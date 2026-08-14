@@ -580,6 +580,9 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 	if err != nil {
 		return interactiveFatalExit(stderr, err.Error())
 	}
+	if message := interactiveRemoteWorkloadIdentityError(remoteEndpoint, auth.IsWorkloadIdentitySelected()); message != "" {
+		return interactiveFatalExit(stderr, message)
+	}
 	if remoteEndpoint != nil {
 		if strings.TrimSpace(root.Prompt) != "" {
 			return runInteractiveRemotePrompt(ctx, root, remoteEndpoint, stdout, stderr)
@@ -3196,6 +3199,13 @@ func normalizeInteractivePrompt(prompt string) string {
 	}
 	prompt = strings.ReplaceAll(prompt, "\r\n", "\n")
 	return strings.ReplaceAll(prompt, "\r", "\n")
+}
+
+func interactiveRemoteWorkloadIdentityError(endpoint *appserverdaemon.RemoteAppServerEndpoint, workloadIdentitySelected bool) string {
+	if endpoint != nil && workloadIdentitySelected {
+		return "workload identity must be configured on the remote app-server host"
+	}
+	return ""
 }
 
 func resolveInteractiveRemoteEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAppServerEndpoint, error) {

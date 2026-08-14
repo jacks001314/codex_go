@@ -264,3 +264,36 @@ func TestRuntimeAgentControllerV2RegistersCanonicalPathAndImplementsTools(t *tes
 		t.Fatalf("listed = %#v, err=%v", listed, err)
 	}
 }
+
+func TestRuntimeAgentControllerFullHistoryForkDropsInheritedCurrentTimeReminders(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{
+		ID:        "parent",
+		SessionID: "parent",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{CWD: t.TempDir(), Model: "gpt-parent"},
+		Items: []session.Item{
+			{ID: "reminder-1", Type: "message", Role: "developer", Text: "<current_time_reminder>\nIt is 12:00 UTC.\n</current_time_reminder>", CreatedAt: now, Data: map[string]any{"kind": "current_time_reminder", "current_time_at": now.Unix()}},
+			{ID: "user-1", Type: "message", Role: "user", Text: "hello", CreatedAt: now},
+		},
+	}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	controller := newRuntimeAgentControllerWithVersion(router, "parent", parent.Metadata.CWD, 2, agent.VersionV2)
+	result, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{TaskName: "worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.Read(session.ThreadID(result.AgentID), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(child.Items) != 1 || child.Items[0].ID != "user-1" {
+		t.Fatalf("forked items = %#v, want inherited user item without current-time reminder", child.Items)
+	}
+}

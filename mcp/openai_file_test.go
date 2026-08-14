@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -477,6 +478,60 @@ func TestRewriteArgumentsThreadsHostedAppContextToUploaderLikeRust(t *testing.T)
 	}
 	if len(uploader.requests) != 2 || uploader.requests[1].HostedContext != nil {
 		t.Fatalf("HostedContext should be nil without hosted param: %#v", uploader.requests)
+	}
+}
+
+func TestRewriteArgumentsRejectsDeniedReadPolicyBeforeUpload(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "report.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	uploader := &fakeUploader{}
+	rewriter := NewOpenAIFileRewriterWithOptions(OpenAIFileRewriterOptions{
+		CWD:        dir,
+		Auth:       &OpenAIFileAuth{ChatGPTBackend: true},
+		Uploader:   uploader,
+		FileSystem: &fakeOpenAIFileSystem{contents: "hello"},
+		ReadPolicy: func(pathURI string) error {
+			if strings.Contains(pathURI, "report.txt") {
+				return errors.New("filesystem policy denies this path")
+			}
+			return nil
+		},
+	})
+	_, err := rewriter.RewriteArguments(context.Background(), map[string]any{"file": "report.txt"}, []string{"file"})
+	if err == nil || !strings.Contains(err.Error(), "filesystem policy denies this path") {
+		t.Fatalf("rewrite error = %v, want denied path", err)
+	}
+	if len(uploader.requests) != 0 {
+		t.Fatalf("uploader should not be called for a denied path: %#v", uploader.requests)
+	}
+}
+
+func TestRewriteArgumentsGrantsReadOverrideDeniedPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "report.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	uploader := &fakeUploader{}
+	rewriter := NewOpenAIFileRewriterWithOptions(OpenAIFileRewriterOptions{
+		CWD:        dir,
+		Auth:       &OpenAIFileAuth{ChatGPTBackend: true},
+		Uploader:   uploader,
+		FileSystem: &fakeOpenAIFileSystem{contents: "hello"},
+		ReadPolicy: func(path string) error {
+			return errors.New("filesystem policy denies this path")
+		},
+		GrantedReadPaths: []string{filepath.Join(dir, "report.txt")},
+	})
+	if _, err := rewriter.RewriteArguments(context.Background(), map[string]any{"file": "report.txt"}, []string{"file"}); err != nil {
+		t.Fatalf("RewriteArguments() error = %v, want granted path to override deny", err)
+	}
+	if len(uploader.requests) != 1 {
+		t.Fatalf("uploader requests = %d, want 1", len(uploader.requests))
+	}
+	if (&OpenAIFileRewriter{}).grantedReadPath(filepath.Join(dir, "report.txt")) {
+		t.Fatal("nil rewriter granted a path")
 	}
 }
 

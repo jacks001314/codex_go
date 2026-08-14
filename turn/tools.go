@@ -87,6 +87,7 @@ type ToolRegistryOptions struct {
 	SessionID                    string
 	PluginMetricsResolver        func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	PluginMeasurementTracker     func(context.Context, plugin.PluginMeasurementBatch)
+	ExtraTools                   []tool.Executor
 }
 
 func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
@@ -233,6 +234,14 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			Runtime:               options.PluginInstallRuntime,
 			AppServerClientName:   options.PluginInstallAppServerClientName,
 		}); err != nil {
+			return nil, err
+		}
+	}
+	for _, executor := range options.ExtraTools {
+		if executor == nil {
+			continue
+		}
+		if err := registry.Register(executor); err != nil {
 			return nil, err
 		}
 	}

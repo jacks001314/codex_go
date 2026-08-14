@@ -48,6 +48,13 @@ const (
 	MethodThreadBackgroundTerminalsList      Method = "thread/backgroundTerminals/list"
 	MethodThreadBackgroundTerminalsTerminate Method = "thread/backgroundTerminals/terminate"
 	MethodThreadRollback                     Method = "thread/rollback"
+	MethodThreadRevert                       Method = "thread/revert"
+	MethodThreadQueueAdd                     Method = "thread/queue/add"
+	MethodThreadQueueList                    Method = "thread/queue/list"
+	MethodThreadQueueUpdate                  Method = "thread/queue/update"
+	MethodThreadQueueDelete                  Method = "thread/queue/delete"
+	MethodThreadQueueReorder                 Method = "thread/queue/reorder"
+	MethodThreadQueueStart                   Method = "thread/queue/start"
 	MethodThreadList                         Method = "thread/list"
 	MethodThreadSectionList                  Method = "threadSection/list"
 	MethodThreadSectionCreate                Method = "threadSection/create"
@@ -2514,6 +2521,148 @@ func (p *ThreadRollbackParams) Validate() error {
 
 type ThreadRollbackResponse struct {
 	Thread *Thread `json:"thread"`
+}
+
+// ThreadRevertParams replaces a paginated thread's durable history with the
+// prefix before beforeTurnId (Rust #38440). Local file changes are unaffected.
+type ThreadRevertParams struct {
+	ThreadID     string `json:"threadId"`
+	BeforeTurnID string `json:"beforeTurnId"`
+}
+
+func (p *ThreadRevertParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	if strings.TrimSpace(p.BeforeTurnID) == "" {
+		return fmt.Errorf("%w: beforeTurnId is required", ErrInvalidRequest)
+	}
+	return nil
+}
+
+type ThreadRevertResponse struct {
+	Thread               *Thread `json:"thread"`
+	TurnsBackwardsCursor *string `json:"turnsBackwardsCursor,omitempty"`
+	ItemsBackwardsCursor *string `json:"itemsBackwardsCursor,omitempty"`
+}
+
+type QueuedSubmission struct {
+	ID                  string `json:"id"`
+	Input               []any  `json:"input"`
+	ClientUserMessageID string `json:"clientUserMessageId"`
+}
+
+type ThreadQueueAddParams struct {
+	ThreadID            string `json:"threadId"`
+	Input               []any  `json:"input"`
+	ClientUserMessageID string `json:"clientUserMessageId"`
+}
+
+func (p *ThreadQueueAddParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	if len(p.Input) == 0 {
+		return jsonRPCInvalidRequest("input is required")
+	}
+	return nil
+}
+
+type ThreadQueueAddResponse struct {
+	QueuedSubmission *QueuedSubmission `json:"queuedSubmission"`
+}
+
+type ThreadQueueListParams struct {
+	ThreadID string  `json:"threadId"`
+	Cursor   *string `json:"cursor,omitempty"`
+	Limit    *int    `json:"limit,omitempty"`
+}
+
+func (p *ThreadQueueListParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	if p.Limit != nil && *p.Limit < 0 {
+		return invalidLimitError()
+	}
+	return nil
+}
+
+type ThreadQueueListResponse struct {
+	Data       []QueuedSubmission `json:"data"`
+	NextCursor *string            `json:"nextCursor,omitempty"`
+}
+
+type ThreadQueueUpdateParams struct {
+	ThreadID           string `json:"threadId"`
+	QueuedSubmissionID string `json:"queuedSubmissionId"`
+	Input              []any  `json:"input"`
+}
+
+func (p *ThreadQueueUpdateParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	if strings.TrimSpace(p.QueuedSubmissionID) == "" {
+		return fmt.Errorf("%w: queuedSubmissionId is required", ErrInvalidRequest)
+	}
+	return nil
+}
+
+type ThreadQueueUpdateResponse struct {
+	QueuedSubmission *QueuedSubmission `json:"queuedSubmission"`
+}
+
+type ThreadQueueDeleteParams struct {
+	ThreadID           string `json:"threadId"`
+	QueuedSubmissionID string `json:"queuedSubmissionId"`
+}
+
+func (p *ThreadQueueDeleteParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	if strings.TrimSpace(p.QueuedSubmissionID) == "" {
+		return fmt.Errorf("%w: queuedSubmissionId is required", ErrInvalidRequest)
+	}
+	return nil
+}
+
+type ThreadQueueDeleteResponse struct {
+	Deleted bool `json:"deleted"`
+}
+
+type ThreadQueueReorderParams struct {
+	ThreadID            string   `json:"threadId"`
+	QueuedSubmissionIDs []string `json:"queuedSubmissionIds"`
+}
+
+func (p *ThreadQueueReorderParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	if len(p.QueuedSubmissionIDs) == 0 {
+		return jsonRPCInvalidRequest("queuedSubmissionIds is required")
+	}
+	return nil
+}
+
+type ThreadQueueReorderResponse struct{}
+
+type ThreadQueueStartParams struct {
+	ThreadID           string  `json:"threadId"`
+	QueuedSubmissionID *string `json:"queuedSubmissionId,omitempty"`
+}
+
+func (p *ThreadQueueStartParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	return nil
+}
+
+type ThreadQueueStartResponse struct {
+	Turn *turn.TurnRecord `json:"turn"`
 }
 
 type ThreadLoadedListParams struct {

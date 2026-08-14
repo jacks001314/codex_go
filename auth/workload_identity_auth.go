@@ -66,15 +66,11 @@ func (o *WorkloadIdentityAuthOptions) httpClient() *http.Client {
 
 // IsWorkloadIdentitySelected reports whether the process environment selects
 // workload identity authentication (Rust is_workload_identity_selected):
-// markers are present and no explicit API key / access token is configured.
+// either environment marker selects workload identity and partial
+// configuration fails validation rather than falling back to another
+// credential source.
 func IsWorkloadIdentitySelected() bool {
-	return !workloadHasExplicitProcessAuth() && workloadReadProcessEnv().hasMarker()
-}
-
-func workloadHasExplicitProcessAuth() bool {
-	return readNonEmptyEnv(OpenAIAPIKeyEnv) != "" ||
-		readNonEmptyEnv(CodexAPIKeyEnv) != "" ||
-		readNonEmptyEnv(CodexAccessTokenEnv) != ""
+	return workloadReadProcessEnv().hasMarker()
 }
 
 type workloadIdentityEnvironment int
@@ -159,12 +155,12 @@ type workloadIdentityFingerprint struct {
 	tokenURL         string
 }
 
-// resolveWorkloadIdentityConfig mirrors Rust resolve_config: selects workload
-// identity only when no explicit process auth is configured and the markers
-// are present, then validates the rule ID, the absolute assertion path, the
-// login policy, and the app routing.
-func resolveWorkloadIdentityConfig(baseURL string, env workloadIdentityProcessEnv, hasExplicitProcessAuth bool, chatgptLoginAllowed bool) (*workloadIdentitySessionConfig, error) {
-	if hasExplicitProcessAuth || !env.hasMarker() {
+// resolveWorkloadIdentityConfig mirrors Rust resolve_config: any workload
+// identity marker selects workload identity, and the configuration is then
+// validated (rule ID, absolute assertion path, login policy, and app routing)
+// without falling back to explicit environment credentials.
+func resolveWorkloadIdentityConfig(baseURL string, env workloadIdentityProcessEnv, chatgptLoginAllowed bool) (*workloadIdentitySessionConfig, error) {
+	if !env.hasMarker() {
 		return nil, nil
 	}
 	if !chatgptLoginAllowed {
@@ -319,12 +315,10 @@ type WorkloadIdentityAuth struct {
 // this process (Rust WorkloadIdentityExternalAuth::from_process_config).
 // It returns (nil, nil) when workload identity is not selected.
 func WorkloadIdentityAuthForProcess(opts *WorkloadIdentityAuthOptions) (*WorkloadIdentityAuth, error) {
-	active := workloadIdentityProcessRegistry.active()
 	env := workloadReadProcessEnv()
 	config, err := resolveWorkloadIdentityConfig(
 		opts.baseURL(),
 		env,
-		workloadHasExplicitProcessAuth() && !active,
 		opts.chatgptLoginAllowed(),
 	)
 	if err != nil {

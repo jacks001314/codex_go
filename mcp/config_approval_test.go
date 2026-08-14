@@ -208,8 +208,8 @@ func TestRuntimeServerConfigFromValuesWithApprovalMode(t *testing.T) {
 		{
 			name: "default_tools_approval_mode",
 			values: map[string]any{
-				"command":                       "test",
-				"default_tools_approval_mode":   "prompt",
+				"command":                     "test",
+				"default_tools_approval_mode": "prompt",
 			},
 			check: func(t *testing.T, config *ServerConfig) {
 				if config.DefaultToolsApprovalMode == nil {
@@ -249,8 +249,8 @@ func TestRuntimeServerConfigFromValuesWithApprovalMode(t *testing.T) {
 		{
 			name: "both default and per-tool approval modes",
 			values: map[string]any{
-				"command":                       "test",
-				"default_tools_approval_mode":   "auto",
+				"command":                     "test",
+				"default_tools_approval_mode": "auto",
 				"tools": map[string]any{
 					"read": map[string]any{
 						"approval_mode": "prompt",

@@ -292,6 +292,24 @@ func TestStoreUpdateMetadataPatchesFields(t *testing.T) {
 	}
 }
 
+func TestStoreUpdateMetadataNoOpReturnsMaterializedThread(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if err := store.Save(&Record{ID: "thread-1", Title: "original"}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got, err := store.UpdateMetadata("thread-1", &MetadataPatch{}, true)
+	if err != nil {
+		t.Fatalf("UpdateMetadata() error = %v", err)
+	}
+	if got == nil || got.ID != "thread-1" || got.Title != "original" {
+		t.Fatalf("UpdateMetadata() no-op should still materialize the thread, got %#v", got)
+	}
+	got, err = store.UpdateMetadata("thread-1", nil, true)
+	if err != nil || got == nil || got.ID != "thread-1" {
+		t.Fatalf("UpdateMetadata(nil) = %#v, %v", got, err)
+	}
+}
+
 func TestStoreArchiveUnarchiveAndList(t *testing.T) {
 	store := NewStore(t.TempDir())
 	now := fixedTime()
@@ -872,6 +890,105 @@ func TestStorePaginatedForkFreezesBoundaryAndProtectsSourceDeletion(t *testing.T
 	}
 	if err := store.Delete("source"); err != nil {
 		t.Fatalf("Delete(source) after child error = %v", err)
+	}
+}
+
+func TestStoreRevertTruncatesPaginatedHistoryBeforeTurn(t *testing.T) {
+	store := NewStore(t.TempDir())
+	record := &Record{
+		ID: "thread",
+		Metadata: Metadata{
+			HistoryMode:  "paginated",
+			RolloutTurns: []TurnSnapshot{{ID: "turn-1", Status: "completed"}, {ID: "turn-2", Status: "completed"}},
+		},
+		Items: []Item{
+			{ID: "item-1", Type: "user_message", Text: "first", Metadata: map[string]any{"turnId": "turn-1"}},
+			{ID: "item-2", Type: "agent_message", Text: "first reply", Metadata: map[string]any{"turnId": "turn-1"}},
+			{ID: "item-3", Type: "user_message", Text: "second", Metadata: map[string]any{"turnId": "turn-2"}},
+			{ID: "item-4", Type: "agent_message", Text: "second reply", Metadata: map[string]any{"turnId": "turn-2"}},
+		},
+	}
+	if err := store.Create(record); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	reverted, err := store.Revert("thread", "turn-2")
+	if err != nil {
+		t.Fatalf("Revert() error = %v", err)
+	}
+	if got := itemIDs(reverted.Items); !reflect.DeepEqual(got, []string{"item-1", "item-2"}) {
+		t.Fatalf("reverted items = %v", got)
+	}
+	if len(reverted.Metadata.RolloutTurns) != 1 || reverted.Metadata.RolloutTurns[0].ID != "turn-1" {
+		t.Fatalf("reverted turns = %#v", reverted.Metadata.RolloutTurns)
+	}
+	if reverted.HistoryBase != nil {
+		t.Fatalf("reverted history base = %#v, want nil", reverted.HistoryBase)
+	}
+	if _, err := store.Revert("thread", "missing-turn"); !errors.Is(err, ErrInvalidThreadID) {
+		t.Fatalf("Revert(missing turn) error = %v", err)
+	}
+	legacy := &Record{ID: "legacy", Metadata: Metadata{HistoryMode: "legacy"}, Items: []Item{{ID: "i", Metadata: map[string]any{"turnId": "t"}}}}
+	if err := store.Create(legacy); err != nil {
+		t.Fatalf("Create(legacy) error = %v", err)
+	}
+	if _, err := store.Revert("legacy", "t"); !errors.Is(err, ErrInvalidThreadID) {
+		t.Fatalf("Revert(legacy) error = %v", err)
+	}
+}
+
+func TestStoreQueueSubmissionCRUD(t *testing.T) {
+	store := NewStore(t.TempDir())
+	record := &Record{ID: "thread", Metadata: Metadata{HistoryMode: "legacy"}}
+	if err := store.Create(record); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	first, err := store.EnqueueSubmission("thread", QueuedSubmission{Input: []any{map[string]any{"type": "text", "text": "first"}}, ClientUserMessageID: "client-1"})
+	if err != nil {
+		t.Fatalf("EnqueueSubmission() error = %v", err)
+	}
+	if first.ID == "" {
+		t.Fatal("enqueued submission id is empty")
+	}
+	if _, err := store.EnqueueSubmission("thread", QueuedSubmission{Input: []any{map[string]any{"type": "text", "text": "second"}}, ClientUserMessageID: "client-2"}); err != nil {
+		t.Fatalf("EnqueueSubmission(second) error = %v", err)
+	}
+	page, next, err := store.ListQueueSubmissions("thread", "", 1)
+	if err != nil {
+		t.Fatalf("ListQueueSubmissions() error = %v", err)
+	}
+	if len(page) != 1 || next == "" {
+		t.Fatalf("first page = %#v next=%q", page, next)
+	}
+	page2, _, err := store.ListQueueSubmissions("thread", next, 1)
+	if err != nil {
+		t.Fatalf("ListQueueSubmissions(page 2) error = %v", err)
+	}
+	if len(page2) != 1 || page2[0].ID == page[0].ID {
+		t.Fatalf("second page = %#v", page2)
+	}
+	if err := store.ReorderQueueSubmissions("thread", []string{page2[0].ID, page[0].ID}); err != nil {
+		t.Fatalf("ReorderQueueSubmissions() error = %v", err)
+	}
+	all, _, _ := store.ListQueueSubmissions("thread", "", 10)
+	if all[0].ID != page2[0].ID {
+		t.Fatalf("reordered first = %q, want %q", all[0].ID, page2[0].ID)
+	}
+	if _, err := store.UpdateQueueSubmission("thread", page[0].ID, []any{map[string]any{"type": "text", "text": "updated"}}); err != nil {
+		t.Fatalf("UpdateQueueSubmission() error = %v", err)
+	}
+	if deleted, err := store.DeleteQueueSubmission("thread", page[0].ID); err != nil || !deleted {
+		t.Fatalf("DeleteQueueSubmission() = %v, %v", deleted, err)
+	}
+	remaining, _, _ := store.ListQueueSubmissions("thread", "", 10)
+	if len(remaining) != 1 {
+		t.Fatalf("remaining submissions = %d, want 1", len(remaining))
+	}
+	dequeued, err := store.DequeueFirstSubmission("thread")
+	if err != nil || dequeued == nil || dequeued.ID != page2[0].ID {
+		t.Fatalf("DequeueFirstSubmission() = %#v, %v", dequeued, err)
+	}
+	if empty, _ := store.DequeueFirstSubmission("thread"); empty != nil {
+		t.Fatalf("empty queue dequeue = %#v", empty)
 	}
 }
 

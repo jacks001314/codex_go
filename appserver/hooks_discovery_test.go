@@ -82,6 +82,97 @@ func TestHookDiscoveryLoadsProjectHooksJSON(t *testing.T) {
 	}
 }
 
+func TestHookDiscoveryAppendsManagedRequirementHooks(t *testing.T) {
+	service := NewHookDiscoveryService("")
+	cfg := config.NewConfigService(t.TempDir())
+	managedDir := t.TempDir()
+	cfg.SetRequirements(&config.ConfigRequirements{Hooks: &config.ManagedHooksRequirements{
+		ManagedDir: &managedDir,
+		PreToolUse: []config.ConfiguredHookGroup{{Matcher: stringPtr("Bash"), Hooks: []config.ConfiguredHookHandler{{Type: "command", Command: "echo managed"}}}},
+	}})
+	service.Config = cfg
+	response := service.Discover(&HookListParams{CWDs: []string{t.TempDir()}}, "")
+	if len(response.Data) != 1 {
+		t.Fatalf("discovery response = %#v", response.Data)
+	}
+	entry := response.Data[0]
+	var found bool
+	for _, hook := range entry.Hooks {
+		if hook.IsManaged && hook.Source == HookSourceCloudRequirements && hook.Command != nil && *hook.Command == "echo managed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("managed hook not appended: %#v", entry.Hooks)
+	}
+}
+
+func TestHookDiscoveryRequiredLoadErrorsForUnsupportedManagedHook(t *testing.T) {
+	service := NewHookDiscoveryService("")
+	cfg := config.NewConfigService(t.TempDir())
+	cfg.SetRequirements(&config.ConfigRequirements{Hooks: &config.ManagedHooksRequirements{
+		PreToolUse: []config.ConfiguredHookGroup{{Hooks: []config.ConfiguredHookHandler{{Type: "prompt"}}}},
+	}})
+	service.Config = cfg
+	response := service.Discover(&HookListParams{CWDs: []string{t.TempDir()}}, "")
+	if len(response.Data) != 1 || len(response.Data[0].RequiredLoadErrors) == 0 {
+		t.Fatalf("required load errors = %#v", response.Data)
+	}
+	if !strings.Contains(response.Data[0].RequiredLoadErrors[0], "unsupported managed hook prompt") {
+		t.Fatalf("required load error = %#v", response.Data[0].RequiredLoadErrors)
+	}
+}
+
+func TestHookDiscoveryRequiredLoadErrorsForEmptyManagedCommand(t *testing.T) {
+	service := NewHookDiscoveryService("")
+	cfg := config.NewConfigService(t.TempDir())
+	cfg.SetRequirements(&config.ConfigRequirements{Hooks: &config.ManagedHooksRequirements{
+		PreToolUse: []config.ConfiguredHookGroup{{Hooks: []config.ConfiguredHookHandler{{Type: "command", Command: ""}}}},
+	}})
+	service.Config = cfg
+	response := service.Discover(&HookListParams{CWDs: []string{t.TempDir()}}, "")
+	if len(response.Data) != 1 || len(response.Data[0].RequiredLoadErrors) == 0 || !strings.Contains(response.Data[0].RequiredLoadErrors[0], "empty hook command") {
+		t.Fatalf("required load errors = %#v", response.Data)
+	}
+}
+
+func TestHookDiscoveryManagedRequirementsWithoutConfigAreNoop(t *testing.T) {
+	service := NewHookDiscoveryService("")
+	response := service.Discover(&HookListParams{CWDs: []string{t.TempDir()}}, "")
+	if len(response.Data) != 1 || len(response.Data[0].Hooks) != 0 || len(response.Data[0].RequiredLoadErrors) != 0 {
+		t.Fatalf("managed requirements should be a no-op without config: %#v", response.Data)
+	}
+}
+
+func TestHookDiscoveryManagedRequirementsSkippedWhenFeatureDisabled(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nhooks = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config error = %v", err)
+	}
+	cfg := config.NewConfigService(home)
+	cfg.SetRequirements(&config.ConfigRequirements{Hooks: &config.ManagedHooksRequirements{
+		PreToolUse: []config.ConfiguredHookGroup{{Hooks: []config.ConfiguredHookHandler{{Type: "prompt"}}}},
+	}})
+	service := &HookDiscoveryService{CodexHome: home, Config: cfg}
+	response := service.Discover(&HookListParams{CWDs: []string{t.TempDir()}}, "")
+	if len(response.Data) != 1 || len(response.Data[0].RequiredLoadErrors) != 0 {
+		t.Fatalf("managed requirements should be skipped while hooks feature disabled: %#v", response.Data)
+	}
+}
+
+func TestManagedRequiredHookLoadErrorsHelper(t *testing.T) {
+	service := NewHookDiscoveryService("")
+	cfg := config.NewConfigService(t.TempDir())
+	cfg.SetRequirements(&config.ConfigRequirements{Hooks: &config.ManagedHooksRequirements{
+		PreToolUse: []config.ConfiguredHookGroup{{Hooks: []config.ConfiguredHookHandler{{Type: "prompt"}}}},
+	}})
+	service.Config = cfg
+	errors := service.ManagedRequiredHookLoadErrors(t.TempDir())
+	if len(errors) != 1 || !strings.Contains(errors[0], "unsupported managed hook prompt") {
+		t.Fatalf("required load errors = %#v", errors)
+	}
+}
+
 func TestHookDiscoveryRecognizesUnsupportedMCPToolHook(t *testing.T) {
 	cwd := t.TempDir()
 	hooksDir := filepath.Join(cwd, ".codex")

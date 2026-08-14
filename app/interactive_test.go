@@ -8,11 +8,25 @@ import (
 	"time"
 
 	"codex_go/appserver"
+	"codex_go/appserverdaemon"
 	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/session"
 	codextui "codex_go/tui"
 )
+
+func TestInteractiveRemoteWorkloadIdentityRejectionLikeRust(t *testing.T) {
+	remote := appserverdaemon.NewWebSocketEndpoint("ws://127.0.0.1:8765", nil)
+	if message := interactiveRemoteWorkloadIdentityError(remote, true); message != "workload identity must be configured on the remote app-server host" {
+		t.Fatalf("remote workload identity message = %q", message)
+	}
+	if message := interactiveRemoteWorkloadIdentityError(remote, false); message != "" {
+		t.Fatalf("non-workload-identity remote message = %q", message)
+	}
+	if message := interactiveRemoteWorkloadIdentityError(nil, true); message != "" {
+		t.Fatalf("embedded workload identity message = %q", message)
+	}
+}
 
 func TestInteractivePluginEnabledWriterPreservesPluginMetadata(t *testing.T) {
 	home := t.TempDir()

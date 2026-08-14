@@ -154,6 +154,83 @@ func TestRouterThreadResumeRestoresPersistedApprovalPolicy(t *testing.T) {
 	}
 }
 
+func TestRouterThreadRevertTruncatesPaginatedHistory(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	threadID := session.ThreadID("thread-revert")
+	record := &session.Record{
+		ID:        threadID,
+		SessionID: string(threadID),
+		Metadata: session.Metadata{
+			HistoryMode: "paginated",
+			RolloutTurns: []session.TurnSnapshot{
+				{ID: "turn-1", Status: "completed"},
+				{ID: "turn-2", Status: "completed"},
+			},
+		},
+		Items: []session.Item{
+			{ID: "item-1", Type: "user_message", Text: "first", Metadata: map[string]any{"turnId": "turn-1"}},
+			{ID: "item-2", Type: "agent_message", Text: "first reply", Metadata: map[string]any{"turnId": "turn-1"}},
+			{ID: "item-3", Type: "user_message", Text: "second", Metadata: map[string]any{"turnId": "turn-2"}},
+			{ID: "item-4", Type: "agent_message", Text: "second reply", Metadata: map[string]any{"turnId": "turn-2"}},
+		},
+	}
+	if err := store.Create(record); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadRevert, ThreadRevertParams{ThreadID: string(threadID), BeforeTurnID: "turn-2"}))
+	if response.Error != nil {
+		t.Fatalf("revert error = %+v", response.Error)
+	}
+	reverted := response.Result.(*ThreadRevertResponse)
+	if reverted.Thread == nil || reverted.Thread.ID != string(threadID) {
+		t.Fatalf("reverted thread = %#v", reverted.Thread)
+	}
+	reloaded, err := store.Read(threadID, true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got := len(reloaded.Items); got != 2 {
+		t.Fatalf("reverted item count = %d, want 2", got)
+	}
+
+	missing := router.Handle(requestWithParams(t, IntID(2), MethodThreadRevert, ThreadRevertParams{ThreadID: string(threadID), BeforeTurnID: "missing"}))
+	if missing.Error == nil || missing.Error.Code != -32600 {
+		t.Fatalf("missing turn revert error = %+v", missing.Error)
+	}
+}
+
+func TestRouterThreadQueueAddListUpdateDelete(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	threadID := session.ThreadID("thread-queue")
+	record := &session.Record{ID: threadID, SessionID: string(threadID), Metadata: session.Metadata{HistoryMode: "legacy"}}
+	if err := store.Create(record); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	input := []any{map[string]any{"type": "text", "text": "hello"}}
+	add := router.Handle(requestWithParams(t, IntID(1), MethodThreadQueueAdd, ThreadQueueAddParams{ThreadID: string(threadID), Input: input, ClientUserMessageID: "client-1"}))
+	if add.Error != nil {
+		t.Fatalf("queue add error = %+v", add.Error)
+	}
+	submission := add.Result.(*ThreadQueueAddResponse).QueuedSubmission
+	if submission == nil || submission.ID == "" || submission.ClientUserMessageID != "client-1" {
+		t.Fatalf("added submission = %#v", submission)
+	}
+	list := router.Handle(requestWithParams(t, IntID(2), MethodThreadQueueList, ThreadQueueListParams{ThreadID: string(threadID)}))
+	if list.Error != nil || len(list.Result.(*ThreadQueueListResponse).Data) != 1 {
+		t.Fatalf("queue list = %+v", list)
+	}
+	update := router.Handle(requestWithParams(t, IntID(3), MethodThreadQueueUpdate, ThreadQueueUpdateParams{ThreadID: string(threadID), QueuedSubmissionID: submission.ID, Input: []any{map[string]any{"type": "text", "text": "updated"}}}))
+	if update.Error != nil {
+		t.Fatalf("queue update error = %+v", update.Error)
+	}
+	del := router.Handle(requestWithParams(t, IntID(4), MethodThreadQueueDelete, ThreadQueueDeleteParams{ThreadID: string(threadID), QueuedSubmissionID: submission.ID}))
+	if del.Error != nil || !del.Result.(*ThreadQueueDeleteResponse).Deleted {
+		t.Fatalf("queue delete = %+v", del)
+	}
+}
+
 func TestRouterThreadStartAllowsOmittedCWD(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)

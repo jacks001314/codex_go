@@ -17,27 +17,29 @@ import (
 )
 
 type Client struct {
-	conn         clientConnection
-	url          string
-	clientName   string
-	sessionID    string
-	open         clientConnectionOpener
-	cleanup      func()
-	writeMu      sync.Mutex
-	recoverMu    sync.Mutex
-	mu           sync.Mutex
-	nextID       int64
-	nextHTTPID   uint64
-	pending      map[int64]chan clientCallResult
-	sessions     map[string]*clientProcessSession
-	httpStreams  map[string]*HTTPBodyStream
-	inboundIDs   map[int64]struct{}
-	inboundSlots chan struct{}
-	done         chan struct{}
-	closeOnce    sync.Once
-	closed       bool
-	metadataMu   sync.Mutex
-	metadata     map[string]*inFlightMetadataRequest
+	conn           clientConnection
+	url            string
+	clientName     string
+	sessionID      string
+	open           clientConnectionOpener
+	cleanup        func()
+	writeMu        sync.Mutex
+	recoverMu      sync.Mutex
+	mu             sync.Mutex
+	nextID         int64
+	nextHTTPID     uint64
+	pending        map[int64]chan clientCallResult
+	sessions       map[string]*clientProcessSession
+	httpStreams    map[string]*HTTPBodyStream
+	inboundIDs     map[int64]struct{}
+	inboundSlots   chan struct{}
+	done           chan struct{}
+	closeOnce      sync.Once
+	closed         bool
+	metadataMu     sync.Mutex
+	metadata       map[string]*inFlightMetadataRequest
+	cacheMu        sync.Mutex
+	discoveryCache *CapabilityDiscoveryCache
 }
 
 type inFlightMetadataRequest struct {
@@ -206,6 +208,16 @@ type clientCallResult struct {
 
 type clientTransportError struct {
 	err error
+}
+
+// IsRetryableRecoveryError reports whether an exec-server error should be
+// retried after a transport disconnect and recovery (Rust #38420).
+func IsRetryableRecoveryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var transportErr *clientTransportError
+	return errors.As(err, &transportErr)
 }
 
 func (e *clientTransportError) Error() string {
@@ -814,6 +826,42 @@ func (c *Client) EnvironmentStatus(ctx context.Context) (*EnvironmentStatus, err
 }
 
 func (c *Client) DiscoverCapabilityRoots(ctx context.Context, params *CapabilityRootsDiscoverParams) (*CapabilityRootsDiscoverResponse, error) {
+	if cached, ok := c.cachedDiscovery(params); ok {
+		return cached.response, cached.err
+	}
+	response, err := c.discoverCapabilityRoots(ctx, params)
+	if err != nil && IsRetryableRecoveryError(err) {
+		response, err = c.discoverCapabilityRoots(ctx, params)
+	}
+	c.cacheDiscovery(params, response, err, err != nil && IsRetryableRecoveryError(err))
+	return response, err
+}
+
+func (c *Client) cachedDiscovery(params *CapabilityRootsDiscoverParams) (cachedDiscoveryEntry, bool) {
+	if c == nil {
+		return cachedDiscoveryEntry{}, false
+	}
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	if c.discoveryCache == nil {
+		return cachedDiscoveryEntry{}, false
+	}
+	return c.discoveryCache.Get(params)
+}
+
+func (c *Client) cacheDiscovery(params *CapabilityRootsDiscoverParams, response *CapabilityRootsDiscoverResponse, err error, retryable bool) {
+	if c == nil {
+		return
+	}
+	c.cacheMu.Lock()
+	if c.discoveryCache == nil {
+		c.discoveryCache = NewCapabilityDiscoveryCache()
+	}
+	c.discoveryCache.Put(params, response, err, retryable)
+	c.cacheMu.Unlock()
+}
+
+func (c *Client) discoverCapabilityRoots(ctx context.Context, params *CapabilityRootsDiscoverParams) (*CapabilityRootsDiscoverResponse, error) {
 	response := CapabilityRootsDiscoverResponse{Roots: []CapabilityRootDiscovery{}}
 	if params == nil || len(params.Roots) == 0 {
 		return &response, nil

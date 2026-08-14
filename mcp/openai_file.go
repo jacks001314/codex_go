@@ -390,6 +390,8 @@ type OpenAIFileRewriterOptions struct {
 	FileSystem       OpenAIFileSystem
 	HTTPClient       OpenAIFileHTTPDoer
 	UploadLimitBytes int64
+	ReadPolicy       func(pathURI string) error
+	GrantedReadPaths []string
 }
 
 type OpenAIFileRewriter struct {
@@ -398,6 +400,8 @@ type OpenAIFileRewriter struct {
 	Uploader         OpenAIFileUploader
 	FileSystem       OpenAIFileSystem
 	UploadLimitBytes int64
+	ReadPolicy       func(pathURI string) error
+	GrantedReadPaths []string
 }
 
 func NewOpenAIFileRewriter(cwd string, auth *OpenAIFileAuth, uploader OpenAIFileUploader) *OpenAIFileRewriter {
@@ -419,6 +423,8 @@ func NewOpenAIFileRewriterWithOptions(options OpenAIFileRewriterOptions) *OpenAI
 		Uploader:         uploader,
 		FileSystem:       options.FileSystem,
 		UploadLimitBytes: limit,
+		ReadPolicy:       options.ReadPolicy,
+		GrantedReadPaths: append([]string(nil), options.GrantedReadPaths...),
 	}
 }
 
@@ -515,6 +521,12 @@ func (r *OpenAIFileRewriter) buildUploadedValue(ctx context.Context, fieldName s
 	if err != nil {
 		return nil, r.contextualize(fieldName, index, filePath, err.Error())
 	}
+	displayPath := resolved.NativePathString()
+	if r.ReadPolicy != nil {
+		if err := r.ReadPolicy(displayPath); err != nil && !r.grantedReadPath(displayPath) {
+			return nil, r.contextualize(fieldName, index, filePath, err.Error())
+		}
+	}
 	fileSystem := r.FileSystem
 	if fileSystem == nil {
 		fileSystem = localOpenAIFileSystem{}
@@ -523,7 +535,6 @@ func (r *OpenAIFileRewriter) buildUploadedValue(ctx context.Context, fieldName s
 	if err != nil {
 		return nil, r.contextualize(fieldName, index, filePath, err.Error())
 	}
-	displayPath := resolved.NativePathString()
 	if info == nil || !info.IsFile {
 		return nil, r.contextualize(fieldName, index, filePath, fmt.Sprintf("path `%s` is not a file", displayPath))
 	}
@@ -569,6 +580,19 @@ func (r *OpenAIFileRewriter) buildUploadedValue(ctx context.Context, fieldName s
 		payload["file_name"] = uploaded.FileName
 	}
 	return payload, nil
+}
+
+func (r *OpenAIFileRewriter) grantedReadPath(path string) bool {
+	if r == nil {
+		return false
+	}
+	normalized := filepath.ToSlash(filepath.Clean(path))
+	for _, granted := range r.GrantedReadPaths {
+		if strings.EqualFold(normalized, filepath.ToSlash(filepath.Clean(granted))) {
+			return true
+		}
+	}
+	return false
 }
 
 func openAIFileDirectoryURI(cwd string) (*utils.PathURI, error) {

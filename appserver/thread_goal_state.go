@@ -7,16 +7,64 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/model"
+	"codex_go/prompt"
 	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/telemetry"
+	"codex_go/turn"
 )
 
 type stateGoalTurnSnapshot struct {
-	GoalID       string
-	StartedAtMS  int64
-	ConnectionID string
+	GoalID             string
+	StartedAtMS        int64
+	LastAccountedAtMS  int64
+	LastAccountedUsage model.AgentUsage
+	ConnectionID       string
+	FinishMode         state.GoalAccountingMode
+}
+
+func goalTokenDeltaForUsage(usage model.AgentUsage) int64 {
+	input := usage.InputTokens - usage.CachedInputTokens
+	if input < 0 {
+		input = 0
+	}
+	output := usage.OutputTokens
+	if output < 0 {
+		output = 0
+	}
+	return input + output
+}
+
+func goalTokenDelta(last, current model.AgentUsage) int64 {
+	delta := model.AgentUsage{
+		InputTokens:           current.InputTokens - last.InputTokens,
+		CachedInputTokens:     current.CachedInputTokens - last.CachedInputTokens,
+		CacheWriteInputTokens: current.CacheWriteInputTokens - last.CacheWriteInputTokens,
+		OutputTokens:          current.OutputTokens - last.OutputTokens,
+		ReasoningOutputTokens: current.ReasoningOutputTokens - last.ReasoningOutputTokens,
+		TotalTokens:           current.TotalTokens - last.TotalTokens,
+	}
+	if delta.InputTokens < 0 {
+		delta.InputTokens = 0
+	}
+	if delta.CachedInputTokens < 0 {
+		delta.CachedInputTokens = 0
+	}
+	if delta.CacheWriteInputTokens < 0 {
+		delta.CacheWriteInputTokens = 0
+	}
+	if delta.OutputTokens < 0 {
+		delta.OutputTokens = 0
+	}
+	if delta.ReasoningOutputTokens < 0 {
+		delta.ReasoningOutputTokens = 0
+	}
+	if delta.TotalTokens < 0 {
+		delta.TotalTokens = 0
+	}
+	return goalTokenDeltaForUsage(delta)
 }
 
 func (r *RuntimeRouter) setStateThreadGoal(params *GoalSetParams) (*GoalSetResponse, *Goal, *session.Record, error) {
@@ -24,6 +72,14 @@ func (r *RuntimeRouter) setStateThreadGoal(params *GoalSetParams) (*GoalSetRespo
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	r.goalStateMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			r.goalStateMu.Unlock()
+		}
+	}()
+	r.prepareExternalGoalMutation(params.ThreadID)
 	ctx := context.Background()
 	existingState, err := r.services.StateRuntime.GetThreadGoal(ctx, params.ThreadID)
 	if err != nil {
@@ -89,6 +145,9 @@ func (r *RuntimeRouter) setStateThreadGoal(params *GoalSetParams) (*GoalSetRespo
 	if appendErr := r.services.ThreadRouter.appendThreadGoalUpdated(*goal, "", time.Now().UTC()); appendErr != nil {
 		slog.Warn("failed to persist goal update in rollout", "thread_id", params.ThreadID, "error", appendErr)
 	}
+	locked = false
+	r.goalStateMu.Unlock()
+	r.applyGoalActiveRuntimeEffects(goal.ThreadID, *goal)
 	return &GoalSetResponse{Goal: *goal}, existing, record, nil
 }
 
@@ -108,9 +167,22 @@ func (r *RuntimeRouter) clearStateThreadGoal(params *GoalClearParams) (*GoalClea
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	r.goalStateMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			r.goalStateMu.Unlock()
+		}
+	}()
+	r.prepareExternalGoalMutation(params.ThreadID)
 	deleted, err := r.services.StateRuntime.DeleteThreadGoal(context.Background(), params.ThreadID)
 	if err != nil {
 		return nil, nil, record, fmt.Errorf("failed to clear thread goal: %w", err)
+	}
+	locked = false
+	r.goalStateMu.Unlock()
+	if deleted != nil {
+		r.clearActiveGoalStateForThread(params.ThreadID)
 	}
 	return &GoalClearResponse{Cleared: deleted != nil}, apiGoalFromState(deleted), record, nil
 }
@@ -175,6 +247,285 @@ func apiGoalFromState(goal *state.ThreadGoal) *Goal {
 		TokensUsed: goal.TokensUsed, TimeUsedSeconds: goal.TimeUsedSeconds,
 		CreatedAt: goal.CreatedAt.Unix(), UpdatedAt: goal.UpdatedAt.Unix(),
 	}
+}
+
+func (r *RuntimeRouter) markStateThreadGoalTurnActiveNow(threadID, turnID, goalID string) {
+	if r == nil || r.services.StateRuntime == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	goalID = strings.TrimSpace(goalID)
+	if threadID == "" || turnID == "" || goalID == "" {
+		return
+	}
+	nowMS := time.Now().UTC().UnixMilli()
+	r.goalAccountingMu.Lock()
+	if r.goalAccountingTurns == nil {
+		r.goalAccountingTurns = map[string]stateGoalTurnSnapshot{}
+	}
+	if r.goalTurnUsage == nil {
+		r.goalTurnUsage = map[string]model.AgentUsage{}
+	}
+	currentUsage := r.goalTurnUsage[stateGoalTurnKey(threadID, turnID)]
+	r.goalAccountingTurns[stateGoalTurnKey(threadID, turnID)] = stateGoalTurnSnapshot{
+		GoalID:             goalID,
+		StartedAtMS:        nowMS,
+		LastAccountedAtMS:  nowMS,
+		LastAccountedUsage: currentUsage,
+		FinishMode:         state.GoalAccountingActiveOnly,
+	}
+	r.goalAccountingMu.Unlock()
+	r.clearGoalIdleActive()
+}
+
+func (r *RuntimeRouter) ensureStateThreadGoalTurnActive(threadID, turnID, goalID string) {
+	if r == nil || r.services.StateRuntime == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	goalID = strings.TrimSpace(goalID)
+	if threadID == "" || turnID == "" || goalID == "" {
+		return
+	}
+	key := stateGoalTurnKey(threadID, turnID)
+	nowMS := time.Now().UTC().UnixMilli()
+	r.goalAccountingMu.Lock()
+	if r.goalAccountingTurns == nil {
+		r.goalAccountingTurns = map[string]stateGoalTurnSnapshot{}
+	}
+	if _, exists := r.goalAccountingTurns[key]; exists {
+		r.goalAccountingMu.Unlock()
+		return
+	}
+	if r.goalTurnUsage == nil {
+		r.goalTurnUsage = map[string]model.AgentUsage{}
+	}
+	currentUsage := r.goalTurnUsage[key]
+	r.goalAccountingTurns[key] = stateGoalTurnSnapshot{
+		GoalID:             goalID,
+		StartedAtMS:        nowMS,
+		LastAccountedAtMS:  nowMS,
+		LastAccountedUsage: currentUsage,
+		FinishMode:         state.GoalAccountingActiveOnly,
+	}
+	r.goalAccountingMu.Unlock()
+	r.clearGoalIdleActive()
+}
+
+func (r *RuntimeRouter) clearActiveGoalStateForThread(threadID string) {
+	if r == nil {
+		return
+	}
+	if active := r.threads.ActiveTurn(threadID); active != nil && strings.TrimSpace(active.TurnID) != "" {
+		r.clearStateThreadGoalTurnSnapshot(threadID, strings.TrimSpace(active.TurnID))
+	}
+	r.clearGoalIdleActive()
+}
+
+func (r *RuntimeRouter) recordGoalTokenUsage(threadID, turnID string, usage model.AgentUsage) {
+	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return
+	}
+	key := stateGoalTurnKey(threadID, turnID)
+	r.goalAccountingMu.Lock()
+	if r.goalTurnUsage == nil {
+		r.goalTurnUsage = map[string]model.AgentUsage{}
+	}
+	r.goalTurnUsage[key] = usage
+	r.goalAccountingMu.Unlock()
+}
+
+func (r *RuntimeRouter) markGoalIdleActive(goalID string) {
+	if r == nil {
+		return
+	}
+	goalID = strings.TrimSpace(goalID)
+	if goalID == "" {
+		return
+	}
+	now := time.Now().UTC()
+	r.goalIdleMu.Lock()
+	if r.goalIdleGoalID != goalID || r.goalIdleLastAccounted.IsZero() {
+		r.goalIdleLastAccounted = now
+	}
+	r.goalIdleGoalID = goalID
+	r.goalIdleMu.Unlock()
+}
+
+func (r *RuntimeRouter) clearGoalIdleActive() {
+	if r == nil {
+		return
+	}
+	r.goalIdleMu.Lock()
+	r.goalIdleGoalID = ""
+	r.goalIdleLastAccounted = time.Now().UTC()
+	r.goalIdleMu.Unlock()
+}
+
+func (r *RuntimeRouter) accountIdleGoalProgress(threadID string) *state.GoalAccountingOutcome {
+	if r == nil || r.services.StateRuntime == nil {
+		return nil
+	}
+	r.goalProgressMu.Lock()
+	defer r.goalProgressMu.Unlock()
+	now := time.Now().UTC()
+	r.goalIdleMu.Lock()
+	goalID := r.goalIdleGoalID
+	last := r.goalIdleLastAccounted
+	if goalID == "" || last.IsZero() {
+		r.goalIdleMu.Unlock()
+		return nil
+	}
+	r.goalIdleMu.Unlock()
+	timeDelta := now.UnixMilli() - last.UnixMilli()
+	if timeDelta < 0 {
+		timeDelta = 0
+	}
+	seconds := timeDelta / 1000
+	outcome, err := r.services.StateRuntime.AccountThreadGoalUsage(
+		context.Background(), threadID, seconds, 0, state.GoalAccountingActiveOnly, &goalID,
+	)
+	if err != nil {
+		slog.Warn("failed to account idle goal progress", "thread_id", threadID, "error", err)
+		return nil
+	}
+	if outcome != nil && outcome.Updated && outcome.Goal != nil {
+		r.goalIdleMu.Lock()
+		if seconds > 0 {
+			r.goalIdleLastAccounted = last.Add(time.Duration(seconds) * time.Second)
+		}
+		r.goalIdleMu.Unlock()
+		r.emitStateThreadGoalUpdate(outcome.Goal, "", "", telemetry.GoalEventKindUsageAccounted)
+		if outcome.Goal.Status != state.ThreadGoalActive {
+			r.clearGoalIdleActive()
+		}
+	}
+	return outcome
+}
+
+func (r *RuntimeRouter) prepareExternalGoalMutation(threadID string) {
+	if r == nil || r.services.StateRuntime == nil {
+		return
+	}
+	if active := r.threads.ActiveTurn(threadID); active != nil && strings.TrimSpace(active.TurnID) != "" {
+		r.accountStateThreadGoalProgress(threadID, strings.TrimSpace(active.TurnID), time.Now().UTC(), state.GoalAccountingActiveOnly)
+		return
+	}
+	r.accountIdleGoalProgress(threadID)
+}
+
+func (r *RuntimeRouter) accountStateThreadGoalProgress(threadID, turnID string, now time.Time, mode state.GoalAccountingMode) *state.GoalAccountingOutcome {
+	if r == nil || r.services.StateRuntime == nil {
+		return nil
+	}
+	r.goalProgressMu.Lock()
+	defer r.goalProgressMu.Unlock()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if mode == "" {
+		mode = state.GoalAccountingActiveOnly
+	}
+	key := stateGoalTurnKey(threadID, turnID)
+	r.goalAccountingMu.Lock()
+	snapshot, ok := r.goalAccountingTurns[key]
+	if !ok || strings.TrimSpace(snapshot.GoalID) == "" {
+		r.goalAccountingMu.Unlock()
+		return nil
+	}
+	if r.goalTurnUsage == nil {
+		r.goalTurnUsage = map[string]model.AgentUsage{}
+	}
+	currentUsage := r.goalTurnUsage[key]
+	tokenDelta := goalTokenDelta(snapshot.LastAccountedUsage, currentUsage)
+	startedAtMS := snapshot.LastAccountedAtMS
+	if startedAtMS == 0 {
+		startedAtMS = snapshot.StartedAtMS
+	}
+	timeDeltaSeconds := (now.UTC().UnixMilli() - startedAtMS) / 1000
+	if timeDeltaSeconds < 0 {
+		timeDeltaSeconds = 0
+	}
+	expectedGoalID := snapshot.GoalID
+	connectionID := snapshot.ConnectionID
+	r.goalAccountingMu.Unlock()
+
+	outcome, err := r.services.StateRuntime.AccountThreadGoalUsage(
+		context.Background(), threadID, timeDeltaSeconds, tokenDelta, mode, &expectedGoalID,
+	)
+	if err != nil {
+		slog.Warn("failed to account active goal progress", "thread_id", threadID, "turn_id", turnID, "error", err)
+		return nil
+	}
+	if outcome != nil && outcome.Updated && outcome.Goal != nil {
+		r.goalAccountingMu.Lock()
+		if updated, exists := r.goalAccountingTurns[key]; exists && updated.GoalID == expectedGoalID {
+			updated.LastAccountedAtMS = now.UTC().UnixMilli()
+			updated.LastAccountedUsage = currentUsage
+			r.goalAccountingTurns[key] = updated
+		}
+		r.goalAccountingMu.Unlock()
+		r.emitStateThreadGoalUpdate(outcome.Goal, turnID, connectionID, telemetry.GoalEventKindUsageAccounted)
+		if outcome.Goal.Status == state.ThreadGoalBudgetLimited {
+			r.enqueueGoalBudgetLimitSteering(threadID, turnID, outcome.Goal)
+		}
+	}
+	return outcome
+}
+
+func (r *RuntimeRouter) enqueueGoalBudgetLimitSteering(threadID, turnID string, goal *state.ThreadGoal) {
+	if r == nil || goal == nil {
+		return
+	}
+	item := modelInputTextMessage("developer", prompt.BudgetLimit(goalContinuationPrompt(goal)))
+	if err := r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{
+		ThreadID:   threadID,
+		TurnID:     turnID,
+		InputItems: []any{item},
+	}); err != nil {
+		slog.Warn("failed to enqueue goal budget limit steering", "thread_id", threadID, "turn_id", turnID, "error", err)
+	}
+}
+
+func (r *RuntimeRouter) setStateThreadGoalTurnFinishMode(threadID, turnID string, mode state.GoalAccountingMode) bool {
+	if r == nil {
+		return false
+	}
+	key := stateGoalTurnKey(threadID, turnID)
+	r.goalAccountingMu.Lock()
+	defer r.goalAccountingMu.Unlock()
+	snapshot, ok := r.goalAccountingTurns[key]
+	if !ok {
+		return false
+	}
+	snapshot.FinishMode = mode
+	r.goalAccountingTurns[key] = snapshot
+	return true
+}
+
+func (r *RuntimeRouter) clearStateThreadGoalTurnSnapshot(threadID, turnID string) {
+	if r == nil {
+		return
+	}
+	r.goalAccountingMu.Lock()
+	delete(r.goalAccountingTurns, stateGoalTurnKey(threadID, turnID))
+	r.goalAccountingMu.Unlock()
+}
+
+func (r *RuntimeRouter) stateThreadGoalTurnExpectedID(threadID, turnID string) *string {
+	if r == nil {
+		return nil
+	}
+	r.goalAccountingMu.Lock()
+	defer r.goalAccountingMu.Unlock()
+	snapshot, ok := r.goalAccountingTurns[stateGoalTurnKey(threadID, turnID)]
+	if !ok || strings.TrimSpace(snapshot.GoalID) == "" {
+		return nil
+	}
+	goalID := snapshot.GoalID
+	return &goalID
 }
 
 func stateGoalStatus(status GoalStatus) state.ThreadGoalStatus {
@@ -258,19 +609,38 @@ func (r *RuntimeRouter) beginStateThreadGoalTurn(threadID, turnID string, starte
 	if r.goalAccountingTurns == nil {
 		r.goalAccountingTurns = map[string]stateGoalTurnSnapshot{}
 	}
+	if r.goalTurnUsage == nil {
+		r.goalTurnUsage = map[string]model.AgentUsage{}
+	}
+	currentUsage := r.goalTurnUsage[stateGoalTurnKey(threadID, turnID)]
 	r.goalAccountingTurns[stateGoalTurnKey(threadID, turnID)] = stateGoalTurnSnapshot{
-		GoalID: goal.GoalID, StartedAtMS: startedAtMS, ConnectionID: strings.TrimSpace(connectionID),
+		GoalID:             goal.GoalID,
+		StartedAtMS:        startedAtMS,
+		LastAccountedAtMS:  startedAtMS,
+		LastAccountedUsage: currentUsage,
+		ConnectionID:       strings.TrimSpace(connectionID),
+		FinishMode:         state.GoalAccountingActiveOnly,
 	}
 	r.goalAccountingMu.Unlock()
+	r.clearGoalIdleActive()
 }
 
 func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, completedAt time.Time, tokenDelta int64, turnErr CodexErrorInfo) {
 	if r == nil || r.services.StateRuntime == nil {
 		return
 	}
+	r.goalProgressMu.Lock()
+	defer r.goalProgressMu.Unlock()
 	key := stateGoalTurnKey(threadID, turnID)
 	r.goalAccountingMu.Lock()
 	snapshot, ok := r.goalAccountingTurns[key]
+	if r.goalTurnUsage == nil {
+		r.goalTurnUsage = map[string]model.AgentUsage{}
+	}
+	if currentUsage, hasUsage := r.goalTurnUsage[key]; ok && hasUsage {
+		tokenDelta = goalTokenDelta(snapshot.LastAccountedUsage, currentUsage)
+		delete(r.goalTurnUsage, key)
+	}
 	delete(r.goalAccountingTurns, key)
 	r.goalAccountingMu.Unlock()
 	if !ok || strings.TrimSpace(snapshot.GoalID) == "" {
@@ -279,14 +649,23 @@ func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, compl
 	if completedAt.IsZero() {
 		completedAt = time.Now().UTC()
 	}
-	timeDeltaSeconds := (completedAt.UTC().UnixMilli() - snapshot.StartedAtMS) / 1000
+	startedAtMS := snapshot.LastAccountedAtMS
+	if startedAtMS == 0 {
+		startedAtMS = snapshot.StartedAtMS
+	}
+	timeDeltaSeconds := (completedAt.UTC().UnixMilli() - startedAtMS) / 1000
 	if timeDeltaSeconds < 0 {
 		timeDeltaSeconds = 0
 	}
+	mode := snapshot.FinishMode
+	if mode == "" {
+		mode = state.GoalAccountingActiveOnly
+	}
+	finishMode := mode
 	expectedGoalID := snapshot.GoalID
 	outcome, err := r.services.StateRuntime.AccountThreadGoalUsage(
 		context.Background(), threadID, timeDeltaSeconds, tokenDelta,
-		state.GoalAccountingActiveOnly, &expectedGoalID,
+		mode, &expectedGoalID,
 	)
 	if err != nil {
 		slog.Warn("failed to account thread goal usage", "thread_id", threadID, "turn_id", turnID, "error", err)
@@ -295,7 +674,10 @@ func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, compl
 	if outcome != nil && outcome.Updated && outcome.Goal != nil {
 		r.emitStateThreadGoalUpdate(outcome.Goal, turnID, snapshot.ConnectionID, telemetry.GoalEventKindUsageAccounted)
 	}
-	if turnErr == nil {
+	if turnErr == nil && outcome != nil && outcome.Goal != nil && outcome.Goal.Status == state.ThreadGoalActive {
+		r.markGoalIdleActive(outcome.Goal.GoalID)
+	}
+	if turnErr == nil || finishMode == state.GoalAccountingActiveOrComplete {
 		return
 	}
 	current, err := r.services.StateRuntime.GetThreadGoal(context.Background(), threadID)
@@ -329,8 +711,173 @@ func (r *RuntimeRouter) emitStateThreadGoalUpdate(goal *state.ThreadGoal, turnID
 		}
 	}
 	turnIDCopy := strings.TrimSpace(turnID)
-	r.notify(NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: apiGoal.ThreadID, TurnID: &turnIDCopy, Goal: *apiGoal})
-	r.emitGoalAnalyticsEvent(context.Background(), connectionID, nil, apiGoal, analyticsKind, &turnIDCopy)
+	var turnIDPtr *string
+	if turnIDCopy != "" {
+		turnIDPtr = &turnIDCopy
+	}
+	r.notify(NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: apiGoal.ThreadID, TurnID: turnIDPtr, Goal: *apiGoal})
+	r.emitGoalAnalyticsEvent(context.Background(), connectionID, nil, apiGoal, analyticsKind, turnIDPtr)
+}
+
+// continueThreadGoalIfIdle starts an automatic continuation turn when the
+// thread is idle and its persisted goal is active. It is invoked both after
+// active goal mutations and from the thread idle transition so the agent
+// continues working toward the objective across turns without requiring the
+// user to submit a follow-up prompt.
+func (r *RuntimeRouter) continueThreadGoalIfIdle(threadID string) {
+	if r == nil || r.threads == nil || r.threads.IsClosing() {
+		return
+	}
+	r.goalStateMu.Lock()
+	defer r.goalStateMu.Unlock()
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return
+	}
+	if r.threads.ActiveTurn(threadID) != nil {
+		return
+	}
+	if status := r.requireThreadStatus().LoadedStatusForThread(threadID); status.Type != IdleStatus().Type {
+		return
+	}
+
+	ctx := context.Background()
+	var promptGoal *prompt.Goal
+	if r.services.StateRuntime != nil {
+		deferred, err := r.services.StateRuntime.HasThreadGoalContinuationDeferral(ctx, threadID)
+		if err != nil {
+			slog.Warn("failed to read thread goal continuation deferral", "thread_id", threadID, "error", err)
+			return
+		}
+		if deferred {
+			return
+		}
+		goal, err := r.services.StateRuntime.GetThreadGoal(ctx, threadID)
+		if err != nil {
+			slog.Warn("failed to read thread goal for continuation", "thread_id", threadID, "error", err)
+			return
+		}
+		if goal == nil || goal.Status != state.ThreadGoalActive {
+			return
+		}
+		r.markGoalIdleActive(goal.GoalID)
+		promptGoal = goalContinuationPrompt(goal)
+	} else {
+		record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+		if err != nil {
+			slog.Warn("failed to read thread record for goal continuation", "thread_id", threadID, "error", err)
+			return
+		}
+		goal, found, err := goalFromRecord(record)
+		if err != nil {
+			slog.Warn("failed to read legacy thread goal for continuation", "thread_id", threadID, "error", err)
+			return
+		}
+		if !found || goal == nil || goal.Status != GoalActive {
+			return
+		}
+		promptGoal = &prompt.Goal{
+			Objective:   goal.Objective,
+			TokenBudget: cloneInt64PtrAppserver(goal.TokenBudget),
+			TokensUsed:  goal.TokensUsed,
+		}
+	}
+
+	params := &turn.TurnStartParams{
+		ThreadID: threadID,
+		AdditionalContext: map[string]turn.AdditionalContextEntry{
+			"goal": {
+				Kind:  turn.AdditionalContextApplication,
+				Value: prompt.Continuation(promptGoal),
+			},
+		},
+	}
+	if err := r.startGoalContinuationTurn(params); err != nil {
+		slog.Warn("failed to start automatic goal continuation", "thread_id", threadID, "error", err)
+	}
+}
+
+func goalContinuationPrompt(goal *state.ThreadGoal) *prompt.Goal {
+	if goal == nil {
+		return nil
+	}
+	return &prompt.Goal{
+		Objective:       goal.Objective,
+		TokenBudget:     cloneInt64PtrAppserver(goal.TokenBudget),
+		TokensUsed:      goal.TokensUsed,
+		TimeUsedSeconds: goal.TimeUsedSeconds,
+	}
+}
+
+func promptGoalFromAPI(goal Goal) *prompt.Goal {
+	return &prompt.Goal{
+		Objective:       goal.Objective,
+		TokenBudget:     cloneInt64PtrAppserver(goal.TokenBudget),
+		TokensUsed:      goal.TokensUsed,
+		TimeUsedSeconds: goal.TimeUsedSeconds,
+	}
+}
+
+func (r *RuntimeRouter) applyGoalActiveRuntimeEffects(threadID string, goal Goal) {
+	if r == nil {
+		return
+	}
+	if goal.Status != GoalActive {
+		r.clearActiveGoalStateForThread(threadID)
+		return
+	}
+	if active := r.threads.ActiveTurn(threadID); active != nil && strings.TrimSpace(active.TurnID) != "" {
+		r.ensureStateThreadGoalTurnActive(threadID, strings.TrimSpace(active.TurnID), goal.GoalID)
+		item := modelInputTextMessage("developer", prompt.ObjectiveUpdated(promptGoalFromAPI(goal)))
+		if err := r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{
+			ThreadID:   threadID,
+			TurnID:     strings.TrimSpace(active.TurnID),
+			InputItems: []any{item},
+		}); err != nil {
+			slog.Warn("failed to enqueue goal objective update steering", "thread_id", threadID, "error", err)
+		}
+		r.continueThreadGoalIfIdle(threadID)
+		return
+	}
+	r.markGoalIdleActive(goal.GoalID)
+	r.continueThreadGoalIfIdle(threadID)
+}
+
+func (r *RuntimeRouter) startGoalContinuationTurn(params *turn.TurnStartParams) error {
+	if r == nil || params == nil {
+		return fmt.Errorf("%w: goal continuation turn params are required", ErrInvalidRequest)
+	}
+	r.inheritTurnEnvironmentSelections(params)
+	if err := r.prepareTurnStartParams(params); err != nil {
+		return err
+	}
+	if err := r.validateTurnStartEnvironments(params); err != nil {
+		return err
+	}
+	if err := params.Validate(); err != nil {
+		return err
+	}
+	if err := r.runPendingSessionStartHook(context.Background(), params); err != nil {
+		return err
+	}
+	reservedRuntime := false
+	if r.hasRuntimeThreadStore() {
+		if err := r.reserveRuntimeThread(params.ThreadID); err != nil {
+			return err
+		}
+		reservedRuntime = true
+	}
+	response, err := r.requireTurns().Start(params)
+	if err != nil {
+		if reservedRuntime {
+			r.clearActiveRuntimeTurn(params.ThreadID, "")
+		}
+		return err
+	}
+	_ = r.persistTurnStartRuntimeWorkspaceRoots(params)
+	_ = r.persistTurnEnvironmentSelections(params)
+	r.startTurnRuntimeAsync(params, response, "")
+	return nil
 }
 
 func stateGoalTurnKey(threadID, turnID string) string {

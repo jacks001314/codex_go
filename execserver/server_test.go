@@ -172,6 +172,9 @@ func TestLocalEnvironmentInfoReportsTemporaryDirectoriesAndCapability(t *testing
 	if !info.Capabilities.EnvironmentConfigRead {
 		t.Fatalf("EnvironmentConfigRead = false, want true (Rust 646f7c0a91)")
 	}
+	if !info.Capabilities.SandboxedFileStreaming {
+		t.Fatalf("SandboxedFileStreaming = false, want true (Rust #38356)")
+	}
 	if len(info.TemporaryDirectories) == 0 {
 		t.Fatalf("TemporaryDirectories empty, want TEMP/TMP (Rust 92fb33b758)")
 	}
@@ -184,6 +187,25 @@ func TestLocalEnvironmentInfoReportsTemporaryDirectoriesAndCapability(t *testing
 		if !strings.HasPrefix(dir, "file://") {
 			t.Fatalf("temporary directory %q is not a file URI", dir)
 		}
+	}
+}
+
+func TestEnvironmentCapabilitiesSandboxedFileStreamingWire(t *testing.T) {
+	raw := []byte(`{"shell":{"name":"bash","path":"/bin/bash"},"capabilities":{"sandboxedFileStreaming":true}}`)
+	var info EnvironmentInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		t.Fatalf("Unmarshal EnvironmentInfo error = %v", err)
+	}
+	if !info.Capabilities.SandboxedFileStreaming {
+		t.Fatalf("SandboxedFileStreaming = false, want true from wire")
+	}
+	legacy := []byte(`{"shell":{"name":"bash","path":"/bin/bash"},"capabilities":{}}`)
+	var legacyInfo EnvironmentInfo
+	if err := json.Unmarshal(legacy, &legacyInfo); err != nil {
+		t.Fatalf("Unmarshal legacy EnvironmentInfo error = %v", err)
+	}
+	if legacyInfo.Capabilities.SandboxedFileStreaming {
+		t.Fatal("legacy executor should default SandboxedFileStreaming to false")
 	}
 }
 

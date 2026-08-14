@@ -25,6 +25,16 @@ type InlineVisualization struct {
 type InlineVisualizationContext struct {
 	VisualizationsDir string
 	ThreadDir         string
+	// ViewerDir is a dedicated cache, outside the visualization artifacts,
+	// where browser viewer documents are materialized (Rust #38306). When empty
+	// it falls back to the legacy `.codex-viewers` directory beside the
+	// artifact thread directory.
+	ViewerDir string
+	// DisableViewers disables link generation entirely. Callers set this when
+	// the active filesystem policy can write to the viewer cache (for example a
+	// full-disk-write session), so materialized viewer documents cannot be
+	// tampered with before they are opened in a browser (Rust #38306).
+	DisableViewers bool
 }
 
 // RewriteInlineVisualizations converts committed directives to browser links. Incomplete
@@ -95,6 +105,9 @@ func (context *InlineVisualizationContext) viewerURL(file string) (string, bool)
 	if context == nil || filepath.Ext(file) != ".html" || filepath.Base(file) != file {
 		return "", false
 	}
+	if context.DisableViewers {
+		return "", false
+	}
 	visualizationsDir, err := filepath.EvalSymlinks(context.VisualizationsDir)
 	if err != nil {
 		return "", false
@@ -116,6 +129,9 @@ func (context *InlineVisualizationContext) viewerURL(file string) (string, bool)
 		return "", false
 	}
 	viewerDir := filepath.Join(threadDir, ".codex-viewers")
+	if strings.TrimSpace(context.ViewerDir) != "" {
+		viewerDir = context.ViewerDir
+	}
 	if err := os.MkdirAll(viewerDir, 0o700); err != nil {
 		return "", false
 	}

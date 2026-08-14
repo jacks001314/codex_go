@@ -1225,8 +1225,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		OnWarning: func(message string) {
 			r.notify(NotificationWarning, &WarningNotification{ThreadID: stringPtrIfNotEmpty(threadID), Message: message})
 		},
-		SamplingFollowUp:                samplingFollowUp,
-		SamplingCompaction:              samplingCompaction,
+		SamplingFollowUp:   samplingFollowUp,
+		SamplingCompaction: samplingCompaction,
+		OnTokenUsage: func(usage model.AgentUsage) {
+			r.recordGoalTokenUsage(threadID, turnID, usage)
+		},
 		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
 	})
 	if err != nil {
@@ -1352,6 +1355,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
+	r.maybeDispatchNextQueuedSubmission(threadID)
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: lastAgentMessageFromThreadItems(threadItems)})
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
@@ -2016,6 +2020,8 @@ func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID str
 		if r == nil || execution == nil || execution.Invocation == nil {
 			return
 		}
+		r.recordNodeReplReviewEvidence(threadID, execution)
+		r.accountGoalToolProgressForCompletion(threadID, turnID, execution)
 		if item, ok := collaborationCompletedThreadItem(execution, threadID, turnID); ok {
 			completedAt := execution.FinishedAt
 			if completedAt.IsZero() {
@@ -3195,6 +3201,7 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 		Turn:     completedTurnNotificationTurn(turnID, TurnStatusFailed, appErr, nil, &completedAt, &durationMS),
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteSystemError(threadID))
+	r.maybeDispatchNextQueuedSubmission(threadID)
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusErrored, Message: err.Error()})
 	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusFailed, startedAtMS, now, durationMS)
 	r.clearActiveDiffTracker(threadID, turnID)
@@ -3465,6 +3472,9 @@ func (r *RuntimeRouter) notifyThreadStatus(notification *ThreadStatusNotificatio
 		ThreadID: notification.ThreadID,
 		Status:   notification.Status,
 	})
+	if strings.EqualFold(notification.Status.Type, IdleStatus().Type) {
+		r.continueThreadGoalIfIdle(notification.ThreadID)
+	}
 }
 
 func (r *RuntimeRouter) notifyTurnDiffFromSessionItem(threadID string, turnID string, item *session.Item) {

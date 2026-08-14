@@ -10,8 +10,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./appserver -run TestDefaultRuntimeRouterSelectsCodeModeProviderByURL"
+      ]
     },
     {
       "sha": "8d637ae3980fdae79044e638c93c7e579de3c62e",
@@ -20,8 +22,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: no apply_patch prompt fallback in Go"
+      ]
     },
     {
       "sha": "b1373b74a27d1d9b65074a873202683355cae772",
@@ -30,8 +34,10 @@
       "domains": [
         "thread-store"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./session -run TestStoreRevertTruncatesPaginatedHistoryBeforeTurn"
+      ]
     },
     {
       "sha": "357696c5e7127525a9259d3dcfa0574516b1fe84",
@@ -41,8 +47,12 @@
         "network",
         "approvals"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./appserver -run TestManagedNetworkProxyRoutesAllowlistMissThroughAppServerApprovalLikeRust",
+        "go test ./appserver -run TestNetworkApprovalPolicyAmendmentPersistsAndOverlaysStartupLikeRust",
+        "go test ./appserver -run TestRemoteGuardianNetworkDecisionsAreScopedPerRequestAndEnvironmentLikeRust"
+      ]
     },
     {
       "sha": "363427b5e3fe1b6d7499e6bc47651f62a5a3b1d2",
@@ -51,8 +61,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust core API recover_turn_if_idle with no app-server consumer; Go resumes interrupted turns via thread/resume + steer (no start-if-idle submission loop)"
+      ]
     },
     {
       "sha": "902bd9e06b3ecb32cbf7f8e64cd23b956be3e7fe",
@@ -61,8 +73,11 @@
       "domains": [
         "sandbox"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./tui -run TestRewriteInlineVisualizationsMaterializesViewerInDedicatedCache",
+        "go test ./tui -run TestRewriteInlineVisualizationsDisablesViewers"
+      ]
     },
     {
       "sha": "e0de12a126f2beb10599a18fd4ca6b08f6e0a1a0",
@@ -71,8 +86,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust test-only determinism"
+      ]
     },
     {
       "sha": "fe614a6304ef804be74a622e482fdd75977abcba",
@@ -81,8 +98,10 @@
       "domains": [
         "guardian"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust extension crate scaffold"
+      ]
     },
     {
       "sha": "c30a3e49c9231361abeaa88d4a57bb7c3e248a50",
@@ -92,8 +111,11 @@
         "sandbox",
         "exec-server"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./execserver -run TestEnvironmentCapabilitiesSandboxedFileStreamingWire",
+        "go test ./execserver -run TestClientFileReadStreamClosesExactBoundaryAndReleasesCapacityLikeRust"
+      ]
     },
     {
       "sha": "80ceab7aaa25068aee26a52353c0d63039c93b29",
@@ -102,8 +124,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "equivalent existing Go orphan output normalization"
+      ]
     },
     {
       "sha": "4ca1af77a561a8908451ae755d8f2b119ca7c434",
@@ -112,8 +136,10 @@
       "domains": [
         "thread-queue"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust test-only"
+      ]
     },
     {
       "sha": "9ed0047a610aa8e4413dfb456fbf40d7b2f38644",
@@ -122,8 +148,10 @@
       "domains": [
         "exec-server"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust test-only"
+      ]
     },
     {
       "sha": "72fa74fbc9c4b72d513304bfa0eda427d2402ed9",
@@ -132,8 +160,10 @@
       "domains": [
         "rollout"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./rollout -run TestSecurityRiskScorePersistsAndLoadsLikeRust"
+      ]
     },
     {
       "sha": "a7b8c074b577f897111c14de3a5e127b91e2a479",
@@ -142,8 +172,10 @@
       "domains": [
         "guardian"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust extension sampler"
+      ]
     },
     {
       "sha": "a7e9fb54800fc784a5039dc461ac68011abed05d",
@@ -152,8 +184,12 @@
       "domains": [
         "guardian"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./sandbox -run TestPermissionProfileIntersectWithReadOnly",
+        "go test ./appserver -run TestModelGuardianReviewerSetsPermissionProfile",
+        "Go Guardian review is a text-only assessment (no exec/view tools), so it cannot read denied paths or write files; IntersectWithReadOnly + profile wiring cover the constraint surface"
+      ]
     },
     {
       "sha": "d09cf7e5f431bf3c331e78f5a4f7ae2913b4fbd6",
@@ -162,8 +198,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./tui/history_cell -run TestUserPromptLongURLWrapsPreservingGutterAndBackground"
+      ]
     },
     {
       "sha": "6fc6b9d6d2580d62622fc9884b5f5707f6505a5e",
@@ -172,8 +210,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Go app-server client request/response is synchronous (no bounded worker/event queue); Rust app-server-client facade architecture absent"
+      ]
     },
     {
       "sha": "911012490ca9b6529dfaf14b0396363dce981169",
@@ -182,8 +222,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust extension"
+      ]
     },
     {
       "sha": "5e32f728f1f86a967c6be057351f12505778df8f",
@@ -192,8 +234,10 @@
       "domains": [
         "skills"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "systemskills assets synced from Rust skill-creator"
+      ]
     },
     {
       "sha": "683716cee9585969ad265eeb08358b24fb93a583",
@@ -202,8 +246,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./appserver -run TestThreadStartEffectivePermissionsTrustProject"
+      ]
     },
     {
       "sha": "ef596c68ca35dcd42283a0014f9b7fb057147269",
@@ -212,8 +258,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./appserver -run TestThreadStartRejectsUnloadableRequiredManagedHooks"
+      ]
     },
     {
       "sha": "779e9114ae63cad0f6d4f1f792463bd6135b7096",
@@ -222,8 +270,10 @@
       "domains": [
         "sandbox"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust codex-linux-sandbox bwrap launcher; Go uses --die-with-parent strategy"
+      ]
     },
     {
       "sha": "053dda6b897887c0bbd8efa5d4952a4380dbb5e4",
@@ -232,8 +282,12 @@
       "domains": [
         "guardian"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./context -run TestNodeReplReviewEvidence",
+        "go test ./state -run TestBuildPromptIncludesNodeReplReviewEvidence",
+        "go test ./appserver -run TestNodeRepl"
+      ]
     },
     {
       "sha": "2bd8727a0c07655fafeae0e4b6fe4c2b4741b399",
@@ -242,8 +296,10 @@
       "domains": [
         "rollout"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./rollout -run TestLoadPreservesFloatingPointRolloutValues"
+      ]
     },
     {
       "sha": "6851fae57cf7306e1d7a093d334b1116d33ce5ad",
@@ -252,8 +308,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust test-only"
+      ]
     },
     {
       "sha": "a70211249ab5d003836a2bb339f69265df84512c",
@@ -262,8 +320,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: no Go tool lifecycle extension API"
+      ]
     },
     {
       "sha": "66919805ea080053d1933b6b43afeb0d8bf70c91",
@@ -272,8 +332,10 @@
       "domains": [
         "guardian"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust extension pool"
+      ]
     },
     {
       "sha": "d167a3604c404e4ee4bc5b5d0b7923e24e0f54f8",
@@ -282,8 +344,10 @@
       "domains": [
         "guardian"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust extension"
+      ]
     },
     {
       "sha": "42bb50d5027fbad3431bdd56667bbee30700aad5",
@@ -292,8 +356,10 @@
       "domains": [
         "thread-store"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./session -run TestStoreUpdateMetadataNoOpReturnsMaterializedThread"
+      ]
     },
     {
       "sha": "73862481e52c1d4f610d127663fad564c0652742",
@@ -302,8 +368,10 @@
       "domains": [
         "guardian"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust extension"
+      ]
     },
     {
       "sha": "2aba3219e605051bbeca4eb6b1a1f3dce404cfd3",
@@ -312,8 +380,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./shell -run TestReadPathsRecognizesPowerShellGetContentForms"
+      ]
     },
     {
       "sha": "4f7032173e574c443a9abf6515382d754295bb24",
@@ -322,8 +392,12 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./mcp -run TestRewriteArgumentsRejectsDeniedReadPolicyBeforeUpload",
+        "go test ./mcp -run TestRewriteArgumentsGrantsReadOverrideDeniedPath",
+        "go test ./appserver -run TestEnvironmentOpenAIFileSystemRejectsUnsupportedSandboxedFileStreaming"
+      ]
     },
     {
       "sha": "f8a3db0b996c52a248c1dcfc3a9dc507e840ced0",
@@ -333,8 +407,11 @@
         "mcp",
         "auth"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./mcp -run TestMCPStatusSetsReauthenticationFailureReason",
+        "go test ./mcp -run TestMCPInitAuthErrorDisplayMatchesRust"
+      ]
     },
     {
       "sha": "9946da9af1829410271f6b76f9159961f7281e0a",
@@ -343,8 +420,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust git-attribution prompt extension not present in Go"
+      ]
     },
     {
       "sha": "588e18aae52bdb35fff94a7760b6b502cf0fd154",
@@ -353,8 +432,11 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./execserver -run TestCapabilityDiscoveryCacheRetriesTransientFailuresAndCachesPermanent",
+        "go test ./execserver -run TestIsRetryableRecoveryError"
+      ]
     },
     {
       "sha": "781445f7c6928eda08fe8dc160a6003d2f3a184b",
@@ -363,8 +445,10 @@
       "domains": [
         "thread-store"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust session-internal ThreadEnvironments refactor, no behavioral change; Go centralizes environment selection in RuntimeRouter"
+      ]
     },
     {
       "sha": "990218bbbd5cb4bb5aafd646c56461dfb2f95d17",
@@ -373,8 +457,10 @@
       "domains": [
         "auth"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./auth -count=1; go test ./app -run TestMCPServerRejectsWorkloadIdentityLikeRust"
+      ]
     },
     {
       "sha": "5ed321ce0029614c7277f671c12fb5ea7a30ea6a",
@@ -383,8 +469,10 @@
       "domains": [
         "auth"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./appserver -run TestAccountRPCsRejectWorkloadIdentityLikeRust"
+      ]
     },
     {
       "sha": "507ef0b3715d2427326ac090d8818e8dcba5efc0",
@@ -393,8 +481,10 @@
       "domains": [
         "guardian"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./state -run TestBuildPromptNodeReplGuidanceGatedOnModelMetadata"
+      ]
     },
     {
       "sha": "f898ebcafdeb0052abc844d9e11b5e754b8ec4af",
@@ -403,8 +493,10 @@
       "domains": [
         "plugins"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./plugin -run TestTargetCuratedMarketplaceForRuntime"
+      ]
     },
     {
       "sha": "93327c852a1fd9347cacf8fce268d793e6503d1b",
@@ -414,8 +506,10 @@
         "guardian",
         "model"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./state -run TestBuildPromptNodeReplGuidanceGatedOnModelMetadata"
+      ]
     },
     {
       "sha": "b87327f4e594759f1f1af76d151777d8676fb0cc",
@@ -424,8 +518,10 @@
       "domains": [
         "mcp"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Go TLS backend differs from rustls"
+      ]
     },
     {
       "sha": "1992f8c0183c6990c82649ef974913cb15a6eef5",
@@ -435,8 +531,10 @@
         "model",
         "approvals"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./appserver -run TestTurnApprovalPolicyForTurnPreservesAutoReviewProtectedPolicyLikeRust"
+      ]
     },
     {
       "sha": "4343b2bdc4e7eb95880a230e588bd07d9f181c2f",
@@ -445,8 +543,11 @@
       "domains": [
         "thread-store"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./appserver -run TestRouterThreadRevertTruncatesPaginatedHistory",
+        "go test ./session -run TestStoreRevertTruncatesPaginatedHistoryBeforeTurn"
+      ]
     },
     {
       "sha": "53eaa297e595fc98df0f33d4c63686a7014d7c9a",
@@ -455,8 +556,10 @@
       "domains": [
         "guardian"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust extension"
+      ]
     },
     {
       "sha": "3ba52d6075bb69795d008d427139c28fdebdb436",
@@ -466,8 +569,10 @@
         "model",
         "context"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./context -run TestCurrentTimeReminder"
+      ]
     },
     {
       "sha": "bff03ecce582d55ff62d8ee37e576b63c24bc0a9",
@@ -476,8 +581,10 @@
       "domains": [
         "compact"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./compact -run TestCompactRemotelyRetainsClientAuthoredDeveloperMessagesWhenEnabled"
+      ]
     },
     {
       "sha": "6344a655a5966f92e009a74928fb0559b41f9093",
@@ -486,8 +593,10 @@
       "domains": [
         "context"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./appserver -run TestRuntimeAgentControllerFullHistoryForkDropsInheritedCurrentTimeReminders"
+      ]
     },
     {
       "sha": "ca83f7908ca3c0184d2b7062c7bf2a0cff2d659f",
@@ -496,8 +605,12 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./tui/tea -run TestModelCtrlCOpensRunningTaskExitMenuInDaemonSession",
+        "go test ./tui/tea -run TestModelCtrlCKeepsInterruptWithoutDaemonSession",
+        "go test ./tui/tea -run TestModelApplyRunningTaskExit"
+      ]
     },
     {
       "sha": "1da59ad257115cc5734e6781d5ac0b4f08a6e064",
@@ -507,8 +620,10 @@
         "mcp",
         "auth"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./mcp -run TestRuntimeConfigOAuthCallbackPortParsesPerServerMatchesRust"
+      ]
     },
     {
       "sha": "5cc65ecb9831917397b9728b708880132d0d58ce",
@@ -518,8 +633,11 @@
         "model",
         "context"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./model -run TestModelInfoUpgradeRetirementTimeParsingMatchesRust",
+        "go test ./model -run TestListModelsExposesUpgradeRetirementTimeLikeRust"
+      ]
     },
     {
       "sha": "813dc5f08d771d351e1da7f00eace464ffe43263",
@@ -528,8 +646,10 @@
       "domains": [
         "sandbox"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Bazel build-only"
+      ]
     },
     {
       "sha": "1b4ea8b3bef397f26216411288eec7bf9bee33ac",
@@ -538,8 +658,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./model -run TestRecordResponsesRetryEmitsRustShape"
+      ]
     },
     {
       "sha": "4d9f3021c828facd6bc480036684484218e350b5",
@@ -548,8 +670,12 @@
       "domains": [
         "guardian"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./context -run TestNodeReplReviewEvidenceModeFor",
+        "go test ./context -run TestNodeReplReviewEvidenceMultimodalInputItems",
+        "go test ./appserver -run TestNodeReplReviewImageURLsFiltersAndNormalizes"
+      ]
     },
     {
       "sha": "9341b38310c73957e1313eab3f7c4034689bdec9",
@@ -559,8 +685,11 @@
         "thread-store",
         "thread-queue"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "go test ./session -run TestStoreQueueSubmissionCRUD",
+        "go test ./appserver -run TestRouterThreadQueueAddListUpdateDelete"
+      ]
     },
     {
       "sha": "18bbb585e7672e574ca1365d13c9604dbc091df0",
@@ -569,8 +698,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust type ergonomics"
+      ]
     },
     {
       "sha": "535795f7d12495ee6ea18db3201d2f85c3606aef",
@@ -579,8 +710,10 @@
       "domains": [
         "daily-sync"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "N/A: Rust internal TurnEnvironment field-collapse refactor, no behavioral change"
+      ]
     },
     {
       "sha": "c6dee5f49f9d4763cb498904d9bf0d0fd0c4586b",
@@ -589,8 +722,10 @@
       "domains": [
         "thread-store"
       ],
-      "status": "audit_pending",
-      "evidence": []
+      "status": "complete",
+      "evidence": [
+        "Go thread/revert truncates in place without unloading/reloading, so thread subscriptions are preserved"
+      ]
     }
   ]
 }

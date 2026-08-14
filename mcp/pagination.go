@@ -8,12 +8,12 @@ import (
 )
 
 const (
-	maxMCPCatalogPages           = 100
-	maxMCPCatalogItems           = 2048
-	maxCodexAppsCatalogItems     = 8192
-	maxMCPPaginationCursorBytes  = 64 * 1024
-	defaultMCPPaginationTimeout  = 30 * time.Second
-	defaultMCPCatalogItemLimit   = maxMCPCatalogItems
+	maxMCPCatalogPages          = 100
+	maxMCPCatalogItems          = 2048
+	maxCodexAppsCatalogItems    = 8192
+	maxMCPPaginationCursorBytes = 64 * 1024
+	defaultMCPPaginationTimeout = 30 * time.Second
+	defaultMCPCatalogItemLimit  = maxMCPCatalogItems
 )
 
 type mcpPaginationFetch[T any] func(context.Context, *string) ([]T, *string, error)

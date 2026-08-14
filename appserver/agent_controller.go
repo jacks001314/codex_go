@@ -155,6 +155,9 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 			return nil, forkErr
 		}
 		record = forked
+		if forkOptions.Mode == session.ForkAll {
+			record.Items = filterInheritedCurrentTimeReminders(record.Items)
+		}
 	} else {
 		record = &session.Record{ID: threadID, SessionID: string(threadID), ParentThreadID: session.ThreadID(c.parentID), CreatedAt: now, UpdatedAt: now, RecencyAt: now}
 		if err := c.router.services.ThreadRouter.store.Create(record); err != nil {
@@ -746,6 +749,21 @@ func runtimeForkTurns(value *string) string {
 		return "all"
 	}
 	return strings.ToLower(strings.TrimSpace(*value))
+}
+
+// filterInheritedCurrentTimeReminders removes current-time reminder developer
+// items copied from a parent thread into a full-history fork. The child turn
+// injects its own fresh reminder, so inheriting parent reminders would
+// accumulate stale time markers in the forked context (Rust #38446).
+func filterInheritedCurrentTimeReminders(items []session.Item) []session.Item {
+	filtered := items[:0]
+	for i := range items {
+		if sessionItemIsCurrentTimeReminder(&items[i]) {
+			continue
+		}
+		filtered = append(filtered, items[i])
+	}
+	return filtered
 }
 
 func firstNonNilError(err error, fallback error) error {

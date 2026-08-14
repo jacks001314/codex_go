@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"codex_go/agent"
+	"codex_go/model"
 	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/state"
@@ -345,6 +346,103 @@ func TestRuntimeRouterPersistsThreadGoalInRustGoalsDBAndRollout(t *testing.T) {
 	}
 	if got, err := stateRuntime.GetThreadGoal(ctx, string(record.ID)); err != nil || got != nil {
 		t.Fatalf("goal after clear = %#v, %v", got, err)
+	}
+}
+
+type goalContinuationTestAgent struct {
+	threadID     string
+	stateRuntime *state.StateRuntime
+	requests     chan model.AgentRequest
+}
+
+func (a *goalContinuationTestAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.requests <- *request
+	complete := state.ThreadGoalComplete
+	if _, err := a.stateRuntime.UpdateThreadGoal(ctx, a.threadID, state.GoalUpdate{Status: &complete}); err != nil {
+		return nil, err
+	}
+	return &model.AgentResponse{
+		ResponseID: "goal-continuation-response",
+		Message:    "goal complete",
+		Items:      []model.AgentItem{{ID: "goal-continuation-message", Type: "agent_message", Text: "goal complete"}},
+	}, nil
+}
+
+func TestRuntimeRouterActiveGoalContinuationStartsTurnWhenIdle(t *testing.T) {
+	home := t.TempDir()
+	ctx := context.Background()
+	sqliteConfig, err := state.NewSqliteConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateRuntime, err := state.InitStateRuntime(ctx, sqliteConfig, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateRuntime.Close()
+
+	store := session.NewStore(home)
+	threadRouter := NewRouter(store)
+	threadRouter.SetStateRuntime(stateRuntime)
+	now := time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC)
+	record := &session.Record{
+		ID: "goal-continuation-thread", SessionID: "goal-continuation-session", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: home, ModelProvider: "openai", HistoryMode: "paginated"},
+		Items:    []session.Item{{ID: "u1", Type: "message", Role: "user", Text: "start goal", Metadata: map[string]any{"turnId": "turn-1"}}},
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := threadRouter.createThreadRollout(record, now); err != nil {
+		t.Fatal(err)
+	}
+
+	objective := "finish parity"
+	budget := int64(1000)
+	active := state.ThreadGoalActive
+	if _, err := stateRuntime.ReplaceThreadGoal(ctx, string(record.ID), objective, active, &budget); err != nil {
+		t.Fatal(err)
+	}
+
+	requests := make(chan model.AgentRequest, 1)
+	agent := &goalContinuationTestAgent{threadID: string(record.ID), stateRuntime: stateRuntime, requests: requests}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: threadRouter,
+		StateRuntime: stateRuntime,
+		TurnRuntime:  turn.NewRuntime(&turn.RuntimeOptions{Agent: agent}),
+	})
+	router.requireThreadStatus().UpsertThread(string(record.ID), false)
+
+	router.continueThreadGoalIfIdle(string(record.ID))
+
+	select {
+	case request := <-requests:
+		if !strings.Contains(request.Instructions, objective) {
+			t.Fatalf("continuation instructions = %q, want objective %q", request.Instructions, objective)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for goal continuation turn")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for router.threads.ActiveTurn(string(record.ID)) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for goal continuation turn to complete")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := router.threads.WaitForTurnWorkers(waitCtx); err != nil {
+		t.Fatalf("wait for goal continuation turn worker: %v", err)
+	}
+
+	goal, err := stateRuntime.GetThreadGoal(ctx, string(record.ID))
+	if err != nil || goal == nil || goal.Status != state.ThreadGoalComplete {
+		t.Fatalf("goal after continuation = %#v, %v", goal, err)
 	}
 }
 

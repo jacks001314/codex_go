@@ -3,17 +3,20 @@ package appserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
 
+	"codex_go/config"
 	execserverclient "codex_go/execserver"
 	"codex_go/mcp"
 	"codex_go/turn"
 )
 
 type environmentOpenAIFileSystem struct {
-	record EnvironmentRecord
+	record          EnvironmentRecord
+	requiresSandbox bool
 }
 
 func (f *environmentOpenAIFileSystem) Metadata(ctx context.Context, pathURI string) (*mcp.OpenAIFileMetadata, error) {
@@ -22,6 +25,11 @@ func (f *environmentOpenAIFileSystem) Metadata(ctx context.Context, pathURI stri
 		return nil, err
 	}
 	defer client.Close()
+	if f.requiresSandbox {
+		if err := f.requireSandboxedFileStreaming(ctx, client); err != nil {
+			return nil, err
+		}
+	}
 	metadata, err := client.FSGetMetadata(ctx, &execserverclient.FSGetMetadataParams{Path: pathURI})
 	if err != nil {
 		return nil, err
@@ -34,12 +42,32 @@ func (f *environmentOpenAIFileSystem) Open(ctx context.Context, pathURI string) 
 	if err != nil {
 		return nil, err
 	}
+	if f.requiresSandbox {
+		if err := f.requireSandboxedFileStreaming(ctx, client); err != nil {
+			_ = client.Close()
+			return nil, err
+		}
+	}
 	stream, err := client.FSReadFileStream(ctx, &execserverclient.FSReadFileParams{Path: pathURI})
 	if err != nil {
 		_ = client.Close()
 		return nil, err
 	}
 	return &environmentOpenAIFileReader{ctx: ctx, client: client, stream: stream}, nil
+}
+
+func (f *environmentOpenAIFileSystem) requireSandboxedFileStreaming(ctx context.Context, client sandboxedFileStreamingInfo) error {
+	if f == nil || !f.requiresSandbox {
+		return nil
+	}
+	info, err := client.EnvironmentInfo(ctx)
+	if err != nil {
+		return err
+	}
+	if !info.Capabilities.SandboxedFileStreaming {
+		return errors.New("selected executor does not support sandboxed file streaming")
+	}
+	return nil
 }
 
 func (f *environmentOpenAIFileSystem) dial(ctx context.Context) (*execserverclient.Client, error) {
@@ -70,6 +98,10 @@ type environmentOpenAIFileReader struct {
 	buffer []byte
 	eof    bool
 	closed bool
+}
+
+type sandboxedFileStreamingInfo interface {
+	EnvironmentInfo(context.Context) (*execserverclient.EnvironmentInfo, error)
 }
 
 func (r *environmentOpenAIFileReader) Read(destination []byte) (int, error) {
@@ -131,4 +163,21 @@ func (r *RuntimeRouter) primaryTurnOpenAIFileSystem(params *turn.TurnStartParams
 		return nil
 	}
 	return &environmentOpenAIFileSystem{record: *record}
+}
+
+// openAIFileReadPolicy returns a read-policy hook for the local fallback
+// filesystem. Remote environments already enforce the filesystem policy in
+// the executor, so the hook is only used when no executor-backed file system
+// is available.
+func openAIFileReadPolicy(fileSystem mcp.OpenAIFileSystem, resolution *config.SandboxPermissionProfileResolution) func(string) error {
+	if fileSystem != nil || resolution == nil || resolution.Profile == nil || !resolution.Profile.HasDenyReadEntries() {
+		return nil
+	}
+	profile := resolution.Profile
+	return func(path string) error {
+		if profile.DeniesReadPath(path) {
+			return fmt.Errorf("filesystem policy denies reading this path")
+		}
+		return nil
+	}
 }

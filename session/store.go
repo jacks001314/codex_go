@@ -249,6 +249,7 @@ type Metadata struct {
 	ElicitationCount           int                         `json:"elicitation_count,omitempty"`
 	Extra                      map[string]any              `json:"extra,omitempty"`
 	RolloutTurns               []TurnSnapshot              `json:"rollout_turns,omitempty"`
+	QueuedSubmissions          []QueuedSubmission          `json:"queued_submissions,omitempty"`
 }
 
 // BaseInstructionsProvenance records whether persisted instructions were explicit or
@@ -272,6 +273,14 @@ type TurnSnapshot struct {
 	DurationMS     *int64 `json:"duration_ms,omitempty"`
 	ErrorMessage   string `json:"error_message,omitempty"`
 	CodexErrorInfo any    `json:"codex_error_info,omitempty"`
+}
+
+// QueuedSubmission is a persistent queued user submission awaiting dispatch
+// (Rust #38456). Input mirrors the protocol's user-input item array.
+type QueuedSubmission struct {
+	ID                  string `json:"id"`
+	Input               []any  `json:"input"`
+	ClientUserMessageID string `json:"client_user_message_id"`
 }
 
 type Record struct {
@@ -628,6 +637,217 @@ func (s *Store) Load(threadID ThreadID) (*Record, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.loadLocked(threadID)
+}
+
+// Revert replaces a loaded paginated thread's durable history with the prefix
+// before beforeTurnID while preserving the thread ID (Rust #38292/#38440). The
+// materialized history is truncated to the retained prefix and persisted as the
+// thread's own local history, dropping any inherited-history reference.
+func (s *Store) Revert(threadID ThreadID, beforeTurnID string) (*Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, err := s.readMaterializedLocked(threadID, true, map[ThreadID]struct{}{})
+	if err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(record.Metadata.HistoryMode), "paginated") {
+		return nil, fmt.Errorf("%w: thread %s does not use paginated history", ErrInvalidThreadID, threadID)
+	}
+	if strings.TrimSpace(beforeTurnID) == "" {
+		return nil, fmt.Errorf("%w: beforeTurnId is required", ErrInvalidThreadID)
+	}
+	items, err := itemsBeforeTurn(record.Items, beforeTurnID)
+	if err != nil {
+		return nil, err
+	}
+	record.Items = items
+	record.Metadata.RolloutTurns = forkTurnSnapshots(record.Metadata.RolloutTurns, items)
+	record.InheritedItems = 0
+	record.InheritedTurns = 0
+	record.HistoryBase = nil
+	record.UpdatedAt = time.Now().UTC()
+	if err := s.saveLocked(record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+// MaxQueueItems is the maximum number of queued submissions retained per
+// thread (Rust #38456).
+const MaxQueueItems = 100
+
+// EnqueueSubmission appends a queued user submission to a thread's durable
+// queue (Rust #38456).
+func (s *Store) EnqueueSubmission(threadID ThreadID, submission QueuedSubmission) (*QueuedSubmission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, err := s.loadLocked(threadID)
+	if err != nil {
+		return nil, err
+	}
+	if len(record.Metadata.QueuedSubmissions) >= MaxQueueItems {
+		return nil, fmt.Errorf("%w: queue cannot contain more than %d submissions", ErrConflict, MaxQueueItems)
+	}
+	submission = cloneQueuedSubmission(submission)
+	if strings.TrimSpace(submission.ID) == "" {
+		submission.ID = uuid.NewString()
+	}
+	record.Metadata.QueuedSubmissions = append(record.Metadata.QueuedSubmissions, submission)
+	if err := s.saveLocked(record); err != nil {
+		return nil, err
+	}
+	return cloneQueuedSubmissionPtr(&submission), nil
+}
+
+// ListQueueSubmissions returns a page of queued submissions. An empty cursor
+// starts at the beginning; the returned cursor points to the next page.
+func (s *Store) ListQueueSubmissions(threadID ThreadID, cursor string, limit int) ([]QueuedSubmission, string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, err := s.loadLocked(threadID)
+	if err != nil {
+		return nil, "", err
+	}
+	if limit <= 0 {
+		limit = MaxQueueItems
+	}
+	offset := 0
+	if strings.TrimSpace(cursor) != "" {
+		if parsed, parseErr := strconv.Atoi(cursor); parseErr == nil && parsed >= 0 {
+			offset = parsed
+		} else {
+			return nil, "", fmt.Errorf("%w: invalid queue cursor", ErrInvalidThreadID)
+		}
+	}
+	queue := record.Metadata.QueuedSubmissions
+	if offset > len(queue) {
+		offset = len(queue)
+	}
+	end := offset + limit
+	if end > len(queue) {
+		end = len(queue)
+	}
+	page := cloneQueuedSubmissions(queue[offset:end])
+	nextCursor := ""
+	if end < len(queue) {
+		nextCursor = strconv.Itoa(end)
+	}
+	return page, nextCursor, nil
+}
+
+// UpdateQueueSubmission replaces the input of an existing queued submission.
+func (s *Store) UpdateQueueSubmission(threadID ThreadID, submissionID string, input []any) (*QueuedSubmission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, err := s.loadLocked(threadID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range record.Metadata.QueuedSubmissions {
+		if record.Metadata.QueuedSubmissions[i].ID != submissionID {
+			continue
+		}
+		record.Metadata.QueuedSubmissions[i].Input = cloneAnySlice(input)
+		if err := s.saveLocked(record); err != nil {
+			return nil, err
+		}
+		return cloneQueuedSubmissionPtr(&record.Metadata.QueuedSubmissions[i]), nil
+	}
+	return nil, fmt.Errorf("%w: queued submission not found: %s", ErrThreadNotFound, submissionID)
+}
+
+// DeleteQueueSubmission removes one queued submission.
+func (s *Store) DeleteQueueSubmission(threadID ThreadID, submissionID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, err := s.loadLocked(threadID)
+	if err != nil {
+		return false, err
+	}
+	queue := record.Metadata.QueuedSubmissions
+	for i := range queue {
+		if queue[i].ID != submissionID {
+			continue
+		}
+		record.Metadata.QueuedSubmissions = append(cloneQueuedSubmissions(queue[:i]), cloneQueuedSubmissions(queue[i+1:])...)
+		if err := s.saveLocked(record); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// ReorderQueueSubmissions replaces the queue order with the provided IDs.
+func (s *Store) ReorderQueueSubmissions(threadID ThreadID, submissionIDs []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, err := s.loadLocked(threadID)
+	if err != nil {
+		return err
+	}
+	byID := make(map[string]QueuedSubmission, len(record.Metadata.QueuedSubmissions))
+	for _, submission := range record.Metadata.QueuedSubmissions {
+		byID[submission.ID] = submission
+	}
+	reordered := make([]QueuedSubmission, 0, len(submissionIDs))
+	for _, id := range submissionIDs {
+		submission, ok := byID[id]
+		if !ok {
+			return fmt.Errorf("%w: queued submission not found: %s", ErrThreadNotFound, id)
+		}
+		reordered = append(reordered, cloneQueuedSubmission(submission))
+	}
+	if len(reordered) != len(record.Metadata.QueuedSubmissions) {
+		return fmt.Errorf("%w: reorder must include every queued submission", ErrInvalidThreadID)
+	}
+	record.Metadata.QueuedSubmissions = reordered
+	return s.saveLocked(record)
+}
+
+// DequeueFirstSubmission removes and returns the front of the queue.
+func (s *Store) DequeueFirstSubmission(threadID ThreadID) (*QueuedSubmission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, err := s.loadLocked(threadID)
+	if err != nil {
+		return nil, err
+	}
+	if len(record.Metadata.QueuedSubmissions) == 0 {
+		return nil, nil
+	}
+	first := cloneQueuedSubmission(record.Metadata.QueuedSubmissions[0])
+	record.Metadata.QueuedSubmissions = cloneQueuedSubmissions(record.Metadata.QueuedSubmissions[1:])
+	if err := s.saveLocked(record); err != nil {
+		return nil, err
+	}
+	return &first, nil
+}
+
+// DequeueSubmission removes and returns a specific submission, or the front of
+// the queue when submissionID is empty.
+func (s *Store) DequeueSubmission(threadID ThreadID, submissionID string) (*QueuedSubmission, error) {
+	if strings.TrimSpace(submissionID) == "" {
+		return s.DequeueFirstSubmission(threadID)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, err := s.loadLocked(threadID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range record.Metadata.QueuedSubmissions {
+		if record.Metadata.QueuedSubmissions[i].ID != submissionID {
+			continue
+		}
+		submission := cloneQueuedSubmission(record.Metadata.QueuedSubmissions[i])
+		record.Metadata.QueuedSubmissions = append(cloneQueuedSubmissions(record.Metadata.QueuedSubmissions[:i]), cloneQueuedSubmissions(record.Metadata.QueuedSubmissions[i+1:])...)
+		if err := s.saveLocked(record); err != nil {
+			return nil, err
+		}
+		return &submission, nil
+	}
+	return nil, fmt.Errorf("%w: queued submission not found: %s", ErrThreadNotFound, submissionID)
 }
 
 func (s *Store) loadLocked(threadID ThreadID) (*Record, error) {
@@ -2490,6 +2710,37 @@ func cloneAnyMap(values map[string]any) map[string]any {
 	cloned := make(map[string]any, len(values))
 	for key, value := range values {
 		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneAnySlice(values []any) []any {
+	if values == nil {
+		return nil
+	}
+	return append([]any(nil), values...)
+}
+
+func cloneQueuedSubmission(submission QueuedSubmission) QueuedSubmission {
+	submission.Input = cloneAnySlice(submission.Input)
+	return submission
+}
+
+func cloneQueuedSubmissionPtr(submission *QueuedSubmission) *QueuedSubmission {
+	if submission == nil {
+		return nil
+	}
+	clone := cloneQueuedSubmission(*submission)
+	return &clone
+}
+
+func cloneQueuedSubmissions(submissions []QueuedSubmission) []QueuedSubmission {
+	if submissions == nil {
+		return nil
+	}
+	cloned := make([]QueuedSubmission, len(submissions))
+	for i := range submissions {
+		cloned[i] = cloneQueuedSubmission(submissions[i])
 	}
 	return cloned
 }

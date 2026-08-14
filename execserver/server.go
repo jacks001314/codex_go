@@ -332,6 +332,9 @@ type EnvironmentCapabilities struct {
 	// Rust 646f7c0a91: whether this executor supports environmentConfig/read;
 	// defaults to false when deserializing legacy executor responses.
 	EnvironmentConfigRead bool `json:"environmentConfigRead"`
+	// Rust #38356: whether this executor can stream files while enforcing
+	// sandboxed filesystem reads.
+	SandboxedFileStreaming bool `json:"sandboxedFileStreaming"`
 }
 
 type EnvironmentStatus struct {
@@ -3109,7 +3112,8 @@ func localEnvironmentInfo() *EnvironmentInfo {
 			NetworkProxyLaunch:         true,
 			CapabilityDiscoverySandbox: true,
 			// Rust 646f7c0a91: local executors advertise environmentConfig/read.
-			EnvironmentConfigRead: true,
+			EnvironmentConfigRead:  true,
+			SandboxedFileStreaming: true,
 		},
 	}
 }

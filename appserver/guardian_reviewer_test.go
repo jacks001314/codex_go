@@ -16,6 +16,7 @@ import (
 
 	"codex_go/auth"
 	"codex_go/model"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/tool"
@@ -23,6 +24,26 @@ import (
 )
 
 type guardianAgentFunc func(context.Context, *model.AgentRequest) (*model.AgentResponse, error)
+
+func TestModelGuardianReviewerSetsPermissionProfile(t *testing.T) {
+	var captured *model.AgentRequest
+	reviewer := &modelGuardianReviewer{
+		agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+			captured = request
+			return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`}, nil
+		}),
+		store: state.NewReviewStore(),
+		permissionProfile: func(threadID, turnID string) *sandbox.PermissionProfile {
+			return &sandbox.PermissionProfile{SandboxPolicy: sandbox.NewReadOnlyPolicy()}
+		},
+	}
+	if _, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "command", Command: "ls", CWD: "/repo"}); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if captured == nil || captured.PermissionProfile == nil || captured.PermissionProfile.SandboxPolicy == nil || captured.PermissionProfile.SandboxPolicy.Kind != sandbox.SandboxReadOnly {
+		t.Fatalf("captured permission profile = %#v", captured)
+	}
+}
 
 func (f guardianAgentFunc) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
 	return f(ctx, request)

@@ -29,6 +29,19 @@ func TestTargetCuratedMarketplaceForRuntime(t *testing.T) {
 	}
 }
 
+func TestPluginServiceSetRuntimeRouteReportsChange(t *testing.T) {
+	service := NewPluginService()
+	if !service.SetRuntimeRoute("chatgpt", "openai") {
+		t.Fatal("first route set did not report a change")
+	}
+	if service.SetRuntimeRoute("chatgpt", "openai") {
+		t.Fatal("same route unexpectedly reported a change")
+	}
+	if !service.SetRuntimeRoute("api-key", "openai") {
+		t.Fatal("auth-mode route change did not report a change")
+	}
+}
+
 func TestPluginServiceRoutesCuratedCapabilitiesHooksAndSkills(t *testing.T) {
 	service := NewPluginService()
 	for _, marketplace := range []string{OpenAICuratedMarketplaceName, OpenAIAPICuratedMarketplaceName, OpenAIRemoteCuratedMarketplaceName} {

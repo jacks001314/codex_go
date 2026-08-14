@@ -598,6 +598,7 @@ type Options struct {
 	OnPostNotification            NotificationPostFunc
 	OnReadGitDiff                 GitDiffReaderFunc
 	OnStopBackgroundTerminals     StopBackgroundTerminalsFunc
+	LocalDaemonSession            bool
 	OnReadDebugConfig             DebugConfigReaderFunc
 	OnReadGoal                    GoalReaderFunc
 	OnSetGoal                     GoalSetterFunc
@@ -777,6 +778,7 @@ type Model struct {
 	onSteerRequest                  SteerRequestFunc
 	onInterrupt                     InterruptFunc
 	onInterruptMCPStartup           InterruptFunc
+	localDaemonSession              bool
 	onExternalEditor                ExternalEditorFunc
 	keymapConfig                    *codextui.KeymapConfig
 	keymapSelectedContext           string
@@ -1017,6 +1019,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSteerRequest:                  options.OnSteerRequest,
 		onInterrupt:                     options.OnInterrupt,
 		onInterruptMCPStartup:           options.OnInterruptMCPStartup,
+		localDaemonSession:              options.LocalDaemonSession,
 		onExternalEditor:                options.OnExternalEditor,
 		keymapConfig:                    options.KeymapConfig.Clone(),
 		onKeymapEdit:                    options.OnKeymapEdit,
@@ -1532,6 +1535,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 				return m, m.respondModal(true)
 			}
 			if m.isTaskRunning() {
+				if m.localDaemonSession && m.composer.Value() == "" && !m.inSideConversation() {
+					m.openRunningTaskExitMenu()
+					return m, nil
+				}
 				return m, m.interruptRunningTask()
 			}
 			if m.inSideConversation() {

@@ -10,6 +10,7 @@ import (
 	"codex_go/features"
 	"codex_go/model"
 	"codex_go/network"
+	"codex_go/sandbox"
 	"codex_go/turn"
 )
 
@@ -62,6 +63,9 @@ func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) Guardian
 		modelReviewer.transcript = r.guardianReviewTranscript
 		modelReviewer.model = r.guardianReviewModelForTurn
 		modelReviewer.specialty = r.guardianReviewModelSpecialtyForTurn
+		modelReviewer.nodeReplAutoReviewRequired = r.guardianReviewNodeReplAutoReviewRequiredForTurn
+		modelReviewer.permissionProfile = r.guardianReviewPermissionProfileForTurn
+		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
 		modelReviewer.environment = r.guardianEnvironmentInputItems
 		r.services.GuardianReviewer = reviewer
 		go func() {
@@ -111,6 +115,40 @@ func (r *RuntimeRouter) guardianReviewModelSpecialtyForTurn(threadID, turnID str
 		return ""
 	}
 	return strings.TrimSpace(info.ModelSpecialty)
+}
+
+func (r *RuntimeRouter) guardianReviewNodeReplAutoReviewRequiredForTurn(threadID, turnID string) bool {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return false
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return false
+	}
+	info := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(active.Params.Model), cfg)
+	return info != nil && info.NodeReplAutoReviewRequired
+}
+
+func (r *RuntimeRouter) guardianReviewPermissionProfileForTurn(threadID, turnID string) *sandbox.PermissionProfile {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return nil
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return nil
+	}
+	resolution, err := turnSandboxPermissionProfile(cfg, active.Params.CWD, active.Params)
+	if err != nil || resolution == nil || resolution.Profile == nil {
+		return nil
+	}
+	readOnly := resolution.Profile.IntersectWithReadOnly()
+	if readOnly == nil {
+		profile := sandbox.ReadOnlyPermissionProfile()
+		readOnly = &profile
+	}
+	return readOnly
 }
 
 func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*model.ResponsesAgentRunner, error) {

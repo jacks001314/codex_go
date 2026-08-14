@@ -48,10 +48,89 @@ func (s *HookDiscoveryService) Discover(params *HookListParams, defaultCWD strin
 		s.appendUserHooks(&entry)
 		s.appendProjectHooks(&entry, cwd)
 		s.appendPluginHooks(&entry)
+		s.appendManagedRequirementHooks(&entry)
 		sortHooks(entry.Hooks)
 		response.Data = append(response.Data, entry)
 	}
 	return response
+}
+
+// ManagedRequiredHookLoadErrors returns the required load errors for managed
+// hooks discovered for the given working directory. This is the fail-closed
+// signal callers can use before starting a session (Rust #38394).
+func (s *HookDiscoveryService) ManagedRequiredHookLoadErrors(cwd string) []string {
+	response := s.Discover(&HookListParams{CWDs: []string{strings.TrimSpace(cwd)}}, "")
+	if response == nil || len(response.Data) == 0 {
+		return nil
+	}
+	return append([]string(nil), response.Data[0].RequiredLoadErrors...)
+}
+
+func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntry) {
+	if s == nil || s.Config == nil || entry == nil {
+		return
+	}
+	read := s.Config.Requirements()
+	if read == nil || read.Requirements == nil || read.Requirements.Hooks == nil {
+		return
+	}
+	managed := read.Requirements.Hooks
+	events := []struct {
+		name   HookEventName
+		groups []config.ConfiguredHookGroup
+	}{
+		{HookEventPreToolUse, managed.PreToolUse},
+		{HookEventPermissionRequest, managed.PermissionRequest},
+		{HookEventPostToolUse, managed.PostToolUse},
+		{HookEventPreCompact, managed.PreCompact},
+		{HookEventPostCompact, managed.PostCompact},
+		{HookEventSessionStart, managed.SessionStart},
+		{HookEventSessionEnd, managed.SessionEnd},
+		{HookEventUserPromptSubmit, managed.UserPromptSubmit},
+		{HookEventSubagentStart, managed.SubagentStart},
+		{HookEventSubagentStop, managed.SubagentStop},
+		{HookEventStop, managed.Stop},
+	}
+	displayOrder := int64(len(entry.Hooks))
+	for _, event := range events {
+		for groupIndex, group := range event.groups {
+			for handlerIndex, handler := range group.Hooks {
+				key := hookDiscoveryKey("managed", event.name, groupIndex, handlerIndex)
+				switch handler.Type {
+				case string(HookHandlerCommand):
+					command := strings.TrimSpace(handler.Command)
+					if command == "" {
+						entry.RequiredLoadErrors = append(entry.RequiredLoadErrors, fmt.Sprintf("skipping empty hook command in managed requirements for %s", event.name))
+						continue
+					}
+					timeout := defaultDiscoveredHookTimeoutSec
+					if handler.TimeoutSec != nil {
+						timeout = int64(*handler.TimeoutSec)
+					}
+					entry.Hooks = append(entry.Hooks, HookMetadata{
+						Key:           key,
+						EventName:     event.name,
+						HandlerType:   HookHandlerCommand,
+						ExecutionMode: hookDiscoveryExecutionMode(handler.Async, event.name),
+						Matcher:       cloneStringPtrAppserver(group.Matcher),
+						Command:       &command,
+						TimeoutSec:    timeout,
+						StatusMessage: cloneStringPtrAppserver(handler.StatusMessage),
+						SourcePath:    "managed",
+						Source:        HookSourceCloudRequirements,
+						DisplayOrder:  displayOrder,
+						Enabled:       true,
+						IsManaged:     true,
+						CurrentHash:   hookDiscoveryHash(event.name, group.Matcher, command, timeout, handler.StatusMessage),
+						TrustStatus:   HookTrustManaged,
+					})
+					displayOrder++
+				case string(HookHandlerMCPTool), string(HookHandlerPrompt), string(HookHandlerAgent):
+					entry.RequiredLoadErrors = append(entry.RequiredLoadErrors, fmt.Sprintf("skipping unsupported managed hook %s in %s", handler.Type, event.name))
+				}
+			}
+		}
+	}
 }
 
 func (s *HookDiscoveryService) hooksFeatureEnabled(cwd string) bool {
@@ -93,6 +172,7 @@ func MergeHookListResponses(left *HookListResponse, right *HookListResponse) *Ho
 			entry.Hooks = append(entry.Hooks, source.Hooks...)
 			entry.Warnings = append(entry.Warnings, source.Warnings...)
 			entry.Errors = append(entry.Errors, source.Errors...)
+			entry.RequiredLoadErrors = append(entry.RequiredLoadErrors, source.RequiredLoadErrors...)
 		}
 	}
 	add(left)

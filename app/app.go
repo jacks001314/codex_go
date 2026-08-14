@@ -680,6 +680,9 @@ func runMCPServer(ctx context.Context, opts *cli.MCPServerOptions, root *cli.Roo
 		opts = &cli.MCPServerOptions{}
 	}
 	codexHome := auth.DefaultCodexHome()
+	if auth.IsWorkloadIdentitySelected() {
+		return errors.New("workload identity is not supported by `codex mcp-server`")
+	}
 	if _, err := config.LoadEffectiveWithOptions(codexHome, mcpServerConfigLoadOptions(opts, root)); err != nil {
 		return err
 	}

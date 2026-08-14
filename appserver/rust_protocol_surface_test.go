@@ -40,6 +40,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodThreadBackgroundTerminalsList):          true,
 		string(MethodThreadBackgroundTerminalsTerminate):     true,
 		string(MethodThreadRollback):                         true,
+		string(MethodThreadRevert):                           true,
 		string(MethodThreadList):                             true,
 		string(MethodThreadSearch):                           true,
 		string(MethodThreadSearchOccurrences):                true,

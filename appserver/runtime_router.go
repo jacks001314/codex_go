@@ -26,6 +26,7 @@ import (
 	"codex_go/codemode"
 	"codex_go/compact"
 	"codex_go/config"
+	codexctx "codex_go/context"
 	"codex_go/execserver"
 	"codex_go/features"
 	"codex_go/install"
@@ -268,6 +269,12 @@ type RuntimeRouter struct {
 	managedNetworkInputs   map[string]managedNetworkReloadInput
 	goalAccountingMu       sync.Mutex
 	goalAccountingTurns    map[string]stateGoalTurnSnapshot
+	goalTurnUsage          map[string]model.AgentUsage
+	goalProgressMu         sync.Mutex
+	goalIdleMu             sync.Mutex
+	goalIdleGoalID         string
+	goalIdleLastAccounted  time.Time
+	goalStateMu            sync.Mutex
 	externalSessionSyncMu  sync.Mutex
 	memoryStartupMu        sync.Mutex
 	memoryStartupClosing   bool
@@ -292,6 +299,8 @@ type RuntimeRouter struct {
 	agentActivity          map[string]chan string
 	agentMessagesMu        sync.Mutex
 	agentMessages          map[string][]any
+	nodeReplEvidenceMu     sync.Mutex
+	nodeReplEvidence       map[string]*codexctx.NodeReplReviewEvidence
 	closeOnce              sync.Once
 	closeErr               error
 }
@@ -381,6 +390,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		managedNetworks:      map[string]*network.PreparedProxyManagedNetwork{},
 		managedNetworkInputs: map[string]managedNetworkReloadInput{},
 		goalAccountingTurns:  map[string]stateGoalTurnSnapshot{},
+		goalTurnUsage:        map[string]model.AgentUsage{},
 		memoryStartupCtx:     memoryStartupCtx,
 		memoryStartupCancel:  memoryStartupCancel,
 		realtimeOpsCtx:       realtimeOpsCtx,
@@ -1903,6 +1913,15 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			}
 			return r.handleThreadRollbackRuntime(request)
 		}
+		if request.Method == MethodThreadRevert {
+			return r.handleThreadRevertRuntime(request)
+		}
+		if request.Method == MethodThreadQueueStart {
+			return r.handleThreadQueueStartRuntime(request)
+		}
+		if isThreadQueueMethod(request.Method) {
+			return r.handleThreadQueueRuntime(request)
+		}
 		if threadMethodRequiresLoadedRuntime(request.Method) {
 			if err := r.rejectNotLoadedThreadRuntimeRequest(request); err != nil {
 				return nil, err
@@ -1951,6 +1970,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			}
 			r.replayPendingServerRequestsForThread(result)
 			r.notifyRestoredTokenUsage(result)
+			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
+				r.continueThreadGoalIfIdle(response.Thread.ID)
+			}
 			return result, nil
 		}
 		if isThreadLifecycleNotificationMethod(request.Method) {
@@ -2344,7 +2366,203 @@ func (r *RuntimeRouter) handleThreadRollbackRuntime(request *Request) (*ThreadRo
 	if !ok {
 		return nil, fmt.Errorf("%w: unexpected thread/rollback response %T", ErrInvalidRequest, result)
 	}
+	r.clearNodeReplReviewEvidence(params.ThreadID)
 	return response, nil
+}
+
+func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadRevertResponse, error) {
+	if r == nil || r.services.ThreadRouter == nil {
+		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
+	}
+	var params ThreadRevertParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
+		return nil, err
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false)
+	if err != nil {
+		return nil, threadReadError(params.ThreadID, err)
+	}
+	if !threadUsesPaginatedHistory(record) {
+		return nil, jsonRPCInvalidRequest("thread/revert only supports paginated threads")
+	}
+	if active := r.activeRuntimeTurnSnapshot(params.ThreadID); active != nil {
+		if _, err := r.handleTurnInterrupt(requestWithInternalParams(MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: params.ThreadID, TurnID: active.ID})); err != nil {
+			return nil, fmt.Errorf("failed to interrupt active turn before revert: %w", err)
+		}
+	}
+	result, err := r.services.ThreadRouter.dispatch(request)
+	if err != nil {
+		return nil, err
+	}
+	response, ok := result.(*ThreadRevertResponse)
+	if !ok {
+		return nil, fmt.Errorf("%w: unexpected thread/revert response %T", ErrInvalidRequest, result)
+	}
+	r.clearNodeReplReviewEvidence(params.ThreadID)
+	r.notify(NotificationThreadReverted, &ThreadIDNotification{ThreadID: params.ThreadID})
+	return response, nil
+}
+
+func isThreadQueueMethod(method Method) bool {
+	switch method {
+	case MethodThreadQueueAdd, MethodThreadQueueList, MethodThreadQueueUpdate, MethodThreadQueueDelete, MethodThreadQueueReorder:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *RuntimeRouter) handleThreadQueueRuntime(request *Request) (any, error) {
+	if r == nil || r.services.ThreadRouter == nil {
+		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
+	}
+	var threadID string
+	switch request.Method {
+	case MethodThreadQueueAdd:
+		var params ThreadQueueAddParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := params.Validate(); err != nil {
+			return nil, err
+		}
+		threadID = strings.TrimSpace(params.ThreadID)
+	case MethodThreadQueueList:
+		var params ThreadQueueListParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := params.Validate(); err != nil {
+			return nil, err
+		}
+		threadID = strings.TrimSpace(params.ThreadID)
+	case MethodThreadQueueUpdate:
+		var params ThreadQueueUpdateParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := params.Validate(); err != nil {
+			return nil, err
+		}
+		threadID = strings.TrimSpace(params.ThreadID)
+	case MethodThreadQueueDelete:
+		var params ThreadQueueDeleteParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := params.Validate(); err != nil {
+			return nil, err
+		}
+		threadID = strings.TrimSpace(params.ThreadID)
+	case MethodThreadQueueReorder:
+		var params ThreadQueueReorderParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
+		if err := params.Validate(); err != nil {
+			return nil, err
+		}
+		threadID = strings.TrimSpace(params.ThreadID)
+	}
+	if err := r.requireLoadedThreadForRuntimeOp(threadID); err != nil {
+		return nil, err
+	}
+	result, err := r.services.ThreadRouter.dispatch(request)
+	if err != nil {
+		return nil, err
+	}
+	if request.Method != MethodThreadQueueList {
+		r.notify(NotificationThreadQueueChanged, &ThreadIDNotification{ThreadID: threadID})
+	}
+	return result, nil
+}
+
+func (r *RuntimeRouter) handleThreadQueueStartRuntime(request *Request) (*ThreadQueueStartResponse, error) {
+	if r == nil || r.services.ThreadRouter == nil {
+		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
+	}
+	var params ThreadQueueStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	if err := r.requireLoadedThreadForRuntimeOp(threadID); err != nil {
+		return nil, err
+	}
+	submissionID := ""
+	if params.QueuedSubmissionID != nil {
+		submissionID = strings.TrimSpace(*params.QueuedSubmissionID)
+	}
+	submission, err := r.services.ThreadRouter.store.DequeueSubmission(session.ThreadID(threadID), submissionID)
+	if err != nil {
+		return nil, threadQueueError(err)
+	}
+	if submission == nil {
+		return nil, jsonRPCInvalidRequest("queue is empty")
+	}
+	input, err := turnUserInputsFromQueuedSubmission(submission.Input)
+	if err != nil {
+		return nil, jsonRPCInvalidRequest("queued submission payload is invalid")
+	}
+	startParams, err := json.Marshal(turn.TurnStartParams{ThreadID: threadID, Input: input})
+	if err != nil {
+		return nil, err
+	}
+	startRequest := &Request{
+		JSONRPC: "2.0",
+		ID:      request.ID,
+		Method:  MethodTurnStart,
+		Params:  startParams,
+	}
+	response, err := r.handleTurnStart(startRequest)
+	if err != nil {
+		return nil, err
+	}
+	r.notify(NotificationThreadQueueChanged, &ThreadIDNotification{ThreadID: threadID})
+	return &ThreadQueueStartResponse{Turn: &response.Turn}, nil
+}
+
+func turnUserInputsFromQueuedSubmission(input []any) ([]turn.TurnUserInput, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	var items []turn.TurnUserInput
+	if err := json.Unmarshal(data, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// maybeDispatchNextQueuedSubmission dispatches the next queued submission in
+// FIFO order after a turn completes or fails (Rust #38456). It does nothing for
+// interrupted turns, which leave the queue paused.
+func (r *RuntimeRouter) maybeDispatchNextQueuedSubmission(threadID string) {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return
+	}
+	submission, err := r.services.ThreadRouter.store.DequeueFirstSubmission(session.ThreadID(strings.TrimSpace(threadID)))
+	if err != nil || submission == nil {
+		return
+	}
+	input, err := turnUserInputsFromQueuedSubmission(submission.Input)
+	if err != nil {
+		return
+	}
+	r.notify(NotificationThreadQueueChanged, &ThreadIDNotification{ThreadID: threadID})
+	_, _ = r.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Input: input}))
 }
 
 func (r *RuntimeRouter) handleExternalAgentConfigImportHistoryRecord(request *Request) (*config.ExternalAgentConfigImportHistoryRecordResponse, error) {
@@ -2739,6 +2957,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		}
 		if err := r.validateThreadStartEnvironments(&params); err != nil {
 			return nil, err
+		}
+		if errors := r.requireHooksDiscovery().ManagedRequiredHookLoadErrors(r.effectiveThreadStartCWD(&params)); len(errors) > 0 {
+			return nil, fmt.Errorf("failed to load required managed hooks: %s", strings.Join(errors, "; "))
 		}
 		var handled bool
 		result, handled, err = r.handleEphemeralThreadStartRuntime(request)
@@ -3367,7 +3588,6 @@ func (r *RuntimeRouter) effectiveConfigForThreadStart(params *ThreadStartParams)
 		return cfg, nil
 	}
 	cwd := r.effectiveThreadStartCWD(params)
-	r.maybeTrustThreadStartProject(params)
 	loaded, err := config.LoadWithOptions(codexHome, &config.LoadOptions{CWD: cwd})
 	if err != nil {
 		return nil, err
@@ -3376,6 +3596,9 @@ func (r *RuntimeRouter) effectiveConfigForThreadStart(params *ThreadStartParams)
 		cfg = loaded
 	}
 	applyRuntimeConfigOverrides(cfg, threadStartConfigOverrides(params))
+	if threadStartEffectivePermissionsTrustProject(cfg, cwd, params) {
+		r.trustThreadStartProject(cwd)
+	}
 	return cfg, nil
 }
 
@@ -3546,12 +3769,12 @@ func threadStartConfigOverrides(params *ThreadStartParams) map[string]any {
 	return params.Config
 }
 
-func (r *RuntimeRouter) maybeTrustThreadStartProject(params *ThreadStartParams) {
-	if r == nil || r.services.Config == nil || params == nil {
+func (r *RuntimeRouter) trustThreadStartProject(cwd string) {
+	if r == nil || r.services.Config == nil {
 		return
 	}
-	cwd := strings.TrimSpace(params.CWD)
-	if cwd == "" || !threadStartSandboxTrustsProject(params.Sandbox) {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
 		return
 	}
 	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
@@ -3565,30 +3788,38 @@ func (r *RuntimeRouter) maybeTrustThreadStartProject(params *ThreadStartParams) 
 	_ = appendProjectTrustLevel(codexHome, trustTarget)
 }
 
-func threadStartSandboxTrustsProject(policy any) bool {
-	switch value := policy.(type) {
-	case string:
-		return sandboxModeTrustsProject(value)
-	case map[string]any:
-		return sandboxModeTrustsProject(firstNonEmpty(
-			threadItemStringFromAnyMap(value, "mode"),
-			threadItemStringFromAnyMap(value, "type"),
-			threadItemStringFromAnyMap(value, "kind"),
-			threadItemStringFromAnyMap(value, "sandboxMode"),
-			threadItemStringFromAnyMap(value, "sandbox_mode"),
-		))
-	case *sandbox.SandboxPolicy:
-		return value != nil && sandboxModeTrustsProject(string(value.Kind))
-	case sandbox.SandboxPolicy:
-		return sandboxModeTrustsProject(string(value.Kind))
-	default:
+// threadStartEffectivePermissionsTrustProject mirrors Rust #38390: project
+// trust is derived from the effective permission profile after managed
+// constraints, not from the requested sandbox mode.
+func threadStartEffectivePermissionsTrustProject(cfg *config.Config, cwd string, params *ThreadStartParams) bool {
+	if cfg == nil || params == nil || strings.TrimSpace(params.CWD) == "" || strings.TrimSpace(cwd) == "" {
 		return false
 	}
-}
-
-func sandboxModeTrustsProject(value string) bool {
-	normalized := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(value)))
-	return normalized == "workspacewrite" || normalized == "dangerfullaccess"
+	var profile *sandbox.PermissionProfile
+	if turnStartSandboxPolicyPresent(params.Sandbox) {
+		_, resolved, err := turnSandboxPolicyPermissionProfile(params.Sandbox)
+		if err != nil || resolved == nil {
+			return false
+		}
+		profile = resolved
+	} else {
+		profileID := ""
+		if params.Permissions != nil {
+			profileID = strings.TrimSpace(*params.Permissions)
+		}
+		resolution, err := cfg.ResolveSandboxPermissionProfile(profileID, cwd)
+		if err != nil || resolution == nil {
+			return false
+		}
+		profile = resolution.Profile
+	}
+	if profile == nil || profile.Disabled {
+		return true
+	}
+	if profile.SandboxPolicy == nil || profile.SandboxPolicy.HasFullDiskWriteAccess() {
+		return true
+	}
+	return len(profile.SandboxPolicy.GetWritableRootsWithCWD(cwd)) > 0
 }
 
 func threadStartTrustTarget(cwd string) string {
@@ -5984,6 +6215,7 @@ func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string
 	}
 	r.notify(NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: goal.ThreadID, Goal: goal})
 	r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, &goal, goalAnalyticsEventKindForSet(existing, &goal), nil)
+	r.applyGoalActiveRuntimeEffects(goal.ThreadID, goal)
 	return &GoalSetResponse{Goal: goal}, nil
 }
 
@@ -10264,12 +10496,13 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		return nil, err
 	}
 	executorSkillProviders := r.executorSkillProviderForThreadWithSandbox(threadID, executorSandboxContexts)
+	goalToolExecutors := r.goalToolExecutorsForTurn(cfg, threadID, strings.TrimSpace(turnID))
 	if r != nil && r.services.ToolRouter != nil && viewImageOptions != nil {
 		if err := r.services.ToolRouter.RegisterIfAbsent(tool.NewViewImageHandler(*viewImageOptions)); err != nil {
 			return nil, err
 		}
 	}
-	if r != nil && r.services.ToolRouter != nil && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
+	if r != nil && r.services.ToolRouter != nil && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
@@ -10421,11 +10654,22 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	}
 	if runtimeToolsUseOpenAIFileUpload(mcpTools) {
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
+		fileSystem := r.primaryTurnOpenAIFileSystem(params)
+		if envFS, ok := fileSystem.(*environmentOpenAIFileSystem); ok &&
+			permissionProfile != nil && permissionProfile.Profile != nil && permissionProfile.Profile.HasDenyReadEntries() {
+			envFS.requiresSandbox = true
+		}
+		var grantedReadPaths []string
+		if params != nil {
+			grantedReadPaths = append(grantedReadPaths, params.RuntimeWorkspaceRoots...)
+		}
 		options.OpenAIFileRewriter = mcp.NewOpenAIFileRewriterWithOptions(mcp.OpenAIFileRewriterOptions{
-			CWD:        primaryTurnEnvironmentCWD(params, cwd),
-			Auth:       mcp.OpenAIFileAuthFromRuntimeAuth(runtimeAuth, cfg.ChatGPTBaseURL()),
-			FileSystem: r.primaryTurnOpenAIFileSystem(params),
-			HTTPClient: r.httpClientForConfig(cfg),
+			CWD:              primaryTurnEnvironmentCWD(params, cwd),
+			Auth:             mcp.OpenAIFileAuthFromRuntimeAuth(runtimeAuth, cfg.ChatGPTBaseURL()),
+			FileSystem:       fileSystem,
+			HTTPClient:       r.httpClientForConfig(cfg),
+			ReadPolicy:       openAIFileReadPolicy(fileSystem, permissionProfile),
+			GrantedReadPaths: grantedReadPaths,
 		})
 	}
 	options.EnableAgents = false
@@ -10536,6 +10780,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.ViewImage = viewImageOptions
 	options.ThreadID = threadID
 	options.TurnID = strings.TrimSpace(turnID)
+	options.ExtraTools = goalToolExecutors
 	// Rust 97729885d4: expose the shared root-session ID to model-reachable
 	// shell commands as CODEX_SESSION_ID. Fall back to the thread ID when the
 	// session record is unavailable.
@@ -11801,7 +12046,10 @@ func isThreadMethod(method Method) bool {
 		MethodThreadCompactStart, MethodThreadApproveGuardianDeniedAction,
 		MethodThreadMetadataUpdate, MethodThreadSectionMove, MethodThreadList, MethodThreadRead,
 		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
-		MethodThreadTurnsList, MethodThreadRollback, MethodThreadInjectItems:
+		MethodThreadTurnsList, MethodThreadRollback, MethodThreadRevert,
+		MethodThreadQueueAdd, MethodThreadQueueList, MethodThreadQueueUpdate,
+		MethodThreadQueueDelete, MethodThreadQueueReorder, MethodThreadQueueStart,
+		MethodThreadInjectItems:
 		return true
 	default:
 		return false

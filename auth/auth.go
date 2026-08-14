@@ -135,11 +135,11 @@ func (s *Store) Load() (*AuthDotJSON, error) {
 }
 
 func (s *Store) Resolve() (*ResolvedAuth, error) {
-	// Once a workload identity session is active in this process, it is the
-	// configured external auth and keeps precedence over explicit env keys
-	// (Rust has_explicit_process_auth && !active_session).
-	workloadActive := workloadIdentitySessionActive()
-	if !workloadActive {
+	// Workload identity markers are an explicit authentication selection, so
+	// explicit env keys only take precedence when no marker is present. With a
+	// marker configured, resolveWorkloadIdentity fails closed on invalid or
+	// partial configuration (Rust #38424).
+	if !workloadReadProcessEnv().hasMarker() {
 		if apiKey := readNonEmptyEnv(OpenAIAPIKeyEnv); apiKey != "" {
 			return &ResolvedAuth{Auth: FromAPIKey(apiKey), Source: OpenAIAPIKeyEnv}, nil
 		}
@@ -150,7 +150,7 @@ func (s *Store) Resolve() (*ResolvedAuth, error) {
 			return &ResolvedAuth{Auth: FromCodexAccessToken(accessToken), Source: CodexAccessTokenEnv}, nil
 		}
 	}
-	if resolved, err := s.resolveWorkloadIdentity(workloadActive); err != nil {
+	if resolved, err := s.resolveWorkloadIdentity(); err != nil {
 		return nil, err
 	} else if resolved != nil {
 		return resolved, nil
@@ -165,8 +165,8 @@ func (s *Store) Resolve() (*ResolvedAuth, error) {
 
 // resolveWorkloadIdentity resolves process-configured workload identity when
 // selected, failing closed on incomplete, conflicting, or unsupported
-// configurations (Rust try_shared_from_auth_config).
-func (s *Store) resolveWorkloadIdentity(workloadActive bool) (*ResolvedAuth, error) {
+// configurations (Rust shared_from_auth_config).
+func (s *Store) resolveWorkloadIdentity() (*ResolvedAuth, error) {
 	env := workloadReadProcessEnv()
 	if !env.hasMarker() {
 		return nil, nil
@@ -175,7 +175,6 @@ func (s *Store) resolveWorkloadIdentity(workloadActive bool) (*ResolvedAuth, err
 	config, err := resolveWorkloadIdentityConfig(
 		opts.baseURL(),
 		env,
-		workloadHasExplicitProcessAuth() && !workloadActive,
 		opts.chatgptLoginAllowed(),
 	)
 	if err != nil {

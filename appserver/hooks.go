@@ -219,10 +219,11 @@ type HookErrorInfo struct {
 }
 
 type HookListEntry struct {
-	CWD      string          `json:"cwd"`
-	Hooks    []HookMetadata  `json:"hooks"`
-	Warnings []string        `json:"warnings"`
-	Errors   []HookErrorInfo `json:"errors"`
+	CWD                string          `json:"cwd"`
+	Hooks              []HookMetadata  `json:"hooks"`
+	Warnings           []string        `json:"warnings"`
+	Errors             []HookErrorInfo `json:"errors"`
+	RequiredLoadErrors []string        `json:"requiredLoadErrors,omitempty"`
 }
 
 func (e *HookListEntry) MarshalJSON() ([]byte, error) {
@@ -238,16 +239,19 @@ func (e *HookListEntry) MarshalJSON() ([]byte, error) {
 	if errors == nil {
 		errors = []HookErrorInfo{}
 	}
+	requiredLoadErrors := append([]string(nil), e.RequiredLoadErrors...)
 	return json.Marshal(struct {
-		CWD      string          `json:"cwd"`
-		Hooks    []HookMetadata  `json:"hooks"`
-		Warnings []string        `json:"warnings"`
-		Errors   []HookErrorInfo `json:"errors"`
+		CWD                string          `json:"cwd"`
+		Hooks              []HookMetadata  `json:"hooks"`
+		Warnings           []string        `json:"warnings"`
+		Errors             []HookErrorInfo `json:"errors"`
+		RequiredLoadErrors []string        `json:"requiredLoadErrors,omitempty"`
 	}{
-		CWD:      e.CWD,
-		Hooks:    hooks,
-		Warnings: warnings,
-		Errors:   errors,
+		CWD:                e.CWD,
+		Hooks:              hooks,
+		Warnings:           warnings,
+		Errors:             errors,
+		RequiredLoadErrors: requiredLoadErrors,
 	})
 }
 
@@ -445,6 +449,7 @@ func cloneEntry(entry HookListEntry) HookListEntry {
 	}
 	entry.Warnings = append([]string(nil), entry.Warnings...)
 	entry.Errors = append([]HookErrorInfo(nil), entry.Errors...)
+	entry.RequiredLoadErrors = append([]string(nil), entry.RequiredLoadErrors...)
 	return entry
 }
 

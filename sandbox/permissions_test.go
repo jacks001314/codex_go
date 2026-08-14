@@ -22,6 +22,61 @@ func TestBuiltinApprovalPresets(t *testing.T) {
 	}
 }
 
+func TestPermissionProfileDeniesReadPath(t *testing.T) {
+	secret := filepath.Join("workspace", "secrets", ".env")
+	profile := &PermissionProfile{DeniedReadEntries: []FileSystemSandboxEntry{
+		{Path: FileSystemPath{Type: "path", Path: secret}, Access: FileSystemAccessDeny},
+		{Path: FileSystemPath{Type: "glob_pattern", Pattern: "**/*.key"}, Access: FileSystemAccessDeny},
+	}}
+	if !profile.DeniesReadPath(secret) {
+		t.Fatal("exact deny-read path was not rejected")
+	}
+	if !profile.DeniesReadPath(filepath.Join("workspace", "keys", "prod.key")) {
+		t.Fatal("deny-read glob was not rejected")
+	}
+	if profile.DeniesReadPath(filepath.Join("workspace", "secrets", "ok.txt")) {
+		t.Fatal("unrelated path was rejected")
+	}
+	if (&PermissionProfile{}).DeniesReadPath(secret) {
+		t.Fatal("empty profile rejected a path")
+	}
+}
+
+func TestPermissionProfileIntersectWithReadOnly(t *testing.T) {
+	denied := filepath.Join("workspace", ".env")
+	profile := WorkspaceWritePermissionProfile()
+	profile.DeniedReadEntries = []FileSystemSandboxEntry{
+		{Path: FileSystemPath{Type: "path", Path: denied}, Access: FileSystemAccessDeny},
+	}
+	readOnly := profile.IntersectWithReadOnly()
+	if readOnly == nil {
+		t.Fatal("managed profile should intersect to read-only")
+	}
+	if readOnly.SandboxPolicy == nil || readOnly.SandboxPolicy.Kind != SandboxReadOnly {
+		t.Fatalf("intersected policy = %#v", readOnly.SandboxPolicy)
+	}
+	if len(readOnly.DeniedReadEntries) != 1 || readOnly.DeniedReadEntries[0].Path.Path != denied {
+		t.Fatalf("deny-read entries not preserved: %#v", readOnly.DeniedReadEntries)
+	}
+	if readOnly.AllowsNetwork() {
+		t.Fatal("intersected read-only profile should restrict network")
+	}
+
+	external := PermissionProfile{SandboxPolicy: &SandboxPolicy{Kind: "external-sandbox"}}
+	if external.IntersectWithReadOnly() != nil {
+		t.Fatal("external-sandbox profile should return nil")
+	}
+	if (*PermissionProfile)(nil).IntersectWithReadOnly() != nil {
+		t.Fatal("nil profile should return nil")
+	}
+
+	fullAccess := FullAccessPermissionProfile()
+	intersectedFull := fullAccess.IntersectWithReadOnly()
+	if intersectedFull == nil || intersectedFull.Disabled {
+		t.Fatalf("full-access profile should intersect to read-only, got %#v", intersectedFull)
+	}
+}
+
 func TestBuiltinPermissionProfileForActivePermissionProfile(t *testing.T) {
 	profile, ok := BuiltinPermissionProfileForActivePermissionProfile(&ActivePermissionProfile{ID: BuiltInPermissionProfileWorkspace})
 	if !ok {

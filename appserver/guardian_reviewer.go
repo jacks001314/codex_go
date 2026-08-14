@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"codex_go/compact"
+	codexctx "codex_go/context"
 	"codex_go/features"
 	"codex_go/model"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/turn"
@@ -22,16 +24,19 @@ type GuardianReviewer interface {
 }
 
 type modelGuardianReviewer struct {
-	agent       model.AgentRunner
-	store       *state.ReviewStore
-	breaker     *state.CircuitBreaker
-	notify      func(threadID string, event *state.Event)
-	interrupt   func(threadID, turnID string)
-	transcript  func(threadID string) []string
-	model       func(threadID, turnID string) string
-	specialty   func(threadID, turnID string) string
-	environment func(context.Context, string, string) ([]any, error)
-	timeout     time.Duration
+	agent                      model.AgentRunner
+	store                      *state.ReviewStore
+	breaker                    *state.CircuitBreaker
+	notify                     func(threadID string, event *state.Event)
+	interrupt                  func(threadID, turnID string)
+	transcript                 func(threadID string) []string
+	model                      func(threadID, turnID string) string
+	specialty                  func(threadID, turnID string) string
+	nodeReplAutoReviewRequired func(threadID, turnID string) bool
+	environment                func(context.Context, string, string) ([]any, error)
+	permissionProfile          func(threadID, turnID string) *sandbox.PermissionProfile
+	nodeReplEvidence           func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
+	timeout                    time.Duration
 }
 
 type guardianSessionRunner struct {
@@ -167,7 +172,22 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if r.transcript != nil {
 		transcript = r.transcript(threadID)
 	}
-	prompt, err := state.BuildPrompt(action, transcript)
+	nodeReplAutoReviewRequired := false
+	if r.nodeReplAutoReviewRequired != nil {
+		nodeReplAutoReviewRequired = r.nodeReplAutoReviewRequired(threadID, turnID)
+	}
+	var nodeReplEvidence *codexctx.NodeReplReviewEvidenceFragment
+	if r.nodeReplEvidence != nil {
+		nodeReplEvidence = r.nodeReplEvidence(threadID, 0)
+	}
+	promptNodeReplEvidence := nodeReplEvidence
+	if nodeReplEvidence != nil && nodeReplEvidence.HasImages() {
+		promptNodeReplEvidence = nil
+	}
+	prompt, err := state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
+		NodeReplAutoReviewRequired: nodeReplAutoReviewRequired,
+		NodeReplEvidence:           promptNodeReplEvidence,
+	})
 	if err != nil {
 		return state.DecisionAborted, "", err
 	}
@@ -196,6 +216,11 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			return state.DecisionAborted, "", err
 		}
 	}
+	if nodeReplEvidence != nil && nodeReplEvidence.HasImages() {
+		for _, item := range nodeReplEvidence.MultimodalInputItems() {
+			inputItems = append(inputItems, item)
+		}
+	}
 	reviewRequest := &model.AgentRequest{
 		Prompt:       prompt,
 		InputItems:   inputItems,
@@ -210,6 +235,9 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			"parent_turn_id":    turnID,
 			"target_item_id":    targetItemID,
 		},
+	}
+	if r.permissionProfile != nil {
+		reviewRequest.PermissionProfile = r.permissionProfile(threadID, turnID)
 	}
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		runner.SeedForReview(reviewRequest)

@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,44 @@ func TestPaginatedRecorderWritesAndResumesOrdinalsLikeRust(t *testing.T) {
 	}
 	if len(lines) != 3 || lines[2].Ordinal == nil || *lines[2].Ordinal != 2 {
 		t.Fatalf("resumed ordinal = %#v", lines[2].Ordinal)
+	}
+}
+
+func TestSecurityRiskScorePersistsAndLoadsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	recorder, err := NewRecorder(&CreateParams{CodexHome: home, ThreadID: "thread-risk", HistoryMode: "paginated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.AppendSecurityRiskScore("command_injection", 0.75, fixedProjectionTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lines, _, err := Load(recorder.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, line := range lines {
+		if line.Type != "security_risk_score" || len(line.SecurityRiskScore) == 0 {
+			continue
+		}
+		found = true
+		var score struct {
+			Category string  `json:"category"`
+			Score    float64 `json:"score"`
+		}
+		if err := json.Unmarshal(line.SecurityRiskScore, &score); err != nil {
+			t.Fatalf("Unmarshal security risk score error = %v", err)
+		}
+		if score.Category != "command_injection" || score.Score != 0.75 {
+			t.Fatalf("security risk score = %#v", score)
+		}
+	}
+	if !found {
+		t.Fatalf("security risk score line not persisted: %#v", lines)
 	}
 }
 

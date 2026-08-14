@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/context"
 )
 
 func TestReviewerRoutes(t *testing.T) {
@@ -256,6 +258,63 @@ func TestBuildPromptSerializesNetworkActionLikeRust(t *testing.T) {
 	}
 	if _, ok := action["extra"]; ok {
 		t.Fatalf("network action leaked internal extra wrapper: %#v", action)
+	}
+}
+
+func TestBuildPromptNodeReplGuidanceGatedOnModelMetadata(t *testing.T) {
+	action := Action{Type: "mcp_tool_call", Server: "node_repl", ToolName: "js", Reason: "retry after scope change"}
+	specialized, err := BuildPromptWithOptions(action, nil, BuildPromptOptions{NodeReplAutoReviewRequired: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(specialized, "Node REPL action JSON:") ||
+		!strings.Contains(specialized, "Retry reason:\nretry after scope change") ||
+		!strings.Contains(specialized, "Below is JavaScript proposed for Node REPL.") {
+		t.Fatalf("specialized prompt = %s", specialized)
+	}
+
+	generic, err := BuildPromptWithOptions(action, nil, BuildPromptOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(generic, "Node REPL action JSON:") {
+		t.Fatalf("generic prompt should not use Node REPL guidance: %s", generic)
+	}
+
+	genericOther, err := BuildPromptWithOptions(Action{Type: "mcp_tool_call", Server: "apps", ToolName: "write"}, nil, BuildPromptOptions{NodeReplAutoReviewRequired: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(genericOther, "Node REPL action JSON:") {
+		t.Fatalf("non-node-repl prompt should stay generic: %s", genericOther)
+	}
+}
+
+func TestBuildPromptIncludesNodeReplReviewEvidence(t *testing.T) {
+	evidence := &context.NodeReplReviewEvidence{}
+	evidence.Record("js", "cell-1", "call-1", []string{"evidence-text"})
+	fragment := evidence.SnapshotSince(0)
+	if fragment == nil {
+		t.Fatal("expected evidence fragment")
+	}
+
+	action := Action{Type: "mcp_tool_call", Server: "node_repl", ToolName: "js"}
+	prompt, err := BuildPromptWithOptions(action, nil, BuildPromptOptions{NodeReplEvidence: fragment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "<node_repl_review_evidence>") ||
+		!strings.Contains(prompt, "evidence-text") ||
+		!strings.Contains(prompt, "untrusted evidence") {
+		t.Fatalf("prompt missing node_repl evidence: %s", prompt)
+	}
+
+	without, err := BuildPromptWithOptions(action, nil, BuildPromptOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(without, "node_repl_review_evidence") {
+		t.Fatalf("prompt should not include evidence when omitted: %s", without)
 	}
 }
 

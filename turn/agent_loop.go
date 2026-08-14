@@ -67,6 +67,7 @@ type SamplingCompaction func(*SamplingCompactionContext) (*SamplingCompactionRes
 type AssistantMessageCallback func(response *model.AgentResponse, iteration int, hasToolCalls bool)
 type ClientMetadataTransform func(map[string]string) map[string]string
 type WarningCallback func(message string)
+type TokenUsageCallback func(usage model.AgentUsage)
 
 type AgentLoop struct {
 	agent             model.AgentRunner
@@ -118,6 +119,7 @@ type AgentLoopRequest struct {
 	SamplingFollowUp                SamplingFollowUp
 	SamplingCompaction              SamplingCompaction
 	OnAssistantMessage              AssistantMessageCallback
+	OnTokenUsage                    TokenUsageCallback
 	StreamHandler                   model.ResponsesStreamHandler
 	ExecutedToolCallMetadataEnabled bool
 	OnSteerCommitted                func(count int)
@@ -265,6 +267,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		result.Response = response
 		result.Responses = append(result.Responses, response)
 		result.Usage = addAgentUsage(result.Usage, response.Usage)
+		if request.OnTokenUsage != nil {
+			request.OnTokenUsage(result.Usage)
+		}
 		result.Iterations = iteration + 1
 		if responseID := strings.TrimSpace(response.ResponseID); responseID != "" {
 			previousResponseID = responseID

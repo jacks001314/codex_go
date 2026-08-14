@@ -57,3 +57,51 @@ func TestRewriteInlineVisualizationsRejectsUnsafeArtifacts(t *testing.T) {
 		}
 	}
 }
+
+func TestRewriteInlineVisualizationsMaterializesViewerInDedicatedCache(t *testing.T) {
+	home := t.TempDir()
+	threadDir := filepath.Join(home, "visualizations", "2026", "07", "21", "thread")
+	viewerDir := filepath.Join(home, "visualization-viewers", "thread")
+	if err := os.MkdirAll(threadDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(threadDir, "chart.html"), []byte(`<canvas id="chart"></canvas><script>globalThis.ready=true</script>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	context := &InlineVisualizationContext{
+		VisualizationsDir: filepath.Join(home, "visualizations"),
+		ThreadDir:         threadDir,
+		ViewerDir:         viewerDir,
+	}
+	_, items := RewriteInlineVisualizations("::codex-inline-vis{file=\"chart.html\"}", context)
+	if len(items) != 1 {
+		t.Fatalf("rewrite items = %#v", items)
+	}
+	viewerURL := strings.TrimPrefix(items[0].URL, "file://")
+	if !strings.HasPrefix(filepath.Clean(viewerURL), filepath.Clean(viewerDir)) {
+		t.Fatalf("viewer URL %q not under dedicated cache %q", viewerURL, viewerDir)
+	}
+	if _, err := os.Stat(filepath.FromSlash(viewerURL)); err != nil {
+		t.Fatalf("viewer was not materialized in dedicated cache: %v", err)
+	}
+}
+
+func TestRewriteInlineVisualizationsDisablesViewers(t *testing.T) {
+	home := t.TempDir()
+	threadDir := filepath.Join(home, "visualizations", "2026", "07", "21", "thread")
+	if err := os.MkdirAll(threadDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(threadDir, "chart.html"), []byte(`<canvas></canvas>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	context := &InlineVisualizationContext{
+		VisualizationsDir: filepath.Join(home, "visualizations"),
+		ThreadDir:         threadDir,
+		DisableViewers:    true,
+	}
+	cleaned, items := RewriteInlineVisualizations("::codex-inline-vis{file=\"chart.html\"}", context)
+	if len(items) != 0 || cleaned != "_Visualization unavailable on this device._" {
+		t.Fatalf("disabled viewer rewrite = %q %#v", cleaned, items)
+	}
+}

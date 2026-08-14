@@ -79,9 +79,9 @@ type CatalogConflict struct {
 
 // ResolvedCatalog is the immutable result of MCP registration resolution.
 type ResolvedCatalog struct {
-	Servers              map[string]ResolvedServer
-	Conflicts            []CatalogConflict
-	DisabledServerNames  map[string]bool // name-level vetoes for subsequent builds
+	Servers             map[string]ResolvedServer
+	Conflicts           []CatalogConflict
+	DisabledServerNames map[string]bool // name-level vetoes for subsequent builds
 }
 
 // ResolveCatalog resolves MCP server registrations from multiple sources into

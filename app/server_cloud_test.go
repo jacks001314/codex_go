@@ -61,6 +61,15 @@ func TestMCPServerStrictConfigRejectsUnknownConfig(t *testing.T) {
 	}
 }
 
+func TestMCPServerRejectsWorkloadIdentityLikeRust(t *testing.T) {
+	t.Setenv(auth.OpenAIFederationRuleIDEnv, "rule-one")
+	t.Setenv(auth.OpenAIIdentityTokenFileEnv, "")
+	err := Run(context.Background(), []string{"mcp-server"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "workload identity is not supported by `codex mcp-server`") {
+		t.Fatalf("mcp-server workload identity error = %v", err)
+	}
+}
+
 func TestCloudExecAndList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

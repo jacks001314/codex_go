@@ -923,6 +923,18 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadTurnsList(request)
 	case MethodThreadRollback:
 		return r.handleThreadRollback(request)
+	case MethodThreadRevert:
+		return r.handleThreadRevert(request)
+	case MethodThreadQueueAdd:
+		return r.handleThreadQueueAdd(request)
+	case MethodThreadQueueList:
+		return r.handleThreadQueueList(request)
+	case MethodThreadQueueUpdate:
+		return r.handleThreadQueueUpdate(request)
+	case MethodThreadQueueDelete:
+		return r.handleThreadQueueDelete(request)
+	case MethodThreadQueueReorder:
+		return r.handleThreadQueueReorder(request)
 	case MethodThreadInjectItems:
 		return r.handleThreadInjectItems(request)
 	default:
@@ -3364,6 +3376,151 @@ func (r *Router) handleThreadRollback(request *Request) (*ThreadRollbackResponse
 	_ = r.appendThreadRollback(record.ID, params.NumTurns, record.UpdatedAt)
 	path := r.threadRolloutPath(record)
 	return &ThreadRollbackResponse{Thread: BuildThread(record, path, true)}, nil
+}
+
+func (r *Router) handleThreadRevert(request *Request) (*ThreadRevertResponse, error) {
+	var params ThreadRevertParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
+	record, err := r.store.Revert(threadID, params.BeforeTurnID)
+	if err != nil {
+		if errors.Is(err, session.ErrThreadNotFound) {
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s not found", threadID))
+		}
+		if errors.Is(err, session.ErrInvalidThreadID) {
+			return nil, jsonRPCInvalidRequest(err.Error())
+		}
+		return nil, err
+	}
+	path := r.threadRolloutPath(record)
+	turnsCursor, itemsCursor := threadResumeHeadCursors(record)
+	return &ThreadRevertResponse{
+		Thread:               BuildThread(record, path, false),
+		TurnsBackwardsCursor: turnsCursor,
+		ItemsBackwardsCursor: itemsCursor,
+	}, nil
+}
+
+func (r *Router) handleThreadQueueAdd(request *Request) (*ThreadQueueAddResponse, error) {
+	var params ThreadQueueAddParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	submission, err := r.store.EnqueueSubmission(session.ThreadID(strings.TrimSpace(params.ThreadID)), session.QueuedSubmission{
+		Input:               append([]any(nil), params.Input...),
+		ClientUserMessageID: strings.TrimSpace(params.ClientUserMessageID),
+	})
+	if err != nil {
+		return nil, threadQueueError(err)
+	}
+	return &ThreadQueueAddResponse{QueuedSubmission: queuedSubmissionFromSession(submission)}, nil
+}
+
+func (r *Router) handleThreadQueueList(request *Request) (*ThreadQueueListResponse, error) {
+	var params ThreadQueueListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	cursor := ""
+	if params.Cursor != nil {
+		cursor = *params.Cursor
+	}
+	limit := 0
+	if params.Limit != nil {
+		limit = *params.Limit
+	}
+	submissions, nextCursor, err := r.store.ListQueueSubmissions(session.ThreadID(strings.TrimSpace(params.ThreadID)), cursor, limit)
+	if err != nil {
+		return nil, threadQueueError(err)
+	}
+	data := make([]QueuedSubmission, len(submissions))
+	for i := range submissions {
+		data[i] = *queuedSubmissionFromSession(&submissions[i])
+	}
+	response := &ThreadQueueListResponse{Data: data}
+	if strings.TrimSpace(nextCursor) != "" {
+		response.NextCursor = stringPtrIfNotEmpty(nextCursor)
+	}
+	return response, nil
+}
+
+func (r *Router) handleThreadQueueUpdate(request *Request) (*ThreadQueueUpdateResponse, error) {
+	var params ThreadQueueUpdateParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	submission, err := r.store.UpdateQueueSubmission(session.ThreadID(strings.TrimSpace(params.ThreadID)), strings.TrimSpace(params.QueuedSubmissionID), params.Input)
+	if err != nil {
+		return nil, threadQueueError(err)
+	}
+	return &ThreadQueueUpdateResponse{QueuedSubmission: queuedSubmissionFromSession(submission)}, nil
+}
+
+func (r *Router) handleThreadQueueDelete(request *Request) (*ThreadQueueDeleteResponse, error) {
+	var params ThreadQueueDeleteParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	deleted, err := r.store.DeleteQueueSubmission(session.ThreadID(strings.TrimSpace(params.ThreadID)), strings.TrimSpace(params.QueuedSubmissionID))
+	if err != nil {
+		return nil, threadQueueError(err)
+	}
+	return &ThreadQueueDeleteResponse{Deleted: deleted}, nil
+}
+
+func (r *Router) handleThreadQueueReorder(request *Request) (*ThreadQueueReorderResponse, error) {
+	var params ThreadQueueReorderParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if err := r.store.ReorderQueueSubmissions(session.ThreadID(strings.TrimSpace(params.ThreadID)), append([]string(nil), params.QueuedSubmissionIDs...)); err != nil {
+		return nil, threadQueueError(err)
+	}
+	return &ThreadQueueReorderResponse{}, nil
+}
+
+func queuedSubmissionFromSession(submission *session.QueuedSubmission) *QueuedSubmission {
+	if submission == nil {
+		return nil
+	}
+	return &QueuedSubmission{
+		ID:                  submission.ID,
+		Input:               append([]any(nil), submission.Input...),
+		ClientUserMessageID: submission.ClientUserMessageID,
+	}
+}
+
+func threadQueueError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, session.ErrThreadNotFound) {
+		return jsonRPCInvalidRequest(err.Error())
+	}
+	if errors.Is(err, session.ErrConflict) || errors.Is(err, session.ErrInvalidThreadID) {
+		return jsonRPCInvalidRequest(err.Error())
+	}
+	return err
 }
 
 func (r *Router) handleThreadInjectItems(request *Request) (*ThreadInjectItemsResponse, error) {

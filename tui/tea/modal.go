@@ -41,6 +41,7 @@ const (
 	ModalKindAutoReview      ModalKind = "auto_review_denials"
 	ModalKindGoal            ModalKind = "goal"
 	ModalKindWindowsSandbox  ModalKind = "windows_sandbox"
+	ModalKindRunningTaskExit ModalKind = "running_task_exit"
 	ModalKindGeneric         ModalKind = "generic"
 )
 
@@ -707,6 +708,14 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			return nil
 		}
 		return m.applyAutoReviewDenialSelection(response.OptionID)
+	}
+	if modal.kind == ModalKindRunningTaskExit {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyRunningTaskExit(response.OptionID)
 	}
 	if modal.kind == ModalKindGoal {
 		m.modal = nil

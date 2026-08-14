@@ -53,7 +53,7 @@ func (c UserHistoryCell) DisplayLines(width int) []string {
 	wrappedMessage := []string{}
 	if message != "" {
 		for _, line := range strings.Split(message, "\n") {
-			wrappedMessage = append(wrappedMessage, tui.AdaptiveWrapLine(line, tui.WrapOptions{
+			wrappedMessage = append(wrappedMessage, tui.WrapLine(line, tui.WrapOptions{
 				Width:      wrapWidth,
 				BreakWords: true,
 			})...)

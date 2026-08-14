@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 const (
@@ -209,6 +212,49 @@ func (p *PermissionProfile) HasDenyReadEntries() bool {
 		return true
 	}
 	return false
+}
+
+// DeniesReadPath reports whether the profile's explicit deny-read entries
+// reject the given filesystem path. Path entries match after cleaning, and
+// glob entries are matched with forward-slash normalization.
+func (p *PermissionProfile) DeniesReadPath(path string) bool {
+	if p == nil {
+		return false
+	}
+	normalized := filepath.ToSlash(filepath.Clean(path))
+	for _, entry := range p.DeniedReadEntries {
+		if !strings.EqualFold(string(entry.Access), string(FileSystemAccessDeny)) {
+			continue
+		}
+		switch entry.Path.Type {
+		case "path", "":
+			candidate := filepath.ToSlash(filepath.Clean(entry.Path.Path))
+			if strings.EqualFold(normalized, candidate) {
+				return true
+			}
+		case "glob_pattern":
+			if ok, _ := doublestar.Match(entry.Path.Pattern, normalized); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IntersectWithReadOnly returns a read-only permission profile that preserves
+// the original profile's explicit deny-read entries and restricts network
+// access. It returns nil for external-sandbox profiles because those belong to
+// a separate enforcement boundary (Rust #38377).
+func (p *PermissionProfile) IntersectWithReadOnly() *PermissionProfile {
+	if p == nil {
+		return nil
+	}
+	if p.SandboxPolicy != nil && p.SandboxPolicy.Kind == "external-sandbox" {
+		return nil
+	}
+	out := ReadOnlyPermissionProfile()
+	out.DeniedReadEntries = append([]FileSystemSandboxEntry(nil), p.DeniedReadEntries...)
+	return &out
 }
 
 func UnsandboxedExecutionAllowed(profile *PermissionProfile) bool {

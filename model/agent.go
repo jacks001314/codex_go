@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"codex_go/codexapi"
+	"codex_go/sandbox"
 )
 
 var ErrInvalidAgentRequest = errors.New("invalid agent request")
@@ -46,6 +47,7 @@ type AgentRequest struct {
 	OutputSchema                 any
 	StreamHandler                ResponsesStreamHandler
 	DisableHostedImageGeneration bool
+	PermissionProfile            *sandbox.PermissionProfile
 }
 
 type AgentUsage struct {

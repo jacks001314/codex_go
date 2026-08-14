@@ -241,6 +241,7 @@ type MCPServerStatus struct {
 	Server            MCPServerInfo         `json:"server"`
 	State             MCPServerStartupState `json:"state"`
 	Error             *string               `json:"error,omitempty"`
+	FailureReason     *string               `json:"failureReason,omitempty"`
 }
 
 func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
@@ -271,6 +272,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		AuthStatus        MCPAuthStatus                     `json:"authStatus"`
 		State             MCPServerStartupState             `json:"state"`
 		Error             *string                           `json:"error,omitempty"`
+		FailureReason     *string                           `json:"failureReason,omitempty"`
 	}{
 		Name:              name,
 		PluginID:          cloneStringPtr(s.PluginID),
@@ -281,6 +283,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		AuthStatus:        authStatus,
 		State:             state,
 		Error:             cloneStringPtr(s.Error),
+		FailureReason:     cloneStringPtr(s.FailureReason),
 	})
 }
 
@@ -1143,7 +1146,11 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		servers[result.Index] = result.Status
 		name := result.Status.effectiveName()
 		if result.Err != nil && result.Status.State == MCPServerFailed {
-			notifyMCPStartupObserver(observer, name, MCPServerFailed, result.Err)
+			observerErr := result.Err
+			if result.Status.Error != nil {
+				observerErr = errors.New(*result.Status.Error)
+			}
+			notifyMCPStartupObserver(observer, name, MCPServerFailed, observerErr)
 		} else {
 			notifyMCPStartupObserver(observer, name, result.Status.State, nil)
 		}
@@ -1223,6 +1230,14 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 		status.Error = nil
 	} else if isRunnableMCPConfig(config) {
 		message := err.Error()
+		authStatus := s.authStatusForConfig(name, config)
+		if display, ok := mcpInitAuthErrorDisplay(name, config, authStatus, err); ok {
+			message = display
+			if authStatus == MCPAuthOAuth {
+				reason := mcpFailureReasonReauthenticationRequired
+				status.FailureReason = &reason
+			}
+		}
 		status.State = MCPServerFailed
 		status.Error = &message
 		status.Tools = nil
@@ -1234,10 +1249,39 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 	return mcpInventoryStatusResult{Index: index, Status: status, Err: err}
 }
 
+const mcpFailureReasonReauthenticationRequired = "reauthenticationRequired"
+
 func notifyMCPStartupObserver(observer MCPStartupObserver, name string, status MCPServerStartupState, err error) {
 	if observer != nil {
 		observer(name, status, err)
 	}
+}
+
+// mcpInitAuthErrorDisplay returns the user-facing startup error for a server
+// whose MCP initialization was rejected for authentication. It mirrors Rust's
+// mcp_init_error_display: an OAuth credential that the server rejects is
+// reported as reauthentication rather than a plain logged-out state.
+func mcpInitAuthErrorDisplay(serverName string, config *ServerConfig, authStatus MCPAuthStatus, err error) (string, bool) {
+	if !mcpErrAuthenticationRequired(err) {
+		return "", false
+	}
+	recoveryHint := fmt.Sprintf("Run `codex mcp login %s`.", strings.TrimSpace(serverName))
+	if config != nil && !config.IsLocalEnvironment() {
+		recoveryHint = "Use your client's MCP OAuth sign-in flow."
+	}
+	state := "is not logged in"
+	if authStatus == MCPAuthOAuth {
+		state = "requires OAuth reauthentication"
+	}
+	return fmt.Sprintf("The %s MCP server %s. %s", strings.TrimSpace(serverName), state, recoveryHint), true
+}
+
+func mcpErrAuthenticationRequired(err error) bool {
+	if err == nil {
+		return false
+	}
+	var status *mcpHTTPStatusError
+	return errors.As(err, &status) && (status.StatusCode == 401 || status.StatusCode == 407)
 }
 
 func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, includeTools bool, includeInventory bool) {
@@ -2209,6 +2253,7 @@ func cancelOAuthLogins(logins []*OAuthLoginServer) {
 
 func cloneMCPServerStatus(status MCPServerStatus) MCPServerStatus {
 	status.PluginID = cloneStringPtr(status.PluginID)
+	status.FailureReason = cloneStringPtr(status.FailureReason)
 	status.Server.Args = append([]string(nil), status.Server.Args...)
 	status.Server.Icons = append([]any(nil), status.Server.Icons...)
 	if status.Server.Title != nil {

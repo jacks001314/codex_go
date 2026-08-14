@@ -1264,6 +1264,12 @@ func TestMCPStatusRecomputesOAuthStatusAfterRefreshDeletesToken(t *testing.T) {
 	if status.Data[0].State != MCPServerFailed {
 		t.Fatalf("State = %q, want failed", status.Data[0].State)
 	}
+	if status.Data[0].FailureReason != nil {
+		t.Fatalf("FailureReason = %#v, want nil after token deletion", status.Data[0].FailureReason)
+	}
+	if status.Data[0].Error == nil || !strings.Contains(*status.Data[0].Error, "is not logged in") {
+		t.Fatalf("Error = %#v, want not-logged-in message", status.Data[0].Error)
+	}
 }
 
 func TestHTTPMCPReadsSSERPCResponse(t *testing.T) {

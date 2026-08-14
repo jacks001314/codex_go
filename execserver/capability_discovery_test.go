@@ -142,6 +142,16 @@ func TestClientDiscoverCapabilityRootsBatchesMoreThanExecutorLimit(t *testing.T)
 	}
 }
 
+func TestClientDiscoverCapabilityRootsEmptyRequest(t *testing.T) {
+	response, err := (&Client{}).DiscoverCapabilityRoots(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("DiscoverCapabilityRoots(nil) error = %v", err)
+	}
+	if response == nil || len(response.Roots) != 0 {
+		t.Fatalf("empty discovery response = %#v", response)
+	}
+}
+
 func writeCapabilityFixture(t *testing.T, root, relativePath, contents string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(relativePath))
