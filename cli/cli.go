@@ -44,6 +44,7 @@ const (
 	CommandStdioToUDS        Command = "stdio-to-uds"
 	CommandExecServer        Command = "exec-server"
 	CommandFeatures          Command = "features"
+	CommandMigrateRollouts   Command = "migrate-rollouts"
 )
 
 var knownCommands = map[string]Command{
@@ -77,6 +78,8 @@ var knownCommands = map[string]Command{
 	"stdio-to-uds":        CommandStdioToUDS,
 	"exec-server":         CommandExecServer,
 	"features":            CommandFeatures,
+	"migrate-rollouts":    CommandMigrateRollouts,
+	"migrateRollouts":     CommandMigrateRollouts,
 }
 
 type SharedOptions struct {

@@ -323,6 +323,69 @@ func TestCompactRemotelyUsesRunnerAndProcessesHistory(t *testing.T) {
 	}
 }
 
+func TestCompactRemotelyRetainsClientAuthoredDeveloperMessagesWhenEnabled(t *testing.T) {
+	clientDeveloper := Item{
+		ID:   "client-developer",
+		Type: "message",
+		Role: "developer",
+		Text: "keep this client instruction",
+		Data: map[string]any{
+			"harness_metadata": map[string]any{"client_authored": true},
+		},
+	}
+	generatedDeveloper := Item{
+		ID:   "generated-developer",
+		Type: "message",
+		Role: "developer",
+		Text: "drop generated instruction",
+	}
+	user := Item{
+		ID:   "user",
+		Type: "message",
+		Role: "user",
+		Kind: "user_message",
+		Text: "hello",
+	}
+	runner := remoteRunnerFunc(func(context.Context, *Request) (*Result, error) {
+		return &Result{
+			Status:  StatusCompleted,
+			Summary: "remote summary",
+			NewHistory: []Item{
+				{ID: "summary", Type: "message", Role: "user", Kind: "compaction_summary", Text: SummaryPrefix + "\nremote summary"},
+			},
+		}, nil
+	})
+
+	for _, enabled := range []bool{false, true} {
+		result, err := CompactRemotely(context.Background(), &Request{
+			ThreadID: "thread-client-developer",
+			Trigger:  TriggerManual,
+			Reason:   ReasonUserRequested,
+			Phase:    PhaseStandaloneTurn,
+			History:  []Item{clientDeveloper, generatedDeveloper, user},
+		}, &RemoteOptions{
+			Runner:                        runner,
+			InitialContext:                []Item{{ID: "ctx", Type: "message", Role: "developer", Text: "context"}},
+			InjectBeforeLastUser:          true,
+			RetainClientDeveloperMessages: enabled,
+		})
+		if err != nil {
+			t.Fatalf("CompactRemotely(enabled=%v) error = %v", enabled, err)
+		}
+		ids := make([]string, 0, len(result.NewHistory))
+		for _, item := range result.NewHistory {
+			ids = append(ids, item.ID)
+		}
+		want := "client-developer,ctx,user,summary"
+		if !enabled {
+			want = "ctx,user,summary"
+		}
+		if strings.Join(ids, ",") != want {
+			t.Fatalf("CompactRemotely(enabled=%v) history ids = %v, want %v", enabled, ids, want)
+		}
+	}
+}
+
 func TestCompactRemotelyRetainsBoundedDelegatedTasksAndDropsCompletions(t *testing.T) {
 	delegated := structuredAgentMessageItem(t, "task", "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n", strings.Repeat("x", 40_000))
 	completion := structuredAgentMessageItem(t, "completion", "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\ndone", "")

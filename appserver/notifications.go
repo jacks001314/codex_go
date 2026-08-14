@@ -45,6 +45,8 @@ const (
 	NotificationMcpServerOauthLoginCompleted        NotificationMethod = NotificationMCPServerOauthLoginCompleted
 	NotificationFsChanged                           NotificationMethod = NotificationFSChanged
 	NotificationThreadRealtimeSdp                   NotificationMethod = NotificationThreadRealtimeSDP
+	NotificationThreadQueueChanged                  NotificationMethod = "thread/queue/changed"
+	NotificationThreadReverted                      NotificationMethod = "thread/reverted"
 )
 
 type ErrorNotification struct {

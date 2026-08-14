@@ -37,6 +37,7 @@ type ServerConfig struct {
 	EnvHTTPHeaders           map[string]string                 `json:"env_http_headers,omitempty"`
 	HTTPHeadersHelper        string                            `json:"http_headers_helper,omitempty"`
 	OAuthClientID            string                            `json:"oauth_client_id,omitempty"`
+	OAuthCallbackPort        uint16                            `json:"oauth_callback_port,omitempty"`
 	OAuthResource            string                            `json:"oauth_resource,omitempty"`
 	Scopes                   []string                          `json:"scopes,omitempty"`
 	ScopesConfigured         bool                              `json:"-"`
@@ -393,6 +394,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 		server.EnvHTTPHeaders = runtimeConfigStringMap(values, "env_http_headers")
 		server.HTTPHeadersHelper = runtimeConfigString(values, "http_headers_helper")
 		server.OAuthClientID = runtimeConfigOAuthClientID(values)
+		server.OAuthCallbackPort = runtimeConfigOAuthCallbackPort(values)
 		server.OAuthResource = runtimeConfigStringAny(values, "oauth_resource", "oauthResource")
 		server.Scopes, server.ScopesConfigured = runtimeConfigOptionalStringSlice(values, "scopes")
 		return server
@@ -440,6 +442,57 @@ func runtimeConfigOAuthClientID(values map[string]any) string {
 		return ""
 	}
 	return runtimeConfigStringAny(oauth, "client_id", "clientId")
+}
+
+func runtimeConfigOAuthCallbackPort(values map[string]any) uint16 {
+	if port := runtimeConfigUint16Any(values, "oauth_callback_port", "oauthCallbackPort"); port > 0 {
+		return port
+	}
+	oauth, ok := runtimeConfigMapAny(values, "oauth")
+	if !ok {
+		return 0
+	}
+	return runtimeConfigUint16Any(oauth, "callback_port", "callbackPort", "port")
+}
+
+func runtimeConfigUint16Any(values map[string]any, keys ...string) uint16 {
+	if values == nil {
+		return 0
+	}
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case float64:
+			if typed > 0 && typed <= 65535 {
+				return uint16(typed)
+			}
+		case float32:
+			if typed > 0 && typed <= 65535 {
+				return uint16(typed)
+			}
+		case int:
+			if typed > 0 && typed <= 65535 {
+				return uint16(typed)
+			}
+		case int64:
+			if typed > 0 && typed <= 65535 {
+				return uint16(typed)
+			}
+		case uint64:
+			if typed > 0 && typed <= 65535 {
+				return uint16(typed)
+			}
+		case json.Number:
+			parsed, err := typed.Float64()
+			if err == nil && parsed > 0 && parsed <= 65535 {
+				return uint16(parsed)
+			}
+		}
+	}
+	return 0
 }
 
 func runtimeConfigStringSliceAny(values map[string]any, keys ...string) []string {

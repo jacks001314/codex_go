@@ -71,7 +71,9 @@ func authStatusFromSnapshot(snapshot *auth.AuthDotJSON, params *AuthStatusParams
 		Mode:               mode,
 		AccountID:          authStatusAccountID(snapshot),
 	}
-	if params != nil && params.IncludeToken != nil && *params.IncludeToken && auth.RefreshFailureForAuth(codexHome, snapshot) == nil {
+	if params != nil && params.IncludeToken != nil && *params.IncludeToken &&
+		!auth.IsWorkloadIdentitySelected() &&
+		auth.RefreshFailureForAuth(codexHome, snapshot) == nil {
 		response.AuthToken = authStatusToken(snapshot)
 	}
 	return response

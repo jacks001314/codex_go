@@ -30,10 +30,10 @@ func TargetCuratedMarketplaceForRuntime(authMode string, modelProviderID string)
 		}
 		return TargetCuratedOpenAIAPI
 	}
-	if strings.EqualFold(strings.TrimSpace(modelProviderID), AmazonBedrockModelProviderID) {
-		return TargetCuratedOpenAIAPI
-	}
-	return TargetCuratedOpenAI
+	// Rust #38429 selects the curated catalog from authentication alone. An
+	// absent auth mode routes to the API-key curated marketplace regardless of
+	// the resolved model provider.
+	return TargetCuratedOpenAIAPI
 }
 
 func authModeUsesCodexBackend(mode string) bool {

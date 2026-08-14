@@ -13,7 +13,7 @@ func TestTargetCuratedMarketplaceForRuntime(t *testing.T) {
 		providerID string
 		want       TargetCuratedMarketplace
 	}{
-		{name: "no auth", want: TargetCuratedOpenAI},
+		{name: "no auth", want: TargetCuratedOpenAIAPI},
 		{name: "chatgpt", authMode: "chatgpt", providerID: AmazonBedrockModelProviderID, want: TargetCuratedOpenAIWithRemote},
 		{name: "external chatgpt", authMode: "chatgptAuthTokens", want: TargetCuratedOpenAIWithRemote},
 		{name: "api key", authMode: "api-key", want: TargetCuratedOpenAIAPI},
@@ -72,7 +72,7 @@ func TestPluginServiceRoutesCuratedCapabilitiesHooksAndSkills(t *testing.T) {
 	}
 
 	service.SetRuntimeRoute("", "openai")
-	assertOnly(OpenAICuratedMarketplaceName)
+	assertOnly(OpenAIAPICuratedMarketplaceName)
 	service.SetRuntimeRoute("api-key", "openai")
 	assertOnly(OpenAIAPICuratedMarketplaceName)
 	service.SetRuntimeRoute("chatgpt", AmazonBedrockModelProviderID)

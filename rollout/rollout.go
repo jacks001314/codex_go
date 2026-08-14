@@ -182,15 +182,16 @@ type Line struct {
 	// ItemMetadata is the optional harness-owned metadata sibling stored
 	// beside a response-item payload (Rust RolloutItemWire::ResponseItem
 	// metadata field, #38058). Absent for legacy lines.
-	ItemMetadata     json.RawMessage `json:"metadata,omitempty"`
-	ItemID           string          `json:"item_id,omitempty"`
-	TurnID           string          `json:"turn_id,omitempty"`
-	Role             string          `json:"role,omitempty"`
-	ResponseID       string          `json:"response_id,omitempty"`
-	ThreadRolledBack *RollbackEvent  `json:"thread_rolled_back,omitempty"`
-	TurnContext      json.RawMessage `json:"turn_context,omitempty"`
-	WorldState       json.RawMessage `json:"world_state,omitempty"`
-	Data             map[string]any  `json:"data,omitempty"`
+	ItemMetadata      json.RawMessage `json:"metadata,omitempty"`
+	ItemID            string          `json:"item_id,omitempty"`
+	TurnID            string          `json:"turn_id,omitempty"`
+	Role              string          `json:"role,omitempty"`
+	ResponseID        string          `json:"response_id,omitempty"`
+	ThreadRolledBack  *RollbackEvent  `json:"thread_rolled_back,omitempty"`
+	TurnContext       json.RawMessage `json:"turn_context,omitempty"`
+	WorldState        json.RawMessage `json:"world_state,omitempty"`
+	SecurityRiskScore json.RawMessage `json:"security_risk_score,omitempty"`
+	Data              map[string]any  `json:"data,omitempty"`
 }
 
 type RollbackEvent struct {
@@ -568,6 +569,30 @@ func (r *Recorder) AppendThreadSettingsApplied(approvalPolicy string, now time.T
 		return err
 	}
 	return r.AppendLine(Line{Type: "event_msg", Timestamp: now.UTC().Format(time.RFC3339Nano), Payload: payload})
+}
+
+// AppendSecurityRiskScore persists a durable thread-owned security risk
+// classifier score. These records are rollout-only and must not enter
+// user-visible thread projections.
+func (r *Recorder) AppendSecurityRiskScore(category string, score float64, now time.Time) error {
+	if r == nil {
+		return errors.New("recorder is nil")
+	}
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return errors.New("security risk category is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	payload, err := json.Marshal(struct {
+		Category string  `json:"category"`
+		Score    float64 `json:"score"`
+	}{Category: category, Score: score})
+	if err != nil {
+		return err
+	}
+	return r.AppendLine(Line{Type: "security_risk_score", Timestamp: now.UTC().Format(time.RFC3339Nano), Payload: payload})
 }
 
 func (r *Recorder) AppendTurnStarted(turnID string, startedAt time.Time) error {
@@ -1254,6 +1279,8 @@ func unmarshalLine(data []byte, line *Line) error {
 				line.TurnContext = append(json.RawMessage(nil), payload...)
 			case "world_state":
 				line.WorldState = append(json.RawMessage(nil), payload...)
+			case "security_risk_score":
+				line.SecurityRiskScore = append(json.RawMessage(nil), payload...)
 			}
 		}
 		if line.ThreadRolledBack == nil {
@@ -1269,6 +1296,11 @@ func unmarshalLine(data []byte, line *Line) error {
 		if len(line.WorldState) == 0 {
 			if payload, ok := raw["world_state"]; ok {
 				line.WorldState = append(json.RawMessage(nil), payload...)
+			}
+		}
+		if len(line.SecurityRiskScore) == 0 {
+			if payload, ok := raw["security_risk_score"]; ok {
+				line.SecurityRiskScore = append(json.RawMessage(nil), payload...)
 			}
 		}
 	}

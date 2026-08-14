@@ -63,6 +63,8 @@ type ThreadGoalUpdatedNotification = GoalUpdatedNotification
 type ThreadGoalClearedNotification = GoalClearedNotification
 type ThreadSettingsUpdatedNotification = SettingsUpdatedNotification
 type ThreadRealtimeSdpNotification = ThreadRealtimeSDPNotification
+type ThreadRevertedNotification = ThreadIDNotification
+type ThreadQueueChangedNotification = ThreadIDNotification
 
 type McpServerStartupFailureReason = MCPServerStartupFailureReason
 type McpServerStatusUpdatedNotification = MCPServerStatusUpdatedNotification

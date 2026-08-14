@@ -311,11 +311,12 @@ type RemoteRunner interface {
 }
 
 type RemoteOptions struct {
-	Runner               RemoteRunner
-	MaxSummaryChars      int
-	InitialContext       []Item
-	InjectBeforeLastUser bool
-	FallbackToLocal      bool
+	Runner                        RemoteRunner
+	MaxSummaryChars               int
+	InitialContext                []Item
+	InjectBeforeLastUser          bool
+	FallbackToLocal               bool
+	RetainClientDeveloperMessages bool
 }
 
 func CompactRemotely(ctx context.Context, request *Request, options *RemoteOptions) (*Result, error) {
@@ -338,7 +339,13 @@ func CompactRemotely(ctx context.Context, request *Request, options *RemoteOptio
 			if len(result.NewHistory) == 0 && strings.TrimSpace(result.Summary) != "" {
 				result.NewHistory = BuildCompactedHistory(nil, lastUserMessages(requestHistoryForCompaction(request), 1), result.Summary)
 			}
-			result.NewHistory = processRemoteHistoryWithRetained(result.NewHistory, requestHistoryForCompaction(request), options.InitialContext, options.InjectBeforeLastUser)
+			result.NewHistory = processRemoteHistoryWithRetained(
+				result.NewHistory,
+				requestHistoryForCompaction(request),
+				options.InitialContext,
+				options.InjectBeforeLastUser,
+				options.RetainClientDeveloperMessages,
+			)
 			if result.CompletedAt.IsZero() {
 				result.CompletedAt = time.Now().UTC()
 			}
@@ -381,10 +388,12 @@ func ShouldKeepCompactedHistoryItem(item Item) bool {
 	}
 }
 
-func FilterCompactedHistory(items []Item) []Item {
+func FilterCompactedHistory(items []Item, retainClientDeveloperMessages ...bool) []Item {
+	retainClientDevelopers := len(retainClientDeveloperMessages) > 0 && retainClientDeveloperMessages[0]
 	filtered := make([]Item, 0, len(items))
 	for _, item := range items {
-		if ShouldKeepCompactedHistoryItem(item) {
+		if ShouldKeepCompactedHistoryItem(item) ||
+			(retainClientDevelopers && IsClientAuthoredDeveloperMessage(item)) {
 			filtered = append(filtered, item)
 		}
 	}
@@ -430,9 +439,9 @@ func ProcessRemoteHistory(remote []Item, initialContext []Item, injectBeforeLast
 	return filtered
 }
 
-func processRemoteHistoryWithRetained(remote []Item, original []Item, initialContext []Item, injectBeforeLastUser bool) []Item {
-	retained := retainedMessagesForRemoteCompaction(original, RemoteRetainedMessageTokenBudget)
-	filtered := FilterCompactedHistory(remote)
+func processRemoteHistoryWithRetained(remote []Item, original []Item, initialContext []Item, injectBeforeLastUser bool, retainClientDeveloperMessages bool) []Item {
+	retained := retainedMessagesForRemoteCompaction(original, RemoteRetainedMessageTokenBudget, retainClientDeveloperMessages)
+	filtered := FilterCompactedHistory(remote, retainClientDeveloperMessages)
 	history := append([]Item(nil), retained...)
 	for _, item := range filtered {
 		if compactHistoryContainsItem(history, item) {
@@ -446,13 +455,16 @@ func processRemoteHistoryWithRetained(remote []Item, original []Item, initialCon
 	return cloneItems(history)
 }
 
-func retainedMessagesForRemoteCompaction(items []Item, maxTokens int) []Item {
+func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, retainClientDeveloperMessages bool) []Item {
 	if maxTokens <= 0 {
 		return nil
 	}
 	candidates := make([]Item, 0, len(items))
 	for _, item := range items {
 		keep := (item.Type == "message" || item.Type == "user_message") && item.Role == "user" && ShouldKeepCompactedHistoryItem(item)
+		if retainClientDeveloperMessages && IsClientAuthoredDeveloperMessage(item) {
+			keep = true
+		}
 		if isStructuredAgentMessage(&item) {
 			cost := EstimateItemTokens(&item)
 			keep = !isAgentCompletionMessage(&item) && cost <= MaxRetainedAgentMessageTokens
@@ -488,6 +500,35 @@ func retainedMessagesForRemoteCompaction(items []Item, maxTokens int) []Item {
 		retainedReversed[left], retainedReversed[right] = retainedReversed[right], retainedReversed[left]
 	}
 	return cloneItems(retainedReversed)
+}
+
+// IsClientAuthoredDeveloperMessage reports whether a compact item is a
+// client-authored developer message and should be retained across remote
+// compaction when the corresponding feature is enabled.
+func IsClientAuthoredDeveloperMessage(item Item) bool {
+	if !strings.EqualFold(strings.TrimSpace(item.Role), "developer") {
+		return false
+	}
+	raw, ok := item.Data["harness_metadata"]
+	if !ok {
+		return false
+	}
+	var metadata map[string]any
+	switch value := raw.(type) {
+	case json.RawMessage:
+		_ = json.Unmarshal(value, &metadata)
+	case string:
+		if strings.TrimSpace(value) != "" {
+			_ = json.Unmarshal([]byte(value), &metadata)
+		}
+	case map[string]any:
+		metadata = value
+	}
+	if metadata == nil {
+		return false
+	}
+	authored, _ := metadata["client_authored"].(bool)
+	return authored
 }
 
 func EstimateItemTokens(item *Item) int {

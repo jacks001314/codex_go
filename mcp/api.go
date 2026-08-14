@@ -1512,6 +1512,7 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 		Store:                 store,
 		HTTPClient:            client,
 		Timeout:               callbackTimeout,
+		Port:                  config.OAuthCallbackPort,
 		ClientRegistration:    registration,
 		CIMDAdvertised:        &discovery.ClientIDMetadataDocumentSupported,
 		PublicClientAuth:      &discovery.PublicClientTokenAuthSupported,
