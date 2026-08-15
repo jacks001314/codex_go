@@ -264,7 +264,13 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if err := registerMCPTools(registry, options); err != nil {
 			return nil, err
 		}
-		if !options.EnableToolSearch {
+		// Rust registers the MCP resource tools whenever MCP servers are
+		// configured, independently of tool search (add_mcp_resource_tools in
+		// codex-rs/core/src/tools/spec_plan.rs). Gating them on tool search
+		// being disabled left them hidden behind deferred discovery, so models
+		// could not list or read MCP resources even though the servers were
+		// configured and their other tools were searchable.
+		if options.MCPService.HasServers() {
 			if err := registerMCPResourceHandlers(registry, options.MCPService, options.ThreadID); err != nil {
 				return nil, err
 			}

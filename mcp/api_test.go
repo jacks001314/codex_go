@@ -670,6 +670,26 @@ func TestApplyRuntimeConfigPreservesRefreshedAppsTools(t *testing.T) {
 	t.Fatal("Apps server missing after runtime refresh")
 }
 
+func TestMCPServiceHasServers(t *testing.T) {
+	if NewMCPService(nil).HasServers() {
+		t.Fatal("HasServers() = true for a service with no runtime")
+	}
+	var nilService *MCPService
+	if nilService.HasServers() {
+		t.Fatal("HasServers() = true for a nil service")
+	}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"disabled": {Config: ServerConfig{Command: "disabled", Enabled: false}},
+	}})
+	if service.HasServers() {
+		t.Fatal("HasServers() = true when only disabled servers are configured")
+	}
+	service.SetServerConfig("docs", &ServerConfig{Enabled: true, Command: "docs"})
+	if !service.HasServers() {
+		t.Fatal("HasServers() = false after an enabled server is configured")
+	}
+}
+
 func TestMCPOAuthAndContentJSONShape(t *testing.T) {
 	login := &MCPServerOauthLoginResponse{AuthorizationURL: "https://example.test/oauth", URL: "legacy"}
 	encodedLogin, err := json.Marshal(login)

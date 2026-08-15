@@ -138,6 +138,20 @@ desktop capture through `view_image` inspection to a structured description:
 npm --prefix sdktests run test:parity -- --scenario windows-screen-capture-description --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
 ```
 
+MCP function-listing scenarios drive the same Chinese prompts through the
+configured ida/angr MCP servers against the `../test/bwrap` ELF fixture
+(copied into each isolated implementation directory so `../test/bwrap`
+resolves from the fixture workspace). The three scenarios are
+`mcp-list-funcs-generic`, `mcp-list-funcs-ida`, and `mcp-list-funcs-angr`.
+They require the local MCP servers to be reachable; the runner pre-flights
+the `[mcp_servers.*]` URLs from the user config before spending model calls
+and fails fast as an infrastructure failure when a server is down.
+
+```powershell
+npm --prefix sdktests run test:parity -- --scenario mcp-list-funcs-ida --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
+npm --prefix sdktests run test:parity -- --scenario mcp-list-funcs-angr --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
+```
+
 The CLI exits with `0` for parity, `1` for a behavior mismatch, and `2` for an
 infrastructure failure.
 

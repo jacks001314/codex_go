@@ -62,6 +62,9 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
 
   const order = args.order ?? ["rust", "go"];
   try {
+    if (scenario.bwrapFixture) {
+      await assertMcpEndpointsReachable(sourceConfig, scenario.name);
+    }
     for (const impl of order) {
       throwIfAborted(args.signal);
       const workspace = path.join(tmpDir, impl, "workspace");
@@ -86,6 +89,11 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
       );
       if (scenario.localImageFixture) {
         cpSync(path.join(repoRoot, scenario.localImageFixture), path.join(workspace, "image.png"));
+      }
+      if (scenario.bwrapFixture) {
+        const bwrapTargetDir = path.join(tmpDir, impl, "test");
+        mkdirSync(bwrapTargetDir, { recursive: true });
+        cpSync(path.resolve(repoRoot, "..", "test", "bwrap"), path.join(bwrapTargetDir, "bwrap"));
       }
       let additionalDirectories: string[] | undefined;
       if (scenario.additionalDirectoryMode === "fixture") {
@@ -156,6 +164,72 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
       console.warn(`temporary cleanup failed for ${tmpDir}: ${runState.cleanupError}`);
     }
   }
+}
+
+async function assertMcpEndpointsReachable(configPath: string, scenarioName: string): Promise<void> {
+  if (!existsSync(configPath)) return;
+  const text = readFileSync(configPath, "utf8");
+  const servers = parseMcpServerUrls(text);
+  const failures: string[] = [];
+  for (const { name, url } of servers) {
+    try {
+      const body = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "sdktests-preflight", version: "0.0.1" },
+        },
+      });
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body,
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) {
+        failures.push(`${name} (${url}) HTTP ${response.status}`);
+      }
+    } catch (error: any) {
+      failures.push(`${name} (${url}): ${String(error?.message ?? error)}`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`MCP server preflight failed for ${scenarioName}: ${failures.join("; ")}`);
+  }
+}
+
+function parseMcpServerUrls(configText: string): { name: string; url: string }[] {
+  const out: { name: string; url: string }[] = [];
+  let current: { name: string; enabled: boolean } | null = null;
+  for (const rawLine of configText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const header = /^\[mcp_servers\.([^\]]+)\]$/.exec(line);
+    if (header) {
+      current = { name: header[1], enabled: true };
+      continue;
+    }
+    if (!current) continue;
+    if (/^\[/.test(line)) {
+      current = null;
+      continue;
+    }
+    const enabled = /^enabled\s*=\s*(true|false)/.exec(line);
+    if (enabled) {
+      current.enabled = enabled[1] === "true";
+      continue;
+    }
+    const url = /^url\s*=\s*"([^"]+)"/.exec(line);
+    if (url && current.enabled) {
+      out.push({ name: current.name, url: url[1] });
+    }
+  }
+  return out;
 }
 
 async function removeTemporaryRoot(root: string): Promise<void> {
@@ -328,6 +402,7 @@ function buildManifest(args: RunArgs, scenario: any, configSummary: Record<strin
       abortBeforeRun: Boolean(scenario.abortBeforeRun),
       additionalDirectoryMode: scenario.additionalDirectoryMode ?? "none",
       localImageFixture: scenario.localImageFixture ?? null,
+      bwrapFixture: Boolean(scenario.bwrapFixture),
     },
     scenarios: [scenario.name],
     order: args.order ?? ["rust", "go"],

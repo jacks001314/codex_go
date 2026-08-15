@@ -13,6 +13,7 @@ export type Scenario = {
   abortBeforeRun?: boolean;
   additionalDirectoryMode?: "none" | "fixture";
   localImageFixture?: string;
+  bwrapFixture?: boolean;
   concurrentResumeAfterFirstTurn?: boolean;
   threadOptions: {
     sandboxMode: "read-only" | "workspace-write" | "danger-full-access";
@@ -597,6 +598,108 @@ export const scenarios: Scenario[] = [
       requiredCompletedItemTypes: ["agent_message", "mcp_tool_call"], forbiddenCompletedItemTypes: ["command_execution", "file_change"],
       uniqueCompletedItemTypes: ["agent_message", "mcp_tool_call"],
       requireStableThreadId: true, eventSequenceComparison: "semantic-tools", agentMessageComparison: "final-per-turn", workspaceMutation: "none",
+    },
+  },
+  {
+    name: "mcp-list-funcs-generic",
+    description: "Asks the model to use any configured MCP server to list the functions of ../test/bwrap and compares Rust/Go MCP tool lifecycle and semantics.",
+    bwrapFixture: true,
+    timeoutMs: 420000,
+    codexConfig: {
+      web_search: "disabled",
+      suppress_unstable_features_warning: true,
+    },
+    threadOptions: {
+      sandboxMode: "read-only",
+      skipGitRepoCheck: true,
+      approvalPolicy: "never",
+      networkAccessEnabled: true,
+      webSearchMode: "disabled",
+    },
+    turns: [
+      {
+        prompt: "使用mcp列出../test/bwrap文件包含的函数列表",
+      },
+    ],
+    expected: {
+      terminal: "turn.completed",
+      minAgentMessages: 1,
+      requireUsage: true,
+      expectedTurns: 1,
+      requiredCompletedItemTypes: ["agent_message", "mcp_tool_call"],
+      rootRolloutPatterns: ["setup_newroot"],
+      eventSequenceComparison: "model-selected-tools",
+      commandOutputComparison: "informational",
+      agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "mcp-list-funcs-ida",
+    description: "Asks the model to use the ida MCP server to list the functions of ../test/bwrap and compares Rust/Go MCP tool lifecycle and semantics.",
+    bwrapFixture: true,
+    timeoutMs: 420000,
+    codexConfig: {
+      web_search: "disabled",
+      suppress_unstable_features_warning: true,
+    },
+    threadOptions: {
+      sandboxMode: "read-only",
+      skipGitRepoCheck: true,
+      approvalPolicy: "never",
+      networkAccessEnabled: true,
+      webSearchMode: "disabled",
+    },
+    turns: [
+      {
+        prompt: "使用ida mcp列出../test/bwrap文件包含的函数列表",
+      },
+    ],
+    expected: {
+      terminal: "turn.completed",
+      minAgentMessages: 1,
+      requireUsage: true,
+      expectedTurns: 1,
+      requiredCompletedItemTypes: ["agent_message", "mcp_tool_call"],
+      rootRolloutPatterns: ["setup_newroot"],
+      eventSequenceComparison: "model-selected-tools",
+      commandOutputComparison: "informational",
+      agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "mcp-list-funcs-angr",
+    description: "Asks the model to use the angr MCP server to list the functions of ../test/bwrap and compares Rust/Go MCP tool lifecycle and semantics.",
+    bwrapFixture: true,
+    timeoutMs: 420000,
+    codexConfig: {
+      web_search: "disabled",
+      suppress_unstable_features_warning: true,
+    },
+    threadOptions: {
+      sandboxMode: "read-only",
+      skipGitRepoCheck: true,
+      approvalPolicy: "never",
+      networkAccessEnabled: true,
+      webSearchMode: "disabled",
+    },
+    turns: [
+      {
+        prompt: "使用angr mcp列出../test/bwrap文件包含的函数列表",
+      },
+    ],
+    expected: {
+      terminal: "turn.completed",
+      minAgentMessages: 1,
+      requireUsage: true,
+      expectedTurns: 1,
+      requiredCompletedItemTypes: ["agent_message", "mcp_tool_call"],
+      rootRolloutPatterns: ["setup_newroot"],
+      eventSequenceComparison: "model-selected-tools",
+      commandOutputComparison: "informational",
+      agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
     },
   },
   {

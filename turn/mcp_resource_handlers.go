@@ -80,7 +80,7 @@ func (h *mcpResourceListExecutor) Execute(ctx context.Context, inv *tool.Invocat
 				m[s.Server.Name] = append(m[s.Server.Name], s.ResourceTemplates...)
 			}
 		}
-		return marshalMCPResourceTool(mcp.MCPResourceTemplatesFromAllServers(m))
+		return marshalMCPResourceTool(mcp.MCPResourceTemplatesFromAllServers(m), effectiveResourceServer(server), h.Spec().Name.Name)
 	}
 	m := map[string][]mcp.MCPResource{}
 	for _, s := range status.Data {
@@ -88,7 +88,7 @@ func (h *mcpResourceListExecutor) Execute(ctx context.Context, inv *tool.Invocat
 			m[s.Server.Name] = append(m[s.Server.Name], s.Resources...)
 		}
 	}
-	return marshalMCPResourceTool(mcp.MCPResourcesFromAllServers(m))
+	return marshalMCPResourceTool(mcp.MCPResourcesFromAllServers(m), effectiveResourceServer(server), h.Spec().Name.Name)
 }
 
 type mcpResourceReadExecutor struct {
@@ -122,12 +122,31 @@ func (h *mcpResourceReadExecutor) Execute(ctx context.Context, inv *tool.Invocat
 	if err != nil {
 		return nil, tool.RespondToModel(fmt.Sprintf("resources/read failed: %v", err))
 	}
-	return marshalMCPResourceTool(mcp.ReadResourcePayloadFromResponse(a.Server, r))
+	return marshalMCPResourceTool(mcp.ReadResourcePayloadFromResponse(a.Server, r), a.Server, h.Spec().Name.Name)
 }
-func marshalMCPResourceTool(v any) (*tool.Output, error) {
+
+// effectiveResourceServer mirrors Rust's default "codex" pseudo-server for the
+// built-in list_mcp_resources/list_mcp_resource_templates tools.
+func effectiveResourceServer(requested string) string {
+	if strings.TrimSpace(requested) != "" {
+		return strings.TrimSpace(requested)
+	}
+	return "codex"
+}
+
+func marshalMCPResourceTool(v any, server string, toolName string) (*tool.Output, error) {
 	b, e := json.Marshal(v)
 	if e != nil {
 		return nil, e
 	}
-	return &tool.Output{Success: true, Body: string(b)}, nil
+	return &tool.Output{
+		Success: true,
+		Body:    string(b),
+		Data: map[string]any{
+			"mcpToolCall": true,
+			"server":      server,
+			"tool":        toolName,
+			"content":     []any{map[string]any{"type": "text", "text": string(b)}},
+		},
+	}, nil
 }

@@ -935,6 +935,18 @@ func (s *MCPService) ConfiguredStatuses() []MCPServerStatus {
 	return statuses
 }
 
+// HasServers reports whether the service has at least one configured MCP
+// server, mirroring Rust's McpRuntime::has_servers so core tool planning can
+// gate MCP resource tools on configured servers rather than on tool search.
+func (s *MCPService) HasServers() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.configs) > 0
+}
+
 func (s *MCPService) ListStatusChecked(params *MCPListServerStatusParams) (*MCPListServerStatusResponse, error) {
 	return s.ListStatusCheckedWithObserver(params, nil)
 }

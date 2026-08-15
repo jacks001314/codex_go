@@ -47,6 +47,13 @@ func TestMCPResourceListPreservesServerNamesAcrossInventory(t *testing.T) {
 	if len(payload.Resources) != 2 || payload.Resources[0].Server != "alpha" || payload.Resources[1].Server != "zeta" {
 		t.Fatalf("resources = %#v", payload.Resources)
 	}
+	if out.Data["mcpToolCall"] != true || out.Data["server"] != "codex" || out.Data["tool"] != "list_mcp_resources" {
+		t.Fatalf("output data = %#v, want Rust-shaped mcp_tool_call marker", out.Data)
+	}
+	content, ok := out.Data["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("output content = %#v", out.Data["content"])
+	}
 }
 
 func TestMCPResourceListRejectsCursorWithoutServerLikeRust(t *testing.T) {

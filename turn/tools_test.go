@@ -855,6 +855,50 @@ func TestBuildToolRegistryMCPToolsDirectWhenToolSearchDisabled(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryRegistersMCPResourceToolsWithServersEvenWithToolSearch(t *testing.T) {
+	newOptions := func(withServers bool) *ToolRegistryOptions {
+		options := DefaultToolRegistryOptions(t.TempDir())
+		options.EnableCore = false
+		options.EnableShell = false
+		options.EnableApplyPatch = false
+		options.EnableAgents = false
+		options.EnableToolSearch = true
+		if withServers {
+			service := mcp.NewMCPService(nil)
+			service.SetServerConfig("docs", &mcp.ServerConfig{Enabled: true, Command: "docs"})
+			options.MCPService = service
+		}
+		return options
+	}
+	resourceTools := []string{"list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"}
+
+	t.Run("servers configured", func(t *testing.T) {
+		registry, err := BuildToolRegistry(newOptions(true))
+		if err != nil {
+			t.Fatalf("BuildToolRegistry() error = %v", err)
+		}
+		visible := specKeySet(registry.ModelVisibleSpecs())
+		for _, name := range resourceTools {
+			if !visible[name] {
+				t.Fatalf("model-visible specs = %#v, missing MCP resource tool %q", visible, name)
+			}
+		}
+	})
+
+	t.Run("no servers", func(t *testing.T) {
+		registry, err := BuildToolRegistry(newOptions(false))
+		if err != nil {
+			t.Fatalf("BuildToolRegistry() error = %v", err)
+		}
+		visible := specKeySet(registry.ModelVisibleSpecs())
+		for _, name := range resourceTools {
+			if visible[name] {
+				t.Fatalf("model-visible specs = %#v, unexpected MCP resource tool %q without servers", visible, name)
+			}
+		}
+	})
+}
+
 func TestBuildToolRegistryAppliesPerServerOmitToolsFrom(t *testing.T) {
 	newOptions := func(searchEnabled bool) *ToolRegistryOptions {
 		options := DefaultToolRegistryOptions(t.TempDir())
