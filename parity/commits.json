@@ -82,9 +82,9 @@
                         "domains":  [
                                         "approvals"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: MCP approval path audit"
+                                         "N/A-equivalent: Go MCP tool-call approvals route through the permission-hook/broker and elicitation handler with no client-side auto-approve/annotation/remembered shortcuts to bypass; strict-auto-review session grants are normalized at the permissions-approval broker (go test ./appserver -run McpElicitation|StrictAutoReview -count=1)"
                                      ]
                     },
                     {
