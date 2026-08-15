@@ -826,9 +826,9 @@
                         "domains":  [
                                         "session"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: delegated-session batch"
+                                         "N/A-equivalent: Go shares one ResponsesAgentRunner across turns and Guardian review sessions (requireAgentForTurn), so the parent WebSocket-to-HTTP fallback state naturally propagates to delegated sessions; no separate delegated model client exists (go test ./appserver -run Guardian -count=1)"
                                      ]
                     },
                     {
