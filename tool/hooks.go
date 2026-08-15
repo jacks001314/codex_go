@@ -60,7 +60,18 @@ type HookInputUpdater interface {
 }
 
 func (r *Router) DispatchWithHooks(ctx context.Context, invocation *Invocation, hooks HookRunner) (*Output, error) {
+	return r.DispatchWithHooksAfterPreHooks(ctx, invocation, hooks, nil)
+}
+
+// DispatchWithHooksAfterPreHooks runs the tool through pre-tool hooks and then
+// executes it, invoking onStarted (when non-nil) after pre-tool hooks complete
+// and before the executor runs (Rust #38568). The callback receives the
+// possibly hook-rewritten invocation, mirroring Rust's tool lifecycle ordering.
+func (r *Router) DispatchWithHooksAfterPreHooks(ctx context.Context, invocation *Invocation, hooks HookRunner, onStarted func(*Invocation)) (*Output, error) {
 	if hooks == nil {
+		if onStarted != nil {
+			onStarted(invocation)
+		}
 		return r.Dispatch(ctx, invocation)
 	}
 	if invocation == nil {
@@ -103,6 +114,9 @@ func (r *Router) DispatchWithHooks(ctx context.Context, invocation *Invocation, 
 		}
 	}
 
+	if onStarted != nil {
+		onStarted(current)
+	}
 	output, err := executor.Execute(ctx, current)
 	if err != nil {
 		return nil, err

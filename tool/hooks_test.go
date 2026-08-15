@@ -75,6 +75,56 @@ func TestRouterDispatchWithHooksRewritesInput(t *testing.T) {
 	}
 }
 
+func TestRouterDispatchWithHooksStartedFiresAfterPreHooksLikeRust(t *testing.T) {
+	registry := NewRegistry()
+	var events []string
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("Bash")}, func(ctx context.Context, invocation *Invocation) (*Output, error) {
+		var args struct {
+			Command string `json:"command"`
+		}
+		if err := invocation.DecodeArguments(&args); err != nil {
+			return nil, err
+		}
+		events = append(events, "execute:"+args.Command)
+		return &Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	hooks := &fakeToolHooks{pre: &PreToolUseHookOutcome{
+		UpdatedInput: map[string]any{"command": "echo rewritten"},
+	}}
+	router := NewRouter(registry)
+
+	var startedCommand string
+	output, err := router.DispatchWithHooksAfterPreHooks(context.Background(), &Invocation{
+		CallID:   "call-1",
+		ToolName: PlainName("Bash"),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"command":"echo original"}`},
+	}, hooks, func(updated *Invocation) {
+		if updated == nil {
+			events = append(events, "started:<nil>")
+			return
+		}
+		var args struct {
+			Command string `json:"command"`
+		}
+		if err := updated.DecodeArguments(&args); err == nil {
+			startedCommand = args.Command
+		}
+		events = append(events, "started:"+startedCommand)
+	})
+	if err != nil {
+		t.Fatalf("DispatchWithHooksAfterPreHooks() error = %v", err)
+	}
+	if output.Body != "ok" {
+		t.Fatalf("output = %+v", output)
+	}
+	want := []string{"started:echo rewritten", "execute:echo rewritten"}
+	if strings.Join(events, ",") != strings.Join(want, ",") {
+		t.Fatalf("events = %#v, want %#v (started must run after pre-tool hooks, before execute)", events, want)
+	}
+}
+
 func TestRouterDispatchWithHooksPostFeedbackReplacesBody(t *testing.T) {
 	registry := NewRegistry()
 	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("echo")}, func(ctx context.Context, invocation *Invocation) (*Output, error) {

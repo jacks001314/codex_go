@@ -7680,6 +7680,45 @@ func TestModelRequestUserInputModalOtherOptionMatchesRust(t *testing.T) {
 	}
 }
 
+func TestModelRequestUserInputEnterOnOtherOpensNotesWithoutSubmittingLikeRust(t *testing.T) {
+	var responses []ModalResponse
+	model := NewModel(nil, Options{
+		OnModalResponse: func(response ModalResponse) bubbletea.Cmd {
+			responses = append(responses, response)
+			return nil
+		},
+	})
+	model.Update(RequestUserInputMsg{
+		ID: "user-input-other-enter",
+		Questions: []codextui.RequestUserInputQuestion{{
+			ID:       "scope",
+			Question: "Where should this apply?",
+			IsOther:  true,
+			Options:  []codextui.RequestUserInputChoice{{Label: "Plan"}, {Label: "All"}},
+		}},
+	})
+	// Select the generated "Other" option (last) and press Enter: Rust #38624
+	// opens the notes editor instead of submitting the response.
+	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(bubbletea.KeyEnter))
+	if len(responses) != 0 {
+		t.Fatalf("responses after Enter on Other = %#v, want none until notes submitted", responses)
+	}
+	if !strings.Contains(model.View(), "Notes:") && !strings.Contains(model.View(), "Add notes") {
+		t.Fatalf("Enter on Other should reveal the notes editor:\n%s", model.View())
+	}
+
+	typeText(t, model, "custom via enter")
+	model.Update(key(bubbletea.KeyEnter))
+	if len(responses) != 1 || responses[0].UserInput == nil {
+		t.Fatalf("responses = %#v", responses)
+	}
+	if got := responses[0].UserInput.AnswerLists["scope"]; len(got) != 2 || got[0] != codextui.RequestUserInputOtherOptionLabel || got[1] != "user_note: custom via enter" {
+		t.Fatalf("scope answer list = %#v", got)
+	}
+}
+
 func TestModelRequestUserInputModalUnansweredConfirmation(t *testing.T) {
 	var responses []ModalResponse
 	model := NewModel(nil, Options{

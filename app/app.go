@@ -1597,12 +1597,15 @@ func runFeatures(opts cli.FeatureOptions, root cli.RootOptions, stdout io.Writer
 	switch opts.Action {
 	case "list":
 		values := features.Defaults()
-		effective, err := config.LoadEffective(
-			auth.DefaultCodexHome(),
-			root.ConfigOverrides,
-			root.EnableFeatures,
-			root.DisableFeatures,
-		)
+		// Rust #38581: load through the shared cloud-aware loader so managed
+		// feature requirements are reflected in the reported state without
+		// rewriting the user's config.toml.
+		effective, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), &config.EffectiveOptions{
+			RawOverrides:         root.ConfigOverrides,
+			EnableFeatures:       root.EnableFeatures,
+			DisableFeatures:      root.DisableFeatures,
+			IncludeManagedConfig: true,
+		})
 		if err != nil {
 			return err
 		}

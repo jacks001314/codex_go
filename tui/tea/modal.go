@@ -820,6 +820,15 @@ func (m *Model) resolveRequestUserInputModal(modal *modalState, optionID string,
 		if !otherSelected {
 			label = question.Options[index].Label
 		}
+		if otherSelected && !modal.userInput.NotesVisible {
+			// Rust #38624: accepting the generated "Other" option opens the
+			// notes editor instead of submitting the response; the answer is
+			// committed only when notes are submitted afterward.
+			modal.userInput.BeginNotes()
+			modal.userInput.Draft = ""
+			m.refreshRequestUserInputModal()
+			return nil, false, false
+		}
 		complete = modal.userInput.CommitOptionAnswer(label, modal.userInput.Draft)
 	} else {
 		complete = modal.userInput.CommitFreeformAnswer(modal.userInput.Draft)

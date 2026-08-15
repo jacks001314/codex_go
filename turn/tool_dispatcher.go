@@ -413,11 +413,16 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		}
 	}
 	startedAt := d.nowUTC()
+	var startedAfterPreHooks func(*tool.Invocation)
 	if d.onToolStarted != nil {
-		d.onToolStarted(toolCtx, invocation, startedAt)
+		// Rust #38568: tool start callbacks run after pre-tool hooks (with the
+		// possibly hook-rewritten invocation) and before the executor runs.
+		startedAfterPreHooks = func(updated *tool.Invocation) {
+			d.onToolStarted(toolCtx, updated, startedAt)
+		}
 	}
 	telemetryTags := d.router.TelemetryTags(invocation)
-	output, dispatchErr := d.router.DispatchWithHooks(toolCtx, invocation, d.hooks)
+	output, dispatchErr := d.router.DispatchWithHooksAfterPreHooks(toolCtx, invocation, d.hooks, startedAfterPreHooks)
 	if dispatchErr != nil {
 		if cause := context.Cause(toolCtx); cause != nil && !errors.Is(cause, context.Canceled) {
 			dispatchErr = cause

@@ -474,16 +474,20 @@ func (c *httpClient) applyCallOptions(options *httpClientCallOptions) {
 }
 
 func (c *httpClient) initialize(ctx context.Context) (string, error) {
+	started := time.Now()
 	response, requestID, err := c.doRPC(ctx, "initialize", mcpClientInitializeParams(c.openAIForm), "", true)
 	if err != nil {
+		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), "failure", time.Since(started))
 		return "", err
 	}
 	defer response.Body.Close()
 	rpc, err := c.readRPCResponse(response, requestID, response.Header.Get(mcpHTTPSessionIDHeader))
 	if err != nil {
+		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), "failure", time.Since(started))
 		return "", err
 	}
 	if rpc.Error != nil {
+		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), "failure", time.Since(started))
 		return "", newMCPRemoteError("initialize", rpc.Error)
 	}
 	var initialized struct {
@@ -492,26 +496,37 @@ func (c *httpClient) initialize(ctx context.Context) (string, error) {
 	if rpc.Result != nil && json.Unmarshal(*rpc.Result, &initialized) == nil {
 		c.negotiatedProtocolVersion = strings.TrimSpace(initialized.ProtocolVersion)
 	}
+	outcome := "legacy"
+	if c.negotiatedProtocolVersion == modernMCPProtocol {
+		outcome = "modern"
+	}
+	recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), outcome, time.Since(started))
 	c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(rpc.Result)
 	return response.Header.Get(mcpHTTPSessionIDHeader), nil
 }
 
 func (c *httpClient) discover(ctx context.Context) (string, error) {
+	started := time.Now()
 	response, requestID, err := c.doRPC(ctx, "server/discover", map[string]any{}, "", true)
 	if err != nil {
+		recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
 		return "", err
 	}
 	defer response.Body.Close()
 	rpc, err := c.readRPCResponse(response, requestID, response.Header.Get(mcpHTTPSessionIDHeader))
 	if err != nil {
+		recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
 		return "", err
 	}
 	if rpc.Error != nil {
+		recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
 		return "", newMCPRemoteError("server/discover", rpc.Error)
 	}
 	if err := validateMCPModernDiscovery(rpc.Result); err != nil {
+		recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
 		return "", err
 	}
+	recordProtocolDiscoveryMetrics("auto", "modern", time.Since(started))
 	c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(rpc.Result)
 	return response.Header.Get(mcpHTTPSessionIDHeader), nil
 }

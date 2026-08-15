@@ -598,6 +598,31 @@ func TestFeaturesListHonorsRootOverrides(t *testing.T) {
 	}
 }
 
+func TestFeaturesListHonorsManagedRequirementsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	// Rust #38581: a managed feature requirement disables fast_mode in
+	// `codex features list` without rewriting the user's config.toml.
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("[features]\nfast_mode = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile requirements returned error: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"features", "list"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("features list returned error: %v", err)
+	}
+	output := stdout.String()
+	line := ""
+	for _, candidate := range strings.Split(output, "\n") {
+		if strings.HasPrefix(candidate, "fast_mode") {
+			line = candidate
+			break
+		}
+	}
+	if !strings.Contains(line, "false") {
+		t.Fatalf("features list did not reflect managed requirement; fast_mode line = %q\n%s", line, output)
+	}
+}
+
 func TestDebugPromptInput(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

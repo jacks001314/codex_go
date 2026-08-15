@@ -369,7 +369,20 @@ func (c *stdioClient) ensureInitialized(ctx context.Context, options *stdioCallO
 	}
 }
 
-func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCallOptions) error {
+func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCallOptions) (err error) {
+	started := time.Now()
+	negotiatedModern := false
+	defer func() {
+		outcome := "failure"
+		if err == nil {
+			if negotiatedModern {
+				outcome = "modern"
+			} else {
+				outcome = "legacy"
+			}
+		}
+		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), outcome, time.Since(started))
+	}()
 	protocolMode, launchEnv, stripProtocolMarker, err := mcpStdioLaunchConfig(c.config)
 	if err != nil {
 		return err
@@ -422,6 +435,7 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 		}
 		if err == nil {
 			c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(response.Result)
+			negotiatedModern = true
 			c.mu.Lock()
 			c.initialized = true
 			c.mu.Unlock()

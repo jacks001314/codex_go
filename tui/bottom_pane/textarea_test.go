@@ -27,6 +27,36 @@ func TestTextAreaStateEditsClampToUTF8Boundaries(t *testing.T) {
 	}
 }
 
+func TestTextAreaStateDeletesThaiCombiningMarksOneAtATimeLikeRust(t *testing.T) {
+	// Rust #38662: backspace removes Thai vowel and tone marks individually
+	// instead of deleting the whole grapheme cluster. Go's backward deletion is
+	// rune-bounded, which already yields the same observable sequence.
+	state := NewTextAreaState("ที่")
+	state.SetCursor(len(state.Text))
+
+	state.DeleteBackward(1)
+	if state.Text != "ที" {
+		t.Fatalf("after first backspace text = %q, want %q", state.Text, "ที")
+	}
+	state.DeleteBackward(1)
+	if state.Text != "ท" {
+		t.Fatalf("after second backspace text = %q, want %q", state.Text, "ท")
+	}
+	state.DeleteBackward(1)
+	if state.Text != "" {
+		t.Fatalf("after third backspace text = %q, want empty", state.Text)
+	}
+
+	// Non-Thai grapheme behavior stays rune-bounded; spacing vowel "ซ้ำ" deletes
+	// the final mark first like Rust.
+	spacing := NewTextAreaState("ซ้ำ")
+	spacing.SetCursor(len(spacing.Text))
+	spacing.DeleteBackward(1)
+	if spacing.Text != "ซ้" {
+		t.Fatalf("spacing vowel text = %q, want %q", spacing.Text, "ซ้")
+	}
+}
+
 func TestTextAreaStateKillYankAndWordDeleteMatchRustCoreBehavior(t *testing.T) {
 	state := NewTextAreaState("one two three\nnext")
 	state.SetCursor(len("one two"))

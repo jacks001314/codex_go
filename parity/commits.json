@@ -238,9 +238,9 @@
                         "domains":  [
                                         "hooks"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: tool lifecycle batch"
+                                         "go test ./tool ./turn -run DispatchWithHooks -count=1; tool start callbacks run after pre-tool hooks with the rewritten invocation (Rust #38568)"
                                      ]
                     },
                     {
@@ -286,9 +286,9 @@
                         "domains":  [
                                         "features"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: CLI features listing batch"
+                                         "go test ./app -run TestFeaturesList -count=1; features list loads managed config and reflects managed feature requirements"
                                      ]
                     },
                     {
@@ -406,9 +406,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI resume batch"
+                                         "N/A: Rust compile-only import fix; Go resume picker has no missing history-mode import and builds clean"
                                      ]
                     },
                     {
@@ -526,9 +526,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI request-input batch"
+                                         "go test ./tui/tea -run RequestUserInputModal -count=1; Enter/Tab on the Other option opens notes without submitting (Rust #38624)"
                                      ]
                     },
                     {
@@ -574,9 +574,9 @@
                         "domains":  [
                                         "mcp"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: Go has no codex_otel metrics substrate for MCP"
+                                         "go test ./mcp -run ProtocolDiscoveryMetrics -count=1; MCP protocol discovery records mode/outcome/duration observations"
                                      ]
                     },
                     {
@@ -718,9 +718,9 @@
                         "domains":  [
                                         "sandbox"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: protocol/sandbox refactor batch"
+                                         "go test ./sandbox ./execserver ./tool ./appserver -run PermissionProfile -count=1; Go carries the resolved permission profile snapshot once in sandbox (no duplicated protocol struct)"
                                      ]
                     },
                     {
@@ -754,9 +754,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI composer batch"
+                                         "go test ./tui/bottom_pane -run ThaiCombining -count=1; Thai combining marks delete one at a time like Rust"
                                      ]
                     },
                     {
