@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -16,6 +17,95 @@ import (
 	"codex_go/session"
 	"codex_go/turn"
 )
+
+func TestStdioServerGoalSetResponsePrecedesGoalNotification(t *testing.T) {
+	server := NewDefaultStdioServer(&StdioOptions{CodexHome: t.TempDir()})
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(stdinReader, stdoutWriter) }()
+	defer func() {
+		_ = stdinWriter.Close()
+		_ = stdoutWriter.Close()
+		<-serveDone
+	}()
+
+	scanner := bufio.NewScanner(stdoutReader)
+	write := func(id int, method string, params any) {
+		raw, err := json.Marshal(params)
+		if err != nil {
+			t.Fatalf("marshal %s params: %v", method, err)
+		}
+		line := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":%q,"params":%s}`, id, method, raw)
+		if _, err := stdinWriter.Write([]byte(line + "\n")); err != nil {
+			t.Fatalf("write %s: %v", method, err)
+		}
+	}
+	// Reads stream lines until the response for `id` arrives, recording the
+	// goal notifications observed before it.
+	readThrough := func(id int) (before []string, response map[string]any) {
+		for scanner.Scan() {
+			var value map[string]any
+			if err := json.Unmarshal(scanner.Bytes(), &value); err != nil {
+				continue
+			}
+			if method, _ := value["method"].(string); method != "" {
+				if method == "thread/goal/updated" || method == "thread/goal/cleared" {
+					before = append(before, method)
+				}
+				continue
+			}
+			if rid, _ := value["id"].(float64); rid == float64(id) {
+				return before, value
+			}
+		}
+		t.Fatalf("response for id %d not observed", id)
+		return nil, nil
+	}
+
+	write(1, "initialize", map[string]any{
+		"clientInfo":   map[string]any{"name": "stdio-goal-order", "version": "1.0.0"},
+		"capabilities": map[string]any{"experimentalApi": true},
+	})
+	readThrough(1)
+	write(2, "initialized", map[string]any{})
+	write(3, "thread/start", map[string]any{
+		"cwd":            server.router.services.DefaultCWD,
+		"approvalPolicy": "never",
+		"sandbox":        "dangerFullAccess",
+		"historyMode":    "paginated",
+	})
+	_, startResponse := readThrough(3)
+	thread, _ := startResponse["result"].(map[string]any)
+	threadObj, _ := thread["thread"].(map[string]any)
+	threadID, _ := threadObj["id"].(string)
+	if threadID == "" {
+		t.Fatalf("thread/start omitted a thread id: %#v", startResponse)
+	}
+
+	objective := "ordering parity"
+	write(4, "thread/goal/set", map[string]any{"threadId": threadID, "objective": objective})
+	beforeSet, setResponse := readThrough(4)
+	for _, method := range beforeSet {
+		if method == "thread/goal/updated" {
+			t.Fatalf("thread/goal/updated arrived before the thread/goal/set response: %v", beforeSet)
+		}
+	}
+	if setResponse["error"] != nil {
+		t.Fatalf("thread/goal/set error: %#v", setResponse["error"])
+	}
+
+	write(5, "thread/goal/clear", map[string]any{"threadId": threadID})
+	beforeClear, clearResponse := readThrough(5)
+	for _, method := range beforeClear {
+		if method == "thread/goal/cleared" {
+			t.Fatalf("thread/goal/cleared arrived before the thread/goal/clear response: %v", beforeClear)
+		}
+	}
+	if clearResponse["error"] != nil {
+		t.Fatalf("thread/goal/clear error: %#v", clearResponse["error"])
+	}
+}
 
 func stdioTestRequestWithParams(t *testing.T, id RequestID, method Method, params any) *Request {
 	t.Helper()

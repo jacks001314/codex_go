@@ -46,6 +46,15 @@ expose `thread/fork`:
 npm --prefix sdktests run test:raw:fork -- --rust <rust-codex> --go <go-codex.exe>
 ```
 
+Run the model-free raw app-server `thread/goal/*` protocol audit (goal set/get/
+clear lifecycle, validation errors, ephemeral forks, and the goals feature
+gate). This is a protocol audit because the TypeScript SDK does not expose the
+app-server goal methods:
+
+```powershell
+npm --prefix sdktests run test:raw:goal -- --rust <rust-codex> --go <go-codex.exe>
+```
+
 Run the full rolled-fork/ephemeral-side lifecycle audit and the bidirectional
 Rust/Go persisted-session compatibility audit:
 

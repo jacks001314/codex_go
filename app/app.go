@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -432,6 +433,37 @@ func rootConfigOverridesWithFeatureToggles(root cli.RootOptions) []string {
 		overrides = append(overrides, "features."+feature+"=false")
 	}
 	return overrides
+}
+
+// featureEnablementFromRoot converts the CLI --enable/--disable feature toggles
+// (and features.* config overrides) into the enablement map seeded into the
+// app-server ConfigService so protocol-level feature gates apply at startup.
+func featureEnablementFromRoot(root *cli.RootOptions) map[string]bool {
+	if root == nil {
+		return nil
+	}
+	enablement := map[string]bool{}
+	for _, feature := range root.EnableFeatures {
+		enablement[strings.TrimSpace(feature)] = true
+	}
+	for _, feature := range root.DisableFeatures {
+		enablement[strings.TrimSpace(feature)] = false
+	}
+	for _, override := range root.ConfigOverrides {
+		key, value, ok := strings.Cut(strings.TrimSpace(override), "=")
+		if !ok || !strings.HasPrefix(key, "features.") {
+			continue
+		}
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			continue
+		}
+		enablement[strings.TrimPrefix(key, "features.")] = parsed
+	}
+	if len(enablement) == 0 {
+		return nil
+	}
+	return enablement
 }
 
 type sandboxRunConfig struct {
@@ -1000,6 +1032,7 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 	if err != nil {
 		return err
 	}
+	runtimeOptions.FeatureEnablement = featureEnablementFromRoot(root)
 	runtimeOptions.Requirements = requirements
 	runtimeOptions.EnableLogDB = true
 	runtimeOptions.RemoteControlDisabledByRequirements = remoteControlDisabledByRequirements

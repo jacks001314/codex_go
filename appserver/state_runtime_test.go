@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"codex_go/agent"
+	"codex_go/config"
 	"codex_go/model"
 	"codex_go/rollout"
 	"codex_go/session"
@@ -28,6 +29,7 @@ func TestDefaultStdioLogDBLifecyclePersistsRuntimeLogs(t *testing.T) {
 	if err := server.router.StartupError(); err != nil {
 		t.Fatal(err)
 	}
+
 	slog.Info("persisted app-server log", "target", "test", "thread_id", "stdio-log-thread")
 	if err := server.Serve(strings.NewReader(""), io.Discard); err != nil {
 		t.Fatal(err)
@@ -1303,5 +1305,112 @@ func TestStdioStartupFailsClosedOnKnownMigrationMismatch(t *testing.T) {
 	}
 	if matches, globErr := filepath.Glob(filepath.Join(home, "db-backups", "sqlite-*")); globErr != nil || len(matches) != 0 {
 		t.Fatalf("checksum mismatch must not trigger corruption backup: %v, %v", matches, globErr)
+	}
+}
+func TestRuntimeRouterThreadGoalFreshPaginatedThreadMaterializesRolloutOnDemand(t *testing.T) {
+	home := t.TempDir()
+	ctx := context.Background()
+	sqliteConfig, err := state.NewSqliteConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateRuntime, err := state.InitStateRuntime(ctx, sqliteConfig, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateRuntime.Close()
+	store := session.NewStore(home)
+	threadRouter := NewRouter(store)
+	threadRouter.SetStateRuntime(stateRuntime)
+	now := time.Date(2026, 8, 15, 8, 0, 0, 0, time.UTC)
+	threadID := session.ThreadID("goal-fresh-thread")
+	rolloutPath := rollout.PathForThread(home, string(threadID), now)
+	record := &session.Record{
+		ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           home,
+			ModelProvider: "openai",
+			HistoryMode:   "paginated",
+			Extra:         map[string]any{"rollout_path": rolloutPath},
+		},
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(rolloutPath); !os.IsNotExist(err) {
+		t.Fatalf("fixture requires a missing rollout file at %s (stat err=%v)", rolloutPath, err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, StateRuntime: stateRuntime})
+
+	objective := "improve benchmark coverage"
+	set := router.Handle(requestWithParams(t, IntID(1), MethodThreadGoalSet, GoalSetParams{ThreadID: string(threadID), Objective: &objective}))
+	if set.Error != nil {
+		t.Fatalf("thread/goal/set on fresh paginated thread error: %+v", set.Error)
+	}
+	goal := set.Result.(*GoalSetResponse).Goal
+	if goal.Status != GoalActive || goal.Objective != objective {
+		t.Fatalf("created goal = %#v", goal)
+	}
+	if _, err := os.Stat(rolloutPath); err != nil {
+		t.Fatalf("thread/goal/set should materialize the rollout file at %s: %v", rolloutPath, err)
+	}
+	get := router.Handle(requestWithParams(t, IntID(2), MethodThreadGoalGet, GoalGetParams{ThreadID: string(threadID)}))
+	if get.Error != nil || get.Result.(*GoalGetResponse).Goal == nil || get.Result.(*GoalGetResponse).Goal.Objective != objective {
+		t.Fatalf("thread/goal/get after set = %+v", get)
+	}
+	clear := router.Handle(requestWithParams(t, IntID(3), MethodThreadGoalClear, GoalClearParams{ThreadID: string(threadID)}))
+	if clear.Error != nil || !clear.Result.(*GoalClearResponse).Cleared {
+		t.Fatalf("thread/goal/clear = %+v", clear)
+	}
+	missing := router.Handle(requestWithParams(t, IntID(4), MethodThreadGoalGet, GoalGetParams{ThreadID: string(threadID)}))
+	if missing.Error != nil || missing.Result.(*GoalGetResponse).Goal != nil {
+		t.Fatalf("thread/goal/get after clear = %+v", missing)
+	}
+}
+
+func TestRuntimeRouterThreadGoalFeatureGateMatchesRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("model = \"gpt-5\"\n[features]\ngoals = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := session.NewStore(home)
+	createRecord(t, store, "thread-goal-gate", time.Now())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+
+	objective := "disabled goal"
+	set := router.Handle(requestWithParams(t, IntID(1), MethodThreadGoalSet, GoalSetParams{ThreadID: "thread-goal-gate", Objective: &objective}))
+	if set.Error == nil || set.Error.Code != JSONRPCInvalidRequestErrorCode || set.Error.Message != "goals feature is disabled" {
+		t.Fatalf("thread/goal/set with goals disabled = %+v", set)
+	}
+	get := router.Handle(requestWithParams(t, IntID(2), MethodThreadGoalGet, GoalGetParams{ThreadID: "thread-goal-gate"}))
+	if get.Error == nil || get.Error.Code != JSONRPCInvalidRequestErrorCode || get.Error.Message != "goals feature is disabled" {
+		t.Fatalf("thread/goal/get with goals disabled = %+v", get)
+	}
+	clear := router.Handle(requestWithParams(t, IntID(3), MethodThreadGoalClear, GoalClearParams{ThreadID: "thread-goal-gate"}))
+	if clear.Error == nil || clear.Error.Code != JSONRPCInvalidRequestErrorCode || clear.Error.Message != "goals feature is disabled" {
+		t.Fatalf("thread/goal/clear with goals disabled = %+v", clear)
+	}
+}
+
+func TestRuntimeRouterThreadGoalFeatureGateSeededFromOptions(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewDefaultRuntimeRouterWithOptions(store, home, &RuntimeRouterOptions{
+		FeatureEnablement: map[string]bool{"goals": false},
+	})
+	defer router.Close()
+	createRecord(t, store, "thread-goal-options", time.Now())
+
+	objective := "disabled goal"
+	set := router.Handle(requestWithParams(t, IntID(1), MethodThreadGoalSet, GoalSetParams{ThreadID: "thread-goal-options", Objective: &objective}))
+	if set.Error == nil || set.Error.Code != JSONRPCInvalidRequestErrorCode || set.Error.Message != "goals feature is disabled" {
+		t.Fatalf("thread/goal/set with goals disabled via options = %+v", set)
+	}
+	get := router.Handle(requestWithParams(t, IntID(2), MethodThreadGoalGet, GoalGetParams{ThreadID: "thread-goal-options"}))
+	if get.Error == nil || get.Error.Message != "goals feature is disabled" {
+		t.Fatalf("thread/goal/get with goals disabled via options = %+v", get)
 	}
 }

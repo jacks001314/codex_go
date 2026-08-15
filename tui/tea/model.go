@@ -140,6 +140,16 @@ type GoalSetterFunc func(threadID string, objective *string, tokenBudget *int64,
 
 type GoalClearerFunc func(threadID string) (bool, error)
 
+// GoalEditTextFunc resolves the text shown in the /goal edit prompt from the
+// stored objective, loading materialized goal objective files when the stored
+// objective is a managed file reference (mirrors Rust objective_text_for_edit).
+type GoalEditTextFunc func(threadID string, objective string) (string, error)
+
+// GoalDraftMaterializeFunc materializes a goal draft (images, remote URLs,
+// oversized objective) into app-server files and returns the objective to
+// persist, mirroring Rust goal_files::materialize_goal_draft.
+type GoalDraftMaterializeFunc func(draft codextui.GoalDraft) (string, error)
+
 type SettingsEdit struct {
 	KeyPath string
 	Value   any
@@ -367,6 +377,24 @@ type GoalResultMsg struct {
 	Cleared   bool
 	Replacing bool
 	Err       error
+}
+
+type GoalEditTextMsg struct {
+	ThreadID  string
+	Objective string
+	Goal      appserver.Goal
+	Err       error
+}
+
+type GoalDraftMaterializeMsg struct {
+	RequestID   uint64
+	Action      string
+	ThreadID    string
+	Objective   string
+	TokenBudget *int64
+	Status      *appserver.GoalStatus
+	Replacing   bool
+	Err         error
 }
 
 type GoalUpdatedMsg struct {
@@ -603,6 +631,8 @@ type Options struct {
 	OnReadGoal                    GoalReaderFunc
 	OnSetGoal                     GoalSetterFunc
 	OnClearGoal                   GoalClearerFunc
+	OnGoalEditText                GoalEditTextFunc
+	OnGoalDraftMaterialize        GoalDraftMaterializeFunc
 	OnWriteSettings               SettingsWriteFunc
 	OnUpdateCollaborationMode     CollaborationModeUpdateFunc
 	OnWriteMemorySettings         MemorySettingsWriteFunc
@@ -814,6 +844,9 @@ type Model struct {
 	onReadGoal                        GoalReaderFunc
 	onSetGoal                         GoalSetterFunc
 	onClearGoal                       GoalClearerFunc
+	onGoalEditText                    GoalEditTextFunc
+	onGoalDraftMaterialize            GoalDraftMaterializeFunc
+	pendingGoalDraft                  *codextui.GoalDraft
 	onWriteSettings                   SettingsWriteFunc
 	onUpdateCollaborationMode         CollaborationModeUpdateFunc
 	onWriteMemorySettings             MemorySettingsWriteFunc
@@ -1048,6 +1081,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadGoal:                      options.OnReadGoal,
 		onSetGoal:                       options.OnSetGoal,
 		onClearGoal:                     options.OnClearGoal,
+		onGoalEditText:                  options.OnGoalEditText,
+		onGoalDraftMaterialize:          options.OnGoalDraftMaterialize,
 		onWriteSettings:                 options.OnWriteSettings,
 		onUpdateCollaborationMode:       options.OnUpdateCollaborationMode,
 		onWriteMemorySettings:           options.OnWriteMemorySettings,
@@ -1386,6 +1421,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case GoalResultMsg:
 		return m, bubbletea.Batch(m.applyGoalResult(msg), m.refreshStatusControlsCmd())
+	case GoalEditTextMsg:
+		return m, bubbletea.Batch(m.applyGoalEditTextResult(msg), m.refreshStatusControlsCmd())
+	case GoalDraftMaterializeMsg:
+		return m, bubbletea.Batch(m.applyGoalDraftMaterializeResult(msg), m.refreshStatusControlsCmd())
 	case ReviewStartResultMsg:
 		m.applyReviewStartResult(msg)
 		return m, m.refreshStatusControlsCmd()
@@ -1914,6 +1953,11 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	}
 	if invocation, ok := codextui.ParseCommand(input); ok && slashInvocationDispatchable(invocation) {
 		m.composerMentionBindings = nil
+		if invocation.Command == codextui.CommandGoal && len(m.attachments) > 0 {
+			if draft := m.collectGoalDraft(invocation.Args); draft != nil {
+				m.pendingGoalDraft = draft
+			}
+		}
 		return m.applyCommand(invocation)
 	}
 	request := SubmitRequest{
@@ -1932,12 +1976,20 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 		return nil, false
 	}
 	input := strings.TrimSpace(m.composer.Value())
-	if input == "" || len(m.attachments) > 0 {
+	if input == "" {
 		return nil, false
 	}
 	invocation, ok := codextui.ParseCommand(input)
 	if !ok || !slashInvocationDispatchable(invocation) {
 		return nil, false
+	}
+	if len(m.attachments) > 0 {
+		if invocation.Command != codextui.CommandGoal {
+			return nil, false
+		}
+		if draft := m.collectGoalDraft(invocation.Args); draft != nil {
+			m.pendingGoalDraft = draft
+		}
 	}
 	m.composer.Reset()
 	m.slashPopup = slashCommandPopup{}
@@ -1951,6 +2003,33 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 		return nil, true
 	}
 	return m.applyCommand(invocation), true
+}
+
+// collectGoalDraft converts the composer attachments into a goal draft,
+// assigning sequential [Image #N] placeholders to local images so they match
+// either the user-typed placeholder in the objective or the appended
+// "Referenced image files:" section (mirrors Rust's GoalDraft construction).
+// The attachments are consumed.
+func (m *Model) collectGoalDraft(args string) *codextui.GoalDraft {
+	draft := codextui.GoalDraft{Objective: args}
+	imageIndex := 0
+	for _, attachment := range m.attachments {
+		switch attachment.Kind {
+		case bottompane.AttachmentImage:
+			imageIndex++
+			draft.LocalImages = append(draft.LocalImages, codextui.GoalLocalImage{
+				Placeholder: "[Image #" + strconv.Itoa(imageIndex) + "]",
+				Path:        attachment.Path,
+			})
+		case bottompane.AttachmentRemoteImage:
+			draft.RemoteImageURLs = append(draft.RemoteImageURLs, attachment.URL)
+		}
+	}
+	m.attachments = nil
+	if len(draft.LocalImages) == 0 && len(draft.RemoteImageURLs) == 0 {
+		return nil
+	}
+	return &draft
 }
 
 func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubbletea.Cmd {

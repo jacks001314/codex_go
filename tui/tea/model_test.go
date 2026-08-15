@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -6385,6 +6387,86 @@ func TestModelGoalEditPromptPreservesRustStatusAndBudget(t *testing.T) {
 	model.Update(setCmd())
 	if setParams.Status == nil || *setParams.Status != appserver.GoalPaused || setParams.TokenBudget == nil || *setParams.TokenBudget != budget || setParams.Objective == nil || *setParams.Objective != "edit this goal" {
 		t.Fatalf("goal edit params = %#v", setParams)
+	}
+}
+
+func TestModelGoalEditResolvesManagedObjectiveFile(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-goal")
+	reference := "Read the Codex goal objective file at /codex-home/attachments/00000000-0000-4000-8000-000000000000/goal-objective.md before continuing."
+	resolved := "original long objective text"
+	existing := appserver.Goal{ThreadID: "thread-goal", Objective: reference, Status: appserver.GoalActive}
+	model := NewModel(state, Options{
+		Width:  100,
+		Height: 24,
+		OnReadGoal: func(string) (*appserver.Goal, error) {
+			return cloneGoalTea(&existing), nil
+		},
+		OnGoalEditText: func(threadID string, objective string) (string, error) {
+			if objective != reference {
+				t.Fatalf("edit text objective = %q, want reference", objective)
+			}
+			return resolved, nil
+		},
+	})
+
+	typeText(t, model, "/goal edit")
+	_, readCmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(readCmd())
+	if model.modal != nil {
+		t.Fatalf("edit prompt should wait for the objective file resolution: %#v", model.modal)
+	}
+	_, _ = model.Update(GoalEditTextMsg{ThreadID: "thread-goal", Objective: resolved, Goal: existing})
+	if model.modal == nil || model.modal.customPrompt == nil || model.modal.customPrompt.Text != resolved {
+		t.Fatalf("goal edit prompt = %#v, want resolved text %q", model.modal, resolved)
+	}
+}
+
+func TestModelGoalWithImageAttachmentMaterializesDraft(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-goal")
+	imagePath := filepath.Join(t.TempDir(), "local-image.png")
+	if err := os.WriteFile(imagePath, []byte("png bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var materialized []codextui.GoalDraft
+	var setObjectives []string
+	model := NewModel(state, Options{
+		Width:  100,
+		Height: 24,
+		OnReadGoal: func(string) (*appserver.Goal, error) {
+			return nil, nil
+		},
+		OnSetGoal: func(threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) (appserver.Goal, error) {
+			value := ""
+			if objective != nil {
+				value = *objective
+			}
+			setObjectives = append(setObjectives, value)
+			return appserver.Goal{ThreadID: threadID, Objective: value, Status: appserver.GoalActive}, nil
+		},
+		OnGoalDraftMaterialize: func(draft codextui.GoalDraft) (string, error) {
+			materialized = append(materialized, draft)
+			return "materialized-objective", nil
+		},
+	})
+	model.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: imagePath}}
+	typeText(t, model, "/goal describe [Image #1]")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(cmd())
+	_, cmd = model.Update(cmd())
+	model.Update(cmd())
+	if len(materialized) != 1 {
+		t.Fatalf("draft materialize calls = %d", len(materialized))
+	}
+	if materialized[0].Objective != "describe [Image #1]" ||
+		len(materialized[0].LocalImages) != 1 ||
+		materialized[0].LocalImages[0].Placeholder != "[Image #1]" ||
+		materialized[0].LocalImages[0].Path != imagePath {
+		t.Fatalf("draft = %#v", materialized[0])
+	}
+	if len(setObjectives) != 1 || setObjectives[0] != "materialized-objective" {
+		t.Fatalf("set objectives = %#v", setObjectives)
 	}
 }
 

@@ -2,8 +2,10 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -68,7 +70,7 @@ func goalTokenDelta(last, current model.AgentUsage) int64 {
 }
 
 func (r *RuntimeRouter) setStateThreadGoal(params *GoalSetParams) (*GoalSetResponse, *Goal, *session.Record, error) {
-	record, _, err := r.materializedGoalThread(params.ThreadID)
+	record, _, err := r.materializedGoalThread(params.ThreadID, true)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -152,7 +154,7 @@ func (r *RuntimeRouter) setStateThreadGoal(params *GoalSetParams) (*GoalSetRespo
 }
 
 func (r *RuntimeRouter) getStateThreadGoal(params *GoalGetParams) (*GoalGetResponse, error) {
-	if _, _, err := r.materializedGoalThread(params.ThreadID); err != nil {
+	if _, _, err := r.materializedGoalThread(params.ThreadID, false); err != nil {
 		return nil, err
 	}
 	goal, err := r.services.StateRuntime.GetThreadGoal(context.Background(), params.ThreadID)
@@ -163,7 +165,7 @@ func (r *RuntimeRouter) getStateThreadGoal(params *GoalGetParams) (*GoalGetRespo
 }
 
 func (r *RuntimeRouter) clearStateThreadGoal(params *GoalClearParams) (*GoalClearResponse, *Goal, *session.Record, error) {
-	record, _, err := r.materializedGoalThread(params.ThreadID)
+	record, _, err := r.materializedGoalThread(params.ThreadID, true)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -187,18 +189,45 @@ func (r *RuntimeRouter) clearStateThreadGoal(params *GoalClearParams) (*GoalClea
 	return &GoalClearResponse{Cleared: deleted != nil}, apiGoalFromState(deleted), record, nil
 }
 
-func (r *RuntimeRouter) materializedGoalThread(threadID string) (*session.Record, string, error) {
+// materializedGoalThread resolves a persisted thread for a goal operation and
+// reconciles its rollout row into the state runtime. When materialize is true
+// (set/clear) a missing rollout file is created first, mirroring Rust's
+// reconcile_thread_goal_rollout -> reconcile_rollout which materializes
+// "goal-first" threads on demand. Reads (materialize=false) skip the reconcile
+// when the rollout file does not exist yet, matching Rust's thread_goal_get
+// which reads the goal database without reconciling.
+func (r *RuntimeRouter) materializedGoalThread(threadID string, materialize bool) (*session.Record, string, error) {
 	threadID = strings.TrimSpace(threadID)
 	if _, ok := r.ephemeralThreadRecord(session.ThreadID(threadID), false); ok {
 		return nil, "", jsonRPCInvalidRequest(fmt.Sprintf("ephemeral thread does not support goals: %s", threadID))
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
 	if err != nil {
+		if errors.Is(err, session.ErrThreadNotFound) || strings.Contains(err.Error(), "thread not found") {
+			return nil, "", jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", threadID))
+		}
 		return nil, "", err
 	}
 	path := r.services.ThreadRouter.threadRolloutPath(record)
 	if strings.TrimSpace(path) == "" {
 		return nil, "", jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", threadID))
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if !materialize {
+			// Fresh thread with no rollout yet: the goal database is authoritative.
+			return record, path, nil
+		}
+		now := record.CreatedAt
+		if now.IsZero() {
+			now = r.services.ThreadRouter.now().UTC()
+		}
+		if err := r.services.ThreadRouter.createThreadRollout(record, now); err != nil {
+			return nil, "", fmt.Errorf("failed to materialize thread rollout: %w", err)
+		}
+		path = r.services.ThreadRouter.threadRolloutPath(record)
+		if strings.TrimSpace(path) == "" {
+			return nil, "", jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", threadID))
+		}
 	}
 	if err := r.services.StateRuntime.ReconcileRollout(context.Background(), path, record.Archived); err != nil {
 		return nil, "", fmt.Errorf("failed to reconcile thread rollout: %w", err)

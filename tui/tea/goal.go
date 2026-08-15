@@ -26,27 +26,33 @@ const (
 
 func (m *Model) applyGoalCommand(args string) bubbletea.Cmd {
 	if m == nil || !features.Enabled(m.featureSettings, "goals") {
+		m.pendingGoalDraft = nil
 		return nil
 	}
 	trimmed := strings.TrimSpace(args)
 	if trimmed == "" {
+		m.pendingGoalDraft = nil
 		return m.readGoal()
 	}
 	switch strings.ToLower(trimmed) {
 	case goalActionClear:
+		m.pendingGoalDraft = nil
 		if _, ok := m.goalThreadIDForChange(); !ok {
 			return nil
 		}
 		return m.clearGoal()
 	case goalActionEdit:
+		m.pendingGoalDraft = nil
 		return m.editGoal()
 	case goalActionPause:
+		m.pendingGoalDraft = nil
 		if _, ok := m.goalThreadIDForChange(); !ok {
 			return nil
 		}
 		status := appserver.GoalPaused
 		return m.setGoal(goalActionPause, nil, nil, &status, false)
 	case goalActionResume:
+		m.pendingGoalDraft = nil
 		if _, ok := m.goalThreadIDForChange(); !ok {
 			return nil
 		}
@@ -78,6 +84,7 @@ func (m *Model) editGoal() bubbletea.Cmd {
 func (m *Model) prepareGoalSet(objective string) bubbletea.Cmd {
 	objective = strings.TrimSpace(objective)
 	if objective == "" {
+		m.pendingGoalDraft = nil
 		return nil
 	}
 	threadID := m.goalThreadID()
@@ -107,6 +114,7 @@ func (m *Model) readGoalForAction(action string, threadID string, objective stri
 func (m *Model) setGoal(action string, objective *string, tokenBudget *int64, status *appserver.GoalStatus, replacing bool) bubbletea.Cmd {
 	threadID := m.goalThreadID()
 	if threadID == "" {
+		m.pendingGoalDraft = nil
 		return nil
 	}
 	requestID := m.nextGoalRequest()
@@ -114,6 +122,25 @@ func (m *Model) setGoal(action string, objective *string, tokenBudget *int64, st
 	objective = cloneStringPtrTea(objective)
 	tokenBudget = cloneInt64PtrTea(tokenBudget)
 	status = cloneGoalStatusPtr(status)
+	if m.pendingGoalDraft != nil && m.onGoalDraftMaterialize != nil {
+		draft := *m.pendingGoalDraft
+		m.pendingGoalDraft = nil
+		materializer := m.onGoalDraftMaterialize
+		return func() bubbletea.Msg {
+			materialized, err := materializer(draft)
+			return GoalDraftMaterializeMsg{
+				RequestID:   requestID,
+				Action:      action,
+				ThreadID:    threadID,
+				Objective:   materialized,
+				TokenBudget: tokenBudget,
+				Status:      status,
+				Replacing:   replacing,
+				Err:         err,
+			}
+		}
+	}
+	m.pendingGoalDraft = nil
 	setter := m.onSetGoal
 	clearer := m.onClearGoal
 	current := cloneGoalTea(m.currentGoal)
@@ -202,6 +229,9 @@ func (m *Model) applyGoalResult(msg GoalResultMsg) bubbletea.Cmd {
 			return nil
 		}
 		m.applyGoalUpdated(*msg.Goal, false)
+		if m.onGoalEditText != nil {
+			return m.resolveGoalEditText(*msg.Goal)
+		}
 		m.openGoalEditPrompt(*msg.Goal)
 	case goalActionPrepareSet:
 		decision := tuiapp.SetThreadGoalDraftPreflightDecision(true, msg.Goal, nil, tuiapp.ThreadGoalSetConfirmIfExists, "", nil)
@@ -235,6 +265,18 @@ func (m *Model) applyGoalResult(msg GoalResultMsg) bubbletea.Cmd {
 	return nil
 }
 
+func (m *Model) applyGoalDraftMaterializeResult(msg GoalDraftMaterializeMsg) bubbletea.Cmd {
+	if m == nil || m.pendingGoalRequestID != msg.RequestID {
+		return nil
+	}
+	m.pendingGoalRequestID = 0
+	if msg.Err != nil {
+		m.showGoalError(msg.Err.Error())
+		return nil
+	}
+	return m.setGoal(msg.Action, &msg.Objective, msg.TokenBudget, msg.Status, msg.Replacing)
+}
+
 func (m *Model) openGoalReplaceConfirmation(objective string) {
 	view := tuiapp.ReplaceThreadGoalConfirmation(m.goalThreadID(), objective)
 	m.modal = &modalState{
@@ -250,6 +292,31 @@ func (m *Model) openGoalReplaceConfirmation(objective string) {
 		},
 	}
 	m.notice = ""
+}
+
+// resolveGoalEditText loads the materialized goal objective file (when the
+// stored objective is a managed goal file reference) before opening the edit
+// prompt, mirroring Rust open_thread_goal_editor -> objective_text_for_edit.
+func (m *Model) resolveGoalEditText(goal appserver.Goal) bubbletea.Cmd {
+	resolver := m.onGoalEditText
+	return func() bubbletea.Msg {
+		text, err := resolver(goal.ThreadID, goal.Objective)
+		return GoalEditTextMsg{ThreadID: goal.ThreadID, Objective: text, Goal: goal, Err: err}
+	}
+}
+
+func (m *Model) applyGoalEditTextResult(msg GoalEditTextMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	if msg.Err != nil {
+		m.showGoalError(msg.Err.Error())
+		return nil
+	}
+	goal := cloneGoalTea(&msg.Goal)
+	goal.Objective = msg.Objective
+	m.openGoalEditPrompt(*goal)
+	return nil
 }
 
 func (m *Model) applyGoalModalOption(optionID string, objective string) bubbletea.Cmd {

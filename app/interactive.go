@@ -660,7 +660,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	elicitationBroker := newInteractiveElicitationBroker()
 	userInputBroker := newInteractiveUserInputBroker()
 	interrupts := newInteractiveInterruptController()
-	readGoal, setGoal, clearGoal := interactiveLocalGoalCallbacks(nil)
+	readGoal, setGoal, clearGoal, editGoalText, materializeGoalDraft := interactiveLocalGoalCallbacks(nil)
 	readAgents, switchAgent := interactiveLocalAgentCallbacks(nil)
 	options := codextea.Options{
 		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
@@ -730,6 +730,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnReadGoal:                readGoal,
 		OnSetGoal:                 setGoal,
 		OnClearGoal:               clearGoal,
+		OnGoalEditText:            editGoalText,
+		OnGoalDraftMaterialize:    materializeGoalDraft,
 		OnReadAgents:              readAgents,
 		OnSwitchAgent:             switchAgent,
 		OnDetectExternalAgent:     interactiveExternalAgentDetectHandler(root),

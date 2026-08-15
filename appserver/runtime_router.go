@@ -195,6 +195,7 @@ type RuntimeRouterOptions struct {
 	CodeModeHostEnabled                 bool
 	CodeModeHostProgram                 string
 	DisableCodeModeInProcessFallback    bool
+	FeatureEnablement                   map[string]bool
 	StateRuntime                        *state.StateRuntime
 	EnableLogDB                         bool
 	logDBInstallation                   *state.LogDBInstallation
@@ -244,6 +245,9 @@ type RuntimeRouter struct {
 	newContextWindowReq    map[string]bool
 	codeModeRuntimesMu     sync.Mutex
 	codeModeRuntimes       map[string]*tool.CodeModeRuntime
+	pendingGoalMu          sync.Mutex
+	pendingGoalByConn      map[string][]*Notification
+	deferredGoalMode       atomic.Bool
 	toolItemReviews        map[string]toolItemReviewSummary
 	skillMCPPromptMu       sync.Mutex
 	skillMCPPrompted       map[string]struct{}
@@ -753,6 +757,12 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	}
 	account := auth.NewAccountManager()
 	configService := config.NewConfigService(codexHome)
+	if options != nil && len(options.FeatureEnablement) > 0 {
+		// Seed the CLI --enable/--disable feature toggles into the config
+		// service so feature gates (for example goals) apply to the protocol
+		// layer, mirroring Rust's app-server config with CLI overrides.
+		configService.SetFeatureEnablementDefaults(options.FeatureEnablement)
+	}
 	if options != nil && options.Requirements != nil {
 		configService.SetRequirementsIfDifferentFromLoaded(options.Requirements)
 	}
@@ -1146,6 +1156,9 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 	if r == nil {
 		return
 	}
+	r.pendingGoalMu.Lock()
+	delete(r.pendingGoalByConn, connectionID)
+	r.pendingGoalMu.Unlock()
 	if r.networkApproval != nil {
 		r.networkApproval.cancelPendingForConnection(connectionID)
 	}
@@ -6179,14 +6192,14 @@ func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string
 		if err != nil {
 			return nil, err
 		}
-		r.notify(NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
+		r.emitGoalNotification(connectionID, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
 		r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, &response.Goal, goalAnalyticsEventKindForSet(existing, &response.Goal), nil)
 		return response, nil
 	}
 	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		response, err := r.requireThreadExtras().SetGoal(params)
 		if err == nil && response != nil {
-			r.notify(NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
+			r.emitGoalNotification(connectionID, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
 		}
 		return response, err
 	}
@@ -6227,7 +6240,7 @@ func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, err
 	}
-	r.notify(NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: goal.ThreadID, Goal: goal})
+	r.emitGoalNotification(connectionID, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: goal.ThreadID, Goal: goal})
 	r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, &goal, goalAnalyticsEventKindForSet(existing, &goal), nil)
 	r.applyGoalActiveRuntimeEffects(goal.ThreadID, goal)
 	return &GoalSetResponse{Goal: goal}, nil
@@ -6280,7 +6293,7 @@ func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams, connectionID st
 			return nil, err
 		}
 		if response.Cleared {
-			r.notify(NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
+			r.emitGoalNotification(connectionID, NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
 			r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, deleted, telemetry.GoalEventKindCleared, nil)
 		}
 		return response, nil
@@ -6288,7 +6301,7 @@ func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams, connectionID st
 	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		response, err := r.requireThreadExtras().ClearGoal(params)
 		if err == nil && response != nil && response.Cleared {
-			r.notify(NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
+			r.emitGoalNotification(connectionID, NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
 		}
 		return response, err
 	}
@@ -6323,7 +6336,7 @@ func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams, connectionID st
 		if err := r.runtimeSaveThreadRecord(record); err != nil {
 			return nil, err
 		}
-		r.notify(NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
+		r.emitGoalNotification(connectionID, NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
 		if found && goal != nil {
 			r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, goal, telemetry.GoalEventKindCleared, nil)
 		}
@@ -6343,6 +6356,69 @@ func (r *RuntimeRouter) goalsFeatureEnabled() bool {
 		return features.Enabled(nil, "goals")
 	}
 	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "goals")
+}
+
+// SetDeferredGoalNotifications switches the router into the stream-transport
+// ordering mode used by the stdio/socket JSON-line servers: thread/goal/*
+// notifications emitted by the set/clear handlers are buffered per connection
+// and flushed by the transport immediately after the response, mirroring
+// Rust's send_response-before-emit ordering. Direct Handle consumers (in-process
+// TUI, unit tests) keep immediate broadcast delivery.
+func (r *RuntimeRouter) SetDeferredGoalNotifications(enabled bool) {
+	if r == nil {
+		return
+	}
+	r.deferredGoalMode.Store(enabled)
+}
+
+// emitGoalNotification delivers a goal notification immediately (default mode)
+// or buffers it for the stream transport to flush after the response
+// (deferred mode). It preserves the same memory/analytics/opt-out checks as
+// notify.
+func (r *RuntimeRouter) emitGoalNotification(connectionID string, method NotificationMethod, params any) {
+	if r == nil {
+		return
+	}
+	if !r.deferredGoalMode.Load() {
+		r.notify(method, params)
+		return
+	}
+	if r.isInternalMemoryNotification(params) {
+		return
+	}
+	r.handleNotificationAnalytics(method, params)
+	if r.notificationMethodOptedOut(method) {
+		return
+	}
+	key := normalizeConnectionID(connectionID)
+	if key == "" {
+		key = "stdio"
+	}
+	notification := NewNotification(method, params)
+	r.pendingGoalMu.Lock()
+	defer r.pendingGoalMu.Unlock()
+	if r.pendingGoalByConn == nil {
+		r.pendingGoalByConn = map[string][]*Notification{}
+	}
+	r.pendingGoalByConn[key] = append(r.pendingGoalByConn[key], notification)
+}
+
+// FlushDeferredGoalNotifications returns and clears the buffered goal
+// notifications for a connection. The stream transport calls it immediately
+// after writing a response so notifications follow their response (Rust order).
+func (r *RuntimeRouter) FlushDeferredGoalNotifications(connectionID string) []*Notification {
+	if r == nil {
+		return nil
+	}
+	key := normalizeConnectionID(connectionID)
+	if key == "" {
+		key = "stdio"
+	}
+	r.pendingGoalMu.Lock()
+	defer r.pendingGoalMu.Unlock()
+	pending := r.pendingGoalByConn[key]
+	delete(r.pendingGoalByConn, key)
+	return pending
 }
 
 // validateGoalSetParamsRust mirrors the Rust goal service validation messages

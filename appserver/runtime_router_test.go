@@ -20338,6 +20338,54 @@ func TestRuntimeRouterThreadGoalPersistsInThreadStoreAndNotifies(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterDeferredGoalNotificationMode(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	routerStore := NewRouter(store)
+	routerStore.SetClock(func() time.Time { return fixedTime() })
+	createRecord(t, store, "thread-deferred", fixedTime())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: routerStore})
+	router.SetNotificationSink(sink)
+
+	objective := "deferred ordering"
+	setGoal := func() *Response {
+		return router.Handle(requestWithParams(t, IntID(1), MethodThreadGoalSet, GoalSetParams{
+			ThreadID: "thread-deferred", Objective: &objective,
+		}))
+	}
+
+	// Default mode broadcasts the notification to the sink immediately.
+	if response := setGoal(); response.Error != nil {
+		t.Fatalf("goal set error: %+v", response.Error)
+	}
+	if !sinkHasMethod(sink, NotificationThreadGoalUpdated) {
+		t.Fatalf("default mode should notify immediately: %#v", sink.List())
+	}
+
+	// Deferred mode (used by the stdio/socket transports) buffers the
+	// notification until the transport flushes it after the response.
+	sink = NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	router.SetDeferredGoalNotifications(true)
+	defer router.SetDeferredGoalNotifications(false)
+	if response := setGoal(); response.Error != nil {
+		t.Fatalf("deferred goal set error: %+v", response.Error)
+	}
+	if sinkHasMethod(sink, NotificationThreadGoalUpdated) {
+		t.Fatalf("deferred mode must not notify before flush: %#v", sink.List())
+	}
+	pending := router.FlushDeferredGoalNotifications("")
+	if len(pending) != 1 || pending[0].Method != NotificationThreadGoalUpdated {
+		t.Fatalf("flushed goal notifications = %#v", pending)
+	}
+	if sinkHasMethod(sink, NotificationThreadGoalUpdated) {
+		t.Fatalf("flushed notifications are transport-owned, not broadcast: %#v", sink.List())
+	}
+	if leftover := router.FlushDeferredGoalNotifications(""); len(leftover) != 0 {
+		t.Fatalf("second flush = %#v", leftover)
+	}
+}
+
 func TestRuntimeRouterThreadGoalSetAndClearEmitGoalAnalyticsLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := fixedTime()

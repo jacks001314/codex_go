@@ -5434,3 +5434,25 @@ func git(t *testing.T, dir string, args ...string) string {
 	}
 	return string(output)
 }
+
+func TestFeatureEnablementFromRoot(t *testing.T) {
+	root := &cli.RootOptions{
+		EnableFeatures:  []string{"memories"},
+		DisableFeatures: []string{"goals", "plugins"},
+		ConfigOverrides: []string{"features.web_search=true", "features.apps=false", "model=gpt-5"},
+	}
+	enablement := featureEnablementFromRoot(root)
+	want := map[string]bool{
+		"memories":   true,
+		"goals":      false,
+		"plugins":    false,
+		"web_search": true,
+		"apps":       false,
+	}
+	if !reflect.DeepEqual(enablement, want) {
+		t.Fatalf("featureEnablementFromRoot = %#v, want %#v", enablement, want)
+	}
+	if featureEnablementFromRoot(nil) != nil {
+		t.Fatalf("nil root should yield nil enablement")
+	}
+}

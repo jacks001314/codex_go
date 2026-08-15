@@ -59,6 +59,7 @@ type remoteAppServerTUIClient struct {
 	unixDial        remoteAppServerUnixDialFunc
 	transport       remoteAppServerTransport
 	nextRequestID   int64
+	codexHome       string
 	turnCompleted   bool
 	turnInterrupted bool
 }
@@ -391,6 +392,12 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnClearGoal: func(threadID string) (bool, error) {
 			return interactiveRemoteClearGoal(ctx, endpoint, threadID)
 		},
+		OnGoalEditText: func(threadID string, objective string) (string, error) {
+			return interactiveRemoteGoalEditText(ctx, endpoint, threadID, objective)
+		},
+		OnGoalDraftMaterialize: func(draft codextui.GoalDraft) (string, error) {
+			return interactiveRemoteGoalDraftMaterialize(ctx, endpoint, draft)
+		},
 		OnStartWindowsSandboxSetup: func(mode chatwidget.WindowsSandboxMode, cwd string) (codextea.WindowsSandboxSetupOutcome, error) {
 			setupCWD := strings.TrimSpace(cwd)
 			if setupCWD == "" {
@@ -641,6 +648,28 @@ func interactiveRemoteReadGoal(ctx context.Context, endpoint *appserverdaemon.Re
 	return response.Goal, nil
 }
 
+func interactiveRemoteGoalEditText(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, threadID string, objective string) (string, error) {
+	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+	defer cancel()
+	client, err := openRemoteSessionClient(reqCtx, endpoint)
+	if err != nil {
+		return objective, err
+	}
+	defer client.close()
+	return resolveGoalObjectiveText(remoteGoalFS(reqCtx, client), client.codexHome, objective)
+}
+
+func interactiveRemoteGoalDraftMaterialize(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, draft codextui.GoalDraft) (string, error) {
+	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+	defer cancel()
+	client, err := openRemoteSessionClient(reqCtx, endpoint)
+	if err != nil {
+		return "", err
+	}
+	defer client.close()
+	return materializeGoalDraft(remoteGoalFS(reqCtx, client), client.codexHome, draft)
+}
+
 func interactiveRemoteSetGoal(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) (appserver.Goal, error) {
 	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
 	defer cancel()
@@ -657,6 +686,17 @@ func interactiveRemoteSetGoal(ctx context.Context, endpoint *appserverdaemon.Rem
 	}
 	if tokenBudget != nil {
 		params.TokenBudgetSet = true
+	}
+	if params.Objective != nil {
+		materialized, materializeErr := materializeOversizedGoalObjective(
+			remoteGoalFS(reqCtx, client),
+			client.codexHome,
+			*params.Objective,
+		)
+		if materializeErr != nil {
+			return appserver.Goal{}, materializeErr
+		}
+		params.Objective = &materialized
 	}
 	var response appserver.GoalSetResponse
 	if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadGoalSet, params, &response); err != nil {
@@ -1901,7 +1941,11 @@ func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {
 		return err
 	}
 	var response appserver.InitializeResponse
-	return c.waitResponse(ctx, id, &response)
+	if err := c.waitResponse(ctx, id, &response); err != nil {
+		return err
+	}
+	c.codexHome = strings.TrimSpace(response.CodexHome)
+	return nil
 }
 
 func (c *remoteAppServerTUIClient) startThread(ctx context.Context, root *cli.RootOptions, state *codextui.State) (string, error) {

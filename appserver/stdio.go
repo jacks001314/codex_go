@@ -99,6 +99,8 @@ func serveJSONLineConnection(router *RuntimeRouter, stdin io.Reader, stdout io.W
 			setWriteErr(writeJSONLine(notification))
 		},
 	})
+	router.SetDeferredGoalNotifications(true)
+	defer router.SetDeferredGoalNotifications(false)
 	router.SetServerRequestSink(connectionServerRequestSink{
 		connectionID: connectionID,
 		send: func(request *ServerRequest) {
@@ -151,6 +153,13 @@ func serveJSONLineConnection(router *RuntimeRouter, stdin io.Reader, stdout io.W
 					if notification := router.initializeRemoteControlStatusNotification(); notification != nil {
 						setWriteErr(writeJSONLine(notification))
 					}
+				}
+				// Rust writes the thread/goal/* response before the
+				// thread/goal/updated|cleared notification; flush any
+				// notifications the handler deferred so they follow their
+				// response on the wire.
+				for _, notification := range router.FlushDeferredGoalNotifications(connectionID) {
+					setWriteErr(writeJSONLine(notification))
 				}
 			}
 		}(request)
