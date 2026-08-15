@@ -874,9 +874,9 @@
                         "domains":  [
                                         "approvals"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: approvals batch"
+                                         "go test ./tool ./turn ./appserver -run RequestPermissions -count=1; request_permissions tool registered under the feature flag and routes through the shared Guardian approval path with turn cancellation via ctx"
                                      ]
                     },
                     {

@@ -8522,6 +8522,36 @@ func TestRuntimeRouterUnifiedExecToolSurfaceFollowsEffectiveFeatureConfigLikeRus
 	}
 }
 
+func TestRuntimeRouterRegistersRequestPermissionsToolWhenFeatureEnabledLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "enabled", enabled: true},
+		{name: "disabled", enabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			body := fmt.Sprintf("[features]\nrequest_permissions_tool = %t\n", tc.enabled)
+			if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+			defer router.Close()
+			toolRouter, err := router.toolRouterForTurn(t.TempDir(), &turn.TurnStartParams{
+				ThreadID: "thread-request-permissions",
+			}, "turn-request-permissions")
+			if err != nil {
+				t.Fatalf("toolRouterForTurn() error = %v", err)
+			}
+			visible := toolSpecKeySetForTest(toolRouter.ModelVisibleSpecs())
+			if visible[tool.RequestPermissionsToolName] != tc.enabled {
+				t.Fatalf("model-visible specs = %#v, request_permissions present = %t want %t", visible, visible[tool.RequestPermissionsToolName], tc.enabled)
+			}
+		})
+	}
+}
+
 func TestRuntimeRouterRegistersViewImageForImageCapableModel(t *testing.T) {
 	cwd := t.TempDir()
 	router := NewRuntimeRouter(RuntimeServices{})

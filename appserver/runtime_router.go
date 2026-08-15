@@ -6159,7 +6159,13 @@ func (r *RuntimeRouter) terminateBackgroundTerminal(params *BackgroundTerminalsT
 }
 
 func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string) (*GoalSetResponse, error) {
+	if !r.goalsFeatureEnabled() {
+		return nil, jsonRPCInvalidRequest("goals feature is disabled")
+	}
 	r.applyGoalTokenBudgetLimit(params)
+	if err := validateGoalSetParamsRust(params); err != nil {
+		return nil, err
+	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -6184,6 +6190,9 @@ func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string
 	}
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
+		if errors.Is(err, session.ErrThreadNotFound) || strings.Contains(err.Error(), "thread not found") {
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", strings.TrimSpace(params.ThreadID)))
+		}
 		return nil, err
 	}
 	existing, found, err := goalFromRecord(record)
@@ -6220,6 +6229,9 @@ func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string
 }
 
 func (r *RuntimeRouter) getThreadGoal(params *GoalGetParams) (*GoalGetResponse, error) {
+	if !r.goalsFeatureEnabled() {
+		return nil, jsonRPCInvalidRequest("goals feature is disabled")
+	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -6234,6 +6246,9 @@ func (r *RuntimeRouter) getThreadGoal(params *GoalGetParams) (*GoalGetResponse, 
 	}
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
+		if errors.Is(err, session.ErrThreadNotFound) || strings.Contains(err.Error(), "thread not found") {
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", strings.TrimSpace(params.ThreadID)))
+		}
 		return nil, err
 	}
 	goal, found, err := goalFromRecord(record)
@@ -6248,6 +6263,9 @@ func (r *RuntimeRouter) getThreadGoal(params *GoalGetParams) (*GoalGetResponse, 
 }
 
 func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams, connectionID string) (*GoalClearResponse, error) {
+	if !r.goalsFeatureEnabled() {
+		return nil, jsonRPCInvalidRequest("goals feature is disabled")
+	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -6274,6 +6292,9 @@ func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams, connectionID st
 	}
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
 	if err != nil {
+		if errors.Is(err, session.ErrThreadNotFound) || strings.Contains(err.Error(), "thread not found") {
+			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", strings.TrimSpace(params.ThreadID)))
+		}
 		return nil, err
 	}
 	goal, found, err := goalFromRecord(record)
@@ -6303,6 +6324,42 @@ func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams, connectionID st
 		}
 	}
 	return &GoalClearResponse{Cleared: cleared}, nil
+}
+
+// goalsFeatureEnabled mirrors Rust's Feature::Goals gate on the thread/goal/*
+// protocol methods. The goals feature defaults to enabled, so a missing config
+// or an unknown key resolves through the feature registry default.
+func (r *RuntimeRouter) goalsFeatureEnabled() bool {
+	if r == nil || r.services.Config == nil {
+		return features.Enabled(nil, "goals")
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil || read.Config == nil {
+		return features.Enabled(nil, "goals")
+	}
+	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "goals")
+}
+
+// validateGoalSetParamsRust mirrors the Rust goal service validation messages
+// and error codes (invalid_request / -32600) for objective and budget errors,
+// before the shared params.Validate() handles the remaining structural checks.
+func validateGoalSetParamsRust(params *GoalSetParams) error {
+	if params == nil || strings.TrimSpace(params.ThreadID) == "" {
+		return nil
+	}
+	if params.Objective != nil {
+		objective := strings.TrimSpace(*params.Objective)
+		if objective == "" {
+			return jsonRPCInvalidRequest("goal objective must not be empty")
+		}
+		if len([]rune(objective)) > 4000 {
+			return jsonRPCInvalidRequest("goal objective must be at most 4000 characters")
+		}
+	}
+	if (params.TokenBudgetSet || params.TokenBudget != nil) && params.TokenBudget != nil && *params.TokenBudget <= 0 {
+		return jsonRPCInvalidRequest("goal budgets must be positive when provided")
+	}
+	return nil
 }
 
 func (r *RuntimeRouter) dispatchRealtime(request *Request) (any, error) {
@@ -10763,6 +10820,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.DisableUpdatePlan = disableUpdatePlan
 	options.DisableWaitAgent = disableWaitAgent
 	options.ClockProvider = clockProvider
+	if features.Enabled(cfg.FeatureSettings(), "request_permissions_tool") {
+		options.EnableRequestPermissions = true
+		options.RequestPermissionsReviewer = r.requestPermissionsGuardianReviewer(threadID)
+	}
 	if len(candidates) > 0 && cfg != nil && features.Enabled(cfg.FeatureSettings(), "tool_suggest") {
 		options.PluginInstallCandidates = candidates
 		options.PluginInstallRecommendationContext = true
@@ -10789,6 +10850,31 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.SessionID = record.SessionID
 	}
 	return turn.BuildToolRouter(options)
+}
+
+// requestPermissionsGuardianReviewer routes request_permissions calls through
+// the shared Guardian approval path (Rust #38701). Turn cancellation while an
+// automatic permission review is pending propagates through ctx.
+func (r *RuntimeRouter) requestPermissionsGuardianReviewer(threadID string) tool.RequestPermissionsReviewer {
+	return func(ctx context.Context, reviewThreadID string, turnID string, callID string, reason string, permissions map[string]any) (tool.RequestPermissionsDecision, error) {
+		if r == nil {
+			return tool.RequestPermissionsDecision{}, errors.New("request_permissions review is unavailable")
+		}
+		if strings.TrimSpace(reviewThreadID) != "" {
+			threadID = strings.TrimSpace(reviewThreadID)
+		}
+		reviewer := r.ensureGuardianReviewer(r.services.Agent)
+		action := state.Action{
+			Type:        "request_permissions",
+			Reason:      strings.TrimSpace(reason),
+			Permissions: permissions,
+		}
+		decision, reviewReason, err := reviewer.Review(ctx, threadID, turnID, callID, action)
+		if err != nil {
+			return tool.RequestPermissionsDecision{}, err
+		}
+		return tool.RequestPermissionsDecision{Approved: decision == state.DecisionApproved, Reason: reviewReason}, nil
+	}
 }
 
 func primaryTurnEnvironmentCWD(params *turn.TurnStartParams, fallback string) string {

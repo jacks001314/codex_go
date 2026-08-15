@@ -72,6 +72,8 @@ type ToolRegistryOptions struct {
 	DisableCodeModeFallback      bool
 	EnableApplyPatch             bool
 	EnableMCP                    bool
+	EnableRequestPermissions     bool
+	RequestPermissionsReviewer   tool.RequestPermissionsReviewer
 	EnableAgents                 bool
 	EnableToolSearch             bool
 	OmitToolSearchSources        bool
@@ -270,6 +272,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	}
 	if options.WebSearch != nil {
 		if _, err := registry.RegisterExternal(NewWebSearchHandler(options.WebSearch)); err != nil {
+			return nil, err
+		}
+	}
+	if options.EnableRequestPermissions && options.RequestPermissionsReviewer != nil {
+		if err := tool.RegisterRequestPermissionsTool(registry, options.RequestPermissionsReviewer); err != nil {
 			return nil, err
 		}
 	}
