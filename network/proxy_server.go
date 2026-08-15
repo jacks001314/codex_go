@@ -1227,6 +1227,10 @@ func (s *ProxyServer) emitProxyPolicyAudit(request ProxyPolicyRequest, decision 
 	}
 	s.auditSink(ProxyPolicyAuditEvent{
 		Request:        request,
+		Timestamp:      time.Now().UTC().Format(time.RFC3339Nano),
+		Scope:          "domain",
+		Method:         request.Method,
+		Client:         request.ClientAddr,
 		Decision:       value,
 		Source:         decision.Source,
 		Reason:         decision.Reason,

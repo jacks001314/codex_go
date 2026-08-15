@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -1753,6 +1754,22 @@ func (c *Client) handleNotification(method string, raw json.RawMessage) error {
 			}
 		}
 		return nil
+	case MethodNetworkPolicyDecision:
+		var params NetworkPolicyDecisionNotification
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return err
+		}
+		if !params.Validate() {
+			return fmt.Errorf("invalid network policy decision notification")
+		}
+		c.mu.Lock()
+		active := c.sessions[params.ProcessID] != nil
+		c.mu.Unlock()
+		if !active {
+			return nil
+		}
+		emitNetworkPolicyDecisionAudit(params)
+		return nil
 	default:
 		return nil
 	}
@@ -1763,6 +1780,32 @@ func (c *Client) handleNotification(method string, raw json.RawMessage) error {
 		session.publishOrdered(event)
 	}
 	return nil
+}
+
+func emitNetworkPolicyDecisionAudit(decision NetworkPolicyDecisionNotification) {
+	method := "none"
+	if decision.Method != nil {
+		method = *decision.Method
+	}
+	client := "unknown"
+	if decision.Client != nil {
+		client = *decision.Client
+	}
+	slog.Info("codex.network_proxy.policy_decision",
+		"event.name", "codex.network_proxy.policy_decision",
+		"event.timestamp", decision.Timestamp,
+		"execution.id", decision.ProcessID,
+		"network.policy.scope", decision.Scope,
+		"network.policy.decision", decision.Decision,
+		"network.policy.source", decision.Source,
+		"network.policy.reason", decision.Reason,
+		"network.policy.override", decision.PolicyOverride,
+		"network.transport.protocol", string(decision.Protocol),
+		"server.address", decision.Host,
+		"server.port", decision.Port,
+		"http.request.method", method,
+		"client.address", client,
+	)
 }
 
 func requireNotificationFields(raw json.RawMessage, fields ...string) error {

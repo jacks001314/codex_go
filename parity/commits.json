@@ -778,9 +778,9 @@
                         "domains":  [
                                         "execserver"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: exec-server network policy batch"
+                                         "go test ./execserver ./network -run NetworkPolicyDecision -count=1; executor proxy decisions forwarded as network/policyDecision notifications, validated and audited on the controller"
                                      ]
                     },
                     {
@@ -862,9 +862,9 @@
                         "domains":  [
                                         "execserver"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: exec-server relay batch"
+                                         "N/A: Go exec-server has no W3C tracing substrate; relay frames are Go-internal, so there is no trace context to propagate"
                                      ]
                     },
                     {

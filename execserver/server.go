@@ -1820,6 +1820,40 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 			}
 		})
 	}
+	// Rust #38670: forward final executor-local proxy policy decisions to the
+	// controller as best-effort network/policyDecision notifications so audit
+	// events carry controller-trusted session and execution metadata.
+	processID := params.ProcessID
+	proxyConfig.AuditSink = func(event network.ProxyPolicyAuditEvent) {
+		notify := processNotifierFromContext(ctx)
+		if notify == nil || strings.TrimSpace(processID) == "" {
+			return
+		}
+		var method *string
+		if strings.TrimSpace(event.Method) != "" {
+			value := event.Method
+			method = &value
+		}
+		var client *string
+		if strings.TrimSpace(event.Client) != "" {
+			value := event.Client
+			client = &value
+		}
+		notify(MethodNetworkPolicyDecision, NetworkPolicyDecisionNotification{
+			ProcessID:      processID,
+			Timestamp:      event.Timestamp,
+			Scope:          event.Scope,
+			Decision:       event.Decision,
+			Source:         string(event.Source),
+			Reason:         event.Reason,
+			Protocol:       NetworkPolicyRequestFromProxy(event.Request).Protocol,
+			Host:           event.Request.Host,
+			Port:           event.Request.Port,
+			Method:         method,
+			Client:         client,
+			PolicyOverride: event.PolicyOverride,
+		})
+	}
 	prepared, err := network.StartProxyManagedNetwork(context.Background(), proxyConfig, preparedParams.Env)
 	if err != nil {
 		policyCancel()

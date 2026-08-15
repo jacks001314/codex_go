@@ -237,6 +237,10 @@ func (f ProxyPolicyDeciderFunc) Decide(ctx context.Context, request ProxyPolicyR
 
 type ProxyPolicyAuditEvent struct {
 	Request        ProxyPolicyRequest
+	Timestamp      string
+	Scope          string
+	Method         string
+	Client         string
 	Decision       string
 	Source         ProxyDecisionSource
 	Reason         string

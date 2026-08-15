@@ -355,6 +355,9 @@ func TestProxyPolicyDeciderOnlyOverridesNotAllowedAndEmitsAuditLikeRust(t *testi
 	if events[0].Decision != "allow" || events[0].Source != ProxyDecisionSourceDecider || events[0].Reason != ProxyReasonNotAllowed || !events[0].PolicyOverride {
 		t.Fatalf("decider audit = %#v", events[0])
 	}
+	if events[0].Scope != "domain" || events[0].Method != http.MethodGet || events[0].Client != "client" || events[0].Timestamp == "" {
+		t.Fatalf("decider audit metadata = %#v", events[0])
+	}
 	decision = server.evaluateProxyPolicy(context.Background(), ProxyPolicyRequest{Protocol: ProxyProtocolHTTP, Host: "blocked.example", Port: 80, Method: http.MethodGet})
 	if decision.Allow || decision.Reason != ProxyReasonDenied || len(calls) != 1 {
 		t.Fatalf("denylist decision = %#v, calls = %d", decision, len(calls))

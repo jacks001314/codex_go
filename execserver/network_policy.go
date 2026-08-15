@@ -12,11 +12,16 @@ import (
 
 const (
 	MethodNetworkPolicyRequest     = "network/policyRequest"
+	MethodNetworkPolicyDecision    = "network/policyDecision"
 	MaxNetworkPolicyHostBytes      = 253
 	MaxNetworkPolicyProcessIDBytes = 256
 	MaxNetworkPolicyReasonBytes    = 1024
 	MaxInFlightServerRequests      = 256
 	NetworkPolicyDenialReason      = "not_allowed"
+
+	MaxNetworkPolicyMethodBytes    = 32
+	MaxNetworkPolicyClientBytes    = 256
+	MaxNetworkPolicyTimestampBytes = 64
 )
 
 type NetworkPolicyRequestParams struct {
@@ -37,6 +42,67 @@ type ExecServerNetworkPolicyRequest struct {
 	Protocol ExecServerNetworkProtocol `json:"protocol"`
 	Host     string                    `json:"host"`
 	Port     uint16                    `json:"port"`
+}
+
+// NetworkPolicyDecisionNotification reports an executor-local network policy
+// decision to its authenticated controller for auditing (Rust #38670).
+type NetworkPolicyDecisionNotification struct {
+	ProcessID      string                    `json:"processId"`
+	Timestamp      string                    `json:"timestamp"`
+	Scope          string                    `json:"scope"`
+	Decision       string                    `json:"decision"`
+	Source         string                    `json:"source"`
+	Reason         string                    `json:"reason"`
+	Protocol       ExecServerNetworkProtocol `json:"protocol"`
+	Host           string                    `json:"host"`
+	Port           uint16                    `json:"port"`
+	Method         *string                   `json:"method,omitempty"`
+	Client         *string                   `json:"client,omitempty"`
+	PolicyOverride bool                      `json:"policyOverride"`
+}
+
+// Validate mirrors Rust emit_network_policy_decision's field validation:
+// bounded, control-free fields with enumerated scope/decision/source values.
+func (n NetworkPolicyDecisionNotification) Validate() bool {
+	if n.ProcessID == "" || len(n.ProcessID) > MaxNetworkPolicyProcessIDBytes {
+		return false
+	}
+	if n.Host == "" || len(n.Host) > MaxNetworkPolicyHostBytes || containsControlOrWhitespace(n.Host) {
+		return false
+	}
+	if len(n.Reason) > MaxNetworkPolicyReasonBytes || containsControl(n.Reason) {
+		return false
+	}
+	switch n.Scope {
+	case "domain", "non_domain":
+	default:
+		return false
+	}
+	switch n.Decision {
+	case "allow", "deny", "ask":
+	default:
+		return false
+	}
+	switch n.Source {
+	case "baseline_policy", "mode_guard", "proxy_state", "decider":
+	default:
+		return false
+	}
+	if n.Timestamp == "" || len(n.Timestamp) > MaxNetworkPolicyTimestampBytes || containsControl(n.Timestamp) {
+		return false
+	}
+	if n.Method != nil && (len(*n.Method) > MaxNetworkPolicyMethodBytes || containsControlOrWhitespace(*n.Method)) {
+		return false
+	}
+	if n.Client != nil && (len(*n.Client) > MaxNetworkPolicyClientBytes || containsControlOrWhitespace(*n.Client)) {
+		return false
+	}
+	switch n.Protocol {
+	case NetworkProtocolHTTP, NetworkProtocolHTTPSConnect, NetworkProtocolSOCKS5TCP, NetworkProtocolSOCKS5UDP:
+		return true
+	default:
+		return false
+	}
 }
 
 type NetworkPolicyRequestResponse struct {
