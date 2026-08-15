@@ -151,12 +151,13 @@ func (r *environmentOpenAIFileReader) Close() error {
 }
 
 func (r *RuntimeRouter) primaryTurnOpenAIFileSystem(params *turn.TurnStartParams) mcp.OpenAIFileSystem {
-	if r == nil || params == nil || len(params.Environments) == 0 || r.services.Environment == nil {
+	selection := primaryTurnEnvironmentSelection(params)
+	if r == nil || selection == nil || r.services.Environment == nil {
 		return nil
 	}
 	environmentID := strings.TrimSpace(firstNonEmpty(
-		threadItemStringFromAnyMap(params.Environments[0], "environmentId"),
-		threadItemStringFromAnyMap(params.Environments[0], "environment_id"),
+		threadItemStringFromAnyMap(selection, "environmentId"),
+		threadItemStringFromAnyMap(selection, "environment_id"),
 	))
 	record, ok := r.services.Environment.Record(environmentID)
 	if !ok || record == nil || (strings.TrimSpace(record.ExecServerURL) == "" && record.NoiseProvider == nil) {

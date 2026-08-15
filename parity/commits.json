@@ -130,9 +130,9 @@
                         "domains":  [
                                         "session"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: environment refactor batch"
+                                         "go test ./appserver ./tool -run \"EnvironmentConfig|UnifiedExecEnvironmentsForTurn|ValidateTurnEnvironmentSelections|PerEnvironment\" -count=1; EnvironmentConfigState (from_thread/pending/ready/failed) parsed and validated in turn environment selections; FromThread resolves to Ready(thread config) at the attachment boundary (threadEnvironmentConfigForTurn) and normalized config persists in thread metadata"
                                      ]
                     },
                     {
@@ -262,9 +262,9 @@
                         "domains":  [
                                         "rollout"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: migration reporting batch"
+                                         "N/A: Go has no rollout-migration engine or migrate-rollouts CLI (the Rust migration tooling itself is tracked as separate follow-up outside this parity window, see update/plan_2026_08_07.md); there is no migration report surface on which thread-storage-change reporting could be added"
                                      ]
                     },
                     {
@@ -790,9 +790,9 @@
                         "domains":  [
                                         "sandbox"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: environment/permission batch"
+                                         "go test ./tool -run TestShellExecutorHonorsPerEnvironmentConfig -count=1; Ready attachment permission profiles override the turn-level profile per environment, FromThread inherits; Go guardian review already restricts review sessions to read-only (guardianReviewPermissionProfileForTurn)"
                                      ]
                     },
                     {
@@ -814,9 +814,9 @@
                         "domains":  [
                                         "session"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: environment refactor batch"
+                                         "go test ./appserver -run \"ResolveEnvironmentConfig|UnifiedExecEnvironmentsForTurn|InspectSelectedCapabilityRoots\" -count=1; resolveEnvironmentConfig tracks thread-vs-owner origin; FromThread re-resolves against thread settings each turn while owner Ready/Pending/Failed configs persist across turns and child-thread selection clones"
                                      ]
                     },
                     {
@@ -850,9 +850,9 @@
                         "domains":  [
                                         "session"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: environment refactor batch"
+                                         "go test ./appserver -run \"ValidateTurnEnvironmentSelections|UnifiedExecEnvironmentsForTurn|InspectSelectedCapabilityRoots\" -count=1; pending/failed attachments accepted, excluded from turn environments, primary environment selection, capability-root inspection, and skill sandbox contexts; later ready selection replaces failed state"
                                      ]
                     },
                     {

@@ -5327,11 +5327,7 @@ func (r *RuntimeRouter) validateTurnEnvironmentSelections(environments []map[str
 	}
 	manager := r.requireEnvironment()
 	for i := range environments {
-		environmentID := firstNonEmpty(
-			threadItemStringFromAnyMap(environments[i], "environmentId"),
-			threadItemStringFromAnyMap(environments[i], "environment_id"),
-		)
-		environmentID = strings.TrimSpace(environmentID)
+		environmentID := selectionEnvironmentID(environments[i])
 		if environmentID == "" {
 			return jsonRPCInvalidRequest("environmentId is required")
 		}
@@ -5345,6 +5341,15 @@ func (r *RuntimeRouter) validateTurnEnvironmentSelections(environments []map[str
 		}
 		if _, ok := manager.Record(environmentID); !ok {
 			return jsonRPCInvalidRequest(fmt.Sprintf("unknown turn environment id `%s`", environmentID))
+		}
+		normalizedConfig, err := validateEnvironmentSelectionConfig(environmentID, environments[i])
+		if err != nil {
+			return jsonRPCInvalidRequest(fmt.Sprintf("invalid environment configuration for `%s`: %v", environmentID, err))
+		}
+		if normalizedConfig == nil {
+			delete(environments[i], "config")
+		} else {
+			environments[i]["config"] = normalizedConfig
 		}
 	}
 	return nil
@@ -10162,20 +10167,61 @@ func (r *RuntimeRouter) selectedCapabilityMCPRootPaths(threadID string) []string
 
 // inspectSelectedCapabilityRootsForThread returns the merged selected
 // capability roots for a thread: persisted thread roots first, then the ready
-// attachment roots from the environment manager, deduplicated by root ID
-// (Rust ThreadEnvironments::inspect_selected_capability_roots, #38067).
+// attachment roots carried by Ready environment configurations and installed
+// by environment readiness reports, deduplicated by root ID (Rust
+// ThreadEnvironments::inspect_selected_capability_roots, #38067, #38521).
 func (r *RuntimeRouter) inspectSelectedCapabilityRootsForThread(record *session.Record) SelectedCapabilityRootsStatus {
-	threadRoots := make([]SelectedCapabilityRoot, 0, len(record.Metadata.SelectedCapabilityRoots))
+	threadRoots := threadSelectedCapabilityRoots(record)
+	attachmentRoots := readyAttachmentRootsFromSelections(record)
+	merged := append(threadRoots, attachmentRoots...)
+	seen := make(map[string]struct{}, len(merged))
+	unique := make([]SelectedCapabilityRoot, 0, len(merged))
+	for _, root := range merged {
+		if _, dup := seen[root.ID]; dup {
+			continue
+		}
+		seen[root.ID] = struct{}{}
+		unique = append(unique, root)
+	}
+	if r == nil || r.services.Environment == nil {
+		return SelectedCapabilityRootsStatus{ReadyRoots: cloneSelectedCapabilityRoots(unique)}
+	}
+	return r.services.Environment.InspectSelectedCapabilityRoots(unique)
+}
+
+// threadSelectedCapabilityRoots decodes the persisted thread capability roots
+// from a session record.
+func threadSelectedCapabilityRoots(record *session.Record) []SelectedCapabilityRoot {
+	if record == nil {
+		return nil
+	}
+	roots := make([]SelectedCapabilityRoot, 0, len(record.Metadata.SelectedCapabilityRoots))
 	for _, raw := range record.Metadata.SelectedCapabilityRoots {
 		var selected SelectedCapabilityRoot
 		if json.Unmarshal(raw, &selected) == nil {
-			threadRoots = append(threadRoots, selected)
+			roots = append(roots, selected)
 		}
 	}
-	if r == nil || r.services.Environment == nil {
-		return SelectedCapabilityRootsStatus{ReadyRoots: cloneSelectedCapabilityRoots(threadRoots)}
+	return roots
+}
+
+// readyAttachmentRootsFromSelections collects the capability roots carried by
+// Ready environment configurations persisted on the thread's selections.
+// Pending and Failed attachments are excluded (#38684).
+func readyAttachmentRootsFromSelections(record *session.Record) []SelectedCapabilityRoot {
+	if record == nil || record.Metadata.Extra == nil {
+		return nil
 	}
-	return r.services.Environment.InspectSelectedCapabilityRoots(threadRoots)
+	selections := environmentSelectionsFromAny(record.Metadata.Extra[runtimeEnvironmentSelectionsExtraKey])
+	var roots []SelectedCapabilityRoot
+	for _, selection := range selections {
+		state, err := environmentConfigStateFromAnyMap(selection)
+		if err != nil || state.Kind != EnvironmentConfigReady || state.Config == nil {
+			continue
+		}
+		roots = append(roots, cloneSelectedCapabilityRoots(state.Config.SelectedCapabilityRoots)...)
+	}
+	return roots
 }
 
 func mergeMCPRootPaths(groups ...[]string) []string {
@@ -10878,15 +10924,32 @@ func (r *RuntimeRouter) requestPermissionsGuardianReviewer(threadID string) tool
 }
 
 func primaryTurnEnvironmentCWD(params *turn.TurnStartParams, fallback string) string {
-	if params != nil && len(params.Environments) > 0 {
+	if selection := primaryTurnEnvironmentSelection(params); selection != nil {
 		if cwd := strings.TrimSpace(firstNonEmpty(
-			threadItemStringFromAnyMap(params.Environments[0], "cwd"),
-			threadItemStringFromAnyMap(params.Environments[0], "CWD"),
+			threadItemStringFromAnyMap(selection, "cwd"),
+			threadItemStringFromAnyMap(selection, "CWD"),
 		)); cwd != "" {
 			return cwd
 		}
 	}
 	return strings.TrimSpace(fallback)
+}
+
+// primaryTurnEnvironmentSelection returns the first environment selection that
+// is usable for the turn. Pending and failed attachments stay out of turn
+// environments and the primary environment fallback (#38684).
+func primaryTurnEnvironmentSelection(params *turn.TurnStartParams) map[string]any {
+	if params == nil {
+		return nil
+	}
+	for _, selection := range params.Environments {
+		state, err := environmentConfigStateFromAnyMap(selection)
+		if err == nil && (state.Kind == EnvironmentConfigPending || state.Kind == EnvironmentConfigFailed) {
+			continue
+		}
+		return selection
+	}
+	return nil
 }
 
 type turnMCPPreparation struct {
@@ -10983,12 +11046,18 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 	if r == nil || params == nil || len(params.Environments) == 0 || r.services.Environment == nil {
 		return nil
 	}
+	// Resolve FromThread attachments against the thread's environment config
+	// once at the attachment boundary (#38521, #38673, #38678). Owner-supplied
+	// Ready configurations keep their canonical value; Pending and Failed
+	// attachments stay out of turn environments (#38684).
+	threadConfig := r.threadEnvironmentConfigForTurn(params)
 	out := make([]tool.UnifiedExecEnvironment, 0, len(params.Environments))
 	for _, selected := range params.Environments {
-		environmentID := strings.TrimSpace(firstNonEmpty(
-			threadItemStringFromAnyMap(selected, "environmentId"),
-			threadItemStringFromAnyMap(selected, "environment_id"),
-		))
+		environmentID := selectionEnvironmentID(selected)
+		state, _ := resolveEnvironmentConfig(selected, threadConfig)
+		if state.Kind == EnvironmentConfigPending || state.Kind == EnvironmentConfigFailed {
+			continue
+		}
 		record, ok := r.services.Environment.Record(environmentID)
 		if !ok || record == nil {
 			continue
@@ -11008,15 +11077,53 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 		if shellPath != "" {
 			environmentShell = &tool.Shell{Type: tool.DetectShellType(shellPath), Path: shellPath}
 		}
-		out = append(out, tool.UnifiedExecEnvironment{
+		environment := tool.UnifiedExecEnvironment{
 			ID:            environmentID,
 			CWD:           cwd,
 			Shell:         environmentShell,
 			ExecServerURL: strings.TrimSpace(record.ExecServerURL),
 			NoiseProvider: record.NoiseProvider,
-		})
+		}
+		if state.Config != nil {
+			allowLoginShell := state.Config.AllowLoginShell
+			environment.AllowLoginShell = &allowLoginShell
+			environment.PermissionProfile = state.Config.PermissionProfile
+			environment.PermissionProfileID = strings.TrimSpace(state.Config.ActivePermissionProfile)
+			environment.PermissionProfileJSON = strings.TrimSpace(state.Config.PermissionProfileJSON)
+		}
+		out = append(out, environment)
 	}
 	return out
+}
+
+// threadEnvironmentConfigForTurn builds the thread-derived EnvironmentConfig
+// used to resolve FromThread attachments: the login-shell policy, the turn's
+// resolved permission profile, and the thread's persisted capability roots
+// (Rust Session::turn_environment_config).
+func (r *RuntimeRouter) threadEnvironmentConfigForTurn(params *turn.TurnStartParams) *EnvironmentConfig {
+	if r == nil || params == nil {
+		return nil
+	}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil {
+		return nil
+	}
+	config := &EnvironmentConfig{AllowLoginShell: cfg.AllowLoginShell()}
+	cwd := firstNonEmpty(primaryTurnEnvironmentCWD(params, params.CWD), params.CWD, r.services.DefaultCWD)
+	resolution, resolveErr := turnSandboxPermissionProfile(cfg, cwd, params)
+	if resolveErr == nil && resolution != nil && resolution.Profile != nil {
+		config.PermissionProfile = resolution.Profile
+		config.ActivePermissionProfile = strings.TrimSpace(resolution.ID)
+		if raw := strings.TrimSpace(resolution.ProfileJSON); raw != "" {
+			config.PermissionProfileJSON = raw
+		} else if raw, jsonErr := sandbox.RuntimePermissionProfileJSON(*resolution.Profile); jsonErr == nil {
+			config.PermissionProfileJSON = raw
+		}
+	}
+	if record, recordErr := r.threadRecord(session.ThreadID(params.ThreadID), true, false); recordErr == nil && record != nil {
+		config.SelectedCapabilityRoots = threadSelectedCapabilityRoots(record)
+	}
+	return config
 }
 
 type appServerEnvironmentWaiter struct {

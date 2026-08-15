@@ -697,6 +697,73 @@ func TestUnifiedExecSpecWarnsAboutPOSIXHeredocForSelectedPowerShellEnvironment(t
 	}
 }
 
+func TestShellExecutorHonorsPerEnvironmentConfigLikeRust(t *testing.T) {
+	allowLoginShell := false
+	readOnly := sandbox.ReadOnlyPermissionProfile()
+	runner := &fakeShellRunner{result: &ShellResult{ExitCode: 0}}
+	cwd := t.TempDir()
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner: runner,
+		Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+		Validation: ShellValidationOptions{
+			ApprovalPolicy:   sandbox.ApprovalOnRequest,
+			CWD:              cwd,
+			AllowLoginShell:  true,
+			DefaultTimeoutMS: 5000,
+		},
+		UnifiedExecEnvironments: []UnifiedExecEnvironment{
+			{ID: "primary", CWD: cwd},
+			{ID: "read-only", CWD: cwd, AllowLoginShell: &allowLoginShell, PermissionProfile: &readOnly, PermissionProfileID: "read-only"},
+		},
+	})
+
+	// The turn-level policy allows login shells, but the attachment's resolved
+	// configuration disables them for that environment (#38673).
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-login-disabled",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi","environment_id":"read-only","login":true}`},
+	})
+	if err == nil {
+		t.Fatalf("login=true on login-disabled environment unexpectedly succeeded: %#v", output)
+	}
+	if !strings.Contains(err.Error(), "login shell is disabled") {
+		t.Fatalf("error = %v", err)
+	}
+
+	// Executing in the primary (thread-inherited) environment still permits login.
+	output, err = executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-login-enabled",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi","environment_id":"primary","login":true}`},
+	})
+	if err != nil {
+		t.Fatalf("Execute(primary) error = %v", err)
+	}
+	if !output.Success {
+		t.Fatalf("login=true on primary environment failed: %#v", output)
+	}
+	if runner.request == nil || runner.request.UnifiedExecEnvironmentID != "primary" {
+		t.Fatalf("request environment = %#v", runner.request)
+	}
+
+	// The attachment's resolved permission profile is installed on the request.
+	_, err = executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-read-only",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi","environment_id":"read-only"}`},
+	})
+	if err != nil {
+		t.Fatalf("Execute(read-only) error = %v", err)
+	}
+	if runner.request == nil || runner.request.UnifiedExecEnvironmentID != "read-only" {
+		t.Fatalf("request environment = %#v", runner.request)
+	}
+	if runner.request.PermissionProfile == nil || runner.request.PermissionProfileID != "read-only" {
+		t.Fatalf("request permission profile = %#v id=%q", runner.request.PermissionProfile, runner.request.PermissionProfileID)
+	}
+}
+
 func (r *fakeShellRunner) Run(ctx context.Context, req *ShellRequest) (*ShellResult, error) {
 	_ = ctx
 	r.request = req

@@ -84,6 +84,10 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 	}
 	if params != nil {
 		for _, environment := range params.Environments {
+			state, stateErr := environmentConfigStateFromAnyMap(environment)
+			if stateErr == nil && (state.Kind == EnvironmentConfigPending || state.Kind == EnvironmentConfigFailed) {
+				continue
+			}
 			environmentID := firstNonEmpty(
 				threadItemStringFromAnyMap(environment, "environmentId"),
 				threadItemStringFromAnyMap(environment, "environment_id"),

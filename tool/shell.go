@@ -122,6 +122,15 @@ type UnifiedExecEnvironment struct {
 	Shell         *Shell
 	ExecServerURL string
 	NoiseProvider execserver.NoiseRendezvousConnectProvider
+	// AllowLoginShell overrides the turn-level login-shell policy for this
+	// environment when non-nil (Rust per-environment EnvironmentConfig,
+	// #38521/#38673).
+	AllowLoginShell *bool
+	// PermissionProfile overrides the turn-level permission profile for this
+	// environment when non-nil (#38673).
+	PermissionProfile     *sandbox.PermissionProfile
+	PermissionProfileID   string
+	PermissionProfileJSON string
 }
 
 type ShellSandboxProfile struct {

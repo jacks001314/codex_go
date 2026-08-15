@@ -433,6 +433,16 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			}
 			args.Shell = ""
 		}
+		// Per-environment resolved configuration overrides the turn-level
+		// login-shell policy and permission profile (Rust EnvironmentConfig,
+		// #38521/#38673).
+		if environment.AllowLoginShell != nil {
+			validation.AllowLoginShell = *environment.AllowLoginShell
+		}
+		if environment.PermissionProfile != nil {
+			validation.PermissionProfile = environment.PermissionProfile
+			validation.PermissionProfileID = environment.PermissionProfileID
+		}
 	}
 	if e.managedNetworkResolver != nil {
 		environmentID := "local"
@@ -611,6 +621,14 @@ func cloneUnifiedExecEnvironments(values []UnifiedExecEnvironment) []UnifiedExec
 		if values[i].Shell != nil {
 			shell := *values[i].Shell
 			out[i].Shell = &shell
+		}
+		if values[i].AllowLoginShell != nil {
+			allowLoginShell := *values[i].AllowLoginShell
+			out[i].AllowLoginShell = &allowLoginShell
+		}
+		if values[i].PermissionProfile != nil {
+			profile := *values[i].PermissionProfile
+			out[i].PermissionProfile = &profile
 		}
 	}
 	return out
