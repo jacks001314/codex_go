@@ -2060,3 +2060,56 @@ func TestHTTPMCPHandshakeDeadlineBoundsInitializeAndClearsAfterwards(t *testing.
 		t.Fatalf("handshake deadline should be cleared after success, timeout = %v", timeout)
 	}
 }
+
+func TestHTTPMCPHandshakeDeadlineDoesNotCancelBeforeBodyRead(t *testing.T) {
+	// Regression: the handshake deadline context must stay alive until the
+	// response body is consumed. doRPC previously deferred-cancelled the
+	// bounded context as soon as headers arrived, so a server that flushed
+	// headers before the JSON body surfaced spurious "context canceled"
+	// failures on initialize/discover and dropped the whole MCP tool catalog.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if request.Method == "notifications/initialized" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		// Send headers first and let the body arrive in a later write so a
+		// cancelled request context would abort the client's body read.
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(50 * time.Millisecond)
+		switch request.Method {
+		case "initialize":
+			if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{
+				"protocolVersion": defaultMCPProtocol,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "slow-body", "version": "test"},
+			}}); err != nil {
+				t.Fatalf("Encode(initialize) error = %v", err)
+			}
+		case "tools/list":
+			if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"tools": []any{}}}); err != nil {
+				t.Fatalf("Encode(tools/list) error = %v", err)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, Enabled: true, StartupTimeout: time.Second})
+	var out struct {
+		Tools []MCPToolInfo `json:"tools"`
+	}
+	if err := client.CallWithOptionsContext(context.Background(), &httpClientCallOptions{}, "tools/list", map[string]any{}, &out); err != nil {
+		t.Fatalf("tools/list after delayed-body handshake failed: %v", err)
+	}
+}

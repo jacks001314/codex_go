@@ -34,6 +34,28 @@ type httpRPCResponse struct {
 	Error   *stdioRPCError   `json:"error,omitempty"`
 }
 
+// mcpDeadlineResponseBody keeps a handshake deadline context alive until the
+// caller consumes the response body. Cancelling the context inside doRPC
+// (before initialize/discover read the JSON body) surfaces spurious
+// "context canceled" failures whenever the server does not deliver the body in
+// the same packet as the headers.
+type mcpDeadlineResponseBody struct {
+	io.ReadCloser
+	cancelOnce sync.Once
+	cancel     context.CancelFunc
+}
+
+func (b *mcpDeadlineResponseBody) Close() error {
+	if b == nil {
+		return nil
+	}
+	b.cancelOnce.Do(b.cancel)
+	if b.ReadCloser == nil {
+		return nil
+	}
+	return b.ReadCloser.Close()
+}
+
 type mcpHTTPStatusError struct {
 	Method     string
 	Status     string
@@ -719,14 +741,16 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 	if err != nil {
 		return nil, 0, err
 	}
+	var handshakeCancel context.CancelFunc
 	if timeout := c.handshakeRequestTimeout(method); timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
+		ctx, handshakeCancel = context.WithTimeout(ctx, timeout)
 	}
 	token, oauthToken := c.authorizationBearerToken(false)
 	response, err := c.doHTTPRequestContext(ctx, endpoint, data, sessionID, token)
 	if err != nil {
+		if handshakeCancel != nil {
+			handshakeCancel()
+		}
 		return nil, 0, err
 	}
 	if response.StatusCode == http.StatusUnauthorized && oauthToken && strings.TrimSpace(token) != "" {
@@ -735,9 +759,15 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 			_ = response.Body.Close()
 			response, err = c.doHTTPRequestContext(ctx, endpoint, data, sessionID, retryToken)
 			if err != nil {
+				if handshakeCancel != nil {
+					handshakeCancel()
+				}
 				return nil, 0, err
 			}
 		}
+	}
+	if handshakeCancel != nil {
+		response.Body = &mcpDeadlineResponseBody{ReadCloser: response.Body, cancel: handshakeCancel}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		readLimit := int64(4096)
