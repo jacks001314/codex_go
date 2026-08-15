@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"codex_go/tool"
 )
@@ -306,54 +309,160 @@ func AugmentToolSpecs(specs []tool.Spec) []tool.Spec {
 }
 
 func RenderJSONSchemaToTypeScript(schema any) string {
-	return renderJSONSchemaToTypeScript(schema)
+	rendered := newJSONSchemaTypeRenderer(schema).render(schema)
+	if len(rendered) > maxRenderedSchemaBytes {
+		return "unknown"
+	}
+	return rendered
 }
 
-func renderJSONSchemaToTypeScript(schema any) string {
-	if schema == nil {
+const (
+	// Expose one nested recursive shape, then fall back to `unknown` on the
+	// next occurrence so generated tool declarations remain finite.
+	maxLocalRefExpansionsPerPath = 2
+	// Bound repeated refs and DAG fan-out separately from cycle depth so one
+	// compact schema cannot expand into an arbitrarily large model-visible item.
+	maxTotalLocalRefExpansions = 32
+	// Bound individual schema rendering before assembling the final declaration.
+	maxRenderedSchemaBytes = 16000
+	// Charge intermediate render strings as they are built so repeated local
+	// refs cannot allocate unbounded expanded copies before the final cap runs.
+	maxRenderWorkBytes = maxRenderedSchemaBytes * 4
+)
+
+type jsonSchemaTypeRenderer struct {
+	root                        any
+	nestedSchemaResourceDepth   int
+	activeLocalRefExpansions    map[string]int
+	remainingLocalRefExpansions int
+	remainingRenderWorkBytes    int
+	renderWorkBudgetExhausted   bool
+}
+
+func newJSONSchemaTypeRenderer(root any) *jsonSchemaTypeRenderer {
+	return &jsonSchemaTypeRenderer{
+		root:                        root,
+		activeLocalRefExpansions:    map[string]int{},
+		remainingLocalRefExpansions: maxTotalLocalRefExpansions,
+		remainingRenderWorkBytes:    maxRenderWorkBytes,
+	}
+}
+
+func (r *jsonSchemaTypeRenderer) render(schema any) string {
+	if r.renderWorkBudgetExhausted {
 		return "unknown"
 	}
-	if boolean, ok := schema.(bool); ok {
-		if boolean {
-			return "unknown"
-		}
-		return "never"
+	// A nested `$id` starts a new schema resource. Fragment-only refs below it
+	// are scoped to that resource, not to the outer document root.
+	entersNestedSchemaResource := !sameSchemaValue(schema, r.root) && schemaHasID(schema)
+	if entersNestedSchemaResource {
+		r.nestedSchemaResourceDepth++
 	}
+	var rendered string
+	switch typed := schema.(type) {
+	case bool:
+		if typed {
+			rendered = "unknown"
+		} else {
+			rendered = "never"
+		}
+	case map[string]any:
+		rendered = r.renderMap(typed)
+	default:
+		rendered = "unknown"
+	}
+	if entersNestedSchemaResource {
+		r.nestedSchemaResourceDepth--
+	}
+	return r.finishRender(rendered)
+}
+
+func schemaHasID(schema any) bool {
 	object, ok := schemaObject(schema)
 	if !ok {
+		return false
+	}
+	_, exists := object["$id"]
+	return exists
+}
+
+func sameSchemaValue(a any, b any) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	valueA := reflect.ValueOf(a)
+	valueB := reflect.ValueOf(b)
+	if valueA.Type() != valueB.Type() {
+		return false
+	}
+	switch valueA.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Ptr, reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return valueA.Pointer() == valueB.Pointer()
+	default:
+		return a == b
+	}
+}
+
+func (r *jsonSchemaTypeRenderer) renderMap(object map[string]any) string {
+	if r.renderWorkBudgetExhausted {
 		return "unknown"
 	}
+	if _, ok := object["$ref"]; ok {
+		return r.renderRef(object)
+	}
 	if value, exists := object["const"]; exists {
-		return renderJSONSchemaLiteral(value)
+		return r.renderLiteral(value)
 	}
 	if values := schemaArray(object["enum"]); len(values) > 0 {
 		rendered := make([]string, 0, len(values))
 		for _, value := range values {
-			rendered = append(rendered, renderJSONSchemaLiteral(value))
+			literal := r.renderLiteral(value)
+			if r.renderWorkBudgetExhausted {
+				return "unknown"
+			}
+			if !r.consumeRenderWork(len(literal)) {
+				return "unknown"
+			}
+			rendered = append(rendered, literal)
 		}
-		return strings.Join(rendered, " | ")
+		if len(rendered) > 0 {
+			return strings.Join(rendered, " | ")
+		}
 	}
 	for _, key := range []string{"anyOf", "oneOf"} {
 		if variants := schemaArray(object[key]); len(variants) > 0 {
 			rendered := make([]string, 0, len(variants))
 			for _, variant := range variants {
-				rendered = append(rendered, renderJSONSchemaToTypeScript(variant))
+				if r.renderWorkBudgetExhausted {
+					return "unknown"
+				}
+				rendered = append(rendered, r.render(variant))
 			}
-			return strings.Join(rendered, " | ")
+			if len(rendered) > 0 {
+				return strings.Join(rendered, " | ")
+			}
 		}
 	}
 	if variants := schemaArray(object["allOf"]); len(variants) > 0 {
 		rendered := make([]string, 0, len(variants))
 		for _, variant := range variants {
-			rendered = append(rendered, renderJSONSchemaToTypeScript(variant))
+			if r.renderWorkBudgetExhausted {
+				return "unknown"
+			}
+			rendered = append(rendered, parenthesizeUnionForIntersection(r.render(variant)))
 		}
-		return strings.Join(rendered, " & ")
+		if len(rendered) > 0 {
+			return strings.Join(rendered, " & ")
+		}
 	}
 	if schemaTypes := schemaArray(object["type"]); len(schemaTypes) > 0 {
 		rendered := make([]string, 0, len(schemaTypes))
 		for _, value := range schemaTypes {
 			if schemaType, ok := value.(string); ok {
-				rendered = append(rendered, renderJSONSchemaType(object, schemaType))
+				if r.renderWorkBudgetExhausted {
+					return "unknown"
+				}
+				rendered = append(rendered, r.renderTypeKeyword(object, schemaType))
 			}
 		}
 		if len(rendered) > 0 {
@@ -361,27 +470,80 @@ func renderJSONSchemaToTypeScript(schema any) string {
 		}
 	}
 	if schemaType, ok := object["type"].(string); ok {
-		return renderJSONSchemaType(object, schemaType)
+		return r.renderTypeKeyword(object, schemaType)
 	}
 	if _, ok := object["properties"]; ok {
-		return renderJSONSchemaObject(object)
+		return r.renderObject(object)
 	}
 	if _, ok := object["additionalProperties"]; ok {
-		return renderJSONSchemaObject(object)
+		return r.renderObject(object)
 	}
 	if _, ok := object["required"]; ok {
-		return renderJSONSchemaObject(object)
+		return r.renderObject(object)
 	}
 	if _, ok := object["items"]; ok {
-		return renderJSONSchemaArray(object)
+		return r.renderArray(object)
 	}
 	if _, ok := object["prefixItems"]; ok {
-		return renderJSONSchemaArray(object)
+		return r.renderArray(object)
 	}
 	return "unknown"
 }
 
-func renderJSONSchemaType(object map[string]any, schemaType string) string {
+func (r *jsonSchemaTypeRenderer) renderRef(object map[string]any) string {
+	referencedType := "unknown"
+	if r.nestedSchemaResourceDepth == 0 {
+		if ref, ok := object["$ref"].(string); ok {
+			if pointer, ok := localJSONPointer(ref); ok {
+				active := r.activeLocalRefExpansions[pointer]
+				resolved := "unknown"
+				if active < maxLocalRefExpansionsPerPath && r.remainingLocalRefExpansions > 0 {
+					var target any
+					found := false
+					if pointer == "" {
+						target = r.root
+						found = true
+					} else {
+						target, found = jsonPointerGet(r.root, pointer)
+					}
+					if found {
+						r.remainingLocalRefExpansions--
+						r.activeLocalRefExpansions[pointer] = active + 1
+						resolved = r.render(target)
+						if active == 0 {
+							delete(r.activeLocalRefExpansions, pointer)
+						} else {
+							r.activeLocalRefExpansions[pointer] = active
+						}
+					}
+				}
+				referencedType = resolved
+			}
+		}
+	}
+	if r.renderWorkBudgetExhausted {
+		return "unknown"
+	}
+	siblings := map[string]any{}
+	for key, value := range object {
+		if key != "$ref" && key != "$defs" && key != "definitions" {
+			siblings[key] = value
+		}
+	}
+	if !hasRenderableSchemaKeywords(siblings) {
+		return referencedType
+	}
+	siblingType := r.renderMap(siblings)
+	if referencedType == "unknown" {
+		return siblingType
+	}
+	if siblingType == "unknown" {
+		return referencedType
+	}
+	return "(" + referencedType + ") & (" + siblingType + ")"
+}
+
+func (r *jsonSchemaTypeRenderer) renderTypeKeyword(object map[string]any, schemaType string) string {
 	switch schemaType {
 	case "string":
 		return "string"
@@ -392,99 +554,317 @@ func renderJSONSchemaType(object map[string]any, schemaType string) string {
 	case "null":
 		return "null"
 	case "array":
-		return renderJSONSchemaArray(object)
+		return r.renderArray(object)
 	case "object":
-		return renderJSONSchemaObject(object)
+		return r.renderObject(object)
 	default:
 		return "unknown"
 	}
 }
 
-func renderJSONSchemaArray(object map[string]any) string {
+func (r *jsonSchemaTypeRenderer) renderArray(object map[string]any) string {
 	if items, ok := object["items"]; ok {
-		return "Array<" + renderJSONSchemaToTypeScript(items) + ">"
+		itemType := r.render(items)
+		if r.renderWorkBudgetExhausted {
+			return "unknown"
+		}
+		return "Array<" + itemType + ">"
 	}
 	if items := schemaArray(object["prefixItems"]); len(items) > 0 {
-		rendered := make([]string, 0, len(items))
+		itemTypes := make([]string, 0, len(items))
 		for _, item := range items {
-			rendered = append(rendered, renderJSONSchemaToTypeScript(item))
+			if r.renderWorkBudgetExhausted {
+				return "unknown"
+			}
+			itemTypes = append(itemTypes, r.render(item))
 		}
-		return "[" + strings.Join(rendered, ", ") + "]"
+		if len(itemTypes) > 0 {
+			return "[" + strings.Join(itemTypes, ", ") + "]"
+		}
 	}
 	return "unknown[]"
 }
 
-func renderJSONSchemaObject(object map[string]any) string {
-	required := map[string]bool{}
+func (r *jsonSchemaTypeRenderer) appendAdditionalPropertiesLine(lines *[]string, object map[string]any, properties map[string]any, prefix string) bool {
+	if additional, exists := object["additionalProperties"]; exists {
+		switch value := additional.(type) {
+		case bool:
+			if value {
+				return r.pushRenderLine(lines, prefix+"[key: string]: unknown;")
+			}
+		default:
+			propertyType := r.render(value)
+			if r.renderWorkBudgetExhausted {
+				return false
+			}
+			return r.pushRenderLine(lines, prefix+"[key: string]: "+propertyType+";")
+		}
+	} else if len(properties) == 0 {
+		return r.pushRenderLine(lines, prefix+"[key: string]: unknown;")
+	}
+	return true
+}
+
+func (r *jsonSchemaTypeRenderer) renderObjectProperty(name string, schema any, required []string) string {
+	if len(name) > r.remainingRenderWorkBytes {
+		r.renderWorkBudgetExhausted = true
+		return "unknown"
+	}
+	optional := "?"
+	for _, requiredName := range required {
+		if requiredName == name {
+			optional = ""
+			break
+		}
+	}
+	propertyName := renderJSONSchemaPropertyName(name)
+	propertyType := r.render(schema)
+	if r.renderWorkBudgetExhausted {
+		return "unknown"
+	}
+	return propertyName + optional + ": " + propertyType + ";"
+}
+
+func (r *jsonSchemaTypeRenderer) renderObject(object map[string]any) string {
+	var required []string
 	for _, value := range schemaArray(object["required"]) {
 		if name, ok := value.(string); ok {
-			required[name] = true
+			required = append(required, name)
 		}
 	}
 	properties, _ := schemaObject(object["properties"])
 	names := make([]string, 0, len(properties))
-	hasDescription := false
-	for name, value := range properties {
+	for name := range properties {
 		names = append(names, name)
-		if property, ok := schemaObject(value); ok {
-			if description, ok := property["description"].(string); ok && description != "" {
-				hasDescription = true
-			}
-		}
 	}
 	sort.Strings(names)
-	if hasDescription {
-		lines := []string{"{"}
+	anyDescription := false
+	for _, name := range names {
+		if hasPropertyDescription(properties[name]) {
+			anyDescription = true
+			break
+		}
+	}
+	if anyDescription {
+		lines := []string{}
+		if !r.pushRenderLine(&lines, "{") {
+			return "unknown"
+		}
 		for _, name := range names {
 			value := properties[name]
-			if property, ok := schemaObject(value); ok {
-				if description, ok := property["description"].(string); ok {
-					for _, line := range strings.Split(description, "\n") {
-						if line = strings.TrimSpace(line); line != "" {
-							lines = append(lines, "  // "+line)
-						}
+			if description := propertyDescription(value); description != "" {
+				for _, line := range strings.Split(description, "\n") {
+					line = strings.TrimSpace(line)
+					if line == "" {
+						continue
+					}
+					if len(line)+5 > r.remainingRenderWorkBytes || !r.pushRenderLine(&lines, "  // "+line) {
+						return "unknown"
 					}
 				}
 			}
-			lines = append(lines, "  "+renderJSONSchemaProperty(name, value, required))
+			property := r.renderObjectProperty(name, value, required)
+			if r.renderWorkBudgetExhausted || !r.pushRenderLine(&lines, "  "+property) {
+				return "unknown"
+			}
 		}
-		appendAdditionalProperties(&lines, object, properties, "  ")
-		lines = append(lines, "}")
+		if !r.appendAdditionalPropertiesLine(&lines, object, properties, "  ") || !r.pushRenderLine(&lines, "}") {
+			return "unknown"
+		}
 		return strings.Join(lines, "\n")
 	}
 	lines := make([]string, 0, len(names)+1)
 	for _, name := range names {
-		lines = append(lines, renderJSONSchemaProperty(name, properties[name], required))
+		property := r.renderObjectProperty(name, properties[name], required)
+		if r.renderWorkBudgetExhausted || !r.pushRenderLine(&lines, property) {
+			return "unknown"
+		}
 	}
-	appendAdditionalProperties(&lines, object, properties, "")
+	if !r.appendAdditionalPropertiesLine(&lines, object, properties, "") {
+		return "unknown"
+	}
 	if len(lines) == 0 {
 		return "{}"
 	}
 	return "{ " + strings.Join(lines, " ") + " }"
 }
 
-func appendAdditionalProperties(lines *[]string, object map[string]any, properties map[string]any, prefix string) {
-	additional, exists := object["additionalProperties"]
-	if exists {
-		switch value := additional.(type) {
-		case bool:
-			if value {
-				*lines = append(*lines, prefix+"[key: string]: unknown;")
+func (r *jsonSchemaTypeRenderer) finishRender(rendered string) string {
+	if r.consumeRenderWork(len(rendered)) {
+		return rendered
+	}
+	return "unknown"
+}
+
+func (r *jsonSchemaTypeRenderer) renderLiteral(value any) string {
+	if jsonLiteralSerializationUpperBound(value) > r.remainingRenderWorkBytes {
+		r.renderWorkBudgetExhausted = true
+		return "unknown"
+	}
+	return renderJSONSchemaLiteral(value)
+}
+
+func (r *jsonSchemaTypeRenderer) consumeRenderWork(renderedBytes int) bool {
+	if renderedBytes > r.remainingRenderWorkBytes {
+		r.renderWorkBudgetExhausted = true
+		return false
+	}
+	r.remainingRenderWorkBytes -= renderedBytes
+	return true
+}
+
+func (r *jsonSchemaTypeRenderer) pushRenderLine(lines *[]string, line string) bool {
+	if !r.consumeRenderWork(len(line)) {
+		return false
+	}
+	*lines = append(*lines, line)
+	return true
+}
+
+func parenthesizeUnionForIntersection(rendered string) string {
+	if strings.Contains(rendered, " | ") {
+		return "(" + rendered + ")"
+	}
+	return rendered
+}
+
+func localJSONPointer(reference string) (string, bool) {
+	fragment, ok := strings.CutPrefix(reference, "#")
+	if !ok {
+		return "", false
+	}
+	pointer, ok := percentDecodeURIFragment(fragment)
+	if !ok {
+		return "", false
+	}
+	if pointer == "" || strings.HasPrefix(pointer, "/") {
+		return pointer, true
+	}
+	return "", false
+}
+
+func percentDecodeURIFragment(fragment string) (string, bool) {
+	bytes := []byte(fragment)
+	decoded := make([]byte, 0, len(bytes))
+	for index := 0; index < len(bytes); {
+		if bytes[index] == '%' {
+			if index+2 >= len(bytes) {
+				return "", false
 			}
-		default:
-			*lines = append(*lines, prefix+"[key: string]: "+renderJSONSchemaToTypeScript(value)+";")
+			high, okHigh := decodeHexDigit(bytes[index+1])
+			low, okLow := decodeHexDigit(bytes[index+2])
+			if !okHigh || !okLow {
+				return "", false
+			}
+			decoded = append(decoded, (high<<4)|low)
+			index += 3
+		} else {
+			decoded = append(decoded, bytes[index])
+			index++
 		}
-	} else if len(properties) == 0 {
-		*lines = append(*lines, prefix+"[key: string]: unknown;")
+	}
+	if !utf8.Valid(decoded) {
+		return "", false
+	}
+	return string(decoded), true
+}
+
+func decodeHexDigit(digit byte) (byte, bool) {
+	switch {
+	case digit >= '0' && digit <= '9':
+		return digit - '0', true
+	case digit >= 'a' && digit <= 'f':
+		return digit - 'a' + 10, true
+	case digit >= 'A' && digit <= 'F':
+		return digit - 'A' + 10, true
+	default:
+		return 0, false
 	}
 }
 
-func renderJSONSchemaProperty(name string, schema any, required map[string]bool) string {
-	optional := "?"
-	if required[name] {
-		optional = ""
+func jsonPointerGet(root any, pointer string) (any, bool) {
+	if pointer == "" {
+		return root, true
 	}
-	return renderJSONSchemaPropertyName(name) + optional + ": " + renderJSONSchemaToTypeScript(schema) + ";"
+	current := root
+	for _, rawSegment := range strings.Split(pointer[1:], "/") {
+		segment := strings.ReplaceAll(strings.ReplaceAll(rawSegment, "~1", "/"), "~0", "~")
+		object, ok := schemaObject(current)
+		if !ok {
+			return nil, false
+		}
+		next, exists := object[segment]
+		if !exists {
+			return nil, false
+		}
+		current = next
+	}
+	return current, true
+}
+
+func hasRenderableSchemaKeywords(object map[string]any) bool {
+	for _, key := range []string{
+		"const", "enum", "anyOf", "oneOf", "allOf", "type",
+		"properties", "additionalProperties", "required", "items", "prefixItems",
+	} {
+		if _, ok := object[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPropertyDescription(schema any) bool {
+	return propertyDescription(schema) != ""
+}
+
+func propertyDescription(schema any) string {
+	property, ok := schemaObject(schema)
+	if !ok {
+		return ""
+	}
+	description, _ := property["description"].(string)
+	return description
+}
+
+func jsonLiteralSerializationUpperBound(value any) int {
+	switch typed := value.(type) {
+	case nil:
+		return 4
+	case bool:
+		if typed {
+			return 4
+		}
+		return 5
+	case float64:
+		return len(strconv.FormatFloat(typed, 'f', -1, 64))
+	case int:
+		return len(strconv.Itoa(typed))
+	case int64:
+		return len(strconv.FormatInt(typed, 10))
+	case json.Number:
+		return len(typed.String())
+	case string:
+		return len(typed)*6 + 2
+	case []any:
+		size := 2
+		for _, value := range typed {
+			size += 1 + jsonLiteralSerializationUpperBound(value)
+		}
+		return size
+	case map[string]any:
+		size := 2
+		for key, value := range typed {
+			size += 4 + len(key)*6 + jsonLiteralSerializationUpperBound(value)
+		}
+		return size
+	default:
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return len(fmt.Sprint(value))
+		}
+		return len(encoded)
+	}
 }
 
 func renderJSONSchemaPropertyName(name string) string {

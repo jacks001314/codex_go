@@ -202,9 +202,9 @@
                         "domains":  [
                                         "sandbox"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: exec-server sandbox batch"
+                                         "go test ./execserver -run FSHelperReadableRoots -count=1; fs helper readable roots grant only the helper executable, not its parent directory"
                                      ]
                     },
                     {
@@ -766,9 +766,9 @@
                         "domains":  [
                                         "codemode"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: code-mode protocol batch"
+                                         "go test ./codemode -run RenderJSONSchema -count=1; local JSON Schema refs resolved with escaped/percent-encoded pointers, sibling intersections, nested-resource scoping, and bounded expansion/render work"
                                      ]
                     },
                     {

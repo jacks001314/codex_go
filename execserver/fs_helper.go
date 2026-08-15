@@ -334,9 +334,12 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		ResolvedPermissionProfileID:   "exec-server-fs-helper",
 		ResolvedPermissionProfileJSON: profileJSON,
 		CWD:                           cwd,
-		SandboxReadableRoots:          []string{filepath.Dir(executable)},
-		UseLegacyLandlock:             ctx.UseLegacyLandlock,
-		Command:                       helperCommand,
+		// Rust #38561: filesystem helpers only need access to their own
+		// executables; granting the containing directory would make unrelated
+		// sibling files readable.
+		SandboxReadableRoots: fsHelperReadableRoots(executable),
+		UseLegacyLandlock:    ctx.UseLegacyLandlock,
+		Command:              helperCommand,
 	})
 	if err != nil {
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
@@ -370,6 +373,16 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
 	}
 	return append([]string{executable}, args...), env, nil
+}
+
+// fsHelperReadableRoots returns the absolute readable roots for a filesystem
+// helper: only the helper executable itself (Rust helper_read_roots #38561).
+func fsHelperReadableRoots(executable string) []string {
+	executable = strings.TrimSpace(executable)
+	if executable == "" {
+		return nil
+	}
+	return []string{filepath.Clean(executable)}
 }
 
 func fsHelperEnvironment() map[string]string {
