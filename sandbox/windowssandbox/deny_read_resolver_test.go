@@ -3,6 +3,7 @@ package windowssandbox
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,5 +54,30 @@ func TestResolveWindowsDenyReadPolicyPathsPreservesMissingExactPaths(t *testing.
 	}
 	if len(got) != 1 || got[0] != cleanWindowsSandboxAbs(missing) {
 		t.Fatalf("paths = %#v", got)
+	}
+}
+
+func TestResolveWindowsDenyReadPolicyPathsRejectsUnboundedRootGlobsLikeRust(t *testing.T) {
+	tmp := t.TempDir()
+	root := filesystemRootForTest(t, tmp)
+	pattern := filepath.Join(root, "**", "*.env")
+	_, err := ResolveWindowsDenyReadPolicyPaths(DenyReadPolicy{Globs: []string{pattern}}, tmp)
+	if err == nil || !strings.Contains(err.Error(), "cannot be safely expanded from a filesystem root without `glob_scan_max_depth`") {
+		t.Fatalf("error = %v, want fail-closed unbounded root glob", err)
+	}
+}
+
+func filesystemRootForTest(t *testing.T, path string) string {
+	t.Helper()
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("Abs(%s) error = %v", path, err)
+	}
+	for {
+		parent := filepath.Dir(absolute)
+		if parent == absolute {
+			return absolute
+		}
+		absolute = parent
 	}
 }

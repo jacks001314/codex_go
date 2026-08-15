@@ -1,6 +1,7 @@
 package windowssandbox
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -43,6 +44,15 @@ func ResolveWindowsDenyReadPolicyPaths(policy DenyReadPolicy, cwd string) ([]str
 			return nil, err
 		}
 		plan := GlobScanPlanForPattern(pattern, policy.GlobScanMaxDepth)
+		// Rust #38660: a recursive glob rooted at a filesystem root cannot be
+		// safely expanded without glob_scan_max_depth; fail closed instead of
+		// silently dropping the deny rule.
+		if plan.MaxDepth == nil && filepath.Dir(plan.Root) == plan.Root {
+			return nil, fmt.Errorf(
+				"unreadable glob `%s` cannot be safely expanded from a filesystem root without `glob_scan_max_depth`; configure `glob_scan_max_depth` or use a non-root directory prefix",
+				pattern,
+			)
+		}
 		seenScanDirs := map[string]bool{}
 		if err := collectExistingGlobMatches(plan.Root, matcher, &paths, seen, seenScanDirs, plan.MaxDepth, 0); err != nil {
 			return nil, err

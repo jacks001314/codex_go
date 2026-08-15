@@ -370,9 +370,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI resume batch"
+                                         "N/A: Go TUI resume delegates to app-server session resume without Rust resume-picker transcript preview paging; no paginated-request retry surface to fix"
                                      ]
                     },
                     {
@@ -382,9 +382,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI resume batch"
+                                         "N/A: Go TUI has no Rust-style resume-picker transcript preview line selection; resume delegates to app-server session resume"
                                      ]
                     },
                     {
