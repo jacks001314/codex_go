@@ -8,17 +8,18 @@ import (
 type APIErrorKind string
 
 const (
-	ErrorTransport             APIErrorKind = "transport"
-	ErrorAPI                   APIErrorKind = "api"
-	ErrorStream                APIErrorKind = "stream"
-	ErrorContextWindowExceeded APIErrorKind = "contextWindowExceeded"
-	ErrorQuotaExceeded         APIErrorKind = "quotaExceeded"
-	ErrorUsageNotIncluded      APIErrorKind = "usageNotIncluded"
-	ErrorRetryable             APIErrorKind = "retryable"
-	ErrorRateLimit             APIErrorKind = "rateLimit"
-	ErrorInvalidRequest        APIErrorKind = "invalidRequest"
-	ErrorCyberPolicy           APIErrorKind = "cyberPolicy"
-	ErrorServerOverloaded      APIErrorKind = "serverOverloaded"
+	ErrorTransport                   APIErrorKind = "transport"
+	ErrorAPI                         APIErrorKind = "api"
+	ErrorStream                      APIErrorKind = "stream"
+	ErrorContextWindowExceeded       APIErrorKind = "contextWindowExceeded"
+	ErrorQuotaExceeded               APIErrorKind = "quotaExceeded"
+	ErrorUsageNotIncluded            APIErrorKind = "usageNotIncluded"
+	ErrorRetryable                   APIErrorKind = "retryable"
+	ErrorRateLimit                   APIErrorKind = "rateLimit"
+	ErrorInvalidRequest              APIErrorKind = "invalidRequest"
+	ErrorCyberPolicy                 APIErrorKind = "cyberPolicy"
+	ErrorMisalignmentPolicyViolation APIErrorKind = "misalignmentPolicyViolation"
+	ErrorServerOverloaded            APIErrorKind = "serverOverloaded"
 )
 
 type APIError struct {
@@ -65,6 +66,8 @@ func (e *APIError) Error() string {
 		return "invalid request: " + e.Message
 	case ErrorCyberPolicy:
 		return "cyber policy: " + e.Message
+	case ErrorMisalignmentPolicyViolation:
+		return "misalignment policy violation: " + e.Message
 	case ErrorServerOverloaded:
 		return "server overloaded"
 	default:

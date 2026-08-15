@@ -2424,7 +2424,7 @@ func TestResponsesAgentRunnerRetriesTemporaryResponseFailedLikeRust(t *testing.T
 }
 
 func TestResponsesAgentRunnerDoesNotRetryFatalResponseFailedLikeRust(t *testing.T) {
-	for _, code := range []string{"context_length_exceeded", "insufficient_quota", "usage_not_included", "cyber_policy", "invalid_prompt", "bio_policy"} {
+	for _, code := range []string{"context_length_exceeded", "insufficient_quota", "usage_not_included", "cyber_policy", "misalignment_policy_violation", "invalid_prompt", "bio_policy"} {
 		t.Run(code, func(t *testing.T) {
 			var attempts atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2444,6 +2444,31 @@ func TestResponsesAgentRunnerDoesNotRetryFatalResponseFailedLikeRust(t *testing.
 				t.Fatalf("attempts = %d, want 1", attempts.Load())
 			}
 		})
+	}
+}
+
+func TestMisalignmentPolicyViolationErrorsAreTypedAndNonRetryableLikeRust(t *testing.T) {
+	err := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"misalignment_policy_violation","message":"This request violated the misalignment policy."}}}`))
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorMisalignmentPolicyViolation {
+		t.Fatalf("streamed error = %#v", err)
+	}
+	if apiErr.Message != "This request violated the misalignment policy." {
+		t.Fatalf("message = %q", apiErr.Message)
+	}
+
+	blank := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"misalignment_policy_violation","message":"   "}}}`))
+	if !errors.As(blank, &apiErr) || apiErr.Message != "This request was blocked due to a misalignment policy violation." {
+		t.Fatalf("blank streamed error = %#v", blank)
+	}
+
+	// HTTP 400 with the misalignment code is also typed and not retried.
+	httpErr := responsesHTTPError("openai", http.StatusBadRequest, http.Header{}, []byte(`{"error":{"code":"misalignment_policy_violation","message":"blocked"}}`))
+	if !errors.As(httpErr, &apiErr) || apiErr.Kind != codexapi.ErrorMisalignmentPolicyViolation || apiErr.Status != http.StatusBadRequest {
+		t.Fatalf("http error = %#v", httpErr)
+	}
+	if apiErr.Message != "blocked" {
+		t.Fatalf("http message = %q", apiErr.Message)
 	}
 }
 

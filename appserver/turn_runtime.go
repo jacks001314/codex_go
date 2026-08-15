@@ -3362,6 +3362,8 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		return fields("serverOverloaded", "server_overloaded")
 	case codexapi.ErrorCyberPolicy:
 		return fields("cyberPolicy", "cyber_policy")
+	case codexapi.ErrorMisalignmentPolicyViolation:
+		return fields("misalignmentPolicyViolation", "misalignment_policy_violation")
 	case codexapi.ErrorInvalidRequest:
 		return fields("badRequest", "invalid_request")
 	case codexapi.ErrorRetryable:

@@ -273,6 +273,49 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 	}
 }
 
+func TestModelMessagesMultiAgentParsingAndOverridePreservationLikeRust(t *testing.T) {
+	var messages ModelMessages
+	if err := json.Unmarshal([]byte(`{
+		"instructions_template": null,
+		"instructions_variables": null,
+		"multi_agent": {
+			"role": {"root": "", "subagent": "subagent base"},
+			"mode": {"explicit": "explicit mode", "hint_text": ""}
+		}
+	}`), &messages); err != nil {
+		t.Fatalf("Unmarshal multi-agent messages error = %v", err)
+	}
+	if messages.MultiAgent == nil || messages.MultiAgent.Role == nil || messages.MultiAgent.Mode == nil {
+		t.Fatalf("multi-agent messages = %#v", messages.MultiAgent)
+	}
+	if messages.MultiAgent.Role.Root == nil || *messages.MultiAgent.Role.Root != "" {
+		t.Fatalf("empty root role = %#v", messages.MultiAgent.Role.Root)
+	}
+	if messages.MultiAgent.Role.Subagent == nil || *messages.MultiAgent.Role.Subagent != "subagent base" {
+		t.Fatalf("subagent role = %#v", messages.MultiAgent.Role.Subagent)
+	}
+	if messages.MultiAgent.Mode.Explicit == nil || *messages.MultiAgent.Mode.Explicit != "explicit mode" {
+		t.Fatalf("explicit mode = %#v", messages.MultiAgent.Mode.Explicit)
+	}
+	if messages.MultiAgent.Mode.HintText == nil || *messages.MultiAgent.Mode.HintText != "" {
+		t.Fatalf("empty hint text = %#v", messages.MultiAgent.Mode.HintText)
+	}
+
+	// A base-instructions override replaces the message set, clearing the
+	// catalog-provided multi-agent messages (Rust with_config_overrides).
+	model := ModelInfo{
+		Slug:          "gpt-test",
+		ModelMessages: &ModelMessages{MultiAgent: messages.MultiAgent},
+	}
+	overridden := WithConfigOverrides(model, &ModelsManagerConfig{BaseInstructions: "override"})
+	if overridden.ModelMessages == nil || overridden.ModelMessages.MultiAgent != nil {
+		t.Fatalf("base-instructions override retained multi-agent messages: %#v", overridden.ModelMessages)
+	}
+	if overridden.ModelMessages.InstructionsTemplate != "override" {
+		t.Fatalf("instructions template = %q", overridden.ModelMessages.InstructionsTemplate)
+	}
+}
+
 func TestServiceTierForRequest(t *testing.T) {
 	info := &ModelInfo{ServiceTiers: []string{"priority", "flex"}}
 	if got := ServiceTierForRequest(info, "fast"); got != "priority" {

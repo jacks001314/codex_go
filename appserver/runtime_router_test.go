@@ -19555,6 +19555,13 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			wantKind:  "response_stream_failed",
 			wantHTTP:  http.StatusServiceUnavailable,
 		},
+		{
+			name:      "misalignment policy violation",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: http.StatusBadRequest, Message: "blocked"},
+			wantError: `"misalignmentPolicyViolation"`,
+			wantKind:  "misalignment_policy_violation",
+			wantHTTP:  http.StatusBadRequest,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

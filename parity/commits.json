@@ -838,9 +838,9 @@
                         "domains":  [
                                         "appserver"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: app-server typed-error batch"
+                                         "go test ./model ./appserver -run Misalignment -count=1; misalignment_policy_violation typed as non-retryable APIError from streams and HTTP 400/403 with fallback message; app-server surfaces misalignmentPolicyViolation"
                                      ]
                     },
                     {

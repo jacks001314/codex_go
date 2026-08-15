@@ -1882,6 +1882,11 @@ func responseFailedError(data []byte) error {
 		return &codexapi.APIError{Kind: codexapi.ErrorUsageNotIncluded, Message: message}
 	case "cyber_policy":
 		return &codexapi.APIError{Kind: codexapi.ErrorCyberPolicy, Message: message}
+	case "misalignment_policy_violation":
+		if strings.TrimSpace(message) == "" {
+			message = "This request was blocked due to a misalignment policy violation."
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: http.StatusBadRequest, Message: message}
 	case "invalid_prompt", "bio_policy":
 		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Message: message}
 	case "server_is_overloaded", "slow_down":

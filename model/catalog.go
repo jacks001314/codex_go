@@ -61,12 +61,30 @@ type ModelMessages struct {
 	PersonalityFriendly  string                     `json:"-"`
 	PersonalityPragmatic string                     `json:"-"`
 	CollaborationModes   *CollaborationModeMessages `json:"collaboration_modes,omitempty"`
+	MultiAgent           *MultiAgentMessages        `json:"multi_agent,omitempty"`
 	TokenBudget          *ModelTokenBudgetConfig    `json:"token_budget,omitempty"`
 }
 
 type CollaborationModeMessages struct {
 	Default *string `json:"default"`
 	Plan    *string `json:"plan"`
+}
+
+// MultiAgentMessages mirrors Rust MultiAgentMessages: model-catalog messages
+// for multi-agent roles and delegation modes (#38619).
+type MultiAgentMessages struct {
+	Role *MultiAgentRoleMessages `json:"role,omitempty"`
+	Mode *MultiAgentModeMessages `json:"mode,omitempty"`
+}
+
+type MultiAgentRoleMessages struct {
+	Root     *string `json:"root,omitempty"`
+	Subagent *string `json:"subagent,omitempty"`
+}
+
+type MultiAgentModeMessages struct {
+	Explicit *string `json:"explicit,omitempty"`
+	HintText *string `json:"hint_text,omitempty"`
 }
 
 // ModelTokenBudgetConfig contains model-owned defaults for the context-window
@@ -84,6 +102,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 		InstructionsTemplate  string                     `json:"instructions_template"`
 		InstructionsVariables map[string]string          `json:"instructions_variables"`
 		CollaborationModes    *CollaborationModeMessages `json:"collaboration_modes"`
+		MultiAgent            *MultiAgentMessages        `json:"multi_agent"`
 		TokenBudget           *ModelTokenBudgetConfig    `json:"token_budget"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -91,6 +110,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	}
 	m.InstructionsTemplate = raw.InstructionsTemplate
 	m.CollaborationModes = raw.CollaborationModes
+	m.MultiAgent = raw.MultiAgent
 	m.TokenBudget = raw.TokenBudget
 	if raw.InstructionsVariables != nil {
 		m.PersonalityDefault = raw.InstructionsVariables["personality_default"]
@@ -933,6 +953,9 @@ func setInstructionsTemplate(model *ModelInfo, template string) {
 	messages.PersonalityDefault = ""
 	messages.PersonalityFriendly = ""
 	messages.PersonalityPragmatic = ""
+	// Rust #38619: a base-instructions override replaces the message set, so
+	// catalog-provided multi-agent role/mode messages are cleared too.
+	messages.MultiAgent = nil
 }
 
 // clearInstructionVariables removes the personality instruction source while

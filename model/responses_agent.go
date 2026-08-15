@@ -1958,6 +1958,16 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 	if err := json.Unmarshal(body, &payload); err == nil && payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
 		message = strings.TrimSpace(payload.Error.Message)
 	}
+	// Rust #38682: misalignment policy violations from HTTP 400/403 responses
+	// surface as a typed, non-retryable error.
+	if (statusCode == http.StatusBadRequest || statusCode == http.StatusForbidden) &&
+		payload.Error != nil &&
+		responseErrorCode(payload.Error) == "misalignment_policy_violation" {
+		if strings.TrimSpace(message) == "" {
+			message = "This request was blocked due to a misalignment policy violation."
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: statusCode, Message: message}
+	}
 	if message == "" {
 		message = http.StatusText(statusCode)
 	}
