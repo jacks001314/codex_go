@@ -7,6 +7,14 @@ import (
 
 // Rust parity: codex-rs/tui/src/bottom_pane/custom_prompt_view.rs.
 
+// NormalizePastedText mirrors Rust #38704: pasted text may contain CRLF pairs
+// or bare CRs (e.g., iTerm2), but the composer expects LF. Normalize CRLF
+// pairs before bare CRs so each pasted line break becomes one LF and existing
+// LFs stay unchanged.
+func NormalizePastedText(pasted string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(pasted, "\r\n", "\n"), "\r", "\n")
+}
+
 type CustomPromptCompletion string
 
 const (
@@ -92,6 +100,9 @@ func (v *CustomPromptView) HandlePaste(pasted string) bool {
 	if v == nil || pasted == "" || v.IsComplete() {
 		return false
 	}
+	// Rust #38704: CRLF pairs and bare CRs normalize to LF so each pasted
+	// line break becomes a single newline.
+	pasted = NormalizePastedText(pasted)
 	v.InsertString(pasted)
 	v.pasteBurst.ClearAfterExplicitPaste()
 	return true

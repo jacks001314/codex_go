@@ -25,6 +25,10 @@ type HookDiscoveryService struct {
 	States            map[string]*HookState
 	BypassTrust       bool
 	PluginHookSources []plugin.HookSource
+	// McpToolHooksEnabled lists mcp_tool hooks instead of warning that MCP
+	// invocation is not available yet (Rust hooks engine #38705). The runner
+	// executes them only when a McpToolHookExecutor is configured.
+	McpToolHooksEnabled bool
 }
 
 func NewHookDiscoveryService(codexHome string) *HookDiscoveryService {
@@ -198,17 +202,19 @@ func (s *HookDiscoveryService) appendUserHooks(entry *HookListEntry) {
 	}
 	configPath := filepath.Join(s.CodexHome, "config.toml")
 	appendHooksTOML(entry, &hookDiscoverySource{
-		Path:      configPath,
-		KeySource: configPath,
-		Source:    HookSourceUser,
-		States:    s.States,
+		Path:                configPath,
+		KeySource:           configPath,
+		Source:              HookSourceUser,
+		States:              s.States,
+		McpToolHooksEnabled: s.McpToolHooksEnabled,
 	})
 	sourcePath := filepath.Join(s.CodexHome, "hooks.json")
 	appendHooksJSON(entry, &hookDiscoverySource{
-		Path:      sourcePath,
-		KeySource: "file:" + sourcePath,
-		Source:    HookSourceUser,
-		States:    s.States,
+		Path:                sourcePath,
+		KeySource:           "file:" + sourcePath,
+		Source:              HookSourceUser,
+		States:              s.States,
+		McpToolHooksEnabled: s.McpToolHooksEnabled,
 	})
 }
 
@@ -216,19 +222,21 @@ func (s *HookDiscoveryService) appendProjectHooks(entry *HookListEntry, cwd stri
 	for _, folder := range s.projectHookFolders(cwd) {
 		configPath := filepath.Join(folder, "config.toml")
 		appendHooksTOML(entry, &hookDiscoverySource{
-			Path:        configPath,
-			KeySource:   configPath,
-			Source:      HookSourceProject,
-			States:      s.States,
-			BypassTrust: s != nil && s.BypassTrust,
+			Path:                configPath,
+			KeySource:           configPath,
+			Source:              HookSourceProject,
+			States:              s.States,
+			BypassTrust:         s != nil && s.BypassTrust,
+			McpToolHooksEnabled: s.McpToolHooksEnabled,
 		})
 		sourcePath := filepath.Join(folder, "hooks.json")
 		appendHooksJSON(entry, &hookDiscoverySource{
-			Path:        sourcePath,
-			KeySource:   "file:" + sourcePath,
-			Source:      HookSourceProject,
-			States:      s.States,
-			BypassTrust: s != nil && s.BypassTrust,
+			Path:                sourcePath,
+			KeySource:           "file:" + sourcePath,
+			Source:              HookSourceProject,
+			States:              s.States,
+			BypassTrust:         s != nil && s.BypassTrust,
+			McpToolHooksEnabled: s.McpToolHooksEnabled,
 		})
 	}
 }
@@ -281,6 +289,9 @@ type hookDiscoverySource struct {
 	BypassTrust bool
 	PluginID    *string
 	Env         map[string]string
+	// McpToolHooksEnabled lists mcp_tool handlers instead of warning that MCP
+	// invocation is not available yet.
+	McpToolHooksEnabled bool
 }
 
 func (s *hookDiscoverySource) State(key string) *HookState {
@@ -310,12 +321,13 @@ func (s *HookDiscoveryService) appendPluginHooks(entry *HookListEntry) {
 			pluginDataRoot = filepath.Join(pluginRoot, "data")
 		}
 		appendHooksJSONWithMessagePrefix(entry, &hookDiscoverySource{
-			Path:        sourcePath,
-			KeySource:   pluginID + ":" + filepath.ToSlash(relativePath),
-			Source:      HookSourcePlugin,
-			States:      s.States,
-			BypassTrust: s.BypassTrust,
-			PluginID:    &pluginID,
+			Path:                sourcePath,
+			KeySource:           pluginID + ":" + filepath.ToSlash(relativePath),
+			Source:              HookSourcePlugin,
+			States:              s.States,
+			BypassTrust:         s.BypassTrust,
+			PluginID:            &pluginID,
+			McpToolHooksEnabled: s.McpToolHooksEnabled,
 			Env: map[string]string{
 				"PLUGIN_ROOT":        pluginRoot,
 				"CLAUDE_PLUGIN_ROOT": pluginRoot,
@@ -384,13 +396,14 @@ func appendHooksTOML(entry *HookListEntry, source *hookDiscoverySource) {
 		return
 	}
 	normalized := &hookDiscoverySource{
-		Path:        sourcePath,
-		KeySource:   sourcePath,
-		Source:      source.Source,
-		States:      source.States,
-		BypassTrust: source.BypassTrust,
-		PluginID:    cloneString(source.PluginID),
-		Env:         cloneHookEnv(source.Env),
+		Path:                sourcePath,
+		KeySource:           sourcePath,
+		Source:              source.Source,
+		States:              source.States,
+		BypassTrust:         source.BypassTrust,
+		PluginID:            cloneString(source.PluginID),
+		Env:                 cloneHookEnv(source.Env),
+		McpToolHooksEnabled: source.McpToolHooksEnabled,
 	}
 	appendHookConfig(entry, normalized, file)
 }
@@ -430,13 +443,14 @@ func appendHooksJSONWithMessagePrefix(entry *HookListEntry, source *hookDiscover
 		return
 	}
 	normalized := &hookDiscoverySource{
-		Path:        sourcePath,
-		KeySource:   firstNonEmptyHookString(source.KeySource, "file:"+sourcePath),
-		Source:      source.Source,
-		States:      source.States,
-		BypassTrust: source.BypassTrust,
-		PluginID:    cloneString(source.PluginID),
-		Env:         cloneHookEnv(source.Env),
+		Path:                sourcePath,
+		KeySource:           firstNonEmptyHookString(source.KeySource, "file:"+sourcePath),
+		Source:              source.Source,
+		States:              source.States,
+		BypassTrust:         source.BypassTrust,
+		PluginID:            cloneString(source.PluginID),
+		Env:                 cloneHookEnv(source.Env),
+		McpToolHooksEnabled: source.McpToolHooksEnabled,
 	}
 	appendHookConfig(entry, normalized, file)
 }
@@ -811,7 +825,49 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 		case HookHandlerAgent:
 			entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping agent hook in %s: agent hooks are not supported yet", source.Path))
 		case HookHandlerMCPTool:
-			entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping MCP tool hook in %s: MCP tool hooks are not supported yet", source.Path))
+			server := strings.TrimSpace(handler.Server)
+			toolName := strings.TrimSpace(handler.Tool)
+			if source == nil || !source.McpToolHooksEnabled {
+				entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping MCP tool hook in %s: MCP invocation is not available yet", source.Path))
+				continue
+			}
+			if server == "" || toolName == "" {
+				entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping MCP tool hook in %s: server and tool are required", source.Path))
+				continue
+			}
+			if event == HookEventSessionEnd {
+				entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping MCP tool hook in %s: MCP tool hooks are not supported for SessionEnd", source.Path))
+				continue
+			}
+			timeoutSec := handler.timeoutSec()
+			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
+			inputTemplate := cloneHookInput(handler.Input)
+			currentHash := hookDiscoveryHashHandler(event, matcher, HookHandlerMCPTool, "", server, toolName, inputTemplate, timeoutSec, handler.statusMessage())
+			state := source.State(key)
+			metadata := HookMetadata{
+				Key:           key,
+				EventName:     event,
+				HandlerType:   HookHandlerMCPTool,
+				ExecutionMode: HookExecutionSync,
+				Matcher:       cloneString(matcher),
+				Server:        &server,
+				Tool:          &toolName,
+				Input:         inputTemplate,
+				TimeoutSec:    timeoutSec,
+				StatusMessage: handler.statusMessage(),
+				SourcePath:    source.Path,
+				Source:        source.Source,
+				PluginID:      cloneString(source.PluginID),
+				DisplayOrder:  displayOrder,
+				Enabled:       hookEnabled(false, state),
+				IsManaged:     false,
+				CurrentHash:   currentHash,
+				TrustStatus:   hookTrustStatus(false, currentHash, hookTrustedHash(false, state)),
+				BypassTrust:   source.BypassTrust,
+				Env:           cloneHookEnv(source.Env),
+			}
+			entry.Hooks = append(entry.Hooks, metadata)
+			displayOrder++
 		default:
 			entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping unsupported hook handler %q in %s", handler.Type, source.Path))
 		}
@@ -1023,11 +1079,24 @@ func normalizedHookMatcher(event HookEventName, matcher *string) *string {
 }
 
 func hookDiscoveryHash(event HookEventName, matcher *string, command string, timeoutSec int64, statusMessage *string) string {
+	return hookDiscoveryHashHandler(event, matcher, HookHandlerCommand, command, "", "", nil, timeoutSec, statusMessage)
+}
+
+func hookDiscoveryHashHandler(event HookEventName, matcher *string, handlerType HookHandlerType, command string, server string, tool string, input map[string]any, timeoutSec int64, statusMessage *string) string {
 	handler := map[string]any{
-		"type":    string(HookHandlerCommand),
-		"command": command,
+		"type":    string(handlerType),
 		"timeout": timeoutSec,
 		"async":   false,
+	}
+	switch handlerType {
+	case HookHandlerCommand:
+		handler["command"] = command
+	case HookHandlerMCPTool:
+		handler["server"] = server
+		handler["tool"] = tool
+		if len(input) > 0 {
+			handler["input"] = input
+		}
 	}
 	if statusMessage != nil {
 		handler["statusMessage"] = *statusMessage
@@ -1041,10 +1110,36 @@ func hookDiscoveryHash(event HookEventName, matcher *string, command string, tim
 	}
 	data, err := json.Marshal(identity)
 	if err != nil {
-		data = []byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", hookEventKeyLabel(event), ptrStringValue(matcher), command, timeoutSec))
+		data = []byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%d", hookEventKeyLabel(event), string(handlerType), ptrStringValue(matcher), command, server, timeoutSec))
 	}
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func cloneHookInput(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		out[key] = cloneHookInputValue(value)
+	}
+	return out
+}
+
+func cloneHookInputValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneHookInput(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i := range typed {
+			out[i] = cloneHookInputValue(typed[i])
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func hookEnabled(isManaged bool, state *HookState) bool {

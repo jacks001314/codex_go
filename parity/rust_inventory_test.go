@@ -235,7 +235,6 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"shell",
 		"skillprovider",
 		"state",
-		"static",
 		"systemskills",
 		"telemetry",
 		"tool",

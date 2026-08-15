@@ -186,10 +186,11 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 			responsesDiagnostic("sampling.completed", map[string]any{"thread_id": request.ThreadID, "turn_id": request.TurnID, "stream_attempt": attempt + 1, "response_id": response.ResponseID})
 			return response, nil
 		}
-		// Rust 5a0d0929e2: connection failures get an unbounded reconnect
-		// window (5-60s exponential) that does not consume the bounded stream
-		// retry budget, for regular sampling on non-Bedrock providers.
-		if isResponsesConnectionFailure(err) && !r.providerIsAmazonBedrock() {
+		// Rust 5a0d0929e2 + da898490fc (#38601): connection failures get an
+		// unbounded reconnect window (5-60s exponential) that does not consume
+		// the bounded stream retry budget, for regular sampling on non-Bedrock
+		// providers while the unbounded_connection_retries feature is enabled.
+		if r.unboundedConnectionRetriesEnabled() && isResponsesConnectionFailure(err) && !r.providerIsAmazonBedrock() {
 			connectionRetries++
 			responsesDiagnostic("sampling.connection_retry", map[string]any{"thread_id": request.ThreadID, "turn_id": request.TurnID, "delay_ms": connectionRetryDelay.Milliseconds()})
 			recordResponsesRetry("sampling", connectionRetries, connectionRetryDelay, "stream")
@@ -283,6 +284,16 @@ func isTLSCertificateError(err error) bool {
 
 func (r *ResponsesAgentRunner) providerIsAmazonBedrock() bool {
 	return r != nil && r.Provider != nil && strings.EqualFold(r.Provider.Name, AmazonBedrockProviderName)
+}
+
+// unboundedConnectionRetriesEnabled reports whether connection failures may
+// keep sampling alive with the unbounded reconnect window. nil (unset) means
+// the stable feature default: enabled.
+func (r *ResponsesAgentRunner) unboundedConnectionRetriesEnabled() bool {
+	if r == nil || r.UnboundedConnectionRetries == nil {
+		return true
+	}
+	return *r.UnboundedConnectionRetries
 }
 
 func responsesStreamErrorHTTPStatus(err error) *uint16 {

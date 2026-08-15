@@ -571,24 +571,34 @@ func (r *Recorder) AppendThreadSettingsApplied(approvalPolicy string, now time.T
 	return r.AppendLine(Line{Type: "event_msg", Timestamp: now.UTC().Format(time.RFC3339Nano), Payload: payload})
 }
 
-// AppendSecurityRiskScore persists a durable thread-owned security risk
-// classifier score. These records are rollout-only and must not enter
-// user-visible thread projections.
-func (r *Recorder) AppendSecurityRiskScore(category string, score float64, now time.Time) error {
+// AppendSecurityRiskScore persists a durable thread-owned snapshot of
+// security risk classifier scores (Rust #38567). These records are
+// rollout-only and must not enter user-visible thread projections. Scores are
+// validated to [0,1] before the whole snapshot is stored.
+func (r *Recorder) AppendSecurityRiskScore(scores map[string]float64, now time.Time) error {
 	if r == nil {
 		return errors.New("recorder is nil")
 	}
-	category = strings.TrimSpace(category)
-	if category == "" {
-		return errors.New("security risk category is required")
+	if len(scores) == 0 {
+		return errors.New("security risk scores are required")
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	normalized := make(map[string]float64, len(scores))
+	for category, score := range scores {
+		category = strings.TrimSpace(category)
+		if category == "" {
+			return errors.New("security risk category is required")
+		}
+		if score < 0 || score > 1 {
+			return fmt.Errorf("invalid security risk score for %s: %v", category, score)
+		}
+		normalized[category] = score
+	}
 	payload, err := json.Marshal(struct {
-		Category string  `json:"category"`
-		Score    float64 `json:"score"`
-	}{Category: category, Score: score})
+		Scores map[string]float64 `json:"scores"`
+	}{Scores: normalized})
 	if err != nil {
 		return err
 	}

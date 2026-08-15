@@ -128,8 +128,9 @@ func TestRenderExplicitPluginInstructions(t *testing.T) {
 	for _, want := range []string{
 		"Capabilities from the `Docs` plugin:",
 		"prefixed with `Docs:`",
+		"tool_search",
+		"Apps from this plugin available in this session: `Docs App`.",
 		"`docs-mcp`",
-		"`Docs App`",
 		"Use these plugin-associated capabilities",
 	} {
 		if !strings.Contains(text, want) {

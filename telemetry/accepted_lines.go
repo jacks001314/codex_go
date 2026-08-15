@@ -53,13 +53,14 @@ type AcceptedLineFingerprintsEventParams struct {
 	LineFingerprints     []AcceptedLineFingerprint `json:"line_fingerprints"`
 }
 
+// AcceptedLineFingerprintsFromUnifiedDiff counts accepted added/deleted lines
+// without generating per-line fingerprints (Rust #38473). The payload keeps a
+// statically empty line_fingerprints field for schema compatibility.
 func AcceptedLineFingerprintsFromUnifiedDiff(diff string) AcceptedLineFingerprintSummary {
-	var currentPath string
 	inHunk := false
 	var summary AcceptedLineFingerprintSummary
 	for _, line := range strings.Split(strings.ReplaceAll(diff, "\r\n", "\n"), "\n") {
 		if strings.HasPrefix(line, "diff --git ") {
-			currentPath = ""
 			inHunk = false
 			continue
 		}
@@ -67,23 +68,11 @@ func AcceptedLineFingerprintsFromUnifiedDiff(diff string) AcceptedLineFingerprin
 			inHunk = true
 			continue
 		}
-		if !inHunk && strings.HasPrefix(line, "+++ ") {
-			currentPath = NormalizeDiffPath(strings.TrimPrefix(line, "+++ "))
-			continue
-		}
-		if !inHunk && strings.HasPrefix(line, "--- ") {
+		if !inHunk && (strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "--- ")) {
 			continue
 		}
 		if strings.HasPrefix(line, "+") {
 			summary.AcceptedAddedLines++
-			if currentPath != "" {
-				if normalized, ok := NormalizeEffectiveLine(strings.TrimPrefix(line, "+")); ok {
-					summary.LineFingerprints = append(summary.LineFingerprints, AcceptedLineFingerprint{
-						PathHash: FingerprintHash("path", currentPath),
-						LineHash: FingerprintHash("line", normalized),
-					})
-				}
-			}
 			continue
 		}
 		if strings.HasPrefix(line, "-") {
@@ -125,27 +114,4 @@ func FingerprintHash(domain string, value string) string {
 	hasher.Write([]byte("\x00"))
 	hasher.Write([]byte(value))
 	return fmt.Sprintf("%x", hasher.Sum(nil))
-}
-
-func NormalizeDiffPath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "/dev/null" {
-		return ""
-	}
-	path = strings.TrimPrefix(path, "a/")
-	path = strings.TrimPrefix(path, "b/")
-	return path
-}
-
-func NormalizeEffectiveLine(line string) (string, bool) {
-	normalized := strings.Join(strings.Fields(line), " ")
-	if len(normalized) <= 3 {
-		return "", false
-	}
-	for _, ch := range normalized {
-		if ch == '_' || ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' {
-			return normalized, true
-		}
-	}
-	return "", false
 }

@@ -1,731 +1,919 @@
 {
-  "schemaVersion": 1,
-  "rustFromExclusive": "e766f75989",
-  "rustToInclusive": "c6dee5f49f9d4763cb498904d9bf0d0fd0c4586b",
-  "commits": [
-    {
-      "sha": "5104cb649e653d8ea828db547fd04cbd004d32fb",
-      "subject": "Support gRPC code-mode hosts in app server (#38288)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./appserver -run TestDefaultRuntimeRouterSelectsCodeModeProviderByURL"
-      ]
-    },
-    {
-      "sha": "8d637ae3980fdae79044e638c93c7e579de3c62e",
-      "subject": "Remove unused apply_patch prompt fallback (#38291)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: no apply_patch prompt fallback in Go"
-      ]
-    },
-    {
-      "sha": "b1373b74a27d1d9b65074a873202683355cae772",
-      "subject": "Add durable reverts for paginated threads (#38292)",
-      "kind": "persistence",
-      "domains": [
-        "thread-store"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./session -run TestStoreRevertTruncatesPaginatedHistoryBeforeTurn"
-      ]
-    },
-    {
-      "sha": "357696c5e7127525a9259d3dcfa0574516b1fe84",
-      "subject": "Route network access through the shared approval pipeline (#38299)",
-      "kind": "runtime",
-      "domains": [
-        "network",
-        "approvals"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./appserver -run TestManagedNetworkProxyRoutesAllowlistMissThroughAppServerApprovalLikeRust",
-        "go test ./appserver -run TestNetworkApprovalPolicyAmendmentPersistsAndOverlaysStartupLikeRust",
-        "go test ./appserver -run TestRemoteGuardianNetworkDecisionsAreScopedPerRequestAndEnvironmentLikeRust"
-      ]
-    },
-    {
-      "sha": "363427b5e3fe1b6d7499e6bc47651f62a5a3b1d2",
-      "subject": "Add interrupted turn recovery (#38303)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust core API recover_turn_if_idle with no app-server consumer; Go resumes interrupted turns via thread/resume + steer (no start-if-idle submission loop)"
-      ]
-    },
-    {
-      "sha": "902bd9e06b3ecb32cbf7f8e64cd23b956be3e7fe",
-      "subject": "Protect inline visualization viewers from sandbox writes (#38306)",
-      "kind": "security",
-      "domains": [
-        "sandbox"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./tui -run TestRewriteInlineVisualizationsMaterializesViewerInDedicatedCache",
-        "go test ./tui -run TestRewriteInlineVisualizationsDisablesViewers"
-      ]
-    },
-    {
-      "sha": "e0de12a126f2beb10599a18fd4ca6b08f6e0a1a0",
-      "subject": "Make gRPC code-mode yield tests deterministic (#38321)",
-      "kind": "test",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust test-only determinism"
-      ]
-    },
-    {
-      "sha": "fe614a6304ef804be74a622e482fdd75977abcba",
-      "subject": "Add Guardian V2 extension scaffold (#38336)",
-      "kind": "runtime",
-      "domains": [
-        "guardian"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust extension crate scaffold"
-      ]
-    },
-    {
-      "sha": "c30a3e49c9231361abeaa88d4a57bb7c3e248a50",
-      "subject": "Support sandboxed file streaming in exec-server (#38356)",
-      "kind": "security",
-      "domains": [
-        "sandbox",
-        "exec-server"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./execserver -run TestEnvironmentCapabilitiesSandboxedFileStreamingWire",
-        "go test ./execserver -run TestClientFileReadStreamClosesExactBoundaryAndReleasesCapacityLikeRust"
-      ]
-    },
-    {
-      "sha": "80ceab7aaa25068aee26a52353c0d63039c93b29",
-      "subject": "Optimize orphan output normalization (#38358)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "equivalent existing Go orphan output normalization"
-      ]
-    },
-    {
-      "sha": "4ca1af77a561a8908451ae755d8f2b119ca7c434",
-      "subject": "Test hook rejection for explicitly started queue items (#38361)",
-      "kind": "test",
-      "domains": [
-        "thread-queue"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust test-only"
-      ]
-    },
-    {
-      "sha": "9ed0047a610aa8e4413dfb456fbf40d7b2f38644",
-      "subject": "Stabilize exec-server byte-budget tests (#38362)",
-      "kind": "test",
-      "domains": [
-        "exec-server"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust test-only"
-      ]
-    },
-    {
-      "sha": "72fa74fbc9c4b72d513304bfa0eda427d2402ed9",
-      "subject": "Persist security risk scores in rollout history (#38363)",
-      "kind": "persistence",
-      "domains": [
-        "rollout"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./rollout -run TestSecurityRiskScorePersistsAndLoadsLikeRust"
-      ]
-    },
-    {
-      "sha": "a7b8c074b577f897111c14de3a5e127b91e2a479",
-      "subject": "Add the Guardian V2 Luna sampler (#38368)",
-      "kind": "runtime",
-      "domains": [
-        "guardian"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust extension sampler"
-      ]
-    },
-    {
-      "sha": "a7e9fb54800fc784a5039dc461ac68011abed05d",
-      "subject": "Constrain Guardian reviews to parent filesystem permissions (#38377)",
-      "kind": "security",
-      "domains": [
-        "guardian"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./sandbox -run TestPermissionProfileIntersectWithReadOnly",
-        "go test ./appserver -run TestModelGuardianReviewerSetsPermissionProfile",
-        "Go Guardian review is a text-only assessment (no exec/view tools), so it cannot read denied paths or write files; IntersectWithReadOnly + profile wiring cover the constraint surface"
-      ]
-    },
-    {
-      "sha": "d09cf7e5f431bf3c331e78f5a4f7ae2913b4fbd6",
-      "subject": "Preserve user message styling when wrapping long URLs (#38380)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./tui/history_cell -run TestUserPromptLongURLWrapsPreservingGutterAndBackground"
-      ]
-    },
-    {
-      "sha": "6fc6b9d6d2580d62622fc9884b5f5707f6505a5e",
-      "subject": "Prevent unread events from blocking in-process requests (#38381)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Go app-server client request/response is synchronous (no bounded worker/event queue); Rust app-server-client facade architecture absent"
-      ]
-    },
-    {
-      "sha": "911012490ca9b6529dfaf14b0396363dce981169",
-      "subject": "Return Luna samples when streamed JSON completes (#38383)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust extension"
-      ]
-    },
-    {
-      "sha": "5e32f728f1f86a967c6be057351f12505778df8f",
-      "subject": "Refine skill creation guidance and validation (#38384)",
-      "kind": "runtime",
-      "domains": [
-        "skills"
-      ],
-      "status": "complete",
-      "evidence": [
-        "systemskills assets synced from Rust skill-creator"
-      ]
-    },
-    {
-      "sha": "683716cee9585969ad265eeb08358b24fb93a583",
-      "subject": "Use effective permissions when trusting app-server projects (#38390)",
-      "kind": "security",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./appserver -run TestThreadStartEffectivePermissionsTrustProject"
-      ]
-    },
-    {
-      "sha": "ef596c68ca35dcd42283a0014f9b7fb057147269",
-      "subject": "Reject sessions with unloadable required managed hooks (#38394)",
-      "kind": "security",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./appserver -run TestThreadStartRejectsUnloadableRequiredManagedHooks"
-      ]
-    },
-    {
-      "sha": "779e9114ae63cad0f6d4f1f792463bd6135b7096",
-      "subject": "Reap orphaned processes in Linux sandboxes (#38396)",
-      "kind": "security",
-      "domains": [
-        "sandbox"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust codex-linux-sandbox bwrap launcher; Go uses --die-with-parent strategy"
-      ]
-    },
-    {
-      "sha": "053dda6b897887c0bbd8efa5d4952a4380dbb5e4",
-      "subject": "Include Node REPL results in Guardian reviews (#38397)",
-      "kind": "runtime",
-      "domains": [
-        "guardian"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./context -run TestNodeReplReviewEvidence",
-        "go test ./state -run TestBuildPromptIncludesNodeReplReviewEvidence",
-        "go test ./appserver -run TestNodeRepl"
-      ]
-    },
-    {
-      "sha": "2bd8727a0c07655fafeae0e4b6fe4c2b4741b399",
-      "subject": "Preserve floating-point values when decoding rollout lines (#38399)",
-      "kind": "persistence",
-      "domains": [
-        "rollout"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./rollout -run TestLoadPreservesFloatingPointRolloutValues"
-      ]
-    },
-    {
-      "sha": "6851fae57cf7306e1d7a093d334b1116d33ce5ad",
-      "subject": "Refresh tracing interest in the token estimate test (#38400)",
-      "kind": "test",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust test-only"
-      ]
-    },
-    {
-      "sha": "a70211249ab5d003836a2bb339f69265df84512c",
-      "subject": "Expose conversation history to tool lifecycle extensions (#38403)",
-      "kind": "persistence",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: no Go tool lifecycle extension API"
-      ]
-    },
-    {
-      "sha": "66919805ea080053d1933b6b43afeb0d8bf70c91",
-      "subject": "Pool Guardian sampling WebSocket connections (#38406)",
-      "kind": "runtime",
-      "domains": [
-        "guardian"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust extension pool"
-      ]
-    },
-    {
-      "sha": "d167a3604c404e4ee4bc5b5d0b7923e24e0f54f8",
-      "subject": "Classify tool calls in the Guardian V2 extension (#38409)",
-      "kind": "runtime",
-      "domains": [
-        "guardian"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust extension"
-      ]
-    },
-    {
-      "sha": "42bb50d5027fbad3431bdd56667bbee30700aad5",
-      "subject": "Allow metadata updates without materializing threads (#38413)",
-      "kind": "persistence",
-      "domains": [
-        "thread-store"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./session -run TestStoreUpdateMetadataNoOpReturnsMaterializedThread"
-      ]
-    },
-    {
-      "sha": "73862481e52c1d4f610d127663fad564c0652742",
-      "subject": "Add bounded transcript rendering for Guardian v2 (#38414)",
-      "kind": "runtime",
-      "domains": [
-        "guardian"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust extension"
-      ]
-    },
-    {
-      "sha": "2aba3219e605051bbeca4eb6b1a1f3dce404cfd3",
-      "subject": "Recognize PowerShell `Get-Content` file reads (#38415)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./shell -run TestReadPathsRecognizesPowerShellGetContentForms"
-      ]
-    },
-    {
-      "sha": "4f7032173e574c443a9abf6515382d754295bb24",
-      "subject": "Honor filesystem permissions for app file uploads (#38416)",
-      "kind": "security",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./mcp -run TestRewriteArgumentsRejectsDeniedReadPolicyBeforeUpload",
-        "go test ./mcp -run TestRewriteArgumentsGrantsReadOverrideDeniedPath",
-        "go test ./appserver -run TestEnvironmentOpenAIFileSystemRejectsUnsupportedSandboxedFileStreaming"
-      ]
-    },
-    {
-      "sha": "f8a3db0b996c52a248c1dcfc3a9dc507e840ced0",
-      "subject": "Clarify MCP OAuth reauthentication errors (#38418)",
-      "kind": "security",
-      "domains": [
-        "mcp",
-        "auth"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./mcp -run TestMCPStatusSetsReauthenticationFailureReason",
-        "go test ./mcp -run TestMCPInitAuthErrorDisplayMatchesRust"
-      ]
-    },
-    {
-      "sha": "9946da9af1829410271f6b76f9159961f7281e0a",
-      "subject": "Apply Codex attribution to app-created commits (#38419)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust git-attribution prompt extension not present in Go"
-      ]
-    },
-    {
-      "sha": "588e18aae52bdb35fff94a7760b6b502cf0fd154",
-      "subject": "Recover capability discovery after executor disconnects (#38420)",
-      "kind": "security",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./execserver -run TestCapabilityDiscoveryCacheRetriesTransientFailuresAndCachesPermanent",
-        "go test ./execserver -run TestIsRetryableRecoveryError"
-      ]
-    },
-    {
-      "sha": "781445f7c6928eda08fe8dc160a6003d2f3a184b",
-      "subject": "Centralize thread environment selection state (#38423)",
-      "kind": "runtime",
-      "domains": [
-        "thread-store"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust session-internal ThreadEnvironments refactor, no behavioral change; Go centralizes environment selection in RuntimeRouter"
-      ]
-    },
-    {
-      "sha": "990218bbbd5cb4bb5aafd646c56461dfb2f95d17",
-      "subject": "Fail closed when workload identity initialization fails (#38424)",
-      "kind": "security",
-      "domains": [
-        "auth"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./auth -count=1; go test ./app -run TestMCPServerRejectsWorkloadIdentityLikeRust"
-      ]
-    },
-    {
-      "sha": "5ed321ce0029614c7277f671c12fb5ea7a30ea6a",
-      "subject": "Protect workload identity auth in app-server account RPCs (#38426)",
-      "kind": "security",
-      "domains": [
-        "auth"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./appserver -run TestAccountRPCsRejectWorkloadIdentityLikeRust"
-      ]
-    },
-    {
-      "sha": "507ef0b3715d2427326ac090d8818e8dcba5efc0",
-      "subject": "Add Guardian guidance for Node REPL tool calls (#38427)",
-      "kind": "runtime",
-      "domains": [
-        "guardian"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./state -run TestBuildPromptNodeReplGuidanceGatedOnModelMetadata"
-      ]
-    },
-    {
-      "sha": "f898ebcafdeb0052abc844d9e11b5e754b8ec4af",
-      "subject": "Route curated plugin catalogs by authentication mode (#38429)",
-      "kind": "security",
-      "domains": [
-        "plugins"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./plugin -run TestTargetCuratedMarketplaceForRuntime"
-      ]
-    },
-    {
-      "sha": "93327c852a1fd9347cacf8fce268d793e6503d1b",
-      "subject": "Gate Node REPL Guardian guidance on model metadata (#38432)",
-      "kind": "runtime",
-      "domains": [
-        "guardian",
-        "model"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./state -run TestBuildPromptNodeReplGuidanceGatedOnModelMetadata"
-      ]
-    },
-    {
-      "sha": "b87327f4e594759f1f1af76d151777d8676fb0cc",
-      "subject": "Add rustls fallback for local MCP HTTP requests (#38436)",
-      "kind": "security",
-      "domains": [
-        "mcp"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Go TLS backend differs from rustls"
-      ]
-    },
-    {
-      "sha": "1992f8c0183c6990c82649ef974913cb15a6eef5",
-      "subject": "Preserve approval policies for auto-reviewed models (#38439)",
-      "kind": "runtime",
-      "domains": [
-        "model",
-        "approvals"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./appserver -run TestTurnApprovalPolicyForTurnPreservesAutoReviewProtectedPolicyLikeRust"
-      ]
-    },
-    {
-      "sha": "4343b2bdc4e7eb95880a230e588bd07d9f181c2f",
-      "subject": "Add app-server support for reverting paginated threads (#38440)",
-      "kind": "persistence",
-      "domains": [
-        "thread-store"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./appserver -run TestRouterThreadRevertTruncatesPaginatedHistory",
-        "go test ./session -run TestStoreRevertTruncatesPaginatedHistoryBeforeTurn"
-      ]
-    },
-    {
-      "sha": "53eaa297e595fc98df0f33d4c63686a7014d7c9a",
-      "subject": "Give Guardian V2 full tool action context (#38441)",
-      "kind": "runtime",
-      "domains": [
-        "guardian"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust extension"
-      ]
-    },
-    {
-      "sha": "3ba52d6075bb69795d008d427139c28fdebdb436",
-      "subject": "Tag current time reminders in model context (#38443)",
-      "kind": "runtime",
-      "domains": [
-        "model",
-        "context"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./context -run TestCurrentTimeReminder"
-      ]
-    },
-    {
-      "sha": "bff03ecce582d55ff62d8ee37e576b63c24bc0a9",
-      "subject": "Retain client developer messages across context compaction (#38445)",
-      "kind": "runtime",
-      "domains": [
-        "compact"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./compact -run TestCompactRemotelyRetainsClientAuthoredDeveloperMessagesWhenEnabled"
-      ]
-    },
-    {
-      "sha": "6344a655a5966f92e009a74928fb0559b41f9093",
-      "subject": "Refresh current-time reminders for full-history subagents (#38446)",
-      "kind": "persistence",
-      "domains": [
-        "context"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./appserver -run TestRuntimeAgentControllerFullHistoryForkDropsInheritedCurrentTimeReminders"
-      ]
-    },
-    {
-      "sha": "ca83f7908ca3c0184d2b7062c7bf2a0cff2d659f",
-      "subject": "Add running-task exit choices to local daemon sessions (#38447)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./tui/tea -run TestModelCtrlCOpensRunningTaskExitMenuInDaemonSession",
-        "go test ./tui/tea -run TestModelCtrlCKeepsInterruptWithoutDaemonSession",
-        "go test ./tui/tea -run TestModelApplyRunningTaskExit"
-      ]
-    },
-    {
-      "sha": "1da59ad257115cc5734e6781d5ac0b4f08a6e064",
-      "subject": "Support per-server MCP OAuth callback ports (#38448)",
-      "kind": "security",
-      "domains": [
-        "mcp",
-        "auth"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./mcp -run TestRuntimeConfigOAuthCallbackPortParsesPerServerMatchesRust"
-      ]
-    },
-    {
-      "sha": "5cc65ecb9831917397b9728b708880132d0d58ce",
-      "subject": "Expose model upgrade retirement times (#38449)",
-      "kind": "runtime",
-      "domains": [
-        "model",
-        "context"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./model -run TestModelInfoUpgradeRetirementTimeParsingMatchesRust",
-        "go test ./model -run TestListModelsExposesUpgradeRetirementTimeLikeRust"
-      ]
-    },
-    {
-      "sha": "813dc5f08d771d351e1da7f00eace464ffe43263",
-      "subject": "Embed the Windows sandbox setup manifest in Bazel builds (#38450)",
-      "kind": "security",
-      "domains": [
-        "sandbox"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Bazel build-only"
-      ]
-    },
-    {
-      "sha": "1b4ea8b3bef397f26216411288eec7bf9bee33ac",
-      "subject": "Add structured telemetry for response retries (#38452)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./model -run TestRecordResponsesRetryEmitsRustShape"
-      ]
-    },
-    {
-      "sha": "4d9f3021c828facd6bc480036684484218e350b5",
-      "subject": "Include node_repl images in Guardian review evidence (#38454)",
-      "kind": "runtime",
-      "domains": [
-        "guardian"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./context -run TestNodeReplReviewEvidenceModeFor",
-        "go test ./context -run TestNodeReplReviewEvidenceMultimodalInputItems",
-        "go test ./appserver -run TestNodeReplReviewImageURLsFiltersAndNormalizes"
-      ]
-    },
-    {
-      "sha": "9341b38310c73957e1313eab3f7c4034689bdec9",
-      "subject": "Add experimental thread queue APIs to app server (#38456)",
-      "kind": "protocol",
-      "domains": [
-        "thread-store",
-        "thread-queue"
-      ],
-      "status": "complete",
-      "evidence": [
-        "go test ./session -run TestStoreQueueSubmissionCRUD",
-        "go test ./appserver -run TestRouterThreadQueueAddListUpdateDelete"
-      ]
-    },
-    {
-      "sha": "18bbb585e7672e574ca1365d13c9604dbc091df0",
-      "subject": "Add an `AbsolutePathBuf` conversion for `FileSystemPath` (#38460)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust type ergonomics"
-      ]
-    },
-    {
-      "sha": "535795f7d12495ee6ea18db3201d2f85c3606aef",
-      "subject": "Centralize turn environment selection state (#38461)",
-      "kind": "runtime",
-      "domains": [
-        "daily-sync"
-      ],
-      "status": "complete",
-      "evidence": [
-        "N/A: Rust internal TurnEnvironment field-collapse refactor, no behavioral change"
-      ]
-    },
-    {
-      "sha": "c6dee5f49f9d4763cb498904d9bf0d0fd0c4586b",
-      "subject": "Preserve thread subscriptions across revert reloads (#38463)",
-      "kind": "persistence",
-      "domains": [
-        "thread-store"
-      ],
-      "status": "complete",
-      "evidence": [
-        "Go thread/revert truncates in place without unloading/reloading, so thread subscriptions are preserved"
-      ]
-    }
-  ]
+    "schemaVersion":  1,
+    "rustFromExclusive":  "c6dee5f49f9d4763cb498904d9bf0d0fd0c4586b",
+    "rustToInclusive":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
+    "commits":  [
+                    {
+                        "sha":  "3711943d11a1c69a65afe98757814b6b5244fbaf",
+                        "subject":  "Parse model annotations from skill frontmatter (#38467)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "skills"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: Go skill parser batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "d5e256ceb210dacbab9d8dcc7eafda58f90f6e51",
+                        "subject":  "Add an Amazon Bedrock Runtime provider (#38470)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "model"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust model-provider crate; Go has no Bedrock runtime provider"
+                                     ]
+                    },
+                    {
+                        "sha":  "5c6f498b0e35058ddf0d3ba0959a0967c5b6495b",
+                        "subject":  "Stop generating accepted-line fingerprints (#38473)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "telemetry"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./telemetry -run AcceptedLine -count=1; fingerprints no longer generated, counts kept"
+                                     ]
+                    },
+                    {
+                        "sha":  "5620bab61cf3fc08cdcd4cf7461b0733252664d5",
+                        "subject":  "Add bounded skill model delegation instructions (#38475)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "skills"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: skills prompt batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "9d012ca4f54c5adc86e605a7bedbdd03ef63f516",
+                        "subject":  "Include agent names in turn metadata (#38483)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "model"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./turn -run AgentNameLikeRust -count=1; agent_name carried in turn metadata, reserved from client overrides"
+                                     ]
+                    },
+                    {
+                        "sha":  "cbe85e117b1db59cdbe8175c59793c3cf2a4a7b8",
+                        "subject":  "Search selected plugin apps before falling back (#38484)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "plugin"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./plugin -run RenderExplicitPluginInstructions -count=1; apps-first guidance with tool_search"
+                                     ]
+                    },
+                    {
+                        "sha":  "4e5a08feb63f79e407c86f69a78dc8c7ef115d88",
+                        "subject":  "Enforce strict auto-review for MCP tool calls (#38492)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "approvals"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: MCP approval path audit"
+                                     ]
+                    },
+                    {
+                        "sha":  "45c9c74e299ae92a75f3fb201d4294d99de31f2f",
+                        "subject":  "Reuse pending MCP startups during reconciliation (#38493)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "mcp"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "equivalent: Go mcp_runtime_coordinator reuses in-flight MCP startups"
+                                     ]
+                    },
+                    {
+                        "sha":  "636e505c5cd809bdce37314f77130ffb4e45c46b",
+                        "subject":  "Verify bundled bwrap in Bazel builds (#38494)",
+                        "kind":  "release",
+                        "domains":  [
+                                        "sandbox"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Bazel build-only"
+                                     ]
+                    },
+                    {
+                        "sha":  "86b1123ff6b5d089a146be4e603a324cf454223a",
+                        "subject":  "Enable parallel tool calls for all model prompts (#38499)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "model"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "equivalent: Go does not gate parallel tool calls on catalog fields"
+                                     ]
+                    },
+                    {
+                        "sha":  "fdbab67c669a3176b13d08ab49493f30a806d2ba",
+                        "subject":  "Carry environment config in turn selections (#38521)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "session"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: environment refactor batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "4eff3b788ba629acc944ed6db6502c362fc08e0a",
+                        "subject":  "Configure Guardian sampling for responses lite (#38527)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "8630bb3caecaff6abc6add450a88035d9f6d3f8c",
+                        "subject":  "Record Guardian V2 risk scores on threads (#38540)",
+                        "kind":  "persistence",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "a44f266a4a23ab2c1aef23c54ce86642559237ca",
+                        "subject":  "Initialize Guardian V2 samplers per thread (#38553)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "db5b4a4cfb2668330f0f600b4bbfc45e16f9d776",
+                        "subject":  "Preserve Guardian transcript boundaries in sampling input (#38555)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "486df09a003953549a8899e6a834e9d49b56fa73",
+                        "subject":  "Improve Guardian transcript context selection (#38558)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "3134ab65725d8af4309ca8bc27a6ca560c21ca04",
+                        "subject":  "Restrict filesystem helper sandbox access (#38561)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "sandbox"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: exec-server sandbox batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "08c48e37007683d366f648d4c40ec17ba5009e98",
+                        "subject":  "Reuse compatible parent compactions in Guardian V2 (#38564)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "aa905bb9625d777a2f64b20408e5ddedbf173395",
+                        "subject":  "Store security risk scores as a snapshot (#38567)",
+                        "kind":  "persistence",
+                        "domains":  [
+                                        "rollout"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./rollout -run SecurityRiskScore -count=1; scores stored as snapshot map"
+                                     ]
+                    },
+                    {
+                        "sha":  "d40dfcc3c727a97315bb34a43165c037b422282c",
+                        "subject":  "Run tool start callbacks after pre-tool hooks (#38568)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "hooks"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: tool lifecycle batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "1c4f42863c1f84eb5175a1a0cfffe84641a63df3",
+                        "subject":  "Require automatic review for high-risk Guardian v2 actions (#38569)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "42d842a91a9d77efbf7a164fc0dcd42637958031",
+                        "subject":  "Report thread storage changes after rollout migration (#38579)",
+                        "kind":  "persistence",
+                        "domains":  [
+                                        "rollout"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: migration reporting batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "2a452d7dc1f97e22e126fc3a111237a3e828de0c",
+                        "subject":  "Keep the latest Guardian risk score during concurrent sampling (#38580)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "7c194ff24b3aa0e3beaf03b526db2d0b4f708794",
+                        "subject":  "Honor cloud-managed requirements in feature listings (#38581)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "features"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: CLI features listing batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "5bc8da6d78fe32343dc51eaf73b96fd288ae0e87",
+                        "subject":  "Bound Guardian V2 tool actions before risk classification (#38586)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "23094236acac6fdc22f67a408ea8ccb8fac8e6e1",
+                        "subject":  "Let extensions resolve approval reviews before Guardian (#38592)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust extension API"
+                                     ]
+                    },
+                    {
+                        "sha":  "742edd6c16939185b424beb68c8eb46878b323a3",
+                        "subject":  "Prioritize new Guardian classifications under load (#38596)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "3360f4a909a920d2e534a63c508d98e91fe6655a",
+                        "subject":  "Install Guardian V2 in the app server (#38597)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "da898490fcc7e75661c367f6a441798a0ce0eb95",
+                        "subject":  "Make unbounded connection retries configurable (#38601)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "model"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./features ./model -run Unbounded -count=1; unbounded_connection_retries feature gates reconnect window"
+                                     ]
+                    },
+                    {
+                        "sha":  "588ee893241de551836bfd97e4964c22f601882b",
+                        "subject":  "Isolate Guardian reviewer sessions from parent extensions (#38602)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "1bb6384c1971579c74194a3cc832847480de470d",
+                        "subject":  "Avoid paginated resume requests for verified legacy rollouts (#38604)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI resume batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "3b3a91ccf0cb09fc8f713385d6eaae98e8919162",
+                        "subject":  "Fix resume transcript preview line selection (#38605)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI resume batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "a3cb1c14fbef105029b99f28951ee240ea4cadff",
+                        "subject":  "Allow larger gRPC code mode tool descriptions (#38606)",
+                        "kind":  "protocol",
+                        "domains":  [
+                                        "codemode"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "equivalent: Go gRPC frames already use ProtocolMaxFrameBytes"
+                                     ]
+                    },
+                    {
+                        "sha":  "c0d59bf6147c83d067e257e858b928f81820ab50",
+                        "subject":  "Fix the missing resume picker history mode import (#38608)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI resume batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "fb5aa093e0657c940e8ffd1dd055d22b92d67dfc",
+                        "subject":  "Support workload identity in remote exec-server auth (#38610)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "auth"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: auth/exec-server batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "f535950eaabebd5654a958fa8775202d08b078f5",
+                        "subject":  "Skip stale Guardian risk score persistence (#38612)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "0fce9332903d1d033ed71a488b81c44f90a7e47f",
+                        "subject":  "Remove the gRPC code-mode enabled tool limit (#38615)",
+                        "kind":  "protocol",
+                        "domains":  [
+                                        "codemode"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "equivalent: Go code-mode host imposes no enabled-tool cap"
+                                     ]
+                    },
+                    {
+                        "sha":  "fa595fbab80251310854366a9e57c1638e8377ba",
+                        "subject":  "Route escalated approval retries through Guardian (#38616)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "approvals"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: approvals batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "086396f7f60347b74c82784d5dfaf4fb2d3bda12",
+                        "subject":  "Prioritize global models in the Bedrock Runtime catalog (#38617)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "model"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Bedrock provider"
+                                     ]
+                    },
+                    {
+                        "sha":  "14a6813fa8223d40fa4ee2a222590a4bec7cf09d",
+                        "subject":  "Apply Guardian policies to v2 risk classification (#38618)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "395723b2385cf1314dcf27db4b01a221785109b0",
+                        "subject":  "Source multi-agent instructions from the model catalog (#38619)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "agent"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: multi-agent catalog batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "478215c5c184e4315e1f2f94cb825afcf96fcbc0",
+                        "subject":  "Preserve large gRPC code-mode tool errors (#38621)",
+                        "kind":  "protocol",
+                        "domains":  [
+                                        "codemode"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "equivalent: Go gRPC frames carry full tool errors"
+                                     ]
+                    },
+                    {
+                        "sha":  "42b5f05cef69491bc578901fb324b3c9a278b253",
+                        "subject":  "Preserve MCP namespace descriptions in the tool catalog cache (#38623)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "mcp"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./mcp -run NamespaceDescriptionPreserved -count=1; namespace descriptions preserved in publish path"
+                                     ]
+                    },
+                    {
+                        "sha":  "1426592fccd9ab78764a0dcce63b0190a95be04c",
+                        "subject":  "Open notes when accepting the request input Other option (#38624)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI request-input batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "d8d7ca73f80e992cade867970ceb264431cea33c",
+                        "subject":  "Enable unified exec by default on Windows (#38625)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "features"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./features ./appserver -count=1; unified_exec default enabled on all platforms"
+                                     ]
+                    },
+                    {
+                        "sha":  "baab1705c60089f919accc11608aa0df02f634f7",
+                        "subject":  "Make Guardian v2 risk classification configurable (#38628)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "guardian"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust Guardian V2 extension"
+                                     ]
+                    },
+                    {
+                        "sha":  "6595071e65c5f4037e578e059aa552434084b6da",
+                        "subject":  "Remove the gRPC code-mode open session limit (#38630)",
+                        "kind":  "protocol",
+                        "domains":  [
+                                        "codemode"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "equivalent: Go code-mode host imposes no session cap"
+                                     ]
+                    },
+                    {
+                        "sha":  "6bed213411d1250686cc162feb4324975c12158a",
+                        "subject":  "Add MCP protocol discovery metrics (#38634)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "mcp"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: Go has no codex_otel metrics substrate for MCP"
+                                     ]
+                    },
+                    {
+                        "sha":  "ccee70f81379374028265be41f95f15d9d254ce9",
+                        "subject":  "Remove repository-local Codex skills (#38635)",
+                        "kind":  "release",
+                        "domains":  [
+                                        "skills"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Go repo has no vendored repo-local skills"
+                                     ]
+                    },
+                    {
+                        "sha":  "7e65e4f3303881ee8b042128996f159fa5b3f128",
+                        "subject":  "Render the initial TUI session header before input (#38639)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI startup batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "58d2daba45dd6d37b8c151ca0c57a54a5b8ce297",
+                        "subject":  "Harden TUI startup input handling (#38641)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI startup batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "a0bed4be2112683b3001ba2c0dd16326ab83c1ba",
+                        "subject":  "Keep the composer editable during TUI startup (#38642)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI startup batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "6d97d4c10230ee5af00ce323af26a489228743ba",
+                        "subject":  "Delay the startup composer until first-login onboarding (#38643)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI startup batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "efa97f9bc6814d6549fca8997678a10ef0111a04",
+                        "subject":  "Show onboarding when Codex home lacks authentication state (#38644)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI startup batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "fe556c4b6cbce64f508037f8ea2b9b071b0172bd",
+                        "subject":  "Deliver gRPC code-mode notifications without truncation (#38645)",
+                        "kind":  "protocol",
+                        "domains":  [
+                                        "codemode"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "equivalent: Go gRPC frames carry full notifications"
+                                     ]
+                    },
+                    {
+                        "sha":  "cce33123a11449771504e9cbc4bf533f64721e1d",
+                        "subject":  "Read Apple notarization issuer ID from Key Vault (#38646)",
+                        "kind":  "release",
+                        "domains":  [
+                                        "release"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: macOS release tooling"
+                                     ]
+                    },
+                    {
+                        "sha":  "b8aa9e9a01e4ab11c15eb6ed935e1927ca64d243",
+                        "subject":  "Add an override to skip project configuration (#38647)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "config"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./config -run IgnoreProjectConfig -count=1; loader override skips project layers"
+                                     ]
+                    },
+                    {
+                        "sha":  "aa1b81e46fa3e5325421fe833ac391043b704fb8",
+                        "subject":  "Reuse the TUI startup account response during bootstrap (#38649)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI startup batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "ff6e7c77a3f4c6bfa39fd780e8fe02e3004f404b",
+                        "subject":  "Canonicalize default namespaces in gRPC subscription filters (#38650)",
+                        "kind":  "protocol",
+                        "domains":  [
+                                        "codemode"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "equivalent: Go gRPC subscription routing canonicalizes namespaces"
+                                     ]
+                    },
+                    {
+                        "sha":  "c530bcd4cd46f2a26a839f7bb90c306a27c50d95",
+                        "subject":  "Move permission profile snapshots into the protocol (#38651)",
+                        "kind":  "protocol",
+                        "domains":  [
+                                        "sandbox"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: protocol/sandbox refactor batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "5186e2ccc305ab54a2bb1239fda3656d8b4ab950",
+                        "subject":  "Skip terminal hyperlink layout when no links are present (#38657)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI rendering batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "848cbad7f458a442a3a84099650f13c5c68bd48f",
+                        "subject":  "Enforce managed deny-read rules in the Windows sandbox (#38660)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "sandbox"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: Windows sandbox batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "274727d37fa69f113d28be4e0654deddcdef4318",
+                        "subject":  "Delete Thai combining marks one at a time in the composer (#38662)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI composer batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "a186f5484dc8b89f103859a7c9bd632881fba54b",
+                        "subject":  "Resolve local JSON Schema refs in Code Mode types (#38664)",
+                        "kind":  "protocol",
+                        "domains":  [
+                                        "codemode"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: code-mode protocol batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "15fde8c1f2d48812c1ad3b5d2fb7a1e7da4053fa",
+                        "subject":  "Forward executor network policy decisions for auditing (#38670)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "execserver"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: exec-server network policy batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "1873e947f804074d99d9537a418b5e4ffde6901f",
+                        "subject":  "Honor per-environment permission profiles (#38673)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "sandbox"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: environment/permission batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "233739e76ab6f63877df8abea720da14afb1825d",
+                        "subject":  "Exclude shortcut-modified input from TUI paste bursts (#38675)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI paste batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "22bf16a37ed45006c0226541874abd7449c29911",
+                        "subject":  "Preserve environment configuration ownership (#38678)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "session"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: environment refactor batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "4e9a1a907385fa04d0b6b30dc2afd152eba2de90",
+                        "subject":  "Preserve HTTP fallback for delegated sessions (#38681)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "session"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: delegated-session batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "eb147c0db364d1e642439f33e3078f8712ef9aa5",
+                        "subject":  "Surface misalignment policy violations as typed errors (#38682)",
+                        "kind":  "protocol",
+                        "domains":  [
+                                        "appserver"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: app-server typed-error batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "2ca575026cef066a58c70f6bdee4feafa6e63d3a",
+                        "subject":  "Support pending environment attachment configuration (#38684)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "session"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: environment refactor batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "4861236f06d0df397436531b4aa3d7fa6975959c",
+                        "subject":  "Propagate request trace context through exec-server relays (#38690)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "execserver"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: exec-server relay batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "53f3fa749659498fa24c81da8fde5440fa7bba7f",
+                        "subject":  "Route permission requests through shared Guardian approvals (#38701)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "approvals"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: approvals batch"
+                                     ]
+                    },
+                    {
+                        "sha":  "e5470f1bce099442d73e491ce63d189d355b061e",
+                        "subject":  "Refresh hook runtimes after plugin changes (#38703)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "hooks"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./appserver -run HookDiscoveryReflectsPluginHookChanges -count=1; discovery refreshes plugin hook sources"
+                                     ]
+                    },
+                    {
+                        "sha":  "3685a61dadefebb66690f8c0f945df044fc11b25",
+                        "subject":  "Normalize CRLF line endings in pasted text (#38704)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./tui/... -run NormalizePastedText -count=1; CRLF pairs normalized before bare CRs"
+                                     ]
+                    },
+                    {
+                        "sha":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
+                        "subject":  "Add MCP tool handler support to the hooks engine (#38705)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "hooks"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./appserver -run McpTool -count=1; mcp_tool hooks listed and run via executor"
+                                     ]
+                    }
+                ]
 }

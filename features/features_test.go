@@ -49,9 +49,18 @@ func TestDefaultsIncludesStableShellTool(t *testing.T) {
 	if defaults["retain_client_developer_messages"] {
 		t.Fatal("retain_client_developer_messages default = true, want false (Rust default_enabled: false)")
 	}
+	if !defaults["unified_exec"] {
+		t.Fatal("unified_exec default = false, want true on all platforms (Rust #38625)")
+	}
+	if !defaults["unbounded_connection_retries"] {
+		t.Fatal("unbounded_connection_retries default = false, want true (Rust #38601)")
+	}
 	for _, spec := range Registry {
 		if spec.Key == "code_mode_host" && spec.Stage != StageStable {
 			t.Fatalf("code_mode_host stage = %q, want %q", spec.Stage, StageStable)
+		}
+		if spec.Key == "unbounded_connection_retries" && spec.Stage != StageStable {
+			t.Fatalf("unbounded_connection_retries stage = %q, want %q", spec.Stage, StageStable)
 		}
 	}
 }

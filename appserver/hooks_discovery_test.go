@@ -173,7 +173,7 @@ func TestManagedRequiredHookLoadErrorsHelper(t *testing.T) {
 	}
 }
 
-func TestHookDiscoveryRecognizesUnsupportedMCPToolHook(t *testing.T) {
+func TestHookDiscoveryWarnsWhenMcpToolHooksUnavailable(t *testing.T) {
 	cwd := t.TempDir()
 	hooksDir := filepath.Join(cwd, ".codex")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
@@ -184,8 +184,94 @@ func TestHookDiscoveryRecognizesUnsupportedMCPToolHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := NewHookDiscoveryService("").Discover(&HookListParams{CWDs: []string{cwd}}, "")
-	if len(response.Data) != 1 || len(response.Data[0].Hooks) != 0 || !warningsContain(response.Data[0].Warnings, "MCP tool hooks are not supported yet") {
+	if len(response.Data) != 1 || len(response.Data[0].Hooks) != 0 || !warningsContain(response.Data[0].Warnings, "MCP invocation is not available yet") {
 		t.Fatalf("MCP tool hook discovery = %+v", response)
+	}
+}
+
+func TestHookDiscoveryListsMcpToolHooksWhenEnabled(t *testing.T) {
+	cwd := t.TempDir()
+	hooksDir := filepath.Join(cwd, ".codex")
+	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"hooks":{
+		"PreToolUse":[{"matcher":"linear.get_issue","hooks":[{"type":"mcp_tool","server":"linear","tool":"get_issue","input":{"issue_id":"${tool_input.id}","label":"issue-${tool_input.id}"}}]}],
+		"SessionEnd":[{"hooks":[{"type":"mcp_tool","server":"linear","tool":"ping"}]}]
+	}}`
+	if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := NewHookDiscoveryService("")
+	service.McpToolHooksEnabled = true
+	response := service.Discover(&HookListParams{CWDs: []string{cwd}}, "")
+	if len(response.Data) != 1 {
+		t.Fatalf("Discover() = %+v", response)
+	}
+	entry := response.Data[0]
+	if len(entry.Hooks) != 1 {
+		t.Fatalf("hooks = %+v, want the PreToolUse mcp_tool hook only (SessionEnd must be skipped)", entry.Hooks)
+	}
+	hook := entry.Hooks[0]
+	if hook.HandlerType != HookHandlerMCPTool || hook.Server == nil || *hook.Server != "linear" || hook.Tool == nil || *hook.Tool != "get_issue" {
+		t.Fatalf("mcp_tool hook = %+v", hook)
+	}
+	if hook.Input["issue_id"] != "${tool_input.id}" || hook.Input["label"] != "issue-${tool_input.id}" {
+		t.Fatalf("argument template = %#v", hook.Input)
+	}
+	if hook.EventName != HookEventPreToolUse || hook.ExecutionMode != HookExecutionSync || !strings.HasPrefix(hook.CurrentHash, "sha256:") {
+		t.Fatalf("mcp_tool hook metadata = %+v", hook)
+	}
+	if !warningsContain(entry.Warnings, "SessionEnd") {
+		t.Fatalf("warnings = %#v, want SessionEnd MCP tool hook warning", entry.Warnings)
+	}
+}
+
+func TestHookDiscoveryReflectsPluginHookChangesLikeRust(t *testing.T) {
+	pluginA := t.TempDir()
+	pluginB := t.TempDir()
+	writePluginHook := func(t *testing.T, root string, command string) string {
+		t.Helper()
+		hooksDir := filepath.Join(root, "hooks")
+		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(hooksDir, "hooks.json")
+		body := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"` + command + `"}]}]}}`
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	firstPath := writePluginHook(t, pluginA, "echo first")
+	service := NewHookDiscoveryService("")
+	service.PluginHookSources = []plugin.HookSource{{
+		PluginID:           "plugin-a",
+		PluginRoot:         pluginA,
+		SourcePath:         firstPath,
+		SourceRelativePath: "hooks/hooks.json",
+	}}
+	cwd := t.TempDir()
+	first := service.Discover(&HookListParams{CWDs: []string{cwd}}, "")
+	if len(first.Data) != 1 || len(first.Data[0].Hooks) != 1 || *first.Data[0].Hooks[0].Command != "echo first" {
+		t.Fatalf("first discovery = %+v", first.Data)
+	}
+
+	// Plugin changes refresh the discovered hook runtimes: no stale cache from
+	// the previous plugin source (Rust #38703 effective_plugin_change refresh).
+	secondPath := writePluginHook(t, pluginB, "echo second")
+	service.PluginHookSources = []plugin.HookSource{{
+		PluginID:           "plugin-b",
+		PluginRoot:         pluginB,
+		SourcePath:         secondPath,
+		SourceRelativePath: "hooks/hooks.json",
+	}}
+	second := service.Discover(&HookListParams{CWDs: []string{cwd}}, "")
+	if len(second.Data) != 1 || len(second.Data[0].Hooks) != 1 || *second.Data[0].Hooks[0].Command != "echo second" {
+		t.Fatalf("second discovery = %+v, want refreshed plugin hook", second.Data)
+	}
+	if *second.Data[0].Hooks[0].PluginID != "plugin-b" {
+		t.Fatalf("plugin id = %q, want plugin-b", *second.Data[0].Hooks[0].PluginID)
 	}
 }
 

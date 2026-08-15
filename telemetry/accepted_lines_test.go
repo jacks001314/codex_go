@@ -22,14 +22,8 @@ func TestAcceptedLineFingerprintsFromUnifiedDiff(t *testing.T) {
 	if summary.AcceptedAddedLines != 3 || summary.AcceptedDeletedLines != 1 {
 		t.Fatalf("unexpected counts: %#v", summary)
 	}
-	if len(summary.LineFingerprints) != 2 {
-		t.Fatalf("unexpected fingerprints: %#v", summary.LineFingerprints)
-	}
-	if summary.LineFingerprints[0].PathHash != FingerprintHash("path", "src/lib.rs") {
-		t.Fatalf("unexpected path hash")
-	}
-	if summary.LineFingerprints[0].LineHash != FingerprintHash("line", "fn useful() {") {
-		t.Fatalf("unexpected first line hash")
+	if len(summary.LineFingerprints) != 0 {
+		t.Fatalf("line fingerprints should no longer be generated (Rust #38473): %#v", summary.LineFingerprints)
 	}
 }
 
@@ -46,8 +40,8 @@ index 0000000..1111111
 	if summary.AcceptedAddedLines != 1 || summary.AcceptedDeletedLines != 0 {
 		t.Fatalf("unexpected counts: %#v", summary)
 	}
-	if len(summary.LineFingerprints) != 1 {
-		t.Fatalf("fingerprints = %#v", summary.LineFingerprints)
+	if len(summary.LineFingerprints) != 0 {
+		t.Fatalf("fingerprints should be empty: %#v", summary.LineFingerprints)
 	}
 }
 
@@ -64,11 +58,8 @@ index 1111111..2222222
 	if summary.AcceptedAddedLines != 1 || summary.AcceptedDeletedLines != 1 {
 		t.Fatalf("unexpected counts: %#v", summary)
 	}
-	if len(summary.LineFingerprints) != 1 {
-		t.Fatalf("fingerprints = %#v", summary.LineFingerprints)
-	}
-	if summary.LineFingerprints[0].LineHash != FingerprintHash("line", "++ new value") {
-		t.Fatalf("unexpected line hash: %#v", summary.LineFingerprints[0])
+	if len(summary.LineFingerprints) != 0 {
+		t.Fatalf("fingerprints = %#v, want none", summary.LineFingerprints)
 	}
 }
 
@@ -166,23 +157,5 @@ func TestAcceptedLineFingerprintEventSerializesNullOptionFieldsLikeRust(t *testi
 		if !strings.Contains(string(data), key) {
 			t.Fatalf("payload %s missing %s", data, key)
 		}
-	}
-}
-
-func TestNormalizeDiffPath(t *testing.T) {
-	if NormalizeDiffPath("b/foo/bar.go") != "foo/bar.go" {
-		t.Fatalf("unexpected normalized path")
-	}
-	if NormalizeDiffPath("/dev/null") != "" {
-		t.Fatalf("/dev/null should be skipped")
-	}
-}
-
-func TestNormalizeEffectiveLine(t *testing.T) {
-	if line, ok := NormalizeEffectiveLine("   return   user.id; "); !ok || line != "return user.id;" {
-		t.Fatalf("unexpected normalized line: %q %v", line, ok)
-	}
-	if _, ok := NormalizeEffectiveLine("}"); ok {
-		t.Fatalf("punctuation-only short line should be skipped")
 	}
 }

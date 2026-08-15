@@ -10487,6 +10487,10 @@ func TestRuntimeRouterTurnStartExecApprovalDeclineLikeRust(t *testing.T) {
 		Prompt:         "run command",
 		CWD:            workspace,
 		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+		// The fake agent exercises the legacy direct-shell tool path; keep
+		// unified exec explicitly disabled after Rust #38625 enabled it by
+		// default on Windows.
+		Config: map[string]any{"features": map[string]any{"unified_exec": false}},
 	}))
 	if turnStart.Error != nil {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
@@ -12531,6 +12535,10 @@ func TestRuntimeRouterTurnStartUpdatesSandboxAndCWDBetweenTurnsLikeRust(t *testi
 		Prompt:         "first turn",
 		CWD:            firstCWD,
 		ApprovalPolicy: string(sandbox.ApprovalNever),
+		// The fake agent exercises the legacy direct-shell tool path; keep
+		// unified exec explicitly disabled after Rust #38625 enabled it by
+		// default on Windows.
+		Config: map[string]any{"features": map[string]any{"unified_exec": false}},
 		SandboxPolicy: map[string]any{
 			"type":                string(sandbox.SandboxWorkspaceWrite),
 			"writableRoots":       []string{firstCWD},
@@ -12549,6 +12557,7 @@ func TestRuntimeRouterTurnStartUpdatesSandboxAndCWDBetweenTurnsLikeRust(t *testi
 		Prompt:         "second turn",
 		CWD:            secondCWD,
 		ApprovalPolicy: string(sandbox.ApprovalNever),
+		Config:         map[string]any{"features": map[string]any{"unified_exec": false}},
 		SandboxPolicy:  string(sandbox.SandboxDangerFullAccess),
 	}))
 	if secondTurn.Error != nil {

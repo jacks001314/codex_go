@@ -180,6 +180,11 @@ type HookMetadata struct {
 	ExecutionMode HookExecutionMode `json:"executionMode"`
 	Matcher       *string           `json:"matcher"`
 	Command       *string           `json:"command"`
+	// MCP tool hooks (Rust #38705) target an MCP server tool with an
+	// argument template expanded against the hook event input.
+	Server        *string           `json:"server,omitempty"`
+	Tool          *string           `json:"tool,omitempty"`
+	Input         map[string]any    `json:"input,omitempty"`
 	TimeoutSec    int64             `json:"timeoutSec"`
 	StatusMessage *string           `json:"statusMessage"`
 	SourcePath    string            `json:"sourcePath"`

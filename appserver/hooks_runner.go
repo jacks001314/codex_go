@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,9 +22,27 @@ type HookRunner struct {
 	ShellArgs    []string
 	Notify       func(NotificationMethod, any)
 	Now          func() time.Time
+	// McpToolHookExecutor executes mcp_tool hooks (Rust #38705). When nil,
+	// mcp_tool handlers are skipped like Rust's engine without an executor.
+	McpToolHookExecutor McpToolHookExecutor
 
 	mu            sync.Mutex
 	asyncRuntimes map[string]*asyncHookRuntime
+}
+
+// HookMcpCall mirrors Rust HookMcpCall: one MCP tool call requested by a
+// configured mcp_tool hook handler.
+type HookMcpCall struct {
+	Server  string
+	Tool    string
+	Input   map[string]any
+	Timeout time.Duration
+}
+
+// McpToolHookExecutor mirrors Rust HookMcpExecutor: returns text interpreted
+// using ordinary command-hook output semantics.
+type McpToolHookExecutor interface {
+	Execute(ctx context.Context, call HookMcpCall) (string, error)
 }
 
 type HookRunRequest struct {
@@ -94,7 +113,12 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 			Run:      started,
 		})
 
-		runResult := r.runCommand(ctx, metadata, request.InputJSON, request.CWD)
+		var runResult *hookCommandRunResult
+		if metadata.HandlerType == HookHandlerMCPTool {
+			runResult = r.runMcpToolHook(ctx, metadata, request)
+		} else {
+			runResult = r.runCommand(ctx, metadata, request.InputJSON, request.CWD)
+		}
 		completed := completedHookSummary(metadata, runResult, hookRunStatus(request.EventName, runResult), hookOutputEntries(request.EventName, runResult))
 		completed = hookSummaryWithRunIDSuffix(completed, request.RunIDSuffix)
 		mergeHookRunEffect(result, hookRunEffect(request.EventName, runResult))
@@ -197,6 +221,156 @@ func (r *HookRunner) runCommand(ctx context.Context, metadata HookMetadata, inpu
 	return result
 }
 
+// runMcpToolHook executes an mcp_tool hook (Rust #38705): the argument
+// template is expanded against the hook event JSON, then the executor's
+// returned text is interpreted with ordinary command-hook output semantics.
+func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, request *HookRunRequest) *hookCommandRunResult {
+	started := r.now()
+	startedAt := started.UTC().UnixMilli()
+	timeoutSec := metadata.TimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = defaultDiscoveredHookTimeoutSec
+	}
+	result := &hookCommandRunResult{
+		StartedAt: startedAt,
+	}
+	if r == nil || r.McpToolHookExecutor == nil {
+		result.Error = stringPointer("MCP invocation is not available yet")
+		return result
+	}
+	var hookEvent any
+	if strings.TrimSpace(request.InputJSON) != "" {
+		if err := json.Unmarshal([]byte(request.InputJSON), &hookEvent); err != nil {
+			result.Error = stringPointer("failed to parse hook event input")
+			return result
+		}
+	}
+	input, err := expandMcpArgumentTemplate(metadata.Input, hookEvent)
+	if err != nil {
+		result.Error = stringPointer(err.Error())
+		return result
+	}
+	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	output, err := r.McpToolHookExecutor.Execute(execCtx, HookMcpCall{
+		Server:  ptrStringValue(metadata.Server),
+		Tool:    ptrStringValue(metadata.Tool),
+		Input:   input,
+		Timeout: time.Duration(timeoutSec) * time.Second,
+	})
+	cancel()
+	completed := r.now()
+	result.CompletedAt = completed.UTC().UnixMilli()
+	result.DurationMS = completed.Sub(started).Milliseconds()
+	if err != nil {
+		result.Error = stringPointer(err.Error())
+		return result
+	}
+	code := int32(0)
+	result.ExitCode = &code
+	result.Stdout = output
+	return result
+}
+
+// expandMcpArgumentTemplate recursively substitutes ${field.nested}
+// placeholders using values from a hook event (Rust mcp_runner.rs). A complete
+// placeholder preserves its JSON type; a placeholder embedded in surrounding
+// text is rendered as a string. Missing fields fail the hook.
+func expandMcpArgumentTemplate(template map[string]any, hookEvent any) (map[string]any, error) {
+	if len(template) == 0 {
+		return map[string]any{}, nil
+	}
+	out := make(map[string]any, len(template))
+	for key, value := range template {
+		resolved, err := resolveMcpTemplateValue(value, hookEvent)
+		if err != nil {
+			return nil, err
+		}
+		out[key] = resolved
+	}
+	return out, nil
+}
+
+func resolveMcpTemplateValue(value any, hookEvent any) (any, error) {
+	switch typed := value.(type) {
+	case map[string]any:
+		return expandMcpArgumentTemplate(typed, hookEvent)
+	case []any:
+		out := make([]any, len(typed))
+		for i := range typed {
+			resolved, err := resolveMcpTemplateValue(typed[i], hookEvent)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = resolved
+		}
+		return out, nil
+	case string:
+		return resolveMcpTemplateString(typed, hookEvent)
+	default:
+		return value, nil
+	}
+}
+
+var mcpArgumentPlaceholderPattern = regexp.MustCompile(`\$\{([^{}]+)\}`)
+
+func resolveMcpTemplateString(text string, hookEvent any) (any, error) {
+	captures := mcpArgumentPlaceholderPattern.FindAllStringSubmatchIndex(text, -1)
+	if len(captures) == 0 {
+		return text, nil
+	}
+	if len(captures) == 1 && captures[0][0] == 0 && captures[0][1] == len(text) {
+		path := text[2 : len(text)-1]
+		return resolveMcpTemplatePath(hookEvent, path)
+	}
+	var resolved strings.Builder
+	previousEnd := 0
+	for _, capture := range captures {
+		resolved.WriteString(text[previousEnd:capture[0]])
+		path := text[capture[2]:capture[3]]
+		value, err := resolveMcpTemplatePath(hookEvent, path)
+		if err != nil {
+			return nil, err
+		}
+		switch typed := value.(type) {
+		case string:
+			resolved.WriteString(typed)
+		case nil:
+			resolved.WriteString("null")
+		case bool:
+			resolved.WriteString(strconv.FormatBool(typed))
+		case float64:
+			resolved.WriteString(strconv.FormatFloat(typed, 'f', -1, 64))
+		case json.Number:
+			resolved.WriteString(typed.String())
+		default:
+			data, err := json.Marshal(value)
+			if err != nil {
+				return nil, err
+			}
+			resolved.Write(data)
+		}
+		previousEnd = capture[1]
+	}
+	resolved.WriteString(text[previousEnd:])
+	return resolved.String(), nil
+}
+
+func resolveMcpTemplatePath(hookEvent any, path string) (any, error) {
+	var current any = hookEvent
+	for _, part := range strings.Split(path, ".") {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("missing field %s in hook event", path)
+		}
+		next, ok := object[part]
+		if !ok {
+			return nil, fmt.Errorf("missing field %s in hook event", path)
+		}
+		current = next
+	}
+	return current, nil
+}
+
 func hookCommandEnv(base []string, overrides map[string]string) []string {
 	if len(overrides) == 0 {
 		return base
@@ -270,10 +444,22 @@ func (r *HookRunner) now() time.Time {
 func selectHookHandlers(hooks []HookMetadata, event HookEventName, matcherInputs []string) []HookMetadata {
 	out := make([]HookMetadata, 0, len(hooks))
 	for _, metadata := range hooks {
-		if metadata.EventName != event || metadata.HandlerType != HookHandlerCommand || !metadata.Enabled {
+		if metadata.EventName != event || !metadata.Enabled {
 			continue
 		}
-		if metadata.Command == nil || strings.TrimSpace(*metadata.Command) == "" {
+		switch metadata.HandlerType {
+		case HookHandlerCommand:
+			if metadata.Command == nil || strings.TrimSpace(*metadata.Command) == "" {
+				continue
+			}
+		case HookHandlerMCPTool:
+			if event == HookEventSessionEnd {
+				continue
+			}
+			if strings.TrimSpace(ptrStringValue(metadata.Server)) == "" || strings.TrimSpace(ptrStringValue(metadata.Tool)) == "" {
+				continue
+			}
+		default:
 			continue
 		}
 		if !hookTrustAllowsExecution(&metadata) {
@@ -370,7 +556,7 @@ func runningHookSummary(metadata HookMetadata, now time.Time) HookRunSummary {
 	return HookRunSummary{
 		ID:            hookRunID(metadata),
 		EventName:     metadata.EventName,
-		HandlerType:   HookHandlerCommand,
+		HandlerType:   metadata.HandlerType,
 		ExecutionMode: HookExecutionSync,
 		Scope:         hookScopeForEvent(metadata.EventName),
 		SourcePath:    metadata.SourcePath,
@@ -389,7 +575,7 @@ func completedHookSummary(metadata HookMetadata, runResult *hookCommandRunResult
 	return HookRunSummary{
 		ID:            hookRunID(metadata),
 		EventName:     metadata.EventName,
-		HandlerType:   HookHandlerCommand,
+		HandlerType:   metadata.HandlerType,
 		ExecutionMode: HookExecutionSync,
 		Scope:         hookScopeForEvent(metadata.EventName),
 		SourcePath:    metadata.SourcePath,

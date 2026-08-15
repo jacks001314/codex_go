@@ -89,13 +89,17 @@ type ClientWorkspaceMetadata struct {
 }
 
 type ClientMetadata struct {
-	InstallationID             string
-	SessionID                  string
-	ThreadID                   string
-	TurnID                     string
-	WindowID                   string
-	RequestKind                ClientRequestKind
-	Compaction                 *ClientCompactionMetadata
+	InstallationID string
+	SessionID      string
+	ThreadID       string
+	TurnID         string
+	WindowID       string
+	RequestKind    ClientRequestKind
+	Compaction     *ClientCompactionMetadata
+	// AgentName is the canonical agent path for sub-agent turns (Rust #38483).
+	// It is emitted in turn metadata only when set; callers fall back to
+	// "/root" like Rust.
+	AgentName                  string
 	ForkedFromThreadID         string
 	ParentThreadID             string
 	ParentTurnID               string
@@ -147,6 +151,9 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	if hasTurnIdentity {
 		value["session_id"] = m.SessionID
 		value["thread_id"] = m.ThreadID
+		if m.AgentName != "" {
+			value[AgentNameKey] = m.AgentName
+		}
 		if m.TurnID != "" {
 			value["turn_id"] = m.TurnID
 		}
@@ -296,7 +303,7 @@ func ClientFilterExtraMetadata(values map[string]string) map[string]string {
 func ClientReservedMetadataKeys() map[string]bool {
 	keys := []string{
 		"installation_id", strings.ToLower(ClientCodexInstallationIDHeader),
-		"session_id", "thread_id", "turn_id", "window_id", strings.ToLower(ClientCodexWindowIDHeader),
+		"session_id", "thread_id", "turn_id", AgentNameKey, "window_id", strings.ToLower(ClientCodexWindowIDHeader),
 		strings.ToLower(ClientCodexTurnMetadataHeader), strings.ToLower(ClientCodexParentThreadIDHeader),
 		strings.ToLower(ClientOpenAISubagentHeader), "request_kind", "compaction",
 		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id", "parent_turn_id", RootTurnIDKey,

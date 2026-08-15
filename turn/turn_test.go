@@ -186,6 +186,40 @@ func TestBuildResponsesClientMetadataIncludesAutoReviewEnabled(t *testing.T) {
 	}
 }
 
+func TestBuildResponsesClientMetadataIncludesAgentNameLikeRust(t *testing.T) {
+	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		InstallationID: "install",
+		SessionID:      "session",
+		ThreadID:       "thread",
+		TurnID:         "turn",
+		RequestKind:    codexapi.ClientRequestTurn,
+		AgentName:      "/root/worker",
+	})
+	var turnMetadata map[string]any
+	if err := json.Unmarshal([]byte(client[codexapi.ClientCodexTurnMetadataHeader]), &turnMetadata); err != nil {
+		t.Fatalf("turn metadata = %q: %v", client[codexapi.ClientCodexTurnMetadataHeader], err)
+	}
+	if turnMetadata["agent_name"] != "/root/worker" {
+		t.Fatalf("agent_name = %#v, want /root/worker", turnMetadata["agent_name"])
+	}
+
+	// Root fallback: without an explicit agent path the runtime supplies
+	// "/root".
+	root := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		SessionID:   "session",
+		ThreadID:    "thread",
+		TurnID:      "turn",
+		RequestKind: codexapi.ClientRequestTurn,
+		AgentName:   "/root",
+	})
+	if err := json.Unmarshal([]byte(root[codexapi.ClientCodexTurnMetadataHeader]), &turnMetadata); err != nil {
+		t.Fatalf("root turn metadata = %q: %v", root[codexapi.ClientCodexTurnMetadataHeader], err)
+	}
+	if turnMetadata["agent_name"] != "/root" {
+		t.Fatalf("root agent_name = %#v", turnMetadata["agent_name"])
+	}
+}
+
 func TestBuildResponsesClientMetadataIncludesNodeReplPolicy(t *testing.T) {
 	required := true
 	disabled := false

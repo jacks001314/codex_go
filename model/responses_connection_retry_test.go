@@ -109,6 +109,47 @@ func TestRunStreamingBedrockUsesBoundedBudget(t *testing.T) {
 	}
 }
 
+func TestRunStreamingUnboundedConnectionRetriesFeatureGateMatchesRust(t *testing.T) {
+	var attempts int
+	var retryEvents []ResponsesStreamEvent
+	disabled := false
+	runner := &ResponsesAgentRunner{
+		Provider: &APIProvider{
+			Name:              "OpenAI",
+			StreamMaxRetries:  1,
+			StreamIdleTimeout: 30 * time.Second,
+		},
+		UnboundedConnectionRetries: &disabled,
+		HTTPClient: connectionRetryHTTPDoer(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			return nil, &url.Error{Op: "Post", URL: "https://api.openai.com", Err: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}}
+		}),
+		StreamHandler: func(event *ResponsesStreamEvent) {
+			if event.Kind == ResponsesStreamEventRetrying {
+				retryEvents = append(retryEvents, *event)
+			}
+		},
+	}
+	// With unbounded_connection_retries disabled, connection failures consume
+	// the bounded stream retry budget exactly like Rust's fallback path.
+	start := time.Now()
+	_, err := runner.runStreaming(context.Background(), &AgentRequest{ThreadID: "t", TurnID: "turn"}, &responsesAgentRequest{Stream: true})
+	if err == nil {
+		t.Fatal("runStreaming() error = nil, want non-nil")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("elapsed = %v, want bounded budget when feature disabled", elapsed)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2 (1 + 1 bounded retry)", attempts)
+	}
+	for _, event := range retryEvents {
+		if event.RetryError == "Reconnecting... waiting for network" {
+			t.Fatalf("unexpected unbounded reconnect event when feature disabled: %+v", event)
+		}
+	}
+}
+
 type connectionRetryHTTPDoer func(*http.Request) (*http.Response, error)
 
 func (f connectionRetryHTTPDoer) Do(req *http.Request) (*http.Response, error) {

@@ -209,6 +209,38 @@ func TestRuntimeToolsFromStatusesMatchesRustMCPInventory(t *testing.T) {
 	}
 }
 
+func TestRuntimeToolNamespaceDescriptionPreservedInCatalogPublishLikeRust(t *testing.T) {
+	// Rust #38623 keeps MCP namespace descriptions when publishing tool
+	// definitions to the process-scoped catalog cache so lazily started
+	// servers expose their instructions before initialization completes.
+	// Go's publish path (RuntimeToolsFromStatuses) must retain the
+	// description exactly like the live connection supplies it.
+	statuses := []MCPServerStatus{{
+		Name:  CodexAppsServerName,
+		State: MCPServerReady,
+		Tools: []MCPToolInfo{{
+			Name: "search",
+			Meta: map[string]any{
+				"_codex_apps": map[string]any{
+					"connectorId":           "docs",
+					"namespace_description": "Search the documentation",
+					"connectorDescription":  "Search the documentation",
+				},
+			},
+		}},
+	}}
+	tools := RuntimeToolsFromStatuses(statuses)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v", tools)
+	}
+	if tools[0].NamespaceDescription != "Search the documentation" {
+		t.Fatalf("namespace description = %q, want preserved", tools[0].NamespaceDescription)
+	}
+	if tools[0].Tool.Description != "Search the documentation" {
+		t.Fatalf("tool description = %q, want namespace description fallback", tools[0].Tool.Description)
+	}
+}
+
 func TestAnnotateRuntimeToolsWithConnectorPluginProvenance(t *testing.T) {
 	provenance := NewConnectorPluginProvenance()
 	provenance.Add(" drive ", "Docs")

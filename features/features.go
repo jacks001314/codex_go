@@ -30,7 +30,9 @@ var Registry = []Spec{
 	{Key: "undo", Stage: StageRemoved},
 	{Key: "shell_tool", Stage: StageStable, DefaultEnabled: true},
 	{Key: "secret_auth_storage", Stage: StageStable, DefaultEnabled: runtime.GOOS == "windows"},
-	{Key: "unified_exec", Stage: StageStable, DefaultEnabled: runtime.GOOS != "windows"},
+	// Rust (codex-rs/features/src/lib.rs d8d7ca73f8 #38625): unified exec is
+	// enabled by default on every platform, including Windows.
+	{Key: "unified_exec", Stage: StageStable, DefaultEnabled: true},
 	{Key: "shell_zsh_fork", Stage: StageUnderDevelopment},
 	{Key: "unified_exec_zsh_fork", Stage: StageUnderDevelopment},
 	{Key: "shell_snapshot", Stage: StageStable, DefaultEnabled: true},
@@ -164,6 +166,9 @@ var Registry = []Spec{
 	{Key: "responses_websockets", Stage: StageRemoved},
 	{Key: "responses_websockets_v2", Stage: StageRemoved},
 	{Key: "remote_compaction_v2", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs da898490fc #38601): keep active
+	// sampling turns alive until a failed network connection recovers.
+	{Key: "unbounded_connection_retries", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs 1ad4397821): retain client-authored
 	// developer messages across compacted context windows.
 	{Key: "retain_client_developer_messages", Stage: StageUnderDevelopment, DefaultEnabled: false},

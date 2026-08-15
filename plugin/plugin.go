@@ -159,16 +159,20 @@ func RenderExplicitPluginInstructions(plugin *CapabilitySummary, availableMCPSer
 	if plugin.HasSkills {
 		lines = append(lines, fmt.Sprintf("- Skills from this plugin are prefixed with `%s:`.", plugin.DisplayName))
 	}
+	// Rust #38484: when an explicitly selected plugin has apps available,
+	// prefer tool_search discovery for this request before unrelated or
+	// built-in tools.
+	if len(availableApps) > 0 {
+		lines = append(lines, "- For the user request that explicitly selected this plugin, and only for that request, if `tool_search` is available and an app from this plugin may help, search for its tools before falling back to unrelated or built-in tools.")
+		lines = append(lines, fmt.Sprintf(
+			"- Apps from this plugin available in this session: %s.",
+			formatBacktickList(availableApps),
+		))
+	}
 	if len(availableMCPServers) > 0 {
 		lines = append(lines, fmt.Sprintf(
 			"- MCP servers from this plugin available in this session: %s.",
 			formatBacktickList(availableMCPServers),
-		))
-	}
-	if len(availableApps) > 0 {
-		lines = append(lines, fmt.Sprintf(
-			"- Apps from this plugin available in this session: %s.",
-			formatBacktickList(availableApps),
 		))
 	}
 	if len(lines) == 1 {

@@ -891,6 +891,41 @@ func TestLoadWithOptionsAppliesProjectConfigLayers(t *testing.T) {
 	}
 }
 
+func TestLoadWithOptionsIgnoreProjectConfigMatchesRust(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	}
+	if err := os.WriteFile(ConfigPath(home), []byte("model = \"gpt-user\"\n"+trustedProjectConfig(project)+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile user config returned error: %v", err)
+	}
+	if err := os.WriteFile(ProjectConfigPath(project), []byte("model = \"gpt-project\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile project config returned error: %v", err)
+	}
+
+	cfg, err := LoadWithOptions(home, &LoadOptions{CWD: project, IgnoreProjectConfig: true})
+	if err != nil {
+		t.Fatalf("LoadWithOptions(ignore project config) returned error: %v", err)
+	}
+	if cfg.Values["model"] != "gpt-user" {
+		t.Fatalf("model = %#v, want user config (project layer must be skipped)", cfg.Values["model"])
+	}
+
+	// Session overrides and other sources remain active with the override set.
+	effective, err := LoadEffectiveWithOptions(home, &EffectiveOptions{
+		CWD:                 project,
+		IgnoreProjectConfig: true,
+		RawOverrides:        []string{`model="gpt-cli"`},
+	})
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions returned error: %v", err)
+	}
+	if effective.Values["model"] != "gpt-cli" {
+		t.Fatalf("model = %#v, want session override with project config skipped", effective.Values["model"])
+	}
+}
+
 func TestLoadEffectiveProjectConfigPrecedence(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")

@@ -133,6 +133,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Focus:    "Windows restricted-token and elevated sandbox deny-read enforcement",
 			Platform: "Windows only",
 			Tests: []string{
+				"windows_elevated_shell_and_unified_exec_enforce_managed_deny_reads",
 				"windows_elevated_does_not_create_missing_workspace_metadata",
 				"windows_elevated_enforces_deny_read_and_protects_setup_marker",
 				"windows_restricted_token_rejects_exact_and_glob_deny_read_policy",
@@ -154,6 +155,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"external_sandbox_skips_exec_approval_on_request",
 				"guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt",
 				"restricted_sandbox_requires_exec_approval_on_request",
+				"windows_sandbox_env_preserves_denied_reads_or_rejects_unsupported_backend",
 			},
 		},
 		{

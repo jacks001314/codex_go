@@ -54,8 +54,14 @@ func TestSecurityRiskScorePersistsAndLoadsLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.AppendSecurityRiskScore("command_injection", 0.75, fixedProjectionTime()); err != nil {
+	if err := recorder.AppendSecurityRiskScore(map[string]float64{
+		"command_injection":    0.75,
+		"privilege_escalation": 0.4,
+	}, fixedProjectionTime()); err != nil {
 		t.Fatal(err)
+	}
+	if err := recorder.AppendSecurityRiskScore(map[string]float64{"out_of_range": 1.5}, fixedProjectionTime()); err == nil {
+		t.Fatal("out-of-range risk score should be rejected like Rust")
 	}
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
@@ -71,13 +77,12 @@ func TestSecurityRiskScorePersistsAndLoadsLikeRust(t *testing.T) {
 		}
 		found = true
 		var score struct {
-			Category string  `json:"category"`
-			Score    float64 `json:"score"`
+			Scores map[string]float64 `json:"scores"`
 		}
 		if err := json.Unmarshal(line.SecurityRiskScore, &score); err != nil {
 			t.Fatalf("Unmarshal security risk score error = %v", err)
 		}
-		if score.Category != "command_injection" || score.Score != 0.75 {
+		if score.Scores["command_injection"] != 0.75 || score.Scores["privilege_escalation"] != 0.4 || len(score.Scores) != 2 {
 			t.Fatalf("security risk score = %#v", score)
 		}
 	}

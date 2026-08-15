@@ -113,6 +113,10 @@ type LoadOptions struct {
 	IncludeManagedConfig bool
 	ManagedConfigPath    string
 	CloudConfigBundle    *CloudConfigLoader
+	// IgnoreProjectConfig bypasses project-root discovery and all project
+	// configuration layers (Rust LoaderOverrides::ignore_project_config,
+	// #38647). Other configuration sources stay active.
+	IgnoreProjectConfig bool
 }
 
 type EffectiveOptions struct {
@@ -126,6 +130,7 @@ type EffectiveOptions struct {
 	IncludeManagedConfig bool
 	ManagedConfigPath    string
 	CloudConfigBundle    *CloudConfigLoader
+	IgnoreProjectConfig  bool
 }
 
 func Load(codexHome string) (*Config, error) {
@@ -167,7 +172,8 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		profile = strings.TrimSpace(opts.Profile)
 		cwd = strings.TrimSpace(opts.CWD)
 	}
-	if cwd != "" && projectConfigEnabled(values, cwd) {
+	ignoreProjectConfig := opts != nil && opts.IgnoreProjectConfig
+	if cwd != "" && !ignoreProjectConfig && projectConfigEnabled(values, cwd) {
 		for _, path := range ProjectConfigPaths(cwd) {
 			projectValues, exists, err := loadConfigFileIfExists(path)
 			if err != nil {
@@ -236,6 +242,7 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		loadOpts.IncludeManagedConfig = opts.IncludeManagedConfig
 		loadOpts.ManagedConfigPath = opts.ManagedConfigPath
 		loadOpts.CloudConfigBundle = opts.CloudConfigBundle
+		loadOpts.IgnoreProjectConfig = opts.IgnoreProjectConfig
 	}
 	cfg, err := LoadWithOptions(codexHome, loadOpts)
 	if err != nil {

@@ -402,6 +402,7 @@ type ResponsesClientMetadataOptions struct {
 	ThreadSource               string
 	Sandbox                    string
 	SandboxMode                string
+	AgentName                  string
 	AutoReviewEnabled          *bool
 	NodeReplAutoReviewRequired *bool
 	NodeReplDisabled           *bool
@@ -444,6 +445,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.ThreadSource = strings.TrimSpace(options.ThreadSource)
 	metadata.Sandbox = strings.TrimSpace(options.Sandbox)
 	metadata.SandboxMode = strings.TrimSpace(options.SandboxMode)
+	metadata.AgentName = strings.TrimSpace(options.AgentName)
 	metadata.AutoReviewEnabled = cloneBoolPtr(options.AutoReviewEnabled)
 	metadata.NodeReplAutoReviewRequired = cloneBoolPtr(options.NodeReplAutoReviewRequired)
 	metadata.NodeReplDisabled = cloneBoolPtr(options.NodeReplDisabled)

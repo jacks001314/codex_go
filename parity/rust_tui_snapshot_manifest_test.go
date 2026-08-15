@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 653 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 653", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 660 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 660", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -97,7 +97,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/bottom_pane/snapshots",
-			Files:    190,
+			Files:    195,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -187,7 +187,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/snapshots",
-			Files:    116,
+			Files:    118,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},

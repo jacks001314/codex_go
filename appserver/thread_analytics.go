@@ -113,6 +113,23 @@ func (r *RuntimeRouter) threadRecordForAnalytics(threadID string) *session.Recor
 	return record
 }
 
+// agentNameForThread returns the canonical agent path for turn metadata
+// (Rust #38483). It falls back to "/root" when the session has no canonical
+// agent path, matching Rust's agent_name metadata behavior. The lookup is
+// intentionally in-memory only (agent registry) so turn-start config building
+// never materializes a thread record as a side effect.
+func (r *RuntimeRouter) agentNameForThread(threadID string) string {
+	threadID = strings.TrimSpace(threadID)
+	if r != nil && r.agentRegistry != nil {
+		if metadata, ok := r.agentRegistry.MetadataForThread(threadID); ok {
+			if path := strings.TrimSpace(string(metadata.Path)); path != "" {
+				return path
+			}
+		}
+	}
+	return "/root"
+}
+
 func threadSourceStringPtr(source *ThreadSource) *string {
 	if source == nil {
 		return nil

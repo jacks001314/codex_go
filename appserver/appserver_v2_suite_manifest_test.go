@@ -60,6 +60,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "mcp_server_status", Owner: "mcp", Focus: "MCP status list/update notifications"},
 		{Module: "mcp_tool", Owner: "mcp", Focus: "mcpServer/tool/call RPC"},
 		{Module: "memory_reset", Owner: "memories", Focus: "memory/reset RPC"},
+		{Module: "misalignment_policy", Owner: "appserver, protocol", Focus: "misalignment policy violations surfaced as typed errors (Rust #38682)"},
 		{Module: "model_auto_review", Owner: "appserver, config", Focus: "auto_review required-on-models enforcement and requirements exposure"},
 		{Module: "model_list", Owner: "model", Focus: "model/list RPC"},
 		{Module: "model_provider_capabilities_read", Owner: "model", Focus: "modelProvider/capabilities/read RPC"},

@@ -79,7 +79,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "app-server/tests/suite/v2",
-			Files: 105,
+			Files: 106,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{

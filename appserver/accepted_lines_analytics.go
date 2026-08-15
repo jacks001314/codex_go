@@ -53,7 +53,6 @@ func (r *RuntimeRouter) emitAcceptedLineFingerprintsAnalyticsEvent(ctx context.C
 		RepoHash:             repoHash,
 		AcceptedAddedLines:   summary.AcceptedAddedLines,
 		AcceptedDeletedLines: summary.AcceptedDeletedLines,
-		LineFingerprints:     summary.LineFingerprints,
 	})
 	for i := range requests {
 		sink.TrackCodexAcceptedLineFingerprintsEvent(ctx, requests[i])

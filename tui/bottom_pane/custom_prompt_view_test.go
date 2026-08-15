@@ -96,3 +96,19 @@ func TestCustomPromptEmptySubmitCancelPasteAndRows(t *testing.T) {
 		t.Fatalf("cancel completion = %s complete=%v", view.Completion, view.IsComplete())
 	}
 }
+
+func TestNormalizePastedTextMatchesRust(t *testing.T) {
+	// Rust #38704: mixed CRLF, bare CR, and LF line endings each become a
+	// single LF; CRLF pairs must not double into two line breaks.
+	if got := NormalizePastedText("one\r\ntwo\rthree\nfour\r\nfive"); got != "one\ntwo\nthree\nfour\nfive" {
+		t.Fatalf("NormalizePastedText = %q", got)
+	}
+	if got := NormalizePastedText("plain"); got != "plain" {
+		t.Fatalf("NormalizePastedText(plain) = %q", got)
+	}
+
+	view := NewCustomPromptView("Edit goal", "Type a goal objective and press Enter", "", "")
+	if !view.HandlePaste("a\r\nb\rc\nd") || view.Text != "a\nb\nc\nd" {
+		t.Fatalf("pasted text = %q", view.Text)
+	}
+}

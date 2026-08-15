@@ -79,6 +79,10 @@ type ResponsesAgentOptions struct {
 	AttestationProvider        codexapi.AttestationProvider
 	SupportsWebsockets         bool
 	WebsocketConnectTimeout    time.Duration
+	// UnboundedConnectionRetries keeps active sampling turns alive until a
+	// failed network connection recovers (Rust Feature::UnboundedConnectionRetries,
+	// default enabled). nil means the feature default (enabled).
+	UnboundedConnectionRetries *bool
 }
 
 type ResponsesAgentRunner struct {
@@ -104,6 +108,7 @@ type ResponsesAgentRunner struct {
 	AttestationProvider        codexapi.AttestationProvider
 	SupportsWebsockets         bool
 	WebsocketConnectTimeout    time.Duration
+	UnboundedConnectionRetries *bool
 	providerAuthFetchedAt      time.Time
 	turnState                  *responsesTurnStateCache
 	websocketSessions          *responsesWebsocketSessionCache
@@ -346,6 +351,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		AttestationProvider:        options.AttestationProvider,
 		SupportsWebsockets:         options.SupportsWebsockets,
 		WebsocketConnectTimeout:    options.WebsocketConnectTimeout,
+		UnboundedConnectionRetries: cloneBoolPtrModel(options.UnboundedConnectionRetries),
 		providerAuthFetchedAt:      providerAuthFetchedAt,
 		turnState:                  &responsesTurnStateCache{},
 		websocketSessions:          &responsesWebsocketSessionCache{sessions: map[string]*responsesWebsocketSession{}},
@@ -2331,6 +2337,14 @@ func cloneAgentIdentitySnapshot(value any) any {
 }
 
 func cloneStringPtrModel(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneBoolPtrModel(value *bool) *bool {
 	if value == nil {
 		return nil
 	}
