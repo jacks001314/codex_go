@@ -806,12 +806,27 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	if err != nil {
 		return err
 	}
+	var resolveHeaders func(context.Context) (http.Header, error)
+	if resolved.Source == auth.WorkloadIdentitySource {
+		// Rust #38610: remote exec-server registry requests resolve managed
+		// credentials asynchronously so workload identity tokens stay fresh
+		// across re-registrations instead of using a one-time static header.
+		store := auth.NewStoreWithOptions(codexHome, storeOptions)
+		resolveHeaders = func(ctx context.Context) (http.Header, error) {
+			fresh, err := store.Resolve()
+			if err != nil {
+				return nil, err
+			}
+			return execServerRemoteAuthHeaders(&fresh.Auth)
+		}
+	}
 	return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
-		BaseURL:       baseURL,
-		EnvironmentID: environmentID,
-		Name:          strings.TrimSpace(opts.Name),
-		AuthHeaders:   headers,
-		HTTPClient:    codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0),
+		BaseURL:            baseURL,
+		EnvironmentID:      environmentID,
+		Name:               strings.TrimSpace(opts.Name),
+		AuthHeaders:        headers,
+		ResolveAuthHeaders: resolveHeaders,
+		HTTPClient:         codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0),
 	})
 }
 

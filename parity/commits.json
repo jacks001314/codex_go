@@ -10,9 +10,9 @@
                         "domains":  [
                                         "skills"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: Go skill parser batch"
+                                         "go test ./appserver -run SkillFrontmatterModel -count=1; skill frontmatter model annotation parsed (luna), unsupported values ignored without disabling loading"
                                      ]
                     },
                     {
@@ -46,9 +46,9 @@
                         "domains":  [
                                         "skills"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: skills prompt batch"
+                                         "go test ./prompt -run SkillModelDelegation -count=1; bounded skill model delegation instruction builder mirrors Rust"
                                      ]
                     },
                     {
@@ -418,9 +418,9 @@
                         "domains":  [
                                         "auth"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: auth/exec-server batch"
+                                         "go test ./execserver -run ResolveAuthHeaders -count=1; remote registry requests resolve fresh auth headers; app wires workload identity refresh"
                                      ]
                     },
                     {
@@ -730,9 +730,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI rendering batch"
+                                         "N/A: Go renders per-line WebLinksInText without Rust mark_buffer_hyperlinks paragraph layout; no layout work to skip"
                                      ]
                     },
                     {
@@ -802,9 +802,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI paste batch"
+                                         "N/A: bubbletea v1.3.10 exposes no Super/Hyper/Meta modifiers and Go has no char-burst buffer to exclude them from"
                                      ]
                     },
                     {

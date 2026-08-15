@@ -405,6 +405,47 @@ func TestRegisterRemoteEnvironmentReportsRegistryErrors(t *testing.T) {
 	}
 }
 
+func TestRegisterRemoteEnvironmentResolvesAuthHeadersPerRequestLikeRust(t *testing.T) {
+	var receivedAuthHeader string
+	resolveCount := 0
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthHeader = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(remoteRegistrationResponse{
+			EnvironmentID:   "env-1",
+			SecurityProfile: RemoteSecurityProfile,
+		})
+	}))
+	defer registry.Close()
+
+	identity, err := generateRemoteNoiseIdentity()
+	if err != nil {
+		t.Fatalf("generateRemoteNoiseIdentity() error = %v", err)
+	}
+	defer identity.Destroy()
+
+	cfg := RemoteEnvironmentConfig{
+		BaseURL:       registry.URL,
+		EnvironmentID: "env-1",
+		AuthHeaders:   http.Header{"Authorization": []string{"Bearer static"}},
+		ResolveAuthHeaders: func(ctx context.Context) (http.Header, error) {
+			resolveCount++
+			headers := http.Header{}
+			headers.Set("Authorization", "Bearer fresh")
+			return headers, nil
+		},
+		HTTPClient: registry.Client(),
+	}
+	if _, err := registerRemoteEnvironment(context.Background(), cfg, identity.PublicKey()); err != nil {
+		t.Fatalf("registerRemoteEnvironment() error = %v", err)
+	}
+	if resolveCount != 1 {
+		t.Fatalf("resolve count = %d, want 1 per registry request", resolveCount)
+	}
+	if receivedAuthHeader != "Bearer fresh" {
+		t.Fatalf("Authorization = %q, want fresh managed credential from resolver", receivedAuthHeader)
+	}
+}
+
 func TestRegisterRemoteEnvironmentAcceptsRegistryAllocationFieldsLikeRust(t *testing.T) {
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(remoteRegistrationResponse{

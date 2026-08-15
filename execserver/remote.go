@@ -33,10 +33,15 @@ type RemoteEnvironmentConfig struct {
 	EnvironmentID string
 	Name          string
 	AuthHeaders   http.Header
-	HTTPClient    *http.Client
-	Dial          func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
-	Backoff       time.Duration
-	MaxBackoff    time.Duration
+	// ResolveAuthHeaders resolves fresh auth headers for each environment
+	// registry request (Rust AuthProvider::resolve_auth_headers, #38610).
+	// Managed credentials (workload identity) are refreshed asynchronously
+	// before the request is sent. When nil, the static AuthHeaders are used.
+	ResolveAuthHeaders func(ctx context.Context) (http.Header, error)
+	HTTPClient         *http.Client
+	Dial               func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	Backoff            time.Duration
+	MaxBackoff         time.Duration
 }
 
 type RemotePublicKey struct {
@@ -158,7 +163,11 @@ func registerRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig,
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
-	for key, values := range cfg.AuthHeaders {
+	headers, err := resolveRemoteEnvironmentAuthHeaders(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("environment registry auth resolution failed: %w", err)
+	}
+	for key, values := range headers {
 		for _, value := range values {
 			request.Header.Add(key, value)
 		}
@@ -182,6 +191,20 @@ func registerRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig,
 		return nil, fmt.Errorf("exec-server protocol error: environment registry returned unsupported security profile `%s`", decoded.SecurityProfile)
 	}
 	return &decoded, nil
+}
+
+func resolveRemoteEnvironmentAuthHeaders(ctx context.Context, cfg RemoteEnvironmentConfig) (http.Header, error) {
+	if cfg.ResolveAuthHeaders != nil {
+		headers, err := cfg.ResolveAuthHeaders(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if headers == nil {
+			return http.Header{}, nil
+		}
+		return headers, nil
+	}
+	return cfg.AuthHeaders, nil
 }
 
 func remoteRegistryStatusError(response *http.Response) error {
