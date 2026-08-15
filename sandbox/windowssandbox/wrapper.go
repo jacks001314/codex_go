@@ -67,6 +67,16 @@ func CreateWindowsSandboxCommandArgsForPermissionProfile(req WindowsSandboxComma
 	if err := req.validateForArgs(); err != nil {
 		return nil, err
 	}
+	// Rust #38660: resolve managed filesystem deny rules at request
+	// construction so exact-path and glob deny-read entries are enforced on
+	// every execution path, unless the caller supplied explicit overrides.
+	if len(req.DenyReadPathsOverride) == 0 && req.PermissionProfile != nil && req.PermissionProfile.HasDenyReadEntries() {
+		resolved, err := ResolveDenyReadPathsFromProfile(req.PermissionProfile, req.CommandCWD)
+		if err != nil {
+			return nil, err
+		}
+		req.DenyReadPathsOverride = resolved
+	}
 	permissionProfileJSON, err := json.Marshal(req.PermissionProfile)
 	if err != nil {
 		return nil, err
@@ -423,6 +433,12 @@ func (r *WindowsSandboxCommandArgsRequest) validateForArgs() error {
 	}
 	if r.WindowsSandboxLevel == "" {
 		r.WindowsSandboxLevel = WindowsSandboxLevelRestrictedToken
+	}
+	if r.WindowsSandboxLevel == WindowsSandboxLevelRestrictedToken && r.PermissionProfile != nil && r.PermissionProfile.HasDenyReadEntries() {
+		// Rust #38660: the unelevated WRITE_RESTRICTED token cannot enforce
+		// split filesystem read restrictions; fail closed instead of running
+		// without the requested deny-read protection.
+		return fmt.Errorf("%w: windows unelevated restricted-token sandbox cannot enforce split filesystem read restrictions directly; refusing to run unsandboxed", ErrInvalidRequest)
 	}
 	if r.ProxySettingsMode == "" {
 		r.ProxySettingsMode = ProxySettingsReconcile

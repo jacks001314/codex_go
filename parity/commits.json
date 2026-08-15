@@ -742,9 +742,9 @@
                         "domains":  [
                                         "sandbox"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: Windows sandbox batch"
+                                         "go test ./sandbox/windowssandbox -run \"DenyRead|RestrictedToken\" -count=1; Windows sandbox requests resolve deny-read paths from the profile at construction, fail closed for unbounded root globs and restricted-token profiles with deny-read entries"
                                      ]
                     },
                     {

@@ -7,12 +7,34 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	coresandbox "codex_go/sandbox"
 )
 
 type DenyReadPolicy struct {
 	Paths            []string
 	Globs            []string
 	GlobScanMaxDepth *int
+}
+
+// ResolveDenyReadPathsFromProfile resolves the managed filesystem deny rules
+// from a resolved permission profile at Windows sandbox request construction
+// (Rust #38660): exact-path and glob deny-read entries become the planned
+// deny-read paths, with unbounded root-level globs failing closed.
+func ResolveDenyReadPathsFromProfile(profile *coresandbox.PermissionProfile, cwd string) ([]string, error) {
+	if profile == nil || !profile.HasDenyReadEntries() {
+		return nil, nil
+	}
+	var policy DenyReadPolicy
+	for _, entry := range profile.DeniedReadEntries {
+		switch entry.Path.Type {
+		case "glob_pattern":
+			policy.Globs = append(policy.Globs, entry.Path.Pattern)
+		case "path":
+			policy.Paths = append(policy.Paths, entry.Path.Path)
+		}
+	}
+	return ResolveWindowsDenyReadPolicyPaths(policy, cwd)
 }
 
 type GlobScanPlan struct {

@@ -1,6 +1,9 @@
 package windowssandbox
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	coresandbox "codex_go/sandbox"
@@ -57,6 +60,63 @@ func TestCreateWindowsSandboxCommandArgsForPermissionProfile(t *testing.T) {
 	}
 	if len(capture.DenyReadPaths) != 1 || len(capture.DenyWritePaths) != 1 {
 		t.Fatalf("capture denies = read %#v write %#v", capture.DenyReadPaths, capture.DenyWritePaths)
+	}
+}
+
+func TestCreateWindowsSandboxCommandArgsResolvesDenyReadPathsFromProfileLikeRust(t *testing.T) {
+	tmp := t.TempDir()
+	exact := filepath.Join(tmp, "secrets.txt")
+	nested := filepath.Join(tmp, "app", ".env")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	for _, path := range []string{exact, nested} {
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+	profile := coresandbox.WorkspaceWritePermissionProfile()
+	profile.DeniedReadEntries = []coresandbox.FileSystemSandboxEntry{
+		{Path: coresandbox.FileSystemPath{Type: "path", Path: exact}, Access: coresandbox.FileSystemAccessDeny},
+		{Path: coresandbox.FileSystemPath{Type: "glob_pattern", Pattern: filepath.Join(tmp, "**", "*.env")}, Access: coresandbox.FileSystemAccessDeny},
+	}
+	got, err := CreateWindowsSandboxCommandArgsForPermissionProfile(WindowsSandboxCommandArgsRequest{
+		Command:             []string{"cmd", "/c", "echo hi"},
+		CommandCWD:          tmp,
+		PermissionProfile:   &profile,
+		WindowsSandboxLevel: WindowsSandboxLevelElevated,
+		CodexHome:           `C:\Users\codex\.codex`,
+	})
+	if err != nil {
+		t.Fatalf("CreateWindowsSandboxCommandArgsForPermissionProfile() error = %v", err)
+	}
+	parsed, err := ParseWindowsSandboxWrapperArgs(got)
+	if err != nil {
+		t.Fatalf("ParseWindowsSandboxWrapperArgs() error = %v", err)
+	}
+	if len(parsed.DenyReadPathsOverride) != 2 {
+		t.Fatalf("deny read paths = %#v, want exact path and glob match resolved from profile", parsed.DenyReadPathsOverride)
+	}
+	joined := strings.Join(parsed.DenyReadPathsOverride, "\n")
+	if !strings.Contains(joined, filepath.Clean(exact)) || !strings.Contains(joined, filepath.Clean(nested)) {
+		t.Fatalf("deny read paths = %#v, want %q and %q", parsed.DenyReadPathsOverride, exact, nested)
+	}
+}
+
+func TestCreateWindowsSandboxCommandArgsRejectsRestrictedTokenWithDenyReadLikeRust(t *testing.T) {
+	profile := coresandbox.WorkspaceWritePermissionProfile()
+	profile.DeniedReadEntries = []coresandbox.FileSystemSandboxEntry{
+		{Path: coresandbox.FileSystemPath{Type: "path", Path: `C:\repo\.env`}, Access: coresandbox.FileSystemAccessDeny},
+	}
+	_, err := CreateWindowsSandboxCommandArgsForPermissionProfile(WindowsSandboxCommandArgsRequest{
+		Command:             []string{"cmd", "/c", "echo hi"},
+		CommandCWD:          `C:\repo`,
+		PermissionProfile:   &profile,
+		WindowsSandboxLevel: WindowsSandboxLevelRestrictedToken,
+		CodexHome:           `C:\Users\codex\.codex`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot enforce split filesystem read restrictions") {
+		t.Fatalf("error = %v, want restricted-token fail-closed for deny-read", err)
 	}
 }
 
