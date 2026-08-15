@@ -454,9 +454,9 @@
                         "domains":  [
                                         "approvals"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: approvals batch"
+                                         "N/A-equivalent: Go has no extension approval contributors to bypass; approval retries already route through the standard Guardian-capable path and the review action carries the escalation/retry reason (tool.shellApprovalReason)"
                                      ]
                     },
                     {
