@@ -751,19 +751,35 @@ func runtimeForkTurns(value *string) string {
 	return strings.ToLower(strings.TrimSpace(*value))
 }
 
-// filterInheritedCurrentTimeReminders removes current-time reminder developer
-// items copied from a parent thread into a full-history fork. The child turn
-// injects its own fresh reminder, so inheriting parent reminders would
-// accumulate stale time markers in the forked context (Rust #38446).
+// filterInheritedCurrentTimeReminders removes current-time reminder and
+// multi-agent role developer items copied from a parent thread into a
+// full-history fork. The child turn injects its own fresh fragments, so
+// inheriting the parent's stale role guidance or reminders would accumulate
+// outdated markers in the forked context (Rust #38446/#38619).
 func filterInheritedCurrentTimeReminders(items []session.Item) []session.Item {
 	filtered := items[:0]
 	for i := range items {
-		if sessionItemIsCurrentTimeReminder(&items[i]) {
+		if sessionItemIsCurrentTimeReminder(&items[i]) || sessionItemIsMultiAgentRoleInstruction(&items[i]) {
 			continue
 		}
 		filtered = append(filtered, items[i])
 	}
 	return filtered
+}
+
+func sessionItemIsMultiAgentRoleInstruction(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	if strings.Contains(strings.TrimSpace(item.Text), "<multi_agent_role>") {
+		return true
+	}
+	for _, part := range item.Content {
+		if strings.TrimSpace(part.Text) != "" && strings.Contains(part.Text, "<multi_agent_role>") {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonNilError(err error, fallback error) error {

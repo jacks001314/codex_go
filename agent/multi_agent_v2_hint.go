@@ -51,6 +51,12 @@ type MultiAgentV2UsageHintOptions struct {
 	ExposeSpawnAgentModelOverrides bool
 	RootUsageHintText              *string
 	SubagentUsageHintText          *string
+	// Catalog role instructions from the model's multi_agent messages
+	// (Rust #38619). Configured text takes precedence; catalog text is used
+	// only when no configuration override exists and is rendered with
+	// <multi_agent_role> markers.
+	RootCatalogHintText     *string
+	SubagentCatalogHintText *string
 }
 
 // MultiAgentV2UsageHint composes the developer-instruction fragment shown to a
@@ -63,9 +69,15 @@ func MultiAgentV2UsageHint(options MultiAgentV2UsageHintOptions) string {
 		identity = MultiAgentV2SubagentUsageHint
 		if options.SubagentUsageHintText != nil {
 			identity = strings.TrimSpace(*options.SubagentUsageHintText)
+		} else if options.SubagentCatalogHintText != nil {
+			identity = strings.TrimSpace(*options.SubagentCatalogHintText)
+			identity = markMultiAgentRoleInstruction(identity)
 		}
 	} else if options.RootUsageHintText != nil {
 		identity = strings.TrimSpace(*options.RootUsageHintText)
+	} else if options.RootCatalogHintText != nil {
+		identity = strings.TrimSpace(*options.RootCatalogHintText)
+		identity = markMultiAgentRoleInstruction(identity)
 	}
 	parts := []string{identity, MultiAgentV2SharedUsageHint}
 	// Rust 92b83e226d (#37189): present wait_agent polling guidance in the
@@ -82,6 +94,13 @@ func MultiAgentV2UsageHint(options MultiAgentV2UsageHintOptions) string {
 		parts = append(parts, MultiAgentV2ModelOverrideUsageHint)
 	}
 	return strings.Join(nonEmptyStrings(parts), "\n\n")
+}
+
+func markMultiAgentRoleInstruction(text string) string {
+	if text == "" {
+		return ""
+	}
+	return "<multi_agent_role>\n" + text + "\n</multi_agent_role>"
 }
 
 func nonEmptyStrings(values []string) []string {

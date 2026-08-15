@@ -9906,6 +9906,24 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 				customModeText = strings.TrimSpace(*v2Config.MultiAgentModeHintText)
 			}
 		}
+		if customModeText == "" {
+			// Rust #38619: catalog multi-agent mode messages provide the
+			// explicit-delegation and hint text when no configuration override
+			// is present.
+			modelID := ""
+			if params != nil {
+				modelID = strings.TrimSpace(params.Model)
+			}
+			info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+			if info != nil && info.ModelMessages != nil && info.ModelMessages.MultiAgent != nil && info.ModelMessages.MultiAgent.Mode != nil {
+				modeMessages := info.ModelMessages.MultiAgent.Mode
+				if modeMessages.HintText != nil && strings.TrimSpace(*modeMessages.HintText) != "" {
+					customModeText = strings.TrimSpace(*modeMessages.HintText)
+				} else if mode != string(MultiAgentModeProactive) && modeMessages.Explicit != nil && strings.TrimSpace(*modeMessages.Explicit) != "" {
+					customModeText = strings.TrimSpace(*modeMessages.Explicit)
+				}
+			}
+		}
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil {
@@ -9977,6 +9995,7 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItem(threadID string, cfg *confi
 	if err != nil {
 		return nil, err
 	}
+	rootCatalogHintText, subagentCatalogHintText := r.multiAgentCatalogRoleInstructions(cfg, nil)
 	hint := agent.MultiAgentV2UsageHint(agent.MultiAgentV2UsageHintOptions{
 		IsSubagent:                     strings.TrimSpace(record.Metadata.AgentPath) != "" || record.Metadata.AgentDepth > 0,
 		MaxConcurrency:                 v2Config.MaxConcurrentThreadsPerSession,
@@ -9984,6 +10003,8 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItem(threadID string, cfg *confi
 		ExposeSpawnAgentModelOverrides: v2Config.ExposeSpawnAgentModelOverrides,
 		RootUsageHintText:              v2Config.RootAgentUsageHintText,
 		SubagentUsageHintText:          v2Config.SubagentUsageHintText,
+		RootCatalogHintText:            rootCatalogHintText,
+		SubagentCatalogHintText:        subagentCatalogHintText,
 	})
 	if strings.TrimSpace(hint) == "" {
 		return nil, nil
@@ -10009,6 +10030,30 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItem(threadID string, cfg *confi
 	}
 	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<multi_agent_usage_hint>", "</multi_agent_usage_hint>", hint))
 	return renderedFragmentInputItem(rendered), nil
+}
+
+// multiAgentCatalogRoleInstructions returns the model-catalog multi-agent role
+// instructions for the turn's effective model (Rust #38619). Configured
+// root/subagent usage-hint text takes precedence at render time; the catalog
+// values are used only when no configuration override exists.
+func (r *RuntimeRouter) multiAgentCatalogRoleInstructions(cfg *config.Config, params *turn.TurnStartParams) (*string, *string) {
+	modelID := ""
+	if params != nil {
+		modelID = strings.TrimSpace(params.Model)
+	}
+	if modelID == "" && cfg != nil {
+		if value, ok := cfg.Values["model"].(string); ok {
+			modelID = strings.TrimSpace(value)
+		}
+	}
+	if modelID == "" {
+		return nil, nil
+	}
+	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	if info == nil || info.ModelMessages == nil || info.ModelMessages.MultiAgent == nil || info.ModelMessages.MultiAgent.Role == nil {
+		return nil, nil
+	}
+	return info.ModelMessages.MultiAgent.Role.Root, info.ModelMessages.MultiAgent.Role.Subagent
 }
 
 func (r *RuntimeRouter) deferredToolsWorldStateInputItem(threadID string, runtime *turn.Runtime, enabled bool) (any, error) {

@@ -490,9 +490,9 @@
                         "domains":  [
                                         "agent"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: multi-agent catalog batch"
+                                         "go test ./model ./appserver ./agent -run MultiAgent -count=1; model_catalog multi_agent role/mode messages parsed, preserved through overrides, and wired into usage-hint/mode developer fragments with config precedence and empty suppression; full-history forks drop parent multi_agent_role guidance"
                                      ]
                     },
                     {
