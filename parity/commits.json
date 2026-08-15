@@ -598,9 +598,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI startup batch"
+                                         "equivalent: Go bubbletea TUI renders the session header and composer atomically per frame; input cannot act before the initial render"
                                      ]
                     },
                     {
@@ -610,9 +610,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI startup batch"
+                                         "N/A: Rust crossterm terminal-probe startup input handling; Go uses bubbletea with no terminal probe/replay state machine"
                                      ]
                     },
                     {
@@ -622,9 +622,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI startup batch"
+                                         "equivalent: Go TUI composer is editable from the first frame during app-server/MCP bootstrap (app/interactive.go)"
                                      ]
                     },
                     {
@@ -634,9 +634,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI startup batch"
+                                         "equivalent: Go runs first-login onboarding before starting the TUI (interactive_onboarding.go), so the composer appears only after onboarding"
                                      ]
                     },
                     {
@@ -646,9 +646,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI startup batch"
+                                         "equivalent: Go onboarding is shown when the resolved auth mode is unknown (auth-relevant state), not when the codex home is non-empty"
                                      ]
                     },
                     {
@@ -694,9 +694,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI startup batch"
+                                         "N/A: Go local TUI startup resolves auth from the auth store without a duplicate remote account RPC; Rust app-server bootstrap account-response reuse has no Go counterpart"
                                      ]
                     },
                     {
