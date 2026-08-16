@@ -171,9 +171,9 @@ func TestRustErrorCodeSurfaceAgainstGo(t *testing.T) {
 // modelInfoRustOnlyAllowlist documents Rust ModelInfo wire fields that Go's
 // ModelInfo does not carry, with the reason so each entry is auditable and
 // removable as Go adopts the field.
-var modelInfoRustOnlyAllowlist = map[string]string{
-	"availability_nux": "carried on Go's ModelSummary (model/api.go) rather than ModelInfo",
-}
+// modelInfoRustOnlyAllowlist documents Rust ModelInfo wire fields that Go's
+// ModelInfo does not carry. Currently empty: all wire fields are carried.
+var modelInfoRustOnlyAllowlist = map[string]string{}
 
 // modelInfoGoOnlyAllowlist documents Go ModelInfo JSON fields absent from
 // Rust's ModelInfo: extensions or naming variants.
@@ -212,8 +212,8 @@ func TestRustModelInfoFieldSurfaceAgainstGo(t *testing.T) {
 	if len(rustSet) != 41 {
 		t.Fatalf("Rust ModelInfo wire field count = %d, want 41 (pinned baseline)", len(rustSet))
 	}
-	if len(goSet) != 42 {
-		t.Fatalf("Go ModelInfo JSON field count = %d, want 42 (pinned baseline)", len(goSet))
+	if len(goSet) != 43 {
+		t.Fatalf("Go ModelInfo JSON field count = %d, want 43 (pinned baseline)", len(goSet))
 	}
 
 	for field := range rustSet {

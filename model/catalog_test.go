@@ -271,6 +271,7 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 			"apply_patch_tool_type": "freeform",
 			"comp_hash": "abc123",
 			"experimental_supported_tools": ["web_search"],
+			"availability_nux": {"message": "Welcome to GPT Test"},
 			"node_repl_auto_review_required": true,
 			"node_repl_disabled": true
 		}]
@@ -287,6 +288,9 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 	if model.ShellType != "unified_exec" || model.ApplyPatchToolType != "freeform" || model.CompHash != "abc123" ||
 		len(model.ExperimentalSupportedTools) != 1 || model.ExperimentalSupportedTools[0] != "web_search" {
 		t.Fatalf("model Rust metadata fields = %#v", model)
+	}
+	if model.AvailabilityNux == nil || model.AvailabilityNux.Message != "Welcome to GPT Test" {
+		t.Fatalf("model availability_nux = %#v", model.AvailabilityNux)
 	}
 	if !model.NodeReplAutoReviewRequired || !model.NodeReplDisabled {
 		t.Fatalf("node repl policy = %#v", model)

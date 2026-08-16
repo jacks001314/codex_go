@@ -489,6 +489,13 @@
                       "area":  "parity",
                       "reason":  "Fixed a real catalog parse gap: Go's ModelInfo parsed only the legacy name supports_reasoning_summaries while the backend /models response sends Rust's serde name supports_reasoning_summary_parameter, so the field was always false and reasoning summaries were never emitted on the catalog-driven request paths (responses_agent.go). The parse now accepts the Rust name as primary (wins), the legacy name as a parse-time alias, and absent fields default to true (Rust serde default_true). The L0 model-metadata verifier allowlist shrank to 1 Rust-only entry (availability_nux) and 2 Go-only extensions (base_instructions, supports_parallel_tool_calls).",
                       "test":  "go test ./model -run 'TestModelInfoReasoningSummariesParseMirrorsRustDefaultTrue|TestModelInfoUnmarshalRustCatalogShape' -count=1; go test ./parity -run TestRustModelInfoFieldSurfaceAgainstGo -count=1"
+                  },
+                  {
+                      "id":  "model-metadata-surface-fully-aligned",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Go ModelInfo now carries the final missing Rust wire field availability_nux (ModelAvailabilityNux{message}) so all 41 Rust openai_models::ModelInfo wire fields are carried; the L0 model-metadata verifier's rust-only allowlist is empty and only 2 genuine Go extensions remain (base_instructions, supports_parallel_tool_calls).",
+                      "test":  "go test ./parity -run TestRustModelInfoFieldSurfaceAgainstGo -count=1; go test ./model -run TestModelInfoUnmarshalRustCatalogShape -count=1"
                   }
               ]
 }

@@ -220,6 +220,9 @@ type ModelInfo struct {
 	NodeReplDisabled              bool              `json:"node_repl_disabled"`
 	AutoReviewModelOverride       string            `json:"auto_review_model_override"`
 	Upgrade                       *ModelInfoUpgrade `json:"upgrade"`
+	// AvailabilityNux mirrors Rust ModelInfo.availability_nux (the NUX shown
+	// when the model preset becomes accessible to the user).
+	AvailabilityNux *ModelAvailabilityNux `json:"availability_nux"`
 	// ShellType / ApplyPatchToolType / CompHash / ExperimentalSupportedTools
 	// carry the Rust openai_models::ModelInfo wire fields so catalog metadata
 	// round-trips identically (L0 model-metadata surface).
@@ -276,49 +279,50 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		Limit int64  `json:"limit"`
 	}
 	var raw struct {
-		Slug                              string              `json:"slug"`
-		DisplayName                       string              `json:"display_name"`
-		Description                       any                 `json:"description"`
-		DefaultReasoningLevel             any                 `json:"default_reasoning_level"`
-		SupportedReasoningLevels          []json.RawMessage   `json:"supported_reasoning_levels"`
-		Visibility                        string              `json:"visibility"`
-		SupportedInAPI                    bool                `json:"supported_in_api"`
-		Priority                          int                 `json:"priority"`
-		AdditionalSpeedTiers              []string            `json:"additional_speed_tiers"`
-		ServiceTiers                      []json.RawMessage   `json:"service_tiers"`
-		DefaultServiceTier                any                 `json:"default_service_tier"`
-		BaseInstructions                  string              `json:"base_instructions"`
-		ModelMessages                     *ModelMessages      `json:"model_messages"`
-		IncludeSkillsUsageInstructions    bool                `json:"include_skills_usage_instructions"`
-		IncludePluginUsageInstructions    bool                `json:"include_plugin_usage_instructions"`
-		IncludeAppsUsageInstructions      *bool               `json:"include_apps_usage_instructions"`
-		ModelSpecialty                    any                 `json:"model_specialty"`
-		SupportsReasoningSummaryParameter *bool               `json:"supports_reasoning_summary_parameter"`
-		SupportsReasoningSummariesLegacy  *bool               `json:"supports_reasoning_summaries"`
-		DefaultReasoningSummary           string              `json:"default_reasoning_summary"`
-		SupportVerbosity                  bool                `json:"support_verbosity"`
-		DefaultVerbosity                  any                 `json:"default_verbosity"`
-		WebSearchToolType                 string              `json:"web_search_tool_type"`
-		TruncationPolicy                  rawTruncationPolicy `json:"truncation_policy"`
-		SupportsParallelToolCalls         bool                `json:"supports_parallel_tool_calls"`
-		ToolMode                          any                 `json:"tool_mode"`
-		MultiAgentVersion                 any                 `json:"multi_agent_version"`
-		SupportsImageDetailOriginal       bool                `json:"supports_image_detail_original"`
-		ContextWindow                     int64               `json:"context_window"`
-		MaxContextWindow                  int64               `json:"max_context_window"`
-		AutoCompactTokenLimit             int64               `json:"auto_compact_token_limit"`
-		EffectiveContextWindowPercent     int                 `json:"effective_context_window_percent"`
-		InputModalities                   []string            `json:"input_modalities"`
-		SupportsSearchTool                bool                `json:"supports_search_tool"`
-		UseResponsesLite                  bool                `json:"use_responses_lite"`
-		NodeReplAutoReviewRequired        bool                `json:"node_repl_auto_review_required"`
-		NodeReplDisabled                  bool                `json:"node_repl_disabled"`
-		AutoReviewModelOverride           any                 `json:"auto_review_model_override"`
-		Upgrade                           *ModelInfoUpgrade   `json:"upgrade"`
-		ShellType                         string              `json:"shell_type"`
-		ApplyPatchToolType                string              `json:"apply_patch_tool_type"`
-		CompHash                          string              `json:"comp_hash"`
-		ExperimentalSupportedTools        []string            `json:"experimental_supported_tools"`
+		Slug                              string                `json:"slug"`
+		DisplayName                       string                `json:"display_name"`
+		Description                       any                   `json:"description"`
+		DefaultReasoningLevel             any                   `json:"default_reasoning_level"`
+		SupportedReasoningLevels          []json.RawMessage     `json:"supported_reasoning_levels"`
+		Visibility                        string                `json:"visibility"`
+		SupportedInAPI                    bool                  `json:"supported_in_api"`
+		Priority                          int                   `json:"priority"`
+		AdditionalSpeedTiers              []string              `json:"additional_speed_tiers"`
+		ServiceTiers                      []json.RawMessage     `json:"service_tiers"`
+		DefaultServiceTier                any                   `json:"default_service_tier"`
+		BaseInstructions                  string                `json:"base_instructions"`
+		ModelMessages                     *ModelMessages        `json:"model_messages"`
+		IncludeSkillsUsageInstructions    bool                  `json:"include_skills_usage_instructions"`
+		IncludePluginUsageInstructions    bool                  `json:"include_plugin_usage_instructions"`
+		IncludeAppsUsageInstructions      *bool                 `json:"include_apps_usage_instructions"`
+		ModelSpecialty                    any                   `json:"model_specialty"`
+		SupportsReasoningSummaryParameter *bool                 `json:"supports_reasoning_summary_parameter"`
+		SupportsReasoningSummariesLegacy  *bool                 `json:"supports_reasoning_summaries"`
+		DefaultReasoningSummary           string                `json:"default_reasoning_summary"`
+		SupportVerbosity                  bool                  `json:"support_verbosity"`
+		DefaultVerbosity                  any                   `json:"default_verbosity"`
+		WebSearchToolType                 string                `json:"web_search_tool_type"`
+		TruncationPolicy                  rawTruncationPolicy   `json:"truncation_policy"`
+		SupportsParallelToolCalls         bool                  `json:"supports_parallel_tool_calls"`
+		ToolMode                          any                   `json:"tool_mode"`
+		MultiAgentVersion                 any                   `json:"multi_agent_version"`
+		SupportsImageDetailOriginal       bool                  `json:"supports_image_detail_original"`
+		ContextWindow                     int64                 `json:"context_window"`
+		MaxContextWindow                  int64                 `json:"max_context_window"`
+		AutoCompactTokenLimit             int64                 `json:"auto_compact_token_limit"`
+		EffectiveContextWindowPercent     int                   `json:"effective_context_window_percent"`
+		InputModalities                   []string              `json:"input_modalities"`
+		SupportsSearchTool                bool                  `json:"supports_search_tool"`
+		UseResponsesLite                  bool                  `json:"use_responses_lite"`
+		NodeReplAutoReviewRequired        bool                  `json:"node_repl_auto_review_required"`
+		NodeReplDisabled                  bool                  `json:"node_repl_disabled"`
+		AutoReviewModelOverride           any                   `json:"auto_review_model_override"`
+		Upgrade                           *ModelInfoUpgrade     `json:"upgrade"`
+		AvailabilityNux                   *ModelAvailabilityNux `json:"availability_nux"`
+		ShellType                         string                `json:"shell_type"`
+		ApplyPatchToolType                string                `json:"apply_patch_tool_type"`
+		CompHash                          string                `json:"comp_hash"`
+		ExperimentalSupportedTools        []string              `json:"experimental_supported_tools"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -362,6 +366,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		NodeReplDisabled:               raw.NodeReplDisabled,
 		AutoReviewModelOverride:        stringFromJSONValue(raw.AutoReviewModelOverride),
 		Upgrade:                        raw.Upgrade,
+		AvailabilityNux:                raw.AvailabilityNux,
 		ShellType:                      raw.ShellType,
 		ApplyPatchToolType:             raw.ApplyPatchToolType,
 		CompHash:                       raw.CompHash,
