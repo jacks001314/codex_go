@@ -538,6 +538,13 @@
                       "area":  "parity",
                       "reason":  "Recognized the Rust feedback config key: Go's interactive TUI already reads feedback.enabled (interactiveFeedbackEnabledFromConfig gates the TUI feedback prompt, default true like Rust), but strict config validation rejected the key. Added the key plus feedback.enabled sub-field validation (deny_unknown_fields mirroring Rust FeedbackConfigToml); the config-schema rust-only allowlist shrank from 13 to 12.",
                       "test":  "go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1; go test ./config -count=1"
+                  },
+                  {
+                      "id":  "notice-config-surface",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Recognized Rust's notice (singular) suppression table: Go's interactive TUI already reads hide_rate_limit_model_nudge from the legacy Go `notices` table, but strict config rejected Rust's `notice` table - a user setting notice.hide_rate_limit_model_nudge would fail config loading. Added the key, notice sub-field validation mirroring Rust's Notice keys (deny_unknown_fields), and made interactiveHideRateLimitModelNudgeFromConfig honor both tables with the Rust name winning. The config-schema rust-only allowlist shrank from 12 to 11; the legacy `notices` stays a documented Go extension.",
+                      "test":  "go test ./app -run TestInteractiveHideRateLimitModelNudgeAcceptsRustAndLegacyTables -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
                   }
               ]
 }

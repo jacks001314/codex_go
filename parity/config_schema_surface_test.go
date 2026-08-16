@@ -24,7 +24,6 @@ var configSchemaRustOnlyAllowlist = map[string]string{
 	"marketplaces":                        "Rust plugin marketplace config section; Go marketplaces are configured via plugin files, not top-level config",
 	"mcp_oauth_callback_port":             "Rust MCP OAuth callback port override; Go uses system-assigned ports",
 	"mcp_oauth_callback_url":              "Rust MCP OAuth callback URL override; Go uses system-assigned URLs",
-	"notice":                              "Rust notice suppression section; Go tracks notices differently (Go `notices` key is a Go extension)",
 	"oss_provider":                        "Rust bundled OSS provider block; Go models OSS providers via model_providers",
 	"suppress_unstable_features_warning":  "Rust startup warning suppression; Go does not render the unstable-features warning",
 }
@@ -69,8 +68,8 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	if len(rustKeys) != 94 {
 		t.Fatalf("Rust config.schema.json top-level property count = %d, want 94 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 88 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 88 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 89 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 89 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)

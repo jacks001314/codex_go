@@ -28,6 +28,34 @@ func TestInteractiveRemoteWorkloadIdentityRejectionLikeRust(t *testing.T) {
 	}
 }
 
+// TestInteractiveHideRateLimitModelNudgeAcceptsRustAndLegacyTables pins the
+// notice suppression read: both Rust's `notice` table and the legacy Go
+// `notices` table are honored, with the Rust name winning when both exist.
+func TestInteractiveHideRateLimitModelNudgeAcceptsRustAndLegacyTables(t *testing.T) {
+	rustTable := interactiveHideRateLimitModelNudgeFromConfig(map[string]any{
+		"notice": map[string]any{"hide_rate_limit_model_nudge": true},
+	})
+	if rustTable == nil || !*rustTable {
+		t.Fatalf("Rust notice table should hide the nudge: %v", rustTable)
+	}
+
+	legacyTable := interactiveHideRateLimitModelNudgeFromConfig(map[string]any{
+		"notices": map[string]any{"hide_rate_limit_model_nudge": true},
+	})
+	if legacyTable == nil || !*legacyTable {
+		t.Fatalf("legacy notices table should hide the nudge: %v", legacyTable)
+	}
+
+	// Rust name wins when both tables are present.
+	both := interactiveHideRateLimitModelNudgeFromConfig(map[string]any{
+		"notice":  map[string]any{"hide_rate_limit_model_nudge": false},
+		"notices": map[string]any{"hide_rate_limit_model_nudge": true},
+	})
+	if both == nil || *both {
+		t.Fatalf("Rust notice table should win when both present: %v", both)
+	}
+}
+
 func TestInteractivePluginEnabledWriterPreservesPluginMetadata(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

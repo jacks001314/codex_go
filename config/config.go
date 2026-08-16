@@ -357,6 +357,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"model_reasoning_effort":                     {},
 	"model_reasoning_summary":                    {},
 	"model_verbosity":                            {},
+	"notice":                                     {},
 	"notices":                                    {},
 	"notify":                                     {},
 	"openai_base_url":                            {},
@@ -439,6 +440,24 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 		for key := range feedback {
 			if !known[key] {
 				return fmt.Errorf("unknown configuration field `feedback.%s`", key)
+			}
+		}
+	}
+	if notice, ok := values["notice"].(map[string]any); ok {
+		// Mirrors Rust Notice (config/src/types.rs, serde deny_unknown_fields).
+		known := map[string]bool{
+			"hide_full_access_warning":                true,
+			"hide_world_writable_warning":             true,
+			"fast_default_opt_out":                    true,
+			"hide_rate_limit_model_nudge":             true,
+			"hide_gpt5_1_migration_prompt":            true,
+			"hide_gpt-5.1-codex-max_migration_prompt": true,
+			"model_migrations":                        true,
+			"external_config_migration_prompts":       true,
+		}
+		for key := range notice {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `notice.%s`", key)
 			}
 		}
 	}

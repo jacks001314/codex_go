@@ -1557,15 +1557,16 @@ func interactiveHideRateLimitModelNudgeFromConfig(values map[string]any) *bool {
 	if values == nil {
 		return nil
 	}
-	notices, ok := values["notices"].(map[string]any)
-	if !ok {
-		return nil
+	// Accept both Rust's `notice` table and the legacy Go `notices` name;
+	// the Rust name wins when both are present.
+	for _, table := range []string{"notice", "notices"} {
+		if notices, ok := values[table].(map[string]any); ok {
+			if value, ok := notices["hide_rate_limit_model_nudge"].(bool); ok {
+				return &value
+			}
+		}
 	}
-	value, ok := notices["hide_rate_limit_model_nudge"].(bool)
-	if !ok {
-		return nil
-	}
-	return &value
+	return nil
 }
 
 func interactiveNotificationSettingsFromConfig(values map[string]any) *chatwidget.NotificationsSetting {
