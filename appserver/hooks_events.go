@@ -162,16 +162,7 @@ func (r *HookRunner) RunSessionStart(ctx context.Context, request *HookSessionSt
 	if request == nil {
 		return nil, fmt.Errorf("%w: session start hook request is nil", ErrInvalidHook)
 	}
-	input := map[string]any{
-		"session_id":      request.ThreadID,
-		"transcript_path": nullableStringValue(request.TranscriptPath),
-		"cwd":             request.CWD,
-		"hook_event_name": "SessionStart",
-		"model":           request.Model,
-		"permission_mode": request.PermissionMode,
-		"source":          string(request.Source),
-	}
-	inputJSON, err := hookInputJSON(input)
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -189,11 +180,7 @@ func (r *HookRunner) RunSessionEnd(ctx context.Context, request *HookSessionEndR
 	if request == nil {
 		return nil, fmt.Errorf("%w: session end hook request is nil", ErrInvalidHook)
 	}
-	inputJSON, err := hookInputJSON(map[string]any{
-		"session_id": request.ThreadID, "transcript_path": nullableStringValue(request.TranscriptPath),
-		"cwd": request.CWD, "hook_event_name": "SessionEnd", "model": request.Model,
-		"permission_mode": request.PermissionMode, "reason": request.Reason,
-	})
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -204,18 +191,7 @@ func (r *HookRunner) RunSubagentStart(ctx context.Context, request *HookSubagent
 	if request == nil {
 		return nil, fmt.Errorf("%w: subagent start hook request is nil", ErrInvalidHook)
 	}
-	input := map[string]any{
-		"session_id":      request.ThreadID,
-		"turn_id":         request.TurnID,
-		"transcript_path": nullableStringValue(request.TranscriptPath),
-		"cwd":             request.CWD,
-		"hook_event_name": "SubagentStart",
-		"model":           request.Model,
-		"permission_mode": request.PermissionMode,
-		"agent_id":        request.AgentID,
-		"agent_type":      request.AgentType,
-	}
-	inputJSON, err := hookInputJSON(input)
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -235,18 +211,7 @@ func (r *HookRunner) RunStop(ctx context.Context, request *HookStopRequest) (*Ho
 	if request == nil {
 		return nil, fmt.Errorf("%w: stop hook request is nil", ErrInvalidHook)
 	}
-	input := map[string]any{
-		"session_id":             request.ThreadID,
-		"turn_id":                request.TurnID,
-		"transcript_path":        nullableStringValue(request.TranscriptPath),
-		"cwd":                    request.CWD,
-		"hook_event_name":        "Stop",
-		"model":                  request.Model,
-		"permission_mode":        request.PermissionMode,
-		"stop_hook_active":       request.StopHookActive,
-		"last_assistant_message": nullableStringValue(request.LastAssistantMessage),
-	}
-	inputJSON, err := hookInputJSON(input)
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -265,21 +230,7 @@ func (r *HookRunner) RunSubagentStop(ctx context.Context, request *HookSubagentS
 	if request == nil {
 		return nil, fmt.Errorf("%w: subagent stop hook request is nil", ErrInvalidHook)
 	}
-	input := map[string]any{
-		"session_id":             request.ThreadID,
-		"turn_id":                request.TurnID,
-		"transcript_path":        nullableStringValue(request.TranscriptPath),
-		"agent_transcript_path":  nullableStringValue(request.AgentTranscriptPath),
-		"cwd":                    request.CWD,
-		"hook_event_name":        "SubagentStop",
-		"model":                  request.Model,
-		"permission_mode":        request.PermissionMode,
-		"stop_hook_active":       request.StopHookActive,
-		"agent_id":               request.AgentID,
-		"agent_type":             request.AgentType,
-		"last_assistant_message": nullableStringValue(request.LastAssistantMessage),
-	}
-	inputJSON, err := hookInputJSON(input)
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -299,20 +250,7 @@ func (r *HookRunner) RunPreToolUse(ctx context.Context, request *HookPreToolUseR
 	if request == nil {
 		return nil, fmt.Errorf("%w: pre tool use hook request is nil", ErrInvalidHook)
 	}
-	input := map[string]any{
-		"session_id":      request.ThreadID,
-		"turn_id":         request.TurnID,
-		"transcript_path": nullableStringValue(request.TranscriptPath),
-		"cwd":             request.CWD,
-		"hook_event_name": "PreToolUse",
-		"model":           request.Model,
-		"permission_mode": request.PermissionMode,
-		"tool_name":       request.ToolName,
-		"tool_input":      request.ToolInput,
-		"tool_use_id":     request.ToolUseID,
-	}
-	addSubagentHookInput(input, request.Subagent)
-	inputJSON, err := hookInputJSON(input)
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -333,19 +271,7 @@ func (r *HookRunner) RunPermissionRequest(ctx context.Context, request *HookPerm
 	if request == nil {
 		return nil, fmt.Errorf("%w: permission request hook request is nil", ErrInvalidHook)
 	}
-	input := map[string]any{
-		"session_id":      request.ThreadID,
-		"turn_id":         request.TurnID,
-		"transcript_path": nullableStringValue(request.TranscriptPath),
-		"cwd":             request.CWD,
-		"hook_event_name": "PermissionRequest",
-		"model":           request.Model,
-		"permission_mode": request.PermissionMode,
-		"tool_name":       request.ToolName,
-		"tool_input":      request.ToolInput,
-	}
-	addSubagentHookInput(input, request.Subagent)
-	inputJSON, err := hookInputJSON(input)
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -366,21 +292,7 @@ func (r *HookRunner) RunPostToolUse(ctx context.Context, request *HookPostToolUs
 	if request == nil {
 		return nil, fmt.Errorf("%w: post tool use hook request is nil", ErrInvalidHook)
 	}
-	input := map[string]any{
-		"session_id":      request.ThreadID,
-		"turn_id":         request.TurnID,
-		"transcript_path": nullableStringValue(request.TranscriptPath),
-		"cwd":             request.CWD,
-		"hook_event_name": "PostToolUse",
-		"model":           request.Model,
-		"permission_mode": request.PermissionMode,
-		"tool_name":       request.ToolName,
-		"tool_input":      request.ToolInput,
-		"tool_response":   request.ToolResponse,
-		"tool_use_id":     request.ToolUseID,
-	}
-	addSubagentHookInput(input, request.Subagent)
-	inputJSON, err := hookInputJSON(input)
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -401,17 +313,7 @@ func (r *HookRunner) RunPreCompact(ctx context.Context, request *HookPreCompactR
 	if request == nil {
 		return nil, fmt.Errorf("%w: pre compact hook request is nil", ErrInvalidHook)
 	}
-	input := map[string]any{
-		"session_id":      request.ThreadID,
-		"turn_id":         request.TurnID,
-		"transcript_path": nullableStringValue(request.TranscriptPath),
-		"cwd":             request.CWD,
-		"hook_event_name": "PreCompact",
-		"model":           request.Model,
-		"trigger":         request.Trigger,
-	}
-	addSubagentHookInput(input, request.Subagent)
-	inputJSON, err := hookInputJSON(input)
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -431,17 +333,7 @@ func (r *HookRunner) RunPostCompact(ctx context.Context, request *HookPostCompac
 	if request == nil {
 		return nil, fmt.Errorf("%w: post compact hook request is nil", ErrInvalidHook)
 	}
-	input := map[string]any{
-		"session_id":      request.ThreadID,
-		"turn_id":         request.TurnID,
-		"transcript_path": nullableStringValue(request.TranscriptPath),
-		"cwd":             request.CWD,
-		"hook_event_name": "PostCompact",
-		"model":           request.Model,
-		"trigger":         request.Trigger,
-	}
-	addSubagentHookInput(input, request.Subagent)
-	inputJSON, err := hookInputJSON(input)
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -461,18 +353,7 @@ func (r *HookRunner) RunUserPromptSubmit(ctx context.Context, request *HookUserP
 	if request == nil {
 		return nil, fmt.Errorf("%w: user prompt submit hook request is nil", ErrInvalidHook)
 	}
-	input := map[string]any{
-		"session_id":      request.ThreadID,
-		"turn_id":         request.TurnID,
-		"transcript_path": nullableStringValue(request.TranscriptPath),
-		"cwd":             request.CWD,
-		"hook_event_name": "UserPromptSubmit",
-		"model":           request.Model,
-		"permission_mode": request.PermissionMode,
-		"prompt":          request.Prompt,
-	}
-	addSubagentHookInput(input, request.Subagent)
-	inputJSON, err := hookInputJSON(input)
+	inputJSON, err := HookInputJSON(request)
 	if err != nil {
 		return nil, err
 	}
@@ -500,6 +381,156 @@ func addSubagentHookInput(input map[string]any, subagent *SubagentHookContext) {
 	}
 	input["agent_id"] = subagent.AgentID
 	input["agent_type"] = subagent.AgentType
+}
+
+// HookInputJSON builds the JSON input sent to a hook command for the given
+// hook event request, mirroring the Rust hook command input serialization
+// (hooks/src/schema.rs). It is the single source of truth for the input wire
+// surface: the HookRunner.Run* methods use it and the parity shared-fixture
+// verifier drives it against the Rust generated command schemas.
+func HookInputJSON(request any) (string, error) {
+	if request == nil {
+		return "", fmt.Errorf("%w: hook request is nil", ErrInvalidHook)
+	}
+	var input map[string]any
+	switch typed := request.(type) {
+	case *HookSessionStartRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"hook_event_name": "SessionStart",
+			"model":           typed.Model,
+			"permission_mode": typed.PermissionMode,
+			"source":          string(typed.Source),
+		}
+	case *HookSessionEndRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"hook_event_name": "SessionEnd",
+			"reason":          typed.Reason,
+		}
+	case *HookSubagentStartRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"turn_id":         typed.TurnID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"hook_event_name": "SubagentStart",
+			"model":           typed.Model,
+			"permission_mode": typed.PermissionMode,
+			"agent_id":        typed.AgentID,
+			"agent_type":      typed.AgentType,
+		}
+	case *HookStopRequest:
+		input = map[string]any{
+			"session_id":             typed.ThreadID,
+			"turn_id":                typed.TurnID,
+			"transcript_path":        nullableStringValue(typed.TranscriptPath),
+			"cwd":                    typed.CWD,
+			"hook_event_name":        "Stop",
+			"model":                  typed.Model,
+			"permission_mode":        typed.PermissionMode,
+			"stop_hook_active":       typed.StopHookActive,
+			"last_assistant_message": nullableStringValue(typed.LastAssistantMessage),
+		}
+	case *HookSubagentStopRequest:
+		input = map[string]any{
+			"session_id":             typed.ThreadID,
+			"turn_id":                typed.TurnID,
+			"transcript_path":        nullableStringValue(typed.TranscriptPath),
+			"agent_transcript_path":  nullableStringValue(typed.AgentTranscriptPath),
+			"cwd":                    typed.CWD,
+			"hook_event_name":        "SubagentStop",
+			"model":                  typed.Model,
+			"permission_mode":        typed.PermissionMode,
+			"stop_hook_active":       typed.StopHookActive,
+			"agent_id":               typed.AgentID,
+			"agent_type":             typed.AgentType,
+			"last_assistant_message": nullableStringValue(typed.LastAssistantMessage),
+		}
+	case *HookPreToolUseRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"turn_id":         typed.TurnID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"hook_event_name": "PreToolUse",
+			"model":           typed.Model,
+			"permission_mode": typed.PermissionMode,
+			"tool_name":       typed.ToolName,
+			"tool_input":      typed.ToolInput,
+			"tool_use_id":     typed.ToolUseID,
+		}
+		addSubagentHookInput(input, typed.Subagent)
+	case *HookPermissionRequestRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"turn_id":         typed.TurnID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"hook_event_name": "PermissionRequest",
+			"model":           typed.Model,
+			"permission_mode": typed.PermissionMode,
+			"tool_name":       typed.ToolName,
+			"tool_input":      typed.ToolInput,
+		}
+		addSubagentHookInput(input, typed.Subagent)
+	case *HookPostToolUseRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"turn_id":         typed.TurnID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"hook_event_name": "PostToolUse",
+			"model":           typed.Model,
+			"permission_mode": typed.PermissionMode,
+			"tool_name":       typed.ToolName,
+			"tool_input":      typed.ToolInput,
+			"tool_use_id":     typed.ToolUseID,
+			"tool_response":   typed.ToolResponse,
+		}
+		addSubagentHookInput(input, typed.Subagent)
+	case *HookPreCompactRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"turn_id":         typed.TurnID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"hook_event_name": "PreCompact",
+			"model":           typed.Model,
+			"trigger":         typed.Trigger,
+		}
+		addSubagentHookInput(input, typed.Subagent)
+	case *HookPostCompactRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"turn_id":         typed.TurnID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"hook_event_name": "PostCompact",
+			"model":           typed.Model,
+			"trigger":         typed.Trigger,
+		}
+		addSubagentHookInput(input, typed.Subagent)
+	case *HookUserPromptSubmitRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"turn_id":         typed.TurnID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"hook_event_name": "UserPromptSubmit",
+			"model":           typed.Model,
+			"permission_mode": typed.PermissionMode,
+			"prompt":          typed.Prompt,
+		}
+		addSubagentHookInput(input, typed.Subagent)
+	default:
+		return "", fmt.Errorf("%w: unsupported hook request type %T", ErrInvalidHook, request)
+	}
+	return hookInputJSON(input)
 }
 
 func toolMatcherInputs(toolName string, aliases []string) []string {

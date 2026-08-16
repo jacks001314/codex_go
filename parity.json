@@ -79,6 +79,13 @@
                       "test":  "go test ./parity -run TestRustCollaborationModeTemplatesMatchGo -count=1; go test ./tui/chatwidget ./appserver -run 'CollaborationMode|Mode' -count=1"
                   },
                   {
+                      "id":  "hooks-command-input-schemas-shared-fixture",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Wired the last unwired Rust data corpus: hooks/schema/generated/*.command.input.schema.json (11 schemars-generated draft-07 schemas pinned as fixtures for every hook command input type). Centralized Go's hand-built hook input maps into a single exported HookInputJSON(request) used by all HookRunner.Run* methods, and TestRustHooksCommandSchemasCoverGoInputSurface drives it against the frozen schema blobs asserting every emitted key is a declared property and every schema-required property is present. The differential caught a real over-emission bug: Go's session-end input emitted model/permission_mode which are absent from the Rust SessionEndCommandInput schema (and Rust input structs use serde deny_unknown_fields, so the extra fields would break Rust-compatible hooks); removed. agent_id/agent_type are optional in the schemas (serde skip_serializing_if) and correctly omitted when no subagent. Registered as contract hooks-command-input-schemas.",
+                      "test":  "go test ./parity -run TestRustHooksCommandSchemasCoverGoInputSurface -count=1; go test ./appserver -run Hook -count=1"
+                  },
+                  {
                       "status":  "done",
                       "test":  "go test ./mcp -run HandshakeDeadline -count=1",
                       "id":  "mcp-handshake-deadline",
