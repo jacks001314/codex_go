@@ -1434,3 +1434,31 @@ func specKeySet(specs []tool.Spec) map[string]bool {
 	}
 	return out
 }
+
+func TestBuildToolRegistryRegistersTestSyncWhenModelDeclaresItLikeRust(t *testing.T) {
+	// Mirrors Rust spec_plan.rs: test_sync_tool is registered only when the
+	// model's experimental_supported_tools declares it.
+	without := DefaultToolRegistryOptions(t.TempDir())
+	registry, err := BuildToolRegistry(without)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry: %v", err)
+	}
+	if _, ok := registry.Lookup(tool.PlainName("test_sync_tool")); ok {
+		t.Fatal("test_sync_tool registered without model declaration")
+	}
+
+	with := DefaultToolRegistryOptions(t.TempDir())
+	with.ExperimentalSupportedTools = []string{"test_sync_tool"}
+	registry, err = BuildToolRegistry(with)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry with declaration: %v", err)
+	}
+	executor, ok := registry.Lookup(tool.PlainName("test_sync_tool"))
+	if !ok {
+		t.Fatal("test_sync_tool not registered when model declares it")
+	}
+	spec := executor.Spec()
+	if spec.Name.Key() != "test_sync_tool" {
+		t.Fatalf("spec name = %q", spec.Name.Key())
+	}
+}

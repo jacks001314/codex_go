@@ -90,6 +90,10 @@ type ToolRegistryOptions struct {
 	PluginMetricsResolver        func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	PluginMeasurementTracker     func(context.Context, plugin.PluginMeasurementBatch)
 	ExtraTools                   []tool.Executor
+	// ExperimentalSupportedTools mirrors Rust model_info.experimental_supported_tools:
+	// tools the selected model declares as supported are registered
+	// conditionally (e.g. test_sync_tool for testing models).
+	ExperimentalSupportedTools []string
 }
 
 func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
@@ -148,6 +152,13 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			NewContextWindow:               options.NewContextWindow,
 		}); err != nil {
 			return nil, err
+		}
+		for _, supported := range options.ExperimentalSupportedTools {
+			if supported == "test_sync_tool" {
+				if err := registry.Register(&tool.TestSyncHandler{}); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if options.EnableShell {

@@ -690,6 +690,12 @@
                       "id":  "workload-identity-refresh-wiring",
                       "reason":  "Closed the #38188 workload-identity refresh wiring gap (need_aligin P1 #6): the ResponsesAgentRunner now refreshes process-selected workload identity after a downstream 401, mirroring Rust AuthManager refresh_external_auth + WorkloadIdentityExternalAuth::refresh. refreshAuthAfterUnauthorized tries workload identity first (injectable WorkloadIdentityRefresh callback, with a lazy fallback that builds from StoreOptions.WorkloadIdentity or the runner's ChatGPTBaseURL), then external-chatgpt-tokens, then managed OAuth. The exec CLI path now sets runner.AuthIssuer = cfg.ChatGPTBaseURL() so the lazy builder resolves the correct token URL; appserver keeps host-managed external refresh (host owns workload identity). Two unit tests pin the injected refresh preserving the previous account and the falls-through-when-not-selected behavior.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./tool -run TestTestSyncHandler -count=1; go test ./turn -run TestBuildToolRegistryRegistersTestSync -count=1; go test ./tool ./turn -count=1",
+                      "id":  "test-sync-tool-handler",
+                      "reason":  "Implemented the P2 conditional tool test_sync_tool (need_aligin 4.1), mirroring Rust core/src/tools/handlers/test_sync.rs + test_sync_spec.rs: a testing-only coordination tool exposed to models that declare test_sync_tool in experimental_supported_tools. It supports optional sleep_before_ms/sleep_after_ms delays and a named barrier (participants + timeout_ms) shared by concurrent tool calls, returning \"ok\" (parallel-capable, schema mirrors Rust). Registered conditionally in BuildToolRegistry when the model's ExperimentalSupportedTools declares it (mirroring spec_plan.rs). Unit tests pin sleep/barrier rendezvous, barrier validation (zero participants, conflicting participant counts), spec shape, and conditional registry registration.",
+                      "area":  "parity"
                   }
               ]
 }
