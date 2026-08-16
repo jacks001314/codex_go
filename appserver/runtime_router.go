@@ -5857,7 +5857,8 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 			})
 		}
 	}
-	if inputItems := inputItemsFromTurnSteer(&params); len(inputItems) > 0 {
+	noticeEnabled := r.imageResizeNoticeEnabledForSteer(&params)
+	if inputItems := inputItemsFromTurnSteerWithNotice(&params, noticeEnabled); len(inputItems) > 0 {
 		if err := r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{
 			ThreadID:       params.ThreadID,
 			TurnID:         params.ExpectedTurnID,

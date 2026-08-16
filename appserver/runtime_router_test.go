@@ -1333,6 +1333,76 @@ func TestRuntimeRouterTurnStartSendsStructuredImageInputWithDefaultDetail(t *tes
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
+func TestRuntimeRouterTurnSteerPreparesImagesLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newBlockingReviewRuntimeAgent()
+	mailbox := turn.NewSteerMailbox()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		SteerMailbox: mailbox,
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "hi"}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start = %+v", turnStart)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	_ = waitForBlockingReviewRuntimeAgentRequest(t, agent)
+	largeImage := testPNGDataURL(t, 2048, 2048)
+	turnSteer := router.Handle(requestWithParams(t, IntID(3), MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:       threadID,
+		ExpectedTurnID: turnID,
+		Input: []turn.TurnUserInput{
+			{Type: "image", URL: largeImage},
+		},
+	}))
+	if turnSteer.Error != nil {
+		t.Fatalf("turn steer = %+v", turnSteer)
+	}
+	items := mailbox.Drain(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
+	if len(items) == 0 {
+		t.Fatal("steer mailbox empty after enqueue")
+	}
+	imageURLs := inputImageURLs(items)
+	if len(imageURLs) != 1 {
+		t.Fatalf("steer input image URLs = %#v", imageURLs)
+	}
+	// The steer image must be resized like the turn-start image (Rust prepares
+	// all request items before sampling); the notice fragment is not emitted
+	// because image_resize_notice is disabled by default.
+	resizedWidth, resizedHeight, err := decodePNGDimensionsFromDataURL(t, imageURLs[0])
+	if err != nil {
+		t.Fatalf("decode prepared steer image: %v", err)
+	}
+	if resizedWidth != 1600 || resizedHeight != 1600 {
+		t.Fatalf("steer prepared dimensions = %dx%d, want 1600x1600", resizedWidth, resizedHeight)
+	}
+	for _, item := range items {
+		message, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if role, _ := message["role"].(string); role == "developer" {
+			content, _ := message["content"].([]map[string]any)
+			for _, block := range content {
+				if text, _ := block["text"].(string); strings.Contains(text, "<image_resize_notice>") {
+					t.Fatalf("steer notice emitted with feature disabled: %q", text)
+				}
+			}
+		}
+	}
+}
+
 func TestRuntimeRouterTurnStartPreparesImagesAndEmitsResizeNoticeLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()

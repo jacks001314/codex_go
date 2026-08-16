@@ -8876,12 +8876,20 @@ func sessionItemFromTurnSteer(params *turn.TurnSteerParams) (session.Item, bool)
 }
 
 func inputItemsFromTurnSteer(params *turn.TurnSteerParams) []any {
+	return inputItemsFromTurnSteerWithNotice(params, true)
+}
+
+func inputItemsFromTurnSteerWithNotice(params *turn.TurnSteerParams, noticeEnabled bool) []any {
 	if params == nil {
 		return nil
 	}
 	items := []any{}
 	if item := userMessageInputItemFromTurnUserInputs(params.Prompt, params.Input); item != nil {
-		items = append(items, item)
+		prepared := prepareSteerUserMessageItem(item)
+		items = append(items, prepared[0])
+		if noticeEnabled && len(prepared) > 1 {
+			items = append(items, prepared[1])
+		}
 	}
 	instructions, additionalItems := instructionsAndInputItemsWithAdditionalContext("", params.AdditionalContext)
 	if strings.TrimSpace(instructions) != "" {
@@ -8896,6 +8904,46 @@ func inputItemsFromTurnSteer(params *turn.TurnSteerParams) []any {
 	}
 	items = append(items, additionalItems...)
 	return items
+}
+
+// prepareSteerUserMessageItem runs the image-preparation pipeline over a steer
+// user message item and returns the prepared message plus, when a resize
+// happened, the resize-notice developer fragment. The caller decides whether to
+// include the notice based on the image_resize_notice feature (mirroring Rust
+// prepare_response_items).
+func prepareSteerUserMessageItem(item any) []any {
+	message, ok := item.(map[string]any)
+	if !ok {
+		return []any{item}
+	}
+	content, _ := message["content"].([]map[string]any)
+	prepared, resized := prepareUserMessageContentImages(content)
+	message["content"] = prepared
+	if len(resized) == 0 {
+		return []any{message}
+	}
+	noticeImages := make([]contextfrag.ResizedImage, 0, len(resized))
+	for _, resize := range resized {
+		noticeImages = append(noticeImages, contextfrag.ResizedImage{
+			ImageNumber:    resize.ImageNumber,
+			ImageCount:     resize.ImageCount,
+			SourceWidth:    int(resize.SourceWidth),
+			SourceHeight:   int(resize.SourceHeight),
+			PreparedWidth:  int(resize.PreparedWidth),
+			PreparedHeight: int(resize.PreparedHeight),
+		})
+	}
+	fragment := contextfrag.NewImageResizeNotice(contextfrag.ImageResizeNoticeSourceUserMessage, noticeImages)
+	rendered := contextfrag.Render(fragment)
+	notice := map[string]any{
+		"type": "message",
+		"role": "developer",
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": rendered.Content,
+		}},
+	}
+	return []any{message, notice}
 }
 
 func userMessageInputItemFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) any {
@@ -8960,6 +9008,18 @@ func (r *RuntimeRouter) imageResizeNoticeEnabledForTurn(params *turn.TurnStartPa
 		return false
 	}
 	if cfg, err := r.effectiveConfigForTurn(params); err == nil && cfg != nil {
+		return features.Enabled(cfg.FeatureSettings(), "image_resize_notice")
+	}
+	return false
+}
+
+func (r *RuntimeRouter) imageResizeNoticeEnabledForSteer(params *turn.TurnSteerParams) bool {
+	if r == nil || params == nil {
+		return false
+	}
+	if cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{
+		ThreadID: params.ThreadID,
+	}); err == nil && cfg != nil {
 		return features.Enabled(cfg.FeatureSettings(), "image_resize_notice")
 	}
 	return false
