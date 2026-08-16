@@ -600,6 +600,12 @@
                       "id":  "config-parse-shared-fixtures-profile-features",
                       "reason":  "Extended the L1 config-parse shared-fixture differential (djalign method 1) to the Rust strict_config_tests.rs samples and fixed the divergence it surfaced: Go strict config now rejects unknown feature keys under [profiles.<name>.features] with the profile-qualified path (profiles.work.features.foo), mirroring Rust unknown_feature_toml_value_path, while known nested tables (tool_registry under a profile) stay accepted; the differential now drives 8 Rust samples (forced_chatgpt_workspace_id single/list/comma, unknown feature key, unknown profile feature key, tool_registry top-level/profile, opaque desktop keys) through Go's strict loader with fn-name pinning. Serde type-error precedence (model_context_window = \"wide\") is documented as an out-of-contract architecture difference: Go's config is a lenient TOML map with typed getters, so wrong-typed values do not fail loading.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./model -run 'ReservedBuiltin|EmptyCustomProviderName|BedrockRuntime|AWSForCustom' -count=1; go test ./parity -run TestRustModelProviderValidationSamplesRunInGo -count=1",
+                      "id":  "model-providers-validation-alignment",
+                      "reason":  "Aligned Go's model_providers validation with Rust validate_model_providers / validate_reserved_model_provider_ids / merge_configured_model_providers (config/src/config_toml.rs + model-provider-info/src/lib.rs): (1) overriding reserved built-in ids (openai/ollama/lmstudio) is now rejected with Rust's exact message; (2) non-Bedrock providers with an empty name are rejected; (3) aws is allowed for amazon-bedrock and amazon-bedrock-runtime (Go previously accepted only amazon-bedrock); (4) the amazon-bedrock-runtime provider is now a built-in (CreateAmazonBedrockRuntimeProvider) and accepts the same base_url/auth/http_headers/aws extension surface as the standard Bedrock variant. New shared-fixture differential TestRustModelProviderValidationSamplesRunInGo drives 6 Rust samples through the Go consumer (ConfiguredProviderMap) with fn-name pinning; config-parse-shared-fixtures contract verifier extended.",
+                      "area":  "parity"
                   }
               ]
 }

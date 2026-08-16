@@ -149,8 +149,85 @@ func TestProviderConfigRejectsAWSForCustomProvider(t *testing.T) {
 	if err == nil {
 		t.Fatal("ProvidersFromConfig returned nil error, want aws provider failure")
 	}
-	if !strings.Contains(err.Error(), "model_providers.custom: provider aws is only supported for `amazon-bedrock`") {
+	if !strings.Contains(err.Error(), "model_providers.custom: provider aws is only supported for `amazon-bedrock` or `amazon-bedrock-runtime`") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestProviderConfigRejectsReservedBuiltinIDsLikeRust(t *testing.T) {
+	// Mirrors Rust validate_reserved_model_provider_ids
+	// (config/src/config_toml.rs): openai/ollama/lmstudio cannot be overridden;
+	// the two Bedrock ids are exempt because their blocks extend the built-ins.
+	for _, reserved := range []string{OpenAIProviderID, OllamaOSSProviderID, LMStudioOSSProviderID} {
+		values := map[string]any{
+			"model_providers": map[string]any{
+				reserved: map[string]any{"name": "Custom"},
+			},
+		}
+		_, err := ProvidersFromConfig(values, "")
+		if err == nil {
+			t.Fatalf("ProvidersFromConfig accepted reserved id %q", reserved)
+		}
+		for _, want := range []string{
+			"model_providers contains reserved built-in provider IDs",
+			"Built-in providers cannot be overridden",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("reserved %q error %q missing %q", reserved, err, want)
+			}
+		}
+	}
+
+	// Bedrock ids stay extendable.
+	for _, bedrock := range []string{AmazonBedrockProviderID, AmazonBedrockRuntimeProviderID} {
+		values := map[string]any{
+			"model_providers": map[string]any{
+				bedrock: map[string]any{"aws": map[string]any{"profile": "dev"}},
+			},
+		}
+		if _, err := ProvidersFromConfig(values, ""); err != nil {
+			t.Fatalf("ProvidersFromConfig rejected bedrock extension %q: %v", bedrock, err)
+		}
+	}
+}
+
+func TestProviderConfigRejectsEmptyCustomProviderNameLikeRust(t *testing.T) {
+	// Mirrors Rust validate_model_providers (config/src/config_toml.rs):
+	// a non-Bedrock provider name must not be empty.
+	values := map[string]any{
+		"model_providers": map[string]any{
+			"custom": map[string]any{"name": "   "},
+		},
+	}
+	_, err := ProvidersFromConfig(values, "")
+	if err == nil || !strings.Contains(err.Error(), "model_providers.custom: provider name must not be empty") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestProviderConfigAcceptsBedrockRuntimeProvider(t *testing.T) {
+	// Mirrors Rust merge_configured_model_providers: the runtime variant
+	// accepts base_url/auth/aws/http_headers extensions like the standard one.
+	values := map[string]any{
+		"model_providers": map[string]any{
+			AmazonBedrockRuntimeProviderID: map[string]any{
+				"aws": map[string]any{"profile": "codex-bedrock", "region": "us-west-2"},
+			},
+		},
+	}
+	providers, err := ProvidersFromConfig(values, "")
+	if err != nil {
+		t.Fatalf("ProvidersFromConfig returned error: %v", err)
+	}
+	provider, ok := providers[AmazonBedrockRuntimeProviderID]
+	if !ok {
+		t.Fatal("amazon-bedrock-runtime provider missing after merge")
+	}
+	if provider.Name != AmazonBedrockRuntimeProviderName {
+		t.Fatalf("name = %q, want %q", provider.Name, AmazonBedrockRuntimeProviderName)
+	}
+	if provider.AWS == nil || provider.AWS.Profile != "codex-bedrock" || provider.AWS.Region != "us-west-2" {
+		t.Fatalf("aws override = %#v", provider.AWS)
 	}
 }
 

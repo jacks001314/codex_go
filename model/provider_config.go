@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -42,6 +43,9 @@ func ConfiguredProviderMap(value any) (map[string]ProviderInfo, error) {
 	if !ok || len(rawProviders) == 0 {
 		return nil, nil
 	}
+	if err := validateReservedModelProviderIDs(rawProviders); err != nil {
+		return nil, err
+	}
 	out := make(map[string]ProviderInfo, len(rawProviders))
 	for id, raw := range rawProviders {
 		rawProvider, ok := raw.(map[string]any)
@@ -52,10 +56,18 @@ func ConfiguredProviderMap(value any) (map[string]ProviderInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("model_providers.%s: %w", id, err)
 		}
-		if provider.AWS != nil && id != AmazonBedrockProviderID {
-			return nil, fmt.Errorf("model_providers.%s: provider aws is only supported for `%s`", id, AmazonBedrockProviderID)
+		if !isBedrockProviderID(id) {
+			// Mirrors Rust validate_model_providers (config/src/config_toml.rs):
+			// aws is only supported for the two bundled Bedrock providers and
+			// a custom provider name must not be empty.
+			if provider.AWS != nil {
+				return nil, fmt.Errorf("model_providers.%s: provider aws is only supported for `%s` or `%s`", id, AmazonBedrockProviderID, AmazonBedrockRuntimeProviderID)
+			}
+			if strings.TrimSpace(provider.Name) == "" {
+				return nil, fmt.Errorf("model_providers.%s: provider name must not be empty", id)
+			}
 		}
-		if id == AmazonBedrockProviderID {
+		if isBedrockProviderID(id) {
 			if provider.Auth != nil && strings.TrimSpace(provider.Auth.Command) == "" {
 				return nil, fmt.Errorf("model_providers.%s: provider auth.command must not be empty", id)
 			}
@@ -67,6 +79,36 @@ func ConfiguredProviderMap(value any) (map[string]ProviderInfo, error) {
 		out[id] = *provider
 	}
 	return out, nil
+}
+
+// reservedModelProviderIDs mirrors Rust RESERVED_MODEL_PROVIDER_IDS
+// (config/src/config_toml.rs): these ids cannot be overridden by a custom
+// model_providers entry; the two Bedrock ids are exempt because their config
+// blocks only extend the bundled provider.
+var reservedModelProviderIDs = map[string]bool{
+	OpenAIProviderID:               true,
+	OllamaOSSProviderID:            true,
+	LMStudioOSSProviderID:          true,
+	AmazonBedrockProviderID:        true,
+	AmazonBedrockRuntimeProviderID: true,
+}
+
+func isBedrockProviderID(id string) bool {
+	return id == AmazonBedrockProviderID || id == AmazonBedrockRuntimeProviderID
+}
+
+func validateReservedModelProviderIDs(rawProviders map[string]any) error {
+	var conflicts []string
+	for id := range rawProviders {
+		if reservedModelProviderIDs[id] && !isBedrockProviderID(id) {
+			conflicts = append(conflicts, "`"+id+"`")
+		}
+	}
+	if len(conflicts) == 0 {
+		return nil
+	}
+	sort.Strings(conflicts)
+	return fmt.Errorf("model_providers contains reserved built-in provider IDs: %s. Built-in providers cannot be overridden. Rename your custom provider (for example, `openai-custom`).", strings.Join(conflicts, ", "))
 }
 
 func ProviderInfoFromConfig(values map[string]any) (*ProviderInfo, error) {
@@ -192,10 +234,10 @@ func resolveProviderAuthCWD(cwd string) string {
 
 func (p *ProviderInfo) ValidateForConfigID(providerID string) error {
 	providerID = strings.TrimSpace(providerID)
-	if p != nil && p.AWS != nil && providerID != AmazonBedrockProviderID {
-		return fmt.Errorf("provider aws is only supported for `%s`", AmazonBedrockProviderID)
+	if p != nil && p.AWS != nil && !isBedrockProviderID(providerID) {
+		return fmt.Errorf("provider aws is only supported for `%s` or `%s`", AmazonBedrockProviderID, AmazonBedrockRuntimeProviderID)
 	}
-	if providerID == AmazonBedrockProviderID {
+	if isBedrockProviderID(providerID) {
 		return nil
 	}
 	if err := p.Validate(); err != nil {

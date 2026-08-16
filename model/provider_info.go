@@ -26,6 +26,8 @@ const (
 	ChatGPTCodexBaseURL                     = "https://chatgpt.com/backend-api/codex"
 	AmazonBedrockProviderID                 = "amazon-bedrock"
 	AmazonBedrockProviderName               = "Amazon Bedrock"
+	AmazonBedrockRuntimeProviderID          = "amazon-bedrock-runtime"
+	AmazonBedrockRuntimeProviderName        = "Amazon Bedrock Runtime"
 	AmazonBedrockDefaultBaseURL             = "https://bedrock-mantle.us-east-1.api.aws/openai/v1"
 	AmazonBedrockBearerTokenEnv             = "AWS_BEARER_TOKEN_BEDROCK"
 	AmazonBedrockMantleServiceName          = "bedrock-mantle"
@@ -344,6 +346,16 @@ func CreateAmazonBedrockProvider(aws *ProviderAWSAuthInfo) ProviderInfo {
 	}
 }
 
+// CreateAmazonBedrockRuntimeProvider mirrors Rust
+// create_amazon_bedrock_runtime_provider (model-provider-info/src/lib.rs): the
+// runtime variant shares the Bedrock setup but drops the Mantle client header.
+func CreateAmazonBedrockRuntimeProvider(aws *ProviderAWSAuthInfo) ProviderInfo {
+	provider := CreateAmazonBedrockProvider(aws)
+	provider.Name = AmazonBedrockRuntimeProviderName
+	provider.HTTPHeaders = nil
+	return provider
+}
+
 func CreateOSSProvider(defaultProviderPort uint16, wireAPI WireAPI) ProviderInfo {
 	port := defaultProviderPort
 	if value := strings.TrimSpace(os.Getenv("CODEX_OSS_PORT")); value != "" {
@@ -373,17 +385,18 @@ func CreateOSSProviderWithBaseURL(baseURL string, wireAPI WireAPI) ProviderInfo 
 
 func BuiltInProviders(openAIBaseURL string) map[string]ProviderInfo {
 	return map[string]ProviderInfo{
-		OpenAIProviderID:        CreateOpenAIProvider(openAIBaseURL),
-		AmazonBedrockProviderID: CreateAmazonBedrockProvider(nil),
-		OllamaOSSProviderID:     CreateOSSProvider(DefaultOllamaPort, WireAPIResponses),
-		LMStudioOSSProviderID:   CreateOSSProvider(DefaultLMStudioPort, WireAPIResponses),
+		OpenAIProviderID:               CreateOpenAIProvider(openAIBaseURL),
+		AmazonBedrockProviderID:        CreateAmazonBedrockProvider(nil),
+		AmazonBedrockRuntimeProviderID: CreateAmazonBedrockRuntimeProvider(nil),
+		OllamaOSSProviderID:            CreateOSSProvider(DefaultOllamaPort, WireAPIResponses),
+		LMStudioOSSProviderID:          CreateOSSProvider(DefaultLMStudioPort, WireAPIResponses),
 	}
 }
 
 func MergeConfiguredProviders(providers map[string]ProviderInfo, configured map[string]ProviderInfo) (map[string]ProviderInfo, error) {
 	out := cloneProviderMap(providers)
 	for key, provider := range configured {
-		if key == AmazonBedrockProviderID {
+		if isBedrockProviderID(key) {
 			baseURLOverride := provider.BaseURL
 			provider.BaseURL = ""
 			authOverride := provider.Auth
@@ -393,9 +406,9 @@ func MergeConfiguredProviders(providers map[string]ProviderInfo, configured map[
 			httpHeadersOverride := provider.HTTPHeaders
 			provider.HTTPHeaders = nil
 			if !(&provider).isZero() {
-				return nil, fmt.Errorf("model_providers.%s only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`; other non-default provider fields are not supported", AmazonBedrockProviderID)
+				return nil, fmt.Errorf("model_providers.%s only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`; other non-default provider fields are not supported", key)
 			}
-			builtIn := out[AmazonBedrockProviderID]
+			builtIn := out[key]
 			builtIn.BaseURL = baseURLOverride
 			builtIn.Auth = cloneProviderAuthInfo(authOverride)
 			if awsOverride != nil {
@@ -409,7 +422,7 @@ func MergeConfiguredProviders(providers map[string]ProviderInfo, configured map[
 					builtIn.HTTPHeaders[name] = value
 				}
 			}
-			out[AmazonBedrockProviderID] = builtIn
+			out[key] = builtIn
 			continue
 		}
 		if _, exists := out[key]; !exists {

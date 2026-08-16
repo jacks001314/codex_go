@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"codex_go/config"
+	"codex_go/model"
 )
 
 // TestRustConfigParseSamplesRunInGo is the djalign dynamic-layer method-1
@@ -33,6 +34,7 @@ func TestRustConfigParseSamplesRunInGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(config_toml.rs) error = %v", err)
 	}
+
 	strictSource, err := os.ReadFile(filepath.Join(root, "config", "src", "strict_config_tests.rs"))
 	if err != nil {
 		t.Fatalf("ReadFile(strict_config_tests.rs) error = %v", err)
@@ -156,6 +158,121 @@ func TestRustConfigParseSamplesRunInGo(t *testing.T) {
 			}
 			if err == nil {
 				t.Fatal("Rust rejects this input; Go strict config accepted it")
+			}
+			for _, want := range tc.wantMessage {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("Go error %q missing Rust-asserted substring %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestRustModelProviderValidationSamplesRunInGo is the djalign dynamic-layer
+// method-1 shared-fixture differential for model_providers validation: the
+// samples mirror Rust config_toml.rs tests (amazon_bedrock_auth_command_
+// must_not_be_empty) plus validate_model_providers / validate_reserved_model_
+// provider_ids semantics. Go's config surface is a lenient TOML map, so the
+// validation happens in the model consumer (ConfiguredProviderMap), exactly
+// where Rust performs it during ConfigToml deserialization.
+func TestRustModelProviderValidationSamplesRunInGo(t *testing.T) {
+	root := rustSnapshotRoot(t)
+	source, err := os.ReadFile(filepath.Join(root, "config", "src", "config_toml.rs"))
+	if err != nil {
+		t.Fatalf("ReadFile(config_toml.rs) error = %v", err)
+	}
+	providerSource, err := os.ReadFile(filepath.Join(root, "model-provider-info", "src", "lib.rs"))
+	if err != nil {
+		t.Fatalf("ReadFile(model-provider-info/src/lib.rs) error = %v", err)
+	}
+
+	cases := []struct {
+		id          string
+		rustTest    string
+		sourceFile  string
+		providers   map[string]any
+		wantAccept  bool
+		wantMessage []string
+	}{
+		{
+			id:         "amazon_bedrock_auth_command_must_not_be_empty",
+			rustTest:   "amazon_bedrock_auth_command_must_not_be_empty",
+			providers:  map[string]any{"amazon-bedrock": map[string]any{"auth": map[string]any{"command": "   "}}},
+			wantAccept: false,
+			wantMessage: []string{
+				"model_providers.amazon-bedrock: provider auth.command must not be empty",
+			},
+		},
+		{
+			id:         "validate_reserved_model_provider_ids",
+			rustTest:   "validate_reserved_model_provider_ids",
+			providers:  map[string]any{"openai": map[string]any{"name": "Custom"}},
+			wantAccept: false,
+			wantMessage: []string{
+				"model_providers contains reserved built-in provider IDs",
+				"Built-in providers cannot be overridden",
+			},
+		},
+		{
+			id:         "validate_model_providers_aws_only_for_bedrock",
+			rustTest:   "validate_model_providers",
+			providers:  map[string]any{"custom": map[string]any{"name": "Custom", "aws": map[string]any{"profile": "dev"}}},
+			wantAccept: false,
+			wantMessage: []string{
+				"model_providers.custom: provider aws is only supported for `amazon-bedrock` or `amazon-bedrock-runtime`",
+			},
+		},
+		{
+			id:         "validate_model_providers_empty_name",
+			rustTest:   "validate_model_providers",
+			providers:  map[string]any{"custom": map[string]any{"name": "   "}},
+			wantAccept: false,
+			wantMessage: []string{
+				"model_providers.custom: provider name must not be empty",
+			},
+		},
+		{
+			id:         "merge_configured_model_providers_bedrock_runtime_extension",
+			rustTest:   "merge_configured_model_providers",
+			sourceFile: "model-provider-info/src/lib.rs",
+			providers:  map[string]any{"amazon-bedrock-runtime": map[string]any{"aws": map[string]any{"profile": "dev", "region": "us-west-2"}}},
+			wantAccept: true,
+		},
+		{
+			id:         "merge_configured_model_providers_rejects_unsupported_bedrock_field",
+			rustTest:   "merge_configured_model_providers",
+			sourceFile: "model-provider-info/src/lib.rs",
+			providers:  map[string]any{"amazon-bedrock": map[string]any{"name": "Custom Bedrock"}},
+			wantAccept: false,
+			wantMessage: []string{
+				"only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			rustSource := string(source)
+			rustSourceLabel := "config/src/config_toml.rs"
+			if tc.sourceFile != "" {
+				rustSource = string(providerSource)
+				rustSourceLabel = tc.sourceFile
+			}
+			if !strings.Contains(rustSource, tc.rustTest) {
+				t.Fatalf("Rust reference %q no longer present in %s; re-sync the shared fixture", tc.rustTest, rustSourceLabel)
+			}
+			providers, err := model.ProvidersFromConfig(map[string]any{"model_providers": tc.providers}, "")
+			if tc.wantAccept {
+				if err != nil {
+					t.Fatalf("Rust accepts this input; Go consumer rejected it: %v", err)
+				}
+				if len(providers) == 0 {
+					t.Fatal("no providers returned for accepted input")
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("Rust rejects this input; Go consumer accepted it")
 			}
 			for _, want := range tc.wantMessage {
 				if !strings.Contains(err.Error(), want) {
