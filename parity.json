@@ -672,6 +672,12 @@
                       "id":  "migrate-rollouts-startup-and-state-cursor",
                       "reason":  "Implemented the startup migration trigger and its SQLite state backing, mirroring Rust startup.rs + thread_manager.rs + codex_state::RolloutMigrationState: (1) state package gained Get/Advance/List/Record/Remove rollout-migration cursor and skipped-rollout fingerprint functions over the existing 0047_rollout_migration_state tables (advance is monotonic so concurrent startups cannot move the frontier backward); (2) MaybeMigrateRolloutsOnStartup is invoked from NewDefaultRuntimeRouterWithOptions behind the background_paginated_rollout_migration feature flag and migrates legacy rollouts in the background, using the creation-ordered cursor (rollout-<ts>-<36-char-uuid> filename parsing) with a 48h lookback, pending-journal recovery, skipped-rollout fingerprint revalidation (empty/malformed retried when the file changes), and terminal-state skip cleanup. Three unit tests pin cursor monotonicity, startup migration + cursor advance, and empty-skip fingerprint retry.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./rollout -run TestCanonicalizeRolloutSetsSubagentHistoryBoundaryLikeRust -count=1; go test ./rollout -count=1",
+                      "id":  "migrate-rollouts-subagent-boundary",
+                      "reason":  "Completed the subagent rollout migration semantics: a migrated subagent rollout now carries subagent_history_start_ordinal = the canonical writer's final ordinal (the first ordinal after all copied parent history), mirroring Rust rewrite_subagent_history_boundary + RolloutMigrationKind detection (source prefix subagent / thread_source subAgent* unless memory_consolidation). Ordinary rollouts keep the field unset. The staged head session_meta (serialized under the payload key) is rewritten before publish. Unit test pins the subagent boundary value (meta+started+2 items = 4) and the ordinary-rollout unset behavior.",
+                      "area":  "parity"
                   }
               ]
 }

@@ -80,7 +80,7 @@ func CanonicalizeRollout(codexHome string, path string) error {
 	if err != nil {
 		return fmt.Errorf("create staged rollout: %w", err)
 	}
-	writeErr := writeCanonicalPaginated(file, meta, items, turns, createdAt)
+	finalOrdinal, writeErr := writeCanonicalPaginated(file, meta, items, turns, createdAt)
 	closeErr := file.Close()
 	if writeErr != nil {
 		_ = os.Remove(stagedPath)
@@ -89,6 +89,15 @@ func CanonicalizeRollout(codexHome string, path string) error {
 	if closeErr != nil {
 		_ = os.Remove(stagedPath)
 		return fmt.Errorf("close staged rollout: %w", closeErr)
+	}
+	if isSubagentRollout(meta) {
+		// Mirrors Rust rewrite_subagent_history_boundary: a migrated subagent
+		// rollout marks the ordinal from which its own history starts so
+		// SQLite projection and resume skip the copied parent history prefix.
+		if err := rewriteStagedSubagentBoundary(stagedPath, finalOrdinal); err != nil {
+			_ = os.Remove(stagedPath)
+			return err
+		}
 	}
 
 	if err := writeMigrationJournal(journalPath); err != nil {
@@ -194,11 +203,10 @@ func writeMigrationJournal(journalPath string) error {
 // writeCanonicalPaginated writes the canonical paginated rollout: session_meta
 // header (history_mode=paginated, no history_base), then per-turn event
 // boundaries and completed items in ordinal order.
-func writeCanonicalPaginated(file *os.File, meta *SessionMeta, items []session.Item, turns []session.TurnSnapshot, createdAt time.Time) error {
+func writeCanonicalPaginated(file *os.File, meta *SessionMeta, items []session.Item, turns []session.TurnSnapshot, createdAt time.Time) (uint64, error) {
 	canonical := *meta
 	canonical.HistoryMode = "paginated"
 	canonical.HistoryBase = nil
-	canonical.SubagentHistoryStartOrdinal = nil
 	ordinal := uint64(0)
 	head, err := json.Marshal(Line{
 		Type:      "session_meta",
@@ -207,10 +215,10 @@ func writeCanonicalPaginated(file *os.File, meta *SessionMeta, items []session.I
 		Ordinal:   &ordinal,
 	})
 	if err != nil {
-		return fmt.Errorf("marshal canonical session meta: %w", err)
+		return 0, fmt.Errorf("marshal canonical session meta: %w", err)
 	}
 	if _, err := file.Write(append(head, '\n')); err != nil {
-		return fmt.Errorf("write canonical session meta: %w", err)
+		return 0, fmt.Errorf("write canonical session meta: %w", err)
 	}
 	ordinal++
 
@@ -226,12 +234,12 @@ func writeCanonicalPaginated(file *os.File, meta *SessionMeta, items []session.I
 			if turn, ok := turnByID[turnID]; ok {
 				startedAt := timeFromUnixOrZero(turn.StartedAt)
 				if err := writeCanonicalEventLine(file, "task_started", turnID, startedAt, ordinal, map[string]any{"started_at": turn.StartedAt}); err != nil {
-					return err
+					return 0, err
 				}
 				ordinal++
 			} else {
 				if err := writeCanonicalEventLine(file, "task_started", turnID, time.Time{}, ordinal, map[string]any{"started_at": nil}); err != nil {
-					return err
+					return 0, err
 				}
 				ordinal++
 			}
@@ -246,7 +254,7 @@ func writeCanonicalPaginated(file *os.File, meta *SessionMeta, items []session.I
 			completedAt = createdAt
 		}
 		if err := writeCanonicalCompletedItem(file, raw, turnID, completedAt, ordinal); err != nil {
-			return err
+			return 0, err
 		}
 		ordinal++
 	}
@@ -261,11 +269,11 @@ func writeCanonicalPaginated(file *os.File, meta *SessionMeta, items []session.I
 		}
 		completedAt := timeFromUnixOrZero(turn.CompletedAt)
 		if err := writeCanonicalEventLine(file, "task_complete", turn.ID, completedAt, ordinal, payload); err != nil {
-			return err
+			return 0, err
 		}
 		ordinal++
 	}
-	return nil
+	return ordinal, nil
 }
 
 func writeCanonicalEventLine(file *os.File, eventType string, turnID string, eventTime time.Time, ordinal uint64, fields map[string]any) error {
@@ -287,6 +295,73 @@ func writeCanonicalEventLine(file *os.File, eventType string, turnID string, eve
 	}
 	if _, err := file.Write(append(line, '\n')); err != nil {
 		return fmt.Errorf("write canonical event %s: %w", eventType, err)
+	}
+	return nil
+}
+
+// isSubagentRollout mirrors Rust migrate_rollout_path's RolloutMigrationKind
+// detection: a non-memory-consolidation session whose source is a subagent or
+// whose thread_source is "subagent" is treated as a subagent rollout.
+func isSubagentRollout(meta *SessionMeta) bool {
+	if meta == nil {
+		return false
+	}
+	source := strings.ToLower(strings.TrimSpace(meta.Source))
+	threadSource := strings.ToLower(strings.TrimSpace(meta.ThreadSource))
+	if source == "internal_memory_consolidation" || threadSource == "memory_consolidation" {
+		return false
+	}
+	if strings.HasPrefix(source, "subagent") || strings.Contains(source, "sub_agent") {
+		return true
+	}
+	if threadSource == "subagent" || threadSource == "subagentreview" || threadSource == "subagentcompact" || threadSource == "subagentthreadspawn" || threadSource == "subagentother" {
+		return true
+	}
+	return false
+}
+
+// rewriteStagedSubagentBoundary mirrors Rust rewrite_subagent_history_boundary:
+// it rewrites the staged rollout's head session_meta to carry the ordinal from
+// which the subagent's own history starts (the canonical writer's final
+// ordinal, i.e. the first ordinal after all copied parent history).
+func rewriteStagedSubagentBoundary(stagedPath string, boundary uint64) error {
+	data, err := os.ReadFile(stagedPath)
+	if err != nil {
+		return fmt.Errorf("read staged rollout for subagent boundary: %w", err)
+	}
+	lines := strings.SplitN(string(data), "\n", 2)
+	if len(lines) == 0 {
+		return errors.New("staged rollout is empty")
+	}
+	var head Line
+	if err := json.Unmarshal([]byte(lines[0]), &head); err != nil {
+		return fmt.Errorf("parse staged head: %w", err)
+	}
+	// The staged head is serialized by Line.MarshalJSON: session_meta lines
+	// carry the SessionMeta under the "payload" key.
+	if head.Meta == nil && len(head.Payload) == 0 {
+		return errors.New("staged rollout head is not session metadata")
+	}
+	meta := head.Meta
+	if meta == nil {
+		var parsed SessionMeta
+		if err := json.Unmarshal(head.Payload, &parsed); err != nil {
+			return fmt.Errorf("parse staged head session metadata: %w", err)
+		}
+		meta = &parsed
+	}
+	meta.SubagentHistoryStartOrdinal = &boundary
+	head.Meta = meta
+	encoded, err := json.Marshal(head)
+	if err != nil {
+		return fmt.Errorf("marshal rewritten head: %w", err)
+	}
+	rewritten := string(encoded)
+	if len(lines) == 2 {
+		rewritten += "\n" + lines[1]
+	}
+	if err := os.WriteFile(stagedPath, []byte(rewritten), 0o600); err != nil {
+		return fmt.Errorf("rewrite staged subagent boundary: %w", err)
 	}
 	return nil
 }

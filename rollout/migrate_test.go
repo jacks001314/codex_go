@@ -115,6 +115,63 @@ func TestCanonicalizeRolloutMigratesCompressedRolloutLikeRust(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeRolloutSetsSubagentHistoryBoundaryLikeRust(t *testing.T) {
+	// Mirrors Rust rewrite_subagent_history_boundary: a migrated subagent
+	// rollout marks the ordinal from which its own history starts; ordinary
+	// rollouts leave subagent_history_start_ordinal unset.
+	home := t.TempDir()
+	subagentID := "123e4567-e89b-42d3-a456-426614174024"
+	subagentPath := filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+subagentID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(subagentPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	now := "2025-01-01T00:00:00Z"
+	meta := map[string]any{
+		"id": subagentID, "session_id": "s", "timestamp": now, "cwd": "/w",
+		"originator": "o", "model": "m", "cli_version": "v",
+		"source": "subagent:thread_spawn", "thread_source": "subAgentThreadSpawn",
+	}
+	data, _ := json.Marshal(meta)
+	lines := []string{
+		string(mustJSON(t, map[string]any{"type": "session_meta", "timestamp": now, "payload": json.RawMessage(data)})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "task_started", "turn_id": "turn-1", "started_at": 1700000000}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "user_message", "client_id": "c1", "message": "subagent hello"}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "agent_message", "message": "subagent answer"}})),
+		"",
+	}
+	if err := os.WriteFile(subagentPath, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := CanonicalizeRollout(home, subagentPath); err != nil {
+		t.Fatalf("CanonicalizeRollout(subagent): %v", err)
+	}
+	metaOut, err := FirstSessionMeta(subagentPath)
+	if err != nil {
+		t.Fatalf("FirstSessionMeta: %v", err)
+	}
+	if metaOut.SubagentHistoryStartOrdinal == nil {
+		t.Fatal("subagent_history_start_ordinal unset after migration; want the first own-history ordinal")
+	}
+	if *metaOut.SubagentHistoryStartOrdinal != 4 {
+		t.Fatalf("subagent_history_start_ordinal = %d, want 4 (meta+started+2 items)", *metaOut.SubagentHistoryStartOrdinal)
+	}
+
+	// Ordinary rollout keeps subagent_history_start_ordinal unset.
+	ordinaryID := "123e4567-e89b-42d3-a456-426614174025"
+	ordinaryPath := filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+ordinaryID+".jsonl")
+	writeTestRollout(t, ordinaryPath, ordinaryID, "")
+	if err := CanonicalizeRollout(home, ordinaryPath); err != nil {
+		t.Fatalf("CanonicalizeRollout(ordinary): %v", err)
+	}
+	ordinaryMeta, err := FirstSessionMeta(ordinaryPath)
+	if err != nil {
+		t.Fatalf("FirstSessionMeta ordinary: %v", err)
+	}
+	if ordinaryMeta.SubagentHistoryStartOrdinal != nil {
+		t.Fatalf("ordinary rollout subagent_history_start_ordinal = %d, want nil", *ordinaryMeta.SubagentHistoryStartOrdinal)
+	}
+}
+
 func TestCanonicalizeRolloutReplaysRollbackMarkerLikeRust(t *testing.T) {
 	// Mirrors Rust rollout_migration_tests.rs: legacy rollbacks remove logical
 	// instruction turns; a ThreadRolledBack marker drops the rolled-back turn's
