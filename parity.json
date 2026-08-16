@@ -666,6 +666,12 @@
                       "id":  "migrate-rollouts-sqlite-projection",
                       "reason":  "Wired the SQLite thread-history projection into the rollout migration Apply flow: after publishing a paginated rollout, the CLI projects it into the durable thread_history SQLite database via state.MaterializeThreadHistory (mirroring Rust migrate_one_rollout's project_rollout_in_batches + projection_state verification). The projection lives in the app layer to avoid a rollout<->state import cycle; the rollout package stays storage-only. End-to-end verified: migrate-rollouts --apply generates thread_history_1.sqlite with 1 completed turn, 2 items, next_rollout_byte_offset covering the file, and next_rollout_ordinal=5 (meta+started+2 items+complete); unit test pins the projection rows and checkpoint.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./state -run TestRolloutMigration -count=1; go test ./appserver -run 'TestMigrateRolloutsOnStartup|TestThreadCreationCursor' -count=1; go test ./appserver -count=1",
+                      "id":  "migrate-rollouts-startup-and-state-cursor",
+                      "reason":  "Implemented the startup migration trigger and its SQLite state backing, mirroring Rust startup.rs + thread_manager.rs + codex_state::RolloutMigrationState: (1) state package gained Get/Advance/List/Record/Remove rollout-migration cursor and skipped-rollout fingerprint functions over the existing 0047_rollout_migration_state tables (advance is monotonic so concurrent startups cannot move the frontier backward); (2) MaybeMigrateRolloutsOnStartup is invoked from NewDefaultRuntimeRouterWithOptions behind the background_paginated_rollout_migration feature flag and migrates legacy rollouts in the background, using the creation-ordered cursor (rollout-<ts>-<36-char-uuid> filename parsing) with a 48h lookback, pending-journal recovery, skipped-rollout fingerprint revalidation (empty/malformed retried when the file changes), and terminal-state skip cleanup. Three unit tests pin cursor monotonicity, startup migration + cursor advance, and empty-skip fingerprint retry.",
+                      "area":  "parity"
                   }
               ]
 }

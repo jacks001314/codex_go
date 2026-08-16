@@ -936,6 +936,12 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		account.ApplyAuthSnapshot(&resolved.Auth)
 	}
 	router.configureMCPFromConfig()
+	if stateRuntime != nil {
+		// Mirrors Rust thread_manager.rs: when background_paginated_rollout_
+		// migration is enabled, inspect rollouts on startup and migrate legacy
+		// ones in the background.
+		MaybeMigrateRolloutsOnStartup(codexHome, stateRuntime, configService)
+	}
 	return router
 }
 
