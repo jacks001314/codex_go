@@ -257,6 +257,38 @@ func TestRustConfigMergeKeyAliasSamplesRunInGo(t *testing.T) {
 				},
 			},
 		},
+		{
+			id:       "shell_environment_policy_legacy_array_overlay_replaces_legacy_array",
+			rustTest: "shell_environment_policy_legacy_array_overlay_replaces_legacy_array",
+			baseTOML: "[shell_environment_policy]\nexclude = [\"LOW_*\", \"SHARED_*\"]\n",
+			userTOML: "[shell_environment_policy]\nexclude = [\"HIGH_*\"]\n",
+			wantValue: map[string]any{
+				"shell_environment_policy": map[string]any{"exclude": []any{"HIGH_*"}},
+			},
+		},
+		{
+			id:       "shell_environment_policy_filters_overlay_merges_by_key_case_insensitively",
+			rustTest: "shell_environment_policy_filters_overlay_merges_by_key_case_insensitively",
+			baseTOML: "[shell_environment_policy.filters]\n\"FLIP_*\" = \"exclude\"\n\"KEEP_*\" = \"include\"\n",
+			userTOML: "[shell_environment_policy.filters]\n\"ADD_*\" = \"exclude\"\n\"flip_*\" = \"include\"\n",
+			wantValue: map[string]any{
+				"shell_environment_policy": map[string]any{
+					"filters": map[string]any{"add_*": "exclude", "flip_*": "include", "keep_*": "include"},
+				},
+			},
+		},
+		{
+			id:       "shell_environment_policy_filters_replace_lower_legacy_filter_fields",
+			rustTest: "shell_environment_policy_filters_replace_lower_legacy_filter_fields",
+			baseTOML: "[shell_environment_policy]\ninherit = \"core\"\nexclude = [\"FLIP_TO_INCLUDE\", \"KEEP_EXCLUDED\"]\ninclude_only = [\"FLIP_TO_EXCLUDE\", \"KEEP_INCLUDED\"]\n",
+			userTOML: "[shell_environment_policy.filters]\n\"ADD_INCLUDED\" = \"include\"\n\"FLIP_TO_EXCLUDE\" = \"exclude\"\n\"FLIP_TO_INCLUDE\" = \"include\"\n",
+			wantValue: map[string]any{
+				"shell_environment_policy": map[string]any{
+					"inherit": "core",
+					"filters": map[string]any{"add_included": "include", "flip_to_exclude": "exclude", "flip_to_include": "include"},
+				},
+			},
+		},
 	}
 
 	for _, tc := range cases {
