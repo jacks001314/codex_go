@@ -1,0 +1,4 @@
+interface:
+  display_name: "动静结合对齐"
+  short_description: "Static-dynamic alignment of codex_go with Rust codex"
+  default_prompt: "Use $djalign to plan and execute static-dynamic alignment of codex_go against the Rust codex."
