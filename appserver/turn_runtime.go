@@ -1188,6 +1188,17 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 	}
 	samplingFollowUp, tokenBudgetDelivery := r.autoCompactFallbackFollowUp(threadID, runConfig)
+	if rolloutFollowUp := r.rolloutBudgetFollowUp(threadID); rolloutFollowUp != nil {
+		if samplingFollowUp != nil {
+			previous := samplingFollowUp
+			samplingFollowUp = func(ctx *turn.SamplingFollowUpContext) []any {
+				items := previous(ctx)
+				return append(items, rolloutFollowUp(ctx)...)
+			}
+		} else {
+			samplingFollowUp = rolloutFollowUp
+		}
+	}
 	samplingCompaction := r.midTurnSamplingCompaction(threadID, turnID, connectionID, params, runConfig, startedAt)
 	result, err := runtime.Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       agentPrompt,
@@ -1343,19 +1354,23 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 	}
 	if budget := r.rolloutBudgetForSession(); budget != nil {
-		// Mirrors Rust Session::record_rollout_budget_usage
-		// (core/src/session/mod.rs): each completed turn charges its usage
-		// against the shared rollout budget; exhaustion fails the turn with
-		// the sessionBudgetExceeded codexErrorInfo.
-		exhausted, budgetErr := budget.RecordUsage(runtimeutil.TokenUsage{
-			InputTokens:             result.Usage.InputTokens,
-			CachedInputTokens:       result.Usage.CachedInputTokens,
-			OutputTokens:            result.Usage.OutputTokens,
-			CodexRolloutBudgetUnits: result.Usage.CodexRolloutBudgetUnits,
-		})
-		if budgetErr != nil {
-			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, budgetErr, nil)
-			return
+		// Per-response charging happens in the sampling follow-up; turns that
+		// produced no model responses are charged here. Exhaustion (from either
+		// path) fails the turn with the sessionBudgetExceeded codexErrorInfo,
+		// mirroring Rust Session::record_rollout_budget_usage.
+		exhausted := r.rolloutBudgetExhausted.Load()
+		if !r.rolloutBudgetCharged.Load() {
+			var budgetErr error
+			exhausted, budgetErr = budget.RecordUsage(runtimeutil.TokenUsage{
+				InputTokens:             result.Usage.InputTokens,
+				CachedInputTokens:       result.Usage.CachedInputTokens,
+				OutputTokens:            result.Usage.OutputTokens,
+				CodexRolloutBudgetUnits: result.Usage.CodexRolloutBudgetUnits,
+			})
+			if budgetErr != nil {
+				r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, budgetErr, nil)
+				return
+			}
 		}
 		if exhausted {
 			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, ErrSessionBudgetExceeded, nil)

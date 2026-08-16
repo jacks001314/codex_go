@@ -307,6 +307,8 @@ type RuntimeRouter struct {
 	nodeReplEvidence       map[string]*codexctx.NodeReplReviewEvidence
 	rolloutBudgetOnce      sync.Once
 	rolloutBudget          *runtimeutil.Budget
+	rolloutBudgetCharged   atomic.Bool
+	rolloutBudgetExhausted atomic.Bool
 	closeOnce              sync.Once
 	closeErr               error
 }
@@ -365,6 +367,59 @@ func (r *RuntimeRouter) rolloutBudgetForSession() *runtimeutil.Budget {
 		r.rolloutBudget = budget
 	})
 	return r.rolloutBudget
+}
+
+// rolloutBudgetReminderMessage builds the developer-context reminder injected
+// into the model when a rollout-budget threshold is crossed, mirroring Rust's
+// RolloutBudgetContext (core/src/context/rollout_budget.rs) with its
+// `<rollout_budget>` markers and exact body wording.
+func rolloutBudgetReminderMessage(remainingTokens int64) any {
+	return model.DeveloperMessageInputItem(fmt.Sprintf(
+		"<rollout_budget>\nYou have %d weighted tokens left in the shared session token budget.\n</rollout_budget>",
+		remainingTokens,
+	))
+}
+
+// rolloutBudgetFollowUp returns a SamplingFollowUp that charges each completed
+// model response against the shared rollout budget (mirroring Rust
+// Session::record_rollout_budget_usage) and injects the `<rollout_budget>`
+// developer reminder when a remaining-tokens threshold is crossed (mirroring
+// Rust maybe_record_reminder, core/src/session/rollout_budget.rs). Exhaustion
+// is recorded on the router and surfaced as ErrSessionBudgetExceeded at turn
+// completion (Go's agent loop cannot abort a sampling step mid-loop).
+func (r *RuntimeRouter) rolloutBudgetFollowUp(threadID string) turn.SamplingFollowUp {
+	return func(ctx *turn.SamplingFollowUpContext) []any {
+		if ctx == nil {
+			return nil
+		}
+		budget := r.rolloutBudgetForSession()
+		if budget == nil {
+			return nil
+		}
+		r.rolloutBudgetCharged.Store(true)
+		exhausted, err := budget.RecordUsage(runtimeutil.TokenUsage{
+			InputTokens:             ctx.Usage.InputTokens,
+			CachedInputTokens:       ctx.Usage.CachedInputTokens,
+			OutputTokens:            ctx.Usage.OutputTokens,
+			CodexRolloutBudgetUnits: ctx.Usage.CodexRolloutBudgetUnits,
+		})
+		if err != nil {
+			return nil
+		}
+		if exhausted {
+			r.rolloutBudgetExhausted.Store(true)
+		}
+		windowID := threadID
+		reminder := budget.PendingReminder(threadID, windowID)
+		if reminder == nil {
+			return nil
+		}
+		budget.MarkReminderDelivered(threadID, windowID, *reminder)
+		if item := rolloutBudgetReminderMessage(reminder.RemainingTokens); item != nil {
+			return []any{item}
+		}
+		return nil
+	}
 }
 
 func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {

@@ -468,6 +468,13 @@
                       "area":  "parity",
                       "reason":  "Closed both monitored error-code emission gaps: (1) threadRollbackFailed - rollback request validation failures (num_turns<1, active turn) now surface a -32600 invalid-request RPC error carrying codexErrorInfo=threadRollbackFailed, mirroring Rust's core/session/handlers.rs + bespoke_event_handling.rs (invalid_request); (2) sessionBudgetExceeded - implemented the rollout budget feature end to end: config/rollout_budget.go resolves features.rollout_budget with Rust's exact validation (required limit_tokens/reminder_at_remaining_tokens, positivity bounds, finite weights defaulting to 1.0), RuntimeRouter.rolloutBudgetForSession lazily configures a shared runtimeutil.Budget per session, runTurnRuntime charges each completed turn's usage and fails the turn with ErrSessionBudgetExceeded, and the turn error mapper surfaces the sessionBudgetExceeded codexErrorInfo. TestRustErrorCodeSurfaceAgainstGo now passes with zero emission gaps (all 17 CodexErrorInfo + 7 ConfigWriteErrorCode values present in Go production code).",
                       "test":  "go test ./parity -run TestRustErrorCodeSurfaceAgainstGo -count=1; go test ./config -run RolloutBudget -count=1; go test ./appserver -run 'RolloutBudget|ThreadRollbackValidation' -count=1"
+                  },
+                  {
+                      "id":  "rollout-budget-reminder-delivery",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Completed the rollout budget feature with reminder delivery: a SamplingFollowUp (composed with the auto-compact follow-up in runTurnRuntime) charges each completed model response against the shared budget per-response (mirroring Rust Session::record_rollout_budget_usage) and injects the Rust-shaped <rollout_budget> developer message ('You have N weighted tokens left in the shared session token budget.') exactly once per remaining-tokens threshold crossing (mirroring maybe_record_reminder); exhaustion is recorded on the router and fails the turn at completion with sessionBudgetExceeded. Three unit tests wire resolution, per-threshold reminder injection (80 -> 75 -> 35 sequence), duplicate suppression, and exhaustion surfacing.",
+                      "test":  "go test ./appserver -run TestRuntimeRouterRolloutBudget -count=1"
                   }
               ]
 }
