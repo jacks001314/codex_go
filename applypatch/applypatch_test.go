@@ -88,6 +88,45 @@ func TestApplyPureMovePreservesContent(t *testing.T) {
 	}
 }
 
+// TestParseToleratesWhitespacePaddedMarkersLikeRust pins Rust parser leniency
+// (parser.rs: "allows for leading/trailing whitespace around patch markers"),
+// covered by apply-patch scenarios 017/018/020.
+func TestParseToleratesWhitespacePaddedMarkersLikeRust(t *testing.T) {
+	cases := []string{
+		// 017: leading-space-padded update header.
+		"*** Begin Patch\n  *** Update File: foo.txt\n@@\n-old\n+new\n*** End Patch",
+		// 018: leading-space-padded begin marker, trailing-space end marker.
+		" *** Begin Patch\n*** Update File: file.txt\n@@\n-one\n+two\n*** End Patch ",
+		// 020: trailing-space begin marker, leading-space final end marker
+		// (matched by StreamingPatchParser::finish's full trim).
+		"*** Begin Patch \n*** Update File: file.txt\n@@\n-one\n+two\n *** End Patch",
+	}
+	for _, patch := range cases {
+		action, err := Parse(patch)
+		if err != nil {
+			t.Fatalf("Parse(%q) error = %v", patch, err)
+		}
+		if action.IsEmpty() {
+			t.Fatalf("Parse(%q) produced empty action", patch)
+		}
+	}
+}
+
+// TestApplyVerifiesBeforeApplyingLikeRustTool pins the app-server tool
+// contract: the tool mirrors Rust's verify_apply_patch_args (verify the whole
+// patch in a shadow workspace first, then apply), so a patch that fails
+// verification applies nothing — unlike the CLI's sequential partial success.
+func TestApplyVerifiesBeforeApplyingLikeRustTool(t *testing.T) {
+	dir := t.TempDir()
+	patch := "*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch"
+	if _, err := Apply(patch, &ApplyOptions{CWD: dir}); err == nil {
+		t.Fatal("Apply() error = nil, want verification failure")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "created.txt")); !os.IsNotExist(err) {
+		t.Fatalf("created.txt exists after failed verification, stat err = %v", err)
+	}
+}
+
 func TestParseRejectsEmptyUpdateWithoutMove(t *testing.T) {
 	_, err := Parse(`*** Begin Patch
 *** Update File: legacy.py

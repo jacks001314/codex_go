@@ -23,7 +23,16 @@ func RunCLI(args []string, stdin io.Reader, stdout, stderr io.Writer, cwd string
 	if strings.TrimSpace(cwd) == "" {
 		cwd = "."
 	}
-	result, err := Apply(patch, &ApplyOptions{CWD: cwd, FileUpdateMode: FileUpdateModeFromEnv()})
+	action, err := Parse(patch)
+	if err != nil {
+		writeCLIError(stderr, err)
+		return 1
+	}
+	// The CLI mirrors Rust's apply_patch_with_mode: hunks are applied
+	// sequentially and a failure after a partial success leaves the already
+	// applied changes on disk (scenario 015). The verify-first flow is only
+	// used by the app-server tool, matching Rust's verify_apply_patch_args.
+	result, err := action.applyCommitted(cwd, FileUpdateModeFromEnv())
 	if err != nil {
 		writeCLIError(stderr, err)
 		return 1

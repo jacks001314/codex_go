@@ -122,42 +122,49 @@ func CreateFreeformTool(includeEnvironmentID bool) *ToolSpec {
 
 func Parse(input string) (*Action, error) {
 	lines := splitLines(input)
-	if len(lines) < 2 || lines[0] != "*** Begin Patch" {
+	// Rust parser.rs: the patch text is trimmed as a whole and each marker
+	// line is matched after trimming, so leading/trailing whitespace around
+	// patch markers is tolerated (see scenarios 017/018/020).
+	if len(lines) < 2 || strings.TrimSpace(lines[0]) != "*** Begin Patch" {
 		return nil, fmt.Errorf("%w: missing begin marker", ErrInvalidPatch)
 	}
 	action := &Action{Changes: make(map[string]Change)}
 	i := 1
-	if i < len(lines) && strings.HasPrefix(lines[i], "*** Environment ID: ") {
-		action.EnvironmentID = strings.TrimPrefix(lines[i], "*** Environment ID: ")
-		if strings.TrimSpace(action.EnvironmentID) == "" {
-			return nil, fmt.Errorf("%w: empty environment id", ErrInvalidPatch)
+	if i < len(lines) {
+		if trimmed := strings.TrimSpace(lines[i]); strings.HasPrefix(trimmed, "*** Environment ID:") {
+			value := strings.TrimSpace(strings.TrimPrefix(trimmed, "*** Environment ID:"))
+			if value == "" {
+				return nil, fmt.Errorf("%w: empty environment id", ErrInvalidPatch)
+			}
+			action.EnvironmentID = value
+			i++
 		}
-		i++
 	}
 	for i < len(lines) {
 		line := lines[i]
-		if line == "*** End Patch" {
+		if strings.TrimSpace(line) == "*** End Patch" {
 			if len(action.Changes) == 0 {
 				return nil, fmt.Errorf("%w: patch contains no hunks", ErrInvalidPatch)
 			}
 			return action, nil
 		}
+		trimmed := strings.TrimSpace(line)
 		switch {
-		case strings.HasPrefix(line, "*** Add File: "):
+		case strings.HasPrefix(trimmed, "*** Add File: "):
 			next, change, err := parseAdd(lines, i)
 			if err != nil {
 				return nil, err
 			}
 			action.addChange(change)
 			i = next
-		case strings.HasPrefix(line, "*** Delete File: "):
-			path := strings.TrimPrefix(line, "*** Delete File: ")
+		case strings.HasPrefix(trimmed, "*** Delete File: "):
+			path := strings.TrimPrefix(trimmed, "*** Delete File: ")
 			if err := validatePath(path); err != nil {
 				return nil, err
 			}
 			action.addChange(Change{Kind: ChangeDelete, Path: path})
 			i++
-		case strings.HasPrefix(line, "*** Update File: "):
+		case strings.HasPrefix(trimmed, "*** Update File: "):
 			next, change, err := parseUpdate(lines, i)
 			if err != nil {
 				return nil, err
@@ -644,18 +651,23 @@ func parseUpdateChunks(diff string) ([]*updateChunk, error) {
 		current = nil
 	}
 	for _, line := range lines {
+		// Rust UpdateFile mode detects "@@", "@@ context" and "*** End of File"
+		// on the trailing-whitespace-trimmed line (update_line); content lines
+		// keep their raw bytes.
+		trimEnd := strings.TrimRight(line, " \t")
 		switch {
-		case line == "*** End of File":
+		case trimEnd == "*** End of File":
 			if current != nil {
 				current.isEndOfFile = true
 			}
 			continue
-		case strings.HasPrefix(line, "@@"):
+		case trimEnd == "@@":
 			flush()
 			current = &updateChunk{}
-			rest := strings.TrimPrefix(line, "@@")
-			rest = strings.TrimPrefix(rest, " ")
-			if context := strings.TrimSpace(rest); context != "" {
+		case strings.HasPrefix(trimEnd, "@@ "):
+			flush()
+			current = &updateChunk{}
+			if context := strings.TrimSpace(strings.TrimPrefix(trimEnd, "@@ ")); context != "" {
 				current.changeContext = context
 			}
 		case strings.HasPrefix(line, "-"):
@@ -719,7 +731,7 @@ func resolveWorkspacePath(cwd string, path string) (string, error) {
 }
 
 func parseAdd(lines []string, start int) (int, Change, error) {
-	path := strings.TrimPrefix(lines[start], "*** Add File: ")
+	path := strings.TrimPrefix(strings.TrimSpace(lines[start]), "*** Add File: ")
 	if err := validatePath(path); err != nil {
 		return start, Change{}, err
 	}
@@ -744,14 +756,19 @@ func parseAdd(lines []string, start int) (int, Change, error) {
 }
 
 func parseUpdate(lines []string, start int) (int, Change, error) {
-	path := strings.TrimPrefix(lines[start], "*** Update File: ")
+	path := strings.TrimPrefix(strings.TrimSpace(lines[start]), "*** Update File: ")
 	if err := validatePath(path); err != nil {
 		return start, Change{}, err
 	}
 	i := start + 1
 	movePath := ""
-	if i < len(lines) && strings.HasPrefix(lines[i], "*** Move to: ") {
-		movePath = strings.TrimPrefix(lines[i], "*** Move to: ")
+	if i < len(lines) {
+		trimEnd := strings.TrimRight(lines[i], " \t")
+		if strings.HasPrefix(trimEnd, "*** Move to: ") {
+			movePath = strings.TrimPrefix(trimEnd, "*** Move to: ")
+		}
+	}
+	if movePath != "" {
 		if err := validatePath(movePath); err != nil {
 			return start, Change{}, err
 		}
@@ -760,7 +777,11 @@ func parseUpdate(lines []string, start int) (int, Change, error) {
 	var diff strings.Builder
 	for i < len(lines) {
 		line := lines[i]
-		if isHunkOrEnd(line) {
+		// Rust StreamingPatchParser UpdateFile mode matches hunk headers with
+		// trailing whitespace trimmed (update_line) and the final line with a
+		// full trim (finish()), while a leading-space marker mid-hunk is a
+		// context line. updateHunkBoundary mirrors that split.
+		if updateHunkBoundary(line, i == len(lines)-1) {
 			break
 		}
 		if line == "*** End of File" || strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") || strings.HasPrefix(line, " ") {
@@ -780,6 +801,8 @@ func parseUpdate(lines []string, start int) (int, Change, error) {
 }
 
 func splitLines(input string) []string {
+	// Rust parse_patch_text trims the whole patch before splitting lines.
+	input = strings.TrimSpace(input)
 	input = strings.ReplaceAll(input, "\r\n", "\n")
 	input = strings.ReplaceAll(input, "\r", "\n")
 	input = strings.TrimSuffix(input, "\n")
@@ -790,10 +813,31 @@ func splitLines(input string) []string {
 }
 
 func isHunkOrEnd(line string) bool {
-	return line == "*** End Patch" ||
-		strings.HasPrefix(line, "*** Add File: ") ||
-		strings.HasPrefix(line, "*** Delete File: ") ||
-		strings.HasPrefix(line, "*** Update File: ")
+	// Rust AddFile/DeleteFile modes match hunk headers and the end marker on
+	// the fully trimmed line.
+	trimmed := strings.TrimSpace(line)
+	return trimmed == "*** End Patch" ||
+		strings.HasPrefix(trimmed, "*** Add File: ") ||
+		strings.HasPrefix(trimmed, "*** Delete File: ") ||
+		strings.HasPrefix(trimmed, "*** Update File: ")
+}
+
+// updateHunkBoundary reports whether line terminates an update hunk, mirroring
+// Rust's UpdateFile mode: headers are matched with trailing whitespace trimmed
+// (update_line), and the final line of the patch may match the end marker with
+// a full trim (StreamingPatchParser::finish). A leading-space marker in the
+// middle of an update hunk is a context line, exactly like Rust.
+func updateHunkBoundary(line string, isLastLine bool) bool {
+	trimEnd := strings.TrimRight(line, " \t")
+	if trimEnd == "*** End Patch" {
+		return true
+	}
+	if isLastLine && strings.TrimSpace(line) == "*** End Patch" {
+		return true
+	}
+	return strings.HasPrefix(trimEnd, "*** Add File: ") ||
+		strings.HasPrefix(trimEnd, "*** Delete File: ") ||
+		strings.HasPrefix(trimEnd, "*** Update File: ")
 }
 
 func validatePath(path string) error {

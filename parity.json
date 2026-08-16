@@ -377,6 +377,13 @@
                       "area":  "parity",
                       "reason":  "L2 record-replay facility (recordreplay): parses the Rust-recorded tui/tests/fixtures/oss-story.jsonl trace (8041 events) into a normalized contract view (timestamps, machine paths and model text excluded per documented rules), freezes a structural digest as a Go golden so upstream recording drift is flagged, and replays the recording's task lifecycle through Go's paginated rollout.Recorder, cross-checking persisted event sequence, item states and recoverability (Resume) against the recording; token-free and reusable in CI.",
                       "test":  "go test ./recordreplay ./parity -count=1"
+                  },
+                  {
+                      "id":  "apply-patch-shared-fixture-double-run",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Shared-fixture double-run over the Rust apply-patch scenario corpus (25 scenarios) surfaced four real divergences that are now fixed and frozen: (1) parser whitespace leniency around patch markers (scenarios 017/018/020) now mirrors Rust's trim/trim_end marker matching including StreamingPatchParser::finish full-trim of the final line; (2) the CLI now applies hunks sequentially and keeps partial success on failure (scenario 015) like Rust's apply_patch_with_mode, while the app-server tool keeps the verify-first flow matching Rust's verify_apply_patch_args. All 25 scenarios byte-match the Rust expected trees; unit tests pin each fixed behavior.",
+                      "test":  "go test ./parity -run TestApplyPatchScenariosMatchRustFixtures -count=1; go test ./applypatch -count=1"
                   }
               ]
 }
