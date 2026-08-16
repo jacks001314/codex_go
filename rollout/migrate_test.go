@@ -49,6 +49,46 @@ func jsonMarshal(value any) ([]byte, error) {
 	return json.Marshal(value)
 }
 
+// writeTestRolloutWithEvents writes a legacy rollout with a turn boundary and
+// user/agent messages so canonicalization has content to replay.
+func writeTestRolloutWithEvents(t *testing.T, path string, threadID string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	now := "2025-01-01T00:00:00Z"
+	meta := map[string]any{
+		"id":          threadID,
+		"session_id":  "session-test",
+		"timestamp":   now,
+		"cwd":         "/workspace",
+		"originator":  "test",
+		"model":       "gpt-test",
+		"cli_version": "0.0.0-test",
+	}
+	data, _ := json.Marshal(meta)
+	lines := []string{
+		string(mustJSON(t, map[string]any{"type": "session_meta", "timestamp": now, "payload": json.RawMessage(data)})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "task_started", "turn_id": "turn-1", "started_at": 1700000000}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "user_message", "client_id": "client-1", "message": "hello event"}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "agent_message", "message": "answer event"}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "task_complete", "turn_id": "turn-1", "completed_at": 1700000005, "duration_ms": 5000}})),
+		"",
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	return data
+}
+
 func TestMigrateRolloutsDryRunClassifiesLikeRust(t *testing.T) {
 	// Mirrors Rust rollout_migration_tests.rs dry-run inspection: legacy
 	// rollouts (active, archived, compressed naming) are Eligible, paginated
@@ -113,18 +153,78 @@ func TestMigrateRolloutsThreadSelection(t *testing.T) {
 	}
 }
 
-func TestMigrateRolloutsApplyNotImplementedFailsCleanly(t *testing.T) {
+func TestMigrateRolloutsApplyMigratesEligibleRollout(t *testing.T) {
 	home := t.TempDir()
-	writeTestRollout(t, filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-123e4567-e89b-42d3-a456-426614174020.jsonl"), "123e4567-e89b-42d3-a456-426614174020", "")
+	threadID := "123e4567-e89b-42d3-a456-426614174020"
+	path := filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+threadID+".jsonl")
+	writeTestRollout(t, path, threadID, "")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
 	report, err := MigrateRollouts(home, MigrationOptions{Apply: true})
 	if err != nil {
 		t.Fatalf("MigrateRollouts: %v", err)
 	}
-	if len(report.Outcomes) != 1 || report.Outcomes[0].Status != MigrationStatusFailed {
-		t.Fatalf("apply outcomes = %#v, want one failed (not implemented)", report.Outcomes)
+	if len(report.Outcomes) != 1 || report.Outcomes[0].Status != MigrationStatusMigrated {
+		t.Fatalf("apply outcomes = %#v, want one migrated", report.Outcomes)
 	}
-	if report.Outcomes[0].Message == nil || !strings.Contains(*report.Outcomes[0].Message, "not implemented") {
-		t.Fatalf("apply message = %#v, want not-implemented note", report.Outcomes[0].Message)
+	// The source file is now paginated (history_mode=paginated), the staged
+	// temp file is gone, and no journal remains.
+	meta, err := FirstSessionMeta(path)
+	if err != nil {
+		t.Fatalf("FirstSessionMeta after migrate: %v", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(meta.HistoryMode), "paginated") {
+		t.Fatalf("history mode = %q, want paginated", meta.HistoryMode)
+	}
+	if _, err := os.Stat(path + ".paginated.tmp"); !os.IsNotExist(err) {
+		t.Fatalf("staged temp file still present (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, MigrationJournalDirectory, threadID+".pending")); !os.IsNotExist(err) {
+		t.Fatalf("migration journal still present (err=%v)", err)
+	}
+	// Dry-run again reports AlreadyPaginated.
+	report, err = MigrateRollouts(home, MigrationOptions{})
+	if err != nil {
+		t.Fatalf("MigrateRollouts dry-run: %v", err)
+	}
+	if len(report.Outcomes) != 1 || report.Outcomes[0].Status != MigrationStatusAlreadyPaginated {
+		t.Fatalf("post-migrate outcomes = %#v, want already_paginated", report.Outcomes)
+	}
+	_ = original
+}
+
+func TestCanonicalizeRolloutWritesPaginatedStagedAndPublishes(t *testing.T) {
+	home := t.TempDir()
+	threadID := "123e4567-e89b-42d3-a456-426614174021"
+	path := filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+threadID+".jsonl")
+	writeTestRolloutWithEvents(t, path, threadID)
+	if err := CanonicalizeRollout(home, path); err != nil {
+		t.Fatalf("CanonicalizeRollout: %v", err)
+	}
+	lines, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load migrated rollout: %v", err)
+	}
+	if len(lines) < 4 {
+		t.Fatalf("migrated lines = %d, want session meta + turn + items", len(lines))
+	}
+	if lines[0].Meta == nil || !strings.EqualFold(strings.TrimSpace(lines[0].Meta.HistoryMode), "paginated") {
+		t.Fatalf("migrated head meta = %#v, want paginated", lines[0].Meta)
+	}
+	var eventTypes []string
+	for i := 1; i < len(lines); i++ {
+		var payload struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(lines[i].Payload, &payload) == nil {
+			eventTypes = append(eventTypes, payload.Type)
+		}
+	}
+	joined := strings.Join(eventTypes, ",")
+	if !strings.Contains(joined, "task_started") || !strings.Contains(joined, "task_complete") {
+		t.Fatalf("migrated event types = %v, want task_started and task_complete", eventTypes)
 	}
 }
 

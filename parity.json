@@ -648,6 +648,12 @@
                       "id":  "migrate-rollouts-cli-dry-run",
                       "reason":  "Started the P1 legacy rollout->paginated migration by implementing the codex migrate-rollouts CLI command surface with the dry-run report layer (phase 1): flags --apply/--thread/--max-mib-per-second/--json/--verbose mirror Rust MigrateRolloutsCommand; rollout.MigrateRollouts scans sessions + archived_sessions (flat and date-nested, plain and .jsonl.zst), classifies each file as eligible/already_paginated/skipped_empty/failed with Rust's thread-id-from-filename rule (36-char UUID suffix) and thread selection, and renders the Rust-shaped JSON report and human report (Scan complete / Scanned N rollout(s): ... / Run codex migrate-rollouts --apply). Apply mode is intentionally reported as failed with a not-implemented message instead of corrupting storage; the canonicalizer/journal/atomic-publish/rollback state machine remains a tracked follow-up.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./rollout -run 'TestMigrateRolloutsApply|TestCanonicalizeRollout' -count=1; go test ./rollout ./cli ./app -count=1",
+                      "id":  "migrate-rollouts-apply-canonicalizer",
+                      "reason":  "Implemented the Apply phase of the P1 rollout migration (phase 2): CanonicalizeRollout replays a legacy rollout into canonical paginated JSONL - session_meta header rewritten to history_mode=paginated (history_base/subagent_history_start_ordinal cleared), legacy events converted to turn boundaries (task_started/task_complete) and Rust-shaped ItemCompleted events wrapping canonical TurnItems (UserMessage/AgentMessage via CoreTurnItemJSONFromSessionItem), consecutive ordinals on every line, staged at .{name}.paginated.tmp, durable .pending journal under rollout-migrations/, atomic rename over the source, journal removal after publish, and staged cleanup on failure. MigrateRollouts --apply now migrates eligible files (previously fail-closed). End-to-end verified: dry-run -> eligible, apply -> migrated, dry-run -> already_paginated, migrated file replays 2 items with correct preview/turns; staged/journal cleaned.",
+                      "area":  "parity"
                   }
               ]
 }

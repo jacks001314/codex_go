@@ -67,7 +67,7 @@ func MigrateRollouts(codexHome string, options MigrationOptions) (*MigrationRepo
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
-		outcome, ok := inspectRolloutPath(path, options)
+		outcome, ok := inspectRolloutPath(codexHome, path, options)
 		if !ok {
 			continue
 		}
@@ -76,7 +76,7 @@ func MigrateRollouts(codexHome string, options MigrationOptions) (*MigrationRepo
 	return report, nil
 }
 
-func inspectRolloutPath(path string, options MigrationOptions) (*MigrationOutcome, bool) {
+func inspectRolloutPath(codexHome string, path string, options MigrationOptions) (*MigrationOutcome, bool) {
 	meta, err := FirstSessionMeta(path)
 	if err != nil {
 		threadID := threadIDFromRolloutFilename(path)
@@ -107,11 +107,10 @@ func inspectRolloutPath(path string, options MigrationOptions) (*MigrationOutcom
 	if !options.Apply {
 		return migrationOutcome(&threadID, path, MigrationStatusEligible, 0, ""), true
 	}
-	// Apply mode is not implemented yet; report as failed with a clear message
-	// instead of silently corrupting storage. The state machine (canonicalizer,
-	// journal, atomic publish, rollback replay) is a tracked follow-up.
-	message := "apply mode is not implemented yet"
-	return migrationOutcome(&threadID, path, MigrationStatusFailed, 0, message), true
+	if err := CanonicalizeRollout(codexHome, path); err != nil {
+		return migrationOutcome(&threadID, path, MigrationStatusFailed, 0, err.Error()), true
+	}
+	return migrationOutcome(&threadID, path, MigrationStatusMigrated, 0, ""), true
 }
 
 func migrationOutcome(threadID *string, path string, status MigrationStatus, bytes uint64, message string) *MigrationOutcome {
