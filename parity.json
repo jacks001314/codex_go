@@ -573,6 +573,13 @@
                       "area":  "parity",
                       "reason":  "Recognized the Rust marketplaces config key: Go's plugin service (marketplace_config.go reads the top-level marketplaces table from config.toml) and interactive TUI (interactivePluginMarketplacesFromConfig) already read it, but strict config rejected the key. Added the key plus per-entry sub-field validation mirroring Rust's MarketplaceConfig (last_updated/last_revision/source_type/source/ref/sparse_paths, deny_unknown_fields). The config-schema rust-only allowlist shrank from 8 to 7; audio was re-audited and confirmed as a realtime wire field, not a config key.",
                       "test":  "go test ./config -run TestMarketplacesSubFieldValidation -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
+                  },
+                  {
+                      "id":  "http-client-ca-fixtures-shared-fixture",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Wired the last unwired Rust data asset: http-client/tests/fixtures TLS certs. The OpenSSL TRUSTED CERTIFICATE fixture (test-ca-trusted.pem) carries trailing X509_AUX data that Go's stdlib AppendCertsFromPEM rejects, while Rust's NormalizedPem (custom_ca.rs) trims it. Added network.AppendCertsFromPEMNormalized (ASN.1-length X509_AUX trim) wired into the startup CA bundle loading, plus the parity verifier proving: test-ca/test-intermediate parse as CAs, the stdlib rejects the AUX variant, the normalized loader accepts it, and the trusted cert equals test-ca. Registered as contract http-client-ca-fixtures.",
+                      "test":  "go test ./parity -run TestRustHTTPClientCAFixturesLoadInGo -count=1; go test ./network -count=1"
                   }
               ]
 }

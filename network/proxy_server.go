@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -469,11 +471,51 @@ func proxyUpstreamRootCAs(env map[string]string) (*x509.CertPool, error) {
 		if readErr != nil {
 			return nil, fmt.Errorf("read startup CA bundle %s: %w", path, readErr)
 		}
-		if !pool.AppendCertsFromPEM(contents) {
+		if !AppendCertsFromPEMNormalized(pool, contents) {
 			return nil, fmt.Errorf("startup CA bundle %s did not contain a certificate", path)
 		}
 	}
 	return pool, nil
+}
+
+// AppendCertsFromPEMNormalized adds every parseable certificate block from a
+// PEM bundle to the pool, mirroring Rust's NormalizedPem (http-client
+// custom_ca.rs): OpenSSL TRUSTED CERTIFICATE sections carry trailing X509_AUX
+// trust metadata after the certificate DER, which the standard library's
+// AppendCertsFromPEM rejects. The AUX trailing data is trimmed via the
+// certificate's ASN.1 length before parsing.
+func AppendCertsFromPEMNormalized(pool *x509.CertPool, contents []byte) bool {
+	added := false
+	rest := contents
+	for {
+		block, remaining := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		rest = remaining
+		der := block.Bytes
+		if strings.EqualFold(strings.TrimSpace(block.Type), "TRUSTED CERTIFICATE") {
+			der = trimX509AUX(der)
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			continue
+		}
+		pool.AddCert(cert)
+		added = true
+	}
+	return added
+}
+
+// trimX509AUX removes OpenSSL X509_AUX trust metadata appended after the
+// certificate DER, keeping only the exact certificate encoding.
+func trimX509AUX(der []byte) []byte {
+	var raw asn1.RawValue
+	rest, err := asn1.Unmarshal(der, &raw)
+	if err != nil || len(rest) == 0 {
+		return der
+	}
+	return der[:len(der)-len(rest)]
 }
 
 type proxyMITMRequestContext struct {
