@@ -531,6 +531,13 @@
                       "area":  "parity",
                       "reason":  "Recognized the Rust log_dir config key: Go's doctor already reads log_dir for log-path reporting, but strict config validation rejected it (not in knownTopLevelConfigFields). Added the key so configured log_dir is accepted and doctor-reported; the config-schema rust-only allowlist shrank from 14 to 13 (Go's logging remains SQLite-based; a file-log redirect honoring log_dir is a tracked follow-up).",
                       "test":  "go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
+                  },
+                  {
+                      "id":  "feedback-config-surface",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Recognized the Rust feedback config key: Go's interactive TUI already reads feedback.enabled (interactiveFeedbackEnabledFromConfig gates the TUI feedback prompt, default true like Rust), but strict config validation rejected the key. Added the key plus feedback.enabled sub-field validation (deny_unknown_fields mirroring Rust FeedbackConfigToml); the config-schema rust-only allowlist shrank from 13 to 12.",
+                      "test":  "go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1; go test ./config -count=1"
                   }
               ]
 }

@@ -329,6 +329,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"experimental_realtime_start_instructions":   {},
 	"experimental_use_unified_exec_tool":         {},
 	"features":                                   {},
+	"feedback":                                   {},
 	"file_opener":                                {},
 	"forced_chatgpt_workspace_id":                {},
 	"forced_login_method":                        {},
@@ -431,6 +432,15 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 	}
 	if err := ValidateShellEnvironmentPolicy(values["shell_environment_policy"]); err != nil {
 		return err
+	}
+	if feedback, ok := values["feedback"].(map[string]any); ok {
+		// Mirrors Rust FeedbackConfigToml (serde deny_unknown_fields).
+		known := map[string]bool{"enabled": true}
+		for key := range feedback {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `feedback.%s`", key)
+			}
+		}
 	}
 	return nil
 }
