@@ -836,6 +836,10 @@ type Model struct {
 	// vimYank is the line yank buffer for Vim normal mode (Y yanks the current
 	// line, p pastes it after the cursor).
 	vimYank                         string
+	// composerKillBuffer is the single-entry editor kill buffer for the
+	// composer (ctrl-k / ctrl-u / kill_whole_line cut into it; ctrl-y yanks it
+	// back), mirroring Rust bottom_pane/textarea.rs kill_buffer.
+	composerKillBuffer              string
 	// vimPendingOp tracks a pending Vim line operator (d or y) waiting for its
 	// repeat key, enabling dd / yy / cc.
 	vimPendingOp                    string
@@ -1707,6 +1711,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			return m, nil
 		}
 		if m.applyEditQueuedMessageKey(msg, keySpec) {
+			return m, nil
+		}
+		if m.applyEditorKillYankKey(msg, keySpec) {
 			return m, nil
 		}
 		if m.applyVimModeKey(msg, keySpec) {

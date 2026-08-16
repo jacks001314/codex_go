@@ -821,6 +821,13 @@
                       "id":  "process-hardening",
                       "reason":  "Implemented the P2 macOS/Linux process hardening (Rust process-hardening/src/lib.rs pre_main_hardening): a new processhardening package applies prctl(PR_SET_DUMPABLE, 0) on Linux/Android, ptrace(PT_DENY_ATTACH) on macOS, setrlimit(RLIMIT_CORE, 0) and clears LD_*/DYLD_* loader env vars, fail-closed with Rust's exit codes 5-7; wired at cmd/codex main start (mirroring Rust's pre-main ctor; non-Unix is a no-op like Rust's Windows TODO). Verified by unit tests (env prefix filtering incl. non-UTF8 keys mirroring Rust's test) and the full-tree CGO_ENABLED=0 darwin/linux cross-compile. Also fixed two pre-existing darwin cross-compile bugs surfaced by the gate: doctor disk_unix.go used the Linux-only Statfs_t.Frsize on darwin (now Bsize via disk_darwin.go) and windowsDevDriveCheck was referenced on all platforms but defined only on Windows (added a non-Windows stub). Registered as contract process-hardening.",
                       "area":  "parity"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./tui/tea -run 'TestEditorKill' -count=1; go test ./tui/... -count=1",
+                      "id":  "tui-editor-kill-yank",
+                      "reason":  "Closed a registered-but-undispatched composer gap found by re-scanning the keymap registry: the editor kill/yank actions (kill_line_start ctrl-u, kill_line_end ctrl-k, kill_whole_line, yank ctrl-y) were registered but never dispatched - the bubbletea textarea does not handle them and the model had no routing. Implemented applyEditorKillYankKey mirroring Rust bottom_pane/textarea.rs: ctrl-k cuts cursor->line-end (or the trailing newline at the line end), ctrl-u cuts line-start->cursor (or the preceding newline at the line start), kill_whole_line cuts the whole line, and ctrl-y pastes the single-entry kill buffer at the cursor (the buffer survives composer clears). Also fixed the shared edit-cursor positioning: after any SetValue-based edit the cursor now stays at the edit point (vimSetCursorAtByteOffset) instead of jumping to the last row - matching Rust. Verified with 3 token-free tests; the live CLI black-box differential re-passes with the rebuilt binary. Registered as contract tui-editor-kill-yank.",
+                      "area":  "parity"
                   }
               ]
 }

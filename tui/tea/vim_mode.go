@@ -194,7 +194,7 @@ func (m *Model) deleteVimCharAtCursor() {
 	}
 	_, size := utf8.DecodeRuneInString(value[offset:])
 	m.composer.SetValue(value[:offset] + value[offset+size:])
-	m.composer.SetCursor(offset)
+	m.vimSetCursorAtByteOffset(offset)
 }
 
 // deleteVimToLineEnd removes the text from the cursor to the end of the
@@ -209,7 +209,7 @@ func (m *Model) deleteVimToLineEnd() {
 	}
 	next := value[:offset] + value[offset+len(line)-col:]
 	m.composer.SetValue(next)
-	m.composer.SetCursor(offset)
+	m.vimSetCursorAtByteOffset(offset)
 }
 
 // deleteVimLine removes the whole current line including its newline (dd).
@@ -230,7 +230,7 @@ func (m *Model) deleteVimLine() {
 	}
 	next := value[:offset] + value[end:]
 	m.composer.SetValue(next)
-	m.composer.SetCursor(offset)
+	m.vimSetCursorAtByteOffset(offset)
 }
 
 // yankVimLine stores the current line in the Vim yank buffer (Y / yy).
@@ -246,7 +246,7 @@ func (m *Model) pasteVimAfterCursor() {
 	offset := m.vimValueByteOffset()
 	value := m.composer.Value()
 	m.composer.SetValue(value[:offset] + m.vimYank + value[offset:])
-	m.composer.SetCursor(offset + len(m.vimYank))
+	m.vimSetCursorAtByteOffset(offset + len(m.vimYank))
 }
 
 // vimWordMotion moves the cursor by word boundaries on the current line.
@@ -338,6 +338,32 @@ func (m *Model) vimLineStartByteOffset() int {
 		offset += len(lines[i]) + 1
 	}
 	return offset
+}
+
+// vimSetCursorAtByteOffset positions the textarea cursor at an absolute byte
+// offset of the composer value. SetValue leaves the cursor on the last row, so
+// the target row is reached by navigating up and the column set within it -
+// matching Rust's cursor position after edits (the cursor stays at the edit
+// point).
+func (m *Model) vimSetCursorAtByteOffset(offset int) {
+	value := m.composer.Value()
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(value) {
+		offset = len(value)
+	}
+	prefix := value[:offset]
+	row := strings.Count(prefix, "\n")
+	lastRow := m.composer.LineCount() - 1
+	for i := 0; i < lastRow-row; i++ {
+		m.composer.CursorUp()
+	}
+	col := offset
+	if nl := strings.LastIndex(prefix, "\n"); nl >= 0 {
+		col = offset - nl - 1
+	}
+	m.composer.SetCursor(col)
 }
 
 // applyVimLineOperatorRepeat handles dd / yy / cc: the operator repeated on
@@ -525,13 +551,13 @@ func (m *Model) applyVimOperatorValueRange(start, end int) {
 	case "d":
 		next := value[:start] + value[end:]
 		m.composer.SetValue(next)
-		m.composer.SetCursor(start)
+		m.vimSetCursorAtByteOffset(start)
 	case "y":
 		m.vimYank = value[start:end]
 	case "c":
 		next := value[:start] + value[end:]
 		m.composer.SetValue(next)
-		m.composer.SetCursor(start)
+		m.vimSetCursorAtByteOffset(start)
 		m.vimInsert = true
 	}
 }

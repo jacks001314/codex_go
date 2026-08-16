@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "frozenAt": "2026-08-17",
-  "plan": "update/plan_2026_08_17_sync15.md",
+  "plan": "update/plan_2026_08_17_sync16.md",
   "verified": {
     "rustCommit": "cd8dc1e9b6dd24d335f4fcb26546f36d045fd59a",
     "parityManifest": "parity.json"
