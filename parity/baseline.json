@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "frozenAt": "2026-08-17",
-  "plan": "update/plan_2026_08_17_sync13.md",
+  "plan": "update/plan_2026_08_17_sync14.md",
   "verified": {
-    "rustCommit": "2bc43d516e8688ed5549e6b5ee7cb54b52781bd1",
+    "rustCommit": "cd8dc1e9b6dd24d335f4fcb26546f36d045fd59a",
     "parityManifest": "parity.json"
   },
   "target": {
-    "rustCommit": "2bc43d516e8688ed5549e6b5ee7cb54b52781bd1",
+    "rustCommit": "cd8dc1e9b6dd24d335f4fcb26546f36d045fd59a",
     "rustBranch": "main",
     "goStartCommit": "df0a351b4454c48b4ea17995117407aacab4acf4"
   },

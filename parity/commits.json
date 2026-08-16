@@ -1,7 +1,7 @@
 {
     "schemaVersion":  1,
     "rustFromExclusive":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
-    "rustToInclusive":  "2bc43d516e8688ed5549e6b5ee7cb54b52781bd1",
+    "rustToInclusive":  "cd8dc1e9b6dd24d335f4fcb26546f36d045fd59a",
     "commits":  [
                     {
                         "sha":  "3c7ae4a81204cbee45084b4fb43b3630c79550c9",
@@ -282,6 +282,18 @@
                         "evidence":  [
                                          "go test ./tui/tea -run 'TestEditQueuedMessage' -count=1; go test ./tui/... -count=1; go test ./... -count=1",
                                          "Go TUI lacked the edit_queued_message feature entirely. Implemented in the tea Model: the chat edit_queued_message binding (default alt-up / shift-left) restores the latest queued follow-up into the composer and removes it from the queue, and in Vim normal mode an empty composer's history-up binding (vim_normal move_up, default k/up) triggers the same restore, mirroring Rust chatwidget/interaction.rs (#38907). Remapped bindings are honored through the resolved keymap (TestEditQueuedMessageVimHistoryUpUsesRemappedBindingLikeRust); edit-and-requeue cycles keep a single queue entry (TestEditQueuedMessageVimHistoryUpEditAndRequeueCycleLikeRust); the empty-composer gate preserves composer behavior when text is present. Registered as contract tui-edit-queued-message-vim-history-up."
+                                     ]
+                    },
+                    {
+                        "sha":  "cd8dc1e9b6dd24d335f4fcb26546f36d045fd59a",
+                        "subject":  "Stop rendering columns after filling their area (#38913)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust-internal rendering-loop micro-optimization in tui/src/render/renderable.rs ColumnRenderable::render - the pre-change loop already skipped out-of-area children via the empty-intersection guard (child.render was never called for them, and desired_height is pure), so adding 'if y >= area.bottom() { break; }' changes iteration only, not the rendered output. Go's TUI clips out-of-area content equivalently; no Go work required."
                                      ]
                     }
                 ]

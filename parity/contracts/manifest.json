@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "targetRustCommit": "2bc43d516e8688ed5549e6b5ee7cb54b52781bd1",
+  "targetRustCommit": "cd8dc1e9b6dd24d335f4fcb26546f36d045fd59a",
   "contracts": [
     {"id":"features","kind":"source-surface","rustPaths":["features/src/lib.rs"],"goPaths":["features/features.go"],"phase":"P1","status":"complete","verifier":"TestRustFeatureKeySurfaceAgainstGo"},
     {"id":"tool-schema-policy","kind":"shared-fixtures","rustPaths":["tools/tests/fixtures/json_schema_policy"],"goPaths":["jsonschema","mcp","parity"],"phase":"P1","status":"complete","verifier":"TestToolJSONSchemaPolicyFixturesMatchRust;TestToolJSONSchemaPolicyOversizedCompaction"},
