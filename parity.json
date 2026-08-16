@@ -86,6 +86,13 @@
                       "test":  "go test ./parity -run TestRustHooksCommandSchemasCoverGoInputSurface -count=1; go test ./appserver -run Hook -count=1"
                   },
                   {
+                      "id":  "hooks-command-output-schemas-shared-fixture",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Wired the second half of the hooks command wire contract: hooks/schema/generated/*.command.output.schema.json (10 schemars-generated draft-07 schemas for every hook command output type). TestRustHooksCommandOutputSchemasCoverGoParseSurface drives Go's per-event ParseHook* output parsers (appserver/hooks_output.go) with a sample carrying every declared schema property (universal envelope continue/stopReason/suppressOutput/systemMessage + hookSpecificOutput + event-specific decision/reason), asserting (1) each parser accepts a full-property sample, (2) event-specific fields are actually decoded (additionalContext from hookSpecificOutput, stopReason from the universal envelope), and (3) every declared schema property is handled by Go's parser (no undeclared-key rejection path). Registered as contract hooks-command-output-schemas.",
+                      "test":  "go test ./parity -run TestRustHooksCommandOutputSchemasCoverGoParseSurface -count=1; go test ./appserver -run Hook -count=1"
+                  },
+                  {
                       "status":  "done",
                       "test":  "go test ./mcp -run HandshakeDeadline -count=1",
                       "id":  "mcp-handshake-deadline",
