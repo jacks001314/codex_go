@@ -580,6 +580,13 @@
                       "area":  "parity",
                       "reason":  "Wired the last unwired Rust data asset: http-client/tests/fixtures TLS certs. The OpenSSL TRUSTED CERTIFICATE fixture (test-ca-trusted.pem) carries trailing X509_AUX data that Go's stdlib AppendCertsFromPEM rejects, while Rust's NormalizedPem (custom_ca.rs) trims it. Added network.AppendCertsFromPEMNormalized (ASN.1-length X509_AUX trim) wired into the startup CA bundle loading, plus the parity verifier proving: test-ca/test-intermediate parse as CAs, the stdlib rejects the AUX variant, the normalized loader accepts it, and the trusted cert equals test-ca. Registered as contract http-client-ca-fixtures.",
                       "test":  "go test ./parity -run TestRustHTTPClientCAFixturesLoadInGo -count=1; go test ./network -count=1"
+                  },
+                  {
+                      "id":  "alignment-control-domain-evidence-refreshed",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Refreshed the alignment-control domain evidence to reflect the current state: 15 contracts complete with verifiers, 87 packages 0 FAIL, sdktests 50/51, L0 enum inventory complete (model metadata 41/41, error codes zero gaps, sandbox exact, events pinned), the config-schema audit 16->7 fixing 9 real gaps, L3 facility readiness, and the remaining certification blockers (L3 live SDK matrix authorization/provider, L4 native platform matrix billing, sdk-cancellation upstream fix). Domain status stays partial (certification not done).",
+                      "test":  "go test ./parity -run 'TestAlignmentDomainsCannotOverclaimCompletion|TestAlignmentBaselineIsFrozenAndTraceable' -count=1"
                   }
               ]
 }
