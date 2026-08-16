@@ -3,6 +3,7 @@ package parity
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -162,6 +163,131 @@ func TestRustConfigParseSamplesRunInGo(t *testing.T) {
 			for _, want := range tc.wantMessage {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("Go error %q missing Rust-asserted substring %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestRustConfigMergeKeyAliasSamplesRunInGo is the djalign dynamic-layer
+// method-1 shared-fixture differential for config layer merging: the samples
+// mirror Rust merge_tests.rs (normalize_key_aliases inside merge_toml_values).
+// Go's mergeConfigMaps must produce the same normalized table as Rust's
+// merge_toml_values for the memories/agents legacy-key aliases, including the
+// canonical-key-wins-within-a-layer and overlay-legacy-wins-over-base-canonical
+// semantics.
+func TestRustConfigMergeKeyAliasSamplesRunInGo(t *testing.T) {
+	root := rustSnapshotRoot(t)
+	source, err := os.ReadFile(filepath.Join(root, "config", "src", "merge_tests.rs"))
+	if err != nil {
+		t.Fatalf("ReadFile(merge_tests.rs) error = %v", err)
+	}
+
+	cases := []struct {
+		id        string
+		rustTest  string
+		baseTOML  string // packaged-defaults layer (base)
+		userTOML  string // user config layer (overlay)
+		wantValue map[string]any
+	}{
+		{
+			id:       "merge_toml_values_normalizes_legacy_key_from_base_layer",
+			rustTest: "merge_toml_values_normalizes_legacy_key_from_base_layer",
+			baseTOML: "[memories]\nno_memories_if_mcp_or_web_search = false\n",
+			userTOML: "[memories]\ndisable_on_external_context = true\n",
+			wantValue: map[string]any{
+				"memories": map[string]any{"disable_on_external_context": true},
+			},
+		},
+		{
+			id:       "merge_toml_values_normalizes_legacy_key_from_overlay_layer",
+			rustTest: "merge_toml_values_normalizes_legacy_key_from_overlay_layer",
+			baseTOML: "[memories]\ndisable_on_external_context = false\n",
+			userTOML: "[memories]\nno_memories_if_mcp_or_web_search = true\n",
+			wantValue: map[string]any{
+				"memories": map[string]any{"disable_on_external_context": true},
+			},
+		},
+		{
+			id:       "merge_toml_values_prefers_canonical_key_when_one_layer_has_both_names",
+			rustTest: "merge_toml_values_prefers_canonical_key_when_one_layer_has_both_names",
+			baseTOML: "",
+			userTOML: "[memories]\ndisable_on_external_context = true\nno_memories_if_mcp_or_web_search = false\n",
+			wantValue: map[string]any{
+				"memories": map[string]any{"disable_on_external_context": true},
+			},
+		},
+		{
+			id:       "merge_toml_values_normalizes_legacy_agents_key_across_layers",
+			rustTest: "merge_toml_values_normalizes_legacy_agents_key_across_layers",
+			baseTOML: "[agents]\nmax_threads = 4\n",
+			userTOML: "[agents]\nmax_concurrent_threads_per_session = 7\n",
+			wantValue: map[string]any{
+				"agents": map[string]any{"max_concurrent_threads_per_session": int64(7)},
+			},
+		},
+		{
+			id:       "merge_toml_values_normalizes_legacy_agents_key_from_overlay",
+			rustTest: "merge_toml_values_normalizes_legacy_agents_key_from_overlay",
+			baseTOML: "[agents]\nmax_concurrent_threads_per_session = 4\n",
+			userTOML: "[agents]\nmax_threads = 7\n",
+			wantValue: map[string]any{
+				"agents": map[string]any{"max_concurrent_threads_per_session": int64(7)},
+			},
+		},
+		{
+			id:       "merge_multi_agent_v2_table_preserves_legacy_boolean_toggle",
+			rustTest: "merge_multi_agent_v2_table_preserves_legacy_boolean_toggle",
+			baseTOML: "[features]\nmulti_agent_v2 = true\n",
+			userTOML: "[features.multi_agent_v2]\nsubagent_usage_hint_text = \"Delegate carefully.\"\n",
+			wantValue: map[string]any{
+				"features": map[string]any{
+					"multi_agent_v2": map[string]any{"enabled": true, "subagent_usage_hint_text": "Delegate carefully."},
+				},
+			},
+		},
+		{
+			id:       "merge_multi_agent_v2_boolean_preserves_existing_feature_table",
+			rustTest: "merge_multi_agent_v2_boolean_preserves_existing_feature_table",
+			baseTOML: "[features.multi_agent_v2]\nenabled = true\nsubagent_usage_hint_text = \"Delegate carefully.\"\n",
+			userTOML: "[features]\nmulti_agent_v2 = false\n",
+			wantValue: map[string]any{
+				"features": map[string]any{
+					"multi_agent_v2": map[string]any{"enabled": false, "subagent_usage_hint_text": "Delegate carefully."},
+				},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			if !strings.Contains(string(source), "fn "+tc.rustTest+"()") {
+				t.Fatalf("Rust test fn %s no longer exists in config/src/merge_tests.rs; re-sync the shared fixture", tc.rustTest)
+			}
+			dir := t.TempDir()
+			if tc.baseTOML != "" {
+				if err := os.WriteFile(filepath.Join(dir, "packaged.toml"), []byte(tc.baseTOML), 0o600); err != nil {
+					t.Fatalf("WriteFile packaged: %v", err)
+				}
+			}
+			if err := os.WriteFile(config.ConfigPath(dir), []byte(tc.userTOML), 0o600); err != nil {
+				t.Fatalf("WriteFile user config: %v", err)
+			}
+			loadOpts := &config.LoadOptions{}
+			if tc.baseTOML != "" {
+				loadOpts.PackagedDefaultsPath = filepath.Join(dir, "packaged.toml")
+			}
+			cfg, err := config.LoadWithOptions(dir, loadOpts)
+			if err != nil {
+				t.Fatalf("LoadWithOptions: %v", err)
+			}
+			for table, want := range tc.wantValue {
+				gotTable, _ := cfg.Values[table].(map[string]any)
+				wantTable, _ := want.(map[string]any)
+				// The merged value must be the normalized table (legacy key
+				// removed), matching Rust's post-merge table exactly.
+				if !reflect.DeepEqual(gotTable, wantTable) {
+					t.Fatalf("%s merge = %#v, want %#v", table, gotTable, wantTable)
 				}
 			}
 		})

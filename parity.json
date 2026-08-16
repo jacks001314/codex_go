@@ -606,6 +606,18 @@
                       "id":  "model-providers-validation-alignment",
                       "reason":  "Aligned Go's model_providers validation with Rust validate_model_providers / validate_reserved_model_provider_ids / merge_configured_model_providers (config/src/config_toml.rs + model-provider-info/src/lib.rs): (1) overriding reserved built-in ids (openai/ollama/lmstudio) is now rejected with Rust's exact message; (2) non-Bedrock providers with an empty name are rejected; (3) aws is allowed for amazon-bedrock and amazon-bedrock-runtime (Go previously accepted only amazon-bedrock); (4) the amazon-bedrock-runtime provider is now a built-in (CreateAmazonBedrockRuntimeProvider) and accepts the same base_url/auth/http_headers/aws extension surface as the standard Bedrock variant. New shared-fixture differential TestRustModelProviderValidationSamplesRunInGo drives 6 Rust samples through the Go consumer (ConfiguredProviderMap) with fn-name pinning; config-parse-shared-fixtures contract verifier extended.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./config -run TestMergeConfigMapsNormalizesKeyAliasesLikeRust -count=1; go test ./parity -run TestRustConfigMergeKeyAliasSamplesRunInGo -count=1",
+                      "id":  "config-merge-key-alias-normalization",
+                      "reason":  "Aligned Go config layer merging with Rust merge_toml_values / normalize_key_aliases (config/src/key_aliases.rs + merge_tests.rs): legacy keys (memories.no_memories_if_mcp_or_web_search -> disable_on_external_context, agents.max_threads -> max_concurrent_threads_per_session) are now normalized at merge time with canonical-key-wins-within-a-layer and overlay-legacy-wins-over-base-canonical semantics (Go previously only fell back in getters, so an overlay's legacy key lost to a base layer's canonical key). New shared-fixture differential TestRustConfigMergeKeyAliasSamplesRunInGo drives 5 Rust merge_tests.rs samples through Go's layer loading with fn-name pinning; config-parse-shared-fixtures contract verifier extended.",
+                      "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./config -run 'TestMergeConfigMapsNormalizesKeyAliasesLikeRust|TestMergeConfigMapsMultiAgentV2BooleanTableLikeRust' -count=1; go test ./parity -run TestRustConfigMergeKeyAliasSamplesRunInGo -count=1",
+                      "id":  "config-merge-multi-agent-v2-boolean-table",
+                      "reason":  "Aligned Go config layer merging with Rust merge_toml_values multi_agent_v2 handling (config/src/merge.rs is_multi_agent_v2_feature_path): a legacy boolean toggle (multi_agent_v2 = true/false) now converts to an enabled field when merged with a nested table, in either direction and under both features and profiles.<name>.features, without discarding nested configuration. Go previously let the nested table silently replace the boolean (dropping the toggle). New unit tests pin both directions at both paths; the shared-fixture differential TestRustConfigMergeKeyAliasSamplesRunInGo now drives 7 Rust merge_tests.rs samples through Go's layer loading.",
+                      "area":  "parity"
                   }
               ]
 }

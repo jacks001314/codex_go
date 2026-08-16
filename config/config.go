@@ -1567,7 +1567,28 @@ func legacyProfileValues(values map[string]any, profile string) (map[string]any,
 }
 
 func mergeConfigMaps(dst map[string]any, src map[string]any) {
+	mergeConfigMapsAt(dst, src, nil)
+}
+
+func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
 	for key, value := range src {
+		childPath := append(append([]string(nil), path...), key)
+		if isMultiAgentV2FeaturePath(childPath) {
+			// Mirrors Rust merge_toml_values_at_path's multi_agent_v2 handling
+			// (config/src/merge.rs): a legacy boolean toggle converts to an
+			// `enabled` field when merged with a nested table, in either
+			// direction, without discarding nested configuration.
+			if baseBool, ok := dst[key].(bool); ok {
+				if _, overlayIsMap := value.(map[string]any); overlayIsMap {
+					dst[key] = map[string]any{"enabled": baseBool}
+				}
+			} else if baseTable, ok := dst[key].(map[string]any); ok {
+				if overlayBool, ok := value.(bool); ok {
+					baseTable["enabled"] = overlayBool
+					continue
+				}
+			}
+		}
 		if key == "shell_environment_policy" {
 			if srcPolicy, ok := value.(map[string]any); ok {
 				basePolicy, _ := dst[key].(map[string]any)
@@ -1578,11 +1599,53 @@ func mergeConfigMaps(dst map[string]any, src map[string]any) {
 		srcMap, srcIsMap := value.(map[string]any)
 		dstMap, dstIsMap := dst[key].(map[string]any)
 		if srcIsMap && dstIsMap {
-			mergeConfigMaps(dstMap, srcMap)
+			normalizeConfigKeyAliases(childPath, dstMap)
+			normalizeConfigKeyAliases(childPath, srcMap)
+			mergeConfigMapsAt(dstMap, srcMap, childPath)
 			continue
+		}
+		if srcIsMap {
+			// Mirrors Rust normalized_with_key_aliases: a freshly inserted
+			// table still gets its aliases normalized at the target path.
+			normalizeConfigKeyAliases(childPath, srcMap)
 		}
 		dst[key] = cloneConfigValue(value)
 	}
+}
+
+func isMultiAgentV2FeaturePath(path []string) bool {
+	if len(path) == 2 && path[0] == "features" && path[1] == "multi_agent_v2" {
+		return true
+	}
+	return len(path) == 4 && path[0] == "profiles" && path[2] == "features" && path[3] == "multi_agent_v2"
+}
+
+// normalizeConfigKeyAliases mirrors Rust normalize_key_aliases
+// (config/src/key_aliases.rs): within a known table, a legacy key is moved to
+// its canonical name (or_insert semantics - the canonical value wins when both
+// are present in the same layer), so an overlay's legacy key overrides a
+// base layer's canonical key exactly like Rust's merge_toml_values.
+func normalizeConfigKeyAliases(path []string, table map[string]any) {
+	if len(path) != 1 {
+		return
+	}
+	switch path[0] {
+	case "memories":
+		normalizeConfigKeyAlias(table, "no_memories_if_mcp_or_web_search", "disable_on_external_context")
+	case "agents":
+		normalizeConfigKeyAlias(table, "max_threads", "max_concurrent_threads_per_session")
+	}
+}
+
+func normalizeConfigKeyAlias(table map[string]any, legacyKey, canonicalKey string) {
+	legacyValue, ok := table[legacyKey]
+	if !ok {
+		return
+	}
+	if _, exists := table[canonicalKey]; !exists {
+		table[canonicalKey] = legacyValue
+	}
+	delete(table, legacyKey)
 }
 
 func cloneConfigValue(value any) any {

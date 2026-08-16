@@ -31,6 +31,137 @@ func TestResumeCWDModeAndResolution(t *testing.T) {
 	}
 }
 
+func TestMergeConfigMapsNormalizesKeyAliasesLikeRust(t *testing.T) {
+	// Mirrors Rust merge_tests.rs: legacy keys are normalized to their
+	// canonical names before overlaying, so an overlay's legacy key wins over
+	// a base layer's canonical key (and vice versa), matching Rust
+	// normalize_key_aliases / merge_toml_values.
+	t.Run("legacy_key_from_base_layer", func(t *testing.T) {
+		base := map[string]any{"memories": map[string]any{"no_memories_if_mcp_or_web_search": false}}
+		overlay := map[string]any{"memories": map[string]any{"disable_on_external_context": true}}
+		mergeConfigMaps(base, overlay)
+		mem := base["memories"].(map[string]any)
+		if _, exists := mem["no_memories_if_mcp_or_web_search"]; exists {
+			t.Fatalf("legacy key survived normalization: %#v", mem)
+		}
+		if got := mem["disable_on_external_context"]; got != true {
+			t.Fatalf("disable_on_external_context = %v, want true", got)
+		}
+	})
+	t.Run("legacy_key_from_overlay_layer", func(t *testing.T) {
+		base := map[string]any{"memories": map[string]any{"disable_on_external_context": false}}
+		overlay := map[string]any{"memories": map[string]any{"no_memories_if_mcp_or_web_search": true}}
+		mergeConfigMaps(base, overlay)
+		mem := base["memories"].(map[string]any)
+		if _, exists := mem["no_memories_if_mcp_or_web_search"]; exists {
+			t.Fatalf("legacy key survived normalization: %#v", mem)
+		}
+		if got := mem["disable_on_external_context"]; got != true {
+			t.Fatalf("disable_on_external_context = %v, want true", got)
+		}
+	})
+	t.Run("canonical_key_wins_within_same_layer", func(t *testing.T) {
+		base := map[string]any{}
+		overlay := map[string]any{"memories": map[string]any{
+			"disable_on_external_context":      true,
+			"no_memories_if_mcp_or_web_search": false,
+		}}
+		mergeConfigMaps(base, overlay)
+		mem := base["memories"].(map[string]any)
+		if _, exists := mem["no_memories_if_mcp_or_web_search"]; exists {
+			t.Fatalf("legacy key survived normalization: %#v", mem)
+		}
+		if got := mem["disable_on_external_context"]; got != true {
+			t.Fatalf("disable_on_external_context = %v, want true", got)
+		}
+	})
+	t.Run("legacy_agents_key_across_layers", func(t *testing.T) {
+		base := map[string]any{"agents": map[string]any{"max_threads": int64(4)}}
+		overlay := map[string]any{"agents": map[string]any{"max_concurrent_threads_per_session": int64(7)}}
+		mergeConfigMaps(base, overlay)
+		agents := base["agents"].(map[string]any)
+		if _, exists := agents["max_threads"]; exists {
+			t.Fatalf("legacy key survived normalization: %#v", agents)
+		}
+		if got := agents["max_concurrent_threads_per_session"]; got != int64(7) {
+			t.Fatalf("max_concurrent_threads_per_session = %v, want 7", got)
+		}
+	})
+	t.Run("legacy_agents_key_from_overlay", func(t *testing.T) {
+		base := map[string]any{"agents": map[string]any{"max_concurrent_threads_per_session": int64(4)}}
+		overlay := map[string]any{"agents": map[string]any{"max_threads": int64(7)}}
+		mergeConfigMaps(base, overlay)
+		agents := base["agents"].(map[string]any)
+		if _, exists := agents["max_threads"]; exists {
+			t.Fatalf("legacy key survived normalization: %#v", agents)
+		}
+		if got := agents["max_concurrent_threads_per_session"]; got != int64(7) {
+			t.Fatalf("max_concurrent_threads_per_session = %v, want 7", got)
+		}
+	})
+}
+
+func TestMergeConfigMapsMultiAgentV2BooleanTableLikeRust(t *testing.T) {
+	// Mirrors Rust merge_tests.rs merge_multi_agent_v2_table_preserves_legacy_
+	// boolean_toggle and merge_multi_agent_v2_boolean_preserves_existing_
+	// feature_table: the legacy boolean toggle converts to an `enabled` field
+	// when merged with a nested table, in either direction.
+	for _, featurePath := range []string{"features", "profiles.work.features"} {
+		t.Run("table_preserves_legacy_boolean_toggle_"+featurePath, func(t *testing.T) {
+			base := map[string]any{}
+			overlay := map[string]any{}
+			writeConfigNested(base, strings.Split(featurePath, "."), map[string]any{"multi_agent_v2": true})
+			writeConfigNested(overlay, append(strings.Split(featurePath, "."), "multi_agent_v2"), map[string]any{"subagent_usage_hint_text": "Delegate carefully."})
+			mergeConfigMaps(base, overlay)
+			merged := readConfigNested(base, append(strings.Split(featurePath, "."), "multi_agent_v2")).(map[string]any)
+			if merged["enabled"] != true || merged["subagent_usage_hint_text"] != "Delegate carefully." {
+				t.Fatalf("%s merged = %#v", featurePath, merged)
+			}
+		})
+		t.Run("boolean_preserves_existing_feature_table_"+featurePath, func(t *testing.T) {
+			base := map[string]any{}
+			overlay := map[string]any{}
+			writeConfigNested(base, append(strings.Split(featurePath, "."), "multi_agent_v2"), map[string]any{
+				"enabled": true, "subagent_usage_hint_text": "Delegate carefully.",
+			})
+			writeConfigNested(overlay, strings.Split(featurePath, "."), map[string]any{"multi_agent_v2": false})
+			mergeConfigMaps(base, overlay)
+			merged := readConfigNested(base, append(strings.Split(featurePath, "."), "multi_agent_v2")).(map[string]any)
+			if merged["enabled"] != false || merged["subagent_usage_hint_text"] != "Delegate carefully." {
+				t.Fatalf("%s merged = %#v", featurePath, merged)
+			}
+		})
+	}
+}
+
+func writeConfigNested(root map[string]any, path []string, value any) {
+	if len(path) == 0 {
+		return
+	}
+	if len(path) == 1 {
+		root[path[0]] = value
+		return
+	}
+	next, ok := root[path[0]].(map[string]any)
+	if !ok {
+		next = map[string]any{}
+		root[path[0]] = next
+	}
+	writeConfigNested(next, path[1:], value)
+}
+
+func readConfigNested(root map[string]any, path []string) any {
+	current := any(root)
+	for _, segment := range path {
+		table, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		current = table[segment]
+	}
+	return current
+}
+
 func TestLoadEffectiveStrictConfigRejectsUnknownProfileFeatureKeyLikeRust(t *testing.T) {
 	// Mirrors Rust strict_config_tests.rs
 	// strict_config_rejects_unknown_profile_feature_key: unknown feature keys
