@@ -1,8 +1,8 @@
 {
-    "rustBaseline":  "6c108912ee",
-    "rustTag":  "main@6c108912ee",
-    "rustUpstreamHead":  "6c108912eeacabfc82723bf44f8a23f6e2f86585",
-    "rustUpstreamTag":  "main@6c108912eeacabfc82723bf44f8a23f6e2f86585",
+    "rustBaseline":  "2bc43d516e",
+    "rustTag":  "main@2bc43d516e",
+    "rustUpstreamHead":  "2bc43d516e8688ed5549e6b5ee7cb54b52781bd1",
+    "rustUpstreamTag":  "main@2bc43d516e8688ed5549e6b5ee7cb54b52781bd1",
     "rustE2EBinary":  {
                           "version":  "codex-cli 0.0.0",
                           "tag":  "main@bbbf396839",
@@ -792,6 +792,13 @@
                       "test":  "go test ./app ./config ./tui/tea -count=1; $env:CODEX_GO_SLASH_PARITY='1'; go test ./tui/tea -run TestSystemCodexSlashParityWithConPTY -count=1",
                       "id":  "cli-blackbox-slash-differential",
                       "reason":  "Ran the djalign method-4 CLI black-box differential as a live gate: Go code.exe vs the Rust @openai/codex release (v0.147.0) run through production ConPTY with /status + /mcp, comparing the observable TUI surface. The run surfaced two real issues, both fixed: (1) the differential test waited for the single identity marker 'gcode' on both binaries and asserted it on both - the Rust release brands itself 'OpenAI Codex' (documented allowed identity mapping rust codex <-> go gcode), so the test now waits for and asserts each side's own identity marker while keeping the shared /status+/mcp surface markers on both; (2) a real Go divergence: the Windows sandbox startup NUX opened even when the cwd was already trusted, while Rust gates it on onboarding_result.directory_trust_persisted (only a fresh/untrusted cwd produces a session trust decision, and elevated-required bypasses the gate). Go now mirrors the Rust condition ((trustDecision && level==Disabled) || elevatedRequired) via config.ProjectConfigEnabled (exported trust check) with the cwd resolved from root.Shared.CWD or os.Getwd(). Contracts cli-blackbox-slash-differential + windows-sandbox-nux-trust-decision; the gate is opt-in (CODEX_GO_SLASH_PARITY=1, both exes present) and token-free.",
+                      "area":  "parity"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./tui/tea -run 'TestEditQueuedMessage' -count=1; go test ./tui/... -count=1",
+                      "id":  "tui-edit-queued-message-vim-history-up",
+                      "reason":  "Aligned upstream 2bc43d516e (#38907 Edit queued messages with Vim history-up): Go's tea TUI lacked the edit_queued_message feature entirely. Implemented in the tea Model (applyEditQueuedMessageKey, routed before input-history navigation): the chat edit_queued_message binding (default alt-up / shift-left) restores the latest queued follow-up into the composer and removes it from the queue, and in Vim normal mode an empty composer's history-up binding (vim_normal move_up, default k/up) triggers the same restore - mirroring Rust chatwidget/interaction.rs. The restored message is removed from the queue so submitting the edited version replaces it instead of duplicating; remapped bindings are honored through the resolved keymap; the empty-composer gate preserves composer behavior when text is present. Registered as contract tui-edit-queued-message-vim-history-up with tests mirroring Rust composer_submission.rs (alt-up most-recent restore, edit-and-requeue cycle, remapped F2 binding, non-empty-composer guard).",
                       "area":  "parity"
                   }
               ]

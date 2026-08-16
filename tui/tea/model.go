@@ -1691,6 +1691,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if m.applyTranscriptNavigationKey(msg) {
 			return m, nil
 		}
+		if m.applyEditQueuedMessageKey(msg, keySpec) {
+			return m, nil
+		}
 		if m.applyInputHistoryKey(msg) {
 			return m, m.refreshSkillPopup()
 		}
@@ -4778,6 +4781,42 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 		}
 		return false
 	}
+}
+
+// applyEditQueuedMessageKey restores the latest queued follow-up into the
+// composer for editing, mirroring Rust 2bc43d516e (#38907 "Edit queued
+// messages with Vim history-up"):
+//
+//   - the chat edit_queued_message binding (default alt-up / shift-left)
+//     restores whenever queued follow-ups exist and no modal or popup is
+//     active;
+//   - in Vim normal mode, an empty composer's history-up binding (vim_normal
+//     move_up, default k/up) triggers the same restore.
+//
+// The restored message is removed from the queue, so submitting the edited
+// version replaces it instead of creating a duplicate (edit-and-requeue
+// cycles keep a single queue entry). Normal history navigation is preserved
+// when the composer has text (the empty-composer gate on the Vim path), and
+// remapped bindings are honored through the resolved keymap.
+func (m *Model) applyEditQueuedMessageKey(msg bubbletea.KeyMsg, keySpec string) bool {
+	if m == nil || len(m.queued) == 0 || m.modal != nil || m.slashPopup.Active || m.skillPopup.Active {
+		return false
+	}
+	editQueued := m.keyMatches("chat", "edit_queued_message", keySpec)
+	vimHistoryUp := m.vimMode && m.composer.Value() == "" && m.keyMatches("vim_normal", "move_up", keySpec)
+	if !editQueued && !vimHistoryUp {
+		return false
+	}
+	last := m.queued[len(m.queued)-1]
+	m.queued = m.queued[:len(m.queued)-1]
+	m.composer.SetValue(last.Request.Prompt)
+	m.composer.SetCursor(len(last.Request.Prompt))
+	m.attachments = cloneComposerAttachments(last.Request.Attachments)
+	m.composerMentionBindings = append([]string(nil), last.Request.MentionBindings...)
+	m.slashPopup = slashCommandPopup{}
+	m.skillPopup = skillPopupState{}
+	m.refreshTranscript()
+	return true
 }
 
 func (m *Model) resetInputHistoryNavigation() {

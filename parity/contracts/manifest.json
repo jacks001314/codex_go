@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "targetRustCommit": "6c108912eeacabfc82723bf44f8a23f6e2f86585",
+  "targetRustCommit": "2bc43d516e8688ed5549e6b5ee7cb54b52781bd1",
   "contracts": [
     {"id":"features","kind":"source-surface","rustPaths":["features/src/lib.rs"],"goPaths":["features/features.go"],"phase":"P1","status":"complete","verifier":"TestRustFeatureKeySurfaceAgainstGo"},
     {"id":"tool-schema-policy","kind":"shared-fixtures","rustPaths":["tools/tests/fixtures/json_schema_policy"],"goPaths":["jsonschema","mcp","parity"],"phase":"P1","status":"complete","verifier":"TestToolJSONSchemaPolicyFixturesMatchRust;TestToolJSONSchemaPolicyOversizedCompaction"},
@@ -33,6 +33,7 @@
     {"id":"delegate-noninteractive-approval-policy","kind":"shared-fixtures","rustPaths":["core/src/codex_delegate.rs","core/src/mcp_tool_call.rs","core/src/mcp_skill_dependencies.rs","core/src/tasks/review.rs"],"goPaths":["appserver"],"phase":"P2","status":"complete","verifier":"TestPrepareTurnStartParamsForcesApprovalNeverForSubagentLikeRust;TestRuntimeAgentControllerSpawnPinsSubagentApprovalNever;TestRuntimeRecordIsSubagent;TestNetworkApprovalNeverPolicyDoesNotPromptLikeRust"},
     {"id":"wsl-update-path-normalization","kind":"shared-fixtures","rustPaths":["cli/src/wsl_paths.rs","cli/src/main.rs"],"goPaths":["install","shell","parity"],"phase":"P2","status":"complete","verifier":"TestRustWSLPathSamplesRunInGo;TestNormalizedUpdateCommandAppliesWSLMappingLikeRust;TestUpdateCommandAndArgsWindowsBranchPreservesCmdSemantics;TestWinPathToWSL"},
     {"id":"windows-sandbox-nux-trust-decision","kind":"shared-fixtures","rustPaths":["tui/src/lib.rs","tui/src/chatwidget/windows_sandbox_prompts.rs"],"goPaths":["app","tui/tea","tui/chatwidget","config"],"phase":"P2","status":"complete","verifier":"TestSystemCodexSlashParityWithConPTY;TestInteractiveWindowsSandboxStartupPromptSkipsTrustedProjectLikeRust;TestInteractiveWindowsSandboxStartupPromptSkipsTrustedGitProjectLikeRust;TestInteractiveWindowsSandboxStartupPromptUsesEffectiveConfig;TestLocalCodexWindowsSandboxNUXWithConPTY"},
-    {"id":"cli-blackbox-slash-differential","kind":"terminal-ui","rustPaths":["tui/src/app/startup.rs","tui/src/chatwidget/windows_sandbox_prompts.rs"],"goPaths":["tui/tea"],"phase":"P2","status":"complete","verifier":"TestSystemCodexSlashParityWithConPTY"}
+    {"id":"cli-blackbox-slash-differential","kind":"terminal-ui","rustPaths":["tui/src/app/startup.rs","tui/src/chatwidget/windows_sandbox_prompts.rs"],"goPaths":["tui/tea"],"phase":"P2","status":"complete","verifier":"TestSystemCodexSlashParityWithConPTY"},
+    {"id":"tui-edit-queued-message-vim-history-up","kind":"shared-fixtures","rustPaths":["tui/src/chatwidget/interaction.rs","tui/src/bottom_pane/chat_composer.rs","tui/src/chatwidget/tests/composer_submission.rs"],"goPaths":["tui/tea"],"phase":"P2","status":"complete","verifier":"TestEditQueuedMessageAltUpRestoresMostRecentLikeRust;TestEditQueuedMessageVimHistoryUpEditAndRequeueCycleLikeRust;TestEditQueuedMessageVimHistoryUpUsesRemappedBindingLikeRust;TestEditQueuedMessageKeepsHistoryNavigationWhenComposerHasText"}
   ]
 }

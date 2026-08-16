@@ -1,7 +1,7 @@
 {
     "schemaVersion":  1,
     "rustFromExclusive":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
-    "rustToInclusive":  "6c108912eeacabfc82723bf44f8a23f6e2f86585",
+    "rustToInclusive":  "2bc43d516e8688ed5549e6b5ee7cb54b52781bd1",
     "commits":  [
                     {
                         "sha":  "3c7ae4a81204cbee45084b4fb43b3630c79550c9",
@@ -269,6 +269,19 @@
                         "evidence":  [
                                          "go test ./execpolicy ./tool ./app ./appserver -count=1",
                                          "Go now carries ShellEnvironmentPolicy on the resolved EnvironmentConfig (protocol parity), infers it from the thread config (Rust inferred_environment_config), and applies the selected turn environment's policy for shell commands, user shell tasks and unified exec (Rust TurnEnvironment::shell_environment_policy): the shell executor resolves the thread-derived policy with the environment's resolved policy winning, the local runner/unified-exec build the command env via execpolicy.CreateEnv (inherit none/core/all, default excludes, exclude/include_only patterns, set overrides, filters table), and the remote exec-server receives the policy as ExecEnvPolicy instead of the hardcoded inherit-all default. Verified dynamically (TestShellExecutorSetsEnvPolicyFromThreadAndEnvironmentLikeRust, TestShellRequestEnv*, TestShellEnvPolicyDifferentialLikeRustExecCommandUsesInstalledPolicy, execpolicy converter tests) and statically (EnvironmentConfig JSON roundtrip + thread inference tests). Env policy logic extracted from codex_go/exec into the leaf codex_go/execpolicy package (mirrors the codex-execpolicy crate split) so the tool layer can use it without an import cycle."
+                                     ]
+                    },
+                    {
+                        "sha":  "2bc43d516e8688ed5549e6b5ee7cb54b52781bd1",
+                        "subject":  "Edit queued messages with Vim history-up (#38907)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./tui/tea -run 'TestEditQueuedMessage' -count=1; go test ./tui/... -count=1; go test ./... -count=1",
+                                         "Go TUI lacked the edit_queued_message feature entirely. Implemented in the tea Model: the chat edit_queued_message binding (default alt-up / shift-left) restores the latest queued follow-up into the composer and removes it from the queue, and in Vim normal mode an empty composer's history-up binding (vim_normal move_up, default k/up) triggers the same restore, mirroring Rust chatwidget/interaction.rs (#38907). Remapped bindings are honored through the resolved keymap (TestEditQueuedMessageVimHistoryUpUsesRemappedBindingLikeRust); edit-and-requeue cycles keep a single queue entry (TestEditQueuedMessageVimHistoryUpEditAndRequeueCycleLikeRust); the empty-composer gate preserves composer behavior when text is present. Registered as contract tui-edit-queued-message-vim-history-up."
                                      ]
                     }
                 ]
