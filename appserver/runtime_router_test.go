@@ -64,6 +64,52 @@ func TestRuntimeMCPConfigUsesSharedHTTPClient(t *testing.T) {
 	}
 }
 
+// TestRuntimeRouterRawReasoningDeltaGatedByShowRawAgentReasoning pins the Rust
+// show_raw_agent_reasoning semantics (default false): raw chain-of-thought
+// reasoning deltas are suppressed unless the config key is enabled.
+func TestRuntimeRouterRawReasoningDeltaGatedByShowRawAgentReasoning(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.SetNotificationSink(sink)
+
+	rawReasoningEvent := &model.ResponsesStreamEvent{
+		Kind: model.ResponsesStreamEventReasoningTextDelta,
+		ReasoningDelta: &model.ResponsesReasoningDelta{
+			ItemID:       "reasoning-1",
+			ContentIndex: intPtr(0),
+			Delta:        "raw thought",
+		},
+		ItemID: "reasoning-1",
+	}
+
+	hidden := newResponsesStreamNotificationState(false, "turn-1")
+	router.notifyResponsesStreamEvent("thread-1", "turn-1", rawReasoningEvent, hidden)
+	if got := reasoningTextDeltaCount(sink); got != 0 {
+		t.Fatalf("raw reasoning deltas without show_raw_agent_reasoning = %d, want 0 (Rust default false)", got)
+	}
+
+	shown := newResponsesStreamNotificationState(false, "turn-1")
+	shown.showRawAgentReasoning = true
+	router.notifyResponsesStreamEvent("thread-1", "turn-1", rawReasoningEvent, shown)
+	if got := reasoningTextDeltaCount(sink); got != 1 {
+		t.Fatalf("raw reasoning deltas with show_raw_agent_reasoning = %d, want 1", got)
+	}
+}
+
+func reasoningTextDeltaCount(sink *NotificationBuffer) int {
+	count := 0
+	for _, notification := range sink.List() {
+		if notification.Method == NotificationReasoningTextDelta {
+			count++
+		}
+	}
+	return count
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
 func TestRuntimeRouterDispatchesThreadAndFS(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
@@ -22471,7 +22517,8 @@ func TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications(t *testing.T) {
 		Prompt:   "hello streaming runtime",
 		Model:    "gpt-test",
 		Config: map[string]any{
-			"features": map[string]any{"apply_patch_streaming_events": true},
+			"features":                 map[string]any{"apply_patch_streaming_events": true},
+			"show_raw_agent_reasoning": true,
 		},
 	}))
 	if turnStart.Error != nil {

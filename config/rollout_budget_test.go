@@ -109,3 +109,21 @@ func TestRolloutBudgetConfigRejectsInvalidValuesLikeRust(t *testing.T) {
 		})
 	}
 }
+
+// TestShowRawAgentReasoningAccessor pins the Rust show_raw_agent_reasoning
+// default (false): absent or non-bool values hide raw reasoning; an explicit
+// true surfaces it.
+func TestShowRawAgentReasoningAccessor(t *testing.T) {
+	absent := &Config{Values: map[string]any{}}
+	if absent.ShowRawAgentReasoning() {
+		t.Fatal("absent show_raw_agent_reasoning should default false like Rust")
+	}
+	enabled := &Config{Values: map[string]any{"show_raw_agent_reasoning": true}}
+	if !enabled.ShowRawAgentReasoning() {
+		t.Fatal("show_raw_agent_reasoning=true should report true")
+	}
+	disabled := &Config{Values: map[string]any{"show_raw_agent_reasoning": false}}
+	if disabled.ShowRawAgentReasoning() {
+		t.Fatal("show_raw_agent_reasoning=false should report false")
+	}
+}

@@ -510,6 +510,13 @@
                       "area":  "parity",
                       "reason":  "Documented the sdktests event normalization rules in sdktests/NORMALIZATION.md per the djalign requirement that every ignore/normalize rule carries a reason, an example, and the field paths: UUID/identity mapped placeholders, RFC-3339 timestamps, session-temp paths, volatile numeric fields, and usage token counts; plus the contract fields asserted outside raw normalization (command exit codes/statuses, item-type sequences, workspace side effects, agent message contracts) and the event-sequence/command-output comparison modes. Also verified the precomputed-exports generator already has a regeneration-no-drift test (Generate* output byte-compared against the frozen artifacts + target Rust commit hash pin).",
                       "test":  "npm --prefix sdktests run test:unit; go test ./appserver -run TestPrecomputedExportsAreWrittenToDiskLikeRust -count=1"
+                  },
+                  {
+                      "id":  "show-raw-agent-reasoning-config-surface",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Closed a config-surface + behavioral gap: Rust show_raw_agent_reasoning (default false) was missing from Go - strict config rejected it and, more importantly, Go emitted raw chain-of-thought reasoning deltas (item/reasoning_text.delta) unconditionally while Rust suppresses them by default. Go now recognizes the key, reads it via Config.ShowRawAgentReasoning() (default false), and the turn stream handler gates raw reasoning deltas behind it; the config-schema rust-only allowlist shrank from 16 to 15 entries. Tests: config accessor defaults, the existing streaming test enables the key, and a new gating test pins suppressed-by-default / enabled-emits semantics.",
+                      "test":  "go test ./config -run TestShowRawAgentReasoningAccessor -count=1; go test ./appserver -run 'TestRuntimeRouterRawReasoningDeltaGatedByShowRawAgentReasoning|TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications' -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
                   }
               ]
 }

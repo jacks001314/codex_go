@@ -182,6 +182,7 @@ func (r *RuntimeRouter) responsesStreamHandler(threadID string, turnID string, p
 	}
 	if cfg, err := r.effectiveConfigForTurn(params); err == nil {
 		state.applyPatchStreamingEvents = features.Enabled(cfg.FeatureSettings(), "apply_patch_streaming_events")
+		state.showRawAgentReasoning = cfg.ShowRawAgentReasoning()
 	}
 	return func(event *model.ResponsesStreamEvent) {
 		r.notifyResponsesStreamEvent(threadID, turnID, event, state)
@@ -204,6 +205,7 @@ type responsesStreamNotificationState struct {
 	agentItemPhases           map[string]string
 	experimentalRawEvents     bool
 	applyPatchStreamingEvents bool
+	showRawAgentReasoning     bool
 	retrying                  bool
 }
 
@@ -637,6 +639,11 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		})
 	case model.ResponsesStreamEventReasoningTextDelta:
 		if event.ReasoningDelta == nil || event.ReasoningDelta.ContentIndex == nil || event.ReasoningDelta.Delta == "" {
+			return
+		}
+		if !state.showRawAgentReasoning {
+			// Rust show_raw_agent_reasoning (default false): raw
+			// chain-of-thought deltas are suppressed unless explicitly enabled.
 			return
 		}
 		r.notify(NotificationReasoningTextDelta, &ReasoningTextDeltaNotification{

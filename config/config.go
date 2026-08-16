@@ -65,6 +65,19 @@ func (c *Config) IncludeEnvironmentContext() bool {
 	return value
 }
 
+// ShowRawAgentReasoning reports whether raw chain-of-thought reasoning deltas
+// should be surfaced, mirroring Rust show_raw_agent_reasoning (default false).
+func (c *Config) ShowRawAgentReasoning() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	value, ok := c.Values["show_raw_agent_reasoning"].(bool)
+	if !ok {
+		return false
+	}
+	return value
+}
+
 type ResumeCWDMode string
 
 const (
@@ -357,6 +370,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"sandbox_workspace_write":                    {},
 	"service_tier":                               {},
 	"shell_environment_policy":                   {},
+	"show_raw_agent_reasoning":                   {},
 	"skills":                                     {},
 	"tool_suggest":                               {},
 	"tools":                                      {},
