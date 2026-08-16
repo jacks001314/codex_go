@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func writeTestRollout(t *testing.T, path string, threadID string, historyMode string) {
@@ -42,6 +44,125 @@ func writeTestRollout(t *testing.T, path string, threadID string, historyMode st
 	}
 	if err := os.WriteFile(path, append(encoded, '\n'), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestCanonicalizeRolloutMigratesCompressedRolloutLikeRust(t *testing.T) {
+	// Mirrors Rust migration_preserves_compressed_rollouts_during_publish: a
+	// .jsonl.zst source stays compressed after migration; the published file
+	// loads as paginated and replays its content.
+	home := t.TempDir()
+	threadID := "123e4567-e89b-42d3-a456-426614174023"
+	plainPath := filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+threadID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(plainPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	now := "2025-01-01T00:00:00Z"
+	meta := map[string]any{
+		"id": threadID, "session_id": "s", "timestamp": now, "cwd": "/w",
+		"originator": "o", "model": "m", "cli_version": "v",
+	}
+	data, _ := json.Marshal(meta)
+	lines := []string{
+		string(mustJSON(t, map[string]any{"type": "session_meta", "timestamp": now, "payload": json.RawMessage(data)})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "task_started", "turn_id": "turn-1", "started_at": 1700000000}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "user_message", "client_id": "c1", "message": "compressed hello"}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "agent_message", "message": "compressed answer"}})),
+		"",
+	}
+	plain := []byte(strings.Join(lines, "\n"))
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
+	}
+	compressed := encoder.EncodeAll(plain, nil)
+	compressedPath := plainPath + ".zst"
+	if err := os.WriteFile(compressedPath, compressed, 0o600); err != nil {
+		t.Fatalf("WriteFile compressed: %v", err)
+	}
+
+	if err := CanonicalizeRollout(home, compressedPath); err != nil {
+		t.Fatalf("CanonicalizeRollout(compressed): %v", err)
+	}
+	// The source is still compressed and no plain or staged files remain.
+	if _, err := os.Stat(compressedPath); err != nil {
+		t.Fatalf("compressed source missing after publish: %v", err)
+	}
+	if _, err := os.Stat(plainPath); !os.IsNotExist(err) {
+		t.Fatalf("plain sibling created unexpectedly (err=%v)", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(compressedPath), ".*.tmp"))
+	if err != nil {
+		t.Fatalf("Glob staged: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("staged temp files remain: %v", matches)
+	}
+
+	lines2, _, err := Load(compressedPath)
+	if err != nil {
+		t.Fatalf("Load migrated compressed: %v", err)
+	}
+	if lines2[0].Meta == nil || !strings.EqualFold(strings.TrimSpace(lines2[0].Meta.HistoryMode), "paginated") {
+		t.Fatalf("migrated compressed head meta = %#v, want paginated", lines2[0].Meta)
+	}
+	rec, err := RecordFromPath(compressedPath, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath compressed: %v", err)
+	}
+	if rec.Preview != "compressed hello" {
+		t.Fatalf("preview = %q, want compressed hello", rec.Preview)
+	}
+}
+
+func TestCanonicalizeRolloutReplaysRollbackMarkerLikeRust(t *testing.T) {
+	// Mirrors Rust rollout_migration_tests.rs: legacy rollbacks remove logical
+	// instruction turns; a ThreadRolledBack marker drops the rolled-back turn's
+	// records from the canonical output.
+	home := t.TempDir()
+	threadID := "123e4567-e89b-42d3-a456-426614174022"
+	path := filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+threadID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	now := "2025-01-01T00:00:00Z"
+	meta := map[string]any{
+		"id": threadID, "session_id": "s", "timestamp": now, "cwd": "/w",
+		"originator": "o", "model": "m", "cli_version": "v",
+	}
+	data, _ := json.Marshal(meta)
+	lines := []string{
+		string(mustJSON(t, map[string]any{"type": "session_meta", "timestamp": now, "payload": json.RawMessage(data)})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "task_started", "turn_id": "turn-1", "started_at": 1700000000}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "user_message", "client_id": "c1", "message": "first"}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "agent_message", "message": "answer-1"}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "task_complete", "turn_id": "turn-1", "completed_at": 1700000005}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "task_started", "turn_id": "turn-2", "started_at": 1700000010}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "user_message", "client_id": "c1", "message": "rolled back"}})),
+		string(mustJSON(t, map[string]any{"type": "event_msg", "timestamp": now, "payload": map[string]any{"type": "thread_rolled_back", "num_turns": 1}})),
+		"",
+	}
+	out := strings.Join(lines, "\n")
+	if err := os.WriteFile(path, []byte(out), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := CanonicalizeRollout(home, path); err != nil {
+		t.Fatalf("CanonicalizeRollout: %v", err)
+	}
+	rec, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath: %v", err)
+	}
+	var texts []string
+	for i := range rec.Items {
+		texts = append(texts, rec.Items[i].Text)
+	}
+	joined := strings.Join(texts, "|")
+	if strings.Contains(joined, "rolled back") {
+		t.Fatalf("rolled-back turn survived canonicalization: %v", texts)
+	}
+	if !strings.Contains(joined, "first") || !strings.Contains(joined, "answer-1") {
+		t.Fatalf("surviving turn lost in canonicalization: %v", texts)
 	}
 }
 

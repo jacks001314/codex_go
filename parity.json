@@ -654,6 +654,12 @@
                       "id":  "migrate-rollouts-apply-canonicalizer",
                       "reason":  "Implemented the Apply phase of the P1 rollout migration (phase 2): CanonicalizeRollout replays a legacy rollout into canonical paginated JSONL - session_meta header rewritten to history_mode=paginated (history_base/subagent_history_start_ordinal cleared), legacy events converted to turn boundaries (task_started/task_complete) and Rust-shaped ItemCompleted events wrapping canonical TurnItems (UserMessage/AgentMessage via CoreTurnItemJSONFromSessionItem), consecutive ordinals on every line, staged at .{name}.paginated.tmp, durable .pending journal under rollout-migrations/, atomic rename over the source, journal removal after publish, and staged cleanup on failure. MigrateRollouts --apply now migrates eligible files (previously fail-closed). End-to-end verified: dry-run -> eligible, apply -> migrated, dry-run -> already_paginated, migrated file replays 2 items with correct preview/turns; staged/journal cleaned.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./rollout -run 'TestCanonicalizeRolloutMigratesCompressedRolloutLikeRust|TestCanonicalizeRolloutReplaysRollbackMarkerLikeRust' -count=1; go test ./rollout -count=1",
+                      "id":  "migrate-rollouts-compressed-and-rollback",
+                      "reason":  "Completed two more Apply-phase submodules of the P1 rollout migration: (1) compressed .jsonl.zst sources stay compressed after migration - the staged plain JSONL is compressed to .{name}.paginated.zst.tmp and renamed over the source (mirroring Rust compress_rollout_to_path + publish), with staged/decompressed cleanup verified; (2) legacy ThreadRolledBack markers are replayed through the existing rollbackSessionItems turn-dropping semantics so rolled-back turns are excluded from the canonical output while surviving turns stay intact (mirroring Rust RollbackPlan visibility). Both pinned by unit tests: compressed migrate keeps compression and replays content with paginated header; rollback marker drops the rolled-back turn's records.",
+                      "area":  "parity"
                   }
               ]
 }

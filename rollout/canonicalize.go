@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+
 	"codex_go/session"
 )
 
@@ -47,6 +49,7 @@ func CanonicalizeRollout(codexHome string, path string) error {
 		return errors.New("rollout is empty; nothing to migrate")
 	}
 
+	compressed := strings.HasSuffix(strings.ToLower(path), ".jsonl.zst")
 	lines, _, err := Load(path)
 	if err != nil {
 		return fmt.Errorf("load legacy rollout: %w", err)
@@ -92,9 +95,29 @@ func CanonicalizeRollout(codexHome string, path string) error {
 		_ = os.Remove(stagedPath)
 		return err
 	}
-	if err := os.Rename(stagedPath, path); err != nil {
+	if compressed {
+		// Mirrors Rust compress_rollout_to_path + publish: the staged plain
+		// JSONL is compressed to .{name}.paginated.zst.tmp and that artifact is
+		// renamed over the compressed source.
+		compressedStagedPath, err := stagedRolloutPathWithSuffix(path, "paginated.zst")
+		if err != nil {
+			_ = os.Remove(stagedPath)
+			return err
+		}
+		if err := compressRolloutToPath(stagedPath, compressedStagedPath); err != nil {
+			_ = os.Remove(stagedPath)
+			return err
+		}
 		_ = os.Remove(stagedPath)
-		return fmt.Errorf("publish staged rollout: %w", err)
+		if err := os.Rename(compressedStagedPath, path); err != nil {
+			_ = os.Remove(compressedStagedPath)
+			return fmt.Errorf("publish compressed staged rollout: %w", err)
+		}
+	} else {
+		if err := os.Rename(stagedPath, path); err != nil {
+			_ = os.Remove(stagedPath)
+			return fmt.Errorf("publish staged rollout: %w", err)
+		}
 	}
 	if err := os.Remove(journalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove migration journal: %w", err)
@@ -114,11 +137,32 @@ func firstSessionMetaFromLines(lines []Line) *SessionMeta {
 // stagedRolloutPath mirrors Rust staged_rollout_path: the staged file sits next
 // to the source as ".{name}.paginated.tmp".
 func stagedRolloutPath(rolloutPath string) (string, error) {
+	return stagedRolloutPathWithSuffix(rolloutPath, "paginated")
+}
+
+func stagedRolloutPathWithSuffix(rolloutPath string, suffix string) (string, error) {
 	name := filepath.Base(rolloutPath)
 	if strings.TrimSpace(name) == "" {
 		return "", errors.New("rollout path has no valid filename")
 	}
-	return filepath.Join(filepath.Dir(rolloutPath), "."+name+".paginated.tmp"), nil
+	return filepath.Join(filepath.Dir(rolloutPath), "."+name+"."+suffix+".tmp"), nil
+}
+
+func compressRolloutToPath(plainPath string, compressedPath string) error {
+	data, err := os.ReadFile(plainPath)
+	if err != nil {
+		return fmt.Errorf("read staged rollout for compression: %w", err)
+	}
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		return fmt.Errorf("create zstd encoder: %w", err)
+	}
+	defer encoder.Close()
+	encoded := encoder.EncodeAll(data, nil)
+	if err := os.WriteFile(compressedPath, encoded, 0o600); err != nil {
+		return fmt.Errorf("write compressed staged rollout: %w", err)
+	}
+	return nil
 }
 
 // migrationJournalPath mirrors Rust migration_journal_path.
