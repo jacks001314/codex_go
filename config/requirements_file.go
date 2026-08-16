@@ -69,6 +69,21 @@ func configRequirementsFromMap(values map[string]any) (*ConfigRequirements, erro
 	if len(values) == 0 {
 		return nil, nil
 	}
+	remoteConfigs, err := parseRemoteSandboxConfigs(values)
+	if err != nil {
+		return nil, err
+	}
+	return configRequirementsFromMapWithResolver(values, remoteConfigs, nil)
+}
+
+// configRequirementsFromMapWithResolver is the shared core of
+// configRequirementsFromMap and the deterministic hostname-injectable variant
+// used by the parity differential (Rust apply_remote_sandbox_config takes the
+// hostname explicitly; a nil resolver falls back to os.Hostname()).
+func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs []RemoteSandboxConfig, resolver HostnameResolver) (*ConfigRequirements, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
 	var out ConfigRequirements
 	if values, ok := stringListAnyKey(values, "allowed_approval_policies", "allowedApprovalPolicies"); ok {
 		out.AllowedApprovalPolicies = make([]sandbox.AskForApproval, 0, len(values))
@@ -88,6 +103,7 @@ func configRequirementsFromMap(values map[string]any) (*ConfigRequirements, erro
 			out.AllowedSandboxModes = append(out.AllowedSandboxModes, sandbox.SandboxMode(value))
 		}
 	}
+	applyRemoteSandboxConfig(&out, remoteConfigs, resolver)
 	if values, ok := stringListAnyKey(values, "allowed_windows_sandbox_implementations", "allowedWindowsSandboxImplementations"); ok {
 		out.AllowedWindowsSandboxImplementations = make([]WindowsSandboxSetupMode, 0, len(values))
 		for _, value := range values {

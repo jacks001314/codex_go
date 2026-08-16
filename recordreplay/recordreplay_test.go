@@ -175,6 +175,75 @@ func TestReplayRustStoryRecordingThroughGoRecorder(t *testing.T) {
 	}
 }
 
+// TestReplayRustStoryRecordingThroughGoCore drives the same Rust recording
+// through Go's actual app-server core (RuntimeRouter + turn runtime) with a
+// scripted agent reproducing the recording's per-task item surface, then
+// validates the observable contract: notification stream and persisted
+// paginated rollout. This is the token-free dynamic verification half of
+// djalign method 2 (recording-driven replay through the core).
+func TestReplayRustStoryRecordingThroughGoCore(t *testing.T) {
+	events, err := storyRecordingEvents(t)
+	if err != nil {
+		t.Fatalf("load recording: %v", err)
+	}
+	codexHome := t.TempDir()
+	result, err := ReplayThroughCore(events, codexHome)
+	if err != nil {
+		t.Fatalf("ReplayThroughCore: %v", err)
+	}
+	if result.ThreadID == "" {
+		t.Fatal("replay produced no thread id")
+	}
+	if len(result.TurnIDs) != 3 {
+		t.Fatalf("replay turns = %d, want 3 (recorded tasks 1/3/5)", len(result.TurnIDs))
+	}
+	if result.RolloutPath == "" {
+		t.Fatal("replay produced no rollout path")
+	}
+	if _, err := os.Stat(result.RolloutPath); err != nil {
+		t.Fatalf("persisted rollout missing: %v", err)
+	}
+	if err := ValidateCoreReplayCrossCheck(events, result); err != nil {
+		t.Fatalf("core replay cross-check: %v", err)
+	}
+
+	// Recoverability: the persisted rollout must resume and continue appending
+	// without corrupting the frozen structure (same as the recorder-level test).
+	resumed, err := rollout.Resume(result.RolloutPath)
+	if err != nil {
+		t.Fatalf("Resume(%s): %v", result.RolloutPath, err)
+	}
+	if err := resumed.AppendTurnStarted("9", nowForTest()); err != nil {
+		t.Fatalf("resumed AppendTurnStarted: %v", err)
+	}
+	if err := resumed.Close(); err != nil {
+		t.Fatalf("resumed Close: %v", err)
+	}
+	lines, _, err := rollout.Load(result.RolloutPath)
+	if err != nil {
+		t.Fatalf("Load after resume: %v", err)
+	}
+	found := false
+	for _, line := range lines {
+		if line.Type != "event_msg" || len(line.Payload) == 0 {
+			continue
+		}
+		var payload struct {
+			Type   string `json:"type"`
+			TurnID string `json:"turn_id"`
+		}
+		if err := json.Unmarshal(line.Payload, &payload); err != nil {
+			continue
+		}
+		if payload.Type == "task_started" && payload.TurnID == "9" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("resumed task_started(9) not persisted in core replay rollout")
+	}
+}
+
 func storyRecordingEvents(t *testing.T) ([]Event, error) {
 	t.Helper()
 	path, err := DefaultStoryRecordingPath()

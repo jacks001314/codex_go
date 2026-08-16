@@ -379,6 +379,20 @@
                       "test":  "go test ./recordreplay ./parity -count=1"
                   },
                   {
+                      "id":  "record-replay-core-through-appserver",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Extended the L2 record-replay facility to drive the Rust recording through Go's actual app-server core instead of only the storage recorder: ReplayThroughCore starts a paginated thread on RuntimeRouter and runs one turn per recorded task with a scripted agent reproducing the recording's per-task item surface (reasoning + agent_message presence, model text excluded), then validates the observable contract - notification stream (turn/started, item/completed reasoning/agentMessage, turn/completed completed) and the persisted paginated rollout (session_meta first, contiguous ordinals, task_started/item/task_complete lifecycle per turn) - via ValidateCoreReplayCrossCheck, plus Resume recoverability. Registered as verifier TestReplayRustStoryRecordingThroughGoCore on the story-recording-replay contract; token-free and CI-able (junction point 2 of djalign: the recording's observable behavior is frozen into Go's core pipeline).",
+                      "test":  "go test ./recordreplay -count=1; go test ./parity -run TestContractVerifiersExistInGoTestFiles -count=1"
+                  },
+                  {
+                      "id":  "remote-sandbox-config-shared-fixture-differential",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Closed the last unwired config-requirements surface: Go now parses remote_sandbox_config (hostname-pattern-scoped allowed_sandbox_modes) and applies the Rust apply_remote_sandbox_config semantics - normalize hostname (trim/trailing-dot/lowercase), first matching entry replaces the top-level modes, non-match preserves them, WildMatchPattern * / ? case-insensitive matching - with an injectable hostname entry point (ConfigRequirementsFromMapWithHostname) mirroring Rust's hostname parameter, and a fn-name-pinned shared-fixture differential (TestRustRemoteSandboxConfigSamplesRunInGo) driving the config_requirements.rs samples (deserialize_remote_sandbox_config_requires_hostname_patterns_list, remote_sandbox_config_first_match_overrides_top_level, remote_sandbox_config_non_match_preserves_top_level) through Go. Registered as contract remote-sandbox-config-shared-fixtures.",
+                      "test":  "go test ./config -run RemoteSandbox -count=1; go test ./parity -run TestRustRemoteSandboxConfigSamplesRunInGo -count=1"
+                  },
+                  {
                       "id":  "apply-patch-shared-fixture-double-run",
                       "status":  "done",
                       "area":  "parity",

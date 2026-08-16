@@ -17,6 +17,12 @@
 //     persisted structure so tests can compare event sequence, item states
 //     and recoverability against the recording (junction point 2: any
 //     recording or recorder drift becomes a failing contract).
+//   - ReplayThroughCore drives the recording through Go's actual app-server
+//     core (RuntimeRouter + turn runtime) with a scripted agent reproducing
+//     the recording's per-task item surface, then returns the notification
+//     stream and the persisted paginated rollout for contract comparison.
+//     This is the dynamic half of djalign method 2: the Rust-recorded
+//     session exercises the real turn pipeline, token-free and CI-able.
 //
 // Model text (deltas/messages) is never compared; only its presence and the
 // surrounding structure are.
