@@ -496,6 +496,13 @@
                       "area":  "parity",
                       "reason":  "Go ModelInfo now carries the final missing Rust wire field availability_nux (ModelAvailabilityNux{message}) so all 41 Rust openai_models::ModelInfo wire fields are carried; the L0 model-metadata verifier's rust-only allowlist is empty and only 2 genuine Go extensions remain (base_instructions, supports_parallel_tool_calls).",
                       "test":  "go test ./parity -run TestRustModelInfoFieldSurfaceAgainstGo -count=1; go test ./model -run TestModelInfoUnmarshalRustCatalogShape -count=1"
+                  },
+                  {
+                      "id":  "l3-sdktests-facility-audit-and-budget-scenario",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "L3 facility readiness audit: sdktests has 88 scenarios (broad coverage of apply-patch failure modes, resume/recovery, MCP, code-mode, approval, sandbox, compaction, persistence), a documented runner with run-manifest.json, raw audit scripts (fork/rolled-fork/session-compat/requirements/goal), and healthy unit tests (50/51 pass, free). Added an opt-in rollout-budget-exhaustion scenario exercising the newly-implemented sessionBudgetExceeded surface (features.rollout_budget limit_tokens=1, expected failure with errorPattern 'budget' matching Rust 'shared rollout token budget exhausted' and Go 'session budget exceeded'), pending live-SDK validation during the authorized L3 run. prompt.md vs Go BaseInstructions audited: model-wording differences are out of the djalign contract by design.",
+                      "test":  "npm --prefix sdktests run test:unit"
                   }
               ]
 }

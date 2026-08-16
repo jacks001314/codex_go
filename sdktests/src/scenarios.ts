@@ -2272,6 +2272,39 @@ export const scenarios: Scenario[] = [
       workspaceMutation: "none",
     },
   },
+  {
+    name: "rollout-budget-exhaustion",
+    description: "Enables features.rollout_budget with a token limit the first turn exceeds and verifies both implementations fail the turn once the shared session budget is exhausted (sessionBudgetExceeded surface). Opt-in until validated against the live SDK.",
+    optIn: true,
+    timeoutMs: 120000,
+    codexConfig: {
+      features: {
+        rollout_budget: {
+          enabled: true,
+          limit_tokens: 1,
+          reminder_at_remaining_tokens: [],
+        },
+      },
+    },
+    threadOptions: {
+      sandboxMode: "danger-full-access", skipGitRepoCheck: true, approvalPolicy: "never",
+      networkAccessEnabled: false, webSearchMode: "disabled",
+    },
+    turns: [{
+      prompt: "Reply with a short sentence about the weather, then stop.",
+    }],
+    expected: {
+      outcome: "failure",
+      errorPattern: "budget",
+      terminal: "turn.completed",
+      minAgentMessages: 0,
+      requireUsage: false,
+      expectedTurns: 1,
+      eventSequenceComparison: "semantic-tools",
+      commandOutputComparison: "informational",
+      workspaceMutation: "none",
+    },
+  },
 ];
 
 export function getScenario(name: string): Scenario {
