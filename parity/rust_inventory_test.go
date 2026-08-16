@@ -223,6 +223,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"network",
 		"parity",
 		"plugin",
+		"processhardening",
 		"prompt",
 		"protocol",
 		"realtime",

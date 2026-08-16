@@ -814,6 +814,13 @@
                       "id":  "session-startup-prewarm",
                       "reason":  "Implemented the P2 session-startup prewarm (Rust core/src/session_startup_prewarm.rs): Go's model layer had ResponsesAgentRunner.Prewarm (guardian-only use) but no session-startup trigger or first-turn consume. Now, creating a thread schedules an asynchronous token-free websocket prewarm (generate=false) mirroring Rust Session::schedule_startup_prewarm, and the first regular turn consumes its response id as PreviousResponseID (mirroring Rust tasks/regular.rs consume_startup_prewarm_for_regular_turn): a turn that starts before the prewarm finishes proceeds without it (Unavailable semantics). Agents without the prewarm interface are skipped. Verified with 3 token-free runtime tests (prewarm feeds the first turn, slow prewarm proceeds without, non-prewarming agent no-op). Registered as contract session-startup-prewarm.",
                       "area":  "parity"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./processhardening -count=1 (unix); CGO_ENABLED=0 GOOS=darwin go build ./...; CGO_ENABLED=0 GOOS=linux go build ./...; go test ./... -count=1",
+                      "id":  "process-hardening",
+                      "reason":  "Implemented the P2 macOS/Linux process hardening (Rust process-hardening/src/lib.rs pre_main_hardening): a new processhardening package applies prctl(PR_SET_DUMPABLE, 0) on Linux/Android, ptrace(PT_DENY_ATTACH) on macOS, setrlimit(RLIMIT_CORE, 0) and clears LD_*/DYLD_* loader env vars, fail-closed with Rust's exit codes 5-7; wired at cmd/codex main start (mirroring Rust's pre-main ctor; non-Unix is a no-op like Rust's Windows TODO). Verified by unit tests (env prefix filtering incl. non-UTF8 keys mirroring Rust's test) and the full-tree CGO_ENABLED=0 darwin/linux cross-compile. Also fixed two pre-existing darwin cross-compile bugs surfaced by the gate: doctor disk_unix.go used the Linux-only Statfs_t.Frsize on darwin (now Bsize via disk_darwin.go) and windowsDevDriveCheck was referenced on all platforms but defined only on Windows (added a non-Windows stub). Registered as contract process-hardening.",
+                      "area":  "parity"
                   }
               ]
 }

@@ -10,6 +10,7 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/execserver"
+	"codex_go/processhardening"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 	commandrunner "codex_go/sandbox/windowssandbox/bin/command_runner"
@@ -17,6 +18,9 @@ import (
 )
 
 func main() {
+	// Rust process-hardening (pre_main_hardening): disable ptrace attach and
+	// core dumps, clear LD_*/DYLD_* loader vars, fail-closed on Unix.
+	processhardening.ApplyPreMain()
 	argv1 := ""
 	if len(os.Args) > 1 {
 		argv1 = os.Args[1]
