@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"testing"
+
+	"codex_go/shell"
 )
 
 type recordingRunner struct {
@@ -56,6 +58,46 @@ func TestUpdateActionCommandArgs(t *testing.T) {
 	command, args := action.CommandArgs()
 	if command != "pnpm" || len(args) != 3 || args[0] != "add" || args[2] != NPMPackageName+"@latest" {
 		t.Fatalf("CommandArgs() = %q %#v", command, args)
+	}
+}
+
+// TestNormalizedUpdateCommandAppliesWSLMappingLikeRust verifies the non-Windows
+// update branch normalizes the command path and every argument for WSL
+// (Rust cli/src/main.rs non-Windows branch -> cli/src/wsl_paths.rs): a Windows
+// drive path maps to /mnt/<drive>/..., other paths are unchanged.
+func TestNormalizedUpdateCommandAppliesWSLMappingLikeRust(t *testing.T) {
+	original := normalizeForWSL
+	defer func() { normalizeForWSL = original }()
+	// Simulate running under WSL using the real Rust-mirror mapping.
+	normalizeForWSL = func(path string) string {
+		if mapped, ok := shell.WinPathToWSL(path); ok {
+			return mapped
+		}
+		return path
+	}
+
+	command, args := normalizedUpdateCommand(`C:\Temp\codex.zip`, []string{"D:/Work/codex.tgz", "/home/user/x"})
+	if command != "/mnt/c/Temp/codex.zip" {
+		t.Fatalf("command = %q, want /mnt/c/Temp/codex.zip", command)
+	}
+	if len(args) != 2 || args[0] != "/mnt/d/Work/codex.tgz" || args[1] != "/home/user/x" {
+		t.Fatalf("args = %#v, want normalized windows path + unchanged unix path", args)
+	}
+}
+
+// TestUpdateCommandAndArgsWindowsBranchPreservesCmdSemantics pins the Windows
+// update branch: non-PowerShell commands run via cmd.exe /C (PATHEXT), while
+// PowerShell runs directly - matching Rust's run_update cfg(windows) split.
+func TestUpdateCommandAndArgsWindowsBranchPreservesCmdSemantics(t *testing.T) {
+	command, args := updateCommandAndArgs("installer.cmd", []string{"--flag"})
+	if runtime.GOOS == "windows" {
+		if command != "cmd" || len(args) != 2 || args[0] != "/C" || args[1] != "installer.cmd --flag" {
+			t.Fatalf("windows branch = %q %#v, want cmd /C joined", command, args)
+		}
+		return
+	}
+	if command != "installer.cmd" || len(args) != 1 || args[0] != "--flag" {
+		t.Fatalf("non-windows branch = %q %#v", command, args)
 	}
 }
 

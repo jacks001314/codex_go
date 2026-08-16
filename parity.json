@@ -779,6 +779,13 @@
                       "id":  "delegate-noninteractive-approval-policy",
                       "reason":  "Closed the pre-ledger P0 gap Rust 95aada11c4 (#38205 Enforce non-interactive approval policy for Codex delegates): Go subagent (delegate) sessions previously inherited the parent's approval policy, so approval-requiring commands and MCP tool calls could be forwarded to the parent. Implemented the central enforcement in prepareTurnStartParams: any subagent thread (subAgentThreadSpawn / Originator=subagent / subagent review-compact-other / memory consolidation sources) is pinned to approval_policy=never, mirroring Rust run_codex_thread_interactive (reject non-never + Constrained::allow_only(Never)). With never, Go already denies approval-requiring actions within the delegate (shell escalation reject, MCP elicitation auto-decline, network no-prompt, skill-MCP dependency skip) - now reachable for every delegate turn. Registered as contract delegate-noninteractive-approval-policy.",
                       "area":  "parity"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./install -run 'TestNormalizedUpdateCommandAppliesWSLMapping|TestUpdateCommandAndArgsWindowsBranch' -count=1; go test ./parity -run TestRustWSLPathSamplesRunInGo -count=1; go test ./shell -run TestWinPathToWSL -count=1",
+                      "id":  "wsl-update-path-normalization",
+                      "reason":  "Closed the P2 WSL path normalization gap: Go already had shell.WinPathToWSL / shell.NormalizeForWSL (Rust cli/src/wsl_paths.rs mirrors) and utils.IsWSL detection, but the update command runner (install.ExecCommandRunner) did not normalize the update command path/arguments on non-Windows like Rust cli/src/main.rs run_update. Wired updateCommandAndArgs: Windows keeps cmd.exe /C PATHEXT semantics (PowerShell direct), non-Windows normalizes the command and every argument for WSL so a Windows path carried by a WSL-managed install resolves to its /mnt/<drive>/... mount path. Registered as contract wsl-update-path-normalization with fn-name-pinned differential TestRustWSLPathSamplesRunInGo (Rust win_to_wsl_basic + normalize_is_noop_on_unix_paths samples) and branch-preservation tests.",
+                      "area":  "parity"
                   }
               ]
 }

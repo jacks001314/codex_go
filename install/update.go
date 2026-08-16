@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"codex_go/shell"
 )
 
 const (
@@ -240,16 +242,44 @@ func RunUpdate(ctx context.Context, opts *RunUpdateOptions) (*UpdateResult, erro
 }
 
 func (r *ExecCommandRunner) Run(ctx context.Context, command string, args []string) error {
-	actualCommand := command
-	actualArgs := append([]string(nil), args...)
-	if runtime.GOOS == "windows" && command != "powershell" {
-		actualCommand = "cmd"
-		actualArgs = []string{"/C", joinCommandLine(append([]string{command}, args...))}
-	}
+	actualCommand, actualArgs := updateCommandAndArgs(command, args)
 	cmd := exec.CommandContext(ctx, actualCommand, actualArgs...)
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
 	return cmd.Run()
+}
+
+// normalizeForWSL maps a Windows absolute path to its WSL mount path when
+// running under WSL, mirroring Rust cli/src/wsl_paths.rs normalize_for_wsl.
+// It is a variable so tests can simulate a WSL environment on any host.
+var normalizeForWSL = shell.NormalizeForWSL
+
+// updateCommandAndArgs resolves the process command and arguments for an
+// update action, mirroring Rust cli/src/main.rs (run_update):
+//   - on Windows the command runs via cmd.exe /C so .CMD/.BAT resolve with
+//     PATHEXT semantics (PowerShell runs directly);
+//   - on non-Windows the command path and every argument are normalized for
+//     WSL (cli/src/wsl_paths.rs), so a Windows path carried by a WSL-managed
+//     install (e.g. C:\...\codex.exe) resolves to its /mnt/<drive>/... mount
+//     path before execution.
+func updateCommandAndArgs(command string, args []string) (string, []string) {
+	if runtime.GOOS == "windows" {
+		if command != "powershell" {
+			return "cmd", []string{"/C", joinCommandLine(append([]string{command}, args...))}
+		}
+		return command, append([]string(nil), args...)
+	}
+	return normalizedUpdateCommand(command, args)
+}
+
+// normalizedUpdateCommand applies the WSL path normalization to the update
+// command path and each argument (Rust cli/src/main.rs non-Windows branch).
+func normalizedUpdateCommand(command string, args []string) (string, []string) {
+	normalized := make([]string, len(args))
+	for i, arg := range args {
+		normalized[i] = normalizeForWSL(arg)
+	}
+	return normalizeForWSL(command), normalized
 }
 
 func FetchLatestVersion(ctx context.Context, opts *UpdateCheckOptions) (string, error) {
