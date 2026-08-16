@@ -9,6 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -1296,6 +1299,7 @@ func TestRuntimeRouterTurnStartSendsStructuredImageInputWithDefaultDetail(t *tes
 	if err != nil {
 		t.Fatalf("DecodeString local image error = %v", err)
 	}
+	validDataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(localImageBytes)
 	localImagePath := filepath.Join(t.TempDir(), "local.png")
 	if err := os.WriteFile(localImagePath, localImageBytes, 0o600); err != nil {
 		t.Fatalf("WriteFile local image error = %v", err)
@@ -1304,7 +1308,7 @@ func TestRuntimeRouterTurnStartSendsStructuredImageInputWithDefaultDetail(t *tes
 		ThreadID: threadID,
 		Input: []turn.TurnUserInput{
 			{Type: "text", Text: "describe these"},
-			{Type: "image", URL: "data:image/png;base64,AAAA"},
+			{Type: "image", URL: validDataURL},
 			{Type: "localImage", Path: localImagePath, Detail: &explicitDetail},
 		},
 	}))
@@ -1323,8 +1327,115 @@ func TestRuntimeRouterTurnStartSendsStructuredImageInputWithDefaultDetail(t *tes
 		t.Fatalf("input image details = %#v, input items = %#v", details, request.InputItems)
 	}
 	imageURLs := inputImageURLs(request.InputItems)
-	if len(imageURLs) != 2 || imageURLs[0] != "data:image/png;base64,AAAA" || !strings.HasPrefix(imageURLs[1], "data:image/png;base64,") {
+	if len(imageURLs) != 2 || imageURLs[0] != validDataURL || !strings.HasPrefix(imageURLs[1], "data:image/png;base64,") {
 		t.Fatalf("input image URLs = %#v, input items = %#v", imageURLs, request.InputItems)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartPreparesImagesAndEmitsResizeNoticeLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	largeImage := testPNGDataURL(t, 2048, 2048)
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input: []turn.TurnUserInput{
+			{Type: "image", URL: largeImage},
+		},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	imageURLs := inputImageURLs(request.InputItems)
+	if len(imageURLs) != 1 {
+		t.Fatalf("input image URLs = %#v", imageURLs)
+	}
+	// The 2048x2048 image must be resized to 1600x1600 (Rust
+	// detail_policies_apply_the_expected_budgets) even though the
+	// image_resize_notice feature is disabled (default): resize is not gated,
+	// only the notice fragment is.
+	resizedWidth, resizedHeight, err := decodePNGDimensionsFromDataURL(t, imageURLs[0])
+	if err != nil {
+		t.Fatalf("decode prepared image: %v", err)
+	}
+	if resizedWidth != 1600 || resizedHeight != 1600 {
+		t.Fatalf("prepared dimensions = %dx%d, want 1600x1600", resizedWidth, resizedHeight)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartResizeNoticeEnabledEmitsDeveloperFragmentLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	home := t.TempDir()
+	codexHome := filepath.Join(home, "codex")
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatalf("MkdirAll codex home: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(codexHome), []byte("[features]\nimage_resize_notice = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(codexHome),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	largeImage := testPNGDataURL(t, 2048, 2048)
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Input: []turn.TurnUserInput{
+			{Type: "image", URL: largeImage},
+		},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	noticeText := ""
+	for _, item := range request.InputItems {
+		message, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if role, _ := message["role"].(string); role != "developer" {
+			continue
+		}
+		content, _ := message["content"].([]map[string]any)
+		for _, block := range content {
+			if text, _ := block["text"].(string); strings.Contains(text, "<image_resize_notice>") {
+				noticeText = text
+			}
+		}
+	}
+	// Rust: "Image 1 of 1 in the preceding user message was resized from
+	// 2048x2048 to 1600x1600 pixels."
+	if !strings.Contains(noticeText, "Image 1 of 1 in the preceding user message was resized from 2048x2048 to 1600x1600 pixels.") {
+		t.Fatalf("resize notice missing or wrong: %q", noticeText)
 	}
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
@@ -25602,6 +25713,38 @@ func inputImageDetails(value any) []string {
 
 func inputImageURLs(value any) []string {
 	return inputImageFieldValues(value, "image_url")
+}
+
+func testPNGDataURL(t *testing.T, width int, height int) string {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for x := 0; x < width; x++ {
+		for y := 0; y < height; y++ {
+			img.Set(x, y, color.RGBA{R: uint8(x % 255), G: uint8(y % 255), B: 30, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("png encode: %v", err)
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+func decodePNGDimensionsFromDataURL(t *testing.T, imageURL string) (int, int, error) {
+	t.Helper()
+	header, payload, ok := strings.Cut(imageURL, ",")
+	if !ok || !strings.HasPrefix(strings.ToLower(header), "data:image/png;base64") {
+		return 0, 0, fmt.Errorf("not a png data url: %q", imageURL)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return 0, 0, err
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(decoded))
+	if err != nil {
+		return 0, 0, err
+	}
+	return cfg.Width, cfg.Height, nil
 }
 
 func inputImageFieldValues(value any, field string) []string {

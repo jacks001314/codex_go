@@ -1189,8 +1189,12 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// appear ahead of the new prompt in conversation history.
 	inputItems = append(inputItems, r.asyncHookContextInputItems(threadID)...)
 	if turnStartUsesStructuredUserInput(params) {
-		if item := userMessageInputItemFromTurnUserInputs(params.Prompt, params.Input); item != nil {
+		item, notice := r.preparedUserMessageInputItem(params)
+		if item != nil {
 			inputItems = append(inputItems, item)
+			if notice != nil {
+				inputItems = append(inputItems, notice)
+			}
 			agentPrompt = ""
 		}
 	}
@@ -5679,6 +5683,7 @@ type appTurnRunConfig struct {
 	AttestationProvider             codexapi.AttestationProvider
 	UnifiedExecEnabled              bool
 	ExecutedToolCallMetadataEnabled bool
+	ImageResizeNoticeEnabled        bool
 }
 
 type responsesMetadataLineage struct {
@@ -5911,6 +5916,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		AttestationProvider:             r.appServerAttestationProvider(),
 		UnifiedExecEnabled:              unifiedExecEnabled,
 		ExecutedToolCallMetadataEnabled: features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"),
+		ImageResizeNoticeEnabled:        features.Enabled(cfg.FeatureSettings(), "image_resize_notice"),
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 			InstallationID:             installationID,
 			SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
@@ -8902,6 +8908,106 @@ func userMessageInputItemFromTurnUserInputs(prompt string, inputs []turn.TurnUse
 		"role":    "user",
 		"content": content,
 	}
+}
+
+// preparedUserMessageInputItem builds the user message input item and runs the
+// Rust image-preparation pipeline (eventmap.PrepareImagePrepContentWithNotices)
+// over its image content. When the image_resize_notice feature is enabled and
+// at least one image was resized, a developer message carrying the
+// ImageResizeNotice fragment is returned as the second value, mirroring Rust
+// prepare_response_items (session/mod.rs prepare_turn_context_response_items)
+// which appends the notice right after the user message.
+func (r *RuntimeRouter) preparedUserMessageInputItem(params *turn.TurnStartParams) (any, any) {
+	if r == nil || params == nil {
+		return userMessageInputItemFromTurnUserInputs(promptFromTurnStart(params), params.Input), nil
+	}
+	item := userMessageInputItemFromTurnUserInputs(promptFromTurnStart(params), params.Input)
+	if item == nil {
+		return nil, nil
+	}
+	content, _ := item.(map[string]any)["content"].([]map[string]any)
+	prepared, resized := prepareUserMessageContentImages(content)
+	item.(map[string]any)["content"] = prepared
+	if !r.imageResizeNoticeEnabledForTurn(params) || len(resized) == 0 {
+		return item, nil
+	}
+	noticeImages := make([]contextfrag.ResizedImage, 0, len(resized))
+	for _, resize := range resized {
+		noticeImages = append(noticeImages, contextfrag.ResizedImage{
+			ImageNumber:    resize.ImageNumber,
+			ImageCount:     resize.ImageCount,
+			SourceWidth:    int(resize.SourceWidth),
+			SourceHeight:   int(resize.SourceHeight),
+			PreparedWidth:  int(resize.PreparedWidth),
+			PreparedHeight: int(resize.PreparedHeight),
+		})
+	}
+	fragment := contextfrag.NewImageResizeNotice(contextfrag.ImageResizeNoticeSourceUserMessage, noticeImages)
+	rendered := contextfrag.Render(fragment)
+	notice := map[string]any{
+		"type": "message",
+		"role": "developer",
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": rendered.Content,
+		}},
+	}
+	return item, notice
+}
+
+func (r *RuntimeRouter) imageResizeNoticeEnabledForTurn(params *turn.TurnStartParams) bool {
+	if r == nil {
+		return false
+	}
+	if cfg, err := r.effectiveConfigForTurn(params); err == nil && cfg != nil {
+		return features.Enabled(cfg.FeatureSettings(), "image_resize_notice")
+	}
+	return false
+}
+
+// prepareUserMessageContentImages runs image preparation over the user message
+// content blocks, replacing input_image data URLs with prepared (possibly
+// resized) versions and returning the resize records in image-number order.
+func prepareUserMessageContentImages(content []map[string]any) ([]map[string]any, []eventmap.ImagePrepResize) {
+	if len(content) == 0 {
+		return content, nil
+	}
+	items := make([]eventmap.ImagePrepContentItem, len(content))
+	for i, block := range content {
+		if blockType, _ := block["type"].(string); blockType == "input_image" {
+			items[i] = eventmap.ImagePrepContentItem{
+				Kind:     eventmap.ImagePrepContentImage,
+				ImageURL: stringFromAny(block["image_url"]),
+				Detail:   eventmap.ImagePrepDetail(stringFromAny(block["detail"])),
+			}
+		} else {
+			items[i] = eventmap.ImagePrepContentItem{
+				Kind: eventmap.ImagePrepContentText,
+				Text: stringFromAny(block["text"]),
+			}
+		}
+	}
+	prepared, resized, err := eventmap.PrepareImagePrepContentWithNotices(items)
+	if err != nil {
+		return content, nil
+	}
+	out := make([]map[string]any, len(prepared))
+	for i, item := range prepared {
+		switch item.Kind {
+		case eventmap.ImagePrepContentImage:
+			out[i] = map[string]any{
+				"type":      "input_image",
+				"image_url": item.ImageURL,
+				"detail":    string(item.Detail),
+			}
+		default:
+			out[i] = map[string]any{
+				"type": "input_text",
+				"text": item.Text,
+			}
+		}
+	}
+	return out, resized
 }
 
 func inputContentFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) []map[string]any {
