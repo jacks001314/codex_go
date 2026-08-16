@@ -4,6 +4,9 @@ This project drives Rust Codex and codex_go through the same local TypeScript SD
 It records raw SDK event streams, normalizes volatile fields, and compares the
 observable contract rather than exact model prose.
 
+The normalization rules (why each volatile field is masked, with examples and
+field paths) are documented in [`NORMALIZATION.md`](NORMALIZATION.md).
+
 Build the Go CLI with its adjacent Code Mode host before live tool or lifecycle
 scenarios. The release build script emits both binaries into the same directory:
 

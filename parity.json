@@ -503,6 +503,13 @@
                       "area":  "parity",
                       "reason":  "L3 facility readiness audit: sdktests has 88 scenarios (broad coverage of apply-patch failure modes, resume/recovery, MCP, code-mode, approval, sandbox, compaction, persistence), a documented runner with run-manifest.json, raw audit scripts (fork/rolled-fork/session-compat/requirements/goal), and healthy unit tests (50/51 pass, free). Added an opt-in rollout-budget-exhaustion scenario exercising the newly-implemented sessionBudgetExceeded surface (features.rollout_budget limit_tokens=1, expected failure with errorPattern 'budget' matching Rust 'shared rollout token budget exhausted' and Go 'session budget exceeded'), pending live-SDK validation during the authorized L3 run. prompt.md vs Go BaseInstructions audited: model-wording differences are out of the djalign contract by design.",
                       "test":  "npm --prefix sdktests run test:unit"
+                  },
+                  {
+                      "id":  "sdktests-normalization-rules-documented",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Documented the sdktests event normalization rules in sdktests/NORMALIZATION.md per the djalign requirement that every ignore/normalize rule carries a reason, an example, and the field paths: UUID/identity mapped placeholders, RFC-3339 timestamps, session-temp paths, volatile numeric fields, and usage token counts; plus the contract fields asserted outside raw normalization (command exit codes/statuses, item-type sequences, workspace side effects, agent message contracts) and the event-sequence/command-output comparison modes. Also verified the precomputed-exports generator already has a regeneration-no-drift test (Generate* output byte-compared against the frozen artifacts + target Rust commit hash pin).",
+                      "test":  "npm --prefix sdktests run test:unit; go test ./appserver -run TestPrecomputedExportsAreWrittenToDiskLikeRust -count=1"
                   }
               ]
 }
