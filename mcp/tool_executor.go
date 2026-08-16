@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"codex_go/jsonschema"
 	"codex_go/tool"
 )
 
@@ -122,9 +123,13 @@ func (e *ToolExecutor) TelemetryTags(_ *tool.Invocation) map[string]string {
 func (e *ToolExecutor) Spec() tool.Spec {
 	name := e.resolvedToolName()
 	return tool.Spec{
-		Name:         name,
-		Description:  firstNonEmptyMCP(e.toolInfo.Description, e.toolInfo.Title),
-		InputSchema:  cloneAnyMap(e.toolInfo.InputSchema),
+		Name:        name,
+		Description: firstNonEmptyMCP(e.toolInfo.Description, e.toolInfo.Title),
+		// Mirrors Rust mcp_tool_to_responses_api_tool: the model-visible
+		// parameters go through the JsonSchema subset policy (sanitize, prune
+		// unreachable $defs, drop non-subset fields, compact oversized
+		// schemas); the raw schema stays on the executor for calls.
+		InputSchema:  jsonschema.Normalize(cloneAnyMap(e.toolInfo.InputSchema)),
 		Search:       e.searchInfo(),
 		Parallel:     e.parallel,
 		ReadOnlyHint: cloneBoolPtrMCP(e.readOnlyHint),

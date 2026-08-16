@@ -216,6 +216,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"gitutil",
 		"history",
 		"install",
+		"jsonschema",
 		"mcp",
 		"memories",
 		"model",

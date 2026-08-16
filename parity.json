@@ -384,6 +384,13 @@
                       "area":  "parity",
                       "reason":  "Shared-fixture double-run over the Rust apply-patch scenario corpus (25 scenarios) surfaced four real divergences that are now fixed and frozen: (1) parser whitespace leniency around patch markers (scenarios 017/018/020) now mirrors Rust's trim/trim_end marker matching including StreamingPatchParser::finish full-trim of the final line; (2) the CLI now applies hunks sequentially and keeps partial success on failure (scenario 015) like Rust's apply_patch_with_mode, while the app-server tool keeps the verify-first flow matching Rust's verify_apply_patch_args. All 25 scenarios byte-match the Rust expected trees; unit tests pin each fixed behavior.",
                       "test":  "go test ./parity -run TestApplyPatchScenariosMatchRustFixtures -count=1; go test ./applypatch -count=1"
+                  },
+                  {
+                      "id":  "tool-schema-policy-shared-fixture-double-run",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "New jsonschema package mirrors Rust's tool-input-schema policy (tools/src/json_schema.rs): sanitize (boolean coercion, const->enum, type inference, default children), prune unreachable $defs/definitions transitively (URL-decoded local refs), drop non-subset fields (pattern/format/title/minimum/...), and compact oversized schemas (5KB budget, depth 3, four lossy passes). The parity verifier feeds the six committed Rust json_schema_policy fixtures through Go and passes every preserved/pruned/dropped assertion plus the oversized compaction assertions. Wired into mcp.ToolExecutor.Spec so the model-visible parameters of MCP tools match Rust's mcp_tool_to_responses_api_tool.",
+                      "test":  "go test ./parity -run TestToolJSONSchemaPolicy -count=1; go test ./jsonschema ./mcp -count=1"
                   }
               ]
 }

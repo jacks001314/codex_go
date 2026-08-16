@@ -3,6 +3,7 @@
   "targetRustCommit": "9ded177ce7c1c0bd2047f902936c177612ab3434",
   "contracts": [
     {"id":"features","kind":"source-surface","rustPaths":["features/src/lib.rs"],"goPaths":["features/features.go"],"phase":"P1","status":"complete","verifier":"TestRustFeatureKeySurfaceAgainstGo"},
+    {"id":"tool-schema-policy","kind":"shared-fixtures","rustPaths":["tools/tests/fixtures/json_schema_policy"],"goPaths":["jsonschema","mcp","parity"],"phase":"P1","status":"complete","verifier":"TestToolJSONSchemaPolicyFixturesMatchRust;TestToolJSONSchemaPolicyOversizedCompaction"},
     {"id":"cli","kind":"source-surface","rustPaths":["cli/src/main.rs"],"goPaths":["cli"],"phase":"P1","status":"complete","verifier":"TestRustCliSubcommandSurfaceAgainstGoParser"},
     {"id":"app-server-schema-stable","kind":"generated-protocol","rustPaths":["app-server-protocol/schema/precomputed/app-server-exports-stable.json.zst"],"goPaths":["appserver/precomputed_exports.go","appserver/schema/precomputed/app-server-exports-stable.json.zst"],"phase":"P1","status":"complete","verifier":"TestPrecomputedExportsAreWrittenToDiskLikeRust"},
     {"id":"app-server-schema-experimental","kind":"generated-protocol","rustPaths":["app-server-protocol/schema/precomputed/app-server-exports-experimental.json.zst"],"goPaths":["appserver/precomputed_exports.go","appserver/schema/precomputed/app-server-exports-experimental.json.zst"],"phase":"P1","status":"complete","verifier":"TestPrecomputedExperimentalExportsAreWrittenToDiskLikeRust"},
