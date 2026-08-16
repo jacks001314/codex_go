@@ -57,34 +57,32 @@ func TestParseAddDeleteUpdate(t *testing.T) {
 	}
 }
 
-func TestApplyPureMovePreservesContent(t *testing.T) {
+// TestUpdateMoveRequiresChangeLinesLikeRust pins the Rust parser contract: the
+// apply-patch spec requires at least one change line per update hunk
+// (`change+`), so a move without any chunk is rejected even with `*** Move
+// to:`. Verified against the Rust apply_patch oracle (which reports "Update
+// file hunk for path 'X' is empty" / "Update hunk does not contain any
+// lines").
+func TestUpdateMoveRequiresChangeLinesLikeRust(t *testing.T) {
 	dir := t.TempDir()
-	const content = "def format_name(first, last):\n    return first + \" \" + last\n"
-	writeApplyFile(t, dir, "legacy.py", content)
+	writeApplyFile(t, dir, "legacy.py", "def format_name(first, last):\n    return first + \" \" + last\n")
 
-	action, err := Parse(`*** Begin Patch
-*** Update File: legacy.py
-*** Move to: formatter.py
-*** End Patch`)
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
+	cases := []string{
+		// No chunk at all.
+		"*** Begin Patch\n*** Update File: legacy.py\n*** Move to: formatter.py\n*** End Patch",
+		// An empty @@ context marker without change lines.
+		"*** Begin Patch\n*** Update File: legacy.py\n*** Move to: formatter.py\n@@\n*** End Patch",
 	}
-	result, err := action.Apply(&ApplyOptions{CWD: dir})
-	if err != nil {
-		t.Fatalf("Apply() error = %v", err)
+	for _, patch := range cases {
+		if _, err := Apply(patch, &ApplyOptions{CWD: dir}); err == nil {
+			t.Fatalf("Apply(%q) error = nil, want empty-hunk rejection", patch)
+		}
 	}
-	if len(result.Changes) != 1 || result.Changes[0].OldContent != content || result.Changes[0].NewContent != content {
-		t.Fatalf("move changes = %#v", result.Changes)
+	if _, err := os.Stat(filepath.Join(dir, "legacy.py")); err != nil {
+		t.Fatalf("legacy.py should remain after rejected move: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "legacy.py")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy.py still exists or stat failed: %v", err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "formatter.py"))
-	if err != nil {
-		t.Fatalf("ReadFile(formatter.py) error = %v", err)
-	}
-	if string(data) != content {
-		t.Fatalf("formatter.py = %q, want %q", data, content)
+	if _, err := os.Stat(filepath.Join(dir, "formatter.py")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("formatter.py should not exist after rejected move: %v", err)
 	}
 }
 

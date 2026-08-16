@@ -794,7 +794,11 @@ func parseUpdate(lines []string, start int) (int, Change, error) {
 	}
 	if chunks, err := parseUpdateChunks(diff.String()); err != nil {
 		return start, Change{}, err
-	} else if len(chunks) == 0 && movePath == "" {
+	} else if len(chunks) == 0 {
+		// Rust parser: the spec requires at least one change line per update
+		// hunk (`change+`), so a move without any chunk is rejected even when
+		// `*** Move to:` is present ("Update file hunk for path 'X' is
+		// empty"). Verified against the Rust apply_patch oracle.
 		return start, Change{}, fmt.Errorf("%w: update file hunk for path %q is empty", ErrInvalidPatch, path)
 	}
 	return i, Change{Kind: ChangeUpdate, Path: path, MovePath: movePath, UnifiedDiff: diff.String()}, nil

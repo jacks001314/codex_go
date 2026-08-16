@@ -405,6 +405,13 @@
                       "area":  "parity",
                       "reason":  "New verifier diffs Go's recognized top-level config keys against Rust core/config.schema.json (94 properties): 13 genuinely-supported keys (auto_review, check_for_update_on_startup, default_permissions, goals, memories, orchestrator, permissions, plan_mode_reasoning_effort, plugins, projects, responses_api_metadata, skills, tool_suggest) were missing from knownTopLevelConfigFields and are now recognized (strict validation no longer rejects them); 16 Rust-only unsupported properties and 6 Go extensions/legacy keys are explicitly allowlisted with auditable reasons. config.KnownTopLevelConfigFields() is exported for the diff.",
                       "test":  "go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1; go test ./config -count=1"
+                  },
+                  {
+                      "id":  "apply-patch-differential-oracle-harness",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Method-5 differential harness: a seeded corpus of random patches/workspaces is applied by the Rust apply_patch release binary (oracle, built from the frozen 9ded177ce checkout) and Go's apply_patch CLI, requiring identical exit status and byte-identical final trees. 3000+ cases across two seeds pass. The harness immediately surfaced a real divergence: Go accepted update+move hunks with zero change lines (pure moves) while Rust rejects them per the spec (change+ required); parseUpdate now requires at least one chunk, and the old TestApplyPureMovePreservesContent was replaced by TestUpdateMoveRequiresChangeLinesLikeRust pinning the Rust behavior. Skips when the oracle binary is absent.",
+                      "test":  "go test ./parity -run TestApplyPatchDifferentialAgainstRustOracle -count=1; go test ./applypatch -count=1"
                   }
               ]
 }
