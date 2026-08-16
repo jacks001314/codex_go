@@ -594,5 +594,12 @@
                       "id":  "config-parse-shared-fixtures-and-oss-provider-surface",
                       "reason":  "Closed a config-surface gap and added the missing L1 config-parse shared-fixture differential (djalign method 1): (1) Go strict config now recognizes the Rust top-level oss_provider key (config.schema.json) without value validation at load time, mirroring Rust's Option<String> deserialization - validation stays in the exec consumer (ValidateProviderID rejects legacy ollama-chat); the config-schema rust-only allowlist shrank from 7 to 6. (2) The new differential test drives Rust config_toml.rs test samples through Go's strict loader: forced_chatgpt_workspace_id accepts single-string and TOML-list forms, and rejects comma-separated strings with Rust's exact message (Go previously accepted them as one workspace ID); Rust-side sample presence is pinned by fn name so upstream test removal breaks the contract. Registered as contract config-parse-shared-fixtures.",
                       "area":  "parity"
-                  }              ]
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./config -run 'ProfileFeatureKey|CommaSeparated|StrictConfig' -count=1; go test ./parity -run TestRustConfigParseSamplesRunInGo -count=1",
+                      "id":  "config-parse-shared-fixtures-profile-features",
+                      "reason":  "Extended the L1 config-parse shared-fixture differential (djalign method 1) to the Rust strict_config_tests.rs samples and fixed the divergence it surfaced: Go strict config now rejects unknown feature keys under [profiles.<name>.features] with the profile-qualified path (profiles.work.features.foo), mirroring Rust unknown_feature_toml_value_path, while known nested tables (tool_registry under a profile) stay accepted; the differential now drives 8 Rust samples (forced_chatgpt_workspace_id single/list/comma, unknown feature key, unknown profile feature key, tool_registry top-level/profile, opaque desktop keys) through Go's strict loader with fn-name pinning. Serde type-error precedence (model_context_window = \"wide\") is documented as an out-of-contract architecture difference: Go's config is a lenient TOML map with typed getters, so wrong-typed values do not fail loading.",
+                      "area":  "parity"
+                  }
+              ]
 }

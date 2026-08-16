@@ -18,16 +18,30 @@ import (
 // The Rust side is pinned by name: the test first verifies the referenced
 // #[test] fn still exists in config/src/config_toml.rs, so upstream removal or
 // renames break the contract instead of silently drifting.
+//
+// Scope note (documented architecture difference): Rust strict config also
+// rejects serde *type* errors with precedence over unknown-field errors
+// (strict_config_tests.rs type_errors_take_precedence_over_ignored_fields,
+// e.g. model_context_window = "wide" -> `invalid type: string "wide", expected
+// i64`). Go's config surface is a lenient TOML map plus typed getters, so a
+// wrong-typed value does not fail loading (it falls back to the getter
+// default). That boundary is not part of this shared-fixture contract; only
+// the accept/reject semantics of the field surface are.
 func TestRustConfigParseSamplesRunInGo(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	source, err := os.ReadFile(filepath.Join(root, "config", "src", "config_toml.rs"))
 	if err != nil {
 		t.Fatalf("ReadFile(config_toml.rs) error = %v", err)
 	}
+	strictSource, err := os.ReadFile(filepath.Join(root, "config", "src", "strict_config_tests.rs"))
+	if err != nil {
+		t.Fatalf("ReadFile(strict_config_tests.rs) error = %v", err)
+	}
 
 	cases := []struct {
 		id          string
 		rustTest    string   // #[test] fn name in config/src/config_toml.rs
+		sourceFile  string   // optional Rust source file containing the test (default config_toml.rs)
 		toml        string   // shared input
 		wantAccept  bool     // Rust serde outcome (accept vs reject)
 		wantMessage []string // substrings the Rust assertion checks on reject
@@ -71,12 +85,59 @@ func TestRustConfigParseSamplesRunInGo(t *testing.T) {
 				"comma-separated strings are not supported",
 			},
 		},
+		{
+			id:         "strict_config_rejects_unknown_feature_key",
+			rustTest:   "strict_config_rejects_unknown_feature_key",
+			sourceFile: "strict_config_tests.rs",
+			toml:       "[features]\nfoo = true",
+			wantAccept: false,
+			wantMessage: []string{
+				"unknown configuration field `features.foo`",
+			},
+		},
+		{
+			id:         "strict_config_rejects_unknown_profile_feature_key",
+			rustTest:   "strict_config_rejects_unknown_profile_feature_key",
+			sourceFile: "strict_config_tests.rs",
+			toml:       "[profiles.work.features]\nfoo = true",
+			wantAccept: false,
+			wantMessage: []string{
+				"unknown configuration field `profiles.work.features.foo`",
+			},
+		},
+		{
+			id:         "strict_config_accepts_tool_registry_config",
+			rustTest:   "strict_config_accepts_tool_registry_config",
+			sourceFile: "strict_config_tests.rs",
+			toml:       "[features.tool_registry]\nerror_on_tool_collisions = true",
+			wantAccept: true,
+		},
+		{
+			id:         "strict_config_accepts_tool_registry_config_profile",
+			rustTest:   "strict_config_accepts_tool_registry_config",
+			sourceFile: "strict_config_tests.rs",
+			toml:       "[profiles.work.features.tool_registry]\nerror_on_tool_collisions = true",
+			wantAccept: true,
+		},
+		{
+			id:         "strict_config_accepts_opaque_desktop_keys",
+			rustTest:   "strict_config_accepts_opaque_desktop_keys",
+			sourceFile: "strict_config_tests.rs",
+			toml:       "[desktop]\nappearanceTheme = \"dark\"\n[desktop.workspace]\ncollapsed = true",
+			wantAccept: true,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.id, func(t *testing.T) {
-			if !strings.Contains(string(source), "fn "+tc.rustTest+"()") {
-				t.Fatalf("Rust test fn %s no longer exists in config/src/config_toml.rs; re-sync the shared fixture", tc.rustTest)
+			rustSource := string(source)
+			rustSourceLabel := "config/src/config_toml.rs"
+			if tc.sourceFile != "" {
+				rustSource = string(strictSource)
+				rustSourceLabel = "config/src/strict_config_tests.rs"
+			}
+			if !strings.Contains(rustSource, "fn "+tc.rustTest+"()") {
+				t.Fatalf("Rust test fn %s no longer exists in %s; re-sync the shared fixture", tc.rustTest, rustSourceLabel)
 			}
 			dir := t.TempDir()
 			body := "model = \"gpt-5\"\n" + tc.toml + "\n"

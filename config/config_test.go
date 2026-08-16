@@ -31,6 +31,50 @@ func TestResumeCWDModeAndResolution(t *testing.T) {
 	}
 }
 
+func TestLoadEffectiveStrictConfigRejectsUnknownProfileFeatureKeyLikeRust(t *testing.T) {
+	// Mirrors Rust strict_config_tests.rs
+	// strict_config_rejects_unknown_profile_feature_key: unknown feature keys
+	// under [profiles.<name>.features] are rejected with the profile-qualified
+	// path, while known nested tables (e.g. tool_registry) are accepted.
+	for _, tc := range []struct {
+		body      string
+		wantError string
+	}{
+		{
+			body:      "[profiles.work.features]\nfoo = true\n",
+			wantError: "unknown configuration field `profiles.work.features.foo`",
+		},
+		{
+			body:      "[profiles.work.features.token_budget]\nunknown = true\n",
+			wantError: "unknown configuration field `profiles.work.features.token_budget.unknown`",
+		},
+		{
+			body:      "[profiles.work.features.tool_registry]\nunknown = true\n",
+			wantError: "unknown configuration field `profiles.work.features.tool_registry.unknown`",
+		},
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(ConfigPath(dir), []byte(tc.body), 0o600); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+		_, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+		if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+			t.Fatalf("strict profiles error = %v, want %q", err, tc.wantError)
+		}
+	}
+
+	// Rust strict_config_accepts_tool_registry_config accepts the known
+	// nested table under a profile.
+	dir := t.TempDir()
+	body := "[profiles.work.features.tool_registry]\nerror_on_tool_collisions = true\n"
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err != nil {
+		t.Fatalf("strict profiles tool_registry returned error: %v", err)
+	}
+}
+
 func TestIncludeEnvironmentContextDefaultsTrueAndHonorsFalseLikeRust(t *testing.T) {
 	if !(*Config)(nil).IncludeEnvironmentContext() || !(&Config{Values: map[string]any{}}).IncludeEnvironmentContext() {
 		t.Fatal("environment context should be enabled by default")

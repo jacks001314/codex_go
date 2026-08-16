@@ -444,6 +444,20 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 	if err := validateKnownFeatureFields(values["features"]); err != nil {
 		return err
 	}
+	if profiles, ok := values["profiles"].(map[string]any); ok {
+		// Mirrors Rust unknown_feature_toml_value_path (config/src/
+		// strict_config.rs): unknown feature keys under [profiles.<name>.
+		// features] are rejected with the profile-qualified path.
+		for name, raw := range profiles {
+			profile, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if err := validateKnownFeatureFieldsAt(profile["features"], "profiles."+name+".features"); err != nil {
+				return err
+			}
+		}
+	}
 	if err := validateKnownMCPServerFields(values["mcp_servers"]); err != nil {
 		return err
 	}
@@ -540,20 +554,24 @@ func validateKnownAgentsFields(value any) error {
 }
 
 func validateKnownFeatureFields(value any) error {
+	return validateKnownFeatureFieldsAt(value, "features")
+}
+
+func validateKnownFeatureFieldsAt(value any, prefix string) error {
 	features, ok := value.(map[string]any)
 	if !ok {
 		return nil
 	}
 	for key := range features {
 		if !knownStrictFeatureFields[key] {
-			return fmt.Errorf("unknown configuration field `features.%s`", key)
+			return fmt.Errorf("unknown configuration field `%s.%s`", prefix, key)
 		}
 	}
 	if tokenBudget, ok := features["token_budget"].(map[string]any); ok {
 		known := map[string]bool{"enabled": true, "reminder_threshold_tokens": true, "reminder_message_template": true, "guidance_message": true, "auto_compact_fallback_prompt": true, "auto_compact_fallback_buffer_tokens": true}
 		for key := range tokenBudget {
 			if !known[key] {
-				return fmt.Errorf("unknown configuration field `features.token_budget.%s`", key)
+				return fmt.Errorf("unknown configuration field `%s.token_budget.%s`", prefix, key)
 			}
 		}
 	}
@@ -561,7 +579,7 @@ func validateKnownFeatureFields(value any) error {
 		known := map[string]bool{"enabled": true, "server_names": true}
 		for key := range nonPrefixed {
 			if !known[key] {
-				return fmt.Errorf("unknown configuration field `features.non_prefixed_mcp_tool_names.%s`", key)
+				return fmt.Errorf("unknown configuration field `%s.non_prefixed_mcp_tool_names.%s`", prefix, key)
 			}
 		}
 	}
@@ -569,7 +587,7 @@ func validateKnownFeatureFields(value any) error {
 		known := map[string]bool{"enabled": true, "disable_in_process_fallback": true}
 		for key := range codeModeHost {
 			if !known[key] {
-				return fmt.Errorf("unknown configuration field `features.code_mode_host.%s`", key)
+				return fmt.Errorf("unknown configuration field `%s.code_mode_host.%s`", prefix, key)
 			}
 		}
 	}
@@ -577,7 +595,7 @@ func validateKnownFeatureFields(value any) error {
 		known := map[string]bool{"enabled": true, "default_exec_yield_time_ms": true, "excluded_tool_namespaces": true, "direct_only_tool_namespaces": true}
 		for key := range codeMode {
 			if !known[key] {
-				return fmt.Errorf("unknown configuration field `features.code_mode.%s`", key)
+				return fmt.Errorf("unknown configuration field `%s.code_mode.%s`", prefix, key)
 			}
 		}
 	}
@@ -588,7 +606,7 @@ func validateKnownFeatureFields(value any) error {
 		known := map[string]bool{"error_on_tool_collisions": true, "turn_metadata_includes_tool_info": true}
 		for key := range toolRegistry {
 			if !known[key] {
-				return fmt.Errorf("unknown configuration field `features.tool_registry.%s`", key)
+				return fmt.Errorf("unknown configuration field `%s.tool_registry.%s`", prefix, key)
 			}
 		}
 	}
@@ -600,7 +618,7 @@ func validateKnownFeatureFields(value any) error {
 		}
 		for key := range rolloutBudget {
 			if !known[key] {
-				return fmt.Errorf("unknown configuration field `features.rollout_budget.%s`", key)
+				return fmt.Errorf("unknown configuration field `%s.rollout_budget.%s`", prefix, key)
 			}
 		}
 	}
