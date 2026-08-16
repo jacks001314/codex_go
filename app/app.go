@@ -136,6 +136,8 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 		return nil
 	case cli.CommandApply:
 		return runApply(parsed.Apply, parsed.Root, stdin, stdout)
+	case cli.CommandMigrateRollouts:
+		return runMigrateRollouts(parsed.MigrateRollouts, parsed.Root, stdout, stderr)
 	case cli.CommandRemoteControl:
 		return runRemoteControl(ctx, parsed.RemoteControl, stdout)
 	case cli.CommandAppServer:
@@ -973,6 +975,78 @@ func runApply(opts cli.ApplyOptions, root cli.RootOptions, stdin io.Reader, stdo
 	}
 	_, err = io.WriteString(stdout, result.Summary())
 	return err
+}
+
+func runMigrateRollouts(opts cli.MigrateRolloutsOptions, root cli.RootOptions, stdout io.Writer, stderr io.Writer) error {
+	report, err := rollout.MigrateRollouts(auth.DefaultCodexHome(), rollout.MigrationOptions{
+		Apply:           opts.Apply,
+		ThreadIDs:       opts.Threads,
+		MaxMibPerSecond: opts.MaxMibPerSecond,
+	})
+	if err != nil {
+		return err
+	}
+	if opts.JSON {
+		data, marshalErr := rollout.RenderJSONReport(report)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		_, err = stdout.Write(append(data, '\n'))
+		if err != nil {
+			return err
+		}
+	} else {
+		printMigrateRolloutsHumanReport(report, opts, stdout)
+	}
+	for _, outcome := range report.Outcomes {
+		if outcome.Status == rollout.MigrationStatusFailed {
+			return &ExitError{Code: 1, Message: "one or more rollout migrations failed", Silent: true}
+		}
+	}
+	return nil
+}
+
+func printMigrateRolloutsHumanReport(report *rollout.MigrationReport, opts cli.MigrateRolloutsOptions, stdout io.Writer) {
+	counts := map[rollout.MigrationStatus]int{}
+	for _, outcome := range report.Outcomes {
+		counts[outcome.Status]++
+	}
+	completion := "Scan complete"
+	if opts.Apply {
+		completion = "Migration complete"
+	}
+	fmt.Fprintf(stdout, "%s.\n", completion)
+	migrated := "eligible"
+	if opts.Apply {
+		migrated = "migrated"
+	}
+	fmt.Fprintf(stdout, "Scanned %d rollout(s): %d %s, %d already paginated, %d skipped (%d empty, %d busy), %d failed.\n",
+		len(report.Outcomes),
+		counts[rollout.MigrationStatusEligible]+counts[rollout.MigrationStatusMigrated],
+		migrated,
+		counts[rollout.MigrationStatusAlreadyPaginated],
+		counts[rollout.MigrationStatusSkippedEmpty]+counts[rollout.MigrationStatusSkippedBusy],
+		counts[rollout.MigrationStatusSkippedEmpty],
+		counts[rollout.MigrationStatusSkippedBusy],
+		counts[rollout.MigrationStatusFailed],
+	)
+	if !opts.Apply && counts[rollout.MigrationStatusEligible] > 0 {
+		fmt.Fprintln(stdout, "Run `codex migrate-rollouts --apply` to migrate eligible sessions.")
+	}
+	if !opts.Verbose {
+		return
+	}
+	for _, outcome := range report.Outcomes {
+		threadID := "unknown"
+		if outcome.ThreadID != nil && strings.TrimSpace(*outcome.ThreadID) != "" {
+			threadID = strings.TrimSpace(*outcome.ThreadID)
+		}
+		if outcome.Message != nil {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\n", rollout.FormatOutcomeStatus(outcome.Status), threadID, *outcome.Message)
+		} else {
+			fmt.Fprintf(stdout, "%s\t%s\n", rollout.FormatOutcomeStatus(outcome.Status), threadID)
+		}
+	}
 }
 
 func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.RootOptions, stdout io.Writer, stderr io.Writer, stdin io.Reader) error {

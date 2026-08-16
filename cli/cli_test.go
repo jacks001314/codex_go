@@ -1546,3 +1546,36 @@ func TestParseUpdate(t *testing.T) {
 		t.Fatalf("Parse update --json error = %v", err)
 	}
 }
+
+func TestParseMigrateRolloutsCommandLikeRust(t *testing.T) {
+	// Mirrors Rust cli/src/migrate_rollouts.rs MigrateRolloutsCommand flags:
+	// --apply, --thread, --max-mib-per-second, --json, --verbose.
+	parsed, err := Parse([]string{"migrate-rollouts", "--json"})
+	if err != nil {
+		t.Fatalf("Parse migrate-rollouts --json error: %v", err)
+	}
+	if parsed.Command != CommandMigrateRollouts || !parsed.MigrateRollouts.JSON || parsed.MigrateRollouts.Apply {
+		t.Fatalf("dry-run parse = %#v", parsed.MigrateRollouts)
+	}
+
+	parsed, err = Parse([]string{"migrate-rollouts", "--apply", "--verbose", "--thread", "123e4567-e89b-42d3-a456-426614174000", "--thread=123e4567-e89b-42d3-a456-426614174001", "--max-mib-per-second", "8"})
+	if err != nil {
+		t.Fatalf("Parse migrate-rollouts flags error: %v", err)
+	}
+	if !parsed.MigrateRollouts.Apply || !parsed.MigrateRollouts.Verbose {
+		t.Fatalf("apply/verbose = %#v", parsed.MigrateRollouts)
+	}
+	if len(parsed.MigrateRollouts.Threads) != 2 || parsed.MigrateRollouts.Threads[0] != "123e4567-e89b-42d3-a456-426614174000" || parsed.MigrateRollouts.Threads[1] != "123e4567-e89b-42d3-a456-426614174001" {
+		t.Fatalf("threads = %#v", parsed.MigrateRollouts.Threads)
+	}
+	if parsed.MigrateRollouts.MaxMibPerSecond != 8 {
+		t.Fatalf("max mib = %d, want 8", parsed.MigrateRollouts.MaxMibPerSecond)
+	}
+
+	if _, err := Parse([]string{"migrate-rollouts", "--max-mib-per-second", "0"}); err == nil {
+		t.Fatal("Parse accepted zero max-mib-per-second")
+	}
+	if _, err := Parse([]string{"migrate-rollouts", "--bogus"}); err == nil || !strings.Contains(err.Error(), "unknown migrate-rollouts option") {
+		t.Fatalf("Parse unknown option error = %v", err)
+	}
+}

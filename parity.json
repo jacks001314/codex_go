@@ -642,6 +642,12 @@
                       "id":  "hook-additional-context-limit-wire-contract",
                       "reason":  "Aligned the hooks wire contract with Rust HookHandlerConfig::Command / HookMetadata (config/src/hook_config.rs + app-server hooks_list): the additionalContextLimit field (Rust additional_context_limit, camelCase JSON/TOML name) is now parsed from hooks.json and hooks.toml handler tables, surfaced on the v2 hooks_list HookMetadata JSON (omitempty, unset stays omitted like Rust skip_serializing_if), and participates in the hook identity hash (NormalizedHookIdentity) so changing the spilling threshold re-marks the hook untrusted. Three unit tests pin JSON parsing, TOML parsing, unset-omission, and hash participation.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./rollout -run 'TestMigrateRollouts|TestRenderJSONReport' -count=1; go test ./cli -run TestParseMigrateRolloutsCommandLikeRust -count=1",
+                      "id":  "migrate-rollouts-cli-dry-run",
+                      "reason":  "Started the P1 legacy rollout->paginated migration by implementing the codex migrate-rollouts CLI command surface with the dry-run report layer (phase 1): flags --apply/--thread/--max-mib-per-second/--json/--verbose mirror Rust MigrateRolloutsCommand; rollout.MigrateRollouts scans sessions + archived_sessions (flat and date-nested, plain and .jsonl.zst), classifies each file as eligible/already_paginated/skipped_empty/failed with Rust's thread-id-from-filename rule (36-char UUID suffix) and thread selection, and renders the Rust-shaped JSON report and human report (Scan complete / Scanned N rollout(s): ... / Run codex migrate-rollouts --apply). Apply mode is intentionally reported as failed with a not-implemented message instead of corrupting storage; the canonicalizer/journal/atomic-publish/rollback state machine remains a tracked follow-up.",
+                      "area":  "parity"
                   }
               ]
 }

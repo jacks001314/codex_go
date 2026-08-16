@@ -327,6 +327,14 @@ type DoctorOptions struct {
 	ASCII   bool
 }
 
+type MigrateRolloutsOptions struct {
+	Apply           bool
+	Threads         []string
+	MaxMibPerSecond uint64
+	JSON            bool
+	Verbose         bool
+}
+
 type ApplyOptions struct {
 	Patch           string
 	ConfigOverrides []string
@@ -391,6 +399,7 @@ type Parsed struct {
 	Update            UpdateOptions
 	Completion        CompletionOptions
 	Doctor            DoctorOptions
+	MigrateRollouts   MigrateRolloutsOptions
 	Apply             ApplyOptions
 	RemoteControl     RemoteControlOptions
 	Session           SessionOptions
@@ -493,6 +502,8 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 		return p, parseCompletion(args, &p.Completion)
 	case CommandDoctor:
 		return p, parseDoctor(args, &p.Doctor)
+	case CommandMigrateRollouts:
+		return p, parseMigrateRollouts(args, &p.MigrateRollouts)
 	case CommandApply:
 		return p, parseApply(args, &p.Apply)
 	case CommandRemoteControl:
@@ -2644,6 +2655,54 @@ func parseDoctor(args []string, doctor *DoctorOptions) error {
 		}
 	}
 	return nil
+}
+
+func parseMigrateRollouts(args []string, options *MigrateRolloutsOptions) error {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--apply":
+			options.Apply = true
+		case arg == "--json":
+			options.JSON = true
+		case arg == "--verbose":
+			options.Verbose = true
+		case arg == "--thread" || strings.HasPrefix(arg, "--thread="):
+			value, next, err := optionalFlagValue(args, i, arg, "--thread")
+			if err != nil {
+				return err
+			}
+			options.Threads = append(options.Threads, value)
+			i = next
+		case arg == "--max-mib-per-second" || strings.HasPrefix(arg, "--max-mib-per-second="):
+			value, next, err := optionalFlagValue(args, i, arg, "--max-mib-per-second")
+			if err != nil {
+				return err
+			}
+			parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+			if err != nil || parsed == 0 {
+				return fmt.Errorf("--max-mib-per-second must be a positive integer")
+			}
+			options.MaxMibPerSecond = parsed
+			i = next
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown migrate-rollouts option %s", arg)
+			}
+			return fmt.Errorf("migrate-rollouts does not accept argument %s", arg)
+		}
+	}
+	return nil
+}
+
+func optionalFlagValue(args []string, index int, arg string, name string) (string, int, error) {
+	if strings.HasPrefix(arg, name+"=") {
+		return strings.TrimPrefix(arg, name+"="), index, nil
+	}
+	if index+1 >= len(args) {
+		return "", index, fmt.Errorf("%s requires a value", name)
+	}
+	return args[index+1], index + 1, nil
 }
 
 func parseApply(args []string, apply *ApplyOptions) error {
