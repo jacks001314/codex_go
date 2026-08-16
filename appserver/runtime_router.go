@@ -230,6 +230,8 @@ type RuntimeRouter struct {
 	authRevision           uint64
 	skillShadowMu          sync.Mutex
 	skillShadowState       map[string]*skillShadowThreadState
+	startupPrewarmMu       sync.Mutex
+	startupPrewarms        map[string]*startupPrewarmState
 	mcpRuntimes            *mcpRuntimeCoordinator
 	mcpConfigManaged       atomic.Bool
 	loginRuntimeMu         sync.Mutex
@@ -3163,6 +3165,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
 			if request.Method == MethodThreadStart {
 				r.startMemoriesStartupTask(response, request)
+				r.scheduleStartupPrewarm(response)
 			}
 		} else if response, ok := result.(*ThreadForkResponse); ok && response.Thread != nil {
 			var forkParams ThreadForkParams

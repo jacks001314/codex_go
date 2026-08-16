@@ -5731,6 +5731,15 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		instructions = modelInfo.ModelInstructions(personality)
 	}
 	historyItems, previousResponseID := r.historyInputItemsForTurn(threadID)
+	if previousResponseID == "" {
+		// Rust core/src/tasks/regular.rs: the first regular turn consumes the
+		// session-startup websocket prewarm (its response id chains the first
+		// request). A prewarm that has not finished is skipped and the turn
+		// proceeds without it.
+		if id := r.takeStartupPrewarmResponseID(threadID); id != "" {
+			previousResponseID = id
+		}
+	}
 	inputItems := append([]any(nil), historyItems...)
 	modelPersonalityItems, err := r.modelPersonalityWorldStateInputItems(
 		threadID,
