@@ -40,7 +40,7 @@ func CanonicalizeKey(key string) string {
 
 func ApplyOverrides(root map[string]any, overrides []Override) {
 	for _, override := range overrides {
-		apply(root, strings.Split(override.Path, "."), override.Value)
+		apply(root, strings.Split(override.Path, "."), override.Value, nil)
 	}
 }
 
@@ -141,18 +141,53 @@ func splitTopLevel(raw string, sep rune) []string {
 	return parts
 }
 
-func apply(root map[string]any, parts []string, value any) {
+func apply(root map[string]any, parts []string, value any, path []string) {
 	if len(parts) == 0 {
 		return
 	}
+	key := parts[0]
+	childPath := append(append([]string(nil), path...), key)
 	if len(parts) == 1 {
-		root[parts[0]] = value
+		if isMultiAgentV2FeaturePath(childPath) {
+			// Mirrors Rust apply_toml_override (config/src/overrides.rs):
+			// multi_agent_v2 boolean/table overrides preserve nested config in
+			// either ordering instead of silently replacing the lower value.
+			switch existing := root[key].(type) {
+			case map[string]any:
+				if enabled, ok := value.(bool); ok {
+					existing["enabled"] = enabled
+					return
+				}
+				if overlayTable, ok := value.(map[string]any); ok {
+					mergeConfigMaps(existing, overlayTable)
+					return
+				}
+			case bool:
+				if _, ok := value.(map[string]any); ok {
+					table := map[string]any{"enabled": existing}
+					mergeConfigMaps(table, value.(map[string]any))
+					root[key] = table
+					return
+				}
+			}
+		}
+		root[key] = value
 		return
 	}
-	next, ok := root[parts[0]].(map[string]any)
+	next, ok := root[key].(map[string]any)
 	if !ok {
-		next = map[string]any{}
-		root[parts[0]] = next
+		if isMultiAgentV2FeaturePath(childPath) {
+			// Mirrors Rust: a legacy boolean toggle on the traversal path is
+			// converted to an enabled table before descending.
+			if enabled, isBool := root[key].(bool); isBool {
+				next = map[string]any{"enabled": enabled}
+			} else {
+				next = map[string]any{}
+			}
+		} else {
+			next = map[string]any{}
+		}
+		root[key] = next
 	}
-	apply(next, parts[1:], value)
+	apply(next, parts[1:], value, childPath)
 }

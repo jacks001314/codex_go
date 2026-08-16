@@ -31,6 +31,38 @@ func TestResumeCWDModeAndResolution(t *testing.T) {
 	}
 }
 
+func TestMergeConfigMapsNormalizesPermissionNetworkDomainsLikeRust(t *testing.T) {
+	// Mirrors Rust merge_tests.rs
+	// merge_toml_values_normalizes_permission_network_domains_before_overlaying:
+	// domain keys are normalized (lowercase, trailing dot stripped) before
+	// overlaying so equivalent hosts across layers land on one key.
+	base := map[string]any{"permissions": map[string]any{"dev": map[string]any{"network": map[string]any{"domains": map[string]any{"example.com": "deny"}}}}}
+	overlay := map[string]any{"permissions": map[string]any{"dev": map[string]any{"network": map[string]any{"domains": map[string]any{"EXAMPLE.COM": "allow"}}}}}
+	mergeConfigMaps(base, overlay)
+	domains := readConfigNested(base, []string{"permissions", "dev", "network", "domains"}).(map[string]any)
+	if len(domains) != 1 {
+		t.Fatalf("domains = %#v, want exactly one normalized key", domains)
+	}
+	if domains["example.com"] != "allow" {
+		t.Fatalf("domains = %#v, want example.com=allow (overlay wins on normalized key)", domains)
+	}
+	if _, exists := domains["EXAMPLE.COM"]; exists {
+		t.Fatalf("unnormalized key survived: %#v", domains)
+	}
+}
+
+func TestMergeConfigMapsNormalizesPermissionNetworkDomainsTrailingDotLikeRust(t *testing.T) {
+	// Rust normalize_host strips trailing dots so FQDN and dotless variants
+	// merge onto the same key.
+	base := map[string]any{"permissions": map[string]any{"prod": map[string]any{"network": map[string]any{"domains": map[string]any{"api.example.com.": "deny"}}}}}
+	overlay := map[string]any{"permissions": map[string]any{"prod": map[string]any{"network": map[string]any{"domains": map[string]any{"API.Example.com": "allow"}}}}}
+	mergeConfigMaps(base, overlay)
+	domains := readConfigNested(base, []string{"permissions", "prod", "network", "domains"}).(map[string]any)
+	if len(domains) != 1 || domains["api.example.com"] != "allow" {
+		t.Fatalf("domains = %#v, want api.example.com=allow", domains)
+	}
+}
+
 func TestMergeConfigMapsNormalizesKeyAliasesLikeRust(t *testing.T) {
 	// Mirrors Rust merge_tests.rs: legacy keys are normalized to their
 	// canonical names before overlaying, so an overlay's legacy key wins over

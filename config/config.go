@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/network"
+
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -1601,6 +1603,15 @@ func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
 		if srcIsMap && dstIsMap {
 			normalizeConfigKeyAliases(childPath, dstMap)
 			normalizeConfigKeyAliases(childPath, srcMap)
+			if isPermissionNetworkDomainsPath(childPath) {
+				// Mirrors Rust merge_toml_values (config/src/merge.rs
+				// normalize_network_domain_keys): permission network domain
+				// keys are normalized (trim, strip ports/brackets, lowercase,
+				// drop trailing dots) before overlaying so equivalent hosts
+				// in different layers land on the same key.
+				normalizeNetworkDomainKeys(dstMap)
+				normalizeNetworkDomainKeys(srcMap)
+			}
 			mergeConfigMapsAt(dstMap, srcMap, childPath)
 			continue
 		}
@@ -1608,6 +1619,9 @@ func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
 			// Mirrors Rust normalized_with_key_aliases: a freshly inserted
 			// table still gets its aliases normalized at the target path.
 			normalizeConfigKeyAliases(childPath, srcMap)
+			if isPermissionNetworkDomainsPath(childPath) {
+				normalizeNetworkDomainKeys(srcMap)
+			}
 		}
 		dst[key] = cloneConfigValue(value)
 	}
@@ -1618,6 +1632,20 @@ func isMultiAgentV2FeaturePath(path []string) bool {
 		return true
 	}
 	return len(path) == 4 && path[0] == "profiles" && path[2] == "features" && path[3] == "multi_agent_v2"
+}
+
+func isPermissionNetworkDomainsPath(path []string) bool {
+	return len(path) == 4 && path[0] == "permissions" && path[2] == "network" && path[3] == "domains"
+}
+
+func normalizeNetworkDomainKeys(table map[string]any) {
+	for key, value := range table {
+		normalized := network.NormalizeProxyHost(key)
+		if normalized != key {
+			delete(table, key)
+			table[normalized] = value
+		}
+	}
 }
 
 // normalizeConfigKeyAliases mirrors Rust normalize_key_aliases

@@ -188,6 +188,7 @@ func TestRustConfigMergeKeyAliasSamplesRunInGo(t *testing.T) {
 		rustTest  string
 		baseTOML  string // packaged-defaults layer (base)
 		userTOML  string // user config layer (overlay)
+		overrides []string
 		wantValue map[string]any
 	}{
 		{
@@ -289,12 +290,67 @@ func TestRustConfigMergeKeyAliasSamplesRunInGo(t *testing.T) {
 				},
 			},
 		},
+		{
+			id:       "multi_agent_v2_cli_overrides_preserve_boolean_and_nested_configuration",
+			rustTest: "multi_agent_v2_cli_overrides_preserve_boolean_and_nested_configuration",
+			overrides: []string{
+				"features.multi_agent_v2=true",
+				"features.multi_agent_v2.subagent_usage_hint_text=Delegate carefully.",
+			},
+			wantValue: map[string]any{
+				"features": map[string]any{
+					"multi_agent_v2": map[string]any{"enabled": true, "subagent_usage_hint_text": "Delegate carefully."},
+				},
+			},
+		},
+		{
+			id:       "multi_agent_v2_cli_overrides_preserve_boolean_and_nested_configuration_reversed",
+			rustTest: "multi_agent_v2_cli_overrides_preserve_boolean_and_nested_configuration",
+			overrides: []string{
+				"features.multi_agent_v2.subagent_usage_hint_text=Delegate carefully.",
+				"features.multi_agent_v2=true",
+			},
+			wantValue: map[string]any{
+				"features": map[string]any{
+					"multi_agent_v2": map[string]any{"enabled": true, "subagent_usage_hint_text": "Delegate carefully."},
+				},
+			},
+		},
+		{
+			id:       "merge_toml_values_normalizes_permission_network_domains_before_overlaying",
+			rustTest: "merge_toml_values_normalizes_permission_network_domains_before_overlaying",
+			baseTOML: "[permissions.dev.network.domains]\n\"example.com\" = \"deny\"\n",
+			userTOML: "[permissions.dev.network.domains]\n\"EXAMPLE.COM\" = \"allow\"\n",
+			wantValue: map[string]any{
+				"permissions": map[string]any{
+					"dev": map[string]any{
+						"network": map[string]any{"domains": map[string]any{"example.com": "allow"}},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.id, func(t *testing.T) {
 			if !strings.Contains(string(source), "fn "+tc.rustTest+"()") {
 				t.Fatalf("Rust test fn %s no longer exists in config/src/merge_tests.rs; re-sync the shared fixture", tc.rustTest)
+			}
+			if len(tc.overrides) > 0 {
+				cfg, err := config.LoadEffectiveWithOptions(t.TempDir(), &config.EffectiveOptions{
+					RawOverrides: tc.overrides,
+				})
+				if err != nil {
+					t.Fatalf("LoadEffectiveWithOptions overrides: %v", err)
+				}
+				for table, want := range tc.wantValue {
+					gotTable, _ := cfg.Values[table].(map[string]any)
+					wantTable, _ := want.(map[string]any)
+					if !reflect.DeepEqual(gotTable, wantTable) {
+						t.Fatalf("%s overrides merge = %#v, want %#v", table, gotTable, wantTable)
+					}
+				}
+				return
 			}
 			dir := t.TempDir()
 			if tc.baseTOML != "" {
