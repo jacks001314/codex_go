@@ -36,6 +36,7 @@ import (
 	"codex_go/features"
 	"codex_go/install"
 	"codex_go/mcp"
+	"codex_go/memories"
 	"codex_go/model"
 	"codex_go/plugin"
 	promptctx "codex_go/prompt"
@@ -5810,6 +5811,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	if err != nil {
 		return nil, err
 	}
+	instructions = r.instructionsWithMemoryToolContext(cfg, instructions)
 	sessionItems := append([]session.Item(nil), currentTimeSessionItems...)
 	sessionItems = append(sessionItems, realtimeStateSessionItems...)
 	sessionItems = append(sessionItems, collaborationModeSessionItems...)
@@ -7337,6 +7339,37 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	}
 	rendered = append(rendered, instructions)
 	return strings.Join(nonEmpty(rendered), "\n\n"), skillInputItems, postToolInputItems, nil
+}
+
+// instructionsWithMemoryToolContext appends the memory-tool developer policy
+// fragment to the turn's developer instructions, mirroring Rust's
+// MemoriesExtension::contribute_thread_context (ext/memories/src/extension.rs):
+// when the memories feature is enabled and memories.use_memories is true, the
+// persisted memory_summary.md excerpt is contributed as a developer-policy
+// section (ext/memories/src/prompts.rs build_memory_tool_developer_instructions
+// -> read_path.md template, summary truncated at 2,500 tokens). A missing or
+// empty summary, or a disabled gate, leaves the instructions unchanged (Rust
+// returns None). The fragment text itself is byte-pinned by the parity
+// shared-fixture verifier TestRustMemoryToolDeveloperInstructionsMatchesGo.
+func (r *RuntimeRouter) instructionsWithMemoryToolContext(cfg *config.Config, instructions string) string {
+	if r == nil || cfg == nil || r.services.Config == nil {
+		return instructions
+	}
+	if !features.Enabled(cfg.FeatureSettings(), "memories") || !cfg.Memories().UseMemories {
+		return instructions
+	}
+	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
+	if codexHome == "" {
+		return instructions
+	}
+	fragment := memories.BuildMemoryToolDeveloperInstructions(codexHome)
+	if fragment == "" {
+		return instructions
+	}
+	if strings.TrimSpace(instructions) == "" {
+		return fragment
+	}
+	return instructions + "\n\n" + fragment
 }
 
 func (r *RuntimeRouter) notifySkillWarnings(threadID string, warnings []string) {

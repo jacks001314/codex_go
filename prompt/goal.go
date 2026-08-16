@@ -24,6 +24,25 @@ func ObjectiveUpdated(goal *Goal) string {
 	return renderGoalTemplate(goalObjectiveUpdatedTemplate, goal)
 }
 
+// GoalTemplateContinuation exposes the continuation template text
+// byte-for-byte (no substitution), used by the parity shared-fixture verifier
+// to pin the template against the Rust ext/goal blob.
+func GoalTemplateContinuation() string {
+	return goalContinuationTemplate
+}
+
+// GoalTemplateBudgetLimit exposes the budget-limit template text byte-for-byte
+// (no substitution), used by the parity shared-fixture verifier.
+func GoalTemplateBudgetLimit() string {
+	return goalBudgetLimitTemplate
+}
+
+// GoalTemplateObjectiveUpdated exposes the objective-updated template text
+// byte-for-byte (no substitution), used by the parity shared-fixture verifier.
+func GoalTemplateObjectiveUpdated() string {
+	return goalObjectiveUpdatedTemplate
+}
+
 func tokenBudget(value *int64) string {
 	if value == nil {
 		return "none"
@@ -115,7 +134,8 @@ Blocked audit:
 - Once the blocked threshold is satisfied, do not keep reporting that you are still blocked while leaving the goal active; call update_goal with status "blocked".
 - Never use status "blocked" merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.
 
-Do not call update_goal unless the goal is complete or the strict blocked audit above is satisfied. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work.`
+Do not call update_goal unless the goal is complete or the strict blocked audit above is satisfied. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work.
+`
 
 const goalBudgetLimitTemplate = `The active thread goal has reached its token budget.
 
@@ -132,7 +152,8 @@ Budget:
 
 The system has marked the goal as budget_limited, so do not start new substantive work for this goal. Wrap up this turn soon: summarize useful progress, identify remaining work or blockers, and leave the user with a clear next step.
 
-Do not call update_goal unless the goal is actually complete.`
+Do not call update_goal unless the goal is actually complete.
+`
 
 const goalObjectiveUpdatedTemplate = `The active thread goal objective was edited by the user.
 
@@ -149,4 +170,5 @@ Budget:
 
 Adjust the current turn to pursue the updated objective. Avoid continuing work that only served the previous objective unless it also helps the updated objective.
 
-Do not call update_goal unless the updated goal is actually complete.`
+Do not call update_goal unless the updated goal is actually complete.
+`

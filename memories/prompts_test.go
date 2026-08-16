@@ -67,3 +67,44 @@ func TestEmbeddedMemoryPromptsMatchRustHashes(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildMemoryToolDeveloperInstructions(t *testing.T) {
+	// Missing summary -> no fragment (Rust build_memory_tool_developer_instructions
+	// returns None when the summary file is absent).
+	if got := BuildMemoryToolDeveloperInstructions(t.TempDir()); got != "" {
+		t.Fatalf("BuildMemoryToolDeveloperInstructions(missing) = %q, want empty", got)
+	}
+
+	home := t.TempDir()
+	memoriesDir := filepath.Join(home, "memories")
+	if err := os.MkdirAll(memoriesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll memories: %v", err)
+	}
+	summary := "v1\n\nproject conventions: use tabs\n"
+	if err := os.WriteFile(filepath.Join(memoriesDir, MemorySummaryFilename), []byte(summary), 0o600); err != nil {
+		t.Fatalf("WriteFile summary: %v", err)
+	}
+	got := BuildMemoryToolDeveloperInstructions(home)
+	if got == "" {
+		t.Fatal("BuildMemoryToolDeveloperInstructions = empty with summary present")
+	}
+	for _, want := range []string{
+		"## Memory",
+		filepath.Join(home, "memories") + "/MEMORY.md",
+		"project conventions: use tabs",
+		"========= MEMORY_SUMMARY BEGINS =========",
+		"========= MEMORY_SUMMARY ENDS =========",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("memory developer instructions missing %q:\n%s", want, got)
+		}
+	}
+
+	// Whitespace-only summary -> no fragment (Rust trims then checks is_empty).
+	if err := os.WriteFile(filepath.Join(memoriesDir, MemorySummaryFilename), []byte("   \n"), 0o600); err != nil {
+		t.Fatalf("WriteFile empty summary: %v", err)
+	}
+	if got := BuildMemoryToolDeveloperInstructions(home); got != "" {
+		t.Fatalf("BuildMemoryToolDeveloperInstructions(empty) = %q, want empty", got)
+	}
+}

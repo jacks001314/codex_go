@@ -90,7 +90,7 @@ func (a *coreReplayAgent) Run(_ context.Context, request *model.AgentRequest) (*
 		if strings.Contains(msgType, "reasoning") {
 			hasReasoning = true
 		}
-		if msgType == "agent_message" {
+		if msgType == "agent_message" || msgType == "message" {
 			hasMessage = true
 		}
 	}
@@ -387,7 +387,7 @@ func ValidateCoreReplayCrossCheck(events []Event, result *CoreReplayResult) erro
 		if recHasReasoning && !reasoning {
 			return fmt.Errorf("task %s: recording has reasoning but replay emitted no reasoning item/completed", lc.ID)
 		}
-		recHasMessage := lifecycleHasMsgType(lc, func(value string) bool { return value == "agent_message" })
+		recHasMessage := lifecycleHasMsgType(lc, func(value string) bool { return value == "agent_message" || value == "message" })
 		if recHasMessage && !message {
 			return fmt.Errorf("task %s: recording has agent_message but replay emitted no agent_message item/completed", lc.ID)
 		}
