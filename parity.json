@@ -65,6 +65,13 @@
                       "test":  "go test ./config -run 'DisablePasteBurst|RealtimeAudio' -count=1; go test ./tui/tea -run 'DisablePasteBurst' -count=1; go test ./appserver -run 'Steer|ResizeNotice|PreparesImages' -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
                   },
                   {
+                      "id":  "exec-apply-patch-freeform-shared-fixture",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Wired the last unwired Rust data asset: exec/tests/fixtures/apply_patch_freeform_final.txt (the exec suite's test_apply_patch_freeform_tool expected final file, include_str!-embedded in Rust so it is always LF). TestExecApplyPatchFreeformFixtureMatchesRust drives the same freeform add + update patch sequence through Go's apply_patch CLI and compares the resulting app.py byte-for-byte against the frozen git blob (candidateRustTo:codex-rs/exec/tests/fixtures/apply_patch_freeform_final.txt) rather than the worktree, so Windows autocrlf CRLF normalization cannot mask or fabricate a match. Go produces byte-identical content, confirming the freeform add/update hunk path (including the @@ context-only hunk header with a blank-line insertion) matches Rust. Registered as contract exec-apply-patch-freeform.",
+                      "test":  "go test ./parity -run TestExecApplyPatchFreeformFixtureMatchesRust -count=1; go test ./applypatch -count=1"
+                  },
+                  {
                       "status":  "done",
                       "test":  "go test ./mcp -run HandshakeDeadline -count=1",
                       "id":  "mcp-handshake-deadline",
