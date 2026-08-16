@@ -630,6 +630,12 @@
                       "id":  "config-merge-cli-overrides-and-network-domains",
                       "reason":  "Completed the config layer-merge alignment against Rust merge_toml_values / apply_toml_override (config/src/merge.rs + overrides.rs): (1) CLI overrides now preserve the multi_agent_v2 boolean toggle as an enabled field when combined with nested options in either ordering, under both features and profiles.<name>.features, while opaque desktop paths keep ordinary replacement semantics (multi_agent_v2_cli_overrides_preserve_boolean_and_nested_configuration / multi_agent_v2_cli_compatibility_excludes_opaque_desktop_paths); (2) permission network domain keys are normalized (trim, strip ports/brackets, lowercase, drop trailing dots) before overlaying so equivalent hosts across layers merge onto one key (merge_toml_values_normalizes_permission_network_domains_before_overlaying), mirroring Rust normalize_network_domain_keys. The shared-fixture differential now drives 13 Rust merge_tests.rs samples; config-parse-shared-fixtures contract verifier covers the full matrix.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./parity -run TestRustConfigMergeKeyAliasSamplesRunInGo -count=1",
+                      "id":  "config-merge-shared-fixture-complete-coverage",
+                      "reason":  "Completed shared-fixture coverage of Rust config/src/merge_tests.rs: all 17 merge test fns (excluding the parse_toml helper) are now driven as differential samples through Go's layer loading and CLI override paths, including shell_environment_policy Unicode case-insensitive filter merging, legacy-array replacement of filters, and multi_agent_v2 opaque desktop path exclusion in both layer and CLI forms. The matrix is pinned by Rust fn name so upstream merge_semantics drift breaks the contract; config-parse-shared-fixtures verifier covers it.",
+                      "area":  "parity"
                   }
               ]
 }

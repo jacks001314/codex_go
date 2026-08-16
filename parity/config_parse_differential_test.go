@@ -329,6 +329,51 @@ func TestRustConfigMergeKeyAliasSamplesRunInGo(t *testing.T) {
 				},
 			},
 		},
+		{
+			id:       "shell_environment_policy_filters_overlay_merges_unicode_keys_case_insensitively",
+			rustTest: "shell_environment_policy_filters_overlay_merges_unicode_keys_case_insensitively",
+			baseTOML: "[shell_environment_policy.filters]\n\"СЕКРЕТ_*\" = \"exclude\"\n",
+			userTOML: "[shell_environment_policy.filters]\n\"секрет_*\" = \"include\"\n",
+			wantValue: map[string]any{
+				"shell_environment_policy": map[string]any{
+					"filters": map[string]any{"секрет_*": "include"},
+				},
+			},
+		},
+		{
+			id:       "shell_environment_policy_legacy_arrays_replace_lower_filters",
+			rustTest: "shell_environment_policy_legacy_arrays_replace_lower_filters",
+			baseTOML: "[shell_environment_policy]\ninherit = \"core\"\n[shell_environment_policy.filters]\n\"FLIP_TO_EXCLUDE\" = \"include\"\n\"LOW_EXCLUDED\" = \"exclude\"\n\"KEEP_INCLUDED\" = \"include\"\n",
+			userTOML: "[shell_environment_policy]\nexclude = [\"FLIP_TO_EXCLUDE\", \"HIGH_EXCLUDED\"]\n",
+			wantValue: map[string]any{
+				"shell_environment_policy": map[string]any{
+					"inherit": "core",
+					"exclude": []any{"FLIP_TO_EXCLUDE", "HIGH_EXCLUDED"},
+				},
+			},
+		},
+		{
+			id:       "merge_multi_agent_v2_compatibility_excludes_opaque_desktop_paths",
+			rustTest: "merge_multi_agent_v2_compatibility_excludes_opaque_desktop_paths",
+			baseTOML: "[desktop.features.multi_agent_v2]\nenabled = true\n",
+			userTOML: "[desktop.features]\nmulti_agent_v2 = false\n",
+			wantValue: map[string]any{
+				"desktop": map[string]any{
+					"features": map[string]any{"multi_agent_v2": false},
+				},
+			},
+		},
+		{
+			id:       "merge_multi_agent_v2_compatibility_excludes_opaque_desktop_paths_table",
+			rustTest: "merge_multi_agent_v2_compatibility_excludes_opaque_desktop_paths",
+			baseTOML: "[desktop.features]\nmulti_agent_v2 = true\n",
+			userTOML: "[desktop.features.multi_agent_v2]\ncustom = true\n",
+			wantValue: map[string]any{
+				"desktop": map[string]any{
+					"features": map[string]any{"multi_agent_v2": map[string]any{"custom": true}},
+				},
+			},
+		},
 	}
 
 	for _, tc := range cases {
