@@ -370,6 +370,13 @@
                       "area":  "parity",
                       "reason":  "All 39 Rust commits from 25eecb071e through bbbf396839 are machine-accounted. The final 16-commit intake covers bundled code-mode host resolution, persisted feedback hashes, MCP credential isolation, host skills, shell environment restrictions, external connector/session sync, collaboration messages and per-thread MCP binding.",
                       "test":  "go test ./... -count=1; go vet ./...; go test -race ./... -count=1; go test ./parity ./features -count=1"
+                  },
+                  {
+                      "id":  "record-replay-l2-harness",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "L2 record-replay facility (recordreplay): parses the Rust-recorded tui/tests/fixtures/oss-story.jsonl trace (8041 events) into a normalized contract view (timestamps, machine paths and model text excluded per documented rules), freezes a structural digest as a Go golden so upstream recording drift is flagged, and replays the recording's task lifecycle through Go's paginated rollout.Recorder, cross-checking persisted event sequence, item states and recoverability (Resume) against the recording; token-free and reusable in CI.",
+                      "test":  "go test ./recordreplay ./parity -count=1"
                   }
               ]
 }

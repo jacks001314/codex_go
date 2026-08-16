@@ -225,6 +225,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"prompt",
 		"protocol",
 		"realtime",
+		"recordreplay",
 		"remotecontrol",
 		"review",
 		"rollout",

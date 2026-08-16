@@ -8,6 +8,12 @@ This directory separates the last certified baseline from the active alignment t
 - `domains.json` tracks implementation status and acceptance criteria by behavior domain.
 - `contracts/manifest.json` maps Rust protocol/data oracles to their Go implementation and verifier.
 
+The L2 record-replay facility lives in `../recordreplay/`: it parses Rust-recorded
+traces (e.g. `tui/tests/fixtures/oss-story.jsonl`), freezes a structural digest as
+`recordreplay/testdata/oss-story-digest.json`, and replays the recorded task
+lifecycle through Go's paginated rollout recorder (event sequence, item states,
+recoverability; token-free).
+
 `complete`, `equivalent`, and `not_applicable` are closed states and require evidence. A candidate can be marked `certificationReady` only when every domain and commit is closed, every contract is complete, and no exception status exists.
 
 Run the local gate against the sibling Rust checkout with:
