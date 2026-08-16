@@ -837,8 +837,12 @@ type Model struct {
 	// line, p pastes it after the cursor).
 	vimYank                         string
 	// vimPendingOp tracks a pending Vim line operator (d or y) waiting for its
-	// repeat key, enabling dd / yy.
+	// repeat key, enabling dd / yy / cc.
 	vimPendingOp                    string
+	// vimPendingObject tracks a pending Vim text-object selection after an
+	// operator: "inner" (i) or "around" (a), waiting for the object key
+	// (w / W / ( / ) / b).
+	vimPendingObject                string
 	petRuntime                      *petRuntime
 	petCodexHome                    string
 	petEnv                          map[string]string

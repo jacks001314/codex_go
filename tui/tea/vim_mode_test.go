@@ -68,6 +68,135 @@ func TestVimModeToggleStartsInNormalModeAndInsertTypes(t *testing.T) {
 	}
 }
 
+// TestVimOperatorMotionsDeleteYankChangeLikeVim pins d/y/c applied to
+// horizontal motions: dw / dh / d0 / d$ / c$ / yw.
+func TestVimOperatorMotionsDeleteYankChangeLikeVim(t *testing.T) {
+	// dw deletes from the cursor to the start of the next word.
+	m := vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'w')
+	if got := m.composer.Value(); got != "hello world" {
+		t.Fatalf("dw value = %q, want hello world", got)
+	}
+
+	// dh deletes the character left of the cursor.
+	m = vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'h')
+	if got := m.composer.Value(); got != "hellobrave world" {
+		t.Fatalf("dh value = %q, want hellobrave world", got)
+	}
+
+	// d0 deletes to the start of the line; d$ to the end.
+	m = vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, '0')
+	if got := m.composer.Value(); got != "brave world" {
+		t.Fatalf("d0 value = %q, want brave world", got)
+	}
+	m = vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, '$')
+	if got := m.composer.Value(); got != "hello " {
+		t.Fatalf("d$ value = %q, want hello ", got)
+	}
+
+	// c$ deletes to the line end and enters insert mode.
+	m = vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'c')
+	m = vimKeyPress(m, '$')
+	if got := m.composer.Value(); got != "hello " || !m.vimInsert {
+		t.Fatalf("c$ value = %q insert=%v, want hello  + insert", got, m.vimInsert)
+	}
+
+	// yw yanks from the cursor to the next word start.
+	m = vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'y')
+	m = vimKeyPress(m, 'w')
+	if got := m.vimYank; got != "brave " {
+		t.Fatalf("yw yank = %q, want brave ", got)
+	}
+}
+
+// TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim pins diw / daw /
+// di( and the yank-paste path (yiw + p).
+func TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim(t *testing.T) {
+	m := vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'i')
+	m = vimKeyPress(m, 'w')
+	if got := m.composer.Value(); got != "hello  world" {
+		t.Fatalf("diw value = %q, want hello  world (inner word)", got)
+	}
+
+	m = vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'a')
+	m = vimKeyPress(m, 'w')
+	if got := m.composer.Value(); got != "helloworld" {
+		t.Fatalf("daw value = %q, want helloworld (around word)", got)
+	}
+
+	m = vimTestModel("call(foo, bar)")
+	m.composer.SetCursor(7)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'i')
+	m = vimKeyPress(m, '(')
+	if got := m.composer.Value(); got != "call()" {
+		t.Fatalf("di( value = %q, want call()", got)
+	}
+
+	m = vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'y')
+	m = vimKeyPress(m, 'i')
+	m = vimKeyPress(m, 'w')
+	if got := m.vimYank; got != "brave" {
+		t.Fatalf("yiw yank = %q, want brave", got)
+	}
+	m = vimKeyPress(m, 'p')
+	if got := m.composer.Value(); got != "hello bravebrave world" {
+		t.Fatalf("yiw+p value = %q, want hello bravebrave world (paste after cursor)", got)
+	}
+}
+
+// TestVimLineOperatorRepeatsAndEscCancel pins cc / yy and operator cancel.
+func TestVimLineOperatorRepeatsAndEscCancel(t *testing.T) {
+	m := vimTestModel("line one\nline two")
+	m.composer.CursorUp()
+	m.composer.SetCursor(0)
+	m = vimKeyPress(m, 'c')
+	m = vimKeyPress(m, 'c')
+	if got := m.composer.Value(); got != "line two" || !m.vimInsert {
+		t.Fatalf("cc value = %q insert=%v, want line two + insert", got, m.vimInsert)
+	}
+
+	m = vimTestModel("alpha beta")
+	m = vimKeyPress(m, 'y')
+	m = vimKeyPress(m, 'y')
+	if got := m.vimYank; got != "alpha beta" {
+		t.Fatalf("yy yank = %q, want alpha beta", got)
+	}
+
+	// Esc cancels a pending operator; the following w is then a plain motion.
+	m = vimTestModel("hello brave world")
+	m.composer.SetCursor(0)
+	m = vimKeyPress(m, 'd')
+	m = vimEscape(m)
+	m = vimKeyPress(m, 'w')
+	if got := m.composer.Value(); got != "hello brave world" {
+		t.Fatalf("cancelled operator mutated value: %q", got)
+	}
+}
+
 // TestVimMotionsMoveCursorLikeVim pins h/l/w/b/e/0/$ on a single line.
 func TestVimMotionsMoveCursorLikeVim(t *testing.T) {
 	m := vimTestModel("alpha beta gamma")

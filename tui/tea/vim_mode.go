@@ -24,27 +24,45 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		if keySpec == "esc" {
 			m.vimInsert = false
 			m.vimPendingOp = ""
+			m.vimPendingObject = ""
 			return true
 		}
 		// Insert mode types normally.
 		return false
 	}
-	// Normal mode: a pending line operator (d or y) waits for its repeat key.
+	// Normal mode: a pending operator (d / y / c) waits for a motion, a text
+	// object, or its repeat key (dd / yy / cc).
 	if m.vimPendingOp != "" {
-		if keySpec == m.vimPendingOp {
-			switch m.vimPendingOp {
-			case "d":
-				m.deleteVimLine()
-			case "y":
-				m.yankVimLine()
+		if m.vimPendingObject != "" {
+			if m.applyVimOperatorTextObject(keySpec) {
+				return true
 			}
+			// An invalid object key cancels the pending operator.
 			m.vimPendingOp = ""
+			m.vimPendingObject = ""
+		} else if keySpec == m.vimPendingOp {
+			m.applyVimLineOperatorRepeat()
 			return true
+		} else {
+			switch {
+			case keySpec == "i":
+				m.vimPendingObject = "inner"
+				return true
+			case keySpec == "a":
+				m.vimPendingObject = "around"
+				return true
+			case keySpec == "esc":
+				m.vimPendingOp = ""
+				return true
+			case m.vimOperatorMotion(keySpec):
+				return true
+			default:
+				// A different key cancels the pending operator and dispatches
+				// normally below.
+				m.vimPendingOp = ""
+				m.vimPendingObject = ""
+			}
 		}
-		// A different key cancels the pending operator. The full operator +
-		// motion/text-object engine is a tracked follow-up; the key then
-		// dispatches normally below.
-		m.vimPendingOp = ""
 	}
 	switch {
 	case m.keyMatches("vim_normal", "enter_insert", keySpec):
@@ -103,6 +121,8 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		m.vimPendingOp = "d"
 	case m.keyMatches("vim_normal", "start_yank_operator", keySpec):
 		m.vimPendingOp = "y"
+	case m.keyMatches("vim_normal", "start_change_operator", keySpec):
+		m.vimPendingOp = "c"
 	default:
 		return false
 	}
@@ -307,6 +327,242 @@ func vimNextWordStart(runes []rune, from int) int {
 		i++
 	}
 	return i
+}
+
+// vimLineStartByteOffset returns the byte offset of the current line's start
+// within the composer value.
+func (m *Model) vimLineStartByteOffset() int {
+	lines := strings.Split(m.composer.Value(), "\n")
+	offset := 0
+	for i := 0; i < m.composer.Line() && i < len(lines); i++ {
+		offset += len(lines[i]) + 1
+	}
+	return offset
+}
+
+// applyVimLineOperatorRepeat handles dd / yy / cc: the operator repeated on
+// itself acts on the whole current line.
+func (m *Model) applyVimLineOperatorRepeat() {
+	op := m.vimPendingOp
+	m.vimPendingOp = ""
+	m.vimPendingObject = ""
+	switch op {
+	case "d":
+		m.deleteVimLine()
+	case "y":
+		m.yankVimLine()
+	case "c":
+		m.deleteVimLine()
+		m.vimInsert = true
+	}
+}
+
+// vimOperatorMotion applies a pending operator to a horizontal motion
+// (h / l / w / b / e / 0 / $). Returns false when keySpec is not an operator
+// motion.
+func (m *Model) vimOperatorMotion(keySpec string) bool {
+	line := m.vimCurrentLine()
+	col := m.vimCursorColumn()
+	runes := []rune(line)
+	from := runeIndexForByte(line, col)
+	var start, end int
+	switch {
+	case keySpec == "h" || keySpec == "left":
+		if col <= 0 {
+			m.cancelVimOperator()
+			return true
+		}
+		start, end = col-1, col
+	case keySpec == "l" || keySpec == "right":
+		if col >= len(line) {
+			m.cancelVimOperator()
+			return true
+		}
+		start, end = col, col+1
+	case keySpec == "w":
+		start, end = col, byteOffsetForRuneIndex(line, vimNextWordStart(runes, from))
+	case keySpec == "b":
+		start, end = byteOffsetForRuneIndex(line, vimPrevWordStart(runes, from)), col
+	case keySpec == "e":
+		start, end = col, byteOffsetForRuneIndex(line, vimWordEndIndex(runes, from))+1
+	case keySpec == "0":
+		start, end = 0, col
+	case keySpec == "$" || keySpec == "shift-$":
+		start, end = col, len(line)
+	default:
+		return false
+	}
+	m.applyVimOperatorRange(start, end)
+	return true
+}
+
+// applyVimOperatorTextObject applies a pending operator to a text object
+// selected after i / a (inner / around) or directly for parens. Returns false
+// when keySpec is not a valid text-object key for the current selection mode.
+func (m *Model) applyVimOperatorTextObject(keySpec string) bool {
+	line := m.vimCurrentLine()
+	runes := []rune(line)
+	col := m.vimCursorColumn()
+	from := runeIndexForByte(line, col)
+	var start, end int
+	switch {
+	case keySpec == "w":
+		wordStart := byteOffsetForRuneIndex(line, vimWordStartIndex(runes, from))
+		wordEnd := byteOffsetForRuneIndex(line, vimWordEndIndex(runes, from)) + 1
+		if m.vimPendingObject == "around" {
+			start = vimWordAroundStart(line, wordStart)
+			end = vimWordAroundEnd(line, wordEnd)
+		} else {
+			start, end = wordStart, wordEnd
+		}
+	case keySpec == "(" || keySpec == "shift-(" || keySpec == ")" || keySpec == "shift-)" || keySpec == "b":
+		parenStart, parenEnd, ok := vimEnclosingParens(line, col)
+		if !ok {
+			m.cancelVimOperator()
+			return true
+		}
+		if m.vimPendingObject == "around" {
+			start, end = parenStart, parenEnd+1
+		} else {
+			start, end = parenStart+1, parenEnd
+		}
+	default:
+		return false
+	}
+	m.applyVimOperatorRange(start, end)
+	return true
+}
+
+func (m *Model) cancelVimOperator() {
+	m.vimPendingOp = ""
+	m.vimPendingObject = ""
+}
+
+// applyVimOperatorRange applies the pending operator (d delete, y yank,
+// c change + insert) to the byte range [start, end) of the current line.
+func (m *Model) applyVimOperatorRange(start, end int) {
+	op := m.vimPendingOp
+	m.vimPendingOp = ""
+	m.vimPendingObject = ""
+	line := m.vimCurrentLine()
+	if start < 0 {
+		start = 0
+	}
+	if end > len(line) {
+		end = len(line)
+	}
+	if start > end {
+		start, end = end, start
+	}
+	value := m.composer.Value()
+	offset := m.vimLineStartByteOffset()
+	switch op {
+	case "d":
+		next := value[:offset+start] + value[offset+end:]
+		m.composer.SetValue(next)
+		m.composer.SetCursor(offset + start)
+	case "y":
+		m.vimYank = value[offset+start : offset+end]
+	case "c":
+		next := value[:offset+start] + value[offset+end:]
+		m.composer.SetValue(next)
+		m.composer.SetCursor(offset + start)
+		m.vimInsert = true
+	}
+}
+
+// vimWordStartIndex returns the rune index of the start of the word under or
+// before the cursor.
+func vimWordStartIndex(runes []rune, from int) int {
+	i := from
+	if i >= len(runes) {
+		i = len(runes) - 1
+	}
+	for i > 0 && isVimSpace(runes[i]) {
+		i--
+	}
+	for i > 0 && !isVimSpace(runes[i-1]) {
+		i--
+	}
+	return i
+}
+
+// vimWordAroundStart returns the byte offset of the start of the whitespace
+// run immediately before the word (or the word start when none).
+func vimWordAroundStart(line string, wordStart int) int {
+	i := wordStart
+	for i > 0 {
+		r, size := utf8.DecodeLastRuneInString(line[:i])
+		if !isVimSpace(r) {
+			break
+		}
+		i -= size
+	}
+	return i
+}
+
+// vimWordAroundEnd returns the byte offset just after the whitespace run
+// immediately following the word (or the word end when none).
+func vimWordAroundEnd(line string, wordEnd int) int {
+	i := wordEnd
+	for i < len(line) {
+		r, size := utf8.DecodeRuneInString(line[i:])
+		if !isVimSpace(r) {
+			break
+		}
+		i += size
+	}
+	return i
+}
+
+// vimEnclosingParens returns the byte range of the innermost enclosing
+// parentheses around the cursor column in the current line.
+func vimEnclosingParens(line string, col int) (int, int, bool) {
+	if col < 0 {
+		col = 0
+	}
+	if col > len(line) {
+		col = len(line)
+	}
+	// Find the nearest unmatched '(' before the cursor, then the matching ')'.
+	depth := 0
+	open := -1
+	for i := 0; i < col; i++ {
+		if line[i] == '(' {
+			if depth == 0 {
+				open = i
+			}
+			depth++
+		} else if line[i] == ')' {
+			if depth > 0 {
+				depth--
+				if depth == 0 {
+					open = -1
+				}
+			}
+		}
+	}
+	if open < 0 {
+		return 0, 0, false
+	}
+	close := -1
+	depth = 0
+	for i := open; i < len(line); i++ {
+		switch line[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				close = i
+				i = len(line)
+			}
+		}
+	}
+	if close < 0 {
+		return 0, 0, false
+	}
+	return open, close, true
 }
 
 func vimPrevWordStart(runes []rune, from int) int {
