@@ -98,6 +98,10 @@ type Runner struct {
 	UseResponsesAPI  bool
 	HTTPClient       model.HTTPDoer
 	Now              func() time.Time
+
+	goalMu       *sync.Mutex
+	goalThreadID string
+	goalTurnID   string
 }
 
 func NewRunner(codexHome string) *Runner {
@@ -106,6 +110,7 @@ func NewRunner(codexHome string) *Runner {
 		UseResponsesAPI: true,
 		Now:             time.Now,
 		UnifiedExec:     tool.NewUnifiedExecManager(),
+		goalMu:          &sync.Mutex{},
 	}
 }
 
@@ -337,6 +342,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		webSearchOptions.TurnMetadata = clientMetadata[codexapi.ClientCodexTurnMetadataHeader]
 	}
 	turnResult, err := r.runAgentTurn(ctx, req, agent, &agentRunConfig{
+		Config:                         cfg,
 		Prompt:                         runPrompt,
 		InputItems:                     inputItems,
 		Model:                          modelID,
@@ -478,6 +484,7 @@ func execReviewSubagentMetadata(req *Request) (string, string) {
 }
 
 type agentRunConfig struct {
+	Config                         *config.Config
 	Prompt                         string
 	Instructions                   string
 	InputItems                     []any
@@ -929,6 +936,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 	if run == nil {
 		return nil, errors.New("agent run config is nil")
 	}
+	r.setGoalTurnContext(strings.TrimSpace(run.ThreadID), strings.TrimSpace(run.TurnID))
 	runForRouter := *run
 	var ownedCodeModeProvider interface{ Close() error }
 	if r.ToolRouter == nil {
@@ -1009,6 +1017,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	if r == nil {
 		return nil, errors.New("exec runner is nil")
 	}
+	goalExecutors := r.goalToolExecutorsForRequest(req, run)
 	if r.ToolRouter != nil {
 		if run != nil && run.ViewImage != nil {
 			if err := r.ToolRouter.RegisterIfAbsent(tool.NewViewImageHandler(*run.ViewImage)); err != nil {
@@ -1081,6 +1090,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.AgentDefaults = run.AgentDefaults
 		options.DisableWaitAgent = run.DisableWaitAgent
 	}
+	options.ExtraTools = goalExecutors
 	return turn.BuildToolRouter(options)
 }
 

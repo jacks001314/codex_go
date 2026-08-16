@@ -64,6 +64,11 @@ type SubmitRequest struct {
 	MentionCatalog         chatwidget.SubmissionMentionCatalog
 	IDEContext             *idecontext.IdeContext
 	CollaborationMode      *chatwidget.CollaborationMode
+	// InternalInputItems are turn input items that reach the model but are not
+	// rendered as a user message. Goal continuations use them to start work on
+	// an active objective without a visible prompt (mirrors Rust's internal
+	// goal steering input).
+	InternalInputItems []any
 }
 
 type SubmitRequestFunc func(request SubmitRequest) bubbletea.Cmd
@@ -149,6 +154,12 @@ type GoalEditTextFunc func(threadID string, objective string) (string, error)
 // oversized objective) into app-server files and returns the objective to
 // persist, mirroring Rust goal_files::materialize_goal_draft.
 type GoalDraftMaterializeFunc func(draft codextui.GoalDraft) (string, error)
+
+// GoalContinuationFunc starts an automatic continuation turn toward an active
+// goal, mirroring the Rust app-server's goal runtime effects after /goal set
+// or resume. The TUI supplies the internal continuation input so the model
+// starts working without a visible user message.
+type GoalContinuationFunc func(goal appserver.Goal) bubbletea.Cmd
 
 type SettingsEdit struct {
 	KeyPath string
@@ -633,6 +644,7 @@ type Options struct {
 	OnClearGoal                   GoalClearerFunc
 	OnGoalEditText                GoalEditTextFunc
 	OnGoalDraftMaterialize        GoalDraftMaterializeFunc
+	OnGoalContinuation            GoalContinuationFunc
 	OnWriteSettings               SettingsWriteFunc
 	OnUpdateCollaborationMode     CollaborationModeUpdateFunc
 	OnWriteMemorySettings         MemorySettingsWriteFunc
@@ -846,6 +858,7 @@ type Model struct {
 	onClearGoal                       GoalClearerFunc
 	onGoalEditText                    GoalEditTextFunc
 	onGoalDraftMaterialize            GoalDraftMaterializeFunc
+	onGoalContinuation                GoalContinuationFunc
 	pendingGoalDraft                  *codextui.GoalDraft
 	onWriteSettings                   SettingsWriteFunc
 	onUpdateCollaborationMode         CollaborationModeUpdateFunc
@@ -1083,6 +1096,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onClearGoal:                     options.OnClearGoal,
 		onGoalEditText:                  options.OnGoalEditText,
 		onGoalDraftMaterialize:          options.OnGoalDraftMaterialize,
+		onGoalContinuation:              options.OnGoalContinuation,
 		onWriteSettings:                 options.OnWriteSettings,
 		onUpdateCollaborationMode:       options.OnUpdateCollaborationMode,
 		onWriteMemorySettings:           options.OnWriteMemorySettings,
@@ -2493,8 +2507,16 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	m.Transcript.lastTurnError = ""
 	m.notice = ""
 	m.refreshTranscript()
-	if len(m.queued) > 0 || (m.currentGoal != nil && m.currentGoal.Status == appserver.GoalActive) {
+	if len(m.queued) > 0 || len(m.rejectedSteers) > 0 {
 		return nil
+	}
+	// Rust's goal runtime continues an active goal whenever the thread is
+	// idle. Refresh the persisted goal first so the model's update_goal
+	// completion/block decisions during the turn are honored instead of
+	// looping on a stale in-memory status.
+	if m.currentGoal != nil && m.currentGoal.Status == appserver.GoalActive &&
+		m.onGoalContinuation != nil && m.onReadGoal != nil {
+		return m.readGoalForAction(goalActionRefresh, m.goalThreadID(), "")
 	}
 	response := message.AssistantMessage
 	if strings.TrimSpace(response) == "" {

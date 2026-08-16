@@ -22,6 +22,7 @@ const (
 	goalActionPause      = "pause"
 	goalActionResume     = "resume"
 	goalActionClear      = "clear"
+	goalActionRefresh    = "refresh"
 )
 
 func (m *Model) applyGoalCommand(args string) bubbletea.Cmd {
@@ -254,6 +255,7 @@ func (m *Model) applyGoalResult(msg GoalResultMsg) bubbletea.Cmd {
 		m.applyGoalUpdated(*msg.Goal, false)
 		decision := tuiapp.ThreadGoalSetSuccessDecision(true, *msg.Goal)
 		m.showGoalInfo(decision.InfoMessage, decision.Hint)
+		return m.maybeContinueGoal(msg.Goal)
 	case goalActionPause, goalActionResume:
 		if msg.Goal == nil {
 			return nil
@@ -261,8 +263,41 @@ func (m *Model) applyGoalResult(msg GoalResultMsg) bubbletea.Cmd {
 		m.applyGoalUpdated(*msg.Goal, false)
 		decision := tuiapp.ThreadGoalStatusUpdateDecision(true, msg.Goal, nil)
 		m.showGoalInfo(decision.InfoMessage, decision.Hint)
+		return m.maybeContinueGoal(msg.Goal)
+	case goalActionRefresh:
+		// Post-turn refresh: the model may have completed, blocked, or cleared
+		// the goal during the turn, so re-read it before deciding whether to
+		// start another continuation. Errors are background noise and should
+		// not surface as a goal command failure.
+		if msg.Err != nil {
+			return nil
+		}
+		if msg.Goal == nil {
+			m.applyGoalCleared(msg.ThreadID, false)
+			return nil
+		}
+		m.applyGoalUpdated(*msg.Goal, false)
+		return m.maybeContinueGoal(msg.Goal)
 	}
 	return nil
+}
+
+// maybeContinueGoal starts an automatic continuation turn when the thread is
+// idle and the goal is active, mirroring Rust's goal runtime effects after
+// /goal set, edit, or resume. The continuation is delivered as an internal
+// input item so no user message is rendered.
+func (m *Model) maybeContinueGoal(goal *appserver.Goal) bubbletea.Cmd {
+	if m == nil || goal == nil || m.onGoalContinuation == nil {
+		return nil
+	}
+	if goal.Status != appserver.GoalActive {
+		return nil
+	}
+	if !m.isIdle() {
+		return nil
+	}
+	cloned := cloneGoalTea(goal)
+	return m.onGoalContinuation(*cloned)
 }
 
 func (m *Model) applyGoalDraftMaterializeResult(msg GoalDraftMaterializeMsg) bubbletea.Cmd {

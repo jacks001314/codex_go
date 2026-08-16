@@ -732,6 +732,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnClearGoal:               clearGoal,
 		OnGoalEditText:            editGoalText,
 		OnGoalDraftMaterialize:    materializeGoalDraft,
+		OnGoalContinuation:        interactiveLocalGoalContinuationCommand(ctx, root, runner, state, approvalBroker, elicitationBroker, userInputBroker, interrupts),
 		OnReadAgents:              readAgents,
 		OnSwitchAgent:             switchAgent,
 		OnDetectExternalAgent:     interactiveExternalAgentDetectHandler(root),
@@ -2451,6 +2452,49 @@ func interactiveTurnCommand(ctx context.Context, root *cli.RootOptions, runner i
 	return interactiveTurnCommandWithRequest(ctx, root, runner, state, codextea.SubmitRequest{Prompt: prompt}, approvalBroker, elicitationBroker, userInputBroker)
 }
 
+// interactiveLocalGoalContinuationCommand returns the /goal continuation hook:
+// after a goal becomes active while the thread is idle, the TUI starts a turn
+// whose model input is the goal continuation prompt (internal, not rendered as
+// a user message), mirroring Rust's app-server goal runtime effects.
+func interactiveLocalGoalContinuationCommand(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker, interrupts *interactiveInterruptController) codextea.GoalContinuationFunc {
+	return func(goal appserver.Goal) bubbletea.Cmd {
+		item := interactiveGoalContinuationInputItem(goal)
+		if item == nil {
+			return nil
+		}
+		request := codextea.SubmitRequest{InternalInputItems: []any{item}}
+		return interactiveTurnCommandWithRequest(ctx, root, runner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
+	}
+}
+
+func interactiveGoalContinuationInputItem(goal appserver.Goal) any {
+	promptText := promptctx.Continuation(&promptctx.Goal{
+		Objective:       strings.TrimSpace(goal.Objective),
+		TokenBudget:     goal.TokenBudget,
+		TokensUsed:      goal.TokensUsed,
+		TimeUsedSeconds: goal.TimeUsedSeconds,
+	})
+	if strings.TrimSpace(promptText) == "" {
+		return nil
+	}
+	rendered := contextfrag.Render(contextfrag.NewAdditionalContextFragment(contextfrag.RoleDeveloper, "goal", promptText))
+	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
+		return nil
+	}
+	role := strings.TrimSpace(rendered.Role)
+	if role == "" {
+		role = contextfrag.RoleUser
+	}
+	return map[string]any{
+		"type": "message",
+		"role": role,
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": rendered.Content,
+		}},
+	}
+}
+
 func interactiveTurnCommandWithRequest(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, request codextea.SubmitRequest, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker, interrupts ...*interactiveInterruptController) bubbletea.Cmd {
 	turnState := cloneInteractiveTurnState(state)
 	threadID := ""
@@ -2548,6 +2592,7 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 			return
 		}
 	}
+	additionalInputItems = append(additionalInputItems, request.InternalInputItems...)
 	additionalInstructions = strings.Join(nonEmptyStringsApp([]string{
 		request.AdditionalInstructions,
 		interactiveCollaborationModeInstructions(request.CollaborationMode),

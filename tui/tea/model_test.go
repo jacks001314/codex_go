@@ -6267,6 +6267,189 @@ func TestModelGoalCommandsCallRuntimeCallbacks(t *testing.T) {
 	}
 }
 
+func TestModelGoalSetStartsContinuationWhenActiveAndIdle(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-goal")
+	var continuationCalls []appserver.Goal
+	model := NewModel(state, Options{
+		Width:           100,
+		Height:          24,
+		StatusLineItems: []string{"task-progress"},
+		OnReadGoal: func(threadID string) (*appserver.Goal, error) {
+			return nil, nil
+		},
+		OnSetGoal: func(threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) (appserver.Goal, error) {
+			goalStatus := appserver.GoalActive
+			if status != nil {
+				goalStatus = *status
+			}
+			return appserver.Goal{
+				ThreadID:  threadID,
+				Objective: stringPtrValueTea(objective),
+				Status:    goalStatus,
+			}, nil
+		},
+		OnGoalContinuation: func(goal appserver.Goal) bubbletea.Cmd {
+			continuationCalls = append(continuationCalls, goal)
+			return func() bubbletea.Msg { return GoalClearedMsg{ThreadID: "thread-goal"} }
+		},
+	})
+
+	typeText(t, model, "/goal 1+1")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("/goal objective did not return preflight command")
+	}
+	_, cmd = model.Update(cmd())
+	if cmd == nil {
+		t.Fatal("/goal objective did not return set command")
+	}
+	_, cmd = model.Update(cmd())
+	if cmd == nil {
+		t.Fatal("active goal set did not start continuation command")
+	}
+	if len(continuationCalls) != 1 {
+		t.Fatalf("goal continuation calls = %d, want 1", len(continuationCalls))
+	}
+	if continuationCalls[0].Objective != "1+1" || continuationCalls[0].Status != appserver.GoalActive {
+		t.Fatalf("goal continuation goal = %#v", continuationCalls[0])
+	}
+
+	typeText(t, model, "/goal pause")
+	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("/goal pause did not return runtime command")
+	}
+	_, cmd = model.Update(cmd())
+	if cmd != nil {
+		t.Fatal("paused goal should not start a continuation command")
+	}
+	if len(continuationCalls) != 1 {
+		t.Fatalf("goal continuation calls after pause = %d, want 1", len(continuationCalls))
+	}
+}
+
+func TestModelGoalContinuationSkippedWhileTurnRunning(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-goal")
+	state.SetStatus("running")
+	var continuationCalls int
+	model := NewModel(state, Options{
+		Width:           100,
+		Height:          24,
+		StatusLineItems: []string{"task-progress"},
+		OnReadGoal: func(threadID string) (*appserver.Goal, error) {
+			return nil, nil
+		},
+		OnSetGoal: func(threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) (appserver.Goal, error) {
+			return appserver.Goal{
+				ThreadID:  threadID,
+				Objective: stringPtrValueTea(objective),
+				Status:    appserver.GoalActive,
+			}, nil
+		},
+		OnGoalContinuation: func(goal appserver.Goal) bubbletea.Cmd {
+			continuationCalls++
+			return nil
+		},
+	})
+
+	typeText(t, model, "/goal 1+1")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("/goal objective did not return preflight command")
+	}
+	_, cmd = model.Update(cmd())
+	if cmd == nil {
+		t.Fatal("/goal objective did not return set command")
+	}
+	_, cmd = model.Update(cmd())
+	if cmd != nil {
+		t.Fatal("running turn should not start a continuation command")
+	}
+	if continuationCalls != 0 {
+		t.Fatalf("goal continuation calls while running = %d, want 0", continuationCalls)
+	}
+}
+
+func TestModelGoalContinuesAfterTurnWhenStillActive(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-goal")
+	var reads int
+	var continuationCalls int
+	stored := &appserver.Goal{ThreadID: "thread-goal", Objective: "1+1", Status: appserver.GoalActive}
+	model := NewModel(state, Options{
+		Width:           100,
+		Height:          24,
+		StatusLineItems: []string{"task-progress"},
+		OnReadGoal: func(threadID string) (*appserver.Goal, error) {
+			reads++
+			return cloneGoalTea(stored), nil
+		},
+		OnGoalContinuation: func(goal appserver.Goal) bubbletea.Cmd {
+			continuationCalls++
+			return func() bubbletea.Msg { return GoalClearedMsg{ThreadID: "thread-goal"} }
+		},
+	})
+	model.currentGoal = cloneGoalTea(stored)
+
+	_, cmd := model.Update(TurnCompletedMsg{ThreadID: "thread-goal", AssistantMessage: "1 + 1 = 2."})
+	if cmd == nil {
+		t.Fatal("turn completion with active goal did not return refresh command")
+	}
+	_, cmd = model.Update(cmd())
+	if cmd == nil {
+		t.Fatal("active goal refresh did not start continuation command")
+	}
+	if reads != 1 {
+		t.Fatalf("goal refresh reads = %d, want 1", reads)
+	}
+	if continuationCalls != 1 {
+		t.Fatalf("goal continuation calls after turn = %d, want 1", continuationCalls)
+	}
+}
+
+func TestModelGoalDoesNotContinueAfterTurnWhenCompleted(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-goal")
+	var reads int
+	var continuationCalls int
+	stored := &appserver.Goal{ThreadID: "thread-goal", Objective: "1+1", Status: appserver.GoalComplete}
+	model := NewModel(state, Options{
+		Width:           100,
+		Height:          24,
+		StatusLineItems: []string{"task-progress"},
+		OnReadGoal: func(threadID string) (*appserver.Goal, error) {
+			reads++
+			return cloneGoalTea(stored), nil
+		},
+		OnGoalContinuation: func(goal appserver.Goal) bubbletea.Cmd {
+			continuationCalls++
+			return nil
+		},
+	})
+	// The in-memory status is stale (active); the persisted goal is complete.
+	model.currentGoal = &appserver.Goal{ThreadID: "thread-goal", Objective: "1+1", Status: appserver.GoalActive}
+
+	_, cmd := model.Update(TurnCompletedMsg{ThreadID: "thread-goal", AssistantMessage: "done"})
+	if cmd == nil {
+		t.Fatal("turn completion with stale active goal did not return refresh command")
+	}
+	_, cmd = model.Update(cmd())
+	if cmd != nil {
+		t.Fatal("completed goal should not start a continuation command")
+	}
+	if reads != 1 {
+		t.Fatalf("goal refresh reads = %d, want 1", reads)
+	}
+	if continuationCalls != 0 {
+		t.Fatalf("goal continuation calls after completion = %d, want 0", continuationCalls)
+	}
+	if model.currentGoal == nil || model.currentGoal.Status != appserver.GoalComplete {
+		t.Fatalf("current goal after refresh = %#v, want complete", model.currentGoal)
+	}
+}
+
 func TestModelGoalReadAndNotifications(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-goal")

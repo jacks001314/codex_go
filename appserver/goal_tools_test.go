@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/tool"
+	"codex_go/turn"
 )
 
 func TestGoalToolExecutorsCreateCompleteAndReplaceGoal(t *testing.T) {
@@ -18,10 +20,10 @@ func TestGoalToolExecutorsCreateCompleteAndReplaceGoal(t *testing.T) {
 	executors := router.goalToolExecutorsForTurn(&config.Config{Values: map[string]any{
 		"features": map[string]any{"goals": true},
 	}}, threadID, "turn-1")
-	create := goalToolExecutorByName(t, executors, goalCreateToolName)
-	update := goalToolExecutorByName(t, executors, goalUpdateToolName)
+	create := goalToolExecutorByName(t, executors, tool.GoalCreateToolName)
+	update := goalToolExecutorByName(t, executors, tool.GoalUpdateToolName)
 
-	output, err := create.Execute(ctx, goalToolInvocation(goalCreateToolName, `{"objective":"ship goal tools","token_budget":123}`))
+	output, err := create.Execute(ctx, goalToolInvocation(tool.GoalCreateToolName, `{"objective":"ship goal tools","token_budget":123}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,12 +36,12 @@ func TestGoalToolExecutorsCreateCompleteAndReplaceGoal(t *testing.T) {
 		t.Fatalf("persisted created goal = %#v, %v", goal, err)
 	}
 
-	_, err = create.Execute(ctx, goalToolInvocation(goalCreateToolName, `{"objective":"duplicate goal"}`))
+	_, err = create.Execute(ctx, goalToolInvocation(tool.GoalCreateToolName, `{"objective":"duplicate goal"}`))
 	if err == nil || !strings.Contains(err.Error(), "unfinished goal") {
 		t.Fatalf("duplicate create error = %v", err)
 	}
 
-	output, err = update.Execute(ctx, goalToolInvocation(goalUpdateToolName, `{"status":"complete"}`))
+	output, err = update.Execute(ctx, goalToolInvocation(tool.GoalUpdateToolName, `{"status":"complete"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +54,7 @@ func TestGoalToolExecutorsCreateCompleteAndReplaceGoal(t *testing.T) {
 		t.Fatalf("persisted completed goal = %#v, %v", goal, err)
 	}
 
-	output, err = create.Execute(ctx, goalToolInvocation(goalCreateToolName, `{"objective":"replacement goal"}`))
+	output, err = create.Execute(ctx, goalToolInvocation(tool.GoalCreateToolName, `{"objective":"replacement goal"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +84,55 @@ func TestGoalToolExecutorsHiddenForReviewAndDisabledFeature(t *testing.T) {
 		"features": map[string]any{"goals": true},
 	}}, threadID, "turn-1"); len(executors) != 0 {
 		t.Fatalf("review goal tools = %#v", executors)
+	}
+}
+
+// TestGoalToolOutputIsStringOnWire guards against DeepSeek's Responses API
+// rejecting structured function_call_output.output objects ("output should be
+// a string or a list of output content parts"). The structured goal snapshot
+// stays in Data for internal consumers, while the wire output must be a string.
+func TestGoalToolOutputIsStringOnWire(t *testing.T) {
+	router, stateRuntime, threadID := newGoalToolTestRouter(t)
+	if _, err := stateRuntime.ReplaceThreadGoal(context.Background(), threadID, "1+2", state.ThreadGoalActive, nil); err != nil {
+		t.Fatal(err)
+	}
+	executors := router.goalToolExecutorsForTurn(&config.Config{Values: map[string]any{
+		"features": map[string]any{"goals": true},
+	}}, threadID, "turn-1")
+	get := goalToolExecutorByName(t, executors, tool.GoalGetToolName)
+
+	output, err := get.Execute(context.Background(), goalToolInvocation(tool.GoalGetToolName, "{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Body == "" {
+		t.Fatalf("goal tool output body must be non-empty text, got %q", output.Body)
+	}
+	if _, ok := output.Data["output"].(goalToolResponse); !ok {
+		t.Fatalf("goal tool Data output lost structured value: %#v", output.Data["output"])
+	}
+	response := turn.ToolResponseFromOutput(goalToolInvocation(tool.GoalGetToolName, "{}"), output)
+	if response == nil {
+		t.Fatal("tool response is nil")
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("unmarshal wire response: %v", err)
+	}
+	wireOutput, ok := wire["output"].(string)
+	if !ok {
+		t.Fatalf("function_call_output.output must be a string on the wire, got %T: %s", wire["output"], encoded)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(wireOutput), &decoded); err != nil {
+		t.Fatalf("wire output is not JSON text: %v", err)
+	}
+	if goal, ok := decoded["goal"].(map[string]any); !ok || goal["objective"] != "1+2" {
+		t.Fatalf("wire output missing structured goal: %s", wireOutput)
 	}
 }
 
@@ -178,8 +229,8 @@ func TestGoalToolUpdateRejectsNonTerminalStatus(t *testing.T) {
 	executors := router.goalToolExecutorsForTurn(&config.Config{Values: map[string]any{
 		"features": map[string]any{"goals": true},
 	}}, threadID, "turn-1")
-	update := goalToolExecutorByName(t, executors, goalUpdateToolName)
-	_, err := update.Execute(context.Background(), goalToolInvocation(goalUpdateToolName, `{"status":"paused"}`))
+	update := goalToolExecutorByName(t, executors, tool.GoalUpdateToolName)
+	_, err := update.Execute(context.Background(), goalToolInvocation(tool.GoalUpdateToolName, `{"status":"paused"}`))
 	if err == nil || !strings.Contains(err.Error(), "only mark the existing goal complete or blocked") {
 		t.Fatalf("update paused error = %v", err)
 	}
@@ -192,14 +243,14 @@ func TestGoalToolCreateAppliesMaxBudget(t *testing.T) {
 		"goals":    map[string]any{"max_goal_token_budget": 100},
 	}}
 	executors := router.goalToolExecutorsForTurn(cfg, threadID, "turn-1")
-	create := goalToolExecutorByName(t, executors, goalCreateToolName)
+	create := goalToolExecutorByName(t, executors, tool.GoalCreateToolName)
 
-	_, err := create.Execute(context.Background(), goalToolInvocation(goalCreateToolName, `{"objective":"oversized","token_budget":101}`))
+	_, err := create.Execute(context.Background(), goalToolInvocation(tool.GoalCreateToolName, `{"objective":"oversized","token_budget":101}`))
 	if err == nil || !strings.Contains(err.Error(), "exceeds the maximum allowed goal token budget of 100") {
 		t.Fatalf("oversized budget error = %v", err)
 	}
 
-	output, err := create.Execute(context.Background(), goalToolInvocation(goalCreateToolName, `{"objective":"default budget"}`))
+	output, err := create.Execute(context.Background(), goalToolInvocation(tool.GoalCreateToolName, `{"objective":"default budget"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,10 +269,10 @@ func TestGoalToolGetAndUpdateNoGoal(t *testing.T) {
 	executors := router.goalToolExecutorsForTurn(&config.Config{Values: map[string]any{
 		"features": map[string]any{"goals": true},
 	}}, threadID, "turn-1")
-	get := goalToolExecutorByName(t, executors, goalGetToolName)
-	update := goalToolExecutorByName(t, executors, goalUpdateToolName)
+	get := goalToolExecutorByName(t, executors, tool.GoalGetToolName)
+	update := goalToolExecutorByName(t, executors, tool.GoalUpdateToolName)
 
-	output, err := get.Execute(context.Background(), goalToolInvocation(goalGetToolName, `{}`))
+	output, err := get.Execute(context.Background(), goalToolInvocation(tool.GoalGetToolName, `{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +280,7 @@ func TestGoalToolGetAndUpdateNoGoal(t *testing.T) {
 		t.Fatalf("get no goal = %#v", response)
 	}
 
-	_, err = update.Execute(context.Background(), goalToolInvocation(goalUpdateToolName, `{"status":"complete"}`))
+	_, err = update.Execute(context.Background(), goalToolInvocation(tool.GoalUpdateToolName, `{"status":"complete"}`))
 	if err == nil || !strings.Contains(err.Error(), "no goal") {
 		t.Fatalf("update no goal error = %v", err)
 	}

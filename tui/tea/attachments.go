@@ -190,7 +190,17 @@ func cloneSubmitRequest(request SubmitRequest) SubmitRequest {
 		MentionCatalog:         cloneSubmissionMentionCatalog(request.MentionCatalog),
 		IDEContext:             cloneIDEContext(request.IDEContext),
 		CollaborationMode:      cloneCollaborationMode(request.CollaborationMode),
+		InternalInputItems:     cloneAnySlice(request.InternalInputItems),
 	}
+}
+
+func cloneAnySlice(values []any) []any {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]any, len(values))
+	copy(out, values)
+	return out
 }
 
 func cloneCollaborationMode(mode *chatwidget.CollaborationMode) *chatwidget.CollaborationMode {
