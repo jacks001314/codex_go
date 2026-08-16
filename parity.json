@@ -552,6 +552,13 @@
                       "area":  "parity",
                       "reason":  "Implemented Rust's under-development feature warning + suppression: Rust's `codex features enable` prints 'Under-development features enabled: X...' to stderr for StageUnderDevelopment features unless suppress_unstable_features_warning is set; Go printed nothing. Added the config key + Config.SuppressUnstableFeaturesWarning(), features.StageFor(), and wired the Rust-mirroring warning into runFeatures' enable path (stderr, suppression hint with config path). The config-schema rust-only allowlist shrank from 11 to 10. Tests pin warn-on-enable and suppress-when-set semantics.",
                       "test":  "go test ./app -run 'TestFeaturesEnableUnderDevelopment' -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
+                  },
+                  {
+                      "id":  "l0-l1-l2-gate-reverification-2026-08-16",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Comprehensive L0/L1/L2 gate re-verification at the frozen 9ded177ce7 baseline: parity full suite + all targeted verifiers (apply-patch differential oracle, scenario double-run, tool schema policy, config schema surface, model metadata surface, error-code surface, verifier existence, event names, sandbox types), L1 unit contracts across applypatch/rollout/session/state/config/appserver/model/tool/turn/app/exec/mcp/codemode, recordreplay L2, and the sdktests unit suite (50/51 pass, 0 fail) - all green; full tree 87 packages 0 FAIL.",
+                      "test":  "go test ./... -count=1; npm --prefix sdktests run test:unit"
                   }
               ]
 }
