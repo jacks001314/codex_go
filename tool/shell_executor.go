@@ -13,6 +13,7 @@ import (
 
 	"codex_go/envutil"
 	"codex_go/execserver"
+	"codex_go/execpolicy"
 	"codex_go/network"
 	"codex_go/plugin"
 	"codex_go/sandbox"
@@ -36,6 +37,12 @@ type ShellExecutorOptions struct {
 	UnifiedExecEvents   UnifiedExecEventSink
 	UnifiedExecThreadID string
 	UnifiedExecTurnID   string
+	// ShellEnvironmentPolicy is the thread-level shell_environment_policy
+	// table used as the inferred policy for the primary (local) environment
+	// and any environment that does not provide its own resolved policy
+	// (mirroring Rust inferred_environment_config, #38902). A selected
+	// environment's resolved policy wins over this value.
+	ShellEnvironmentPolicy map[string]any
 	// SessionID mirrors Rust 97729885d4: the shared root-session ID is exposed
 	// to model-reachable shell commands as CODEX_SESSION_ID.
 	SessionID               string
@@ -63,6 +70,7 @@ type ShellExecutor struct {
 	unifiedExecEvents        UnifiedExecEventSink
 	unifiedExecThreadID      string
 	unifiedExecTurnID        string
+	shellEnvironmentPolicy   map[string]any
 	sessionID                string
 	unifiedExecEnvironments  []UnifiedExecEnvironment
 	managedNetworkResolver   ManagedNetworkResolver
@@ -122,6 +130,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.unifiedExecEvents = options.UnifiedExecEvents
 	executor.unifiedExecThreadID = options.UnifiedExecThreadID
 	executor.unifiedExecTurnID = options.UnifiedExecTurnID
+	executor.shellEnvironmentPolicy = cloneShellEnvironmentPolicy(options.ShellEnvironmentPolicy)
 	executor.sessionID = options.SessionID
 	executor.unifiedExecEnvironments = cloneUnifiedExecEnvironments(options.UnifiedExecEnvironments)
 	executor.managedNetworkResolver = options.ManagedNetworkResolver
@@ -544,6 +553,18 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		}
 		req.RemoteNetworkProxy = &launch
 	}
+	// Rust #38902: the selected turn environment's shell environment policy
+	// drives the inherited-variable filtering for shell commands, user shell
+	// tasks and unified exec. Environments without their own resolved policy
+	// fall back to the thread-derived policy (inferred_environment_config).
+	policyTable := e.shellEnvironmentPolicy
+	if environment != nil && len(environment.ShellEnvironmentPolicy) > 0 {
+		policyTable = environment.ShellEnvironmentPolicy
+	}
+	if len(policyTable) > 0 {
+		req.EnvPolicy = execpolicy.EnvPolicyFromShellEnvironmentPolicy(policyTable, req.CWD)
+		req.ThreadID = e.unifiedExecThreadID
+	}
 	var result *ShellResult
 	if e.shouldUseUnifiedExec(req) {
 		req, err = prepareUnifiedExecShellRequest(req)
@@ -622,6 +643,7 @@ func cloneUnifiedExecEnvironments(values []UnifiedExecEnvironment) []UnifiedExec
 			shell := *values[i].Shell
 			out[i].Shell = &shell
 		}
+		out[i].ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(values[i].ShellEnvironmentPolicy)
 		if values[i].AllowLoginShell != nil {
 			allowLoginShell := *values[i].AllowLoginShell
 			out[i].AllowLoginShell = &allowLoginShell
@@ -629,6 +651,33 @@ func cloneUnifiedExecEnvironments(values []UnifiedExecEnvironment) []UnifiedExec
 		if values[i].PermissionProfile != nil {
 			profile := *values[i].PermissionProfile
 			out[i].PermissionProfile = &profile
+		}
+	}
+	return out
+}
+
+// cloneShellEnvironmentPolicy deep-copies the shell_environment_policy table
+// (nested filters/set maps and pattern slices) so resolved environment configs
+// never alias the config tree they were built from.
+func cloneShellEnvironmentPolicy(table map[string]any) map[string]any {
+	if len(table) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(table))
+	for key, value := range table {
+		switch typed := value.(type) {
+		case map[string]any:
+			inner := make(map[string]any, len(typed))
+			for innerKey, innerValue := range typed {
+				inner[innerKey] = innerValue
+			}
+			out[key] = inner
+		case []any:
+			items := make([]any, len(typed))
+			copy(items, typed)
+			out[key] = items
+		default:
+			out[key] = value
 		}
 	}
 	return out

@@ -27,7 +27,7 @@ func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedEx
 	if codexHome == "" {
 		return nil, fmt.Errorf("codex home is required for Windows sandbox unified exec")
 	}
-	env := shellRunnerEnvMap(os.Environ(), req.Env)
+	env := shellRequestEnv(req)
 	if profileID := strings.TrimSpace(req.PermissionProfileID); profileID != "" {
 		env["CODEX_PERMISSION_PROFILE"] = profileID
 	}

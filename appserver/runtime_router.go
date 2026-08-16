@@ -10786,6 +10786,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
+	if table, ok := cfg.Values["shell_environment_policy"].(map[string]any); ok {
+		options.Shell.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(table)
+	}
 	options.UnifiedExec = r.services.UnifiedExec
 	if r.services.CodeModeProvider != nil {
 		options.CodeModeProvider = r.services.CodeModeProvider
@@ -11264,6 +11267,7 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 		if state.Config != nil {
 			allowLoginShell := state.Config.AllowLoginShell
 			environment.AllowLoginShell = &allowLoginShell
+			environment.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(state.Config.ShellEnvironmentPolicy)
 			environment.PermissionProfile = state.Config.PermissionProfile
 			environment.PermissionProfileID = strings.TrimSpace(state.Config.ActivePermissionProfile)
 			environment.PermissionProfileJSON = strings.TrimSpace(state.Config.PermissionProfileJSON)
@@ -11286,6 +11290,9 @@ func (r *RuntimeRouter) threadEnvironmentConfigForTurn(params *turn.TurnStartPar
 		return nil
 	}
 	config := &EnvironmentConfig{AllowLoginShell: cfg.AllowLoginShell()}
+	if table, ok := cfg.Values["shell_environment_policy"].(map[string]any); ok {
+		config.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(table)
+	}
 	cwd := firstNonEmpty(primaryTurnEnvironmentCWD(params, params.CWD), params.CWD, r.services.DefaultCWD)
 	resolution, resolveErr := turnSandboxPermissionProfile(cfg, cwd, params)
 	if resolveErr == nil && resolution != nil && resolution.Profile != nil {

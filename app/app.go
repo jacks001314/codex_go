@@ -625,51 +625,11 @@ func sandboxCloudConfigEligibleAuth(snapshot *auth.AuthDotJSON) bool {
 }
 
 func sandboxEnvPolicyFromConfig(cfg *config.Config, cwd string) *codexexec.EnvPolicy {
-	policy := &codexexec.EnvPolicy{
-		Inherit: "all",
-		CWD:     cwd,
-	}
 	if cfg == nil || cfg.Values == nil {
-		return policy
+		return codexexec.EnvPolicyFromShellEnvironmentPolicy(nil, cwd)
 	}
-	table, ok := cfg.Values["shell_environment_policy"].(map[string]any)
-	if !ok {
-		return policy
-	}
-	if inherit := stringFromAny(table["inherit"]); inherit != "" {
-		policy.Inherit = inherit
-	}
-	if ignore, ok := table["ignore_default_excludes"].(bool); ok {
-		policy.IgnoreDefaultExcludes = &ignore
-	}
-	policy.Exclude = sandboxEnvPatternsFromConfigValue(table["exclude"])
-	policy.IncludeOnly = sandboxEnvPatternsFromConfigValue(table["include_only"])
-	if include, exclude, err := config.ShellEnvironmentFilterPatterns(table); err == nil && table["filters"] != nil {
-		policy.IncludeOnly = sandboxEnvPatternsFromConfigValue(include)
-		policy.Exclude = sandboxEnvPatternsFromConfigValue(exclude)
-	}
-	policy.Set = stringMapFromAny(table["set"])
-	return policy
-}
-
-func sandboxEnvPatternsFromConfigValue(value any) []codexexec.EnvVariablePattern {
-	values := stringSliceFromAny(value)
-	if len(values) == 0 {
-		return nil
-	}
-	patterns := make([]codexexec.EnvVariablePattern, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		mode := codexexec.EnvPatternLiteral
-		if strings.ContainsAny(value, "*?") {
-			mode = codexexec.EnvPatternWildcard
-		}
-		patterns = append(patterns, codexexec.EnvVariablePattern{Mode: mode, Value: value})
-	}
-	return patterns
+	table, _ := cfg.Values["shell_environment_policy"].(map[string]any)
+	return codexexec.EnvPolicyFromShellEnvironmentPolicy(table, cwd)
 }
 
 func sandboxConfigUsesPermissionProfiles(cfg *config.Config) bool {

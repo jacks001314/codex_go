@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"codex_go/execserver"
+	"codex_go/execpolicy"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 )
@@ -55,7 +56,7 @@ func (r *LocalShellRunner) Run(ctx context.Context, req *ShellRequest) (*ShellRe
 	}
 
 	started := time.Now()
-	env := shellRunnerEnvMap(os.Environ(), req.Env)
+	env := shellRequestEnv(req)
 	if req.PermissionProfile != nil {
 		return r.runWithPermissionProfile(ctx, req, env, started)
 	}
@@ -227,6 +228,29 @@ func shellRunnerEnvMap(base []string, overrides map[string]string) map[string]st
 		env[key] = value
 	}
 	return env
+}
+
+// shellRequestEnv builds the command environment for a shell request: the
+// parent environment filtered through the request's shell environment policy
+// when one is set (mirroring Rust create_env with the selected turn
+// environment's ShellEnvironmentPolicy, #38902), then the request's explicit
+// env overrides. The policy may come from the thread-derived config or a
+// selected environment's resolved configuration.
+func shellRequestEnv(req *ShellRequest) map[string]string {
+	base := shellRunnerEnvMap(os.Environ(), nil)
+	if req != nil && req.EnvPolicy != nil {
+		base = execpolicy.CreateEnv(req.EnvPolicy, &req.ThreadID, base)
+	}
+	if req == nil {
+		return base
+	}
+	for key, value := range req.Env {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		base[key] = value
+	}
+	return base
 }
 
 func shellRunnerAbsPath(path string) (string, error) {

@@ -1,7 +1,7 @@
 {
     "schemaVersion":  1,
     "rustFromExclusive":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
-    "rustToInclusive":  "ed32158e90ef872c5eef96baf2f14feac70aee6e",
+    "rustToInclusive":  "6c108912eeacabfc82723bf44f8a23f6e2f86585",
     "commits":  [
                     {
                         "sha":  "3c7ae4a81204cbee45084b4fb43b3630c79550c9",
@@ -242,6 +242,33 @@
                         "evidence":  [
                                          "go test ./tui/tea -run 'TestModelPwd|TestModelCd' -count=1; go test ./tui/... ./app -run 'Slash|Command|WorkingDirectory' -count=1; go test ./app -run TestInteractiveWorkingDirectoryChangeHandlerForksAtNewCWD -count=1",
                                          "Implemented /cd [path] (defaults to ~) and /pwd (+ /cwd alias) in the Go tea TUI mirroring Rust #38894: CommandCd/CommandPwd enum + parse + slash frames with Rust descriptions; /pwd displays 'Current working directory: <cwd>' as an info message; /cd runs eligibility gates (idle primary session, no side conversation, no queued submissions, no pending steers, no background terminals, not in review mode), resolves relative paths against the current cwd and ~/ against the home dir, forks the current thread at the new cwd preserving history, patches the fork's cwd, archives the old thread, and attaches the replacement session. CommandCd added to CommandSupportsInlineArgs so '/cd <path>' dispatches directly. Model tests cover pwd display, cd replacement + history preservation, running-session rejection, and ~ default; app test covers fork-at-new-cwd + archive + missing-dir rejection."
+                                     ]
+                    },
+                    {
+                        "sha":  "f85e81d30be6a57705bbd957e287de000a4870d2",
+                        "subject":  "Move requirements policy ownership to execpolicy (#38899)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "config"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "Rust-internal refactor: RequirementsExecPolicy (struct + order-independent fingerprint equality + AsRef<Policy>) moved verbatim from config/src/requirements_exec_policy.rs to execpolicy/src/policy.rs and re-exported from codex-config. No Go-visible behavior, wire, schema or config surface changed; no Go alignment work required (N/A). Verified by the Rust diff itself: 5 files, pure type relocation."
+                                     ]
+                    },
+                    {
+                        "sha":  "6c108912eeacabfc82723bf44f8a23f6e2f86585",
+                        "subject":  "Honor per-environment shell variable policies (#38902)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "config",
+                                        "exec",
+                                        "appserver"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./execpolicy ./tool ./app ./appserver -count=1",
+                                         "Go now carries ShellEnvironmentPolicy on the resolved EnvironmentConfig (protocol parity), infers it from the thread config (Rust inferred_environment_config), and applies the selected turn environment's policy for shell commands, user shell tasks and unified exec (Rust TurnEnvironment::shell_environment_policy): the shell executor resolves the thread-derived policy with the environment's resolved policy winning, the local runner/unified-exec build the command env via execpolicy.CreateEnv (inherit none/core/all, default excludes, exclude/include_only patterns, set overrides, filters table), and the remote exec-server receives the policy as ExecEnvPolicy instead of the hardcoded inherit-all default. Verified dynamically (TestShellExecutorSetsEnvPolicyFromThreadAndEnvironmentLikeRust, TestShellRequestEnv*, TestShellEnvPolicyDifferentialLikeRustExecCommandUsesInstalledPolicy, execpolicy converter tests) and statically (EnvironmentConfig JSON roundtrip + thread inference tests). Env policy logic extracted from codex_go/exec into the leaf codex_go/execpolicy package (mirrors the codex-execpolicy crate split) so the tool layer can use it without an import cycle."
                                      ]
                     }
                 ]

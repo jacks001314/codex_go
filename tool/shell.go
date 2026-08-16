@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"codex_go/execserver"
+	"codex_go/execpolicy"
 	"codex_go/network"
 	"codex_go/sandbox"
 	shellutil "codex_go/shell"
@@ -87,6 +88,15 @@ type ShellRequest struct {
 	YieldTimeMS                     uint64
 	MaxOutputTokens                 *int
 	Env                             map[string]string
+	// EnvPolicy, when set, filters the inherited environment for this command
+	// (mirroring Rust create_env with the selected turn environment's
+	// ShellEnvironmentPolicy, #38902). The command environment is built from
+	// the parent environment through this policy, then req.Env overrides are
+	// applied on top.
+	EnvPolicy                       *execpolicy.EnvPolicy
+	// ThreadID is exposed to model-reachable commands as CODEX_THREAD_ID when
+	// an EnvPolicy builds the command environment.
+	ThreadID                        string
 	TTY                             bool
 	SandboxPermissions              sandbox.SandboxPermissions
 	AdditionalPermissions           *sandbox.AdditionalPermissionProfile
@@ -122,6 +132,10 @@ type UnifiedExecEnvironment struct {
 	Shell         *Shell
 	ExecServerURL string
 	NoiseProvider execserver.NoiseRendezvousConnectProvider
+	// ShellEnvironmentPolicy is this environment's resolved shell environment
+	// policy table (empty when the thread-derived policy applies), mirroring
+	// Rust protocol::EnvironmentConfig shell_environment_policy (#38902).
+	ShellEnvironmentPolicy map[string]any
 	// AllowLoginShell overrides the turn-level login-shell policy for this
 	// environment when non-nil (Rust per-environment EnvironmentConfig,
 	// #38521/#38673).

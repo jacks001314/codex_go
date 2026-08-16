@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"codex_go/execserver"
+	"codex_go/execpolicy"
 	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/utils"
@@ -58,6 +59,31 @@ type UnifiedExecManager struct {
 	maxEmptyPollYieldTimeMS uint64
 	processes               map[int]*unifiedExecProcess
 	pausedThreads           map[string]chan struct{}
+}
+
+// execEnvPolicyFromShellPolicy converts a codexexec EnvPolicy into the
+// exec-server wire form. Pattern lists are carried as their raw pattern
+// strings (the server wildcard-matches them); the default-excludes flag
+// mirrors CreateEnv's nil-means-true default.
+func execEnvPolicyFromShellPolicy(policy *execpolicy.EnvPolicy) *execserver.ExecEnvPolicy {
+	out := &execserver.ExecEnvPolicy{Inherit: "all", IgnoreDefaultExcludes: true}
+	if policy == nil {
+		return out
+	}
+	if strings.TrimSpace(policy.Inherit) != "" {
+		out.Inherit = policy.Inherit
+	}
+	if policy.IgnoreDefaultExcludes != nil {
+		out.IgnoreDefaultExcludes = *policy.IgnoreDefaultExcludes
+	}
+	for i := range policy.Exclude {
+		out.Exclude = append(out.Exclude, policy.Exclude[i].Value)
+	}
+	for i := range policy.IncludeOnly {
+		out.IncludeOnly = append(out.IncludeOnly, policy.IncludeOnly[i].Value)
+	}
+	out.Set = policy.Set
+	return out
 }
 
 func (m *UnifiedExecManager) SetThreadElicitationPaused(threadID string, paused bool) {
@@ -269,9 +295,7 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 	}
 	cmd := osexec.Command(req.Command[0], req.Command[1:]...)
 	cmd.Dir = req.CWD
-	if len(req.Env) > 0 {
-		cmd.Env = envSlice(shellRunnerEnvMap(os.Environ(), req.Env))
-	}
+	cmd.Env = envSlice(shellRequestEnv(req))
 	started, err := startUnifiedExecCommand(cmd, req.TTY)
 	if err != nil {
 		m.releaseProcessID(processID)
@@ -484,11 +508,15 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 			return nil, err
 		}
 	}
+	envPolicy := &execserver.ExecEnvPolicy{Inherit: "all", IgnoreDefaultExcludes: true}
+	if req.EnvPolicy != nil {
+		envPolicy = execEnvPolicyFromShellPolicy(req.EnvPolicy)
+	}
 	startResponse, err := client.Start(startCtx, &execserver.ExecParams{
 		ProcessID:             remoteID,
 		Argv:                  append([]string(nil), req.Command...),
 		CWD:                   remoteCWD,
-		EnvPolicy:             &execserver.ExecEnvPolicy{Inherit: "all", IgnoreDefaultExcludes: true},
+		EnvPolicy:             envPolicy,
 		Env:                   cloneEnv(req.Env),
 		TTY:                   req.TTY,
 		PipeStdin:             false,

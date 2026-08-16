@@ -1,9 +1,76 @@
-package exec
+package execpolicy
 
 import (
 	"runtime"
 	"testing"
 )
+
+func TestEnvPolicyFromShellEnvironmentPolicy(t *testing.T) {
+	table := map[string]any{
+		"inherit":      "core",
+		"exclude":      []any{"SECRET_*"},
+		"include_only": []any{"PATH"},
+		"set":          map[string]any{"CODEX_KEPT": "yes"},
+	}
+	policy := EnvPolicyFromShellEnvironmentPolicy(table, "/repo")
+	if policy.Inherit != "core" || policy.CWD != "/repo" {
+		t.Fatalf("policy = %#v", policy)
+	}
+	if len(policy.Exclude) != 1 || policy.Exclude[0].Value != "SECRET_*" || policy.Exclude[0].Mode != EnvPatternWildcard {
+		t.Fatalf("exclude = %#v", policy.Exclude)
+	}
+	if len(policy.IncludeOnly) != 1 || policy.IncludeOnly[0].Value != "PATH" || policy.IncludeOnly[0].Mode != EnvPatternLiteral {
+		t.Fatalf("include_only = %#v", policy.IncludeOnly)
+	}
+	if policy.Set["CODEX_KEPT"] != "yes" {
+		t.Fatalf("set = %#v", policy.Set)
+	}
+
+	// The filters table wins over the legacy exclude/include_only lists.
+	filters := EnvPolicyFromShellEnvironmentPolicy(map[string]any{
+		"filters":    map[string]any{"KEEP_*": "include", "DROP_*": "exclude"},
+		"exclude":    []any{"LEGACY_EXCLUDE_*"},
+		"include_only": []any{"LEGACY_INCLUDE_*"},
+	}, "")
+	if len(filters.IncludeOnly) != 1 || filters.IncludeOnly[0].Value != "KEEP_*" {
+		t.Fatalf("filters include_only = %#v", filters.IncludeOnly)
+	}
+	if len(filters.Exclude) != 1 || filters.Exclude[0].Value != "DROP_*" {
+		t.Fatalf("filters exclude = %#v", filters.Exclude)
+	}
+
+	// Empty/nil table yields the default policy (inherit all, default
+	// excludes ignored), matching Rust's Default.
+	def := EnvPolicyFromShellEnvironmentPolicy(nil, "")
+	if def.Inherit != "all" || def.IgnoreDefaultExcludes != nil || len(def.Exclude) != 0 {
+		t.Fatalf("default policy = %#v", def)
+	}
+}
+
+func TestEnvPolicyFromShellEnvironmentPolicyFiltersInheritedEnv(t *testing.T) {
+	policy := EnvPolicyFromShellEnvironmentPolicy(map[string]any{
+		"inherit": "core",
+		"set":     map[string]any{"CODEX_KEPT": "yes"},
+	}, "/repo")
+	threadID := "thread-1"
+	env := CreateEnv(policy, &threadID, map[string]string{
+		"PATH":         "/bin",
+		"RANDOM_VAR":   "y",
+		"SECRET_TOKEN": "x",
+	})
+	if env["PATH"] != "/bin" {
+		t.Fatalf("core var PATH lost: %#v", env)
+	}
+	if env["RANDOM_VAR"] != "" || env["SECRET_TOKEN"] != "" {
+		t.Fatalf("non-core vars leaked: %#v", env)
+	}
+	if env["CODEX_KEPT"] != "yes" {
+		t.Fatalf("set var missing: %#v", env)
+	}
+	if env[ThreadIDEnvVar] != "thread-1" {
+		t.Fatalf("thread id = %q", env[ThreadIDEnvVar])
+	}
+}
 
 func TestCreateEnvInheritExcludeSetAndThreadID(t *testing.T) {
 	threadID := "thread-1"

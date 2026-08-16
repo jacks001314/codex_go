@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"codex_go/execserver"
+	"codex_go/execpolicy"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 )
@@ -17,6 +18,67 @@ func TestLocalShellRunnerRequiresRequest(t *testing.T) {
 	_, err := NewLocalShellRunner().Run(context.Background(), nil)
 	if err == nil {
 		t.Fatal("Run returned nil error, want failure")
+	}
+}
+
+// TestShellRequestEnvAppliesPolicyLikeRust verifies that a shell request's
+// environment is built from the parent environment through the selected
+// environment's shell environment policy (inherit=core drops non-core vars,
+// set adds explicit overrides, explicit req.Env overrides stay authoritative),
+// mirroring Rust create_env (#38902).
+func TestShellRequestEnvAppliesPolicyLikeRust(t *testing.T) {
+	t.Setenv("CODEX_NONCORE_MARKER", "drop-me")
+	policy := execpolicy.EnvPolicyFromShellEnvironmentPolicy(map[string]any{
+		"inherit": "core",
+		"set":     map[string]any{"CODEX_KEPT": "yes"},
+	}, "")
+	env := shellRequestEnv(&ShellRequest{
+		EnvPolicy: policy,
+		ThreadID:  "thread-1",
+		Env:       map[string]string{"CODEX_SESSION_ID": "session-1"},
+	})
+	if env["CODEX_NONCORE_MARKER"] != "" {
+		t.Fatalf("non-core parent var leaked under inherit=core: %#v", env)
+	}
+	if env["CODEX_KEPT"] != "yes" {
+		t.Fatalf("set var missing: %#v", env)
+	}
+	if env["CODEX_SESSION_ID"] != "session-1" {
+		t.Fatalf("explicit env override missing: %#v", env)
+	}
+	if env[execpolicy.ThreadIDEnvVar] != "thread-1" {
+		t.Fatalf("thread id env = %q", env[execpolicy.ThreadIDEnvVar])
+	}
+}
+
+// TestShellRequestEnvDefaultExcludesAndIncludeOnlyLikeRust pins the
+// ignore_default_excludes and include_only application order: default excludes
+// (KEY/SECRET/TOKEN) drop secrets before include_only keeps only the listed
+// variables.
+func TestShellRequestEnvDefaultExcludesAndIncludeOnlyLikeRust(t *testing.T) {
+	t.Setenv("SECRET_API_TOKEN", "leak")
+	t.Setenv("PATH", "/bin")
+	policy := execpolicy.EnvPolicyFromShellEnvironmentPolicy(map[string]any{
+		"ignore_default_excludes": false,
+		"include_only":            []any{"PATH"},
+	}, "")
+	env := shellRequestEnv(&ShellRequest{EnvPolicy: policy})
+	if env["SECRET_API_TOKEN"] != "" {
+		t.Fatalf("default-excluded secret leaked: %#v", env)
+	}
+	if env["PATH"] != "/bin" {
+		t.Fatalf("include_only PATH missing: %#v", env)
+	}
+}
+
+// TestShellRequestEnvWithoutPolicyKeepsParentEnv pins the no-policy fallback:
+// without an EnvPolicy the parent environment is inherited unchanged plus the
+// explicit overrides (pre-#38902 behavior).
+func TestShellRequestEnvWithoutPolicyKeepsParentEnv(t *testing.T) {
+	t.Setenv("CODEX_PARENT_VAR", "kept")
+	env := shellRequestEnv(&ShellRequest{Env: map[string]string{"CODEX_SESSION_ID": "s"}})
+	if env["CODEX_PARENT_VAR"] != "kept" || env["CODEX_SESSION_ID"] != "s" {
+		t.Fatalf("env = %#v", env)
 	}
 }
 

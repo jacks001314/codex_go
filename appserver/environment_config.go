@@ -32,6 +32,13 @@ type EnvironmentConfig struct {
 	// AllowLoginShell reports whether shell tools may start login shells in
 	// this environment.
 	AllowLoginShell bool
+	// ShellEnvironmentPolicy is the shell_environment_policy config table
+	// controlling which environment variables shell commands may inherit in
+	// this environment (inherit / ignore_default_excludes / exclude /
+	// include_only / set / filters), mirroring Rust protocol::EnvironmentConfig
+	// shell_environment_policy (#38902). An empty map means the thread-derived
+	// policy applies.
+	ShellEnvironmentPolicy map[string]any
 	// PermissionProfile is the resolved profile (nil only for legacy thread
 	// configs that could not resolve a profile).
 	PermissionProfile *sandbox.PermissionProfile
@@ -43,6 +50,33 @@ type EnvironmentConfig struct {
 	// SelectedCapabilityRoots are the capability roots selected for this
 	// thread's environment attachment.
 	SelectedCapabilityRoots []SelectedCapabilityRoot
+}
+
+// cloneShellEnvironmentPolicy deep-copies the shell_environment_policy table
+// (nested filters/set maps and pattern slices) so resolved environment configs
+// never alias the config tree they were built from.
+func cloneShellEnvironmentPolicy(table map[string]any) map[string]any {
+	if len(table) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(table))
+	for key, value := range table {
+		switch typed := value.(type) {
+		case map[string]any:
+			inner := make(map[string]any, len(typed))
+			for innerKey, innerValue := range typed {
+				inner[innerKey] = innerValue
+			}
+			out[key] = inner
+		case []any:
+			items := make([]any, len(typed))
+			copy(items, typed)
+			out[key] = items
+		default:
+			out[key] = value
+		}
+	}
+	return out
 }
 
 // EnvironmentConfigState is the configuration supplied for a thread's selected
@@ -159,6 +193,15 @@ func environmentConfigFromAny(value any) (*EnvironmentConfig, error) {
 		stringFromAny(object["permission_profile_id"]),
 		stringFromAny(object["permissionProfileId"]),
 	))
+	if raw, present := object["shell_environment_policy"]; present {
+		if table, ok := raw.(map[string]any); ok {
+			config.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(table)
+		}
+	} else if raw, present := object["shellEnvironmentPolicy"]; present {
+		if table, ok := raw.(map[string]any); ok {
+			config.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(table)
+		}
+	}
 	profileJSON := strings.TrimSpace(firstNonEmpty(
 		stringFromAny(object["permission_profile"]),
 		stringFromAny(object["permissionProfile"]),
@@ -244,6 +287,9 @@ func environmentConfigToAny(config *EnvironmentConfig) map[string]any {
 		"allow_login_shell":       config.AllowLoginShell,
 		"selectedCapabilityRoots": roots,
 	}
+	if len(config.ShellEnvironmentPolicy) > 0 {
+		out["shell_environment_policy"] = cloneShellEnvironmentPolicy(config.ShellEnvironmentPolicy)
+	}
 	if profileJSON != "" {
 		out["permission_profile"] = profileJSON
 	}
@@ -325,6 +371,9 @@ func cloneEnvironmentConfig(config *EnvironmentConfig) *EnvironmentConfig {
 		return nil
 	}
 	clone := *config
+	if config.ShellEnvironmentPolicy != nil {
+		clone.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(config.ShellEnvironmentPolicy)
+	}
 	if config.PermissionProfile != nil {
 		profile := *config.PermissionProfile
 		clone.PermissionProfile = &profile

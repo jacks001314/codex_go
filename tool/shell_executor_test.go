@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/execpolicy"
 	"codex_go/execserver"
 	"codex_go/network"
 	"codex_go/sandbox"
@@ -761,6 +762,105 @@ func TestShellExecutorHonorsPerEnvironmentConfigLikeRust(t *testing.T) {
 	}
 	if runner.request.PermissionProfile == nil || runner.request.PermissionProfileID != "read-only" {
 		t.Fatalf("request permission profile = %#v id=%q", runner.request.PermissionProfile, runner.request.PermissionProfileID)
+	}
+}
+
+// TestShellExecutorSetsEnvPolicyFromThreadAndEnvironmentLikeRust is the
+// dynamic verification for #38902: the selected turn environment's shell
+// environment policy drives the inherited-variable filtering. The thread
+// (inferred) policy applies to environments without their own resolved
+// policy, and an environment's resolved policy wins over the thread policy.
+func TestShellExecutorSetsEnvPolicyFromThreadAndEnvironmentLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	runner := &fakeShellRunner{result: &ShellResult{ExitCode: 0, Stdout: "ok\n", Duration: time.Millisecond}}
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner: runner,
+		Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+		Validation: ShellValidationOptions{
+			ApprovalPolicy:   sandbox.ApprovalOnRequest,
+			CWD:              cwd,
+			DefaultTimeoutMS: 5000,
+		},
+		ShellEnvironmentPolicy: map[string]any{
+			"inherit": "core",
+			"set":     map[string]any{"CODEX_THREAD_POLICY": "yes"},
+		},
+		UnifiedExecEnvironments: []UnifiedExecEnvironment{
+			{ID: "primary", CWD: cwd},
+			{ID: "locked", CWD: cwd, ShellEnvironmentPolicy: map[string]any{
+				"inherit": "none",
+				"set":     map[string]any{"CODEX_ENV_POLICY": "locked"},
+			}},
+		},
+	})
+
+	// The thread-derived policy applies to the primary environment (it has no
+	// resolved policy; Rust inferred_environment_config).
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-primary",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi","environment_id":"primary"}`},
+	})
+	if err != nil || !output.Success {
+		t.Fatalf("Execute(primary) = %#v, %v", output, err)
+	}
+	if runner.request == nil || runner.request.EnvPolicy == nil {
+		t.Fatalf("primary request EnvPolicy = %#v", runner.request)
+	}
+	if runner.request.EnvPolicy.Inherit != "core" || runner.request.EnvPolicy.Set["CODEX_THREAD_POLICY"] != "yes" {
+		t.Fatalf("primary EnvPolicy = %#v, want thread-derived core+set", runner.request.EnvPolicy)
+	}
+
+	// The environment's resolved policy wins over the thread policy.
+	output, err = executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-locked",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi","environment_id":"locked"}`},
+	})
+	if err != nil || !output.Success {
+		t.Fatalf("Execute(locked) = %#v, %v", output, err)
+	}
+	if runner.request == nil || runner.request.EnvPolicy == nil {
+		t.Fatalf("locked request EnvPolicy = %#v", runner.request)
+	}
+	if runner.request.EnvPolicy.Inherit != "none" || runner.request.EnvPolicy.Set["CODEX_ENV_POLICY"] != "locked" {
+		t.Fatalf("locked EnvPolicy = %#v, want environment-resolved none+set", runner.request.EnvPolicy)
+	}
+	if runner.request.EnvPolicy.Set["CODEX_THREAD_POLICY"] != "" {
+		t.Fatalf("thread policy leaked into environment policy: %#v", runner.request.EnvPolicy.Set)
+	}
+}
+
+// TestShellEnvPolicyDifferentialLikeRust pins Rust's unified_exec suite test
+// exec_command_uses_installed_environment_shell_policy_with_explicit_overrides
+// (#38902): the installed (ready) environment's resolved shell environment
+// policy wins over the thread-derived policy, and create_env with
+// inherit=none + include_only=[KEEP] + set={KEEP:preserved, DROP:filtered}
+// yields KEEP=preserved, DROP=missing, OWNER_ONLY=missing on a parent
+// environment that provides all three.
+func TestShellEnvPolicyDifferentialLikeRustExecCommandUsesInstalledPolicy(t *testing.T) {
+	envPolicy := map[string]any{
+		"inherit":      "none",
+		"include_only": []any{"KEEP"},
+		"set":          map[string]any{"KEEP": "preserved", "DROP": "filtered"},
+	}
+	parent := map[string]string{"KEEP": "parent", "DROP": "parent", "OWNER_ONLY": "owner"}
+
+	// The environment's resolved policy wins over the thread-derived policy
+	// (TurnEnvironment.shell_environment_policy -> EnvironmentConfig).
+	policy := execpolicy.EnvPolicyFromShellEnvironmentPolicy(envPolicy, "")
+	env := execpolicy.CreateEnv(policy, nil, parent)
+	drop := env["DROP"]
+	if drop == "" {
+		drop = "missing"
+	}
+	owner := env["OWNER_ONLY"]
+	if owner == "" {
+		owner = "missing"
+	}
+	got := env["KEEP"] + ":" + drop + ":" + owner
+	if got != "preserved:missing:missing" {
+		t.Fatalf("env output = %q, want preserved:missing:missing (Rust exec_command_uses_installed_environment_shell_policy_with_explicit_overrides); env=%#v", got, env)
 	}
 }
 

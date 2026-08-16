@@ -21,11 +21,45 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"codex_go/execpolicy"
 	"codex_go/execserver"
 	"codex_go/network"
 	"codex_go/sandbox"
 	"github.com/coder/websocket"
 )
+
+// TestExecEnvPolicyFromShellPolicy pins the unified-exec wire conversion of
+// the selected environment's shell environment policy (#38902): the exec-server
+// receives the inherit mode, default-excludes flag, raw pattern lists and set
+// overrides so it filters its own environment server-side.
+func TestExecEnvPolicyFromShellPolicy(t *testing.T) {
+	policy := execpolicy.EnvPolicyFromShellEnvironmentPolicy(map[string]any{
+		"inherit":      "none",
+		"exclude":      []any{"DROP_*"},
+		"include_only": []any{"PATH"},
+		"set":          map[string]any{"CODEX_KEPT": "yes"},
+	}, "")
+	wire := execEnvPolicyFromShellPolicy(policy)
+	if wire.Inherit != "none" || !wire.IgnoreDefaultExcludes {
+		t.Fatalf("wire = %#v", wire)
+	}
+	if len(wire.Exclude) != 1 || wire.Exclude[0] != "DROP_*" {
+		t.Fatalf("wire exclude = %#v", wire.Exclude)
+	}
+	if len(wire.IncludeOnly) != 1 || wire.IncludeOnly[0] != "PATH" {
+		t.Fatalf("wire include_only = %#v", wire.IncludeOnly)
+	}
+	if wire.Set["CODEX_KEPT"] != "yes" {
+		t.Fatalf("wire set = %#v", wire.Set)
+	}
+
+	// nil policy keeps the pre-#38902 default (inherit all, default excludes
+	// ignored) so the remote path does not change behavior without config.
+	def := execEnvPolicyFromShellPolicy(nil)
+	if def.Inherit != "all" || !def.IgnoreDefaultExcludes {
+		t.Fatalf("default wire = %#v", def)
+	}
+}
 
 func TestUnifiedExecHelperProcess(t *testing.T) {
 	separator := -1

@@ -2,11 +2,14 @@ package appserver
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"codex_go/config"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/turn"
@@ -187,6 +190,10 @@ func TestUnifiedExecEnvironmentsForTurnSkipsPendingFailedAndAppliesConfig(t *tes
 			"allow_login_shell":     false,
 			"permission_profile":    profileJSON,
 			"permission_profile_id": "read-only",
+			"shell_environment_policy": map[string]any{
+				"inherit": "core",
+				"set":     map[string]any{"CODEX_ENV": "ready"},
+			},
 		}}},
 		{"environmentId": "pending-env", "cwd": "/remote", "config": map[string]any{"state": "pending"}},
 		{"environmentId": "failed-env", "cwd": "/remote", "config": map[string]any{"state": "failed", "error": "boom"}},
@@ -202,6 +209,84 @@ func TestUnifiedExecEnvironmentsForTurnSkipsPendingFailedAndAppliesConfig(t *tes
 	}
 	if environments[0].PermissionProfile == nil || environments[0].PermissionProfileID != "read-only" {
 		t.Fatalf("permission profile = %#v id=%q", environments[0].PermissionProfile, environments[0].PermissionProfileID)
+	}
+	// #38902: the resolved environment's shell environment policy is carried
+	// on the turn environment so shell/unified-exec apply it.
+	if len(environments[0].ShellEnvironmentPolicy) == 0 {
+		t.Fatalf("ready environment shell environment policy not carried: %#v", environments[0])
+	}
+	if inherit, _ := environments[0].ShellEnvironmentPolicy["inherit"].(string); inherit != "core" {
+		t.Fatalf("ready environment policy = %#v, want inherit=core", environments[0].ShellEnvironmentPolicy)
+	}
+}
+
+// TestThreadEnvironmentConfigForTurnPopulatesShellPolicyLikeRust verifies the
+// inferred (thread-derived) shell environment policy: the thread's
+// EnvironmentConfig carries the config's shell_environment_policy so
+// environments without their own resolved policy inherit it (Rust
+// inferred_environment_config, #38902).
+func TestThreadEnvironmentConfigForTurnPopulatesShellPolicyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	codexHome := filepath.Join(home, "codex")
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(config.ConfigPath(codexHome), []byte("[shell_environment_policy]\ninherit = \"core\"\n\n[shell_environment_policy.set]\nCODEX_THREAD = \"inferred\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(codexHome)})
+	defer router.Close()
+
+	cfg := router.threadEnvironmentConfigForTurn(&turn.TurnStartParams{CWD: t.TempDir()})
+	if cfg == nil {
+		t.Fatalf("thread environment config = nil")
+	}
+	if len(cfg.ShellEnvironmentPolicy) == 0 {
+		t.Fatalf("thread environment config carries no shell environment policy: %#v", cfg)
+	}
+	if inherit, _ := cfg.ShellEnvironmentPolicy["inherit"].(string); inherit != "core" {
+		t.Fatalf("thread policy inherit = %#v, want core", cfg.ShellEnvironmentPolicy)
+	}
+	set, _ := cfg.ShellEnvironmentPolicy["set"].(map[string]any)
+	if set["CODEX_THREAD"] != "inferred" {
+		t.Fatalf("thread policy set = %#v", cfg.ShellEnvironmentPolicy)
+	}
+}
+
+// TestEnvironmentConfigShellPolicyJSONRoundTrip pins the serialized surface of
+// the resolved shell environment policy: it survives the environment-config
+// JSON roundtrip (thread metadata persistence) with nested set/filters maps
+// intact.
+func TestEnvironmentConfigShellPolicyJSONRoundTrip(t *testing.T) {
+	config := &EnvironmentConfig{
+		AllowLoginShell: true,
+		ShellEnvironmentPolicy: map[string]any{
+			"inherit": "core",
+			"set":     map[string]any{"CODEX_KEPT": "yes"},
+			"filters": map[string]any{"PATH": "include"},
+		},
+	}
+	serialized := environmentConfigToAny(config)
+	if _, present := serialized["shell_environment_policy"]; !present {
+		t.Fatalf("shell_environment_policy not serialized: %#v", serialized)
+	}
+	parsed, err := environmentConfigFromAny(serialized)
+	if err != nil {
+		t.Fatalf("environmentConfigFromAny: %v", err)
+	}
+	if parsed == nil || len(parsed.ShellEnvironmentPolicy) == 0 {
+		t.Fatalf("parsed policy missing: %#v", parsed)
+	}
+	if inherit, _ := parsed.ShellEnvironmentPolicy["inherit"].(string); inherit != "core" {
+		t.Fatalf("parsed inherit = %#v", parsed.ShellEnvironmentPolicy)
+	}
+	set, _ := parsed.ShellEnvironmentPolicy["set"].(map[string]any)
+	if set["CODEX_KEPT"] != "yes" {
+		t.Fatalf("parsed set = %#v", parsed.ShellEnvironmentPolicy)
+	}
+	filters, _ := parsed.ShellEnvironmentPolicy["filters"].(map[string]any)
+	if filters["PATH"] != "include" {
+		t.Fatalf("parsed filters = %#v", parsed.ShellEnvironmentPolicy)
 	}
 }
 
