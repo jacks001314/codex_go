@@ -88,7 +88,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 		logout.ConfigOverrides = append(append([]string(nil), parsed.Root.ConfigOverrides...), logout.ConfigOverrides...)
 		return runLogout(ctx, logout, stdout)
 	case cli.CommandFeatures:
-		return runFeatures(parsed.Features, parsed.Root, stdout)
+		return runFeatures(parsed.Features, parsed.Root, stdout, stderr)
 	case cli.CommandMCP:
 		return runMCP(ctx, &parsed.MCP, stdout)
 	case cli.CommandPlugin:
@@ -1641,7 +1641,7 @@ func runLogout(ctx context.Context, opts cli.LoginOptions, stdout io.Writer) err
 	return nil
 }
 
-func runFeatures(opts cli.FeatureOptions, root cli.RootOptions, stdout io.Writer) error {
+func runFeatures(opts cli.FeatureOptions, root cli.RootOptions, stdout io.Writer, stderr io.Writer) error {
 	switch opts.Action {
 	case "list":
 		values := features.Defaults()
@@ -1672,11 +1672,29 @@ func runFeatures(opts cli.FeatureOptions, root cli.RootOptions, stdout io.Writer
 		if err := config.SetFeature(auth.DefaultCodexHome(), opts.Feature, enabled); err != nil {
 			return err
 		}
+		// Mirrors Rust cli/src/main.rs maybe_print_under_development_feature_warning:
+		// enabling an under-development feature prints a suppression hint.
+		if enabled && features.StageFor(opts.Feature) == features.StageUnderDevelopment && !underDevelopmentWarningSuppressed(root) {
+			fmt.Fprintf(stderr, "Under-development features enabled: %s. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in %s.\n",
+				opts.Feature, config.ConfigPath(auth.DefaultCodexHome()))
+		}
 		fmt.Fprintf(stdout, "%s feature %s\n", title(opts.Action), opts.Feature)
 		return nil
 	default:
 		return fmt.Errorf("unknown features subcommand %s", opts.Action)
 	}
+}
+
+func underDevelopmentWarningSuppressed(root cli.RootOptions) bool {
+	effective, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), &config.EffectiveOptions{
+		RawOverrides:    root.ConfigOverrides,
+		EnableFeatures:  root.EnableFeatures,
+		DisableFeatures: root.DisableFeatures,
+	})
+	if err != nil {
+		return false
+	}
+	return effective.SuppressUnstableFeaturesWarning()
 }
 
 func runCompletion(opts cli.CompletionOptions, stdout io.Writer) error {

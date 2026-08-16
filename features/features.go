@@ -198,6 +198,16 @@ func Validate(key string) error {
 	return fmt.Errorf("Unknown feature flag: %s", key)
 }
 
+// StageFor returns the feature's stage, or StageStable for unknown keys.
+// Mirrors Rust's feature registry lookup used by the under-development
+// feature warning.
+func StageFor(key string) Stage {
+	if spec, ok := byKey()[key]; ok {
+		return spec.Stage
+	}
+	return StageStable
+}
+
 func Defaults() map[string]bool {
 	out := make(map[string]bool, len(Registry))
 	for _, spec := range Registry {

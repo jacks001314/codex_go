@@ -579,6 +579,38 @@ func TestFeaturesEnablePersists(t *testing.T) {
 	}
 }
 
+// TestFeaturesEnableUnderDevelopmentWarnsLikeRust pins the Rust
+// maybe_print_under_development_feature_warning behavior: enabling an
+// under-development feature prints the suppression hint to stderr.
+func TestFeaturesEnableUnderDevelopmentWarnsLikeRust(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"features", "enable", "shell_zsh_fork"}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("features enable returned error: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "Under-development features enabled: shell_zsh_fork") {
+		t.Fatalf("stderr = %q, want under-development warning", stderr.String())
+	}
+}
+
+// TestFeaturesEnableUnderDevelopmentWarningSuppressed pins the
+// suppress_unstable_features_warning behavior: with the config key set, the
+// under-development warning is omitted.
+func TestFeaturesEnableUnderDevelopmentWarningSuppressed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("suppress_unstable_features_warning = true\n"), 0o644); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"features", "enable", "shell_zsh_fork"}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("features enable returned error: %v", err)
+	}
+	if strings.Contains(stderr.String(), "Under-development features enabled") {
+		t.Fatalf("stderr = %q, want suppressed warning", stderr.String())
+	}
+}
+
 func TestFeaturesListHonorsRootOverrides(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	var stdout bytes.Buffer

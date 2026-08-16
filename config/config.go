@@ -88,6 +88,20 @@ func (c *Config) SQLiteHome() string {
 	return strings.TrimSpace(stringFromConfigValue(c.Values["sqlite_home"]))
 }
 
+// SuppressUnstableFeaturesWarning reports whether the under-development
+// feature warning should be suppressed, mirroring Rust
+// suppress_unstable_features_warning (default false).
+func (c *Config) SuppressUnstableFeaturesWarning() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	value, ok := c.Values["suppress_unstable_features_warning"].(bool)
+	if !ok {
+		return false
+	}
+	return value
+}
+
 type ResumeCWDMode string
 
 const (
@@ -386,6 +400,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"show_raw_agent_reasoning":                   {},
 	"skills":                                     {},
 	"sqlite_home":                                {},
+	"suppress_unstable_features_warning":         {},
 	"tool_suggest":                               {},
 	"tools":                                      {},
 	"trusted_projects":                           {},

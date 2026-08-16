@@ -545,6 +545,13 @@
                       "area":  "parity",
                       "reason":  "Recognized Rust's notice (singular) suppression table: Go's interactive TUI already reads hide_rate_limit_model_nudge from the legacy Go `notices` table, but strict config rejected Rust's `notice` table - a user setting notice.hide_rate_limit_model_nudge would fail config loading. Added the key, notice sub-field validation mirroring Rust's Notice keys (deny_unknown_fields), and made interactiveHideRateLimitModelNudgeFromConfig honor both tables with the Rust name winning. The config-schema rust-only allowlist shrank from 12 to 11; the legacy `notices` stays a documented Go extension.",
                       "test":  "go test ./app -run TestInteractiveHideRateLimitModelNudgeAcceptsRustAndLegacyTables -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
+                  },
+                  {
+                      "id":  "suppress-unstable-features-warning-config-surface",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Implemented Rust's under-development feature warning + suppression: Rust's `codex features enable` prints 'Under-development features enabled: X...' to stderr for StageUnderDevelopment features unless suppress_unstable_features_warning is set; Go printed nothing. Added the config key + Config.SuppressUnstableFeaturesWarning(), features.StageFor(), and wired the Rust-mirroring warning into runFeatures' enable path (stderr, suppression hint with config path). The config-schema rust-only allowlist shrank from 11 to 10. Tests pin warn-on-enable and suppress-when-set semantics.",
+                      "test":  "go test ./app -run 'TestFeaturesEnableUnderDevelopment' -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
                   }
               ]
 }

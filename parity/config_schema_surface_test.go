@@ -25,7 +25,6 @@ var configSchemaRustOnlyAllowlist = map[string]string{
 	"mcp_oauth_callback_port":             "Rust MCP OAuth callback port override; Go uses system-assigned ports",
 	"mcp_oauth_callback_url":              "Rust MCP OAuth callback URL override; Go uses system-assigned URLs",
 	"oss_provider":                        "Rust bundled OSS provider block; Go models OSS providers via model_providers",
-	"suppress_unstable_features_warning":  "Rust startup warning suppression; Go does not render the unstable-features warning",
 }
 
 // configSchemaGoOnlyAllowlist lists Go-recognized keys absent from Rust's
@@ -68,8 +67,8 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	if len(rustKeys) != 94 {
 		t.Fatalf("Rust config.schema.json top-level property count = %d, want 94 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 89 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 89 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 90 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 90 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)
