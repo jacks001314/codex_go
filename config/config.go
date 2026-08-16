@@ -290,9 +290,12 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"apps_mcp_product_sku":              {},
 	"approval_policy":                   {},
 	"approvals_reviewer":                {},
+	"auto_review":                       {},
 	"chatgpt_base_url":                  {},
+	"check_for_update_on_startup":       {},
 	"cli_auth_credentials_store":        {},
 	"compact_prompt":                    {},
+	"default_permissions":               {},
 	"desktop":                           {},
 	"developer_instructions":            {},
 	"experimental_realtime_ws_base_url": {},
@@ -306,6 +309,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"file_opener":                                {},
 	"forced_chatgpt_workspace_id":                {},
 	"forced_login_method":                        {},
+	"goals":                                      {},
 	"hide_agent_reasoning":                       {},
 	"history":                                    {},
 	"hooks":                                      {},
@@ -316,6 +320,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"instructions":                               {},
 	"mcp_oauth_credentials_store":                {},
 	"mcp_servers":                                {},
+	"memories":                                   {},
 	"model":                                      {},
 	"model_auto_compact_token_limit":             {},
 	"model_auto_compact_token_limit_scope":       {},
@@ -330,15 +335,21 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"notices":                                    {},
 	"notify":                                     {},
 	"openai_base_url":                            {},
+	"orchestrator":                               {},
 	"otel":                                       {},
 	"personality":                                {},
+	"permissions":                                {},
+	"plan_mode_reasoning_effort":                 {},
+	"plugins":                                    {},
 	"project_doc_fallback_filenames":             {},
 	"project_doc_max_bytes":                      {},
 	"project_root_markers":                       {},
+	"profiles":                                   {},
+	"projects":                                   {},
 	"realtime":                                   {},
 	"profile":                                    {},
-	"profiles":                                   {},
 	"responsesapi_client_metadata":               {},
+	"responses_api_metadata":                     {},
 	"review_model":                               {},
 	"resume_cwd":                                 {},
 	"requirements":                               {},
@@ -346,6 +357,8 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"sandbox_workspace_write":                    {},
 	"service_tier":                               {},
 	"shell_environment_policy":                   {},
+	"skills":                                     {},
+	"tool_suggest":                               {},
 	"tools":                                      {},
 	"trusted_projects":                           {},
 	"tui":                                        {},
@@ -353,6 +366,18 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"web_search":                                 {},
 	"windows":                                    {},
 	"windows_sandbox":                            {},
+}
+
+// KnownTopLevelConfigFields returns the sorted list of recognized top-level
+// configuration keys, used by the parity verifier to diff Go's config surface
+// against Rust's core/config.schema.json (djalign static layer).
+func KnownTopLevelConfigFields() []string {
+	keys := make([]string, 0, len(knownTopLevelConfigFields))
+	for key := range knownTopLevelConfigFields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func validateKnownTopLevelConfigFields(values map[string]any) error {

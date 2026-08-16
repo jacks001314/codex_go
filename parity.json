@@ -398,6 +398,13 @@
                       "area":  "parity",
                       "reason":  "Extended the tool input-schema policy to the remaining imported-tool surfaces: (1) dynamic tools now normalize through jsonschema in dynamicToolInputSchema, mirroring Rust parse_dynamic_tool; (2) Agent Plugin v1 MCP tools get Rust's MAX_SERIALIZED_MCP_TOOL_BYTES (8000) fallback - when the normalized schema still exceeds the cap the parameters degrade to {type:object, additionalProperties:true}, mirroring agent_plugin_mcp_tool_to_responses_api_tool; the AgentPlugin flag is threaded from MCPServerStatus.PluginID through RuntimeToolInfo/ToolExecutorOptions. Unit tests pin both wirings.",
                       "test":  "go test ./turn -run TestDynamicToolInputSchemaNormalizesLikeRust -count=1; go test ./mcp -run TestAgentPluginOversizedSchemaDegradesToAcceptAnything -count=1"
+                  },
+                  {
+                      "id":  "config-schema-surface-verifier",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "New verifier diffs Go's recognized top-level config keys against Rust core/config.schema.json (94 properties): 13 genuinely-supported keys (auto_review, check_for_update_on_startup, default_permissions, goals, memories, orchestrator, permissions, plan_mode_reasoning_effort, plugins, projects, responses_api_metadata, skills, tool_suggest) were missing from knownTopLevelConfigFields and are now recognized (strict validation no longer rejects them); 16 Rust-only unsupported properties and 6 Go extensions/legacy keys are explicitly allowlisted with auditable reasons. config.KnownTopLevelConfigFields() is exported for the diff.",
+                      "test":  "go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1; go test ./config -count=1"
                   }
               ]
 }
