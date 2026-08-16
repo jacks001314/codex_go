@@ -72,13 +72,17 @@ type ResponsesAgentOptions struct {
 	AuthIssuer                 string
 	StoreOptions               *auth.StoreOptions
 	ExternalAuthRefresh        ExternalAuthRefreshFunc
-	AgentIdentity              *AgentIdentityOptions
-	ModelsManager              ModelsManager
-	EnableRequestCompression   bool
-	IncludeAttestation         bool
-	AttestationProvider        codexapi.AttestationProvider
-	SupportsWebsockets         bool
-	WebsocketConnectTimeout    time.Duration
+	// WorkloadIdentityRefresh refreshes process-scoped workload identity
+	// after a downstream 401 (Rust WorkloadIdentityExternalAuth::refresh,
+	// #38188). When nil, the runner lazily builds one from StoreOptions.
+	WorkloadIdentityRefresh  WorkloadIdentityRefreshFunc
+	AgentIdentity            *AgentIdentityOptions
+	ModelsManager            ModelsManager
+	EnableRequestCompression bool
+	IncludeAttestation       bool
+	AttestationProvider      codexapi.AttestationProvider
+	SupportsWebsockets       bool
+	WebsocketConnectTimeout  time.Duration
 	// UnboundedConnectionRetries keeps active sampling turns alive until a
 	// failed network connection recovers (Rust Feature::UnboundedConnectionRetries,
 	// default enabled). nil means the feature default (enabled).
@@ -100,6 +104,7 @@ type ResponsesAgentRunner struct {
 	AuthIssuer                 string
 	StoreOptions               *auth.StoreOptions
 	ExternalAuthRefresh        ExternalAuthRefreshFunc
+	WorkloadIdentityRefresh    WorkloadIdentityRefreshFunc
 	AgentIdentity              *AgentIdentityOptions
 	AgentIdentityTelemetry     *codexapi.AgentIdentityTelemetry
 	ModelsManager              ModelsManager
@@ -158,6 +163,10 @@ type ExternalAuthRefreshResponse struct {
 }
 
 type ExternalAuthRefreshFunc func(ctx context.Context, request *ExternalAuthRefreshRequest) (*ExternalAuthRefreshResponse, error)
+
+// WorkloadIdentityRefreshFunc re-exchanges workload identity tokens preserving
+// the previously authenticated account.
+type WorkloadIdentityRefreshFunc func(ctx context.Context, previousAccountID string) (*auth.AuthDotJSON, error)
 
 type responsesAgentRequest struct {
 	Model                string                  `json:"model"`
@@ -343,6 +352,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		AuthIssuer:                 strings.TrimSpace(options.AuthIssuer),
 		StoreOptions:               cloneStoreOptions(options.StoreOptions),
 		ExternalAuthRefresh:        options.ExternalAuthRefresh,
+		WorkloadIdentityRefresh:    options.WorkloadIdentityRefresh,
 		AgentIdentity:              cloneAgentIdentityOptions(options.AgentIdentity),
 		AgentIdentityTelemetry:     agentIdentityTelemetryFromAuthHeaders(options.Auth),
 		ModelsManager:              options.ModelsManager,
@@ -2078,6 +2088,73 @@ func (r *ResponsesAgentRunner) ensureFreshProviderCommandAuth(ctx context.Contex
 	return r.refreshProviderCommandAuth(ctx)
 }
 
+// refreshWorkloadIdentityAuth re-exchanges workload identity after a
+// downstream 401 (Rust AuthManager refresh_external_auth + WorkloadIdentity
+// ExternalAuth::refresh, #38188): when the process selected workload identity,
+// the refresh preserves the previously authenticated account instead of
+// falling through to OAuth token refresh.
+func (r *ResponsesAgentRunner) refreshWorkloadIdentityAuth(ctx context.Context) error {
+	if r == nil || r.AuthSnapshot == nil {
+		return errors.New("workload identity refresh is not available")
+	}
+	if r.WorkloadIdentityRefresh != nil {
+		refreshed, err := r.WorkloadIdentityRefresh(ctx, accountIDFromMap(r.AuthSnapshot.Tokens))
+		if err != nil {
+			return err
+		}
+		if refreshed == nil {
+			return errors.New("workload identity refresh returned no auth")
+		}
+		return r.applyRefreshedAuth(refreshed)
+	}
+	if !auth.IsWorkloadIdentitySelected() {
+		return errors.New("workload identity is not selected")
+	}
+	options := r.workloadIdentityOptions()
+	if options == nil {
+		return errors.New("workload identity options are not configured")
+	}
+	authProvider, err := auth.WorkloadIdentityAuthForProcess(options)
+	if err != nil {
+		return err
+	}
+	if authProvider == nil {
+		return errors.New("workload identity is not selected")
+	}
+	refreshed, err := authProvider.RefreshAuth(ctx, accountIDFromMap(r.AuthSnapshot.Tokens))
+	if err != nil {
+		return err
+	}
+	if refreshed == nil {
+		return errors.New("workload identity refresh returned no auth")
+	}
+	return r.applyRefreshedAuth(refreshed)
+}
+
+func (r *ResponsesAgentRunner) applyRefreshedAuth(refreshed *auth.AuthDotJSON) error {
+	headers, err := AuthHeadersFromAuth(*refreshed)
+	if err != nil {
+		return err
+	}
+	r.AuthSnapshot = cloneAuthSnapshot(refreshed)
+	r.Auth = &headers
+	r.AgentIdentityTelemetry = agentIdentityTelemetryFromAuthHeaders(&headers)
+	return nil
+}
+
+func (r *ResponsesAgentRunner) workloadIdentityOptions() *auth.WorkloadIdentityAuthOptions {
+	if r == nil {
+		return nil
+	}
+	if r.StoreOptions != nil && r.StoreOptions.WorkloadIdentity != nil {
+		return r.StoreOptions.WorkloadIdentity
+	}
+	if strings.TrimSpace(r.AuthIssuer) == "" {
+		return nil
+	}
+	return &auth.WorkloadIdentityAuthOptions{ChatGPTBaseURL: r.AuthIssuer}
+}
+
 func providerAuthRefreshInterval(info *ProviderAuthInfo) time.Duration {
 	if info == nil || info.RefreshIntervalMS == 0 {
 		return 0
@@ -2086,6 +2163,9 @@ func providerAuthRefreshInterval(info *ProviderAuthInfo) time.Duration {
 }
 
 func (r *ResponsesAgentRunner) refreshAuthAfterUnauthorized(ctx context.Context) error {
+	if err := r.refreshWorkloadIdentityAuth(ctx); err == nil {
+		return nil
+	}
 	if err := r.refreshExternalChatGPTAuth(ctx); err == nil {
 		return nil
 	}

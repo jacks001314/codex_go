@@ -684,6 +684,12 @@
                       "id":  "migrate-rollouts-maintenance-lock",
                       "reason":  "Added the rollout-maintenance lock, mirroring Rust rollout/src/maintenance.rs: a process-scoped nonblocking exclusive lock at .tmp/rollout-maintenance.lock (via gofrs/flock, cross-platform) coordinates rollout compression and migration, which both publish by renaming over an existing rollout path. MigrateRollouts Apply acquires the lock and reports SkippedBusy (untouched source) when another maintenance job holds it; WaitAcquireRolloutMaintenanceLock blocks for tests/callers that prefer to wait. Unit tests pin first/second-acquire exclusion, release-then-reacquire, wait timeout, and the busy outcome leaving the source unmigrated.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./model -run 'TestResponsesAgentRunnerRefreshWorkloadIdentity' -count=1; go test ./model ./exec ./auth -count=1",
+                      "id":  "workload-identity-refresh-wiring",
+                      "reason":  "Closed the #38188 workload-identity refresh wiring gap (need_aligin P1 #6): the ResponsesAgentRunner now refreshes process-selected workload identity after a downstream 401, mirroring Rust AuthManager refresh_external_auth + WorkloadIdentityExternalAuth::refresh. refreshAuthAfterUnauthorized tries workload identity first (injectable WorkloadIdentityRefresh callback, with a lazy fallback that builds from StoreOptions.WorkloadIdentity or the runner's ChatGPTBaseURL), then external-chatgpt-tokens, then managed OAuth. The exec CLI path now sets runner.AuthIssuer = cfg.ChatGPTBaseURL() so the lazy builder resolves the correct token URL; appserver keeps host-managed external refresh (host owns workload identity). Two unit tests pin the injected refresh preserving the previous account and the falls-through-when-not-selected behavior.",
+                      "area":  "parity"
                   }
               ]
 }

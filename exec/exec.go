@@ -1362,6 +1362,7 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
 			return nil, err
 		}
 		agent.StoreOptions = storeOptions
+		agent.AuthIssuer = cfg.ChatGPTBaseURL()
 		agent.AgentIdentity = agentIdentityOptionsForExec(cfg)
 		agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
 		return agent, nil

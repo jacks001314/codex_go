@@ -2737,3 +2737,42 @@ func TestAddMemoryGenerationHeaderForConsolidationAgentLikeRust(t *testing.T) {
 		t.Fatalf("ordinary subagent memory generation header = %q, want empty", got)
 	}
 }
+
+func TestResponsesAgentRunnerRefreshWorkloadIdentityAfterUnauthorizedLikeRust(t *testing.T) {
+	// Mirrors Rust refresh_external_auth (login/src/auth/manager.rs): when the
+	// process selected workload identity, a downstream 401 re-exchanges the
+	// workload token preserving the previously authenticated account instead
+	// of falling through to OAuth refresh.
+	runner := &ResponsesAgentRunner{
+		AuthSnapshot: &auth.AuthDotJSON{
+			Tokens: map[string]any{"access_token": "old", "account_id": "account-one"},
+		},
+		WorkloadIdentityRefresh: func(ctx context.Context, previousAccountID string) (*auth.AuthDotJSON, error) {
+			if previousAccountID != "account-one" {
+				t.Fatalf("previous account id = %q, want account-one", previousAccountID)
+			}
+			return &auth.AuthDotJSON{
+				Tokens: map[string]any{"access_token": "new-workload", "account_id": "account-one"},
+			}, nil
+		},
+	}
+	if err := runner.refreshWorkloadIdentityAuth(context.Background()); err != nil {
+		t.Fatalf("refreshWorkloadIdentityAuth: %v", err)
+	}
+	if got := stringFromAny(runner.AuthSnapshot.Tokens, "access_token"); got != "new-workload" {
+		t.Fatalf("access token after refresh = %q, want new-workload", got)
+	}
+	if runner.Auth == nil {
+		t.Fatal("auth headers not updated after workload identity refresh")
+	}
+}
+
+func TestResponsesAgentRunnerWorkloadIdentityRefreshFallsThroughWhenNotSelected(t *testing.T) {
+	// Without a configured workload identity, the refresh falls through to the
+	// next recovery step instead of erroring the whole recovery.
+	runner := &ResponsesAgentRunner{AuthSnapshot: &auth.AuthDotJSON{}}
+	err := runner.refreshWorkloadIdentityAuth(context.Background())
+	if err == nil {
+		t.Fatal("expected workload identity refresh to report unavailability")
+	}
+}
