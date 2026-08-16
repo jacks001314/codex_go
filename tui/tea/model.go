@@ -828,6 +828,17 @@ type Model struct {
 	tuiTheme                        string
 	tuiPet                          string
 	vimMode                         bool
+	// vimInsert is the Vim mode state when vimMode is enabled: false = normal
+	// mode (keys dispatch vim_normal actions), true = insert mode (keys type
+	// normally until Esc). Rust starts the composer in Vim normal mode when
+	// /vim is enabled (bottom_pane/chat_composer.rs).
+	vimInsert                       bool
+	// vimYank is the line yank buffer for Vim normal mode (Y yanks the current
+	// line, p pastes it after the cursor).
+	vimYank                         string
+	// vimPendingOp tracks a pending Vim line operator (d or y) waiting for its
+	// repeat key, enabling dd / yy.
+	vimPendingOp                    string
 	petRuntime                      *petRuntime
 	petCodexHome                    string
 	petEnv                          map[string]string
@@ -1692,6 +1703,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			return m, nil
 		}
 		if m.applyEditQueuedMessageKey(msg, keySpec) {
+			return m, nil
+		}
+		if m.applyVimModeKey(msg, keySpec) {
 			return m, nil
 		}
 		if m.applyInputHistoryKey(msg) {
@@ -4803,7 +4817,7 @@ func (m *Model) applyEditQueuedMessageKey(msg bubbletea.KeyMsg, keySpec string) 
 		return false
 	}
 	editQueued := m.keyMatches("chat", "edit_queued_message", keySpec)
-	vimHistoryUp := m.vimMode && m.composer.Value() == "" && m.keyMatches("vim_normal", "move_up", keySpec)
+	vimHistoryUp := m.vimMode && !m.vimInsert && m.composer.Value() == "" && m.keyMatches("vim_normal", "move_up", keySpec)
 	if !editQueued && !vimHistoryUp {
 		return false
 	}

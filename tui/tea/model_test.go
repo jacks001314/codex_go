@@ -5517,6 +5517,10 @@ func TestModelRustSlashLongTailCommandSurfaces(t *testing.T) {
 	if !model.vimMode || !strings.Contains(model.View(), "Vim mode enabled.") {
 		t.Fatalf("vim toggle failed:\n%s", model.View())
 	}
+	// Vim mode starts the composer in NORMAL mode (Rust parity); enter insert
+	// mode before typing the next slash command so the letters are not
+	// dispatched as vim_normal actions.
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'i'}})
 
 	typeText(t, model, "/plan investigate architecture")
 	model.Update(key(bubbletea.KeyEnter))
