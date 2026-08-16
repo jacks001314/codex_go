@@ -68,6 +68,58 @@ func TestVimModeToggleStartsInNormalModeAndInsertTypes(t *testing.T) {
 	}
 }
 
+// TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim pins dj / dk / yj:
+// the j/k motions act on the current line plus its neighbor.
+func TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim(t *testing.T) {
+	m := vimTestModel("line zero\nline one\nline two")
+	m.composer.CursorUp()
+	m.composer.CursorUp()
+	m.composer.SetCursor(0) // cursor on line zero (row 0)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'j')
+	if got := m.composer.Value(); got != "line two" {
+		t.Fatalf("dj value = %q, want line two (line zero + line one deleted)", got)
+	}
+
+	m = vimTestModel("line zero\nline one\nline two")
+	m.composer.CursorUp()
+	m.composer.SetCursor(0) // cursor on line one (row 1)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'k')
+	if got := m.composer.Value(); got != "line two" {
+		t.Fatalf("dk value = %q, want line two (line zero + line one deleted)", got)
+	}
+
+	m = vimTestModel("line zero\nline one\nline two")
+	m.composer.SetCursor(0) // cursor on line two (row 2, the last)
+	m = vimKeyPress(m, 'y')
+	m = vimKeyPress(m, 'j')
+	if got := m.vimYank; got != "line two" {
+		t.Fatalf("yj yank at last line = %q, want line two", got)
+	}
+
+	m = vimTestModel("line zero\nline one\nline two")
+	m.composer.SetCursor(0) // cursor on line two (row 2)
+	m = vimKeyPress(m, 'y')
+	m = vimKeyPress(m, 'k')
+	if got := m.vimYank; got != "line one\nline two" {
+		t.Fatalf("yk yank = %q, want line one\\nline two", got)
+	}
+}
+
+// TestVimBigWordTextObjectLikeVim pins the W (big word) inner text object,
+// which targets the whitespace-delimited word like the plain w object.
+func TestVimBigWordTextObjectLikeVim(t *testing.T) {
+	m := vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'i')
+	m = vimKeyPress(m, 'W')
+	if got := m.composer.Value(); got != "hello  world" {
+		t.Fatalf("diW value = %q, want hello  world (inner big word)", got)
+	}
+}
+
 // TestVimOperatorMotionsDeleteYankChangeLikeVim pins d/y/c applied to
 // horizontal motions: dw / dh / d0 / d$ / c$ / yw.
 func TestVimOperatorMotionsDeleteYankChangeLikeVim(t *testing.T) {

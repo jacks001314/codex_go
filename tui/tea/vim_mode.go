@@ -361,6 +361,16 @@ func (m *Model) applyVimLineOperatorRepeat() {
 // (h / l / w / b / e / 0 / $). Returns false when keySpec is not an operator
 // motion.
 func (m *Model) vimOperatorMotion(keySpec string) bool {
+	if keySpec == "k" || keySpec == "up" || keySpec == "j" || keySpec == "down" {
+		// dj / dk / yj / yk / cj / ck act on the current line and its neighbor
+		// (Vim line motions).
+		direction := 1
+		if keySpec == "k" || keySpec == "up" {
+			direction = -1
+		}
+		m.vimOperatorLineMotion(direction)
+		return true
+	}
 	line := m.vimCurrentLine()
 	col := m.vimCursorColumn()
 	runes := []rune(line)
@@ -406,7 +416,7 @@ func (m *Model) applyVimOperatorTextObject(keySpec string) bool {
 	from := runeIndexForByte(line, col)
 	var start, end int
 	switch {
-	case keySpec == "w":
+	case keySpec == "w" || keySpec == "shift-w":
 		wordStart := byteOffsetForRuneIndex(line, vimWordStartIndex(runes, from))
 		wordEnd := byteOffsetForRuneIndex(line, vimWordEndIndex(runes, from)) + 1
 		if m.vimPendingObject == "around" {
@@ -438,12 +448,50 @@ func (m *Model) cancelVimOperator() {
 	m.vimPendingObject = ""
 }
 
+// vimLineStartOffset returns the byte offset of line row's start in the
+// composer value.
+func (m *Model) vimLineStartOffset(row int, lines []string) int {
+	start := 0
+	for i := 0; i < row && i < len(lines); i++ {
+		start += len(lines[i]) + 1
+	}
+	return start
+}
+
+// vimLineEndInclusive returns the byte offset just after line row, including
+// its trailing newline when present (or the value end for the last line).
+func (m *Model) vimLineEndInclusive(row int, lines []string) int {
+	end := m.vimLineStartOffset(row, lines) + len(lines[row])
+	if row < len(lines)-1 {
+		end++
+	}
+	return end
+}
+
+// vimOperatorLineMotion applies the pending operator to the current line plus
+// its neighbor: direction 1 (j) adds the next line, -1 (k) adds the previous
+// line. At the first/last line the operator acts on the current line only.
+func (m *Model) vimOperatorLineMotion(direction int) {
+	value := m.composer.Value()
+	lines := strings.Split(value, "\n")
+	row := m.composer.Line()
+	if row < 0 || row >= len(lines) {
+		m.cancelVimOperator()
+		return
+	}
+	start := m.vimLineStartOffset(row, lines)
+	end := m.vimLineEndInclusive(row, lines)
+	if direction > 0 && row+1 < len(lines) {
+		end = m.vimLineEndInclusive(row+1, lines)
+	} else if direction < 0 && row > 0 {
+		start = m.vimLineStartOffset(row-1, lines)
+	}
+	m.applyVimOperatorValueRange(start, end)
+}
+
 // applyVimOperatorRange applies the pending operator (d delete, y yank,
 // c change + insert) to the byte range [start, end) of the current line.
 func (m *Model) applyVimOperatorRange(start, end int) {
-	op := m.vimPendingOp
-	m.vimPendingOp = ""
-	m.vimPendingObject = ""
 	line := m.vimCurrentLine()
 	if start < 0 {
 		start = 0
@@ -454,19 +502,36 @@ func (m *Model) applyVimOperatorRange(start, end int) {
 	if start > end {
 		start, end = end, start
 	}
+	m.applyVimOperatorValueRange(m.vimLineStartByteOffset()+start, m.vimLineStartByteOffset()+end)
+}
+
+// applyVimOperatorValueRange applies the pending operator to a byte range of
+// the full composer value.
+func (m *Model) applyVimOperatorValueRange(start, end int) {
+	op := m.vimPendingOp
+	m.vimPendingOp = ""
+	m.vimPendingObject = ""
 	value := m.composer.Value()
-	offset := m.vimLineStartByteOffset()
+	if start < 0 {
+		start = 0
+	}
+	if end > len(value) {
+		end = len(value)
+	}
+	if start > end {
+		start, end = end, start
+	}
 	switch op {
 	case "d":
-		next := value[:offset+start] + value[offset+end:]
+		next := value[:start] + value[end:]
 		m.composer.SetValue(next)
-		m.composer.SetCursor(offset + start)
+		m.composer.SetCursor(start)
 	case "y":
-		m.vimYank = value[offset+start : offset+end]
+		m.vimYank = value[start:end]
 	case "c":
-		next := value[:offset+start] + value[offset+end:]
+		next := value[:start] + value[end:]
 		m.composer.SetValue(next)
-		m.composer.SetCursor(offset + start)
+		m.composer.SetCursor(start)
 		m.vimInsert = true
 	}
 }
