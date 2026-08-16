@@ -15,7 +15,19 @@ const (
 	LegacyMCPToolNamePrefix = "mcp__"
 	MCPToolNameDelimiter    = "__"
 	openAIFileHookInputKey  = "_codex_openai_file_arguments"
+	// maxSerializedMCPToolBytes mirrors Rust MAX_SERIALIZED_MCP_TOOL_BYTES:
+	// the cap above which Agent Plugin v1 tools degrade to an accept-anything
+	// object schema (responses_api.rs).
+	maxSerializedMCPToolBytes = 8_000
 )
+
+func mustMarshalJSON(value any) []byte {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return data
+}
 
 type ToolExecutorOptions struct {
 	Service                       *MCPService
@@ -32,6 +44,10 @@ type ToolExecutorOptions struct {
 	Binding                       *Binding
 	OpenAIFileRewriter            *OpenAIFileRewriter
 	OpenAIFileInputOptionalFields map[string][]string
+	// AgentPlugin marks tools contributed by Agent Plugins v1 servers, which
+	// get Rust's oversized-schema fallback in Spec (mirrors
+	// agent_plugin_mcp_tool_to_responses_api_tool).
+	AgentPlugin bool
 }
 
 type ToolExecutor struct {
@@ -50,6 +66,7 @@ type ToolExecutor struct {
 	binding                       *Binding
 	openAIFileRewriter            *OpenAIFileRewriter
 	openAIFileInputOptionalFields map[string][]string
+	agentPlugin                   bool
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -80,6 +97,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.model = strings.TrimSpace(options.Model)
 	executor.openAIFileRewriter = options.OpenAIFileRewriter
 	executor.openAIFileInputOptionalFields = cloneOpenAIFileOptionalFields(options.OpenAIFileInputOptionalFields)
+	executor.agentPlugin = options.AgentPlugin
 	return executor
 }
 
@@ -102,6 +120,7 @@ func RegisterToolExecutors(registry *tool.Registry, service *MCPService, tools [
 			ToolName:                      tool.NamespacedName(tools[i].CallableNamespace, tools[i].CallableName),
 			ConnectorID:                   tools[i].ConnectorID,
 			OpenAIFileInputOptionalFields: tools[i].OpenAIFileInputOptionalFields,
+			AgentPlugin:                   tools[i].AgentPlugin,
 		}); err != nil {
 			return err
 		}
@@ -122,6 +141,14 @@ func (e *ToolExecutor) TelemetryTags(_ *tool.Invocation) map[string]string {
 
 func (e *ToolExecutor) Spec() tool.Spec {
 	name := e.resolvedToolName()
+	parameters := jsonschema.Normalize(cloneAnyMap(e.toolInfo.InputSchema))
+	// Mirrors Rust agent_plugin_mcp_tool_to_responses_api_tool: Agent Plugins
+	// v1 tools that still exceed the serialized-size cap after normalization
+	// degrade to an accept-anything object schema instead of reaching the
+	// model oversized.
+	if e.agentPlugin && len(mustMarshalJSON(parameters)) > maxSerializedMCPToolBytes {
+		parameters = map[string]any{"type": "object", "additionalProperties": true}
+	}
 	return tool.Spec{
 		Name:        name,
 		Description: firstNonEmptyMCP(e.toolInfo.Description, e.toolInfo.Title),
@@ -129,7 +156,7 @@ func (e *ToolExecutor) Spec() tool.Spec {
 		// parameters go through the JsonSchema subset policy (sanitize, prune
 		// unreachable $defs, drop non-subset fields, compact oversized
 		// schemas); the raw schema stays on the executor for calls.
-		InputSchema:  jsonschema.Normalize(cloneAnyMap(e.toolInfo.InputSchema)),
+		InputSchema:  parameters,
 		Search:       e.searchInfo(),
 		Parallel:     e.parallel,
 		ReadOnlyHint: cloneBoolPtrMCP(e.readOnlyHint),

@@ -391,6 +391,13 @@
                       "area":  "parity",
                       "reason":  "New jsonschema package mirrors Rust's tool-input-schema policy (tools/src/json_schema.rs): sanitize (boolean coercion, const->enum, type inference, default children), prune unreachable $defs/definitions transitively (URL-decoded local refs), drop non-subset fields (pattern/format/title/minimum/...), and compact oversized schemas (5KB budget, depth 3, four lossy passes). The parity verifier feeds the six committed Rust json_schema_policy fixtures through Go and passes every preserved/pruned/dropped assertion plus the oversized compaction assertions. Wired into mcp.ToolExecutor.Spec so the model-visible parameters of MCP tools match Rust's mcp_tool_to_responses_api_tool.",
                       "test":  "go test ./parity -run TestToolJSONSchemaPolicy -count=1; go test ./jsonschema ./mcp -count=1"
+                  },
+                  {
+                      "id":  "dynamic-tool-schema-policy-and-agent-plugin-cap",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Extended the tool input-schema policy to the remaining imported-tool surfaces: (1) dynamic tools now normalize through jsonschema in dynamicToolInputSchema, mirroring Rust parse_dynamic_tool; (2) Agent Plugin v1 MCP tools get Rust's MAX_SERIALIZED_MCP_TOOL_BYTES (8000) fallback - when the normalized schema still exceeds the cap the parameters degrade to {type:object, additionalProperties:true}, mirroring agent_plugin_mcp_tool_to_responses_api_tool; the AgentPlugin flag is threaded from MCPServerStatus.PluginID through RuntimeToolInfo/ToolExecutorOptions. Unit tests pin both wirings.",
+                      "test":  "go test ./turn -run TestDynamicToolInputSchemaNormalizesLikeRust -count=1; go test ./mcp -run TestAgentPluginOversizedSchemaDegradesToAcceptAnything -count=1"
                   }
               ]
 }

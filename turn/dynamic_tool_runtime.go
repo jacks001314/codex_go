@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/jsonschema"
 	"codex_go/tool"
 )
 
@@ -232,7 +233,10 @@ func dynamicToolInputSchema(value any) (map[string]any, bool) {
 		return map[string]any{"type": "object", "properties": map[string]any{}}, true
 	}
 	if schema, ok := value.(map[string]any); ok {
-		return cloneMapAny(schema), true
+		// Mirrors Rust parse_dynamic_tool: the model-visible parameters go
+		// through the JsonSchema subset policy (sanitize, prune unreachable
+		// $defs, drop non-subset fields, compact oversized schemas).
+		return jsonschema.Normalize(cloneMapAny(schema)), true
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -242,7 +246,7 @@ func dynamicToolInputSchema(value any) (map[string]any, bool) {
 	if err := json.Unmarshal(data, &schema); err != nil {
 		return nil, false
 	}
-	return schema, true
+	return jsonschema.Normalize(schema), true
 }
 
 func dynamicToolNamespaceName(namespace *DynamicToolNamespaceSpec) *string {

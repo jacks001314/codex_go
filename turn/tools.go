@@ -468,6 +468,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			RequestMeta:                   mcpRuntimeToolRequestMeta(&info),
 			OpenAIFileRewriter:            options.OpenAIFileRewriter,
 			OpenAIFileInputOptionalFields: info.OpenAIFileInputOptionalFields,
+			AgentPlugin:                   info.AgentPlugin,
 			ConnectorID:                   info.ConnectorID,
 			Model:                         options.Model,
 		})

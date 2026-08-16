@@ -51,7 +51,11 @@ type RuntimeToolInfo struct {
 	ServerOrigin                  string              `json:"serverOrigin,omitempty"`
 	OpenAIFileInputOptionalFields map[string][]string `json:"openaiFileInputOptionalFields,omitempty"`
 	OmitLegacyPrefix              bool                `json:"-"`
-	Tool                          RuntimeTool         `json:"tool"`
+	// AgentPlugin marks tools contributed by Agent Plugins v1 servers. It is
+	// internal-only and drives the oversized-schema fallback in
+	// ToolExecutor.Spec, mirroring Rust's agent_plugin_mcp_tool_to_responses_api_tool.
+	AgentPlugin bool        `json:"-"`
+	Tool        RuntimeTool `json:"tool"`
 	// Meta carries the raw MCP tool _meta (including _codex_apps for Codex
 	// Apps tools). It is internal-only (not serialized to the model) and feeds
 	// hosted-app upload context and approval metadata (Rust #38101/#38108).
@@ -114,8 +118,9 @@ func RuntimeToolsFromStatuses(statuses []MCPServerStatus) []RuntimeToolInfo {
 				continue
 			}
 			runtimeTool := RuntimeToolInfo{
-				ServerName: runtimeServerName,
-				Meta:       cloneJSONValue(toolInfo.Meta),
+				ServerName:  runtimeServerName,
+				AgentPlugin: status.PluginID != nil,
+				Meta:        cloneJSONValue(toolInfo.Meta),
 				Tool: RuntimeTool{
 					Name:         toolName,
 					Title:        strings.TrimSpace(toolInfo.Title),

@@ -6,11 +6,62 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"codex_go/tool"
 )
+
+// TestAgentPluginOversizedSchemaDegradesToAcceptAnything mirrors Rust
+// agent_plugin_mcp_tool_to_responses_api_tool: Agent Plugin v1 tools whose
+// normalized schema still exceeds MAX_SERIALIZED_MCP_TOOL_BYTES degrade to
+// {"type":"object","additionalProperties":true}; regular MCP tools keep their
+// (compacted) schema.
+func TestAgentPluginOversizedSchemaDegradesToAcceptAnything(t *testing.T) {
+	enum := make([]any, 0, 4000)
+	for i := 0; i < 4000; i++ {
+		enum = append(enum, "value-"+strconv.Itoa(i))
+	}
+	hugeSchema := map[string]any{
+		"type":        "object",
+		"description": "A schema that compaction cannot shrink below the cap.",
+		"properties": map[string]any{
+			"choice": map[string]any{"type": "string", "enum": enum},
+		},
+	}
+
+	agentPlugin := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:  "agent-plugin-server",
+		AgentPlugin: true,
+		ToolInfo: &MCPToolInfo{
+			Name:        "create",
+			Description: "Create",
+			InputSchema: hugeSchema,
+		},
+	})
+	got := agentPlugin.Spec().InputSchema
+	want := map[string]any{"type": "object", "additionalProperties": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("agent-plugin Spec().InputSchema = %#v, want %#v", got, want)
+	}
+
+	regular := NewToolExecutor(&ToolExecutorOptions{
+		ServerName: "regular-server",
+		ToolInfo: &MCPToolInfo{
+			Name:        "create",
+			Description: "Create",
+			InputSchema: hugeSchema,
+		},
+	})
+	gotRegular := regular.Spec().InputSchema
+	if reflect.DeepEqual(gotRegular, want) {
+		t.Fatalf("regular MCP Spec().InputSchema degraded unexpectedly: %#v", gotRegular)
+	}
+	if _, ok := gotRegular["properties"].(map[string]any); !ok {
+		t.Fatalf("regular MCP Spec().InputSchema = %#v, want preserved properties", gotRegular)
+	}
+}
 
 func TestMCPToolExecutorRunsCall(t *testing.T) {
 	service := NewMCPService(nil)
