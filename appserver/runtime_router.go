@@ -305,6 +305,8 @@ type RuntimeRouter struct {
 	agentMessages          map[string][]any
 	nodeReplEvidenceMu     sync.Mutex
 	nodeReplEvidence       map[string]*codexctx.NodeReplReviewEvidence
+	rolloutBudgetOnce      sync.Once
+	rolloutBudget          *runtimeutil.Budget
 	closeOnce              sync.Once
 	closeErr               error
 }
@@ -332,6 +334,38 @@ type runtimeSelectedSkillCatalog struct {
 
 const runtimeSeedRolloutExtraKey = "runtime_seed_rollout"
 const remoteControlExternalAuthRecoveryTimeout = 30 * time.Second
+
+// rolloutBudgetForSession lazily resolves and configures the shared rollout
+// budget from `features.rollout_budget` (mirrors Rust's per-root-thread-session
+// RolloutBudget configured from resolve_rollout_budget_config). Returns nil
+// when the feature is disabled, the config is absent, or resolution fails.
+func (r *RuntimeRouter) rolloutBudgetForSession() *runtimeutil.Budget {
+	if r == nil {
+		return nil
+	}
+	r.rolloutBudgetOnce.Do(func() {
+		if r.services.Config == nil {
+			return
+		}
+		read, err := r.services.Config.Read(&config.ConfigReadParams{})
+		if err != nil {
+			return
+		}
+		resolved, err := (&config.Config{Values: read.Config}).RolloutBudgetConfig()
+		if err != nil || resolved == nil {
+			return
+		}
+		budget := runtimeutil.NewBudget()
+		budget.Configure(runtimeutil.BudgetConfig{
+			LimitTokens:               resolved.LimitTokens,
+			PrefillTokenWeight:        resolved.PrefillTokenWeight,
+			SamplingTokenWeight:       resolved.SamplingTokenWeight,
+			ReminderAtRemainingTokens: resolved.ReminderAtRemainingTokens,
+		})
+		r.rolloutBudget = budget
+	})
+	return r.rolloutBudget
+}
 
 func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	if services.SpawnGraph == nil && services.StateRuntime != nil {
@@ -2355,6 +2389,11 @@ func (r *RuntimeRouter) handleThreadRollbackRuntime(request *Request) (*ThreadRo
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	// Mirrors Rust core/src/session/handlers.rs thread_rollback: a num_turns < 1
+	// request surfaces the ThreadRollbackFailed codexErrorInfo.
+	if params.NumTurns < 1 {
+		return nil, threadRollbackFailed("numTurns must be >= 1")
+	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -2369,7 +2408,7 @@ func (r *RuntimeRouter) handleThreadRollbackRuntime(request *Request) (*ThreadRo
 		return nil, jsonRPCInvalidRequest("paginated threads do not support thread/rollback")
 	}
 	if r.activeRuntimeTurnSnapshot(params.ThreadID) != nil {
-		return nil, jsonRPCInvalidRequest("Cannot rollback while a turn is in progress.")
+		return nil, threadRollbackFailed("Cannot rollback while a turn is in progress.")
 	}
 	result, err := r.services.ThreadRouter.dispatch(request)
 	if err != nil {

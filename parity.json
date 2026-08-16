@@ -461,6 +461,13 @@
                       "area":  "parity",
                       "reason":  "TestRustModelInfoFieldSurfaceAgainstGo pins the wire fields of Rust's openai_models::ModelInfo (41 fields, excluding the serde-skipped internal marker) against Go's ModelInfo JSON surface (38 fields): 6 Rust-only fields are allowlisted with auditable reasons (availability_nux lives on Go's ModelSummary; supports_reasoning_summary_parameter is Go's supports_reasoning_summaries naming variant; apply_patch_tool_type/comp_hash/experimental_supported_tools/shell_type not yet carried), and 3 Go-only fields are documented extensions. All four L0 enum-inventory items (sandbox types, event names, error codes, model metadata) are now pinned.",
                       "test":  "go test ./parity -run TestRustModelInfoFieldSurfaceAgainstGo -count=1"
+                  },
+                  {
+                      "id":  "error-code-emission-gaps-closed",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Closed both monitored error-code emission gaps: (1) threadRollbackFailed - rollback request validation failures (num_turns<1, active turn) now surface a -32600 invalid-request RPC error carrying codexErrorInfo=threadRollbackFailed, mirroring Rust's core/session/handlers.rs + bespoke_event_handling.rs (invalid_request); (2) sessionBudgetExceeded - implemented the rollout budget feature end to end: config/rollout_budget.go resolves features.rollout_budget with Rust's exact validation (required limit_tokens/reminder_at_remaining_tokens, positivity bounds, finite weights defaulting to 1.0), RuntimeRouter.rolloutBudgetForSession lazily configures a shared runtimeutil.Budget per session, runTurnRuntime charges each completed turn's usage and fails the turn with ErrSessionBudgetExceeded, and the turn error mapper surfaces the sessionBudgetExceeded codexErrorInfo. TestRustErrorCodeSurfaceAgainstGo now passes with zero emission gaps (all 17 CodexErrorInfo + 7 ConfigWriteErrorCode values present in Go production code).",
+                      "test":  "go test ./parity -run TestRustErrorCodeSurfaceAgainstGo -count=1; go test ./config -run RolloutBudget -count=1; go test ./appserver -run 'RolloutBudget|ThreadRollbackValidation' -count=1"
                   }
               ]
 }

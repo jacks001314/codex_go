@@ -95,12 +95,9 @@ func TestRustEventMsgWireNamesCoverRecordedSurface(t *testing.T) {
 
 // rustErrorCodeEmissionGaps documents Rust error-code wire values that Go does
 // not emit yet, with the reason so the gap stays auditable and shrinks as Go
-// wires the emitting paths. The verifier fails if Rust adds codes or Go starts
-// emitting an allowlisted value without removing the entry.
-var rustErrorCodeEmissionGaps = map[string]string{
-	"sessionBudgetExceeded": "Go rollout-budget handling does not yet surface the sessionBudgetExceeded codexErrorInfo when the session budget is exhausted",
-	"threadRollbackFailed":  "Go thread/rollback failure paths return generic RPC errors instead of the threadRollbackFailed codexErrorInfo",
-}
+// wires the emitting paths. Currently empty: every CodexErrorInfo and
+// ConfigWriteErrorCode wire value is present in Go production code.
+var rustErrorCodeEmissionGaps = map[string]string{}
 
 // TestRustErrorCodeSurfaceAgainstGo is the L0 enum-inventory check for error
 // codes: every wire value of the app-server v2 CodexErrorInfo and

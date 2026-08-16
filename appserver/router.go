@@ -3351,6 +3351,11 @@ func (r *Router) handleThreadRollback(request *Request) (*ThreadRollbackResponse
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	// Mirrors Rust core/src/session/handlers.rs thread_rollback: a num_turns < 1
+	// request surfaces the ThreadRollbackFailed codexErrorInfo.
+	if params.NumTurns < 1 {
+		return nil, threadRollbackFailed("numTurns must be >= 1")
+	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}

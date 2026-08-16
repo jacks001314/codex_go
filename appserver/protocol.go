@@ -227,6 +227,10 @@ var (
 	ErrUnknownMethod         = errors.New("unknown app-server method")
 	ErrInvalidRequest        = errors.New("invalid app-server request")
 	ErrJSONRPCInvalidRequest = errors.New("json-rpc invalid request")
+	// ErrSessionBudgetExceeded surfaces the Rust SessionBudgetExceeded
+	// codexErrorInfo when the shared rollout budget is exhausted
+	// (core/src/session/rollout_budget.rs).
+	ErrSessionBudgetExceeded = errors.New("session budget exceeded")
 )
 
 type jsonRPCInvalidRequestError struct {
@@ -250,6 +254,41 @@ func (e *jsonRPCInvalidRequestError) Is(target error) bool {
 
 func jsonRPCInvalidRequest(message string) error {
 	return &jsonRPCInvalidRequestError{message: message}
+}
+
+// threadRollbackFailedError carries the Rust ThreadRollbackFailed codexErrorInfo
+// on thread/rollback request validation failures (num_turns < 1, active turn),
+// mirroring codex-rs core/src/session/handlers.rs. The structured error data
+// makes the app-server RPC response surface the codexErrorInfo like Rust's
+// bespoke event handling (bespoke_event_handling.rs).
+type threadRollbackFailedError struct {
+	message string
+}
+
+func (e *threadRollbackFailedError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
+func (e *threadRollbackFailedError) Unwrap() error {
+	return ErrInvalidRequest
+}
+
+func (e *threadRollbackFailedError) Is(target error) bool {
+	// Rust surfaces rollback failures via invalid_request (-32600) with the
+	// ThreadRollbackFailed codexErrorInfo; the request-level classification
+	// must stay invalid-request, not invalid-params.
+	return target == ErrJSONRPCInvalidRequest || target == ErrInvalidRequest
+}
+
+func (e *threadRollbackFailedError) JSONRPCErrorData() map[string]any {
+	return map[string]any{"codexErrorInfo": "threadRollbackFailed"}
+}
+
+func threadRollbackFailed(message string) error {
+	return &threadRollbackFailedError{message: message}
 }
 
 type Method string

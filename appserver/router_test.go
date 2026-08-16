@@ -35,7 +35,6 @@ func TestRouterStartPromptDoesNotMaterializeThreadLikeRust(t *testing.T) {
 	if startResponse.Error != nil {
 		t.Fatalf("start error: %+v", startResponse.Error)
 	}
-
 	start, ok := startResponse.Result.(*ThreadStartResponse)
 	if !ok {
 		t.Fatalf("unexpected start result type: %T", startResponse.Result)
@@ -108,6 +107,48 @@ func TestRouterStartPromptDoesNotMaterializeThreadLikeRust(t *testing.T) {
 	}
 	if _, err := os.Stat(*start.Thread.Path); !os.IsNotExist(err) {
 		t.Fatalf("thread/start prompt unexpectedly materialized rollout: %v", err)
+	}
+}
+
+// TestRouterThreadRollbackValidationSurfacesThreadRollbackFailedLikeRust pins
+// the Rust ThreadRollbackFailed codexErrorInfo: rollback requests with
+// num_turns < 1 (and, on the runtime router, an active turn) fail with the
+// structured error data carrying codexErrorInfo=threadRollbackFailed
+// (mirrors core/src/session/handlers.rs + bespoke_event_handling.rs).
+func TestRouterThreadRollbackValidationSurfacesThreadRollbackFailedLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	if err := store.Create(&session.Record{ID: "thread-rollback-validation", CreatedAt: now, UpdatedAt: now, RecencyAt: now}); err != nil {
+		t.Fatalf("create thread: %v", err)
+	}
+	router := NewRouter(store)
+
+	response := router.Handle(requestWithParams(t, IntID(50), MethodThreadRollback, ThreadRollbackParams{
+		ThreadID: "thread-rollback-validation",
+		NumTurns: 0,
+	}))
+	if response.Error == nil {
+		t.Fatal("rollback with NumTurns=0 should fail")
+	}
+	if response.Error.Message != "numTurns must be >= 1" {
+		t.Fatalf("error message = %q", response.Error.Message)
+	}
+	if got, ok := response.Error.Data["codexErrorInfo"].(string); !ok || got != "threadRollbackFailed" {
+		t.Fatalf("error data = %#v, want codexErrorInfo=threadRollbackFailed", response.Error.Data)
+	}
+
+	// num_turns >= 1 passes validation (rolling back an empty legacy thread is
+	// a no-op success) and never carries the ThreadRollbackFailed surface.
+	valid := router.Handle(requestWithParams(t, IntID(51), MethodThreadRollback, ThreadRollbackParams{
+		ThreadID: "thread-rollback-validation",
+		NumTurns: 1,
+	}))
+	if valid.Error == nil {
+		// Success path: no error payload to inspect.
+		return
+	}
+	if _, ok := valid.Error.Data["codexErrorInfo"]; ok {
+		t.Fatalf("non-validation rollback failure should not carry ThreadRollbackFailed: %#v", valid.Error.Data)
 	}
 }
 

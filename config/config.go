@@ -491,6 +491,18 @@ func validateKnownFeatureFields(value any) error {
 			}
 		}
 	}
+	if rolloutBudget, ok := features["rollout_budget"].(map[string]any); ok {
+		// Mirrors Rust RolloutBudgetConfigToml (serde deny_unknown_fields).
+		known := map[string]bool{
+			"enabled": true, "limit_tokens": true, "reminder_at_remaining_tokens": true,
+			"sampling_token_weight": true, "prefill_token_weight": true,
+		}
+		for key := range rolloutBudget {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `features.rollout_budget.%s`", key)
+			}
+		}
+	}
 	return nil
 }
 

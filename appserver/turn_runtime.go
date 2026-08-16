@@ -1342,6 +1342,26 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			}
 		}
 	}
+	if budget := r.rolloutBudgetForSession(); budget != nil {
+		// Mirrors Rust Session::record_rollout_budget_usage
+		// (core/src/session/mod.rs): each completed turn charges its usage
+		// against the shared rollout budget; exhaustion fails the turn with
+		// the sessionBudgetExceeded codexErrorInfo.
+		exhausted, budgetErr := budget.RecordUsage(runtimeutil.TokenUsage{
+			InputTokens:             result.Usage.InputTokens,
+			CachedInputTokens:       result.Usage.CachedInputTokens,
+			OutputTokens:            result.Usage.OutputTokens,
+			CodexRolloutBudgetUnits: result.Usage.CodexRolloutBudgetUnits,
+		})
+		if budgetErr != nil {
+			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, budgetErr, nil)
+			return
+		}
+		if exhausted {
+			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, ErrSessionBudgetExceeded, nil)
+			return
+		}
+	}
 	completedAt := time.Now().UTC()
 	completedAtUnix := completedAt.Unix()
 	durationMS := completedAt.UnixMilli() - startedAtMS
@@ -3335,6 +3355,8 @@ func turnAnalyticsErrorFieldsFromError(err error) turnAnalyticsErrorFields {
 		errors.Is(err, sandbox.ErrInvalidPermissionProfileRequest),
 		errors.Is(err, sandbox.ErrInvalidWindowsSandboxRequest):
 		return turnAnalyticsErrorFields{TurnError: "sandboxError", CodexErrorKind: stringPtrIfNotEmpty("sandbox")}
+	case errors.Is(err, ErrSessionBudgetExceeded):
+		return turnAnalyticsErrorFields{TurnError: "sessionBudgetExceeded", CodexErrorKind: stringPtrIfNotEmpty("rollout_budget")}
 	default:
 		return turnAnalyticsErrorFields{}
 	}
