@@ -440,6 +440,13 @@
                       "area":  "parity",
                       "reason":  "The differential harness surfaced a CLI stdout divergence: Rust print_summary groups all added, then modified, then deleted, each in hunk application order, while Go's Summary() path-sorted within each kind (e.g. 'M nested/a.txt M b.txt' vs 'M b.txt M nested/a.txt'). Summary() now mirrors Rust's grouping/order; the harness compares stdout byte-exact on success and failure (both print nothing to stdout on failure) across 3500+ additional seeded cases. New TestContractVerifiersExistInGoTestFiles audits that every contract verifier name maps to a real test function in the Go tree (location-agnostic; goPaths remain implementation paths).",
                       "test":  "go test ./parity -run 'TestApplyPatchDifferentialAgainstRustOracle|TestContractVerifiersExistInGoTestFiles' -count=1; go test ./applypatch -count=1"
+                  },
+                  {
+                      "id":  "l0-enum-inventory-sandbox-types-and-event-names",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Completed two L0 enum-inventory items: (1) TestRustProcessSandboxTypeSurfaceAgainstGo pins the exec-server ProcessSandboxType wire values (camelCase none/macosSeatbelt/linuxSeccomp/windowsRestrictedToken) against Go's execserver constants - exact match; (2) TestRustEventMsgWireNamesCoverRecordedSurface extracts the app-server EventMsg wire names (snake_case + serde renames) from protocol.rs and pins every codex_event msg.type in the oss-story recording to a current wire name or a documented historical rename (agent_message_delta -> agent_message_content_delta, agent_reasoning_raw_content_delta -> reasoning_raw_content_delta), so future event renames break the check.",
+                      "test":  "go test ./parity -run 'TestRustProcessSandboxTypeSurfaceAgainstGo|TestRustEventMsgWireNamesCoverRecordedSurface' -count=1"
                   }
               ]
 }
