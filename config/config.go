@@ -379,6 +379,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"notify":                                     {},
 	"openai_base_url":                            {},
 	"orchestrator":                               {},
+	"oss_provider":                               {},
 	"otel":                                       {},
 	"personality":                                {},
 	"permissions":                                {},
@@ -496,6 +497,14 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 					return fmt.Errorf("unknown configuration field `marketplaces.%s.%s`", name, key)
 				}
 			}
+		}
+	}
+	if rawWorkspaces, ok := values["forced_chatgpt_workspace_id"].(string); ok {
+		// Mirrors Rust ForcedChatgptWorkspaceIds deserialize (config/src/
+		// config_toml.rs): a single string containing a comma is rejected with
+		// the same message instead of being silently treated as one workspace.
+		if strings.Contains(rawWorkspaces, ",") {
+			return errors.New("forced_chatgpt_workspace_id must be a single workspace ID string or a TOML list of strings; comma-separated strings are not supported. Use `forced_chatgpt_workspace_id = [\"123e4567-e89b-42d3-a456-426614174000\", \"123e4567-e89b-42d3-a456-426614174001\"]` instead.")
 		}
 	}
 	return nil

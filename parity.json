@@ -587,6 +587,12 @@
                       "area":  "parity",
                       "reason":  "Refreshed the alignment-control domain evidence to reflect the current state: 15 contracts complete with verifiers, 87 packages 0 FAIL, sdktests 50/51, L0 enum inventory complete (model metadata 41/41, error codes zero gaps, sandbox exact, events pinned), the config-schema audit 16->7 fixing 9 real gaps, L3 facility readiness, and the remaining certification blockers (L3 live SDK matrix authorization/provider, L4 native platform matrix billing, sdk-cancellation upstream fix). Domain status stays partial (certification not done).",
                       "test":  "go test ./parity -run 'TestAlignmentDomainsCannotOverclaimCompletion|TestAlignmentBaselineIsFrozenAndTraceable' -count=1"
-                  }
-              ]
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./config -run 'OSSProvider|CommaSeparated|StrictConfig' -count=1; go test ./parity -run 'TestRustConfigParseSamplesRunInGo|TestRustConfigSchemaSurfaceAgainstGo' -count=1",
+                      "id":  "config-parse-shared-fixtures-and-oss-provider-surface",
+                      "reason":  "Closed a config-surface gap and added the missing L1 config-parse shared-fixture differential (djalign method 1): (1) Go strict config now recognizes the Rust top-level oss_provider key (config.schema.json) without value validation at load time, mirroring Rust's Option<String> deserialization - validation stays in the exec consumer (ValidateProviderID rejects legacy ollama-chat); the config-schema rust-only allowlist shrank from 7 to 6. (2) The new differential test drives Rust config_toml.rs test samples through Go's strict loader: forced_chatgpt_workspace_id accepts single-string and TOML-list forms, and rejects comma-separated strings with Rust's exact message (Go previously accepted them as one workspace ID); Rust-side sample presence is pinned by fn name so upstream test removal breaks the contract. Registered as contract config-parse-shared-fixtures.",
+                      "area":  "parity"
+                  }              ]
 }

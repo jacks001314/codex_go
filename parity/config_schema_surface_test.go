@@ -21,7 +21,6 @@ var configSchemaRustOnlyAllowlist = map[string]string{
 	"experimental_thread_config_endpoint": "Rust experimental thread-config endpoint; not implemented in Go",
 	"experimental_thread_store":           "Rust experimental thread store; Go uses its own session store",
 	"ghost_snapshot":                      "Rust checkpoint/ghost snapshot persistence; not implemented in Go",
-	"oss_provider":                        "Rust bundled OSS provider block; Go models OSS providers via model_providers",
 }
 
 // configSchemaGoOnlyAllowlist lists Go-recognized keys absent from Rust's
@@ -64,8 +63,8 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	if len(rustKeys) != 94 {
 		t.Fatalf("Rust config.schema.json top-level property count = %d, want 94 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 93 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 93 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 94 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 94 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)

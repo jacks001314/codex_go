@@ -571,6 +571,43 @@ func TestToolOutputTokenLimitMatchesRustOptionalUsize(t *testing.T) {
 	}
 }
 
+func TestLoadEffectiveStrictConfigRejectsCommaSeparatedWorkspaceIDs(t *testing.T) {
+	// Mirrors Rust ForcedChatgptWorkspaceIds deserialize (config/src/
+	// config_toml.rs): a single string containing a comma is rejected with the
+	// same message instead of being silently treated as one workspace ID.
+	dir := t.TempDir()
+	body := "model = \"gpt-5\"\nforced_chatgpt_workspace_id = \"123e4567-e89b-42d3-a456-426614174000,123e4567-e89b-42d3-a456-426614174001\"\n"
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	_, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+	if err == nil {
+		t.Fatal("LoadEffectiveWithOptions accepted comma-separated forced_chatgpt_workspace_id")
+	}
+	for _, want := range []string{
+		"forced_chatgpt_workspace_id must be a single workspace ID string or a TOML list of strings",
+		"comma-separated strings are not supported",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+
+	// The TOML list form and single string form stay accepted.
+	for _, body := range []string{
+		"forced_chatgpt_workspace_id = \"123e4567-e89b-42d3-a456-426614174000\"\n",
+		"forced_chatgpt_workspace_id = [\"123e4567-e89b-42d3-a456-426614174000\", \"123e4567-e89b-42d3-a456-426614174001\"]\n",
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+		if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err != nil {
+			t.Fatalf("LoadEffectiveWithOptions strict %q returned error: %v", body, err)
+		}
+	}
+}
+
 func TestLoadEffectiveWithOptionsIncludesManagedConfigLayer(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(ConfigPath(dir), []byte("model = \"gpt-user\"\n"), 0o600); err != nil {
@@ -691,6 +728,28 @@ func TestLoadEffectiveStrictConfigAllowsTUI(t *testing.T) {
 	}
 	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err != nil {
 		t.Fatalf("LoadEffectiveWithOptions strict tui returned error: %v", err)
+	}
+}
+
+func TestLoadEffectiveStrictConfigAcceptsOSSProviderKey(t *testing.T) {
+	// Rust recognizes top-level `oss_provider` (Option<String>,
+	// config/src/config_toml.rs); strict config must accept any string value
+	// at load time because Rust deserialization does not validate the value -
+	// validation happens only in set_default_oss_provider (save path), and Go's
+	// consumer (exec.effectiveProvider) rejects the removed legacy provider id.
+	for _, value := range []string{"lmstudio", "ollama", "custom-provider", "ollama-chat"} {
+		dir := t.TempDir()
+		body := "model = \"gpt-5\"\noss_provider = \"" + value + "\"\n"
+		if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+		cfg, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+		if err != nil {
+			t.Fatalf("LoadEffectiveWithOptions strict oss_provider=%q returned error: %v", value, err)
+		}
+		if cfg.Values["oss_provider"] != value {
+			t.Fatalf("oss_provider = %#v, want %q", cfg.Values["oss_provider"], value)
+		}
 	}
 }
 
