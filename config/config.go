@@ -341,6 +341,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"include_environment_context":                {},
 	"include_permissions_instructions":           {},
 	"instructions":                               {},
+	"log_dir":                                    {},
 	"mcp_oauth_credentials_store":                {},
 	"mcp_servers":                                {},
 	"memories":                                   {},

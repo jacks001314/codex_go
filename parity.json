@@ -524,6 +524,13 @@
                       "area":  "parity",
                       "reason":  "Wired the Rust sqlite_home config key: Go's state package already supported the CODEX_SQLITE_HOME env var and SqliteConfig, but the sqlite_home config key was missing (strict config rejected it). Added the key, Config.SQLiteHome() accessor, and state.SqliteConfigForCodexHomeWithOverride (configured override wins, then env, then codex home, mirroring Rust's managed-value precedence), wired into the appserver state runtime resolution (prepareSharedStateRuntime -> resolveDefaultStateRuntime). The config-schema rust-only allowlist shrank from 15 to 14. TestSqliteConfigForCodexHomeWithOverride pins the precedence.",
                       "test":  "go test ./state -run TestSqliteConfigForCodexHomeWithOverride -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
+                  },
+                  {
+                      "id":  "log-dir-config-surface",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Recognized the Rust log_dir config key: Go's doctor already reads log_dir for log-path reporting, but strict config validation rejected it (not in knownTopLevelConfigFields). Added the key so configured log_dir is accepted and doctor-reported; the config-schema rust-only allowlist shrank from 14 to 13 (Go's logging remains SQLite-based; a file-log redirect honoring log_dir is a tracked follow-up).",
+                      "test":  "go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
                   }
               ]
 }
