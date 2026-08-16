@@ -34,6 +34,37 @@ func TestStaticModelsManagerListsSortedModelsAndMarksDefault(t *testing.T) {
 	}
 }
 
+// TestModelInfoReasoningSummariesParseMirrorsRustDefaultTrue pins the
+// supports_reasoning_summary_parameter parse semantics: absent defaults true
+// (Rust serde default_true), the Rust wire name wins, and the legacy Go name
+// remains a parse-time alias.
+func TestModelInfoReasoningSummariesParseMirrorsRustDefaultTrue(t *testing.T) {
+	base := `{"models":[{"slug":"gpt-test","display_name":"GPT Test"}]}`
+	var absent ModelsResponse
+	if err := json.Unmarshal([]byte(base), &absent); err != nil {
+		t.Fatalf("unmarshal absent: %v", err)
+	}
+	if !absent.Models[0].SupportsReasoningSummaries {
+		t.Fatal("absent supports_reasoning_summary_parameter should default true like Rust")
+	}
+
+	var rustFalse ModelsResponse
+	if err := json.Unmarshal([]byte(`{"models":[{"slug":"gpt-test","display_name":"GPT Test","supports_reasoning_summary_parameter":false}]}`), &rustFalse); err != nil {
+		t.Fatalf("unmarshal rust-false: %v", err)
+	}
+	if rustFalse.Models[0].SupportsReasoningSummaries {
+		t.Fatal("supports_reasoning_summary_parameter=false should parse as false")
+	}
+
+	var legacy ModelsResponse
+	if err := json.Unmarshal([]byte(`{"models":[{"slug":"gpt-test","display_name":"GPT Test","supports_reasoning_summaries":false}]}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy: %v", err)
+	}
+	if legacy.Models[0].SupportsReasoningSummaries {
+		t.Fatal("legacy supports_reasoning_summaries=false should parse as false")
+	}
+}
+
 func TestModelCatalogPreservesKnownMultiAgentVersion(t *testing.T) {
 	var catalog ModelsResponse
 	err := json.Unmarshal([]byte(`{"models":[

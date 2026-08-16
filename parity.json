@@ -482,6 +482,13 @@
                       "area":  "parity",
                       "reason":  "Go ModelInfo now carries four previously-missing Rust openai_models::ModelInfo wire fields: shell_type (ConfigShellToolType values), apply_patch_tool_type (freeform), comp_hash, and experimental_supported_tools, populated by the catalog UnmarshalJSON so backend /models metadata round-trips identically; the L0 model-metadata verifier allowlist shrank from 6 to 2 Rust-only entries (availability_nux on ModelSummary, supports_reasoning_summary_parameter naming variant). TestModelInfoUnmarshalRustCatalogShape pins the parse.",
                       "test":  "go test ./parity -run TestRustModelInfoFieldSurfaceAgainstGo -count=1; go test ./model -run TestModelInfoUnmarshalRustCatalogShape -count=1"
+                  },
+                  {
+                      "id":  "model-reasoning-summaries-parse-fixed",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Fixed a real catalog parse gap: Go's ModelInfo parsed only the legacy name supports_reasoning_summaries while the backend /models response sends Rust's serde name supports_reasoning_summary_parameter, so the field was always false and reasoning summaries were never emitted on the catalog-driven request paths (responses_agent.go). The parse now accepts the Rust name as primary (wins), the legacy name as a parse-time alias, and absent fields default to true (Rust serde default_true). The L0 model-metadata verifier allowlist shrank to 1 Rust-only entry (availability_nux) and 2 Go-only extensions (base_instructions, supports_parallel_tool_calls).",
+                      "test":  "go test ./model -run 'TestModelInfoReasoningSummariesParseMirrorsRustDefaultTrue|TestModelInfoUnmarshalRustCatalogShape' -count=1; go test ./parity -run TestRustModelInfoFieldSurfaceAgainstGo -count=1"
                   }
               ]
 }

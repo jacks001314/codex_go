@@ -178,45 +178,48 @@ type TruncationPolicy struct {
 }
 
 type ModelInfo struct {
-	Slug                           string            `json:"slug"`
-	DisplayName                    string            `json:"display_name"`
-	Description                    string            `json:"description"`
-	DefaultReasoningLevel          string            `json:"default_reasoning_level"`
-	SupportedReasoningLevels       []string          `json:"supported_reasoning_levels"`
-	Visibility                     string            `json:"visibility"`
-	SupportedInAPI                 bool              `json:"supported_in_api"`
-	Priority                       int               `json:"priority"`
-	AdditionalSpeedTiers           []string          `json:"additional_speed_tiers"`
-	ServiceTiers                   []string          `json:"service_tiers"`
-	DefaultServiceTier             string            `json:"default_service_tier"`
-	BaseInstructions               string            `json:"base_instructions"`
-	ModelMessages                  *ModelMessages    `json:"model_messages"`
-	IncludeSkillsUsageInstructions bool              `json:"include_skills_usage_instructions"`
-	IncludePluginUsageInstructions bool              `json:"include_plugin_usage_instructions"`
-	IncludeAppsUsageInstructions   bool              `json:"include_apps_usage_instructions"`
-	ModelSpecialty                 string            `json:"model_specialty"`
-	SupportsReasoningSummaries     bool              `json:"supports_reasoning_summaries"`
-	DefaultReasoningSummary        string            `json:"default_reasoning_summary"`
-	SupportVerbosity               bool              `json:"support_verbosity"`
-	DefaultVerbosity               string            `json:"default_verbosity"`
-	WebSearchToolType              string            `json:"web_search_tool_type"`
-	TruncationPolicy               TruncationPolicy  `json:"truncation_policy"`
-	SupportsParallelToolCalls      bool              `json:"supports_parallel_tool_calls"`
-	ToolMode                       string            `json:"tool_mode"`
-	MultiAgentVersion              string            `json:"multi_agent_version"`
-	SupportsImageDetailOriginal    bool              `json:"supports_image_detail_original"`
-	ContextWindow                  int64             `json:"context_window"`
-	MaxContextWindow               int64             `json:"max_context_window"`
-	AutoCompactTokenLimit          int64             `json:"auto_compact_token_limit"`
-	EffectiveContextWindowPercent  int               `json:"effective_context_window_percent"`
-	InputModalities                []string          `json:"input_modalities"`
-	UsedFallbackModelMetadata      bool              `json:"-"`
-	SupportsSearchTool             bool              `json:"supports_search_tool"`
-	UseResponsesLite               bool              `json:"use_responses_lite"`
-	NodeReplAutoReviewRequired     bool              `json:"node_repl_auto_review_required"`
-	NodeReplDisabled               bool              `json:"node_repl_disabled"`
-	AutoReviewModelOverride        string            `json:"auto_review_model_override"`
-	Upgrade                        *ModelInfoUpgrade `json:"upgrade"`
+	Slug                           string         `json:"slug"`
+	DisplayName                    string         `json:"display_name"`
+	Description                    string         `json:"description"`
+	DefaultReasoningLevel          string         `json:"default_reasoning_level"`
+	SupportedReasoningLevels       []string       `json:"supported_reasoning_levels"`
+	Visibility                     string         `json:"visibility"`
+	SupportedInAPI                 bool           `json:"supported_in_api"`
+	Priority                       int            `json:"priority"`
+	AdditionalSpeedTiers           []string       `json:"additional_speed_tiers"`
+	ServiceTiers                   []string       `json:"service_tiers"`
+	DefaultServiceTier             string         `json:"default_service_tier"`
+	BaseInstructions               string         `json:"base_instructions"`
+	ModelMessages                  *ModelMessages `json:"model_messages"`
+	IncludeSkillsUsageInstructions bool           `json:"include_skills_usage_instructions"`
+	IncludePluginUsageInstructions bool           `json:"include_plugin_usage_instructions"`
+	IncludeAppsUsageInstructions   bool           `json:"include_apps_usage_instructions"`
+	ModelSpecialty                 string         `json:"model_specialty"`
+	// SupportsReasoningSummaries mirrors Rust ModelInfo.supports_reasoning_summary_parameter
+	// (serde default_true: absent means true). The legacy Go wire name
+	// supports_reasoning_summaries is still accepted on parse.
+	SupportsReasoningSummaries    bool              `json:"supports_reasoning_summary_parameter"`
+	DefaultReasoningSummary       string            `json:"default_reasoning_summary"`
+	SupportVerbosity              bool              `json:"support_verbosity"`
+	DefaultVerbosity              string            `json:"default_verbosity"`
+	WebSearchToolType             string            `json:"web_search_tool_type"`
+	TruncationPolicy              TruncationPolicy  `json:"truncation_policy"`
+	SupportsParallelToolCalls     bool              `json:"supports_parallel_tool_calls"`
+	ToolMode                      string            `json:"tool_mode"`
+	MultiAgentVersion             string            `json:"multi_agent_version"`
+	SupportsImageDetailOriginal   bool              `json:"supports_image_detail_original"`
+	ContextWindow                 int64             `json:"context_window"`
+	MaxContextWindow              int64             `json:"max_context_window"`
+	AutoCompactTokenLimit         int64             `json:"auto_compact_token_limit"`
+	EffectiveContextWindowPercent int               `json:"effective_context_window_percent"`
+	InputModalities               []string          `json:"input_modalities"`
+	UsedFallbackModelMetadata     bool              `json:"-"`
+	SupportsSearchTool            bool              `json:"supports_search_tool"`
+	UseResponsesLite              bool              `json:"use_responses_lite"`
+	NodeReplAutoReviewRequired    bool              `json:"node_repl_auto_review_required"`
+	NodeReplDisabled              bool              `json:"node_repl_disabled"`
+	AutoReviewModelOverride       string            `json:"auto_review_model_override"`
+	Upgrade                       *ModelInfoUpgrade `json:"upgrade"`
 	// ShellType / ApplyPatchToolType / CompHash / ExperimentalSupportedTools
 	// carry the Rust openai_models::ModelInfo wire fields so catalog metadata
 	// round-trips identically (L0 model-metadata surface).
@@ -273,48 +276,49 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		Limit int64  `json:"limit"`
 	}
 	var raw struct {
-		Slug                           string              `json:"slug"`
-		DisplayName                    string              `json:"display_name"`
-		Description                    any                 `json:"description"`
-		DefaultReasoningLevel          any                 `json:"default_reasoning_level"`
-		SupportedReasoningLevels       []json.RawMessage   `json:"supported_reasoning_levels"`
-		Visibility                     string              `json:"visibility"`
-		SupportedInAPI                 bool                `json:"supported_in_api"`
-		Priority                       int                 `json:"priority"`
-		AdditionalSpeedTiers           []string            `json:"additional_speed_tiers"`
-		ServiceTiers                   []json.RawMessage   `json:"service_tiers"`
-		DefaultServiceTier             any                 `json:"default_service_tier"`
-		BaseInstructions               string              `json:"base_instructions"`
-		ModelMessages                  *ModelMessages      `json:"model_messages"`
-		IncludeSkillsUsageInstructions bool                `json:"include_skills_usage_instructions"`
-		IncludePluginUsageInstructions bool                `json:"include_plugin_usage_instructions"`
-		IncludeAppsUsageInstructions   *bool               `json:"include_apps_usage_instructions"`
-		ModelSpecialty                 any                 `json:"model_specialty"`
-		SupportsReasoningSummaries     bool                `json:"supports_reasoning_summaries"`
-		DefaultReasoningSummary        string              `json:"default_reasoning_summary"`
-		SupportVerbosity               bool                `json:"support_verbosity"`
-		DefaultVerbosity               any                 `json:"default_verbosity"`
-		WebSearchToolType              string              `json:"web_search_tool_type"`
-		TruncationPolicy               rawTruncationPolicy `json:"truncation_policy"`
-		SupportsParallelToolCalls      bool                `json:"supports_parallel_tool_calls"`
-		ToolMode                       any                 `json:"tool_mode"`
-		MultiAgentVersion              any                 `json:"multi_agent_version"`
-		SupportsImageDetailOriginal    bool                `json:"supports_image_detail_original"`
-		ContextWindow                  int64               `json:"context_window"`
-		MaxContextWindow               int64               `json:"max_context_window"`
-		AutoCompactTokenLimit          int64               `json:"auto_compact_token_limit"`
-		EffectiveContextWindowPercent  int                 `json:"effective_context_window_percent"`
-		InputModalities                []string            `json:"input_modalities"`
-		SupportsSearchTool             bool                `json:"supports_search_tool"`
-		UseResponsesLite               bool                `json:"use_responses_lite"`
-		NodeReplAutoReviewRequired     bool                `json:"node_repl_auto_review_required"`
-		NodeReplDisabled               bool                `json:"node_repl_disabled"`
-		AutoReviewModelOverride        any                 `json:"auto_review_model_override"`
-		Upgrade                        *ModelInfoUpgrade   `json:"upgrade"`
-		ShellType                      string              `json:"shell_type"`
-		ApplyPatchToolType             string              `json:"apply_patch_tool_type"`
-		CompHash                       string              `json:"comp_hash"`
-		ExperimentalSupportedTools     []string            `json:"experimental_supported_tools"`
+		Slug                              string              `json:"slug"`
+		DisplayName                       string              `json:"display_name"`
+		Description                       any                 `json:"description"`
+		DefaultReasoningLevel             any                 `json:"default_reasoning_level"`
+		SupportedReasoningLevels          []json.RawMessage   `json:"supported_reasoning_levels"`
+		Visibility                        string              `json:"visibility"`
+		SupportedInAPI                    bool                `json:"supported_in_api"`
+		Priority                          int                 `json:"priority"`
+		AdditionalSpeedTiers              []string            `json:"additional_speed_tiers"`
+		ServiceTiers                      []json.RawMessage   `json:"service_tiers"`
+		DefaultServiceTier                any                 `json:"default_service_tier"`
+		BaseInstructions                  string              `json:"base_instructions"`
+		ModelMessages                     *ModelMessages      `json:"model_messages"`
+		IncludeSkillsUsageInstructions    bool                `json:"include_skills_usage_instructions"`
+		IncludePluginUsageInstructions    bool                `json:"include_plugin_usage_instructions"`
+		IncludeAppsUsageInstructions      *bool               `json:"include_apps_usage_instructions"`
+		ModelSpecialty                    any                 `json:"model_specialty"`
+		SupportsReasoningSummaryParameter *bool               `json:"supports_reasoning_summary_parameter"`
+		SupportsReasoningSummariesLegacy  *bool               `json:"supports_reasoning_summaries"`
+		DefaultReasoningSummary           string              `json:"default_reasoning_summary"`
+		SupportVerbosity                  bool                `json:"support_verbosity"`
+		DefaultVerbosity                  any                 `json:"default_verbosity"`
+		WebSearchToolType                 string              `json:"web_search_tool_type"`
+		TruncationPolicy                  rawTruncationPolicy `json:"truncation_policy"`
+		SupportsParallelToolCalls         bool                `json:"supports_parallel_tool_calls"`
+		ToolMode                          any                 `json:"tool_mode"`
+		MultiAgentVersion                 any                 `json:"multi_agent_version"`
+		SupportsImageDetailOriginal       bool                `json:"supports_image_detail_original"`
+		ContextWindow                     int64               `json:"context_window"`
+		MaxContextWindow                  int64               `json:"max_context_window"`
+		AutoCompactTokenLimit             int64               `json:"auto_compact_token_limit"`
+		EffectiveContextWindowPercent     int                 `json:"effective_context_window_percent"`
+		InputModalities                   []string            `json:"input_modalities"`
+		SupportsSearchTool                bool                `json:"supports_search_tool"`
+		UseResponsesLite                  bool                `json:"use_responses_lite"`
+		NodeReplAutoReviewRequired        bool                `json:"node_repl_auto_review_required"`
+		NodeReplDisabled                  bool                `json:"node_repl_disabled"`
+		AutoReviewModelOverride           any                 `json:"auto_review_model_override"`
+		Upgrade                           *ModelInfoUpgrade   `json:"upgrade"`
+		ShellType                         string              `json:"shell_type"`
+		ApplyPatchToolType                string              `json:"apply_patch_tool_type"`
+		CompHash                          string              `json:"comp_hash"`
+		ExperimentalSupportedTools        []string            `json:"experimental_supported_tools"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -337,7 +341,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		IncludePluginUsageInstructions: raw.IncludePluginUsageInstructions,
 		IncludeAppsUsageInstructions:   defaultTrueBool(raw.IncludeAppsUsageInstructions),
 		ModelSpecialty:                 stringFromJSONValue(raw.ModelSpecialty),
-		SupportsReasoningSummaries:     raw.SupportsReasoningSummaries,
+		SupportsReasoningSummaries:     reasoningSummariesSupport(raw.SupportsReasoningSummaryParameter, raw.SupportsReasoningSummariesLegacy),
 		DefaultReasoningSummary:        raw.DefaultReasoningSummary,
 		SupportVerbosity:               raw.SupportVerbosity,
 		DefaultVerbosity:               stringFromJSONValue(raw.DefaultVerbosity),
@@ -742,6 +746,20 @@ func defaultTrueBool(value *bool) bool {
 		return true
 	}
 	return *value
+}
+
+// reasoningSummariesSupport resolves the model's reasoning-summary support,
+// mirroring Rust ModelInfo.supports_reasoning_summary_parameter with
+// #[serde(default = "default_true")]: the Rust wire name wins, the legacy Go
+// name is a parse-time alias, and an absent field defaults to true.
+func reasoningSummariesSupport(primary, legacy *bool) bool {
+	if primary != nil {
+		return *primary
+	}
+	if legacy != nil {
+		return *legacy
+	}
+	return true
 }
 
 func knownMultiAgentVersion(value string) string {

@@ -172,8 +172,7 @@ func TestRustErrorCodeSurfaceAgainstGo(t *testing.T) {
 // ModelInfo does not carry, with the reason so each entry is auditable and
 // removable as Go adopts the field.
 var modelInfoRustOnlyAllowlist = map[string]string{
-	"availability_nux":                     "carried on Go's ModelSummary (model/api.go) rather than ModelInfo",
-	"supports_reasoning_summary_parameter": "Go carries the same concept as supports_reasoning_summaries (whether the model accepts the Responses API reasoning.summary parameter); naming variant",
+	"availability_nux": "carried on Go's ModelSummary (model/api.go) rather than ModelInfo",
 }
 
 // modelInfoGoOnlyAllowlist documents Go ModelInfo JSON fields absent from
@@ -181,7 +180,6 @@ var modelInfoRustOnlyAllowlist = map[string]string{
 var modelInfoGoOnlyAllowlist = map[string]string{
 	"base_instructions":            "Go extension carrying the model base instructions template",
 	"supports_parallel_tool_calls": "Go extension for parallel tool call support",
-	"supports_reasoning_summaries": "Go's name for Rust's supports_reasoning_summary_parameter",
 }
 
 // TestRustModelInfoFieldSurfaceAgainstGo is the L0 enum-inventory check for
