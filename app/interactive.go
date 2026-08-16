@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,36 @@ type interactiveSession struct {
 	Stderr   io.Writer
 	ThreadID string
 	UI       *codextui.State
+}
+
+// interactiveExternalEditorDirectoryHandler resolves a protected directory for
+// external editor buffer files from the effective filesystem sandbox policy
+// (Rust 73abda8bfe, #38830): the configured Codex home, the default Codex
+// home, and a workspace fallback are tried in order, rejecting candidates the
+// policy exposes as writable.
+func interactiveExternalEditorDirectoryHandler(root *cli.RootOptions, codexHome string) codextea.ExternalEditorDirectoryFunc {
+	return func(cwd string) (string, error) {
+		loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
+		if err != nil {
+			return "", err
+		}
+		resolution, err := loaded.ResolveSandboxPermissionProfile("", cwd)
+		if err != nil {
+			return "", err
+		}
+		if resolution == nil || resolution.Profile == nil {
+			return "", nil
+		}
+		policy := resolution.Profile.LegacySandboxPolicy()
+		candidates := []string{codexHome}
+		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+			candidates = append(candidates, filepath.Join(home, ".codex"))
+		}
+		if runtime.GOOS != "windows" && strings.TrimSpace(cwd) != "" {
+			candidates = append(candidates, filepath.Join(cwd, ".codex"))
+		}
+		return codextea.EditorDirectory(candidates, policy, cwd)
+	}
 }
 
 type interactiveTurnRunner interface {
@@ -781,6 +812,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 			}
 			return func() bubbletea.Msg { return codextea.MCPStartupFinishAfterLagMsg{} }
 		},
+		OnExternalEditorDirectory: interactiveExternalEditorDirectoryHandler(root, auth.DefaultCodexHome()),
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			approvalBroker.respond(response)
 			elicitationBroker.respond(response)

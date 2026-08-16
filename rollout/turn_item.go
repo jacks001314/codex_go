@@ -278,8 +278,15 @@ func sessionItemCoreKind(item *session.Item, values map[string]any) string {
 	if rolloutBoolFromAny(firstAny(values, "dynamicToolCall", "dynamic_tool_call")) {
 		return "DynamicToolCall"
 	}
-	if isToolSessionType(kind) && firstAny(values, "command", "cmd") != nil {
-		return "CommandExecution"
+	if isToolSessionType(kind) {
+		if firstAny(values, "command", "cmd") != nil {
+			return "CommandExecution"
+		}
+		// Rust's canonical paginated thread vocabulary has no plain
+		// function_call / tool_output variants: non-command tool exchanges are
+		// represented as DynamicToolCall items (codex-rs protocol TurnItem).
+		// This fallback makes exec-generated tool items paginated-compatible.
+		return "DynamicToolCall"
 	}
 	return ""
 }
@@ -389,7 +396,11 @@ func populateCoreDynamicTool(core map[string]any, item *session.Item, values map
 	core["tool"] = firstNonEmptyString(anyString(values, "tool"), toolLeaf(item.Name))
 	core["arguments"] = jsonValue(firstAny(values, "arguments", "input", "rawArguments", "raw_arguments"), map[string]any{})
 	core["status"] = snakeEnum(dynamicStatus(item, values))
-	copyOptional(core, "content_items", firstAny(values, "contentItems", "content_items"))
+	contentItems := firstAny(values, "contentItems", "content_items")
+	if contentItems == nil && item != nil && strings.Contains(item.Type, "output") && strings.TrimSpace(item.Text) != "" {
+		contentItems = []any{map[string]any{"type": "inputText", "text": item.Text}}
+	}
+	copyOptional(core, "content_items", contentItems)
 	copyOptional(core, "success", firstAny(values, "success"))
 	copyOptional(core, "error", firstAny(values, "error"))
 	if duration, ok := durationFromMS(firstAny(values, "durationMs", "duration_ms")); ok {

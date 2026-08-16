@@ -196,6 +196,7 @@ func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
 	switcher := m.onSwitchAgent
 	if switcher == nil {
 		if m.State != nil {
+			m.invalidateAppsScope()
 			m.State.SetThreadID(threadID)
 			m.State.Messages = nil
 			m.State.BumpMessagesRevision()
@@ -256,6 +257,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		m.notice = "Agent switch failed: missing thread id"
 		return
 	}
+	m.invalidateAppsScope()
 	if m.State != nil {
 		m.State.SetThreadID(entry.ThreadID)
 		messages := append([]codextui.Message(nil), message.Response.Messages...)

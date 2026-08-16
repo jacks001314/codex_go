@@ -2,6 +2,7 @@ package tea
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -26,7 +27,7 @@ func (m *Model) openExternalEditor() bubbletea.Cmd {
 	}
 	runner := m.onExternalEditor
 	if runner == nil {
-		runner = defaultExternalEditorCmd
+		return m.defaultExternalEditor()
 	}
 	m.editorActive = true
 	m.notice = ""
@@ -37,6 +38,40 @@ func (m *Model) openExternalEditor() bubbletea.Cmd {
 		m.notice = "Failed to open editor: editor command did not start"
 	}
 	return cmd
+}
+
+// defaultExternalEditor resolves a protected editor directory (Rust #38830)
+// and runs the configured editor against a buffer file inside it.
+func (m *Model) defaultExternalEditor() bubbletea.Cmd {
+	m.editorActive = true
+	m.notice = ""
+	seed := m.composer.Value()
+	editorDir := ""
+	if m.externalEditorDirectory != nil {
+		dir, err := m.externalEditorDirectory(m.sessionCWD)
+		if err != nil {
+			m.editorActive = false
+			return func() bubbletea.Msg {
+				return ExternalEditorFinishedMsg{Err: fmt.Errorf("cannot open editor: %w", err)}
+			}
+		}
+		if strings.TrimSpace(dir) != "" {
+			editorDir = dir
+		}
+	}
+	editor, err := resolveExternalEditorCommand()
+	if err != nil {
+		return func() bubbletea.Msg {
+			return ExternalEditorFinishedMsg{Err: err}
+		}
+	}
+	command := newExternalEditorCommand(seed, editor, editorDir)
+	return bubbletea.Exec(command, func(err error) bubbletea.Msg {
+		if err != nil {
+			return ExternalEditorFinishedMsg{Err: err}
+		}
+		return ExternalEditorFinishedMsg{Text: command.EditedText()}
+	})
 }
 
 func (m *Model) applyExternalEditorFinished(message ExternalEditorFinishedMsg) {
@@ -58,22 +93,6 @@ func (m *Model) applyExternalEditorFinished(message ExternalEditorFinishedMsg) {
 	m.notice = ""
 }
 
-func defaultExternalEditorCmd(seed string) bubbletea.Cmd {
-	editor, err := resolveExternalEditorCommand()
-	if err != nil {
-		return func() bubbletea.Msg {
-			return ExternalEditorFinishedMsg{Err: err}
-		}
-	}
-	command := newExternalEditorCommand(seed, editor)
-	return bubbletea.Exec(command, func(err error) bubbletea.Msg {
-		if err != nil {
-			return ExternalEditorFinishedMsg{Err: err}
-		}
-		return ExternalEditorFinishedMsg{Text: command.EditedText()}
-	})
-}
-
 func resolveExternalEditorCommand() ([]string, error) {
 	raw, ok := os.LookupEnv("VISUAL")
 	if !ok {
@@ -92,16 +111,18 @@ func resolveExternalEditorCommand() ([]string, error) {
 	return parts, nil
 }
 
-func newExternalEditorCommand(seed string, editor []string) *externalEditorCommand {
+func newExternalEditorCommand(seed string, editor []string, directory string) *externalEditorCommand {
 	return &externalEditorCommand{
-		seed:   seed,
-		editor: append([]string(nil), editor...),
+		seed:      seed,
+		editor:    append([]string(nil), editor...),
+		directory: directory,
 	}
 }
 
 type externalEditorCommand struct {
-	seed   string
-	editor []string
+	seed      string
+	editor    []string
+	directory string
 
 	stdin  io.Reader
 	stdout io.Writer
@@ -126,7 +147,7 @@ func (c *externalEditorCommand) Run() error {
 	if c == nil || len(c.editor) == 0 {
 		return errExternalEditorEmpty
 	}
-	file, err := os.CreateTemp("", "codex-editor-*.md")
+	file, err := os.CreateTemp(c.directory, "codex-editor-*.md")
 	if err != nil {
 		return err
 	}

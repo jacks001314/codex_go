@@ -83,6 +83,85 @@ func TestPaginatedAppendSessionItemsWritesRustItemCompletedWire(t *testing.T) {
 	}
 }
 
+func TestCoreTurnItemJSONFromSessionItemConvertsPlainToolItemsLikeRust(t *testing.T) {
+	now := time.Date(2026, 8, 16, 1, 2, 3, 0, time.UTC)
+	cases := []struct {
+		name  string
+		item  session.Item
+		check func(t *testing.T, core map[string]any)
+	}{
+		{
+			name: "plain function call becomes dynamic tool call",
+			item: session.Item{
+				ID: "call-1", Type: "function_call", Name: "echo", CallID: "call-1",
+				Text: `{}`, CreatedAt: now,
+				Data:     map[string]any{"arguments": `{}`},
+				Metadata: map[string]any{"turnId": "turn-1"},
+			},
+			check: func(t *testing.T, core map[string]any) {
+				if core["type"] != "DynamicToolCall" || core["id"] != "call-1" || core["tool"] != "echo" || core["status"] != "in_progress" {
+					t.Fatalf("core = %#v", core)
+				}
+			},
+		},
+		{
+			name: "command tool call becomes command execution",
+			item: session.Item{
+				ID: "call-cmd", Type: "function_call", Name: "shell", CallID: "call-cmd",
+				Text: `{"cmd":"date"}`, CreatedAt: now,
+				Data:     map[string]any{"arguments": `{"cmd":"date"}`, "command": "date"},
+				Metadata: map[string]any{"turnId": "turn-1"},
+			},
+			check: func(t *testing.T, core map[string]any) {
+				if core["type"] != "CommandExecution" || core["id"] != "call-cmd" {
+					t.Fatalf("core = %#v", core)
+				}
+				if command, ok := core["command"].([]any); !ok || len(command) != 1 || command[0] != "date" {
+					t.Fatalf("core command = %#v", core["command"])
+				}
+			},
+		},
+		{
+			name: "plain tool output becomes completed dynamic tool call with content",
+			item: session.Item{
+				ID: "fco_1", Type: "tool_output", CallID: "call-1",
+				Text: "tool says hi", CreatedAt: now,
+				Data:     map[string]any{"call_id": "call-1", "success": true},
+				Metadata: map[string]any{"turnId": "turn-1"},
+			},
+			check: func(t *testing.T, core map[string]any) {
+				if core["type"] != "DynamicToolCall" || core["status"] != "completed" || core["success"] != true {
+					t.Fatalf("core = %#v", core)
+				}
+				content, ok := core["content_items"].([]any)
+				if !ok || len(content) != 1 {
+					t.Fatalf("core content = %#v", core["content_items"])
+				}
+				block, ok := content[0].(map[string]any)
+				if !ok || block["text"] != "tool says hi" || block["type"] != "inputText" {
+					t.Fatalf("core content block = %#v", content[0])
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, turnID, err := CoreTurnItemJSONFromSessionItem(&tc.item)
+			if err != nil {
+				t.Fatalf("CoreTurnItemJSONFromSessionItem() error = %v", err)
+			}
+			if turnID != "turn-1" {
+				t.Fatalf("turn id = %q, want turn-1", turnID)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("Unmarshal(%s) error = %v", raw, err)
+			}
+			tc.check(t, got)
+		})
+	}
+}
+
 func TestCoreAndPublicThreadItemWireConversionsMatchRustShapes(t *testing.T) {
 	turnID := "turn-1"
 	command := session.Item{

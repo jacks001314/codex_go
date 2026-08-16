@@ -79,6 +79,11 @@ type InterruptFunc func() bubbletea.Cmd
 
 type ExternalEditorFunc func(seed string) bubbletea.Cmd
 
+// ExternalEditorDirectoryFunc resolves a protected directory for external
+// editor buffer files at editor-open time (Rust #38830). The directory must
+// not be writable under the session's filesystem policy.
+type ExternalEditorDirectoryFunc func(cwd string) (string, error)
+
 type KeymapEditFunc func(edit codextui.KeymapEdit) (*codextui.KeymapConfig, string, error)
 
 type ExternalEditorFinishedMsg struct {
@@ -491,10 +496,11 @@ type MentionFileSearchResultMsg struct {
 }
 
 type AppListResultMsg struct {
-	ThreadID     string
-	ForceRefetch bool
-	Response     appsapi.AppListResponse
-	Err          error
+	ThreadID        string
+	ScopeGeneration uint64
+	ForceRefetch    bool
+	Response        appsapi.AppListResponse
+	Err             error
 }
 
 type AgentListResultMsg struct {
@@ -619,6 +625,7 @@ type Options struct {
 	OnInterrupt                   InterruptFunc
 	OnInterruptMCPStartup         InterruptFunc
 	OnExternalEditor              ExternalEditorFunc
+	OnExternalEditorDirectory     ExternalEditorDirectoryFunc
 	KeymapConfig                  *codextui.KeymapConfig
 	OnKeymapEdit                  KeymapEditFunc
 	OnModalResponse               ModalResponseFunc
@@ -822,6 +829,7 @@ type Model struct {
 	onInterruptMCPStartup           InterruptFunc
 	localDaemonSession              bool
 	onExternalEditor                ExternalEditorFunc
+	externalEditorDirectory         ExternalEditorDirectoryFunc
 	keymapConfig                    *codextui.KeymapConfig
 	keymapSelectedContext           string
 	keymapSelectedAction            string
@@ -876,6 +884,7 @@ type Model struct {
 	windowsSandboxSetupChoiceRequired bool
 	onOpenDesktopThread               DesktopThreadOpenFunc
 	onSandboxReadDir                  SandboxReadDirFunc
+	appsScopeGeneration               uint64
 	onDetectExternalAgent             ExternalAgentDetectFunc
 	onImportExternalAgent             ExternalAgentImportFunc
 	pendingExternalAgentImports       map[string]bool
@@ -1067,6 +1076,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onInterruptMCPStartup:           options.OnInterruptMCPStartup,
 		localDaemonSession:              options.LocalDaemonSession,
 		onExternalEditor:                options.OnExternalEditor,
+		externalEditorDirectory:         options.OnExternalEditorDirectory,
 		keymapConfig:                    options.KeymapConfig.Clone(),
 		onKeymapEdit:                    options.OnKeymapEdit,
 		onModalResponse:                 options.OnModalResponse,

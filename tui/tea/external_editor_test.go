@@ -102,7 +102,7 @@ func TestExternalEditorCommandRunReturnsUpdatedContent(t *testing.T) {
 		exe,
 		"-test.run=^TestExternalEditorHelperProcess$",
 		"--",
-	})
+	}, t.TempDir())
 
 	if err := command.Run(); err != nil {
 		t.Fatalf("Run() error = %v", err)

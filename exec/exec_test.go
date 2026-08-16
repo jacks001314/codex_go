@@ -218,7 +218,7 @@ func TestRunResumeCompactsBeforeTurnAndEmitsActivity(t *testing.T) {
 	}
 }
 
-func TestRunPersistedHistoryModeUsesLegacyDefault(t *testing.T) {
+func TestRunPersistedHistoryModeUsesPaginatedForFreshPersistentThread(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
 		t.Fatalf("Save auth returned error: %v", err)
@@ -235,8 +235,8 @@ func TestRunPersistedHistoryModeUsesLegacyDefault(t *testing.T) {
 		t.Fatalf("Run returned error: %v stderr=%q", err, stderr.String())
 	}
 	record := loadSessionRecord(t, home, result.ThreadID)
-	if record.Metadata.HistoryMode != "legacy" {
-		t.Fatalf("history mode = %q, want legacy", record.Metadata.HistoryMode)
+	if record.Metadata.HistoryMode != "paginated" {
+		t.Fatalf("history mode = %q, want paginated (Rust #38774)", record.Metadata.HistoryMode)
 	}
 	path, err := rollout.FindThreadPath(home, result.ThreadID, false)
 	if err != nil {
@@ -257,8 +257,8 @@ func TestRunPersistedHistoryModeUsesLegacyDefault(t *testing.T) {
 			continue
 		}
 		if entry.Type == "session_meta" && entry.Meta != nil {
-			if entry.Meta.HistoryMode != "legacy" {
-				t.Fatalf("rollout session_meta history mode = %q, want legacy", entry.Meta.HistoryMode)
+			if entry.Meta.HistoryMode != "paginated" {
+				t.Fatalf("rollout session_meta history mode = %q, want paginated", entry.Meta.HistoryMode)
 			}
 			foundMeta = true
 			break
@@ -266,8 +266,8 @@ func TestRunPersistedHistoryModeUsesLegacyDefault(t *testing.T) {
 		if entry.Type == "session_meta" && len(entry.Payload) > 0 {
 			var meta rollout.SessionMeta
 			if err := json.Unmarshal(entry.Payload, &meta); err == nil {
-				if meta.HistoryMode != "legacy" {
-					t.Fatalf("rollout session_meta history mode = %q, want legacy", meta.HistoryMode)
+				if meta.HistoryMode != "paginated" {
+					t.Fatalf("rollout session_meta history mode = %q, want paginated", meta.HistoryMode)
 				}
 				foundMeta = true
 				break
@@ -318,13 +318,16 @@ func TestRunResumePersistsExistingHistoryMode(t *testing.T) {
 }
 
 func TestExecPersistedHistoryModeMatchesRust(t *testing.T) {
-	if got := execPersistedHistoryMode(nil); got != "legacy" {
-		t.Fatalf("fresh session history mode = %q, want legacy", got)
+	if got := execPersistedHistoryMode(nil, true); got != "paginated" {
+		t.Fatalf("fresh session history mode = %q, want paginated (Rust #38774)", got)
 	}
-	if got := execPersistedHistoryMode(&session.Record{Metadata: session.Metadata{HistoryMode: "paginated"}}); got != "paginated" {
+	if got := execPersistedHistoryMode(&session.Record{}, false); got != "legacy" {
+		t.Fatalf("legacy-imported session history mode = %q, want legacy preserved", got)
+	}
+	if got := execPersistedHistoryMode(&session.Record{Metadata: session.Metadata{HistoryMode: "paginated"}}, false); got != "paginated" {
 		t.Fatalf("existing paginated history mode = %q, want paginated preserved", got)
 	}
-	if got := execPersistedHistoryMode(&session.Record{Metadata: session.Metadata{HistoryMode: "all"}}); got != "legacy" {
+	if got := execPersistedHistoryMode(&session.Record{Metadata: session.Metadata{HistoryMode: "all"}}, false); got != "legacy" {
 		t.Fatalf("invalid history mode = %q, want legacy fallback", got)
 	}
 }

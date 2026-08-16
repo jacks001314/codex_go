@@ -3719,7 +3719,8 @@ func (r *Runner) persistSessionTurnStart(req *Request, threadID string, turnID s
 	now := r.now().UTC()
 	store := session.NewStore(filepath.Join(r.CodexHome, "sessions"))
 	record, err := store.Read(session.ThreadID(threadID), true, true)
-	if err != nil && !errors.Is(err, session.ErrThreadNotFound) {
+	fresh := errors.Is(err, session.ErrThreadNotFound)
+	if err != nil && !fresh {
 		return err
 	}
 	if record == nil {
@@ -3764,7 +3765,7 @@ func (r *Runner) persistSessionTurnStart(req *Request, threadID string, turnID s
 	if strings.TrimSpace(record.Metadata.CLIVersion) == "" {
 		record.Metadata.CLIVersion = doctor.Version()
 	}
-	record.Metadata.HistoryMode = execPersistedHistoryMode(record)
+	record.Metadata.HistoryMode = execPersistedHistoryMode(record, fresh)
 	if strings.TrimSpace(record.Metadata.SessionPrefix) == "" {
 		record.Metadata.SessionPrefix = session.PrefixForSessionID(firstNonEmpty(record.SessionID, threadID))
 	}
@@ -3833,17 +3834,17 @@ func execStartTurnSnapshot(metadata *session.Metadata, turnID string, now time.T
 }
 
 // execPersistedHistoryMode returns the rollout history mode to persist for an
-// exec session. Fresh sessions use Rust's default "legacy"; an existing
-// session keeps its persisted mode. Rust #38774 requests paginated history
-// for new persistent threads and falls back to legacy when the thread store
-// does not support pagination; Go's exec runner stays on the legacy fallback
-// until its session-item converter can represent every exec item (including
-// plain tool calls and outputs) in paginated core form. The previous code
+// exec session. Fresh persistent sessions use Rust's "paginated" default
+// (Rust #38774 requests paginated history when codex exec starts a persistent
+// thread); an existing session keeps its persisted mode. The previous code
 // reused the fork-mode value "all" (session.ForkAll), which is not a valid
 // history mode: Rust's app-server only accepts "legacy"/"paginated" and
 // rejects the session, which makes Desktop app handoff (/app) silently fail to
 // open the thread.
-func execPersistedHistoryMode(existing *session.Record) string {
+func execPersistedHistoryMode(existing *session.Record, fresh bool) string {
+	if fresh {
+		return "paginated"
+	}
 	if existing != nil {
 		switch strings.TrimSpace(existing.Metadata.HistoryMode) {
 		case "legacy", "paginated":
@@ -5666,6 +5667,21 @@ func sessionItemFromAgentItem(turnID string, fallbackID string, responseID strin
 	for key, value := range item.Data {
 		metadata[key] = value
 	}
+	data := cloneMap(item.Data)
+	if isToolSessionItemType(item.Type) {
+		if data == nil {
+			data = map[string]any{}
+		}
+		// Mirror appserver addShellCommandData so shell-command tool calls
+		// convert to CommandExecution in paginated threads (Rust #38774).
+		addExecShellCommandData(data, item.Arguments)
+		if item.Arguments != "" {
+			data["arguments"] = item.Arguments
+		}
+		if item.Input != "" {
+			data["input"] = item.Input
+		}
+	}
 	raw, _ := json.Marshal(item)
 	out := session.Item{
 		ID:         firstNonEmpty(item.ID, item.CallID, fallbackID),
@@ -5676,7 +5692,7 @@ func sessionItemFromAgentItem(turnID string, fallbackID string, responseID strin
 		Namespace:  item.Namespace,
 		CallID:     item.CallID,
 		CreatedAt:  createdAt,
-		Data:       cloneMap(item.Data),
+		Data:       data,
 		Metadata:   metadata,
 		Raw:        raw,
 		ResponseID: responseID,
@@ -5855,6 +5871,7 @@ func toolInvocationData(invocation *tool.Invocation) map[string]any {
 	}
 	if invocation.Payload.Arguments != "" {
 		data["arguments"] = invocation.Payload.Arguments
+		addExecShellCommandData(data, invocation.Payload.Arguments)
 	}
 	if invocation.Payload.Input != "" {
 		data["input"] = invocation.Payload.Input
@@ -5864,6 +5881,38 @@ func toolInvocationData(invocation *tool.Invocation) map[string]any {
 		data["arguments_map"] = invocation.Payload.Search
 	}
 	return data
+}
+
+func isToolSessionItemType(itemType string) bool {
+	switch strings.TrimSpace(itemType) {
+	case "function_call", "custom_tool_call", "tool_search_call", "function_call_output", "custom_tool_call_output", "tool_search_output", "tool_output":
+		return true
+	default:
+		return false
+	}
+}
+
+// addExecShellCommandData mirrors appserver addShellCommandData: when tool
+// arguments are JSON with a "cmd"/"cwd"/"workdir" key, the parsed shell
+// command is recorded on the item data so the paginated converter recognizes
+// the tool as a CommandExecution (Rust #38774).
+func addExecShellCommandData(data map[string]any, arguments string) {
+	if data == nil || strings.TrimSpace(arguments) == "" {
+		return
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return
+	}
+	if command, ok := args["cmd"].(string); ok && strings.TrimSpace(command) != "" {
+		data["command"] = command
+	}
+	if cwd, ok := args["cwd"].(string); ok && strings.TrimSpace(cwd) != "" {
+		data["cwd"] = cwd
+	}
+	if workdir, ok := args["workdir"].(string); ok && strings.TrimSpace(workdir) != "" {
+		data["cwd"] = workdir
+	}
 }
 
 func toolOutputData(output *tool.Output) map[string]any {

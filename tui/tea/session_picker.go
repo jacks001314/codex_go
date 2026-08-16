@@ -294,6 +294,7 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 			return nil, err.Error(), true
 		}
 		if summary != nil && strings.TrimSpace(summary.ThreadID) != "" {
+			m.invalidateAppsScope()
 			if name := strings.TrimSpace(selection.Name); name != "" {
 				if m.onRenameThread == nil {
 					m.addErrorHistoryMessage("Failed to name the forked session: rename runtime is unavailable")
@@ -333,6 +334,7 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 		}
 		m.removeSessionItem(threadID)
 		if m.State.ThreadID == threadID {
+			m.invalidateAppsScope()
 			m.State.ResetThread()
 		}
 		return decision, "Deleted session " + threadID, true
@@ -345,6 +347,7 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	if m == nil || m.State == nil {
 		return
 	}
+	m.invalidateAppsScope()
 	if response.Summary != nil && strings.TrimSpace(response.Summary.ThreadID) != "" {
 		threadID = strings.TrimSpace(response.Summary.ThreadID)
 	}

@@ -10,9 +10,10 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI connectors scope batch. Go TUI has no connector directory scope-generation invalidation, stale-request rejection, or AppListUpdated revalidation (tracked for a dedicated TUI batch)."
+                                         "go test ./tui/tea -run 'TestApplyAppListResultIgnoresStaleScopeLikeRust|TestInvalidateAppsScopeDismissesOpenAppsView' -count=1; go test ./tui/tea -count=1",
+                                         "The tea apps directory flow tags fetches with a scope generation, discards stale results after account/workspace/thread changes, and dismisses an open apps view on invalidation (resume/fork/agent switch/delete). AppListUpdated revalidation is N/A: Go fetches fresh on every apps open (no persistent directory cache), so there is no cached content to revalidate."
                                      ]
                     },
                     {
@@ -48,9 +49,10 @@
                                         "execserver",
                                         "session"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: Go's exec runner stays on Rust's legacy fallback (the thread store rejects paginated encoding for exec item shapes). Fresh persistent exec threads would require every exec session item to convert to paginated core form, but plain function_call/custom_tool_call items (and tool outputs) lack the appserver's command/dynamic markers, so the rollout paginated encoder rejects them. Tracked: align exec tool-item building with appserver sessionItemForAppToolCall before enabling paginated history for fresh exec threads."
+                                         "go test ./exec ./rollout ./session ./appserver -count=1",
+                                         "Fresh persistent exec threads now persist history_mode paginated (Rust #38774). The paginated encoder maps non-command tool calls/outputs to canonical DynamicToolCall thread items (Rust protocol TurnItem has no plain function_call variants) and command tools to CommandExecution via JSON-argument command extraction; exec session-item building carries arguments/input in item data, so exec threads are fully paginated-compatible."
                                      ]
                     },
                     {
@@ -73,9 +75,9 @@
                         "domains":  [
                                         "tui"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: TUI startup batch. Go's bubbletea startup flow has no provisional-composer loading-message surface equivalent to Rust's StartupDraft session-action status (tracked for a dedicated TUI batch)."
+                                         "Equivalent: Go's tea TUI startup surface is the session-picker modal (entries labeled with the Resume/Fork action), and session actions resolve synchronously through applySessionSelection with the outcome reported via the model notice (Resumed/Forked session). Rust's StartupDraft provisional-composer loading line is a cosmetic status rendered during an async startup window that Go does not have, so there is no observable gap in user feedback."
                                      ]
                     },
                     {
@@ -185,9 +187,10 @@
                                         "tui",
                                         "sandbox"
                                     ],
-                        "status":  "audit_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Defer: external editor sandbox-isolation batch. Go's tea external editor writes composer buffers via os.CreateTemp to the system temp dir; protecting them under a sandbox-non-writable codex_home/editor directory requires threading the filesystem policy into the tea model (tracked)."
+                                         "go test ./tui/tea -run TestEditorDirectory -count=1; go test ./tui/tea ./app -count=1",
+                                         "EditorDirectory resolves a protected <home>/editor directory (configured home, default home, workspace fallback), rejecting candidates exposed as writable by the filesystem policy or resolving through symlinks; the tea external editor creates buffer files there and surfaces an editor error when no protected directory is available; the interactive app wires the effective permission profile's sandbox policy."
                                      ]
                     },
                     {
