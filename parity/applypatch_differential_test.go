@@ -177,23 +177,16 @@ func randomDifferentialCase(rng *rand.Rand, index int) differentialApplyPatchCas
 	hunkCount := 1 + rng.Intn(3)
 	var b strings.Builder
 	b.WriteString("*** Begin Patch\n")
+	if rng.Intn(6) == 0 {
+		b.WriteString("*** Environment ID: env-" + strconv.Itoa(index) + "\n")
+	}
 	for h := 0; h < hunkCount; h++ {
 		kind := rng.Intn(100)
 		switch {
 		case kind < 40: // update existing file
 			name := names[rng.Intn(len(names))]
 			b.WriteString("*** Update File: " + name + "\n")
-			b.WriteString("@@\n")
-			oldLines := strings.Split(workspace[name], "\n")
-			if len(oldLines) == 0 || (len(oldLines) == 1 && oldLines[0] == "") {
-				oldLines = []string{"missing"}
-			}
-			target := oldLines[rng.Intn(len(oldLines))]
-			if target == "" {
-				target = "empty-line"
-			}
-			b.WriteString("-" + target + "\n")
-			b.WriteString("+" + target + " changed\n")
+			writeUpdateChunks(&b, workspace[name], rng)
 		case kind < 65: // add file
 			name := "added_" + strconv.Itoa(index) + "_" + strconv.Itoa(h) + ".txt"
 			if rng.Intn(4) == 0 {
@@ -204,6 +197,9 @@ func randomDifferentialCase(rng *rand.Rand, index int) differentialApplyPatchCas
 			if rng.Intn(2) == 0 {
 				b.WriteString("+" + differentialContentLines[rng.Intn(len(differentialContentLines))] + "\n")
 			}
+			if rng.Intn(4) == 0 {
+				b.WriteString("*** End of File\n")
+			}
 		case kind < 80: // delete existing file
 			name := names[rng.Intn(len(names))]
 			b.WriteString("*** Delete File: " + name + "\n")
@@ -211,12 +207,7 @@ func randomDifferentialCase(rng *rand.Rand, index int) differentialApplyPatchCas
 			name := names[rng.Intn(len(names))]
 			b.WriteString("*** Update File: " + name + "\n")
 			b.WriteString("*** Move to: moved_" + strconv.Itoa(index) + "_" + strconv.Itoa(h) + ".txt\n")
-			b.WriteString("@@\n")
-			oldLines := strings.Split(workspace[name], "\n")
-			if len(oldLines) > 0 && oldLines[0] != "" {
-				b.WriteString("-" + oldLines[0] + "\n")
-				b.WriteString("+" + oldLines[0] + " renamed\n")
-			}
+			writeUpdateChunks(&b, workspace[name], rng)
 		default: // invalid patch constructs (both sides must reject or accept alike)
 			switch rng.Intn(4) {
 			case 0:
@@ -232,6 +223,38 @@ func randomDifferentialCase(rng *rand.Rand, index int) differentialApplyPatchCas
 	}
 	b.WriteString("*** End Patch\n")
 	return differentialApplyPatchCase{workspace: workspace, patch: b.String()}
+}
+
+// writeUpdateChunks emits 1-2 @@ chunks that match the workspace content when
+// present, plus context lines and an optional End of File marker, mirroring
+// the Rust fixture shapes.
+func writeUpdateChunks(b *strings.Builder, content string, rng *rand.Rand) {
+	oldLines := strings.Split(content, "\n")
+	if len(oldLines) > 0 && oldLines[len(oldLines)-1] == "" {
+		oldLines = oldLines[:len(oldLines)-1]
+	}
+	chunkCount := 1 + rng.Intn(2)
+	for c := 0; c < chunkCount; c++ {
+		b.WriteString("@@\n")
+		if rng.Intn(3) == 0 {
+			// A context line (leading space) before the change.
+			if len(oldLines) > 0 && oldLines[0] != "" {
+				b.WriteString(" " + oldLines[0] + "\n")
+			}
+		}
+		var target string
+		if len(oldLines) > 0 {
+			target = oldLines[rng.Intn(len(oldLines))]
+		}
+		if target == "" {
+			target = "empty-line"
+		}
+		b.WriteString("-" + target + "\n")
+		b.WriteString("+" + target + " changed\n")
+		if c == 0 && rng.Intn(3) == 0 {
+			b.WriteString("*** End of File\n")
+		}
+	}
 }
 
 func randomContent(rng *rand.Rand) string {
