@@ -27,6 +27,33 @@ func TestBundledSQLiteMeetsRustMinimum(t *testing.T) {
 	}
 }
 
+// TestSqliteConfigForCodexHomeWithOverride pins the sqlite_home precedence:
+// the configured override wins, then CODEX_SQLITE_HOME, then the codex home.
+func TestSqliteConfigForCodexHomeWithOverride(t *testing.T) {
+	codexHome := t.TempDir()
+	override := t.TempDir()
+	envHome := t.TempDir()
+
+	// Configured override wins over the env var.
+	t.Setenv("CODEX_SQLITE_HOME", envHome)
+	config, err := SqliteConfigForCodexHomeWithOverride(codexHome, override)
+	if err != nil {
+		t.Fatalf("with override: %v", err)
+	}
+	if config.Home() != filepath.Clean(override) {
+		t.Fatalf("Home() = %q, want override %q", config.Home(), filepath.Clean(override))
+	}
+
+	// Empty override falls back to the env var.
+	envConfig, err := SqliteConfigForCodexHomeWithOverride(codexHome, "")
+	if err != nil {
+		t.Fatalf("with env fallback: %v", err)
+	}
+	if envConfig.Home() != filepath.Clean(envHome) {
+		t.Fatalf("Home() = %q, want env home %q", envConfig.Home(), filepath.Clean(envHome))
+	}
+}
+
 func TestNativeSQLiteArtifactPlatform(t *testing.T) {
 	wantOS := os.Getenv("CODEX_EXPECT_GOOS")
 	wantArch := os.Getenv("CODEX_EXPECT_GOARCH")

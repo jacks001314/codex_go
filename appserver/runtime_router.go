@@ -946,11 +946,11 @@ func (r *RuntimeRouter) StartupError() error {
 	return r.startupErr
 }
 
-func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *RuntimeRouterOptions) (*state.StateRuntime, bool, error) {
+func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *RuntimeRouterOptions, sqliteHomeOverride string) (*state.StateRuntime, bool, error) {
 	if options != nil && options.StateRuntime != nil {
 		return options.StateRuntime, false, nil
 	}
-	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
+	sqliteConfig, err := state.SqliteConfigForCodexHomeWithOverride(codexHome, sqliteHomeOverride)
 	if err != nil {
 		return nil, false, err
 	}

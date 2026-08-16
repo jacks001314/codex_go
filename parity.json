@@ -517,6 +517,13 @@
                       "area":  "parity",
                       "reason":  "Closed a config-surface + behavioral gap: Rust show_raw_agent_reasoning (default false) was missing from Go - strict config rejected it and, more importantly, Go emitted raw chain-of-thought reasoning deltas (item/reasoning_text.delta) unconditionally while Rust suppresses them by default. Go now recognizes the key, reads it via Config.ShowRawAgentReasoning() (default false), and the turn stream handler gates raw reasoning deltas behind it; the config-schema rust-only allowlist shrank from 16 to 15 entries. Tests: config accessor defaults, the existing streaming test enables the key, and a new gating test pins suppressed-by-default / enabled-emits semantics.",
                       "test":  "go test ./config -run TestShowRawAgentReasoningAccessor -count=1; go test ./appserver -run 'TestRuntimeRouterRawReasoningDeltaGatedByShowRawAgentReasoning|TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications' -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
+                  },
+                  {
+                      "id":  "sqlite-home-config-surface",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Wired the Rust sqlite_home config key: Go's state package already supported the CODEX_SQLITE_HOME env var and SqliteConfig, but the sqlite_home config key was missing (strict config rejected it). Added the key, Config.SQLiteHome() accessor, and state.SqliteConfigForCodexHomeWithOverride (configured override wins, then env, then codex home, mirroring Rust's managed-value precedence), wired into the appserver state runtime resolution (prepareSharedStateRuntime -> resolveDefaultStateRuntime). The config-schema rust-only allowlist shrank from 15 to 14. TestSqliteConfigForCodexHomeWithOverride pins the precedence.",
+                      "test":  "go test ./state -run TestSqliteConfigForCodexHomeWithOverride -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
                   }
               ]
 }

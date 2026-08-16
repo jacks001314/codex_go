@@ -78,6 +78,16 @@ func (c *Config) ShowRawAgentReasoning() bool {
 	return value
 }
 
+// SQLiteHome returns the configured SQLite data directory override, mirroring
+// Rust sqlite_home. Empty when unset (callers fall back to CODEX_SQLITE_HOME
+// and then the codex home).
+func (c *Config) SQLiteHome() string {
+	if c == nil || c.Values == nil {
+		return ""
+	}
+	return strings.TrimSpace(stringFromConfigValue(c.Values["sqlite_home"]))
+}
+
 type ResumeCWDMode string
 
 const (
@@ -372,6 +382,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"shell_environment_policy":                   {},
 	"show_raw_agent_reasoning":                   {},
 	"skills":                                     {},
+	"sqlite_home":                                {},
 	"tool_suggest":                               {},
 	"tools":                                      {},
 	"trusted_projects":                           {},

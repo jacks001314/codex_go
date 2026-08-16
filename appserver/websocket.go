@@ -17,6 +17,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"codex_go/config"
 	"codex_go/session"
 	"codex_go/state"
 )
@@ -158,7 +159,11 @@ func prepareSharedStateRuntime(ctx context.Context, codexHome string, options *R
 		}
 		return prepared, nil, nil
 	}
-	runtime, _, err := resolveDefaultStateRuntime(ctx, codexHome, prepared)
+	sqliteHomeOverride := ""
+	if cfg, err := config.LoadWithOptions(codexHome, nil); err == nil {
+		sqliteHomeOverride = cfg.SQLiteHome()
+	}
+	runtime, _, err := resolveDefaultStateRuntime(ctx, codexHome, prepared, sqliteHomeOverride)
 	if err != nil {
 		return nil, nil, err
 	}

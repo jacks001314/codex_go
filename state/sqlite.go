@@ -60,6 +60,17 @@ func SqliteConfigForCodexHome(codexHome string) (SqliteConfig, error) {
 	return NewSqliteConfig(ResolveSQLiteHome(codexHome))
 }
 
+// SqliteConfigForCodexHomeWithOverride resolves the SQLite home honoring the
+// configured sqlite_home override first (Rust's managed config value wins),
+// then the CODEX_SQLITE_HOME environment variable, then the codex home.
+func SqliteConfigForCodexHomeWithOverride(codexHome, override string) (SqliteConfig, error) {
+	override = strings.TrimSpace(override)
+	if override != "" {
+		return NewSqliteConfig(override)
+	}
+	return SqliteConfigForCodexHome(codexHome)
+}
+
 func ResolveSQLiteHome(codexHome string) string {
 	if sqliteHome := strings.TrimSpace(os.Getenv("CODEX_SQLITE_HOME")); sqliteHome != "" {
 		return sqliteHome
