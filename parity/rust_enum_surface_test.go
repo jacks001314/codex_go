@@ -1,6 +1,8 @@
 package parity
 
 import (
+	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -88,6 +90,84 @@ func TestRustEventMsgWireNamesCoverRecordedSurface(t *testing.T) {
 	}
 	if len(seen) == 0 {
 		t.Fatalf("no codex_event msg types found in the recording")
+	}
+}
+
+// rustErrorCodeEmissionGaps documents Rust error-code wire values that Go does
+// not emit yet, with the reason so the gap stays auditable and shrinks as Go
+// wires the emitting paths. The verifier fails if Rust adds codes or Go starts
+// emitting an allowlisted value without removing the entry.
+var rustErrorCodeEmissionGaps = map[string]string{
+	"sessionBudgetExceeded": "Go rollout-budget handling does not yet surface the sessionBudgetExceeded codexErrorInfo when the session budget is exhausted",
+	"threadRollbackFailed":  "Go thread/rollback failure paths return generic RPC errors instead of the threadRollbackFailed codexErrorInfo",
+}
+
+// TestRustErrorCodeSurfaceAgainstGo is the L0 enum-inventory check for error
+// codes: every wire value of the app-server v2 CodexErrorInfo and
+// ConfigWriteErrorCode enums must be present in the Go tree (as an emitted
+// string or a constant) or be a documented emission gap. ConfigWriteErrorCode
+// values are covered by config/api.go constants; CodexErrorInfo values by the
+// appserver's emitted strings.
+func TestRustErrorCodeSurfaceAgainstGo(t *testing.T) {
+	root := rustSnapshotRoot(t)
+	protocolDir := filepath.Join(root, "app-server-protocol", "src", "protocol", "v2")
+	shared := string(mustReadParityFile(t, filepath.Join(protocolDir, "shared.rs")))
+	config := string(mustReadParityFile(t, filepath.Join(protocolDir, "config.rs")))
+	rustWire := append(
+		parseCamelCaseEnum(t, shared, "CodexErrorInfo"),
+		parseCamelCaseEnum(t, config, "ConfigWriteErrorCode")...,
+	)
+	wireSet := map[string]bool{}
+	for _, name := range rustWire {
+		wireSet[name] = true
+	}
+
+	present := map[string]bool{}
+	err := filepath.WalkDir(filepath.Join(".."), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for code := range wireSet {
+			if strings.Contains(string(data), `"`+code+`"`) {
+				present[code] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WalkDir: %v", err)
+	}
+
+	for code := range wireSet {
+		if present[code] {
+			continue
+		}
+		if reason, ok := rustErrorCodeEmissionGaps[code]; ok {
+			t.Logf("documented emission gap %q: %s", code, reason)
+			continue
+		}
+		t.Errorf("Rust error code %q is neither present in the Go tree nor a documented emission gap", code)
+	}
+	for code := range rustErrorCodeEmissionGaps {
+		if !wireSet[code] {
+			t.Errorf("documented emission gap %q is no longer a Rust error code; remove the entry", code)
+		}
+		if present[code] {
+			t.Errorf("documented emission gap %q is now present in the Go tree; remove the entry", code)
+		}
 	}
 }
 

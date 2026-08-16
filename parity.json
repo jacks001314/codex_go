@@ -447,6 +447,13 @@
                       "area":  "parity",
                       "reason":  "Completed two L0 enum-inventory items: (1) TestRustProcessSandboxTypeSurfaceAgainstGo pins the exec-server ProcessSandboxType wire values (camelCase none/macosSeatbelt/linuxSeccomp/windowsRestrictedToken) against Go's execserver constants - exact match; (2) TestRustEventMsgWireNamesCoverRecordedSurface extracts the app-server EventMsg wire names (snake_case + serde renames) from protocol.rs and pins every codex_event msg.type in the oss-story recording to a current wire name or a documented historical rename (agent_message_delta -> agent_message_content_delta, agent_reasoning_raw_content_delta -> reasoning_raw_content_delta), so future event renames break the check.",
                       "test":  "go test ./parity -run 'TestRustProcessSandboxTypeSurfaceAgainstGo|TestRustEventMsgWireNamesCoverRecordedSurface' -count=1"
+                  },
+                  {
+                      "id":  "l0-enum-inventory-error-codes",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "TestRustErrorCodeSurfaceAgainstGo pins every wire value of the app-server v2 CodexErrorInfo and ConfigWriteErrorCode enums to Go production code (non-test files): all 17 CodexErrorInfo codes are emitted or allowlisted, all 7 ConfigWriteErrorCode codes are covered by config/api.go constants (configRequirementReadonly added to complete the surface). Two emission gaps are documented with auditable reasons: sessionBudgetExceeded (Go rollout-budget path does not surface the codexErrorInfo yet) and threadRollbackFailed (Go thread/rollback failure returns generic RPC errors); both stay monitored by the verifier and shrink as Go wires them.",
+                      "test":  "go test ./parity -run TestRustErrorCodeSurfaceAgainstGo -count=1; go test ./config -count=1"
                   }
               ]
 }

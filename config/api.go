@@ -24,12 +24,13 @@ const appServerManagedConfigPathEnv = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH"
 type ConfigWriteErrorCode string
 
 const (
-	ConfigWriteLayerReadonly   ConfigWriteErrorCode = "configLayerReadonly"
-	ConfigWriteVersionConflict ConfigWriteErrorCode = "configVersionConflict"
-	ConfigWriteValidation      ConfigWriteErrorCode = "configValidationError"
-	ConfigWritePathNotFound    ConfigWriteErrorCode = "configPathNotFound"
-	ConfigWriteSchemaUnknown   ConfigWriteErrorCode = "configSchemaUnknownKey"
-	ConfigWriteUserLayerAbsent ConfigWriteErrorCode = "userLayerNotFound"
+	ConfigWriteLayerReadonly       ConfigWriteErrorCode = "configLayerReadonly"
+	ConfigWriteRequirementReadonly ConfigWriteErrorCode = "configRequirementReadonly"
+	ConfigWriteVersionConflict     ConfigWriteErrorCode = "configVersionConflict"
+	ConfigWriteValidation          ConfigWriteErrorCode = "configValidationError"
+	ConfigWritePathNotFound        ConfigWriteErrorCode = "configPathNotFound"
+	ConfigWriteSchemaUnknown       ConfigWriteErrorCode = "configSchemaUnknownKey"
+	ConfigWriteUserLayerAbsent     ConfigWriteErrorCode = "userLayerNotFound"
 )
 
 type ConfigWriteError struct {
