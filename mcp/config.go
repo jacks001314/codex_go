@@ -38,6 +38,7 @@ type ServerConfig struct {
 	HTTPHeadersHelper        string                            `json:"http_headers_helper,omitempty"`
 	OAuthClientID            string                            `json:"oauth_client_id,omitempty"`
 	OAuthCallbackPort        uint16                            `json:"oauth_callback_port,omitempty"`
+	OAuthCallbackURL         string                            `json:"oauth_callback_url,omitempty"`
 	OAuthResource            string                            `json:"oauth_resource,omitempty"`
 	Scopes                   []string                          `json:"scopes,omitempty"`
 	ScopesConfigured         bool                              `json:"-"`
@@ -214,6 +215,16 @@ func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codex
 			continue
 		}
 		config := runtimeServerConfigFromValues(table)
+		// Rust mcp_oauth_callback_port / mcp_oauth_callback_url provide global
+		// defaults applied to every MCP server; per-server values win.
+		if config.OAuthCallbackPort == 0 {
+			if port := runtimeConfigUint16Any(values, "mcp_oauth_callback_port", "mcpOauthCallbackPort"); port > 0 {
+				config.OAuthCallbackPort = port
+			}
+		}
+		if config.OAuthCallbackURL == "" {
+			config.OAuthCallbackURL = runtimeConfigStringAny(values, "mcp_oauth_callback_url", "mcpOauthCallbackUrl")
+		}
 		out.Servers[name] = ServerRegistration{
 			Name:   name,
 			Config: *config,
@@ -395,6 +406,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 		server.HTTPHeadersHelper = runtimeConfigString(values, "http_headers_helper")
 		server.OAuthClientID = runtimeConfigOAuthClientID(values)
 		server.OAuthCallbackPort = runtimeConfigOAuthCallbackPort(values)
+		server.OAuthCallbackURL = runtimeConfigStringAny(values, "oauth_callback_url", "oauthCallbackUrl")
 		server.OAuthResource = runtimeConfigStringAny(values, "oauth_resource", "oauthResource")
 		server.Scopes, server.ScopesConfigured = runtimeConfigOptionalStringSlice(values, "scopes")
 		return server
@@ -480,6 +492,10 @@ func runtimeConfigUint16Any(values map[string]any, keys ...string) uint16 {
 		case int64:
 			if typed > 0 && typed <= 65535 {
 				return uint16(typed)
+			}
+		case uint16:
+			if typed > 0 {
+				return typed
 			}
 		case uint64:
 			if typed > 0 && typed <= 65535 {

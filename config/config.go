@@ -358,6 +358,8 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"instructions":                               {},
 	"log_dir":                                    {},
 	"mcp_oauth_credentials_store":                {},
+	"mcp_oauth_callback_port":                    {},
+	"mcp_oauth_callback_url":                     {},
 	"mcp_servers":                                {},
 	"memories":                                   {},
 	"model":                                      {},

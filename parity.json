@@ -559,6 +559,13 @@
                       "area":  "parity",
                       "reason":  "Comprehensive L0/L1/L2 gate re-verification at the frozen 9ded177ce7 baseline: parity full suite + all targeted verifiers (apply-patch differential oracle, scenario double-run, tool schema policy, config schema surface, model metadata surface, error-code surface, verifier existence, event names, sandbox types), L1 unit contracts across applypatch/rollout/session/state/config/appserver/model/tool/turn/app/exec/mcp/codemode, recordreplay L2, and the sdktests unit suite (50/51 pass, 0 fail) - all green; full tree 87 packages 0 FAIL.",
                       "test":  "go test ./... -count=1; npm --prefix sdktests run test:unit"
+                  },
+                  {
+                      "id":  "mcp-oauth-callback-global-defaults-config-surface",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Wired Rust's top-level mcp_oauth_callback_port / mcp_oauth_callback_url global defaults: Go's MCP OAuth already supported per-server oauth_callback_port and a fixed redirect URL, but the top-level keys were strict-rejected and unused. Added both keys, ServerConfig.OAuthCallbackURL, global-default fallbacks in the runtime config resolution (per-server values win, mirroring Rust's server.oauth_callback_port(config.mcp_oauth_callback_port)), and a RedirectURL override in the OAuth login server (mirroring mcp_oauth_callback_url). Also hardened runtimeConfigUint16Any for uint16. The config-schema rust-only allowlist shrank from 10 to 8; TestRuntimeConfigMCPOAuthCallbackGlobalDefaults pins global-vs-per-server precedence.",
+                      "test":  "go test ./mcp -run TestRuntimeConfigMCPOAuthCallbackGlobalDefaults -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1"
                   }
               ]
 }

@@ -22,8 +22,6 @@ var configSchemaRustOnlyAllowlist = map[string]string{
 	"experimental_thread_store":           "Rust experimental thread store; Go uses its own session store",
 	"ghost_snapshot":                      "Rust checkpoint/ghost snapshot persistence; not implemented in Go",
 	"marketplaces":                        "Rust plugin marketplace config section; Go marketplaces are configured via plugin files, not top-level config",
-	"mcp_oauth_callback_port":             "Rust MCP OAuth callback port override; Go uses system-assigned ports",
-	"mcp_oauth_callback_url":              "Rust MCP OAuth callback URL override; Go uses system-assigned URLs",
 	"oss_provider":                        "Rust bundled OSS provider block; Go models OSS providers via model_providers",
 }
 
@@ -67,8 +65,8 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	if len(rustKeys) != 94 {
 		t.Fatalf("Rust config.schema.json top-level property count = %d, want 94 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 90 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 90 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 92 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 92 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)

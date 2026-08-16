@@ -28,12 +28,16 @@ type OAuthLoginServerOptions struct {
 	State                 string
 	Host                  string
 	Port                  uint16
-	Store                 *OAuthStore
-	HTTPClient            *http.Client
-	Timeout               time.Duration
-	ClientRegistration    MCPServerOauthClientRegistration
-	CIMDAdvertised        *bool
-	PublicClientAuth      *bool
+	// RedirectURL optionally overrides the redirect URL presented to the OAuth
+	// flow (mirrors Rust mcp_oauth_callback_url); when empty the server derives
+	// it from the listener host/port.
+	RedirectURL        string
+	Store              *OAuthStore
+	HTTPClient         *http.Client
+	Timeout            time.Duration
+	ClientRegistration MCPServerOauthClientRegistration
+	CIMDAdvertised     *bool
+	PublicClientAuth   *bool
 }
 
 type OAuthLoginServerResult struct {
@@ -78,7 +82,10 @@ func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	redirectURL := fmt.Sprintf("http://%s:%d/callback/%s", host, port, callbackID)
+	redirectURL := strings.TrimSpace(options.RedirectURL)
+	if redirectURL == "" {
+		redirectURL = fmt.Sprintf("http://%s:%d/callback/%s", host, port, callbackID)
+	}
 	session, err := NewOAuthLoginSessionWithClientRegistration(ctx, &OAuthLoginSessionOptions{
 		ServerURL:             options.ServerURL,
 		ClientID:              options.ClientID,

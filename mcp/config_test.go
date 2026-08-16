@@ -39,6 +39,49 @@ func TestRuntimeConfigAppToolApprovalParsesAllModes(t *testing.T) {
 	}
 }
 
+// TestRuntimeConfigMCPOAuthCallbackGlobalDefaultsPins the Rust
+// mcp_oauth_callback_port / mcp_oauth_callback_url behavior: the top-level
+// keys provide global defaults applied to every MCP server, with per-server
+// values winning.
+func TestRuntimeConfigMCPOAuthCallbackGlobalDefaults(t *testing.T) {
+	cfg := RuntimeConfigFromValues(map[string]any{
+		"mcp_oauth_callback_port": int64(9876),
+		"mcp_oauth_callback_url":  "http://callback.example:9876/callback",
+		"mcp_servers": map[string]any{
+			"plain": map[string]any{
+				"type": "sse", "url": "https://example.com/sse",
+			},
+			"overridden": map[string]any{
+				"type": "sse", "url": "https://other.com/sse",
+				"oauth_callback_port": int64(1234),
+				"oauth_callback_url":  "http://custom.example/cb",
+			},
+		},
+	}, t.TempDir())
+
+	plain, ok := cfg.Servers["plain"]
+	if !ok {
+		t.Fatal("plain server missing")
+	}
+	if plain.Config.OAuthCallbackPort != 9876 {
+		t.Fatalf("plain port = %d, want global default 9876", plain.Config.OAuthCallbackPort)
+	}
+	if plain.Config.OAuthCallbackURL != "http://callback.example:9876/callback" {
+		t.Fatalf("plain url = %q, want global default", plain.Config.OAuthCallbackURL)
+	}
+
+	overridden, ok := cfg.Servers["overridden"]
+	if !ok {
+		t.Fatal("overridden server missing")
+	}
+	if overridden.Config.OAuthCallbackPort != 1234 {
+		t.Fatalf("overridden port = %d, want per-server 1234", overridden.Config.OAuthCallbackPort)
+	}
+	if overridden.Config.OAuthCallbackURL != "http://custom.example/cb" {
+		t.Fatalf("overridden url = %q, want per-server", overridden.Config.OAuthCallbackURL)
+	}
+}
+
 func TestRuntimeConfigFromValuesParsesHTTPHeadersHelper(t *testing.T) {
 	runtime := RuntimeConfigFromValues(map[string]any{
 		"mcp_servers": map[string]any{
