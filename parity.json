@@ -475,6 +475,13 @@
                       "area":  "parity",
                       "reason":  "Completed the rollout budget feature with reminder delivery: a SamplingFollowUp (composed with the auto-compact follow-up in runTurnRuntime) charges each completed model response against the shared budget per-response (mirroring Rust Session::record_rollout_budget_usage) and injects the Rust-shaped <rollout_budget> developer message ('You have N weighted tokens left in the shared session token budget.') exactly once per remaining-tokens threshold crossing (mirroring maybe_record_reminder); exhaustion is recorded on the router and fails the turn at completion with sessionBudgetExceeded. Three unit tests wire resolution, per-threshold reminder injection (80 -> 75 -> 35 sequence), duplicate suppression, and exhaustion surfacing.",
                       "test":  "go test ./appserver -run TestRuntimeRouterRolloutBudget -count=1"
+                  },
+                  {
+                      "id":  "model-metadata-fields-carried",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Go ModelInfo now carries four previously-missing Rust openai_models::ModelInfo wire fields: shell_type (ConfigShellToolType values), apply_patch_tool_type (freeform), comp_hash, and experimental_supported_tools, populated by the catalog UnmarshalJSON so backend /models metadata round-trips identically; the L0 model-metadata verifier allowlist shrank from 6 to 2 Rust-only entries (availability_nux on ModelSummary, supports_reasoning_summary_parameter naming variant). TestModelInfoUnmarshalRustCatalogShape pins the parse.",
+                      "test":  "go test ./parity -run TestRustModelInfoFieldSurfaceAgainstGo -count=1; go test ./model -run TestModelInfoUnmarshalRustCatalogShape -count=1"
                   }
               ]
 }

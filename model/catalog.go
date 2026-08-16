@@ -217,6 +217,13 @@ type ModelInfo struct {
 	NodeReplDisabled               bool              `json:"node_repl_disabled"`
 	AutoReviewModelOverride        string            `json:"auto_review_model_override"`
 	Upgrade                        *ModelInfoUpgrade `json:"upgrade"`
+	// ShellType / ApplyPatchToolType / CompHash / ExperimentalSupportedTools
+	// carry the Rust openai_models::ModelInfo wire fields so catalog metadata
+	// round-trips identically (L0 model-metadata surface).
+	ShellType                  string   `json:"shell_type"`
+	ApplyPatchToolType         string   `json:"apply_patch_tool_type"`
+	CompHash                   string   `json:"comp_hash"`
+	ExperimentalSupportedTools []string `json:"experimental_supported_tools"`
 }
 
 // ModelInfoUpgrade carries the replacement model and informational retirement
@@ -304,6 +311,10 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		NodeReplDisabled               bool                `json:"node_repl_disabled"`
 		AutoReviewModelOverride        any                 `json:"auto_review_model_override"`
 		Upgrade                        *ModelInfoUpgrade   `json:"upgrade"`
+		ShellType                      string              `json:"shell_type"`
+		ApplyPatchToolType             string              `json:"apply_patch_tool_type"`
+		CompHash                       string              `json:"comp_hash"`
+		ExperimentalSupportedTools     []string            `json:"experimental_supported_tools"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -347,6 +358,10 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		NodeReplDisabled:               raw.NodeReplDisabled,
 		AutoReviewModelOverride:        stringFromJSONValue(raw.AutoReviewModelOverride),
 		Upgrade:                        raw.Upgrade,
+		ShellType:                      raw.ShellType,
+		ApplyPatchToolType:             raw.ApplyPatchToolType,
+		CompHash:                       raw.CompHash,
+		ExperimentalSupportedTools:     cloneStrings(raw.ExperimentalSupportedTools),
 	}
 	if m.BaseInstructions == "" {
 		m.BaseInstructions = BaseInstructions

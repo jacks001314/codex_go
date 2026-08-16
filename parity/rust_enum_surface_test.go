@@ -172,11 +172,7 @@ func TestRustErrorCodeSurfaceAgainstGo(t *testing.T) {
 // ModelInfo does not carry, with the reason so each entry is auditable and
 // removable as Go adopts the field.
 var modelInfoRustOnlyAllowlist = map[string]string{
-	"apply_patch_tool_type":                "model-level apply-patch tool selection is not yet carried by Go ModelInfo",
 	"availability_nux":                     "carried on Go's ModelSummary (model/api.go) rather than ModelInfo",
-	"comp_hash":                            "Go ModelInfo does not carry the compaction compatibility hash",
-	"experimental_supported_tools":         "Go ModelInfo does not carry the experimental tools list",
-	"shell_type":                           "Go ModelInfo does not carry the per-model shell tool type",
 	"supports_reasoning_summary_parameter": "Go carries the same concept as supports_reasoning_summaries (whether the model accepts the Responses API reasoning.summary parameter); naming variant",
 }
 
@@ -218,8 +214,8 @@ func TestRustModelInfoFieldSurfaceAgainstGo(t *testing.T) {
 	if len(rustSet) != 41 {
 		t.Fatalf("Rust ModelInfo wire field count = %d, want 41 (pinned baseline)", len(rustSet))
 	}
-	if len(goSet) != 38 {
-		t.Fatalf("Go ModelInfo JSON field count = %d, want 38 (pinned baseline)", len(goSet))
+	if len(goSet) != 42 {
+		t.Fatalf("Go ModelInfo JSON field count = %d, want 42 (pinned baseline)", len(goSet))
 	}
 
 	for field := range rustSet {

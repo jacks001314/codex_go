@@ -236,6 +236,10 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 			"effective_context_window_percent": 95,
 			"input_modalities": ["text", "image"],
 			"supports_search_tool": true,
+			"shell_type": "unified_exec",
+			"apply_patch_tool_type": "freeform",
+			"comp_hash": "abc123",
+			"experimental_supported_tools": ["web_search"],
 			"node_repl_auto_review_required": true,
 			"node_repl_disabled": true
 		}]
@@ -248,6 +252,10 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 	}
 	if model.Visibility != VisibilityList || !model.SupportsParallelToolCalls || !model.SupportsSearchTool || model.ToolMode != ToolModeCodeModeOnly {
 		t.Fatalf("model flags = %#v", model)
+	}
+	if model.ShellType != "unified_exec" || model.ApplyPatchToolType != "freeform" || model.CompHash != "abc123" ||
+		len(model.ExperimentalSupportedTools) != 1 || model.ExperimentalSupportedTools[0] != "web_search" {
+		t.Fatalf("model Rust metadata fields = %#v", model)
 	}
 	if !model.NodeReplAutoReviewRequired || !model.NodeReplDisabled {
 		t.Fatalf("node repl policy = %#v", model)
