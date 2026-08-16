@@ -36,6 +36,7 @@ import (
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
+	"codex_go/state"
 )
 
 const (
@@ -361,6 +362,40 @@ func runWindowsSandboxPlan(ctx context.Context, plan *sandbox.CommandRunPlan, en
 	}
 	if exitCode != 0 {
 		return silentExitCode(exitCode)
+	}
+	return nil
+}
+
+func projectMigratedRollouts(codexHome string, report *rollout.MigrationReport) error {
+	if report == nil {
+		return nil
+	}
+	config, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return err
+	}
+	for _, outcome := range report.Outcomes {
+		if outcome.Status != rollout.MigrationStatusMigrated {
+			continue
+		}
+		threadID := strings.TrimSpace(outcome.RolloutPath)
+		meta, err := rollout.FirstSessionMeta(outcome.RolloutPath)
+		if err != nil {
+			return fmt.Errorf("read migrated rollout metadata %s: %w", outcome.RolloutPath, err)
+		}
+		threadID = strings.TrimSpace(meta.ID)
+		if threadID == "" {
+			continue
+		}
+		db, err := config.OpenThreadHistoryDB(context.Background())
+		if err != nil {
+			return fmt.Errorf("open thread history database: %w", err)
+		}
+		err = state.MaterializeThreadHistory(context.Background(), db, threadID, outcome.RolloutPath, 0, meta.SubagentHistoryStartOrdinal)
+		db.Close()
+		if err != nil {
+			return fmt.Errorf("project thread history for %s: %w", threadID, err)
+		}
 	}
 	return nil
 }
@@ -978,13 +1013,24 @@ func runApply(opts cli.ApplyOptions, root cli.RootOptions, stdin io.Reader, stdo
 }
 
 func runMigrateRollouts(opts cli.MigrateRolloutsOptions, root cli.RootOptions, stdout io.Writer, stderr io.Writer) error {
-	report, err := rollout.MigrateRollouts(auth.DefaultCodexHome(), rollout.MigrationOptions{
+	codexHome := auth.DefaultCodexHome()
+	report, err := rollout.MigrateRollouts(codexHome, rollout.MigrationOptions{
 		Apply:           opts.Apply,
 		ThreadIDs:       opts.Threads,
 		MaxMibPerSecond: opts.MaxMibPerSecond,
 	})
 	if err != nil {
 		return err
+	}
+	if opts.Apply {
+		// Mirrors Rust migrate_one_rollout: after publishing the paginated
+		// rollout, materialize its SQLite thread-history projection so the
+		// app-server reads it from the durable projection rather than
+		// re-projecting on demand. The rollout package stays storage-only;
+		// the projection lives here to avoid an import cycle.
+		if err := projectMigratedRollouts(codexHome, report); err != nil {
+			return err
+		}
 	}
 	if opts.JSON {
 		data, marshalErr := rollout.RenderJSONReport(report)

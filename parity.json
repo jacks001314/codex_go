@@ -660,6 +660,12 @@
                       "id":  "migrate-rollouts-compressed-and-rollback",
                       "reason":  "Completed two more Apply-phase submodules of the P1 rollout migration: (1) compressed .jsonl.zst sources stay compressed after migration - the staged plain JSONL is compressed to .{name}.paginated.zst.tmp and renamed over the source (mirroring Rust compress_rollout_to_path + publish), with staged/decompressed cleanup verified; (2) legacy ThreadRolledBack markers are replayed through the existing rollbackSessionItems turn-dropping semantics so rolled-back turns are excluded from the canonical output while surviving turns stay intact (mirroring Rust RollbackPlan visibility). Both pinned by unit tests: compressed migrate keeps compression and replays content with paginated header; rollback marker drops the rolled-back turn's records.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./app -run TestProjectMigratedRolloutsWritesThreadHistorySQLite -count=1; go test ./rollout ./state -count=1",
+                      "id":  "migrate-rollouts-sqlite-projection",
+                      "reason":  "Wired the SQLite thread-history projection into the rollout migration Apply flow: after publishing a paginated rollout, the CLI projects it into the durable thread_history SQLite database via state.MaterializeThreadHistory (mirroring Rust migrate_one_rollout's project_rollout_in_batches + projection_state verification). The projection lives in the app layer to avoid a rollout<->state import cycle; the rollout package stays storage-only. End-to-end verified: migrate-rollouts --apply generates thread_history_1.sqlite with 1 completed turn, 2 items, next_rollout_byte_offset covering the file, and next_rollout_ordinal=5 (meta+started+2 items+complete); unit test pins the projection rows and checkpoint.",
+                      "area":  "parity"
                   }
               ]
 }
