@@ -48,6 +48,22 @@ type MigrationOptions struct {
 // eligibility; it never modifies local storage.
 func MigrateRollouts(codexHome string, options MigrationOptions) (*MigrationReport, error) {
 	report := &MigrationReport{Outcomes: []MigrationOutcome{}}
+	if options.Apply {
+		// Mirrors Rust: migration replaces rollout files by rename; exclude
+		// rollout compression and concurrent migration for this Codex home
+		// with the process-scoped nonblocking maintenance lock.
+		guard, err := TryAcquireRolloutMaintenanceLock(codexHome)
+		if err != nil {
+			return nil, err
+		}
+		if guard == nil {
+			// Another maintenance job holds the lock; report eligible files as
+			// busy instead of racing the rename.
+			report.Outcomes = append(report.Outcomes, *migrationOutcome(nil, filepath.Join(codexHome, "sessions"), MigrationStatusSkippedBusy, 0, "another rollout maintenance job is running; retry later"))
+			return report, nil
+		}
+		defer guard.Release()
+	}
 	roots := []string{
 		filepath.Join(codexHome, SessionsSubdir),
 		filepath.Join(codexHome, ArchivedSessionsSubdir),

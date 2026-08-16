@@ -47,6 +47,36 @@ func writeTestRollout(t *testing.T, path string, threadID string, historyMode st
 	}
 }
 
+func TestMigrateRolloutsApplyReportsBusyWhenMaintenanceLockHeld(t *testing.T) {
+	// Mirrors Rust skipped_busy_outcome: when another maintenance job holds
+	// the rollout-maintenance lock, Apply reports SkippedBusy instead of
+	// racing the rename.
+	home := t.TempDir()
+	threadID := "123e4567-e89b-42d3-a456-426614174050"
+	writeTestRollout(t, filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+threadID+".jsonl"), threadID, "")
+	guard, err := TryAcquireRolloutMaintenanceLock(home)
+	if err != nil || guard == nil {
+		t.Fatalf("acquire maintenance lock err=%v", err)
+	}
+	defer guard.Release()
+
+	report, err := MigrateRollouts(home, MigrationOptions{Apply: true})
+	if err != nil {
+		t.Fatalf("MigrateRollouts: %v", err)
+	}
+	if len(report.Outcomes) != 1 || report.Outcomes[0].Status != MigrationStatusSkippedBusy {
+		t.Fatalf("outcomes = %#v, want one skipped_busy", report.Outcomes)
+	}
+	// The source rollout is untouched.
+	meta, err := FirstSessionMeta(filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+threadID+".jsonl"))
+	if err != nil {
+		t.Fatalf("FirstSessionMeta: %v", err)
+	}
+	if strings.EqualFold(strings.TrimSpace(meta.HistoryMode), "paginated") {
+		t.Fatal("rollout was migrated despite the maintenance lock")
+	}
+}
+
 func TestCanonicalizeRolloutMigratesCompressedRolloutLikeRust(t *testing.T) {
 	// Mirrors Rust migration_preserves_compressed_rollouts_during_publish: a
 	// .jsonl.zst source stays compressed after migration; the published file

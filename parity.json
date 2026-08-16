@@ -678,6 +678,12 @@
                       "id":  "migrate-rollouts-subagent-boundary",
                       "reason":  "Completed the subagent rollout migration semantics: a migrated subagent rollout now carries subagent_history_start_ordinal = the canonical writer's final ordinal (the first ordinal after all copied parent history), mirroring Rust rewrite_subagent_history_boundary + RolloutMigrationKind detection (source prefix subagent / thread_source subAgent* unless memory_consolidation). Ordinary rollouts keep the field unset. The staged head session_meta (serialized under the payload key) is rewritten before publish. Unit test pins the subagent boundary value (meta+started+2 items = 4) and the ordinary-rollout unset behavior.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./rollout -run 'TestRolloutMaintenanceLock|TestWaitAcquire|TestMigrateRolloutsApplyReportsBusy' -count=1; go test ./rollout -count=1",
+                      "id":  "migrate-rollouts-maintenance-lock",
+                      "reason":  "Added the rollout-maintenance lock, mirroring Rust rollout/src/maintenance.rs: a process-scoped nonblocking exclusive lock at .tmp/rollout-maintenance.lock (via gofrs/flock, cross-platform) coordinates rollout compression and migration, which both publish by renaming over an existing rollout path. MigrateRollouts Apply acquires the lock and reports SkippedBusy (untouched source) when another maintenance job holds it; WaitAcquireRolloutMaintenanceLock blocks for tests/callers that prefer to wait. Unit tests pin first/second-acquire exclusion, release-then-reacquire, wait timeout, and the busy outcome leaving the source unmigrated.",
+                      "area":  "parity"
                   }
               ]
 }
