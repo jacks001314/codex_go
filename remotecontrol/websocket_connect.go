@@ -57,6 +57,11 @@ func BuildRemoteControlWebsocketRequest(websocketURL string, enrollment *Enrollm
 	if err := setRemoteControlWebsocketHeader(request.Header, RemoteControlInstallationIDHeader, installationID); err != nil {
 		return nil, err
 	}
+	if hostDeviceKind := HostDeviceKind(); hostDeviceKind != "" {
+		if err := setRemoteControlWebsocketHeader(request.Header, RemoteControlHostDeviceKindHeader, hostDeviceKind); err != nil {
+			return nil, err
+		}
+	}
 	if subscribeCursor != nil {
 		if err := setRemoteControlWebsocketHeader(request.Header, RemoteControlSubscribeCursorHeader, *subscribeCursor); err != nil {
 			return nil, err

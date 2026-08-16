@@ -182,8 +182,11 @@ func (b *Builder) Build(opts *Options) *Report {
 	if codexHome == "" {
 		codexHome = auth.DefaultCodexHome()
 	}
+	cwd := doctorCWD(opts)
 	checks := []*DoctorCheck{
 		b.timed(systemCheck),
+		b.timed(func() *DoctorCheck { return diskCheck(codexHome, cwd) }),
+		b.timed(endpointProtectionCheck),
 		b.timed(func() *DoctorCheck { return installCheck(codexHome, !opts.Summary, b.currentExe) }),
 		b.timed(func() *DoctorCheck { return runtimeCheckForDoctor(codexHome, b.currentExe) }),
 		b.timed(searchCheck),
@@ -195,12 +198,15 @@ func (b *Builder) Build(opts *Options) *Report {
 		b.timed(func() *DoctorCheck { return mcpCheck(codexHome, opts) }),
 		b.timed(func() *DoctorCheck { return sandboxCheck(codexHome, opts) }),
 		b.timed(func() *DoctorCheck { return terminalCheck(currentEnvMap(), opts) }),
-		b.timed(func() *DoctorCheck { return gitCheck(doctorCWD(opts)) }),
+		b.timed(func() *DoctorCheck { return gitCheck(cwd) }),
 		b.timed(func() *DoctorCheck { return terminalTitleCheck(codexHome, opts) }),
 		b.timed(func() *DoctorCheck { return stateCheck(codexHome, opts) }),
 		b.timed(func() *DoctorCheck { return rolloutDBParityCheck(codexHome, opts) }),
 		b.timed(func() *DoctorCheck { return backgroundServerCheck(codexHome) }),
 		b.timed(func() *DoctorCheck { return b.providerReachabilityCheck(codexHome, opts) }),
+	}
+	if runtime.GOOS == "windows" {
+		checks = append(checks, b.timed(func() *DoctorCheck { return windowsDevDriveCheck(cwd) }))
 	}
 	return &Report{
 		SchemaVersion: 1,

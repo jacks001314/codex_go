@@ -55,6 +55,8 @@ func TestReportBuildsLocalChecks(t *testing.T) {
 		category string
 	}{
 		{"system.environment", "system"},
+		{"system.disk", "disk"},
+		{"security.endpoint", "security"},
 		{"installation", "install"},
 		{"runtime.provenance", "runtime"},
 		{"runtime.search", "search"},
@@ -72,6 +74,7 @@ func TestReportBuildsLocalChecks(t *testing.T) {
 		{"state.rollout_db_parity", "threads"},
 		{"app_server.status", "app-server"},
 		{"network.provider_reachability", "reachability"},
+		{"git.worktree.dev_drive", "git"},
 	}
 	if len(report.Checks) != len(wantChecks) {
 		t.Fatalf("check IDs = %v, want %d checks", checkIDs(report), len(wantChecks))

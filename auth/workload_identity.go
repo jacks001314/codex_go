@@ -30,8 +30,9 @@ type WorkloadIdentityExchange struct {
 }
 
 type WorkloadIdentityConfig struct {
-	AssertionFile    string
-	FederationRuleID string
+	AssertionFile           string
+	FederationRuleID        string
+	WorkloadIdentityContext string
 }
 
 type workloadIdentityCacheState struct {
@@ -96,8 +97,10 @@ const (
 )
 
 // NewWorkloadIdentityConfig validates the federation rule ID and assertion
-// path (Rust WorkloadIdentityConfig::new).
-func NewWorkloadIdentityConfig(federationRuleID string, assertionFile string) (WorkloadIdentityConfig, error) {
+// path (Rust WorkloadIdentityConfig::new). workloadIdentityContext is the
+// optional OPENAI_WORKLOAD_IDENTITY_CONTEXT value forwarded unchanged to the
+// token exchange (Rust #38767).
+func NewWorkloadIdentityConfig(federationRuleID string, assertionFile string, workloadIdentityContext string) (WorkloadIdentityConfig, error) {
 	federationRuleID = strings.TrimSpace(federationRuleID)
 	if federationRuleID == "" {
 		return WorkloadIdentityConfig{}, workloadErrInvalidFederationRuleID
@@ -105,7 +108,11 @@ func NewWorkloadIdentityConfig(federationRuleID string, assertionFile string) (W
 	if !filepathIsAbsolute(assertionFile) {
 		return WorkloadIdentityConfig{}, workloadErrAssertionFileMustAbsolute
 	}
-	return WorkloadIdentityConfig{AssertionFile: assertionFile, FederationRuleID: federationRuleID}, nil
+	return WorkloadIdentityConfig{
+		AssertionFile:           assertionFile,
+		FederationRuleID:        federationRuleID,
+		WorkloadIdentityContext: workloadIdentityContext,
+	}, nil
 }
 
 // NewWorkloadIdentityExchange validates the token URL and builds an exchange
@@ -273,6 +280,9 @@ func (e *WorkloadIdentityExchange) exchange(ctx context.Context) (WorkloadIdenti
 	form.Set("grant_type", workloadJWTBearerGrant)
 	form.Set("assertion", assertion)
 	form.Set("federation_rule_id", e.config.FederationRuleID)
+	if e.config.WorkloadIdentityContext != "" {
+		form.Set("workload_identity_context", e.config.WorkloadIdentityContext)
+	}
 	reqCtx, cancel := context.WithTimeout(ctx, workloadRequestTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(reqCtx, http.MethodPost, e.tokenURL.String(), strings.NewReader(form.Encode()))

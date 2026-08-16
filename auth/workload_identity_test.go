@@ -16,18 +16,54 @@ import (
 )
 
 func TestNewWorkloadIdentityConfigValidates(t *testing.T) {
-	if _, err := NewWorkloadIdentityConfig("  ", "/tmp/assertion"); err == nil {
+	if _, err := NewWorkloadIdentityConfig("  ", "/tmp/assertion", ""); err == nil {
 		t.Fatal("empty federation rule id accepted")
 	}
-	if _, err := NewWorkloadIdentityConfig("rule-1", "relative/path"); err == nil {
+	if _, err := NewWorkloadIdentityConfig("rule-1", "relative/path", ""); err == nil {
 		t.Fatal("relative assertion path accepted")
 	}
-	config, err := NewWorkloadIdentityConfig("rule-1", "/tmp/assertion")
+	config, err := NewWorkloadIdentityConfig("rule-1", "/tmp/assertion", "ctx-1")
 	if err != nil {
 		t.Fatalf("NewWorkloadIdentityConfig() error = %v", err)
 	}
-	if config.FederationRuleID != "rule-1" || config.AssertionFile != "/tmp/assertion" {
+	if config.FederationRuleID != "rule-1" || config.AssertionFile != "/tmp/assertion" || config.WorkloadIdentityContext != "ctx-1" {
 		t.Fatalf("config = %+v", config)
+	}
+}
+
+func TestWorkloadIdentityExchangeForwardsWorkloadIdentityContext(t *testing.T) {
+	var sawContext atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		sawContext.Store(r.Form.Get("workload_identity_context"))
+		fmt.Fprint(w, `{"access_token":"tok-ctx","chatgpt_account_id":"acct-1","chatgpt_account_user_id":"u-1","expires_in":300,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","scope":"codex","token_type":"Bearer","user_id":"user-1"}`)
+	}))
+	defer server.Close()
+
+	// Without a context the field is omitted entirely.
+	plain, _ := NewWorkloadIdentityConfig("rule-1", writeAssertion(t), "")
+	plainExchange, err := NewWorkloadIdentityExchange(plain, server.URL, server.Client())
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentityExchange() error = %v", err)
+	}
+	if _, err := plainExchange.Resolve(context.Background()); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got := sawContext.Load().(string); got != "" {
+		t.Fatalf("workload_identity_context without config = %q, want empty", got)
+	}
+
+	// With a context the value is forwarded unchanged.
+	withCtx, _ := NewWorkloadIdentityConfig("rule-1", writeAssertion(t), "opaque-context")
+	ctxExchange, err := NewWorkloadIdentityExchange(withCtx, server.URL, server.Client())
+	if err != nil {
+		t.Fatalf("NewWorkloadIdentityExchange() error = %v", err)
+	}
+	if _, err := ctxExchange.Resolve(context.Background()); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got := sawContext.Load().(string); got != "opaque-context" {
+		t.Fatalf("workload_identity_context = %q, want opaque-context", got)
 	}
 }
 
@@ -78,7 +114,7 @@ func TestWorkloadIdentityExchangeCachesAndRefreshes(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config, _ := NewWorkloadIdentityConfig("rule-1", writeAssertion(t))
+	config, _ := NewWorkloadIdentityConfig("rule-1", writeAssertion(t), "")
 	exchange, err := NewWorkloadIdentityExchange(config, server.URL, server.Client())
 	if err != nil {
 		t.Fatalf("NewWorkloadIdentityExchange() error = %v", err)
@@ -119,7 +155,7 @@ func TestWorkloadIdentityExchangeCoalescesConcurrentResolves(t *testing.T) {
 		fmt.Fprint(w, `{"access_token":"tok-1","chatgpt_account_id":"acct-1","chatgpt_account_user_id":"u-1","expires_in":300,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","scope":"codex","token_type":"Bearer","user_id":"user-1"}`)
 	}))
 	defer server.Close()
-	config, _ := NewWorkloadIdentityConfig("rule-1", writeAssertion(t))
+	config, _ := NewWorkloadIdentityConfig("rule-1", writeAssertion(t), "")
 	exchange, err := NewWorkloadIdentityExchange(config, server.URL, server.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +179,7 @@ func TestWorkloadIdentityExchangeValidatesResponse(t *testing.T) {
 		fmt.Fprint(w, `{"access_token":"","chatgpt_account_id":"acct-1"}`)
 	}))
 	defer server.Close()
-	config, _ := NewWorkloadIdentityConfig("rule-1", writeAssertion(t))
+	config, _ := NewWorkloadIdentityConfig("rule-1", writeAssertion(t), "")
 	exchange, err := NewWorkloadIdentityExchange(config, server.URL, server.Client())
 	if err != nil {
 		t.Fatal(err)

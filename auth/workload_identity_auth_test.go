@@ -243,10 +243,38 @@ func TestWorkloadIdentityIncompatibleSessionSettingsRejected(t *testing.T) {
 		"different rule": differentRule,
 		"different file": differentFile,
 		"different env":  differentEnvironment,
+		"different ctx": func() workloadIdentitySessionConfig {
+			ctx := base
+			ctx.workloadIdentityContext = "opaque-context"
+			return ctx
+		}(),
 	} {
 		if _, err := newWorkloadIdentityAuthForRegistry(config, registry); err != workloadErrConflictingConfiguration {
 			t.Fatalf("%s: err = %v, want ConflictingConfiguration", name, err)
 		}
+	}
+}
+
+func TestWorkloadIdentityProcessEnvReadsContext(t *testing.T) {
+	unsetTestEnv(t, OpenAIFederationRuleIDEnv, OpenAIIdentityTokenFileEnv, OpenAIWorkloadIdentityContextEnv)
+	t.Setenv(OpenAIFederationRuleIDEnv, "rule-env")
+	t.Setenv(OpenAIIdentityTokenFileEnv, "C:\\token")
+	t.Setenv(OpenAIWorkloadIdentityContextEnv, "ctx-env")
+
+	env := workloadReadProcessEnv()
+	if env.workloadIdentityContext != "ctx-env" {
+		t.Fatalf("workload identity context = %q, want ctx-env", env.workloadIdentityContext)
+	}
+	config, err := resolveWorkloadIdentityConfig(
+		"https://chatgpt.com",
+		env,
+		/*chatgptLoginAllowed*/ true,
+	)
+	if err != nil {
+		t.Fatalf("resolveWorkloadIdentityConfig() error = %v", err)
+	}
+	if config == nil || config.workloadIdentityContext != "ctx-env" {
+		t.Fatalf("resolved config = %+v, want context ctx-env", config)
 	}
 }
 

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "targetRustCommit": "85fc4def358b7df21883e72ae8dda43a0f572f32",
+  "targetRustCommit": "9ded177ce7c1c0bd2047f902936c177612ab3434",
   "contracts": [
     {"id":"features","kind":"source-surface","rustPaths":["features/src/lib.rs"],"goPaths":["features/features.go"],"phase":"P1","status":"complete","verifier":"TestRustFeatureKeySurfaceAgainstGo"},
     {"id":"cli","kind":"source-surface","rustPaths":["cli/src/main.rs"],"goPaths":["cli"],"phase":"P1","status":"complete","verifier":"TestRustCliSubcommandSurfaceAgainstGoParser"},

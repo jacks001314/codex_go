@@ -1791,7 +1791,12 @@ func emitNetworkPolicyDecisionAudit(decision NetworkPolicyDecisionNotification) 
 	if decision.Client != nil {
 		client = *decision.Client
 	}
+	// Rust 899d1715c8 (#38800): forwarded network policy decisions are audit
+	// telemetry. The codex_otel.log_only target keeps them available to OTEL
+	// log export while the state log DB handler excludes them from persistent
+	// logs (state/persistSlogRecord).
 	slog.Info("codex.network_proxy.policy_decision",
+		"target", "codex_otel.log_only",
 		"event.name", "codex.network_proxy.policy_decision",
 		"event.timestamp", decision.Timestamp,
 		"execution.id", decision.ProcessID,

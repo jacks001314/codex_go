@@ -14,8 +14,9 @@ import (
 // a file-backed JWT exchange with ChatGPT's auth endpoints, reusing one
 // process-scoped session for resolve and refresh.
 const (
-	OpenAIFederationRuleIDEnv  = "OPENAI_FEDERATION_RULE_ID"
-	OpenAIIdentityTokenFileEnv = "OPENAI_IDENTITY_TOKEN_FILE"
+	OpenAIFederationRuleIDEnv        = "OPENAI_FEDERATION_RULE_ID"
+	OpenAIIdentityTokenFileEnv       = "OPENAI_IDENTITY_TOKEN_FILE"
+	OpenAIWorkloadIdentityContextEnv = "OPENAI_WORKLOAD_IDENTITY_CONTEXT"
 
 	// WorkloadIdentitySource labels ResolvedAuth from the workload identity
 	// process session (Rust's configured external auth source).
@@ -102,18 +103,20 @@ func workloadInvalidConfig(message string) error {
 }
 
 type workloadIdentityProcessEnv struct {
-	federationRuleID  string
-	identityTokenFile string
-	hasFederationRule bool
-	hasIdentityToken  bool
+	federationRuleID        string
+	identityTokenFile       string
+	workloadIdentityContext string
+	hasFederationRule       bool
+	hasIdentityToken        bool
 }
 
 func workloadReadProcessEnv() workloadIdentityProcessEnv {
 	return workloadIdentityProcessEnv{
-		federationRuleID:  strings.TrimSpace(readNonEmptyEnv(OpenAIFederationRuleIDEnv)),
-		identityTokenFile: readNonEmptyEnv(OpenAIIdentityTokenFileEnv),
-		hasFederationRule: osEnvPresent(OpenAIFederationRuleIDEnv),
-		hasIdentityToken:  osEnvPresent(OpenAIIdentityTokenFileEnv),
+		federationRuleID:        strings.TrimSpace(readNonEmptyEnv(OpenAIFederationRuleIDEnv)),
+		identityTokenFile:       readNonEmptyEnv(OpenAIIdentityTokenFileEnv),
+		workloadIdentityContext: readNonEmptyEnv(OpenAIWorkloadIdentityContextEnv),
+		hasFederationRule:       osEnvPresent(OpenAIFederationRuleIDEnv),
+		hasIdentityToken:        osEnvPresent(OpenAIIdentityTokenFileEnv),
 	}
 }
 
@@ -124,24 +127,26 @@ func (e workloadIdentityProcessEnv) hasMarker() bool {
 // workloadIdentitySessionConfig is a fully validated, exchange-ready session
 // configuration (Rust WorkloadIdentitySessionConfig).
 type workloadIdentitySessionConfig struct {
-	assertionFile    string
-	environment      workloadIdentityEnvironment
-	federationRuleID string
-	httpClient       *http.Client
-	tokenURL         string
+	assertionFile           string
+	environment             workloadIdentityEnvironment
+	federationRuleID        string
+	httpClient              *http.Client
+	tokenURL                string
+	workloadIdentityContext string
 }
 
 func (c workloadIdentitySessionConfig) fingerprint() workloadIdentityFingerprint {
 	return workloadIdentityFingerprint{
-		assertionFile:    c.assertionFile,
-		environment:      c.environment,
-		federationRuleID: c.federationRuleID,
-		tokenURL:         c.tokenURL,
+		assertionFile:           c.assertionFile,
+		environment:             c.environment,
+		federationRuleID:        c.federationRuleID,
+		tokenURL:                c.tokenURL,
+		workloadIdentityContext: c.workloadIdentityContext,
 	}
 }
 
 func (c workloadIdentitySessionConfig) exchange() (*WorkloadIdentityExchange, error) {
-	config, err := NewWorkloadIdentityConfig(c.federationRuleID, c.assertionFile)
+	config, err := NewWorkloadIdentityConfig(c.federationRuleID, c.assertionFile, c.workloadIdentityContext)
 	if err != nil {
 		return nil, err
 	}
@@ -149,10 +154,11 @@ func (c workloadIdentitySessionConfig) exchange() (*WorkloadIdentityExchange, er
 }
 
 type workloadIdentityFingerprint struct {
-	assertionFile    string
-	environment      workloadIdentityEnvironment
-	federationRuleID string
-	tokenURL         string
+	assertionFile           string
+	environment             workloadIdentityEnvironment
+	federationRuleID        string
+	tokenURL                string
+	workloadIdentityContext string
 }
 
 // resolveWorkloadIdentityConfig mirrors Rust resolve_config: any workload
@@ -180,10 +186,11 @@ func resolveWorkloadIdentityConfig(baseURL string, env workloadIdentityProcessEn
 		return nil, err
 	}
 	return &workloadIdentitySessionConfig{
-		assertionFile:    env.identityTokenFile,
-		environment:      environment,
-		federationRuleID: env.federationRuleID,
-		tokenURL:         environment.tokenURL(),
+		assertionFile:           env.identityTokenFile,
+		environment:             environment,
+		federationRuleID:        env.federationRuleID,
+		tokenURL:                environment.tokenURL(),
+		workloadIdentityContext: env.workloadIdentityContext,
 	}, nil
 }
 

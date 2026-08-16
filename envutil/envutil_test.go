@@ -14,6 +14,8 @@ func TestIsNonInheritableEnvVarCaseInsensitiveLikeRust(t *testing.T) {
 		"OpenAI_Federation_Rule_Id",
 		"OPENAI_IDENTITY_TOKEN_FILE",
 		"openai_identity_token_file",
+		"OPENAI_WORKLOAD_IDENTITY_CONTEXT",
+		"openai_workload_identity_context",
 	} {
 		if !IsNonInheritableEnvVar(name) {
 			t.Fatalf("IsNonInheritableEnvVar(%q) = false, want true", name)
@@ -31,6 +33,7 @@ func TestScrubSliceAndCommandEnv(t *testing.T) {
 		"PATH=C:\\bin",
 		"OPENAI_FEDERATION_RULE_ID=rule-1",
 		"openai_identity_token_file=C:\\token",
+		"OPENAI_WORKLOAD_IDENTITY_CONTEXT=ctx-1",
 		"HOME=C:\\home",
 	})
 	if len(scrubbed) != 2 || scrubbed[0] != "PATH=C:\\bin" || scrubbed[1] != "HOME=C:\\home" {

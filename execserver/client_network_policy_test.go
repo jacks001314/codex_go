@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,50 @@ type networkPolicyTestConnection struct {
 	closed    chan struct{}
 	closeOnce sync.Once
 }
+
+func TestEmitNetworkPolicyDecisionAuditUsesLogOnlyTarget(t *testing.T) {
+	var mu sync.Mutex
+	var targets []string
+	previous := slog.Default()
+	slog.SetDefault(slog.New(loggingHandlerFunc(func(record slog.Record) {
+		record.Attrs(func(attr slog.Attr) bool {
+			if attr.Key == "target" {
+				mu.Lock()
+				targets = append(targets, attr.Value.String())
+				mu.Unlock()
+			}
+			return true
+		})
+	})))
+	defer slog.SetDefault(previous)
+
+	emitNetworkPolicyDecisionAudit(NetworkPolicyDecisionNotification{
+		ProcessID: "pid-1",
+		Scope:     "trusted-conversation",
+		Decision:  "allow",
+		Source:    "proxy",
+		Reason:    "trusted",
+		Host:      "example.com",
+		Port:      443,
+		Protocol:  "tcp",
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(targets) != 1 || targets[0] != "codex_otel.log_only" {
+		t.Fatalf("audit targets = %#v, want [codex_otel.log_only]", targets)
+	}
+}
+
+type loggingHandlerFunc func(record slog.Record)
+
+func (f loggingHandlerFunc) Enabled(context.Context, slog.Level) bool { return true }
+func (f loggingHandlerFunc) Handle(_ context.Context, record slog.Record) error {
+	f(record)
+	return nil
+}
+func (f loggingHandlerFunc) WithAttrs(attrs []slog.Attr) slog.Handler { return f }
+func (f loggingHandlerFunc) WithGroup(name string) slog.Handler       { return f }
 
 func newNetworkPolicyTestConnection(buffer int) *networkPolicyTestConnection {
 	return &networkPolicyTestConnection{

@@ -42,6 +42,8 @@ func TestLogDBHandlerDropsFilteredRecords(t *testing.T) {
 	logger.Debug("drop sdk", "target", "opentelemetry_sdk")
 	logger.Info("retain sdk", "target", "opentelemetry_sdk")
 	logger.Debug("drop websocket", "target", "codex_api::responses_websocket_timing")
+	logger.Info("drop log-only audit", "target", "codex_otel.log_only")
+	logger.Info("retain audit", "target", "codex_otel.network_proxy")
 	if err := handler.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -49,11 +51,11 @@ func TestLogDBHandlerDropsFilteredRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Target != "opentelemetry_sdk" || rows[0].Level != "INFO" {
+	if len(rows) != 2 {
 		t.Fatalf("filtered rows = %#v", rows)
 	}
 	for _, row := range rows {
-		if row.Target == "codex_api::responses_websocket_timing" || (row.Target == "opentelemetry_sdk" && row.Level == "DEBUG") {
+		if row.Target == "codex_otel.log_only" || row.Target == "codex_api::responses_websocket_timing" || (row.Target == "opentelemetry_sdk" && row.Level == "DEBUG") {
 			t.Fatalf("filtered row persisted: %#v", row)
 		}
 	}

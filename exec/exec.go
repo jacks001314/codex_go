@@ -3834,10 +3834,15 @@ func execStartTurnSnapshot(metadata *session.Metadata, turnID string, now time.T
 
 // execPersistedHistoryMode returns the rollout history mode to persist for an
 // exec session. Fresh sessions use Rust's default "legacy"; an existing
-// session keeps its persisted mode. The previous code reused the fork-mode
-// value "all" (session.ForkAll), which is not a valid history mode: Rust's
-// app-server only accepts "legacy"/"paginated" and rejects the session, which
-// makes Desktop app handoff (/app) silently fail to open the thread.
+// session keeps its persisted mode. Rust #38774 requests paginated history
+// for new persistent threads and falls back to legacy when the thread store
+// does not support pagination; Go's exec runner stays on the legacy fallback
+// until its session-item converter can represent every exec item (including
+// plain tool calls and outputs) in paginated core form. The previous code
+// reused the fork-mode value "all" (session.ForkAll), which is not a valid
+// history mode: Rust's app-server only accepts "legacy"/"paginated" and
+// rejects the session, which makes Desktop app handoff (/app) silently fail to
+// open the thread.
 func execPersistedHistoryMode(existing *session.Record) string {
 	if existing != nil {
 		switch strings.TrimSpace(existing.Metadata.HistoryMode) {

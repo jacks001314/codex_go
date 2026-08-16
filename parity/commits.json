@@ -1,918 +1,218 @@
 {
     "schemaVersion":  1,
-    "rustFromExclusive":  "c6dee5f49f9d4763cb498904d9bf0d0fd0c4586b",
-    "rustToInclusive":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
+    "rustFromExclusive":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
+    "rustToInclusive":  "9ded177ce7c1c0bd2047f902936c177612ab3434",
     "commits":  [
                     {
-                        "sha":  "3711943d11a1c69a65afe98757814b6b5244fbaf",
-                        "subject":  "Parse model annotations from skill frontmatter (#38467)",
+                        "sha":  "3c7ae4a81204cbee45084b4fb43b3630c79550c9",
+                        "subject":  "Scope TUI app directory state to the active context (#38743)",
                         "kind":  "runtime",
                         "domains":  [
-                                        "skills"
+                                        "tui"
                                     ],
-                        "status":  "complete",
+                        "status":  "audit_pending",
                         "evidence":  [
-                                         "go test ./appserver -run SkillFrontmatterModel -count=1; skill frontmatter model annotation parsed (luna), unsupported values ignored without disabling loading"
+                                         "Defer: TUI connectors scope batch. Go TUI has no connector directory scope-generation invalidation, stale-request rejection, or AppListUpdated revalidation (tracked for a dedicated TUI batch)."
                                      ]
                     },
                     {
-                        "sha":  "d5e256ceb210dacbab9d8dcc7eafda58f90f6e51",
-                        "subject":  "Add an Amazon Bedrock Runtime provider (#38470)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "model"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust model-provider crate; Go has no Bedrock runtime provider"
-                                     ]
-                    },
-                    {
-                        "sha":  "5c6f498b0e35058ddf0d3ba0959a0967c5b6495b",
-                        "subject":  "Stop generating accepted-line fingerprints (#38473)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "telemetry"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./telemetry -run AcceptedLine -count=1; fingerprints no longer generated, counts kept"
-                                     ]
-                    },
-                    {
-                        "sha":  "5620bab61cf3fc08cdcd4cf7461b0733252664d5",
-                        "subject":  "Add bounded skill model delegation instructions (#38475)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "skills"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./prompt -run SkillModelDelegation -count=1; bounded skill model delegation instruction builder mirrors Rust"
-                                     ]
-                    },
-                    {
-                        "sha":  "9d012ca4f54c5adc86e605a7bedbdd03ef63f516",
-                        "subject":  "Include agent names in turn metadata (#38483)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "model"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./turn -run AgentNameLikeRust -count=1; agent_name carried in turn metadata, reserved from client overrides"
-                                     ]
-                    },
-                    {
-                        "sha":  "cbe85e117b1db59cdbe8175c59793c3cf2a4a7b8",
-                        "subject":  "Search selected plugin apps before falling back (#38484)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "plugin"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./plugin -run RenderExplicitPluginInstructions -count=1; apps-first guidance with tool_search"
-                                     ]
-                    },
-                    {
-                        "sha":  "4e5a08feb63f79e407c86f69a78dc8c7ef115d88",
-                        "subject":  "Enforce strict auto-review for MCP tool calls (#38492)",
-                        "kind":  "security",
-                        "domains":  [
-                                        "approvals"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A-equivalent: Go MCP tool-call approvals route through the permission-hook/broker and elicitation handler with no client-side auto-approve/annotation/remembered shortcuts to bypass; strict-auto-review session grants are normalized at the permissions-approval broker (go test ./appserver -run McpElicitation|StrictAutoReview -count=1)"
-                                     ]
-                    },
-                    {
-                        "sha":  "45c9c74e299ae92a75f3fb201d4294d99de31f2f",
-                        "subject":  "Reuse pending MCP startups during reconciliation (#38493)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "mcp"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go mcp_runtime_coordinator reuses in-flight MCP startups"
-                                     ]
-                    },
-                    {
-                        "sha":  "636e505c5cd809bdce37314f77130ffb4e45c46b",
-                        "subject":  "Verify bundled bwrap in Bazel builds (#38494)",
-                        "kind":  "release",
-                        "domains":  [
-                                        "sandbox"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Bazel build-only"
-                                     ]
-                    },
-                    {
-                        "sha":  "86b1123ff6b5d089a146be4e603a324cf454223a",
-                        "subject":  "Enable parallel tool calls for all model prompts (#38499)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "model"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go does not gate parallel tool calls on catalog fields"
-                                     ]
-                    },
-                    {
-                        "sha":  "fdbab67c669a3176b13d08ab49493f30a806d2ba",
-                        "subject":  "Carry environment config in turn selections (#38521)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "session"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./appserver ./tool -run \"EnvironmentConfig|UnifiedExecEnvironmentsForTurn|ValidateTurnEnvironmentSelections|PerEnvironment\" -count=1; EnvironmentConfigState (from_thread/pending/ready/failed) parsed and validated in turn environment selections; FromThread resolves to Ready(thread config) at the attachment boundary (threadEnvironmentConfigForTurn) and normalized config persists in thread metadata"
-                                     ]
-                    },
-                    {
-                        "sha":  "4eff3b788ba629acc944ed6db6502c362fc08e0a",
-                        "subject":  "Configure Guardian sampling for responses lite (#38527)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "8630bb3caecaff6abc6add450a88035d9f6d3f8c",
-                        "subject":  "Record Guardian V2 risk scores on threads (#38540)",
-                        "kind":  "persistence",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "a44f266a4a23ab2c1aef23c54ce86642559237ca",
-                        "subject":  "Initialize Guardian V2 samplers per thread (#38553)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "db5b4a4cfb2668330f0f600b4bbfc45e16f9d776",
-                        "subject":  "Preserve Guardian transcript boundaries in sampling input (#38555)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "486df09a003953549a8899e6a834e9d49b56fa73",
-                        "subject":  "Improve Guardian transcript context selection (#38558)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "3134ab65725d8af4309ca8bc27a6ca560c21ca04",
-                        "subject":  "Restrict filesystem helper sandbox access (#38561)",
-                        "kind":  "security",
-                        "domains":  [
-                                        "sandbox"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./execserver -run FSHelperReadableRoots -count=1; fs helper readable roots grant only the helper executable, not its parent directory"
-                                     ]
-                    },
-                    {
-                        "sha":  "08c48e37007683d366f648d4c40ec17ba5009e98",
-                        "subject":  "Reuse compatible parent compactions in Guardian V2 (#38564)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "aa905bb9625d777a2f64b20408e5ddedbf173395",
-                        "subject":  "Store security risk scores as a snapshot (#38567)",
-                        "kind":  "persistence",
-                        "domains":  [
-                                        "rollout"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./rollout -run SecurityRiskScore -count=1; scores stored as snapshot map"
-                                     ]
-                    },
-                    {
-                        "sha":  "d40dfcc3c727a97315bb34a43165c037b422282c",
-                        "subject":  "Run tool start callbacks after pre-tool hooks (#38568)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "hooks"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./tool ./turn -run DispatchWithHooks -count=1; tool start callbacks run after pre-tool hooks with the rewritten invocation (Rust #38568)"
-                                     ]
-                    },
-                    {
-                        "sha":  "1c4f42863c1f84eb5175a1a0cfffe84641a63df3",
-                        "subject":  "Require automatic review for high-risk Guardian v2 actions (#38569)",
-                        "kind":  "security",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "42d842a91a9d77efbf7a164fc0dcd42637958031",
-                        "subject":  "Report thread storage changes after rollout migration (#38579)",
-                        "kind":  "persistence",
-                        "domains":  [
-                                        "rollout"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Go has no rollout-migration engine or migrate-rollouts CLI (the Rust migration tooling itself is tracked as separate follow-up outside this parity window, see update/plan_2026_08_07.md); there is no migration report surface on which thread-storage-change reporting could be added"
-                                     ]
-                    },
-                    {
-                        "sha":  "2a452d7dc1f97e22e126fc3a111237a3e828de0c",
-                        "subject":  "Keep the latest Guardian risk score during concurrent sampling (#38580)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "7c194ff24b3aa0e3beaf03b526db2d0b4f708794",
-                        "subject":  "Honor cloud-managed requirements in feature listings (#38581)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "features"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./app -run TestFeaturesList -count=1; features list loads managed config and reflects managed feature requirements"
-                                     ]
-                    },
-                    {
-                        "sha":  "5bc8da6d78fe32343dc51eaf73b96fd288ae0e87",
-                        "subject":  "Bound Guardian V2 tool actions before risk classification (#38586)",
-                        "kind":  "security",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "23094236acac6fdc22f67a408ea8ccb8fac8e6e1",
-                        "subject":  "Let extensions resolve approval reviews before Guardian (#38592)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust extension API"
-                                     ]
-                    },
-                    {
-                        "sha":  "742edd6c16939185b424beb68c8eb46878b323a3",
-                        "subject":  "Prioritize new Guardian classifications under load (#38596)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "3360f4a909a920d2e534a63c508d98e91fe6655a",
-                        "subject":  "Install Guardian V2 in the app server (#38597)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "da898490fcc7e75661c367f6a441798a0ce0eb95",
-                        "subject":  "Make unbounded connection retries configurable (#38601)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "model"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./features ./model -run Unbounded -count=1; unbounded_connection_retries feature gates reconnect window"
-                                     ]
-                    },
-                    {
-                        "sha":  "588ee893241de551836bfd97e4964c22f601882b",
-                        "subject":  "Isolate Guardian reviewer sessions from parent extensions (#38602)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "1bb6384c1971579c74194a3cc832847480de470d",
-                        "subject":  "Avoid paginated resume requests for verified legacy rollouts (#38604)",
-                        "kind":  "runtime",
+                        "sha":  "a7edf37cb46b5fc4d50bd03df8e5999a86f602eb",
+                        "subject":  "Remove the TUI test dependency on `codex-cli` (#38746)",
+                        "kind":  "test",
                         "domains":  [
                                         "tui"
                                     ],
                         "status":  "complete",
                         "evidence":  [
-                                         "N/A: Go TUI resume delegates to app-server session resume without Rust resume-picker transcript preview paging; no paginated-request retry surface to fix"
+                                         "N/A: Rust compile/test-infra dependency removal; Go TUI tests have no codex-cli dependency."
                                      ]
                     },
                     {
-                        "sha":  "3b3a91ccf0cb09fc8f713385d6eaae98e8919162",
-                        "subject":  "Fix resume transcript preview line selection (#38605)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Go TUI has no Rust-style resume-picker transcript preview line selection; resume delegates to app-server session resume"
-                                     ]
-                    },
-                    {
-                        "sha":  "a3cb1c14fbef105029b99f28951ee240ea4cadff",
-                        "subject":  "Allow larger gRPC code mode tool descriptions (#38606)",
-                        "kind":  "protocol",
-                        "domains":  [
-                                        "codemode"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go gRPC frames already use ProtocolMaxFrameBytes"
-                                     ]
-                    },
-                    {
-                        "sha":  "c0d59bf6147c83d067e257e858b928f81820ab50",
-                        "subject":  "Fix the missing resume picker history mode import (#38608)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust compile-only import fix; Go resume picker has no missing history-mode import and builds clean"
-                                     ]
-                    },
-                    {
-                        "sha":  "fb5aa093e0657c940e8ffd1dd055d22b92d67dfc",
-                        "subject":  "Support workload identity in remote exec-server auth (#38610)",
+                        "sha":  "12933b69551394328319dcdd1bcee7907326dc85",
+                        "subject":  "Forward workload identity context during token exchange (#38767)",
                         "kind":  "security",
                         "domains":  [
                                         "auth"
                                     ],
                         "status":  "complete",
                         "evidence":  [
-                                         "go test ./execserver -run ResolveAuthHeaders -count=1; remote registry requests resolve fresh auth headers; app wires workload identity refresh"
+                                         "go test ./auth ./envutil -count=1",
+                                         "OPENAI_WORKLOAD_IDENTITY_CONTEXT read from the process env, forwarded unchanged as the workload_identity_context exchange field, included in the session fingerprint (different values cannot share an exchange), and added to envutil non-inheritable launch-context scrubbing."
                                      ]
                     },
                     {
-                        "sha":  "f535950eaabebd5654a958fa8775202d08b078f5",
-                        "subject":  "Skip stale Guardian risk score persistence (#38612)",
+                        "sha":  "c4941302c73c6322b153bba13ac0a9f4396301d6",
+                        "subject":  "Use paginated history for persistent exec threads (#38774)",
+                        "kind":  "persistence",
+                        "domains":  [
+                                        "execserver",
+                                        "session"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: Go's exec runner stays on Rust's legacy fallback (the thread store rejects paginated encoding for exec item shapes). Fresh persistent exec threads would require every exec session item to convert to paginated core form, but plain function_call/custom_tool_call items (and tool outputs) lack the appserver's command/dynamic markers, so the rollout paginated encoder rejects them. Tracked: align exec tool-item building with appserver sessionItemForAppToolCall before enabling paginated history for fresh exec threads."
+                                     ]
+                    },
+                    {
+                        "sha":  "00f6a8a60e5c5e93d185c7fe67fd596b7e62240f",
+                        "subject":  "Keep active-turn model settings stable across updates (#38785)",
                         "kind":  "runtime",
                         "domains":  [
-                                        "guardian"
+                                        "appserver",
+                                        "session"
                                     ],
                         "status":  "complete",
                         "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
+                                         "Equivalent: Go resolves model, provider, reasoning effort, service tier, approval policy, and parallel-tool-call settings once at turn start into appTurnRunConfig and hands them to the turn AgentLoop; mid-turn thread/config updates therefore cannot change the active turn's sampling requests, matching Rust's step-scoped snapshot."
                                      ]
                     },
                     {
-                        "sha":  "0fce9332903d1d033ed71a488b81c44f90a7e47f",
-                        "subject":  "Remove the gRPC code-mode enabled tool limit (#38615)",
-                        "kind":  "protocol",
+                        "sha":  "a95a6fe333c276623ef172f9f7825ac2790be184",
+                        "subject":  "Show resume and fork status during TUI startup (#38788)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: TUI startup batch. Go's bubbletea startup flow has no provisional-composer loading-message surface equivalent to Rust's StartupDraft session-action status (tracked for a dedicated TUI batch)."
+                                     ]
+                    },
+                    {
+                        "sha":  "6efcdad4c3c167741ac3791766152c15b03e3653",
+                        "subject":  "Add storage diagnostics to `codex doctor` (#38795)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "doctor"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./doctor -count=1",
+                                         "system.disk check reports CODEX_HOME and worktree free space (warn < 5 GiB, fail < 1 GiB); git.worktree.dev_drive (Windows) reports trusted/untrusted Dev Drive state; feedback doctor report workspace anchoring is N/A because Go has no feedback doctor attachment."
+                                     ]
+                    },
+                    {
+                        "sha":  "899d1715c87a504ce4c9ec85c2fd7753e33a7be4",
+                        "subject":  "Route executor policy audits through log-only telemetry (#38800)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "execserver"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./execserver -run TestEmitNetworkPolicyDecisionAuditUsesLogOnlyTarget -count=1; go test ./state -run TestLogDBHandlerDropsFilteredRecords -count=1",
+                                         "Forwarded codex.network_proxy.policy_decision events now carry target codex_otel.log_only; the state LogDBHandler excludes that target from the persistent log while standard logging still receives it."
+                                     ]
+                    },
+                    {
+                        "sha":  "b3cc21737803549679e2009193c04205f7d8d19c",
+                        "subject":  "Add a health endpoint to the code-mode gRPC listener (#38806)",
+                        "kind":  "runtime",
                         "domains":  [
                                         "codemode"
                                     ],
                         "status":  "complete",
                         "evidence":  [
-                                         "equivalent: Go code-mode host imposes no enabled-tool cap"
+                                         "N/A: Go provides no code-mode gRPC server (codemode is a gRPC client to the standalone Rust host); there is no listener on which a /healthz route could be added."
                                      ]
                     },
                     {
-                        "sha":  "fa595fbab80251310854366a9e57c1638e8377ba",
-                        "subject":  "Route escalated approval retries through Guardian (#38616)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "approvals"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A-equivalent: Go has no extension approval contributors to bypass; approval retries already route through the standard Guardian-capable path and the review action carries the escalation/retry reason (tool.shellApprovalReason)"
-                                     ]
-                    },
-                    {
-                        "sha":  "086396f7f60347b74c82784d5dfaf4fb2d3bda12",
-                        "subject":  "Prioritize global models in the Bedrock Runtime catalog (#38617)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "model"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Bedrock provider"
-                                     ]
-                    },
-                    {
-                        "sha":  "14a6813fa8223d40fa4ee2a222590a4bec7cf09d",
-                        "subject":  "Apply Guardian policies to v2 risk classification (#38618)",
-                        "kind":  "security",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "395723b2385cf1314dcf27db4b01a221785109b0",
-                        "subject":  "Source multi-agent instructions from the model catalog (#38619)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "agent"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./model ./appserver ./agent -run MultiAgent -count=1; model_catalog multi_agent role/mode messages parsed, preserved through overrides, and wired into usage-hint/mode developer fragments with config precedence and empty suppression; full-history forks drop parent multi_agent_role guidance"
-                                     ]
-                    },
-                    {
-                        "sha":  "478215c5c184e4315e1f2f94cb825afcf96fcbc0",
-                        "subject":  "Preserve large gRPC code-mode tool errors (#38621)",
-                        "kind":  "protocol",
-                        "domains":  [
-                                        "codemode"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go gRPC frames carry full tool errors"
-                                     ]
-                    },
-                    {
-                        "sha":  "42b5f05cef69491bc578901fb324b3c9a278b253",
-                        "subject":  "Preserve MCP namespace descriptions in the tool catalog cache (#38623)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "mcp"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./mcp -run NamespaceDescriptionPreserved -count=1; namespace descriptions preserved in publish path"
-                                     ]
-                    },
-                    {
-                        "sha":  "1426592fccd9ab78764a0dcce63b0190a95be04c",
-                        "subject":  "Open notes when accepting the request input Other option (#38624)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./tui/tea -run RequestUserInputModal -count=1; Enter/Tab on the Other option opens notes without submitting (Rust #38624)"
-                                     ]
-                    },
-                    {
-                        "sha":  "d8d7ca73f80e992cade867970ceb264431cea33c",
-                        "subject":  "Enable unified exec by default on Windows (#38625)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "features"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./features ./appserver -count=1; unified_exec default enabled on all platforms"
-                                     ]
-                    },
-                    {
-                        "sha":  "baab1705c60089f919accc11608aa0df02f634f7",
-                        "subject":  "Make Guardian v2 risk classification configurable (#38628)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "guardian"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust Guardian V2 extension"
-                                     ]
-                    },
-                    {
-                        "sha":  "6595071e65c5f4037e578e059aa552434084b6da",
-                        "subject":  "Remove the gRPC code-mode open session limit (#38630)",
-                        "kind":  "protocol",
-                        "domains":  [
-                                        "codemode"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go code-mode host imposes no session cap"
-                                     ]
-                    },
-                    {
-                        "sha":  "6bed213411d1250686cc162feb4324975c12158a",
-                        "subject":  "Add MCP protocol discovery metrics (#38634)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "mcp"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./mcp -run ProtocolDiscoveryMetrics -count=1; MCP protocol discovery records mode/outcome/duration observations"
-                                     ]
-                    },
-                    {
-                        "sha":  "ccee70f81379374028265be41f95f15d9d254ce9",
-                        "subject":  "Remove repository-local Codex skills (#38635)",
-                        "kind":  "release",
-                        "domains":  [
-                                        "skills"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Go repo has no vendored repo-local skills"
-                                     ]
-                    },
-                    {
-                        "sha":  "7e65e4f3303881ee8b042128996f159fa5b3f128",
-                        "subject":  "Render the initial TUI session header before input (#38639)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go bubbletea TUI renders the session header and composer atomically per frame; input cannot act before the initial render"
-                                     ]
-                    },
-                    {
-                        "sha":  "58d2daba45dd6d37b8c151ca0c57a54a5b8ce297",
-                        "subject":  "Harden TUI startup input handling (#38641)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Rust crossterm terminal-probe startup input handling; Go uses bubbletea with no terminal probe/replay state machine"
-                                     ]
-                    },
-                    {
-                        "sha":  "a0bed4be2112683b3001ba2c0dd16326ab83c1ba",
-                        "subject":  "Keep the composer editable during TUI startup (#38642)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go TUI composer is editable from the first frame during app-server/MCP bootstrap (app/interactive.go)"
-                                     ]
-                    },
-                    {
-                        "sha":  "6d97d4c10230ee5af00ce323af26a489228743ba",
-                        "subject":  "Delay the startup composer until first-login onboarding (#38643)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go runs first-login onboarding before starting the TUI (interactive_onboarding.go), so the composer appears only after onboarding"
-                                     ]
-                    },
-                    {
-                        "sha":  "efa97f9bc6814d6549fca8997678a10ef0111a04",
-                        "subject":  "Show onboarding when Codex home lacks authentication state (#38644)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go onboarding is shown when the resolved auth mode is unknown (auth-relevant state), not when the codex home is non-empty"
-                                     ]
-                    },
-                    {
-                        "sha":  "fe556c4b6cbce64f508037f8ea2b9b071b0172bd",
-                        "subject":  "Deliver gRPC code-mode notifications without truncation (#38645)",
-                        "kind":  "protocol",
-                        "domains":  [
-                                        "codemode"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go gRPC frames carry full notifications"
-                                     ]
-                    },
-                    {
-                        "sha":  "cce33123a11449771504e9cbc4bf533f64721e1d",
-                        "subject":  "Read Apple notarization issuer ID from Key Vault (#38646)",
-                        "kind":  "release",
-                        "domains":  [
-                                        "release"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: macOS release tooling"
-                                     ]
-                    },
-                    {
-                        "sha":  "b8aa9e9a01e4ab11c15eb6ed935e1927ca64d243",
-                        "subject":  "Add an override to skip project configuration (#38647)",
+                        "sha":  "5ba12929f8870400695292eb805af440c25ec5ae",
+                        "subject":  "Add raw config overrides to the TypeScript SDK (#38817)",
                         "kind":  "runtime",
                         "domains":  [
                                         "config"
                                     ],
                         "status":  "complete",
                         "evidence":  [
-                                         "go test ./config -run IgnoreProjectConfig -count=1; loader override skips project layers"
+                                         "N/A: the Go repository does not mirror the TypeScript SDK (npm/codex is the CLI wrapper only); no codexOptions/exec.ts surface exists to extend."
                                      ]
                     },
                     {
-                        "sha":  "aa1b81e46fa3e5325421fe833ac391043b704fb8",
-                        "subject":  "Reuse the TUI startup account response during bootstrap (#38649)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Go local TUI startup resolves auth from the auth store without a duplicate remote account RPC; Rust app-server bootstrap account-response reuse has no Go counterpart"
-                                     ]
-                    },
-                    {
-                        "sha":  "ff6e7c77a3f4c6bfa39fd780e8fe02e3004f404b",
-                        "subject":  "Canonicalize default namespaces in gRPC subscription filters (#38650)",
-                        "kind":  "protocol",
-                        "domains":  [
-                                        "codemode"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "equivalent: Go gRPC subscription routing canonicalizes namespaces"
-                                     ]
-                    },
-                    {
-                        "sha":  "c530bcd4cd46f2a26a839f7bb90c306a27c50d95",
-                        "subject":  "Move permission profile snapshots into the protocol (#38651)",
-                        "kind":  "protocol",
-                        "domains":  [
-                                        "sandbox"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./sandbox ./execserver ./tool ./appserver -run PermissionProfile -count=1; Go carries the resolved permission profile snapshot once in sandbox (no duplicated protocol struct)"
-                                     ]
-                    },
-                    {
-                        "sha":  "5186e2ccc305ab54a2bb1239fda3656d8b4ab950",
-                        "subject":  "Skip terminal hyperlink layout when no links are present (#38657)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Go renders per-line WebLinksInText without Rust mark_buffer_hyperlinks paragraph layout; no layout work to skip"
-                                     ]
-                    },
-                    {
-                        "sha":  "848cbad7f458a442a3a84099650f13c5c68bd48f",
-                        "subject":  "Enforce managed deny-read rules in the Windows sandbox (#38660)",
-                        "kind":  "security",
-                        "domains":  [
-                                        "sandbox"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./sandbox/windowssandbox -run \"DenyRead|RestrictedToken\" -count=1; Windows sandbox requests resolve deny-read paths from the profile at construction, fail closed for unbounded root globs and restricted-token profiles with deny-read entries"
-                                     ]
-                    },
-                    {
-                        "sha":  "274727d37fa69f113d28be4e0654deddcdef4318",
-                        "subject":  "Delete Thai combining marks one at a time in the composer (#38662)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./tui/bottom_pane -run ThaiCombining -count=1; Thai combining marks delete one at a time like Rust"
-                                     ]
-                    },
-                    {
-                        "sha":  "a186f5484dc8b89f103859a7c9bd632881fba54b",
-                        "subject":  "Resolve local JSON Schema refs in Code Mode types (#38664)",
-                        "kind":  "protocol",
-                        "domains":  [
-                                        "codemode"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./codemode -run RenderJSONSchema -count=1; local JSON Schema refs resolved with escaped/percent-encoded pointers, sibling intersections, nested-resource scoping, and bounded expansion/render work"
-                                     ]
-                    },
-                    {
-                        "sha":  "15fde8c1f2d48812c1ad3b5d2fb7a1e7da4053fa",
-                        "subject":  "Forward executor network policy decisions for auditing (#38670)",
-                        "kind":  "security",
-                        "domains":  [
-                                        "execserver"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./execserver ./network -run NetworkPolicyDecision -count=1; executor proxy decisions forwarded as network/policyDecision notifications, validated and audited on the controller"
-                                     ]
-                    },
-                    {
-                        "sha":  "1873e947f804074d99d9537a418b5e4ffde6901f",
-                        "subject":  "Honor per-environment permission profiles (#38673)",
-                        "kind":  "security",
-                        "domains":  [
-                                        "sandbox"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./tool -run TestShellExecutorHonorsPerEnvironmentConfig -count=1; Ready attachment permission profiles override the turn-level profile per environment, FromThread inherits; Go guardian review already restricts review sessions to read-only (guardianReviewPermissionProfileForTurn)"
-                                     ]
-                    },
-                    {
-                        "sha":  "233739e76ab6f63877df8abea720da14afb1825d",
-                        "subject":  "Exclude shortcut-modified input from TUI paste bursts (#38675)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "tui"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: bubbletea v1.3.10 exposes no Super/Hyper/Meta modifiers and Go has no char-burst buffer to exclude them from"
-                                     ]
-                    },
-                    {
-                        "sha":  "22bf16a37ed45006c0226541874abd7449c29911",
-                        "subject":  "Preserve environment configuration ownership (#38678)",
-                        "kind":  "runtime",
+                        "sha":  "fcdae21073bac8613b3418047fc3e2a3e15cb6f0",
+                        "subject":  "Support metadata staging for reserved thread IDs (#38819)",
+                        "kind":  "persistence",
                         "domains":  [
                                         "session"
                                     ],
                         "status":  "complete",
                         "evidence":  [
-                                         "go test ./appserver -run \"ResolveEnvironmentConfig|UnifiedExecEnvironmentsForTurn|InspectSelectedCapabilityRoots\" -count=1; resolveEnvironmentConfig tracks thread-vs-owner origin; FromThread re-resolves against thread settings each turn while owner Ready/Pending/Failed configs persist across turns and child-thread selection clones"
+                                         "N/A: Rust ThreadManager/thread-store internal API for host-owned state before thread start; Go's appserver thread router generates thread IDs at start and has no reserve_thread_id/stage-metadata surface."
                                      ]
                     },
                     {
-                        "sha":  "4e9a1a907385fa04d0b6b30dc2afd152eba2de90",
-                        "subject":  "Preserve HTTP fallback for delegated sessions (#38681)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "session"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A-equivalent: Go shares one ResponsesAgentRunner across turns and Guardian review sessions (requireAgentForTurn), so the parent WebSocket-to-HTTP fallback state naturally propagates to delegated sessions; no separate delegated model client exists (go test ./appserver -run Guardian -count=1)"
-                                     ]
-                    },
-                    {
-                        "sha":  "eb147c0db364d1e642439f33e3078f8712ef9aa5",
-                        "subject":  "Surface misalignment policy violations as typed errors (#38682)",
-                        "kind":  "protocol",
-                        "domains":  [
-                                        "appserver"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./model ./appserver -run Misalignment -count=1; misalignment_policy_violation typed as non-retryable APIError from streams and HTTP 400/403 with fallback message; app-server surfaces misalignmentPolicyViolation"
-                                     ]
-                    },
-                    {
-                        "sha":  "2ca575026cef066a58c70f6bdee4feafa6e63d3a",
-                        "subject":  "Support pending environment attachment configuration (#38684)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "session"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./appserver -run \"ValidateTurnEnvironmentSelections|UnifiedExecEnvironmentsForTurn|InspectSelectedCapabilityRoots\" -count=1; pending/failed attachments accepted, excluded from turn environments, primary environment selection, capability-root inspection, and skill sandbox contexts; later ready selection replaces failed state"
-                                     ]
-                    },
-                    {
-                        "sha":  "4861236f06d0df397436531b4aa3d7fa6975959c",
-                        "subject":  "Propagate request trace context through exec-server relays (#38690)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "execserver"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "N/A: Go exec-server has no W3C tracing substrate; relay frames are Go-internal, so there is no trace context to propagate"
-                                     ]
-                    },
-                    {
-                        "sha":  "53f3fa749659498fa24c81da8fde5440fa7bba7f",
-                        "subject":  "Route permission requests through shared Guardian approvals (#38701)",
-                        "kind":  "security",
-                        "domains":  [
-                                        "approvals"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./tool ./turn ./appserver -run RequestPermissions -count=1; request_permissions tool registered under the feature flag and routes through the shared Guardian approval path with turn cancellation via ctx"
-                                     ]
-                    },
-                    {
-                        "sha":  "e5470f1bce099442d73e491ce63d189d355b061e",
-                        "subject":  "Refresh hook runtimes after plugin changes (#38703)",
-                        "kind":  "runtime",
-                        "domains":  [
-                                        "hooks"
-                                    ],
-                        "status":  "complete",
-                        "evidence":  [
-                                         "go test ./appserver -run HookDiscoveryReflectsPluginHookChanges -count=1; discovery refreshes plugin hook sources"
-                                     ]
-                    },
-                    {
-                        "sha":  "3685a61dadefebb66690f8c0f945df044fc11b25",
-                        "subject":  "Normalize CRLF line endings in pasted text (#38704)",
+                        "sha":  "1ba9ce89101d2bd1efb981e0a94a61a955d42702",
+                        "subject":  "Avoid cloning TUI history span content (#38822)",
                         "kind":  "runtime",
                         "domains":  [
                                         "tui"
                                     ],
                         "status":  "complete",
                         "evidence":  [
-                                         "go test ./tui/... -run NormalizePastedText -count=1; CRLF pairs normalized before bare CRs"
+                                         "N/A: Rust TUI allocation micro-optimization in insert_history; Go's history insertion does not clone span content in the same structure."
                                      ]
                     },
                     {
-                        "sha":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
-                        "subject":  "Add MCP tool handler support to the hooks engine (#38705)",
+                        "sha":  "49db349ffdd888f5e3c91abf9b7519d8631e6e9a",
+                        "subject":  "Avoid allocating per character when decorating hyperlinks (#38823)",
                         "kind":  "runtime",
                         "domains":  [
-                                        "hooks"
+                                        "tui"
                                     ],
                         "status":  "complete",
                         "evidence":  [
-                                         "go test ./appserver -run McpTool -count=1; mcp_tool hooks listed and run via executor"
+                                         "N/A: Rust TUI per-character allocation micro-optimization in terminal_hyperlinks; Go renders hyperlink decorations with a different per-line path."
+                                     ]
+                    },
+                    {
+                        "sha":  "c7a95f84b389d64bce0cc6dbd2d893fd5a0577c3",
+                        "subject":  "Add endpoint protection checks to `codex doctor` (#38827)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "doctor"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./doctor -run TestEndpointCheckLikeRust -count=1",
+                                         "security.endpoint check detects CrowdStrike Falcon, BeyondTrust, Microsoft Defender, SentinelOne (Windows sc query), and Jamf Protect (macOS systemextensionsctl), with product-specific exclusion remediation and complete/partial/unavailable inspection states."
+                                     ]
+                    },
+                    {
+                        "sha":  "73abda8bfef6bd42eb11351be53980a027fd1feb",
+                        "subject":  "Isolate external editor buffers from sandbox-writable paths (#38830)",
+                        "kind":  "security",
+                        "domains":  [
+                                        "tui",
+                                        "sandbox"
+                                    ],
+                        "status":  "audit_pending",
+                        "evidence":  [
+                                         "Defer: external editor sandbox-isolation batch. Go's tea external editor writes composer buffers via os.CreateTemp to the system temp dir; protecting them under a sandbox-non-writable codex_home/editor directory requires threading the filesystem policy into the tea model (tracked)."
+                                     ]
+                    },
+                    {
+                        "sha":  "9bfaf7a076523ad6bbf75b2b62893543749991c7",
+                        "subject":  "Share editor keymaps across TUI composer components (#38837)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "N/A: Rust TUI Arc allocation sharing between the composer and its textarea; Go's bubbletea composer/textarea share keymap values by copy with identical observable binding behavior."
+                                     ]
+                    },
+                    {
+                        "sha":  "9ded177ce7c1c0bd2047f902936c177612ab3434",
+                        "subject":  "Identify Mac mini hosts in remote control handshakes (#38840)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "remotecontrol"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./remotecontrol -count=1",
+                                         "x-codex-host-device-kind: mac_mini header is sent on macOS when system_profiler reports machine name exactly Mac mini (2s timeout, cached successful detection, header omitted elsewhere); parser and header tests cover Mac mini, other names, empty, malformed, and non-macOS omission."
                                      ]
                     }
                 ]

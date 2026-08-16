@@ -16,6 +16,7 @@ import (
 var nonInheritableEnvVars = []string{
 	"OPENAI_FEDERATION_RULE_ID",
 	"OPENAI_IDENTITY_TOKEN_FILE",
+	"OPENAI_WORKLOAD_IDENTITY_CONTEXT",
 }
 
 // IsNonInheritableEnvVar reports whether name is a launch-context variable,
