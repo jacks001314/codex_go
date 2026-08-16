@@ -171,6 +171,99 @@ func TestRustErrorCodeSurfaceAgainstGo(t *testing.T) {
 	}
 }
 
+// modelInfoRustOnlyAllowlist documents Rust ModelInfo wire fields that Go's
+// ModelInfo does not carry, with the reason so each entry is auditable and
+// removable as Go adopts the field.
+var modelInfoRustOnlyAllowlist = map[string]string{
+	"apply_patch_tool_type":                "model-level apply-patch tool selection is not yet carried by Go ModelInfo",
+	"availability_nux":                     "carried on Go's ModelSummary (model/api.go) rather than ModelInfo",
+	"comp_hash":                            "Go ModelInfo does not carry the compaction compatibility hash",
+	"experimental_supported_tools":         "Go ModelInfo does not carry the experimental tools list",
+	"shell_type":                           "Go ModelInfo does not carry the per-model shell tool type",
+	"supports_reasoning_summary_parameter": "Go carries the same concept as supports_reasoning_summaries (whether the model accepts the Responses API reasoning.summary parameter); naming variant",
+}
+
+// modelInfoGoOnlyAllowlist documents Go ModelInfo JSON fields absent from
+// Rust's ModelInfo: extensions or naming variants.
+var modelInfoGoOnlyAllowlist = map[string]string{
+	"base_instructions":            "Go extension carrying the model base instructions template",
+	"supports_parallel_tool_calls": "Go extension for parallel tool call support",
+	"supports_reasoning_summaries": "Go's name for Rust's supports_reasoning_summary_parameter",
+}
+
+// TestRustModelInfoFieldSurfaceAgainstGo is the L0 enum-inventory check for
+// model metadata: the wire fields of Rust's openai_models::ModelInfo (skipping
+// internal-only fields) must be present in Go's ModelInfo JSON surface or be a
+// documented naming variant / gap, so metadata drift is reported instead of
+// silently diverging.
+func TestRustModelInfoFieldSurfaceAgainstGo(t *testing.T) {
+	root := rustSnapshotRoot(t)
+	source := string(mustReadParityFile(t, filepath.Join(root, "protocol", "src", "openai_models.rs")))
+	rustFields := parseStructFields(t, source, "ModelInfo")
+	rustSet := map[string]bool{}
+	for _, field := range rustFields {
+		if field == "used_fallback_model_metadata" {
+			continue // #[serde(skip_serializing, skip_deserializing)] internal marker
+		}
+		rustSet[field] = true
+	}
+
+	goSource := string(mustReadParityFile(t, filepath.Join("..", "model", "catalog.go")))
+	goFields := parseJSONStructFields(t, goSource, "ModelInfo")
+	goSet := map[string]bool{}
+	for _, field := range goFields {
+		if field == "-" {
+			continue
+		}
+		goSet[field] = true
+	}
+
+	if len(rustSet) != 41 {
+		t.Fatalf("Rust ModelInfo wire field count = %d, want 41 (pinned baseline)", len(rustSet))
+	}
+	if len(goSet) != 38 {
+		t.Fatalf("Go ModelInfo JSON field count = %d, want 38 (pinned baseline)", len(goSet))
+	}
+
+	for field := range rustSet {
+		if goSet[field] {
+			continue
+		}
+		if reason, ok := modelInfoRustOnlyAllowlist[field]; ok {
+			t.Logf("allowlisted Rust-only ModelInfo field %q: %s", field, reason)
+			continue
+		}
+		t.Errorf("Rust ModelInfo field %q is not in Go's ModelInfo and not allowlisted", field)
+	}
+	for field := range goSet {
+		if rustSet[field] {
+			continue
+		}
+		if reason, ok := modelInfoGoOnlyAllowlist[field]; ok {
+			t.Logf("allowlisted Go-only ModelInfo field %q: %s", field, reason)
+			continue
+		}
+		t.Errorf("Go ModelInfo field %q is absent from Rust's ModelInfo and not allowlisted", field)
+	}
+
+	for field := range modelInfoRustOnlyAllowlist {
+		if !rustSet[field] {
+			t.Errorf("allowlisted Rust-only ModelInfo field %q is no longer in Rust's ModelInfo; remove the entry", field)
+		}
+		if goSet[field] {
+			t.Errorf("allowlisted Rust-only ModelInfo field %q is now in Go's ModelInfo; remove the entry", field)
+		}
+	}
+	for field := range modelInfoGoOnlyAllowlist {
+		if !goSet[field] {
+			t.Errorf("allowlisted Go-only ModelInfo field %q is no longer in Go's ModelInfo; remove the entry", field)
+		}
+		if rustSet[field] {
+			t.Errorf("allowlisted Go-only ModelInfo field %q now appears in Rust's ModelInfo; remove the entry", field)
+		}
+	}
+}
+
 // parseCamelCaseEnum extracts a #[serde(rename_all = "camelCase")] enum's
 // serialized variant names from Rust source.
 func parseCamelCaseEnum(t *testing.T, source, enumName string) []string {
@@ -226,6 +319,38 @@ func extractEnumVariants(body string) []string {
 	var out []string
 	for _, match := range variantPattern.FindAllStringSubmatch(body, -1) {
 		out = append(out, match[1])
+	}
+	return out
+}
+
+// parseStructFields extracts the `pub <field>:` names of a Rust struct.
+func parseStructFields(t *testing.T, source, structName string) []string {
+	t.Helper()
+	pattern := regexp.MustCompile(`(?s)pub struct ` + regexp.QuoteMeta(structName) + ` \{(.*?)\n\}`)
+	match := pattern.FindStringSubmatch(source)
+	if len(match) != 2 {
+		t.Fatalf("could not find struct %s in source", structName)
+	}
+	body := match[1]
+	var out []string
+	for _, match := range regexp.MustCompile(`(?m)^\s+pub ([a-z_0-9]+):`).FindAllStringSubmatch(body, -1) {
+		out = append(out, match[1])
+	}
+	return out
+}
+
+// parseJSONStructFields extracts the json tag names of a Go struct.
+func parseJSONStructFields(t *testing.T, source, structName string) []string {
+	t.Helper()
+	pattern := regexp.MustCompile(`(?s)type ` + regexp.QuoteMeta(structName) + ` struct \{(.*?)\n\}`)
+	match := pattern.FindStringSubmatch(source)
+	if len(match) != 2 {
+		t.Fatalf("could not find struct %s in source", structName)
+	}
+	var out []string
+	for _, m := range regexp.MustCompile(`json:"([^"]+)"`).FindAllStringSubmatch(match[1], -1) {
+		name := strings.Split(m[1], ",")[0]
+		out = append(out, name)
 	}
 	return out
 }

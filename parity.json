@@ -454,6 +454,13 @@
                       "area":  "parity",
                       "reason":  "TestRustErrorCodeSurfaceAgainstGo pins every wire value of the app-server v2 CodexErrorInfo and ConfigWriteErrorCode enums to Go production code (non-test files): all 17 CodexErrorInfo codes are emitted or allowlisted, all 7 ConfigWriteErrorCode codes are covered by config/api.go constants (configRequirementReadonly added to complete the surface). Two emission gaps are documented with auditable reasons: sessionBudgetExceeded (Go rollout-budget path does not surface the codexErrorInfo yet) and threadRollbackFailed (Go thread/rollback failure returns generic RPC errors); both stay monitored by the verifier and shrink as Go wires them.",
                       "test":  "go test ./parity -run TestRustErrorCodeSurfaceAgainstGo -count=1; go test ./config -count=1"
+                  },
+                  {
+                      "id":  "l0-enum-inventory-model-metadata",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "TestRustModelInfoFieldSurfaceAgainstGo pins the wire fields of Rust's openai_models::ModelInfo (41 fields, excluding the serde-skipped internal marker) against Go's ModelInfo JSON surface (38 fields): 6 Rust-only fields are allowlisted with auditable reasons (availability_nux lives on Go's ModelSummary; supports_reasoning_summary_parameter is Go's supports_reasoning_summaries naming variant; apply_patch_tool_type/comp_hash/experimental_supported_tools/shell_type not yet carried), and 3 Go-only fields are documented extensions. All four L0 enum-inventory items (sandbox types, event names, error codes, model metadata) are now pinned.",
+                      "test":  "go test ./parity -run TestRustModelInfoFieldSurfaceAgainstGo -count=1"
                   }
               ]
 }
