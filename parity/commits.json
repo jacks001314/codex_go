@@ -1,7 +1,7 @@
 {
     "schemaVersion":  1,
     "rustFromExclusive":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
-    "rustToInclusive":  "375996d3f5b9130edf12f4af8073703df2724570",
+    "rustToInclusive":  "ed32158e90ef872c5eef96baf2f14feac70aee6e",
     "commits":  [
                     {
                         "sha":  "3c7ae4a81204cbee45084b4fb43b3630c79550c9",
@@ -229,6 +229,19 @@
                         "evidence":  [
                                          "go test ./state -run TestStateRuntimeRestoresIndependentThreadTimestampMaxima -count=1; go test ./state -count=1",
                                          "Go's loadThreadTimestamps used the same SELECT MAX(updated_at_ms), MAX(recency_at_ms) FROM threads as the pre-fix Rust; SQLite interprets the two-argument form as the scalar max() (same-row maximum / NULL semantics) rather than two independent column aggregates, so when the updated_at and recency_at maxima belong to different threads one counter was silently corrupted on reopen. Aligned to Rust's independent scalar subqueries (SELECT (SELECT MAX(updated_at_ms) FROM threads), (SELECT MAX(recency_at_ms) FROM threads)) and pinned the regression with two threads holding maxima in different rows, close + reopen, both counters verified (3000/4000)."
+                                     ]
+                    },
+                    {
+                        "sha":  "ed32158e90ef872c5eef96baf2f14feac70aee6e",
+                        "subject":  "Add working-directory commands to the TUI (#38894)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./tui/tea -run 'TestModelPwd|TestModelCd' -count=1; go test ./tui/... ./app -run 'Slash|Command|WorkingDirectory' -count=1; go test ./app -run TestInteractiveWorkingDirectoryChangeHandlerForksAtNewCWD -count=1",
+                                         "Implemented /cd [path] (defaults to ~) and /pwd (+ /cwd alias) in the Go tea TUI mirroring Rust #38894: CommandCd/CommandPwd enum + parse + slash frames with Rust descriptions; /pwd displays 'Current working directory: <cwd>' as an info message; /cd runs eligibility gates (idle primary session, no side conversation, no queued submissions, no pending steers, no background terminals, not in review mode), resolves relative paths against the current cwd and ~/ against the home dir, forks the current thread at the new cwd preserving history, patches the fork's cwd, archives the old thread, and attaches the replacement session. CommandCd added to CommandSupportsInlineArgs so '/cd <path>' dispatches directly. Model tests cover pwd display, cd replacement + history preservation, running-session rejection, and ~ default; app test covers fork-at-new-cwd + archive + missing-dir rejection."
                                      ]
                     }
                 ]

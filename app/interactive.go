@@ -91,6 +91,48 @@ func interactiveExternalEditorDirectoryHandler(root *cli.RootOptions, codexHome 
 	}
 }
 
+// interactiveWorkingDirectoryChangeHandler mirrors Rust change_working_directory
+// (#38894): fork the current local thread at the new cwd (preserving
+// conversation history), patch the fork's cwd, archive the old thread, and
+// return the replacement session summary for the TUI to attach.
+func interactiveWorkingDirectoryChangeHandler(root *cli.RootOptions) codextea.WorkingDirectoryChangeFunc {
+	return func(threadID string, cwd string) (*codextui.SessionSummary, error) {
+		store := newSessionStore()
+		threadID = strings.TrimSpace(threadID)
+		cwd = strings.TrimSpace(cwd)
+		if threadID == "" {
+			return nil, errors.New("working directory change requires a thread id")
+		}
+		if cwd == "" {
+			return nil, errors.New("working directory change requires a directory")
+		}
+		if info, err := os.Stat(cwd); err != nil {
+			return nil, fmt.Errorf("cannot access directory %s: %w", cwd, err)
+		} else if !info.IsDir() {
+			return nil, fmt.Errorf("not a directory: %s", cwd)
+		}
+		record, err := store.Fork(session.ThreadID(threadID), session.ForkOptions{Mode: session.ForkAll})
+		if err != nil {
+			return nil, fmt.Errorf("failed to change directory: %w", err)
+		}
+		if _, err := store.UpdateMetadata(record.ID, &session.MetadataPatch{CWD: &cwd}, false); err != nil {
+			_ = store.Delete(record.ID)
+			return nil, fmt.Errorf("failed to change directory: %w", err)
+		}
+		// Preserve the old thread as archived so the replacement session
+		// becomes the active one, mirroring Rust's thread_archive step.
+		if err := store.Archive(session.ThreadID(threadID)); err != nil && !errors.Is(err, session.ErrThreadNotFound) {
+			_ = store.Delete(record.ID)
+			return nil, fmt.Errorf("failed to change directory: %w", err)
+		}
+		updated, err := store.Read(record.ID, false, true)
+		if err != nil {
+			return nil, fmt.Errorf("failed to change directory: %w", err)
+		}
+		return firstSessionSummary(store, updated), nil
+	}
+}
+
 type interactiveTurnRunner interface {
 	RunContext(ctx context.Context, req *codexexec.Request, stdin io.Reader, stdout, stderr io.Writer) (*codexexec.Result, error)
 }
@@ -702,6 +744,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		SessionHeaderVersion:        doctor.Version(),
 		WindowsSandboxStartupPrompt: interactiveWindowsSandboxStartupPrompt(root, settings.PermissionRequirements),
 		OnSessionAction:             interactiveSessionActionHandler(root),
+		OnWorkingDirectoryChange:    interactiveWorkingDirectoryChangeHandler(root),
 		OnResumeSession:             interactiveResumeSessionHandler(root),
 		OnRenameThread:              interactiveRenameThreadHandler(),
 		OnLogout:                    interactiveLogoutHandler(ctx, root),

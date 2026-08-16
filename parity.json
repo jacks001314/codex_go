@@ -1,8 +1,8 @@
 {
-    "rustBaseline":  "375996d3f5",
-    "rustTag":  "main@375996d3f5",
-    "rustUpstreamHead":  "375996d3f5b9130edf12f4af8073703df2724570",
-    "rustUpstreamTag":  "main@375996d3f5b9130edf12f4af8073703df2724570",
+    "rustBaseline":  "ed32158e90",
+    "rustTag":  "main@ed32158e90",
+    "rustUpstreamHead":  "ed32158e90ef872c5eef96baf2f14feac70aee6e",
+    "rustUpstreamTag":  "main@ed32158e90ef872c5eef96baf2f14feac70aee6e",
     "rustE2EBinary":  {
                           "version":  "codex-cli 0.0.0",
                           "tag":  "main@bbbf396839",

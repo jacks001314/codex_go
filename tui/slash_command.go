@@ -25,6 +25,8 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "goal", Command: CommandGoal, Description: "set or view the goal for a long-running task"},
 		{Name: "statusline", Command: CommandStatusline, Description: "configure status line items"},
 		{Name: "title", Command: CommandTitle, Description: "configure terminal title items"},
+		{Name: "cd", Command: CommandCd, Description: "change the current working directory"},
+		{Name: "pwd", Command: CommandPwd, Aliases: []string{"cwd"}, Description: "show the current working directory"},
 		{Name: "debug-config", Command: CommandDebugConfig, Description: "show config layers and requirements"},
 		{Name: "new", Command: CommandNew, Description: "start a new chat during a conversation"},
 		{Name: "init", Command: CommandInit, Description: "create an AGENTS.md file with instructions for Codex"},

@@ -103,6 +103,13 @@ type pendingSteerSubmission struct {
 
 type SessionActionFunc func(selection codextui.SessionSelection) (*codextui.SessionSummary, error)
 
+// WorkingDirectoryChangeFunc changes the active local session's working
+// directory, preserving conversation history (Rust #38894 /cd). The
+// implementation forks the current thread at the new cwd (or starts a fresh
+// thread when there is no resumable rollout), archives the old thread, and
+// returns the replacement session summary for the model to attach.
+type WorkingDirectoryChangeFunc func(threadID string, cwd string) (*codextui.SessionSummary, error)
+
 type SessionResumeFunc func(selection codextui.SessionSelection) (SessionResumeResponse, error)
 
 type ThreadRenameFunc func(threadID string, name string) error
@@ -631,6 +638,7 @@ type Options struct {
 	OnKeymapEdit                  KeymapEditFunc
 	OnModalResponse               ModalResponseFunc
 	OnSessionAction               SessionActionFunc
+	OnWorkingDirectoryChange      WorkingDirectoryChangeFunc
 	OnResumeSession               SessionResumeFunc
 	OnRenameThread                ThreadRenameFunc
 	OnLogout                      LogoutFunc
@@ -839,6 +847,7 @@ type Model struct {
 	onKeymapEdit                    KeymapEditFunc
 	onModalResponse                 ModalResponseFunc
 	onSessionAction                 SessionActionFunc
+	onWorkingDirectoryChange        WorkingDirectoryChangeFunc
 	onResumeSession                 SessionResumeFunc
 	onRenameThread                  ThreadRenameFunc
 	onLogout                        LogoutFunc
@@ -1085,6 +1094,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onKeymapEdit:                    options.OnKeymapEdit,
 		onModalResponse:                 options.OnModalResponse,
 		onSessionAction:                 options.OnSessionAction,
+		onWorkingDirectoryChange:        options.OnWorkingDirectoryChange,
 		onResumeSession:                 options.OnResumeSession,
 		onRenameThread:                  options.OnRenameThread,
 		onLogout:                        options.OnLogout,
@@ -1540,6 +1550,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case AgentSwitchResultMsg:
 		m.applyAgentSwitchResult(msg)
 		return m, m.refreshStatusControlsCmd()
+	case WorkingDirectoryChangeResultMsg:
+		m.applyWorkingDirectoryChangeResult(msg)
+		return m, nil
 	case AgentNavigateResultMsg:
 		return m, m.applyAgentNavigateResult(msg)
 	case SkillsListResultMsg:
@@ -4174,6 +4187,10 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return m.applyResumeCommand(invocation.Args)
 	case codextui.CommandFork:
 		return m.applyForkCurrentSession(invocation.Args)
+	case codextui.CommandCd:
+		return m.applyWorkingDirectoryChangeCommand(invocation.Args)
+	case codextui.CommandPwd:
+		m.applyWorkingDirectoryDisplayCommand()
 	case codextui.CommandArchive:
 		m.openCurrentSessionActionConfirmation(codextui.SessionSelectionArchive)
 	case codextui.CommandUnarchive:

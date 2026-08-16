@@ -3325,6 +3325,61 @@ func TestInteractiveSessionActionHandlerMutatesLocalStore(t *testing.T) {
 	}
 }
 
+func TestInteractiveWorkingDirectoryChangeHandlerForksAtNewCWD(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	store := session.NewStore(filepath.Join(auth.DefaultCodexHome(), "sessions"))
+	now := fixedAppSessionTime()
+	sourceCWD := filepath.Join(t.TempDir(), "source")
+	targetCWD := filepath.Join(t.TempDir(), "target")
+	if err := os.MkdirAll(sourceCWD, 0o755); err != nil {
+		t.Fatalf("MkdirAll source: %v", err)
+	}
+	if err := os.MkdirAll(targetCWD, 0o755); err != nil {
+		t.Fatalf("MkdirAll target: %v", err)
+	}
+	if err := store.Save(&session.Record{
+		ID:        "thread-cd",
+		Title:     "CD source",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{CWD: sourceCWD, Source: "cli"},
+		Items:     []session.Item{{ID: "item-1", Type: "user_message", Text: "hello"}},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := interactiveWorkingDirectoryChangeHandler(nil)
+
+	summary, err := handler("thread-cd", targetCWD)
+	if err != nil {
+		t.Fatalf("working directory change error = %v", err)
+	}
+	if summary == nil || summary.ThreadID == "" || summary.ThreadID == "thread-cd" {
+		t.Fatalf("replacement summary = %#v", summary)
+	}
+	if summary.CWD != targetCWD {
+		t.Fatalf("replacement cwd = %q, want %q", summary.CWD, targetCWD)
+	}
+	replacement, err := store.Read(session.ThreadID(summary.ThreadID), false, true)
+	if err != nil {
+		t.Fatalf("read replacement: %v", err)
+	}
+	if replacement.Metadata.CWD != targetCWD {
+		t.Fatalf("replacement metadata cwd = %q, want %q", replacement.Metadata.CWD, targetCWD)
+	}
+	if len(replacement.Items) != 1 || replacement.Items[0].Text != "hello" {
+		t.Fatalf("replacement history not preserved: %#v", replacement.Items)
+	}
+	archived, err := store.Read("thread-cd", true, false)
+	if err != nil || !archived.Archived {
+		t.Fatalf("source thread not archived: %#v err=%v", archived, err)
+	}
+
+	if _, err := handler("thread-cd", filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("working directory change to a missing directory succeeded")
+	}
+}
+
 func collectInteractiveStream(t *testing.T, started codextea.StreamStartedMsg) (codextea.TurnCompletedMsg, bool, bool) {
 	t.Helper()
 	var completed codextea.TurnCompletedMsg

@@ -747,6 +747,8 @@ const (
 	CommandMemoryUpdate     Command = "debug-m-update"
 	CommandResume           Command = "resume"
 	CommandFork             Command = "fork"
+	CommandCd               Command = "cd"
+	CommandPwd              Command = "pwd"
 	CommandArchive          Command = "archive"
 	CommandUnarchive        Command = "unarchive"
 	CommandDelete           Command = "delete"
@@ -891,6 +893,10 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandResume, Args: args, Name: name}, true
 	case "/fork":
 		return &CommandInvocation{Command: CommandFork, Args: args, Name: name}, true
+	case "/cd":
+		return &CommandInvocation{Command: CommandCd, Args: args, Name: name}, true
+	case "/pwd", "/cwd":
+		return &CommandInvocation{Command: CommandPwd, Args: args, Name: name}, true
 	case "/archive":
 		return &CommandInvocation{Command: CommandArchive, Args: args, Name: name}, true
 	case "/unarchive":
