@@ -156,11 +156,12 @@ func differentialApplyPatchCases(t *testing.T) []differentialApplyPatchCase {
 	return cases
 }
 
-var differentialFileNames = []string{"a.txt", "b.txt", "nested/c.txt", "foo.go", "old.py"}
+var differentialFileNames = []string{"a.txt", "b.txt", "nested/c.txt", "foo.go", "old.py", "my file.txt", "nested dir/other file.txt"}
 
 var differentialContentLines = []string{
 	"hello", "world", "one", "two", "three", "",
 	"func main() {", "return nil", "line with spaces", "x = 1",
+	"héllo wörld", "日本語テキスト", "emoji 🎉", "tab\there",
 }
 
 func randomDifferentialCase(rng *rand.Rand, index int) differentialApplyPatchCase {
@@ -191,6 +192,10 @@ func randomDifferentialCase(rng *rand.Rand, index int) differentialApplyPatchCas
 			name := "added_" + strconv.Itoa(index) + "_" + strconv.Itoa(h) + ".txt"
 			if rng.Intn(4) == 0 {
 				name = "nested/" + name
+			}
+			if rng.Intn(8) == 0 && fileCount > 0 {
+				// Add-overwrite an existing workspace file (scenario 011).
+				name = names[rng.Intn(fileCount)]
 			}
 			b.WriteString("*** Add File: " + name + "\n")
 			b.WriteString("+" + differentialContentLines[rng.Intn(len(differentialContentLines))] + "\n")
@@ -233,6 +238,12 @@ func writeUpdateChunks(b *strings.Builder, content string, rng *rand.Rand) {
 	if len(oldLines) > 0 && oldLines[len(oldLines)-1] == "" {
 		oldLines = oldLines[:len(oldLines)-1]
 	}
+	// Rust's push_delta truncates a trailing '\r' per line, and the file
+	// update matcher compares source lines without terminators, so strip the
+	// CR when matching CRLF workspace content.
+	for i := range oldLines {
+		oldLines[i] = strings.TrimSuffix(oldLines[i], "\r")
+	}
 	chunkCount := 1 + rng.Intn(2)
 	for c := 0; c < chunkCount; c++ {
 		b.WriteString("@@\n")
@@ -263,5 +274,9 @@ func randomContent(rng *rand.Rand) string {
 	for i := 0; i < lineCount; i++ {
 		lines = append(lines, differentialContentLines[rng.Intn(len(differentialContentLines))])
 	}
-	return strings.Join(lines, "\n") + "\n"
+	separator := "\n"
+	if rng.Intn(4) == 0 {
+		separator = "\r\n"
+	}
+	return strings.Join(lines, separator) + separator
 }

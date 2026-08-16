@@ -412,6 +412,20 @@
                       "area":  "parity",
                       "reason":  "Method-5 differential harness: a seeded corpus of random patches/workspaces is applied by the Rust apply_patch release binary (oracle, built from the frozen 9ded177ce checkout) and Go's apply_patch CLI, requiring identical exit status and byte-identical final trees. 3000+ cases across two seeds pass. The harness immediately surfaced a real divergence: Go accepted update+move hunks with zero change lines (pure moves) while Rust rejects them per the spec (change+ required); parseUpdate now requires at least one chunk, and the old TestApplyPureMovePreservesContent was replaced by TestUpdateMoveRequiresChangeLinesLikeRust pinning the Rust behavior. Skips when the oracle binary is absent.",
                       "test":  "go test ./parity -run TestApplyPatchDifferentialAgainstRustOracle -count=1; go test ./applypatch -count=1"
+                  },
+                  {
+                      "id":  "apply-patch-differential-corpus-extension",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "The seeded differential corpus now also covers unicode content lines, CRLF workspaces, paths with spaces, add-overwrite of existing files, duplicate targets, *** Environment ID headers, *** End of File markers, context lines and multiple @@ chunks per update; 8000+ cases across four seeds match the Rust oracle with no further divergences.",
+                      "test":  "go test ./parity -run TestApplyPatchDifferentialAgainstRustOracle -count=1"
+                  },
+                  {
+                      "id":  "backend-task-details-fixtures",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Shared-fixture double-run over backend-client/tests/fixtures: Go chatgptapi.CodeTaskDetailsResponse extracts the same unified diff (current_diff_task_turn preferred, pr output_diff fallback), assistant text messages, joined user prompt and combined error message as the Rust types.rs tests assert, from the same committed fixtures.",
+                      "test":  "go test ./parity -run TestBackendTaskDetailsFixturesMatchRust -count=1"
                   }
               ]
 }
