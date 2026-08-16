@@ -1639,3 +1639,61 @@ func projectTrustConfig(path string, trustLevel string) string {
 	key := strings.ReplaceAll(filepath.Clean(path), `\`, `\\`)
 	return "\n[projects.\"" + key + "\"]\ntrust_level = \"" + trustLevel + "\"\n"
 }
+
+func TestDisablePasteBurstAccessorLikeRust(t *testing.T) {
+	// Mirrors Rust disable_paste_burst (config/mod.rs): default false, true
+	// when configured, and accepted by strict config.
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte("model = \"gpt-5\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	cfg, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions default returned error: %v", err)
+	}
+	if cfg.DisablePasteBurst() {
+		t.Fatal("DisablePasteBurst default = true, want false")
+	}
+
+	enabled := t.TempDir()
+	if err := os.WriteFile(ConfigPath(enabled), []byte("disable_paste_burst = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	cfgEnabled, err := LoadEffectiveWithOptions(enabled, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions(disable_paste_burst) returned error: %v", err)
+	}
+	if !cfgEnabled.DisablePasteBurst() {
+		t.Fatal("DisablePasteBurst = false, want true")
+	}
+	if _, ok := cfgEnabled.Values["disable_paste_burst"]; !ok {
+		t.Fatal("disable_paste_burst not carried in Values")
+	}
+}
+
+func TestLoadEffectiveStrictConfigAcceptsRealtimeAudioLikeRust(t *testing.T) {
+	// Mirrors Rust RealtimeAudioToml (config/src/config_toml.rs + core config
+	// test realtime_audio_loads_from_config_toml): [audio] microphone/speaker
+	// are accepted by strict config and unknown sub-fields are rejected
+	// (serde deny_unknown_fields).
+	for _, body := range []string{
+		"[audio]\nmicrophone = \"USB Mic\"\nspeaker = \"Desk Speakers\"\n",
+		"[audio]\nmicrophone = \"USB Mic\"\n",
+		"[audio]\nspeaker = \"Desk Speakers\"\n",
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+		if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err != nil {
+			t.Fatalf("LoadEffectiveWithOptions %q returned error: %v", body, err)
+		}
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte("[audio]\nunknown_device = \"x\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err == nil {
+		t.Fatal("LoadEffectiveWithOptions(audio.unknown_device) returned nil error, want unknown-field rejection")
+	}
+}

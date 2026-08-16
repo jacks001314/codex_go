@@ -104,6 +104,21 @@ func (c *Config) SuppressUnstableFeaturesWarning() bool {
 	return value
 }
 
+// DisablePasteBurst reports whether burst-paste detection for typed input is
+// disabled, mirroring Rust disable_paste_burst (default false): when true, all
+// characters are inserted as received and no buffering or placeholder
+// replacement occurs for fast keypress bursts.
+func (c *Config) DisablePasteBurst() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	value, ok := c.Values["disable_paste_burst"].(bool)
+	if !ok {
+		return false
+	}
+	return value
+}
+
 type ResumeCWDMode string
 
 const (
@@ -337,6 +352,8 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"default_permissions":               {},
 	"desktop":                           {},
 	"developer_instructions":            {},
+	"disable_paste_burst":               {},
+	"audio":                             {},
 	"experimental_realtime_ws_base_url": {},
 	"experimental_realtime_webrtc_call_base_url": {},
 	"experimental_realtime_ws_model":             {},
@@ -478,6 +495,18 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 		for key := range feedback {
 			if !known[key] {
 				return fmt.Errorf("unknown configuration field `feedback.%s`", key)
+			}
+		}
+	}
+	if audio, ok := values["audio"].(map[string]any); ok {
+		// Mirrors Rust RealtimeAudioToml (config/src/config_toml.rs, serde
+		// deny_unknown_fields): machine-local realtime audio device
+		// preferences (microphone/speaker) accepted so legacy config loads;
+		// the value is a compatibility no-op in Go.
+		known := map[string]bool{"microphone": true, "speaker": true}
+		for key := range audio {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `audio.%s`", key)
 			}
 		}
 	}

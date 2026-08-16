@@ -658,6 +658,33 @@ func TestModelPasteBurstEnterInsertsNewlineWithoutSubmitting(t *testing.T) {
 	}
 }
 
+func TestModelDisablePasteBurstSubmitsOnEnterLikeRust(t *testing.T) {
+	// Rust disable_paste_burst (chat_composer.rs): when true, burst detection
+	// is bypassed entirely - fast typed input does not suppress Enter, so a
+	// burst of characters followed by Enter submits the prompt instead of
+	// inserting a newline.
+	now := time.Unix(0, 0)
+	var requests []SubmitRequest
+	model := NewModel(nil, Options{
+		DisablePasteBurst: true,
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			requests = append(requests, request)
+			return nil
+		},
+	})
+	model.now = func() time.Time { return now }
+
+	model.Update(runes("hello"))
+	now = now.Add(10 * time.Millisecond)
+	model.Update(key(bubbletea.KeyEnter))
+	if len(requests) != 1 {
+		t.Fatalf("requests after burst Enter = %#v, want submit (disable_paste_burst)", requests)
+	}
+	if requests[0].Prompt != "hello" {
+		t.Fatalf("submitted prompt = %q, want hello", requests[0].Prompt)
+	}
+}
+
 func TestModelPasteBurstDoesNotBlockSlashCommandEnter(t *testing.T) {
 	now := time.Unix(0, 0)
 	model := NewModel(nil, Options{})

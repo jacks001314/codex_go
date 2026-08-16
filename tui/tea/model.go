@@ -176,6 +176,7 @@ type SettingsWriteResult struct {
 	UseMemories             *bool
 	GenerateMemories        *bool
 	FeedbackEnabled         *bool
+	DisablePasteBurst       bool
 	Personality             chatwidget.Personality
 	Notifications           *chatwidget.NotificationsSetting
 	NotificationMethod      codextui.NotificationMethod
@@ -710,6 +711,7 @@ type Options struct {
 	UseMemories                    *bool
 	GenerateMemories               *bool
 	FeedbackEnabled                *bool
+	DisablePasteBurst              bool
 	Personality                    chatwidget.Personality
 	HideRateLimitModelNudge        *bool
 	TUITheme                       string
@@ -813,6 +815,7 @@ type Model struct {
 	pendingMCPInventoryMessageIndex int
 	pendingMCPInventoryDetail       bool
 	featureSettings                 map[string]bool
+	disablePasteBurst               bool
 	personality                     chatwidget.Personality
 	tuiTheme                        string
 	tuiPet                          string
@@ -1066,6 +1069,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		mcpStartup:                      chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
 		initialMessages:                 options.InitialMessages,
 		featureSettings:                 cloneBoolMapTea(options.FeatureSettings),
+		disablePasteBurst:               options.DisablePasteBurst,
 		personality:                     initialPersonality(state, options.Personality),
 		tuiTheme:                        strings.TrimSpace(options.TUITheme),
 		tuiPet:                          normalizePetIDTea(options.TUIPet),
@@ -1913,14 +1917,14 @@ func (m *Model) currentTime() time.Time {
 }
 
 func (m *Model) noteComposerRunes(runes []rune, now time.Time) {
-	if m == nil || len(runes) <= 1 {
+	if m == nil || len(runes) <= 1 || m.disablePasteBurst {
 		return
 	}
 	m.extendComposerPasteWindow(now)
 }
 
 func (m *Model) extendComposerPasteWindow(now time.Time) {
-	if m == nil {
+	if m == nil || m.disablePasteBurst {
 		return
 	}
 	until := now.Add(bottompane.PasteEnterSuppressWindow)
@@ -1935,7 +1939,7 @@ func (m *Model) clearComposerPasteWindow() {
 }
 
 func (m *Model) shouldPasteBurstEnterInsertNewline(now time.Time) bool {
-	if m == nil || m.composerPasteEnterUntil == nil || m.composerStartsSlashContext() {
+	if m == nil || m.disablePasteBurst || m.composerPasteEnterUntil == nil || m.composerStartsSlashContext() {
 		return false
 	}
 	return !now.After(*m.composerPasteEnterUntil)

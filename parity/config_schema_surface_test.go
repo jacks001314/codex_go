@@ -15,8 +15,6 @@ import (
 // properties that Go intentionally does not recognize. Each entry carries the
 // reason so the list is auditable and can shrink as Go implements more keys.
 var configSchemaRustOnlyAllowlist = map[string]string{
-	"audio":                               "audio content/realtime protocol support exists, but the Rust `audio` config section (recording/hotkey) is not implemented in Go",
-	"disable_paste_burst":                 "Rust TUI paste-burst throttling; Go TUI has no paste-burst throttle",
 	"experimental_compact_prompt_file":    "Rust experimental compaction feature; not implemented in Go",
 	"experimental_thread_config_endpoint": "Rust experimental thread-config endpoint; not implemented in Go",
 	"experimental_thread_store":           "Rust experimental thread store; Go uses its own session store",
@@ -64,8 +62,8 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	if len(rustKeys) != 94 {
 		t.Fatalf("Rust config.schema.json top-level property count = %d, want 94 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 97 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 97 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 99 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 99 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)
