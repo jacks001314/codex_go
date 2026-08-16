@@ -433,6 +433,13 @@
                       "area":  "parity",
                       "reason":  "Method-5 property test for rollout writing: random turn/item operation sequences written by the paginated Recorder must produce a Rust-compatible rollout - contiguous ordinals, session_meta first line, canonical event_msg payload types (task_started/item_started/item_completed/task_complete), exact item byte round-trip, item lifecycle pairing, and appendability after Resume. 120+ sequences in CI (4 seeds x 30) plus 450 high-intensity sequences verified.",
                       "test":  "go test ./rollout -run TestRecorderRandomSequencesPreserveRustStructure -count=1"
+                  },
+                  {
+                      "id":  "apply-patch-cli-summary-ordering-and-verifier-audit",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "The differential harness surfaced a CLI stdout divergence: Rust print_summary groups all added, then modified, then deleted, each in hunk application order, while Go's Summary() path-sorted within each kind (e.g. 'M nested/a.txt M b.txt' vs 'M b.txt M nested/a.txt'). Summary() now mirrors Rust's grouping/order; the harness compares stdout byte-exact on success and failure (both print nothing to stdout on failure) across 3500+ additional seeded cases. New TestContractVerifiersExistInGoTestFiles audits that every contract verifier name maps to a real test function in the Go tree (location-agnostic; goPaths remain implementation paths).",
+                      "test":  "go test ./parity -run 'TestApplyPatchDifferentialAgainstRustOracle|TestContractVerifiersExistInGoTestFiles' -count=1; go test ./applypatch -count=1"
                   }
               ]
 }

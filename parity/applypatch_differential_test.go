@@ -35,6 +35,14 @@ func TestApplyPatchDifferentialAgainstRustOracle(t *testing.T) {
 				t.Fatalf("exit disagreement: rust exit!=0 = %v, go exit!=0 = %v\npatch:\n%s",
 					rustResult.exitNonZero, goResult.exitNonZero, tc.patch)
 			}
+			// The CLI summary on stdout is observable contract (Rust
+			// print_summary vs Go Summary): category grouping in hunk
+			// application order. Both implementations print nothing to stdout
+			// on failure.
+			if rustResult.stdout != goResult.stdout {
+				t.Fatalf("stdout disagreement:\n--- rust ---\n%s--- go ---\n%spatch:\n%s",
+					rustResult.stdout, goResult.stdout, tc.patch)
+			}
 			if len(rustResult.tree) != len(goResult.tree) {
 				t.Fatalf("tree entry count mismatch: rust %d, go %d\npatch:\n%s\nrust tree=%v\ngo tree=%v",
 					len(rustResult.tree), len(goResult.tree), tc.patch, rustResult.tree, goResult.tree)
@@ -83,6 +91,7 @@ func rustApplyPatchBinary(t *testing.T) string {
 
 type applyPatchOutcome struct {
 	exitNonZero bool
+	stdout      string
 	tree        map[string][]byte
 }
 
@@ -93,6 +102,8 @@ func runOracleApplyPatch(t *testing.T, oracle string, tc differentialApplyPatchC
 	cmd := exec.Command(oracle, tc.patch)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS=1")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
 	err := cmd.Run()
 	exitNonZero := false
 	if err != nil {
@@ -101,7 +112,7 @@ func runOracleApplyPatch(t *testing.T, oracle string, tc differentialApplyPatchC
 		}
 		exitNonZero = true
 	}
-	return applyPatchOutcome{exitNonZero: exitNonZero, tree: snapshotTree(t, dir)}
+	return applyPatchOutcome{exitNonZero: exitNonZero, stdout: stdout.String(), tree: snapshotTree(t, dir)}
 }
 
 func runGoApplyPatch(t *testing.T, tc differentialApplyPatchCase) applyPatchOutcome {
@@ -111,7 +122,7 @@ func runGoApplyPatch(t *testing.T, tc differentialApplyPatchCase) applyPatchOutc
 	t.Setenv(applypatch.PreserveLineEndingsEnvVar, "1")
 	var stdout, stderr bytes.Buffer
 	code := applypatch.RunCLI([]string{tc.patch}, strings.NewReader(""), &stdout, &stderr, dir)
-	return applyPatchOutcome{exitNonZero: code != 0, tree: snapshotTree(t, dir)}
+	return applyPatchOutcome{exitNonZero: code != 0, stdout: stdout.String(), tree: snapshotTree(t, dir)}
 }
 
 func writeDifferentialWorkspace(t *testing.T, dir string, files map[string]string) {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -415,24 +414,27 @@ func (r *ApplyResult) Summary() string {
 	if r == nil || len(r.Updated) == 0 {
 		return "No files were modified.\n"
 	}
-	applied := append([]AppliedFile(nil), r.Updated...)
-	sort.SliceStable(applied, func(i, j int) bool {
-		left := changeKindPriority(applied[i].Kind)
-		right := changeKindPriority(applied[j].Kind)
-		if left == right {
-			return applied[i].Path < applied[j].Path
-		}
-		return left < right
-	})
 	var builder strings.Builder
 	builder.WriteString("Success. Updated the following files:\n")
-	for _, file := range applied {
+	// Mirrors Rust print_summary (lib.rs): all added, then all modified, then
+	// all deleted, each group in hunk application order (not path-sorted).
+	// Verified against the Rust apply_patch oracle.
+	for _, kind := range []ChangeKind{ChangeAdd, ChangeUpdate, ChangeDelete} {
+		writeSummaryGroup(&builder, r.Updated, kind)
+	}
+	return builder.String()
+}
+
+func writeSummaryGroup(builder *strings.Builder, files []AppliedFile, kind ChangeKind) {
+	for _, file := range files {
+		if file.Kind != kind {
+			continue
+		}
 		builder.WriteString(file.StatusLetter())
 		builder.WriteByte(' ')
 		builder.WriteString(filepath.ToSlash(file.Path))
 		builder.WriteByte('\n')
 	}
-	return builder.String()
 }
 
 func (f *AppliedFile) StatusLetter() string {
@@ -446,19 +448,6 @@ func (f *AppliedFile) StatusLetter() string {
 		return "D"
 	default:
 		return "M"
-	}
-}
-
-func changeKindPriority(kind ChangeKind) int {
-	switch kind {
-	case ChangeAdd:
-		return 0
-	case ChangeUpdate:
-		return 1
-	case ChangeDelete:
-		return 2
-	default:
-		return 3
 	}
 }
 
