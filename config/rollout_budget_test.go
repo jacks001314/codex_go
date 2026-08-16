@@ -127,3 +127,31 @@ func TestShowRawAgentReasoningAccessor(t *testing.T) {
 		t.Fatal("show_raw_agent_reasoning=false should report false")
 	}
 }
+
+// TestMarketplacesSubFieldValidation pins the Rust MarketplaceConfig surface:
+// valid marketplace entries pass strict validation and unknown sub-fields are
+// rejected (deny_unknown_fields).
+func TestMarketplacesSubFieldValidation(t *testing.T) {
+	valid := map[string]any{
+		"marketplaces": map[string]any{
+			"my-market": map[string]any{
+				"source_type":  "git",
+				"source":       "https://example.com/repo.git",
+				"ref":          "main",
+				"sparse_paths": []any{"plugins"},
+			},
+		},
+	}
+	if err := validateKnownTopLevelConfigFields(valid); err != nil {
+		t.Fatalf("valid marketplaces rejected: %v", err)
+	}
+
+	invalid := map[string]any{
+		"marketplaces": map[string]any{
+			"my-market": map[string]any{"bogus_field": true},
+		},
+	}
+	if err := validateKnownTopLevelConfigFields(invalid); err == nil || !strings.Contains(err.Error(), "marketplaces.my-market.bogus_field") {
+		t.Fatalf("invalid marketplaces error = %v, want unknown field rejection", err)
+	}
+}

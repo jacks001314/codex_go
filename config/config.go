@@ -361,6 +361,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"mcp_oauth_callback_port":                    {},
 	"mcp_oauth_callback_url":                     {},
 	"mcp_servers":                                {},
+	"marketplaces":                               {},
 	"memories":                                   {},
 	"model":                                      {},
 	"model_auto_compact_token_limit":             {},
@@ -475,6 +476,25 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 		for key := range notice {
 			if !known[key] {
 				return fmt.Errorf("unknown configuration field `notice.%s`", key)
+			}
+		}
+	}
+	if marketplaces, ok := values["marketplaces"].(map[string]any); ok {
+		// Mirrors Rust MarketplaceConfig (config/src/types.rs, serde
+		// deny_unknown_fields): each marketplace entry allows the Rust fields.
+		known := map[string]bool{
+			"last_updated": true, "last_revision": true, "source_type": true,
+			"source": true, "ref": true, "sparse_paths": true,
+		}
+		for name, raw := range marketplaces {
+			entry, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			for key := range entry {
+				if !known[key] {
+					return fmt.Errorf("unknown configuration field `marketplaces.%s.%s`", name, key)
+				}
 			}
 		}
 	}
