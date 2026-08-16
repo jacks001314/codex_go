@@ -21,7 +21,7 @@ const (
 
 const collaborationModeDefaultInstructions = "# Collaboration Mode: Default\n\n" +
 	"You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.\n\n" +
-	"Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Plan and Default.\n\n" +
+	"Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.\n\n" +
 	"## request_user_input availability\n\n" +
 	"Use the `request_user_input` tool only when it is listed in the available tools for this turn.\n\n" +
 	"In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.\n"
@@ -34,6 +34,20 @@ func CollaborationModeInstructions(kind CollaborationModeKind) string {
 		return strings.TrimSpace(collaborationModePlanInstructions)
 	}
 	return strings.TrimSpace(collaborationModeDefaultInstructions)
+}
+
+// DefaultInstructions returns the Default-mode developer instructions
+// byte-for-byte (no trimming), used by the parity shared-fixture verifier to
+// pin the template against the Rust collaboration-mode-templates blob.
+func DefaultInstructions() string {
+	return collaborationModeDefaultInstructions
+}
+
+// PlanInstructions returns the Plan-mode developer instructions byte-for-byte
+// (no trimming), used by the parity shared-fixture verifier to pin the
+// embedded template against the Rust collaboration-mode-templates blob.
+func PlanInstructions() string {
+	return collaborationModePlanInstructions
 }
 
 type CollaborationOptionalString struct {

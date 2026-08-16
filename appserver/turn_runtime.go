@@ -310,13 +310,14 @@ const collaborationModeDefaultInstructions = `# Collaboration Mode: Default
 
 You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
 
-Your active mode changes only when new developer instructions with a different ` + "`<collaboration_mode>...</collaboration_mode>`" + ` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Plan and Default.
+Your active mode changes only when new developer instructions with a different ` + "`<collaboration_mode>...</collaboration_mode>`" + ` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.
 
 ## request_user_input availability
 
 Use the ` + "`request_user_input`" + ` tool only when it is listed in the available tools for this turn.
 
-In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.`
+In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
+`
 
 func collaborationModeDeveloperInstructions(params *turn.TurnStartParams) string {
 	if params == nil || params.CollaborationMode == nil {
@@ -333,6 +334,14 @@ func collaborationModeDeveloperInstructions(params *turn.TurnStartParams) string
 		return collaborationModeDefaultInstructions
 	}
 	return ""
+}
+
+// CollaborationModeDefaultInstructions exposes the Default-mode developer
+// instructions byte-for-byte (no trimming) for the parity shared-fixture
+// verifier pinning the template against the Rust collaboration-mode-templates
+// blob.
+func CollaborationModeDefaultInstructions() string {
+	return collaborationModeDefaultInstructions
 }
 
 type collaborationModeWorldStateSnapshot struct {
