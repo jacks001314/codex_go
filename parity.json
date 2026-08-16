@@ -426,6 +426,13 @@
                       "area":  "parity",
                       "reason":  "Shared-fixture double-run over backend-client/tests/fixtures: Go chatgptapi.CodeTaskDetailsResponse extracts the same unified diff (current_diff_task_turn preferred, pr output_diff fallback), assistant text messages, joined user prompt and combined error message as the Rust types.rs tests assert, from the same committed fixtures.",
                       "test":  "go test ./parity -run TestBackendTaskDetailsFixturesMatchRust -count=1"
+                  },
+                  {
+                      "id":  "rollout-writer-property-test",
+                      "status":  "done",
+                      "area":  "parity",
+                      "reason":  "Method-5 property test for rollout writing: random turn/item operation sequences written by the paginated Recorder must produce a Rust-compatible rollout - contiguous ordinals, session_meta first line, canonical event_msg payload types (task_started/item_started/item_completed/task_complete), exact item byte round-trip, item lifecycle pairing, and appendability after Resume. 120+ sequences in CI (4 seeds x 30) plus 450 high-intensity sequences verified.",
+                      "test":  "go test ./rollout -run TestRecorderRandomSequencesPreserveRustStructure -count=1"
                   }
               ]
 }
