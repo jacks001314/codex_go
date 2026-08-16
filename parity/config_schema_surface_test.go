@@ -20,12 +20,13 @@ var configSchemaRustOnlyAllowlist = map[string]string{
 	"experimental_compact_prompt_file":    "Rust experimental compaction feature; not implemented in Go",
 	"experimental_thread_config_endpoint": "Rust experimental thread-config endpoint; not implemented in Go",
 	"experimental_thread_store":           "Rust experimental thread store; Go uses its own session store",
-	"ghost_snapshot":                      "Rust checkpoint/ghost snapshot persistence; not implemented in Go",
 }
 
 // configSchemaGoOnlyAllowlist lists Go-recognized keys absent from Rust's
 // config.schema.json: legacy or Go-specific extensions.
 var configSchemaGoOnlyAllowlist = map[string]string{
+	"js_repl_node_module_dirs":     "Rust deprecated ignored field (schemars skip); Go recognizes it so strict config does not reject legacy config",
+	"js_repl_node_path":            "Rust deprecated ignored field (schemars skip); Go recognizes it so strict config does not reject legacy config",
 	"notices":                      "Go extension for notice suppression (Rust uses `notice`); kept for Go compatibility",
 	"requirements":                 "Go extension matching legacy config requirements sections",
 	"responsesapi_client_metadata": "Go legacy alias of Rust responses_api_metadata; kept for backward compatibility",
@@ -63,8 +64,8 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	if len(rustKeys) != 94 {
 		t.Fatalf("Rust config.schema.json top-level property count = %d, want 94 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 94 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 94 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 97 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 97 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)

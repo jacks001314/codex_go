@@ -696,6 +696,12 @@
                       "id":  "test-sync-tool-handler",
                       "reason":  "Implemented the P2 conditional tool test_sync_tool (need_aligin 4.1), mirroring Rust core/src/tools/handlers/test_sync.rs + test_sync_spec.rs: a testing-only coordination tool exposed to models that declare test_sync_tool in experimental_supported_tools. It supports optional sleep_before_ms/sleep_after_ms delays and a named barrier (participants + timeout_ms) shared by concurrent tool calls, returning \"ok\" (parallel-capable, schema mirrors Rust). Registered conditionally in BuildToolRegistry when the model's ExperimentalSupportedTools declares it (mirroring spec_plan.rs). Unit tests pin sleep/barrier rendezvous, barrier validation (zero participants, conflicting participant counts), spec shape, and conditional registry registration.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./config -run 'TestLoadEffectiveStrictConfigAcceptsGhostSnapshot|TestLoadEffectiveStrictConfigAcceptsDeprecatedJSRepl' -count=1; go test ./parity -run TestRustConfigSchemaSurfaceAgainstGo -count=1",
+                      "id":  "ghost-snapshot-and-js-repl-config-keys",
+                      "reason":  "Recognized the remaining P2 config keys so strict config accepts legacy config like Rust: (1) ghost_snapshot (config.schema.json GhostSnapshotToml, compatibility-only no-op) is now a known top-level key with sub-field validation mirroring Rust deny_unknown_fields, accepting ignore_large_untracked_files/dirs, disable_warnings, and the legacy aliases ignore_untracked_files_over_bytes / large_untracked_dir_warning_threshold; the config-schema rust-only allowlist shrank from 7 to 6. (2) js_repl_node_path / js_repl_node_module_dirs (Rust deprecated ignored fields, serde-accepted but schemars-skipped) are recognized so strict config does not reject legacy config; they are documented Go-only allowlist entries. Unit tests pin acceptance of every field/alias and rejection of unknown ghost_snapshot fields.",
+                      "area":  "parity"
                   }
               ]
 }

@@ -31,6 +31,61 @@ func TestResumeCWDModeAndResolution(t *testing.T) {
 	}
 }
 
+func TestLoadEffectiveStrictConfigAcceptsDeprecatedJSReplKeysLikeRust(t *testing.T) {
+	// Rust ConfigToml keeps js_repl_node_path / js_repl_node_module_dirs as
+	// deprecated ignored fields (serde accepts them, schemars skips them); Go
+	// strict config must not reject legacy config carrying these keys.
+	for _, body := range []string{
+		"js_repl_node_path = \"/opt/node\"\n",
+		"js_repl_node_module_dirs = [\"/opt/node_modules\"]\n",
+		"js_repl_node_path = \"/opt/node\"\njs_repl_node_module_dirs = [\"/opt/a\", \"/opt/b\"]\n",
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+		cfg, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+		if err != nil {
+			t.Fatalf("LoadEffectiveWithOptions strict %q returned error: %v", body, err)
+		}
+		if _, ok := cfg.Values["js_repl_node_path"]; body == "js_repl_node_path = \"/opt/node\"\n" && !ok {
+			t.Fatalf("js_repl_node_path not carried: %#v", cfg.Values)
+		}
+	}
+}
+
+func TestLoadEffectiveStrictConfigAcceptsGhostSnapshotCompatLikeRust(t *testing.T) {
+	// Mirrors Rust GhostSnapshotToml (config/src/config_toml.rs): the
+	// compatibility-only settings are retained so legacy `ghost_snapshot`
+	// config still loads; the legacy aliases are accepted and unknown fields
+	// are rejected (serde deny_unknown_fields).
+	for _, body := range []string{
+		"[ghost_snapshot]\ndisable_warnings = true\n",
+		"[ghost_snapshot]\nignore_large_untracked_files = 100\n",
+		"[ghost_snapshot]\nignore_large_untracked_dirs = 200\n",
+		"[ghost_snapshot]\nignore_untracked_files_over_bytes = 100\n",
+		"[ghost_snapshot]\nlarge_untracked_dir_warning_threshold = 200\n",
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+		if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err != nil {
+			t.Fatalf("LoadEffectiveWithOptions strict %q returned error: %v", body, err)
+		}
+	}
+
+	dir := t.TempDir()
+	body := "[ghost_snapshot]\nunknown_field = true\n"
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	_, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+	if err == nil || !strings.Contains(err.Error(), "unknown configuration field `ghost_snapshot.unknown_field`") {
+		t.Fatalf("strict ghost_snapshot error = %v", err)
+	}
+}
+
 func TestMergeConfigMapsNormalizesPermissionNetworkDomainsLikeRust(t *testing.T) {
 	// Mirrors Rust merge_tests.rs
 	// merge_toml_values_normalizes_permission_network_domains_before_overlaying:

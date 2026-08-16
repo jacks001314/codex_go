@@ -350,6 +350,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"forced_chatgpt_workspace_id":                {},
 	"forced_login_method":                        {},
 	"goals":                                      {},
+	"ghost_snapshot":                             {},
 	"hide_agent_reasoning":                       {},
 	"history":                                    {},
 	"hooks":                                      {},
@@ -358,6 +359,8 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"include_environment_context":                {},
 	"include_permissions_instructions":           {},
 	"instructions":                               {},
+	"js_repl_node_module_dirs":                   {},
+	"js_repl_node_path":                          {},
 	"log_dir":                                    {},
 	"mcp_oauth_credentials_store":                {},
 	"mcp_oauth_callback_port":                    {},
@@ -512,6 +515,25 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 				if !known[key] {
 					return fmt.Errorf("unknown configuration field `marketplaces.%s.%s`", name, key)
 				}
+			}
+		}
+	}
+	if ghostSnapshot, ok := values["ghost_snapshot"].(map[string]any); ok {
+		// Mirrors Rust GhostSnapshotToml (config/src/config_toml.rs, serde
+		// deny_unknown_fields): compatibility-only no-op settings retained so
+		// legacy `ghost_snapshot` config still loads. Aliases
+		// ignore_untracked_files_over_bytes / large_untracked_dir_warning_threshold
+		// are accepted too.
+		known := map[string]bool{
+			"ignore_large_untracked_files":          true,
+			"ignore_untracked_files_over_bytes":     true,
+			"ignore_large_untracked_dirs":           true,
+			"large_untracked_dir_warning_threshold": true,
+			"disable_warnings":                      true,
+		}
+		for key := range ghostSnapshot {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `ghost_snapshot.%s`", key)
 			}
 		}
 	}
