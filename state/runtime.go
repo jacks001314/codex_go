@@ -204,7 +204,15 @@ ON CONFLICT(id) DO NOTHING`, time.Now().Unix())
 
 func (r *StateRuntime) loadThreadTimestamps(ctx context.Context) error {
 	var updatedAt, recencyAt sql.NullInt64
-	if err := r.stateDB.QueryRowContext(ctx, `SELECT MAX(updated_at_ms), MAX(recency_at_ms) FROM threads`).Scan(&updatedAt, &recencyAt); err != nil {
+	// Rust 375996d3f5 (#38893): the persisted maxima for updated_at_ms and
+	// recency_at_ms must be loaded with separate scalar subqueries. A single
+	// SELECT MAX(a), MAX(b) evaluates as the multi-argument scalar max() and
+	// returns the same-row maximum when the two maxima belong to different
+	// threads, silently corrupting one timestamp counter. Independent
+	// subqueries restore each counter from its own column.
+	if err := r.stateDB.QueryRowContext(ctx,
+		`SELECT (SELECT MAX(updated_at_ms) FROM threads), (SELECT MAX(recency_at_ms) FROM threads)`,
+	).Scan(&updatedAt, &recencyAt); err != nil {
 		return fmt.Errorf("load thread timestamps: %w", err)
 	}
 	if updatedAt.Valid {

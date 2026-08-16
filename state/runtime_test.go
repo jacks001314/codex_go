@@ -459,3 +459,64 @@ func TestStateRuntimeRejectsUnknownLegacyGoRemoteControlSchema(t *testing.T) {
 		t.Fatalf("unknown schema was modified: original=%d staging=%d", original, staging)
 	}
 }
+
+// TestStateRuntimeRestoresIndependentThreadTimestampMaxima mirrors Rust
+// 375996d3f5 (#38893) init_restores_independent_thread_timestamp_maxima: the
+// persisted maxima for updated_at_ms and recency_at_ms must be restored
+// independently with separate scalar subqueries. When the two maxima belong
+// to different threads, a single SELECT MAX(a), MAX(b) evaluates as the
+// multi-argument scalar max() and returns the same-row maximum, corrupting one
+// counter on reopen.
+func TestStateRuntimeRestoresIndependentThreadTimestampMaxima(t *testing.T) {
+	ctx := context.Background()
+	config, err := NewSqliteConfig(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := InitStateRuntime(ctx, config, "openai")
+	if err != nil {
+		t.Fatalf("InitStateRuntime() error = %v", err)
+	}
+
+	// Two threads: thread A holds the max updated_at_ms, thread B holds the
+	// max recency_at_ms. Seed minimal full rows (the schema has NOT NULL
+	// columns), then set the timestamp columns so the maxima live in different
+	// rows - exactly the Rust regression scenario.
+	db := runtime.StateDB()
+	for _, row := range []struct {
+		id        string
+		updatedAt int64
+		recencyAt int64
+	}{
+		{"00000000-0000-0000-0000-000000000101", 3_000, 1_000},
+		{"00000000-0000-0000-0000-000000000102", 1_000, 4_000},
+	} {
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO threads (id, rollout_path, created_at, updated_at, recency_at, created_at_ms, updated_at_ms, recency_at_ms, source, model_provider, cwd, title, sandbox_policy, approval_mode, tokens_used)
+			 VALUES (?, '/rollout', 1, 1, 1, 1, 1, 1, 'cli', 'openai', '/repo', 't', 'read-only', 'never', 0)
+			 ON CONFLICT(id) DO UPDATE SET updated_at_ms = excluded.updated_at_ms, recency_at_ms = excluded.recency_at_ms`,
+			row.id); err != nil {
+			t.Fatalf("seed thread %s: %v", row.id, err)
+		}
+		if _, err := db.ExecContext(ctx,
+			`UPDATE threads SET updated_at_ms = ?, recency_at_ms = ? WHERE id = ?`,
+			row.updatedAt, row.recencyAt, row.id); err != nil {
+			t.Fatalf("update thread %s timestamps: %v", row.id, err)
+		}
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("close runtime: %v", err)
+	}
+
+	reopened, err := InitStateRuntime(ctx, config, "openai")
+	if err != nil {
+		t.Fatalf("reopen runtime: %v", err)
+	}
+	defer reopened.Close()
+	if got := reopened.ThreadUpdatedAtMillis(); got != 3_000 {
+		t.Fatalf("restored thread updated_at max = %d, want 3000 (independent subquery)", got)
+	}
+	if got := reopened.ThreadRecencyAtMillis(); got != 4_000 {
+		t.Fatalf("restored thread recency_at max = %d, want 4000 (independent subquery)", got)
+	}
+}

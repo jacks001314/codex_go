@@ -1,7 +1,7 @@
 {
     "schemaVersion":  1,
     "rustFromExclusive":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
-    "rustToInclusive":  "9ded177ce7c1c0bd2047f902936c177612ab3434",
+    "rustToInclusive":  "375996d3f5b9130edf12f4af8073703df2724570",
     "commits":  [
                     {
                         "sha":  "3c7ae4a81204cbee45084b4fb43b3630c79550c9",
@@ -216,6 +216,19 @@
                         "evidence":  [
                                          "go test ./remotecontrol -count=1",
                                          "x-codex-host-device-kind: mac_mini header is sent on macOS when system_profiler reports machine name exactly Mac mini (2s timeout, cached successful detection, header omitted elsewhere); parser and header tests cover Mac mini, other names, empty, malformed, and non-macOS omission."
+                                     ]
+                    },
+                    {
+                        "sha":  "375996d3f5b9130edf12f4af8073703df2724570",
+                        "subject":  "Restore thread timestamp maxima independently (#38893)",
+                        "kind":  "persistence",
+                        "domains":  [
+                                        "state-runtime"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./state -run TestStateRuntimeRestoresIndependentThreadTimestampMaxima -count=1; go test ./state -count=1",
+                                         "Go's loadThreadTimestamps used the same SELECT MAX(updated_at_ms), MAX(recency_at_ms) FROM threads as the pre-fix Rust; SQLite interprets the two-argument form as the scalar max() (same-row maximum / NULL semantics) rather than two independent column aggregates, so when the updated_at and recency_at maxima belong to different threads one counter was silently corrupted on reopen. Aligned to Rust's independent scalar subqueries (SELECT (SELECT MAX(updated_at_ms) FROM threads), (SELECT MAX(recency_at_ms) FROM threads)) and pinned the regression with two threads holding maxima in different rows, close + reopen, both counters verified (3000/4000)."
                                      ]
                     }
                 ]
