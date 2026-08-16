@@ -3014,6 +3014,35 @@ func runtimeRecordIsThreadSpawn(record *session.Record) bool {
 	return threadSource == "subagentthreadspawn" || source == "subagentthreadspawn"
 }
 
+// runtimeRecordIsSubagent reports whether a thread is a subagent (delegate)
+// thread: agent-tool spawns (subAgentThreadSpawn / Originator=subagent), the
+// generic subagent source, and the subagent review/compact/other and memory
+// consolidation kinds. Rust 95aada11c4 (#38205) requires every delegated
+// session to run with the `never` approval policy; this predicate feeds the
+// central enforcement in prepareTurnStartParams so approval-requiring commands
+// and MCP tool calls are denied within the delegate instead of being forwarded
+// to the parent session.
+func runtimeRecordIsSubagent(record *session.Record) bool {
+	if record == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(record.Metadata.Originator), "subagent") {
+		return true
+	}
+	normalize := func(value string) string {
+		return strings.ToLower(strings.NewReplacer("_", "", "-", "", "/", "", ":", "", " ", "").Replace(strings.TrimSpace(value)))
+	}
+	switch normalize(record.Metadata.ThreadSource) {
+	case "subagent", "subagentreview", "subagentcompact", "subagentother", "subagentthreadspawn", "memoryconsolidation":
+		return true
+	}
+	switch normalize(record.Metadata.Source) {
+	case "subagent", "subagentreview", "subagentcompact", "subagentother", "subagentthreadspawn":
+		return true
+	}
+	return false
+}
+
 func runtimeThreadListShouldDefaultModelProvider(request *Request, params *ThreadListParams) bool {
 	if request == nil || params == nil {
 		return false
@@ -5603,6 +5632,14 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), false, false)
 	if err != nil {
 		return err
+	}
+	if runtimeRecordIsSubagent(record) {
+		// Rust 95aada11c4 (#38205): delegated sessions always run with the
+		// `never` approval policy (the delegate config is pinned with
+		// Constrained::allow_only(Never)). Approval-requiring commands, MCP
+		// tool calls and escalations are denied within the delegate instead of
+		// being forwarded to the parent session.
+		params.ApprovalPolicy = sandbox.ApprovalNever
 	}
 	settings := r.threadSettingsForTurn(params.ThreadID)
 	if strings.TrimSpace(params.CWD) == "" {
