@@ -1938,7 +1938,7 @@ func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, e
 		Version: configVersion(userValues),
 		Config:  cloneMap(userValues),
 	})
-	if projectConfigEnabled(userValues, cwd) {
+	if ProjectConfigEnabled(userValues, cwd) {
 		for _, dotCodexFolder := range ProjectDotCodexFolders(cwd) {
 			path := filepath.Join(dotCodexFolder, "config.toml")
 			projectValues, exists, err := loadConfigFileIfExists(path)

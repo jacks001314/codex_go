@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -54,6 +55,66 @@ func useLocalExecRunner(t *testing.T) {
 	t.Cleanup(func() {
 		newCodexExecRunner = previous
 	})
+}
+
+// TestInteractiveWindowsSandboxStartupPromptSkipsTrustedGitProjectLikeRust
+// reproduces the ConPTY differential fixture exactly: the cwd is a git root
+// and the effective config already trusts it, so the enable prompt must not
+// open (Rust directory_trust_persisted parity).
+func TestInteractiveWindowsSandboxStartupPromptSkipsTrustedGitProjectLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows sandbox prompt is Windows-only")
+	}
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	project, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	project = filepath.Clean(filepath.Join(project, ".."))
+	if _, err := os.Stat(filepath.Join(project, ".git")); err != nil {
+		t.Skipf("no git root at %s", project)
+	}
+	root := &cli.RootOptions{Shared: cli.SharedOptions{CWD: project}}
+
+	body := "[projects." + strconv.Quote(project) + "]\ntrust_level = \"trusted\"\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+		t.Fatalf("write trusted git project config: %v", err)
+	}
+	loaded, loadErr := config.LoadEffectiveWithOptions(home, interactiveKeymapLoadOptions(root))
+	if loadErr != nil || loaded == nil {
+		t.Fatalf("load effective config: %v", loadErr)
+	}
+	if !config.ProjectConfigEnabled(loaded.Values, project) {
+		t.Fatalf("ProjectConfigEnabled(%q) = false with trusted project config; values projects=%#v", project, loaded.Values["projects"])
+	}
+	if prompt := interactiveWindowsSandboxStartupPrompt(root, nil); prompt != nil {
+		t.Fatalf("trusted git project prompted for Windows sandbox setup: %#v", prompt)
+	}
+}
+
+// TestInteractiveWindowsSandboxStartupPromptSkipsTrustedProjectLikeRust pins
+// the Rust parity for the startup NUX trigger: a cwd that is already trusted
+// in the effective config produced no in-session directory trust decision, so
+// the Windows sandbox enable prompt must NOT open (Rust tui/src/lib.rs
+// onboarding_result.directory_trust_persisted), even though the backend is
+// disabled.
+func TestInteractiveWindowsSandboxStartupPromptSkipsTrustedProjectLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows sandbox prompt is Windows-only")
+	}
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	project := t.TempDir()
+	root := &cli.RootOptions{Shared: cli.SharedOptions{CWD: project}}
+
+	body := "[projects." + strconv.Quote(project) + "]\ntrust_level = \"trusted\"\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(body), 0o600); err != nil {
+		t.Fatalf("write trusted project config: %v", err)
+	}
+	if prompt := interactiveWindowsSandboxStartupPrompt(root, nil); prompt != nil {
+		t.Fatalf("trusted project prompted for Windows sandbox setup: %#v", prompt)
+	}
 }
 
 func writeAppResponseSSE(w io.Writer, payload string) {

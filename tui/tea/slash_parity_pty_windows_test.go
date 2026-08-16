@@ -40,11 +40,22 @@ func TestSystemCodexSlashParityWithConPTY(t *testing.T) {
 	}
 
 	commands := []string{"/status", "/mcp"}
-	system := runCodexSlashPTY(t, systemExe, root, commands)
-	local := runCodexSlashPTY(t, localExe, root, commands)
+	// The two implementations brand themselves differently: the Rust release
+	// renders "OpenAI Codex" while the Go binary renders "gcode". That identity
+	// difference is a documented allowed mapping (parity/domains.json
+	// allowedIdentityMappings: rust "codex" <-> go "gcode"), so each side waits
+	// for and asserts its own identity marker, while the shared observable
+	// surface (/status, /mcp, model, approval, sandbox, session, ...) must
+	// appear in both.
+	// The wait helper's Contains is case-sensitive, so each side waits for its
+	// exact-case identity rendering.
+	system := runCodexSlashPTY(t, systemExe, root, "OpenAI Codex", commands)
+	local := runCodexSlashPTY(t, localExe, root, "gcode", commands)
 
+	if !strings.Contains(strings.ToLower(system), "openai codex") {
+		t.Fatalf("system output missing its identity marker:\n%s", system)
+	}
 	for _, want := range []string{
-		"gcode",
 		"/status",
 		"/mcp",
 		"model",
@@ -62,9 +73,12 @@ func TestSystemCodexSlashParityWithConPTY(t *testing.T) {
 			t.Fatalf("local output missing %q:\n%s", want, local)
 		}
 	}
+	if !strings.Contains(strings.ToLower(local), "gcode") {
+		t.Fatalf("local output missing its identity marker:\n%s", local)
+	}
 }
 
-func runCodexSlashPTY(t *testing.T, exe string, cwd string, commands []string) string {
+func runCodexSlashPTY(t *testing.T, exe string, cwd string, startupMarker string, commands []string) string {
 	t.Helper()
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-test"}`), 0o600); err != nil {
@@ -109,7 +123,7 @@ func runCodexSlashPTY(t *testing.T, exe string, cwd string, commands []string) s
 			}
 		}
 	}()
-	ready, earlyExit := waitForGoPTYOutputOrExit(&output, "gcode", exited, 10*time.Second)
+	ready, earlyExit := waitForGoPTYOutputOrExit(&output, startupMarker, exited, 10*time.Second)
 	if !ready {
 		if earlyExit != nil {
 			t.Fatalf("%s exited before rendering: %v output=%q", exe, earlyExit, output.String())

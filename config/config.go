@@ -227,7 +227,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		cwd = strings.TrimSpace(opts.CWD)
 	}
 	ignoreProjectConfig := opts != nil && opts.IgnoreProjectConfig
-	if cwd != "" && !ignoreProjectConfig && projectConfigEnabled(values, cwd) {
+	if cwd != "" && !ignoreProjectConfig && ProjectConfigEnabled(values, cwd) {
 		for _, path := range ProjectConfigPaths(cwd) {
 			projectValues, exists, err := loadConfigFileIfExists(path)
 			if err != nil {
@@ -1295,7 +1295,13 @@ func managedConfigPath(codexHome string, override string) string {
 	return filepath.Join(string(filepath.Separator), "etc", "codex", "managed_config.toml")
 }
 
-func projectConfigEnabled(userValues map[string]any, cwd string) bool {
+// ProjectConfigEnabled reports whether the effective project config for cwd is
+// enabled: the active project root (or an ancestor within it) carries
+// trust_level = "trusted". It is the pre-session trust signal the interactive
+// Windows sandbox NUX uses to mirror Rust's
+// onboarding_result.directory_trust_persisted (a cwd that was already trusted
+// produces no session trust decision).
+func ProjectConfigEnabled(userValues map[string]any, cwd string) bool {
 	trustLevels := projectTrustLevels(userValues)
 	if len(trustLevels) == 0 {
 		return false

@@ -36,9 +36,26 @@ func interactiveWindowsSandboxStartupPrompt(root *cli.RootOptions, requirements 
 	setupComplete, _ := windowssandbox.SandboxSetupIsComplete(codexHome)
 	requirementsSourcePresent := loaded.Requirements != nil && loaded.Requirements.AllowedWindowsSandboxImplementations != nil
 	elevatedSetupRequired := chatwidget.ElevatedWindowsSandboxSetupRequired(level, requirementsSourcePresent, setupComplete)
-	// The Go startup path does not currently expose Rust's directory_trust_persisted bit.
-	// Prompt while the backend is disabled; either setup choice persists windows.sandbox.
-	decision := chatwidget.MaybePromptWindowsSandboxEnable(true, level, elevatedSetupRequired, true)
+	// Rust tui/src/lib.rs: the startup NUX fires only when the session made a
+	// directory trust decision (a fresh/untrusted cwd) while the sandbox
+	// backend is disabled, or when elevated sandbox setup is required. A cwd
+	// that was already trusted in the effective config produced no trust
+	// decision, so the NUX is skipped - mirroring Rust
+	// onboarding_result.directory_trust_persisted. Go has no in-session
+	// directory-trust onboarding, so the pre-session trust state is the
+	// available signal: trusted now means no trust decision was made.
+	cwd := ""
+	if root != nil {
+		cwd = strings.TrimSpace(root.Shared.CWD)
+	}
+	if cwd == "" {
+		if resolved, err := os.Getwd(); err == nil {
+			cwd = strings.TrimSpace(resolved)
+		}
+	}
+	trustDecisionContext := !config.ProjectConfigEnabled(loaded.Values, cwd)
+	showNow := (trustDecisionContext && level == chatwidget.WindowsSandboxLevelDisabled) || elevatedSetupRequired
+	decision := chatwidget.MaybePromptWindowsSandboxEnable(showNow, level, elevatedSetupRequired, true)
 	if !decision.OpenEnablePrompt {
 		return nil
 	}

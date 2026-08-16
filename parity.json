@@ -786,6 +786,13 @@
                       "id":  "wsl-update-path-normalization",
                       "reason":  "Closed the P2 WSL path normalization gap: Go already had shell.WinPathToWSL / shell.NormalizeForWSL (Rust cli/src/wsl_paths.rs mirrors) and utils.IsWSL detection, but the update command runner (install.ExecCommandRunner) did not normalize the update command path/arguments on non-Windows like Rust cli/src/main.rs run_update. Wired updateCommandAndArgs: Windows keeps cmd.exe /C PATHEXT semantics (PowerShell direct), non-Windows normalizes the command and every argument for WSL so a Windows path carried by a WSL-managed install resolves to its /mnt/<drive>/... mount path. Registered as contract wsl-update-path-normalization with fn-name-pinned differential TestRustWSLPathSamplesRunInGo (Rust win_to_wsl_basic + normalize_is_noop_on_unix_paths samples) and branch-preservation tests.",
                       "area":  "parity"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./app ./config ./tui/tea -count=1; $env:CODEX_GO_SLASH_PARITY='1'; go test ./tui/tea -run TestSystemCodexSlashParityWithConPTY -count=1",
+                      "id":  "cli-blackbox-slash-differential",
+                      "reason":  "Ran the djalign method-4 CLI black-box differential as a live gate: Go code.exe vs the Rust @openai/codex release (v0.147.0) run through production ConPTY with /status + /mcp, comparing the observable TUI surface. The run surfaced two real issues, both fixed: (1) the differential test waited for the single identity marker 'gcode' on both binaries and asserted it on both - the Rust release brands itself 'OpenAI Codex' (documented allowed identity mapping rust codex <-> go gcode), so the test now waits for and asserts each side's own identity marker while keeping the shared /status+/mcp surface markers on both; (2) a real Go divergence: the Windows sandbox startup NUX opened even when the cwd was already trusted, while Rust gates it on onboarding_result.directory_trust_persisted (only a fresh/untrusted cwd produces a session trust decision, and elevated-required bypasses the gate). Go now mirrors the Rust condition ((trustDecision && level==Disabled) || elevatedRequired) via config.ProjectConfigEnabled (exported trust check) with the cwd resolved from root.Shared.CWD or os.Getwd(). Contracts cli-blackbox-slash-differential + windows-sandbox-nux-trust-decision; the gate is opt-in (CODEX_GO_SLASH_PARITY=1, both exes present) and token-free.",
+                      "area":  "parity"
                   }
               ]
 }
