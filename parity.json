@@ -636,6 +636,12 @@
                       "id":  "config-merge-shared-fixture-complete-coverage",
                       "reason":  "Completed shared-fixture coverage of Rust config/src/merge_tests.rs: all 17 merge test fns (excluding the parse_toml helper) are now driven as differential samples through Go's layer loading and CLI override paths, including shell_environment_policy Unicode case-insensitive filter merging, legacy-array replacement of filters, and multi_agent_v2 opaque desktop path exclusion in both layer and CLI forms. The matrix is pinned by Rust fn name so upstream merge_semantics drift breaks the contract; config-parse-shared-fixtures verifier covers it.",
                       "area":  "parity"
+                  },                  {
+                      "status":  "done",
+                      "test":  "go test ./appserver -run 'AdditionalContextLimit|HookDiscovery|HookMetadata' -count=1; go test ./appserver -run 'Hook' -count=1",
+                      "id":  "hook-additional-context-limit-wire-contract",
+                      "reason":  "Aligned the hooks wire contract with Rust HookHandlerConfig::Command / HookMetadata (config/src/hook_config.rs + app-server hooks_list): the additionalContextLimit field (Rust additional_context_limit, camelCase JSON/TOML name) is now parsed from hooks.json and hooks.toml handler tables, surfaced on the v2 hooks_list HookMetadata JSON (omitempty, unset stays omitted like Rust skip_serializing_if), and participates in the hook identity hash (NormalizedHookIdentity) so changing the spilling threshold re-marks the hook untrusted. Three unit tests pin JSON parsing, TOML parsing, unset-omission, and hash participation.",
+                      "area":  "parity"
                   }
               ]
 }

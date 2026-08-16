@@ -182,21 +182,25 @@ type HookMetadata struct {
 	Command       *string           `json:"command"`
 	// MCP tool hooks (Rust #38705) target an MCP server tool with an
 	// argument template expanded against the hook event input.
-	Server        *string           `json:"server,omitempty"`
-	Tool          *string           `json:"tool,omitempty"`
-	Input         map[string]any    `json:"input,omitempty"`
-	TimeoutSec    int64             `json:"timeoutSec"`
-	StatusMessage *string           `json:"statusMessage"`
-	SourcePath    string            `json:"sourcePath"`
-	Source        HookSource        `json:"source"`
-	PluginID      *string           `json:"pluginId"`
-	DisplayOrder  int64             `json:"displayOrder"`
-	Enabled       bool              `json:"enabled"`
-	IsManaged     bool              `json:"isManaged"`
-	CurrentHash   string            `json:"currentHash"`
-	TrustStatus   HookTrustStatus   `json:"trustStatus"`
-	BypassTrust   bool              `json:"-"`
-	Env           map[string]string `json:"-"`
+	Server        *string        `json:"server,omitempty"`
+	Tool          *string        `json:"tool,omitempty"`
+	Input         map[string]any `json:"input,omitempty"`
+	TimeoutSec    int64          `json:"timeoutSec"`
+	StatusMessage *string        `json:"statusMessage"`
+	// AdditionalContextLimit mirrors Rust HookMetadata.additional_context_limit
+	// (app-server hooks_list contract): nil means the default 2,500-token
+	// spilling threshold; 0 disables spilling.
+	AdditionalContextLimit *int64            `json:"additionalContextLimit,omitempty"`
+	SourcePath             string            `json:"sourcePath"`
+	Source                 HookSource        `json:"source"`
+	PluginID               *string           `json:"pluginId"`
+	DisplayOrder           int64             `json:"displayOrder"`
+	Enabled                bool              `json:"enabled"`
+	IsManaged              bool              `json:"isManaged"`
+	CurrentHash            string            `json:"currentHash"`
+	TrustStatus            HookTrustStatus   `json:"trustStatus"`
+	BypassTrust            bool              `json:"-"`
+	Env                    map[string]string `json:"-"`
 }
 
 func (m *HookMetadata) Validate() error {

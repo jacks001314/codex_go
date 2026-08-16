@@ -125,7 +125,7 @@ func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntr
 						DisplayOrder:  displayOrder,
 						Enabled:       true,
 						IsManaged:     true,
-						CurrentHash:   hookDiscoveryHash(event.name, group.Matcher, command, timeout, handler.StatusMessage),
+						CurrentHash:   hookDiscoveryHash(event.name, group.Matcher, command, timeout, handler.StatusMessage, nil),
 						TrustStatus:   HookTrustManaged,
 					})
 					displayOrder++
@@ -361,6 +361,11 @@ type hookJSONHandlerConfigWire struct {
 	Async               bool           `json:"async"`
 	StatusMessage       *string        `json:"statusMessage"`
 	StatusMessageAlias  *string        `json:"status_message"`
+	// Mirrors Rust HookHandlerConfig::Command additional_context_limit
+	// (config/src/hook_config.rs): approximate token threshold for spilling
+	// this hook's additionalContext to disk. Unset uses 2,500 tokens; 0
+	// disables spilling.
+	AdditionalContextLimit *uint64 `json:"additionalContextLimit"`
 }
 
 func appendHooksTOML(entry *HookListEntry, source *hookDiscoverySource) {
@@ -652,6 +657,12 @@ func applyHooksTOMLHandlerValue(handler *hookJSONHandlerConfigWire, key string, 
 				handler.StatusMessageAlias = &value
 			}
 		}
+	case "additionalContextLimit", "additional_context_limit":
+		value, ok := parseHooksTOMLUint(rawValue)
+		if !ok {
+			return fmt.Sprintf("skipping invalid hook additionalContextLimit %q in %s", rawValue, path)
+		}
+		handler.AdditionalContextLimit = &value
 	}
 	return ""
 }
@@ -795,28 +806,30 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 			}
 			timeoutSec := handler.timeoutSec()
 			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
-			currentHash := hookDiscoveryHash(event, matcher, command, timeoutSec, handler.statusMessage())
+			additionalContextLimit := handler.additionalContextLimit()
+			currentHash := hookDiscoveryHash(event, matcher, command, timeoutSec, handler.statusMessage(), additionalContextLimit)
 			state := source.State(key)
 			displayCommand := expandHookEnvPlaceholders(command, source.Env)
 			metadata := HookMetadata{
-				Key:           key,
-				EventName:     event,
-				HandlerType:   HookHandlerCommand,
-				ExecutionMode: hookDiscoveryExecutionMode(handler.Async, event),
-				Matcher:       cloneString(matcher),
-				Command:       &displayCommand,
-				TimeoutSec:    timeoutSec,
-				StatusMessage: handler.statusMessage(),
-				SourcePath:    source.Path,
-				Source:        source.Source,
-				PluginID:      cloneString(source.PluginID),
-				DisplayOrder:  displayOrder,
-				Enabled:       hookEnabled(false, state),
-				IsManaged:     false,
-				CurrentHash:   currentHash,
-				TrustStatus:   hookTrustStatus(false, currentHash, hookTrustedHash(false, state)),
-				BypassTrust:   source.BypassTrust,
-				Env:           cloneHookEnv(source.Env),
+				Key:                    key,
+				EventName:              event,
+				HandlerType:            HookHandlerCommand,
+				ExecutionMode:          hookDiscoveryExecutionMode(handler.Async, event),
+				Matcher:                cloneString(matcher),
+				Command:                &displayCommand,
+				TimeoutSec:             timeoutSec,
+				StatusMessage:          handler.statusMessage(),
+				AdditionalContextLimit: additionalContextLimit,
+				SourcePath:             source.Path,
+				Source:                 source.Source,
+				PluginID:               cloneString(source.PluginID),
+				DisplayOrder:           displayOrder,
+				Enabled:                hookEnabled(false, state),
+				IsManaged:              false,
+				CurrentHash:            currentHash,
+				TrustStatus:            hookTrustStatus(false, currentHash, hookTrustedHash(false, state)),
+				BypassTrust:            source.BypassTrust,
+				Env:                    cloneHookEnv(source.Env),
 			}
 			entry.Hooks = append(entry.Hooks, metadata)
 			displayOrder++
@@ -842,7 +855,7 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 			timeoutSec := handler.timeoutSec()
 			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
 			inputTemplate := cloneHookInput(handler.Input)
-			currentHash := hookDiscoveryHashHandler(event, matcher, HookHandlerMCPTool, "", server, toolName, inputTemplate, timeoutSec, handler.statusMessage())
+			currentHash := hookDiscoveryHashHandler(event, matcher, HookHandlerMCPTool, "", server, toolName, inputTemplate, timeoutSec, handler.statusMessage(), nil)
 			state := source.State(key)
 			metadata := HookMetadata{
 				Key:           key,
@@ -963,6 +976,18 @@ func (h *hookJSONHandlerConfigWire) statusMessage() *string {
 	return cloneString(h.StatusMessageAlias)
 }
 
+func (h *hookJSONHandlerConfigWire) additionalContextLimit() *int64 {
+	if h == nil || h.AdditionalContextLimit == nil {
+		return nil
+	}
+	value := *h.AdditionalContextLimit
+	if value > uint64(^uint64(0)>>1) {
+		return nil
+	}
+	converted := int64(value)
+	return &converted
+}
+
 func hookDiscoveryCWDs(params *HookListParams, defaultCWD string) []string {
 	seen := map[string]bool{}
 	var cwds []string
@@ -1078,11 +1103,11 @@ func normalizedHookMatcher(event HookEventName, matcher *string) *string {
 	return &value
 }
 
-func hookDiscoveryHash(event HookEventName, matcher *string, command string, timeoutSec int64, statusMessage *string) string {
-	return hookDiscoveryHashHandler(event, matcher, HookHandlerCommand, command, "", "", nil, timeoutSec, statusMessage)
+func hookDiscoveryHash(event HookEventName, matcher *string, command string, timeoutSec int64, statusMessage *string, additionalContextLimit *int64) string {
+	return hookDiscoveryHashHandler(event, matcher, HookHandlerCommand, command, "", "", nil, timeoutSec, statusMessage, additionalContextLimit)
 }
 
-func hookDiscoveryHashHandler(event HookEventName, matcher *string, handlerType HookHandlerType, command string, server string, tool string, input map[string]any, timeoutSec int64, statusMessage *string) string {
+func hookDiscoveryHashHandler(event HookEventName, matcher *string, handlerType HookHandlerType, command string, server string, tool string, input map[string]any, timeoutSec int64, statusMessage *string, additionalContextLimit *int64) string {
 	handler := map[string]any{
 		"type":    string(handlerType),
 		"timeout": timeoutSec,
@@ -1100,6 +1125,9 @@ func hookDiscoveryHashHandler(event HookEventName, matcher *string, handlerType 
 	}
 	if statusMessage != nil {
 		handler["statusMessage"] = *statusMessage
+	}
+	if additionalContextLimit != nil {
+		handler["additionalContextLimit"] = *additionalContextLimit
 	}
 	identity := map[string]any{
 		"event_name": hookEventKeyLabel(event),

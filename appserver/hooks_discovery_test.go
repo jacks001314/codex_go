@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -336,7 +337,7 @@ statusMessage = "running listed hook"
 	if hook.TimeoutSec != 5 || hook.StatusMessage == nil || *hook.StatusMessage != "running listed hook" {
 		t.Fatalf("hook timeout/status = %+v", hook)
 	}
-	if hook.CurrentHash != hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, 5, hook.StatusMessage) {
+	if hook.CurrentHash != hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, 5, hook.StatusMessage, nil) {
 		t.Fatalf("hash = %q, want normalized hook hash", hook.CurrentHash)
 	}
 }
@@ -780,4 +781,113 @@ func warningsContain(warnings []string, value string) bool {
 		}
 	}
 	return false
+}
+func TestHookDiscoveryParsesAdditionalContextLimitFromJSON(t *testing.T) {
+	// Mirrors Rust hooks_tests.rs hooks_file_deserializes_existing_json_shape:
+	// additionalContextLimit is parsed from hooks.json and surfaced on the
+	// v2 hooks_list contract.
+	cwd := t.TempDir()
+	hooksDir := filepath.Join(cwd, ".codex")
+	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	body := `{
+		"description": "Optional stop-time review gate for Codex Companion.",
+		"hooks": {
+			"PreToolUse": [{
+				"matcher": "^Bash$",
+				"hooks": [{
+					"type": "command",
+					"command": "python3 /tmp/pre.py",
+					"timeout": 10,
+					"statusMessage": "checking",
+					"additionalContextLimit": 4096
+				}]
+			}]
+		}
+	}`
+	sourcePath := filepath.Join(hooksDir, "hooks.json")
+	if err := os.WriteFile(sourcePath, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	service := NewHookDiscoveryService("")
+	response := service.Discover(&HookListParams{CWDs: []string{cwd}}, "")
+	if len(response.Data) != 1 || len(response.Data[0].Hooks) != 1 {
+		t.Fatalf("Discover() = %+v", response)
+	}
+	hook := response.Data[0].Hooks[0]
+	if hook.AdditionalContextLimit == nil || *hook.AdditionalContextLimit != 4096 {
+		t.Fatalf("additionalContextLimit = %#v, want 4096", hook.AdditionalContextLimit)
+	}
+	// The hash must include the limit (Rust NormalizedHookIdentity), so a hook
+	// with a different limit hashes differently.
+	withLimit := hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, hook.TimeoutSec, hook.StatusMessage, hook.AdditionalContextLimit)
+	limit := int64(1)
+	otherLimit := hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, hook.TimeoutSec, hook.StatusMessage, &limit)
+	if withLimit == otherLimit {
+		t.Fatal("additionalContextLimit must participate in the hook identity hash")
+	}
+}
+
+func TestHookDiscoveryParsesAdditionalContextLimitFromTOML(t *testing.T) {
+	// Mirrors Rust hooks_tests.rs hook_events_deserialize_from_toml_arrays_of_
+	// tables: additionalContextLimit is accepted in TOML handler tables under
+	// the user config layer.
+	home := t.TempDir()
+	body := `
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /tmp/pre.py"
+timeout = 10
+statusMessage = "checking"
+additionalContextLimit = 4096
+`
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	service := NewHookDiscoveryService(home)
+	response := service.Discover(&HookListParams{}, "")
+	if len(response.Data) != 1 || len(response.Data[0].Hooks) != 1 {
+		t.Fatalf("Discover() = %+v", response)
+	}
+	hook := response.Data[0].Hooks[0]
+	if hook.AdditionalContextLimit == nil || *hook.AdditionalContextLimit != 4096 {
+		t.Fatalf("additionalContextLimit = %#v, want 4096", hook.AdditionalContextLimit)
+	}
+}
+
+func TestHookMetadataMarshalOmitsUnsetAdditionalContextLimitLikeRust(t *testing.T) {
+	// Mirrors Rust hooks_tests.rs hook_handler_omits_unset_additional_context_
+	// limit: the field is omitted from JSON when unset.
+	metadata := HookMetadata{
+		Key:           "k",
+		EventName:     HookEventPreToolUse,
+		HandlerType:   HookHandlerCommand,
+		ExecutionMode: HookExecutionSync,
+		TimeoutSec:    1,
+		SourcePath:    "/tmp/hooks.json",
+		Source:        HookSourceUser,
+	}
+	data, err := json.Marshal(&metadata)
+	if err != nil {
+		t.Fatalf("MarshalJSON() error = %v", err)
+	}
+	if strings.Contains(string(data), "additionalContextLimit") {
+		t.Fatalf("unset additionalContextLimit leaked into JSON: %s", data)
+	}
+	metadata.AdditionalContextLimit = int64Ptr(2500)
+	data, err = json.Marshal(&metadata)
+	if err != nil {
+		t.Fatalf("MarshalJSON() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"additionalContextLimit":2500`) {
+		t.Fatalf("set additionalContextLimit missing from JSON: %s", data)
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }
