@@ -45,6 +45,52 @@ func TestModelGuardianReviewerSetsPermissionProfile(t *testing.T) {
 	}
 }
 
+// TestModelGuardianReviewerSkipsStaleScoresOverMaxToolCallLag mirrors Rust
+// extension_tests.rs approval review at, above, and after recovering from the
+// configured lag limit (#39001): the reviewer skips the model sample when the
+// latest tool call lags the latest scored tool call by more than
+// max_tool_call_lag, and recovers once the scored call catches up.
+func TestModelGuardianReviewerSkipsStaleScoresOverMaxToolCallLag(t *testing.T) {
+	calls := 0
+	reviewer := &modelGuardianReviewer{
+		agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+			calls++
+			return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`}, nil
+		}),
+		store:          state.NewReviewStore(),
+		breaker:        state.NewCircuitBreaker(),
+		scoreProgress:  map[string]*guardianScoreProgress{},
+		maxToolCallLag: 2,
+	}
+	review := func() (state.ReviewDecision, error) {
+		decision, _, err := reviewer.Review(context.Background(), "thread-lag", "turn-lag", "call-lag", state.Action{Type: "command", Command: "ls", CWD: "/repo"})
+		return decision, err
+	}
+	decision, err := review()
+	if err != nil || decision != state.DecisionApproved || calls != 1 {
+		t.Fatalf("first review = %v %v calls=%d, want approved with 1 sample", decision, err, calls)
+	}
+	progress := reviewer.scoreProgress["thread-lag"]
+	// Two tool calls run without a stored score (lag = 3-1 = 2): review proceeds.
+	progress.latestToolCall = 3
+	decision, err = review()
+	if err != nil || decision != state.DecisionApproved || calls != 2 {
+		t.Fatalf("review at lag limit = %v %v calls=%d, want approved with sample", decision, err, calls)
+	}
+	// Many tool calls run without a stored score (lag = 20-4 = 16): review skips.
+	progress.latestToolCall = 20
+	decision, err = review()
+	if err != nil || decision != state.DecisionDenied || calls != 2 {
+		t.Fatalf("review above lag = %v %v calls=%d, want denied without sampling", decision, err, calls)
+	}
+	// The scored call catches up (lag = 20-18 = 2): review proceeds again.
+	progress.latestScoredToolCall = 18
+	decision, err = review()
+	if err != nil || decision != state.DecisionApproved || calls != 3 {
+		t.Fatalf("review after recovery = %v %v calls=%d, want approved with sample", decision, err, calls)
+	}
+}
+
 func (f guardianAgentFunc) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
 	return f(ctx, request)
 }

@@ -39,7 +39,7 @@ func TestStateRuntimeOwnsRustDatabaseLifecycle(t *testing.T) {
 		db   *sql.DB
 		want int
 	}{
-		{name: "state", db: runtime.StateDB(), want: 48},
+		{name: "state", db: runtime.StateDB(), want: 49},
 		{name: "logs", db: runtime.LogsDB(), want: 2},
 		{name: "goals", db: runtime.GoalsDB(), want: 2},
 		{name: "memories", db: runtime.MemoriesDB(), want: 1},
@@ -285,7 +285,7 @@ CREATE TABLE _sqlx_migrations (
 
 func TestRuntimeMigrationInventoryMatchesFrozenRustCounts(t *testing.T) {
 	want := map[RuntimeDBKind]int{
-		RuntimeDBState:         48,
+		RuntimeDBState:         49,
 		RuntimeDBLogs:          2,
 		RuntimeDBGoals:         2,
 		RuntimeDBMemories:      1,

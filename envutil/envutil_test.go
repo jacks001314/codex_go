@@ -2,6 +2,7 @@ package envutil
 
 import (
 	"os/exec"
+	"strings"
 	"testing"
 
 	"codex_go/applypatch"
@@ -16,12 +17,15 @@ func TestIsNonInheritableEnvVarCaseInsensitiveLikeRust(t *testing.T) {
 		"openai_identity_token_file",
 		"OPENAI_WORKLOAD_IDENTITY_CONTEXT",
 		"openai_workload_identity_context",
+		CodexExecServerNoiseAuthTokenEnvVar,
+		"codex_exec_server_noise_auth_token",
+		"Codex_Exec_Server_Noise_Auth_Token",
 	} {
 		if !IsNonInheritableEnvVar(name) {
 			t.Fatalf("IsNonInheritableEnvVar(%q) = false, want true", name)
 		}
 	}
-	for _, name := range []string{"PATH", "OPENAI_API_KEY", "OPENAI_FEDERATION_RULE"} {
+	for _, name := range []string{"PATH", "OPENAI_API_KEY", "OPENAI_FEDERATION_RULE", "CODEX_EXEC_SERVER_NOISE_REGISTRY_URL"} {
 		if IsNonInheritableEnvVar(name) {
 			t.Fatalf("IsNonInheritableEnvVar(%q) = true, want false", name)
 		}
@@ -34,6 +38,8 @@ func TestScrubSliceAndCommandEnv(t *testing.T) {
 		"OPENAI_FEDERATION_RULE_ID=rule-1",
 		"openai_identity_token_file=C:\\token",
 		"OPENAI_WORKLOAD_IDENTITY_CONTEXT=ctx-1",
+		CodexExecServerNoiseAuthTokenEnvVar + "=configured-noise-token",
+		"codex_exec_server_noise_auth_token=case-variant-noise-token",
 		"HOME=C:\\home",
 	})
 	if len(scrubbed) != 2 || scrubbed[0] != "PATH=C:\\bin" || scrubbed[1] != "HOME=C:\\home" {
@@ -41,10 +47,51 @@ func TestScrubSliceAndCommandEnv(t *testing.T) {
 	}
 
 	cmd := exec.Command("echo", "hi")
-	cmd.Env = []string{"OPENAI_FEDERATION_RULE_ID=inherited"}
+	cmd.Env = []string{"OPENAI_FEDERATION_RULE_ID=inherited", "Codex_Exec_Server_Noise_Auth_Token=inherited"}
 	ScrubCommandEnv(cmd)
 	if len(cmd.Env) != 0 {
 		t.Fatalf("ScrubCommandEnv() = %#v, want empty", cmd.Env)
+	}
+}
+
+// TestScrubCommandEnvRemovesNoiseAuthTokenAfterPolicyOverrides mirrors Rust
+// command_hook_does_not_expose_configured_noise_auth_token (#38941): a shell
+// environment policy that explicitly sets the Noise auth token (or a case
+// variant) must still be scrubbed before the command or hook runs.
+func TestScrubCommandEnvRemovesNoiseAuthTokenAfterPolicyOverrides(t *testing.T) {
+	for _, name := range []string{
+		CodexExecServerNoiseAuthTokenEnvVar,
+		strings.ToLower(CodexExecServerNoiseAuthTokenEnvVar),
+		strings.ToUpper(CodexExecServerNoiseAuthTokenEnvVar),
+	} {
+		cmd := exec.Command("echo", "hi")
+		cmd.Env = []string{
+			name + "=configured-noise-token",
+			"CODEX_HOOK_SAFE_ENV=visible",
+		}
+		ScrubCommandEnv(cmd)
+		for _, pair := range cmd.Env {
+			pairName := pair
+			for i := 0; i < len(pair); i++ {
+				if pair[i] == '=' {
+					pairName = pair[:i]
+					break
+				}
+			}
+			if IsNonInheritableEnvVar(pairName) {
+				t.Fatalf("policy override leaked %q through the scrubber", pair)
+			}
+		}
+		found := false
+		for _, pair := range cmd.Env {
+			if pair == "CODEX_HOOK_SAFE_ENV=visible" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("safe hook env was dropped: %#v", cmd.Env)
+		}
 	}
 }
 

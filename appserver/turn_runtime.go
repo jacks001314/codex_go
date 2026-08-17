@@ -7326,7 +7326,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 		hostSkillMetadata,
 		executorMetadata,
 		promptctx.AvailableSkillsRenderOptions{
-			Budget:                   promptctx.DefaultSkillMetadataBudget(r.skillContextWindowForTurn(cfg, params)),
+			Budget:                   skillMetadataBudgetForConfig(cfg, r.skillContextWindowForTurn(cfg, params)),
 			IncludeUsageInstructions: includeUsageInstructions,
 		},
 	)

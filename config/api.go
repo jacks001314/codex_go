@@ -1579,6 +1579,23 @@ func (s *ConfigService) loadManagedConfigLayerFromEnv() {
 	}
 	override, ok := os.LookupEnv(appServerManagedConfigPathEnv)
 	if !ok || strings.TrimSpace(override) == "" {
+		// Rust #38947: on Windows the default CODEX_HOME/managed_config.toml is
+		// ignored. When the deprecated file still exists, surface the startup
+		// warning directing users to the supported locations.
+		if shouldIgnoreDefaultManagedConfig("") {
+			deprecated := managedConfigPath(s.codexHome, "")
+			if pathExists(deprecated) {
+				details := fmt.Sprintf(
+					"Ignoring deprecated managed config file at %s; CODEX_HOME/managed_config.toml is no longer supported on Windows. Use %%ProgramData%%\\OpenAI\\Codex\\requirements.toml for enforced settings or config.toml for defaults.",
+					deprecated,
+				)
+				s.warnings = append(s.warnings, ConfigWarningNotification{
+					Summary: "Ignoring deprecated managed config file.",
+					Details: &details,
+					Path:    &deprecated,
+				})
+			}
+		}
 		return
 	}
 	path := managedConfigPath(s.codexHome, override)

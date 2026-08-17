@@ -72,6 +72,10 @@ const (
 type SkillMetadataBudget struct {
 	Kind  SkillMetadataBudgetKind
 	Limit int
+	// Configured marks a budget sourced from [skills].max_context_tokens
+	// (Rust #38978). Configured budgets render the plain Rust warnings instead
+	// of the context-window-percent variant.
+	Configured bool
 }
 
 type AvailableSkillsRenderOptions struct {
@@ -135,6 +139,26 @@ func DefaultSkillMetadataBudget(contextWindow int64) SkillMetadataBudget {
 		return SkillMetadataBudget{Kind: SkillMetadataBudgetTokens, Limit: limit}
 	}
 	return SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: DefaultSkillMetadataCharBudget}
+}
+
+// MaxConfiguredSkillMetadataTokenBudget caps [skills].max_context_tokens at
+// 10,000 tokens (Rust MAX_CONFIGURED_SKILL_METADATA_TOKEN_BUDGET, #38978).
+const MaxConfiguredSkillMetadataTokenBudget = 10_000
+
+// ConfiguredSkillMetadataBudget returns the token budget for the available-
+// skills catalog from an explicit [skills].max_context_tokens value, capped at
+// MaxConfiguredSkillMetadataTokenBudget. A non-positive value yields the zero
+// budget so callers fall back to the context-window default (mirrors Rust
+// NonZeroUsize).
+func ConfiguredSkillMetadataBudget(maxTokens int) SkillMetadataBudget {
+	if maxTokens <= 0 {
+		return SkillMetadataBudget{}
+	}
+	limit := maxTokens
+	if limit > MaxConfiguredSkillMetadataTokenBudget {
+		limit = MaxConfiguredSkillMetadataTokenBudget
+	}
+	return SkillMetadataBudget{Kind: SkillMetadataBudgetTokens, Limit: limit, Configured: true}
 }
 
 func RenderAvailableSkills(skills []InstructionsSkillMetadata, budget SkillMetadataBudget) *AvailableSkills {
@@ -944,7 +968,7 @@ func skillRenderWarning(report *SkillRenderReport, budget SkillMetadataBudget) *
 			verb = "was"
 		}
 		prefix := "Exceeded skills context budget."
-		if budget.Kind == SkillMetadataBudgetTokens {
+		if budget.Kind == SkillMetadataBudgetTokens && !budget.Configured {
 			prefix = fmt.Sprintf("Exceeded skills context budget of %d%%.", SkillMetadataContextWindowPercent)
 		}
 		message := fmt.Sprintf("%s All skill descriptions were removed and %d additional %s %s not included in the model-visible skills list.", prefix, report.OmittedCount, word, verb)
@@ -952,7 +976,7 @@ func skillRenderWarning(report *SkillRenderReport, budget SkillMetadataBudget) *
 	}
 	if report.TotalCount > 0 && (report.TruncatedDescriptionChars+report.TotalCount-1)/report.TotalCount > SkillDescriptionWarningThreshold {
 		message := SkillDescriptionTruncatedWarning
-		if budget.Kind == SkillMetadataBudgetTokens {
+		if budget.Kind == SkillMetadataBudgetTokens && !budget.Configured {
 			message = SkillDescriptionTruncatedWarningWithPercent
 		}
 		return &message

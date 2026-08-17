@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"codex_go/config"
 	promptctx "codex_go/prompt"
@@ -26,12 +27,13 @@ const (
 // turn's eligible resources, seen set, and ranked selections used to emit
 // invocation metrics.
 type skillShadowThreadState struct {
-	mu       sync.Mutex
-	recent   []string
-	turnID   string
-	eligible map[string]bool
-	seen     map[string]bool
-	ranked   []skillShadowRankedSelection
+	mu          sync.Mutex
+	recent      []string
+	turnID      string
+	eligible    map[string]bool
+	seen        map[string]bool
+	ranked      []skillShadowRankedSelection
+	taskContext *promptctx.ShadowTaskContext
 }
 
 type skillShadowRankedSelection struct {
@@ -48,7 +50,7 @@ func (r *RuntimeRouter) skillShadowThreadStateFor(threadID string) *skillShadowT
 	}
 	state := r.skillShadowState[threadID]
 	if state == nil {
-		state = &skillShadowThreadState{}
+		state = &skillShadowThreadState{taskContext: promptctx.NewShadowTaskContext()}
 		r.skillShadowState[threadID] = state
 	}
 	return state
@@ -88,7 +90,18 @@ func (r *RuntimeRouter) runSkillShadowSelection(threadID string, turnID string, 
 		}
 	}
 	state.mu.Unlock()
-	observations := promptctx.RunSkillShadowSelection(query, documents, recentSkillIDs)
+	shadowQuery := promptctx.ShadowQuery{Text: query, Truncated: queryTruncated}
+	state.mu.Lock()
+	taskContext := state.taskContext
+	state.mu.Unlock()
+	snapshot := taskContext.BeginTurn(turnID, shadowQuery, skillShadowIsSubstantive(query, params))
+	taskRecentIDs := make([]int, 0, len(snapshot.RecentSkills))
+	for _, resource := range snapshot.RecentSkills {
+		if index, ok := eligibleByResource[resource]; ok {
+			taskRecentIDs = append(taskRecentIDs, index)
+		}
+	}
+	observations := promptctx.RunSkillShadowSelectionWithTaskContext(shadowQuery, documents, recentSkillIDs, snapshot.Query, taskRecentIDs)
 	eligible := make(map[string]bool, len(resources))
 	for _, resource := range resources {
 		eligible[resource] = true
@@ -108,6 +121,19 @@ func (r *RuntimeRouter) runSkillShadowSelection(threadID string, turnID string, 
 	state.seen = map[string]bool{}
 	state.ranked = ranked
 	state.mu.Unlock()
+	// Explicit intent is a relevance signal for future turns even when the
+	// subsequent prompt read fails; predictions were frozen before recording it
+	// (Rust ShadowSelectionExperiment::run).
+	for _, group := range groups {
+		for _, skill := range group {
+			if !skill.AllowsImplicitInvocation() {
+				continue
+			}
+			if explicitlySelected[strings.ToLower(strings.TrimSpace(skill.Name))] {
+				taskContext.Record(turnID, skillShadowResourceKey(skill))
+			}
+		}
+	}
 	if r.services.SkillShadowMetrics == nil {
 		return
 	}
@@ -152,6 +178,9 @@ func (r *RuntimeRouter) recordSkillShadowInvocation(threadID string, turnID stri
 	}
 	state.seen[resource] = true
 	state.recent = skillShadowRecordRecent(state.recent, resource)
+	if state.taskContext != nil {
+		state.taskContext.Record(turnID, resource)
+	}
 	if r.services.SkillShadowMetrics == nil {
 		return
 	}
@@ -302,6 +331,40 @@ func skillShadowQuery(params *turn.TurnStartParams) (string, bool) {
 		end--
 	}
 	return query[:end], true
+}
+
+// skillShadowIsSubstantive mirrors Rust ShadowTaskContext::is_substantive
+// (#39008): explicit skill/mention intents are always substantive, otherwise the
+// normalized request text must not be a bare continuation/acknowledgement.
+func skillShadowIsSubstantive(query string, params *turn.TurnStartParams) bool {
+	if params != nil {
+		for _, input := range params.Input {
+			if (input.Type == "skill" || input.Type == "mention") && strings.TrimSpace(input.Name) != "" {
+				return true
+			}
+		}
+	}
+	normalized := skillShadowNormalizeSubstantiveText(query)
+	return !skillShadowSubstantiveIgnores[normalized]
+}
+
+func skillShadowNormalizeSubstantiveText(text string) string {
+	parts := make([]string, 0)
+	for _, part := range strings.FieldsFunc(text, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if part != "" {
+			parts = append(parts, strings.ToLower(part))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+var skillShadowSubstantiveIgnores = map[string]bool{
+	"": true, "yes": true, "yep": true, "yeah": true, "ok": true, "okay": true,
+	"sure": true, "go": true, "go ahead": true, "continue": true, "please continue": true,
+	"proceed": true, "do it": true, "do that": true, "try again": true, "retry": true,
+	"thanks": true, "thank you": true,
 }
 
 func skillShadowReductionBPS(catalog, selected int) int {

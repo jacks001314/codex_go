@@ -670,6 +670,7 @@ type Thread struct {
 	Ephemeral            bool              `json:"ephemeral"`
 	Section              *ThreadSection    `json:"section"`
 	SectionEnteredAt     *int64            `json:"sectionEnteredAt"`
+	ProjectID            *string           `json:"projectId"`
 	HistoryMode          ThreadHistoryMode `json:"historyMode"`
 	ModelProvider        string            `json:"modelProvider"`
 	CreatedAt            int64             `json:"createdAt"`
@@ -707,6 +708,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		Ephemeral            bool              `json:"ephemeral"`
 		Section              *ThreadSection    `json:"section"`
 		SectionEnteredAt     *int64            `json:"sectionEnteredAt"`
+		ProjectID            *string           `json:"projectId"`
 		HistoryMode          ThreadHistoryMode `json:"historyMode"`
 		ModelProvider        string            `json:"modelProvider"`
 		CreatedAt            int64             `json:"createdAt"`
@@ -733,6 +735,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		Ephemeral:            t.Ephemeral,
 		Section:              t.Section,
 		SectionEnteredAt:     t.SectionEnteredAt,
+		ProjectID:            t.ProjectID,
 		HistoryMode:          historyMode,
 		ModelProvider:        t.ModelProvider,
 		CreatedAt:            t.CreatedAt,
@@ -1288,6 +1291,7 @@ type ThreadStartParams struct {
 	MultiAgentMode          MultiAgentMode           `json:"multiAgentMode,omitempty"`
 	HistoryMode             ThreadHistoryMode        `json:"historyMode,omitempty"`
 	ThreadSource            *ThreadSource            `json:"threadSource,omitempty"`
+	ProjectID               *string                  `json:"projectId,omitempty"`
 	RuntimeWorkspaceRoots   []string                 `json:"runtimeWorkspaceRoots,omitempty"`
 	SelectedCapabilityRoots []SelectedCapabilityRoot `json:"selectedCapabilityRoots,omitempty"`
 	Environments            []map[string]any         `json:"environments,omitempty"`
@@ -2093,6 +2097,11 @@ type ThreadApproveGuardianDeniedActionResponse struct{}
 type ThreadMetadataUpdateParams struct {
 	ThreadID string                      `json:"threadId"`
 	GitInfo  *ThreadMetadataGitInfoPatch `json:"gitInfo,omitempty"`
+	// ProjectID is the project assignment as a raw JSON value: absent (nil)
+	// means no change, JSON null means clear, and a JSON string sets the
+	// project. Mirrors Rust Option<StoreClearableField<String>> (#38940); a
+	// pointer type cannot distinguish JSON null from absence.
+	ProjectID json.RawMessage `json:"projectId,omitempty"`
 }
 
 func (p *ThreadMetadataUpdateParams) Validate() error {
@@ -5052,9 +5061,18 @@ func MetadataPatchToSessionWithExisting(params *ThreadMetadataUpdateParams, exis
 	if err := params.Validate(); err != nil {
 		return session.MetadataPatch{}, err
 	}
+	_, projectChanged, err := MetadataProjectUpdate(params)
+	if err != nil {
+		return session.MetadataPatch{}, err
+	}
 	patch := session.MetadataPatch{}
 	if params.GitInfo == nil {
-		return session.MetadataPatch{}, jsonRPCInvalidRequest("thread metadata update must include at least one field")
+		// Rust #38940: project_id alone is a valid metadata update (the Rust
+		// guard is `git_info.is_none() && project_id.is_none()`).
+		if !projectChanged {
+			return session.MetadataPatch{}, jsonRPCInvalidRequest("thread metadata update must include at least one field")
+		}
+		return patch, nil
 	}
 	if !params.GitInfo.SHA.Set && !params.GitInfo.Branch.Set && !params.GitInfo.OriginURL.Set {
 		return session.MetadataPatch{}, jsonRPCInvalidRequest("gitInfo must include at least one field")
@@ -5082,6 +5100,31 @@ func MetadataPatchToSessionWithExisting(params *ThreadMetadataUpdateParams, exis
 		patch.Git["origin_url"] = value
 	}
 	return patch, nil
+}
+
+// MetadataProjectUpdate decodes the thread metadata projectId raw value:
+// (nil, false) when absent (no change), (nil, true) when JSON null (clear),
+// and (value, true) when a JSON string (set). Mirrors Rust
+// Option<StoreClearableField<String>> parsing in thread_processor.rs (#38940).
+func MetadataProjectUpdate(params *ThreadMetadataUpdateParams) (*string, bool, error) {
+	if params == nil || len(params.ProjectID) == 0 || string(bytes.TrimSpace(params.ProjectID)) == "" {
+		return nil, false, nil
+	}
+	raw := bytes.TrimSpace(params.ProjectID)
+	if bytes.Equal(raw, []byte("null")) {
+		return nil, true, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, false, jsonRPCInvalidRequest(fmt.Sprintf("Invalid request: projectId must be a string or null: %v", err))
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		// An empty string clears the assignment (Rust treats empty as
+		// Some(None)).
+		return nil, true, nil
+	}
+	return &value, true, nil
 }
 
 func threadSectionFromRecord(record *session.Record) *ThreadSection {

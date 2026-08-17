@@ -246,12 +246,19 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		}
 	}
 	if opts != nil && opts.IncludeManagedConfig {
-		managedValues, exists, err := loadConfigFileIfExists(managedConfigPath(codexHome, opts.ManagedConfigPath))
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			mergeConfigMaps(values, managedValues)
+		if shouldIgnoreDefaultManagedConfig(opts.ManagedConfigPath) {
+			// Rust #38947: on Windows the default CODEX_HOME/managed_config.toml
+			// is no longer loaded; explicit managed-config path overrides are
+			// preserved. The startup warning for an existing deprecated file is
+			// surfaced by the app-server ConfigService.
+		} else {
+			managedValues, exists, err := loadConfigFileIfExists(managedConfigPath(codexHome, opts.ManagedConfigPath))
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				mergeConfigMaps(values, managedValues)
+			}
 		}
 	}
 	requirements, err := LoadRequirementsFile(filepath.Join(codexHome, "requirements.toml"))
@@ -271,7 +278,32 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			requirements = cloudRequirements
 		}
 	}
+	applyManagedApprovalsReviewerGuardianV2Override(values, requirements)
 	return &Config{Values: values, Requirements: requirements}, nil
+}
+
+// applyManagedApprovalsReviewerGuardianV2Override mirrors Rust
+// ConfigRequirementsToml::apply_to_config / core config requirements
+// apply_to_config (#39005): when allowed_approvals_reviewers is set and does not
+// include the user reviewer, Guardian V2 is disabled so it cannot override a
+// managed approval-reviewer policy that excludes the user reviewer. Lists that
+// keep "user" allowed, or requirements without the reviewer list (e.g. legacy
+// guardian_approval-only requirements), preserve the setting.
+func applyManagedApprovalsReviewerGuardianV2Override(values map[string]any, requirements *ConfigRequirements) {
+	if values == nil || requirements == nil || requirements.AllowedApprovalsReviewers == nil {
+		return
+	}
+	for _, reviewer := range requirements.AllowedApprovalsReviewers {
+		if reviewer == ApprovalsReviewerUser {
+			return
+		}
+	}
+	featuresTable, ok := values["features"].(map[string]any)
+	if !ok {
+		featuresTable = map[string]any{}
+		values["features"] = featuresTable
+	}
+	featuresTable["guardianv2"] = false
 }
 
 func LoadEffective(codexHome string, rawOverrides, enableFeatures, disableFeatures []string, cwd ...string) (*Config, error) {
@@ -702,7 +734,7 @@ var knownStrictMCPServerFields = map[string]bool{"command": true, "args": true, 
 var knownStrictFeatureFields = map[string]bool{
 	"mcp_2026_07_28": true,
 	"tool_registry":  true,
-	"shell_tool":     true, "secret_auth_storage": true, "unified_exec": true, "shell_zsh_fork": true, "unified_exec_zsh_fork": true, "shell_snapshot": true, "deferred_executor": true, "code_mode": true, "code_mode_host": true, "code_mode_only": true, "standalone_web_search": true, "runtime_metrics": true, "memories": true, "external_agent_memory_import": true, "local_thread_store_compression": true, "background_paginated_rollout_migration": true, "chronicle": true, "apply_patch_streaming_events": true, "exec_permission_approvals": true, "hooks": true, "request_permissions_tool": true, "use_legacy_landlock": true, "enable_request_compression": true, "network_proxy": true, "respect_system_proxy": true, "multi_agent": true, "multi_agent_v2": true, "enable_fanout": true, "apps": true, "enable_mcp_apps": true, "non_prefixed_mcp_tool_names": true, "tool_suggest": true, "recommended_plugins": true, "plugins": true, "in_app_browser": true, "in_app_updates": true, "browser_use": true, "browser_use_full_cdp_access": true, "browser_use_external": true, "computer_use": true, "remote_plugin": true, "plugin_sharing": true, "image_generation": true, "imagegenext": true, "view_image": true, "unified_image_budget": true, "item_ids": true, "concurrent_reasoning_summaries": true, "skill_mcp_dependency_install": true, "skill_search": true, "mentions_v2": true, "default_mode_request_user_input": true, "terminal_visualization_instructions": true, "guardian_approval": true, "goals": true, "token_budget": true, "rollout_budget": true, "current_time_reminder": true, "tool_call_mcp_elicitation": true, "auth_elicitation": true, "personality": true, "artifact": true, "fast_mode": true, "realtime_conversation": true, "prevent_idle_sleep": true, "remote_compaction_v2": true, "use_agent_identity": true, "workspace_dependencies": true,
+	"shell_tool":     true, "secret_auth_storage": true, "unified_exec": true, "shell_zsh_fork": true, "unified_exec_zsh_fork": true, "shell_snapshot": true, "deferred_executor": true, "code_mode": true, "code_mode_host": true, "code_mode_only": true, "standalone_web_search": true, "runtime_metrics": true, "memories": true, "external_agent_memory_import": true, "local_thread_store_compression": true, "background_paginated_rollout_migration": true, "chronicle": true, "apply_patch_streaming_events": true, "exec_permission_approvals": true, "hooks": true, "request_permissions_tool": true, "use_legacy_landlock": true, "enable_request_compression": true, "network_proxy": true, "respect_system_proxy": true, "multi_agent": true, "multi_agent_v2": true, "enable_fanout": true, "apps": true, "enable_mcp_apps": true, "non_prefixed_mcp_tool_names": true, "tool_suggest": true, "recommended_plugins": true, "plugins": true, "in_app_browser": true, "in_app_updates": true, "browser_use": true, "browser_use_full_cdp_access": true, "browser_use_external": true, "computer_use": true, "remote_plugin": true, "plugin_sharing": true, "image_generation": true, "imagegenext": true, "view_image": true, "unified_image_budget": true, "item_ids": true, "concurrent_reasoning_summaries": true, "skill_mcp_dependency_install": true, "skill_search": true, "mentions_v2": true, "default_mode_request_user_input": true, "terminal_visualization_instructions": true, "guardian_approval": true, "guardian_enhanced_node_repl_transcripts": true, "guardian_node_repl_transcript_images": true, "guardian_reuse_parent_compaction": true, "guardianv2": true, "goals": true, "token_budget": true, "rollout_budget": true, "current_time_reminder": true, "tool_call_mcp_elicitation": true, "auth_elicitation": true, "personality": true, "artifact": true, "fast_mode": true, "realtime_conversation": true, "prevent_idle_sleep": true, "remote_compaction_v2": true, "use_agent_identity": true, "workspace_dependencies": true,
 }
 
 func ProjectConfigPath(cwd string) string {
@@ -776,6 +808,129 @@ func (c *Config) IncludeSkillInstructions() bool {
 		return true
 	}
 	return include
+}
+
+// SkillMaxContextTokens returns the configured [skills].max_context_tokens
+// budget override for the available-skills catalog, if any. Only positive
+// values count (mirrors Rust NonZeroUsize, #38978); the catalog rendering caps
+// the value at 10,000 tokens.
+func (c *Config) SkillMaxContextTokens() (int, bool) {
+	if c == nil || c.Values == nil {
+		return 0, false
+	}
+	skills, ok := c.Values["skills"].(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	raw, ok := skills["max_context_tokens"]
+	if !ok {
+		return 0, false
+	}
+	switch typed := raw.(type) {
+	case int64:
+		if typed > 0 {
+			return int(typed), true
+		}
+	case float64:
+		if typed > 0 && typed == float64(int64(typed)) {
+			return int(typed), true
+		}
+	case int:
+		if typed > 0 {
+			return typed, true
+		}
+	case string:
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64); err == nil && parsed > 0 {
+			return int(parsed), true
+		}
+	}
+	return 0, false
+}
+
+// GuardianV2MaxParentCompactionTokens returns the configured
+// [features.guardianv2].max_parent_compaction_tokens bound (default 25,000,
+// clamped to 100..100,000), mirroring Rust
+// GuardianV2Config::max_parent_compaction_tokens (#38980).
+func (c *Config) GuardianV2MaxParentCompactionTokens() int {
+	const (
+		defaultParentCompactionTokens = 25_000
+		minParentCompactionTokens     = 100
+		maxParentCompactionTokens     = 100_000
+	)
+	if c == nil || c.Values == nil {
+		return defaultParentCompactionTokens
+	}
+	featuresTable, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return defaultParentCompactionTokens
+	}
+	guardianV2, ok := featuresTable["guardianv2"].(map[string]any)
+	if !ok {
+		return defaultParentCompactionTokens
+	}
+	value := int64(0)
+	switch typed := guardianV2["max_parent_compaction_tokens"].(type) {
+	case int64:
+		value = typed
+	case int:
+		value = int64(typed)
+	case float64:
+		if typed == float64(int64(typed)) {
+			value = int64(typed)
+		}
+	case string:
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64); err == nil {
+			value = parsed
+		}
+	}
+	if value <= 0 {
+		return defaultParentCompactionTokens
+	}
+	if value < minParentCompactionTokens {
+		value = minParentCompactionTokens
+	}
+	if value > maxParentCompactionTokens {
+		value = maxParentCompactionTokens
+	}
+	return int(value)
+}
+
+// GuardianV2MaxToolCallLag returns the configured
+// [features.guardianv2].max_tool_call_lag bound (default 3; non-positive or
+// unset values fall back to the default), mirroring Rust
+// GuardianV2Config::max_tool_call_lag (#39001).
+func (c *Config) GuardianV2MaxToolCallLag() int {
+	const defaultMaxToolCallLag = 3
+	if c == nil || c.Values == nil {
+		return defaultMaxToolCallLag
+	}
+	featuresTable, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return defaultMaxToolCallLag
+	}
+	guardianV2, ok := featuresTable["guardianv2"].(map[string]any)
+	if !ok {
+		return defaultMaxToolCallLag
+	}
+	value := int64(0)
+	switch typed := guardianV2["max_tool_call_lag"].(type) {
+	case int64:
+		value = typed
+	case int:
+		value = int64(typed)
+	case float64:
+		if typed == float64(int64(typed)) {
+			value = int64(typed)
+		}
+	case string:
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64); err == nil {
+			value = parsed
+		}
+	}
+	if value <= 0 {
+		return defaultMaxToolCallLag
+	}
+	return int(value)
 }
 
 func (c *Config) SkillShadowSelectionEnabled() bool {
@@ -985,6 +1140,20 @@ func (c *Config) FeatureSettingsWithLegacyUsages() (map[string]bool, []featurefl
 		requirementSettings, _ := featureflags.ResolveSettings(requirementValues)
 		for key, enabled := range requirementSettings {
 			settings[key] = enabled
+		}
+	}
+	if c.Requirements != nil {
+		if requirements := c.Requirements; requirements.AllowedApprovalsReviewers != nil {
+			userAllowed := false
+			for _, reviewer := range requirements.AllowedApprovalsReviewers {
+				if reviewer == ApprovalsReviewerUser {
+					userAllowed = true
+					break
+				}
+			}
+			if !userAllowed {
+				settings["guardianv2"] = false
+			}
 		}
 	}
 	return settings, usages
@@ -1293,6 +1462,39 @@ func managedConfigPath(codexHome string, override string) string {
 		return filepath.Join(codexHome, "managed_config.toml")
 	}
 	return filepath.Join(string(filepath.Separator), "etc", "codex", "managed_config.toml")
+}
+
+// shouldIgnoreDefaultManagedConfig reports whether the default legacy
+// managed_config.toml must be ignored for this load. Mirrors Rust #38947: on
+// Windows, when no explicit managed-config path is configured, the default
+// CODEX_HOME/managed_config.toml is no longer loaded (explicit overrides and
+// Unix legacy support are preserved).
+func shouldIgnoreDefaultManagedConfig(override string) bool {
+	return shouldIgnoreDefaultManagedConfigForOS(override, runtime.GOOS == "windows")
+}
+
+func shouldIgnoreDefaultManagedConfigForOS(override string, isWindows bool) bool {
+	if strings.TrimSpace(override) != "" {
+		return false
+	}
+	return isWindows
+}
+
+// HasLocalManagedConfiguration reports whether local managed configuration is
+// present. Mirrors Rust loader::has_local_managed_configuration (#38947): on
+// Windows only the system requirements file
+// (%ProgramData%\OpenAI\Codex\requirements.toml) counts, while Unix also
+// honors the legacy /etc/codex/managed_config.toml default.
+func HasLocalManagedConfiguration(codexHome string) bool {
+	if !shouldIgnoreDefaultManagedConfig("") {
+		if pathExists(managedConfigPath(codexHome, "")) {
+			return true
+		}
+	}
+	if pathExists(filepath.Join(codexHome, "requirements.toml")) {
+		return true
+	}
+	return false
 }
 
 // ProjectConfigEnabled reports whether the effective project config for cwd is

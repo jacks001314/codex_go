@@ -6,10 +6,11 @@
 >
 > 基线：
 > - Rust（上游）：`D:\qax\reagent\dev\git\codex`，冻结目标
->   `6c108912eeacabfc82723bf44f8a23f6e2f86585`（#38902），当前无新漂移。
+>   `21cfd369efca2df70c904c580b2e7e2e3eddb3c3`（#38940/#38941/#38942/#38947/
+>   #38978/#38980/#38987/#38990，sync18 更新），当前无新漂移。
 > - Go：`D:\qax\reagent\dev\codex_go`，对齐到同一基线。
-> - 契约：`parity/contracts/manifest.json` 30 个契约 complete 且带 verifier；
->   `parity.json` 113 个 done 项；L0/L1/L2 门禁在冻结基线全绿。
+> - 契约：`parity/contracts/manifest.json` 47 个契约 complete 且带 verifier；
+>   `parity.json` 131 个 done 项；L0/L1/L2 门禁在冻结基线全绿。
 
 ## 一、总体结论
 

@@ -1,47 +1,770 @@
 {
-  "schemaVersion": 1,
-  "targetRustCommit": "1f41cc5d92722748e45cae9cecc6d883a4e7cbb1",
-  "contracts": [
-    {"id":"features","kind":"source-surface","rustPaths":["features/src/lib.rs"],"goPaths":["features/features.go"],"phase":"P1","status":"complete","verifier":"TestRustFeatureKeySurfaceAgainstGo"},
-    {"id":"tool-schema-policy","kind":"shared-fixtures","rustPaths":["tools/tests/fixtures/json_schema_policy"],"goPaths":["jsonschema","mcp","parity"],"phase":"P1","status":"complete","verifier":"TestToolJSONSchemaPolicyFixturesMatchRust;TestToolJSONSchemaPolicyOversizedCompaction"},
-    {"id":"cli","kind":"source-surface","rustPaths":["cli/src/main.rs"],"goPaths":["cli"],"phase":"P1","status":"complete","verifier":"TestRustCliSubcommandSurfaceAgainstGoParser"},
-    {"id":"app-server-schema-stable","kind":"generated-protocol","rustPaths":["app-server-protocol/schema/precomputed/app-server-exports-stable.json.zst"],"goPaths":["appserver/precomputed_exports.go","appserver/schema/precomputed/app-server-exports-stable.json.zst"],"phase":"P1","status":"complete","verifier":"TestPrecomputedExportsAreWrittenToDiskLikeRust"},
-    {"id":"app-server-schema-experimental","kind":"generated-protocol","rustPaths":["app-server-protocol/schema/precomputed/app-server-exports-experimental.json.zst"],"goPaths":["appserver/precomputed_exports.go","appserver/schema/precomputed/app-server-exports-experimental.json.zst"],"phase":"P1","status":"complete","verifier":"TestPrecomputedExperimentalExportsAreWrittenToDiskLikeRust"},
-    {"id":"exec-server-protocol","kind":"wire-protocol","rustPaths":["exec-server-protocol/src/protocol.rs"],"goPaths":["execserver"],"phase":"P1","status":"complete","verifier":"TestRustExecServerProtocolSurfaceAgainstGo;TestRustProcessSandboxTypeSurfaceAgainstGo"},
-    {"id":"state-migrations","kind":"sqlite-schema","rustPaths":["state/migrations","state/logs_migrations","state/goals_migrations","state/memory_migrations","state/thread_history_migrations"],"goPaths":["state/migrations","state/migrations.go"],"phase":"P2","status":"complete","verifier":"TestStateMigrationsMatchRustTarget"},
-    {"id":"config-schema-surface","kind":"source-surface","rustPaths":["core/config.schema.json"],"goPaths":["config","parity"],"phase":"P1","status":"complete","verifier":"TestRustConfigSchemaSurfaceAgainstGo"},
-    {"id":"config-parse-shared-fixtures","kind":"shared-fixtures","rustPaths":["config/src/config_toml.rs","config/src/merge_tests.rs","model-provider-info/src/lib.rs"],"goPaths":["config","model","parity"],"phase":"P1","status":"complete","verifier":"TestRustConfigParseSamplesRunInGo;TestRustModelProviderValidationSamplesRunInGo;TestRustConfigMergeKeyAliasSamplesRunInGo"},
-    {"id":"remote-sandbox-config-shared-fixtures","kind":"shared-fixtures","rustPaths":["config/src/config_requirements.rs"],"goPaths":["config","parity"],"phase":"P2","status":"complete","verifier":"TestRustRemoteSandboxConfigSamplesRunInGo"},
-    {"id":"image-preparation-dimensions","kind":"shared-fixtures","rustPaths":["core/src/image_preparation_tests.rs","utils/image/src/lib.rs"],"goPaths":["eventmap","appserver","parity"],"phase":"P2","status":"complete","verifier":"TestRustImagePreparationDimensionSamplesRunInGo;TestPrepareImagePrepResizesLargeImagesLikeRust;TestRuntimeRouterTurnStartPreparesImagesAndEmitsResizeNoticeLikeRust"},
-    {"id":"exec-apply-patch-freeform","kind":"shared-fixtures","rustPaths":["exec/tests/suite/apply_patch.rs","exec/tests/fixtures/apply_patch_freeform_final.txt"],"goPaths":["applypatch","parity"],"phase":"P2","status":"complete","verifier":"TestExecApplyPatchFreeformFixtureMatchesRust"},
-    {"id":"collaboration-mode-templates","kind":"shared-fixtures","rustPaths":["collaboration-mode-templates/templates/default.md","collaboration-mode-templates/templates/plan.md","models-manager/src/collaboration_mode_presets.rs"],"goPaths":["tui/chatwidget","appserver","parity"],"phase":"P2","status":"complete","verifier":"TestRustCollaborationModeTemplatesMatchGo"},
-    {"id":"hooks-command-input-schemas","kind":"shared-fixtures","rustPaths":["hooks/schema/generated","hooks/src/schema.rs"],"goPaths":["appserver","parity"],"phase":"P2","status":"complete","verifier":"TestRustHooksCommandSchemasCoverGoInputSurface"},
-    {"id":"hooks-command-output-schemas","kind":"shared-fixtures","rustPaths":["hooks/schema/generated","hooks/src/schema.rs"],"goPaths":["appserver","parity"],"phase":"P2","status":"complete","verifier":"TestRustHooksCommandOutputSchemasCoverGoParseSurface"},
-    {"id":"http-client-ca-fixtures","kind":"shared-fixtures","rustPaths":["http-client/tests/fixtures"],"goPaths":["network","parity"],"phase":"P1","status":"complete","verifier":"TestRustHTTPClientCAFixturesLoadInGo"},
-    {"id":"backend-task-details-fixtures","kind":"shared-fixtures","rustPaths":["backend-client/tests/fixtures"],"goPaths":["chatgptapi","parity"],"phase":"P1","status":"complete","verifier":"TestBackendTaskDetailsFixturesMatchRust"},
-    {"id":"apply-patch-scenarios","kind":"shared-fixtures","rustPaths":["apply-patch/tests/fixtures/scenarios"],"goPaths":["applypatch","parity"],"phase":"P1","status":"complete","verifier":"TestApplyPatchScenariosMatchRustFixtures"},
-    {"id":"apply-patch-differential-oracle","kind":"differential-oracle","rustPaths":["apply-patch/src"],"goPaths":["applypatch","parity"],"phase":"P1","status":"complete","verifier":"TestApplyPatchDifferentialAgainstRustOracle"},
-    {"id":"rollout-layout","kind":"durable-data","rustPaths":["rollout/src/recorder.rs","rollout/src/session_index.rs"],"goPaths":["rollout/rollout.go","rollout/projection.go","rollout/lineage_record.go","rollout/session_index.go","session/store.go"],"phase":"P3","status":"complete","verifier":"TestRouterPaginatedForkPersistsPhysicalHistoryReferenceOnly"},
-    {"id":"tui-snapshots","kind":"terminal-ui","rustPaths":["tui/src"],"goPaths":["tui"],"phase":"P7","status":"complete","verifier":"TestRustTUISnapshotManifestCoversPrioritySurfaces"},
-    {"id":"story-recording-replay","kind":"record-replay","rustPaths":["tui/tests/fixtures/oss-story.jsonl","protocol/src/protocol.rs"],"goPaths":["recordreplay"],"phase":"P2","status":"complete","verifier":"TestParseRustStoryRecording;TestReplayRustStoryRecordingThroughGoRecorder;TestRustEventMsgWireNamesCoverRecordedSurface;TestReplayRustStoryRecordingThroughGoCore"},
-    {"id":"apply-patch-freeform-spec","kind":"shared-fixtures","rustPaths":["core/src/tools/handlers/apply_patch_spec.rs","core/src/tools/handlers/apply_patch.lark"],"goPaths":["applypatch","parity"],"phase":"P2","status":"complete","verifier":"TestRustApplyPatchFreeformSpecMatchesGo"},
-    {"id":"goal-prompt-templates","kind":"shared-fixtures","rustPaths":["ext/goal/templates/goals"],"goPaths":["prompt","parity"],"phase":"P2","status":"complete","verifier":"TestRustGoalPromptTemplatesMatchGo"},
-    {"id":"imagegen-description","kind":"shared-fixtures","rustPaths":["ext/image-generation/imagegen_description.md"],"goPaths":["turn","parity"],"phase":"P2","status":"complete","verifier":"TestImageGenerationDescriptionMatchesRustBlob"},
-    {"id":"memory-tool-developer-instructions","kind":"shared-fixtures","rustPaths":["ext/memories/templates/memories/read_path.md","ext/memories/src/prompts.rs","ext/memories/src/extension.rs"],"goPaths":["memories","appserver","parity"],"phase":"P2","status":"complete","verifier":"TestRustMemoryToolDeveloperInstructionsMatchesGo;TestRuntimeRouterTurnStartEmitsMemoryToolDeveloperInstructionsLikeRust;TestRuntimeRouterTurnStartOmitsMemoryToolDeveloperInstructionsWhenGated"},
-    {"id":"record-replay-harness-generalized","kind":"record-replay","rustPaths":["tui/tests/fixtures/oss-story.jsonl","protocol/src/protocol.rs"],"goPaths":["recordreplay"],"phase":"P2","status":"complete","verifier":"TestReplayThroughCoreSyntheticItemSurfaces;TestReplayThroughCoreInProgressTaskReplaysToCompletion;TestReplayRecorderLevelPersistsUncompletedTurnWithoutFabricatedComplete;TestTaskLifecyclesExcludeSessionOnlyIds;TestEventJSONRoundtripPreservesContractView;TestDigestIsDeterministic;TestUnknownKindsAreNeverSwallowed;TestNormalizationDropsOnlyDocumentedVolatileFields"},
-    {"id":"shell-environment-policy-per-environment","kind":"shared-fixtures","rustPaths":["core/src/exec_env.rs","protocol/src/shell_environment.rs","core/tests/suite/unified_exec.rs","core/src/tools/handlers/shell_tests.rs"],"goPaths":["execpolicy","tool","appserver"],"phase":"P2","status":"complete","verifier":"TestShellEnvPolicyDifferentialLikeRustExecCommandUsesInstalledPolicy;TestShellExecutorSetsEnvPolicyFromThreadAndEnvironmentLikeRust;TestShellRequestEnvAppliesPolicyLikeRust;TestShellRequestEnvDefaultExcludesAndIncludeOnlyLikeRust;TestEnvPolicyFromShellEnvironmentPolicy;TestEnvPolicyFromShellEnvironmentPolicyFiltersInheritedEnv;TestExecEnvPolicyFromShellPolicy;TestThreadEnvironmentConfigForTurnPopulatesShellPolicyLikeRust;TestEnvironmentConfigShellPolicyJSONRoundTrip"},
-    {"id":"delegate-noninteractive-approval-policy","kind":"shared-fixtures","rustPaths":["core/src/codex_delegate.rs","core/src/mcp_tool_call.rs","core/src/mcp_skill_dependencies.rs","core/src/tasks/review.rs"],"goPaths":["appserver"],"phase":"P2","status":"complete","verifier":"TestPrepareTurnStartParamsForcesApprovalNeverForSubagentLikeRust;TestRuntimeAgentControllerSpawnPinsSubagentApprovalNever;TestRuntimeRecordIsSubagent;TestNetworkApprovalNeverPolicyDoesNotPromptLikeRust"},
-    {"id":"wsl-update-path-normalization","kind":"shared-fixtures","rustPaths":["cli/src/wsl_paths.rs","cli/src/main.rs"],"goPaths":["install","shell","parity"],"phase":"P2","status":"complete","verifier":"TestRustWSLPathSamplesRunInGo;TestNormalizedUpdateCommandAppliesWSLMappingLikeRust;TestUpdateCommandAndArgsWindowsBranchPreservesCmdSemantics;TestWinPathToWSL"},
-    {"id":"windows-sandbox-nux-trust-decision","kind":"shared-fixtures","rustPaths":["tui/src/lib.rs","tui/src/chatwidget/windows_sandbox_prompts.rs"],"goPaths":["app","tui/tea","tui/chatwidget","config"],"phase":"P2","status":"complete","verifier":"TestSystemCodexSlashParityWithConPTY;TestInteractiveWindowsSandboxStartupPromptSkipsTrustedProjectLikeRust;TestInteractiveWindowsSandboxStartupPromptSkipsTrustedGitProjectLikeRust;TestInteractiveWindowsSandboxStartupPromptUsesEffectiveConfig;TestLocalCodexWindowsSandboxNUXWithConPTY"},
-    {"id":"cli-blackbox-slash-differential","kind":"terminal-ui","rustPaths":["tui/src/app/startup.rs","tui/src/chatwidget/windows_sandbox_prompts.rs"],"goPaths":["tui/tea"],"phase":"P2","status":"complete","verifier":"TestSystemCodexSlashParityWithConPTY"},
-    {"id":"tui-edit-queued-message-vim-history-up","kind":"shared-fixtures","rustPaths":["tui/src/chatwidget/interaction.rs","tui/src/bottom_pane/chat_composer.rs","tui/src/chatwidget/tests/composer_submission.rs"],"goPaths":["tui/tea"],"phase":"P2","status":"complete","verifier":"TestEditQueuedMessageAltUpRestoresMostRecentLikeRust;TestEditQueuedMessageVimHistoryUpEditAndRequeueCycleLikeRust;TestEditQueuedMessageVimHistoryUpUsesRemappedBindingLikeRust;TestEditQueuedMessageKeepsHistoryNavigationWhenComposerHasText"},
-    {"id":"tui-vim-normal-mode","kind":"shared-fixtures","rustPaths":["tui/src/bottom_pane/chat_composer.rs"],"goPaths":["tui/tea"],"phase":"P2","status":"complete","verifier":"TestVimModeToggleStartsInNormalModeAndInsertTypes;TestVimMotionsMoveCursorLikeVim;TestVimEditsDeleteAndChangeLikeVim;TestVimLineYankPasteAndOperators;TestVimInsertModeKeepsQueuedMessageIntactLikeRust;TestVimOperatorMotionsDeleteYankChangeLikeVim;TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim;TestVimLineOperatorRepeatsAndEscCancel;TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim;TestVimBigWordTextObjectLikeVim"},
-    {"id":"session-startup-prewarm","kind":"shared-fixtures","rustPaths":["core/src/session_startup_prewarm.rs","core/src/tasks/regular.rs","core/src/session/session.rs"],"goPaths":["appserver"],"phase":"P2","status":"complete","verifier":"TestRuntimeRouterSessionStartupPrewarmFeedsFirstTurnLikeRust;TestRuntimeRouterSessionStartupPrewarmSlowTurnProceedsWithoutLikeRust;TestRuntimeRouterSessionStartupPrewarmSkipsWithoutCapableAgent"},
-    {"id":"process-hardening","kind":"source-surface","rustPaths":["process-hardening/src/lib.rs"],"goPaths":["processhardening","cmd/codex","doctor"],"phase":"P2","status":"complete","verifier":"TestEnvKeysWithPrefixHandlesNonUTF8Entries;TestEnvKeysWithPrefixEmptyAndMissing;TestGoTopLevelDirectoryInventory"},
-    {"id":"tui-editor-kill-yank","kind":"shared-fixtures","rustPaths":["tui/src/bottom_pane/textarea.rs"],"goPaths":["tui/tea"],"phase":"P2","status":"complete","verifier":"TestEditorKillLineEndAndStartLikeRust;TestEditorKillAtLineBoundaryMergesLinesLikeRust;TestEditorKillWholeLineAndYankLikeRust"},
-    {"id":"config-legacy-project-roots-alias","kind":"shared-fixtures","rustPaths":["core/src/config/permissions.rs"],"goPaths":["config"],"phase":"P2","status":"complete","verifier":"TestLegacyProjectRootsRestrictionsDoNotFailOpenLikeRust"},
-    {"id":"doctor-network-failure-classification","kind":"shared-fixtures","rustPaths":["cli/src/doctor/network.rs","http-client/src/route_aware_client_pool.rs"],"goPaths":["doctor"],"phase":"P2","status":"complete","verifier":"TestClassifyHTTPProbeErrorClassifiesFailuresLikeRust;TestRouteAwareProbeHTTPClientHonorsSystemProxyPolicy;TestRouteAwareProbeHTTPClientExtendsRootCAsAndFallsBack;TestNetworkCheckReportsProxyPolicyDetailsLikeRust"},
-    {"id":"appserver-reject-obsolete-permission-profile","kind":"shared-fixtures","rustPaths":["app-server/src/message_processor.rs","app-server/tests/suite/v2/request_validation.rs"],"goPaths":["appserver"],"phase":"P2","status":"complete","verifier":"TestRejectObsoletePermissionProfileLikeRust"},
-    {"id":"tui-compact-command-activity","kind":"shared-fixtures","rustPaths":["tui/src/exec_cell/model.rs","tui/src/exec_cell/render.rs","tui/src/chatwidget/command_lifecycle.rs"],"goPaths":["tui/exec_cell","tui/tea"],"phase":"P2","status":"complete","verifier":"TestExecCellCompactGroupGroupsSuccessesAndPreservesTranscript;TestExecCellCompactGroupIncludesUnifiedExecStartup;TestExecCellCompactGroupKeepsFailuresAndManualCommandsVisible;TestExecCellCompactGroupFlushesAtGroupLimit;TestModelCompactCommandActivityGroupsSuccessesAndPreservesTranscript;TestModelCompactCommandActivityGroupsUnifiedExecStartup;TestModelCompactCommandActivityKeepsFailuresVisible;TestModelCompactCommandActivityFlushesForManualShellAndBoundaries"}
-  ]
+    "schemaVersion":  1,
+    "targetRustCommit":  "21cfd369efca2df70c904c580b2e7e2e3eddb3c3",
+    "contracts":  [
+                      {
+                          "id":  "features",
+                          "kind":  "source-surface",
+                          "rustPaths":  [
+                                            "features/src/lib.rs"
+                                        ],
+                          "goPaths":  [
+                                          "features/features.go"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestRustFeatureKeySurfaceAgainstGo"
+                      },
+                      {
+                          "id":  "tool-schema-policy",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "tools/tests/fixtures/json_schema_policy"
+                                        ],
+                          "goPaths":  [
+                                          "jsonschema",
+                                          "mcp",
+                                          "parity"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestToolJSONSchemaPolicyFixturesMatchRust;TestToolJSONSchemaPolicyOversizedCompaction"
+                      },
+                      {
+                          "id":  "cli",
+                          "kind":  "source-surface",
+                          "rustPaths":  [
+                                            "cli/src/main.rs"
+                                        ],
+                          "goPaths":  [
+                                          "cli"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestRustCliSubcommandSurfaceAgainstGoParser"
+                      },
+                      {
+                          "id":  "app-server-schema-stable",
+                          "kind":  "generated-protocol",
+                          "rustPaths":  [
+                                            "app-server-protocol/schema/precomputed/app-server-exports-stable.json.zst"
+                                        ],
+                          "goPaths":  [
+                                          "appserver/precomputed_exports.go",
+                                          "appserver/schema/precomputed/app-server-exports-stable.json.zst"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestPrecomputedExportsAreWrittenToDiskLikeRust"
+                      },
+                      {
+                          "id":  "app-server-schema-experimental",
+                          "kind":  "generated-protocol",
+                          "rustPaths":  [
+                                            "app-server-protocol/schema/precomputed/app-server-exports-experimental.json.zst"
+                                        ],
+                          "goPaths":  [
+                                          "appserver/precomputed_exports.go",
+                                          "appserver/schema/precomputed/app-server-exports-experimental.json.zst"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestPrecomputedExperimentalExportsAreWrittenToDiskLikeRust"
+                      },
+                      {
+                          "id":  "exec-server-protocol",
+                          "kind":  "wire-protocol",
+                          "rustPaths":  [
+                                            "exec-server-protocol/src/protocol.rs"
+                                        ],
+                          "goPaths":  [
+                                          "execserver"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestRustExecServerProtocolSurfaceAgainstGo;TestRustProcessSandboxTypeSurfaceAgainstGo"
+                      },
+                      {
+                          "id":  "state-migrations",
+                          "kind":  "sqlite-schema",
+                          "rustPaths":  [
+                                            "state/migrations",
+                                            "state/logs_migrations",
+                                            "state/goals_migrations",
+                                            "state/memory_migrations",
+                                            "state/thread_history_migrations"
+                                        ],
+                          "goPaths":  [
+                                          "state/migrations",
+                                          "state/migrations.go"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestStateMigrationsMatchRustTarget"
+                      },
+                      {
+                          "id":  "config-schema-surface",
+                          "kind":  "source-surface",
+                          "rustPaths":  [
+                                            "core/config.schema.json"
+                                        ],
+                          "goPaths":  [
+                                          "config",
+                                          "parity"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestRustConfigSchemaSurfaceAgainstGo"
+                      },
+                      {
+                          "id":  "config-parse-shared-fixtures",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "config/src/config_toml.rs",
+                                            "config/src/merge_tests.rs",
+                                            "model-provider-info/src/lib.rs"
+                                        ],
+                          "goPaths":  [
+                                          "config",
+                                          "model",
+                                          "parity"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestRustConfigParseSamplesRunInGo;TestRustModelProviderValidationSamplesRunInGo;TestRustConfigMergeKeyAliasSamplesRunInGo"
+                      },
+                      {
+                          "id":  "remote-sandbox-config-shared-fixtures",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "config/src/config_requirements.rs"
+                                        ],
+                          "goPaths":  [
+                                          "config",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRustRemoteSandboxConfigSamplesRunInGo"
+                      },
+                      {
+                          "id":  "image-preparation-dimensions",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "core/src/image_preparation_tests.rs",
+                                            "utils/image/src/lib.rs"
+                                        ],
+                          "goPaths":  [
+                                          "eventmap",
+                                          "appserver",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRustImagePreparationDimensionSamplesRunInGo;TestPrepareImagePrepResizesLargeImagesLikeRust;TestRuntimeRouterTurnStartPreparesImagesAndEmitsResizeNoticeLikeRust"
+                      },
+                      {
+                          "id":  "exec-apply-patch-freeform",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "exec/tests/suite/apply_patch.rs",
+                                            "exec/tests/fixtures/apply_patch_freeform_final.txt"
+                                        ],
+                          "goPaths":  [
+                                          "applypatch",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestExecApplyPatchFreeformFixtureMatchesRust"
+                      },
+                      {
+                          "id":  "collaboration-mode-templates",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "collaboration-mode-templates/templates/default.md",
+                                            "collaboration-mode-templates/templates/plan.md",
+                                            "models-manager/src/collaboration_mode_presets.rs"
+                                        ],
+                          "goPaths":  [
+                                          "tui/chatwidget",
+                                          "appserver",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRustCollaborationModeTemplatesMatchGo"
+                      },
+                      {
+                          "id":  "hooks-command-input-schemas",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "hooks/schema/generated",
+                                            "hooks/src/schema.rs"
+                                        ],
+                          "goPaths":  [
+                                          "appserver",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRustHooksCommandSchemasCoverGoInputSurface"
+                      },
+                      {
+                          "id":  "hooks-command-output-schemas",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "hooks/schema/generated",
+                                            "hooks/src/schema.rs"
+                                        ],
+                          "goPaths":  [
+                                          "appserver",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRustHooksCommandOutputSchemasCoverGoParseSurface"
+                      },
+                      {
+                          "id":  "http-client-ca-fixtures",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "http-client/tests/fixtures"
+                                        ],
+                          "goPaths":  [
+                                          "network",
+                                          "parity"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestRustHTTPClientCAFixturesLoadInGo"
+                      },
+                      {
+                          "id":  "backend-task-details-fixtures",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "backend-client/tests/fixtures"
+                                        ],
+                          "goPaths":  [
+                                          "chatgptapi",
+                                          "parity"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestBackendTaskDetailsFixturesMatchRust"
+                      },
+                      {
+                          "id":  "apply-patch-scenarios",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "apply-patch/tests/fixtures/scenarios"
+                                        ],
+                          "goPaths":  [
+                                          "applypatch",
+                                          "parity"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestApplyPatchScenariosMatchRustFixtures"
+                      },
+                      {
+                          "id":  "apply-patch-differential-oracle",
+                          "kind":  "differential-oracle",
+                          "rustPaths":  [
+                                            "apply-patch/src"
+                                        ],
+                          "goPaths":  [
+                                          "applypatch",
+                                          "parity"
+                                      ],
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestApplyPatchDifferentialAgainstRustOracle"
+                      },
+                      {
+                          "id":  "rollout-layout",
+                          "kind":  "durable-data",
+                          "rustPaths":  [
+                                            "rollout/src/recorder.rs",
+                                            "rollout/src/session_index.rs"
+                                        ],
+                          "goPaths":  [
+                                          "rollout/rollout.go",
+                                          "rollout/projection.go",
+                                          "rollout/lineage_record.go",
+                                          "rollout/session_index.go",
+                                          "session/store.go"
+                                      ],
+                          "phase":  "P3",
+                          "status":  "complete",
+                          "verifier":  "TestRouterPaginatedForkPersistsPhysicalHistoryReferenceOnly"
+                      },
+                      {
+                          "id":  "tui-snapshots",
+                          "kind":  "terminal-ui",
+                          "rustPaths":  [
+                                            "tui/src"
+                                        ],
+                          "goPaths":  [
+                                          "tui"
+                                      ],
+                          "phase":  "P7",
+                          "status":  "complete",
+                          "verifier":  "TestRustTUISnapshotManifestCoversPrioritySurfaces"
+                      },
+                      {
+                          "id":  "story-recording-replay",
+                          "kind":  "record-replay",
+                          "rustPaths":  [
+                                            "tui/tests/fixtures/oss-story.jsonl",
+                                            "protocol/src/protocol.rs"
+                                        ],
+                          "goPaths":  [
+                                          "recordreplay"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestParseRustStoryRecording;TestReplayRustStoryRecordingThroughGoRecorder;TestRustEventMsgWireNamesCoverRecordedSurface;TestReplayRustStoryRecordingThroughGoCore"
+                      },
+                      {
+                          "id":  "apply-patch-freeform-spec",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "core/src/tools/handlers/apply_patch_spec.rs",
+                                            "core/src/tools/handlers/apply_patch.lark"
+                                        ],
+                          "goPaths":  [
+                                          "applypatch",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRustApplyPatchFreeformSpecMatchesGo"
+                      },
+                      {
+                          "id":  "goal-prompt-templates",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "ext/goal/templates/goals"
+                                        ],
+                          "goPaths":  [
+                                          "prompt",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRustGoalPromptTemplatesMatchGo"
+                      },
+                      {
+                          "id":  "imagegen-description",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "ext/image-generation/imagegen_description.md"
+                                        ],
+                          "goPaths":  [
+                                          "turn",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestImageGenerationDescriptionMatchesRustBlob"
+                      },
+                      {
+                          "id":  "memory-tool-developer-instructions",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "ext/memories/templates/memories/read_path.md",
+                                            "ext/memories/src/prompts.rs",
+                                            "ext/memories/src/extension.rs"
+                                        ],
+                          "goPaths":  [
+                                          "memories",
+                                          "appserver",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRustMemoryToolDeveloperInstructionsMatchesGo;TestRuntimeRouterTurnStartEmitsMemoryToolDeveloperInstructionsLikeRust;TestRuntimeRouterTurnStartOmitsMemoryToolDeveloperInstructionsWhenGated"
+                      },
+                      {
+                          "id":  "record-replay-harness-generalized",
+                          "kind":  "record-replay",
+                          "rustPaths":  [
+                                            "tui/tests/fixtures/oss-story.jsonl",
+                                            "protocol/src/protocol.rs"
+                                        ],
+                          "goPaths":  [
+                                          "recordreplay"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestReplayThroughCoreSyntheticItemSurfaces;TestReplayThroughCoreInProgressTaskReplaysToCompletion;TestReplayRecorderLevelPersistsUncompletedTurnWithoutFabricatedComplete;TestTaskLifecyclesExcludeSessionOnlyIds;TestEventJSONRoundtripPreservesContractView;TestDigestIsDeterministic;TestUnknownKindsAreNeverSwallowed;TestNormalizationDropsOnlyDocumentedVolatileFields"
+                      },
+                      {
+                          "id":  "shell-environment-policy-per-environment",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "core/src/exec_env.rs",
+                                            "protocol/src/shell_environment.rs",
+                                            "core/tests/suite/unified_exec.rs",
+                                            "core/src/tools/handlers/shell_tests.rs"
+                                        ],
+                          "goPaths":  [
+                                          "execpolicy",
+                                          "tool",
+                                          "appserver"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestShellEnvPolicyDifferentialLikeRustExecCommandUsesInstalledPolicy;TestShellExecutorSetsEnvPolicyFromThreadAndEnvironmentLikeRust;TestShellRequestEnvAppliesPolicyLikeRust;TestShellRequestEnvDefaultExcludesAndIncludeOnlyLikeRust;TestEnvPolicyFromShellEnvironmentPolicy;TestEnvPolicyFromShellEnvironmentPolicyFiltersInheritedEnv;TestExecEnvPolicyFromShellPolicy;TestThreadEnvironmentConfigForTurnPopulatesShellPolicyLikeRust;TestEnvironmentConfigShellPolicyJSONRoundTrip"
+                      },
+                      {
+                          "id":  "delegate-noninteractive-approval-policy",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "core/src/codex_delegate.rs",
+                                            "core/src/mcp_tool_call.rs",
+                                            "core/src/mcp_skill_dependencies.rs",
+                                            "core/src/tasks/review.rs"
+                                        ],
+                          "goPaths":  [
+                                          "appserver"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestPrepareTurnStartParamsForcesApprovalNeverForSubagentLikeRust;TestRuntimeAgentControllerSpawnPinsSubagentApprovalNever;TestRuntimeRecordIsSubagent;TestNetworkApprovalNeverPolicyDoesNotPromptLikeRust"
+                      },
+                      {
+                          "id":  "wsl-update-path-normalization",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "cli/src/wsl_paths.rs",
+                                            "cli/src/main.rs"
+                                        ],
+                          "goPaths":  [
+                                          "install",
+                                          "shell",
+                                          "parity"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRustWSLPathSamplesRunInGo;TestNormalizedUpdateCommandAppliesWSLMappingLikeRust;TestUpdateCommandAndArgsWindowsBranchPreservesCmdSemantics;TestWinPathToWSL"
+                      },
+                      {
+                          "id":  "windows-sandbox-nux-trust-decision",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "tui/src/lib.rs",
+                                            "tui/src/chatwidget/windows_sandbox_prompts.rs"
+                                        ],
+                          "goPaths":  [
+                                          "app",
+                                          "tui/tea",
+                                          "tui/chatwidget",
+                                          "config"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestSystemCodexSlashParityWithConPTY;TestInteractiveWindowsSandboxStartupPromptSkipsTrustedProjectLikeRust;TestInteractiveWindowsSandboxStartupPromptSkipsTrustedGitProjectLikeRust;TestInteractiveWindowsSandboxStartupPromptUsesEffectiveConfig;TestLocalCodexWindowsSandboxNUXWithConPTY"
+                      },
+                      {
+                          "id":  "cli-blackbox-slash-differential",
+                          "kind":  "terminal-ui",
+                          "rustPaths":  [
+                                            "tui/src/app/startup.rs",
+                                            "tui/src/chatwidget/windows_sandbox_prompts.rs"
+                                        ],
+                          "goPaths":  [
+                                          "tui/tea"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestSystemCodexSlashParityWithConPTY"
+                      },
+                      {
+                          "id":  "tui-edit-queued-message-vim-history-up",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "tui/src/chatwidget/interaction.rs",
+                                            "tui/src/bottom_pane/chat_composer.rs",
+                                            "tui/src/chatwidget/tests/composer_submission.rs"
+                                        ],
+                          "goPaths":  [
+                                          "tui/tea"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestEditQueuedMessageAltUpRestoresMostRecentLikeRust;TestEditQueuedMessageVimHistoryUpEditAndRequeueCycleLikeRust;TestEditQueuedMessageVimHistoryUpUsesRemappedBindingLikeRust;TestEditQueuedMessageKeepsHistoryNavigationWhenComposerHasText"
+                      },
+                      {
+                          "id":  "tui-vim-normal-mode",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "tui/src/bottom_pane/chat_composer.rs"
+                                        ],
+                          "goPaths":  [
+                                          "tui/tea"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestVimModeToggleStartsInNormalModeAndInsertTypes;TestVimMotionsMoveCursorLikeVim;TestVimEditsDeleteAndChangeLikeVim;TestVimLineYankPasteAndOperators;TestVimInsertModeKeepsQueuedMessageIntactLikeRust;TestVimOperatorMotionsDeleteYankChangeLikeVim;TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim;TestVimLineOperatorRepeatsAndEscCancel;TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim;TestVimBigWordTextObjectLikeVim"
+                      },
+                      {
+                          "id":  "session-startup-prewarm",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "core/src/session_startup_prewarm.rs",
+                                            "core/src/tasks/regular.rs",
+                                            "core/src/session/session.rs"
+                                        ],
+                          "goPaths":  [
+                                          "appserver"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRuntimeRouterSessionStartupPrewarmFeedsFirstTurnLikeRust;TestRuntimeRouterSessionStartupPrewarmSlowTurnProceedsWithoutLikeRust;TestRuntimeRouterSessionStartupPrewarmSkipsWithoutCapableAgent"
+                      },
+                      {
+                          "id":  "process-hardening",
+                          "kind":  "source-surface",
+                          "rustPaths":  [
+                                            "process-hardening/src/lib.rs"
+                                        ],
+                          "goPaths":  [
+                                          "processhardening",
+                                          "cmd/codex",
+                                          "doctor"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestEnvKeysWithPrefixHandlesNonUTF8Entries;TestEnvKeysWithPrefixEmptyAndMissing;TestGoTopLevelDirectoryInventory"
+                      },
+                      {
+                          "id":  "tui-editor-kill-yank",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "tui/src/bottom_pane/textarea.rs"
+                                        ],
+                          "goPaths":  [
+                                          "tui/tea"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestEditorKillLineEndAndStartLikeRust;TestEditorKillAtLineBoundaryMergesLinesLikeRust;TestEditorKillWholeLineAndYankLikeRust"
+                      },
+                      {
+                          "id":  "config-legacy-project-roots-alias",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "core/src/config/permissions.rs"
+                                        ],
+                          "goPaths":  [
+                                          "config"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestLegacyProjectRootsRestrictionsDoNotFailOpenLikeRust"
+                      },
+                      {
+                          "id":  "doctor-network-failure-classification",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "cli/src/doctor/network.rs",
+                                            "http-client/src/route_aware_client_pool.rs"
+                                        ],
+                          "goPaths":  [
+                                          "doctor"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestClassifyHTTPProbeErrorClassifiesFailuresLikeRust;TestRouteAwareProbeHTTPClientHonorsSystemProxyPolicy;TestRouteAwareProbeHTTPClientExtendsRootCAsAndFallsBack;TestNetworkCheckReportsProxyPolicyDetailsLikeRust"
+                      },
+                      {
+                          "id":  "appserver-reject-obsolete-permission-profile",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "app-server/src/message_processor.rs",
+                                            "app-server/tests/suite/v2/request_validation.rs"
+                                        ],
+                          "goPaths":  [
+                                          "appserver"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRejectObsoletePermissionProfileLikeRust"
+                      },
+                      {
+                          "id":  "tui-compact-command-activity",
+                          "kind":  "shared-fixtures",
+                          "rustPaths":  [
+                                            "tui/src/exec_cell/model.rs",
+                                            "tui/src/exec_cell/render.rs",
+                                            "tui/src/chatwidget/command_lifecycle.rs"
+                                        ],
+                          "goPaths":  [
+                                          "tui/exec_cell",
+                                          "tui/tea"
+                                      ],
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestExecCellCompactGroupGroupsSuccessesAndPreservesTranscript;TestExecCellCompactGroupIncludesUnifiedExecStartup;TestExecCellCompactGroupKeepsFailuresAndManualCommandsVisible;TestExecCellCompactGroupFlushesAtGroupLimit;TestModelCompactCommandActivityGroupsSuccessesAndPreservesTranscript;TestModelCompactCommandActivityGroupsUnifiedExecStartup;TestModelCompactCommandActivityKeepsFailuresVisible;TestModelCompactCommandActivityFlushesForManualShellAndBoundaries"
+                      },
+                      {
+                          "id":  "env-noise-auth-token-scrub",
+                          "goPaths":  [
+                                          "envutil",
+                                          "execserver/remote_harness.go"
+                                      ],
+                          "rustPaths":  [
+                                            "protocol/src/shell_environment.rs",
+                                            "exec-server/src/environment.rs",
+                                            "hooks/src/engine/command_runner_tests.rs"
+                                        ],
+                          "kind":  "shared-fixtures",
+                          "phase":  "P1",
+                          "status":  "complete",
+                          "verifier":  "TestIsNonInheritableEnvVarCaseInsensitiveLikeRust;TestScrubCommandEnvRemovesNoiseAuthTokenAfterPolicyOverrides;TestScrubSliceAndCommandEnv"
+                      },
+                      {
+                          "id":  "config-windows-ignore-legacy-managed-config",
+                          "goPaths":  [
+                                          "config"
+                                      ],
+                          "rustPaths":  [
+                                            "config/src/loader/layer_io.rs",
+                                            "config/src/loader/mod.rs"
+                                        ],
+                          "kind":  "shared-fixtures",
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestShouldIgnoreDefaultManagedConfigForOS;TestWindowsIgnoresLegacyManagedConfigLikeRust;TestHasLocalManagedConfigurationWindowsExcludesLegacyFile"
+                      },
+                      {
+                          "id":  "skills-max-context-tokens-budget",
+                          "goPaths":  [
+                                          "config",
+                                          "prompt",
+                                          "appserver"
+                                      ],
+                          "rustPaths":  [
+                                            "config/src/skills_config.rs",
+                                            "ext/skills/src/render.rs",
+                                            "ext/skills/src/extension.rs"
+                                        ],
+                          "kind":  "shared-fixtures",
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestSkillMaxContextTokensReadsPositiveConfigLikeRust;TestConfiguredSkillMetadataBudgetCapsAtTenThousandLikeRust;TestRenderConfiguredBudgetWarningOmitsPercentLikeRust"
+                      },
+                      {
+                          "id":  "environment-exec-policy-overlay",
+                          "goPaths":  [
+                                          "execpolicy",
+                                          "appserver"
+                                      ],
+                          "rustPaths":  [
+                                            "protocol/src/environment.rs",
+                                            "core/src/session/environment.rs",
+                                            "execpolicy/src/policy.rs",
+                                            "core/src/tools/approvals.rs"
+                                        ],
+                          "kind":  "shared-fixtures",
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestRequirementsPolicyFingerprintOrderIndependent;TestRequirementsPolicyHasAllowRules;TestRequirementsPolicyMergeOverlayTightensAccess;TestEnvironmentConfigExecPolicyParsesAndRejectsAllowRules"
+                      },
+                      {
+                          "id":  "guardian-parent-compaction-bound",
+                          "goPaths":  [
+                                          "appserver",
+                                          "config"
+                                      ],
+                          "rustPaths":  [
+                                            "ext/guardian-v2/src/config.rs",
+                                            "ext/guardian-v2/src/extension.rs"
+                                        ],
+                          "kind":  "shared-fixtures",
+                          "phase":  "P3",
+                          "status":  "complete",
+                          "verifier":  "TestGuardianParentCompactionResponseIDBoundsOversizedSummary;TestGuardianV2MaxParentCompactionTokensDefaultsAndBoundsLikeRust;TestGuardianV2ConfigSurfaceParsesLikeRust"
+                      },
+                      {
+                          "id":  "appserver-project-apis",
+                          "goPaths":  [
+                                          "state",
+                                          "appserver"
+                                      ],
+                          "rustPaths":  [
+                                            "app-server-protocol/src/protocol/v2/project.rs",
+                                            "app-server/src/request_processors/projects.rs",
+                                            "state/src/runtime/projects.rs",
+                                            "state/migrations/0049_projects.sql"
+                                        ],
+                          "kind":  "shared-fixtures",
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestProjectStoreLifecycleMirrorsRustProjectsStore;TestProjectCursorValidation;TestRuntimeRouterProjectLifecycleMirrorsRustProjectsProcessor;TestRuntimeRouterProjectValidationMirrorsRustProjectsProcessor;TestRuntimeRouterThreadMetadataProjectUpdateMirrorsRustThreadProcessor"
+                      }
+,
+                      {
+                          "id":  "skill-shadow-fused-selectors",
+                          "goPaths":  [
+                                          "prompt",
+                                          "appserver"
+                                      ],
+                          "rustPaths":  [
+                                            "ext/skills/src/dynamic_skill_selector/lru_plus_character_routing.rs",
+                                            "ext/skills/src/dynamic_skill_selector.rs"
+                                        ],
+                          "kind":  "shared-fixtures",
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestLruPlusCharacterRoutingRecoversRecentlyInvokedSkill;TestLruPlusCharacterRoutingColdStartFallsBackToRoutingCard;TestLruPlusLexicalCharacterRoutingFusesAllThreeSignals;TestLruPlusCharacterRoutingRespectsLimitAndDeduplicates;TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatalog"
+                      },
+                      {
+                          "id":  "skill-shadow-task-context-fusion",
+                          "goPaths":  [
+                                          "prompt",
+                                          "appserver"
+                                      ],
+                          "rustPaths":  [
+                                            "ext/skills/src/shadow_selection_experiment/task_context.rs",
+                                            "ext/skills/src/shadow_selection_experiment/mod.rs"
+                                        ],
+                          "kind":  "shared-fixtures",
+                          "phase":  "P2",
+                          "status":  "complete",
+                          "verifier":  "TestShadowTaskContextContinuationRecoversPriorRequest;TestShadowTaskContextTurnIsolationAndBoundedHistory;TestShadowTaskContextSkipsNonSubstantivePriorRequests;TestTaskContextFusionRecoversSkillFromEarlierTurn;TestSkillShadowTaskContextFusionRecoversEarlierTurnSkill"
+                      },
+                      {
+                          "id":  "guardian-max-tool-call-lag",
+                          "goPaths":  [
+                                          "appserver",
+                                          "config"
+                                      ],
+                          "rustPaths":  [
+                                            "ext/guardian-v2/src/config.rs",
+                                            "ext/guardian-v2/src/extension.rs"
+                                        ],
+                          "kind":  "shared-fixtures",
+                          "phase":  "P3",
+                          "status":  "complete",
+                          "verifier":  "TestModelGuardianReviewerSkipsStaleScoresOverMaxToolCallLag;TestGuardianV2MaxToolCallLagDefaultsLikeRust;TestGuardianV2ConfigSurfaceParsesLikeRust"
+                      },
+                      {
+                          "id":  "guardian-v2-managed-reviewers-disable",
+                          "goPaths":  [
+                                          "config",
+                                          "appserver"
+                                      ],
+                          "rustPaths":  [
+                                            "config/src/config_requirements.rs",
+                                            "core/src/config/requirements.rs"
+                                        ],
+                          "kind":  "shared-fixtures",
+                          "phase":  "P3",
+                          "status":  "complete",
+                          "verifier":  "TestManagedApprovalsReviewersDisableGuardianV2LikeRust;TestGuardianV2ConfigSurfaceParsesLikeRust"
+                      }
+                  ]
 }

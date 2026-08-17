@@ -76,6 +76,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "plugin_share", Owner: "plugin", Focus: "plugin share save/list/update/delete"},
 		{Module: "plugin_uninstall", Owner: "plugin", Focus: "plugin/uninstall RPC"},
 		{Module: "process_exec", Owner: "appserver", Focus: "process/spawn stdio/pty lifecycle and launch-context env scrubbing"},
+		{Module: "projects", Owner: "state, appserver", Focus: "experimental project/list/read/create/import/update/move/delete RPCs, thread assignment and notifications"},
 		{Module: "rate_limit_reset_credits", Owner: "auth, appserver", Focus: "rate-limit reset credit RPCs"},
 		{Module: "rate_limits", Owner: "auth, model", Focus: "account rate-limit notifications"},
 		{Module: "realtime_conversation", Owner: "realtime", Focus: "thread realtime RPCs and notifications"},

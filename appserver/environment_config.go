@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"codex_go/execpolicy"
 	"codex_go/sandbox"
 )
 
@@ -39,6 +40,11 @@ type EnvironmentConfig struct {
 	// shell_environment_policy (#38902). An empty map means the thread-derived
 	// policy applies.
 	ShellEnvironmentPolicy map[string]any
+	// ExecPolicy is the optional restrictive managed command policy for this
+	// environment attachment, mirroring Rust protocol::EnvironmentConfig
+	// exec_policy (#38942). Environment policies can only tighten command
+	// access: allow rules are rejected at validation.
+	ExecPolicy *execpolicy.RequirementsPolicy
 	// PermissionProfile is the resolved profile (nil only for legacy thread
 	// configs that could not resolve a profile).
 	PermissionProfile *sandbox.PermissionProfile
@@ -202,6 +208,22 @@ func environmentConfigFromAny(value any) (*EnvironmentConfig, error) {
 			config.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(table)
 		}
 	}
+	if raw, present := object["exec_policy"]; present {
+		policy, err := environmentExecPolicyFromAny(raw)
+		if err != nil {
+			return nil, err
+		}
+		config.ExecPolicy = policy
+	} else if raw, present := object["execPolicy"]; present {
+		policy, err := environmentExecPolicyFromAny(raw)
+		if err != nil {
+			return nil, err
+		}
+		config.ExecPolicy = policy
+	}
+	if config.ExecPolicy != nil && config.ExecPolicy.HasAllowRules() {
+		return nil, fmt.Errorf("environment command policy cannot contain allow rules")
+	}
 	profileJSON := strings.TrimSpace(firstNonEmpty(
 		stringFromAny(object["permission_profile"]),
 		stringFromAny(object["permissionProfile"]),
@@ -235,6 +257,37 @@ func environmentConfigFromAny(value any) (*EnvironmentConfig, error) {
 		config.SelectedCapabilityRoots = roots
 	}
 	return config, nil
+}
+
+// environmentExecPolicyFromAny parses the environment attachment's exec_policy
+// value: a policy DSL string or a policy object. Mirrors Rust
+// RequirementsExecPolicy parsing (#38942).
+func environmentExecPolicyFromAny(value any) (*execpolicy.RequirementsPolicy, error) {
+	if value == nil {
+		return nil, nil
+	}
+	switch typed := value.(type) {
+	case string:
+		text := strings.TrimSpace(typed)
+		if text == "" {
+			return nil, nil
+		}
+		policy, err := execpolicy.ParseRequirementsPolicy("environment", text)
+		if err != nil {
+			return nil, fmt.Errorf("invalid environment command policy: %w", err)
+		}
+		return policy, nil
+	default:
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid environment command policy: %w", err)
+		}
+		policy, err := execpolicy.ParseRequirementsPolicy("environment", string(raw))
+		if err != nil {
+			return nil, fmt.Errorf("invalid environment command policy: %w", err)
+		}
+		return policy, nil
+	}
 }
 
 func selectedCapabilityRootsFromAny(value any) ([]SelectedCapabilityRoot, error) {
@@ -293,6 +346,9 @@ func environmentConfigToAny(config *EnvironmentConfig) map[string]any {
 	if profileJSON != "" {
 		out["permission_profile"] = profileJSON
 	}
+	if config.ExecPolicy != nil && strings.TrimSpace(config.ExecPolicy.Text()) != "" {
+		out["exec_policy"] = config.ExecPolicy.Text()
+	}
 	if config.ActivePermissionProfile != "" {
 		out["permission_profile_id"] = config.ActivePermissionProfile
 	}
@@ -321,6 +377,9 @@ func validateEnvironmentConfigForSelection(environmentID string, config *Environ
 	}
 	if len(config.SelectedCapabilityRoots) > maxSelectedCapabilityRoots {
 		return fmt.Errorf("environment readiness contains more than %d selected capability roots", maxSelectedCapabilityRoots)
+	}
+	if config.ExecPolicy != nil && config.ExecPolicy.HasAllowRules() {
+		return fmt.Errorf("environment command policy cannot contain allow rules")
 	}
 	seen := make(map[string]struct{}, len(config.SelectedCapabilityRoots))
 	for _, root := range config.SelectedCapabilityRoots {
@@ -374,6 +433,7 @@ func cloneEnvironmentConfig(config *EnvironmentConfig) *EnvironmentConfig {
 	if config.ShellEnvironmentPolicy != nil {
 		clone.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(config.ShellEnvironmentPolicy)
 	}
+	clone.ExecPolicy = config.ExecPolicy.Clone()
 	if config.PermissionProfile != nil {
 		profile := *config.PermissionProfile
 		clone.PermissionProfile = &profile

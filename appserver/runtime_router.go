@@ -1962,6 +1962,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 	if isRealtimeMethod(request.Method) {
 		return r.dispatchRealtime(request)
 	}
+	if isProjectMethod(request.Method) {
+		return r.dispatchProject(request)
+	}
 	if request.Method == MethodThreadSectionList {
 		if r.services.ThreadRouter == nil {
 			return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
@@ -2834,11 +2837,32 @@ func (r *RuntimeRouter) handleThreadMetadataUpdateRuntime(request *Request) (*Th
 	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("ephemeral thread does not support metadata updates: %s", params.ThreadID))
 	}
+	projectUpdate, projectChanged, projectUpdateErr := MetadataProjectUpdate(&params)
+	if projectUpdateErr != nil {
+		return nil, projectUpdateErr
+	}
+	if projectChanged && projectUpdate != nil {
+		if r.services.StateRuntime != nil {
+			project, projectErr := r.services.StateRuntime.GetProject(context.Background(), *projectUpdate)
+			if projectErr != nil {
+				return nil, fmt.Errorf("failed to read project: %w", projectErr)
+			}
+			if project == nil {
+				return nil, jsonRPCInvalidRequest(fmt.Sprintf("project not found: %s", *projectUpdate))
+			}
+		}
+	}
 	result, err := r.services.ThreadRouter.dispatch(request)
 	if err != nil {
 		return nil, err
 	}
 	response, _ := result.(*ThreadMetadataUpdateResponse)
+	if projectChanged && r.services.StateRuntime != nil {
+		if _, _, projectErr := r.services.StateRuntime.SetThreadProject(context.Background(), params.ThreadID, projectUpdate); projectErr != nil {
+			return nil, fmt.Errorf("failed to update thread project: %w", projectErr)
+		}
+		r.notifyThreadProjectUpdated(request, params.ThreadID, projectUpdate)
+	}
 	return response, nil
 }
 
@@ -3102,6 +3126,20 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		if err := r.validateThreadStartEnvironments(&params); err != nil {
 			return nil, err
 		}
+		if params.ProjectID != nil {
+			if strings.TrimSpace(*params.ProjectID) == "" {
+				return nil, jsonRPCInvalidRequest("projectId must not be empty")
+			}
+			if r.services.StateRuntime != nil {
+				project, projectErr := r.services.StateRuntime.GetProject(context.Background(), *params.ProjectID)
+				if projectErr != nil {
+					return nil, fmt.Errorf("failed to read project: %w", projectErr)
+				}
+				if project == nil {
+					return nil, jsonRPCInvalidRequest(fmt.Sprintf("project not found: %s", *params.ProjectID))
+				}
+			}
+		}
 		if errors := r.requireHooksDiscovery().ManagedRequiredHookLoadErrors(r.effectiveThreadStartCWD(&params)); len(errors) > 0 {
 			return nil, fmt.Errorf("failed to load required managed hooks: %s", strings.Join(errors, "; "))
 		}
@@ -3158,6 +3196,17 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			r.applyThreadStartOriginator(response, request)
 			r.markRuntimeSeedRollout(response, request)
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			if request.Method == MethodThreadStart && r.services.StateRuntime != nil {
+				var startParams ThreadStartParams
+				if request.DecodeParams(&startParams) == nil && startParams.ProjectID != nil {
+					projectID := strings.TrimSpace(*startParams.ProjectID)
+					if _, _, projectErr := r.services.StateRuntime.SetThreadProject(context.Background(), response.Thread.ID, &projectID); projectErr != nil {
+						r.rollbackThreadStartInitialization(response.Thread.ID)
+						return nil, fmt.Errorf("failed to assign thread project: %w", projectErr)
+					}
+					r.notifyThreadProjectUpdated(request, response.Thread.ID, &projectID)
+				}
+			}
 			if r.services.Skills != nil && r.localEnvironmentEnabled() {
 				r.services.Skills.WatchCWDs([]string{response.Thread.CWD})
 			}

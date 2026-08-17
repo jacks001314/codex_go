@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -758,6 +759,150 @@ func TestIncludeSkillInstructionsUsesRustDefaultAndSkillsConfig(t *testing.T) {
 	invalid := &Config{Values: map[string]any{"skills": map[string]any{"include_instructions": "false"}}}
 	if !invalid.IncludeSkillInstructions() {
 		t.Fatal("IncludeSkillInstructions() invalid value should use true default")
+	}
+}
+
+// TestSkillMaxContextTokensReadsPositiveConfigLikeRust mirrors Rust
+// NonZeroUsize [skills].max_context_tokens (#38978): positive values are read,
+// zero/negative/non-numeric values are treated as unset.
+func TestSkillMaxContextTokensReadsPositiveConfigLikeRust(t *testing.T) {
+	if got, ok := (&Config{Values: map[string]any{"skills": map[string]any{"max_context_tokens": int64(800)}}}).SkillMaxContextTokens(); !ok || got != 800 {
+		t.Fatalf("max_context_tokens=800 = %d, %v", got, ok)
+	}
+	if got, ok := (&Config{Values: map[string]any{"skills": map[string]any{"max_context_tokens": "800"}}}).SkillMaxContextTokens(); !ok || got != 800 {
+		t.Fatalf("max_context_tokens=\"800\" = %d, %v", got, ok)
+	}
+	if got, ok := (&Config{Values: map[string]any{"skills": map[string]any{"max_context_tokens": int64(0)}}}).SkillMaxContextTokens(); ok || got != 0 {
+		t.Fatalf("max_context_tokens=0 = %d, %v, want unset", got, ok)
+	}
+	if got, ok := (&Config{Values: map[string]any{"skills": map[string]any{"max_context_tokens": "abc"}}}).SkillMaxContextTokens(); ok || got != 0 {
+		t.Fatalf("max_context_tokens=abc = %d, %v, want unset", got, ok)
+	}
+	if got, ok := (&Config{Values: map[string]any{}}).SkillMaxContextTokens(); ok || got != 0 {
+		t.Fatalf("unset = %d, %v, want unset", got, ok)
+	}
+}
+
+// TestGuardianV2MaxParentCompactionTokensDefaultsAndBoundsLikeRust mirrors Rust
+// GuardianV2Config::max_parent_compaction_tokens (#38980): default 25,000,
+// configured values clamped to 100..100,000.
+func TestGuardianV2MaxParentCompactionTokensDefaultsAndBoundsLikeRust(t *testing.T) {
+	if got := (&Config{}).GuardianV2MaxParentCompactionTokens(); got != 25_000 {
+		t.Fatalf("default = %d, want 25000", got)
+	}
+	configured := &Config{Values: map[string]any{
+		"features": map[string]any{"guardianv2": map[string]any{"max_parent_compaction_tokens": int64(256)}},
+	}}
+	if got := configured.GuardianV2MaxParentCompactionTokens(); got != 256 {
+		t.Fatalf("configured = %d, want 256", got)
+	}
+	clampedLow := &Config{Values: map[string]any{
+		"features": map[string]any{"guardianv2": map[string]any{"max_parent_compaction_tokens": int64(10)}},
+	}}
+	if got := clampedLow.GuardianV2MaxParentCompactionTokens(); got != 100 {
+		t.Fatalf("clamped low = %d, want 100", got)
+	}
+	clampedHigh := &Config{Values: map[string]any{
+		"features": map[string]any{"guardianv2": map[string]any{"max_parent_compaction_tokens": int64(1_000_000)}},
+	}}
+	if got := clampedHigh.GuardianV2MaxParentCompactionTokens(); got != 100_000 {
+		t.Fatalf("clamped high = %d, want 100000", got)
+	}
+}
+
+// TestGuardianV2ConfigSurfaceParsesLikeRust ensures the Guardian v2 feature
+// config surface (#38980/#38987/#38990) parses cleanly: max_parent_compaction_
+// tokens, the transcript include_images opt-in, and the feature enablement
+// table are all recognized without strict-config errors.
+func TestGuardianV2ConfigSurfaceParsesLikeRust(t *testing.T) {
+	body := `
+[features.guardianv2]
+enabled = true
+max_parent_compaction_tokens = 256
+max_tool_call_lag = 2
+
+[features.guardianv2.transcript]
+include_images = true
+sources = ["tool_outputs", "reasoning"]
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("Guardian v2 config surface rejected: %v", err)
+	}
+	if got := cfg.GuardianV2MaxParentCompactionTokens(); got != 256 {
+		t.Fatalf("max_parent_compaction_tokens = %d, want 256", got)
+	}
+	if got := cfg.GuardianV2MaxToolCallLag(); got != 2 {
+		t.Fatalf("max_tool_call_lag = %d, want 2", got)
+	}
+}
+
+// TestGuardianV2MaxToolCallLagDefaultsLikeRust mirrors Rust
+// GuardianV2Config::max_tool_call_lag (#39001): default 3; non-positive values
+// fall back to the default.
+func TestGuardianV2MaxToolCallLagDefaultsLikeRust(t *testing.T) {
+	if got := (&Config{}).GuardianV2MaxToolCallLag(); got != 3 {
+		t.Fatalf("default = %d, want 3", got)
+	}
+	configured := &Config{Values: map[string]any{
+		"features": map[string]any{"guardianv2": map[string]any{"max_tool_call_lag": int64(7)}},
+	}}
+	if got := configured.GuardianV2MaxToolCallLag(); got != 7 {
+		t.Fatalf("configured = %d, want 7", got)
+	}
+	nonPositive := &Config{Values: map[string]any{
+		"features": map[string]any{"guardianv2": map[string]any{"max_tool_call_lag": int64(0)}},
+	}}
+	if got := nonPositive.GuardianV2MaxToolCallLag(); got != 3 {
+		t.Fatalf("non-positive = %d, want default 3", got)
+	}
+}
+
+// TestManagedApprovalsReviewersDisableGuardianV2LikeRust mirrors Rust
+// cloud_config.rs managed_guardian_v1_requirements_disable_guardian_v2
+// (#39005): allowed_approvals_reviewers without "user" forces guardianv2 off;
+// user-inclusive lists and legacy guardian_approval-only requirements preserve
+// the setting.
+func TestManagedApprovalsReviewersDisableGuardianV2LikeRust(t *testing.T) {
+	settingsFor := func(requirementsTOML string) bool {
+		dir := t.TempDir()
+		cfg := &Config{Values: map[string]any{
+			"features": map[string]any{"guardianv2": true},
+		}}
+		if requirementsTOML != "" {
+			if err := os.WriteFile(filepath.Join(dir, "requirements.toml"), []byte(requirementsTOML), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		requirements, err := LoadRequirementsFile(filepath.Join(dir, "requirements.toml"))
+		if err != nil {
+			t.Fatalf("LoadRequirementsFile: %v", err)
+		}
+		applyManagedApprovalsReviewerGuardianV2Override(cfg.Values, requirements)
+		settings, _ := cfg.FeatureSettingsWithLegacyUsages()
+		return settings["guardianv2"]
+	}
+	for _, test := range []struct {
+		requirements string
+		want         bool
+	}{
+		{`allowed_approvals_reviewers = ["auto_review"]`, false},
+		{`allowed_approvals_reviewers = ["guardian_subagent"]`, false},
+		{`allowed_approvals_reviewers = ["auto_review", "user"]`, true},
+		{`allowed_approvals_reviewers = ["user"]`, true},
+		{`[features]
+guardian_approval = true`, true},
+		{`[features]
+auto_review = true`, true},
+		{"", true},
+	} {
+		if got := settingsFor(test.requirements); got != test.want {
+			t.Fatalf("requirements %q: guardianv2 = %v, want %v", test.requirements, got, test.want)
+		}
 	}
 }
 
@@ -1695,5 +1840,82 @@ func TestLoadEffectiveStrictConfigAcceptsRealtimeAudioLikeRust(t *testing.T) {
 	}
 	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err == nil {
 		t.Fatal("LoadEffectiveWithOptions(audio.unknown_device) returned nil error, want unknown-field rejection")
+	}
+}
+
+// TestShouldIgnoreDefaultManagedConfigForOS mirrors Rust #38947: Windows with
+// no explicit override ignores the legacy default, while explicit overrides
+// and Unix legacy support are preserved.
+func TestShouldIgnoreDefaultManagedConfigForOS(t *testing.T) {
+	if !shouldIgnoreDefaultManagedConfigForOS("", true) {
+		t.Fatal("windows default should be ignored")
+	}
+	if shouldIgnoreDefaultManagedConfigForOS("", false) {
+		t.Fatal("unix default must be preserved")
+	}
+	if shouldIgnoreDefaultManagedConfigForOS("C:\\explicit\\managed.toml", true) {
+		t.Fatal("explicit override must be preserved on Windows")
+	}
+	if shouldIgnoreDefaultManagedConfigForOS("C:\\explicit\\managed.toml", false) {
+		t.Fatal("explicit override must be preserved on Unix")
+	}
+}
+
+// TestWindowsIgnoresLegacyManagedConfigLikeRust exercises the Windows legacy
+// managed-config behavior on the current platform (Rust cfg!(windows) gate;
+// the pure platform decision is covered by
+// TestShouldIgnoreDefaultManagedConfigForOS on every host).
+func TestWindowsIgnoresLegacyManagedConfigLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only legacy managed config behavior")
+	}
+	home := t.TempDir()
+	deprecated := filepath.Join(home, "managed_config.toml")
+	if err := os.WriteFile(deprecated, []byte("model = \"gpt-4.1\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadEffectiveWithOptions(home, &EffectiveOptions{IncludeManagedConfig: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := cfg.Values["model"].(string); got == "gpt-4.1" {
+		t.Fatalf("legacy managed config leaked into effective values: model = %q", got)
+	}
+
+	service := NewConfigService(home)
+	warnings := service.Warnings()
+	found := false
+	for _, warning := range warnings {
+		if warning.Summary == "Ignoring deprecated managed config file." {
+			found = true
+			if warning.Path == nil || *warning.Path != deprecated {
+				t.Fatalf("warning path = %v, want %q", warning.Path, deprecated)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("deprecated managed config warning not emitted: %+v", warnings)
+	}
+}
+
+// TestHasLocalManagedConfigurationWindowsExcludesLegacyFile mirrors Rust
+// has_local_managed_configuration_with_system_requirements_path: on Windows the
+// legacy managed_config.toml alone must not count as local managed
+// configuration.
+func TestHasLocalManagedConfigurationWindowsExcludesLegacyFile(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), []byte("model = \"gpt-4.1\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := !shouldIgnoreDefaultManagedConfigForOS("", runtime.GOOS == "windows")
+	if HasLocalManagedConfiguration(home) != want {
+		t.Fatalf("legacy-only managed config detection = %v, want %v", HasLocalManagedConfiguration(home), want)
+	}
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("[features]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !HasLocalManagedConfiguration(home) {
+		t.Fatal("requirements.toml must count as local managed configuration")
 	}
 }

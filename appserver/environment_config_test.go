@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/execpolicy"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/turn"
@@ -336,6 +337,71 @@ func TestEnvironmentConfigJSONRoundTrip(t *testing.T) {
 	if len(parsed.SelectedCapabilityRoots) != 1 || parsed.SelectedCapabilityRoots[0].ID != "root-1" {
 		t.Fatalf("parsed roots = %#v", parsed.SelectedCapabilityRoots)
 	}
+}
+
+// TestEnvironmentConfigExecPolicyParsesAndRejectsAllowRules mirrors Rust
+// protocol::EnvironmentConfig exec_policy + validate_environment_config
+// (#38942): a restrictive policy parses, allow rules are rejected with the
+// Rust message, and the policy survives the clone/serialize roundtrip.
+func TestEnvironmentConfigExecPolicyParsesAndRejectsAllowRules(t *testing.T) {
+	config, err := environmentConfigFromAny(map[string]any{
+		"exec_policy": "prefix_rule(pattern = [\"echo\", \"blocked\"], decision = \"forbidden\", justification = \"managed\")",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ExecPolicy == nil {
+		t.Fatal("exec_policy was not parsed")
+	}
+	if config.ExecPolicy.HasAllowRules() {
+		t.Fatal("forbidden-only policy must not have allow rules")
+	}
+	if config.ExecPolicy.Text() == "" {
+		t.Fatal("policy text was not retained")
+	}
+
+	cloned := cloneEnvironmentConfig(config)
+	if cloned == nil || cloned.ExecPolicy == nil {
+		t.Fatal("clone lost exec_policy")
+	}
+	if !reflect.DeepEqual(cloned.ExecPolicy.Fingerprint(), config.ExecPolicy.Fingerprint()) {
+		t.Fatal("clone fingerprint differs")
+	}
+
+	serialized := environmentConfigToAny(cloned)
+	if got, ok := serialized["exec_policy"].(string); !ok || got == "" {
+		t.Fatalf("serialized exec_policy = %#v", serialized["exec_policy"])
+	}
+	roundtripped, err := environmentConfigFromAny(serialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(roundtripped.ExecPolicy.Fingerprint(), config.ExecPolicy.Fingerprint()) {
+		t.Fatal("roundtrip fingerprint differs")
+	}
+
+	_, err = environmentConfigFromAny(map[string]any{
+		"exec_policy": "prefix_rule(pattern = [\"echo\"], decision = \"allow\")",
+	})
+	if err == nil || !strings.Contains(err.Error(), "environment command policy cannot contain allow rules") {
+		t.Fatalf("allow-rule parse error = %v, want the Rust message", err)
+	}
+
+	rejected := &EnvironmentConfig{
+		ExecPolicy: mustRequirementsPolicy(t, "prefix_rule(pattern = [\"echo\"], decision = \"allow\")"),
+	}
+	if err := validateEnvironmentConfigForSelection("env-1", rejected); err == nil || !strings.Contains(err.Error(), "environment command policy cannot contain allow rules") {
+		t.Fatalf("validate error = %v, want the Rust message", err)
+	}
+}
+
+func mustRequirementsPolicy(t *testing.T, text string) *execpolicy.RequirementsPolicy {
+	t.Helper()
+	policy, err := execpolicy.ParseRequirementsPolicy("test", text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
 }
 
 func mustJSONRaw(t *testing.T, value any) json.RawMessage {

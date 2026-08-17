@@ -26,6 +26,18 @@ type HostSkillsPromptContext struct {
 	Warnings     []string
 }
 
+// skillMetadataBudgetForConfig returns the available-skills catalog budget:
+// [skills].max_context_tokens when configured, otherwise the default 2%-of-
+// context-window budget (Rust skill_metadata_budget, #38978).
+func skillMetadataBudgetForConfig(cfg *config.Config, contextWindow int64) promptctx.SkillMetadataBudget {
+	if cfg != nil {
+		if maxTokens, ok := cfg.SkillMaxContextTokens(); ok {
+			return promptctx.ConfiguredSkillMetadataBudget(maxTokens)
+		}
+	}
+	return promptctx.DefaultSkillMetadataBudget(contextWindow)
+}
+
 // BuildHostSkillsPromptContext builds the model-visible host skill catalog and
 // explicit skill bodies used by non-app-server entry points.
 func BuildHostSkillsPromptContext(options *HostSkillsPromptOptions) (*HostSkillsPromptContext, error) {
@@ -62,7 +74,7 @@ func BuildHostSkillsPromptContext(options *HostSkillsPromptOptions) (*HostSkills
 
 	if options.Config == nil || options.Config.IncludeSkillInstructions() {
 		available := promptctx.RenderAvailableSkillsWithOptions(metadata, promptctx.AvailableSkillsRenderOptions{
-			Budget:                   promptctx.DefaultSkillMetadataBudget(options.ContextWindow),
+			Budget:                   skillMetadataBudgetForConfig(options.Config, options.ContextWindow),
 			IncludeUsageInstructions: true,
 		})
 		if available != nil {

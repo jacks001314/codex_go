@@ -10,10 +10,18 @@ import (
 	"codex_go/applypatch"
 )
 
+// CodexExecServerNoiseAuthTokenEnvVar is the execution-server credential that
+// model-reachable commands and command hooks must not inherit. Mirrors Rust
+// codex_protocol::shell_environment::CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR
+// (the constant lives here so the exec server and the environment scrubber
+// share one definition, mirroring the Rust move into codex-protocol #38941).
+const CodexExecServerNoiseAuthTokenEnvVar = "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN"
+
 // nonInheritableEnvVars mirrors Rust's NON_INHERITABLE_ENV_VARS
 // (codex-rs/protocol/src/shell_environment.rs, Rust c4513cb982): environment
 // variables that model-reachable child processes must not inherit.
 var nonInheritableEnvVars = []string{
+	CodexExecServerNoiseAuthTokenEnvVar,
 	"OPENAI_FEDERATION_RULE_ID",
 	"OPENAI_IDENTITY_TOKEN_FILE",
 	"OPENAI_WORKLOAD_IDENTITY_CONTEXT",

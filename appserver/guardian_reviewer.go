@@ -27,6 +27,9 @@ type modelGuardianReviewer struct {
 	agent                      model.AgentRunner
 	store                      *state.ReviewStore
 	breaker                    *state.CircuitBreaker
+	scoreMu                    sync.Mutex
+	scoreProgress              map[string]*guardianScoreProgress
+	maxToolCallLag             int
 	notify                     func(threadID string, event *state.Event)
 	interrupt                  func(threadID, turnID string)
 	transcript                 func(threadID string) []string
@@ -37,6 +40,76 @@ type modelGuardianReviewer struct {
 	permissionProfile          func(threadID, turnID string) *sandbox.PermissionProfile
 	nodeReplEvidence           func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
 	timeout                    time.Duration
+}
+
+// defaultGuardianMaxToolCallLag mirrors Rust
+// GuardianV2Config::DEFAULT_MAX_TOOL_CALL_LAG (#39001).
+const defaultGuardianMaxToolCallLag = 3
+
+// guardianScoreProgress tracks the latest tool call and the latest scored tool
+// call per thread (Rust GuardianV2ScoreProgress, #39001): approval review is
+// skipped when the score lags by more than max_tool_call_lag tool calls.
+type guardianScoreProgress struct {
+	latestToolCall       int
+	latestScoredToolCall int
+}
+
+func (r *modelGuardianReviewer) beginToolCall(threadID string) *guardianScoreProgress {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	r.scoreMu.Lock()
+	defer r.scoreMu.Unlock()
+	if r.scoreProgress == nil {
+		r.scoreProgress = map[string]*guardianScoreProgress{}
+	}
+	progress := r.scoreProgress[threadID]
+	if progress == nil {
+		progress = &guardianScoreProgress{}
+		r.scoreProgress[threadID] = progress
+	}
+	progress.latestToolCall++
+	return progress
+}
+
+func (r *modelGuardianReviewer) scoreLag(threadID string) int {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return 0
+	}
+	r.scoreMu.Lock()
+	defer r.scoreMu.Unlock()
+	if r.scoreProgress == nil {
+		return 0
+	}
+	progress := r.scoreProgress[threadID]
+	if progress == nil {
+		return 0
+	}
+	return progress.latestToolCall - progress.latestScoredToolCall
+}
+
+func (r *modelGuardianReviewer) markScored(threadID string) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	r.scoreMu.Lock()
+	defer r.scoreMu.Unlock()
+	if progress := r.scoreProgress[threadID]; progress != nil {
+		progress.latestScoredToolCall = progress.latestToolCall
+	}
+}
+
+// SetMaxToolCallLag configures the per-thread stale-score bound (Rust
+// GuardianV2Config::max_tool_call_lag). Non-positive values restore the
+// default.
+func (r *modelGuardianReviewer) SetMaxToolCallLag(lag int) {
+	if r == nil {
+		return
+	}
+	if lag <= 0 {
+		lag = defaultGuardianMaxToolCallLag
+	}
+	r.maxToolCallLag = lag
 }
 
 type guardianSessionRunner struct {
@@ -153,7 +226,11 @@ func newModelGuardianReviewer(agent model.AgentRunner) GuardianReviewer {
 	if agent == nil {
 		return nil
 	}
-	return &modelGuardianReviewer{agent: &guardianSessionRunner{agent: agent}, store: state.NewReviewStore(), breaker: state.NewCircuitBreaker(), timeout: state.ReviewTimeout}
+	return &modelGuardianReviewer{
+		agent: &guardianSessionRunner{agent: agent}, store: state.NewReviewStore(),
+		breaker: state.NewCircuitBreaker(), scoreProgress: map[string]*guardianScoreProgress{},
+		maxToolCallLag: defaultGuardianMaxToolCallLag, timeout: state.ReviewTimeout,
+	}
 }
 
 func (r *modelGuardianReviewer) Prewarm(ctx context.Context) error {
@@ -168,6 +245,14 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if r == nil || r.agent == nil {
 		return state.DecisionAborted, "", errors.New("guardian reviewer is unavailable")
 	}
+	// Rust #39001: skip approval review when the latest risk score lags by more
+	// than max_tool_call_lag tool calls. The Go simplified reviewer fails closed
+	// (no stale-score auto-approval), mirroring the stale-data guard while
+	// keeping the established refuse-approval convention.
+	if r.maxToolCallLag > 0 && r.scoreLag(threadID) > r.maxToolCallLag {
+		return state.DecisionDenied, "guardian review skipped: risk score lag exceeds max_tool_call_lag", nil
+	}
+	r.beginToolCall(threadID)
 	var transcript []string
 	if r.transcript != nil {
 		transcript = r.transcript(threadID)
@@ -279,6 +364,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	r.emit(threadID, completed)
 	decision := state.DecisionFromEvent(completed)
 	r.recordDecision(threadID, turnID, decision)
+	r.markScored(threadID)
 	return decision, assessment.Rationale, nil
 }
 
@@ -623,7 +709,32 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 	}
 	responseID := ""
 	if compacted != nil && strings.TrimSpace(compacted.ResponseID) != "" {
-		responseID = strings.TrimSpace(compacted.ResponseID)
+		// Rust #38980: reuse the latest encrypted parent compaction only when
+		// its complete serialized item fits within the configured
+		// max_parent_compaction_tokens bound (default 25,000 tokens; 4 bytes
+		// per token, mirroring TruncationPolicy::Tokens(n).byte_budget()).
+		// Go approximates the serialized item size with the compaction summary
+		// bytes. An oversized latest compaction fails closed: the existing
+		// reviewer context is preserved instead of seeding with older context.
+		responseID = guardianParentCompactionResponseID(compacted, cfg.GuardianV2MaxParentCompactionTokens())
 	}
 	sessionRunner.ResetAfterParentCompaction(responseID)
+}
+
+// guardianParentCompactionResponseID returns the reusable compaction response
+// ID when the latest encrypted parent compaction fits within the configured
+// token bound, and an empty ID when it is oversized (fail closed, #38980). The
+// serialized item size is approximated by the compaction summary bytes (4
+// bytes per token, mirroring Rust TruncationPolicy::Tokens byte_budget).
+func guardianParentCompactionResponseID(compacted *compact.Result, maxTokens int) string {
+	if compacted == nil || strings.TrimSpace(compacted.ResponseID) == "" {
+		return ""
+	}
+	if maxTokens <= 0 {
+		maxTokens = 25_000
+	}
+	if len(compacted.Summary) > maxTokens*4 {
+		return ""
+	}
+	return strings.TrimSpace(compacted.ResponseID)
 }

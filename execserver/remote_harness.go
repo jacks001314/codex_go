@@ -16,14 +16,20 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	clatter "github.com/shurlinet/go-clatter"
+
+	"codex_go/envutil"
 )
 
 const (
 	CodexExecServerNoiseRegistryURLEnvVar      = "CODEX_EXEC_SERVER_NOISE_REGISTRY_URL"
 	CodexExecServerNoiseEnvironmentIDEnvVar    = "CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID"
-	CodexExecServerNoiseAuthTokenEnvVar        = "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN"
 	CodexExecServerNoiseChatGPTAccountIDEnvVar = "CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID"
 )
+
+// CodexExecServerNoiseAuthTokenEnvVar is the shared execution-server credential
+// constant (single definition across the exec server and the environment
+// scrubber, mirroring Rust #38941).
+const CodexExecServerNoiseAuthTokenEnvVar = envutil.CodexExecServerNoiseAuthTokenEnvVar
 
 type NoiseRendezvousConnectBundle struct {
 	WebSocketURL            string

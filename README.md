@@ -1,6 +1,6 @@
-# Codex Go
+﻿# Codex Go
 
-The latest audited alignment target is Rust `main` at `1f41cc5d92722748e45cae9cecc6d883a4e7cbb1`; see [the 2026-08-17 alignment record](./update/plan_2026_08_17_sync17.md).
+The latest audited alignment target is Rust `main` at `21cfd369efca2df70c904c580b2e7e2e3eddb3c3`; see [the 2026-08-17 alignment record](./update/plan_2026_08_17_sync19.md).
 [parity.json](./parity.json) records the current SDK and implementation evidence. Candidate baseline, commit, domain, and contract state live under [parity/](./parity/); only `parity/baseline.json` with `certificationReady: true` denotes a fully certified release.
 
 `codex_go` 是 Codex CLI 的 Go 实现，目标是逐步对齐 Rust 版 Codex CLI 的命令行行为、配置语义、认证、模型请求、TUI、app-server、MCP、插件、沙箱和会话能力。

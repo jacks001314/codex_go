@@ -65,8 +65,8 @@ func TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatal
 	router.runSkillShadowSelection("thread-one", "turn-one", cfg, &turn.TurnStartParams{Input: []turn.TurnUserInput{{Type: "text", Text: "create slides"}}}, skills)
 
 	records := metrics.Records()
-	if len(records) != 48 {
-		t.Fatalf("metric records = %d, want 48", len(records))
+	if len(records) != 66 {
+		t.Fatalf("metric records = %d, want 66", len(records))
 	}
 	methods := map[string]bool{}
 	for _, record := range records {
@@ -83,7 +83,7 @@ func TestRuntimeRouterSkillShadowSelectionRecordsRustMethodsWithoutChangingCatal
 			t.Fatalf("catalog metric = %#v", record)
 		}
 	}
-	for _, method := range []string{"weighted_lexical_v1", "fielded_bm25_v1", "character_ngram_v1", "character_routing_card_v1", "multi_query_lexical_v1", "routing_card_exact_v1", "lru_v1", "lru_plus_lexical_v1"} {
+	for _, method := range []string{"weighted_lexical_v1", "fielded_bm25_v1", "character_ngram_v1", "character_routing_card_v1", "multi_query_lexical_v1", "routing_card_exact_v1", "lru_v1", "lru_plus_lexical_v1", "lru_plus_character_routing_v1", "lru_plus_lexical_character_routing_v1"} {
 		if !methods[method] {
 			t.Fatalf("missing method %q in %#v", method, methods)
 		}
@@ -226,8 +226,8 @@ func TestSkillShadowInvocationRecordingEmitsRankMetrics(t *testing.T) {
 			lruRank = record.tags["rank"]
 		}
 	}
-	if invocations != 8 {
-		t.Fatalf("invocation records = %d, want 8", invocations)
+	if invocations != 11 {
+		t.Fatalf("invocation records = %d, want 11", invocations)
 	}
 	if lruRank != "miss" {
 		t.Fatalf("lru_v1 rank before history = %q, want miss", lruRank)
@@ -259,5 +259,43 @@ func TestSkillShadowInvocationSkipsExplicitInvokeType(t *testing.T) {
 		if record.name == skillShadowInvocationMetric {
 			t.Fatalf("explicit invocation recorded: %#v", record)
 		}
+	}
+}
+
+func TestSkillShadowTaskContextFusionRecoversEarlierTurnSkill(t *testing.T) {
+	metrics := &recordingSkillShadowMetrics{}
+	router := NewRuntimeRouter(RuntimeServices{SkillShadowMetrics: metrics})
+	defer router.Close()
+	cfg := &config.Config{Values: map[string]any{"skills": map[string]any{"shadow_selection_enabled": true}}}
+	skills := []promptctx.InstructionsSkillMetadata{
+		{Name: "slides", Path: "/skills/slides", Description: "Create presentations."},
+		{Name: "python-tools", Path: "/skills/python-tools", Description: "Manage Python environments."},
+	}
+	// Turn one: explicit skill intent "slides" plus a successful implicit
+	// invocation of python-tools; both are relevance evidence for future turns.
+	router.runSkillShadowSelection("thread-tc", "turn-one", cfg, &turn.TurnStartParams{Input: []turn.TurnUserInput{{Type: "skill", Name: "slides"}}}, skills)
+	router.recordSkillShadowInvocation("thread-tc", "turn-one", skills[1])
+	// Turn two: a bare continuation; the task-context fusion must recover the
+	// python-tools skill from the earlier turn (Rust #39008).
+	router.runSkillShadowSelection("thread-tc", "turn-two", cfg, &turn.TurnStartParams{Prompt: "continue"}, skills)
+	state := router.skillShadowThreadStateFor("thread-tc")
+	state.mu.Lock()
+	ranked := append([]skillShadowRankedSelection(nil), state.ranked...)
+	state.mu.Unlock()
+	var taskFusion []string
+	for _, selection := range ranked {
+		if selection.method == "task_context_fusion_v1" {
+			taskFusion = selection.skillResources
+			break
+		}
+	}
+	found := false
+	for _, resource := range taskFusion {
+		if resource == "/skills/python-tools" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("task_context_fusion_v1 did not recover python-tools: %#v", taskFusion)
 	}
 }

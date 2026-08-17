@@ -370,6 +370,52 @@ func TestDefaultSkillMetadataBudget(t *testing.T) {
 	}
 }
 
+// TestConfiguredSkillMetadataBudgetCapsAtTenThousandLikeRust mirrors Rust
+// skill_metadata_budget with max_context_tokens (#38978): positive values are
+// honored, values above 10,000 are capped, and non-positive values yield the
+// zero budget (NonZeroUsize) so callers fall back to the context-window
+// default.
+func TestConfiguredSkillMetadataBudgetCapsAtTenThousandLikeRust(t *testing.T) {
+	if got := ConfiguredSkillMetadataBudget(800); got.Kind != SkillMetadataBudgetTokens || got.Limit != 800 || !got.Configured {
+		t.Fatalf("ConfiguredSkillMetadataBudget(800) = %#v", got)
+	}
+	if got := ConfiguredSkillMetadataBudget(10000); got.Limit != 10000 {
+		t.Fatalf("ConfiguredSkillMetadataBudget(10000) = %#v", got)
+	}
+	if got := ConfiguredSkillMetadataBudget(25000); got.Limit != MaxConfiguredSkillMetadataTokenBudget {
+		t.Fatalf("ConfiguredSkillMetadataBudget(25000) = %#v, want cap %d", got, MaxConfiguredSkillMetadataTokenBudget)
+	}
+	if got := ConfiguredSkillMetadataBudget(0); got.Limit != 0 {
+		t.Fatalf("ConfiguredSkillMetadataBudget(0) = %#v, want zero budget", got)
+	}
+	if got := ConfiguredSkillMetadataBudget(-5); got.Limit != 0 {
+		t.Fatalf("ConfiguredSkillMetadataBudget(-5) = %#v, want zero budget", got)
+	}
+}
+
+// TestRenderConfiguredBudgetWarningOmitsPercentLikeRust pins the plain Rust
+// warning wording for a configured budget (SKILL_DESCRIPTIONS_REMOVED_WARNING_
+// PREFIX has no "2%" suffix; the percent variant only applies to the default
+// context-window budget, #38978).
+func TestRenderConfiguredBudgetWarningOmitsPercentLikeRust(t *testing.T) {
+	skills := []InstructionsSkillMetadata{
+		{Name: "alpha", Description: strings.Repeat("x", 120), Path: "/skills/alpha/SKILL.md"},
+		{Name: "beta", Description: strings.Repeat("y", 120), Path: "/skills/beta/SKILL.md"},
+		{Name: "gamma", Description: strings.Repeat("z", 120), Path: "/skills/gamma/SKILL.md"},
+	}
+	available := RenderAvailableSkills(skills, ConfiguredSkillMetadataBudget(1))
+	if available == nil || available.WarningMessage == nil {
+		t.Fatal("expected a warning message for an exhausted configured budget")
+	}
+	if strings.Contains(*available.WarningMessage, "2%") {
+		t.Fatalf("configured-budget warning must not mention the context-window percent: %q", *available.WarningMessage)
+	}
+	wantPrefix := "Exceeded skills context budget. All skill descriptions were removed and"
+	if !strings.HasPrefix(*available.WarningMessage, wantPrefix) {
+		t.Fatalf("warning = %q, want prefix %q", *available.WarningMessage, wantPrefix)
+	}
+}
+
 func TestRenderCombinedAvailableSkillsSharesBudgetAndPrioritizesExecutor(t *testing.T) {
 	host := []InstructionsSkillMetadata{
 		{Name: "host-one", Description: strings.Repeat("h", 100), Path: "C:/skills/host-one/SKILL.md", Root: "C:/skills", Scope: "user"},
