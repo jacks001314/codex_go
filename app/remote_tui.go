@@ -3549,6 +3549,9 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 			status,
 		)
 		item.CallID = id
+		// Carry the command execution source so the TUI can group consecutive
+		// successful Agent / unified-exec startup commands (Rust #38921).
+		item.Metadata = map[string]any{"source": firstNonEmptyLocal(remotePayloadString(payload, "source"), string(appserver.CommandExecutionSourceAgent))}
 		return item
 	case "mcpToolCall":
 		status := remotePayloadString(payload, "status")

@@ -1,6 +1,7 @@
 package execcell
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -229,5 +230,127 @@ func TestUnifiedExecInteractionFormatting(t *testing.T) {
 	powershell := FormatUnifiedExecInteraction([]string{"pwsh", "-NoProfile", "-Command", "Get-ChildItem"}, "")
 	if powershell != "Waited for `pwsh -NoProfile -Command Get-ChildItem`" {
 		t.Fatalf("powershell interaction should use Rust join fallback: %q", powershell)
+	}
+}
+
+func TestExecCellCompactGroupGroupsSuccessesAndPreservesTranscript(t *testing.T) {
+	cell := NewExecCell(ExecCall{
+		CallID:  "call-first",
+		Command: []string{"bash", "-lc", "printf first"},
+		Source:  ExecSourceAgent,
+	}, false)
+	if !cell.CompleteCall("call-first", CommandOutput{ExitCode: 0, AggregatedOutput: "first\n", FormattedOutput: "first\n"}, time.Second) {
+		t.Fatal("first CompleteCall failed")
+	}
+	if cell.ShouldFlush() {
+		t.Fatal("a single completed groupable command should stay un-flushed")
+	}
+
+	next, ok := cell.WithAddedCall("call-second", []string{"bash", "-lc", "printf second"}, nil, ExecSourceAgent, "")
+	if !ok {
+		t.Fatal("second groupable call should join the compact group")
+	}
+	display := strings.Join(next.DisplayLines(80), "\n")
+	if !strings.Contains(display, "• Ran 1 command · ctrl + t to view transcript") || !strings.Contains(display, "Running printf second") {
+		t.Fatalf("active compact group display:\n%s", display)
+	}
+	if !next.CompleteCall("call-second", CommandOutput{ExitCode: 0, AggregatedOutput: "second\n", FormattedOutput: "second\n"}, time.Second) {
+		t.Fatal("second CompleteCall failed")
+	}
+	if next.ShouldFlush() {
+		t.Fatal("compact group with all successes should stay un-flushed")
+	}
+	display = strings.Join(next.DisplayLines(80), "\n")
+	if !strings.Contains(display, "• Ran 2 commands · ctrl + t to view transcript") || strings.Contains(display, "printf second") {
+		t.Fatalf("completed compact group display:\n%s", display)
+	}
+	transcript := strings.Join(next.TranscriptLines(80), "\n")
+	if !strings.Contains(transcript, "$ printf first") || !strings.Contains(transcript, "$ printf second") {
+		t.Fatalf("compact group must preserve the full transcript:\n%s", transcript)
+	}
+}
+
+func TestExecCellCompactGroupIncludesUnifiedExecStartup(t *testing.T) {
+	cell := NewExecCell(ExecCall{
+		CallID:  "call-agent",
+		Command: []string{"bash", "-lc", "echo agent"},
+		Source:  ExecSourceAgent,
+	}, false)
+	if !cell.CompleteCall("call-agent", CommandOutput{ExitCode: 0}, time.Second) {
+		t.Fatal("agent CompleteCall failed")
+	}
+	next, ok := cell.WithAddedCall("call-startup", []string{"bash", "-lc", "echo startup"}, nil, ExecSourceUnifiedExecStartup, "")
+	if !ok {
+		t.Fatal("unified exec startup should join the compact group")
+	}
+	if !next.CompleteCall("call-startup", CommandOutput{ExitCode: 0}, time.Second) {
+		t.Fatal("startup CompleteCall failed")
+	}
+	if next.ShouldFlush() {
+		t.Fatal("agent + unified exec startup successes should stay un-flushed")
+	}
+	display := strings.Join(next.DisplayLines(80), "\n")
+	if !strings.Contains(display, "• Ran 2 commands · ctrl + t to view transcript") {
+		t.Fatalf("unified exec startup not grouped:\n%s", display)
+	}
+}
+
+func TestExecCellCompactGroupKeepsFailuresAndManualCommandsVisible(t *testing.T) {
+	cell := NewExecCell(ExecCall{
+		CallID:  "call-first",
+		Command: []string{"bash", "-lc", "printf first"},
+		Source:  ExecSourceAgent,
+	}, false)
+	if !cell.CompleteCall("call-first", CommandOutput{ExitCode: 0, AggregatedOutput: "first\n"}, time.Second) {
+		t.Fatal("first CompleteCall failed")
+	}
+	next, ok := cell.WithAddedCall("call-broken", []string{"bash", "-lc", "printf broken"}, nil, ExecSourceAgent, "")
+	if !ok {
+		t.Fatal("groupable call should join even when it later fails")
+	}
+	if !next.CompleteCall("call-broken", CommandOutput{ExitCode: 1, AggregatedOutput: "broken\n", FormattedOutput: "broken\n"}, time.Second) {
+		t.Fatal("broken CompleteCall failed")
+	}
+	if !next.ShouldFlush() {
+		t.Fatal("compact group with a failure must flush")
+	}
+	display := strings.Join(next.DisplayLines(80), "\n")
+	if !strings.Contains(display, "• Ran 1 command · ctrl + t to view transcript") || !strings.Contains(display, "Ran printf broken") {
+		t.Fatalf("failed command must stay visible:\n%s", display)
+	}
+
+	// A manual shell command never joins an inactive compact group.
+	if _, ok := cell.WithAddedCall("call-manual", []string{"bash", "-lc", "printf manual"}, nil, ExecSourceUserShell, ""); ok {
+		t.Fatal("manual shell command must not join an inactive compact group")
+	}
+}
+
+func TestExecCellCompactGroupFlushesAtGroupLimit(t *testing.T) {
+	cell := NewExecCell(ExecCall{
+		CallID:  "call-0",
+		Command: []string{"bash", "-lc", "echo 0"},
+		Source:  ExecSourceAgent,
+	}, false)
+	if !cell.CompleteCall("call-0", CommandOutput{ExitCode: 0}, time.Second) {
+		t.Fatal("call-0 CompleteCall failed")
+	}
+	for i := 1; i < MaxGroupedCommands; i++ {
+		next, ok := cell.WithAddedCall(fmt.Sprintf("call-%d", i), []string{"bash", "-lc", fmt.Sprintf("echo %d", i)}, nil, ExecSourceAgent, "")
+		if !ok {
+			t.Fatalf("call-%d did not join below the group limit", i)
+		}
+		cell = next
+		if !cell.CompleteCall(fmt.Sprintf("call-%d", i), CommandOutput{ExitCode: 0}, time.Second) {
+			t.Fatalf("call-%d CompleteCall failed", i)
+		}
+		if i < MaxGroupedCommands-1 && cell.ShouldFlush() {
+			t.Fatalf("call-%d flushed before the group limit", i)
+		}
+	}
+	if !cell.ShouldFlush() {
+		t.Fatal("compact group at the 32-command limit must flush")
+	}
+	if _, ok := cell.WithAddedCall("call-over", []string{"bash", "-lc", "echo over"}, nil, ExecSourceAgent, ""); ok {
+		t.Fatal("compact group over the limit must reject new calls")
 	}
 }

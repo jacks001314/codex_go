@@ -2,12 +2,20 @@ package doctor
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -497,6 +505,152 @@ func TestNetworkCheckWarnsWhenCustomCAEnvIsNotFile(t *testing.T) {
 	if check.Summary != "custom CA env var does not point at a file" || !containsDetail(check, "SSL_CERT_FILE: not a file "+dir) {
 		t.Fatalf("check = %+v", check)
 	}
+}
+
+func TestNetworkCheckReportsProxyPolicyDetailsLikeRust(t *testing.T) {
+	clearDoctorProxyEnv(t)
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+[features]
+respect_system_proxy = true
+
+[permissions.network]
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	check := networkCheck(home, &Options{})
+	if check.Status != CheckStatusOK {
+		t.Fatalf("status = %s details=%v", check.Status, check.Details)
+	}
+	if !containsDetail(check, "respect system proxy: enabled") {
+		t.Fatalf("missing respect system proxy detail: %#v", check.Details)
+	}
+	if !containsDetail(check, "managed proxy: configured") {
+		t.Fatalf("missing managed proxy detail: %#v", check.Details)
+	}
+
+	plainHome := t.TempDir()
+	plain := networkCheck(plainHome, &Options{})
+	if !containsDetail(plain, "respect system proxy: disabled") || !containsDetail(plain, "managed proxy: not configured") {
+		t.Fatalf("default proxy policy details = %#v", plain.Details)
+	}
+}
+
+func TestClassifyHTTPProbeErrorClassifiesFailuresLikeRust(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "nil", err: nil, want: ""},
+		{name: "tls certificate verification", err: &tls.CertificateVerificationError{}, want: "TLS handshake or certificate validation failed"},
+		{name: "x509 unknown authority", err: x509.UnknownAuthorityError{}, want: "TLS handshake or certificate validation failed"},
+		{name: "tls record header", err: &tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}, want: "TLS handshake or certificate validation failed"},
+		{name: "proxy http to https", err: errors.New(`Get "https://example.com": proxyconnect tcp: localhost:3128: server gave HTTP response to HTTPS client`), want: "TLS handshake or certificate validation failed"},
+		{name: "deadline exceeded", err: context.DeadlineExceeded, want: "request timed out"},
+		{name: "url timeout", err: &url.Error{Op: "Get", URL: "https://example.com", Err: context.DeadlineExceeded}, want: "request timed out"},
+		{name: "proxy auth 407", err: errors.New("proxyconnect tcp: proxy.example:3128: 407 Proxy Authentication Required"), want: "proxy authentication required"},
+		{name: "invalid proxy url", err: errors.New(`Get "https://example.com": http: invalid proxy URL`), want: "invalid proxy configuration"},
+		{name: "malformed proxy", err: errors.New("proxyconnect tcp: malformed proxy address"), want: "invalid proxy configuration"},
+		{name: "unsupported proxy scheme", err: errors.New("proxyconnect tcp: unsupported protocol scheme \"socks5\""), want: "unsupported proxy configuration"},
+		{name: "proxy resolution", err: errors.New("proxyconnect tcp: dial tcp: lookup proxy.example: no such host"), want: "proxy resolution failed"},
+		{name: "connect refused", err: errors.New(`Get "http://127.0.0.1:9": dial tcp 127.0.0.1:9: connect: connection refused`), want: "connect failed"},
+		{name: "generic", err: errors.New("boom"), want: "request failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyHTTPProbeError(tc.err)
+			gotMessage := ""
+			if got != nil {
+				gotMessage = got.Error()
+			}
+			if gotMessage != tc.want {
+				t.Fatalf("classifyHTTPProbeError(%v) = %q, want %q", tc.err, gotMessage, tc.want)
+			}
+		})
+	}
+}
+
+func TestRouteAwareProbeHTTPClientHonorsSystemProxyPolicy(t *testing.T) {
+	clearDoctorProxyEnv(t)
+	disabled := routeAwareProbeHTTPClient(&config.Config{Values: map[string]any{}})
+	transport, ok := disabled.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport = %T", disabled.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("Proxy set, want nil when respect_system_proxy is disabled")
+	}
+
+	enabled := routeAwareProbeHTTPClient(&config.Config{Values: map[string]any{"features": map[string]any{"respect_system_proxy": true}}})
+	transport, ok = enabled.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport = %T", enabled.Transport)
+	}
+	if transport.Proxy == nil {
+		t.Fatal("Proxy nil, want ProxyFromEnvironment when respect_system_proxy is enabled")
+	}
+}
+
+func TestRouteAwareProbeHTTPClientExtendsRootCAsAndFallsBack(t *testing.T) {
+	clearDoctorProxyEnv(t)
+	certPEM := testSelfSignedCACertPEM(t)
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caPath, certPEM, 0o600); err != nil {
+		t.Fatalf("write ca file: %v", err)
+	}
+	t.Setenv("CODEX_CA_CERTIFICATE", caPath)
+	client := routeAwareProbeHTTPClient(&config.Config{Values: map[string]any{}})
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
+		t.Fatalf("route-aware client missing root pool: transport=%T tls=%#v", client.Transport, transport)
+	}
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		t.Fatal("generated CA PEM did not decode")
+	}
+	ca, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse generated CA: %v", err)
+	}
+	if _, err := ca.Verify(x509.VerifyOptions{Roots: transport.TLSClientConfig.RootCAs}); err != nil {
+		t.Fatalf("custom CA not trusted by probe root pool: %v", err)
+	}
+
+	// An invalid custom CA bundle must not replace the system roots.
+	t.Setenv("CODEX_CA_CERTIFICATE", "")
+	badPath := filepath.Join(t.TempDir(), "bad.pem")
+	if err := os.WriteFile(badPath, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatalf("write bad ca file: %v", err)
+	}
+	t.Setenv("SSL_CERT_FILE", badPath)
+	fallback := routeAwareProbeHTTPClient(&config.Config{Values: map[string]any{}})
+	transport, ok = fallback.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
+		t.Fatalf("invalid custom CA must fall back to a usable system root pool")
+	}
+}
+
+func testSelfSignedCACertPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate rsa key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "codex doctor test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
 func TestTerminalCheckFailsForDumbTerminal(t *testing.T) {

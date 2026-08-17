@@ -85,6 +85,9 @@ func OutputLinesFor(output *CommandOutput, params OutputLinesParams) OutputLines
 }
 
 func (c ExecCell) DisplayLines(width int) []string {
+	if len(c.Calls) > 1 && (!c.IsExploringCell() || !c.IsActive()) {
+		return c.compactGroupDisplayLines(width)
+	}
 	if c.IsExploringCell() {
 		return c.exploringDisplayLines(width)
 	}
@@ -94,6 +97,9 @@ func (c ExecCell) DisplayLines(width int) []string {
 func (c ExecCell) DisplayLinesWithTheme(width int, themeID string) []string {
 	if strings.TrimSpace(themeID) == "" {
 		return c.DisplayLines(width)
+	}
+	if len(c.Calls) > 1 && (!c.IsExploringCell() || !c.IsActive()) {
+		return c.compactGroupDisplayLinesWithTheme(width, themeID)
 	}
 	if c.IsExploringCell() {
 		return c.exploringDisplayLines(width)
@@ -168,8 +174,46 @@ func (c ExecCell) commandDisplayLinesStyled(width int, themeID string, styled bo
 	if len(c.Calls) != 1 {
 		return nil
 	}
+	return commandCallDisplayLinesStyled(width, c.Calls[0], themeID, styled)
+}
+
+func (c ExecCell) compactGroupDisplayLines(width int) []string {
+	return c.compactGroupDisplayLinesStyled(width, "", false)
+}
+
+func (c ExecCell) compactGroupDisplayLinesWithTheme(width int, themeID string) []string {
+	return c.compactGroupDisplayLinesStyled(width, themeID, true)
+}
+
+func (c ExecCell) compactGroupDisplayLinesStyled(width int, themeID string, styled bool) []string {
+	completedCommands := 0
+	for _, call := range c.Calls {
+		if !IsGroupableSource(call.Source) || call.Duration == nil || call.Output == nil || call.Output.ExitCode != 0 {
+			break
+		}
+		completedCommands++
+	}
+	lines := []string{}
+	if completedCommands > 0 {
+		noun := "commands"
+		if completedCommands == 1 {
+			noun = "command"
+		}
+		countText := "Ran " + tui.FormatInt(int64(completedCommands)) + " " + noun
+		if styled {
+			lines = append(lines, ansiWrap(ansiGreenBold, "•")+" "+ansiWrap(ansiBold, countText)+" · "+ansiWrap(ansiDim, transcriptHint))
+		} else {
+			lines = append(lines, "• "+countText+" · "+transcriptHint)
+		}
+	}
+	for _, call := range c.Calls[completedCommands:] {
+		lines = append(lines, commandCallDisplayLinesStyled(width, call, themeID, styled)...)
+	}
+	return lines
+}
+
+func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, styled bool) []string {
 	width = max(width, 1)
-	call := c.Calls[0]
 	success := call.Output != nil && call.Output.ExitCode == 0
 	failed := call.Output != nil && call.Output.ExitCode != 0
 	bullet := "•"

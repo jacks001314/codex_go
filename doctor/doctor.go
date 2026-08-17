@@ -2,6 +2,8 @@ package doctor
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -29,6 +31,7 @@ import (
 	"codex_go/install"
 	"codex_go/mcp"
 	"codex_go/model"
+	"codex_go/network"
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/session"
@@ -1206,6 +1209,9 @@ const (
 type reachabilityPlan struct {
 	Description string
 	Endpoints   []*reachabilityEndpoint
+	// httpClient carries the route-aware probe client built from the effective
+	// config (Rust #38918 carries an HttpClientFactory on the plan).
+	httpClient *http.Client
 }
 
 type reachabilityEndpoint struct {
@@ -1261,7 +1267,7 @@ func providerReachabilityPlan(codexHome string, opts *Options) (*reachabilityPla
 	if err != nil {
 		return nil, err
 	}
-	return providerReachabilityPlanFromParts(
+	plan := providerReachabilityPlanFromParts(
 		mode,
 		providerID,
 		provider.Name,
@@ -1269,7 +1275,9 @@ func providerReachabilityPlan(codexHome string, opts *Options) (*reachabilityPla
 		provider.QueryParams,
 		provider.IsAmazonBedrock(),
 		stringConfigValueForDoctor(cfg, "chatgpt_base_url"),
-	), nil
+	)
+	plan.httpClient = routeAwareProbeHTTPClient(cfg)
+	return plan, nil
 }
 
 func activeProviderBaseURLForDoctor(providerID string, provider *model.ProviderInfo, resolved *auth.ResolvedAuth) (string, error) {
@@ -1404,6 +1412,9 @@ func (b *Builder) runProviderReachabilityCheck(plan *reachabilityPlan) *DoctorCh
 		return NewCheck("network.provider_reachability", "reachability", CheckStatusOK, "active provider has no HTTP endpoint to probe").DetailsList(details)
 	}
 	client := b.providerHTTPClient()
+	if plan != nil && plan.httpClient != nil {
+		client = plan.httpClient
+	}
 	requiredFailures := 0
 	warnings := 0
 	var issues []*DoctorIssue
@@ -1483,6 +1494,44 @@ func (b *Builder) providerHTTPClient() *http.Client {
 	return &http.Client{Timeout: defaultProviderReachabilityTimeout}
 }
 
+// routeAwareProbeHTTPClient builds the provider probe client, matching Rust's
+// route-aware pool used by codex doctor (#38918): the effective
+// respect_system_proxy feature decides whether the system proxy is honored,
+// and custom CA env vars (CODEX_CA_CERTIFICATE / SSL_CERT_FILE) extend the
+// system roots. An invalid custom CA bundle leaves the system roots intact
+// (Rust with_legacy_custom_ca_fallback preserves the transport-default pool).
+func routeAwareProbeHTTPClient(cfg *config.Config) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyFromEnvironment
+	if cfg == nil || !cfg.RespectSystemProxyEnabled() {
+		transport.Proxy = nil
+	}
+	transport.TLSClientConfig = &tls.Config{
+		RootCAs:    probeRootCAsForDoctor(),
+		MinVersion: tls.VersionTLS12,
+	}
+	return &http.Client{Timeout: defaultProviderReachabilityTimeout, Transport: transport}
+}
+
+// probeRootCAsForDoctor extends the system certificate pool with custom CA
+// bundles pointed at by CODEX_CA_CERTIFICATE / SSL_CERT_FILE. Unreadable or
+// unparseable bundles are ignored so the system roots remain usable.
+func probeRootCAsForDoctor() *x509.CertPool {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	for _, key := range []string{"CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			if contents, readErr := os.ReadFile(value); readErr == nil {
+				// Invalid bundles leave the pool unchanged (system-root fallback).
+				_ = network.AppendCertsFromPEMNormalized(pool, contents)
+			}
+		}
+	}
+	return pool
+}
+
 func httpProbeURL(ctx context.Context, client *http.Client, rawURL string) (string, error) {
 	return httpProbeURLWithMethod(ctx, client, http.MethodHead, rawURL)
 }
@@ -1534,15 +1583,136 @@ func classifyHTTPProbeError(err error) error {
 		return nil
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("request timed out")
+		return errors.New("request timed out")
+	}
+	if isTLSProbeError(err) {
+		return errors.New("TLS handshake or certificate validation failed")
+	}
+	if isProxyAuthenticationProbeError(err) {
+		return errors.New("proxy authentication required")
+	}
+	if isInvalidProxyConfigProbeError(err) {
+		return errors.New("invalid proxy configuration")
+	}
+	if isUnsupportedProxySchemeProbeError(err) {
+		return errors.New("unsupported proxy configuration")
+	}
+	if isProxyResolutionProbeError(err) {
+		return errors.New("proxy resolution failed")
 	}
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
 		if urlErr.Timeout() {
-			return fmt.Errorf("request timed out")
+			return errors.New("request timed out")
 		}
 	}
-	return fmt.Errorf("connect failed")
+	if isConnectProbeError(err) {
+		return errors.New("connect failed")
+	}
+	return errors.New("request failed")
+}
+
+// isTLSProbeError mirrors Rust RouteFailureClass::TlsError
+// (route_aware_client_pool failure_class): TLS handshake failures and
+// certificate validation failures, including proxies that answer HTTPS with
+// plain HTTP.
+func isTLSProbeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var certificateErr *tls.CertificateVerificationError
+	if errors.As(err, &certificateErr) {
+		return true
+	}
+	var recordErr *tls.RecordHeaderError
+	if errors.As(err, &recordErr) {
+		return true
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthority) {
+		return true
+	}
+	var hostnameErr x509.HostnameError
+	if errors.As(err, &hostnameErr) {
+		return true
+	}
+	var invalidCertificateErr x509.CertificateInvalidError
+	if errors.As(err, &invalidCertificateErr) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "tls:") ||
+		strings.Contains(message, "x509:") ||
+		strings.Contains(message, "certificate signed by unknown authority") ||
+		strings.Contains(message, "certificate verify") ||
+		strings.Contains(message, "handshake failure") ||
+		strings.Contains(message, "server gave http response to https client")
+}
+
+// isProxyAuthenticationProbeError mirrors Rust
+// RouteFailureClass::ProxyAuthenticationRequired: HTTP 407 from the proxy or a
+// proxyconnect 407 failure.
+func isProxyAuthenticationProbeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "proxy authentication required") {
+		return true
+	}
+	return strings.Contains(message, "407") && strings.Contains(message, "proxy")
+}
+
+// isInvalidProxyConfigProbeError mirrors Rust
+// RouteFailureClass::InvalidProxyConfig: malformed proxy URLs or addresses.
+func isInvalidProxyConfigProbeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "invalid proxy") ||
+		strings.Contains(message, "malformed proxy") ||
+		(strings.Contains(message, "missing port") && strings.Contains(message, "proxy"))
+}
+
+// isUnsupportedProxySchemeProbeError mirrors Rust
+// RouteFailureClass::UnsupportedProxyScheme.
+func isUnsupportedProxySchemeProbeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unsupported proxy scheme") ||
+		strings.Contains(message, "unsupported protocol scheme")
+}
+
+// isProxyResolutionProbeError mirrors Rust RouteFailureClass::ResolverError:
+// the proxy address itself fails to resolve.
+func isProxyResolutionProbeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "proxy") {
+		return false
+	}
+	return strings.Contains(message, "no such host") ||
+		strings.Contains(message, "server misbehaving") ||
+		strings.Contains(message, "no route to host")
+}
+
+// isConnectProbeError mirrors Rust RouteAwareRequestError::is_connect: TCP
+// connection establishment failures.
+func isConnectProbeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "connection refused") ||
+		strings.Contains(message, "connection reset") ||
+		strings.Contains(message, "connection closed") ||
+		strings.Contains(message, "no route to host") ||
+		strings.Contains(message, "network is unreachable")
 }
 
 func authStoreOptionsForDoctor(codexHome string, opts *Options) (*auth.StoreOptions, error) {
@@ -2753,8 +2923,9 @@ func backgroundServerMode(settingsPath string) string {
 	return "ephemeral"
 }
 
-func networkCheck(_ string, _ *Options) *DoctorCheck {
+func networkCheck(codexHome string, opts *Options) *DoctorCheck {
 	env := currentEnvMap()
+	cfg, _ := loadEffectiveConfigForDoctor(codexHome, opts)
 	presentProxyVars := []string{}
 	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"} {
 		if value, ok := env[key]; ok && strings.TrimSpace(value) != "" {
@@ -2766,6 +2937,22 @@ func networkCheck(_ string, _ *Options) *DoctorCheck {
 		details = append(details, "proxy env vars: none")
 	} else {
 		details = append(details, "proxy env vars present: "+strings.Join(presentProxyVars, ", "))
+	}
+	if cfg != nil {
+		// Rust network::check reports the effective proxy policy even when no
+		// proxy env var is set, so users can see why a configured proxy is or
+		// is not used. macOS system proxy state stays platform-gated (N/A on
+		// the Windows host; documented in doctor output).
+		respectSystemProxy := "disabled"
+		if cfg.RespectSystemProxyEnabled() {
+			respectSystemProxy = "enabled"
+		}
+		details = append(details, "respect system proxy: "+respectSystemProxy)
+		if managedProxyConfiguredForDoctor(cfg) {
+			details = append(details, "managed proxy: configured")
+		} else {
+			details = append(details, "managed proxy: not configured")
+		}
 	}
 	status := CheckStatusOK
 	summary := "network-related environment looks readable"
@@ -2780,6 +2967,20 @@ func networkCheck(_ string, _ *Options) *DoctorCheck {
 		}
 	}
 	return NewCheck("network.env", "network", status, summary).DetailsList(details)
+}
+
+// managedProxyConfiguredForDoctor reports whether the effective config defines
+// a managed permissions network (Rust config.permissions.network.is_some()).
+func managedProxyConfiguredForDoctor(cfg *config.Config) bool {
+	if cfg == nil || cfg.Values == nil {
+		return false
+	}
+	permissions, ok := cfg.Values["permissions"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = permissions["network"]
+	return ok
 }
 
 func websocketReachabilityCheck(codexHome string, opts *Options) *DoctorCheck {

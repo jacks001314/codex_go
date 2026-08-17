@@ -1,8 +1,8 @@
 {
-    "rustBaseline":  "cd8dc1e9b6",
-    "rustTag":  "main@cd8dc1e9b6",
-    "rustUpstreamHead":  "cd8dc1e9b6dd24d335f4fcb26546f36d045fd59a",
-    "rustUpstreamTag":  "main@cd8dc1e9b6dd24d335f4fcb26546f36d045fd59a",
+    "rustBaseline":  "1f41cc5d92",
+    "rustTag":  "main@1f41cc5d92",
+    "rustUpstreamHead":  "1f41cc5d92722748e45cae9cecc6d883a4e7cbb1",
+    "rustUpstreamTag":  "main@1f41cc5d92722748e45cae9cecc6d883a4e7cbb1",
     "rustE2EBinary":  {
                           "version":  "codex-cli 0.0.0",
                           "tag":  "main@bbbf396839",
@@ -13,7 +13,7 @@
                         "commit":  "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
                         "sha256":  "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
                     },
-    "generatedAt":  "2026-08-06",
+    "generatedAt":  "2026-08-17",
     "items":  [
                   {
                       "status":  "done",
@@ -827,6 +827,34 @@
                       "test":  "go test ./tui/tea -run 'TestEditorKill' -count=1; go test ./tui/... -count=1",
                       "id":  "tui-editor-kill-yank",
                       "reason":  "Closed a registered-but-undispatched composer gap found by re-scanning the keymap registry: the editor kill/yank actions (kill_line_start ctrl-u, kill_line_end ctrl-k, kill_whole_line, yank ctrl-y) were registered but never dispatched - the bubbletea textarea does not handle them and the model had no routing. Implemented applyEditorKillYankKey mirroring Rust bottom_pane/textarea.rs: ctrl-k cuts cursor->line-end (or the trailing newline at the line end), ctrl-u cuts line-start->cursor (or the preceding newline at the line start), kill_whole_line cuts the whole line, and ctrl-y pastes the single-entry kill buffer at the cursor (the buffer survives composer clears). Also fixed the shared edit-cursor positioning: after any SetValue-based edit the cursor now stays at the edit point (vimSetCursorAtByteOffset) instead of jumping to the last row - matching Rust. Verified with 3 token-free tests; the live CLI black-box differential re-passes with the rebuilt binary. Registered as contract tui-editor-kill-yank.",
+                      "area":  "parity"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./config -run TestLegacyProjectRoots -count=1",
+                      "id":  "config-legacy-project-roots-alias",
+                      "reason":  "Aligned upstream 772e88c8ae (#38916 Honor legacy :project_roots permission entries): Go config specialFilesystemPath already mapped :project_roots to the project_roots kind (pre-existing alias), so the gap was test coverage proving the legacy profile behavior. Added TestLegacyProjectRootsRestrictionsDoNotFailOpenLikeRust mirroring Rust's legacy_project_roots_restrictions_do_not_fail_open: read_deny/write_deny with \":project_roots\" = \"none\" deny at the cwd (legacy profiles must not fail open), and write_read with \":project_roots\" = { docs = \"read\" } resolves docs to read-only. Registered as contract config-legacy-project-roots-alias.",
+                      "area":  "parity"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./doctor -count=1",
+                      "id":  "doctor-network-failure-classification",
+                      "reason":  "Aligned upstream c8ddb210d2 (#38918 Improve codex doctor network diagnostics): classifyHTTPProbeError now mirrors Rust RouteAwareRequestError::failure_class messages - TLS handshake/certificate validation (tls.CertificateVerificationError, x509 errors, 'server gave HTTP response to HTTPS client'), proxy authentication (HTTP 407 + proxyconnect), invalid proxy configuration, unsupported proxy scheme, proxy resolution failure, request timed out, connect failed, and request failed. The provider reachability probe now uses a route-aware client built from the effective config (routeAwareProbeHTTPClient): the system proxy is honored only when the respect_system_proxy feature is enabled, custom CA env vars (CODEX_CA_CERTIFICATE / SSL_CERT_FILE) extend the system roots with the invalid-bundle system-root fallback (mirroring RouteAwareClientPool with_legacy_custom_ca_fallback), and the plan carries the client like Rust's plan.http_client_factory. network.env reports 'respect system proxy: enabled/disabled' and 'managed proxy: configured/not configured' from the effective config (Rust network::check); macOS system proxy state stays platform-gated (N/A on the Windows host, documented). Registered as contract doctor-network-failure-classification.",
+                      "area":  "parity"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./appserver -count=1",
+                      "id":  "appserver-reject-obsolete-permission-profile",
+                      "reason":  "Aligned upstream 935b1c4e3d (#38919 Reject obsolete app-server permission profile fields): Go Request.Validate now rejects permissionProfile on thread/start, thread/resume, thread/fork, and turn/start with the Rust message ('`permissionProfile` is no longer supported for <method>; use `permissions` with a named profile id instead'), surfacing a new ErrInvalidParams sentinel (obsoletePermissionProfileError). The three request entry points (router, runtime router, stdio) classify ErrInvalidParams as JSON-RPC -32602 (invalid params) while generic validation errors stay -32600, and unrelated unknown fields remain accepted with the connection staying usable - mirroring Rust message_processor deserialize_client_request. Registered as contract appserver-reject-obsolete-permission-profile.",
+                      "area":  "parity"
+                  },
+                  {
+                      "status":  "done",
+                      "test":  "go test ./tui/exec_cell -count=1; go test ./tui/tea -run 'TestModelCompactCommandActivity|TestModelRendersCommandExecutionLifecycle' -count=1; go test ./tui/... -count=1",
+                      "id":  "tui-compact-command-activity",
+                      "reason":  "Aligned upstream 1f41cc5d92 (#38921 Compact successful command activity in the TUI): ExecCell mirrors Rust MAX_GROUPED_COMMANDS=32 with reworked WithAddedCall (rejects over-limit, non-groupable, and failed calls when inactive; continues exploration or the compact group) and ShouldFlush (flush at 32, on failure, on non-groupable sources when inactive; keep compact groups un-flushed while all calls are groupable/successful). Added ExecSourceUnifiedExecStartup and isGroupableSource = Agent | UnifiedExecStartup. render.go adds compactGroupDisplayLines ('Ran N commands · ctrl + t to view transcript' + remaining calls) with commandCallDisplayLines extraction; single-command cells keep the normal command display. The tea Model tracks an active compact group (message index + cell) accumulating consecutive successful Agent/unified-exec-startup completions (source read from item metadata set by the app layer in remote_tui.go) and flushes at failures, non-groupable sources, and interaction boundaries (submit, slash, approval, MCP elicitation, request-user-input, turn completed/interrupted, other non-command items), preserving the full transcript in RawText. Registered as contract tui-compact-command-activity.",
                       "area":  "parity"
                   }
               ]

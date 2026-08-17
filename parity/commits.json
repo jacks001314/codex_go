@@ -1,7 +1,7 @@
 {
     "schemaVersion":  1,
     "rustFromExclusive":  "85fc4def358b7df21883e72ae8dda43a0f572f32",
-    "rustToInclusive":  "cd8dc1e9b6dd24d335f4fcb26546f36d045fd59a",
+    "rustToInclusive":  "1f41cc5d92722748e45cae9cecc6d883a4e7cbb1",
     "commits":  [
                     {
                         "sha":  "3c7ae4a81204cbee45084b4fb43b3630c79550c9",
@@ -294,6 +294,58 @@
                         "status":  "complete",
                         "evidence":  [
                                          "N/A: Rust-internal rendering-loop micro-optimization in tui/src/render/renderable.rs ColumnRenderable::render - the pre-change loop already skipped out-of-area children via the empty-intersection guard (child.render was never called for them, and desired_height is pure), so adding 'if y >= area.bottom() { break; }' changes iteration only, not the rendered output. Go's TUI clips out-of-area content equivalently; no Go work required."
+                                     ]
+                    },
+                    {
+                        "sha":  "772e88c8ae987445b81d932ea0f38fa0cc8fb5dc",
+                        "subject":  "Honor legacy `:project_roots` permission entries (#38916)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "config"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./config -run TestLegacyProjectRoots -count=1",
+                                         "Go config specialFilesystemPath already mapped :project_roots to the project_roots kind (pre-existing alias); closed the test gap with TestLegacyProjectRootsRestrictionsDoNotFailOpenLikeRust mirroring Rust's legacy_project_roots_restrictions_do_not_fail_open: read_deny/write_deny with \":project_roots\" = \"none\" deny at the cwd, and write_read with \":project_roots\" = { docs = \"read\" } resolves docs to read-only."
+                                     ]
+                    },
+                    {
+                        "sha":  "c8ddb210d2429cacacf86593e157114b00634f13",
+                        "subject":  "Improve `codex doctor` network diagnostics (#38918)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "doctor"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./doctor -count=1",
+                                         "classifyHTTPProbeError now mirrors Rust RouteAwareRequestError::failure_class messages (TLS handshake/certificate validation, proxy authentication via HTTP 407 + proxyconnect, invalid proxy configuration, unsupported proxy scheme, proxy resolution, timeout, connect failed, request failed); the provider probe uses a route-aware client built from the effective config (system proxy honored only when the respect_system_proxy feature is enabled, custom CA env CODEX_CA_CERTIFICATE / SSL_CERT_FILE extends the system roots with the invalid-bundle system-root fallback, mirroring RouteAwareClientPool with_legacy_custom_ca_fallback); network.env reports 'respect system proxy: enabled/disabled' and 'managed proxy: configured/not configured' from the effective config. macOS system proxy state stays platform-gated (N/A on the Windows host, documented)."
+                                     ]
+                    },
+                    {
+                        "sha":  "935b1c4e3d25ec0c04bccde0144125f46314180b",
+                        "subject":  "Reject obsolete app-server permission profile fields (#38919)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "appserver"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./appserver -count=1",
+                                         "Request.Validate now rejects permissionProfile on thread/start, thread/resume, thread/fork, and turn/start with the Rust message ('`permissionProfile` is no longer supported for <method>; use `permissions` with a named profile id instead'); the three request entry points classify the ErrInvalidParams sentinel as JSON-RPC -32602 (invalid params) while generic validation errors stay -32600, and unrelated unknown fields remain accepted."
+                                     ]
+                    },
+                    {
+                        "sha":  "1f41cc5d92722748e45cae9cecc6d883a4e7cbb1",
+                        "subject":  "Compact successful command activity in the TUI (#38921)",
+                        "kind":  "runtime",
+                        "domains":  [
+                                        "tui"
+                                    ],
+                        "status":  "complete",
+                        "evidence":  [
+                                         "go test ./tui/exec_cell -count=1; go test ./tui/tea -run 'TestModelCompactCommandActivity|TestModelRendersCommandExecutionLifecycle' -count=1; go test ./tui/... -count=1",
+                                         "ExecCell mirrors Rust MAX_GROUPED_COMMANDS=32 with reworked WithAddedCall (rejects over-limit / non-groupable / failed calls when inactive; continues exploration or the compact group) and ShouldFlush (flush at 32, on failure, on non-groupable sources when inactive; keep compact groups un-flushed while all calls are groupable/successful); ExecSourceUnifiedExecStartup added and isGroupableSource = Agent | UnifiedExecStartup; render adds compactGroupDisplayLines ('Ran N commands · ctrl + t to view transcript' + remaining calls) with commandCallDisplayLines extraction; the tea Model tracks an active compact group (message index + cell) accumulating consecutive successful Agent/unified-exec-startup completions (source read from item metadata set by the app layer) and flushes at failures, non-groupable sources, and interaction boundaries (submit, slash, approval, MCP elicitation, request-user-input, turn completed/interrupted, other non-command items), preserving the full transcript."
                                      ]
                     }
                 ]

@@ -25,6 +25,7 @@ type ElicitationRequestMsg struct {
 }
 
 func (m *Model) openElicitationModal(message ElicitationRequestMsg) bubbletea.Cmd {
+	m.flushCompactCommandGroup()
 	title := strings.TrimSpace(message.Title)
 	if title == "" {
 		title = "MCP request"

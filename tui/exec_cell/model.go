@@ -4,6 +4,11 @@ import "time"
 
 const MaxLiveOutputBytes = 1024 * 1024
 
+// MaxGroupedCommands mirrors Rust's MAX_GROUPED_COMMANDS
+// (codex-rs/tui/src/exec_cell/model.rs): a compact command group flushes once
+// this many completed commands accumulate while inactive.
+const MaxGroupedCommands = 32
+
 // Rust parity: codex-rs/tui/src/exec_cell/model.rs.
 
 type ExecCommandSource int
@@ -11,6 +16,7 @@ type ExecCommandSource int
 const (
 	ExecSourceAgent ExecCommandSource = iota
 	ExecSourceUserShell
+	ExecSourceUnifiedExecStartup
 	ExecSourceUnifiedExecInteraction
 )
 
@@ -68,7 +74,23 @@ func (c ExecCell) WithAddedCall(callID string, command []string, parsed []Parsed
 		StartTime:        &now,
 		InteractionInput: interactionInput,
 	}
-	if c.IsExploringCell() && isExploringCall(call) {
+	hasFailedCall := false
+	for _, existing := range c.Calls {
+		if existing.Output != nil && existing.Output.ExitCode != 0 {
+			hasFailedCall = true
+			break
+		}
+	}
+	if (len(c.Calls) >= MaxGroupedCommands && !c.IsActive()) ||
+		(!IsGroupableSource(source) && !c.IsActive()) ||
+		(hasFailedCall && !c.IsActive()) {
+		return ExecCell{}, false
+	}
+	continuesExploration := isExploringCall(call) &&
+		(c.IsExploringCell() || (len(c.Calls) > 0 && c.Calls[len(c.Calls)-1].Duration == nil && isExploringCall(c.Calls[len(c.Calls)-1]))) &&
+		(c.IsActive() || allCallsGroupable(c.Calls))
+	continuesCompactGroup := allCallsCompleteGroupableSuccess(c.Calls)
+	if continuesExploration || continuesCompactGroup {
 		next := c
 		next.Calls = append(append([]ExecCall(nil), c.Calls...), call)
 		return next, true
@@ -90,15 +112,18 @@ func (c *ExecCell) CompleteCall(callID string, output CommandOutput, duration ti
 }
 
 func (c ExecCell) ShouldFlush() bool {
-	if c.IsExploringCell() {
-		return false
-	}
 	for _, call := range c.Calls {
-		if call.Output == nil {
-			return false
+		if !IsGroupableSource(call.Source) || (call.Output != nil && call.Output.ExitCode != 0) {
+			return !c.IsActive()
 		}
 	}
-	return true
+	if len(c.Calls) >= MaxGroupedCommands {
+		return !c.IsActive()
+	}
+	if allCallsCompleteGroupableSuccess(c.Calls) {
+		return false
+	}
+	return !c.IsExploringCell() && allCallsHaveDuration(c.Calls)
 }
 
 func (c *ExecCell) MarkFailed() {
@@ -122,6 +147,33 @@ func (c ExecCell) IsExploringCell() bool {
 	}
 	for _, call := range c.Calls {
 		if !isExploringCall(call) {
+			return false
+		}
+	}
+	return true
+}
+
+func allCallsCompleteGroupableSuccess(calls []ExecCall) bool {
+	for _, call := range calls {
+		if !IsGroupableSource(call.Source) || call.Duration == nil || call.Output == nil || call.Output.ExitCode != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func allCallsGroupable(calls []ExecCall) bool {
+	for _, call := range calls {
+		if !IsGroupableSource(call.Source) {
+			return false
+		}
+	}
+	return true
+}
+
+func allCallsHaveDuration(calls []ExecCall) bool {
+	for _, call := range calls {
+		if call.Duration == nil {
 			return false
 		}
 	}
@@ -174,6 +226,13 @@ func (c ExecCall) IsUserShellCommand() bool {
 
 func (c ExecCall) IsUnifiedExecInteraction() bool {
 	return c.Source == ExecSourceUnifiedExecInteraction
+}
+
+// IsGroupableSource mirrors Rust ExecCell::is_groupable_source: only agent and
+// unified-exec startup commands may accumulate into a compact "Ran N commands"
+// group. Manual shell commands and unified-exec interactions stay visible.
+func IsGroupableSource(source ExecCommandSource) bool {
+	return source == ExecSourceAgent || source == ExecSourceUnifiedExecStartup
 }
 
 func isExploringCall(call ExecCall) bool {

@@ -95,6 +95,69 @@ func TestResolveSandboxPermissionProfileLegacySandboxMode(t *testing.T) {
 	assertRuntimeEntry(t, wire, "path", filepath.Clean(extra), "", string(sandbox.FileSystemAccessWrite))
 }
 
+// Rust parity: permissions_tests.rs legacy_project_roots_restrictions_do_not_fail_open
+// (#38916). Profiles written before the rename to :workspace_roots may still use
+// :project_roots; the alias must keep deny rules and read-only subpath carveouts
+// enforced instead of silently dropping the entries (fail-open).
+func TestLegacyProjectRootsRestrictionsDoNotFailOpenLikeRust(t *testing.T) {
+	cwd := filepath.Join(t.TempDir(), "repo")
+	docs := filepath.Join(cwd, "docs")
+	cfg := &Config{Values: map[string]any{
+		"permissions": map[string]any{
+			"read_deny": map[string]any{
+				"filesystem": map[string]any{
+					":root":          "read",
+					":project_roots": "none",
+				},
+			},
+			"write_deny": map[string]any{
+				"filesystem": map[string]any{
+					":root":          "write",
+					":project_roots": "none",
+				},
+			},
+			"write_read": map[string]any{
+				"filesystem": map[string]any{
+					":root": "write",
+					":project_roots": map[string]any{
+						"docs": "read",
+					},
+				},
+			},
+		},
+	}}
+
+	readDeny, err := cfg.ResolveSandboxPermissionProfile("read_deny", cwd)
+	if err != nil {
+		t.Fatalf("read_deny ResolveSandboxPermissionProfile() error = %v", err)
+	}
+	if readDeny.Profile == nil || !readDeny.Profile.DeniesReadPath(cwd) {
+		t.Fatalf("read_deny must deny the project root, profile = %+v", readDeny.Profile)
+	}
+	readDenyWire := decodeRuntimeProfile(t, readDeny.ProfileJSON)
+	assertRuntimeEntry(t, readDenyWire, "path", filepath.Clean(cwd), "", string(sandbox.FileSystemAccessDeny))
+	assertSpecialRuntimeEntry(t, readDenyWire, "root", "", string(sandbox.FileSystemAccessRead))
+
+	writeDeny, err := cfg.ResolveSandboxPermissionProfile("write_deny", cwd)
+	if err != nil {
+		t.Fatalf("write_deny ResolveSandboxPermissionProfile() error = %v", err)
+	}
+	if writeDeny.Profile == nil || !writeDeny.Profile.DeniesReadPath(cwd) {
+		t.Fatalf("write_deny must deny the project root, profile = %+v", writeDeny.Profile)
+	}
+	writeDenyWire := decodeRuntimeProfile(t, writeDeny.ProfileJSON)
+	assertRuntimeEntry(t, writeDenyWire, "path", filepath.Clean(cwd), "", string(sandbox.FileSystemAccessDeny))
+	assertSpecialRuntimeEntry(t, writeDenyWire, "root", "", string(sandbox.FileSystemAccessWrite))
+
+	writeRead, err := cfg.ResolveSandboxPermissionProfile("write_read", cwd)
+	if err != nil {
+		t.Fatalf("write_read ResolveSandboxPermissionProfile() error = %v", err)
+	}
+	writeReadWire := decodeRuntimeProfile(t, writeRead.ProfileJSON)
+	assertSpecialRuntimeEntry(t, writeReadWire, "root", "", string(sandbox.FileSystemAccessWrite))
+	assertRuntimeEntry(t, writeReadWire, "path", filepath.Clean(docs), "", string(sandbox.FileSystemAccessRead))
+}
+
 type runtimeProfileForTest struct {
 	Type       string `json:"type"`
 	FileSystem struct {
@@ -102,9 +165,13 @@ type runtimeProfileForTest struct {
 		GlobScanMaxDepth *int   `json:"glob_scan_max_depth"`
 		Entries          []struct {
 			Path struct {
-				Type    string `json:"type"`
-				Path    string `json:"path"`
-				Pattern string `json:"pattern"`
+				Type    string  `json:"type"`
+				Path    string  `json:"path"`
+				Pattern string  `json:"pattern"`
+				Value   *struct {
+					Kind    string  `json:"kind"`
+					Subpath *string `json:"subpath,omitempty"`
+				} `json:"value,omitempty"`
 			} `json:"path"`
 			Access string `json:"access"`
 		} `json:"entries"`
@@ -129,4 +196,24 @@ func assertRuntimeEntry(t *testing.T, wire runtimeProfileForTest, typ string, pa
 		}
 	}
 	t.Fatalf("entry type=%s path=%q pattern=%q access=%q not found in %+v", typ, path, pattern, access, wire.FileSystem.Entries)
+}
+
+func assertSpecialRuntimeEntry(t *testing.T, wire runtimeProfileForTest, kind string, subpath string, access string) {
+	t.Helper()
+	for _, entry := range wire.FileSystem.Entries {
+		if entry.Path.Type != "special" || entry.Access != access || entry.Path.Value == nil {
+			continue
+		}
+		if entry.Path.Value.Kind != kind {
+			continue
+		}
+		entrySubpath := ""
+		if entry.Path.Value.Subpath != nil {
+			entrySubpath = *entry.Path.Value.Subpath
+		}
+		if entrySubpath == subpath {
+			return
+		}
+	}
+	t.Fatalf("special entry kind=%q subpath=%q access=%q not found in %+v", kind, subpath, access, wire.FileSystem.Entries)
 }

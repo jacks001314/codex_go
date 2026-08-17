@@ -46,13 +46,14 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 	return []rustFixtureRoot{
 		{
 			Path:  "cli/tests",
-			Files: 18,
+			Files: 19,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
 				"cli/tests/features.rs",
 				"cli/tests/mcp_list.rs",
 				"cli/tests/plugin_cli.rs",
+				"cli/tests/doctor_enterprise_network.rs",
 			},
 		},
 		{

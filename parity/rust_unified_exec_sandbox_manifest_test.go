@@ -55,6 +55,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"exec_command_clamps_model_requested_max_output_tokens_to_policy",
 				"exec_command_hides_and_rejects_login_when_disabled",
 				"exec_command_reports_chunk_and_exit_metadata",
+				"exec_command_uses_installed_environment_shell_policy_with_explicit_overrides",
 				"unified_exec_can_enable_tty",
 				"unified_exec_defaults_to_pipe",
 				"unified_exec_emits_end_event_when_session_dies_via_stdin",

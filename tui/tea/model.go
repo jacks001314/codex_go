@@ -776,9 +776,14 @@ type Model struct {
 	footerStyle lipgloss.Style
 	bottomStyle lipgloss.Style
 
-	lastTurnError                   string
-	needsFinalMessageSeparator      bool
-	activeAssistantDeltaItemID      string
+	lastTurnError              string
+	needsFinalMessageSeparator bool
+	activeAssistantDeltaItemID string
+	// compactCommandGroup tracks consecutive successful Agent / unified-exec
+	// startup command executions so they render as one compact "Ran N commands"
+	// history cell (Rust #38921). It is reset at interaction boundaries and
+	// whenever a non-groupable or failed command breaks the run.
+	compactCommandGroup             *compactCommandGroupState
 	mcpStartup                      chatwidget.McpStartupRoundState
 	mcpStartupHeader                string
 	mcpStartupActive                bool
@@ -832,46 +837,46 @@ type Model struct {
 	// mode (keys dispatch vim_normal actions), true = insert mode (keys type
 	// normally until Esc). Rust starts the composer in Vim normal mode when
 	// /vim is enabled (bottom_pane/chat_composer.rs).
-	vimInsert                       bool
+	vimInsert bool
 	// vimYank is the line yank buffer for Vim normal mode (Y yanks the current
 	// line, p pastes it after the cursor).
-	vimYank                         string
+	vimYank string
 	// composerKillBuffer is the single-entry editor kill buffer for the
 	// composer (ctrl-k / ctrl-u / kill_whole_line cut into it; ctrl-y yanks it
 	// back), mirroring Rust bottom_pane/textarea.rs kill_buffer.
-	composerKillBuffer              string
+	composerKillBuffer string
 	// vimPendingOp tracks a pending Vim line operator (d or y) waiting for its
 	// repeat key, enabling dd / yy / cc.
-	vimPendingOp                    string
+	vimPendingOp string
 	// vimPendingObject tracks a pending Vim text-object selection after an
 	// operator: "inner" (i) or "around" (a), waiting for the object key
 	// (w / W / ( / ) / b).
-	vimPendingObject                string
-	petRuntime                      *petRuntime
-	petCodexHome                    string
-	petEnv                          map[string]string
-	petFetch                        pets.AssetFetchFunc
-	petLoadPending                  string
-	onSubmit                        SubmitFunc
-	onSubmitRequest                 SubmitRequestFunc
-	onSteerRequest                  SteerRequestFunc
-	onInterrupt                     InterruptFunc
-	onInterruptMCPStartup           InterruptFunc
-	localDaemonSession              bool
-	onExternalEditor                ExternalEditorFunc
-	externalEditorDirectory         ExternalEditorDirectoryFunc
-	keymapConfig                    *codextui.KeymapConfig
-	keymapSelectedContext           string
-	keymapSelectedAction            string
-	onKeymapEdit                    KeymapEditFunc
-	onModalResponse                 ModalResponseFunc
-	onSessionAction                 SessionActionFunc
-	onWorkingDirectoryChange        WorkingDirectoryChangeFunc
-	onResumeSession                 SessionResumeFunc
-	onRenameThread                  ThreadRenameFunc
-	onLogout                        LogoutFunc
-	onReadAgents                    AgentThreadReaderFunc
-	onSwitchAgent                   AgentThreadSwitchFunc
+	vimPendingObject         string
+	petRuntime               *petRuntime
+	petCodexHome             string
+	petEnv                   map[string]string
+	petFetch                 pets.AssetFetchFunc
+	petLoadPending           string
+	onSubmit                 SubmitFunc
+	onSubmitRequest          SubmitRequestFunc
+	onSteerRequest           SteerRequestFunc
+	onInterrupt              InterruptFunc
+	onInterruptMCPStartup    InterruptFunc
+	localDaemonSession       bool
+	onExternalEditor         ExternalEditorFunc
+	externalEditorDirectory  ExternalEditorDirectoryFunc
+	keymapConfig             *codextui.KeymapConfig
+	keymapSelectedContext    string
+	keymapSelectedAction     string
+	onKeymapEdit             KeymapEditFunc
+	onModalResponse          ModalResponseFunc
+	onSessionAction          SessionActionFunc
+	onWorkingDirectoryChange WorkingDirectoryChangeFunc
+	onResumeSession          SessionResumeFunc
+	onRenameThread           ThreadRenameFunc
+	onLogout                 LogoutFunc
+	onReadAgents             AgentThreadReaderFunc
+	onSwitchAgent            AgentThreadSwitchFunc
 	// backgroundThreadEvents buffers app-server notifications for non-active
 	// (subagent) threads so switching to them can replay in-progress activity
 	// instead of showing an empty transcript (Rust parity: ThreadEventStore).
@@ -1032,6 +1037,14 @@ type toolCallDisplayState struct {
 	StartedAt    time.Time
 	Completed    bool
 	PlanUpdate   bool
+}
+
+// compactCommandGroupState is the live accumulation state for a compact
+// "Ran N commands" history cell. The cell is re-rendered at MessageIndex as
+// commands start and complete (Rust #38921 chatwidget command lifecycle).
+type compactCommandGroupState struct {
+	MessageIndex int
+	Cell         execcell.ExecCell
 }
 
 type mcpToolCallDisplayState struct {
@@ -2016,6 +2029,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	m.composer.Reset()
 	m.slashPopup = slashCommandPopup{}
 	m.skillPopup = skillPopupState{}
+	m.flushCompactCommandGroup()
 	if input == "" && len(m.attachments) == 0 {
 		m.composerMentionBindings = nil
 		return nil
@@ -2044,6 +2058,7 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 	if m == nil {
 		return nil, false
 	}
+	m.flushCompactCommandGroup()
 	input := strings.TrimSpace(m.composer.Value())
 	if input == "" {
 		return nil, false
@@ -2538,6 +2553,7 @@ func (m *Model) shouldSubmitOnTab() bool {
 }
 
 func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
+	m.flushCompactCommandGroup()
 	m.deferPendingSteers()
 	if message.Err != nil {
 		m.setStatus("error")
@@ -2584,6 +2600,7 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 	if m == nil || !m.isTaskRunning() {
 		return
 	}
+	m.flushCompactCommandGroup()
 	m.deferPendingSteers()
 	m.setStatus("idle")
 	text := "Interrupted current turn."
@@ -2717,6 +2734,11 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 	if item == nil {
 		return
 	}
+	if item.Type != "command_execution" {
+		// A new non-command item is an interaction boundary for compact command
+		// groups (Rust #38921 chatwidget add_to_history / tool_requests).
+		m.flushCompactCommandGroup()
+	}
 	switch item.Type {
 	case "command_execution":
 		m.Transcript.finishAssistantPreambleBeforeTool()
@@ -2751,6 +2773,9 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	if item == nil {
 		return nil
+	}
+	if item.Type != "command_execution" {
+		m.flushCompactCommandGroup()
 	}
 	switch item.Type {
 	case "user_message", "userMessage":
@@ -3065,9 +3090,10 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 	call := execcell.ExecCall{
 		CallID:  firstNonEmpty(state.CallID, state.ID),
 		Command: shellScriptCommandForDisplay(item.Command),
-		Source:  execcell.ExecSourceAgent,
+		Source:  execCommandSourceForItem(item),
 	}
-	if commandExecutionInProgress(item.Status) {
+	inProgress := commandExecutionInProgress(item.Status)
+	if inProgress {
 		started := state.StartedAt
 		call.StartTime = &started
 	} else {
@@ -3086,13 +3112,98 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 			AggregatedOutput: output,
 			FormattedOutput:  output,
 		}
+		call.Duration = m.commandExecutionDurationForItem(state)
 		state.Completed = true
 	}
+
+	// Compact command grouping (Rust #38921): consecutive successful Agent and
+	// unified-exec startup commands accumulate into one "Ran N commands" cell.
+	// A running command joins the active group; a completion completes its call
+	// in the group; anything else breaks the group and renders on its own.
+	if m.compactCommandGroup != nil {
+		group := *m.compactCommandGroup
+		handled := false
+		if inProgress {
+			next, ok := group.Cell.WithAddedCall(call.CallID, call.Command, call.Parsed, call.Source, call.InteractionInput)
+			if ok {
+				handled = true
+				m.compactCommandGroup.Cell = next
+				m.compactCommandGroup.MessageIndex = m.upsertHistoryMessage(group.MessageIndex, next.DisplayLinesWithTheme(width, m.activeTUITheme()), next.RawLines())
+			}
+		} else if call.Output != nil {
+			duration := time.Duration(0)
+			if call.Duration != nil {
+				duration = *call.Duration
+			}
+			if group.Cell.CompleteCall(call.CallID, *call.Output, duration) {
+				handled = true
+				m.compactCommandGroup.MessageIndex = m.upsertHistoryMessage(group.MessageIndex, group.Cell.DisplayLinesWithTheme(width, m.activeTUITheme()), group.Cell.RawLines())
+				if group.Cell.ShouldFlush() {
+					m.flushCompactCommandGroup()
+				} else {
+					m.compactCommandGroup.Cell = group.Cell
+				}
+			}
+		}
+		if handled {
+			state.Completed = true
+			return
+		}
+		m.flushCompactCommandGroup()
+	}
+
 	cell := execcell.NewExecCell(call, false)
 	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
+	if !inProgress && execcell.IsGroupableSource(call.Source) && call.Output != nil && call.Output.ExitCode == 0 {
+		// Seed a compact group with the completed command so the next groupable
+		// command joins it (Rust keeps the completed compact cell un-flushed).
+		m.compactCommandGroup = &compactCommandGroupState{MessageIndex: state.MessageIndex, Cell: cell}
+	}
 	if state.Completed {
 		m.Transcript.needsFinalMessageSeparator = true
 	}
+}
+
+// flushCompactCommandGroup ends a compact command group. The rendered history
+// cell stays in place; only the live accumulation state is reset so subsequent
+// commands start their own cell. Groups with running commands are preserved
+// (Rust flush_completed_command_activity only flushes inactive exec cells).
+func (m *Model) flushCompactCommandGroup() {
+	if m == nil || m.compactCommandGroup == nil || m.compactCommandGroup.Cell.IsActive() {
+		return
+	}
+	m.compactCommandGroup = nil
+	m.Transcript.needsFinalMessageSeparator = true
+}
+
+// execCommandSourceForItem reads the command execution source from item
+// metadata (set by the app layer when translating app-server payloads) with a
+// default of Agent, mirroring the wire default in Rust protocol.rs.
+func execCommandSourceForItem(item *protocol.ThreadItem) execcell.ExecCommandSource {
+	if item == nil {
+		return execcell.ExecSourceAgent
+	}
+	switch appserver.CommandExecutionSource(strings.TrimSpace(metadataString(item.Metadata, "source"))) {
+	case appserver.CommandExecutionSourceUserShell:
+		return execcell.ExecSourceUserShell
+	case appserver.CommandExecutionSourceUnifiedExecStartup:
+		return execcell.ExecSourceUnifiedExecStartup
+	case appserver.CommandExecutionSourceUnifiedExecInteraction:
+		return execcell.ExecSourceUnifiedExecInteraction
+	default:
+		return execcell.ExecSourceAgent
+	}
+}
+
+func (m *Model) commandExecutionDurationForItem(state *toolCallDisplayState) *time.Duration {
+	if state == nil || state.StartedAt.IsZero() {
+		return nil
+	}
+	elapsed := m.currentTime().Sub(state.StartedAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return &elapsed
 }
 
 func (m *Model) renderMCPToolCallItem(item *protocol.ThreadItem, completed bool) {
@@ -4151,6 +4262,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	if invocation == nil {
 		return nil
 	}
+	m.flushCompactCommandGroup()
 	if m.inSideConversation() && !sideSlashCommandAllowed(invocation.Command) {
 		message := sideSlashUnavailableMessage(invocation.Name)
 		if invocation.Command == codextui.CommandRename {

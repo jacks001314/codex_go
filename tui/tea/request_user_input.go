@@ -21,6 +21,7 @@ type requestUserInputTimeoutMsg struct {
 }
 
 func (m *Model) openRequestUserInputModal(message RequestUserInputMsg) bubbletea.Cmd {
+	m.flushCompactCommandGroup()
 	state, err := codextui.NewRequestUserInputState(message.Questions, message.AutoResolutionMS)
 	if err != nil {
 		m.openModal(ModalRequestMsg{

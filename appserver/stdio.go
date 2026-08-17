@@ -200,7 +200,7 @@ func decodeJSONLine(router *RuntimeRouter, data []byte) (any, *Request) {
 			ID RequestID `json:"id"`
 		}
 		_ = json.Unmarshal(data, &raw)
-		return ErrorResponse(raw.ID, -32600, fmt.Sprintf("invalid request: %v", err), nil), nil
+		return ErrorResponse(raw.ID, requestValidationErrorCode(err), fmt.Sprintf("invalid request: %v", err), nil), nil
 	}
 	return nil, request
 }

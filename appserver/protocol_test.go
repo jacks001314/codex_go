@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -48,6 +49,59 @@ func TestOutgoingMessagesMatchRustJSONRPCShape(t *testing.T) {
 				t.Fatalf("encoded = %s, want %s", data, tc.want)
 			}
 		})
+	}
+}
+
+// Rust parity: app-server/src/message_processor.rs reject_removed_permission_profile
+// (#38919). The obsolete `permissionProfile` field is rejected with
+// invalid_params (-32602) on thread/start, thread/resume, thread/fork and
+// turn/start; unrelated unknown fields stay accepted for forward compatibility.
+func TestRejectObsoletePermissionProfileLikeRust(t *testing.T) {
+	methods := []string{"thread/start", "thread/resume", "thread/fork", "turn/start"}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			raw := fmt.Sprintf(`{"id":1,"method":%q,"params":{"permissionProfile":"workspace"}}`, method)
+			_, err := ParseRequest([]byte(raw))
+			if err == nil {
+				t.Fatalf("ParseRequest(%s) succeeded, want obsolete permissionProfile rejection", raw)
+			}
+			if !errors.Is(err, ErrInvalidParams) {
+				t.Fatalf("ParseRequest(%s) error = %v, want ErrInvalidParams", raw, err)
+			}
+			if code := requestValidationErrorCode(err); code != JSONRPCInvalidParamsErrorCode {
+				t.Fatalf("requestValidationErrorCode() = %d, want %d", code, JSONRPCInvalidParamsErrorCode)
+			}
+			wantMessage := fmt.Sprintf("`permissionProfile` is no longer supported for `%s`; use `permissions` with a named profile id instead", method)
+			if err.Error() != wantMessage {
+				t.Fatalf("error message = %q, want %q", err.Error(), wantMessage)
+			}
+		})
+	}
+
+	// Unknown fields are still accepted when combined with named permissions.
+	request, err := ParseRequest([]byte(`{"id":2,"method":"thread/start","params":{"permissions":{"id":"workspace"},"futureField":42}}`))
+	if err != nil {
+		t.Fatalf("thread/start with unknown field rejected: %v", err)
+	}
+	if request == nil {
+		t.Fatal("ParseRequest returned nil request")
+	}
+
+	// Methods not in the obsolete set still accept permissionProfile
+	// (command/exec legitimately carries permissionProfile).
+	if _, err := ParseRequest([]byte(`{"id":3,"method":"command/exec","params":{"permissionProfile":"workspace","command":["echo","hi"]}}`)); err != nil {
+		t.Fatalf("command/exec permissionProfile rejected: %v", err)
+	}
+
+	// The connection remains usable: a valid request parses and is dispatched
+	// (only the missing store surfaces, not a validation error).
+	response := (&Router{}).Handle(&Request{
+		ID:     IntID(4),
+		Method: MethodThreadList,
+		Params: json.RawMessage(`{}`),
+	})
+	if response == nil || response.Error == nil || response.Error.Code != JSONRPCInternalErrorCode {
+		t.Fatalf("post-rejection connection usability response = %+v, want -32603 store error", response)
 	}
 }
 

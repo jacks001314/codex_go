@@ -1239,7 +1239,7 @@ func (r *RuntimeRouter) Handle(request *Request) *Response {
 		if request == nil {
 			return ErrorResponse(RequestID{}, -32600, err.Error(), nil)
 		}
-		return ErrorResponse(request.ID, -32600, err.Error(), nil)
+		return ErrorResponse(request.ID, requestValidationErrorCode(err), err.Error(), nil)
 	}
 	result, err := r.dispatch(request)
 	if err != nil {
@@ -12514,6 +12514,7 @@ func runtimeErrorCode(err error) int {
 		errors.Is(err, ErrJSONRPCInvalidRequest):
 		return JSONRPCInvalidRequestErrorCode
 	case errors.Is(err, ErrInvalidRequest),
+		errors.Is(err, ErrInvalidParams),
 		errors.Is(err, ErrInvalidFSRequest),
 		errors.Is(err, remotecontrol.ErrInvalidRequest),
 		errors.Is(err, sandbox.ErrInvalidWindowsSandboxRequest),

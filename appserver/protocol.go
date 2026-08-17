@@ -227,6 +227,9 @@ var (
 	ErrUnknownMethod         = errors.New("unknown app-server method")
 	ErrInvalidRequest        = errors.New("invalid app-server request")
 	ErrJSONRPCInvalidRequest = errors.New("json-rpc invalid request")
+	// ErrInvalidParams mirrors Rust's invalid_params (-32602) at the request
+	// validation boundary (Rust message_processor deserialize_client_request).
+	ErrInvalidParams = errors.New("invalid app-server params")
 	// ErrSessionBudgetExceeded surfaces the Rust SessionBudgetExceeded
 	// codexErrorInfo when the shared rollout budget is exhausted
 	// (core/src/session/rollout_budget.rs).
@@ -289,6 +292,55 @@ func (e *threadRollbackFailedError) JSONRPCErrorData() map[string]any {
 
 func threadRollbackFailed(message string) error {
 	return &threadRollbackFailedError{message: message}
+}
+
+// obsoletePermissionProfileError rejects the removed `permissionProfile`
+// request field on the app-server methods that once accepted it (Rust
+// #38919). Clients must select a named profile through `permissions` instead.
+type obsoletePermissionProfileError struct {
+	message string
+}
+
+func (e *obsoletePermissionProfileError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
+func (e *obsoletePermissionProfileError) Unwrap() error {
+	return ErrInvalidParams
+}
+
+func (e *obsoletePermissionProfileError) Is(target error) bool {
+	return target == ErrInvalidParams
+}
+
+func rejectObsoleteRequestFields(r *Request) error {
+	if r == nil {
+		return nil
+	}
+	switch r.Method {
+	case MethodThreadStart, MethodThreadResume, MethodThreadFork, MethodTurnStart:
+	default:
+		return nil
+	}
+	var params map[string]json.RawMessage
+	if len(bytes.TrimSpace(r.Params)) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(r.Params, &params); err != nil {
+		return nil
+	}
+	if _, present := params["permissionProfile"]; !present {
+		return nil
+	}
+	return &obsoletePermissionProfileError{
+		message: fmt.Sprintf(
+			"`permissionProfile` is no longer supported for `%s`; use `permissions` with a named profile id instead",
+			string(r.Method),
+		),
+	}
 }
 
 type Method string
@@ -426,6 +478,9 @@ func (r *Request) Validate() error {
 	}
 	if strings.TrimSpace(string(r.Method)) == "" {
 		return fmt.Errorf("%w: method is required", ErrInvalidRequest)
+	}
+	if err := rejectObsoleteRequestFields(r); err != nil {
+		return err
 	}
 	return nil
 }

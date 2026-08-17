@@ -853,7 +853,7 @@ func (r *Router) Handle(request *Request) *Response {
 		if request == nil {
 			return ErrorResponse(RequestID{}, -32600, err.Error(), nil)
 		}
-		return ErrorResponse(request.ID, -32600, err.Error(), nil)
+		return ErrorResponse(request.ID, requestValidationErrorCode(err), err.Error(), nil)
 	}
 	if r == nil || r.store == nil {
 		return ErrorResponse(request.ID, -32603, "thread store is not configured", nil)
@@ -3596,7 +3596,7 @@ func errorCode(err error) int {
 		return JSONRPCMethodNotFoundErrorCode
 	case errors.Is(err, ErrJSONRPCInvalidRequest):
 		return JSONRPCInvalidRequestErrorCode
-	case errors.Is(err, ErrInvalidRequest), errors.Is(err, session.ErrInvalidThreadID):
+	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrInvalidParams), errors.Is(err, session.ErrInvalidThreadID):
 		return JSONRPCInvalidParamsErrorCode
 	case errors.Is(err, session.ErrThreadNotFound):
 		return -32004
@@ -3605,6 +3605,17 @@ func errorCode(err error) int {
 	default:
 		return JSONRPCInternalErrorCode
 	}
+}
+
+// requestValidationErrorCode classifies Request.Validate errors on the wire.
+// Generic validation failures keep Rust's invalid_request (-32600), while the
+// obsolete-field rejection surfaces as invalid_params (-32602) like Rust's
+// reject_removed_permission_profile (#38919).
+func requestValidationErrorCode(err error) int {
+	if errors.Is(err, ErrInvalidParams) {
+		return JSONRPCInvalidParamsErrorCode
+	}
+	return JSONRPCInvalidRequestErrorCode
 }
 
 type methodNotFoundError struct {
