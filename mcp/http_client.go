@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -287,6 +288,11 @@ func newMCPHTTPClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *http
 
 func newMCPHTTPClientWithShared(config *ServerConfig, openAIForm bool, shared HTTPDoer) *httpClient {
 	client := mcpHTTPClientFromShared(shared, mcpClientTimeout(config))
+	if config != nil {
+		if policy := mcpRedirectPolicy(config.URL); policy != nil {
+			client.CheckRedirect = policy
+		}
+	}
 	if config != nil && strings.TrimSpace(config.URL) != "" && strings.TrimSpace(config.HTTPHeadersHelper) != "" {
 		cwd, _ := os.Getwd()
 		helperTransport, helperErr := newMCPHTTPHeadersHelperTransport(client.Transport, config.URL, config.HTTPHeadersHelper, cwd)
@@ -306,6 +312,58 @@ func newMCPHTTPClientWithShared(config *ServerConfig, openAIForm bool, shared HT
 		protocolMode: protocolMode,
 		retrySleep:   time.Sleep,
 	}
+}
+
+// mcpRedirectPolicy returns an http.Client CheckRedirect that follows only
+// same-origin redirects (every hop stays on the configured server's origin) and
+// requires HTTPS for redirects on non-loopback hostnames (Rust #39046). A nil
+// policy (unparseable or empty configured URL) leaves the default behavior.
+func mcpRedirectPolicy(configuredURL string) func(*http.Request, []*http.Request) error {
+	origin, err := url.Parse(strings.TrimSpace(configuredURL))
+	if err != nil || origin.Scheme == "" || origin.Host == "" {
+		return nil
+	}
+	return func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("mcp: stopped after 10 redirects")
+		}
+		if !sameMCPRedirectOrigin(request.URL, origin) {
+			return fmt.Errorf("mcp: redirect to a different origin rejected: %s", request.URL)
+		}
+		if !loopbackMCPHost(request.URL.Hostname()) && !strings.EqualFold(request.URL.Scheme, "https") {
+			return fmt.Errorf("mcp: insecure redirect rejected: %s", request.URL)
+		}
+		return nil
+	}
+}
+
+func sameMCPRedirectOrigin(target *url.URL, origin *url.URL) bool {
+	return strings.EqualFold(target.Scheme, origin.Scheme) &&
+		strings.EqualFold(target.Hostname(), origin.Hostname()) &&
+		effectiveMCPPort(target) == effectiveMCPPort(origin)
+}
+
+func effectiveMCPPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
+}
+
+func loopbackMCPHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "localhost" || host == "localhost." {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 type httpDoerRoundTripper struct {

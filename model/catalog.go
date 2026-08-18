@@ -528,7 +528,7 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
 				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
 				UseResponsesLite: true, DefaultReasoningSummary: "none",
-				ContextWindow: 272000, MaxContextWindow: 272000, EffectiveContextWindowPercent: 95,
+				ContextWindow: 272000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
@@ -540,7 +540,7 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
 				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
 				UseResponsesLite: true, DefaultReasoningSummary: "none",
-				ContextWindow: 272000, MaxContextWindow: 272000, EffectiveContextWindowPercent: 95,
+				ContextWindow: 272000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
@@ -552,7 +552,7 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
 				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
 				UseResponsesLite: true, DefaultReasoningSummary: "none",
-				ContextWindow: 272000, MaxContextWindow: 272000, EffectiveContextWindowPercent: 95,
+				ContextWindow: 272000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
 			},
 			{
@@ -644,9 +644,9 @@ func AmazonBedrockModelCatalog() ModelsResponse {
 		Models: []ModelInfo{
 			bedrockModel(AmazonBedrockGPT55ModelID, 0),
 			bedrockModel(AmazonBedrockGPT54ModelID, 10),
-			bedrockModel(AmazonBedrockGPT56SolModelID, 20),
-			bedrockModel(AmazonBedrockGPT56TerraModelID, 30),
-			bedrockModel(AmazonBedrockGPT56LunaModelID, 40),
+			bedrockModelWithMaxContextWindow(AmazonBedrockGPT56SolModelID, 20, 872000),
+			bedrockModelWithMaxContextWindow(AmazonBedrockGPT56TerraModelID, 30, 872000),
+			bedrockModelWithMaxContextWindow(AmazonBedrockGPT56LunaModelID, 40, 872000),
 		},
 	}
 }
@@ -1113,6 +1113,13 @@ func localPersonalityMessagesForSlug(slug string) *ModelMessages {
 }
 
 func bedrockModel(slug string, priority int) ModelInfo {
+	return bedrockModelWithMaxContextWindow(slug, priority, 272000)
+}
+
+// bedrockModelWithMaxContextWindow mirrors Rust #39102: Amazon Bedrock GPT-5.6
+// variants allow context-window overrides up to 872,000 tokens while GPT-5.5 and
+// GPT-5.4 keep the shared 272,000-token Bedrock window.
+func bedrockModelWithMaxContextWindow(slug string, priority int, maxContextWindow int64) ModelInfo {
 	return ModelInfo{
 		Slug:                           slug,
 		DisplayName:                    slug,
@@ -1123,7 +1130,7 @@ func bedrockModel(slug string, priority int) ModelInfo {
 		IncludeSkillsUsageInstructions: true,
 		TruncationPolicy:               TruncationPolicy{Mode: TruncationModeBytes, Limit: 10000},
 		ContextWindow:                  272000,
-		MaxContextWindow:               272000,
+		MaxContextWindow:               maxContextWindow,
 		EffectiveContextWindowPercent:  95,
 		InputModalities:                []string{"text"},
 	}

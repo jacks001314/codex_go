@@ -45,6 +45,8 @@ const (
 	CommandExecServer        Command = "exec-server"
 	CommandFeatures          Command = "features"
 	CommandMigrateRollouts   Command = "migrate-rollouts"
+	CommandAgents            Command = "agents"
+	CommandQueue             Command = "queue"
 )
 
 var knownCommands = map[string]Command{
@@ -80,6 +82,8 @@ var knownCommands = map[string]Command{
 	"features":            CommandFeatures,
 	"migrate-rollouts":    CommandMigrateRollouts,
 	"migrateRollouts":     CommandMigrateRollouts,
+	"agents":              CommandAgents,
+	"queue":               CommandQueue,
 }
 
 type SharedOptions struct {

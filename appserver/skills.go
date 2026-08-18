@@ -267,7 +267,6 @@ type SkillsServiceOptions struct {
 type skillFrontmatter struct {
 	Name        string                   `yaml:"name"`
 	Description string                   `yaml:"description"`
-	Model       string                   `yaml:"model"`
 	Metadata    skillFrontmatterMetadata `yaml:"metadata"`
 }
 
@@ -281,10 +280,6 @@ type parsedSkillFrontmatter struct {
 	Name             string
 	Description      string
 	ShortDescription string
-	// Model is the optional model requested by the skill frontmatter (Rust
-	// #38467). Only supported values ("luna") are retained; unsupported values
-	// are ignored without failing to load the rest of the metadata.
-	Model string
 }
 
 type skillMetadataFile struct {
@@ -1032,20 +1027,7 @@ func parseSkillFrontmatterResult(contents string, defaultName string) (*parsedSk
 		Name:             name,
 		Description:      description,
 		ShortDescription: sanitizeSkillSingleLine(parsed.Metadata.shortDescription()),
-		Model:            normalizeSkillFrontmatterModel(parsed.Model),
 	}, nil
-}
-
-// normalizeSkillFrontmatterModel recognizes supported skill model annotations
-// (Rust SkillModel::Luna) case-insensitively and ignores unsupported values so
-// they never prevent the rest of the skill metadata from loading.
-func normalizeSkillFrontmatterModel(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "luna":
-		return "luna"
-	default:
-		return ""
-	}
 }
 
 func invalidSkillFieldError(field string, maxLen int) error {

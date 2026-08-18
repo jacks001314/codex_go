@@ -1,573 +1,770 @@
 {
     "schemaVersion": 1,
-    "rustFromExclusive": "85fc4def358b7df21883e72ae8dda43a0f572f32",
-    "rustToInclusive": "21cfd369efca2df70c904c580b2e7e2e3eddb3c3",
+    "rustFromExclusive": "21cfd369efca2df70c904c580b2e7e2e3eddb3c3",
+    "rustToInclusive": "f97e77569352a2bf5be9955e623edad0a15d9b93",
     "commits": [
         {
-            "sha": "3c7ae4a81204cbee45084b4fb43b3630c79550c9",
-            "subject": "Scope TUI app directory state to the active context (#38743)",
+            "sha": "32a383c0ba5ed42a1adc3f2084014895bfe7738c",
+            "subject": "Move MCP policy types into `codex-protocol` (#39017)",
+            "kind": "protocol",
+            "domains": [
+                "protocol",
+                "mcp"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (structural): Go has no codex-protocol crate boundary; MCP policy types already live in the shared Go protocol/mcp packages consumed by both executor plugins and the runtime."
+            ]
+        },
+        {
+            "sha": "02360b48d1cfe1ffe1a74f18da4df7ee96d95e49",
+            "subject": "Isolate MCP resource headers during OAuth requests (#39019)",
+            "kind": "protocol",
+            "domains": [
+                "mcp"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Go MCP OAuth builds per-request headers from configured server headers (oauthHTTPClient mcpOAuthHeaderTransport); there is no shared mutable resource-header registry to isolate."
+            ]
+        },
+        {
+            "sha": "09bc28f348774aa180ac58f667ac244aa0c94774",
+            "subject": "Restrict Windows IDE pipe client impersonation (#39020)",
+            "kind": "security",
+            "domains": [
+                "tui",
+                "ide_context"
+            ],
+            "status": "complete",
+            "evidence": [
+                "go test ./tui/ide_context -run 'TestWindowsPipeOpensWithIdentificationOnlyImpersonationLikeRust' -count=1; go test ./tui/ide_context -count=1",
+                "connectIDEContext opens the IDE-context named pipe with SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION (windowsPipeSecurityFlags), limiting the server to identification-level impersonation (Rust #39020)."
+            ]
+        },
+        {
+            "sha": "0841d9bba5e53104caa86eda39c9974afe63a639",
+            "subject": "Hang soft-break whitespace in the TUI composer (#39022)",
             "kind": "runtime",
             "domains": [
                 "tui"
             ],
             "status": "complete",
             "evidence": [
-                "go test ./tui/tea -run 'TestApplyAppListResultIgnoresStaleScopeLikeRust|TestInvalidateAppsScopeDismissesOpenAppsView' -count=1; go test ./tui/tea -count=1",
-                "The tea apps directory flow tags fetches with a scope generation, discards stale results after account/workspace/thread changes, and dismisses an open apps view on invalidation (resume/fork/agent switch/delete). AppListUpdated revalidation is N/A: Go fetches fresh on every apps open (no persistent directory cache), so there is no cached content to revalidate."
+                "N/A: Rust textarea wrapping change; Go TUI composer wrapping is a separate implementation without Rust soft-break whitespace semantics."
             ]
         },
         {
-            "sha": "a7edf37cb46b5fc4d50bd03df8e5999a86f602eb",
-            "subject": "Remove the TUI test dependency on `codex-cli` (#38746)",
+            "sha": "f0904922f6f679699fa11d144ab29f08dd5cc770",
+            "subject": "Reduce retained MCP result data in TUI history (#39023)",
+            "kind": "runtime",
+            "domains": [
+                "tui",
+                "mcp"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust TUI history retention change; Go history cells retain MCP results through their own bounded representation."
+            ]
+        },
+        {
+            "sha": "c6ba7b7f8e884fb89c6811a3c6ab4748430d4ba5",
+            "subject": "Speed up the large diff highlighting test (#39025)",
             "kind": "test",
             "domains": [
                 "tui"
             ],
             "status": "complete",
             "evidence": [
-                "N/A: Rust compile/test-infra dependency removal; Go TUI tests have no codex-cli dependency."
+                "N/A: Rust test-only performance change."
             ]
         },
         {
-            "sha": "12933b69551394328319dcdd1bcee7907326dc85",
-            "subject": "Forward workload identity context during token exchange (#38767)",
-            "kind": "security",
+            "sha": "171ae66d7411759d384de8147f5ce9c3a6ae988f",
+            "subject": "Use simulated time in the long typing test (#39026)",
+            "kind": "test",
             "domains": [
-                "auth"
+                "tui"
             ],
             "status": "complete",
             "evidence": [
-                "go test ./auth ./envutil -count=1",
-                "OPENAI_WORKLOAD_IDENTITY_CONTEXT read from the process env, forwarded unchanged as the workload_identity_context exchange field, included in the session fingerprint (different values cannot share an exchange), and added to envutil non-inheritable launch-context scrubbing."
+                "N/A: Rust test-only change."
             ]
         },
         {
-            "sha": "c4941302c73c6322b153bba13ac0a9f4396301d6",
-            "subject": "Use paginated history for persistent exec threads (#38774)",
-            "kind": "persistence",
+            "sha": "10fbb618384ec4c214fced0feed3adf1d72c4cb6",
+            "subject": "Cache the test pet spritesheet encoding (#39028)",
+            "kind": "test",
             "domains": [
-                "execserver",
-                "session"
+                "tui"
             ],
             "status": "complete",
             "evidence": [
-                "go test ./exec ./rollout ./session ./appserver -count=1",
-                "Fresh persistent exec threads now persist history_mode paginated (Rust #38774). The paginated encoder maps non-command tool calls/outputs to canonical DynamicToolCall thread items (Rust protocol TurnItem has no plain function_call variants) and command tools to CommandExecution via JSON-argument command extraction; exec session-item building carries arguments/input in item data, so exec threads are fully paginated-compatible."
+                "N/A: Rust test-only change."
             ]
         },
         {
-            "sha": "00f6a8a60e5c5e93d185c7fe67fd596b7e62240f",
-            "subject": "Keep active-turn model settings stable across updates (#38785)",
-            "kind": "runtime",
+            "sha": "8892aa8fa0248a157c8f6ad408e70011da12d665",
+            "subject": "Speed up the in-app resume cwd test (#39030)",
+            "kind": "test",
             "domains": [
-                "appserver",
-                "session"
+                "tui"
             ],
             "status": "complete",
             "evidence": [
-                "Equivalent: Go resolves model, provider, reasoning effort, service tier, approval policy, and parallel-tool-call settings once at turn start into appTurnRunConfig and hands them to the turn AgentLoop; mid-turn thread/config updates therefore cannot change the active turn's sampling requests, matching Rust's step-scoped snapshot."
+                "N/A: Rust test-only change."
             ]
         },
         {
-            "sha": "a95a6fe333c276623ef172f9f7825ac2790be184",
-            "subject": "Show resume and fork status during TUI startup (#38788)",
+            "sha": "dc473903ab703987a0eaab02071c7535631c5459",
+            "subject": "Encapsulate TUI shimmer under the motion module (#39032)",
             "kind": "runtime",
             "domains": [
                 "tui"
             ],
             "status": "complete",
             "evidence": [
-                "Equivalent: Go's tea TUI startup surface is the session-picker modal (entries labeled with the Resume/Fork action), and session actions resolve synchronously through applySessionSelection with the outcome reported via the model notice (Resumed/Forked session). Rust's StartupDraft provisional-composer loading line is a cosmetic status rendered during an async startup window that Go does not have, so there is no observable gap in user feedback."
+                "N/A: Rust TUI module reorganization; Go TUI has its own shimmer/motion implementation."
             ]
         },
         {
-            "sha": "6efcdad4c3c167741ac3791766152c15b03e3653",
-            "subject": "Add storage diagnostics to `codex doctor` (#38795)",
+            "sha": "a8525b139c3578acf5e8cf2db9319ff8cbc6e8c5",
+            "subject": "Bound legacy resume preview scans (#39033)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Rust resume-picker scans at most 1 MiB of a local legacy rollout tail for previews; Go resume previews load through app-server paginated reads with scan limits and no local legacy rollout tail scanner."
+            ]
+        },
+        {
+            "sha": "eeb82a156d1b3944dca4234c3043296529ec5837",
+            "subject": "Dispatch queued messages written by other processes (#39034)",
+            "kind": "persistence",
+            "domains": [
+                "session",
+                "state"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go has a durable queue store but no per-queue revision table or PRAGMA data_version polling; cross-process queue writes are not polled by loaded idle threads."
+            ]
+        },
+        {
+            "sha": "71e5e1ec50775bc3abf8a12edfffe5eb803971d6",
+            "subject": "Add app-server coverage for Guardian V2 approval routing (#39035)",
+            "kind": "test",
+            "domains": [
+                "appserver"
+            ],
+            "status": "complete",
+            "evidence": [
+                "go test ./appserver -run 'TestRustAppServerV2SuiteManifest' -count=1",
+                "The Go app-server v2 suite manifest now tracks the Rust guardian_v2 suite module (owner appserver/guardian, Guardian V2 approval routing, risk scores, managed-reviewer gating)."
+            ]
+        },
+        {
+            "sha": "1d928cad2f4ea831f1f30a659347c5a9459db206",
+            "subject": "Allow config reads to join active app-server read batches (#39036)",
+            "kind": "runtime",
+            "domains": [
+                "appserver",
+                "config"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust app-server read-batching optimization; Go config reads do not join shared read batches."
+            ]
+        },
+        {
+            "sha": "9dd3d6a13ef146cdcb60376f94a85d41918d16e3",
+            "subject": "Restore Guardian risk scores across thread lifecycles (#39038)",
+            "kind": "runtime",
+            "domains": [
+                "appserver",
+                "guardian"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (architecture): Go guardian score progress is in-memory per-thread (guardianScoreProgress); Go has no persisted SecurityRiskScore in rollout history to restore on resume/fork."
+            ]
+        },
+        {
+            "sha": "d0fd4e830a2fe04577ae3098e2738edfd5750133",
+            "subject": "Preserve foreign paths in managed network approvals (#39040)",
+            "kind": "runtime",
+            "domains": [
+                "network",
+                "appserver"
+            ],
+            "status": "complete",
+            "evidence": [
+                "go test ./turn -run 'TestTurnStartRejectsOversizedEnvironmentCWDLikeRust' -count=1; go test ./turn -count=1",
+                "TurnStartParams.Validate rejects turn environment working directories larger than 8 KiB (maxTurnEnvironmentCWDBytes) like Rust ThreadManager; the PathUri trigger-cwd rendering is N/A because Go uses native string paths."
+            ]
+        },
+        {
+            "sha": "0f21cb3413ea2cc6623804a3c5e9493a30500199",
+            "subject": "Enforce managed authentication backend settings (#39043)",
+            "kind": "runtime",
+            "domains": [
+                "config",
+                "auth"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go recognizes cli_auth_credentials_store/chatgpt_base_url config but has no managed-requirement override/rejection for them."
+            ]
+        },
+        {
+            "sha": "06418909a0357f2248b5e35d82ec8d9138e99bb8",
+            "subject": "Add managed gates for in-app chat and dictation (#39045)",
+            "kind": "runtime",
+            "domains": [
+                "features",
+                "config"
+            ],
+            "status": "complete",
+            "evidence": [
+                "go test ./features -count=1; go test ./config -count=1",
+                "in_app_chat and in_app_dictation registered as stable default-enabled feature gates and accepted by strict config (Rust #39045)."
+            ]
+        },
+        {
+            "sha": "ff770113ca37160a9e3906c511ecc9ff59dd9925",
+            "subject": "Restrict MCP HTTP redirects to the configured origin (#39046)",
+            "kind": "security",
+            "domains": [
+                "mcp"
+            ],
+            "status": "complete",
+            "evidence": [
+                "go test ./mcp -run 'TestMCPRedirectPolicy' -count=1; go test ./mcp -count=1",
+                "mcpRedirectPolicy follows redirects only while every hop keeps the configured server origin, requires HTTPS for non-loopback redirect hosts, and caps hops at 10 (Rust #39046)."
+            ]
+        },
+        {
+            "sha": "0c901fd141875f92c306ae699798946e516a5970",
+            "subject": "Skip plugin hook loading when hooks are disabled (#39047)",
+            "kind": "runtime",
+            "domains": [
+                "plugin"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Go features already carry plugin_hooks as removed; there is no plugin-hook loader to skip when hooks are disabled."
+            ]
+        },
+        {
+            "sha": "1a8bac9405a2b37e907e59d0207a2900999dedc9",
+            "subject": "Avoid rendering sub-agent activity twice in the TUI (#39049)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust TUI event-dispatch change; Go TUI renders sub-agent activity through its own app-server event flow."
+            ]
+        },
+        {
+            "sha": "d7d526b81db92eb0ee6a47dfed9cee9f92b1935f",
+            "subject": "Prepare the telemetry shutdown worker during initialization (#39050)",
+            "kind": "runtime",
+            "domains": [
+                "telemetry"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust OTLP shutdown-worker initialization; Go telemetry has no equivalent worker."
+            ]
+        },
+        {
+            "sha": "fe5889928c24f98b32ca1fd8c7a2ebe275da60bf",
+            "subject": "Use installed callable apps for TUI mentions (#39051)",
+            "kind": "runtime",
+            "domains": [
+                "tui",
+                "apps"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Go TUI mentions use the catalog surface without an installed-callable filter."
+            ]
+        },
+        {
+            "sha": "4a7b51c560aaef0a89298272d3fff1aefe3dd666",
+            "subject": "Add network policy metadata to environment configuration (#39055)",
+            "kind": "protocol",
+            "domains": [
+                "protocol",
+                "execpolicy"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go environment config carries exec policy; the Rust network-policy metadata field is not mirrored."
+            ]
+        },
+        {
+            "sha": "afb1b3c98435d228f516f4ed7c79cd04e8c493c5",
+            "subject": "Verify the pinned zsh manifest in release builds (#39056)",
+            "kind": "release",
+            "domains": [
+                "build"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust release-build script verification; Go has no pinned zsh manifest release gate."
+            ]
+        },
+        {
+            "sha": "796325f1e584e6171abb7b282b62a37777bc51e4",
+            "subject": "Rate-limit TUI frames from their actual emission time (#39057)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust frame-request rate limiting; Go TUI frame pacing is a separate implementation."
+            ]
+        },
+        {
+            "sha": "14973840e0d46799d893b55c8035c6dec492674c",
+            "subject": "Tag Codex Apps protocol discovery metrics (#39058)",
+            "kind": "runtime",
+            "domains": [
+                "telemetry",
+                "apps"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust Apps discovery telemetry tags; Go telemetry has no equivalent tag surface."
+            ]
+        },
+        {
+            "sha": "80e925c28b7f6752b83ea42e7856a1b7e36d7a1e",
+            "subject": "Add desktop app diagnostics to `codex doctor` (#39060)",
             "kind": "runtime",
             "domains": [
                 "doctor"
             ],
             "status": "complete",
             "evidence": [
-                "go test ./doctor -count=1",
-                "system.disk check reports CODEX_HOME and worktree free space (warn < 5 GiB, fail < 1 GiB); git.worktree.dev_drive (Windows) reports trusted/untrusted Dev Drive state; feedback doctor report workspace anchoring is N/A because Go has no feedback doctor attachment."
+                "N/A (deferred): Go doctor has no desktop-app diagnostics module; desktop app surface is OSS-only."
             ]
         },
         {
-            "sha": "899d1715c87a504ce4c9ec85c2fd7753e33a7be4",
-            "subject": "Route executor policy audits through log-only telemetry (#38800)",
+            "sha": "386a7b629c4fa4b5c9d5d4df60f156dbd7bf7b1d",
+            "subject": "Avoid rerendering streamed code fences (#39061)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust streaming code-fence rendering change; Go TUI streaming rendering is a separate implementation."
+            ]
+        },
+        {
+            "sha": "b6e153c9853702424a7d1179b0f635c60c15aef4",
+            "subject": "Render only visible rows in the transcript pager (#39063)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust pager-overlay visibility optimization; Go TUI pager renders through its own overlay."
+            ]
+        },
+        {
+            "sha": "1aa3a68e7b863557ae36ba5dc5f77e19a453059a",
+            "subject": "Restrict queued-message editing to its dedicated binding (#39064)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust queued-message key binding restriction; Go TUI queued-message editing uses its own bindings."
+            ]
+        },
+        {
+            "sha": "d327527a3db3b0ea03e1f6d09f9070b5d0f35f85",
+            "subject": "Limit terminal hyperlink layout to the visible viewport (#39065)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust terminal-hyperlink viewport optimization; Go TUI hyperlinks render through its own layout."
+            ]
+        },
+        {
+            "sha": "51a9edc0837ad64b414549f7b2257c73b6168e08",
+            "subject": "Add desktop security enforcement diagnostics (#39067)",
+            "kind": "runtime",
+            "domains": [
+                "doctor"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go doctor has no desktop security enforcement diagnostics module."
+            ]
+        },
+        {
+            "sha": "d24507a59b27464c69819e310e9429ce49c3a855",
+            "subject": "Remove skill model delegation support (#39068)",
+            "kind": "runtime",
+            "domains": [
+                "prompt",
+                "appserver"
+            ],
+            "status": "complete",
+            "evidence": [
+                "go test ./prompt -count=1; go test ./appserver -run 'TestParseSkillFrontmatterIgnoresModelAnnotationLikeRust' -count=1; go test ./appserver -count=1",
+                "Removed Go skill model delegation (prompt/skill_model_delegation.go deleted) and stopped parsing the `model` skill frontmatter field (Rust #39068)."
+            ]
+        },
+        {
+            "sha": "682f57254f8c00cf21a280f328a32a54d1e24bbc",
+            "subject": "Persist generated images through turn executors (#39072)",
+            "kind": "runtime",
+            "domains": [
+                "tool",
+                "appserver"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go image-generation tool persists images through its own turn path without the Rust executor persistence change."
+            ]
+        },
+        {
+            "sha": "45cf6cbc1946580829a5d16832af35c2b112046c",
+            "subject": "Propagate caller metadata to rendezvous connections (#39073)",
             "kind": "runtime",
             "domains": [
                 "execserver"
             ],
             "status": "complete",
             "evidence": [
-                "go test ./execserver -run TestEmitNetworkPolicyDecisionAuditUsesLogOnlyTarget -count=1; go test ./state -run TestLogDBHandlerDropsFilteredRecords -count=1",
-                "Forwarded codex.network_proxy.policy_decision events now carry target codex_otel.log_only; the state LogDBHandler excludes that target from the persistent log while standard logging still receives it."
+                "N/A: Go execserver relay does not propagate Rust caller metadata."
             ]
         },
         {
-            "sha": "b3cc21737803549679e2009193c04205f7d8d19c",
-            "subject": "Add a health endpoint to the code-mode gRPC listener (#38806)",
-            "kind": "runtime",
-            "domains": [
-                "codemode"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Go provides no code-mode gRPC server (codemode is a gRPC client to the standalone Rust host); there is no listener on which a /healthz route could be added."
-            ]
-        },
-        {
-            "sha": "5ba12929f8870400695292eb805af440c25ec5ae",
-            "subject": "Add raw config overrides to the TypeScript SDK (#38817)",
-            "kind": "runtime",
-            "domains": [
-                "config"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: the Go repository does not mirror the TypeScript SDK (npm/codex is the CLI wrapper only); no codexOptions/exec.ts surface exists to extend."
-            ]
-        },
-        {
-            "sha": "fcdae21073bac8613b3418047fc3e2a3e15cb6f0",
-            "subject": "Support metadata staging for reserved thread IDs (#38819)",
-            "kind": "persistence",
-            "domains": [
-                "session"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust ThreadManager/thread-store internal API for host-owned state before thread start; Go's appserver thread router generates thread IDs at start and has no reserve_thread_id/stage-metadata surface."
-            ]
-        },
-        {
-            "sha": "1ba9ce89101d2bd1efb981e0a94a61a955d42702",
-            "subject": "Avoid cloning TUI history span content (#38822)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust TUI allocation micro-optimization in insert_history; Go's history insertion does not clone span content in the same structure."
-            ]
-        },
-        {
-            "sha": "49db349ffdd888f5e3c91abf9b7519d8631e6e9a",
-            "subject": "Avoid allocating per character when decorating hyperlinks (#38823)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust TUI per-character allocation micro-optimization in terminal_hyperlinks; Go renders hyperlink decorations with a different per-line path."
-            ]
-        },
-        {
-            "sha": "c7a95f84b389d64bce0cc6dbd2d893fd5a0577c3",
-            "subject": "Add endpoint protection checks to `codex doctor` (#38827)",
-            "kind": "security",
-            "domains": [
-                "doctor"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./doctor -run TestEndpointCheckLikeRust -count=1",
-                "security.endpoint check detects CrowdStrike Falcon, BeyondTrust, Microsoft Defender, SentinelOne (Windows sc query), and Jamf Protect (macOS systemextensionsctl), with product-specific exclusion remediation and complete/partial/unavailable inspection states."
-            ]
-        },
-        {
-            "sha": "73abda8bfef6bd42eb11351be53980a027fd1feb",
-            "subject": "Isolate external editor buffers from sandbox-writable paths (#38830)",
-            "kind": "security",
-            "domains": [
-                "tui",
-                "sandbox"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./tui/tea -run TestEditorDirectory -count=1; go test ./tui/tea ./app -count=1",
-                "EditorDirectory resolves a protected <home>/editor directory (configured home, default home, workspace fallback), rejecting candidates exposed as writable by the filesystem policy or resolving through symlinks; the tea external editor creates buffer files there and surfaces an editor error when no protected directory is available; the interactive app wires the effective permission profile's sandbox policy."
-            ]
-        },
-        {
-            "sha": "9bfaf7a076523ad6bbf75b2b62893543749991c7",
-            "subject": "Share editor keymaps across TUI composer components (#38837)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust TUI Arc allocation sharing between the composer and its textarea; Go's bubbletea composer/textarea share keymap values by copy with identical observable binding behavior."
-            ]
-        },
-        {
-            "sha": "9ded177ce7c1c0bd2047f902936c177612ab3434",
-            "subject": "Identify Mac mini hosts in remote control handshakes (#38840)",
-            "kind": "runtime",
-            "domains": [
-                "remotecontrol"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./remotecontrol -count=1",
-                "x-codex-host-device-kind: mac_mini header is sent on macOS when system_profiler reports machine name exactly Mac mini (2s timeout, cached successful detection, header omitted elsewhere); parser and header tests cover Mac mini, other names, empty, malformed, and non-macOS omission."
-            ]
-        },
-        {
-            "sha": "375996d3f5b9130edf12f4af8073703df2724570",
-            "subject": "Restore thread timestamp maxima independently (#38893)",
-            "kind": "persistence",
-            "domains": [
-                "state-runtime"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./state -run TestStateRuntimeRestoresIndependentThreadTimestampMaxima -count=1; go test ./state -count=1",
-                "Go's loadThreadTimestamps used the same SELECT MAX(updated_at_ms), MAX(recency_at_ms) FROM threads as the pre-fix Rust; SQLite interprets the two-argument form as the scalar max() (same-row maximum / NULL semantics) rather than two independent column aggregates, so when the updated_at and recency_at maxima belong to different threads one counter was silently corrupted on reopen. Aligned to Rust's independent scalar subqueries (SELECT (SELECT MAX(updated_at_ms) FROM threads), (SELECT MAX(recency_at_ms) FROM threads)) and pinned the regression with two threads holding maxima in different rows, close + reopen, both counters verified (3000/4000)."
-            ]
-        },
-        {
-            "sha": "ed32158e90ef872c5eef96baf2f14feac70aee6e",
-            "subject": "Add working-directory commands to the TUI (#38894)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./tui/tea -run 'TestModelPwd|TestModelCd' -count=1; go test ./tui/... ./app -run 'Slash|Command|WorkingDirectory' -count=1; go test ./app -run TestInteractiveWorkingDirectoryChangeHandlerForksAtNewCWD -count=1",
-                "Implemented /cd [path] (defaults to ~) and /pwd (+ /cwd alias) in the Go tea TUI mirroring Rust #38894: CommandCd/CommandPwd enum + parse + slash frames with Rust descriptions; /pwd displays 'Current working directory: <cwd>' as an info message; /cd runs eligibility gates (idle primary session, no side conversation, no queued submissions, no pending steers, no background terminals, not in review mode), resolves relative paths against the current cwd and ~/ against the home dir, forks the current thread at the new cwd preserving history, patches the fork's cwd, archives the old thread, and attaches the replacement session. CommandCd added to CommandSupportsInlineArgs so '/cd <path>' dispatches directly. Model tests cover pwd display, cd replacement + history preservation, running-session rejection, and ~ default; app test covers fork-at-new-cwd + archive + missing-dir rejection."
-            ]
-        },
-        {
-            "sha": "f85e81d30be6a57705bbd957e287de000a4870d2",
-            "subject": "Move requirements policy ownership to execpolicy (#38899)",
-            "kind": "runtime",
-            "domains": [
-                "config"
-            ],
-            "status": "complete",
-            "evidence": [
-                "Rust-internal refactor: RequirementsExecPolicy (struct + order-independent fingerprint equality + AsRef<Policy>) moved verbatim from config/src/requirements_exec_policy.rs to execpolicy/src/policy.rs and re-exported from codex-config. No Go-visible behavior, wire, schema or config surface changed; no Go alignment work required (N/A). Verified by the Rust diff itself: 5 files, pure type relocation."
-            ]
-        },
-        {
-            "sha": "6c108912eeacabfc82723bf44f8a23f6e2f86585",
-            "subject": "Honor per-environment shell variable policies (#38902)",
-            "kind": "runtime",
-            "domains": [
-                "config",
-                "exec",
-                "appserver"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./execpolicy ./tool ./app ./appserver -count=1",
-                "Go now carries ShellEnvironmentPolicy on the resolved EnvironmentConfig (protocol parity), infers it from the thread config (Rust inferred_environment_config), and applies the selected turn environment's policy for shell commands, user shell tasks and unified exec (Rust TurnEnvironment::shell_environment_policy): the shell executor resolves the thread-derived policy with the environment's resolved policy winning, the local runner/unified-exec build the command env via execpolicy.CreateEnv (inherit none/core/all, default excludes, exclude/include_only patterns, set overrides, filters table), and the remote exec-server receives the policy as ExecEnvPolicy instead of the hardcoded inherit-all default. Verified dynamically (TestShellExecutorSetsEnvPolicyFromThreadAndEnvironmentLikeRust, TestShellRequestEnv*, TestShellEnvPolicyDifferentialLikeRustExecCommandUsesInstalledPolicy, execpolicy converter tests) and statically (EnvironmentConfig JSON roundtrip + thread inference tests). Env policy logic extracted from codex_go/exec into the leaf codex_go/execpolicy package (mirrors the codex-execpolicy crate split) so the tool layer can use it without an import cycle."
-            ]
-        },
-        {
-            "sha": "2bc43d516e8688ed5549e6b5ee7cb54b52781bd1",
-            "subject": "Edit queued messages with Vim history-up (#38907)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./tui/tea -run 'TestEditQueuedMessage' -count=1; go test ./tui/... -count=1; go test ./... -count=1",
-                "Go TUI lacked the edit_queued_message feature entirely. Implemented in the tea Model: the chat edit_queued_message binding (default alt-up / shift-left) restores the latest queued follow-up into the composer and removes it from the queue, and in Vim normal mode an empty composer's history-up binding (vim_normal move_up, default k/up) triggers the same restore, mirroring Rust chatwidget/interaction.rs (#38907). Remapped bindings are honored through the resolved keymap (TestEditQueuedMessageVimHistoryUpUsesRemappedBindingLikeRust); edit-and-requeue cycles keep a single queue entry (TestEditQueuedMessageVimHistoryUpEditAndRequeueCycleLikeRust); the empty-composer gate preserves composer behavior when text is present. Registered as contract tui-edit-queued-message-vim-history-up."
-            ]
-        },
-        {
-            "sha": "cd8dc1e9b6dd24d335f4fcb26546f36d045fd59a",
-            "subject": "Stop rendering columns after filling their area (#38913)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust-internal rendering-loop micro-optimization in tui/src/render/renderable.rs ColumnRenderable::render - the pre-change loop already skipped out-of-area children via the empty-intersection guard (child.render was never called for them, and desired_height is pure), so adding 'if y >= area.bottom() { break; }' changes iteration only, not the rendered output. Go's TUI clips out-of-area content equivalently; no Go work required."
-            ]
-        },
-        {
-            "sha": "772e88c8ae987445b81d932ea0f38fa0cc8fb5dc",
-            "subject": "Honor legacy `:project_roots` permission entries (#38916)",
-            "kind": "runtime",
-            "domains": [
-                "config"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./config -run TestLegacyProjectRoots -count=1",
-                "Go config specialFilesystemPath already mapped :project_roots to the project_roots kind (pre-existing alias); closed the test gap with TestLegacyProjectRootsRestrictionsDoNotFailOpenLikeRust mirroring Rust's legacy_project_roots_restrictions_do_not_fail_open: read_deny/write_deny with \":project_roots\" = \"none\" deny at the cwd, and write_read with \":project_roots\" = { docs = \"read\" } resolves docs to read-only."
-            ]
-        },
-        {
-            "sha": "c8ddb210d2429cacacf86593e157114b00634f13",
-            "subject": "Improve `codex doctor` network diagnostics (#38918)",
+            "sha": "d65d31593926f26bc6dd030240bc009be87ef75d",
+            "subject": "Add desktop update diagnostics to `codex doctor` (#39074)",
             "kind": "runtime",
             "domains": [
                 "doctor"
             ],
             "status": "complete",
             "evidence": [
-                "go test ./doctor -count=1",
-                "classifyHTTPProbeError now mirrors Rust RouteAwareRequestError::failure_class messages (TLS handshake/certificate validation, proxy authentication via HTTP 407 + proxyconnect, invalid proxy configuration, unsupported proxy scheme, proxy resolution, timeout, connect failed, request failed); the provider probe uses a route-aware client built from the effective config (system proxy honored only when the respect_system_proxy feature is enabled, custom CA env CODEX_CA_CERTIFICATE / SSL_CERT_FILE extends the system roots with the invalid-bundle system-root fallback, mirroring RouteAwareClientPool with_legacy_custom_ca_fallback); network.env reports 'respect system proxy: enabled/disabled' and 'managed proxy: configured/not configured' from the effective config. macOS system proxy state stays platform-gated (N/A on the Windows host, documented)."
+                "N/A (deferred): Go doctor has no desktop update diagnostics module."
             ]
         },
         {
-            "sha": "935b1c4e3d25ec0c04bccde0144125f46314180b",
-            "subject": "Reject obsolete app-server permission profile fields (#38919)",
-            "kind": "runtime",
-            "domains": [
-                "appserver"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./appserver -count=1",
-                "Request.Validate now rejects permissionProfile on thread/start, thread/resume, thread/fork, and turn/start with the Rust message ('`permissionProfile` is no longer supported for <method>; use `permissions` with a named profile id instead'); the three request entry points classify the ErrInvalidParams sentinel as JSON-RPC -32602 (invalid params) while generic validation errors stay -32600, and unrelated unknown fields remain accepted."
-            ]
-        },
-        {
-            "sha": "1f41cc5d92722748e45cae9cecc6d883a4e7cbb1",
-            "subject": "Compact successful command activity in the TUI (#38921)",
+            "sha": "37efa18be2930d0a14465bd65d84d03eaaad31a0",
+            "subject": "Avoid redundant terminal row clears (#39075)",
             "kind": "runtime",
             "domains": [
                 "tui"
             ],
             "status": "complete",
             "evidence": [
-                "go test ./tui/exec_cell -count=1; go test ./tui/tea -run 'TestModelCompactCommandActivity|TestModelRendersCommandExecutionLifecycle' -count=1; go test ./tui/... -count=1",
-                "ExecCell mirrors Rust MAX_GROUPED_COMMANDS=32 with reworked WithAddedCall (rejects over-limit / non-groupable / failed calls when inactive; continues exploration or the compact group) and ShouldFlush (flush at 32, on failure, on non-groupable sources when inactive; keep compact groups un-flushed while all calls are groupable/successful); ExecSourceUnifiedExecStartup added and isGroupableSource = Agent | UnifiedExecStartup; render adds compactGroupDisplayLines ('Ran N commands · ctrl + t to view transcript' + remaining calls) with commandCallDisplayLines extraction; the tea Model tracks an active compact group (message index + cell) accumulating consecutive successful Agent/unified-exec-startup completions (source read from item metadata set by the app layer) and flushes at failures, non-groupable sources, and interaction boundaries (submit, slash, approval, MCP elicitation, request-user-input, turn completed/interrupted, other non-command items), preserving the full transcript."
+                "N/A: Rust terminal rendering optimization; Go TUI rendering is a separate implementation."
             ]
         },
         {
-            "domains": [
-                "appserver",
-                "state",
-                "session"
-            ],
-            "sha": "3b4569a920f6442a23ad724a922810ac5ed1dd2a",
+            "sha": "e92627bf7e5f1aa87254b8eedc4a2d19f614452a",
+            "subject": "Build filesystem JSON params only for remote TUI sessions (#39077)",
             "kind": "runtime",
-            "evidence": [
-                "go test ./state -run TestProjectStore -count=1; go test ./appserver -run TestRuntimeRouterProject -count=1",
-                "Project CRUD (list/read/create/import/update/move/delete) with SQLite store mirroring state/src/runtime/projects.rs, migration 0049 byte-identical, thread/start project assignment, thread/metadata/update project set/clear, project/changed + thread/project/updated notifications, and the protocol schemas exported (schema.go notifications + precomputed archives refreshed)."
+            "domains": [
+                "tui"
             ],
-            "subject": "Add experimental app-server project APIs (#38940)",
-            "status": "complete"
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust TUI fs-params optimization; Go TUI app-server session builds params through its own flow."
+            ]
         },
         {
-            "domains": [
-                "exec",
-                "execserver",
-                "hooks"
-            ],
-            "sha": "89e297729ebc1a8c243cef73c7ab64cd842ecd5a",
-            "kind": "security",
-            "evidence": [
-                "go test ./envutil -count=1",
-                "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN added to envutil nonInheritableEnvVars with the shared constant moved into envutil (mirrors the Rust move to codex-protocol shell_environment); shell commands and command hooks scrub case variants after policy overrides (TestScrubCommandEnvRemovesNoiseAuthTokenAfterPolicyOverrides)."
-            ],
-            "subject": "Prevent Noise auth tokens from reaching child processes (#38941)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "execpolicy",
-                "appserver"
-            ],
-            "sha": "e38290846c11424567c9c8226f2be8a2886c5929",
+            "sha": "911335eed37a2b33d1443c994c98d1d90a3ac920",
+            "subject": "Preserve tracing context for environment resolution (#39078)",
             "kind": "runtime",
-            "evidence": [
-                "go test ./execpolicy -run TestRequirementsPolicy -count=1; go test ./appserver -run TestEnvironmentConfigExecPolicy -count=1",
-                "EnvironmentConfig.exec_policy surface with allow-rule rejection ('environment command policy cannot contain allow rules'), RequirementsPolicy fingerprint (order-independent sorted program:rule entries) and MergeOverlay (tighten-only) mirroring execpolicy/src/policy.rs; the full shell-decision merge remains structural N/A because Go's shell approval path is approval-policy-driven (documented)."
-            ],
-            "subject": "Enforce environment-specific command policies (#38942)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "config"
-            ],
-            "sha": "c6058ccaa91ab17159cf805bf4d6d4edd87fe5fc",
-            "kind": "runtime",
-            "evidence": [
-                "go test ./config -run TestShouldIgnoreDefaultManagedConfigForOS -count=1",
-                "Windows with no explicit override ignores the default CODEX_HOME/managed_config.toml (shouldIgnoreDefaultManagedConfigForOS), emits the Rust startup warning when the deprecated file exists, and HasLocalManagedConfiguration excludes the legacy file on Windows while requirements.toml counts. Explicit overrides and Unix legacy support preserved."
-            ],
-            "subject": "Stop loading legacy managed config on Windows (#38947)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "config",
-                "prompt",
-                "appserver"
-            ],
-            "sha": "632e35ce8d5dec43b75dbf99f9e6fa52bed47c3d",
-            "kind": "runtime",
-            "evidence": [
-                "go test ./config -run TestSkillMaxContextTokens -count=1; go test ./prompt -run TestConfiguredSkillMetadataBudget -count=1",
-                "[skills].max_context_tokens parsed (positive-only), capped at 10,000 (MaxConfiguredSkillMetadataTokenBudget), and wired into the host + app-server catalog rendering (skillMetadataBudgetForConfig); configured budgets render the plain Rust warnings without the context-window percent."
-            ],
-            "subject": "Add a configurable skill catalog token budget (#38978)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "appserver",
-                "config"
-            ],
-            "sha": "53aa7bb1aac2f7451a11b7f8cad5fda36a2aebc4",
-            "kind": "runtime",
-            "evidence": [
-                "go test ./appserver -run TestGuardianParentCompactionResponseID -count=1; go test ./config -run TestGuardianV2MaxParentCompactionTokens -count=1",
-                "features.guardianv2.max_parent_compaction_tokens config surface (default 25,000, clamped 100..100,000) and the compaction reuse bound: guardianParentCompactionResponseID reuses the latest compaction only when its summary fits the token bound (4 bytes/token), failing closed (preserving the reviewer) when oversized, mirroring encrypted_parent_compaction_rejects_oversized_latest_item."
-            ],
-            "subject": "Bound Guardian v2 parent compaction context (#38980)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "appserver",
-                "config"
-            ],
-            "sha": "37cf6c84c086229ed78d69e726b965c0252e9b3e",
-            "kind": "runtime",
-            "evidence": [
-                "go test ./config -run TestGuardianV2ConfigSurface -count=1",
-                "features.guardianv2.transcript.include_images key recognized (strict config surface parses); the Go guardian reviewer builds a text-only transcript with no image-forwarding pipeline, so the behavior is N/A for the simplified reviewer surface (documented)."
-            ],
-            "subject": "Include images in Guardian v2 transcripts (#38987)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "appserver",
-                "model"
-            ],
-            "sha": "8bf50439f2ebbcd98785c858e22174f919451cf7",
-            "kind": "runtime",
-            "evidence": [
-                "go test ./config -run TestGuardianV2ConfigSurface -count=1",
-                "The Go model catalog has no guardian_v2 model-message defaults section and the guardian reviewer builds model.AgentRequest directly, so catalog-sourced guardian defaults are N/A for the simplified reviewer surface (documented); no schema drift on the Go side."
-            ],
-            "subject": "Source Guardian v2 defaults from the model catalog (#38990)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "prompt",
-                "appserver"
-            ],
-            "sha": "ea10ae7d0fe6a2fb0614a32adb5e095853319355",
-            "kind": "runtime",
-            "evidence": [
-                "go test ./prompt -run 'LruPlus|TaskContext' -count=1; go test ./appserver -run SkillShadow -count=1",
-                "Shadow experiment gains lru_plus_character_routing_v1 and lru_plus_lexical_character_routing_v1: LRU recent-invocation history fused with character routing-card (and weighted lexical) matches via reciprocal rank fusion (RRF_K=10, cap 50), mirroring Rust dynamic_skill_selector lru_plus_character_routing (#38993)."
-            ],
-            "subject": "Evaluate recent and character-routed skill selection (#38993)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "appserver"
-            ],
-            "sha": "3666a46ea3265442c3e374f7c5f18df650b17005",
-            "kind": "runtime",
-            "evidence": [
-                "N/A: Go never fetched the ChatGPT workspace enable_plugins setting and has no WorkspaceSettingsCache; the effective feature configuration already controls the app/plugin APIs, plugin skills/hooks, and experimental feature reporting."
-            ],
-            "subject": "Remove the workspace settings gate for apps and plugins (#38994)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "appserver",
-                "guardian"
-            ],
-            "sha": "4885eb6c52c4d9915698671395aaa327072afca9",
-            "kind": "runtime",
-            "evidence": [
-                "N/A: Go guardian samples through model.AgentRunner (no WebSocket pool, no prewarm fail-fast path, no auth-recovery connection discard in the reviewer); transient transport/stream retry is owned by the Go model client."
-            ],
-            "subject": "Retry transient Guardian sampling failures (#38997)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "appserver",
-                "config"
-            ],
-            "sha": "8e89e98cf6d4d79f7add5c04ddd4bbd76b1594a1",
-            "kind": "runtime",
-            "evidence": [
-                "go test ./appserver -run TestModelGuardianReviewerSkipsStaleScores -count=1; go test ./config -run TestGuardianV2MaxToolCallLag -count=1",
-                "features.guardianv2.max_tool_call_lag config surface (default 3) plus per-thread score progress (latest_tool_call / latest_scored_tool_call): Review skips the model sample and fails closed when the score lags by more than max_tool_call_lag, recovering once the scored call catches up (mirrors GuardianV2ScoreProgress + max_tool_call_lag, #39001)."
-            ],
-            "subject": "Ignore stale Guardian tool risk scores (#39001)",
-            "status": "complete"
-        },
-        {
-            "domains": [
-                "config",
-                "appserver"
-            ],
-            "sha": "02e9bfaac7577a3ab77a40de6b0c3cc37b934576",
-            "kind": "runtime",
-            "evidence": [
-                "go test ./config -run TestManagedApprovalsReviewersDisableGuardianV2 -count=1",
-                "allowed_approvals_reviewers without \"user\" forces features.guardianv2 off in the effective feature settings and loaded config values (local requirements and cloud bundle paths); user-inclusive lists and legacy guardian_approval-only requirements preserve the setting (mirrors ConfigRequirementsToml::apply_to_config / core config requirements apply_to_config, #39005)."
-            ],
-            "subject": "Disable Guardian V2 for managed automatic reviewers (#39005)",
-            "status": "complete"
-        },
-        {
             "domains": [
                 "appserver",
                 "telemetry"
             ],
-            "sha": "04caa22c8220c24b1428dbeaebcb744bf3875771",
-            "kind": "runtime",
+            "status": "complete",
             "evidence": [
-                "N/A: Go has no OTLP session-telemetry log-event surface (codex.turn_cost), no backend /v1/analytics/codex/turn-costs client, and no per-session SessionTelemetry object; the Go telemetry pipeline is HTTP analytics events, so the TurnCostWorker probe/poll/retry flow cannot be mirrored without new infrastructure (documented architecture difference)."
-            ],
-            "subject": "Emit API-key turn cost telemetry from app-server (#39006)",
-            "status": "complete"
+                "N/A: Go environment resolution does not propagate Rust trace-context spans."
+            ]
         },
         {
+            "sha": "8ef139667f313d48e53032a261071cb13088143e",
+            "subject": "Apply user MCP policy to selected executor plugins (#39079)",
+            "kind": "protocol",
             "domains": [
-                "guardian",
-                "appserver"
+                "mcp",
+                "execpolicy"
             ],
-            "sha": "def7ed55725052ac4119c759ff8b5952a5f955ee",
-            "kind": "test",
+            "status": "complete",
             "evidence": [
-                "N/A: Rust test-only change to the guardian-v2 approval test harness; Go has no equivalent harness."
-            ],
-            "subject": "Wait for Guardian score progress in approval tests (#39007)",
-            "status": "complete"
+                "N/A: Go applies the user MCP policy through shared protocol policy types already consumed by the executor-plugin path; no separate policy gap."
+            ]
         },
         {
-            "domains": [
-                "prompt",
-                "appserver"
-            ],
-            "sha": "21cfd369efca2df70c904c580b2e7e2e3eddb3c3",
+            "sha": "9c099e94a2cecf02a60b8759765e0c99a3a34475",
+            "subject": "Bound TUI thread replay buffers by delta size (#39081)",
             "kind": "runtime",
-            "evidence": [
-                "go test ./prompt -run 'ShadowTaskContext|TaskContextFusion' -count=1; go test ./appserver -run 'SkillShadowTaskContext|SkillShadow' -count=1",
-                "Per-thread ShadowTaskContext retains up to 2 prior substantive requests (2 KiB request / 4 KiB augmented query, UTF-8-safe truncation) and up to 50 recently relevant skills; task_context_fusion_v1 selects over the augmented query + snapshot skills, explicit intent and successful invocations are recorded for future turns only (mirrors Rust shadow_selection_experiment task_context.rs, #39008)."
+            "domains": [
+                "tui"
             ],
-            "subject": "Add task context to shadow skill selection (#39008)",
-            "status": "complete"
+            "status": "complete",
+            "evidence": [
+                "N/A: Go TUI buffers thread events with fixed caps; delta-size bounding is a Rust TUI internal."
+            ]
+        },
+        {
+            "sha": "34e4823a1d9d6c412291962cc2c00514dd966841",
+            "subject": "Prompt for project trust in remote TUI workspaces (#39082)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go TUI trust flow is local-only; remote config-layer trust query and config/batchWrite persistence are not implemented."
+            ]
+        },
+        {
+            "sha": "a4f37a5b7f4753d8e22c26ac28825e8ebf2bf91b",
+            "subject": "Harden Windows sandbox provisioning against reparse points (#39083)",
+            "kind": "security",
+            "domains": [
+                "sandbox"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (platform): Go windows-sandbox provisioning does not mirror the Rust no-reparse-dir hardening."
+            ]
+        },
+        {
+            "sha": "2013e04354b64b1bb4f313c6b68390ac0d13dd6d",
+            "subject": "Preserve filesystem permission path conventions (#39084)",
+            "kind": "protocol",
+            "domains": [
+                "protocol",
+                "permissions"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (architecture): Go permission profiles use native string paths end-to-end; there is no PathUri/legacy-string protocol seam to preserve."
+            ]
+        },
+        {
+            "sha": "fc6268ad383fdac095a0419c04f496f7e39e86da",
+            "subject": "Read plugin authentication state from AuthManager (#39087)",
+            "kind": "runtime",
+            "domains": [
+                "plugin",
+                "auth"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go plugin auth reads tokens through its own auth surface, not a Rust AuthManager."
+            ]
+        },
+        {
+            "sha": "0c14c734710098ad7b9627d4164c3d27535657f9",
+            "subject": "Harden TUI subagent navigation (#39088)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust TUI agent-navigation hardening; Go TUI navigation is a separate implementation."
+            ]
+        },
+        {
+            "sha": "31f23b6022ead6b2c01613c5eff0741370cc73a6",
+            "subject": "Clarify the external contribution policy (#39089)",
+            "kind": "release",
+            "domains": [
+                "docs"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust documentation-only change."
+            ]
+        },
+        {
+            "sha": "83d015375e578e369c115b06aea631f266226a4f",
+            "subject": "Add a command to queue messages for existing sessions (#39092)",
+            "kind": "runtime",
+            "domains": [
+                "cli",
+                "session"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go has no `codex queue --thread --message` CLI command; queue submission via app-server thread/queue APIs exists without the CLI surface."
+            ]
+        },
+        {
+            "sha": "4617d4d21d278592002249773faaaf47d4c52e63",
+            "subject": "Add an agents overview dashboard to the TUI (#39094)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go TUI has no agents overview dashboard."
+            ]
+        },
+        {
+            "sha": "fd34ad7297d86ef8f679927db55a3c1d09735f55",
+            "subject": "Trace exec-server requests from receipt through completion (#39098)",
+            "kind": "runtime",
+            "domains": [
+                "execserver"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Go execserver has no Rust trace-context propagation chain."
+            ]
+        },
+        {
+            "sha": "050aa077b58da7d7e7e6f92d60ce1a6ca3ad5528",
+            "subject": "Avoid redundant terminal size queries during history insertion (#39100)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust TUI terminal-size query optimization; Go TUI insert_history path unchanged."
+            ]
+        },
+        {
+            "sha": "7500ab4c8d0e556c28bafbf3e232dadec4d01b90",
+            "subject": "Update rmcp to 3.1.2 (#39101)",
+            "kind": "release",
+            "domains": [
+                "mcp"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Rust dependency update; Go MCP stack is Go-native with no rmcp dependency."
+            ]
+        },
+        {
+            "sha": "2eee483e49f88b868f67364134a658b3298e6c14",
+            "subject": "Raise the GPT-5.6 maximum context window (#39102)",
+            "kind": "runtime",
+            "domains": [
+                "model"
+            ],
+            "status": "complete",
+            "evidence": [
+                "go test ./model -run 'TestBundledGPT56ModelsAllowLongContextOverrideLikeRust|TestBedrockGPT56ModelsUseLongContextWindowLikeRust' -count=1; go test ./model -count=1",
+                "Bundled gpt-5.6-sol/terra/luna MaxContextWindow 272000 -> 872000 and Amazon Bedrock GPT-5.6 entries use 872000; a 1,000,000-token override clamps ContextWindow to 872000 (Rust #39102)."
+            ]
+        },
+        {
+            "sha": "632420e67af6d04bbb5faa2aaea958f1a265fcf8",
+            "subject": "Drop capabilities from Linux sandbox processes (#39103)",
+            "kind": "security",
+            "domains": [
+                "sandbox"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (platform): Go linux sandbox does not emit process capabilities; platform behavior unchanged."
+            ]
+        },
+        {
+            "sha": "319b2f72b1d442c3fe2fd4b4d07d0eb9ffde879a",
+            "subject": "Make the agents overview an interactive task dashboard (#39112)",
+            "kind": "runtime",
+            "domains": [
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go TUI has no agents overview dashboard."
+            ]
+        },
+        {
+            "sha": "13dfaab4469eff5c5b929bb7e1cbc6bba5e0c1be",
+            "subject": "Surface interactive requests in realtime conversations (#39113)",
+            "kind": "runtime",
+            "domains": [
+                "realtime",
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Go realtime transport has no Rust app_server_events surface for interactive-request surfacing."
+            ]
+        },
+        {
+            "sha": "fd5018e0445ba7d879c5dbda66ecdab4b6da1886",
+            "subject": "Add a dedicated `codex agents` dashboard command (#39114)",
+            "kind": "runtime",
+            "domains": [
+                "cli",
+                "tui"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (deferred): Go CLI has no `codex agents` dashboard command; the agents overview dashboard is not implemented."
+            ]
+        },
+        {
+            "sha": "ca08a58ab47779a966b86155e128325fdfb5af8a",
+            "subject": "Remove the experimental thread config endpoint (#39115)",
+            "kind": "runtime",
+            "domains": [
+                "appserver",
+                "config"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Go never had an experimental_thread_config_endpoint config key or a remote thread config loader; Rust schema/config surface pinned counts updated accordingly."
+            ]
+        },
+        {
+            "sha": "ede5247893a50297a47c9aa5038e6ab28312ff50",
+            "subject": "Reject lossy legacy permission projections (#39117)",
+            "kind": "protocol",
+            "domains": [
+                "protocol",
+                "permissions"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A (architecture): Go permission profiles use native string paths end-to-end; there is no legacy projection seam to reject lossy conversions."
+            ]
+        },
+        {
+            "sha": "f97e77569352a2bf5be9955e623edad0a15d9b93",
+            "subject": "Fail closed on deeply nested command wrappers (#39122)",
+            "kind": "security",
+            "domains": [
+                "shell",
+                "execpolicy"
+            ],
+            "status": "complete",
+            "evidence": [
+                "N/A: Go has no is_dangerous_command wrapper-depth safety layer; exec policy is prefix-rule evaluation only (execpolicy.Check), so there is no bounded wrapper depth to fail closed."
+            ]
         }
     ]
 }

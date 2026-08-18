@@ -16,7 +16,6 @@ import (
 // reason so the list is auditable and can shrink as Go implements more keys.
 var configSchemaRustOnlyAllowlist = map[string]string{
 	"experimental_compact_prompt_file":    "Rust experimental compaction feature; not implemented in Go",
-	"experimental_thread_config_endpoint": "Rust experimental thread-config endpoint; not implemented in Go",
 	"experimental_thread_store":           "Rust experimental thread store; Go uses its own session store",
 }
 
@@ -59,8 +58,8 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	goKeys := config.KnownTopLevelConfigFields()
 	sort.Strings(goKeys)
 
-	if len(rustKeys) != 94 {
-		t.Fatalf("Rust config.schema.json top-level property count = %d, want 94 (pinned baseline)", len(rustKeys))
+	if len(rustKeys) != 93 {
+		t.Fatalf("Rust config.schema.json top-level property count = %d, want 93 (pinned baseline)", len(rustKeys))
 	}
 	if len(goKeys) != 99 {
 		t.Fatalf("Go recognized top-level config key count = %d, want 99 (pinned baseline)", len(goKeys))

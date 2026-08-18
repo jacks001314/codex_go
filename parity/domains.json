@@ -1,421 +1,421 @@
 {
-    "schemaVersion":  1,
-    "targetRustCommit":  "21cfd369efca2df70c904c580b2e7e2e3eddb3c3",
-    "allowedIdentityMappings":  [
-                                    {
-                                        "rust":  "codex",
-                                        "go":  "gcode",
-                                        "scope":  "published command name only"
-                                    },
-                                    {
-                                        "rust":  "openai/codex",
-                                        "go":  "jacks001314/codex-go",
-                                        "scope":  "repository and package coordinates only"
-                                    }
-                                ],
-    "domains":  [
-                    {
-                        "id":  "alignment-control",
-                        "severity":  "P0",
-                        "phase":  "P0",
-                        "owner":  "parity",
-                        "status":  "partial",
-                        "acceptance":  "Every target commit and public contract has machine-checked evidence; certification has no open status.",
-                        "evidence":  [
-                                         "go test ./parity ./features -count=1",
-                                         "parity/alignment_control_test.go",
-                                         "go test ./... -count=1 (87 packages, 0 FAIL)",
-                                         "npm --prefix sdktests run test:unit (50/51, 0 fail)",
-                                         "33 contracts complete with verifiers (parity/contracts/manifest.json: +apply-patch-freeform-spec, +goal-prompt-templates, +imagegen-description, +memory-tool-developer-instructions, +record-replay-harness-generalized, +shell-environment-policy-per-environment, +delegate-noninteractive-approval-policy, +wsl-update-path-normalization, +windows-sandbox-nux-trust-decision, +cli-blackbox-slash-differential)",
-                                         "Baseline re-targeted ed32158e90 -\u003e 6c108912ee (2 new upstream commits audited: f85e81d30b #38899 Rust-internal execpolicy type relocation = N/A; 6c108912ee #38902 per-environment shell variable policies = Implement); commit ledger 19 -\u003e 21 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync4.md",
-                                         "Baseline re-targeted 6c108912ee -\u003e 2bc43d516e (1 new upstream commit audited: 2bc43d516e #38907 Edit queued messages with Vim history-up = Implement); commit ledger 21 -\u003e 22 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync8.md",
-                                         "TUI edit-queued-message closed (#38907): the tea Model now restores the latest queued follow-up into the composer via the chat edit_queued_message binding (default alt-up/shift-left) and via the Vim-normal empty-composer history-up binding (vim_normal move_up, default k/up), removing the restored message from the queue so re-submitting replaces it. Mirrors Rust chatwidget/interaction.rs; remapped bindings honored, empty-composer gate preserves composer behavior. Tests mirror composer_submission.rs (most-recent restore, edit-and-requeue cycle, F2 remap, non-empty guard) (contract tui-edit-queued-message-vim-history-up, record in update/plan_2026_08_17_sync8.md)",
-                                         "TUI Vim normal mode closed: Go /vim was a stub (vim_normal/vim_operator/vim_text_object actions registered but never dispatched). Implemented a real Vim normal mode in the tea Model (tui/tea/vim_mode.go): normal/insert state machine (Rust starts the composer in normal mode when /vim is enabled), dispatching registered vim_normal actions through the resolved keymap (i/a/A/I/o/O/s/C insert-entering, h/l/k/j/w/b/e/0/$ motions, x/D edits, Y/p line yank/paste, dd/yy/cc line-operator repeats, and the full operator engine: d/y/c applied to horizontal motions (dw/dh/db/de/d0/d$/yw/c$), inner/around text objects (diw/daw/yiw, parens di(/da(), with Esc cancel - completing the registered vim_operator/vim_text_object surfaces). Insert mode types normally until Esc; the #38907 queued-message history-up gate now requires real normal mode. Verified with 5 token-free tests (contract tui-vim-normal-mode, record in update/plan_2026_08_17_sync9.md)",
-                                         "Session-startup prewarm closed (P2): creating a thread schedules an asynchronous token-free websocket prewarm (ResponsesAgentRunner.Prewarm, generate=false) mirroring Rust Session::schedule_startup_prewarm, and the first regular turn consumes its response id as PreviousResponseID (Rust tasks/regular.rs consume_startup_prewarm_for_regular_turn); a turn starting before the prewarm finishes proceeds without it (Unavailable semantics); agents without the prewarm interface are skipped. Verified with 3 token-free runtime tests (contract session-startup-prewarm, record in update/plan_2026_08_17_sync11.md)",
-                                         "Vim surface completed (sync12): k/j line operator motions (dj/dk/yj/yk/cj/ck) and the W big-word text object now dispatch, completing the registered vim_operator/vim_text_object surface; the live CLI black-box differential (Go code.exe vs Rust @openai/codex v0.147.0 through ConPTY) was rebuilt and re-run after the TUI changes and still passes. 10 token-free Vim tests (contract tui-vim-normal-mode, record in update/plan_2026_08_17_sync12.md)",
-                                         "Process hardening closed (P2): new processhardening package applies prctl(PR_SET_DUMPABLE)/ptrace(PT_DENY_ATTACH)/setrlimit(RLIMIT_CORE) and clears LD_*/DYLD_* loader vars with Rust exit codes 5-7, wired at cmd/codex main start (Rust pre_main_hardening); full-tree CGO_ENABLED=0 darwin+linux cross-compile now passes, fixing two pre-existing doctor darwin bugs surfaced by the gate (Statfs_t.Frsize -\u003e Bsize on darwin; windowsDevDriveCheck stub on non-Windows) (contract process-hardening, record in update/plan_2026_08_17_sync13.md)",
-                                         "Baseline re-targeted 2bc43d516e -\u003e cd8dc1e9b6 (1 new upstream commit audited: cd8dc1e9b6 #38913 Stop rendering columns after filling their area = N/A - Rust-internal ColumnRenderable iteration optimization with zero observable behavior change; the pre-change loop already skipped out-of-area children via the empty-intersection guard and desired_height is pure); commit ledger 22 -\u003e 23 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync14.md",
-                                         "Verification cycle (sync15): after the recent TUI (Vim mode + operator engine) and process-hardening changes, the full gate stack was re-run - rebuilt code.exe and re-passed the live CLI black-box differential (Go vs Rust v0.147.0 through production ConPTY), sdktests unit suite 50/51 (1 documented skip), full tree 0 FAIL, parity/features green (36 contracts), CGO_ENABLED=0 darwin+linux full cross-compile exit 0 (record in update/plan_2026_08_17_sync15.md)",
-                                         "TUI editor kill/yank closed (sync16): re-scanning the keymap registry found the editor kill/yank actions (ctrl-k kill_line_end, ctrl-u kill_line_start, kill_whole_line, ctrl-y yank) registered but never dispatched - the bubbletea textarea does not handle them. Implemented applyEditorKillYankKey mirroring Rust bottom_pane/textarea.rs (single-entry kill buffer, boundary-newline semantics, paste at cursor), and fixed the shared edit-cursor positioning so SetValue-based edits keep the cursor at the edit point (vimSetCursorAtByteOffset). Verified with 3 token-free tests + re-passed live CLI differential with rebuilt code.exe (contract tui-editor-kill-yank, record in update/plan_2026_08_17_sync16.md)",
-                                         "CLI black-box differential ran live (method 4): Go code.exe vs Rust @openai/codex v0.147.0 through production ConPTY (/status + /mcp). Surfaced and fixed two issues: (1) the differential test asserted the single identity marker \u0027gcode\u0027 on both binaries while the Rust release brands itself \u0027OpenAI Codex\u0027 (allowed mapping) - now per-side identity markers with shared surface markers on both; (2) a real divergence: Go\u0027s Windows sandbox startup NUX opened for an already-trusted cwd, while Rust gates on onboarding_result.directory_trust_persisted - Go now mirrors ((trustDecision \u0026\u0026 level==Disabled) || elevatedRequired) via exported config.ProjectConfigEnabled with cwd resolved from root.Shared.CWD or os.Getwd(). Contracts cli-blackbox-slash-differential + windows-sandbox-nux-trust-decision, record in update/plan_2026_08_17_sync7.md",
-                                         "per-environment shell variable policies closed (#38902): EnvironmentConfig carries ShellEnvironmentPolicy with thread inference + JSON roundtrip; the shell executor resolves the thread-derived policy with the environment\u0027s resolved policy winning and sets ShellRequest.EnvPolicy; local shell/unified-exec build the command env via execpolicy.CreateEnv (inherit none/core/all, default excludes, exclude/include_only, set, filters), remote exec-server receives ExecEnvPolicy instead of the hardcoded inherit-all default; env-policy logic moved to the leaf codex_go/execpolicy package (mirrors the codex-execpolicy crate split). fn-name-pinned differential TestShellEnvPolicyDifferentialLikeRustExecCommandUsesInstalledPolicy (Rust exec_command_uses_installed_environment_shell_policy_with_explicit_overrides: preserved:missing:missing) + executor/runner/appserver dynamic tests (contract shell-environment-policy-per-environment)",
-                                         "delegate non-interactive approval policy closed (#38205, pre-ledger P0): subagent (delegate) turns are pinned to approval_policy=never in prepareTurnStartParams (runtimeRecordIsSubagent covers subAgentThreadSpawn / Originator=subagent / subagent review-compact-other / memory consolidation), mirroring Rust run_codex_thread_interactive (reject non-never + Constrained::allow_only(Never)); with never the existing deny paths (shell escalation reject, MCP elicitation auto-decline, network no-prompt, skill-MCP dependency skip) apply inside the delegate so nothing is forwarded to the parent. Dynamic tests TestPrepareTurnStartParamsForcesApprovalNeverForSubagentLikeRust + TestRuntimeAgentControllerSpawnPinsSubagentApprovalNever + TestRuntimeRecordIsSubagent (contract delegate-noninteractive-approval-policy, record in update/plan_2026_08_17_sync5.md)",
-                                         "WSL update path normalization closed (P2): install.ExecCommandRunner now normalizes the update command path and arguments for WSL on non-Windows (Rust cli/src/main.rs run_update -\u003e cli/src/wsl_paths.rs) via updateCommandAndArgs/normalizedUpdateCommand, while Windows keeps cmd.exe /C PATHEXT semantics (PowerShell direct). shell.WinPathToWSL / shell.NormalizeForWSL already mirrored the Rust mapping; the runner wiring was the missing piece. fn-name-pinned differential TestRustWSLPathSamplesRunInGo (Rust win_to_wsl_basic + normalize_is_noop_on_unix_paths) + branch-preservation tests (contract wsl-update-path-normalization, record in update/plan_2026_08_17_sync6.md)",
-                                         "L0 enum inventory complete: model metadata 41/41, error codes 17+7 present (zero emission gaps), sandbox types exact, event names pinned, feature keys and tool names covered",
-                                         "L0/L1/L2 gate re-verification at frozen 9ded177ce7 recorded in update/plan_2026_08_16.md",
-                                         "L2 record-replay extended to drive the recording through the app-server core: ReplayThroughCore replays oss-story.jsonl tasks through RuntimeRouter with a scripted agent, validates the notification stream + persisted paginated rollout + Resume recoverability (TestReplayRustStoryRecordingThroughGoCore, registered on the story-recording-replay contract)",
-                                         "L2 record-replay harness generalized to arbitrary trace shapes (record-replay-harness-generalized): synthetic reasoning-only / plain-message / in-progress tasks replay through the app-server core (TestReplayThroughCoreSyntheticItemSurfaces, TestReplayThroughCoreInProgressTaskReplaysToCompletion), the recorder persists an uncompleted turn without fabricating task_complete (TestReplayRecorderLevelPersistsUncompletedTurnWithoutFabricatedComplete), and method-5 property tests pin Event JSON roundtrip fixed point, digest determinism, unknown-kind no-swallow and documented volatile-field drops (property_test.go, Rust-checkout-free)",
-                                         "Config-schema rust-only allowlist reduced 16-\u003e7 via audit fixing 9 real gaps (show_raw_agent_reasoning behavior, sqlite_home/log_dir/feedback/notice/marketplaces recognition, suppress_unstable_features_warning, mcp_oauth_callback_port/url global defaults)",
-                                         "image-resize-notice closed: eventmap performs real dimension-changing image prep (Rust budget math 2048/2500 and 6000/10000, decode/resize/re-encode) wired into the turn-start input path with feature-gated ImageResizeNotice fragment (TestRustImagePreparationDimensionSamplesRunInGo + app-server end-to-end tests; contract image-preparation-dimensions)",
-                                         "Config-schema rust-only allowlist further reduced 7-\u003e5-\u003e3: disable_paste_burst implemented end-to-end (config accessor + TUI Options + tea Model bypass gates, TestModelDisablePasteBurstSubmitsOnEnterLikeRust) and audio (RealtimeAudioToml microphone/speaker) recognized with deny_unknown_fields sub-field validation as a compatibility no-op",
-                                         "exec-apply-patch-freeform wired: the last unwired Rust data asset (exec freeform add+update fixture) drives Go\u0027s apply_patch CLI byte-identically against the frozen git blob (contract exec-apply-patch-freeform)",
-                                         "collaboration-mode-templates pinned: Default/Plan developer templates byte-match the frozen Rust blobs, fixing KNOWN_MODE_NAMES ordering (Default and Plan) and the appserver trailing newline (contract collaboration-mode-templates)",
-                                         "hooks-command-input-schemas wired: all 11 Rust hook command input schemas drive Go\u0027s centralized HookInputJSON; fixed session-end over-emission (model/permission_mode not in Rust schema) (contract hooks-command-input-schemas)",
-                                         "hooks-command-output-schemas wired: all 10 Rust hook command output schemas drive Go\u0027s ParseHook* output parsers with per-event typed field checks (contract hooks-command-output-schemas)",
-                                         "prompt-surface contracts closed: apply-patch-freeform-spec (description + lark grammar vs apply_patch_spec.rs), goal-prompt-templates (ext/goal/templates/goals/*.md byte-identical, trailing newline fixed), imagegen-description (imagegen_description.md byte-identical), memory-tool-developer-instructions (read_path.md render differential + production wiring: memories feature + use_memories gate appends the 2,500-token-truncated memory_summary fragment to turn developer instructions via instructionsWithMemoryToolContext, mirroring Rust MemoriesExtension::contribute_thread_context; token-free e2e tests TestRuntimeRouterTurnStartEmitsMemoryToolDeveloperInstructionsLikeRust + negative gates)",
-                                         "L3 facility ready: 89 scenarios + opt-in rollout-budget-exhaustion, NORMALIZATION.md documented, raw audit scripts; live SDK differential matrix remains authorization-gated",
-                                         "Certification blockers: SDK differential re-certification against 9ded177ce7 (authorization/provider), native platform matrix (GitHub billing), sdk-cancellation (upstream Rust fix)",
-                                         "Baseline re-targeted cd8dc1e9b6 -\u003e 1f41cc5d92 (4 new upstream commits audited: 772e88c8ae #38916 legacy :project_roots alias = Test-only (Go already mapped the alias; closed with legacy-restrictions tests); c8ddb210d2 #38918 doctor network diagnostics = Implement (failure classification + route-aware probe client + proxy policy details); 935b1c4e3d #38919 reject obsolete permissionProfile = Implement (-32602 classification on four methods); 1f41cc5d92 #38921 TUI compact command activity = Implement (exec_cell grouping + compact render + tea accumulation)); commit ledger 23 -\u003e 27 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync17.md",
-                                         "Legacy :project_roots alias closed (#38916): Go config specialFilesystemPath already mapped :project_roots to the project_roots kind; closed the gap with TestLegacyProjectRootsRestrictionsDoNotFailOpenLikeRust mirroring Rust\u0027s legacy_project_roots_restrictions_do_not_fail_open (read_deny/write_deny \u0027:project_roots\u0027 = \u0027none\u0027 deny at the cwd; write_read \u0027:project_roots\u0027 = { docs = \u0027read\u0027 } resolves docs to read-only) (contract config-legacy-project-roots-alias, record in update/plan_2026_08_17_sync17.md)",
-                                         "Doctor network diagnostics closed (#38918): classifyHTTPProbeError mirrors Rust RouteAwareRequestError::failure_class (TLS handshake/certificate validation, proxy authentication via HTTP 407 + proxyconnect, invalid proxy configuration, unsupported proxy scheme, proxy resolution failure, request timed out, connect failed, request failed); the provider probe uses a route-aware client built from the effective config (system proxy honored only when the respect_system_proxy feature is enabled; CODEX_CA_CERTIFICATE / SSL_CERT_FILE extend the system roots with the invalid-bundle system-root fallback mirroring RouteAwareClientPool with_legacy_custom_ca_fallback); network.env reports respect system proxy enabled/disabled and managed proxy configured/not configured from the effective config; macOS system proxy state stays platform-gated on the Windows host (contract doctor-network-failure-classification, record in update/plan_2026_08_17_sync17.md)",
-                                         "Obsolete permissionProfile rejection closed (#38919): Request.Validate rejects permissionProfile on thread/start, thread/resume, thread/fork, and turn/start with the Rust message (\u0027`permissionProfile` is no longer supported for \u003cmethod\u003e; use `permissions` with a named profile id instead\u0027) via a new ErrInvalidParams sentinel; the router, runtime router, and stdio entry points classify it as JSON-RPC -32602 (invalid params) while generic validation errors stay -32600, and unrelated unknown fields remain accepted with the connection staying usable (contract appserver-reject-obsolete-permission-profile, record in update/plan_2026_08_17_sync17.md)",
-                                         "TUI compact command activity closed (#38921): ExecCell mirrors Rust MAX_GROUPED_COMMANDS=32 with reworked WithAddedCall / ShouldFlush and a new ExecSourceUnifiedExecStartup (isGroupableSource = Agent | UnifiedExecStartup); render.go adds compactGroupDisplayLines (\u0027Ran N commands · ctrl + t to view transcript\u0027 + remaining calls) with commandCallDisplayLines extraction; the tea Model tracks an active compact group (message index + cell) accumulating consecutive successful Agent/unified-exec-startup completions (source read from item metadata set by the app layer) and flushes at failures, non-groupable sources, and interaction boundaries (submit, slash, approval, MCP elicitation, request-user-input, turn completed/interrupted, other non-command items), preserving the full transcript (contract tui-compact-command-activity, record in update/plan_2026_08_17_sync17.md)",
-                                         "Baseline re-targeted 1f41cc5d92 -\u003e 8bf50439f2 (8 new upstream commits audited: 3b4569a920 #38940 app-server project APIs = Implement (state project store + 7 endpoints + thread assignment + notifications); 89e297729e #38941 Noise auth token scrub = Implement (envutil non-inheritable list + shared constant); e38290846c #38942 environment-specific command policies = Implement (EnvironmentConfig.exec_policy + allow-rule rejection + RequirementsPolicy fingerprint/merge; shell-decision merge structural N/A); c6058ccaa9 #38947 Windows legacy managed config ignore = Implement; 632e35ce8d #38978 skill catalog max_context_tokens = Implement (10,000 cap + wiring); 53aa7bb1aa #38980 guardian parent compaction bound = Implement (25,000 default, fail closed); 37cf6c84c0 #38987 guardian transcript images = documented N/A (Go simplified reviewer has no image pipeline); 8bf50439f2 #38990 guardian model catalog defaults = documented N/A); commit ledger 27 -\u003e 35 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync18.md",
-                                         "Baseline re-targeted 8bf50439f2 -> 21cfd369ef (8 new upstream commits audited: ea10ae7d0f #38993 fused shadow selectors = Implement (lru_plus_character_routing_v1 + lru_plus_lexical_character_routing_v1 via reciprocal rank fusion); 3666a46ea3 #38994 workspace settings gate removal = N/A (Go never fetched enable_plugins / has no WorkspaceSettingsCache); 4885eb6c52 #38997 guardian sampler retry = documented N/A (Go guardian samples through model.AgentRunner; transport/stream retry is owned by the Go model client); 8e89e98cf6 #39001 stale Guardian tool risk scores = Implement (features.guardianv2.max_tool_call_lag default 3 + per-thread score progress, fail closed); 02e9bfaac7 #39005 managed reviewers disable Guardian V2 = Implement (allowed_approvals_reviewers without user forces guardianv2 off); 04caa22c82 #39006 API-key turn cost telemetry = documented N/A (Go has no OTLP session-telemetry log-event surface / backend turn-cost client); def7ed5572 #39007 approval test harness wait = N/A (test-only); 21cfd369ef #39008 task-context shadow selection = Implement (ShadowTaskContext + task_context_fusion_v1)); commit ledger 35 -> 43 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync19.md"
-                                     ]
-                    },
-                    {
-                        "id":  "sqlite-runtime-version",
-                        "severity":  "P0",
-                        "phase":  "P2",
-                        "owner":  "state",
-                        "status":  "partial",
-                        "acceptance":  "Every supported artifact reports SQLite \u003e= 3.51.3 and passes WAL recovery tests.",
-                        "evidence":  [
-                                         "Windows/amd64 native gate passed with embedded SQLite 3.51.3, lifecycle ownership and committed-WAL recovery",
-                                         "CGO_ENABLED=0 go build ./... passed for linux/windows/darwin amd64/arm64",
-                                         ".github/workflows/sqlite-platform-gates.yml defines the six native runners; five remote native artifacts remain blocked by GitHub billing"
-                                     ]
-                    },
-                    {
-                        "id":  "state-runtime",
-                        "severity":  "P0",
-                        "phase":  "P2",
-                        "owner":  "state",
-                        "status":  "complete",
-                        "acceptance":  "Go owns the same five databases with compatible lifecycle, pragmas, pools, recovery and migrations.",
-                        "evidence":  [
-                                         "go test ./state ./appserver ./remotecontrol ./app ./parity -count=1",
-                                         "go test -race ./state ./appserver -run \u0027Test(StateRuntime|WritableSQLite|RuntimeMigration|RuntimeCorruption|SQLiteRecovers|BackupFiles|DefaultStdioOwns|ConnectionRoutersDoNotClose|StdioStartupFails)\u0027 -count=1",
-                                         "state_5/logs_2/goals_1/memories_1 open eagerly while thread_history_1 remains lazy",
-                                         "all writable pool connections use WAL, synchronous NORMAL, incremental auto-vacuum, 5-second busy timeout and max 5 connections",
-                                         "known SQLx checksums validate, unknown future versions are ignored, and legacy recency version 38 is repaired to 39",
-                                         "corruption recovery isolates the failed DB and moves surviving DB/WAL/SHM files into Rust-compatible unique backup folders",
-                                         "TestStateMigrationsMatchRustTarget compares all 55 canonical SQL files byte-for-byte with frozen Rust Git blobs",
-                                         "stdio owns one runtime; WebSocket and Unix transports inject one shared runtime across connection routers"
-                                     ]
-                    },
-                    {
-                        "id":  "rollout-thread-store",
-                        "severity":  "P0",
-                        "phase":  "P3",
-                        "owner":  "session,rollout,state",
-                        "status":  "complete",
-                        "acceptance":  "Rollout is authoritative, layout and flush ordering match Rust, and SQLite projection is rebuildable.",
-                        "evidence":  [
-                                         "go test ./session ./rollout ./state ./appserver -count=1",
-                                         "go test -race ./session ./rollout ./state -run \u0027Test(StorePaginatedFork|PaginatedAppendSessionItems|CompressedProjection|ReadProjection|ThreadHistory|PreparePaginatedFork|PaginatedSessionWriter)\u0027 -count=1",
-                                         "paginated recorders persist contiguous ordinals and project only after Sync/Close",
-                                         "rollouts use Rust nested layout, archive/name indexes, canonical session headers and compressed JSONL coordinates",
-                                         "reference-backed forks materialize compressed ancestors without copying inherited events",
-                                         "cold Store reads and appends resolve rollout-only lineage at the frozen byte/ordinal boundary after restart"
-                                     ]
-                    },
-                    {
-                        "id":  "thread-history",
-                        "severity":  "P0",
-                        "phase":  "P3",
-                        "owner":  "history,state",
-                        "status":  "complete",
-                        "acceptance":  "History schema, offsets, ordinals, malformed-line recovery and queries are cross-binary compatible.",
-                        "evidence":  [
-                                         "go test ./session ./rollout ./state ./appserver -count=1",
-                                         "go test -race ./appserver -run \u0027Test(RouterPaginated|RuntimeRouterPaginated|ThreadHistorySearch|Router.*Resume)\u0027 -count=1",
-                                         "malformed and unknown lines remain pending until retry or a provable ordinal gap",
-                                         "rows and byte/ordinal checkpoint commit atomically",
-                                         "SQLite-backed turns/items/search queries traverse bounded lineage with Rust cursor semantics",
-                                         "paginated writers emit ItemStarted for in-progress snapshots and exactly one canonical ItemCompleted terminal event",
-                                         "resume and fork use SQLite physical positions and remain functional without Go snapshots"
-                                     ]
-                    },
-                    {
-                        "id":  "goals-persistence",
-                        "severity":  "P1",
-                        "phase":  "P4",
-                        "owner":  "appserver,state",
-                        "status":  "complete",
-                        "acceptance":  "Goals and continuation deferrals survive restart and are mutually readable by Rust and Go.",
-                        "evidence":  [
-                                         "go test ./state ./appserver ./tui/... -run \u0027Goal|Continuation\u0027 -count=1",
-                                         "TestRuntimeRouterPersistsThreadGoalInRustGoalsDBAndRollout",
-                                         "TestPaginatedForkCanDeferInheritedGoalContinuation",
-                                         "TestThreadGoalSnapshotDefersContinuationAndDeleteCascades"
-                                     ]
-                    },
-                    {
-                        "id":  "agent-graph-persistence",
-                        "severity":  "P1",
-                        "phase":  "P4",
-                        "owner":  "agent,state",
-                        "status":  "complete",
-                        "acceptance":  "Thread spawn edges survive restart and mixed-process access.",
-                        "evidence":  [
-                                         "go test ./state ./appserver -run \u0027SpawnEdge|SpawnGraph\u0027 -count=1",
-                                         "TestThreadSpawnEdgesPersistRustOrderingAndStatusSemantics",
-                                         "TestRuntimeRouterUsesPersistentSpawnGraphByDefault",
-                                         "TestRuntimeRouterThreadLifecycleUsesSpawnGraphDescendants"
-                                     ]
-                    },
-                    {
-                        "id":  "logs-persistence",
-                        "severity":  "P1",
-                        "phase":  "P4",
-                        "owner":  "telemetry,state",
-                        "status":  "complete",
-                        "acceptance":  "SQLite logs and per-partition retention match Rust.",
-                        "evidence":  [
-                                         "go test ./state ./appserver -run \u0027LogDB|Logs|Feedback\u0027 -count=1",
-                                         "TestLogsPruneEachRustPartitionByRowAndByteLimit",
-                                         "TestDefaultStdioLogDBLifecyclePersistsRuntimeLogs",
-                                         "TestFeedbackUploadFlushesSQLiteLogsForAgentSubtreeAndAttachesRollouts"
-                                     ]
-                    },
-                    {
-                        "id":  "memory-pipeline",
-                        "severity":  "P0",
-                        "phase":  "P5",
-                        "owner":  "memories,state",
-                        "status":  "complete",
-                        "acceptance":  "Stage1, phase2, jobs, leases, retry, selection and consolidation match Rust.",
-                        "evidence":  [
-                                         "go test ./memories ./state ./appserver -count=1",
-                                         "go test -race ./memories ./state ./appserver -run \u0027Test(Memory|ThreadStartAutomaticallyRunsMemory)\u0027 -count=1",
-                                         "stage1 extraction, phase2 consolidation, leases, retry exhaustion, selection hydration, workspace baseline reset and app-server startup are covered"
-                                     ]
-                    },
-                    {
-                        "id":  "app-server-schema",
-                        "severity":  "P0",
-                        "phase":  "P1",
-                        "owner":  "appserver",
-                        "status":  "complete",
-                        "acceptance":  "Stable and experimental JSON Schema and TypeScript exports have zero canonical diff.",
-                        "evidence":  [
-                                         "go test ./appserver ./app ./cli ./parity -count=1",
-                                         "go test -race ./appserver -run TestPrecomputed -count=1",
-                                         "stable, experimental and internal export trees compare byte-for-byte with embedded target-Rust maps",
-                                         "vendored zstd archives compare byte-for-byte with the frozen Rust target checkout",
-                                         "index suppression, generated-header stripping, Prettier ordering, trailing-whitespace cleanup and relative-path validation match Rust"
-                                     ]
-                    },
-                    {
-                        "id":  "feature-registry",
-                        "severity":  "P1",
-                        "phase":  "P1",
-                        "owner":  "features",
-                        "status":  "complete",
-                        "acceptance":  "Keys, stages, defaults, dependency behavior and model headers match Rust.",
-                        "evidence":  [
-                                         "go test ./features ./parity -count=1",
-                                         "TestRustFeatureKeySurfaceAgainstGo",
-                                         "executed_tool_call_metadata is registered and code_mode_buffered_exec is retained at the removed stage for legacy config recognition"
-                                     ]
-                    },
-                    {
-                        "id":  "executed-tool-call-metadata",
-                        "severity":  "P1",
-                        "phase":  "P1",
-                        "owner":  "model,turn,tool",
-                        "status":  "complete",
-                        "acceptance":  "Feature gating, session recording, attempted calls, retries, nesting and bounds match Rust.",
-                        "evidence":  [
-                                         "go test ./model ./turn ./tool ./appserver -count=1",
-                                         "direct, custom, namespaced and code-mode attempts attach only to matching outputs",
-                                         "failed sampling replay, yielded-cell wait attribution, forgery stripping and 8/32 KiB bounds"
-                                     ]
-                    },
-                    {
-                        "id":  "permission-profiles",
-                        "severity":  "P0",
-                        "phase":  "P7",
-                        "owner":  "sandbox,execserver",
-                        "status":  "complete",
-                        "acceptance":  "The canonical effective profile reaches every sandbox, server, approval and escalation path.",
-                        "evidence":  [
-                                         "go test ./sandbox ./execserver ./tool ./appserver -count=1",
-                                         "go test -race ./sandbox ./appserver -run Test(IntersectPermissionProfiles|ServerRequestBrokerIntersectsPermissions|ServerRequestBrokerRejectsSessionScopedStrictAutoReview|WindowsPermissionProfiles) -count=1",
-                                         "canonical runtime profile wins over stale JSON/policy projections across shell, unified exec, exec-server, elevated Windows IPC and apply_patch",
-                                         "app-server intersects client grants with requested permissions before returning them to core",
-                                         "symbolic slash_tmp is ignored on Windows while literal /tmp remains an ordinary path",
-                                         "additional grants preserve read and deny entries",
-                                         "apply_patch rejects .git/.agents/.codex and paths outside workspace writable roots under the workspace profile"
-                                     ]
-                    },
-                    {
-                        "id":  "sandbox-violations",
-                        "severity":  "P0",
-                        "phase":  "P1",
-                        "owner":  "sandbox,execserver",
-                        "status":  "complete",
-                        "acceptance":  "Normalized filesystem/network violations and sandboxType wire values match Rust.",
-                        "evidence":  [
-                                         "go test ./sandbox ./execserver ./tool ./appserver -count=1",
-                                         "go test -race ./sandbox ./execserver ./tool ./appserver -run Test(ClassifyFileSystemSandboxViolation|NetworkSandboxViolation|ProcessStateTransportsLocallyClassifiedSandboxDenial|ProcessSandboxTypeProtocolMapping|ExecResponseDistinguishes|UnifiedExecRecordsKnownSandboxViolation|ManagedNetworkBlockedObserverRecords) -count=1",
-                                         "filesystem classifier preserves Rust stream and keyword ordering, quick rejects, Unicode paths, 512-character snippets and platform SIGSYS behavior",
-                                         "exec-server distinguishes legacy missing sandboxType from explicit none and transports local denial without duplicate recording",
-                                         "managed network violations record with or without approval requirements"
-                                     ]
-                    },
-                    {
-                        "id":  "remote-metadata-coalescing",
-                        "severity":  "P1",
-                        "phase":  "P1",
-                        "owner":  "execserver",
-                        "status":  "complete",
-                        "acceptance":  "Equivalent requests coalesce and all mutation, cancellation and error invalidation rules match Rust.",
-                        "evidence":  [
-                                         "go test ./execserver -count=1",
-                                         "go test -race ./execserver -run TestClient.*Metadata -count=1",
-                                         "same-path unsandboxed requests share only in-flight results",
-                                         "sandbox/path boundaries, error retry, initializer cancellation handoff and mutation invalidation match Rust"
-                                     ]
-                    },
-                    {
-                        "id":  "environment-clock",
-                        "severity":  "P1",
-                        "phase":  "P1",
-                        "owner":  "appserver,turn",
-                        "status":  "complete",
-                        "acceptance":  "Configured clock refreshes current date and timezone at the same boundaries as Rust.",
-                        "evidence":  [
-                                         "go test ./appserver ./config -count=1",
-                                         "go test -race ./appserver -run Test.*Environment.*Clock -count=1",
-                                         "turn, Guardian review and compaction rebuild current_date from the configured clock",
-                                         "external clock failures stop before inference; prewarm does not read the clock",
-                                         "include_environment_context defaults true and supports explicit disable",
-                                         "Windows system timezone IDs are normalized to IANA names"
-                                     ]
-                    },
-                    {
-                        "id":  "code-mode",
-                        "severity":  "P0",
-                        "phase":  "P6",
-                        "owner":  "codemode",
-                        "status":  "complete",
-                        "acceptance":  "Production runs exclusively through a standalone host with matching fallback and fail-closed behavior.",
-                        "evidence":  [
-                                         "go test ./codemode ./tool ./turn ./exec ./appserver ./app ./install -count=1",
-                                         "go test -race ./codemode ./turn ./exec ./appserver -run Test.*CodeMode -count=1",
-                                         "production app-server and exec paths always inject process, WebSocket, or explicitly disabled providers",
-                                         "real framed-stdio host preserves store/load and yielded cells across per-turn registry rebinds",
-                                         "host lookup follows package, standalone, sibling and bare-program install contexts",
-                                         "optional code_mode falls back to direct tools; code_mode_only and disabled fallback fail closed with once-per-thread warnings"
-                                     ]
-                    },
-                    {
-                        "id":  "realtime",
-                        "severity":  "P0",
-                        "phase":  "P6",
-                        "owner":  "realtime,appserver",
-                        "status":  "complete",
-                        "acceptance":  "Real WebSocket, WebRTC and sideband E2E behavior matches Rust without synthetic responses.",
-                        "evidence":  [
-                                         "go test ./realtime ./appserver -count=1",
-                                         "go test -race ./realtime ./appserver -count=1",
-                                         "real WebSocket and WebRTC HTTP/SDP/sideband transports cover V1/V2/V3 handshake, binary rejection, transcript, handoff, world state, backpressure and shutdown ordering"
-                                     ]
-                    },
-                    {
-                        "id":  "external-agent",
-                        "severity":  "P1",
-                        "phase":  "P1",
-                        "owner":  "config,appserver",
-                        "status":  "complete",
-                        "acceptance":  "Connector candidates, source attribution, import and cleanup wire behavior match Rust.",
-                        "evidence":  [
-                                         "go test ./config ./appserver -count=1",
-                                         "TestExternalAgentConfigDetectResponseConnectorsMatchRust",
-                                         "TestDetectExternalSessionConnectorsMatchesNameAndUUID",
-                                         "six cold/active/diverged/ambiguous incremental imported-session sync scenarios"
-                                     ]
-                    },
-                    {
-                        "id":  "command-actions",
-                        "severity":  "P1",
-                        "phase":  "P1",
-                        "owner":  "execserver,eventmap",
-                        "status":  "complete",
-                        "acceptance":  "Read actions preserve executor-native POSIX, drive, relative and UNC paths.",
-                        "evidence":  [
-                                         "go test ./utils ./shell ./rollout ./appserver -count=1",
-                                         "TestResolveExecutorPathPreservesForeignConventions",
-                                         "TestCommandExecutionActionsPreserveExecutorPathsLikeRust",
-                                         "TestRolloutReadCommandActionsPreserveExecutorPathsLikeRust"
-                                     ]
-                    },
-                    {
-                        "id":  "tool-telemetry",
-                        "severity":  "P1",
-                        "phase":  "P1",
-                        "owner":  "telemetry,tool,skills",
-                        "status":  "complete",
-                        "acceptance":  "Tool tags are collected synchronously and explicit skill metrics include status, sanitized skill and invoke_type on success and error paths.",
-                        "evidence":  [
-                                         "go test ./tool ./mcp ./turn ./appserver -count=1",
-                                         "MCP server/origin result tags and explicit skill success/error counters match Rust"
-                                     ]
-                    },
-                    {
-                        "id":  "streaming-buffers",
-                        "severity":  "P1",
-                        "phase":  "P1",
-                        "owner":  "tool,execserver",
-                        "status":  "complete",
-                        "acceptance":  "Streaming output and Noise framing consume front data without repeated shifts and always progress across invalid UTF-8.",
-                        "evidence":  [
-                                         "go test ./tool ./execserver -count=1",
-                                         "UTF-8 prefix views and multi-message Noise decoder regressions"
-                                     ]
-                    },
-                    {
-                        "id":  "account-plans",
-                        "severity":  "P1",
-                        "phase":  "P1",
-                        "owner":  "auth,appserver,tui",
-                        "status":  "complete",
-                        "acceptance":  "Enterprise automation is parsed, mapped, serialized and rendered exactly like Rust.",
-                        "evidence":  [
-                                         "go test ./auth ./chatgptapi ./appserver ./tui/status ./tui -count=1",
-                                         "Rust GetAccountResponse schema validation"
-                                     ]
-                    },
-                    {
-                        "id":  "tui-remote-handlers",
-                        "severity":  "P1",
-                        "phase":  "P7",
-                        "owner":  "tui,appserver",
-                        "status":  "complete",
-                        "acceptance":  "All active remote requests have matching interaction and failure semantics.",
-                        "evidence":  [
-                                         "go test ./tui/... ./appserver -count=1",
-                                         "TUI remote app-server event targets, approvals, plugins, external-agent import, goals, realtime and connection status success/failure paths are covered",
-                                         "TestRustTUISnapshotManifestCoversPrioritySurfaces"
-                                     ]
-                    },
-                    {
-                        "id":  "sdk-cancellation",
-                        "severity":  "P0",
-                        "phase":  "P7",
-                        "owner":  "exec,appserver",
-                        "status":  "partial",
-                        "acceptance":  "Rust and Go converge without weakening process-tree cancellation safety.",
-                        "evidence":  [
-                                         "Opt-in resume-tool-interrupted-command leaves a Rust PowerShell descendant alive and aborts resume at bbbf396839",
-                                         "Go terminates the exact process tree and resumes; safety behavior must not regress while awaiting an upstream Rust fix"
-                                     ]
-                    },
-                    {
-                        "id":  "cross-platform-release",
-                        "severity":  "P0",
-                        "phase":  "P8",
-                        "owner":  "release",
-                        "status":  "partial",
-                        "acceptance":  "Native Windows, Linux and macOS gates pass for the required architecture matrix.",
-                        "evidence":  [
-                                         "Windows/amd64 native SQLite/runtime gate passed",
-                                         "linux/windows/darwin amd64/arm64 cross-compilation passed with CGO_ENABLED=0",
-                                         "GitHub Actions annotation says the job was not started because the account is locked due to a billing issue"
-                                     ]
-                    }
-                ]
+    "schemaVersion": 1,
+    "targetRustCommit": "f97e77569352a2bf5be9955e623edad0a15d9b93",
+    "allowedIdentityMappings": [
+        {
+            "rust": "codex",
+            "go": "gcode",
+            "scope": "published command name only"
+        },
+        {
+            "rust": "openai/codex",
+            "go": "jacks001314/codex-go",
+            "scope": "repository and package coordinates only"
+        }
+    ],
+    "domains": [
+        {
+            "id": "alignment-control",
+            "severity": "P0",
+            "phase": "P0",
+            "owner": "parity",
+            "status": "partial",
+            "acceptance": "Every target commit and public contract has machine-checked evidence; certification has no open status.",
+            "evidence": [
+                "go test ./parity ./features -count=1",
+                "parity/alignment_control_test.go",
+                "go test ./... -count=1 (87 packages, 0 FAIL)",
+                "npm --prefix sdktests run test:unit (50/51, 0 fail)",
+                "33 contracts complete with verifiers (parity/contracts/manifest.json: +apply-patch-freeform-spec, +goal-prompt-templates, +imagegen-description, +memory-tool-developer-instructions, +record-replay-harness-generalized, +shell-environment-policy-per-environment, +delegate-noninteractive-approval-policy, +wsl-update-path-normalization, +windows-sandbox-nux-trust-decision, +cli-blackbox-slash-differential)",
+                "Baseline re-targeted ed32158e90 -> 6c108912ee (2 new upstream commits audited: f85e81d30b #38899 Rust-internal execpolicy type relocation = N/A; 6c108912ee #38902 per-environment shell variable policies = Implement); commit ledger 19 -> 21 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync4.md",
+                "Baseline re-targeted 6c108912ee -> 2bc43d516e (1 new upstream commit audited: 2bc43d516e #38907 Edit queued messages with Vim history-up = Implement); commit ledger 21 -> 22 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync8.md",
+                "TUI edit-queued-message closed (#38907): the tea Model now restores the latest queued follow-up into the composer via the chat edit_queued_message binding (default alt-up/shift-left) and via the Vim-normal empty-composer history-up binding (vim_normal move_up, default k/up), removing the restored message from the queue so re-submitting replaces it. Mirrors Rust chatwidget/interaction.rs; remapped bindings honored, empty-composer gate preserves composer behavior. Tests mirror composer_submission.rs (most-recent restore, edit-and-requeue cycle, F2 remap, non-empty guard) (contract tui-edit-queued-message-vim-history-up, record in update/plan_2026_08_17_sync8.md)",
+                "TUI Vim normal mode closed: Go /vim was a stub (vim_normal/vim_operator/vim_text_object actions registered but never dispatched). Implemented a real Vim normal mode in the tea Model (tui/tea/vim_mode.go): normal/insert state machine (Rust starts the composer in normal mode when /vim is enabled), dispatching registered vim_normal actions through the resolved keymap (i/a/A/I/o/O/s/C insert-entering, h/l/k/j/w/b/e/0/$ motions, x/D edits, Y/p line yank/paste, dd/yy/cc line-operator repeats, and the full operator engine: d/y/c applied to horizontal motions (dw/dh/db/de/d0/d$/yw/c$), inner/around text objects (diw/daw/yiw, parens di(/da(), with Esc cancel - completing the registered vim_operator/vim_text_object surfaces). Insert mode types normally until Esc; the #38907 queued-message history-up gate now requires real normal mode. Verified with 5 token-free tests (contract tui-vim-normal-mode, record in update/plan_2026_08_17_sync9.md)",
+                "Session-startup prewarm closed (P2): creating a thread schedules an asynchronous token-free websocket prewarm (ResponsesAgentRunner.Prewarm, generate=false) mirroring Rust Session::schedule_startup_prewarm, and the first regular turn consumes its response id as PreviousResponseID (Rust tasks/regular.rs consume_startup_prewarm_for_regular_turn); a turn starting before the prewarm finishes proceeds without it (Unavailable semantics); agents without the prewarm interface are skipped. Verified with 3 token-free runtime tests (contract session-startup-prewarm, record in update/plan_2026_08_17_sync11.md)",
+                "Vim surface completed (sync12): k/j line operator motions (dj/dk/yj/yk/cj/ck) and the W big-word text object now dispatch, completing the registered vim_operator/vim_text_object surface; the live CLI black-box differential (Go code.exe vs Rust @openai/codex v0.147.0 through ConPTY) was rebuilt and re-run after the TUI changes and still passes. 10 token-free Vim tests (contract tui-vim-normal-mode, record in update/plan_2026_08_17_sync12.md)",
+                "Process hardening closed (P2): new processhardening package applies prctl(PR_SET_DUMPABLE)/ptrace(PT_DENY_ATTACH)/setrlimit(RLIMIT_CORE) and clears LD_*/DYLD_* loader vars with Rust exit codes 5-7, wired at cmd/codex main start (Rust pre_main_hardening); full-tree CGO_ENABLED=0 darwin+linux cross-compile now passes, fixing two pre-existing doctor darwin bugs surfaced by the gate (Statfs_t.Frsize -> Bsize on darwin; windowsDevDriveCheck stub on non-Windows) (contract process-hardening, record in update/plan_2026_08_17_sync13.md)",
+                "Baseline re-targeted 2bc43d516e -> cd8dc1e9b6 (1 new upstream commit audited: cd8dc1e9b6 #38913 Stop rendering columns after filling their area = N/A - Rust-internal ColumnRenderable iteration optimization with zero observable behavior change; the pre-change loop already skipped out-of-area children via the empty-intersection guard and desired_height is pure); commit ledger 22 -> 23 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync14.md",
+                "Verification cycle (sync15): after the recent TUI (Vim mode + operator engine) and process-hardening changes, the full gate stack was re-run - rebuilt code.exe and re-passed the live CLI black-box differential (Go vs Rust v0.147.0 through production ConPTY), sdktests unit suite 50/51 (1 documented skip), full tree 0 FAIL, parity/features green (36 contracts), CGO_ENABLED=0 darwin+linux full cross-compile exit 0 (record in update/plan_2026_08_17_sync15.md)",
+                "TUI editor kill/yank closed (sync16): re-scanning the keymap registry found the editor kill/yank actions (ctrl-k kill_line_end, ctrl-u kill_line_start, kill_whole_line, ctrl-y yank) registered but never dispatched - the bubbletea textarea does not handle them. Implemented applyEditorKillYankKey mirroring Rust bottom_pane/textarea.rs (single-entry kill buffer, boundary-newline semantics, paste at cursor), and fixed the shared edit-cursor positioning so SetValue-based edits keep the cursor at the edit point (vimSetCursorAtByteOffset). Verified with 3 token-free tests + re-passed live CLI differential with rebuilt code.exe (contract tui-editor-kill-yank, record in update/plan_2026_08_17_sync16.md)",
+                "CLI black-box differential ran live (method 4): Go code.exe vs Rust @openai/codex v0.147.0 through production ConPTY (/status + /mcp). Surfaced and fixed two issues: (1) the differential test asserted the single identity marker 'gcode' on both binaries while the Rust release brands itself 'OpenAI Codex' (allowed mapping) - now per-side identity markers with shared surface markers on both; (2) a real divergence: Go's Windows sandbox startup NUX opened for an already-trusted cwd, while Rust gates on onboarding_result.directory_trust_persisted - Go now mirrors ((trustDecision && level==Disabled) || elevatedRequired) via exported config.ProjectConfigEnabled with cwd resolved from root.Shared.CWD or os.Getwd(). Contracts cli-blackbox-slash-differential + windows-sandbox-nux-trust-decision, record in update/plan_2026_08_17_sync7.md",
+                "per-environment shell variable policies closed (#38902): EnvironmentConfig carries ShellEnvironmentPolicy with thread inference + JSON roundtrip; the shell executor resolves the thread-derived policy with the environment's resolved policy winning and sets ShellRequest.EnvPolicy; local shell/unified-exec build the command env via execpolicy.CreateEnv (inherit none/core/all, default excludes, exclude/include_only, set, filters), remote exec-server receives ExecEnvPolicy instead of the hardcoded inherit-all default; env-policy logic moved to the leaf codex_go/execpolicy package (mirrors the codex-execpolicy crate split). fn-name-pinned differential TestShellEnvPolicyDifferentialLikeRustExecCommandUsesInstalledPolicy (Rust exec_command_uses_installed_environment_shell_policy_with_explicit_overrides: preserved:missing:missing) + executor/runner/appserver dynamic tests (contract shell-environment-policy-per-environment)",
+                "delegate non-interactive approval policy closed (#38205, pre-ledger P0): subagent (delegate) turns are pinned to approval_policy=never in prepareTurnStartParams (runtimeRecordIsSubagent covers subAgentThreadSpawn / Originator=subagent / subagent review-compact-other / memory consolidation), mirroring Rust run_codex_thread_interactive (reject non-never + Constrained::allow_only(Never)); with never the existing deny paths (shell escalation reject, MCP elicitation auto-decline, network no-prompt, skill-MCP dependency skip) apply inside the delegate so nothing is forwarded to the parent. Dynamic tests TestPrepareTurnStartParamsForcesApprovalNeverForSubagentLikeRust + TestRuntimeAgentControllerSpawnPinsSubagentApprovalNever + TestRuntimeRecordIsSubagent (contract delegate-noninteractive-approval-policy, record in update/plan_2026_08_17_sync5.md)",
+                "WSL update path normalization closed (P2): install.ExecCommandRunner now normalizes the update command path and arguments for WSL on non-Windows (Rust cli/src/main.rs run_update -> cli/src/wsl_paths.rs) via updateCommandAndArgs/normalizedUpdateCommand, while Windows keeps cmd.exe /C PATHEXT semantics (PowerShell direct). shell.WinPathToWSL / shell.NormalizeForWSL already mirrored the Rust mapping; the runner wiring was the missing piece. fn-name-pinned differential TestRustWSLPathSamplesRunInGo (Rust win_to_wsl_basic + normalize_is_noop_on_unix_paths) + branch-preservation tests (contract wsl-update-path-normalization, record in update/plan_2026_08_17_sync6.md)",
+                "L0 enum inventory complete: model metadata 41/41, error codes 17+7 present (zero emission gaps), sandbox types exact, event names pinned, feature keys and tool names covered",
+                "L0/L1/L2 gate re-verification at frozen 9ded177ce7 recorded in update/plan_2026_08_16.md",
+                "L2 record-replay extended to drive the recording through the app-server core: ReplayThroughCore replays oss-story.jsonl tasks through RuntimeRouter with a scripted agent, validates the notification stream + persisted paginated rollout + Resume recoverability (TestReplayRustStoryRecordingThroughGoCore, registered on the story-recording-replay contract)",
+                "L2 record-replay harness generalized to arbitrary trace shapes (record-replay-harness-generalized): synthetic reasoning-only / plain-message / in-progress tasks replay through the app-server core (TestReplayThroughCoreSyntheticItemSurfaces, TestReplayThroughCoreInProgressTaskReplaysToCompletion), the recorder persists an uncompleted turn without fabricating task_complete (TestReplayRecorderLevelPersistsUncompletedTurnWithoutFabricatedComplete), and method-5 property tests pin Event JSON roundtrip fixed point, digest determinism, unknown-kind no-swallow and documented volatile-field drops (property_test.go, Rust-checkout-free)",
+                "Config-schema rust-only allowlist reduced 16->7 via audit fixing 9 real gaps (show_raw_agent_reasoning behavior, sqlite_home/log_dir/feedback/notice/marketplaces recognition, suppress_unstable_features_warning, mcp_oauth_callback_port/url global defaults)",
+                "image-resize-notice closed: eventmap performs real dimension-changing image prep (Rust budget math 2048/2500 and 6000/10000, decode/resize/re-encode) wired into the turn-start input path with feature-gated ImageResizeNotice fragment (TestRustImagePreparationDimensionSamplesRunInGo + app-server end-to-end tests; contract image-preparation-dimensions)",
+                "Config-schema rust-only allowlist further reduced 7->5->3: disable_paste_burst implemented end-to-end (config accessor + TUI Options + tea Model bypass gates, TestModelDisablePasteBurstSubmitsOnEnterLikeRust) and audio (RealtimeAudioToml microphone/speaker) recognized with deny_unknown_fields sub-field validation as a compatibility no-op",
+                "exec-apply-patch-freeform wired: the last unwired Rust data asset (exec freeform add+update fixture) drives Go's apply_patch CLI byte-identically against the frozen git blob (contract exec-apply-patch-freeform)",
+                "collaboration-mode-templates pinned: Default/Plan developer templates byte-match the frozen Rust blobs, fixing KNOWN_MODE_NAMES ordering (Default and Plan) and the appserver trailing newline (contract collaboration-mode-templates)",
+                "hooks-command-input-schemas wired: all 11 Rust hook command input schemas drive Go's centralized HookInputJSON; fixed session-end over-emission (model/permission_mode not in Rust schema) (contract hooks-command-input-schemas)",
+                "hooks-command-output-schemas wired: all 10 Rust hook command output schemas drive Go's ParseHook* output parsers with per-event typed field checks (contract hooks-command-output-schemas)",
+                "prompt-surface contracts closed: apply-patch-freeform-spec (description + lark grammar vs apply_patch_spec.rs), goal-prompt-templates (ext/goal/templates/goals/*.md byte-identical, trailing newline fixed), imagegen-description (imagegen_description.md byte-identical), memory-tool-developer-instructions (read_path.md render differential + production wiring: memories feature + use_memories gate appends the 2,500-token-truncated memory_summary fragment to turn developer instructions via instructionsWithMemoryToolContext, mirroring Rust MemoriesExtension::contribute_thread_context; token-free e2e tests TestRuntimeRouterTurnStartEmitsMemoryToolDeveloperInstructionsLikeRust + negative gates)",
+                "L3 facility ready: 89 scenarios + opt-in rollout-budget-exhaustion, NORMALIZATION.md documented, raw audit scripts; live SDK differential matrix remains authorization-gated",
+                "Certification blockers: SDK differential re-certification against 9ded177ce7 (authorization/provider), native platform matrix (GitHub billing), sdk-cancellation (upstream Rust fix)",
+                "Baseline re-targeted cd8dc1e9b6 -> 1f41cc5d92 (4 new upstream commits audited: 772e88c8ae #38916 legacy :project_roots alias = Test-only (Go already mapped the alias; closed with legacy-restrictions tests); c8ddb210d2 #38918 doctor network diagnostics = Implement (failure classification + route-aware probe client + proxy policy details); 935b1c4e3d #38919 reject obsolete permissionProfile = Implement (-32602 classification on four methods); 1f41cc5d92 #38921 TUI compact command activity = Implement (exec_cell grouping + compact render + tea accumulation)); commit ledger 23 -> 27 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync17.md",
+                "Legacy :project_roots alias closed (#38916): Go config specialFilesystemPath already mapped :project_roots to the project_roots kind; closed the gap with TestLegacyProjectRootsRestrictionsDoNotFailOpenLikeRust mirroring Rust's legacy_project_roots_restrictions_do_not_fail_open (read_deny/write_deny ':project_roots' = 'none' deny at the cwd; write_read ':project_roots' = { docs = 'read' } resolves docs to read-only) (contract config-legacy-project-roots-alias, record in update/plan_2026_08_17_sync17.md)",
+                "Doctor network diagnostics closed (#38918): classifyHTTPProbeError mirrors Rust RouteAwareRequestError::failure_class (TLS handshake/certificate validation, proxy authentication via HTTP 407 + proxyconnect, invalid proxy configuration, unsupported proxy scheme, proxy resolution failure, request timed out, connect failed, request failed); the provider probe uses a route-aware client built from the effective config (system proxy honored only when the respect_system_proxy feature is enabled; CODEX_CA_CERTIFICATE / SSL_CERT_FILE extend the system roots with the invalid-bundle system-root fallback mirroring RouteAwareClientPool with_legacy_custom_ca_fallback); network.env reports respect system proxy enabled/disabled and managed proxy configured/not configured from the effective config; macOS system proxy state stays platform-gated on the Windows host (contract doctor-network-failure-classification, record in update/plan_2026_08_17_sync17.md)",
+                "Obsolete permissionProfile rejection closed (#38919): Request.Validate rejects permissionProfile on thread/start, thread/resume, thread/fork, and turn/start with the Rust message ('`permissionProfile` is no longer supported for <method>; use `permissions` with a named profile id instead') via a new ErrInvalidParams sentinel; the router, runtime router, and stdio entry points classify it as JSON-RPC -32602 (invalid params) while generic validation errors stay -32600, and unrelated unknown fields remain accepted with the connection staying usable (contract appserver-reject-obsolete-permission-profile, record in update/plan_2026_08_17_sync17.md)",
+                "TUI compact command activity closed (#38921): ExecCell mirrors Rust MAX_GROUPED_COMMANDS=32 with reworked WithAddedCall / ShouldFlush and a new ExecSourceUnifiedExecStartup (isGroupableSource = Agent | UnifiedExecStartup); render.go adds compactGroupDisplayLines ('Ran N commands · ctrl + t to view transcript' + remaining calls) with commandCallDisplayLines extraction; the tea Model tracks an active compact group (message index + cell) accumulating consecutive successful Agent/unified-exec-startup completions (source read from item metadata set by the app layer) and flushes at failures, non-groupable sources, and interaction boundaries (submit, slash, approval, MCP elicitation, request-user-input, turn completed/interrupted, other non-command items), preserving the full transcript (contract tui-compact-command-activity, record in update/plan_2026_08_17_sync17.md)",
+                "Baseline re-targeted 1f41cc5d92 -> 8bf50439f2 (8 new upstream commits audited: 3b4569a920 #38940 app-server project APIs = Implement (state project store + 7 endpoints + thread assignment + notifications); 89e297729e #38941 Noise auth token scrub = Implement (envutil non-inheritable list + shared constant); e38290846c #38942 environment-specific command policies = Implement (EnvironmentConfig.exec_policy + allow-rule rejection + RequirementsPolicy fingerprint/merge; shell-decision merge structural N/A); c6058ccaa9 #38947 Windows legacy managed config ignore = Implement; 632e35ce8d #38978 skill catalog max_context_tokens = Implement (10,000 cap + wiring); 53aa7bb1aa #38980 guardian parent compaction bound = Implement (25,000 default, fail closed); 37cf6c84c0 #38987 guardian transcript images = documented N/A (Go simplified reviewer has no image pipeline); 8bf50439f2 #38990 guardian model catalog defaults = documented N/A); commit ledger 27 -> 35 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync18.md",
+                "Baseline re-targeted 8bf50439f2 -> 21cfd369ef (8 new upstream commits audited: ea10ae7d0f #38993 fused shadow selectors = Implement (lru_plus_character_routing_v1 + lru_plus_lexical_character_routing_v1 via reciprocal rank fusion); 3666a46ea3 #38994 workspace settings gate removal = N/A (Go never fetched enable_plugins / has no WorkspaceSettingsCache); 4885eb6c52 #38997 guardian sampler retry = documented N/A (Go guardian samples through model.AgentRunner; transport/stream retry is owned by the Go model client); 8e89e98cf6 #39001 stale Guardian tool risk scores = Implement (features.guardianv2.max_tool_call_lag default 3 + per-thread score progress, fail closed); 02e9bfaac7 #39005 managed reviewers disable Guardian V2 = Implement (allowed_approvals_reviewers without user forces guardianv2 off); 04caa22c82 #39006 API-key turn cost telemetry = documented N/A (Go has no OTLP session-telemetry log-event surface / backend turn-cost client); def7ed5572 #39007 approval test harness wait = N/A (test-only); 21cfd369ef #39008 task-context shadow selection = Implement (ShadowTaskContext + task_context_fusion_v1)); commit ledger 35 -> 43 entries with evidence, alignment constants/baseline/parity.json/README updated, record in update/plan_2026_08_17_sync19.md"
+            ]
+        },
+        {
+            "id": "sqlite-runtime-version",
+            "severity": "P0",
+            "phase": "P2",
+            "owner": "state",
+            "status": "partial",
+            "acceptance": "Every supported artifact reports SQLite >= 3.51.3 and passes WAL recovery tests.",
+            "evidence": [
+                "Windows/amd64 native gate passed with embedded SQLite 3.51.3, lifecycle ownership and committed-WAL recovery",
+                "CGO_ENABLED=0 go build ./... passed for linux/windows/darwin amd64/arm64",
+                ".github/workflows/sqlite-platform-gates.yml defines the six native runners; five remote native artifacts remain blocked by GitHub billing"
+            ]
+        },
+        {
+            "id": "state-runtime",
+            "severity": "P0",
+            "phase": "P2",
+            "owner": "state",
+            "status": "complete",
+            "acceptance": "Go owns the same five databases with compatible lifecycle, pragmas, pools, recovery and migrations.",
+            "evidence": [
+                "go test ./state ./appserver ./remotecontrol ./app ./parity -count=1",
+                "go test -race ./state ./appserver -run 'Test(StateRuntime|WritableSQLite|RuntimeMigration|RuntimeCorruption|SQLiteRecovers|BackupFiles|DefaultStdioOwns|ConnectionRoutersDoNotClose|StdioStartupFails)' -count=1",
+                "state_5/logs_2/goals_1/memories_1 open eagerly while thread_history_1 remains lazy",
+                "all writable pool connections use WAL, synchronous NORMAL, incremental auto-vacuum, 5-second busy timeout and max 5 connections",
+                "known SQLx checksums validate, unknown future versions are ignored, and legacy recency version 38 is repaired to 39",
+                "corruption recovery isolates the failed DB and moves surviving DB/WAL/SHM files into Rust-compatible unique backup folders",
+                "TestStateMigrationsMatchRustTarget compares all 55 canonical SQL files byte-for-byte with frozen Rust Git blobs",
+                "stdio owns one runtime; WebSocket and Unix transports inject one shared runtime across connection routers"
+            ]
+        },
+        {
+            "id": "rollout-thread-store",
+            "severity": "P0",
+            "phase": "P3",
+            "owner": "session,rollout,state",
+            "status": "complete",
+            "acceptance": "Rollout is authoritative, layout and flush ordering match Rust, and SQLite projection is rebuildable.",
+            "evidence": [
+                "go test ./session ./rollout ./state ./appserver -count=1",
+                "go test -race ./session ./rollout ./state -run 'Test(StorePaginatedFork|PaginatedAppendSessionItems|CompressedProjection|ReadProjection|ThreadHistory|PreparePaginatedFork|PaginatedSessionWriter)' -count=1",
+                "paginated recorders persist contiguous ordinals and project only after Sync/Close",
+                "rollouts use Rust nested layout, archive/name indexes, canonical session headers and compressed JSONL coordinates",
+                "reference-backed forks materialize compressed ancestors without copying inherited events",
+                "cold Store reads and appends resolve rollout-only lineage at the frozen byte/ordinal boundary after restart"
+            ]
+        },
+        {
+            "id": "thread-history",
+            "severity": "P0",
+            "phase": "P3",
+            "owner": "history,state",
+            "status": "complete",
+            "acceptance": "History schema, offsets, ordinals, malformed-line recovery and queries are cross-binary compatible.",
+            "evidence": [
+                "go test ./session ./rollout ./state ./appserver -count=1",
+                "go test -race ./appserver -run 'Test(RouterPaginated|RuntimeRouterPaginated|ThreadHistorySearch|Router.*Resume)' -count=1",
+                "malformed and unknown lines remain pending until retry or a provable ordinal gap",
+                "rows and byte/ordinal checkpoint commit atomically",
+                "SQLite-backed turns/items/search queries traverse bounded lineage with Rust cursor semantics",
+                "paginated writers emit ItemStarted for in-progress snapshots and exactly one canonical ItemCompleted terminal event",
+                "resume and fork use SQLite physical positions and remain functional without Go snapshots"
+            ]
+        },
+        {
+            "id": "goals-persistence",
+            "severity": "P1",
+            "phase": "P4",
+            "owner": "appserver,state",
+            "status": "complete",
+            "acceptance": "Goals and continuation deferrals survive restart and are mutually readable by Rust and Go.",
+            "evidence": [
+                "go test ./state ./appserver ./tui/... -run 'Goal|Continuation' -count=1",
+                "TestRuntimeRouterPersistsThreadGoalInRustGoalsDBAndRollout",
+                "TestPaginatedForkCanDeferInheritedGoalContinuation",
+                "TestThreadGoalSnapshotDefersContinuationAndDeleteCascades"
+            ]
+        },
+        {
+            "id": "agent-graph-persistence",
+            "severity": "P1",
+            "phase": "P4",
+            "owner": "agent,state",
+            "status": "complete",
+            "acceptance": "Thread spawn edges survive restart and mixed-process access.",
+            "evidence": [
+                "go test ./state ./appserver -run 'SpawnEdge|SpawnGraph' -count=1",
+                "TestThreadSpawnEdgesPersistRustOrderingAndStatusSemantics",
+                "TestRuntimeRouterUsesPersistentSpawnGraphByDefault",
+                "TestRuntimeRouterThreadLifecycleUsesSpawnGraphDescendants"
+            ]
+        },
+        {
+            "id": "logs-persistence",
+            "severity": "P1",
+            "phase": "P4",
+            "owner": "telemetry,state",
+            "status": "complete",
+            "acceptance": "SQLite logs and per-partition retention match Rust.",
+            "evidence": [
+                "go test ./state ./appserver -run 'LogDB|Logs|Feedback' -count=1",
+                "TestLogsPruneEachRustPartitionByRowAndByteLimit",
+                "TestDefaultStdioLogDBLifecyclePersistsRuntimeLogs",
+                "TestFeedbackUploadFlushesSQLiteLogsForAgentSubtreeAndAttachesRollouts"
+            ]
+        },
+        {
+            "id": "memory-pipeline",
+            "severity": "P0",
+            "phase": "P5",
+            "owner": "memories,state",
+            "status": "complete",
+            "acceptance": "Stage1, phase2, jobs, leases, retry, selection and consolidation match Rust.",
+            "evidence": [
+                "go test ./memories ./state ./appserver -count=1",
+                "go test -race ./memories ./state ./appserver -run 'Test(Memory|ThreadStartAutomaticallyRunsMemory)' -count=1",
+                "stage1 extraction, phase2 consolidation, leases, retry exhaustion, selection hydration, workspace baseline reset and app-server startup are covered"
+            ]
+        },
+        {
+            "id": "app-server-schema",
+            "severity": "P0",
+            "phase": "P1",
+            "owner": "appserver",
+            "status": "complete",
+            "acceptance": "Stable and experimental JSON Schema and TypeScript exports have zero canonical diff.",
+            "evidence": [
+                "go test ./appserver ./app ./cli ./parity -count=1",
+                "go test -race ./appserver -run TestPrecomputed -count=1",
+                "stable, experimental and internal export trees compare byte-for-byte with embedded target-Rust maps",
+                "vendored zstd archives compare byte-for-byte with the frozen Rust target checkout",
+                "index suppression, generated-header stripping, Prettier ordering, trailing-whitespace cleanup and relative-path validation match Rust"
+            ]
+        },
+        {
+            "id": "feature-registry",
+            "severity": "P1",
+            "phase": "P1",
+            "owner": "features",
+            "status": "complete",
+            "acceptance": "Keys, stages, defaults, dependency behavior and model headers match Rust.",
+            "evidence": [
+                "go test ./features ./parity -count=1",
+                "TestRustFeatureKeySurfaceAgainstGo",
+                "executed_tool_call_metadata is registered and code_mode_buffered_exec is retained at the removed stage for legacy config recognition"
+            ]
+        },
+        {
+            "id": "executed-tool-call-metadata",
+            "severity": "P1",
+            "phase": "P1",
+            "owner": "model,turn,tool",
+            "status": "complete",
+            "acceptance": "Feature gating, session recording, attempted calls, retries, nesting and bounds match Rust.",
+            "evidence": [
+                "go test ./model ./turn ./tool ./appserver -count=1",
+                "direct, custom, namespaced and code-mode attempts attach only to matching outputs",
+                "failed sampling replay, yielded-cell wait attribution, forgery stripping and 8/32 KiB bounds"
+            ]
+        },
+        {
+            "id": "permission-profiles",
+            "severity": "P0",
+            "phase": "P7",
+            "owner": "sandbox,execserver",
+            "status": "complete",
+            "acceptance": "The canonical effective profile reaches every sandbox, server, approval and escalation path.",
+            "evidence": [
+                "go test ./sandbox ./execserver ./tool ./appserver -count=1",
+                "go test -race ./sandbox ./appserver -run Test(IntersectPermissionProfiles|ServerRequestBrokerIntersectsPermissions|ServerRequestBrokerRejectsSessionScopedStrictAutoReview|WindowsPermissionProfiles) -count=1",
+                "canonical runtime profile wins over stale JSON/policy projections across shell, unified exec, exec-server, elevated Windows IPC and apply_patch",
+                "app-server intersects client grants with requested permissions before returning them to core",
+                "symbolic slash_tmp is ignored on Windows while literal /tmp remains an ordinary path",
+                "additional grants preserve read and deny entries",
+                "apply_patch rejects .git/.agents/.codex and paths outside workspace writable roots under the workspace profile"
+            ]
+        },
+        {
+            "id": "sandbox-violations",
+            "severity": "P0",
+            "phase": "P1",
+            "owner": "sandbox,execserver",
+            "status": "complete",
+            "acceptance": "Normalized filesystem/network violations and sandboxType wire values match Rust.",
+            "evidence": [
+                "go test ./sandbox ./execserver ./tool ./appserver -count=1",
+                "go test -race ./sandbox ./execserver ./tool ./appserver -run Test(ClassifyFileSystemSandboxViolation|NetworkSandboxViolation|ProcessStateTransportsLocallyClassifiedSandboxDenial|ProcessSandboxTypeProtocolMapping|ExecResponseDistinguishes|UnifiedExecRecordsKnownSandboxViolation|ManagedNetworkBlockedObserverRecords) -count=1",
+                "filesystem classifier preserves Rust stream and keyword ordering, quick rejects, Unicode paths, 512-character snippets and platform SIGSYS behavior",
+                "exec-server distinguishes legacy missing sandboxType from explicit none and transports local denial without duplicate recording",
+                "managed network violations record with or without approval requirements"
+            ]
+        },
+        {
+            "id": "remote-metadata-coalescing",
+            "severity": "P1",
+            "phase": "P1",
+            "owner": "execserver",
+            "status": "complete",
+            "acceptance": "Equivalent requests coalesce and all mutation, cancellation and error invalidation rules match Rust.",
+            "evidence": [
+                "go test ./execserver -count=1",
+                "go test -race ./execserver -run TestClient.*Metadata -count=1",
+                "same-path unsandboxed requests share only in-flight results",
+                "sandbox/path boundaries, error retry, initializer cancellation handoff and mutation invalidation match Rust"
+            ]
+        },
+        {
+            "id": "environment-clock",
+            "severity": "P1",
+            "phase": "P1",
+            "owner": "appserver,turn",
+            "status": "complete",
+            "acceptance": "Configured clock refreshes current date and timezone at the same boundaries as Rust.",
+            "evidence": [
+                "go test ./appserver ./config -count=1",
+                "go test -race ./appserver -run Test.*Environment.*Clock -count=1",
+                "turn, Guardian review and compaction rebuild current_date from the configured clock",
+                "external clock failures stop before inference; prewarm does not read the clock",
+                "include_environment_context defaults true and supports explicit disable",
+                "Windows system timezone IDs are normalized to IANA names"
+            ]
+        },
+        {
+            "id": "code-mode",
+            "severity": "P0",
+            "phase": "P6",
+            "owner": "codemode",
+            "status": "complete",
+            "acceptance": "Production runs exclusively through a standalone host with matching fallback and fail-closed behavior.",
+            "evidence": [
+                "go test ./codemode ./tool ./turn ./exec ./appserver ./app ./install -count=1",
+                "go test -race ./codemode ./turn ./exec ./appserver -run Test.*CodeMode -count=1",
+                "production app-server and exec paths always inject process, WebSocket, or explicitly disabled providers",
+                "real framed-stdio host preserves store/load and yielded cells across per-turn registry rebinds",
+                "host lookup follows package, standalone, sibling and bare-program install contexts",
+                "optional code_mode falls back to direct tools; code_mode_only and disabled fallback fail closed with once-per-thread warnings"
+            ]
+        },
+        {
+            "id": "realtime",
+            "severity": "P0",
+            "phase": "P6",
+            "owner": "realtime,appserver",
+            "status": "complete",
+            "acceptance": "Real WebSocket, WebRTC and sideband E2E behavior matches Rust without synthetic responses.",
+            "evidence": [
+                "go test ./realtime ./appserver -count=1",
+                "go test -race ./realtime ./appserver -count=1",
+                "real WebSocket and WebRTC HTTP/SDP/sideband transports cover V1/V2/V3 handshake, binary rejection, transcript, handoff, world state, backpressure and shutdown ordering"
+            ]
+        },
+        {
+            "id": "external-agent",
+            "severity": "P1",
+            "phase": "P1",
+            "owner": "config,appserver",
+            "status": "complete",
+            "acceptance": "Connector candidates, source attribution, import and cleanup wire behavior match Rust.",
+            "evidence": [
+                "go test ./config ./appserver -count=1",
+                "TestExternalAgentConfigDetectResponseConnectorsMatchRust",
+                "TestDetectExternalSessionConnectorsMatchesNameAndUUID",
+                "six cold/active/diverged/ambiguous incremental imported-session sync scenarios"
+            ]
+        },
+        {
+            "id": "command-actions",
+            "severity": "P1",
+            "phase": "P1",
+            "owner": "execserver,eventmap",
+            "status": "complete",
+            "acceptance": "Read actions preserve executor-native POSIX, drive, relative and UNC paths.",
+            "evidence": [
+                "go test ./utils ./shell ./rollout ./appserver -count=1",
+                "TestResolveExecutorPathPreservesForeignConventions",
+                "TestCommandExecutionActionsPreserveExecutorPathsLikeRust",
+                "TestRolloutReadCommandActionsPreserveExecutorPathsLikeRust"
+            ]
+        },
+        {
+            "id": "tool-telemetry",
+            "severity": "P1",
+            "phase": "P1",
+            "owner": "telemetry,tool,skills",
+            "status": "complete",
+            "acceptance": "Tool tags are collected synchronously and explicit skill metrics include status, sanitized skill and invoke_type on success and error paths.",
+            "evidence": [
+                "go test ./tool ./mcp ./turn ./appserver -count=1",
+                "MCP server/origin result tags and explicit skill success/error counters match Rust"
+            ]
+        },
+        {
+            "id": "streaming-buffers",
+            "severity": "P1",
+            "phase": "P1",
+            "owner": "tool,execserver",
+            "status": "complete",
+            "acceptance": "Streaming output and Noise framing consume front data without repeated shifts and always progress across invalid UTF-8.",
+            "evidence": [
+                "go test ./tool ./execserver -count=1",
+                "UTF-8 prefix views and multi-message Noise decoder regressions"
+            ]
+        },
+        {
+            "id": "account-plans",
+            "severity": "P1",
+            "phase": "P1",
+            "owner": "auth,appserver,tui",
+            "status": "complete",
+            "acceptance": "Enterprise automation is parsed, mapped, serialized and rendered exactly like Rust.",
+            "evidence": [
+                "go test ./auth ./chatgptapi ./appserver ./tui/status ./tui -count=1",
+                "Rust GetAccountResponse schema validation"
+            ]
+        },
+        {
+            "id": "tui-remote-handlers",
+            "severity": "P1",
+            "phase": "P7",
+            "owner": "tui,appserver",
+            "status": "complete",
+            "acceptance": "All active remote requests have matching interaction and failure semantics.",
+            "evidence": [
+                "go test ./tui/... ./appserver -count=1",
+                "TUI remote app-server event targets, approvals, plugins, external-agent import, goals, realtime and connection status success/failure paths are covered",
+                "TestRustTUISnapshotManifestCoversPrioritySurfaces"
+            ]
+        },
+        {
+            "id": "sdk-cancellation",
+            "severity": "P0",
+            "phase": "P7",
+            "owner": "exec,appserver",
+            "status": "partial",
+            "acceptance": "Rust and Go converge without weakening process-tree cancellation safety.",
+            "evidence": [
+                "Opt-in resume-tool-interrupted-command leaves a Rust PowerShell descendant alive and aborts resume at bbbf396839",
+                "Go terminates the exact process tree and resumes; safety behavior must not regress while awaiting an upstream Rust fix"
+            ]
+        },
+        {
+            "id": "cross-platform-release",
+            "severity": "P0",
+            "phase": "P8",
+            "owner": "release",
+            "status": "partial",
+            "acceptance": "Native Windows, Linux and macOS gates pass for the required architecture matrix.",
+            "evidence": [
+                "Windows/amd64 native SQLite/runtime gate passed",
+                "linux/windows/darwin amd64/arm64 cross-compilation passed with CGO_ENABLED=0",
+                "GitHub Actions annotation says the job was not started because the account is locked due to a billing issue"
+            ]
+        }
+    ]
 }

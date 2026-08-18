@@ -165,6 +165,43 @@ func TestFallbackBundledModelsMatchCurrentRustDefault(t *testing.T) {
 	}
 }
 
+func TestBundledGPT56ModelsAllowLongContextOverrideLikeRust(t *testing.T) {
+	// Rust #39102 raises the GPT-5.6 maximum context window to 872,000 tokens
+	// (models-manager/models.json max_context_window 272000 -> 872000).
+	for _, slug := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		info := NewStaticModelsManager(fallbackBundledModelsResponse()).GetModelInfo(slug, nil)
+		if info.MaxContextWindow != 872000 {
+			t.Fatalf("%s MaxContextWindow = %d, want 872000", slug, info.MaxContextWindow)
+		}
+		if info.ContextWindow != 272000 {
+			t.Fatalf("%s ContextWindow = %d, want 272000", slug, info.ContextWindow)
+		}
+
+		// A 1,000,000-token override clamps to the new 872,000 maximum
+		// (mirror manager_tests.rs get_model_info_applies_long_context_override...).
+		overridden := WithConfigOverrides(info, &ModelsManagerConfig{ModelContextWindow: 1_000_000})
+		if overridden.ContextWindow != 872000 {
+			t.Fatalf("%s overridden ContextWindow = %d, want 872000", slug, overridden.ContextWindow)
+		}
+	}
+}
+
+func TestBedrockGPT56ModelsUseLongContextWindowLikeRust(t *testing.T) {
+	// Rust #39102 rebuilds the Amazon Bedrock GPT-5.6 entries with a
+	// max_context_window of 872,000 while GPT-5.5/GPT-5.4 keep 272,000.
+	catalog := AmazonBedrockModelCatalog()
+	for _, model := range catalog.Models {
+		want := int64(272000)
+		switch model.Slug {
+		case AmazonBedrockGPT56SolModelID, AmazonBedrockGPT56TerraModelID, AmazonBedrockGPT56LunaModelID:
+			want = 872000
+		}
+		if model.MaxContextWindow != want {
+			t.Fatalf("%s MaxContextWindow = %d, want %d", model.Slug, model.MaxContextWindow, want)
+		}
+	}
+}
+
 func TestLoadModelsResponseFromFileMirrorsRustModelCatalogJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
 	if err := os.WriteFile(path, []byte(`{"models":[{"slug":"deepseek-v4-flash","context_window":1048576,"max_context_window":1048576,"effective_context_window_percent":95}]}`), 0o600); err != nil {

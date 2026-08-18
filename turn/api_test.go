@@ -230,6 +230,41 @@ func TestTurnStartRejectsRelativeRuntimeWorkspaceRoots(t *testing.T) {
 	}
 }
 
+func TestTurnStartRejectsOversizedEnvironmentCWDLikeRust(t *testing.T) {
+	service := NewTurnService()
+	oversized := strings.Repeat("x", maxTurnEnvironmentCWDBytes+1)
+	_, err := service.Start(&TurnStartParams{
+		ThreadID: "thread-1",
+		Environments: []map[string]any{
+			{"environment_id": "env-1", "cwd": "C:\\" + oversized},
+		},
+	})
+	if !errors.Is(err, ErrInvalidTurnRequest) || !strings.Contains(err.Error(), "turn environment working directory exceeds the maximum size") {
+		t.Fatalf("Start() error = %v, want oversized-cwd invalid turn request", err)
+	}
+
+	// A cwd at the 8 KiB boundary is accepted (Rust #39040: > MAX rejects).
+	boundary := "/" + strings.Repeat("x", maxTurnEnvironmentCWDBytes-1)
+	if _, err := service.Start(&TurnStartParams{
+		ThreadID: "thread-2",
+		Environments: []map[string]any{
+			{"environment_id": "env-1", "cwd": boundary},
+		},
+	}); err != nil {
+		t.Fatalf("Start() boundary-cwd error = %v", err)
+	}
+
+	// Environments without a cwd are unaffected.
+	if _, err := service.Start(&TurnStartParams{
+		ThreadID: "thread-3",
+		Environments: []map[string]any{
+			{"environment_id": "env-1"},
+		},
+	}); err != nil {
+		t.Fatalf("Start() cwd-less environment error = %v", err)
+	}
+}
+
 func TestTurnSteerRejectsOversizedTextInput(t *testing.T) {
 	service := NewTurnService()
 	start, err := service.Start(&TurnStartParams{ThreadID: "thread-1", Prompt: "hello"})

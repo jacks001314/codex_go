@@ -37,6 +37,12 @@ func TestDefaultsIncludesStableShellTool(t *testing.T) {
 	if !defaults["in_app_updates"] {
 		t.Fatal("in_app_updates default = false, want true")
 	}
+	if !defaults["in_app_chat"] {
+		t.Fatal("in_app_chat default = false, want true (Rust #39045 stable gate)")
+	}
+	if !defaults["in_app_dictation"] {
+		t.Fatal("in_app_dictation default = false, want true (Rust #39045 stable gate)")
+	}
 	if defaults["recommended_plugins"] {
 		t.Fatal("recommended_plugins default = true, want false")
 	}

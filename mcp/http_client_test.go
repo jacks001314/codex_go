@@ -9,11 +9,104 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestMCPRedirectPolicySameOriginAllowed(t *testing.T) {
+	policy := mcpRedirectPolicy("https://mcp.example.com/v1")
+	if policy == nil {
+		t.Fatal("mcpRedirectPolicy returned nil for a valid URL")
+	}
+	for _, target := range []string{
+		"https://mcp.example.com/v2",
+		"https://mcp.example.com:443/v2",
+	} {
+		request, err := http.NewRequest("GET", target, nil)
+		if err != nil {
+			t.Fatalf("NewRequest(%q): %v", target, err)
+		}
+		if err := policy(request, []*http.Request{{URL: mustMCPTestURL("https://mcp.example.com/v1")}}); err != nil {
+			t.Fatalf("same-origin redirect to %s rejected: %v", target, err)
+		}
+	}
+}
+
+func TestMCPRedirectPolicyCrossOriginRejected(t *testing.T) {
+	policy := mcpRedirectPolicy("https://mcp.example.com/v1")
+	request, err := http.NewRequest("GET", "https://evil.example.com/v2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := policy(request, []*http.Request{{URL: mustMCPTestURL("https://mcp.example.com/v1")}}); err == nil {
+		t.Fatal("cross-origin redirect accepted, want rejection")
+	}
+}
+
+func TestMCPRedirectPolicyInsecureNonLoopbackRejected(t *testing.T) {
+	policy := mcpRedirectPolicy("https://mcp.example.com/v1")
+	request, err := http.NewRequest("GET", "http://mcp.example.com/v2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := policy(request, []*http.Request{{URL: mustMCPTestURL("https://mcp.example.com/v1")}}); err == nil {
+		t.Fatal("insecure non-loopback redirect accepted, want rejection")
+	}
+}
+
+func TestMCPRedirectPolicyLoopbackHTTPAllowed(t *testing.T) {
+	// Loopback hosts keep their configured scheme: HTTP redirects between
+	// loopback origins do not need to upgrade to HTTPS (Rust #39046).
+	for _, origin := range []string{"http://127.0.0.1:9000/v1", "http://localhost:9000/v1"} {
+		policy := mcpRedirectPolicy(origin)
+		target := "http://127.0.0.1:9000/x"
+		if strings.Contains(origin, "localhost") {
+			target = "http://localhost:9000/x"
+		}
+		request, err := http.NewRequest("GET", target, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := policy(request, []*http.Request{{URL: mustMCPTestURL(origin)}}); err != nil {
+			t.Fatalf("loopback redirect to %s rejected: %v", target, err)
+		}
+	}
+}
+
+func TestMCPRedirectPolicyHopLimit(t *testing.T) {
+	policy := mcpRedirectPolicy("https://mcp.example.com/v1")
+	request, err := http.NewRequest("GET", "https://mcp.example.com/v10", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	via := make([]*http.Request, 10)
+	for i := range via {
+		via[i] = &http.Request{}
+	}
+	if err := policy(request, via); err == nil {
+		t.Fatal("10-hop redirect accepted, want hop-limit rejection")
+	}
+}
+
+func TestMCPRedirectPolicyNilForUnusableURL(t *testing.T) {
+	if policy := mcpRedirectPolicy(""); policy != nil {
+		t.Fatal("empty URL produced a policy, want nil")
+	}
+	if policy := mcpRedirectPolicy("not a url"); policy != nil {
+		t.Fatal("unparseable URL produced a policy, want nil")
+	}
+}
+
+func mustMCPTestURL(raw string) *url.URL {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
+}
 
 type mcpTestRoundTripFunc func(*http.Request) (*http.Response, error)
 

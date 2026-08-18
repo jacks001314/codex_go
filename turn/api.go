@@ -294,8 +294,26 @@ func (p *TurnStartParams) Validate() error {
 	if err := validateRuntimeWorkspaceRoots(p.RuntimeWorkspaceRoots); err != nil {
 		return err
 	}
+	if err := validateTurnEnvironmentCWDs(p.Environments); err != nil {
+		return err
+	}
 	if err := validateUserInputTextLimit(p.Prompt, p.Input); err != nil {
 		return err
+	}
+	return nil
+}
+
+// maxTurnEnvironmentCWDBytes mirrors Rust ThreadManager's
+// MAX_TURN_ENVIRONMENT_CWD_BYTES (8 KiB, #39040): pathological selected working
+// directories are rejected at the environment-selection boundary.
+const maxTurnEnvironmentCWDBytes = 8 * 1024
+
+func validateTurnEnvironmentCWDs(environments []map[string]any) error {
+	for _, environment := range environments {
+		cwd, _ := environment["cwd"].(string)
+		if len(cwd) > maxTurnEnvironmentCWDBytes {
+			return fmt.Errorf("%w: turn environment working directory exceeds the maximum size", ErrInvalidTurnRequest)
+		}
 	}
 	return nil
 }

@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 663 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 663", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 673 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 673", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -110,8 +110,18 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
+			Path:     "tui/src/bottom_pane/textarea/snapshots",
+			Files:    4,
+			Owner:    "tui/bottom_pane/textarea",
+			Focus:    "textarea wrapping: hanging tabs, mandatory breaks, end-of-line spaces, and vertical navigation after resize",
+			Priority: []string{"composer"},
+			Required: []string{
+				"tui/src/bottom_pane/textarea/snapshots/codex_tui__bottom_pane__textarea__wrapping__tests__hanging_tab_cursor_and_scroll.snap",
+			},
+		},
+		{
 			Path:     "tui/src/chatwidget/snapshots",
-			Files:    223,
+			Files:    225,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -167,7 +177,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/onboarding/snapshots",
-			Files:    3,
+			Files:    4,
 			Owner:    "tui/onboarding",
 			Focus:    "trust-directory onboarding states",
 			Priority: []string{"onboarding"},
@@ -187,7 +197,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/snapshots",
-			Files:    120,
+			Files:    123,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},

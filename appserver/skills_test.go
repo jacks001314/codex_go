@@ -1259,45 +1259,27 @@ interface:
 	}
 }
 
-func TestParseSkillFrontmatterModelAnnotationLikeRust(t *testing.T) {
-	parsed, ok := parseSkillFrontmatter(`---
-name: demo
-description: Demo skill
-model: luna
----
-`, "fallback")
-	if !ok {
-		t.Fatal("parseSkillFrontmatter(luna) failed")
+func TestParseSkillFrontmatterIgnoresModelAnnotationLikeRust(t *testing.T) {
+	// Rust #39068 removed skill model delegation: the `model` frontmatter
+	// field is no longer parsed or exposed.
+	tests := []struct {
+		contents    string
+		description string
+	}{
+		{"---\nname: demo\ndescription: Demo skill\nmodel: luna\n---\n", "Demo skill"},
+		{"---\nname: demo\ndescription: Demo skill\nmodel: terra\n---\n", "Demo skill"},
+		{"---\nname: demo\ndescription: Demo skill\n---\n", "Demo skill"},
+		{"---\nname: demo\ndescription: Build for AWS: ECS\nmodel: luna\n---\n", "Build for AWS: ECS"},
 	}
-	if parsed.Model != "luna" {
-		t.Fatalf("model = %q, want luna", parsed.Model)
-	}
-
-	// Skills without a model annotation keep an empty model.
-	parsed, ok = parseSkillFrontmatter(`---
-name: demo
-description: Demo skill
----
-`, "fallback")
-	if !ok || parsed.Model != "" {
-		t.Fatalf("absent model parsed as %q ok=%v", parsed.Model, ok)
-	}
-
-	// Unsupported model values are ignored without disabling skill loading.
-	for _, unsupported := range []string{"terra", "sol", "unknown"} {
-		parsed, ok := parseSkillFrontmatter("---\nname: demo\ndescription: Demo skill\nmodel: "+unsupported+"\n---\n", "fallback")
+	for _, test := range tests {
+		contents := test.contents
+		parsed, ok := parseSkillFrontmatter(contents, "fallback")
 		if !ok {
-			t.Fatalf("parseSkillFrontmatter(%s) failed", unsupported)
+			t.Fatalf("parseSkillFrontmatter(%q) failed", contents)
 		}
-		if parsed.Model != "" || parsed.Name != "demo" || parsed.Description != "Demo skill" {
-			t.Fatalf("unsupported model %q parsed as %#v", unsupported, parsed)
+		if parsed.Name != "demo" || parsed.Description != test.description {
+			t.Fatalf("model-annotated frontmatter parsed as %#v", parsed)
 		}
-	}
-
-	// The existing frontmatter scalar repair path also preserves model: luna.
-	parsed, ok = parseSkillFrontmatter("---\nname: demo\ndescription: Build for AWS: ECS\nmodel: luna\n---\n", "fallback")
-	if !ok || parsed.Model != "luna" {
-		t.Fatalf("repaired frontmatter model = %q ok=%v", parsed.Model, ok)
 	}
 }
 

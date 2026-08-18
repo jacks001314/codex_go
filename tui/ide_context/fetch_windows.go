@@ -15,6 +15,11 @@ type windowsPipeStream struct {
 	deadline time.Time
 }
 
+// windowsPipeSecurityFlags mirrors Rust #39020: the IDE-context named pipe is
+// opened with SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION so the server can
+// identify the client but cannot impersonate it beyond the identification level.
+const windowsPipeSecurityFlags = windows.SECURITY_SQOS_PRESENT | windows.SECURITY_IDENTIFICATION
+
 func connectIDEContext(_ string, _ string, deadline time.Time) (io.ReadWriteCloser, error) {
 	path, err := windows.UTF16PtrFromString(DefaultWindowsPipeName)
 	if err != nil {
@@ -26,7 +31,7 @@ func connectIDEContext(_ string, _ string, deadline time.Time) (io.ReadWriteClos
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		nil,
 		windows.OPEN_EXISTING,
-		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OVERLAPPED,
+		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OVERLAPPED|windowsPipeSecurityFlags,
 		0,
 	)
 	if err != nil {

@@ -1,16 +1,16 @@
-# Go 版 Codex 与 Rust 版 Codex 对齐缺口审计（刷新版）
+﻿# Go 版 Codex 与 Rust 版 Codex 对齐缺口审计（刷新版）
 
 > 本文件是 2026-08-13 版 `need_aligin.md` 的刷新：对原报告的每一项做
 > **源码/证据复核**（`git show 6c108912ee` 冻结基线 + Go 当前工作树），
-> 逐项标记 Closed / N/A / Open。刷新日期：2026-08-17。
+> 逐项标记 Closed / N/A / Open。刷新日期：2026-08-18。
 >
 > 基线：
 > - Rust（上游）：`D:\qax\reagent\dev\git\codex`，冻结目标
->   `21cfd369efca2df70c904c580b2e7e2e3eddb3c3`（#38940/#38941/#38942/#38947/
->   #38978/#38980/#38987/#38990，sync18 更新），当前无新漂移。
+>   `f97e77569352a2bf5be9955e623edad0a15d9b93`（#39017-#39122锛宻ync20 鏇存柊锛?/ 
+>   #38978/#38980/#38987/#38990，sync20 更新），当前无新漂移。
 > - Go：`D:\qax\reagent\dev\codex_go`，对齐到同一基线。
-> - 契约：`parity/contracts/manifest.json` 47 个契约 complete 且带 verifier；
->   `parity.json` 131 个 done 项；L0/L1/L2 门禁在冻结基线全绿。
+> - 契约：`parity/contracts/manifest.json` 53 个契约 complete 且带 verifier；
+>   `parity.json` 137 个 done 项；L0/L1/L2 门禁在冻结基线全绿。
 
 ## 一、总体结论
 
