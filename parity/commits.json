@@ -633,7 +633,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (deferred): Go TUI has no agents overview dashboard."
+                "go test ./tui/agents_overview ./app ./cli -run \"Agents|Overview|Dashboard\" -count=1",
+                "Interactive agents-overview dashboard implemented: tui/agents_overview mirrors Rust agents_overview_view.rs (status/project grouping with per-group counts, search ctrl+f, new-task dispatch with project cwd, rename ctrl+r, stop ctrl+x, details pane >=90 cols, exit-on-cancel, refresh preserves selection, width-aware plain-text rendering). `codex agents` opens the full-screen dashboard on interactive terminals (contract agents-overview-dashboard; full tree go test ./... 0 FAIL)."
             ]
         },
         {
@@ -707,7 +708,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (deferred): Go TUI has no agents overview dashboard."
+                "go test ./tui/agents_overview ./app ./cli -run \"Agents|Overview|Dashboard\" -count=1",
+                "Interactive agents-overview dashboard implemented: tui/agents_overview mirrors Rust agents_overview_view.rs (status/project grouping with per-group counts, search ctrl+f, new-task dispatch with project cwd, rename ctrl+r, stop ctrl+x, details pane >=90 cols, exit-on-cancel, refresh preserves selection, width-aware plain-text rendering). `codex agents` opens the full-screen dashboard on interactive terminals (contract agents-overview-dashboard; full tree go test ./... 0 FAIL)."
             ]
         },
         {

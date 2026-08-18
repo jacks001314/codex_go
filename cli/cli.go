@@ -383,6 +383,8 @@ type AgentsOptions struct {
 	RemoteAuthEnv   string
 	StrictConfig    bool
 	ConfigOverrides []string
+	Cwd             string
+	NoAltScreen     bool
 }
 
 type DebugOptions struct {
@@ -2661,6 +2663,17 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 			agents.ConfigOverrides = append(agents.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			agents.ConfigOverrides = append(agents.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+		case arg == "-C" || arg == "--cd":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			agents.Cwd = value
+			i = next
+		case strings.HasPrefix(arg, "--cd="):
+			agents.Cwd = strings.TrimPrefix(arg, "--cd=")
+		case arg == "--no-alt-screen":
+			agents.NoAltScreen = true
 		default:
 			// Rust #39114: invocation-specific session overrides cannot apply
 			// to shared sessions, so positional args and other options are

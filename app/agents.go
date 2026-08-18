@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -16,14 +17,19 @@ import (
 
 // runAgentsCommand mirrors Rust #39114 `codex agents`: open the shared agents
 // overview against a local background app server or a server supplied with
-// --remote, without creating a new session. The Go interim renders the active
-// session list as a text overview; the interactive agents-overview dashboard
-// (#39094/#39112) is a pending UI increment.
+// --remote, without creating a new session. On an interactive terminal the
+// full-screen agents-overview dashboard (#39094/#39112) is opened; otherwise
+// the active session list is rendered as a text overview.
 func runAgentsCommand(ctx context.Context, opts *cli.AgentsOptions, root *cli.RootOptions, stdout io.Writer) error {
+	return runAgentsCommandWithIO(ctx, opts, root, os.Stdin, stdout)
+}
+
+func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *cli.RootOptions, stdin io.Reader, stdout io.Writer) error {
 	remoteRoot := &cli.RootOptions{}
 	if root != nil {
 		*remoteRoot = *root
 	}
+	cwdOverride := ""
 	if opts != nil {
 		if strings.TrimSpace(opts.Remote) != "" {
 			remoteRoot.Remote = opts.Remote
@@ -31,19 +37,45 @@ func runAgentsCommand(ctx context.Context, opts *cli.AgentsOptions, root *cli.Ro
 		if strings.TrimSpace(opts.RemoteAuthEnv) != "" {
 			remoteRoot.RemoteAuthEnv = opts.RemoteAuthEnv
 		}
+		cwdOverride = strings.TrimSpace(opts.Cwd)
 	}
 	if strings.TrimSpace(remoteRoot.Remote) != "" || strings.TrimSpace(remoteRoot.RemoteAuthEnv) != "" {
 		endpoint, err := resolveInteractiveRemoteEndpoint(remoteRoot)
 		if err != nil {
 			return err
 		}
+		if shouldRunInteractiveTUI(stdin, stdout) {
+			client, err := openRemoteSessionClient(ctx, endpoint)
+			if err != nil {
+				return err
+			}
+			source := newRemoteAgentsDashboardSource(client, cwdOverride)
+			defer source.Close()
+			result, err := runAgentsDashboard(ctx, source, opts, stdin, stdout)
+			if err != nil {
+				return err
+			}
+			return writeAgentsOpenedSession(ctx, result, endpoint, stdout)
+		}
 		return runRemoteAgentsOverview(ctx, endpoint, stdout)
+	}
+	if shouldRunInteractiveTUI(stdin, stdout) {
+		source, err := newAgentsDashboardSourceForLocal(ctx)
+		if err != nil {
+			return err
+		}
+		defer source.Close()
+		result, err := runAgentsDashboard(ctx, source, opts, stdin, stdout)
+		if err != nil {
+			return err
+		}
+		return writeAgentsOpenedSession(ctx, result, nil, stdout)
 	}
 	return runLocalAgentsOverview(stdout)
 }
 
 func runLocalAgentsOverview(stdout io.Writer) error {
-	return runLocalAgentsOverviewWithStore(newSessionStore(), stdout)
+	return runLocalAgentsOverviewWithStore(newAgentsDashboardStore(), stdout)
 }
 
 func runLocalAgentsOverviewWithStore(store *session.Store, stdout io.Writer) error {

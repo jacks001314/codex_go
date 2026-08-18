@@ -979,6 +979,23 @@
             "phase": "P2",
             "status": "complete",
             "verifier": "TestRemoteTrustStatusFromValuesLikeRust;TestEnsureRemoteProjectTrustNonInteractiveDeclinesLikeRust"
+        },
+        {
+            "id": "agents-overview-dashboard",
+            "kind": "shared-fixtures",
+            "rustPaths": [
+                "tui/src/app/agents_overview.rs",
+                "tui/src/app/agents_overview_view.rs",
+                "cli/src/main.rs"
+            ],
+            "goPaths": [
+                "tui/agents_overview",
+                "app/agents_dashboard.go",
+                "app/agents.go"
+            ],
+            "phase": "P2",
+            "status": "complete",
+            "verifier": "TestGroupForStatusLikeRust;TestActivateDispatchLikeRust;TestActivateOpenSelectedLikeRust;TestRenameFlowLikeRust;TestStopOnlyWhenActiveLikeRust;TestCancelExitSemantics;TestRenderLayout;TestRenderStatusGrouping;TestAgentsOverviewRowsFromThreadsLikeRust;TestAgentsOverviewRowsFromRecordsLikeRust;TestAgentsDashboardLoadsAndRenders;TestAgentsDashboardDispatchTask;TestAgentsDashboardOpenSelectedThread;TestAgentsDashboardExitOnEsc;TestAgentsDashboardStopSelected;TestAgentsDashboardRenameSelected"
         }
     ]
 }

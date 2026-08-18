@@ -1063,6 +1063,13 @@
             "id": "exec-server-trace-context",
             "reason": "Exec-server requests carry a TraceContext (traceId/spanId) from receipt through completion: inbound JSON-RPC requests decode/generate traceContext and propagate it through request handling via context; OTLP spans and queue-duration histogram remain structural N/A (Rust fd34ad7297, #39098).",
             "area": "execserver"
+        },
+        {
+            "status": "done",
+            "test": "go test ./tui/agents_overview ./app -run \"AgentsOverview|AgentsDashboard|GroupForStatus|ActivateDispatch|ActivateOpen|RenameFlow|StopOnlyWhenActive|CancelExitSemantics|RenderLayout|RenderStatusGrouping|AgentsRows\" -count=1",
+            "id": "agents-overview-interactive-dashboard",
+            "reason": "Interactive agents-overview dashboard implemented (#39094/#39112, deferred in sync20): new tui/agents_overview package mirrors Rust agents_overview_view.rs (status/project grouping, search, new-task dispatch, rename, stop, details pane, exit-on-cancel, refresh-preserving selection, width-aware rendering); codex agents opens the full-screen dashboard on an interactive terminal against the shared app server (--remote or the Unix daemon started automatically per #39114) with the session-store fallback elsewhere; dispatch uses thread/start+turn/start, stop uses turn/interrupt, rename uses thread/setName; --cd and --no-alt-screen accepted; non-interactive output keeps the text overview. Verified by 16+ token-free core tests and 8+ app model tests; full tree go test ./... 0 FAIL.",
+            "area": "tui"
         }
     ]
 }

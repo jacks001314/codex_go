@@ -178,7 +178,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandQueue:
 		return runSessionQueue(&parsed.Queue, &parsed.Root, stdout)
 	case cli.CommandAgents:
-		return runAgentsCommand(ctx, &parsed.Agents, &parsed.Root, stdout)
+		return runAgentsCommandWithIO(ctx, &parsed.Agents, &parsed.Root, stdin, stdout)
 	case cli.CommandUpdate:
 		return runUpdate(ctx, &parsed.Update, stdout, stderr)
 	default:

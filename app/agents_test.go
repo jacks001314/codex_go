@@ -1,6 +1,8 @@
 package app
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -22,6 +24,53 @@ func TestParseAgentsCommandLikeRust(t *testing.T) {
 		t.Fatalf("Parse(agents --remote) error = %v", err)
 	}
 	if parsed.Agents.Remote != "ws://127.0.0.1:1234" || parsed.Agents.RemoteAuthEnv != "TOKEN" {
+		t.Fatalf("Agents options = %#v", parsed.Agents)
+	}
+}
+
+func TestRunAgentsCommandWithIOFallsBackToTextOverviewOffTerminal(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	if err := store.Create(&session.Record{
+		ID:        "33333333-3333-3333-3333-333333333333",
+		SessionID: "s-3",
+		Title:     "overview",
+		Metadata:  session.Metadata{HistoryMode: "legacy", Source: "cli"},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	previous := newAgentsDashboardStore
+	newAgentsDashboardStore = func() *session.Store { return store }
+	defer func() { newAgentsDashboardStore = previous }()
+	var stdout bytes.Buffer
+	var stdin bytes.Buffer
+	if err := runAgentsCommandWithIO(context.Background(), &cli.AgentsOptions{}, nil, &stdin, &stdout); err != nil {
+		t.Fatalf("runAgentsCommandWithIO() error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"Active sessions:", "33333333-3333-3333-3333-333333333333", "overview"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("text overview missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestParseAgentsCommandAcceptsDashboardFlagsLikeRust(t *testing.T) {
+	parsed, err := cli.Parse([]string{"agents", "--cd", "/workspace", "--no-alt-screen"})
+	if err != nil {
+		t.Fatalf("Parse(agents --cd --no-alt-screen) error = %v", err)
+	}
+	if parsed.Command != cli.CommandAgents {
+		t.Fatalf("Command = %q, want agents", parsed.Command)
+	}
+	if parsed.Agents.Cwd != "/workspace" || !parsed.Agents.NoAltScreen {
+		t.Fatalf("Agents options = %#v", parsed.Agents)
+	}
+
+	parsed, err = cli.Parse([]string{"agents", "-C", "/other", "--remote", "ws://127.0.0.1:1234"})
+	if err != nil {
+		t.Fatalf("Parse(agents -C --remote) error = %v", err)
+	}
+	if parsed.Agents.Cwd != "/other" || parsed.Agents.Remote != "ws://127.0.0.1:1234" {
 		t.Fatalf("Agents options = %#v", parsed.Agents)
 	}
 }

@@ -18,7 +18,8 @@
    - 会话解析：UUID 或精确名称、歧义拒绝（SessionNameMatch::Unique）；
    - 本地 app-server 路由（探测 daemon，拒绝嵌入式+daemon 并存）与 --remote 路由；
    - 服务器不支持 thread/queue/add 时给出明确升级提示。
-3. **#39114 `codex agents` 命令骨架**（cli + app） ✅ 已完成（文本概览；交互式仪表盘待后续）
+3. **#39114 `codex agents` 命令骨架**（cli + app） ✅ 已完成（文本概览；交互式仪表盘见
+   [plan_2026_08_18_agents_dashboard.md](./plan_2026_08_18_agents_dashboard.md)，#39094/#39112 已闭环）
    - CLI 解析（--remote、拒绝会话级覆盖）；
    - 本地后台 app-server 启动 / --remote 连接 + 活动会话文本概览；
    - 交互式 agents 仪表盘（#39094/#39112）作为后续批次的 UI 增量。
