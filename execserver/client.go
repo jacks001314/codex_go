@@ -1344,7 +1344,7 @@ func (c *Client) call(ctx context.Context, method string, params any, target any
 	if err != nil {
 		return err
 	}
-	request := map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}
+	request := clientRequestEnvelope(id, method, params, traceContextFromContext(ctx))
 	data, err := json.Marshal(request)
 	if err != nil {
 		c.cancelCall(id)
@@ -1378,6 +1378,17 @@ func (c *Client) call(ctx context.Context, method string, params any, target any
 		return nil
 	}
 	return json.Unmarshal(response.Result, target)
+}
+
+// clientRequestEnvelope builds the JSON-RPC envelope for an outbound
+// exec-server request, carrying the active trace context so the server can
+// continue the client's trace (Rust #39098 trace-parent propagation).
+func clientRequestEnvelope(id int64, method string, params any, trace TraceContext) map[string]any {
+	envelope := map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}
+	if !trace.IsZero() {
+		envelope["traceContext"] = trace
+	}
+	return envelope
 }
 
 func (c *Client) notify(ctx context.Context, method string, params any) error {

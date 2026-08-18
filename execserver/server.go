@@ -155,9 +155,10 @@ type notification struct {
 }
 
 type response struct {
-	ID     RequestID `json:"id"`
-	Result any       `json:"result,omitempty"`
-	Error  *rpcError `json:"error,omitempty"`
+	ID           RequestID     `json:"id"`
+	Result       any           `json:"result,omitempty"`
+	Error        *rpcError     `json:"error,omitempty"`
+	TraceContext *TraceContext `json:"traceContext,omitempty"`
 }
 
 type rpcError struct {
@@ -1143,7 +1144,7 @@ func (s *Server) handleLineWithLabel(ctx context.Context, line []byte, connectio
 		if err != nil {
 			return errorResponseForRequest(req.ID, err), true
 		}
-		return response{ID: req.ID, Result: result}, true
+		return response{ID: req.ID, Result: result, TraceContext: &trace}, true
 	}
 	var note notification
 	if err := json.Unmarshal(line, &note); err != nil {
@@ -1217,8 +1218,10 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		}
 		return InitializeResponse{SessionID: entry.id}, nil
 	case MethodEnvironmentInfo:
+		logEnvironmentTrace(ctx, MethodEnvironmentInfo)
 		return localEnvironmentInfo(), nil
 	case MethodEnvironmentStatus:
+		logEnvironmentTrace(ctx, MethodEnvironmentStatus)
 		return EnvironmentStatus{Status: EnvironmentStatusReady}, nil
 	case MethodCapabilityRootsDiscover:
 		var params CapabilityRootsDiscoverParams

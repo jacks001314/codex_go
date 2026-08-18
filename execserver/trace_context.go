@@ -2,6 +2,7 @@ package execserver
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -60,4 +61,15 @@ func traceContextFromContext(ctx context.Context) TraceContext {
 	}
 	trace, _ := ctx.Value(traceContextKey{}).(TraceContext)
 	return trace
+}
+
+// logEnvironmentTrace exposes the active request trace on environment
+// resolution RPCs (Rust #39078: environment resolution retains tracing
+// context); the same trace is carried back on the RPC response.
+func logEnvironmentTrace(ctx context.Context, method string) {
+	trace := traceContextFromContext(ctx)
+	if trace.IsZero() {
+		return
+	}
+	slog.Debug("exec-server environment request", "method", method, "trace_id", trace.TraceID, "span_id", trace.SpanID)
 }

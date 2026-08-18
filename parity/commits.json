@@ -506,7 +506,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (structural): Go has no OTLP span tree for environment resolution; the exec-server trace-context carrier (#39098) now provides the propagation chain that a future Go span pipeline would reuse for environment-resolution spans."
+                "go test ./execserver -run 'TraceContext|Envelope|ResponseEncodes' -count=1",
+                "Implemented the #39078 semantic carrier: environment resolution RPCs (environment/info, environment/status) log the active trace context and their responses carry the same traceContext, so callers can correlate environment resolution with the request trace. Rust's OTLP span tree (environments.resolve/wait_until_ready spans) remains structural N/A without a Go span pipeline (documented)."
             ]
         },
         {
@@ -644,8 +645,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "go test ./execserver -run 'TraceContext' -count=1; go test ./execserver -count=1",
-                "Implemented #39098 trace-context carrier: execserver/trace_context.go TraceContext{TraceID,SpanID} with New/Parse/ChildSpan/String; inbound JSON-RPC requests carry traceContext, get a generated trace when absent, and propagate through handleRequest via context. Rust OTLP spans and the exec_server_request_queue_duration_seconds histogram remain structural N/A (documented)."
+                "go test ./execserver -run 'TraceContext|Envelope|ResponseEncodes' -count=1; go test ./execserver -count=1",
+                "Implemented #39098 trace-context carrier end to end: TraceContext{TraceID,SpanID} with New/Parse/ChildSpan; inbound requests decode/generate traceContext and propagate via context; outbound client requests carry the active trace (clientRequestEnvelope); server responses echo traceContext back; OTLP spans and the queue-duration histogram remain structural N/A (documented)."
             ]
         },
         {

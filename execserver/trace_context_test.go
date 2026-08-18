@@ -53,3 +53,35 @@ func TestRequestDecodesTraceContext(t *testing.T) {
 		t.Fatalf("bare request trace context = %#v, want nil", bare.TraceContext)
 	}
 }
+
+func TestClientRequestEnvelopeCarriesTraceLikeRust(t *testing.T) {
+	withTrace := clientRequestEnvelope(7, MethodEnvironmentInfo, map[string]any{"cwd": "/repo"}, TraceContext{TraceID: "trace-1", SpanID: "span-1"})
+	trace, ok := withTrace["traceContext"].(TraceContext)
+	if !ok || trace.TraceID != "trace-1" || trace.SpanID != "span-1" {
+		t.Fatalf("envelope traceContext = %#v", withTrace["traceContext"])
+	}
+	if withTrace["method"] != MethodEnvironmentInfo || withTrace["id"] != int64(7) {
+		t.Fatalf("envelope = %#v", withTrace)
+	}
+	withoutTrace := clientRequestEnvelope(8, MethodEnvironmentInfo, nil, TraceContext{})
+	if _, present := withoutTrace["traceContext"]; present {
+		t.Fatalf("zero trace leaked into envelope: %#v", withoutTrace)
+	}
+}
+
+func TestResponseEncodesTraceContext(t *testing.T) {
+	trace := TraceContext{TraceID: "trace-1", SpanID: "span-1"}
+	data, err := json.Marshal(response{ID: RequestID{}, Result: "ok", TraceContext: &trace})
+	if err != nil {
+		t.Fatalf("Marshal(response) error = %v", err)
+	}
+	var decoded struct {
+		TraceContext *TraceContext `json:"traceContext"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal(response) error = %v", err)
+	}
+	if decoded.TraceContext == nil || decoded.TraceContext.TraceID != "trace-1" {
+		t.Fatalf("decoded trace = %#v", decoded.TraceContext)
+	}
+}
