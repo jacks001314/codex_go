@@ -149,7 +149,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (deferred): Go has a durable queue store but no per-queue revision table or PRAGMA data_version polling; cross-process queue writes are not polled by loaded idle threads."
+                "go test ./appserver -run 'QueuedDispatch|ResumeLoadDispatches' -count=1; go test ./appserver -count=1",
+                "Implemented the load/resume half of #39034: maybeDispatchQueuedSubmissionIfIdle dispatches pending queued submissions when a thread is loaded/resumed and idle (guards: closing/active-turn/not-loaded), observing cross-process writes because Go's durable queue lives in the thread record and is re-read from the store each check. The Rust per-queue revision table + PRAGMA data_version polling remain structural N/A for Go's embedded-JSON queue architecture (documented)."
             ]
         },
         {
@@ -215,7 +216,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (deferred): Go recognizes cli_auth_credentials_store/chatgpt_base_url config but has no managed-requirement override/rejection for them."
+                "go test ./config -run 'TestManagedAuthBackend' -count=1; go test ./config -count=1",
+                "Implemented #39043: ConfigRequirements gains exact managed cli_auth_credentials_store (file/keyring/auto/ephemeral, validated) and chatgpt_base_url; LoadWithOptions applies applyManagedAuthBackendOverride so runtime/bootstrap auth uses the managed values; ConfigService.Requirements() exposes them; config write APIs reject changing either key when managed; cloud-managed requirement layers ignore the local-only auth requirements (applyCloudConfigBundle drops them)."
             ]
         },
         {
@@ -613,7 +615,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (deferred): Go has no `codex queue --thread --message` CLI command; queue submission via app-server thread/queue APIs exists without the CLI surface."
+                "go test ./cli -run 'ParseQueue' -count=1; go test ./app -run 'Queue' -count=1; go test ./cli ./app -count=1",
+                "Implemented #39092: `codex queue --thread --message` CLI command (rejects empty message/blank thread, positional args, and image attachments); resolves active sessions by UUID or exact name with ambiguous-name rejection; routes through the local in-process app-server router or an explicit --remote server; wraps thread/queue/add method-not-found with an update/restart hint."
             ]
         },
         {
@@ -724,7 +727,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (deferred): Go CLI has no `codex agents` dashboard command; the agents overview dashboard is not implemented."
+                "go test ./cli -run 'ParseAgents' -count=1; go test ./app -run 'Agents' -count=1; go test ./cli ./app -count=1",
+                "Implemented the #39114 CLI surface: `codex agents` parses --remote/--remote-auth-token-env/--config, rejects invocation-specific session overrides, and renders an active-session text overview from a local store or a remote app server. The interactive agents-overview dashboard (#39094/#39112) remains a pending UI increment (documented)."
             ]
         },
         {

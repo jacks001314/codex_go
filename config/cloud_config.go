@@ -266,6 +266,13 @@ func applyCloudConfigBundle(values map[string]any, requirements *ConfigRequireme
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
 	}
+	// Rust 0f21cb3413 (#39043): cli_auth_credentials_store and chatgpt_base_url
+	// are local-only authentication requirements and are ignored in
+	// cloud-managed requirement layers.
+	if managedRequirements != nil {
+		managedRequirements.CliAuthCredentialsStore = nil
+		managedRequirements.ChatgptBaseURL = nil
+	}
 
 	// Permission profiles in requirements are executable policy definitions,
 	// while the remaining fields constrain which config values may be selected.

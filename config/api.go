@@ -483,6 +483,17 @@ type ConfigRequirementsReadResponse struct {
 	Requirements *ConfigRequirements `json:"requirements"`
 }
 
+// AuthCredentialsStoreMode mirrors Rust codex_config::types::AuthCredentialsStoreMode
+// used by the managed cli_auth_credentials_store requirement (#39043).
+type AuthCredentialsStoreMode string
+
+const (
+	AuthCredentialsStoreFile      AuthCredentialsStoreMode = "file"
+	AuthCredentialsStoreKeyring   AuthCredentialsStoreMode = "keyring"
+	AuthCredentialsStoreAuto      AuthCredentialsStoreMode = "auto"
+	AuthCredentialsStoreEphemeral AuthCredentialsStoreMode = "ephemeral"
+)
+
 var supportedExperimentalFeatureEnablement = []string{
 	"auth_elicitation",
 	"memories",
@@ -513,6 +524,8 @@ type ConfigRequirements struct {
 	Models                               *ModelsRequirements             `json:"models,omitempty"`
 	AllowedLoginMethods                  []ForcedLoginMethod             `json:"allowedLoginMethods,omitempty"`
 	AllowedChatGPTWorkspaces             []string                        `json:"allowedChatGPTWorkspaces,omitempty"`
+	CliAuthCredentialsStore              *AuthCredentialsStoreMode       `json:"cliAuthCredentialsStore,omitempty"`
+	ChatgptBaseURL                       *string                         `json:"chatgptBaseUrl,omitempty"`
 	MCPServers                           map[string]MCPServerRequirement `json:"-"`
 	Plugins                              map[string]PluginRequirements   `json:"-"`
 }
@@ -539,6 +552,8 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		Models                               *ModelsRequirements       `json:"models"`
 		AllowedLoginMethods                  []ForcedLoginMethod       `json:"allowedLoginMethods"`
 		AllowedChatGPTWorkspaces             []string                  `json:"allowedChatGPTWorkspaces"`
+		CliAuthCredentialsStore              *AuthCredentialsStoreMode `json:"cliAuthCredentialsStore"`
+		ChatgptBaseURL                       *string                   `json:"chatgptBaseUrl"`
 	}{
 		AllowedApprovalPolicies:              permissionPoliciesOrNil(r.AllowedApprovalPolicies),
 		AllowedApprovalsReviewers:            approvalsReviewersOrNil(r.AllowedApprovalsReviewers),
@@ -560,6 +575,8 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		Models:                               cloneModels(r.Models),
 		AllowedLoginMethods:                  forcedLoginMethodsOrNil(r.AllowedLoginMethods),
 		AllowedChatGPTWorkspaces:             stringSliceOrNil(r.AllowedChatGPTWorkspaces),
+		CliAuthCredentialsStore:              cloneAuthCredentialsStoreMode(r.CliAuthCredentialsStore),
+		ChatgptBaseURL:                       cloneStringPtr(r.ChatgptBaseURL),
 	})
 }
 
@@ -1810,6 +1827,9 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 		return nil, configWriteErrorf(ConfigWriteVersionConflict, "Configuration was modified since last read. Fetch latest version and retry.")
 	}
 	for i := range params.Edits {
+		if err := s.rejectManagedAuthWrite(params.Edits[i].KeyPath); err != nil {
+			return nil, err
+		}
 		if err := validateWritableKeyPath(params.Edits[i].KeyPath, params.Edits[i].Value); err != nil {
 			return nil, err
 		}
@@ -1831,6 +1851,31 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 		response.OverriddenMetadata = overridden
 	}
 	return response, nil
+}
+
+// rejectManagedAuthWrite mirrors Rust config_processor write rejection for
+// exact managed requirements (#39043): cli_auth_credentials_store and
+// chatgpt_base_url become read-only through config write APIs when a managed
+// requirement pins them.
+func (s *ConfigService) rejectManagedAuthWrite(keyPath string) error {
+	if s == nil || s.requirements == nil {
+		return nil
+	}
+	parts := splitKeyPath(keyPath)
+	if len(parts) != 1 {
+		return nil
+	}
+	switch parts[0] {
+	case "cli_auth_credentials_store":
+		if s.requirements.CliAuthCredentialsStore != nil {
+			return configWriteErrorf(ConfigWriteValidation, "cli_auth_credentials_store is managed by requirements and cannot be written")
+		}
+	case "chatgpt_base_url":
+		if s.requirements.ChatgptBaseURL != nil {
+			return configWriteErrorf(ConfigWriteValidation, "chatgpt_base_url is managed by requirements and cannot be written")
+		}
+	}
+	return nil
 }
 
 func pathsMatchAfterNormalization(expected string, provided string) bool {
@@ -2910,6 +2955,8 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.Models = cloneModels(requirements.Models)
 	clone.MCPServers = cloneMCPServerRequirements(requirements.MCPServers)
 	clone.Plugins = clonePluginRequirements(requirements.Plugins)
+	clone.CliAuthCredentialsStore = cloneAuthCredentialsStoreMode(requirements.CliAuthCredentialsStore)
+	clone.ChatgptBaseURL = cloneStringPtr(requirements.ChatgptBaseURL)
 	return &clone
 }
 
@@ -3204,6 +3251,14 @@ func cloneUint64Ptr(value *uint64) *uint64 {
 }
 
 func cloneStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneAuthCredentialsStoreMode(value *AuthCredentialsStoreMode) *AuthCredentialsStoreMode {
 	if value == nil {
 		return nil
 	}

@@ -21,6 +21,8 @@ import (
 	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/state"
+
+	"github.com/google/uuid"
 )
 
 const sessionPickerPageSize = 20
@@ -1296,4 +1298,202 @@ type sessionPickerEntry struct {
 	ModelProvider string           `json:"modelProvider,omitempty"`
 	Source        string           `json:"source,omitempty"`
 	ThreadSource  string           `json:"threadSource,omitempty"`
+}
+
+// runSessionQueue mirrors Rust cli/src/queue_cmd.rs run_queue_command + tui
+// session_queue_commands.rs (#39092): submit a text message through the
+// thread/queue/add app-server API for an existing session, resolving the
+// session by UUID or exact name (rejecting ambiguous names) and routing to a
+// local or explicit remote app server.
+func runSessionQueue(opts *cli.QueueOptions, root *cli.RootOptions, stdout io.Writer) error {
+	if opts == nil {
+		return errors.New("queue options are required")
+	}
+	if len(opts.Shared.Images) > 0 || (root != nil && len(root.Shared.Images) > 0) {
+		return errors.New("`codex queue` does not support image attachments")
+	}
+	message := strings.TrimSpace(opts.Message)
+	if message == "" {
+		return errors.New("`codex queue` requires --message <TEXT>")
+	}
+	sessionOpts := &cli.SessionOptions{
+		Target:          strings.TrimSpace(opts.Thread),
+		Remote:          opts.Remote,
+		RemoteAuthEnv:   opts.RemoteAuthEnv,
+		Shared:          opts.Shared,
+		StrictConfig:    opts.StrictConfig,
+		ConfigOverrides: append([]string(nil), opts.ConfigOverrides...),
+	}
+	if err := loadSessionRuntimeConfig(sessionOpts, root); err != nil {
+		return err
+	}
+	endpoint, err := resolveSessionRemoteEndpoint(sessionOpts, root)
+	if err != nil {
+		return err
+	}
+	if endpoint != nil {
+		return runRemoteSessionQueue(context.Background(), endpoint, sessionOpts, message, stdout)
+	}
+	return runLocalSessionQueue(sessionOpts, message, stdout)
+}
+
+func runLocalSessionQueue(opts *cli.SessionOptions, message string, stdout io.Writer) error {
+	store := newSessionStore()
+	threadID, err := resolveQueueSessionTarget(store, opts)
+	if err != nil {
+		return err
+	}
+	result, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadQueueAdd, appserver.ThreadQueueAddParams{
+		ThreadID:            string(threadID),
+		Input:               []any{map[string]any{"type": "text", "text": message}},
+		ClientUserMessageID: uuid.NewString(),
+	})
+	if closeRuntime != nil {
+		defer closeRuntime()
+	}
+	if err != nil {
+		return queueUnsupportedServerError(err, false)
+	}
+	response, ok := result.(*appserver.ThreadQueueAddResponse)
+	if !ok || response == nil || response.QueuedSubmission == nil {
+		return errors.New("queue submission response missing")
+	}
+	fmt.Fprintf(stdout, "Queued message %s for thread %s.\n", response.QueuedSubmission.ID, threadID)
+	return nil
+}
+
+func runRemoteSessionQueue(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, opts *cli.SessionOptions, message string, stdout io.Writer) error {
+	client, err := openRemoteSessionClient(ctx, endpoint)
+	if err != nil {
+		return err
+	}
+	defer client.close()
+	threadID := ""
+	target := strings.TrimSpace(opts.Target)
+	if isUUIDLike(target) {
+		threadID = target
+	} else {
+		resolved, err := lookupRemoteSessionUniqueByName(ctx, client, target, opts)
+		if err != nil {
+			return err
+		}
+		threadID = resolved.threadID
+	}
+	var response appserver.ThreadQueueAddResponse
+	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadQueueAdd, appserver.ThreadQueueAddParams{
+		ThreadID:            threadID,
+		Input:               []any{map[string]any{"type": "text", "text": message}},
+		ClientUserMessageID: uuid.NewString(),
+	}, &response); err != nil {
+		return queueUnsupportedServerError(err, true)
+	}
+	if response.QueuedSubmission == nil {
+		return errors.New("queue submission response missing")
+	}
+	fmt.Fprintf(stdout, "Queued message %s for thread %s.\n", response.QueuedSubmission.ID, threadID)
+	return nil
+}
+
+// resolveQueueSessionTarget resolves the queue target as a UUID or as an exact
+// active session name, rejecting ambiguous names (Rust SessionNameMatch::Unique).
+func resolveQueueSessionTarget(store *session.Store, opts *cli.SessionOptions) (session.ThreadID, error) {
+	if opts == nil || strings.TrimSpace(opts.Target) == "" {
+		return "", errors.New("SESSION is required")
+	}
+	target := strings.TrimSpace(opts.Target)
+	if isUUIDLike(target) {
+		return session.ThreadID(target), nil
+	}
+	return sessionIDByUniqueActiveName(store, target)
+}
+
+func sessionIDByUniqueActiveName(store *session.Store, name string) (session.ThreadID, error) {
+	if store == nil {
+		return "", errors.New("session store is nil")
+	}
+	records, err := listSessionsByArchived(store, false)
+	if err != nil {
+		return "", err
+	}
+	var matches []session.ThreadID
+	for i := range records {
+		recordName := strings.TrimSpace(records[i].Title)
+		if recordName == "" {
+			recordName = strings.TrimSpace(string(records[i].ID))
+		}
+		if recordName == name {
+			matches = append(matches, records[i].ID)
+		}
+	}
+	if len(matches) == 0 {
+		// SQLite names may exist without a rollout record in the scan.
+		if id, found := sessionIDBySQLiteName(store, name, sessionArchivedFilter(false)); found {
+			return id, nil
+		}
+		return "", fmt.Errorf("No active session found matching '%s'.", name)
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("Multiple active sessions match '%s'; use the session UUID.", name)
+	}
+	return matches[0], nil
+}
+
+// lookupRemoteSessionUniqueByName scans remote active sessions for an exact
+// name match and rejects ambiguous names (Rust #39092).
+func lookupRemoteSessionUniqueByName(ctx context.Context, client *remoteAppServerTUIClient, name string, opts *cli.SessionOptions) (remoteResolvedSessionTarget, error) {
+	// Queue messages can target interactive, exec, and custom sessions, so the
+	// lookup does not restrict source kinds.
+	searchOpts := &cli.SessionOptions{}
+	if opts != nil {
+		*searchOpts = *opts
+	}
+	searchOpts.IncludeNonInteractive = true
+	var matches []remoteResolvedSessionTarget
+	cursor := (*string)(nil)
+	for {
+		params := remoteThreadListParams(searchOpts, false, 100)
+		params.Cursor = cursor
+		params.SearchTerm = &name
+		var response appserver.ThreadListResponse
+		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response); err != nil {
+			return remoteResolvedSessionTarget{}, fmt.Errorf("failed to list sessions while resolving session name: %w", err)
+		}
+		for i := range response.Data {
+			if remoteThreadDisplayName(&response.Data[i]) == name {
+				target, err := remoteSessionTargetFromThread(&response.Data[i])
+				if err == nil {
+					matches = append(matches, target)
+				}
+			}
+		}
+		if response.NextCursor == nil || strings.TrimSpace(*response.NextCursor) == "" {
+			break
+		}
+		cursor = response.NextCursor
+	}
+	switch len(matches) {
+	case 0:
+		return remoteResolvedSessionTarget{}, fmt.Errorf("No active session found matching '%s'.", name)
+	case 1:
+		return matches[0], nil
+	default:
+		return remoteResolvedSessionTarget{}, fmt.Errorf("Multiple active sessions match '%s'; use the session UUID.", name)
+	}
+}
+
+// queueUnsupportedServerError wraps thread/queue/add method-not-found failures
+// with a server upgrade hint (Rust #39092).
+func queueUnsupportedServerError(err error, remote bool) error {
+	if err == nil {
+		return nil
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "method not found") || strings.Contains(message, "-32601") {
+		server := "local app-server daemon"
+		if remote {
+			server = "remote app server"
+		}
+		return fmt.Errorf("the %s does not support thread/queue/add; update or restart the %s: %w", server, server, err)
+	}
+	return err
 }

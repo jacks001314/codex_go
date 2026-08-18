@@ -68,6 +68,42 @@ func TestRustSubcommandSurfaceParity(t *testing.T) {
 	}
 }
 
+func TestParseQueueCommandLikeRust(t *testing.T) {
+	parsed, err := Parse([]string{"queue", "--thread", "thread-1", "--message", "hello"})
+	if err != nil {
+		t.Fatalf("Parse(queue) error = %v", err)
+	}
+	if parsed.Command != CommandQueue {
+		t.Fatalf("Command = %q, want %q", parsed.Command, CommandQueue)
+	}
+	if parsed.Queue.Thread != "thread-1" || parsed.Queue.Message != "hello" {
+		t.Fatalf("Queue = %#v", parsed.Queue)
+	}
+
+	parsed, err = Parse([]string{"queue", "--thread=thread-1", "--message=hello", "--remote", "ws://127.0.0.1:1234", "--remote-auth-token-env", "TOKEN"})
+	if err != nil {
+		t.Fatalf("Parse(queue with remote) error = %v", err)
+	}
+	if parsed.Queue.Remote != "ws://127.0.0.1:1234" || parsed.Queue.RemoteAuthEnv != "TOKEN" {
+		t.Fatalf("Queue remote = %#v", parsed.Queue)
+	}
+}
+
+func TestParseQueueCommandRejectsInvalidLikeRust(t *testing.T) {
+	for _, args := range [][]string{
+		{"queue", "--message", "hello"},                             // missing --thread
+		{"queue", "--thread", "thread-1"},                           // missing --message
+		{"queue", "--thread", "", "--message", "hi"},                // empty --thread
+		{"queue", "--thread", "t", "--message", "  "},               // blank --message
+		{"queue", "--thread", "t", "--message", "hi", "positional"}, // positional arg
+		{"queue", "--thread", "t", "--message", "hi", "--bogus"},    // unknown option
+	} {
+		if _, err := Parse(args); err == nil {
+			t.Fatalf("Parse(%v) succeeded, want error", args)
+		}
+	}
+}
+
 func TestRustSubcommandAliasParity(t *testing.T) {
 	// Rust visible_alias/alias attributes in codex-rs/cli/src/main.rs:
 	// exec -> e, apply -> a, cloud -> cloud-tasks.

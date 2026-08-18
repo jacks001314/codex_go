@@ -857,6 +857,76 @@
             "phase": "P2",
             "status": "complete",
             "verifier": "TestTurnStartRejectsOversizedEnvironmentCWDLikeRust"
+        },
+        {
+            "id": "managed-auth-backend-requirements",
+            "kind": "shared-fixtures",
+            "rustPaths": [
+                "config/src/config_requirements.rs",
+                "app-server/src/request_processors/config_processor.rs",
+                "core/src/config/auth_keyring.rs"
+            ],
+            "goPaths": [
+                "config/api.go",
+                "config/requirements_file.go",
+                "config/config.go",
+                "config/cloud_config.go",
+                "config/managed_auth_backend_test.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestManagedAuthBackendRequirementsOverrideUserConfigLikeRust;TestManagedAuthBackendWriteRejectedLikeRust;TestManagedAuthBackendIgnoredInCloudRequirementsLikeRust"
+        },
+        {
+            "id": "queue-cli-command",
+            "kind": "source-surface",
+            "rustPaths": [
+                "cli/src/queue_cmd.rs",
+                "tui/src/session_queue_commands.rs",
+                "tui/src/named_session_lookup.rs"
+            ],
+            "goPaths": [
+                "cli/cli.go",
+                "cli/cli_test.go",
+                "app/session.go",
+                "app/queue_test.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestParseQueueCommandLikeRust;TestRunSessionQueueRejectsImagesLikeRust;TestQueueUnsupportedServerErrorWrapsMethodNotFoundLikeRust"
+        },
+        {
+            "id": "agents-dashboard-command",
+            "kind": "source-surface",
+            "rustPaths": [
+                "cli/src/main.rs",
+                "tui/src/app/agents_overview.rs"
+            ],
+            "goPaths": [
+                "cli/cli.go",
+                "cli/cli_test.go",
+                "app/agents.go",
+                "app/agents_test.go"
+            ],
+            "phase": "P2",
+            "status": "complete",
+            "verifier": "TestParseAgentsCommandLikeRust;TestRunLocalAgentsOverviewWithStoreLikeRust"
+        },
+        {
+            "id": "queued-submission-load-dispatch",
+            "kind": "shared-fixtures",
+            "rustPaths": [
+                "ext/queue/src/service.rs",
+                "state/src/runtime/queued_items.rs"
+            ],
+            "goPaths": [
+                "appserver/runtime_router.go",
+                "appserver/queued_dispatch_test.go",
+                "session/store.go"
+            ],
+            "phase": "P2",
+            "status": "complete",
+            "verifier": "TestRuntimeRouterResumeLoadDispatchesPendingQueuedSubmissionLikeRust;TestRuntimeRouterQueuedDispatchSkipsBusyOrMissingThreadsLikeRust"
         }
     ]
 }

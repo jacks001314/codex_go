@@ -279,7 +279,24 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		}
 	}
 	applyManagedApprovalsReviewerGuardianV2Override(values, requirements)
+	applyManagedAuthBackendOverride(values, requirements)
 	return &Config{Values: values, Requirements: requirements}, nil
+}
+
+// applyManagedAuthBackendOverride mirrors Rust 0f21cb3413 (#39043): exact
+// managed cli_auth_credentials_store / chatgpt_base_url requirements override
+// user-configured values in the effective configuration, so runtime and
+// bootstrap authentication use the managed backend settings.
+func applyManagedAuthBackendOverride(values map[string]any, requirements *ConfigRequirements) {
+	if values == nil || requirements == nil {
+		return
+	}
+	if requirements.CliAuthCredentialsStore != nil {
+		values["cli_auth_credentials_store"] = string(*requirements.CliAuthCredentialsStore)
+	}
+	if requirements.ChatgptBaseURL != nil {
+		values["chatgpt_base_url"] = *requirements.ChatgptBaseURL
+	}
 }
 
 // applyManagedApprovalsReviewerGuardianV2Override mirrors Rust

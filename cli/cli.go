@@ -363,6 +363,28 @@ type SessionOptions struct {
 	Prompt                string
 }
 
+// QueueOptions mirrors Rust cli/src/queue_cmd.rs QueueCommand (#39092):
+// submit a text message through thread/queue/add for an existing session.
+type QueueOptions struct {
+	Thread          string
+	Message         string
+	Remote          string
+	RemoteAuthEnv   string
+	Shared          SharedOptions
+	StrictConfig    bool
+	ConfigOverrides []string
+}
+
+// AgentsOptions mirrors Rust cli/src/main.rs codex agents dashboard command
+// (#39114): open the shared agents overview against a local or remote
+// app server without creating a new session.
+type AgentsOptions struct {
+	Remote          string
+	RemoteAuthEnv   string
+	StrictConfig    bool
+	ConfigOverrides []string
+}
+
 type DebugOptions struct {
 	Subcommand       string
 	AppServerAction  string
@@ -407,6 +429,8 @@ type Parsed struct {
 	Apply             ApplyOptions
 	RemoteControl     RemoteControlOptions
 	Session           SessionOptions
+	Queue             QueueOptions
+	Agents            AgentsOptions
 	Debug             DebugOptions
 	RawSubcommand     []string
 }
@@ -522,6 +546,10 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 		return p, parseSessionMutation(args, &p.Session, string(CommandUnarchive), false)
 	case CommandDelete:
 		return p, parseSessionMutation(args, &p.Session, string(CommandDelete), true)
+	case CommandQueue:
+		return p, parseQueue(args, &p.Queue)
+	case CommandAgents:
+		return p, parseAgents(args, &p.Agents)
 	case CommandDebug:
 		return p, parseDebug(args, &p.Debug)
 	default:
@@ -566,7 +594,7 @@ func validateTUISharedOptions(shared SharedOptions) error {
 func (p *Parsed) unsupportedStrictConfigSubcommandName() string {
 	switch p.Command {
 	case CommandInteractive, CommandExec, CommandReview, CommandMCPServer, CommandExecServer,
-		CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandDoctor:
+		CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandDoctor, CommandQueue:
 		return ""
 	case CommandAppServer:
 		if len(p.AppServer.Subcommand) == 0 {
@@ -585,7 +613,7 @@ func (p *Parsed) unsupportedStrictConfigSubcommandName() string {
 
 func (p *Parsed) remoteUnsupportedSubcommandName() string {
 	switch p.Command {
-	case CommandInteractive, CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork:
+	case CommandInteractive, CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandQueue, CommandAgents:
 		return ""
 	case CommandAppServer:
 		if len(p.AppServer.Subcommand) == 0 {
@@ -2521,6 +2549,127 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 		}
 	default:
 		return fmt.Errorf("unknown app-server daemon subcommand %s", daemon.Action)
+	}
+	return nil
+}
+
+func parseQueue(args []string, queue *QueueOptions) error {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if handled, err := parseSharedOption(args, &i, &queue.Shared); err != nil {
+			return err
+		} else if handled {
+			continue
+		}
+		switch {
+		case arg == "--thread":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			queue.Thread = value
+			i = next
+		case strings.HasPrefix(arg, "--thread="):
+			queue.Thread = strings.TrimPrefix(arg, "--thread=")
+		case arg == "--message":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			queue.Message = value
+			i = next
+		case strings.HasPrefix(arg, "--message="):
+			queue.Message = strings.TrimPrefix(arg, "--message=")
+		case arg == "--remote":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			queue.Remote = value
+			i = next
+		case strings.HasPrefix(arg, "--remote="):
+			queue.Remote = strings.TrimPrefix(arg, "--remote=")
+		case arg == "--remote-auth-token-env":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			queue.RemoteAuthEnv = value
+			i = next
+		case strings.HasPrefix(arg, "--remote-auth-token-env="):
+			queue.RemoteAuthEnv = strings.TrimPrefix(arg, "--remote-auth-token-env=")
+		case arg == "--strict-config":
+			queue.StrictConfig = true
+		case arg == "-c" || arg == "--config":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			queue.ConfigOverrides = append(queue.ConfigOverrides, value)
+			i = next
+		case strings.HasPrefix(arg, "--config="):
+			queue.ConfigOverrides = append(queue.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+		case strings.HasPrefix(arg, "-c") && arg != "-C":
+			queue.ConfigOverrides = append(queue.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+		case strings.HasPrefix(arg, "-"):
+			return fmt.Errorf("unknown queue option %s", arg)
+		default:
+			return fmt.Errorf("`codex queue` does not accept positional arguments")
+		}
+	}
+	if strings.TrimSpace(queue.Thread) == "" {
+		return errors.New("`codex queue` requires --thread <THREAD>")
+	}
+	if strings.TrimSpace(queue.Message) == "" {
+		return errors.New("`codex queue` requires --message <TEXT>")
+	}
+	return nil
+}
+
+func parseAgents(args []string, agents *AgentsOptions) error {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--remote":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			agents.Remote = value
+			i = next
+		case strings.HasPrefix(arg, "--remote="):
+			agents.Remote = strings.TrimPrefix(arg, "--remote=")
+		case arg == "--remote-auth-token-env":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			agents.RemoteAuthEnv = value
+			i = next
+		case strings.HasPrefix(arg, "--remote-auth-token-env="):
+			agents.RemoteAuthEnv = strings.TrimPrefix(arg, "--remote-auth-token-env=")
+		case arg == "--strict-config":
+			agents.StrictConfig = true
+		case arg == "-c" || arg == "--config":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			agents.ConfigOverrides = append(agents.ConfigOverrides, value)
+			i = next
+		case strings.HasPrefix(arg, "--config="):
+			agents.ConfigOverrides = append(agents.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+		case strings.HasPrefix(arg, "-c") && arg != "-C":
+			agents.ConfigOverrides = append(agents.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+		default:
+			// Rust #39114: invocation-specific session overrides cannot apply
+			// to shared sessions, so positional args and other options are
+			// rejected.
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown agents option %s", arg)
+			}
+			return fmt.Errorf("`codex agents` does not accept argument %s", arg)
+		}
 	}
 	return nil
 }

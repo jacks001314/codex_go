@@ -149,6 +149,22 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	if values, ok := stringListAnyKey(values, "allowed_chatgpt_workspaces", "allowedChatGPTWorkspaces"); ok {
 		out.AllowedChatGPTWorkspaces = append([]string(nil), values...)
 	}
+	// Rust 0f21cb3413 (#39043): exact managed authentication backend settings.
+	// These are local-only requirements and are dropped from cloud layers in
+	// applyCloudConfigBundle.
+	if value, ok := stringAnyKey(values, "cli_auth_credentials_store", "cliAuthCredentialsStore"); ok {
+		mode := AuthCredentialsStoreMode(strings.ToLower(strings.TrimSpace(value)))
+		switch mode {
+		case AuthCredentialsStoreFile, AuthCredentialsStoreKeyring, AuthCredentialsStoreAuto, AuthCredentialsStoreEphemeral:
+			out.CliAuthCredentialsStore = &mode
+		default:
+			return nil, fmt.Errorf("invalid cli_auth_credentials_store mode %q: expected file, keyring, auto, or ephemeral", value)
+		}
+	}
+	if value, ok := stringAnyKey(values, "chatgpt_base_url", "chatgptBaseUrl"); ok && strings.TrimSpace(value) != "" {
+		baseURL := strings.TrimSpace(value)
+		out.ChatgptBaseURL = &baseURL
+	}
 	if nested, ok := mapAnyKey(values, "browser_use", "browserUse"); ok {
 		out.BrowserUse = browserUseRequirementsFromMap(nested)
 	}
@@ -634,6 +650,8 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.Models == nil &&
 			value.AllowedLoginMethods == nil &&
 			value.AllowedChatGPTWorkspaces == nil &&
+			value.CliAuthCredentialsStore == nil &&
+			value.ChatgptBaseURL == nil &&
 			value.MCPServers == nil &&
 			value.Plugins == nil)
 }

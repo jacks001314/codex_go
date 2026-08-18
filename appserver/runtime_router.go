@@ -2085,6 +2085,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			r.notifyRestoredTokenUsage(result)
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
 				r.continueThreadGoalIfIdle(response.Thread.ID)
+				r.maybeDispatchQueuedSubmissionIfIdle(response.Thread.ID)
 			}
 			return result, nil
 		}
@@ -2681,6 +2682,33 @@ func (r *RuntimeRouter) maybeDispatchNextQueuedSubmission(threadID string) {
 	}
 	r.notify(NotificationThreadQueueChanged, &ThreadIDNotification{ThreadID: threadID})
 	_, _ = r.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Input: input}))
+}
+
+// maybeDispatchQueuedSubmissionIfIdle discovers pending queued work when a
+// thread is loaded or resumed and idle (Rust #39034: wake loaded idle threads
+// with pending external messages). The per-queue revision table and
+// PRAGMA data_version polling are structural N/A for Go, whose durable queue
+// lives in the thread record and is re-read from the store on every check, so
+// cross-process writes are observed on load/resume.
+func (r *RuntimeRouter) maybeDispatchQueuedSubmissionIfIdle(threadID string) {
+	if r == nil || r.threads == nil || r.threads.IsClosing() {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return
+	}
+	if r.threads.ActiveTurn(threadID) != nil {
+		return
+	}
+	if status := r.requireThreadStatus().LoadedStatusForThread(threadID); status.Type != IdleStatus().Type {
+		return
+	}
+	pending, _, err := r.services.ThreadRouter.store.ListQueueSubmissions(session.ThreadID(threadID), "", 1)
+	if err != nil || len(pending) == 0 {
+		return
+	}
+	r.maybeDispatchNextQueuedSubmission(threadID)
 }
 
 func (r *RuntimeRouter) handleExternalAgentConfigImportHistoryRecord(request *Request) (*config.ExternalAgentConfigImportHistoryRecordResponse, error) {

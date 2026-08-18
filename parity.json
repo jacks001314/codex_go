@@ -13,7 +13,7 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-08-18T12:00:00+08:00",
+    "generatedAt": "2026-08-18T13:00:00+08:00",
     "items": [
         {
             "status": "done",
@@ -1014,6 +1014,34 @@
             "id": "turn-environment-cwd-size-bound",
             "reason": "TurnStartParams.Validate rejects turn environment working directories larger than 8 KiB with 'turn environment working directory exceeds the maximum size', mirroring Rust ThreadManager::MAX_TURN_ENVIRONMENT_CWD_BYTES (Rust d0fd4e830a, #39040); PathUri trigger-cwd rendering is N/A for the Go native-string architecture.",
             "area": "turn"
+        },
+        {
+            "status": "done",
+            "test": "go test ./config -run 'TestManagedAuthBackend' -count=1",
+            "id": "managed-auth-backend-requirements",
+            "reason": "cli_auth_credentials_store and chatgpt_base_url become exact managed requirements: parsed from requirements.toml with mode validation, overriding user config in the effective runtime/bootstrap auth config, exposed via configRequirements/read, write-protected through config write APIs, and ignored in cloud-managed requirement layers (Rust 0f21cb3413, #39043).",
+            "area": "config"
+        },
+        {
+            "status": "done",
+            "test": "go test ./cli ./app -run 'Queue' -count=1",
+            "id": "queue-cli-command",
+            "reason": "`codex queue --thread --message` submits a text message through thread/queue/add: UUID/exact-name session resolution with ambiguous-name rejection, image/empty-message rejection, local in-process router or explicit --remote routing, and method-not-found upgrade hints (Rust 83d015375e, #39092).",
+            "area": "cli"
+        },
+        {
+            "status": "done",
+            "test": "go test ./cli ./app -run 'Agents' -count=1",
+            "id": "agents-dashboard-command",
+            "reason": "`codex agents` opens the shared agents overview surface against a local store or --remote server with an active-session text overview and rejects invocation-specific session overrides; the interactive dashboard TUI (#39094/#39112) remains a pending UI increment (Rust fd5018e044, #39114).",
+            "area": "cli"
+        },
+        {
+            "status": "done",
+            "test": "go test ./appserver -run 'QueuedDispatch|ResumeLoadDispatches' -count=1",
+            "id": "queued-submission-load-dispatch",
+            "reason": "Loaded/resumed idle threads dispatch pending queued submissions (cross-process writes are observed by re-reading the thread record); the Rust per-queue revision table + PRAGMA data_version polling stay structural N/A for the Go embedded-JSON queue (Rust eeb82a156d, #39034).",
+            "area": "appserver"
         }
     ]
 }
