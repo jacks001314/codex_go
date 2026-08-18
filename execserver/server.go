@@ -143,9 +143,10 @@ func (id *RequestID) IsZero() bool {
 }
 
 type request struct {
-	ID     RequestID       `json:"id"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params,omitempty"`
+	ID           RequestID       `json:"id"`
+	Method       string          `json:"method"`
+	Params       json.RawMessage `json:"params,omitempty"`
+	TraceContext *TraceContext   `json:"traceContext,omitempty"`
 }
 
 type notification struct {
@@ -1130,7 +1131,15 @@ func (s *Server) handleLineWithLabel(ctx context.Context, line []byte, connectio
 		if req.Method == "" {
 			return malformedRPCResponse(connectionLabel, errors.New("JSON-RPC request is missing method")), true
 		}
-		result, err := s.handleRequest(ctx, &req)
+		trace := TraceContext{}
+		if req.TraceContext != nil {
+			trace = *req.TraceContext
+		}
+		if trace.IsZero() {
+			trace = NewTraceContext()
+		}
+		requestCtx := withTraceContext(ctx, trace)
+		result, err := s.handleRequest(requestCtx, &req)
 		if err != nil {
 			return errorResponseForRequest(req.ID, err), true
 		}

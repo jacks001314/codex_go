@@ -927,6 +927,58 @@
             "phase": "P2",
             "status": "complete",
             "verifier": "TestRuntimeRouterResumeLoadDispatchesPendingQueuedSubmissionLikeRust;TestRuntimeRouterQueuedDispatchSkipsBusyOrMissingThreadsLikeRust"
+        },
+        {
+            "id": "desktop-doctor-diagnostics",
+            "kind": "source-surface",
+            "rustPaths": [
+                "cli/src/doctor/desktop.rs",
+                "cli/src/doctor/desktop/platform.rs",
+                "cli/src/doctor/updates.rs"
+            ],
+            "goPaths": [
+                "doctor/desktop.go",
+                "doctor/desktop_windows.go",
+                "doctor/desktop_darwin.go",
+                "doctor/desktop_other.go",
+                "doctor/desktop_test.go"
+            ],
+            "phase": "P2",
+            "status": "complete",
+            "verifier": "TestDesktopChecksReportInstallationLikeRust;TestDesktopChecksReportNoInstallationLikeRust;TestDesktopChecksRegisteredInBuilder"
+        },
+        {
+            "id": "exec-server-trace-context",
+            "kind": "source-surface",
+            "rustPaths": [
+                "exec-server/src/trace_context.rs",
+                "exec-server/src/rpc.rs"
+            ],
+            "goPaths": [
+                "execserver/trace_context.go",
+                "execserver/trace_context_test.go",
+                "execserver/server.go"
+            ],
+            "phase": "P2",
+            "status": "complete",
+            "verifier": "TestTraceContextRoundTripAndPropagation;TestRequestDecodesTraceContext"
+        },
+        {
+            "id": "remote-tui-project-trust",
+            "kind": "shared-fixtures",
+            "rustPaths": [
+                "tui/src/onboarding/trust_directory.rs",
+                "tui/src/app/startup.rs"
+            ],
+            "goPaths": [
+                "app/remote_trust.go",
+                "app/remote_trust_test.go",
+                "app/remote_tui.go",
+                "config/config.go"
+            ],
+            "phase": "P2",
+            "status": "complete",
+            "verifier": "TestRemoteTrustStatusFromValuesLikeRust;TestEnsureRemoteProjectTrustNonInteractiveDeclinesLikeRust"
         }
     ]
 }

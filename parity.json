@@ -13,7 +13,7 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-08-18T13:00:00+08:00",
+    "generatedAt": "2026-08-18T15:00:00+08:00",
     "items": [
         {
             "status": "done",
@@ -1042,6 +1042,27 @@
             "id": "queued-submission-load-dispatch",
             "reason": "Loaded/resumed idle threads dispatch pending queued submissions (cross-process writes are observed by re-reading the thread record); the Rust per-queue revision table + PRAGMA data_version polling stay structural N/A for the Go embedded-JSON queue (Rust eeb82a156d, #39034).",
             "area": "appserver"
+        },
+        {
+            "status": "done",
+            "test": "go test ./app -run 'RemoteTrust' -count=1; go test ./config -run 'ProjectTrust' -count=1",
+            "id": "remote-tui-project-trust",
+            "reason": "Remote TUI startup now queries the remote app server's project config layers before starting a thread, reports trusted/untrusted/undecided (config.ProjectTrustLevelForTarget), prompts interactively on undecided, and persists accepted trust via remote config/batchWrite (Rust 34e4823a1d, #39082).",
+            "area": "tui"
+        },
+        {
+            "status": "done",
+            "test": "go test ./doctor -run 'Desktop' -count=1",
+            "id": "desktop-doctor-diagnostics",
+            "reason": "codex doctor gains desktop checks: desktop.app.version probes local OpenAI/ChatGPT/Codex installations (Windows registry / macOS Applications) reporting name/path/version; desktop.security and desktop.updates register with explicit N/A semantics for the OSS surface (Rust 80e925c28b/51a9edc083/d65d315939, #39060/#39067/#39074).",
+            "area": "doctor"
+        },
+        {
+            "status": "done",
+            "test": "go test ./execserver -run 'TraceContext' -count=1",
+            "id": "exec-server-trace-context",
+            "reason": "Exec-server requests carry a TraceContext (traceId/spanId) from receipt through completion: inbound JSON-RPC requests decode/generate traceContext and propagate it through request handling via context; OTLP spans and queue-duration histogram remain structural N/A (Rust fd34ad7297, #39098).",
+            "area": "execserver"
         }
     ]
 }

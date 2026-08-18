@@ -208,6 +208,7 @@ func (b *Builder) Build(opts *Options) *Report {
 		b.timed(func() *DoctorCheck { return backgroundServerCheck(codexHome) }),
 		b.timed(func() *DoctorCheck { return b.providerReachabilityCheck(codexHome, opts) }),
 	}
+	checks = append(checks, desktopChecks()...)
 	if runtime.GOOS == "windows" {
 		checks = append(checks, b.timed(func() *DoctorCheck { return windowsDevDriveCheck(cwd) }))
 	}

@@ -1,4 +1,4 @@
-﻿package config
+package config
 
 import (
 	"bytes"
@@ -1532,6 +1532,16 @@ func ProjectConfigEnabled(userValues map[string]any, cwd string) bool {
 		}
 	}
 	return strings.EqualFold(trustLevels[canonicalProjectPath(trustTarget)], "trusted")
+}
+
+// ProjectTrustLevelForTarget reports the explicit trust_level decision for a
+// project path using the same canonicalization as ProjectConfigEnabled
+// (Rust project trust levels, #39082). ok=false when no explicit decision
+// exists for the path.
+func ProjectTrustLevelForTarget(userValues map[string]any, path string) (string, bool) {
+	trustLevels := projectTrustLevels(userValues)
+	level, ok := trustLevels[canonicalProjectPath(path)]
+	return level, ok
 }
 
 func projectTrustLevels(values map[string]any) map[string]string {

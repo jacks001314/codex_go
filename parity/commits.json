@@ -355,7 +355,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (deferred): Go doctor has no desktop-app diagnostics module; desktop app surface is OSS-only."
+                "go test ./doctor -run 'Desktop' -count=1; go test ./doctor -count=1",
+                "Implemented #39060 desktop.app.version: doctor/desktop*.go probes local desktop application installations (Windows Uninstall registry, macOS /Applications), reporting name/path/version/platform; no installation reports an explicit OK 'no desktop application installation detected'. Registered in the doctor Build checks."
             ]
         },
         {
@@ -415,7 +416,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (deferred): Go doctor has no desktop security enforcement diagnostics module."
+                "go test ./doctor -run 'Desktop' -count=1",
+                "Implemented #39067 desktop.security as a registered doctor check: reports desktop security enforcement status with explicit N/A semantics for the OSS surface (codex_go has no ChatGPT desktop product layer; platform security is OS-provided). Platform probes are injectable for tests."
             ]
         },
         {
@@ -466,7 +468,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (deferred): Go doctor has no desktop update diagnostics module."
+                "go test ./doctor -run 'Desktop' -count=1",
+                "Implemented #39074 desktop.updates as a registered doctor check: reports desktop update-channel status with explicit N/A semantics for the OSS surface (no managed update channel). Platform probes are injectable for tests."
             ]
         },
         {
@@ -503,7 +506,7 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A: Go environment resolution does not propagate Rust trace-context spans."
+                "N/A (structural): Go has no OTLP span tree for environment resolution; the exec-server trace-context carrier (#39098) now provides the propagation chain that a future Go span pipeline would reuse for environment-resolution spans."
             ]
         },
         {
@@ -540,7 +543,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A (deferred): Go TUI trust flow is local-only; remote config-layer trust query and config/batchWrite persistence are not implemented."
+                "go test ./app -run 'RemoteTrust|TrustStatus' -count=1; go test ./app -count=1",
+                "Implemented #39082: app/remote_trust.go queries the remote app server's effective config (config/read) for project trust decisions (config.ProjectTrustLevelForTarget), reports trusted/untrusted/undecided, prompts interactively when undecided, and persists accepted trust through config/batchWrite (projects.<path>.trust_level). Wired into runInteractiveRemoteTUI startup before thread start; git-root resolution remains a documented pending increment."
             ]
         },
         {
@@ -640,7 +644,8 @@
             ],
             "status": "complete",
             "evidence": [
-                "N/A: Go execserver has no Rust trace-context propagation chain."
+                "go test ./execserver -run 'TraceContext' -count=1; go test ./execserver -count=1",
+                "Implemented #39098 trace-context carrier: execserver/trace_context.go TraceContext{TraceID,SpanID} with New/Parse/ChildSpan/String; inbound JSON-RPC requests carry traceContext, get a generated trace when absent, and propagate through handleRequest via context. Rust OTLP spans and the exec_server_request_queue_duration_seconds histogram remain structural N/A (documented)."
             ]
         },
         {

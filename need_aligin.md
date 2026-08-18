@@ -9,8 +9,8 @@
 >   `f97e77569352a2bf5be9955e623edad0a15d9b93`（#39017-#39122锛宻ync20 鏇存柊锛?/ 
 >   #38978/#38980/#38987/#38990，sync20 更新），当前无新漂移。
 > - Go：`D:\qax\reagent\dev\codex_go`，对齐到同一基线。
-> - 契约：`parity/contracts/manifest.json` 53 个契约 complete 且带 verifier；
->   `parity.json` 141 个 done 项；L0/L1/L2 门禁在冻结基线全绿。
+> - 契约：`parity/contracts/manifest.json` 64 个契约 complete 且带 verifier；
+>   `parity.json` 144 个 done 项；L0/L1/L2 门禁在冻结基线全绿。
 
 ## 一、总体结论
 

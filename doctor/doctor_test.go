@@ -82,6 +82,9 @@ func TestReportBuildsLocalChecks(t *testing.T) {
 		{"state.rollout_db_parity", "threads"},
 		{"app_server.status", "app-server"},
 		{"network.provider_reachability", "reachability"},
+		{"desktop.app.version", "desktop"},
+		{"desktop.security", "desktop"},
+		{"desktop.updates", "desktop"},
 		{"git.worktree.dev_drive", "git"},
 	}
 	if len(report.Checks) != len(wantChecks) {

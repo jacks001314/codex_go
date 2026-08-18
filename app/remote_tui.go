@@ -311,6 +311,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	accountDisplay, hasChatGPTAccount := interactiveRemoteStatusAccount(ctx, endpoint)
 	state.AccountDisplay = accountDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
+	// Rust #39082: query remote project config layers before starting a thread
+	// and persist accepted trust through config/batchWrite on the remote server.
+	interactiveRemoteTrustCheck(ctx, endpoint, root, shouldRunInteractiveTUI(stdin, stdout))
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
 	options := codextea.Options{
