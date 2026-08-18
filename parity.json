@@ -1077,6 +1077,13 @@
             "id": "agents-overview-in-session",
             "reason": "In-session /agents implemented (#39094 TUI half + #39112 interactions): /agents parses to CommandAgents and opens the full-screen dashboard in the tea Model driven by the shared tui/agents_overview core (nav/search/group/dispatch/rename/stop/details, esc closes, refresh coalesces with pending on thread events preserving selection). Remote TUI wires refresh/dispatch/stop/rename handlers over the shared app server (thread/loadedList+read, thread/start+turn/start, turn/interrupt, thread/setName); local embedded TUI shows the Rust \"Shared agents unavailable\" selection view with Unix-only Start background server (daemon lifecycle start). Opening a root session attaches through the existing switch-agent path (Rust select_agents_overview_thread). Verified by 11 token-free tea tests + app handler tests; full tree go test ./... 0 FAIL.",
             "area": "tui"
+        },
+        {
+            "status": "done",
+            "test": "go test ./tui/agents_overview ./tui ./tui/tea ./app ./cli -run \"AgentsOverview|AgentsEmbedded|AgentsDashboard|RenderStyled|StartAgentsDaemon\" -count=1",
+            "id": "agents-overview-draft-preservation-and-styling",
+            "reason": "Agents dashboard polish (documented follow-ups): (1) per-thread draft preservation on session switch - the tea Model captures the current thread composer draft on dashboard attach (agentsOverviewDrafts + agentsOverviewPendingDraft mirroring Rust input_states), restores the target thread saved draft (consumed, Rust remove) and clears the composer when none exists (Rust fresh chat widget), discarding pending drafts on failed switches; /agents stays composer-exclusive like Rust (pre-open drafts are consumed by the slash submit) and pending server requests remain covered by the existing per-thread backgroundThreadEvents buffer. (2) ANSI styling - tui/agents_overview now renders segment-based spans (style.go) with Render (plain) and RenderStyled (Rust ratatui-equivalent: bold headers/group names, dim summary/status/placeholder, red/green/cyan/dim status dots, cyan bold selection marker and prompt label, bold footer shortcuts); tea Model and the standalone codex agents dashboard both render styled. Verified by 4 core style tests + 3 tea draft tests; full tree go test ./... 0 FAIL.",
+            "area": "tui"
         }
     ]
 }

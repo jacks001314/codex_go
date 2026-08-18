@@ -60,5 +60,6 @@ Rust #39094/#39112 的交互式任务仪表盘：全屏列出根会话、按项�
   （tea Model 全屏仪表盘 + 嵌入会话 "Shared agents unavailable" 选择视图 +
   通知驱动刷新）。
 - ✅ 仪表盘 "打开"：复用 onSwitchAgent/applyAgentModalOption 挂接交互会话。
-- 待续：切换会话时保留上一线程的草稿输入与 pending 请求（Rust
-  select_agents_overview_thread 输入状态保留链路的完整版）；仪表盘 ANSI 样式打磨。
+- ✅ 切换会话草稿保留 + ANSI 样式：见
+  [plan_2026_08_18_agents_dashboard_in_session.md](./plan_2026_08_18_agents_dashboard_in_session.md)
+  （per-thread 草稿 capture/restore + RenderStyled Rust 同款样式）。

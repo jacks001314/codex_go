@@ -7,36 +7,39 @@ import (
 )
 
 // Render produces the plain-text dashboard lines for the given terminal
-// dimensions, mirroring Rust AgentsOverviewView::render. Lines are unstyled;
-// the terminal front-end may apply ANSI styling per line/segment.
+// dimensions, mirroring Rust AgentsOverviewView::render.
 func (v *View) Render(termWidth, termHeight int) []string {
+	return v.renderLines(termWidth, termHeight, false)
+}
+
+// RenderStyled is Render with the Rust ANSI styling applied (bold headers,
+// dim meta text, colored status dots, cyan markers/labels).
+func (v *View) RenderStyled(termWidth, termHeight int) []string {
+	return v.renderLines(termWidth, termHeight, true)
+}
+
+func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	if v == nil || termWidth < 12 || termHeight < 8 {
 		return nil
 	}
-	inset := func(x int, line string) string {
-		if x <= 0 {
-			return line
-		}
-		padding := x
-		lineWidth := displayWidth(line)
-		if padding+lineWidth > termWidth {
-			line = truncateToWidth(line, termWidth-padding)
-		}
-		return strings.Repeat(" ", padding) + line
+	inset := strings.Repeat(" ", 2)
+	maxWidth := termWidth - 2
+	if maxWidth < 0 {
+		maxWidth = 0
 	}
 
 	lines := make([]string, 0, termHeight)
 	// header
-	lines = append(lines, inset(2, "Agent command center"))
+	lines = append(lines, renderLine(inset, []span{{text: "Agent command center", style: spanBold}}, maxWidth, styled))
 	// summary
 	needsYou, working, ready := v.Counts()
-	lines = append(lines, inset(2, formatSummary(needsYou, working, ready)))
+	lines = append(lines, renderLine(inset, []span{{text: formatSummary(needsYou, working, ready), style: spanDim}}, maxWidth, styled))
 	// divider
 	dividerWidth := termWidth - 4
 	if dividerWidth < 0 {
 		dividerWidth = 0
 	}
-	lines = append(lines, inset(2, strings.Repeat("─", dividerWidth)))
+	lines = append(lines, renderLine(inset, []span{{text: strings.Repeat("─", dividerWidth), style: spanDim}}, maxWidth, styled))
 
 	bodyHeight := termHeight - 5 // header + summary + divider + prompt + footer
 	if bodyHeight < 3 {
@@ -52,26 +55,42 @@ func (v *View) Render(termWidth, termHeight int) []string {
 		if listWidth < 46 {
 			listWidth = 46
 		}
-		lines = append(lines, v.renderRows(bodyHeight, listWidth)...)
-		lines = append(lines, v.renderDetails(38, bodyHeight)...)
+		lines = append(lines, v.renderRows(bodyHeight, listWidth, styled)...)
+		lines = append(lines, v.renderDetails(38, bodyHeight, styled)...)
 	} else {
-		lines = append(lines, v.renderRows(bodyHeight, bodyWidth)...)
+		lines = append(lines, v.renderRows(bodyHeight, bodyWidth, styled)...)
 	}
 
 	// prompt
 	label, input, placeholder := v.Prompt()
-	prompt := label + input
+	prompt := []span{{text: label, style: spanCyanBold}, {text: input, style: spanPlain}}
 	if placeholder != "" {
-		available := bodyWidth - displayWidth(label) - 1
+		available := bodyWidth - runewidth.StringWidth(label) - 1
 		if available > 0 {
 			placeholder = truncateToWidth(placeholder, available)
 		}
-		prompt += placeholder
+		prompt = append(prompt, span{text: placeholder, style: spanDim})
 	}
-	lines = append(lines, inset(2, prompt))
+	lines = append(lines, renderLine(inset, prompt, maxWidth, styled))
 	// footer
-	lines = append(lines, inset(2, "↑↓ navigate  enter open  ctrl+f search  ctrl+s group  ctrl+r rename  ctrl+x stop  esc back"))
+	lines = append(lines, renderLine(inset, v.footerSpans(), maxWidth, styled))
 	return lines
+}
+
+func (v *View) footerSpans() []span {
+	stopStyle := spanDim
+	if row := v.SelectedRow(); row != nil && row.StatusActive {
+		stopStyle = spanBold
+	}
+	return []span{
+		{text: "↑↓", style: spanBold}, {text: " navigate  ", style: spanDim},
+		{text: "enter", style: spanBold}, {text: " open  ", style: spanDim},
+		{text: "ctrl+f", style: spanBold}, {text: " search  ", style: spanDim},
+		{text: "ctrl+s", style: spanBold}, {text: " group  ", style: spanDim},
+		{text: "ctrl+r", style: spanBold}, {text: " rename  ", style: spanDim},
+		{text: "ctrl+x", style: stopStyle}, {text: " stop  ", style: spanDim},
+		{text: "esc", style: spanBold}, {text: " back", style: spanDim},
+	}
 }
 
 func formatSummary(needsYou, working, ready int) string {
@@ -107,7 +126,7 @@ func itoa(value int) string {
 
 // renderRows renders the list body (group headers + rows), mirroring Rust
 // AgentsOverviewView::render_rows including scroll-to-selection behavior.
-func (v *View) renderRows(height, listWidth int) []string {
+func (v *View) renderRows(height, listWidth int, styled bool) []string {
 	visible := v.VisibleIndices()
 	if len(visible) == 0 {
 		return nil
@@ -171,76 +190,83 @@ func (v *View) renderRows(height, listWidth int) []string {
 					count++
 				}
 			}
-			lines = append(lines, group+"  "+itoa(count))
+			lines = append(lines, renderLine("", []span{
+				{text: group, style: spanBold},
+				{text: "  " + itoa(count), style: spanDim},
+			}, listWidth, styled))
 			previousGroup = &group
 		}
 		if len(lines) >= height {
 			break
 		}
-		lines = append(lines, v.renderRowLine(index, projectGrouping, listWidth))
+		lines = append(lines, renderLine("", v.renderRowSpans(index, projectGrouping), listWidth, styled))
 	}
 	return lines
 }
 
-func (v *View) renderRowLine(index int, projectGrouping bool, maxWidth int) string {
+func (v *View) renderRowSpans(index int, projectGrouping bool) []span {
 	row := &v.Rows[index]
-	marker := " "
+	marker := span{text: " ", style: spanPlain}
 	if v.Selected == index {
-		marker = "›"
+		marker = span{text: "›", style: spanCyanBold}
 	}
-	title := row.Title()
-	current := ""
+	spans := []span{
+		marker,
+		{text: " ", style: spanPlain},
+		{text: row.Group.Dot(), style: groupDotStyle(row.Group)},
+		{text: " ", style: spanPlain},
+		{text: row.Title(), style: spanPlain},
+	}
 	if row.IsCurrent {
-		current = "  current"
+		spans = append(spans, span{text: "  current", style: spanDim})
 	}
-	line := marker + " " + row.Group.Dot() + " " + title + current
 	if projectGrouping {
-		line += "  " + row.Group.Label()
+		spans = append(spans, span{text: "  " + row.Group.Label(), style: spanDim})
 	}
-	if displayWidth(line) > maxWidth {
-		line = truncateToWidth(line, maxWidth)
-	}
-	return line
+	return spans
 }
 
 // renderDetails renders the task details pane (wide terminals), mirroring
 // Rust AgentsOverviewView::render_details.
-func (v *View) renderDetails(width, height int) []string {
+func (v *View) renderDetails(width, height int, styled bool) []string {
 	row := v.SelectedRow()
 	if row == nil {
 		return nil
 	}
-	var lines []string
-	lines = append(lines, "Task details")
-	lines = append(lines, "")
-	lines = append(lines, row.Title())
-	lines = append(lines, row.Group.Dot()+" "+row.Group.Label())
-	lines = append(lines, "")
-	lines = append(lines, "Project")
-	lines = append(lines, row.CWD)
+	var lines [][]span
+	lines = append(lines, []span{{text: "Task details", style: spanBold}})
+	lines = append(lines, nil)
+	lines = append(lines, []span{{text: row.Title(), style: spanBold}})
+	lines = append(lines, []span{
+		{text: row.Group.Dot(), style: groupDotStyle(row.Group)},
+		{text: " ", style: spanPlain},
+		{text: row.Group.Label(), style: spanPlain},
+	})
+	lines = append(lines, nil)
+	lines = append(lines, []span{{text: "Project", style: spanDim}})
+	lines = append(lines, []span{{text: row.CWD, style: spanPlain}})
 	if strings.TrimSpace(row.GitBranch) != "" {
-		lines = append(lines, "")
-		lines = append(lines, "Branch")
-		lines = append(lines, strings.TrimSpace(row.GitBranch))
+		lines = append(lines, nil)
+		lines = append(lines, []span{{text: "Branch", style: spanDim}})
+		lines = append(lines, []span{{text: strings.TrimSpace(row.GitBranch), style: spanPlain}})
 	}
-	lines = append(lines, "")
-	lines = append(lines, "Latest activity")
+	lines = append(lines, nil)
+	lines = append(lines, []span{{text: "Latest activity", style: spanDim}})
 	preview := strings.TrimSpace(row.Preview)
 	if preview == "" {
 		preview = "No activity yet."
 	}
-	lines = append(lines, wordWrap(preview, width)...)
+	for _, wrapped := range wordWrap(preview, width) {
+		lines = append(lines, []span{{text: wrapped, style: spanPlain}})
+	}
 
 	out := make([]string, 0, height)
-	lines = append(lines, "")
-	for _, line := range lines {
+	lines = append(lines, nil)
+	for _, spans := range lines {
 		if len(out) >= height {
 			break
 		}
-		if displayWidth(line) > width {
-			line = truncateToWidth(line, width)
-		}
-		out = append(out, line)
+		out = append(out, renderLine("", spans, width, styled))
 	}
 	return out
 }

@@ -995,7 +995,7 @@
             ],
             "phase": "P2",
             "status": "complete",
-            "verifier": "TestGroupForStatusLikeRust;TestActivateDispatchLikeRust;TestActivateOpenSelectedLikeRust;TestRenameFlowLikeRust;TestStopOnlyWhenActiveLikeRust;TestCancelExitSemantics;TestRenderLayout;TestRenderStatusGrouping;TestAgentsOverviewRowsFromThreadsLikeRust;TestAgentsOverviewRowsFromRecordsLikeRust;TestAgentsDashboardLoadsAndRenders;TestAgentsDashboardDispatchTask;TestAgentsDashboardOpenSelectedThread;TestAgentsDashboardExitOnEsc;TestAgentsDashboardStopSelected;TestAgentsDashboardRenameSelected"
+            "verifier": "TestGroupForStatusLikeRust;TestActivateDispatchLikeRust;TestActivateOpenSelectedLikeRust;TestRenameFlowLikeRust;TestStopOnlyWhenActiveLikeRust;TestCancelExitSemantics;TestRenderLayout;TestRenderStatusGrouping;TestAgentsOverviewRowsFromThreadsLikeRust;TestAgentsOverviewRowsFromRecordsLikeRust;TestAgentsDashboardLoadsAndRenders;TestAgentsDashboardDispatchTask;TestAgentsDashboardOpenSelectedThread;TestAgentsDashboardExitOnEsc;TestAgentsDashboardStopSelected;TestAgentsDashboardRenameSelected;TestRenderStyledMatchesRenderWhenStripped;TestRenderStyledAppliesRustStyles;TestRenderStyledFooterStopHintDependsOnSelection;TestRenderStyledLineWidths"
         },
         {
             "id": "agents-overview-in-session",
@@ -1016,7 +1016,7 @@
             ],
             "phase": "P2",
             "status": "complete",
-            "verifier": "TestModelAgentsCommandOpensDashboardAndLoads;TestModelAgentsDashboardNavigationAndSearch;TestModelAgentsDashboardDispatchTask;TestModelAgentsDashboardStopSelected;TestModelAgentsDashboardRenameSelected;TestModelAgentsDashboardEscCloses;TestModelAgentsDashboardOpenAttachesViaSwitchAgent;TestModelAgentsDashboardOpenCurrentThreadIsNoop;TestModelAgentsEmbeddedShowsUnavailableSelection;TestModelAgentsDashboardRefreshesOnThreadEventsAndCoalesces;TestInteractiveStartAgentsDaemonPlatformGate"
+            "verifier": "TestModelAgentsCommandOpensDashboardAndLoads;TestModelAgentsDashboardNavigationAndSearch;TestModelAgentsDashboardDispatchTask;TestModelAgentsDashboardStopSelected;TestModelAgentsDashboardRenameSelected;TestModelAgentsDashboardEscCloses;TestModelAgentsDashboardOpenAttachesViaSwitchAgent;TestModelAgentsDashboardOpenCurrentThreadIsNoop;TestModelAgentsEmbeddedShowsUnavailableSelection;TestModelAgentsDashboardRefreshesOnThreadEventsAndCoalesces;TestInteractiveStartAgentsDaemonPlatformGate;TestModelAgentsDashboardPreservesDraftAcrossSwitch;TestModelAgentsDashboardAttachClearsComposerWithoutSavedDraft;TestModelAgentsDashboardSwitchFailureDiscardsPendingDraft"
         }
     ]
 }

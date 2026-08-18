@@ -558,7 +558,7 @@ func (m *agentsDashboardModel) View() string {
 	if m == nil || m.done {
 		return ""
 	}
-	lines := m.view.Render(m.width, m.height)
+	lines := m.view.RenderStyled(m.width, m.height)
 	if m.notice != "" {
 		lines = append(lines, "  "+m.notice)
 	}

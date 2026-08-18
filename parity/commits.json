@@ -635,7 +635,8 @@
             "evidence": [
                 "go test ./tui/agents_overview ./app ./cli -run \"Agents|Overview|Dashboard\" -count=1",
                 "Interactive agents-overview dashboard implemented: tui/agents_overview mirrors Rust agents_overview_view.rs (status/project grouping with per-group counts, search ctrl+f, new-task dispatch with project cwd, rename ctrl+r, stop ctrl+x, details pane >=90 cols, exit-on-cancel, refresh preserves selection, width-aware plain-text rendering). `codex agents` opens the full-screen dashboard on interactive terminals (contract agents-overview-dashboard; full tree go test ./... 0 FAIL).",
-                "In-session /agents added: tea Model full-screen dashboard (nav/search/group/dispatch/rename/stop, esc closes, notification-driven refresh coalesces with pending preserving selection), remote TUI handlers over the shared app server, embedded \"Shared agents unavailable\" selection with Unix Start-background-server, open attaches via the switch-agent path (contract agents-overview-in-session; full tree go test ./... 0 FAIL)."
+                "In-session /agents added: tea Model full-screen dashboard (nav/search/group/dispatch/rename/stop, esc closes, notification-driven refresh coalesces with pending preserving selection), remote TUI handlers over the shared app server, embedded \"Shared agents unavailable\" selection with Unix Start-background-server, open attaches via the switch-agent path (contract agents-overview-in-session; full tree go test ./... 0 FAIL).",
+                "Polish follow-up: per-thread composer draft capture/restore on dashboard attach (Rust input_states) and ANSI styling via segment-based Render/RenderStyled (contract agents-overview-dashboard + agents-overview-in-session verifiers extended; parity.json agents-overview-draft-preservation-and-styling; full tree go test ./... 0 FAIL)."
             ]
         },
         {
@@ -711,7 +712,8 @@
             "evidence": [
                 "go test ./tui/agents_overview ./app ./cli -run \"Agents|Overview|Dashboard\" -count=1",
                 "Interactive agents-overview dashboard implemented: tui/agents_overview mirrors Rust agents_overview_view.rs (status/project grouping with per-group counts, search ctrl+f, new-task dispatch with project cwd, rename ctrl+r, stop ctrl+x, details pane >=90 cols, exit-on-cancel, refresh preserves selection, width-aware plain-text rendering). `codex agents` opens the full-screen dashboard on interactive terminals (contract agents-overview-dashboard; full tree go test ./... 0 FAIL).",
-                "In-session /agents added: tea Model full-screen dashboard (nav/search/group/dispatch/rename/stop, esc closes, notification-driven refresh coalesces with pending preserving selection), remote TUI handlers over the shared app server, embedded \"Shared agents unavailable\" selection with Unix Start-background-server, open attaches via the switch-agent path (contract agents-overview-in-session; full tree go test ./... 0 FAIL)."
+                "In-session /agents added: tea Model full-screen dashboard (nav/search/group/dispatch/rename/stop, esc closes, notification-driven refresh coalesces with pending preserving selection), remote TUI handlers over the shared app server, embedded \"Shared agents unavailable\" selection with Unix Start-background-server, open attaches via the switch-agent path (contract agents-overview-in-session; full tree go test ./... 0 FAIL).",
+                "Polish follow-up: per-thread composer draft capture/restore on dashboard attach (Rust input_states) and ANSI styling via segment-based Render/RenderStyled (contract agents-overview-dashboard + agents-overview-in-session verifiers extended; parity.json agents-overview-draft-preservation-and-styling; full tree go test ./... 0 FAIL)."
             ]
         },
         {

@@ -55,6 +55,7 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	if m.agentsOverviewEmbedded {
 		return m.openAgentsUnavailableSelection()
 	}
+	m.agentsOverviewPendingDraft = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
 	m.agentsOverviewNotice = ""
 	m.agentsOverviewBusy = false
@@ -265,7 +266,9 @@ func (m *Model) renameAgentsOverviewCmd(name string) bubbletea.Cmd {
 
 // openAgentsOverviewThread closes the dashboard and attaches to the selected
 // root session through the same switch-agent path used by the subagent
-// picker (Rust select_agents_overview_thread).
+// picker (Rust select_agents_overview_thread). The current thread's composer
+// draft is preserved per-thread and the target thread's saved draft is
+// restored after the switch completes (Rust input_states / restore).
 func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 	if m == nil {
 		return nil
@@ -284,7 +287,68 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 		m.notice = "Already showing this session."
 		return nil
 	}
+	// Rust select_agents_overview_thread: preserve the current thread's
+	// composer draft so returning to it restores what was being composed. The
+	// composer is empty here (the /agents slash command consumed it), but the
+	// capture keeps the per-thread draft map consistent across chained
+	// switches and mirrors the Rust input_states lifecycle.
+	if current != "" && current != threadID {
+		m.captureAgentsOverviewDraft(current)
+	}
+	if saved, ok := m.agentsOverviewDrafts[threadID]; ok {
+		draft := saved
+		m.agentsOverviewPendingDraft = &draft
+		delete(m.agentsOverviewDrafts, threadID)
+	} else {
+		// Rust builds a fresh chat widget when attaching to a thread without
+		// a preserved input state, so the composer starts empty instead of
+		// carrying the previous thread's draft.
+		empty := ""
+		m.agentsOverviewPendingDraft = &empty
+	}
 	return m.applyAgentModalOption(threadID)
+}
+
+// captureAgentsOverviewDraft stores the composer draft for a thread so it can
+// be restored when the dashboard re-attaches to it (Rust input_states). The
+// textarea has no read API for the cursor column, so the draft is the
+// composer value (the cursor lands at the end on restore).
+func (m *Model) captureAgentsOverviewDraft(threadID string) {
+	if m == nil {
+		return
+	}
+	if threadID == "" {
+		return
+	}
+	if m.agentsOverviewDrafts == nil {
+		m.agentsOverviewDrafts = map[string]string{}
+	}
+	draft := m.composer.Value()
+	if strings.TrimSpace(draft) == "" {
+		delete(m.agentsOverviewDrafts, threadID)
+		return
+	}
+	m.agentsOverviewDrafts[threadID] = draft
+}
+
+// restorePendingAgentsOverviewDraft applies the saved draft for the thread
+// the dashboard just attached to (Rust restore_thread_input_state). It is
+// invoked from the switch-result path after a successful attach.
+func (m *Model) restorePendingAgentsOverviewDraft() {
+	if m == nil || m.agentsOverviewPendingDraft == nil {
+		return
+	}
+	draft := *m.agentsOverviewPendingDraft
+	m.agentsOverviewPendingDraft = nil
+	m.composer.SetValue(draft)
+}
+
+// discardPendingAgentsOverviewDraft drops a pending draft after a failed
+// switch so it is not restored onto the wrong thread later.
+func (m *Model) discardPendingAgentsOverviewDraft() {
+	if m != nil {
+		m.agentsOverviewPendingDraft = nil
+	}
 }
 
 func (m *Model) closeAgentsOverview() {
@@ -306,7 +370,7 @@ func (m *Model) renderAgentsOverview() string {
 	if m == nil || m.agentsOverview == nil {
 		return ""
 	}
-	lines := m.agentsOverview.Render(m.width, m.height)
+	lines := m.agentsOverview.RenderStyled(m.width, m.height)
 	if m.agentsOverviewNotice != "" {
 		lines = append(lines, "  "+m.agentsOverviewNotice)
 	}

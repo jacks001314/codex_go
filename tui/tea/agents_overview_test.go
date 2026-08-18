@@ -2,6 +2,7 @@ package tea
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -408,5 +409,132 @@ func TestModelAgentsDashboardRefreshesOnThreadEventsAndCoalesces(t *testing.T) {
 	model = updated.(*Model)
 	if refreshed != 2 {
 		t.Fatalf("refreshed = %d, want 2", refreshed)
+	}
+}
+
+func TestModelAgentsDashboardPreservesDraftAcrossSwitch(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("root-1")
+	model := NewModel(state, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(currentThreadID string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+		OnSwitchAgent: func(threadID string) (AgentThreadSwitchResponse, error) {
+			return AgentThreadSwitchResponse{
+				Entry:  codextui.AgentThreadEntry{ThreadID: threadID, AgentNickname: "agent"},
+				Status: "idle",
+			}, nil
+		},
+	})
+
+	// root-2 carries a preserved draft from a previous switch; attaching must
+	// restore it (Rust restore_thread_input_state).
+	model.agentsOverviewDrafts = map[string]string{"root-2": "saved B"}
+	openAgentsDashboard(t, model)
+	model.agentsOverview.Selected = 1
+	updated, command := model.Update(key(bubbletea.KeyEnter))
+	model = updated.(*Model)
+	message := command()
+	updated, _ = model.Update(message)
+	model = updated.(*Model)
+	if got := model.composer.Value(); got != "saved B" {
+		t.Fatalf("composer after attach to root-2 = %q, want restored %q", got, "saved B")
+	}
+	if model.agentsOverviewPendingDraft != nil {
+		t.Fatal("pending draft should be consumed after attach")
+	}
+	if _, exists := model.agentsOverviewDrafts["root-2"]; exists {
+		t.Fatal("restored draft must be consumed from the map (Rust remove)")
+	}
+
+	// captureAgentsOverviewDraft stores the composer value per thread (the
+	// /agents slash command is composer-exclusive like Rust, so the capture
+	// hook is exercised directly here; it runs on every dashboard attach).
+	model.composer.SetValue("draft C")
+	model.captureAgentsOverviewDraft("root-2")
+	if got := model.agentsOverviewDrafts["root-2"]; got != "draft C" {
+		t.Fatalf("captured draft for root-2 = %q, want %q", got, "draft C")
+	}
+	// Attaching to root-3 (no saved draft) clears the composer instead of
+	// carrying root-2's draft.
+	model.composer.SetValue("")
+	openAgentsDashboard(t, model)
+	model.agentsOverview.Selected = 2 // root-3
+	updated, command = model.Update(key(bubbletea.KeyEnter))
+	model = updated.(*Model)
+	message = command()
+	updated, _ = model.Update(message)
+	model = updated.(*Model)
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("composer after attach to root-3 = %q, want empty", got)
+	}
+}
+
+func TestModelAgentsDashboardAttachClearsComposerWithoutSavedDraft(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("root-1")
+	model := NewModel(state, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(currentThreadID string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+		OnSwitchAgent: func(threadID string) (AgentThreadSwitchResponse, error) {
+			return AgentThreadSwitchResponse{
+				Entry:  codextui.AgentThreadEntry{ThreadID: threadID, AgentNickname: "agent"},
+				Status: "idle",
+			}, nil
+		},
+	})
+	// A draft composed on root-1 is captured per-thread (Rust input_states);
+	// attaching to a thread without a saved draft must not carry it along.
+	model.composer.SetValue("stale draft from root-1")
+	model.captureAgentsOverviewDraft("root-1")
+	if got := model.agentsOverviewDrafts["root-1"]; got != "stale draft from root-1" {
+		t.Fatalf("captured draft for root-1 = %q", got)
+	}
+	model.composer.SetValue("")
+	openAgentsDashboard(t, model)
+	model.agentsOverview.Selected = 2 // root-3 has no saved draft
+	updated, command := model.Update(key(bubbletea.KeyEnter))
+	model = updated.(*Model)
+	message := command()
+	updated, _ = model.Update(message)
+	model = updated.(*Model)
+	if model == nil {
+		t.Fatal("model became nil after attach")
+	}
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("composer after attach to root-3 = %q, want empty (Rust fresh chat widget)", got)
+	}
+}
+
+func TestModelAgentsDashboardSwitchFailureDiscardsPendingDraft(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("root-1")
+	model := NewModel(state, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(currentThreadID string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+		OnSwitchAgent: func(threadID string) (AgentThreadSwitchResponse, error) {
+			return AgentThreadSwitchResponse{}, errors.New("boom")
+		},
+	})
+	openAgentsDashboard(t, model)
+	model.agentsOverview.Selected = 1
+	updated, command := model.Update(key(bubbletea.KeyEnter))
+	model = updated.(*Model)
+	message := command()
+	updated, _ = model.Update(message)
+	model = updated.(*Model)
+	if model.agentsOverviewPendingDraft != nil {
+		t.Fatal("failed switch must discard the pending draft")
+	}
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("composer after failed switch = %q, want empty", got)
 	}
 }

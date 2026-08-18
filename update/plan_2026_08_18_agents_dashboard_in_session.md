@@ -50,6 +50,16 @@ standalone `codex agents` 仪表盘（上一轮）之后，补齐 Rust #39094 �
 
 ## 待续（完整 Rust 端态）
 
-- 切换会话时保留上一线程的草稿输入与 pending server requests
-  （Rust select_agents_overview_thread 的 input_states/dispatched_requests 链）。
-- 仪表盘 ANSI 样式（当前为纯文本渲染，语义与 Rust 快照一致）。
+- ✅ **切换会话草稿保留**：tea Model 增加 per-thread 草稿映射
+  （`agentsOverviewDrafts` + `agentsOverviewPendingDraft`，镜像 Rust
+  input_states/restore）：attach 时保存当前线程 composer 草稿、恢复目标线程
+  已存草稿（消费），无存稿则清空 composer（Rust fresh chat widget），失败时丢弃
+  pending 草稿。结构性说明：/agents 为 slash 命令独占 composer（与 Rust 相同），
+  打开仪表盘前线程草稿在命令提交时清除；pending server requests 由既有
+  backgroundThreadEvents 按线程缓冲覆盖。
+- ✅ **ANSI 样式**：核心包段级渲染（span/SGR，`style.go`），`Render` 保持纯文本、
+  `RenderStyled` 输出 Rust 同款样式（bold 标题/组头、dim 摘要/状态标签/占位符、
+  状态点红/绿/青/灰、cyan bold 选中标记与 prompt 标签、footer 快捷键 bold）；
+  tea Model 与 standalone dashboard 均切换为 RenderStyled。
+- 待续：普通 /agent 切换路径（非仪表盘）的 per-thread 草稿管理（需 hook
+  thread_event_store 式 per-thread input_state 记录，属会话生命周期改造）。

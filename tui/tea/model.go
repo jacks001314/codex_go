@@ -754,20 +754,22 @@ type Model struct {
 	// Overlay stack (new architecture)
 	overlays *overlay.Overlay
 
-	transcript             viewport.Model
-	composer               textarea.Model
-	activityFollow         bool
-	overlay                *chatwidget.TranscriptOverlay
-	slashPopup             slashCommandPopup
-	agentsOverview         *agentsoverview.View
-	agentsOverviewNotice   string
-	agentsOverviewBusy     bool
-	agentsOverviewRefresh  int
-	agentsOverviewPending  bool
-	agentsOverviewInflight bool
-	transcriptCache        transcriptRenderCache
-	lastTranscriptContent  string
-	lastTranscriptHeight   int
+	transcript                 viewport.Model
+	composer                   textarea.Model
+	activityFollow             bool
+	overlay                    *chatwidget.TranscriptOverlay
+	slashPopup                 slashCommandPopup
+	agentsOverview             *agentsoverview.View
+	agentsOverviewNotice       string
+	agentsOverviewBusy         bool
+	agentsOverviewRefresh      int
+	agentsOverviewPending      bool
+	agentsOverviewInflight     bool
+	agentsOverviewDrafts       map[string]string
+	agentsOverviewPendingDraft *string
+	transcriptCache            transcriptRenderCache
+	lastTranscriptContent      string
+	lastTranscriptHeight       int
 
 	width                  int
 	height                 int
@@ -1145,6 +1147,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onAgentsOverviewStop:            options.OnAgentsOverviewStop,
 		onAgentsOverviewRename:          options.OnAgentsOverviewRename,
 		onStartAgentsDaemon:             options.OnStartAgentsDaemon,
+		agentsOverviewDrafts:            map[string]string{},
 		onExternalEditor:                options.OnExternalEditor,
 		externalEditorDirectory:         options.OnExternalEditorDirectory,
 		keymapConfig:                    options.KeymapConfig.Clone(),

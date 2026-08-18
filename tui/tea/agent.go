@@ -228,6 +228,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		return
 	}
 	if message.Err != nil {
+		m.discardPendingAgentsOverviewDraft()
 		if message.closedSide != nil {
 			side := message.closedSide
 			m.activeSide = nil
@@ -283,6 +284,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 	m.upsertAgentEntry(entry)
 	m.setActiveAgentLabel(entry)
 	m.notice = entry.DisplayLabel()
+	m.restorePendingAgentsOverviewDraft()
 	m.refreshTranscript()
 }
 
