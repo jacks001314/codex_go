@@ -55,8 +55,10 @@ Rust #39094/#39112 的交互式任务仪表盘：全屏列出根会话、按项�
 
 ## 下一增量
 
-- in-session `/agents`（tea Model 内嵌仪表盘视图 + 嵌入会话 "Shared agents
-  unavailable" 选择视图，Rust #39094 embedded 分支）。
-- 仪表盘 "打开" 直接挂接交互会话（select_agents_overview_thread 的 attach/输入状态
-  保留链路）。
-- 远程仪表盘：ThreadLoadedList 通知驱动的自动刷新（线程事件到达时保留选中）。
+- ✅ in-session `/agents`：见
+  [plan_2026_08_18_agents_dashboard_in_session.md](./plan_2026_08_18_agents_dashboard_in_session.md)
+  （tea Model 全屏仪表盘 + 嵌入会话 "Shared agents unavailable" 选择视图 +
+  通知驱动刷新）。
+- ✅ 仪表盘 "打开"：复用 onSwitchAgent/applyAgentModalOption 挂接交互会话。
+- 待续：切换会话时保留上一线程的草稿输入与 pending 请求（Rust
+  select_agents_overview_thread 输入状态保留链路的完整版）；仪表盘 ANSI 样式打磨。

@@ -996,6 +996,27 @@
             "phase": "P2",
             "status": "complete",
             "verifier": "TestGroupForStatusLikeRust;TestActivateDispatchLikeRust;TestActivateOpenSelectedLikeRust;TestRenameFlowLikeRust;TestStopOnlyWhenActiveLikeRust;TestCancelExitSemantics;TestRenderLayout;TestRenderStatusGrouping;TestAgentsOverviewRowsFromThreadsLikeRust;TestAgentsOverviewRowsFromRecordsLikeRust;TestAgentsDashboardLoadsAndRenders;TestAgentsDashboardDispatchTask;TestAgentsDashboardOpenSelectedThread;TestAgentsDashboardExitOnEsc;TestAgentsDashboardStopSelected;TestAgentsDashboardRenameSelected"
+        },
+        {
+            "id": "agents-overview-in-session",
+            "kind": "shared-fixtures",
+            "rustPaths": [
+                "tui/src/app/agents_overview.rs",
+                "tui/src/app/agents_overview_view.rs",
+                "tui/src/app/event_dispatch.rs",
+                "tui/src/slash_command.rs"
+            ],
+            "goPaths": [
+                "tui/tea/agents_overview.go",
+                "tui/tea/model.go",
+                "tui/state.go",
+                "app/agents_overview_tui.go",
+                "app/remote_tui.go",
+                "app/interactive.go"
+            ],
+            "phase": "P2",
+            "status": "complete",
+            "verifier": "TestModelAgentsCommandOpensDashboardAndLoads;TestModelAgentsDashboardNavigationAndSearch;TestModelAgentsDashboardDispatchTask;TestModelAgentsDashboardStopSelected;TestModelAgentsDashboardRenameSelected;TestModelAgentsDashboardEscCloses;TestModelAgentsDashboardOpenAttachesViaSwitchAgent;TestModelAgentsDashboardOpenCurrentThreadIsNoop;TestModelAgentsEmbeddedShowsUnavailableSelection;TestModelAgentsDashboardRefreshesOnThreadEventsAndCoalesces;TestInteractiveStartAgentsDaemonPlatformGate"
         }
     ]
 }

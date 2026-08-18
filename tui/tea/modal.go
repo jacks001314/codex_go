@@ -34,6 +34,7 @@ const (
 	ModalKindHooksBrowser    ModalKind = "hooks_browser"
 	ModalKindPluginsBrowser  ModalKind = "plugins_browser"
 	ModalKindAgent           ModalKind = "agent"
+	ModalKindAgents          ModalKind = "agents"
 	ModalKindTheme           ModalKind = "theme"
 	ModalKindPets            ModalKind = "pets"
 	ModalKindMemories        ModalKind = "memories"
@@ -685,6 +686,14 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			return nil
 		}
 		return m.applyAgentModalOption(response.OptionID)
+	}
+	if modal.kind == ModalKindAgents {
+		m.modal = nil
+		if cancelled {
+			m.notice = ""
+			return nil
+		}
+		return m.applyAgentsModalOption(response.OptionID)
 	}
 	if modal.kind == ModalKindTheme {
 		m.modal = nil

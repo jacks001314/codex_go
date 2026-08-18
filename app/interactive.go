@@ -810,6 +810,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnGoalContinuation:        interactiveLocalGoalContinuationCommand(ctx, root, runner, state, approvalBroker, elicitationBroker, userInputBroker, interrupts),
 		OnReadAgents:              readAgents,
 		OnSwitchAgent:             switchAgent,
+		AgentsOverviewEmbedded:    true,
+		OnStartAgentsDaemon:       interactiveStartAgentsDaemon,
 		OnDetectExternalAgent:     interactiveExternalAgentDetectHandler(root),
 		OnImportExternalAgent:     interactiveExternalAgentImportHandler(root),
 		OnReadHooks:               interactiveHooksReader(root),

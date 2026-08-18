@@ -1070,6 +1070,13 @@
             "id": "agents-overview-interactive-dashboard",
             "reason": "Interactive agents-overview dashboard implemented (#39094/#39112, deferred in sync20): new tui/agents_overview package mirrors Rust agents_overview_view.rs (status/project grouping, search, new-task dispatch, rename, stop, details pane, exit-on-cancel, refresh-preserving selection, width-aware rendering); codex agents opens the full-screen dashboard on an interactive terminal against the shared app server (--remote or the Unix daemon started automatically per #39114) with the session-store fallback elsewhere; dispatch uses thread/start+turn/start, stop uses turn/interrupt, rename uses thread/setName; --cd and --no-alt-screen accepted; non-interactive output keeps the text overview. Verified by 16+ token-free core tests and 8+ app model tests; full tree go test ./... 0 FAIL.",
             "area": "tui"
+        },
+        {
+            "status": "done",
+            "test": "go test ./tui ./tui/tea ./app ./cli -run \"AgentsOverview|AgentsEmbedded|AgentsDashboard|ParseCommand|StartAgentsDaemon\" -count=1",
+            "id": "agents-overview-in-session",
+            "reason": "In-session /agents implemented (#39094 TUI half + #39112 interactions): /agents parses to CommandAgents and opens the full-screen dashboard in the tea Model driven by the shared tui/agents_overview core (nav/search/group/dispatch/rename/stop/details, esc closes, refresh coalesces with pending on thread events preserving selection). Remote TUI wires refresh/dispatch/stop/rename handlers over the shared app server (thread/loadedList+read, thread/start+turn/start, turn/interrupt, thread/setName); local embedded TUI shows the Rust \"Shared agents unavailable\" selection view with Unix-only Start background server (daemon lifecycle start). Opening a root session attaches through the existing switch-agent path (Rust select_agents_overview_thread). Verified by 11 token-free tea tests + app handler tests; full tree go test ./... 0 FAIL.",
+            "area": "tui"
         }
     ]
 }

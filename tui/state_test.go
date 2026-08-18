@@ -149,6 +149,7 @@ func TestParseCommand(t *testing.T) {
 		{input: "/plan investigate", command: CommandPlan, args: "investigate", ok: true},
 		{input: "/btw quick question", command: CommandSide, args: "quick question", ok: true},
 		{input: "/subagents", command: CommandAgent, ok: true},
+		{input: "/agents", command: CommandAgents, ok: true},
 		{input: "/multi-agents", command: CommandUnknown, ok: true},
 		{input: "/ide", command: CommandIde, ok: true},
 		{input: "/vim", command: CommandVim, ok: true},

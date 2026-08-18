@@ -341,6 +341,12 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSwitchAgent: func(threadID string) (codextea.AgentThreadSwitchResponse, error) {
 			return interactiveRemoteSwitchAgentThread(ctx, endpoint, threadID)
 		},
+		AgentsOverviewEmbedded:    false,
+		OnAgentsOverviewRefresh:   interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
+		OnAgentsOverviewDispatch:  interactiveRemoteAgentsOverviewDispatch(ctx, endpoint),
+		OnAgentsOverviewStop:      interactiveRemoteAgentsOverviewStop(ctx, endpoint),
+		OnAgentsOverviewRename:    interactiveRemoteAgentsOverviewRename(ctx, endpoint),
+		OnStartAgentsDaemon:       interactiveStartAgentsDaemon,
 		OnWriteSettings:           interactiveRemoteSettingsWriteHandler(ctx, endpoint),
 		OnUpdateCollaborationMode: interactiveRemoteCollaborationModeUpdateHandler(ctx, endpoint),
 		OnWriteMemorySettings:     interactiveRemoteMemorySettingsWriteHandler(ctx, endpoint),

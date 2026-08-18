@@ -27,6 +27,7 @@ import (
 	"codex_go/protocol"
 	"codex_go/review"
 	codextui "codex_go/tui"
+	agentsoverview "codex_go/tui/agents_overview"
 	"codex_go/tui/anim"
 	bottompane "codex_go/tui/bottom_pane"
 	mentionsv2 "codex_go/tui/bottom_pane/mentions_v2"
@@ -644,6 +645,12 @@ type Options struct {
 	OnLogout                      LogoutFunc
 	OnReadAgents                  AgentThreadReaderFunc
 	OnSwitchAgent                 AgentThreadSwitchFunc
+	AgentsOverviewEmbedded        bool
+	OnAgentsOverviewRefresh       AgentsOverviewRefreshFunc
+	OnAgentsOverviewDispatch      AgentsOverviewDispatchFunc
+	OnAgentsOverviewStop          AgentsOverviewStopFunc
+	OnAgentsOverviewRename        AgentsOverviewRenameFunc
+	OnStartAgentsDaemon           AgentsDaemonStartFunc
 	OnClipboardWrite              func(text string) error
 	OnReadTokenActivity           TokenActivityReaderFunc
 	OnReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
@@ -747,14 +754,20 @@ type Model struct {
 	// Overlay stack (new architecture)
 	overlays *overlay.Overlay
 
-	transcript            viewport.Model
-	composer              textarea.Model
-	activityFollow        bool
-	overlay               *chatwidget.TranscriptOverlay
-	slashPopup            slashCommandPopup
-	transcriptCache       transcriptRenderCache
-	lastTranscriptContent string
-	lastTranscriptHeight  int
+	transcript             viewport.Model
+	composer               textarea.Model
+	activityFollow         bool
+	overlay                *chatwidget.TranscriptOverlay
+	slashPopup             slashCommandPopup
+	agentsOverview         *agentsoverview.View
+	agentsOverviewNotice   string
+	agentsOverviewBusy     bool
+	agentsOverviewRefresh  int
+	agentsOverviewPending  bool
+	agentsOverviewInflight bool
+	transcriptCache        transcriptRenderCache
+	lastTranscriptContent  string
+	lastTranscriptHeight   int
 
 	width                  int
 	height                 int
@@ -863,6 +876,12 @@ type Model struct {
 	onInterrupt              InterruptFunc
 	onInterruptMCPStartup    InterruptFunc
 	localDaemonSession       bool
+	agentsOverviewEmbedded   bool
+	onAgentsOverviewRefresh  AgentsOverviewRefreshFunc
+	onAgentsOverviewDispatch AgentsOverviewDispatchFunc
+	onAgentsOverviewStop     AgentsOverviewStopFunc
+	onAgentsOverviewRename   AgentsOverviewRenameFunc
+	onStartAgentsDaemon      AgentsDaemonStartFunc
 	onExternalEditor         ExternalEditorFunc
 	externalEditorDirectory  ExternalEditorDirectoryFunc
 	keymapConfig             *codextui.KeymapConfig
@@ -1120,6 +1139,12 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onInterrupt:                     options.OnInterrupt,
 		onInterruptMCPStartup:           options.OnInterruptMCPStartup,
 		localDaemonSession:              options.LocalDaemonSession,
+		agentsOverviewEmbedded:          options.AgentsOverviewEmbedded,
+		onAgentsOverviewRefresh:         options.OnAgentsOverviewRefresh,
+		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,
+		onAgentsOverviewStop:            options.OnAgentsOverviewStop,
+		onAgentsOverviewRename:          options.OnAgentsOverviewRename,
+		onStartAgentsDaemon:             options.OnStartAgentsDaemon,
 		onExternalEditor:                options.OnExternalEditor,
 		externalEditorDirectory:         options.OnExternalEditorDirectory,
 		keymapConfig:                    options.KeymapConfig.Clone(),
@@ -1461,9 +1486,15 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.refreshSkillPopup()
 	case ThreadEventMsg:
 		cmd := m.applyThreadEvent(msg.Event)
+		if m.agentsOverview != nil {
+			cmd = bubbletea.Batch(cmd, m.refreshAgentsOverviewCmd())
+		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
 	case ThreadScopedEventMsg:
 		cmd := m.applyThreadScopedEvent(msg)
+		if m.agentsOverview != nil {
+			cmd = bubbletea.Batch(cmd, m.refreshAgentsOverviewCmd())
+		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
 	case HookRunMsg:
 		m.applyHookRun(msg)
@@ -1579,6 +1610,39 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case AgentListResultMsg:
 		m.applyAgentListResult(msg)
 		return m, nil
+	case agentsOverviewListMsg:
+		return m, m.applyAgentsOverviewList(msg)
+	case agentsOverviewDispatchMsg:
+		if msg.err != nil {
+			m.agentsOverviewNotice = "Failed to start background task: " + strings.TrimSpace(msg.err.Error())
+		} else if strings.TrimSpace(msg.threadID) != "" {
+			m.agentsOverviewNotice = "Dispatched task " + msg.threadID
+		}
+		m.agentsOverviewBusy = false
+		return m, m.refreshAgentsOverviewCmd()
+	case agentsOverviewStopMsg:
+		if msg.err != nil {
+			m.agentsOverviewNotice = "Failed to stop background task: " + strings.TrimSpace(msg.err.Error())
+		} else {
+			m.agentsOverviewNotice = ""
+		}
+		m.agentsOverviewBusy = false
+		return m, m.refreshAgentsOverviewCmd()
+	case agentsOverviewRenameMsg:
+		if msg.err != nil {
+			m.agentsOverviewNotice = "Failed to rename task: " + strings.TrimSpace(msg.err.Error())
+		} else {
+			m.agentsOverviewNotice = ""
+		}
+		m.agentsOverviewBusy = false
+		return m, m.refreshAgentsOverviewCmd()
+	case agentsOverviewDaemonMsg:
+		if msg.err != nil {
+			m.notice = "Failed to start background server: " + strings.TrimSpace(msg.err.Error())
+		} else {
+			m.notice = "Background server started. Open `codex agents` in another terminal."
+		}
+		return m, nil
 	case AgentSwitchResultMsg:
 		m.applyAgentSwitchResult(msg)
 		return m, m.refreshStatusControlsCmd()
@@ -1637,6 +1701,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		if m.overlay != nil {
 			return m, m.updateTranscriptOverlayKey(msg)
+		}
+		if m.agentsOverview != nil {
+			return m, m.updateAgentsOverviewKey(msg)
 		}
 		switch msg.Type {
 		case bubbletea.KeyCtrlC:
@@ -1815,6 +1882,9 @@ func (m *Model) View() string {
 			m.syncTranscriptOverlay()
 		}
 		return m.overlay.View()
+	}
+	if m.agentsOverview != nil {
+		return m.renderAgentsOverview()
 	}
 	// Rust renders the session picker as a temporary full-screen surface. It
 	// must not be appended below the transcript, where the transcript viewport
@@ -4321,6 +4391,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return m.applyPlanCommand(invocation.Args)
 	case codextui.CommandAgent:
 		return m.applyAgentCommand()
+	case codextui.CommandAgents:
+		return m.applyAgentsCommand()
 	case codextui.CommandSide:
 		return m.applySideCommand(invocation.Name, invocation.Args)
 	case codextui.CommandResume:
