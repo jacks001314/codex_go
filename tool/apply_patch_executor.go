@@ -104,6 +104,10 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
 	applyOptions := &applypatch.ApplyOptions{CWD: e.cwd(), FileUpdateMode: e.fileUpdateMode()}
+	// Rust #39659: when an otherwise-required sandbox is bypassed, disable
+	// symlink traversal so a verified path cannot be swapped for a link to a
+	// different file.
+	applyOptions.NoFollowSymlinks = applyPatchSandboxBypassed(e.permissionProfile, e.sandboxPolicy)
 	if deniedPath := applyPatchDeniedPath(action, e.cwd(), e.permissionProfile, e.sandboxPolicy); deniedPath != "" {
 		body := fmt.Sprintf("apply_patch verification failed: path %s is outside of the project workspace roots", deniedPath)
 		sandbox.RecordFileSystemPolicyViolation(sandbox.PlatformSandboxType(), deniedPath, body)
@@ -200,6 +204,20 @@ func applyPatchDeniedPath(action *applypatch.Action, cwd string, profile *sandbo
 		}
 	}
 	return ""
+}
+
+// applyPatchSandboxBypassed reports whether the patch runs without a
+// filesystem sandbox (full disk write access with no deny entries), in which
+// case no-follow filesystem operations are required (Rust #39659).
+func applyPatchSandboxBypassed(profile *sandbox.PermissionProfile, legacyPolicy *sandbox.SandboxPolicy) bool {
+	policy := legacyPolicy
+	if profile != nil {
+		policy = profile.LegacySandboxPolicy()
+	}
+	if policy == nil {
+		return false
+	}
+	return policy.HasFullDiskWriteAccess()
 }
 
 func ApplyPatchChanges(invocation *Invocation, cwd string) []map[string]any {

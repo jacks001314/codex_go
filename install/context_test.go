@@ -134,6 +134,37 @@ func TestDetectsPackageLayoutFromResourcesDirRequiresBinDir(t *testing.T) {
 	}
 }
 
+func TestPackageLayoutFromExeResolvesBinJunctionLikeRust(t *testing.T) {
+	// Rust #39649: installer bin directories can be junctions; bundled helper
+	// lookup must resolve from the canonical executable path.
+	if runtime.GOOS != "windows" {
+		t.Skip("junction regression test is Windows-specific")
+	}
+	packageDir := t.TempDir()
+	realBin := filepath.Join(packageDir, "real-bin")
+	resourcesDir := filepath.Join(packageDir, resourcesDirname)
+	for _, dir := range []string{realBin, resourcesDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(packageDir, packageMetadataFilename), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	binDir := filepath.Join(packageDir, binDirname)
+	if err := os.Symlink(realBin, binDir); err != nil {
+		t.Skipf("junctions/symlinks unavailable: %v", err)
+	}
+	exePath := filepath.Join(binDir, "codex.exe")
+	if err := os.WriteFile(exePath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	layout := PackageLayoutFromExe(exePath)
+	if layout == nil || layout.PackageDir != packageDir {
+		t.Fatalf("layout = %+v, want packageDir %q", layout, packageDir)
+	}
+}
+
 func TestPackageManifestParsesVersion(t *testing.T) {
 	packageDir := t.TempDir()
 	binDir := filepath.Join(packageDir, binDirname)

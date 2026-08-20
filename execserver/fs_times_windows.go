@@ -18,3 +18,7 @@ func createdAtMillis(info os.FileInfo) int64 {
 	}
 	return time.Unix(0, data.CreationTime.Nanoseconds()).UTC().UnixNano() / int64(time.Millisecond)
 }
+
+func createdAtMillisForPath(info os.FileInfo, _ string) int64 {
+	return createdAtMillis(info)
+}

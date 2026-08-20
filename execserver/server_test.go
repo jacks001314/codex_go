@@ -1477,6 +1477,59 @@ func TestGetMetadataIncludesCreatedAtOnWindows(t *testing.T) {
 	}
 }
 
+func TestNoFollowSymlinkComponentRejectsLinkedPaths(t *testing.T) {
+	// Rust #39659/#39666: no-follow operations reject links in any path
+	// component.
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "target.txt"), []byte("target"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "linked")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if linkPath, err := noFollowSymlinkComponent(filepath.Join(dir, "linked", "target.txt")); err != nil || linkPath == "" {
+		t.Fatalf("noFollowSymlinkComponent = %q, %v; want linked component", linkPath, err)
+	}
+	plain := filepath.Join(dir, "plain.txt")
+	if err := os.WriteFile(plain, []byte("plain"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if linkPath, err := noFollowSymlinkComponent(plain); err != nil || linkPath != "" {
+		t.Fatalf("noFollowSymlinkComponent(plain) = %q, %v; want empty", linkPath, err)
+	}
+	// A leaf symlink is also rejected.
+	if err := os.Symlink(filepath.Join(outside, "target.txt"), filepath.Join(dir, "leaf.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if linkPath, err := noFollowSymlinkComponent(filepath.Join(dir, "leaf.txt")); err != nil || linkPath == "" {
+		t.Fatalf("leaf symlink = %q, %v; want rejected", linkPath, err)
+	}
+}
+
+func TestWriteFileNoFollowRejectsSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "linked")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	disabled := false
+	_, err := writeFile(&FSWriteFileParams{
+		Path:           filepath.Join(dir, "linked", "secret.txt"),
+		DataBase64:     base64.StdEncoding.EncodeToString([]byte("evil")),
+		FollowSymlinks: &disabled,
+	})
+	if err == nil || !strings.Contains(err.Error(), "traverses symlink") {
+		t.Fatalf("no-follow write error = %v", err)
+	}
+	if data, readErr := os.ReadFile(filepath.Join(outside, "secret.txt")); readErr != nil || string(data) != "secret" {
+		t.Fatalf("outside file mutated: %q, %v", data, readErr)
+	}
+}
+
 func TestRemovePathDefaultsRecursiveAndForce(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "dir")

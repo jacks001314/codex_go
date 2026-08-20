@@ -59,11 +59,18 @@ type Action struct {
 	CWD           string
 	Hunks         []Change
 	Changes       map[string]Change
+	// NoFollowSymlinks is set by the runtime when an unsandboxed patch must
+	// not follow symlinks (Rust #39659).
+	NoFollowSymlinks bool
 }
 
 type ApplyOptions struct {
 	CWD            string
 	FileUpdateMode FileUpdateMode
+	// NoFollowSymlinks mirrors Rust #39659: reject patches whose paths
+	// traverse symlinks in any component, used when an otherwise-required
+	// sandbox is bypassed.
+	NoFollowSymlinks bool
 }
 
 type ApplyResult struct {
@@ -250,6 +257,9 @@ func (a *Action) Verify(options *ApplyOptions) error {
 	if a == nil || len(a.Hunks) == 0 {
 		return fmt.Errorf("%w: patch contains no hunks", ErrInvalidPatch)
 	}
+	if a != nil && options != nil && options.NoFollowSymlinks {
+		a.NoFollowSymlinks = true
+	}
 	cwd := "."
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
 		cwd = options.CWD
@@ -261,6 +271,9 @@ func (a *Action) Verify(options *ApplyOptions) error {
 func (a *Action) ApplyVerified(options *ApplyOptions) (*ApplyResult, error) {
 	if a == nil || len(a.Hunks) == 0 {
 		return nil, fmt.Errorf("%w: patch contains no hunks", ErrInvalidPatch)
+	}
+	if a != nil && options != nil && options.NoFollowSymlinks {
+		a.NoFollowSymlinks = true
 	}
 	cwd := "."
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
@@ -290,6 +303,32 @@ func (a *Action) applyCommitted(cwd string, mode FileUpdateMode) (*ApplyResult, 
 }
 
 func (a *Action) preflight(cwd string, mode FileUpdateMode) error {
+	if a != nil && a.NoFollowSymlinks {
+		for _, name := range a.FilePaths() {
+			resolved, err := resolveWorkspacePath(cwd, name)
+			if err != nil {
+				return err
+			}
+			if linkPath, err := noFollowSymlinkPath(resolved); err != nil {
+				return err
+			} else if linkPath != "" {
+				return fmt.Errorf("%w: path %s traverses symlink %s", ErrInvalidPatch, name, linkPath)
+			}
+			if strings.TrimSpace(name) != "" {
+				if movePath, ok := a.movePathFor(name); ok {
+					moveResolved, moveErr := resolveWorkspacePath(cwd, movePath)
+					if moveErr != nil {
+						return moveErr
+					}
+					if linkPath, err := noFollowSymlinkPath(moveResolved); err != nil {
+						return err
+					} else if linkPath != "" {
+						return fmt.Errorf("%w: move target %s traverses symlink %s", ErrInvalidPatch, movePath, linkPath)
+					}
+				}
+			}
+		}
+	}
 	// Rust a1c88e865d: reject patches containing multiple operations whose paths
 	// resolve to the same file (e.g. `duplicate.txt` and `./duplicate.txt`).
 	resolvedPaths := map[string]string{}
@@ -378,6 +417,51 @@ func (a *Action) preflight(cwd string, mode FileUpdateMode) error {
 	}
 	_, err = shadowAction.applyCommitted(tempDir, mode)
 	return err
+}
+
+// movePathFor returns the move target for a change path when present.
+func (a *Action) movePathFor(path string) (string, bool) {
+	if a == nil {
+		return "", false
+	}
+	for _, hunk := range a.Hunks {
+		if strings.TrimSpace(hunk.Path) == strings.TrimSpace(path) && strings.TrimSpace(hunk.MovePath) != "" {
+			return strings.TrimSpace(hunk.MovePath), true
+		}
+	}
+	return "", false
+}
+
+// noFollowSymlinkPath walks every component of path and returns the first
+// component that is a symlink (or the path itself when the leaf is a link),
+// mirroring Rust #39659 no-follow filesystem operations.
+func noFollowSymlinkPath(path string) (string, error) {
+	clean := filepath.Clean(path)
+	volume := filepath.VolumeName(clean)
+	rest := strings.TrimPrefix(clean, volume)
+	separator := string(os.PathSeparator)
+	parts := strings.Split(rest, separator)
+	current := volume
+	if current == "" {
+		current = separator
+	}
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return current, nil
+		}
+	}
+	return "", nil
 }
 
 func Apply(input string, options *ApplyOptions) (*ApplyResult, error) {

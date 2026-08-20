@@ -477,3 +477,47 @@ func TestApplyRejectsDuplicateResolvedPathsLikeRust(t *testing.T) {
 		t.Fatalf("Verify(distinct) error = %v", err)
 	}
 }
+
+func TestNoFollowSymlinksRejectsLinkedPathComponents(t *testing.T) {
+	// Rust #39659: an unsandboxed patch must not follow symlinks in any path
+	// component, so a verified path cannot be swapped for a link to another
+	// file.
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "linked")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	action, err := Parse("*** Begin Patch\n*** Add File: linked/secret.txt\n+evil\n*** End Patch")
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	err = action.Verify(&ApplyOptions{CWD: dir, NoFollowSymlinks: true})
+	if err == nil || !strings.Contains(err.Error(), "traverses symlink") {
+		t.Fatalf("Verify(no-follow) error = %v, want symlink rejection", err)
+	}
+	if data, readErr := os.ReadFile(filepath.Join(outside, "secret.txt")); readErr != nil || string(data) != "secret\n" {
+		t.Fatalf("outside file mutated: %q, %v", data, readErr)
+	}
+	// A leaf symlink is also rejected.
+	leafTarget := filepath.Join(dir, "leaf-target.txt")
+	if err := os.WriteFile(leafTarget, []byte("target\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(leafTarget, filepath.Join(dir, "leaf-link.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	leafAction, err := Parse("*** Begin Patch\n*** Update File: leaf-link.txt\n@@\n-target\n+changed\n*** End Patch")
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	if err := leafAction.Verify(&ApplyOptions{CWD: dir, NoFollowSymlinks: true}); err == nil || !strings.Contains(err.Error(), "traverses symlink") {
+		t.Fatalf("leaf Verify(no-follow) error = %v, want symlink rejection", err)
+	}
+	// With the default follow behavior the patch still applies.
+	if err := leafAction.Verify(&ApplyOptions{CWD: dir}); err != nil {
+		t.Fatalf("Verify(follow) error = %v", err)
+	}
+}

@@ -465,8 +465,9 @@ type SignalParams struct {
 type SignalResponse struct{}
 
 type FSReadFileParams struct {
-	Path    string                    `json:"path"`
-	Sandbox *FileSystemSandboxContext `json:"sandbox,omitempty"`
+	Path           string                    `json:"path"`
+	Sandbox        *FileSystemSandboxContext `json:"sandbox,omitempty"`
+	FollowSymlinks *bool                     `json:"followSymlinks,omitempty"`
 }
 
 type FSReadFileResponse struct {
@@ -477,6 +478,10 @@ type FSOpenParams struct {
 	HandleID string                    `json:"handleId"`
 	Path     string                    `json:"path"`
 	Sandbox  *FileSystemSandboxContext `json:"sandbox,omitempty"`
+	// FollowSymlinks controls whether traversal follows links in path
+	// components (Rust #39659). Defaults to true; unsandboxed callers can
+	// disable it to reject links.
+	FollowSymlinks *bool `json:"followSymlinks,omitempty"`
 }
 
 type FSOpenResponse struct {
@@ -501,9 +506,10 @@ type FSCloseParams struct {
 type FSCloseResponse struct{}
 
 type FSWriteFileParams struct {
-	Path       string                    `json:"path"`
-	DataBase64 string                    `json:"dataBase64"`
-	Sandbox    *FileSystemSandboxContext `json:"sandbox,omitempty"`
+	Path           string                    `json:"path"`
+	DataBase64     string                    `json:"dataBase64"`
+	Sandbox        *FileSystemSandboxContext `json:"sandbox,omitempty"`
+	FollowSymlinks *bool                     `json:"followSymlinks,omitempty"`
 }
 
 type FSWriteFileResponse struct{}
@@ -2141,6 +2147,13 @@ func readFile(params *FSReadFileParams) (*FSReadFileResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	if params != nil && params.FollowSymlinks != nil && !*params.FollowSymlinks {
+		if linkPath, err := noFollowSymlinkComponent(path); err != nil {
+			return nil, err
+		} else if linkPath != "" {
+			return nil, requestError(-32600, fmt.Sprintf("fs/open path %s traverses symlink %s", params.Path, linkPath))
+		}
+	}
 	file, err := openRegularFileForRead(path)
 	if err != nil {
 		return nil, err
@@ -2178,6 +2191,13 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
 	path, err := resolvePath(params.Path)
 	if err != nil {
 		return nil, err
+	}
+	if params != nil && params.FollowSymlinks != nil && !*params.FollowSymlinks {
+		if linkPath, err := noFollowSymlinkComponent(path); err != nil {
+			return nil, err
+		} else if linkPath != "" {
+			return nil, requestError(-32600, fmt.Sprintf("fs/open path %s traverses symlink %s", params.Path, linkPath))
+		}
 	}
 	file, err := openRegularFileForRead(path)
 	if err != nil {
@@ -2289,6 +2309,13 @@ func writeFile(params *FSWriteFileParams) (*FSWriteFileResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	if params != nil && params.FollowSymlinks != nil && !*params.FollowSymlinks {
+		if linkPath, err := noFollowSymlinkComponent(path); err != nil {
+			return nil, err
+		} else if linkPath != "" {
+			return nil, requestError(-32600, fmt.Sprintf("fs/writeFile path %s traverses symlink %s", params.Path, linkPath))
+		}
+	}
 	data, err := base64.StdEncoding.DecodeString(params.DataBase64)
 	if err != nil {
 		return nil, fmt.Errorf("fs/writeFile requires valid base64 dataBase64: %w", err)
@@ -2351,7 +2378,7 @@ func getMetadata(params *FSGetMetadataParams) (*FSGetMetadataResponse, error) {
 		IsFile:       info.Mode().IsRegular(),
 		IsSymlink:    linkInfo.Mode()&os.ModeSymlink != 0,
 		Size:         info.Size(),
-		CreatedAtMS:  createdAtMillis(info),
+		CreatedAtMS:  createdAtMillisForPath(info, path),
 		ModifiedAtMS: info.ModTime().UnixMilli(),
 	}, nil
 }
