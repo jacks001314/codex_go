@@ -659,6 +659,9 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 			if !registration.Config.Enabled {
 				continue
 			}
+			if !mcpServerEnvironmentAvailable(&registration.Config, runtime.AvailableEnvironment) {
+				continue
+			}
 			service.configs[name] = config
 			authStatus := service.authStatusForConfig(name, &config)
 			var pluginID *string
@@ -676,6 +679,30 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 		}
 	}
 	return service
+}
+
+// mcpServerEnvironmentAvailable mirrors Rust #39335: attachment-scoped MCP
+// servers (those bound to a non-local environment) stay disabled while their
+// environment configuration is pending, failed, or unselected. The controller-
+// owned Apps server and selected-plugin access are preserved through
+// AvailableEnvironment entries supplied by the runtime.
+func mcpServerEnvironmentAvailable(config *ServerConfig, available []string) bool {
+	if config == nil {
+		return false
+	}
+	environmentID := strings.TrimSpace(config.EnvironmentID)
+	if environmentID == "" {
+		environmentID = DefaultMCPServerEnvironmentID
+	}
+	if environmentID == DefaultMCPServerEnvironmentID {
+		return true
+	}
+	for _, selected := range available {
+		if strings.TrimSpace(selected) == environmentID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {

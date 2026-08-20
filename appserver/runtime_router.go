@@ -10098,7 +10098,11 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		}
 		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
-		return r.runtimeMCPConfig(values, codexHome, runtimeAuth, cfg.Requirements)
+		config := r.runtimeMCPConfig(values, codexHome, runtimeAuth, cfg.Requirements)
+		// Rust #39335: attachment-scoped MCP servers are only enabled when
+		// their environment is selected and available for the thread.
+		config.AvailableEnvironment = append([]string(nil), selectedEnvironmentIDs(r.activeTurnParams(threadID))...)
+		return config
 	}
 	service := r.mcpRuntimes.serviceForThread(threadID, cfg, authRevision, func(cfg *config.Config) *mcp.MCPService {
 		service := mcp.NewMCPService(runtimeConfig(cfg))

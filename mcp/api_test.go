@@ -1543,3 +1543,31 @@ func TestValidateMCPResourceOriginRejectsAmbiguousScope(t *testing.T) {
 		t.Fatalf("valid connector rejected: %v", err)
 	}
 }
+
+func TestMCPEnvironmentPolicyDisablesUnselectedAttachmentServers(t *testing.T) {
+	// Rust #39335: attachment-scoped MCP servers stay disabled while their
+	// environment is pending, failed, or unselected; local servers and
+	// controller-owned Apps remain available.
+	config := RuntimeConfigFromValues(map[string]any{
+		"mcp_servers": map[string]any{
+			"local-server": map[string]any{"url": "https://local.example/mcp", "enabled": true},
+			"env-server": map[string]any{
+				"url": "https://env.example/mcp", "enabled": true, "environment_id": "env-a",
+			},
+			"other-env-server": map[string]any{
+				"url": "https://other.example/mcp", "enabled": true, "environment_id": "env-b",
+			},
+		},
+	}, t.TempDir())
+	config.AvailableEnvironment = []string{"env-a"}
+	service := NewMCPService(config)
+	if _, ok := service.ServerConfigForServer("local-server"); !ok {
+		t.Fatal("local server should remain available")
+	}
+	if _, ok := service.ServerConfigForServer("env-server"); !ok {
+		t.Fatal("selected environment server should be available")
+	}
+	if _, ok := service.ServerConfigForServer("other-env-server"); ok {
+		t.Fatal("unselected environment server should be disabled")
+	}
+}
