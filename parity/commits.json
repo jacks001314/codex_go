@@ -46,9 +46,9 @@
       "domains": [
         "plugin"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: /ps/plugins/suggested/codex compact response parsing; recommended plugin install hydrates metadata before elicitation, skips unavailable recommendations, returns retryable on unverifiable metadata (plugin/suggested.go, plugin/api.go HydrateRecommendedPluginMetadata, appserver/plugin_install_runtime.go). Tests added."
       ]
     },
     {
@@ -205,9 +205,9 @@
       "domains": [
         "mcp"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented (wire surface): MCPResourceReadParams gains originCallId with echo on successful reads and validation rejecting missing/mismatched/ambiguous origins (mcp/api.go). Go has no app-widget provenance model, so bounded origin history/compaction checkpoint tracking is N/A architecture; the protocol surface and validation match Rust."
       ]
     },
     {
@@ -217,9 +217,9 @@
       "domains": [
         "mcp"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "N/A (architecture): Go session/rollout has no app-widget MCP resource-origin provenance that compaction could checkpoint (no widget/account-link/app-policy surfaces; appserver_v2 manifest lists mcp_resource_origin as Rust-only). The scoped read wire surface (originCallId) is implemented in mcp/api.go with validation; compaction preserves thread metadata but there is no origin state to persist."
       ]
     },
     {
@@ -377,9 +377,9 @@
       "domains": [
         "mcp"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented (wire surface): MCPResourceReadParams gains connectorId for hosted app resource reads with origin/connector mutual-exclusion validation (mcp/api.go validateMCPResourceOrigin). x-codex-turn-metadata forwarding is N/A: Go MCP runtime does not carry the Rust connector metadata header surface."
       ]
     },
     {
@@ -454,7 +454,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "Implemented: TurnRuntimeState.MisalignmentPolicyViolation stops the chat - finalizes the turn, clears queued input, gates MaybeSendNextQueuedInput and submissions, rejects non-allowed ops (interrupt/clean terminals/override context/reload config/list skills/rename remain allowed); tea model detects misalignment_policy_violation errors, clears queue/drafts, disables composer, shows precaution notice (tui/chatwidget/turn_runtime.go + tui/tea/model.go). Tests added."
+        "Implemented: TurnRuntimeState.MisalignmentPolicyViolation stops the chat (finalize turn, clear queue, gate submissions, allow only interrupt/clean-terminals/override-context/reload-config/list-skills/rename); tea model detects misalignment_policy_violation errors, clears queue/drafts, disables composer (tui/chatwidget/turn_runtime.go, tui/tea/model.go). Tests added."
       ]
     },
     {
@@ -527,9 +527,9 @@
       "domains": [
         "auth"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: provider-owned auth recovery runs before AuthManager fallback with a per-request single-attempt bound (model/responses_agent.go refreshBedrockAWSCredentials + bedrockAuthRecoveryAttempted); HTTP/WebSocket 401 paths preserve existing behavior. Tests added."
       ]
     },
     {
@@ -685,9 +685,9 @@
         "mcp",
         "rollout"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to mcp, rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: RuntimeRouter implements McpToolHookExecutor routing mcp_tool hooks through the session MCP runtime with fail-fast for uncataloged/unconnected servers, no approval or recursive hooks (appserver/hook_mcp_executor.go + runtime_router.go requireHookRunner wiring). Tests added."
       ]
     },
     {
@@ -710,9 +710,9 @@
       "domains": [
         "config"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: agent role application already bounded to model/effort/tier/developer instructions preserving parent provider/permissions; added symlink rejection for user role config files (config/agents.go os.Lstat). Tests added."
       ]
     },
     {
@@ -786,9 +786,9 @@
         "plugin",
         "exec"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to shell, plugin, exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: executor skill catalog entries carry PluginID attributed from matching capability roots; skill_invocation analytics already emit plugin_id (skillprovider/provider.go CatalogEntry.PluginID, appserver/turn_runtime.go attributeExecutorSkillPluginIDs, executor_skill_provider.go). Tests added."
       ]
     },
     {
@@ -812,9 +812,9 @@
       "domains": [
         "core"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: protocol/appserver agent_message items carry optional delivery=async (protocol/exec_events.go AsyncAgentMessageItem, appserver/protocol.go Delivery + threadItemDelivery); tea model renders async messages as standalone assistant cells without finalizing the turn; finalAgentMessageSummary/lastAgentMessage skip async items. Tests added."
       ]
     },
     {
@@ -863,9 +863,9 @@
       "domains": [
         "core"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: send_user_message_async DirectModelOnly tool (tool/send_user_message_async.go) registered when the model advertises experimental_supported_tools; appserver converts the completion into an agent_message session item with delivery=async (appserver/turn_runtime.go sessionItemForAppAsyncMessage). Tests added."
       ]
     },
     {
@@ -912,9 +912,9 @@
       "domains": [
         "mcp"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: hook MCP calls execute through the runtime current connection set without startup wait; unavailable servers reject immediately (appserver/hook_mcp_executor.go). Tests added."
       ]
     },
     {
@@ -986,9 +986,9 @@
       "domains": [
         "auth"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: aws.auth_refresh provider config (command/args/timeout) parsed and validated; expired Bedrock signature failures run the refresh command once (shared in-flight state), reload the SDK credential chain, and re-sign subsequent requests (model/provider_config.go, provider_info.go, responses_agent.go). Tests added."
       ]
     },
     {
@@ -1325,9 +1325,9 @@
       "domains": [
         "core"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: send_user_message_async registered with ExposureDirectModelOnly so supported models call it directly without code-mode exposure (tool/send_user_message_async.go Spec). Test verifies direct visibility semantics via the shared handler tests."
       ]
     },
     {
@@ -1424,9 +1424,9 @@
         "mcp",
         "auth"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to mcp, auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: fallback OAuth credential writes create files with 0600 before writing, reject symlinks/non-regular files, restore private permissions (mcp/oauth.go writeMCPOAuthFallbackFile). Tests added."
       ]
     },
     {
@@ -1449,9 +1449,9 @@
         "mcp",
         "auth"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to mcp, auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: issuer persisted with OAuth credentials and preserved across refreshes; refresh validates the discovered issuer against the pinned stored issuer and requires reauthentication when missing/changed while unexpired access tokens remain usable (mcp/oauth*.go, http_client.go refreshOAuthTokenForRequest). Tests added."
       ]
     },
     {
@@ -1475,7 +1475,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "Implemented: CustomPromptView gained SetVimEnabled (starts in insert mode, first Esc enters normal mode, second cancels), Vim normal keys (i/a/A/I/O/o/h/l/k/j/w/b/e/0/$/x/s/D/C/r with pending replacement), editor motions (left/right/up/down/home/end/word/delete-word/kill), and mode-aware footer hints; tea modal routes editor/vim keys and custom prompt constructors apply composer Vim preference (tui/bottom_pane/custom_prompt_view.go + tui/tea/modal.go, goal.go, slash_misc_commands.go). Tests added."
+        "Implemented: CustomPromptView gained SetVimEnabled (insert start, first Esc normal mode, second cancels), Vim normal keys with pending replacement, editor motions, mode-aware footer hints; tea modal routes editor/vim keys and constructors apply composer Vim preference (tui/bottom_pane/custom_prompt_view.go, tui/tea/modal.go, goal.go, slash_misc_commands.go). Tests added."
       ]
     },
     {
@@ -1487,7 +1487,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "N/A (architecture): Go TUI is bubbletea-based and renders frames through bubbletea's full-frame renderer; it does not implement the Rust custom VT100 backend with partial DEC scroll regions for history insertion, so the Windows Terminal partial-scroll-region scrollback discard does not apply. Inline chat already preserves native scrollback by running outside the alternate screen (tui/tea/model.go)."
+        "N/A (architecture): Go TUI is bubbletea-based and renders frames through bubbletea full-frame rendering without the Rust custom VT100 backend; no partial DEC scroll regions for history insertion, so the Windows Terminal scrollback-discard issue does not apply. Inline chat already preserves native scrollback outside the alternate screen (tui/tea/model.go)."
       ]
     },
     {
@@ -1499,9 +1499,9 @@
         "plugin",
         "exec"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to shell, plugin, exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: executor skill and capability file reads stream through fs/open + fs/readBlock with incremental per-file/bundle limits (appserver/skills_remote.go readClientEnvironmentTextStream). Tests added."
       ]
     },
     {
@@ -1536,9 +1536,9 @@
       "domains": [
         "sandbox"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: .git counts as repository metadata only when file-based or a directory containing HEAD (config/config.go gitMetadataPathExists, nearestGitRoot, projectRootMarkerExists); incomplete synthetic .git dirs no longer hide parent repositories. Tests added."
       ]
     },
     {
@@ -1588,7 +1588,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "Implemented: chatwidget routes StrictReviewRequired as a warning history cell (\"This request requires additional safety checks, some tool calls might take extra time\") via ProtocolNotificationRouteWarning (tui/chatwidget/protocol.go + protocol_requests.go); app layer registers autoApprovalReview/strictReviewRequired notification routing and replay filtering (tui/app/app_server_event_targets.go + replay_filter.go). Tests in protocol_requests_test.go."
+        "Implemented: chatwidget routes StrictReviewRequired as a warning history cell via ProtocolNotificationRouteWarning; app layer registers autoApprovalReview/strictReviewRequired routing + replay filtering (tui/chatwidget/protocol.go, protocol_requests.go, tui/app/app_server_event_targets.go, replay_filter.go). Tests added."
       ]
     },
     {
@@ -1613,7 +1613,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "Equivalent (already implemented): Go CLI/TUI resume and fork read archived sessions directly (store.Read(threadID, includeArchived=true) in app/interactive.go interactiveResumeSessionHandler and app/session.go runSessionResume/runSessionFork; store.Fork reads the archived source), so resuming or forking an archived session succeeds without the Rust startup failure that the unarchive prompt addresses. Archive/unarchive commands and the /unarchive picker already exist."
+        "Equivalent (already implemented): Go CLI/TUI resume and fork read archived sessions directly (store.Read includeArchived=true in app/interactive.go and app/session.go; store.Fork reads archived source), so resuming/forking an archived session succeeds without the Rust startup failure the unarchive prompt addresses; /unarchive and picker already exist."
       ]
     },
     {
@@ -1660,9 +1660,9 @@
       "domains": [
         "core"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Equivalent (already implemented) + regression test: Go PackageLayoutFromExe already canonicalizes via filepath.EvalSymlinks (resolves bin junctions) before locating codex-resources; added a Windows junction regression test (install/context_test.go)."
       ]
     },
     {
@@ -1733,9 +1733,9 @@
       "domains": [
         "sandbox"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: applypatch ApplyOptions.NoFollowSymlinks rejects symlinks in any path component for unsandboxed patches (applypatch/applypatch.go noFollowSymlinkPath, move targets included); tool/apply_patch_executor.go enables it when the sandbox is bypassed; execserver fs/open, fs/readFile, fs/writeFile gain followSymlinks protocol fields with no-follow enforcement (execserver/no_follow.go, server.go). Tests added."
       ]
     },
     {
@@ -1795,9 +1795,9 @@
       "domains": [
         "sandbox"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: Linux no-follow metadata uses statx for birth time with fallback when unavailable (execserver/fs_times_unix.go statxBirthMillis/createdAtMillisForPath, platform fallbacks); no-follow ops reject links in any component (execserver/no_follow.go). Tests added."
       ]
     },
     {
