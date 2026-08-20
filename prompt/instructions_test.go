@@ -64,6 +64,25 @@ func TestLoadProjectConcatenatesAndTruncates(t *testing.T) {
 	}
 }
 
+func TestLoadProjectInstructionsDeniesUnreadablePathLikeRust(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	doc := filepath.Join(root, InstructionsDefaultAgentsMDFilename)
+	if err := os.WriteFile(doc, []byte("project instructions"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	_, err := LoadProjectInstructions(InstructionsLoadConfig{
+		CWD:      root,
+		MaxBytes: 1 << 20,
+		DenyRead: func(path string) bool { return path == doc },
+	})
+	if err == nil || !strings.Contains(err.Error(), "not readable under the active filesystem permissions") {
+		t.Fatalf("LoadProjectInstructions(denied) error = %v", err)
+	}
+}
+
 func TestLoadedEnvironmentLabeledText(t *testing.T) {
 	loaded := &LoadedInstructions{
 		UserInstructions: "user",

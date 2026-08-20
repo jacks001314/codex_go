@@ -3220,7 +3220,10 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 				}
 			}
 			r.applyThreadStartConfigSnapshot(response, request)
-			r.applyThreadStartInstructionSources(response, request)
+			if err := r.applyThreadStartInstructionSources(response, request); err != nil {
+				r.rollbackThreadStartInitialization(response.Thread.ID)
+				return nil, err
+			}
 			r.applyThreadStartOriginator(response, request)
 			r.markRuntimeSeedRollout(response, request)
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
@@ -3571,19 +3574,22 @@ func runtimeRouterNow(r *RuntimeRouter) time.Time {
 	return time.Now().UTC()
 }
 
-func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStartResponse, request *Request) {
+func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStartResponse, request *Request) error {
 	if r == nil || response == nil || response.Thread == nil || request == nil {
-		return
+		return nil
 	}
 	var params ThreadStartParams
 	if err := request.DecodeParams(&params); err != nil {
-		return
+		return nil
 	}
 	var cfg *config.Config
 	if loaded, cfgErr := r.effectiveConfigForThreadStart(&params); cfgErr == nil {
 		cfg = loaded
 	}
-	instructions, sources := r.threadStartInstructions(&params)
+	instructions, sources, err := r.threadStartInstructions(&params)
+	if err != nil {
+		return err
+	}
 	response.InstructionSources = sources
 	configuredBaseInstructions := ""
 	if cfg != nil {
@@ -3592,7 +3598,7 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 	baseInstructions := firstNonEmpty(stringPtrValue(params.BaseInstructions), instructions, configuredBaseInstructions)
 	record, err := r.threadRecord(session.ThreadID(response.Thread.ID), true, true)
 	if err != nil || record == nil {
-		return
+		return nil
 	}
 	if strings.TrimSpace(baseInstructions) != "" {
 		record.Metadata.BaseInstructions = baseInstructions
@@ -3616,6 +3622,7 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 	}
 	setThreadRecordInstructionSources(record, sources)
 	_ = r.runtimeSaveThreadRecord(record)
+	return nil
 }
 
 func (r *RuntimeRouter) applyThreadStartOriginator(response *ThreadStartResponse, request *Request) {
@@ -4123,9 +4130,9 @@ func (r *RuntimeRouter) threadStartServiceTier(cfg *config.Config, params *Threa
 	return threadLifecycleServiceTierForRequest(r.requireModels(), requested, modelID)
 }
 
-func (r *RuntimeRouter) threadStartInstructions(params *ThreadStartParams) (string, []string) {
+func (r *RuntimeRouter) threadStartInstructions(params *ThreadStartParams) (string, []string, error) {
 	if r == nil || params == nil {
-		return "", nil
+		return "", nil, nil
 	}
 	parts := []string{}
 	sources := []string{}
@@ -4141,11 +4148,23 @@ func (r *RuntimeRouter) threadStartInstructions(params *ThreadStartParams) (stri
 		if cfg, err := r.effectiveConfigForThreadStart(params); err == nil && cfg != nil {
 			maxBytes = cfg.ProjectDocMaxBytes()
 		}
+		cwd := r.effectiveThreadStartCWD(params)
+		var denyRead func(string) bool
+		if cfg, cfgErr := r.effectiveConfigForThreadStart(params); cfgErr == nil && cfg != nil {
+			if resolution, resolveErr := turnSandboxPermissionProfile(cfg, cwd, nil); resolveErr == nil && resolution != nil && resolution.Profile != nil {
+				profile := resolution.Profile
+				denyRead = func(path string) bool { return profile.DeniesReadPath(path) }
+			}
+		}
 		loaded, err := promptctx.LoadProjectInstructions(promptctx.InstructionsLoadConfig{
-			CWD:      r.effectiveThreadStartCWD(params),
+			CWD:      cwd,
 			MaxBytes: maxBytes,
+			DenyRead: denyRead,
 		})
-		if err == nil && loaded != nil {
+		if err != nil {
+			return "", nil, err
+		}
+		if loaded != nil {
 			projectText := strings.TrimSpace(loaded.Text())
 			if projectText != "" {
 				parts = append(parts, projectText)
@@ -4158,7 +4177,7 @@ func (r *RuntimeRouter) threadStartInstructions(params *ThreadStartParams) (stri
 			}
 		}
 	}
-	return strings.Join(parts, promptctx.InstructionsAgentsMDSeparator), sources
+	return strings.Join(parts, promptctx.InstructionsAgentsMDSeparator), sources, nil
 }
 
 func (r *RuntimeRouter) codexHomeForInstructions() string {

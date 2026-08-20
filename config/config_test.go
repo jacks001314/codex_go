@@ -1563,15 +1563,10 @@ func TestProjectHooksDotCodexFolderUsesRootCheckoutForLinkedWorktree(t *testing.
 	root := filepath.Join(t.TempDir(), "repo")
 	worktree := filepath.Join(t.TempDir(), "worktree")
 	child := filepath.Join(worktree, "child")
-	if err := os.MkdirAll(filepath.Join(root, ".git", "worktrees", "feature"), 0o755); err != nil {
-		t.Fatalf("MkdirAll root .git/worktrees returned error: %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(child, ".codex"), 0o755); err != nil {
 		t.Fatalf("MkdirAll child .codex returned error: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+filepath.Join(root, ".git", "worktrees", "feature")+"\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile worktree .git returned error: %v", err)
-	}
+	writeLinkedWorktreeMetadata(t, root, worktree, "feature")
 
 	dotCodex := filepath.Join(child, ".codex")
 	got := ProjectHooksDotCodexFolder(child, dotCodex)
@@ -1585,15 +1580,10 @@ func TestProjectConfigTrustUsesRootCheckoutForLinkedWorktree(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(t.TempDir(), "repo")
 	worktree := filepath.Join(t.TempDir(), "worktree")
-	if err := os.MkdirAll(filepath.Join(root, ".git", "worktrees", "feature"), 0o755); err != nil {
-		t.Fatalf("MkdirAll root .git/worktrees returned error: %v", err)
-	}
 	if err := os.MkdirAll(filepath.Join(worktree, ".codex"), 0o755); err != nil {
 		t.Fatalf("MkdirAll worktree .codex returned error: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+filepath.Join(root, ".git", "worktrees", "feature")+"\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile worktree .git returned error: %v", err)
-	}
+	writeLinkedWorktreeMetadata(t, root, worktree, "feature")
 	if err := os.WriteFile(ConfigPath(home), []byte("model = \"gpt-user\"\n"+trustedProjectConfig(root)+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile user config returned error: %v", err)
 	}
@@ -1608,6 +1598,62 @@ func TestProjectConfigTrustUsesRootCheckoutForLinkedWorktree(t *testing.T) {
 	if cfg.Values["model"] != "gpt-worktree" {
 		t.Fatalf("model = %#v, want linked worktree config trusted via root checkout", cfg.Values["model"])
 	}
+}
+
+func TestForgedLinkedWorktreeDoesNotInheritTrustLikeRust(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "trusted")
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll root .git returned error: %v", err)
+	}
+	attacker := filepath.Join(t.TempDir(), "attacker")
+	if err := os.MkdirAll(filepath.Join(attacker, ".codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll attacker .codex returned error: %v", err)
+	}
+	// Point at a worktree directory that was never registered.
+	if err := os.WriteFile(filepath.Join(attacker, ".git"), []byte("gitdir: "+filepath.Join(root, ".git", "worktrees", "missing")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile attacker .git returned error: %v", err)
+	}
+	if got := rootCheckoutForLinkedWorktree(attacker); got != attacker {
+		t.Fatalf("rootCheckoutForLinkedWorktree(forged) = %q, want no trust inheritance (%q)", got, attacker)
+	}
+}
+
+func TestLinkedWorktreeRejectsSwappedBacklinkLikeRust(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	if err := os.MkdirAll(filepath.Join(worktree, ".codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree .codex returned error: %v", err)
+	}
+	worktreeGitDir := writeLinkedWorktreeMetadata(t, root, worktree, "feature")
+	// The backlink must name this checkout's own .git; point it elsewhere.
+	other := filepath.Join(t.TempDir(), "other")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatalf("MkdirAll other returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "gitdir"), []byte(filepath.Join(other, ".git")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile swapped backlink returned error: %v", err)
+	}
+	if got := rootCheckoutForLinkedWorktree(worktree); got != worktree {
+		t.Fatalf("rootCheckoutForLinkedWorktree(swapped) = %q, want no trust inheritance (%q)", got, worktree)
+	}
+}
+
+func writeLinkedWorktreeMetadata(t *testing.T, root string, worktree string, feature string) string {
+	t.Helper()
+	worktreeGitDir := filepath.Join(root, ".git", "worktrees", feature)
+	if err := os.MkdirAll(worktreeGitDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree git dir returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+worktreeGitDir+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile worktree .git returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "gitdir"), []byte(filepath.Join(worktree, ".git")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile worktree gitdir backlink returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile worktree commondir returned error: %v", err)
+	}
+	return worktreeGitDir
 }
 
 func TestForcedChatGPTWorkspaceIDs(t *testing.T) {

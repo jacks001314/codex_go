@@ -1670,8 +1670,11 @@ func rootCheckoutForLinkedWorktree(checkoutRoot string) string {
 		return ""
 	}
 	gitFile := filepath.Join(checkoutRoot, ".git")
-	info, err := os.Stat(gitFile)
-	if err != nil || info.IsDir() {
+	info, err := os.Lstat(gitFile)
+	if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return checkoutRoot
+	}
+	if info.Size() > maxGitMetadataFileBytes {
 		return checkoutRoot
 	}
 	data, err := os.ReadFile(gitFile)
@@ -1686,12 +1689,111 @@ func rootCheckoutForLinkedWorktree(checkoutRoot string) string {
 		target = filepath.Join(checkoutRoot, target)
 	}
 	target = filepath.Clean(target)
-	slashTarget := filepath.ToSlash(target)
-	before, _, found := strings.Cut(slashTarget, "/.git/worktrees/")
-	if found && before != "" {
-		return filepath.Clean(filepath.FromSlash(before))
+	// Rust #39616: validate the linked worktree before inheriting the main
+	// repository's trust. The `.git` pointer alone is not proof that the
+	// repository registered this checkout.
+	gitDirInfo, err := os.Lstat(target)
+	if err != nil || !gitDirInfo.IsDir() || gitDirInfo.Mode()&os.ModeSymlink != 0 {
+		return checkoutRoot
 	}
-	return checkoutRoot
+	canonicalGitDir, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return checkoutRoot
+	}
+	if filepath.Base(filepath.Dir(canonicalGitDir)) != "worktrees" {
+		return checkoutRoot
+	}
+	commonDir := filepath.Dir(filepath.Dir(canonicalGitDir))
+
+	gitdirBytes, ok := readGitMetadataFile(filepath.Join(canonicalGitDir, "gitdir"))
+	if !ok {
+		return checkoutRoot
+	}
+	gitdirTarget := strings.TrimSpace(string(gitdirBytes))
+	if gitdirTarget == "" {
+		return checkoutRoot
+	}
+	if !filepath.IsAbs(gitdirTarget) {
+		gitdirTarget = filepath.Join(canonicalGitDir, gitdirTarget)
+	}
+	gitdirTarget = filepath.Clean(gitdirTarget)
+	if filepath.Base(gitdirTarget) != ".git" {
+		return checkoutRoot
+	}
+	registeredCheckout := filepath.Dir(gitdirTarget)
+
+	commondirBytes, ok := readGitMetadataFile(filepath.Join(canonicalGitDir, "commondir"))
+	if !ok {
+		return checkoutRoot
+	}
+	commondirValue := strings.TrimSpace(string(commondirBytes))
+	if commondirValue == "" {
+		return checkoutRoot
+	}
+	if !filepath.IsAbs(commondirValue) {
+		commondirValue = filepath.Join(canonicalGitDir, commondirValue)
+	}
+	linkedCommonDir := filepath.Clean(commondirValue)
+
+	canonicalRegistered, err := filepath.EvalSymlinks(registeredCheckout)
+	if err != nil {
+		return checkoutRoot
+	}
+	canonicalCheckout, err := filepath.EvalSymlinks(checkoutRoot)
+	if err != nil {
+		return checkoutRoot
+	}
+	canonicalLinkedCommon, err := filepath.EvalSymlinks(linkedCommonDir)
+	if err != nil {
+		return checkoutRoot
+	}
+	if filepath.Clean(canonicalRegistered) != filepath.Clean(canonicalCheckout) ||
+		filepath.Clean(canonicalLinkedCommon) != filepath.Clean(commonDir) {
+		return checkoutRoot
+	}
+
+	// Prove that the main checkout owns the canonical common directory.
+	mainRoot := filepath.Dir(commonDir)
+	mainGitDir := filepath.Join(mainRoot, ".git")
+	if mainInfo, err := os.Lstat(mainGitDir); err == nil && !mainInfo.IsDir() && mainInfo.Mode()&os.ModeSymlink == 0 {
+		if mainInfo.Size() > maxGitMetadataFileBytes {
+			return checkoutRoot
+		}
+		mainData, err := os.ReadFile(mainGitDir)
+		if err != nil {
+			return checkoutRoot
+		}
+		mainTarget := parseGitDirPointer(string(mainData))
+		if mainTarget == "" {
+			return checkoutRoot
+		}
+		if !filepath.IsAbs(mainTarget) {
+			mainTarget = filepath.Join(mainRoot, mainTarget)
+		}
+		mainGitDir = filepath.Clean(mainTarget)
+	}
+	canonicalMainGitDir, err := filepath.EvalSymlinks(mainGitDir)
+	if err != nil {
+		return checkoutRoot
+	}
+	if filepath.Clean(canonicalMainGitDir) != filepath.Clean(commonDir) {
+		return checkoutRoot
+	}
+	return mainRoot
+}
+
+const maxGitMetadataFileBytes = 64 * 1024
+
+func readGitMetadataFile(path string) ([]byte, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Size() > maxGitMetadataFileBytes {
+		return nil, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || int64(len(data)) > maxGitMetadataFileBytes {
+		return nil, false
+	}
+	return data, true
 }
 
 func parseGitDirPointer(contents string) string {

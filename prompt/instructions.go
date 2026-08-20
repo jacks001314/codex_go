@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,6 +148,10 @@ type InstructionsLoadConfig struct {
 	FallbackNames    []string
 	EnvironmentID    string
 	UserInstructions string
+	// DenyRead, when set, reports whether the active filesystem permissions
+	// reject reading a discovered instruction path. A denied instruction file
+	// fails loading instead of silently omitting it (Rust #39653).
+	DenyRead func(path string) bool
 }
 
 func LoadProjectInstructions(config InstructionsLoadConfig) (*LoadedInstructions, error) {
@@ -168,6 +173,9 @@ func LoadProjectInstructions(config InstructionsLoadConfig) (*LoadedInstructions
 	for _, path := range paths {
 		if remaining == 0 {
 			break
+		}
+		if config.DenyRead != nil && config.DenyRead(path) {
+			return nil, fmt.Errorf("failed to load AGENTS.md instructions: %s is not readable under the active filesystem permissions", path)
 		}
 		data, err := os.ReadFile(path)
 		if os.IsNotExist(err) {

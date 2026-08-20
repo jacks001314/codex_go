@@ -1461,9 +1461,9 @@
             "domains":  [
                 "core"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: config.rootCheckoutForLinkedWorktree now validates the gitdir backlink, commondir, registered checkout, symlink/metadata constraints, and main-checkout ownership before inheriting the main repository's trust key; forged and swapped worktrees fall back to the checkout's own trust. Tests cover valid, forged, and swapped worktrees."
                 ]
             },
         {
@@ -1672,9 +1672,9 @@
             "domains":  [
                 "protocol"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: LoadProjectInstructions accepts a DenyRead predicate and fails when a discovered AGENTS.md is denied by the active filesystem permissions; threadStartInstructions resolves the turn's permission profile and propagates the error so thread start rolls back instead of leaking instructions; tests cover denial."
                 ]
             },
         {
