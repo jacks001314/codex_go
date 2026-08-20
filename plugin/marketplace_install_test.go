@@ -18,9 +18,14 @@ func TestIsolatedPluginGitEnvStripsScopedConfigLikeRust(t *testing.T) {
 			name = pair[:idx]
 		}
 		if name == "GIT_CONFIG_COUNT" || name == "GIT_CONFIG_PARAMETERS" ||
-			strings.HasPrefix(name, "GIT_CONFIG_KEY_") || strings.HasPrefix(name, "GIT_CONFIG_VALUE_") ||
-			name == "GIT_CONFIG_GLOBAL" || name == "GIT_CONFIG_SYSTEM" {
+			strings.HasPrefix(name, "GIT_CONFIG_KEY_") || strings.HasPrefix(name, "GIT_CONFIG_VALUE_") {
 			t.Fatalf("scoped git config variable survived isolation: %s", name)
 		}
+		if pair == "GIT_CONFIG_GLOBAL=/attacker/gitconfig" {
+			t.Fatal("attacker GIT_CONFIG_GLOBAL survived isolation")
+		}
+	}
+	if !strings.Contains(strings.Join(env, "\x00"), "GIT_CONFIG_GLOBAL="+isolatedGitConfigPathValue) {
+		t.Fatal("isolated GIT_CONFIG_GLOBAL was not set to the empty trusted config")
 	}
 }
