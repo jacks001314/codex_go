@@ -1166,9 +1166,9 @@
                         "domains":  [
                                         "plugin"
                                     ],
-                        "status":  "implementation_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Deferred (documented): scoped to plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                                         "Implemented: automatic plugin/curated marketplace git operations run with repository-scoped GIT_CONFIG_* variables stripped and global/system config pointed at an empty trusted file (GitMarketplaceMaterializer.Automatic + isolatedPluginGitEnv); explicit operations keep the caller environment."
                                      ]
                     },
                     {

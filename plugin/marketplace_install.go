@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -84,7 +85,11 @@ func (f MarketplacePluginMaterializerFunc) MaterializeMarketplacePlugin(source *
 	return f(source, destination)
 }
 
-type GitMarketplaceMaterializer struct{}
+type GitMarketplaceMaterializer struct {
+	// Automatic isolates background marketplace/plugin git operations from
+	// repository-scoped or command-scoped Git configuration (Rust #39520).
+	Automatic bool
+}
 
 type GitMarketplaceRevisionResolver struct{}
 
@@ -99,18 +104,18 @@ func defaultMarketplaceInstallRoot() string {
 }
 
 func (m *GitMarketplaceMaterializer) MaterializeMarketplace(source *ParsedMarketplaceSource, sparsePaths []string, destination string) error {
-	return materializeGitMarketplace(source, sparsePaths, destination, false)
+	return materializeGitMarketplace(source, sparsePaths, destination, false, m != nil && m.Automatic)
 }
 
 func (m *GitMarketplaceMaterializer) MaterializeMarketplacePlugin(source *ParsedMarketplaceSource, destination string) error {
-	return materializeGitMarketplace(source, nil, destination, false)
+	return materializeGitMarketplace(source, nil, destination, false, m != nil && m.Automatic)
 }
 
 func (m *GitMarketplaceMaterializer) UpgradeMarketplace(source *ParsedMarketplaceSource, sparsePaths []string, destination string) error {
-	return materializeGitMarketplace(source, sparsePaths, destination, true)
+	return materializeGitMarketplace(source, sparsePaths, destination, true, m != nil && m.Automatic)
 }
 
-func materializeGitMarketplace(source *ParsedMarketplaceSource, sparsePaths []string, destination string, replaceExisting bool) error {
+func materializeGitMarketplace(source *ParsedMarketplaceSource, sparsePaths []string, destination string, replaceExisting bool, automatic bool) error {
 	if source == nil || source.Kind != MarketplaceSourceGit {
 		return nil
 	}
@@ -147,7 +152,7 @@ func materializeGitMarketplace(source *ParsedMarketplaceSource, sparsePaths []st
 		}
 	}()
 
-	if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, stagedRoot); err != nil {
+	if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, stagedRoot, automatic); err != nil {
 		return err
 	}
 	if _, err := os.Stat(destination); err == nil {
@@ -209,7 +214,7 @@ func (r *GitMarketplaceRevisionResolver) MarketplaceRevision(source *ParsedMarke
 	if source.RefName != nil && strings.TrimSpace(*source.RefName) != "" {
 		ref = strings.TrimSpace(*source.RefName)
 	}
-	output, err := runMarketplaceGitOutput(nil, "ls-remote", source.URL, ref)
+	output, err := runMarketplaceGitOutput(nil, false, "ls-remote", source.URL, ref)
 	if err != nil {
 		return "", err
 	}
@@ -220,40 +225,44 @@ func (r *GitMarketplaceRevisionResolver) MarketplaceRevision(source *ParsedMarke
 	return fields[0], nil
 }
 
-func cloneGitMarketplaceSource(url string, refName *string, sparsePaths []string, destination string) error {
+func cloneGitMarketplaceSource(url string, refName *string, sparsePaths []string, destination string, automatic bool) error {
 	if len(sparsePaths) == 0 {
-		if err := runMarketplaceGit(nil, "clone", url, destination); err != nil {
+		if err := runMarketplaceGit(nil, automatic, "clone", url, destination); err != nil {
 			return err
 		}
 		if refName != nil && strings.TrimSpace(*refName) != "" {
-			if err := runMarketplaceGit(&destination, "checkout", strings.TrimSpace(*refName)); err != nil {
+			if err := runMarketplaceGit(&destination, automatic, "checkout", strings.TrimSpace(*refName)); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := runMarketplaceGit(nil, "clone", "--filter=blob:none", "--no-checkout", url, destination); err != nil {
+	if err := runMarketplaceGit(nil, automatic, "clone", "--filter=blob:none", "--no-checkout", url, destination); err != nil {
 		return err
 	}
 	args := append([]string{"sparse-checkout", "set"}, sparsePaths...)
-	if err := runMarketplaceGit(&destination, args...); err != nil {
+	if err := runMarketplaceGit(&destination, automatic, args...); err != nil {
 		return err
 	}
 	checkoutRef := "HEAD"
 	if refName != nil && strings.TrimSpace(*refName) != "" {
 		checkoutRef = strings.TrimSpace(*refName)
 	}
-	return runMarketplaceGit(&destination, "checkout", checkoutRef)
+	return runMarketplaceGit(&destination, automatic, "checkout", checkoutRef)
 }
 
-func runMarketplaceGit(cwd *string, args ...string) error {
-	_, err := runMarketplaceGitOutput(cwd, args...)
+func runMarketplaceGit(cwd *string, automatic bool, args ...string) error {
+	_, err := runMarketplaceGitOutput(cwd, automatic, args...)
 	return err
 }
 
-func runMarketplaceGitOutput(cwd *string, args ...string) (string, error) {
+func runMarketplaceGitOutput(cwd *string, automatic bool, args ...string) (string, error) {
 	command := exec.Command("git", args...)
-	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if automatic {
+		command.Env = isolatedPluginGitEnv()
+	} else {
+		command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	}
 	if cwd != nil {
 		command.Dir = *cwd
 	}
@@ -262,4 +271,43 @@ func runMarketplaceGitOutput(cwd *string, args ...string) (string, error) {
 		return string(output), nil
 	}
 	return "", fmt.Errorf("git %s failed: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+}
+
+var isolatedGitConfigOnce sync.Once
+var isolatedGitConfigPathValue string
+
+// isolatedPluginGitEnv returns an environment for automatic plugin git
+// operations with repository-scoped Git configuration variables removed and
+// global/system config pointed at an empty trusted file so ambient config
+// cannot redirect remotes or invoke helpers (Rust #39520).
+func isolatedPluginGitEnv() []string {
+	isolatedGitConfigOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "codex-plugin-git-")
+		if err != nil {
+			isolatedGitConfigPathValue = os.DevNull
+			return
+		}
+		isolatedGitConfigPathValue = filepath.Join(dir, "empty-gitconfig")
+		_ = os.WriteFile(isolatedGitConfigPathValue, nil, 0o600)
+	})
+	var env []string
+	for _, pair := range os.Environ() {
+		name := pair
+		if idx := strings.IndexByte(pair, '='); idx >= 0 {
+			name = pair[:idx]
+		}
+		switch {
+		case name == "GIT_CONFIG_COUNT", name == "GIT_CONFIG_PARAMETERS",
+			name == "GIT_CONFIG_SYSTEM", name == "GIT_CONFIG_GLOBAL",
+			strings.HasPrefix(name, "GIT_CONFIG_KEY_"), strings.HasPrefix(name, "GIT_CONFIG_VALUE_"):
+			continue
+		default:
+			env = append(env, pair)
+		}
+	}
+	return append(env,
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL="+isolatedGitConfigPathValue,
+	)
 }

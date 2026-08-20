@@ -37,6 +37,13 @@ func (s *PluginService) StartCuratedRepoSync(onChanged func()) bool {
 	s.curatedSyncInFlight = true
 	codexHome := s.codexHome
 	materializer := s.marketplaceMaterializer
+	if gitMaterializer, ok := materializer.(*GitMarketplaceMaterializer); ok {
+		// Rust #39520: background curated sync must not inherit repository or
+		// command-scoped Git configuration.
+		isolated := *gitMaterializer
+		isolated.Automatic = true
+		materializer = &isolated
+	}
 	s.mu.Unlock()
 
 	go func() {
