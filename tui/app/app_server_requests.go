@@ -1,5 +1,7 @@
 package app
 
+import "strings"
+
 // Rust parity subset: codex-rs/tui/src/app/app_server_requests.rs.
 
 const (
@@ -37,17 +39,26 @@ const (
 type ResolvedAppServerRequest struct {
 	Kind       ResolvedAppServerRequestKind
 	ID         string
+	ThreadID   string
 	CallID     string
 	ServerName string
 	RequestID  string
 }
 
 type PendingAppServerRequests struct {
-	execApprovals        map[string]string
-	fileChangeApprovals  map[string]string
-	permissionsApprovals map[string]string
+	execApprovals        map[pendingApprovalKey]string
+	fileChangeApprovals  map[pendingApprovalKey]string
+	permissionsApprovals map[pendingApprovalKey]string
 	userInputs           map[string][]pendingUserInputRequest
 	mcpRequests          map[mcpRequestKey]string
+}
+
+// pendingApprovalKey scopes pending app-server approvals by both the thread
+// and the item id so colliding ids across concurrent threads never resolve,
+// submit, or dismiss the wrong request (Rust #39372).
+type pendingApprovalKey struct {
+	threadID string
+	itemID   string
 }
 
 type pendingUserInputRequest struct {
@@ -70,9 +81,9 @@ func (p *PendingAppServerRequests) Clear() {
 	if p == nil {
 		return
 	}
-	p.execApprovals = map[string]string{}
-	p.fileChangeApprovals = map[string]string{}
-	p.permissionsApprovals = map[string]string{}
+	p.execApprovals = map[pendingApprovalKey]string{}
+	p.fileChangeApprovals = map[pendingApprovalKey]string{}
+	p.permissionsApprovals = map[pendingApprovalKey]string{}
 	p.userInputs = map[string][]pendingUserInputRequest{}
 	p.mcpRequests = map[mcpRequestKey]string{}
 }
@@ -88,11 +99,11 @@ func (p *PendingAppServerRequests) NoteServerRequest(request ServerRequest) *Uns
 		if id == "" {
 			id = request.ItemID
 		}
-		p.execApprovals[id] = request.ID
+		p.execApprovals[pendingApprovalKey{threadID: canonicalApprovalThreadID(request.ThreadID), itemID: id}] = request.ID
 	case ServerRequestFileChangeApproval:
-		p.fileChangeApprovals[request.ItemID] = request.ID
+		p.fileChangeApprovals[pendingApprovalKey{threadID: canonicalApprovalThreadID(request.ThreadID), itemID: request.ItemID}] = request.ID
 	case ServerRequestPermissionsApproval:
-		p.permissionsApprovals[request.ItemID] = request.ID
+		p.permissionsApprovals[pendingApprovalKey{threadID: canonicalApprovalThreadID(request.ThreadID), itemID: request.ItemID}] = request.ID
 	case ServerRequestUserInput:
 		p.userInputs[request.TurnID] = append(p.userInputs[request.TurnID], pendingUserInputRequest{
 			ItemID:    request.ItemID,
@@ -124,11 +135,15 @@ func (p *PendingAppServerRequests) ContainsServerRequest(request ServerRequest) 
 	p.ensure()
 	switch request.Kind {
 	case ServerRequestCommandExecutionApproval:
-		return mapContainsValue(p.execApprovals, request.ID)
+		id := request.ApprovalID
+		if id == "" {
+			id = request.ItemID
+		}
+		return mapContainsValue(p.execApprovals, request.ID) && p.execApprovals[pendingApprovalKey{threadID: canonicalApprovalThreadID(request.ThreadID), itemID: id}] == request.ID
 	case ServerRequestFileChangeApproval:
-		return mapContainsValue(p.fileChangeApprovals, request.ID)
+		return p.fileChangeApprovals[pendingApprovalKey{threadID: canonicalApprovalThreadID(request.ThreadID), itemID: request.ItemID}] == request.ID
 	case ServerRequestPermissionsApproval:
-		return mapContainsValue(p.permissionsApprovals, request.ID)
+		return p.permissionsApprovals[pendingApprovalKey{threadID: canonicalApprovalThreadID(request.ThreadID), itemID: request.ItemID}] == request.ID
 	case ServerRequestUserInput:
 		for _, queue := range p.userInputs {
 			for _, pending := range queue {
@@ -157,22 +172,22 @@ func (p *PendingAppServerRequests) ResolveNotification(requestID string) (Resolv
 		return ResolvedAppServerRequest{}, false
 	}
 	p.ensure()
-	for id, pendingRequestID := range p.execApprovals {
+	for key, pendingRequestID := range p.execApprovals {
 		if pendingRequestID == requestID {
-			delete(p.execApprovals, id)
-			return ResolvedAppServerRequest{Kind: ResolvedAppServerRequestExecApproval, ID: id, RequestID: requestID}, true
+			delete(p.execApprovals, key)
+			return ResolvedAppServerRequest{Kind: ResolvedAppServerRequestExecApproval, ID: key.itemID, ThreadID: key.threadID, RequestID: requestID}, true
 		}
 	}
-	for id, pendingRequestID := range p.fileChangeApprovals {
+	for key, pendingRequestID := range p.fileChangeApprovals {
 		if pendingRequestID == requestID {
-			delete(p.fileChangeApprovals, id)
-			return ResolvedAppServerRequest{Kind: ResolvedAppServerRequestFileChangeApproval, ID: id, RequestID: requestID}, true
+			delete(p.fileChangeApprovals, key)
+			return ResolvedAppServerRequest{Kind: ResolvedAppServerRequestFileChangeApproval, ID: key.itemID, ThreadID: key.threadID, RequestID: requestID}, true
 		}
 	}
-	for id, pendingRequestID := range p.permissionsApprovals {
+	for key, pendingRequestID := range p.permissionsApprovals {
 		if pendingRequestID == requestID {
-			delete(p.permissionsApprovals, id)
-			return ResolvedAppServerRequest{Kind: ResolvedAppServerRequestPermissionsApproval, ID: id, RequestID: requestID}, true
+			delete(p.permissionsApprovals, key)
+			return ResolvedAppServerRequest{Kind: ResolvedAppServerRequestPermissionsApproval, ID: key.itemID, ThreadID: key.threadID, RequestID: requestID}, true
 		}
 	}
 	if pending, ok := p.removeUserInputRequest(requestID); ok {
@@ -237,13 +252,13 @@ func (p *PendingAppServerRequests) removeUserInputRequest(requestID string) (pen
 
 func (p *PendingAppServerRequests) ensure() {
 	if p.execApprovals == nil {
-		p.execApprovals = map[string]string{}
+		p.execApprovals = map[pendingApprovalKey]string{}
 	}
 	if p.fileChangeApprovals == nil {
-		p.fileChangeApprovals = map[string]string{}
+		p.fileChangeApprovals = map[pendingApprovalKey]string{}
 	}
 	if p.permissionsApprovals == nil {
-		p.permissionsApprovals = map[string]string{}
+		p.permissionsApprovals = map[pendingApprovalKey]string{}
 	}
 	if p.userInputs == nil {
 		p.userInputs = map[string][]pendingUserInputRequest{}
@@ -253,7 +268,17 @@ func (p *PendingAppServerRequests) ensure() {
 	}
 }
 
-func mapContainsValue(values map[string]string, value string) bool {
+// canonicalApprovalThreadID normalizes parseable thread ids so equivalent
+// UUID representations still match (Rust #39372).
+func canonicalApprovalThreadID(threadID string) string {
+	parsed, ok := ParseAppServerThreadID(threadID)
+	if ok {
+		return parsed
+	}
+	return strings.TrimSpace(threadID)
+}
+
+func mapContainsValue(values map[pendingApprovalKey]string, value string) bool {
 	for _, candidate := range values {
 		if candidate == value {
 			return true

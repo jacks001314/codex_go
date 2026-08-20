@@ -60,6 +60,31 @@ func TestPendingAppServerRequestsUserInputFIFOMatchRust(t *testing.T) {
 	}
 }
 
+func TestPendingAppServerRequestsScopesApprovalsByThread(t *testing.T) {
+	// Rust #39372: approval ids can collide across concurrent threads; pending
+	// tracking must key by both thread and id so resolution cannot dismiss the
+	// wrong thread's request.
+	pending := NewPendingAppServerRequests()
+	pending.NoteServerRequest(ServerRequest{ID: "req-a", Kind: ServerRequestCommandExecutionApproval, ThreadID: rustThreadID1, ItemID: "item-1", ApprovalID: "approval-1"})
+	pending.NoteServerRequest(ServerRequest{ID: "req-b", Kind: ServerRequestCommandExecutionApproval, ThreadID: rustThreadID2, ItemID: "item-1", ApprovalID: "approval-1"})
+	if pending.PendingCount() != 2 {
+		t.Fatalf("PendingCount() = %d, want 2", pending.PendingCount())
+	}
+	// Resolving thread A's request must not dismiss thread B's colliding id.
+	resolved, ok := pending.ResolveNotification("req-a")
+	if !ok || resolved.Kind != ResolvedAppServerRequestExecApproval || resolved.ID != "approval-1" || resolved.ThreadID != canonicalApprovalThreadID(rustThreadID1) {
+		t.Fatalf("ResolveNotification(req-a) = %#v/%v", resolved, ok)
+	}
+	if pending.PendingCount() != 1 {
+		t.Fatalf("PendingCount() after resolving thread A = %d, want 1", pending.PendingCount())
+	}
+	// The remaining request is thread B's.
+	remaining, ok := pending.ResolveNotification("req-b")
+	if !ok || remaining.ThreadID != canonicalApprovalThreadID(rustThreadID2) {
+		t.Fatalf("ResolveNotification(req-b) = %#v/%v", remaining, ok)
+	}
+}
+
 func TestPendingAppServerRequestsMcpResolveMatchRust(t *testing.T) {
 	pending := NewPendingAppServerRequests()
 	pending.NoteServerRequest(ServerRequest{ID: "req-mcp", Kind: ServerRequestMcpElicitation, ServerName: "sentry"})
