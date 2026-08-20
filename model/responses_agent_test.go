@@ -2776,3 +2776,26 @@ func TestResponsesAgentRunnerWorkloadIdentityRefreshFallsThroughWhenNotSelected(
 		t.Fatal("expected workload identity refresh to report unavailability")
 	}
 }
+
+func TestResponsesAgentRunnerAppliesManagedResidencyHeaderLikeRust(t *testing.T) {
+	provider := &APIProvider{
+		Name:    OpenAIProviderName,
+		BaseURL: "https://example.invalid/v1",
+		// A provider-configured residency header must be overridden by the
+		// managed enforce_residency requirement (#39645).
+		Headers: http.Header{ResidencyHeaderName: []string{"provider-value"}},
+	}
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:      provider,
+		ModelsManager: NewStaticModelsManager(ModelsResponse{}),
+		ProviderID:    OpenAIProviderID,
+	})
+	runner.Residency = "us"
+	req, err := runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{Model: "gpt-test"}, &responsesAgentRequest{}, "application/json")
+	if err != nil {
+		t.Fatalf("newResponsesHTTPRequest() error = %v", err)
+	}
+	if got := req.Header.Get(ResidencyHeaderName); got != "us" {
+		t.Fatalf("residency header = %q, want managed value us", got)
+	}
+}

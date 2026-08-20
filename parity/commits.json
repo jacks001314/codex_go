@@ -1636,9 +1636,9 @@
                 "auth",
                 "config"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to auth, config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: ResponsesAgentRunner gains a managed Residency setting applied as the authoritative x-openai-internal-codex-residency header on model requests (overriding provider http_headers); appserver wires it from ConfigRequirements.EnforceResidency; test covers override."
                 ]
             },
         {

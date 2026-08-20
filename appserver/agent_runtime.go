@@ -182,7 +182,15 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	agent.StoreOptions = r.authStoreOptions()
 	agent.AgentIdentity = agentIdentityOptionsForAppTurn(cfg)
 	agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
+	agent.Residency = managedResidencyForConfig(cfg)
 	return agent, nil
+}
+
+func managedResidencyForConfig(cfg *config.Config) string {
+	if cfg != nil && cfg.Requirements != nil && cfg.Requirements.EnforceResidency != nil {
+		return string(*cfg.Requirements.EnforceResidency)
+	}
+	return ""
 }
 
 func (r *RuntimeRouter) appTurnModelProviderConfig(cfg *config.Config, params *turn.TurnStartParams) (*appTurnRunConfig, error) {

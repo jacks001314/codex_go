@@ -27,6 +27,10 @@ import (
 const defaultResponsesEndpoint = "https://api.openai.com/v1"
 const defaultResponsesRetryBaseDelay = 200 * time.Millisecond
 const responsesLiteHeader = "x-openai-internal-codex-responses-lite"
+
+// ResidencyHeaderName is the managed residency header applied to model
+// requests (Rust default_client.rs RESIDENCY_HEADER_NAME, #39645).
+const ResidencyHeaderName = "x-openai-internal-codex-residency"
 const responsesIncludeTimingMetricsHeader = codexapi.ClientResponsesAPIIncludeTimingMetricsHeader
 
 type HTTPDoer interface {
@@ -114,11 +118,14 @@ type ResponsesAgentRunner struct {
 	SupportsWebsockets         bool
 	WebsocketConnectTimeout    time.Duration
 	UnboundedConnectionRetries *bool
-	providerAuthFetchedAt      time.Time
-	turnState                  *responsesTurnStateCache
-	websocketSessions          *responsesWebsocketSessionCache
-	agentIdentityTried         bool
-	agentIdentityBypass        bool
+	// Residency, when set, is the managed residency requirement enforced as an
+	// authoritative header on model requests (Rust #39645).
+	Residency             string
+	providerAuthFetchedAt time.Time
+	turnState             *responsesTurnStateCache
+	websocketSessions     *responsesWebsocketSessionCache
+	agentIdentityTried    bool
+	agentIdentityBypass   bool
 }
 
 type responsesTurnStateCache struct {
@@ -1146,6 +1153,11 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	addCompatibilityMetadataHeaders(httpRequest.Header, apiRequest.ClientMetadata)
 	addMemoryGenerationHeader(httpRequest.Header, apiRequest.ClientMetadata)
 	addHeaders(httpRequest.Header, r.providerHeaders())
+	if residency := strings.TrimSpace(r.Residency); residency != "" {
+		// Managed enforce_residency is authoritative over any provider
+		// http_headers value (Rust #39645).
+		httpRequest.Header.Set(ResidencyHeaderName, residency)
+	}
 	if err := r.addAttestationHeader(ctx, httpRequest.Header, request); err != nil {
 		return nil, err
 	}
