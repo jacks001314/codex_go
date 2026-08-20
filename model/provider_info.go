@@ -83,6 +83,15 @@ type ProviderAuthInfo struct {
 type ProviderAWSAuthInfo struct {
 	Profile string `json:"profile,omitempty"`
 	Region  string `json:"region,omitempty"`
+	// AuthRefresh mirrors Rust #39410: an `aws` command that refreshes
+	// expired AWS SDK credentials for Bedrock sessions, plus a timeout.
+	AuthRefresh *ProviderAuthRefreshInfo `json:"auth_refresh,omitempty"`
+}
+
+type ProviderAuthRefreshInfo struct {
+	Command   string   `json:"command,omitempty"`
+	Args      []string `json:"args,omitempty"`
+	TimeoutMS uint64   `json:"timeout_ms,omitempty"`
 }
 
 type ProviderInfo struct {
@@ -317,6 +326,19 @@ func cloneProviderAuthInfo(info *ProviderAuthInfo) *ProviderAuthInfo {
 	}
 }
 
+func cloneProviderAWSAuthInfoConfig(info *ProviderAWSAuthInfo) *ProviderAWSAuthInfo {
+	if info == nil {
+		return nil
+	}
+	clone := *info
+	if info.AuthRefresh != nil {
+		refresh := *info.AuthRefresh
+		refresh.Args = append([]string(nil), info.AuthRefresh.Args...)
+		clone.AuthRefresh = &refresh
+	}
+	return &clone
+}
+
 func CreateOpenAIProvider(baseURL string) ProviderInfo {
 	return ProviderInfo{
 		Name:                        OpenAIProviderName,
@@ -406,13 +428,13 @@ func MergeConfiguredProviders(providers map[string]ProviderInfo, configured map[
 			httpHeadersOverride := provider.HTTPHeaders
 			provider.HTTPHeaders = nil
 			if !(&provider).isZero() {
-				return nil, fmt.Errorf("model_providers.%s only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`; other non-default provider fields are not supported", key)
+				return nil, fmt.Errorf("model_providers.%s only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, and `aws.auth_refresh`; other non-default provider fields are not supported", key)
 			}
 			builtIn := out[key]
 			builtIn.BaseURL = baseURLOverride
 			builtIn.Auth = cloneProviderAuthInfo(authOverride)
 			if awsOverride != nil {
-				builtIn.AWS = &ProviderAWSAuthInfo{Profile: awsOverride.Profile, Region: awsOverride.Region}
+				builtIn.AWS = cloneProviderAWSAuthInfoConfig(awsOverride)
 			}
 			if len(httpHeadersOverride) > 0 {
 				if builtIn.HTTPHeaders == nil {

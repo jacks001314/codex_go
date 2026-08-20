@@ -183,6 +183,7 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	agent.AgentIdentity = agentIdentityOptionsForAppTurn(cfg)
 	agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
 	agent.Residency = managedResidencyForConfig(cfg)
+	agent.AWS = provider.AWS
 	return agent, nil
 }
 

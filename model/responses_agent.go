@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -91,6 +92,9 @@ type ResponsesAgentOptions struct {
 	// failed network connection recovers (Rust Feature::UnboundedConnectionRetries,
 	// default enabled). nil means the feature default (enabled).
 	UnboundedConnectionRetries *bool
+	// AWS carries the Amazon Bedrock SDK credential configuration when the
+	// provider uses the AWS credential chain (Rust #39410).
+	AWS *ProviderAWSAuthInfo
 }
 
 type ResponsesAgentRunner struct {
@@ -118,6 +122,9 @@ type ResponsesAgentRunner struct {
 	SupportsWebsockets         bool
 	WebsocketConnectTimeout    time.Duration
 	UnboundedConnectionRetries *bool
+	// AWS carries the Amazon Bedrock SDK credential configuration (Rust
+	// #39410) so expired SDK credentials can be refreshed on 401 failures.
+	AWS *ProviderAWSAuthInfo
 	// Residency, when set, is the managed residency requirement enforced as an
 	// authoritative header on model requests (Rust #39645).
 	Residency             string
@@ -126,6 +133,10 @@ type ResponsesAgentRunner struct {
 	websocketSessions     *responsesWebsocketSessionCache
 	agentIdentityTried    bool
 	agentIdentityBypass   bool
+	// AWSRefreshMu and AWSRefreshInFlight share Bedrock AWS credential
+	// refresh state across concurrent failures (Rust shared_state, #39410).
+	AWSRefreshMu       sync.Mutex
+	AWSRefreshInFlight chan struct{}
 }
 
 type responsesTurnStateCache struct {
@@ -369,6 +380,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		SupportsWebsockets:         options.SupportsWebsockets,
 		WebsocketConnectTimeout:    options.WebsocketConnectTimeout,
 		UnboundedConnectionRetries: cloneBoolPtrModel(options.UnboundedConnectionRetries),
+		AWS:                        cloneProviderAWSAuthInfo(options.AWS),
 		providerAuthFetchedAt:      providerAuthFetchedAt,
 		turnState:                  &responsesTurnStateCache{},
 		websocketSessions:          &responsesWebsocketSessionCache{sessions: map[string]*responsesWebsocketSession{}},
@@ -2175,6 +2187,9 @@ func providerAuthRefreshInterval(info *ProviderAuthInfo) time.Duration {
 }
 
 func (r *ResponsesAgentRunner) refreshAuthAfterUnauthorized(ctx context.Context) error {
+	if err := r.refreshBedrockAWSCredentials(ctx); err == nil {
+		return nil
+	}
 	if err := r.refreshWorkloadIdentityAuth(ctx); err == nil {
 		return nil
 	}
@@ -2185,6 +2200,87 @@ func (r *ResponsesAgentRunner) refreshAuthAfterUnauthorized(ctx context.Context)
 		return nil
 	}
 	return r.refreshProviderCommandAuth(ctx)
+}
+
+// refreshBedrockAWSCredentials mirrors Rust #39410: when a Bedrock session
+// using the AWS SDK credential chain reports expired credentials (e.g.
+// "Signature expired"), run the configured aws.auth_refresh command once,
+// reload the SDK credentials, and re-sign subsequent requests.
+func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context) error {
+	if r == nil || r.Provider == nil || r.Provider.Name != AmazonBedrockProviderName || r.AWS == nil || r.AWS.AuthRefresh == nil {
+		return errors.New("bedrock aws auth refresh is not configured")
+	}
+	refresh := r.AWS.AuthRefresh
+	if strings.TrimSpace(refresh.Command) == "" {
+		return errors.New("bedrock aws auth refresh command is empty")
+	}
+	// Share refresh state across matching provider configurations so
+	// concurrent failures invoke the command only once (Rust shared_state).
+	r.AWSRefreshMu.Lock()
+	if r.AWSRefreshInFlight != nil {
+		ch := r.AWSRefreshInFlight
+		r.AWSRefreshMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ch:
+		}
+		return nil
+	}
+	ch := make(chan struct{})
+	r.AWSRefreshInFlight = ch
+	r.AWSRefreshMu.Unlock()
+
+	runErr := r.runBedrockAWSRefreshCommand(ctx, refresh)
+
+	r.AWSRefreshMu.Lock()
+	r.AWSRefreshInFlight = nil
+	close(ch)
+	r.AWSRefreshMu.Unlock()
+	if runErr != nil {
+		return runErr
+	}
+	// Reload the SDK credential chain and re-sign future requests.
+	if r.AWS != nil {
+		awsContext, err := auth.LoadAWSAuthContext(&auth.AWSAuthConfig{
+			Profile: strings.TrimSpace(r.AWS.Profile),
+			Region:  strings.TrimSpace(r.AWS.Region),
+			Service: AmazonBedrockMantleServiceName,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to reload Amazon Bedrock auth after refresh: %w", err)
+		}
+		if r.Auth == nil {
+			r.Auth = &AuthHeaders{Headers: http.Header{}}
+		}
+		r.Auth.SignRequest = func(ctx context.Context, request *http.Request, body []byte) (*SignedRequest, error) {
+			return signBedrockMantleRequest(awsContext, request, body)
+		}
+	}
+	return nil
+}
+
+func (r *ResponsesAgentRunner) runBedrockAWSRefreshCommand(ctx context.Context, refresh *ProviderAuthRefreshInfo) error {
+	if refresh == nil || strings.TrimSpace(refresh.Command) == "" {
+		return errors.New("bedrock aws auth refresh command is empty")
+	}
+	timeoutMS := refresh.TimeoutMS
+	if timeoutMS == 0 {
+		timeoutMS = DefaultProviderAuthTimeoutMS
+	}
+	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMS)*time.Millisecond)
+	defer cancel()
+	args := append([]string(nil), refresh.Args...)
+	cmd := exec.CommandContext(execCtx, refresh.Command, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("bedrock aws auth refresh failed: %s", message)
+	}
+	return nil
 }
 
 func (r *ResponsesAgentRunner) resolveAgentIdentityAuth(ctx context.Context) error {
@@ -2451,6 +2547,19 @@ func cloneBoolPtrModel(value *bool) *bool {
 		return nil
 	}
 	clone := *value
+	return &clone
+}
+
+func cloneProviderAWSAuthInfo(value *ProviderAWSAuthInfo) *ProviderAWSAuthInfo {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	if value.AuthRefresh != nil {
+		refresh := *value.AuthRefresh
+		refresh.Args = append([]string(nil), value.AuthRefresh.Args...)
+		clone.AuthRefresh = &refresh
+	}
 	return &clone
 }
 

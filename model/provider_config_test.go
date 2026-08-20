@@ -154,6 +154,39 @@ func TestProviderConfigRejectsAWSForCustomProvider(t *testing.T) {
 	}
 }
 
+func TestProviderAWSConfigParsesAuthRefreshLikeRust(t *testing.T) {
+	// Rust #39410: aws.auth_refresh carries a command, args, and timeout for
+	// refreshing expired SDK credentials on Bedrock.
+	values := map[string]any{
+		"model_providers": map[string]any{
+			"amazon-bedrock": map[string]any{
+				"aws":    map[string]any{
+					"region": "us-east-1",
+					"auth_refresh": map[string]any{
+						"command":    "aws",
+						"args":       []string{"sso", "login", "--no-browser"},
+						"timeout_ms": int64(30000),
+					},
+				},
+			},
+		},
+	}
+	providers, err := ProvidersFromConfig(values, "")
+	if err != nil {
+		t.Fatalf("ProvidersFromConfig error = %v", err)
+	}
+	bedrock, ok := providers[AmazonBedrockProviderID]
+	if !ok {
+		t.Fatalf("providers missing amazon-bedrock: %#v", providers)
+	}
+	if bedrock.AWS == nil || bedrock.AWS.AuthRefresh == nil {
+		t.Fatalf("bedrock aws auth_refresh = %#v", bedrock.AWS)
+	}
+	if bedrock.AWS.AuthRefresh.Command != "aws" || len(bedrock.AWS.AuthRefresh.Args) != 3 || bedrock.AWS.AuthRefresh.TimeoutMS != 30000 {
+		t.Fatalf("auth_refresh = %#v", bedrock.AWS.AuthRefresh)
+	}
+}
+
 func TestProviderConfigRejectsReservedBuiltinIDsLikeRust(t *testing.T) {
 	// Mirrors Rust validate_reserved_model_provider_ids
 	// (config/src/config_toml.rs): openai/ollama/lmstudio cannot be overridden;
@@ -279,7 +312,7 @@ func TestProviderConfigAllowsOnlyAmazonBedrockAWSOverride(t *testing.T) {
 	if err == nil {
 		t.Fatal("ProviderForConfigID returned nil error, want unsupported override failure")
 	}
-	if !strings.Contains(err.Error(), "only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`") {
+	if !strings.Contains(err.Error(), "only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, and `aws.auth_refresh`") {
 		t.Fatalf("error = %v", err)
 	}
 

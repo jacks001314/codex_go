@@ -2799,3 +2799,48 @@ func TestResponsesAgentRunnerAppliesManagedResidencyHeaderLikeRust(t *testing.T)
 		t.Fatalf("residency header = %q, want managed value us", got)
 	}
 }
+
+func TestRefreshBedrockAWSCredentialsRunsCommandOnceAndReloads(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell helper not needed; command path is cross-platform")
+	}
+	helper := `
+if [ "$1" = "refresh" ]; then
+  touch "$CODEX_TEST_REFRESH_MARKER"
+  exit 0
+fi
+exit 1
+`
+	marker := filepath.Join(t.TempDir(), "refreshed")
+	script := filepath.Join(t.TempDir(), "aws-refresh.sh")
+	if err := os.WriteFile(script, []byte(helper), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_TEST_REFRESH_MARKER", marker)
+	runner := &ResponsesAgentRunner{
+		Provider: &APIProvider{Name: AmazonBedrockProviderName},
+		AWS: &ProviderAWSAuthInfo{
+			Region: "us-east-1",
+			AuthRefresh: &ProviderAuthRefreshInfo{
+				Command: script,
+				Args:    []string{"refresh"},
+			},
+		},
+	}
+	if err := runner.refreshBedrockAWSCredentials(context.Background()); err != nil {
+		t.Fatalf("refresh error = %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("refresh command did not run: %v", err)
+	}
+	if runner.Auth == nil || runner.Auth.SignRequest == nil {
+		t.Fatalf("signer not reloaded after refresh: %#v", runner.Auth)
+	}
+}
+
+func TestRefreshBedrockAWSCredentialsSkipsWhenNotConfigured(t *testing.T) {
+	runner := &ResponsesAgentRunner{Provider: &APIProvider{Name: OpenAIProviderName}}
+	if err := runner.refreshBedrockAWSCredentials(context.Background()); err == nil {
+		t.Fatal("refresh should be skipped when not configured")
+	}
+}

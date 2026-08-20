@@ -156,6 +156,17 @@ func providerInfoFromConfig(values map[string]any, validate bool) (*ProviderInfo
 			Profile: stringConfig(awsConfig, "profile"),
 			Region:  stringConfig(awsConfig, "region"),
 		}
+		if refreshConfig, ok := configValue(awsConfig, "auth_refresh").(map[string]any); ok {
+			timeoutMS, err := providerAuthRefreshTimeoutMSConfig(refreshConfig)
+			if err != nil {
+				return nil, err
+			}
+			provider.AWS.AuthRefresh = &ProviderAuthRefreshInfo{
+				Command:   stringConfig(refreshConfig, "command"),
+				Args:      stringSliceConfig(refreshConfig, "args"),
+				TimeoutMS: timeoutMS,
+			}
+		}
 	}
 	if validate {
 		if err := provider.Validate(); err != nil {
@@ -163,6 +174,21 @@ func providerInfoFromConfig(values map[string]any, validate bool) (*ProviderInfo
 		}
 	}
 	return provider, nil
+}
+
+func providerAuthRefreshTimeoutMSConfig(values map[string]any) (uint64, error) {
+	raw := configValue(values, "timeout_ms")
+	if raw == nil {
+		return DefaultProviderAuthTimeoutMS, nil
+	}
+	value, ok := uint64FromAny(raw)
+	if !ok {
+		return 0, fmt.Errorf("provider aws.auth_refresh.timeout_ms must be a positive integer")
+	}
+	if value == 0 {
+		return 0, fmt.Errorf("provider aws.auth_refresh.timeout_ms must be non-zero")
+	}
+	return value, nil
 }
 
 func providerAuthInfoFromConfig(values map[string]any) (*ProviderAuthInfo, error) {
@@ -311,16 +337,19 @@ func stringMapConfig(values map[string]any, key string) map[string]string {
 }
 
 func stringSliceConfig(values map[string]any, key string) []string {
-	raw, ok := configValue(values, key).([]any)
-	if !ok {
+	switch raw := configValue(values, key).(type) {
+	case []any:
+		out := make([]string, 0, len(raw))
+		for _, value := range raw {
+			text, ok := value.(string)
+			if ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	case []string:
+		return append([]string(nil), raw...)
+	default:
 		return nil
 	}
-	out := make([]string, 0, len(raw))
-	for _, value := range raw {
-		text, ok := value.(string)
-		if ok {
-			out = append(out, text)
-		}
-	}
-	return out
 }
