@@ -560,6 +560,20 @@ func TestNoiseVirtualStreamProcessorExitReportsClosedStreamLikeRust(t *testing.T
 	case <-time.After(5 * time.Second):
 		t.Fatal("virtual stream processor did not report closure")
 	}
+	// Rust #39235: when the processor exits before the writer task, the
+	// physical relay still sends a reset for the harness stream.
+	select {
+	case frame := <-outgoing:
+		parsed, err := decodeRelayMessageFrame(frame)
+		if err != nil {
+			t.Fatalf("decode reset frame: %v", err)
+		}
+		if parsed.StreamID != "stream-1" || parsed.Kind != relayFrameReset {
+			t.Fatalf("reset frame = %#v, want reset for stream-1", parsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("processor-exit reset frame was not queued")
+	}
 }
 
 func TestNoiseChannelPrologueEncodingMatchesRust(t *testing.T) {

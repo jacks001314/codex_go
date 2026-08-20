@@ -406,7 +406,11 @@ func newRemoteNoiseVirtualStream(
 	}
 	go func() {
 		defer serverConn.Close()
+		// Rust #39235: when the JSON-RPC processor exits before the writer
+		// task, the physical relay still resets the corresponding harness
+		// stream so the peer does not wait on a dead connection.
 		_ = server.serveConnectionStream(streamCtx, serverConn, serverConn)
+		queueRelayReset(outgoing, streamID)
 	}()
 	go stream.runInboundWriter(streamCtx)
 	go stream.runOutboundReader(streamCtx, outgoing, closed)
