@@ -47,7 +47,7 @@ func TestRuntimeRouterPreparesMCPAndPluginRecommendationsConcurrently(t *testing
 	}
 
 	request := waitForRuntimeAgentRequest(t, agent)
-	if input := inputItemText(request.InputItems); !strings.Contains(input, "<recommended_plugins>") || !strings.Contains(input, "GitHub") {
+	if input := inputItemText(request.InputItems); !strings.Contains(input, "<recommended_plugins>") || !strings.Contains(input, "github") {
 		t.Fatalf("recommended plugin input missing: %s", input)
 	}
 	if !agentRequestCodeModeHasTool(request, "mcp__required_preparation", "echo") {
@@ -92,7 +92,7 @@ func newConcurrentTurnPreparationTest(t *testing.T) (*RuntimeRouter, *recordingR
 	recommendationStarted := make(chan struct{})
 	var recommendationOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ps/plugins/suggested" {
+		if r.URL.Path != "/ps/plugins/suggested/codex" {
 			http.NotFound(w, r)
 			return
 		}
