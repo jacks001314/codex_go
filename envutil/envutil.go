@@ -22,6 +22,9 @@ const CodexExecServerNoiseAuthTokenEnvVar = "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN"
 // variables that model-reachable child processes must not inherit.
 var nonInheritableEnvVars = []string{
 	CodexExecServerNoiseAuthTokenEnvVar,
+	// Rust #39301: the Node REPL auth token must not reach model-reachable
+	// child processes.
+	"NODE_REPL_AUTH_TOKEN",
 	"OPENAI_FEDERATION_RULE_ID",
 	"OPENAI_IDENTITY_TOKEN_FILE",
 	"OPENAI_WORKLOAD_IDENTITY_CONTEXT",

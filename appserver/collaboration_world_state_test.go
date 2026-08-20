@@ -137,8 +137,12 @@ func TestCollaborationModeWorldStatePreservesExplicitEmptyAndClearsMissing(t *te
 		t.Fatal(err)
 	}
 	state, err = session.DecodeWorldState(record.Metadata.WorldState)
-	if err != nil || len(state.CollaborationMode) != 0 {
-		t.Fatalf("missing instructions did not clear snapshot: %s, err = %v", record.Metadata.WorldState, err)
+	if err != nil || len(state.CollaborationMode) == 0 {
+		t.Fatalf("missing instructions must persist the empty-state snapshot once: %s, err = %v", record.Metadata.WorldState, err)
+	}
+	var cleared collaborationModeWorldStateSnapshot
+	if err := json.Unmarshal(state.CollaborationMode, &cleared); err != nil || cleared.Mode != "plan" || cleared.Instructions == "" {
+		t.Fatalf("persisted cleared snapshot = %s, err = %v", state.CollaborationMode, err)
 	}
 	item, err = router.collaborationModeWorldStateInputItem(string(threadID), collaborationModeParamsForTest("plan", "catalog-model", ""), missing)
 	if err != nil || item != nil {

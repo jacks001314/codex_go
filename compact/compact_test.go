@@ -430,6 +430,47 @@ func TestEncryptedAgentMessageTokenEstimateUsesPlaintextApproximation(t *testing
 	}
 }
 
+func TestShouldKeepCompactedHistoryItemDropsDescendantProgressLikeRust(t *testing.T) {
+	descendantProgress := Item{
+		ID:   "desc-progress",
+		Type: "agent_message",
+		Raw:  mustAgentMessageRaw(t, "/root/child", "/root", "Message Type: MESSAGE\nTask name: /root\nSender: /root/child\nPayload:\nchild progress"),
+	}
+	if ShouldKeepCompactedHistoryItem(descendantProgress) {
+		t.Fatal("descendant MESSAGE progress must not be retained")
+	}
+	rootProgress := Item{
+		ID:   "root-progress",
+		Type: "agent_message",
+		Raw:  mustAgentMessageRaw(t, "/root", "/root/child", "Message Type: MESSAGE\nTask name: /root/child\nSender: /root\nPayload:\nparent progress"),
+	}
+	if !ShouldKeepCompactedHistoryItem(rootProgress) {
+		t.Fatal("root-authored progress must be retained")
+	}
+	descendantTask := Item{
+		ID:   "desc-task",
+		Type: "agent_message",
+		Raw:  mustAgentMessageRaw(t, "/root/child", "/root", "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root/child\nPayload:\ntask"),
+	}
+	if !ShouldKeepCompactedHistoryItem(descendantTask) {
+		t.Fatal("descendant-authored tasks must be retained")
+	}
+}
+
+func mustAgentMessageRaw(t *testing.T, author string, recipient string, text string) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"type":      "agent_message",
+		"author":    author,
+		"recipient": recipient,
+		"content":   []any{map[string]any{"type": "input_text", "text": text}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	return raw
+}
+
 func structuredAgentMessageItem(t *testing.T, id string, envelope string, encrypted string) Item {
 	t.Helper()
 	content := []any{map[string]any{"type": "input_text", "text": envelope}}

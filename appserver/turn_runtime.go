@@ -3,7 +3,9 @@ package appserver
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -346,8 +348,9 @@ func CollaborationModeDefaultInstructions() string {
 }
 
 type collaborationModeWorldStateSnapshot struct {
-	Mode  string `json:"mode"`
-	Model string `json:"model"`
+	Mode         string `json:"mode"`
+	Model        string `json:"model"`
+	Instructions string `json:"instructions,omitempty"`
 }
 
 func collaborationModeInstructions(params *turn.TurnStartParams, info *model.ModelInfo) (string, bool) {
@@ -391,7 +394,14 @@ func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelIn
 	if modelID == "" {
 		modelID = strings.TrimSpace(stringFromAny(collaborationModeSettings(params.CollaborationMode)["model"]))
 	}
-	return collaborationModeWorldStateSnapshot{Mode: mode, Model: modelID}, true
+	instructions, _ := collaborationModeInstructions(params, info)
+	// Rust #39163: hash the rendered collaboration instructions so changed
+	// guidance (e.g. after a model catalog refresh) refreshes retained history
+	// even when the mode and model are unchanged. An empty-state hash makes
+	// removal clear retained instructions exactly once.
+	hash := sha256.Sum256([]byte(instructions))
+	value := hex.EncodeToString(hash[:16])
+	return collaborationModeWorldStateSnapshot{Mode: mode, Model: modelID, Instructions: value}, true
 }
 
 func (s *responsesStreamNotificationState) planParserFor(itemID string) *proposedPlanStreamParser {
@@ -9731,7 +9741,7 @@ func (r *RuntimeRouter) collaborationModeWorldStateInputItem(threadID string, pa
 	}
 
 	var snapshot json.RawMessage
-	if currentValid && hasInstructions {
+	if currentValid {
 		snapshot, err = json.Marshal(current)
 		if err != nil {
 			return nil, err

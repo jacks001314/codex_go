@@ -367,7 +367,7 @@ func CompactRemotely(ctx context.Context, request *Request, options *RemoteOptio
 func ShouldKeepCompactedHistoryItem(item Item) bool {
 	switch item.Type {
 	case "agent_message":
-		return !isAgentCompletionMessage(&item)
+		return !isAgentCompletionMessage(&item) && !isDescendantProgressMessage(&item)
 	case "compaction", "context_compaction":
 		return true
 	case "compaction_trigger":
@@ -565,6 +565,32 @@ func isStructuredAgentMessage(item *Item) bool {
 func isAgentCompletionMessage(item *Item) bool {
 	text, ok := firstAgentMessageInputText(item)
 	return ok && strings.HasPrefix(text, "Message Type: FINAL_ANSWER\n")
+}
+
+// isDescendantProgressMessage reports whether an agent message is a
+// descendant-authored progress update ("Message Type: MESSAGE") that remote
+// compaction v2 should not retain (Rust #39176). Descendant-authored tasks
+// (encrypted NEW_TASK payloads) are still retained.
+func isDescendantProgressMessage(item *Item) bool {
+	author, recipient := agentMessageAuthorRecipient(item)
+	if author == "" || recipient == "" || !strings.HasPrefix(author, recipient+"/") {
+		return false
+	}
+	text, ok := firstAgentMessageInputText(item)
+	return ok && strings.HasPrefix(text, "Message Type: MESSAGE\n")
+}
+
+func agentMessageAuthorRecipient(item *Item) (string, string) {
+	if item == nil || len(item.Raw) == 0 {
+		return "", ""
+	}
+	var raw map[string]any
+	if json.Unmarshal(item.Raw, &raw) != nil {
+		return "", ""
+	}
+	author, _ := raw["author"].(string)
+	recipient, _ := raw["recipient"].(string)
+	return author, recipient
 }
 
 func firstAgentMessageInputText(item *Item) (string, bool) {

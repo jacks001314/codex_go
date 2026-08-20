@@ -157,9 +157,9 @@
             "domains":  [
                 "core"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: collaborationModeWorldStateSnapshot now includes a hash of the rendered collaboration instructions; changed guidance refreshes retained history even when mode/model are unchanged, empty-state snapshots persist so removal clears instructions once, and legacy snapshots without a hash refresh once on resume; tests updated."
                 ]
             },
         {
@@ -181,9 +181,9 @@
             "domains":  [
                 "core"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "N/A (equivalent): Go automatic idle work (thread-goal continuation) starts a turn directly with additional context; it never queues an empty user message for the input queue, matching Rust's post-#39174 behavior."
                 ]
             },
         {
@@ -193,9 +193,9 @@
             "domains":  [
                 "core"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: compact.ShouldKeepCompactedHistoryItem now drops descendant-authored MESSAGE progress updates (author under recipient path + Message Type: MESSAGE) while retaining descendant-authored tasks and root progress; tests cover all three cases."
                 ]
             },
         {
@@ -365,9 +365,9 @@
             "domains":  [
                 "protocol"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Already implemented: sandbox.IntersectPermissionProfiles (policy_transforms.go) restricts a grant to requested permissions with materialized CWD entries, constraining denies, glob-depth merging, and fail-closed behavior; covered by policy_transforms tests."
                 ]
             },
         {
@@ -722,9 +722,9 @@
             "domains":  [
                 "auth"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: envutil.nonInheritableEnvVars now includes NODE_REPL_AUTH_TOKEN (case-insensitive scrub of inherited and configured child environments); tests cover inherited and mixed-case forms."
                 ]
             },
         {
@@ -1574,9 +1574,9 @@
             "domains":  [
                 "protocol"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Already equivalent: config.ResolveSandboxPermissionProfile resolves named profiles from effective configuration and managed requirements and is consumed by the app-server turn flow; network proxy lookup and thread-settings overrides are likewise exposed through config/turn surfaces."
                 ]
             },
         {
