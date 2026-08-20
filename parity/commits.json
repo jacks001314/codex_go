@@ -452,9 +452,9 @@
       "domains": [
         "tui"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: TurnRuntimeState.MisalignmentPolicyViolation stops the chat - finalizes the turn, clears queued input, gates MaybeSendNextQueuedInput and submissions, rejects non-allowed ops (interrupt/clean terminals/override context/reload config/list skills/rename remain allowed); tea model detects misalignment_policy_violation errors, clears queue/drafts, disables composer, shows precaution notice (tui/chatwidget/turn_runtime.go + tui/tea/model.go). Tests added."
       ]
     },
     {
@@ -1473,9 +1473,9 @@
       "domains": [
         "tui"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: CustomPromptView gained SetVimEnabled (starts in insert mode, first Esc enters normal mode, second cancels), Vim normal keys (i/a/A/I/O/o/h/l/k/j/w/b/e/0/$/x/s/D/C/r with pending replacement), editor motions (left/right/up/down/home/end/word/delete-word/kill), and mode-aware footer hints; tea modal routes editor/vim keys and custom prompt constructors apply composer Vim preference (tui/bottom_pane/custom_prompt_view.go + tui/tea/modal.go, goal.go, slash_misc_commands.go). Tests added."
       ]
     },
     {
@@ -1485,9 +1485,9 @@
       "domains": [
         "tui"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "N/A (architecture): Go TUI is bubbletea-based and renders frames through bubbletea's full-frame renderer; it does not implement the Rust custom VT100 backend with partial DEC scroll regions for history insertion, so the Windows Terminal partial-scroll-region scrollback discard does not apply. Inline chat already preserves native scrollback by running outside the alternate screen (tui/tea/model.go)."
       ]
     },
     {
@@ -1586,9 +1586,9 @@
       "domains": [
         "tui"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: chatwidget routes StrictReviewRequired as a warning history cell (\"This request requires additional safety checks, some tool calls might take extra time\") via ProtocolNotificationRouteWarning (tui/chatwidget/protocol.go + protocol_requests.go); app layer registers autoApprovalReview/strictReviewRequired notification routing and replay filtering (tui/app/app_server_event_targets.go + replay_filter.go). Tests in protocol_requests_test.go."
       ]
     },
     {
@@ -1611,9 +1611,9 @@
         "tui",
         "rollout"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to tui, rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Equivalent (already implemented): Go CLI/TUI resume and fork read archived sessions directly (store.Read(threadID, includeArchived=true) in app/interactive.go interactiveResumeSessionHandler and app/session.go runSessionResume/runSessionFork; store.Fork reads the archived source), so resuming or forking an archived session succeeds without the Rust startup failure that the unarchive prompt addresses. Archive/unarchive commands and the /unarchive picker already exist."
       ]
     },
     {
