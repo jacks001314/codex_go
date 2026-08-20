@@ -117,9 +117,12 @@ func parseAgentRoleConfig(name string, value any, configBaseDir string) (agent.R
 			path = filepath.Join(configBaseDir, path)
 		}
 		path = filepath.Clean(path)
-		info, err := os.Stat(path)
+		info, err := os.Lstat(path)
 		if err != nil {
 			return agent.RoleConfig{}, fmt.Errorf("agents.%s.config_file must point to an existing file at %s: %w", name, path, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return agent.RoleConfig{}, fmt.Errorf("agents.%s.config_file must not be a symlink: %s", name, path)
 		}
 		if !info.Mode().IsRegular() {
 			return agent.RoleConfig{}, fmt.Errorf("agents.%s.config_file must point to a file: %s", name, path)

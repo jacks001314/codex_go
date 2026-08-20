@@ -80,6 +80,23 @@ func TestAgentsConfigRejectsMissingOrDirectoryRoleFile(t *testing.T) {
 	}
 }
 
+func TestAgentsConfigRejectsSymlinkedRoleFile(t *testing.T) {
+	// Rust #39299: user role files must not be symlinks.
+	home := t.TempDir()
+	target := filepath.Join(home, "role-target.toml")
+	if err := os.WriteFile(target, []byte("description = \"real\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "role-link.toml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	cfg := &Config{Values: map[string]any{"agents": map[string]any{"worker": map[string]any{"description": "x", "config_file": link}}}}
+	if _, err := cfg.AgentsConfig(home); err == nil || !strings.Contains(err.Error(), "must not be a symlink") {
+		t.Fatalf("error = %v, want symlink rejection", err)
+	}
+}
+
 func TestAgentsConfigRejectsInvalidPositiveLimits(t *testing.T) {
 	for _, key := range []string{"max_concurrent_threads_per_session", "max_threads", "job_max_runtime_seconds"} {
 		t.Run(key, func(t *testing.T) {
