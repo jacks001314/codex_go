@@ -577,6 +577,9 @@ func readRemoteEnvironmentText(ctx context.Context, caller remoteEnvironmentFSCa
 	if metadata.Size > maxExecutorSkillResourceBytes {
 		return "", fmt.Errorf("environment skill resource %s exceeds %d bytes", path, maxExecutorSkillResourceBytes)
 	}
+	if streamCaller, ok := caller.(clientRemoteEnvironmentFSCaller); ok && streamCaller.client != nil {
+		return readClientEnvironmentTextStream(ctx, streamCaller.client, path, metadata.Size)
+	}
 	id := *nextID
 	*nextID = *nextID + 1
 	raw, err := caller.Call(ctx, id, "fs/readFile", map[string]any{"path": path})
@@ -595,6 +598,43 @@ func readRemoteEnvironmentText(ctx context.Context, caller remoteEnvironmentFSCa
 		return "", fmt.Errorf("environment skill resource %s exceeds %d bytes", path, maxExecutorSkillResourceBytes)
 	}
 	return string(data), nil
+}
+
+// readClientEnvironmentTextStream reads a remote environment file through the
+// streaming fs/open + fs/readBlock path (Rust #39620), enforcing the per-file
+// limit incrementally as chunks arrive so oversized files stop early.
+func readClientEnvironmentTextStream(ctx context.Context, client *execserverclient.Client, path string, size int64) (string, error) {
+	if client == nil || strings.TrimSpace(path) == "" {
+		return "", errors.New("environment skill streaming read requires a client and path")
+	}
+	if size > maxExecutorSkillResourceBytes {
+		return "", fmt.Errorf("environment skill resource %s exceeds %d bytes", path, maxExecutorSkillResourceBytes)
+	}
+	stream, err := client.FSReadFileStream(ctx, &execserverclient.FSReadFileParams{Path: path})
+	if err != nil {
+		return "", err
+	}
+	defer stream.Close(ctx)
+	var builder strings.Builder
+	for {
+		chunk, done, err := stream.Next(ctx)
+		if err != nil {
+			return "", err
+		}
+		if len(chunk) > 0 {
+			if builder.Len()+len(chunk) > maxExecutorSkillResourceBytes {
+				return "", fmt.Errorf("environment skill resource %s exceeds %d bytes", path, maxExecutorSkillResourceBytes)
+			}
+			builder.Write(chunk)
+		}
+		if done {
+			break
+		}
+	}
+	if builder.Len() > maxExecutorSkillResourceBytes {
+		return "", fmt.Errorf("environment skill resource %s exceeds %d bytes", path, maxExecutorSkillResourceBytes)
+	}
+	return builder.String(), nil
 }
 
 func getRemoteEnvironmentMetadata(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, path string) (*remoteFSGetMetadataResponse, error) {
