@@ -17,6 +17,7 @@ import (
 	"codex_go/config"
 	"codex_go/execpolicy"
 	"codex_go/network"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/tool"
@@ -836,4 +837,42 @@ func newNetworkApprovalTestRouter(t *testing.T, approvalPolicy string) *RuntimeR
 		_ = os.Remove(filepath.Join(home, "rules", "default.rules.lock"))
 	})
 	return router
+}
+
+func TestNetworkApprovalDisconnectReportsElapsedTimeLikeRust(t *testing.T) {
+	// Rust #39284: when a proxy request disconnects before approval completes,
+	// the owning tool call receives a model-visible explanation including how
+	// long the request waited.
+	router := newNetworkApprovalTestRouter(t, string(sandbox.ApprovalOnRequest))
+	service := router.networkApproval
+	service.registerActiveCall("thread-network", "turn-network", &tool.Invocation{
+		CallID:   "exec-network-1",
+		ToolName: tool.PlainName("exec_command"),
+	})
+	_, cancel := context.WithCancel(context.Background())
+	service.mu.Lock()
+	service.pending[pendingNetworkApprovalKey{
+		networkApprovalKey: networkApprovalKey{
+			threadID: "thread-network", environmentID: "local",
+			protocol: network.ProxyProtocolHTTP, host: "example.com", port: 80,
+		},
+		turnID: "turn-network",
+		callID: "exec-network-1",
+	}] = &pendingNetworkApproval{
+		done:         make(chan struct{}),
+		turnID:       "turn-network",
+		connectionID: "connection-network",
+		cancel:       cancel,
+		startedAt:    time.Now().Add(-1500 * time.Millisecond),
+	}
+	service.mu.Unlock()
+
+	service.cancelPendingForConnection("connection-network")
+
+	service.callsMu.Lock()
+	call := service.calls[networkApprovalCallKey("thread-network", "turn-network", "exec-network-1")]
+	service.callsMu.Unlock()
+	if call == nil || !strings.Contains(call.outcome, "disconnected after") || !strings.Contains(call.outcome, "ms") {
+		t.Fatalf("disconnect outcome = %q, want elapsed-time explanation", call.outcome)
+	}
 }

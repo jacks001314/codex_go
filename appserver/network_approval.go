@@ -33,6 +33,7 @@ type pendingNetworkApproval struct {
 	turnID       string
 	connectionID string
 	cancel       context.CancelFunc
+	startedAt    time.Time
 }
 
 type pendingNetworkApprovalKey struct {
@@ -160,6 +161,7 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 		turnID:       active.turnID,
 		connectionID: active.connectionID,
 		cancel:       approvalCancel,
+		startedAt:    time.Now(),
 	}
 	s.pending[pendingKey] = pending
 	s.mu.Unlock()
@@ -448,9 +450,53 @@ func (s *networkApprovalService) cancelPendingForConnection(connectionID string)
 	if s == nil || connectionID == "" {
 		return
 	}
+	now := time.Now()
+	var elapsed time.Duration
+	s.mu.Lock()
+	for _, pending := range s.pending {
+		if pending != nil && normalizeConnectionID(pending.connectionID) == connectionID && !pending.startedAt.IsZero() {
+			if current := now.Sub(pending.startedAt); current > elapsed {
+				elapsed = current
+			}
+		}
+	}
+	s.mu.Unlock()
+	// Rust #39284: when a proxy request disconnects while awaiting a network
+	// approval decision, the owning tool call gets a model-visible explanation
+	// that includes how long the request waited.
+	outcome := "Network request disconnected before approval could complete"
+	if elapsed > 0 {
+		outcome = fmt.Sprintf("Network request disconnected after %d ms, before approval could complete", elapsed.Milliseconds())
+	}
+	s.recordDisconnectOutcomeForConnection(connectionID, outcome)
 	s.cancelPending(func(_ networkApprovalKey, pending *pendingNetworkApproval) bool {
 		return normalizeConnectionID(pending.connectionID) == connectionID
 	})
+}
+
+func (s *networkApprovalService) recordDisconnectOutcomeForConnection(connectionID string, message string) {
+	if s == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	turns := map[string]string{}
+	s.mu.Lock()
+	for _, pending := range s.pending {
+		if pending != nil && normalizeConnectionID(pending.connectionID) == connectionID && pending.turnID != "" {
+			turns[pending.turnID] = ""
+		}
+	}
+	s.mu.Unlock()
+	s.callsMu.Lock()
+	defer s.callsMu.Unlock()
+	for _, call := range s.calls {
+		if call == nil || call.outcome != "" {
+			continue
+		}
+		if _, ok := turns[call.turnID]; ok {
+			call.outcome = message
+		}
+	}
 }
 
 func (s *networkApprovalService) cancelPending(matches func(networkApprovalKey, *pendingNetworkApproval) bool) {
