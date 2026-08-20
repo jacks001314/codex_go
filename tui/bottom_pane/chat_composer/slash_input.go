@@ -195,6 +195,7 @@ type QueuedInputAction string
 
 const (
 	QueuedInputPlain      QueuedInputAction = "plain"
+	QueuedInputLiteral    QueuedInputAction = "literal"
 	QueuedInputParseSlash QueuedInputAction = "parse_slash"
 	QueuedInputRunShell   QueuedInputAction = "run_shell"
 )
@@ -207,6 +208,17 @@ func QueuedInputActionFor(preparedText string, deferSlashValidation bool) Queued
 		return QueuedInputRunShell
 	}
 	return QueuedInputPlain
+}
+
+// QueuedInputActionForPrepared mirrors Rust chat_composer.rs (#39604): when
+// paste expansion reveals a leading `!` that was not present in the original
+// input, the queued input is marked Literal so draining it never treats the
+// pasted text as a shell command.
+func QueuedInputActionForPrepared(preparedText string, originalInput string, deferSlashValidation bool) QueuedInputAction {
+	if strings.HasPrefix(preparedText, "!") && !strings.HasPrefix(strings.TrimSpace(originalInput), "!") {
+		return QueuedInputLiteral
+	}
+	return QueuedInputActionFor(preparedText, deferSlashValidation)
 }
 
 func SelectedCommandDispatchesImmediatelyOnTab(command bottompane.SlashCommandItem) bool {

@@ -76,6 +76,25 @@ func TestRenderStyledFooterStopHintDependsOnSelection(t *testing.T) {
 	}
 }
 
+func TestRenderStyledFooterUsesResolvedShortcutHints(t *testing.T) {
+	view := New(sampleRows(), "", false)
+	view.SetShortcutHint(ShortcutHintSearch, "ctrl-l")
+	view.SetShortcutHint(ShortcutHintStop, "")
+	styled := strings.Join(view.RenderStyled(120, 24), "\n")
+	if !strings.Contains(styled, "ctrl-l") || !strings.Contains(styled, " search  ") {
+		t.Errorf("custom search hint missing:\n%s", styled)
+	}
+	if strings.Contains(styled, "ctrl+f") {
+		t.Errorf("default search hint should be replaced:\n%s", styled)
+	}
+	if strings.Contains(styled, " stop  ") || strings.Contains(styled, "ctrl+x") {
+		t.Errorf("unbound stop hint should be hidden:\n%s", styled)
+	}
+	if !strings.Contains(styled, "ctrl+s") || !strings.Contains(styled, "ctrl+r") {
+		t.Errorf("default group/rename hints missing:\n%s", styled)
+	}
+}
+
 func TestRenderStyledLineWidths(t *testing.T) {
 	view := New(sampleRows(), "", false)
 	for _, dims := range [][2]int{{120, 24}, {80, 20}, {46, 12}} {

@@ -66,6 +66,7 @@ func TestTurnRuntimeTaskCompleteFollowUpSeparatorAndNotificationMatchRust(t *tes
 	state := TurnRuntimeState{
 		HadWorkActivity:            true,
 		NeedsFinalMessageSeparator: true,
+		SessionConfigured:          true,
 		InputQueue: InputQueueState{
 			QueuedUserMessages: []QueuedUserMessage{
 				NewQueuedUserMessage(NewUserMessage("next"), QueuedInputPlain),
@@ -106,6 +107,32 @@ func TestTurnRuntimeTaskCompleteFollowUpSeparatorAndNotificationMatchRust(t *tes
 	}
 	if state.BranchRefreshRequests != 1 || state.GitSummaryRefreshRequests != 1 {
 		t.Fatalf("status refresh requests = %d/%d", state.BranchRefreshRequests, state.GitSummaryRefreshRequests)
+	}
+}
+
+func TestTurnRuntimeQueuedInputGatedOnSessionConfigured(t *testing.T) {
+	// Rust #39604: maybe_send_next_queued_input must not drain before the
+	// session is configured, so queued prompts survive session setup.
+	state := TurnRuntimeState{
+		SessionConfigured: false,
+		InputQueue: InputQueueState{
+			QueuedUserMessages: []QueuedUserMessage{
+				NewQueuedUserMessage(NewUserMessage("queued"), QueuedInputPlain),
+			},
+		},
+	}
+	if state.MaybeSendNextQueuedInput() {
+		t.Fatalf("queued input drained before session configured: %#v", state.InputQueue)
+	}
+	if len(state.InputQueue.QueuedUserMessages) != 1 {
+		t.Fatalf("queued input should remain pending: %#v", state.InputQueue)
+	}
+	state.SessionConfigured = true
+	if !state.MaybeSendNextQueuedInput() {
+		t.Fatalf("queued input should drain after session configured")
+	}
+	if !state.InputQueue.UserTurnPendingStart || state.FollowUpStartedCount != 1 {
+		t.Fatalf("follow-up not started: %#v count=%d", state.InputQueue, state.FollowUpStartedCount)
 	}
 }
 

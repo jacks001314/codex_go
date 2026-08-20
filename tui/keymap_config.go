@@ -206,11 +206,35 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 				return bindings, "custom global", true
 			}
 		}
+		// Rust: the default alt-a binding for the agents dashboard is disabled
+		// when the user configures alt-a for another main-surface action so the
+		// new default never shadows an existing custom binding.
+		if context == "global" && action == "open_agents" && config.altACustomBindingExists() {
+			return nil, "default", false
+		}
 	}
 	if descriptor, ok := FindKeymapAction(context, action); ok {
 		return append([]string(nil), descriptor.DefaultBindings...), "default", false
 	}
 	return nil, "unknown", false
+}
+
+// altACustomBindingExists reports whether any configured keymap action binds
+// alt-a, which would shadow the default agents-dashboard shortcut.
+func (c *KeymapConfig) altACustomBindingExists() bool {
+	if c == nil || c.bindings == nil {
+		return false
+	}
+	for _, actions := range c.bindings {
+		for _, bindings := range actions {
+			for _, binding := range bindings {
+				if binding == "alt-a" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func KeymapActionHasBinding(config *KeymapConfig, context string, action string, binding string) bool {

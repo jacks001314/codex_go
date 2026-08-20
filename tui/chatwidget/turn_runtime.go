@@ -124,6 +124,9 @@ type TurnRuntimeState struct {
 
 	MCPStartupActive bool
 	TaskRunning      bool
+	// SessionConfigured mirrors Rust is_session_configured(): queued input
+	// must not drain until the session has been configured (#39604).
+	SessionConfigured bool
 
 	InterruptHintVisible bool
 	StatusHeader         string
@@ -607,7 +610,7 @@ func (s *TurnRuntimeState) InterruptedTurnMessage(reason TurnAbortReason) string
 }
 
 func (s *TurnRuntimeState) MaybeSendNextQueuedInput() bool {
-	if s == nil || s.InputQueue.SuppressQueueAutosend {
+	if s == nil || !s.SessionConfigured || s.InputQueue.SuppressQueueAutosend {
 		return false
 	}
 	if _, _, ok := s.InputQueue.PopNextQueuedUserMessage(); ok {

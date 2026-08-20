@@ -169,3 +169,20 @@ func TestInputSubmissionQueueBeforeConfiguredPushesFrontMatchRust(t *testing.T) 
 		t.Fatalf("queue decision = %#v", decision)
 	}
 }
+
+func TestSubmitQueuedLiteralPromptDisablesShellEscape(t *testing.T) {
+	// Rust #39604: queued literal input beginning with `!` drains as model
+	// input with shell escapes disabled, never as a local shell command.
+	decision := SubmitQueuedLiteralPrompt(NewUserMessage("!ls"))
+	if decision.ShellCommand != "" || decision.QueueDrain != QueueDrainStop {
+		t.Fatalf("literal prompt should not become a shell command: %#v", decision)
+	}
+	if len(decision.Items) != 1 || decision.Items[0].Kind != SubmittedInputText || decision.Items[0].Text != "!ls" {
+		t.Fatalf("literal prompt items = %#v", decision.Items)
+	}
+
+	shell := SubmitQueuedShellPrompt(NewUserMessage("!ls"))
+	if shell.ShellCommand != "ls" {
+		t.Fatalf("shell prompt command = %q, want ls", shell.ShellCommand)
+	}
+}

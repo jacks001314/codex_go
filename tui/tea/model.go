@@ -70,6 +70,10 @@ type SubmitRequest struct {
 	// an active objective without a visible prompt (mirrors Rust's internal
 	// goal steering input).
 	InternalInputItems []any
+	// LiteralInput marks queued input whose leading `!` was revealed only by
+	// paste expansion. It must be submitted as literal model input with shell
+	// escapes disabled (Rust #39604 QueuedInputAction::Literal).
+	LiteralInput bool
 }
 
 type SubmitRequestFunc func(request SubmitRequest) bubbletea.Cmd
@@ -95,6 +99,7 @@ type ExternalEditorFinishedMsg struct {
 type queuedSubmission struct {
 	Request      SubmitRequest
 	ParseCommand bool
+	Literal      bool
 }
 
 type pendingSteerSubmission struct {
@@ -866,7 +871,11 @@ type Model struct {
 	// vimPendingObject tracks a pending Vim text-object selection after an
 	// operator: "inner" (i) or "around" (a), waiting for the object key
 	// (w / W / ( / ) / b).
-	vimPendingObject         string
+	vimPendingObject string
+	// vimPendingReplace tracks the Vim `r` replacement: the next typed
+	// character replaces the grapheme under the cursor without leaving normal
+	// mode (Rust #39661 vim_normal.replace_char).
+	vimPendingReplace bool
 	petRuntime               *petRuntime
 	petCodexHome             string
 	petEnv                   map[string]string
@@ -1783,6 +1792,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if m.keyMatches("global", "open_transcript", keySpec) {
 			return m, m.openTranscriptOverlay()
 		}
+		if m.keyMatches("global", "open_agents", keySpec) {
+			return m, m.applyAgentsCommand()
+		}
 		if m.keyMatches("global", "copy", keySpec) {
 			m.copyLastAgentResponse()
 			return m, nil
@@ -2368,7 +2380,7 @@ func (m *Model) submitNextQueued() bubbletea.Cmd {
 	if len(m.rejectedSteers) > 0 {
 		next := m.rejectedSteers[0]
 		m.rejectedSteers = append([]queuedSubmission(nil), m.rejectedSteers[1:]...)
-		return m.submitRequest(next.Request, next.ParseCommand)
+		return m.submitQueuedRequest(next)
 	}
 	if len(m.queued) == 0 {
 		return nil
@@ -2376,7 +2388,18 @@ func (m *Model) submitNextQueued() bubbletea.Cmd {
 	next := m.queued[0]
 	copy(m.queued, m.queued[1:])
 	m.queued = m.queued[:len(m.queued)-1]
-	return m.submitRequest(next.Request, next.ParseCommand)
+	return m.submitQueuedRequest(next)
+}
+
+func (m *Model) submitQueuedRequest(next queuedSubmission) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	request := cloneSubmitRequest(next.Request)
+	if next.Literal {
+		request.LiteralInput = true
+	}
+	return m.submitRequest(request, next.ParseCommand)
 }
 
 func (m *Model) applyMCPStartupUpdate(message MCPStartupUpdateMsg) bubbletea.Cmd {

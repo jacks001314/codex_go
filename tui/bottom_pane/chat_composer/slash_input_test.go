@@ -130,6 +130,15 @@ func TestSlashInputPreparedArgsQueuedActionAndElementsMatchRustCore(t *testing.T
 	if got := QueuedInputActionFor("!ls", true); got != QueuedInputRunShell {
 		t.Fatalf("shell queued action = %s", got)
 	}
+	if got := QueuedInputActionForPrepared("!pasted", "pasted", true); got != QueuedInputLiteral {
+		t.Fatalf("paste-expanded ! queued action = %s, want literal", got)
+	}
+	if got := QueuedInputActionForPrepared("!pasted", "!pasted", true); got != QueuedInputRunShell {
+		t.Fatalf("visible ! queued action = %s, want run_shell", got)
+	}
+	if got := QueuedInputActionForPrepared("/plan now", "", true); got != QueuedInputParseSlash {
+		t.Fatalf("deferred slash queued action = %s, want parse_slash", got)
+	}
 
 	first := "inspect"
 	second := "@file"

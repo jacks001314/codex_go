@@ -23,6 +23,7 @@ const keymapFeatureFastMode = "fast_mode"
 
 var keymapActionCatalog = []KeymapAction{
 	keymapAction("global", "Global", "open_transcript", "Open the transcript overlay.", []string{"ctrl-t"}),
+	keymapAction("global", "Global", "open_agents", "Open the shared agents overview.", []string{"alt-a"}),
 	keymapAction("global", "Global", "open_external_editor", "Open the current draft in an external editor.", []string{"ctrl-g"}),
 	keymapAction("global", "Global", "copy", "Copy the last agent response to the clipboard.", []string{"ctrl-o"}),
 	keymapAction("global", "Global", "clear_terminal", "Clear the terminal UI.", []string{"ctrl-l"}),
@@ -72,6 +73,7 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("vim_normal", "Vim normal", "move_line_start", "Move to the start of the line.", []string{"0"}),
 	keymapAction("vim_normal", "Vim normal", "move_line_end", "Move to the end of the line.", []string{"$", "shift-$"}),
 	keymapAction("vim_normal", "Vim normal", "delete_char", "Delete the character under the cursor.", []string{"x"}),
+	keymapAction("vim_normal", "Vim normal", "replace_char", "Replace the character under the cursor.", []string{"r"}),
 	keymapAction("vim_normal", "Vim normal", "substitute_char", "Delete the character under the cursor and enter insert mode.", []string{"s"}),
 	keymapAction("vim_normal", "Vim normal", "delete_to_line_end", "Delete from cursor to end of line.", []string{"shift-d", "D"}),
 	keymapAction("vim_normal", "Vim normal", "change_to_line_end", "Change from cursor to end of line and enter insert mode.", []string{"shift-c", "C"}),
@@ -124,6 +126,11 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("list", "List", "jump_bottom", "Jump to the last list item.", []string{"end"}),
 	keymapAction("list", "List", "accept", "Accept the current list selection.", []string{"enter"}),
 	keymapAction("list", "List", "cancel", "Cancel and close selection views.", []string{"esc"}),
+	keymapAction("agents", "Agents", "search", "Search the available agent tasks.", []string{"ctrl-f"}),
+	keymapAction("agents", "Agents", "new_task", "Start composing a new agent task.", []string{"ctrl-n"}),
+	keymapAction("agents", "Agents", "rename", "Rename the selected task.", []string{"ctrl-r"}),
+	keymapAction("agents", "Agents", "stop", "Stop the selected running task.", []string{"ctrl-x"}),
+	keymapAction("agents", "Agents", "toggle_grouping", "Toggle grouping tasks by status or project.", []string{"ctrl-s"}),
 	keymapAction("approval", "Approval", "open_fullscreen", "Open approval details fullscreen.", []string{"ctrl-a", "ctrl-shift-a"}),
 	keymapAction("approval", "Approval", "open_thread", "Open the approval source thread when available.", []string{"o"}),
 	keymapAction("approval", "Approval", "approve", "Approve the primary option.", []string{"y"}),

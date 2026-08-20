@@ -183,6 +183,17 @@ func SubmitQueuedShellPrompt(message UserMessage) SubmissionDecision {
 	})
 }
 
+// SubmitQueuedLiteralPrompt mirrors Rust #39604: queued input whose leading
+// `!` came from paste expansion must drain as literal model input with shell
+// escapes disabled, never as a local shell command.
+func SubmitQueuedLiteralPrompt(message UserMessage) SubmissionDecision {
+	return DecideUserMessageSubmission(message, UserMessageTextHistoryRecord(), SubmissionOptions{
+		SessionConfigured:     true,
+		CurrentModelHasImages: true,
+		ShellEscapePolicy:     ShellEscapeDisallow,
+	})
+}
+
 func recordOrText(record UserMessageHistoryRecord) UserMessageHistoryRecord {
 	if record.Kind == "" {
 		return UserMessageTextHistoryRecord()

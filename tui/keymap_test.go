@@ -10,10 +10,17 @@ import (
 func TestKeymapActionCatalogIncludesRustActions(t *testing.T) {
 	actions := KeymapActions(KeymapActionFilter{})
 	want := []string{
+		"global/open_agents",
+		"agents/search",
+		"agents/new_task",
+		"agents/rename",
+		"agents/stop",
+		"agents/toggle_grouping",
 		"global/open_external_editor",
 		"composer/submit",
 		"editor/insert_newline",
 		"vim_text_object/double_quote",
+		"vim_normal/replace_char",
 		"approval/approve_for_prefix",
 		"pager/close_transcript",
 		"list/page_down",
@@ -60,6 +67,97 @@ func TestRenderKeymapCatalog(t *testing.T) {
 	}
 	if strings.Contains(rendered, "Toggle Fast Mode") {
 		t.Fatalf("RenderKeymapCatalog should hide fast mode by default:\n%s", rendered)
+	}
+}
+
+func TestOpenAgentsDefaultBinding(t *testing.T) {
+	config := NewKeymapConfig()
+	bindings, source, custom := ResolvedKeymapBindings(config, "global", "open_agents")
+	if custom || source != "default" || strings.Join(bindings, ",") != "alt-a" {
+		t.Fatalf("open_agents resolved bindings = %#v source=%q custom=%v, want alt-a default", bindings, source, custom)
+	}
+	if !KeymapActionHasBinding(config, "global", "open_agents", "alt-a") {
+		t.Fatal("open_agents default alt-a binding is not active")
+	}
+}
+
+func TestOpenAgentsDefaultShadowedByCustomAltA(t *testing.T) {
+	// Rust #39142: when the user binds alt-a to another main-surface action,
+	// the new default agents shortcut is disabled so it never shadows the
+	// existing custom binding.
+	config := NewKeymapConfig()
+	if err := config.Set("global", "copy", []string{"alt-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate error = %v", err)
+	}
+	bindings, source, custom := ResolvedKeymapBindings(config, "global", "open_agents")
+	if custom || source != "default" || len(bindings) != 0 {
+		t.Fatalf("shadowed open_agents resolved bindings = %#v source=%q custom=%v, want unbound", bindings, source, custom)
+	}
+	if KeymapActionHasBinding(config, "global", "open_agents", "alt-a") {
+		t.Fatal("open_agents should not resolve alt-a when another action uses it")
+	}
+}
+
+func TestAgentsKeymapActionsResolveDefaults(t *testing.T) {
+	config := NewKeymapConfig()
+	for action, want := range map[string]string{
+		"search":          "ctrl-f",
+		"new_task":        "ctrl-n",
+		"rename":          "ctrl-r",
+		"stop":            "ctrl-x",
+		"toggle_grouping": "ctrl-s",
+	} {
+		bindings, source, custom := ResolvedKeymapBindings(config, "agents", action)
+		if custom || source != "default" || strings.Join(bindings, ",") != want {
+			t.Fatalf("agents.%s resolved bindings = %#v source=%q custom=%v, want %s", action, bindings, source, custom, want)
+		}
+	}
+}
+
+func TestAgentsKeymapCustomBinding(t *testing.T) {
+	config := NewKeymapConfig()
+	if err := config.Set("agents", "search", []string{"ctrl-l"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate error = %v", err)
+	}
+	if !KeymapActionHasBinding(config, "agents", "search", "ctrl-l") {
+		t.Fatal("custom agents.search binding is not active")
+	}
+	if KeymapActionHasBinding(config, "agents", "search", "ctrl-f") {
+		t.Fatal("default agents.search binding should not remain after custom set")
+	}
+}
+
+func TestAgentsKeymapConfigParsing(t *testing.T) {
+	var values map[string]any
+	input := `
+[tui.keymap.global]
+open_agents = "alt-a"
+
+[tui.keymap.agents]
+search = "ctrl-l"
+stop = []
+`
+	if err := toml.Unmarshal([]byte(input), &values); err != nil {
+		t.Fatalf("toml.Unmarshal error = %v", err)
+	}
+	config, err := KeymapConfigFromConfigValues(values)
+	if err != nil {
+		t.Fatalf("KeymapConfigFromConfigValues error = %v", err)
+	}
+	if bindings, ok := config.Binding("global", "open_agents"); !ok || strings.Join(bindings, ",") != "alt-a" {
+		t.Fatalf("open_agents bindings = %#v ok=%v", bindings, ok)
+	}
+	if bindings, ok := config.Binding("agents", "search"); !ok || strings.Join(bindings, ",") != "ctrl-l" {
+		t.Fatalf("agents.search bindings = %#v ok=%v", bindings, ok)
+	}
+	if bindings, ok := config.Binding("agents", "stop"); !ok || len(bindings) != 0 {
+		t.Fatalf("agents.stop bindings = %#v ok=%v, want explicit unbind", bindings, ok)
 	}
 }
 

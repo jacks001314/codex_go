@@ -6,6 +6,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 )
 
@@ -62,7 +63,34 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	m.agentsOverviewRefresh = 0
 	m.agentsOverviewPending = false
 	m.agentsOverviewInflight = false
+	m.applyAgentsOverviewKeymapHints()
 	return m.refreshAgentsOverviewCmd()
+}
+
+// applyAgentsOverviewKeymapHints resolves the agents-dashboard shortcuts from
+// the user's keymap so the footer renders custom bindings (Rust #39142
+// AgentsKeymap::primary_hint).
+func (m *Model) applyAgentsOverviewKeymapHints() {
+	if m == nil || m.agentsOverview == nil {
+		return
+	}
+	for _, hint := range []struct {
+		action string
+		key    string
+	}{
+		{action: agentsoverview.ShortcutHintSearch, key: "agents.search"},
+		{action: agentsoverview.ShortcutHintToggleGrouping, key: "agents.toggle_grouping"},
+		{action: agentsoverview.ShortcutHintRename, key: "agents.rename"},
+		{action: agentsoverview.ShortcutHintStop, key: "agents.stop"},
+	} {
+		context, action, _ := strings.Cut(hint.key, ".")
+		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, context, action)
+		binding := ""
+		if len(bindings) > 0 {
+			binding = bindings[0]
+		}
+		m.agentsOverview.SetShortcutHint(hint.action, binding)
+	}
 }
 
 func (m *Model) openAgentsUnavailableSelection() bubbletea.Cmd {
@@ -166,19 +194,27 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.agentsOverview == nil {
 		return nil
 	}
+	keySpec := keySpecFromKeyMsg(msg)
+	handled := false
 	switch msg.String() {
 	case "up", "k":
 		m.agentsOverview.MoveSelection(false)
+		handled = true
 	case "down", "j":
 		m.agentsOverview.MoveSelection(true)
+		handled = true
 	case "pgup":
 		m.agentsOverview.PageUp()
+		handled = true
 	case "pgdown":
 		m.agentsOverview.PageDown()
+		handled = true
 	case "home":
 		m.agentsOverview.JumpTop()
+		handled = true
 	case "end":
 		m.agentsOverview.JumpBottom()
+		handled = true
 	case "enter":
 		prompt := strings.TrimSpace(m.agentsOverview.State.Input)
 		switch action := m.agentsOverview.Activate(); action {
@@ -189,33 +225,46 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		case agentsoverview.ActionOpenThread:
 			return m.openAgentsOverviewThread(m.agentsOverview.SelectedThreadID())
 		}
+		handled = true
 	case "esc":
 		m.agentsOverview.Cancel()
 		if m.agentsOverview.Completion != agentsoverview.CompletionNone {
 			m.closeAgentsOverview()
 			m.notice = ""
 		}
+		handled = true
 	case "backspace":
 		m.agentsOverview.Backspace()
-	case "ctrl+f":
+		handled = true
+	}
+	if m.keyMatches("agents", "search", keySpec) {
 		m.agentsOverview.ToggleSearch()
-	case "ctrl+s":
+		handled = true
+	}
+	if m.keyMatches("agents", "toggle_grouping", keySpec) {
 		m.agentsOverview.ToggleGrouping()
-	case "ctrl+n":
+		handled = true
+	}
+	if m.keyMatches("agents", "new_task", keySpec) {
 		m.agentsOverview.ClearNew()
-	case "ctrl+r":
+		handled = true
+	}
+	if m.keyMatches("agents", "rename", keySpec) {
 		m.agentsOverview.BeginRename()
-	case "ctrl+x":
+		handled = true
+	}
+	if m.keyMatches("agents", "stop", keySpec) {
 		if action := m.agentsOverview.StopSelected(); action == agentsoverview.ActionStopThread {
 			return m.stopAgentsOverviewCmd(m.agentsOverview.SelectedThreadID())
 		}
-	case "ctrl+c":
+		handled = true
+	}
+	if keySpec == "ctrl-c" {
 		return bubbletea.Quit
-	default:
-		if msg.Type == bubbletea.KeyRunes {
-			for _, r := range msg.Runes {
-				m.agentsOverview.TypeChar(r)
-			}
+	}
+	if !handled && msg.Type == bubbletea.KeyRunes {
+		for _, r := range msg.Runes {
+			m.agentsOverview.TypeChar(r)
 		}
 	}
 	return nil

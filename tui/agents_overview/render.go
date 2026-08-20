@@ -82,15 +82,24 @@ func (v *View) footerSpans() []span {
 	if row := v.SelectedRow(); row != nil && row.StatusActive {
 		stopStyle = spanBold
 	}
-	return []span{
+	spans := []span{
 		{text: "↑↓", style: spanBold}, {text: " navigate  ", style: spanDim},
 		{text: "enter", style: spanBold}, {text: " open  ", style: spanDim},
-		{text: "ctrl+f", style: spanBold}, {text: " search  ", style: spanDim},
-		{text: "ctrl+s", style: spanBold}, {text: " group  ", style: spanDim},
-		{text: "ctrl+r", style: spanBold}, {text: " rename  ", style: spanDim},
-		{text: "ctrl+x", style: stopStyle}, {text: " stop  ", style: spanDim},
-		{text: "esc", style: spanBold}, {text: " back", style: spanDim},
 	}
+	if binding, ok := v.shortcutHint(ShortcutHintSearch, "ctrl+f"); ok {
+		spans = append(spans, span{text: binding, style: spanBold}, span{text: " search  ", style: spanDim})
+	}
+	if binding, ok := v.shortcutHint(ShortcutHintToggleGrouping, "ctrl+s"); ok {
+		spans = append(spans, span{text: binding, style: spanBold}, span{text: " group  ", style: spanDim})
+	}
+	if binding, ok := v.shortcutHint(ShortcutHintRename, "ctrl+r"); ok {
+		spans = append(spans, span{text: binding, style: spanBold}, span{text: " rename  ", style: spanDim})
+	}
+	if binding, ok := v.shortcutHint(ShortcutHintStop, "ctrl+x"); ok {
+		spans = append(spans, span{text: binding, style: stopStyle}, span{text: " stop  ", style: spanDim})
+	}
+	spans = append(spans, span{text: "esc", style: spanBold}, span{text: " back", style: spanDim})
+	return spans
 }
 
 func formatSummary(needsYou, working, ready int) string {

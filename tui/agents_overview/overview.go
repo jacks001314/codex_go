@@ -133,6 +133,42 @@ type View struct {
 	State        State
 	ExitOnCancel bool
 	Completion   Completion
+	hints        map[string]string
+}
+
+// ShortcutHintKey identifies a dashboard footer shortcut. The tea layer
+// resolves the key from the user's keymap and passes it through
+// SetShortcutHint so the rendered footer reflects custom bindings (Rust
+// AgentsKeymap::primary_hint / #39142).
+const (
+	ShortcutHintSearch         = "search"
+	ShortcutHintToggleGrouping = "toggle_grouping"
+	ShortcutHintRename         = "rename"
+	ShortcutHintStop           = "stop"
+)
+
+// SetShortcutHint overrides the displayed key for one dashboard action. An
+// empty binding hides the hint entirely (Rust unbind); nil/absent falls back
+// to the default binding.
+func (v *View) SetShortcutHint(action string, binding string) {
+	if v == nil {
+		return
+	}
+	if v.hints == nil {
+		v.hints = map[string]string{}
+	}
+	v.hints[action] = binding
+}
+
+func (v *View) shortcutHint(action string, fallback string) (string, bool) {
+	if v == nil {
+		return fallback, true
+	}
+	binding, ok := v.hints[action]
+	if !ok {
+		return fallback, true
+	}
+	return binding, strings.TrimSpace(binding) != ""
 }
 
 // New creates a dashboard view. selectedThreadID restores the previous

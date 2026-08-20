@@ -71,6 +71,7 @@ type QueuedInputAction string
 
 const (
 	QueuedInputPlain      QueuedInputAction = "plain"
+	QueuedInputLiteral    QueuedInputAction = "literal"
 	QueuedInputParseSlash QueuedInputAction = "parse_slash"
 	QueuedInputRunShell   QueuedInputAction = "run_shell"
 )

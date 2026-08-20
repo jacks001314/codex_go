@@ -176,21 +176,38 @@ func TestApprovalOverlayPatchAndMcpHeadersMatchRustFields(t *testing.T) {
 		ThreadLabel:   "Robie [worker]",
 		EnvironmentID: "env-1",
 		Reason:        "need to update files",
-		Changes:       []string{"M file.txt"},
+		Changes:       []string{"src/old.txt -> src/new.txt", "src/other.txt"},
 	})
 	patchRows := patch.Rows(120)
 	for _, want := range []string{
 		"Would you like to make the following edits?",
 		"Thread: Robie [worker]",
-		"Reason: need to update files",
+		"Description: need to update files",
+		"Destination: src/old.txt",
+		"Destination: src/other.txt",
+		"Destination: src/new.txt",
 	} {
 		if !bottomPaneContainsRow(patchRows, want) {
 			t.Fatalf("patch rows missing %q: %#v", want, patchRows)
 		}
 	}
-	for _, unwanted := range []string{"Environment: env-1", "M file.txt"} {
+	for _, unwanted := range []string{"Environment: env-1", "Reason: need to update files"} {
 		if bottomPaneContainsRow(patchRows, unwanted) {
 			t.Fatalf("patch rows should not include %q like Rust: %#v", unwanted, patchRows)
+		}
+	}
+
+	noChanges := NewApprovalOverlay(ApprovalRequest{
+		Kind: ApprovalRequestApplyPatch,
+		ID:   "patch-empty",
+	})
+	noChangesRows := noChanges.Rows(120)
+	for _, want := range []string{
+		"Description: Apply proposed file edits",
+		"Destination: unavailable",
+	} {
+		if !bottomPaneContainsRow(noChangesRows, want) {
+			t.Fatalf("empty patch rows missing %q: %#v", want, noChangesRows)
 		}
 	}
 

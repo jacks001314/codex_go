@@ -324,6 +324,51 @@ func TestVimEditsDeleteAndChangeLikeVim(t *testing.T) {
 	}
 }
 
+// TestVimReplaceCharAndChangeMotionsLikeVim pins #39661: `r` replaces the
+// grapheme under the cursor while staying in normal mode, Esc cancels a
+// pending replacement, and cw / cj / ck change motions work alongside cc.
+func TestVimReplaceCharAndChangeMotionsLikeVim(t *testing.T) {
+	m := vimTestModel("hello world")
+	m.composer.SetCursor(0)
+	m = vimKeyPress(m, 'r')
+	m = vimKeyPress(m, 'H')
+	if got := m.composer.Value(); got != "Hello world" {
+		t.Fatalf("rH value = %q, want Hello world", got)
+	}
+	if m.vimInsert || m.vimPendingReplace {
+		t.Fatalf("replace_char should stay in normal mode: insert=%v pending=%v", m.vimInsert, m.vimPendingReplace)
+	}
+
+	// Esc cancels a pending replacement without mutating the composer.
+	m = vimTestModel("hello world")
+	m.composer.SetCursor(0)
+	m = vimKeyPress(m, 'r')
+	m = vimEscape(m)
+	if got := m.composer.Value(); got != "hello world" || m.vimPendingReplace {
+		t.Fatalf("cancelled replacement value = %q pending=%v", got, m.vimPendingReplace)
+	}
+
+	// cw changes from the cursor to the next word start and enters insert.
+	m = vimTestModel("hello brave world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'c')
+	m = vimKeyPress(m, 'w')
+	if got := m.composer.Value(); got != "hello world" || !m.vimInsert {
+		t.Fatalf("cw value = %q insert=%v, want hello world + insert", got, m.vimInsert)
+	}
+
+	// cj changes the current line plus the next line.
+	m = vimTestModel("line one\nline two\nline three")
+	m.composer.CursorUp()
+	m.composer.CursorUp()
+	m.composer.SetCursor(0)
+	m = vimKeyPress(m, 'c')
+	m = vimKeyPress(m, 'j')
+	if got := m.composer.Value(); got != "line three" || !m.vimInsert {
+		t.Fatalf("cj value = %q insert=%v, want line three + insert", got, m.vimInsert)
+	}
+}
+
 // TestVimLineYankPasteAndOperators pins Y/p and dd/yy.
 func TestVimLineYankPasteAndOperators(t *testing.T) {
 	m := vimTestModel("alpha beta")

@@ -20,6 +20,21 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	if m == nil || !m.vimMode || m.modal != nil || m.overlay != nil || m.slashPopup.Active || m.skillPopup.Active {
 		return false
 	}
+	// Rust #39661: a pending `r` replacement consumes the next typed
+	// character, replacing the grapheme under the cursor while remaining in
+	// normal mode. Esc cancels the pending replacement.
+	if m.vimPendingReplace {
+		m.vimPendingReplace = false
+		if keySpec == "esc" {
+			return true
+		}
+		if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 {
+			m.replaceVimCharAtCursor(msg.Runes[0])
+		} else if keySpec == "enter" {
+			m.replaceVimCharAtCursor('\n')
+		}
+		return true
+	}
 	if m.vimInsert {
 		if keySpec == "esc" {
 			m.vimInsert = false
@@ -93,6 +108,8 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		m.vimInsert = true
 	case m.keyMatches("vim_normal", "delete_char", keySpec):
 		m.deleteVimCharAtCursor()
+	case m.keyMatches("vim_normal", "replace_char", keySpec):
+		m.vimPendingReplace = true
 	case m.keyMatches("vim_normal", "delete_to_line_end", keySpec):
 		m.deleteVimToLineEnd()
 	case m.keyMatches("vim_normal", "move_left", keySpec):
@@ -195,6 +212,27 @@ func (m *Model) deleteVimCharAtCursor() {
 	_, size := utf8.DecodeRuneInString(value[offset:])
 	m.composer.SetValue(value[:offset] + value[offset+size:])
 	m.vimSetCursorAtByteOffset(offset)
+}
+
+// replaceVimCharAtCursor replaces the grapheme under the cursor with ch,
+// staying in normal mode (Rust #39661 replace_char). Newline replacement
+// moves the cursor to the start of the next line; any other character leaves
+// the cursor on the replacement.
+func (m *Model) replaceVimCharAtCursor(ch rune) {
+	value := m.composer.Value()
+	offset := m.vimValueByteOffset()
+	if offset >= len(value) {
+		return
+	}
+	_, size := utf8.DecodeRuneInString(value[offset:])
+	replacement := string(ch)
+	next := value[:offset] + replacement + value[offset+size:]
+	m.composer.SetValue(next)
+	if ch == '\n' {
+		m.vimSetCursorAtByteOffset(offset + len(replacement))
+	} else {
+		m.vimSetCursorAtByteOffset(offset)
+	}
 }
 
 // deleteVimToLineEnd removes the text from the cursor to the end of the

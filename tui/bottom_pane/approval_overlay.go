@@ -1,6 +1,7 @@
 package bottompane
 
 import (
+	"sort"
 	"strings"
 
 	"codex_go/sandbox"
@@ -542,15 +543,10 @@ func BuildApprovalHeaderRows(request ApprovalRequest, width int) []string {
 			rows = append(rows, "Permission rule: "+rule)
 		}
 	case ApprovalRequestApplyPatch:
-		if request.ThreadLabel != "" {
-			rows = append(rows, "Thread: "+request.ThreadLabel)
-		}
-		if request.Reason != "" {
-			if len(rows) > 0 {
-				rows = append(rows, "")
-			}
-			rows = appendWrappedApprovalRows(rows, "Reason: "+request.Reason, width)
-		}
+		// Rust #39285 apply_patch_header.rs: show a description plus the
+		// destination paths affected by the change, falling back to
+		// "unavailable" when change details are missing.
+		rows = appendApplyPatchApprovalHeaderRows(rows, request, width)
 	case ApprovalRequestMcpElicitation:
 		if request.ThreadLabel != "" {
 			rows = append(rows, "Thread: "+request.ThreadLabel, "")
@@ -561,6 +557,76 @@ func BuildApprovalHeaderRows(request ApprovalRequest, width int) []string {
 		}
 	}
 	return trimTrailingBlankRows(rows)
+}
+
+// appendApplyPatchApprovalHeaderRows mirrors Rust
+// bottom_pane/apply_patch_header.rs (#39285): a Thread line when a label is
+// available, a Description line (the approval reason or the default "Apply
+// proposed file edits"), and one Destination line per affected path. Move
+// changes include both the source and target paths, formatted for the host
+// platform and sorted/deduped for display.
+func appendApplyPatchApprovalHeaderRows(rows []string, request ApprovalRequest, width int) []string {
+	if request.ThreadLabel != "" {
+		rows = append(rows, "Thread: "+request.ThreadLabel)
+	}
+	if len(rows) > 0 {
+		rows = append(rows, "")
+	}
+	description := strings.TrimSpace(request.Reason)
+	if description == "" {
+		description = "Apply proposed file edits"
+	}
+	rows = appendWrappedApprovalRows(rows, "Description: "+description, width)
+
+	destinations := approvalDestinations(request)
+	if len(destinations) == 0 {
+		rows = append(rows, "Destination: unavailable")
+		return trimTrailingBlankRows(rows)
+	}
+	for _, destination := range destinations {
+		rows = append(rows, "Destination: "+destination)
+	}
+	return trimTrailingBlankRows(rows)
+}
+
+// approvalDestinations returns the sorted, deduped destination paths affected
+// by an apply-patch approval. The Changes field carries display paths; a
+// "A -> B" entry contributes both the source and the move target.
+func approvalDestinations(request ApprovalRequest) []string {
+	seen := map[string]bool{}
+	destinations := []string{}
+	for _, change := range request.Changes {
+		change = strings.TrimSpace(change)
+		if change == "" {
+			continue
+		}
+		for _, path := range splitApprovalChangePaths(change) {
+			if path != "" && !seen[path] {
+				seen[path] = true
+				destinations = append(destinations, path)
+			}
+		}
+	}
+	sort.Strings(destinations)
+	return destinations
+}
+
+// splitApprovalChangePaths extracts the destination paths from one change
+// display entry. Move entries use the "source -> target" form used by
+// CreateDiffSummary, so both paths are preserved for the Destination list.
+func splitApprovalChangePaths(change string) []string {
+	const arrow = " -> "
+	if index := strings.Index(change, arrow); index >= 0 {
+		source := strings.TrimSpace(change[:index])
+		target := strings.TrimSpace(change[index+len(arrow):])
+		return []string{source, target}
+	}
+	// Compact forms like "M file.txt" or a bare path keep only the path.
+	fields := strings.Fields(change)
+	if len(fields) > 1 && len(fields[0]) == 1 {
+		return []string{strings.Join(fields[1:], " ")}
+	}
+	return []string{change}
 }
 
 func FormatApprovalPermissionsRule(permissions *sandbox.RequestPermissionProfile) string {
