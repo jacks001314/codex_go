@@ -697,6 +697,12 @@ func mcpServerEnvironmentAvailable(config *ServerConfig, available []string) boo
 	if environmentID == DefaultMCPServerEnvironmentID {
 		return true
 	}
+	// No thread environment selection means the runtime did not attach any
+	// environment; attachment-scoped filtering only applies once selections
+	// exist, so executor-owned and pre-attachment servers remain usable.
+	if len(available) == 0 {
+		return true
+	}
 	for _, selected := range available {
 		if strings.TrimSpace(selected) == environmentID {
 			return true
