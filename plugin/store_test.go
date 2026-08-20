@@ -53,6 +53,29 @@ func TestPluginStoreInstallAndVersionTracking(t *testing.T) {
 	}
 }
 
+func TestPluginStoreRejectsSymlinkedManifestLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store, err := NewPluginStore(home)
+	if err != nil {
+		t.Fatalf("NewPluginStore() error = %v", err)
+	}
+	pluginID, _ := NewPluginId("sample", "debug")
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, ".codex-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "plugin.json")
+	if err := os.WriteFile(target, []byte(`{"name":"sample","version":"1.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(src, ".codex-plugin", "plugin.json")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := store.Install(src, pluginID); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("Install(symlinked manifest) error = %v", err)
+	}
+}
+
 func TestPluginStoreInstallWithExplicitVersion(t *testing.T) {
 	home := t.TempDir()
 	store, _ := NewPluginStore(home)

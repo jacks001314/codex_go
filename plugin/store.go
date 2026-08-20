@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -537,6 +538,36 @@ func replacePluginRootAtomically(source string, targetRoot string, pluginVersion
 	stagedRoot := filepath.Join(stagedDir, pluginDirName)
 	stagedVersionRoot := filepath.Join(stagedRoot, pluginVersion)
 
+	// Rust #39590: capture the on-disk manifest (regular file, no symlinked
+	// components) before copying so a staged copy cannot change precedence.
+	var sourceManifestRelative string
+	var sourceManifestContents []byte
+	if fallbackManifest == nil {
+		manifestPath, findErr := findPluginManifestPath(source)
+		if findErr != nil {
+			return findErr
+		}
+		if manifestPath == "" {
+			return pluginStoreInvalidError("missing plugin.json")
+		}
+		if err := rejectSymlinkedPluginManifestPath(source, manifestPath); err != nil {
+			return err
+		}
+		rel, relErr := filepath.Rel(source, manifestPath)
+		if relErr != nil || strings.HasPrefix(filepath.ToSlash(rel), "..") {
+			return pluginStoreInvalidError("plugin manifest is outside the plugin source")
+		}
+		sourceManifestRelative = rel
+		data, readErr := os.ReadFile(manifestPath)
+		if readErr != nil {
+			return pluginStoreIOError("failed to read plugin.json", readErr)
+		}
+		sourceManifestContents = data
+	} else {
+		sourceManifestRelative = filepath.Join(".codex-plugin", "plugin.json")
+		sourceManifestContents = fallbackManifest
+	}
+
 	if err := copyDirRecursive(source, stagedVersionRoot); err != nil {
 		return err
 	}
@@ -551,6 +582,22 @@ func replacePluginRootAtomically(source string, targetRoot string, pluginVersion
 		if err := os.WriteFile(manifestPath, fallbackManifest, 0o600); err != nil {
 			return pluginStoreIOError("failed to write fallback plugin manifest", err)
 		}
+	}
+
+	stagedManifestPath, stagedFindErr := findPluginManifestPath(stagedVersionRoot)
+	if stagedFindErr != nil {
+		return stagedFindErr
+	}
+	if stagedManifestPath == "" ||
+		filepath.Clean(stagedManifestPath) != filepath.Clean(filepath.Join(stagedVersionRoot, sourceManifestRelative)) {
+		return pluginStoreInvalidError("plugin manifest changed during installation staging")
+	}
+	stagedContents, stagedReadErr := os.ReadFile(stagedManifestPath)
+	if stagedReadErr != nil {
+		return pluginStoreIOError("failed to read staged plugin.json", stagedReadErr)
+	}
+	if !bytes.Equal(stagedContents, sourceManifestContents) {
+		return pluginStoreInvalidError("plugin manifest contents changed during installation staging")
 	}
 
 	targetVersionRoot := filepath.Join(targetRoot, pluginVersion)
@@ -624,6 +671,33 @@ func removeOldPluginVersions(targetRoot string, currentVersion string) error {
 
 func oldPluginVersionWouldStayActive(oldVersion string, newVersion string) bool {
 	return oldVersion == DefaultPluginVersion || comparePluginVersions(oldVersion, newVersion) > 0
+}
+
+// rejectSymlinkedPluginManifestPath rejects a plugin manifest whose final path
+// or ancestor directories are symbolic links, which could let a lower-
+// precedence manifest take its place during installation staging (Rust
+// #39590).
+func rejectSymlinkedPluginManifestPath(source string, manifestPath string) error {
+	if info, err := os.Lstat(manifestPath); err != nil {
+		return pluginStoreIOError("failed to stat plugin manifest", err)
+	} else if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return pluginStoreInvalidError(fmt.Sprintf("plugin manifest %q must be a regular file", manifestPath))
+	}
+	rel, err := filepath.Rel(source, filepath.Dir(manifestPath))
+	if err != nil || strings.HasPrefix(filepath.ToSlash(rel), "..") {
+		return pluginStoreInvalidError("plugin manifest is outside the plugin source")
+	}
+	dir := source
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		dir = filepath.Join(dir, part)
+		if info, statErr := os.Lstat(dir); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return pluginStoreInvalidError(fmt.Sprintf("plugin manifest directory %q is a symbolic link", dir))
+		}
+	}
+	return nil
 }
 
 func copyDirRecursive(source string, target string) error {
