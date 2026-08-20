@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"codex_go/execserver"
 	"codex_go/execpolicy"
+	"codex_go/execserver"
 	"codex_go/network"
 	"codex_go/sandbox"
 	shellutil "codex_go/shell"
@@ -81,19 +81,19 @@ func (a *ExecCommandArgs) UnmarshalJSON(data []byte) error {
 }
 
 type ShellRequest struct {
-	Command                         []string
-	HookCommand                     string
-	CWD                             string
-	TimeoutMS                       uint64
-	YieldTimeMS                     uint64
-	MaxOutputTokens                 *int
-	Env                             map[string]string
+	Command         []string
+	HookCommand     string
+	CWD             string
+	TimeoutMS       uint64
+	YieldTimeMS     uint64
+	MaxOutputTokens *int
+	Env             map[string]string
 	// EnvPolicy, when set, filters the inherited environment for this command
 	// (mirroring Rust create_env with the selected turn environment's
 	// ShellEnvironmentPolicy, #38902). The command environment is built from
 	// the parent environment through this policy, then req.Env overrides are
 	// applied on top.
-	EnvPolicy                       *execpolicy.EnvPolicy
+	EnvPolicy *execpolicy.EnvPolicy
 	// ThreadID is exposed to model-reachable commands as CODEX_THREAD_ID when
 	// an EnvPolicy builds the command environment.
 	ThreadID                        string
@@ -298,7 +298,13 @@ func ResolveCommandWithOptions(args *ExecCommandArgs, sessionShell *Shell, opts 
 	}
 	shell := sessionShell
 	if strings.TrimSpace(args.Shell) != "" {
-		shell = &Shell{Type: DetectShellType(args.Shell), Path: args.Shell}
+		// A model-provided shell path only selects the shell type; the local
+		// executable is resolved through normal discovery (Rust #39607).
+		if shellType := DetectShellType(args.Shell); shellType != ShellUnknown {
+			shell = ResolveShellByType(shellType)
+		} else {
+			shell = nil
+		}
 	}
 	if shell == nil {
 		shell = NewDefaultShell()
@@ -307,6 +313,15 @@ func ResolveCommandWithOptions(args *ExecCommandArgs, sessionShell *Shell, opts 
 		Command:   shell.DeriveExecArgs(args.Cmd, useLoginShell),
 		ShellType: shell.Type,
 	}, nil
+}
+
+// ResolveShellByType discovers the local executable for a shell type
+// (shell/command.go GetShell) and rejects unresolvable types.
+func ResolveShellByType(shellType ShellType) *Shell {
+	if detected := shellutil.GetShell(shellutil.ShellType(shellType)); detected != nil {
+		return &Shell{Type: shellType, Path: detected.ShellPath}
+	}
+	return nil
 }
 
 func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellValidationOptions) (*ShellRequest, error) {

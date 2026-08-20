@@ -243,6 +243,8 @@ func TestHelpersMatchRustFormatting(t *testing.T) {
 		auth.PlanEnterpriseCBPUsageBased:     "Enterprise",
 		auth.PlanEnterprise:                  "Enterprise",
 		auth.PlanEdu:                         "Edu",
+		auth.PlanEduPlus:                     "Edu Plus",
+		auth.PlanEduPro:                      "Edu Pro",
 		auth.PlanUnknown:                     "Unknown",
 	}
 	for input, want := range planCases {

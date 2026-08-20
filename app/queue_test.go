@@ -4,14 +4,15 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/cli"
 	"codex_go/session"
 )
 
 // TestSessionIDByUniqueActiveNameLikeRust mirrors Rust queue.rs session lookup
-// coverage (#39092): UUIDs pass through, exact unique names resolve, ambiguous
-// names are rejected, and missing sessions report no match.
+// coverage (#39092): UUIDs pass through, exact unique names resolve, and
+// missing sessions report no match.
 func TestSessionIDByUniqueActiveNameLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	for _, record := range []*session.Record{
@@ -31,6 +32,27 @@ func TestSessionIDByUniqueActiveNameLikeRust(t *testing.T) {
 	}
 	if _, err := sessionIDByUniqueActiveName(store, "missing"); err == nil || !strings.Contains(err.Error(), "No active session") {
 		t.Fatalf("missing name error = %v", err)
+	}
+}
+
+func TestSessionIDByUniqueActiveNamePrefersMostRecentDuplicateLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	older := time.Now().UTC().Add(-2 * time.Hour)
+	newer := time.Now().UTC().Add(-1 * time.Hour)
+	for _, record := range []*session.Record{
+		{ID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", SessionID: "s-old", Title: "shared-name", UpdatedAt: older, Metadata: session.Metadata{HistoryMode: "legacy"}},
+		{ID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", SessionID: "s-new", Title: "shared-name", UpdatedAt: newer, Metadata: session.Metadata{HistoryMode: "legacy", Source: "custom"}},
+	} {
+		if err := store.Create(record); err != nil {
+			t.Fatalf("Create(%s) error = %v", record.ID, err)
+		}
+	}
+	id, err := sessionIDByUniqueActiveName(store, "shared-name")
+	if err != nil {
+		t.Fatalf("sessionIDByUniqueActiveName() error = %v", err)
+	}
+	if id != "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" {
+		t.Fatalf("duplicate name resolved to %q, want the most recent session", id)
 	}
 }
 

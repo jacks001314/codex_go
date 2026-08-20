@@ -625,7 +625,9 @@ func sandboxCloudConfigEligibleAuth(snapshot *auth.AuthDotJSON) bool {
 	if account == nil || account.Type != auth.AccountChatGPT {
 		return false
 	}
-	return account.PlanType.IsBusinessLike() || account.PlanType == auth.PlanEnterprise || account.PlanType == auth.PlanEdu
+	return account.PlanType.IsBusinessLike() ||
+		account.PlanType.IsEducationLike() ||
+		account.PlanType == auth.PlanEnterprise
 }
 
 func sandboxEnvPolicyFromConfig(cfg *config.Config, cwd string) *codexexec.EnvPolicy {

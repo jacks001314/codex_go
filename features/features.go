@@ -135,7 +135,13 @@ var Registry = []Spec{
 	{Key: "mentions_v2", Stage: StageStable, DefaultEnabled: true},
 	{Key: "steer", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "default_mode_request_user_input", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #39625): cwd-relative turn diff paths.
+	{Key: "cwd_relative_turn_diffs", Stage: StageUnderDevelopment},
 	{Key: "terminal_visualization_instructions", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #39288/#39452): the async user
+	// message feature gate was registered then retired; the tool itself is
+	// unconditionally available.
+	{Key: "send_async_message", Stage: StageRemoved},
 	{Key: "guardian_approval", Stage: StageStable, DefaultEnabled: true},
 	{Key: "guardian_enhanced_node_repl_transcripts", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_node_repl_transcript_images", Stage: StageUnderDevelopment, DefaultEnabled: false},

@@ -5604,3 +5604,24 @@ func TestFeatureEnablementFromRoot(t *testing.T) {
 		t.Fatalf("nil root should yield nil enablement")
 	}
 }
+
+func TestSandboxCloudConfigEligibleAuthEducationPlansLikeRust(t *testing.T) {
+	for _, planType := range []string{"edu", "edu_plus", "edu_pro"} {
+		snapshot := &auth.AuthDotJSON{
+			AuthMode: "chatgpt",
+			Tokens:   map[string]any{"plan_type": planType},
+		}
+		if !sandboxCloudConfigEligibleAuth(snapshot) {
+			t.Fatalf("plan_type %q should be cloud-config eligible", planType)
+		}
+	}
+	if sandboxCloudConfigEligibleAuth(&auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens:   map[string]any{"plan_type": "plus"},
+	}) {
+		t.Fatal("individual plus plan must not be cloud-config eligible")
+	}
+	if sandboxCloudConfigEligibleAuth(nil) {
+		t.Fatal("nil auth must not be cloud-config eligible")
+	}
+}

@@ -136,8 +136,8 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		data []byte
 		want string
 	}{
-		{"stable", stablePrecomputedExports, "542b4ed5e8a765db0646080d7db74cd87af6250cc2624fc2d1216d8f70ca9014"},
-		{"experimental", experimentalPrecomputedExports, "06a588aca6e6af361032ffa450fa694f9d85dfc8f31da027b24f738e5d97462a"},
+		{"stable", stablePrecomputedExports, "c67a4d1c2ced320f0ddfb460aaa9d21b08870a9dc5f5ff978da9358c216bbf6f"},
+		{"experimental", experimentalPrecomputedExports, "ba358182911240401b50036f4bb557c808363d8fc4170e0c3a89eaa152de7748"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -202,6 +202,7 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 	requireProtocolSignature(t, stable.Notifications, string(NotificationGuardianWarning), "GuardianWarningNotification", "")
 	requireProtocolSignature(t, stable.Notifications, string(NotificationItemGuardianApprovalReviewStarted), "ItemGuardianApprovalReviewStartedNotification", "")
 	requireProtocolSignature(t, stable.Notifications, string(NotificationItemGuardianApprovalReviewCompleted), "ItemGuardianApprovalReviewCompletedNotification", "")
+	requireProtocolSignature(t, stable.Notifications, string(NotificationStrictReviewRequired), "StrictReviewRequiredNotification", "")
 	requireProtocolSignature(t, stable.Notifications, string(NotificationMCPServerStatusUpdated), "McpServerStatusUpdatedNotification", "")
 	requireProtocolSignature(t, stable.Notifications, string(NotificationModelSafetyBufferingUpdated), "ModelSafetyBufferingUpdatedNotification", "")
 	requireProtocolSignature(t, stable.Notifications, string(NotificationThreadEnvironmentConnected), "EnvironmentConnectionNotification", "")

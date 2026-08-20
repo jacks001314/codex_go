@@ -220,13 +220,24 @@ func extractRefreshTokenErrorCode(body string) string {
 	if strings.TrimSpace(body) == "" {
 		return ""
 	}
-	var payload struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
+	var payload map[string]any
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {
 		return ""
 	}
-	return strings.TrimSpace(payload.Error.Code)
+	// RFC 6749 reports an unusable refresh token as a plain-string error code
+	// ({"error":"invalid_grant"}); legacy backend responses nest it as
+	// {"error":{"code":"refresh_token_*"}}. Mirror Rust's extractor, which
+	// accepts both shapes plus a top-level "code" field (#39637).
+	switch value := payload["error"].(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case map[string]any:
+		if code, ok := value["code"].(string); ok {
+			return strings.TrimSpace(code)
+		}
+	}
+	if code, ok := payload["code"].(string); ok {
+		return strings.TrimSpace(code)
+	}
+	return ""
 }

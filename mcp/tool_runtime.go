@@ -152,7 +152,7 @@ func RuntimeToolsFromStatuses(statuses []MCPServerStatus) []RuntimeToolInfo {
 }
 
 const (
-	runtimeMCPToolNameMaxLength = 64
+	runtimeMCPToolNameMaxLength = 128
 	runtimeMCPHashLength        = 12
 )
 

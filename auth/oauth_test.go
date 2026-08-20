@@ -282,6 +282,89 @@ func TestRefreshChatGPTTokensRecordsPermanentFailure(t *testing.T) {
 	}
 }
 
+func TestRefreshChatGPTTokensInvalidGrantIsPermanentLikeRust(t *testing.T) {
+	clearAuthEnvForRefreshTests(t)
+	home := t.TempDir()
+	if err := PersistChatGPTTokens(home, &ExchangedTokens{
+		IDToken:      fakeJWT(map[string]any{"chatgpt_account_id": "account-123"}),
+		AccessToken:  "old-access-token",
+		RefreshToken: "old-refresh-token",
+	}); err != nil {
+		t.Fatalf("PersistChatGPTTokens() error = %v", err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSONAuth(t, w, map[string]any{"error": "invalid_grant"})
+	}))
+	defer server.Close()
+
+	_, err := RefreshChatGPTTokens(context.Background(), &RefreshChatGPTTokenOptions{
+		CodexHome: home,
+		Issuer:    server.URL,
+		ClientID:  "client-test",
+	})
+	if got := RefreshTokenFailedReasonFromError(err); got == nil || *got != RefreshTokenFailedOther {
+		t.Fatalf("first refresh error = %v, reason = %+v; want permanent Other", err, got)
+	}
+	loaded, loadErr := NewStore(home).Load()
+	if loadErr != nil {
+		t.Fatalf("Load() error = %v", loadErr)
+	}
+	if failed := RefreshFailureForAuth(home, loaded); failed == nil || failed.Reason != RefreshTokenFailedOther {
+		t.Fatalf("recorded failure = %+v, want permanent Other", failed)
+	}
+
+	_, err = RefreshChatGPTTokens(context.Background(), &RefreshChatGPTTokenOptions{
+		CodexHome: home,
+		Issuer:    server.URL,
+		ClientID:  "client-test",
+	})
+	if got := RefreshTokenFailedReasonFromError(err); got == nil || *got != RefreshTokenFailedOther {
+		t.Fatalf("second refresh error = %v, reason = %+v", err, got)
+	}
+	if requests != 1 {
+		t.Fatalf("refresh endpoint requests = %d, want 1 (failure cached)", requests)
+	}
+}
+
+func TestRefreshChatGPTTokensOtherBadRequestStaysTransientLikeRust(t *testing.T) {
+	clearAuthEnvForRefreshTests(t)
+	home := t.TempDir()
+	if err := PersistChatGPTTokens(home, &ExchangedTokens{
+		IDToken:      fakeJWT(map[string]any{"chatgpt_account_id": "account-123"}),
+		AccessToken:  "old-access-token",
+		RefreshToken: "old-refresh-token",
+	}); err != nil {
+		t.Fatalf("PersistChatGPTTokens() error = %v", err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSONAuth(t, w, map[string]any{"error": "invalid_request"})
+	}))
+	defer server.Close()
+
+	for attempt := 0; attempt < 2; attempt++ {
+		_, err := RefreshChatGPTTokens(context.Background(), &RefreshChatGPTTokenOptions{
+			CodexHome: home,
+			Issuer:    server.URL,
+			ClientID:  "client-test",
+		})
+		if IsPermanentRefreshFailure(err) {
+			t.Fatalf("attempt %d: invalid_request must stay transient, got permanent %v", attempt+1, err)
+		}
+		if err == nil {
+			t.Fatalf("attempt %d: refresh should fail", attempt+1)
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("refresh endpoint requests = %d, want 2 (retryable)", requests)
+	}
+}
+
 func TestRefreshTokenFailureClassifiesBackendCodes(t *testing.T) {
 	cases := []struct {
 		code string
@@ -296,6 +379,20 @@ func TestRefreshTokenFailureClassifiesBackendCodes(t *testing.T) {
 		failed := classifyRefreshTokenFailure(`{"error":{"code":"` + tc.code + `"}}`)
 		if failed.Reason != tc.want {
 			t.Fatalf("classify %q = %s, want %s", tc.code, failed.Reason, tc.want)
+		}
+	}
+}
+
+func TestExtractRefreshTokenErrorCodeShapes(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"error":{"code":"refresh_token_expired"}}`: "refresh_token_expired",
+		`{"error":"invalid_grant"}`:                  "invalid_grant",
+		`{"code":"top_level_code"}`:                  "top_level_code",
+		`not json`:                                   "",
+		``:                                           "",
+	} {
+		if got := extractRefreshTokenErrorCode(body); got != want {
+			t.Fatalf("extractRefreshTokenErrorCode(%q) = %q, want %q", body, got, want)
 		}
 	}
 }

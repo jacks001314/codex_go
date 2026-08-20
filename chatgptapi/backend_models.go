@@ -89,6 +89,8 @@ const (
 	PlanK12                         PlanType = "k12"
 	PlanEnterprise                  PlanType = "enterprise"
 	PlanEdu                         PlanType = "edu"
+	PlanEduPlus                     PlanType = "edu_plus"
+	PlanEduPro                      PlanType = "edu_pro"
 	PlanUnknown                     PlanType = "unknown"
 )
 

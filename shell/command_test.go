@@ -1,8 +1,11 @@
 package shell
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -26,6 +29,72 @@ func TestDetectShellType(t *testing.T) {
 		if !ok || got != want {
 			t.Fatalf("DetectShellType(%q) = %q, %v; want %q", input, got, ok, want)
 		}
+	}
+}
+
+func TestGetShellResolvesModelProvidedPathByType(t *testing.T) {
+	binDir := t.TempDir()
+	executableName := "bash"
+	if runtime.GOOS == "windows" {
+		executableName = "bash.exe"
+	}
+	executable := filepath.Join(binDir, executableName)
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", executable, err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SHELL", "")
+
+	// A model-provided path selects the shell type; the executable must be the
+	// discovered local binary, never the provided path (Rust #39607).
+	detected := GetShellByModelProvidedPath(filepath.Join(t.TempDir(), "attacker", "bash"))
+	if detected == nil {
+		t.Fatal("GetShellByModelProvidedPath() = nil")
+	}
+	if detected.ShellType != ShellBash {
+		t.Fatalf("shell type = %q, want bash", detected.ShellType)
+	}
+	if detected.ShellPath != executable {
+		t.Fatalf("resolved shell path = %q, want discovered %q", detected.ShellPath, executable)
+	}
+	if strings.Contains(detected.ShellPath, "attacker") {
+		t.Fatalf("resolved shell path must not come from the model-provided path: %q", detected.ShellPath)
+	}
+}
+
+func TestGetShellByModelProvidedPathUnknownTypeFallsBack(t *testing.T) {
+	detected := GetShellByModelProvidedPath(filepath.Join(t.TempDir(), "attacker", "not-a-shell"))
+	fallback := UltimateFallbackShell()
+	if detected == nil || detected.ShellType != fallback.ShellType {
+		t.Fatalf("unknown shell type = %+v, want fallback %+v", detected, fallback)
+	}
+}
+
+func TestSedReadPathRejectsInPlaceMutationsLikeRust(t *testing.T) {
+	for _, command := range []string{
+		"sed -n -i.bak 1p secret.txt",
+		"sed -ni.bak 1p secret.txt",
+		"sed -Eni.bak 1p secret.txt",
+		"sed --in-place -n 1p secret.txt",
+		"sed --in-place=.bak -n 1p secret.txt",
+	} {
+		if got := ReadPaths(SplitCommandLine(command)); len(got) != 0 {
+			t.Fatalf("ReadPaths(%q) = %#v, want none (in-place mutation)", command, got)
+		}
+	}
+}
+
+func TestSedReadPathKeepsOperandsAfterDoubleDash(t *testing.T) {
+	got := ReadPaths(SplitCommandLine("cat README.md && sed 's/a/x/' -- -input.txt"))
+	if want := []string{"README.md"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ReadPaths() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSedReadPathStillClassifiesPrintOnlyRange(t *testing.T) {
+	got := ReadPaths(SplitCommandLine("sed -n 1,5p README.md"))
+	if want := []string{"README.md"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ReadPaths() = %#v, want %#v", got, want)
 	}
 }
 

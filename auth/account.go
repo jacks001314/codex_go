@@ -29,11 +29,24 @@ const (
 	PlanEnterpriseCBPUsageBased     PlanType = "enterprise_cbp_usage_based"
 	PlanEnterprise                  PlanType = "enterprise"
 	PlanEdu                         PlanType = "edu"
+	PlanEduPlus                     PlanType = "edu_plus"
+	PlanEduPro                      PlanType = "edu_pro"
 )
 
 func (p PlanType) IsBusinessLike() bool {
 	switch p {
 	case PlanBusiness, PlanEnt26, PlanEnterpriseCBPAutomation, PlanEnterpriseCBPUsageBased:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsEducationLike groups education plans by workspace capabilities without
+// losing their SKU identity (Rust PlanType::is_education_like, #39316).
+func (p PlanType) IsEducationLike() bool {
+	switch p {
+	case PlanEdu, PlanEduPlus, PlanEduPro:
 		return true
 	default:
 		return false
@@ -50,13 +63,7 @@ func (p PlanType) IsTeamLike() bool {
 }
 
 func (p PlanType) IsWorkspaceAccount() bool {
-	switch p {
-	case PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26,
-		PlanEnterpriseCBPAutomation, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu:
-		return true
-	default:
-		return false
-	}
+	return p.IsTeamLike() || p.IsBusinessLike() || p.IsEducationLike() || p == PlanEnterprise
 }
 
 type AccountType string
@@ -1477,6 +1484,10 @@ func planFromString(value string) PlanType {
 		return PlanEnterprise
 	case string(PlanEdu):
 		return PlanEdu
+	case string(PlanEduPlus):
+		return PlanEduPlus
+	case string(PlanEduPro):
+		return PlanEduPro
 	default:
 		return PlanUnknown
 	}

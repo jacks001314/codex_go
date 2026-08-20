@@ -58,6 +58,24 @@ func TestRateLimitPayloadPreservesEnterpriseAutomationPlan(t *testing.T) {
 	}
 }
 
+func TestRateLimitPayloadPreservesEduPlans(t *testing.T) {
+	for planType, wire := range map[PlanType]string{
+		PlanEduPlus: "edu_plus",
+		PlanEduPro:  "edu_pro",
+	} {
+		var payload RateLimitStatusPayload
+		if err := json.Unmarshal([]byte(`{"plan_type":"`+wire+`"}`), &payload); err != nil {
+			t.Fatalf("Unmarshal(%s) error = %v", wire, err)
+		}
+		if payload.PlanType != planType {
+			t.Fatalf("plan = %q, want %q", payload.PlanType, planType)
+		}
+		if snapshots := RateLimitSnapshotsFromPayload(&payload); len(snapshots) != 1 || snapshots[0].PlanType != planType {
+			t.Fatalf("snapshots = %#v", snapshots)
+		}
+	}
+}
+
 func TestConstructorsInitializeRequiredFields(t *testing.T) {
 	title := true
 	item := NewTaskListItem("task", "Title", &title, true, false)

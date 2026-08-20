@@ -176,7 +176,6 @@ func rustWorkspaceMembersSnapshot() []string {
 		"ext/extension-api",
 		"ext/goal",
 		"ext/git-attribution",
-		"ext/guardian",
 		"ext/guardian-v2",
 		"ext/image-generation",
 		"ext/items",
@@ -262,15 +261,15 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
-		{Path: "Cargo.toml", SHA256: "c1b573e26f292abcbfa0d5473ef543886e8a30c9ac4785c6cfc4b00f1daea3d7"},
+		{Path: "Cargo.toml", SHA256: "723a4c4bb8b779589d940abe58f068fae6aef39424133c2d1af593c92a6a5662"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
-		{Path: "exec/src/lib.rs", SHA256: "fcf9025041aade20f09d44f4d3555072245eb40b63e43d37e47d02fd1caa0d95"},
+		{Path: "exec/src/lib.rs", SHA256: "ab21fb2d2a230a7d914d2be7413eeee32b4a47161359a7aa811d7e8c59e262ac"},
 		{Path: "exec/src/exec_events.rs", SHA256: "fc914a7d8f7e990b19a95c41abf758e95e5b7ea028caa8b34b1c82306382c004"},
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
-		{Path: "core/src/client.rs", SHA256: "628ad1386b500a248a58e1877ac9eb507318e57e3af695f0399aa3363587be07"},
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "aa2410dc871964ed3b33f2b5fb910f5e795c7a93a90cf1df152e123bc397472b"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "c0272158e2b9dec341b4f23fa36c6bc7155ac4a383c896bdb8688ccb7fe28ef5"},
-		{Path: "core/tests/suite/mod.rs", SHA256: "bc064c6992690220bbf4c5992c8a2b07e2172b19b481676e21b53e62b6a51766"},
+		{Path: "core/src/client.rs", SHA256: "f85a08f3fdc05868557f403f0cc06a6523ad4baeaddad359804e3a3d39953439"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "4fcf0f97675b92804d24efe3ef48bdf6926809d3bc36aeb7b9f9e57cd5b32f99"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "685593889cd5bd9a65b8446530f8e0d1ff21dade7ece97d4e7787e1d80b7d01a"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "fa0a3dc38f1d3c69e3ffa1a10a2cbfbf7d7e36fc44cfaac041b5c719c9bba0e3"},
 	}
 }
 

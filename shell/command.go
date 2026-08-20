@@ -1,6 +1,8 @@
 package shell
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -57,12 +59,87 @@ func UltimateFallbackShell() *DetectedShell {
 	return &DetectedShell{ShellType: ShellSh, ShellPath: "/bin/sh"}
 }
 
+// GetShell resolves the local executable for a shell type through Codex's
+// normal discovery order (Rust shell_detect::get_shell, #39607): the user's
+// default shell when it matches, the binary on PATH, then known fallbacks.
+func GetShell(shellType ShellType) *DetectedShell {
+	if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
+		if detected, ok := DetectShellType(shell); ok && detected == shellType && fileExists(shell) {
+			return &DetectedShell{ShellType: shellType, ShellPath: shell}
+		}
+	}
+	switch shellType {
+	case ShellPowerShell:
+		if path := firstExecutable("pwsh", "powershell"); path != "" {
+			return &DetectedShell{ShellType: ShellPowerShell, ShellPath: path}
+		}
+	case ShellCmd:
+		if path := firstExecutable("cmd"); path != "" {
+			return &DetectedShell{ShellType: ShellCmd, ShellPath: path}
+		}
+	case ShellZsh:
+		if path := firstExecutable("zsh"); path != "" {
+			return &DetectedShell{ShellType: ShellZsh, ShellPath: path}
+		}
+		if path := existingFilePath("/bin/zsh"); path != "" {
+			return &DetectedShell{ShellType: ShellZsh, ShellPath: path}
+		}
+	case ShellBash:
+		if path := firstExecutable("bash"); path != "" {
+			return &DetectedShell{ShellType: ShellBash, ShellPath: path}
+		}
+		for _, candidate := range []string{"/bin/bash", "/usr/bin/bash"} {
+			if path := existingFilePath(candidate); path != "" {
+				return &DetectedShell{ShellType: ShellBash, ShellPath: path}
+			}
+		}
+	case ShellSh:
+		if path := firstExecutable("sh"); path != "" {
+			return &DetectedShell{ShellType: ShellSh, ShellPath: path}
+		}
+		if path := existingFilePath("/bin/sh"); path != "" {
+			return &DetectedShell{ShellType: ShellSh, ShellPath: path}
+		}
+	}
+	return nil
+}
+
+// GetShellByModelProvidedPath uses the model-provided path only to select a
+// shell type, then discovers the local executable (Rust #39607). The provided
+// path never determines which executable Codex runs.
 func GetShellByModelProvidedPath(shellPath string) *DetectedShell {
 	shellType, ok := DetectShellType(shellPath)
 	if !ok {
 		return UltimateFallbackShell()
 	}
-	return &DetectedShell{ShellType: shellType, ShellPath: shellPath}
+	if shell := GetShell(shellType); shell != nil {
+		return shell
+	}
+	return UltimateFallbackShell()
+}
+
+func firstExecutable(names ...string) string {
+	for _, name := range names {
+		if path, err := exec.LookPath(name); err == nil && strings.TrimSpace(path) != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func existingFilePath(path string) string {
+	if fileExists(path) {
+		return path
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func ShlexJoin(tokens []string) string {
@@ -526,6 +603,11 @@ func awkReadPath(args []string) string {
 }
 
 func sedReadPath(args []string) string {
+	if sedHasInPlaceFlag(args) {
+		// In-place `sed` can edit files, so it is never classified as a read
+		// (Rust #39700).
+		return ""
+	}
 	hasPrintOnly := false
 	for _, arg := range args {
 		if arg == "-n" {
@@ -568,6 +650,46 @@ func sedReadPath(args []string) string {
 		return ""
 	}
 	return operands[0]
+}
+
+// sedHasInPlaceFlag mirrors Rust's sed_has_in_place_flag (#39700): it handles
+// `--` boundaries, options with arguments (`-e`/`-f`/`--expression`/`--file`),
+// combined short flags (`-ni.bak`), and backup suffixes
+// (`-i.bak`/`--in-place=.bak`).
+func sedHasInPlaceFlag(args []string) bool {
+	index := 0
+	for index < len(args) {
+		token := args[index]
+		index++
+		switch {
+		case token == "--":
+			return false
+		case token == "-e" || token == "-f" || token == "--expression" || token == "--file":
+			index++ // consume the option argument
+		case token == "--in-place" || strings.HasPrefix(token, "--in-place="):
+			return true
+		case strings.HasPrefix(token, "--"):
+			// Other long options do not mutate in place.
+		default:
+			if !strings.HasPrefix(token, "-") {
+				continue
+			}
+			shortOptions := strings.TrimPrefix(token, "-")
+		scanCluster:
+			for i, option := range shortOptions {
+				switch option {
+				case 'i':
+					return true
+				case 'e', 'f':
+					if i == len(shortOptions)-1 {
+						index++ // consume the option argument
+					}
+					break scanCluster
+				}
+			}
+		}
+	}
+	return false
 }
 
 func isSedPrintRange(value string) bool {

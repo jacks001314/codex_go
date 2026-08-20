@@ -461,8 +461,16 @@ func RefreshChatGPTTokens(ctx context.Context, opts *RefreshChatGPTTokenOptions)
 	if err := postJSON(ctx, normalized.HTTPClient, refreshTokenURL(normalized.Issuer), body, &out); err != nil {
 		var statusErr *httpStatusError
 		if errors.As(err, &statusErr) {
+			// RFC 6749 reports an unusable refresh token as invalid_grant
+			// without preserving the legacy expired/reused/revoked subtype.
+			// Keep it terminal with the generic reason (#39637).
+			code := extractRefreshTokenErrorCode(statusErr.Body)
+			isInvalidGrantBadRequest := statusErr.StatusCode == http.StatusBadRequest &&
+				strings.EqualFold(code, "invalid_grant")
 			failed := classifyRefreshTokenFailure(statusErr.Body)
-			if statusErr.StatusCode == http.StatusUnauthorized || failed.Reason != RefreshTokenFailedOther {
+			if statusErr.StatusCode == http.StatusUnauthorized ||
+				failed.Reason != RefreshTokenFailedOther ||
+				isInvalidGrantBadRequest {
 				RecordPermanentRefreshFailureIfUnchangedWithOptions(normalized.CodexHome, attempted, failed, opts.StoreOptions)
 				return nil, failed
 			}

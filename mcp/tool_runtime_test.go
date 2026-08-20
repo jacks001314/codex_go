@@ -91,6 +91,36 @@ func TestNormalizeRuntimeToolsForModelDisambiguatesCollisions(t *testing.T) {
 	}
 }
 
+func TestNormalizeRuntimeToolsForModelResponsesAPINameBoundary(t *testing.T) {
+	// Rust #39594: the Responses API accepts tool names up to 128 bytes, so
+	// model-visible MCP names at the 128-byte boundary stay un-hashed while
+	// names above it are shortened and hashed to stay bounded and unique.
+	const namespace = "mcp__s"
+	namespaceLen := len(namespace) + len("__")
+	for _, totalLen := range []int{128, 129} {
+		name := strings.Repeat("a", totalLen-namespaceLen)
+		info := RuntimeToolInfo{
+			ServerName: "s",
+			Tool:       RuntimeTool{Name: name},
+		}
+		normalized := NormalizeRuntimeToolsForModel([]RuntimeToolInfo{info})
+		if len(normalized) != 1 {
+			t.Fatalf("totalLen %d: normalized = %#v", totalLen, normalized)
+		}
+		key := normalized[0].CallableNamespace + "__" + normalized[0].CallableName
+		if len(key) != 128 {
+			t.Fatalf("totalLen %d: callable name length = %d, want 128", totalLen, len(key))
+		}
+		if totalLen == 128 {
+			if normalized[0].CallableNamespace != namespace || normalized[0].CallableName != name {
+				t.Fatalf("totalLen 128: name should be preserved, got %q/%q", normalized[0].CallableNamespace, normalized[0].CallableName)
+			}
+		} else if normalized[0].CallableName == name {
+			t.Fatalf("totalLen 129: oversized name should be hashed, got %q", normalized[0].CallableName)
+		}
+	}
+}
+
 func TestBuildExposureDefersToolsWhenSearchEnabled(t *testing.T) {
 	visible := true
 	hidden := false

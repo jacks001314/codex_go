@@ -16,6 +16,7 @@ const (
 	NotificationFileChangePatchUpdated              NotificationMethod = "item/fileChange/patchUpdated"
 	NotificationItemGuardianApprovalReviewStarted   NotificationMethod = "item/autoApprovalReview/started"
 	NotificationItemGuardianApprovalReviewCompleted NotificationMethod = "item/autoApprovalReview/completed"
+	NotificationStrictReviewRequired                NotificationMethod = "autoApprovalReview/strictReviewRequired"
 	NotificationRawResponseItemCompleted            NotificationMethod = "rawResponseItem/completed"
 	NotificationRawResponseCompleted                NotificationMethod = "rawResponse/completed"
 	NotificationHookStarted                         NotificationMethod = "hook/started"
@@ -705,6 +706,15 @@ type ItemGuardianApprovalReviewCompletedNotification struct {
 	DecisionSource AutoReviewDecisionSource     `json:"decisionSource"`
 	Review         GuardianApprovalReview       `json:"review"`
 	Action         GuardianApprovalReviewAction `json:"action"`
+}
+
+// StrictReviewRequiredNotification mirrors Rust
+// StrictReviewRequiredNotification (#39157): Guardian requires a strict review
+// for the item in this turn.
+type StrictReviewRequiredNotification struct {
+	ThreadID    string `json:"threadId"`
+	TurnID      string `json:"turnId"`
+	StartedAtMS uint64 `json:"startedAtMs"`
 }
 
 type TerminalInteractionNotification struct {

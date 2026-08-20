@@ -1,8 +1,8 @@
 {
-    "rustBaseline": "f97e775693",
-    "rustTag": "main@f97e775693",
-    "rustUpstreamHead": "f97e77569352a2bf5be9955e623edad0a15d9b93",
-    "rustUpstreamTag": "main@f97e77569352a2bf5be9955e623edad0a15d9b93",
+    "rustBaseline": "9bf673718a",
+    "rustTag": "main@9bf673718a",
+    "rustUpstreamHead": "9bf673718a4605b49e47d00762121d372af95439",
+    "rustUpstreamTag": "main@9bf673718a4605b49e47d00762121d372af95439",
     "rustE2EBinary": {
         "version": "codex-cli 0.0.0",
         "tag": "main@bbbf396839",
@@ -13,7 +13,7 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-08-18T15:00:00+08:00",
+    "generatedAt": "2026-08-20T15:00:00+08:00",
     "items": [
         {
             "status": "done",

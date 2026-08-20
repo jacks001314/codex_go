@@ -9349,6 +9349,12 @@ func accountPlanTypeFromBackend(plan chatgptapi.PlanType) *auth.PlanType {
 	case chatgptapi.PlanEdu, chatgptapi.PlanEducation:
 		value := auth.PlanEdu
 		return &value
+	case chatgptapi.PlanEduPlus:
+		value := auth.PlanEduPlus
+		return &value
+	case chatgptapi.PlanEduPro:
+		value := auth.PlanEduPro
+		return &value
 	default:
 		value := auth.PlanUnknown
 		return &value

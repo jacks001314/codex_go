@@ -68,6 +68,10 @@ func PlanTypeDisplayName(planType auth.PlanType) string {
 		return "Enterprise"
 	case auth.PlanProlite:
 		return "Pro Lite"
+	case auth.PlanEduPlus:
+		return "Edu Plus"
+	case auth.PlanEduPro:
+		return "Edu Pro"
 	default:
 		return titleCase(string(planType))
 	}

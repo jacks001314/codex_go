@@ -112,6 +112,14 @@ func TestPlanTypeClassificationsMatchRust(t *testing.T) {
 	if PlanTeam.IsBusinessLike() || PlanEnterprise.IsBusinessLike() {
 		t.Fatal("team and legacy enterprise plans are not business-like")
 	}
+	for _, plan := range []PlanType{PlanEdu, PlanEduPlus, PlanEduPro} {
+		if !plan.IsEducationLike() {
+			t.Fatalf("plan %q should be education-like", plan)
+		}
+	}
+	if PlanEnterprise.IsEducationLike() || PlanTeam.IsEducationLike() {
+		t.Fatal("enterprise and team plans are not education-like")
+	}
 	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased} {
 		if !plan.IsTeamLike() {
 			t.Fatalf("plan %q should be team-like", plan)
@@ -120,13 +128,26 @@ func TestPlanTypeClassificationsMatchRust(t *testing.T) {
 	if PlanBusiness.IsTeamLike() || PlanProlite.IsTeamLike() {
 		t.Fatal("enterprise and individual Pro Lite plans are not team-like")
 	}
-	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26, PlanEnterpriseCBPAutomation, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu} {
+	for _, plan := range []PlanType{PlanTeam, PlanSelfServeBusinessProlite, PlanSelfServeBusinessUsageBased, PlanBusiness, PlanEnt26, PlanEnterpriseCBPAutomation, PlanEnterpriseCBPUsageBased, PlanEnterprise, PlanEdu, PlanEduPlus, PlanEduPro} {
 		if !plan.IsWorkspaceAccount() {
 			t.Fatalf("plan %q should be a workspace account", plan)
 		}
 	}
 	if PlanPlus.IsWorkspaceAccount() || PlanUnknown.IsWorkspaceAccount() {
 		t.Fatal("individual or unknown plans must not be workspace accounts")
+	}
+}
+
+func TestPlanFromStringParsesEducationVariants(t *testing.T) {
+	for input, want := range map[string]PlanType{
+		"edu":       PlanEdu,
+		"edu_plus":  PlanEduPlus,
+		"edu_pro":   PlanEduPro,
+		"education": PlanUnknown,
+	} {
+		if got := planFromString(input); got != want {
+			t.Fatalf("planFromString(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

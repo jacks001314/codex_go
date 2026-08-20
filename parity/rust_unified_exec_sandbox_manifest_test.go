@@ -176,7 +176,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"test_get_command_rejects_explicit_shell_in_zsh_fork_mode",
 				"test_get_command_respects_explicit_bash_shell",
 				"test_get_command_respects_explicit_cmd_shell",
-				"test_get_command_respects_explicit_powershell_shell",
+				"test_get_command_resolves_powershell_by_type",
 				"test_get_command_uses_default_shell_when_unspecified",
 				"write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separate",
 				"write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_command_on_completion",

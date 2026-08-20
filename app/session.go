@@ -1301,10 +1301,10 @@ type sessionPickerEntry struct {
 }
 
 // runSessionQueue mirrors Rust cli/src/queue_cmd.rs run_queue_command + tui
-// session_queue_commands.rs (#39092): submit a text message through the
+// session_queue_commands.rs (#39092/#39385): submit a text message through the
 // thread/queue/add app-server API for an existing session, resolving the
-// session by UUID or exact name (rejecting ambiguous names) and routing to a
-// local or explicit remote app server.
+// session by UUID or exact name (preferring the most recent match) and routing
+// to a local or explicit remote app server.
 func runSessionQueue(opts *cli.QueueOptions, root *cli.RootOptions, stdout io.Writer) error {
 	if opts == nil {
 		return errors.New("queue options are required")
@@ -1395,7 +1395,8 @@ func runRemoteSessionQueue(ctx context.Context, endpoint *appserverdaemon.Remote
 }
 
 // resolveQueueSessionTarget resolves the queue target as a UUID or as an exact
-// active session name, rejecting ambiguous names (Rust SessionNameMatch::Unique).
+// active session name, preferring the most recent duplicate
+// (Rust SessionNameMatch::FirstIncludingNonInteractive, #39385).
 func resolveQueueSessionTarget(store *session.Store, opts *cli.SessionOptions) (session.ThreadID, error) {
 	if opts == nil || strings.TrimSpace(opts.Target) == "" {
 		return "", errors.New("SESSION is required")
@@ -1411,35 +1412,34 @@ func sessionIDByUniqueActiveName(store *session.Store, name string) (session.Thr
 	if store == nil {
 		return "", errors.New("session store is nil")
 	}
+	// Prefer state-database matches before falling back to rollout scanning;
+	// ListThreadRowsByName returns the most recent match first (#39385).
+	if id, found := sessionIDBySQLiteName(store, name, sessionArchivedFilter(false)); found {
+		return id, nil
+	}
 	records, err := listSessionsByArchived(store, false)
 	if err != nil {
 		return "", err
 	}
-	var matches []session.ThreadID
+	var matches []session.Record
 	for i := range records {
 		recordName := strings.TrimSpace(records[i].Title)
 		if recordName == "" {
 			recordName = strings.TrimSpace(string(records[i].ID))
 		}
 		if recordName == name {
-			matches = append(matches, records[i].ID)
+			matches = append(matches, records[i])
 		}
 	}
 	if len(matches) == 0 {
-		// SQLite names may exist without a rollout record in the scan.
-		if id, found := sessionIDBySQLiteName(store, name, sessionArchivedFilter(false)); found {
-			return id, nil
-		}
 		return "", fmt.Errorf("No active session found matching '%s'.", name)
 	}
-	if len(matches) > 1 {
-		return "", fmt.Errorf("Multiple active sessions match '%s'; use the session UUID.", name)
-	}
-	return matches[0], nil
+	sortSessionRecordsByRecency(matches)
+	return matches[0].ID, nil
 }
 
 // lookupRemoteSessionUniqueByName scans remote active sessions for an exact
-// name match and rejects ambiguous names (Rust #39092).
+// name match and prefers the most recent duplicate (Rust #39092/#39385).
 func lookupRemoteSessionUniqueByName(ctx context.Context, client *remoteAppServerTUIClient, name string, opts *cli.SessionOptions) (remoteResolvedSessionTarget, error) {
 	// Queue messages can target interactive, exec, and custom sessions, so the
 	// lookup does not restrict source kinds.
@@ -1449,6 +1449,7 @@ func lookupRemoteSessionUniqueByName(ctx context.Context, client *remoteAppServe
 	}
 	searchOpts.IncludeNonInteractive = true
 	var matches []remoteResolvedSessionTarget
+	var best *appserver.Thread
 	cursor := (*string)(nil)
 	for {
 		params := remoteThreadListParams(searchOpts, false, 100)
@@ -1463,6 +1464,9 @@ func lookupRemoteSessionUniqueByName(ctx context.Context, client *remoteAppServe
 				target, err := remoteSessionTargetFromThread(&response.Data[i])
 				if err == nil {
 					matches = append(matches, target)
+					if best == nil || remoteThreadRecency(&response.Data[i]) > remoteThreadRecency(best) {
+						best = &response.Data[i]
+					}
 				}
 			}
 		}
@@ -1477,8 +1481,22 @@ func lookupRemoteSessionUniqueByName(ctx context.Context, client *remoteAppServe
 	case 1:
 		return matches[0], nil
 	default:
-		return remoteResolvedSessionTarget{}, fmt.Errorf("Multiple active sessions match '%s'; use the session UUID.", name)
+		target, err := remoteSessionTargetFromThread(best)
+		if err != nil {
+			return remoteResolvedSessionTarget{}, err
+		}
+		return target, nil
 	}
+}
+
+func remoteThreadRecency(thread *appserver.Thread) int64 {
+	if thread == nil {
+		return 0
+	}
+	if thread.RecencyAt != nil {
+		return *thread.RecencyAt
+	}
+	return thread.UpdatedAt
 }
 
 // queueUnsupportedServerError wraps thread/queue/add method-not-found failures

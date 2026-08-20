@@ -1,786 +1,1976 @@
 {
-    "schemaVersion": 1,
-    "rustFromExclusive": "21cfd369efca2df70c904c580b2e7e2e3eddb3c3",
-    "rustToInclusive": "f97e77569352a2bf5be9955e623edad0a15d9b93",
-    "commits": [
+    "schemaVersion":  1,
+    "rustFromExclusive":  "f97e77569352a2bf5be9955e623edad0a15d9b93",
+    "rustToInclusive":  "9bf673718a4605b49e47d00762121d372af95439",
+    "commits":  [
         {
-            "sha": "32a383c0ba5ed42a1adc3f2084014895bfe7738c",
-            "subject": "Move MCP policy types into `codex-protocol` (#39017)",
-            "kind": "protocol",
-            "domains": [
-                "protocol",
-                "mcp"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A (structural): Go has no codex-protocol crate boundary; MCP policy types already live in the shared Go protocol/mcp packages consumed by both executor plugins and the runtime."
-            ]
-        },
+            "sha":  "5ee6baee2fcc0b6ffd413d9611f5538dad40d0f2",
+            "subject":  "Validate identifiers in plugin creator workflows (#39131)",
+            "kind":  "runtime",
+            "domains":  [
+                "plugin"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
         {
-            "sha": "02360b48d1cfe1ffe1a74f18da4df7ee96d95e49",
-            "subject": "Isolate MCP resource headers during OAuth requests (#39019)",
-            "kind": "protocol",
-            "domains": [
-                "mcp"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Go MCP OAuth builds per-request headers from configured server headers (oauthHTTPClient mcpOAuthHeaderTransport); there is no shared mutable resource-header registry to isolate."
-            ]
-        },
+            "sha":  "9a254ba1fa0315e90e0cb2eed5038eaf418a19cd",
+            "subject":  "Redact auth tokens from app-server response logs (#39141)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
         {
-            "sha": "09bc28f348774aa180ac58f667ac244aa0c94774",
-            "subject": "Restrict Windows IDE pipe client impersonation (#39020)",
-            "kind": "security",
-            "domains": [
-                "tui",
-                "ide_context"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./tui/ide_context -run 'TestWindowsPipeOpensWithIdentificationOnlyImpersonationLikeRust' -count=1; go test ./tui/ide_context -count=1",
-                "connectIDEContext opens the IDE-context named pipe with SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION (windowsPipeSecurityFlags), limiting the server to identification-level impersonation (Rust #39020)."
-            ]
-        },
-        {
-            "sha": "0841d9bba5e53104caa86eda39c9974afe63a639",
-            "subject": "Hang soft-break whitespace in the TUI composer (#39022)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust textarea wrapping change; Go TUI composer wrapping is a separate implementation without Rust soft-break whitespace semantics."
-            ]
-        },
-        {
-            "sha": "f0904922f6f679699fa11d144ab29f08dd5cc770",
-            "subject": "Reduce retained MCP result data in TUI history (#39023)",
-            "kind": "runtime",
-            "domains": [
-                "tui",
-                "mcp"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust TUI history retention change; Go history cells retain MCP results through their own bounded representation."
-            ]
-        },
-        {
-            "sha": "c6ba7b7f8e884fb89c6811a3c6ab4748430d4ba5",
-            "subject": "Speed up the large diff highlighting test (#39025)",
-            "kind": "test",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust test-only performance change."
-            ]
-        },
-        {
-            "sha": "171ae66d7411759d384de8147f5ce9c3a6ae988f",
-            "subject": "Use simulated time in the long typing test (#39026)",
-            "kind": "test",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust test-only change."
-            ]
-        },
-        {
-            "sha": "10fbb618384ec4c214fced0feed3adf1d72c4cb6",
-            "subject": "Cache the test pet spritesheet encoding (#39028)",
-            "kind": "test",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust test-only change."
-            ]
-        },
-        {
-            "sha": "8892aa8fa0248a157c8f6ad408e70011da12d665",
-            "subject": "Speed up the in-app resume cwd test (#39030)",
-            "kind": "test",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust test-only change."
-            ]
-        },
-        {
-            "sha": "dc473903ab703987a0eaab02071c7535631c5459",
-            "subject": "Encapsulate TUI shimmer under the motion module (#39032)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust TUI module reorganization; Go TUI has its own shimmer/motion implementation."
-            ]
-        },
-        {
-            "sha": "a8525b139c3578acf5e8cf2db9319ff8cbc6e8c5",
-            "subject": "Bound legacy resume preview scans (#39033)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A (deferred): Rust resume-picker scans at most 1 MiB of a local legacy rollout tail for previews; Go resume previews load through app-server paginated reads with scan limits and no local legacy rollout tail scanner."
-            ]
-        },
-        {
-            "sha": "eeb82a156d1b3944dca4234c3043296529ec5837",
-            "subject": "Dispatch queued messages written by other processes (#39034)",
-            "kind": "persistence",
-            "domains": [
-                "session",
-                "state"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./appserver -run 'QueuedDispatch|ResumeLoadDispatches' -count=1; go test ./appserver -count=1",
-                "Implemented the load/resume half of #39034: maybeDispatchQueuedSubmissionIfIdle dispatches pending queued submissions when a thread is loaded/resumed and idle (guards: closing/active-turn/not-loaded), observing cross-process writes because Go's durable queue lives in the thread record and is re-read from the store each check. The Rust per-queue revision table + PRAGMA data_version polling remain structural N/A for Go's embedded-JSON queue architecture (documented)."
-            ]
-        },
-        {
-            "sha": "71e5e1ec50775bc3abf8a12edfffe5eb803971d6",
-            "subject": "Add app-server coverage for Guardian V2 approval routing (#39035)",
-            "kind": "test",
-            "domains": [
-                "appserver"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./appserver -run 'TestRustAppServerV2SuiteManifest' -count=1",
-                "The Go app-server v2 suite manifest now tracks the Rust guardian_v2 suite module (owner appserver/guardian, Guardian V2 approval routing, risk scores, managed-reviewer gating)."
-            ]
-        },
-        {
-            "sha": "1d928cad2f4ea831f1f30a659347c5a9459db206",
-            "subject": "Allow config reads to join active app-server read batches (#39036)",
-            "kind": "runtime",
-            "domains": [
-                "appserver",
+            "sha":  "f47f77ada6699460bf13b0b7278e710692e0ea34",
+            "subject":  "Add configurable shortcuts for the agents dashboard (#39142)",
+            "kind":  "runtime",
+            "domains":  [
                 "config"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust app-server read-batching optimization; Go config reads do not join shared read batches."
-            ]
-        },
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
         {
-            "sha": "9dd3d6a13ef146cdcb60376f94a85d41918d16e3",
-            "subject": "Restore Guardian risk scores across thread lifecycles (#39038)",
-            "kind": "runtime",
-            "domains": [
+            "sha":  "de7bbb04811afdbefe77b1604ebe0d0e28734d7c",
+            "subject":  "Hydrate recommended plugin metadata on selection (#39143)",
+            "kind":  "runtime",
+            "domains":  [
+                "plugin"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "230791fd1f255b9bd5ca5228326239db980f08dd",
+            "subject":  "Persist active permission profiles in turn context (#39145)",
+            "kind":  "runtime",
+            "domains":  [
+                "protocol"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "bc7a4870398ac8f7ac90aaab1dc10ee0766f7fe1",
+            "subject":  "Centralize persisted resume settings lookup (#39147)",
+            "kind":  "runtime",
+            "domains":  [
+                "config"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "6f95f19103983e4d269609bff86c7dd20bd16c7c",
+            "subject":  "Update PyPI publish action to v1.14.2 (#39152)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "539a09cb28ca1ded4278c6d54716abbacab42428",
+            "subject":  "Restore permission profiles when resuming threads (#39153)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui",
+                "protocol"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui, protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "3d47dc40be53a2b7729443cf89cfa8d058830aa1",
+            "subject":  "Box the TUI future to bound CLI stack usage (#39154)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "f6ba9110fa5ac469ea732612f8ca06375ea4de42",
+            "subject":  "Prepare Python SDK 0.147.0 stable release (#39155)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "f5e9d66851a20311b8385204686990c6c5960014",
+            "subject":  "Notify clients when Guardian requires strict review (#39157)",
+            "kind":  "runtime",
+            "domains":  [
                 "appserver",
                 "guardian"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A (architecture): Go guardian score progress is in-memory per-thread (guardianScoreProgress); Go has no persisted SecurityRiskScore in rollout history to restore on resume/fork."
-            ]
-        },
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "Implemented: appserver gains NotificationStrictReviewRequired (autoApprovalReview/strictReviewRequired) with StrictReviewRequiredNotification {threadId, turnId, startedAtMs}; registered in notificationMethods and the params map; protocol schema matches Rust ServerNotification fixtures (schema_test)."
+                ]
+            },
         {
-            "sha": "d0fd4e830a2fe04577ae3098e2738edfd5750133",
-            "subject": "Preserve foreign paths in managed network approvals (#39040)",
-            "kind": "runtime",
-            "domains": [
-                "network",
-                "appserver"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./turn -run 'TestTurnStartRejectsOversizedEnvironmentCWDLikeRust' -count=1; go test ./turn -count=1",
-                "TurnStartParams.Validate rejects turn environment working directories larger than 8 KiB (maxTurnEnvironmentCWDBytes) like Rust ThreadManager; the PathUri trigger-cwd rendering is N/A because Go uses native string paths."
-            ]
-        },
-        {
-            "sha": "0f21cb3413ea2cc6623804a3c5e9493a30500199",
-            "subject": "Enforce managed authentication backend settings (#39043)",
-            "kind": "runtime",
-            "domains": [
-                "config",
-                "auth"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./config -run 'TestManagedAuthBackend' -count=1; go test ./config -count=1",
-                "Implemented #39043: ConfigRequirements gains exact managed cli_auth_credentials_store (file/keyring/auto/ephemeral, validated) and chatgpt_base_url; LoadWithOptions applies applyManagedAuthBackendOverride so runtime/bootstrap auth uses the managed values; ConfigService.Requirements() exposes them; config write APIs reject changing either key when managed; cloud-managed requirement layers ignore the local-only auth requirements (applyCloudConfigBundle drops them)."
-            ]
-        },
-        {
-            "sha": "06418909a0357f2248b5e35d82ec8d9138e99bb8",
-            "subject": "Add managed gates for in-app chat and dictation (#39045)",
-            "kind": "runtime",
-            "domains": [
-                "features",
-                "config"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./features -count=1; go test ./config -count=1",
-                "in_app_chat and in_app_dictation registered as stable default-enabled feature gates and accepted by strict config (Rust #39045)."
-            ]
-        },
-        {
-            "sha": "ff770113ca37160a9e3906c511ecc9ff59dd9925",
-            "subject": "Restrict MCP HTTP redirects to the configured origin (#39046)",
-            "kind": "security",
-            "domains": [
-                "mcp"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./mcp -run 'TestMCPRedirectPolicy' -count=1; go test ./mcp -count=1",
-                "mcpRedirectPolicy follows redirects only while every hop keeps the configured server origin, requires HTTPS for non-loopback redirect hosts, and caps hops at 10 (Rust #39046)."
-            ]
-        },
-        {
-            "sha": "0c901fd141875f92c306ae699798946e516a5970",
-            "subject": "Skip plugin hook loading when hooks are disabled (#39047)",
-            "kind": "runtime",
-            "domains": [
-                "plugin"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Go features already carry plugin_hooks as removed; there is no plugin-hook loader to skip when hooks are disabled."
-            ]
-        },
-        {
-            "sha": "1a8bac9405a2b37e907e59d0207a2900999dedc9",
-            "subject": "Avoid rendering sub-agent activity twice in the TUI (#39049)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust TUI event-dispatch change; Go TUI renders sub-agent activity through its own app-server event flow."
-            ]
-        },
-        {
-            "sha": "d7d526b81db92eb0ee6a47dfed9cee9f92b1935f",
-            "subject": "Prepare the telemetry shutdown worker during initialization (#39050)",
-            "kind": "runtime",
-            "domains": [
-                "telemetry"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust OTLP shutdown-worker initialization; Go telemetry has no equivalent worker."
-            ]
-        },
-        {
-            "sha": "fe5889928c24f98b32ca1fd8c7a2ebe275da60bf",
-            "subject": "Use installed callable apps for TUI mentions (#39051)",
-            "kind": "runtime",
-            "domains": [
-                "tui",
-                "apps"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Go TUI mentions use the catalog surface without an installed-callable filter."
-            ]
-        },
-        {
-            "sha": "4a7b51c560aaef0a89298272d3fff1aefe3dd666",
-            "subject": "Add network policy metadata to environment configuration (#39055)",
-            "kind": "protocol",
-            "domains": [
-                "protocol",
-                "execpolicy"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A (deferred): Go environment config carries exec policy; the Rust network-policy metadata field is not mirrored."
-            ]
-        },
-        {
-            "sha": "afb1b3c98435d228f516f4ed7c79cd04e8c493c5",
-            "subject": "Verify the pinned zsh manifest in release builds (#39056)",
-            "kind": "release",
-            "domains": [
-                "build"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust release-build script verification; Go has no pinned zsh manifest release gate."
-            ]
-        },
-        {
-            "sha": "796325f1e584e6171abb7b282b62a37777bc51e4",
-            "subject": "Rate-limit TUI frames from their actual emission time (#39057)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust frame-request rate limiting; Go TUI frame pacing is a separate implementation."
-            ]
-        },
-        {
-            "sha": "14973840e0d46799d893b55c8035c6dec492674c",
-            "subject": "Tag Codex Apps protocol discovery metrics (#39058)",
-            "kind": "runtime",
-            "domains": [
-                "telemetry",
-                "apps"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust Apps discovery telemetry tags; Go telemetry has no equivalent tag surface."
-            ]
-        },
-        {
-            "sha": "80e925c28b7f6752b83ea42e7856a1b7e36d7a1e",
-            "subject": "Add desktop app diagnostics to `codex doctor` (#39060)",
-            "kind": "runtime",
-            "domains": [
-                "doctor"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./doctor -run 'Desktop' -count=1; go test ./doctor -count=1",
-                "Implemented #39060 desktop.app.version: doctor/desktop*.go probes local desktop application installations (Windows Uninstall registry, macOS /Applications), reporting name/path/version/platform; no installation reports an explicit OK 'no desktop application installation detected'. Registered in the doctor Build checks."
-            ]
-        },
-        {
-            "sha": "386a7b629c4fa4b5c9d5d4df60f156dbd7bf7b1d",
-            "subject": "Avoid rerendering streamed code fences (#39061)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust streaming code-fence rendering change; Go TUI streaming rendering is a separate implementation."
-            ]
-        },
-        {
-            "sha": "b6e153c9853702424a7d1179b0f635c60c15aef4",
-            "subject": "Render only visible rows in the transcript pager (#39063)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust pager-overlay visibility optimization; Go TUI pager renders through its own overlay."
-            ]
-        },
-        {
-            "sha": "1aa3a68e7b863557ae36ba5dc5f77e19a453059a",
-            "subject": "Restrict queued-message editing to its dedicated binding (#39064)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust queued-message key binding restriction; Go TUI queued-message editing uses its own bindings."
-            ]
-        },
-        {
-            "sha": "d327527a3db3b0ea03e1f6d09f9070b5d0f35f85",
-            "subject": "Limit terminal hyperlink layout to the visible viewport (#39065)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust terminal-hyperlink viewport optimization; Go TUI hyperlinks render through its own layout."
-            ]
-        },
-        {
-            "sha": "51a9edc0837ad64b414549f7b2257c73b6168e08",
-            "subject": "Add desktop security enforcement diagnostics (#39067)",
-            "kind": "runtime",
-            "domains": [
-                "doctor"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./doctor -run 'Desktop' -count=1",
-                "Implemented #39067 desktop.security as a registered doctor check: reports desktop security enforcement status with explicit N/A semantics for the OSS surface (codex_go has no ChatGPT desktop product layer; platform security is OS-provided). Platform probes are injectable for tests."
-            ]
-        },
-        {
-            "sha": "d24507a59b27464c69819e310e9429ce49c3a855",
-            "subject": "Remove skill model delegation support (#39068)",
-            "kind": "runtime",
-            "domains": [
-                "prompt",
-                "appserver"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./prompt -count=1; go test ./appserver -run 'TestParseSkillFrontmatterIgnoresModelAnnotationLikeRust' -count=1; go test ./appserver -count=1",
-                "Removed Go skill model delegation (prompt/skill_model_delegation.go deleted) and stopped parsing the `model` skill frontmatter field (Rust #39068)."
-            ]
-        },
-        {
-            "sha": "682f57254f8c00cf21a280f328a32a54d1e24bbc",
-            "subject": "Persist generated images through turn executors (#39072)",
-            "kind": "runtime",
-            "domains": [
-                "tool",
-                "appserver"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A (deferred): Go image-generation tool persists images through its own turn path without the Rust executor persistence change."
-            ]
-        },
-        {
-            "sha": "45cf6cbc1946580829a5d16832af35c2b112046c",
-            "subject": "Propagate caller metadata to rendezvous connections (#39073)",
-            "kind": "runtime",
-            "domains": [
-                "execserver"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Go execserver relay does not propagate Rust caller metadata."
-            ]
-        },
-        {
-            "sha": "d65d31593926f26bc6dd030240bc009be87ef75d",
-            "subject": "Add desktop update diagnostics to `codex doctor` (#39074)",
-            "kind": "runtime",
-            "domains": [
-                "doctor"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./doctor -run 'Desktop' -count=1",
-                "Implemented #39074 desktop.updates as a registered doctor check: reports desktop update-channel status with explicit N/A semantics for the OSS surface (no managed update channel). Platform probes are injectable for tests."
-            ]
-        },
-        {
-            "sha": "37efa18be2930d0a14465bd65d84d03eaaad31a0",
-            "subject": "Avoid redundant terminal row clears (#39075)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust terminal rendering optimization; Go TUI rendering is a separate implementation."
-            ]
-        },
-        {
-            "sha": "e92627bf7e5f1aa87254b8eedc4a2d19f614452a",
-            "subject": "Build filesystem JSON params only for remote TUI sessions (#39077)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust TUI fs-params optimization; Go TUI app-server session builds params through its own flow."
-            ]
-        },
-        {
-            "sha": "911335eed37a2b33d1443c994c98d1d90a3ac920",
-            "subject": "Preserve tracing context for environment resolution (#39078)",
-            "kind": "runtime",
-            "domains": [
-                "appserver",
-                "telemetry"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./execserver -run 'TraceContext|Envelope|ResponseEncodes' -count=1",
-                "Implemented the #39078 semantic carrier: environment resolution RPCs (environment/info, environment/status) log the active trace context and their responses carry the same traceContext, so callers can correlate environment resolution with the request trace. Rust's OTLP span tree (environments.resolve/wait_until_ready spans) remains structural N/A without a Go span pipeline (documented)."
-            ]
-        },
-        {
-            "sha": "8ef139667f313d48e53032a261071cb13088143e",
-            "subject": "Apply user MCP policy to selected executor plugins (#39079)",
-            "kind": "protocol",
-            "domains": [
-                "mcp",
-                "execpolicy"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Go applies the user MCP policy through shared protocol policy types already consumed by the executor-plugin path; no separate policy gap."
-            ]
-        },
-        {
-            "sha": "9c099e94a2cecf02a60b8759765e0c99a3a34475",
-            "subject": "Bound TUI thread replay buffers by delta size (#39081)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Go TUI buffers thread events with fixed caps; delta-size bounding is a Rust TUI internal."
-            ]
-        },
-        {
-            "sha": "34e4823a1d9d6c412291962cc2c00514dd966841",
-            "subject": "Prompt for project trust in remote TUI workspaces (#39082)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./app -run 'RemoteTrust|TrustStatus' -count=1; go test ./app -count=1",
-                "Implemented #39082: app/remote_trust.go queries the remote app server's effective config (config/read) for project trust decisions (config.ProjectTrustLevelForTarget), reports trusted/untrusted/undecided, prompts interactively when undecided, and persists accepted trust through config/batchWrite (projects.<path>.trust_level). Wired into runInteractiveRemoteTUI startup before thread start; git-root resolution remains a documented pending increment."
-            ]
-        },
-        {
-            "sha": "a4f37a5b7f4753d8e22c26ac28825e8ebf2bf91b",
-            "subject": "Harden Windows sandbox provisioning against reparse points (#39083)",
-            "kind": "security",
-            "domains": [
-                "sandbox"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A (platform): Go windows-sandbox provisioning does not mirror the Rust no-reparse-dir hardening."
-            ]
-        },
-        {
-            "sha": "2013e04354b64b1bb4f313c6b68390ac0d13dd6d",
-            "subject": "Preserve filesystem permission path conventions (#39084)",
-            "kind": "protocol",
-            "domains": [
-                "protocol",
-                "permissions"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A (architecture): Go permission profiles use native string paths end-to-end; there is no PathUri/legacy-string protocol seam to preserve."
-            ]
-        },
-        {
-            "sha": "fc6268ad383fdac095a0419c04f496f7e39e86da",
-            "subject": "Read plugin authentication state from AuthManager (#39087)",
-            "kind": "runtime",
-            "domains": [
-                "plugin",
-                "auth"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A (deferred): Go plugin auth reads tokens through its own auth surface, not a Rust AuthManager."
-            ]
-        },
-        {
-            "sha": "0c14c734710098ad7b9627d4164c3d27535657f9",
-            "subject": "Harden TUI subagent navigation (#39088)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust TUI agent-navigation hardening; Go TUI navigation is a separate implementation."
-            ]
-        },
-        {
-            "sha": "31f23b6022ead6b2c01613c5eff0741370cc73a6",
-            "subject": "Clarify the external contribution policy (#39089)",
-            "kind": "release",
-            "domains": [
-                "docs"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust documentation-only change."
-            ]
-        },
-        {
-            "sha": "83d015375e578e369c115b06aea631f266226a4f",
-            "subject": "Add a command to queue messages for existing sessions (#39092)",
-            "kind": "runtime",
-            "domains": [
-                "cli",
-                "session"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./cli -run 'ParseQueue' -count=1; go test ./app -run 'Queue' -count=1; go test ./cli ./app -count=1",
-                "Implemented #39092: `codex queue --thread --message` CLI command (rejects empty message/blank thread, positional args, and image attachments); resolves active sessions by UUID or exact name with ambiguous-name rejection; routes through the local in-process app-server router or an explicit --remote server; wraps thread/queue/add method-not-found with an update/restart hint."
-            ]
-        },
-        {
-            "sha": "4617d4d21d278592002249773faaaf47d4c52e63",
-            "subject": "Add an agents overview dashboard to the TUI (#39094)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./tui/agents_overview ./app ./cli -run \"Agents|Overview|Dashboard\" -count=1",
-                "Interactive agents-overview dashboard implemented: tui/agents_overview mirrors Rust agents_overview_view.rs (status/project grouping with per-group counts, search ctrl+f, new-task dispatch with project cwd, rename ctrl+r, stop ctrl+x, details pane >=90 cols, exit-on-cancel, refresh preserves selection, width-aware plain-text rendering). `codex agents` opens the full-screen dashboard on interactive terminals (contract agents-overview-dashboard; full tree go test ./... 0 FAIL).",
-                "In-session /agents added: tea Model full-screen dashboard (nav/search/group/dispatch/rename/stop, esc closes, notification-driven refresh coalesces with pending preserving selection), remote TUI handlers over the shared app server, embedded \"Shared agents unavailable\" selection with Unix Start-background-server, open attaches via the switch-agent path (contract agents-overview-in-session; full tree go test ./... 0 FAIL).",
-                "Polish follow-up: per-thread composer draft capture/restore on dashboard attach (Rust input_states) and ANSI styling via segment-based Render/RenderStyled (contract agents-overview-dashboard + agents-overview-in-session verifiers extended; parity.json agents-overview-draft-preservation-and-styling; full tree go test ./... 0 FAIL)."
-            ]
-        },
-        {
-            "sha": "fd34ad7297d86ef8f679927db55a3c1d09735f55",
-            "subject": "Trace exec-server requests from receipt through completion (#39098)",
-            "kind": "runtime",
-            "domains": [
-                "execserver"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./execserver -run 'TraceContext|Envelope|ResponseEncodes' -count=1; go test ./execserver -count=1",
-                "Implemented #39098 trace-context carrier end to end: TraceContext{TraceID,SpanID} with New/Parse/ChildSpan; inbound requests decode/generate traceContext and propagate via context; outbound client requests carry the active trace (clientRequestEnvelope); server responses echo traceContext back; OTLP spans and the queue-duration histogram remain structural N/A (documented)."
-            ]
-        },
-        {
-            "sha": "050aa077b58da7d7e7e6f92d60ce1a6ca3ad5528",
-            "subject": "Avoid redundant terminal size queries during history insertion (#39100)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust TUI terminal-size query optimization; Go TUI insert_history path unchanged."
-            ]
-        },
-        {
-            "sha": "7500ab4c8d0e556c28bafbf3e232dadec4d01b90",
-            "subject": "Update rmcp to 3.1.2 (#39101)",
-            "kind": "release",
-            "domains": [
-                "mcp"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Rust dependency update; Go MCP stack is Go-native with no rmcp dependency."
-            ]
-        },
-        {
-            "sha": "2eee483e49f88b868f67364134a658b3298e6c14",
-            "subject": "Raise the GPT-5.6 maximum context window (#39102)",
-            "kind": "runtime",
-            "domains": [
-                "model"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./model -run 'TestBundledGPT56ModelsAllowLongContextOverrideLikeRust|TestBedrockGPT56ModelsUseLongContextWindowLikeRust' -count=1; go test ./model -count=1",
-                "Bundled gpt-5.6-sol/terra/luna MaxContextWindow 272000 -> 872000 and Amazon Bedrock GPT-5.6 entries use 872000; a 1,000,000-token override clamps ContextWindow to 872000 (Rust #39102)."
-            ]
-        },
-        {
-            "sha": "632420e67af6d04bbb5faa2aaea958f1a265fcf8",
-            "subject": "Drop capabilities from Linux sandbox processes (#39103)",
-            "kind": "security",
-            "domains": [
-                "sandbox"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A (platform): Go linux sandbox does not emit process capabilities; platform behavior unchanged."
-            ]
-        },
-        {
-            "sha": "319b2f72b1d442c3fe2fd4b4d07d0eb9ffde879a",
-            "subject": "Make the agents overview an interactive task dashboard (#39112)",
-            "kind": "runtime",
-            "domains": [
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./tui/agents_overview ./app ./cli -run \"Agents|Overview|Dashboard\" -count=1",
-                "Interactive agents-overview dashboard implemented: tui/agents_overview mirrors Rust agents_overview_view.rs (status/project grouping with per-group counts, search ctrl+f, new-task dispatch with project cwd, rename ctrl+r, stop ctrl+x, details pane >=90 cols, exit-on-cancel, refresh preserves selection, width-aware plain-text rendering). `codex agents` opens the full-screen dashboard on interactive terminals (contract agents-overview-dashboard; full tree go test ./... 0 FAIL).",
-                "In-session /agents added: tea Model full-screen dashboard (nav/search/group/dispatch/rename/stop, esc closes, notification-driven refresh coalesces with pending preserving selection), remote TUI handlers over the shared app server, embedded \"Shared agents unavailable\" selection with Unix Start-background-server, open attaches via the switch-agent path (contract agents-overview-in-session; full tree go test ./... 0 FAIL).",
-                "Polish follow-up: per-thread composer draft capture/restore on dashboard attach (Rust input_states) and ANSI styling via segment-based Render/RenderStyled (contract agents-overview-dashboard + agents-overview-in-session verifiers extended; parity.json agents-overview-draft-preservation-and-styling; full tree go test ./... 0 FAIL)."
-            ]
-        },
-        {
-            "sha": "13dfaab4469eff5c5b929bb7e1cbc6bba5e0c1be",
-            "subject": "Surface interactive requests in realtime conversations (#39113)",
-            "kind": "runtime",
-            "domains": [
-                "realtime",
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Go realtime transport has no Rust app_server_events surface for interactive-request surfacing."
-            ]
-        },
-        {
-            "sha": "fd5018e0445ba7d879c5dbda66ecdab4b6da1886",
-            "subject": "Add a dedicated `codex agents` dashboard command (#39114)",
-            "kind": "runtime",
-            "domains": [
-                "cli",
-                "tui"
-            ],
-            "status": "complete",
-            "evidence": [
-                "go test ./cli -run 'ParseAgents' -count=1; go test ./app -run 'Agents' -count=1; go test ./cli ./app -count=1",
-                "Implemented the #39114 CLI surface: `codex agents` parses --remote/--remote-auth-token-env/--config, rejects invocation-specific session overrides, and renders an active-session text overview from a local store or a remote app server. The interactive agents-overview dashboard (#39094/#39112) remains a pending UI increment (documented)."
-            ]
-        },
-        {
-            "sha": "ca08a58ab47779a966b86155e128325fdfb5af8a",
-            "subject": "Remove the experimental thread config endpoint (#39115)",
-            "kind": "runtime",
-            "domains": [
-                "appserver",
-                "config"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Go never had an experimental_thread_config_endpoint config key or a remote thread config loader; Rust schema/config surface pinned counts updated accordingly."
-            ]
-        },
-        {
-            "sha": "ede5247893a50297a47c9aa5038e6ab28312ff50",
-            "subject": "Reject lossy legacy permission projections (#39117)",
-            "kind": "protocol",
-            "domains": [
-                "protocol",
-                "permissions"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A (architecture): Go permission profiles use native string paths end-to-end; there is no legacy projection seam to reject lossy conversions."
-            ]
-        },
-        {
-            "sha": "f97e77569352a2bf5be9955e623edad0a15d9b93",
-            "subject": "Fail closed on deeply nested command wrappers (#39122)",
-            "kind": "security",
-            "domains": [
+            "sha":  "4216123b3df55c7f59323e9d57055e1c8dc4dbba",
+            "subject":  "Require approval for commands with dynamic shell words (#39159)",
+            "kind":  "runtime",
+            "domains":  [
                 "shell",
-                "execpolicy"
-            ],
-            "status": "complete",
-            "evidence": [
-                "N/A: Go has no is_dangerous_command wrapper-depth safety layer; exec policy is prefix-rule evaluation only (execpolicy.Check), so there is no bounded wrapper depth to fail closed."
-            ]
-        }
-    ]
-}
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to shell, tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "e2eea071405a4d312ca9eabeed91b7e7cb9685c3",
+            "subject":  "Refresh collaboration instructions when their content changes (#39163)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "0acf302db5ffedea4b8ef0112f4cbcddd65cff57",
+            "subject":  "Prevent marketplace identity spoofing (#39165)",
+            "kind":  "runtime",
+            "domains":  [
+                "plugin"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "63b268c81b28bb65203afdc57862efaa3879998b",
+            "subject":  "Skip empty user messages for automatic idle turns (#39174)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "711a5f8b3a6eb40134146ae9ec22fdcdda5e3170",
+            "subject":  "Drop descendant progress updates after remote compaction (#39176)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "880f1135ea5902f85d7c13d60ee01d61334b6ad9",
+            "subject":  "Scope MCP app resource reads to their originating call (#39187)",
+            "kind":  "runtime",
+            "domains":  [
+                "mcp"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "a397079287e6638b39dda329835350d93222681f",
+            "subject":  "Preserve MCP resource origins across compaction (#39192)",
+            "kind":  "runtime",
+            "domains":  [
+                "mcp"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "b5ea64a203ce1b04629010d3ef0a0d18c3c870a9",
+            "subject":  "Add a symlink-safe reader for sensitive files (#39200)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "a04940cb12cca43510aaf8d601ce42352f0902cb",
+            "subject":  "Reject symbolic links in memory workspaces (#39205)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "bb701f1e8c8db884fa0cdafff4b8dcb1604f2fdd",
+            "subject":  "Add a fail-closed Tree-sitter PowerShell lowerer (#39213)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust-internal/refactor work with no Go behavioral surface."
+                ]
+            },
+        {
+            "sha":  "e13c1d569d953ecac06a09cf5663fb3cd405636d",
+            "subject":  "Prevent custom providers from inheriting ambient auth (#39214)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "76ceaddb29444388fbbbae07c46f7e8849f9658b",
+            "subject":  "Reconnect Guardian sampling WebSockets after auth changes (#39220)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth",
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to auth, guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "2a30972fcb646f9d6bfed6de6606aa3f0f8c3dd2",
+            "subject":  "Skip redirected external-agent migration destinations (#39221)",
+            "kind":  "runtime",
+            "domains":  [
+                "rollout"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "e7e13c68e224da4dde35fc685ea2a2ab1a62dc9d",
+            "subject":  "Add Guardian v2 approval review metrics (#39224)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui",
+                "guardian",
+                "analytics"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui, guardian, analytics; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "9b9b614b02ba04df55479284749c5cbbed695c24",
+            "subject":  "Include node_repl screenshots in Guardian v2 reviews (#39227)",
+            "kind":  "runtime",
+            "domains":  [
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "3df5087f754af3794f4b414c78921b5f07af1ace",
+            "subject":  "Decouple Noise relay streams from JSON-RPC processing (#39235)",
+            "kind":  "runtime",
+            "domains":  [
+                "exec"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "a998c7a1ce88a521d319a4f336e0a4bf36095637",
+            "subject":  "Deduplicate remote plugin bundle syncs with shared semaphores (#39240)",
+            "kind":  "runtime",
+            "domains":  [
+                "plugin"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "e683c3118b25bc2fce65e9cbccded7a8343307f1",
+            "subject":  "Record Guardian v2 classification metrics (#39241)",
+            "kind":  "runtime",
+            "domains":  [
+                "guardian",
+                "analytics"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to guardian, analytics; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "19d185fec8e1216ddd7b5522b331d69a6ecf3b1c",
+            "subject":  "Add safe permission profile intersection (#39242)",
+            "kind":  "runtime",
+            "domains":  [
+                "protocol"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "a1dc95d5afcbd3ccdebb611864ce94fa3d3e8e3d",
+            "subject":  "Scope MCP resource reads by connector (#39244)",
+            "kind":  "runtime",
+            "domains":  [
+                "mcp"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "8193c56a595f66eb0f77f18d7434765eb0179d20",
+            "subject":  "Give Guardian classifier connections distinct thread identities (#39246)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui",
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui, guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "77e688960196dbc82bbeb00c844d2555a61925aa",
+            "subject":  "Add exec-server forwarding mode (#39249)",
+            "kind":  "runtime",
+            "domains":  [
+                "shell",
+                "exec"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to shell, exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "fa9a05f2d25f95b39cf365e77cb10f87e8719185",
+            "subject":  "Deduplicate rollout moves when archiving threads (#39256)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui",
+                "rollout"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui, rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "ecb8013dfa82120d11b02e3b68b7d3a3afd79d39",
+            "subject":  "Reconnect WebRTC Realtime sideband transports (#39257)",
+            "kind":  "runtime",
+            "domains":  [
+                "exec"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "3006151ad413b165c799fa68d4d7ba8751542389",
+            "subject":  "Simplify unified exec output snapshots (#39259)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "785ecd7452f87c7eb731fbb73892185cbdd9d5f9",
+            "subject":  "Stop TUI chats on misalignment policy violations (#39261)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "726ec7ecbf2f74784bf88f8722d031b1565a0184",
+            "subject":  "Prevent ConPTY DLL loading from the current directory (#39262)",
+            "kind":  "runtime",
+            "domains":  [
+                "sandbox"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "846a16852f6bcd155d552236d4d893749c6130e6",
+            "subject":  "Improve Guardian v2 risk classification (#39264)",
+            "kind":  "runtime",
+            "domains":  [
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "d68b85a0978e15c49c6e96bde1f73ddaeac35d79",
+            "subject":  "Require fresh approval beneath denied permission paths (#39266)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui",
+                "protocol"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui, protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "4a3e829c56415f8c1e69b18fbe74f4d81eaa926a",
+            "subject":  "Inject Node REPL policy into Guardian review sessions (#39267)",
+            "kind":  "runtime",
+            "domains":  [
+                "guardian",
+                "rollout"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to guardian, rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "f950a1ba0b12884605d98a48fbedaeccff29dd0e",
+            "subject":  "Preserve thread names during rollout migration (#39273)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui",
+                "rollout"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui, rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "22b860e80b06dff3c5e86160e5dc3199b7816693",
+            "subject":  "Add provider-owned authentication recovery (#39274)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "884a193b78fd323a2a40e6007f9001ebff47d79e",
+            "subject":  "Declare experimental Amazon Bedrock setup APIs (#39277)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "392328ed5d2030cee129b9831dbe995a6301d572",
+            "subject":  "Preserve owner-provided environment configuration (#39278)",
+            "kind":  "runtime",
+            "domains":  [
+                "config"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "88c39c457891565b6f792e92d1af77d4f22768fe",
+            "subject":  "Propagate Windows sandbox ACL update failures (#39279)",
+            "kind":  "runtime",
+            "domains":  [
+                "sandbox"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "681c82f4979ac9dd2fdaded8539b0845ca5f5955",
+            "subject":  "Move shell snapshot scripts into `codex-shell-command` (#39281)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "2fe4e06cc23bda9d8a719fbcf3d3712e42d450de",
+            "subject":  "Document secure devcontainer DNS exfiltration risk (#39283)",
+            "kind":  "release",
+            "domains":  [
+                "ci",
+                "docs"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (CI/docs/scripts): GitHub workflows, docs, packaging, or desktop advertising with no Go behavioral surface."
+                ]
+            },
+        {
+            "sha":  "ba37d0c45b46ede95df9e5acdd0cabf02fdda51b",
+            "subject":  "Report network disconnects during approval (#39284)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "e7f9fa9cd9cefa7d21361586c206ea56b6f8cfea",
+            "subject":  "Show file destinations in TUI change approvals (#39285)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "997a80020f5bb129c6804e8046d09fb0231751c6",
+            "subject":  "Report diagnostic upload failures (#39287)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "ccf4191582523186df449725eed9492e368e945f",
+            "subject":  "Register the async message feature flag (#39288)",
+            "kind":  "runtime",
+            "domains":  [
+                "features"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "Implemented (surface): send_async_message feature key registered as StageRemoved mirroring Rust #39288/#39452; the async user message tool surface is unconditionally available in Go."
+                ]
+            },
+        {
+            "sha":  "633bd4abf7b223f826032f6f13e6c7f67c9d9185",
+            "subject":  "Add Windows sandbox diagnostics to `codex doctor` (#39290)",
+            "kind":  "runtime",
+            "domains":  [
+                "sandbox"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "17de14558b2b3385d87309a07bb66158b75f6ed3",
+            "subject":  "Remove app-server\u0027s direct reqwest dependency (#39293)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "701db965e583341e9e963f2af79ec172b887a171",
+            "subject":  "Increase SQLite log sink batching (#39294)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "87070a77925cbffed8b34ddc99afaf40d56863aa",
+            "subject":  "Enable MCP tool hooks in Codex sessions (#39296)",
+            "kind":  "runtime",
+            "domains":  [
+                "mcp",
+                "rollout"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to mcp, rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "45528c51320e191968131f4bd3e4f3f43e93ee08",
+            "subject":  "Allow overriding Codex package versions (#39298)",
+            "kind":  "release",
+            "domains":  [
+                "ci",
+                "docs"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (CI/docs/scripts): GitHub workflows, docs, packaging, or desktop advertising with no Go behavioral surface."
+                ]
+            },
+        {
+            "sha":  "1a6e07a4febcc0ecfa04464f5e95cb47144cd746",
+            "subject":  "Restrict agent roles to bounded configuration overrides (#39299)",
+            "kind":  "runtime",
+            "domains":  [
+                "config"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "fe50b616899eef5aac0dacf1e2d36a09c109944b",
+            "subject":  "Prevent Node REPL auth tokens from reaching child processes (#39301)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "b473c4e6abd35c02b100d6df6f5476286122c1aa",
+            "subject":  "Record Guardian v2 classification token usage (#39303)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth",
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to auth, guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "e51a91b2f4a1b04c4fd8e1db671bb34f93da4e16",
+            "subject":  "Keep Guardian v2 risk scores in memory (#39304)",
+            "kind":  "runtime",
+            "domains":  [
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "6ec012668b0decdd4506e376f0553816ab684e67",
+            "subject":  "Honor managed config during project discovery (#39306)",
+            "kind":  "runtime",
+            "domains":  [
+                "config"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "c97bd2dcb52a8120d96086fac49665452af3161b",
+            "subject":  "Fail closed on Guardian V2 risk scoring errors (#39307)",
+            "kind":  "runtime",
+            "domains":  [
+                "shell",
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to shell, guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "280d56b1d823a7e9dfd85f796da38bd825d0052d",
+            "subject":  "Attribute executor skill invocations to plugins (#39309)",
+            "kind":  "runtime",
+            "domains":  [
+                "shell",
+                "plugin",
+                "exec"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to shell, plugin, exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "7d9990fa30ab495d473fc555f0d5e7c68e9d205a",
+            "subject":  "Bind unified exec approvals to shell executables (#39311)",
+            "kind":  "runtime",
+            "domains":  [
+                "shell",
+                "tui",
+                "exec"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to shell, tui, exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "fb356f3d2c9fa05f9b06771f8e3c877ca66ed330",
+            "subject":  "Add async delivery metadata to agent messages (#39312)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "4d8c664a4976833b2142974bdba6e8d1a270d671",
+            "subject":  "Run hooks with the captured session environment (#39314)",
+            "kind":  "runtime",
+            "domains":  [
+                "rollout"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "8ae72a9314dd9f0c1e74bd495d9a90089b9e3a8e",
+            "subject":  "Evict guardian transcript entries in cacheable chunks (#39315)",
+            "kind":  "runtime",
+            "domains":  [
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "657bd889ae28edcbf5395c103b479bf8b328704e",
+            "subject":  "Support Edu Plus and Edu Pro account plans (#39316)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth",
+                "chatgptapi",
+                "appserver",
+                "tui"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "Implemented: auth.PlanEduPlus/PlanEduPro + IsEducationLike; planFromString; IsWorkspaceAccount includes education variants; chatgptapi backend plan constants; accountPlanTypeFromBackend mapping; sandboxCloudConfigEligibleAuth uses IsEducationLike; TUI PlanTypeDisplayName renders Edu Plus/Edu Pro; tests."
+                ]
+            },
+        {
+            "sha":  "71dbf72b0576f9e7be1ef28d275bc79ece6d4b6c",
+            "subject":  "Add the async user message tool (#39319)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "f1087ff151b06e781ecb086068d45fcc62d02da3",
+            "subject":  "Expand OAuth metadata redirect test coverage (#39320)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "b537d5a0970f9d3153b1e647e2b42deed32555e0",
+            "subject":  "Enforce workspace restrictions for header authentication (#39322)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "67ed4e717acfb8f729c9aa3f2bbdf19bbae73817",
+            "subject":  "Stop migrating Cursor sandbox settings (#39325)",
+            "kind":  "runtime",
+            "domains":  [
+                "config",
+                "sandbox"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to config, sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "d35e5495f991508409ff30e38db8dbe49d565570",
+            "subject":  "Route hook MCP calls through current connections (#39331)",
+            "kind":  "runtime",
+            "domains":  [
+                "mcp"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "fde2156057c38c0227ce94c8514d04c7498df60d",
+            "subject":  "Enforce environment MCP policies (#39335)",
+            "kind":  "runtime",
+            "domains":  [
+                "mcp"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "8843960ba06b1b2570e689f3fff354c324ab2417",
+            "subject":  "Scope TUI approval requests to their threads (#39372)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "14a8ac89af0a3c9033c1fa4d747ec5d6333e9890",
+            "subject":  "Prefer the most recent session when queueing by name (#39385)",
+            "kind":  "runtime",
+            "domains":  [
+                "app",
+                "session"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "Implemented: queue-by-name prefers the most recent duplicate; state-db match preferred before rollout scanning; remote lookup keeps the most recent thread; tests."
+                ]
+            },
+        {
+            "sha":  "956f590ad549e75913894614ce0cbec4d5fd677a",
+            "subject":  "Remove npm package staging from repo checks (#39402)",
+            "kind":  "release",
+            "domains":  [
+                "ci",
+                "docs"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (CI/docs/scripts): GitHub workflows, docs, packaging, or desktop advertising with no Go behavioral surface."
+                ]
+            },
+        {
+            "sha":  "6cc2ba8a9567e3083531283f923127b86a6c5908",
+            "subject":  "Support FD mounts with older system Bubblewrap versions (#39404)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Linux Bubblewrap-specific; Go uses the platform sandbox stack directly."
+                ]
+            },
+        {
+            "sha":  "3929c99a97d1aa0fb8000903a4b57b24fbabe742",
+            "subject":  "Refresh expired AWS credentials for Bedrock (#39410)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "f5a3dc55404ddc066a4e4a65602fee166ecc46b3",
+            "subject":  "Remove the feature gate for async user messages (#39452)",
+            "kind":  "runtime",
+            "domains":  [
+                "features"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "Implemented (surface): send_async_message marked Removed in the Go feature registry; no gate remains on the async user message tool."
+                ]
+            },
+        {
+            "sha":  "e741cd9ace0286bf0be3d5e1c7f569b345e33ee5",
+            "subject":  "Consolidate Guardian extensions into `codex-guardian-v2` (#39474)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "d1d51f6315f84a1737c655cb4d78104d030d5102",
+            "subject":  "Move shell snapshot tests into shell-command (#39480)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "fcdf2b501412d85efa3ce6bc217b8b51d7ed792a",
+            "subject":  "Make head-tail buffer capacity const generic (#39493)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "94a831d9dd33566240895af96fc6ed7ddda08859",
+            "subject":  "Test panoramic Guardian transcript image resizing (#39494)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "af700180808cce2ce28a31aad0fbad4dc58b857a",
+            "subject":  "Use default timeouts in cyber exec policy tests (#39496)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "83915c7ca1c20bda394096ace3d33595b9c7e11c",
+            "subject":  "Correct normalized dynamic tool coverage across response modes (#39497)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "36268f177f557c0443e5c9475dc0c68852b49373",
+            "subject":  "Use a narrow fixture for the unified image resize test (#39501)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "b0cdcce6169daf68cbd17f85f7688339eaf175ef",
+            "subject":  "Test text stringify errors in the code mode runtime (#39505)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "eb5a25aaa2288e7711b31087607aa5daf424e923",
+            "subject":  "Test code mode notifications without a sync tool call (#39506)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "6972c57c78aecedceff76413f866b333f0e63278",
+            "subject":  "Test disabled enhanced Node REPL transcript images separately (#39509)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "992f5c681f0d7aa25914686150f01e74820482d6",
+            "subject":  "Track built-in control tool calls in analytics (#39510)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "db675cc005db424855319cb1f86cc5c89700318d",
+            "subject":  "Use stored item types when materializing turn summaries (#39514)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "18937b226524164546e7328a2ed47c0d52536e0a",
+            "subject":  "Use `mem::take` to drain unified exec output buffers (#39515)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "ffad92234000c3c0cf4b48cbf1e92c96b0ab5742",
+            "subject":  "Isolate automatic plugin Git operations (#39520)",
+            "kind":  "runtime",
+            "domains":  [
+                "plugin"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "1b450c79126cc56df29b833110a8c702f82de882",
+            "subject":  "Persist thread section moves before the first turn (#39523)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "3b45c29062ff0e76e71c91b6753290400e7fa8da",
+            "subject":  "Stop treating Git commands as inherently safe (#39524)",
+            "kind":  "runtime",
+            "domains":  [
+                "shell"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to shell; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "8e2265196ecc03e08e816764fad7f1eaf49cbf4f",
+            "subject":  "Add a just recipe for assembling Codex packages (#39584)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "6141747444deed4c42cd30f18dfa50a00268ca20",
+            "subject":  "Test plugin sync isolation from repository Git config (#39585)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "3bebaea8f2091386b1e942a197adaf3c09b12c86",
+            "subject":  "Isolate IPC in Bubblewrap sandboxes (#39586)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Linux Bubblewrap-specific; Go uses the platform sandbox stack directly."
+                ]
+            },
+        {
+            "sha":  "4b450d2f1b21e4e7d0baa0674f947b4ec6a02f14",
+            "subject":  "Preserve unparsed shell wrappers in exec policy (#39588)",
+            "kind":  "runtime",
+            "domains":  [
+                "shell",
+                "exec"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to shell, exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "e7c0e8eb9f38db42e24b75cbfefcd53df88c82ce",
+            "subject":  "Harden plugin manifest handling during installation (#39590)",
+            "kind":  "runtime",
+            "domains":  [
+                "plugin"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "493e0efb7b8867d668294418cd6cdddc01a740e0",
+            "subject":  "Prevent SQLx warnings from feeding back into SQLite logs (#39592)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "1bfabb21fe56e21adce3aed945ab74aff27b67d2",
+            "subject":  "Raise the MCP tool name limit to 128 bytes (#39594)",
+            "kind":  "protocol",
+            "domains":  [
+                "mcp"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "Implemented: runtimeMCPToolNameMaxLength 64-\u003e128; boundary tests at 128/129 bytes mirror Rust connection_manager_tests."
+                ]
+            },
+        {
+            "sha":  "8f4a48a6adc653359caaf02fd87a60b62fd7a702",
+            "subject":  "Keep marketplace upgrade state out of config (#39595)",
+            "kind":  "runtime",
+            "domains":  [
+                "config",
+                "plugin"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to config, plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "d75c85f65139aa9245a96d05642a0a5d2bae436a",
+            "subject":  "Separate thread settings from environment configuration (#39597)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui",
+                "config"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui, config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "f6950546e5eaaf8c25031f1450920a6c0e43e103",
+            "subject":  "Protect macOS Seatbelt writable root anchors (#39599)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): macOS Seatbelt / platform-specific behavior; Go uses its own platform stack (no Seatbelt implementation, Windows host)."
+                ]
+            },
+        {
+            "sha":  "198f42067aff70a55a0a42145aa5346c7597eac5",
+            "subject":  "Keep async user messages on the direct tool surface (#39601)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "8e7f64697456d69809334652d86498c78d934dab",
+            "subject":  "Use in-process parsing for PowerShell command classification (#39602)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust-internal/refactor work with no Go behavioral surface."
+                ]
+            },
+        {
+            "sha":  "3434c2545b16487188effee3febf993c2d650b27",
+            "subject":  "Preserve queued TUI input semantics (#39604)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "430bc36fb23575040ca22423f89ea8deac6bdf71",
+            "subject":  "Hide approved automatic review warnings in the TUI (#39605)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust-internal/refactor work with no Go behavioral surface."
+                ]
+            },
+        {
+            "sha":  "6869d17cc24fd30f7bedb4fa2969c31dbe81316a",
+            "subject":  "Enable user namespaces in shared CI setup (#39606)",
+            "kind":  "release",
+            "domains":  [
+                "ci",
+                "docs"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (CI/docs/scripts): GitHub workflows, docs, packaging, or desktop advertising with no Go behavioral surface."
+                ]
+            },
+        {
+            "sha":  "186b449bc218ced20399bc950e23ca16cc3f9be3",
+            "subject":  "Resolve model-provided shells by type (#39607)",
+            "kind":  "security",
+            "domains":  [
+                "shell",
+                "tool"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "Implemented: model-provided shell path only selects the shell type; executable resolved via shell.GetShell discovery (PATH/fallbacks); unknown types fall back; tool.ResolveCommandWithOptions no longer trusts the provided path; tests."
+                ]
+            },
+        {
+            "sha":  "5c305eb50b3ebd12476c4bec6dc3de3c596b29a2",
+            "subject":  "Harden skill installation against unsafe symlinks (#39608)",
+            "kind":  "runtime",
+            "domains":  [
+                "plugin"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "c19482a7687ac0e53a113332e798a1b44f1dc773",
+            "subject":  "Limit Bazel integration test threads on macOS (#39609)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "929e2b9c1d8a54c6409fada200440964e366ed39",
+            "subject":  "Harden MCP OAuth fallback credential writes (#39611)",
+            "kind":  "runtime",
+            "domains":  [
+                "mcp",
+                "auth"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to mcp, auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "530c1aed58b88060cfe851005c9dae3a89f44ad0",
+            "subject":  "Prevent `apply_patch` from widening write permissions (#39614)",
+            "kind":  "runtime",
+            "domains":  [
+                "protocol"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "250b5ea2bff83edb151b29ca93248856c970126c",
+            "subject":  "Bind MCP OAuth refresh tokens to their issuer (#39615)",
+            "kind":  "runtime",
+            "domains":  [
+                "mcp",
+                "auth"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to mcp, auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "bc3545b805de6e91a11b88114fe1673b678633ca",
+            "subject":  "Validate linked worktrees before inheriting project trust (#39616)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "4bb7804a23be9511e670e4622635c4717302abf9",
+            "subject":  "Apply composer editing preferences to TUI text prompts (#39618)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "da6e68951b985f9c45a472d8ced4b1d3935cc145",
+            "subject":  "Preserve inline TUI scrollback in Windows Terminal (#39619)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "f1e06b386510fbf5261cc3daebb164034918418f",
+            "subject":  "Stream executor capability and skill file reads (#39620)",
+            "kind":  "runtime",
+            "domains":  [
+                "shell",
+                "plugin",
+                "exec"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to shell, plugin, exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "52e387dacaf5375d9fe5a77f7fc5f6fe31d2f610",
+            "subject":  "Prevent protected-path rename bypasses in macOS Seatbelt (#39623)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): macOS Seatbelt / platform-specific behavior; Go uses its own platform stack (no Seatbelt implementation, Windows host)."
+                ]
+            },
+        {
+            "sha":  "e396ef3fc1bcb39fc857f255940623420ce2fc5e",
+            "subject":  "Add cwd-relative turn diff paths (#39625)",
+            "kind":  "runtime",
+            "domains":  [
+                "features",
+                "eventmap"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "Implemented (surface): cwd_relative_turn_diffs feature key registered (UnderDevelopment, default false) mirroring Rust; diff-path behavior remains scoped to eventmap (documented in update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "9ca99b51713066681cce211184c0ff9035496979",
+            "subject":  "Preserve parent repository discovery through sandbox metadata mounts (#39629)",
+            "kind":  "runtime",
+            "domains":  [
+                "sandbox"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "942af8447b1d1addc81fb3c3135293497d479a06",
+            "subject":  "Retire the untrusted approval policy (#39630)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "910ecccf30ba051efe5e5060dc8ccc644c554c7c",
+            "subject":  "Skip sandboxed shell commands in Guardian v2 by default (#39631)",
+            "kind":  "runtime",
+            "domains":  [
+                "shell",
+                "sandbox",
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to shell, sandbox, guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "7ea7b293696473a12ea48701e8f638fa6bb2aed0",
+            "subject":  "Expose permission profile resolution in the core API (#39632)",
+            "kind":  "runtime",
+            "domains":  [
+                "protocol"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "7edd0a4c9dc69923e27a4948407971c8ca15db29",
+            "subject":  "Show strict review warnings in the TUI (#39635)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "fdc23b93b895ecb8f0176c61822fc36e770c3b6b",
+            "subject":  "Treat `invalid_grant` refresh failures as permanent (#39637)",
+            "kind":  "security",
+            "domains":  [
+                "auth"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "Implemented: 400 + invalid_grant (RFC 6749 string and legacy object shapes) classified as permanent refresh failure with generic reason and cached; other 400s stay transient; tests."
+                ]
+            },
+        {
+            "sha":  "d944ce83a230eab293b2a7bd583466256227a74a",
+            "subject":  "Prompt to unarchive sessions before resuming or forking (#39640)",
+            "kind":  "runtime",
+            "domains":  [
+                "tui",
+                "rollout"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to tui, rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "663da53823dfc923dc3b94233675b75feea98e59",
+            "subject":  "Sanitize developer context in full-history agent forks (#39641)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "af0e82c562a03aa748c3b56b2d772ad04a494bc7",
+            "subject":  "Enforce managed residency for model providers (#39645)",
+            "kind":  "runtime",
+            "domains":  [
+                "auth",
+                "config"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to auth, config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "8aaf839774b90387b885f623efce95ec1bed8092",
+            "subject":  "Exercise restricted-token sandboxing in cyber policy tests (#39646)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "ab82cddd049a4c72d3e23a1ebeb0c63c0d9c530b",
+            "subject":  "Resolve bundled Windows helpers through bin junctions (#39649)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "7ece061767a8d0dea59757ca3285f7cb2ccfc4dd",
+            "subject":  "Enforce filesystem permissions when loading AGENTS.md (#39653)",
+            "kind":  "runtime",
+            "domains":  [
+                "protocol"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "1802a65571e02e1d3e65afbbc6ec49abdc5c0495",
+            "subject":  "Make core integration test permissions explicit (#39655)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "4a432d180dcd5db031a41ee8976a0a62735b1c77",
+            "subject":  "Advertise the Desktop app in graphical Linux sessions (#39656)",
+            "kind":  "release",
+            "domains":  [
+                "ci",
+                "docs"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (CI/docs/scripts): GitHub workflows, docs, packaging, or desktop advertising with no Go behavioral surface."
+                ]
+            },
+        {
+            "sha":  "5e3a6fe4eee7bab705fed03b0dbed9bc110ef4cd",
+            "subject":  "Warn when launching the deprecated MCP server (#39657)",
+            "kind":  "runtime",
+            "domains":  [
+                "mcp"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "4e1a772a7dab609ca85ac9c6133a3e3f9fd30f48",
+            "subject":  "Let Guardian V2 satisfy required model reviews (#39658)",
+            "kind":  "runtime",
+            "domains":  [
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "e3e5ad28470f6a225301518c30a66e749a880164",
+            "subject":  "Harden unsandboxed patch filesystem access (#39659)",
+            "kind":  "runtime",
+            "domains":  [
+                "sandbox"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "631d5a8b02d417802b4674dbcd9f1a73dfec468c",
+            "subject":  "Expand Vim change commands and add character replacement (#39661)",
+            "kind":  "runtime",
+            "domains":  [
+                "shell",
+                "tui"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to shell, tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "240bbfc14ac46e30f56fa4e8c8f1ec34c4bc1cf7",
+            "subject":  "Add max and ultra reasoning efforts to the SDKs (#39662)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "97c82c0900d2f70036ab3ab047fc93ee69cd21a3",
+            "subject":  "Restrict plugin migration to home scope (#39663)",
+            "kind":  "runtime",
+            "domains":  [
+                "plugin",
+                "rollout"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to plugin, rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "fec2dccfcfe147aff064b5cddb46c0a0559ff441",
+            "subject":  "Add macOS Seatbelt filesystem integration tests (#39665)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "2584e88cadc15779ebddb2e5ca87f12478d6b3ad",
+            "subject":  "Improve no-follow filesystem behavior across platforms (#39666)",
+            "kind":  "runtime",
+            "domains":  [
+                "sandbox"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "312b62ac95335e1762b70ceb8910374965bd2785",
+            "subject":  "Trace MCP runtime refresh coordination (#39667)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "478dbe9df0a33141d265db5977947cc432e7fe85",
+            "subject":  "Make Guardian v2 parent compaction reuse configurable (#39691)",
+            "kind":  "runtime",
+            "domains":  [
+                "config",
+                "guardian"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to config, guardian; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "f277e313f1ce6f5ea02792fb48e1093a5540ecfc",
+            "subject":  "Fail closed on unsafe config and sed parsing (#39700)",
+            "kind":  "security",
+            "domains":  [
+                "shell",
+                "config"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "Implemented: sedHasInPlaceFlag in shell/command.go (-i/--in-place/combined short flags/backup suffixes/-- boundary); in-place sed is never classified as a read. App-server config part equivalent: Go config load errors already propagate (no default-config fallback in the Go daemon startup path)."
+                ]
+            },
+        {
+            "sha":  "585b97d394aa09d187ac37dc87b40250f5c77944",
+            "subject":  "Wait for turn completion events in multi-agent resume tests (#39702)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "37a9da9901c5fa417896af8840ba27dffe4f1ca1",
+            "subject":  "Move the global scope check into the code-mode runtime (#39703)",
+            "kind":  "runtime",
+            "domains":  [
+                "core"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "02de49f7183d30cc72bdb83b64816392c29a908c",
+            "subject":  "Harden Seatbelt writable root path binding (#39706)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): macOS Seatbelt / platform-specific behavior; Go uses its own platform stack (no Seatbelt implementation, Windows host)."
+                ]
+            },
+        {
+            "sha":  "3675fe014b2106e6e87673bf9e464e4a7e945915",
+            "subject":  "Remove redundant code mode image helper test (#39707)",
+            "kind":  "test",
+            "domains":  [
+                "test"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (test-only/tooling): no Go behavioral surface; covered by the Go test suites or irrelevant to the Go implementation (see update/plan_2026_08_20.md)."
+                ]
+            },
+        {
+            "sha":  "59f7da58d6ae8401304554f807023610181f65f0",
+            "subject":  "Log TUI app event variants without their payloads (#39709)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "4a942885c8b4745757a9f86ad2075e16c42483c5",
+            "subject":  "Reduce unified exec output buffer allocations (#39712)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "2c74b56fcde8a4f32c44701b7e6452e4c526f9e6",
+            "subject":  "Pass CI workflow inputs through environment variables (#39717)",
+            "kind":  "release",
+            "domains":  [
+                "ci",
+                "docs"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (CI/docs/scripts): GitHub workflows, docs, packaging, or desktop advertising with no Go behavioral surface."
+                ]
+            },
+        {
+            "sha":  "6d020311f0f883ddf8c4622d36533527800ee905",
+            "subject":  "Stop persisting checkout credentials in V8 workflows (#39719)",
+            "kind":  "release",
+            "domains":  [
+                "ci",
+                "docs"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (CI/docs/scripts): GitHub workflows, docs, packaging, or desktop advertising with no Go behavioral surface."
+                ]
+            },
+        {
+            "sha":  "1674b0a130987522de3f34d080b793585a355da1",
+            "subject":  "Expose managed policy for browser settings imports (#39720)",
+            "kind":  "runtime",
+            "domains":  [
+                "config"
+                ],
+            "status":  "implementation_pending",
+            "evidence":  [
+                "Deferred (documented): scoped to config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                ]
+            },
+        {
+            "sha":  "9894a14c81e50bbd845a337e4f77293f1cbc2633",
+            "subject":  "Track multi-agent v2 spawn calls in analytics (#39722)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            },
+        {
+            "sha":  "9bf673718a4605b49e47d00762121d372af95439",
+            "subject":  "Box the WebSocket dial future (#39726)",
+            "kind":  "runtime",
+            "domains":  [
+                "architecture"
+                ],
+            "status":  "complete",
+            "evidence":  [
+                "N/A (architecture/platform): Rust extension-crate/analytics/internal or SDK-enum work with no Go behavioral surface; Go equivalents are in-process or already support the values."
+                ]
+            }
+        ]
+    }

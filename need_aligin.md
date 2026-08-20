@@ -2,15 +2,15 @@
 
 > 本文件是 2026-08-13 版 `need_aligin.md` 的刷新：对原报告的每一项做
 > **源码/证据复核**（`git show 6c108912ee` 冻结基线 + Go 当前工作树），
-> 逐项标记 Closed / N/A / Open。刷新日期：2026-08-18。
+> 逐项标记 Closed / N/A / Open。刷新日期：2026-08-20。
 >
 > 基线：
 > - Rust（上游）：`D:\qax\reagent\dev\git\codex`，冻结目标
->   `f97e77569352a2bf5be9955e623edad0a15d9b93`（#39017-#39122锛宻ync20 鏇存柊锛?/ 
->   #38978/#38980/#38987/#38990，sync20 更新），当前无新漂移。
+>   `9bf673718a4605b49e47d00762121d372af95439`（#39131-#39726，sync21 更新），
+>   本周期已审计 160 个新提交（见 `update/plan_2026_08_20.md`）。
 > - Go：`D:\qax\reagent\dev\codex_go`，对齐到同一基线。
-> - 契约：`parity/contracts/manifest.json` 64 个契约 complete 且带 verifier；
->   `parity.json` 144 个 done 项；L0/L1/L2 门禁在冻结基线全绿。
+> - 契约：`parity/contracts/manifest.json` 70 个契约 complete 且带 verifier；
+>   `parity.json` 150+ 个 done 项；L0/L1/L2 门禁在冻结基线全绿。
 
 ## 一、总体结论
 

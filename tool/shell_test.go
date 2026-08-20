@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -55,6 +56,39 @@ func TestShellDeriveExecArgs(t *testing.T) {
 	}
 }
 
+func TestResolveCommandWithOptionsResolvesModelProvidedShellByType(t *testing.T) {
+	binDir := t.TempDir()
+	executableName := "bash"
+	if runtime.GOOS == "windows" {
+		executableName = "bash.exe"
+	}
+	executable := filepath.Join(binDir, executableName)
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", executable, err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SHELL", "")
+
+	attackerShell := filepath.Join(t.TempDir(), "attacker", "bash")
+	resolved, err := ResolveCommandWithOptions(
+		&ExecCommandArgs{Cmd: "echo hello", Shell: attackerShell},
+		nil,
+		CommandResolutionOptions{AllowLoginShell: true},
+	)
+	if err != nil {
+		t.Fatalf("ResolveCommandWithOptions() error = %v", err)
+	}
+	if resolved.ShellType != ShellBash {
+		t.Fatalf("shell type = %q, want bash", resolved.ShellType)
+	}
+	if len(resolved.Command) != 3 || resolved.Command[0] != executable || resolved.Command[1] != "-lc" || resolved.Command[2] != "echo hello" {
+		t.Fatalf("resolved command = %#v, want [%s -lc echo hello]", resolved.Command, executable)
+	}
+	if strings.Contains(resolved.Command[0], "attacker") {
+		t.Fatalf("model-provided path must not be used as the executable: %q", resolved.Command[0])
+	}
+}
+
 func TestResolveCommandRejectsLoginShellWhenDisabled(t *testing.T) {
 	login := true
 	_, err := ResolveCommand(&ExecCommandArgs{
@@ -67,6 +101,18 @@ func TestResolveCommandRejectsLoginShellWhenDisabled(t *testing.T) {
 }
 
 func TestResolveCommandUsesRequestedShell(t *testing.T) {
+	binDir := t.TempDir()
+	executableName := "zsh"
+	if runtime.GOOS == "windows" {
+		executableName = "zsh.exe"
+	}
+	executable := filepath.Join(binDir, executableName)
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", executable, err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SHELL", "")
+
 	resolved, err := ResolveCommand(&ExecCommandArgs{
 		Cmd:   "echo hi",
 		Shell: "/bin/zsh",
@@ -77,51 +123,45 @@ func TestResolveCommandUsesRequestedShell(t *testing.T) {
 	if resolved.ShellType != ShellZsh {
 		t.Fatalf("ShellType = %q", resolved.ShellType)
 	}
-	if resolved.Command[0] != "/bin/zsh" {
+	if len(resolved.Command) != 3 || resolved.Command[0] != executable {
 		t.Fatalf("Command = %#v", resolved.Command)
 	}
 }
 
 func TestResolveCommandMatchesRustUnifiedExecExplicitShells(t *testing.T) {
-	cases := []struct {
-		name      string
-		shell     string
-		wantType  ShellType
-		wantArgv  []string
-		allowBool bool
+	for _, tc := range []struct {
+		name     string
+		shell    string
+		binNames []string
+		wantType ShellType
+		flags    []string
 	}{
-		{
-			name:      "bash",
-			shell:     "/bin/bash",
-			wantType:  ShellBash,
-			wantArgv:  []string{"/bin/bash", "-lc", "echo hello"},
-			allowBool: true,
-		},
-		{
-			name:      "powershell",
-			shell:     "powershell",
-			wantType:  ShellPowerShell,
-			wantArgv:  []string{"powershell", "-Command", "echo hello"},
-			allowBool: true,
-		},
-		{
-			name:      "cmd",
-			shell:     "cmd",
-			wantType:  ShellCmd,
-			wantArgv:  []string{"cmd", "/c", "echo hello"},
-			allowBool: true,
-		},
-	}
-	for _, tc := range cases {
+		{name: "bash", shell: "/bin/bash", binNames: []string{"bash"}, wantType: ShellBash, flags: []string{"-lc"}},
+		{name: "powershell", shell: "powershell", binNames: []string{"pwsh"}, wantType: ShellPowerShell, flags: []string{"-Command"}},
+		{name: "cmd", shell: "cmd", binNames: []string{"cmd"}, wantType: ShellCmd, flags: []string{"/c"}},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			executableName := tc.binNames[0]
+			if runtime.GOOS == "windows" {
+				executableName += ".exe"
+			}
+			executable := filepath.Join(binDir, executableName)
+			if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o700); err != nil {
+				t.Fatalf("WriteFile(%s) error = %v", executable, err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("SHELL", "")
 			resolved, err := ResolveCommand(&ExecCommandArgs{
 				Cmd:   "echo hello",
 				Shell: tc.shell,
-			}, &Shell{Type: ShellBash, Path: "/bin/bash"}, tc.allowBool)
+			}, &Shell{Type: ShellBash, Path: "/bin/bash"}, true)
 			if err != nil {
 				t.Fatalf("ResolveCommand returned error: %v", err)
 			}
-			if resolved.ShellType != tc.wantType || !stringSlicesEqual(resolved.Command, tc.wantArgv) {
+			wantArgv := append([]string{executable}, tc.flags...)
+			wantArgv = append(wantArgv, "echo hello")
+			if resolved.ShellType != tc.wantType || !stringSlicesEqual(resolved.Command, wantArgv) {
 				t.Fatalf("resolved = %#v", resolved)
 			}
 		})

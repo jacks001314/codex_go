@@ -1,6 +1,6 @@
 {
     "schemaVersion": 1,
-    "targetRustCommit": "f97e77569352a2bf5be9955e623edad0a15d9b93",
+    "targetRustCommit": "9bf673718a4605b49e47d00762121d372af95439",
     "contracts": [
         {
             "id": "features",
@@ -680,8 +680,8 @@
                 "config"
             ],
             "rustPaths": [
-                "ext/guardian-v2/src/config.rs",
-                "ext/guardian-v2/src/extension.rs"
+                "ext/guardian-v2/src/async_scorer/config.rs",
+                "ext/guardian-v2/src/async_scorer/extension.rs"
             ],
             "kind": "shared-fixtures",
             "phase": "P3",
@@ -742,8 +742,8 @@
                 "config"
             ],
             "rustPaths": [
-                "ext/guardian-v2/src/config.rs",
-                "ext/guardian-v2/src/extension.rs"
+                "ext/guardian-v2/src/async_scorer/config.rs",
+                "ext/guardian-v2/src/async_scorer/extension.rs"
             ],
             "kind": "shared-fixtures",
             "phase": "P3",
@@ -1017,6 +1017,110 @@
             "phase": "P2",
             "status": "complete",
             "verifier": "TestModelAgentsCommandOpensDashboardAndLoads;TestModelAgentsDashboardNavigationAndSearch;TestModelAgentsDashboardDispatchTask;TestModelAgentsDashboardStopSelected;TestModelAgentsDashboardRenameSelected;TestModelAgentsDashboardEscCloses;TestModelAgentsDashboardOpenAttachesViaSwitchAgent;TestModelAgentsDashboardOpenCurrentThreadIsNoop;TestModelAgentsEmbeddedShowsUnavailableSelection;TestModelAgentsDashboardRefreshesOnThreadEventsAndCoalesces;TestInteractiveStartAgentsDaemonPlatformGate;TestModelAgentsDashboardPreservesDraftAcrossSwitch;TestModelAgentsDashboardAttachClearsComposerWithoutSavedDraft;TestModelAgentsDashboardSwitchFailureDiscardsPendingDraft"
+        },
+        {
+            "id": "edu-plus-pro-account-plans",
+            "kind": "source-surface",
+            "rustPaths": [
+                "protocol/src/auth.rs",
+                "protocol/src/account.rs",
+                "cloud-config/src/service.rs",
+                "tui/src/status/helpers.rs"
+            ],
+            "goPaths": [
+                "auth/account.go",
+                "chatgptapi/backend_models.go",
+                "appserver/runtime_router.go",
+                "app/app.go",
+                "tui/status/helpers.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestPlanTypeClassificationsMatchRust;TestRateLimitPayloadPreservesEduPlans;TestSandboxCloudConfigEligibleAuthEducationPlansLikeRust"
+        },
+        {
+            "id": "mcp-tool-name-128-boundary",
+            "kind": "source-surface",
+            "rustPaths": [
+                "codex-mcp/src/tools.rs"
+            ],
+            "goPaths": [
+                "mcp/tool_runtime.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestNormalizeRuntimeToolsForModelResponsesAPINameBoundary"
+        },
+        {
+            "id": "invalid-grant-permanent-refresh-failure",
+            "kind": "source-surface",
+            "rustPaths": [
+                "login/src/auth/manager.rs"
+            ],
+            "goPaths": [
+                "auth/oauth.go",
+                "auth/refresh_failure.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestRefreshChatGPTTokensInvalidGrantIsPermanentLikeRust;TestRefreshChatGPTTokensOtherBadRequestStaysTransientLikeRust;TestExtractRefreshTokenErrorCodeShapes"
+        },
+        {
+            "id": "strict-review-required-notification",
+            "kind": "generated-protocol",
+            "rustPaths": [
+                "app-server-protocol/schema/json/v2/StrictReviewRequiredNotification.json",
+                "app-server-protocol/schema/typescript/v2/StrictReviewRequiredNotification.ts"
+            ],
+            "goPaths": [
+                "appserver/notifications.go",
+                "appserver/schema.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestBuildProtocolSchemaMatchesRustStableFixtures;TestBuildTypeScriptProtocolSchemaMatchesRustFixtures"
+        },
+        {
+            "id": "model-provided-shell-resolved-by-type",
+            "kind": "source-surface",
+            "rustPaths": [
+                "core/src/shell.rs",
+                "shell-command/src/shell_detect.rs"
+            ],
+            "goPaths": [
+                "shell/command.go",
+                "tool/shell.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestGetShellResolvesModelProvidedPathByType;TestResolveCommandWithOptionsResolvesModelProvidedShellByType"
+        },
+        {
+            "id": "sed-in-place-fail-closed",
+            "kind": "source-surface",
+            "rustPaths": [
+                "shell-command/src/parse_command.rs"
+            ],
+            "goPaths": [
+                "shell/command.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestSedReadPathRejectsInPlaceMutationsLikeRust;TestSedReadPathKeepsOperandsAfterDoubleDash"
+        },
+        {
+            "id": "queue-by-name-most-recent-session",
+            "kind": "source-surface",
+            "rustPaths": [
+                "tui/src/session_archive_commands.rs",
+                "tui/src/session_queue_commands.rs"
+            ],
+            "goPaths": [
+                "app/session.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestSessionIDByUniqueActiveNamePrefersMostRecentDuplicateLikeRust;TestSessionIDByUniqueActiveNameLikeRust"
         }
     ]
 }
