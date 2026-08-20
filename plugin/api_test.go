@@ -941,8 +941,11 @@ func TestUpgradeMarketplaceRevisionAndConfig(t *testing.T) {
 	}
 	configValues := readMarketplaceConfigForTest(t, filepath.Join(home, ConfigTOMLFilename))
 	debug := marketplaceConfigEntryForTest(t, configValues, "debug")
-	if debug["last_revision"] != "rev-1" {
+	if debug["last_revision"] != nil {
 		t.Fatalf("debug config = %#v", debug)
+	}
+	if got := installedMarketplaceRevision(filepath.Join(home, InstalledMarketplacesDir, "debug")); got != "rev-1" {
+		t.Fatalf("installed marketplace revision = %q, want rev-1 in state file", got)
 	}
 
 	upgraded, err = service.UpgradeMarketplace(&MarketplaceUpgradeParams{})

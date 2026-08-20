@@ -1,15 +1,60 @@
 package plugin
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const InstalledMarketplacesDir = ".tmp/marketplaces"
 const InstalledMarketplacePluginsDir = "plugins"
+
+// marketplaceInstallStateFilename keeps activated marketplace revision state
+// out of config.toml (Rust #39595).
+const marketplaceInstallStateFilename = ".codex-marketplace-install.json"
+
+type marketplaceInstallState struct {
+	LastUpdated  string `json:"last_updated"`
+	LastRevision string `json:"last_revision"`
+}
+
+func installedMarketplaceRevision(root string) string {
+	if strings.TrimSpace(root) == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(root, marketplaceInstallStateFilename))
+	if err != nil {
+		return ""
+	}
+	var state marketplaceInstallState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(state.LastRevision)
+}
+
+func writeMarketplaceInstallState(root string, revision string) error {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	state := marketplaceInstallState{
+		LastUpdated:  time.Now().UTC().Format(time.RFC3339),
+		LastRevision: strings.TrimSpace(revision),
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(root, marketplaceInstallStateFilename), data, 0o600)
+}
 
 type MarketplaceMaterializer interface {
 	MaterializeMarketplace(source *ParsedMarketplaceSource, sparsePaths []string, destination string) error

@@ -1496,7 +1496,6 @@ func (s *PluginService) UpgradeMarketplace(params *MarketplaceUpgradeParams) (*M
 	}
 	materializer := s.marketplaceMaterializer
 	resolver := s.marketplaceRevision
-	configPath := s.marketplaceConfigPath
 	s.mu.Unlock()
 
 	selected := make([]string, 0, len(marketplaces))
@@ -1530,7 +1529,7 @@ func (s *PluginService) UpgradeMarketplace(params *MarketplaceUpgradeParams) (*M
 			}
 			revision = strings.TrimSpace(resolved)
 		}
-		if marketplace.LastRevision != nil && revision != "" && *marketplace.LastRevision == revision {
+		if installedRevision := installedMarketplaceRevision(marketplace.RootPath); revision != "" && installedRevision == revision {
 			continue
 		}
 		if upgrader, ok := materializer.(MarketplaceUpgrader); ok {
@@ -1545,11 +1544,12 @@ func (s *PluginService) UpgradeMarketplace(params *MarketplaceUpgradeParams) (*M
 			}
 		}
 		if revision != "" {
-			marketplace.LastRevision = &revision
-		}
-		if err := recordMarketplaceConfig(configPath, &marketplace); err != nil {
-			upgradeErrors = append(upgradeErrors, MarketplaceUpgradeErrorInfo{MarketplaceName: name, Message: err.Error()})
-			continue
+			// Rust #39595: keep marketplace upgrade state out of config.toml;
+			// the activated revision lives in .codex-marketplace-install.json.
+			if err := writeMarketplaceInstallState(marketplace.RootPath, revision); err != nil {
+				upgradeErrors = append(upgradeErrors, MarketplaceUpgradeErrorInfo{MarketplaceName: name, Message: err.Error()})
+				continue
+			}
 		}
 		updatedMarketplaces[name] = marketplace
 		roots = append(roots, marketplace.RootPath)

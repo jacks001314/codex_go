@@ -1288,9 +1288,9 @@
                                         "config",
                                         "plugin"
                                     ],
-                        "status":  "implementation_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Deferred (documented): scoped to config, plugin; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                                         "Implemented: marketplace upgrades now track the activated revision in .codex-marketplace-install.json per marketplace root instead of writing last_revision/last_updated into config.toml; freshness checks read the state file; tests updated."
                                      ]
                     },
                     {
