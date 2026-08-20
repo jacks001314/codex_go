@@ -2490,6 +2490,66 @@ func (s *PluginService) Install(params *PluginInstallParams) (*PluginInstallResp
 	return nil, fmt.Errorf("%w: plugin %q not found", ErrInvalidPluginRequest, id)
 }
 
+// HydrateRecommendedPluginMetadata mirrors Rust #39143: fetch the selected
+// recommended plugin's details before presenting an install request, using
+// them to verify availability and populate connector metadata. It returns
+// (detail, true) when the plugin is available, (nil, false) when the plugin is
+// no longer available, and an error when its metadata cannot be verified.
+func (s *PluginService) HydrateRecommendedPluginMetadata(remotePluginID string) (*PluginDetail, bool, error) {
+	remotePluginID = strings.TrimSpace(remotePluginID)
+	if remotePluginID == "" {
+		return nil, false, fmt.Errorf("%w: remote plugin id is required", ErrInvalidPluginRequest)
+	}
+	if s == nil {
+		return nil, false, fmt.Errorf("%w: plugin service is nil", ErrInvalidPluginRequest)
+	}
+	s.mu.Lock()
+	var found *PluginDetail
+	for _, detail := range s.plugins {
+		if strings.TrimSpace(detail.Summary.RemotePluginID) == remotePluginID ||
+			strings.TrimSpace(detail.Summary.ID) == remotePluginID ||
+			strings.TrimSpace(detail.Summary.Name) == remotePluginID {
+			copyDetail := cloneDetail(detail)
+			found = &copyDetail
+			break
+		}
+	}
+	if found != nil {
+		s.mu.Unlock()
+		materialized, err := s.materializeMarketplacePluginDetail(found)
+		if err != nil {
+			return nil, false, err
+		}
+		if materialized == nil || materialized.Summary.InstallPolicy == InstallBlocked {
+			return nil, false, nil
+		}
+		return materialized, true, nil
+	}
+	marketplaces := s.marketplaceListLocked()
+	target := s.targetCuratedMarketplace
+	s.mu.Unlock()
+	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
+	for _, detail := range routePluginDetails(loadedDetails, target) {
+		if strings.TrimSpace(detail.Summary.RemotePluginID) != remotePluginID &&
+			strings.TrimSpace(detail.Summary.ID) != remotePluginID &&
+			strings.TrimSpace(detail.Summary.Name) != remotePluginID {
+			continue
+		}
+		materialized, err := s.materializeMarketplacePluginDetail(&detail)
+		if err != nil {
+			return nil, false, err
+		}
+		if materialized == nil {
+			return nil, false, nil
+		}
+		if materialized.Summary.InstallPolicy == InstallBlocked {
+			return nil, false, nil
+		}
+		return materialized, true, nil
+	}
+	return nil, false, nil
+}
+
 func (s *PluginService) materializeMarketplacePluginDetail(detail *PluginDetail) (*PluginDetail, error) {
 	return s.materializeMarketplacePluginDetailWithOptions(detail, false)
 }

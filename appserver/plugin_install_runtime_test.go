@@ -69,6 +69,86 @@ func TestPluginInstallRuntimeRequestsElicitationAndInstallsOnAccept(t *testing.T
 	}
 }
 
+func TestPluginInstallRuntimeHydratesRecommendedMetadataBeforeElicitation(t *testing.T) {
+	plugins := plugin.NewPluginService()
+	plugins.AddPlugin(plugin.PluginDetail{
+		Summary: plugin.PluginSummary{
+			ID:              "docs@market",
+			Name:            "docs",
+			DisplayName:     "Docs",
+			MarketplaceName: "market",
+			RemotePluginID:  "remote-docs",
+			InstallPolicy:   plugin.InstallAllowed,
+		},
+	})
+	broker := NewServerRequestBroker()
+	var elicited bool
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		elicited = true
+		_, _ = broker.Resolve(OK(request.ID, &MCPElicitationRequestResponse{Action: MCPElicitationActionAccept}))
+	}))
+	runtime := &pluginInstallRuntime{
+		broker:   broker,
+		plugins:  plugins,
+		threadID: "thread-1",
+		turnID:   "turn-1",
+	}
+	// Rust #39143: a recommended plugin with a remote id hydrates metadata
+	// before the install elicitation is presented.
+	result, err := runtime.RequestPluginInstall(context.Background(), &tool.PluginInstallRequest{
+		CallID:        "call-1",
+		SuggestionID:  "request_plugin_install_call-1",
+		ToolType:      "plugin",
+		Tool:          plugin.DiscoverableInfo{ID: "docs@market", RemotePluginID: "remote-docs", Name: "Docs"},
+		SuggestReason: "Use docs",
+		Elicitation: &tool.PluginInstallElicitation{
+			Message:         "Use docs",
+			Meta:            map[string]any{"tool_id": "docs@market"},
+			RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RequestPluginInstall() error = %v", err)
+	}
+	if result == nil || !elicited || !result.Completed {
+		t.Fatalf("result = %#v elicited=%v", result, elicited)
+	}
+}
+
+func TestPluginInstallRuntimeSkipsElicitationWhenRecommendedUnavailable(t *testing.T) {
+	plugins := plugin.NewPluginService()
+	broker := NewServerRequestBroker()
+	var elicited bool
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		elicited = true
+	}))
+	runtime := &pluginInstallRuntime{
+		broker:   broker,
+		plugins:  plugins,
+		threadID: "thread-1",
+		turnID:   "turn-1",
+	}
+	// The recommendation is no longer available, so elicitation is skipped.
+	result, err := runtime.RequestPluginInstall(context.Background(), &tool.PluginInstallRequest{
+		CallID:        "call-1",
+		SuggestionID:  "request_plugin_install_call-1",
+		ToolType:      "plugin",
+		Tool:          plugin.DiscoverableInfo{ID: "docs@market", RemotePluginID: "missing-remote", Name: "Docs"},
+		SuggestReason: "Use docs",
+		Elicitation: &tool.PluginInstallElicitation{
+			Message:         "Use docs",
+			Meta:            map[string]any{"tool_id": "docs@market"},
+			RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RequestPluginInstall() error = %v", err)
+	}
+	if result == nil || elicited || result.ResponseAction != "unavailable" {
+		t.Fatalf("result = %#v elicited=%v, want unavailable", result, elicited)
+	}
+}
+
 func TestPluginInstallRuntimeDeclineDoesNotInstall(t *testing.T) {
 	configService := config.NewConfigService(t.TempDir())
 	plugins := plugin.NewPluginService()

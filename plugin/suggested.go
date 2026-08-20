@@ -206,24 +206,17 @@ func discoverableCandidatesFromSuggested(plugins []SuggestedPlugin, details []Pl
 
 func decodeSuggestedPluginResponse(data []byte) (*SuggestedPluginList, error) {
 	var raw struct {
-		Enabled *bool `json:"enabled"`
+		Enabled bool `json:"enabled"`
 		Plugins []struct {
-			ID                 string `json:"id"`
-			Name               string `json:"name"`
-			Status             string `json:"status"`
-			InstallationPolicy string `json:"installation_policy"`
-			Release            struct {
-				DisplayName      string   `json:"display_name"`
-				DisplayNameCamel string   `json:"displayName"`
-				AppIDs           []string `json:"app_ids"`
-				AppIDsCamel      []string `json:"appIds"`
-			} `json:"release"`
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			DisplayName string `json:"display_name"`
 		} `json:"plugins"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, err
 	}
-	if raw.Enabled == nil || !*raw.Enabled {
+	if !raw.Enabled {
 		return &SuggestedPluginList{}, nil
 	}
 	plugins := make([]SuggestedPlugin, 0, len(raw.Plugins))
@@ -231,7 +224,7 @@ func decodeSuggestedPluginResponse(data []byte) (*SuggestedPluginList, error) {
 	for _, plugin := range raw.Plugins {
 		remoteID := strings.TrimSpace(plugin.ID)
 		name := strings.TrimSpace(plugin.Name)
-		if remoteID == "" || name == "" || !suggestedStatusAllowed(plugin.Status) || !suggestedInstallPolicyAllowed(plugin.InstallationPolicy) {
+		if remoteID == "" || name == "" {
 			continue
 		}
 		id := pluginID(name, RemoteGlobalMarketplaceName)
@@ -239,13 +232,12 @@ func decodeSuggestedPluginResponse(data []byte) (*SuggestedPluginList, error) {
 			continue
 		}
 		seen[id] = true
-		displayName := strings.TrimSpace(firstNonEmpty(plugin.Release.DisplayName, plugin.Release.DisplayNameCamel, name))
+		displayName := strings.TrimSpace(firstNonEmpty(plugin.DisplayName, name))
 		plugins = append(plugins, SuggestedPlugin{
 			ID:              id,
 			RemotePluginID:  remoteID,
 			Name:            name,
 			DisplayName:     displayName,
-			AppConnectorIDs: uniqueNonEmptyStrings(firstNonEmptyStringSlice(plugin.Release.AppIDs, plugin.Release.AppIDsCamel)),
 		})
 	}
 	sort.SliceStable(plugins, func(i int, j int) bool {
@@ -259,7 +251,9 @@ func suggestedPluginsURL(baseURL string) string {
 	if base == "" {
 		base = "https://chatgpt.com/backend-api"
 	}
-	raw := base + "/ps/plugins/suggested"
+	// Rust #39143: Codex-specific recommendation route with a compact
+	// response shape.
+	raw := base + "/ps/plugins/suggested/codex"
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return raw + "?scope=GLOBAL"

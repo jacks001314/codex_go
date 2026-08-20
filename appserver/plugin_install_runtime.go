@@ -35,6 +35,21 @@ func (r *pluginInstallRuntime) RequestPluginInstall(ctx context.Context, request
 			RequestedSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		}
 	}
+	// Rust #39143: hydrate the selected recommendation's metadata before
+	// presenting an install request. A plugin that is no longer available
+	// skips elicitation; an unverifiable plugin returns a retryable response.
+	if request.ToolType == "plugin" && r.plugins != nil && strings.TrimSpace(request.Tool.RemotePluginID) != "" {
+		_, available, hydrateErr := r.plugins.HydrateRecommendedPluginMetadata(request.Tool.RemotePluginID)
+		if hydrateErr != nil {
+			result.Retryable = true
+			result.ResponseAction = "retry"
+			return result, nil
+		}
+		if !available {
+			result.ResponseAction = "unavailable"
+			return result, nil
+		}
+	}
 	turnID := strings.TrimSpace(r.turnID)
 	params := &MCPElicitationRequestParams{
 		ThreadID:        strings.TrimSpace(r.threadID),

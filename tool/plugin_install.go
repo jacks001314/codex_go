@@ -58,6 +58,9 @@ type PluginInstallRuntimeResult struct {
 	Completed      bool   `json:"completed"`
 	ResponseAction string `json:"responseAction,omitempty"`
 	PersistDisable bool   `json:"persistDisable,omitempty"`
+	// Retryable reports that the runtime could not verify the recommended
+	// plugin metadata and the request should be retried (Rust #39143).
+	Retryable bool `json:"retryable,omitempty"`
 }
 
 type RequestPluginInstallEntry struct {
