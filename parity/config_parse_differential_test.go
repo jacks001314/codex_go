@@ -504,7 +504,7 @@ func TestRustModelProviderValidationSamplesRunInGo(t *testing.T) {
 			providers:  map[string]any{"amazon-bedrock": map[string]any{"name": "Custom Bedrock"}},
 			wantAccept: false,
 			wantMessage: []string{
-				"only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, and `aws.region`",
+				"only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, and `aws.auth_refresh`",
 			},
 		},
 	}
