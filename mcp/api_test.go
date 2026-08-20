@@ -800,6 +800,38 @@ func TestMCPParamsMarshalRustV2Shape(t *testing.T) {
 		t.Fatalf("legacy serverName should not be emitted: %#v", resourcePayload)
 	}
 
+	// Rust #39187/#39244: originCallId and connectorId survive the wire.
+	scoped, err := json.Marshal(MCPResourceReadParams{
+		Server:       "docs",
+		URI:          "file://demo",
+		OriginCallID: "call-123",
+	})
+	if err != nil {
+		t.Fatalf("Marshal scoped resource params returned error: %v", err)
+	}
+	var scopedPayload map[string]any
+	if err := json.Unmarshal(scoped, &scopedPayload); err != nil {
+		t.Fatalf("Unmarshal scoped resource params returned error: %v", err)
+	}
+	if scopedPayload["originCallId"] != "call-123" {
+		t.Fatalf("scoped originCallId = %#v", scopedPayload["originCallId"])
+	}
+	connector, err := json.Marshal(MCPResourceReadParams{
+		Server:      "docs",
+		URI:         "file://demo",
+		ConnectorID: "connector-1",
+	})
+	if err != nil {
+		t.Fatalf("Marshal connector resource params returned error: %v", err)
+	}
+	var connectorPayload map[string]any
+	if err := json.Unmarshal(connector, &connectorPayload); err != nil {
+		t.Fatalf("Unmarshal connector resource params returned error: %v", err)
+	}
+	if connectorPayload["connectorId"] != "connector-1" {
+		t.Fatalf("connectorId = %#v", connectorPayload["connectorId"])
+	}
+
 	encodedTool, err := json.Marshal(MCPToolCallParams{
 		ThreadID:   "thread-live",
 		ServerName: "legacy-tool-server",
@@ -1494,5 +1526,20 @@ func TestMCPToolCatalogGraceKeySharesOnlyForEligibleServers(t *testing.T) {
 	oauth := &ServerConfig{URL: "https://example.test/oauth", OAuthClientID: "client-1"}
 	if key, eligible := mcpToolCatalogGraceKey("docs", oauth, false, false, false); eligible {
 		t.Fatalf("OAuth HTTP config should not produce a shared grace key, got %q", key)
+	}
+}
+
+func TestValidateMCPResourceOriginRejectsAmbiguousScope(t *testing.T) {
+	if err := validateMCPResourceOrigin(&MCPResourceReadParams{OriginCallID: "call-1", ConnectorID: "connector-1"}); err == nil {
+		t.Fatal("origin + connector should be rejected")
+	}
+	if err := validateMCPResourceOrigin(&MCPResourceReadParams{OriginCallID: "call with space"}); err == nil {
+		t.Fatal("whitespace origin should be rejected")
+	}
+	if err := validateMCPResourceOrigin(&MCPResourceReadParams{OriginCallID: "call-1"}); err != nil {
+		t.Fatalf("valid origin rejected: %v", err)
+	}
+	if err := validateMCPResourceOrigin(&MCPResourceReadParams{ConnectorID: "connector-1"}); err != nil {
+		t.Fatalf("valid connector rejected: %v", err)
 	}
 }

@@ -396,23 +396,36 @@ type MCPResourceReadParams struct {
 	Server     string  `json:"server,omitempty"`
 	ServerName string  `json:"serverName,omitempty"`
 	URI        string  `json:"uri"`
+	// OriginCallID scopes the read to the app tool call that produced the
+	// widget (Rust #39187): the app, account link, and policy context of the
+	// originating call are used when reading the associated resource.
+	OriginCallID string `json:"originCallId,omitempty"`
+	// ConnectorID restricts hosted app resource reads to the connector that
+	// produced them (Rust #39244).
+	ConnectorID string `json:"connectorId,omitempty"`
 }
 
 func (p MCPResourceReadParams) MarshalJSON() ([]byte, error) {
 	type payload struct {
-		ThreadID *string `json:"threadId,omitempty"`
-		Server   string  `json:"server"`
-		URI      string  `json:"uri"`
+		ThreadID     *string `json:"threadId,omitempty"`
+		Server       string  `json:"server"`
+		URI          string  `json:"uri"`
+		OriginCallID string  `json:"originCallId,omitempty"`
+		ConnectorID  string  `json:"connectorId,omitempty"`
 	}
 	return json.Marshal(payload{
-		ThreadID: cloneStringPtr(p.ThreadID),
-		Server:   firstNonEmptyMCP(p.Server, p.ServerName),
-		URI:      p.URI,
+		ThreadID:     cloneStringPtr(p.ThreadID),
+		Server:       firstNonEmptyMCP(p.Server, p.ServerName),
+		URI:          p.URI,
+		OriginCallID: strings.TrimSpace(p.OriginCallID),
+		ConnectorID:  strings.TrimSpace(p.ConnectorID),
 	})
 }
 
 type MCPResourceReadResponse struct {
 	Contents []MCPResourceContent `json:"contents"`
+	// OriginCallID echoes the scoped origin on successful reads (Rust #39187).
+	OriginCallID string `json:"originCallId,omitempty"`
 }
 
 func (r *MCPResourceReadResponse) MarshalJSON() ([]byte, error) {
@@ -421,8 +434,9 @@ func (r *MCPResourceReadResponse) MarshalJSON() ([]byte, error) {
 		contents = []MCPResourceContent{}
 	}
 	return json.Marshal(struct {
-		Contents []MCPResourceContent `json:"contents"`
-	}{Contents: contents})
+		Contents     []MCPResourceContent `json:"contents"`
+		OriginCallID string               `json:"originCallId,omitempty"`
+	}{Contents: contents, OriginCallID: strings.TrimSpace(r.OriginCallID)})
 }
 
 type MCPResourceContent struct {
@@ -1691,6 +1705,9 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 	if server == "" || uri == "" {
 		return nil, invalidMCPRequest("server and uri are required")
 	}
+	if err := validateMCPResourceOrigin(params); err != nil {
+		return nil, err
+	}
 	if err := s.requiredServerAvailable(server); err != nil {
 		return nil, err
 	}
@@ -1706,6 +1723,11 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 	request.URI = uri
 	var response *MCPResourceReadResponse
 	var err error
+	setOrigin := func() {
+		if response != nil && strings.TrimSpace(params.OriginCallID) != "" {
+			response.OriginCallID = strings.TrimSpace(params.OriginCallID)
+		}
+	}
 	if config, ok := s.serverConfig(server); ok {
 		if strings.TrimSpace(config.URL) != "" {
 			if err := ValidateServerAuth(server, &config); err != nil {
@@ -1715,6 +1737,7 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 			if err != nil {
 				return nil, err
 			}
+			setOrigin()
 			s.writeCachedResource(cacheKey, response)
 			return response, nil
 		}
@@ -1723,13 +1746,33 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 			if err != nil {
 				return nil, err
 			}
+			setOrigin()
 			s.writeCachedResource(cacheKey, response)
 			return response, nil
 		}
 	}
 	response = &MCPResourceReadResponse{Contents: []MCPResourceContent{{URI: uri, MimeType: "text/plain", Text: ""}}}
+	setOrigin()
 	s.writeCachedResource(cacheKey, response)
 	return response, nil
+}
+
+// validateMCPResourceOrigin mirrors Rust #39187/#39244: scoped reads carry
+// either a connector id (hosted app resources) or an originating call id;
+// providing both, or a connector without the app-only surface, is rejected.
+func validateMCPResourceOrigin(params *MCPResourceReadParams) error {
+	if params == nil {
+		return nil
+	}
+	origin := strings.TrimSpace(params.OriginCallID)
+	connector := strings.TrimSpace(params.ConnectorID)
+	if origin != "" && connector != "" {
+		return invalidMCPRequest("resource read cannot combine originCallId and connectorId")
+	}
+	if origin != "" && strings.ContainsAny(origin, " \t\r\n") {
+		return invalidMCPRequest("originCallId must be a single call id")
+	}
+	return nil
 }
 
 func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, error) {
