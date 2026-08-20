@@ -137,6 +137,9 @@ type ResponsesAgentRunner struct {
 	// refresh state across concurrent failures (Rust shared_state, #39410).
 	AWSRefreshMu       sync.Mutex
 	AWSRefreshInFlight chan struct{}
+	// bedrockAuthRecoveryAttempted bounds provider-owned Bedrock auth recovery
+	// to one attempt per request (Rust #39274).
+	bedrockAuthRecoveryAttempted bool
 }
 
 type responsesTurnStateCache struct {
@@ -2210,6 +2213,11 @@ func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context)
 	if r == nil || r.Provider == nil || r.Provider.Name != AmazonBedrockProviderName || r.AWS == nil || r.AWS.AuthRefresh == nil {
 		return errors.New("bedrock aws auth refresh is not configured")
 	}
+	// Rust #39274: at most one provider-owned recovery attempt per request.
+	if r.bedrockAuthRecoveryAttempted {
+		return errors.New("bedrock aws auth refresh already attempted for this request")
+	}
+	r.bedrockAuthRecoveryAttempted = true
 	refresh := r.AWS.AuthRefresh
 	if strings.TrimSpace(refresh.Command) == "" {
 		return errors.New("bedrock aws auth refresh command is empty")

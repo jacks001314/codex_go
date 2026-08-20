@@ -2844,3 +2844,29 @@ func TestRefreshBedrockAWSCredentialsSkipsWhenNotConfigured(t *testing.T) {
 		t.Fatal("refresh should be skipped when not configured")
 	}
 }
+
+func TestRefreshBedrockAWSCredentialsBoundsProviderRecoveryPerRequest(t *testing.T) {
+	// Rust #39274: at most one provider-owned recovery attempt per request.
+	if runtime.GOOS == "windows" {
+		t.Skip("shell helper path is unix-only")
+	}
+	script := filepath.Join(t.TempDir(), "aws-refresh.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := &ResponsesAgentRunner{
+		Provider: &APIProvider{Name: AmazonBedrockProviderName},
+		AWS: &ProviderAWSAuthInfo{
+			Region: "us-east-1",
+			AuthRefresh: &ProviderAuthRefreshInfo{
+				Command: script,
+			},
+		},
+	}
+	if err := runner.refreshBedrockAWSCredentials(context.Background()); err != nil {
+		t.Fatalf("first refresh error = %v", err)
+	}
+	if err := runner.refreshBedrockAWSCredentials(context.Background()); err == nil {
+		t.Fatal("second provider-owned recovery should be rejected within the request")
+	}
+}
