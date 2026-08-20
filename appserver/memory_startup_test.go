@@ -305,3 +305,40 @@ func writeMemoryStartupTestRollout(t *testing.T, home, threadID string, now time
 	}
 	return recorder.Path()
 }
+
+func TestPrimaryEnvironmentConfiguredForMemoryStartupLikeRust(t *testing.T) {
+	// Rust #39597: memory initialization starts only after the primary
+	// environment is configured; attachment-scoped roots from a pending or
+	// failed environment gate it off.
+	router := NewRuntimeRouter(RuntimeServices{
+		Environment: NewEnvironmentManager(EnvironmentShellInfo{}, ""),
+	})
+	rawRoot, err := json.Marshal(SelectedCapabilityRoot{
+		ID: "root-a",
+		Location: CapabilityRootLocation{
+			Type: CapabilityRootLocationEnvironment, EnvironmentID: "env-a", Path: "/remote/skills",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &session.Record{Metadata: session.Metadata{SelectedCapabilityRoots: []json.RawMessage{rawRoot}}}
+	if router.primaryEnvironmentConfiguredForMemoryStartup(&ThreadStartParams{}, record) {
+		t.Fatal("memory startup should wait for an unconfigured environment")
+	}
+	// Once the environment reports ready with matching roots, startup may run.
+	if _, err := router.services.Environment.Add(&EnvironmentAddParams{EnvironmentID: "env-a", ExecServerURL: "ws://127.0.0.1:1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := router.services.Environment.SetInfo("env-a", EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "/remote"); err != nil {
+		t.Fatal(err)
+	}
+	if !router.primaryEnvironmentConfiguredForMemoryStartup(&ThreadStartParams{}, record) {
+		t.Fatal("memory startup should run after the environment is ready")
+	}
+	// A thread with only local roots is always ready.
+	local := &session.Record{Metadata: session.Metadata{SelectedCapabilityRoots: []json.RawMessage{}}}
+	if !router.primaryEnvironmentConfiguredForMemoryStartup(&ThreadStartParams{}, local) {
+		t.Fatal("local-only thread should allow memory startup")
+	}
+}

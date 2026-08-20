@@ -235,6 +235,12 @@ func (r *RuntimeRouter) startMemoriesStartupTask(response *ThreadStartResponse, 
 	if err != nil || record == nil || memoryStartupNonRootRecord(record) {
 		return
 	}
+	// Rust #39597: memory initialization starts only after the primary
+	// environment is configured, so it never runs against a pending or failed
+	// environment attachment.
+	if !r.primaryEnvironmentConfiguredForMemoryStartup(&params, record) {
+		return
+	}
 	cfg, err := r.effectiveConfigForThreadStart(&params)
 	if err != nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "memories") {
 		return
@@ -308,6 +314,44 @@ func (r *RuntimeRouter) startMemoriesStartupTask(response *ThreadStartResponse, 
 			"stage_one_failed", report.StageOneFailed,
 			"phase_two_status", report.PhaseTwoStatus)
 	}()
+}
+
+func (r *RuntimeRouter) primaryEnvironmentConfiguredForMemoryStartup(params *ThreadStartParams, record *session.Record) bool {
+	if r == nil || r.services.Environment == nil {
+		return true
+	}
+	if record == nil || len(record.Metadata.SelectedCapabilityRoots) == 0 {
+		return true
+	}
+	var threadRoots []SelectedCapabilityRoot
+	for _, raw := range record.Metadata.SelectedCapabilityRoots {
+		var selected SelectedCapabilityRoot
+		if err := json.Unmarshal(raw, &selected); err != nil {
+			continue
+		}
+		threadRoots = append(threadRoots, selected)
+	}
+	roots := r.services.Environment.InspectSelectedCapabilityRoots(threadRoots)
+	requested := map[string]bool{}
+	for _, raw := range record.Metadata.SelectedCapabilityRoots {
+		var selected SelectedCapabilityRoot
+		if err := json.Unmarshal(raw, &selected); err != nil {
+			continue
+		}
+		if selected.Location.Type == CapabilityRootLocationEnvironment && firstNonEmpty(strings.TrimSpace(selected.Location.EnvironmentID), "local") != "local" {
+			requested[strings.TrimSpace(selected.ID)] = true
+		}
+	}
+	if len(requested) == 0 {
+		return true
+	}
+	for _, root := range roots.ReadyRoots {
+		delete(requested, strings.TrimSpace(root.ID))
+	}
+	if len(requested) > 0 {
+		return false
+	}
+	return true
 }
 
 func (r *RuntimeRouter) waitForInternalMemoryTurn(ctx context.Context, threadID string) error {
