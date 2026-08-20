@@ -290,9 +290,9 @@
             "domains":  [
                 "rollout"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: external migration write helpers (writeExternalTOML, copyExternalSkill, copyExternalDirectoryWithRewrite, copyExternalHookScripts) reject repository-scoped targets whose existing components are symlinks/reparse points, preventing writes outside the repository; test covers a .codex directory replaced by a symlink."
                 ]
             },
         {

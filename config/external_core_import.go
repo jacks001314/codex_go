@@ -391,6 +391,9 @@ func nonEmptyTextFile(path string) bool {
 }
 
 func copyExternalSkill(source string, target string) error {
+	if err := rejectRedirectedExternalTarget(target); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(target, 0o700); err != nil {
 		return err
 	}
@@ -419,6 +422,46 @@ func copyExternalSkill(source string, target string) error {
 		}
 		if err := os.WriteFile(to, data, 0o600); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// rejectRedirectedExternalTarget rejects repository-scoped generated
+// configuration writes whose existing path components are symbolic links (or,
+// on Windows, reparse points), which could redirect writes outside the
+// repository (Rust #39221). Home-scoped writes have no repository root and are
+// not checked.
+func rejectRedirectedExternalTarget(target string) error {
+	cleaned := filepath.Clean(target)
+	dir := filepath.Dir(cleaned)
+	for {
+		if pathExists(filepath.Join(dir, ".git")) || pathExists(filepath.Join(dir, ".hg")) || pathExists(filepath.Join(dir, ".svn")) {
+			return rejectExternalSymlinkComponents(dir, cleaned)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
+}
+
+func rejectExternalSymlinkComponents(root string, target string) error {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("generated configuration target %q escapes repository scope %q", target, root)
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		if info, statErr := os.Lstat(current); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("generated configuration path %q is a symbolic link", current)
 		}
 	}
 	return nil

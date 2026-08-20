@@ -293,6 +293,9 @@ func externalHookPayloadFromGroups(groups map[string][]externalHookGroup) extern
 }
 
 func copyExternalHookScripts(source string, target string) error {
+	if err := rejectRedirectedExternalTarget(target); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(source)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

@@ -441,6 +441,9 @@ func replaceExternalTermCaseSensitive(input string, needle string, replacement s
 }
 
 func copyExternalDirectoryWithRewrite(source string, target string, rewrite func(string) string) error {
+	if err := rejectRedirectedExternalTarget(target); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(target, 0o700); err != nil {
 		return err
 	}
