@@ -10,6 +10,7 @@ import (
 
 	"codex_go/config"
 	"codex_go/execserver"
+	"codex_go/plugin"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/turn"
@@ -128,3 +129,40 @@ func TestExecutorWindowsSkillReadFailsClosedWhenSandboxDisabled(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestAttributeExecutorSkillPluginIDsMatchesRootLikeRust(t *testing.T) {
+	// Rust #39309: executor skills discovered under a plugin's capability
+	// root are attributed to that plugin for skill_invocation analytics.
+	entries := []SkillsListEntry{
+		{Name: "lint-fix", AuthorityKind: string(executorSkillSourceKindForTest), AuthorityID: "root-a"},
+	}
+	attributeExecutorSkillPluginIDs(entries, "root-a", map[string]string{"root-a": "lint@openai-curated-remote"})
+	if len(entries) != 1 || entries[0].PluginID != "lint@openai-curated-remote" {
+		t.Fatalf("entries = %#v", entries)
+	}
+	// A root without a mapped plugin keeps an empty attribution.
+	other := []SkillsListEntry{{Name: "plain", AuthorityID: "root-b"}}
+	attributeExecutorSkillPluginIDs(other, "root-b", map[string]string{"root-a": "lint@openai-curated-remote"})
+	if other[0].PluginID != "" {
+		t.Fatalf("unattributed root plugin id = %q", other[0].PluginID)
+	}
+}
+
+func TestExecutorSkillCapabilityMatchesRootByConfigName(t *testing.T) {
+	if !executorSkillCapabilityMatchesRoot(
+		plugin.CapabilitySummary{ConfigName: "lint@openai-curated-remote"},
+		CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: "/skills/lint"},
+		"/skills/lint",
+	) {
+		t.Fatal("lint root should match lint plugin")
+	}
+	if executorSkillCapabilityMatchesRoot(
+		plugin.CapabilitySummary{ConfigName: "lint@openai-curated-remote"},
+		CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: "/skills/other"},
+		"/skills/other",
+	) {
+		t.Fatal("other root should not match lint plugin")
+	}
+}
+
+const executorSkillSourceKindForTest = "executor"

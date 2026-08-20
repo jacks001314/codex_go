@@ -34,6 +34,9 @@ type CatalogEntry struct {
 	Enabled          bool
 	PromptVisible    bool
 	Dependencies     []ToolDependency
+	// PluginID attributes an executor skill to the plugin whose capability
+	// root selected it (Rust #39309), carried into skill_invocation analytics.
+	PluginID string
 }
 
 type ToolDependency struct {

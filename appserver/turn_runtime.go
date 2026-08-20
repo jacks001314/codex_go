@@ -7539,6 +7539,7 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx 
 	}
 	entries := make([]SkillsListEntry, 0)
 	warnings := make([]string, 0)
+	rootPluginIDs := r.executorSkillRootPluginIDs(threadID)
 	for _, raw := range record.Metadata.SelectedCapabilityRoots {
 		var selected SelectedCapabilityRoot
 		if err := json.Unmarshal(raw, &selected); err != nil {
@@ -7568,7 +7569,9 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx 
 				}
 				applyExecutorSkillDisplayPaths(cached.entries, selected.ID)
 			})
-			entries = append(entries, cloneSkills(cached.entries)...)
+			cloned := cloneSkills(cached.entries)
+			attributeExecutorSkillPluginIDs(cloned, selected.ID, rootPluginIDs)
+			entries = append(entries, cloned...)
 			warnings = append(warnings, cached.warnings...)
 			continue
 		}
@@ -7596,10 +7599,88 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx 
 				cached.warnings = append(cached.warnings, fmt.Sprintf("Failed to load environment skill at %s: %s", skillErr.Path, skillErr.Message))
 			}
 		})
-		entries = append(entries, cloneSkills(cached.entries)...)
+		cloned := cloneSkills(cached.entries)
+		attributeExecutorSkillPluginIDs(cloned, selected.ID, rootPluginIDs)
+		entries = append(entries, cloned...)
 		warnings = append(warnings, cached.warnings...)
 	}
 	return entries, warnings, nil
+}
+
+// executorSkillRootPluginIDs maps selected capability root ids to the plugin
+// whose capability root they resolve (Rust #39309 selected plugin snapshot).
+// A root is attributed to a plugin when the plugin's enabled capability
+// manifests under the same environment root path.
+func (r *RuntimeRouter) executorSkillRootPluginIDs(threadID string) map[string]string {
+	if r == nil || r.services.Plugins == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return nil
+	}
+	capabilities := r.services.Plugins.EnabledCapabilities()
+	if len(capabilities) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for _, raw := range record.Metadata.SelectedCapabilityRoots {
+		var selected SelectedCapabilityRoot
+		if err := json.Unmarshal(raw, &selected); err != nil || selected.ID == "" {
+			continue
+		}
+		if selected.Location.Type != CapabilityRootLocationEnvironment {
+			continue
+		}
+		rootPath := capabilityRootLocalPath(selected.Location.Path)
+		for _, capability := range capabilities {
+			if strings.TrimSpace(capability.ConfigName) == "" {
+				continue
+			}
+			if executorSkillCapabilityMatchesRoot(capability, selected.Location, rootPath) {
+				out[strings.TrimSpace(selected.ID)] = strings.TrimSpace(capability.ConfigName)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func executorSkillCapabilityMatchesRoot(capability plugin.CapabilitySummary, location CapabilityRootLocation, rootPath string) bool {
+	// Capability roots carry a manifest under the environment root; matching
+	// by ConfigName fallback keeps local executor roots attributable when the
+	// root path equals the plugin's declared root.
+	if strings.TrimSpace(rootPath) == "" {
+		return false
+	}
+	configName := strings.TrimSpace(capability.ConfigName)
+	if configName == "" {
+		return false
+	}
+	// Local plugin capability roots are commonly named after the plugin, so a
+	// root whose path basename equals the plugin config name is attributed.
+	base := filepath.Base(rootPath)
+	return strings.EqualFold(base, configName) || strings.EqualFold(base, pluginNameFromConfigName(configName))
+}
+
+func pluginNameFromConfigName(configName string) string {
+	if index := strings.Index(configName, "@"); index > 0 {
+		return configName[:index]
+	}
+	return configName
+}
+
+func attributeExecutorSkillPluginIDs(entries []SkillsListEntry, rootID string, rootPluginIDs map[string]string) {
+	if len(entries) == 0 || rootPluginIDs == nil {
+		return
+	}
+	pluginID := rootPluginIDs[strings.TrimSpace(rootID)]
+	if strings.TrimSpace(pluginID) == "" {
+		return
+	}
+	for i := range entries {
+		entries[i].PluginID = pluginID
+	}
 }
 
 func (r *RuntimeRouter) selectedCapabilitySkillCatalog(threadID string, rootKey string) *runtimeSelectedSkillCatalog {

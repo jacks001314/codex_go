@@ -63,6 +63,7 @@ func (r *RuntimeRouter) executorSkillProviderCatalog(ctx context.Context, thread
 			DisplayPath:      entry.DisplayPath,
 			Enabled:          entry.Enabled,
 			PromptVisible:    entry.AllowsImplicitInvocation(),
+			PluginID:         entry.PluginID,
 		})
 	}
 	return catalog, nil
