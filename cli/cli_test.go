@@ -1353,6 +1353,30 @@ func TestParseExecServerAndStdioToUDS(t *testing.T) {
 	}
 }
 
+func TestParseExecServerForwardModeLikeRust(t *testing.T) {
+	// Rust #39249: `exec-server forward --connect ws://HOST:PORT` registers an
+	// existing WebSocket exec-server as a remote environment.
+	parsed, err := Parse([]string{"exec-server", "forward", "--connect", "ws://127.0.0.1:7777", "--name", "worker-a"})
+	if err != nil {
+		t.Fatalf("Parse exec-server forward returned error: %v", err)
+	}
+	if parsed.Command != CommandExecServer || parsed.ExecServer.Forward != "ws://127.0.0.1:7777" {
+		t.Fatalf("exec-server forward = %#v", parsed.ExecServer)
+	}
+	// Missing --connect is rejected.
+	if _, err := Parse([]string{"exec-server", "forward"}); err == nil || !strings.Contains(err.Error(), "--connect") {
+		t.Fatalf("forward without --connect error = %v", err)
+	}
+	// Forward conflicts with --remote.
+	if _, err := Parse([]string{"exec-server", "--connect", "ws://127.0.0.1:7777", "--remote", "ws://registry:9000"}); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("forward + remote error = %v", err)
+	}
+	// Non-WebSocket connect URL is rejected.
+	if _, err := Parse([]string{"exec-server", "forward", "--connect", "tcp://bad"}); err == nil || !strings.Contains(err.Error(), "ws://") {
+		t.Fatalf("bad connect URL error = %v", err)
+	}
+}
+
 func TestParseExecServerExitOnStdinCloseEnvironment(t *testing.T) {
 	t.Setenv(execServerExitOnStdinCloseEnv, "true")
 	parsed, err := Parse([]string{"exec-server", "--remote", "https://example.test", "--environment-id", "env-1"})

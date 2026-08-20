@@ -776,6 +776,28 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	if strings.TrimSpace(opts.Remote) != "" {
 		return runExecServerRemote(ctx, opts, rootConfigOverrides, strictConfig, stdin)
 	}
+	if forward := strings.TrimSpace(opts.Forward); forward != "" && forward != "forward" {
+		// Rust #39249: register an existing WebSocket exec-server as a
+		// remote environment and forward complete payloads unchanged.
+		environmentID := strings.TrimSpace(opts.EnvironmentID)
+		if environmentID == "" {
+			environmentID = "forward"
+		}
+		codexHome := auth.DefaultCodexHome()
+		loadedConfig, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
+			RawOverrides: rootConfigOverrides,
+			StrictConfig: strictConfig,
+		})
+		if err != nil {
+			return err
+		}
+		return execserver.ForwardServer(ctx, &execserver.ForwardOptions{
+			ConnectURL:    forward,
+			EnvironmentID: environmentID,
+			Name:          strings.TrimSpace(opts.Name),
+			HTTPClient:    codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0),
+		})
+	}
 	loadedConfig, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), &config.EffectiveOptions{
 		RawOverrides: rootConfigOverrides,
 		StrictConfig: strictConfig,

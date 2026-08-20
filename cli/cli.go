@@ -260,6 +260,7 @@ type ExecServerOptions struct {
 	Listen               string
 	ListenSet            bool
 	Remote               string
+	Forward              string
 	EnvironmentID        string
 	Name                 string
 	UseAgentIdentityAuth bool
@@ -2176,6 +2177,13 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case arg == "forward":
+			// Rust #39249: forward mode registers an existing WebSocket
+			// exec-server as a remote environment.
+			if execServer.Forward != "" {
+				return fmt.Errorf("exec-server forward mode is already configured")
+			}
+			execServer.Forward = "forward"
 		case arg == "--strict-config":
 			execServer.StrictConfig = true
 		case arg == "--listen":
@@ -2198,6 +2206,15 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			i = next
 		case strings.HasPrefix(arg, "--remote="):
 			execServer.Remote = strings.TrimPrefix(arg, "--remote=")
+		case arg == "--connect":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			execServer.Forward = value
+			i = next
+		case strings.HasPrefix(arg, "--connect="):
+			execServer.Forward = strings.TrimPrefix(arg, "--connect=")
 		case arg == "--environment-id":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -2236,16 +2253,29 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.ExitOnStdinClose = enabled
 		}
 	}
+	forward := strings.TrimSpace(execServer.Forward)
+	if forward != "" && forward != "forward" && execServer.Remote != "" {
+		return errors.New("exec-server forward cannot be combined with --remote")
+	}
 	if execServer.Remote != "" && execServer.EnvironmentID == "" {
 		return errors.New("--environment-id is required when --remote is set")
+	}
+	if forward == "forward" && execServer.Remote == "" {
+		return errors.New("exec-server forward requires --connect ws://HOST:PORT")
+	}
+	if forward != "" && forward != "forward" && !strings.HasPrefix(forward, "ws://") && !strings.HasPrefix(forward, "wss://") {
+		return fmt.Errorf("exec-server forward requires --connect ws://HOST:PORT, got %q", forward)
+	}
+	if forward != "" && forward != "forward" && execServer.ListenSet {
+		return errors.New("--listen conflicts with exec-server forward")
 	}
 	if execServer.Remote != "" && execServer.ListenSet {
 		return errors.New("--listen conflicts with --remote")
 	}
-	if execServer.UseAgentIdentityAuth && execServer.Remote == "" {
+	if execServer.UseAgentIdentityAuth && execServer.Remote == "" && forward == "" {
 		return errors.New("--use-agent-identity-auth requires --remote")
 	}
-	if execServer.ExitOnStdinClose && execServer.Remote == "" {
+	if execServer.ExitOnStdinClose && execServer.Remote == "" && forward == "" {
 		return errors.New("--exit-on-stdin-close requires --remote")
 	}
 	return nil
