@@ -18,6 +18,11 @@ func (e *invalidFileInputError) Unwrap() error {
 }
 
 func validateRegularFile(path string, file *os.File, isDiskFile bool) error {
+	if info, err := os.Lstat(path); err != nil {
+		return err
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return &invalidFileInputError{message: fmt.Sprintf("path `%s` is not a regular file", path)}
+	}
 	info, err := file.Stat()
 	if err != nil {
 		return err

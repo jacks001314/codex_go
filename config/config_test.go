@@ -32,6 +32,17 @@ func TestResumeCWDModeAndResolution(t *testing.T) {
 	}
 }
 
+func TestLoadEffectiveRejectsRetiredUntrustedApprovalPolicyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(ConfigPath(home), []byte("approval_policy = \"untrusted\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	_, err := LoadEffectiveWithOptions(home, nil)
+	if err == nil || !strings.Contains(err.Error(), `approval_policy = "untrusted" is no longer supported; remove this setting`) {
+		t.Fatalf("LoadEffective(untrusted) error = %v", err)
+	}
+}
+
 func TestLoadEffectiveStrictConfigAcceptsDeprecatedJSReplKeysLikeRust(t *testing.T) {
 	// Rust ConfigToml keeps js_repl_node_path / js_repl_node_module_dirs as
 	// deprecated ignored fields (serde accepts them, schemars skips them); Go

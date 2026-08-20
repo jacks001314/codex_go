@@ -83,6 +83,43 @@ func TestWorkspaceBaselineReportsAddedModifiedDeletedAndResets(t *testing.T) {
 	}
 }
 
+func TestPrepareWorkspaceRejectsSymlinkRootLikeRust(t *testing.T) {
+	home := t.TempDir()
+	outside := filepath.Join(home, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "memories")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := PrepareWorkspace(context.Background(), link); err == nil || !strings.Contains(err.Error(), "memory root cannot be a symbolic link") {
+		t.Fatalf("PrepareWorkspace(symlink root) error = %v", err)
+	}
+}
+
+func TestPrepareWorkspaceRemovesSymlinksLikeRust(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "memories")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(home, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "extensions")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := PrepareWorkspace(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("symlink %s was not removed", link)
+	}
+}
+
 func TestPrepareWorkspaceRecoversUnusableGitDirectory(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "memories")
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {

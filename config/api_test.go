@@ -404,6 +404,19 @@ func TestServiceWriteValueNilDeletesKeyPath(t *testing.T) {
 	}
 }
 
+func TestServiceWriteValueRejectsRetiredUntrustedApprovalPolicyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, "model = \"gpt-5\"\n")
+	service := NewConfigService(home)
+	_, err := service.WriteValue(&ConfigValueWriteParams{
+		KeyPath: "approval_policy",
+		Value:   "untrusted",
+	})
+	if err == nil || !strings.Contains(err.Error(), `approval_policy = "untrusted" is no longer supported; remove this setting`) {
+		t.Fatalf("WriteValue(untrusted) error = %v", err)
+	}
+}
+
 func TestServiceWriteSkillConfig(t *testing.T) {
 	home := t.TempDir()
 	service := NewConfigService(home)

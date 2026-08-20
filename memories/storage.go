@@ -37,6 +37,17 @@ func RawMemoriesFile(root string) string {
 }
 
 func EnsureLayout(root string) error {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(root); err != nil {
+		return err
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("memory root cannot be a symbolic link: %s", root)
+	}
+	if err := removeMemorySymlinks(root); err != nil {
+		return err
+	}
 	return os.MkdirAll(RolloutSummariesDir(root), 0o755)
 }
 

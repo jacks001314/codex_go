@@ -123,8 +123,8 @@ func (p *StartupPipeline) Run(ctx context.Context) (StartupReport, error) {
 		ctx = context.Background()
 	}
 	root := Root(p.CodexHome)
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return report, fmt.Errorf("create memories root: %w", err)
+	if err := EnsureLayout(root); err != nil {
+		return report, fmt.Errorf("prepare memories root: %w", err)
 	}
 	_ = SeedExtensionInstructions(root)
 	pruned, err := p.State.PruneStage1OutputsForRetention(ctx, p.Config.MaxUnusedDays, StageOnePruneBatchSize)
@@ -288,6 +288,9 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	cancel()
 	lostOwnership := <-heartbeatDone
 	if agentErr != nil {
+		// Rust #39205: remove worker-created symlinks even when the worker
+		// fails so they cannot affect files outside the workspace.
+		_ = removeMemorySymlinks(root)
 		var spawnErr *ConsolidationSpawnError
 		if errors.As(agentErr, &spawnErr) {
 			return fail("failed_spawn_agent")
@@ -296,6 +299,9 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	}
 	if lostOwnership {
 		return fail("failed_agent")
+	}
+	if err := removeMemorySymlinks(root); err != nil {
+		return fail("failed_remove_symlinks")
 	}
 	if err := ValidateConsolidationArtifacts(root); err != nil {
 		return fail("failed_invalid_artifacts")

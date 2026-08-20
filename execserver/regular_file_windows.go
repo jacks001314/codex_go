@@ -19,7 +19,9 @@ func openRegularFileForRead(path string) (*os.File, error) {
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 		nil,
 		windows.OPEN_EXISTING,
-		windows.FILE_ATTRIBUTE_NORMAL|windows.SECURITY_SQOS_PRESENT|windows.SECURITY_IDENTIFICATION,
+		// Rust #39200: FILE_FLAG_OPEN_REPARSE_POINT avoids following a reparse
+		// point at the final path component for sensitive reads.
+		windows.FILE_ATTRIBUTE_NORMAL|windows.SECURITY_SQOS_PRESENT|windows.SECURITY_IDENTIFICATION|windows.FILE_FLAG_OPEN_REPARSE_POINT,
 		0,
 	)
 	if err != nil {

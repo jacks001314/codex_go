@@ -14,6 +14,23 @@ const (
 	AmazonBedrockModelProviderID       = "amazon-bedrock"
 )
 
+var openAIReservedMarketplaceNames = map[string]bool{
+	OpenAICuratedMarketplaceName:       true,
+	OpenAIAPICuratedMarketplaceName:    true,
+	OpenAIRemoteCuratedMarketplaceName: true,
+	"openai-bundled":                   true,
+	"openai-bundled-alpha":             true,
+	"openai-primary-runtime":           true,
+}
+
+// IsReservedMarketplaceName reports names reserved for managed or remote
+// marketplaces that unmanaged sources must not be able to claim (Rust
+// #39165). Repository manifests and user-configured sources are rejected for
+// these names even when source restrictions are disabled.
+func IsReservedMarketplaceName(name string) bool {
+	return openAIReservedMarketplaceNames[strings.TrimSpace(name)]
+}
+
 type TargetCuratedMarketplace string
 
 const (

@@ -72,9 +72,6 @@ func applySignedRequestBody(request *http.Request, body []byte) {
 }
 
 func ResolveProviderAuth(snapshot *auth.AuthDotJSON, provider ProviderInfo) (AuthHeaders, error) {
-	if snapshot != nil && snapshot.Mode() == "bedrock-api-key" {
-		return AuthHeaders{}, errors.New(BedrockAPIKeyUnsupportedMessage)
-	}
 	if provider.Auth != nil {
 		return ResolveProviderCommandAuth(context.Background(), provider.Auth)
 	}
@@ -82,6 +79,15 @@ func ResolveProviderAuth(snapshot *auth.AuthDotJSON, provider ProviderInfo) (Aut
 		return AuthHeaders{}, err
 	} else if bearer != "" {
 		return BearerAuthHeaders(bearer, "", false), nil
+	}
+	// Rust #39214: providers that do not require OpenAI auth and have no
+	// configured auth must not inherit ambient authentication headers
+	// (bearer token, ChatGPT-Account-ID, ...).
+	if !provider.RequiresOpenAIAuth && provider.Auth == nil {
+		return AuthHeaders{Headers: http.Header{}}, nil
+	}
+	if snapshot != nil && snapshot.Mode() == "bedrock-api-key" {
+		return AuthHeaders{}, errors.New(BedrockAPIKeyUnsupportedMessage)
 	}
 	if snapshot == nil {
 		return AuthHeaders{Headers: http.Header{}}, nil

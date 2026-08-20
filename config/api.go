@@ -2554,6 +2554,10 @@ func validateWritableKeyPath(keyPath string, value any) error {
 		}
 	case "profiles":
 		return configWriteErrorf(ConfigWriteValidation, "`profiles` contains legacy config profile tables and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead")
+	case "approval_policy":
+		if text, ok := value.(string); ok && strings.EqualFold(strings.TrimSpace(text), "untrusted") {
+			return configWriteErrorf(ConfigWriteValidation, `approval_policy = "untrusted" is no longer supported; remove this setting`)
+		}
 	}
 	return nil
 }

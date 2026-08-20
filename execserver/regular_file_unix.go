@@ -9,7 +9,9 @@ import (
 )
 
 func openRegularFileForRead(path string) (*os.File, error) {
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	// Rust #39200: O_NOFOLLOW prevents a symlink at the final path component
+	// from redirecting sensitive reads.
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
 	}

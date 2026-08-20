@@ -4,7 +4,9 @@ package execserver
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,5 +46,20 @@ func TestFileReadsRejectFIFONonBlockingLikeRust(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("openFile(FIFO) waited for a writer")
+	}
+}
+
+func TestFileReadsRejectSymlinkLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	link := filepath.Join(dir, "link.txt")
+	if err := os.WriteFile(target, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := readFile(&FSReadFileParams{Path: link}); err == nil || !strings.Contains(err.Error(), "not a") {
+		t.Fatalf("readFile(symlink) error = %v, want regular-file rejection", err)
 	}
 }

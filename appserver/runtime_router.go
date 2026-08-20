@@ -12364,6 +12364,18 @@ func (r *RuntimeRouter) externalAuthRefresh(ctx context.Context, request *model.
 	if strings.TrimSpace(response.AccessToken) == "" || strings.TrimSpace(response.ChatGPTAccountID) == "" {
 		return nil, fmt.Errorf("%w: external auth refresh response omitted accessToken or chatgptAccountId", ErrInvalidRequest)
 	}
+	// Rust #39322: header credentials must stay bound to a validated ChatGPT
+	// workspace. A refresh that returns a missing or disallowed account ID is
+	// rejected without replacing the previously cached authentication.
+	if r.services.Config != nil {
+		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
+			cfg := &config.Config{Values: read.Config}
+			workspaces := cfg.ForcedChatGPTWorkspaceIDs()
+			if err := auth.EnsureWorkspaceAccountAllowed(workspaces, response.ChatGPTAccountID); err != nil {
+				return nil, fmt.Errorf("external auth refresh was rejected: %w", err)
+			}
+		}
+	}
 	snapshot := auth.FromChatGPTAuthTokens(response.AccessToken, response.ChatGPTAccountID, response.ChatGPTPlanType)
 	if codexHome := r.codexHomeForRollout(); codexHome != "" {
 		if err := r.authStore(codexHome).Save(snapshot); err != nil {

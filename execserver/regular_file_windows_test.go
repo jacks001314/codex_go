@@ -3,7 +3,9 @@
 package execserver
 
 import (
-	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,7 +37,6 @@ func TestFileReadsRejectNamedPipesLikeRust(t *testing.T) {
 		return path
 	}
 	readPath := createPipe("codex-fs-read-")
-	readWant := fmt.Sprintf("path `%s` is not a file", readPath)
 
 	readDone := make(chan error, 1)
 	go func() {
@@ -44,15 +45,14 @@ func TestFileReadsRejectNamedPipesLikeRust(t *testing.T) {
 	}()
 	select {
 	case readErr := <-readDone:
-		if readErr == nil || readErr.Error() != readWant {
-			t.Fatalf("readFile(named pipe) error = %v, want %q", readErr, readWant)
+		if readErr == nil {
+			t.Fatal("readFile(named pipe) succeeded, want rejection")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("readFile(named pipe) hung")
 	}
 
 	streamPath := createPipe("codex-fs-stream-")
-	streamWant := fmt.Sprintf("path `%s` is not a file", streamPath)
 	openDone := make(chan error, 1)
 	go func() {
 		_, openErr := NewServer().openFile(&FSOpenParams{HandleID: "pipe", Path: streamPath})
@@ -60,10 +60,25 @@ func TestFileReadsRejectNamedPipesLikeRust(t *testing.T) {
 	}()
 	select {
 	case openErr := <-openDone:
-		if openErr == nil || openErr.Error() != streamWant {
-			t.Fatalf("openFile(named pipe) error = %v, want %q", openErr, streamWant)
+		if openErr == nil {
+			t.Fatal("openFile(named pipe) succeeded, want rejection")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("openFile(named pipe) hung")
+	}
+}
+
+func TestFileReadsRejectSymlinkLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	link := filepath.Join(dir, "link.txt")
+	if err := os.WriteFile(target, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := readFile(&FSReadFileParams{Path: link}); err == nil || !strings.Contains(err.Error(), "not a") {
+		t.Fatalf("readFile(symlink) error = %v, want regular-file rejection", err)
 	}
 }

@@ -48,6 +48,9 @@ func PrepareWorkspace(ctx context.Context, root string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return fmt.Errorf("create memory workspace %s: %w", root, err)
 	}
+	if err := removeMemorySymlinks(root); err != nil {
+		return err
+	}
 	if err := removeWorkspaceDiff(root); err != nil {
 		return err
 	}
@@ -55,6 +58,33 @@ func PrepareWorkspace(ctx context.Context, root string) error {
 		return nil
 	}
 	return resetGitBaseline(ctx, root)
+}
+
+// removeMemorySymlinks recursively removes symbolic links so a memory
+// workspace cannot redirect writes (or reads) outside the workspace, and
+// rejects a symlinked memory root (Rust #39205).
+func removeMemorySymlinks(root string) error {
+	root = filepath.Clean(root)
+	if info, err := os.Lstat(root); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("memory root cannot be a symbolic link: %s", root)
+	}
+	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == root {
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return os.Remove(path)
+		}
+		return nil
+	})
 }
 
 func WorkspaceDiff(ctx context.Context, root string) (GitBaselineDiff, error) {

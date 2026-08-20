@@ -1385,6 +1385,9 @@ func (s *PluginService) AddMarketplace(params *MarketplaceAddParams) (*Marketpla
 	if name == "" {
 		return nil, fmt.Errorf("%w: marketplace name and source are required", ErrInvalidPluginRequest)
 	}
+	if IsReservedMarketplaceName(name) {
+		return nil, fmt.Errorf("marketplace `%s` is reserved and cannot be added from this source", name)
+	}
 	safeName, err := safeMarketplaceDirName(name)
 	if err != nil {
 		return nil, err
@@ -2852,12 +2855,39 @@ func (s *PluginService) marketplaceListLocked() []Marketplace {
 	for _, marketplace := range s.marketplaces {
 		marketplaces = append(marketplaces, marketplace)
 	}
-	marketplaces = appendImplicitCuratedMarketplace(marketplaces, s.implicitCuratedMarketplaceLocked())
+	curated := s.implicitCuratedMarketplaceLocked()
+	marketplaces = appendImplicitCuratedMarketplace(marketplaces, curated)
+	marketplaces = filterReservedMarketplaceSpoofs(marketplaces, curated)
 	marketplaces = routeMarketplaces(marketplaces, s.targetCuratedMarketplace)
 	sort.SliceStable(marketplaces, func(i int, j int) bool {
 		return marketplaces[i].Name < marketplaces[j].Name
 	})
 	return marketplaces
+}
+
+// filterReservedMarketplaceSpoofs drops marketplaces that claim names reserved
+// for managed/remote marketplaces unless they live at the expected managed
+// path (Rust #39165). The implicit curated marketplace is appended at the
+// managed path before this filter runs, so it survives; user-configured or
+// repository spoofs at other paths are rejected.
+func filterReservedMarketplaceSpoofs(marketplaces []Marketplace, curated *Marketplace) []Marketplace {
+	if len(marketplaces) == 0 {
+		return marketplaces
+	}
+	var managedPath string
+	if curated != nil {
+		managedPath = filepath.Clean(curated.RootPath)
+	}
+	out := make([]Marketplace, 0, len(marketplaces))
+	for _, marketplace := range marketplaces {
+		if IsReservedMarketplaceName(marketplace.Name) &&
+			marketplace.Name != OpenAIRemoteCuratedMarketplaceName &&
+			(managedPath == "" || filepath.Clean(marketplace.RootPath) != managedPath) {
+			continue
+		}
+		out = append(out, marketplace)
+	}
+	return out
 }
 
 func marketplaceEntries(marketplaces []Marketplace, plugins []PluginSummary) []PluginMarketplaceEntry {

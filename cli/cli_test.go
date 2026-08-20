@@ -334,12 +334,19 @@ func TestParseTUIOnlyFlagsForRootResumeAndFork(t *testing.T) {
 		t.Fatalf("resume session = %#v", resume.Session)
 	}
 
-	fork, err := Parse([]string{"fork", "--last", "-auntrusted", "continue"})
+	fork, err := Parse([]string{"fork", "--last", "-aon-request", "continue"})
 	if err != nil {
 		t.Fatalf("Parse fork returned error: %v", err)
 	}
-	if !fork.Session.Last || fork.Session.Prompt != "continue" || fork.Session.Shared.ApprovalPolicy != "untrusted" {
+	if !fork.Session.Last || fork.Session.Prompt != "continue" || fork.Session.Shared.ApprovalPolicy != "on-request" {
 		t.Fatalf("fork session = %#v", fork.Session)
+	}
+}
+
+func TestParseRejectsRetiredUntrustedApprovalPolicyLikeRust(t *testing.T) {
+	_, err := Parse([]string{"--ask-for-approval", "untrusted"})
+	if err == nil || !strings.Contains(err.Error(), "must be one of on-request, never") {
+		t.Fatalf("Parse(--ask-for-approval untrusted) error = %v", err)
 	}
 }
 

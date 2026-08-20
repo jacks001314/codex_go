@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	coresandbox "codex_go/sandbox"
@@ -67,4 +68,27 @@ func TestApplyCapabilityDeniesForWorldWritableAddsReadonlyCapDeny(t *testing.T) 
 	}
 	runtime.KeepAlive(sidBytes)
 	runtime.KeepAlive(sd)
+}
+
+func TestApplyCapabilityDeniesForWorldWritablePropagatesFailuresLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	cwd := t.TempDir()
+	profile := coresandbox.ReadOnlyPermissionProfile()
+	permissions, err := ResolvePermissions(&profile, []string{cwd})
+	if err != nil {
+		t.Fatalf("ResolvePermissions() error = %v", err)
+	}
+	req := &WorldWritableAuditRequest{
+		CodexHome:   codexHome,
+		CWD:         cwd,
+		Env:         map[string]string{},
+		Permissions: permissions,
+	}
+	// A flagged path that cannot be ACL-ed (does not exist) must surface as an
+	// aggregated error instead of being silently logged away.
+	missing := filepath.Join(cwd, "does-not-exist")
+	err = applyCapabilityDeniesForWorldWritable(req, []string{missing})
+	if err == nil || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("applyCapabilityDeniesForWorldWritable(missing) error = %v, want path-context error", err)
+	}
 }

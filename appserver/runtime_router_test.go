@@ -5091,6 +5091,41 @@ func TestRuntimeRouterExternalAuthRefreshBridgeUpdatesAccount(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterExternalAuthRefreshRejectsDisallowedWorkspaceLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("forced_chatgpt_workspace_id = \"workspace-allowed\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		Account: auth.NewAccountManager(),
+		Config:  config.NewConfigService(home),
+	})
+	plan := "pro"
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		go func() {
+			_, _ = router.requireServerRequests().Resolve(OK(request.ID, auth.ChatGPTAuthTokensRefreshResponse{
+				AccessToken:      fakeJWTAppserver(map[string]any{"email": "refresh@example.com", "plan_type": "pro"}),
+				ChatGPTAccountID: "account-disallowed",
+				ChatGPTPlanType:  &plan,
+			}))
+		}()
+	}))
+	_, err := router.externalAuthRefresh(context.Background(), &model.ExternalAuthRefreshRequest{
+		Reason:            model.ExternalAuthRefreshUnauthorized,
+		PreviousAccountID: "account-old",
+	})
+	if err == nil || !strings.Contains(err.Error(), "restricted to workspace") {
+		t.Fatalf("externalAuthRefresh(disallowed workspace) error = %v", err)
+	}
+	loaded, loadErr := auth.NewStore(home).Load()
+	if loadErr != nil {
+		t.Fatalf("auth load error: %v", loadErr)
+	}
+	if loaded != nil {
+		t.Fatalf("auth cache was replaced by a disallowed refresh: %+v", loaded)
+	}
+}
+
 func TestRemoteControlAuthRecoveryLogObserverEmitsRustMetadata(t *testing.T) {
 	var buf bytes.Buffer
 	previous := slog.Default()

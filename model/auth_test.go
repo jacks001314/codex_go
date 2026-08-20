@@ -93,7 +93,7 @@ func TestResolveProviderAuthFallsBackToCodexAuth(t *testing.T) {
 	headers, err := ResolveProviderAuth(&auth.AuthDotJSON{
 		AuthMode:     "api-key",
 		OpenAIAPIKey: "openai-token",
-	}, ProviderInfo{})
+	}, ProviderInfo{RequiresOpenAIAuth: true})
 	if err != nil {
 		t.Fatalf("ResolveProviderAuth returned error: %v", err)
 	}
@@ -102,11 +102,59 @@ func TestResolveProviderAuthFallsBackToCodexAuth(t *testing.T) {
 	}
 }
 
+func TestResolveProviderAuthCustomProviderDoesNotInheritAmbientAuthLikeRust(t *testing.T) {
+	headers, err := ResolveProviderAuth(&auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens:   map[string]any{"access_token": "ambient-token", "chatgpt_account_id": "account-123"},
+	}, ProviderInfo{RequiresOpenAIAuth: false})
+	if err != nil {
+		t.Fatalf("ResolveProviderAuth returned error: %v", err)
+	}
+	if got := headers.Headers.Get("Authorization"); got != "" {
+		t.Fatalf("custom provider inherited Authorization %q", got)
+	}
+	if got := headers.Headers.Get("ChatGPT-Account-ID"); got != "" {
+		t.Fatalf("custom provider inherited ChatGPT-Account-ID %q", got)
+	}
+}
+
+func TestResolveProviderAuthCustomProviderKeepsExplicitBearerLikeRust(t *testing.T) {
+	headers, err := ResolveProviderAuth(&auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens:   map[string]any{"access_token": "ambient-token", "chatgpt_account_id": "account-123"},
+	}, ProviderInfo{ExperimentalBearerToken: "provider-token"})
+	if err != nil {
+		t.Fatalf("ResolveProviderAuth returned error: %v", err)
+	}
+	if got := headers.Headers.Get("Authorization"); got != "Bearer provider-token" {
+		t.Fatalf("Authorization = %q, want provider bearer", got)
+	}
+	if got := headers.Headers.Get("ChatGPT-Account-ID"); got != "" {
+		t.Fatalf("explicit bearer inherited ChatGPT-Account-ID %q", got)
+	}
+}
+
+func TestResolveProviderAuthOpenAIProviderKeepsAmbientAuthLikeRust(t *testing.T) {
+	headers, err := ResolveProviderAuth(&auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens:   map[string]any{"access_token": "ambient-token", "chatgpt_account_id": "account-123"},
+	}, ProviderInfo{RequiresOpenAIAuth: true})
+	if err != nil {
+		t.Fatalf("ResolveProviderAuth returned error: %v", err)
+	}
+	if got := headers.Headers.Get("Authorization"); got != "Bearer ambient-token" {
+		t.Fatalf("Authorization = %q, want ambient token", got)
+	}
+	if got := headers.Headers.Get("ChatGPT-Account-ID"); got != "account-123" {
+		t.Fatalf("ChatGPT-Account-ID = %q, want account-123", got)
+	}
+}
+
 func TestResolveProviderAuthRejectsBedrockAPIKeyForConfiguredProvider(t *testing.T) {
 	_, err := ResolveProviderAuth(&auth.AuthDotJSON{
 		AuthMode:      "bedrock-api-key",
 		BedrockAPIKey: map[string]string{"api_key": "bedrock"},
-	}, ProviderInfo{})
+	}, ProviderInfo{RequiresOpenAIAuth: true})
 	if err == nil {
 		t.Fatal("ResolveProviderAuth returned nil error, want failure")
 	}

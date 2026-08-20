@@ -3334,11 +3334,11 @@ func parseTUIOnlyOption(args []string, i *int, shared *SharedOptions) (bool, err
 func setApprovalPolicy(shared *SharedOptions, value string) error {
 	value = strings.TrimSpace(value)
 	switch value {
-	case "untrusted", "on-request", "never":
+	case "on-request", "never":
 		shared.ApprovalPolicy = value
 		return nil
 	default:
-		return errors.New("--ask-for-approval must be one of untrusted, on-request, never")
+		return errors.New("--ask-for-approval must be one of on-request, never")
 	}
 }
 

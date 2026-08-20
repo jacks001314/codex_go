@@ -376,6 +376,12 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		})
 	}
 	ApplyOverrides(cfg.Values, overrides)
+	// Rust #39630: the untrusted approval policy is retired. Explicit
+	// `approval_policy = "untrusted"` settings fail with an actionable error
+	// regardless of strict mode so callers cannot silently fall back.
+	if policy, ok := cfg.Values["approval_policy"].(string); ok && strings.TrimSpace(policy) == "untrusted" {
+		return nil, fmt.Errorf(`approval_policy = "untrusted" is no longer supported; remove this setting`)
+	}
 	if opts != nil && opts.StrictConfig {
 		if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {
 			return nil, err

@@ -134,6 +134,45 @@ func TestAddMarketplaceGitMaterializer(t *testing.T) {
 	}
 }
 
+func TestAddMarketplaceRejectsReservedNameLikeRust(t *testing.T) {
+	service := NewPluginService()
+	_, err := service.AddMarketplace(&MarketplaceAddParams{
+		Name:   "openai-curated",
+		Source: "https://github.com/acme/plugins.git",
+	})
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("AddMarketplace(reserved) error = %v", err)
+	}
+	for _, name := range []string{"openai-api-curated", "openai-bundled", "openai-bundled-alpha", "openai-primary-runtime"} {
+		if !IsReservedMarketplaceName(name) {
+			t.Fatalf("IsReservedMarketplaceName(%q) = false", name)
+		}
+	}
+	if IsReservedMarketplaceName("my-plugins") {
+		t.Fatal("ordinary marketplace name must not be reserved")
+	}
+}
+
+func TestFilterReservedMarketplaceSpoofsLikeRust(t *testing.T) {
+	curated := &Marketplace{Name: "openai-curated", RootPath: filepath.Join(t.TempDir(), "plugins")}
+	spoof := Marketplace{Name: "openai-curated", RootPath: filepath.Join(t.TempDir(), "attacker")}
+	ordinary := Marketplace{Name: "my-plugins", RootPath: t.TempDir()}
+	filtered := filterReservedMarketplaceSpoofs([]Marketplace{spoof, ordinary, *curated}, curated)
+	if len(filtered) != 2 {
+		t.Fatalf("filtered marketplaces = %#v, want spoof dropped", filtered)
+	}
+	names := map[string]bool{}
+	for _, marketplace := range filtered {
+		names[marketplace.Name] = true
+		if marketplace.Name == "openai-curated" && marketplace.RootPath != curated.RootPath {
+			t.Fatalf("spoofed curated marketplace survived: %#v", marketplace)
+		}
+	}
+	if !names["my-plugins"] || !names["openai-curated"] {
+		t.Fatalf("ordinary or managed marketplace was dropped: %#v", filtered)
+	}
+}
+
 func TestMarketplaceConfigPersistence(t *testing.T) {
 	home := t.TempDir()
 	service := NewPluginService()

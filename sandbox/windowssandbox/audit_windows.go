@@ -29,6 +29,10 @@ func ApplyWorldWritableScanAndDenies(req *WorldWritableAuditRequest) (*WorldWrit
 	}
 	if err := applyCapabilityDeniesForWorldWritable(req, flagged); err != nil {
 		_ = logAuditNote(req.LogsBaseDir, fmt.Sprintf("AUDIT: failed to apply capability deny ACEs: %v", err))
+		// Rust #39279: preflight must fail when applying a deny ACE failed so
+		// a detected world-writable path is never left without its capability
+		// restriction while reporting success.
+		return worldWritableAuditResult(flagged, false), err
 	}
 	return worldWritableAuditResult(flagged, false), nil
 }
@@ -163,6 +167,7 @@ func applyCapabilityDeniesForWorldWritable(req *WorldWritableAuditRequest, flagg
 		activeSIDs = []string{caps.Readonly}
 	}
 
+	var firstErr error
 	for _, path := range flagged {
 		if anyWorkspaceRootContains(workspaceRoots, path) {
 			continue
@@ -170,12 +175,15 @@ func applyCapabilityDeniesForWorldWritable(req *WorldWritableAuditRequest, flagg
 		for _, sid := range activeSIDs {
 			if err := AddDenyWriteACE(ACLRequest{Path: path, SID: sid}); err != nil {
 				_ = logAuditNote(req.LogsBaseDir, fmt.Sprintf("AUDIT: failed to apply capability deny ACE to %s: %v", path, err))
+				if firstErr == nil {
+					firstErr = fmt.Errorf("failed to apply deny ACE to %s: %w", path, err)
+				}
 				continue
 			}
 			_ = logAuditNote(req.LogsBaseDir, fmt.Sprintf("AUDIT: applied capability deny ACE to %s", path))
 		}
 	}
-	return nil
+	return firstErr
 }
 
 func anyWorkspaceRootContains(roots []string, path string) bool {
