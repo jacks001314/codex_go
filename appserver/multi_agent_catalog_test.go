@@ -54,3 +54,22 @@ func TestFilterInheritedDeveloperFragmentsDropsParentRoleGuidanceLikeRust(t *tes
 		t.Fatalf("filtered = %#v, want only the ordinary developer message", filtered)
 	}
 }
+
+func TestFilterInheritedDeveloperFragmentsPreservesUnrelatedContentLikeRust(t *testing.T) {
+	items := []session.Item{
+		{
+			ID:   "compound",
+			Type: "message",
+			Content: []session.ContentPart{
+				{Type: "input_text", Text: "<multi_agent_role>\nparent root role\n</multi_agent_role>"},
+				{Type: "input_text", Text: "<multi_agent_mode>\nproactive\n</multi_agent_mode>"},
+				{Type: "input_text", Text: "unrelated context that must survive"},
+			},
+		},
+	}
+	filtered := filterInheritedCurrentTimeReminders(items)
+	if len(filtered) != 1 || filtered[0].ID != "compound" || len(filtered[0].Content) != 1 ||
+		filtered[0].Content[0].Text != "unrelated context that must survive" {
+		t.Fatalf("filtered = %#v, want only the unrelated content item", filtered)
+	}
+}

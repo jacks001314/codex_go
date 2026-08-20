@@ -1623,9 +1623,9 @@
             "domains":  [
                 "core"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: filterInheritedCurrentTimeReminders now filters fork-specific developer instructions per content item (multi-agent role/mode/usage-hint and current-time reminders), preserving unrelated content in compound developer messages and dropping the message only when it is left empty; tests cover compound preservation."
                 ]
             },
         {
@@ -1771,9 +1771,9 @@
                 "plugin",
                 "rollout"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to plugin, rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: plugin migrations are detected only for home scope and repository-scoped plugin imports are rejected without writing config (detectExternalPluginsMigration + importExternalPluginsMigration)."
                 ]
             },
         {

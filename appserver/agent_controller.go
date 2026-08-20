@@ -752,34 +752,60 @@ func runtimeForkTurns(value *string) string {
 }
 
 // filterInheritedCurrentTimeReminders removes current-time reminder and
-// multi-agent role developer items copied from a parent thread into a
-// full-history fork. The child turn injects its own fresh fragments, so
-// inheriting the parent's stale role guidance or reminders would accumulate
-// outdated markers in the forked context (Rust #38446/#38619).
+// multi-agent role/mode developer content copied from a parent thread into a
+// full-history fork. Filtering happens per content item so unrelated content
+// sharing a developer message survives; the message is dropped only when
+// filtering leaves it empty (Rust #38446/#38619/#39641).
 func filterInheritedCurrentTimeReminders(items []session.Item) []session.Item {
 	filtered := items[:0]
 	for i := range items {
-		if sessionItemIsCurrentTimeReminder(&items[i]) || sessionItemIsMultiAgentRoleInstruction(&items[i]) {
-			continue
+		item := &items[i]
+		if retainForkedDeveloperMessage(item) {
+			filtered = append(filtered, *item)
 		}
-		filtered = append(filtered, items[i])
 	}
 	return filtered
 }
 
-func sessionItemIsMultiAgentRoleInstruction(item *session.Item) bool {
+// retainForkedDeveloperMessage filters fork-specific developer instruction
+// content items out of a developer message while preserving unrelated content
+// (Rust #39641). It returns false only when the message would be left empty.
+func retainForkedDeveloperMessage(item *session.Item) bool {
 	if item == nil {
 		return false
 	}
-	if strings.Contains(strings.TrimSpace(item.Text), "<multi_agent_role>") {
+	if len(item.Content) == 0 {
+		if isForkExcludedDeveloperText(item.Text) {
+			return false
+		}
+		if sessionItemIsCurrentTimeReminder(item) {
+			return false
+		}
 		return true
 	}
+	retained := item.Content[:0]
 	for _, part := range item.Content {
-		if strings.TrimSpace(part.Text) != "" && strings.Contains(part.Text, "<multi_agent_role>") {
-			return true
+		if part.Type == "input_text" && isForkExcludedDeveloperText(part.Text) {
+			continue
 		}
+		retained = append(retained, part)
 	}
-	return false
+	item.Content = retained
+	if len(retained) > 0 {
+		return true
+	}
+	if sessionItemIsCurrentTimeReminder(item) {
+		return false
+	}
+	return strings.TrimSpace(item.Text) != ""
+}
+
+func isForkExcludedDeveloperText(text string) bool {
+	text = strings.TrimSpace(text)
+	return strings.Contains(text, "<multi_agent_role>") ||
+		strings.Contains(text, "<multi_agent_mode>") ||
+		strings.Contains(text, "<multi_agent_usage_hint>") ||
+		strings.Contains(text, "<current_time_reminder>")
 }
 
 func firstNonNilError(err error, fallback error) error {

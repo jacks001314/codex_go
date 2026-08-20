@@ -32,6 +32,12 @@ type externalPluginID struct {
 }
 
 func (s *ConfigService) detectExternalPluginsMigration(scope externalMigrationScope) (ExternalAgentConfigMigrationItem, bool) {
+	// Rust #39663: plugin imports persist user-global enabled state, so
+	// repository-controlled settings must never be plugin installation
+	// authority.
+	if !scope.home() {
+		return ExternalAgentConfigMigrationItem{}, false
+	}
 	settingsPath := s.externalSettingsPath(scope)
 	settings, ok := readEffectiveClaudeSettings(settingsPath)
 	if !ok {
@@ -93,6 +99,9 @@ func (s *ConfigService) importExternalPluginsMigration(item ExternalAgentConfigM
 	scope, ok := externalScopeFromCWD(item.CWD)
 	if !ok {
 		return externalCoreImportFailure(result, item, "scope_resolution", fmt.Errorf("migration working directory does not exist"))
+	}
+	if !scope.home() {
+		return externalCoreImportFailure(result, item, "plugin_import", fmt.Errorf("repository-scoped plugin migration is not allowed"))
 	}
 	settings, _ := readEffectiveClaudeSettings(s.externalSettingsPath(scope))
 	sources := s.externalMarketplaceImportSources(scope, settings)
