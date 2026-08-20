@@ -428,9 +428,9 @@
       "domains": [
         "exec"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: frameless WebRTC realtime sideband sockets reconnect after unexpected transport loss with capped exponential backoff (max 5 attempts, 250ms-5s); 404/410 handshake statuses are terminal; session closed state resets before reconnect (realtime/transport.go). Tests added."
       ]
     },
     {
@@ -600,9 +600,9 @@
       "domains": [
         "tui"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: network approval service records disconnect timing and writes a model-visible outcome (\"Network request disconnected after N ms, before approval could complete\") to the owning tool call when a proxy request disconnects while awaiting approval; explicit approval outcomes are preserved (appserver/network_approval.go cancelPendingForConnection + recordDisconnectOutcomeForConnection). Test added."
       ]
     },
     {
@@ -936,9 +936,9 @@
       "domains": [
         "tui"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: pending app-server approvals are keyed by both thread id and approval id (pendingApprovalKey) so colliding ids across concurrent threads resolve, submit, or dismiss only the originating thread request; parseable thread ids are canonicalized (tui/app/app_server_requests.go). Test added."
       ]
     },
     {
