@@ -34,6 +34,7 @@ import (
 	"codex_go/network"
 	"codex_go/rollout"
 	"codex_go/sandbox"
+	"codex_go/sandbox/windowssandbox"
 	"codex_go/session"
 	"codex_go/shell"
 
@@ -2725,7 +2726,41 @@ func sandboxCheck(codexHome string, opts *Options) *DoctorCheck {
 		return NewCheck("sandbox.helpers", "sandbox", CheckStatusWarning, "sandbox config could not be loaded").
 			Detail("sandbox config error: " + err.Error())
 	}
-	return sandboxCheckFromConfig(cfg, doctorDispatchPaths(opts))
+	check := sandboxCheckFromConfig(cfg, doctorDispatchPaths(opts))
+	check = applyWindowsSandboxDoctorDiagnostics(check, cfg, codexHome, doctorCWD(opts))
+	return check
+}
+
+// applyWindowsSandboxDoctorDiagnostics reports the configured Windows sandbox
+// backend, whether denied-read restrictions are active, and any recorded
+// elevated-sandbox setup failure (Rust #39290).
+func applyWindowsSandboxDoctorDiagnostics(check *DoctorCheck, cfg *config.Config, codexHome string, cwd string) *DoctorCheck {
+	if check == nil {
+		check = NewCheck("sandbox.helpers", "sandbox", CheckStatusOK, "sandbox configuration is readable")
+	}
+	values := configValuesForDoctor(cfg)
+	level := strings.TrimSpace(stringConfigValueFromAny(values["windows_sandbox"]))
+	if level == "" {
+		level = "default"
+	}
+	check = check.Detail("windows sandbox level: " + level)
+	restrictions := "inactive"
+	if resolution, resolveErr := cfg.ResolveSandboxPermissionProfile("", cwd); resolveErr == nil && resolution != nil && resolution.Profile != nil && resolution.Profile.HasDenyReadEntries() {
+		restrictions = "active"
+	}
+	check = check.Detail("denied-read restrictions: " + restrictions)
+	if report, readErr := windowssandbox.ReadSetupErrorReport(codexHome); readErr == nil && report != nil {
+		message := strings.TrimSpace(report.Message)
+		if message == "" {
+			message = string(report.Code)
+		}
+		check.Status = CheckStatusWarning
+		check.Summary = "Windows sandbox setup failed"
+		check = check.
+			Detail("windows sandbox setup error: " + message).
+			Remediate("Re-run the Windows sandbox setup or restart the elevated sandbox service; contact your administrator if the failure persists.")
+	}
+	return check
 }
 
 func sandboxCheckFromConfig(cfg *config.Config, dispatchPaths *cli.DispatchPaths) *DoctorCheck {

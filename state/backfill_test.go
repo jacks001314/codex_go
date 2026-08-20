@@ -224,3 +224,44 @@ FROM threads WHERE id = ?`, id).Scan(
 		t.Fatalf("thread derived metadata = title:%q preview:%q sandbox:%q approval:%q memory:%q archived:%v tokens:%d", title, gotPreview, sandboxPolicy, approvalMode, memoryMode, archivedValue, tokens)
 	}
 }
+
+func TestUpsertRolloutThreadPreservesNameOnPaginatedPromotionLikeRust(t *testing.T) {
+	home := t.TempDir()
+	runtime := newBackfillTestRuntimeAt(t, home)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	metadata := rolloutThreadMetadata{
+		id: "promote-thread", path: filepath.Join(home, "sessions", "promote.jsonl"),
+		source: "cli", historyMode: "paginated", modelProvider: "openai",
+		cwd: "/workspace", cliVersion: "1.2.3", title: "Renamed Thread",
+		preview: "preview text", sandboxPolicy: "read-only", approvalMode: "on-request",
+		memoryMode: "disabled", createdAt: now, updatedAt: now, recencyAt: now,
+		tokensUsed: 1,
+	}
+	if err := runtime.upsertRolloutThread(ctx, metadata); err != nil {
+		t.Fatalf("upsertRolloutThread() error = %v", err)
+	}
+	var name string
+	if err := runtime.StateDB().QueryRow(`SELECT name FROM threads WHERE id = ?`, metadata.id).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Renamed Thread" {
+		t.Fatalf("promoted thread name = %q, want legacy title", name)
+	}
+
+	// An existing name must be preserved across a rerun (repair path).
+	if _, err := runtime.StateDB().Exec(`UPDATE threads SET name = 'Explicit' WHERE id = ?`, metadata.id); err != nil {
+		t.Fatal(err)
+	}
+	metadata.title = "Changed Title"
+	if err := runtime.upsertRolloutThread(ctx, metadata); err != nil {
+		t.Fatalf("upsertRolloutThread(rerun) error = %v", err)
+	}
+	if err := runtime.StateDB().QueryRow(`SELECT name FROM threads WHERE id = ?`, metadata.id).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Explicit" {
+		t.Fatalf("existing thread name overwritten = %q, want Explicit", name)
+	}
+}

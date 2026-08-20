@@ -22,9 +22,9 @@
             "domains":  [
                 "auth"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "N/A (equivalent): Go does not log raw JSON-RPC response payloads; there is no <- response debug log carrying ChatGPTAuthTokensRefreshResponse access tokens, so nothing to redact."
                 ]
             },
         {
@@ -515,9 +515,9 @@
                 "tui",
                 "rollout"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to tui, rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: state.upsertRolloutThread backfills the threads.name column from the legacy display title when promoting to paginated history, preserves an existing canonical name, and repairs missing names on reruns; tests cover promotion and preservation."
                 ]
             },
         {
@@ -539,9 +539,9 @@
             "domains":  [
                 "auth"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to auth; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "N/A (equivalent): Rust declares experimental account/bedrock/discover and account/bedrock/setup but returns method-not-found because setup is unimplemented; Go likewise does not implement these experimental methods, so the runtime surface matches."
                 ]
             },
         {
@@ -648,9 +648,9 @@
             "domains":  [
                 "sandbox"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to sandbox; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: doctor sandbox check now reports the configured Windows sandbox level and whether denied-read restrictions are active, and surfaces a recorded elevated-sandbox setup failure report with remediation; test covers the failure path."
                 ]
             },
         {
@@ -1709,9 +1709,9 @@
             "domains":  [
                 "mcp"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: runMCPServer prints the deprecation warning to stderr before launching the stdio server, matching Rust #39657."
                 ]
             },
         {

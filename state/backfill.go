@@ -591,6 +591,21 @@ ON CONFLICT(id) DO UPDATE SET
 			return fmt.Errorf("restore rollout thread memory mode %s: %w", metadata.id, err)
 		}
 	}
+	// Rust #39273: paginated threads display `name`; preserve an existing name
+	// or carry over the legacy display title when promoting, and repair missing
+	// names when migration encounters an already-paginated rollout.
+	if metadata.historyMode == "paginated" {
+		name := strings.TrimSpace(metadata.title)
+		if name == "" {
+			name = strings.TrimSpace(existingTitle)
+		}
+		if name != "" {
+			if _, err := r.stateDB.ExecContext(ctx, `
+UPDATE threads SET name = ? WHERE id = ? AND (name IS NULL OR trim(name) = '')`, name, metadata.id); err != nil {
+				return fmt.Errorf("promote rollout thread name %s: %w", metadata.id, err)
+			}
+		}
+	}
 	return nil
 }
 

@@ -714,6 +714,9 @@ func runMCPServer(ctx context.Context, opts *cli.MCPServerOptions, root *cli.Roo
 	if opts == nil {
 		opts = &cli.MCPServerOptions{}
 	}
+	// Rust #39657: the standalone MCP server is deprecated; keep serving after
+	// the warning.
+	fmt.Fprintln(os.Stderr, "warning: `codex mcp-server` is deprecated and will be removed in a future release.")
 	codexHome := auth.DefaultCodexHome()
 	if auth.IsWorkloadIdentitySelected() {
 		return errors.New("workload identity is not supported by `codex mcp-server`")
