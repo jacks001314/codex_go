@@ -9985,6 +9985,11 @@ func (r *RuntimeRouter) requireHookRunner() *HookRunner {
 		r.services.HookRunner = NewHookRunner()
 	}
 	r.services.HookRunner.Notify = r.notify
+	// Rust #39296/#39331: mcp_tool hooks execute through the session's shared
+	// MCP runtime against the current connection set, without model-tool
+	// approval or recursive hook dispatch. Unavailable servers fail
+	// immediately instead of starting or reconnecting them.
+	r.services.HookRunner.McpToolHookExecutor = r
 	return r.services.HookRunner
 }
 
