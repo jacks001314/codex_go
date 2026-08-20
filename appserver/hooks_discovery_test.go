@@ -476,6 +476,13 @@ func TestHookDiscoveryLinkedWorktreeUsesRootCheckoutHooks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+filepath.Join(root, ".git", "worktrees", "feature")+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile worktree .git error = %v", err)
 	}
+	worktreeGitDir := filepath.Join(root, ".git", "worktrees", "feature")
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "gitdir"), []byte(filepath.Join(worktree, ".git")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile worktree gitdir backlink error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile worktree commondir error = %v", err)
+	}
 	projectTrust := strings.ReplaceAll(filepath.Clean(root), `\`, `\\`)
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile config error = %v", err)

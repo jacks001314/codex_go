@@ -6355,7 +6355,9 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
 	record, err := r.threadRecord(threadID, true, true)
 	if err != nil || record == nil {
-		return err
+		// The thread may only exist in-memory (e.g. before its first turn);
+		// durable persistence is best-effort.
+		return nil
 	}
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	configOverrides := threadRecordConfigOverrides(record)
@@ -6370,7 +6372,6 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 	if params.Permissions != nil && strings.TrimSpace(*params.Permissions) != "" {
 		profile := strings.TrimSpace(*params.Permissions)
 		record.Metadata.ActivePermissionProfile = profile
-		configOverrides["permissions"] = profile
 	}
 	record.Metadata.Extra["config"] = configOverrides
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
