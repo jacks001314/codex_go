@@ -53,6 +53,7 @@ const (
 	ProtocolNotificationRouteShutdownComplete  ProtocolNotificationRoute = "shutdown_complete"
 	ProtocolNotificationRouteTurnDiff          ProtocolNotificationRoute = "turn_diff"
 	ProtocolNotificationRouteDeprecationNotice ProtocolNotificationRoute = "deprecation_notice"
+	ProtocolNotificationRouteWarning           ProtocolNotificationRoute = "warning"
 	ProtocolNotificationRouteIgnored           ProtocolNotificationRoute = "ignored"
 )
 
@@ -122,6 +123,14 @@ func ClassifyProtocolNotification(notification ProtocolNotification, replay Repl
 			Route:          ProtocolNotificationRouteDeprecationNotice,
 			HistorySummary: notification.Summary,
 			HistoryDetails: notification.Details,
+		}
+	case NotificationStrictReviewRequired:
+		// Rust #39635: StrictReviewRequired arrives while the active command
+		// is still running; render a warning history cell explaining tool
+		// calls may take extra time without touching the running state.
+		return ProtocolNotificationRouteDecision{
+			Route:          ProtocolNotificationRouteWarning,
+			HistorySummary: "This request requires additional safety checks, some tool calls might take extra time",
 		}
 	default:
 		return ProtocolNotificationRouteDecision{Route: ProtocolNotificationRouteDefault}

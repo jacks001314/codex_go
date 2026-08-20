@@ -817,6 +817,7 @@ type Model struct {
 	bottom                          []string
 	attachments                     []bottompane.ComposerAttachment
 	composerMentionBindings         []string
+	misalignmentPolicyStopped       bool
 	modal                           *modalState
 	skillPopup                      skillPopupState
 	mentionPopup                    *mentionsv2.Popup
@@ -2205,6 +2206,10 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	if m == nil {
 		return nil
 	}
+	if m.misalignmentPolicyStopped {
+		m.notice = "Chat stopped as a precaution. Start or resume another chat to continue."
+		return nil
+	}
 	request = cloneSubmitRequest(request)
 	if request.CollaborationMode == nil {
 		request.CollaborationMode = m.effectiveSubmissionCollaborationMode()
@@ -2654,6 +2659,9 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	if message.Err != nil {
 		m.setStatus("error")
 		errorMessage := message.Err.Error()
+		if chatwidget.IsMisalignmentPolicyViolationMessage(errorMessage) {
+			return m.applyMisalignmentPolicyViolation(errorMessage)
+		}
 		m.markActiveToolCallsFailed(errorMessage)
 		m.clearCurrentThreadAfterFailure(errorMessage)
 		m.addTurnErrorHistoryMessage(errorMessage)
@@ -2917,6 +2925,28 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	case "sub_agent_activity", "subAgentActivity":
 		m.renderSubAgentActivity(item)
 	}
+	return nil
+}
+
+// applyMisalignmentPolicyViolation stops the affected chat: the active turn
+// is finalized, queued and draft input are cleared, the composer is disabled,
+// and a non-dismissible precaution view directs the user to start or resume
+// another chat (Rust #39261 misalignment_policy.rs).
+func (m *Model) applyMisalignmentPolicyViolation(message string) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	m.clearCurrentThreadAfterFailure(message)
+	m.Transcript.clearCurrentThreadAfterFailure(m.State, message)
+	m.addTurnErrorHistoryMessage(message)
+	m.notice = "Chat stopped as a precaution"
+	m.deferPendingSteers()
+	m.queued = nil
+	m.rejectedSteers = nil
+	m.composer.SetValue("")
+	m.composer.Blur()
+	m.misalignmentPolicyStopped = true
+	m.refreshTranscript()
 	return nil
 }
 

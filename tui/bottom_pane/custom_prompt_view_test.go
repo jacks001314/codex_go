@@ -112,3 +112,83 @@ func TestNormalizePastedTextMatchesRust(t *testing.T) {
 		t.Fatalf("pasted text = %q", view.Text)
 	}
 }
+
+func TestCustomPromptVimModeMatchesRustComposerPreferences(t *testing.T) {
+	// Rust #39618: custom prompts start in insert mode, first Esc enters
+	// normal mode, and Vim keys edit while preserving Esc cancellation.
+	view := NewCustomPromptView("Edit goal", "Type a goal objective", "", "")
+	view.SetVimEnabled(true)
+	if !view.VimEnabled() || !view.VimInsert() {
+		t.Fatalf("vim insert start = enabled=%v insert=%v", view.VimEnabled(), view.VimInsert())
+	}
+	for _, ch := range "hello" {
+		view.HandleRuneAt(ch, time.Now())
+	}
+	view.HandleKeyAt("esc", time.Now())
+	if view.VimInsert() {
+		t.Fatal("first esc should enter normal mode, not cancel")
+	}
+	if view.IsComplete() {
+		t.Fatal("first esc should not cancel the prompt")
+	}
+	view.HandleKeyAt("0", time.Now())
+	view.HandleKeyAt("x", time.Now())
+	if got := view.Text; got != "ello" {
+		t.Fatalf("x in normal mode = %q, want ello", got)
+	}
+	// r replaces the character under the cursor and stays in normal mode.
+	view.HandleKeyAt("r", time.Now())
+	view.HandleKeyAt("H", time.Now())
+	if got := view.Text; got != "Hllo" {
+		t.Fatalf("rH = %q, want Hllo (ello with first char replaced)", got)
+	}
+	if view.VimInsert() {
+		t.Fatal("replace_char should stay in normal mode")
+	}
+	// i enters insert mode; second esc cancels the whole prompt.
+	view.HandleKeyAt("i", time.Now())
+	if !view.VimInsert() {
+		t.Fatal("i should enter insert mode")
+	}
+	view.HandleKeyAt("esc", time.Now())
+	view.HandleKeyAt("esc", time.Now())
+	if !view.IsComplete() || view.Completion != CustomPromptCancelled {
+		t.Fatalf("esc from normal mode should cancel: completion=%s", view.Completion)
+	}
+
+	// Mode-aware footer hints.
+	insert := NewCustomPromptView("Goal", "Type", "", "")
+	insert.SetVimEnabled(true)
+	if rows := insert.Rows(); !bottomPaneContainsRow(rows, "Press enter to confirm or esc to enter normal mode") {
+		t.Fatalf("insert hint rows = %#v", rows)
+	}
+	insert.HandleKeyAt("esc", time.Now())
+	if rows := insert.Rows(); !bottomPaneContainsRow(rows, "Vim normal · i to insert · esc to cancel") {
+		t.Fatalf("normal hint rows = %#v", rows)
+	}
+}
+
+func TestCustomPromptEditorMotionsMatchComposer(t *testing.T) {
+	view := NewCustomPromptView("Name thread", "Type a name", "one two three", "")
+	view.MoveLineStart()
+	view.MoveWord(1)
+	if view.Cursor() != 4 {
+		t.Fatalf("MoveWord cursor = %d, want 4 (start of two)", view.Cursor())
+	}
+	view.MoveWordEnd()
+	if view.Cursor() != 7 {
+		t.Fatalf("MoveWordEnd cursor = %d, want 7 (end of two)", view.Cursor())
+	}
+	view.MoveWord(-1)
+	if view.Cursor() != 4 {
+		t.Fatalf("MoveWord back cursor = %d, want 4 (start of two)", view.Cursor())
+	}
+	view.MoveLineEnd()
+	if view.Cursor() != len([]rune(view.Text)) {
+		t.Fatalf("MoveLineEnd cursor = %d, want %d", view.Cursor(), len([]rune(view.Text)))
+	}
+	view.DeleteWordBackward()
+	if got := view.Text; got != "one two " {
+		t.Fatalf("DeleteWordBackward = %q, want 'one two '", got)
+	}
+}

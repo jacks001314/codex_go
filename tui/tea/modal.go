@@ -394,6 +394,20 @@ func (m *Model) updateCustomPromptModal(message bubbletea.KeyMsg) bubbletea.Cmd 
 			prompt.HandleKey("enter")
 		case bubbletea.KeyBackspace:
 			prompt.HandleKey("backspace")
+		case bubbletea.KeyLeft:
+			prompt.HandleKey("left")
+		case bubbletea.KeyRight:
+			prompt.HandleKey("right")
+		case bubbletea.KeyUp:
+			prompt.HandleKey("up")
+		case bubbletea.KeyDown:
+			prompt.HandleKey("down")
+		case bubbletea.KeyHome:
+			prompt.HandleKey("home")
+		case bubbletea.KeyEnd:
+			prompt.HandleKey("end")
+		default:
+			prompt.HandleKey(message.String())
 		}
 	}
 	if !prompt.IsComplete() {

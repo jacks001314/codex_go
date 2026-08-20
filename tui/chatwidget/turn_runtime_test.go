@@ -136,6 +136,53 @@ func TestTurnRuntimeQueuedInputGatedOnSessionConfigured(t *testing.T) {
 	}
 }
 
+func TestTurnRuntimeMisalignmentPolicyViolationStopsChat(t *testing.T) {
+	// Rust #39261: a misalignment policy violation finalizes the turn, clears
+	// queued input, and rejects further submissions.
+	state := TurnRuntimeState{
+		SessionConfigured: true,
+		InputQueue: InputQueueState{
+			QueuedUserMessages: []QueuedUserMessage{
+				NewQueuedUserMessage(NewUserMessage("queued"), QueuedInputPlain),
+			},
+		},
+	}
+	outcome := state.HandleNonRetryError(`{"error":{"code":"misalignment_policy_violation","message":"blocked"}}`, &TurnRuntimeCodexErrorInfo{Kind: TurnRuntimeCodexErrorMisalignmentPolicyViolation})
+	if outcome != TurnRuntimeErrorMisalignmentPolicyViolation {
+		t.Fatalf("outcome = %q, want misalignment_policy_violation", outcome)
+	}
+	if !state.MisalignmentPolicyViolation {
+		t.Fatal("misalignment policy violation not recorded")
+	}
+	if len(state.InputQueue.QueuedUserMessages) != 0 {
+		t.Fatalf("queued input should be cleared: %#v", state.InputQueue)
+	}
+	if state.MaybeSendNextQueuedInput() {
+		t.Fatal("stopped chat should not drain queued input")
+	}
+	if !state.AcceptsMisalignmentPolicyOp("interrupt") {
+		t.Fatal("interrupt should remain allowed")
+	}
+	if state.AcceptsMisalignmentPolicyOp("fork") {
+		t.Fatal("fork should be rejected on a stopped chat")
+	}
+}
+
+func TestIsMisalignmentPolicyViolationMessage(t *testing.T) {
+	for _, message := range []string{
+		"misalignment_policy_violation",
+		`{"error":{"code":"misalignment_policy_violation","message":"blocked"}}`,
+		"something misalignmentPolicyViolation else",
+	} {
+		if !IsMisalignmentPolicyViolationMessage(message) {
+			t.Fatalf("IsMisalignmentPolicyViolationMessage(%q) = false", message)
+		}
+	}
+	if IsMisalignmentPolicyViolationMessage("ordinary error") {
+		t.Fatal("ordinary error classified as misalignment")
+	}
+}
+
 func TestTurnRuntimeTaskCompleteNotificationSuppressedByActiveGoal(t *testing.T) {
 	state := TurnRuntimeState{ActiveGoalContinuing: true}
 	state.OnTaskStarted("turn-1")

@@ -365,6 +365,7 @@ func (m *Model) applyGoalModalOption(optionID string, objective string) bubblete
 func (m *Model) openGoalEditPrompt(goal appserver.Goal) {
 	view := chatwidget.NewGoalEditPromptView(goal)
 	prompt := bottompane.NewCustomPromptView(view.Title, view.Placeholder, view.InitialText, "")
+	prompt.SetVimEnabled(m.vimMode)
 	m.modal = &modalState{
 		id:           "edit-goal",
 		kind:         ModalKindGoal,

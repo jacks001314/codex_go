@@ -39,6 +39,7 @@ const (
 	NotificationModelSafetyBufferingUpdated ServerNotificationKind = "model_safety_buffering_updated"
 	NotificationWarning                     ServerNotificationKind = "warning"
 	NotificationGuardianWarning             ServerNotificationKind = "guardian_warning"
+	NotificationStrictReviewRequired        ServerNotificationKind = "autoApprovalReview/strictReviewRequired"
 	NotificationDeprecationNotice           ServerNotificationKind = "deprecation_notice"
 	NotificationConfigWarning               ServerNotificationKind = "config_warning"
 	NotificationMcpServerStatusUpdated      ServerNotificationKind = "mcp_server_status_updated"

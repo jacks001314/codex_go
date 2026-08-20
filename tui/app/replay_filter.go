@@ -46,7 +46,10 @@ func EventIsNotice(event ThreadBufferedEvent) bool {
 		return false
 	}
 	switch event.Notification.Name {
-	case ServerNotificationWarning, ServerNotificationGuardianWarning, ServerNotificationConfigWarning:
+	case ServerNotificationWarning,
+		ServerNotificationGuardianWarning,
+		ServerNotificationStrictReviewRequired,
+		ServerNotificationConfigWarning:
 		return true
 	default:
 		return false

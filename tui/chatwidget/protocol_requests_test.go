@@ -44,6 +44,22 @@ func TestProtocolNotificationRoutesGuardianShutdownDiffAndDeprecationMatchRust(t
 	}
 }
 
+func TestProtocolNotificationStrictReviewRequiredRoutesWarning(t *testing.T) {
+	// Rust #39635: StrictReviewRequired renders as a warning history cell
+	// explaining tool calls may take extra time.
+	decision := ClassifyProtocolNotification(ProtocolNotification{
+		Kind:     NotificationStrictReviewRequired,
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+	}, ReplayNone)
+	if decision.Route != ProtocolNotificationRouteWarning {
+		t.Fatalf("strict review route = %q, want warning", decision.Route)
+	}
+	if decision.HistorySummary != "This request requires additional safety checks, some tool calls might take extra time" {
+		t.Fatalf("strict review summary = %q", decision.HistorySummary)
+	}
+}
+
 func TestProtocolNotificationReplaySuppressionAndRequestTrimMatchRust(t *testing.T) {
 	suppressed := ClassifyProtocolNotification(ProtocolNotification{Kind: NotificationTurnStarted}, ReplayResumeInitialMessages)
 	if suppressed.Route != ProtocolNotificationRouteIgnored || !suppressed.SuppressedByReplay {

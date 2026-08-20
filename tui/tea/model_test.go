@@ -7581,6 +7581,37 @@ func TestModelTestApprovalMatchesPatchApprovalFixture(t *testing.T) {
 	}
 }
 
+func TestModelMisalignmentPolicyViolationStopsChat(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 200, Height: 36})
+	model.queueComposer(true)
+	model.composer.SetValue("draft")
+	updated, cmd := model.Update(TurnCompletedMsg{Err: errors.New(`{"error":{"code":"misalignment_policy_violation","message":"blocked"}}`)})
+	if cmd != nil {
+		t.Fatalf("misalignment stop cmd = %#v, want nil", cmd)
+	}
+	stopped := updated.(*Model)
+	if !stopped.misalignmentPolicyStopped {
+		t.Fatal("misalignment policy stop not recorded")
+	}
+	if len(stopped.queued) != 0 || len(stopped.rejectedSteers) != 0 {
+		t.Fatalf("queued input should be cleared: queued=%#v rejected=%#v", stopped.queued, stopped.rejectedSteers)
+	}
+	if got := stopped.composer.Value(); got != "" {
+		t.Fatalf("composer should be cleared, got %q", got)
+	}
+	stopped.composer.SetValue("new")
+	next, cmd := stopped.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("stopped chat submit cmd = %#v, want nil (submit rejected)", cmd)
+	}
+	if got := next.(*Model).SubmittedRequests(); len(got) != 0 {
+		t.Fatalf("stopped chat should not submit requests, got %#v", got)
+	}
+	if got := next.(*Model).State.Status; strings.EqualFold(strings.TrimSpace(got), "running") {
+		t.Fatalf("stopped chat should not start a turn, status = %q", got)
+	}
+}
+
 func TestModelForkCommandForksCurrentSessionImmediately(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-source")

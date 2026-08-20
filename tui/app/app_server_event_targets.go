@@ -55,6 +55,7 @@ const (
 	ServerNotificationThreadRealtimeClosed                = "thread_realtime_closed"
 	ServerNotificationWarning                             = "warning"
 	ServerNotificationGuardianWarning                     = "guardian_warning"
+	ServerNotificationStrictReviewRequired                = "autoApprovalReview/strictReviewRequired"
 	ServerNotificationSkillsChanged                       = "skills_changed"
 	ServerNotificationMcpServerOauthLoginCompleted        = "mcp_server_oauth_login_completed"
 	ServerNotificationAccountUpdated                      = "account_updated"

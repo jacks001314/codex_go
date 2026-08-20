@@ -50,6 +50,7 @@ const (
 	TurnRuntimeErrorNone              TurnRuntimeErrorOutcome = ""
 	TurnRuntimeErrorRejectedSteer     TurnRuntimeErrorOutcome = "rejected_steer"
 	TurnRuntimeErrorCyberPolicy       TurnRuntimeErrorOutcome = "cyber_policy"
+	TurnRuntimeErrorMisalignmentPolicyViolation TurnRuntimeErrorOutcome = "misalignment_policy_violation"
 	TurnRuntimeErrorSafetyAccessBlock TurnRuntimeErrorOutcome = "safety_access_block"
 	TurnRuntimeErrorServerOverloaded  TurnRuntimeErrorOutcome = "server_overloaded"
 	TurnRuntimeErrorRateLimit         TurnRuntimeErrorOutcome = "rate_limit"
@@ -61,6 +62,7 @@ type TurnRuntimeCodexErrorKind string
 const (
 	TurnRuntimeCodexErrorActiveTurnNotSteerable     TurnRuntimeCodexErrorKind = "ActiveTurnNotSteerable"
 	TurnRuntimeCodexErrorCyberPolicy                TurnRuntimeCodexErrorKind = "CyberPolicy"
+	TurnRuntimeCodexErrorMisalignmentPolicyViolation TurnRuntimeCodexErrorKind = "MisalignmentPolicyViolation"
 	TurnRuntimeCodexErrorServerOverloaded           TurnRuntimeCodexErrorKind = "ServerOverloaded"
 	TurnRuntimeCodexErrorUsageLimitExceeded         TurnRuntimeCodexErrorKind = "UsageLimitExceeded"
 	TurnRuntimeCodexErrorResponseTooManyFailedTries TurnRuntimeCodexErrorKind = "ResponseTooManyFailedAttempts"
@@ -175,6 +177,10 @@ type TurnRuntimeState struct {
 	LastErrorOutcome          TurnRuntimeErrorOutcome
 	LastErrorMessage          string
 	PetNotificationKind       string
+	// MisalignmentPolicyViolation stops the affected chat: queued and draft
+	// input are cleared, further submissions are rejected, and the composer is
+	// disabled (Rust #39261).
+	MisalignmentPolicyViolation bool
 }
 
 func (s *TurnRuntimeState) StartTurn(turnID string) {
@@ -541,6 +547,10 @@ func (s *TurnRuntimeState) HandleNonRetryError(message string, info *TurnRuntime
 	if s == nil {
 		return TurnRuntimeErrorNone
 	}
+	if info != nil && info.Kind == TurnRuntimeCodexErrorMisalignmentPolicyViolation {
+		s.OnMisalignmentPolicyViolation()
+		return TurnRuntimeErrorMisalignmentPolicyViolation
+	}
 	if info != nil && info.Kind == TurnRuntimeCodexErrorActiveTurnNotSteerable && s.EnqueueRejectedSteer() {
 		s.LastErrorOutcome = TurnRuntimeErrorRejectedSteer
 		return TurnRuntimeErrorRejectedSteer
@@ -570,6 +580,40 @@ func (s *TurnRuntimeState) HandleNonRetryError(message string, info *TurnRuntime
 	return TurnRuntimeErrorGeneric
 }
 
+// OnMisalignmentPolicyViolation stops the affected chat: the active turn is
+// finalized, queued input is cleared, and further submissions are rejected
+// (Rust #39261 on_misalignment_policy_violation).
+func (s *TurnRuntimeState) OnMisalignmentPolicyViolation() {
+	if s == nil || s.MisalignmentPolicyViolation {
+		return
+	}
+	s.MisalignmentPolicyViolation = true
+	s.InputQueue.Clear()
+	s.FinalizeTurn()
+	s.PendingInputPreview = s.InputQueue.Preview()
+	s.RequestRedraw()
+}
+
+// AcceptsMisalignmentPolicyOp reports whether an operation is allowed on a
+// chat stopped for a misalignment policy violation (Rust
+// rejects_misalignment_policy_op inverse).
+func (s *TurnRuntimeState) AcceptsMisalignmentPolicyOp(op string) bool {
+	if s == nil || !s.MisalignmentPolicyViolation {
+		return true
+	}
+	switch op {
+	case "interrupt",
+		"clean_background_terminals",
+		"override_turn_context",
+		"reload_user_config",
+		"list_skills",
+		"set_thread_name":
+		return true
+	default:
+		return false
+	}
+}
+
 func IsSafetyAccessBlockMessage(message string) bool {
 	if strings.HasPrefix(message, SafetyAccessBlockPrefix) {
 		return true
@@ -583,6 +627,26 @@ func IsSafetyAccessBlockMessage(message string) bool {
 		return false
 	}
 	return strings.HasPrefix(response.Error.Message, SafetyAccessBlockPrefix)
+}
+
+// IsMisalignmentPolicyViolationMessage reports whether a turn-failed message
+// carries the app-server misalignment policy violation marker (Rust #39261).
+// The message may be a plain error text, a JSON error envelope, or a
+// response.failed payload whose error code is misalignment_policy_violation.
+func IsMisalignmentPolicyViolationMessage(message string) bool {
+	if strings.Contains(message, "misalignment_policy_violation") ||
+		strings.Contains(message, "misalignmentPolicyViolation") {
+		return true
+	}
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(message), &envelope); err == nil {
+		return strings.EqualFold(strings.TrimSpace(envelope.Error.Code), "misalignment_policy_violation")
+	}
+	return false
 }
 
 func AppServerRateLimitErrorKind(info *TurnRuntimeCodexErrorInfo) (RateLimitErrorKind, bool) {
@@ -610,7 +674,7 @@ func (s *TurnRuntimeState) InterruptedTurnMessage(reason TurnAbortReason) string
 }
 
 func (s *TurnRuntimeState) MaybeSendNextQueuedInput() bool {
-	if s == nil || !s.SessionConfigured || s.InputQueue.SuppressQueueAutosend {
+	if s == nil || !s.SessionConfigured || s.InputQueue.SuppressQueueAutosend || s.MisalignmentPolicyViolation {
 		return false
 	}
 	if _, _, ok := s.InputQueue.PopNextQueuedUserMessage(); ok {

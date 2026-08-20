@@ -219,6 +219,7 @@ func (m *Model) openReviewCustomPrompt() {
 		contextLabel = strings.TrimSpace(*view.ContextLabel)
 	}
 	prompt := bottompane.NewCustomPromptView(view.Title, view.Placeholder, view.InitialText, contextLabel)
+	prompt.SetVimEnabled(m.vimMode)
 	m.modal = &modalState{
 		id:           "review-custom-prompt",
 		kind:         ModalKindReview,
@@ -256,6 +257,7 @@ func (m *Model) openRenamePrompt() {
 		title = "Rename thread"
 	}
 	prompt := bottompane.NewCustomPromptView(title, "Type a name and press Enter", initial, "")
+	prompt.SetVimEnabled(m.vimMode)
 	m.modal = &modalState{
 		id:           "rename-thread",
 		kind:         ModalKindGeneric,
