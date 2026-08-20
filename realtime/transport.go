@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -326,22 +327,107 @@ func (m *Manager) startRealtimeSideband(sideband *realtimeSideband) {
 	}
 	go func() {
 		defer m.backgroundTaskWait.Done()
-		connection, err := dialRealtimeTransport(sideband.ctx, sideband.threadID, sideband.backend, sideband.config, sideband.callID, false)
-		if err != nil {
-			m.notifySidebandError(sideband, fmt.Errorf("connect realtime sideband: %w", err))
-			return
-		}
-		m.mu.Lock()
-		state := m.sessions[sideband.threadID]
-		if m.shutdown || sideband.ctx.Err() != nil || m.sidebands[sideband.threadID] != sideband || state == nil || state.ClosedAt != nil {
+		// Rust #39257: reconnect frameless WebRTC sideband sockets after
+		// unexpected transport loss with capped exponential backoff, while a
+		// terminal handshake status (404/410) completes the session.
+		attempt := 0
+		for {
+			connection, err := dialRealtimeTransport(sideband.ctx, sideband.threadID, sideband.backend, sideband.config, sideband.callID, false)
+			if err != nil {
+				if realtimeHandshakeTerminal(err) {
+					return
+				}
+				if attempt == 0 {
+					m.notifySidebandError(sideband, fmt.Errorf("connect realtime sideband: %w", err))
+				}
+				attempt++
+				if sideband.ctx.Err() != nil || !m.sidebandShouldReconnect(sideband) || attempt > realtimeSidebandMaxReconnectAttempts {
+					return
+				}
+				if !sleepSidebandReconnect(sideband.ctx, realtimeSidebandReconnectDelay(attempt)) {
+					return
+				}
+				continue
+			}
+			m.mu.Lock()
+			state := m.sessions[sideband.threadID]
+			if m.shutdown || sideband.ctx.Err() != nil || m.sidebands[sideband.threadID] != sideband || state == nil || state.ClosedAt != nil {
+				m.mu.Unlock()
+				connection.closeNow()
+				return
+			}
+			m.connections[sideband.threadID] = connection
 			m.mu.Unlock()
-			connection.closeNow()
-			return
+			// runRealtimeConnection returns only after the connection ends.
+			// finishRealtimeTransport marks the session closed; reset that so
+			// the sideband can reconnect and continue.
+			m.runRealtimeConnection(connection)
+			m.mu.Lock()
+			sessionState := m.sessions[sideband.threadID]
+			if sessionState != nil {
+				sessionState.ClosedAt = nil
+				sessionState.CloseReason = ""
+			}
+			m.sidebands[sideband.threadID] = sideband
+			m.mu.Unlock()
+			if sideband.ctx.Err() != nil || !m.sidebandShouldReconnect(sideband) {
+				return
+			}
+			attempt++
+			if attempt > realtimeSidebandMaxReconnectAttempts {
+				return
+			}
+			if !sleepSidebandReconnect(sideband.ctx, realtimeSidebandReconnectDelay(attempt)) {
+				return
+			}
 		}
-		m.connections[sideband.threadID] = connection
-		m.mu.Unlock()
-		m.runRealtimeConnection(connection)
 	}()
+}
+
+const realtimeSidebandMaxReconnectAttempts = 5
+
+func (m *Manager) sidebandShouldReconnect(sideband *realtimeSideband) bool {
+	if m == nil || sideband == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.sessions[sideband.threadID]
+	return m.sidebands[sideband.threadID] == sideband && !m.shutdown && sideband.ctx.Err() == nil && state != nil && state.ClosedAt == nil
+}
+
+func realtimeSidebandReconnectDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Duration(250*(1<<min(attempt-1, 4))) * time.Millisecond
+	if delay > 5*time.Second {
+		return 5 * time.Second
+	}
+	return delay
+}
+
+func sleepSidebandReconnect(ctx context.Context, delay time.Duration) bool {
+	if ctx == nil {
+		return false
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func realtimeHandshakeTerminal(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error()
+	return strings.Contains(text, "404") || strings.Contains(text, "410") ||
+		strings.Contains(text, "not found") || strings.Contains(text, "gone")
 }
 
 func (m *Manager) startRealtimeConnection(connection *realtimeTransportSession) {

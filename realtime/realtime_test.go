@@ -37,6 +37,37 @@ func TestAudioChunkValidate(t *testing.T) {
 	}
 }
 
+func TestRealtimeSidebandReconnectHelpersLikeRust(t *testing.T) {
+	// Rust #39257: reconnect uses capped exponential backoff, honors context
+	// cancellation, and treats 404/410 handshake statuses as terminal.
+	if got := realtimeSidebandReconnectDelay(1); got != 250*time.Millisecond {
+		t.Fatalf("reconnect delay(1) = %v", got)
+	}
+	if got := realtimeSidebandReconnectDelay(2); got != 500*time.Millisecond {
+		t.Fatalf("reconnect delay(2) = %v", got)
+	}
+	if got := realtimeSidebandReconnectDelay(10); got > 5*time.Second {
+		t.Fatalf("reconnect delay(10) = %v, want capped", got)
+	}
+	if !realtimeHandshakeTerminal(errors.New("handshake: HTTP 404")) ||
+		!realtimeHandshakeTerminal(errors.New("410 gone")) ||
+		realtimeHandshakeTerminal(errors.New("connection reset")) {
+		t.Fatal("terminal handshake classification mismatch")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if sleepSidebandReconnect(ctx, time.Hour) {
+		t.Fatal("sleep should abort on cancelled context")
+	}
+	start := time.Now()
+	if !sleepSidebandReconnect(context.Background(), 20*time.Millisecond) {
+		t.Fatal("sleep should return true after the delay")
+	}
+	if elapsed := time.Since(start); elapsed < 10*time.Millisecond {
+		t.Fatalf("sleep returned too early: %v", elapsed)
+	}
+}
+
 func TestRealtimeAudioAndTransportJSONRequiredFieldsMatchRust(t *testing.T) {
 	var audio AudioChunk
 	if err := json.Unmarshal([]byte(`{"data":"","sampleRate":0,"numChannels":0,"samplesPerChannel":null,"itemId":null}`), &audio); err != nil {
