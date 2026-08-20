@@ -759,9 +759,9 @@
             "domains":  [
                 "config"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: LoadWithOptions builds a discovery snapshot that merges managed config before resolving project trust and root markers; project_root_markers from managed config now govern project config discovery; tests cover a managed marker boundary."
                 ]
             },
         {

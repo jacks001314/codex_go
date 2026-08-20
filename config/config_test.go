@@ -43,6 +43,34 @@ func TestLoadEffectiveRejectsRetiredUntrustedApprovalPolicyLikeRust(t *testing.T
 	}
 }
 
+func TestManagedProjectRootMarkersGovernDiscoveryLikeRust(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "MARKER"), []byte("marker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".codex", "config.toml"), []byte("model = \"gpt-managed-project\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	trusted := trustedProjectConfig(repo)
+	if err := os.WriteFile(ConfigPath(home), []byte("model = \"gpt-user\"\n"+trusted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managedConfigPath(home, ""), []byte("project_root_markers = [\"MARKER\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithOptions(home, &LoadOptions{CWD: repo, IncludeManagedConfig: true})
+	if err != nil {
+		t.Fatalf("LoadWithOptions() error = %v", err)
+	}
+	if cfg.Values["model"] != "gpt-managed-project" {
+		t.Fatalf("model = %#v, want managed-marker project config loaded", cfg.Values["model"])
+	}
+}
+
 func TestLoadEffectiveStrictConfigAcceptsDeprecatedJSReplKeysLikeRust(t *testing.T) {
 	// Rust ConfigToml keeps js_repl_node_path / js_repl_node_module_dirs as
 	// deprecated ignored fields (serde accepts them, schemars skips them); Go

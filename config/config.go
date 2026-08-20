@@ -227,8 +227,19 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		cwd = strings.TrimSpace(opts.CWD)
 	}
 	ignoreProjectConfig := opts != nil && opts.IgnoreProjectConfig
-	if cwd != "" && !ignoreProjectConfig && ProjectConfigEnabled(values, cwd) {
-		for _, path := range ProjectConfigPaths(cwd) {
+	// Rust #39306: legacy managed-file settings also govern the project
+	// boundary and trust, so discovery uses a snapshot that includes managed
+	// values before loading project config.
+	discoveryValues := cloneMap(values)
+	if opts != nil && opts.IncludeManagedConfig && !shouldIgnoreDefaultManagedConfig(opts.ManagedConfigPath) {
+		if managedValues, exists, err := loadConfigFileIfExists(managedConfigPath(codexHome, opts.ManagedConfigPath)); err != nil {
+			return nil, err
+		} else if exists {
+			mergeConfigMaps(discoveryValues, managedValues)
+		}
+	}
+	if cwd != "" && !ignoreProjectConfig && ProjectConfigEnabled(discoveryValues, cwd) {
+		for _, path := range projectConfigPathsWithMarkers(cwd, projectRootMarkersFromValues(discoveryValues)) {
 			projectValues, exists, err := loadConfigFileIfExists(path)
 			if err != nil {
 				return nil, err
@@ -773,9 +784,24 @@ func ProjectConfigPaths(cwd string) []string {
 	return paths
 }
 
+// projectConfigPathsWithMarkers is ProjectConfigPaths using explicit project
+// root markers (which may come from managed config, Rust #39306).
+func projectConfigPathsWithMarkers(cwd string, markers []string) []string {
+	folders := projectDotCodexFoldersWithMarkers(cwd, markers)
+	paths := make([]string, 0, len(folders))
+	for _, folder := range folders {
+		paths = append(paths, filepath.Join(folder, "config.toml"))
+	}
+	return paths
+}
+
 func ProjectDotCodexFolders(cwd string) []string {
+	return projectDotCodexFoldersWithMarkers(cwd, nil)
+}
+
+func projectDotCodexFoldersWithMarkers(cwd string, markers []string) []string {
 	var folders []string
-	root := activeProjectRoot(cwd)
+	root := activeProjectRootWithMarkers(cwd, markers)
 	for _, dir := range projectAncestorDirsWithinRoot(cwd, root) {
 		folder := filepath.Join(dir, ".codex")
 		if dirExists(folder) {
@@ -786,6 +812,27 @@ func ProjectDotCodexFolders(cwd string) []string {
 		folders[i], folders[j] = folders[j], folders[i]
 	}
 	return folders
+}
+
+func projectRootMarkersFromValues(values map[string]any) []string {
+	if values == nil {
+		return nil
+	}
+	switch value := values["project_root_markers"].(type) {
+	case string:
+		if strings.TrimSpace(value) != "" {
+			return []string{strings.TrimSpace(value)}
+		}
+	case []any:
+		var out []string
+		for _, item := range value {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, strings.TrimSpace(text))
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func ActiveProjectRoot(cwd string) string {
@@ -1624,9 +1671,13 @@ func activeProjectTrustTarget(cwd string) string {
 }
 
 func activeProjectRoot(cwd string) string {
+	return activeProjectRootWithMarkers(cwd, nil)
+}
+
+func activeProjectRootWithMarkers(cwd string, markers []string) string {
 	dirs := projectAncestorDirs(cwd)
 	for _, dir := range dirs {
-		if projectRootMarkerExists(dir) {
+		if projectRootMarkerExistsWithMarkers(dir, markers) {
 			return dir
 		}
 	}
@@ -1648,6 +1699,18 @@ func nearestGitRoot(cwd string) string {
 func projectRootMarkerExists(dir string) bool {
 	for _, marker := range []string{".git", ".hg", ".svn"} {
 		if pathExists(filepath.Join(dir, marker)) {
+			return true
+		}
+	}
+	return false
+}
+
+func projectRootMarkerExistsWithMarkers(dir string, markers []string) bool {
+	if len(markers) == 0 {
+		markers = []string{".git", ".hg", ".svn"}
+	}
+	for _, marker := range markers {
+		if marker != "" && pathExists(filepath.Join(dir, marker)) {
 			return true
 		}
 	}
