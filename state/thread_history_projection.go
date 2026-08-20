@@ -342,17 +342,20 @@ UPDATE thread_turns
 SET
     first_user_item_id = COALESCE(first_user_item_id, (
         SELECT item_id FROM thread_items
-        WHERE thread_id = ? AND turn_id = ? AND item_type = 'userMessage'
+        WHERE thread_id = ? AND turn_id = ?
+          AND (item_type = 'userMessage' OR (item_type = '' AND json_extract(item_json, '$.type') = 'userMessage'))
         ORDER BY rollout_ordinal LIMIT 1
     )),
     final_agent_item_id = COALESCE((
         SELECT item_id FROM thread_items
-        WHERE thread_id = ? AND turn_id = ? AND item_type = 'agentMessage'
+        WHERE thread_id = ? AND turn_id = ?
+          AND (item_type = 'agentMessage' OR (item_type = '' AND json_extract(item_json, '$.type') = 'agentMessage'))
           AND json_extract(item_json, '$.phase') = 'final_answer'
         ORDER BY rollout_ordinal DESC LIMIT 1
     ), CASE WHEN status IN ('completed', 'interrupted', 'failed') THEN (
         SELECT item_id FROM thread_items
-        WHERE thread_id = ? AND turn_id = ? AND item_type = 'agentMessage'
+        WHERE thread_id = ? AND turn_id = ?
+          AND (item_type = 'agentMessage' OR (item_type = '' AND json_extract(item_json, '$.type') = 'agentMessage'))
           AND json_extract(item_json, '$.phase') IS NULL
         ORDER BY rollout_ordinal DESC LIMIT 1
     ) END, final_agent_item_id)
