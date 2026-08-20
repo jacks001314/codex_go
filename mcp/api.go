@@ -1560,6 +1560,7 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 		ServerName:            config.OAuthCredentialName(name),
 		ServerURL:             config.URL,
 		ClientID:              clientID,
+		Issuer:                strings.TrimSpace(discovery.Issuer),
 		RegistrationEndpoint:  discovery.RegistrationEndpoint,
 		AuthorizationEndpoint: discovery.AuthorizationEndpoint,
 		TokenEndpoint:         discovery.TokenEndpoint,

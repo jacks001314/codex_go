@@ -19,6 +19,7 @@ type OAuthLoginServerOptions struct {
 	ServerURL             string
 	ClientID              string
 	ClientSecret          string
+	Issuer                string
 	RegistrationEndpoint  string
 	ClientName            string
 	AuthorizationEndpoint string
@@ -90,6 +91,7 @@ func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions
 		ServerURL:             options.ServerURL,
 		ClientID:              options.ClientID,
 		ClientSecret:          options.ClientSecret,
+		Issuer:                options.Issuer,
 		RegistrationEndpoint:  options.RegistrationEndpoint,
 		ClientName:            options.ClientName,
 		AuthorizationEndpoint: options.AuthorizationEndpoint,

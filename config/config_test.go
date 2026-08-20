@@ -1396,6 +1396,76 @@ func TestLoadWithOptionsAppliesProjectConfigLayers(t *testing.T) {
 	}
 }
 
+func TestGitMetadataPathRequiresHEADOrFilePointerLikeRust(t *testing.T) {
+	// Rust #39629: a `.git` directory is repository metadata only when it
+	// contains HEAD; file-based `.git` pointers remain valid. An incomplete
+	// synthetic directory must not hide a parent repository.
+	root := t.TempDir()
+	outer := filepath.Join(root, "outer")
+	if err := os.MkdirAll(filepath.Join(outer, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if gitMetadataPathExists(filepath.Join(outer, ".git")) {
+		t.Fatal("empty .git directory should not count as repository metadata")
+	}
+	if root := nearestGitRoot(outer); root != "" {
+		t.Fatalf("nearestGitRoot with empty .git = %q, want empty", root)
+	}
+	if projectRootMarkerExists(outer) {
+		t.Fatal("empty .git directory should not mark a project root")
+	}
+	if err := os.WriteFile(filepath.Join(outer, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !gitMetadataPathExists(filepath.Join(outer, ".git")) {
+		t.Fatal(".git with HEAD should count as repository metadata")
+	}
+	if root := nearestGitRoot(outer); root != outer {
+		t.Fatalf("nearestGitRoot = %q, want %q", root, outer)
+	}
+	if !projectRootMarkerExists(outer) {
+		t.Fatal("project root marker should match .git with HEAD")
+	}
+
+	// File-based .git pointers (gitdir: <path>) remain valid metadata.
+	worktree := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: ../outer/.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !gitMetadataPathExists(filepath.Join(worktree, ".git")) {
+		t.Fatal("file-based .git pointer should count as repository metadata")
+	}
+	if root := nearestGitRoot(worktree); root != worktree {
+		t.Fatalf("nearestGitRoot(worktree) = %q, want %q", root, worktree)
+	}
+}
+
+func TestProjectRootDiscoverySkipsIncompleteGitDirectoryLikeRust(t *testing.T) {
+	// Rust #39629: an incomplete `.git` directory in a child must not hide
+	// the real parent repository during project-root discovery.
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(repo, "child")
+	if err := os.MkdirAll(filepath.Join(child, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := activeProjectRootWithMarkers(child, nil); got != repo {
+		t.Fatalf("activeProjectRootWithMarkers = %q, want parent repo %q", got, repo)
+	}
+	if got := nearestGitRoot(child); got != repo {
+		t.Fatalf("nearestGitRoot = %q, want parent repo %q", got, repo)
+	}
+}
+
 func TestLoadWithOptionsIgnoreProjectConfigMatchesRust(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")

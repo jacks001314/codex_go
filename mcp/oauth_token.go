@@ -19,6 +19,7 @@ type OAuthCodeExchangeOptions struct {
 	ServerURL             string
 	ClientID              string
 	ClientSecret          string
+	Issuer                string
 	AuthorizationEndpoint string
 	TokenEndpoint         string
 	RedirectURL           string
@@ -32,6 +33,7 @@ type OAuthRefreshOptions struct {
 	ServerURL       string
 	ClientID        string
 	ClientSecret    string
+	Issuer          string
 	TokenEndpoint   string
 	AccessToken     string
 	RefreshToken    string
@@ -67,6 +69,7 @@ func (c *OAuthTokenClient) ExchangeAuthorizationCode(ctx context.Context, option
 		ServerURL:    options.ServerURL,
 		ClientID:     options.ClientID,
 		ClientSecret: options.ClientSecret,
+		Issuer:       options.Issuer,
 		Scopes:       options.Scopes,
 	}), nil
 }
@@ -96,6 +99,7 @@ func (c *OAuthTokenClient) RefreshToken(ctx context.Context, options *OAuthRefre
 		ServerURL:    options.ServerURL,
 		ClientID:     options.ClientID,
 		ClientSecret: options.ClientSecret,
+		Issuer:       options.Issuer,
 		Scopes:       options.Scopes,
 	}), nil
 }
@@ -149,6 +153,7 @@ type oauthTokenSetOptions struct {
 	ServerURL    string
 	ClientID     string
 	ClientSecret string
+	Issuer       string
 	Scopes       []string
 }
 
@@ -161,6 +166,7 @@ func oauth2TokenToSet(token *oauth2.Token, options *oauthTokenSetOptions) *OAuth
 		ServerURL:    strings.TrimSpace(options.ServerURL),
 		ClientID:     strings.TrimSpace(options.ClientID),
 		ClientSecret: strings.TrimSpace(options.ClientSecret),
+		Issuer:       strings.TrimSpace(options.Issuer),
 		AccessToken:  strings.TrimSpace(token.AccessToken),
 		RefreshToken: strings.TrimSpace(token.RefreshToken),
 		Scopes:       scopesFromOAuth2Token(token, options.Scopes),

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,67 @@ func TestOAuthStoreSaveLoadStatusAndDelete(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".credentials.json")); !os.IsNotExist(err) {
 		t.Fatalf(".credentials.json should be removed, err = %v", err)
+	}
+}
+
+func TestWriteMCPOAuthFallbackFileRejectsSymlinkAndRestoresMode(t *testing.T) {
+	// Rust #39611: fallback credential writes must not follow links and must
+	// keep the file private.
+	home := t.TempDir()
+	path := filepath.Join(home, mcpOAuthFallbackFilename)
+	if err := writeMCPOAuthFallbackFile(path, []byte(`{"k":1}`)); err != nil {
+		t.Fatalf("write error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != `{"k":1}` {
+		t.Fatalf("read = %q, %v", data, err)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("fallback mode = %v, %v; want 0600", info.Mode().Perm(), err)
+		}
+	}
+	target := filepath.Join(home, "target.json")
+	if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "link.json")
+	if err := os.Symlink(target, link); err == nil {
+		if err := writeMCPOAuthFallbackFile(link, []byte("evil")); err == nil {
+			t.Fatal("symlinked fallback write should be rejected")
+		}
+		if data, err := os.ReadFile(target); err != nil || string(data) != "original" {
+			t.Fatalf("symlink target mutated: %q, %v", data, err)
+		}
+	}
+}
+
+func TestOAuthTokenSetPersistsIssuer(t *testing.T) {
+	// Rust #39615: the discovered issuer is persisted with new credentials
+	// and preserved across saves/loads.
+	home := t.TempDir()
+	store := NewOAuthStore(home)
+	tokens := &OAuthTokenSet{
+		ServerName:   "docs",
+		ServerURL:    "https://example.com/mcp",
+		ClientID:     "client-1",
+		Issuer:       "https://auth.example.com",
+		AccessToken:  "access-1",
+		RefreshToken: "refresh-1",
+	}
+	if err := store.Save(tokens); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+	loaded, err := store.Load("docs", "https://example.com/mcp")
+	if err != nil || loaded == nil {
+		t.Fatalf("Load = %#v, %v", loaded, err)
+	}
+	if loaded.Issuer != "https://auth.example.com" {
+		t.Fatalf("loaded issuer = %q, want https://auth.example.com", loaded.Issuer)
+	}
+	if loaded.RefreshToken != "refresh-1" {
+		t.Fatalf("loaded refresh token = %q", loaded.RefreshToken)
 	}
 }
 

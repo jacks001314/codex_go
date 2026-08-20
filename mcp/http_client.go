@@ -1179,6 +1179,15 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 	if discovery == nil || strings.TrimSpace(discovery.TokenEndpoint) == "" {
 		return nil, errors.New("MCP OAuth token endpoint was not discovered")
 	}
+	// Rust #39615: a stored refresh token must only be used with the issuer
+	// that originally granted it. A missing or changed issuer requires
+	// reauthentication, and an unexpired access token can still be used
+	// without exposing the refresh token.
+	discoveredIssuer := strings.TrimSpace(discovery.Issuer)
+	storedIssuer := strings.TrimSpace(tokens.Issuer)
+	if storedIssuer != "" && discoveredIssuer != "" && !strings.EqualFold(storedIssuer, discoveredIssuer) {
+		return nil, fmt.Errorf("MCP OAuth refresh issuer changed: stored %q, discovered %q", storedIssuer, discoveredIssuer)
+	}
 	clientID := strings.TrimSpace(tokens.ClientID)
 	if clientID == "" {
 		clientID = strings.TrimSpace(c.config.OAuthClientID)
@@ -1188,6 +1197,7 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 		ServerURL:       c.config.URL,
 		ClientID:        clientID,
 		ClientSecret:    tokens.ClientSecret,
+		Issuer:          discoveredIssuer,
 		TokenEndpoint:   discovery.TokenEndpoint,
 		AccessToken:     tokens.AccessToken,
 		RefreshToken:    tokens.RefreshToken,

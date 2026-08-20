@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ type OAuthTokenSet struct {
 	ServerURL       string   `json:"server_url"`
 	ClientID        string   `json:"client_id"`
 	ClientSecret    string   `json:"client_secret,omitempty"`
+	Issuer          string   `json:"issuer,omitempty"`
 	AccessToken     string   `json:"access_token"`
 	RefreshToken    string   `json:"refresh_token,omitempty"`
 	Scopes          []string `json:"scopes,omitempty"`
@@ -41,6 +43,7 @@ type oauthFallbackEntry struct {
 	ServerURL       string   `json:"server_url"`
 	ClientID        string   `json:"client_id"`
 	ClientSecret    *string  `json:"client_secret,omitempty"`
+	Issuer          string   `json:"issuer,omitempty"`
 	AccessToken     string   `json:"access_token"`
 	ExpiresAtMillis *int64   `json:"expires_at,omitempty"`
 	RefreshToken    *string  `json:"refresh_token,omitempty"`
@@ -239,7 +242,46 @@ func (s *OAuthStore) writeFallbackFile(file map[string]*oauthFallbackEntry) erro
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	return writeMCPOAuthFallbackFile(path, data)
+}
+
+// writeMCPOAuthFallbackFile mirrors Rust #39611: the fallback file contains
+// OAuth credentials, so it must be private from the moment it is created and
+// writes must never follow links to another path.
+func writeMCPOAuthFallbackFile(path string, data []byte) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("MCP OAuth fallback path is empty")
+	}
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil:
+		// Existing path: reject symlinks and other non-regular files
+		// (Windows reparse points surface as os.ModeSymlink here too).
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("MCP OAuth fallback path %s is not a regular file", path)
+		}
+	case errors.Is(err, os.ErrNotExist):
+		info = nil
+	default:
+		return err
+	}
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	file, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	// Restore private permissions even when the file already existed with
+	// looser modes (Unix).
+	if runtime.GOOS != "windows" {
+		if err := file.Chmod(0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func oauthTokenSetFromFallbackEntry(entry *oauthFallbackEntry) *OAuthTokenSet {
@@ -250,6 +292,7 @@ func oauthTokenSetFromFallbackEntry(entry *oauthFallbackEntry) *OAuthTokenSet {
 		ServerName:      entry.ServerName,
 		ServerURL:       entry.ServerURL,
 		ClientID:        entry.ClientID,
+		Issuer:          strings.TrimSpace(entry.Issuer),
 		AccessToken:     entry.AccessToken,
 		Scopes:          append([]string(nil), entry.Scopes...),
 		ExpiresAtMillis: cloneInt64Pointer(entry.ExpiresAtMillis),
@@ -268,6 +311,7 @@ func oauthFallbackEntryFromTokenSet(tokens *OAuthTokenSet) *oauthFallbackEntry {
 		ServerName:      strings.TrimSpace(tokens.ServerName),
 		ServerURL:       strings.TrimSpace(tokens.ServerURL),
 		ClientID:        strings.TrimSpace(tokens.ClientID),
+		Issuer:          strings.TrimSpace(tokens.Issuer),
 		AccessToken:     strings.TrimSpace(tokens.AccessToken),
 		Scopes:          append([]string(nil), tokens.Scopes...),
 		ExpiresAtMillis: cloneInt64Pointer(tokens.ExpiresAtMillis),

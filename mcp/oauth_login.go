@@ -19,6 +19,7 @@ type OAuthLoginSessionOptions struct {
 	ServerURL             string
 	ClientID              string
 	ClientSecret          string
+	Issuer                string
 	RegistrationEndpoint  string
 	ClientName            string
 	AuthorizationEndpoint string
@@ -37,6 +38,7 @@ type OAuthLoginSession struct {
 	ServerURL        string
 	ClientID         string
 	ClientSecret     string
+	Issuer           string
 	TokenEndpoint    string
 	RedirectURL      string
 	CallbackPath     string
@@ -117,6 +119,7 @@ func NewOAuthLoginSession(options *OAuthLoginSessionOptions) (*OAuthLoginSession
 		ServerURL:        strings.TrimSpace(options.ServerURL),
 		ClientID:         strings.TrimSpace(options.ClientID),
 		ClientSecret:     strings.TrimSpace(options.ClientSecret),
+		Issuer:           strings.TrimSpace(options.Issuer),
 		TokenEndpoint:    strings.TrimSpace(options.TokenEndpoint),
 		RedirectURL:      strings.TrimSpace(options.RedirectURL),
 		CallbackPath:     callbackPath,
@@ -303,6 +306,7 @@ func (s *OAuthLoginSession) CompleteCallback(ctx context.Context, rawPath string
 		ServerURL:             s.ServerURL,
 		ClientID:              s.ClientID,
 		ClientSecret:          s.ClientSecret,
+		Issuer:                s.Issuer,
 		AuthorizationEndpoint: "",
 		TokenEndpoint:         s.TokenEndpoint,
 		RedirectURL:           s.RedirectURL,

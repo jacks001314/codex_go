@@ -1159,6 +1159,77 @@ func TestHTTPMCPRefreshesExpiredOAuthToken(t *testing.T) {
 	}
 }
 
+func TestHTTPMCPRefreshRejectsChangedIssuerLikeRust(t *testing.T) {
+	// Rust #39615: a stored refresh token must not be sent to a different
+	// issuer than the one that originally granted it.
+	var sawRefresh bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
+			writeJSON(t, w, map[string]any{
+				"issuer":                 "https://new-issuer.example.test",
+				"authorization_endpoint": "https://new-issuer.example.test/authorize",
+				"token_endpoint":         "http://" + r.Host + "/token",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/token":
+			sawRefresh = true
+			writeJSON(t, w, map[string]any{"access_token": "oauth-new", "refresh_token": "refresh-new", "expires_in": 3600})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	configURL := server.URL + "/mcp"
+	expired := time.Now().Add(-time.Hour).UnixMilli()
+	if err := NewOAuthStore(home).Save(&OAuthTokenSet{
+		ServerName:      "docs",
+		ServerURL:       configURL,
+		ClientID:        "client-1",
+		Issuer:          "https://old-issuer.example.test",
+		AccessToken:     "oauth-old",
+		RefreshToken:    "refresh-old",
+		ExpiresAtMillis: &expired,
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"docs": {Config: ServerConfig{URL: configURL, OAuthClientID: "client-1", Enabled: true}},
+	}, CodexHome: home})
+	status, err := service.ListStatusChecked(&MCPListServerStatusParams{Detail: &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly}})
+	if err != nil {
+		t.Fatalf("ListStatusChecked() error = %v", err)
+	}
+	if sawRefresh {
+		t.Fatal("refresh should not run when the issuer changed")
+	}
+	if len(status.Data) != 1 || status.Data[0].AuthStatus != MCPAuthOAuth {
+		t.Fatalf("status = %#v, want oAuth (stored credentials exist)", status)
+	}
+	// An unexpired access token may still be used without exposing the
+	// refresh token.
+	future := time.Now().Add(time.Hour).UnixMilli()
+	if err := NewOAuthStore(home).Save(&OAuthTokenSet{
+		ServerName:      "docs",
+		ServerURL:       configURL,
+		ClientID:        "client-1",
+		Issuer:          "https://old-issuer.example.test",
+		AccessToken:     "oauth-valid",
+		RefreshToken:    "refresh-old",
+		ExpiresAtMillis: &future,
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	tokens, err := NewOAuthStore(home).Load("docs", configURL)
+	if err != nil || tokens == nil {
+		t.Fatalf("Load = %#v, %v", tokens, err)
+	}
+	if got := tokens.AccessTokenForRequest(time.Now()); got != "oauth-valid" {
+		t.Fatalf("unexpired access token = %q, want oauth-valid", got)
+	}
+}
+
 func TestHTTPMCPRefreshesOAuthTokenAfterUnauthorizedResponse(t *testing.T) {
 	var sawRefresh bool
 	var initializeAuthHeaders []string

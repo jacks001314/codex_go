@@ -28,6 +28,9 @@ type StreamableHTTPOAuthDiscovery struct {
 	ScopesSupported                   []string
 	Resource                          string
 	AuthorizationServer               string
+	// Issuer is the authorization server issuer discovered for the MCP
+	// server (Rust #39615): refresh tokens are bound to this issuer.
+	Issuer                            string
 	ClientIDMetadataDocumentSupported bool
 	PublicClientTokenAuthSupported    bool
 }
@@ -409,6 +412,7 @@ func discoveryFromMCPOAuthAuthorizationMetadata(serverURL string, metadata *oaut
 		RegistrationEndpoint:              strings.TrimSpace(metadata.RegistrationEndpoint),
 		ScopesSupported:                   normalizeMCPOAuthScopes(metadata.ScopesSupported),
 		AuthorizationServer:               authorizationServer,
+		Issuer:                            authorizationServer,
 		ClientIDMetadataDocumentSupported: metadata.ClientIDMetadataDocumentSupported,
 		PublicClientTokenAuthSupported:    metadataHasPublicClientTokenAuth(metadata.TokenEndpointAuthMethodsSupported),
 	}

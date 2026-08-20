@@ -1689,7 +1689,7 @@ func activeProjectRootWithMarkers(cwd string, markers []string) string {
 
 func nearestGitRoot(cwd string) string {
 	for _, dir := range projectAncestorDirs(cwd) {
-		if pathExists(filepath.Join(dir, ".git")) {
+		if gitMetadataPathExists(filepath.Join(dir, ".git")) {
 			return dir
 		}
 	}
@@ -1698,6 +1698,12 @@ func nearestGitRoot(cwd string) string {
 
 func projectRootMarkerExists(dir string) bool {
 	for _, marker := range []string{".git", ".hg", ".svn"} {
+		if marker == ".git" {
+			if gitMetadataPathExists(filepath.Join(dir, marker)) {
+				return true
+			}
+			continue
+		}
 		if pathExists(filepath.Join(dir, marker)) {
 			return true
 		}
@@ -1710,9 +1716,41 @@ func projectRootMarkerExistsWithMarkers(dir string, markers []string) bool {
 		markers = []string{".git", ".hg", ".svn"}
 	}
 	for _, marker := range markers {
-		if marker != "" && pathExists(filepath.Join(dir, marker)) {
+		if marker == "" {
+			continue
+		}
+		if marker == ".git" {
+			if gitMetadataPathExists(filepath.Join(dir, marker)) {
+				return true
+			}
+			continue
+		}
+		if pathExists(filepath.Join(dir, marker)) {
 			return true
 		}
+	}
+	return false
+}
+
+// gitMetadataPathExists mirrors Rust #39629: a `.git` path counts as
+// repository metadata only when it is a file-based gitdir pointer or a real
+// checkout directory containing HEAD. A synthetic or incomplete `.git`
+// directory (e.g. a sandbox read-only mount) must not hide a parent
+// repository during project discovery.
+func gitMetadataPathExists(gitPath string) bool {
+	if gitPath == "" {
+		return false
+	}
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		return false
+	}
+	if !info.IsDir() {
+		// File-based `.git` entries (gitdir: pointers) remain valid metadata.
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(gitPath, "HEAD")); err == nil {
+		return true
 	}
 	return false
 }
