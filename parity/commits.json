@@ -328,9 +328,9 @@
       "domains": [
         "exec"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: Noise relay streams keep framing/encryption/multiplexing in the virtual stream while the JSON-RPC decoder (remoteJSONRPCDecoder) owns payload reassembly; a processor exit now sends a relay reset for the harness stream so the peer does not wait on a dead connection (execserver/remote_relay.go). Test extended."
       ]
     },
     {
@@ -403,9 +403,9 @@
         "shell",
         "exec"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to shell, exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: exec-server forward mode (`codex exec-server forward --connect ws://HOST:PORT`) registers an existing WebSocket exec-server as a remote environment and serves complete payloads unchanged (cli parse + ExecServerOptions.Forward, app runExecServer, execserver/forward.go ForwardServer). Tests added."
       ]
     },
     {
@@ -924,9 +924,9 @@
       "domains": [
         "mcp"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to mcp; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: attachment-scoped MCP servers stay disabled while their environment is pending, failed, or unselected; local servers and selected-plugin/controller-owned Apps remain available via AvailableEnvironment (mcp/api.go mcpServerEnvironmentAvailable; appserver/runtime_router.go populates AvailableEnvironment from thread selections). Test added."
       ]
     },
     {
@@ -1178,9 +1178,9 @@
       "domains": [
         "tui"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: section moves materialize a fresh non-ephemeral thread rollout before applying the move so section-filtered thread lists retain it (appserver/router.go materializeThreadForSectionMove). Test added."
       ]
     },
     {
@@ -1301,9 +1301,9 @@
         "tui",
         "config"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Deferred (documented): scoped to tui, config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+        "Implemented: thread settings snapshots and restore data stay separate from owner environment config (resolveEnvironmentConfig ownership, existing); environment selections survive evict/resume/spawn; memory initialization now waits for the primary environment to be configured before starting (appserver/memory_startup.go primaryEnvironmentConfiguredForMemoryStartup). Test added."
       ]
     },
     {
