@@ -67,6 +67,27 @@ func TestAgentMessageItemWithPhaseJSONShape(t *testing.T) {
 	}
 }
 
+func TestAsyncAgentMessageItemJSONShape(t *testing.T) {
+	// Rust #39312: async delivery marker survives on agentMessage items.
+	event := ItemCompleted(AsyncAgentMessageItem("item-async", "still working"))
+	got, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal error = %v", err)
+	}
+	text := string(got)
+	for _, want := range []string{
+		`"type":"item.completed"`,
+		`"type":"agent_message"`,
+		`"text":"still working"`,
+		`"delivery":"async"`,
+		`"phase":"final_answer"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("async item JSON missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestToolItemJSONShape(t *testing.T) {
 	started := ItemStarted(ToolCallItem("tool-call-1", "exec_command", `{"cmd":"date"}`))
 	data, err := json.Marshal(started)

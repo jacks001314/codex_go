@@ -82,6 +82,9 @@ type ToolRegistryOptions struct {
 	EnableWaitForEnvironment     bool
 	DisableUpdatePlan            bool
 	NewContextWindow             func()
+	// SendUserMessageAsync, when set, emits an asynchronous user-visible
+	// agent message for the send_user_message_async tool (#39319).
+	SendUserMessageAsync func(message string)
 	DisableWaitAgent             bool
 	DynamicTools                 []DynamicToolSpec
 	ThreadID                     string
@@ -156,6 +159,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		for _, supported := range options.ExperimentalSupportedTools {
 			if supported == "test_sync_tool" {
 				if err := registry.Register(&tool.TestSyncHandler{}); err != nil {
+					return nil, err
+				}
+			}
+			if supported == "send_user_message_async" {
+				if err := registry.Register(&tool.SendUserMessageAsyncHandler{EmitAsyncMessage: options.SendUserMessageAsync}); err != nil {
 					return nil, err
 				}
 			}

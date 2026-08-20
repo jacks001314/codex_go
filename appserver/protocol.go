@@ -897,6 +897,7 @@ type ThreadItem struct {
 	Status     string              `json:"status,omitempty"`
 	TurnID     string              `json:"turnId,omitempty"`
 	CreatedAt  int64               `json:"createdAt"`
+	Delivery   string              `json:"delivery,omitempty"`
 	Content    []ThreadItemContent `json:"content,omitempty"`
 	Data       map[string]any      `json:"data,omitempty"`
 	Raw        json.RawMessage     `json:"raw,omitempty"`
@@ -3624,6 +3625,7 @@ func BuildThreadItem(item session.Item) ThreadItem {
 		Type:       item.Type,
 		Role:       item.Role,
 		Text:       item.Text,
+		Delivery:   threadItemDelivery(item),
 		Name:       item.Name,
 		Namespace:  item.Namespace,
 		CallID:     item.CallID,
@@ -3635,6 +3637,19 @@ func BuildThreadItem(item session.Item) ThreadItem {
 		Raw:        append(json.RawMessage(nil), item.Raw...),
 		ResponseID: item.ResponseID,
 	}
+}
+
+// threadItemDelivery reads the async delivery marker from the item metadata
+// so agent messages emitted by send_user_message_async stay user-visible
+// without ending the turn (#39312).
+func threadItemDelivery(item session.Item) string {
+	if value, ok := item.Metadata["delivery"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	if value, ok := item.Data["delivery"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return ""
 }
 
 func threadItemContentFromSession(content []session.ContentPart) []ThreadItemContent {

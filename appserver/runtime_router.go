@@ -10989,6 +10989,17 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.EnvironmentWaiter = appServerEnvironmentWaiter{manager: r.services.Environment}
 	options.SelectedEnvironmentIDs = selectedEnvironmentIDs(params)
 	options.WaitForEnvironmentToolConfig = r.services.WaitForEnvironmentToolConfig
+	if params != nil {
+		modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
+		if info := r.modelInfoForRuntimeWithConfig(modelID, cfg); info != nil {
+			for _, supported := range info.ExperimentalSupportedTools {
+				if supported == tool.DefaultSendUserMessageAsyncToolName {
+					options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
+					break
+				}
+			}
+		}
+	}
 	if options.Shell != nil && cfg != nil {
 		options.Shell.Validation.AdditionalPermissionsAllowed = features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals")
 	}

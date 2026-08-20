@@ -2887,7 +2887,13 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 			m.commitPendingSteers(1)
 		}
 	case "agent_message":
-		if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {
+		if strings.EqualFold(strings.TrimSpace(item.Delivery), "async") {
+			// Rust #39312: an async agent message is user-visible but does not
+			// end the turn, so it renders as a standalone assistant message
+			// without becoming the turn's final answer.
+			m.Transcript.finishAssistantPreambleBeforeTool()
+			m.applyHistoryCell(historycell.NewAgentMessageCell([]string{item.Text}, true))
+		} else if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {
 			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
 		} else {
 			m.mergeAssistantFinal(item.Text)

@@ -1927,7 +1927,9 @@ func completedTurnNotificationTurn(turnID string, status TurnStatus, appErr *Tur
 
 func finalAgentMessageSummary(items []ThreadItem) []ThreadItem {
 	for i := len(items) - 1; i >= 0; i-- {
-		if normalizeThreadItemType(items[i].Type) != "agentMessage" || strings.TrimSpace(items[i].Text) == "" {
+		if normalizeThreadItemType(items[i].Type) != "agentMessage" ||
+			strings.TrimSpace(items[i].Text) == "" ||
+			strings.TrimSpace(items[i].Delivery) == "async" {
 			continue
 		}
 		return []ThreadItem{items[i]}
@@ -1937,7 +1939,9 @@ func finalAgentMessageSummary(items []ThreadItem) []ThreadItem {
 
 func lastAgentMessageFromThreadItems(items []ThreadItem) string {
 	for i := len(items) - 1; i >= 0; i-- {
-		if normalizeThreadItemType(items[i].Type) == "agentMessage" && strings.TrimSpace(items[i].Text) != "" {
+		if normalizeThreadItemType(items[i].Type) == "agentMessage" &&
+			strings.TrimSpace(items[i].Text) != "" &&
+			strings.TrimSpace(items[i].Delivery) != "async" {
 			return strings.TrimSpace(items[i].Text)
 		}
 	}
@@ -3879,6 +3883,9 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 				if item, ok := sessionItemForAppToolOutput(turnID, &toolExecutions[i], createdAt, metadata); ok {
 					items = append(items, item)
 				}
+				if item, ok := sessionItemForAppAsyncMessage(turnID, &toolExecutions[i], createdAt, metadata); ok {
+					items = append(items, item)
+				}
 				if item, ok := sessionItemForAppCollaborationPresentation(turnID, &toolExecutions[i], createdAt, metadata); ok {
 					items = append(items, item)
 				}
@@ -5568,6 +5575,39 @@ func sessionItemForAppToolOutput(turnID string, execution *turn.ToolExecutionRes
 		Data:      appToolOutputData(execution.Invocation, execution.Output),
 		CreatedAt: outputCreatedAt,
 		Metadata:  outputMetadata,
+	}, true
+}
+
+// sessionItemForAppAsyncMessage converts a send_user_message_async tool
+// completion into a user-visible agent_message session item carrying the
+// async delivery marker (#39312/#39319). The message stays out of the model's
+// input context; only the turn items and notifications expose it.
+func sessionItemForAppAsyncMessage(turnID string, execution *turn.ToolExecutionResult, createdAt time.Time, responseMetadata map[string]any) (session.Item, bool) {
+	if execution == nil || execution.Invocation == nil || execution.Output == nil {
+		return session.Item{}, false
+	}
+	if execution.Invocation.ToolName.Key() != tool.DefaultSendUserMessageAsyncToolName {
+		return session.Item{}, false
+	}
+	message := ""
+	if value, ok := execution.Output.Data["async_message"].(map[string]any); ok {
+		message, _ = value["message"].(string)
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return session.Item{}, false
+	}
+	callID := appToolExecutionCallID(execution, createdAt)
+	metadata := appTimingMetadata(appTurnMetadata(turnID, cloneAnyMap(responseMetadata)), execution.StartedAt, execution.FinishedAt)
+	metadata["toolName"] = execution.Invocation.ToolName.Key()
+	metadata["delivery"] = "async"
+	return session.Item{
+		ID:        "agent-message-" + safeIdentifier(turnID) + "-" + safeIdentifier(callID),
+		Type:      "agent_message",
+		Role:      "assistant",
+		Text:      message,
+		CreatedAt: createdAt,
+		Metadata:  metadata,
 	}, true
 }
 

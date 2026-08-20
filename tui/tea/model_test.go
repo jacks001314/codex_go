@@ -7612,6 +7612,29 @@ func TestModelMisalignmentPolicyViolationStopsChat(t *testing.T) {
 	}
 }
 
+func TestModelAsyncAgentMessageRendersWithoutEndingTurn(t *testing.T) {
+	// Rust #39312: an agent message with delivery=async is user-visible but
+	// does not become the turn's final answer.
+	model := NewModel(codextui.NewState(nil), Options{Width: 200, Height: 36})
+	model.State.SetThreadID("thread-async")
+	model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{
+		Type: "item.completed",
+		Item: &protocol.ThreadItem{ID: "async-1", Type: "agent_message", Text: "still working", Delivery: "async"},
+	}})
+	view := model.View()
+	if !strings.Contains(view, "still working") {
+		t.Fatalf("async message not rendered:\n%s", view)
+	}
+	model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{
+		Type: "item.completed",
+		Item: &protocol.ThreadItem{ID: "final-1", Type: "agent_message", Text: "done"},
+	}})
+	view = model.View()
+	if !strings.Contains(view, "done") {
+		t.Fatalf("final message not rendered:\n%s", view)
+	}
+}
+
 func TestModelForkCommandForksCurrentSessionImmediately(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-source")

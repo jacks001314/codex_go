@@ -87,6 +87,7 @@ type ThreadItem struct {
 	Message               string                       `json:"message,omitempty"`
 	Text                  string                       `json:"text,omitempty"`
 	Phase                 string                       `json:"phase,omitempty"`
+	Delivery              string                       `json:"delivery,omitempty"`
 	ToolName              string                       `json:"tool_name,omitempty"`
 	CallID                string                       `json:"call_id,omitempty"`
 	Input                 string                       `json:"input,omitempty"`
@@ -188,6 +189,19 @@ func AgentMessageItemWithPhase(id, text, phase string) ThreadItem {
 		Type:  "agent_message",
 		Text:  text,
 		Phase: phase,
+	}
+}
+
+// AsyncAgentMessageItem mirrors Rust AgentMessageItem with
+// delivery: AgentMessageDelivery::Async (#39312): a user-visible agent
+// message sent without ending the current turn.
+func AsyncAgentMessageItem(id, text string) ThreadItem {
+	return ThreadItem{
+		ID:        id,
+		Type:      "agent_message",
+		Text:      text,
+		Phase:     "final_answer",
+		Delivery:  "async",
 	}
 }
 
