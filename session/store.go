@@ -228,6 +228,7 @@ type Metadata struct {
 	BaseInstructionsProvenance *BaseInstructionsProvenance `json:"base_instructions_provenance,omitempty"`
 	Instructions               string                      `json:"instructions,omitempty"`
 	ApprovalPolicy             string                      `json:"approval_policy,omitempty"`
+	ActivePermissionProfile    string                      `json:"active_permission_profile,omitempty"`
 	SandboxPolicy              string                      `json:"sandbox_policy,omitempty"`
 	ServiceTier                string                      `json:"service_tier,omitempty"`
 	PromptCacheKey             string                      `json:"prompt_cache_key,omitempty"`
@@ -337,6 +338,7 @@ type MetadataPatch struct {
 	BaseInstructions        *string
 	Instructions            *string
 	ApprovalPolicy          *string
+	ActivePermissionProfile *string
 	SandboxPolicy           *string
 	ServiceTier             *string
 	PromptCacheKey          *string
@@ -1246,6 +1248,9 @@ func (s *Store) updateMetadataLocked(threadID ThreadID, patch *MetadataPatch, in
 	}
 	if patch.ApprovalPolicy != nil {
 		record.Metadata.ApprovalPolicy = *patch.ApprovalPolicy
+	}
+	if patch.ActivePermissionProfile != nil {
+		record.Metadata.ActivePermissionProfile = *patch.ActivePermissionProfile
 	}
 	if patch.SandboxPolicy != nil {
 		record.Metadata.SandboxPolicy = *patch.SandboxPolicy

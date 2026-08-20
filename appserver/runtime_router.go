@@ -5770,6 +5770,13 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 	if strings.TrimSpace(providerFromTurnStart(params)) == "" && strings.TrimSpace(record.Metadata.ModelProvider) != "" {
 		params.Config["model_provider"] = strings.TrimSpace(record.Metadata.ModelProvider)
 	}
+	// Rust #39153: restore the thread's persisted active permission profile on
+	// cold resumes and forks so the thread does not fall back to the current
+	// configured default.
+	if params.Permissions == nil && strings.TrimSpace(record.Metadata.ActivePermissionProfile) != "" {
+		value := strings.TrimSpace(record.Metadata.ActivePermissionProfile)
+		params.Permissions = &value
+	}
 	return nil
 }
 
@@ -6342,7 +6349,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 }
 
 func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams) error {
-	if r == nil || params == nil || params.ApprovalPolicy == nil || strings.TrimSpace(*params.ApprovalPolicy) == "" {
+	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil) {
 		return nil
 	}
 	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
@@ -6350,19 +6357,27 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 	if err != nil || record == nil {
 		return err
 	}
-	policy := strings.TrimSpace(*params.ApprovalPolicy)
-	record.Metadata.ApprovalPolicy = policy
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	configOverrides := threadRecordConfigOverrides(record)
 	if configOverrides == nil {
 		configOverrides = map[string]any{}
 	}
-	configOverrides["approval_policy"] = policy
+	if params.ApprovalPolicy != nil && strings.TrimSpace(*params.ApprovalPolicy) != "" {
+		policy := strings.TrimSpace(*params.ApprovalPolicy)
+		record.Metadata.ApprovalPolicy = policy
+		configOverrides["approval_policy"] = policy
+	}
+	if params.Permissions != nil && strings.TrimSpace(*params.Permissions) != "" {
+		profile := strings.TrimSpace(*params.Permissions)
+		record.Metadata.ActivePermissionProfile = profile
+		configOverrides["permissions"] = profile
+	}
 	record.Metadata.Extra["config"] = configOverrides
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return err
 	}
-	return r.services.ThreadRouter.appendThreadSettingsApplied(threadID, policy, runtimeRouterNow(r).UTC())
+	appliedPolicy := strings.TrimSpace(record.Metadata.ApprovalPolicy)
+	return r.services.ThreadRouter.appendThreadSettingsApplied(threadID, appliedPolicy, runtimeRouterNow(r).UTC())
 }
 
 func (r *RuntimeRouter) cleanBackgroundTerminals(params *BackgroundTerminalsCleanParams) (*BackgroundTerminalsCleanResponse, error) {

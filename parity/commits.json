@@ -58,9 +58,9 @@
                         "domains":  [
                                         "protocol"
                                     ],
-                        "status":  "implementation_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Deferred (documented): scoped to protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                                         "Implemented: session.Metadata/MetadataPatch carry active_permission_profile, persisted by thread/settings.update (record metadata + config overrides) and restored on cold resume/fork in prepareTurnStartParams."
                                      ]
                     },
                     {
@@ -70,9 +70,9 @@
                         "domains":  [
                                         "config"
                                     ],
-                        "status":  "implementation_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Deferred (documented): scoped to config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                                         "N/A (equivalent): Go resumes/forks resolve the approvals reviewer from effective config plus thread settings history (threadSettingsForTurn/applyThreadSettingsToTurnStartParams), honoring explicit request overrides, matching the centralized helper behavior."
                                      ]
                     },
                     {
@@ -95,9 +95,9 @@
                                         "tui",
                                         "protocol"
                                     ],
-                        "status":  "implementation_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Deferred (documented): scoped to tui, protocol; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                                         "Implemented: prepareTurnStartParams restores the persisted ActivePermissionProfile on resume/fork so the thread does not fall back to the current configured default; explicit turn-start values win."
                                      ]
                     },
                     {
@@ -1144,8 +1144,8 @@
                                     ],
                         "status":  "complete",
                         "evidence":  [
-                                         "Implemented: refreshThreadSummaryIDs selects user/agent summary items using the stored item_type column with a fallback to json_extract(item_json, '$.type') when item_type is empty (thread_history_projection.go)."
-                                    ]
+                                         "Implemented: refreshThreadSummaryIDs selects user/agent summary items using the stored item_type column with a fallback to json_extract(item_json, \u0027$.type\u0027) when item_type is empty (thread_history_projection.go)."
+                                     ]
                     },
                     {
                         "sha":  "18937b226524164546e7328a2ed47c0d52536e0a",

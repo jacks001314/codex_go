@@ -292,6 +292,24 @@ func TestStoreUpdateMetadataPatchesFields(t *testing.T) {
 	}
 }
 
+func TestStorePersistsActivePermissionProfileLikeRust(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if err := store.Save(&Record{ID: "thread-1"}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	profile := "workspace"
+	if _, err := store.UpdateMetadata("thread-1", &MetadataPatch{ActivePermissionProfile: &profile}, true); err != nil {
+		t.Fatalf("UpdateMetadata() error = %v", err)
+	}
+	loaded, err := store.Load("thread-1")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded == nil || loaded.Metadata.ActivePermissionProfile != "workspace" {
+		t.Fatalf("persisted metadata = %#v", loaded)
+	}
+}
+
 func TestStoreUpdateMetadataNoOpReturnsMaterializedThread(t *testing.T) {
 	store := NewStore(t.TempDir())
 	if err := store.Save(&Record{ID: "thread-1", Title: "original"}); err != nil {
