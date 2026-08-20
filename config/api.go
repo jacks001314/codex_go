@@ -516,6 +516,7 @@ type ConfigRequirements struct {
 	AllowRemoteControl                   *bool                           `json:"allowRemoteControl,omitempty"`
 	ComputerUse                          *ComputerUseRequirements        `json:"computerUse,omitempty"`
 	BrowserUse                           *BrowserUseRequirements         `json:"browserUse,omitempty"`
+	InAppBrowser                         *InAppBrowserRequirements       `json:"inAppBrowser,omitempty"`
 	AutoReview                           *AutoReviewRequirements         `json:"autoReview,omitempty"`
 	FeatureRequirements                  map[string]bool                 `json:"featureRequirements,omitempty"`
 	Hooks                                *ManagedHooksRequirements       `json:"hooks,omitempty"`
@@ -544,6 +545,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowRemoteControl                   *bool                     `json:"allowRemoteControl"`
 		ComputerUse                          *ComputerUseRequirements  `json:"computerUse"`
 		BrowserUse                           *BrowserUseRequirements   `json:"browserUse"`
+		InAppBrowser                         *InAppBrowserRequirements `json:"inAppBrowser"`
 		AutoReview                           *AutoReviewRequirements   `json:"autoReview"`
 		FeatureRequirements                  map[string]bool           `json:"featureRequirements"`
 		Hooks                                *ManagedHooksRequirements `json:"hooks"`
@@ -567,6 +569,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowRemoteControl:                   cloneBoolPtr(r.AllowRemoteControl),
 		ComputerUse:                          cloneComputerUse(r.ComputerUse),
 		BrowserUse:                           cloneBrowserUse(r.BrowserUse),
+		InAppBrowser:                         cloneInAppBrowser(r.InAppBrowser),
 		AutoReview:                           cloneAutoReview(r.AutoReview),
 		FeatureRequirements:                  cloneBoolMap(r.FeatureRequirements),
 		Hooks:                                cloneManagedHooks(r.Hooks),
@@ -632,6 +635,20 @@ func (r *BrowserUseRequirements) MarshalJSON() ([]byte, error) {
 		DisableAutoReview *bool `json:"disableAutoReview"`
 	}{
 		DisableAutoReview: cloneBoolPtr(r.DisableAutoReview),
+	})
+}
+
+// InAppBrowserRequirements mirrors Rust's managed in-app browser settings
+// policy (Rust #39720): whether external browser settings imports are allowed.
+type InAppBrowserRequirements struct {
+	AllowExternalBrowserSettingsImport *bool `json:"allowExternalBrowserSettingsImport,omitempty"`
+}
+
+func (r *InAppBrowserRequirements) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		AllowExternalBrowserSettingsImport *bool `json:"allowExternalBrowserSettingsImport"`
+	}{
+		AllowExternalBrowserSettingsImport: cloneBoolPtr(r.AllowExternalBrowserSettingsImport),
 	})
 }
 
@@ -3052,6 +3069,13 @@ func cloneBrowserUse(value *BrowserUseRequirements) *BrowserUseRequirements {
 		return nil
 	}
 	return &BrowserUseRequirements{DisableAutoReview: cloneBoolPtr(value.DisableAutoReview)}
+}
+
+func cloneInAppBrowser(value *InAppBrowserRequirements) *InAppBrowserRequirements {
+	if value == nil {
+		return nil
+	}
+	return &InAppBrowserRequirements{AllowExternalBrowserSettingsImport: cloneBoolPtr(value.AllowExternalBrowserSettingsImport)}
 }
 
 func cloneManagedHooks(value *ManagedHooksRequirements) *ManagedHooksRequirements {

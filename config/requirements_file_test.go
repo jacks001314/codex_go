@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +154,33 @@ url = "https://plugin.example/mcp"
 	}
 	if allowlist := requirements.Plugins["empty@test"].MCPServers; allowlist == nil || len(*allowlist) != 0 {
 		t.Fatalf("explicit empty plugin allowlist = %#v", allowlist)
+	}
+}
+
+func TestLoadRequirementsFileParsesInAppBrowserImportPolicyLikeRust(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requirements.toml")
+	body := `
+[in_app_browser]
+allow_external_browser_settings_import = true
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile requirements error = %v", err)
+	}
+	requirements, err := LoadRequirementsFile(path)
+	if err != nil {
+		t.Fatalf("LoadRequirementsFile() error = %v", err)
+	}
+	if requirements == nil || requirements.InAppBrowser == nil ||
+		requirements.InAppBrowser.AllowExternalBrowserSettingsImport == nil ||
+		!*requirements.InAppBrowser.AllowExternalBrowserSettingsImport {
+		t.Fatalf("in_app_browser requirements = %#v", requirements)
+	}
+	encoded, err := json.Marshal(requirements)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(encoded), `"inAppBrowser":{"allowExternalBrowserSettingsImport":true}`) {
+		t.Fatalf("requirements JSON missing inAppBrowser policy: %s", encoded)
 	}
 }
 

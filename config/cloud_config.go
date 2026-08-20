@@ -329,6 +329,9 @@ func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequireme
 	if overlay.BrowserUse != nil {
 		out.BrowserUse = cloneBrowserUse(overlay.BrowserUse)
 	}
+	if overlay.InAppBrowser != nil {
+		out.InAppBrowser = cloneInAppBrowser(overlay.InAppBrowser)
+	}
 	if overlay.AutoReview != nil {
 		// Rust 208f05b233: `auto_review.required_on_models` unions model slugs
 		// across requirement layers so protected models stay protected even

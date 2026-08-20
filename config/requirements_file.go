@@ -60,6 +60,14 @@ func browserUseRequirementsFromMap(values map[string]any) *BrowserUseRequirement
 	return &out
 }
 
+func inAppBrowserRequirementsFromMap(values map[string]any) *InAppBrowserRequirements {
+	var out InAppBrowserRequirements
+	if value, ok := boolAnyKey(values, "allow_external_browser_settings_import", "allowExternalBrowserSettingsImport"); ok {
+		out.AllowExternalBrowserSettingsImport = &value
+	}
+	return &out
+}
+
 func ConfigRequirementsFromMap(values map[string]any) *ConfigRequirements {
 	requirements, _ := configRequirementsFromMap(values)
 	return requirements
@@ -167,6 +175,9 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	}
 	if nested, ok := mapAnyKey(values, "browser_use", "browserUse"); ok {
 		out.BrowserUse = browserUseRequirementsFromMap(nested)
+	}
+	if nested, ok := mapAnyKey(values, "in_app_browser", "inAppBrowser"); ok {
+		out.InAppBrowser = inAppBrowserRequirementsFromMap(nested)
 	}
 	if nested, ok := mapAnyKey(values, "auto_review", "autoReview"); ok {
 		out.AutoReview = autoReviewRequirementsFromMap(nested)
@@ -642,6 +653,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.AllowRemoteControl == nil &&
 			value.ComputerUse == nil &&
 			value.BrowserUse == nil &&
+			value.InAppBrowser == nil &&
 			value.AutoReview == nil &&
 			value.FeatureRequirements == nil &&
 			value.Hooks == nil &&
