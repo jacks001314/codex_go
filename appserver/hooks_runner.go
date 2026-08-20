@@ -22,6 +22,10 @@ type HookRunner struct {
 	ShellArgs    []string
 	Notify       func(NotificationMethod, any)
 	Now          func() time.Time
+	// capturedEnv is the session process environment captured when the hook
+	// registry is created; command hooks replay it across configuration
+	// reloads instead of inheriting the live environment (Rust #39314).
+	capturedEnv []string
 	// McpToolHookExecutor executes mcp_tool hooks (Rust #38705). When nil,
 	// mcp_tool handlers are skipped like Rust's engine without an executor.
 	McpToolHookExecutor McpToolHookExecutor
@@ -78,7 +82,7 @@ type hookCommandRunResult struct {
 }
 
 func NewHookRunner() *HookRunner {
-	return &HookRunner{Now: time.Now, asyncRuntimes: map[string]*asyncHookRuntime{}}
+	return &HookRunner{Now: time.Now, capturedEnv: os.Environ(), asyncRuntimes: map[string]*asyncHookRuntime{}}
 }
 
 func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRunResult, error) {
@@ -157,7 +161,7 @@ func (r *HookRunner) runCommand(ctx context.Context, metadata HookMetadata, inpu
 
 	cmd := r.commandForHook(execCtx, metadata)
 	cmd.Dir = cwd
-	cmd.Env = hookCommandEnv(os.Environ(), metadata.Env)
+	cmd.Env = hookCommandEnv(r.hookEnvironment(), metadata.Env)
 	// Rust c4513cb982: hook child processes must not inherit Codex launch
 	// context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
 	envutil.ScrubCommandEnv(cmd)
@@ -410,14 +414,15 @@ func hookCommandEnv(base []string, overrides map[string]string) []string {
 func (r *HookRunner) commandForHook(ctx context.Context, metadata HookMetadata) *osexec.Cmd {
 	command := ptrStringValue(metadata.Command)
 	if strings.TrimSpace(r.ShellProgram) == "" {
+		env := r.hookEnvironment()
 		if runtime.GOOS == "windows" {
-			program := os.Getenv("COMSPEC")
+			program := capturedEnvValue(env, "COMSPEC")
 			if strings.TrimSpace(program) == "" {
 				program = "cmd.exe"
 			}
 			return osexec.CommandContext(ctx, program, "/C", command)
 		}
-		program := os.Getenv("SHELL")
+		program := capturedEnvValue(env, "SHELL")
 		if strings.TrimSpace(program) == "" {
 			program = "/bin/sh"
 		}
@@ -426,6 +431,25 @@ func (r *HookRunner) commandForHook(ctx context.Context, metadata HookMetadata) 
 	args := append([]string(nil), r.ShellArgs...)
 	args = append(args, command)
 	return osexec.CommandContext(ctx, r.ShellProgram, args...)
+}
+
+// hookEnvironment returns the captured session environment, falling back to
+// the live process environment for direct-constructed runners.
+func (r *HookRunner) hookEnvironment() []string {
+	if r != nil && r.capturedEnv != nil {
+		return r.capturedEnv
+	}
+	return os.Environ()
+}
+
+func capturedEnvValue(env []string, key string) string {
+	prefix := key + "="
+	for _, pair := range env {
+		if strings.HasPrefix(pair, prefix) {
+			return strings.TrimPrefix(pair, prefix)
+		}
+	}
+	return ""
 }
 
 func (r *HookRunner) notify(method NotificationMethod, params any) {

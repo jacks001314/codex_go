@@ -551,9 +551,9 @@
             "domains":  [
                 "config"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to config; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "N/A (equivalent): Go SettingsUpdateParams/UpdateSettings have no environments field, so thread settings cannot downgrade an owner-provided environment configuration to FromThread; environment config states are fixed per attachment."
                 ]
             },
         {
@@ -824,9 +824,9 @@
             "domains":  [
                 "rollout"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to rollout; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "Implemented: HookRunner captures the process environment at construction and replays it for command hooks across reloads, resolving the default shell from the captured snapshot; live-env fallback retained for direct-constructed runners."
                 ]
             },
         {
@@ -1857,9 +1857,9 @@
             "domains":  [
                 "core"
                 ],
-            "status":  "implementation_pending",
+            "status":  "complete",
             "evidence":  [
-                "Deferred (documented): scoped to core; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                "N/A (test-only): the Rust change relocates a globalThis allowlist test into the code-mode runtime suite; Go codemode has its own in-process runtime tests with no core-network harness dependency."
                 ]
             },
         {
