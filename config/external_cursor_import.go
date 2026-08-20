@@ -17,7 +17,6 @@ import (
 const (
 	externalCursorHomeConfigFile    = "cli-config.json"
 	externalCursorProjectConfigFile = "cli.json"
-	externalCursorSandboxFile       = "sandbox.json"
 	externalCursorRulesFile         = ".cursorrules"
 )
 
@@ -108,17 +107,8 @@ func (s *ConfigService) externalCursorSettingsPath(scope externalMigrationScope)
 }
 
 func (s *ConfigService) externalCursorConfigMigration(scope externalMigrationScope) (string, string, map[string]any, bool) {
-	sourceDir := s.externalCursorConfigDir(scope)
 	source := s.externalCursorSettingsPath(scope)
 	settings, ok := readJSONObject(source)
-	sandbox, sandboxOK := readJSONObject(filepath.Join(sourceDir, externalCursorSandboxFile))
-	if sandboxOK {
-		if !ok {
-			settings = map[string]any{}
-		}
-		settings["__cursorSandbox"] = sandbox
-		ok = true
-	}
 	if !ok {
 		return "", "", nil, false
 	}
@@ -130,42 +120,9 @@ func (s *ConfigService) externalCursorConfigMigration(scope externalMigrationSco
 }
 
 func buildCursorConfigMigration(settings map[string]any) map[string]any {
-	migrated := buildClaudeConfigMigration(map[string]any{"env": settings["env"]})
-	sandbox, _ := settings["__cursorSandbox"].(map[string]any)
-	mode := ""
-	switch externalString(sandbox["type"]) {
-	case "workspace_readwrite":
-		mode = "workspace-write"
-	case "read_only":
-		mode = "read-only"
-	}
-	if mode != "" {
-		migrated["sandbox_mode"] = mode
-	}
-	if mode != "workspace-write" {
-		return migrated
-	}
-	workspace := map[string]any{}
-	var roots []string
-	for _, path := range externalStrings(sandbox["additionalReadwritePaths"]) {
-		if filepath.IsAbs(path) {
-			roots = append(roots, path)
-		}
-	}
-	if len(roots) > 0 {
-		workspace["writable_roots"] = roots
-	}
-	if externalBool(sandbox["disableTmpWrite"]) {
-		workspace["exclude_slash_tmp"] = true
-		workspace["exclude_tmpdir_env_var"] = true
-	}
-	if network, ok := sandbox["networkPolicy"].(map[string]any); ok && externalString(network["default"]) == "allow" {
-		workspace["network_access"] = true
-	}
-	if len(workspace) > 0 {
-		migrated["sandbox_workspace_write"] = workspace
-	}
-	return migrated
+	// Rust #39325: Cursor sandbox settings (.cursor/sandbox.json) are no
+	// longer migrated; only supported cli-config.json settings (env) remain.
+	return buildClaudeConfigMigration(map[string]any{"env": settings["env"]})
 }
 
 func (s *ConfigService) importExternalCursorConfig(scope externalMigrationScope, result *ExternalAgentConfigImportTypeResult) error {

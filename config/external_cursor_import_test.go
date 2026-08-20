@@ -67,9 +67,14 @@ func TestExternalCursorHomeMigrationDetectsImportsAndDoesNotRedetect(t *testing.
 	}
 
 	configText := mustReadExternalCursorTestFile(t, filepath.Join(codexHome, "config.toml"))
-	for _, want := range []string{"CURSOR_ENV", "workspace-write", "writable_roots", writable, "exclude_slash_tmp", "network_access", "cursor-docs", "sample@acme", "installed = true", "enabled = true"} {
+	for _, want := range []string{"CURSOR_ENV", "cursor-docs", "sample@acme", "installed = true", "enabled = true"} {
 		if !strings.Contains(configText, want) {
 			t.Fatalf("config missing %q:\n%s", want, configText)
+		}
+	}
+	for _, unwanted := range []string{"workspace-write", "writable_roots", "exclude_slash_tmp", "network_access"} {
+		if strings.Contains(configText, unwanted) {
+			t.Fatalf("config must not migrate Cursor sandbox settings, found %q:\n%s", unwanted, configText)
 		}
 	}
 
@@ -140,7 +145,7 @@ func TestExternalCursorRepositoryMigrationUsesProjectFilesAndLegacyRules(t *test
 	}
 	service.ImportExternalAgentConfig(&ExternalAgentConfigImportParams{MigrationItems: detected.Items, MigrationSource: &source})
 	configText := mustReadExternalCursorTestFile(t, filepath.Join(repo, ".codex", "config.toml"))
-	if !strings.Contains(configText, "REPO_CURSOR") || !strings.Contains(configText, "read-only") {
+	if !strings.Contains(configText, "REPO_CURSOR") || strings.Contains(configText, "read-only") {
 		t.Fatalf("repo config = %s", configText)
 	}
 	if got := mustReadExternalCursorTestFile(t, filepath.Join(repo, "AGENTS.md")); got != "Use Codex and AGENTS.md.\n" {
