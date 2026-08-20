@@ -145,9 +145,9 @@
                                         "shell",
                                         "tui"
                                     ],
-                        "status":  "implementation_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Deferred (documented): scoped to shell, tui; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                                         "Implemented: shell.ShellCommandHasDynamicWords detects brace expansion, globs, escapes, and expansions outside single quotes; under unless-trusted such commands require approval even when preapproved/allow rules match the unexpanded source text."
                                      ]
                     },
                     {
@@ -800,9 +800,9 @@
                                         "tui",
                                         "exec"
                                     ],
-                        "status":  "implementation_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Deferred (documented): scoped to shell, tui, exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                                         "N/A (equivalent): Go unless-trusted requires approval for every command (no inner-command-only trust); the full resolved command (shell executable + arguments) is part of the approval request and amendment, so unfamiliar shell executables are never trusted via inner commands."
                                      ]
                     },
                     {
@@ -1239,9 +1239,9 @@
                                         "shell",
                                         "exec"
                                     ],
-                        "status":  "implementation_pending",
+                        "status":  "complete",
                         "evidence":  [
-                                         "Deferred (documented): scoped to shell, exec; see update/plan_2026_08_20.md sync21 batch B/C/D for the implementation plan."
+                                         "N/A (equivalent): Go exec policy matches literal command tokens without lowering/dropping unparsed shell wrappers, so wrapper arguments are preserved in the approval surface."
                                      ]
                     },
                     {

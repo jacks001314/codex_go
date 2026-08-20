@@ -32,6 +32,33 @@ func TestDetectShellType(t *testing.T) {
 	}
 }
 
+func TestShellCommandHasDynamicWordsLikeRust(t *testing.T) {
+	for _, dynamic := range []string{
+		"find ./missing -{delete,print}",
+		"rm -rf *",
+		"cat ?.txt",
+		"echo $HOME",
+		"grep [abc] file",
+		"echo \"$PATH\"",
+		"echo unquoted\\ escape",
+		"echo `pwd`",
+	} {
+		if !ShellCommandHasDynamicWords(dynamic) {
+			t.Fatalf("ShellCommandHasDynamicWords(%q) = false, want true", dynamic)
+		}
+	}
+	for _, literal := range []string{
+		"echo 'literal *?[{$}'",
+		"echo \"quoted *?[{\"",
+		"echo hello",
+		"cat README.md",
+	} {
+		if ShellCommandHasDynamicWords(literal) {
+			t.Fatalf("ShellCommandHasDynamicWords(%q) = true, want false", literal)
+		}
+	}
+}
+
 func TestGetShellResolvesModelProvidedPathByType(t *testing.T) {
 	binDir := t.TempDir()
 	executableName := "bash"

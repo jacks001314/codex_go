@@ -322,6 +322,50 @@ func TokenizePowerShellCommand(command string) []string {
 	return tokens
 }
 
+// ShellCommandHasDynamicWords reports whether a shell command contains words
+// whose literal source text differs from what the shell executes at runtime:
+// brace expansion, globs, escapes, or expansions outside single quotes
+// (Rust #39159). Such commands must not match allow rules on their source text.
+func ShellCommandHasDynamicWords(command string) bool {
+	var quote rune
+	escaped := false
+	for _, r := range command {
+		if escaped {
+			// An escape outside single quotes changes the word at runtime.
+			if quote != '\'' {
+				return true
+			}
+			escaped = false
+			continue
+		}
+		switch quote {
+		case '\'':
+			if r == '\'' {
+				quote = 0
+			}
+			continue
+		case '"':
+			if r == '"' {
+				quote = 0
+				continue
+			}
+			if r == '\\' || r == '$' || r == '`' {
+				return true
+			}
+			continue
+		}
+		switch r {
+		case '\\':
+			escaped = true
+		case '\'', '"':
+			quote = r
+		case '*', '?', '[', '{', '}', '$', '`':
+			return true
+		}
+	}
+	return escaped
+}
+
 // ReadPaths returns file operands from the read commands recognized by the
 // implicit skill invocation fixtures. Connector-separated commands are
 // inspected independently and a leading cd is applied to later relative paths.

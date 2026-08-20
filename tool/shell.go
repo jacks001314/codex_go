@@ -382,7 +382,11 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	if escalationApprovalRequired && opts.ApprovalPolicy != sandbox.ApprovalOnRequest {
 		return nil, fmt.Errorf("approval policy is %s; reject command - you cannot ask for escalated permissions if the approval policy is %s", opts.ApprovalPolicy, opts.ApprovalPolicy)
 	}
-	policyApprovalRequired := opts.ApprovalPolicy == sandbox.ApprovalUnlessTrusted && !opts.PermissionsPreapproved
+	// Rust #39159: commands with dynamic shell words (brace expansion, globs,
+	// escapes, expansions) require approval under unless-trusted even when a
+	// policy allow rule matches the unexpanded source text.
+	policyApprovalRequired := opts.ApprovalPolicy == sandbox.ApprovalUnlessTrusted &&
+		(!opts.PermissionsPreapproved || shellutil.ShellCommandHasDynamicWords(args.Cmd))
 	approvalRequired := escalationApprovalRequired || policyApprovalRequired
 	approvalReason := shellApprovalReason(args)
 	if policyApprovalRequired && strings.TrimSpace(approvalReason) == "" {
