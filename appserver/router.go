@@ -2592,6 +2592,12 @@ func (r *Router) handleThreadSectionMove(request *Request) (*ThreadSectionMoveRe
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
+	// Rust #39523: a fresh non-ephemeral thread has no persisted rollout or
+	// preview until its first turn. Materialize it before applying an explicit
+	// section move so the thread stays visible in section-filtered lists.
+	if err := r.materializeThreadForSectionMove(session.ThreadID(params.ThreadID)); err != nil {
+		return nil, err
+	}
 	var beforeThreadID *session.ThreadID
 	if params.BeforeThreadID != nil {
 		value := session.ThreadID(*params.BeforeThreadID)
@@ -2613,6 +2619,38 @@ func (r *Router) handleThreadSectionMove(request *Request) (*ThreadSectionMoveRe
 		}
 	}
 	return &ThreadSectionMoveResponse{}, nil
+}
+
+// materializeThreadForSectionMove flushes a non-ephemeral thread's rollout
+// when it exists in the store but has no persisted file yet (Rust #39523).
+func (r *Router) materializeThreadForSectionMove(threadID session.ThreadID) error {
+	if r == nil {
+		return nil
+	}
+	record, err := r.readThreadRecord(threadID, true, false)
+	if err != nil {
+		if errors.Is(err, session.ErrThreadNotFound) {
+			return jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", strings.TrimSpace(string(threadID))))
+		}
+		return jsonRPCInvalidRequest(err.Error())
+	}
+	if record == nil {
+		return jsonRPCInvalidRequest(fmt.Sprintf("thread not found: %s", strings.TrimSpace(string(threadID))))
+	}
+	path := r.threadRolloutPath(record)
+	if strings.TrimSpace(path) != "" {
+		if _, statErr := os.Stat(path); statErr == nil {
+			return nil
+		}
+	}
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = r.now().UTC()
+	}
+	if err := r.createThreadRollout(record, now); err != nil {
+		return jsonRPCInvalidRequest(fmt.Sprintf("failed to materialize thread rollout: %v", err))
+	}
+	return nil
 }
 
 func (r *Router) handleThreadSectionCreate(request *Request) (*ThreadSectionCreateResponse, error) {

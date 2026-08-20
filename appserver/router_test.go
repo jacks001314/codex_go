@@ -1858,6 +1858,49 @@ func TestRouterMemoryModeRejectsUnknownModeAsInvalidRequest(t *testing.T) {
 	}
 }
 
+func TestRouterSectionMoveMaterializesFreshThreadLikeRust(t *testing.T) {
+	// Rust #39523: moving a fresh non-ephemeral thread into a section before
+	// its first turn must materialize its rollout so section-filtered lists
+	// still show it.
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	threadID := session.ThreadID("thread-fresh-section-move")
+	record := &session.Record{
+		ID: threadID, SessionID: string(threadID), Title: "Fresh",
+		CreatedAt: time.Now().UTC(),
+		Metadata:  session.Metadata{Source: string(SessionSourceCli)},
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	pinnedID := session.PinnedThreadSectionID
+	moved := router.Handle(requestWithParams(t, IntID(1), MethodThreadSectionMove, ThreadSectionMoveParams{
+		ThreadID: string(threadID), SectionID: OptionalString{Set: true, Value: &pinnedID},
+	}))
+	if moved.Error != nil {
+		t.Fatalf("section move error = %+v", moved.Error)
+	}
+	// The rollout file should exist now.
+	persisted, err := store.Load(threadID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	path := router.threadRolloutPath(persisted)
+	if strings.TrimSpace(path) == "" {
+		t.Fatal("thread rollout path is empty")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("rollout was not materialized: %v", err)
+	}
+	// Section-filtered list still includes the thread.
+	filtered := router.Handle(requestWithParams(t, IntID(2), MethodThreadList, ThreadListParams{
+		SectionID: OptionalString{Set: true, Value: &pinnedID},
+	}))
+	if filtered.Error != nil || len(filtered.Result.(*ThreadListResponse).Data) != 1 {
+		t.Fatalf("section-filtered list = %#v %v", filtered.Result, filtered.Error)
+	}
+}
+
 func TestRouterSetNameAndMemoryModeRejectArchivedThread(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
