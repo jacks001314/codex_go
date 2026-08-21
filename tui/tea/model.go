@@ -5330,7 +5330,8 @@ func richMessageDisplayLines(message codextui.Message, width int, themeID string
 		if contentWidth < 1 {
 			contentWidth = 1
 		}
-		rendered, err := markdown.RenderWithThemeCwd(text, contentWidth, themeID, cwd)
+		renderText, _ := codextui.RewriteInlineVisualizations(text, nil)
+		rendered, err := markdown.RenderWithThemeCwd(renderText, contentWidth, themeID, cwd)
 		if err == nil && strings.TrimSpace(rendered) != "" {
 			lines := trimBlankDisplayEdges(rawLinesTrimmed(rendered))
 			return prefixPrewrappedAgentLines(lines, true)
