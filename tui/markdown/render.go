@@ -48,6 +48,7 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 	if width <= 0 {
 		width = defaultWidth
 	}
+	text = UnwrapMarkdownFences(text)
 	text, localLinks := rewriteLocalFileLinksWithInfo(text, cwd)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
