@@ -396,6 +396,41 @@ func TestModelMessagesMultiAgentParsingAndOverridePreservationLikeRust(t *testin
 	}
 }
 
+func TestModelMessagesAutoReviewParsingPreservesEmptyOverridesLikeRust(t *testing.T) {
+	var messages ModelMessages
+	if err := json.Unmarshal([]byte(`{
+		"auto_review": {
+			"policy": "policy",
+			"policy_template": "",
+			"rejection_instructions": "reject instructions",
+			"timeout_instructions": "timeout instructions"
+		}
+	}`), &messages); err != nil {
+		t.Fatalf("Unmarshal auto_review messages error = %v", err)
+	}
+	if messages.AutoReview == nil {
+		t.Fatal("auto_review messages not parsed")
+	}
+	autoReview := messages.AutoReview
+	if autoReview.Policy == nil || *autoReview.Policy != "policy" {
+		t.Fatalf("policy = %#v", autoReview.Policy)
+	}
+	if autoReview.PolicyTemplate == nil || *autoReview.PolicyTemplate != "" {
+		t.Fatalf("empty policy_template override lost: %#v", autoReview.PolicyTemplate)
+	}
+	if autoReview.RejectionInstructions == nil || *autoReview.RejectionInstructions != "reject instructions" {
+		t.Fatalf("rejection_instructions = %#v", autoReview.RejectionInstructions)
+	}
+	if autoReview.TimeoutInstructions == nil || *autoReview.TimeoutInstructions != "timeout instructions" {
+		t.Fatalf("timeout_instructions = %#v", autoReview.TimeoutInstructions)
+	}
+	model := ModelInfo{Slug: "gpt-test", ModelMessages: &messages}
+	cloned := cloneModelInfo(model)
+	if cloned.ModelMessages == nil || cloned.ModelMessages.AutoReview == nil || *cloned.ModelMessages.AutoReview.RejectionInstructions != "reject instructions" {
+		t.Fatalf("cloned auto_review messages = %#v", cloned.ModelMessages)
+	}
+}
+
 func TestServiceTierForRequest(t *testing.T) {
 	info := &ModelInfo{ServiceTiers: []string{"priority", "flex"}}
 	if got := ServiceTierForRequest(info, "fast"); got != "priority" {
@@ -916,6 +951,11 @@ func TestAmazonBedrockModelCatalog(t *testing.T) {
 	}
 	if !models[0].IsDefault {
 		t.Fatal("first Bedrock model should be default")
+	}
+	for _, model := range models {
+		if model.MultiAgentVersion != "v1" {
+			t.Fatalf("Bedrock model %s multi_agent_version = %q, want v1", model.Model, model.MultiAgentVersion)
+		}
 	}
 }
 

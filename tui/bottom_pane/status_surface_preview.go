@@ -19,6 +19,7 @@ const (
 	StatusPreviewProjectName        StatusSurfacePreviewItem = "project-name"
 	StatusPreviewProjectRoot        StatusSurfacePreviewItem = "project-root"
 	StatusPreviewCurrentDir         StatusSurfacePreviewItem = "current-dir"
+	StatusPreviewHostname           StatusSurfacePreviewItem = "hostname"
 	StatusPreviewStatus             StatusSurfacePreviewItem = "status"
 	StatusPreviewThreadTitle        StatusSurfacePreviewItem = "thread-title"
 	StatusPreviewGitBranch          StatusSurfacePreviewItem = "git-branch"
@@ -76,6 +77,7 @@ func StatusSurfacePreviewItems() []StatusSurfacePreviewItem {
 		StatusPreviewProjectName,
 		StatusPreviewProjectRoot,
 		StatusPreviewCurrentDir,
+		StatusPreviewHostname,
 		StatusPreviewStatus,
 		StatusPreviewThreadTitle,
 		StatusPreviewGitBranch,
@@ -211,6 +213,8 @@ func StatusSurfacePreviewPlaceholder(item StatusSurfacePreviewItem) string {
 		return "my-project"
 	case StatusPreviewCurrentDir:
 		return "~/my-project/subdir"
+	case StatusPreviewHostname:
+		return "my-host"
 	case StatusPreviewStatus:
 		return "Working"
 	case StatusPreviewThreadTitle:

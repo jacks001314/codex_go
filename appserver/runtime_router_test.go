@@ -478,9 +478,25 @@ func TestRuntimeRouterThreadListAndSearchReportSubagentDirectInputCapability(t *
 	}
 	assertCapabilities("search", searchThreads)
 
-	rejected := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{ThreadID: "spawn-v2"}))
-	if rejected.Error == nil || rejected.Error.Message != "direct app-server input is not allowed for multi-agent v2 sub-agents" {
-		t.Fatalf("v2 direct turn response = %+v", rejected)
+	// Rust #39792: direct input (turn start/steer, queued input, settings
+	// updates) is rejected for parent-owned multi-agent V2 subagents.
+	directInputRequests := []struct {
+		name   string
+		method Method
+		params any
+	}{
+		{"turn start", MethodTurnStart, turn.TurnStartParams{ThreadID: "spawn-v2"}},
+		{"steer", MethodTurnSteer, turn.TurnSteerParams{ThreadID: "spawn-v2", ExpectedTurnID: "turn-1"}},
+		{"settings update", MethodThreadSettingsUpdate, SettingsUpdateParams{ThreadID: "spawn-v2"}},
+		{"queue add", MethodThreadQueueAdd, ThreadQueueAddParams{ThreadID: "spawn-v2", Input: []any{"hello"}}},
+		{"queue update", MethodThreadQueueUpdate, ThreadQueueUpdateParams{ThreadID: "spawn-v2", QueuedSubmissionID: "q-1"}},
+		{"queue start", MethodThreadQueueStart, ThreadQueueStartParams{ThreadID: "spawn-v2"}},
+	}
+	for _, item := range directInputRequests {
+		rejected := router.Handle(requestWithParams(t, IntID(3), item.method, item.params))
+		if rejected.Error == nil || rejected.Error.Message != "direct app-server input is not allowed for multi-agent v2 sub-agents" {
+			t.Fatalf("v2 direct %s response = %+v", item.name, rejected)
+		}
 	}
 }
 

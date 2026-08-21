@@ -1,16 +1,16 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 )
 
 func TestMCPEventStreamNotificationParsesRawPayload(t *testing.T) {
-	stream := &MCPEventStream{raw: json.RawMessage(`{"method":"notifications/event","params":{"name":"fileChanged"}}`)}
-	notification := stream.Notification()
+	notification := decodeMCPEventStreamNotification(json.RawMessage(`{"method":"notifications/event","params":{"name":"fileChanged"}}`))
 	if notification == nil {
-		t.Fatal("Notification() = nil, want parsed notification")
+		t.Fatal("decode = nil, want parsed notification")
 	}
 	if notification.Method != "notifications/event" {
 		t.Fatalf("method = %q", notification.Method)
@@ -25,11 +25,26 @@ func TestMCPEventStreamNotificationParsesRawPayload(t *testing.T) {
 }
 
 func TestMCPEventStreamNotificationEmpty(t *testing.T) {
-	if stream := (&MCPEventStream{}).Notification(); stream != nil {
-		t.Fatalf("empty stream Notification() = %+v, want nil", stream)
+	if notification := decodeMCPEventStreamNotification(nil); notification != nil {
+		t.Fatalf("empty decode = %+v, want nil", notification)
 	}
-	if stream := (&MCPEventStream{raw: json.RawMessage("null")}).Notification(); stream != nil {
-		t.Fatalf("null stream Notification() = %+v, want nil", stream)
+	if notification := decodeMCPEventStreamNotification(json.RawMessage("null")); notification != nil {
+		t.Fatalf("null decode = %+v, want nil", notification)
+	}
+}
+
+func TestMCPEventStreamCloseCancelsTransportAndIsIdempotent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := newMCPEventStream(ctx, cancel)
+	stream.Close()
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("stream Close did not cancel the transport context")
+	}
+	stream.Close()
+	if stream.Done() == nil {
+		t.Fatal("stream done channel is nil")
 	}
 }
 

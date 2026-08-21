@@ -30,6 +30,7 @@ const (
 	NotificationMCPServerStatusUpdated              NotificationMethod = "mcpServer/startupStatus/updated"
 	NotificationMCPToolCallProgress                 NotificationMethod = "item/mcpToolCall/progress"
 	NotificationMCPServerOauthLoginCompleted        NotificationMethod = "mcpServer/oauthLogin/completed"
+	NotificationMCPServerEventStream                NotificationMethod = "mcpServer/event/stream/notification"
 	NotificationWindowsSandboxSetupCompleted        NotificationMethod = "windowsSandbox/setupCompleted"
 	NotificationWindowsWorldWritableWarning         NotificationMethod = "windows/worldWritableWarning"
 	NotificationFSChanged                           NotificationMethod = "fs/changed"
@@ -44,6 +45,7 @@ const (
 	NotificationMcpServerStatusUpdated              NotificationMethod = NotificationMCPServerStatusUpdated
 	NotificationMcpToolCallProgress                 NotificationMethod = NotificationMCPToolCallProgress
 	NotificationMcpServerOauthLoginCompleted        NotificationMethod = NotificationMCPServerOauthLoginCompleted
+	NotificationMcpServerEventStream                NotificationMethod = NotificationMCPServerEventStream
 	NotificationFsChanged                           NotificationMethod = NotificationFSChanged
 	NotificationThreadRealtimeSdp                   NotificationMethod = NotificationThreadRealtimeSDP
 	NotificationThreadQueueChanged                  NotificationMethod = "thread/queue/changed"

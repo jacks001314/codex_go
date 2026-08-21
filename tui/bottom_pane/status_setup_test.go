@@ -53,6 +53,27 @@ func TestStatusLineSetupParsingAndPreviewMatchesRust(t *testing.T) {
 	}
 }
 
+func TestStatusLineHostnameSetupItemMatchesRust(t *testing.T) {
+	item, ok := ParseStatusLineItem("hostname")
+	if !ok || item != StatusLineHostname {
+		t.Fatalf("parse hostname = %v ok=%v", item, ok)
+	}
+	if got := StatusLineItemID(item); got != "hostname" {
+		t.Fatalf("id = %q", got)
+	}
+	if got := StatusLineItemPreviewItem(item); got != StatusPreviewHostname {
+		t.Fatalf("preview item = %q", got)
+	}
+	data := NewStatusSurfacePreviewData(map[StatusSurfacePreviewItem]string{
+		StatusPreviewHostname:   "ssh-build-01.example.com",
+		StatusPreviewCurrentDir: "/repo",
+	})
+	state := NewStatusLineSetupState([]string{"hostname", "current-dir"}, true, data)
+	if state.PreviewText != "ssh-build-01.example.com · /repo" {
+		t.Fatalf("preview = %q", state.PreviewText)
+	}
+}
+
 func TestTerminalTitleParsingAndPreviewMatchesRust(t *testing.T) {
 	items, ok := ParseTerminalTitleItems([]string{"project", "spinner", "status", "thread"})
 	if !ok {

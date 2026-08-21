@@ -60,6 +60,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "marketplace_upgrade", Owner: "plugin", Focus: "marketplace/upgrade RPC"},
 		{Module: "mcp_resource", Owner: "mcp", Focus: "mcpServer/resource/read RPC"},
 		{Module: "mcp_resource_origin", Owner: "mcp", Focus: "MCP resource reads scoped by origin and connector"},
+		{Module: "mcp_event_stream", Owner: "mcp, appserver", Focus: "MCP server event streaming notifications"},
 		{Module: "mcp_server_elicitation", Owner: "mcp, appserver", Focus: "MCP elicitation server request"},
 		{Module: "mcp_server_status", Owner: "mcp", Focus: "MCP status list/update notifications"},
 		{Module: "mcp_tool", Owner: "mcp", Focus: "mcpServer/tool/call RPC"},

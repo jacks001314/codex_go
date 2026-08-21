@@ -34,6 +34,7 @@ type modelGuardianReviewer struct {
 	interrupt                  func(threadID, turnID string)
 	transcript                 func(threadID string) []string
 	model                      func(threadID, turnID string) string
+	autoReviewMessages         func(threadID, turnID string) *model.AutoReviewMessages
 	specialty                  func(threadID, turnID string) string
 	nodeReplAutoReviewRequired func(threadID, turnID string) bool
 	environment                func(context.Context, string, string) ([]any, error)
@@ -335,7 +336,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 				r.emit(threadID, completed)
 			}
 			r.recordDecision(threadID, turnID, state.DecisionTimedOut)
-			return state.DecisionTimedOut, state.GuardianTimeoutMessage(), finishErr
+			return state.DecisionTimedOut, guardianTimeoutMessage(r.autoReviewMessagesForTurn(threadID, turnID)), finishErr
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(reviewCtx.Err(), context.Canceled) {
 			completed, finishErr := store.Abort(event.ID, "Guardian review was aborted.")
@@ -365,7 +366,36 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	decision := state.DecisionFromEvent(completed)
 	r.recordDecision(threadID, turnID, decision)
 	r.markScored(threadID)
-	return decision, assessment.Rationale, nil
+	rationale := assessment.Rationale
+	if decision == state.DecisionDenied {
+		rationale = guardianRejectionMessage(r.autoReviewMessagesForTurn(threadID, turnID), rationale)
+	}
+	return decision, rationale, nil
+}
+
+func (r *modelGuardianReviewer) autoReviewMessagesForTurn(threadID, turnID string) *model.AutoReviewMessages {
+	if r == nil || r.autoReviewMessages == nil {
+		return nil
+	}
+	return r.autoReviewMessages(threadID, turnID)
+}
+
+// guardianRejectionMessage mirrors Rust run_guardian_review (#39741): the
+// acting model's rejection_instructions replace the default when present.
+func guardianRejectionMessage(messages *model.AutoReviewMessages, rationale string) string {
+	if messages != nil && messages.RejectionInstructions != nil {
+		return "This action was rejected due to unacceptable risk.\nReason: " + rationale + "\n" + *messages.RejectionInstructions
+	}
+	return rationale
+}
+
+// guardianTimeoutMessage mirrors Rust guardian_timeout_message (#39741): the
+// acting model's timeout_instructions replace the default when present.
+func guardianTimeoutMessage(messages *model.AutoReviewMessages) string {
+	if messages != nil && messages.TimeoutInstructions != nil {
+		return *messages.TimeoutInstructions
+	}
+	return state.GuardianTimeoutMessage()
 }
 
 func (r *modelGuardianReviewer) modelForTurn(threadID, turnID string) string {

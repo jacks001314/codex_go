@@ -412,6 +412,73 @@ func TestLocalOpenAIFileUploaderAttachesHostedAppContextLikeRust(t *testing.T) {
 	}
 }
 
+func TestLocalOpenAIFileUploaderFinalizesReservedPDFCreateLikeRust(t *testing.T) {
+	var server *httptest.Server
+	var createBody map[string]any
+	var finalizeBody map[string]any
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/backend-api/files":
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Errorf("decode create body: %v", err)
+			}
+			createBody = body
+			writeOpenAIFileTestJSON(t, w, map[string]any{
+				"file_id":              "file_pdf",
+				"upload_url":           server.URL + "/blob",
+				"pdf_c2pa_reservation": true,
+			})
+		case "/blob":
+			w.WriteHeader(http.StatusOK)
+		case "/backend-api/files/file_pdf/uploaded":
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Errorf("decode finalize body: %v", err)
+			}
+			finalizeBody = body
+			writeOpenAIFileTestJSON(t, w, map[string]any{
+				"status":          "success",
+				"download_url":    server.URL + "/download/file_pdf",
+				"file_name":       "report.pdf",
+				"mime_type":       "application/pdf",
+				"file_size_bytes": 24,
+			})
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "report.pdf")
+	if err := os.WriteFile(path, []byte("%PDF-1.4"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	uploader := &LocalOpenAIFileUploader{
+		Auth:       &OpenAIFileAuth{ChatGPTBackend: true, BaseURL: server.URL + "/backend-api"},
+		HTTPClient: server.Client(),
+	}
+	uploaded, err := uploader.UploadOpenAIFile(context.Background(), OpenAIFileUploadRequest{
+		Path:          path,
+		FileName:      "report.pdf",
+		FileSizeBytes: 8,
+		HostedContext: &HostedFileUploadContext{ConnectorID: "library", ActionName: "create_library_file", Model: "gpt-work"},
+	})
+	if err != nil {
+		t.Fatalf("UploadOpenAIFile() error = %v", err)
+	}
+	reserved, ok := finalizeBody["pdf_c2pa_create_request"].(map[string]any)
+	if !ok || len(reserved) == 0 {
+		t.Fatalf("finalize body missing pdf_c2pa_create_request: %#v", finalizeBody)
+	}
+	if reserved["file_name"] != createBody["file_name"] || reserved["file_size"] != createBody["file_size"] {
+		t.Fatalf("reserved create payload = %#v, want %#v", reserved, createBody)
+	}
+	if uploaded.FileID != "file_pdf" || uploaded.FileSizeBytes != 24 {
+		t.Fatalf("uploaded = %#v", uploaded)
+	}
+}
+
 func TestLocalOpenAIFileUploaderFallsBackToLocalSizeForLegacyFinalizeLikeRust(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

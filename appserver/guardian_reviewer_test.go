@@ -279,6 +279,43 @@ func TestModelGuardianReviewerEmitsLifecycleAndRecordsDenial(t *testing.T) {
 	}
 }
 
+func TestModelGuardianReviewerUsesModelSpecificAutoReviewInstructionsLikeRust(t *testing.T) {
+	rejection := "Follow the managed policy and stop."
+	timeout := "Managed timeout instruction."
+	messages := &model.AutoReviewMessages{RejectionInstructions: &rejection, TimeoutInstructions: &timeout}
+	reviewer := &modelGuardianReviewer{
+		store: state.NewReviewStore(), breaker: state.NewCircuitBreaker(),
+		autoReviewMessages: func(threadID, turnID string) *model.AutoReviewMessages {
+			return messages
+		},
+		agent: guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+			return &model.AgentResponse{Message: `{"riskLevel":"high","userAuthorization":"low","outcome":"deny","rationale":"risky"}`}, nil
+		}),
+	}
+	decision, reason, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "write"})
+	if err != nil || decision != state.DecisionDenied {
+		t.Fatalf("decision=%s err=%v", decision, err)
+	}
+	if !strings.Contains(reason, "This action was rejected due to unacceptable risk.") || !strings.Contains(reason, rejection) {
+		t.Fatalf("denial reason = %q, want model rejection instructions", reason)
+	}
+
+	timeoutReviewer := &modelGuardianReviewer{
+		timeout: time.Millisecond,
+		autoReviewMessages: func(threadID, turnID string) *model.AutoReviewMessages {
+			return messages
+		},
+		agent: guardianAgentFunc(func(ctx context.Context, _ *model.AgentRequest) (*model.AgentResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}),
+	}
+	decision, reason, err = timeoutReviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "write"})
+	if err != nil || decision != state.DecisionTimedOut || reason != timeout {
+		t.Fatalf("timeout decision=%s reason=%q err=%v", decision, reason, err)
+	}
+}
+
 func TestModelGuardianReviewerInterruptsAfterDenialThreshold(t *testing.T) {
 	interrupts := 0
 	reviewer := &modelGuardianReviewer{

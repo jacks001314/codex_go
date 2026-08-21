@@ -192,6 +192,13 @@ func TestPluginInstallRuntimeConnectorAcceptDoesNotInstallPlugin(t *testing.T) {
 	plugins := plugin.NewPluginService()
 	broker := NewServerRequestBroker()
 	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		params, ok := request.Params.(*MCPElicitationRequestParams)
+		if !ok {
+			t.Fatalf("params type = %T", request.Params)
+		}
+		if meta, ok := params.Meta.(map[string]any); !ok || meta["suggestion_id"] != nil {
+			t.Fatalf("connector install meta must omit suggestion_id: %#v", params.Meta)
+		}
 		_, _ = broker.Resolve(OK(request.ID, &MCPElicitationRequestResponse{Action: MCPElicitationActionAccept}))
 	}))
 	runtime := &pluginInstallRuntime{broker: broker, plugins: plugins}

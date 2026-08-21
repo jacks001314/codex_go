@@ -62,6 +62,7 @@ func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) Guardian
 		modelReviewer.interrupt = r.interruptTurnForGuardianCircuitBreaker
 		modelReviewer.transcript = r.guardianReviewTranscript
 		modelReviewer.model = r.guardianReviewModelForTurn
+		modelReviewer.autoReviewMessages = r.guardianReviewAutoReviewMessagesForTurn
 		modelReviewer.specialty = r.guardianReviewModelSpecialtyForTurn
 		modelReviewer.nodeReplAutoReviewRequired = r.guardianReviewNodeReplAutoReviewRequiredForTurn
 		modelReviewer.permissionProfile = r.guardianReviewPermissionProfileForTurn
@@ -99,6 +100,23 @@ func (r *RuntimeRouter) guardianReviewModelForTurn(threadID, turnID string) stri
 		return ""
 	}
 	return strings.TrimSpace(active.RunConfig.AutoReviewModelOverride)
+}
+
+func (r *RuntimeRouter) guardianReviewAutoReviewMessagesForTurn(threadID, turnID string) *model.AutoReviewMessages {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return nil
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return nil
+	}
+	info := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(active.Params.Model), cfg)
+	if info == nil || info.ModelMessages == nil || info.ModelMessages.AutoReview == nil {
+		return nil
+	}
+	autoReview := *info.ModelMessages.AutoReview
+	return &autoReview
 }
 
 func (r *RuntimeRouter) guardianReviewModelSpecialtyForTurn(threadID, turnID string) string {

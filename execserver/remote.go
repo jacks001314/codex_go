@@ -219,7 +219,27 @@ func remoteRegistryStatusError(response *http.Response) error {
 	if code != nil {
 		codeSuffix = ", " + *code
 	}
-	return fmt.Errorf("environment registry request failed (%s%s): %s", status, codeSuffix, message)
+	return &remoteRegistryHTTPError{
+		StatusCode: response.StatusCode,
+		Code:       code,
+		message:    fmt.Sprintf("environment registry request failed (%s%s): %s", status, codeSuffix, message),
+	}
+}
+
+// remoteRegistryHTTPError carries the HTTP status and registry error code
+// so the initial-connection recovery can classify transient failures (Rust
+// EnvironmentRegistryHttp, #39777).
+type remoteRegistryHTTPError struct {
+	StatusCode int
+	Code       *string
+	message    string
+}
+
+func (e *remoteRegistryHTTPError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
 }
 
 func registryHTTPErrorMessage(body string) (*string, string) {

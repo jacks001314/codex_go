@@ -278,7 +278,7 @@ func (h *RequestPluginInstallHandler) Execute(ctx context.Context, invocation *I
 			ActionType:    requestPluginInstallActionInstall,
 			Tool:          cloneDiscoverablePluginCandidate(candidate),
 			SuggestReason: reason,
-			Elicitation:   buildPluginInstallElicitation(reason, &candidate),
+			Elicitation:   buildPluginInstallElicitation(reason, suggestionID, &candidate),
 		}
 		if result, err := h.runtime.RequestPluginInstall(ctx, request); err == nil && result != nil {
 			runtimeResult = result
@@ -361,19 +361,25 @@ func findPluginInstallCandidate(candidates []plugin.DiscoverableInfo, id string,
 	return plugin.DiscoverableInfo{}, false
 }
 
-func buildPluginInstallElicitation(reason string, candidate *plugin.DiscoverableInfo) *PluginInstallElicitation {
+func buildPluginInstallElicitation(reason string, suggestionID string, candidate *plugin.DiscoverableInfo) *PluginInstallElicitation {
 	if candidate == nil {
 		candidate = &plugin.DiscoverableInfo{}
 	}
+	toolType := discoverableCandidateToolType(candidate)
 	meta := map[string]any{
 		"codex_approval_kind":          requestPluginInstallApprovalKind,
 		requestPluginInstallPersistKey: requestPluginInstallPersistAlways,
-		"tool_type":                    discoverableCandidateToolType(candidate),
+		"tool_type":                    toolType,
 		"suggest_type":                 requestPluginInstallActionInstall,
 		"suggest_reason":               reason,
 		"tool_id":                      candidate.ID,
 		"tool_name":                    candidate.Name,
 		"app_connector_ids":            append([]string(nil), candidate.AppConnectorIDs...),
+	}
+	// Rust #39765: plugin installs carry the suggestion id (the elicitation
+	// request id) in the install metadata; connector installs omit it.
+	if toolType == requestPluginInstallToolTypePlugin {
+		meta["suggestion_id"] = strings.TrimSpace(suggestionID)
 	}
 	if len(candidate.PluginDisplayNames) > 0 {
 		meta["plugin_display_names"] = append([]string(nil), candidate.PluginDisplayNames...)

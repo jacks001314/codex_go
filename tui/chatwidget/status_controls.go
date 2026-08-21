@@ -3,6 +3,7 @@ package chatwidget
 import (
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -696,6 +697,8 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 			return value, true
 		}
 		return nonEmptyTrimmed(s.Runtime.ProjectName)
+	case bottompane.StatusLineHostname:
+		return normalizedOSHostName()
 	case bottompane.StatusLineGitBranch:
 		if s.StatusLineBranchSet {
 			return s.StatusLineBranch, true
@@ -1207,6 +1210,7 @@ func AllStatusLineItems() []bottompane.StatusLineItem {
 		bottompane.StatusLineReasoning,
 		bottompane.StatusLineCurrentDir,
 		bottompane.StatusLineProjectRoot,
+		bottompane.StatusLineHostname,
 		bottompane.StatusLineGitBranch,
 		bottompane.StatusLinePullRequestNumber,
 		bottompane.StatusLineBranchChanges,
@@ -1391,6 +1395,8 @@ func statusLineItemForPreviewItem(item StatusSurfacePreviewItem) (bottompane.Sta
 		return bottompane.StatusLineProjectRoot, true
 	case StatusPreviewCurrentDir:
 		return bottompane.StatusLineCurrentDir, true
+	case StatusPreviewHostname:
+		return bottompane.StatusLineHostname, true
 	case StatusPreviewThreadTitle:
 		return bottompane.StatusLineThreadTitle, true
 	case StatusPreviewGitBranch:
@@ -1443,6 +1449,21 @@ func statusLineItemForPreviewItem(item StatusSurfacePreviewItem) (bottompane.Sta
 func nonEmptyTrimmed(value string) (string, bool) {
 	value = strings.TrimSpace(value)
 	return value, value != ""
+}
+
+// normalizedOSHostName mirrors Rust config::os_host_name: the normalized
+// kernel hostname (lowercase, trailing dot trimmed) without DNS resolution.
+// An empty result means the item is omitted from the status line.
+func normalizedOSHostName() (string, bool) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "", false
+	}
+	hostname = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(hostname), "."))
+	if hostname == "" {
+		return "", false
+	}
+	return strings.ToLower(hostname), true
 }
 
 func capitalizeFirstASCII(text string) string {

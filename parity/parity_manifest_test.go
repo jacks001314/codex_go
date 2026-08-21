@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-const parityRustBaseline = "9bf673718a"
+const parityRustBaseline = "f20b63e85c"
 
 type parityManifest struct {
 	RustBaseline     string               `json:"rustBaseline"`

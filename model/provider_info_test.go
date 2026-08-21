@@ -133,6 +133,10 @@ func TestSupportsRemoteCompaction(t *testing.T) {
 	if !(&azure).SupportsRemoteCompaction() {
 		t.Fatal("Azure provider should support remote compaction")
 	}
+	bedrock := ProviderInfo{Name: AmazonBedrockProviderID}
+	if !(&bedrock).SupportsRemoteCompaction() {
+		t.Fatal("Amazon Bedrock provider should support remote compaction")
+	}
 	custom := ProviderInfo{Name: "Example", BaseURL: "https://example.com/v1"}
 	if (&custom).SupportsRemoteCompaction() {
 		t.Fatal("custom provider should not support remote compaction")

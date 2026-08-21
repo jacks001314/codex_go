@@ -534,7 +534,7 @@ func (m *EnvironmentManager) InspectSelectedCapabilityRoots(threadRoots []Select
 	}
 	m.mu.Unlock()
 
-	merged := append(cloneSelectedCapabilityRoots(threadRoots), m.readyAttachmentRoots(records)...)
+	merged := combineSelectedCapabilityRoots(threadRoots, m.readyAttachmentRoots(records))
 	seen := make(map[string]struct{}, len(merged))
 	for _, root := range merged {
 		if _, dup := seen[root.ID]; dup {
@@ -545,6 +545,32 @@ func (m *EnvironmentManager) InspectSelectedCapabilityRoots(threadRoots []Select
 	}
 	status.ReadyRoots = m.filterReadyRoots(status.ReadyRoots, records, &status.Warnings)
 	return status
+}
+
+// combineSelectedCapabilityRoots mirrors Rust combine_selected_capability_roots
+// (#39746): a matching live attachment root (same root id and environment id)
+// refreshes the persisted thread-owned location, while persisted roots remain
+// when the executor reports none. Attachment roots are then appended in
+// selection order; duplicates are dropped by the caller.
+func combineSelectedCapabilityRoots(threadRoots []SelectedCapabilityRoot, attachmentRoots []SelectedCapabilityRoot) []SelectedCapabilityRoot {
+	combined := make([]SelectedCapabilityRoot, 0, len(threadRoots)+len(attachmentRoots))
+	for _, threadRoot := range threadRoots {
+		replacement := threadRoot
+		if threadRoot.Location.Type == CapabilityRootLocationEnvironment {
+			for _, attachmentRoot := range attachmentRoots {
+				if attachmentRoot.ID != threadRoot.ID ||
+					attachmentRoot.Location.Type != CapabilityRootLocationEnvironment ||
+					attachmentRoot.Location.EnvironmentID != threadRoot.Location.EnvironmentID {
+					continue
+				}
+				replacement = attachmentRoot
+				break
+			}
+		}
+		combined = append(combined, replacement)
+	}
+	combined = append(combined, attachmentRoots...)
+	return combined
 }
 
 // readyAttachmentRoots returns the selected capability roots installed by

@@ -165,8 +165,9 @@ func (u *LocalOpenAIFileUploader) UploadOpenAIFile(ctx context.Context, request 
 		createBody["codex_model"] = request.HostedContext.Model
 	}
 	var created struct {
-		FileID    string `json:"file_id"`
-		UploadURL string `json:"upload_url"`
+		FileID             string `json:"file_id"`
+		UploadURL          string `json:"upload_url"`
+		PDFC2PAReservation bool   `json:"pdf_c2pa_reservation"`
 	}
 	if err := u.authorizedJSON(ctx, http.MethodPost, createURL, createBody, &created); err != nil {
 		return nil, err
@@ -181,6 +182,13 @@ func (u *LocalOpenAIFileUploader) UploadOpenAIFile(ctx context.Context, request 
 
 	finalizeURL := baseURL + "/files/" + url.PathEscape(created.FileID) + "/uploaded"
 	deadline := time.Now().Add(u.finalizeTimeout())
+	// Rust #39807: when the server reserves a PDF C2PA create, the original
+	// creation payload is echoed back on finalization; older servers expect an
+	// empty payload.
+	finalizePayload := map[string]any{}
+	if created.PDFC2PAReservation {
+		finalizePayload["pdf_c2pa_create_request"] = createBody
+	}
 	for {
 		var finalized struct {
 			Status       string `json:"status"`
@@ -192,7 +200,7 @@ func (u *LocalOpenAIFileUploader) UploadOpenAIFile(ctx context.Context, request 
 			// local size when absent (Rust #38101).
 			FileSizeBytes *int64 `json:"file_size_bytes"`
 		}
-		if err := u.authorizedJSON(ctx, http.MethodPost, finalizeURL, map[string]any{}, &finalized); err != nil {
+		if err := u.authorizedJSON(ctx, http.MethodPost, finalizeURL, finalizePayload, &finalized); err != nil {
 			return nil, err
 		}
 		switch finalized.Status {

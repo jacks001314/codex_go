@@ -220,6 +220,15 @@ func TestStatusControlsHelpersAndPreviewData(t *testing.T) {
 	}
 }
 
+func TestStatusLineHostnameRendersCurrentMachineHostname(t *testing.T) {
+	state := NewStatusControlsState(StatusControlsRuntime{})
+	got, ok := state.StatusLineValueForItem(bottompane.StatusLineHostname)
+	want, wantOK := normalizedOSHostName()
+	if ok != wantOK || got != want {
+		t.Fatalf("hostname = %q ok=%v, want %q ok=%v", got, ok, want, wantOK)
+	}
+}
+
 func TestStatusLineRateLimitWindowSelectionMatchesRust(t *testing.T) {
 	fiveHours := int64(5 * 60)
 	weekly := int64(7 * 24 * 60)

@@ -120,6 +120,8 @@ const (
 	MethodMCPServerStatusList                    Method = "mcpServerStatus/list"
 	MethodMCPServerResourceRead                  Method = "mcpServer/resource/read"
 	MethodMCPServerToolCall                      Method = "mcpServer/tool/call"
+	MethodMCPServerEventStreamStart              Method = "mcpServer/event/stream/start"
+	MethodMCPServerEventStreamStop               Method = "mcpServer/event/stream/stop"
 	MethodFSReadFile                             Method = "fs/readFile"
 	MethodFSWriteFile                            Method = "fs/writeFile"
 	MethodFSCreateDirectory                      Method = "fs/createDirectory"

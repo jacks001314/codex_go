@@ -80,7 +80,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "app-server/tests/suite/v2",
-			Files: 112,
+			Files: 113,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -91,7 +91,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "core/tests/suite",
-			Files: 161,
+			Files: 160,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

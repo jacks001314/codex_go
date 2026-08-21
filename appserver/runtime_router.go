@@ -228,6 +228,8 @@ type RuntimeRouter struct {
 	mcpStandardFormInput   map[string]bool
 	authRevisionMu         sync.Mutex
 	authRevision           uint64
+	authChanged            chan struct{}
+	mcpEventStreams        *mcpEventStreamManager
 	skillShadowMu          sync.Mutex
 	skillShadowState       map[string]*skillShadowThreadState
 	startupPrewarmMu       sync.Mutex
@@ -469,6 +471,8 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		mcpOpenAIForm:        map[string]bool{},
 		mcpStandardFormInput: map[string]bool{},
 		mcpRuntimes:          newMCPRuntimeCoordinator(),
+		authChanged:          make(chan struct{}),
+		mcpEventStreams:      newMCPEventStreamManager(),
 		commandApprovals:     map[string]struct{}{},
 		fileApprovals:        map[string]struct{}{},
 		serverRequestGuards:  map[string]*ThreadStatusActiveGuard{},
@@ -643,11 +647,22 @@ func (r *RuntimeRouter) noteAuthChanged() {
 	}
 	r.authRevisionMu.Lock()
 	r.authRevision++
+	close(r.authChanged)
+	r.authChanged = make(chan struct{})
 	r.authRevisionMu.Unlock()
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.invalidateAll()
 	}
 	r.prewarmLoadedMCPThreads()
+}
+
+func (r *RuntimeRouter) authChangedChannel() <-chan struct{} {
+	if r == nil {
+		return nil
+	}
+	r.authRevisionMu.Lock()
+	defer r.authRevisionMu.Unlock()
+	return r.authChanged
 }
 
 func (r *RuntimeRouter) notifyRemoteControlStatusChanged(notification *remotecontrol.StatusChangedNotification) {
@@ -1266,6 +1281,9 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 	r.clearConnectionRequestAttestation(connectionID)
 	r.clearConnectionMCPOpenAIForm(connectionID)
 	r.clearConnectionMCPStandardFormInput(connectionID)
+	if r.mcpEventStreams != nil {
+		r.mcpEventStreams.stopConnection(connectionID)
+	}
 	r.syncMCPOpenAIFormElicitationCapability()
 	r.syncMCPStandardFormInputCapability()
 	if r.services.CommandExec != nil {
@@ -1397,6 +1415,9 @@ func (r *RuntimeRouter) close() error {
 		if err := r.mcpRuntimes.close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
+	}
+	if r.mcpEventStreams != nil {
+		r.mcpEventStreams.clear()
 	}
 	if r.services.MCP != nil {
 		if err := r.services.MCP.Close(); err != nil && closeErr == nil {
@@ -1849,6 +1870,8 @@ func experimentalAPIMethod(method Method) bool {
 		MethodFuzzyFileSearchStop,
 		MethodFuzzyFileSearchUpdate,
 		MethodMemoryReset,
+		MethodMCPServerEventStreamStart,
+		MethodMCPServerEventStreamStop,
 		MethodMockExperimentalMethod,
 		MethodProcessKill,
 		MethodProcessResizePty,
@@ -2187,6 +2210,10 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handleMCPServerResourceRead(request)
 	case MethodMCPServerToolCall:
 		return r.handleMCPServerToolCall(request)
+	case MethodMCPServerEventStreamStart:
+		return r.handleMCPServerEventStreamStart(request)
+	case MethodMCPServerEventStreamStop:
+		return r.handleMCPServerEventStreamStop(request)
 	case MethodFSReadFile:
 		return r.handleFSReadFile(request)
 	case MethodFSWriteFile:
@@ -2542,6 +2569,7 @@ func (r *RuntimeRouter) handleThreadQueueRuntime(request *Request) (any, error) 
 		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
 	}
 	var threadID string
+	directInputGuarded := false
 	switch request.Method {
 	case MethodThreadQueueAdd:
 		var params ThreadQueueAddParams
@@ -2552,6 +2580,7 @@ func (r *RuntimeRouter) handleThreadQueueRuntime(request *Request) (any, error) 
 			return nil, err
 		}
 		threadID = strings.TrimSpace(params.ThreadID)
+		directInputGuarded = true
 	case MethodThreadQueueList:
 		var params ThreadQueueListParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -2570,6 +2599,7 @@ func (r *RuntimeRouter) handleThreadQueueRuntime(request *Request) (any, error) 
 			return nil, err
 		}
 		threadID = strings.TrimSpace(params.ThreadID)
+		directInputGuarded = true
 	case MethodThreadQueueDelete:
 		var params ThreadQueueDeleteParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -2588,6 +2618,11 @@ func (r *RuntimeRouter) handleThreadQueueRuntime(request *Request) (any, error) 
 			return nil, err
 		}
 		threadID = strings.TrimSpace(params.ThreadID)
+	}
+	if directInputGuarded {
+		if err := r.ensureDirectInputAllowed(request, threadID); err != nil {
+			return nil, err
+		}
 	}
 	if err := r.requireLoadedThreadForRuntimeOp(threadID); err != nil {
 		return nil, err
@@ -2614,6 +2649,9 @@ func (r *RuntimeRouter) handleThreadQueueStartRuntime(request *Request) (*Thread
 		return nil, err
 	}
 	threadID := strings.TrimSpace(params.ThreadID)
+	if err := r.ensureDirectInputAllowed(request, threadID); err != nil {
+		return nil, err
+	}
 	if err := r.requireLoadedThreadForRuntimeOp(threadID); err != nil {
 		return nil, err
 	}
@@ -2637,10 +2675,11 @@ func (r *RuntimeRouter) handleThreadQueueStartRuntime(request *Request) (*Thread
 		return nil, err
 	}
 	startRequest := &Request{
-		JSONRPC: "2.0",
-		ID:      request.ID,
-		Method:  MethodTurnStart,
-		Params:  startParams,
+		JSONRPC:  "2.0",
+		ID:       request.ID,
+		Method:   MethodTurnStart,
+		Params:   startParams,
+		Internal: request.Internal,
 	}
 	response, err := r.handleTurnStart(startRequest)
 	if err != nil {
@@ -2849,6 +2888,9 @@ func (r *RuntimeRouter) handleThreadUnsubscribeRuntime(request *Request) (*Threa
 		return &ThreadUnsubscribeResponse{Status: ThreadUnsubscribeStatusNotLoaded}, nil
 	}
 	if r.unsubscribeThreadConnection(params.ThreadID, request.normalizedConnectionID()) {
+		if r.mcpEventStreams != nil {
+			r.mcpEventStreams.stopThreadConnection(params.ThreadID, request.normalizedConnectionID())
+		}
 		return &ThreadUnsubscribeResponse{Status: ThreadUnsubscribeStatusUnsubscribed}, nil
 	}
 	return &ThreadUnsubscribeResponse{Status: ThreadUnsubscribeStatusNotSubscribed}, nil
@@ -3066,6 +3108,24 @@ func runtimeRecordIsThreadSpawn(record *session.Record) bool {
 	threadSource := strings.ToLower(strings.NewReplacer("_", "", "-", "", "/", "", ":", "", " ", "").Replace(strings.TrimSpace(record.Metadata.ThreadSource)))
 	source := strings.ToLower(strings.NewReplacer("_", "", "-", "", "/", "", ":", "", " ", "").Replace(strings.TrimSpace(record.Metadata.Source)))
 	return threadSource == "subagentthreadspawn" || source == "subagentthreadspawn"
+}
+
+// ensureDirectInputAllowed mirrors Rust's ensure_direct_input_allowed: direct
+// app-server input (turn start, steer, queued input, settings updates) is
+// rejected for multi-agent V2 thread-spawn subagents unless the request is
+// internal. The same policy drives thread CanAcceptDirectInput reporting.
+func (r *RuntimeRouter) ensureDirectInputAllowed(request *Request, threadID string) error {
+	if r == nil || request == nil || request.Internal {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil || !runtimeRecordIsThreadSpawn(record) {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(record.Metadata.MultiAgentVersion), string(agent.VersionV2)) {
+		return jsonRPCInvalidRequest("direct app-server input is not allowed for multi-agent v2 sub-agents")
+	}
+	return nil
 }
 
 // runtimeRecordIsSubagent reports whether a thread is a subagent (delegate)
@@ -5199,8 +5259,8 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	if record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false); !request.Internal && err == nil && runtimeRecordIsThreadSpawn(record) && strings.EqualFold(strings.TrimSpace(record.Metadata.MultiAgentVersion), string(agent.VersionV2)) {
-		return nil, jsonRPCInvalidRequest("direct app-server input is not allowed for multi-agent v2 sub-agents")
+	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
+		return nil, err
 	}
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
@@ -5969,6 +6029,9 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
+		return nil, err
+	}
 	connectionID := request.normalizedConnectionID()
 	createdAt := runtimeRouterNow(r).UTC()
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
@@ -6275,6 +6338,9 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		}
 		if strings.TrimSpace(params.ThreadID) == "" {
 			return nil, fmt.Errorf("%w: threadId is required", ErrInvalidThreadExtraRequest)
+		}
+		if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
+			return nil, err
 		}
 		if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
 			return nil, err
@@ -10517,7 +10583,7 @@ func (r *RuntimeRouter) selectedCapabilityMCPRootPaths(threadID string) []string
 func (r *RuntimeRouter) inspectSelectedCapabilityRootsForThread(record *session.Record) SelectedCapabilityRootsStatus {
 	threadRoots := threadSelectedCapabilityRoots(record)
 	attachmentRoots := readyAttachmentRootsFromSelections(record)
-	merged := append(threadRoots, attachmentRoots...)
+	merged := combineSelectedCapabilityRoots(threadRoots, attachmentRoots)
 	seen := make(map[string]struct{}, len(merged))
 	unique := make([]SelectedCapabilityRoot, 0, len(merged))
 	for _, root := range merged {

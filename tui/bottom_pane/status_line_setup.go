@@ -63,6 +63,8 @@ func ParseStatusLineItem(id string) (StatusLineItem, bool) {
 		return StatusLineCurrentDir, true
 	case "project-name", "project", "project-root":
 		return StatusLineProjectRoot, true
+	case "hostname":
+		return StatusLineHostname, true
 	case "git-branch":
 		return StatusLineGitBranch, true
 	case "pull-request-number":
@@ -122,6 +124,8 @@ func StatusLineItemID(item StatusLineItem) string {
 		return "current-dir"
 	case StatusLineProjectRoot:
 		return "project-name"
+	case StatusLineHostname:
+		return "hostname"
 	case StatusLineGitBranch:
 		return "git-branch"
 	case StatusLinePullRequestNumber:
@@ -181,6 +185,8 @@ func StatusLineItemPreviewItem(item StatusLineItem) StatusSurfacePreviewItem {
 		return StatusPreviewCurrentDir
 	case StatusLineProjectRoot:
 		return StatusPreviewProjectRoot
+	case StatusLineHostname:
+		return StatusPreviewHostname
 	case StatusLineGitBranch:
 		return StatusPreviewGitBranch
 	case StatusLinePullRequestNumber:
@@ -241,6 +247,7 @@ func StatusLineItemDescription(item StatusLineItem, previewData StatusSurfacePre
 		StatusLineReasoning:          "Current reasoning level",
 		StatusLineCurrentDir:         "Current working directory",
 		StatusLineProjectRoot:        "Project name (omitted when unavailable)",
+		StatusLineHostname:           "Current machine hostname (omitted when unavailable)",
 		StatusLineGitBranch:          "Current Git branch (omitted when unavailable)",
 		StatusLinePullRequestNumber:  "Open pull request number for the current branch (omitted when unavailable)",
 		StatusLineBranchChanges:      "Committed branch changes against the default branch (omitted when unavailable)",

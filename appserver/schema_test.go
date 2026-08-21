@@ -136,8 +136,8 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		data []byte
 		want string
 	}{
-		{"stable", stablePrecomputedExports, "c67a4d1c2ced320f0ddfb460aaa9d21b08870a9dc5f5ff978da9358c216bbf6f"},
-		{"experimental", experimentalPrecomputedExports, "ba358182911240401b50036f4bb557c808363d8fc4170e0c3a89eaa152de7748"},
+		{"stable", stablePrecomputedExports, "fd46d1f89d223e6c415f548df285fdffc4e0d95854d4101524b21fa067856f49"},
+		{"experimental", experimentalPrecomputedExports, "31e8dfc1df42b08eb1d2e737915a41328e782cb7104d9d67a096834c59613c32"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

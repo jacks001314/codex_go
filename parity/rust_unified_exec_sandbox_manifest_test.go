@@ -53,6 +53,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Platform: "all; individual Rust tests skip or gate host/target Windows, Unix, macOS, network, sandbox, and ARM cases",
 			Tests: []string{
 				"exec_command_clamps_model_requested_max_output_tokens_to_policy",
+				"exec_command_does_not_expose_configured_noise_auth_token",
 				"exec_command_hides_and_rejects_login_when_disabled",
 				"exec_command_reports_chunk_and_exit_metadata",
 				"exec_command_uses_installed_environment_shell_policy_with_explicit_overrides",
@@ -134,7 +135,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Focus:    "Windows restricted-token and elevated sandbox deny-read enforcement",
 			Platform: "Windows only",
 			Tests: []string{
-				"windows_elevated_shell_and_unified_exec_enforce_managed_deny_reads",
+				"windows_elevated_unified_exec_enforces_managed_deny_reads",
 				"windows_elevated_does_not_create_missing_workspace_metadata",
 				"windows_elevated_enforces_deny_read_and_protects_setup_marker",
 				"windows_restricted_token_rejects_exact_and_glob_deny_read_policy",

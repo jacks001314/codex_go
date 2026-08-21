@@ -28,8 +28,8 @@ func TestEnvPolicyFromShellEnvironmentPolicy(t *testing.T) {
 
 	// The filters table wins over the legacy exclude/include_only lists.
 	filters := EnvPolicyFromShellEnvironmentPolicy(map[string]any{
-		"filters":    map[string]any{"KEEP_*": "include", "DROP_*": "exclude"},
-		"exclude":    []any{"LEGACY_EXCLUDE_*"},
+		"filters":      map[string]any{"KEEP_*": "include", "DROP_*": "exclude"},
+		"exclude":      []any{"LEGACY_EXCLUDE_*"},
 		"include_only": []any{"LEGACY_INCLUDE_*"},
 	}, "")
 	if len(filters.IncludeOnly) != 1 || filters.IncludeOnly[0].Value != "KEEP_*" {
@@ -152,6 +152,31 @@ func TestCreateEnvCoreAndDefaultExcludes(t *testing.T) {
 	}
 	if env["CODEX_PUBLIC"] != "ok" {
 		t.Fatalf("set env missing: %+v", env)
+	}
+}
+
+func TestCreateEnvWindowsCorePreservesCaseVariantWINDIR(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows core environment allowlist")
+	}
+	ignoreDefaultExcludes := false
+	env := CreateEnv(&EnvPolicy{
+		Inherit:               "core",
+		IgnoreDefaultExcludes: &ignoreDefaultExcludes,
+	}, nil, map[string]string{
+		"PATH":       `C:\Windows\System32`,
+		"SystemRoot": `C:\Windows`,
+		"WinDir":     `C:\Windows`,
+		"Custom":     "drop",
+	})
+	if env["WinDir"] != `C:\Windows` {
+		t.Fatalf("case-variant WinDir not preserved: %+v", env)
+	}
+	if env["SystemRoot"] != `C:\Windows` {
+		t.Fatalf("SystemRoot not preserved: %+v", env)
+	}
+	if _, ok := env["Custom"]; ok {
+		t.Fatalf("Custom inherited despite core mode: %+v", env)
 	}
 }
 

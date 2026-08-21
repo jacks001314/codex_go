@@ -533,6 +533,52 @@ func (c *httpClient) CallWithOptionsContext(ctx context.Context, options *httpCl
 	return c.callWithTransientRetries(ctx, method, params, out)
 }
 
+// CallStream performs a long-lived streamable HTTP request (Rust
+// CancellableEventStreamRequest): every server notification envelope from the
+// SSE stream is delivered to onNotification, and the call returns when the
+// matching-id response arrives, the stream ends, or ctx is cancelled. The
+// caller must consume notifications promptly or drop the stream.
+func (c *httpClient) CallStream(ctx context.Context, options *httpClientCallOptions, method string, params any, onNotification func(envelope *stdioRPCEnvelope) error) error {
+	if c == nil {
+		return errors.New("HTTP MCP client is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.applyCallOptions(options)
+	if !c.initialized {
+		if err := c.reinitialize(ctx); err != nil {
+			return err
+		}
+	}
+	response, requestID, err := c.doRPC(ctx, method, params, c.sessionID, true)
+	if err != nil {
+		return err
+	}
+	rpc, readErr := c.readRPCResponseWithStreamHandler(response, requestID, c.sessionID, onNotification)
+	_ = response.Body.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if rpc != nil && rpc.Error != nil {
+		return newMCPRemoteError(method, rpc.Error)
+	}
+	return nil
+}
+
+func (c *httpClient) readRPCResponseWithStreamHandler(response *http.Response, id int64, sessionID string, onNotification func(envelope *stdioRPCEnvelope) error) (*httpRPCResponse, error) {
+	contentType := ""
+	if response != nil {
+		contentType = response.Header.Get("Content-Type")
+	}
+	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		return readMCPHTTPSSEWithLimit(response.Body, id, 0, onNotification)
+	}
+	return c.readRPCResponse(response, id, sessionID)
+}
+
 func (c *httpClient) applyCallOptions(options *httpClientCallOptions) {
 	c.serverName = ""
 	c.threadID = ""

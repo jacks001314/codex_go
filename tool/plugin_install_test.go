@@ -101,6 +101,9 @@ func TestRequestPluginInstallHandlerUsesRuntimeResult(t *testing.T) {
 	if runtime.request.Elicitation == nil || runtime.request.Elicitation.Meta["remote_plugin_id"] != "plugins~Docs" {
 		t.Fatalf("elicitation = %#v", runtime.request.Elicitation)
 	}
+	if runtime.request.Elicitation.Meta["suggestion_id"] != "request_plugin_install_install-docs" {
+		t.Fatalf("plugin elicitation suggestion_id = %#v", runtime.request.Elicitation.Meta["suggestion_id"])
+	}
 }
 
 func TestRequestPluginInstallHandlerReturnsDeclineMetadata(t *testing.T) {
@@ -181,6 +184,9 @@ func TestRequestPluginInstallHandlerSupportsConnectorCandidates(t *testing.T) {
 	}
 	if runtime.request.Elicitation.Meta["install_url"] != "https://chatgpt.com/apps/docs" {
 		t.Fatalf("elicitation meta = %#v", runtime.request.Elicitation.Meta)
+	}
+	if _, present := runtime.request.Elicitation.Meta["suggestion_id"]; present {
+		t.Fatalf("connector elicitation must omit suggestion_id: %#v", runtime.request.Elicitation.Meta)
 	}
 	pluginDisplayNames, ok := runtime.request.Elicitation.Meta["plugin_display_names"].([]string)
 	if !ok || strings.Join(pluginDisplayNames, ",") != "Docs Plugin" {

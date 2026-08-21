@@ -261,15 +261,15 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
-		{Path: "Cargo.toml", SHA256: "723a4c4bb8b779589d940abe58f068fae6aef39424133c2d1af593c92a6a5662"},
+		{Path: "Cargo.toml", SHA256: "0d48b0a92329567735d6b7be2761fb6c85e62891bed627f625fa6349c859e25a"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
 		{Path: "exec/src/lib.rs", SHA256: "ab21fb2d2a230a7d914d2be7413eeee32b4a47161359a7aa811d7e8c59e262ac"},
 		{Path: "exec/src/exec_events.rs", SHA256: "fc914a7d8f7e990b19a95c41abf758e95e5b7ea028caa8b34b1c82306382c004"},
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
 		{Path: "core/src/client.rs", SHA256: "f85a08f3fdc05868557f403f0cc06a6523ad4baeaddad359804e3a3d39953439"},
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "4fcf0f97675b92804d24efe3ef48bdf6926809d3bc36aeb7b9f9e57cd5b32f99"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "685593889cd5bd9a65b8446530f8e0d1ff21dade7ece97d4e7787e1d80b7d01a"},
-		{Path: "core/tests/suite/mod.rs", SHA256: "fa0a3dc38f1d3c69e3ffa1a10a2cbfbf7d7e36fc44cfaac041b5c719c9bba0e3"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "5d58f257ba52d3de30781da060814fabe32eb3f95bcd53ef254a8fbd049e1bc8"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "86167afe4d2ed37b7b4100728f11c40d22ffccfa3d23abb4a625488c707dd9e9"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "c5860d4d7096e512d851ed78744c0ce1f09501f843ad9152416692ff509b83cf"},
 	}
 }
 

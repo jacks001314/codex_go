@@ -290,7 +290,14 @@ func (p *ProviderInfo) IsOpenAI() bool {
 }
 
 func (p *ProviderInfo) IsAmazonBedrock() bool {
-	return p.Name == AmazonBedrockProviderName
+	if p == nil {
+		return false
+	}
+	name := strings.TrimSpace(p.Name)
+	return strings.EqualFold(name, AmazonBedrockProviderName) ||
+		strings.EqualFold(name, AmazonBedrockRuntimeProviderName) ||
+		strings.EqualFold(name, AmazonBedrockProviderID) ||
+		strings.EqualFold(name, AmazonBedrockRuntimeProviderID)
 }
 
 func (p *ProviderInfo) UsesOpenAIActorAuthorization() bool {
@@ -306,7 +313,7 @@ func (p *ProviderInfo) UsesOpenAIActorAuthorization() bool {
 }
 
 func (p *ProviderInfo) SupportsRemoteCompaction() bool {
-	return p.IsOpenAI() || IsAzureResponsesProvider(p.Name, p.BaseURL)
+	return p.IsOpenAI() || IsAzureResponsesProvider(p.Name, p.BaseURL) || p.IsAmazonBedrock()
 }
 
 func (p *ProviderInfo) HasCommandAuth() bool {

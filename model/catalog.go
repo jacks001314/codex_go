@@ -63,6 +63,7 @@ type ModelMessages struct {
 	CollaborationModes   *CollaborationModeMessages `json:"collaboration_modes,omitempty"`
 	MultiAgent           *MultiAgentMessages        `json:"multi_agent,omitempty"`
 	TokenBudget          *ModelTokenBudgetConfig    `json:"token_budget,omitempty"`
+	AutoReview           *AutoReviewMessages        `json:"auto_review,omitempty"`
 }
 
 type CollaborationModeMessages struct {
@@ -97,6 +98,16 @@ type ModelTokenBudgetConfig struct {
 	AutoCompactFallbackBufferTokens int    `json:"auto_compact_fallback_buffer_tokens"`
 }
 
+// AutoReviewMessages mirrors Rust AutoReviewMessages (#39741): catalog-provided
+// auto-review policy and outcome instructions. Pointer fields preserve explicit
+// empty-string overrides.
+type AutoReviewMessages struct {
+	Policy                *string `json:"policy,omitempty"`
+	PolicyTemplate        *string `json:"policy_template,omitempty"`
+	RejectionInstructions *string `json:"rejection_instructions,omitempty"`
+	TimeoutInstructions   *string `json:"timeout_instructions,omitempty"`
+}
+
 func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		InstructionsTemplate  string                     `json:"instructions_template"`
@@ -104,6 +115,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 		CollaborationModes    *CollaborationModeMessages `json:"collaboration_modes"`
 		MultiAgent            *MultiAgentMessages        `json:"multi_agent"`
 		TokenBudget           *ModelTokenBudgetConfig    `json:"token_budget"`
+		AutoReview            *AutoReviewMessages        `json:"auto_review"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -112,6 +124,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	m.CollaborationModes = raw.CollaborationModes
 	m.MultiAgent = raw.MultiAgent
 	m.TokenBudget = raw.TokenBudget
+	m.AutoReview = raw.AutoReview
 	if raw.InstructionsVariables != nil {
 		m.PersonalityDefault = raw.InstructionsVariables["personality_default"]
 		m.PersonalityFriendly = raw.InstructionsVariables["personality_friendly"]
@@ -1133,6 +1146,9 @@ func bedrockModelWithMaxContextWindow(slug string, priority int, maxContextWindo
 		MaxContextWindow:               maxContextWindow,
 		EffectiveContextWindowPercent:  95,
 		InputModalities:                []string{"text"},
+		// Rust #39804: Amazon Bedrock does not support multi-agent V2 response
+		// items, so every Bedrock catalog model advertises multi-agent V1.
+		MultiAgentVersion: "v1",
 	}
 }
 
@@ -1162,6 +1178,14 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 		if messages.TokenBudget != nil {
 			tokenBudget := *messages.TokenBudget
 			messages.TokenBudget = &tokenBudget
+		}
+		if messages.AutoReview != nil {
+			autoReview := *messages.AutoReview
+			autoReview.Policy = cloneStringPointer(autoReview.Policy)
+			autoReview.PolicyTemplate = cloneStringPointer(autoReview.PolicyTemplate)
+			autoReview.RejectionInstructions = cloneStringPointer(autoReview.RejectionInstructions)
+			autoReview.TimeoutInstructions = cloneStringPointer(autoReview.TimeoutInstructions)
+			messages.AutoReview = &autoReview
 		}
 		out.ModelMessages = &messages
 	}

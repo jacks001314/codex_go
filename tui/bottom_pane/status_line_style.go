@@ -12,6 +12,7 @@ const (
 	StatusLineReasoning
 	StatusLineCurrentDir
 	StatusLineProjectRoot
+	StatusLineHostname
 	StatusLineGitBranch
 	StatusLinePullRequestNumber
 	StatusLineBranchChanges
@@ -114,7 +115,7 @@ func StatusLineAccentForItem(item StatusLineItem) StatusLineAccent {
 		return StatusLineAccentUsage
 	case StatusLineFiveHourLimit, StatusLineWeeklyLimit:
 		return StatusLineAccentLimit
-	case StatusLineCodexVersion, StatusLineSessionID:
+	case StatusLineCodexVersion, StatusLineHostname, StatusLineSessionID:
 		return StatusLineAccentMetadata
 	case StatusLineFastMode, StatusLineRawOutput, StatusLinePermissions, StatusLineApprovalMode:
 		return StatusLineAccentMode

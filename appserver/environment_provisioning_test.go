@@ -50,6 +50,53 @@ func TestInspectSelectedCapabilityRootsMergesThreadAndReadyRootsLikeRust(t *test
 	}
 }
 
+func TestCombineSelectedCapabilityRootsRefreshesMatchingLiveRootsLikeRust(t *testing.T) {
+	// Rust #39746: a matching live attachment root (same root id and
+	// environment id) refreshes the persisted thread-owned location, while
+	// persisted roots are preserved when the executor reports none.
+	threadRoots := []SelectedCapabilityRoot{
+		{
+			ID: "plugin-root",
+			Location: CapabilityRootLocation{
+				Type:          CapabilityRootLocationEnvironment,
+				EnvironmentID: "tools",
+				Path:          "file:///persisted/root",
+			},
+		},
+		{
+			ID: "owner-root",
+			Location: CapabilityRootLocation{
+				Type:          CapabilityRootLocationEnvironment,
+				EnvironmentID: "tools",
+				Path:          "file:///persisted/owner",
+			},
+		},
+	}
+	attachmentRoots := []SelectedCapabilityRoot{
+		{
+			ID: "plugin-root",
+			Location: CapabilityRootLocation{
+				Type:          CapabilityRootLocationEnvironment,
+				EnvironmentID: "tools",
+				Path:          "file:///live/root",
+			},
+		},
+	}
+	combined := combineSelectedCapabilityRoots(threadRoots, attachmentRoots)
+	if len(combined) != 3 {
+		t.Fatalf("combined roots = %+v, want 3", combined)
+	}
+	if combined[0].Location.Path != "file:///live/root" {
+		t.Fatalf("matching thread root was not refreshed: %+v", combined[0])
+	}
+	if combined[1].Location.Path != "file:///persisted/owner" {
+		t.Fatalf("non-matching persisted root changed: %+v", combined[1])
+	}
+	if combined[2].Location.Path != "file:///live/root" {
+		t.Fatalf("attachment root missing from tail: %+v", combined[2])
+	}
+}
+
 func TestInspectSelectedCapabilityRootsHidesUnavailableEnvironmentsLikeRust(t *testing.T) {
 	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
 	// A pending environment contributes no ready roots yet.

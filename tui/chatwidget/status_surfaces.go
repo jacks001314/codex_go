@@ -52,6 +52,7 @@ const (
 	StatusPreviewProjectName        StatusSurfacePreviewItem = "project-name"
 	StatusPreviewProjectRoot        StatusSurfacePreviewItem = "project-root"
 	StatusPreviewCurrentDir         StatusSurfacePreviewItem = "current-dir"
+	StatusPreviewHostname           StatusSurfacePreviewItem = "hostname"
 	StatusPreviewStatus             StatusSurfacePreviewItem = "status"
 	StatusPreviewThreadTitle        StatusSurfacePreviewItem = "thread-title"
 	StatusPreviewGitBranch          StatusSurfacePreviewItem = "git-branch"

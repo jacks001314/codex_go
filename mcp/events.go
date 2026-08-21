@@ -1,9 +1,10 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
 	"strings"
+	"sync"
 )
 
 // MCPEventDefinition mirrors Rust McpEventDefinition (41014b11bd): an event
@@ -65,8 +66,11 @@ func (s *MCPService) ListMCPEvents(serverName string) ([]MCPEventDefinition, err
 	return nil, invalidMCPRequest("MCP server has no transport")
 }
 
-// OpenMCPEventStream opens an MCP event subscription with the supplied event
-// arguments (Rust McpResourceClient::open_event_stream, events/stream).
+// OpenMCPEventStream opens a continuous MCP event subscription with the
+// supplied event arguments (Rust McpResourceClient::open_event_stream,
+// events/stream). HTTP servers stream every server notification on the
+// returned stream until Close; stdio servers deliver the single response
+// notification and then end (the hosted Plugin Runtime path is HTTP).
 func (s *MCPService) OpenMCPEventStream(serverName string, eventName string, arguments any) (*MCPEventStream, error) {
 	if s == nil {
 		return nil, invalidMCPRequest("MCP service is nil")
@@ -84,42 +88,121 @@ func (s *MCPService) OpenMCPEventStream(serverName string, eventName string, arg
 		return nil, invalidMCPRequest("unknown MCP server " + serverName)
 	}
 	params := map[string]any{"name": eventName, "arguments": arguments}
-	var raw json.RawMessage
-	var err error
 	if strings.TrimSpace(config.URL) != "" {
 		if err := ValidateServerAuth(serverName, &config); err != nil {
 			return nil, err
 		}
-		client := s.httpClientForServer(serverName, &config)
-		err = client.CallWithOptions(&httpClientCallOptions{ServerName: serverName}, "events/stream", params, &raw)
-	} else if strings.TrimSpace(config.Command) != "" {
+		return s.openHTTPEventStream(serverName, &config, params), nil
+	}
+	if strings.TrimSpace(config.Command) != "" {
 		client := s.stdioClientForServer(serverName, &config)
-		err = client.Call("events/stream", params, &raw)
-	} else {
-		return nil, invalidMCPRequest("MCP server has no transport")
+		var raw json.RawMessage
+		if err := client.Call("events/stream", params, &raw); err != nil {
+			return nil, err
+		}
+		stream := newMCPEventStream(context.Background(), nil)
+		if notification := decodeMCPEventStreamNotification(raw); notification != nil {
+			stream.notifications <- notification
+		}
+		close(stream.done)
+		return stream, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return &MCPEventStream{raw: raw}, nil
+	return nil, invalidMCPRequest("MCP server has no transport")
 }
 
-// MCPEventStream owns an event subscription response (Rust McpEventStream).
-type MCPEventStream struct {
-	raw json.RawMessage
+func (s *MCPService) openHTTPEventStream(serverName string, config *ServerConfig, params map[string]any) *MCPEventStream {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := newMCPEventStream(ctx, cancel)
+	client := s.httpClientForServer(serverName, config)
+	go func() {
+		defer stream.finish()
+		err := client.CallStream(ctx, &httpClientCallOptions{ServerName: serverName}, "events/stream", params, func(envelope *stdioRPCEnvelope) error {
+			if envelope == nil || strings.TrimSpace(envelope.Method) == "" {
+				return nil
+			}
+			notification := &MCPEventNotification{Method: strings.TrimSpace(envelope.Method)}
+			if len(envelope.Params) > 0 {
+				notification.Params = append(json.RawMessage(nil), envelope.Params...)
+			}
+			select {
+			case stream.notifications <- notification:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+		stream.err = err
+	}()
+	return stream
 }
 
-var ErrMCPEventStreamEmpty = errors.New("MCP event stream returned no payload")
-
-// Notification returns the raw lifecycle notification payload, or nil when the
-// stream ended.
-func (s *MCPEventStream) Notification() *MCPEventNotification {
-	if s == nil || len(s.raw) == 0 || string(s.raw) == "null" {
+func decodeMCPEventStreamNotification(raw json.RawMessage) *MCPEventNotification {
+	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
 	var notification MCPEventNotification
-	if err := json.Unmarshal(s.raw, &notification); err != nil {
+	if err := json.Unmarshal(raw, &notification); err != nil {
 		return nil
 	}
 	return &notification
+}
+
+// MCPEventStream owns a continuous event subscription (Rust McpEventStream).
+type MCPEventStream struct {
+	notifications chan *MCPEventNotification
+	done          chan struct{}
+	err           error
+	cancel        context.CancelFunc
+	closeOnce     sync.Once
+}
+
+func newMCPEventStream(ctx context.Context, cancel context.CancelFunc) *MCPEventStream {
+	return &MCPEventStream{
+		notifications: make(chan *MCPEventNotification, 64),
+		done:          make(chan struct{}),
+		cancel:        cancel,
+	}
+}
+
+// Notifications returns the lifecycle notifications as they arrive. The
+// channel closes when the stream ends (Close, server termination, transport
+// failure, or auth/runtime ownership change at the app-server layer).
+func (s *MCPEventStream) Notifications() <-chan *MCPEventNotification {
+	if s == nil {
+		return nil
+	}
+	return s.notifications
+}
+
+// Done is closed when the underlying transport ends.
+func (s *MCPEventStream) Done() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.done
+}
+
+// Err returns the transport error, if any, once the stream has ended.
+func (s *MCPEventStream) Err() error {
+	if s == nil {
+		return nil
+	}
+	return s.err
+}
+
+// Close cancels the subscription and releases the transport. The stream's
+// Done channel closes once the transport goroutine exits.
+func (s *MCPEventStream) Close() {
+	if s == nil {
+		return
+	}
+	s.closeOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+	})
+}
+
+func (s *MCPEventStream) finish() {
+	close(s.done)
 }

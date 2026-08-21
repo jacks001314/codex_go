@@ -1,6 +1,6 @@
 {
     "schemaVersion": 1,
-    "targetRustCommit": "9bf673718a4605b49e47d00762121d372af95439",
+    "targetRustCommit": "f20b63e85c459509a7d37181476f84dc8368343f",
     "contracts": [
         {
             "id": "features",
@@ -404,10 +404,9 @@
             "id": "shell-environment-policy-per-environment",
             "kind": "shared-fixtures",
             "rustPaths": [
-                "core/src/exec_env.rs",
-                "protocol/src/shell_environment.rs",
-                "core/tests/suite/unified_exec.rs",
-                "core/src/tools/handlers/shell_tests.rs"
+            "core/src/exec_env.rs",
+            "protocol/src/shell_environment.rs",
+            "core/tests/suite/unified_exec.rs"
             ],
             "goPaths": [
                 "execpolicy",
