@@ -306,7 +306,7 @@ func PrepareImagePrepImageWithResult(imageURL string, detail ImagePrepDetail) (*
 	if detail == ImagePrepDetailLow {
 		return nil, ErrImagePrepUnsupportedLowDetail
 	}
-	mediaType, payload, err := splitImagePrepDataURL(imageURL)
+	_, payload, err := splitImagePrepDataURL(imageURL)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +325,7 @@ func PrepareImagePrepImageWithResult(imageURL string, detail ImagePrepDetail) (*
 	if detail == ImagePrepDetailOriginal {
 		limits = UnifiedImageLimits
 	}
-	prepared, err := prepareImagePrepDecoded(imageURL, mediaType, decoded, limits)
+	prepared, err := prepareImagePrepDecoded(decoded, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +337,7 @@ func PrepareImagePrepImageWithResult(imageURL string, detail ImagePrepDetail) (*
 // Images that already fit the budget are returned byte-for-byte for
 // PNG/JPEG/WebP (Rust can_preserve_source_bytes) and re-encoded as PNG for
 // other decodable formats (GIF), mirroring Rust load_for_prompt_bytes.
-func prepareImagePrepDecoded(originalURL string, mediaType string, payload []byte, limits PromptImageResizeLimits) (*ImagePrepResult, error) {
+func prepareImagePrepDecoded(payload []byte, limits PromptImageResizeLimits) (*ImagePrepResult, error) {
 	format, img, sourceWidth, sourceHeight, err := decodeImagePrepBytes(payload)
 	if err != nil {
 		return nil, err
@@ -346,7 +346,13 @@ func prepareImagePrepDecoded(originalURL string, mediaType string, payload []byt
 	if targetWidth == sourceWidth && targetHeight == sourceHeight {
 		if canImagePrepPreserveSourceBytes(format) {
 			return &ImagePrepResult{
-				URL: "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(payload),
+				// Use the canonical mime for the detected format rather than the
+				// media type declared in the original data URL. Sources such as
+				// the view_image tool label bytes application/octet-stream even
+				// when the payload is a valid PNG/JPEG/WebP; preserving that
+				// label would make the Responses API reject the image as an
+				// unsupported format (it only accepts webp/png/jpeg/gif).
+				URL: "data:" + imagePrepMIME(format) + ";base64," + base64.StdEncoding.EncodeToString(payload),
 			}, nil
 		}
 		resized := resizeImagePrep(img, targetWidth, targetHeight)
@@ -385,6 +391,22 @@ func prepareImagePrepDecoded(originalURL string, mediaType string, payload []byt
 			PreparedHeight: targetHeight,
 		},
 	}, nil
+}
+
+// imagePrepMIME maps a detected image format to the mime type used in the data
+// URL sent to the Responses API, mirroring Rust format_to_mime. Only the
+// formats the API accepts (webp/png/jpeg/gif) are produced.
+func imagePrepMIME(format imagePrepFormat) string {
+	switch format {
+	case imagePrepFormatJPEG:
+		return "image/jpeg"
+	case imagePrepFormatGIF:
+		return "image/gif"
+	case imagePrepFormatWebP:
+		return "image/webp"
+	default:
+		return "image/png"
+	}
 }
 
 type imagePrepFormat int

@@ -20,6 +20,7 @@ import (
 
 	"codex_go/auth"
 	"codex_go/codexapi"
+	"codex_go/eventmap"
 
 	"github.com/coder/websocket"
 	"github.com/klauspost/compress/zstd"
@@ -1431,7 +1432,77 @@ func responsesInputItems(request *AgentRequest) []any {
 	if !request.Store && !request.ItemIDsEnabled {
 		items = stripResponseInputItemIDs(items)
 	}
+	items = prepareResponseInputImages(items)
 	return items
+}
+
+// prepareResponseInputImages runs the image-preparation pipeline over every
+// input_image in the request, mirroring Rust prepare_response_items. The Rust
+// version processes all response items (messages and tool outputs) at request
+// time so images are always re-encoded to a format the Responses API accepts
+// (webp/png/jpeg/gif) and unsupported inputs are replaced with a placeholder.
+// Go previously only prepared the current user message, so images carried in
+// tool outputs (e.g. view_image, which labels bytes application/octet-stream)
+// or replayed from history could reach the API and be rejected as an
+// unsupported image.
+func prepareResponseInputImages(items []any) []any {
+	if len(items) == 0 {
+		return items
+	}
+	data, err := json.Marshal(items)
+	if err != nil {
+		return items
+	}
+	if !bytes.Contains(data, []byte(`"input_image"`)) {
+		return items
+	}
+	var normalized []any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&normalized); err != nil {
+		return items
+	}
+	prepareResponseInputImageBlocks(normalized)
+	return normalized
+}
+
+func prepareResponseInputImageBlocks(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		prepareResponseInputImageBlock(typed)
+		for _, key := range []string{"content", "output", "content_items"} {
+			if child, ok := typed[key]; ok {
+				prepareResponseInputImageBlocks(child)
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			prepareResponseInputImageBlocks(child)
+		}
+	}
+}
+
+func prepareResponseInputImageBlock(block map[string]any) {
+	itemType, _ := block["type"].(string)
+	if itemType != "input_image" && itemType != "image" {
+		return
+	}
+	imageURL, _ := block["image_url"].(string)
+	if strings.TrimSpace(imageURL) == "" {
+		return
+	}
+	detail := eventmap.ImagePrepDetail(responseToolString(block["detail"]))
+	prepared, err := eventmap.PrepareImagePrepImage(imageURL, detail)
+	if err != nil {
+		// Replace an image that cannot be processed with a placeholder text
+		// block, matching Rust image_preparation.rs.
+		delete(block, "image_url")
+		delete(block, "detail")
+		block["type"] = "input_text"
+		block["text"] = eventmap.ImagePrepPlaceholderForError(err)
+		return
+	}
+	block["image_url"] = prepared
 }
 
 func responsesInputItemsForProvider(request *AgentRequest, providerName string) []any {

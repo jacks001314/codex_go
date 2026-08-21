@@ -1286,7 +1286,7 @@ func TestResponsesAgentRunnerReasoningUsesModelDefaultsAndLiteContext(t *testing
 			"role": "user",
 			"content": []any{map[string]any{
 				"type":      "input_image",
-				"image_url": "data:",
+				"image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
 				"detail":    "high",
 			}},
 		}},
@@ -1346,6 +1346,76 @@ func TestResponsesAgentRunnerReasoningUsesModelDefaultsAndLiteContext(t *testing
 	}
 	if _, ok := reasoning["summary"]; ok {
 		t.Fatalf("reasoning summary present = %#v", reasoning)
+	}
+}
+
+func TestPrepareResponseInputImagesReencodesUnsupportedMime(t *testing.T) {
+	// A valid 1x1 PNG payload that view_image-style tools label
+	// application/octet-stream. Image preparation must re-encode the data URL
+	// with the canonical image/png mime (mirroring Rust format_to_mime) so the
+	// Responses API does not reject it as an unsupported image.
+	const pngPayload = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	items := []any{map[string]any{
+		"type": "message",
+		"role": "user",
+		"content": []any{map[string]any{
+			"type":      "input_image",
+			"image_url": "data:application/octet-stream;base64," + pngPayload,
+			"detail":    "high",
+		}},
+	}}
+	out := prepareResponseInputImages(items)
+	content := out[0].(map[string]any)["content"].([]any)
+	block := content[0].(map[string]any)
+	if block["type"] != "input_image" {
+		t.Fatalf("block type = %#v, want input_image", block["type"])
+	}
+	url, _ := block["image_url"].(string)
+	if !strings.HasPrefix(url, "data:image/png;base64,") {
+		t.Fatalf("image_url = %q, want data:image/png;base64,...", url)
+	}
+}
+
+func TestPrepareResponseInputImagesReplacesUnprocessableWithPlaceholder(t *testing.T) {
+	items := []any{map[string]any{
+		"type": "message",
+		"role": "user",
+		"content": []any{map[string]any{
+			"type":      "input_image",
+			"image_url": "data:",
+			"detail":    "high",
+		}},
+	}}
+	out := prepareResponseInputImages(items)
+	content := out[0].(map[string]any)["content"].([]any)
+	block := content[0].(map[string]any)
+	if block["type"] != "input_text" {
+		t.Fatalf("block type = %#v, want input_text placeholder", block["type"])
+	}
+	if text, _ := block["text"].(string); !strings.Contains(text, "image content omitted") {
+		t.Fatalf("placeholder text = %q", text)
+	}
+	if _, ok := block["image_url"]; ok {
+		t.Fatal("placeholder block still carries image_url")
+	}
+}
+
+func TestPrepareResponseInputImagesLeavesNonImageItems(t *testing.T) {
+	items := []any{map[string]any{
+		"type": "message",
+		"role": "user",
+		"content": []any{map[string]any{
+			"type": "input_text",
+			"text": "hello",
+		}},
+	}}
+	out := prepareResponseInputImages(items)
+	if len(out) != 1 {
+		t.Fatalf("len(out) = %d, want 1", len(out))
+	}
+	content := out[0].(map[string]any)["content"].([]any)
+	if block := content[0].(map[string]any); block["type"] != "input_text" || block["text"] != "hello" {
+		t.Fatalf("block = %#v", block)
 	}
 }
 

@@ -78,6 +78,31 @@ func TestPrepareImagePrepPreservesSmallImageBytesLikeRust(t *testing.T) {
 	}
 }
 
+func TestPrepareImagePrepUsesCanonicalMimeForPreservedBytes(t *testing.T) {
+	// The view_image tool labels valid image bytes application/octet-stream
+	// (matching Rust). Preparation must re-label the preserved data URL with
+	// the canonical mime for the detected format, because the Responses API
+	// only accepts webp/png/jpeg/gif and rejects application/octet-stream as an
+	// unsupported image.
+	payload := mustBase64Payload(t, pngDataURL(64, 32))
+	mislabeled := dataURL("application/octet-stream", payload)
+	result, err := PrepareImagePrepImageWithResult(mislabeled, ImagePrepDetailHigh)
+	if err != nil {
+		t.Fatalf("PrepareImagePrepImageWithResult: %v", err)
+	}
+	if result == nil || result.Resize != nil {
+		t.Fatalf("expected no resize, got %#v", result)
+	}
+	if !strings.HasPrefix(result.URL, "data:image/png;base64,") {
+		t.Fatalf("preserved URL = %q, want data:image/png;base64,...", result.URL)
+	}
+	// The bytes must be unchanged, only the mime label corrected.
+	got := mustBase64Payload(t, result.URL)
+	if !bytes.Equal(got, payload) {
+		t.Fatal("preserved image bytes changed")
+	}
+}
+
 func TestPrepareImagePrepOriginalUsesUnifiedLimitsLikeRust(t *testing.T) {
 	// Rust: (6401,100) with original detail (6000 max / 10000 patches) ->
 	// (6000,94); a 2048x2048 image with original detail stays 2048x2048
