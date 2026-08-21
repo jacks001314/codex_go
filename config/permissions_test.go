@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"codex_go/sandbox"
@@ -216,4 +217,68 @@ func assertSpecialRuntimeEntry(t *testing.T, wire runtimeProfileForTest, kind st
 		}
 	}
 	t.Fatalf("special entry kind=%q subpath=%q access=%q not found in %+v", kind, subpath, access, wire.FileSystem.Entries)
+}
+
+func TestResolvePermissionProfileSelectionManagedDefaultWinsAndMergesCatalogLikeRust(t *testing.T) {
+	// Rust #39752: a managed default overrides the configured default while
+	// preserving Windows-style paths, and the merged configured + managed
+	// catalog is returned without compiling executor paths.
+	cfg := &Config{Values: map[string]any{
+		"default_permissions": "configured-windows",
+		"permissions": map[string]any{
+			"configured-windows": map[string]any{
+				"workspace_roots": map[string]any{`C:\Users\agent\workspace`: true},
+				"filesystem":      map[string]any{`C:\Users\agent\workspace`: "write"},
+			},
+		},
+	}}
+	cfg.Requirements = &ConfigRequirements{
+		DefaultPermissions: stringPtrConfig(`managed-windows`),
+		AllowedPermissionProfiles: map[string]bool{
+			"configured-windows": false,
+			"managed-windows":    true,
+		},
+		Permissions: map[string]any{
+			"managed-windows": map[string]any{
+				"workspace_roots": map[string]any{`D:\Managed\workspace`: true},
+				"filesystem":      map[string]any{`D:\Managed\workspace`: "read"},
+			},
+		},
+	}
+	selection, err := cfg.ResolvePermissionProfileSelection()
+	if err != nil {
+		t.Fatalf("ResolvePermissionProfileSelection() error = %v", err)
+	}
+	if selection.ProfileID != "managed-windows" {
+		t.Fatalf("profile id = %q, want managed-windows", selection.ProfileID)
+	}
+	if len(selection.Profiles) != 2 {
+		t.Fatalf("merged catalog = %#v, want configured + managed", selection.Profiles)
+	}
+	managed, ok := selection.Profiles["managed-windows"].(map[string]any)
+	if !ok {
+		t.Fatalf("managed profile missing from catalog: %#v", selection.Profiles)
+	}
+	roots, ok := managed["workspace_roots"].(map[string]any)
+	if !ok || !roots[`D:\Managed\workspace`].(bool) {
+		t.Fatalf("managed Windows-style workspace roots lost: %#v", managed)
+	}
+}
+
+func TestResolvePermissionProfileSelectionRejectsUndefinedAllowlistedProfileLikeRust(t *testing.T) {
+	cfg := &Config{Values: map[string]any{}}
+	cfg.Requirements = &ConfigRequirements{
+		DefaultPermissions: stringPtrConfig("missing-profile"),
+		AllowedPermissionProfiles: map[string]bool{
+			"missing-profile": true,
+		},
+	}
+	_, err := cfg.ResolvePermissionProfileSelection()
+	if err == nil || !strings.Contains(err.Error(), "allowed_permission_profiles refers to undefined profile `missing-profile`") {
+		t.Fatalf("error = %v, want undefined allowlisted profile rejection", err)
+	}
+}
+
+func stringPtrConfig(value string) *string {
+	return &value
 }

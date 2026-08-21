@@ -22,6 +22,67 @@ type SandboxPermissionProfileResolution struct {
 	WorkspaceRoots []string
 }
 
+// PermissionProfileSelection is the uncompiled result of
+// ResolvePermissionProfileSelection (Rust ResolvedPermissionProfileSelection,
+// #39752): the effective profile id and the merged configured + managed
+// profile catalog without platform-specific path compilation.
+type PermissionProfileSelection struct {
+	ProfileID string
+	Profiles  map[string]any
+}
+
+// ResolvePermissionProfileSelection mirrors Rust resolve_permission_profile_selection
+// (#39752): the effective profile is selected using configured defaults, managed
+// requirements defaults, and allowlists, and the merged catalog is returned
+// without compiling executor paths.
+func (c *Config) ResolvePermissionProfileSelection() (PermissionProfileSelection, error) {
+	if c == nil {
+		c = &Config{Values: map[string]any{}}
+	}
+	configuredProfiles := permissionProfilesFromConfig(c.Values["permissions"])
+	configuredDefault := strings.TrimSpace(stringFromConfigValue(c.Values["default_permissions"]))
+	var requirements *ConfigRequirements
+	if c.Requirements != nil {
+		requirements = c.Requirements
+	}
+	merged := cloneMap(configuredProfiles)
+	if requirements != nil {
+		for name, profile := range requirements.Permissions {
+			merged[name] = profile
+		}
+	}
+	profileID := ""
+	if requirements != nil && requirements.DefaultPermissions != nil {
+		profileID = strings.TrimSpace(*requirements.DefaultPermissions)
+	}
+	if profileID == "" {
+		profileID = configuredDefault
+	}
+	if requirements != nil && requirements.AllowedPermissionProfiles != nil {
+		for allowed, enabled := range requirements.AllowedPermissionProfiles {
+			allowed = strings.TrimSpace(allowed)
+			if !enabled || allowed == "" {
+				continue
+			}
+			if !permissionProfileKnown(merged, allowed) {
+				return PermissionProfileSelection{}, fmt.Errorf("requirements.toml allowed_permission_profiles refers to undefined profile `%s`", allowed)
+			}
+		}
+		if profileID != "" && !requirements.AllowedPermissionProfiles[profileID] {
+			return PermissionProfileSelection{}, fmt.Errorf("permission profile %q is disallowed by managed requirements", profileID)
+		}
+	}
+	return PermissionProfileSelection{ProfileID: profileID, Profiles: merged}, nil
+}
+
+func permissionProfileKnown(profiles map[string]any, profileID string) bool {
+	if strings.HasPrefix(profileID, ":") {
+		return isRuntimeBuiltinPermissionProfile(profileID)
+	}
+	_, ok := profiles[profileID]
+	return ok
+}
+
 type runtimePermissionProfileWire struct {
 	Type       string                 `json:"type"`
 	FileSystem *runtimeFilesystemWire `json:"file_system,omitempty"`

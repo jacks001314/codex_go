@@ -2,6 +2,7 @@ package rollout
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,13 +22,29 @@ const (
 	MigrationStatusFailed           MigrationStatus = "failed"
 )
 
+// MigrationFailureReason mirrors Rust RolloutMigrationFailureReason (#39784):
+// a bounded explanation for why one rollout migration failed (serde snake_case).
+type MigrationFailureReason string
+
+const (
+	MigrationFailureMissingSqliteMetadata            MigrationFailureReason = "missing_sqlite_metadata"
+	MigrationFailureInvalidSessionMetadata           MigrationFailureReason = "invalid_session_metadata"
+	MigrationFailureRolloutReadFailed                MigrationFailureReason = "rollout_read_failed"
+	MigrationFailureLegacyRolloutConversionFailed    MigrationFailureReason = "legacy_rollout_conversion_failed"
+	MigrationFailureSQLiteMaterializationFailed      MigrationFailureReason = "sqlite_materialization_failed"
+	MigrationFailureRolloutPublishFailed             MigrationFailureReason = "rollout_publish_failed"
+	MigrationFailureInterruptedMigrationRecoveryFail MigrationFailureReason = "interrupted_migration_recovery_failed"
+	MigrationFailureUnknown                          MigrationFailureReason = "unknown"
+)
+
 // MigrationOutcome mirrors Rust RolloutMigrationOutcome.
 type MigrationOutcome struct {
-	ThreadID       *string         `json:"thread_id,omitempty"`
-	RolloutPath    string          `json:"rollout_path"`
-	Status         MigrationStatus `json:"status"`
-	BytesProcessed uint64          `json:"bytes_processed"`
-	Message        *string         `json:"message,omitempty"`
+	ThreadID       *string                 `json:"thread_id,omitempty"`
+	RolloutPath    string                  `json:"rollout_path"`
+	Status         MigrationStatus         `json:"status"`
+	FailureReason  *MigrationFailureReason `json:"failure_reason,omitempty"`
+	BytesProcessed uint64                  `json:"bytes_processed"`
+	Message        *string                 `json:"message,omitempty"`
 }
 
 // MigrationReport mirrors Rust RolloutMigrationReport.
@@ -104,14 +121,17 @@ func inspectRolloutPath(codexHome string, path string, options MigrationOptions)
 			empty = true
 		}
 		status := MigrationStatusFailed
+		var failureReason *MigrationFailureReason
 		if empty {
 			status = MigrationStatusSkippedEmpty
+		} else {
+			failureReason = classifyMigrationReadFailure(err)
 		}
 		message := ""
 		if !empty {
 			message = err.Error()
 		}
-		return migrationOutcome(&threadID, path, status, 0, message), true
+		return migrationOutcomeWithReason(&threadID, path, status, failureReason, 0, message), true
 	}
 	threadID := strings.TrimSpace(meta.ID)
 	if !matchesMigrationSelection(options.ThreadIDs, threadID) {
@@ -124,15 +144,32 @@ func inspectRolloutPath(codexHome string, path string, options MigrationOptions)
 		return migrationOutcome(&threadID, path, MigrationStatusEligible, 0, ""), true
 	}
 	if err := CanonicalizeRollout(codexHome, path); err != nil {
-		return migrationOutcome(&threadID, path, MigrationStatusFailed, 0, err.Error()), true
+		return migrationOutcomeWithReason(&threadID, path, MigrationStatusFailed, migrationFailureReasonPtr(MigrationFailureUnknown), 0, err.Error()), true
 	}
 	return migrationOutcome(&threadID, path, MigrationStatusMigrated, 0, ""), true
 }
 
+// classifyMigrationReadFailure mirrors Rust #39784: filesystem read failures
+// classify as rollout_read_failed; a readable file whose session metadata is
+// missing/malformed is invalid_session_metadata.
+func classifyMigrationReadFailure(err error) *MigrationFailureReason {
+	var pathErr *os.PathError
+	var linkErr *os.LinkError
+	if errors.As(err, &pathErr) || errors.As(err, &linkErr) {
+		return migrationFailureReasonPtr(MigrationFailureRolloutReadFailed)
+	}
+	return migrationFailureReasonPtr(MigrationFailureInvalidSessionMetadata)
+}
+
 func migrationOutcome(threadID *string, path string, status MigrationStatus, bytes uint64, message string) *MigrationOutcome {
+	return migrationOutcomeWithReason(threadID, path, status, nil, bytes, message)
+}
+
+func migrationOutcomeWithReason(threadID *string, path string, status MigrationStatus, failureReason *MigrationFailureReason, bytes uint64, message string) *MigrationOutcome {
 	outcome := &MigrationOutcome{
 		RolloutPath:    path,
 		Status:         status,
+		FailureReason:  failureReason,
 		BytesProcessed: bytes,
 	}
 	if threadID != nil && strings.TrimSpace(*threadID) != "" {
@@ -144,6 +181,11 @@ func migrationOutcome(threadID *string, path string, status MigrationStatus, byt
 		outcome.Message = &msg
 	}
 	return outcome
+}
+
+func migrationFailureReasonPtr(reason MigrationFailureReason) *MigrationFailureReason {
+	value := reason
+	return &value
 }
 
 func matchesMigrationSelection(selected []string, threadID string) bool {

@@ -97,9 +97,9 @@
         "config",
         "sandbox"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "implementation_pending: add uncompiled permission profile selection (configured + managed catalog, managed default override, allowlist rejection)."
+        "Implemented: ResolvePermissionProfileSelection selects the effective profile (managed default overrides configured, allowlists enforced, undefined allowlisted profiles rejected) and returns the merged configured + managed catalog without compiling executor paths; requirements.toml [permissions] tables are parsed into ConfigRequirements.Permissions (config/permissions.go, requirements_file.go, api.go). Tests mirror Rust permission_profile_selection_tests.rs."
       ]
     },
     {
@@ -251,9 +251,9 @@
         "rollout",
         "state"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "implementation_pending: rollout migration failure classification + telemetry surface parity."
+        "Implemented: rollout migration outcomes carry failure_reason (rollout_read_failed vs invalid_session_metadata classification, plus the full Rust reason enum) on failed outcomes (rollout/migrate.go). Tests added."
       ]
     },
     {

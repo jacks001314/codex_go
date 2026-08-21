@@ -2,6 +2,7 @@ package rollout
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -342,6 +343,43 @@ func TestMigrateRolloutsDryRunClassifiesLikeRust(t *testing.T) {
 	}
 	if byID[emptyID] != MigrationStatusSkippedEmpty {
 		t.Fatalf("empty status = %q, want skipped_empty", byID[emptyID])
+	}
+}
+
+func TestMigrateRolloutsClassifiesFailureReasonsLikeRust(t *testing.T) {
+	// Rust #39784: unreadable rollouts classify as rollout_read_failed and
+	// malformed session metadata as invalid_session_metadata; both carry the
+	// failure_reason on the outcome.
+	home := t.TempDir()
+	metaID := "123e4567-e89b-42d3-a456-426614174011"
+	metaPath := filepath.Join(home, SessionsSubdir, "rollout-2025-01-01T00-00-00-"+metaID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(metaPath, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile meta: %v", err)
+	}
+
+	report, err := MigrateRollouts(home, MigrationOptions{})
+	if err != nil {
+		t.Fatalf("MigrateRollouts: %v", err)
+	}
+	byID := map[string]*MigrationOutcome{}
+	for _, outcome := range report.Outcomes {
+		if outcome.ThreadID != nil {
+			byID[*outcome.ThreadID] = &outcome
+		}
+	}
+	metaOutcome := byID[metaID]
+	if metaOutcome == nil || metaOutcome.FailureReason == nil || *metaOutcome.FailureReason != MigrationFailureInvalidSessionMetadata {
+		t.Fatalf("metadata failure outcome = %#v, want invalid_session_metadata", metaOutcome)
+	}
+
+	if reason := classifyMigrationReadFailure(&os.PathError{Op: "open", Path: "rollout.jsonl", Err: os.ErrPermission}); reason == nil || *reason != MigrationFailureRolloutReadFailed {
+		t.Fatalf("filesystem failure reason = %v, want rollout_read_failed", reason)
+	}
+	if reason := classifyMigrationReadFailure(errors.New("missing session id")); reason == nil || *reason != MigrationFailureInvalidSessionMetadata {
+		t.Fatalf("metadata failure reason = %v, want invalid_session_metadata", reason)
 	}
 }
 

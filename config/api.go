@@ -510,6 +510,10 @@ type ConfigRequirements struct {
 	AllowedWindowsSandboxImplementations []WindowsSandboxSetupMode       `json:"allowedWindowsSandboxImplementations,omitempty"`
 	AllowedPermissionProfiles            map[string]bool                 `json:"allowedPermissionProfiles,omitempty"`
 	DefaultPermissions                   *string                         `json:"defaultPermissions,omitempty"`
+	// Permissions carries the managed [permissions] profile catalog from
+	// requirements (Rust ConfigRequirementsToml.permissions, #39752). It is
+	// internal and not part of the app-server wire ConfigRequirements schema.
+	Permissions map[string]any `json:"-"`
 	AllowedWebSearchModes                []WebSearchMode                 `json:"allowedWebSearchModes,omitempty"`
 	AllowManagedHooksOnly                *bool                           `json:"allowManagedHooksOnly,omitempty"`
 	AllowAppshots                        *bool                           `json:"allowAppshots,omitempty"`
@@ -2961,6 +2965,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.AllowedSandboxModes = cloneSlice(requirements.AllowedSandboxModes)
 	clone.AllowedWindowsSandboxImplementations = cloneSlice(requirements.AllowedWindowsSandboxImplementations)
 	clone.AllowedPermissionProfiles = cloneBoolMap(requirements.AllowedPermissionProfiles)
+	clone.Permissions = cloneMap(requirements.Permissions)
 	clone.AllowedWebSearchModes = cloneSlice(requirements.AllowedWebSearchModes)
 	clone.FeatureRequirements = cloneBoolMap(requirements.FeatureRequirements)
 	clone.DefaultPermissions = cloneStringPtr(requirements.DefaultPermissions)
