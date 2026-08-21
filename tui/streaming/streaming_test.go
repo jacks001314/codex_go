@@ -2,6 +2,8 @@ package streaming
 
 import (
 	"strings"
+
+	"codex_go/utils"
 	"testing"
 	"time"
 )
@@ -297,4 +299,39 @@ func TestCommitTickCatchUpOnlySuppressesSmooth(t *testing.T) {
 	if controller.QueuedLines() != 1 {
 		t.Fatalf("smooth queue should remain, got %d", controller.QueuedLines())
 	}
+}
+
+func TestStreamControllerMarkdownRenderAndFenceHoldback(t *testing.T) {
+	c := NewStreamControllerWithTheme(80, "dark")
+	c.Push("hello **world**\n```go\nfunc main() {\n")
+	cell, _ := c.OnCommitTickBatch(20)
+	if cell == nil {
+		t.Fatal("expected a cell with the stable prefix")
+	}
+	prefix := strings.Join(stripANSILines(cell.DisplayLines(80)), "\n")
+	if !strings.Contains(prefix, "hello") {
+		t.Fatalf("stable prefix not rendered: %q", prefix)
+	}
+	if strings.Contains(prefix, "func main") {
+		t.Fatalf("unclosed fence content leaked into stable lines: %q", prefix)
+	}
+
+	// Closing the fence releases the previously held-back code block.
+	c.Push("}\n```\n")
+	cell2, _ := c.OnCommitTickBatch(20)
+	if cell2 == nil {
+		t.Fatal("expected a cell after the fence closes")
+	}
+	after := strings.Join(stripANSILines(cell2.DisplayLines(80)), "\n")
+	if !strings.Contains(after, "func main") {
+		t.Fatalf("fence content not released after close: %q", after)
+	}
+}
+
+func stripANSILines(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = utils.StripANSI(l)
+	}
+	return out
 }

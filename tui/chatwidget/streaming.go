@@ -374,8 +374,9 @@ func (s *ChatStreamingState) handleStreamingDelta(delta string) {
 		s.recordVisibleTurnActivity()
 	}
 	if s.StreamController == nil {
-		s.StreamController = streamingcore.NewStreamController(s.streamWidth(2))
+		s.StreamController = streamingcore.NewStreamControllerWithTheme(s.streamWidth(2), streamingcore.CurrentStreamTheme())
 	}
+	s.StreamController.SetTheme(streamingcore.CurrentStreamTheme())
 	if s.StreamController.Push(delta) {
 		s.startCommitAnimation()
 		s.RunCatchUpCommitTick(time.Now())

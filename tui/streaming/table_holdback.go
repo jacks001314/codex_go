@@ -14,6 +14,7 @@ const (
 	TableHoldbackNone TableHoldbackKind = iota
 	TableHoldbackPendingHeader
 	TableHoldbackConfirmed
+	TableHoldbackFence
 )
 
 type TableHoldbackState struct {
@@ -33,6 +34,7 @@ type TableHoldbackScanner struct {
 	previousLine        *previousLineState
 	pendingHeaderStart  *int
 	confirmedTableStart *int
+	activeFenceStart    *int
 }
 
 func NewTableHoldbackScanner() *TableHoldbackScanner {
@@ -46,6 +48,9 @@ func (s *TableHoldbackScanner) Reset() {
 func (s *TableHoldbackScanner) State() TableHoldbackState {
 	if s.confirmedTableStart != nil {
 		return TableHoldbackState{Kind: TableHoldbackConfirmed, SourceStart: *s.confirmedTableStart}
+	}
+	if s.activeFenceStart != nil {
+		return TableHoldbackState{Kind: TableHoldbackFence, SourceStart: *s.activeFenceStart}
 	}
 	if s.pendingHeaderStart != nil {
 		return TableHoldbackState{Kind: TableHoldbackPendingHeader, SourceStart: *s.pendingHeaderStart}
@@ -94,6 +99,18 @@ func (s *TableHoldbackScanner) pushLine(sourceLine string) {
 
 	s.previousLine = &previousLineState{sourceStart: sourceStart, fenceKind: fenceKind, isHeader: isHeader}
 	s.fenceTracker.Advance(line)
+	// Track whether we are inside an unclosed fenced code block so the stream
+	// renderer can hold back its lines until the block closes (Rust
+	// TopLevelBlockTracker parity). Any line that returns to FenceOutside ends
+	// the holdback.
+	afterFence := s.fenceTracker.Kind()
+	if s.activeFenceStart == nil && fenceKind == tui.FenceOutside && afterFence != tui.FenceOutside {
+		start := sourceStart
+		s.activeFenceStart = &start
+	}
+	if afterFence == tui.FenceOutside {
+		s.activeFenceStart = nil
+	}
 	s.sourceOffset += len(sourceLine)
 }
 

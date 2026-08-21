@@ -183,16 +183,29 @@ func (c UserHistoryCell) RawLines() []string {
 type AgentMessageCell struct {
 	Lines       []string
 	IsFirstLine bool
+	// Prewrapped marks lines that were already rendered to the target width
+	// (for example streaming markdown output that carries ANSI styling). Such
+	// lines are only prefixed rather than re-wrapped, which would otherwise
+	// split an ANSI-colored token across display lines.
+	Prewrapped bool
 }
 
 func NewAgentMessageCell(lines []string, isFirstLine bool) AgentMessageCell {
+	return newAgentMessageCell(lines, isFirstLine, false)
+}
+
+func NewPrewrappedAgentMessageCell(lines []string, isFirstLine bool) AgentMessageCell {
+	return newAgentMessageCell(lines, isFirstLine, true)
+}
+
+func newAgentMessageCell(lines []string, isFirstLine bool, prewrapped bool) AgentMessageCell {
 	normalized := append([]string(nil), lines...)
 	for i := range normalized {
 		if strings.TrimSpace(normalized[i]) == "" {
 			normalized[i] = ""
 		}
 	}
-	return AgentMessageCell{Lines: normalized, IsFirstLine: isFirstLine}
+	return AgentMessageCell{Lines: normalized, IsFirstLine: isFirstLine, Prewrapped: prewrapped}
 }
 
 func (c AgentMessageCell) DisplayLines(width int) []string {
@@ -201,6 +214,10 @@ func (c AgentMessageCell) DisplayLines(width int) []string {
 		initial := "  "
 		if index == 0 && c.IsFirstLine {
 			initial = "\u2022 "
+		}
+		if c.Prewrapped {
+			out = append(out, initial+line)
+			continue
 		}
 		out = append(out, tui.AdaptiveWrapLine(line, tui.WrapOptions{
 			Width:            width,

@@ -7,9 +7,19 @@ import (
 	"codex_go/eventmap"
 	"codex_go/tui"
 	historycell "codex_go/tui/history_cell"
+	"codex_go/tui/markdown"
 )
 
 // Rust parity: codex-rs/tui/src/streaming/controller.rs.
+
+// currentStreamTheme holds the active TUI theme used for streaming markdown
+// rendering. It is set by the model each frame; an empty value keeps the
+// historical plain-text fallback so streaming behavior is unchanged when no
+// theme is configured.
+var currentStreamTheme string
+
+func SetStreamTheme(theme string) { currentStreamTheme = theme }
+func CurrentStreamTheme() string  { return currentStreamTheme }
 
 type queuedLine struct {
 	text       string
@@ -27,6 +37,7 @@ type streamCore struct {
 	holdbackScanner   *TableHoldbackScanner
 	now               func() time.Time
 	hasVisualization  bool
+	theme             string
 }
 
 func newStreamCore(width int) streamCore {
@@ -35,6 +46,12 @@ func newStreamCore(width int) streamCore {
 		holdbackScanner: NewTableHoldbackScanner(),
 		now:             time.Now,
 	}
+}
+
+func newStreamCoreWithTheme(width int, theme string) streamCore {
+	core := newStreamCore(width)
+	core.theme = theme
+	return core
 }
 
 func (c *streamCore) pushDelta(delta string) bool {
@@ -144,8 +161,10 @@ func (c *streamCore) setWidth(width int) {
 func (c *streamCore) reset() {
 	width := c.width
 	now := c.now
+	theme := c.theme
 	*c = newStreamCore(width)
 	c.now = now
+	c.theme = theme
 }
 
 func (c *streamCore) syncStableQueue() bool {
@@ -174,7 +193,7 @@ func (c *streamCore) computeTargetStableLen() int {
 	if state.Kind == TableHoldbackNone {
 		return max(len(c.renderedLines), c.emittedStableLen)
 	}
-	prefixLen := renderedLineCountBeforeSource(c.rawSource, state.SourceStart, c.width)
+	prefixLen := renderedLineCountBeforeSource(c.rawSource, state.SourceStart, c.width, c.theme)
 	return max(prefixLen, c.emittedStableLen)
 }
 
@@ -182,7 +201,7 @@ func (c *streamCore) renderSourceLines(source string) []string {
 	if c.hasVisualization || strings.Contains(source, tui.InlineVisualizationDirectivePrefix) {
 		source, _ = tui.RewriteInlineVisualizations(source, nil)
 	}
-	return renderSourceLines(source, c.width)
+	return renderSourceLines(source, c.width, c.theme)
 }
 
 func (c *streamCore) rebuildStableQueueFromRender() {
@@ -210,6 +229,16 @@ func NewStreamController(width int) *StreamController {
 	return &StreamController{core: newStreamCore(width)}
 }
 
+func NewStreamControllerWithTheme(width int, theme string) *StreamController {
+	return &StreamController{core: newStreamCoreWithTheme(width, theme)}
+}
+
+// SetTheme updates the markdown rendering theme used for streaming lines so
+// the transcript re-renders with the active TUI theme.
+func (c *StreamController) SetTheme(theme string) {
+	c.core.theme = theme
+}
+
 func (c *StreamController) Push(delta string) bool {
 	return c.core.pushDelta(delta)
 }
@@ -223,7 +252,7 @@ func (c *StreamController) OnCommitTickBatch(maxLines int) (historycell.HistoryC
 	if len(lines) == 0 {
 		return nil, c.core.isIdle()
 	}
-	cell := historycell.NewAgentMessageCell(lines, !c.headerEmitted)
+	cell := historycell.NewPrewrappedAgentMessageCell(lines, !c.headerEmitted)
 	c.headerEmitted = true
 	return cell, c.core.isIdle()
 }
@@ -319,13 +348,25 @@ func (c *PlanStreamController) HasLiveTail() bool {
 	return c != nil && c.core.hasTail()
 }
 
-func renderSourceLines(source string, width int) []string {
+func renderSourceLines(source string, width int, theme string) []string {
 	// Keep provider citation controls out of the human transcript. The raw
 	// source remains available from Finalize for protocol/history consumers.
 	source = eventmap.StripHiddenAssistantMarkup(source, false)
 	source = strings.TrimRight(source, "\n")
 	if source == "" {
 		return nil
+	}
+	// When a theme is active, render the in-progress markdown so the streaming
+	// transcript shows styling/code highlighting (Rust StreamingMarkdownRender).
+	// The unclosed-block holdback keeps the earlier stable blocks in place.
+	if theme != "" && width > 0 {
+		if rendered, err := markdown.RenderWithThemeCwd(source, width, theme, ""); err == nil && rendered != "" {
+			lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+			for len(lines) > 0 && lines[len(lines)-1] == "" {
+				lines = lines[:len(lines)-1]
+			}
+			return lines
+		}
 	}
 	raw := strings.Split(source, "\n")
 	if width <= 0 {
@@ -341,12 +382,12 @@ func renderSourceLines(source string, width int) []string {
 	return out
 }
 
-func renderedLineCountBeforeSource(source string, sourceStart int, width int) int {
+func renderedLineCountBeforeSource(source string, sourceStart int, width int, theme string) int {
 	if sourceStart <= 0 {
 		return 0
 	}
 	if sourceStart > len(source) {
 		sourceStart = len(source)
 	}
-	return len(renderSourceLines(source[:sourceStart], width))
+	return len(renderSourceLines(source[:sourceStart], width, theme))
 }

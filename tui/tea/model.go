@@ -38,6 +38,7 @@ import (
 	"codex_go/tui/markdown"
 	"codex_go/tui/overlay"
 	pets "codex_go/tui/pets"
+	streamingpkg "codex_go/tui/streaming"
 	"codex_go/tui/styles"
 )
 
@@ -1905,6 +1906,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 }
 
 func (m *Model) View() string {
+	streamingpkg.SetStreamTheme(m.activeTUITheme())
 	if m == nil {
 		return ""
 	}
