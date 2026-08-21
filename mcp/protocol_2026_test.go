@@ -311,6 +311,52 @@ func TestMCP2026HTTPRejectsUnprovenLegacyPrevalidationErrors(t *testing.T) {
 	}
 }
 
+func TestMCP2026HTTPDiscoveryJSONRPCErrorFallsBackLikeRust(t *testing.T) {
+	// Rust #39798 (rmcp 3.1.3): any server/discover JSON-RPC error falls back
+	// to legacy initialization while preserving its diagnostics, not just
+	// method-not-found.
+	methods := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		methods = append(methods, request.Method)
+		switch request.Method {
+		case "server/discover":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      request.ID,
+				"error":   map[string]any{"code": -32602, "message": "discover rejected"},
+			})
+		case "initialize":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"protocolVersion": "2025-03-26", "capabilities": map[string]any{}})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{"tools": []any{}})
+		default:
+			t.Fatalf("unexpected method %q", request.Method)
+		}
+	}))
+	defer server.Close()
+
+	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, ProtocolMode: MCPProtocol20260728})
+	var result struct {
+		Tools []any `json:"tools"`
+	}
+	if err := client.Call("tools/list", map[string]any{}, &result); err != nil {
+		t.Fatalf("Call() error = %v, want legacy fallback", err)
+	}
+	if got := strings.Join(methods, ","); got != "server/discover,initialize,notifications/initialized,tools/list" {
+		t.Fatalf("methods = %q", got)
+	}
+}
+
 func TestMCP2026StdioDiscoveryAndMultiRoundInput(t *testing.T) {
 	if os.Getenv("MCP_STDIO_2026_HELPER") == "1" {
 		runMCP2026StdioHelper(t)

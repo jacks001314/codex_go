@@ -264,9 +264,9 @@
         "appserver",
         "telemetry"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "implementation_pending: turn cost telemetry for custom model providers (turn cost worker usage path)."
+        "N/A (equivalent): Go has no OTLP turn-cost worker or backend turn-usage client (documented api-key-turn-cost-telemetry architecture difference); the custom-provider turn-cost extension has no Go surface."
       ]
     },
     {
@@ -363,9 +363,9 @@
       "domains": [
         "mcp"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "implementation_pending: Go MCP client needs the rmcp 3.1.3 discovery/retry/startup-error behavior surface (OAuth startup errors, streamable HTTP retry classification)."
+        "Implemented: server/discover JSON-RPC errors now fall back to legacy initialization while preserving diagnostics (unproven rejections reclassified like rmcp HEADER_MISMATCH) so authentication/retry classifications survive the fallback (mcp/protocol_2026.go). OAuth issuer-check failures do not consume pending authorization state (Go login sessions are caller-owned and issuer validation happens at exchange time). Tests added."
       ]
     },
     {

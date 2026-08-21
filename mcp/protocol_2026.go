@@ -121,8 +121,12 @@ func isMCPDiscoveryFallbackError(err error) bool {
 	if errors.Is(err, errMCPModernProtocolUnsupported) {
 		return true
 	}
+	// Rust #39798 (rmcp 3.1.3): any server/discover JSON-RPC error falls back
+	// to legacy initialization while preserving its diagnostics; unproven
+	// rejections are reclassified as header mismatches so authentication and
+	// retry classifications survive the fallback.
 	var remoteErr *MCPRemoteError
-	return errors.As(err, &remoteErr) && remoteErr.Code == mcpJSONRPCMethodNotFoundCode
+	return errors.As(err, &remoteErr) && remoteErr.Code != 0
 }
 
 func hasMCPLegacyFallbackEvidence(message string) bool {
