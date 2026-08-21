@@ -594,14 +594,37 @@ func renderTableSeparator(widths []int, ch string) string {
 	return strings.Join(parts, strings.Repeat(" ", tableColumnGap))
 }
 
+var (
+	tableBoldRE   = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	tableItalicRE = regexp.MustCompile(`\*([^*\s][^*]*)\*`)
+	tableCodeRE   = regexp.MustCompile("`([^`]+)`")
+)
+
+// decorateTableInline applies ANSI styling to common inline markdown inside a
+// table cell (bold, italic, code, links) so table cells are as rich as the
+// surrounding transcript (Rust TableCell rich spans). Stripping ANSI restores
+// the plain text used for column-width measurement.
+func decorateTableInline(text string) string {
+	if m := tableImageRE.FindStringSubmatch(text); m != nil {
+		return decorateTableInline(m[1])
+	}
+	if m := tableLinkRE.FindStringSubmatch(text); m != nil {
+		return "\x1b[36;4m" + decorateTableInline(m[1]) + "\x1b[0m"
+	}
+	text = tableBoldRE.ReplaceAllString(text, "\x1b[1m$1\x1b[0m")
+	text = tableCodeRE.ReplaceAllString(text, "\x1b[36m$1\x1b[0m")
+	text = tableItalicRE.ReplaceAllString(text, "\x1b[3m$1\x1b[0m")
+	return text
+}
+
 func renderTableRow(cells []string, widths []int, alignments []string) string {
 	var sb strings.Builder
 	for i, cell := range cells {
 		if i >= len(widths) {
 			break
 		}
-		content := stripInlineMarkdown(cell)
-		contentWidth := codextui.DisplayWidth(content)
+		content := decorateTableInline(cell)
+		contentWidth := codextui.DisplayWidth(utils.StripANSI(content))
 		remaining := widths[i] - contentWidth
 		if remaining < 0 {
 			remaining = 0

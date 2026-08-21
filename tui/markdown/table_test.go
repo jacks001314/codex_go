@@ -59,6 +59,21 @@ func TestRenderWithThemeSplicesCompactTable(t *testing.T) {
 	}
 }
 
+func TestRenderWithThemeRichInlineTableCell(t *testing.T) {
+	source := "| A | B |\n|---|---|\n| **bold** | `code` |"
+	rendered, err := RenderWithTheme(source, 60, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := utils.StripANSI(rendered)
+	if !strings.Contains(clean, "bold") || !strings.Contains(clean, "code") {
+		t.Fatalf("rich inline cell content missing:\n%s", clean)
+	}
+	if !strings.Contains(rendered, "\x1b[1m") || !strings.Contains(rendered, "\x1b[36m") {
+		t.Fatalf("table cell inline markdown not styled:\n%q", rendered)
+	}
+}
+
 func TestDetectSourceTablesDetectsBlockquoteSkipsIndentedCode(t *testing.T) {
 	source := "> | A | B |\n> |---|---|\n> | 1 | 2 |\n\n    | C | D |\n    |---|---|\n    | 3 | 4 |"
 	tables, _ := detectSourceTables(source)
