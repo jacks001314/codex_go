@@ -238,9 +238,9 @@
         "protocol",
         "core"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "implementation_pending: standalone named function call outputs handling in protocol/context normalization (models, image preparation, guardian transcript)."
+        "Implemented: function_call_output items may omit call_id and carry optional name/namespace; the parse never falls back to the item id as a call id, history normalization preserves standalone named outputs (only paired orphans are removed), and tool output input items emit name/namespace (appserver/protocol.go, session/history.go). Tests added."
       ]
     },
     {

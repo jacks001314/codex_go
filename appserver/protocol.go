@@ -5678,7 +5678,11 @@ func sessionItemFromResumeHistory(raw *ThreadResumeHistoryItem, now time.Time, i
 		item.Data = cloneAnyMap(payload)
 	case "function_call_output", "custom_tool_call_output", "tool_search_output":
 		item.Type = itemType
-		item.CallID = firstNonEmpty(stringFromMap(payload, "call_id"), stringFromMap(payload, "callId"), id)
+		// Rust #39782: call_id is optional; standalone named outputs carry
+		// name/namespace and never inherit the item id as a call id.
+		item.CallID = firstNonEmpty(stringFromMap(payload, "call_id"), stringFromMap(payload, "callId"))
+		item.Name = stringFromMap(payload, "name")
+		item.Namespace = stringFromMap(payload, "namespace")
 		item.Text = firstNonEmpty(stringFromMap(payload, "output"), contentText(payload["output"]))
 		item.Data = cloneAnyMap(payload)
 	case "mcpToolCall", "mcp_tool_call":

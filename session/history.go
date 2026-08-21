@@ -94,11 +94,14 @@ func normalizeHistoryToolPairs(items []any) []any {
 		callID := historyString(item["call_id"])
 		switch historyString(item["type"]) {
 		case "function_call_output":
-			if callID == "" || !functionCalls[callID] {
+			// Rust #39782: standalone named outputs (no call id) are external
+			// context and are preserved; only paired outputs without a
+			// matching call are orphans.
+			if callID != "" && !functionCalls[callID] {
 				continue
 			}
 		case "custom_tool_call_output":
-			if callID == "" || !customCalls[callID] {
+			if callID != "" && !customCalls[callID] {
 				continue
 			}
 		case "tool_search_output":
@@ -347,7 +350,9 @@ func nonModelVisibleHistoryItemType(itemType string) bool {
 }
 
 func toolOutputInputItem(item *Item) map[string]any {
-	callID := firstNonEmpty(item.CallID, stringValue(item.Data, "call_id"), stringValue(item.Metadata, "callId"), item.ID)
+	// Rust #39782: call_id is optional for standalone named outputs; the item
+	// id is never used as a call id.
+	callID := firstNonEmpty(item.CallID, stringValue(item.Data, "call_id"), stringValue(item.Metadata, "callId"))
 	output := any(firstNonEmpty(item.Text, stringValue(item.Data, "output")))
 	if value, ok := item.Data["content_items"]; ok {
 		output = value
@@ -363,9 +368,17 @@ func toolOutputInputItem(item *Item) map[string]any {
 		}
 	}
 	out := map[string]any{
-		"id":      item.ID,
-		"type":    outputType,
-		"call_id": callID,
+		"id":   item.ID,
+		"type": outputType,
+	}
+	if callID != "" {
+		out["call_id"] = callID
+	}
+	if name := firstNonEmpty(item.Name, stringValue(item.Data, "name")); name != "" {
+		out["name"] = name
+	}
+	if namespace := firstNonEmpty(item.Namespace, stringValue(item.Data, "namespace")); namespace != "" {
+		out["namespace"] = namespace
 	}
 	if outputType == "tool_search_output" {
 		out["status"] = firstNonEmpty(item.Status, "completed")

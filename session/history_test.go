@@ -221,6 +221,30 @@ func TestInputItemsFromRecordNormalizesInterruptedAndOrphanToolsLikeRust(t *test
 	}
 }
 
+func TestInputItemsFromRecordPreservesStandaloneNamedFunctionCallOutputLikeRust(t *testing.T) {
+	// Rust #39782: standalone named function_call_output items (no call id)
+	// are external context and survive normalization instead of being dropped
+	// as orphans; paired outputs keep the existing orphan removal.
+	record := &Record{Items: []Item{
+		{ID: "standalone", Type: "function_call_output", Name: "notifications", Namespace: "slack", Text: "Alice mentioned you."},
+		{ID: "orphan", Type: "function_call_output", CallID: "call-orphan", Text: "must disappear"},
+	}}
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want only the standalone output", items)
+	}
+	standalone := items[0].(map[string]any)
+	if standalone["type"] != "function_call_output" {
+		t.Fatalf("standalone type = %v", standalone["type"])
+	}
+	if _, ok := standalone["call_id"]; ok {
+		t.Fatalf("standalone output must not carry a call_id: %#v", standalone)
+	}
+	if standalone["name"] != "notifications" || standalone["namespace"] != "slack" {
+		t.Fatalf("standalone output name/namespace = %#v", standalone)
+	}
+}
+
 func TestInputItemsFromRecordNormalizesToolSearchLikeRust(t *testing.T) {
 	record := &Record{Items: []Item{
 		{ID: "search", Type: "tool_search_call", CallID: "search-1", Text: `{"query":"weather"}`},
