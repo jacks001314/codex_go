@@ -3025,7 +3025,7 @@ func (m *Model) renderFileChangeItem(item *protocol.ThreadItem, completed bool) 
 			m.Transcript.needsFinalMessageSeparator = true
 			return
 		}
-		m.applyHistoryCell(historycell.NewPatchEvent(changes, m.State.CWD))
+		m.applyHistoryCell(historycell.NewPatchEventWithTheme(changes, m.State.CWD, m.activeTUITheme()))
 		if id != "" {
 			if m.renderedFileChanges == nil {
 				m.renderedFileChanges = map[string]bool{}

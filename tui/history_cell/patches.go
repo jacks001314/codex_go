@@ -13,22 +13,31 @@ import (
 type PatchHistoryCell struct {
 	Changes map[string]tui.FileChange
 	CWD     string
+	Theme   string
 }
 
 func NewPatchEvent(changes map[string]tui.FileChange, cwd string) PatchHistoryCell {
+	return newPatchEventTheme(changes, cwd, "dark")
+}
+
+func NewPatchEventWithTheme(changes map[string]tui.FileChange, cwd string, theme string) PatchHistoryCell {
+	return newPatchEventTheme(changes, cwd, theme)
+}
+
+func newPatchEventTheme(changes map[string]tui.FileChange, cwd string, theme string) PatchHistoryCell {
 	cloned := make(map[string]tui.FileChange, len(changes))
 	for path, change := range changes {
 		cloned[path] = change
 	}
-	return PatchHistoryCell{Changes: cloned, CWD: strings.TrimSpace(cwd)}
+	return PatchHistoryCell{Changes: cloned, CWD: strings.TrimSpace(cwd), Theme: theme}
 }
 
 func (c PatchHistoryCell) DisplayLines(width int) []string {
-	return tui.CreateDiffSummary(c.Changes, c.CWD, width)
+	return tui.CreateDiffSummary(c.Changes, c.CWD, width, c.Theme)
 }
 
 func (c PatchHistoryCell) RawLines() []string {
-	return tui.CreateDiffSummary(c.Changes, c.CWD, 120)
+	return tui.CreateDiffSummary(c.Changes, c.CWD, 120, c.Theme)
 }
 
 func NewPatchApplyFailure(stderr string) PlainHistoryCell {

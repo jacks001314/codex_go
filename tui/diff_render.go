@@ -16,10 +16,18 @@ const (
 	ansiGreen = "\x1b[32m"
 	ansiRed   = "\x1b[31m"
 	ansiReset = "\x1b[0m"
-	// Combined fg+bg styles for git-style diff lines: the whole line is green
-	// on a dark-green background for additions and red on dark-red for deletions.
+	// Combined fg+bg git-style styles for sign/gutter glyphs on dark terminals.
 	ansiAddLine = "\x1b[32;48;5;22m"
 	ansiDelLine = "\x1b[31;48;5;52m"
+	// Rust fallback diff palette (diff_render.rs). Dark theme uses muted red/green
+	// backgrounds; light theme uses GitHub-style pastels with tinted number cells.
+	ansiBgAddDark     = "\x1b[48;2;33;58;43m"    // #213A2B
+	ansiBgDelDark     = "\x1b[48;2;74;34;29m"    // #4A221D
+	ansiBgAddLight    = "\x1b[48;2;218;251;225m" // #dafbe1
+	ansiBgDelLight    = "\x1b[48;2;255;235;233m" // #ffebe9
+	ansiBgAddNumLight = "\x1b[48;2;172;238;187m" // #aceebb
+	ansiBgDelNumLight = "\x1b[48;2;255;206;203m" // #ffcecb
+	ansiGutterFgLight = "\x1b[38;2;31;35;40m"    // #1f2328
 )
 
 type DiffLineType int
@@ -38,9 +46,9 @@ type DiffRow struct {
 	Change   FileChange
 }
 
-func CreateDiffSummary(changes map[string]FileChange, cwd string, wrapCols int) []string {
+func CreateDiffSummary(changes map[string]FileChange, cwd string, wrapCols int, theme string) []string {
 	rows := CollectDiffRows(changes)
-	return RenderChangesBlock(rows, wrapCols, cwd)
+	return RenderChangesBlock(rows, wrapCols, cwd, theme)
 }
 
 func CollectDiffRows(changes map[string]FileChange) []DiffRow {
@@ -90,7 +98,7 @@ func CalculateAddRemoveFromDiff(unifiedDiff string) (int, int) {
 	return added, removed
 }
 
-func RenderChangesBlock(rows []DiffRow, wrapCols int, cwd string) []string {
+func RenderChangesBlock(rows []DiffRow, wrapCols int, cwd string, theme string) []string {
 	if wrapCols <= 0 {
 		wrapCols = 80
 	}
@@ -128,13 +136,11 @@ func RenderChangesBlock(rows []DiffRow, wrapCols int, cwd string) []string {
 		if len(rows) > 1 {
 			lines = append(lines, ansiDim+"  \u2514 "+ansiReset+renderDiffPath(row, cwd)+" "+RenderLineCountSummary(row.Added, row.Removed))
 		}
-		// Saturate the content width so extremely narrow terminals stay
-		// renderable (Rust #38075).
 		contentWidth := wrapCols - 4
 		if contentWidth < 0 {
 			contentWidth = 0
 		}
-		for _, line := range RenderFileChange(row.Change, contentWidth) {
+		for _, line := range RenderFileChange(row.Change, contentWidth, theme, detectLangForPath(row.Path)) {
 			lines = append(lines, "    "+line)
 		}
 	}
@@ -145,33 +151,33 @@ func RenderLineCountSummary(added int, removed int) string {
 	return "(" + ansiGreen + "+" + FormatInt(int64(added)) + ansiReset + " " + ansiRed + "-" + FormatInt(int64(removed)) + ansiReset + ")"
 }
 
-func RenderFileChange(change FileChange, width int) []string {
+func RenderFileChange(change FileChange, width int, theme string, lang string) []string {
 	if width < 0 {
 		width = 80
 	}
 	switch change.Type {
 	case FileChangeAdd:
-		return renderWholeFileChange(change.Content, DiffLineInsert, width)
+		return renderWholeFileChange(change.Content, DiffLineInsert, width, theme, lang)
 	case FileChangeDelete:
-		return renderWholeFileChange(change.Content, DiffLineDelete, width)
+		return renderWholeFileChange(change.Content, DiffLineDelete, width, theme, lang)
 	case FileChangeUpdate:
-		return renderUnifiedDiff(change.UnifiedDiff, width)
+		return renderUnifiedDiff(change.UnifiedDiff, width, theme, lang)
 	default:
 		return nil
 	}
 }
 
-func renderWholeFileChange(content string, lineType DiffLineType, width int) []string {
+func renderWholeFileChange(content string, lineType DiffLineType, width int, theme string, lang string) []string {
 	lines := contentLines(content)
 	numberWidth := LineNumberWidth(len(lines))
 	out := []string{}
 	for index, line := range lines {
-		out = append(out, renderWrappedDiffLine(index+1, lineType, line, width, numberWidth)...)
+		out = append(out, renderWrappedDiffLine(index+1, lineType, line, width, numberWidth, theme, lang)...)
 	}
 	return out
 }
 
-func renderUnifiedDiff(unifiedDiff string, width int) []string {
+func renderUnifiedDiff(unifiedDiff string, width int, theme string, lang string) []string {
 	out := []string{}
 	oldLine := 0
 	newLine := 0
@@ -189,10 +195,10 @@ func renderUnifiedDiff(unifiedDiff string, width int) []string {
 		}
 		switch {
 		case strings.HasPrefix(raw, "+"):
-			out = append(out, renderWrappedDiffLine(newLine, DiffLineInsert, strings.TrimPrefix(raw, "+"), width, numberWidth)...)
+			out = append(out, renderWrappedDiffLine(newLine, DiffLineInsert, strings.TrimPrefix(raw, "+"), width, numberWidth, theme, lang)...)
 			newLine++
 		case strings.HasPrefix(raw, "-"):
-			out = append(out, renderWrappedDiffLine(oldLine, DiffLineDelete, strings.TrimPrefix(raw, "-"), width, numberWidth)...)
+			out = append(out, renderWrappedDiffLine(oldLine, DiffLineDelete, strings.TrimPrefix(raw, "-"), width, numberWidth, theme, lang)...)
 			oldLine++
 		default:
 			text := strings.TrimPrefix(raw, " ")
@@ -200,7 +206,7 @@ func renderUnifiedDiff(unifiedDiff string, width int) []string {
 			if lineNumber == 0 {
 				lineNumber = oldLine
 			}
-			out = append(out, renderWrappedDiffLine(lineNumber, DiffLineContext, text, width, numberWidth)...)
+			out = append(out, renderWrappedDiffLine(lineNumber, DiffLineContext, text, width, numberWidth, theme, "")...)
 			oldLine++
 			newLine++
 		}
@@ -208,31 +214,166 @@ func renderUnifiedDiff(unifiedDiff string, width int) []string {
 	return out
 }
 
-func renderWrappedDiffLine(lineNumber int, lineType DiffLineType, text string, width int, numberWidth int) []string {
+func renderWrappedDiffLine(lineNumber int, lineType DiffLineType, text string, width int, numberWidth int, theme string, lang string) []string {
+	light := diffThemeIsLight(theme)
 	sign := " "
-	lineStyle := ""
 	switch lineType {
 	case DiffLineInsert:
 		sign = "+"
-		lineStyle = ansiAddLine
 	case DiffLineDelete:
 		sign = "-"
-		lineStyle = ansiDelLine
 	}
-	prefix := leftPadInt(lineNumber, numberWidth) + " "
-	prefix += sign + " "
-	wrapped := AdaptiveWrapLine(text, WrapOptions{
-		Width:            width,
-		InitialIndent:    prefix,
-		SubsequentIndent: strings.Repeat(" ", DisplayWidth(prefix)),
-		BreakWords:       true,
-	})
-	if lineStyle != "" {
-		for i, line := range wrapped {
-			wrapped[i] = lineStyle + line + ansiReset
+	num := leftPadInt(lineNumber, numberWidth)
+	gutterDisplay := numberWidth + 3 // number + space + sign + space
+	subjectWidth := width - gutterDisplay
+	if subjectWidth < 1 {
+		subjectWidth = 1
+	}
+	contentSegments := WrapLine(text, WrapOptions{Width: subjectWidth, BreakWords: true})
+	if len(contentSegments) == 0 {
+		contentSegments = []string{""}
+	}
+	out := make([]string, 0, len(contentSegments))
+	indent := strings.Repeat(" ", gutterDisplay)
+	for i, seg := range contentSegments {
+		prefix := indent
+		if i == 0 {
+			prefix = buildDiffPrefix(lineType, num, sign, light)
 		}
+		out = append(out, prefix+styleDiffContent(seg, lang, theme, lineType, light)+ansiReset)
 	}
-	return wrapped
+	return out
+}
+
+func buildDiffPrefix(lineType DiffLineType, num string, sign string, light bool) string {
+	var sb strings.Builder
+	if light {
+		sb.WriteString(ansiGutterFgLight)
+		switch lineType {
+		case DiffLineInsert:
+			sb.WriteString(ansiBgAddNumLight)
+		case DiffLineDelete:
+			sb.WriteString(ansiBgDelNumLight)
+		}
+		sb.WriteString(num)
+		sb.WriteString(ansiReset)
+		sb.WriteString(" ")
+		switch lineType {
+		case DiffLineInsert:
+			sb.WriteString(ansiGreen)
+			sb.WriteString(sign)
+			sb.WriteString(ansiReset)
+		case DiffLineDelete:
+			sb.WriteString(ansiRed)
+			sb.WriteString(sign)
+			sb.WriteString(ansiReset)
+		default:
+			sb.WriteString(" ")
+		}
+		sb.WriteString(" ")
+		return sb.String()
+	}
+	sb.WriteString(ansiDim)
+	sb.WriteString(num)
+	sb.WriteString(ansiReset)
+	sb.WriteString(" ")
+	switch lineType {
+	case DiffLineInsert:
+		sb.WriteString(ansiAddLine)
+		sb.WriteString(sign)
+		sb.WriteString(ansiReset)
+	case DiffLineDelete:
+		sb.WriteString(ansiDelLine)
+		sb.WriteString(sign)
+		sb.WriteString(ansiReset)
+	default:
+		sb.WriteString(" ")
+	}
+	sb.WriteString(" ")
+	return sb.String()
+}
+
+// styleDiffContent renders the wrapped content segment of a diff line with the
+// resolved line background (git-style) and, when a source language is known,
+// syntax highlighting whose token foregrounds are re-anchored onto the line
+// background (Rust parity: push_wrapped_diff_line_with_syntax_and_style_context).
+func styleDiffContent(content string, lang string, theme string, lineType DiffLineType, light bool) string {
+	bg := diffBgSGR(lineType, light)
+	if lang == "" {
+		return bg + diffFgSGR(lineType, light) + content
+	}
+	hl := HighlightCodeANSI(content, lang, theme)
+	if hl == "" {
+		return bg + diffFgSGR(lineType, light) + content
+	}
+	// Re-apply the line background after every SGR reset so chroma token colors
+	// sit on top of the tinted background instead of clearing it.
+	hl = strings.ReplaceAll(hl, ansiReset, ansiReset+bg)
+	return bg + hl
+}
+
+func diffBgSGR(lineType DiffLineType, light bool) string {
+	if light {
+		switch lineType {
+		case DiffLineInsert:
+			return ansiBgAddLight
+		case DiffLineDelete:
+			return ansiBgDelLight
+		}
+		return ""
+	}
+	switch lineType {
+	case DiffLineInsert:
+		return ansiBgAddDark
+	case DiffLineDelete:
+		return ansiBgDelDark
+	}
+	return ""
+}
+
+func diffFgSGR(lineType DiffLineType, light bool) string {
+	if light {
+		// GitHub-style pastel backgrounds already contrast with the default
+		// foreground, so plain text needs no explicit color.
+		return ""
+	}
+	switch lineType {
+	case DiffLineInsert:
+		return ansiGreen
+	case DiffLineDelete:
+		return ansiRed
+	}
+	return ""
+}
+
+// diffThemeIsLight reports whether the active TUI theme is a light palette so
+// the diff renderer picks GitHub-style pastel backgrounds (Rust DiffTheme).
+func diffThemeIsLight(theme string) bool {
+	id := strings.ToLower(strings.TrimSpace(theme))
+	if id == "" {
+		return false
+	}
+	if strings.Contains(id, "light") || strings.Contains(id, "latte") || strings.Contains(id, "xcode") || strings.Contains(id, "github-light") {
+		return true
+	}
+	return false
+}
+
+// detectLangForPath returns a chroma language token for a diff file path (empty
+// when the extension is not a source language), mirroring Rust
+// detect_lang_for_path.
+func detectLangForPath(path string) string {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	switch ext {
+	case "", "txt", "log", "md", "markdown", "http", "php", "html", "htm", "json", "yaml", "yml", "toml", "xml", "svg", "css", "graphql", "sql", "ini", "conf":
+		return ""
+	}
+	// Normalize C-family extensions to chroma's "c" lexer token.
+	switch ext {
+	case "cc", "cpp", "cxx", "hh", "hpp":
+		return "c"
+	}
+	return ext
 }
 
 func LineNumberWidth(maxLineNumber int) int {
