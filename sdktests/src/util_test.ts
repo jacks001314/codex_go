@@ -44,7 +44,7 @@ test("rollout selection matches session metadata instead of a child parent refer
 
   assert.equal(selectRolloutJsonl([child, root], rootID), root);
   assert.deepEqual(collectRolloutRecords([root, child]).map(({ jsonl: _jsonl, ...record }) => record), [
-    { threadId: rootID, sessionId: "", threadSource: "cli", parentThreadId: "", agentPath: "", agentNickname: "" },
-    { threadId: "thread-child", sessionId: rootID, threadSource: "subagent", parentThreadId: rootID, agentPath: "/root/calculator", agentNickname: "" },
+    { threadId: rootID, sessionId: "", threadSource: "cli", source: undefined, parentThreadId: "", agentPath: "", agentNickname: "", agentRole: "" },
+    { threadId: "thread-child", sessionId: rootID, threadSource: "subagent", source: { subagent: { thread_spawn: { parent_thread_id: rootID } } }, parentThreadId: rootID, agentPath: "/root/calculator", agentNickname: "", agentRole: "" },
   ]);
 });

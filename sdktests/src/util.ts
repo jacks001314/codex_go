@@ -152,9 +152,11 @@ export type RolloutRecord = {
   threadId: string;
   sessionId: string;
   threadSource: string;
+  source: unknown;
   parentThreadId: string;
   agentPath: string;
   agentNickname: string;
+  agentRole: string;
   jsonl: string;
 };
 
@@ -165,12 +167,14 @@ export function collectRolloutRecords(contents: string[]): RolloutRecord[] {
       threadId: stringValue(meta?.id),
       sessionId: stringValue(meta?.session_id),
       threadSource: stringValue(meta?.thread_source),
+      source: meta?.source,
       parentThreadId: firstString(
         meta?.parent_thread_id,
         meta?.source?.subagent?.thread_spawn?.parent_thread_id,
       ),
       agentPath: stringValue(meta?.agent_path),
       agentNickname: stringValue(meta?.agent_nickname),
+      agentRole: stringValue(meta?.agent_role),
       jsonl,
     };
   });

@@ -81,6 +81,7 @@ export type Scenario = {
     minCompletedCollabSpawnCalls?: number;
     requiredCompletedCollabTools?: string[];
     minSubagentRollouts?: number;
+    subagentRequireAgentMessages?: boolean;
     subagentRolloutPatterns?: string[];
     subagentFinalMessagePatterns?: string[];
     rootRolloutPatterns?: string[];
@@ -315,6 +316,46 @@ export const scenarios: Scenario[] = [
       minSubagentRollouts: 2,
       finalAgentMessagePatterns: [
         "93326215443944152681699238856266700490715968264381621468592963895217599993229915608941463976156518286253697920827223758251185210916864000000000000000000000000",
+      ],
+      forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
+      eventSequenceComparison: "model-selected-tools",
+      commandOutputComparison: "informational",
+      agentMessageComparison: "final-per-turn",
+      workspaceMutation: "none",
+    },
+  },
+  {
+    name: "multi-agent-factorial-500",
+    description: "Reproduces the reported user scenario: multiple agents split the computation of 500!. Verifies root synthesis plus a readable assistant transcript in every linked subagent thread - the data the agents dashboard renders when switching to an agent.",
+    optIn: true,
+    timeoutMs: 600000,
+    codexConfig: {
+      agents: { max_concurrent_threads_per_session: 4 },
+      web_search: "disabled",
+      suppress_unstable_features_warning: true,
+    },
+    threadOptions: {
+      sandboxMode: "read-only",
+      skipGitRepoCheck: true,
+      approvalPolicy: "never",
+      networkAccessEnabled: false,
+      webSearchMode: "disabled",
+    },
+    turns: [{ prompt: "请你使用多个agent分拆计算500！你必须创建多个 agent 并协作完成计算，等待所有 agent 的结果并核对数值，最后在最终回答中返回 500! 的精确十进制值。不要使用 shell，也不要修改文件。" }],
+    expected: {
+      terminal: "turn.completed",
+      minAgentMessages: 1,
+      requireUsage: true,
+      expectedTurns: 1,
+      requiredCompletedItemTypes: ["agent_message"],
+      forbiddenCompletedItemTypes: ["file_change"],
+      minCompletedCollabSpawnCalls: 2,
+      requiredCompletedCollabTools: ["collaboration.spawn_agent", "collaboration.wait_agent"],
+      minSubagentRollouts: 2,
+      subagentRequireAgentMessages: true,
+      finalAgentMessagePatterns: [
+        "122013682599111006870123878542304692625357434280319284219241",
+        "0{100}",
       ],
       forbiddenPublicEventPatterns: ["collaboration\\.", "gAAAA"],
       eventSequenceComparison: "model-selected-tools",

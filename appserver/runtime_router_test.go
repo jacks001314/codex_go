@@ -13847,7 +13847,7 @@ func TestRuntimeRouterFirstTurnAfterExternalLoginWaitsForRecommendedPluginsLikeR
 	var gotAuthorization string
 	var gotAccountID string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ps/plugins/suggested" {
+		if r.URL.Path != "/ps/plugins/suggested/codex" {
 			http.NotFound(w, r)
 			return
 		}
@@ -13861,14 +13861,14 @@ func TestRuntimeRouterFirstTurnAfterExternalLoginWaitsForRecommendedPluginsLikeR
 		mu.Unlock()
 		time.Sleep(100 * time.Millisecond)
 		w.Header().Set("Content-Type", "application/json")
+		// Rust #39143: the Codex-specific recommendation route serves a compact
+		// shape (id/name/display_name) without status/installation_policy.
 		_, _ = w.Write([]byte(`{
 			"enabled": true,
 			"plugins": [{
 				"id": "plugin_github",
 				"name": "github",
-				"status": "ENABLED",
-				"installation_policy": "AVAILABLE",
-				"release": {"display_name": "GitHub"}
+				"display_name": "GitHub"
 			}]
 		}`))
 	}))

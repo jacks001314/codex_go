@@ -70,6 +70,8 @@ export function compareArtifact(artifactDir: string): CompareResult {
     checkCollaborationContract("go", go, expected.minCompletedCollabSpawnCalls, expected.requiredCompletedCollabTools),
     checkSubagentRollouts("rust", rust, expected.minSubagentRollouts),
     checkSubagentRollouts("go", go, expected.minSubagentRollouts),
+    checkSubagentAgentMessages("rust", rust, expected.subagentRequireAgentMessages),
+    checkSubagentAgentMessages("go", go, expected.subagentRequireAgentMessages),
     checkSubagentRolloutPatterns("rust", rust, expected.subagentRolloutPatterns),
     checkSubagentRolloutPatterns("go", go, expected.subagentRolloutPatterns),
     checkSubagentFinalMessagePatterns("rust", rust, expected.subagentFinalMessagePatterns),
@@ -644,11 +646,7 @@ function checkCollaborationContract(label: string, recording: any, minimumSpawnC
   const tools = new Set([...completedCalls].map((call) => call.slice(0, call.lastIndexOf(":"))));
   const rootThreadID = String(recording?.threadId ?? "").trim();
   const linkedSubagentThreads = new Set(
-    (Array.isArray(recording?.rolloutRecords) ? recording.rolloutRecords : [])
-      .filter((record: any) => String(record?.parentThreadId ?? "").trim() === rootThreadID)
-      .filter((record: any) => String(record?.threadSource ?? "").trim().toLowerCase() === "subagent")
-      .map((record: any) => String(record?.threadId ?? "").trim())
-      .filter(Boolean),
+    linkedSubagentRolloutRecords(recording).map((record: any) => String(record?.threadId ?? "").trim()).filter(Boolean),
   );
   if (linkedSubagentThreads.size > 0) tools.add("collaboration.spawn_agent");
   const completedSpawnCalls = [...completedCalls].filter((call) => call.startsWith("collaboration.spawn_agent:")).length;
@@ -730,14 +728,7 @@ function checkSubagentRollouts(label: string, recording: any, minimumSubagents: 
     return { name: `${label}: subagent rollout contract`, ok: true, detail: "scenario has no subagent rollout contract" };
   }
   const rootThreadID = String(recording?.threadId ?? "").trim();
-  const linked = Array.isArray(recording?.rolloutRecords)
-    ? recording.rolloutRecords.filter((record: any) => {
-        const threadID = String(record?.threadId ?? "").trim();
-        const parentThreadID = String(record?.parentThreadId ?? "").trim();
-        const source = String(record?.threadSource ?? "").trim().toLowerCase();
-        return threadID !== "" && threadID !== rootThreadID && parentThreadID === rootThreadID && source === "subagent";
-      })
-    : [];
+  const linked = linkedSubagentRolloutRecords(recording);
   const linkedThreadIDs = new Set(linked.map((record: any) => String(record.threadId).trim()));
   const ok = rootThreadID !== "" && linkedThreadIDs.size >= minimum;
   return {
@@ -747,19 +738,55 @@ function checkSubagentRollouts(label: string, recording: any, minimumSubagents: 
   };
 }
 
+function checkSubagentAgentMessages(label: string, recording: any, required: unknown) {
+  if (!required) {
+    return { name: `${label}: subagent agent messages`, ok: true, detail: "scenario has no subagent-message contract" };
+  }
+  const empty: string[] = [];
+  for (const record of linkedSubagentRolloutRecords(recording)) {
+    const threadID = String(record?.threadId ?? "").trim();
+    if (assistantMessagesFromRollout(record?.jsonl).length === 0) {
+      empty.push(threadID || "<unknown>");
+    }
+  }
+  const ok = empty.length === 0;
+  return {
+    name: `${label}: subagent agent messages`,
+    ok,
+    detail: ok ? undefined : `${label}: subagent threads with no assistant message=${JSON.stringify(empty)}`,
+  };
+}
+
+function assistantMessagesFromRollout(jsonl: unknown): string[] {
+  const messages: string[] = [];
+  for (const line of String(jsonl ?? "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let raw: any;
+    try {
+      raw = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (raw?.type === "event_msg" && raw?.payload?.type === "agent_message") {
+      const text = String(raw.payload.message ?? raw.payload.text ?? "");
+      if (text.trim()) messages.push(text);
+      continue;
+    }
+    const item = raw?.type === "response_item" ? raw.payload : raw?.type === "item" ? raw.item : undefined;
+    if (!item || item.type !== "message" || item.role !== "assistant") continue;
+    const content = Array.isArray(item.content)
+      ? item.content.map((part: any) => String(part?.text ?? "")).join("")
+      : String(item.text ?? "");
+    if (content.trim()) messages.push(content);
+  }
+  return [...new Set(messages)];
+}
+
 function checkSubagentRolloutPatterns(label: string, recording: any, expected: unknown) {
   if (!Array.isArray(expected) || expected.length === 0) {
     return { name: `${label}: subagent rollout patterns`, ok: true, detail: "scenario has no subagent rollout pattern contract" };
   }
-  const rootThreadID = String(recording?.threadId ?? "").trim();
-  const linked = Array.isArray(recording?.rolloutRecords)
-    ? recording.rolloutRecords.filter((record: any) => {
-        const threadID = String(record?.threadId ?? "").trim();
-        return threadID !== "" && threadID !== rootThreadID &&
-          String(record?.parentThreadId ?? "").trim() === rootThreadID &&
-          String(record?.threadSource ?? "").trim().toLowerCase() === "subagent";
-      })
-    : [];
+  const linked = linkedSubagentRolloutRecords(recording);
   const rolloutText = linked.map((record: any) => String(record?.jsonl ?? "")).join("\n");
   const missing = expected.map(String).filter((pattern) => !new RegExp(pattern, "s").test(rolloutText));
   return {
@@ -789,10 +816,35 @@ function linkedSubagentRolloutRecords(recording: any): any[] {
     ? recording.rolloutRecords.filter((record: any) => {
         const threadID = String(record?.threadId ?? "").trim();
         const parentThreadID = String(record?.parentThreadId ?? "").trim();
-        const source = String(record?.threadSource ?? "").trim().toLowerCase();
-        return threadID !== "" && threadID !== rootThreadID && parentThreadID === rootThreadID && source === "subagent";
+        return threadID !== "" && threadID !== rootThreadID && parentThreadID === rootThreadID && isSubagentRolloutRecord(record);
       })
     : [];
+}
+
+function isSubagentRolloutRecord(record: any): boolean {
+  if (!record || typeof record !== "object") return false;
+  const threadSource = String(record?.threadSource ?? "").trim().toLowerCase();
+  const source = record?.source;
+  let sourceLower = "";
+  let sourceKind = "";
+  if (typeof source === "string") {
+    sourceLower = source.trim().toLowerCase();
+  } else if (source && typeof source === "object" && !Array.isArray(source)) {
+    const subagent = source.subagent;
+    if (subagent && typeof subagent === "object" && !Array.isArray(subagent)) {
+      const keys = Object.keys(subagent);
+      sourceKind = keys.length > 0 ? String(keys[0]).toLowerCase() : "";
+    }
+  }
+  if (sourceLower === "internal_memory_consolidation" || threadSource === "memory_consolidation") {
+    return false;
+  }
+  const sourceHit =
+    sourceLower.startsWith("subagent") ||
+    sourceLower.includes("sub_agent") ||
+    sourceKind !== "";
+  const threadHit = ["subagent", "subagentreview", "subagentcompact", "subagentthreadspawn", "subagentother"].includes(threadSource);
+  return sourceHit || threadHit;
 }
 
 function finalAssistantMessagesFromRollout(jsonl: unknown): string[] {
