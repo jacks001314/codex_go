@@ -114,6 +114,21 @@ func TestRenderWithThemeCwdLocalFileLinksInTable(t *testing.T) {
 	}
 }
 
+func TestRenderWithThemeCwdLocalFileLinkIsClickable(t *testing.T) {
+	source := "See [main](./src/main.rs) now."
+	rendered, err := RenderWithThemeCwd(source, 60, "", "/qax/dev/codex_go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered, "\x1b]8;;file:///qax/dev/codex_go/src/main.rs\x07") {
+		t.Fatalf("local file link not wrapped in an OSC-8 file hyperlink:\n%q", rendered)
+	}
+	// Visible text still shows the resolved path.
+	if !strings.Contains(utils.StripANSI(rendered), "./src/main.rs") {
+		t.Fatalf("local file link lost its display path:\n%q", rendered)
+	}
+}
+
 func TestRewriteLocalFileLinksSkipsCodeBlocksAndImages(t *testing.T) {
 	source := "```\n[code](./src/x.go)\n```\n\n![img](./img.png)\n\n[link](./real.go)"
 	got := rewriteLocalFileLinks(source, "")

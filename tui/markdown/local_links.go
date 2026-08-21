@@ -8,6 +8,14 @@ import (
 	"strings"
 )
 
+// localFileLink records a local file link rewritten during markdown
+// preprocessing so the rendered display path can be wrapped in an OSC-8
+// hyperlink pointing at the original file target (Rust trusted_file_destination).
+type localFileLink struct {
+	Display string
+	Dest    string
+}
+
 // Rust parity: codex-rs/tui/src/markdown_render.rs local file-link display.
 //
 // Codex file references are markdown links whose destination is a local path
@@ -253,4 +261,31 @@ func renderLocalLinkTarget(dest string, cwd string) (string, bool) {
 	rendered := displayLocalLinkPath(pathText, cwd)
 	rendered += locationSuffix
 	return rendered, true
+}
+
+// localLinkFileURL converts a local link destination into an absolute file://
+// URL for OSC-8 hyperlinks. Relative targets are joined against cwd when
+// available; otherwise no URL is produced so the text stays un-clickable.
+func localLinkFileURL(dest string, cwd string) string {
+	pathText, _, ok := parseLocalTarget(dest)
+	if !ok {
+		return ""
+	}
+	if !isAbsoluteLocalLinkPath(pathText) {
+		if cwd == "" {
+			return ""
+		}
+		pathText = normalizeLocalLinkPathText(filepath.ToSlash(filepath.Join(filepath.FromSlash(cwd), filepath.FromSlash(pathText))))
+	}
+	return fileURLForPath(pathText)
+}
+
+func fileURLForPath(pathText string) string {
+	if isWindowsDrivePath(pathText) {
+		return "file:///" + pathText
+	}
+	if strings.HasPrefix(pathText, "//") {
+		return "file:" + pathText
+	}
+	return "file://" + pathText
 }

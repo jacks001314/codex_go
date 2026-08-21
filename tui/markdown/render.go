@@ -48,7 +48,7 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 	if width <= 0 {
 		width = defaultWidth
 	}
-	text = rewriteLocalFileLinks(text, cwd)
+	text, localLinks := rewriteLocalFileLinksWithInfo(text, cwd)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
 	style := codexMarkdownStyle()
@@ -68,6 +68,7 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 	out = restoreSourceCodeBlocks(out, codeBlocks, themeID)
 	out = restoreRenderedTables(out, tables, width)
 	out = annotateRenderedLineURLs(out)
+	out = annotateLocalFileLinks(out, localLinks, cwd)
 	return strings.TrimRight(out, "\n"), nil
 }
 
@@ -82,17 +83,26 @@ var markdownLinkRE = regexp.MustCompile(`\[([^\]\n]*)\]\(([^()\s]+)(?:\s+[^)]*)?
 // syntax are left untouched by locating the code ranges in the parsed document
 // and skipping any link match that falls inside them.
 func rewriteLocalFileLinks(source string, cwd string) string {
+	out, _ := rewriteLocalFileLinksWithInfo(source, cwd)
+	return out
+}
+
+// rewriteLocalFileLinksWithInfo rewrites local file link labels to their
+// resolved target paths and returns the rewritten source plus the annotations
+// needed to add OSC-8 hyperlinks to the rendered paths afterward.
+func rewriteLocalFileLinksWithInfo(source string, cwd string) (string, []localFileLink) {
 	if !strings.Contains(source, "](") {
-		return source
+		return source, nil
 	}
 	data := []byte(source)
 	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
 	codeRanges := collectCodeRanges(document)
 	matches := markdownLinkRE.FindAllStringSubmatchIndex(source, -1)
 	if len(matches) == 0 {
-		return source
+		return source, nil
 	}
 	var sb strings.Builder
+	var links []localFileLink
 	cursor := 0
 	for _, m := range matches {
 		// Skip matches inside code blocks/code spans so code text is preserved.
@@ -120,9 +130,39 @@ func rewriteLocalFileLinks(source string, cwd string) string {
 		sb.WriteString(display)
 		sb.WriteString("`")
 		cursor = m[1]
+		links = append(links, localFileLink{Display: display, Dest: dest})
 	}
 	sb.WriteString(source[cursor:])
-	return sb.String()
+	return sb.String(), links
+}
+
+// annotateLocalFileLinks wraps matching local file path text in each rendered
+// line with an OSC-8 hyperlink pointing at the original file target, so file
+// references are clickable (Rust trusted_file_destination).
+func annotateLocalFileLinks(rendered string, links []localFileLink, cwd string) string {
+	if len(links) == 0 {
+		return rendered
+	}
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	for i, line := range lines {
+		for _, link := range links {
+			if link.Display == "" || !strings.Contains(line, link.Display) {
+				continue
+			}
+			fileURL := localLinkFileURL(link.Dest, cwd)
+			if fileURL == "" {
+				continue
+			}
+			line = strings.ReplaceAll(line, link.Display, osc8FileLink(fileURL, link.Display))
+		}
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
+}
+
+// osc8FileLink wraps text in an OSC-8 hyperlink to an absolute file URL.
+func osc8FileLink(fileURL string, text string) string {
+	return "\x1b]8;;" + fileURL + "\x07" + text + "\x1b]8;;\x07"
 }
 
 // collectCodeRanges returns the byte ranges of fenced/indented code blocks and
