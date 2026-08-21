@@ -382,7 +382,7 @@
             "id": "sdk-windows-interrupted-command",
             "status": "partial",
             "area": "sdk",
-            "reason": "The opt-in Windows cancellation diagnostic still fails on Rust bbbf396839: Rust leaves the PowerShell descendant alive and the resumed turn aborts, while Go terminates the tree and resumes safely. Closing this requires an upstream Rust fix; Go must not regress process-tree safety to imitate the defect.",
+            "reason": "The opt-in Windows cancellation diagnostic still fails on Rust bbbf396839: Rust leaves the PowerShell descendant alive and the resumed turn aborts, while Go terminates the tree and resumes safely. Closing this requires an upstream Rust fix; Go must not regress process-tree safety to imitate the defect. Upstream Rust main is still bd19459358 with no fix; the Windows shell/process-tree issues are tracked open as openai/codex#39517 and #39484 (updated 2026-08-19). Re-verify only when an upstream fix lands.",
             "test": "npm --prefix sdktests run test:parity -- --scenario resume-tool-interrupted-command --rust <rust-codex> --go <go-codex> --sdk <rust-sdk-typescript>"
         },
         {
