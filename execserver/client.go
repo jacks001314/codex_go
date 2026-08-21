@@ -26,6 +26,7 @@ type Client struct {
 	cleanup        func()
 	writeMu        sync.Mutex
 	recoverMu      sync.Mutex
+	acceptedMu     sync.Mutex
 	mu             sync.Mutex
 	nextID         int64
 	nextHTTPID     uint64
@@ -41,6 +42,7 @@ type Client struct {
 	metadata       map[string]*inFlightMetadataRequest
 	cacheMu        sync.Mutex
 	discoveryCache *CapabilityDiscoveryCache
+	accepted       bool
 }
 
 type inFlightMetadataRequest struct {

@@ -276,9 +276,9 @@
       "domains": [
         "execserver"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "implementation_pending: host-accepted exec-server WebSocket transport + environment surface."
+        "Implemented: ConnectAcceptedClient constructs an exec-server client over a host-accepted, authenticated WebSocket (initial connect rejects resume), and ReplaceAcceptedConnection retires the current transport and resumes the same session on a host-supplied replacement with serialized handoff (overlapping replacements rejected, non-accepted clients refused) (execserver/accepted.go). Tests cover initial readiness, replacement session preservation, and misuse rejection."
       ]
     },
     {
