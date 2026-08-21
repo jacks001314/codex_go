@@ -22,6 +22,23 @@ func TestRenderCompactTableMatchesRustFormat(t *testing.T) {
 	}
 }
 
+func TestRenderWithThemeTableCellHardBreak(t *testing.T) {
+	source := "| A | B |\n|---|---|\n| line1<br>line2 | single |"
+	rendered, err := RenderWithTheme(source, 60, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := utils.StripANSI(rendered)
+	for _, want := range []string{"line1", "line2", "single"} {
+		if !strings.Contains(clean, want) {
+			t.Fatalf("hard-broken table cell missing %q:\n%s", want, clean)
+		}
+	}
+	if strings.Contains(clean, "<br>") {
+		t.Fatalf("<br> leaked into table cell:\n%s", clean)
+	}
+}
+
 func TestRenderCompactTableBodySeparator(t *testing.T) {
 	tables, _ := detectSourceTables("| Name | Value |\n|---|---|\n| alpha | 1 |\n| beta | 22 |")
 	if len(tables) != 1 {

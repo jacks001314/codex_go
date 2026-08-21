@@ -324,15 +324,87 @@ func renderCompactTableBlock(t sourceTable, widths []int) []string {
 		rows[i] = normalizeTableRow(row, colCount)
 	}
 	out := make([]string, 0, 2+len(t.rows)*2)
-	out = append(out, renderTableRow(header, widths, t.alignments))
+	out = append(out, renderTableRowBlock(header, widths, t.alignments)...)
 	out = append(out, renderTableSeparator(widths, tableHeaderSeparatorChar))
 	for i, row := range rows {
-		out = append(out, renderTableRow(row, widths, t.alignments))
+		out = append(out, renderTableRowBlock(row, widths, t.alignments)...)
 		if i+1 < len(t.rows) {
 			out = append(out, renderTableSeparator(widths, tableBodySeparatorChar))
 		}
 	}
 	return out
+}
+
+// renderTableRowBlock renders a single table row, allowing each cell to span
+// multiple display lines when it contains a hard break (<br> or an embedded
+// newline). Single-line cells render exactly as before.
+func renderTableRowBlock(cells []string, widths []int, alignments []string) []string {
+	cellLines := make([][]string, len(cells))
+	maxLines := 1
+	for i, cell := range cells {
+		if i >= len(widths) {
+			break
+		}
+		content := decorateTableInline(cell)
+		lines := splitTableCellLines(content)
+		cellLines[i] = lines
+		if len(lines) > maxLines {
+			maxLines = len(lines)
+		}
+	}
+	out := make([]string, 0, maxLines)
+	for li := 0; li < maxLines; li++ {
+		var sb strings.Builder
+		for i := range cellLines {
+			if i >= len(widths) {
+				break
+			}
+			content := ""
+			if li < len(cellLines[i]) {
+				content = cellLines[i][li]
+			}
+			contentWidth := codextui.DisplayWidth(utils.StripANSI(content))
+			remaining := widths[i] - contentWidth
+			if remaining < 0 {
+				remaining = 0
+			}
+			var leftPad, rightPad int
+			switch tableAlignment(alignments, i) {
+			case "center":
+				leftPad = remaining / 2
+				rightPad = remaining - leftPad
+			case "right":
+				leftPad = remaining
+			default:
+				rightPad = remaining
+			}
+			isLast := i == len(cellLines)-1
+			sb.WriteString(" ")
+			if leftPad > 0 {
+				sb.WriteString(strings.Repeat(" ", leftPad))
+			}
+			sb.WriteString(content)
+			if rightPad > 0 && !isLast {
+				sb.WriteString(strings.Repeat(" ", rightPad))
+			}
+			if !isLast {
+				sb.WriteString(strings.Repeat(" ", tableCellPadding+tableColumnGap))
+			}
+		}
+		out = append(out, sb.String())
+	}
+	return out
+}
+
+// splitTableCellLines splits a table cell into display lines on hard breaks
+// (<br> or embedded newlines), which Rust's TableCell supports.
+func splitTableCellLines(content string) []string {
+	if !strings.Contains(content, "<br>") && !strings.Contains(content, "\n") {
+		return []string{content}
+	}
+	normalized := strings.ReplaceAll(content, "<br>", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r\n", "\n")
+	return strings.Split(normalized, "\n")
 }
 
 // renderCompactTableWideBlock renders a table when its natural width exceeds the
