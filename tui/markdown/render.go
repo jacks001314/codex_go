@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"regexp"
 	"strings"
 
 	codextui "codex_go/tui"
@@ -32,6 +33,14 @@ func Render(text string, width int) (string, error) {
 }
 
 func RenderWithTheme(text string, width int, themeID string) (string, error) {
+	return RenderWithThemeCwd(text, width, themeID, "")
+}
+
+// RenderWithThemeCwd renders markdown for the TUI transcript, resolving local
+// file links against cwd so they display the real target path instead of the
+// label (Rust parity: markdown_render local file-link display). Passing an
+// empty cwd renders absolute paths unchanged.
+func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "", nil
@@ -39,6 +48,7 @@ func RenderWithTheme(text string, width int, themeID string) (string, error) {
 	if width <= 0 {
 		width = defaultWidth
 	}
+	text = rewriteLocalFileLinks(text, cwd)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
 	style := codexMarkdownStyle()
@@ -59,6 +69,114 @@ func RenderWithTheme(text string, width int, themeID string) (string, error) {
 	out = restoreRenderedTables(out, tables, width)
 	out = annotateRenderedLineURLs(out)
 	return strings.TrimRight(out, "\n"), nil
+}
+
+// markdownLinkRE matches simple markdown link spans "[label](dest)" (with an
+// optional title) that are not necessarily preceded by "!" (image syntax).
+var markdownLinkRE = regexp.MustCompile(`\[([^\]\n]*)\]\(([^()\s]+)(?:\s+[^)]*)?\)`)
+
+// rewriteLocalFileLinks rewrites the label of every local file link in the
+// source to the resolved target path before markdown rendering, so the
+// transcript shows the real file target (optionally shortened against cwd)
+// instead of the caller-provided label. Code blocks, inline code, and image
+// syntax are left untouched by locating the code ranges in the parsed document
+// and skipping any link match that falls inside them.
+func rewriteLocalFileLinks(source string, cwd string) string {
+	if !strings.Contains(source, "](") {
+		return source
+	}
+	data := []byte(source)
+	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
+	codeRanges := collectCodeRanges(document)
+	matches := markdownLinkRE.FindAllStringSubmatchIndex(source, -1)
+	if len(matches) == 0 {
+		return source
+	}
+	var sb strings.Builder
+	cursor := 0
+	for _, m := range matches {
+		// Skip matches inside code blocks/code spans so code text is preserved.
+		if inCodeRange(m[0], codeRanges) {
+			continue
+		}
+		// Skip image syntax "![...](...)".
+		if m[0] > 0 && source[m[0]-1] == '!' {
+			continue
+		}
+		dest := source[m[4]:m[5]]
+		if !isLocalPathLikeLink(dest) {
+			continue
+		}
+		display, ok := renderLocalLinkTarget(dest, cwd)
+		if !ok {
+			continue
+		}
+		// Render the resolved target as a code span (Rust parity: local file links
+		// are shown as the real path text in code style, not as the markdown label).
+		// glamour renders a label/url pair as "label url", which would duplicate
+		// the path, so a code span avoids that while keeping the target styled.
+		sb.WriteString(source[cursor:m[0]])
+		sb.WriteString("`")
+		sb.WriteString(display)
+		sb.WriteString("`")
+		cursor = m[1]
+	}
+	sb.WriteString(source[cursor:])
+	return sb.String()
+}
+
+// collectCodeRanges returns the byte ranges of fenced/indented code blocks and
+// inline code spans so link rewriting can leave code text untouched.
+func collectCodeRanges(document ast.Node) [][2]int {
+	var ranges [][2]int
+	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch block := node.(type) {
+		case *ast.CodeBlock:
+			ranges = appendCodeBlockRanges(ranges, block.Lines())
+		case *ast.FencedCodeBlock:
+			ranges = appendCodeBlockRanges(ranges, block.Lines())
+		case *ast.CodeSpan:
+			ranges = appendDescendantTextRanges(ranges, block)
+		}
+		return ast.WalkContinue, nil
+	})
+	return ranges
+}
+
+func appendCodeBlockRanges(ranges [][2]int, lines *gmtext.Segments) [][2]int {
+	if lines == nil {
+		return ranges
+	}
+	for i := 0; i < lines.Len(); i++ {
+		seg := lines.At(i)
+		ranges = append(ranges, [2]int{seg.Start, seg.Stop})
+	}
+	return ranges
+}
+
+func appendDescendantTextRanges(ranges [][2]int, node ast.Node) [][2]int {
+	_ = ast.Walk(node, func(child ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if text, ok := child.(*ast.Text); ok {
+			ranges = append(ranges, [2]int{text.Segment.Start, text.Segment.Stop})
+		}
+		return ast.WalkContinue, nil
+	})
+	return ranges
+}
+
+func inCodeRange(pos int, ranges [][2]int) bool {
+	for _, r := range ranges {
+		if pos >= r[0] && pos < r[1] {
+			return true
+		}
+	}
+	return false
 }
 
 // annotateRenderedLineURLs wraps web URLs in each rendered line with OSC-8

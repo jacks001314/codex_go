@@ -16,14 +16,14 @@ func TestRenderTranscriptCacheReusesUnchangedMessages(t *testing.T) {
 		state.AddMessage(codextui.RoleAssistant, fmt.Sprintf("assistant %d", i))
 	}
 	var cache transcriptMessageCache
-	first := renderTranscriptWithCache(&cache, state, false, 80, "dark", false)
+	first := renderTranscriptWithCache(&cache, state, false, 80, "dark", false, "")
 	if !strings.Contains(first, "user 19") || !strings.Contains(first, "assistant 19") {
 		t.Fatalf("first render missing tail:\n%s", first)
 	}
 
 	// Mutate only the streaming tail. Earlier messages should reuse cached lines.
 	state.Messages[len(state.Messages)-1].Text += " +delta"
-	second := renderTranscriptWithCache(&cache, state, false, 80, "dark", false)
+	second := renderTranscriptWithCache(&cache, state, false, 80, "dark", false, "")
 	if !strings.Contains(second, "assistant 19 +delta") {
 		t.Fatalf("cache render missing streamed delta:\n%s", second)
 	}
@@ -32,7 +32,7 @@ func TestRenderTranscriptCacheReusesUnchangedMessages(t *testing.T) {
 	}
 
 	// Re-rendering with no change must be byte-identical.
-	third := renderTranscriptWithCache(&cache, state, false, 80, "dark", false)
+	third := renderTranscriptWithCache(&cache, state, false, 80, "dark", false, "")
 	if third != second {
 		t.Fatalf("cache render not stable across no-op renders:\n%s\n---\n%s", second, third)
 	}
@@ -45,7 +45,7 @@ func TestRenderTranscriptCacheReflectsDirectMutation(t *testing.T) {
 		[]string{"$ command", "hidden detail"},
 	)
 	var cache transcriptMessageCache
-	first := renderTranscriptWithCache(&cache, state, false, 80, "dark", true)
+	first := renderTranscriptWithCache(&cache, state, false, 80, "dark", true, "")
 	if !strings.Contains(first, "hidden detail") {
 		t.Fatalf("expanded render missing raw detail:\n%s", first)
 	}
@@ -53,7 +53,7 @@ func TestRenderTranscriptCacheReflectsDirectMutation(t *testing.T) {
 	// Mutate the message in place without bumping MessagesRevision; the cache
 	// must still notice the content change.
 	state.Messages[0].RawText += "\nlate running detail"
-	second := renderTranscriptWithCache(&cache, state, false, 80, "dark", true)
+	second := renderTranscriptWithCache(&cache, state, false, 80, "dark", true, "")
 	if !strings.Contains(second, "late running detail") {
 		t.Fatalf("cache render did not reflect direct RawText mutation:\n%s", second)
 	}

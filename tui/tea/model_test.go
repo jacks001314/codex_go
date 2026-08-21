@@ -5527,7 +5527,7 @@ func TestModelThemeAppliesToAssistantMarkdownCodeBlocks(t *testing.T) {
 
 func TestAssistantMarkdownCodeBlockPreservesSourceLines(t *testing.T) {
 	source := "下面是 C 代码：\n\n```c\n#include <stdio.h>\n\nvoid swap(int *a, int *b) {\n    int temp = *a;\n    *a = *b;\n    *b = temp;\n}\n```"
-	lines := richMessageDisplayLines(codextui.Message{Role: codextui.RoleAssistant, Text: source}, 24, "dracula")
+	lines := richMessageDisplayLines(codextui.Message{Role: codextui.RoleAssistant, Text: source}, 24, "dracula", "")
 	cleanLines := make([]string, 0, len(lines))
 	for _, line := range lines {
 		cleanLines = append(cleanLines, strings.TrimSpace(utils.StripANSI(line)))

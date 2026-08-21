@@ -4720,7 +4720,7 @@ func (m *Model) transcriptRenderCached(state *codextui.State, width int) string 
 	if state == nil {
 		return "No messages yet."
 	}
-	return renderTranscriptWithCache(&m.transcriptMessages, state, m.rawOutput, width, m.activeTUITheme(), false)
+	return renderTranscriptWithCache(&m.transcriptMessages, state, m.rawOutput, width, m.activeTUITheme(), false, m.sessionCWD)
 }
 
 func (m *Model) refreshTranscript() {
@@ -4846,7 +4846,7 @@ func (m *Model) renderTranscriptOverlayCached() string {
 	if m == nil {
 		return ""
 	}
-	return renderTranscriptWithCache(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), true)
+	return renderTranscriptWithCache(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), true, m.sessionCWD)
 }
 
 func (m *Model) activeTUITheme() string {
@@ -5241,13 +5241,13 @@ func renderTranscript(state *codextui.State, raw bool, width int, themeID string
 }
 
 func renderTranscriptWithHistoryMode(state *codextui.State, raw bool, width int, themeID string, expandedHistory bool) string {
-	return renderTranscriptWithCache(nil, state, raw, width, themeID, expandedHistory)
+	return renderTranscriptWithCache(nil, state, raw, width, themeID, expandedHistory, "")
 }
 
 // renderTranscriptWithCache renders the transcript into display lines, reusing
 // the per-message cache when a message's render inputs are unchanged. Passing a
 // nil cache disables caching and renders the whole history from scratch.
-func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool) string {
+func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, cwd string) string {
 	if state == nil || len(state.Messages) == 0 {
 		return "No messages yet."
 	}
@@ -5273,7 +5273,7 @@ func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.St
 		if cache != nil && i < len(cache.messages) && cache.messages[i].key == key {
 			lines = cache.messages[i].lines
 		} else {
-			lines = transcriptMessageDisplayLines(message, width, themeID, expandedHistory)
+			lines = transcriptMessageDisplayLines(message, width, themeID, expandedHistory, cwd)
 			if cache != nil {
 				entry := transcriptMessageCacheEntry{key: key, lines: lines}
 				if i < len(cache.messages) {
@@ -5301,7 +5301,7 @@ func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.St
 	return builder.String()
 }
 
-func transcriptMessageDisplayLines(message codextui.Message, width int, themeID string, expandedHistory bool) []string {
+func transcriptMessageDisplayLines(message codextui.Message, width int, themeID string, expandedHistory bool, cwd string) []string {
 	if expandedHistory && message.Role == codextui.RoleHistory {
 		text := strings.TrimRight(message.RawText, "\r\n")
 		if strings.TrimSpace(text) == "" {
@@ -5309,10 +5309,10 @@ func transcriptMessageDisplayLines(message codextui.Message, width int, themeID 
 		}
 		return codextui.ReflowTranscriptLines(rawLinesTrimmed(text), width)
 	}
-	return richMessageDisplayLines(message, width, themeID)
+	return richMessageDisplayLines(message, width, themeID, cwd)
 }
 
-func richMessageDisplayLines(message codextui.Message, width int, themeID string) []string {
+func richMessageDisplayLines(message codextui.Message, width int, themeID string, cwd string) []string {
 	text := strings.TrimRight(message.Text, "\r\n")
 	if message.Role == codextui.RoleAssistant {
 		text = eventmap.StripHiddenAssistantMarkup(text, false)
@@ -5328,7 +5328,7 @@ func richMessageDisplayLines(message codextui.Message, width int, themeID string
 		if contentWidth < 1 {
 			contentWidth = 1
 		}
-		rendered, err := markdown.RenderWithTheme(text, contentWidth, themeID)
+		rendered, err := markdown.RenderWithThemeCwd(text, contentWidth, themeID, cwd)
 		if err == nil && strings.TrimSpace(rendered) != "" {
 			lines := trimBlankDisplayEdges(rawLinesTrimmed(rendered))
 			return prefixPrewrappedAgentLines(lines, true)
