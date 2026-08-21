@@ -54,6 +54,66 @@ func TestRenderWithThemeRestoresMultipleCodeBlocks(t *testing.T) {
 	}
 }
 
+func TestRenderWithThemeStylesInlineMarkdown(t *testing.T) {
+	source := "# Title\n\n**bold** and *italic* and `code`\n\n## Subheading"
+	rendered, err := RenderWithTheme(source, 60, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := utils.StripANSI(rendered)
+	for _, literal := range []string{"# Title", "**bold**", "*italic*", "## Subheading"} {
+		if strings.Contains(clean, literal) {
+			t.Fatalf("markdown marker %q leaked into styled output:\n%s", literal, clean)
+		}
+	}
+	for _, want := range []string{"Title", "bold", "italic", "Subheading"} {
+		if !strings.Contains(clean, want) {
+			t.Fatalf("styled content missing %q:\n%s", want, clean)
+		}
+	}
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected ANSI styling for inline markdown, got no escapes:\n%s", rendered)
+	}
+}
+
+func TestRenderWithThemeAddsOSC8Hyperlinks(t *testing.T) {
+	source := "Visit https://example.com/path for details."
+	rendered, err := RenderWithTheme(source, 60, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered, "\x1b]8;;https://example.com/path\x07") {
+		t.Fatalf("expected OSC-8 hyperlink in rendered output:\n%s", rendered)
+	}
+	// The visible text still contains the URL.
+	clean := utils.StripANSI(rendered)
+	if !strings.Contains(clean, "https://example.com/path") {
+		t.Fatalf("URL text missing after annotation:\n%s", clean)
+	}
+}
+
+func TestRenderWithThemeRendersBoxDrawingTable(t *testing.T) {
+	source := "| Name | Value |\n|---|---|\n| alpha | 1 |\n| beta | 22 |"
+	rendered, err := RenderWithTheme(source, 60, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := utils.StripANSI(rendered)
+	if strings.Contains(clean, "|") {
+		t.Fatalf("table still uses ASCII pipe separator:\n%s", clean)
+	}
+	for _, want := range []string{"\u2501", "\u2500"} {
+		if !strings.Contains(clean, want) {
+			t.Fatalf("box-drawing table missing %q:\n%s", want, clean)
+		}
+	}
+	for _, want := range []string{"Name", "Value", "alpha", "1", "beta", "22"} {
+		if !strings.Contains(clean, want) {
+			t.Fatalf("table content missing %q:\n%s", want, clean)
+		}
+	}
+}
+
 func containsExactLine(text string, want string) bool {
 	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
 		if line == want {

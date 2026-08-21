@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"codex_go/utils"
 )
 
 func TestFileChangeLineCounts(t *testing.T) {
@@ -30,23 +32,23 @@ func TestCollectDiffRowsSortsAndSummarizes(t *testing.T) {
 	if rows[0].Removed != 2 || rows[1].Added != 1 {
 		t.Fatalf("row counts = %#v", rows)
 	}
-	if got := RenderLineCountSummary(12, 3); got != "(+12 -3)" {
+	if got := utils.StripANSI(RenderLineCountSummary(12, 3)); got != "(+12 -3)" {
 		t.Fatalf("summary = %q", got)
 	}
 }
 
 func TestRenderFileChangeAddDeleteAndUpdate(t *testing.T) {
 	add := RenderFileChange(NewAddFileChange("first\nsecond\n"), 40)
-	if len(add) != 2 || !strings.Contains(add[0], "1 + first") || !strings.Contains(add[1], "2 + second") {
+	if len(add) != 2 || !strings.Contains(utils.StripANSI(add[0]), "1 + first") || !strings.Contains(utils.StripANSI(add[1]), "2 + second") {
 		t.Fatalf("add render = %#v", add)
 	}
 	del := RenderFileChange(NewDeleteFileChange("gone\n"), 40)
-	if len(del) != 1 || !strings.Contains(del[0], "1 - gone") {
+	if len(del) != 1 || !strings.Contains(utils.StripANSI(del[0]), "1 - gone") {
 		t.Fatalf("delete render = %#v", del)
 	}
 	diff := "@@ -10,2 +20,3 @@\n context\n-old\n+new\n+new2\n"
 	update := RenderFileChange(NewUpdateFileChange(diff, ""), 40)
-	joined := strings.Join(update, "\n")
+	joined := utils.StripANSI(strings.Join(update, "\n"))
 	for _, want := range []string{"@@ -10,2 +20,3 @@", "20   context", "11 - old", "21 + new", "22 + new2"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("update render missing %q:\n%s", want, joined)
@@ -62,7 +64,7 @@ func TestRenderChangesBlockSingleMultiAndRename(t *testing.T) {
 	single := CreateDiffSummary(map[string]FileChange{
 		addPath: NewAddFileChange("package main\n"),
 	}, cwd, 80)
-	if len(single) == 0 || !strings.Contains(single[0], "Added src/a.go (+1 -0)") {
+	if len(single) == 0 || !strings.Contains(utils.StripANSI(single[0]), "Added src/a.go (+1 -0)") {
 		t.Fatalf("single summary = %#v", single)
 	}
 
@@ -70,7 +72,7 @@ func TestRenderChangesBlockSingleMultiAndRename(t *testing.T) {
 		addPath:  NewAddFileChange("new\n"),
 		"old.go": NewUpdateFileChange("@@ -1 +1 @@\n-old\n+new\n", renamePath),
 	}, cwd, 80)
-	joined := strings.Join(multi, "\n")
+	joined := utils.StripANSI(strings.Join(multi, "\n"))
 	for _, want := range []string{"Edited 2 files (+2 -1)", "old.go -> src/b.go", "src/a.go (+1 -0)"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("multi summary missing %q:\n%s", want, joined)

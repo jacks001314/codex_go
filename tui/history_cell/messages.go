@@ -1,6 +1,7 @@
 package historycell
 
 import (
+	"regexp"
 	"strings"
 
 	"codex_go/tui"
@@ -14,7 +15,10 @@ const (
 	ansiUserMessagePrefix     = "\x1b[1;2m"
 	ansiUserMessagePrefixEnd  = "\x1b[22m"
 	ansiUserMessageReset      = "\x1b[0m"
+	ansiUserMessageMention    = "\x1b[36m"
 )
+
+var userMessageMentionRE = regexp.MustCompile(`[$@][A-Za-z0-9][A-Za-z0-9_-]*`)
 
 type TextElement struct {
 	Start int
@@ -75,10 +79,83 @@ func (c UserHistoryCell) DisplayLines(width int) []string {
 		if index == 0 {
 			prefix = ansiUserMessagePrefix + "\u203a " + ansiUserMessagePrefixEnd
 		}
-		lines = append(lines, styleUserMessageLine(prefix+line, width))
+		lines = append(lines, styleUserMessageLine(prefix+styleUserMessageMentions(line), width))
 	}
 	lines = append(lines, styleUserMessageLine("", width))
 	return lines
+}
+
+// styleUserMessageMentions wraps mention-like tokens ($name / @name) with cyan
+// so tool/plugin mentions inside a user message are highlighted, mirroring the
+// Rust TUI's cyan text-element rendering. Common environment variables (for
+// example $HOME/$PATH) are left uncolored.
+func styleUserMessageMentions(text string) string {
+	if !strings.ContainsAny(text, "$@") {
+		return text
+	}
+	var sb strings.Builder
+	cursor := 0
+	for _, loc := range userMessageMentionRE.FindAllStringIndex(text, -1) {
+		token := text[loc[0]:loc[1]]
+		name := token[1:]
+		if isCommonEnvVarName(name) || !isStandaloneMentionToken(text, loc[0], loc[1], token[0]) {
+			continue
+		}
+		sb.WriteString(text[cursor:loc[0]])
+		sb.WriteString(ansiUserMessageMention)
+		sb.WriteString(token)
+		sb.WriteString(ansiUserMessageReset)
+		cursor = loc[1]
+	}
+	if cursor == 0 {
+		return text
+	}
+	sb.WriteString(text[cursor:])
+	return sb.String()
+}
+
+// isStandaloneMentionToken reports whether the token at [start,end) is a
+// standalone mention rather than part of an identifier, email address, or path.
+func isStandaloneMentionToken(text string, start int, end int, sigil byte) bool {
+	if sigil == '$' {
+		if start > 0 && (isMentionNameByte(text[start-1]) || text[start-1] == '.') {
+			return false
+		}
+		if end < len(text) && (text[end] == '.' || text[end] == '/' || text[end] == '\\') {
+			return false
+		}
+	}
+	if sigil == '@' {
+		if start > 0 && isMentionNameByte(text[start-1]) {
+			return false
+		}
+	}
+	if start > 0 {
+		prev := text[start-1]
+		if isMentionNameByte(prev) || prev == '.' || prev == '/' || prev == '\\' {
+			return false
+		}
+	}
+	if end < len(text) {
+		next := text[end]
+		if isMentionNameByte(next) {
+			return false
+		}
+	}
+	return true
+}
+
+func isMentionNameByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b == '-'
+}
+
+func isCommonEnvVarName(name string) bool {
+	switch strings.ToUpper(name) {
+	case "PATH", "HOME", "USER", "SHELL", "PWD", "TMPDIR", "TEMP", "TMP", "LANG", "TERM", "XDG_CONFIG_HOME":
+		return true
+	default:
+		return false
+	}
 }
 
 func styleUserMessageLine(content string, width int) string {

@@ -10,6 +10,18 @@ import (
 
 // Rust parity: codex-rs/tui/src/diff_render.rs.
 
+const (
+	ansiBold  = "\x1b[1m"
+	ansiDim   = "\x1b[2m"
+	ansiGreen = "\x1b[32m"
+	ansiRed   = "\x1b[31m"
+	ansiReset = "\x1b[0m"
+	// Combined fg+bg styles for git-style diff lines: the whole line is green
+	// on a dark-green background for additions and red on dark-red for deletions.
+	ansiAddLine = "\x1b[32;48;5;22m"
+	ansiDelLine = "\x1b[31;48;5;52m"
+)
+
 type DiffLineType int
 
 const (
@@ -101,20 +113,20 @@ func RenderChangesBlock(rows []DiffRow, wrapCols int, cwd string) []string {
 		case FileChangeDelete:
 			verb = "Deleted"
 		}
-		lines = append(lines, verb+" "+renderDiffPath(row, cwd)+" "+RenderLineCountSummary(row.Added, row.Removed))
+		lines = append(lines, ansiDim+"\u2022 "+ansiReset+ansiBold+verb+ansiReset+" "+renderDiffPath(row, cwd)+" "+RenderLineCountSummary(row.Added, row.Removed))
 	default:
 		noun := "files"
 		if len(rows) == 1 {
 			noun = "file"
 		}
-		lines = append(lines, "Edited "+FormatInt(int64(len(rows)))+" "+noun+" "+RenderLineCountSummary(totalAdded, totalRemoved))
+		lines = append(lines, ansiDim+"\u2022 "+ansiReset+ansiBold+"Edited"+ansiReset+" "+FormatInt(int64(len(rows)))+" "+noun+" "+RenderLineCountSummary(totalAdded, totalRemoved))
 	}
 	for index, row := range rows {
 		if index > 0 {
 			lines = append(lines, "")
 		}
 		if len(rows) > 1 {
-			lines = append(lines, "  "+renderDiffPath(row, cwd)+" "+RenderLineCountSummary(row.Added, row.Removed))
+			lines = append(lines, ansiDim+"  \u2514 "+ansiReset+renderDiffPath(row, cwd)+" "+RenderLineCountSummary(row.Added, row.Removed))
 		}
 		// Saturate the content width so extremely narrow terminals stay
 		// renderable (Rust #38075).
@@ -130,7 +142,7 @@ func RenderChangesBlock(rows []DiffRow, wrapCols int, cwd string) []string {
 }
 
 func RenderLineCountSummary(added int, removed int) string {
-	return "(+" + FormatInt(int64(added)) + " -" + FormatInt(int64(removed)) + ")"
+	return "(" + ansiGreen + "+" + FormatInt(int64(added)) + ansiReset + " " + ansiRed + "-" + FormatInt(int64(removed)) + ansiReset + ")"
 }
 
 func RenderFileChange(change FileChange, width int) []string {
@@ -198,19 +210,28 @@ func renderUnifiedDiff(unifiedDiff string, width int) []string {
 
 func renderWrappedDiffLine(lineNumber int, lineType DiffLineType, text string, width int, numberWidth int) []string {
 	sign := " "
+	lineStyle := ""
 	switch lineType {
 	case DiffLineInsert:
 		sign = "+"
+		lineStyle = ansiAddLine
 	case DiffLineDelete:
 		sign = "-"
+		lineStyle = ansiDelLine
 	}
-	prefix := leftPadInt(lineNumber, numberWidth) + " " + sign + " "
+	prefix := leftPadInt(lineNumber, numberWidth) + " "
+	prefix += sign + " "
 	wrapped := AdaptiveWrapLine(text, WrapOptions{
 		Width:            width,
 		InitialIndent:    prefix,
 		SubsequentIndent: strings.Repeat(" ", DisplayWidth(prefix)),
 		BreakWords:       true,
 	})
+	if lineStyle != "" {
+		for i, line := range wrapped {
+			wrapped[i] = lineStyle + line + ansiReset
+		}
+	}
 	return wrapped
 }
 

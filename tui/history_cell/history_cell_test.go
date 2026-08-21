@@ -477,7 +477,8 @@ func TestPatchSearchAndSessionHistoryCells(t *testing.T) {
 		`D:\repo\a.go`: tui.NewAddFileChange("package main\n"),
 	}, `D:\repo`)
 	patchDisplay := strings.Join(patch.DisplayLines(80), "\n")
-	if !strings.Contains(patchDisplay, "Added a.go (+1 -0)") || !strings.Contains(patchDisplay, "package main") {
+	strippedPatch := utils.StripANSI(patchDisplay)
+	if !strings.Contains(strippedPatch, "Added a.go (+1 -0)") || !strings.Contains(strippedPatch, "package main") {
 		t.Fatalf("patch display:\n%s", patchDisplay)
 	}
 

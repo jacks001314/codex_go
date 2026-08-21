@@ -1142,8 +1142,8 @@ func TestModelTranscriptOverlayOpensScrollsAndCloses(t *testing.T) {
 	if !model.overlay.AtBottom() || model.overlay.YOffset() <= 0 {
 		t.Fatalf("overlay initial offset=%d atBottom=%v, want scrollable bottom", model.overlay.YOffset(), model.overlay.AtBottom())
 	}
-	if !batchContainsMessageType(openCmd, bubbletea.EnableMouseCellMotion()) {
-		t.Fatal("opening transcript overlay did not enable mouse tracking")
+	if !batchContainsMessageType(openCmd, bubbletea.EnterAltScreen()) {
+		t.Fatal("opening transcript overlay did not enter the alternate screen")
 	}
 
 	beforeWheel := model.overlay.YOffset()
@@ -1171,8 +1171,8 @@ func TestModelTranscriptOverlayOpensScrollsAndCloses(t *testing.T) {
 			t.Fatal("Ctrl+C inside transcript overlay should not quit")
 		}
 	}
-	if !batchContainsMessageType(cmd, bubbletea.DisableMouse()) {
-		t.Fatal("closing transcript overlay did not disable mouse tracking")
+	if !batchContainsMessageType(cmd, bubbletea.ExitAltScreen()) {
+		t.Fatal("closing transcript overlay did not leave the alternate screen")
 	}
 
 	updated, _ = model.Update(key(bubbletea.KeyCtrlT))

@@ -772,7 +772,8 @@ type Model struct {
 	agentsOverviewInflight     bool
 	agentsOverviewDrafts       map[string]string
 	agentsOverviewPendingDraft *string
-	transcriptCache            transcriptRenderCache
+	transcriptMessages         transcriptMessageCache
+	overlayMessages            transcriptMessageCache
 	lastTranscriptContent      string
 	lastTranscriptHeight       int
 
@@ -876,7 +877,7 @@ type Model struct {
 	// vimPendingReplace tracks the Vim `r` replacement: the next typed
 	// character replaces the grapheme under the cursor without leaving normal
 	// mode (Rust #39661 vim_normal.replace_char).
-	vimPendingReplace bool
+	vimPendingReplace        bool
 	petRuntime               *petRuntime
 	petCodexHome             string
 	petEnv                   map[string]string
@@ -1047,16 +1048,33 @@ type Model struct {
 	now                     func() time.Time
 }
 
-type transcriptRenderKey struct {
-	revision uint64
+// transcriptMessageKey identifies the render inputs for a single transcript
+// message. Two messages with the same key always render to the same display
+// lines, so an unchanged message can reuse its cached lines instead of being
+// re-wrapped and re-rendered on every frame.
+type transcriptMessageKey struct {
+	role     codextui.MessageRole
+	text     string
+	rawText  string
 	width    int
-	raw      bool
 	themeID  string
+	raw      bool
+	expanded bool
 }
 
-type transcriptRenderCache struct {
-	key     transcriptRenderKey
-	content string
+type transcriptMessageCacheEntry struct {
+	key   transcriptMessageKey
+	lines []string
+}
+
+// transcriptMessageCache stores per-message display lines indexed by message
+// position. It is invalidated lazily by comparing the message key: a message
+// whose content or render inputs changed is re-rendered, while unchanged
+// messages reuse their cached lines. This keeps the per-frame cost of a
+// streaming turn proportional to the changed message instead of the whole
+// history (Rust parity: committed history cells cache their display lines).
+type transcriptMessageCache struct {
+	messages []transcriptMessageCacheEntry
 }
 
 type toolCallDisplayState struct {
@@ -4699,22 +4717,10 @@ func (m *Model) syncTranscriptHeight() {
 }
 
 func (m *Model) transcriptRenderCached(state *codextui.State, width int) string {
-	key := transcriptRenderKey{}
-	if state != nil {
-		key.revision = state.MessagesRevision
+	if state == nil {
+		return "No messages yet."
 	}
-	key.width = width
-	key.raw = m.rawOutput
-	key.themeID = m.activeTUITheme()
-
-	if m.transcriptCache.key == key {
-		return m.transcriptCache.content
-	}
-
-	content := renderTranscriptWithHistoryMode(state, key.raw, width, key.themeID, false)
-	m.transcriptCache.key = key
-	m.transcriptCache.content = content
-	return content
+	return renderTranscriptWithCache(&m.transcriptMessages, state, m.rawOutput, width, m.activeTUITheme(), false)
 }
 
 func (m *Model) refreshTranscript() {
@@ -4748,7 +4754,7 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 	}
 	m.ensureSize()
 	if m.overlay == nil {
-		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, renderTranscriptOverlayContent(m.State, m.rawOutput, m.width, m.activeTUITheme()))
+		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, m.renderTranscriptOverlayCached())
 		m.overlayTranscript = true
 	} else {
 		m.overlayTranscript = true
@@ -4763,10 +4769,17 @@ func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
 	}
 	m.overlay = nil
 	m.overlayTranscript = false
-	commands := []bubbletea.Cmd{bubbletea.DisableMouse}
+	// Restore the wheel-to-terminal behavior once the overlay is gone; mouse
+	// tracking was never enabled, so the alternate screen is the only mode to
+	// leave.
+	m.setAlternateScroll(false)
+	var commands []bubbletea.Cmd
 	if m.overlayAltScreen {
 		m.overlayAltScreen = false
 		commands = append(commands, bubbletea.ExitAltScreen)
+	}
+	if len(commands) == 0 {
+		return nil
 	}
 	return bubbletea.Batch(commands...)
 }
@@ -4775,12 +4788,40 @@ func (m *Model) openPagerTerminalMode() bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
-	commands := []bubbletea.Cmd{bubbletea.EnableMouseCellMotion}
-	if m.noAltScreen && !m.overlayAltScreen {
+	// Rust parity: temporary overlay surfaces (Ctrl+T transcript pager) render
+	// on the alternate screen and enable alternate scroll so the mouse wheel
+	// scrolls the overlay content rather than the terminal's native scrollback.
+	// Alternate scroll maps the wheel to up/down key presses, which the pager
+	// keymap turns into scroll, so mouse tracking stays off and native text
+	// selection/copy keeps working. `--no-alt-screen` keeps the overlay inline.
+	m.setAlternateScroll(true)
+	var commands []bubbletea.Cmd
+	if !m.noAltScreen && !m.overlayAltScreen {
 		m.overlayAltScreen = true
 		commands = append(commands, bubbletea.EnterAltScreen)
 	}
+	if len(commands) == 0 {
+		return nil
+	}
 	return bubbletea.Batch(commands...)
+}
+
+// setAlternateScroll toggles the terminal's alternate-scroll mode (DEC private
+// mode 1007). When enabled, the terminal translates the mouse wheel into
+// up/down key presses instead of scrolling the scrollback, letting the overlay
+// scroll without capturing the mouse. The write is serialized through the pet
+// runtime output mutex so it never interleaves with frame text.
+func (m *Model) setAlternateScroll(enabled bool) {
+	if m == nil || m.petRuntime == nil || m.petRuntime.out == nil {
+		return
+	}
+	seq := "\x1b[?1007l"
+	if enabled {
+		seq = "\x1b[?1007h"
+	}
+	m.petRuntime.mu.Lock()
+	defer m.petRuntime.mu.Unlock()
+	_, _ = m.petRuntime.out.Write([]byte(seq))
 }
 
 func (m *Model) syncTranscriptOverlay() {
@@ -4791,7 +4832,21 @@ func (m *Model) syncTranscriptOverlay() {
 	if !m.overlayTranscript {
 		return
 	}
-	m.overlay.SetContent(renderTranscriptOverlayContent(m.State, m.rawOutput, m.width, m.activeTUITheme()))
+	if content := m.renderTranscriptOverlayCached(); content != m.overlay.Content() {
+		m.overlay.SetContent(content)
+	}
+}
+
+// renderTranscriptOverlayCached renders the expanded transcript overlay
+// content, reusing per-message display lines so a streaming tail does not
+// re-render the whole history. It always recomputes the joined content so
+// direct in-place message mutations are reflected even when the state revision
+// was not bumped.
+func (m *Model) renderTranscriptOverlayCached() string {
+	if m == nil {
+		return ""
+	}
+	return renderTranscriptWithCache(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), true)
 }
 
 func (m *Model) activeTUITheme() string {
@@ -5185,11 +5240,14 @@ func renderTranscript(state *codextui.State, raw bool, width int, themeID string
 	return renderTranscriptWithHistoryMode(state, raw, width, themeID, false)
 }
 
-func renderTranscriptOverlayContent(state *codextui.State, raw bool, width int, themeID string) string {
-	return renderTranscriptWithHistoryMode(state, raw, width, themeID, true)
+func renderTranscriptWithHistoryMode(state *codextui.State, raw bool, width int, themeID string, expandedHistory bool) string {
+	return renderTranscriptWithCache(nil, state, raw, width, themeID, expandedHistory)
 }
 
-func renderTranscriptWithHistoryMode(state *codextui.State, raw bool, width int, themeID string, expandedHistory bool) string {
+// renderTranscriptWithCache renders the transcript into display lines, reusing
+// the per-message cache when a message's render inputs are unchanged. Passing a
+// nil cache disables caching and renders the whole history from scratch.
+func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool) string {
 	if state == nil || len(state.Messages) == 0 {
 		return "No messages yet."
 	}
@@ -5201,16 +5259,29 @@ func renderTranscriptWithHistoryMode(state *codextui.State, raw bool, width int,
 	}
 	var builder strings.Builder
 	first := true
-	for _, message := range state.Messages {
+	for i, message := range state.Messages {
+		key := transcriptMessageKey{
+			role:     message.Role,
+			text:     message.Text,
+			rawText:  message.RawText,
+			width:    width,
+			themeID:  themeID,
+			raw:      raw,
+			expanded: expandedHistory,
+		}
 		var lines []string
-		if expandedHistory && message.Role == codextui.RoleHistory {
-			text := strings.TrimRight(message.RawText, "\r\n")
-			if strings.TrimSpace(text) == "" {
-				text = strings.TrimRight(message.Text, "\r\n")
-			}
-			lines = codextui.ReflowTranscriptLines(rawLinesTrimmed(text), width)
+		if cache != nil && i < len(cache.messages) && cache.messages[i].key == key {
+			lines = cache.messages[i].lines
 		} else {
-			lines = richMessageDisplayLines(message, width, themeID)
+			lines = transcriptMessageDisplayLines(message, width, themeID, expandedHistory)
+			if cache != nil {
+				entry := transcriptMessageCacheEntry{key: key, lines: lines}
+				if i < len(cache.messages) {
+					cache.messages[i] = entry
+				} else {
+					cache.messages = append(cache.messages, entry)
+				}
+			}
 		}
 		if len(lines) == 0 {
 			continue
@@ -5221,10 +5292,24 @@ func renderTranscriptWithHistoryMode(state *codextui.State, raw bool, width int,
 		builder.WriteString(strings.TrimRight(strings.Join(lines, "\n"), "\r\n"))
 		first = false
 	}
+	if cache != nil && len(cache.messages) > len(state.Messages) {
+		cache.messages = cache.messages[:len(state.Messages)]
+	}
 	if builder.Len() == 0 {
 		return "No messages yet."
 	}
 	return builder.String()
+}
+
+func transcriptMessageDisplayLines(message codextui.Message, width int, themeID string, expandedHistory bool) []string {
+	if expandedHistory && message.Role == codextui.RoleHistory {
+		text := strings.TrimRight(message.RawText, "\r\n")
+		if strings.TrimSpace(text) == "" {
+			text = strings.TrimRight(message.Text, "\r\n")
+		}
+		return codextui.ReflowTranscriptLines(rawLinesTrimmed(text), width)
+	}
+	return richMessageDisplayLines(message, width, themeID)
 }
 
 func richMessageDisplayLines(message codextui.Message, width int, themeID string) []string {

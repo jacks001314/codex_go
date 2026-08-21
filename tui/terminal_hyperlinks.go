@@ -2,6 +2,7 @@ package tui
 
 import (
 	"net/url"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -13,6 +14,36 @@ type TerminalHyperlink struct {
 	End         int
 	Destination string
 }
+
+// AnnotateWebURLsInLine wraps web URLs in a rendered terminal line with OSC-8
+// hyperlink sequences. ANSI styling around a URL (e.g. cyan link text) is
+// preserved because the URL bytes are a contiguous run that is wrapped in place.
+func AnnotateWebURLsInLine(line string) string {
+	if !strings.Contains(line, "http") {
+		return line
+	}
+	locations := webURLPattern.FindAllStringIndex(line, -1)
+	if len(locations) == 0 {
+		return line
+	}
+	var sb strings.Builder
+	cursor := 0
+	for _, loc := range locations {
+		raw := line[loc[0]:loc[1]]
+		trimmed, trimStart := trimWebToken(raw)
+		if _, ok := WebDestination(trimmed); !ok {
+			continue
+		}
+		urlStart := loc[0] + trimStart
+		sb.WriteString(line[cursor:urlStart])
+		sb.WriteString(OSC8Hyperlink(trimmed, trimmed))
+		cursor = urlStart + len(trimmed)
+	}
+	sb.WriteString(line[cursor:])
+	return sb.String()
+}
+
+var webURLPattern = regexp.MustCompile(`https?://[^\s\x1b]+`)
 
 func WebDestination(destination string) (string, bool) {
 	safe := strings.Map(func(r rune) rune {

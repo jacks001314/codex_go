@@ -57,6 +57,12 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 	}
 	width = firstPositive(width, defaultOverlayWidth)
 	height = firstPositive(height, defaultOverlayHeight)
+	// Avoid re-laying-out the viewport (and re-wrapping the content) on every
+	// frame when the terminal size is unchanged. Content changes are delivered
+	// separately through SetContent, which preserves the scroll position.
+	if o.viewport.Width > 0 && o.width == width && o.height == height {
+		return
+	}
 	bodyHeight := height - 2
 	if bodyHeight < minOverlayBodyHeight {
 		bodyHeight = minOverlayBodyHeight
