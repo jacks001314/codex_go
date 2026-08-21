@@ -459,6 +459,24 @@ func (r *RuntimeRouter) guardianReviewTranscript(threadID string) []string {
 	lines := make([]string, 0, maxLines)
 	for i := len(record.Items) - 1; i >= 0 && len(lines) < maxLines; i-- {
 		item := record.Items[i]
+		// Rust #39791: standalone function_call_output items (no call id) are
+		// external context; render them as tool results with the namespaced
+		// tool name and a placeholder for non-text content.
+		if strings.EqualFold(strings.TrimSpace(item.Type), "function_call_output") && strings.TrimSpace(item.CallID) == "" {
+			name := strings.TrimSpace(item.Name)
+			if namespace := strings.TrimSpace(item.Namespace); namespace != "" {
+				name = namespace + "." + name
+			}
+			if name == "" {
+				name = "tool"
+			}
+			text := strings.TrimSpace(item.Text)
+			if text == "" {
+				text = "[non-text output]"
+			}
+			lines = append(lines, "tool "+name+" result: "+text)
+			continue
+		}
 		text := strings.TrimSpace(item.Text)
 		if text == "" && len(item.Content) > 0 {
 			for _, part := range item.Content {
@@ -627,6 +645,7 @@ func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*Threa
 		}
 		items = append(items, item)
 	}
+	r.markThreadMemoryPollutedOnExternalContext(params.ThreadID, items)
 	if _, ok := r.appendEphemeralThreadItems(session.ThreadID(params.ThreadID), items); ok {
 		return &ThreadInjectItemsResponse{}, nil
 	}

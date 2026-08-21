@@ -301,9 +301,9 @@
         "session",
         "guardian"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "implementation_pending: Go session/guardian transcript needs standalone tool-output external-context handling (core session/guardian prompt parity)."
+        "Implemented: standalone function_call_output items (no call id) mark the thread memory mode polluted when memories.disable_on_external_context is enabled (runtimeAppendItems + inject-items paths), and guardian transcripts render them as namespaced tool-result entries with a non-text placeholder (appserver/runtime_router.go, guardian_reviewer.go). Image-generation reuse already consumes function/custom-tool output bodies generically. Tests added."
       ]
     },
     {

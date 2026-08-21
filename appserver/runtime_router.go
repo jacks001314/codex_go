@@ -7546,6 +7546,7 @@ func (r *RuntimeRouter) runtimeAppendItem(threadID session.ThreadID, item sessio
 }
 
 func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []session.Item) (*session.Record, error) {
+	r.markThreadMemoryPollutedOnExternalContext(string(threadID), items)
 	if record, ok := r.appendEphemeralThreadItems(threadID, items); ok {
 		return record, nil
 	}
@@ -7556,6 +7557,32 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 		return liveThread.AppendItems(items)
 	}
 	return r.services.ThreadRouter.store.AppendItems(threadID, items)
+}
+
+// markThreadMemoryPollutedOnExternalContext mirrors Rust
+// mark_thread_memory_mode_polluted_if_external_context (#39791): standalone
+// function_call_output items (no call id) are external context; when
+// memories.disable_on_external_context is enabled, the thread memory mode is
+// marked polluted.
+func (r *RuntimeRouter) markThreadMemoryPollutedOnExternalContext(threadID string, items []session.Item) {
+	if r == nil || r.services.StateRuntime == nil || len(items) == 0 {
+		return
+	}
+	standalone := false
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item.Type), "function_call_output") && strings.TrimSpace(item.CallID) == "" {
+			standalone = true
+			break
+		}
+	}
+	if !standalone {
+		return
+	}
+	cfg := r.effectiveMCPConfigForThread(strings.TrimSpace(threadID))
+	if cfg == nil || !cfg.Memories().DisableOnExternalContext {
+		return
+	}
+	_, _ = r.services.StateRuntime.MarkThreadMemoryModePolluted(context.Background(), strings.TrimSpace(threadID))
 }
 
 func (r *RuntimeRouter) appendEphemeralThreadItems(threadID session.ThreadID, items []session.Item) (*session.Record, bool) {

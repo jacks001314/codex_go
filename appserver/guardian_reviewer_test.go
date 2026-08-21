@@ -9,12 +9,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"codex_go/auth"
+	"codex_go/config"
 	"codex_go/model"
 	"codex_go/sandbox"
 	"codex_go/session"
@@ -313,6 +316,83 @@ func TestModelGuardianReviewerUsesModelSpecificAutoReviewInstructionsLikeRust(t 
 	decision, reason, err = timeoutReviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "write"})
 	if err != nil || decision != state.DecisionTimedOut || reason != timeout {
 		t.Fatalf("timeout decision=%s reason=%q err=%v", decision, reason, err)
+	}
+}
+
+func TestGuardianReviewTranscriptRendersStandaloneFunctionCallOutputLikeRust(t *testing.T) {
+	// Rust #39791: standalone function_call_output items render in guardian
+	// transcripts as "tool <namespace.name> result" entries with a placeholder
+	// for non-text content.
+	home := t.TempDir()
+	store := session.NewStore(home)
+	threadID := "123e4567-e89b-42d3-a456-426614174100"
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{Source: "cli", ModelProvider: "openai"},
+		Items: []session.Item{
+			{ID: "standalone", Type: "function_call_output", Name: "read", Namespace: "drive", Text: "ok", CreatedAt: now},
+			{ID: "paired", Type: "function_call_output", CallID: "call-1", Text: "paired", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	lines := router.guardianReviewTranscript(threadID)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "tool drive.read result: ok") {
+		t.Fatalf("transcript missing standalone tool result: %q", joined)
+	}
+	if strings.Contains(joined, "tool  result: paired") || strings.Contains(joined, "tool result: paired") {
+		t.Fatalf("paired function call output rendered as standalone tool result: %q", joined)
+	}
+}
+
+func TestMarkThreadMemoryPollutedOnStandaloneExternalContextLikeRust(t *testing.T) {
+	home := t.TempDir()
+	sqliteConfig, err := state.NewSqliteConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateRuntime, err := state.InitStateRuntime(context.Background(), sqliteConfig, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateRuntime.Close()
+	threadID := "123e4567-e89b-42d3-a456-426614174101"
+	rolloutPath := writeMemoryStartupTestRollout(t, home, threadID, time.Now().UTC().Add(-time.Hour).Truncate(time.Second))
+	if err := stateRuntime.ReconcileRollout(context.Background(), rolloutPath, false); err != nil {
+		t.Fatal(err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		StateRuntime: stateRuntime,
+		Config:       config.NewConfigService(home),
+		Models:       model.NewModelService(nil),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Agent:        newRecordingRuntimeAgent("ok"),
+	})
+	defer router.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[memories]\ndisable_on_external_context = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	router.markThreadMemoryPollutedOnExternalContext(threadID, []session.Item{{
+		Type:   "function_call_output",
+		Name:   "read",
+		CallID: "",
+	}})
+	var mode string
+	if err := stateRuntime.StateDB().QueryRow(`SELECT memory_mode FROM threads WHERE id = ?`, threadID).Scan(&mode); err != nil {
+		t.Fatalf("query memory_mode: %v", err)
+	}
+	if mode != "polluted" {
+		t.Fatalf("memory_mode = %q, want polluted", mode)
 	}
 }
 
