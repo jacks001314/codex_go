@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"codex_go/utils"
 )
 
 // Rust parity: codex-rs/tui/src/terminal_hyperlinks.rs.
@@ -35,6 +37,14 @@ func AnnotateWebURLsInLine(line string) string {
 			continue
 		}
 		urlStart := loc[0] + trimStart
+		// A URL fragment that runs to the end of the line may have been hard-wrapped
+		// by the renderer; annotating a truncated fragment would point the
+		// hyperlink at an incomplete target. Skip such fragments (Rust remap_wrapped_line).
+		if isLineEnd(line, loc[1]) {
+			sb.WriteString(line[cursor:loc[1]])
+			cursor = loc[1]
+			continue
+		}
 		sb.WriteString(line[cursor:urlStart])
 		sb.WriteString(OSC8Hyperlink(trimmed, trimmed))
 		cursor = urlStart + len(trimmed)
@@ -138,4 +148,10 @@ func unmatchedClosing(text string, closing rune) bool {
 	openCount := strings.Count(text, string(opening))
 	closeCount := strings.Count(text, string(closing))
 	return closeCount > openCount
+}
+func isLineEnd(line string, pos int) bool {
+	if pos >= len(line) {
+		return true
+	}
+	return strings.TrimSpace(utils.StripANSI(line[pos:])) == ""
 }

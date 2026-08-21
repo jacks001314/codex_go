@@ -25,6 +25,20 @@ func TestRenderWithThemeHighlightsCodeAndChangesTheme(t *testing.T) {
 	}
 }
 
+func TestRenderWithThemeWrappedURLNotMisAnnotated(t *testing.T) {
+	url := "https://example.com/" + strings.Repeat("a", 80)
+	source := "See " + url + " end"
+	rendered, err := RenderWithTheme(source, 40, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A URL that the renderer hard-wraps must not be annotated with a truncated
+	// hyperlink target (it would open an incomplete URL).
+	if strings.Contains(rendered, "\x1b]8;;https://example\x07") {
+		t.Fatalf("wrapped URL fragment annotated with a truncated target:\n%q", rendered)
+	}
+}
+
 func TestRenderWithThemePreservesCodeLinesAtNarrowWidth(t *testing.T) {
 	source := "```c\nvoid swap(int *a, int *b) {\n    int temp = *a;\n}\n```"
 	rendered, err := RenderWithTheme(source, 12, "dracula")
