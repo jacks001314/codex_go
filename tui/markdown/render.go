@@ -49,7 +49,7 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 		width = defaultWidth
 	}
 	text = UnwrapMarkdownFences(text)
-	text, localLinks := rewriteLocalFileLinksWithInfo(text, cwd)
+	text, localLinks, webLinks := rewriteLinksWithInfo(text, cwd)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
 	style := codexMarkdownStyle()
@@ -69,6 +69,7 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 	out = restoreSourceCodeBlocks(out, codeBlocks, themeID)
 	out = restoreRenderedTables(out, tables, width)
 	out = annotateRenderedLineURLs(out)
+	out = annotateWebLinkLabels(out, webLinks)
 	out = annotateLocalFileLinks(out, localLinks, cwd)
 	return strings.TrimRight(out, "\n"), nil
 }
@@ -83,27 +84,35 @@ var markdownLinkRE = regexp.MustCompile(`\[([^\]\n]*)\]\(([^()\s]+)(?:\s+[^)]*)?
 // instead of the caller-provided label. Code blocks, inline code, and image
 // syntax are left untouched by locating the code ranges in the parsed document
 // and skipping any link match that falls inside them.
+// webFileLink records a markdown link with a web destination so the rendered
+// label can be wrapped in an OSC-8 hyperlink (Rust mark_buffer_hyperlinks).
+type webFileLink struct {
+	Label string
+	URL   string
+}
+
 func rewriteLocalFileLinks(source string, cwd string) string {
-	out, _ := rewriteLocalFileLinksWithInfo(source, cwd)
+	out, _, _ := rewriteLinksWithInfo(source, cwd)
 	return out
 }
 
-// rewriteLocalFileLinksWithInfo rewrites local file link labels to their
-// resolved target paths and returns the rewritten source plus the annotations
-// needed to add OSC-8 hyperlinks to the rendered paths afterward.
-func rewriteLocalFileLinksWithInfo(source string, cwd string) (string, []localFileLink) {
+// rewriteLinksWithInfo rewrites local file link labels to their resolved target
+// paths and returns the rewritten source plus the annotations needed to add
+// OSC-8 hyperlinks afterward (local file targets and web link labels).
+func rewriteLinksWithInfo(source string, cwd string) (string, []localFileLink, []webFileLink) {
 	if !strings.Contains(source, "](") {
-		return source, nil
+		return source, nil, nil
 	}
 	data := []byte(source)
 	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
 	codeRanges := collectCodeRanges(document)
 	matches := markdownLinkRE.FindAllStringSubmatchIndex(source, -1)
 	if len(matches) == 0 {
-		return source, nil
+		return source, nil, nil
 	}
 	var sb strings.Builder
 	var links []localFileLink
+	var webLinks []webFileLink
 	cursor := 0
 	for _, m := range matches {
 		// Skip matches inside code blocks/code spans so code text is preserved.
@@ -115,26 +124,47 @@ func rewriteLocalFileLinksWithInfo(source string, cwd string) (string, []localFi
 			continue
 		}
 		dest := source[m[4]:m[5]]
-		if !isLocalPathLikeLink(dest) {
+		label := source[m[2]:m[3]]
+		if isLocalPathLikeLink(dest) {
+			display, ok := renderLocalLinkTarget(dest, cwd)
+			if !ok {
+				continue
+			}
+			// Render the resolved target as a code span (Rust parity: local file
+			// links show the real path, not the markdown label).
+			sb.WriteString(source[cursor:m[0]])
+			sb.WriteString("`")
+			sb.WriteString(display)
+			sb.WriteString("`")
+			cursor = m[1]
+			links = append(links, localFileLink{Display: display, Dest: dest})
 			continue
 		}
-		display, ok := renderLocalLinkTarget(dest, cwd)
-		if !ok {
-			continue
+		if webURL, ok := codextui.WebDestination(dest); ok {
+			webLinks = append(webLinks, webFileLink{Label: label, URL: webURL})
 		}
-		// Render the resolved target as a code span (Rust parity: local file links
-		// are shown as the real path text in code style, not as the markdown label).
-		// glamour renders a label/url pair as "label url", which would duplicate
-		// the path, so a code span avoids that while keeping the target styled.
-		sb.WriteString(source[cursor:m[0]])
-		sb.WriteString("`")
-		sb.WriteString(display)
-		sb.WriteString("`")
-		cursor = m[1]
-		links = append(links, localFileLink{Display: display, Dest: dest})
 	}
 	sb.WriteString(source[cursor:])
-	return sb.String(), links
+	return sb.String(), links, webLinks
+}
+
+// annotateWebLinkLabels wraps the rendered label of each markdown web link in an
+// OSC-8 hyperlink to its destination (Rust mark_buffer_hyperlinks).
+func annotateWebLinkLabels(rendered string, webLinks []webFileLink) string {
+	if len(webLinks) == 0 {
+		return rendered
+	}
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	for i, line := range lines {
+		for _, link := range webLinks {
+			if link.Label == "" || !strings.Contains(line, link.Label) {
+				continue
+			}
+			line = strings.ReplaceAll(line, link.Label, osc8FileLink(link.URL, link.Label))
+		}
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
 }
 
 // annotateLocalFileLinks wraps matching local file path text in each rendered

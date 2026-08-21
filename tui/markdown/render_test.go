@@ -92,6 +92,17 @@ func TestRenderWithThemeAddsOSC8Hyperlinks(t *testing.T) {
 	}
 }
 
+func TestRenderWithThemeMarksLinkLabel(t *testing.T) {
+	source := "See [docs](https://example.com/docs) for details."
+	rendered, err := RenderWithTheme(source, 60, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered, "\x1b]8;;https://example.com/docs\x07docs\x1b]8;;\x07") {
+		t.Fatalf("web link label not wrapped in an OSC-8 hyperlink:\n%q", rendered)
+	}
+}
+
 func TestRenderWithThemeRendersBoxDrawingTable(t *testing.T) {
 	source := "| Name | Value |\n|---|---|\n| alpha | 1 |\n| beta | 22 |"
 	rendered, err := RenderWithTheme(source, 60, "")
