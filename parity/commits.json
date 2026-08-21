@@ -110,9 +110,9 @@
         "config",
         "appserver"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "implementation_pending: parse managed developer instructions from requirements and propagate to thread start instructions."
+        "Implemented: additional_developer_instructions parsed from requirements.toml and exposed as additionalDeveloperInstructions on configRequirements/read; managed instructions are contributed as a separate developer message with the <managed_developer_instructions> markers on every turn (naturally preserved across compaction/resume/forks without duplication), rejected above the 10,000-token bound (config/api.go, requirements_file.go, appserver/turn_runtime.go). Tests added."
       ]
     },
     {

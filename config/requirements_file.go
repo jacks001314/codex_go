@@ -124,6 +124,9 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	if value, ok := stringAnyKey(values, "default_permissions", "defaultPermissions"); ok {
 		out.DefaultPermissions = &value
 	}
+	if value, ok := stringAnyKey(values, "additional_developer_instructions", "additionalDeveloperInstructions"); ok {
+		out.AdditionalDeveloperInstructions = &value
+	}
 	if nested, ok := mapAnyKey(values, "permissions"); ok {
 		out.Permissions = cloneMap(nested)
 	}
@@ -650,6 +653,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.AllowedWindowsSandboxImplementations == nil &&
 			value.AllowedPermissionProfiles == nil &&
 			value.DefaultPermissions == nil &&
+			value.AdditionalDeveloperInstructions == nil &&
 			value.Permissions == nil &&
 			value.AllowedWebSearchModes == nil &&
 			value.AllowManagedHooksOnly == nil &&

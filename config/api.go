@@ -504,35 +504,36 @@ var supportedExperimentalFeatureEnablement = []string{
 }
 
 type ConfigRequirements struct {
-	AllowedApprovalPolicies              []sandbox.AskForApproval        `json:"allowedApprovalPolicies,omitempty"`
-	AllowedApprovalsReviewers            []ApprovalsReviewer             `json:"allowedApprovalsReviewers,omitempty"`
-	AllowedSandboxModes                  []sandbox.SandboxMode           `json:"allowedSandboxModes,omitempty"`
-	AllowedWindowsSandboxImplementations []WindowsSandboxSetupMode       `json:"allowedWindowsSandboxImplementations,omitempty"`
-	AllowedPermissionProfiles            map[string]bool                 `json:"allowedPermissionProfiles,omitempty"`
-	DefaultPermissions                   *string                         `json:"defaultPermissions,omitempty"`
+	AllowedApprovalPolicies              []sandbox.AskForApproval  `json:"allowedApprovalPolicies,omitempty"`
+	AllowedApprovalsReviewers            []ApprovalsReviewer       `json:"allowedApprovalsReviewers,omitempty"`
+	AllowedSandboxModes                  []sandbox.SandboxMode     `json:"allowedSandboxModes,omitempty"`
+	AllowedWindowsSandboxImplementations []WindowsSandboxSetupMode `json:"allowedWindowsSandboxImplementations,omitempty"`
+	AllowedPermissionProfiles            map[string]bool           `json:"allowedPermissionProfiles,omitempty"`
+	DefaultPermissions                   *string                   `json:"defaultPermissions,omitempty"`
 	// Permissions carries the managed [permissions] profile catalog from
 	// requirements (Rust ConfigRequirementsToml.permissions, #39752). It is
 	// internal and not part of the app-server wire ConfigRequirements schema.
-	Permissions map[string]any `json:"-"`
-	AllowedWebSearchModes                []WebSearchMode                 `json:"allowedWebSearchModes,omitempty"`
-	AllowManagedHooksOnly                *bool                           `json:"allowManagedHooksOnly,omitempty"`
-	AllowAppshots                        *bool                           `json:"allowAppshots,omitempty"`
-	AllowRemoteControl                   *bool                           `json:"allowRemoteControl,omitempty"`
-	ComputerUse                          *ComputerUseRequirements        `json:"computerUse,omitempty"`
-	BrowserUse                           *BrowserUseRequirements         `json:"browserUse,omitempty"`
-	InAppBrowser                         *InAppBrowserRequirements       `json:"inAppBrowser,omitempty"`
-	AutoReview                           *AutoReviewRequirements         `json:"autoReview,omitempty"`
-	FeatureRequirements                  map[string]bool                 `json:"featureRequirements,omitempty"`
-	Hooks                                *ManagedHooksRequirements       `json:"hooks,omitempty"`
-	EnforceResidency                     *ResidencyRequirement           `json:"enforceResidency,omitempty"`
-	Network                              *NetworkRequirements            `json:"network,omitempty"`
-	Models                               *ModelsRequirements             `json:"models,omitempty"`
-	AllowedLoginMethods                  []ForcedLoginMethod             `json:"allowedLoginMethods,omitempty"`
-	AllowedChatGPTWorkspaces             []string                        `json:"allowedChatGPTWorkspaces,omitempty"`
-	CliAuthCredentialsStore              *AuthCredentialsStoreMode       `json:"cliAuthCredentialsStore,omitempty"`
-	ChatgptBaseURL                       *string                         `json:"chatgptBaseUrl,omitempty"`
-	MCPServers                           map[string]MCPServerRequirement `json:"-"`
-	Plugins                              map[string]PluginRequirements   `json:"-"`
+	Permissions                     map[string]any                  `json:"-"`
+	AllowedWebSearchModes           []WebSearchMode                 `json:"allowedWebSearchModes,omitempty"`
+	AllowManagedHooksOnly           *bool                           `json:"allowManagedHooksOnly,omitempty"`
+	AllowAppshots                   *bool                           `json:"allowAppshots,omitempty"`
+	AllowRemoteControl              *bool                           `json:"allowRemoteControl,omitempty"`
+	ComputerUse                     *ComputerUseRequirements        `json:"computerUse,omitempty"`
+	BrowserUse                      *BrowserUseRequirements         `json:"browserUse,omitempty"`
+	InAppBrowser                    *InAppBrowserRequirements       `json:"inAppBrowser,omitempty"`
+	AutoReview                      *AutoReviewRequirements         `json:"autoReview,omitempty"`
+	FeatureRequirements             map[string]bool                 `json:"featureRequirements,omitempty"`
+	Hooks                           *ManagedHooksRequirements       `json:"hooks,omitempty"`
+	EnforceResidency                *ResidencyRequirement           `json:"enforceResidency,omitempty"`
+	Network                         *NetworkRequirements            `json:"network,omitempty"`
+	Models                          *ModelsRequirements             `json:"models,omitempty"`
+	AllowedLoginMethods             []ForcedLoginMethod             `json:"allowedLoginMethods,omitempty"`
+	AllowedChatGPTWorkspaces        []string                        `json:"allowedChatGPTWorkspaces,omitempty"`
+	CliAuthCredentialsStore         *AuthCredentialsStoreMode       `json:"cliAuthCredentialsStore,omitempty"`
+	ChatgptBaseURL                  *string                         `json:"chatgptBaseUrl,omitempty"`
+	AdditionalDeveloperInstructions *string                         `json:"additionalDeveloperInstructions,omitempty"`
+	MCPServers                      map[string]MCPServerRequirement `json:"-"`
+	Plugins                         map[string]PluginRequirements   `json:"-"`
 }
 
 func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
@@ -560,6 +561,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowedChatGPTWorkspaces             []string                  `json:"allowedChatGPTWorkspaces"`
 		CliAuthCredentialsStore              *AuthCredentialsStoreMode `json:"cliAuthCredentialsStore"`
 		ChatgptBaseURL                       *string                   `json:"chatgptBaseUrl"`
+		AdditionalDeveloperInstructions      *string                   `json:"additionalDeveloperInstructions"`
 	}{
 		AllowedApprovalPolicies:              permissionPoliciesOrNil(r.AllowedApprovalPolicies),
 		AllowedApprovalsReviewers:            approvalsReviewersOrNil(r.AllowedApprovalsReviewers),
@@ -584,6 +586,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowedChatGPTWorkspaces:             stringSliceOrNil(r.AllowedChatGPTWorkspaces),
 		CliAuthCredentialsStore:              cloneAuthCredentialsStoreMode(r.CliAuthCredentialsStore),
 		ChatgptBaseURL:                       cloneStringPtr(r.ChatgptBaseURL),
+		AdditionalDeveloperInstructions:      cloneStringPtr(r.AdditionalDeveloperInstructions),
 	})
 }
 
@@ -2969,6 +2972,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.AllowedWebSearchModes = cloneSlice(requirements.AllowedWebSearchModes)
 	clone.FeatureRequirements = cloneBoolMap(requirements.FeatureRequirements)
 	clone.DefaultPermissions = cloneStringPtr(requirements.DefaultPermissions)
+	clone.AdditionalDeveloperInstructions = cloneStringPtr(requirements.AdditionalDeveloperInstructions)
 	clone.AllowManagedHooksOnly = cloneBoolPtr(requirements.AllowManagedHooksOnly)
 	clone.AllowAppshots = cloneBoolPtr(requirements.AllowAppshots)
 	clone.AllowRemoteControl = cloneBoolPtr(requirements.AllowRemoteControl)

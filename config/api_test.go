@@ -147,6 +147,7 @@ func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 	model := "gpt-5"
 	disableAutoReview := true
 	hiddenCommand := "hidden"
+	managedInstructions := "Follow the company policy."
 	requirements := &ConfigRequirements{
 		AllowedApprovalPolicies: []sandbox.AskForApproval{},
 		AllowedSandboxModes:     []sandbox.SandboxMode{sandbox.SandboxWorkspaceWrite},
@@ -165,7 +166,8 @@ func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 		MCPServers: map[string]MCPServerRequirement{
 			"internal": {Identity: &MCPServerIdentity{Command: &hiddenCommand}},
 		},
-		Plugins: map[string]PluginRequirements{"sample@test": {}},
+		Plugins:                         map[string]PluginRequirements{"sample@test": {}},
+		AdditionalDeveloperInstructions: &managedInstructions,
 	}
 	data, err := json.Marshal(requirements)
 	if err != nil {
@@ -188,6 +190,9 @@ func TestConfigRequirementsMarshalRustShape(t *testing.T) {
 		if _, ok := root[key]; !ok {
 			t.Fatalf("requirements missing key %q: %s", key, data)
 		}
+	}
+	if got, ok := root["additionalDeveloperInstructions"].(string); !ok || got != managedInstructions {
+		t.Fatalf("additionalDeveloperInstructions = %+v, want %q", root["additionalDeveloperInstructions"], managedInstructions)
 	}
 	computerUse := root["computerUse"].(map[string]any)
 	if computerUse["allowLockedComputerUse"] != nil {

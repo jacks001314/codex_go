@@ -5802,6 +5802,11 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		return nil, err
 	}
 	inputItems = append(inputItems, modelPersonalityItems...)
+	if item, err := r.managedDeveloperInstructionsInputItem(cfg); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+	}
 	tokenBudget, err := cfg.TokenBudgetConfigWithDefaults(modelTokenBudgetDefaults(modelInfo))
 	if err != nil {
 		return nil, err
@@ -7429,6 +7434,28 @@ func (r *RuntimeRouter) instructionsWithMemoryToolContext(cfg *config.Config, in
 		return fragment
 	}
 	return instructions + "\n\n" + fragment
+}
+
+const maxManagedDeveloperInstructionsTokens = 10000
+
+// managedDeveloperInstructionsInputItem mirrors Rust
+// ManagedDeveloperInstructions (#39755): requirements-owned instructions are
+// contributed as a separate developer message with the
+// <managed_developer_instructions> markers, independent of ordinary developer
+// instructions, and rejected when the rendered context exceeds 10,000
+// estimated tokens.
+func (r *RuntimeRouter) managedDeveloperInstructionsInputItem(cfg *config.Config) (any, error) {
+	if r == nil || cfg == nil || cfg.Requirements == nil || cfg.Requirements.AdditionalDeveloperInstructions == nil {
+		return nil, nil
+	}
+	instructions := strings.TrimSpace(*cfg.Requirements.AdditionalDeveloperInstructions)
+	if instructions == "" {
+		return nil, nil
+	}
+	if utils.ApproxTokensFromByteCount(len(instructions)) > maxManagedDeveloperInstructionsTokens {
+		return nil, fmt.Errorf("managed developer instructions exceed the %d-token limit", maxManagedDeveloperInstructionsTokens)
+	}
+	return model.DeveloperMessageInputItem("<managed_developer_instructions>\n" + instructions + "\n</managed_developer_instructions>"), nil
 }
 
 func (r *RuntimeRouter) notifySkillWarnings(threadID string, warnings []string) {
