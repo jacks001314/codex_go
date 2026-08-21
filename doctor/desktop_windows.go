@@ -51,8 +51,3 @@ func desktopAppInstallations() []desktopAppInstallation {
 	}
 	return out
 }
-
-func desktopProductName(displayName string) bool {
-	lower := strings.ToLower(strings.TrimSpace(displayName))
-	return strings.Contains(lower, "openai") || strings.Contains(lower, "chatgpt") || strings.Contains(lower, "codex")
-}

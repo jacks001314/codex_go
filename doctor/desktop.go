@@ -19,6 +19,13 @@ type desktopAppInstallation struct {
 	Platform string
 }
 
+// desktopProductName reports whether an application display name belongs to
+// the OpenAI/ChatGPT/Codex desktop surface (shared across platform probes).
+func desktopProductName(displayName string) bool {
+	lower := strings.ToLower(strings.TrimSpace(displayName))
+	return strings.Contains(lower, "openai") || strings.Contains(lower, "chatgpt") || strings.Contains(lower, "codex")
+}
+
 var (
 	desktopInstallationProbe = func() []desktopAppInstallation { return desktopAppInstallations() }
 	desktopSecurityProbe     = func(apps []desktopAppInstallation) string { return desktopSecurityEnforcement(apps) }

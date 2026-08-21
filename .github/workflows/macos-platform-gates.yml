@@ -5,6 +5,8 @@ on:
   push:
     paths:
       - 'app/**'
+      - 'doctor/**'
+      - 'execserver/**'
       - 'network/**'
       - 'sandbox/**'
       - 'scripts/**'
