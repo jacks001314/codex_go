@@ -97,6 +97,23 @@ func TestRenderWithThemeCwdLocalFileLinks(t *testing.T) {
 	}
 }
 
+func TestRenderWithThemeCwdLocalFileLinksInTable(t *testing.T) {
+	source := "| File |\n|---|\n| [a](./src/a.rs) |\n| [b](/qax/dev/codex_go/src/b.go) |"
+	rendered, err := RenderWithThemeCwd(source, 60, "", "/qax/dev/codex_go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := utils.StripANSI(rendered)
+	for _, want := range []string{"./src/a.rs", "src/b.go"} {
+		if !strings.Contains(clean, want) {
+			t.Fatalf("table cell local link display missing %q:\n%s", want, clean)
+		}
+	}
+	if strings.Contains(clean, "[a]") || strings.Contains(clean, "[b]") {
+		t.Fatalf("table cell local link label leaked:\n%s", clean)
+	}
+}
+
 func TestRewriteLocalFileLinksSkipsCodeBlocksAndImages(t *testing.T) {
 	source := "```\n[code](./src/x.go)\n```\n\n![img](./img.png)\n\n[link](./real.go)"
 	got := rewriteLocalFileLinks(source, "")
