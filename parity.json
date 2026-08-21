@@ -375,7 +375,7 @@
             "id": "cross-platform-release-gates",
             "status": "partial",
             "area": "release",
-            "reason": "Linux Landlock/bwrap is verified on a native Kali runner. Native Windows platform and production ConPTY gates pass. Forty-seven relevant packages compile for Darwin/arm64, and Darwin network/sandbox vet plus actionlint pass. The macOS workflow now directly tests Keychain roots, a Unix-socket HTTP round trip, native seatbelt enforcement, and desktop/platform behavior; a native macOS workflow artifact is still required.",
+            "reason": "Linux Landlock/bwrap is verified on a native Kali runner. Native Windows platform and production ConPTY gates pass. The FULL Go tree now cross-compiles for Darwin/arm64, Darwin/amd64, Linux/arm64, and Linux/amd64 with CGO_ENABLED=0 (fixed darwin fs birth-time and doctor desktop-product-name compile breaks); Darwin network/sandbox vet plus actionlint pass. The macOS workflow directly tests Keychain roots, a Unix-socket HTTP round trip, native seatbelt enforcement, and desktop/platform behavior and uploads artifacts, but its GitHub Actions runs fail before any step executes (runner provisioning on the repository account/plan), so a native macOS workflow artifact still requires external GitHub infrastructure.",
             "test": "go test ./sandbox ./network ./app ./tui/...; macOS workflow: .github/workflows/macos-platform-gates.yml"
         },
         {
