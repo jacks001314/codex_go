@@ -180,8 +180,11 @@ func TestRenderWideTableFallsBackToKeyValueWhenTooNarrow(t *testing.T) {
 		t.Fatal(err)
 	}
 	clean := utils.StripANSI(rendered)
-	if !strings.Contains(clean, "alpha") {
-		t.Fatalf("key/value fallback missing key value:\n%s", clean)
+	if !strings.Contains(clean, "Name") || !strings.Contains(clean, "Value") {
+		t.Fatalf("key/value fallback missing header labels:\n%s", clean)
+	}
+	if !strings.Contains(clean, "alph") {
+		t.Fatalf("key/value fallback missing body value:\n%s", clean)
 	}
 	// The marker must never leak into the transcript.
 	if strings.Contains(clean, "CODEX_INTERNAL_TABLE_") {

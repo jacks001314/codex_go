@@ -308,7 +308,7 @@ func renderCompactTableSized(t sourceTable, maxWidth int) []string {
 		// Even minimum-width columns would overflow; fall back to key/value
 		// records so a multi-column table stays readable in a narrow terminal
 		// (Rust parity: markdown_render table key/value fallback).
-		return renderTableKeyValue(t, colCount)
+		return renderTableKeyValue(t, colCount, maxWidth)
 	}
 	widths := allocateColumnWidths(natural, budget, colCount)
 	return renderCompactTableWideBlock(t, widths, colCount)
@@ -492,25 +492,67 @@ func allocateColumnWidths(natural []int, budget int, colCount int) []int {
 	return widths
 }
 
-func renderTableKeyValue(t sourceTable, colCount int) []string {
+func renderTableKeyValue(t sourceTable, colCount int, maxWidth int) []string {
 	header := normalizeTableRow(t.header, colCount)
+	// Precompute labels and the widest label so record colon separators align
+	// across rows (Rust render_aligned_field).
+	labels := make([]string, colCount)
+	maxKey := 0
+	for i := 0; i < colCount; i++ {
+		label := stripInlineMarkdown(header[i])
+		labels[i] = label
+		if w := codextui.DisplayWidth(label); w > maxKey {
+			maxKey = w
+		}
+	}
 	lines := make([]string, 0)
 	for _, row := range t.rows {
 		if len(row) == 0 {
 			continue
 		}
 		for i := 0; i < colCount && i < len(row); i++ {
-			label := stripInlineMarkdown(header[i])
+			label := labels[i]
 			value := stripInlineMarkdown(row[i])
-			if label != "" {
-				lines = append(lines, "• "+label+": "+value)
-			} else {
-				lines = append(lines, "• "+value)
+			if label == "" {
+				lines = append(lines, "\u2022 "+value)
+				continue
+			}
+			labelText := label + ":"
+			padded := labelText + strings.Repeat(" ", maxKey+1-codextui.DisplayWidth(labelText))
+			prefix := "\u2022 " + padded
+			avail := maxWidth - codextui.DisplayWidth(prefix)
+			if avail < 1 {
+				// Too narrow for an inline value: stack the value on the next line
+				// (Rust render_stacked_field).
+				lines = append(lines, "\u2022 "+labelText)
+				for _, wl := range wrapValue(value, maxWidth-4) {
+					lines = append(lines, "    "+wl)
+				}
+				continue
+			}
+			valueLines := wrapValue(value, avail)
+			for k, wl := range valueLines {
+				if k == 0 {
+					lines = append(lines, prefix+" "+wl)
+				} else {
+					lines = append(lines, strings.Repeat(" ", codextui.DisplayWidth(prefix)+1)+wl)
+				}
 			}
 		}
 		lines = append(lines, "")
 	}
 	return lines
+}
+
+func wrapValue(value string, width int) []string {
+	if width < 1 {
+		return []string{value}
+	}
+	wrapped := codextui.AdaptiveWrapLine(value, codextui.WrapOptions{Width: width, BreakWords: true})
+	if len(wrapped) == 0 {
+		return []string{""}
+	}
+	return wrapped
 }
 
 func normalizeTableRow(row []string, colCount int) []string {
