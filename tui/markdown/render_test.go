@@ -39,6 +39,21 @@ func TestRenderWithThemeWrappedURLNotMisAnnotated(t *testing.T) {
 	}
 }
 
+func TestRenderWithThemeLongURLClickable(t *testing.T) {
+	url := "https://example.com/" + strings.Repeat("a", 80)
+	source := "See " + url + " end"
+	rendered, err := RenderWithTheme(source, 40, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered, "\x1b]8;;"+url+"\x07"+url+"\x1b]8;;\x07") {
+		t.Fatalf("long URL not annotated as one full hyperlink:\n%q", rendered)
+	}
+	if strings.Contains(rendered, "CODEXURLPROT_") {
+		t.Fatalf("long-URL placeholder leaked into output:\n%q", rendered)
+	}
+}
+
 func TestRenderWithThemePreservesCodeLinesAtNarrowWidth(t *testing.T) {
 	source := "```c\nvoid swap(int *a, int *b) {\n    int temp = *a;\n}\n```"
 	rendered, err := RenderWithTheme(source, 12, "dracula")

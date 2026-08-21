@@ -2,6 +2,7 @@ package markdown
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 
 	codextui "codex_go/tui"
@@ -50,6 +51,7 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 	}
 	text = UnwrapMarkdownFences(text)
 	text, localLinks, webLinks := rewriteLinksWithInfo(text, cwd)
+	urlPlaceholders, text := protectLongBareURLs(text, width)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
 	style := codexMarkdownStyle()
@@ -71,7 +73,77 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 	out = annotateRenderedLineURLs(out)
 	out = annotateWebLinkLabels(out, webLinks)
 	out = annotateLocalFileLinks(out, localLinks, cwd)
+	out = restoreURLPlaceholders(out, urlPlaceholders)
 	return strings.TrimRight(out, "\n"), nil
+}
+
+var bareURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
+
+// protectLongBareURLs replaces bare web URLs that would be hard-wrapped by the
+// renderer (wider than the content width) with short unique placeholders, so the
+// renderer keeps them on one line. After rendering they are restored as a single
+// clickable hyperlink (Rust remap_wrapped_line for over-wide URLs). URLs inside
+// code blocks and markdown link destinations are left untouched.
+func protectLongBareURLs(text string, width int) (map[string]string, string) {
+	if !strings.Contains(text, "http") {
+		return nil, text
+	}
+	threshold := width - 5
+	if threshold < 10 {
+		threshold = 10
+	}
+	data := []byte(text)
+	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
+	codeRanges := collectCodeRanges(document)
+	matches := bareURLPattern.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) == 0 {
+		return nil, text
+	}
+	var sb strings.Builder
+	var placeholders map[string]string
+	cursor := 0
+	id := 0
+	for _, m := range matches {
+		if inCodeRange(m[0], codeRanges) {
+			continue
+		}
+		// Skip markdown link destinations "[label](url)".
+		if m[0] >= 2 && text[m[0]-1] == '(' && text[m[0]-2] == ']' {
+			continue
+		}
+		url := text[m[0]:m[1]]
+		if codextui.DisplayWidth(url) <= threshold {
+			continue
+		}
+		if placeholders == nil {
+			placeholders = map[string]string{}
+		}
+		ph := "CODEXURLPROT_" + strconv.Itoa(id) + "_X_"
+		id++
+		for strings.Contains(text, ph) {
+			ph = "CODEXURLPROT_" + strconv.Itoa(id) + "_X_"
+			id++
+		}
+		placeholders[ph] = url
+		sb.WriteString(text[cursor:m[0]])
+		sb.WriteString(ph)
+		cursor = m[1]
+	}
+	if len(placeholders) == 0 {
+		return nil, text
+	}
+	sb.WriteString(text[cursor:])
+	return placeholders, sb.String()
+}
+
+func restoreURLPlaceholders(rendered string, placeholders map[string]string) string {
+	if len(placeholders) == 0 {
+		return rendered
+	}
+	for ph, url := range placeholders {
+		rendered = strings.ReplaceAll(rendered, ph, codextui.OSC8Hyperlink(url, url))
+	}
+	return rendered
 }
 
 // markdownLinkRE matches simple markdown link spans "[label](dest)" (with an
