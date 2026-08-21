@@ -22,6 +22,7 @@ type TokenBudgetDefaults struct {
 
 type TokenBudgetConfig struct {
 	Enabled                         bool
+	UseHistoryNotesExtension        bool
 	ReminderThresholdTokens         *int
 	ReminderMessageTemplate         string
 	GuidanceMessage                 string
@@ -58,10 +59,15 @@ func (c *Config) TokenBudgetConfigWithDefaults(defaults *TokenBudgetDefaults) (*
 	out.Enabled, _ = table["enabled"].(bool)
 	hasExplicitSettings := false
 	for key := range table {
-		if key != "enabled" {
+		// Rust #39830: use_history_notes_extension is a gate, not an explicit
+		// token-budget setting.
+		if key != "enabled" && key != "use_history_notes_extension" {
 			hasExplicitSettings = true
 			break
 		}
+	}
+	if value, ok := table["use_history_notes_extension"].(bool); ok {
+		out.UseHistoryNotesExtension = value
 	}
 	if out.Enabled && !hasExplicitSettings && defaults != nil {
 		candidate := *out

@@ -18,6 +18,38 @@ func TestTokenBudgetConfigParsesFallback(t *testing.T) {
 	}
 }
 
+func TestTokenBudgetConfigParsesUseHistoryNotesExtensionLikeRust(t *testing.T) {
+	cfg := &Config{Values: map[string]any{"features": map[string]any{"token_budget": map[string]any{
+		"enabled": true, "use_history_notes_extension": true,
+	}}}}
+	got, err := cfg.TokenBudgetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled || !got.UseHistoryNotesExtension {
+		t.Fatalf("config = %+v, want enabled + use_history_notes_extension", got)
+	}
+
+	// The gate alone does not make the token budget explicitly configured, so
+	// model defaults still apply (Rust has_explicit_settings).
+	withDefaults, err := cfg.TokenBudgetConfigWithDefaults(&TokenBudgetDefaults{
+		ReminderThresholdTokens:         12000,
+		ReminderMessageTemplate:         "model reminder",
+		GuidanceMessage:                 "model guidance",
+		AutoCompactFallbackPrompt:       "model fallback",
+		AutoCompactFallbackBufferTokens: 8000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withDefaults.ReminderThresholdTokens == nil || *withDefaults.ReminderThresholdTokens != 12000 {
+		t.Fatalf("gate suppressed model defaults: %+v", withDefaults)
+	}
+	if !withDefaults.UseHistoryNotesExtension {
+		t.Fatalf("gate lost after defaults: %+v", withDefaults)
+	}
+}
+
 func TestTokenBudgetConfigRejectsInvalidFallback(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

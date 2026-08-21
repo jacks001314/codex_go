@@ -83,6 +83,60 @@ func TestLoadProjectInstructionsDeniesUnreadablePathLikeRust(t *testing.T) {
 	}
 }
 
+func TestLoadProjectInstructionsSkipsUntrustedProjectLikeRust(t *testing.T) {
+	// Rust #39837: project-scoped AGENTS.md discovery is skipped for
+	// untrusted projects while user-level instructions are preserved.
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, InstructionsDefaultAgentsMDFilename), []byte("project instructions"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	loaded, err := LoadProjectInstructions(InstructionsLoadConfig{
+		CWD:              root,
+		MaxBytes:         1 << 20,
+		UserInstructions: "user instructions",
+		UntrustedProject: true,
+	})
+	if err != nil {
+		t.Fatalf("LoadProjectInstructions() error = %v", err)
+	}
+	if loaded == nil || loaded.Text() != "user instructions" {
+		t.Fatalf("loaded = %#v, want only user instructions", loaded)
+	}
+	for _, entry := range loaded.Entries {
+		if entry.Provenance == InstructionsProvenanceProject {
+			t.Fatalf("untrusted project leaked project instructions: %#v", entry)
+		}
+	}
+}
+
+func TestInstructionsManagerCacheKeyIncludesTrustLevelLikeRust(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, InstructionsDefaultAgentsMDFilename), []byte("project instructions"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	manager := NewInstructionsManager("user")
+	if err := manager.Refresh(InstructionsLoadConfig{CWD: root, MaxBytes: -1, EnvironmentID: "local"}); err != nil {
+		t.Fatalf("Refresh(trusted) error = %v", err)
+	}
+	trusted := manager.Loaded()
+	if trusted == nil || !strings.Contains(trusted.Text(), "project instructions") {
+		t.Fatalf("trusted loaded = %#v", trusted)
+	}
+	if err := manager.Refresh(InstructionsLoadConfig{CWD: root, MaxBytes: -1, EnvironmentID: "local", UntrustedProject: true}); err != nil {
+		t.Fatalf("Refresh(untrusted) error = %v", err)
+	}
+	untrusted := manager.Loaded()
+	if untrusted == nil || untrusted.Text() != "user" {
+		t.Fatalf("untrusted loaded = %#v, want only user instructions", untrusted)
+	}
+}
+
 func TestLoadedEnvironmentLabeledText(t *testing.T) {
 	loaded := &LoadedInstructions{
 		UserInstructions: "user",

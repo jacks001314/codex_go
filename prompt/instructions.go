@@ -152,11 +152,20 @@ type InstructionsLoadConfig struct {
 	// reject reading a discovered instruction path. A denied instruction file
 	// fails loading instead of silently omitting it (Rust #39653).
 	DenyRead func(path string) bool
+	// UntrustedProject, when set, skips project-scoped AGENTS.md discovery
+	// while preserving user-level instructions (Rust #39837).
+	UntrustedProject bool
 }
 
 func LoadProjectInstructions(config InstructionsLoadConfig) (*LoadedInstructions, error) {
 	loaded := &LoadedInstructions{UserInstructions: config.UserInstructions}
 	if config.MaxBytes == 0 {
+		if loaded.IsEmpty() {
+			return nil, nil
+		}
+		return loaded, nil
+	}
+	if config.UntrustedProject {
 		if loaded.IsEmpty() {
 			return nil, nil
 		}
@@ -277,7 +286,13 @@ func NewInstructionsManager(userInstructions string) *InstructionsManager {
 
 func (m *InstructionsManager) Refresh(config InstructionsLoadConfig) error {
 	config.UserInstructions = m.userInstructions
-	key := config.CWD + "\x00" + strings.Join(config.RootMarkers, "\x00") + "\x00" + strings.Join(config.FallbackNames, "\x00") + "\x00" + config.EnvironmentID
+	// Rust #39837: the active project trust level is part of the instruction
+	// cache key so runtime trust changes reload the applicable instructions.
+	untrusted := ""
+	if config.UntrustedProject {
+		untrusted = "untrusted"
+	}
+	key := config.CWD + "\x00" + strings.Join(config.RootMarkers, "\x00") + "\x00" + strings.Join(config.FallbackNames, "\x00") + "\x00" + config.EnvironmentID + "\x00" + untrusted
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.lastKey == key {

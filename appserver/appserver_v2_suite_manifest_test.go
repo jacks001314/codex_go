@@ -51,6 +51,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "fs", Owner: "appserver", Focus: "fs read/write/watch RPCs"},
 		{Module: "git_attribution", Owner: "appserver, session", Focus: "git attribution propagation"},
 		{Module: "guardian_v2", Owner: "appserver, guardian", Focus: "Guardian V2 approval routing, risk scores and managed-reviewer gating"},
+		{Module: "history_notes_extension", Owner: "token-budget, history, notes", Focus: "history and notes tools for token-budget sessions"},
 		{Module: "hooks_list", Owner: "appserver, tool", Focus: "hooks/list RPC incl. execution mode"},
 		{Module: "host_skills", Owner: "prompt, execserver", Focus: "host-provided skill discovery"},
 		{Module: "imagegen_extension", Owner: "tool, model", Focus: "image generation extension"},

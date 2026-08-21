@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	candidateRustFrom = "9bf673718a4605b49e47d00762121d372af95439"
-	candidateRustTo   = "f20b63e85c459509a7d37181476f84dc8368343f"
-	candidateGoStart  = "5fe232dbae7eec3e44703fde21281b443c16d2e0"
+	candidateRustFrom = "f20b63e85c459509a7d37181476f84dc8368343f"
+	candidateRustTo   = "bd19459358f534ed1cae464ec13d56600aeb45f2"
+	candidateGoStart  = "a56410c23bd95e040f086dff544838c8c5feaa9f"
 )
 
 type alignmentBaseline struct {
@@ -124,8 +124,8 @@ func TestAlignmentCommitLedgerIsComplete(t *testing.T) {
 	if ledger.SchemaVersion != 1 || ledger.RustFromExclusive != candidateRustFrom || ledger.RustToInclusive != candidateRustTo {
 		t.Fatalf("invalid commit ledger header: %#v", ledger)
 	}
-	if len(ledger.Commits) != 38 {
-		t.Fatalf("candidate commit count = %d, want 38", len(ledger.Commits))
+	if len(ledger.Commits) != 3 {
+		t.Fatalf("candidate commit count = %d, want 3", len(ledger.Commits))
 	}
 	shaPattern := regexp.MustCompile(`^[0-9a-f]{40}$`)
 	allowedStatus := map[string]bool{
@@ -145,7 +145,7 @@ func TestAlignmentCommitLedgerIsComplete(t *testing.T) {
 			t.Fatalf("complete commit has no evidence: %s", commit.SHA)
 		}
 	}
-	if ledger.Commits[0].SHA != "bf2aee99c58362d3f588d98432dcbc7adc371c73" || ledger.Commits[len(ledger.Commits)-1].SHA != candidateRustTo {
+	if ledger.Commits[0].SHA != "daa48072f4f507221da313a748c3f7c551ae5500" || ledger.Commits[len(ledger.Commits)-1].SHA != candidateRustTo {
 		t.Fatalf("candidate commit ledger boundary mismatch: first=%s last=%s", ledger.Commits[0].SHA, ledger.Commits[len(ledger.Commits)-1].SHA)
 	}
 }

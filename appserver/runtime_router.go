@@ -29,6 +29,7 @@ import (
 	codexctx "codex_go/context"
 	"codex_go/execserver"
 	"codex_go/features"
+	"codex_go/historynotes"
 	"codex_go/install"
 	"codex_go/mcp"
 	"codex_go/model"
@@ -4210,16 +4211,25 @@ func (r *RuntimeRouter) threadStartInstructions(params *ThreadStartParams) (stri
 		}
 		cwd := r.effectiveThreadStartCWD(params)
 		var denyRead func(string) bool
+		untrustedProject := false
 		if cfg, cfgErr := r.effectiveConfigForThreadStart(params); cfgErr == nil && cfg != nil {
+			// Rust #39837: project-scoped AGENTS.md discovery is skipped for
+			// untrusted projects while user-level instructions are preserved.
+			if root := config.ActiveProjectRoot(cwd); root != "" {
+				if level, ok := config.ProjectTrustLevelForTarget(cfg.Values, root); ok && strings.EqualFold(level, "untrusted") {
+					untrustedProject = true
+				}
+			}
 			if resolution, resolveErr := turnSandboxPermissionProfile(cfg, cwd, nil); resolveErr == nil && resolution != nil && resolution.Profile != nil {
 				profile := resolution.Profile
 				denyRead = func(path string) bool { return profile.DeniesReadPath(path) }
 			}
 		}
 		loaded, err := promptctx.LoadProjectInstructions(promptctx.InstructionsLoadConfig{
-			CWD:      cwd,
-			MaxBytes: maxBytes,
-			DenyRead: denyRead,
+			CWD:              cwd,
+			MaxBytes:         maxBytes,
+			DenyRead:         denyRead,
+			UntrustedProject: untrustedProject,
 		})
 		if err != nil {
 			return "", nil, err
@@ -11338,7 +11348,14 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.ViewImage = viewImageOptions
 	options.ThreadID = threadID
 	options.TurnID = strings.TrimSpace(turnID)
-	options.ExtraTools = goalToolExecutors
+	historyNotesTools := []tool.Executor(nil)
+	if cfg != nil {
+		if tokenBudget, tokenErr := cfg.TokenBudgetConfig(); tokenErr == nil && tokenBudget != nil && tokenBudget.UseHistoryNotesExtension {
+			historyNotesTools = r.historyNotesToolsForTurn(cfg, params, threadID)
+		}
+	}
+	extraTools := append(goalToolExecutors, historyNotesTools...)
+	options.ExtraTools = extraTools
 	// Rust 97729885d4: expose the shared root-session ID to model-reachable
 	// shell commands as CODEX_SESSION_ID. Fall back to the thread ID when the
 	// session record is unavailable.
@@ -11347,6 +11364,57 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.SessionID = record.SessionID
 	}
 	return turn.BuildToolRouter(options)
+}
+
+// historyNotesToolsForTurn mirrors Rust HistoryNotesExtension::tools (#39827):
+// the nine history/notes tools are exposed for token-budget sessions when the
+// extension gate is enabled, the provider is OpenAI, and the auth uses the
+// Codex backend. A backend/auth resolution failure disables the surface rather
+// than failing the turn.
+func (r *RuntimeRouter) historyNotesToolsForTurn(cfg *config.Config, params *turn.TurnStartParams, threadID string) []tool.Executor {
+	if r == nil || cfg == nil {
+		return nil
+	}
+	modelProviderConfig, err := r.appTurnModelProviderConfig(cfg, params)
+	if err != nil {
+		return nil
+	}
+	providerInfo, err := model.ProviderForConfigID(configValues(cfg), modelProviderConfig.ProviderID, stringConfigValue(cfg, "openai_base_url"))
+	if err != nil || providerInfo == nil || !providerInfo.IsOpenAI() {
+		return nil
+	}
+	resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())
+	if err != nil || resolved == nil || (&resolved.Auth).BackendMode() != "chatgpt" {
+		return nil
+	}
+	runtimeProvider := model.CreateRuntimeProviderForID(modelProviderConfig.ProviderID, *providerInfo, &resolved.Auth)
+	apiProvider, err := runtimeProvider.APIProvider()
+	if err != nil {
+		return nil
+	}
+	authHeaders, err := runtimeProvider.APIAuth()
+	if err != nil {
+		return nil
+	}
+	sessionID := strings.TrimSpace(threadID)
+	agentName := "root"
+	if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
+		if strings.TrimSpace(record.SessionID) != "" {
+			sessionID = strings.TrimSpace(record.SessionID)
+		}
+		if path := strings.TrimSpace(record.Metadata.AgentPath); path != "" {
+			agentName = path
+		}
+	}
+	backend := &historynotes.Backend{
+		BaseURL: strings.TrimRight(strings.TrimSpace(apiProvider.BaseURL), "/"),
+		ApplyAuth: func(request *http.Request, body []byte) error {
+			_, err := authHeaders.ApplyRequest(context.Background(), request, body)
+			return err
+		},
+		HTTPDoer: r.httpClientForConfig(cfg).Do,
+	}
+	return historynotes.Tools(backend, sessionID, agentName)
 }
 
 // requestPermissionsGuardianReviewer routes request_permissions calls through
