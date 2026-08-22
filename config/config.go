@@ -397,8 +397,36 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {
 			return nil, err
 		}
+		if err := validateBrowserComputerUseConfigValues(cfg.Values); err != nil {
+			return nil, err
+		}
 	}
 	return cfg, nil
+}
+
+func validateBrowserComputerUseConfigValues(values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	if raw, ok := values["browser_use"]; ok {
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("browser_use must be a table")
+		}
+		if err := validateBrowserUseConfigValues(table); err != nil {
+			return err
+		}
+	}
+	if raw, ok := values["computer_use"]; ok {
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("computer_use must be a table")
+		}
+		if err := validateComputerUseConfigValues(table); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var knownTopLevelConfigFields = map[string]struct{}{
@@ -411,10 +439,12 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"approval_policy":                   {},
 	"approvals_reviewer":                {},
 	"auto_review":                       {},
+	"browser_use":                       {},
 	"chatgpt_base_url":                  {},
 	"check_for_update_on_startup":       {},
 	"cli_auth_credentials_store":        {},
 	"compact_prompt":                    {},
+	"computer_use":                      {},
 	"default_permissions":               {},
 	"desktop":                           {},
 	"developer_instructions":            {},

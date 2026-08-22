@@ -237,6 +237,8 @@ var configRequiredNullableKeys = []string{
 	"service_tier",
 	"analytics",
 	"apps",
+	"browser_use",
+	"computer_use",
 	"desktop",
 }
 
