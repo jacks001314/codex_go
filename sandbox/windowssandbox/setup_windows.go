@@ -23,6 +23,9 @@ const (
 
 	errorCancelled        windows.Errno = 1223
 	seeMaskNoCloseProcess               = 0x00000040
+	// seeMaskNoAsync mirrors Rust #39971: sandbox setup runs on a thread without
+	// a Windows message loop, so ShellExecuteExW requires synchronous activation.
+	seeMaskNoAsync        = 0x00000001
 	shellExecuteShowHide                = 0
 )
 
@@ -307,7 +310,7 @@ func runSetupExeElevated(exe string, payloadB64 string, useDispatchFlag bool) (i
 	}
 	sei := shellExecuteInfoW{
 		CbSize:       uint32(unsafe.Sizeof(shellExecuteInfoW{})),
-		FMask:        seeMaskNoCloseProcess,
+		FMask:        seeMaskNoCloseProcess | seeMaskNoAsync,
 		LpVerb:       verbW,
 		LpFile:       exeW,
 		LpParameters: paramsW,
