@@ -106,17 +106,17 @@ func NewKeymapActionMenuView(item KeymapActionItem) SelectionView {
 	currentBinding := strings.Join(item.Bindings, ", ")
 	switch len(item.Bindings) {
 	case 0:
-		items = append(items, SelectionItem{ID: "set", Name: "Set key", Description: "Capture a key for this unbound action.", SelectedDescription: "Capture one key and bind this action.", Action: KeymapActionSetBinding, DismissOnSelect: true})
+		items = append(items, SelectionItem{ID: "set", Name: "Set key", Description: "Capture a key for this unbound action.", Action: KeymapActionSetBinding, DismissOnSelect: true})
 	case 1:
 		items = append(items,
-			SelectionItem{ID: "set", Name: "Replace binding", Description: "Capture a replacement key.", SelectedDescription: "Capture one key and replace `" + currentBinding + "`.", Action: KeymapActionSetBinding, DismissOnSelect: true},
-			SelectionItem{ID: "add", Name: "Add alternate binding", Description: "Keep the current binding and add another key.", SelectedDescription: "Capture one key and keep `" + currentBinding + "` as an alternate.", Action: KeymapActionAddBinding, DismissOnSelect: true},
+			SelectionItem{ID: "set", Name: "Replace binding", Description: "Capture a replacement key for `" + currentBinding + "`.", Action: KeymapActionSetBinding, DismissOnSelect: true},
+			SelectionItem{ID: "add", Name: "Add alternate binding", Description: "Keep `" + currentBinding + "` and add another key.", Action: KeymapActionAddBinding, DismissOnSelect: true},
 		)
 	default:
 		items = append(items,
-			SelectionItem{ID: "replace_one", Name: "Replace one binding...", Description: "Choose which existing binding to replace.", SelectedDescription: "Pick one current binding, then capture its replacement.", Action: KeymapActionReplaceBinding},
-			SelectionItem{ID: "set", Name: "Replace all bindings", Description: "Replace every current binding with one key.", SelectedDescription: "Capture one key and replace `" + currentBinding + "`.", Action: KeymapActionSetBinding, DismissOnSelect: true},
-			SelectionItem{ID: "add", Name: "Add alternate binding", Description: "Keep current bindings and add another key.", SelectedDescription: "Capture one key and keep `" + currentBinding + "`.", Action: KeymapActionAddBinding, DismissOnSelect: true},
+			SelectionItem{ID: "replace_one", Name: "Replace one binding...", Description: "Choose which existing binding to replace.", Action: KeymapActionReplaceBinding},
+			SelectionItem{ID: "set", Name: "Replace all bindings", Description: "Replace `" + currentBinding + "` with one key.", Action: KeymapActionSetBinding, DismissOnSelect: true},
+			SelectionItem{ID: "add", Name: "Add alternate binding", Description: "Keep `" + currentBinding + "` and add another key.", Action: KeymapActionAddBinding, DismissOnSelect: true},
 		)
 	}
 	removeReason := ""
@@ -155,7 +155,7 @@ func NewKeymapReplaceBindingMenuView(item KeymapActionItem) SelectionView {
 		items = append(items, SelectionItem{
 			ID:              binding,
 			Name:            binding,
-			Description:     "Replace this binding",
+			Description:     "Replace `" + binding + "` with another key.",
 			Action:          KeymapActionReplaceBinding,
 			DismissOnSelect: true,
 		})
