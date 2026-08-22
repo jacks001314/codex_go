@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,7 +12,13 @@ const valueOf = (name) => {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
 };
-const version = (valueOf("--version") || "").replace(/^v/, "");
+let version = (valueOf("--version") || "").replace(/^v/, "");
+if (!version) {
+  const versionFile = path.resolve(root, "VERSION");
+  if (existsSync(versionFile)) {
+    version = readFileSync(versionFile, "utf8").trim().replace(/^v/, "");
+  }
+}
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
   throw new Error("Usage: node npm/scripts/build-packages.mjs --version 1.2.3 [--output-dir dist/npm]");
 }
@@ -24,11 +30,11 @@ mkdirSync(stageRoot, { recursive: true });
 
 const targets = [
   { goos: "linux", goarch: "amd64", npmOS: "linux", npmCPU: "x64", targetTriple: "x86_64-unknown-linux-musl" },
-  //{ goos: "linux", goarch: "arm64", npmOS: "linux", npmCPU: "arm64", targetTriple: "aarch64-unknown-linux-musl" },
-  //{ goos: "darwin", goarch: "amd64", npmOS: "darwin", npmCPU: "x64", targetTriple: "x86_64-apple-darwin" },
-  //{ goos: "darwin", goarch: "arm64", npmOS: "darwin", npmCPU: "arm64", targetTriple: "aarch64-apple-darwin" },
+  { goos: "linux", goarch: "arm64", npmOS: "linux", npmCPU: "arm64", targetTriple: "aarch64-unknown-linux-musl" },
+  { goos: "darwin", goarch: "amd64", npmOS: "darwin", npmCPU: "x64", targetTriple: "x86_64-apple-darwin" },
+  { goos: "darwin", goarch: "arm64", npmOS: "darwin", npmCPU: "arm64", targetTriple: "aarch64-apple-darwin" },
   { goos: "windows", goarch: "amd64", npmOS: "win32", npmCPU: "x64", targetTriple: "x86_64-pc-windows-msvc" },
-  //{ goos: "windows", goarch: "arm64", npmOS: "win32", npmCPU: "arm64", targetTriple: "aarch64-pc-windows-msvc" },
+  { goos: "windows", goarch: "arm64", npmOS: "win32", npmCPU: "arm64", targetTriple: "aarch64-pc-windows-msvc" },
 ];
 
 function run(command, commandArgs, options = {}) {

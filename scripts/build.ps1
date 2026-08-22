@@ -31,6 +31,11 @@ function Resolve-Version {
     if (-not [string]::IsNullOrWhiteSpace($env:CODEX_GO_VERSION)) {
         return $env:CODEX_GO_VERSION.TrimStart("v")
     }
+    $VersionFile = Join-Path $Root "VERSION"
+    if (Test-Path -LiteralPath $VersionFile) {
+        $FileVersion = ([System.IO.File]::ReadAllText($VersionFile)).Trim().TrimStart("v")
+        if ($FileVersion) { return $FileVersion }
+    }
     $tag = Invoke-GitText -Arguments @("describe", "--tags", "--exact-match", "HEAD")
     if ($tag) {
         return $tag -replace "^(?:go-)?v", ""

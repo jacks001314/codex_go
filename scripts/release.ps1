@@ -1,6 +1,5 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
     [string]$Version,
     [string]$OutputDir,
     [string[]]$Targets = @(
@@ -15,6 +14,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $VersionFile = Join-Path $Root "VERSION"
+    if (Test-Path -LiteralPath $VersionFile) {
+        $Version = ([System.IO.File]::ReadAllText($VersionFile)).Trim()
+    } else {
+        throw "Version required (-Version or a VERSION file at $VersionFile)."
+    }
+}
 $Version = $Version.TrimStart("v")
 if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
     throw "Version must be semantic version text such as 1.2.3 or 1.2.3-beta.1."

@@ -23,8 +23,11 @@ const tarballs = readdirSync(packageDir)
   .map((file) => path.join(packageDir, file));
 const main = tarballs.filter((file) => /jacks001314-codex-go-\d/.test(path.basename(file)));
 const platforms = tarballs.filter((file) => !main.includes(file));
-if (main.length !== 1 || platforms.length !== 6) {
-  throw new Error(`Expected six platform packages and one main package in ${packageDir}; found ${platforms.length} platform and ${main.length} main packages.`);
+if (main.length !== 1) {
+  throw new Error(`Expected exactly one main package in ${packageDir}; found ${main.length}.`);
+}
+if (platforms.length === 0) {
+  throw new Error(`Expected at least one platform package in ${packageDir}; found none.`);
 }
 
 for (const tarball of [...platforms.sort(), main[0]]) {

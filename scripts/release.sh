@@ -34,6 +34,15 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+if [ -z "$VERSION" ]; then
+  if [ -f "$ROOT/VERSION" ]; then
+    VERSION=$(cat "$ROOT/VERSION" | tr -d ' \t\r\n')
+  else
+    echo "Version required (use --version or create $ROOT/VERSION)." >&2
+    exit 2
+  fi
+fi
+
 VERSION=$(printf '%s' "$VERSION" | sed 's/^v//')
 if ! printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
   echo "Version must be semantic version text such as 1.2.3 or 1.2.3-beta.1." >&2

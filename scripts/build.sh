@@ -49,6 +49,11 @@ HOST_GOARCH=$(go env GOARCH)
 TARGET_GOOS=${TARGET_GOOS:-$HOST_GOOS}
 TARGET_GOARCH=${TARGET_GOARCH:-$HOST_GOARCH}
 
+if [ -z "$VERSION" ] && [ -f "$ROOT/VERSION" ]; then
+  # Single source of truth: the root VERSION file (strip a leading 'v').
+  VERSION=$(sed 's/^v//' "$ROOT/VERSION" | tr -d ' \t\r\n')
+fi
+
 if [ -z "$VERSION" ]; then
   VERSION=$(git -C "$ROOT" describe --tags --exact-match HEAD 2>/dev/null || true)
   VERSION=$(printf '%s' "$VERSION" | sed -E 's/^(go-)?v//')

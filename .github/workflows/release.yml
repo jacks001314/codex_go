@@ -1,0 +1,119 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.out.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate tag and VERSION
+        id: out
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] || { echo "Not a tag ref"; exit 1; }
+          tag="${GITHUB_REF_NAME#v}"
+          [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "Tag '${GITHUB_REF_NAME}' is not a valid semver"; exit 1;
+          }
+          file_version="$(tr -d '\r\n' < VERSION)"
+          [[ "$tag" == "$file_version" ]] || {
+            echo "Tag ${tag} != VERSION ${file_version}"; exit 1;
+          }
+          echo "version=${tag}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Install zip (for Windows archives)
+        run: sudo apt-get update && sudo apt-get install -y zip
+      - name: Build cross-platform archives
+        run: scripts/release.sh --version "$VERSION" --output-dir "dist/v$VERSION"
+      - name: Stage installers
+        run: |
+          cp scripts/install.sh "dist/v$VERSION/install.sh"
+          cp scripts/install.ps1 "dist/v$VERSION/install.ps1"
+          # If a config JSON Schema is generated in the future, stage it here:
+          # cp <schema-path> "dist/v$VERSION/config-schema.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/v$VERSION
+
+  npm:
+    # Only publish when an npm token is configured for the @jacks001314 scope.
+    if: ${{ secrets.NPM_TOKEN != '' }}
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Stage npm packages (6 platforms)
+        run: node npm/scripts/build-packages.mjs --version "$VERSION" --output-dir "dist/v$VERSION/npm"
+      - name: Publish npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="latest"
+          [[ "$VERSION" == *-alpha.* ]] && tag="alpha"
+          echo "Publishing @jacks001314/codex-go@$VERSION with tag '$tag'"
+          node npm/scripts/publish-packages.mjs --directory "dist/v$VERSION/npm" --tag "$tag"
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+      - name: Generate release notes from the tag commit
+        run: |
+          commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          git log -1 --format=%B "${commit}" > "${RUNNER_TEMP}/release-notes.md"
+          echo >> "${RUNNER_TEMP}/release-notes.md"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ env.VERSION }}
+          tag_name: ${{ github.ref_name }}
+          body_path: ${{ runner.temp }}/release-notes.md
+          files: dist/**
+          make_latest: ${{ !contains(needs.validate.outputs.version, '-') }}
+          prerelease: ${{ contains(needs.validate.outputs.version, '-') }}

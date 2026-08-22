@@ -12,3 +12,4 @@ bin/
 !sandbox/windowssandbox/bin/**
 dist/
 func.md
+npm_token.md
