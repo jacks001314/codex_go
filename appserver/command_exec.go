@@ -141,6 +141,11 @@ func (a *managedCommandExec) startCommand(cmd *osexec.Cmd) error {
 type CommandExecOptions struct {
 	ConnectionID              string
 	PermissionProfileResolver CommandExecPermissionProfileResolver
+	// ManagedDenyReadEntries carries the effective config's managed filesystem
+	// deny_read rules (#40004) so a request-specific sandbox policy cannot
+	// weaken them. They are merged into the resolved profile and conflicting
+	// overrides are rejected.
+	ManagedDenyReadEntries []sandbox.FileSystemSandboxEntry
 	// ApplyPatchPreserveLineEndings carries the apply_patch line-ending
 	// rollout state (Rust c9c6c0daa9) into command/exec child processes.
 	ApplyPatchPreserveLineEndings bool
@@ -217,7 +222,7 @@ func (s *CommandExecService) ExecuteWithOptions(ctx context.Context, params *Com
 		return nil, err
 	}
 	cwd := commandExecCWD(params, defaultCWD)
-	resolution, err := resolveCommandExecSandbox(params, cwd, commandExecPermissionProfileResolver(options))
+	resolution, err := resolveCommandExecSandbox(params, cwd, commandExecPermissionProfileResolver(options), options)
 	if err != nil {
 		return nil, err
 	}
@@ -736,9 +741,13 @@ func commandExecFinalResponse(exitCode int32, stdout *commandExecOutputBuffer, s
 	return response
 }
 
-func resolveCommandExecSandbox(params *CommandExecParams, cwd string, resolver CommandExecPermissionProfileResolver) (*commandExecSandboxResolution, error) {
+func resolveCommandExecSandbox(params *CommandExecParams, cwd string, resolver CommandExecPermissionProfileResolver, options *CommandExecOptions) (*commandExecSandboxResolution, error) {
 	if params == nil {
 		return &commandExecSandboxResolution{}, nil
+	}
+	managedDenyRead := []sandbox.FileSystemSandboxEntry(nil)
+	if options != nil {
+		managedDenyRead = options.ManagedDenyReadEntries
 	}
 	if params.PermissionProfile != nil {
 		profileID := strings.TrimSpace(*params.PermissionProfile)
@@ -751,6 +760,9 @@ func resolveCommandExecSandbox(params *CommandExecParams, cwd string, resolver C
 		}
 		if resolved == nil || resolved.Profile == nil {
 			return nil, jsonRPCInvalidRequest(fmt.Sprintf("command/exec permissionProfile %q did not resolve to a profile", profileID))
+		}
+		if err := mergeManagedDenyRead(resolved.Profile, managedDenyRead); err != nil {
+			return nil, jsonRPCInvalidRequest(err.Error())
 		}
 		resolvedID := strings.TrimSpace(resolved.ID)
 		if resolvedID == "" {
@@ -773,8 +785,27 @@ func resolveCommandExecSandbox(params *CommandExecParams, cwd string, resolver C
 		return &commandExecSandboxResolution{PermissionProfileID: &profileID, PermissionProfile: profile}, nil
 	default:
 		profileID := commandExecSandboxPolicyProfileID(params.SandboxPolicy)
+		if err := mergeManagedDenyRead(profile, managedDenyRead); err != nil {
+			return nil, jsonRPCInvalidRequest(err.Error())
+		}
 		return &commandExecSandboxResolution{PermissionProfileID: &profileID, PermissionProfile: profile}, nil
 	}
+}
+
+// mergeManagedDenyRead appends the managed deny_read rules to a permission
+// profile and rejects overrides that would grant read access to a managed
+// denied path (#40004).
+func mergeManagedDenyRead(profile *sandbox.PermissionProfile, managedDenyRead []sandbox.FileSystemSandboxEntry) error {
+	if profile == nil || len(managedDenyRead) == 0 {
+		return nil
+	}
+	// A full-access (unsandboxed) profile would bypass the managed deny_read
+	// rules, so reject it as a conflict (#40004).
+	if profile.Disabled || (profile.SandboxPolicy != nil && profile.SandboxPolicy.Kind == sandbox.SandboxDangerFullAccess) {
+		return fmt.Errorf("sandbox policy grants full access and conflicts with managed deny_read rules")
+	}
+	profile.DeniedReadEntries = append(profile.DeniedReadEntries, managedDenyRead...)
+	return nil
 }
 
 func commandExecSandboxPolicyProfileID(policy *sandbox.SandboxPolicy) string {

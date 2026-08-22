@@ -9836,8 +9836,58 @@ func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecRespons
 		// Rust c9c6c0daa9: the active feature configuration is authoritative over
 		// client-provided environment values.
 		options.ApplyPatchPreserveLineEndings = r.applyPatchPreserveLineEndingsFromConfig()
+		options.ManagedDenyReadEntries = r.commandExecManagedDenyReadEntries()
 	}
 	return r.requireCommandExec().ExecuteWithOptions(nil, &params, r.services.DefaultCWD, r.notify, options)
+}
+
+// commandExecManagedDenyReadEntries returns the effective config's managed
+// requirements `[permissions.filesystem] deny_read` rules so request-specific
+// command/exec sandbox policies cannot weaken them (#40004).
+func (r *RuntimeRouter) commandExecManagedDenyReadEntries() []sandbox.FileSystemSandboxEntry {
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	response := r.services.Config.Requirements()
+	if response == nil || response.Requirements == nil || response.Requirements.Permissions == nil {
+		return nil
+	}
+	return managedDenyReadEntriesFromPerms(response.Requirements.Permissions)
+}
+
+func managedDenyReadEntriesFromPerms(perms map[string]any) []sandbox.FileSystemSandboxEntry {
+	filesystem, ok := perms["filesystem"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	raw, ok := filesystem["deny_read"]
+	if !ok {
+		return nil
+	}
+	out := []sandbox.FileSystemSandboxEntry(nil)
+	appendPath := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		out = append(out, sandbox.FileSystemSandboxEntry{
+			Path:   sandbox.FileSystemPath{Type: "path", Path: filepath.Clean(path)},
+			Access: sandbox.FileSystemAccessDeny,
+		})
+	}
+	switch items := raw.(type) {
+	case []any:
+		for _, item := range items {
+			if path, ok := item.(string); ok {
+				appendPath(path)
+			}
+		}
+	case map[string]any:
+		for path := range items {
+			appendPath(path)
+		}
+	}
+	return out
 }
 
 func (r *RuntimeRouter) commandExecPermissionProfileResolver() CommandExecPermissionProfileResolver {
