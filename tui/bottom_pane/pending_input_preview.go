@@ -87,7 +87,10 @@ func pushSectionHeader(lines *[]string, width int, header string) {
 
 func pushPreview(lines *[]string, width int, text string) {
 	wrapped := []string{}
-	for _, rawLine := range rustLines(text) {
+	// Mirror Rust's `.take(PREVIEW_LINE_LIMIT + 1)` (#39864): wrap only the first
+	// four source lines so oversized multiline inputs don't force wrapping work on
+	// the whole text; the extra line detects overflow and renders the ellipsis.
+	for _, rawLine := range takeLines(rustLines(text), PreviewLineLimit+1) {
 		wrapped = append(wrapped, tui.AdaptiveWrapLine(rawLine, tui.WrapOptions{
 			Width:            width,
 			InitialIndent:    "  \u21ab ",
@@ -100,6 +103,13 @@ func pushPreview(lines *[]string, width int, text string) {
 	if len(wrapped) > PreviewLineLimit {
 		*lines = append(*lines, "    \u2026")
 	}
+}
+
+func takeLines(lines []string, n int) []string {
+	if n < len(lines) {
+		return lines[:n]
+	}
+	return lines
 }
 
 func rustLines(text string) []string {

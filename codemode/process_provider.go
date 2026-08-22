@@ -16,7 +16,10 @@ import (
 	"codex_go/tool"
 )
 
-const processHostHandshakeTimeout = 10 * time.Second
+// localHostStartupTimeout mirrors Rust's LOCAL_HOST_STARTUP_TIMEOUT (#39940):
+// locally spawned code-mode hosts get a generous 30s handshake window, while the
+// WebSocket connection owner keeps the shorter host-handshake timeout elsewhere.
+const localHostStartupTimeout = 30 * time.Second
 
 type ProcessProvider struct {
 	program string
@@ -71,7 +74,7 @@ func (p *ProcessProvider) connect(ctx context.Context) (*remoteConnection, error
 	if err != nil {
 		return nil, err
 	}
-	handshakeCtx, cancel := context.WithTimeout(ctx, processHostHandshakeTimeout)
+	handshakeCtx, cancel := context.WithTimeout(ctx, localHostStartupTimeout)
 	defer cancel()
 	connection, err := connectRemoteTransport(handshakeCtx, transport)
 	if err != nil {
