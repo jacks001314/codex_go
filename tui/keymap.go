@@ -32,6 +32,7 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("global", "Global", "toggle_raw_output", "Toggle raw scrollback mode.", []string{"alt-r"}),
 	keymapAction("global", "Global", "toggle_side_conversation", "Switch between a side conversation and its parent.", []string{"ctrl-/"}),
 	keymapAction("chat", "Chat", "interrupt_turn", "Interrupt the active turn.", []string{"esc"}),
+	keymapAction("chat", "Chat", "toggle_voice_mute", "Toggle the microphone in an active voice conversation.", nil),
 	keymapAction("chat", "Chat", "decrease_reasoning_effort", "Decrease reasoning effort.", []string{"alt-,", "shift-down"}),
 	keymapAction("chat", "Chat", "increase_reasoning_effort", "Increase reasoning effort.", []string{"alt-.", "shift-up"}),
 	keymapAction("chat", "Chat", "edit_queued_message", "Edit the most recently queued message.", []string{"alt-up", "shift-left"}),
