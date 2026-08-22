@@ -901,6 +901,7 @@ type Model struct {
 	keymapConfig             *codextui.KeymapConfig
 	keymapSelectedContext    string
 	keymapSelectedAction     string
+	copyTargets              []chatwidget.CopyTarget
 	onKeymapEdit             KeymapEditFunc
 	onModalResponse          ModalResponseFunc
 	onSessionAction          SessionActionFunc
@@ -4914,15 +4915,46 @@ func (m *Model) copyLastAgentResponse() {
 		m.refreshTranscript()
 		return
 	}
-	if err := m.clipboardWrite(text); err != nil {
-		m.notice = "Copy failed: " + err.Error()
+	// Rust #39997: /copy opens a picker with the whole response plus each fenced
+	// code block and blockquote so the user can copy an individual target.
+	targets := chatwidget.CopyTargetsFromMarkdown(text)
+	if len(targets) == 0 {
+		m.notice = "No agent response to copy"
 		m.addErrorHistoryMessage(m.notice)
 		m.refreshTranscript()
 		return
 	}
-	m.notice = "Copied last message to clipboard"
+	m.copyTargets = targets
+	m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewCopyTargetPickerView(text))
+}
+
+func (m *Model) applyCopyTargetModalOption(optionID string) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	target, ok := chatwidget.CopyTargetForID(m.copyTargets, optionID)
+	if !ok {
+		m.notice = "Copy failed: selected target not found"
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
+		return nil
+	}
+	if m.clipboardWrite == nil {
+		m.notice = "Copy failed: clipboard is unavailable"
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
+		return nil
+	}
+	if err := m.clipboardWrite(target.Text); err != nil {
+		m.notice = "Copy failed: " + err.Error()
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
+		return nil
+	}
+	m.notice = "Copied " + target.Label + " to clipboard"
 	m.addInfoHistoryMessage(m.notice)
 	m.refreshTranscript()
+	return nil
 }
 
 const rawOutputModeOnNotice = "Raw output mode on: transcript text is shown for clean terminal selection."

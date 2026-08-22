@@ -1290,10 +1290,14 @@ func TestModelCopiesLastAgentResponse(t *testing.T) {
 	})
 
 	model.Update(key(bubbletea.KeyCtrlO))
+	if !strings.Contains(model.View(), "Copy response as") {
+		t.Fatalf("copy should open a target picker:\n%s", model.View())
+	}
+	model.Update(key(bubbletea.KeyEnter))
 	if copied != "second" {
 		t.Fatalf("copied = %q, want second", copied)
 	}
-	if !strings.Contains(model.View(), "Copied last message to clipboard") {
+	if !strings.Contains(model.View(), "Copied Whole response to clipboard") {
 		t.Fatalf("copy notice missing:\n%s", model.View())
 	}
 }
@@ -1329,13 +1333,17 @@ func TestModelSlashCopyLastAgentResponse(t *testing.T) {
 
 	typeText(t, model, "/copy")
 	model.Update(key(bubbletea.KeyEnter))
+	if !strings.Contains(model.View(), "Copy response as") {
+		t.Fatalf("/copy should open a target picker:\n%s", model.View())
+	}
+	model.Update(key(bubbletea.KeyEnter))
 	if copied != "final answer" {
 		t.Fatalf("copied = %q, want final answer", copied)
 	}
 	if len(model.SubmittedPrompts()) != 0 {
 		t.Fatalf("slash copy should not submit a prompt")
 	}
-	if !strings.Contains(model.View(), "Copied last message to clipboard") {
+	if !strings.Contains(model.View(), "Copied Whole response to clipboard") {
 		t.Fatalf("copy notice missing:\n%s", model.View())
 	}
 }
@@ -4138,14 +4146,14 @@ func TestModelKeymapActionMenuResponsiveWidthsMatchRust(t *testing.T) {
 			t.Fatalf("width %d disabled gutter mismatch:\n%s", width, rendered)
 		}
 		if width < 96 {
-			if !strings.Contains(rendered, "Replace binding\n     Capture one key and replace `ctrl-t`.") {
-				t.Fatalf("width %d should stack selected description:\n%s", width, rendered)
+			if !strings.Contains(rendered, "Replace binding\n     Capture a replacement key for `ctrl-t`.") {
+				t.Fatalf("width %d should stack the binding-aware description:\n%s", width, rendered)
 			}
 			continue
 		}
 		var twoColumn bool
 		for _, line := range strings.Split(rendered, "\n") {
-			if strings.Contains(line, "Replace binding") && strings.Contains(line, "Capture one key and replace `ctrl-t`.") {
+			if strings.Contains(line, "Replace binding") && strings.Contains(line, "Capture a replacement key for `ctrl-t`.") {
 				twoColumn = true
 			}
 		}

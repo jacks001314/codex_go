@@ -771,6 +771,14 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		return m.applyKeymapModalOption(modal.id, response.OptionID)
 	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.CopyTargetPickerViewID {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyCopyTargetModalOption(response.OptionID)
+	}
 	m.modal = nil
 	if !cancelled && len(modal.options) > 0 {
 		if notice != "" {
