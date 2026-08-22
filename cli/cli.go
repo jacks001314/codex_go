@@ -2662,6 +2662,25 @@ func parseQueue(args []string, queue *QueueOptions) error {
 func parseAgents(args []string, agents *AgentsOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		// Agents-specific flags that must preserve raw values or are exclusive
+		// to the dashboard invocation (Rust #39870 keeps these on the raw
+		// value path rather than the shared session-config parser).
+		switch {
+		case arg == "-C" || arg == "--cd":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			agents.Cwd = value
+			i = next
+			continue
+		case strings.HasPrefix(arg, "--cd="):
+			agents.Cwd = strings.TrimPrefix(arg, "--cd=")
+			continue
+		case arg == "--no-alt-screen":
+			agents.NoAltScreen = true
+			continue
+		}
 		if matched, err := parseSharedOption(args, &i, &agents.Shared); err != nil {
 			return err
 		} else if matched {
@@ -2716,26 +2735,12 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 			agents.ConfigOverrides = append(agents.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			agents.ConfigOverrides = append(agents.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
-		case arg == "-C" || arg == "--cd":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			agents.Cwd = value
-			i = next
-		case strings.HasPrefix(arg, "--cd="):
-			agents.Cwd = strings.TrimPrefix(arg, "--cd=")
-		case arg == "--no-alt-screen":
-			agents.NoAltScreen = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("unknown agents option %s", arg)
 			}
 			return fmt.Errorf("`codex agents` does not accept argument %s", arg)
 		}
-	}
-	if strings.TrimSpace(agents.Cwd) == "" && strings.TrimSpace(agents.Shared.CWD) != "" {
-		agents.Cwd = agents.Shared.CWD
 	}
 	if agents.Shared.NoAltScreen {
 		agents.NoAltScreen = true

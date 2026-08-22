@@ -73,14 +73,25 @@ func TestParseAgentsCommandAcceptsDashboardFlagsLikeRust(t *testing.T) {
 	if parsed.Agents.Cwd != "/other" || parsed.Agents.Remote != "ws://127.0.0.1:1234" {
 		t.Fatalf("Agents options = %#v", parsed.Agents)
 	}
+
+	// Rust #39870: codex agents accepts invocation-specific session config
+	// (model / approval / sandbox / search / cwd) but not prompt, images, or
+	// local provider / add-dir (remote).
+	parsed, err = cli.Parse([]string{"agents", "--model", "gpt-5.6-sol", "--search"})
+	if err != nil {
+		t.Fatalf("Parse(agents --model --search) error = %v", err)
+	}
+	if parsed.Agents.Shared.Model != "gpt-5.6-sol" || !parsed.Agents.Shared.Search {
+		t.Fatalf("Agents shared options = %#v", parsed.Agents.Shared)
+	}
 }
 
 func TestParseAgentsCommandRejectsInvocationOverridesLikeRust(t *testing.T) {
 	for _, args := range [][]string{
 		{"agents", "positional"},
-		{"agents", "--model", "gpt-5.6-sol"},
 		{"agents", "--bogus"},
 		{"agents", "--prompt", "hello"},
+		{"agents", "--image", "x.png"},
 	} {
 		if _, err := cli.Parse(args); err == nil {
 			t.Fatalf("Parse(%v) succeeded, want rejection of invocation-specific overrides", args)

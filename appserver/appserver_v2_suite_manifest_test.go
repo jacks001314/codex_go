@@ -25,6 +25,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "app_read", Owner: "apps", Focus: "app/read RPC"},
 		{Module: "attestation", Owner: "appserver, model", Focus: "attestation server request and Responses header"},
 		{Module: "auto_env", Owner: "appserver, execserver", Focus: "auto environment selection"},
+		{Module: "bedrock_setup", Owner: "model-provider, appserver", Focus: "Amazon Bedrock account discovery and setup"},
 		{Module: "client_metadata", Owner: "model", Focus: "Responses API client metadata propagation"},
 		{Module: "code_mode_host", Owner: "codemode", Focus: "code mode host lifecycle and tool dispatch"},
 		{Module: "collaboration_mode_list", Owner: "appserver", Focus: "collaborationMode/list presets"},
