@@ -320,6 +320,32 @@ func TestBuildShellRequestRejectsEscalationWhenApprovalIsNever(t *testing.T) {
 	}
 }
 
+func TestBuildShellRequestEscalationHonorsGranularSandboxApprovalLikeRust(t *testing.T) {
+	// Rust #40024: granular sandbox_approval=true allows escalation to prompt;
+	// sandbox_approval=false rejects it via the shared policy check.
+	args := &ExecCommandArgs{
+		Cmd:                "echo hi",
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+	}
+	shell := &Shell{Type: ShellBash, Path: "/bin/bash"}
+	if _, err := BuildShellRequest(args, shell, ShellValidationOptions{
+		AdditionalPermissionsAllowed: true,
+		ApprovalPolicy:               sandbox.ApprovalGranular,
+		GranularSandboxApproval:      true,
+		CWD:                          t.TempDir(),
+	}); err != nil {
+		t.Fatalf("granular sandbox_approval=true should allow escalation, got %v", err)
+	}
+	if _, err := BuildShellRequest(args, shell, ShellValidationOptions{
+		AdditionalPermissionsAllowed: true,
+		ApprovalPolicy:               sandbox.ApprovalGranular,
+		GranularSandboxApproval:      false,
+		CWD:                          t.TempDir(),
+	}); err == nil {
+		t.Fatal("granular sandbox_approval=false should reject escalation, got nil error")
+	}
+}
+
 func TestBuildShellRequestRejectsJustificationWithoutExplicitSandboxPermissionsLikeRust(t *testing.T) {
 	const want = "`justification` requires an explicit `sandbox_permissions`; use `sandbox_permissions: \"require_escalated\"` for unsandboxed execution, or omit `justification`."
 	for _, payload := range []string{

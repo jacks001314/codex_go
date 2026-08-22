@@ -13,6 +13,7 @@ import (
 	"codex_go/execpolicy"
 	"codex_go/execserver"
 	"codex_go/network"
+	"codex_go/safety"
 	"codex_go/sandbox"
 	shellutil "codex_go/shell"
 )
@@ -172,6 +173,11 @@ type ShellResult struct {
 type ShellValidationOptions struct {
 	AdditionalPermissionsAllowed    bool
 	ApprovalPolicy                  sandbox.AskForApproval
+	// GranularSandboxApproval / GranularRules mirror Rust's granular
+	// AskForApproval sub-config (#40024): sandbox escalation is rejected only
+	// when the shared policy check rejects prompting.
+	GranularSandboxApproval         bool
+	GranularRules                   bool
 	PermissionsPreapproved          bool
 	AllowLoginShell                 bool
 	ShellMode                       UnifiedExecShellMode
@@ -379,8 +385,12 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	}
 	sandboxProfile := buildShellSandboxProfile(permissionProfile, additionalPermissions, cwd)
 	escalationApprovalRequired := RequestsSandboxOverride(sandboxPermissions) && !opts.PermissionsPreapproved
-	if escalationApprovalRequired && opts.ApprovalPolicy != sandbox.ApprovalOnRequest {
-		return nil, fmt.Errorf("approval policy is %s; reject command - you cannot ask for escalated permissions if the approval policy is %s", opts.ApprovalPolicy, opts.ApprovalPolicy)
+	if escalationApprovalRequired {
+		// Rust #40024: use the shared policy rejection check so granular
+		// sandbox_approval controls whether escalation may prompt.
+		if _, rejected := safety.PromptRejectedByPolicy(shellApprovalPolicy(&opts), /*promptIsRule*/ false); rejected {
+			return nil, fmt.Errorf("approval policy is %s; reject command - you cannot ask for escalated permissions if the approval policy is %s", opts.ApprovalPolicy, opts.ApprovalPolicy)
+		}
 	}
 	// Rust #39159: commands with dynamic shell words (brace expansion, globs,
 	// escapes, expansions) require approval under unless-trusted even when a
@@ -428,6 +438,28 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		Justification:                   args.Justification,
 		PrefixRule:                      cloneStrings(args.PrefixRule),
 	}, nil
+}
+
+// shellApprovalPolicy maps the shell validation approval policy + granular
+// sub-config into a safety.ApprovalPolicy for the shared rejection check.
+func shellApprovalPolicy(opts *ShellValidationOptions) safety.ApprovalPolicy {
+	mode := safety.ApprovalMode("")
+	if opts != nil {
+		switch opts.ApprovalPolicy {
+		case sandbox.ApprovalNever:
+			mode = safety.ApprovalNever
+		case sandbox.ApprovalOnRequest:
+			mode = safety.ApprovalOnRequest
+		case sandbox.ApprovalUnlessTrusted:
+			mode = safety.ApprovalUnlessTrusted
+		case sandbox.ApprovalGranular:
+			mode = safety.ApprovalGranular
+		}
+	}
+	if opts == nil {
+		return safety.ApprovalPolicy{Mode: mode}
+	}
+	return safety.ApprovalPolicy{Mode: mode, Rules: opts.GranularRules, SandboxApproval: opts.GranularSandboxApproval}
 }
 
 func cloneManagedNetworkSandboxContext(value *network.ProxyManagedNetworkSandboxContext) *network.ProxyManagedNetworkSandboxContext {

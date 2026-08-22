@@ -11114,6 +11114,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	}
 	if options.Shell != nil && cfg != nil {
 		options.Shell.Validation.AdditionalPermissionsAllowed = features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals")
+		if policy := strings.TrimSpace(stringConfigValue(cfg, "approval_policy")); policy != "" {
+			options.Shell.Validation.ApprovalPolicy = sandbox.AskForApproval(policy)
+		}
 	}
 	if options.Shell != nil && permissionProfile != nil && permissionProfile.Profile != nil {
 		options.Shell.Validation.PermissionProfileID = strings.TrimSpace(permissionProfile.ID)
