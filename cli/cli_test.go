@@ -68,6 +68,36 @@ func TestRustSubcommandSurfaceParity(t *testing.T) {
 	}
 }
 
+func TestParseAgentsAcceptsSessionConfigurationLikeRust(t *testing.T) {
+	agents := &AgentsOptions{}
+	if err := parseAgents([]string{"--model", "gpt-5", "--sandbox", "read-only", "--search", "--cd", "."}, agents); err != nil {
+		t.Fatalf("parseAgents accepted session flags returned error: %v", err)
+	}
+	if agents.Shared.Model != "gpt-5" {
+		t.Fatalf("Shared.Model = %q, want gpt-5", agents.Shared.Model)
+	}
+	if agents.Shared.Sandbox != "read-only" {
+		t.Fatalf("Shared.Sandbox = %q, want read-only", agents.Shared.Sandbox)
+	}
+	if !agents.Shared.Search {
+		t.Fatal("Shared.Search should be set")
+	}
+	if agents.Cwd == "" {
+		t.Fatal("Cwd should be set from --cd")
+	}
+
+	for _, args := range [][]string{
+		{"--image", "x.png"},
+		{"--oss"},
+		{"--local-provider", "localhost:11434"},
+		{"--add-dir", "."},
+	} {
+		if err := parseAgents(args, &AgentsOptions{}); err == nil {
+			t.Fatalf("parseAgents(%v) should be rejected", args)
+		}
+	}
+}
+
 func TestParseQueueCommandLikeRust(t *testing.T) {
 	parsed, err := Parse([]string{"queue", "--thread", "thread-1", "--message", "hello"})
 	if err != nil {

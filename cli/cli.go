@@ -386,6 +386,7 @@ type AgentsOptions struct {
 	ConfigOverrides []string
 	Cwd             string
 	NoAltScreen     bool
+	Shared          SharedOptions
 }
 
 type DebugOptions struct {
@@ -2661,6 +2662,28 @@ func parseQueue(args []string, queue *QueueOptions) error {
 func parseAgents(args []string, agents *AgentsOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if matched, err := parseSharedOption(args, &i, &agents.Shared); err != nil {
+			return err
+		} else if matched {
+			// Rust #39870: codex agents may accept model / approval / sandbox /
+			// configuration session settings, but never initial images, local
+			// providers, or additional directories.
+			if len(agents.Shared.Images) > 0 {
+				return fmt.Errorf("`codex agents` does not accept initial images")
+			}
+			if agents.Shared.OSS || strings.TrimSpace(agents.Shared.OSSProvider) != "" {
+				return fmt.Errorf("`codex agents` does not accept a local provider")
+			}
+			if len(agents.Shared.AddDirs) > 0 {
+				return fmt.Errorf("`codex agents` does not accept additional directories")
+			}
+			continue
+		}
+		if matched, err := parseTUIOnlyOption(args, &i, &agents.Shared); err != nil {
+			return err
+		} else if matched {
+			continue
+		}
 		switch {
 		case arg == "--remote":
 			value, next, err := requireValue(args, i, arg)
@@ -2705,14 +2728,17 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 		case arg == "--no-alt-screen":
 			agents.NoAltScreen = true
 		default:
-			// Rust #39114: invocation-specific session overrides cannot apply
-			// to shared sessions, so positional args and other options are
-			// rejected.
 			if strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("unknown agents option %s", arg)
 			}
 			return fmt.Errorf("`codex agents` does not accept argument %s", arg)
 		}
+	}
+	if strings.TrimSpace(agents.Cwd) == "" && strings.TrimSpace(agents.Shared.CWD) != "" {
+		agents.Cwd = agents.Shared.CWD
+	}
+	if agents.Shared.NoAltScreen {
+		agents.NoAltScreen = true
 	}
 	return nil
 }
