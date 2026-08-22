@@ -529,6 +529,12 @@ type BuildPromptOptions struct {
 	// NodeReplEvidence includes bounded node_repl results as untrusted
 	// evidence in the review prompt (Rust #38397).
 	NodeReplEvidence *context.NodeReplReviewEvidenceFragment
+	// RootUserAuthorization carries bounded root-conversation evidence for
+	// subagent (MultiAgent V2) reviews so late root-user authorization is not
+	// lost when the worker's own transcript lacks it (#39975). Only root user
+	// messages are treated as authorization evidence; agent claims and
+	// assistant commentary are excluded.
+	RootUserAuthorization []string
 }
 
 // BuildPromptWithOptions renders the Guardian review prompt, selecting the
@@ -564,6 +570,17 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 		if rendered := context.Render(options.NodeReplEvidence); rendered != nil && strings.TrimSpace(rendered.Content) != "" {
 			builder.WriteString("\n\n")
 			builder.WriteString(rendered.Content)
+		}
+	}
+	if len(options.RootUserAuthorization) > 0 {
+		builder.WriteString("\n\nRoot user authorization evidence (root conversation):\n")
+		for _, line := range options.RootUserAuthorization {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			builder.WriteString("- ")
+			builder.WriteString(strings.TrimSpace(line))
+			builder.WriteByte('\n')
 		}
 	}
 	if len(transcript) > 0 {

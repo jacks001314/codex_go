@@ -40,6 +40,7 @@ type modelGuardianReviewer struct {
 	environment                func(context.Context, string, string) ([]any, error)
 	permissionProfile          func(threadID, turnID string) *sandbox.PermissionProfile
 	nodeReplEvidence           func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
+	rootUserAuthorization      func(threadID, turnID string) []string
 	timeout                    time.Duration
 }
 
@@ -274,6 +275,17 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		NodeReplAutoReviewRequired: nodeReplAutoReviewRequired,
 		NodeReplEvidence:           promptNodeReplEvidence,
 	})
+	if err == nil && r.rootUserAuthorization != nil {
+		var root []string
+		root = r.rootUserAuthorization(threadID, turnID)
+		if len(root) > 0 {
+			prompt, err = state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
+				NodeReplAutoReviewRequired: nodeReplAutoReviewRequired,
+				NodeReplEvidence:           promptNodeReplEvidence,
+				RootUserAuthorization:      root,
+			})
+		}
+	}
 	if err != nil {
 		return state.DecisionAborted, "", err
 	}

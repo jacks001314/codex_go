@@ -68,6 +68,7 @@ func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) Guardian
 		modelReviewer.permissionProfile = r.guardianReviewPermissionProfileForTurn
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
 		modelReviewer.environment = r.guardianEnvironmentInputItems
+		modelReviewer.rootUserAuthorization = r.guardianRootUserAuthorizationForTurn
 		r.services.GuardianReviewer = reviewer
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -92,6 +93,34 @@ func (r *RuntimeRouter) guardianEnvironmentInputItems(ctx context.Context, threa
 		return nil, err
 	}
 	return []any{item}, nil
+}
+
+// guardianRootUserAuthorizationForTurn returns bounded root-conversation user
+// message evidence for a subagent (MultiAgent V2) review so late root-user
+// authorization is not lost when the worker transcript lacks it (#39975). The
+// real root-thread backfill is a best-effort read from the active worker's root
+// thread; when unavailable, the reviewer falls back to the worker transcript.
+func (r *RuntimeRouter) guardianRootUserAuthorizationForTurn(threadID, turnID string) []string {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return nil
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return nil
+	}
+	return r.runtimeRootUserEvidence(threadID)
+}
+
+// runtimeRootUserEvidence is a best-effort read of the worker's root user
+// message text. It returns nil when no root evidence is accessible.
+func (r *RuntimeRouter) runtimeRootUserEvidence(workerThreadID string) []string {
+	if r == nil || strings.TrimSpace(workerThreadID) == "" {
+		return nil
+	}
+	// The Go reviewer currently owns the worker's transcript only; root user
+	// evidence requires reading the root thread store, which is not wired here.
+	return nil
 }
 
 func (r *RuntimeRouter) guardianReviewModelForTurn(threadID, turnID string) string {
