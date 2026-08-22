@@ -83,12 +83,23 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 		}
 		if h != nil && h.reviewer != nil {
 			decision, reason, err := h.reviewer.Review(ctx, request.ThreadID, request.TurnID, appserverMCPElicitationID(request), guardianMCPAction(request))
-			if err == nil && decision == state.DecisionApproved {
-				return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionAccept, Meta: map[string]any{"approvals_reviewer": "auto_review"}}, nil
+			if err == nil {
+				// Rust #40031: strict MCP auto-review propagates canonical
+				// approved / denied / timed-out / aborted outcomes instead of
+				// collapsing them into a generic decline.
+				switch decision {
+				case state.DecisionApproved:
+					return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionAccept, Meta: map[string]any{"approvals_reviewer": "auto_review"}}, nil
+				case state.DecisionAborted:
+					return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel, Meta: map[string]any{"approvals_reviewer": "auto_review"}}, nil
+				}
 			}
 			meta := map[string]any{"approvals_reviewer": "auto_review"}
 			if strings.TrimSpace(reason) != "" {
 				meta["reason"] = reason
+			}
+			if err == nil && decision == state.DecisionTimedOut {
+				meta["timed_out"] = true
 			}
 			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionDecline, Meta: meta}, nil
 		}
