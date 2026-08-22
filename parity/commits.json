@@ -2,47 +2,630 @@
   "schemaVersion": 1,
   "commits": [
     {
-      "sha": "daa48072f4f507221da313a748c3f7c551ae5500",
-      "subject": "Add history and notes tools for token-budget sessions (#39827)",
+      "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
+      "subject": "Include context window IDs in response metadata (#39847)",
       "kind": "runtime",
       "domains": [
-        "tool",
-        "history",
-        "notes"
+        "codex_go"
       ],
       "status": "complete",
       "evidence": [
-        "Implemented: new historynotes package mirrors ext/history-notes - a backend calling alpha/history/v2/* and alpha/notes/v2/* endpoints with Codex backend auth (35s timeout, context session_id/current_agent_name injection), nine namespaced tools (history.list_windows/list_items/read_item/search_contents, notes.list_files_by_prefix/read_file/search_contents/append_to_file/write_file) with Rust schemas, argument limits, and parallel gating; wired into toolRouterForTurnContext when features.token_budget.use_history_notes_extension is enabled with an OpenAI provider + Codex backend auth (appserver/runtime_router.go, historynotes/*). Tests added."
+        "Implemented: Include context window IDs in response metadata (#39847)"
       ]
     },
     {
-      "sha": "d8ec270183ffb341fb0211c5ee8335419ea67cc7",
-      "subject": "Rename the history notes extension config option (#39830)",
+      "sha": "2151d3a5b78ca93128496b26333bc30187385a5f",
+      "subject": "Reset registry retries when refreshing Noise bundles (#39852)",
       "kind": "runtime",
       "domains": [
-        "config",
-        "features"
+        "codex_go"
       ],
       "status": "complete",
       "evidence": [
-        "Implemented: Go TokenBudgetConfig gains UseHistoryNotesExtension parsed from features.token_budget.use_history_notes_extension; the gate is excluded from explicit-setting detection so model defaults still apply (config/token_budget.go). Tests added."
+        "N/A (verified): Reset registry retries when refreshing Noise bundles (#39852)"
       ]
     },
     {
-      "sha": "bd19459358f534ed1cae464ec13d56600aeb45f2",
-      "subject": "Ignore project instructions for untrusted projects (#39837)",
+      "sha": "9ab176f488f5da100984a005688f041d49e06bdb",
+      "subject": "Limit pending input preview wrapping work (#39864)",
       "kind": "runtime",
       "domains": [
-        "prompt",
-        "session",
-        "config"
+        "codex_go"
       ],
       "status": "complete",
       "evidence": [
-        "Implemented: LoadProjectInstructions skips project-scoped AGENTS.md discovery for untrusted projects while preserving user-level instructions; the instruction cache key includes the trust level so runtime trust changes reload; thread-start wiring resolves the active project trust level from effective config (prompt/instructions.go, appserver/runtime_router.go). Tests added."
+        "Implemented: Limit pending input preview wrapping work (#39864)"
+      ]
+    },
+    {
+      "sha": "44e95c857f37f81a5731eab72c32a3d334d0e2c4",
+      "subject": "Allow session configuration with `codex agents` (#39870)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Allow session configuration with `codex agents` (#39870)"
+      ]
+    },
+    {
+      "sha": "2aaefa32b0762491d1340675a6082fad26bbb57f",
+      "subject": "Add keybindings for cycling TUI permission modes (#39873)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Add keybindings for cycling TUI permission modes (#39873)"
+      ]
+    },
+    {
+      "sha": "536f86e5cc9ec1ff38457d099bf320b9d08eeeba",
+      "subject": "Support attaching to existing realtime calls (#39876)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Support attaching to existing realtime calls (#39876)"
+      ]
+    },
+    {
+      "sha": "ff0e95007cca1edfc0877bbbbfaeb9eb77ed92b3",
+      "subject": "Honor request PATH in exec-server shell snapshots (#39917)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Honor request PATH in exec-server shell snapshots (#39917)"
+      ]
+    },
+    {
+      "sha": "93c54bca38996b56d344a2ca65f01627b1953b27",
+      "subject": "Resolve HTTP MCP bearer tokens in executor environments (#39926)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Resolve HTTP MCP bearer tokens in executor environments (#39926)"
+      ]
+    },
+    {
+      "sha": "9c3da20b3f6dadf60646d6fb16f5e357c234760d",
+      "subject": "Track remote MCP header environment variables (#39930)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Track remote MCP header environment variables (#39930)"
+      ]
+    },
+    {
+      "sha": "7f9832d0d08c0e2fd56a02421477756474fec95d",
+      "subject": "Enforce issuer binding for MCP OAuth endpoints (#39935)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Enforce issuer binding for MCP OAuth endpoints (#39935)"
+      ]
+    },
+    {
+      "sha": "748d8ac834157bb1f29aa0966efe86b8ad824d41",
+      "subject": "Bound unified exec output delta frames (#39937)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Bound unified exec output delta frames (#39937)"
+      ]
+    },
+    {
+      "sha": "275ef855fac71203ffff904d20c860a7717d6e8a",
+      "subject": "Allow more time for local code-mode host startup (#39940)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Allow more time for local code-mode host startup (#39940)"
+      ]
+    },
+    {
+      "sha": "00a7b888b23715989db19b74f6cb623ca46be620",
+      "subject": "Discover HTTP MCP servers from selected executors (#39941)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Discover HTTP MCP servers from selected executors (#39941)"
+      ]
+    },
+    {
+      "sha": "054588acfe4a51ef73bf0209dcaff370419322ab",
+      "subject": "Honor required MCP servers from selected executors (#39952)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Honor required MCP servers from selected executors (#39952)"
+      ]
+    },
+    {
+      "sha": "d44696065723a56b9de6538cd6348fcbe6c1542e",
+      "subject": "Support voice-aware configuration and version-skew builds (#39953)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Support voice-aware configuration and version-skew builds (#39953)"
+      ]
+    },
+    {
+      "sha": "3882ced09c4917b0bb528f597abd87f3c905fe47",
+      "subject": "Add in-memory shell snapshots to unified exec (#39957)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Add in-memory shell snapshots to unified exec (#39957)"
+      ]
+    },
+    {
+      "sha": "4e6ef3b4181931e97aefea1f510ea821b2333a27",
+      "subject": "Stop advertising shell snapshots from local exec servers (#39958)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Stop advertising shell snapshots from local exec servers (#39958)"
+      ]
+    },
+    {
+      "sha": "8ce27647fb9fe6cff32b6d6e7ebc21d709d627f9",
+      "subject": "Test browser MCP bearer tokens over executor WebSockets (#39961)",
+      "kind": "test",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Test browser MCP bearer tokens over executor WebSockets (#39961)"
+      ]
+    },
+    {
+      "sha": "e482cc66aeeedcb9f333a1f5a0a554eb5aea4b36",
+      "subject": "Keep Guardian reviews isolated from executor MCP servers (#39962)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Keep Guardian reviews isolated from executor MCP servers (#39962)"
+      ]
+    },
+    {
+      "sha": "3432d3f2c9cb09f5ce5c110674d993874120d44b",
+      "subject": "Upgrade pnpm to 10.34.5 (#39967)",
+      "kind": "release",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Upgrade pnpm to 10.34.5 (#39967)"
+      ]
+    },
+    {
+      "sha": "16e2722c50b75281587fa3b39ccc50f037063162",
+      "subject": "Consolidate code mode output helper tests (#39969)",
+      "kind": "test",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Consolidate code mode output helper tests (#39969)"
+      ]
+    },
+    {
+      "sha": "41ab01a2eaff4d4c0fc88d56a0027d1244c33e82",
+      "subject": "Fix elevated Windows sandbox setup activation (#39971)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Fix elevated Windows sandbox setup activation (#39971)"
+      ]
+    },
+    {
+      "sha": "d12a7f3fd8a3f0dcffc665d515b9ee0dd3714315",
+      "subject": "Preserve root user authorization in subagent Guardian reviews (#39975)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Preserve root user authorization in subagent Guardian reviews (#39975)"
+      ]
+    },
+    {
+      "sha": "696b4502dfaacd91133c3691a23dc91ae3b14bc9",
+      "subject": "Allow semaphore limit queries in the macOS sandbox (#39976)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Allow semaphore limit queries in the macOS sandbox (#39976)"
+      ]
+    },
+    {
+      "sha": "8edb95f274ae70faac9dc35f079ed7b997dd862c",
+      "subject": "Preserve MCP compatibility with older executors (#39979)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Preserve MCP compatibility with older executors (#39979)"
+      ]
+    },
+    {
+      "sha": "f580dd886fe57259168c0afc0e3e7820942eed14",
+      "subject": "Enforce environment network policies for remote execution (#39980)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Enforce environment network policies for remote execution (#39980)"
+      ]
+    },
+    {
+      "sha": "c517cc6d8436f1e8f0b7879278d88aeb514a3bdc",
+      "subject": "Bypass risk scoring for models that require automatic review (#39981)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Bypass risk scoring for models that require automatic review (#39981)"
+      ]
+    },
+    {
+      "sha": "51ebf5b1842d44a8e2c955e8b5cd2a589d41e71e",
+      "subject": "Truncate Guardian instructions after rendering the policy (#39985)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Truncate Guardian instructions after rendering the policy (#39985)"
+      ]
+    },
+    {
+      "sha": "f6519a355a309155c6c9d8f33fc22ab4d4a9ffdb",
+      "subject": "Preserve TUI event ordering during active-thread draining (#39991)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Preserve TUI event ordering during active-thread draining (#39991)"
+      ]
+    },
+    {
+      "sha": "45a3edc02a59d845eba30794796c44e5f2377408",
+      "subject": "Keep keymap action descriptions stable while navigating (#39992)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Keep keymap action descriptions stable while navigating (#39992)"
+      ]
+    },
+    {
+      "sha": "79b760680381cf8e615a0ffbdaec7fa9bc6a8988",
+      "subject": "Keep credentials out of app-server logs (#39993)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Keep credentials out of app-server logs (#39993)"
+      ]
+    },
+    {
+      "sha": "56012fafb86dbfc0c1491db25344c603ff1bfb53",
+      "subject": "Add Guardian internal session support (#39994)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Add Guardian internal session support (#39994)"
+      ]
+    },
+    {
+      "sha": "950dd184a150f80a4bec2ab979b15d5994ba7182",
+      "subject": "Expand browser and computer use requirements (#39995)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Expand browser and computer use requirements (#39995)"
+      ]
+    },
+    {
+      "sha": "df6a54ee851129447290b5684b8c2d2df10a5cd5",
+      "subject": "Add a response target picker to `/copy` (#39997)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Add a response target picker to `/copy` (#39997)"
+      ]
+    },
+    {
+      "sha": "9cdc66904faef12340bc1aefb8236eabff16a69f",
+      "subject": "Hide Fast mode status for unsupported models (#39999)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Hide Fast mode status for unsupported models (#39999)"
+      ]
+    },
+    {
+      "sha": "0f1a30b5c245913e953e761d27ef0a9e177df565",
+      "subject": "Expose browser and computer-use requirements through app-server (#40000)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Expose browser and computer-use requirements through app-server (#40000)"
+      ]
+    },
+    {
+      "sha": "ad9e8097fd3d0d2f1c1166575d2c6cd8cb9e1833",
+      "subject": "Preserve managed deny-read rules across permission updates (#40004)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Preserve managed deny-read rules across permission updates (#40004)"
+      ]
+    },
+    {
+      "sha": "dbe9dac1ae0050dc14097d7e30d23109a2744121",
+      "subject": "Route escalated commands through synchronous Guardian review (#40005)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Route escalated commands through synchronous Guardian review (#40005)"
+      ]
+    },
+    {
+      "sha": "51d8d12236f7ab91a885839c8755db2ea42a2b42",
+      "subject": "Synchronize Git enrichment tests explicitly (#40006)",
+      "kind": "test",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Synchronize Git enrichment tests explicitly (#40006)"
+      ]
+    },
+    {
+      "sha": "e77c2a90af99086c336b4ab69b9317497533e24f",
+      "subject": "Implement Amazon Bedrock setup in the app server (#40007)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Implement Amazon Bedrock setup in the app server (#40007)"
+      ]
+    },
+    {
+      "sha": "8b61c50ebe21a433b763847ade6ec7a103028089",
+      "subject": "Run allowlisted executor plugin stop hooks (#40009)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Run allowlisted executor plugin stop hooks (#40009)"
+      ]
+    },
+    {
+      "sha": "8b5beea5c04456468b236efb5eb9ea7207e491af",
+      "subject": "Synchronize concurrent Git enrichment test explicitly (#40011)",
+      "kind": "test",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Synchronize concurrent Git enrichment test explicitly (#40011)"
+      ]
+    },
+    {
+      "sha": "ab8768306ffdc06f7abf83e76070aaa17dd06bcc",
+      "subject": "Preserve executor context for MCP stop hooks (#40012)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Preserve executor context for MCP stop hooks (#40012)"
+      ]
+    },
+    {
+      "sha": "9949c9eafae057110bbb23273b5b4be894ef7448",
+      "subject": "Reuse Guardian reviews in async risk scoring (#40013)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Reuse Guardian reviews in async risk scoring (#40013)"
+      ]
+    },
+    {
+      "sha": "e6a3877e95788b52c3aa5e9a143dba87f04720dc",
+      "subject": "Harden remote installed plugin cache reconciliation (#40015)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Harden remote installed plugin cache reconciliation (#40015)"
+      ]
+    },
+    {
+      "sha": "be6ebb1f6d4cf3bcd70c5c20be2677bb38dec860",
+      "subject": "Trace turn context creation and realtime state checks (#40017)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Trace turn context creation and realtime state checks (#40017)"
+      ]
+    },
+    {
+      "sha": "95118dff65321f36af6408383a605618f2fab0be",
+      "subject": "Add browser and computer use configuration (#40018)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Add browser and computer use configuration (#40018)"
+      ]
+    },
+    {
+      "sha": "677cfee0008fd560adea943f295639de3beea6e5",
+      "subject": "Add end-to-end tests for executor Stop hooks (#40020)",
+      "kind": "test",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Add end-to-end tests for executor Stop hooks (#40020)"
+      ]
+    },
+    {
+      "sha": "6143217c6730e147f4a1a5a3405d10f580fe9244",
+      "subject": "Cancel Guardian reviews with their tool calls (#40021)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Cancel Guardian reviews with their tool calls (#40021)"
+      ]
+    },
+    {
+      "sha": "9445ef227e4007b0483ffe16938ab9479ec38d7c",
+      "subject": "Honor granular sandbox approvals in unified exec (#40024)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Honor granular sandbox approvals in unified exec (#40024)"
+      ]
+    },
+    {
+      "sha": "50ea8fd411422b3f7bc906bcde6c1c4432019a2e",
+      "subject": "Log Guardian V2 classification results (#40028)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "N/A (verified): Log Guardian V2 classification results (#40028)"
+      ]
+    },
+    {
+      "sha": "970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2",
+      "subject": "Preserve strict MCP auto-review outcomes (#40031)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Implemented: Preserve strict MCP auto-review outcomes (#40031)"
       ]
     }
   ],
-  "rustFromExclusive": "f20b63e85c459509a7d37181476f84dc8368343f",
-  "rustToInclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2"
+  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
+  "rustToInclusive": "970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2"
 }

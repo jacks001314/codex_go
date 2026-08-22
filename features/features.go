@@ -36,6 +36,7 @@ var Registry = []Spec{
 	{Key: "shell_zsh_fork", Stage: StageUnderDevelopment},
 	{Key: "unified_exec_zsh_fork", Stage: StageUnderDevelopment},
 	{Key: "shell_snapshot", Stage: StageStable, DefaultEnabled: true},
+	{Key: "shell_snapshot_v2", Stage: StageUnderDevelopment},
 	{Key: "deferred_executor", Stage: StageUnderDevelopment},
 	{Key: "js_repl", Stage: StageRemoved},
 	{Key: "executed_tool_call_metadata", Stage: StageUnderDevelopment},
@@ -148,6 +149,7 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs c2bcb9a26b): reuse encrypted parent
 	// compaction when restarting Guardian review sessions.
 	{Key: "guardian_reuse_parent_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "guardian_ext", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardianv2", Stage: StageUnderDevelopment},
 	{Key: "goals", Stage: StageStable, DefaultEnabled: true},
 	{Key: "token_budget", Stage: StageUnderDevelopment},

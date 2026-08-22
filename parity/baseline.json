@@ -1,43 +1,44 @@
 {
-    "schemaVersion": 1,
-    "frozenAt": "2026-08-21",
-    "plan": "update/plan_2026_08_21.md",
-    "verified": {
-        "rustCommit": "bd19459358f534ed1cae464ec13d56600aeb45f2",
-        "parityManifest": "parity.json"
-    },
-    "target": {
-        "rustCommit": "bd19459358f534ed1cae464ec13d56600aeb45f2",
-        "rustBranch": "main",
-        "goStartCommit": "a56410c23bd95e040f086dff544838c8c5feaa9f"
-    },
-    "requirements": {
-        "minimumSQLiteVersion": "3.51.3",
-        "zeroExceptions": true,
-        "requiredPlatforms": [
-            "windows/amd64",
-            "windows/arm64",
-            "linux/amd64",
-            "linux/arm64",
-            "darwin/amd64",
-            "darwin/arm64"
-        ],
-        "requiredConsecutiveDifferentialRuns": 3,
-        "requiredConsecutiveSDKRuns": 3
-    },
-    "evidence": {
-        "cleanSDKRuns": [
-            "sdktests/artifacts/suites/2026-08-01T024647417Z-parity",
-            "sdktests/artifacts/suites/2026-08-01T033419130Z-parity"
-        ],
-        "finalRawFork": "sdktests/artifacts/2026-08-01T065723289Z-raw_paginated_fork",
-        "finalRawConfigRequirements": "sdktests/artifacts/2026-08-01T065723280Z-raw_config_requirements",
-        "nativeSQLite": [
-            "windows/amd64: SQLite 3.51.3, lifecycle and WAL recovery pass"
-        ]
-    },
-    "certificationBlockers": [
-        "SDK differential re-certification against Rust bd19459358f534ed1cae464ec13d56600aeb45f2 is pending"
+  "schemaVersion": 1,
+  "frozenAt": "2026-08-21",
+  "plan": "update/plan_2026_08_21.md",
+  "verified": {
+    "rustCommit": "970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2",
+    "parityManifest": "parity.json"
+  },
+  "target": {
+    "rustCommit": "970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2",
+    "rustBranch": "main",
+    "goStartCommit": "5c25a72b1cbd16b060b594f2ccb7c3243479eb87"
+  },
+  "requirements": {
+    "minimumSQLiteVersion": "3.51.3",
+    "zeroExceptions": true,
+    "requiredPlatforms": [
+      "windows/amd64",
+      "windows/arm64",
+      "linux/amd64",
+      "linux/arm64",
+      "darwin/amd64",
+      "darwin/arm64"
     ],
-    "certificationReady": false
+    "requiredConsecutiveDifferentialRuns": 3,
+    "requiredConsecutiveSDKRuns": 3
+  },
+  "evidence": {
+    "cleanSDKRuns": [
+      "sdktests/artifacts/suites/2026-08-01T024647417Z-parity",
+      "sdktests/artifacts/suites/2026-08-01T033419130Z-parity"
+    ],
+    "finalRawFork": "sdktests/artifacts/2026-08-01T065723289Z-raw_paginated_fork",
+    "finalRawConfigRequirements": "sdktests/artifacts/2026-08-01T065723280Z-raw_config_requirements",
+    "nativeSQLite": [
+      "windows/amd64: SQLite 3.51.3, lifecycle and WAL recovery pass"
+    ]
+  },
+  "certificationBlockers": [
+    "SDK differential re-certification against Rust 970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2 is pending"
+  ],
+  "certificationReady": false,
+  "Plan": "update/plan_2026_08_22.md"
 }

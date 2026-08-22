@@ -227,6 +227,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"utils/home-dir",
 		"utils/pty",
 		"utils/readiness",
+		"utils/redacted-string",
 		"utils/rustls-provider",
 		"utils/string",
 		"utils/cli",
@@ -262,15 +263,15 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
-		{Path: "Cargo.toml", SHA256: "8063e42f2bb68b0b727dc94fed1996d05325e8859cb4051b86bd641f37c16ea6"},
+		{Path: "Cargo.toml", SHA256: "9dad50d0a6f7b6730d6dc5c36aff8397da551eb82285c12fe9f754fe1ff2797c"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
 		{Path: "exec/src/lib.rs", SHA256: "ab21fb2d2a230a7d914d2be7413eeee32b4a47161359a7aa811d7e8c59e262ac"},
 		{Path: "exec/src/exec_events.rs", SHA256: "fc914a7d8f7e990b19a95c41abf758e95e5b7ea028caa8b34b1c82306382c004"},
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
-		{Path: "core/src/client.rs", SHA256: "f85a08f3fdc05868557f403f0cc06a6523ad4baeaddad359804e3a3d39953439"},
+		{Path: "core/src/client.rs", SHA256: "f5ca8ab12aa1b9013ab0bb95c9dff3464bbc92e03be6ee47000dbb2da42b3697"},
 		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "5d58f257ba52d3de30781da060814fabe32eb3f95bcd53ef254a8fbd049e1bc8"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "07f838558f16f3f29b96327f04abe03ab64dcb1054c043b2419fbbfb8aa8f171"},
-		{Path: "core/tests/suite/mod.rs", SHA256: "c5860d4d7096e512d851ed78744c0ce1f09501f843ad9152416692ff509b83cf"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "4410afc5dea2fcaad85fe515c4abdc29babb81ab3a743440927289d0553f7c81"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "7025a28c72394292a522781bd80a7a62f3e34c87d80a91fb0f1ecfc2f61a59ad"},
 	}
 }
 

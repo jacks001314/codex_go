@@ -80,7 +80,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "app-server/tests/suite/v2",
-			Files: 114,
+			Files: 115,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -91,7 +91,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "core/tests/suite",
-			Files: 160,
+			Files: 164,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -103,7 +103,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tui/src/chatwidget/tests",
-			Files: 36,
+			Files: 38,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -114,7 +114,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tui/src/chatwidget/tests/snapshots",
-			Files: 12,
+			Files: 13,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{
