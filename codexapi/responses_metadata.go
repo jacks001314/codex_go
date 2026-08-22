@@ -13,6 +13,7 @@ const (
 	ThreadIDKey                   = "thread_id"
 	TurnIDKey                     = "turn_id"
 	WindowIDKey                   = "window_id"
+	ContextWindowIDKey            = "context_window_id"
 	RequestKindKey                = "request_kind"
 	CompactionKey                 = "compaction"
 	CodeModeToolNamesKey          = "code_mode_tool_names"
@@ -49,6 +50,7 @@ var reservedMetadataKeys = map[string]bool{
 	TurnIDKey:                     true,
 	WindowIDKey:                   true,
 	WindowIDHeader:                true,
+	ContextWindowIDKey:            true,
 	TurnMetadataHeader:            true,
 	ParentThreadIDHeader:          true,
 	OpenAISubagentHeader:          true,
@@ -106,6 +108,7 @@ type ResponsesMetadata struct {
 	ThreadID            string
 	TurnID              string
 	WindowID            string
+	ContextWindowID     string
 	RequestKind         *ResponsesRequestKind
 	ForkedFromThreadID  string
 	ParentThreadID      string
@@ -145,6 +148,7 @@ func (m *ResponsesMetadata) TurnMetadataValue() map[string]any {
 	if hasRequestIdentity {
 		putStringAny(payload, InstallationIDKey, m.InstallationID)
 		putStringAny(payload, WindowIDKey, m.WindowID)
+		putStringAny(payload, ContextWindowIDKey, m.ContextWindowID)
 	}
 	if hasTurnIdentity {
 		putStringAny(payload, SessionIDKey, m.SessionID)

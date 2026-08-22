@@ -94,6 +94,7 @@ type ClientMetadata struct {
 	ThreadID       string
 	TurnID         string
 	WindowID       string
+	ContextWindowID string
 	RequestKind    ClientRequestKind
 	Compaction     *ClientCompactionMetadata
 	// AgentName is the canonical agent path for sub-agent turns (Rust #38483).
@@ -147,6 +148,9 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	if hasRequestIdentity {
 		value["installation_id"] = m.InstallationID
 		value["window_id"] = m.WindowID
+		if m.ContextWindowID != "" {
+			value["context_window_id"] = m.ContextWindowID
+		}
 	}
 	if hasTurnIdentity {
 		value["session_id"] = m.SessionID

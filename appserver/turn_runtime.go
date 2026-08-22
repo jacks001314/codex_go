@@ -5998,6 +5998,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			ThreadID:                   threadID,
 			TurnID:                     turnID,
 			WindowID:                   threadID + ":1",
+			ContextWindowID:            r.contextWindowIDForThread(threadID),
 			RequestKind:                codexapi.ClientRequestTurn,
 			ForkedFromThreadID:         lineage.ForkedFromThreadID,
 			ParentThreadID:             lineage.ParentThreadID,

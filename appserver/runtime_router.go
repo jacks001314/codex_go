@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -248,6 +249,8 @@ type RuntimeRouter struct {
 	executedToolCalls      map[string]*turn.ExecutedToolCallRecorder
 	newContextWindowMu     sync.Mutex
 	newContextWindowReq    map[string]bool
+	contextWindowMu        sync.Mutex
+	contextWindowIDs       map[string]string
 	codeModeRuntimesMu     sync.Mutex
 	codeModeRuntimes       map[string]*tool.CodeModeRuntime
 	pendingGoalMu          sync.Mutex
@@ -12509,6 +12512,49 @@ func (r *RuntimeRouter) takeNewContextWindowRequest(threadID string) bool {
 	requested := r.newContextWindowReq[threadID]
 	delete(r.newContextWindowReq, threadID)
 	return requested
+}
+
+// contextWindowIDForThread returns the stable model-visible context window ID
+// for a thread, creating it on first use (#39847). It advances after compaction.
+func (r *RuntimeRouter) contextWindowIDForThread(threadID string) string {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return ""
+	}
+	r.contextWindowMu.Lock()
+	defer r.contextWindowMu.Unlock()
+	if r.contextWindowIDs == nil {
+		r.contextWindowIDs = map[string]string{}
+	}
+	if id := r.contextWindowIDs[threadID]; id != "" {
+		return id
+	}
+	id := newContextWindowID()
+	r.contextWindowIDs[threadID] = id
+	return id
+}
+
+// advanceContextWindowID regenerates a thread's context window ID after
+// compaction, mirroring Rust #39847 where the ID advances on compaction.
+func (r *RuntimeRouter) advanceContextWindowID(threadID string) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	r.contextWindowMu.Lock()
+	defer r.contextWindowMu.Unlock()
+	if r.contextWindowIDs == nil {
+		r.contextWindowIDs = map[string]string{}
+	}
+	r.contextWindowIDs[threadID] = newContextWindowID()
+}
+
+func newContextWindowID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 func (r *RuntimeRouter) userInputResponderForTurn(threadID string, turnID string) tool.UserInputResponder {

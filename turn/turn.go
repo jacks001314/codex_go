@@ -392,6 +392,7 @@ type ResponsesClientMetadataOptions struct {
 	ThreadID                   string
 	TurnID                     string
 	WindowID                   string
+	ContextWindowID            string
 	RequestKind                codexapi.ClientRequestKind
 	ForkedFromThreadID         string
 	ParentThreadID             string
@@ -432,6 +433,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 		windowID,
 	)
 	metadata.TurnID = strings.TrimSpace(options.TurnID)
+	metadata.ContextWindowID = strings.TrimSpace(options.ContextWindowID)
 	metadata.RequestKind = options.RequestKind
 	if metadata.RequestKind == "" {
 		metadata.RequestKind = codexapi.ClientRequestTurn
