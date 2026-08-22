@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   validate:
@@ -36,6 +37,8 @@ jobs:
   build:
     needs: validate
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ needs.validate.outputs.version }}
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
@@ -60,13 +63,10 @@ jobs:
           path: dist/v$VERSION
 
   npm:
-    # Only publish when an npm token is configured for the @jacks001314 scope.
-    if: ${{ secrets.NPM_TOKEN != '' }}
     needs: build
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ needs.validate.outputs.version }}
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      VERSION: ${{ needs.build.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -81,8 +81,14 @@ jobs:
         run: node npm/scripts/build-packages.mjs --version "$VERSION" --output-dir "dist/v$VERSION/npm"
       - name: Publish npm packages
         shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN not configured; skipping npm publish."
+            exit 0
+          fi
           tag="latest"
           [[ "$VERSION" == *-alpha.* ]] && tag="alpha"
           echo "Publishing @jacks001314/codex-go@$VERSION with tag '$tag'"
@@ -93,8 +99,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     env:
-      VERSION: ${{ needs.validate.outputs.version }}
+      VERSION: ${{ needs.build.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -115,5 +122,5 @@ jobs:
           tag_name: ${{ github.ref_name }}
           body_path: ${{ runner.temp }}/release-notes.md
           files: dist/**
-          make_latest: ${{ !contains(needs.validate.outputs.version, '-') }}
-          prerelease: ${{ contains(needs.validate.outputs.version, '-') }}
+          make_latest: ${{ !contains(needs.build.outputs.version, '-') }}
+          prerelease: ${{ contains(needs.build.outputs.version, '-') }}
