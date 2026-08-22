@@ -34,9 +34,17 @@ type Config struct {
 	DangerouslyAllowAllUnixSockets   bool
 	AllowLocalBinding                bool
 	Domains                          map[string]DomainPermission
+	UnixSockets                      map[string]UnixSocketPermission
 	MITM                             bool
 	MITMHooks                        []MITMHook
 }
+
+type UnixSocketPermission string
+
+const (
+	UnixSocketAllow UnixSocketPermission = "allow"
+	UnixSocketDeny  UnixSocketPermission = "deny"
+)
 
 type MITMHook struct {
 	Host         string
@@ -125,6 +133,148 @@ func NewSpec(config Config, requirements *Requirements, permissionKind Permissio
 		constraints:             constraints,
 		hardDenyAllowlistMisses: hardDeny,
 	}, nil
+}
+
+// EnvironmentNetworkPolicy is the attachment/owner-provided traffic policy for
+// one execution environment (#39980). Proxy enablement, listeners, network
+// mode, MITM, and credentials remain outside attachment-owned traffic policy.
+type EnvironmentNetworkPolicy struct {
+	Domains                        map[string]DomainPermission
+	UnixSockets                    map[string]UnixSocketPermission
+	AllowUpstreamProxy             bool
+	DangerouslyAllowAllUnixSockets bool
+	AllowLocalBinding              bool
+	ManagedAllowedDomainsOnly      bool
+}
+
+// EnvironmentNetworkPolicyFromConfig captures portable traffic restrictions
+// without exposing controller runtime settings (#39980).
+func EnvironmentNetworkPolicyFromConfig(config *Config, managedAllowedDomainsOnly bool) EnvironmentNetworkPolicy {
+	return EnvironmentNetworkPolicy{
+		Domains:                        copyDomainMapArray(config.Domains),
+		UnixSockets:                    copyUnixSocketMap(config.UnixSockets),
+		AllowUpstreamProxy:             config.AllowUpstreamProxy,
+		DangerouslyAllowAllUnixSockets: config.DangerouslyAllowAllUnixSockets,
+		AllowLocalBinding:              config.AllowLocalBinding,
+		ManagedAllowedDomainsOnly:      managedAllowedDomainsOnly,
+	}
+}
+
+// ApplyTo applies attachment-owned traffic settings while preserving inherited
+// denials and proxy setup (#39980).
+func (p *EnvironmentNetworkPolicy) ApplyTo(config *Config) {
+	if p == nil || config == nil {
+		return
+	}
+	inheritedDenials := deniedDomainMap(config)
+	config.Domains = copyDomainMapArray(p.Domains)
+	for host := range inheritedDenials {
+		config.Domains[NormalizeHost(host)] = DomainDeny
+	}
+	inheritedSockets := config.UnixSockets
+	config.UnixSockets = copyUnixSocketMap(p.UnixSockets)
+	inheritedPermitsAll := config.DangerouslyAllowAllUnixSockets && !hasUnixSocketDeny(inheritedSockets)
+	ownerPermitsAll := p.DangerouslyAllowAllUnixSockets && !hasUnixSocketDeny(p.UnixSockets)
+	effective := copyUnixSocketMap(p.UnixSockets)
+	for path, permission := range inheritedSockets {
+		if permission == UnixSocketDeny || ownerPermitsAll {
+			if effective == nil {
+				effective = map[string]UnixSocketPermission{}
+			}
+			effective[path] = permission
+		}
+	}
+	if inheritedPermitsAll {
+		for path, permission := range inheritedSockets {
+			if permission == UnixSocketAllow {
+				if effective == nil {
+					effective = map[string]UnixSocketPermission{}
+				}
+				if _, ok := effective[path]; !ok {
+					effective[path] = permission
+				}
+			}
+		}
+	}
+	config.UnixSockets = effective
+	config.DangerouslyAllowAllUnixSockets = inheritedPermitsAll && ownerPermitsAll
+	if p.AllowUpstreamProxy {
+		config.AllowUpstreamProxy = true
+	}
+	if p.AllowLocalBinding {
+		config.AllowLocalBinding = true
+	}
+}
+
+// NewSpecForEnvironment resolves a remote environment's network policy for a
+// selected command and applies it to the execution-scoped proxy (#39980).
+func NewSpecForEnvironment(config Config, requirements *Requirements, permissionKind PermissionProfileKind, policy *EnvironmentNetworkPolicy, execRules []NetworkRule) (*Spec, error) {
+	if permissionKind == PermissionDisabled {
+		return nil, fmt.Errorf("environment network policy requires managed network enforcement")
+	}
+	spec, err := NewSpec(config, requirements, permissionKind)
+	if err != nil {
+		return nil, err
+	}
+	if policy != nil {
+		next := *spec
+		next.config = cloneConfig(&spec.config)
+		policy.ApplyTo(&next.config)
+		next.hardDenyAllowlistMisses = spec.hardDenyAllowlistMisses || policy.ManagedAllowedDomainsOnly || !managedSandboxActive(permissionKind)
+		spec = &next
+	}
+	if len(execRules) > 0 {
+		return spec.WithExecPolicyNetworkRules(execRules)
+	}
+	return spec, nil
+}
+
+func managedSandboxActive(permissionKind PermissionProfileKind) bool {
+	return permissionKind == PermissionManaged || permissionKind == PermissionExternal
+}
+
+func copyDomainMapArray(values map[string]DomainPermission) map[string]DomainPermission {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]DomainPermission, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func copyUnixSocketMap(values map[string]UnixSocketPermission) map[string]UnixSocketPermission {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]UnixSocketPermission, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func deniedDomainMap(config *Config) map[string]struct{} {
+	denials := map[string]struct{}{}
+	if config == nil {
+		return denials
+	}
+	for host, permission := range config.Domains {
+		if permission == DomainDeny {
+			denials[host] = struct{}{}
+		}
+	}
+	return denials
+}
+
+func hasUnixSocketDeny(values map[string]UnixSocketPermission) bool {
+	for _, permission := range values {
+		if permission == UnixSocketDeny {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Spec) Enabled() bool {
