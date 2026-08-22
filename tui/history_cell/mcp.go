@@ -3,6 +3,7 @@ package historycell
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 
 	"codex_go/tui"
@@ -210,6 +211,7 @@ func EmptyMCPOutput() PlainHistoryCell {
 
 type McpServerStatus struct {
 	Name              string
+	RuntimeStatus     string
 	Auth              string
 	Tools             []string
 	Resources         []McpResource
@@ -258,11 +260,20 @@ func NewMCPToolsOutputFromStatuses(statuses []McpServerStatus, detail bool) McpT
 			break
 		}
 	}
-	if !hasTools {
+	if !hasTools && detail {
 		lines = append(lines, "  \u2022 No MCP tools available.", "")
 	}
 	for _, status := range statuses {
-		lines = append(lines, "  \u2022 "+strings.TrimSpace(status.Name))
+		label := mcpRuntimeStatusLabel(status.RuntimeStatus, status.Auth)
+		count := len(status.Tools)
+		unit := "tools"
+		if count == 1 {
+			unit = "tool"
+		}
+		lines = append(lines, "  \u2022 "+strings.TrimSpace(status.Name)+": "+label+" ("+strconv.Itoa(count)+" "+unit+")")
+		if !detail {
+			continue
+		}
 		lines = append(lines, "    \u2022 Auth: "+firstNonEmptyHistory(strings.TrimSpace(status.Auth), "Unsupported"))
 		tools := append([]string(nil), status.Tools...)
 		sort.Strings(tools)
@@ -277,7 +288,37 @@ func NewMCPToolsOutputFromStatuses(statuses []McpServerStatus, detail bool) McpT
 		}
 		lines = append(lines, "")
 	}
+	if !detail {
+		lines = append(lines, "")
+		lines = append(lines, "  Use /mcp verbose for tools and resources.")
+	}
 	return McpToolsOutputCell{Lines: lines}
+}
+
+// mcpRuntimeStatusLabel renders the connection state label for the compact
+// /mcp view (Rust #40068). A server with no runtimeStatus falls back to the
+// authentication state, and otherwise reports an unknown state.
+func mcpRuntimeStatusLabel(runtimeStatus string, auth string) string {
+	switch runtimeStatus {
+	case "connected":
+		return "connected"
+	case "starting":
+		return "starting"
+	case "authenticationRequired":
+		return "authentication required"
+	case "failed":
+		return "failed"
+	case "notStarted":
+		return "not started"
+	case "disabled":
+		return "disabled"
+	case "cancelled":
+		return "cancelled"
+	}
+	if auth == "Not logged in" {
+		return "authentication required"
+	}
+	return "unknown"
 }
 
 func NewMcpInventoryLoading() PlainHistoryCell {

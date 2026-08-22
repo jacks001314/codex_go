@@ -453,22 +453,40 @@ func TestMCPHistoryCells(t *testing.T) {
 	}
 
 	wrapped := NewMCPToolsOutputFromStatuses([]McpServerStatus{{
-		Name:  "many-tools",
-		Auth:  "Unsupported",
-		Tools: []string{"gamma_tool", "alpha_tool", "beta_tool"},
-	}}, false)
-	wrappedLines := wrapped.DisplayLines(34)
+		Name:          "many-tools",
+		RuntimeStatus: "connected",
+		Auth:          "Unsupported",
+		Tools:         []string{"gamma_tool", "alpha_tool", "beta_tool"},
+	}}, true)
+	wrappedLines := wrapped.DisplayLines(40)
 	foundContinuation := false
 	for _, line := range wrappedLines {
-		if len([]rune(line)) > 34 {
-			t.Fatalf("inventory line exceeds width 34: %q", line)
+		if len([]rune(line)) > 40 {
+			t.Fatalf("inventory line exceeds width 40: %q", line)
 		}
-		if strings.HasPrefix(line, strings.Repeat(" ", len([]rune("    \u2022 Tools: ")))) && strings.Contains(line, "beta_tool") {
+		if strings.HasPrefix(line, strings.Repeat(" ", len([]rune("    \u2022 Tools: ")))) && strings.Contains(line, "gamma_tool") {
 			foundContinuation = true
 		}
 	}
 	if !foundContinuation {
 		t.Fatalf("many tools should wrap with an aligned continuation:\n%s", strings.Join(wrappedLines, "\n"))
+	}
+
+	compact := NewMCPToolsOutputFromStatuses([]McpServerStatus{
+		{Name: "docs", RuntimeStatus: "connected", Auth: "OAuth", Tools: []string{"search", "read"}},
+		{Name: "auth", RuntimeStatus: "authenticationRequired", Auth: "OAuth"},
+		{Name: "unknown", Auth: "OAuth"},
+	}, false)
+	compactDisplay := strings.Join(compact.DisplayLines(120), "\n")
+	for _, want := range []string{
+		"docs: connected (2 tools)",
+		"auth: authentication required (0 tools)",
+		"unknown: unknown (0 tools)",
+		"Use /mcp verbose for tools and resources.",
+	} {
+		if !strings.Contains(compactDisplay, want) {
+			t.Fatalf("compact mcp display missing %q:\n%s", want, compactDisplay)
+		}
 	}
 }
 

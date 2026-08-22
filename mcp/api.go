@@ -60,6 +60,21 @@ const (
 	MCPAuthOAuth       MCPAuthStatus = "oAuth"
 )
 
+// MCPConnectionStatus is the thread-runtime connection state of an MCP server
+// (Rust #40068). It is reported on thread-scoped mcpServerStatus/list requests
+// and is null when unavailable or the active configuration changed.
+type MCPConnectionStatus string
+
+const (
+	MCPConnectionNotStarted             MCPConnectionStatus = "notStarted"
+	MCPConnectionStarting               MCPConnectionStatus = "starting"
+	MCPConnectionConnected              MCPConnectionStatus = "connected"
+	MCPConnectionAuthenticationRequired MCPConnectionStatus = "authenticationRequired"
+	MCPConnectionFailed                 MCPConnectionStatus = "failed"
+	MCPConnectionCancelled              MCPConnectionStatus = "cancelled"
+	MCPConnectionDisabled               MCPConnectionStatus = "disabled"
+)
+
 type MCPServerStatusDetailMode string
 
 const (
@@ -230,6 +245,9 @@ func (t MCPToolInfo) MarshalJSON() ([]byte, error) {
 
 type MCPServerStatus struct {
 	Name string `json:"name,omitempty"`
+	// RuntimeStatus reports the current thread-runtime connection state; nil
+	// when unavailable or the active configuration changed (Rust #40068).
+	RuntimeStatus     *MCPConnectionStatus `json:"runtimeStatus,omitempty"`
 	// PluginID reports the owning plugin for plugin-contributed servers and is
 	// nil for servers from other sources (Rust 78d3665d15).
 	PluginID          *string               `json:"pluginId,omitempty"`
@@ -264,6 +282,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(struct {
 		Name              string                            `json:"name"`
+		RuntimeStatus     *MCPConnectionStatus              `json:"runtimeStatus"`
 		PluginID          *string                           `json:"pluginId"`
 		ServerInfo        *MCPServerInfo                    `json:"serverInfo"`
 		Tools             map[string]MCPToolInfo            `json:"tools"`
@@ -275,6 +294,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		FailureReason     *string                           `json:"failureReason,omitempty"`
 	}{
 		Name:              name,
+		RuntimeStatus:     cloneMCPConnectionStatus(s.RuntimeStatus),
 		PluginID:          cloneStringPtr(s.PluginID),
 		ServerInfo:        serverInfo,
 		Tools:             toolMapFromList(s.Tools),
@@ -1106,6 +1126,10 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 	if params != nil {
 		detail = params.Detail
 	}
+	threadID := ""
+	if params != nil && params.ThreadID != nil {
+		threadID = strings.TrimSpace(*params.ThreadID)
+	}
 	s.mu.Lock()
 	servers := make([]MCPServerStatus, 0, len(s.servers))
 	configs := make(map[string]ServerConfig, len(s.configs))
@@ -1128,13 +1152,12 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 			cloned.Resources = nil
 			cloned.ResourceTemplates = nil
 		}
+		if threadID != "" {
+			cloned.RuntimeStatus = s.runtimeConnectionStatus(cloned.effectiveName(), s.starting[cloned.effectiveName()] > 0)
+		}
 		servers = append(servers, cloned)
 	}
 	s.mu.Unlock()
-	threadID := ""
-	if params != nil && params.ThreadID != nil {
-		threadID = strings.TrimSpace(*params.ThreadID)
-	}
 	servers = s.populateStatusInventories(params, detail, observer, servers, configs, dynamicConfigs, threadID)
 	sort.SliceStable(servers, func(i int, j int) bool {
 		return servers[i].effectiveName() < servers[j].effectiveName()
@@ -1144,6 +1167,47 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 		return nil, err
 	}
 	return &MCPListServerStatusResponse{Data: page, NextCursor: nextCursor, Servers: page}, nil
+}
+
+// runtimeConnectionStatus derives the thread-runtime connection state for a
+// server (Rust #40068). It observes the already-published connection state
+// without starting or reconnecting the server. The caller must hold s.mu.
+func (s *MCPService) runtimeConnectionStatus(name string, starting bool) *MCPConnectionStatus {
+	name = strings.TrimSpace(name)
+	status := s.servers[name]
+	if !starting {
+		switch status.State {
+		case MCPServerStarting:
+			starting = true
+		case MCPServerFailed:
+			if status.FailureReason != nil && *status.FailureReason == mcpFailureReasonReauthenticationRequired {
+				v := MCPConnectionAuthenticationRequired
+				return &v
+			}
+			v := MCPConnectionFailed
+			return &v
+		case MCPServerCancelled:
+			v := MCPConnectionCancelled
+			return &v
+		case MCPServerStopped:
+			v := MCPConnectionDisabled
+			return &v
+		case MCPServerReady, "":
+			// A registered server that is part of the live connection set and
+			// is not mid-startup is considered connected. A previously
+			// failed/cancelled server that has transitioned back to ready is
+			// connected too.
+			v := MCPConnectionConnected
+			return &v
+		}
+	}
+	if starting {
+		v := MCPConnectionStarting
+		return &v
+	}
+	// A configured server that has not begun startup reports notStarted.
+	v := MCPConnectionNotStarted
+	return &v
 }
 
 type mcpInventoryStatusResult struct {
@@ -2342,6 +2406,7 @@ func cancelOAuthLogins(logins []*OAuthLoginServer) {
 }
 
 func cloneMCPServerStatus(status MCPServerStatus) MCPServerStatus {
+	status.RuntimeStatus = cloneMCPConnectionStatus(status.RuntimeStatus)
 	status.PluginID = cloneStringPtr(status.PluginID)
 	status.FailureReason = cloneStringPtr(status.FailureReason)
 	status.Server.Args = append([]string(nil), status.Server.Args...)
@@ -2517,6 +2582,14 @@ func mcpServerStatusResourceTemplates(templates []MCPResourceTemplate) []mcpServ
 }
 
 func cloneStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneMCPConnectionStatus(value *MCPConnectionStatus) *MCPConnectionStatus {
 	if value == nil {
 		return nil
 	}

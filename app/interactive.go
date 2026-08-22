@@ -1065,6 +1065,7 @@ func interactiveHistoryMCPStatuses(statuses []mcp.MCPServerStatus) []historycell
 		}
 		out = append(out, historycell.McpServerStatus{
 			Name:              name,
+			RuntimeStatus:     mcpRuntimeStatusWire(status.RuntimeStatus),
 			Auth:              interactiveMCPAuthStatusDisplay(status.AuthStatus),
 			Tools:             interactiveMCPToolNames(status.Tools),
 			Resources:         interactiveMCPResources(status.Resources),
@@ -1072,6 +1073,13 @@ func interactiveHistoryMCPStatuses(statuses []mcp.MCPServerStatus) []historycell
 		})
 	}
 	return out
+}
+
+func mcpRuntimeStatusWire(status *mcp.MCPConnectionStatus) string {
+	if status == nil {
+		return ""
+	}
+	return string(*status)
 }
 
 func interactiveMCPAuthStatusDisplay(status mcp.MCPAuthStatus) string {

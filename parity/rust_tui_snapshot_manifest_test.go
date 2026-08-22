@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 687 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 687", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 689 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 689", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -165,7 +165,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/history_cell/snapshots",
-			Files:    52,
+			Files:    54,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
