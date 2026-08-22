@@ -130,6 +130,10 @@ type StatusControlsRuntime struct {
 	TotalTokenUsage     StatusTokenUsage
 	ThreadID            string
 	FastMode            bool
+	// ModelSupportsFastMode is true when the currently selected model exposes a
+	// Fast/priority service tier. When false the fast-mode status item is
+	// omitted (Rust #39999 hides the value for catalogued unsupported models).
+	ModelSupportsFastMode bool
 	RawOutput           bool
 	ThreadTitle         string
 	WorkspaceHeadline   string
@@ -770,6 +774,9 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 	case bottompane.StatusLineSessionID:
 		return nonEmptyTrimmed(s.Runtime.ThreadID)
 	case bottompane.StatusLineFastMode:
+		if !s.Runtime.ModelSupportsFastMode {
+			return "", false
+		}
 		if s.Runtime.FastMode {
 			return "Fast on", true
 		}

@@ -366,6 +366,23 @@ func (m *Model) syncStatusControlsRuntime() {
 	m.statusControls.Runtime = m.statusControlsRuntime()
 }
 
+// modelSupportsFastMode reports whether the currently selected model exposes a
+// Fast/priority service tier (#39999). An empty tier list (uncatalogued model)
+// keeps the status value visible, while a catalogued model without a Fast tier
+// hides it.
+func modelSupportsFastMode(commands []bottompane.ServiceTierCommand) bool {
+	if len(commands) == 0 {
+		return true
+	}
+	for _, command := range commands {
+		if strings.EqualFold(strings.TrimSpace(command.Name), "fast") ||
+			strings.EqualFold(strings.TrimSpace(command.ID), "priority") {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 	cwd := ""
 	if m != nil {
@@ -396,6 +413,7 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 		ApprovalMode:       strings.TrimSpace(m.State.ApprovalPolicy),
 		ThreadID:           strings.TrimSpace(m.State.ThreadID),
 		RawOutput:          m.rawOutput,
+		ModelSupportsFastMode: modelSupportsFastMode(m.serviceTierCommands),
 		ThreadTitle:        strings.TrimSpace(m.State.ThreadID),
 		TaskProgress:       m.goalTaskProgress(),
 		CodexVersion:       "codex_go",

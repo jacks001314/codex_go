@@ -37,6 +37,29 @@ func TestStatusControlsSetStatusRefreshesTitleWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestStatusLineFastModeHidesForUnsupportedCatalogModelLikeRust(t *testing.T) {
+	cases := []struct {
+		name         string
+		fastMode     bool
+		supportsFast bool
+		want         string
+		wantOK       bool
+	}{
+		{name: "catalogued unsupported model hides fast mode", fastMode: true, supportsFast: false, want: "", wantOK: false},
+		{name: "supported model shows fast on", fastMode: true, supportsFast: true, want: "Fast on", wantOK: true},
+		{name: "supported model shows fast off", fastMode: false, supportsFast: true, want: "Fast off", wantOK: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewStatusControlsState(StatusControlsRuntime{FastMode: tc.fastMode, ModelSupportsFastMode: tc.supportsFast})
+			got, ok := state.StatusLineValueForItem(bottompane.StatusLineFastMode)
+			if ok != tc.wantOK || got != tc.want {
+				t.Fatalf("fast mode = %q ok=%v, want %q ok=%v", got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
 func TestStatusControlsStatusLineSetupBranchGitAndLimits(t *testing.T) {
 	fiveHours := int64(5 * 60)
 	weekly := int64(7 * 24 * 60)
