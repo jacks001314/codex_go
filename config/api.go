@@ -518,6 +518,7 @@ type ConfigRequirements struct {
 	Permissions                     map[string]any                  `json:"-"`
 	AllowedWebSearchModes           []WebSearchMode                 `json:"allowedWebSearchModes,omitempty"`
 	AllowManagedHooksOnly           *bool                           `json:"allowManagedHooksOnly,omitempty"`
+	AllowBrowserAndComputerUse      *bool                           `json:"allowBrowserAndComputerUse,omitempty"`
 	AllowAppshots                   *bool                           `json:"allowAppshots,omitempty"`
 	AllowRemoteControl              *bool                           `json:"allowRemoteControl,omitempty"`
 	ComputerUse                     *ComputerUseRequirements        `json:"computerUse,omitempty"`
@@ -548,6 +549,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		DefaultPermissions                   *string                   `json:"defaultPermissions"`
 		AllowedWebSearchModes                []WebSearchMode           `json:"allowedWebSearchModes"`
 		AllowManagedHooksOnly                *bool                     `json:"allowManagedHooksOnly"`
+		AllowBrowserAndComputerUse           *bool                     `json:"allowBrowserAndComputerUse"`
 		AllowAppshots                        *bool                     `json:"allowAppshots"`
 		AllowRemoteControl                   *bool                     `json:"allowRemoteControl"`
 		ComputerUse                          *ComputerUseRequirements  `json:"computerUse"`
@@ -573,6 +575,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		DefaultPermissions:                   cloneStringPtr(r.DefaultPermissions),
 		AllowedWebSearchModes:                webSearchModesOrNil(r.AllowedWebSearchModes),
 		AllowManagedHooksOnly:                cloneBoolPtr(r.AllowManagedHooksOnly),
+		AllowBrowserAndComputerUse:           cloneBoolPtr(r.AllowBrowserAndComputerUse),
 		AllowAppshots:                        cloneBoolPtr(r.AllowAppshots),
 		AllowRemoteControl:                   cloneBoolPtr(r.AllowRemoteControl),
 		ComputerUse:                          cloneComputerUse(r.ComputerUse),
@@ -636,14 +639,58 @@ func simpleModelNamespace(namespace string) bool {
 }
 
 type BrowserUseRequirements struct {
-	DisableAutoReview *bool `json:"disableAutoReview,omitempty"`
+	AllowHistoryAccess          *bool                           `json:"allowHistoryAccess,omitempty"`
+	DisableAutoReview           *bool                           `json:"disableAutoReview,omitempty"`
+	AllowGlobalPersistentApproval *bool                          `json:"allowGlobalPersistentApproval,omitempty"`
+	DefaultOriginPolicy         *BrowserUseOriginPolicy         `json:"defaultOriginPolicy,omitempty"`
+	Origins                     map[string]BrowserUseOriginPolicy `json:"origins,omitempty"`
 }
 
 func (r *BrowserUseRequirements) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		DisableAutoReview *bool `json:"disableAutoReview"`
+		AllowHistoryAccess            *bool                             `json:"allowHistoryAccess"`
+		DisableAutoReview             *bool                             `json:"disableAutoReview"`
+		AllowGlobalPersistentApproval *bool                             `json:"allowGlobalPersistentApproval"`
+		DefaultOriginPolicy           *BrowserUseOriginPolicy           `json:"defaultOriginPolicy"`
+		Origins                       map[string]BrowserUseOriginPolicy `json:"origins"`
 	}{
-		DisableAutoReview: cloneBoolPtr(r.DisableAutoReview),
+		AllowHistoryAccess:            cloneBoolPtr(r.AllowHistoryAccess),
+		DisableAutoReview:             cloneBoolPtr(r.DisableAutoReview),
+		AllowGlobalPersistentApproval: cloneBoolPtr(r.AllowGlobalPersistentApproval),
+		DefaultOriginPolicy:           cloneBrowserUseOriginPolicy(r.DefaultOriginPolicy),
+		Origins:                       cloneBrowserUseOriginPolicies(r.Origins),
+	})
+}
+
+// BrowserUseOriginPolicy mirrors Rust's BrowserUseOriginPolicy requirements and
+// config per-origin policy (#39995, #40018).
+type BrowserUseOriginPolicy struct {
+	Access                 *AllowDenyRequirement             `json:"access,omitempty"`
+	Downloads              *AllowDenyRequirement             `json:"downloads,omitempty"`
+	Uploads                *AllowDenyRequirement             `json:"uploads,omitempty"`
+	FullCDPAccess          *AllowDenyRequirement             `json:"fullCdpAccess,omitempty"`
+	AutoReview             *AllowDenyRequirement             `json:"autoReview,omitempty"`
+	PersistentApproval     *bool                             `json:"persistentApproval,omitempty"`
+	AccessApprovalLifetime *BrowserUseAccessApprovalLifetime `json:"accessApprovalLifetime,omitempty"`
+}
+
+func (p *BrowserUseOriginPolicy) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Access                 *AllowDenyRequirement             `json:"access"`
+		Downloads              *AllowDenyRequirement             `json:"downloads"`
+		Uploads                *AllowDenyRequirement             `json:"uploads"`
+		FullCDPAccess          *AllowDenyRequirement             `json:"fullCdpAccess"`
+		AutoReview             *AllowDenyRequirement             `json:"autoReview"`
+		PersistentApproval     *bool                             `json:"persistentApproval"`
+		AccessApprovalLifetime *BrowserUseAccessApprovalLifetime `json:"accessApprovalLifetime"`
+	}{
+		Access:                 cloneAllowDenyRequirementPtr(p.Access),
+		Downloads:              cloneAllowDenyRequirementPtr(p.Downloads),
+		Uploads:                cloneAllowDenyRequirementPtr(p.Uploads),
+		FullCDPAccess:          cloneAllowDenyRequirementPtr(p.FullCDPAccess),
+		AutoReview:             cloneAllowDenyRequirementPtr(p.AutoReview),
+		PersistentApproval:     cloneBoolPtr(p.PersistentApproval),
+		AccessApprovalLifetime: cloneBrowserUseAccessApprovalLifetimePtr(p.AccessApprovalLifetime),
 	})
 }
 
@@ -730,14 +777,78 @@ const (
 )
 
 type ComputerUseRequirements struct {
-	AllowLockedComputerUse *bool `json:"allowLockedComputerUse,omitempty"`
+	AllowLockedComputerUse *bool                            `json:"allowLockedComputerUse,omitempty"`
+	AllowPersistentApproval *bool                           `json:"allowPersistentApproval,omitempty"`
+	DefaultAppAccess        *AllowDenyRequirement           `json:"defaultAppAccess,omitempty"`
+	Macos                   *ComputerUseMacosRequirements   `json:"macos,omitempty"`
+	Windows                 *ComputerUseWindowsRequirements `json:"windows,omitempty"`
 }
 
 func (r *ComputerUseRequirements) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		AllowLockedComputerUse *bool `json:"allowLockedComputerUse"`
+		AllowLockedComputerUse *bool                             `json:"allowLockedComputerUse"`
+		AllowPersistentApproval *bool                            `json:"allowPersistentApproval"`
+		DefaultAppAccess        *AllowDenyRequirement            `json:"defaultAppAccess"`
+		Macos                   *ComputerUseMacosRequirements    `json:"macos"`
+		Windows                 *ComputerUseWindowsRequirements  `json:"windows"`
 	}{
-		AllowLockedComputerUse: cloneBoolPtr(r.AllowLockedComputerUse),
+		AllowLockedComputerUse:  cloneBoolPtr(r.AllowLockedComputerUse),
+		AllowPersistentApproval: cloneBoolPtr(r.AllowPersistentApproval),
+		DefaultAppAccess:        cloneAllowDenyRequirementPtr(r.DefaultAppAccess),
+		Macos:                   cloneComputerUseMacos(r.Macos),
+		Windows:                 cloneComputerUseWindows(r.Windows),
+	})
+}
+
+// ComputerUseMacosRequirements mirrors Rust's macOS bundle-id requirements
+// (#39995, #40018).
+type ComputerUseMacosRequirements struct {
+	BundleIDs map[string]AllowDenyRequirement `json:"bundleIds,omitempty"`
+}
+
+func (r *ComputerUseMacosRequirements) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		BundleIDs map[string]AllowDenyRequirement `json:"bundleIds"`
+	}{
+		BundleIDs: cloneAllowDenyMap(r.BundleIDs),
+	})
+}
+
+// ComputerUseWindowsRequirements mirrors Rust's Windows AUMID / executable
+// requirements (#39995, #40018).
+type ComputerUseWindowsRequirements struct {
+	Aumids map[string]AllowDenyRequirement           `json:"aumids,omitempty"`
+	Exes   []ComputerUseWindowsExeRequirement        `json:"exes,omitempty"`
+}
+
+func (r *ComputerUseWindowsRequirements) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Aumids map[string]AllowDenyRequirement    `json:"aumids"`
+		Exes   []ComputerUseWindowsExeRequirement `json:"exes"`
+	}{
+		Aumids: cloneAllowDenyMap(r.Aumids),
+		Exes:   cloneComputerUseWindowsExes(r.Exes),
+	})
+}
+
+type ComputerUseWindowsExeRequirement struct {
+	PublisherName string               `json:"publisherName"`
+	ProductName   string               `json:"productName"`
+	BinaryName    *string              `json:"binaryName,omitempty"`
+	Access        AllowDenyRequirement `json:"access"`
+}
+
+func (r *ComputerUseWindowsExeRequirement) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		PublisherName string               `json:"publisherName"`
+		ProductName   string               `json:"productName"`
+		BinaryName    *string              `json:"binaryName"`
+		Access        AllowDenyRequirement `json:"access"`
+	}{
+		PublisherName: r.PublisherName,
+		ProductName:   r.ProductName,
+		BinaryName:    cloneStringPtr(r.BinaryName),
+		Access:        r.Access,
 	})
 }
 
@@ -2976,6 +3087,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.DefaultPermissions = cloneStringPtr(requirements.DefaultPermissions)
 	clone.AdditionalDeveloperInstructions = cloneStringPtr(requirements.AdditionalDeveloperInstructions)
 	clone.AllowManagedHooksOnly = cloneBoolPtr(requirements.AllowManagedHooksOnly)
+	clone.AllowBrowserAndComputerUse = cloneBoolPtr(requirements.AllowBrowserAndComputerUse)
 	clone.AllowAppshots = cloneBoolPtr(requirements.AllowAppshots)
 	clone.AllowRemoteControl = cloneBoolPtr(requirements.AllowRemoteControl)
 	clone.ComputerUse = cloneComputerUse(requirements.ComputerUse)
@@ -3072,14 +3184,108 @@ func cloneComputerUse(value *ComputerUseRequirements) *ComputerUseRequirements {
 	if value == nil {
 		return nil
 	}
-	return &ComputerUseRequirements{AllowLockedComputerUse: cloneBoolPtr(value.AllowLockedComputerUse)}
+	return &ComputerUseRequirements{
+		AllowLockedComputerUse:  cloneBoolPtr(value.AllowLockedComputerUse),
+		AllowPersistentApproval: cloneBoolPtr(value.AllowPersistentApproval),
+		DefaultAppAccess:        cloneAllowDenyRequirementPtr(value.DefaultAppAccess),
+		Macos:                   cloneComputerUseMacos(value.Macos),
+		Windows:                 cloneComputerUseWindows(value.Windows),
+	}
 }
 
 func cloneBrowserUse(value *BrowserUseRequirements) *BrowserUseRequirements {
 	if value == nil {
 		return nil
 	}
-	return &BrowserUseRequirements{DisableAutoReview: cloneBoolPtr(value.DisableAutoReview)}
+	return &BrowserUseRequirements{
+		AllowHistoryAccess:            cloneBoolPtr(value.AllowHistoryAccess),
+		DisableAutoReview:             cloneBoolPtr(value.DisableAutoReview),
+		AllowGlobalPersistentApproval: cloneBoolPtr(value.AllowGlobalPersistentApproval),
+		DefaultOriginPolicy:           cloneBrowserUseOriginPolicy(value.DefaultOriginPolicy),
+		Origins:                       cloneBrowserUseOriginPolicies(value.Origins),
+	}
+}
+
+func cloneAllowDenyRequirementPtr(value *AllowDenyRequirement) *AllowDenyRequirement {
+	if value == nil {
+		return nil
+	}
+	out := *value
+	return &out
+}
+
+func cloneBrowserUseAccessApprovalLifetimePtr(value *BrowserUseAccessApprovalLifetime) *BrowserUseAccessApprovalLifetime {
+	if value == nil {
+		return nil
+	}
+	out := *value
+	return &out
+}
+
+func cloneBrowserUseOriginPolicy(value *BrowserUseOriginPolicy) *BrowserUseOriginPolicy {
+	if value == nil {
+		return nil
+	}
+	return &BrowserUseOriginPolicy{
+		Access:                 cloneAllowDenyRequirementPtr(value.Access),
+		Downloads:              cloneAllowDenyRequirementPtr(value.Downloads),
+		Uploads:                cloneAllowDenyRequirementPtr(value.Uploads),
+		FullCDPAccess:          cloneAllowDenyRequirementPtr(value.FullCDPAccess),
+		AutoReview:             cloneAllowDenyRequirementPtr(value.AutoReview),
+		PersistentApproval:     cloneBoolPtr(value.PersistentApproval),
+		AccessApprovalLifetime: cloneBrowserUseAccessApprovalLifetimePtr(value.AccessApprovalLifetime),
+	}
+}
+
+func cloneBrowserUseOriginPolicies(values map[string]BrowserUseOriginPolicy) map[string]BrowserUseOriginPolicy {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]BrowserUseOriginPolicy, len(values))
+	for key, value := range values {
+		out[key] = *cloneBrowserUseOriginPolicy(&value)
+	}
+	return out
+}
+
+func cloneComputerUseMacos(value *ComputerUseMacosRequirements) *ComputerUseMacosRequirements {
+	if value == nil {
+		return nil
+	}
+	return &ComputerUseMacosRequirements{BundleIDs: cloneAllowDenyMap(value.BundleIDs)}
+}
+
+func cloneComputerUseWindows(value *ComputerUseWindowsRequirements) *ComputerUseWindowsRequirements {
+	if value == nil {
+		return nil
+	}
+	return &ComputerUseWindowsRequirements{
+		Aumids: cloneAllowDenyMap(value.Aumids),
+		Exes:   cloneComputerUseWindowsExes(value.Exes),
+	}
+}
+
+func cloneComputerUseWindowsExes(values []ComputerUseWindowsExeRequirement) []ComputerUseWindowsExeRequirement {
+	if values == nil {
+		return nil
+	}
+	out := make([]ComputerUseWindowsExeRequirement, len(values))
+	for i, value := range values {
+		out[i] = value
+		out[i].BinaryName = cloneStringPtr(value.BinaryName)
+	}
+	return out
+}
+
+func cloneAllowDenyMap(values map[string]AllowDenyRequirement) map[string]AllowDenyRequirement {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]AllowDenyRequirement, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func cloneInAppBrowser(value *InAppBrowserRequirements) *InAppBrowserRequirements {

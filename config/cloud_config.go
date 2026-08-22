@@ -317,6 +317,9 @@ func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequireme
 	if overlay.AllowManagedHooksOnly != nil {
 		out.AllowManagedHooksOnly = cloneBoolPtr(overlay.AllowManagedHooksOnly)
 	}
+	if overlay.AllowBrowserAndComputerUse != nil {
+		out.AllowBrowserAndComputerUse = cloneBoolPtr(overlay.AllowBrowserAndComputerUse)
+	}
 	if overlay.AllowAppshots != nil {
 		out.AllowAppshots = cloneBoolPtr(overlay.AllowAppshots)
 	}

@@ -54,10 +54,75 @@ func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequireme
 
 func browserUseRequirementsFromMap(values map[string]any) *BrowserUseRequirements {
 	var out BrowserUseRequirements
+	if value, ok := boolAnyKey(values, "allow_history_access", "allowHistoryAccess"); ok {
+		out.AllowHistoryAccess = &value
+	}
 	if value, ok := boolAnyKey(values, "disable_auto_review", "disableAutoReview"); ok {
 		out.DisableAutoReview = &value
 	}
+	if value, ok := boolAnyKey(values, "allow_global_persistent_approval", "allowGlobalPersistentApproval"); ok {
+		out.AllowGlobalPersistentApproval = &value
+	}
+	if nested, ok := mapAnyKey(values, "default_origin_policy", "defaultOriginPolicy"); ok {
+		out.DefaultOriginPolicy = browserUseOriginPolicyFromMap(nested)
+	}
+	if nested, ok := mapAnyKey(values, "origins"); ok {
+		out.Origins = browserUseOriginPoliciesFromMap(nested)
+	}
 	return &out
+}
+
+func browserUseOriginPoliciesFromMap(values map[string]any) map[string]BrowserUseOriginPolicy {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]BrowserUseOriginPolicy, len(values))
+	for name, nested := range values {
+		if table, ok := nested.(map[string]any); ok {
+			out[name] = *browserUseOriginPolicyFromMap(table)
+		}
+	}
+	return out
+}
+
+func browserUseOriginPolicyFromMap(values map[string]any) *BrowserUseOriginPolicy {
+	var out BrowserUseOriginPolicy
+	if value, ok := allowDenyAnyKey(values, "access"); ok {
+		out.Access = &value
+	}
+	if value, ok := allowDenyAnyKey(values, "downloads"); ok {
+		out.Downloads = &value
+	}
+	if value, ok := allowDenyAnyKey(values, "uploads"); ok {
+		out.Uploads = &value
+	}
+	if value, ok := allowDenyAnyKey(values, "full_cdp_access", "fullCdpAccess"); ok {
+		out.FullCDPAccess = &value
+	}
+	if value, ok := allowDenyAnyKey(values, "auto_review", "autoReview"); ok {
+		out.AutoReview = &value
+	}
+	if value, ok := boolAnyKey(values, "persistent_approval", "persistentApproval"); ok {
+		out.PersistentApproval = &value
+	}
+	if value, ok := stringAnyKey(values, "access_approval_lifetime", "accessApprovalLifetime"); ok {
+		lifetime := BrowserUseAccessApprovalLifetime(value)
+		out.AccessApprovalLifetime = &lifetime
+	}
+	return &out
+}
+
+func allowDenyAnyKey(values map[string]any, keys ...string) (AllowDenyRequirement, bool) {
+	for _, key := range keys {
+		if raw, ok := values[key]; ok {
+			value, ok := raw.(string)
+			if !ok {
+				return "", false
+			}
+			return AllowDenyRequirement(value), true
+		}
+	}
+	return "", false
 }
 
 func inAppBrowserRequirementsFromMap(values map[string]any) *InAppBrowserRequirements {
@@ -138,6 +203,9 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	}
 	if value, ok := boolAnyKey(values, "allow_managed_hooks_only", "allowManagedHooksOnly"); ok {
 		out.AllowManagedHooksOnly = &value
+	}
+	if value, ok := boolAnyKey(values, "allow_browser_and_computer_use", "allowBrowserAndComputerUse"); ok {
+		out.AllowBrowserAndComputerUse = &value
 	}
 	if value, ok := boolAnyKey(values, "allow_appshots", "allowAppshots"); ok {
 		out.AllowAppshots = &value
@@ -358,7 +426,76 @@ func computerUseRequirementsFromMap(values map[string]any) *ComputerUseRequireme
 	if value, ok := boolAnyKey(values, "allow_locked_computer_use", "allowLockedComputerUse"); ok {
 		out.AllowLockedComputerUse = &value
 	}
+	if value, ok := boolAnyKey(values, "allow_persistent_approval", "allowPersistentApproval"); ok {
+		out.AllowPersistentApproval = &value
+	}
+	if value, ok := allowDenyAnyKey(values, "default_app_access", "defaultAppAccess"); ok {
+		out.DefaultAppAccess = &value
+	}
+	if nested, ok := mapAnyKey(values, "macos"); ok {
+		out.Macos = computerUseMacosRequirementsFromMap(nested)
+	}
+	if nested, ok := mapAnyKey(values, "windows"); ok {
+		out.Windows = computerUseWindowsRequirementsFromMap(nested)
+	}
 	return &out
+}
+
+func computerUseMacosRequirementsFromMap(values map[string]any) *ComputerUseMacosRequirements {
+	var out ComputerUseMacosRequirements
+	if nested, ok := mapAnyKey(values, "bundle_ids", "bundleIds"); ok {
+		out.BundleIDs = allowDenyMapFromMap(nested)
+	}
+	return &out
+}
+
+func computerUseWindowsRequirementsFromMap(values map[string]any) *ComputerUseWindowsRequirements {
+	var out ComputerUseWindowsRequirements
+	if nested, ok := mapAnyKey(values, "aumids"); ok {
+		out.Aumids = allowDenyMapFromMap(nested)
+	}
+	if raw, ok := values["exes"]; ok {
+		items, ok := raw.([]any)
+		if !ok {
+			items = nil
+		}
+		out.Exes = computerUseWindowsExesFromList(items)
+	}
+	return &out
+}
+
+func computerUseWindowsExesFromList(values []any) []ComputerUseWindowsExeRequirement {
+	out := make([]ComputerUseWindowsExeRequirement, 0, len(values))
+	for _, raw := range values {
+		table, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		var item ComputerUseWindowsExeRequirement
+		item.PublisherName, _ = stringAnyKey(table, "publisher_name", "publisherName")
+		item.ProductName, _ = stringAnyKey(table, "product_name", "productName")
+		if value, ok := stringAnyKey(table, "binary_name", "binaryName"); ok {
+			item.BinaryName = &value
+		}
+		if value, ok := allowDenyAnyKey(table, "access"); ok {
+			item.Access = value
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func allowDenyMapFromMap(values map[string]any) map[string]AllowDenyRequirement {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]AllowDenyRequirement, len(values))
+	for key, raw := range values {
+		if value, ok := raw.(string); ok {
+			out[key] = AllowDenyRequirement(value)
+		}
+	}
+	return out
 }
 
 func managedHooksRequirementsFromMap(values map[string]any) *ManagedHooksRequirements {
@@ -657,6 +794,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.Permissions == nil &&
 			value.AllowedWebSearchModes == nil &&
 			value.AllowManagedHooksOnly == nil &&
+			value.AllowBrowserAndComputerUse == nil &&
 			value.AllowAppshots == nil &&
 			value.AllowRemoteControl == nil &&
 			value.ComputerUse == nil &&
