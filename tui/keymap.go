@@ -35,6 +35,8 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("chat", "Chat", "toggle_voice_mute", "Toggle the microphone in an active voice conversation.", nil),
 	keymapAction("chat", "Chat", "decrease_reasoning_effort", "Decrease reasoning effort.", []string{"alt-,", "shift-down"}),
 	keymapAction("chat", "Chat", "increase_reasoning_effort", "Increase reasoning effort.", []string{"alt-.", "shift-up"}),
+	keymapAction("chat", "Chat", "previous_permission_mode", "Switch to the previous available permission mode.", nil),
+	keymapAction("chat", "Chat", "next_permission_mode", "Switch to the next available permission mode.", nil),
 	keymapAction("chat", "Chat", "edit_queued_message", "Edit the most recently queued message.", []string{"alt-up", "shift-left"}),
 	keymapAction("composer", "Composer", "submit", "Submit the current composer draft.", []string{"enter"}),
 	keymapAction("composer", "Composer", "queue", "Queue the draft while a task is running.", []string{"tab"}),

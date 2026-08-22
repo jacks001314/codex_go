@@ -1984,6 +1984,17 @@ func sanitizeProjectConfigValues(values map[string]any) {
 			delete(values, "features")
 		}
 	}
+	// Repository contents must not turn an ordinary key into a permission
+	// increase (#39873): permission-mode cycling shortcuts are session-only and
+	// are stripped from project config.
+	if tui, ok := values["tui"].(map[string]any); ok {
+		if keymap, ok := tui["keymap"].(map[string]any); ok {
+			if chat, ok := keymap["chat"].(map[string]any); ok {
+				delete(chat, "previous_permission_mode")
+				delete(chat, "next_permission_mode")
+			}
+		}
+	}
 }
 
 func resolveProjectRelativeConfigValues(values map[string]any, dotCodexDir string) {
