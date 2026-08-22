@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { chmodSync, existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,14 @@ if (!existsSync(executable)) {
   console.error(`Codex executable is missing from ${platformPackage}: ${executable}`);
   process.exit(1);
 }
+
+// The native binary must be executable. When a platform package was built or
+// packed on a host that does not preserve Unix mode bits (e.g. Windows), the
+// tarball ships the binary without the exec bit, causing EACCES on Linux/macOS.
+// Ensure it is executable before spawn (no-op on Windows, harmless elsewhere).
+try {
+  chmodSync(executable, 0o755);
+} catch {}
 
 function isPnpmOwnedCodexInstall(nodeModulesDir) {
   if (!existsSync(path.join(nodeModulesDir, ".modules.yaml"))) return false;

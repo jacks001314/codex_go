@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -56,6 +56,9 @@ for (const target of targets) {
   const env = { ...process.env, GOOS: target.goos, GOARCH: target.goarch, CGO_ENABLED: "0" };
   const ldflags = `-s -w -X codex_go/doctor.buildVersion=${version} -X codex_go/appserver.buildVersion=${version} -X codex_go/mcp.buildVersion=${version}`;
   run("go", ["build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", executable, "./cmd/codex"], { env });
+  // Best-effort exec bit: required for Unix targets when built on a host that
+  // does not preserve mode bits. No-op on Windows.
+  try { chmodSync(executable, 0o755); } catch {}
   if (target.goos === "windows") {
     const resourcesDir = path.join(targetDir, "codex-resources");
     mkdirSync(resourcesDir, { recursive: true });

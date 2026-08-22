@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
-	"github.com/muesli/termenv"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	gmtext "github.com/yuin/goldmark/text"
@@ -55,11 +54,12 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
 	style := codexMarkdownStyle()
+	colorLevel := codextui.DetectStdoutColorLevel()
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(width),
-		glamour.WithColorProfile(termenv.TrueColor),
-		glamour.WithChromaFormatter("terminal16m"),
+		glamour.WithColorProfile(codextui.TermenvProfileForLevel(colorLevel)),
+		glamour.WithChromaFormatter(codextui.ChromaFormatterForLevel(colorLevel)),
 	)
 	if err != nil {
 		return "", err

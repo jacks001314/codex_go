@@ -12,10 +12,27 @@ func HighlightCodeANSI(code string, language string, themeID string) string {
 		return ""
 	}
 	var out bytes.Buffer
-	if err := quick.Highlight(&out, code, language, "terminal16m", ChromaThemeForCodexTheme(themeID)); err != nil {
+	if err := quick.Highlight(&out, code, language, ChromaFormatterForLevel(diffColorLevel()), ChromaThemeForCodexTheme(themeID)); err != nil {
 		return code
 	}
 	return strings.TrimRight(out.String(), "\r\n")
+}
+
+// ChromaFormatterForLevel maps the detected terminal color depth to the chroma
+// terminal formatter so syntax highlighting never emits truecolor escapes on a
+// terminal that cannot display them (Rust parity: terminal color level drives
+// the highlighter's color format).
+func ChromaFormatterForLevel(level StdoutColorLevel) string {
+	switch level {
+	case ColorTrue:
+		return "terminal16m"
+	case ColorANSI256:
+		return "terminal256"
+	case ColorANSI16:
+		return "terminal16"
+	default:
+		return "terminal16m"
+	}
 }
 
 func HighlightBashANSI(script string, themeID string) string {
