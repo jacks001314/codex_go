@@ -148,6 +148,13 @@ func execThreadSource(req *Request) string {
 	if req != nil && req.subagent != nil {
 		return "subagent"
 	}
+	// `--thread-source` lets an exec caller classify newly created/forked
+	// threads (mirrors Rust #40161). A non-empty value is used verbatim.
+	if req != nil {
+		if source := strings.TrimSpace(req.Exec.ThreadSource); source != "" {
+			return source
+		}
+	}
 	// Rust's exec crate starts every user-facing session with
 	// ThreadSource::User regardless of the exec subcommand (including review).
 	return "user"

@@ -8803,7 +8803,7 @@ func renderedFragmentInputItem(rendered *contextfrag.RenderedFragment) any {
 	if role == "" {
 		role = contextfrag.RoleUser
 	}
-	return map[string]any{
+	item := map[string]any{
 		"type": "message",
 		"role": role,
 		"content": []map[string]any{{
@@ -8811,6 +8811,14 @@ func renderedFragmentInputItem(rendered *contextfrag.RenderedFragment) any {
 			"text": rendered.Content,
 		}},
 	}
+	// Preserve the harness-owned content classification as message metadata
+	// (mirrors Rust `content_item_kinds` from the 2026-08-23 sync25 batch).
+	if kind := strings.TrimSpace(rendered.ContentKind); kind != "" {
+		item["internal_chat_message_metadata_passthrough"] = map[string]any{
+			"content_item_kinds": []string{kind},
+		}
+	}
+	return item
 }
 
 func (r *RuntimeRouter) skillContextWindowForTurn(cfg *config.Config, params *turn.TurnStartParams) int64 {

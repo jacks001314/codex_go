@@ -107,6 +107,10 @@ type ReasoningItemReasoningSummary struct {
 
 type InternalChatMessageMetadataPassthrough struct {
 	TurnID string `json:"turn_id,omitempty"`
+	// ContentItemKinds carries harness-owned classifications aligned with the
+	// item's content entries (mirrors Rust `content_item_kinds`). Transparent
+	// string wrapper in Rust, so []string is the wire representation.
+	ContentItemKinds []string `json:"content_item_kinds,omitempty"`
 }
 
 type LocalShellStatus string

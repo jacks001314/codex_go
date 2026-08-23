@@ -17,22 +17,35 @@ type Fragment interface {
 	Role() string
 	Markers() (string, string)
 	Body() string
+	// ContentKind returns a stable "<feature>.<name>" classification for the
+	// rendered model-visible content (mirrors Rust `content_kind()`).
+	ContentKind() string
 }
 
 type RenderedFragment struct {
-	Role    string
-	Content string
+	Role        string
+	Content     string
+	ContentKind string
 }
 
 type SimpleFragment struct {
-	role     string
-	openTag  string
-	closeTag string
-	body     string
+	role        string
+	openTag     string
+	closeTag    string
+	body        string
+	contentKind string
 }
 
 func NewSimpleFragment(role string, openTag string, closeTag string, body string) *SimpleFragment {
 	return &SimpleFragment{role: role, openTag: openTag, closeTag: closeTag, body: body}
+}
+
+// NewSimpleFragmentWithKind builds a fragment with an explicit content-kind
+// classification. A kind that is empty falls back to "generic".
+func NewSimpleFragmentWithKind(role string, openTag string, closeTag string, body string, contentKind string) *SimpleFragment {
+	f := NewSimpleFragment(role, openTag, closeTag, body)
+	f.contentKind = contentKind
+	return f
 }
 
 func (f *SimpleFragment) Role() string {
@@ -47,6 +60,13 @@ func (f *SimpleFragment) Body() string {
 	return f.body
 }
 
+func (f *SimpleFragment) ContentKind() string {
+	if f.contentKind == "" {
+		return "generic"
+	}
+	return f.contentKind
+}
+
 func Render(fragment Fragment) *RenderedFragment {
 	if fragment == nil {
 		return nil
@@ -58,8 +78,9 @@ func Render(fragment Fragment) *RenderedFragment {
 		content = strings.Join(nonEmpty([]string{open, body, close}), "\n")
 	}
 	return &RenderedFragment{
-		Role:    fragment.Role(),
-		Content: content,
+		Role:        fragment.Role(),
+		Content:     content,
+		ContentKind: fragment.ContentKind(),
 	}
 }
 
@@ -69,8 +90,9 @@ func RenderStandalone(fragment Fragment) *RenderedFragment {
 	}
 	open, close := fragment.Markers()
 	return &RenderedFragment{
-		Role:    fragment.Role(),
-		Content: open + fragment.Body() + close,
+		Role:        fragment.Role(),
+		Content:     open + fragment.Body() + close,
+		ContentKind: fragment.ContentKind(),
 	}
 }
 
@@ -601,4 +623,67 @@ func valueOr(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// ContentKind implementations: each fragment supplies a stable
+// "<feature>.<name>" classification mirroring the Rust `content_kind()`
+// helpers introduced in the 2026-08-23 sync25 batch (#40174/#40177/#40180).
+
+func (p *AvailablePluginsInstructions) ContentKind() string {
+	return "plugins.usage_instructions"
+}
+
+func (p *PluginInstructions) ContentKind() string {
+	return "plugins.instructions"
+}
+
+func (s *SkillInstructions) ContentKind() string {
+	return "skills.selected_skill_instructions"
+}
+
+func (a *AppInstructions) ContentKind() string {
+	return "apps.instructions"
+}
+
+func (n *ImageResizeNotice) ContentKind() string {
+	return "images.resize_notice"
+}
+
+func (p *RecommendedPluginsInstructions) ContentKind() string {
+	return "plugins.recommendations"
+}
+
+func (p *PermissionsInstructions) ContentKind() string {
+	return "generic.permissions_instructions"
+}
+
+func (c *CurrentTimeReminder) ContentKind() string {
+	return "current_time.reminder"
+}
+
+func (a *AdditionalContextFragment) ContentKind() string {
+	if a == nil {
+		return "generic.additional_content"
+	}
+	return "additional_content." + a.Key
+}
+
+func (u *UserInstructions) ContentKind() string {
+	return "agents_md.instructions"
+}
+
+func (m *ModelSwitchInstructions) ContentKind() string {
+	return "model_switch.instructions"
+}
+
+func (p *PersonalitySpecInstructions) ContentKind() string {
+	return "personality.spec_instructions"
+}
+
+func (c *ContextWindowGuidance) ContentKind() string {
+	return "token_budget.context_window_guidance"
+}
+
+func (t *TokenBudgetContext) ContentKind() string {
+	return "token_budget.context_window"
 }

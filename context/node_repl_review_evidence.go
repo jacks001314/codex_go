@@ -172,6 +172,10 @@ func (f *NodeReplReviewEvidenceFragment) Markers() (string, string) {
 	return "<node_repl_review_evidence>", "</node_repl_review_evidence>"
 }
 
+func (f *NodeReplReviewEvidenceFragment) ContentKind() string {
+	return "guardian.node_repl_review_evidence"
+}
+
 func (f *NodeReplReviewEvidenceFragment) Body() string {
 	if f == nil {
 		return ""

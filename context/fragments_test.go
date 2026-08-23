@@ -26,7 +26,7 @@ func TestRenderManySkipsNilAndEmpty(t *testing.T) {
 		NewSimpleFragment(RoleUser, "", "", " "),
 		NewSimpleFragment(RoleUser, "", "", "hello"),
 	})
-	if !reflect.DeepEqual(rendered, []RenderedFragment{{Role: RoleUser, Content: "hello"}}) {
+	if !reflect.DeepEqual(rendered, []RenderedFragment{{Role: RoleUser, Content: "hello", ContentKind: "generic"}}) {
 		t.Fatalf("RenderMany() = %#v", rendered)
 	}
 }

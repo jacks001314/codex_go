@@ -117,6 +117,7 @@ type RootOptions struct {
 type ExecOptions struct {
 	StrictConfig          bool
 	Shared                SharedOptions
+	ThreadSource          string
 	SkipGitRepoCheck      bool
 	Ephemeral             bool
 	IgnoreUserConfig      bool
@@ -742,6 +743,13 @@ func parseExec(args []string, exec *ExecOptions) error {
 			return parseReview(args[i+1:], &exec.Review)
 		case arg == "--strict-config":
 			exec.StrictConfig = true
+		case arg == "--thread-source":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			exec.ThreadSource = value
+			return parseExec(args[next:], exec)
 		case arg == "--skip-git-repo-check":
 			exec.SkipGitRepoCheck = true
 		case arg == "--ephemeral":
