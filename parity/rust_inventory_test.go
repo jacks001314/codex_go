@@ -247,5 +247,6 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"tui",
 		"turn",
 		"utils",
+		"worktree",
 	}
 }
