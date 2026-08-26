@@ -1676,3 +1676,13 @@ func TestParseMigrateRolloutsCommandLikeRust(t *testing.T) {
 		t.Fatalf("Parse unknown option error = %v", err)
 	}
 }
+
+func TestParseDoctorFeedbackFlag(t *testing.T) {
+	opts := &DoctorOptions{}
+	if err := parseDoctor([]string{"--json", "--feedback"}, opts); err != nil {
+		t.Fatalf("parseDoctor error = %v", err)
+	}
+	if !opts.JSON || !opts.Feedback {
+		t.Fatalf("parseDoctor flags = %#v, want JSON+Feedback", opts)
+	}
+}

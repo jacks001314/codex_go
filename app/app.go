@@ -119,6 +119,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 			All:     parsed.Doctor.All,
 			NoColor: parsed.Doctor.NoColor,
 			ASCII:   parsed.Doctor.ASCII,
+			Feedback: parsed.Doctor.Feedback,
 			Root:    parsed.Root,
 			DispatchPaths: func() *cli.DispatchPaths {
 				if runOpts == nil || runOpts.DispatchPaths == nil {

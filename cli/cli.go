@@ -331,6 +331,7 @@ type DoctorOptions struct {
 	All     bool
 	NoColor bool
 	ASCII   bool
+	Feedback bool
 }
 
 type MigrateRolloutsOptions struct {
@@ -2882,6 +2883,8 @@ func parseDoctor(args []string, doctor *DoctorOptions) error {
 			doctor.NoColor = true
 		case "--ascii":
 			doctor.ASCII = true
+		case "--feedback":
+			doctor.Feedback = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("unknown doctor option %s", arg)

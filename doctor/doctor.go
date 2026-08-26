@@ -44,6 +44,11 @@ import (
 )
 
 const defaultProviderReachabilityTimeout = 3 * time.Second
+
+// feedbackIntegrityCheckDeadline bounds each database integrity scan when
+// collecting a diagnostic feedback attachment (Rust #40688), so a slow or
+// lock-contended database cannot delay the feedback report.
+const feedbackIntegrityCheckDeadline = 1 * time.Second
 const responsesWebsocketsV2BetaHeaderValue = "responses_websockets=2026-02-06"
 const websocketImmediateCloseGrace = 250 * time.Millisecond
 const maxBackgroundProbeErrorChars = 120
@@ -141,6 +146,10 @@ type Options struct {
 	All           bool
 	NoColor       bool
 	ASCII         bool
+	// Feedback bounds each database integrity scan when collecting a feedback
+	// attachment (Rust #40688): an incomplete clean scan becomes a warning
+	// rather than a failure.
+	Feedback      bool
 	CodexHome     string
 	Root          cli.RootOptions
 	DispatchPaths *cli.DispatchPaths
@@ -634,6 +643,15 @@ func installCheck(codexHome string, showDetails bool, currentExe func() (string,
 		check.Remediate(remediation)
 	}
 	return check
+}
+
+// worseCheckStatus returns the more severe of two check statuses.
+func worseCheckStatus(a, b CheckStatus) CheckStatus {
+	precedence := map[CheckStatus]int{CheckStatusOK: 0, CheckStatusWarning: 1, CheckStatusFail: 2}
+	if precedence[b] > precedence[a] {
+		return b
+	}
+	return a
 }
 
 func searchCheck() *DoctorCheck {
@@ -4307,18 +4325,24 @@ func stateCheck(codexHome string, opts *Options) *DoctorCheck {
 	pushPathReadinessDetail(&details, "log dir", logDir)
 	pushPathReadinessDetail(&details, "sqlite home", sqliteHome)
 
-	integrityFailures := []string{}
+	status := CheckStatusOK
+	feedback := opts != nil && opts.Feedback
 	for _, dbPath := range runtimeDBPathsForDoctor(sqliteHome) {
 		pushPathReadinessDetail(&details, dbPath.Label, dbPath.Path)
-		sqliteIntegrityDetailForDoctor(&details, &integrityFailures, dbPath.Label, dbPath.Path)
+		var deadline time.Time
+		if feedback {
+			deadline = time.Now().Add(feedbackIntegrityCheckDeadline)
+		}
+		status = worseCheckStatus(status, sqliteIntegrityDetailForDoctor(&details, dbPath.Label, dbPath.Path, deadline))
 	}
 	rolloutStatsDetailsForDoctor(&details, codexHome)
 	standaloneReleaseCacheDetailsForDoctor(&details)
 
-	status := CheckStatusOK
 	summary := "state paths and databases are inspectable"
-	if len(integrityFailures) > 0 {
-		status = CheckStatusFail
+	switch status {
+	case CheckStatusWarning:
+		summary = "some database integrity checks exceeded their time limit"
+	case CheckStatusFail:
 		summary = "state database integrity check failed"
 	}
 	check := NewCheck("state.paths", "state", status, summary).DetailsList(details)
@@ -4360,24 +4384,36 @@ func runtimeDBPathsForDoctor(sqliteHome string) []runtimeDBPathForDoctor {
 	}
 }
 
-func sqliteIntegrityDetailForDoctor(details *[]string, integrityFailures *[]string, label string, path string) {
+func sqliteIntegrityDetailForDoctor(details *[]string, label string, path string, deadline time.Time) CheckStatus {
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		*details = append(*details, fmt.Sprintf("%s integrity: skipped (missing)", label))
-		return
+		return CheckStatusOK
 	}
-	result, err := sqliteIntegrityCheckForDoctor(path)
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if !deadline.IsZero() {
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
+	result, err := sqliteIntegrityCheckForDoctor(ctx, path)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			if integrityResultHasCorruption(result) {
+				*details = append(*details, fmt.Sprintf("%s integrity: %s (scan exceeded time limit)", label, strings.Join(result, "; ")))
+				return CheckStatusFail
+			}
+			*details = append(*details, fmt.Sprintf("%s integrity: scan exceeded time limit", label))
+			return CheckStatusWarning
+		}
 		message := fmt.Sprintf("%s integrity: %s", label, err.Error())
-		*integrityFailures = append(*integrityFailures, message)
 		*details = append(*details, message)
-		return
+		return CheckStatusFail
 	}
 	if len(result) == 0 {
 		message := fmt.Sprintf("%s integrity: empty result", label)
-		*integrityFailures = append(*integrityFailures, message)
 		*details = append(*details, message)
-		return
+		return CheckStatusFail
 	}
 	allOK := true
 	for _, row := range result {
@@ -4388,20 +4424,20 @@ func sqliteIntegrityDetailForDoctor(details *[]string, integrityFailures *[]stri
 	}
 	if allOK {
 		*details = append(*details, fmt.Sprintf("%s integrity: ok", label))
-		return
+		return CheckStatusOK
 	}
 	message := fmt.Sprintf("%s integrity: %s", label, strings.Join(result, "; "))
-	*integrityFailures = append(*integrityFailures, message)
 	*details = append(*details, message)
+	return CheckStatusFail
 }
 
-func sqliteIntegrityCheckForDoctor(path string) ([]string, error) {
+func sqliteIntegrityCheckForDoctor(ctx context.Context, path string) ([]string, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.Query("PRAGMA integrity_check")
+	rows, err := db.QueryContext(ctx, "PRAGMA integrity_check")
 	if err != nil {
 		return nil, err
 	}
@@ -4415,9 +4451,21 @@ func sqliteIntegrityCheckForDoctor(path string) ([]string, error) {
 		out = append(out, value)
 	}
 	if err := rows.Err(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return out, err
+		}
 		return nil, err
 	}
 	return out, nil
+}
+
+func integrityResultHasCorruption(rows []string) bool {
+	for _, row := range rows {
+		if row != "ok" {
+			return true
+		}
+	}
+	return false
 }
 
 type rolloutStatsForDoctor struct {

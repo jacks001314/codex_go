@@ -2993,3 +2993,17 @@ func localOnlyHTTPClient(t *testing.T) *http.Client {
 		},
 	}
 }
+
+func TestWorseCheckStatus(t *testing.T) {
+	cases := []struct{ a, b, want CheckStatus }{
+		{CheckStatusOK, CheckStatusWarning, CheckStatusWarning},
+		{CheckStatusWarning, CheckStatusFail, CheckStatusFail},
+		{CheckStatusFail, CheckStatusOK, CheckStatusFail},
+		{CheckStatusOK, CheckStatusOK, CheckStatusOK},
+	}
+	for _, tc := range cases {
+		if got := worseCheckStatus(tc.a, tc.b); got != tc.want {
+			t.Fatalf("worseCheckStatus(%q, %q) = %q, want %q", tc.a, tc.b, got, tc.want)
+		}
+	}
+}

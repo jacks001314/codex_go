@@ -128,7 +128,7 @@ func codexCompletionSpec() *completionNode {
 			node("zsh", nil),
 		),
 		node("update", nil),
-		node("doctor", []string{"--json", "--summary", "--all", "--no-color", "--ascii"}),
+		node("doctor", []string{"--json", "--summary", "--all", "--no-color", "--ascii", "--feedback"}),
 		node("sandbox", sandboxCompletionOptions(),
 			node("setup", []string{"--elevated", "--user", "--current-user", "--codex-home"}),
 		),
