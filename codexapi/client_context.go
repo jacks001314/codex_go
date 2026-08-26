@@ -108,6 +108,7 @@ type ClientMetadata struct {
 	SubagentHeader             string
 	SubagentKind               string
 	ThreadSource               string
+	TurnTrigger                string
 	Sandbox                    string
 	SandboxMode                string
 	AutoReviewEnabled          *bool
@@ -185,6 +186,9 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	}
 	if m.ThreadSource != "" {
 		value["thread_source"] = m.ThreadSource
+	}
+	if m.TurnTrigger != "" {
+		value["turn_trigger"] = m.TurnTrigger
 	}
 	if m.Sandbox != "" {
 		value["sandbox"] = m.Sandbox
@@ -312,6 +316,7 @@ func ClientReservedMetadataKeys() map[string]bool {
 		strings.ToLower(ClientOpenAISubagentHeader), "request_kind", "compaction",
 		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id", "parent_turn_id", RootTurnIDKey,
 		"subagent_kind", "thread_source", "sandbox", "sandbox_mode", "workspaces",
+		"turn_trigger",
 		AutoReviewEnabledKey, NodeReplAutoReviewRequiredKey, NodeReplDisabledKey, CodeModeToolNamesKey,
 	}
 	out := make(map[string]bool, len(keys))

@@ -41,6 +41,7 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	metadata.ParentTurnID = "parent-turn"
 	metadata.RootTurnID = "root-turn"
 	metadata.SubagentHeader = "review"
+	metadata.TurnTrigger = "realtime"
 	metadata.Extra = map[string]string{"workspace_kind": "git", "thread_id": "bad"}
 	client := metadata.ClientMetadata()
 	if client[ClientCodexInstallationIDHeader] != "install" || client[ClientCodexWindowIDHeader] != "window" {
@@ -54,6 +55,9 @@ func TestClientMetadataClientMetadataAndHeaders(t *testing.T) {
 	}
 	if !strings.Contains(client[ClientCodexTurnMetadataHeader], `"root_turn_id":"root-turn"`) {
 		t.Fatalf("ClientMetadata() missing root turn: %v", client)
+	}
+	if !strings.Contains(client[ClientCodexTurnMetadataHeader], `"turn_trigger":"realtime"`) {
+		t.Fatalf("turn metadata missing turn_trigger: %s", client[ClientCodexTurnMetadataHeader])
 	}
 	if !strings.Contains(client[ClientCodexTurnMetadataHeader], `"workspace_kind":"git"`) {
 		t.Fatalf("turn metadata missing extra: %s", client[ClientCodexTurnMetadataHeader])

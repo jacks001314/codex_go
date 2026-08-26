@@ -324,6 +324,9 @@ func realtimeTurnStartParams(record *session.Record) *turn.TurnStartParams {
 		CWD:        strings.TrimSpace(record.Metadata.CWD),
 		Model:      strings.TrimSpace(record.Metadata.Model),
 		Originator: strings.TrimSpace(record.Metadata.Originator),
+		// Rust #40665: turns started by a realtime handoff are classified with a
+		// "realtime" turn trigger in the Responses request metadata.
+		TurnTrigger: "realtime",
 		Config:     threadRecordConfigOverrides(record),
 	}
 	if providerID := strings.TrimSpace(record.Metadata.ModelProvider); providerID != "" {

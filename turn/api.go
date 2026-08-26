@@ -185,6 +185,7 @@ type TurnStartParams struct {
 	CWD                   string            `json:"cwd,omitempty"`
 	Model                 string            `json:"model,omitempty"`
 	Originator            string            `json:"originator,omitempty"`
+	TurnTrigger           string            `json:"turnTrigger,omitempty"`
 	ApprovalPolicy        any               `json:"approvalPolicy,omitempty"`
 	ApprovalsReviewer     *string           `json:"approvalsReviewer,omitempty"`
 	SandboxPolicy         any               `json:"sandboxPolicy,omitempty"`

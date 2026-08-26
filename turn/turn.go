@@ -401,6 +401,7 @@ type ResponsesClientMetadataOptions struct {
 	SubagentHeader             string
 	SubagentKind               string
 	ThreadSource               string
+	TurnTrigger                string
 	Sandbox                    string
 	SandboxMode                string
 	AgentName                  string
@@ -445,6 +446,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.SubagentHeader = strings.TrimSpace(options.SubagentHeader)
 	metadata.SubagentKind = strings.TrimSpace(options.SubagentKind)
 	metadata.ThreadSource = strings.TrimSpace(options.ThreadSource)
+	metadata.TurnTrigger = strings.TrimSpace(options.TurnTrigger)
 	metadata.Sandbox = strings.TrimSpace(options.Sandbox)
 	metadata.SandboxMode = strings.TrimSpace(options.SandboxMode)
 	metadata.AgentName = strings.TrimSpace(options.AgentName)
