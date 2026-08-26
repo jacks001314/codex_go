@@ -4,7 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"codex_go/shell"
@@ -219,6 +222,37 @@ func TestExecCommandRunnerWindowsSpecialCaseDocumented(t *testing.T) {
 	line := (&UpdateAction{Kind: UpdateActionNPMGlobalLatest}).CommandLine()
 	if line == "" {
 		t.Fatal("CommandLine() returned empty string")
+	}
+}
+
+// TestResolveWindowsUpdateCommandFromPathIgnoresRelativePATH pins the #40422
+// hardening: update commands are resolved using only absolute PATH entries, so a
+// relative PATH entry (which a project can influence) cannot select a decoy
+// command; a relative-only PATH is rejected with guidance.
+func TestResolveWindowsUpdateCommandFromPathIgnoresRelativePATH(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows update command resolution is Windows-specific")
+	}
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "codex-update-tool.cmd")
+	if err := os.WriteFile(tool, []byte("@echo off\r\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	absDir := filepath.Dir(tool)
+	t.Setenv("PATH", absDir+";relative;")
+	t.Setenv("PATHEXT", ".EXE;.CMD;.BAT")
+	got, err := resolveWindowsUpdateCommandFromPath("codex-update-tool")
+	if err != nil {
+		t.Fatalf("resolve() error = %v", err)
+	}
+	if !strings.EqualFold(filepath.Clean(got), filepath.Clean(tool)) {
+		t.Fatalf("resolved = %q, want %q", got, tool)
+	}
+
+	// A relative-only PATH is rejected (the project could influence the updater).
+	t.Setenv("PATH", "relative;.")
+	if _, err := resolveWindowsUpdateCommandFromPath("codex-update-tool"); err == nil {
+		t.Fatalf("relative-only PATH: expected error, got nil")
 	}
 }
 

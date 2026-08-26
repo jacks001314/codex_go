@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -242,11 +244,118 @@ func RunUpdate(ctx context.Context, opts *RunUpdateOptions) (*UpdateResult, erro
 }
 
 func (r *ExecCommandRunner) Run(ctx context.Context, command string, args []string) error {
+	if runtime.GOOS == "windows" {
+		return r.runWindowsUpdate(ctx, command, args)
+	}
 	actualCommand, actualArgs := updateCommandAndArgs(command, args)
 	cmd := exec.CommandContext(ctx, actualCommand, actualArgs...)
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
 	return cmd.Run()
+}
+
+// runWindowsUpdate resolves and executes a Windows update command. It runs from
+// a temporary directory so a project-local command or package-manager config
+// cannot influence the updater once the user has accepted the prompt, and it
+// resolves the command using only absolute PATH entries (Rust #40422).
+func (r *ExecCommandRunner) runWindowsUpdate(ctx context.Context, command string, args []string) error {
+	resolved, err := resolveWindowsUpdateCommandFromPath(command)
+	if err != nil {
+		return err
+	}
+	var execCommand string
+	var execArgs []string
+	if strings.EqualFold(strings.TrimSpace(command), "powershell") {
+		// Run PowerShell directly so the installer's PowerShell metacharacters
+		// are not re-parsed by a batch shim.
+		execCommand = resolved
+		execArgs = args
+	} else {
+		// Package-manager commands on Windows are .cmd/.bat shims; route the
+		// resolved command through cmd.exe /C so PATHEXT batch semantics apply.
+		execCommand = "cmd"
+		execArgs = []string{"/C", joinCommandLine(append([]string{resolved}, args...))}
+	}
+	updateDir, err := os.MkdirTemp("", "codex-update")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(updateDir)
+	cmd := exec.CommandContext(ctx, execCommand, execArgs...)
+	cmd.Dir = updateDir
+	cmd.Stdout = r.Stdout
+	cmd.Stderr = r.Stderr
+	return cmd.Run()
+}
+
+// resolveWindowsUpdateCommandFromPath resolves command by searching only the
+// absolute PATH entries (with PATHEXT extension resolution), mirroring Rust
+// #40422 resolve_windows_update_command_from_path. A relative-only PATH is
+// rejected so a project-local command/config cannot influence the updater.
+func resolveWindowsUpdateCommandFromPath(command string) (string, error) {
+	pathEnv := os.Getenv("PATH")
+	if strings.TrimSpace(pathEnv) == "" {
+		return "", errors.New("PATH is not set")
+	}
+	abs := make([]string, 0, 8)
+	for _, entry := range filepath.SplitList(pathEnv) {
+		if filepath.IsAbs(entry) {
+			abs = append(abs, entry)
+		}
+	}
+	if len(abs) == 0 {
+		return "", fmt.Errorf("Could not find an absolute update command `%s` on PATH. Please update manually: https://developers.openai.com/codex/cli/", command)
+	}
+	exts := pathExtList()
+	for _, dir := range abs {
+		if full := findExecutableInDir(dir, command, exts); full != "" {
+			return full, nil
+		}
+	}
+	return "", fmt.Errorf("could not find update command `%s` on PATH", command)
+}
+
+func pathExtList() []string {
+	raw := strings.TrimSpace(os.Getenv("PATHEXT"))
+	if raw == "" {
+		return []string{".exe", ".cmd", ".bat", ".com"}
+	}
+	parts := strings.Split(raw, ";")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func findExecutableInDir(dir, command string, exts []string) string {
+	if strings.ContainsAny(command, `/\`) {
+		if executableExists(command) {
+			return command
+		}
+		return ""
+	}
+	candidate := filepath.Join(dir, command)
+	if filepath.Ext(command) != "" {
+		if executableExists(candidate) {
+			return candidate
+		}
+		return ""
+	}
+	for _, ext := range exts {
+		if executableExists(candidate + ext) {
+			return candidate + ext
+		}
+	}
+	return ""
+}
+
+func executableExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // normalizeForWSL maps a Windows absolute path to its WSL mount path when
