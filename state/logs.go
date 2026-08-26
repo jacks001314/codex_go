@@ -78,6 +78,24 @@ func (r *StateRuntime) InsertLogs(ctx context.Context, entries []LogEntry) (err 
 			}
 			r.metrics.Counter("codex.sqlite.log.write", 1, map[string]string{"status": status})
 			r.metrics.Histogram("codex.sqlite.log.write.duration_ms", int(time.Since(started).Milliseconds()), nil)
+			r.metrics.Counter("codex.sqlite.log.write.entries", len(entries), nil)
+			batchBytes := int64(0)
+			largest := int64(0)
+			for i := range entries {
+				entryBytes := int64(len(entries[i].Level) + len(entries[i].Target))
+				if entries[i].FeedbackLogBody != nil {
+					entryBytes += int64(len(*entries[i].FeedbackLogBody))
+				}
+				if entries[i].Message != nil {
+					entryBytes += int64(len(*entries[i].Message))
+				}
+				batchBytes += entryBytes
+				if entryBytes > largest {
+					largest = entryBytes
+				}
+			}
+			r.metrics.Histogram("codex.sqlite.log.write.batch_bytes", int(batchBytes), nil)
+			r.metrics.Histogram("codex.sqlite.log.write.largest_entry_bytes", int(largest), nil)
 		}
 	}()
 	ctx = nonNilContext(ctx)
