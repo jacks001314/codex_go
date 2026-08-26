@@ -53,6 +53,16 @@ type HookStopRequest struct {
 	Hooks                []HookMetadata
 }
 
+type HookInterruptRequest struct {
+	ThreadID       string
+	TurnID         string
+	CWD            string
+	TranscriptPath *string
+	Model          string
+	PermissionMode string
+	Hooks          []HookMetadata
+}
+
 type HookSubagentStopRequest struct {
 	ThreadID             string
 	TurnID               string
@@ -221,6 +231,25 @@ func (r *HookRunner) RunStop(ctx context.Context, request *HookStopRequest) (*Ho
 		TurnID:    &turnID,
 		CWD:       request.CWD,
 		EventName: HookEventStop,
+		InputJSON: inputJSON,
+		Hooks:     request.Hooks,
+	})
+}
+
+func (r *HookRunner) RunInterrupt(ctx context.Context, request *HookInterruptRequest) (*HookRunResult, error) {
+	if request == nil {
+		return nil, fmt.Errorf("%w: interrupt hook request is nil", ErrInvalidHook)
+	}
+	inputJSON, err := HookInputJSON(request)
+	if err != nil {
+		return nil, err
+	}
+	turnID := request.TurnID
+	return r.Run(ctx, &HookRunRequest{
+		ThreadID:  request.ThreadID,
+		TurnID:    &turnID,
+		CWD:       request.CWD,
+		EventName: HookEventInterrupt,
 		InputJSON: inputJSON,
 		Hooks:     request.Hooks,
 	})
@@ -435,6 +464,16 @@ func HookInputJSON(request any) (string, error) {
 			"permission_mode":        typed.PermissionMode,
 			"stop_hook_active":       typed.StopHookActive,
 			"last_assistant_message": nullableStringValue(typed.LastAssistantMessage),
+		}
+	case *HookInterruptRequest:
+		input = map[string]any{
+			"session_id":      typed.ThreadID,
+			"turn_id":         typed.TurnID,
+			"transcript_path": nullableStringValue(typed.TranscriptPath),
+			"cwd":             typed.CWD,
+			"hook_event_name": "Interrupt",
+			"model":           typed.Model,
+			"permission_mode": typed.PermissionMode,
 		}
 	case *HookSubagentStopRequest:
 		input = map[string]any{

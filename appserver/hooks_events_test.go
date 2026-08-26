@@ -43,6 +43,20 @@ func TestHookRunnerRunSessionEndBuildsLifecycleInput(t *testing.T) {
 	}
 }
 
+func TestHookRunnerRunInterruptBuildsInput(t *testing.T) {
+	runner := NewHookRunner()
+	hook := hookRunnerMetadata("interrupt", HookEventInterrupt, "", 0)
+	command := hookRunnerStdinContainsCommand("hook_event_name", "Interrupt", "model", "gpt")
+	hook.Command = &command
+	result, err := runner.RunInterrupt(context.Background(), &HookInterruptRequest{ThreadID: "thread-1", TurnID: "turn-1", CWD: t.TempDir(), Model: "gpt", PermissionMode: "on-request", Hooks: []HookMetadata{hook}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Runs) != 1 || result.Runs[0].Status != HookRunCompleted {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestHookRunnerRunPreToolUseBuildsInputAndRunID(t *testing.T) {
 	runner := NewHookRunner()
 	hook := hookRunnerMetadata("pre", HookEventPreToolUse, "Bash|Shell", 0)
