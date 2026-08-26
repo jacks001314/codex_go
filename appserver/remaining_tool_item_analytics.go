@@ -98,6 +98,7 @@ func (r *RuntimeRouter) emitImageGenerationAnalyticsEvent(ctx context.Context, c
 		CodexToolItemEventBase: base,
 		RevisedPromptPresent:   threadItemStringPtrFromData(item.Data, "revisedPrompt", "revised_prompt") != nil,
 		SavedPathPresent:       threadItemStringPtrFromData(item.Data, "savedPath", "saved_path") != nil,
+		TransparentBackground:  threadItemBoolPtrFromData(item.Data, "transparentBackground", "transparent_background"),
 	})
 	sink.TrackCodexImageGenerationEvent(ctx, event)
 }

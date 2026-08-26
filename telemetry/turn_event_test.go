@@ -588,6 +588,7 @@ func TestCodexWebSearchEventSerializesExpectedRustShape(t *testing.T) {
 }
 
 func TestCodexImageGenerationEventSerializesExpectedRustShape(t *testing.T) {
+	transparent := true
 	event := NewCodexImageGenerationEvent(CodexImageGenerationEventParams{
 		CodexToolItemEventBase: CodexToolItemEventBase{
 			ThreadID:             "thread-1",
@@ -606,6 +607,7 @@ func TestCodexImageGenerationEventSerializesExpectedRustShape(t *testing.T) {
 		},
 		RevisedPromptPresent: true,
 		SavedPathPresent:     true,
+		TransparentBackground: &transparent,
 	})
 
 	var got map[string]any
@@ -618,8 +620,28 @@ func TestCodexImageGenerationEventSerializesExpectedRustShape(t *testing.T) {
 		params["terminal_status"] != "failed" ||
 		params["failure_kind"] != "tool_error" ||
 		params["revised_prompt_present"] != true ||
-		params["saved_path_present"] != true {
+		params["saved_path_present"] != true ||
+		params["transparent_background"] != true {
 		t.Fatalf("image generation event JSON = %#v", got)
+	}
+
+	// An unset transparent background is omitted, mirroring Rust #40544.
+	event = NewCodexImageGenerationEvent(CodexImageGenerationEventParams{
+		CodexToolItemEventBase: CodexToolItemEventBase{
+			ThreadID: "thread-1",
+			TurnID:   "turn-1",
+			ItemID:   "image-2",
+			Runtime:  sampleRuntimeMetadata(),
+		},
+		RevisedPromptPresent: false,
+		SavedPathPresent:     false,
+	})
+	if err := marshalUnmarshalTelemetry(event, &got); err != nil {
+		t.Fatalf("marshal event error = %v", err)
+	}
+	params = got["event_params"].(map[string]any)
+	if _, present := params["transparent_background"]; present {
+		t.Fatalf("unset transparent_background should be omitted: %#v", params)
 	}
 }
 
