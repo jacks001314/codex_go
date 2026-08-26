@@ -5820,6 +5820,13 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
+	// Rust #40539: inject the history-notes thread hint into the context window
+	// when the extension is enabled and the hint is present.
+	if tokenBudget != nil && tokenBudget.UseHistoryNotesExtension {
+		if item, ok := r.historyNotesThreadHintInputItem(cfg, params, threadID); ok && item != nil {
+			inputItems = append(inputItems, item)
+		}
+	}
 	realtimeStateSessionItems := []session.Item{}
 	if item, err := r.realtimeWorldStateInputItem(threadID, cfg); err != nil {
 		return nil, err
@@ -10288,6 +10295,25 @@ func (r *RuntimeRouter) contextWindowGuidanceWorldStateInputItem(threadID string
 	}
 	rendered := contextfrag.RenderStandalone(&contextfrag.ContextWindowGuidance{Message: message})
 	return renderedFragmentInputItem(rendered), nil
+}
+
+// historyNotesThreadHintInputItem fetches the history-notes context-window hint
+// (Rust #40539 contribute_thread_context) and renders it as a developer fragment
+// tagged with the notes.thread_hint content kind.
+func (r *RuntimeRouter) historyNotesThreadHintInputItem(cfg *config.Config, params *turn.TurnStartParams, threadID string) (any, bool) {
+	if r == nil || cfg == nil {
+		return nil, false
+	}
+	backend, sessionID, agentName, ok := r.historyNotesBackendForTurn(cfg, params, threadID)
+	if !ok {
+		return nil, false
+	}
+	text, ok := backend.ThreadHint(context.Background(), sessionID, agentName)
+	if !ok || strings.TrimSpace(text) == "" {
+		return nil, false
+	}
+	fragment := contextfrag.NewSimpleFragmentWithKind(contextfrag.RoleDeveloper, "", "", text, "notes.thread_hint")
+	return renderedFragmentInputItem(contextfrag.Render(fragment)), true
 }
 
 func sameJSONValue(left json.RawMessage, right json.RawMessage) bool {

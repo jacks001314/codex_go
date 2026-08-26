@@ -11476,29 +11476,40 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 // Codex backend. A backend/auth resolution failure disables the surface rather
 // than failing the turn.
 func (r *RuntimeRouter) historyNotesToolsForTurn(cfg *config.Config, params *turn.TurnStartParams, threadID string) []tool.Executor {
-	if r == nil || cfg == nil {
+	backend, sessionID, agentName, ok := r.historyNotesBackendForTurn(cfg, params, threadID)
+	if !ok {
 		return nil
+	}
+	return historynotes.Tools(backend, sessionID, agentName)
+}
+
+// historyNotesBackendForTurn resolves the history-notes backend for a thread,
+// returning the backend, session id, and agent name. It returns ok=false when
+// the extension gate, OpenAI provider, or chatgpt backend auth is unavailable.
+func (r *RuntimeRouter) historyNotesBackendForTurn(cfg *config.Config, params *turn.TurnStartParams, threadID string) (*historynotes.Backend, string, string, bool) {
+	if r == nil || cfg == nil {
+		return nil, "", "", false
 	}
 	modelProviderConfig, err := r.appTurnModelProviderConfig(cfg, params)
 	if err != nil {
-		return nil
+		return nil, "", "", false
 	}
 	providerInfo, err := model.ProviderForConfigID(configValues(cfg), modelProviderConfig.ProviderID, stringConfigValue(cfg, "openai_base_url"))
 	if err != nil || providerInfo == nil || !providerInfo.IsOpenAI() {
-		return nil
+		return nil, "", "", false
 	}
 	resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())
 	if err != nil || resolved == nil || (&resolved.Auth).BackendMode() != "chatgpt" {
-		return nil
+		return nil, "", "", false
 	}
 	runtimeProvider := model.CreateRuntimeProviderForID(modelProviderConfig.ProviderID, *providerInfo, &resolved.Auth)
 	apiProvider, err := runtimeProvider.APIProvider()
 	if err != nil {
-		return nil
+		return nil, "", "", false
 	}
 	authHeaders, err := runtimeProvider.APIAuth()
 	if err != nil {
-		return nil
+		return nil, "", "", false
 	}
 	sessionID := strings.TrimSpace(threadID)
 	agentName := "root"
@@ -11518,7 +11529,7 @@ func (r *RuntimeRouter) historyNotesToolsForTurn(cfg *config.Config, params *tur
 		},
 		HTTPDoer: r.httpClientForConfig(cfg).Do,
 	}
-	return historynotes.Tools(backend, sessionID, agentName)
+	return backend, sessionID, agentName, true
 }
 
 // requestPermissionsGuardianReviewer routes request_permissions calls through
