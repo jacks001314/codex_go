@@ -46,7 +46,7 @@ func TestFindCodexHomeFromEnvDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(got) != ".codex" {
+	if filepath.Base(got) != ".gcode" {
 		t.Fatalf("default home = %q", got)
 	}
 }

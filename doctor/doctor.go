@@ -869,7 +869,7 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 		modelName = "<default>"
 	}
 	details = []string{
-		"CODEX_HOME: " + codexHome,
+		"GCODE_HOME: " + codexHome,
 		"cwd: " + doctorCWD(opts),
 		"model: " + modelName,
 		"model provider: " + effectiveProviderIDForDoctor(opts, cfg),
@@ -4303,7 +4303,7 @@ func stateCheck(codexHome string, opts *Options) *DoctorCheck {
 	logDir := logDirForDoctor(codexHome, cfg)
 	sqliteHome := sqliteHomeForDoctor(codexHome, opts)
 	details := []string{}
-	pushPathReadinessDetail(&details, "CODEX_HOME", codexHome)
+	pushPathReadinessDetail(&details, "GCODE_HOME", codexHome)
 	pushPathReadinessDetail(&details, "log dir", logDir)
 	pushPathReadinessDetail(&details, "sqlite home", sqliteHome)
 

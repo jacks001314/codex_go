@@ -144,7 +144,7 @@ func TestBuildPayloadDenyWritePathsMergesProtectedChildren(t *testing.T) {
 	commandCWD := filepath.Join(tmp, "workspace")
 	extra := filepath.Join(tmp, "extra")
 	explicitDeny := filepath.Join(tmp, "explicit-deny")
-	for _, path := range []string{filepath.Join(commandCWD, ".git"), filepath.Join(extra, ".codex")} {
+	for _, path := range []string{filepath.Join(commandCWD, ".git"), filepath.Join(extra, ".gcode")} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatalf("MkdirAll(%s) error = %v", path, err)
 		}
@@ -158,7 +158,7 @@ func TestBuildPayloadDenyWritePathsMergesProtectedChildren(t *testing.T) {
 		t.Fatalf("ResolvePermissions() error = %v", err)
 	}
 	got := BuildPayloadDenyWritePaths(&SandboxSetupRequest{Permissions: permissions, CommandCWD: commandCWD}, []string{explicitDeny})
-	if !containsCanonical(got, filepath.Join(commandCWD, ".git")) || !containsCanonical(got, filepath.Join(extra, ".codex")) || !containsCanonical(got, explicitDeny) {
+	if !containsCanonical(got, filepath.Join(commandCWD, ".git")) || !containsCanonical(got, filepath.Join(extra, ".gcode")) || !containsCanonical(got, explicitDeny) {
 		t.Fatalf("deny write paths = %#v", got)
 	}
 }

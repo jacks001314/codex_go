@@ -116,14 +116,17 @@ func StoreOptionsFromConfig(mode string, secretAuthStorageEnabled bool) *StoreOp
 }
 
 func DefaultCodexHome() string {
+	if value := strings.TrimSpace(os.Getenv("GCODE_HOME")); value != "" {
+		return value
+	}
 	if value := strings.TrimSpace(os.Getenv("CODEX_HOME")); value != "" {
 		return value
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return ".codex"
+		return ".gcode"
 	}
-	return filepath.Join(home, ".codex")
+	return filepath.Join(home, ".gcode")
 }
 
 func (s *Store) Path() string {

@@ -89,7 +89,10 @@ var (
 func Current() *InstallContext {
 	currentOnce.Do(func() {
 		exe, _ := os.Executable()
-		codexHome := os.Getenv("CODEX_HOME")
+		codexHome := os.Getenv("GCODE_HOME")
+		if codexHome == "" {
+			codexHome = os.Getenv("CODEX_HOME")
+		}
 		current = FromExe(
 			runtime.GOOS == "darwin",
 			exe,

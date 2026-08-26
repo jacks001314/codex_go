@@ -252,7 +252,7 @@ func (s *HookDiscoveryService) projectHookFolders(cwd string) []string {
 			return projectHookFoldersFromLayers(read.Layers)
 		}
 	}
-	return []string{filepath.Join(cwd, ".codex")}
+	return []string{filepath.Join(cwd, ".gcode")}
 }
 
 func projectHookFoldersFromLayers(layers []config.Layer) []string {

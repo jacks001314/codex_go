@@ -69,7 +69,7 @@ func NewWebSocketRouterFactory(codexHome string, storeRoot string) func() *Runti
 func NewWebSocketRouterFactoryWithOptions(codexHome string, storeRoot string, options *RuntimeRouterOptions) func() *RuntimeRouter {
 	codexHome = strings.TrimSpace(codexHome)
 	if codexHome == "" {
-		codexHome = ".codex"
+		codexHome = ".gcode"
 	}
 	storeRoot = strings.TrimSpace(storeRoot)
 	if storeRoot == "" {
@@ -82,7 +82,7 @@ func NewWebSocketRouterFactoryWithOptions(codexHome string, storeRoot string, op
 
 func NewWebSocketServer(policy *WebSocketAuthPolicy, routerFactory func() *RuntimeRouter) *WebSocketServer {
 	if routerFactory == nil {
-		routerFactory = NewWebSocketRouterFactory(".codex", "")
+		routerFactory = NewWebSocketRouterFactory(".gcode", "")
 	}
 	return &WebSocketServer{
 		policy:         policy,
@@ -100,7 +100,7 @@ func ServeWebSocket(ctx context.Context, options *WebSocketOptions) error {
 	}
 	codexHome := strings.TrimSpace(options.CodexHome)
 	if codexHome == "" {
-		codexHome = ".codex"
+		codexHome = ".gcode"
 	}
 	preparedRuntimeOptions, ownedStateRuntime, err := prepareSharedStateRuntime(ctx, codexHome, options.RuntimeOptions)
 	if err != nil {

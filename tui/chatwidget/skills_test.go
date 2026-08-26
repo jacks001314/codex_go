@@ -26,7 +26,7 @@ func TestSkillsBrowserViewUsesRuntimeInventory(t *testing.T) {
 		CWD: `D:\repo`,
 		Skills: []appserver.SkillsListEntry{{
 			Name:             "Docs:review",
-			Path:             `D:\repo\.codex\skills\review\SKILL.md`,
+			Path:             `D:\repo\.gcode\skills\review\SKILL.md`,
 			Scope:            "plugin",
 			Description:      "Long review guidance",
 			ShortDescription: "Review code",
@@ -50,7 +50,7 @@ func TestSkillsBrowserViewUsesRuntimeInventory(t *testing.T) {
 	if first.Name != "review (Docs)" || first.ID == "" {
 		t.Fatalf("first item = %+v", first)
 	}
-	for _, want := range []string{"enabled", "Review code", "scope: plugin", "plugin: docs@team", `D:\repo\.codex\skills\review\SKILL.md`} {
+	for _, want := range []string{"enabled", "Review code", "scope: plugin", "plugin: docs@team", `D:\repo\.gcode\skills\review\SKILL.md`} {
 		if !strings.Contains(first.Description, want) {
 			t.Fatalf("first description missing %q: %q", want, first.Description)
 		}

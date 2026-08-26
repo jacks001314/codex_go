@@ -10,8 +10,8 @@ func TestUsageKindFromPath(t *testing.T) {
 		path string
 		want UsageKind
 	}{
-		{"/home/me/.codex/memories/MEMORY.md", UsageKindMemoryMD},
-		{`C:\Users\me\.codex\memories\memory_summary.md`, UsageKindMemorySummary},
+		{"/home/me/.gcode/memories/MEMORY.md", UsageKindMemoryMD},
+		{`C:\Users\me\.gcode\memories\memory_summary.md`, UsageKindMemorySummary},
 		{"memories/raw_memories.md", UsageKindRawMemories},
 		{"memories/rollout_summaries/thread-a.md", UsageKindRolloutSummaries},
 		{"memories/skills/ad_hoc/instructions.md", UsageKindSkills},
@@ -29,8 +29,8 @@ func TestUsageKindsFromCommand(t *testing.T) {
 		command string
 		want    []UsageKind
 	}{
-		{"cat ~/.codex/memories/MEMORY.md", []UsageKind{UsageKindMemoryMD}},
-		{"rg notes ~/.codex/memories/raw_memories.md ~/.codex/memories/skills/ad_hoc/instructions.md", []UsageKind{UsageKindRawMemories, UsageKindSkills}},
+		{"cat ~/.gcode/memories/MEMORY.md", []UsageKind{UsageKindMemoryMD}},
+		{"rg notes ~/.gcode/memories/raw_memories.md ~/.gcode/memories/skills/ad_hoc/instructions.md", []UsageKind{UsageKindRawMemories, UsageKindSkills}},
 		{"git status", nil},
 	}
 	for _, tc := range cases {

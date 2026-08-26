@@ -13,7 +13,7 @@ func IsCommandCWDRoot(commandCWD string, root string) bool {
 }
 
 func ProtectWorkspaceCodexDir(cwd string, sid string) (bool, error) {
-	return protectWorkspaceSubdir(cwd, sid, ".codex")
+	return protectWorkspaceSubdir(cwd, sid, ".gcode")
 }
 
 func ProtectWorkspaceAgentsDir(cwd string, sid string) (bool, error) {

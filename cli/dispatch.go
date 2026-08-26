@@ -166,7 +166,8 @@ func LinuxSandboxExePath(paths *DispatchPaths, currentExe string) string {
 func FilterDotenv(values map[string]string) map[string]string {
 	out := map[string]string{}
 	for key, value := range values {
-		if strings.HasPrefix(strings.ToUpper(key), DispatchIllegalEnvVarPrefix) {
+		upper := strings.ToUpper(key)
+		if strings.HasPrefix(upper, DispatchIllegalEnvVarPrefix) || strings.HasPrefix(upper, "GCODE_") {
 			continue
 		}
 		out[key] = value

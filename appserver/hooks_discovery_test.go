@@ -15,7 +15,7 @@ import (
 
 func TestHookDiscoveryLoadsProjectHooksJSON(t *testing.T) {
 	cwd := t.TempDir()
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -176,7 +176,7 @@ func TestManagedRequiredHookLoadErrorsHelper(t *testing.T) {
 
 func TestHookDiscoveryWarnsWhenMcpToolHooksUnavailable(t *testing.T) {
 	cwd := t.TempDir()
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestHookDiscoveryWarnsWhenMcpToolHooksUnavailable(t *testing.T) {
 
 func TestHookDiscoveryListsMcpToolHooksWhenEnabled(t *testing.T) {
 	cwd := t.TempDir()
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +361,7 @@ func TestHookDiscoveryUsesTrustedProjectConfigLayers(t *testing.T) {
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile config error = %v", err)
 	}
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -393,7 +393,7 @@ func TestHookDiscoveryUsesEachCWDEffectiveFeatureEnablementLikeRust(t *testing.T
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nhooks = false\n\n[projects.\""+strings.ReplaceAll(filepath.Clean(workspace), `\`, `\\`)+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile config error = %v", err)
 	}
-	hooksDir := filepath.Join(workspace, ".codex")
+	hooksDir := filepath.Join(workspace, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll hooks dir error = %v", err)
 	}
@@ -437,7 +437,7 @@ func TestHookDiscoveryUsesTrustedProjectDotCodexWithoutConfigToml(t *testing.T) 
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile config error = %v", err)
 	}
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -467,11 +467,11 @@ func TestHookDiscoveryLinkedWorktreeUsesRootCheckoutHooks(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".git", "worktrees", "feature"), 0o755); err != nil {
 		t.Fatalf("MkdirAll root gitdir error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, ".codex"), 0o700); err != nil {
-		t.Fatalf("MkdirAll root .codex error = %v", err)
+	if err := os.MkdirAll(filepath.Join(root, ".gcode"), 0o700); err != nil {
+		t.Fatalf("MkdirAll root .gcode error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(worktree, ".codex"), 0o700); err != nil {
-		t.Fatalf("MkdirAll worktree .codex error = %v", err)
+	if err := os.MkdirAll(filepath.Join(worktree, ".gcode"), 0o700); err != nil {
+		t.Fatalf("MkdirAll worktree .gcode error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+filepath.Join(root, ".git", "worktrees", "feature")+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile worktree .git error = %v", err)
@@ -487,14 +487,14 @@ func TestHookDiscoveryLinkedWorktreeUsesRootCheckoutHooks(t *testing.T) {
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile config error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".codex", "hooks.json"), []byte(`{
+	if err := os.WriteFile(filepath.Join(root, ".gcode", "hooks.json"), []byte(`{
 		"hooks": {
 			"PostToolUse": [{"hooks": [{"type": "command", "command": "echo root checkout"}]}]
 		}
 	}`), 0o600); err != nil {
 		t.Fatalf("WriteFile root hooks error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(worktree, ".codex", "hooks.json"), []byte(`{
+	if err := os.WriteFile(filepath.Join(worktree, ".gcode", "hooks.json"), []byte(`{
 		"hooks": {
 			"PostToolUse": [{"hooks": [{"type": "command", "command": "echo worktree local"}]}]
 		}
@@ -511,8 +511,8 @@ func TestHookDiscoveryLinkedWorktreeUsesRootCheckoutHooks(t *testing.T) {
 	if hook.Command == nil || *hook.Command != "echo root checkout" {
 		t.Fatalf("hook = %+v, want root checkout hook", hook)
 	}
-	if !strings.Contains(filepath.Clean(hook.SourcePath), filepath.Clean(filepath.Join(root, ".codex"))) {
-		t.Fatalf("source path = %q, want root checkout .codex", hook.SourcePath)
+	if !strings.Contains(filepath.Clean(hook.SourcePath), filepath.Clean(filepath.Join(root, ".gcode"))) {
+		t.Fatalf("source path = %q, want root checkout .gcode", hook.SourcePath)
 	}
 }
 
@@ -522,7 +522,7 @@ func TestHookDiscoverySkipsUntrustedProjectHooksWhenConfigServicePresent(t *test
 		t.Fatalf("WriteFile config error = %v", err)
 	}
 	cwd := t.TempDir()
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -543,7 +543,7 @@ func TestHookDiscoverySkipsUntrustedProjectHooksWhenConfigServicePresent(t *test
 
 func TestHookDiscoveryWarningsForUnsupportedHandlers(t *testing.T) {
 	cwd := t.TempDir()
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -583,7 +583,7 @@ func TestHookDiscoveryWarningsForUnsupportedHandlers(t *testing.T) {
 func TestRuntimeRouterHooksListMergesRegistryAndDiscovery(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -678,7 +678,7 @@ func TestRuntimeRouterHooksListAppliesConfigHookState(t *testing.T) {
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile config error = %v", err)
 	}
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -749,7 +749,7 @@ func TestRuntimeRouterBypassHookTrustKeepsStatusAndMarksExecutionBypass(t *testi
 	if err := os.WriteFile(config.ConfigPath(home), []byte("bypass_hook_trust = true\n[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile config error = %v", err)
 	}
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -794,7 +794,7 @@ func TestHookDiscoveryParsesAdditionalContextLimitFromJSON(t *testing.T) {
 	// additionalContextLimit is parsed from hooks.json and surfaced on the
 	// v2 hooks_list contract.
 	cwd := t.TempDir()
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}

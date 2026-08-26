@@ -141,7 +141,7 @@ func (s *ConfigService) externalHooksPaths(scope externalMigrationScope) (string
 	if scope.home() {
 		return s.externalAgentHome, filepath.Join(s.codexHome, "hooks.json")
 	}
-	return filepath.Join(scope.repoRoot, externalClaudeConfigDir), filepath.Join(scope.repoRoot, ".codex", "hooks.json")
+	return filepath.Join(scope.repoRoot, externalClaudeConfigDir), filepath.Join(scope.repoRoot, ".gcode", "hooks.json")
 }
 
 func buildExternalHooksMigration(sourceDir string, targetConfigDir string) (externalHookMigration, error) {

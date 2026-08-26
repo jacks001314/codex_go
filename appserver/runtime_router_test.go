@@ -2983,8 +2983,8 @@ func TestRuntimeRouterConfigReadIncludesProjectLayerForCWDLikeRust(t *testing.T)
 	if err := os.WriteFile(config.ConfigPath(home), []byte(userConfig), 0o600); err != nil {
 		t.Fatalf("WriteFile user config error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workspace, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll .codex error = %v", err)
+	if err := os.MkdirAll(filepath.Join(workspace, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll .gcode error = %v", err)
 	}
 	if err := os.WriteFile(config.ProjectConfigPath(workspace), []byte("model_reasoning_effort = \"high\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile project config error = %v", err)
@@ -3003,7 +3003,7 @@ func TestRuntimeRouterConfigReadIncludesProjectLayerForCWDLikeRust(t *testing.T)
 		t.Fatalf("model_reasoning_effort = %#v, want high", read.Config["model_reasoning_effort"])
 	}
 	origin := read.Origins["model_reasoning_effort"]
-	wantDotCodex := filepath.Join(workspace, ".codex")
+	wantDotCodex := filepath.Join(workspace, ".gcode")
 	if origin.Name.Type != config.LayerSourceProject || origin.Name.DotCodexFolder != wantDotCodex {
 		t.Fatalf("origin = %+v, want project dot-codex %q", origin, wantDotCodex)
 	}
@@ -5830,7 +5830,7 @@ func TestRuntimeRouterSkillsListDefaultsCWDAndIncludesConfiguredPluginSkillsLike
 	if err := os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: fake\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(.git) error = %v", err)
 	}
-	repoSkillDir := filepath.Join(cwd, ".codex", "skills", "repo-skill")
+	repoSkillDir := filepath.Join(cwd, ".gcode", "skills", "repo-skill")
 	if err := os.MkdirAll(repoSkillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(repo skill) error = %v", err)
 	}
@@ -6193,7 +6193,7 @@ func TestRuntimeRouterSkillsListSkipsCWDRootsWhenLocalEnvironmentDisabledLikeRus
 		t.Fatalf("WriteFile(user skill) error = %v", err)
 	}
 	cwd := t.TempDir()
-	repoSkillDir := filepath.Join(cwd, ".codex", "skills", "repo-skill")
+	repoSkillDir := filepath.Join(cwd, ".gcode", "skills", "repo-skill")
 	if err := os.MkdirAll(repoSkillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(repo skill) error = %v", err)
 	}
@@ -6590,7 +6590,7 @@ description = "Inspect without writes."
 func TestRuntimeRouterPermissionProfileListResolvesProjectProfilesAndPaginates(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workspace, ".codex"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(workspace, ".gcode"), 0o755); err != nil {
 		t.Fatalf("mkdir project config: %v", err)
 	}
 	projectTrust := strings.ReplaceAll(filepath.Clean(workspace), `\`, `\\`)
@@ -6646,7 +6646,7 @@ description = "Project-scoped profile."
 func TestRuntimeRouterPermissionProfileListDiscoversProjectProfilesWithoutDefaultSelection(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workspace, ".codex"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(workspace, ".gcode"), 0o755); err != nil {
 		t.Fatalf("mkdir project config: %v", err)
 	}
 	projectTrust := strings.ReplaceAll(filepath.Clean(workspace), `\`, `\\`)
@@ -8113,7 +8113,7 @@ func TestRuntimeRouterFuzzyFileSearchSessionStopRejectsFurtherUpdates(t *testing
 func TestRuntimeRouterExperimentalFeatureListResolvesThreadProjectConfig(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
 		t.Fatalf("mkdir project config: %v", err)
 	}
 	projectTrust := strings.ReplaceAll(filepath.Clean(project), `\`, `\\`)
@@ -8313,7 +8313,7 @@ func TestRuntimeRouterAppListUsesThreadProjectFeatureConfigLikeRust(t *testing.T
 	clearAuthEnvAppserver(t)
 	home := t.TempDir()
 	project := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
 		t.Fatalf("mkdir project config: %v", err)
 	}
 	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
@@ -11870,10 +11870,10 @@ func TestRuntimeRouterTurnStartUsesProjectConfigFromThreadCWD(t *testing.T) {
 	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-user\"\nmodel_provider = \"openai\"\n\n[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile user config returned error: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(project, ".codex", "instructions.md"), []byte("project instructions"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(project, ".gcode", "instructions.md"), []byte("project instructions"), 0o600); err != nil {
 		t.Fatalf("WriteFile instructions returned error: %v", err)
 	}
 	if err := os.WriteFile(config.ProjectConfigPath(project), []byte("model = \"gpt-project\"\nmodel_instructions_file = \"instructions.md\"\nmodel_reasoning_effort = \"high\"\n"), 0o600); err != nil {
@@ -12271,7 +12271,7 @@ func TestRuntimeRouterTurnStartRuntimeWorkspaceRootsResumeFromLoadedThread(t *te
 func TestRuntimeRouterThreadStartElevatedSandboxPersistsProjectTrust(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workspace, ".codex"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(workspace, ".gcode"), 0o755); err != nil {
 		t.Fatalf("MkdirAll project config dir returned error: %v", err)
 	}
 	if err := os.WriteFile(config.ProjectConfigPath(workspace), []byte("model_reasoning_effort = \"high\"\n"), 0o600); err != nil {
@@ -12450,10 +12450,10 @@ func TestRuntimeRouterThreadSettingsUpdateAffectsFutureTurn(t *testing.T) {
 	home := t.TempDir()
 	initialProject := t.TempDir()
 	updatedProject := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(updatedProject, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(updatedProject, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(updatedProject, ".codex", "instructions.md"), []byte("updated project instructions"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(updatedProject, ".gcode", "instructions.md"), []byte("updated project instructions"), 0o600); err != nil {
 		t.Fatalf("WriteFile instructions returned error: %v", err)
 	}
 	if err := os.WriteFile(config.ProjectConfigPath(updatedProject), []byte("model_instructions_file = \"instructions.md\"\n"), 0o600); err != nil {
@@ -12746,10 +12746,10 @@ func TestRuntimeRouterTurnStartUpdatesCWDBetweenTurnsLikeRust(t *testing.T) {
 	secondProject := t.TempDir()
 	writeProjectInstructions := func(dir string, text string) {
 		t.Helper()
-		if err := os.MkdirAll(filepath.Join(dir, ".codex"), 0o755); err != nil {
-			t.Fatalf("MkdirAll project .codex returned error: %v", err)
+		if err := os.MkdirAll(filepath.Join(dir, ".gcode"), 0o755); err != nil {
+			t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, ".codex", "instructions.md"), []byte(text), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, ".gcode", "instructions.md"), []byte(text), 0o600); err != nil {
 			t.Fatalf("WriteFile instructions returned error: %v", err)
 		}
 		if err := os.WriteFile(config.ProjectConfigPath(dir), []byte("model_instructions_file = \"instructions.md\"\n"), 0o600); err != nil {
@@ -14513,7 +14513,7 @@ func TestRuntimeRouterSkillsContextFollowsModelUsageInstructionsFlagLikeRust(t *
 
 func TestRuntimeRouterSkillsContextIncludesCWDRepoSkills(t *testing.T) {
 	cwd := t.TempDir()
-	skillDir := filepath.Join(cwd, ".codex", "skills", "repo-helper")
+	skillDir := filepath.Join(cwd, ".gcode", "skills", "repo-helper")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
 	}
@@ -16948,8 +16948,8 @@ func TestRuntimeRouterTurnStartInjectsExternalCurrentTimeReminder(t *testing.T) 
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile user config returned error: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
 	projectConfig := `instructions = "project instructions"
 

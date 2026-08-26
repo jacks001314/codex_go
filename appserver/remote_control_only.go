@@ -26,7 +26,7 @@ func ServeRemoteControlOnly(ctx context.Context, options *RemoteControlOnlyOptio
 	}
 	codexHome := strings.TrimSpace(options.CodexHome)
 	if codexHome == "" {
-		codexHome = ".codex"
+		codexHome = ".gcode"
 	}
 	storeRoot := strings.TrimSpace(options.StoreRoot)
 	if storeRoot == "" {

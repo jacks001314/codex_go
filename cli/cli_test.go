@@ -1163,11 +1163,11 @@ func TestParseSandboxSetup(t *testing.T) {
 		t.Fatalf("Sandbox = %#v", parsed.Sandbox)
 	}
 
-	managed, err := Parse([]string{"sandbox", "setup", "--elevated", "--user", `DOMAIN\alice`, "--codex-home", `C:\Users\alice\.codex`})
+	managed, err := Parse([]string{"sandbox", "setup", "--elevated", "--user", `DOMAIN\alice`, "--codex-home", `C:\Users\alice\.gcode`})
 	if err != nil {
 		t.Fatalf("Parse managed setup returned error: %v", err)
 	}
-	if managed.Sandbox.User != `DOMAIN\alice` || managed.Sandbox.CodexHome != `C:\Users\alice\.codex` {
+	if managed.Sandbox.User != `DOMAIN\alice` || managed.Sandbox.CodexHome != `C:\Users\alice\.gcode` {
 		t.Fatalf("managed setup = %#v", managed.Sandbox)
 	}
 }
@@ -1180,7 +1180,7 @@ func TestParseSandboxSetupRejectsMissingRequiredFlags(t *testing.T) {
 	}{
 		{name: "missing user", args: []string{"sandbox", "setup", "--elevated"}, want: "--user or --current-user is required"},
 		{name: "missing codex home", args: []string{"sandbox", "setup", "--elevated", "--user", `DOMAIN\alice`}, want: "--codex-home is required with --user"},
-		{name: "user conflict", args: []string{"sandbox", "setup", "--elevated", "--current-user", "--user", `DOMAIN\alice`, "--codex-home", `C:\Users\alice\.codex`}, want: "--user conflicts with --current-user"},
+		{name: "user conflict", args: []string{"sandbox", "setup", "--elevated", "--current-user", "--user", `DOMAIN\alice`, "--codex-home", `C:\Users\alice\.gcode`}, want: "--user conflicts with --current-user"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

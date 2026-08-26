@@ -18,7 +18,7 @@ func TestMemoryUsageKindsFromCommand(t *testing.T) {
 		{name: "read", command: "memory read user/preferences", want: []MemoryUsageKind{MemoryUsageKindRead}},
 		{name: "list", command: "memories list", want: []MemoryUsageKind{MemoryUsageKindList}},
 		{name: "write", command: "codex memory add remember this", want: []MemoryUsageKind{MemoryUsageKindWrite, MemoryUsageKindAdHocNote}},
-		{name: "memory file read", command: "cat ~/.codex/memories/MEMORY.md", want: []MemoryUsageKind{MemoryUsageKindRead}},
+		{name: "memory file read", command: "cat ~/.gcode/memories/MEMORY.md", want: []MemoryUsageKind{MemoryUsageKindRead}},
 		{name: "none", command: "rg -n memory_usage", want: nil},
 	}
 	for _, tc := range cases {

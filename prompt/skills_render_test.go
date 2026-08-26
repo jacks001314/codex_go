@@ -264,7 +264,7 @@ func TestRenderAvailableSkillsCanOmitUsageInstructionsLikeRust(t *testing.T) {
 }
 
 func TestRenderAvailableSkillsUsesAliasesWhenTheyAllowMoreSkillsToFitLikeRust(t *testing.T) {
-	root := "/Users/xl/.codex/plugins/cache/openai-curated/example/hash1234567890/skills-with-a-very-long-shared-prefix"
+	root := "/Users/xl/.gcode/plugins/cache/openai-curated/example/hash1234567890/skills-with-a-very-long-shared-prefix"
 	skills := make([]InstructionsSkillMetadata, 0, 12)
 	for i := 0; i < 12; i++ {
 		name := fmt.Sprintf("shared-root-skill-%d", i)
@@ -314,8 +314,8 @@ func TestRenderAvailableSkillsUsesAliasesWhenTheyAllowMoreSkillsToFitLikeRust(t 
 }
 
 func TestBuildSkillAliasPlanUsesMarketplaceRootForSingleSkillPluginVersionLikeRust(t *testing.T) {
-	githubRoot := "/Users/xl/.codex/plugins/cache/openai-curated/github/hash123/skills"
-	marketplaceRoot := "/Users/xl/.codex/plugins/cache/openai-curated"
+	githubRoot := "/Users/xl/.gcode/plugins/cache/openai-curated/github/hash123/skills"
+	marketplaceRoot := "/Users/xl/.gcode/plugins/cache/openai-curated"
 	skills := []InstructionsSkillMetadata{
 		{Name: "github:gh-fix-ci", Scope: "repo", Path: githubRoot + "/gh-fix-ci/SKILL.md", Root: githubRoot},
 	}
@@ -337,7 +337,7 @@ func TestBuildSkillAliasPlanUsesMarketplaceRootForSingleSkillPluginVersionLikeRu
 }
 
 func TestBuildSkillAliasPlanUsesSkillRootForMultipleSkillsInOnePluginVersionLikeRust(t *testing.T) {
-	githubRoot := "/Users/xl/.codex/plugins/cache/openai-curated/github/hash123/skills"
+	githubRoot := "/Users/xl/.gcode/plugins/cache/openai-curated/github/hash123/skills"
 	skills := []InstructionsSkillMetadata{
 		{Name: "github:gh-fix-ci", Scope: "repo", Path: githubRoot + "/gh-fix-ci/SKILL.md", Root: githubRoot},
 		{Name: "github:yeet", Scope: "repo", Path: githubRoot + "/yeet/SKILL.md", Root: githubRoot},

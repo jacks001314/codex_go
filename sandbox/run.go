@@ -685,7 +685,7 @@ func rustPermissionProfileWireFromPermissionProfile(profile *PermissionProfile) 
 		}
 		addSpecial(FileSystemAccessRead, "project_roots", ".git")
 		addSpecial(FileSystemAccessRead, "project_roots", ".agents")
-		addSpecial(FileSystemAccessRead, "project_roots", ".codex")
+		addSpecial(FileSystemAccessRead, "project_roots", ".gcode")
 		for _, root := range policy.WritableRoots {
 			addPath(FileSystemAccessWrite, root)
 		}

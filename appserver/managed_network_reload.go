@@ -120,7 +120,7 @@ func managedNetworkReloadEvent(event fsnotify.Event, codexHome string) bool {
 	return name == config.ConfigPath(codexHome) ||
 		name == execPolicyDefaultPath(codexHome) ||
 		name == filepath.Join(codexHome, "rules") ||
-		(filepath.Base(name) == "config.toml" && filepath.Base(filepath.Dir(name)) == ".codex")
+		(filepath.Base(name) == "config.toml" && filepath.Base(filepath.Dir(name)) == ".gcode")
 }
 
 func execPolicyDefaultPath(codexHome string) string {

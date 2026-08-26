@@ -57,7 +57,7 @@ func TestApplyPatchExecutorRunsPatchAndFormatsOutput(t *testing.T) {
 
 func TestApplyPatchExecutorWorkspacePolicyProtectsMetadataLikeRust(t *testing.T) {
 	cwd := t.TempDir()
-	for _, directory := range []string{".git", ".agents", ".codex"} {
+	for _, directory := range []string{".git", ".agents", ".gcode"} {
 		if err := os.MkdirAll(filepath.Join(cwd, directory), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", directory, err)
 		}
@@ -77,7 +77,7 @@ func TestApplyPatchExecutorWorkspacePolicyProtectsMetadataLikeRust(t *testing.T)
 	}
 	assertApplyPatchFile(t, filepath.Join(cwd, "allowed.txt"), "workspace root patch access\n")
 
-	for _, directory := range []string{".git", ".agents", ".codex"} {
+	for _, directory := range []string{".git", ".agents", ".gcode"} {
 		t.Run(directory, func(t *testing.T) {
 			target := filepath.Join(cwd, directory, "protected.txt")
 			patch := fmt.Sprintf("*** Begin Patch\n*** Add File: %s/protected.txt\n+metadata write\n*** End Patch\n", directory)

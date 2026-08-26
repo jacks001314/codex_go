@@ -464,8 +464,8 @@ func TestThemePickerDiscoversCustomThemeDirectoryAndSubtitle(t *testing.T) {
 
 	home, err := os.UserHomeDir()
 	if err == nil && strings.TrimSpace(home) != "" {
-		subtitle := ThemePickerSubtitle(filepath.Join(home, ".codex", "themes"), 240)
-		if !strings.Contains(subtitle, "Custom .tmTheme files") || !strings.Contains(subtitle, filepath.Join("~", ".codex", "themes")) {
+		subtitle := ThemePickerSubtitle(filepath.Join(home, ".gcode", "themes"), 240)
+		if !strings.Contains(subtitle, "Custom .tmTheme files") || !strings.Contains(subtitle, filepath.Join("~", ".gcode", "themes")) {
 			t.Fatalf("subtitle = %q", subtitle)
 		}
 	}

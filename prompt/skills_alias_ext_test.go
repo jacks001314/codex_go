@@ -12,7 +12,7 @@ func TestExtensionSkillAliasRootDerivesFromLocator(t *testing.T) {
 	}{
 		{"skill://root-1/skills/foo", "skill://root-1/skills"},
 		{"skill://root-1/skills/foo/SKILL.md", "skill://root-1/skills"},
-		{"file:///repo/.codex/skills/bar", "file:///repo/.codex"},
+		{"file:///repo/.gcode/skills/bar", "file:///repo/.gcode"},
 		{"https://example.com/skills/baz", "https://example.com/skills"},
 	}
 	for _, tc := range cases {

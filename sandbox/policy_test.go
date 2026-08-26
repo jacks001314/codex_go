@@ -62,7 +62,7 @@ func TestWorkspaceWritableRootsIncludeCWDAndProtectMetadata(t *testing.T) {
 	if !workspace.IsPathWritable(filepath.Join(cwd, "src", "main.go")) {
 		t.Fatal("workspace file should be writable")
 	}
-	for _, directory := range []string{".git", ".agents", ".codex"} {
+	for _, directory := range []string{".git", ".agents", ".gcode"} {
 		if workspace.IsPathWritable(filepath.Join(cwd, directory, "protected.txt")) {
 			t.Fatalf("%s should be read-only under workspace root", directory)
 		}

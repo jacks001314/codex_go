@@ -269,12 +269,15 @@ func shellRunnerAbsPath(path string) (string, error) {
 }
 
 func defaultLocalShellRunnerCodexHome() string {
+	if value := strings.TrimSpace(os.Getenv("GCODE_HOME")); value != "" {
+		return value
+	}
 	if value := strings.TrimSpace(os.Getenv("CODEX_HOME")); value != "" {
 		return value
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return ".codex"
+		return ".gcode"
 	}
-	return filepath.Join(home, ".codex")
+	return filepath.Join(home, ".gcode")
 }

@@ -140,14 +140,17 @@ func DiscoverThemeOptions(bundled []string, customPaths []string) []ThemeOption 
 }
 
 func DefaultThemeDir() string {
-	codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	codexHome := strings.TrimSpace(os.Getenv("GCODE_HOME"))
+	if codexHome == "" {
+		codexHome = strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	}
 	if codexHome == "" {
 		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-			codexHome = filepath.Join(home, ".codex")
+			codexHome = filepath.Join(home, ".gcode")
 		}
 	}
 	if codexHome == "" {
-		return filepath.Join(".codex", "themes")
+		return filepath.Join(".gcode", "themes")
 	}
 	return filepath.Join(codexHome, "themes")
 }
@@ -199,7 +202,7 @@ func ThemePickerSubtitle(themeDir string, width int) string {
 func formatThemeDirDisplay(themeDir string) string {
 	themeDir = strings.TrimSpace(themeDir)
 	if themeDir == "" {
-		return filepath.Join("~", ".codex", "themes")
+		return filepath.Join("~", ".gcode", "themes")
 	}
 	home, err := os.UserHomeDir()
 	if err == nil && strings.TrimSpace(home) != "" {

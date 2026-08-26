@@ -396,14 +396,17 @@ func fsHelperEnvironment() map[string]string {
 }
 
 func fsHelperCodexHome() string {
+	if value := strings.TrimSpace(os.Getenv("GCODE_HOME")); value != "" && filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
 	if value := strings.TrimSpace(os.Getenv("CODEX_HOME")); value != "" && filepath.IsAbs(value) {
 		return filepath.Clean(value)
 	}
 	home, err := os.UserHomeDir()
 	if err == nil && filepath.IsAbs(home) {
-		return filepath.Join(home, ".codex")
+		return filepath.Join(home, ".gcode")
 	}
-	return filepath.Join(filepath.VolumeName(os.TempDir())+string(filepath.Separator), ".codex")
+	return filepath.Join(filepath.VolumeName(os.TempDir())+string(filepath.Separator), ".gcode")
 }
 
 func fsOperationFailure(err error) *requestFailure {

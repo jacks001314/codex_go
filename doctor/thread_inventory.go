@@ -101,7 +101,7 @@ func missingStateDBRolloutParityCheck(scan *rolloutParityScan, details []string)
 		check.Issue(NewIssue(CheckStatusWarning, "rollout scan was incomplete or found bad files").
 			WithMeasured(fmt.Sprintf("%d scan errors, %d malformed names, scan cap reached: %t", len(scan.ScanErrors), len(scan.MalformedNames), scan.ReachedScanCap)).
 			WithExpected("rollout directories are fully scannable").
-			WithRemedy("Check file permissions and unexpected files under CODEX_HOME sessions."))
+			WithRemedy("Check file permissions and unexpected files under GCODE_HOME sessions."))
 	}
 	return check
 }
@@ -198,7 +198,7 @@ func rolloutParityCheckFromScanAndRecords(codexHome string, scan *rolloutParityS
 		check.Issue(NewIssue(CheckStatusWarning, "rollout scan was incomplete or found bad files").
 			WithMeasured(fmt.Sprintf("%d scan errors, %d malformed names, scan cap reached: %t", len(scan.ScanErrors), len(scan.MalformedNames), scan.ReachedScanCap)).
 			WithExpected("rollout directories are fully scannable").
-			WithRemedy("Check file permissions and unexpected files under CODEX_HOME sessions."))
+			WithRemedy("Check file permissions and unexpected files under GCODE_HOME sessions."))
 	}
 	return check
 }

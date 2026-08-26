@@ -19,7 +19,7 @@ func TestInteractiveHooksReaderAndWriterPersistState(t *testing.T) {
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectKey+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(config.toml) error = %v", err)
 	}
-	hooksDir := filepath.Join(cwd, ".codex")
+	hooksDir := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}

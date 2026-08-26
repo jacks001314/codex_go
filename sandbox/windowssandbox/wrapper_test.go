@@ -27,7 +27,7 @@ func TestCreateWindowsSandboxCommandArgsForPermissionProfile(t *testing.T) {
 		WriteRootsOverrideSet:            true,
 		DenyReadPathsOverride:            []string{`C:\repo\.env`},
 		DenyWritePathsOverride:           []string{`C:\repo\readonly`},
-		CodexHome:                        `C:\Users\codex\.codex`,
+		CodexHome:                        `C:\Users\codex\.gcode`,
 	})
 	if err != nil {
 		t.Fatalf("CreateWindowsSandboxCommandArgsForPermissionProfile() error = %v", err)
@@ -39,7 +39,7 @@ func TestCreateWindowsSandboxCommandArgsForPermissionProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseWindowsSandboxWrapperArgs() error = %v", err)
 	}
-	if parsed.CodexHome != `C:\Users\codex\.codex` || parsed.CommandCWD != `C:\repo` {
+	if parsed.CodexHome != `C:\Users\codex\.gcode` || parsed.CommandCWD != `C:\repo` {
 		t.Fatalf("parsed paths = home %q cwd %q", parsed.CodexHome, parsed.CommandCWD)
 	}
 	if len(parsed.Command) != 3 || parsed.Command[0] != "cmd" {
@@ -85,7 +85,7 @@ func TestCreateWindowsSandboxCommandArgsResolvesDenyReadPathsFromProfileLikeRust
 		CommandCWD:          tmp,
 		PermissionProfile:   &profile,
 		WindowsSandboxLevel: WindowsSandboxLevelElevated,
-		CodexHome:           `C:\Users\codex\.codex`,
+		CodexHome:           `C:\Users\codex\.gcode`,
 	})
 	if err != nil {
 		t.Fatalf("CreateWindowsSandboxCommandArgsForPermissionProfile() error = %v", err)
@@ -113,7 +113,7 @@ func TestCreateWindowsSandboxCommandArgsRejectsRestrictedTokenWithDenyReadLikeRu
 		CommandCWD:          `C:\repo`,
 		PermissionProfile:   &profile,
 		WindowsSandboxLevel: WindowsSandboxLevelRestrictedToken,
-		CodexHome:           `C:\Users\codex\.codex`,
+		CodexHome:           `C:\Users\codex\.gcode`,
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot enforce split filesystem read restrictions") {
 		t.Fatalf("error = %v, want restricted-token fail-closed for deny-read", err)
@@ -128,7 +128,7 @@ func TestParseWindowsSandboxWrapperArgsRejectsRelativeCodexHome(t *testing.T) {
 		Env:                 map[string]string{},
 		PermissionProfile:   &profile,
 		WindowsSandboxLevel: WindowsSandboxLevelRestrictedToken,
-		CodexHome:           `C:\Users\codex\.codex`,
+		CodexHome:           `C:\Users\codex\.gcode`,
 	})
 	if err != nil {
 		t.Fatalf("CreateWindowsSandboxCommandArgsForPermissionProfile() error = %v", err)

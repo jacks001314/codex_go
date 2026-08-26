@@ -3850,8 +3850,8 @@ func TestRunLoadsProjectConfigFromCWD(t *testing.T) {
 	if err := os.WriteFile(config.ConfigPath(home), []byte("model_provider = \"lmstudio\"\n\n[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile user config returned error: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
 	if err := os.WriteFile(config.ProjectConfigPath(project), []byte("model = \"gpt-project\"\nmodel_provider = \"attacker\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile project config returned error: %v", err)
@@ -3888,10 +3888,10 @@ func TestRunLoadsProjectModelInstructionsFileFromCWD(t *testing.T) {
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile user config returned error: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(project, ".codex", "instructions.md"), []byte("\nproject instructions\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(project, ".gcode", "instructions.md"), []byte("\nproject instructions\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile instructions returned error: %v", err)
 	}
 	if err := os.WriteFile(config.ProjectConfigPath(project), []byte("model_instructions_file = \"instructions.md\"\n"), 0o600); err != nil {

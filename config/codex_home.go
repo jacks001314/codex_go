@@ -7,7 +7,10 @@ import (
 )
 
 func FindCodexHome() (string, error) {
-	value := os.Getenv("CODEX_HOME")
+	value := os.Getenv("GCODE_HOME")
+	if value == "" {
+		value = os.Getenv("CODEX_HOME")
+	}
 	if value == "" {
 		return FindCodexHomeFromEnv("")
 	}
@@ -39,5 +42,5 @@ func FindCodexHomeFromEnv(codexHomeEnv string) (string, error) {
 	if err != nil || home == "" {
 		return "", fmt.Errorf("Could not find home directory")
 	}
-	return filepath.Join(home, ".codex"), nil
+	return filepath.Join(home, ".gcode"), nil
 }

@@ -57,7 +57,7 @@ func BuiltinPetModel(id string, codexHome string) (Pet, error) {
 		return Pet{}, errors.New("unknown pet " + id)
 	}
 	if strings.TrimSpace(codexHome) == "" {
-		return Pet{}, errors.New("CODEX_HOME is not available")
+		return Pet{}, errors.New("GCODE_HOME is not available")
 	}
 	return Pet{
 		ID:              catalogPet.ID,

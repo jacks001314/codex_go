@@ -21,7 +21,7 @@ func LoadAmbientPet(petID string, codexHome string, animationsEnabled bool, env 
 		return AmbientPetState{}, errors.New("unknown pet " + petID)
 	}
 	if strings.TrimSpace(codexHome) == "" {
-		return AmbientPetState{}, errors.New("CODEX_HOME is not available")
+		return AmbientPetState{}, errors.New("GCODE_HOME is not available")
 	}
 	if _, err := EnsureBuiltinPet(codexHome, catalogPet, fetch); err != nil {
 		return AmbientPetState{}, err

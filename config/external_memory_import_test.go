@@ -11,7 +11,7 @@ import (
 func TestExternalAgentMemoryDetectAndImportPreservesScopeAndProvenance(t *testing.T) {
 	root := t.TempDir()
 	externalHome := filepath.Join(root, ".claude")
-	codexHome := filepath.Join(root, ".codex")
+	codexHome := filepath.Join(root, ".gcode")
 	cwd := filepath.Join(root, "repo")
 	projectKey := externalMemoryProjectKey(cwd)
 	memoryRoot := filepath.Join(externalHome, "projects", projectKey, "memory")

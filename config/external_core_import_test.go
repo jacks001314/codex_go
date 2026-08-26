@@ -12,7 +12,7 @@ import (
 
 func TestExternalCoreMigrationDetectsAndImportsSkillsWithoutOverwriting(t *testing.T) {
 	root := t.TempDir()
-	codexHome := filepath.Join(root, ".codex")
+	codexHome := filepath.Join(root, ".gcode")
 	externalHome := filepath.Join(root, ".claude")
 	sourceSkill := filepath.Join(externalHome, "skills", "reviewer")
 	if err := os.MkdirAll(sourceSkill, 0o700); err != nil {
@@ -51,7 +51,7 @@ func TestExternalCoreMigrationDetectsAndImportsSkillsWithoutOverwriting(t *testi
 
 func TestExternalCoreMigrationMergesLocalSettingsAndPreservesExistingConfig(t *testing.T) {
 	root := t.TempDir()
-	codexHome := filepath.Join(root, ".codex")
+	codexHome := filepath.Join(root, ".gcode")
 	externalHome := filepath.Join(root, ".claude")
 	if err := os.MkdirAll(externalHome, 0o700); err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestExternalCoreMigrationMergesLocalSettingsAndPreservesExistingConfig(t *t
 func TestExternalToolsMigrationDetectsAndImportsMCPCommandsAndSubagents(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
-	codexHome := filepath.Join(root, ".codex")
+	codexHome := filepath.Join(root, ".gcode")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -126,10 +126,10 @@ func TestExternalToolsMigrationDetectsAndImportsMCPCommandsAndSubagents(t *testi
 	if err := os.WriteFile(filepath.Join(agentDir, "researcher.md"), []byte("---\nname: researcher\ndescription: Claude research role\npermissionMode: acceptEdits\neffort: max\n---\nResearch with Claude Code.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(repo, ".codex"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(repo, ".gcode"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".codex", "config.toml"), []byte("[mcp_servers.docs]\ncommand = \"docs-existing\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gcode", "config.toml"), []byte("[mcp_servers.docs]\ncommand = \"docs-existing\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -158,7 +158,7 @@ func TestExternalToolsMigrationDetectsAndImportsMCPCommandsAndSubagents(t *testi
 	if len(completed.ItemTypeResults) != 3 {
 		t.Fatalf("completed = %#v", completed)
 	}
-	configData, err := os.ReadFile(filepath.Join(repo, ".codex", "config.toml"))
+	configData, err := os.ReadFile(filepath.Join(repo, ".gcode", "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestExternalToolsMigrationDetectsAndImportsMCPCommandsAndSubagents(t *testi
 	if pathExists(filepath.Join(repo, ".agents", "skills", "source-command-unsupported")) {
 		t.Fatal("unsupported command template was imported")
 	}
-	agentData, err := os.ReadFile(filepath.Join(repo, ".codex", "agents", "researcher.toml"))
+	agentData, err := os.ReadFile(filepath.Join(repo, ".gcode", "agents", "researcher.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestExternalHooksMigrationFiltersRewritesCopiesAndPreservesTargets(t *testi
 	codexHome := filepath.Join(root, ".codex-home")
 	sourceDir := filepath.Join(repo, ".claude")
 	sourceHooks := filepath.Join(sourceDir, "hooks")
-	targetHooks := filepath.Join(repo, ".codex", "hooks")
+	targetHooks := filepath.Join(repo, ".gcode", "hooks")
 	for _, dir := range []string{filepath.Join(repo, ".git"), sourceHooks, targetHooks} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -258,7 +258,7 @@ func TestExternalHooksMigrationFiltersRewritesCopiesAndPreservesTargets(t *testi
 	if len(completed.ItemTypeResults) != 1 || len(completed.ItemTypeResults[0].Successes) != 3 || len(completed.ItemTypeResults[0].Failures) != 0 {
 		t.Fatalf("completed = %#v", completed)
 	}
-	data, err := os.ReadFile(filepath.Join(repo, ".codex", "hooks.json"))
+	data, err := os.ReadFile(filepath.Join(repo, ".gcode", "hooks.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestExternalHooksMigrationFiltersRewritesCopiesAndPreservesTargets(t *testi
 	}
 	original := string(data)
 	_, completed = service.ImportExternalAgentConfig(&ExternalAgentConfigImportParams{MigrationItems: detected.Items})
-	after, err := os.ReadFile(filepath.Join(repo, ".codex", "hooks.json"))
+	after, err := os.ReadFile(filepath.Join(repo, ".gcode", "hooks.json"))
 	if err != nil || string(after) != original || len(completed.ItemTypeResults[0].Successes) != 0 {
 		t.Fatalf("existing hooks overwritten: data=%q completed=%#v err=%v", after, completed, err)
 	}
@@ -318,14 +318,14 @@ func TestExternalHooksMigrationHonorsLocalDisableOverride(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sourceDir, "settings.local.json"), []byte(`{"disableAllHooks":false,"hooks":{"SessionStart":[{"matcher":"local","hooks":[{"command":"echo local"}]}]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	migration, err := buildExternalHooksMigration(sourceDir, filepath.Join(root, ".codex"))
+	migration, err := buildExternalHooksMigration(sourceDir, filepath.Join(root, ".gcode"))
 	if err != nil || len(migration.Groups["SessionStart"]) != 2 {
 		t.Fatalf("local enable override = %#v err=%v", migration, err)
 	}
 	if err := os.WriteFile(filepath.Join(sourceDir, "settings.local.json"), []byte(`{"disableAllHooks":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	migration, err = buildExternalHooksMigration(sourceDir, filepath.Join(root, ".codex"))
+	migration, err = buildExternalHooksMigration(sourceDir, filepath.Join(root, ".gcode"))
 	if err != nil || len(migration.Groups) != 0 {
 		t.Fatalf("local disable override = %#v err=%v", migration, err)
 	}
@@ -350,7 +350,7 @@ func TestExternalRepoMigrationNeverOverwritesSymlinkTargets(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(repo, ".claude"), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.MkdirAll(filepath.Join(repo, ".codex"), 0o700); err != nil {
+			if err := os.MkdirAll(filepath.Join(repo, ".gcode"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(repo, "CLAUDE.md"), []byte("Claude guidance\n"), 0o600); err != nil {
@@ -364,7 +364,7 @@ func TestExternalRepoMigrationNeverOverwritesSymlinkTargets(t *testing.T) {
 				linkedTarget := filepath.Join(root, test.name+"-"+name+"-target")
 				migrationTarget := filepath.Join(repo, name)
 				if name == "hooks.json" {
-					migrationTarget = filepath.Join(repo, ".codex", name)
+					migrationTarget = filepath.Join(repo, ".gcode", name)
 				}
 				if test.linkedContent != nil {
 					if err := os.WriteFile(linkedTarget, []byte(*test.linkedContent), 0o600); err != nil {
@@ -401,7 +401,7 @@ func TestExternalRepoMigrationNeverOverwritesSymlinkTargets(t *testing.T) {
 				linkedTarget := filepath.Join(root, test.name+"-"+name+"-target")
 				migrationTarget := filepath.Join(repo, name)
 				if name == "hooks.json" {
-					migrationTarget = filepath.Join(repo, ".codex", name)
+					migrationTarget = filepath.Join(repo, ".gcode", name)
 				}
 				gotLink, err := os.Readlink(migrationTarget)
 				if err != nil || gotLink != linkedTarget {
@@ -422,7 +422,7 @@ func TestExternalRepoMigrationNeverOverwritesSymlinkTargets(t *testing.T) {
 
 func TestExternalPluginsMigrationDetectsAndInstallsLocalMarketplace(t *testing.T) {
 	root := t.TempDir()
-	codexHome := filepath.Join(root, ".codex")
+	codexHome := filepath.Join(root, ".gcode")
 	externalHome := filepath.Join(root, ".claude")
 	marketplace := filepath.Join(externalHome, "my-marketplace")
 	pluginRoot := filepath.Join(marketplace, "plugins", "cloudflare")
@@ -483,7 +483,7 @@ func TestExternalPluginsMigrationDetectsAndInstallsLocalMarketplace(t *testing.T
 
 func TestExternalPluginsMigrationUsesLocalSettingsAndValidSources(t *testing.T) {
 	root := t.TempDir()
-	codexHome := filepath.Join(root, ".codex")
+	codexHome := filepath.Join(root, ".gcode")
 	externalHome := filepath.Join(root, ".claude")
 	if err := os.MkdirAll(externalHome, 0o700); err != nil {
 		t.Fatal(err)

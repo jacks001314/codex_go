@@ -42,7 +42,7 @@ func TestHooksListEntryForCWDMatchesRust(t *testing.T) {
 
 func TestBuildHookTrustWriteParamsMatchesRust(t *testing.T) {
 	params := BuildHookTrustWriteParams([]HookTrustUpdate{
-		{Key: `file:C:\repo\.codex\hooks.json:pre_tool_use:0:0`, CurrentHash: "sha256:a"},
+		{Key: `file:C:\repo\.gcode\hooks.json:pre_tool_use:0:0`, CurrentHash: "sha256:a"},
 		{Key: "project:post_tool_use:1", CurrentHash: "sha256:b"},
 	})
 	if !params.ReloadUserConfig || params.FilePath != nil || params.ExpectedVersion != nil {
@@ -56,7 +56,7 @@ func TestBuildHookTrustWriteParamsMatchesRust(t *testing.T) {
 		t.Fatalf("edit = %#v", edit)
 	}
 	value := edit.Value.(map[string]any)
-	first := value[`file:C:\repo\.codex\hooks.json:pre_tool_use:0:0`].(map[string]any)
+	first := value[`file:C:\repo\.gcode\hooks.json:pre_tool_use:0:0`].(map[string]any)
 	if first["trusted_hash"] != "sha256:a" {
 		t.Fatalf("first trust value = %#v", first)
 	}

@@ -174,13 +174,16 @@ func persistProxyManagedCACertificate(contents []byte) (string, error) {
 }
 
 func proxyManagedCADirectory() (string, error) {
-	home := os.Getenv("CODEX_HOME")
+	home := os.Getenv("GCODE_HOME")
+	if home == "" {
+		home = os.Getenv("CODEX_HOME")
+	}
 	if home == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("resolve CODEX_HOME for managed MITM CA: %w", err)
 		}
-		home = filepath.Join(userHome, ".codex")
+		home = filepath.Join(userHome, ".gcode")
 	}
 	return filepath.Join(home, ProxyManagedMITMCADir), nil
 }

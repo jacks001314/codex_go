@@ -245,7 +245,7 @@ func copyMultiAgentTUIHomeFile(t *testing.T, name string, targetHome string) {
 	if err != nil {
 		t.Fatalf("resolve user home: %v", err)
 	}
-	source := filepath.Join(userHome, ".codex", name)
+	source := filepath.Join(userHome, ".gcode", name)
 	data, err := os.ReadFile(source)
 	if err != nil {
 		t.Fatalf("read isolated TUI %s source: %v", name, err)

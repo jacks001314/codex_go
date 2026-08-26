@@ -167,7 +167,7 @@ func (s *ConfigService) externalTargetConfigPath(scope externalMigrationScope) s
 	if scope.home() {
 		return filepath.Join(s.codexHome, "config.toml")
 	}
-	return filepath.Join(scope.repoRoot, ".codex", "config.toml")
+	return filepath.Join(scope.repoRoot, ".gcode", "config.toml")
 }
 
 func (s *ConfigService) importExternalConfig(scope externalMigrationScope, result *ExternalAgentConfigImportTypeResult) error {

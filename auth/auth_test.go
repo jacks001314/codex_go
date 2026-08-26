@@ -60,6 +60,16 @@ func TestDefaultCodexHomeUsesEnv(t *testing.T) {
 	}
 }
 
+func TestDefaultCodexHomePrefersGCODEHome(t *testing.T) {
+	gcode := t.TempDir()
+	codex := t.TempDir()
+	t.Setenv("GCODE_HOME", gcode)
+	t.Setenv("CODEX_HOME", codex)
+	if got := DefaultCodexHome(); got != gcode {
+		t.Fatalf("DefaultCodexHome = %q, want GCODE_HOME %q", got, gcode)
+	}
+}
+
 func TestSaveCreatesAuthJSON(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)

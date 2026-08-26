@@ -11,7 +11,7 @@ import (
 
 func TestSkillLoadWarningStateSuppressesRepeatedActiveErrorsMatchRust(t *testing.T) {
 	state := NewSkillLoadWarningState()
-	skillError := startupSkillError("/repo/.codex/skills/abc/SKILL.md", "invalid description")
+	skillError := startupSkillError("/repo/.gcode/skills/abc/SKILL.md", "invalid description")
 
 	if got := state.NewlyActiveErrors([]appserver.SkillErrorInfo{skillError}); !reflect.DeepEqual(got, []appserver.SkillErrorInfo{skillError}) {
 		t.Fatalf("first NewlyActiveErrors() = %#v, want error", got)
@@ -23,7 +23,7 @@ func TestSkillLoadWarningStateSuppressesRepeatedActiveErrorsMatchRust(t *testing
 
 func TestSkillLoadWarningStateReemitsAfterErrorClearsMatchRust(t *testing.T) {
 	state := NewSkillLoadWarningState()
-	skillError := startupSkillError("/repo/.codex/skills/abc/SKILL.md", "invalid description")
+	skillError := startupSkillError("/repo/.gcode/skills/abc/SKILL.md", "invalid description")
 
 	state.NewlyActiveErrors([]appserver.SkillErrorInfo{skillError})
 	if got := state.NewlyActiveErrors(nil); len(got) != 0 {
@@ -36,8 +36,8 @@ func TestSkillLoadWarningStateReemitsAfterErrorClearsMatchRust(t *testing.T) {
 
 func TestSkillLoadWarningStateDisplaysNewMessageForActivePathMatchRust(t *testing.T) {
 	state := NewSkillLoadWarningState()
-	initial := startupSkillError("/repo/.codex/skills/abc/SKILL.md", "invalid description")
-	changed := startupSkillError("/repo/.codex/skills/abc/SKILL.md", "invalid frontmatter")
+	initial := startupSkillError("/repo/.gcode/skills/abc/SKILL.md", "invalid description")
+	changed := startupSkillError("/repo/.gcode/skills/abc/SKILL.md", "invalid frontmatter")
 
 	if got := state.NewlyActiveErrors([]appserver.SkillErrorInfo{initial}); !reflect.DeepEqual(got, []appserver.SkillErrorInfo{initial}) {
 		t.Fatalf("initial NewlyActiveErrors() = %#v, want initial", got)
@@ -49,7 +49,7 @@ func TestSkillLoadWarningStateDisplaysNewMessageForActivePathMatchRust(t *testin
 
 func TestSkillLoadWarningStateClearAllowsActiveErrorAgainMatchRust(t *testing.T) {
 	state := NewSkillLoadWarningState()
-	skillError := startupSkillError("/repo/.codex/skills/abc/SKILL.md", "invalid description")
+	skillError := startupSkillError("/repo/.gcode/skills/abc/SKILL.md", "invalid description")
 
 	state.NewlyActiveErrors([]appserver.SkillErrorInfo{skillError})
 	state.NewlyActiveErrors([]appserver.SkillErrorInfo{skillError})
@@ -62,13 +62,13 @@ func TestSkillLoadWarningStateClearAllowsActiveErrorAgainMatchRust(t *testing.T)
 
 func TestSkillLoadWarningMessagesMatchRust(t *testing.T) {
 	errors := []appserver.SkillErrorInfo{
-		startupSkillError("/repo/.codex/skills/abc/SKILL.md", "invalid description"),
-		startupSkillError("/repo/.codex/skills/xyz/SKILL.md", "missing name"),
+		startupSkillError("/repo/.gcode/skills/abc/SKILL.md", "invalid description"),
+		startupSkillError("/repo/.gcode/skills/xyz/SKILL.md", "missing name"),
 	}
 	want := []string{
 		"Skipped loading 2 skill(s) due to invalid SKILL.md files.",
-		"/repo/.codex/skills/abc/SKILL.md: invalid description",
-		"/repo/.codex/skills/xyz/SKILL.md: missing name",
+		"/repo/.gcode/skills/abc/SKILL.md: invalid description",
+		"/repo/.gcode/skills/xyz/SKILL.md: missing name",
 	}
 	if got := SkillLoadWarningMessages(errors); !reflect.DeepEqual(got, want) {
 		t.Fatalf("SkillLoadWarningMessages() = %#v, want %#v", got, want)
@@ -196,10 +196,10 @@ func TestMigrationPromptHiddenTargetPresetAndAcceptedActionsMatchRust(t *testing
 
 func TestProjectConfigWarningAndHarnessOverrideNormalizationMatchRust(t *testing.T) {
 	warnings := BuildProjectConfigWarningMessages([]ProjectConfigDisabledFolder{
-		{Folder: "/repo/.codex", Reason: "not trusted"},
-		{Folder: "/repo/sub/.codex", Reason: "owner mismatch"},
+		{Folder: "/repo/.gcode", Reason: "not trusted"},
+		{Folder: "/repo/sub/.gcode", Reason: "owner mismatch"},
 	})
-	want := []string{"Project-local config, hooks, and exec policies are disabled in the following folders until the project is trusted, but skills still load.\n    1. /repo/.codex\n       not trusted\n    2. /repo/sub/.codex\n       owner mismatch"}
+	want := []string{"Project-local config, hooks, and exec policies are disabled in the following folders until the project is trusted, but skills still load.\n    1. /repo/.gcode\n       not trusted\n    2. /repo/sub/.gcode\n       owner mismatch"}
 	if !reflect.DeepEqual(warnings, want) {
 		t.Fatalf("warnings = %#v, want %#v", warnings, want)
 	}

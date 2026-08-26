@@ -82,10 +82,10 @@ func interactiveExternalEditorDirectoryHandler(root *cli.RootOptions, codexHome 
 		policy := resolution.Profile.LegacySandboxPolicy()
 		candidates := []string{codexHome}
 		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-			candidates = append(candidates, filepath.Join(home, ".codex"))
+			candidates = append(candidates, filepath.Join(home, ".gcode"))
 		}
 		if runtime.GOOS != "windows" && strings.TrimSpace(cwd) != "" {
-			candidates = append(candidates, filepath.Join(cwd, ".codex"))
+			candidates = append(candidates, filepath.Join(cwd, ".gcode"))
 		}
 		return codextea.EditorDirectory(candidates, policy, cwd)
 	}

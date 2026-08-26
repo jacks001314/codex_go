@@ -10,7 +10,7 @@ import (
 
 func TestExternalCursorHomeMigrationDetectsImportsAndDoesNotRedetect(t *testing.T) {
 	root := t.TempDir()
-	codexHome := filepath.Join(root, ".codex")
+	codexHome := filepath.Join(root, ".gcode")
 	claudeHome := filepath.Join(root, ".claude")
 	cursorHome := filepath.Join(root, ".cursor")
 	writable := filepath.Join(root, "generated")
@@ -122,7 +122,7 @@ func TestExternalCursorRepositoryMigrationUsesProjectFilesAndLegacyRules(t *test
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
 	cursorDir := filepath.Join(repo, ".cursor")
-	codexHome := filepath.Join(root, ".codex")
+	codexHome := filepath.Join(root, ".gcode")
 	for _, dir := range []string{filepath.Join(repo, ".git"), cursorDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -144,7 +144,7 @@ func TestExternalCursorRepositoryMigrationUsesProjectFilesAndLegacyRules(t *test
 		t.Fatalf("detected types = %s, items=%#v", got, detected.Items)
 	}
 	service.ImportExternalAgentConfig(&ExternalAgentConfigImportParams{MigrationItems: detected.Items, MigrationSource: &source})
-	configText := mustReadExternalCursorTestFile(t, filepath.Join(repo, ".codex", "config.toml"))
+	configText := mustReadExternalCursorTestFile(t, filepath.Join(repo, ".gcode", "config.toml"))
 	if !strings.Contains(configText, "REPO_CURSOR") || strings.Contains(configText, "read-only") {
 		t.Fatalf("repo config = %s", configText)
 	}
@@ -200,7 +200,7 @@ func TestExternalCursorSessionDetectionUsesCursorShapeAndLimits(t *testing.T) {
 	if err := os.WriteFile(transcript, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service := NewConfigService(filepath.Join(root, ".codex"))
+	service := NewConfigService(filepath.Join(root, ".gcode"))
 	service.SetExternalAgentHome(filepath.Join(root, ".claude"))
 	source := externalMigrationSourceCursor
 	maxSessions := uint32(1)
@@ -212,7 +212,7 @@ func TestExternalCursorSessionDetectionUsesCursorShapeAndLimits(t *testing.T) {
 	if session.Path != transcript || session.CWD != cwd || session.Title == nil || *session.Title != "Fix Cursor import" {
 		t.Fatalf("session = %#v", session)
 	}
-	if err := RecordExternalSessionImport(filepath.Join(root, ".codex"), transcript, "thread-cursor"); err != nil {
+	if err := RecordExternalSessionImport(filepath.Join(root, ".gcode"), transcript, "thread-cursor"); err != nil {
 		t.Fatal(err)
 	}
 	if detectedAgain := service.DetectExternalAgentConfig(&ExternalAgentConfigDetectParams{IncludeHome: true, MigrationSource: &source}); len(detectedAgain.Items) != 0 {

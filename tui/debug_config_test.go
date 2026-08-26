@@ -17,7 +17,7 @@ func TestDebugConfigOutputListsLayersIncludingDisabled(t *testing.T) {
 			Config:  map[string]any{"model": "gpt-system"},
 		},
 		{
-			Name:           config.LayerSource{Type: config.LayerSourceProject, DotCodexFolder: `D:\repo\.codex`},
+			Name:           config.LayerSource{Type: config.LayerSourceProject, DotCodexFolder: `D:\repo\.gcode`},
 			Version:        "project-v1",
 			Config:         map[string]any{"model": "gpt-project"},
 			DisabledReason: &disabled,
@@ -29,7 +29,7 @@ func TestDebugConfigOutputListsLayersIncludingDisabled(t *testing.T) {
 		DebugConfigCommand,
 		"Config layer stack (lowest precedence first):",
 		"1. system (/etc/codex/config.toml) (enabled)",
-		`2. project (D:\repo\.codex/config.toml) (disabled)`,
+		`2. project (D:\repo\.gcode/config.toml) (disabled)`,
 		"reason: not trusted",
 		"Requirements:",
 		"<none>",

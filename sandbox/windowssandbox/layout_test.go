@@ -45,7 +45,7 @@ func TestCaptureRequiresExplicitBackend(t *testing.T) {
 	_, err := RunWindowsSandboxCapture(&CaptureRequest{
 		PermissionProfileID: "workspace",
 		WorkspaceRoots:      []string{`C:\repo`},
-		CodexHome:           `C:\Users\codex\.codex`,
+		CodexHome:           `C:\Users\codex\.gcode`,
 		Command:             []string{"cmd", "/c", "echo hi"},
 		CWD:                 `C:\repo`,
 	})

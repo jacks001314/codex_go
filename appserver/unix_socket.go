@@ -66,7 +66,7 @@ func NewUnixSocketRouter(codexHome string) *RuntimeRouter {
 func NewUnixSocketRouterWithOptions(codexHome string, options *RuntimeRouterOptions) *RuntimeRouter {
 	codexHome = strings.TrimSpace(codexHome)
 	if codexHome == "" {
-		codexHome = ".codex"
+		codexHome = ".gcode"
 	}
 	store := session.NewStore(filepath.Join(codexHome, "sessions"))
 	return NewDefaultRuntimeRouterWithOptions(store, codexHome, options)
@@ -78,7 +78,7 @@ func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
 	}
 	codexHome := strings.TrimSpace(options.CodexHome)
 	if codexHome == "" {
-		codexHome = ".codex"
+		codexHome = ".gcode"
 	}
 	preparedRuntimeOptions, ownedStateRuntime, err := prepareSharedStateRuntime(ctx, codexHome, options.RuntimeOptions)
 	if err != nil {

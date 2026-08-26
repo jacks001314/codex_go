@@ -965,8 +965,8 @@ func TestTerminalTitleReportsProjectConfigFallback(t *testing.T) {
 func TestTerminalTitleCheckUsesProjectLayerWithoutConfigLikeRust(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("mkdir .codex: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("mkdir .gcode: %v", err)
 	}
 	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-user\"\n"+trustedProjectConfigForDoctor(project)+"\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -983,8 +983,8 @@ func TestTerminalTitleCheckUsesProjectLayerWithoutConfigLikeRust(t *testing.T) {
 func TestTerminalTitleCheckSkipsUntrustedProjectLayerLikeRust(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("mkdir .codex: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("mkdir .gcode: %v", err)
 	}
 	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-user\"\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -1191,7 +1191,7 @@ func TestConfigCheckReportsRustFeatureDetailLabels(t *testing.T) {
 		t.Fatalf("check = %+v", check)
 	}
 	for _, want := range []string{
-		"CODEX_HOME: " + home,
+		"GCODE_HOME: " + home,
 		"model: <default>",
 		"model provider: openai",
 		"mcp servers: 0",
@@ -1942,7 +1942,7 @@ func TestStateCheckReportsRustPathDBAndRolloutDetails(t *testing.T) {
 		t.Fatalf("check = %+v", check)
 	}
 	for _, want := range []string{
-		"CODEX_HOME: " + home + " (dir)",
+		"GCODE_HOME: " + home + " (dir)",
 		"log dir: " + filepath.Join(home, "log") + " (dir)",
 		"sqlite home: " + sqliteHome + " (dir)",
 		"state DB: " + filepath.Join(sqliteHome, "state_5.sqlite") + " (file)",

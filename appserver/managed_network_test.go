@@ -438,7 +438,7 @@ func TestThreadManagedNetworkHotReloadsProjectConfigLayerLikeRust(t *testing.T) 
 	if err := os.Mkdir(filepath.Join(project, ".git"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	dotCodex := filepath.Join(project, ".codex")
+	dotCodex := filepath.Join(project, ".gcode")
 	if err := os.Mkdir(dotCodex, 0o700); err != nil {
 		t.Fatal(err)
 	}

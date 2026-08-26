@@ -153,9 +153,9 @@ func windowsSandboxSmokeDefaultCodexHome() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return ".codex"
+		return ".gcode"
 	}
-	return filepath.Join(home, ".codex")
+	return filepath.Join(home, ".gcode")
 }
 
 func windowsSandboxSmokeEnabled(kind string) bool {

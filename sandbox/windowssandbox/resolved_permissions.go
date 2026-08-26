@@ -158,7 +158,7 @@ func buildWindowsWritableRoots(paths []string) []WindowsWritableRoot {
 			Root: cleaned,
 			ReadOnlySubpaths: []string{
 				filepath.Join(cleaned, ".git"),
-				filepath.Join(cleaned, ".codex"),
+				filepath.Join(cleaned, ".gcode"),
 			},
 		})
 	}

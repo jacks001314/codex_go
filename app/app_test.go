@@ -1007,8 +1007,8 @@ func TestInteractiveKeymapCommandPersistsConfig(t *testing.T) {
 func TestInteractiveDebugConfigReaderUsesRustStyleRenderer(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex error = %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode error = %v", err)
 	}
 	t.Setenv("CODEX_HOME", home)
 	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-user\"\n"+trustedProjectConfigApp(project)+"\n"), 0o600); err != nil {
@@ -1017,7 +1017,7 @@ func TestInteractiveDebugConfigReaderUsesRustStyleRenderer(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("allowed_web_search_modes = []\nallow_remote_control = false\n[experimental_network]\nenabled = true\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile requirements error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(project, ".codex", "config.toml"), []byte("model_provider = \"openai\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(project, ".gcode", "config.toml"), []byte("model_provider = \"openai\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile project config error = %v", err)
 	}
 	root := &cli.RootOptions{Shared: cli.SharedOptions{CWD: project}}
@@ -1421,11 +1421,11 @@ func TestRemoteProtocolUserMessageMapsCommittedSteer(t *testing.T) {
 func TestInteractiveSubmitInputsIncludesSelectedSkill(t *testing.T) {
 	inputs := interactiveSubmitInputs(codextea.SubmitRequest{
 		Prompt:          "$imagegen",
-		MentionBindings: []string{`imagegen|skill://C:\Users\me\.codex\skills\.system\imagegen\SKILL.md`},
+		MentionBindings: []string{`imagegen|skill://C:\Users\me\.gcode\skills\.system\imagegen\SKILL.md`},
 		MentionCatalog: chatwidget.SubmissionMentionCatalog{
 			Skills: []appserver.SkillsListEntry{{
 				Name:    "imagegen",
-				Path:    `C:\Users\me\.codex\skills\.system\imagegen\SKILL.md`,
+				Path:    `C:\Users\me\.gcode\skills\.system\imagegen\SKILL.md`,
 				Enabled: true,
 			}},
 		},
@@ -1434,7 +1434,7 @@ func TestInteractiveSubmitInputsIncludesSelectedSkill(t *testing.T) {
 	if len(inputs) != 1 {
 		t.Fatalf("inputs = %#v", inputs)
 	}
-	if inputs[0].Type != "skill" || inputs[0].Name != "imagegen" || inputs[0].Path != `C:\Users\me\.codex\skills\.system\imagegen\SKILL.md` {
+	if inputs[0].Type != "skill" || inputs[0].Name != "imagegen" || inputs[0].Path != `C:\Users\me\.gcode\skills\.system\imagegen\SKILL.md` {
 		t.Fatalf("skill input = %#v", inputs[0])
 	}
 }
@@ -1442,7 +1442,7 @@ func TestInteractiveSubmitInputsIncludesSelectedSkill(t *testing.T) {
 func TestInteractiveLocalSkillContextInjectsExplicitRepoSkill(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	cwd := t.TempDir()
-	skillDir := filepath.Join(cwd, ".codex", "skills", "repo-helper")
+	skillDir := filepath.Join(cwd, ".gcode", "skills", "repo-helper")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
 	}
@@ -2218,7 +2218,7 @@ func TestInteractiveRemoteReadHooksCallsAppServer(t *testing.T) {
 							HandlerType: appserver.HookHandlerCommand,
 							Matcher:     &matcher,
 							Command:     &command,
-							SourcePath:  `D:\repo\.codex\hooks.json`,
+							SourcePath:  `D:\repo\.gcode\hooks.json`,
 							Source:      appserver.HookSourceProject,
 							Enabled:     true,
 							TrustStatus: appserver.HookTrustTrusted,
@@ -3057,7 +3057,7 @@ func TestInteractiveRemoteReadSkillsCallsAppServer(t *testing.T) {
 						CWD: `D:\repo`,
 						Skills: []appserver.SkillsListEntry{{
 							Name:             "Docs:review",
-							Path:             `D:\repo\.codex\skills\review\SKILL.md`,
+							Path:             `D:\repo\.gcode\skills\review\SKILL.md`,
 							Scope:            "plugin",
 							ShortDescription: "Review code",
 							Enabled:          true,
@@ -3129,7 +3129,7 @@ func TestInteractiveRemoteSkillEnabledWriterCallsAppServer(t *testing.T) {
 	defer cancel()
 	requests := make(chan remoteTUITestRequest, 4)
 	serverErrs := make(chan error, 1)
-	const skillPath = `D:\repo\.codex\skills\review\SKILL.md`
+	const skillPath = `D:\repo\.gcode\skills\review\SKILL.md`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -3197,7 +3197,7 @@ func TestInteractiveRemoteSkillEnabledWriterCallsAppServer(t *testing.T) {
 
 func TestInteractiveExternalAgentMigrationHandlersUseEmbeddedAppServer(t *testing.T) {
 	userHome := t.TempDir()
-	home := filepath.Join(userHome, ".codex")
+	home := filepath.Join(userHome, ".gcode")
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}

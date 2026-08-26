@@ -46,13 +46,13 @@ func TestLoadEffectiveRejectsRetiredUntrustedApprovalPolicyLikeRust(t *testing.T
 func TestManagedProjectRootMarkersGovernDiscoveryLikeRust(t *testing.T) {
 	home := t.TempDir()
 	repo := filepath.Join(t.TempDir(), "repo")
-	if err := os.MkdirAll(filepath.Join(repo, ".codex"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repo, ".gcode"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "MARKER"), []byte("marker"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".codex", "config.toml"), []byte("model = \"gpt-managed-project\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".gcode", "config.toml"), []byte("model = \"gpt-managed-project\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	trusted := trustedProjectConfig(repo)
@@ -1364,14 +1364,14 @@ func TestLoadWithOptionsAppliesProjectConfigLayers(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")
 	nested := filepath.Join(project, "child")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(project, ".git"), []byte("gitdir"), 0o600); err != nil {
 		t.Fatalf("WriteFile project .git returned error: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(nested, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll nested .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(nested, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll nested .gcode returned error: %v", err)
 	}
 	if err := os.WriteFile(ConfigPath(home), []byte("model = \"gpt-user\"\nmodel_provider = \"openai\"\n"+trustedProjectConfig(project)+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile user config returned error: %v", err)
@@ -1390,7 +1390,7 @@ func TestLoadWithOptionsAppliesProjectConfigLayers(t *testing.T) {
 	if cfg.Values["model"] != "gpt-nested" || cfg.Values["model_provider"] != "openai" {
 		t.Fatalf("project layered values = %#v", cfg.Values)
 	}
-	wantInstructions := filepath.Join(nested, ".codex", "instructions.md")
+	wantInstructions := filepath.Join(nested, ".gcode", "instructions.md")
 	if cfg.Values["model_instructions_file"] != wantInstructions {
 		t.Fatalf("model_instructions_file = %#v, want %q", cfg.Values["model_instructions_file"], wantInstructions)
 	}
@@ -1469,8 +1469,8 @@ func TestProjectRootDiscoverySkipsIncompleteGitDirectoryLikeRust(t *testing.T) {
 func TestLoadWithOptionsIgnoreProjectConfigMatchesRust(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
 	if err := os.WriteFile(ConfigPath(home), []byte("model = \"gpt-user\"\n"+trustedProjectConfig(project)+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile user config returned error: %v", err)
@@ -1504,8 +1504,8 @@ func TestLoadWithOptionsIgnoreProjectConfigMatchesRust(t *testing.T) {
 func TestLoadEffectiveProjectConfigPrecedence(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
 	if err := os.WriteFile(ConfigPath(home), []byte("model = \"gpt-user\"\n"+trustedProjectConfig(project)+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile user config returned error: %v", err)
@@ -1529,8 +1529,8 @@ func TestLoadEffectiveProjectConfigPrecedence(t *testing.T) {
 func TestProjectConfigIgnoresUnsupportedKeys(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
 	if err := os.WriteFile(ConfigPath(home), []byte(`
 model = "gpt-user"
@@ -1591,8 +1591,8 @@ base_url = "https://attacker.example/v1"
 func TestProjectConfigRequiresTrustedProject(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
 	if err := os.WriteFile(ConfigPath(home), []byte("model = \"gpt-user\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile user config returned error: %v", err)
@@ -1624,8 +1624,8 @@ func TestProjectConfigTrustUsesActiveProjectRoot(t *testing.T) {
 	home := t.TempDir()
 	parent := filepath.Join(t.TempDir(), "parent")
 	project := filepath.Join(parent, "project")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode returned error: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(project, ".git"), []byte("gitdir"), 0o600); err != nil {
 		t.Fatalf("WriteFile project .git returned error: %v", err)
@@ -1661,14 +1661,14 @@ func TestProjectHooksDotCodexFolderUsesRootCheckoutForLinkedWorktree(t *testing.
 	root := filepath.Join(t.TempDir(), "repo")
 	worktree := filepath.Join(t.TempDir(), "worktree")
 	child := filepath.Join(worktree, "child")
-	if err := os.MkdirAll(filepath.Join(child, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll child .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(child, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll child .gcode returned error: %v", err)
 	}
 	writeLinkedWorktreeMetadata(t, root, worktree, "feature")
 
-	dotCodex := filepath.Join(child, ".codex")
+	dotCodex := filepath.Join(child, ".gcode")
 	got := ProjectHooksDotCodexFolder(child, dotCodex)
-	want := filepath.Join(root, "child", ".codex")
+	want := filepath.Join(root, "child", ".gcode")
 	if got != want {
 		t.Fatalf("ProjectHooksDotCodexFolder = %q, want %q", got, want)
 	}
@@ -1678,8 +1678,8 @@ func TestProjectConfigTrustUsesRootCheckoutForLinkedWorktree(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(t.TempDir(), "repo")
 	worktree := filepath.Join(t.TempDir(), "worktree")
-	if err := os.MkdirAll(filepath.Join(worktree, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll worktree .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(worktree, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree .gcode returned error: %v", err)
 	}
 	writeLinkedWorktreeMetadata(t, root, worktree, "feature")
 	if err := os.WriteFile(ConfigPath(home), []byte("model = \"gpt-user\"\n"+trustedProjectConfig(root)+"\n"), 0o600); err != nil {
@@ -1704,8 +1704,8 @@ func TestForgedLinkedWorktreeDoesNotInheritTrustLikeRust(t *testing.T) {
 		t.Fatalf("MkdirAll root .git returned error: %v", err)
 	}
 	attacker := filepath.Join(t.TempDir(), "attacker")
-	if err := os.MkdirAll(filepath.Join(attacker, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll attacker .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(attacker, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll attacker .gcode returned error: %v", err)
 	}
 	// Point at a worktree directory that was never registered.
 	if err := os.WriteFile(filepath.Join(attacker, ".git"), []byte("gitdir: "+filepath.Join(root, ".git", "worktrees", "missing")+"\n"), 0o600); err != nil {
@@ -1719,8 +1719,8 @@ func TestForgedLinkedWorktreeDoesNotInheritTrustLikeRust(t *testing.T) {
 func TestLinkedWorktreeRejectsSwappedBacklinkLikeRust(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo")
 	worktree := filepath.Join(t.TempDir(), "worktree")
-	if err := os.MkdirAll(filepath.Join(worktree, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll worktree .codex returned error: %v", err)
+	if err := os.MkdirAll(filepath.Join(worktree, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree .gcode returned error: %v", err)
 	}
 	worktreeGitDir := writeLinkedWorktreeMetadata(t, root, worktree, "feature")
 	// The backlink must name this checkout's own .git; point it elsewhere.

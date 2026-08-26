@@ -225,7 +225,7 @@ func (s *ConfigService) externalSubagentPaths(scope externalMigrationScope) (str
 	if scope.home() {
 		return filepath.Join(s.externalAgentHome, "agents"), filepath.Join(s.codexHome, "agents")
 	}
-	return filepath.Join(scope.repoRoot, externalClaudeConfigDir, "agents"), filepath.Join(scope.repoRoot, ".codex", "agents")
+	return filepath.Join(scope.repoRoot, externalClaudeConfigDir, "agents"), filepath.Join(scope.repoRoot, ".gcode", "agents")
 }
 
 func (s *ConfigService) buildExternalMCPMigration(scope externalMigrationScope) map[string]any {

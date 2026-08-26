@@ -802,7 +802,7 @@ var knownStrictFeatureFields = map[string]bool{
 }
 
 func ProjectConfigPath(cwd string) string {
-	return filepath.Join(strings.TrimSpace(cwd), ".codex", "config.toml")
+	return filepath.Join(strings.TrimSpace(cwd), ".gcode", "config.toml")
 }
 
 func ProjectConfigPaths(cwd string) []string {
@@ -833,7 +833,7 @@ func projectDotCodexFoldersWithMarkers(cwd string, markers []string) []string {
 	var folders []string
 	root := activeProjectRootWithMarkers(cwd, markers)
 	for _, dir := range projectAncestorDirsWithinRoot(cwd, root) {
-		folder := filepath.Join(dir, ".codex")
+		folder := filepath.Join(dir, ".gcode")
 		if dirExists(folder) {
 			folders = append(folders, folder)
 		}
@@ -885,9 +885,9 @@ func ProjectHooksDotCodexFolder(cwd string, dotCodexFolder string) string {
 		return dotCodexFolder
 	}
 	if relative == "." {
-		return filepath.Join(repoRoot, ".codex")
+		return filepath.Join(repoRoot, ".gcode")
 	}
-	return filepath.Join(repoRoot, relative, ".codex")
+	return filepath.Join(repoRoot, relative, ".gcode")
 }
 
 func (c *Config) FeatureSettings() map[string]bool {

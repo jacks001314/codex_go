@@ -7,7 +7,7 @@ import (
 )
 
 func TestSandboxDirsMatchRustLayout(t *testing.T) {
-	home := filepath.Join("C:", "Users", "example", ".codex")
+	home := filepath.Join("C:", "Users", "example", ".gcode")
 	if SandboxDir(home) != filepath.Join(home, ".sandbox") {
 		t.Fatalf("SandboxDir() = %q", SandboxDir(home))
 	}

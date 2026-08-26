@@ -47,7 +47,7 @@ type ProtocolTypeEntry struct {
 
 func AppServerControlSocketPath(codexHome string) string {
 	if codexHome == "" {
-		codexHome = ".codex"
+		codexHome = ".gcode"
 	}
 	return filepath.Join(codexHome, ControlDirName, ControlSocketFileName)
 }

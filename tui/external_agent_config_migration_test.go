@@ -120,7 +120,7 @@ func sampleExternalMigrationItems() []config.ExternalAgentConfigMigrationItem {
 	return []config.ExternalAgentConfigMigrationItem{
 		{
 			ItemType:    config.MigrationConfig,
-			Description: "Migrate /home/alex/.claude/settings.json into /home/alex/.codex/config.toml",
+			Description: "Migrate /home/alex/.claude/settings.json into /home/alex/.gcode/config.toml",
 		},
 		{
 			ItemType:    config.MigrationAgentsMD,

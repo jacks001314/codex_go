@@ -12,7 +12,7 @@ func TestJunctionHelpers(t *testing.T) {
 		t.Fatalf("junction names should differ")
 	}
 	got := JunctionRootForUserProfile(`C:\Users\codex`)
-	want := filepath.Join(`C:\Users\codex`, ".codex", ".sandbox", "cwd")
+	want := filepath.Join(`C:\Users\codex`, ".gcode", ".sandbox", "cwd")
 	if got != want {
 		t.Fatalf("JunctionRootForUserProfile() = %q, want %q", got, want)
 	}

@@ -343,7 +343,7 @@ func (s *ConfigService) importExternalCursorCommands(scope externalMigrationScop
 
 func (s *ConfigService) externalCursorSubagentPaths(scope externalMigrationScope) (string, string) {
 	source := filepath.Join(s.externalCursorConfigDir(scope), "agents")
-	target := filepath.Join(scope.repoRoot, ".codex", "agents")
+	target := filepath.Join(scope.repoRoot, ".gcode", "agents")
 	if scope.home() {
 		target = filepath.Join(s.codexHome, "agents")
 	}
@@ -480,7 +480,7 @@ func (s *ConfigService) detectExternalCursorHooksMigration(scope externalMigrati
 	sourceDir := s.externalCursorConfigDir(scope)
 	target := filepath.Join(s.codexHome, "hooks.json")
 	if !scope.home() {
-		target = filepath.Join(scope.repoRoot, ".codex", "hooks.json")
+		target = filepath.Join(scope.repoRoot, ".gcode", "hooks.json")
 	}
 	if !missingOrEmptyTextFile(target) {
 		return ExternalAgentConfigMigrationItem{}, false
@@ -507,7 +507,7 @@ func (s *ConfigService) importExternalCursorHooksMigration(item ExternalAgentCon
 	sourceDir := s.externalCursorConfigDir(scope)
 	target := filepath.Join(s.codexHome, "hooks.json")
 	if !scope.home() {
-		target = filepath.Join(scope.repoRoot, ".codex", "hooks.json")
+		target = filepath.Join(scope.repoRoot, ".gcode", "hooks.json")
 	}
 	if !missingOrEmptyTextFile(target) {
 		return result

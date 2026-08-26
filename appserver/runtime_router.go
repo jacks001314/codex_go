@@ -853,7 +853,7 @@ func NewDefaultRuntimeRouter(store *session.Store, codexHome string) *RuntimeRou
 func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, options *RuntimeRouterOptions) *RuntimeRouter {
 	codexHome = strings.TrimSpace(codexHome)
 	if codexHome == "" {
-		codexHome = ".codex"
+		codexHome = ".gcode"
 	}
 	var stateRuntime *state.StateRuntime
 	closeStateRuntime := false

@@ -562,7 +562,7 @@ func workspaceWriteFSEntries(policy *coresandbox.SandboxPolicy) []rustFSEntry {
 			})
 		}
 	}
-	for _, name := range []string{".git", ".agents", ".codex"} {
+	for _, name := range []string{".git", ".agents", ".gcode"} {
 		subpath := name
 		entries = append(entries, rustFSEntry{Path: specialFSPath("project_roots", &subpath), Access: "read"})
 	}

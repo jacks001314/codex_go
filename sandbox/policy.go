@@ -380,7 +380,7 @@ func buildWritableRoots(paths []string) []WritableRoot {
 		out = append(out, WritableRoot{
 			Root:                   path,
 			ReadOnlySubpaths:       protectedSubpaths(path),
-			ProtectedMetadataNames: []string{".git", ".agents", ".codex"},
+			ProtectedMetadataNames: []string{".git", ".agents", ".gcode"},
 		})
 	}
 	return out
@@ -390,7 +390,7 @@ func protectedSubpaths(root string) []string {
 	return []string{
 		filepath.Join(root, ".git"),
 		filepath.Join(root, ".agents"),
-		filepath.Join(root, ".codex"),
+		filepath.Join(root, ".gcode"),
 	}
 }
 

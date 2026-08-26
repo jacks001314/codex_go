@@ -10,7 +10,7 @@ import (
 
 func TestProtectWorkspaceCodexDirAddsDenyWrite(t *testing.T) {
 	cwd := t.TempDir()
-	path := filepath.Join(cwd, ".codex")
+	path := filepath.Join(cwd, ".gcode")
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}

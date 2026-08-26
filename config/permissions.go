@@ -338,7 +338,7 @@ func builtinPermissionProfileBuilder(profileID string) (*permissionProfileBuilde
 		builder.addEntry(runtimeSpecialEntry("tmpdir", "", sandbox.FileSystemAccessWrite))
 		builder.addEntry(runtimeSpecialEntry("project_roots", ".git", sandbox.FileSystemAccessRead))
 		builder.addEntry(runtimeSpecialEntry("project_roots", ".agents", sandbox.FileSystemAccessRead))
-		builder.addEntry(runtimeSpecialEntry("project_roots", ".codex", sandbox.FileSystemAccessRead))
+		builder.addEntry(runtimeSpecialEntry("project_roots", ".gcode", sandbox.FileSystemAccessRead))
 	default:
 		return nil, fmt.Errorf("default_permissions refers to unknown built-in profile `%s`", profileID)
 	}

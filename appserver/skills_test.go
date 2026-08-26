@@ -296,9 +296,9 @@ func TestSkillsListUsesEachCWDBundledSkillsConfigLikeRust(t *testing.T) {
 		}
 		trustKey := strings.ReplaceAll(filepath.Clean(tc.cwd), `\`, `\\`)
 		userConfig.WriteString("\n[projects.\"" + trustKey + "\"]\ntrust_level = \"trusted\"\n")
-		dotCodex := filepath.Join(tc.cwd, ".codex")
+		dotCodex := filepath.Join(tc.cwd, ".gcode")
 		if err := os.MkdirAll(dotCodex, 0o755); err != nil {
-			t.Fatalf("MkdirAll(.codex) error = %v", err)
+			t.Fatalf("MkdirAll(.gcode) error = %v", err)
 		}
 		contents := "[skills.bundled]\nenabled = " + strconv.FormatBool(tc.enabled) + "\n"
 		if err := os.WriteFile(filepath.Join(dotCodex, "config.toml"), []byte(contents), 0o600); err != nil {
@@ -569,7 +569,7 @@ func TestSetExtraRoots(t *testing.T) {
 
 func TestSkillsListIncludesCWDCodeXSkillsRootLikeRust(t *testing.T) {
 	cwd := t.TempDir()
-	skillDir := filepath.Join(cwd, ".codex", "skills", "repo-skill")
+	skillDir := filepath.Join(cwd, ".gcode", "skills", "repo-skill")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
 	}
@@ -654,7 +654,7 @@ func TestSkillsListDeduplicatesByPathPreferringRepoRootLikeRust(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: fake\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(.git) error = %v", err)
 	}
-	skillsRoot := filepath.Join(cwd, ".codex", "skills")
+	skillsRoot := filepath.Join(cwd, ".gcode", "skills")
 	skillDir := filepath.Join(skillsRoot, "shared-skill")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
@@ -691,7 +691,7 @@ func TestSkillsListKeepsDuplicateNamesAndSortsByScopeLikeRust(t *testing.T) {
 	}
 	userRoot := t.TempDir()
 	writeNamedSkill(userRoot, "user-copy", "user")
-	writeNamedSkill(filepath.Join(cwd, ".codex", "skills"), "repo-copy", "repo")
+	writeNamedSkill(filepath.Join(cwd, ".gcode", "skills"), "repo-copy", "repo")
 
 	response, err := NewSkillsServiceWithOptions(&SkillsServiceOptions{
 		RootSpecs: []SkillsRoot{{Path: userRoot, Scope: "user"}},
@@ -746,7 +746,7 @@ func TestSkillsListLoadsRepoSkillsWhenCWDIsFileLikeRust(t *testing.T) {
 	if err := os.WriteFile(cwdFile, []byte("package main\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(cwd file) error = %v", err)
 	}
-	skillDir := filepath.Join(project, ".codex", "skills", "repo-skill")
+	skillDir := filepath.Join(project, ".gcode", "skills", "repo-skill")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
 	}
@@ -815,7 +815,7 @@ func TestSkillsListUsesCachedResultUntilForceReloadLikeRust(t *testing.T) {
 		t.Fatalf("first response = %#v, want no skills", first)
 	}
 
-	skillDir := filepath.Join(cwd, ".codex", "skills", "late-extra-skill")
+	skillDir := filepath.Join(cwd, ".gcode", "skills", "late-extra-skill")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
 	}

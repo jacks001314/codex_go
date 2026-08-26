@@ -13,7 +13,7 @@ func TestWriteExternalTOMLRejectsRedirectedRepositoryTargetLikeRust(t *testing.T
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(repo, ".codex", "config.toml")
+	target := filepath.Join(repo, ".gcode", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestWriteExternalTOMLRejectsRedirectedRepositoryTargetLikeRust(t *testing.T
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(repo, ".codex")
+	link := filepath.Join(repo, ".gcode")
 	if err := os.RemoveAll(link); err != nil {
 		t.Fatal(err)
 	}

@@ -345,7 +345,7 @@ func linuxFilesystemPolicyFromLegacy(policy *legacySandboxPolicy) *linuxFilesyst
 			{Access: "write", Special: linuxSpecialPath{Kind: "project_roots"}},
 			{Access: "read", Special: linuxSpecialPath{Kind: "project_roots", Subpath: ".git"}},
 			{Access: "read", Special: linuxSpecialPath{Kind: "project_roots", Subpath: ".agents"}},
-			{Access: "read", Special: linuxSpecialPath{Kind: "project_roots", Subpath: ".codex"}},
+			{Access: "read", Special: linuxSpecialPath{Kind: "project_roots", Subpath: ".gcode"}},
 		}
 		if !policy.ExcludeSlashTmp {
 			entries = append(entries, linuxFilesystemEntry{Access: "write", Special: linuxSpecialPath{Kind: "slash_tmp"}})
@@ -476,7 +476,7 @@ func (p *linuxFilesystemPolicy) protectedReadOnlySubpaths(cwd string) []string {
 		if root == "/" {
 			continue
 		}
-		for _, name := range []string{".git", ".agents", ".codex"} {
+		for _, name := range []string{".git", ".agents", ".gcode"} {
 			add(filepath.Join(root, name))
 		}
 	}
@@ -1100,7 +1100,11 @@ func createProxySocketDir() (string, error) {
 }
 
 func proxySocketParentDir() string {
-	if home := os.Getenv("CODEX_HOME"); home != "" {
+	home := os.Getenv("GCODE_HOME")
+	if home == "" {
+		home = os.Getenv("CODEX_HOME")
+	}
+	if home != "" {
 		candidate := filepath.Join(home, "tmp")
 		if len(filepath.Join(candidate, fmt.Sprintf("%s%d-%d-127", proxySocketDirPrefix, ^uint32(0), ^uint32(0)), "proxy-route-9223372036854775807.sock")) <= 107 {
 			return candidate

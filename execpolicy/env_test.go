@@ -77,7 +77,7 @@ func TestCreateEnvInheritExcludeSetAndThreadID(t *testing.T) {
 	env := CreateEnv(&EnvPolicy{
 		InheritAll: true,
 		Exclude:    []EnvVariablePattern{{Mode: EnvPatternPrefix, Value: "SECRET_"}},
-		Set:        map[string]string{"CODEX_HOME": "$CWD/.codex", "PATH": "/custom$PATH_SEP$PATH"},
+		Set:        map[string]string{"CODEX_HOME": "$CWD/.gcode", "PATH": "/custom$PATH_SEP$PATH"},
 		CWD:        "/repo",
 	}, &threadID, map[string]string{
 		"PATH":       "/usr/bin",
@@ -86,7 +86,7 @@ func TestCreateEnvInheritExcludeSetAndThreadID(t *testing.T) {
 	if env["SECRET_KEY"] != "" {
 		t.Fatalf("SECRET_KEY inherited, env=%+v", env)
 	}
-	if env["CODEX_HOME"] != "/repo/.codex" {
+	if env["CODEX_HOME"] != "/repo/.gcode" {
 		t.Fatalf("CODEX_HOME = %q", env["CODEX_HOME"])
 	}
 	if env[ThreadIDEnvVar] != "thread-1" {

@@ -37,7 +37,7 @@ func Uninstall(codexHome string) {
 func Install(codexHome string) error {
 	codexHome = strings.TrimSpace(codexHome)
 	if codexHome == "" {
-		return fmt.Errorf("system skills CODEX_HOME is required")
+		return fmt.Errorf("system skills GCODE_HOME is required")
 	}
 	skillsRoot := filepath.Join(codexHome, "skills")
 	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {

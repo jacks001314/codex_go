@@ -513,8 +513,8 @@ func TestServiceReadIncludesProjectConfigForCWD(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
 	writeConfig(t, home, "model = \"gpt-user\"\nmodel_provider = \"openai\"\n"+trustedProjectConfig(project)+"\n")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex error = %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode error = %v", err)
 	}
 	if err := os.WriteFile(ProjectConfigPath(project), []byte("model = \"gpt-project\"\nmodel_provider = \"attacker\"\nmodel_instructions_file = \"instructions.md\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile project config error = %v", err)
@@ -528,12 +528,12 @@ func TestServiceReadIncludesProjectConfigForCWD(t *testing.T) {
 	if read.Config["model"] != "gpt-project" || read.Config["model_provider"] != "openai" {
 		t.Fatalf("config = %+v", read.Config)
 	}
-	wantInstructions := filepath.Join(project, ".codex", "instructions.md")
+	wantInstructions := filepath.Join(project, ".gcode", "instructions.md")
 	if read.Config["model_instructions_file"] != wantInstructions {
 		t.Fatalf("model_instructions_file = %#v, want %q", read.Config["model_instructions_file"], wantInstructions)
 	}
 	modelOrigin := read.Origins["model"]
-	if modelOrigin.Name.Type != LayerSourceProject || modelOrigin.Name.DotCodexFolder != filepath.Join(project, ".codex") {
+	if modelOrigin.Name.Type != LayerSourceProject || modelOrigin.Name.DotCodexFolder != filepath.Join(project, ".gcode") {
 		t.Fatalf("model origin = %+v", modelOrigin)
 	}
 	if read.Origins["model_provider"].Name.Type != LayerSourceUser {
@@ -552,8 +552,8 @@ func TestServiceReadIncludesEmptyProjectLayerForDotCodexWithoutConfig(t *testing
 	home := t.TempDir()
 	project := t.TempDir()
 	writeConfig(t, home, "model = \"gpt-user\"\n"+trustedProjectConfig(project)+"\n")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex error = %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode error = %v", err)
 	}
 	service := NewConfigService(home)
 
@@ -567,7 +567,7 @@ func TestServiceReadIncludesEmptyProjectLayerForDotCodexWithoutConfig(t *testing
 	if len(read.Layers) != 2 || read.Layers[1].Name.Type != LayerSourceProject {
 		t.Fatalf("layers = %+v", read.Layers)
 	}
-	if read.Layers[1].Name.DotCodexFolder != filepath.Join(project, ".codex") {
+	if read.Layers[1].Name.DotCodexFolder != filepath.Join(project, ".gcode") {
 		t.Fatalf("project layer source = %+v", read.Layers[1].Name)
 	}
 	projectConfig, ok := read.Layers[1].Config.(map[string]any)
@@ -580,8 +580,8 @@ func TestServiceManagedLayersOverrideProjectConfig(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
 	writeConfig(t, home, "model = \"gpt-user\"\n"+trustedProjectConfig(project)+"\n")
-	if err := os.MkdirAll(filepath.Join(project, ".codex"), 0o755); err != nil {
-		t.Fatalf("MkdirAll project .codex error = %v", err)
+	if err := os.MkdirAll(filepath.Join(project, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project .gcode error = %v", err)
 	}
 	if err := os.WriteFile(ProjectConfigPath(project), []byte("model = \"gpt-project\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile project config error = %v", err)
@@ -633,7 +633,7 @@ func TestServiceWriteReportsOverriddenByManagedLayer(t *testing.T) {
 func TestServiceBatchWritePreservesQuotedHookStateKeys(t *testing.T) {
 	home := t.TempDir()
 	service := NewConfigService(home)
-	hookKey := `file:C:\Users\me\.codex\hooks.json:pre_tool_use:0:0`
+	hookKey := `file:C:\Users\me\.gcode\hooks.json:pre_tool_use:0:0`
 	_, err := service.BatchWrite(&ConfigBatchWriteParams{Edits: []ConfigEdit{{
 		KeyPath: "hooks.state",
 		Value: map[string]any{

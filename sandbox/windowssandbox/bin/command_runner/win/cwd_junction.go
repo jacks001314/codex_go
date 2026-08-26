@@ -15,7 +15,7 @@ func JunctionNameForPath(path string) string {
 }
 
 func JunctionRootForUserProfile(userprofile string) string {
-	return filepath.Join(userprofile, ".codex", ".sandbox", "cwd")
+	return filepath.Join(userprofile, ".gcode", ".sandbox", "cwd")
 }
 
 func CreateCWDJunction(cwd string) (string, error) {

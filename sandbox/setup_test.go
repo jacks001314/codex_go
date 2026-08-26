@@ -3,7 +3,7 @@ package sandbox
 import "testing"
 
 func TestParseSetupCommand(t *testing.T) {
-	cmd, ok, err := ParseSetupCommand([]string{"setup", "--elevated", "--user", `DOMAIN\alice`, "--codex-home", `C:\Users\alice\.codex`})
+	cmd, ok, err := ParseSetupCommand([]string{"setup", "--elevated", "--user", `DOMAIN\alice`, "--codex-home", `C:\Users\alice\.gcode`})
 	if err != nil || !ok {
 		t.Fatalf("ParseSetupCommand() = %#v %v %v", cmd, ok, err)
 	}

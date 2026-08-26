@@ -2551,7 +2551,7 @@ func TestModelHooksCommandReadsRuntimeHooks(t *testing.T) {
 					Matcher:     &matcher,
 					Command:     &command,
 					TimeoutSec:  10,
-					SourcePath:  `D:\repo\.codex\hooks.json`,
+					SourcePath:  `D:\repo\.gcode\hooks.json`,
 					Source:      appserver.HookSourceProject,
 					Enabled:     true,
 					TrustStatus: appserver.HookTrustTrusted,
@@ -2608,7 +2608,7 @@ func TestModelHooksBrowserWritesRustConfigEdits(t *testing.T) {
 				EventName:   appserver.HookEventPreToolUse,
 				HandlerType: appserver.HookHandlerCommand,
 				Command:     &command,
-				SourcePath:  `D:\repo\.codex\hooks.json`,
+				SourcePath:  `D:\repo\.gcode\hooks.json`,
 				Source:      appserver.HookSourceProject,
 				Enabled:     true,
 				CurrentHash: "sha256:current",
@@ -2693,7 +2693,7 @@ func TestModelHooksBrowserUsesRustWriteFailureMessages(t *testing.T) {
 							CWD: `D:\repo`,
 							Hooks: []appserver.HookMetadata{{
 								Key: "hook-1", EventName: appserver.HookEventPreToolUse, HandlerType: appserver.HookHandlerCommand,
-								Command: &command, SourcePath: `D:\repo\.codex\hooks.json`, Source: appserver.HookSourceProject,
+								Command: &command, SourcePath: `D:\repo\.gcode\hooks.json`, Source: appserver.HookSourceProject,
 								Enabled: true, CurrentHash: "sha256:current", TrustStatus: test.status,
 							}},
 						},
@@ -3458,7 +3458,7 @@ func TestModelSkillsManageReadsRuntimeInventory(t *testing.T) {
 				CWD: `D:\repo`,
 				Skills: []appserver.SkillsListEntry{{
 					Name:             "Docs:review",
-					Path:             `D:\repo\.codex\skills\review\SKILL.md`,
+					Path:             `D:\repo\.gcode\skills\review\SKILL.md`,
 					Scope:            "plugin",
 					ShortDescription: "Review code",
 					Enabled:          true,
@@ -3491,7 +3491,7 @@ func TestModelSkillsManageReadsRuntimeInventory(t *testing.T) {
 }
 
 func TestModelSkillsManageWritesSummarizesAndReloads(t *testing.T) {
-	const skillPath = `D:\repo\.codex\skills\review\SKILL.md`
+	const skillPath = `D:\repo\.gcode\skills\review\SKILL.md`
 	enabled := true
 	readCalls := 0
 	writeCalls := 0
@@ -3553,7 +3553,7 @@ func TestModelSkillsManageWritesSummarizesAndReloads(t *testing.T) {
 }
 
 func TestModelSkillsManageWriteFailureDoesNotCountAsChange(t *testing.T) {
-	const skillPath = `D:\repo\.codex\skills\review\SKILL.md`
+	const skillPath = `D:\repo\.gcode\skills\review\SKILL.md`
 	model := NewModel(codextui.NewState(nil), Options{
 		Width:            80,
 		Height:           24,
@@ -3605,7 +3605,7 @@ func TestModelSkillPopupReadsRuntimeInventoryAndInsertsSkill(t *testing.T) {
 				CWD: `D:\repo`,
 				Skills: []appserver.SkillsListEntry{{
 					Name:             "imagegen",
-					Path:             `C:\Users\me\.codex\skills\.system\imagegen\SKILL.md`,
+					Path:             `C:\Users\me\.gcode\skills\.system\imagegen\SKILL.md`,
 					Scope:            "system",
 					Description:      "Generate or edit images for websites, games, and more",
 					Enabled:          true,
@@ -3650,7 +3650,7 @@ func TestModelSkillPopupSubmissionCarriesMentionBindingAndCatalog(t *testing.T) 
 				CWD: `D:\repo`,
 				Skills: []appserver.SkillsListEntry{{
 					Name:             "imagegen",
-					Path:             `C:\Users\me\.codex\skills\.system\imagegen\SKILL.md`,
+					Path:             `C:\Users\me\.gcode\skills\.system\imagegen\SKILL.md`,
 					Scope:            "system",
 					Description:      "Generate images",
 					Enabled:          true,
@@ -3676,7 +3676,7 @@ func TestModelSkillPopupSubmissionCarriesMentionBindingAndCatalog(t *testing.T) 
 	if requests[0].Prompt != "$imagegen" {
 		t.Fatalf("prompt = %q, want $imagegen", requests[0].Prompt)
 	}
-	wantBinding := `imagegen|skill://C:\Users\me\.codex\skills\.system\imagegen\SKILL.md`
+	wantBinding := `imagegen|skill://C:\Users\me\.gcode\skills\.system\imagegen\SKILL.md`
 	if len(requests[0].MentionBindings) != 1 || requests[0].MentionBindings[0] != wantBinding {
 		t.Fatalf("mention bindings = %#v, want %q", requests[0].MentionBindings, wantBinding)
 	}
@@ -3801,7 +3801,7 @@ func TestModelSkillsListMenuOpensSkillPopup(t *testing.T) {
 				CWD: `D:\repo`,
 				Skills: []appserver.SkillsListEntry{{
 					Name:        "openai-docs",
-					Path:        `C:\Users\me\.codex\skills\.system\openai-docs\SKILL.md`,
+					Path:        `C:\Users\me\.gcode\skills\.system\openai-docs\SKILL.md`,
 					Scope:       "system",
 					Description: "Reference OpenAI docs",
 					Enabled:     true,

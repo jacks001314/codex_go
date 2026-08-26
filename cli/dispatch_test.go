@@ -49,8 +49,14 @@ func TestPathEnvWithEntry(t *testing.T) {
 }
 
 func TestFilterDotenvRejectsCodexKeys(t *testing.T) {
-	filtered := FilterDotenv(map[string]string{"CODEX_HOME": "bad", "APP_ENV": "ok"})
-	if _, ok := filtered["CODEX_HOME"]; ok || filtered["APP_ENV"] != "ok" {
+	filtered := FilterDotenv(map[string]string{"CODEX_HOME": "bad", "GCODE_HOME": "bad", "APP_ENV": "ok"})
+	if _, ok := filtered["CODEX_HOME"]; ok {
+		t.Fatalf("CODEX_HOME was not filtered: %#v", filtered)
+	}
+	if _, ok := filtered["GCODE_HOME"]; ok {
+		t.Fatalf("GCODE_HOME was not filtered: %#v", filtered)
+	}
+	if filtered["APP_ENV"] != "ok" {
 		t.Fatalf("unexpected filtered env: %#v", filtered)
 	}
 }
