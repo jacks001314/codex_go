@@ -879,6 +879,9 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	pluginService := plugin.NewPluginService()
 	pluginService.SetCodexHome(codexHome)
 	runtimeMetrics := state.NewTaskMetrics()
+	if stateRuntime != nil {
+		stateRuntime.SetMetrics(runtimeMetrics)
+	}
 	services := RuntimeServices{
 		ThreadRouter:           NewRouter(store),
 		StateRuntime:           stateRuntime,

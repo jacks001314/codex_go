@@ -62,13 +62,24 @@ func (r *StateRuntime) InsertLog(ctx context.Context, entry LogEntry) error {
 }
 
 // InsertLogs writes and prunes one batch atomically.
-func (r *StateRuntime) InsertLogs(ctx context.Context, entries []LogEntry) error {
+func (r *StateRuntime) InsertLogs(ctx context.Context, entries []LogEntry) (err error) {
 	if err := r.requireLogsDB(); err != nil {
 		return err
 	}
 	if len(entries) == 0 {
 		return nil
 	}
+	started := time.Now()
+	defer func() {
+		if r.metrics != nil {
+			status := "ok"
+			if err != nil {
+				status = "error"
+			}
+			r.metrics.Counter("codex.sqlite.log.write", 1, map[string]string{"status": status})
+			r.metrics.Histogram("codex.sqlite.log.write.duration_ms", int(time.Since(started).Milliseconds()), nil)
+		}
+	}()
 	ctx = nonNilContext(ctx)
 	tx, err := r.logsDB.BeginTx(ctx, nil)
 	if err != nil {

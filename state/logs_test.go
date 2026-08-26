@@ -184,3 +184,22 @@ func lastLogTS(rows []LogRow) int64 {
 	}
 	return rows[len(rows)-1].TS
 }
+
+func TestInsertLogsEmitsWriteTelemetry(t *testing.T) {
+	runtime := newGoalTestRuntime(t)
+	metrics := NewTaskMetrics()
+	runtime.SetMetrics(metrics)
+	message := "telemetry probe"
+	if err := runtime.InsertLogs(context.Background(), []LogEntry{{TS: 10, TSNanos: 1, Level: "INFO", Target: "worker", Message: &message}}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, rec := range metrics.Records() {
+		if rec.Name == "codex.sqlite.log.write" && rec.Kind == "counter" && rec.Tags["status"] == "ok" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no codex.sqlite.log.write metric: %#v", metrics.Records())
+	}
+}

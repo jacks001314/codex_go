@@ -18,6 +18,15 @@ type runtimeDBSpec struct {
 	path  func(SqliteConfig) string
 }
 
+// SetMetrics installs the TaskMetrics used to emit SQLite log-persistence
+// telemetry (Rust #40726 codex.sqlite.log.write_*).
+func (r *StateRuntime) SetMetrics(metrics *TaskMetrics) {
+	if r == nil {
+		return
+	}
+	r.metrics = metrics
+}
+
 var runtimeDBSpecs = []runtimeDBSpec{
 	{kind: RuntimeDBState, label: "state DB", path: SqliteConfig.StateDBPath},
 	{kind: RuntimeDBLogs, label: "log DB", path: SqliteConfig.LogsDBPath},
@@ -55,6 +64,7 @@ type StateRuntime struct {
 	memoriesDB      *sql.DB
 	threadHistoryMu sync.Mutex
 	threadHistoryDB *sql.DB
+	metrics         *TaskMetrics
 	closed          bool
 	threadUpdatedAt atomic.Int64
 	threadRecencyAt atomic.Int64
