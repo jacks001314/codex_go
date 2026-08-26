@@ -41,6 +41,7 @@ const (
 	CollabAgentToolCallInProgress CollabAgentToolCallStatus = "inProgress"
 	CollabAgentToolCallCompleted  CollabAgentToolCallStatus = "completed"
 	CollabAgentToolCallFailed     CollabAgentToolCallStatus = "failed"
+	CollabAgentToolCallInterrupted CollabAgentToolCallStatus = "interrupted"
 )
 
 type CollaborationModeMask struct {

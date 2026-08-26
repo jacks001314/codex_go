@@ -26579,3 +26579,10 @@ func TestCollabAgentToolAnalyticsNameNewToolsLikeRust(t *testing.T) {
 		}
 	}
 }
+
+func TestCollabToolCallAnalyticsOutcomeInterruptedLikeRust(t *testing.T) {
+	status, failure, ok := collabToolCallAnalyticsOutcome(CollabAgentToolCallInterrupted)
+	if !ok || status != telemetry.ToolItemTerminalStatusInterrupted || failure != nil {
+		t.Fatalf("interrupted outcome = status=%q failure=%v ok=%v, want interrupted + no failure", status, failure, ok)
+	}
+}

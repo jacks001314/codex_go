@@ -4864,7 +4864,7 @@ func threadItemCollabAgentToolStatus(item *ThreadItem) CollabAgentToolCallStatus
 	}
 	status := CollabAgentToolCallStatus(threadItemStringFromData(item.Data, "status"))
 	switch status {
-	case CollabAgentToolCallInProgress, CollabAgentToolCallCompleted, CollabAgentToolCallFailed:
+	case CollabAgentToolCallInProgress, CollabAgentToolCallCompleted, CollabAgentToolCallFailed, CollabAgentToolCallInterrupted:
 		return status
 	default:
 		return CollabAgentToolCallCompleted

@@ -151,6 +151,8 @@ func collabToolCallAnalyticsOutcome(status CollabAgentToolCallStatus) (string, *
 		return telemetry.ToolItemTerminalStatusCompleted, nil, true
 	case CollabAgentToolCallFailed:
 		return telemetry.ToolItemTerminalStatusFailed, stringPtrIfNotEmpty(telemetry.ToolItemFailureKindToolError), true
+	case CollabAgentToolCallInterrupted:
+		return telemetry.ToolItemTerminalStatusInterrupted, nil, true
 	default:
 		return "", nil, false
 	}
