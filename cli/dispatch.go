@@ -227,12 +227,28 @@ func dispatchAliasNames(goos string) []string {
 func createDispatchAlias(dir string, alias string, currentExe string) error {
 	target := filepath.Join(dir, alias)
 	if runtime.GOOS == "windows" {
-		quotedExe := `"` + strings.ReplaceAll(currentExe, `"`, `""`) + `"`
+		exe := windowsBatchExecutablePath(currentExe, dir)
+		quotedExe := `"` + strings.ReplaceAll(exe, `"`, `""`) + `"`
 		flag := dispatchFlagForAlias(alias)
 		body := fmt.Sprintf("@echo off\r\n%s %s %%*\r\n", quotedExe, flag)
 		return os.WriteFile(target, []byte(body), 0o700)
 	}
 	return os.Symlink(currentExe, target)
+}
+
+// windowsBatchExecutablePath returns a path to executable that is safe to embed
+// in a generated Windows .bat alias. When executable and aliasDirectory are on
+// the same volume it returns a path relative to the batch file using %~dp0, so
+// Unicode paths under the alias directory (which the active console code page
+// may not represent) still resolve correctly. Otherwise it falls back to the
+// absolute path (Rust #40570 windows_batch_executable_path).
+func windowsBatchExecutablePath(executable, aliasDirectory string) string {
+	if rel, err := filepath.Rel(aliasDirectory, executable); err == nil {
+		if !filepath.IsAbs(rel) {
+			return `%~dp0` + rel
+		}
+	}
+	return executable
 }
 
 func dispatchFlagForAlias(alias string) string {

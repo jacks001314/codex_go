@@ -41,6 +41,42 @@ func TestDispatchKind(t *testing.T) {
 	}
 }
 
+// TestWindowsBatchExecutablePathPreservesUnicode pins the #40570 behavior:
+// when the executable and the alias directory share a volume, the generated
+// .bat alias must reference the executable via a %~dp0-relative path so a
+// Unicode path under the alias directory is not corrupted by the active console
+// code page; on a different volume it must fall back to the absolute path.
+func TestWindowsBatchExecutablePathPreservesUnicode(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows batch-alias path behavior is Windows-specific")
+	}
+
+	root := t.TempDir()
+	aliasDirectory := filepath.Join(root, "用户", ".codex", "tmp", "arg0")
+	executable := filepath.Join(root, "用户", "bin", "cmd.exe")
+
+	// Same volume -> %~dp0-relative path.
+	got := windowsBatchExecutablePath(executable, aliasDirectory)
+	if !strings.HasPrefix(got, `%~dp0`) {
+		t.Fatalf("same-volume path = %q, want %%~dp0-relative", got)
+	}
+	rel := strings.TrimPrefix(got, `%~dp0`)
+	if resolved := filepath.Clean(filepath.Join(aliasDirectory, rel)); resolved != executable {
+		t.Fatalf("%%~dp0 path %q resolves to %q, want %q", got, resolved, executable)
+	}
+
+	// Different volume -> absolute fallback.
+	vol := filepath.VolumeName(aliasDirectory)
+	if len(vol) == 0 || vol[0] < 'A' || vol[0] > 'Z' {
+		t.Fatalf("unexpected volume name %q", vol)
+	}
+	otherVol := string(byte('A'+((vol[0]-'A')+1)%26)) + vol[1:]
+	differentExe := filepath.Join(otherVol, "bin", "cmd.exe")
+	if got := windowsBatchExecutablePath(differentExe, aliasDirectory); got != differentExe {
+		t.Fatalf("different-volume path = %q, want absolute %q", got, differentExe)
+	}
+}
+
 func TestPathEnvWithEntry(t *testing.T) {
 	got := PathEnvWithEntry("/new", "/old")
 	if !strings.HasPrefix(got, "/new"+string(os.PathListSeparator)) {
