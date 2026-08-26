@@ -944,6 +944,11 @@ func responsesReasoningParam(request *AgentRequest, info *ModelInfo) *responsesR
 	if effort == "ultra" {
 		effort = "max"
 	}
+	// Rust #40799: keep "persistent" in local settings, but the Responses API
+	// calls it "disabled".
+	if effort == "persistent" {
+		effort = "disabled"
+	}
 	summary := strings.TrimSpace(request.ReasoningSummary)
 	if summary == "" {
 		summary = strings.TrimSpace(info.DefaultReasoningSummary)

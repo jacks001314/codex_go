@@ -2979,3 +2979,12 @@ func TestResponsesAgentRunnerContentItemKindsGate(t *testing.T) {
 		t.Fatalf("disabled gate did not strip content_item_kinds: %#v", got[0])
 	}
 }
+
+func TestResponsesReasoningParamPersistentTranslatesToDisabled(t *testing.T) {
+	request := &AgentRequest{ReasoningEffort: "persistent"}
+	info := &ModelInfo{SupportsReasoningSummaries: true, DefaultReasoningSummary: "none"}
+	r := responsesReasoningParam(request, info)
+	if r == nil || r.Effort != "disabled" {
+		t.Fatalf("reasoning effort = %#v, want disabled (Rust #40799)", r)
+	}
+}

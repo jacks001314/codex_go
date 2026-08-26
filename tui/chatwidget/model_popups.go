@@ -249,6 +249,8 @@ func ReasoningEffortPopupLabel(effort string) string {
 		return "Extra high"
 	case "ultra":
 		return "Ultra"
+	case "persistent":
+		return "Persistent"
 	case "":
 		return "Default"
 	default:

@@ -65,3 +65,9 @@ func TestReasoningPopupDefaultHighlightAndWarningDescriptionMatchRust(t *testing
 		t.Fatalf("selected description = %q", selectedDescription)
 	}
 }
+
+func TestReasoningEffortPopupLabelPersistent(t *testing.T) {
+	if got := ReasoningEffortPopupLabel("persistent"); got != "Persistent" {
+		t.Fatalf("label = %q, want Persistent (Rust #40799)", got)
+	}
+}
