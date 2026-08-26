@@ -84,8 +84,14 @@ func TestHistoryNotesBackendPostsContextAndAuthLikeRust(t *testing.T) {
 
 func TestHistoryNotesToolValidationAndExecutionLikeRust(t *testing.T) {
 	var gotPath string
+	var gotLimit json.Number
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
+		var body map[string]json.RawMessage
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if raw, ok := body["limit"]; ok {
+			_ = json.Unmarshal(raw, &gotLimit)
+		}
 		_, _ = w.Write([]byte(`{"items":[]}`))
 	}))
 	defer server.Close()
@@ -102,15 +108,22 @@ func TestHistoryNotesToolValidationAndExecutionLikeRust(t *testing.T) {
 		t.Fatalf("output = %#v path=%q", output, gotPath)
 	}
 
+	// #40775: client-side argument limits were removed; an oversized limit is
+	// forwarded to the backend instead of rejected locally.
 	oversized, err := executor.Execute(context.Background(), &tool.Invocation{
 		CallID:   "call-2",
 		ToolName: tool.NamespacedName("history", "list_items"),
 		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"limit":999}`},
 	})
-	if err == nil || !strings.Contains(err.Error(), "exceeds the maximum of 20") {
-		t.Fatalf("oversized limit error = %v", err)
+	if err != nil {
+		t.Fatalf("oversized limit Execute() error = %v", err)
 	}
-	_ = oversized
+	if !oversized.Success {
+		t.Fatalf("oversized limit not forwarded: %#v", oversized)
+	}
+	if gotLimit.String() != "999" {
+		t.Fatalf("forwarded limit = %v, want 999", gotLimit)
+	}
 }
 
 func TestHistoryNotesSearchQueryLengthValidation(t *testing.T) {
@@ -118,8 +131,10 @@ func TestHistoryNotesSearchQueryLengthValidation(t *testing.T) {
 	if err := action.ValidateArguments(map[string]any{"query": strings.Repeat("x", maxSearchQueryChars)}); err != nil {
 		t.Fatalf("boundary query rejected: %v", err)
 	}
-	if err := action.ValidateArguments(map[string]any{"query": strings.Repeat("x", maxSearchQueryChars+1)}); err == nil {
-		t.Fatal("oversized query accepted")
+	// #40775: the client-side query length limit was removed; oversized queries
+	// are forwarded to the backend.
+	if err := action.ValidateArguments(map[string]any{"query": strings.Repeat("x", maxSearchQueryChars+1)}); err != nil {
+		t.Fatalf("oversized query rejected: %v", err)
 	}
 }
 
