@@ -10,8 +10,10 @@ import (
 	"unicode/utf8"
 
 	execserverclient "codex_go/execserver"
+	"codex_go/features"
 	"codex_go/session"
 	"codex_go/skillprovider"
+	"codex_go/turn"
 )
 
 const maxExecutorSkillResourceBytes = 1024 * 1024
@@ -24,6 +26,11 @@ func (r *RuntimeRouter) executorSkillProviderForThreadWithSandbox(threadID strin
 	if r == nil || !r.threadHasSelectedCapabilityRoots(threadID) {
 		return nil
 	}
+	// Rust #40640: managed requirements may disable the `plugins` feature, in
+	// which case selected executor plugin roots must not expose capabilities.
+	if !r.executorPluginsFeatureEnabledForThread(threadID) {
+		return nil
+	}
 	provider := skillprovider.ProviderFuncs{
 		ListFunc: func(ctx context.Context, _ skillprovider.ListQuery) (skillprovider.Catalog, error) {
 			return r.executorSkillProviderCatalog(ctx, threadID, sandboxContexts)
@@ -33,6 +40,21 @@ func (r *RuntimeRouter) executorSkillProviderForThreadWithSandbox(threadID strin
 		},
 	}
 	return skillprovider.NewRegistry(skillprovider.Source{Kind: skillprovider.SourceExecutor, Label: "executor", Provider: provider})
+}
+
+func (r *RuntimeRouter) executorPluginsFeatureEnabledForThread(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return true
+	}
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{CWD: strings.TrimSpace(record.Metadata.CWD), ThreadID: threadID})
+	if err != nil || cfg == nil {
+		return true
+	}
+	return features.Enabled(cfg.FeatureSettings(), "plugins")
 }
 
 func (r *RuntimeRouter) threadHasSelectedCapabilityRoots(threadID string) bool {
