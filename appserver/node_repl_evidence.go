@@ -104,7 +104,7 @@ func (r *RuntimeRouter) recordNodeReplReviewEvidence(threadID string, execution 
 		return
 	}
 	namespace := strings.TrimRight(strings.TrimSpace(execution.Invocation.ToolName.Namespace), "_")
-	if namespace != "node_repl" && namespace != "mcp__node_repl" {
+	if !isNodeReplBackedNamespace(namespace) {
 		return
 	}
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), "")
@@ -131,6 +131,18 @@ func (r *RuntimeRouter) recordNodeReplReviewEvidence(threadID string, execution 
 	callID := strings.TrimSpace(execution.Invocation.CallID)
 	evidence := r.nodeReplEvidenceForThread(strings.TrimSpace(threadID))
 	evidence.RecordMultimodal(execution.Invocation.ToolName.Name, cellID, callID, blocks, imageURLs)
+}
+
+// isNodeReplBackedNamespace reports whether the tool namespace routes through a
+// Node REPL-backed MCP server (node_repl or cua_repl), mirroring Rust
+// codex_protocol::mcp::is_node_repl_backed_server (#40257).
+func isNodeReplBackedNamespace(namespace string) bool {
+	switch namespace {
+	case "node_repl", "cua_repl", "mcp__node_repl", "mcp__cua_repl":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *RuntimeRouter) nodeReplEvidenceForThread(threadID string) *codexctx.NodeReplReviewEvidence {

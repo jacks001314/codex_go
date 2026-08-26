@@ -84,3 +84,15 @@ func TestNodeReplEvidenceStoreClearAndSnapshot(t *testing.T) {
 		t.Fatal("cleared evidence should not produce a snapshot")
 	}
 }
+func TestIsNodeReplBackedNamespaceRecognizesCuaRepl(t *testing.T) {
+	for _, namespace := range []string{"node_repl", "cua_repl", "mcp__node_repl", "mcp__cua_repl"} {
+		if !isNodeReplBackedNamespace(namespace) {
+			t.Fatalf("namespace %q should be node-repl backed", namespace)
+		}
+	}
+	for _, namespace := range []string{"exec", "git", "filesystem"} {
+		if isNodeReplBackedNamespace(namespace) {
+			t.Fatalf("namespace %q should not be node-repl backed", namespace)
+		}
+	}
+}
