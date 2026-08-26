@@ -833,3 +833,15 @@ func intPtrTelemetry(value int) *int {
 func uint64PtrTelemetry(value uint64) *uint64 {
 	return &value
 }
+
+func TestCodexToolItemEventBaseRootTurnIDSerializes(t *testing.T) {
+	root := "root-turn-1"
+	base := CodexToolItemEventBase{ThreadID: "thread-1", TurnID: "turn-1", ItemID: "item-1", RootTurnID: &root}
+	var got map[string]any
+	if err := marshalUnmarshalTelemetry(base, &got); err != nil {
+		t.Fatalf("marshal error = %v", err)
+	}
+	if got["root_turn_id"] != "root-turn-1" {
+		t.Fatalf("root_turn_id = %#v, want root-turn-1 (Rust #40486)", got["root_turn_id"])
+	}
+}

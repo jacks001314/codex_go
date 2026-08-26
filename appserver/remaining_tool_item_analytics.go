@@ -114,6 +114,10 @@ func (r *RuntimeRouter) toolItemAnalyticsBase(connectionID string, threadID stri
 		}
 	}
 	lineage := r.responsesMetadataLineage(threadID)
+	rootTurnID := ""
+	if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.Params != nil {
+		rootTurnID = strings.TrimSpace(active.Params.RootTurnID)
+	}
 	startedAtMS := uint64FromNonNegativeInt64(threadItemInt64FromData(item.Data, "startedAtMs", "started_at_ms"))
 	completedAtMS := uint64FromNonNegativeInt64(threadItemInt64FromData(item.Data, "completedAtMs", "completed_at_ms"))
 	if completedAtMS == 0 && item.CreatedAt > 0 {
@@ -129,6 +133,7 @@ func (r *RuntimeRouter) toolItemAnalyticsBase(connectionID string, threadID stri
 		ThreadSource:                   stringPtrIfNotEmpty(lineage.ThreadSource),
 		SubagentSource:                 stringPtrIfNotEmpty(lineage.SubagentKind),
 		ParentThreadID:                 stringPtrIfNotEmpty(lineage.ParentThreadID),
+		RootTurnID:                     stringPtrIfNotEmpty(rootTurnID),
 		ToolName:                       toolName,
 		StartedAtMS:                    startedAtMS,
 		CompletedAtMS:                  completedAtMS,
