@@ -50,6 +50,7 @@ type logDBSink struct {
 	commands chan logDBCommand
 	done     chan struct{}
 	closed   bool
+	runtime  *StateRuntime
 }
 
 type LogDBHandler struct {
@@ -69,6 +70,7 @@ func NewLogDBHandlerWithConfig(runtime *StateRuntime, next slog.Handler, config 
 	sink := &logDBSink{
 		commands: make(chan logDBCommand, config.QueueCapacity),
 		done:     make(chan struct{}),
+		runtime:  runtime,
 	}
 	go sink.run(runtime, config)
 	return &LogDBHandler{
@@ -311,7 +313,17 @@ func (s *logDBSink) tryEntry(entry LogEntry) {
 	select {
 	case s.commands <- logDBCommand{entry: &entry}:
 	default:
+		if s != nil && s.runtime != nil {
+			s.metricsCounter("codex.sqlite.log.queue_drop")
+		}
 	}
+}
+
+func (s *logDBSink) metricsCounter(name string) {
+	if s == nil || s.runtime == nil || s.runtime.metrics == nil {
+		return
+	}
+	s.runtime.metrics.Counter(name, 1, nil)
 }
 
 func (s *logDBSink) flush(ctx context.Context) error {
