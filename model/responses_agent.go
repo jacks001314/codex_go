@@ -116,10 +116,10 @@ type ResponsesAgentOptions struct {
 	// nil means enabled (the feature default is on), matching the Stable
 	// default_enabled: true registration.
 	ContentItemKindsEnabled *bool
-	IncludeAttestation       bool
-	AttestationProvider      codexapi.AttestationProvider
-	SupportsWebsockets       bool
-	WebsocketConnectTimeout  time.Duration
+	IncludeAttestation      bool
+	AttestationProvider     codexapi.AttestationProvider
+	SupportsWebsockets      bool
+	WebsocketConnectTimeout time.Duration
 	// UnboundedConnectionRetries keeps active sampling turns alive until a
 	// failed network connection recovers (Rust Feature::UnboundedConnectionRetries,
 	// default enabled). nil means the feature default (enabled).
@@ -160,7 +160,7 @@ type ResponsesAgentRunner struct {
 	AWS *ProviderAWSAuthInfo
 	// Residency, when set, is the managed residency requirement enforced as an
 	// authoritative header on model requests (Rust #39645).
-	Residency             string
+	Residency string
 	// FreeGuardianEnabled, when set, allows eligible Guardian review inference
 	// to route through the dedicated unmetered Codex endpoints (Rust
 	// Config::free_guardian_enabled, #40892).

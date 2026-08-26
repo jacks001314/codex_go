@@ -91,6 +91,113 @@ func TestSecurityRiskScorePersistsAndLoadsLikeRust(t *testing.T) {
 	}
 }
 
+func TestSecurityRiskScorePersistsProvenanceLikeRust(t *testing.T) {
+	home := t.TempDir()
+	recorder, err := NewRecorder(&CreateParams{CodexHome: home, ThreadID: "thread-risk-prov", HistoryMode: "paginated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	callID := "call-42"
+	action := json.RawMessage(`{"type":"command","command":"ls"}`)
+	if err := recorder.AppendSecurityRiskScoreWithProvenance(map[string]float64{"command_injection": 0.9}, &callID, action, fixedProjectionTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lines, _, err := Load(recorder.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, line := range lines {
+		if line.Type != "security_risk_score" || len(line.SecurityRiskScore) == 0 {
+			continue
+		}
+		found = true
+		var score struct {
+			Scores    map[string]float64 `json:"scores"`
+			CallID    *string            `json:"call_id"`
+			Action    json.RawMessage    `json:"action"`
+			SampledAt string             `json:"sampled_at"`
+		}
+		if err := json.Unmarshal(line.SecurityRiskScore, &score); err != nil {
+			t.Fatalf("Unmarshal security risk score error = %v", err)
+		}
+		if score.Scores["command_injection"] != 0.9 {
+			t.Fatalf("security risk scores = %#v", score.Scores)
+		}
+		if score.CallID == nil || *score.CallID != "call-42" {
+			t.Fatalf("call_id = %#v, want call-42", score.CallID)
+		}
+		if string(score.Action) != `{"type":"command","command":"ls"}` {
+			t.Fatalf("action = %s", string(score.Action))
+		}
+		if score.SampledAt == "" {
+			t.Fatalf("sampled_at missing")
+		}
+	}
+	if !found {
+		t.Fatalf("security risk score line not persisted: %#v", lines)
+	}
+}
+
+func TestSecurityRiskScoreProvenancePersistsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	recorder, err := NewRecorder(&CreateParams{CodexHome: home, ThreadID: "thread-risk-prov", HistoryMode: "paginated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	callID := "toolcall-abc123"
+	action := json.RawMessage(`{"kind":"cmd","command":"ls","coordinate":{"type":"cmd"}}`)
+	if err := recorder.AppendSecurityRiskScoreWithProvenance(
+		map[string]float64{"action_risk": 0.9},
+		&callID,
+		action,
+		fixedProjectionTime(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lines, _, err := Load(recorder.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, line := range lines {
+		if line.Type != "security_risk_score" || len(line.SecurityRiskScore) == 0 {
+			continue
+		}
+		found = true
+		var score struct {
+			Scores    map[string]float64 `json:"scores"`
+			CallID    *string            `json:"call_id"`
+			Action    json.RawMessage    `json:"action"`
+			SampledAt string             `json:"sampled_at"`
+		}
+		if err := json.Unmarshal(line.SecurityRiskScore, &score); err != nil {
+			t.Fatalf("Unmarshal security risk score error = %v", err)
+		}
+		if score.Scores["action_risk"] != 0.9 {
+			t.Fatalf("security risk score = %#v", score)
+		}
+		if score.CallID == nil || *score.CallID != callID {
+			t.Fatalf("call_id = %v, want %s", score.CallID, callID)
+		}
+		if len(score.Action) == 0 || !strings.Contains(string(score.Action), "cmd") {
+			t.Fatalf("action not preserved: %s", string(score.Action))
+		}
+		if score.SampledAt == "" {
+			t.Fatalf("sampled_at not preserved")
+		}
+	}
+	if !found {
+		t.Fatalf("security risk score line not persisted: %#v", lines)
+	}
+}
+
 func TestReadProjectionStepsDefersRejectedRetryLikeRust(t *testing.T) {
 	path := writeProjectionFixture(t, "{not json}\n"+projectionLineJSON(0, "turn-0"))
 	steps, nextOffset, err := ReadProjectionSteps(path, 0, 0)

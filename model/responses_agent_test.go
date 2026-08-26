@@ -1647,6 +1647,51 @@ func TestResponsesAgentRunnerRoutingHintUsesCodexBackendAuth(t *testing.T) {
 	}
 }
 
+func TestResponsesAgentRunnerGuardianEndpointRouting(t *testing.T) {
+	makeRunner := func(freeGuardian bool) *ResponsesAgentRunner {
+		runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+			Provider:     &APIProvider{Name: OpenAIProviderName, BaseURL: "https://example.test/backend-api/codex"},
+			AuthSnapshot: &auth.AuthDotJSON{AuthMode: "chatgpt"},
+		})
+		runner.FreeGuardianEnabled = freeGuardian
+		return runner
+	}
+
+	// A Guardian review request routes to /guardian and omits the routing hint
+	// when free_guardian is enabled and all provider/model conditions hold.
+	runner := makeRunner(true)
+	request, err := runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{TaskKind: AgentTaskReview, Originator: "guardian"}, &responsesAgentRequest{Model: DefaultApprovalReviewPreferredModel}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(request.URL.Path, "/guardian") {
+		t.Fatalf("guardian path = %q, want /guardian", request.URL.Path)
+	}
+	if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "" {
+		t.Fatalf("guardian routing hint = %q, want empty", got)
+	}
+
+	// A normal (non-review) request keeps the standard /responses route.
+	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{}, &responsesAgentRequest{Model: "gpt-test"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(request.URL.Path, "/responses") {
+		t.Fatalf("normal path = %q, want /responses", request.URL.Path)
+	}
+
+	// Disabling free_guardian keeps /responses even for a Guardian review
+	// request.
+	runner = makeRunner(false)
+	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{TaskKind: AgentTaskReview}, &responsesAgentRequest{Model: DefaultApprovalReviewPreferredModel}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(request.URL.Path, "/responses") {
+		t.Fatalf("disabled path = %q, want /responses", request.URL.Path)
+	}
+}
+
 func TestResponsesAgentRunnerSendsStoreAndMetadataFieldsWithoutHTTPPreviousResponseID(t *testing.T) {
 	var recordedBody map[string]any
 	var recordedHeaders http.Header
