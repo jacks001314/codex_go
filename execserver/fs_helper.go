@@ -1,8 +1,8 @@
 package execserver
 
 import (
+	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,12 +12,24 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 )
 
 const FSHelperArg1 = "--codex-run-as-fs-helper"
+
+const (
+	// fsHelperExitTimeout bounds how long the parent waits to reap the fs helper
+	// after it has responded, killing a stuck helper instead of hanging foreever
+	// (Rust #40808 FS_HELPER_EXIT_TIMEOUT).
+	fsHelperExitTimeout = 2 * time.Second
+	// maxFSHelperStderrBytes bounds the retained stderr diagnostic from a noisy
+	// helper (Rust #40808 MAX_FS_HELPER_STDERR_BYTES).
+	maxFSHelperStderrBytes = 4096
+)
 
 var fsHelperCommandForExecutable = func(executable string) []string {
 	return []string{executable, FSHelperArg1}
@@ -197,20 +209,43 @@ func runSandboxedFSOperation(ctx *FileSystemSandboxContext, operation string, pa
 	if err != nil {
 		return true, err
 	}
-	commandCtx := context.Background()
-	cmd := exec.CommandContext(commandCtx, command[0], command[1:]...)
+	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = envPairs(env)
-	cmd.Stdin = bytes.NewReader(requestJSON)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return true, requestError(-32603, fmt.Sprintf("fs sandbox helper stdin pipe failed: %v", err))
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return true, requestError(-32603, fmt.Sprintf("fs sandbox helper stdout pipe failed: %v", err))
+	}
+	stderr := &boundedBuffer{}
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		return true, requestError(-32603, fmt.Sprintf("fs sandbox helper start failed: %v", err))
+	}
+	// Write the newline-delimited request. If the pipe fails, terminate the
+	// helper so an elevated process cannot survive a disconnected control pipe
+	// (Rust #40808).
+	if _, err := stdin.Write(append(requestJSON, '\n')); err != nil {
+		terminateFSHelper(cmd)
+		return true, requestError(-32603, fmt.Sprintf("fs sandbox helper pipe failed: %v", err))
+	}
+	_ = stdin.Close()
+
+	// Read the newline-delimited response without an operation deadline, then
+	// reap the helper with a bounded timeout, killing a stuck helper.
+	line, err := readHelperResponse(stdout)
+	if err != nil {
+		terminateFSHelper(cmd)
+		return true, requestError(-32603, fmt.Sprintf("fs sandbox helper failed: %v", err))
+	}
+	if err := reapFSHelper(cmd); err != nil {
 		return true, requestError(-32603, fmt.Sprintf("fs sandbox helper failed with status %v: %s", err, strings.TrimSpace(stderr.String())))
 	}
 	var response fsHelperResponse
-	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+	if err := json.Unmarshal(line, &response); err != nil {
 		return true, requestError(-32603, fmt.Sprintf("invalid fs sandbox helper response: %v", err))
 	}
 	if response.Status == "error" {
@@ -429,4 +464,68 @@ func mapFSRequestError(err error) error {
 		return nil
 	}
 	return fsOperationFailure(err)
+}
+
+// boundedBuffer retains a bounded prefix of helper stderr so a noisy helper
+// cannot exhaust memory (Rust #40808 MAX_FS_HELPER_STDERR_BYTES).
+type boundedBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.buf) < maxFSHelperStderrBytes {
+		remaining := maxFSHelperStderrBytes - len(b.buf)
+		if len(p) > remaining {
+			b.buf = append(b.buf, p[:remaining]...)
+		} else {
+			b.buf = append(b.buf, p...)
+		}
+	}
+	return len(p), nil
+}
+
+func (b *boundedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
+}
+
+// readHelperResponse reads the newline-delimited fs helper response from stdout
+// without imposing an operation deadline, mirroring Rust read_helper_response.
+func readHelperResponse(stdout io.Reader) ([]byte, error) {
+	line, err := bufio.NewReader(stdout).ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		return nil, errors.New("fs sandbox helper closed stdout without responding")
+	}
+	return bytes.TrimSpace(line), nil
+}
+
+// reapFSHelper waits up to fsHelperExitTimeout for the helper to exit after it
+// has responded, killing a stuck helper (Rust #40808).
+func reapFSHelper(cmd *exec.Cmd) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(fsHelperExitTimeout):
+		_ = cmd.Process.Kill()
+		<-done
+		return errors.New("fs sandbox helper did not exit after responding")
+	}
+}
+
+// terminateFSHelper kills and reaps a helper whose control pipe failed so an
+// elevated process cannot survive a disconnected control pipe (Rust #40808).
+func terminateFSHelper(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 }
