@@ -122,3 +122,28 @@ func TestHistoryNotesSearchQueryLengthValidation(t *testing.T) {
 		t.Fatal("oversized query accepted")
 	}
 }
+
+func TestThreadHintFetchesBoundedText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"  remember to run gofmt  "}`))
+	}))
+	defer server.Close()
+	backend := &Backend{BaseURL: server.URL}
+	got, ok := backend.ThreadHint(context.Background(), "session-1", "root")
+	if !ok || got != "remember to run gofmt" {
+		t.Fatalf("ThreadHint = %q ok=%v, want trimmed text", got, ok)
+	}
+
+	// An oversized hint is omitted (Rust #40539 MAX_THREAD_HINT_BYTES).
+	big := strings.Repeat("x", MaxThreadHintBytes+1)
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"` + big + `"}`))
+	}))
+	defer server2.Close()
+	backend2 := &Backend{BaseURL: server2.URL}
+	if _, ok := backend2.ThreadHint(context.Background(), "session-1", "root"); ok {
+		t.Fatal("oversized thread hint should be omitted")
+	}
+}

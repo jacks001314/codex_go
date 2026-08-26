@@ -77,3 +77,28 @@ func (b *Backend) Call(ctx context.Context, path string, sessionID string, curre
 	}
 	return json.RawMessage(data), nil
 }
+
+// ThreadHint fetches the history-notes context-window hint for a thread
+// (Rust #40539 contribute_thread_context -> alpha/notes/v2/thread_hint). It
+// returns the trimmed hint and true when non-empty and at most
+// MaxThreadHintBytes; oversized, empty, or failed requests omit the hint.
+func (b *Backend) ThreadHint(ctx context.Context, sessionID string, currentAgentName string) (string, bool) {
+	data, err := b.Call(ctx, "alpha/notes/v2/thread_hint", sessionID, currentAgentName, map[string]any{})
+	if err != nil {
+		return "", false
+	}
+	var payload struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", false
+	}
+	text := strings.TrimSpace(payload.Text)
+	if text == "" || len(text) > MaxThreadHintBytes {
+		return "", false
+	}
+	return text, true
+}
+
+// MaxThreadHintBytes bounds the history-notes context hint (Rust #40539).
+const MaxThreadHintBytes = 4_000
