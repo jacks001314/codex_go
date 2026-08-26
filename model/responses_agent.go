@@ -85,6 +85,12 @@ type ResponsesAgentOptions struct {
 	AgentIdentity            *AgentIdentityOptions
 	ModelsManager            ModelsManager
 	EnableRequestCompression bool
+	// ContentItemKindsEnabled mirrors Rust's content_item_kinds feature gate:
+	// when disabled, content_item_kinds is cleared from every response item
+	// carried to the provider (Rust client.rs prepare_response_items_for_request).
+	// nil means enabled (the feature default is on), matching the Stable
+	// default_enabled: true registration.
+	ContentItemKindsEnabled *bool
 	IncludeAttestation       bool
 	AttestationProvider      codexapi.AttestationProvider
 	SupportsWebsockets       bool
@@ -118,6 +124,7 @@ type ResponsesAgentRunner struct {
 	AgentIdentityTelemetry     *codexapi.AgentIdentityTelemetry
 	ModelsManager              ModelsManager
 	EnableRequestCompression   bool
+	ContentItemKindsEnabled    *bool
 	IncludeAttestation         bool
 	AttestationProvider        codexapi.AttestationProvider
 	SupportsWebsockets         bool
@@ -379,6 +386,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		AgentIdentityTelemetry:     agentIdentityTelemetryFromAuthHeaders(options.Auth),
 		ModelsManager:              options.ModelsManager,
 		EnableRequestCompression:   options.EnableRequestCompression,
+		ContentItemKindsEnabled:    cloneBoolPtrModel(options.ContentItemKindsEnabled),
 		IncludeAttestation:         options.IncludeAttestation,
 		AttestationProvider:        options.AttestationProvider,
 		SupportsWebsockets:         options.SupportsWebsockets,
@@ -467,7 +475,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		modelID = "gpt-5.5"
 	}
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItemsForProvider(request, r.providerName()), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
+		Model: modelID, Instructions: responsesInstructions(request), Input: r.gateContentItemKinds(responsesInputItemsForProvider(request, r.providerName())), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls, ClientMetadata: cloneStringMap(request.ClientMetadata),
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &ModelInfo{Slug: modelID, SupportsReasoningSummaries: true})
@@ -583,7 +591,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	}
 	modelInfo := r.modelInfoForRequest(modelID)
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: responsesInputItemsForProvider(request, r.providerName()), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
+		Model: modelID, Instructions: responsesInstructions(request), Input: r.gateContentItemKinds(responsesInputItemsForProvider(request, r.providerName())), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
 		ServiceTier: ServiceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
 		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
@@ -874,6 +882,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		instructions = ""
 		tools = nil
 	}
+	inputItems = r.gateContentItemKinds(inputItems)
 	// Only Responses WebSocket v2 supports previous_response_id. This HTTP/SSE
 	// runner carries conversation context by sending full history in input.
 	apiRequest := &responsesAgentRequest{
@@ -1503,6 +1512,35 @@ func prepareResponseInputImageBlock(block map[string]any) {
 		return
 	}
 	block["image_url"] = prepared
+}
+
+// gateContentItemKinds clears content_item_kinds from every request item when
+// the content_item_kinds feature is explicitly disabled, mirroring Rust's
+// client.rs prepare_response_items_for_request. A nil gate (the feature
+// default is enabled) preserves the annotation.
+func (r *ResponsesAgentRunner) gateContentItemKinds(items []any) []any {
+	if r == nil || r.ContentItemKindsEnabled == nil || *r.ContentItemKindsEnabled {
+		return items
+	}
+	return stripResponseItemContentKinds(items)
+}
+
+// stripResponseItemContentKinds removes the content_item_kinds metadata key
+// from each message item in place. Items without the passthrough metadata are
+// left untouched.
+func stripResponseItemContentKinds(items []any) []any {
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		md, ok := m["internal_chat_message_metadata_passthrough"].(map[string]any)
+		if !ok {
+			continue
+		}
+		delete(md, "content_item_kinds")
+	}
+	return items
 }
 
 func responsesInputItemsForProvider(request *AgentRequest, providerName string) []any {

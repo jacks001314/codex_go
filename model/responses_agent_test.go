@@ -2940,3 +2940,42 @@ func TestRefreshBedrockAWSCredentialsBoundsProviderRecoveryPerRequest(t *testing
 		t.Fatal("second provider-owned recovery should be rejected within the request")
 	}
 }
+func TestResponsesAgentRunnerContentItemKindsGate(t *testing.T) {
+	newItem := func() map[string]any {
+		return map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": "hi"},
+			},
+			"internal_chat_message_metadata_passthrough": map[string]any{
+				"content_item_kinds": []any{"user.text"},
+			},
+		}
+	}
+	hasKinds := func(item any) bool {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return false
+		}
+		md, ok := m["internal_chat_message_metadata_passthrough"].(map[string]any)
+		if !ok {
+			return false
+		}
+		_, present := md["content_item_kinds"]
+		return present
+	}
+
+	// A nil gate means the feature default (enabled): content kinds preserved.
+	runner := &ResponsesAgentRunner{}
+	if got := runner.gateContentItemKinds([]any{newItem()}); !hasKinds(got[0]) {
+		t.Fatalf("enabled gate stripped content_item_kinds: %#v", got[0])
+	}
+
+	// An explicit disabled gate clears content_item_kinds from the request item.
+	disabled := false
+	runnerDisabled := &ResponsesAgentRunner{ContentItemKindsEnabled: &disabled}
+	if got := runnerDisabled.gateContentItemKinds([]any{newItem()}); hasKinds(got[0]) {
+		t.Fatalf("disabled gate did not strip content_item_kinds: %#v", got[0])
+	}
+}
