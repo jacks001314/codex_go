@@ -1400,6 +1400,28 @@ func TestPrepareResponseInputImagesReplacesUnprocessableWithPlaceholder(t *testi
 	}
 }
 
+func TestPrepareResponseInputImagesTagsFailedImageKind(t *testing.T) {
+	items := []any{map[string]any{
+		"type": "message",
+		"role": "user",
+		"content": []any{map[string]any{
+			"type":      "input_image",
+			"image_url": "data:",
+			"detail":    "high",
+		}},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []any{"user.image"},
+		},
+	}}
+	out := prepareResponseInputImages(items)
+	msg := out[0].(map[string]any)
+	md := msg["internal_chat_message_metadata_passthrough"].(map[string]any)
+	kinds, _ := md["content_item_kinds"].([]any)
+	if len(kinds) != 1 || kinds[0] != "images.preparation_error" {
+		t.Fatalf("content_item_kinds = %#v, want images.preparation_error (Rust #40281)", kinds)
+	}
+}
+
 func TestPrepareResponseInputImagesLeavesNonImageItems(t *testing.T) {
 	items := []any{map[string]any{
 		"type": "message",

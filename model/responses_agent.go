@@ -1484,9 +1484,15 @@ func prepareResponseInputImageBlocks(value any) {
 	switch typed := value.(type) {
 	case map[string]any:
 		prepareResponseInputImageBlock(typed)
+		md, _ := typed["internal_chat_message_metadata_passthrough"].(map[string]any)
+		kinds, _ := md["content_item_kinds"].([]any)
 		for _, key := range []string{"content", "output", "content_items"} {
 			if child, ok := typed[key]; ok {
-				prepareResponseInputImageBlocks(child)
+				if key == "content" && kinds != nil {
+					prepareResponseInputImageContentWithKinds(child, kinds)
+				} else {
+					prepareResponseInputImageBlocks(child)
+				}
 			}
 		}
 	case []any:
@@ -1494,6 +1500,35 @@ func prepareResponseInputImageBlocks(value any) {
 			prepareResponseInputImageBlocks(child)
 		}
 	}
+}
+
+// prepareResponseInputImageContentWithKinds processes a message content array
+// while updating content_item_kinds for image-preparation failures, mirroring
+// Rust image_preparation.rs which tags failed images as images.preparation_error
+// (#40281).
+func prepareResponseInputImageContentWithKinds(value any, kinds []any) {
+	content, ok := value.([]any)
+	if !ok {
+		prepareResponseInputImageBlocks(value)
+		return
+	}
+	for i, block := range content {
+		prepareResponseInputImageBlock(block.(map[string]any))
+		if i < len(kinds) && kinds[i] == "user.image" {
+			if m, ok := block.(map[string]any); ok && m["type"] == "input_text" && blockWasPreparationError(m) {
+				kinds[i] = "images.preparation_error"
+			}
+		}
+	}
+}
+
+var imagePrepErrorPrefix = "image content omitted because"
+
+// blockWasPreparationError reports whether an input_text block was produced by a
+// failed image preparation (a placeholder rather than real user text).
+func blockWasPreparationError(block map[string]any) bool {
+	text, _ := block["text"].(string)
+	return strings.HasPrefix(strings.TrimSpace(text), imagePrepErrorPrefix)
 }
 
 func prepareResponseInputImageBlock(block map[string]any) {
