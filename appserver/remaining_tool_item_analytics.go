@@ -175,6 +175,14 @@ func collabAgentToolAnalyticsName(tool CollabAgentTool) string {
 		return "wait_agent"
 	case CollabAgentToolCloseAgent:
 		return "close_agent"
+	case CollabAgentToolSendMessage:
+		return "send_message"
+	case CollabAgentToolFollowup:
+		return "followup_task"
+	case CollabAgentToolInterrupt:
+		return "interrupt_agent"
+	case CollabAgentToolListAgents:
+		return "list_agents"
 	default:
 		return "send_input"
 	}

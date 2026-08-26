@@ -29,6 +29,10 @@ const (
 	CollabAgentToolResumeAgent CollabAgentTool = "resumeAgent"
 	CollabAgentToolWait        CollabAgentTool = "wait"
 	CollabAgentToolCloseAgent  CollabAgentTool = "closeAgent"
+	CollabAgentToolSendMessage CollabAgentTool = "sendMessage"
+	CollabAgentToolFollowup    CollabAgentTool = "followupTask"
+	CollabAgentToolInterrupt   CollabAgentTool = "interruptAgent"
+	CollabAgentToolListAgents  CollabAgentTool = "listAgents"
 )
 
 type CollabAgentToolCallStatus string

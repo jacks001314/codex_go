@@ -4850,7 +4850,8 @@ func threadItemCollabAgentTool(item *ThreadItem) CollabAgentTool {
 	}
 	tool := CollabAgentTool(threadItemStringFromData(item.Data, "tool"))
 	switch tool {
-	case CollabAgentToolSpawnAgent, CollabAgentToolSendInput, CollabAgentToolResumeAgent, CollabAgentToolWait, CollabAgentToolCloseAgent:
+	case CollabAgentToolSpawnAgent, CollabAgentToolSendInput, CollabAgentToolResumeAgent, CollabAgentToolWait, CollabAgentToolCloseAgent,
+		CollabAgentToolSendMessage, CollabAgentToolFollowup, CollabAgentToolInterrupt, CollabAgentToolListAgents:
 		return tool
 	default:
 		return CollabAgentToolSendInput

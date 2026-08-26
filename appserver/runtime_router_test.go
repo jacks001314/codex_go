@@ -26562,3 +26562,20 @@ func TestUserMessageInputItemFromTurnUserInputsContentKinds(t *testing.T) {
 		t.Fatalf("content_item_kinds = %#v, want %#v", kinds, want)
 	}
 }
+
+func TestCollabAgentToolAnalyticsNameNewToolsLikeRust(t *testing.T) {
+	cases := map[CollabAgentTool]string{
+		CollabAgentToolSendMessage: "send_message",
+		CollabAgentToolFollowup:    "followup_task",
+		CollabAgentToolInterrupt:   "interrupt_agent",
+		CollabAgentToolListAgents:  "list_agents",
+		CollabAgentToolSpawnAgent:  "spawn_agent",
+		CollabAgentToolWait:        "wait_agent",
+		CollabAgentToolSendInput:   "send_input",
+	}
+	for tool, want := range cases {
+		if got := collabAgentToolAnalyticsName(tool); got != want {
+			t.Fatalf("collabAgentToolAnalyticsName(%q) = %q, want %q", tool, got, want)
+		}
+	}
+}
