@@ -94,3 +94,26 @@ func runGit(t *testing.T, cwd string, args ...string) {
 		t.Fatalf("git %v: %v (%s)", args, err, out)
 	}
 }
+
+func TestSanitizeGitURLStripsCredentials(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"https://user:pass@github.com/org/repo.git", "https://github.com/org/repo.git"},
+		{"https://github.com/org/repo.git", "https://github.com/org/repo.git"},
+		{"git@github.com:org/repo.git", "git@github.com:org/repo.git"},
+		{"user@github.com:org/repo.git", "github.com:org/repo.git"},
+		{"ssh://git@github.com/org/repo.git", "ssh://git@github.com/org/repo.git"},
+		{"ssh://user@github.com/org/repo.git", "ssh://github.com/org/repo.git"},
+	}
+	for _, tc := range cases {
+		got, err := SanitizeGitURL(tc.in)
+		if err != nil {
+			t.Fatalf("SanitizeGitURL(%q) error = %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("SanitizeGitURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if _, err := SanitizeGitURL("https://user:secret@host/repo.git"); err != nil {
+		t.Fatalf("unexpected error = %v", err)
+	}
+}

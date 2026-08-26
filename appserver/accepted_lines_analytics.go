@@ -72,6 +72,11 @@ func acceptedLineRepoHashFromRemoteURL(remoteURL string) *string {
 	if remoteURL == "" {
 		return nil
 	}
+	// Rust #40713: strip embedded credentials before the remote reaches any
+	// metadata/analytics path so tokens in remote URLs are not hashed/carried.
+	if sanitized, err := gitutil.SanitizeGitURL(remoteURL); err == nil {
+		remoteURL = sanitized
+	}
 	canonical := canonicalizeAcceptedLineGitRemoteURL(remoteURL)
 	if canonical == "" {
 		canonical = remoteURL
