@@ -69,6 +69,8 @@ Rust `git pull origin main` advanced `f5420174da..bde9db1375` (4 upstream commit
 - `go test ./rollout -count=1` (SecurityRiskScore payload).
 - `go test ./model -count=1`, `go test ./config -count=1`, `go test ./features -count=1`.
 - `go test ./parity -count=1` (static/surface gates remain green).
+- `go test ./appserver -count=1` pass (static-freeze precomputed export hashes reconciled to
+  Rust `bde9db1375`).
 
 ## Status summary
 
