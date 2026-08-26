@@ -111,3 +111,13 @@ func TestForPromptTagsOmittedImageUnsupported(t *testing.T) {
 		t.Fatalf("omitted image content = %#v", prompt[0].Content)
 	}
 }
+
+func TestMergeContextualMessagesPreservesContentItemKinds(t *testing.T) {
+	merged := MergeContextualMessages([]HistoryItem{
+		{Kind: eventmap.ResponseMessage, Role: "user", ID: "u1", Content: []eventmap.ContentItem{{Kind: eventmap.ContentInputText, Text: "a"}}, ContentItemKinds: []string{"user.text"}},
+		{Kind: eventmap.ResponseMessage, Role: "user", ID: "u2", Content: []eventmap.ContentItem{{Kind: eventmap.ContentInputImage, ImageURL: "data:"}}, ContentItemKinds: []string{"user.image"}},
+	})
+	if len(merged) != 1 || len(merged[0].ContentItemKinds) != 2 || merged[0].ContentItemKinds[0] != "user.text" || merged[0].ContentItemKinds[1] != "user.image" {
+		t.Fatalf("merged kinds = %#v", merged[0].ContentItemKinds)
+	}
+}

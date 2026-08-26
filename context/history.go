@@ -261,6 +261,7 @@ func MergeContextualMessages(items []HistoryItem) []HistoryItem {
 			continue
 		}
 		out[len(out)-1].Content = append(out[len(out)-1].Content, item.Content...)
+		out[len(out)-1].ContentItemKinds = append(out[len(out)-1].ContentItemKinds, item.ContentItemKinds...)
 	}
 	return out
 }
