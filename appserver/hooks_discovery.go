@@ -94,6 +94,7 @@ func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntr
 		{HookEventSubagentStart, managed.SubagentStart},
 		{HookEventSubagentStop, managed.SubagentStop},
 		{HookEventStop, managed.Stop},
+		{HookEventInterrupt, managed.Interrupt},
 	}
 	displayOrder := int64(len(entry.Hooks))
 	for _, event := range events {
@@ -780,7 +781,7 @@ func parseHooksTOMLBool(raw string) (bool, bool) {
 // hookDiscoveryExecutionMode mirrors Rust discovery.rs: async command hooks
 // run in the background except SessionEnd, which stays synchronous.
 func hookDiscoveryExecutionMode(async bool, event HookEventName) HookExecutionMode {
-	if async && event != HookEventSessionEnd {
+	if async && event != HookEventSessionEnd && event != HookEventInterrupt {
 		return HookExecutionAsync
 	}
 	return HookExecutionSync
@@ -1024,6 +1025,7 @@ func orderedHookJSONEventNames() []string {
 		"SubagentStart",
 		"SubagentStop",
 		"Stop",
+		"Interrupt",
 	}
 }
 
@@ -1051,6 +1053,8 @@ func hookEventFromJSONName(value string) HookEventName {
 		return HookEventSubagentStop
 	case "Stop":
 		return HookEventStop
+	case "Interrupt":
+		return HookEventInterrupt
 	default:
 		return ""
 	}

@@ -26,6 +26,7 @@ const (
 	HookEventSubagentStart     HookEventName = "subagentStart"
 	HookEventSubagentStop      HookEventName = "subagentStop"
 	HookEventStop              HookEventName = "stop"
+	HookEventInterrupt         HookEventName = "interrupt"
 )
 
 type HookHandlerType string

@@ -955,6 +955,7 @@ type ManagedHooksRequirements struct {
 	SubagentStart     []ConfiguredHookGroup `json:"SubagentStart"`
 	SubagentStop      []ConfiguredHookGroup `json:"SubagentStop"`
 	Stop              []ConfiguredHookGroup `json:"Stop"`
+	Interrupt         []ConfiguredHookGroup `json:"Interrupt"`
 }
 
 func (r *ManagedHooksRequirements) MarshalJSON() ([]byte, error) {
@@ -972,6 +973,7 @@ func (r *ManagedHooksRequirements) MarshalJSON() ([]byte, error) {
 		SubagentStart     []ConfiguredHookGroup `json:"SubagentStart"`
 		SubagentStop      []ConfiguredHookGroup `json:"SubagentStop"`
 		Stop              []ConfiguredHookGroup `json:"Stop"`
+		Interrupt         []ConfiguredHookGroup `json:"Interrupt"`
 	}{
 		ManagedDir:        cloneStringPtr(r.ManagedDir),
 		WindowsManagedDir: cloneStringPtr(r.WindowsManagedDir),
@@ -986,6 +988,7 @@ func (r *ManagedHooksRequirements) MarshalJSON() ([]byte, error) {
 		SubagentStart:     hookGroupsForJSON(r.SubagentStart),
 		SubagentStop:      hookGroupsForJSON(r.SubagentStop),
 		Stop:              hookGroupsForJSON(r.Stop),
+		Interrupt:         hookGroupsForJSON(r.Interrupt),
 	})
 }
 
@@ -3312,6 +3315,7 @@ func cloneManagedHooks(value *ManagedHooksRequirements) *ManagedHooksRequirement
 		SubagentStart:     hookGroupsForJSON(value.SubagentStart),
 		SubagentStop:      hookGroupsForJSON(value.SubagentStop),
 		Stop:              hookGroupsForJSON(value.Stop),
+		Interrupt:         hookGroupsForJSON(value.Interrupt),
 	}
 }
 
