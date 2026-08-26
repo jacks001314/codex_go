@@ -21,6 +21,8 @@ type ExitReason string
 const (
 	ExitReasonUserRequested ExitReason = "user_requested"
 	ExitReasonFatal         ExitReason = "fatal"
+	ExitReasonTurnInterrupted ExitReason = "turn_interrupted"
+	ExitReasonThreadRemoved   ExitReason = "thread_removed"
 )
 
 type AppRunControlKind string

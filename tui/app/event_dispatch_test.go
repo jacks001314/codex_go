@@ -58,3 +58,13 @@ func TestCurrentThreadMutationPreflightMatchesRust(t *testing.T) {
 		t.Fatalf("allowed = %#v", allowed)
 	}
 }
+
+func TestExitReasonDistinctionsMatchRust(t *testing.T) {
+	// Rust #40629 distinguishes disconnects, interrupted turns, and removed threads.
+	if ExitReasonUserRequested == ExitReasonFatal || ExitReasonFatal == ExitReasonTurnInterrupted || ExitReasonTurnInterrupted == ExitReasonThreadRemoved {
+		t.Fatal("exit reasons must be distinct")
+	}
+	if ExitReasonTurnInterrupted != "turn_interrupted" || ExitReasonThreadRemoved != "thread_removed" {
+		t.Fatalf("turn/thread exit reason wire values = %q/%q", ExitReasonTurnInterrupted, ExitReasonThreadRemoved)
+	}
+}
