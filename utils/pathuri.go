@@ -307,6 +307,11 @@ func (u *PathURI) HostNativePath() (string, error) {
 	if !ok || inferred != convention {
 		return "", &ParseError{Reason: "path URI uses a foreign path convention", Path: u.String()}
 	}
+	// Rust #40423: reject encoded native separators on Windows before converting
+	// so decoding cannot reinterpret URI segment boundaries.
+	if convention == ConventionWindows && u.hasEncodedWindowsSeparators() {
+		return "", &ParseError{Reason: "path URI contains encoded native path separators", Path: u.String()}
+	}
 	rendered, err := LegacyAppPathStringFromURI(u, convention)
 	if err != nil {
 		return "", &ParseError{Reason: "path URI is not valid on this host", Path: u.String()}
@@ -315,6 +320,26 @@ func (u *PathURI) HostNativePath() (string, error) {
 		return "", &ParseError{Reason: "path is not absolute", Path: rendered.Value}
 	}
 	return rendered.Value, nil
+}
+
+// hasEncodedWindowsSeparators reports whether any URI path segment, once
+// percent-decoded, contains a native Windows path separator ('/' or '\'),
+// which would let decoding reinterpret URI segment boundaries. Mirrors Rust
+// #40423 containment_path_segments fail-closed behavior.
+func (u *PathURI) hasEncodedWindowsSeparators() bool {
+	if u == nil || u.url == nil {
+		return false
+	}
+	for _, segment := range u.segments() {
+		decoded, err := url.PathUnescape(segment)
+		if err != nil {
+			return true
+		}
+		if strings.Contains(decoded, "/") || strings.Contains(decoded, `\`) {
+			return true
+		}
+	}
+	return false
 }
 
 func (u *PathURI) Parent() (*PathURI, bool) {

@@ -238,6 +238,34 @@ func TestHostNativePathRejectsForeignConvention(t *testing.T) {
 	}
 }
 
+func TestHostNativePathRejectsEncodedWindowsSeparators(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows file URI hardening is host-specific")
+	}
+	// Percent-encoded '\' must fail closed rather than be reinterpretted as a
+	// segment boundary (Rust #40423).
+	uri, err := Parse("file:///C:/Workspace/%5C%5Cevil")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if _, err := uri.HostNativePath(); err == nil {
+		t.Fatalf("HostNativePath(%q) error = nil (encoded separator must fail closed)", uri.String())
+	}
+
+	// A percent-encoded drive colon is recognized as a Windows drive.
+	encoded, err := Parse("file:///C%3A/Users/Alice/file.txt")
+	if err != nil {
+		t.Fatalf("Parse(%q) error = %v", "file:///C%3A/Users/Alice/file.txt", err)
+	}
+	got, err := encoded.HostNativePath()
+	if err != nil {
+		t.Fatalf("HostNativePath(%q) error = %v", encoded.String(), err)
+	}
+	if got != `C:\Users\Alice\file.txt` {
+		t.Fatalf("HostNativePath = %q, want C:\\Users\\Alice\\file.txt", got)
+	}
+}
+
 func TestWindowsPathURICaseInsensitiveEqualityAndContainment(t *testing.T) {
 	// Windows drive-path URIs compare and contain ASCII-case-insensitively
 	// (Rust 4cb8676d3a, #37129).
