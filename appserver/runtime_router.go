@@ -2520,6 +2520,51 @@ func (r *RuntimeRouter) handleThreadRollbackRuntime(request *Request) (*ThreadRo
 	return response, nil
 }
 
+// runInterruptHook discovers and runs the managed Interrupt hooks for a turn
+// that is being interrupted, mirroring Rust #40511.
+func (r *RuntimeRouter) runInterruptHook(active *activeRuntimeTurn) {
+	if r == nil || active == nil {
+		return
+	}
+	cwd := ""
+	model := ""
+	permissionMode := ""
+	if active.Params != nil {
+		cwd = strings.TrimSpace(active.Params.CWD)
+		model = strings.TrimSpace(active.Params.Model)
+		permissionMode = strings.TrimSpace(fmt.Sprint(active.Params.ApprovalPolicy))
+	}
+	hooks := r.interruptHooksForCWD(cwd)
+	if len(hooks) == 0 {
+		return
+	}
+	_, err := r.requireHookRunner().RunInterrupt(context.Background(), &HookInterruptRequest{
+		ThreadID:       active.ThreadID,
+		TurnID:         active.TurnID,
+		CWD:            cwd,
+		Model:          model,
+		PermissionMode: permissionMode,
+		Hooks:          hooks,
+	})
+	if err != nil {
+		slog.Warn("interrupt hook failed", "thread_id", active.ThreadID, "turn_id", active.TurnID, "error", err)
+	}
+}
+
+func (r *RuntimeRouter) interruptHooksForCWD(cwd string) []HookMetadata {
+	if r == nil {
+		return nil
+	}
+	hooks := r.hooksForCWD(cwd)
+	out := make([]HookMetadata, 0, len(hooks))
+	for _, hook := range hooks {
+		if hook.EventName == HookEventInterrupt {
+			out = append(out, hook)
+		}
+	}
+	return out
+}
+
 func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadRevertResponse, error) {
 	if r == nil || r.services.ThreadRouter == nil {
 		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
@@ -6137,6 +6182,9 @@ func (r *RuntimeRouter) handleTurnInterrupt(request *Request) (*turn.TurnInterru
 			if analytics != nil {
 				analytics.ExplicitClientInterruptRequestedAtMS = &requestedAtMS
 			}
+			// Rust #40511: run the Interrupt hook for an active top-level turn
+			// before its interrupted abort event is emitted.
+			r.runInterruptHook(active)
 			// Match Rust app-server ordering: acknowledge turn/interrupt before
 			// publishing the interrupted terminal lifecycle notifications.
 			go func() {
