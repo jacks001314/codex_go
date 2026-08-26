@@ -33,6 +33,30 @@ type BedrockAPIKeyAuth struct {
 	Region string `json:"region"`
 }
 
+// Format redacts the managed Amazon Bedrock API key from derived debug
+// formatting while retaining the region, mirroring Rust #40706 custom Debug
+// for BedrockApiKeyAuth. Applying fmt.Formatter keeps every %v / %+v / %#v
+// path from leaking the secret.
+func (a *BedrockAPIKeyAuth) Format(f fmt.State, verb rune) {
+	if a == nil {
+		fmt.Fprint(f, "<nil>")
+		return
+	}
+	const redacted = "<redacted>"
+	switch verb {
+	case '#':
+		fmt.Fprintf(f, "auth.BedrockAPIKeyAuth{APIKey:%q, Region:%q}", redacted, a.Region)
+	case 'v':
+		if f.Flag('+') {
+			fmt.Fprintf(f, "{APIKey:%s Region:%s}", redacted, a.Region)
+		} else {
+			fmt.Fprintf(f, "{%s %s}", redacted, a.Region)
+		}
+	default:
+		fmt.Fprintf(f, "{APIKey:%s Region:%s}", redacted, a.Region)
+	}
+}
+
 type AgentIdentityAuthRecord struct {
 	AgentRuntimeID        string   `json:"agent_runtime_id"`
 	AgentPrivateKey       string   `json:"agent_private_key"`

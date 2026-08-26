@@ -2,8 +2,10 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -270,5 +272,24 @@ func TestSafeFormatSecret(t *testing.T) {
 	}
 	if got := SafeFormatSecret("short"); got != "****" {
 		t.Fatalf("SafeFormatSecret(short) = %q", got)
+	}
+}
+
+// TestBedrockAPIKeyAuthDebugRedactsSecretLikeRust pins #40706: derived debug
+// formatting of BedrockAPIKeyAuth must never expose the API key, while the
+// region is retained.
+func TestBedrockAPIKeyAuthDebugRedactsSecretLikeRust(t *testing.T) {
+	auth := &BedrockAPIKeyAuth{APIKey: "super-secret-bedrock-key", Region: "us-east-1"}
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		got := fmt.Sprintf(verb, auth)
+		if strings.Contains(got, "super-secret-bedrock-key") {
+			t.Fatalf("%s exposed the Bedrock API key: %s", verb, got)
+		}
+		if !strings.Contains(got, "<redacted>") {
+			t.Fatalf("%s did not mark the key redacted: %s", verb, got)
+		}
+		if !strings.Contains(got, "us-east-1") {
+			t.Fatalf("%s did not retain the region: %s", verb, got)
+		}
 	}
 }
