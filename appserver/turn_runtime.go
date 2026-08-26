@@ -6437,6 +6437,8 @@ func analyticsTurnToolCounts(result *turn.AgentLoopResult) *telemetry.CodexTurnT
 			counts.ImageGeneration++
 		case strings.Contains(key, "image_generation") || strings.Contains(key, "imageGeneration"):
 			counts.ImageGeneration++
+		case name.Namespace == agent.MultiAgentV2Namespace:
+			counts.SubagentToolCall++
 		case name.Namespace != "":
 			counts.DynamicToolCall++
 		}

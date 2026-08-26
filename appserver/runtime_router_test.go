@@ -26586,3 +26586,14 @@ func TestCollabToolCallAnalyticsOutcomeInterruptedLikeRust(t *testing.T) {
 		t.Fatalf("interrupted outcome = status=%q failure=%v ok=%v, want interrupted + no failure", status, failure, ok)
 	}
 }
+
+func TestAnalyticsTurnToolCountsCountsCollabAsSubagent(t *testing.T) {
+	inv := &tool.Invocation{ToolName: tool.NamespacedName(agent.MultiAgentV2Namespace, "send_message")}
+	result := &turn.AgentLoopResult{
+		ToolExecutions: []turn.ToolExecutionResult{{Invocation: inv}},
+	}
+	counts := analyticsTurnToolCounts(result)
+	if counts.SubagentToolCall != 1 || counts.DynamicToolCall != 0 || counts.Total != 1 {
+		t.Fatalf("counts = %#v, want subagent=1 dynamic=0 total=1 (Rust #40585)", counts)
+	}
+}
