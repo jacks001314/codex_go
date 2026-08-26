@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,5 +79,19 @@ func TestDescribeExitReasonDistinguishesStates(t *testing.T) {
 	}
 	if got := DescribeExitReason(ExitReasonFatal); got != "Disconnected from the app server" {
 		t.Fatalf("Fatal = %q", got)
+	}
+}
+
+func TestAppExitInfoFormatsDisconnectGuidance(t *testing.T) {
+	info := &AppExitInfo{
+		ThreadID:    "thread-1",
+		ExitReason:  ExitReasonTurnInterrupted,
+		ResumeHint:  "resume: codex resume thread-1",
+		Disconnect: &DisconnectInfo{Command: []string{"codex", "--remote", "wss://host:443"}, StopHint: "press esc"},
+	}
+	lines := info.FormatExitMessages()
+	joined := strings.Join(lines, "|")
+	if !strings.Contains(joined, "The active turn was interrupted") || !strings.Contains(joined, "Reconnect: codex --remote wss://host:443") || !strings.Contains(joined, "Stop the running turn: press esc") {
+		t.Fatalf("exit summary = %q", joined)
 	}
 }

@@ -1,6 +1,9 @@
 package app
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const ShutdownFirstExitTimeout = 2 * time.Second
 
@@ -51,6 +54,49 @@ func DescribeExitReason(reason ExitReason) string {
 	default:
 		return "Session ended"
 	}
+}
+
+// DisconnectInfo carries reconnect and stop guidance for a task owned by a
+// persistent app server (Rust #40629).
+type DisconnectInfo struct {
+	Command  []string
+	StopHint string
+}
+
+// AppExitInfo summarizes the terminal exit output, distinguishing a
+// disconnect from an interrupted turn or a removed thread.
+type AppExitInfo struct {
+	ThreadID       string
+	ExitReason     ExitReason
+	ResumeHint     string
+	TokenUsageLine string
+	Disconnect     *DisconnectInfo
+}
+
+// FormatExitMessages renders the exit summary lines.
+func (i *AppExitInfo) FormatExitMessages() []string {
+	if i == nil {
+		return nil
+	}
+	var lines []string
+	if summary := DescribeExitReason(i.ExitReason); summary != "" {
+		lines = append(lines, summary)
+	}
+	if i.ThreadID != "" {
+		lines = append(lines, "Thread: "+i.ThreadID)
+	}
+	if i.ResumeHint != "" {
+		lines = append(lines, i.ResumeHint)
+	}
+	if i.Disconnect != nil {
+		if len(i.Disconnect.Command) > 0 {
+			lines = append(lines, "Reconnect: "+strings.Join(i.Disconnect.Command, " "))
+		}
+		if i.Disconnect.StopHint != "" {
+			lines = append(lines, "Stop the running turn: "+i.Disconnect.StopHint)
+		}
+	}
+	return lines
 }
 
 type ExitModeDecision struct {
