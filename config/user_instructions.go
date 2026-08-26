@@ -13,14 +13,14 @@ const (
 	LocalAgentsMDFilename   = "AGENTS.override.md"
 )
 
-type UserInstructions struct {
+type Instructions struct {
 	Text   string `json:"text"`
 	Source string `json:"source"`
 }
 
 type LoadedUserInstructions struct {
-	Instructions *UserInstructions `json:"instructions,omitempty"`
-	Warnings     []string          `json:"warnings,omitempty"`
+	Instructions *Instructions `json:"instructions,omitempty"`
+	Warnings     []string      `json:"warnings,omitempty"`
 }
 
 type UserInstructionsProvider struct {
@@ -69,7 +69,7 @@ func (p *UserInstructionsProvider) Load() *LoadedUserInstructions {
 		if text == "" {
 			continue
 		}
-		loaded.Instructions = &UserInstructions{Text: text, Source: path}
+		loaded.Instructions = &Instructions{Text: text, Source: path}
 		return loaded
 	}
 	return loaded
