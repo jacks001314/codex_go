@@ -8633,10 +8633,14 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(threadID stri
 		return nil
 	}
 	items := make([]any, 0, len(selected))
+	reasoningEffort := ""
+	if params != nil && params.Effort != nil {
+		reasoningEffort = strings.TrimSpace(*params.Effort)
+	}
 	for _, skill := range selected {
 		item, truncated, err := r.skillInstructionsInputItemWithProvider(threadID, skill, executorProviders)
 		if err != nil {
-			r.emitExplicitSkillInjectionMetric(skill.Name, "error")
+			r.emitExplicitSkillInjectionMetric(skill.Name, "error", skill.PluginID, modelID, reasoningEffort)
 			if r != nil {
 				r.notify(NotificationWarning, &WarningNotification{
 					ThreadID: stringPtrIfNotEmpty(threadID),
@@ -8645,7 +8649,7 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(threadID stri
 			}
 			continue
 		}
-		r.emitExplicitSkillInjectionMetric(skill.Name, "success")
+		r.emitExplicitSkillInjectionMetric(skill.Name, "success", skill.PluginID, modelID, reasoningEffort)
 		if item != nil {
 			items = append(items, item)
 			if strings.EqualFold(strings.TrimSpace(skill.LocatorKind), "file") || strings.TrimSpace(skill.LocatorKind) == "" {
@@ -8666,15 +8670,25 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(threadID stri
 	return items
 }
 
-func (r *RuntimeRouter) emitExplicitSkillInjectionMetric(skillName string, status string) {
+func (r *RuntimeRouter) emitExplicitSkillInjectionMetric(skillName string, status string, pluginID string, modelID string, reasoningEffort string) {
 	if r == nil || r.services.SkillInjectionMetrics == nil {
 		return
 	}
-	r.services.SkillInjectionMetrics.Counter("codex.skill.injected", 1, map[string]string{
+	tags := map[string]string{
 		"status":      status,
 		"skill":       sanitizeMetricTagValue(skillName),
 		"invoke_type": telemetry.SkillInvocationTypeExplicit,
-	})
+	}
+	if strings.TrimSpace(pluginID) != "" {
+		tags["plugin_id"] = sanitizeMetricTagValue(pluginID)
+	}
+	if strings.TrimSpace(modelID) != "" {
+		tags["model_slug"] = sanitizeMetricTagValue(modelID)
+	}
+	if strings.TrimSpace(reasoningEffort) != "" {
+		tags["reasoning_effort"] = sanitizeMetricTagValue(reasoningEffort)
+	}
+	r.services.SkillInjectionMetrics.Counter("codex.skill.injected", 1, tags)
 }
 
 func sanitizeMetricTagValue(value string) string {
