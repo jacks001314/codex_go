@@ -9169,11 +9169,39 @@ func userMessageInputItemFromTurnUserInputs(prompt string, inputs []turn.TurnUse
 	if len(content) == 0 {
 		return nil
 	}
-	return map[string]any{
+	item := map[string]any{
 		"type":    "message",
 		"role":    "user",
 		"content": content,
 	}
+	// Annotate the user message with harness-owned content kinds aligned with its
+	// content entries (mirrors Rust Session::response_item_from_user_input #40196:
+	// user.text / user.image / user.audio written into content_item_kinds).
+	if kinds := userContentItemKinds(content); len(kinds) > 0 {
+		item["internal_chat_message_metadata_passthrough"] = map[string]any{
+			"content_item_kinds": kinds,
+		}
+	}
+	return item
+}
+
+// userContentItemKinds maps the user message content blocks to the harness-owned
+// content-item classification (Rust ContentItemKind):
+// input_image -> user.image, input_audio -> user.audio, otherwise user.text.
+func userContentItemKinds(content []map[string]any) []string {
+	kinds := make([]string, 0, len(content))
+	for _, block := range content {
+		blockType, _ := block["type"].(string)
+		switch strings.TrimSpace(blockType) {
+		case "input_image":
+			kinds = append(kinds, "user.image")
+		case "input_audio":
+			kinds = append(kinds, "user.audio")
+		default:
+			kinds = append(kinds, "user.text")
+		}
+	}
+	return kinds
 }
 
 // preparedUserMessageInputItem builds the user message input item and runs the

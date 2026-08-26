@@ -26536,3 +26536,29 @@ func inputItemsContainFragment(items []any, marker string, identity string) bool
 	}
 	return false
 }
+
+func TestUserMessageInputItemFromTurnUserInputsContentKinds(t *testing.T) {
+	prompt := "hello"
+	inputs := []turn.TurnUserInput{
+		{Text: "some text"},
+		{Type: "image", URL: "data:image/png;base64,AAA"},
+		{Type: "audio", URL: "data:audio/wav;base64,BBB"},
+	}
+	item := userMessageInputItemFromTurnUserInputs(prompt, inputs)
+	if item == nil {
+		t.Fatal("nil user message item")
+	}
+	m, ok := item.(map[string]any)
+	if !ok {
+		t.Fatalf("item type = %T", item)
+	}
+	md, ok := m["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected metadata passthrough, got %#v", m)
+	}
+	kinds, _ := md["content_item_kinds"].([]string)
+	want := []string{"user.text", "user.text", "user.image", "user.audio"}
+	if !reflect.DeepEqual(kinds, want) {
+		t.Fatalf("content_item_kinds = %#v, want %#v", kinds, want)
+	}
+}
