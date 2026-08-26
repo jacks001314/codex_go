@@ -35,6 +35,17 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		}
 		return true
 	}
+	// A pending find/till motion (f/F/t/T) consumes the next typed character as
+	// the search target, mirroring Rust vim_commands.rs VimPending::Find.
+	if m.vimPendingFind {
+		if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 {
+			m.resolveVimFind(msg.Runes[0])
+		} else if keySpec == "esc" {
+			m.clearVimFind()
+			m.cancelVimOperator()
+		}
+		return true
+	}
 	if m.vimInsert {
 		if keySpec == "esc" {
 			m.vimInsert = false
@@ -130,6 +141,14 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		m.composer.CursorStart()
 	case m.keyMatches("vim_normal", "move_line_end", keySpec):
 		m.composer.CursorEnd()
+	case m.keyMatches("vim_normal", "find_char_forward", keySpec):
+		m.startVimFind(0, true, "")
+	case m.keyMatches("vim_normal", "find_char_backward", keySpec):
+		m.startVimFind(0, false, "")
+	case m.keyMatches("vim_normal", "till_char_forward", keySpec):
+		m.startVimFind(1, true, "")
+	case m.keyMatches("vim_normal", "till_char_backward", keySpec):
+		m.startVimFind(1, false, "")
 	case m.keyMatches("vim_normal", "yank_line", keySpec):
 		m.yankVimLine()
 	case m.keyMatches("vim_normal", "paste_after", keySpec):
@@ -317,6 +336,96 @@ func (m *Model) vimWordMotion(kind int) {
 	m.composer.SetCursor(byteOffsetForRuneIndex(line, target))
 }
 
+// startVimFind begins a find/till motion that waits for the next typed
+// character as its target. kind 0 = find (land on the target), 1 = till (stop
+// just before/after); forward selects f/t vs F/T; operator carries a pending
+// d/y/c when f/t is used as an operator motion.
+func (m *Model) startVimFind(kind int, forward bool, operator string) {
+	m.vimPendingFind = true
+	m.vimFindKind = kind
+	m.vimFindForward = forward
+	m.vimFindOperator = operator
+}
+
+func (m *Model) clearVimFind() {
+	m.vimPendingFind = false
+	m.vimFindKind = 0
+	m.vimFindForward = false
+	m.vimFindOperator = ""
+}
+
+// resolveVimFind applies a find/till motion to the current line using the
+// captured kind/direction/operator. When a pending operator is present the
+// motion applies it over the resulting character range; otherwise the cursor
+// moves to the destination (mirrors Rust find_vim_character).
+func (m *Model) resolveVimFind(target rune) {
+	kind := m.vimFindKind
+	forward := m.vimFindForward
+	operator := m.vimFindOperator
+	m.clearVimFind()
+
+	line := m.vimCurrentLine()
+	col := m.vimCursorColumn()
+	from := runeIndexForByte(line, col)
+	idx, ok := vimFindCharIndex(line, from, target, kind, forward)
+	if !ok {
+		if operator != "" {
+			m.cancelVimOperator()
+		}
+		return
+	}
+	if operator == "" {
+		m.composer.SetCursor(byteOffsetForRuneIndex(line, idx))
+		return
+	}
+	bytePos := byteOffsetForRuneIndex(line, idx)
+	targetLen := len(string([]rune(line)[idx]))
+	var start, end int
+	switch {
+	case forward && kind == 0: // f: cursor..target end
+		start, end = col, bytePos+targetLen
+	case !forward && kind == 0: // F: target start..cursor
+		start, end = bytePos, col
+	case forward && kind == 1: // t: cursor..target start
+		start, end = col, bytePos
+	default: // T: target end..cursor
+		start, end = bytePos+targetLen, col
+	}
+	m.applyVimOperatorRange(start, end)
+}
+
+// vimFindCharIndex returns the rune index of the destination for a find/till
+// motion on the current line. kind 0 = find (land on target), 1 = till (stop
+// just before/after the target). The search is line-local.
+func vimFindCharIndex(line string, from int, target rune, kind int, forward bool) (int, bool) {
+	runes := []rune(line)
+	if forward {
+		for i := from + 1; i < len(runes); i++ {
+			if runes[i] != target {
+				continue
+			}
+			if kind == 0 {
+				return i, true
+			}
+			if i-1 >= from {
+				return i - 1, true
+			}
+			return from, true
+		}
+		return 0, false
+	}
+	for i := from - 1; i >= 0; i-- {
+		if runes[i] != target {
+			continue
+		}
+		if kind == 0 {
+			return i, true
+		}
+		return i + 1, true
+	}
+	return 0, false
+}
+
 func runeIndexForByte(s string, byteCol int) int {
 	if byteCol <= 0 {
 		return 0
@@ -425,6 +534,21 @@ func (m *Model) applyVimLineOperatorRepeat() {
 // (h / l / w / b / e / 0 / $). Returns false when keySpec is not an operator
 // motion.
 func (m *Model) vimOperatorMotion(keySpec string) bool {
+	// Character find/till operator motions (d f / y t etc.): f/F/t/T capture a
+	// pending find with the current operator, mirroring Rust VimPending::Find.
+	if keySpec == "f" || keySpec == "shift-f" || keySpec == "F" || keySpec == "t" || keySpec == "shift-t" || keySpec == "T" {
+		kind, forward := 0, true
+		switch {
+		case keySpec == "shift-f" || keySpec == "F":
+			kind, forward = 0, false
+		case keySpec == "t":
+			kind, forward = 1, true
+		case keySpec == "shift-t" || keySpec == "T":
+			kind, forward = 1, false
+		}
+		m.startVimFind(kind, forward, m.vimPendingOp)
+		return true
+	}
 	if keySpec == "k" || keySpec == "up" || keySpec == "j" || keySpec == "down" {
 		// dj / dk / yj / yk / cj / ck act on the current line and its neighbor
 		// (Vim line motions).

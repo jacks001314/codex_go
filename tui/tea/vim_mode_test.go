@@ -295,6 +295,49 @@ func TestVimMotionsMoveCursorLikeVim(t *testing.T) {
 	}
 }
 
+// TestVimFindTillMotionsLikeVim pins #40785 f/F/t/T character find and till
+// motions (line-local): f lands on the target, t stops just before it, F/T
+// work backward, and d f applies the delete operator over the found range.
+func TestVimFindTillMotionsLikeVim(t *testing.T) {
+	m := vimTestModel("hello world")
+	m = vimKeyPress(m, 'f')
+	m = vimKeyPress(m, 'o')
+	if got := vimCursorColumn(m); got != 4 {
+		t.Fatalf("f then o cursor = %d, want 4 (on the 'o')", got)
+	}
+
+	m = vimTestModel("hello world")
+	m = vimKeyPress(m, 't')
+	m = vimKeyPress(m, 'o')
+	if got := vimCursorColumn(m); got != 3 {
+		t.Fatalf("t then o cursor = %d, want 3 (just before the 'o')", got)
+	}
+
+	m = vimTestModel("hello world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'F')
+	m = vimKeyPress(m, 'o')
+	if got := vimCursorColumn(m); got != 4 {
+		t.Fatalf("F then o cursor = %d, want 4 (on the previous 'o')", got)
+	}
+
+	m = vimTestModel("hello world")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'T')
+	m = vimKeyPress(m, 'o')
+	if got := vimCursorColumn(m); got != 5 {
+		t.Fatalf("T then o cursor = %d, want 5 (just after the previous 'o')", got)
+	}
+
+	m = vimTestModel("hello world")
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'f')
+	m = vimKeyPress(m, 'o')
+	if got := m.composer.Value(); got != " world" {
+		t.Fatalf("d f o value = %q, want ' world' (deleted hello)", got)
+	}
+}
+
 // TestVimEditsDeleteAndChangeLikeVim pins x / D / s / C.
 func TestVimEditsDeleteAndChangeLikeVim(t *testing.T) {
 	m := vimTestModel("hello world")

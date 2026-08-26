@@ -879,6 +879,14 @@ type Model struct {
 	// character replaces the grapheme under the cursor without leaving normal
 	// mode (Rust #39661 vim_normal.replace_char).
 	vimPendingReplace        bool
+	// vimPendingFind tracks a pending Vim find/till motion (f/F/t/T): the next
+	// typed character is the search target. vimFindKind: 0=find, 1=till;
+	// vimFindForward is true for f/t; vimFindOperator carries a pending d/y/c
+	// when the find is an operator motion ("" for plain navigation).
+	vimPendingFind   bool
+	vimFindKind      int
+	vimFindForward   bool
+	vimFindOperator  string
 	petRuntime               *petRuntime
 	petCodexHome             string
 	petEnv                   map[string]string
