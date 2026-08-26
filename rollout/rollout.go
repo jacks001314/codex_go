@@ -571,11 +571,31 @@ func (r *Recorder) AppendThreadSettingsApplied(approvalPolicy string, now time.T
 	return r.AppendLine(Line{Type: "event_msg", Timestamp: now.UTC().Format(time.RFC3339Nano), Payload: payload})
 }
 
+// SecurityRiskScorePayload is the durable, rollout-only snapshot of a security
+// risk classifier result (Rust codex_protocol::security_risk::SecurityRiskScore).
+// In addition to per-category scores it may carry the provenance of the tool
+// call and bounded action that produced it (#40901) plus the sampling time.
+type SecurityRiskScorePayload struct {
+	Scores    map[string]float64 `json:"scores"`
+	CallID    *string            `json:"call_id,omitempty"`
+	Action    json.RawMessage    `json:"action,omitempty"`
+	SampledAt string             `json:"sampled_at,omitempty"`
+}
+
 // AppendSecurityRiskScore persists a durable thread-owned snapshot of
 // security risk classifier scores (Rust #38567). These records are
 // rollout-only and must not enter user-visible thread projections. Scores are
 // validated to [0,1] before the whole snapshot is stored.
 func (r *Recorder) AppendSecurityRiskScore(scores map[string]float64, now time.Time) error {
+	return r.AppendSecurityRiskScoreWithProvenance(scores, nil, nil, now)
+}
+
+// AppendSecurityRiskScoreWithProvenance persists a security risk classifier
+// result together with the optional tool call and bounded action provenance
+// (Rust #40901). callID corresponds to the tool call whose action produced the
+// score, and action is the bounded tool action that was reviewed. Both are
+// stored rollout-only and never enter user-visible projections.
+func (r *Recorder) AppendSecurityRiskScoreWithProvenance(scores map[string]float64, callID *string, action json.RawMessage, now time.Time) error {
 	if r == nil {
 		return errors.New("recorder is nil")
 	}
@@ -596,9 +616,16 @@ func (r *Recorder) AppendSecurityRiskScore(scores map[string]float64, now time.T
 		}
 		normalized[category] = score
 	}
-	payload, err := json.Marshal(struct {
-		Scores map[string]float64 `json:"scores"`
-	}{Scores: normalized})
+	sampledAt := ""
+	if !now.IsZero() {
+		sampledAt = now.UTC().Format(time.RFC3339Nano)
+	}
+	payload, err := json.Marshal(SecurityRiskScorePayload{
+		Scores:    normalized,
+		CallID:    callID,
+		Action:    action,
+		SampledAt: sampledAt,
+	})
 	if err != nil {
 		return err
 	}

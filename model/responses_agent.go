@@ -35,6 +35,31 @@ const responsesLiteHeader = "x-openai-internal-codex-responses-lite"
 const ResidencyHeaderName = "x-openai-internal-codex-residency"
 const responsesIncludeTimingMetricsHeader = codexapi.ClientResponsesAPIIncludeTimingMetricsHeader
 
+// ResponsesEndpoint selects the Responses-compatible backend route used for an
+// inference request (Rust codex_api::endpoint::ResponsesEndpoint, #40892).
+type ResponsesEndpoint int
+
+const (
+	// ResponsesEndpointResponses is the standard user-owned model inference route.
+	ResponsesEndpointResponses ResponsesEndpoint = iota
+	// ResponsesEndpointGuardian routes a full Guardian approval-review agent.
+	ResponsesEndpointGuardian
+	// ResponsesEndpointGuardianClassifier routes lightweight asynchronous Guardian risk classification.
+	ResponsesEndpointGuardianClassifier
+)
+
+// Path returns the provider-relative path for this inference surface.
+func (e ResponsesEndpoint) Path() string {
+	switch e {
+	case ResponsesEndpointGuardian:
+		return "/guardian"
+	case ResponsesEndpointGuardianClassifier:
+		return "/guardian-classifier"
+	default:
+		return "/responses"
+	}
+}
+
 type HTTPDoer interface {
 	Do(request *http.Request) (*http.Response, error)
 }
@@ -136,6 +161,10 @@ type ResponsesAgentRunner struct {
 	// Residency, when set, is the managed residency requirement enforced as an
 	// authoritative header on model requests (Rust #39645).
 	Residency             string
+	// FreeGuardianEnabled, when set, allows eligible Guardian review inference
+	// to route through the dedicated unmetered Codex endpoints (Rust
+	// Config::free_guardian_enabled, #40892).
+	FreeGuardianEnabled   bool
 	providerAuthFetchedAt time.Time
 	turnState             *responsesTurnStateCache
 	websocketSessions     *responsesWebsocketSessionCache
@@ -1164,7 +1193,13 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 		}
 		contentEncoding = "zstd"
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, r.responsesURL(), bytes.NewReader(requestBody))
+	endpoint := r.responsesEndpoint(apiRequest.Model, request)
+	if endpoint == ResponsesEndpointGuardian {
+		// The dedicated Guardian endpoint is unmetered and rejects inference
+		// hints / service tier (Rust #40892).
+		apiRequest.ServiceTier = ""
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, r.responsesURL(endpoint), bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, err
 	}
@@ -1177,8 +1212,12 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	addTurnStateHeader(httpRequest.Header, r.turnStateForRequest(request))
 	addBetaFeaturesHeader(httpRequest.Header, apiRequest.BetaFeaturesHeader)
 	addOriginatorHeader(httpRequest.Header, requestOriginator(request))
-	if routingHint := r.responsesRoutingHint(apiRequest.Model, apiRequest.ServiceTier); routingHint != "" {
-		httpRequest.Header.Set(codexapi.ClientCodexRoutingHintHeader, routingHint)
+	// Routing hints are only sent on the standard /responses route; the
+	// dedicated Guardian endpoints omit them (Rust #40892).
+	if endpoint == ResponsesEndpointResponses {
+		if routingHint := r.responsesRoutingHint(apiRequest.Model, apiRequest.ServiceTier); routingHint != "" {
+			httpRequest.Header.Set(codexapi.ClientCodexRoutingHintHeader, routingHint)
+		}
 	}
 	addCompatibilityMetadataHeaders(httpRequest.Header, apiRequest.ClientMetadata)
 	addMemoryGenerationHeader(httpRequest.Header, apiRequest.ClientMetadata)
@@ -1203,7 +1242,7 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 }
 
 func (r *ResponsesAgentRunner) responsesRoutingHint(modelID, serviceTier string) string {
-	if r == nil || !strings.EqualFold(r.providerName(), OpenAIProviderName) || !r.ProviderRequiresOpenAIAuth || r.ProviderUsesOwnCredentials || r.Provider == nil || r.Provider.Auth != nil || !authSnapshotUsesCodexBackend(r.AuthSnapshot) {
+	if !r.usesCodexBackend() {
 		return ""
 	}
 	modelID = strings.TrimSpace(modelID)
@@ -1215,6 +1254,71 @@ func (r *ResponsesAgentRunner) responsesRoutingHint(modelID, serviceTier string)
 		return fmt.Sprintf("model=%s;tier=%s", modelID, serviceTier)
 	}
 	return "model=" + modelID
+}
+
+// usesCodexBackend reports whether the current provider/auth combination is
+// eligible for Codex-backend routing (Rust ModelClient::uses_codex_backend,
+// #40892).
+func (r *ResponsesAgentRunner) usesCodexBackend() bool {
+	if r == nil || !strings.EqualFold(r.providerName(), OpenAIProviderName) || !r.ProviderRequiresOpenAIAuth || r.ProviderUsesOwnCredentials || r.Provider == nil || r.Provider.Auth != nil {
+		return false
+	}
+	return authSnapshotUsesCodexBackend(r.AuthSnapshot)
+}
+
+// supportsCodexBackendRoutes reports whether the provider base URL permits the
+// dedicated Codex backend routes (Rust
+// ModelProviderInfo::supports_codex_backend_routes, #40892).
+func (r *ResponsesAgentRunner) supportsCodexBackendRoutes() bool {
+	if r == nil || !strings.EqualFold(r.providerName(), OpenAIProviderName) {
+		return false
+	}
+	baseURL := ""
+	if r.Provider != nil {
+		baseURL = strings.TrimRight(strings.TrimSpace(r.Provider.BaseURL), "/")
+	}
+	if baseURL == "" {
+		return true
+	}
+	return strings.HasSuffix(baseURL, "/backend-api/codex")
+}
+
+// approvalReviewPreferredModel mirrors Rust
+// RuntimeProvider::approval_review_preferred_model (#37103 / #40892).
+func (r *ResponsesAgentRunner) approvalReviewPreferredModel() string {
+	if r.AuthSnapshot != nil && r.AuthSnapshot.Mode() == "api-key" {
+		return APIKeyApprovalReviewPreferredModel
+	}
+	return DefaultApprovalReviewPreferredModel
+}
+
+// isGuardianReviewRequest reports whether the agent request is a Guardian
+// approval-review inference (Rust guardian session source, #40892). The Go
+// reviewer reuses the main ResponsesAgentRunner, so eligibility is derived from
+// the request's review task kind / guardian originator.
+func isGuardianReviewRequest(request *AgentRequest) bool {
+	if request == nil {
+		return false
+	}
+	if request.TaskKind == AgentTaskReview {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(request.Originator), "guardian")
+}
+
+// responsesEndpoint selects the Responses-compatible backend route for a
+// request (Rust ModelClient::responses_endpoint, #40892). Guardian review
+// inference is routed to /guardian only when every eligibility requirement is
+// met; all other requests keep the standard /responses route.
+func (r *ResponsesAgentRunner) responsesEndpoint(model string, request *AgentRequest) ResponsesEndpoint {
+	if r.FreeGuardianEnabled &&
+		isGuardianReviewRequest(request) &&
+		r.usesCodexBackend() &&
+		r.supportsCodexBackendRoutes() &&
+		model == r.approvalReviewPreferredModel() {
+		return ResponsesEndpointGuardian
+	}
+	return ResponsesEndpointResponses
 }
 
 func (r *ResponsesAgentRunner) addAttestationHeader(ctx context.Context, headers http.Header, request *AgentRequest) error {
@@ -2089,7 +2193,7 @@ func usageFromResponses(usage *responsesAgentAPIUsage, fallbackText string) Agen
 	return out
 }
 
-func (r *ResponsesAgentRunner) responsesURL() string {
+func (r *ResponsesAgentRunner) responsesURL(endpoint ResponsesEndpoint) string {
 	provider := r.Provider
 	if provider == nil {
 		provider = &APIProvider{BaseURL: defaultResponsesEndpoint}
@@ -2098,7 +2202,7 @@ func (r *ResponsesAgentRunner) responsesURL() string {
 	if baseURL == "" {
 		baseURL = defaultResponsesEndpoint
 	}
-	raw := baseURL + "/responses"
+	raw := baseURL + endpoint.Path()
 	if len(provider.QueryParams) == 0 {
 		return raw
 	}

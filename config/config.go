@@ -1033,6 +1033,32 @@ func (c *Config) GuardianV2MaxToolCallLag() int {
 	return int(value)
 }
 
+// FreeGuardianEnabled returns whether Guardian may route eligible inference
+// through the unmetered Codex endpoints, mirroring Rust
+// Config::free_guardian_enabled ([features.guardianv2].free_guardian, #40892).
+func (c *Config) FreeGuardianEnabled() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	featuresTable, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	guardianV2, ok := featuresTable["guardianv2"].(map[string]any)
+	if !ok {
+		return false
+	}
+	switch typed := guardianV2["free_guardian"].(type) {
+	case bool:
+		return typed
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		return err == nil && parsed
+	default:
+		return false
+	}
+}
+
 func (c *Config) SkillShadowSelectionEnabled() bool {
 	if featureflags.Enabled(c.FeatureSettings(), "skill_search") {
 		return true

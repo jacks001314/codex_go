@@ -232,6 +232,7 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	contentItemKindsEnabled := features.Enabled(cfg.FeatureSettings(), "content_item_kinds")
 	agent.ContentItemKindsEnabled = &contentItemKindsEnabled
 	agent.Residency = managedResidencyForConfig(cfg)
+	agent.FreeGuardianEnabled = cfg.FreeGuardianEnabled()
 	agent.AWS = provider.AWS
 	return agent, nil
 }

@@ -289,6 +289,22 @@ func (p *ProviderInfo) IsOpenAI() bool {
 	return p.Name == OpenAIProviderName
 }
 
+// SupportsCodexBackendRoutes reports whether this OpenAI provider may route
+// inference through the dedicated Codex backend endpoints (/guardian,
+// /guardian-classifier). Mirrors Rust ModelProviderInfo::supports_codex_backend_routes
+// (#40892): true when no base_url is set (the default OpenAI backend) or when
+// the base URL ends with "/backend-api/codex".
+func (p *ProviderInfo) SupportsCodexBackendRoutes() bool {
+	if p == nil || !p.IsOpenAI() {
+		return false
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
+	if baseURL == "" {
+		return true
+	}
+	return strings.HasSuffix(baseURL, "/backend-api/codex")
+}
+
 func (p *ProviderInfo) IsAmazonBedrock() bool {
 	if p == nil {
 		return false
