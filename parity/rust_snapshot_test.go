@@ -270,7 +270,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		{Path: "exec/src/lib.rs", SHA256: "c71d9969d311dfca89e30d36f560a6ec264beb4b5e64b7a5958015c8204d01ba"},
 		{Path: "exec/src/exec_events.rs", SHA256: "fc914a7d8f7e990b19a95c41abf758e95e5b7ea028caa8b34b1c82306382c004"},
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
-		{Path: "core/src/client.rs", SHA256: "2c4221bcc0f690c11522a01a98242e566c1846ad51e3d0bd83f6b85fc6e36147"},
+		{Path: "core/src/client.rs", SHA256: "751ddeea8ea89fb7fefe7b5c5d6590fdb3848287944537c6d8722a534561565b"},
 		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "b9b7ba34d3a31e8d9e688451eb6d17a6c1c4215a4eeaa8900f382fe70ecc335c"},
 		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "cf2d04af3bedb12c7a1e33de0a002bf41f8ec5c372b7f3d6aabb599810bf3a3f"},
 		{Path: "core/tests/suite/mod.rs", SHA256: "22aa672a6f0bb92feb4a494a9d988d8d75502d51780c5a19606883a8a6c4590d"},
