@@ -281,7 +281,18 @@ func sanitizeHistoryInputItem(input any) any {
 		if nonModelVisibleHistoryItemType(itemType) {
 			return nil
 		}
+		// Preserve harness-owned content classifications through history
+		// sanitization: content_item_kinds are model-visible and must survive
+		// (Rust #40264 preserves message/passthrough metadata on truncation).
+		passthrough, _ := typed["internal_chat_message_metadata_passthrough"].(map[string]any)
 		delete(typed, "internal_chat_message_metadata_passthrough")
+		if passthrough != nil {
+			if kinds, ok := passthrough["content_item_kinds"]; ok {
+				typed["internal_chat_message_metadata_passthrough"] = map[string]any{
+					"content_item_kinds": kinds,
+				}
+			}
+		}
 		if itemType == "message" {
 			normalizeHistoryMessageContentTypes(typed)
 		}

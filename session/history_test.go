@@ -511,3 +511,26 @@ func sessionMinimalPNGBytes() []byte {
 		0xae, 0x42, 0x60, 0x82,
 	}
 }
+
+func TestSanitizeHistoryInputItemPreservesContentItemKinds(t *testing.T) {
+	input := map[string]any{
+		"type": "message",
+		"role": "user",
+		"content": []any{map[string]any{"type": "input_text", "text": "hi"}},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []any{"user.text"},
+			"turn_id":            "secret",
+		},
+	}
+	got := sanitizeHistoryInputItem(input)
+	md, _ := got.(map[string]any)["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if md == nil {
+		t.Fatal("passthrough missing (content_item_kinds must be preserved, Rust #40264)")
+	}
+	if _, ok := md["content_item_kinds"]; !ok {
+		t.Fatalf("content_item_kinds not preserved: %#v", md)
+	}
+	if _, ok := md["turn_id"]; ok {
+		t.Fatalf("non-model-visible passthrough should be stripped: %#v", md)
+	}
+}
