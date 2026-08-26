@@ -95,3 +95,19 @@ func TestRemoveFirstItemRemovesCounterpart(t *testing.T) {
 		t.Fatalf("RawItems() = %#v, want %#v", got, want)
 	}
 }
+
+func TestForPromptTagsOmittedImageUnsupported(t *testing.T) {
+	manager := NewHistoryManager()
+	manager.RecordItems(
+		HistoryItem{Kind: eventmap.ResponseMessage, Role: "user", ID: "u1",
+			Content: []eventmap.ContentItem{{Kind: eventmap.ContentInputImage, ImageURL: "data:image/png;base64,AAA"}},
+			ContentItemKinds: []string{"user.image"}},
+	)
+	prompt := manager.ForPrompt(false)
+	if len(prompt) != 1 || len(prompt[0].ContentItemKinds) != 1 || prompt[0].ContentItemKinds[0] != "images.unsupported" {
+		t.Fatalf("omitted image kind = %#v, want images.unsupported (Rust #40277)", prompt[0].ContentItemKinds)
+	}
+	if prompt[0].Content[0].Kind != eventmap.ContentInputText || prompt[0].Content[0].Text != ImageOmittedPlaceholder {
+		t.Fatalf("omitted image content = %#v", prompt[0].Content)
+	}
+}

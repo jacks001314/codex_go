@@ -38,6 +38,9 @@ type ResponseItem struct {
 	Role            string
 	Phase           string
 	Content         []ContentItem
+	// ContentItemKinds carries the harness-owned content classification aligned
+	// with Content, so omitted unsupported media can be tagged (Rust #40277).
+	ContentItemKinds []string
 	Summary         []string
 	RawContent      []string
 	WebSearchAction string

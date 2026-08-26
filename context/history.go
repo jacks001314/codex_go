@@ -111,7 +111,7 @@ func (m *HistoryManager) ReplaceLastTurnImages(placeholder string) bool {
 			return false
 		}
 		if item.Kind == eventmap.ResponseOther && item.WebSearchAction == "function_call_output" {
-			replaced := replaceImagesInContent(item.Content, placeholder)
+			replaced := replaceImagesInContent(item.Content, item.ContentItemKinds, placeholder)
 			if replaced {
 				m.historyVersion++
 			}
@@ -246,7 +246,7 @@ func StripImages(items *[]HistoryItem, placeholder string) {
 		placeholder = ImageOmittedPlaceholder
 	}
 	for index := range *items {
-		replaceImagesInContent((*items)[index].Content, placeholder)
+		replaceImagesInContent((*items)[index].Content, (*items)[index].ContentItemKinds, placeholder)
 		if (*items)[index].Kind == eventmap.ResponseImageGeneration {
 			(*items)[index].ImageResult = ""
 		}
@@ -351,11 +351,14 @@ func removeCorrespondingFor(items *[]HistoryItem, removed *HistoryItem) {
 	}
 }
 
-func replaceImagesInContent(content []eventmap.ContentItem, placeholder string) bool {
+func replaceImagesInContent(content []eventmap.ContentItem, kinds []string, placeholder string) bool {
 	replaced := false
 	for i := range content {
 		if content[i].Kind == eventmap.ContentInputImage {
 			content[i] = eventmap.ContentItem{Kind: eventmap.ContentInputText, Text: placeholder}
+			if i < len(kinds) {
+				kinds[i] = "images.unsupported"
+			}
 			replaced = true
 		}
 	}
@@ -376,6 +379,7 @@ func cloneItems(items []HistoryItem) []HistoryItem {
 func cloneItem(item HistoryItem) HistoryItem {
 	cloned := item
 	cloned.Content = append([]eventmap.ContentItem(nil), item.Content...)
+	cloned.ContentItemKinds = append([]string(nil), item.ContentItemKinds...)
 	cloned.Summary = append([]string(nil), item.Summary...)
 	cloned.RawContent = append([]string(nil), item.RawContent...)
 	return cloned
