@@ -68,3 +68,15 @@ func TestExitReasonDistinctionsMatchRust(t *testing.T) {
 		t.Fatalf("turn/thread exit reason wire values = %q/%q", ExitReasonTurnInterrupted, ExitReasonThreadRemoved)
 	}
 }
+
+func TestDescribeExitReasonDistinguishesStates(t *testing.T) {
+	if got := DescribeExitReason(ExitReasonTurnInterrupted); got != "The active turn was interrupted" {
+		t.Fatalf("TurnInterrupted = %q", got)
+	}
+	if got := DescribeExitReason(ExitReasonThreadRemoved); got != "The thread was removed" {
+		t.Fatalf("ThreadRemoved = %q", got)
+	}
+	if got := DescribeExitReason(ExitReasonFatal); got != "Disconnected from the app server" {
+		t.Fatalf("Fatal = %q", got)
+	}
+}

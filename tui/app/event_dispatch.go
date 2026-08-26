@@ -37,6 +37,22 @@ type AppRunControl struct {
 	Reason ExitReason
 }
 
+// DescribeExitReason returns the terminal summary line for an exit reason,
+// distinguishing a disconnected app server from an interrupted turn or a
+// removed thread (Rust #40629).
+func DescribeExitReason(reason ExitReason) string {
+	switch reason {
+	case ExitReasonTurnInterrupted:
+		return "The active turn was interrupted"
+	case ExitReasonThreadRemoved:
+		return "The thread was removed"
+	case ExitReasonFatal:
+		return "Disconnected from the app server"
+	default:
+		return "Session ended"
+	}
+}
+
 type ExitModeDecision struct {
 	PendingShutdownExitThreadID string
 	ShouldShutdownCurrentThread bool
