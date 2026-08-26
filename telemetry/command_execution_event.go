@@ -76,7 +76,7 @@ type CodexToolItemEventBase struct {
 	ThreadSource                   *string                      `json:"thread_source"`
 	SubagentSource                 *string                      `json:"subagent_source"`
 	ParentThreadID                 *string                      `json:"parent_thread_id"`
-	RootTurnID                     *string                      `json:"root_turn_id"`
+	RootTurnID                     *string                      `json:"root_turn_id,omitempty"`
 	ToolName                       string                       `json:"tool_name"`
 	StartedAtMS                    uint64                       `json:"started_at_ms"`
 	CompletedAtMS                  uint64                       `json:"completed_at_ms"`
