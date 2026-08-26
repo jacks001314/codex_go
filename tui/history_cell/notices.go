@@ -83,10 +83,22 @@ func NewSafetyAccessBlockEvent() SafetyAccessBlockCell {
 	}
 }
 
-func NewCyberPolicyErrorEvent() SafetyAccessBlockCell {
+// routeCyberTrustedAccessURL picks the individual Trusted Access page for
+// consumer ChatGPT plans and the enterprise application otherwise, mirroring
+// Rust #40504.
+func routeCyberTrustedAccessURL(planType string) string {
+	switch strings.ToLower(strings.TrimSpace(planType)) {
+	case "free", "go", "plus", "pro", "prolite", "business premium":
+		return "https://chatgpt.com/cyber/"
+	default:
+		return "https://openai.com/form/enterprise-trusted-access-for-cyber/"
+	}
+}
+
+func NewCyberPolicyErrorEvent(planType string) SafetyAccessBlockCell {
 	return SafetyAccessBlockCell{
 		Body:             "We take extra caution with cybersecurity requests. If you’re a security professional, you may be able to apply for Trusted Access.",
-		TrustedAccessURL: "https://openai.com/form/enterprise-trusted-access-for-cyber/",
+		TrustedAccessURL: routeCyberTrustedAccessURL(planType),
 	}
 }
 

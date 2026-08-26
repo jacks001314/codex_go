@@ -35,6 +35,7 @@ type ChatWidgetConfig struct {
 	FeatureSettings     map[string]bool
 	Connectors          ChatWidgetConnectors
 	HasChatGPTAccount   bool
+	PlanType            string
 	HasCodexBackendAuth bool
 	IsFirstRun          bool
 	InitialUserMessage  *UserMessage
@@ -73,6 +74,7 @@ func NewChatWidgetSnapshot(config ChatWidgetConfig) ChatWidgetSnapshot {
 	}
 	streaming := NewChatStreamingState(80)
 	runtime := TurnRuntimeState{Streaming: *streaming}
+	runtime.ChatGPTPlanType = config.PlanType
 	runtime.UpdateTaskRunningState()
 	return ChatWidgetSnapshot{
 		Config:                      config,

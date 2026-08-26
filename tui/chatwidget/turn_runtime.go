@@ -121,6 +121,8 @@ type TurnRuntimeState struct {
 	SafetyBuffering SafetyBufferingState
 	Streaming       ChatStreamingState
 	Tools           ToolLifecycleState
+	// ChatGPTPlanType routes cyber Trusted Access links by plan (Rust #40504).
+	ChatGPTPlanType string
 
 	InputQueue InputQueueState
 
@@ -503,7 +505,7 @@ func (s *TurnRuntimeState) OnCyberPolicyError() {
 	s.InputQueue.SubmitPendingSteersAfterInterrupt = false
 	s.FinalizeTurn()
 	s.LastErrorOutcome = TurnRuntimeErrorCyberPolicy
-	s.addHistoryEvent(TurnRuntimeHistoryCyberPolicy, "", historycell.NewCyberPolicyErrorEvent())
+	s.addHistoryEvent(TurnRuntimeHistoryCyberPolicy, "", historycell.NewCyberPolicyErrorEvent(s.ChatGPTPlanType))
 	s.RequestRedraw()
 	s.MaybeSendNextQueuedInput()
 }

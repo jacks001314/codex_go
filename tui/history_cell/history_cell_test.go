@@ -307,7 +307,7 @@ func TestNoticeHistoryCells(t *testing.T) {
 	if !strings.Contains(safetyDisplay, SafetyAccessBlockTitle) || !strings.Contains(safetyDisplay, "you’re a researcher") || !strings.Contains(safetyDisplay, "Trusted Access: https://openai.com/form/trusted-access-for-life-sciences") {
 		t.Fatalf("safety display:\n%s", safetyDisplay)
 	}
-	cyber := NewCyberPolicyErrorEvent()
+	cyber := NewCyberPolicyErrorEvent("")
 	if got := strings.Join(cyber.RawLines(), "\n"); !strings.Contains(got, "you’re a security professional") || !strings.Contains(got, "https://openai.com/form/enterprise-trusted-access-for-cyber/") {
 		t.Fatalf("cyber raw:\n%s", got)
 	}
@@ -604,6 +604,21 @@ func TestExecHistoryCells(t *testing.T) {
 	for _, line := range narrow.DisplayLines(12)[2:] {
 		if tui.DisplayWidth(line) > 12 {
 			t.Fatalf("process line exceeds width: %q width=%d", line, tui.DisplayWidth(line))
+		}
+	}
+}
+
+func TestCyberTrustedAccessURLRoutesByPlan(t *testing.T) {
+	individual := "https://chatgpt.com/cyber/"
+	enterprise := "https://openai.com/form/enterprise-trusted-access-for-cyber/"
+	for _, plan := range []string{"free", "go", "plus", "pro", "prolite", "business premium"} {
+		if got := routeCyberTrustedAccessURL(plan); got != individual {
+			t.Fatalf("route(%q) = %q, want individual %q", plan, got, individual)
+		}
+	}
+	for _, plan := range []string{"enterprise", "", "unknown"} {
+		if got := routeCyberTrustedAccessURL(plan); got != enterprise {
+			t.Fatalf("route(%q) = %q, want enterprise %q", plan, got, enterprise)
 		}
 	}
 }
