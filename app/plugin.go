@@ -7,8 +7,10 @@ import (
 	"sort"
 	"strings"
 
+	"codex_go/appserver"
 	"codex_go/auth"
 	"codex_go/cli"
+	"codex_go/config"
 	"codex_go/plugin"
 )
 
@@ -342,6 +344,14 @@ func runPluginMarketplaceUpgrade(ctx *pluginCLIContext, opts *cli.PluginMarketpl
 }
 
 func runPluginMarketplaceRemove(ctx *pluginCLIContext, opts *cli.PluginMarketplaceOptions, stdout io.Writer) error {
+	name := strings.TrimSpace(opts.Name)
+	if name != "" {
+		if source, err := appserver.MarketplaceRemoveConflictSource(config.NewConfigService(ctx.codexHome), name); err != nil {
+			return err
+		} else if source != "" {
+			return fmt.Errorf("marketplace `%s` is also defined by the %s layer; update that configuration source instead of removing it", name, source)
+		}
+	}
 	outcome, err := ctx.service.RemoveMarketplace(&plugin.MarketplaceRemoveParams{MarketplaceName: opts.Name})
 	if err != nil {
 		return err

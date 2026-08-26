@@ -7941,7 +7941,73 @@ func (r *RuntimeRouter) handleMarketplaceRemove(request *Request) (*plugin.Marke
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	name := strings.TrimSpace(firstNonEmpty(params.MarketplaceName, params.Name))
+	if name != "" {
+		source, err := r.marketplaceRemoveConflictSource(name)
+		if err != nil {
+			return nil, err
+		}
+		if source != "" {
+			return nil, fmt.Errorf("marketplace `%s` is also defined by the %s layer; update that configuration source instead of removing it", name, source)
+		}
+	}
 	return r.requirePlugins().RemoveMarketplace(&params)
+}
+
+// marketplaceRemoveConflictSource returns a non-empty configuration source when
+// the marketplace is defined by another enabled layer in the operation's config
+// stack, so removing a user override cannot delete a snapshot still referenced
+// by a lower-precedence layer (Rust #40683 remove_marketplace_sync).
+func (r *RuntimeRouter) marketplaceRemoveConflictSource(marketplaceName string) (string, error) {
+	if r == nil || r.services.Config == nil {
+		return "", nil
+	}
+	return MarketplaceRemoveConflictSource(r.services.Config, marketplaceName)
+}
+
+// MarketplaceRemoveConflictSource returns a non-empty configuration source when
+// the marketplace is defined by another enabled layer in the operation's config
+// stack, so removing a user override cannot delete a snapshot still referenced
+// by a lower-precedence layer (Rust #40683 remove_marketplace_sync).
+func MarketplaceRemoveConflictSource(svc *config.ConfigService, marketplaceName string) (string, error) {
+	if svc == nil {
+		return "", nil
+	}
+	read, err := svc.Read(&config.ConfigReadParams{IncludeLayers: true})
+	if err != nil || read == nil {
+		return "", err
+	}
+	userConfigPath := config.ConfigPath(svc.CodexHome())
+	for _, layer := range read.Layers {
+		if layer.Name.Type == config.LayerSourceUser &&
+			strings.EqualFold(strings.TrimSpace(layer.Name.File), strings.TrimSpace(userConfigPath)) &&
+			layer.Name.Profile == nil {
+			// The user override being removed is the layer we may clean up.
+			continue
+		}
+		if layerDisabledReason(layer.DisabledReason) != "" {
+			continue
+		}
+		cfg, ok := layer.Config.(map[string]any)
+		if !ok {
+			continue
+		}
+		marketplaces, ok := cfg["marketplaces"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, defined := marketplaces[marketplaceName]; defined {
+			return string(layer.Name.Type), nil
+		}
+	}
+	return "", nil
+}
+
+func layerDisabledReason(reason *string) string {
+	if reason == nil {
+		return ""
+	}
+	return strings.TrimSpace(*reason)
 }
 
 func (r *RuntimeRouter) handleMarketplaceUpgrade(request *Request) (*plugin.MarketplaceUpgradeResponse, error) {
