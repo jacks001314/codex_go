@@ -233,6 +233,7 @@ type TaskMetric struct {
 	Inc        int
 	Value      int
 	DurationMS float64
+	Boundaries []float64
 	Tags       map[string]string
 	At         time.Time
 }
@@ -276,6 +277,22 @@ func (m *TaskMetrics) Histogram(name string, value int, tags map[string]string) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.records = append(m.records, &TaskMetric{Name: name, Kind: "histogram", Value: value, Tags: cloneStringMap(tags), At: m.now().UTC()})
+}
+
+// HistogramWithBounds records a histogram value together with its explicit
+// bucket boundaries (Rust #40726 adds explicit byte histogram boundaries for
+// SQLite log batch metrics).
+func (m *TaskMetrics) HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.records = append(m.records, &TaskMetric{
+		Name:       name,
+		Kind:       "histogram",
+		Value:      value,
+		Boundaries: append([]float64(nil), boundaries...),
+		Tags:       cloneStringMap(tags),
+		At:         m.now().UTC(),
+	})
 }
 
 func (m *TaskMetrics) RecordDuration(name string, duration time.Duration, tags map[string]string) {

@@ -16,6 +16,10 @@ const (
 	logRetentionDays                 = 10
 )
 
+// logBatchByteBoundaries are the explicit byte histogram bucket boundaries for
+// SQLite log batch metrics (Rust #40726).
+var logBatchByteBoundaries = []float64{256, 1024, 4096, 16384, 65536, 262144, 1048576}
+
 type LogEntry struct {
 	TS              int64
 	TSNanos         int64
@@ -94,8 +98,8 @@ func (r *StateRuntime) InsertLogs(ctx context.Context, entries []LogEntry) (err 
 					largest = entryBytes
 				}
 			}
-			r.metrics.Histogram("codex.sqlite.log.write.batch_bytes", int(batchBytes), nil)
-			r.metrics.Histogram("codex.sqlite.log.write.largest_entry_bytes", int(largest), nil)
+			r.metrics.HistogramWithBounds("codex.sqlite.log.write.batch_bytes", int(batchBytes), logBatchByteBoundaries, nil)
+			r.metrics.HistogramWithBounds("codex.sqlite.log.write.largest_entry_bytes", int(largest), logBatchByteBoundaries, nil)
 		}
 	}()
 	ctx = nonNilContext(ctx)
