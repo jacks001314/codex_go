@@ -31,6 +31,9 @@ func (s *PluginService) EnabledMCPServerContributions() []MCPServerContribution 
 			continue
 		}
 		configs := readPluginMCPServerConfigs(root, s.agentPluginDataRoot(detail.Summary.ID, root))
+		// #40363: apply local env_vars from .codex-plugin/plugin.json to matching
+		// stdio servers loaded from an Agent Plugin manifest (no-op otherwise).
+		applyCodexEnvOverlay(root, configs)
 		names := make([]string, 0, len(configs))
 		for name := range configs {
 			names = append(names, name)
