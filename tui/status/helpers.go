@@ -62,8 +62,10 @@ func PlanTypeDisplayName(planType auth.PlanType) string {
 	switch planType {
 	case auth.PlanEnterpriseCBPAutomation:
 		return "Enterprise (Automation)"
-	case auth.PlanTeam, auth.PlanSelfServeBusinessProlite, auth.PlanSelfServeBusinessUsageBased:
+	case auth.PlanTeam, auth.PlanSelfServeBusinessUsageBased:
 		return "Business"
+	case auth.PlanSelfServeBusinessProlite:
+		return "Business Premium"
 	case auth.PlanBusiness, auth.PlanEnt26, auth.PlanEnterpriseCBPUsageBased, auth.PlanEnterprise:
 		return "Enterprise"
 	case auth.PlanProlite:

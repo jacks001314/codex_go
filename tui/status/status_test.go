@@ -235,7 +235,7 @@ func TestHelpersMatchRustFormatting(t *testing.T) {
 		auth.PlanPro:                         "Pro",
 		auth.PlanProlite:                     "Pro Lite",
 		auth.PlanTeam:                        "Business",
-		auth.PlanSelfServeBusinessProlite:    "Business",
+		auth.PlanSelfServeBusinessProlite:    "Business Premium",
 		auth.PlanSelfServeBusinessUsageBased: "Business",
 		auth.PlanBusiness:                    "Enterprise",
 		auth.PlanEnt26:                       "Enterprise",
