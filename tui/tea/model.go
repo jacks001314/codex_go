@@ -878,15 +878,15 @@ type Model struct {
 	// vimPendingReplace tracks the Vim `r` replacement: the next typed
 	// character replaces the grapheme under the cursor without leaving normal
 	// mode (Rust #39661 vim_normal.replace_char).
-	vimPendingReplace        bool
+	vimPendingReplace bool
 	// vimPendingFind tracks a pending Vim find/till motion (f/F/t/T): the next
 	// typed character is the search target. vimFindKind: 0=find, 1=till;
 	// vimFindForward is true for f/t; vimFindOperator carries a pending d/y/c
 	// when the find is an operator motion ("" for plain navigation).
-	vimPendingFind   bool
-	vimFindKind      int
-	vimFindForward   bool
-	vimFindOperator  string
+	vimPendingFind           bool
+	vimFindKind              int
+	vimFindForward           bool
+	vimFindOperator          string
 	petRuntime               *petRuntime
 	petCodexHome             string
 	petEnv                   map[string]string
@@ -1961,6 +1961,7 @@ func (m *Model) View() string {
 			sections = append(sections, m.bottomStyle.Render(working))
 		}
 		composer := m.composer.View()
+		composer = annotateComposerHyperlinks(composer)
 		if chrome {
 			composer = m.renderComposerRegion(composer)
 		}
@@ -2014,6 +2015,22 @@ func (m *Model) renderComposerRegion(content string) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("8")).
 		Render(content)
+}
+
+// annotateComposerHyperlinks wraps visible HTTP(S) URLs in each rendered
+// composer line with OSC-8 terminal hyperlinks so links the user types are
+// clickable, mirroring the Rust composer hyperlink handling (#40720). URLs
+// split across soft-wrapped lines may be annotated as fragments, which is an
+// acknowledged rough edge until the full wrap-aware cache is wired.
+func annotateComposerHyperlinks(content string) string {
+	if !strings.Contains(content, "http") {
+		return content
+	}
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = codextui.AnnotateWebURLsInLine(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func fitTerminalLine(line string, width int) string {
