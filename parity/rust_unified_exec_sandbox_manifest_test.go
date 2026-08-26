@@ -98,7 +98,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Owner:     "execserver, turn, tool",
 			Focus:     "remote exec-server pushed process events, replay gaps, direct denials, and legacy exit metadata",
 			Platform:  "all; async websocket exec-server fixture",
-			TestCases: 7,
+			TestCases: 8,
 			Tests: []string{
 				"exec_command_consumes_pushed_remote_process_events",
 			},

@@ -185,6 +185,16 @@ var Registry = []Spec{
 	{Key: "use_agent_identity", Stage: StageUnderDevelopment},
 	{Key: "workspace_dependencies", Stage: StageStable, DefaultEnabled: true},
 	{Key: "psp", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs f5420174da): feature-key surface frozen
+	// during the sync26 static re-target.
+	{Key: "transcript_v2", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "content_item_kinds", Stage: StageStable, DefaultEnabled: true},
+	{Key: "code_mode_prewarm", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "skip_host_skill_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "in_app_local_automation", Stage: StageStable, DefaultEnabled: true},
+	{Key: "bedrock_setup_wizard", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "step_model_switching", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "compaction_image_budget", Stage: StageUnderDevelopment, DefaultEnabled: false},
 }
 
 func preventIdleSleepStage() Stage {

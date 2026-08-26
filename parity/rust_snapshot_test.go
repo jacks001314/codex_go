@@ -122,6 +122,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"analytics",
 		"agent-graph-store",
 		"agent-identity",
+		"agent-roles",
 		"backend-client",
 		"bwrap",
 		"build-info",
@@ -215,6 +216,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"tools",
 		"v8-poc",
 		"websocket-client",
+		"worktree",
 		"workload-identity",
 		"utils/absolute-path",
 		"utils/audio",
@@ -263,15 +265,15 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
-		{Path: "Cargo.toml", SHA256: "9dad50d0a6f7b6730d6dc5c36aff8397da551eb82285c12fe9f754fe1ff2797c"},
+		{Path: "Cargo.toml", SHA256: "2df83b1071671521e36286f87be1434e960045a610ae05e1e78224de3c8966ff"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
-		{Path: "exec/src/lib.rs", SHA256: "3189ec0cda32fba52af47ec6382e1784033813d63d294850339f8756fbf22227"},
+		{Path: "exec/src/lib.rs", SHA256: "c71d9969d311dfca89e30d36f560a6ec264beb4b5e64b7a5958015c8204d01ba"},
 		{Path: "exec/src/exec_events.rs", SHA256: "fc914a7d8f7e990b19a95c41abf758e95e5b7ea028caa8b34b1c82306382c004"},
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
-		{Path: "core/src/client.rs", SHA256: "f5ca8ab12aa1b9013ab0bb95c9dff3464bbc92e03be6ee47000dbb2da42b3697"},
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "5d58f257ba52d3de30781da060814fabe32eb3f95bcd53ef254a8fbd049e1bc8"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "4410afc5dea2fcaad85fe515c4abdc29babb81ab3a743440927289d0553f7c81"},
-		{Path: "core/tests/suite/mod.rs", SHA256: "fa6b69fdd57d39b53ebc26039612d49188c573f3573e3311d25fbef3636b7c54"},
+		{Path: "core/src/client.rs", SHA256: "2c4221bcc0f690c11522a01a98242e566c1846ad51e3d0bd83f6b85fc6e36147"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "b9b7ba34d3a31e8d9e688451eb6d17a6c1c4215a4eeaa8900f382fe70ecc335c"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "cf2d04af3bedb12c7a1e33de0a002bf41f8ec5c372b7f3d6aabb599810bf3a3f"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "22aa672a6f0bb92feb4a494a9d988d8d75502d51780c5a19606883a8a6c4590d"},
 	}
 }
 

@@ -86,6 +86,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		".config",
 		"agent-graph-store",
 		"agent-identity",
+		"agent-roles",
 		"analytics",
 		"ansi-escape",
 		"app-server",
@@ -186,6 +187,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"websocket-client",
 		"windows-sandbox-rs",
 		"workload-identity",
+		"worktree",
 	}
 }
 
