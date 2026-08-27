@@ -42,4 +42,7 @@ func TestWorldWritableAuditResultSamplesAndCountsExtra(t *testing.T) {
 	if !result.FailedScan {
 		t.Fatalf("FailedScan = false, want true")
 	}
+	if result.FlaggedCount != len(paths) {
+		t.Fatalf("FlaggedCount = %d, want %d", result.FlaggedCount, len(paths))
+	}
 }

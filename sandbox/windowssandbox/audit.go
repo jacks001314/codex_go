@@ -30,10 +30,14 @@ type WorldWritableAuditResult struct {
 	SamplePaths []string
 	ExtraCount  int
 	FailedScan  bool
+	// FlaggedCount is the total number of directories flagged by the scan
+	// (Rust apply_world_writable_scan_and_denies_for_permissions -> usize,
+	// #40983). It feeds the world-writable-scan telemetry histogram.
+	FlaggedCount int
 }
 
 func worldWritableAuditResult(paths []string, failedScan bool) *WorldWritableAuditResult {
-	result := &WorldWritableAuditResult{FailedScan: failedScan}
+	result := &WorldWritableAuditResult{FailedScan: failedScan, FlaggedCount: len(paths)}
 	if len(paths) <= worldWritableAuditSampleLimit {
 		result.SamplePaths = cloneStrings(paths)
 		return result
