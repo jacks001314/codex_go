@@ -15,6 +15,15 @@ import (
 
 const backendTimeout = 35 * time.Second
 const encryptedToolArgumentsHeader = "x-openai-encrypted-tool-arguments"
+const toolOutputTruncationPolicyHeader = "x-openai-tool-output-truncation-policy"
+
+// ToolTruncationPolicy is the serialized form of the output truncation policy
+// forwarded to the history/notes backend (Rust protocol TruncationPolicy,
+// #41062): {"mode":"bytes"|"tokens","limit":N}.
+type ToolTruncationPolicy struct {
+	Mode  string `json:"mode"`
+	Limit int    `json:"limit"`
+}
 
 // encryptedArgumentsRoute reports whether the backend route carries sensitive
 // tool arguments that must be marked encrypted (Rust #41041). The JSON request
@@ -36,9 +45,10 @@ func encryptedArgumentsRoute(path string) bool {
 // HistoryNotesBackend). The embedding router resolves the base URL and auth
 // headers from the effective OpenAI provider + codex backend auth.
 type Backend struct {
-	BaseURL   string
-	ApplyAuth func(*http.Request, []byte) error
-	HTTPDoer  func(*http.Request) (*http.Response, error)
+	BaseURL              string
+	ApplyAuth            func(*http.Request, []byte) error
+	HTTPDoer             func(*http.Request) (*http.Response, error)
+	ToolTruncationPolicy *ToolTruncationPolicy
 }
 
 func (b *Backend) Call(ctx context.Context, path string, sessionID string, currentAgentName string, arguments map[string]any) (json.RawMessage, error) {
@@ -69,6 +79,13 @@ func (b *Backend) Call(ctx context.Context, path string, sessionID string, curre
 	request.Header.Set("Content-Type", "application/json")
 	if encryptedArgumentsRoute(path) {
 		request.Header.Set(encryptedToolArgumentsHeader, "true")
+	}
+	if b.ToolTruncationPolicy != nil {
+		encoded, err := json.Marshal(b.ToolTruncationPolicy)
+		if err != nil {
+			return nil, fmt.Errorf("history backend truncation policy could not be encoded: %w", err)
+		}
+		request.Header.Set(toolOutputTruncationPolicyHeader, string(encoded))
 	}
 	if b.ApplyAuth != nil {
 		if err := b.ApplyAuth(request, body); err != nil {

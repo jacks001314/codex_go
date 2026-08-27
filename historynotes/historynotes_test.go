@@ -218,3 +218,30 @@ func TestHistoryNotesMarkSensitiveFieldsEncryptedLikeRust(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoryNotesForwardsTruncationPolicyLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(toolOutputTruncationPolicyHeader); got != `{"mode":"tokens","limit":10000}` {
+			t.Fatalf("truncation policy header = %q, want tokens/10000", got)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	backend := &Backend{BaseURL: server.URL, HTTPDoer: server.Client().Do, ToolTruncationPolicy: &ToolTruncationPolicy{Mode: "tokens", Limit: 10000}}
+	if _, err := backend.Call(context.Background(), "alpha/history/v2/list_windows", "session-1", "root", map[string]any{}); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+
+	// No policy set -> no header.
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(toolOutputTruncationPolicyHeader); got != "" {
+			t.Fatalf("unexpected truncation policy header = %q", got)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server2.Close()
+	plain := &Backend{BaseURL: server2.URL, HTTPDoer: server2.Client().Do}
+	if _, err := plain.Call(context.Background(), "alpha/history/v2/list_windows", "session-1", "root", map[string]any{}); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+}
