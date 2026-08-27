@@ -73,3 +73,17 @@ func logEnvironmentTrace(ctx context.Context, method string) {
 	}
 	slog.Debug("exec-server environment request", "method", method, "trace_id", trace.TraceID, "span_id", trace.SpanID)
 }
+
+// TraceContextFromContext returns the trace context carried in ctx, if any
+// (Rust exec-server trace_context.rs, #39098). It is the exported accessor used
+// across the code-mode gRPC boundary (Rust #41017).
+func TraceContextFromContext(ctx context.Context) TraceContext {
+	return traceContextFromContext(ctx)
+}
+
+// WithTraceContext carries a trace context in ctx (Rust exec-server
+// trace_context.rs, #39098). It is the exported setter used to seed a trace
+// context before crossing the code-mode boundary.
+func WithTraceContext(ctx context.Context, trace TraceContext) context.Context {
+	return withTraceContext(ctx, trace)
+}

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/execserver"
 	"codex_go/tool"
 
 	"github.com/coder/websocket"
@@ -644,5 +645,21 @@ func writeHostFrame(t *testing.T, ctx context.Context, conn *websocket.Conn, mes
 	}
 	if err := conn.Write(ctx, websocket.MessageBinary, payload); err != nil {
 		t.Fatalf("Write() error = %v", err)
+	}
+}
+
+func TestCodeModeTraceContextFromContextLikeRust(t *testing.T) {
+	// No trace context -> nil.
+	if got := codeModeTraceContextFromContext(context.Background()); got != nil {
+		t.Fatalf("no-context trace = %#v, want nil", got)
+	}
+	// A carried exec-server trace context converts to a W3C traceparent.
+	ctx := execserver.WithTraceContext(context.Background(), execserver.TraceContext{TraceID: "trace-1", SpanID: "span-1"})
+	got := codeModeTraceContextFromContext(ctx)
+	if got == nil {
+		t.Fatal("trace context = nil, want W3C traceparent")
+	}
+	if got.Traceparent != "00-trace-1-span-1-01" {
+		t.Fatalf("traceparent = %q", got.Traceparent)
 	}
 }

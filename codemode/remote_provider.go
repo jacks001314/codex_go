@@ -13,8 +13,23 @@ import (
 	"sync/atomic"
 	"time"
 
+	"codex_go/execserver"
 	"codex_go/tool"
 )
+
+// codeModeTraceContextFromContext carries the active trace context across the
+// code-mode gRPC boundary (Rust #41017). It converts the exec-server
+// TraceID/SpanID pair into a W3C-style traceparent so nested tool callback
+// spans stay connected.
+func codeModeTraceContextFromContext(ctx context.Context) *CodeModeTraceContext {
+	trace := execserver.TraceContextFromContext(ctx)
+	if trace.IsZero() {
+		return nil
+	}
+	return &CodeModeTraceContext{
+		Traceparent: "00-" + strings.TrimSpace(trace.TraceID) + "-" + strings.TrimSpace(trace.SpanID) + "-01",
+	}
+}
 
 // defaultHostWaitTransportTimeout mirrors Rust's DEFAULT_HOST_WAIT_TRANSPORT_TIMEOUT:
 // a stalled code-mode host must answer wait/terminate requests within this
@@ -239,6 +254,7 @@ func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemote
 	response, err := connection.Execute(ctx, s.id, delegate, ExecuteRequest{
 		ToolCallID: request.ToolCallID, EnabledTools: definitions, Source: request.Source,
 		YieldTimeMS: request.YieldTimeMS, MaxOutputTokens: request.MaxOutputTokens,
+		TraceContext: codeModeTraceContextFromContext(ctx),
 	})
 	return publicRemoteResponseForGeneration(response, s.generation), err
 }
