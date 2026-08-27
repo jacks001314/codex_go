@@ -251,6 +251,7 @@ type RuntimeRouter struct {
 	newContextWindowReq    map[string]bool
 	contextWindowMu        sync.Mutex
 	contextWindowIDs       map[string]string
+	windowNumbers          map[string]uint64
 	codeModeRuntimesMu     sync.Mutex
 	codeModeRuntimes       map[string]*tool.CodeModeRuntime
 	pendingGoalMu          sync.Mutex
@@ -12724,6 +12725,39 @@ func (r *RuntimeRouter) contextWindowIDForThread(threadID string) string {
 	id := newContextWindowID()
 	r.contextWindowIDs[threadID] = id
 	return id
+}
+
+// windowNumberForThread returns the zero-based context window number for a
+// thread, creating it at 0 on first use and advancing on compaction (Rust
+// #40987 Track window and fork positions in turn metadata).
+func (r *RuntimeRouter) windowNumberForThread(threadID string) uint64 {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return 0
+	}
+	r.contextWindowMu.Lock()
+	defer r.contextWindowMu.Unlock()
+	if r.windowNumbers == nil {
+		r.windowNumbers = map[string]uint64{}
+	}
+	return r.windowNumbers[threadID]
+}
+
+func uint64PtrAppserver(value uint64) *uint64 {
+	return &value
+}
+
+// advanceWindowNumber increments a thread's context window number after
+// compaction, mirroring Rust window advancement (#40987).
+func (r *RuntimeRouter) advanceWindowNumber(threadID string) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	r.contextWindowMu.Lock()
+	defer r.contextWindowMu.Unlock()
+	if r.windowNumbers == nil {
+		r.windowNumbers = map[string]uint64{}
+	}
+	r.windowNumbers[threadID]++
 }
 
 // advanceContextWindowID regenerates a thread's context window ID after

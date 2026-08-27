@@ -95,6 +95,9 @@ type ClientMetadata struct {
 	TurnID         string
 	WindowID       string
 	ContextWindowID string
+	// WindowNumber is the zero-based number of the current context window,
+	// included in Responses turn metadata (Rust #40987).
+	WindowNumber *uint64
 	RequestKind    ClientRequestKind
 	Compaction     *ClientCompactionMetadata
 	// AgentName is the canonical agent path for sub-agent turns (Rust #38483).
@@ -151,6 +154,9 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 		value["window_id"] = m.WindowID
 		if m.ContextWindowID != "" {
 			value["context_window_id"] = m.ContextWindowID
+		}
+		if m.WindowNumber != nil {
+			value["window_number"] = *m.WindowNumber
 		}
 	}
 	if hasTurnIdentity {

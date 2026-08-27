@@ -228,3 +228,37 @@ func TestClientCompactionMetadataDefaults(t *testing.T) {
 		t.Fatalf("Strategy = %q, want memento", metadata.Strategy)
 	}
 }
+
+func TestClientMetadataSerializesWindowNumberLikeRust(t *testing.T) {
+	metadata := NewClientMetadata("install", "session", "thread", "window")
+	metadata.RequestKind = ClientRequestTurn
+	metadata.ThreadID = "thread"
+	metadata.TurnID = "turn"
+	windowNumber := uint64(3)
+	metadata.WindowNumber = &windowNumber
+	client := metadata.ClientMetadata()
+	raw, ok := client[ClientCodexTurnMetadataHeader]
+	if !ok {
+		t.Fatalf("turn metadata header missing")
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		t.Fatalf("unmarshal turn metadata: %v", err)
+	}
+	if got, present := decoded["window_number"]; !present || got != float64(3) {
+		t.Fatalf("window_number = %#v, want 3", decoded["window_number"])
+	}
+	// Unset window number is omitted.
+	plain := NewClientMetadata("install", "session", "thread", "window")
+	plain.RequestKind = ClientRequestTurn
+	plain.ThreadID = "thread"
+	plain.TurnID = "turn"
+	raw2 := plain.ClientMetadata()[ClientCodexTurnMetadataHeader]
+	var decoded2 map[string]any
+	if err := json.Unmarshal([]byte(raw2), &decoded2); err != nil {
+		t.Fatalf("unmarshal plain turn metadata: %v", err)
+	}
+	if _, present := decoded2["window_number"]; present {
+		t.Fatalf("unset window_number should be omitted: %#v", decoded2)
+	}
+}

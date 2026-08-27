@@ -387,12 +387,15 @@ func (m *MetadataState) MetadataValue(model string, reasoningEffort string) map[
 }
 
 type ResponsesClientMetadataOptions struct {
-	InstallationID             string
-	SessionID                  string
-	ThreadID                   string
-	TurnID                     string
-	WindowID                   string
-	ContextWindowID            string
+	InstallationID  string
+	SessionID       string
+	ThreadID        string
+	TurnID          string
+	WindowID        string
+	ContextWindowID string
+	// WindowNumber is the zero-based current context window number included in
+	// Responses turn metadata (Rust #40987).
+	WindowNumber               *uint64
 	RequestKind                codexapi.ClientRequestKind
 	ForkedFromThreadID         string
 	ParentThreadID             string
@@ -435,6 +438,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	)
 	metadata.TurnID = strings.TrimSpace(options.TurnID)
 	metadata.ContextWindowID = strings.TrimSpace(options.ContextWindowID)
+	metadata.WindowNumber = options.WindowNumber
 	metadata.RequestKind = options.RequestKind
 	if metadata.RequestKind == "" {
 		metadata.RequestKind = codexapi.ClientRequestTurn
