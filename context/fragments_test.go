@@ -237,3 +237,23 @@ func TestPersistentModeInstructionsLikeRust(t *testing.T) {
 		t.Fatalf("catalog body = %#v", fragCustom.Body())
 	}
 }
+
+func TestParseDelegatedToolOutputLikeRust(t *testing.T) {
+	prompt := "<codex_delegation>\n  <source_thread_id>thread-1</source_thread_id>\n  <input>&lt;code&gt;hello&lt;/code&gt;</input>\n</codex_delegation>"
+	source, delegated, ok := ParseDelegatedToolOutput("send_message_to_thread", "codex_app", prompt)
+	if !ok || source != "thread-1" || delegated != "<code>hello</code>" {
+		t.Fatalf("delegated = (%q,%q,%v)", source, delegated, ok)
+	}
+	// Non-delegation name is rejected.
+	if _, _, ok := ParseDelegatedToolOutput("other", "codex_app", prompt); ok {
+		t.Fatalf("non-delegation name accepted")
+	}
+	// Non-trusted namespace is rejected.
+	if _, _, ok := ParseDelegatedToolOutput("send_message_to_thread", "untrusted", prompt); ok {
+		t.Fatalf("untrusted namespace accepted")
+	}
+	// Non-delegation prompt is rejected.
+	if _, _, ok := ParseDelegatedToolOutput("send_message_to_thread", "codex_app", "plain output"); ok {
+		t.Fatalf("non-delegation prompt accepted")
+	}
+}
