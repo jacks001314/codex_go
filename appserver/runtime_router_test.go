@@ -26818,3 +26818,23 @@ func TestPluginCatalogDisabledFromValues(t *testing.T) {
 		t.Fatal("plugins=false should disable the plugin catalog")
 	}
 }
+
+func TestMergePluginMarketplaceEntries(t *testing.T) {
+	path1 := "p1"
+	acme := plugin.PluginMarketplaceEntry{Name: "acme", Path: &path1, Plugins: []plugin.PluginSummary{{ID: "acme-tool", Name: "acme-tool"}}}
+	extra := []plugin.PluginMarketplaceEntry{
+		{Name: "acme", Path: &path1, Plugins: []plugin.PluginSummary{{ID: "acme-other", Name: "acme-other"}}},
+		{Name: "acme2", Plugins: []plugin.PluginSummary{{ID: "acme2-tool", Name: "acme2-tool"}}},
+	}
+	merged := mergePluginMarketplaceEntries([]plugin.PluginMarketplaceEntry{acme}, extra)
+	if len(merged) != 2 {
+		t.Fatalf("merged = %#v", merged)
+	}
+	// The installed/cached entry wins for a duplicate name.
+	if merged[0].Name != "acme" || len(merged[0].Plugins) != 1 || merged[0].Plugins[0].ID != "acme-tool" {
+		t.Fatalf("merged duplicate = %#v", merged[0])
+	}
+	if merged[1].Name != "acme2" || len(merged[1].Plugins) != 1 || merged[1].Plugins[0].ID != "acme2-tool" {
+		t.Fatalf("merged extra = %#v", merged[1])
+	}
+}

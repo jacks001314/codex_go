@@ -60,6 +60,31 @@ func (s *PluginService) ReloadConfig() error {
 	return nil
 }
 
+// ResolveConfigMarketplaces maps a config value map into the marketplaces it
+// declares (`[marketplaces]`), loading each one's plugin manifests. This mirrors
+// Rust PluginRequestProcessor::list_marketplaces_for_config over the effective
+// config stack (#40954). Marketplaces declared in config but not yet materialized
+// (no manifest on disk) are silently skipped rather than cloned here.
+func (s *PluginService) ResolveConfigMarketplaces(values map[string]any) ([]PluginMarketplaceEntry, []MarketplaceLoadErrorInfo) {
+	if s == nil || len(values) == 0 {
+		return nil, nil
+	}
+	s.mu.Lock()
+	installRoot := s.marketplaceInstallRoot
+	now := s.now
+	s.mu.Unlock()
+	marketplaces := configuredMarketplacesFromConfig(values, installRoot, now)
+	if len(marketplaces) == 0 {
+		return nil, nil
+	}
+	details, loadErrors := loadMarketplacePlugins(marketplaces)
+	summaries := make([]PluginSummary, 0, len(details))
+	for i := range details {
+		summaries = append(summaries, cloneSummary(details[i].Summary))
+	}
+	return marketplaceEntries(marketplaces, summaries), loadErrors
+}
+
 func recordMarketplaceConfig(configPath string, marketplace *Marketplace) error {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" || marketplace == nil {

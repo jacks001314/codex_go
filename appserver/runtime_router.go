@@ -8062,6 +8062,14 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 		}, nil
 	}
 	response := r.requirePlugins().List(&params)
+	// Rust #40954: surface marketplaces declared in the effective config stack
+	// (project plugin/marketplace config) in addition to the installed store.
+	if read, err := r.pluginCatalogConfig(params.CWDs); err == nil && read != nil {
+		if entries, loadErrors := r.services.Plugins.ResolveConfigMarketplaces(read.Config); len(entries) > 0 || len(loadErrors) > 0 {
+			response.Marketplaces = mergePluginMarketplaceEntries(response.Marketplaces, entries)
+			response.MarketplaceLoadErrors = append(response.MarketplaceLoadErrors, loadErrors...)
+		}
+	}
 	if r.services.Plugins.TargetCuratedMarketplace() == plugin.TargetCuratedOpenAIWithRemote {
 		r.startInstalledRemotePluginSync()
 	} else {
@@ -8070,28 +8078,60 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 	return response, nil
 }
 
+// mergePluginMarketplaceEntries concatenates config-declared marketplaces onto
+// the primary (installed) marketplace entries, keeping the first occurrence of a
+// name so the installed/cached entry wins.
+func mergePluginMarketplaceEntries(primary, extra []plugin.PluginMarketplaceEntry) []plugin.PluginMarketplaceEntry {
+	if len(extra) == 0 {
+		return primary
+	}
+	seen := make(map[string]bool, len(primary)+len(extra))
+	merged := make([]plugin.PluginMarketplaceEntry, 0, len(primary)+len(extra))
+	for _, entry := range primary {
+		merged = append(merged, entry)
+		if entry.Name != "" {
+			seen[entry.Name] = true
+		}
+	}
+	for _, entry := range extra {
+		if entry.Name != "" && seen[entry.Name] {
+			continue
+		}
+		merged = append(merged, entry)
+		if entry.Name != "" {
+			seen[entry.Name] = true
+		}
+	}
+	return merged
+}
+
 // pluginCatalogConfigDisabled mirrors Rust PluginRequestProcessor::load_catalog_config
 // (#40954): the catalog config is the effective config stack (system/user/runtime)
 // without a discovered project when `cwds` are empty/omitted, and project-inclusive
 // otherwise. It reports whether the plugins feature is disabled in that stack.
 func (r *RuntimeRouter) pluginCatalogConfigDisabled(cwds []string) bool {
-	if r == nil || r.services.Config == nil {
-		return false
-	}
-	params := &config.ConfigReadParams{}
-	clean := cleanStringSlice(cwds)
-	if len(clean) > 0 {
-		// Rust PluginRequestProcessor::load_catalog_config loads at the appserver
-		// process CWD (with project config) when cwds are present.
-		if cwd := r.threadStartDefaultCWD(); cwd != "" {
-			params.CWD = &cwd
-		}
-	}
-	read, err := r.services.Config.Read(params)
+	read, err := r.pluginCatalogConfig(cwds)
 	if err != nil || read == nil {
 		return false
 	}
 	return pluginCatalogDisabledFromValues(read.Config)
+}
+
+// pluginCatalogConfig reads the effective config stack that drives the plugin
+// catalog (Rust PluginRequestProcessor::load_catalog_config): non-project config
+// when `cwds` are empty/omitted, and the appserver process CWD (with project
+// config) when `cwds` are present.
+func (r *RuntimeRouter) pluginCatalogConfig(cwds []string) (*config.ConfigReadResponse, error) {
+	if r == nil || r.services.Config == nil {
+		return nil, nil
+	}
+	params := &config.ConfigReadParams{}
+	if len(cleanStringSlice(cwds)) > 0 {
+		if cwd := r.threadStartDefaultCWD(); cwd != "" {
+			params.CWD = &cwd
+		}
+	}
+	return r.services.Config.Read(params)
 }
 
 // pluginCatalogDisabledFromValues reports whether the plugins feature is disabled
