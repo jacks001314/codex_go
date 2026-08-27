@@ -314,3 +314,58 @@ func TestWindowsPathURICaseInsensitiveEqualityAndContainment(t *testing.T) {
 		}
 	}
 }
+
+func TestPathURIOverlapsSemanticsLikeRust(t *testing.T) {
+	parent, err := FromAbsoluteNativePath("/workspace", ConventionPosix)
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	child, err := FromAbsoluteNativePath("/workspace/a", ConventionPosix)
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	sibling, err := FromAbsoluteNativePath("/workspace/b", ConventionPosix)
+	if err != nil {
+		t.Fatalf("sibling: %v", err)
+	}
+	disjoint, err := FromAbsoluteNativePath("/workspace/c", ConventionPosix)
+	if err != nil {
+		t.Fatalf("disjoint: %v", err)
+	}
+	overlap, ok := parent.Overlaps(child)
+	if !ok || !overlap {
+		t.Fatalf("parent.Overlaps(child) = (%v,%v), want (true,true)", overlap, ok)
+	}
+	overlap, ok = parent.Overlaps(parent)
+	if !ok || !overlap {
+		t.Fatalf("Overlaps(equal) = (%v,%v), want (true,true)", overlap, ok)
+	}
+	// /workspace/b and /workspace/c are neither ancestor nor descendant.
+	overlap, ok = sibling.Overlaps(disjoint)
+	if !ok || overlap {
+		t.Fatalf("Overlaps(disjoint) = (%v,%v), want (false,true)", overlap, ok)
+	}
+}
+
+func TestPathURILexicalDepthAndJoinDescendantLikeRust(t *testing.T) {
+	base, err := FromAbsoluteNativePath("/workspace", ConventionPosix)
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	if depth, ok := base.LexicalDepth(); !ok || depth != 1 {
+		t.Fatalf("LexicalDepth = (%d,%v), want (1,true)", depth, ok)
+	}
+	child, err := base.JoinDescendant("a/b")
+	if err != nil {
+		t.Fatalf("JoinDescendant(a/b): %v", err)
+	}
+	if !child.StartsWith(base) {
+		t.Fatalf("JoinDescendant result %v does not start with base %v", child, base)
+	}
+	if _, err := base.JoinDescendant("/escape"); err == nil {
+		t.Fatal("JoinDescendant(/escape) = nil error, want absolute path rejected")
+	}
+	if _, err := base.JoinDescendant("../../escape"); err == nil {
+		t.Fatal("JoinDescendant(../../escape) = nil error, want escaping path rejected")
+	}
+}

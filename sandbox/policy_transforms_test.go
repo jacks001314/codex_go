@@ -78,3 +78,16 @@ func TestIntersectPermissionProfilesRetainsConstrainingDenyLikeRust(t *testing.T
 		t.Fatalf("retained deny = %#v", got.FileSystem.Entries[1])
 	}
 }
+
+func TestPathsMayOverlapMatchesAncestorDescendantAndDisjointLikeRust(t *testing.T) {
+	base := t.TempDir()
+	if !pathsMayOverlap(filepath.Join(base, "a"), filepath.Join(base, "a", "b")) {
+		t.Fatal("pathsMayOverlap(ancestor, descendant) = false, want true")
+	}
+	if !pathsMayOverlap(filepath.Join(base, "a"), filepath.Join(base, "a")) {
+		t.Fatal("pathsMayOverlap(equal) = false, want true")
+	}
+	if pathsMayOverlap(filepath.Join(base, "a"), filepath.Join(base, "b")) {
+		t.Fatal("pathsMayOverlap(disjoint) = true, want false")
+	}
+}

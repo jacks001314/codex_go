@@ -229,6 +229,92 @@ func bytesEqualFoldASCII(a, b []byte) bool {
 	return true
 }
 
+// Overlaps returns whether the lexical subtrees rooted at these URIs overlap.
+// The second return is false when either URI does not expose unambiguous
+// lexical components (opaque fallback or encoded native separators) so the
+// caller can fail closed. Equal URIs overlap even when opaque. Mirrors Rust
+// PathUri::overlaps (#41001).
+func (u *PathURI) Overlaps(other *PathURI) (bool, bool) {
+	if u == nil || other == nil {
+		return false, false
+	}
+	if u.Equal(other) {
+		return true, true
+	}
+	if _, ok := u.LexicalDepth(); !ok {
+		return false, false
+	}
+	if _, ok := other.LexicalDepth(); !ok {
+		return false, false
+	}
+	return u.StartsWith(other) || other.StartsWith(u), true
+}
+
+// IsOpaque returns true for a fallback URI that losslessly stores native path
+// bytes (Rust PathUri::is_opaque).
+func (u *PathURI) IsOpaque() bool {
+	if u == nil || u.url == nil {
+		return false
+	}
+	return opaqueFallbackBytes(u.url) != nil
+}
+
+// LexicalDepth returns the number of non-empty path segments when this URI is
+// safe for lexical containment. Opaque fallback URIs and segments containing
+// encoded native separators return false because they do not expose
+// unambiguous component boundaries. Mirrors Rust PathUri::lexical_depth (#41001).
+func (u *PathURI) LexicalDepth() (int, bool) {
+	if u == nil || u.url == nil {
+		return 0, false
+	}
+	if opaqueFallbackBytes(u.url) != nil {
+		return 0, false
+	}
+	if u.hasEncodedWindowsSeparators() {
+		return 0, false
+	}
+	if _, ok := u.InferConvention(); !ok {
+		return 0, false
+	}
+	segments := nonEmptySegments(u.segments())
+	for _, segment := range segments {
+		decoded, err := url.PathUnescape(segment)
+		if err != nil {
+			return 0, false
+		}
+		if strings.Contains(decoded, "/") || strings.Contains(decoded, `\`) {
+			return 0, false
+		}
+	}
+	return len(segments), true
+}
+
+// JoinDescendant lexically resolves a relative native path that remains at or
+// below this URI. Absolute, Windows drive-relative, and escaping paths are
+// rejected. Mirrors Rust PathUri::join_descendant (#41001).
+func (u *PathURI) JoinDescendant(nativePath string) (*PathURI, error) {
+	descendant, err := u.Join(nativePath)
+	if err != nil {
+		return nil, err
+	}
+	convention, ok := u.InferConvention()
+	if !ok {
+		return nil, &ParseError{Reason: "invalid file URI path", Path: u.String()}
+	}
+	if strings.HasPrefix(nativePath, "/") {
+		return nil, &ParseError{Reason: "path must resolve to a relative descendant when joining a path URI", Path: nativePath}
+	}
+	if convention == ConventionWindows {
+		if strings.HasPrefix(nativePath, `\`) || isDriveRelative(nativePath) {
+			return nil, &ParseError{Reason: "path must resolve to a relative descendant when joining a path URI", Path: nativePath}
+		}
+	}
+	if !descendant.StartsWith(u) {
+		return nil, &ParseError{Reason: "path must resolve to a relative descendant when joining a path URI", Path: nativePath}
+	}
+	return descendant, nil
+}
+
 func toASCIILower(b byte) byte {
 	if b >= 'A' && b <= 'Z' {
 		return b + ('a' - 'A')

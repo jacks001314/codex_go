@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"codex_go/utils"
+
 	"github.com/bmatcuk/doublestar/v4"
 )
 
@@ -182,11 +184,47 @@ func permissionDenyConstrainsGrant(deny FileSystemSandboxEntry, accepted []FileS
 		if deny.Path.Type == "glob_pattern" {
 			denyPath = permissionGlobStaticPrefix(materializePermissionGlob(deny.Path.Pattern, cwd))
 		}
-		if denyPath != "" && (sameOrWithin(denyPath, grantPath) || sameOrWithin(grantPath, denyPath)) {
+		if denyPath != "" && pathsMayOverlap(denyPath, grantPath) {
 			return true
 		}
 	}
 	return false
+}
+
+// pathsMayOverlap reports whether two resolved filesystem paths occupy the
+// same lexical subtree, matching Rust #41001's URI-native overlap check. The
+// resolved paths are converted to PathUri values and compared with Overlaps;
+// when a path is opaque or has ambiguous encoded component boundaries the
+// comparison fails closed (treated as overlapping) so a deny is preserved
+// rather than silently dropped.
+func pathsMayOverlap(denyPath, grantPath string) bool {
+	denyURI, err := uriFromPolicyPath(denyPath)
+	if err != nil {
+		return true
+	}
+	grantURI, err := uriFromPolicyPath(grantPath)
+	if err != nil {
+		return true
+	}
+	overlap, ok := denyURI.Overlaps(grantURI)
+	if !ok {
+		// Ambiguous component boundaries: fail closed.
+		return true
+	}
+	return overlap
+}
+
+func uriFromPolicyPath(nativePath string) (*utils.PathURI, error) {
+	if strings.TrimSpace(nativePath) == "" {
+		return nil, &utils.ParseError{Reason: "empty path"}
+	}
+	if utils.CrossPlatformSlash(nativePath) != nativePath && strings.Contains(nativePath, `\`) {
+		// Prefer the Windows convention for non-forward-slash paths so drive
+		// letters and UNC hosts are preserved.
+		convention := utils.ConventionWindows
+		return utils.FromAbsoluteNativePath(filepath.ToSlash(nativePath), convention)
+	}
+	return utils.FromHostNativePath(filepath.Clean(nativePath))
 }
 
 func materializePermissionGlob(pattern, cwd string) string {
