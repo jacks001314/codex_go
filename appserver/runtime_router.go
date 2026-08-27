@@ -8051,6 +8051,16 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 	if r.services.Config != nil {
 		r.configureMCPFromConfig()
 	}
+	// Rust #40954: the plugin catalog honors the effective config stack. When the
+	// plugins feature is disabled it returns an empty catalog; when `cwds` are
+	// omitted/empty the catalog config excludes project config.
+	if r.pluginCatalogConfigDisabled(params.CWDs) {
+		return &plugin.PluginListResponse{
+			Marketplaces:          []plugin.PluginMarketplaceEntry{},
+			MarketplaceLoadErrors: []plugin.MarketplaceLoadErrorInfo{},
+			FeaturedPluginIDs:     []string{},
+		}, nil
+	}
 	response := r.requirePlugins().List(&params)
 	if r.services.Plugins.TargetCuratedMarketplace() == plugin.TargetCuratedOpenAIWithRemote {
 		r.startInstalledRemotePluginSync()
@@ -8058,6 +8068,33 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 		r.maybeStartCuratedRepoSync(true)
 	}
 	return response, nil
+}
+
+// pluginCatalogConfigDisabled mirrors Rust PluginRequestProcessor::load_catalog_config
+// (#40954): the catalog config is the effective config stack (system/user/runtime)
+// without a discovered project when `cwds` are empty/omitted, and project-inclusive
+// otherwise. It reports whether the plugins feature is disabled in that stack.
+func (r *RuntimeRouter) pluginCatalogConfigDisabled(cwds []string) bool {
+	if r == nil || r.services.Config == nil {
+		return false
+	}
+	params := &config.ConfigReadParams{}
+	clean := cleanStringSlice(cwds)
+	if len(clean) > 0 {
+		cwd := clean[0]
+		params.CWD = &cwd
+	}
+	read, err := r.services.Config.Read(params)
+	if err != nil || read == nil {
+		return false
+	}
+	return pluginCatalogDisabledFromValues(read.Config)
+}
+
+// pluginCatalogDisabledFromValues reports whether the plugins feature is disabled
+// in a config value map (Rust #40954 Feature::Plugins gate for the plugin catalog).
+func pluginCatalogDisabledFromValues(values map[string]any) bool {
+	return !features.Enabled((&config.Config{Values: values}).FeatureSettings(), "plugins")
 }
 
 func (r *RuntimeRouter) handlePluginInstalled(request *Request) (*plugin.PluginInstalledResponse, error) {

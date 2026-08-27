@@ -26802,3 +26802,19 @@ func TestPersistentModeInstructionsFragmentLikeRust(t *testing.T) {
 		t.Fatalf("guardian session produced fragment")
 	}
 }
+
+func TestPluginCatalogDisabledFromValues(t *testing.T) {
+	// Default (no values) leaves the plugins feature enabled.
+	if pluginCatalogDisabledFromValues(nil) {
+		t.Fatal("nil config values should default to plugins enabled")
+	}
+	if pluginCatalogDisabledFromValues(map[string]any{}) {
+		t.Fatal("empty config values should default to plugins enabled")
+	}
+	if pluginCatalogDisabledFromValues(map[string]any{"features": map[string]any{"plugins": true}}) {
+		t.Fatal("explicit plugins=true should not be disabled")
+	}
+	if !pluginCatalogDisabledFromValues(map[string]any{"features": map[string]any{"plugins": false}}) {
+		t.Fatal("plugins=false should disable the plugin catalog")
+	}
+}
