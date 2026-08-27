@@ -26725,3 +26725,47 @@ func TestStandaloneToolOutputInputItemLikeRust(t *testing.T) {
 		t.Fatalf("standalone tool output must not carry a call_id: %#v", item)
 	}
 }
+
+func TestWriteStdinApprovalForTurnRequiresFreshApprovalLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nwrite_stdin_approval = true\n"), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+
+	// Feature enabled, no session approval yet -> the write is rejected.
+	if err := router.writeStdinApprovalForTurn(42, threadID, "turn-1", "hello\n"); err == nil {
+		t.Fatal("writeStdinApprovalForTurn() = nil, want rejection without a fresh approval")
+	}
+	// Granting a command session approval allows the write.
+	router.rememberCommandApprovalForSession(threadID)
+	if err := router.writeStdinApprovalForTurn(42, threadID, "turn-1", "hello\n"); err != nil {
+		t.Fatalf("writeStdinApprovalForTurn() after session approval error = %v", err)
+	}
+}
+
+func TestWriteStdinApprovalForTurnDisabledFeatureDoesNotGateLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	if err := router.writeStdinApprovalForTurn(42, threadID, "turn-1", "hello\n"); err != nil {
+		t.Fatalf("writeStdinApprovalForTurn() with feature off error = %v, want no gate", err)
+	}
+}

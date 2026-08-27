@@ -513,6 +513,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	if router.services.UnifiedExec == nil {
 		router.services.UnifiedExec = tool.NewUnifiedExecManager()
 	}
+	router.services.UnifiedExec.SetWriteStdinApproval(router.writeStdinApprovalForTurn)
 	if router.services.Config != nil {
 		_, _ = router.services.Config.MaybeMigratePersonality()
 	}
@@ -11911,6 +11912,40 @@ func (r *RuntimeRouter) serverRequestSinkConfigured() bool {
 
 func (r *RuntimeRouter) commandApprovalForSession(threadID string) bool {
 	return r.approvalForSession(r.commandApprovals, threadID)
+}
+
+// writeStdinApprovalForTurn gates writing non-empty input to an escalated
+// unified-exec terminal when the write_stdin_approval feature is enabled
+// (Rust #40978). The callback carries the process thread/turn so the feature
+// flag can be resolved per-turn; a fresh command/session approval is required
+// before allowing the write, otherwise the write is rejected.
+func (r *RuntimeRouter) writeStdinApprovalForTurn(processID int, threadID string, turnID string, chars string) error {
+	if r == nil {
+		return nil
+	}
+	cwd := ""
+	if record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), false, false); err == nil && record != nil {
+		cwd = strings.TrimSpace(record.Metadata.CWD)
+	}
+	var read *config.ConfigReadResponse
+	if r.services.Config != nil {
+		params := &config.ConfigReadParams{}
+		if cwd != "" {
+			params.CWD = stringPtrIfNotEmpty(cwd)
+		}
+		read, _ = r.services.Config.Read(params)
+	}
+	settings := (&config.Config{Values: map[string]any{}}).FeatureSettings()
+	if read != nil {
+		settings = (&config.Config{Values: read.Config}).FeatureSettings()
+	}
+	if !features.Enabled(settings, "write_stdin_approval") {
+		return nil
+	}
+	if r.commandApprovalForSession(strings.TrimSpace(threadID)) {
+		return nil
+	}
+	return fmt.Errorf("writing input to this escalated terminal requires a fresh approval")
 }
 
 func (r *RuntimeRouter) fileChangeApprovalForSession(threadID string) bool {
