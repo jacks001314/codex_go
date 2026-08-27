@@ -45,3 +45,16 @@ func TestResolvePermissionsRejectsDisabledProfile(t *testing.T) {
 		t.Fatalf("ResolvePermissions(full access) error = nil, want failure")
 	}
 }
+func TestHasSymbolicRootReadAccessMirrorsReadOnly(t *testing.T) {
+	readOnly := &ResolvedWindowsSandboxPermissions{FileSystem: &coresandbox.SandboxPolicy{Kind: coresandbox.SandboxReadOnly}}
+	if !readOnly.HasSymbolicRootReadAccess("C:\\work") {
+		t.Fatal("read-only policy should expose a symbolic root read for cwd")
+	}
+	if readOnly.HasSymbolicRootReadAccess("") {
+		t.Fatal("read-only policy with empty cwd should not expose a symbolic root read")
+	}
+	writeOnly := &ResolvedWindowsSandboxPermissions{FileSystem: &coresandbox.SandboxPolicy{Kind: coresandbox.SandboxWorkspaceWrite}}
+	if writeOnly.HasSymbolicRootReadAccess("C:\\work") {
+		t.Fatal("workspace-write policy should not expose a symbolic root read")
+	}
+}

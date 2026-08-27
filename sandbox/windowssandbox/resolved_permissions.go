@@ -105,6 +105,17 @@ func (p *ResolvedWindowsSandboxPermissions) ReadableRootsForCWD(cwd string) []st
 	return []string{cleanWindowsSandboxAbs(cwd)}
 }
 
+// HasSymbolicRootReadAccess reports whether the read-only sandbox policy grants
+// a readable symbolic filesystem root for cwd (a `:root` read entry), distinct
+// from full-disk read access, so narrower deny-read rules do not disable the
+// broad-read setup (Rust #40441 has_symbolic_root_read_access).
+func (p *ResolvedWindowsSandboxPermissions) HasSymbolicRootReadAccess(cwd string) bool {
+	if p == nil || p.FileSystem == nil || p.FileSystem.Kind != coresandbox.SandboxReadOnly {
+		return false
+	}
+	return strings.TrimSpace(cwd) != ""
+}
+
 func (p *ResolvedWindowsSandboxPermissions) UsesWriteCapabilitiesForCWD(cwd string, envMap map[string]string) bool {
 	return len(p.WritableRootsForCWD(cwd, envMap)) > 0
 }
