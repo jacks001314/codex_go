@@ -11312,8 +11312,14 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 					break
 				}
 			}
+			if info.ModelMessages != nil {
+				options.ModelConfirmationPolicies = info.ModelMessages.ConfirmationPolicies
+			}
 		}
 	}
+	// Rust omits the confirmation-policies request metadata for Guardian review
+	// sessions (is_basic_session_source), so the actor tools are the main model's.
+	options.SuppressActorConfirmationPolicies = guardianTurnStart(params)
 	if options.Shell != nil && cfg != nil {
 		options.Shell.Validation.AdditionalPermissionsAllowed = features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals")
 		if policy := strings.TrimSpace(stringConfigValue(cfg, "approval_policy")); policy != "" {

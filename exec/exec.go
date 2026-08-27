@@ -1073,6 +1073,16 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.ImageGeneration = run.ImageGeneration
 		options.ViewImage = run.ViewImage
 	}
+	if run != nil && strings.TrimSpace(run.Model) != "" {
+		// Forward the issuing model's confirmation-policy documents to actor MCP
+		// calls (#41072); resolved from the same catalog as the turn model.
+		info := execModelInfo(strings.TrimSpace(run.Model), run.Config)
+		if info.ModelMessages != nil {
+			options.ModelConfirmationPolicies = info.ModelMessages.ConfirmationPolicies
+		}
+	}
+	// Guardian review sessions omit the confirmation-policies request metadata.
+	options.SuppressActorConfirmationPolicies = req != nil && strings.EqualFold(strings.TrimSpace(req.Exec.Subcommand), "review")
 	options.EnableAgents = run != nil && run.AgentController != nil
 	if options.EnableAgents {
 		options.AgentController = run.AgentController

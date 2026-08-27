@@ -136,6 +136,74 @@ func TestCodexAppsMCPToolRequestMetaIncludesCallIDLikeRust(t *testing.T) {
 	}
 }
 
+func TestMCPToolExecutorAttachesConfirmationPoliciesForNodeREPL(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName: "node_repl",
+		ConfirmationPolicies: &ActorConfirmationPolicies{
+			BrowserUse:  "# Browser confirmations\n\nKeep {{literal_markdown}}.\n",
+			ComputerUse: "  # Native confirmations\r\n\nKeep ${native_markdown}.\n",
+		},
+	})
+	meta := executor.requestMetaForCall().(map[string]any)
+	policies, ok := meta[ConfirmationPoliciesMetaKey].(map[string]any)
+	if !ok {
+		t.Fatalf("confirmation policies meta = %#v, want object", meta[ConfirmationPoliciesMetaKey])
+	}
+	if policies["browser_use"] != "# Browser confirmations\n\nKeep {{literal_markdown}}.\n" ||
+		policies["computer_use"] != "  # Native confirmations\r\n\nKeep ${native_markdown}.\n" {
+		t.Fatalf("confirmation policies = %#v", policies)
+	}
+}
+
+func TestMCPToolExecutorConfirmationPoliciesEmptyForNilPolicies(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{ServerName: "cua_repl"})
+	meta := executor.requestMetaForCall().(map[string]any)
+	policies, ok := meta[ConfirmationPoliciesMetaKey].(map[string]any)
+	if !ok || len(policies) != 0 {
+		t.Fatalf("confirmation policies meta = %#v, want empty object", meta[ConfirmationPoliciesMetaKey])
+	}
+}
+
+func TestMCPToolExecutorOmitConfirmationPoliciesForNonNodeREPL(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:           "filesystem",
+		ConfirmationPolicies: &ActorConfirmationPolicies{BrowserUse: "b"},
+	})
+	meta, _ := executor.requestMetaForCall().(map[string]any)
+	if meta != nil {
+		if _, ok := meta[ConfirmationPoliciesMetaKey]; ok {
+			t.Fatalf("confirmation policies meta present for non-node-repl server: %#v", meta)
+		}
+	}
+}
+
+func TestMCPToolExecutorSuppressConfirmationPoliciesForGuardian(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:                        "cua_repl",
+		SuppressActorConfirmationPolicies: true,
+		ConfirmationPolicies:              &ActorConfirmationPolicies{BrowserUse: "b"},
+	})
+	meta, _ := executor.requestMetaForCall().(map[string]any)
+	if meta != nil {
+		if _, ok := meta[ConfirmationPoliciesMetaKey]; ok {
+			t.Fatalf("confirmation policies meta present for Guardian session: %#v", meta)
+		}
+	}
+}
+
+func TestIsNodeReplBackedServer(t *testing.T) {
+	for _, name := range []string{"node_repl", "cua_repl"} {
+		if !IsNodeReplBackedServer(name) {
+			t.Fatalf("IsNodeReplBackedServer(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"filesystem", "calendar", "mcp__node_repl", "", "node_repl "} {
+		if IsNodeReplBackedServer(name) {
+			t.Fatalf("IsNodeReplBackedServer(%q) = true, want false", name)
+		}
+	}
+}
+
 func TestMCPToolExecutorHookPayloadsUsePrefixedName(t *testing.T) {
 	executor := NewToolExecutor(&ToolExecutorOptions{
 		ServerName: "filesystem",

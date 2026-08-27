@@ -12,6 +12,7 @@ import (
 
 	"codex_go/agent"
 	"codex_go/mcp"
+	"codex_go/model"
 	"codex_go/plugin"
 	"codex_go/skillprovider"
 	"codex_go/tool"
@@ -26,6 +27,27 @@ func TestDynamicToolPreservesInlineAudioContent(t *testing.T) {
 	item := modelItems[0].(map[string]any)
 	if item["type"] != "input_audio" || item["audio_url"] != "data:audio/wav;base64,YXVkaW8=" {
 		t.Fatalf("model item = %#v", item)
+	}
+}
+
+func TestMcpActorConfirmationPoliciesMapping(t *testing.T) {
+	browser := "# Browser confirmations\n\nKeep.\n"
+	computer := "# Native confirmations."
+	cp := &model.ConfirmationPolicies{BrowserUse: &browser, ComputerUse: &computer}
+	actor := mcpActorConfirmationPolicies(cp)
+	if actor == nil || actor.BrowserUse != browser || actor.ComputerUse != computer {
+		t.Fatalf("actor confirmation policies = %#v", actor)
+	}
+	// Empty-string overrides are preserved (Rust forwards text verbatim).
+	empty := ""
+	cpEmpty := &model.ConfirmationPolicies{BrowserUse: &empty}
+	actorEmpty := mcpActorConfirmationPolicies(cpEmpty)
+	if actorEmpty == nil || actorEmpty.BrowserUse != "" || actorEmpty.ComputerUse != "" {
+		t.Fatalf("empty override actor policies = %#v", actorEmpty)
+	}
+	// A nil input maps to nil so the executor attaches an empty object.
+	if mcpActorConfirmationPolicies(nil) != nil {
+		t.Fatal("nil model confirmation policies should map to nil actor policies")
 	}
 }
 

@@ -15,11 +15,31 @@ const (
 	LegacyMCPToolNamePrefix = "mcp__"
 	MCPToolNameDelimiter    = "__"
 	openAIFileHookInputKey  = "_codex_openai_file_arguments"
+	// ConfirmationPoliciesMetaKey mirrors Rust protocol::mcp::
+	// CONFIRMATION_POLICIES_META_KEY; host-supplied confirmation-policy
+	// documents forwarded to Node REPL-backed actor calls (#41072).
+	ConfirmationPoliciesMetaKey = "openai/confirmation_policies"
 	// maxSerializedMCPToolBytes mirrors Rust MAX_SERIALIZED_MCP_TOOL_BYTES:
 	// the cap above which Agent Plugin v1 tools degrade to an accept-anything
 	// object schema (responses_api.rs).
 	maxSerializedMCPToolBytes = 8_000
 )
+
+// ActorConfirmationPolicies carries the issuing model's Browser Use and native
+// Computer Use confirmation-policy Markdown (Rust
+// protocol::openai_models::ConfirmationPolicies, #41072), forwarded verbatim in
+// the openai/confirmation_policies request metadata for node_repl/cua_repl
+// actor calls.
+type ActorConfirmationPolicies struct {
+	BrowserUse  string
+	ComputerUse string
+}
+
+// IsNodeReplBackedServer mirrors Rust protocol::mcp::is_node_repl_backed_server:
+// whether a raw MCP server name identifies a Node REPL-backed actor server.
+func IsNodeReplBackedServer(server string) bool {
+	return server == "node_repl" || server == "cua_repl"
+}
 
 func mustMarshalJSON(value any) []byte {
 	data, err := json.Marshal(value)
@@ -48,6 +68,14 @@ type ToolExecutorOptions struct {
 	// get Rust's oversized-schema fallback in Spec (mirrors
 	// agent_plugin_mcp_tool_to_responses_api_tool).
 	AgentPlugin bool
+	// ConfirmationPolicies carries the issuing model's confirmation-policy
+	// Markdown (#41072), forwarded verbatim in the openai/confirmation_policies
+	// request metadata for node_repl/cua_repl actor calls. Nil still attaches an
+	// empty object (clearing startup defaults).
+	ConfirmationPolicies *ActorConfirmationPolicies
+	// SuppressActorConfirmationPolicies omits the confirmation-policies metadata
+	// entirely (Guardian review sessions), mirroring Rust's basic-session gate.
+	SuppressActorConfirmationPolicies bool
 }
 
 type ToolExecutor struct {
@@ -67,6 +95,8 @@ type ToolExecutor struct {
 	openAIFileRewriter            *OpenAIFileRewriter
 	openAIFileInputOptionalFields map[string][]string
 	agentPlugin                   bool
+	confirmationPolicies          *ActorConfirmationPolicies
+	suppressActorPolicies         bool
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -98,6 +128,8 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.openAIFileRewriter = options.OpenAIFileRewriter
 	executor.openAIFileInputOptionalFields = cloneOpenAIFileOptionalFields(options.OpenAIFileInputOptionalFields)
 	executor.agentPlugin = options.AgentPlugin
+	executor.confirmationPolicies = options.ConfirmationPolicies
+	executor.suppressActorPolicies = options.SuppressActorConfirmationPolicies
 	return executor
 }
 
@@ -251,10 +283,30 @@ func (e *ToolExecutor) requestMetaForCall(callID ...string) any {
 		}
 		requestMeta["_codex_apps"] = appsMeta
 	}
+	if IsNodeReplBackedServer(e.resolvedServerName()) && !e.suppressActorPolicies {
+		requestMeta[ConfirmationPoliciesMetaKey] = e.actorConfirmationPoliciesMeta()
+	}
 	if len(requestMeta) == 0 {
 		return nil
 	}
 	return requestMeta
+}
+
+// actorConfirmationPoliciesMeta builds the openai/confirmation_policies value for
+// an eligible actor call. It is always a (possibly empty) object so runtimes
+// can clear startup defaults; text is forwarded verbatim.
+func (e *ToolExecutor) actorConfirmationPoliciesMeta() map[string]any {
+	policies := map[string]any{}
+	if e == nil || e.confirmationPolicies == nil {
+		return policies
+	}
+	if e.confirmationPolicies.BrowserUse != "" {
+		policies["browser_use"] = e.confirmationPolicies.BrowserUse
+	}
+	if e.confirmationPolicies.ComputerUse != "" {
+		policies["computer_use"] = e.confirmationPolicies.ComputerUse
+	}
+	return policies
 }
 
 func (e *ToolExecutor) PreToolUsePayload(invocation *tool.Invocation) (*tool.PreToolUsePayload, bool) {

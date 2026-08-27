@@ -64,6 +64,7 @@ type ModelMessages struct {
 	MultiAgent           *MultiAgentMessages        `json:"multi_agent,omitempty"`
 	TokenBudget          *ModelTokenBudgetConfig    `json:"token_budget,omitempty"`
 	AutoReview           *AutoReviewMessages        `json:"auto_review,omitempty"`
+	ConfirmationPolicies *ConfirmationPolicies      `json:"confirmation_policies,omitempty"`
 }
 
 type CollaborationModeMessages struct {
@@ -108,6 +109,15 @@ type AutoReviewMessages struct {
 	TimeoutInstructions   *string `json:"timeout_instructions,omitempty"`
 }
 
+// ConfirmationPolicies mirrors Rust protocol::openai_models::ConfirmationPolicies
+// (#41072): model-owned replacement Markdown for the Browser Use and native
+// Computer Use confirmation-policy documents, forwarded unchanged to actor MCP
+// tools. Pointer fields preserve explicit empty-string overrides.
+type ConfirmationPolicies struct {
+	BrowserUse  *string `json:"browser_use,omitempty"`
+	ComputerUse *string `json:"computer_use,omitempty"`
+}
+
 func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		InstructionsTemplate  string                     `json:"instructions_template"`
@@ -116,6 +126,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 		MultiAgent            *MultiAgentMessages        `json:"multi_agent"`
 		TokenBudget           *ModelTokenBudgetConfig    `json:"token_budget"`
 		AutoReview            *AutoReviewMessages        `json:"auto_review"`
+		ConfirmationPolicies  *ConfirmationPolicies      `json:"confirmation_policies"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -125,6 +136,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	m.MultiAgent = raw.MultiAgent
 	m.TokenBudget = raw.TokenBudget
 	m.AutoReview = raw.AutoReview
+	m.ConfirmationPolicies = raw.ConfirmationPolicies
 	if raw.InstructionsVariables != nil {
 		m.PersonalityDefault = raw.InstructionsVariables["personality_default"]
 		m.PersonalityFriendly = raw.InstructionsVariables["personality_friendly"]
@@ -1007,6 +1019,9 @@ func setInstructionsTemplate(model *ModelInfo, template string) {
 	// Rust #38619: a base-instructions override replaces the message set, so
 	// catalog-provided multi-agent role/mode messages are cleared too.
 	messages.MultiAgent = nil
+	// Rust #41072: the override also drops the catalog-provided confirmation-
+	// policy documents (with_config_overrides sets confirmation_policies: None).
+	messages.ConfirmationPolicies = nil
 }
 
 // clearInstructionVariables removes the personality instruction source while

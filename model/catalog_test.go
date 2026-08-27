@@ -431,6 +431,50 @@ func TestModelMessagesAutoReviewParsingPreservesEmptyOverridesLikeRust(t *testin
 	}
 }
 
+func TestModelMessagesConfirmationPoliciesRoundTrip(t *testing.T) {
+	browser := "# Browser confirmations\n\nKeep {{literal_markdown}}.\n"
+	computer := "  # Native confirmations\r\n\nKeep ${native_markdown}.\n"
+	messages := ModelMessages{
+		ConfirmationPolicies: &ConfirmationPolicies{
+			BrowserUse:  &browser,
+			ComputerUse: &computer,
+		},
+	}
+	data, err := json.Marshal(&messages)
+	if err != nil {
+		t.Fatalf("marshal confirmation_policies messages error = %v", err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatalf("unmarshal marshaled value error = %v", err)
+	}
+	policies, ok := value["confirmation_policies"].(map[string]any)
+	if !ok {
+		t.Fatalf("confirmation_policies not serialized: %s", string(data))
+	}
+	if policies["browser_use"] != browser || policies["computer_use"] != computer {
+		t.Fatalf("confirmation_policies = %#v", policies)
+	}
+
+	var parsed ModelMessages
+	if err := json.Unmarshal([]byte(`{"confirmation_policies":{"browser_use":"b","computer_use":"c"}}`), &parsed); err != nil {
+		t.Fatalf("unmarshal confirmation_policies messages error = %v", err)
+	}
+	if parsed.ConfirmationPolicies == nil ||
+		parsed.ConfirmationPolicies.BrowserUse == nil || *parsed.ConfirmationPolicies.BrowserUse != "b" ||
+		parsed.ConfirmationPolicies.ComputerUse == nil || *parsed.ConfirmationPolicies.ComputerUse != "c" {
+		t.Fatalf("parsed confirmation_policies = %#v", parsed.ConfirmationPolicies)
+	}
+
+	// A base-instructions override replaces the message set, dropping the
+	// catalog-provided confirmation-policy documents (Rust #41072).
+	model := ModelInfo{Slug: "gpt-test", ModelMessages: &messages}
+	overridden := WithConfigOverrides(model, &ModelsManagerConfig{BaseInstructions: "override"})
+	if overridden.ModelMessages == nil || overridden.ModelMessages.ConfirmationPolicies != nil {
+		t.Fatalf("base-instructions override retained confirmation_policies: %#v", overridden.ModelMessages)
+	}
+}
+
 func TestServiceTierForRequest(t *testing.T) {
 	info := &ModelInfo{ServiceTiers: []string{"priority", "flex"}}
 	if got := ServiceTierForRequest(info, "fast"); got != "priority" {

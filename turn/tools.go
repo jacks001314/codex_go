@@ -10,6 +10,7 @@ import (
 	"codex_go/compact"
 	featureflags "codex_go/features"
 	"codex_go/mcp"
+	"codex_go/model"
 	"codex_go/plugin"
 	"codex_go/sandbox"
 	"codex_go/skillprovider"
@@ -39,6 +40,14 @@ type ToolRegistryOptions struct {
 	SkillProviders            *skillprovider.Registry
 	OpenAIFileRewriter        *mcp.OpenAIFileRewriter
 	Model                     string
+	// ModelConfirmationPolicies carries the issuing model's Browser Use /
+	// Computer Use confirmation-policy Markdown (#41072), forwarded to actor MCP
+	// calls. Nil results in an empty openai/confirmation_policies object for
+	// eligible node_repl/cua_repl calls.
+	ModelConfirmationPolicies *model.ConfirmationPolicies
+	// SuppressActorConfirmationPolicies omits the confirmation-policies request
+	// metadata (Guardian review sessions).
+	SuppressActorConfirmationPolicies bool
 
 	AgentController                agent.ToolController
 	AgentExposure                  tool.Exposure
@@ -84,15 +93,15 @@ type ToolRegistryOptions struct {
 	NewContextWindow             func()
 	// SendUserMessageAsync, when set, emits an asynchronous user-visible
 	// agent message for the send_user_message_async tool (#39319).
-	SendUserMessageAsync func(message string)
-	DisableWaitAgent             bool
-	DynamicTools                 []DynamicToolSpec
-	ThreadID                     string
-	TurnID                       string
-	SessionID                    string
-	PluginMetricsResolver        func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
-	PluginMeasurementTracker     func(context.Context, plugin.PluginMeasurementBatch)
-	ExtraTools                   []tool.Executor
+	SendUserMessageAsync     func(message string)
+	DisableWaitAgent         bool
+	DynamicTools             []DynamicToolSpec
+	ThreadID                 string
+	TurnID                   string
+	SessionID                string
+	PluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
+	PluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
+	ExtraTools               []tool.Executor
 	// ExperimentalSupportedTools mirrors Rust model_info.experimental_supported_tools:
 	// tools the selected model declares as supported are registered
 	// conditionally (e.g. test_sync_tool for testing models).
@@ -481,15 +490,17 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 				Annotations: info.Tool.Annotations,
 				Meta:        info.Meta,
 			},
-			ToolName:                      tool.NamespacedName(info.CallableNamespace, info.CallableName),
-			ThreadID:                      options.ThreadID,
-			TurnID:                        options.TurnID,
-			RequestMeta:                   mcpRuntimeToolRequestMeta(&info),
-			OpenAIFileRewriter:            options.OpenAIFileRewriter,
-			OpenAIFileInputOptionalFields: info.OpenAIFileInputOptionalFields,
-			AgentPlugin:                   info.AgentPlugin,
-			ConnectorID:                   info.ConnectorID,
-			Model:                         options.Model,
+			ToolName:                          tool.NamespacedName(info.CallableNamespace, info.CallableName),
+			ThreadID:                          options.ThreadID,
+			TurnID:                            options.TurnID,
+			RequestMeta:                       mcpRuntimeToolRequestMeta(&info),
+			OpenAIFileRewriter:                options.OpenAIFileRewriter,
+			OpenAIFileInputOptionalFields:     info.OpenAIFileInputOptionalFields,
+			AgentPlugin:                       info.AgentPlugin,
+			ConnectorID:                       info.ConnectorID,
+			Model:                             options.Model,
+			ConfirmationPolicies:              mcpActorConfirmationPolicies(options.ModelConfirmationPolicies),
+			SuppressActorConfirmationPolicies: options.SuppressActorConfirmationPolicies,
 		})
 		spec := executor.Spec()
 		spec.NamespaceDescription = mcp.BoundedMCPNamespaceDescription(info.NamespaceDescription)
@@ -515,6 +526,23 @@ func mcpRuntimeToolRequestMeta(info *mcp.RuntimeToolInfo) map[string]any {
 		apps["connector_id"] = connectorID
 	}
 	return map[string]any{"_codex_apps": apps}
+}
+
+// mcpActorConfirmationPolicies converts the model catalog's confirmation-policy
+// documents into the MCP executor's actor metadata form (#41072). A nil input
+// remains nil so the executor attaches an empty object for eligible calls.
+func mcpActorConfirmationPolicies(cp *model.ConfirmationPolicies) *mcp.ActorConfirmationPolicies {
+	if cp == nil {
+		return nil
+	}
+	out := &mcp.ActorConfirmationPolicies{}
+	if cp.BrowserUse != nil {
+		out.BrowserUse = *cp.BrowserUse
+	}
+	if cp.ComputerUse != nil {
+		out.ComputerUse = *cp.ComputerUse
+	}
+	return out
 }
 
 type specOverrideExecutor struct {
