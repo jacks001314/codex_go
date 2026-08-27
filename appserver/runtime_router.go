@@ -8297,6 +8297,10 @@ func (r *RuntimeRouter) configureMCPFromConfig() {
 		requirements = current.Requirements
 	}
 	r.requireMCP().ApplyRuntimeConfig(r.runtimeMCPConfig(read.Config, r.services.Config.CodexHome(), runtimeAuth, requirements))
+	if snapshot != nil {
+		httpClient := r.httpClientForConfig(&config.Config{Values: read.Config})
+		r.requireMCP().SetTrustedAccess(mcp.ServiceTrustedAccessFromSnapshot(snapshot, r.chatGPTBaseURL(), httpClient))
+	}
 	r.mcpConfigManaged.Store(true)
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.invalidateAll()

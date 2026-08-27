@@ -637,6 +637,18 @@ type MCPService struct {
 	TrustedAccess *TrustedAccessContext
 }
 
+// SetTrustedAccess installs the trusted-access context used to attach
+// host-owned openai/entitlementContext metadata to eligible plugin MCP calls
+// (Rust #40992/#41005). It is a no-op when the service is nil.
+func (s *MCPService) SetTrustedAccess(context *TrustedAccessContext) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TrustedAccess = context
+}
+
 var sharedOptionalMCPStartupGrace = struct {
 	sync.Mutex
 	deadlines map[string]time.Time

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/auth"
 )
 
 func TestListStatusAndToolCall(t *testing.T) {
@@ -1715,5 +1717,37 @@ func TestMCPTrustedAccessAttachmentEligibilityLikeRust(t *testing.T) {
 		if _, present := metaMap3[entitlementContextKey]; present {
 			t.Fatalf("no trusted access context should not attach: %#v", meta3)
 		}
+	}
+}
+
+func TestServiceTrustedAccessFromSnapshotLikeRust(t *testing.T) {
+	base := "https://chatgpt.com/backend-api"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"programs":[{"program":"cyber","state":"active","grants":[{"level":"tac1","source":"individual"}]}]}`))
+	}))
+	defer server.Close()
+
+	// Non-ChatGPT auth -> nil context.
+	if got := ServiceTrustedAccessFromSnapshot(&auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk"}, base, server.Client()); got != nil {
+		t.Fatalf("non-ChatGPT snapshot produced a context: %#v", got)
+	}
+
+	// ChatGPT auth -> context with account identity and backend enabled.
+	chatgpt := &auth.AuthDotJSON{AuthMode: "chatgpt", Tokens: map[string]any{"access_token": "token", "account_id": "account-1", "chatgpt_user_id": "user-1"}}
+	ctx := ServiceTrustedAccessFromSnapshot(chatgpt, base, server.Client())
+	if ctx == nil || ctx.Account == nil || !ctx.Account.UsesCodexBackend {
+		t.Fatalf("ChatGPT snapshot produced no/useless context: %#v", ctx)
+	}
+	// Account identity is carried for the identity-consistency check.
+	if ctx.Account.AccountID != "account-1" || ctx.Account.ChatGPTUserID != "user-1" {
+		t.Fatalf("account identity = %#v", ctx.Account)
+	}
+	// A constructed context still attaches an unknown-status entitlement when
+	// the auth applier cannot verify the token.
+	meta := ctx.addContext(map[string]any{})
+	entitlements, _ := meta[entitlementContextKey].(map[string]any)
+	cyber, _ := entitlements["entitlements"].(map[string]any)["cyber_trusted_access"].(map[string]any)
+	if cyber == nil || cyber["status"] != "unknown" {
+		t.Fatalf("cyber_trusted_access = %#v", cyber)
 	}
 }
