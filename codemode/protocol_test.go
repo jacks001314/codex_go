@@ -328,3 +328,22 @@ func TestFramedCodecRoundTripsAndRejectsOversizedFrames(t *testing.T) {
 func uint64Ptr(value uint64) *uint64 {
 	return &value
 }
+
+func TestExecuteRequestTraceContextRoundTripsLikeRust(t *testing.T) {
+	req := ExecuteRequest{
+		ToolCallID:   "call-trace",
+		Source:       "text('hi')",
+		TraceContext: &CodeModeTraceContext{Traceparent: "00-abcdef1234567890abcdef1234567890-1234567890abcdef-01"},
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal execute request: %v", err)
+	}
+	var decoded ExecuteRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal execute request: %v", err)
+	}
+	if decoded.TraceContext == nil || decoded.TraceContext.Traceparent != "00-abcdef1234567890abcdef1234567890-1234567890abcdef-01" {
+		t.Fatalf("decoded TraceContext = %#v", decoded.TraceContext)
+	}
+}

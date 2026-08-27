@@ -101,6 +101,17 @@ type ExecuteRequest struct {
 	Source          string                   `json:"source"`
 	YieldTimeMS     *uint64                  `json:"yield_time_ms"`
 	MaxOutputTokens *int                     `json:"max_output_tokens"`
+	// TraceContext carries the W3C traceparent for this execution across the
+	// code-mode gRPC boundary (Rust #41017), so nested tool callback spans stay
+	// connected.
+	TraceContext *CodeModeTraceContext `json:"traceContext,omitempty"`
+}
+
+// CodeModeTraceContext carries the W3C traceparent/tracestate across the
+// code-mode gRPC boundary (Rust protocol::W3cTraceContext, #41017).
+type CodeModeTraceContext struct {
+	Traceparent string `json:"traceparent,omitempty"`
+	Tracestate  string `json:"tracestate,omitempty"`
 }
 
 func (r *ExecuteRequest) Validate() error {
