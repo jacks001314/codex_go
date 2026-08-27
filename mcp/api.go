@@ -247,7 +247,7 @@ type MCPServerStatus struct {
 	Name string `json:"name,omitempty"`
 	// RuntimeStatus reports the current thread-runtime connection state; nil
 	// when unavailable or the active configuration changed (Rust #40068).
-	RuntimeStatus     *MCPConnectionStatus `json:"runtimeStatus,omitempty"`
+	RuntimeStatus *MCPConnectionStatus `json:"runtimeStatus,omitempty"`
 	// PluginID reports the owning plugin for plugin-contributed servers and is
 	// nil for servers from other sources (Rust 78d3665d15).
 	PluginID          *string               `json:"pluginId,omitempty"`
@@ -639,13 +639,15 @@ var sharedOptionalMCPStartupGrace = struct {
 }{deadlines: map[string]time.Time{}}
 
 type cachedMCPHTTPClient struct {
-	key    string
-	client *httpClient
+	key            string
+	client         *httpClient
+	startupTimeout time.Duration
 }
 
 type cachedMCPStdioClient struct {
-	key    string
-	client *stdioClient
+	key            string
+	client         *stdioClient
+	startupTimeout time.Duration
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
@@ -2040,14 +2042,15 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 	sharedHTTPClient := s.sharedHTTPClient
 	sharedHTTPClientKey := s.sharedHTTPClientKey
 	key := mcpHTTPConnectionCacheKey(config, openAIForm, sharedHTTPClientKey)
-	if cached := s.httpClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() {
+	if cached := s.httpClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
+		cached.startupTimeout == config.StartupTimeout {
 		s.mu.Unlock()
 		return cached.client
 	}
 	old := s.deleteHTTPClientLocked(name)
 	cloned := cloneServerConfig(config)
 	client := newMCPHTTPClientWithShared(&cloned, openAIForm, sharedHTTPClient)
-	s.httpClients[name] = &cachedMCPHTTPClient{key: key, client: client}
+	s.httpClients[name] = &cachedMCPHTTPClient{key: key, client: client, startupTimeout: config.StartupTimeout}
 	s.mu.Unlock()
 	closeHTTPClients([]*httpClient{old})
 	return client
@@ -2114,13 +2117,14 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 	}
 	openAIForm := s.openAIForm
 	key := mcpConnectionCacheKey(config, openAIForm)
-	if cached := s.stdioClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() {
+	if cached := s.stdioClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
+		cached.startupTimeout == config.StartupTimeout {
 		s.mu.Unlock()
 		return cached.client
 	}
 	old := s.deleteStdioClientLocked(name)
 	client := newMCPStdioClientWithOpenAIForm(config, openAIForm)
-	s.stdioClients[name] = &cachedMCPStdioClient{key: key, client: client}
+	s.stdioClients[name] = &cachedMCPStdioClient{key: key, client: client, startupTimeout: config.StartupTimeout}
 	s.mu.Unlock()
 	closeStdioClients([]*stdioClient{old})
 	return client
