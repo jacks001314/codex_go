@@ -631,6 +631,10 @@ type MCPService struct {
 	generation          uint64
 	sharedHTTPClient    HTTPDoer
 	sharedHTTPClientKey string
+	// TrustedAccess, when set, attaches host-owned openai/entitlementContext
+	// metadata to eligible plugin MCP calls (Rust TrustedAccessContext,
+	// #40992/#41005).
+	TrustedAccess *TrustedAccessContext
 }
 
 var sharedOptionalMCPStartupGrace = struct {
@@ -1929,7 +1933,7 @@ func (s *MCPService) augmentToolCallMeta(params *MCPToolCallParams) any {
 		}
 	}
 	if !params.SupportsSandboxStateMeta {
-		return meta
+		return s.attachTrustedAccess(meta, params)
 	}
 	if strings.TrimSpace(params.SandboxCWD) == "" {
 		return meta
@@ -1965,7 +1969,55 @@ func (s *MCPService) augmentToolCallMeta(params *MCPToolCallParams) any {
 		out = map[string]any{}
 	}
 	out[mcpSandboxStateMetaCapability] = stateMap
-	return out
+	return s.attachTrustedAccess(out, params)
+}
+
+// attachTrustedAccess attaches the host-owned openai/entitlementContext
+// metadata when the call is from an eligible plugin MCP server and the service
+// carries a TrustedAccessContext (Rust #41005). Caller-supplied entitlement
+// context is replaced by a fresh verified (or unknown) result.
+func (s *MCPService) attachTrustedAccess(meta any, params *MCPToolCallParams) any {
+	if s == nil || s.TrustedAccess == nil || params == nil || !trustedAccessEligible(params) {
+		return meta
+	}
+	var metaMap map[string]any
+	switch current := meta.(type) {
+	case map[string]any:
+		metaMap = current
+	case nil:
+		metaMap = map[string]any{}
+	default:
+		return meta
+	}
+	return s.TrustedAccess.addContext(cloneAnyMap(metaMap))
+}
+
+// trustedAccessEligible reports whether a plugin MCP call is eligible for
+// host-owned entitlement metadata: a local (default environment) stdio call
+// with no arguments. The full plugin-ownership + read-only annotation +
+// requested-entitlement checks are performed by the app-server layer; this
+// helper keeps the attachment scoped to local stdio zero-argument calls.
+func trustedAccessEligible(params *MCPToolCallParams) bool {
+	if params == nil {
+		return false
+	}
+	if params.ServerEnvironmentID != "" && params.ServerEnvironmentID != DefaultMCPServerEnvironmentID {
+		return false
+	}
+	switch arguments := params.Arguments.(type) {
+	case nil:
+	case map[string]any:
+		if len(arguments) > 0 {
+			return false
+		}
+	case string:
+		if strings.TrimSpace(arguments) != "" {
+			return false
+		}
+	default:
+		return false
+	}
+	return true
 }
 
 func mcpToolCallMetaWithThreadID(meta any, threadID string) any {

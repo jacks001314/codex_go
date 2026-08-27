@@ -1679,3 +1679,41 @@ func TestTrustedAccessContextUnknownFallbackLikeRust(t *testing.T) {
 		t.Fatalf("no-backend cyber_trusted_access = %#v", cyber2)
 	}
 }
+
+func TestMCPTrustedAccessAttachmentEligibilityLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"programs":[{"program":"cyber","state":"active","grants":[{"level":"tac1","source":"individual"}]}]}`))
+	}))
+	defer server.Close()
+	service := NewMCPService(nil)
+	service.TrustedAccess = &TrustedAccessContext{
+		ChatGPTBaseURL: server.URL,
+		HTTPDoer:       server.Client().Do,
+		Account:        &TrustedAccessAccount{UsesCodexBackend: true},
+	}
+	base := &MCPToolCallParams{ServerName: "plugin-server", ToolName: "read", ServerEnvironmentID: DefaultMCPServerEnvironmentID, Arguments: map[string]any{}}
+	meta := service.augmentToolCallMeta(base)
+	entitlements, _ := meta.(map[string]any)[entitlementContextKey].(map[string]any)
+	cyber, _ := entitlements["entitlements"].(map[string]any)["cyber_trusted_access"].(map[string]any)
+	if cyber == nil || cyber["status"] != "granted" {
+		t.Fatalf("eligible meta cyber_trusted_access = %#v", cyber)
+	}
+
+	// Argument-bearing calls are not eligible.
+	arg := &MCPToolCallParams{ServerName: "plugin-server", ToolName: "read", ServerEnvironmentID: DefaultMCPServerEnvironmentID, Arguments: map[string]any{"path": "x"}}
+	meta2 := service.augmentToolCallMeta(arg)
+	if metaMap2, ok := meta2.(map[string]any); ok {
+		if _, present := metaMap2[entitlementContextKey]; present {
+			t.Fatalf("argument-bearing call should not attach entitlement context: %#v", meta2)
+		}
+	}
+
+	// No TrustedAccessContext -> no attachment.
+	plain := NewMCPService(nil)
+	meta3 := plain.augmentToolCallMeta(base)
+	if metaMap3, ok := meta3.(map[string]any); ok {
+		if _, present := metaMap3[entitlementContextKey]; present {
+			t.Fatalf("no trusted access context should not attach: %#v", meta3)
+		}
+	}
+}
