@@ -887,6 +887,11 @@ type Model struct {
 	vimFindKind     int
 	vimFindForward  bool
 	vimFindOperator string
+	// vimPendingG tracks the first key of the `gg` buffer-top jump chord
+	// (mirrors Rust vim_commands.rs jump_top). Once pending, the next `g`
+	// completes the chord and jumps to the top buffer line; any other key
+	// cancels the chord and is dispatched normally.
+	vimPendingG bool
 	// vimHasLastDelete and vimLastDeleteWord record the last completed Vim
 	// delete for dot-repeat (`.`): vimLastDeleteWord mirrors the Rust
 	// VimCommandState::last_change word-delete edit (#40521).

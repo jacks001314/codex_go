@@ -491,3 +491,96 @@ func TestVimDotRepeatReplaysDeleteCharLikeRust(t *testing.T) {
 		t.Fatalf("after dot = %q, want c", got)
 	}
 }
+
+// TestVimBufferJumpMotionsLikeRust pins #40958 gg / G buffer line jumps: gg
+// moves to the first line's first non-blank, G to the last line's.
+func TestVimBufferJumpMotionsLikeRust(t *testing.T) {
+	// gg jumps to the top buffer line. vimTestModel leaves the cursor on the
+	// last row, so this exercises the jump from the bottom.
+	m := vimTestModel("  alpha\n beta\n  gamma")
+	m = vimKeyPress(m, 'g')
+	m = vimKeyPress(m, 'g')
+	if got := vimCursorColumn(m); got != 2 {
+		t.Fatalf("gg cursor column = %d, want 2 (first non-blank of first line)", got)
+	}
+	if got := m.composer.Line(); got != 0 {
+		t.Fatalf("gg line = %d, want 0", got)
+	}
+
+	// G jumps to the last buffer line's first non-blank from the top.
+	m = vimTestModel("  alpha\n beta\n  gamma")
+	m.composer.CursorUp()
+	m.composer.CursorUp()
+	m.composer.SetCursor(0)
+	m = vimKeyPress(m, 'G')
+	if got := m.composer.Line(); got != 2 {
+		t.Fatalf("G line = %d, want 2", got)
+	}
+	if got := vimCursorColumn(m); got != 2 {
+		t.Fatalf("G cursor column = %d, want 2 (first non-blank of last line)", got)
+	}
+}
+
+// TestVimBufferJumpOperatorMotionsLikeRust pins the operator forms: dgg
+// deletes the buffer start through the end of the current line; dG / yG / cG
+// apply over the current line through the end of the buffer; and an
+// incomplete gg chord is cancelled by another key.
+func TestVimBufferJumpOperatorMotionsLikeRust(t *testing.T) {
+	// dgg on line one deletes from the buffer start through line one.
+	m := vimTestModel("line zero\nline one\nline two")
+	m.composer.CursorUp() // row 1 (line one)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'g')
+	m = vimKeyPress(m, 'g')
+	if got := m.composer.Value(); got != "line two" {
+		t.Fatalf("dgg value = %q, want line two", got)
+	}
+
+	// dG on line one deletes line one through the end of the buffer.
+	m = vimTestModel("line zero\nline one\nline two")
+	m.composer.CursorUp() // row 1 (line one)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'G')
+	if got := m.composer.Value(); got != "line zero\n" {
+		t.Fatalf("dG value = %q, want line zero\\n", got)
+	}
+
+	// yG yanks the current line through the end of the buffer.
+	m = vimTestModel("line zero\nline one\nline two")
+	m.composer.CursorUp() // row 1 (line one)
+	m = vimKeyPress(m, 'y')
+	m = vimKeyPress(m, 'G')
+	if got := m.vimYank; got != "line one\nline two" {
+		t.Fatalf("yG yank = %q, want line one\\nline two", got)
+	}
+
+	// ygg yanks the buffer start through the end of the current line.
+	m = vimTestModel("line zero\nline one\nline two")
+	m.composer.CursorUp() // row 1 (line one)
+	m = vimKeyPress(m, 'y')
+	m = vimKeyPress(m, 'g')
+	m = vimKeyPress(m, 'g')
+	if got := m.vimYank; got != "line zero\nline one\n" {
+		t.Fatalf("ygg yank = %q, want line zero\\nline one\\n", got)
+	}
+
+	// cG changes through the end of the buffer and enters insert mode.
+	m = vimTestModel("line zero\nline one\nline two")
+	m.composer.CursorUp() // row 1 (line one)
+	m = vimKeyPress(m, 'c')
+	m = vimKeyPress(m, 'G')
+	if got := m.composer.Value(); got != "line zero\n" || !m.vimInsert {
+		t.Fatalf("cG value = %q insert=%v, want line zero\\n + insert", got, m.vimInsert)
+	}
+
+	// An incomplete gg chord is cancelled by x, which then deletes a char.
+	m = vimTestModel("abc")
+	m = vimKeyPress(m, 'g')
+	m = vimKeyPress(m, 'x')
+	if got := m.composer.Value(); got != "bc" {
+		t.Fatalf("g then x value = %q, want bc (chord cancelled, x deletes)", got)
+	}
+	if m.vimPendingG {
+		t.Fatal("pending g chord not cleared after a non-g key")
+	}
+}

@@ -46,6 +46,16 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		}
 		return true
 	}
+	// The `gg` buffer-top jump chord (Rust #40958 vim_commands.rs jump_top):
+	// a pending `g` is completed by a second `g`; any other key cancels the
+	// chord and lets the current key be dispatched normally below.
+	if m.vimPendingG {
+		m.vimPendingG = false
+		if keySpec == "g" {
+			m.jumpToVimBufferLine(false)
+			return true
+		}
+	}
 	if m.vimInsert {
 		if keySpec == "esc" {
 			m.vimInsert = false
@@ -80,6 +90,16 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 			case keySpec == "esc":
 				m.vimPendingOp = ""
 				return true
+			case keySpec == "g":
+				// dg / yg / cg begin the `gg` buffer-top chord with the
+				// pending operator attached (Rust operator motion_jump_top).
+				m.vimPendingG = true
+				return true
+			case keySpec == "shift-g":
+				// dG / yG / cG apply the operator over the buffer-bottom
+				// range (Rust operator motion_jump_bottom).
+				m.jumpToVimBufferLine(true)
+				return true
 			case m.vimOperatorMotion(keySpec):
 				return true
 			default:
@@ -89,6 +109,17 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 				m.vimPendingObject = ""
 			}
 		}
+	}
+	// Buffer-jump motions in normal mode (Rust #40958): `gg` jumps to the
+	// first buffer line (a two-key chord started by the pending-g state), `G`
+	// jumps to the last buffer line.
+	if keySpec == "g" {
+		m.vimPendingG = true
+		return true
+	}
+	if keySpec == "shift-g" {
+		m.jumpToVimBufferLine(true)
+		return true
 	}
 	switch {
 	case m.keyMatches("vim_normal", "enter_insert", keySpec):
@@ -768,6 +799,50 @@ func (m *Model) applyVimOperatorValueRange(start, end int) {
 		m.vimSetCursorAtByteOffset(start)
 		m.vimInsert = true
 	}
+}
+
+// jumpToVimBufferLine mirrors Rust vim_commands.rs jump_to_vim_buffer_line
+// (#40958): with a pending operator it applies the operator over the buffer
+// jump range (gg deletes/yanks/changes the start of the buffer through the end
+// of the current line; G covers the current line through the end of the
+// buffer). Without an operator it moves the cursor to the first non-blank of
+// the first (gg) or last (G) buffer line.
+func (m *Model) jumpToVimBufferLine(last bool) {
+	op := m.vimPendingOp
+	if op != "" {
+		value := m.composer.Value()
+		lines := strings.Split(value, "\n")
+		row := m.composer.Line()
+		if row < 0 || row >= len(lines) {
+			m.cancelVimOperator()
+			return
+		}
+		var start, end int
+		if last {
+			start, end = m.vimLineStartOffset(row, lines), len(value)
+		} else {
+			start, end = 0, m.vimLineEndInclusive(row, lines)
+		}
+		if start > end {
+			start, end = end, start
+		}
+		m.applyVimOperatorValueRange(start, end)
+		return
+	}
+
+	// Plain motion: move to the target line and land on its first non-blank.
+	if last {
+		for m.composer.Line() < m.composer.LineCount()-1 {
+			m.composer.CursorDown()
+		}
+		m.composer.SetCursor(0)
+	} else {
+		for m.composer.Line() > 0 {
+			m.composer.CursorUp()
+		}
+		m.composer.SetCursor(0)
+	}
+	m.vimCursorLineStartNonBlank()
 }
 
 // vimWordStartIndex returns the rune index of the start of the word under or
