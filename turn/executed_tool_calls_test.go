@@ -178,3 +178,20 @@ func executedToolCallsFromObject(t *testing.T, object map[string]any) []map[stri
 	}
 	return calls
 }
+
+func TestExecutedToolCallRecorderAttachesCellCompletenessLikeRust(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-1", "exec-call")
+	execOutput := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "exec-call", Output: NewFunctionCallOutputPayload("running", nil)}
+	first, token := recorder.AttachPendingToPrompt([]any{execOutput})
+	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(first)[0])
+	metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata["cell_id"] != "cell-1" {
+		t.Fatalf("cell_id = %#v, want cell-1", metadata["cell_id"])
+	}
+	if metadata["tool_calls_complete"] != true {
+		t.Fatalf("tool_calls_complete = %#v, want true", metadata["tool_calls_complete"])
+	}
+	recorder.CommitAttachment(token)
+}

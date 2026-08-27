@@ -65,6 +65,12 @@ func (c ExecutedToolCall) MarshalJSON() ([]byte, error) {
 	}{Name: c.Name, Arguments: arguments})
 }
 
+// Truncated reports whether the recorded tool call had its arguments (or the
+// call itself) truncated by the recording limit (Rust #41058).
+func (c ExecutedToolCall) Truncated() bool {
+	return c.truncation != nil
+}
+
 func (i *AgentItem) AppendExecutedToolCalls(calls ...ExecutedToolCall) {
 	if i == nil || len(calls) == 0 {
 		return

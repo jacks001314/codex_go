@@ -70,6 +70,8 @@ type ToolResponseItem struct {
 	Tools     []any                      `json:"tools,omitempty"`
 
 	executedToolCalls []model.ExecutedToolCall
+	cellID            string
+	toolCallsComplete *bool
 }
 
 func (i *ToolResponseItem) ExecutedToolCalls() []model.ExecutedToolCall {
@@ -92,7 +94,25 @@ func (i *ToolResponseItem) CloneForExecutedToolCallPrompt() model.ExecutedToolCa
 	clone := *i
 	clone.Tools = append([]any(nil), i.Tools...)
 	clone.executedToolCalls = append([]model.ExecutedToolCall(nil), i.executedToolCalls...)
+	clone.cellID = i.cellID
+	if i.toolCallsComplete != nil {
+		value := *i.toolCallsComplete
+		clone.toolCallsComplete = &value
+	}
 	return &clone
+}
+
+func (i *ToolResponseItem) SetExecutedToolCallCell(cellID string) {
+	if i != nil {
+		i.cellID = strings.TrimSpace(cellID)
+	}
+}
+
+func (i *ToolResponseItem) SetExecutedToolCallsComplete(complete bool) {
+	if i != nil {
+		value := complete
+		i.toolCallsComplete = &value
+	}
 }
 
 func (i *ToolResponseItem) MarshalJSON() ([]byte, error) {
@@ -154,6 +174,13 @@ func marshalToolResponseItem(item *ToolResponseItem, value any) ([]byte, error) 
 	}
 	object["internal_chat_message_metadata_passthrough"] = map[string]any{
 		"executed_tool_calls": item.executedToolCalls,
+	}
+	metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if item.cellID != "" {
+		metadata["cell_id"] = item.cellID
+	}
+	if item.toolCallsComplete != nil {
+		metadata["tool_calls_complete"] = *item.toolCallsComplete
 	}
 	return json.Marshal(object)
 }

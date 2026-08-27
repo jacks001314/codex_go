@@ -164,6 +164,8 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 			continue
 		}
 		calls := make([]model.ExecutedToolCall, 0, 4)
+		cellID := ""
+		complete := true
 		if call, exists := r.direct[callID]; exists {
 			if _, seen := seenDirect[callID]; !seen {
 				calls = append(calls, call)
@@ -172,9 +174,15 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 			}
 		}
 		if groupID := r.outputs[callID]; groupID != "" {
+			if strings.HasPrefix(groupID, "cell:") {
+				cellID = strings.TrimPrefix(groupID, "cell:")
+			}
 			if _, seen := seenGroups[groupID]; !seen {
 				if group := r.groups[groupID]; group != nil && len(group.pending) > 0 {
 					for _, pending := range group.pending {
+						if pending.call.Truncated() {
+							complete = false
+						}
 						calls = append(calls, pending.call)
 					}
 					seenGroups[groupID] = struct{}{}
@@ -183,7 +191,11 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 			}
 		}
 		if len(calls) > 0 {
-			out[index] = clonePromptOutputWithExecutedToolCalls(out[index], calls)
+			var completePtr *bool
+			if strings.TrimSpace(cellID) != "" {
+				completePtr = &complete
+			}
+			out[index] = clonePromptOutputWithExecutedToolCalls(out[index], calls, cellID, completePtr)
 		}
 	}
 	if len(attachment.directCallIDs) == 0 && len(attachment.groups) == 0 {
@@ -348,21 +360,42 @@ func executedToolCallOutputType(itemType string) bool {
 	}
 }
 
-func clonePromptOutputWithExecutedToolCalls(value any, calls []model.ExecutedToolCall) any {
+func clonePromptOutputWithExecutedToolCalls(value any, calls []model.ExecutedToolCall, cellID string, complete *bool) any {
 	if carrier, ok := value.(model.ExecutedToolCallCarrier); ok {
 		clone := carrier.CloneForExecutedToolCallPrompt()
 		clone.ReplaceExecutedToolCalls(append(clone.ExecutedToolCalls(), calls...))
+		if agentItem, okValue := clone.(*model.AgentItem); okValue {
+			if strings.TrimSpace(cellID) != "" {
+				agentItem.SetExecutedToolCallCell(cellID)
+				agentItem.SetExecutedToolCallsComplete(*complete)
+			}
+			return clone
+		}
+		if toolItem, okValue := clone.(*ToolResponseItem); okValue {
+			if strings.TrimSpace(cellID) != "" {
+				toolItem.SetExecutedToolCallCell(cellID)
+				toolItem.SetExecutedToolCallsComplete(*complete)
+			}
+			return clone
+		}
 		return clone
 	}
 	if item, ok := value.(map[string]any); ok {
-		return &trustedExecutedToolCallMapItem{value: cloneExecutedToolCallMap(item), calls: append([]model.ExecutedToolCall(nil), calls...)}
+		out := &trustedExecutedToolCallMapItem{value: cloneExecutedToolCallMap(item), calls: append([]model.ExecutedToolCall(nil), calls...)}
+		if strings.TrimSpace(cellID) != "" {
+			out.cellID = cellID
+			out.complete = complete
+		}
+		return out
 	}
 	return value
 }
 
 type trustedExecutedToolCallMapItem struct {
-	value map[string]any
-	calls []model.ExecutedToolCall
+	value    map[string]any
+	calls    []model.ExecutedToolCall
+	cellID   string
+	complete *bool
 }
 
 func (i *trustedExecutedToolCallMapItem) ExecutedToolCalls() []model.ExecutedToolCall {
@@ -382,14 +415,20 @@ func (i *trustedExecutedToolCallMapItem) CloneForExecutedToolCallPrompt() model.
 	if i == nil {
 		return (*trustedExecutedToolCallMapItem)(nil)
 	}
-	return &trustedExecutedToolCallMapItem{value: cloneExecutedToolCallMap(i.value), calls: append([]model.ExecutedToolCall(nil), i.calls...)}
+	clone := &trustedExecutedToolCallMapItem{value: cloneExecutedToolCallMap(i.value), calls: append([]model.ExecutedToolCall(nil), i.calls...)}
+	clone.cellID = i.cellID
+	if i.complete != nil {
+		value := *i.complete
+		clone.complete = &value
+	}
+	return clone
 }
 
 func (i *trustedExecutedToolCallMapItem) MarshalJSON() ([]byte, error) {
 	if i == nil {
 		return []byte("null"), nil
 	}
-	return json.Marshal(mapWithExecutedToolCalls(i.value, i.calls))
+	return json.Marshal(mapWithExecutedToolCallMetadata(i.value, i.calls, i.cellID, i.complete))
 }
 
 func cloneExecutedToolCallMap(value map[string]any) map[string]any {
@@ -423,6 +462,28 @@ func mapWithExecutedToolCalls(value map[string]any, calls []model.ExecutedToolCa
 		metadata = map[string]any{}
 	}
 	metadata["executed_tool_calls"] = calls
+	clone["internal_chat_message_metadata_passthrough"] = metadata
+	return clone
+}
+
+func mapWithExecutedToolCallMetadata(value map[string]any, calls []model.ExecutedToolCall, cellID string, complete *bool) map[string]any {
+	clone := cloneExecutedToolCallMap(value)
+	if len(calls) == 0 && strings.TrimSpace(cellID) == "" && complete == nil {
+		return clone
+	}
+	metadata, _ := clone["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if len(calls) > 0 {
+		metadata["executed_tool_calls"] = calls
+	}
+	if strings.TrimSpace(cellID) != "" {
+		metadata["cell_id"] = cellID
+	}
+	if complete != nil {
+		metadata["tool_calls_complete"] = *complete
+	}
 	clone["internal_chat_message_metadata_passthrough"] = metadata
 	return clone
 }
