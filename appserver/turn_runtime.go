@@ -206,6 +206,36 @@ func currentTimeReminderExplicitlyConfigured(cfg *config.Config) bool {
 	return exists
 }
 
+// persistentModeInstructionsFragment builds the persistent-mode developer
+// guidance fragment when the turn uses persistent reasoning effort and is not a
+// Guardian session (Rust #41050). The approval-request channel is tailored to
+// send_user_message_async availability.
+func (r *RuntimeRouter) persistentModeInstructionsFragment(cfg *config.Config, params *turn.TurnStartParams, modelInfo *model.ModelInfo, threadID string) *contextfrag.SimpleFragment {
+	if cfg == nil || params == nil || r == nil || guardianTurnStart(params) {
+		return nil
+	}
+	effort := appReasoningEffortForTurn(cfg, params)
+	if !strings.EqualFold(strings.TrimSpace(effort), "persistent") {
+		return nil
+	}
+	asyncAvailable := false
+	if modelInfo != nil {
+		for _, supported := range modelInfo.ExperimentalSupportedTools {
+			if supported == tool.DefaultSendUserMessageAsyncToolName {
+				asyncAvailable = true
+				break
+			}
+		}
+	}
+	catalogInstructions := ""
+	if record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, false); err == nil && record != nil {
+		if meta, ok := record.Metadata.Extra["persistent_instructions"].(string); ok {
+			catalogInstructions = meta
+		}
+	}
+	return contextfrag.PersistentModeInstructions(effort, catalogInstructions, asyncAvailable, false)
+}
+
 func activeTurnDiffKey(threadID string, turnID string) string {
 	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
 }
@@ -5939,6 +5969,13 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		return nil, err
 	}
 	inputItems = append(inputItems, currentTimeInputItems...)
+	// Rust #41050: persistent-reasoning turns get bundled proactivity/follow-up
+	// developer guidance (tailored to send_user_message_async availability).
+	if fragment := r.persistentModeInstructionsFragment(cfg, params, modelInfo, threadID); fragment != nil {
+		if rendered := contextfrag.Render(fragment); rendered != nil {
+			instructions = strings.Join(nonEmpty([]string{instructions, rendered.Content}), "\n\n")
+		}
+	}
 	instructions = r.instructionsWithPluginContext(threadID, cfg, params, instructions)
 	var skillInputItems []any
 	var postToolInputItems turn.ToolPostExecutionInputItems
