@@ -11219,6 +11219,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			if reminder.ClockSource == config.CurrentTimeSourceExternal {
 				clockProvider = &appServerClockProvider{router: r}
 			}
+		} else if applyPersistentClockDefaults(cfg, params) {
+			// Rust #40942: persistent-reasoning turns default the current-time
+			// reminder and the clock.sleep tool on (no stale config to inherit).
+			enableCurrentTimeTool = true
+			enableSleepTool = true
 		}
 	}
 	var trustedPluginRoots plugin.TrustedPluginRoots

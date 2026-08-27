@@ -171,6 +171,41 @@ func appReasoningEffortForTurn(cfg *config.Config, params *turn.TurnStartParams)
 	return firstNonEmpty(stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort"))
 }
 
+// applyPersistentClockDefaults mirrors Rust time_reminder::apply_persistent_defaults
+// (#40942): turns using persistent reasoning effort default the current-time
+// reminder and the interruptible clock.sleep tool ON, unless the feature is
+// explicitly configured or a managed requirement already sets current_time_reminder.
+// Review turns are excluded because turnStartReviewRuntime() routes them without
+// the clock tools.
+func applyPersistentClockDefaults(cfg *config.Config, params *turn.TurnStartParams) bool {
+	if cfg == nil || turnStartReviewRuntime(params) {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(appReasoningEffortForTurn(cfg, params)), "persistent") {
+		// Explicit feature config or a managed requirement wins over the default.
+		if currentTimeReminderExplicitlyConfigured(cfg) {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// currentTimeReminderExplicitlyConfigured reports whether the turn config
+// explicitly sets [features].current_time_reminder (Rust checks the effective
+// config-layer stack before applying the persistent default).
+func currentTimeReminderExplicitlyConfigured(cfg *config.Config) bool {
+	if cfg == nil || cfg.Values == nil {
+		return false
+	}
+	featuresValue, ok := cfg.Values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, exists := featuresValue["current_time_reminder"]
+	return exists
+}
+
 func activeTurnDiffKey(threadID string, turnID string) string {
 	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
 }

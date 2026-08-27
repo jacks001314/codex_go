@@ -26661,3 +26661,47 @@ func TestTurnErrorMisalignmentJSONExposesDetailsLikeRust(t *testing.T) {
 		t.Fatalf("misalignment.steer = %#v", misalignment["steer"])
 	}
 }
+
+func TestApplyPersistentClockDefaultsEnablesOnPersistentEffortLikeRust(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{}}}
+	params := &turn.TurnStartParams{Effort: stringPtrAppserver("persistent")}
+	if !applyPersistentClockDefaults(cfg, params) {
+		t.Fatal("applyPersistentClockDefaults() = false, want true for persistent effort")
+	}
+}
+
+func TestApplyPersistentClockDefaultsSkipsOrdinaryEffortLikeRust(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{}}}
+	params := &turn.TurnStartParams{Effort: stringPtrAppserver("medium")}
+	if applyPersistentClockDefaults(cfg, params) {
+		t.Fatal("applyPersistentClockDefaults() = true, want false for ordinary effort")
+	}
+}
+
+func TestApplyPersistentClockDefaultsRespectsExplicitConfigLikeRust(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{"current_time_reminder": map[string]any{"enabled": false}}}}
+	params := &turn.TurnStartParams{Effort: stringPtrAppserver("persistent")}
+	if applyPersistentClockDefaults(cfg, params) {
+		t.Fatal("applyPersistentClockDefaults() = true, want false when current_time_reminder explicitly configured")
+	}
+}
+
+func TestApplyPersistentClockDefaultsSkipsReviewTurnsLikeRust(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{}}}
+	params := &turn.TurnStartParams{Effort: stringPtrAppserver("persistent")}
+	params.Originator = "review"
+	if applyPersistentClockDefaults(cfg, params) {
+		t.Fatal("applyPersistentClockDefaults() = true, want false for review turns")
+	}
+}
+
+func TestCurrentTimeReminderExplicitlyConfiguredDetectsFeatureKey(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{"current_time_reminder": map[string]any{"enabled": true}}}}
+	if !currentTimeReminderExplicitlyConfigured(cfg) {
+		t.Fatal("currentTimeReminderExplicitlyConfigured() = false, want true")
+	}
+	cfg = &config.Config{Values: map[string]any{"features": map[string]any{}}}
+	if currentTimeReminderExplicitlyConfigured(cfg) {
+		t.Fatal("currentTimeReminderExplicitlyConfigured() = true, want false")
+	}
+}
