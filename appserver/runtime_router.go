@@ -3354,7 +3354,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 				r.services.Skills.WatchCWDs([]string{response.Thread.CWD})
 			}
 			r.emitThreadStartAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
-			r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
+			if shouldEmitThreadStartedNotification(response.Thread) {
+				r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
+			}
 			if request.Method == MethodThreadStart {
 				r.startMemoriesStartupTask(response, request)
 				r.scheduleStartupPrewarm(response)
@@ -3367,7 +3369,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
 			r.emitThreadForkAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 			r.notifyRestoredTokenUsage(response)
-			r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
+			if shouldEmitThreadStartedNotification(response.Thread) {
+				r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
+			}
 		}
 	case MethodThreadArchive:
 		archivedIDs := lifecycleIDsWithFallback(request, lifecycleIDs)
@@ -5240,6 +5244,23 @@ func (r *RuntimeRouter) lifecycleSubtreeIDs(request *Request) []session.ThreadID
 		return nil
 	}
 	return ids
+}
+
+// shouldEmitThreadStartedNotification reports whether a thread/started
+// notification should be emitted. Ephemeral internal helper threads (for
+// example memory consolidation) are hidden from TUI routing so they do not
+// enter the agents overview or refresh it (Rust #40494 HiddenSystemThread).
+func shouldEmitThreadStartedNotification(thread *Thread) bool {
+	if thread == nil {
+		return true
+	}
+	if !thread.Ephemeral {
+		return true
+	}
+	if thread.ThreadSource != nil && *thread.ThreadSource == ThreadSourceMemoryConsolidation {
+		return false
+	}
+	return true
 }
 
 func threadStartedNotificationThread(thread *Thread) *Thread {
