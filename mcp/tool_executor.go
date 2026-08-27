@@ -264,7 +264,31 @@ func (e *ToolExecutor) PreToolUsePayload(invocation *tool.Invocation) (*tool.Pre
 	return &tool.PreToolUsePayload{
 		ToolName:  e.hookToolName(),
 		ToolInput: mcpHookToolInput(invocation.Payload.Arguments),
+		McpTool:   e.mcpToolContext(),
 	}, true
+}
+
+// mcpToolContext captures the model-visible MCP tool details and its source
+// classification for tool lifecycle extensions (Rust McpToolContext, #40976).
+// The executable client is never exposed.
+func (e *ToolExecutor) mcpToolContext() *tool.McpToolContext {
+	if e == nil {
+		return nil
+	}
+	ctx := &tool.McpToolContext{
+		ServerName: strings.TrimSpace(e.serverName),
+		ToolName:   strings.TrimSpace(e.toolInfo.Name),
+		Connector:  strings.TrimSpace(e.connectorID),
+		Source:     tool.McpToolSourceOther,
+	}
+	if ctx.Connector != "" {
+		ctx.Source = tool.McpToolSourceConnector
+	} else if e.agentPlugin {
+		ctx.Source = tool.McpToolSourcePlugin
+	} else if e.serverName != "" {
+		ctx.Source = tool.McpToolSourceConfig
+	}
+	return ctx
 }
 
 func (e *ToolExecutor) PostToolUsePayload(invocation *tool.Invocation, output *tool.Output) (*tool.PostToolUsePayload, bool) {

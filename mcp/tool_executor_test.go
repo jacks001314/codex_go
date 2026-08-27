@@ -157,6 +157,15 @@ func TestMCPToolExecutorHookPayloadsUsePrefixedName(t *testing.T) {
 	if input, ok := pre.ToolInput.(map[string]any); !ok || input["path"] != "/tmp/notes.txt" {
 		t.Fatalf("pre.ToolInput = %#v", pre.ToolInput)
 	}
+	if pre.McpTool == nil {
+		t.Fatal("pre.McpTool = nil, want populated MCP provenance")
+	}
+	if pre.McpTool.ServerName != "filesystem" || pre.McpTool.ToolName != "read_file" {
+		t.Fatalf("pre.McpTool = %#v", pre.McpTool)
+	}
+	if pre.McpTool.Source != tool.McpToolSourceConfig {
+		t.Fatalf("pre.McpTool.Source = %q, want config", pre.McpTool.Source)
+	}
 
 	output := &tool.Output{
 		CallID: "call-mcp",
@@ -403,5 +412,38 @@ func TestMcpToolCallAppContextOmitsRemovedTemplateIDLikeRust(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "templateId") {
 		t.Fatalf("app context = %s", encoded)
+	}
+}
+
+func TestMCPToolContextClassifiesConnectorAndPluginLikeRust(t *testing.T) {
+	connectorExecutor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:  "codex-apps",
+		ConnectorID: "connector-slack",
+		ToolInfo:    &MCPToolInfo{Name: "read"},
+	})
+	invocation := &tool.Invocation{
+		CallID:   "call-connector",
+		ToolName: tool.NamespacedName("codex-apps", "read"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`},
+	}
+	pre, ok := connectorExecutor.PreToolUsePayload(invocation)
+	if !ok || pre.McpTool == nil {
+		t.Fatalf("connector pre = %#v (%v)", pre, ok)
+	}
+	if pre.McpTool.Source != tool.McpToolSourceConnector || pre.McpTool.Connector != "connector-slack" {
+		t.Fatalf("connector McpTool = %#v", pre.McpTool)
+	}
+
+	pluginExecutor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:  "plugin-server",
+		AgentPlugin: true,
+		ToolInfo:    &MCPToolInfo{Name: "ping"},
+	})
+	pre2, ok2 := pluginExecutor.PreToolUsePayload(invocation)
+	if !ok2 || pre2.McpTool == nil {
+		t.Fatalf("plugin pre = %#v (%v)", pre2, ok2)
+	}
+	if pre2.McpTool.Source != tool.McpToolSourcePlugin {
+		t.Fatalf("plugin McpTool.Source = %q, want plugin", pre2.McpTool.Source)
 	}
 }

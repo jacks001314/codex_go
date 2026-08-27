@@ -16,6 +16,34 @@ type HookToolName struct {
 type PreToolUsePayload struct {
 	ToolName  *HookToolName
 	ToolInput any
+	// McpTool, when set, carries read-only metadata and provenance captured
+	// from the MCP call that will execute (Rust ToolStartInput.mcp_tool,
+	// #40976). It exposes the model-visible MCP tool details and source
+	// classification without exposing the executable client.
+	McpTool *McpToolContext
+}
+
+// McpToolSource classifies the origin of an MCP tool call for tool lifecycle
+// extensions (Rust extension_api::McpToolSource, #40976).
+type McpToolSource string
+
+const (
+	McpToolSourceConnector      McpToolSource = "connector"
+	McpToolSourceConfig         McpToolSource = "config"
+	McpToolSourceSelectedPlugin McpToolSource = "selected_plugin"
+	McpToolSourcePlugin         McpToolSource = "plugin"
+	McpToolSourceOther          McpToolSource = "other"
+)
+
+// McpToolContext is the model-visible MCP tool details plus its source
+// classification, captured from the MCP call that will execute (Rust
+// extension_api::McpToolContext, #40976).
+type McpToolContext struct {
+	ServerName string        `json:"serverName,omitempty"`
+	ToolName   string        `json:"toolName,omitempty"`
+	Connector  string        `json:"connector,omitempty"`
+	PluginID   string        `json:"pluginId,omitempty"`
+	Source     McpToolSource `json:"source,omitempty"`
 }
 
 type PostToolUsePayload struct {
