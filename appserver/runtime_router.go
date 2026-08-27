@@ -11857,6 +11857,10 @@ func (r *RuntimeRouter) threadEnvironmentConfigForTurn(params *turn.TurnStartPar
 	if record, recordErr := r.threadRecord(session.ThreadID(params.ThreadID), true, false); recordErr == nil && record != nil {
 		config.SelectedCapabilityRoots = threadSelectedCapabilityRoots(record)
 	}
+	config.WorkspaceRoots = append([]string(nil), params.RuntimeWorkspaceRoots...)
+	if environmentCWD := firstNonEmpty(primaryTurnEnvironmentCWD(params, params.CWD), params.CWD); strings.TrimSpace(environmentCWD) != "" && len(config.WorkspaceRoots) == 0 {
+		config.WorkspaceRoots = []string{environmentCWD}
+	}
 	return config
 }
 

@@ -56,6 +56,10 @@ type EnvironmentConfig struct {
 	// SelectedCapabilityRoots are the capability roots selected for this
 	// thread's environment attachment.
 	SelectedCapabilityRoots []SelectedCapabilityRoot
+	// WorkspaceRoots are the effective workspace roots for this environment
+	// attachment, used when materializing permission profiles and filesystem
+	// context (Rust EnvironmentConfig.workspace_roots, #40912).
+	WorkspaceRoots []string
 }
 
 // cloneShellEnvironmentPolicy deep-copies the shell_environment_policy table

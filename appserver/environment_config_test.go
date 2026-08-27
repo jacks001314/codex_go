@@ -412,3 +412,28 @@ func mustJSONRaw(t *testing.T, value any) json.RawMessage {
 	}
 	return raw
 }
+
+func TestThreadEnvironmentConfigForTurnPopulatesWorkspaceRootsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	codexHome := filepath.Join(home, "codex")
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(codexHome)})
+	defer router.Close()
+
+	cwd := t.TempDir()
+	cfg := router.threadEnvironmentConfigForTurn(&turn.TurnStartParams{CWD: cwd})
+	if cfg == nil {
+		t.Fatalf("thread environment config = nil")
+	}
+	if len(cfg.WorkspaceRoots) != 1 || cfg.WorkspaceRoots[0] != cwd {
+		t.Fatalf("workspace roots = %#v, want [%s]", cfg.WorkspaceRoots, cwd)
+	}
+
+	customRoot := filepath.Join(t.TempDir(), "workspace")
+	cfg2 := router.threadEnvironmentConfigForTurn(&turn.TurnStartParams{CWD: cwd, RuntimeWorkspaceRoots: []string{customRoot}})
+	if len(cfg2.WorkspaceRoots) != 1 || cfg2.WorkspaceRoots[0] != customRoot {
+		t.Fatalf("runtime workspace roots = %#v, want [%s]", cfg2.WorkspaceRoots, customRoot)
+	}
+}
