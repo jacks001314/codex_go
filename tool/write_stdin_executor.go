@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -62,6 +63,10 @@ func (e *WriteStdinExecutor) Execute(ctx context.Context, invocation *Invocation
 	}
 	result, err := e.manager.WriteStdin(ctx, &args, e.maxOutputTokens)
 	if err != nil {
+		var approvalErr *UnifiedExecStdinApprovalError
+		if errors.As(err, &approvalErr) {
+			return nil, RespondToModel("write_stdin rejected: " + approvalErr.Message)
+		}
 		return nil, RespondToModel("write_stdin failed: " + err.Error())
 	}
 	maxOutputTokens := result.MaxOutputTokensUsed

@@ -19,8 +19,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"codex_go/execserver"
 	"codex_go/execpolicy"
+	"codex_go/execserver"
 	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/utils"
@@ -52,6 +52,23 @@ var (
 	startUnifiedExecWindowsSandbox = startUnifiedExecWindowsSandboxCommand
 )
 
+// UnifiedExecStdinApprovalError surfaces a rejected fresh approval required
+// before writing input to an escalated terminal (Rust #40978 write_stdin
+// approval). The executor maps it to a "write_stdin rejected: ..." message.
+type UnifiedExecStdinApprovalError struct {
+	Message string
+}
+
+func (e *UnifiedExecStdinApprovalError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message == "" {
+		return "write_stdin approval required"
+	}
+	return e.Message
+}
+
 type UnifiedExecManager struct {
 	mu                      sync.Mutex
 	nextID                  int
@@ -59,6 +76,32 @@ type UnifiedExecManager struct {
 	maxEmptyPollYieldTimeMS uint64
 	processes               map[int]*unifiedExecProcess
 	pausedThreads           map[string]chan struct{}
+	// writeStdinApproval, when set, is invoked before non-empty stdin is
+	// written to an escalated terminal (Rust #40978). The callback receives the
+	// process, thread, turn, and the input characters so the app-server layer
+	// can resolve the per-turn write_stdin_approval feature flag and route a
+	// fresh approval. Returning an error rejects the write.
+	writeStdinApproval func(processID int, threadID string, turnID string, chars string) error
+}
+
+// shellRequestEscalated reports whether a unified exec command escalated
+// sandboxing required by its ambient policy (Rust #40978 SandboxAttempt
+// is_escalated). A request that explicitly used require_escalated bypasses the
+// default sandbox, so subsequent non-empty stdin writes may need a fresh
+// approval when the write_stdin_approval feature is enabled.
+func shellRequestEscalated(req *ShellRequest) bool {
+	return req != nil && req.SandboxPermissions == sandbox.SandboxPermissionsRequireEscalated
+}
+
+// SetWriteStdinApproval installs the callback that the app-server layer wires
+// to route a fresh `writeStdin` approval for escalated terminals (Rust #40978).
+func (m *UnifiedExecManager) SetWriteStdinApproval(fn func(processID int, threadID string, turnID string, chars string) error) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.writeStdinApproval = fn
 }
 
 // execEnvPolicyFromShellPolicy converts a codexexec EnvPolicy into the
@@ -203,6 +246,7 @@ type unifiedExecProcess struct {
 	networkPolicyTimeout time.Duration
 	sandbox              unifiedExecSandboxProcess
 	sandboxType          *sandbox.SandboxType
+	escalated            bool
 	done                 chan struct{}
 	eventDone            chan struct{}
 	eventSink            UnifiedExecEventSink
@@ -320,6 +364,7 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 		turnID:        req.UnifiedExecTurnID,
 		eventsStarted: true,
 		sandboxType:   req.ProcessSandboxType,
+		escalated:     shellRequestEscalated(req),
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -385,6 +430,7 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 		turnID:        req.UnifiedExecTurnID,
 		eventsStarted: true,
 		sandboxType:   req.ProcessSandboxType,
+		escalated:     shellRequestEscalated(req),
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -556,6 +602,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		threadID:             req.UnifiedExecThreadID,
 		turnID:               req.UnifiedExecTurnID,
 		sandboxType:          execserver.SandboxTypeFromProtocol(startResponse.SandboxType),
+		escalated:            shellRequestEscalated(req),
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -782,6 +829,16 @@ func (m *UnifiedExecManager) WriteStdin(ctx context.Context, args *WriteStdinArg
 	process.interactionMu.Lock()
 	defer process.interactionMu.Unlock()
 	if args.Chars != "" {
+		if process.escalated {
+			m.mu.Lock()
+			approval := m.writeStdinApproval
+			m.mu.Unlock()
+			if approval != nil {
+				if err := approval(args.SessionID, process.threadID, process.turnID, args.Chars); err != nil {
+					return nil, &UnifiedExecStdinApprovalError{Message: err.Error()}
+				}
+			}
+		}
 		if !process.tty {
 			if args.Chars != unifiedExecInterrupt {
 				return nil, ErrUnifiedExecStdinClosed

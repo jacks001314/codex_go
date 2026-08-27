@@ -1454,3 +1454,79 @@ func TestFileSystemSandboxContextCanonicalProfileWinsOverLegacyJSONLikeRust(t *t
 func unifiedExecHelperCommand(mode string) []string {
 	return []string{os.Args[0], "-test.run=^TestUnifiedExecHelperProcess$", "--", "--unified-exec-helper", mode}
 }
+
+func TestUnifiedExecWriteStdinApprovalGateEscalatedLikeRust(t *testing.T) {
+	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	request := &ShellRequest{
+		Command:            unifiedExecHelperCommand("echo"),
+		HookCommand:        "interactive helper",
+		CWD:                t.TempDir(),
+		TTY:                true,
+		YieldTimeMS:        unifiedExecMinYieldMS,
+		TimeoutMS:          15_000,
+		MaxOutputTokens:    intPtr(100),
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+	}
+	opened, err := manager.Exec(context.Background(), request, "exec-call")
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if opened.ProcessID == nil {
+		t.Fatalf("opened.ProcessID = %v, want non-nil", opened.ProcessID)
+	}
+
+	var approved int
+	manager.SetWriteStdinApproval(func(processID int, threadID string, turnID string, chars string) error {
+		approved++
+		if processID != *opened.ProcessID {
+			t.Fatalf("approval processID = %d, want %d", processID, *opened.ProcessID)
+		}
+		return nil
+	})
+	write := NewWriteStdinExecutor(manager, intPtr(50))
+	continued, err := write.Execute(context.Background(), &Invocation{
+		CallID:   "write-call-approve",
+		ToolName: PlainName(DefaultWriteStdinToolName),
+		Payload: Payload{Kind: PayloadFunction, Arguments: fmt.Sprintf(
+			`{"session_id":%d,"chars":"hello\n","yield_time_ms":250,"max_output_tokens":1000}`,
+			*opened.ProcessID,
+		)},
+	})
+	if err != nil {
+		t.Fatalf("write hello error = %v", err)
+	}
+	if approved != 1 {
+		t.Fatalf("approval calls = %d, want 1", approved)
+	}
+	if !strings.Contains(continued.Body, "ECHO:hello") {
+		t.Fatalf("continued = %#v", continued)
+	}
+
+	manager.SetWriteStdinApproval(func(processID int, threadID string, turnID string, chars string) error {
+		return errors.New("denied by policy")
+	})
+	_, err = write.Execute(context.Background(), &Invocation{
+		CallID:   "write-call-reject",
+		ToolName: PlainName(DefaultWriteStdinToolName),
+		Payload: Payload{Kind: PayloadFunction, Arguments: fmt.Sprintf(
+			`{"session_id":%d,"chars":"world\n","yield_time_ms":250,"max_output_tokens":1000}`,
+			*opened.ProcessID,
+		)},
+	})
+	if err == nil {
+		t.Fatalf("write rejected error = nil, want rejection")
+	}
+	var approvalErr *UnifiedExecStdinApprovalError
+	if !errors.As(err, &approvalErr) {
+		// The executor wraps the approval rejection in a model-facing
+		// FunctionCallError; verify the wrapped message surfaces "rejected".
+		if !strings.Contains(err.Error(), "write_stdin rejected: denied by policy") {
+			t.Fatalf("rejected message = %q", err.Error())
+		}
+	} else {
+		if !strings.Contains(approvalErr.Message, "denied by policy") {
+			t.Fatalf("rejected message = %q", approvalErr.Message)
+		}
+	}
+}
