@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1617,5 +1619,63 @@ func TestEntitlementContextValueAttachesHostOwnedMetadataLikeRust(t *testing.T) 
 	}
 	if decoded["schemaVersion"] != float64(1) {
 		t.Fatalf("schemaVersion = %#v, want 1", decoded["schemaVersion"])
+	}
+}
+
+func TestTrustedAccessContextFetchesAndAttachesLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/accounts/verified_access" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"programs":[{"program":"cyber","state":"active","grants":[{"level":"tac1","source":"individual"}]}]}`))
+	}))
+	defer server.Close()
+	ctx := &TrustedAccessContext{
+		ChatGPTBaseURL: server.URL,
+		HTTPDoer:       server.Client().Do,
+		ApplyAuth: func(req *http.Request) error {
+			req.Header.Set("Authorization", "Bearer token")
+			return nil
+		},
+		Account: &TrustedAccessAccount{UsesCodexBackend: true},
+	}
+	meta := ctx.addContext(map[string]any{"k": "v"})
+	entitlements, _ := meta[entitlementContextKey].(map[string]any)
+	cyber, _ := entitlements["entitlements"].(map[string]any)["cyber_trusted_access"].(map[string]any)
+	if cyber == nil || cyber["status"] != "granted" {
+		t.Fatalf("cyber_trusted_access = %#v", cyber)
+	}
+	grants, _ := cyber["grants"].([]map[string]any)
+	if len(grants) != 1 || grants[0]["level"] != "tac1" || grants[0]["source"] != "user" {
+		t.Fatalf("grants = %#v", cyber["grants"])
+	}
+	// Caller-supplied entitlement metadata is replaced.
+	if _, present := meta["k"]; !present {
+		t.Fatalf("meta = %#v, want existing key preserved", meta)
+	}
+}
+
+func TestTrustedAccessContextUnknownFallbackLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`not-json`))
+	}))
+	defer server.Close()
+	ctx := &TrustedAccessContext{
+		ChatGPTBaseURL: server.URL,
+		HTTPDoer:       server.Client().Do,
+		Account:        &TrustedAccessAccount{UsesCodexBackend: true},
+	}
+	meta := ctx.addContext(map[string]any{})
+	entitlements, _ := meta[entitlementContextKey].(map[string]any)
+	cyber, _ := entitlements["entitlements"].(map[string]any)["cyber_trusted_access"].(map[string]any)
+	if cyber == nil || cyber["status"] != "unknown" {
+		t.Fatalf("malformed response cyber_trusted_access = %#v", cyber)
+	}
+	// Unsupported auth (not codex backend) also falls back to unknown.
+	noBackend := &TrustedAccessContext{Account: &TrustedAccessAccount{UsesCodexBackend: false}, ChatGPTBaseURL: "https://example.test", HTTPDoer: server.Client().Do}
+	meta2 := noBackend.addContext(map[string]any{})
+	cyber2, _ := meta2[entitlementContextKey].(map[string]any)["entitlements"].(map[string]any)["cyber_trusted_access"].(map[string]any)
+	if cyber2 == nil || cyber2["status"] != "unknown" {
+		t.Fatalf("no-backend cyber_trusted_access = %#v", cyber2)
 	}
 }

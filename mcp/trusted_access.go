@@ -1,8 +1,12 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
+	"time"
 )
 
 // Trusted access context for MCP metadata (Rust codex-mcp trusted_access.rs,
@@ -114,4 +118,107 @@ func entitlementContextValue(status string, grants []map[string]any) map[string]
 			},
 		},
 	}
+}
+
+const verifiedAccessPath = "/accounts/verified_access"
+
+// TrustedAccessContext fetches account-bound cyber verified access and attaches
+// it as host-owned `openai/entitlementContext` metadata to eligible plugin MCP
+// calls (Rust TrustedAccessContext, #40992/#41005). The runtime supplies the
+// ChatGPT base URL, an HTTP doer, and the auth-request applier; the account
+// identity to validate against is carried in Account.
+type TrustedAccessContext struct {
+	ChatGPTBaseURL string
+	HTTPDoer       func(*http.Request) (*http.Response, error)
+	ApplyAuth      func(*http.Request) error
+	Account        *TrustedAccessAccount
+}
+
+// TrustedAccessAccount carries the account identity that must match the fetched
+// access (Rust CodexAuth account identity checks).
+type TrustedAccessAccount struct {
+	AccountID        string
+	ChatGPTUserID    string
+	Workspace        bool
+	FedRAMP          bool
+	UsesCodexBackend bool
+}
+
+// addContext replaces caller-supplied entitlement metadata with a fresh
+// verified result (Rust TrustedAccessContext::add_context). When the grant
+// fetch cannot be verified (auth, identity mismatch, malformed/oversized
+// response, or timeout) it falls back to an `unknown` status.
+func (c *TrustedAccessContext) addContext(meta map[string]any) map[string]any {
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	delete(meta, entitlementContextKey)
+	status, grants := c.fetchStatus()
+	meta[entitlementContextKey] = entitlementContextValue(status, grants)
+	return meta
+}
+
+func (c *TrustedAccessContext) fetchStatus() (string, []map[string]any) {
+	if c == nil || c.Account == nil || !c.Account.UsesCodexBackend || strings.TrimSpace(c.ChatGPTBaseURL) == "" {
+		return "unknown", nil
+	}
+	if c.HTTPDoer == nil {
+		return "unknown", nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), trustedAccessTimeoutMS*time.Millisecond)
+	defer cancel()
+	url := strings.TrimRight(strings.TrimSpace(c.ChatGPTBaseURL), "/") + verifiedAccessPath
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "unknown", nil
+	}
+	if c.ApplyAuth != nil {
+		if err := c.ApplyAuth(req); err != nil {
+			return "unknown", nil
+		}
+	}
+	response, err := c.HTTPDoer(req)
+	if err != nil {
+		return "unknown", nil
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "unknown", nil
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxVerifiedAccessBytes))
+	if err != nil || len(body) > maxVerifiedAccessBytes {
+		return "unknown", nil
+	}
+	return parseVerifiedAccess(body)
+}
+
+func parseVerifiedAccess(body []byte) (string, []map[string]any) {
+	var response VerifiedAccessResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return "unknown", nil
+	}
+	var cyberProgram *VerifiedAccessProgram
+	for _, rawProgram := range response.Programs {
+		var program VerifiedAccessProgram
+		if err := json.Unmarshal(rawProgram, &program); err != nil {
+			continue
+		}
+		if program.Program != "cyber" {
+			continue
+		}
+		if cyberProgram != nil {
+			// Multiple cyber programs is ambiguous -> unknown.
+			return "unknown", nil
+		}
+		cp := program
+		cyberProgram = &cp
+	}
+	if cyberProgram == nil {
+		return "unknown", nil
+	}
+	status, grants, ok := cyberTrustedAccessStatus(cyberProgram)
+	if !ok {
+		return "unknown", nil
+	}
+	return status, grants
 }
