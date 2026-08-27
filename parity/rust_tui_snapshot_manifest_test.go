@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 715 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 715", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 717 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 717", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -121,7 +121,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/chatwidget/snapshots",
-			Files:    238,
+			Files:    239,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -133,7 +133,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/chatwidget/tests/snapshots",
-			Files:    13,
+			Files:    14,
 			Owner:    "tui/chatwidget",
 			Focus:    "chatwidget approval request modal and history snapshots",
 			Priority: []string{"approval", "history"},

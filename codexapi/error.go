@@ -20,6 +20,7 @@ const (
 	ErrorCyberPolicy                 APIErrorKind = "cyberPolicy"
 	ErrorMisalignmentPolicyViolation APIErrorKind = "misalignmentPolicyViolation"
 	ErrorServerOverloaded            APIErrorKind = "serverOverloaded"
+	ErrorRateLimitExceeded           APIErrorKind = "rateLimitExceeded"
 )
 
 type APIError struct {
@@ -68,6 +69,8 @@ func (e *APIError) Error() string {
 		return "cyber policy: " + e.Message
 	case ErrorMisalignmentPolicyViolation:
 		return "misalignment policy violation: " + e.Message
+	case ErrorRateLimitExceeded:
+		return "rate limit exceeded: " + e.Message
 	case ErrorServerOverloaded:
 		return "server overloaded"
 	default:

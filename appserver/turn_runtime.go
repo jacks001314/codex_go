@@ -3430,6 +3430,8 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		return fields("usageLimitExceeded", "usage_not_included")
 	case codexapi.ErrorRateLimit:
 		return fields("usageLimitExceeded", "usage_limit_reached")
+	case codexapi.ErrorRateLimitExceeded:
+		return fields("rateLimitExceeded", "rate_limit_exceeded")
 	case codexapi.ErrorServerOverloaded:
 		return fields("serverOverloaded", "server_overloaded")
 	case codexapi.ErrorCyberPolicy:

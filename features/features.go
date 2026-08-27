@@ -194,7 +194,10 @@ var Registry = []Spec{
 	{Key: "in_app_local_automation", Stage: StageStable, DefaultEnabled: true},
 	{Key: "bedrock_setup_wizard", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "step_model_switching", Stage: StageUnderDevelopment, DefaultEnabled: false},
-	{Key: "compaction_image_budget", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 307ce6cda9): write_stdin_approval
+	// added; compaction_image_budget promoted to stable/default-on (sync28).
+	{Key: "write_stdin_approval", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "compaction_image_budget", Stage: StageStable, DefaultEnabled: true},
 }
 
 func preventIdleSleepStage() Stage {

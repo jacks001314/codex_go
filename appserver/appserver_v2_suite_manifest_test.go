@@ -38,6 +38,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "current_time", Owner: "appserver", Focus: "currentTime/read server request"},
 		{Module: "curated_mcp_sync", Owner: "mcp", Focus: "curated MCP synchronization"},
 		{Module: "cyber_access_program", Owner: "safety, appserver", Focus: "cyber access program selection per turn"},
+		{Module: "daybreak_access", Owner: "auth, appserver", Focus: "daybreak feature access gating and entitlement checks"},
 		{Module: "dynamic_tools", Owner: "tool, turn", Focus: "dynamic tool call server request"},
 		{Module: "environment_add", Owner: "appserver, execserver", Focus: "environment/add RPC"},
 		{Module: "environment_info", Owner: "appserver, execserver", Focus: "environment/info RPC"},

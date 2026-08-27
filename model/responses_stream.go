@@ -1893,6 +1893,13 @@ func responseFailedError(data []byte) error {
 		return &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
 	}
 	if errBody != nil {
+		if code == "rate_limit_exceeded" {
+			retryable := &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: message}
+			if delay, ok := responseFailedRetryDelay(code, message); ok {
+				return retryable.WithRetryDelay(delay)
+			}
+			return retryable
+		}
 		retryable := &codexapi.APIError{Kind: codexapi.ErrorRetryable, Message: message}
 		if delay, ok := responseFailedRetryDelay(code, message); ok {
 			return retryable.WithRetryDelay(delay)

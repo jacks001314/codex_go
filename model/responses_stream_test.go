@@ -2,8 +2,11 @@ package model
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"codex_go/codexapi"
 )
 
 func TestParseResponsesStreamRecoversDeclaredCustomToolFromFunctionCallEnvelope(t *testing.T) {
@@ -201,5 +204,42 @@ func TestSafetyBufferingIgnoresUnrelatedMetadata(t *testing.T) {
 	event := []byte(`{"type":"response.metadata","metadata":{"type":"other_metadata","use_cases":["cyber"]}}`)
 	if buffering := safetyBufferingFromStreamMetadata(event); buffering != nil {
 		t.Fatalf("unrelated metadata should not produce safety buffering: %#v", buffering)
+	}
+}
+
+func TestResponseFailedErrorClassifiesRateLimitExceededLikeRust(t *testing.T) {
+	raw := `{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for gpt-5.1 in organization org-AAA on tokens per min (TPM): Limit 30000, Used 22999, Requested 12528. Please try again in 11.054s. Visit https://platform.openai.com/account/rate-limits to learn more."}}}`
+	err := responseFailedError([]byte(raw))
+	if err == nil {
+		t.Fatal("responseFailedError() = nil, want error")
+	}
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T, want *codexapi.APIError", err)
+	}
+	if apiErr.Kind != codexapi.ErrorRateLimitExceeded {
+		t.Fatalf("error kind = %q, want rateLimitExceeded", apiErr.Kind)
+	}
+	delay, ok := codexapi.RetryDelayInfo(err)
+	if !ok {
+		t.Fatal("retry delay not reported for rate_limit_exceeded")
+	}
+	if delay.Milliseconds() != 11054 {
+		t.Fatalf("retry delay = %v, want 11054ms", delay)
+	}
+}
+
+func TestResponseFailedErrorUnknownCodeStaysRetryableLikeRust(t *testing.T) {
+	raw := `{"type":"response.failed","response":{"error":{"code":"unknown_error","message":"Rate limit reached. Please try again in 1s."}}}`
+	err := responseFailedError([]byte(raw))
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T, want *codexapi.APIError", err)
+	}
+	if apiErr.Kind != codexapi.ErrorRetryable {
+		t.Fatalf("error kind = %q, want retryable", apiErr.Kind)
+	}
+	if _, ok := codexapi.RetryDelayInfo(err); ok {
+		t.Fatal("retry delay reported for unknown error code, want none (Rust preserves only unclassified codes as Retryable without delay)")
 	}
 }
