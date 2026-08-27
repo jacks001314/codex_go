@@ -452,20 +452,6 @@ func cloneExecutedToolCallMap(value map[string]any) map[string]any {
 	return clone
 }
 
-func mapWithExecutedToolCalls(value map[string]any, calls []model.ExecutedToolCall) map[string]any {
-	clone := cloneExecutedToolCallMap(value)
-	if len(calls) == 0 {
-		return clone
-	}
-	metadata, _ := clone["internal_chat_message_metadata_passthrough"].(map[string]any)
-	if metadata == nil {
-		metadata = map[string]any{}
-	}
-	metadata["executed_tool_calls"] = calls
-	clone["internal_chat_message_metadata_passthrough"] = metadata
-	return clone
-}
-
 func mapWithExecutedToolCallMetadata(value map[string]any, calls []model.ExecutedToolCall, cellID string, complete *bool) map[string]any {
 	clone := cloneExecutedToolCallMap(value)
 	if len(calls) == 0 && strings.TrimSpace(cellID) == "" && complete == nil {
