@@ -222,7 +222,7 @@ func TestSkillRenderLocatorPreservesLiteralBackslashesInPackageIDsLikeRust(t *te
 	}
 }
 
-func TestRenderAvailableSkillsOmitsAliasesWithoutBudgetPressureLikeRust(t *testing.T) {
+func TestRenderAvailableSkillsAliasesEvenWithoutBudgetPressureLikeRust(t *testing.T) {
 	root := "/tmp/skills"
 	skills := []InstructionsSkillMetadata{
 		{Name: "alpha-skill", Scope: "repo", Path: root + "/alpha/SKILL.md", Root: root},
@@ -233,14 +233,17 @@ func TestRenderAvailableSkillsOmitsAliasesWithoutBudgetPressureLikeRust(t *testi
 	if available == nil {
 		t.Fatalf("RenderAvailableSkills() = nil")
 	}
-	if len(available.SkillRootLines) != 0 {
-		t.Fatalf("SkillRootLines = %#v, want none", available.SkillRootLines)
+	// Rust #41011: aliased catalogs are evaluated regardless of budget pressure
+	// and selected when they preserve inclusion/description while reducing
+	// prompt size. Repeated skill locator roots yield shortened rN aliases.
+	if len(available.SkillRootLines) == 0 {
+		t.Fatalf("SkillRootLines = %#v, want the shared root alias table", available.SkillRootLines)
 	}
-	if strings.Contains(available.Body, "### Skill roots") {
-		t.Fatalf("Body unexpectedly used aliases:\n%s", available.Body)
+	if !strings.Contains(available.Body, "### Skill roots") {
+		t.Fatalf("Body expected alias root table:\n%s", available.Body)
 	}
-	if got := strings.Join(available.SkillLines, "\n"); !strings.Contains(got, root+"/alpha/SKILL.md") || strings.Contains(got, "r0/") {
-		t.Fatalf("SkillLines = %#v", available.SkillLines)
+	if got := strings.Join(available.SkillLines, "\n"); !strings.Contains(got, "r0/alpha/SKILL.md") || !strings.Contains(got, "r0/beta/SKILL.md") {
+		t.Fatalf("SkillLines = %#v, want aliased r0/ locators", available.SkillLines)
 	}
 }
 

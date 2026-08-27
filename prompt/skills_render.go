@@ -222,24 +222,24 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
 
 	absolute := renderCombinedSkillLines(hostLines, executorLines, budget, nil)
 	selected := absolute
-	if !combinedSkillsFullyRendered(absolute) {
-		if plan, ok := buildSkillAliasPlan(hostLines, budget); ok && plan.tableCost < budget.Limit {
-			adjustedBudget := budget
-			adjustedBudget.Limit -= plan.tableCost
-			aliased := renderCombinedSkillLines(applySkillAliases(hostLines, plan), executorLines, adjustedBudget, plan.rootLines)
-			if combinedSkillsRenderIsBetter(aliased, absolute, budget) {
-				selected = aliased
-			}
+	// Rust #41011: evaluate aliased catalogs regardless of budget pressure and
+	// select them when they preserve inclusion/description while reducing size.
+	if plan, ok := buildSkillAliasPlan(hostLines, budget); ok && plan.tableCost < budget.Limit {
+		adjustedBudget := budget
+		adjustedBudget.Limit -= plan.tableCost
+		aliased := renderCombinedSkillLines(applySkillAliases(hostLines, plan), executorLines, adjustedBudget, plan.rootLines)
+		if combinedSkillsRenderIsBetter(aliased, absolute, budget) {
+			selected = aliased
 		}
-		// Rust ce22ea9712: executor locators are compacted with provider-specific
-		// `e` aliases alongside host `r` aliases under metadata pressure.
-		if plan, ok := buildExtensionAliasPlan(executorLines, budget); ok && plan.tableCost < budget.Limit {
-			adjustedBudget := budget
-			adjustedBudget.Limit -= plan.tableCost
-			aliased := renderCombinedSkillLines(applySkillAliases(hostLines, nil), applySkillAliases(executorLines, plan), adjustedBudget, nil)
-			if combinedSkillsRenderIsBetter(aliased, selected, budget) {
-				selected = aliased
-			}
+	}
+	// Rust ce22ea9712: executor locators are compacted with provider-specific
+	// `e` aliases alongside host `r` aliases under metadata pressure.
+	if plan, ok := buildExtensionAliasPlan(executorLines, budget); ok && plan.tableCost < budget.Limit {
+		adjustedBudget := budget
+		adjustedBudget.Limit -= plan.tableCost
+		aliased := renderCombinedSkillLines(applySkillAliases(hostLines, nil), applySkillAliases(executorLines, plan), adjustedBudget, nil)
+		if combinedSkillsRenderIsBetter(aliased, selected, budget) {
+			selected = aliased
 		}
 	}
 
@@ -348,10 +348,11 @@ func orderedSkillRenderLines(skills []InstructionsSkillMetadata) []skillRenderLi
 
 func renderBestSkillLines(lines []skillRenderLine, budget SkillMetadataBudget) ([]string, *SkillRenderReport, []string) {
 	absoluteLines, absoluteReport := renderSkillLines(lines, budget)
-	if absoluteReport.OmittedCount == 0 && absoluteReport.TruncatedDescriptionChars == 0 {
-		return absoluteLines, absoluteReport, nil
-	}
 
+	// Rust #41011: evaluate the aliased catalog regardless of budget pressure
+	// and select it whenever it preserves skill inclusion and description
+	// content while reducing prompt size. Previously aliases were only tried
+	// when the unaliased catalog was not fully rendered.
 	plan, ok := buildSkillAliasPlan(lines, budget)
 	if !ok || plan.tableCost >= budget.Limit {
 		return absoluteLines, absoluteReport, nil
@@ -498,10 +499,6 @@ func allocatedSkillLinesCost(lines []skillRenderLine, allocations []skillLineAll
 		cost += budget.cost(line.renderWithDescriptionChars(allocations[index].descriptionChars) + "\n")
 	}
 	return cost
-}
-
-func combinedSkillsFullyRendered(rendered *combinedAvailableSkillsRender) bool {
-	return rendered != nil && rendered.hostReport.OmittedCount == 0 && rendered.hostReport.TruncatedDescriptionChars == 0 && rendered.executorReport.OmittedCount == 0 && rendered.executorReport.TruncatedDescriptionChars == 0
 }
 
 func combinedSkillsRenderIsBetter(candidate *combinedAvailableSkillsRender, current *combinedAvailableSkillsRender, budget SkillMetadataBudget) bool {
