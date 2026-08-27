@@ -41,6 +41,15 @@ func buildSeatbeltPolicy(cwd string, profile *PermissionProfile, allowUnixSocket
 
 	if !policy.HasFullDiskWriteAccess() {
 		lines = append(lines, "(deny file-write*)", `(allow file-write-data (literal "/dev/null"))`)
+		// macOS #40961: ordinary sandboxed processes keep system scratch
+		// directories for compatibility, while denying them to filesystem
+		// helpers (which use a separate restricted policy). These grants are
+		// process-only and mirror Rust's MACOS_PROCESS_PLATFORM_DEFAULTS.
+		for _, scratch := range []string{"/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"} {
+			name := fmt.Sprintf("SCRATCH_%d", len(parameters))
+			parameters = append(parameters, seatbeltParameter{Name: name, Value: cleanSeatbeltPath(scratch)})
+			lines = append(lines, fmt.Sprintf(`(allow file-read* file-test-existence file-write* (subpath (param "%s")))`, name))
+		}
 		for _, root := range policy.GetWritableRootsWithCWD(cwd) {
 			name := fmt.Sprintf("WRITABLE_ROOT_%d", len(parameters))
 			parameters = append(parameters, seatbeltParameter{Name: name, Value: cleanSeatbeltPath(root.Root)})

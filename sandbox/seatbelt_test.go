@@ -12,12 +12,12 @@ func TestBuildSeatbeltPolicyWorkspaceWriteAndNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSeatbeltPolicy: %v", err)
 	}
-	for _, want := range []string{"(deny file-write*)", "(deny network*)", "PROTECTED_WRITE_"} {
+	for _, want := range []string{"(deny file-write*)", "(deny network*)", "PROTECTED_WRITE_", "SCRATCH_"} {
 		if !strings.Contains(policy, want) {
 			t.Fatalf("policy missing %q:\n%s", want, policy)
 		}
 	}
-	if !seatbeltHasParameterPrefix(parameters, "PROTECTED_WRITE_") || !seatbeltParametersContain(parameters, "/tmp/agent.sock") {
+	if !seatbeltHasParameterPrefix(parameters, "PROTECTED_WRITE_") || !seatbeltHasParameterPrefix(parameters, "SCRATCH_") || !seatbeltParametersContain(parameters, "/tmp/agent.sock") || !seatbeltParametersContain(parameters, "/private/tmp") {
 		t.Fatalf("parameters = %#v", parameters)
 	}
 	if seatbeltParametersContain(parameters, "relative.sock") {
