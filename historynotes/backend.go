@@ -14,6 +14,23 @@ import (
 )
 
 const backendTimeout = 35 * time.Second
+const encryptedToolArgumentsHeader = "x-openai-encrypted-tool-arguments"
+
+// encryptedArgumentsRoute reports whether the backend route carries sensitive
+// tool arguments that must be marked encrypted (Rust #41041). The JSON request
+// body is unchanged; only the header signals that the route's search query /
+// note text fields are encrypted.
+func encryptedArgumentsRoute(path string) bool {
+	switch strings.TrimSpace(path) {
+	case "alpha/history/v2/search_contents",
+		"alpha/notes/v2/search_contents",
+		"alpha/notes/v2/append_to_file",
+		"alpha/notes/v2/write_file":
+		return true
+	default:
+		return false
+	}
+}
 
 // Backend calls the Codex backend history/notes endpoints (Rust
 // HistoryNotesBackend). The embedding router resolves the base URL and auth
@@ -50,6 +67,9 @@ func (b *Backend) Call(ctx context.Context, path string, sessionID string, curre
 		return nil, fmt.Errorf("history backend request could not be built: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
+	if encryptedArgumentsRoute(path) {
+		request.Header.Set(encryptedToolArgumentsHeader, "true")
+	}
 	if b.ApplyAuth != nil {
 		if err := b.ApplyAuth(request, body); err != nil {
 			return nil, fmt.Errorf("history backend auth failed: %w", err)

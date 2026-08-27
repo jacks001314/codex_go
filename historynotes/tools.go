@@ -179,7 +179,7 @@ func (a Action) Parameters() map[string]any {
 		required = []string{"item_id", "window_id"}
 	case HistorySearchContents:
 		properties["limit"] = integer(1, "Maximum number of matching items to return.")
-		properties["query"] = map[string]any{"type": "string", "description": "Case-sensitive literal substring to find in item content."}
+		properties["query"] = map[string]any{"type": "string", "encrypted": true, "description": "Case-sensitive literal substring to find in item content."}
 		properties["recent_first"] = map[string]any{"type": "boolean", "description": "Whether to return the most recently created matches first."}
 		properties["tool_namespace"] = nullableString("Callable namespace to include. When set, non-tool messages are excluded.")
 		properties["role"] = role("Message role to include. Null or omission includes all roles.")
@@ -199,17 +199,17 @@ func (a Action) Parameters() map[string]any {
 		required = []string{"path"}
 	case NotesSearchContents:
 		properties["max_matches_per_file"] = integer(1, "Maximum number of matching lines returned per file.")
-		properties["query"] = map[string]any{"type": "string", "description": "Case-sensitive literal substring to find in note lines."}
+		properties["query"] = map[string]any{"type": "string", "encrypted": true, "description": "Case-sensitive literal substring to find in note lines."}
 		properties["recent_file_first"] = map[string]any{"type": "boolean", "description": "Whether to order matching files by creation time, newest first."}
 		properties["max_files"] = integer(1, "Maximum number of matching files returned.")
 		properties["path_prefix"] = nullableString("Note path prefix to search.")
 		required = []string{"query"}
 	case NotesAppendToFile:
-		properties["text"] = map[string]any{"type": "string", "description": "Text appended exactly as provided."}
+		properties["text"] = map[string]any{"type": "string", "encrypted": true, "description": "Text appended exactly as provided."}
 		properties["path"] = map[string]any{"type": "string", "description": "Note file path to append to."}
 		required = []string{"text", "path"}
 	default: // NotesWriteFile
-		properties["text"] = map[string]any{"type": "string", "description": "Complete replacement text for the file."}
+		properties["text"] = map[string]any{"type": "string", "encrypted": true, "description": "Complete replacement text for the file."}
 		properties["path"] = map[string]any{"type": "string", "description": "Note file path to create or replace."}
 		required = []string{"text", "path"}
 	}

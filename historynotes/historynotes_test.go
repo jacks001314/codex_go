@@ -162,3 +162,59 @@ func TestThreadHintFetchesBoundedText(t *testing.T) {
 		t.Fatal("oversized thread hint should be omitted")
 	}
 }
+
+func TestHistoryNotesEncryptedArgumentsHeaderLikeRust(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"alpha/history/v2/search_contents", true},
+		{"alpha/notes/v2/search_contents", true},
+		{"alpha/notes/v2/append_to_file", true},
+		{"alpha/notes/v2/write_file", true},
+		{"alpha/history/v2/list_windows", false},
+		{"alpha/notes/v2/thread_hint", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get(encryptedToolArgumentsHeader); (got == "true") != tc.want {
+					t.Fatalf("header = %q, want present=%v", got, tc.want)
+				}
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer server.Close()
+			backend := &Backend{BaseURL: server.URL, HTTPDoer: server.Client().Do}
+			if _, err := backend.Call(context.Background(), tc.path, "session-1", "root", map[string]any{}); err != nil {
+				t.Fatalf("Call(%s) error = %v", tc.path, err)
+			}
+		})
+	}
+}
+
+func TestHistoryNotesMarkSensitiveFieldsEncryptedLikeRust(t *testing.T) {
+	encryptedFields := map[string]bool{
+		"history.search_contents.query": true,
+		"notes.search_contents.query":   true,
+		"notes.append_to_file.text":     true,
+		"notes.write_file.text":         true,
+	}
+	for _, action := range allActions {
+		schema := action.Parameters()
+		props, _ := schema["properties"].(map[string]any)
+		for name, prop := range props {
+			propMap, _ := prop.(map[string]any)
+			if propMap == nil {
+				continue
+			}
+			key := action.Namespace() + "." + action.Name() + "." + name
+			if encryptedFields[key] {
+				if propMap["encrypted"] != true {
+					t.Fatalf("field %s not marked encrypted: %#v", key, propMap)
+				}
+			} else if encrypted, _ := propMap["encrypted"].(bool); encrypted {
+				t.Fatalf("field %s unexpectedly encrypted", key)
+			}
+		}
+	}
+}
