@@ -103,3 +103,43 @@ func TestBoundExecutedToolCallsEnforcesPerCallAndPromptLimitsIdempotently(t *tes
 		t.Fatalf("bounding is not idempotent\nfirst: %s\nsecond: %s", firstJSON, secondJSON)
 	}
 }
+
+func TestExecutedToolCallCellCompletenessSerializedLikeRust(t *testing.T) {
+	item := &AgentItem{Type: "function_call", Name: "echo", CallID: "call-1", Arguments: `{"value":1}`}
+	RecordExecutedToolCall(item)
+	item.SetExecutedToolCallCell("cell-1")
+	item.SetExecutedToolCallsComplete(true)
+	bounded := BoundExecutedToolCallsForPrompt([]any{item})
+	encoded, err := json.Marshal(bounded[0])
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	metadata := object[internalChatMessageMetadataPassthroughField].(map[string]any)
+	if metadata["cell_id"] != "cell-1" {
+		t.Fatalf("cell_id = %#v, want cell-1", metadata["cell_id"])
+	}
+	if metadata["tool_calls_complete"] != true {
+		t.Fatalf("tool_calls_complete = %#v, want true", metadata["tool_calls_complete"])
+	}
+	if calls, ok := metadata[executedToolCallsField].([]any); !ok || len(calls) != 1 {
+		t.Fatalf("executed calls = %#v", metadata[executedToolCallsField])
+	}
+	// Without a cell association, no cell_id is emitted.
+	plainItem := &AgentItem{Type: "function_call", Name: "echo", CallID: "call-2", Arguments: `{"value":2}`}
+	RecordExecutedToolCall(plainItem)
+	plain := BoundExecutedToolCallsForPrompt([]any{plainItem})
+	encoded2, _ := json.Marshal(plain[0])
+	var object2 map[string]any
+	_ = json.Unmarshal(encoded2, &object2)
+	metadata2 := object2[internalChatMessageMetadataPassthroughField].(map[string]any)
+	if _, present := metadata2["cell_id"]; present {
+		t.Fatalf("no-cell item emitted cell_id: %#v", metadata2)
+	}
+	if _, present := metadata2["tool_calls_complete"]; present {
+		t.Fatalf("no-completeness item emitted tool_calls_complete: %#v", metadata2)
+	}
+}

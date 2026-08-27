@@ -84,6 +84,13 @@ type AgentItem struct {
 	// Locally observed metadata is intentionally private so JSON input cannot
 	// forge warehouse-only executed-tool records.
 	executedToolCalls []ExecutedToolCall
+	// cellID associates the recorded tool calls with the originating Code Mode
+	// cell shared across its exec and wait outputs (Rust #41058). Input cannot
+	// forge this field.
+	cellID string
+	// toolCallsComplete reports whether the host finished recording the cell's
+	// calls without losing calls or arguments (Rust #41058).
+	toolCallsComplete *bool
 }
 
 func (i *AgentItem) MarshalJSON() ([]byte, error) {
@@ -230,7 +237,30 @@ func marshalAgentItemWithExecutedToolCalls(item *AgentItem, value any) ([]byte, 
 	object[internalChatMessageMetadataPassthroughField] = map[string]any{
 		executedToolCallsField: item.executedToolCalls,
 	}
+	if item.cellID != "" {
+		object[internalChatMessageMetadataPassthroughField].(map[string]any)["cell_id"] = item.cellID
+	}
+	if item.toolCallsComplete != nil {
+		object[internalChatMessageMetadataPassthroughField].(map[string]any)["tool_calls_complete"] = *item.toolCallsComplete
+	}
 	return json.Marshal(object)
+}
+
+// SetExecutedToolCallCell associates the recorded tool calls with the Code
+// Mode cell shared across its exec and wait outputs (Rust #41058).
+func (i *AgentItem) SetExecutedToolCallCell(cellID string) {
+	if i != nil {
+		i.cellID = strings.TrimSpace(cellID)
+	}
+}
+
+// SetExecutedToolCallsComplete marks whether the host finished recording the
+// cell's calls without losing calls or arguments (Rust #41058).
+func (i *AgentItem) SetExecutedToolCallsComplete(complete bool) {
+	if i != nil {
+		value := complete
+		i.toolCallsComplete = &value
+	}
 }
 
 type responsesReasoningSummary struct {

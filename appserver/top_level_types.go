@@ -111,6 +111,14 @@ type InternalChatMessageMetadataPassthrough struct {
 	// item's content entries (mirrors Rust `content_item_kinds`). Transparent
 	// string wrapper in Rust, so []string is the wire representation.
 	ContentItemKinds []string `json:"content_item_kinds,omitempty"`
+	// CellID is the host-owned Code Mode cell shared by its exec and subsequent
+	// wait outputs (Rust #41058). It is ignored on input so requests cannot
+	// forge tool call records.
+	CellID string `json:"cell_id,omitempty"`
+	// ToolCallsComplete reports whether the host finished recording the cell's
+	// calls without losing calls or arguments (Rust #41058). This describes the
+	// call inventory across the cell's outputs, not tool success.
+	ToolCallsComplete *bool `json:"tool_calls_complete,omitempty"`
 }
 
 type LocalShellStatus string
