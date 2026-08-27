@@ -8081,8 +8081,11 @@ func (r *RuntimeRouter) pluginCatalogConfigDisabled(cwds []string) bool {
 	params := &config.ConfigReadParams{}
 	clean := cleanStringSlice(cwds)
 	if len(clean) > 0 {
-		cwd := clean[0]
-		params.CWD = &cwd
+		// Rust PluginRequestProcessor::load_catalog_config loads at the appserver
+		// process CWD (with project config) when cwds are present.
+		if cwd := r.threadStartDefaultCWD(); cwd != "" {
+			params.CWD = &cwd
+		}
 	}
 	read, err := r.services.Config.Read(params)
 	if err != nil || read == nil {
