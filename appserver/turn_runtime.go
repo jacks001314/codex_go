@@ -1253,6 +1253,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			agentPrompt = ""
 		}
 	}
+	if params.ToolOutput != nil && !turnStartUsesStructuredUserInput(params) {
+		// Rust #40991/#41002: a standalone named tool output starts the turn
+		// without a user prompt. It is surfaced as a function_call_output item
+		// (no call_id) so it is not treated as a user message.
+		inputItems = append(inputItems, standaloneToolOutputInputItem(params.ToolOutput))
+		agentPrompt = ""
+	}
 	samplingFollowUp, tokenBudgetDelivery := r.autoCompactFallbackFollowUp(threadID, runConfig)
 	if rolloutFollowUp := r.rolloutBudgetFollowUp(threadID); rolloutFollowUp != nil {
 		if samplingFollowUp != nil {
@@ -9283,6 +9290,25 @@ func userContentItemKinds(content []map[string]any) []string {
 		}
 	}
 	return kinds
+}
+
+// standaloneToolOutputInputItem builds a standalone function_call_output model
+// input item from a turn/start toolOutput (Rust #41002). It carries a name and
+// optional namespace but no call_id, so it is preserved as external context
+// rather than paired to a tool call.
+func standaloneToolOutputInputItem(output *turn.TurnToolOutput) any {
+	if output == nil {
+		return nil
+	}
+	item := map[string]any{
+		"type":   "function_call_output",
+		"name":   output.Name,
+		"output": output.Output,
+	}
+	if strings.TrimSpace(output.Namespace) != "" {
+		item["namespace"] = output.Namespace
+	}
+	return item
 }
 
 // preparedUserMessageInputItem builds the user message input item and runs the

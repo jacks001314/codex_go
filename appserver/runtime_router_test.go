@@ -26705,3 +26705,23 @@ func TestCurrentTimeReminderExplicitlyConfiguredDetectsFeatureKey(t *testing.T) 
 		t.Fatal("currentTimeReminderExplicitlyConfigured() = true, want false")
 	}
 }
+
+func TestStandaloneToolOutputInputItemLikeRust(t *testing.T) {
+	input := standaloneToolOutputInputItem(&turn.TurnToolOutput{Name: "notifications", Namespace: "slack", Output: "Alice mentioned you."})
+	item, ok := input.(map[string]any)
+	if !ok {
+		t.Fatalf("input = %#v, want map", input)
+	}
+	if item["type"] != "function_call_output" {
+		t.Fatalf("type = %#v, want function_call_output", item["type"])
+	}
+	if item["name"] != "notifications" || item["namespace"] != "slack" {
+		t.Fatalf("name/namespace = %#v", item)
+	}
+	if item["output"] != "Alice mentioned you." {
+		t.Fatalf("output = %#v", item["output"])
+	}
+	if _, hasCallID := item["call_id"]; hasCallID {
+		t.Fatalf("standalone tool output must not carry a call_id: %#v", item)
+	}
+}

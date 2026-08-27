@@ -1062,6 +1062,20 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			ExitCode:         threadItemInt64PtrFromData(i.Data, "exit_code", "exitCode"),
 			DurationMS:       threadItemInt64PtrFromData(i.Data, "duration_ms", "durationMs"),
 		})
+	case "functionCallOutput":
+		return json.Marshal(struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			Namespace string `json:"namespace,omitempty"`
+			Output    string `json:"output"`
+		}{
+			Type:      "functionCallOutput",
+			ID:        threadItemExternalID(i),
+			Name:      threadItemName(i),
+			Namespace: threadItemNamespace(i),
+			Output:    threadItemOutputText(i),
+		})
 	case "mcpToolCall":
 		return json.Marshal(struct {
 			Type              string  `json:"type"`
@@ -3745,6 +3759,8 @@ func threadItemWireType(item *ThreadItem) string {
 	switch strings.TrimSpace(item.Type) {
 	case "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall":
 		return item.Type
+	case "functionCallOutput":
+		return "functionCallOutput"
 	case "command_execution":
 		return "commandExecution"
 	case "file_change":
@@ -3768,6 +3784,13 @@ func threadItemWireType(item *ThreadItem) string {
 		}
 		if strings.TrimSpace(threadItemCommand(item)) != "" {
 			return "commandExecution"
+		}
+		// Rust #41002: a standalone named function-call output (no call_id
+		// pairing a call) is surfaced as a distinct functionCallOutput thread
+		// item rather than a generic tool output.
+		if (strings.TrimSpace(item.Type) == "function_call_output" || strings.TrimSpace(item.Type) == "custom_tool_call_output" || strings.TrimSpace(item.Type) == "tool_output") &&
+			strings.TrimSpace(threadItemName(item)) != "" {
+			return "functionCallOutput"
 		}
 	}
 	return item.Type
@@ -3891,6 +3914,42 @@ func threadItemJSONValueFromData(data map[string]any, keys ...string) any {
 		return value
 	}
 	return nil
+}
+
+// threadItemName returns the tool/function name carried by a functionCallOutput
+// or function_call_output thread item (Rust #41002 FunctionCallOutput.name).
+func threadItemName(item *ThreadItem) string {
+	if item == nil {
+		return ""
+	}
+	if name := threadItemStringFromData(item.Data, "name", "toolName", "tool_name"); strings.TrimSpace(name) != "" {
+		return name
+	}
+	return strings.TrimSpace(item.Name)
+}
+
+// threadItemNamespace returns the optional namespace of a standalone
+// functionCallOutput thread item (Rust #41002 FunctionCallOutput.namespace).
+func threadItemNamespace(item *ThreadItem) string {
+	if item == nil {
+		return ""
+	}
+	if namespace := threadItemStringFromData(item.Data, "namespace"); strings.TrimSpace(namespace) != "" {
+		return namespace
+	}
+	return strings.TrimSpace(item.Namespace)
+}
+
+// threadItemOutputText returns the visible output body of a standalone
+// functionCallOutput thread item (Rust #41002 FunctionCallOutput.output).
+func threadItemOutputText(item *ThreadItem) string {
+	if item == nil {
+		return ""
+	}
+	if output := threadItemStringFromData(item.Data, "output"); strings.TrimSpace(output) != "" {
+		return output
+	}
+	return strings.TrimSpace(item.Text)
 }
 
 func threadItemCommand(item *ThreadItem) string {

@@ -66,6 +66,14 @@ type TurnUserInput struct {
 	MimeType     string        `json:"mimeType,omitempty"`
 }
 
+// TurnToolOutput carries a standalone named function-call output used to start
+// or steer a turn without a user prompt (Rust TurnToolOutput, #41002).
+type TurnToolOutput struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	Output    string `json:"output"`
+}
+
 type ByteRange struct {
 	Start uint `json:"start"`
 	End   uint `json:"end"`
@@ -179,6 +187,7 @@ func (i *TurnUserInput) MarshalJSON() ([]byte, error) {
 type TurnStartParams struct {
 	ThreadID              string            `json:"threadId"`
 	Input                 []TurnUserInput   `json:"input,omitempty"`
+	ToolOutput            *TurnToolOutput   `json:"toolOutput,omitempty"`
 	Prompt                string            `json:"prompt,omitempty"`
 	ClientUserMessageID   string            `json:"clientUserMessageId,omitempty"`
 	ResponsesAPIMetadata  map[string]string `json:"responsesapiClientMetadata,omitempty"`
@@ -227,6 +236,7 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		ThreadID            string          `json:"threadId"`
 		ClientUserMessageID string          `json:"clientUserMessageId,omitempty"`
 		Input               []TurnUserInput `json:"input"`
+		ToolOutput          *TurnToolOutput `json:"toolOutput,omitempty"`
 		CWD                 string          `json:"cwd,omitempty"`
 		ApprovalPolicy      any             `json:"approvalPolicy,omitempty"`
 		ApprovalsReviewer   *string         `json:"approvalsReviewer,omitempty"`
@@ -242,6 +252,7 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		ThreadID:            p.ThreadID,
 		ClientUserMessageID: p.ClientUserMessageID,
 		Input:               userInputsForJSONWithPrompt(p.Input, p.Prompt),
+		ToolOutput:          p.ToolOutput,
 		CWD:                 p.CWD,
 		ApprovalPolicy:      p.ApprovalPolicy,
 		ApprovalsReviewer:   p.ApprovalsReviewer,
@@ -297,6 +308,20 @@ func (p *TurnStartParams) Validate() error {
 	}
 	if err := validateTurnEnvironmentCWDs(p.Environments); err != nil {
 		return err
+	}
+	if p.ToolOutput != nil {
+		if strings.TrimSpace(p.ToolOutput.Name) == "" {
+			return fmt.Errorf("%w: toolOutput.name must not be empty", ErrInvalidTurnRequest)
+		}
+		if userInputTextChars(p.Prompt, p.Input) > 0 {
+			return fmt.Errorf("%w: toolOutput cannot be combined with nonempty input", ErrInvalidTurnRequest)
+		}
+		if actualChars := utf8.RuneCountInString(p.ToolOutput.Output); actualChars > MaxUserInputTextChars {
+			return &InputTooLargeError{
+				MaxChars:    MaxUserInputTextChars,
+				ActualChars: actualChars,
+			}
+		}
 	}
 	if err := validateUserInputTextLimit(p.Prompt, p.Input); err != nil {
 		return err

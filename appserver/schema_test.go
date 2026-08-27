@@ -608,6 +608,15 @@ func sampleRustSchemaThreadItems() []ThreadItem {
 		{ID: "item-enter-review", Type: "enteredReviewMode", Text: "review started"},
 		{ID: "item-exit-review", Type: "exitedReviewMode", Text: "review ended"},
 		{ID: "item-compact", Type: "contextCompaction"},
+		{
+			ID:   "item-function-output",
+			Type: "functionCallOutput",
+			Name: "notifications",
+			Data: map[string]any{
+				"namespace": "slack",
+				"output":    "Alice mentioned you.",
+			},
+		},
 	}
 }
 
@@ -1401,4 +1410,36 @@ func findProtocolMethod(methods []ProtocolMethod, method string) *ProtocolMethod
 		}
 	}
 	return nil
+}
+
+func TestFunctionCallOutputThreadItemSerializesLikeRust(t *testing.T) {
+	item := ThreadItem{
+		ID:   "item-fn-out",
+		Type: "functionCallOutput",
+		Name: "notifications",
+		Data: map[string]any{
+			"namespace": "slack",
+			"output":    "Alice mentioned you.",
+		},
+	}
+	data, err := json.Marshal(&item)
+	if err != nil {
+		t.Fatalf("marshal thread item: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal thread item: %v", err)
+	}
+	if decoded["type"] != "functionCallOutput" {
+		t.Fatalf("type = %#v, want functionCallOutput", decoded["type"])
+	}
+	if decoded["name"] != "notifications" {
+		t.Fatalf("name = %#v, want notifications", decoded["name"])
+	}
+	if decoded["namespace"] != "slack" {
+		t.Fatalf("namespace = %#v, want slack", decoded["namespace"])
+	}
+	if decoded["output"] != "Alice mentioned you." {
+		t.Fatalf("output = %#v", decoded["output"])
+	}
 }
