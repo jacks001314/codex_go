@@ -1115,6 +1115,63 @@ func TestResponsesAgentRunnerDoesNotAddHostedImageGenerationWhenStandaloneNamesp
 	}
 }
 
+func TestResponsesLitePrefixItemsUseStableDeterministicIDsLikeRust(t *testing.T) {
+	tools := []any{
+		map[string]any{"type": "function", "name": "echo", "strict": true},
+	}
+	instructions := "You are a helpful assistant."
+
+	first := responsesLiteInputItems([]any{map[string]any{"type": "message", "role": "user", "content": []any{}}}, cloneAnySlice(tools), instructions, "thread-abc")
+	second := responsesLiteInputItems([]any{map[string]any{"type": "message", "role": "user", "content": []any{}}}, cloneAnySlice(tools), instructions, "thread-abc")
+
+	// Same thread + same payload must produce identical prefix item IDs.
+	at1, ok := first[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first item = %#v, want additional_tools map", first[0])
+	}
+	at2, ok := second[0].(map[string]any)
+	if !ok {
+		t.Fatalf("second item = %#v, want additional_tools map", second[0])
+	}
+	if at1["id"] != at2["id"] {
+		t.Fatalf("additional_tools id unstable: got %v then %v", at1["id"], at2["id"])
+	}
+	msg1, ok := first[1].(responsesInputMessage)
+	if !ok {
+		t.Fatalf("first message item = %#v, want responsesInputMessage", first[1])
+	}
+	msg2, ok := second[1].(responsesInputMessage)
+	if !ok {
+		t.Fatalf("second message item = %#v, want responsesInputMessage", second[1])
+	}
+	if msg1.ID != msg2.ID || msg1.ID == "" {
+		t.Fatalf("base-instruction message id unstable or empty: %q then %q", msg1.ID, msg2.ID)
+	}
+	if !strings.HasPrefix(msg1.ID, "msg_") || !strings.HasPrefix(at1["id"].(string), "at_") {
+		t.Fatalf("prefix item id suffixes missing: at=%v msg=%q", at1["id"], msg1.ID)
+	}
+
+	// Changing the thread must change the IDs.
+	third := responsesLiteInputItems([]any{map[string]any{"type": "message", "role": "user", "content": []any{}}}, cloneAnySlice(tools), instructions, "thread-xyz")
+	at3, ok := third[0].(map[string]any)
+	if !ok {
+		t.Fatalf("third item = %#v, want additional_tools map", third[0])
+	}
+	if at3["id"] == at1["id"] {
+		t.Fatalf("additional_tools id did not change across threads: %v", at1["id"])
+	}
+
+	// Changing the payload (tools) must change the additional_tools ID.
+	changedTools := responsesLiteInputItems([]any{map[string]any{"type": "message", "role": "user", "content": []any{}}}, []any{map[string]any{"type": "function", "name": "other"}}, instructions, "thread-abc")
+	at4, ok := changedTools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("changed-tools item = %#v, want additional_tools map", changedTools[0])
+	}
+	if at4["id"] == at1["id"] {
+		t.Fatalf("additional_tools id did not change across payloads: %v", at1["id"])
+	}
+}
+
 func TestResponsesAgentRunnerParsesImageGenerationCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{

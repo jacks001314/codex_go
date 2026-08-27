@@ -26597,3 +26597,67 @@ func TestAnalyticsTurnToolCountsCountsCollabAsSubagent(t *testing.T) {
 		t.Fatalf("counts = %#v, want subagent=1 dynamic=0 total=1 (Rust #40585)", counts)
 	}
 }
+
+func stringPtrAppserver(value string) *string {
+	return &value
+}
+
+func TestMisalignmentDetailsFromErrorSurfacesPublicTurnErrorDetails(t *testing.T) {
+	err := &codexapi.APIError{
+		Kind:    codexapi.ErrorMisalignmentPolicyViolation,
+		Status:  http.StatusBadRequest,
+		Message: "This request violated the misalignment policy.",
+		Misalignment: &codexapi.MisalignmentDetails{
+			ErrorType:           stringPtrAppserver("unauthorized_data_transfer"),
+			DetailedExplanation: stringPtrAppserver("Sensitive customer explanation"),
+			Steer:               &codexapi.MisalignmentSteer{Message: "Sensitive customer steering"},
+		},
+	}
+
+	got := misalignmentDetailsFromError(err)
+	if got == nil {
+		t.Fatal("misalignmentDetailsFromError() = nil, want populated details")
+	}
+	if got.ErrorType == nil || *got.ErrorType != "unauthorized_data_transfer" {
+		t.Fatalf("error_type = %#v, want unauthorized_data_transfer", got.ErrorType)
+	}
+	if got.DetailedExplanation == nil || *got.DetailedExplanation != "Sensitive customer explanation" {
+		t.Fatalf("detailed_explanation = %#v", got.DetailedExplanation)
+	}
+	if got.Steer == nil || got.Steer.Message != "Sensitive customer steering" {
+		t.Fatalf("steer = %#v", got.Steer)
+	}
+}
+
+func TestTurnErrorMisalignmentJSONExposesDetailsLikeRust(t *testing.T) {
+	apiErr := &codexapi.APIError{
+		Kind:    codexapi.ErrorMisalignmentPolicyViolation,
+		Status:  http.StatusBadRequest,
+		Message: "This request violated the misalignment policy.",
+		Misalignment: &codexapi.MisalignmentDetails{
+			ErrorType:           stringPtrAppserver("unauthorized_data_transfer"),
+			DetailedExplanation: stringPtrAppserver("Sensitive customer explanation"),
+			Steer:               &codexapi.MisalignmentSteer{Message: "Sensitive customer steering"},
+		},
+	}
+	appErr := &TurnError{Message: apiErr.Error(), CodexErrorInfo: "misalignmentPolicyViolation", Misalignment: misalignmentDetailsFromError(apiErr)}
+	data, err := json.Marshal(appErr)
+	if err != nil {
+		t.Fatalf("marshal turn error: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal turn error: %v", err)
+	}
+	misalignment, ok := decoded["misalignment"].(map[string]any)
+	if !ok {
+		t.Fatalf("misalignment = %#v, want object", decoded["misalignment"])
+	}
+	if misalignment["errorType"] != "unauthorized_data_transfer" {
+		t.Fatalf("misalignment.errorType = %#v", misalignment["errorType"])
+	}
+	steer, ok := misalignment["steer"].(map[string]any)
+	if !ok || steer["message"] != "Sensitive customer steering" {
+		t.Fatalf("misalignment.steer = %#v", misalignment["steer"])
+	}
+}

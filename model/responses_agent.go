@@ -23,6 +23,7 @@ import (
 	"codex_go/eventmap"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -270,6 +271,7 @@ type responsesTextFormat struct {
 }
 
 type responsesInputMessage struct {
+	ID      string                  `json:"id,omitempty"`
 	Type    string                  `json:"type,omitempty"`
 	Role    string                  `json:"role"`
 	Content []responsesInputContent `json:"content"`
@@ -335,6 +337,9 @@ type responsesAgentAPIErrorBody struct {
 	Message string `json:"message"`
 	Type    string `json:"type,omitempty"`
 	Code    any    `json:"code,omitempty"`
+	// Misalignment carries the optional public explanation and continuation
+	// instruction returned with a misalignment block (Rust #40952).
+	Misalignment json.RawMessage `json:"misalignment,omitempty"`
 }
 
 type ResponsesAPIError struct {
@@ -907,7 +912,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	tools = normalizeResponseToolParameters(tools)
 	parallelToolCalls := request.ParallelToolCalls && !modelInfo.UseResponsesLite
 	if modelInfo.UseResponsesLite {
-		inputItems = responsesLiteInputItems(inputItems, tools, instructions)
+		inputItems = responsesLiteInputItems(inputItems, tools, instructions, request.ThreadID)
 		instructions = ""
 		tools = nil
 	}
@@ -1764,17 +1769,19 @@ func isPrefixedResponseItemID(value string) bool {
 	return ok && prefix != "" && suffix != ""
 }
 
-func responsesLiteInputItems(inputItems []any, tools []any, instructions string) []any {
+func responsesLiteInputItems(inputItems []any, tools []any, instructions string, threadID string) []any {
 	if tools == nil {
 		tools = []any{}
 	}
-	prefix := []any{map[string]any{
-		"type":  "additional_tools",
-		"role":  "developer",
-		"tools": tools,
-	}}
+	// Responses Lite rebuilds its tools and base-instruction prefix on every
+	// request. Derive deterministic item IDs from the thread ID plus each
+	// item's serialized payload so an unchanged prefix keeps its identity
+	// across retries and resumed sessions (Rust client.rs #40962). Changing the
+	// thread or the payload changes the IDs.
+	prefixItems := []any{responsesLiteAdditionalToolsItem(tools, threadID)}
 	if strings.TrimSpace(instructions) != "" {
-		prefix = append(prefix, responsesInputMessage{
+		prefixItems = append(prefixItems, responsesInputMessage{
+			ID:   responsesLiteItemID("msg", []byte(strings.TrimSpace(instructions)), threadID),
 			Type: "message",
 			Role: "developer",
 			Content: []responsesInputContent{{
@@ -1783,12 +1790,29 @@ func responsesLiteInputItems(inputItems []any, tools []any, instructions string)
 			}},
 		})
 	}
-	items := make([]any, 0, len(prefix)+len(inputItems))
-	items = append(items, prefix...)
+	items := make([]any, 0, len(prefixItems)+len(inputItems))
+	items = append(items, prefixItems...)
 	for i := range inputItems {
 		items = append(items, stripResponsesLiteImageDetails(inputItems[i]))
 	}
 	return items
+}
+
+func responsesLiteAdditionalToolsItem(tools []any, threadID string) map[string]any {
+	item := map[string]any{
+		"type":  "additional_tools",
+		"role":  "developer",
+		"tools": tools,
+	}
+	if payload, err := json.Marshal(tools); err == nil {
+		item["id"] = responsesLiteItemID("at", payload, threadID)
+	}
+	return item
+}
+
+func responsesLiteItemID(prefix string, payload []byte, threadID string) string {
+	namespace := uuid.NewSHA1(uuid.NameSpaceOID, []byte(threadID))
+	return prefix + "_" + uuid.NewSHA1(namespace, payload).String()
 }
 
 func stripResponsesLiteImageDetails(value any) any {

@@ -175,45 +175,45 @@ const (
 	MethodCommandExecTerminate                   Method = "command/exec/terminate"
 	MethodCommandExecResize                      Method = "command/exec/resize"
 
-	NotificationThreadStarted                   NotificationMethod = "thread/started"
-	NotificationThreadStatusChanged             NotificationMethod = "thread/status/changed"
-	NotificationThreadArchived                  NotificationMethod = "thread/archived"
-	NotificationThreadDeleted                   NotificationMethod = "thread/deleted"
-	NotificationThreadUnarchived                NotificationMethod = "thread/unarchived"
-	NotificationThreadClosed                    NotificationMethod = "thread/closed"
-	NotificationSkillsChanged                   NotificationMethod = "skills/changed"
-	NotificationThreadNameUpdated               NotificationMethod = "thread/name/updated"
-	NotificationThreadGoalUpdated               NotificationMethod = "thread/goal/updated"
-	NotificationThreadGoalCleared               NotificationMethod = "thread/goal/cleared"
-	NotificationThreadEnvironmentConnected      NotificationMethod = "thread/environment/connected"
-	NotificationThreadEnvironmentDisconnected   NotificationMethod = "thread/environment/disconnected"
-	NotificationThreadSettingsUpdated           NotificationMethod = "thread/settings/updated"
-	NotificationThreadTokenUsageUpdated         NotificationMethod = "thread/tokenUsage/updated"
-	NotificationTurnStarted                     NotificationMethod = "turn/started"
-	NotificationTurnCompleted                   NotificationMethod = "turn/completed"
-	NotificationThreadRealtimeStarted           NotificationMethod = "thread/realtime/started"
-	NotificationThreadRealtimeItemAdded         NotificationMethod = "thread/realtime/itemAdded"
-	NotificationThreadRealtimeItemStarted       NotificationMethod = "thread/realtime/item/started"
-	NotificationThreadRealtimeItemCompleted     NotificationMethod = "thread/realtime/item/completed"
+	NotificationThreadStarted                     NotificationMethod = "thread/started"
+	NotificationThreadStatusChanged               NotificationMethod = "thread/status/changed"
+	NotificationThreadArchived                    NotificationMethod = "thread/archived"
+	NotificationThreadDeleted                     NotificationMethod = "thread/deleted"
+	NotificationThreadUnarchived                  NotificationMethod = "thread/unarchived"
+	NotificationThreadClosed                      NotificationMethod = "thread/closed"
+	NotificationSkillsChanged                     NotificationMethod = "skills/changed"
+	NotificationThreadNameUpdated                 NotificationMethod = "thread/name/updated"
+	NotificationThreadGoalUpdated                 NotificationMethod = "thread/goal/updated"
+	NotificationThreadGoalCleared                 NotificationMethod = "thread/goal/cleared"
+	NotificationThreadEnvironmentConnected        NotificationMethod = "thread/environment/connected"
+	NotificationThreadEnvironmentDisconnected     NotificationMethod = "thread/environment/disconnected"
+	NotificationThreadSettingsUpdated             NotificationMethod = "thread/settings/updated"
+	NotificationThreadTokenUsageUpdated           NotificationMethod = "thread/tokenUsage/updated"
+	NotificationTurnStarted                       NotificationMethod = "turn/started"
+	NotificationTurnCompleted                     NotificationMethod = "turn/completed"
+	NotificationThreadRealtimeStarted             NotificationMethod = "thread/realtime/started"
+	NotificationThreadRealtimeItemAdded           NotificationMethod = "thread/realtime/itemAdded"
+	NotificationThreadRealtimeItemStarted         NotificationMethod = "thread/realtime/item/started"
+	NotificationThreadRealtimeItemCompleted       NotificationMethod = "thread/realtime/item/completed"
 	NotificationThreadRealtimeItemTranscriptDelta NotificationMethod = "thread/realtime/item/transcript/delta"
-	NotificationThreadRealtimeTranscriptDelta   NotificationMethod = "thread/realtime/transcript/delta"
-	NotificationThreadRealtimeTranscriptDone    NotificationMethod = "thread/realtime/transcript/done"
-	NotificationThreadRealtimeOutputAudioDelta  NotificationMethod = "thread/realtime/outputAudio/delta"
-	NotificationThreadRealtimeSDP               NotificationMethod = "thread/realtime/sdp"
-	NotificationThreadRealtimeError             NotificationMethod = "thread/realtime/error"
-	NotificationThreadRealtimeClosed            NotificationMethod = "thread/realtime/closed"
-	NotificationError                           NotificationMethod = "error"
-	NotificationAccountLoginCompleted           NotificationMethod = "account/login/completed"
-	NotificationAccountUpdated                  NotificationMethod = "account/updated"
-	NotificationAccountRateLimitsUpdated        NotificationMethod = "account/rateLimits/updated"
-	NotificationAppListUpdated                  NotificationMethod = "app/list/updated"
-	NotificationModelRerouted                   NotificationMethod = "model/rerouted"
-	NotificationModelVerification               NotificationMethod = "model/verification"
-	NotificationWarning                         NotificationMethod = "warning"
-	NotificationDeprecationNotice               NotificationMethod = "deprecationNotice"
-	NotificationConfigWarning                   NotificationMethod = "configWarning"
-	NotificationFuzzyFileSearchSessionUpdated   NotificationMethod = "fuzzyFileSearch/sessionUpdated"
-	NotificationFuzzyFileSearchSessionCompleted NotificationMethod = "fuzzyFileSearch/sessionCompleted"
+	NotificationThreadRealtimeTranscriptDelta     NotificationMethod = "thread/realtime/transcript/delta"
+	NotificationThreadRealtimeTranscriptDone      NotificationMethod = "thread/realtime/transcript/done"
+	NotificationThreadRealtimeOutputAudioDelta    NotificationMethod = "thread/realtime/outputAudio/delta"
+	NotificationThreadRealtimeSDP                 NotificationMethod = "thread/realtime/sdp"
+	NotificationThreadRealtimeError               NotificationMethod = "thread/realtime/error"
+	NotificationThreadRealtimeClosed              NotificationMethod = "thread/realtime/closed"
+	NotificationError                             NotificationMethod = "error"
+	NotificationAccountLoginCompleted             NotificationMethod = "account/login/completed"
+	NotificationAccountUpdated                    NotificationMethod = "account/updated"
+	NotificationAccountRateLimitsUpdated          NotificationMethod = "account/rateLimits/updated"
+	NotificationAppListUpdated                    NotificationMethod = "app/list/updated"
+	NotificationModelRerouted                     NotificationMethod = "model/rerouted"
+	NotificationModelVerification                 NotificationMethod = "model/verification"
+	NotificationWarning                           NotificationMethod = "warning"
+	NotificationDeprecationNotice                 NotificationMethod = "deprecationNotice"
+	NotificationConfigWarning                     NotificationMethod = "configWarning"
+	NotificationFuzzyFileSearchSessionUpdated     NotificationMethod = "fuzzyFileSearch/sessionUpdated"
+	NotificationFuzzyFileSearchSessionCompleted   NotificationMethod = "fuzzyFileSearch/sessionCompleted"
 )
 
 const (
@@ -877,18 +877,38 @@ type TurnError struct {
 	Message           string         `json:"message"`
 	CodexErrorInfo    CodexErrorInfo `json:"codexErrorInfo"`
 	AdditionalDetails *string        `json:"additionalDetails"`
+	// Misalignment carries the optional public explanation and continuation
+	// instruction for a resumable misalignment block (Rust #40952). It is
+	// delivered live to app-server clients but never written to rollout.
+	Misalignment *MisalignmentErrorDetails `json:"misalignment,omitempty"`
 }
 
 func (e TurnError) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Message           string         `json:"message"`
-		CodexErrorInfo    CodexErrorInfo `json:"codexErrorInfo"`
-		AdditionalDetails *string        `json:"additionalDetails"`
+		Message           string                    `json:"message"`
+		CodexErrorInfo    CodexErrorInfo            `json:"codexErrorInfo"`
+		AdditionalDetails *string                   `json:"additionalDetails"`
+		Misalignment      *MisalignmentErrorDetails `json:"misalignment,omitempty"`
 	}{
 		Message:           e.Message,
 		CodexErrorInfo:    e.CodexErrorInfo,
 		AdditionalDetails: cloneStringPtrAppserver(e.AdditionalDetails),
+		Misalignment:      e.Misalignment,
 	})
+}
+
+// MisalignmentErrorDetails are the customer-facing details supplied by the
+// Responses API for a misalignment block (Rust #40952). The fields are
+// optional so new categories added by Responses do not prevent the error from
+// being surfaced.
+type MisalignmentErrorDetails struct {
+	ErrorType           *string            `json:"errorType,omitempty"`
+	DetailedExplanation *string            `json:"detailedExplanation,omitempty"`
+	Steer               *MisalignmentSteer `json:"steer,omitempty"`
+}
+
+type MisalignmentSteer struct {
+	Message string `json:"message"`
 }
 
 type ThreadItem struct {

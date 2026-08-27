@@ -27,6 +27,10 @@ type APIError struct {
 	Kind    APIErrorKind `json:"kind"`
 	Status  int          `json:"status,omitempty"`
 	Message string       `json:"message,omitempty"`
+	// Misalignment carries the optional public explanation and continuation
+	// instruction for a misalignment policy block (Rust #40952). It is exposed
+	// to live clients but never serialized into rollout storage.
+	Misalignment *MisalignmentDetails `json:"-"`
 	// Delay is retained for compatibility. New code should use WithRetryDelay
 	// and RetryDelay so retry metadata remains independent from error details.
 	Delay time.Duration `json:"delay,omitempty"`
@@ -40,6 +44,18 @@ type APIErrorDetails struct {
 	Kind    APIErrorKind
 	Status  int
 	Message string
+}
+
+// MisalignmentDetails mirrors the customer-facing misalignment block details
+// supplied by the Responses API (Rust MisalignmentErrorDetails).
+type MisalignmentDetails struct {
+	ErrorType           *string            `json:"errorType,omitempty"`
+	DetailedExplanation *string            `json:"detailedExplanation,omitempty"`
+	Steer               *MisalignmentSteer `json:"steer,omitempty"`
+}
+
+type MisalignmentSteer struct {
+	Message string `json:"message"`
 }
 
 func (e *APIError) Error() string {

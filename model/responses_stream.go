@@ -1886,7 +1886,7 @@ func responseFailedError(data []byte) error {
 		if strings.TrimSpace(message) == "" {
 			message = "This request was blocked due to a misalignment policy violation."
 		}
-		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: http.StatusBadRequest, Message: message}
+		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: http.StatusBadRequest, Message: message, Misalignment: parseMisalignmentDetails(errBody)}
 	case "invalid_prompt", "bio_policy":
 		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Message: message}
 	case "server_is_overloaded", "slow_down":
@@ -1907,6 +1907,27 @@ func responseFailedError(data []byte) error {
 		return retryable
 	}
 	return errResponsesStreamFailed
+}
+
+func parseMisalignmentDetails(errBody *responsesAgentAPIErrorBody) *codexapi.MisalignmentDetails {
+	if errBody == nil || len(errBody.Misalignment) == 0 || strings.TrimSpace(string(errBody.Misalignment)) == "" || string(errBody.Misalignment) == "null" {
+		return nil
+	}
+	var details struct {
+		ErrorType           *string `json:"error_type"`
+		DetailedExplanation *string `json:"detailed_explanation"`
+		Steer               *struct {
+			Message string `json:"message"`
+		} `json:"steer"`
+	}
+	if err := json.Unmarshal(errBody.Misalignment, &details); err != nil {
+		return nil
+	}
+	out := &codexapi.MisalignmentDetails{ErrorType: details.ErrorType, DetailedExplanation: details.DetailedExplanation}
+	if details.Steer != nil {
+		out.Steer = &codexapi.MisalignmentSteer{Message: details.Steer.Message}
+	}
+	return out
 }
 
 var responseFailedRetryDelayPattern = regexp.MustCompile(`(?i)try again in\s*(\d+(?:\.\d+)?)\s*(s|ms|seconds?)`)

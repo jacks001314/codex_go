@@ -3245,7 +3245,7 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 	completedAt := now.Unix()
 	durationMS := now.UnixMilli() - startedAtMS
 	errorFields := turnAnalyticsErrorFieldsFromError(err)
-	appErr := &TurnError{Message: err.Error(), CodexErrorInfo: errorFields.TurnError}
+	appErr := &TurnError{Message: err.Error(), CodexErrorInfo: errorFields.TurnError, Misalignment: misalignmentDetailsFromError(err)}
 	if analytics != nil {
 		analytics.TurnError = errorFields.TurnError
 		analytics.CodexErrorKind = errorFields.CodexErrorKind
@@ -3410,6 +3410,26 @@ func turnAnalyticsErrorFieldsFromError(err error) turnAnalyticsErrorFields {
 	default:
 		return turnAnalyticsErrorFields{}
 	}
+}
+
+// misalignmentDetailsFromError extracts the optional public misalignment
+// explanation and continuation instruction from a misalignment policy
+// violation error so live app-server clients can offer a user-confirmed
+// continuation (Rust #40952). The details are never written to rollout.
+func misalignmentDetailsFromError(err error) *MisalignmentErrorDetails {
+	if err == nil {
+		return nil
+	}
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) || apiErr.Misalignment == nil {
+		return nil
+	}
+	m := apiErr.Misalignment
+	out := &MisalignmentErrorDetails{ErrorType: m.ErrorType, DetailedExplanation: m.DetailedExplanation}
+	if m.Steer != nil {
+		out.Steer = &MisalignmentSteer{Message: m.Steer.Message}
+	}
+	return out
 }
 
 func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsErrorFields {

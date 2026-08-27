@@ -41,6 +41,57 @@ func TestParseResponsesStreamRecoversDeclaredCustomToolFromFunctionCallEnvelope(
 	}
 }
 
+func TestResponseFailedErrorParsesMisalignmentDetailsLikeRust(t *testing.T) {
+	raw := `{"type":"response.failed","response":{"error":{"code":"misalignment_policy_violation","message":"This request violated the misalignment policy.","misalignment":{"error_type":"unauthorized_data_transfer","detailed_explanation":"Sensitive customer explanation","steer":{"message":"Sensitive customer steering"}}}}}`
+	err := responseFailedError([]byte(raw))
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T, want *codexapi.APIError", err)
+	}
+	if apiErr.Kind != codexapi.ErrorMisalignmentPolicyViolation {
+		t.Fatalf("error kind = %q, want misalignmentPolicyViolation", apiErr.Kind)
+	}
+	if apiErr.Misalignment == nil {
+		t.Fatal("misalignment details = nil, want populated")
+	}
+	if apiErr.Misalignment.ErrorType == nil || *apiErr.Misalignment.ErrorType != "unauthorized_data_transfer" {
+		t.Fatalf("error_type = %#v, want unauthorized_data_transfer", apiErr.Misalignment.ErrorType)
+	}
+	if apiErr.Misalignment.DetailedExplanation == nil || *apiErr.Misalignment.DetailedExplanation != "Sensitive customer explanation" {
+		t.Fatalf("detailed_explanation = %#v", apiErr.Misalignment.DetailedExplanation)
+	}
+	if apiErr.Misalignment.Steer == nil || apiErr.Misalignment.Steer.Message != "Sensitive customer steering" {
+		t.Fatalf("steer = %#v", apiErr.Misalignment.Steer)
+	}
+}
+
+func TestResponseFailedErrorMalformedMisalignmentIsIgnoredLikeRust(t *testing.T) {
+	raw := `{"type":"response.failed","response":{"error":{"code":"misalignment_policy_violation","message":"blocked","misalignment":"not-an-object"}}}`
+	err := responseFailedError([]byte(raw))
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T, want *codexapi.APIError", err)
+	}
+	if apiErr.Kind != codexapi.ErrorMisalignmentPolicyViolation {
+		t.Fatalf("error kind = %q, want misalignmentPolicyViolation", apiErr.Kind)
+	}
+	if apiErr.Misalignment != nil {
+		t.Fatalf("malformed misalignment should be nil, got %#v", apiErr.Misalignment)
+	}
+}
+
+func TestResponseFailedErrorMisalignmentAbsentIsNilLikeRust(t *testing.T) {
+	raw := `{"type":"response.failed","response":{"error":{"code":"misalignment_policy_violation","message":"This request violated the misalignment policy."}}}`
+	err := responseFailedError([]byte(raw))
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T, want *codexapi.APIError", err)
+	}
+	if apiErr.Misalignment != nil {
+		t.Fatalf("misalignment should be nil when absent, got %#v", apiErr.Misalignment)
+	}
+}
+
 func TestUsageFromStreamEventDataCapturesRolloutBudgetUnits(t *testing.T) {
 	usage, ok := usageFromStreamEventData([]byte(`{"response":{"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6,"codex_rollout_budget_units":2.5}}}`))
 	if !ok {
