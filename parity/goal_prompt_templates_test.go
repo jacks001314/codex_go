@@ -20,9 +20,14 @@ func TestRustGoalPromptTemplatesMatchGo(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	rustRepo := filepath.Dir(root)
 
-	continuation := gitOutput(t, rustRepo, "show", candidateRustTo+":codex-rs/ext/goal/templates/goals/continuation.md")
-	budget := gitOutput(t, rustRepo, "show", candidateRustTo+":codex-rs/ext/goal/templates/goals/budget_limit.md")
-	objective := gitOutput(t, rustRepo, "show", candidateRustTo+":codex-rs/ext/goal/templates/goals/objective_updated.md")
+	// The goal templates changed in the sync26/sync27 range (#40628 adds the
+	// "No-progress check" to continuation.md), which is newer than the
+	// certification baseline (candidateRustTo). Verify against the current
+	// freeze target so these templates stay pinned to the latest upstream.
+	target := "bde9db1375667c50dcc0c2b52532a4e2672571c2"
+	continuation := gitOutput(t, rustRepo, "show", target+":codex-rs/ext/goal/templates/goals/continuation.md")
+	budget := gitOutput(t, rustRepo, "show", target+":codex-rs/ext/goal/templates/goals/budget_limit.md")
+	objective := gitOutput(t, rustRepo, "show", target+":codex-rs/ext/goal/templates/goals/objective_updated.md")
 
 	cases := []struct {
 		name string
