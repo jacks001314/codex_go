@@ -1571,3 +1571,51 @@ func TestMCPEnvironmentPolicyDisablesUnselectedAttachmentServers(t *testing.T) {
 		t.Fatal("unselected environment server should be disabled")
 	}
 }
+
+func TestCyberTrustedAccessStatusDerivationLikeRust(t *testing.T) {
+	granted := &VerifiedAccessProgram{Program: "cyber", State: VerifiedAccessActive, Grants: []VerifiedAccessGrant{
+		{Level: TrustedAccessTac2, Source: VerifiedAccessIndividual},
+	}}
+	status, grants, ok := cyberTrustedAccessStatus(granted)
+	if !ok || status != "granted" || len(grants) != 1 || grants[0]["level"] != "tac2" || grants[0]["source"] != "user" {
+		t.Fatalf("granted status = %q grants=%#v ok=%v", status, grants, ok)
+	}
+
+	notGranted := &VerifiedAccessProgram{Program: "cyber", State: VerifiedAccessInactive}
+	status, grants, ok = cyberTrustedAccessStatus(notGranted)
+	if !ok || status != "not_granted" || len(grants) != 0 {
+		t.Fatalf("not_granted status = %q grants=%#v ok=%v", status, grants, ok)
+	}
+
+	unknown := &VerifiedAccessProgram{Program: "cyber", State: VerifiedAccessUnavailable}
+	status, _, ok = cyberTrustedAccessStatus(unknown)
+	if !ok || status != "unknown" {
+		t.Fatalf("unknown status = %q ok=%v", status, ok)
+	}
+
+	// Active state with no grants is an ambiguous outcome -> not ok.
+	ambiguous := &VerifiedAccessProgram{Program: "cyber", State: VerifiedAccessActive}
+	if _, _, ok := cyberTrustedAccessStatus(ambiguous); ok {
+		t.Fatalf("ambiguous program status ok = true, want false")
+	}
+}
+
+func TestEntitlementContextValueAttachesHostOwnedMetadataLikeRust(t *testing.T) {
+	value := entitlementContextValue("granted", []map[string]any{{"level": "tac1", "source": "current_account"}})
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal entitlement context: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal entitlement context: %v", err)
+	}
+	entitlements, _ := decoded["entitlements"].(map[string]any)
+	cyber, _ := entitlements["cyber_trusted_access"].(map[string]any)
+	if cyber == nil || cyber["status"] != "granted" {
+		t.Fatalf("cyber_trusted_access = %#v", cyber)
+	}
+	if decoded["schemaVersion"] != float64(1) {
+		t.Fatalf("schemaVersion = %#v, want 1", decoded["schemaVersion"])
+	}
+}
