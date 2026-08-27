@@ -192,3 +192,48 @@ func TestImageResizeNoticeRendersRustShape(t *testing.T) {
 		t.Fatalf("tool output notice = %q", toolOutput.Content)
 	}
 }
+
+func TestPersistentModeInstructionsLikeRust(t *testing.T) {
+	// Persistent effort + async availability -> developer fragment with the
+	// tailored approval channel.
+	frag := PersistentModeInstructions("persistent", "", true, false)
+	if frag == nil {
+		t.Fatal("persistent effort produced nil fragment")
+	}
+	if frag.Role() != RoleDeveloper {
+		t.Fatalf("role = %q, want developer", frag.Role())
+	}
+	open, close := frag.Markers()
+	if open != "<persistent_mode>" || close != "</persistent_mode>" {
+		t.Fatalf("markers = %q %q", open, close)
+	}
+	if frag.ContentKind() != "persistent_mode.instructions" {
+		t.Fatalf("content kind = %q", frag.ContentKind())
+	}
+	if !strings.Contains(frag.Body(), "via functions.send_user_message_async") {
+		t.Fatalf("body missing async approval channel:\n%s", frag.Body())
+	}
+
+	// No async available -> no channel suffix.
+	fragNoAsync := PersistentModeInstructions("persistent", "", false, false)
+	if fragNoAsync == nil || strings.Contains(fragNoAsync.Body(), "send_user_message_async") {
+		t.Fatalf("no-async body = %#v", fragNoAsync)
+	}
+
+	// Non-persistent effort -> nil.
+	if frag := PersistentModeInstructions("medium", "", true, false); frag != nil {
+		t.Fatalf("non-persistent produced fragment")
+	}
+
+	// Guardian session -> nil.
+	if frag := PersistentModeInstructions("persistent", "", true, true); frag != nil {
+		t.Fatalf("guardian session produced fragment")
+	}
+
+	// Catalog instructions override the bundled default.
+	catalog := "Custom persistent guidance for {{ approval_request_channel }}."
+	fragCustom := PersistentModeInstructions("persistent", catalog, true, false)
+	if !strings.Contains(fragCustom.Body(), "Custom persistent guidance for") || !strings.Contains(fragCustom.Body(), "via functions.send_user_message_async") {
+		t.Fatalf("catalog body = %#v", fragCustom.Body())
+	}
+}
