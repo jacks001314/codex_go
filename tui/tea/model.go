@@ -883,10 +883,15 @@ type Model struct {
 	// typed character is the search target. vimFindKind: 0=find, 1=till;
 	// vimFindForward is true for f/t; vimFindOperator carries a pending d/y/c
 	// when the find is an operator motion ("" for plain navigation).
-	vimPendingFind           bool
-	vimFindKind              int
-	vimFindForward           bool
-	vimFindOperator          string
+	vimPendingFind  bool
+	vimFindKind     int
+	vimFindForward  bool
+	vimFindOperator string
+	// vimHasLastDelete and vimLastDeleteWord record the last completed Vim
+	// delete for dot-repeat (`.`): vimLastDeleteWord mirrors the Rust
+	// VimCommandState::last_change word-delete edit (#40521).
+	vimHasLastDelete         bool
+	vimLastDeleteWord        bool
 	petRuntime               *petRuntime
 	petCodexHome             string
 	petEnv                   map[string]string

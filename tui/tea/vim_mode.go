@@ -119,6 +119,8 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		m.vimInsert = true
 	case m.keyMatches("vim_normal", "delete_char", keySpec):
 		m.deleteVimCharAtCursor()
+	case m.keyMatches("vim_normal", "repeat_last_change", keySpec):
+		m.applyVimDotRepeat()
 	case m.keyMatches("vim_normal", "replace_char", keySpec):
 		m.vimPendingReplace = true
 	case m.keyMatches("vim_normal", "delete_to_line_end", keySpec):
@@ -229,8 +231,51 @@ func (m *Model) deleteVimCharAtCursor() {
 		return
 	}
 	_, size := utf8.DecodeRuneInString(value[offset:])
+	m.recordVimDelete(value[offset : offset+size])
 	m.composer.SetValue(value[:offset] + value[offset+size:])
 	m.vimSetCursorAtByteOffset(offset)
+}
+
+// recordVimDelete records the last completed Vim delete for dot-repeat (`.`),
+// mirroring Rust VimCommandState::last_change (#40521). A deletion spanning
+// multiple runes or containing whitespace is treated as a word delete.
+func (m *Model) recordVimDelete(deleted string) {
+	m.vimHasLastDelete = true
+	m.vimLastDeleteWord = utf8.RuneCountInString(deleted) > 1 || strings.ContainsAny(deleted, " \t")
+}
+
+// applyVimDotRepeat replays the last completed Vim delete (`.`), mirroring Rust
+// vim_normal.repeat_last_change (#40521). When no complete edit is recorded the
+// key is a no-op.
+func (m *Model) applyVimDotRepeat() bool {
+	if m == nil || !m.vimHasLastDelete {
+		return false
+	}
+	if m.vimLastDeleteWord {
+		m.deleteVimWordAtCursor()
+	} else {
+		m.deleteVimCharAtCursor()
+	}
+	return true
+}
+
+// deleteVimWordAtCursor deletes the word under/after the cursor (the `dw` word
+// motion), used to replay a recorded word delete.
+func (m *Model) deleteVimWordAtCursor() {
+	line := m.vimCurrentLine()
+	col := m.vimCursorColumn()
+	runes := []rune(line)
+	from := runeIndexForByte(line, col)
+	start := col
+	end := byteOffsetForRuneIndex(line, vimNextWordStart(runes, from))
+	value := m.composer.Value()
+	startByte := m.vimLineStartByteOffset() + start
+	endByte := m.vimLineStartByteOffset() + end
+	if startByte < 0 || endByte > len(value) || startByte >= endByte {
+		return
+	}
+	m.composer.SetValue(value[:startByte] + value[endByte:])
+	m.vimSetCursorAtByteOffset(startByte)
 }
 
 // replaceVimCharAtCursor replaces the grapheme under the cursor with ch,
@@ -711,6 +756,7 @@ func (m *Model) applyVimOperatorValueRange(start, end int) {
 	}
 	switch op {
 	case "d":
+		m.recordVimDelete(value[start:end])
 		next := value[:start] + value[end:]
 		m.composer.SetValue(next)
 		m.vimSetCursorAtByteOffset(start)

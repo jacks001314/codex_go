@@ -86,6 +86,7 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("vim_normal", "Vim normal", "change_to_line_end", "Change from cursor to end of line and enter insert mode.", []string{"shift-c", "C"}),
 	keymapAction("vim_normal", "Vim normal", "yank_line", "Yank the entire line.", []string{"shift-y", "Y"}),
 	keymapAction("vim_normal", "Vim normal", "paste_after", "Paste after the cursor.", []string{"p"}),
+	keymapAction("vim_normal", "Vim normal", "repeat_last_change", "Repeat the last complete edit.", []string{"."}),
 	keymapAction("vim_normal", "Vim normal", "start_delete_operator", "Begin a delete operator and wait for a motion.", []string{"d"}),
 	keymapAction("vim_normal", "Vim normal", "start_yank_operator", "Begin a yank operator and wait for a motion.", []string{"y"}),
 	keymapAction("vim_normal", "Vim normal", "start_change_operator", "Begin a change operator and wait for a text object.", []string{"c"}),

@@ -467,3 +467,27 @@ func TestVimInsertModeKeepsQueuedMessageIntactLikeRust(t *testing.T) {
 		t.Fatalf("queue after normal-mode restore = %d, want 0", len(m.queued))
 	}
 }
+func TestVimDotRepeatReplaysDeleteWordLikeRust(t *testing.T) {
+	m := vimTestModel("alpha beta gamma")
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'w')
+	if got := m.composer.Value(); got != "beta gamma" {
+		t.Fatalf("after dw = %q, want beta gamma", got)
+	}
+	m = vimKeyPress(m, '.')
+	if got := m.composer.Value(); got != "gamma" {
+		t.Fatalf("after dot = %q, want gamma", got)
+	}
+}
+
+func TestVimDotRepeatReplaysDeleteCharLikeRust(t *testing.T) {
+	m := vimTestModel("abc")
+	m = vimKeyPress(m, 'x')
+	if got := m.composer.Value(); got != "bc" {
+		t.Fatalf("after x = %q, want bc", got)
+	}
+	m = vimKeyPress(m, '.')
+	if got := m.composer.Value(); got != "c" {
+		t.Fatalf("after dot = %q, want c", got)
+	}
+}
