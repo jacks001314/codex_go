@@ -1659,3 +1659,28 @@ func TestUserTextFromRaw(t *testing.T) {
 		t.Fatalf("userTextFromRaw() = %q, want hello", got)
 	}
 }
+
+func TestForkedFromOrdinalResolvesCutoffLikeRust(t *testing.T) {
+	// Persisted cutoff wins.
+	persisted := uint64(7)
+	meta := &SessionMeta{ForkedFromID: "parent", ForkedFromOrdinalExclusive: &persisted, HistoryBase: &HistoryPosition{ThreadID: "parent", EndOrdinalExclusive: 5}}
+	if got := ForkedFromOrdinal(meta); got == nil || *got != 7 {
+		t.Fatalf("persisted cutoff = %v, want 7", got)
+	}
+	// Falls back to the history base when it belongs to the parent and no
+	// persisted cutoff is present.
+	base := &SessionMeta{ForkedFromID: "parent", HistoryBase: &HistoryPosition{ThreadID: "parent", EndOrdinalExclusive: 5}}
+	if got := ForkedFromOrdinal(base); got == nil || *got != 5 {
+		t.Fatalf("history-base cutoff = %v, want 5", got)
+	}
+	// A history base belonging to another thread is ambiguous -> nil (Rust
+	// omits the cutoff).
+	other := &SessionMeta{ForkedFromID: "parent", HistoryBase: &HistoryPosition{ThreadID: "other", EndOrdinalExclusive: 5}}
+	if got := ForkedFromOrdinal(other); got != nil {
+		t.Fatalf("foreign history-base cutoff = %v, want nil", got)
+	}
+	// No forked_from_id -> no cutoff.
+	if got := ForkedFromOrdinal(&SessionMeta{}); got != nil {
+		t.Fatalf("no-fork cutoff = %v, want nil", got)
+	}
+}

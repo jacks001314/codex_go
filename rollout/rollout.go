@@ -52,6 +52,24 @@ type Config struct {
 	GenerateMemories bool
 }
 
+// ForkedFromOrdinal resolves the fork cutoff ordinal for a session meta,
+// preferring the persisted forked_from_ordinal_exclusive and falling back to the
+// history base when it belongs to the parent thread or this is the thread's
+// original rollout (Rust rollout::forked_from_ordinal_exclusive, #40987).
+func ForkedFromOrdinal(meta *SessionMeta) *uint64 {
+	if meta == nil || strings.TrimSpace(meta.ForkedFromID) == "" {
+		return nil
+	}
+	if meta.ForkedFromOrdinalExclusive != nil {
+		return meta.ForkedFromOrdinalExclusive
+	}
+	if base := meta.HistoryBase; base != nil && base.ThreadID == meta.ForkedFromID {
+		out := base.EndOrdinalExclusive
+		return &out
+	}
+	return nil
+}
+
 type Item struct {
 	ID         string          `json:"id,omitempty"`
 	Type       string          `json:"type"`
@@ -74,10 +92,14 @@ type ContentPart struct {
 }
 
 type SessionMeta struct {
-	ID                          string                              `json:"id"`
-	SessionID                   string                              `json:"session_id"`
-	SessionPrefix               string                              `json:"session_prefix,omitempty"`
-	ForkedFromID                string                              `json:"forked_from_id,omitempty"`
+	ID            string `json:"id"`
+	SessionID     string `json:"session_id"`
+	SessionPrefix string `json:"session_prefix,omitempty"`
+	ForkedFromID  string `json:"forked_from_id,omitempty"`
+	// ForkedFromOrdinalExclusive persists the fork cutoff ordinal separately
+	// from the physical history base so fork lineage stays accurate after
+	// reverts and cold resumes (Rust #40987).
+	ForkedFromOrdinalExclusive  *uint64                             `json:"forked_from_ordinal_exclusive,omitempty"`
 	Timestamp                   string                              `json:"timestamp"`
 	CWD                         string                              `json:"cwd"`
 	Source                      string                              `json:"source,omitempty"`
