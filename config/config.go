@@ -1059,6 +1059,34 @@ func (c *Config) FreeGuardianEnabled() bool {
 	}
 }
 
+// GuardianV2PersistScores returns whether Guardian V2 reviewed actions and risk
+// scores are written to rollout files for debugging, mirroring Rust
+// Config::guardian_v2_persist_scores ([features.guardianv2].persist_scores,
+// #40911). The option defaults to false so scores are only persisted when
+// explicitly enabled and the session is not ephemeral.
+func (c *Config) GuardianV2PersistScores() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	featuresTable, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	guardianV2, ok := featuresTable["guardianv2"].(map[string]any)
+	if !ok {
+		return false
+	}
+	switch typed := guardianV2["persist_scores"].(type) {
+	case bool:
+		return typed
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		return err == nil && parsed
+	default:
+		return false
+	}
+}
+
 func (c *Config) SkillShadowSelectionEnabled() bool {
 	if featureflags.Enabled(c.FeatureSettings(), "skill_search") {
 		return true

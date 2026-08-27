@@ -2074,3 +2074,24 @@ func TestHasLocalManagedConfigurationWindowsExcludesLegacyFile(t *testing.T) {
 		t.Fatal("requirements.toml must count as local managed configuration")
 	}
 }
+
+func TestGuardianV2PersistScoresParsesAndDefaultsLikeRust(t *testing.T) {
+	// Defaults to false when unset.
+	if got := (&Config{}).GuardianV2PersistScores(); got {
+		t.Fatal("default persist_scores = true, want false (opt-in)")
+	}
+	// Opt-in via [features.guardianv2].persist_scores = true.
+	configured := &Config{Values: map[string]any{
+		"features": map[string]any{"guardianv2": map[string]any{"persist_scores": true}},
+	}}
+	if !configured.GuardianV2PersistScores() {
+		t.Fatal("configured persist_scores = false, want true")
+	}
+	// Explicit false remains false.
+	disabled := &Config{Values: map[string]any{
+		"features": map[string]any{"guardianv2": map[string]any{"persist_scores": false}},
+	}}
+	if disabled.GuardianV2PersistScores() {
+		t.Fatal("disabled persist_scores = true, want false")
+	}
+}
