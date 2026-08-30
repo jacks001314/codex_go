@@ -34,3 +34,23 @@ func TestModelPickerAsyncFetchLikeRust(t *testing.T) {
 		t.Fatalf("pendingModelsRequestID = %d, want reset to 0", m.pendingModelsRequestID)
 	}
 }
+
+func TestModelPickerRefreshFallsBackToDefaultLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.Model = "gpt-old"
+	m := NewModel(state, Options{
+		OnListModels: func(includeHidden bool) ([]codextui.ModelPickerOption, error) {
+			return []codextui.ModelPickerOption{{ID: "gpt-fresh", Label: "Fresh", IsDefault: true}}, nil
+		},
+	})
+	m.modelPickerOpts = []codextui.ModelPickerOption{{ID: "gpt-stale", Label: "Stale"}}
+	cmd := m.openModelPicker()
+	if cmd == nil {
+		t.Fatal("openModelPicker did not return a fetch command")
+	}
+	updated, _ := m.Update(cmd())
+	m = updated.(*Model)
+	if m.State.Model != "gpt-fresh" {
+		t.Fatalf("default model after refresh = %q, want gpt-fresh", m.State.Model)
+	}
+}

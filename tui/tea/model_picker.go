@@ -77,6 +77,24 @@ func (m *Model) refreshModelPicker() {
 	if m == nil || m.modal == nil || m.modal.modelPicker == nil {
 		return
 	}
+	// Rust #41467: apply accepted catalog updates to the new-thread default. If
+	// the current model is no longer available, fall back to the catalog default
+	// (or the first available model).
+	if m.State != nil && !m.modelIsAvailable(m.State.Model) {
+		fallback := ""
+		for _, option := range m.modelPickerOpts {
+			if option.IsDefault {
+				fallback = option.ID
+				break
+			}
+		}
+		if fallback == "" && len(m.modelPickerOpts) > 0 {
+			fallback = m.modelPickerOpts[0].ID
+		}
+		if fallback != "" {
+			m.State.Model = fallback
+		}
+	}
 	picker := codextui.NewModelPicker(append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...), m.State.Model)
 	if picker == nil || len(picker.Options) == 0 {
 		return
@@ -98,6 +116,19 @@ func (m *Model) refreshModelPicker() {
 		})
 	}
 	m.modal.options = modalOptions
+}
+
+// modelIsAvailable reports whether model is present in the refreshed catalog.
+func (m *Model) modelIsAvailable(model string) bool {
+	if strings.TrimSpace(model) == "" {
+		return true
+	}
+	for _, option := range m.modelPickerOpts {
+		if option.ID == model {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) openModelReasoningPicker(option codextui.ModelPickerOption) {
