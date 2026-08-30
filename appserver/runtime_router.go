@@ -8433,6 +8433,7 @@ func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string
 			Source:            mcp.CatalogSourcePlugin,
 			PluginID:          contribution.PluginID,
 			PluginDisplayName: contribution.PluginDisplayName,
+			PluginHostRoot:    contribution.PluginRoot,
 		})
 	}
 	if len(overlays) == 0 {

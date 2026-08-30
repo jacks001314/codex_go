@@ -153,6 +153,7 @@ type ServerRegistration struct {
 	ContributionOrder int
 	PluginID          string
 	PluginDisplayName string
+	PluginHostRoot    string
 	SelectionOrder    int
 }
 
@@ -243,6 +244,7 @@ type ConfigOverlay struct {
 	Source            CatalogSource
 	PluginID          string
 	PluginDisplayName string
+	PluginHostRoot    string
 	SelectionOrder    int
 }
 
@@ -298,6 +300,7 @@ func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *R
 			ContributionOrder: overlay.ContributionOrder,
 			PluginID:          overlay.PluginID,
 			PluginDisplayName: overlay.PluginDisplayName,
+			PluginHostRoot:    overlay.PluginHostRoot,
 			SelectionOrder:    overlay.SelectionOrder,
 		}
 	}

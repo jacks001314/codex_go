@@ -28,10 +28,12 @@ func TestPluginAttributionFromRegistration(t *testing.T) {
 				Source:            "plugin",
 				PluginID:          "acme/weather",
 				PluginDisplayName: "Weather Plugin",
+				PluginHostRoot:    "file:///plugins/acme",
 			},
 			want: &PluginAttribution{
 				PluginID:    "acme/weather",
 				DisplayName: "Weather Plugin",
+				HostRoot:    "file:///plugins/acme",
 			},
 		},
 		{
@@ -55,7 +57,7 @@ func TestPluginAttributionFromRegistration(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 			if got != nil && tt.want != nil {
-				if got.PluginID != tt.want.PluginID || got.DisplayName != tt.want.DisplayName {
+				if got.PluginID != tt.want.PluginID || got.DisplayName != tt.want.DisplayName || got.HostRoot != tt.want.HostRoot {
 					t.Errorf("got %+v, want %+v", got, tt.want)
 				}
 			}

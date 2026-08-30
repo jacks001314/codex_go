@@ -10,6 +10,7 @@ import (
 type PluginAttribution struct {
 	PluginID    string
 	DisplayName string
+	HostRoot    string
 }
 
 // CatalogSource mirrors Rust's McpServerSource and identifies where a server
@@ -221,5 +222,6 @@ func PluginAttributionFromRegistration(reg *ServerRegistration) *PluginAttributi
 	return &PluginAttribution{
 		PluginID:    reg.PluginID,
 		DisplayName: reg.PluginDisplayName,
+		HostRoot:    reg.PluginHostRoot,
 	}
 }

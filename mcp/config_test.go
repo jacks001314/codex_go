@@ -213,6 +213,26 @@ func TestRuntimeConfigAppliesManagedMCPRequirementsLikeRust(t *testing.T) {
 	}
 }
 
+func TestRuntimeConfigFreezesPluginHostRootLikeRust(t *testing.T) {
+	base := &RuntimeConfig{Servers: map[string]ServerRegistration{}}
+	overlays := []ConfigOverlay{{
+		Name:              "docs",
+		Config:            ServerConfig{Command: "echo"},
+		Source:            CatalogSourcePlugin,
+		PluginID:          "docs@test",
+		PluginDisplayName: "Docs",
+		PluginHostRoot:    "file:///plugins/docs",
+	}}
+	out := NewManager(nil).RuntimeConfig(*base, overlays)
+	reg, ok := out.Servers["docs"]
+	if !ok {
+		t.Fatal("docs server missing")
+	}
+	if reg.PluginHostRoot != "file:///plugins/docs" {
+		t.Fatalf("PluginHostRoot = %q", reg.PluginHostRoot)
+	}
+}
+
 func TestRuntimeConfigPluginRequirementAllowlistSemanticsLikeRust(t *testing.T) {
 	pluginServers := map[string]ServerRegistration{
 		"docs": {Name: "docs", Source: "plugin", PluginID: "sample@test", Config: ServerConfig{Command: "docs-cli", Enabled: true}},
