@@ -217,6 +217,16 @@ type ModelRerouteReason string
 
 const ModelRerouteReasonHighRiskCyberActivity ModelRerouteReason = "highRiskCyberActivity"
 
+// AuthRecoveryNotification mirrors Rust v2::AuthRecoveryNotification (#41239):
+// surfaced when a model provider needs the user to re-authenticate and when
+// recovery completes.
+type AuthRecoveryNotification struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	Provider string `json:"provider"`
+	Message  string `json:"message"`
+}
+
 type ModelVerification string
 
 const ModelVerificationTrustedAccessForCyber ModelVerification = "trustedAccessForCyber"

@@ -206,6 +206,51 @@ func currentTimeReminderExplicitlyConfigured(cfg *config.Config) bool {
 	return exists
 }
 
+// decideClockToolEnablement mirrors Rust add_core_utility_tools after #41210 and
+// #41243. The current-time (clock.curr_time) tool is registered when the
+// current_time_reminder feature is enabled OR the model advertises the "clock"
+// capability (model_has_clock). The interruptible clock.sleep tool is gated by
+// the sleep_tool feature plus the structured sleep_tool.mode override:
+//   - always_on registers sleep regardless of the model or legacy clock config.
+//   - model_driven (the default) falls back to the current_time_reminder
+//     sleep_tool config when the reminder feature is on, and to model_has_clock
+//     otherwise.
+//
+// Rust applies the #40942 persistent-reasoning default in the turn-context
+// config resolution (apply_persistent_defaults), which enables the
+// current_time_reminder feature and sets sleep_tool=true for the turn. Go
+// leaves the effective config untouched, so the default is synthesized here.
+func decideClockToolEnablement(cfg *config.Config, params *turn.TurnStartParams, modelHasClock bool) (enableCurrentTimeTool bool, enableSleepTool bool) {
+	if cfg == nil {
+		return false, false
+	}
+	currentTimeReminderEnabled := features.Enabled(cfg.FeatureSettings(), "current_time_reminder")
+	persistentDefault := false
+	if !currentTimeReminderEnabled && applyPersistentClockDefaults(cfg, params) {
+		currentTimeReminderEnabled = true
+		persistentDefault = true
+	}
+	enableCurrentTimeTool = currentTimeReminderEnabled || modelHasClock
+	if features.Enabled(cfg.FeatureSettings(), "sleep_tool") {
+		switch cfg.SleepToolMode() {
+		case config.SleepToolModeAlwaysOn:
+			enableSleepTool = true
+		default: // config.SleepToolModeModelDriven
+			if currentTimeReminderEnabled {
+				if persistentDefault {
+					// Rust apply_persistent_defaults sets sleep_tool=true.
+					enableSleepTool = true
+				} else if reminder := cfg.CurrentTimeReminder(); reminder != nil {
+					enableSleepTool = reminder.SleepTool
+				}
+			} else {
+				enableSleepTool = modelHasClock
+			}
+		}
+	}
+	return enableCurrentTimeTool, enableSleepTool
+}
+
 // persistentModeInstructionsFragment builds the persistent-mode developer
 // guidance fragment when the turn uses persistent reasoning effort and is not a
 // Guardian session (Rust #41050). The approval-request channel is tailored to

@@ -23338,7 +23338,7 @@ func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationByDefaultLikeR
 		}
 	}
 	instructions, _ := recordedBody["instructions"].(string)
-	for _, want := range []string{promptctx.SkillsInstructionsOpenTag, "### How to use skills", "must read its `SKILL.md` completely"} {
+	for _, want := range []string{promptctx.SkillsInstructionsOpenTag, "### How to use skills", "open and read its `SKILL.md` completely"} {
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("instructions missing skills protocol %q:\n%s", want, instructions)
 		}
@@ -26703,6 +26703,94 @@ func TestCurrentTimeReminderExplicitlyConfiguredDetectsFeatureKey(t *testing.T) 
 	cfg = &config.Config{Values: map[string]any{"features": map[string]any{}}}
 	if currentTimeReminderExplicitlyConfigured(cfg) {
 		t.Fatal("currentTimeReminderExplicitlyConfigured() = true, want false")
+	}
+}
+
+func TestDecideClockToolEnablementLikeRust(t *testing.T) {
+	tests := []struct {
+		name          string
+		features      map[string]any
+		effort        string
+		modelHasClock bool
+		wantCurrTime  bool
+		wantSleep     bool
+	}{
+		{
+			// Rust ClockSetup::Configured: feature on + model clock, no sleep config.
+			name:          "configured feature and model clock",
+			features:      map[string]any{"current_time_reminder": true},
+			modelHasClock: true,
+			wantCurrTime:  true,
+			wantSleep:     false,
+		},
+		{
+			// Rust ClockSetup::Persistent: persistent effort defaults curr_time + sleep on.
+			name:          "persistent default",
+			features:      map[string]any{},
+			effort:        "persistent",
+			modelHasClock: false,
+			wantCurrTime:  true,
+			wantSleep:     true,
+		},
+		{
+			// Rust ClockSetup::OrdinaryEffort: nothing triggers the clock tools.
+			name:          "ordinary effort",
+			features:      map[string]any{},
+			effort:        "medium",
+			modelHasClock: false,
+			wantCurrTime:  false,
+			wantSleep:     false,
+		},
+		{
+			// Rust ClockSetup::ModelTools: model clock registers curr_time, and
+			// model_driven falls back to model_has_clock for sleep.
+			name:          "model tools without reminders",
+			features:      map[string]any{"current_time_reminder": false},
+			effort:        "high",
+			modelHasClock: true,
+			wantCurrTime:  true,
+			wantSleep:     true,
+		},
+		{
+			// Rust ClockSetup::ExplicitlyDisabled: no feature, no model clock.
+			name:          "explicitly disabled and no model clock",
+			features:      map[string]any{"current_time_reminder": false},
+			modelHasClock: false,
+			wantCurrTime:  false,
+			wantSleep:     false,
+		},
+		{
+			// sleep_tool.mode=always_on registers sleep regardless of model/config.
+			name:          "sleep always_on mode",
+			features:      map[string]any{"current_time_reminder": false, "sleep_tool": map[string]any{"enabled": true, "mode": "always_on"}},
+			modelHasClock: false,
+			wantCurrTime:  false,
+			wantSleep:     true,
+		},
+		{
+			// sleep_tool feature off: model clock still registers curr_time, not sleep.
+			name:          "sleep tool feature disabled",
+			features:      map[string]any{"current_time_reminder": false, "sleep_tool": false},
+			modelHasClock: true,
+			wantCurrTime:  true,
+			wantSleep:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Values: map[string]any{"features": tt.features}}
+			params := &turn.TurnStartParams{}
+			if tt.effort != "" {
+				params.Effort = stringPtrAppserver(tt.effort)
+			}
+			gotCurrTime, gotSleep := decideClockToolEnablement(cfg, params, tt.modelHasClock)
+			if gotCurrTime != tt.wantCurrTime {
+				t.Fatalf("decideClockToolEnablement() current-time = %v, want %v", gotCurrTime, tt.wantCurrTime)
+			}
+			if gotSleep != tt.wantSleep {
+				t.Fatalf("decideClockToolEnablement() sleep = %v, want %v", gotSleep, tt.wantSleep)
+			}
+		})
 	}
 }
 

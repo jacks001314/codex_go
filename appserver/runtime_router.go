@@ -11298,18 +11298,29 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if err != nil {
 		return nil, err
 	}
+	// Rust #41243: the sleep_tool feature gates clock.sleep registration via a
+	// model_driven / always_on mode, and the current-time tool is registered for
+	// a model that declares the clock capability even without the feature flag.
+	turnModelInfo := (*model.ModelInfo)(nil)
+	if params != nil {
+		modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
+		turnModelInfo = r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	}
+	modelHasClock := false
+	if turnModelInfo != nil {
+		for _, supported := range turnModelInfo.ExperimentalSupportedTools {
+			if supported == "clock" {
+				modelHasClock = true
+				break
+			}
+		}
+	}
 	if cfg != nil {
-		if reminder := cfg.CurrentTimeReminder(); reminder != nil && reminder.Enabled {
-			enableCurrentTimeTool = true
-			enableSleepTool = reminder.SleepTool
-			if reminder.ClockSource == config.CurrentTimeSourceExternal {
+		enableCurrentTimeTool, enableSleepTool = decideClockToolEnablement(cfg, params, modelHasClock)
+		if enableCurrentTimeTool {
+			if reminder := cfg.CurrentTimeReminder(); reminder != nil && reminder.ClockSource == config.CurrentTimeSourceExternal {
 				clockProvider = &appServerClockProvider{router: r}
 			}
-		} else if applyPersistentClockDefaults(cfg, params) {
-			// Rust #40942: persistent-reasoning turns default the current-time
-			// reminder and the clock.sleep tool on (no stale config to inherit).
-			enableCurrentTimeTool = true
-			enableSleepTool = true
 		}
 	}
 	var trustedPluginRoots plugin.TrustedPluginRoots
@@ -11383,18 +11394,16 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.EnvironmentWaiter = appServerEnvironmentWaiter{manager: r.services.Environment}
 	options.SelectedEnvironmentIDs = selectedEnvironmentIDs(params)
 	options.WaitForEnvironmentToolConfig = r.services.WaitForEnvironmentToolConfig
-	if params != nil {
-		modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
-		if info := r.modelInfoForRuntimeWithConfig(modelID, cfg); info != nil {
-			for _, supported := range info.ExperimentalSupportedTools {
-				if supported == tool.DefaultSendUserMessageAsyncToolName {
-					options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
-					break
-				}
+	if turnModelInfo != nil {
+		sendUserMessageAsyncAdded := false
+		for _, supported := range turnModelInfo.ExperimentalSupportedTools {
+			if supported == tool.DefaultSendUserMessageAsyncToolName && !sendUserMessageAsyncAdded {
+				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
+				sendUserMessageAsyncAdded = true
 			}
-			if info.ModelMessages != nil {
-				options.ModelConfirmationPolicies = info.ModelMessages.ConfirmationPolicies
-			}
+		}
+		if turnModelInfo.ModelMessages != nil {
+			options.ModelConfirmationPolicies = turnModelInfo.ModelMessages.ConfirmationPolicies
 		}
 	}
 	// Rust omits the confirmation-policies request metadata for Guardian review

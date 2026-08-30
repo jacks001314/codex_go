@@ -207,6 +207,8 @@ const (
 	NotificationAccountUpdated                    NotificationMethod = "account/updated"
 	NotificationAccountRateLimitsUpdated          NotificationMethod = "account/rateLimits/updated"
 	NotificationAppListUpdated                    NotificationMethod = "app/list/updated"
+	NotificationAuthRecoveryStarted               NotificationMethod = "modelProvider/authRecoveryStarted"
+	NotificationAuthRecoveryCompleted             NotificationMethod = "modelProvider/authRecoveryCompleted"
 	NotificationModelRerouted                     NotificationMethod = "model/rerouted"
 	NotificationModelVerification                 NotificationMethod = "model/verification"
 	NotificationWarning                           NotificationMethod = "warning"

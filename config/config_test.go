@@ -1917,6 +1917,44 @@ sleep_tool = true
 	}
 }
 
+func TestSleepToolModeConfig(t *testing.T) {
+	dir := t.TempDir()
+	body := `[features.sleep_tool]
+enabled = true
+mode = "always_on"
+`
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got := cfg.SleepToolMode(); got != SleepToolModeAlwaysOn {
+		t.Fatalf("SleepToolMode(always_on) = %q", got)
+	}
+
+	// model_driven is the default and is selected by an explicit mode.
+	cfg = &Config{Values: map[string]any{"features": map[string]any{"sleep_tool": map[string]any{"mode": "model_driven"}}}}
+	if got := cfg.SleepToolMode(); got != SleepToolModeModelDriven {
+		t.Fatalf("SleepToolMode(model_driven) = %q", got)
+	}
+
+	// Absent config, bool form, and invalid mode all fall back to model_driven.
+	cfg = &Config{Values: map[string]any{}}
+	if got := cfg.SleepToolMode(); got != SleepToolModeModelDriven {
+		t.Fatalf("SleepToolMode(absent) = %q", got)
+	}
+	cfg = &Config{Values: map[string]any{"features": map[string]any{"sleep_tool": true}}}
+	if got := cfg.SleepToolMode(); got != SleepToolModeModelDriven {
+		t.Fatalf("SleepToolMode(bool) = %q", got)
+	}
+	cfg = &Config{Values: map[string]any{"features": map[string]any{"sleep_tool": map[string]any{"mode": "bogus"}}}}
+	if got := cfg.SleepToolMode(); got != SleepToolModeModelDriven {
+		t.Fatalf("SleepToolMode(invalid) = %q", got)
+	}
+}
+
 func TestLoadWithOptionsRejectsMissingOrInvalidProfile(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := LoadWithOptions(dir, &LoadOptions{Profile: "missing"}); err == nil {

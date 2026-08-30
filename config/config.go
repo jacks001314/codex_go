@@ -56,6 +56,17 @@ type CurrentTimeReminderConfig struct {
 	SleepTool               bool
 }
 
+type SleepToolMode string
+
+const (
+	// SleepToolModeModelDriven registers sleep based on the model and the legacy
+	// current_time_reminder config (Rust SleepToolMode::ModelDriven, the default).
+	SleepToolModeModelDriven SleepToolMode = "model_driven"
+	// SleepToolModeAlwaysOn registers sleep whenever the sleep_tool feature is
+	// enabled, regardless of the model or legacy clock config.
+	SleepToolModeAlwaysOn SleepToolMode = "always_on"
+)
+
 func (c *Config) IncludeEnvironmentContext() bool {
 	if c == nil || c.Values == nil {
 		return true
@@ -1430,6 +1441,33 @@ func (c *Config) CurrentTimeReminder() *CurrentTimeReminderConfig {
 		return nil
 	}
 	return cfg
+}
+
+// SleepToolMode reads the structured [features].sleep_tool.mode override
+// (Rust #41243 SleepToolConfigToml). It defaults to ModelDriven when the
+// features.sleep_tool key is absent, a bool, or the mode is omitted/invalid.
+func (c *Config) SleepToolMode() SleepToolMode {
+	if c == nil {
+		return SleepToolModeModelDriven
+	}
+	featuresValue, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return SleepToolModeModelDriven
+	}
+	raw, ok := featuresValue["sleep_tool"]
+	if !ok {
+		return SleepToolModeModelDriven
+	}
+	value, ok := raw.(map[string]any)
+	if !ok {
+		return SleepToolModeModelDriven
+	}
+	switch strings.TrimSpace(stringFromConfigValue(value["mode"])) {
+	case string(SleepToolModeAlwaysOn):
+		return SleepToolModeAlwaysOn
+	default:
+		return SleepToolModeModelDriven
+	}
 }
 
 func (c *Config) ChatGPTBaseURL() string {
