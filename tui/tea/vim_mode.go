@@ -8,6 +8,12 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 )
 
+// vimSearchRange is a byte-offset match range in the composer draft.
+type vimSearchRange struct {
+	Start int
+	End   int
+}
+
 // applyVimModeKey dispatches Vim normal/insert mode keys when /vim is enabled
 // (m.vimMode), mirroring Rust's bottom_pane/chat_composer.rs Vim support. In
 // normal mode the registered vim_normal actions are handled through the
@@ -19,6 +25,22 @@ import (
 func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	if m == nil || !m.vimMode || m.modal != nil || m.overlay != nil || m.slashPopup.Active || m.skillPopup.Active {
 		return false
+	}
+	// Rust #41586: while a Vim search query is being entered, typed runes
+	// accumulate into the query, Enter performs the search and Esc cancels it.
+	if m.vimSearchMode {
+		if keySpec == "esc" {
+			m.cancelVimSearch()
+			return true
+		}
+		if keySpec == "enter" {
+			m.executeVimSearch()
+			return true
+		}
+		if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 {
+			m.vimSearchQuery += string(msg.Runes[0])
+		}
+		return true
 	}
 	// Rust #39661: a pending `r` replacement consumes the next typed
 	// character, replacing the grapheme under the cursor while remaining in
@@ -174,6 +196,14 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		m.composer.CursorStart()
 	case m.keyMatches("vim_normal", "move_line_end", keySpec):
 		m.composer.CursorEnd()
+	case m.keyMatches("vim_normal", "search_forward", keySpec):
+		m.startVimSearch(true)
+	case m.keyMatches("vim_normal", "search_backward", keySpec):
+		m.startVimSearch(false)
+	case m.keyMatches("vim_normal", "search_next", keySpec):
+		m.jumpVimSearchMatch(true)
+	case m.keyMatches("vim_normal", "search_prev", keySpec):
+		m.jumpVimSearchMatch(false)
 	case m.keyMatches("vim_normal", "find_char_forward", keySpec):
 		m.startVimFind(0, true, "")
 	case m.keyMatches("vim_normal", "find_char_backward", keySpec):
@@ -428,6 +458,184 @@ func (m *Model) clearVimFind() {
 	m.vimFindKind = 0
 	m.vimFindForward = false
 	m.vimFindOperator = ""
+}
+
+// startVimSearch begins a Vim composer search (Rust #41586 vim_search.rs):
+// typed runes become the query until Enter executes it or Esc cancels it.
+func (m *Model) startVimSearch(forward bool) {
+	m.vimSearchMode = true
+	m.vimSearchForward = forward
+	m.vimSearchQuery = ""
+	m.vimSearchMatches = nil
+	m.vimSearchIndex = -1
+}
+
+// cancelVimSearch abandons the active search query and clears its state.
+func (m *Model) cancelVimSearch() {
+	m.vimSearchMode = false
+	m.vimSearchQuery = ""
+	m.vimSearchMatches = nil
+	m.vimSearchIndex = -1
+}
+
+// executeVimSearch finds matches for the entered query and lands on the first
+// match relative to the cursor.
+func (m *Model) executeVimSearch() {
+	query := m.vimSearchQuery
+	forward := m.vimSearchForward
+	m.vimSearchMode = false
+	m.vimSearchQuery = query
+	if query == "" {
+		m.vimSearchMatches = nil
+		m.vimSearchIndex = -1
+		return
+	}
+	m.vimSearchMatches = findVimSearchMatches(m.composer.Value(), query)
+	if len(m.vimSearchMatches) == 0 {
+		m.vimSearchIndex = -1
+		return
+	}
+	m.vimSearchIndex = m.firstVimSearchIndexFrom(m.vimValueByteOffset(), forward)
+	m.applyVimSearchMatch()
+}
+
+// jumpVimSearchMatch moves to the next (or previous) search match, wrapping.
+func (m *Model) jumpVimSearchMatch(next bool) {
+	if len(m.vimSearchMatches) == 0 {
+		if m.vimSearchQuery == "" {
+			return
+		}
+		m.vimSearchMatches = findVimSearchMatches(m.composer.Value(), m.vimSearchQuery)
+		m.vimSearchIndex = m.firstVimSearchIndexFrom(m.vimValueByteOffset(), m.vimSearchForward)
+		if len(m.vimSearchMatches) == 0 {
+			return
+		}
+	}
+	if next {
+		m.vimSearchIndex++
+		if m.vimSearchIndex >= len(m.vimSearchMatches) {
+			m.vimSearchIndex = 0
+		}
+	} else {
+		m.vimSearchIndex--
+		if m.vimSearchIndex < 0 {
+			m.vimSearchIndex = len(m.vimSearchMatches) - 1
+		}
+	}
+	m.applyVimSearchMatch()
+}
+
+// applyVimSearchMatch moves the composer cursor to the current search match.
+func (m *Model) applyVimSearchMatch() {
+	if m.vimSearchIndex < 0 || m.vimSearchIndex >= len(m.vimSearchMatches) {
+		return
+	}
+	m.vimSearchMoveCursor(m.vimSearchMatches[m.vimSearchIndex].Start)
+}
+
+// vimSearchMoveCursor positions the composer cursor at a byte offset within the
+// value, moving to the containing logical line first.
+func (m *Model) vimSearchMoveCursor(offset int) {
+	row, col := vimLineColumnForByteOffset(m.composer.Value(), offset)
+	for m.composer.Line() < row {
+		m.composer.CursorDown()
+	}
+	for m.composer.Line() > row {
+		m.composer.CursorUp()
+	}
+	m.composer.SetCursor(col)
+}
+
+func vimLineColumnForByteOffset(value string, offset int) (row int, col int) {
+	lines := strings.Split(value, "\n")
+	remaining := offset
+	for i, line := range lines {
+		if remaining <= len(line) {
+			return i, remaining
+		}
+		remaining -= len(line) + 1
+	}
+	if len(lines) == 0 {
+		return 0, 0
+	}
+	return len(lines) - 1, len(lines[len(lines)-1])
+}
+
+// firstVimSearchIndexFrom returns the match index nearest the cursor in the
+// given direction, wrapping to the other end when no match lies beyond it.
+func (m *Model) firstVimSearchIndexFrom(cursor int, forward bool) int {
+	if len(m.vimSearchMatches) == 0 {
+		return -1
+	}
+	if forward {
+		for i, match := range m.vimSearchMatches {
+			if match.Start >= cursor {
+				return i
+			}
+		}
+		return 0
+	}
+	for i := len(m.vimSearchMatches) - 1; i >= 0; i-- {
+		if m.vimSearchMatches[i].Start < cursor {
+			return i
+		}
+	}
+	return len(m.vimSearchMatches) - 1
+}
+
+// findVimSearchMatches returns the byte-offset ranges of case-insensitive
+// substring matches of query within text, mapping folded (lowercased) byte
+// ranges back to original Unicode byte ranges.
+func findVimSearchMatches(text, query string) []vimSearchRange {
+	if text == "" || query == "" {
+		return nil
+	}
+	queryLower := strings.ToLower(query)
+	if queryLower == "" {
+		return nil
+	}
+	type foldedSpan struct {
+		foldedStart  int
+		foldedEnd    int
+		originalFrom int
+		originalTo   int
+	}
+	folded := strings.Builder{}
+	spans := []foldedSpan{}
+	for originalFrom, r := range text {
+		originalTo := originalFrom + utf8.RuneLen(r)
+		lower := unicode.ToLower(r)
+		foldedStart := folded.Len()
+		folded.WriteRune(lower)
+		spans = append(spans, foldedSpan{foldedStart: foldedStart, foldedEnd: folded.Len(), originalFrom: originalFrom, originalTo: originalTo})
+	}
+	foldedText := folded.String()
+	ranges := []vimSearchRange{}
+	searchFrom := 0
+	for searchFrom <= len(foldedText) {
+		relativeStart := strings.Index(foldedText[searchFrom:], queryLower)
+		if relativeStart < 0 {
+			break
+		}
+		foldedStart := searchFrom + relativeStart
+		foldedEnd := foldedStart + len(queryLower)
+		originalFrom := -1
+		originalTo := 0
+		for _, span := range spans {
+			if span.foldedEnd <= foldedStart || span.foldedStart >= foldedEnd {
+				continue
+			}
+			if originalFrom < 0 {
+				originalFrom = span.originalFrom
+			}
+			originalTo = span.originalTo
+		}
+		if originalFrom >= 0 {
+			ranges = append(ranges, vimSearchRange{Start: originalFrom, End: originalTo})
+		}
+		searchFrom = foldedEnd
+	}
+	return ranges
 }
 
 // resolveVimFind applies a find/till motion to the current line using the

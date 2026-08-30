@@ -41,6 +41,66 @@ func vimEscape(m *Model) *Model {
 	return updated.(*Model)
 }
 
+func vimEnter(m *Model) *Model {
+	updated, _ := m.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	return updated.(*Model)
+}
+
+// TestVimSearchMotionsLikeRust pins the composer search motions (#41586): `/`
+// enters forward search, typed runes accumulate into the query, Enter lands on
+// the first match relative to the cursor, and n/N navigate (wrapping).
+func TestVimSearchMotionsLikeRust(t *testing.T) {
+	m := vimTestModel("hello world hello")
+	m = vimKeyPress(m, '/')
+	if !m.vimSearchMode {
+		t.Fatalf("slash did not enter search mode")
+	}
+	for _, r := range "hello" {
+		m = vimKeyPress(m, r)
+	}
+	if m.vimSearchQuery != "hello" {
+		t.Fatalf("query = %q, want hello", m.vimSearchQuery)
+	}
+	m = vimEnter(m)
+	if m.vimSearchMode {
+		t.Fatal("enter did not exit search mode")
+	}
+	if got := m.vimValueByteOffset(); got != 0 {
+		t.Fatalf("cursor after search = %d, want 0", got)
+	}
+	// n moves to the second "hello" at byte offset 12.
+	m = vimKeyPress(m, 'n')
+	if got := m.vimValueByteOffset(); got != 12 {
+		t.Fatalf("cursor after n = %d, want 12", got)
+	}
+	// N moves back to the first match.
+	m = vimKeyPress(m, 'N')
+	if got := m.vimValueByteOffset(); got != 0 {
+		t.Fatalf("cursor after N = %d, want 0", got)
+	}
+	// A backward search (?) lands on the last match before the cursor.
+	m = vimKeyPress(m, '?')
+	if !m.vimSearchMode {
+		t.Fatal("question mark did not enter search mode")
+	}
+	for _, r := range "hello" {
+		m = vimKeyPress(m, r)
+	}
+	m = vimEnter(m)
+	if got := m.vimValueByteOffset(); got != 12 {
+		t.Fatalf("cursor after backward search = %d, want 12", got)
+	}
+	// Esc in search mode cancels it.
+	m = vimKeyPress(m, '/')
+	if !m.vimSearchMode {
+		t.Fatal("slash did not enter search mode (second)")
+	}
+	m = vimEscape(m)
+	if m.vimSearchMode || m.vimSearchQuery != "" {
+		t.Fatalf("esc did not cancel search: mode=%v query=%q", m.vimSearchMode, m.vimSearchQuery)
+	}
+}
+
 // TestVimModeToggleStartsInNormalModeAndInsertTypes pins the mode state
 // machine: /vim starts normal; i enters insert where keys type (even k, which
 // is a normal-mode motion); Esc returns to normal where x deletes.

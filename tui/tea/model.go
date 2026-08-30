@@ -892,6 +892,18 @@ type Model struct {
 	// completes the chord and jumps to the top buffer line; any other key
 	// cancels the chord and is dispatched normally.
 	vimPendingG bool
+	// vimSearchMode tracks active Vim composer search query entry (Rust #41586
+	// bottom_pane/textarea/vim_search.rs). While active, typed runes accumulate
+	// into vimSearchQuery; Enter performs the search and Esc cancels it.
+	vimSearchMode bool
+	// vimSearchQuery is the query being entered (or the last executed query).
+	vimSearchQuery string
+	// vimSearchForward is true for a forward search (/), false for backward (?).
+	vimSearchForward bool
+	// vimSearchMatches caches the byte offsets of the current query's matches.
+	vimSearchMatches []vimSearchRange
+	// vimSearchIndex is the current match index into vimSearchMatches.
+	vimSearchIndex int
 	// vimHasLastDelete and vimLastDeleteWord record the last completed Vim
 	// delete for dot-repeat (`.`): vimLastDeleteWord mirrors the Rust
 	// VimCommandState::last_change word-delete edit (#40521).
