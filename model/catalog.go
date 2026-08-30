@@ -214,6 +214,38 @@ func (m *ModelInfo) ModelInstructions(personality string) string {
 	return m.BaseInstructions
 }
 
+// resolvedContextWindow returns the model's effective context window, preferring
+// the configured context_window over max_context_window (Rust
+// ModelInfo::resolved_context_window).
+func (m *ModelInfo) resolvedContextWindow() (int64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	if m.ContextWindow > 0 {
+		return m.ContextWindow, true
+	}
+	if m.MaxContextWindow > 0 {
+		return m.MaxContextWindow, true
+	}
+	return 0, false
+}
+
+// usableContextWindow returns the context available to inference after reserving
+// the model's configured headroom (Rust ModelInfo::usable_context_window,
+// #41162). It distinguishes reserved-headroom capacity from the resolved context
+// window and the auto-compaction limit.
+func (m *ModelInfo) usableContextWindow() (int64, bool) {
+	window, ok := m.resolvedContextWindow()
+	if !ok {
+		return 0, false
+	}
+	percent := m.EffectiveContextWindowPercent
+	if percent <= 0 {
+		percent = 95
+	}
+	return window * int64(percent) / 100, true
+}
+
 type TruncationPolicy struct {
 	Mode  string `json:"mode"`
 	Limit int64  `json:"limit"`

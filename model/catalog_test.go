@@ -1245,3 +1245,32 @@ func int64PtrEqual(left *int64, right *int64) bool {
 	}
 	return *left == *right
 }
+
+// TestModelInfoUsableContextWindowLikeRust mirrors Rust #41162
+// ModelInfo::usable_context_window: it reserves the effective context-window
+// percent from the resolved context window, distinct from the auto-compaction
+// limit.
+func TestModelInfoUsableContextWindowLikeRust(t *testing.T) {
+	model := ModelInfo{
+		ContextWindow:                 272000,
+		MaxContextWindow:              872000,
+		AutoCompactTokenLimit:         250000,
+		EffectiveContextWindowPercent: 95,
+	}
+	if usable, ok := model.usableContextWindow(); !ok || usable != 258400 {
+		t.Fatalf("usableContextWindow = %d, %v, want 258400, true", usable, ok)
+	}
+	// Prefer the configured context_window over max_context_window.
+	if window, ok := model.resolvedContextWindow(); !ok || window != 272000 {
+		t.Fatalf("resolvedContextWindow = %d, %v, want 272000, true", window, ok)
+	}
+	// Default percent is 95 when unset.
+	defaultModel := ModelInfo{ContextWindow: 100000}
+	if usable, ok := defaultModel.usableContextWindow(); !ok || usable != 95000 {
+		t.Fatalf("default usableContextWindow = %d, %v, want 95000, true", usable, ok)
+	}
+	// No context window yields none.
+	if _, ok := (&ModelInfo{}).usableContextWindow(); ok {
+		t.Fatalf("empty model usableContextWindow ok = true, want false")
+	}
+}
