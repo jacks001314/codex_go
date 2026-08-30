@@ -574,8 +574,15 @@ func TestBuildToolRegistryUnifiedExecFeatureGatesWriteStdinLikeRust(t *testing.T
 	if !ok || shellSpec.Exposure != tool.ExposureHidden {
 		t.Fatalf("shell_command spec = %#v", shellSpec)
 	}
-	if _, ok := registry.Lookup(tool.PlainName(tool.DefaultExecCommandToolName)); ok {
-		t.Fatal("exec_command registered while unified_exec disabled")
+	// Rust #41393: with unified_exec disabled, exec_command stays available in a
+	// completion-only (one-shot) mode rather than being dropped.
+	oneShotSpec, ok := registry.Spec(tool.PlainName(tool.DefaultExecCommandToolName))
+	if !ok || !strings.Contains(oneShotSpec.Description, "cannot be resumed") {
+		t.Fatalf("one-shot exec_command spec = %#v", oneShotSpec)
+	}
+	oneShotProps, _ := oneShotSpec.InputSchema["properties"].(map[string]any)
+	if _, hasTTY := oneShotProps["tty"]; hasTTY {
+		t.Fatalf("one-shot exec_command exposes tty: %#v", oneShotProps)
 	}
 	shellRequired, _ := shellSpec.InputSchema["required"].([]string)
 	if len(shellRequired) != 1 || shellRequired[0] != "command" {

@@ -212,6 +212,20 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 				return nil, err
 			}
 		}
+		// Rust #41393: when resumable unified execution is disabled, keep
+		// `exec_command` available in a completion-only (one-shot) mode instead
+		// of dropping it. The one-shot executor runs to completion via the local
+		// shell runner with a `timeout_ms` bound and no session/write_stdin.
+		if !options.EnableUnifiedExec && supportsShellCommand {
+			oneShotOptions := *shellOptions
+			oneShotOptions.ToolName = tool.PlainName(tool.DefaultExecCommandToolName)
+			oneShotOptions.UnifiedExec = nil
+			oneShotOptions.OneShot = true
+			oneShotExecutor := tool.NewShellExecutor(&oneShotOptions)
+			if err := registry.Register(oneShotExecutor); err != nil {
+				return nil, err
+			}
+		}
 		if options.EnableUnifiedExec && supportsShellCommand {
 			legacyOptions := *shellOptions
 			legacyOptions.ToolName = tool.PlainName(tool.DefaultShellCommandToolName)

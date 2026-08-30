@@ -915,3 +915,53 @@ func TestInjectSessionIDEnvShellExecutor(t *testing.T) {
 		t.Fatalf("empty session id should not inject CODEX_SESSION_ID: %#v", cleared)
 	}
 }
+
+// TestOneShotExecSpecRemovesSessionArgsLikeRust verifies the R#41393
+// completion-only `exec_command` surface removes resumable/session arguments and
+// exposes `timeout_ms`.
+func TestOneShotExecSpecRemovesSessionArgsLikeRust(t *testing.T) {
+	executor := NewShellExecutor(&ShellExecutorOptions{OneShot: true, ToolName: PlainName(DefaultExecCommandToolName)})
+	spec := executor.Spec()
+	properties, _ := spec.InputSchema["properties"].(map[string]any)
+	if _, ok := properties["tty"]; ok {
+		t.Fatalf("one-shot spec still exposes tty: %#v", properties)
+	}
+	if _, ok := properties["yield_time_ms"]; ok {
+		t.Fatalf("one-shot spec still exposes yield_time_ms: %#v", properties)
+	}
+	if _, ok := properties["timeout_ms"]; !ok {
+		t.Fatalf("one-shot spec missing timeout_ms: %#v", properties)
+	}
+	if !strings.Contains(spec.Description, "cannot be resumed") {
+		t.Fatalf("one-shot spec description = %q", spec.Description)
+	}
+}
+
+// TestOneShotExecReportsExit124OnTimeoutLikeRust verifies a completion-only
+// (one-shot) command terminated on timeout reports exit code 124 (Rust #41393).
+func TestOneShotExecReportsExit124OnTimeoutLikeRust(t *testing.T) {
+	runner := &fakeShellRunner{result: &ShellResult{TimedOut: true}}
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner:   runner,
+		OneShot:  true,
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Shell:    &Shell{Type: ShellBash, Path: "/bin/sh"},
+		Validation: ShellValidationOptions{
+			ApprovalPolicy:   sandbox.ApprovalOnRequest,
+			CWD:              t.TempDir(),
+			DefaultTimeoutMS: 5000,
+		},
+	})
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-timeout",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi"}`},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	data, _ := output.Data["exit_code"].(int)
+	if data != 124 {
+		t.Fatalf("one-shot timed-out exit code = %v, want 124", output.Data["exit_code"])
+	}
+}

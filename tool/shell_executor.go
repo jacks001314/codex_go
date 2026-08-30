@@ -57,6 +57,11 @@ type ShellExecutorOptions struct {
 	PluginMetricsResolver func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	// PluginMeasurementTracker publishes a validated plugin measurement batch.
 	PluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
+	// OneShot marks an executor as completion-only (Rust #41393): used when
+	// resumable unified execution is disabled, it runs an `exec_command` to
+	// completion (no PTY/session, no write_stdin), exposes a `timeout_ms`
+	// argument, and reports a timed-out command with exit code 124.
+	OneShot bool
 }
 
 type ShellExecutor struct {
@@ -77,6 +82,7 @@ type ShellExecutor struct {
 	preserveLineEndings      bool
 	pluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	pluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
+	oneShot                  bool
 }
 
 type ShellApprovalDecision struct {
@@ -137,6 +143,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.preserveLineEndings = options.PreserveLineEndings
 	executor.pluginMetricsResolver = options.PluginMetricsResolver
 	executor.pluginMeasurementTracker = options.PluginMeasurementTracker
+	executor.oneShot = options.OneShot
 	return executor
 }
 
@@ -156,6 +163,9 @@ func (e *ShellExecutor) Spec() Spec {
 	}
 	if e.unifiedExec != nil {
 		return e.unifiedExecSpec()
+	}
+	if e.oneShot {
+		return e.oneShotExecSpec()
 	}
 	return Spec{
 		Name:        e.toolName,
@@ -199,6 +209,38 @@ func (e *ShellExecutor) Spec() Spec {
 		},
 		Parallel: true,
 	}
+}
+
+// oneShotExecSpec is the completion-only `exec_command` surface (Rust #41393):
+// a command runs to completion and cannot be resumed or written to, so the
+// resumable/session arguments (`tty`, `yield_time_ms`) are removed and a
+// `timeout_ms` argument is the mode's runtime bound. The process is terminated
+// on timeout or turn cancellation.
+func (e *ShellExecutor) oneShotExecSpec() Spec {
+	spec := Spec{
+		Name:        e.toolName,
+		Description: "Runs a command to completion and returns its output. The process is terminated on timeout or cancellation and cannot be resumed.",
+		InputSchema: map[string]any{
+			"type":     "object",
+			"required": []string{"cmd"},
+			"properties": map[string]any{
+				"cmd":                    map[string]any{"type": "string", "description": "The shell command to execute."},
+				"cwd":                    map[string]any{"type": "string", "description": "Working directory for the command. Relative paths are resolved from the session cwd."},
+				"workdir":                map[string]any{"type": "string", "description": "Alias for cwd."},
+				"env":                    map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+				"timeout_ms":             map[string]any{"type": "integer", "minimum": 0, "description": "Maximum command runtime. Defaults to 10000 ms."},
+				"max_output_tokens":      map[string]any{"type": "integer", "minimum": 0, "description": "Output token budget."},
+				"shell":                  map[string]any{"type": "string"},
+				"login":                  map[string]any{"type": "boolean"},
+				"sandbox_permissions":    map[string]any{"type": "string"},
+				"additional_permissions": map[string]any{"type": "object"},
+				"justification":          map[string]any{"type": "string"},
+				"prefix_rule":            map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			},
+		},
+		Parallel: true,
+	}
+	return spec
 }
 
 func (e *ShellExecutor) shellCommandSpec() Spec {
@@ -603,6 +645,13 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}
 	if err != nil {
 		return nil, err
+	}
+	// Rust #41393: a one-shot (completion-only) command terminated on timeout or
+	// turn cancellation reports a timed-out command with exit code 124.
+	if e.oneShot && result != nil && result.TimedOut {
+		result.ExitCode = 124
+		result.HasExitCode = true
+		result.ProcessID = nil
 	}
 	if metricsSidecar != nil {
 		if result.ProcessID != nil {
