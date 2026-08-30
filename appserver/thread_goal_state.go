@@ -312,6 +312,12 @@ func (r *RuntimeRouter) markStateThreadGoalTurnActiveNow(threadID, turnID, goalI
 	if r.goalTurnUsage == nil {
 		r.goalTurnUsage = map[string]model.AgentUsage{}
 	}
+	if r.descendantTokenUsage == nil {
+		r.descendantTokenUsage = map[string]int64{}
+	}
+	if r.lastAccountedDescendant == nil {
+		r.lastAccountedDescendant = map[string]int64{}
+	}
 	currentUsage := r.goalTurnUsage[stateGoalTurnKey(threadID, turnID)]
 	r.goalAccountingTurns[stateGoalTurnKey(threadID, turnID)] = stateGoalTurnSnapshot{
 		GoalID:             goalID,
@@ -320,6 +326,9 @@ func (r *RuntimeRouter) markStateThreadGoalTurnActiveNow(threadID, turnID, goalI
 		LastAccountedUsage: currentUsage,
 		FinishMode:         state.GoalAccountingActiveOnly,
 	}
+	// Rust #41183: anchoring a goal re-baselines descendant token accounting so
+	// descendant usage does not carry across to a replacement goal.
+	r.lastAccountedDescendant[strings.TrimSpace(threadID)] = r.descendantTokenUsage[strings.TrimSpace(threadID)]
 	r.goalAccountingMu.Unlock()
 	r.clearGoalIdleActive()
 }
@@ -340,6 +349,12 @@ func (r *RuntimeRouter) ensureStateThreadGoalTurnActive(threadID, turnID, goalID
 	if r.goalAccountingTurns == nil {
 		r.goalAccountingTurns = map[string]stateGoalTurnSnapshot{}
 	}
+	if r.descendantTokenUsage == nil {
+		r.descendantTokenUsage = map[string]int64{}
+	}
+	if r.lastAccountedDescendant == nil {
+		r.lastAccountedDescendant = map[string]int64{}
+	}
 	if existing, exists := r.goalAccountingTurns[key]; exists {
 		// Rust #41454 mark_current_turn_goal_active: when the active goal changes
 		// mid-turn, reset the per-turn execution-failure flags so the failure
@@ -350,6 +365,8 @@ func (r *RuntimeRouter) ensureStateThreadGoalTurnActive(threadID, turnID, goalID
 			r.goalAccountingTurns[key] = existing
 			// A replacement goal restarts the per-thread consecutive counter.
 			delete(r.execFailureTurns, strings.TrimSpace(threadID))
+			// A replacement goal re-baselines descendant token accounting.
+			r.lastAccountedDescendant[strings.TrimSpace(threadID)] = r.descendantTokenUsage[strings.TrimSpace(threadID)]
 		}
 		r.goalAccountingMu.Unlock()
 		return
@@ -436,6 +453,101 @@ func (r *RuntimeRouter) recordGoalTokenUsage(threadID, turnID string, usage mode
 	r.goalAccountingMu.Unlock()
 }
 
+// recordGoalTokenUsageWithDescendants records a turn's own token usage (for the
+// thread's own goal, if any) and, when the thread is a spawned descendant
+// (subagent), rolls the same usage into its root ancestor goal's descendant
+// budget (Rust #41183). The descendant rollup lets subagent token spend count
+// against the root goal.
+func (r *RuntimeRouter) recordGoalTokenUsageWithDescendants(threadID, turnID string, usage model.AgentUsage) {
+	if r == nil {
+		return
+	}
+	r.recordGoalTokenUsage(threadID, turnID, usage)
+	rootID := r.rootGoalThreadID(threadID)
+	if rootID != "" && rootID != strings.TrimSpace(threadID) {
+		r.recordDescendantGoalTokenUsage(rootID, usage)
+	}
+}
+
+// rootGoalThreadID walks the thread spawn lineage to the root thread that owns
+// the goal a subagent's usage should be attributed to. It returns the thread
+// itself when it has no parent (a root thread).
+func (r *RuntimeRouter) rootGoalThreadID(threadID string) string {
+	if r == nil || r.threads == nil {
+		return strings.TrimSpace(threadID)
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return ""
+	}
+	rootID := threadID
+	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	for err == nil && record != nil && strings.TrimSpace(string(record.ParentThreadID)) != "" {
+		rootID = strings.TrimSpace(string(record.ParentThreadID))
+		record, err = r.threadRecord(record.ParentThreadID, false, false)
+	}
+	return rootID
+}
+
+// recordDescendantGoalTokenUsage mirrors Rust goal-accounting #41183: token
+// usage from a spawned descendant (a subagent or nested agent) is rolled into
+// the root goal's usage so it contributes to that goal's token budget. The
+// delta since the last recorded descendant usage is accumulated per thread;
+// the accounting-side (active/idle) consumes it via descendantTokenDelta.
+func (r *RuntimeRouter) recordDescendantGoalTokenUsage(threadID string, usage model.AgentUsage) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	delta := goalTokenDeltaForUsage(usage)
+	if delta <= 0 {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	r.goalAccountingMu.Lock()
+	if r.descendantTokenUsage == nil {
+		r.descendantTokenUsage = map[string]int64{}
+	}
+	r.descendantTokenUsage[threadID] += delta
+	r.goalAccountingMu.Unlock()
+}
+
+// descendantTokenDelta returns the descendant token usage accumulated for a
+// thread since the last accounted baseline, and records it as accounted. The
+// caller must hold goalProgressMu (via accountStateThreadGoalProgress or
+// accountIdleGoalProgress) to avoid double-counting.
+func (r *RuntimeRouter) descendantTokenDelta(threadID string) int64 {
+	if r == nil {
+		return 0
+	}
+	threadID = strings.TrimSpace(threadID)
+	r.goalAccountingMu.Lock()
+	defer r.goalAccountingMu.Unlock()
+	current := r.descendantTokenUsage[threadID]
+	baseline := r.lastAccountedDescendant[threadID]
+	delta := current - baseline
+	if delta < 0 {
+		delta = 0
+	}
+	r.lastAccountedDescendant[threadID] = current
+	return delta
+}
+
+// resetDescendantTokenBaseline re-anchors the descendant baseline for a thread
+// so a goal change does not carry descendant usage across to the replacement
+// goal (Rust #41183).
+func (r *RuntimeRouter) resetDescendantTokenBaseline(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	r.goalAccountingMu.Lock()
+	defer r.goalAccountingMu.Unlock()
+	if r.lastAccountedDescendant == nil {
+		r.lastAccountedDescendant = map[string]int64{}
+	}
+	r.lastAccountedDescendant[threadID] = r.descendantTokenUsage[threadID]
+}
+
 func (r *RuntimeRouter) markGoalIdleActive(goalID string) {
 	if r == nil {
 		return
@@ -483,8 +595,9 @@ func (r *RuntimeRouter) accountIdleGoalProgress(threadID string) *state.GoalAcco
 		timeDelta = 0
 	}
 	seconds := timeDelta / 1000
+	descendantDelta := r.descendantTokenDelta(threadID)
 	outcome, err := r.services.StateRuntime.AccountThreadGoalUsage(
-		context.Background(), threadID, seconds, 0, state.GoalAccountingActiveOnly, &goalID,
+		context.Background(), threadID, seconds, descendantDelta, state.GoalAccountingActiveOnly, &goalID,
 	)
 	if err != nil {
 		slog.Warn("failed to account idle goal progress", "thread_id", threadID, "error", err)
@@ -550,6 +663,10 @@ func (r *RuntimeRouter) accountStateThreadGoalProgress(threadID, turnID string, 
 	expectedGoalID := snapshot.GoalID
 	connectionID := snapshot.ConnectionID
 	r.goalAccountingMu.Unlock()
+	descendantDelta := r.descendantTokenDelta(threadID)
+	if descendantDelta > 0 {
+		tokenDelta += descendantDelta
+	}
 
 	outcome, err := r.services.StateRuntime.AccountThreadGoalUsage(
 		context.Background(), threadID, timeDeltaSeconds, tokenDelta, mode, &expectedGoalID,

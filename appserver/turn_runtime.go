@@ -1396,7 +1396,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		SamplingFollowUp:   samplingFollowUp,
 		SamplingCompaction: samplingCompaction,
 		OnTokenUsage: func(usage model.AgentUsage) {
-			r.recordGoalTokenUsage(threadID, turnID, usage)
+			r.recordGoalTokenUsageWithDescendants(threadID, turnID, usage)
 		},
 		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
 	})
