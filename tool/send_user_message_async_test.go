@@ -60,3 +60,21 @@ func TestSendUserMessageAsyncHandlerDescriptionOverride(t *testing.T) {
 		t.Fatalf("empty description = %q, want empty", got)
 	}
 }
+
+func TestSendUserMessageAsyncHandlerRestrictsToQuestionsLikeRust(t *testing.T) {
+	spec := (&SendUserMessageAsyncHandler{}).Spec()
+	if !strings.Contains(spec.Description, "Only use this tool to ask for missing information, preferences, constraints, clarification, or approval.") {
+		t.Fatalf("description missing question restriction: %q", spec.Description)
+	}
+	props, ok := spec.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("input schema properties = %#v", spec.InputSchema["properties"])
+	}
+	message, ok := props["message"].(map[string]any)
+	if !ok {
+		t.Fatalf("input schema message = %#v", props["message"])
+	}
+	if got := message["description"]; got != "The concise question to send to the user." {
+		t.Fatalf("message description = %q, want question-only guidance", got)
+	}
+}
