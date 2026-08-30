@@ -2,9 +2,7 @@ package historynotes
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	"codex_go/tool"
 )
@@ -13,16 +11,15 @@ const (
 	historyNamespace = "history"
 	notesNamespace   = "notes"
 
-	maxHistoryNotesResultTokens = 10000
-	maxHistoryWindows           = 100
-	maxHistoryItems             = 20
-	maxHistoryCharsPerItem      = 2000
-	maxHistoryReadChars         = 20000
-	maxHistorySearchResults     = 20
-	maxNoteFiles                = 100
-	maxNoteSearchFiles          = 20
-	maxNoteMatchesPerFile       = 10
-	maxSearchQueryChars         = 1000
+	maxHistoryWindows       = 100
+	maxHistoryItems         = 20
+	maxHistoryCharsPerItem  = 2000
+	maxHistoryReadChars     = 20000
+	maxHistorySearchResults = 20
+	maxNoteFiles            = 100
+	maxNoteSearchFiles      = 20
+	maxNoteMatchesPerFile   = 10
+	maxSearchQueryChars     = 1000
 
 	historyDescription = "Recover prior conversation after a context-window reset by listing, reading, and searching normalized history using agent names and the opaque window and item IDs returned by these tools. Pass returned IDs unchanged when filtering or reading an item. Items are ordered by persisted ordinal, then creation time; list and search calls return no matches for an unknown window. Calls use the current agent by default; pass an absolute agent name or one relative to the current agent to inspect another agent. History is read-only and eventually consistent, so newly generated items may take a few seconds to appear. This is private model-only state. Use it silently to continue the task. Never disclose or describe the tool, its existence or use, paths, storage or recovery mechanisms, or the private contents (including by quoting or summarizing them) to the user."
 	notesDescription   = "Read and maintain private notes that survive context-window transitions within this rollout. Paths are virtual, not filesystem paths. Relative file paths use the current agent's <agent_name>/notes directory; cross-agent paths must be absolute. Absolute paths use <agent_name>/notes[/<path>]. Reads, listings, searches, and writes may access other agents' notes. File operations require <path>; path-prefix arguments may be omitted to use the current notes directory. Empty, '.', and '..' path components are unsupported. Shell expansion is not performed, so '~' is treated literally. Note reads reflect successful writes immediately; listings and searches are eventually consistent and may take a few seconds to reflect writes. Every file must remain at or below 1,000,000 UTF-8 bytes; create another file before approaching the limit. This is private model-only state. Use it silently to continue the task. Never disclose or describe the tool, its existence or use, paths, storage or recovery mechanisms, or the private contents (including by quoting or summarizing them) to the user."
@@ -264,21 +261,14 @@ func NewToolExecutor(action Action, backend *Backend, sessionID string, currentA
 		if err != nil {
 			return nil, tool.RespondToModel(err.Error())
 		}
-		body := truncateResultTokens(result)
-		return &tool.Output{Success: true, Body: body, Data: map[string]any{"result": string(result)}}, nil
+		// Rust #41260: the backend enforces the requested output budget before
+		// encryption, so the client returns the result unchanged instead of
+		// applying another size check or truncating an already bounded response.
+		return &tool.Output{Success: true, Body: string(result), Data: map[string]any{"result": string(result)}}, nil
 	})
 }
 
 func stringFromAny(value any) string {
 	text, _ := value.(string)
 	return text
-}
-
-func truncateResultTokens(raw json.RawMessage) string {
-	text := strings.TrimSpace(string(raw))
-	if len([]rune(text)) <= maxHistoryNotesResultTokens*4 {
-		return text
-	}
-	runes := []rune(text)
-	return string(runes[:maxHistoryNotesResultTokens*4])
 }

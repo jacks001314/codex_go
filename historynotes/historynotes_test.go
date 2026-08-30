@@ -246,6 +246,28 @@ func TestHistoryNotesForwardsTruncationPolicyLikeRust(t *testing.T) {
 	}
 }
 
+func TestHistoryNotesToolOutputPreservesUnboundedResultLikeRust(t *testing.T) {
+	// The backend enforces the output budget before encryption, so a result
+	// larger than the old client-side token limit must be returned unchanged.
+	bigPayload := strings.Repeat("x", 40_001)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"items":["` + bigPayload + `"]}`))
+	}))
+	defer server.Close()
+	executor := NewToolExecutor(HistoryReadItem, &Backend{BaseURL: server.URL, HTTPDoer: server.Client().Do}, "session-1", "root")
+	output, err := executor.Execute(context.Background(), &tool.Invocation{
+		CallID:   "call-1",
+		ToolName: tool.NamespacedName("history", "read_item"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"item_id":"item-1","window_id":"window-1"}`},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !output.Success || !strings.Contains(output.Body, bigPayload) {
+		t.Fatalf("output body truncated or missing payload: len=%d", len(output.Body))
+	}
+}
+
 func TestHistoryNotesBackendSanitizesErrorsLikeRust(t *testing.T) {
 	// A non-2xx response surfaces only a consistent message with the status,
 	// without leaking the underlying detail body.
