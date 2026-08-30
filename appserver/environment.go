@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -200,6 +201,7 @@ type EnvironmentInfoResponse struct {
 	Shell        EnvironmentShellInfo                     `json:"shell"`
 	CWD          *string                                  `json:"cwd"`
 	PlatformOS   string                                   `json:"platformOs,omitempty"`
+	UserHomeDir  string                                   `json:"userHomeDir,omitempty"`
 	Capabilities execserverclient.EnvironmentCapabilities `json:"capabilities"`
 }
 
@@ -712,7 +714,11 @@ func (m *EnvironmentManager) InfoContext(ctx context.Context, params *Environmen
 	if cwd == nil {
 		cwd = defaultCWD
 	}
-	return &EnvironmentInfoResponse{Shell: shell, CWD: cloneString(cwd), PlatformOS: runtime.GOOS}, nil
+	userHomeDir := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		userHomeDir = home
+	}
+	return &EnvironmentInfoResponse{Shell: shell, CWD: cloneString(cwd), PlatformOS: runtime.GOOS, UserHomeDir: userHomeDir}, nil
 }
 
 func (m *EnvironmentManager) Status(params *EnvironmentStatusParams) (*EnvironmentStatusResponse, error) {
@@ -904,6 +910,7 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 			Shell:        EnvironmentShellInfo{Name: info.Shell.Name, Path: info.Shell.Path},
 			CWD:          cloneString(info.CWD),
 			PlatformOS:   info.PlatformOS,
+			UserHomeDir:  strings.TrimSpace(info.UserHomeDir),
 			Capabilities: info.Capabilities,
 		}
 		if err := response.Shell.Validate(); err != nil {

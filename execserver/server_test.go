@@ -188,6 +188,12 @@ func TestLocalEnvironmentInfoReportsTemporaryDirectoriesAndCapability(t *testing
 			t.Fatalf("temporary directory %q is not a file URI", dir)
 		}
 	}
+	// Rust #41204: the local executor reports its user home directory.
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		if strings.TrimSpace(info.UserHomeDir) == "" {
+			t.Fatalf("UserHomeDir empty, want %q (Rust #41204)", home)
+		}
+	}
 }
 
 func TestEnvironmentCapabilitiesSandboxedFileStreamingWire(t *testing.T) {

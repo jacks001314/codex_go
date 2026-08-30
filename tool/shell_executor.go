@@ -567,6 +567,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		req.UnifiedExecEnvironmentID = environment.ID
 		req.UnifiedExecRemoteURL = environment.ExecServerURL
 		req.UnifiedExecNoiseProvider = environment.NoiseProvider
+		req.UnifiedExecUserHomeDir = strings.TrimSpace(environment.UserHomeDir)
 	}
 	if req.RemoteNetworkProxy != nil {
 		launch := *req.RemoteNetworkProxy

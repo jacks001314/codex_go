@@ -237,6 +237,13 @@ func TestEnvironmentInfoReportsLocalPlatformOSLikeRust(t *testing.T) {
 	if info.PlatformOS != runtime.GOOS {
 		t.Fatalf("PlatformOS = %q, want %q", info.PlatformOS, runtime.GOOS)
 	}
+	// Rust #41204: the local environment reports its user home directory so it
+	// can be carried into filesystem sandbox contexts.
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		if strings.TrimSpace(info.UserHomeDir) != strings.TrimSpace(home) {
+			t.Fatalf("UserHomeDir = %q, want %q (Rust #41204)", info.UserHomeDir, home)
+		}
+	}
 }
 
 // TestThreadEnvironmentConfigForTurnPopulatesShellPolicyLikeRust verifies the

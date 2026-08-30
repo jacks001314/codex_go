@@ -325,6 +325,7 @@ type EnvironmentInfo struct {
 	Shell                ShellInfo               `json:"shell"`
 	CWD                  *string                 `json:"cwd"`
 	PlatformOS           string                  `json:"platformOs,omitempty"`
+	UserHomeDir          string                  `json:"userHomeDir,omitempty"`
 	TemporaryDirectories []string                `json:"temporaryDirectories,omitempty"`
 	Capabilities         EnvironmentCapabilities `json:"capabilities"`
 }
@@ -379,6 +380,7 @@ type FileSystemSandboxContext struct {
 	Permissions                     json.RawMessage                 `json:"permissions"`
 	CWD                             string                          `json:"cwd,omitempty"`
 	WorkspaceRoots                  []string                        `json:"workspaceRoots,omitempty"`
+	UserHomeDir                     string                          `json:"userHomeDir,omitempty"`
 	WindowsSandboxLevel             string                          `json:"windowsSandboxLevel"`
 	WindowsSandboxPrivateDesktop    bool                            `json:"windowsSandboxPrivateDesktop,omitempty"`
 	WindowsSandboxProxySettingsMode WindowsSandboxProxySettingsMode `json:"windowsSandboxProxySettingsMode,omitempty"`
@@ -3178,10 +3180,15 @@ func localEnvironmentInfo() *EnvironmentInfo {
 			cwd = current
 		}
 	}
+	userHomeDir := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		userHomeDir = home
+	}
 	return &EnvironmentInfo{
 		Shell:                ShellInfo{Name: detected.Name(), Path: detected.ShellPath},
 		CWD:                  stringPtr(cwd),
 		PlatformOS:           runtime.GOOS,
+		UserHomeDir:          userHomeDir,
 		TemporaryDirectories: localTemporaryDirectories(cwdPath),
 		Capabilities: EnvironmentCapabilities{
 			NetworkProxyLaunch:         true,

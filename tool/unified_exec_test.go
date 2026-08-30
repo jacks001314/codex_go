@@ -1433,6 +1433,43 @@ func TestFileSystemSandboxContextKeepsCanonicalPermissionsSeparateFromWorkspaceR
 	}
 }
 
+// TestFileSystemSandboxContextPropagatesUserHomeDirLikeRust mirrors Rust #41204:
+// the executor-reported user home is carried into the filesystem sandbox context
+// as a path URI, and an absent home is preserved as empty.
+func TestFileSystemSandboxContextPropagatesUserHomeDirLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	profile := sandbox.WorkspaceWritePermissionProfile()
+
+	contextValue, err := NewFileSystemSandboxContext(FileSystemSandboxContextOptions{
+		PermissionProfile: &profile,
+		CWD:               cwd,
+		UserHomeDir:       home,
+	})
+	if err != nil {
+		t.Fatalf("NewFileSystemSandboxContext() error = %v", err)
+	}
+	wantHome, err := unifiedExecPathURI(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contextValue.UserHomeDir != wantHome {
+		t.Fatalf("user home dir = %q, want %q", contextValue.UserHomeDir, wantHome)
+	}
+
+	// Preserve compatibility with executors that do not report a home.
+	withoutHome, err := NewFileSystemSandboxContext(FileSystemSandboxContextOptions{
+		PermissionProfile: &profile,
+		CWD:               cwd,
+	})
+	if err != nil {
+		t.Fatalf("NewFileSystemSandboxContext() error = %v", err)
+	}
+	if withoutHome.UserHomeDir != "" {
+		t.Fatalf("user home dir without executor home = %q, want empty", withoutHome.UserHomeDir)
+	}
+}
+
 func TestFileSystemSandboxContextCanonicalProfileWinsOverLegacyJSONLikeRust(t *testing.T) {
 	cwd := t.TempDir()
 	canonical := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"},{"path":{"type":"glob_pattern","pattern":"**/*.env"},"access":"deny"}]},"network":"restricted"}`

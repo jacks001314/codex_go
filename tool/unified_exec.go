@@ -657,6 +657,7 @@ func unifiedExecSandboxContext(req *ShellRequest) (*execserver.FileSystemSandbox
 		PermissionProfile:               req.PermissionProfile,
 		PermissionProfileJSON:           req.PermissionProfileJSON,
 		CWD:                             req.CWD,
+		UserHomeDir:                     req.UnifiedExecUserHomeDir,
 		WindowsSandboxLevel:             req.WindowsSandboxLevel,
 		WindowsSandboxPrivateDesktop:    req.WindowsSandboxPrivateDesktop,
 		WindowsSandboxProxySettingsMode: req.WindowsSandboxProxySettingsMode,
@@ -668,6 +669,7 @@ type FileSystemSandboxContextOptions struct {
 	PermissionProfileJSON           string
 	CWD                             string
 	WorkspaceRoots                  []string
+	UserHomeDir                     string
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
 	WindowsSandboxPrivateDesktop    bool
 	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
@@ -708,6 +710,14 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 		}
 		workspaceRoots = append(workspaceRoots, uri)
 	}
+	userHomeDir := ""
+	if home := strings.TrimSpace(options.UserHomeDir); home != "" {
+		uri, uriErr := unifiedExecPathURI(home)
+		if uriErr != nil {
+			return nil, uriErr
+		}
+		userHomeDir = uri
+	}
 	windowsSandboxLevel := options.WindowsSandboxLevel
 	if windowsSandboxLevel == "" {
 		windowsSandboxLevel = sandbox.WindowsSandboxDisabled
@@ -721,6 +731,7 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 		Permissions:                     json.RawMessage(portableJSON),
 		CWD:                             cwd,
 		WorkspaceRoots:                  workspaceRoots,
+		UserHomeDir:                     userHomeDir,
 		WindowsSandboxLevel:             string(windowsSandboxLevel),
 		WindowsSandboxPrivateDesktop:    options.WindowsSandboxPrivateDesktop,
 		WindowsSandboxProxySettingsMode: options.WindowsSandboxProxySettingsMode,

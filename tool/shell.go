@@ -120,6 +120,7 @@ type ShellRequest struct {
 	UnifiedExecRemoteURL            string
 	UnifiedExecNoiseProvider        execserver.NoiseRendezvousConnectProvider
 	UnifiedExecEnvironmentID        string
+	UnifiedExecUserHomeDir          string
 	EnforceManagedNetwork           bool
 	ManagedNetwork                  *network.ProxyManagedNetworkSandboxContext
 	RemoteNetworkProxy              *execserver.RemoteNetworkProxyLaunchConfig
@@ -128,10 +129,13 @@ type ShellRequest struct {
 }
 
 type UnifiedExecEnvironment struct {
-	ID            string
-	CWD           string
-	Shell         *Shell
-	PlatformOS    string
+	ID         string
+	CWD        string
+	Shell      *Shell
+	PlatformOS string
+	// UserHomeDir is the executor-reported user home directory used to expand
+	// home-relative policy paths in filesystem sandbox contexts (Rust #41204).
+	UserHomeDir   string
 	ExecServerURL string
 	NoiseProvider execserver.NoiseRendezvousConnectProvider
 	// ShellEnvironmentPolicy is this environment's resolved shell environment
