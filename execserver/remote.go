@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 )
 
 const (
@@ -26,6 +27,8 @@ const (
 	defaultRemoteHTTPTimeout  = 30 * time.Second
 	defaultRemoteDialTimeout  = 10 * time.Second
 	defaultRemoteCloseTimeout = time.Second
+	registryRecoveryInitialMS = 500
+	registryRecoveryMax       = 5 * time.Second
 )
 
 type RemoteEnvironmentConfig struct {
@@ -114,7 +117,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	server := NewServerWithHTTPClient(cfg.HTTPClient)
 	defer server.shutdownSessions()
 	backoff := cfg.Backoff
-	registration, err := registerRemoteEnvironment(ctx, cfg, identity.PublicKey())
+	registration, err := registerRemoteEnvironmentWithRetry(ctx, cfg, identity.PublicKey())
 	if err != nil {
 		return err
 	}
@@ -134,7 +137,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 			}
 		}
 		if response != nil && response.StatusCode >= 400 && response.StatusCode < 500 {
-			registration, err = registerRemoteEnvironment(ctx, cfg, identity.PublicKey())
+			registration, err = registerRemoteEnvironmentWithRetry(ctx, cfg, identity.PublicKey())
 			if err != nil {
 				return err
 			}
@@ -191,6 +194,35 @@ func registerRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig,
 		return nil, fmt.Errorf("exec-server protocol error: environment registry returned unsupported security profile `%s`", decoded.SecurityProfile)
 	}
 	return &decoded, nil
+}
+
+// registerRemoteEnvironmentWithRetry mirrors Rust #41219
+// (EnvironmentRegistryClient::register_environment_with_retry). Retrying
+// ambiguous failures is unsafe because a timed-out request may still have
+// replaced a newer registration, so only explicit `503 registration_conflict`
+// responses are retried with jittered exponential backoff. The enclosing remote
+// transport future owns cancellation; retries spawn no background work.
+func registerRemoteEnvironmentWithRetry(ctx context.Context, cfg RemoteEnvironmentConfig, key RemotePublicKey) (*remoteRegistrationResponse, error) {
+	// Competing executors for the same environment must not retry in lockstep.
+	retryKey := uuid.NewString()
+	var attempt uint32
+	for {
+		registration, err := registerRemoteEnvironment(ctx, cfg, key)
+		if err == nil {
+			return registration, nil
+		}
+		var httpErr *remoteRegistryHTTPError
+		if !errors.As(err, &httpErr) ||
+			httpErr.StatusCode != http.StatusServiceUnavailable ||
+			httpErr.Code == nil || *httpErr.Code != "registration_conflict" {
+			return nil, err
+		}
+		attempt++
+		delay := registrationConflictRetryDelay(retryKey, attempt-1)
+		if sleepErr := sleepContext(ctx, delay); sleepErr != nil {
+			return nil, sleepErr
+		}
+	}
 }
 
 func resolveRemoteEnvironmentAuthHeaders(ctx context.Context, cfg RemoteEnvironmentConfig) (http.Header, error) {
@@ -272,6 +304,42 @@ func registryErrorMessage(body string) string {
 		return preview
 	}
 	return "empty error body"
+}
+
+// registrationConflictRetryDelay mirrors Rust
+// client_recovery::registry_recovery_retry_delay (#41219): exponential backoff
+// capped at registryRecoveryMax, plus a deterministic jitter up to half the base
+// delay, so competing executors for the same environment do not retry in
+// lockstep. retry_key and attempt seed the jitter.
+func registrationConflictRetryDelay(retryKey string, attempt uint32) time.Duration {
+	shift := attempt
+	if shift > 4 {
+		shift = 4
+	}
+	multiplier := uint32(1) << shift
+	base := time.Duration(registryRecoveryInitialMS) * time.Millisecond * time.Duration(multiplier)
+	if base > registryRecoveryMax {
+		base = registryRecoveryMax
+	}
+	baseMillis := int64(base / time.Millisecond)
+	if baseMillis <= 0 {
+		baseMillis = 1
+	}
+	jitter := stableRegistryHash(retryKey, attempt) % uint64(baseMillis/2+1)
+	return time.Duration(baseMillis)*time.Millisecond + time.Duration(jitter)*time.Millisecond
+}
+
+// stableRegistryHash is a small FNV-1a style hash used to seed the retry jitter.
+func stableRegistryHash(parts ...any) uint64 {
+	var h uint64 = 1469598103934665603
+	for part := range parts {
+		s := fmt.Sprint(parts[part])
+		for i := 0; i < len(s); i++ {
+			h ^= uint64(s[i])
+			h *= 1099511628211
+		}
+	}
+	return h
 }
 
 func previewErrorBody(body string) string {
