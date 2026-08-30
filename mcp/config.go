@@ -138,6 +138,23 @@ func ValidateServerAuth(serverName string, config *ServerConfig) error {
 
 type ToolConfig struct {
 	ApprovalMode *apps.AppToolApproval `json:"approval_mode,omitempty"`
+
+	// OutputTokenLimit is the token budget for this tool's output, applied
+	// before the standard serialization allowance (Rust #41421). When multiple
+	// sources configure a limit, the most restrictive (smallest) wins; it is
+	// independent of the approval mode.
+	OutputTokenLimit *int `json:"output_token_limit,omitempty"`
+}
+
+// RestrictOutputTokenLimit applies the stricter explicit output budget without
+// changing the approval policy (Rust McpServerToolConfig::restrict_output_token_limit).
+func (t *ToolConfig) RestrictOutputTokenLimit(limit *int) {
+	if limit == nil || *limit <= 0 {
+		return
+	}
+	if t.OutputTokenLimit == nil || *limit < *t.OutputTokenLimit {
+		t.OutputTokenLimit = limit
+	}
 }
 
 type EnvVar struct {
@@ -514,6 +531,48 @@ func runtimeConfigUint16Any(values map[string]any, keys ...string) uint16 {
 	return 0
 }
 
+// runtimeConfigPositiveIntAny returns the first positive integer value among the
+// candidate keys (e.g. output_token_limit / outputTokenLimit), or nil when unset
+// or non-positive.
+func runtimeConfigPositiveIntAny(values map[string]any, keys ...string) *int {
+	if values == nil {
+		return nil
+	}
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case int:
+			if typed > 0 {
+				out := typed
+				return &out
+			}
+		case int64:
+			if typed > 0 && typed <= int64(maxInt()) {
+				out := int(typed)
+				return &out
+			}
+		case float64:
+			if typed > 0 && typed <= float64(maxInt()) {
+				out := int(typed)
+				return &out
+			}
+		case json.Number:
+			if n, err := typed.Int64(); err == nil && n > 0 && n <= int64(maxInt()) {
+				out := int(n)
+				return &out
+			}
+		}
+	}
+	return nil
+}
+
+func maxInt() int {
+	return int(^uint(0) >> 1)
+}
+
 func runtimeConfigStringSliceAny(values map[string]any, keys ...string) []string {
 	for _, key := range keys {
 		if values := runtimeConfigStringSlice(values, key); len(values) > 0 {
@@ -718,7 +777,8 @@ func runtimeConfigToolsMap(values map[string]any, key string) map[string]ToolCon
 			continue
 		}
 		toolConfig := ToolConfig{
-			ApprovalMode: runtimeConfigAppToolApproval(toolTable, "approval_mode", "approvalMode"),
+			ApprovalMode:     runtimeConfigAppToolApproval(toolTable, "approval_mode", "approvalMode"),
+			OutputTokenLimit: runtimeConfigPositiveIntAny(toolTable, "output_token_limit", "outputTokenLimit"),
 		}
 		out[toolName] = toolConfig
 	}

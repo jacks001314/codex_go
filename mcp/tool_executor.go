@@ -9,6 +9,7 @@ import (
 
 	"codex_go/jsonschema"
 	"codex_go/tool"
+	"codex_go/utils"
 )
 
 const (
@@ -230,6 +231,13 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	if err != nil {
 		return nil, err
 	}
+	// Rust #41421: carry the effective per-tool output budget so tool output,
+	// post-tool hook responses, and resumed sessions share the same truncation
+	// limit. Resolve the configured per-tool limit and truncate the response
+	// text before it reaches the model.
+	if limit := e.resolvedOutputTokenLimit(); limit > 0 {
+		truncateMCPResponseToOutputTokenLimit(response, limit)
+	}
 	body := MCPToolResponseText(response)
 	data := mcpToolResponseData(response)
 	if contentItems := mcpToolModelContentItems(response); len(contentItems) > 0 {
@@ -249,6 +257,47 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		Data:       data,
 		LogPreview: mcpLogPreview(body),
 	}, nil
+}
+
+// resolvedOutputTokenLimit returns the configured per-tool output token limit
+// for this server/tool, resolved from the MCP service server config (Rust
+// #41421 PreparedMcpCall::output_token_limit). 0 means no per-tool limit.
+func (e *ToolExecutor) resolvedOutputTokenLimit() int {
+	if e == nil || e.service == nil {
+		return 0
+	}
+	limit := e.service.ConfiguredToolOutputLimit(e.resolvedServerName(), e.resolvedRemoteToolName())
+	if limit == nil || *limit <= 0 {
+		return 0
+	}
+	return *limit
+}
+
+// truncateMCPResponseToOutputTokenLimit truncates the text content of an MCP
+// tool response to the given output token budget, preserving non-text content
+// items (Rust #41421). It strips the text from over-budget content items so the
+// model does not observe an unbounded tool result.
+func truncateMCPResponseToOutputTokenLimit(response *MCPToolCallResponse, limit int) {
+	if response == nil || limit <= 0 {
+		return
+	}
+	totalTokens := 0
+	for i := range response.Content {
+		totalTokens += utils.ApproxTokenCount(response.Content[i].Text)
+	}
+	if totalTokens <= limit {
+		return
+	}
+	remaining := limit
+	for i := range response.Content {
+		tokens := utils.ApproxTokenCount(response.Content[i].Text)
+		if tokens <= remaining {
+			remaining -= tokens
+			continue
+		}
+		response.Content[i].Text = utils.TruncateText(response.Content[i].Text, utils.TokensPolicy(remaining))
+		remaining = 0
+	}
 }
 
 func (e *ToolExecutor) WaitUntilReady(ctx context.Context, invocation *tool.Invocation) error {

@@ -934,6 +934,28 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 	cancelOAuthLogins([]*OAuthLoginServer{oldOAuthLogin})
 }
 
+// ConfiguredToolOutputLimit returns the configured per-tool output token limit
+// for a server's tool, or nil when unset (Rust #41421). The effective limit is
+// resolved from the server config so the MCP executor can truncate a tool
+// result before it reaches the model.
+func (s *MCPService) ConfiguredToolOutputLimit(serverName, toolName string) *int {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	config, ok := s.configs[strings.TrimSpace(serverName)]
+	if !ok {
+		return nil
+	}
+	toolConfig, ok := config.Tools[strings.TrimSpace(toolName)]
+	if !ok || toolConfig.OutputTokenLimit == nil || *toolConfig.OutputTokenLimit <= 0 {
+		return nil
+	}
+	limit := *toolConfig.OutputTokenLimit
+	return &limit
+}
+
 func (s *MCPService) SetElicitationHandler(handler MCPElicitationHandler) {
 	if s == nil {
 		return
