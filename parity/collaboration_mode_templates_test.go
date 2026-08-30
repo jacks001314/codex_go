@@ -10,6 +10,17 @@ import (
 	chatwidget "codex_go/tui/chatwidget"
 )
 
+// activeFreezeRustTo is the sync29 L0 freeze target (#41586, "Add Vim search
+// motions to the composer"). The certified baseline (candidateRustTo,
+// 970b7f2ff4) is intentionally left at the sync26 certification point, but the
+// collaboration-mode default template changed in the sync29 range (#41448,
+// "Clarify question handling in Default collaboration mode") and Go mirrors the
+// new text. The shared-fixture differential therefore pins the Rust template
+// blobs to the active sync29 alignment target instead of the certified baseline;
+// plan.md, collaboration_mode_presets.rs, and config_types.rs are identical at
+// both commits so only the default template reference needs the active target.
+const activeFreezeRustTo = "63d213884daea50e4f74efc192cdc44f549b67d5"
+
 // TestRustCollaborationModeTemplatesMatchGo is the djalign dynamic-layer
 // method-1 shared-fixture differential for the collaboration-mode developer
 // templates: Rust embeds collaboration-mode-templates/templates/default.md and
@@ -28,21 +39,21 @@ func TestRustCollaborationModeTemplatesMatchGo(t *testing.T) {
 	rustRepo := filepath.Dir(root)
 
 	// Default template: Rust default.md with KNOWN_MODE_NAMES substituted.
-	rustDefault := gitOutput(t, rustRepo, "show", candidateRustTo+":codex-rs/collaboration-mode-templates/templates/default.md")
+	rustDefault := gitOutput(t, rustRepo, "show", activeFreezeRustTo+":codex-rs/collaboration-mode-templates/templates/default.md")
 	wantDefault := strings.ReplaceAll(string(rustDefault), "{{KNOWN_MODE_NAMES}}", "Default and Plan")
 	if strings.Contains(wantDefault, "{{KNOWN_MODE_NAMES}}") {
 		t.Fatal("Rust default template still contains unresolved KNOWN_MODE_NAMES placeholder")
 	}
 
 	// Plan template: Rust plan.md.
-	wantPlan := gitOutput(t, rustRepo, "show", candidateRustTo+":codex-rs/collaboration-mode-templates/templates/plan.md")
+	wantPlan := gitOutput(t, rustRepo, "show", activeFreezeRustTo+":codex-rs/collaboration-mode-templates/templates/plan.md")
 
 	// Verify the Rust rendering order source is pinned (Default, Plan).
-	presets := gitOutput(t, rustRepo, "show", candidateRustTo+":codex-rs/models-manager/src/collaboration_mode_presets.rs")
+	presets := gitOutput(t, rustRepo, "show", activeFreezeRustTo+":codex-rs/models-manager/src/collaboration_mode_presets.rs")
 	if !strings.Contains(string(presets), "TUI_VISIBLE_COLLABORATION_MODES") {
 		t.Fatal("Rust collaboration_mode_presets.rs no longer references TUI_VISIBLE_COLLABORATION_MODES; re-sync the shared fixture")
 	}
-	configTypes := gitOutput(t, rustRepo, "show", candidateRustTo+":codex-rs/protocol/src/config_types.rs")
+	configTypes := gitOutput(t, rustRepo, "show", activeFreezeRustTo+":codex-rs/protocol/src/config_types.rs")
 	if !strings.Contains(string(configTypes), "pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 2] = [ModeKind::Default, ModeKind::Plan]") {
 		t.Fatal("Rust TUI_VISIBLE_COLLABORATION_MODES order changed from [Default, Plan]; re-sync the shared fixture")
 	}
