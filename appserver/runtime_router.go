@@ -584,6 +584,11 @@ func (r *RuntimeRouter) notify(method NotificationMethod, params any) {
 	if r.isInternalMemoryNotification(params) {
 		return
 	}
+	// Rust #41416: omit inline image/audio content from app-server item
+	// notifications when the feature is enabled, keeping it in model input.
+	if isOmitMediaNotificationMethod(method) && r.notificationMediaFilterEnabled() {
+		params = withoutNotificationMedia(params)
+	}
 	r.handleNotificationAnalytics(method, params)
 	if r.notificationMethodOptedOut(method) {
 		return
@@ -594,6 +599,20 @@ func (r *RuntimeRouter) notify(method NotificationMethod, params any) {
 	if sink != nil {
 		sink.Notify(NewNotification(method, params))
 	}
+}
+
+// notificationMediaFilterEnabled resolves the app-server-wide
+// omit_app_server_notification_media feature (Rust #41416).
+func (r *RuntimeRouter) notificationMediaFilterEnabled() bool {
+	if r == nil || r.services.Config == nil {
+		return false
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return false
+	}
+	cfg := &config.Config{Values: read.Config}
+	return features.Enabled(cfg.FeatureSettings(), "omit_app_server_notification_media")
 }
 
 func (r *RuntimeRouter) notifyTurnCompletedOnce(notification *TurnCompletedNotification) bool {

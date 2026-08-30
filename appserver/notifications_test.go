@@ -99,6 +99,34 @@ func TestRawResponseCompletedNotificationIncludesUsageMetadata(t *testing.T) {
 	}
 }
 
+func TestWithoutNotificationMediaOmitItemMediaLikeRust(t *testing.T) {
+	payload := ThreadItemPayload{
+		"type": "message",
+		"content": []any{
+			map[string]any{"type": "input_text", "text": "hello"},
+			map[string]any{"type": "input_image", "image_url": "data:image/png;base64,xyz"},
+			map[string]any{"type": "input_audio", "audio_url": "data:audio/wav;base64,abc"},
+		},
+	}
+	notification := withoutNotificationMedia(&ItemStartedNotification{Item: payload}).(*ItemStartedNotification)
+	content, ok := notification.Item["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("content = %#v, want only the input_text entry", notification.Item["content"])
+	}
+	if text := content[0].(map[string]any); text["type"] != "input_text" || text["text"] != "hello" {
+		t.Fatalf("first content = %#v", content[0])
+	}
+
+	raw := withoutNotificationMedia(&RawResponseItemCompletedNotification{Item: map[string]any{
+		"type":   "function_call_output",
+		"output": []any{map[string]any{"type": "input_text", "text": "ok"}, map[string]any{"type": "input_image", "image_url": "data:image/png;base64,xyz"}},
+	}}).(*RawResponseItemCompletedNotification)
+	rawContent := raw.Item.(map[string]any)["output"].([]any)
+	if len(rawContent) != 1 || rawContent[0].(map[string]any)["type"] != "input_text" {
+		t.Fatalf("raw response item output = %#v", rawContent)
+	}
+}
+
 func TestContextCompactedNotificationUsesDeprecatedRustShape(t *testing.T) {
 	data, err := json.Marshal(&ContextCompactedNotification{
 		ThreadID:  "thread-1",
