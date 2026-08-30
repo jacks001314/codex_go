@@ -3062,16 +3062,19 @@ func TestExecAgentControllerValidatesV2SpawnModelOverrides(t *testing.T) {
 		t.Fatalf("default reasoning effort = %#v, want medium", args.ReasoningEffort)
 	}
 	unsupportedTier := "flex"
-	if err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{ServiceTier: &unsupportedTier}); err == nil || !strings.Contains(err.Error(), "Supported service tiers: priority") {
-		t.Fatalf("unsupported service tier error = %v", err)
+	// Rust #41308: per-spawn service-tier overrides are removed; subagents follow
+	// the root thread's tier. resolveSpawnModelOverrides must ignore a provided
+	// service_tier rather than validating or resolving it.
+	if err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{ServiceTier: &unsupportedTier}); err != nil {
+		t.Fatalf("per-spawn service tier should be ignored, got error = %v", err)
 	}
 	fastTier := "fast"
 	tierArgs := &agent.SpawnAgentArgs{ServiceTier: &fastTier}
 	if err := controller.resolveSpawnModelOverrides(tierArgs); err != nil {
 		t.Fatal(err)
 	}
-	if tierArgs.ServiceTier == nil || *tierArgs.ServiceTier != "priority" {
-		t.Fatalf("resolved service tier = %#v, want priority", tierArgs.ServiceTier)
+	if tierArgs.ServiceTier == nil || *tierArgs.ServiceTier != "fast" {
+		t.Fatalf("per-spawn service tier should be left unmodified, got %#v", tierArgs.ServiceTier)
 	}
 }
 

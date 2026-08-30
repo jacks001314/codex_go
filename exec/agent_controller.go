@@ -651,26 +651,6 @@ func (c *execAgentController) resolveSpawnModelOverrides(args *agent.SpawnAgentA
 		value := strings.TrimSpace(selectedPreset.DefaultReasoningLevel)
 		args.ReasoningEffort = &value
 	}
-	if args.ServiceTier != nil && strings.TrimSpace(*args.ServiceTier) != "" {
-		requestedTier := strings.TrimSpace(*args.ServiceTier)
-		info := s.modelsManager.GetModelInfo(selectedModel, nil)
-		resolvedTier := model.ServiceTierForRequest(&info, requestedTier)
-		if resolvedTier == "" && requestedTier != model.ServiceTierDefaultRequestValue {
-			supported := "none"
-			if len(info.ServiceTiers) > 0 {
-				supported = strings.Join(info.ServiceTiers, ", ")
-			}
-			return fmt.Errorf(
-				"Service tier `%s` is not supported for model `%s`. Supported service tiers: %s",
-				requestedTier,
-				selectedModel,
-				supported,
-			)
-		}
-		if resolvedTier != "" {
-			args.ServiceTier = &resolvedTier
-		}
-	}
 	return nil
 }
 
@@ -864,9 +844,6 @@ func (c *execAgentController) startTask(task *execAgentTask, args *agent.SpawnAg
 		}
 		if args.ReasoningEffort != nil && strings.TrimSpace(*args.ReasoningEffort) != "" {
 			childReq.Exec.Shared.ModelReasoningEffort = strings.TrimSpace(*args.ReasoningEffort)
-		}
-		if args.ServiceTier != nil && strings.TrimSpace(*args.ServiceTier) != "" {
-			childReq.Exec.ConfigOverrides = append(childReq.Exec.ConfigOverrides, fmt.Sprintf("service_tier=%q", strings.TrimSpace(*args.ServiceTier)))
 		}
 		if args.ForkContext || execForkTurns(args.ForkTurns) != "none" {
 			childReq.AdditionalInputItems = append(c.parentInputItems(args.ForkTurns), childReq.AdditionalInputItems...)
