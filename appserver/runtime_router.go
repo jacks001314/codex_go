@@ -798,6 +798,57 @@ func (r *RuntimeRouter) authStoreOptions() *auth.StoreOptions {
 	return options
 }
 
+// accountScopedModelsManager builds a lazily-resolved account-scoped model
+// catalog manager for the app-server (Rust #41467 "Refresh the TUI model picker
+// from the app server"). The underlying RemoteModelsManager is constructed only
+// on first use, once the auth store is resolvable. The config catalog is the
+// manager's base so a failed refresh preserves configured models; a ChatGPT
+// account treats the fetched account catalog as the source of truth. Any
+// auth/config error keeps the bundled static catalog (the LazyModelsManager
+// fallback), matching the previous NewModelService(nil) behavior.
+func accountScopedModelsManager(codexHome string, configService *config.ConfigService) model.ModelsManager {
+	build := func() (model.ModelsManager, error) {
+		read, err := configService.Read(&config.ConfigReadParams{})
+		if err != nil || read == nil {
+			return nil, err
+		}
+		cfg := &config.Config{Values: read.Config}
+		providerID := strings.TrimSpace(stringFromMap(read.Config, "model_provider"))
+		providerInfo, err := model.ProviderForConfigID(read.Config, providerID, strings.TrimSpace(stringFromMap(read.Config, "openai_base_url")))
+		if err != nil || providerInfo == nil {
+			return nil, err
+		}
+		storeOptions := auth.StoreOptionsFromConfig(cfg.CLIAuthCredentialsStoreMode(), cfg.SecretAuthStorageEnabled())
+		storeOptions.WorkloadIdentity = &auth.WorkloadIdentityAuthOptions{ChatGPTBaseURL: cfg.ChatGPTBaseURL()}
+		resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
+		if err != nil || resolved == nil {
+			return nil, err
+		}
+		provider := model.CreateRuntimeProviderForID(providerID, *providerInfo, &resolved.Auth)
+		apiProvider, err := provider.APIProvider()
+		if err != nil {
+			return nil, err
+		}
+		authHeaders, err := provider.APIAuth()
+		if err != nil {
+			return nil, err
+		}
+		var base *model.ModelsResponse
+		if catalog := model.ModelsCatalogFromConfigValues(read.Config); catalog != nil {
+			base = catalog
+		}
+		account := auth.AccountFromAuth(&resolved.Auth)
+		hasChatGPTAccount := account != nil && account.Type == auth.AccountChatGPT
+		endpoint := model.NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
+		return model.NewRemoteModelsManagerWithOptions(&model.RemoteModelsManagerOptions{
+			ModelCatalog:                    base,
+			Endpoint:                        endpoint,
+			UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
+		}), nil
+	}
+	return model.NewLazyModelsManager(build)
+}
+
 func (r *RuntimeRouter) resolveAuthWithLoginRestrictions(codexHome string) (*auth.ResolvedAuth, error) {
 	store := r.authStore(codexHome)
 	resolved, err := store.Resolve()
@@ -938,7 +989,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 			IncludeDefaultRoots: true,
 		}),
 		Plugins:               pluginService,
-		Models:                model.NewModelService(nil),
+		Models:                model.NewModelService(accountScopedModelsManager(codexHome, configService)),
 		Permissions:           sandbox.NewPermissionProfileService(nil),
 		MCP:                   mcp.NewMCPService(nil),
 		Features:              features.NewFeatureService(nil),
