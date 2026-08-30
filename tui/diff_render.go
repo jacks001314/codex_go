@@ -48,6 +48,16 @@ func CreateDiffSummary(changes map[string]FileChange, cwd string, wrapCols int, 
 	return RenderChangesBlock(rows, wrapCols, cwd, theme)
 }
 
+// CreateDiffPreview renders an inline patch preview limited to previewMaxRows
+// content rows across all files (Rust #41143). File summaries are retained and an
+// omission notice is appended when content is truncated.
+func CreateDiffPreview(changes map[string]FileChange, cwd string, wrapCols int, theme string) []string {
+	return RenderChangesBlockLimited(CollectDiffRows(changes), wrapCols, cwd, theme, previewMaxRows)
+}
+
+// previewMaxRows bounds the inline diff preview (#41143).
+const previewMaxRows = 12
+
 func CollectDiffRows(changes map[string]FileChange) []DiffRow {
 	rows := make([]DiffRow, 0, len(changes))
 	for path, change := range changes {
@@ -96,6 +106,16 @@ func CalculateAddRemoveFromDiff(unifiedDiff string) (int, int) {
 }
 
 func RenderChangesBlock(rows []DiffRow, wrapCols int, cwd string, theme string) []string {
+	return renderChangesBlock(rows, wrapCols, cwd, theme, 0)
+}
+
+// RenderChangesBlockLimited renders a diff block, limiting the number of content
+// lines across all changed files to maxRows (0 or negative = unlimited).
+func RenderChangesBlockLimited(rows []DiffRow, wrapCols int, cwd string, theme string, maxRows int) []string {
+	return renderChangesBlock(rows, wrapCols, cwd, theme, maxRows)
+}
+
+func renderChangesBlock(rows []DiffRow, wrapCols int, cwd string, theme string, maxRows int) []string {
 	if wrapCols <= 0 {
 		wrapCols = 80
 	}
@@ -126,6 +146,7 @@ func RenderChangesBlock(rows []DiffRow, wrapCols int, cwd string, theme string) 
 		}
 		lines = append(lines, ansiDim+"\u2022 "+ansiReset+ansiBold+"Edited"+ansiReset+" "+FormatInt(int64(len(rows)))+" "+noun+" "+RenderLineCountSummary(totalAdded, totalRemoved))
 	}
+	omitted := false
 	for index, row := range rows {
 		if index > 0 {
 			lines = append(lines, "")
@@ -137,9 +158,20 @@ func RenderChangesBlock(rows []DiffRow, wrapCols int, cwd string, theme string) 
 		if contentWidth < 0 {
 			contentWidth = 0
 		}
-		for _, line := range RenderFileChange(row.Change, contentWidth, theme, detectLangForPath(row.Path)) {
+		content := RenderFileChange(row.Change, contentWidth, theme, detectLangForPath(row.Path))
+		if maxRows > 0 && len(content) > maxRows {
+			content = content[:maxRows]
+			omitted = true
+		}
+		if maxRows > 0 {
+			maxRows -= len(content)
+		}
+		for _, line := range content {
 			lines = append(lines, "    "+line)
 		}
+	}
+	if omitted {
+		lines = append(lines, "… additional lines omitted (view transcript for the full diff)")
 	}
 	return lines
 }

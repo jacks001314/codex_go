@@ -33,7 +33,9 @@ func newPatchEventTheme(changes map[string]tui.FileChange, cwd string, theme str
 }
 
 func (c PatchHistoryCell) DisplayLines(width int) []string {
-	return tui.CreateDiffSummary(c.Changes, c.CWD, width, c.Theme)
+	// Rust #41143: the inline patch preview is bounded, while the transcript and
+	// raw view retain the complete diff.
+	return tui.CreateDiffPreview(c.Changes, c.CWD, width, c.Theme)
 }
 
 func (c PatchHistoryCell) RawLines() []string {
