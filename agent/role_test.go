@@ -36,17 +36,12 @@ func TestRoleResolverResolveDeepClonesNicknameCandidates(t *testing.T) {
 	}
 }
 
-func TestRoleResolverApplyPreservesProviderAndTierUnlessSet(t *testing.T) {
+func TestRoleResolverApplyPreservesProviderUnlessSet(t *testing.T) {
 	resolver := NewRoleResolver(map[string]RoleConfig{
 		"locked-model": {
 			Settings: map[string]string{
 				"model":                  "gpt-5",
 				"model_reasoning_effort": "high",
-			},
-		},
-		"locked-tier": {
-			Settings: map[string]string{
-				"service_tier": "priority",
 			},
 		},
 	})
@@ -62,12 +57,6 @@ func TestRoleResolverApplyPreservesProviderAndTierUnlessSet(t *testing.T) {
 	}
 	if config.Model != "gpt-5" || config.Settings["model_reasoning_effort"] != "high" {
 		t.Fatalf("Apply() config = %#v", config)
-	}
-	if err := resolver.Apply(config, "locked-tier"); err != nil {
-		t.Fatalf("Apply(locked-tier) error = %v", err)
-	}
-	if config.ServiceTier != "priority" {
-		t.Fatalf("Apply(locked-tier) ServiceTier = %q, want priority", config.ServiceTier)
 	}
 }
 
@@ -89,7 +78,6 @@ func TestSpawnToolDescriptionFormatsRoles(t *testing.T) {
 			Settings: map[string]string{
 				"model":                  "gpt-5",
 				"model_reasoning_effort": "high",
-				"service_tier":           "priority",
 			},
 		},
 	})
@@ -97,7 +85,6 @@ func TestSpawnToolDescriptionFormatsRoles(t *testing.T) {
 		"`default` is used",
 		"`reviewer`: reviews changes",
 		"model is set to `gpt-5`",
-		"service tier is set to `priority`",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("SpawnToolDescription() missing %q in:\n%s", want, description)

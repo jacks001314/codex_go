@@ -36,7 +36,6 @@ func (c *RoleAwareToolController) SpawnAgent(ctx context.Context, args *SpawnAge
 	}
 	setSpawnDefault(&resolved.Model, c.defaults.Model)
 	setSpawnDefault(&resolved.ReasoningEffort, c.defaults.ReasoningEffort)
-	setSpawnDefault(&resolved.ServiceTier, c.defaults.ServiceTier)
 	if c.defaults.DeveloperInstructions != nil {
 		value := *c.defaults.DeveloperInstructions
 		resolved.DeveloperInstructions = &value
@@ -135,8 +134,6 @@ func applyRoleSpawnSettings(args *SpawnAgentArgs, settings map[string]string) {
 			args.Model = &value
 		case "model_reasoning_effort":
 			args.ReasoningEffort = &value
-		case "service_tier":
-			args.ServiceTier = &value
 		case "developer_instructions":
 			args.DeveloperInstructions = &value
 		}

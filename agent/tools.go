@@ -54,7 +54,6 @@ type SpawnAgentArgs struct {
 	AgentType       *string `json:"agent_type,omitempty"`
 	Model           *string `json:"model,omitempty"`
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
-	ServiceTier     *string `json:"service_tier,omitempty"`
 	ForkContext     bool    `json:"fork_context,omitempty"`
 	ForkTurns       *string `json:"fork_turns,omitempty"`
 
@@ -297,7 +296,6 @@ type MultiAgentHandlerOptions struct {
 type SpawnDefaults struct {
 	Model                 string
 	ReasoningEffort       string
-	ServiceTier           string
 	DeveloperInstructions *string
 }
 

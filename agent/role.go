@@ -90,13 +90,10 @@ func (r *RoleResolver) Apply(config *RuntimeConfig, roleName string) error {
 		config.Settings = make(map[string]string, len(role.Settings))
 	}
 	currentProvider := config.ModelProvider
-	currentServiceTier := config.ServiceTier
 	for key, value := range role.Settings {
 		switch key {
 		case "model_provider":
 			config.ModelProvider = value
-		case "service_tier":
-			config.ServiceTier = value
 		case "model":
 			config.Model = value
 		default:
@@ -105,9 +102,6 @@ func (r *RoleResolver) Apply(config *RuntimeConfig, roleName string) error {
 	}
 	if _, ok := role.Settings["model_provider"]; !ok {
 		config.ModelProvider = currentProvider
-	}
-	if _, ok := role.Settings["service_tier"]; !ok {
-		config.ServiceTier = currentServiceTier
 	}
 	return nil
 }
@@ -154,7 +148,6 @@ func lockedSettingsNotes(settings map[string]string) string {
 	}
 	model, hasModel := settings["model"]
 	effort, hasEffort := settings["model_reasoning_effort"]
-	tier, hasTier := settings["service_tier"]
 	var notes []string
 	switch {
 	case hasModel && hasEffort:
@@ -163,9 +156,6 @@ func lockedSettingsNotes(settings map[string]string) string {
 		notes = append(notes, fmt.Sprintf(" This role's model is set to `%s`.", model))
 	case hasEffort:
 		notes = append(notes, fmt.Sprintf(" This role's reasoning effort is set to `%s`.", effort))
-	}
-	if hasTier {
-		notes = append(notes, fmt.Sprintf(" This role's service tier is set to `%s`.", tier))
 	}
 	if len(notes) == 0 {
 		return ""
