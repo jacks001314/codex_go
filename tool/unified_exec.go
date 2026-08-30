@@ -410,6 +410,23 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 }
 
 func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellRequest, callID string, processID int) (*ShellResult, error) {
+	// Rust #41227: the elevated sandbox account cannot access Microsoft Store
+	// PowerShell. Replace Store PowerShell with a compatible pwsh/powershell.exe
+	// and ensure -NoProfile for local elevated sandbox commands.
+	if len(req.Command) > 0 {
+		preparedCommand := preparePowerShellCommandForElevatedWindowsSandbox(
+			req.Command,
+			DetectShellType(req.Command[0]),
+			/*sandboxRequested*/ true,
+			req.WindowsSandboxLevel,
+			/*environmentIsRemote*/ false,
+		)
+		if !equalStringSlices(preparedCommand, req.Command) {
+			copied := *req
+			copied.Command = preparedCommand
+			req = &copied
+		}
+	}
 	started, err := startUnifiedExecWindowsSandbox(req)
 	if err != nil {
 		m.releaseProcessID(processID)
