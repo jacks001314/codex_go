@@ -13434,6 +13434,21 @@ func TestMultiAgentModeCatalogText(t *testing.T) {
 	}
 }
 
+func TestCollaborationModeDefaultQuestionGuidanceLikeRust(t *testing.T) {
+	instructions := CollaborationModeDefaultInstructions()
+	for _, want := range []string{
+		"strongly prefer making reasonable assumptions",
+		"Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.",
+		"If `request_user_input` returns no answers, continue with best judgment",
+		"Never use the `request_user_input` tool for permission requests or permission-related escalations.",
+		"Ask the user directly with one concise plain-text question",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("Default collaboration-mode instructions missing %q:\n%s", want, instructions)
+		}
+	}
+}
+
 func TestRuntimeRouterTurnStartAppliesExplicitPersonality(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
