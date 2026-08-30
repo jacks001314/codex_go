@@ -324,6 +324,7 @@ type InitializeResponse struct {
 type EnvironmentInfo struct {
 	Shell                ShellInfo               `json:"shell"`
 	CWD                  *string                 `json:"cwd"`
+	PlatformOS           string                  `json:"platformOs,omitempty"`
 	TemporaryDirectories []string                `json:"temporaryDirectories,omitempty"`
 	Capabilities         EnvironmentCapabilities `json:"capabilities"`
 }
@@ -3180,6 +3181,7 @@ func localEnvironmentInfo() *EnvironmentInfo {
 	return &EnvironmentInfo{
 		Shell:                ShellInfo{Name: detected.Name(), Path: detected.ShellPath},
 		CWD:                  stringPtr(cwd),
+		PlatformOS:           runtime.GOOS,
 		TemporaryDirectories: localTemporaryDirectories(cwdPath),
 		Capabilities: EnvironmentCapabilities{
 			NetworkProxyLaunch:         true,

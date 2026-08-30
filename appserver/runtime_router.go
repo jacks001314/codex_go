@@ -11900,8 +11900,10 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 			threadItemStringFromAnyMap(selected, "CWD"),
 		))
 		shellInfo := record.Shell
+		platformOS := ""
 		if info, err := r.services.Environment.InfoContext(context.Background(), &EnvironmentInfoParams{EnvironmentID: environmentID}); err == nil && info != nil {
 			shellInfo = info.Shell
+			platformOS = strings.TrimSpace(info.PlatformOS)
 		} else if !record.InfoOverride {
 			shellInfo = EnvironmentShellInfo{}
 		}
@@ -11914,6 +11916,7 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 			ID:            environmentID,
 			CWD:           cwd,
 			Shell:         environmentShell,
+			PlatformOS:    platformOS,
 			ExecServerURL: strings.TrimSpace(record.ExecServerURL),
 			NoiseProvider: record.NoiseProvider,
 		}

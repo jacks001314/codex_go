@@ -131,6 +131,7 @@ type UnifiedExecEnvironment struct {
 	ID            string
 	CWD           string
 	Shell         *Shell
+	PlatformOS    string
 	ExecServerURL string
 	NoiseProvider execserver.NoiseRendezvousConnectProvider
 	// ShellEnvironmentPolicy is this environment's resolved shell environment
@@ -171,8 +172,8 @@ type ShellResult struct {
 }
 
 type ShellValidationOptions struct {
-	AdditionalPermissionsAllowed    bool
-	ApprovalPolicy                  sandbox.AskForApproval
+	AdditionalPermissionsAllowed bool
+	ApprovalPolicy               sandbox.AskForApproval
 	// GranularSandboxApproval / GranularRules mirror Rust's granular
 	// AskForApproval sub-config (#40024): sandbox escalation is rejected only
 	// when the shared policy check rejects prompting.
@@ -388,7 +389,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	if escalationApprovalRequired {
 		// Rust #40024: use the shared policy rejection check so granular
 		// sandbox_approval controls whether escalation may prompt.
-		if _, rejected := safety.PromptRejectedByPolicy(shellApprovalPolicy(&opts), /*promptIsRule*/ false); rejected {
+		if _, rejected := safety.PromptRejectedByPolicy(shellApprovalPolicy(&opts) /*promptIsRule*/, false); rejected {
 			return nil, fmt.Errorf("approval policy is %s; reject command - you cannot ask for escalated permissions if the approval policy is %s", opts.ApprovalPolicy, opts.ApprovalPolicy)
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -218,6 +219,23 @@ func TestUnifiedExecEnvironmentsForTurnSkipsPendingFailedAndAppliesConfig(t *tes
 	}
 	if inherit, _ := environments[0].ShellEnvironmentPolicy["inherit"].(string); inherit != "core" {
 		t.Fatalf("ready environment policy = %#v, want inherit=core", environments[0].ShellEnvironmentPolicy)
+	}
+}
+
+func TestEnvironmentInfoReportsLocalPlatformOSLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, t.TempDir())
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "local-env", ExecServerURL: "ws://127.0.0.1:1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetInfo("local-env", EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := manager.Info(&EnvironmentInfoParams{EnvironmentID: "local-env"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.PlatformOS != runtime.GOOS {
+		t.Fatalf("PlatformOS = %q, want %q", info.PlatformOS, runtime.GOOS)
 	}
 }
 

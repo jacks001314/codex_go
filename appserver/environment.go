@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -198,6 +199,7 @@ func (p *EnvironmentInfoParams) Validate() error {
 type EnvironmentInfoResponse struct {
 	Shell        EnvironmentShellInfo                     `json:"shell"`
 	CWD          *string                                  `json:"cwd"`
+	PlatformOS   string                                   `json:"platformOs,omitempty"`
 	Capabilities execserverclient.EnvironmentCapabilities `json:"capabilities"`
 }
 
@@ -710,7 +712,7 @@ func (m *EnvironmentManager) InfoContext(ctx context.Context, params *Environmen
 	if cwd == nil {
 		cwd = defaultCWD
 	}
-	return &EnvironmentInfoResponse{Shell: shell, CWD: cloneString(cwd)}, nil
+	return &EnvironmentInfoResponse{Shell: shell, CWD: cloneString(cwd), PlatformOS: runtime.GOOS}, nil
 }
 
 func (m *EnvironmentManager) Status(params *EnvironmentStatusParams) (*EnvironmentStatusResponse, error) {
@@ -901,6 +903,7 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 		response := &EnvironmentInfoResponse{
 			Shell:        EnvironmentShellInfo{Name: info.Shell.Name, Path: info.Shell.Path},
 			CWD:          cloneString(info.CWD),
+			PlatformOS:   info.PlatformOS,
 			Capabilities: info.Capabilities,
 		}
 		if err := response.Shell.Validate(); err != nil {
