@@ -6063,6 +6063,12 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	inputItems = append(inputItems, skillInputItems...)
 	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), params.ResponsesAPIMetadata)
 	serviceTier := r.appServiceTierForTurn(cfg, params, modelProviderConfig.Model)
+	// Rust #41308: every subagent turn follows the root thread's service tier,
+	// not just the spawn turn. Preserve fast_mode gating; an unsupported tier is
+	// dropped by ServiceTierForRequest.
+	if rootTier := r.subagentRootServiceTier(threadID); rootTier != "" && features.Enabled(cfg.FeatureSettings(), "fast_mode") {
+		serviceTier = model.ServiceTierForRequest(modelInfo, rootTier)
+	}
 	hostedTools, err := r.hostedToolsForTurn(params, turnRuntime)
 	if err != nil {
 		return nil, err

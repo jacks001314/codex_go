@@ -645,6 +645,32 @@ func (c *runtimeAgentController) rootServiceTierForSpawn() string {
 	return strings.TrimSpace(record.Metadata.ServiceTier)
 }
 
+// subagentRootServiceTier returns the service tier of the root thread that a
+// subagent `threadID` descends from, walking the parent-thread chain. It returns
+// "" when threadID is not a subagent (no parent) or the root has no configured
+// service tier, so the subagent keeps its own config default. Used to make every
+// subagent turn follow the root tier (Rust #41308 Session::get_or_prepare_turn).
+func (r *RuntimeRouter) subagentRootServiceTier(threadID string) string {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return ""
+	}
+	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, false)
+	if err != nil || record == nil {
+		return ""
+	}
+	if record.ParentThreadID == "" {
+		return ""
+	}
+	for record.ParentThreadID != "" {
+		parent, parentErr := r.threadRecord(record.ParentThreadID, true, false)
+		if parentErr != nil || parent == nil {
+			return ""
+		}
+		record = parent
+	}
+	return strings.TrimSpace(record.Metadata.ServiceTier)
+}
+
 func runtimeRecordDescendsFrom(record session.Record, rootID session.ThreadID, records []session.Record) bool {
 	if record.ID == rootID {
 		return true

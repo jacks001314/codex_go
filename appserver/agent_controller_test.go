@@ -341,3 +341,41 @@ func TestRuntimeAgentControllerRootServiceTierForSpawnLikeRust(t *testing.T) {
 		t.Fatalf("rootServiceTierForSpawn(no tier) = %q, want empty", got)
 	}
 }
+
+func TestRuntimeRouterSubagentRootServiceTierLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	root := &session.Record{
+		ID: "root", SessionID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), Model: "gpt-root", ServiceTier: "priority"},
+	}
+	if err := store.Create(root); err != nil {
+		t.Fatal(err)
+	}
+	child := &session.Record{
+		ID: "child", SessionID: "child", ParentThreadID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: root.Metadata.CWD, Model: "gpt-child", ServiceTier: ""},
+	}
+	if err := store.Create(child); err != nil {
+		t.Fatal(err)
+	}
+	grandchild := &session.Record{
+		ID: "grandchild", SessionID: "grandchild", ParentThreadID: "child", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: root.Metadata.CWD, Model: "gpt-grandchild", ServiceTier: "flex"},
+	}
+	if err := store.Create(grandchild); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	// A subagent (any depth) inherits the root thread's tier, ignoring its own.
+	if got := router.subagentRootServiceTier("child"); got != "priority" {
+		t.Fatalf("subagentRootServiceTier(child) = %q, want priority", got)
+	}
+	if got := router.subagentRootServiceTier("grandchild"); got != "priority" {
+		t.Fatalf("subagentRootServiceTier(grandchild) = %q, want priority", got)
+	}
+	// The root thread itself is not a subagent and never inherits a root tier.
+	if got := router.subagentRootServiceTier("root"); got != "" {
+		t.Fatalf("subagentRootServiceTier(root) = %q, want empty", got)
+	}
+}
