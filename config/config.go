@@ -489,6 +489,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"mcp_oauth_credentials_store":                {},
 	"mcp_oauth_callback_port":                    {},
 	"mcp_oauth_callback_url":                     {},
+	"mcp_optional_startup_grace_ms":              {},
 	"mcp_servers":                                {},
 	"marketplaces":                               {},
 	"memories":                                   {},
@@ -1248,6 +1249,29 @@ func (c *Config) CodeModeDefaultExecYieldTime() time.Duration {
 		return DefaultCodeModeExecYieldTime
 	}
 	return time.Duration(value) * time.Millisecond
+}
+
+// DefaultMCPOptionalStartupGrace mirrors Rust
+// codex_mcp::DEFAULT_OPTIONAL_MCP_STARTUP_GRACE (#41199): how long tool-catalog
+// capture waits for optional MCP servers before omitting them.
+const DefaultMCPOptionalStartupGrace = time.Second
+
+// MCPOptionalStartupGrace reads the optional [mcp_optional_startup_grace_ms]
+// window used while building the initial tool catalog. An absent key falls back
+// to DefaultMCPOptionalStartupGrace (1s); an explicit 0 disables the shared
+// grace so optional servers wait for their configured startup_timeout_sec.
+func (c *Config) MCPOptionalStartupGrace() time.Duration {
+	if c == nil || c.Values == nil {
+		return DefaultMCPOptionalStartupGrace
+	}
+	raw, ok := c.Values["mcp_optional_startup_grace_ms"]
+	if !ok {
+		return DefaultMCPOptionalStartupGrace
+	}
+	if value, ok := nonNegativeIntFromConfigValue(raw); ok {
+		return time.Duration(value) * time.Millisecond
+	}
+	return DefaultMCPOptionalStartupGrace
 }
 
 func (c *Config) ToolRegistryTurnMetadataIncludesToolInfo() bool {

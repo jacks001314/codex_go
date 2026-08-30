@@ -615,6 +615,24 @@ func TestCodeModeAndToolRegistryNestedConfig(t *testing.T) {
 	}
 }
 
+func TestMCPOptionalStartupGrace(t *testing.T) {
+	// An absent key falls back to the 1s default.
+	if got := (&Config{Values: map[string]any{}}).MCPOptionalStartupGrace(); got != DefaultMCPOptionalStartupGrace {
+		t.Fatalf("MCPOptionalStartupGrace(absent) = %v, want %v", got, DefaultMCPOptionalStartupGrace)
+	}
+	if got := (*Config)(nil).MCPOptionalStartupGrace(); got != DefaultMCPOptionalStartupGrace {
+		t.Fatalf("MCPOptionalStartupGrace(nil) = %v, want %v", got, DefaultMCPOptionalStartupGrace)
+	}
+	// An explicit zero disables the shared grace.
+	if got := (&Config{Values: map[string]any{"mcp_optional_startup_grace_ms": int64(0)}}).MCPOptionalStartupGrace(); got != 0 {
+		t.Fatalf("MCPOptionalStartupGrace(0) = %v, want 0", got)
+	}
+	// A non-zero value is applied in milliseconds.
+	if got := (&Config{Values: map[string]any{"mcp_optional_startup_grace_ms": int64(2500)}}).MCPOptionalStartupGrace(); got != 2500*time.Millisecond {
+		t.Fatalf("MCPOptionalStartupGrace(2500) = %v, want %v", got, 2500*time.Millisecond)
+	}
+}
+
 func TestToolEnablementUsesRustDefaultsAndNestedConfig(t *testing.T) {
 	defaults := &Config{Values: map[string]any{}}
 	if !defaults.UpdatePlanEnabled() || !defaults.WaitAgentEnabled() {

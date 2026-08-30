@@ -12537,11 +12537,18 @@ func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequired(threadID string, 
 	if r == nil || service == nil {
 		return nil, nil
 	}
+	// Rust #41199: the optional MCP startup grace is configurable; a zero value
+	// disables the shared grace (servers wait for their own startup timeout).
+	optionalStartupGrace := config.DefaultMCPOptionalStartupGrace
+	if cfg != nil {
+		optionalStartupGrace = cfg.MCPOptionalStartupGrace()
+	}
 	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{
-		ThreadID:            stringPtrIfNotEmpty(strings.TrimSpace(threadID)),
-		Detail:              &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
-		RequiredServers:     append([]string(nil), requiredServers...),
-		NonBlockingOptional: true,
+		ThreadID:             stringPtrIfNotEmpty(strings.TrimSpace(threadID)),
+		Detail:               &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
+		RequiredServers:      append([]string(nil), requiredServers...),
+		NonBlockingOptional:  true,
+		OptionalStartupGrace: optionalStartupGrace,
 	})
 	if err != nil || response == nil {
 		return nil, nil

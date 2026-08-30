@@ -1296,7 +1296,10 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 			notifyMCPStartupObserver(observer, name, result.Status.State, nil)
 		}
 	}
-	if params == nil || !params.NonBlockingOptional {
+	// Rust #41199: a zero optional_mcp_startup_grace disables the shared grace,
+	// so optional servers wait for their configured startup timeout instead of
+	// being omitted after a fixed window. This is the blocking path.
+	if params == nil || !params.NonBlockingOptional || params.OptionalStartupGrace <= 0 {
 		for len(pending) > 0 {
 			applyResult(<-resultCh)
 		}
@@ -1304,9 +1307,6 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 	}
 
 	grace := params.OptionalStartupGrace
-	if grace <= 0 {
-		grace = time.Second
-	}
 	defaultDeadline := time.Now().Add(grace)
 	optionalDeadlines := map[int]time.Time{}
 	for index, name := range pending {

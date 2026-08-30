@@ -327,6 +327,73 @@ func TestListStatusCheckedOptionalStartupUsesSharedGraceAndWarmsCache(t *testing
 	t.Fatal("optional MCP did not publish its warmed tool cache")
 }
 
+func TestListStatusCheckedDisabledGraceWaitsForOptionalStartup(t *testing.T) {
+	if os.Getenv("MCP_CONCURRENT_FAST_HELPER") == "1" {
+		runMCPHelperServer()
+		return
+	}
+	releaseFile := t.TempDir() + string(os.PathSeparator) + "release-disabled-grace"
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable() error = %v", err)
+	}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"optional": {Config: ServerConfig{
+			Command: executable,
+			Args:    []string{"-test.run=TestListStatusCheckedDisabledGraceWaitsForOptionalStartup", "--"},
+			Env: map[string]string{
+				"MCP_CONCURRENT_FAST_HELPER":   "1",
+				"MCP_OPTIONAL_STARTUP_BARRIER": "1",
+				"MCP_CONCURRENT_RELEASE_FILE":  releaseFile,
+			},
+			Enabled: true, StartupTimeout: 5 * time.Second,
+		}},
+	}})
+	defer service.Close()
+
+	type result struct {
+		response *MCPListServerStatusResponse
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		// Rust #41199: a disabled (zero) shared grace must not omit the
+		// pending optional server; it waits for startup instead.
+		response, err := service.ListStatusChecked(&MCPListServerStatusParams{
+			Detail:               &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly},
+			NonBlockingOptional:  true,
+			OptionalStartupGrace: 0,
+		})
+		done <- result{response, err}
+	}()
+	select {
+	case <-done:
+		t.Fatal("disabled shared grace returned before optional startup")
+	case <-time.After(200 * time.Millisecond):
+		// Still waiting for the optional server's startup.
+	}
+	if err := os.WriteFile(releaseFile, []byte("ready"), 0o600); err != nil {
+		t.Fatalf("release optional helper: %v", err)
+	}
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("ListStatusChecked() error = %v", res.err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			statuses := service.ConfiguredStatuses()
+			if len(statuses) == 1 && statuses[0].State == MCPServerReady && len(statuses[0].Tools) == 1 {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatal("optional MCP did not publish its tool cache after disabled grace")
+	case <-time.After(5 * time.Second):
+		t.Fatal("disabled shared grace did not return after startup")
+	}
+}
+
 func TestListStatusCheckedExplicitRequiredServerWaitsPastGrace(t *testing.T) {
 	if os.Getenv("MCP_CONCURRENT_FAST_HELPER") == "1" {
 		runMCPHelperServer()
