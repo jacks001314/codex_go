@@ -74,6 +74,7 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 			DefaultReasoningSummary:    "auto",
 			SupportVerbosity:           true,
 			DefaultVerbosity:           "low",
+			SupportedReasoningLevels:   []string{"low", "medium", "high", "xhigh", "max", "ultra"},
 		}}}),
 		ProviderID: OpenAIProviderID,
 	})
@@ -178,6 +179,74 @@ func TestResponsesAgentRunnerPostsResponsesRequest(t *testing.T) {
 	}
 	if response.ReasoningIncluded == nil || !*response.ReasoningIncluded {
 		t.Fatalf("reasoning included = %#v", response.ReasoningIncluded)
+	}
+}
+
+func TestReasoningEffortForRequestModelAwareUltraFallback(t *testing.T) {
+	levels := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
+	multiAgent := "high"
+	ultraEffort := "ultra"
+	tests := []struct {
+		name   string
+		info   *ModelInfo
+		effort string
+		want   string
+	}{
+		{
+			name:   "supported catalog override wins for ultra",
+			info:   &ModelInfo{MultiAgentReasoningEffort: &multiAgent, SupportedReasoningLevels: levels},
+			effort: "ultra",
+			want:   "high",
+		},
+		{
+			name:   "unsupported override falls back to max",
+			info:   &ModelInfo{MultiAgentReasoningEffort: &multiAgent, SupportedReasoningLevels: []string{"low", "max"}},
+			effort: "ultra",
+			want:   "max",
+		},
+		{
+			name:   "ultra override is rejected and falls back to max",
+			info:   &ModelInfo{MultiAgentReasoningEffort: &ultraEffort, SupportedReasoningLevels: levels},
+			effort: "ultra",
+			want:   "max",
+		},
+		{
+			name:   "no override prefers max when supported",
+			info:   &ModelInfo{SupportedReasoningLevels: levels},
+			effort: "ultra",
+			want:   "max",
+		},
+		{
+			name:   "no max uses highest supported non-ultra",
+			info:   &ModelInfo{SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "ultra"}},
+			effort: "ultra",
+			want:   "xhigh",
+		},
+		{
+			name:   "empty catalog falls back to medium",
+			info:   &ModelInfo{},
+			effort: "ultra",
+			want:   "medium",
+		},
+		{
+			name:   "non-ultra effort passes through",
+			info:   &ModelInfo{MultiAgentReasoningEffort: &multiAgent, SupportedReasoningLevels: levels},
+			effort: "high",
+			want:   "high",
+		},
+		{
+			name:   "nil model info passes through",
+			info:   nil,
+			effort: "ultra",
+			want:   "ultra",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reasoningEffortForRequest(tt.info, tt.effort); got != tt.want {
+				t.Fatalf("reasoningEffortForRequest(%v, %q) = %q, want %q", tt.info, tt.effort, got, tt.want)
+			}
+		})
 	}
 }
 

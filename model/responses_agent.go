@@ -975,9 +975,7 @@ func responsesReasoningParam(request *AgentRequest, info *ModelInfo) *responsesR
 	if effort == "" {
 		effort = strings.TrimSpace(info.DefaultReasoningLevel)
 	}
-	if effort == "ultra" {
-		effort = "max"
-	}
+	effort = reasoningEffortForRequest(info, effort)
 	// Rust #40799: keep "persistent" in local settings, but the Responses API
 	// calls it "disabled".
 	if effort == "persistent" {
@@ -995,6 +993,32 @@ func responsesReasoningParam(request *AgentRequest, info *ModelInfo) *responsesR
 		reasoning.Context = "all_turns"
 	}
 	return reasoning
+}
+
+// reasoningEffortForRequest mirrors Rust core/src/client.rs
+// reasoning_effort_for_request (#41206). When the selected effort is Ultra, the
+// model-aware override is used when present and supported; otherwise the fallback
+// prefers max, then the highest supported non-ultra effort, and finally medium
+// when the model declares no reasoning levels. Other efforts pass through.
+func reasoningEffortForRequest(info *ModelInfo, effort string) string {
+	if info == nil || effort != "ultra" {
+		return effort
+	}
+	if info.MultiAgentReasoningEffort != nil {
+		if override := strings.TrimSpace(*info.MultiAgentReasoningEffort); override != "" &&
+			override != "ultra" && containsString(info.SupportedReasoningLevels, override) {
+			return override
+		}
+	}
+	if containsString(info.SupportedReasoningLevels, "max") {
+		return "max"
+	}
+	for i := len(info.SupportedReasoningLevels) - 1; i >= 0; i-- {
+		if level := info.SupportedReasoningLevels[i]; level != "ultra" {
+			return level
+		}
+	}
+	return "medium"
 }
 
 func responsesStreamOptionsForRequest(request *AgentRequest, reasoning *responsesReasoning, providerName string) *responsesStreamOptions {
