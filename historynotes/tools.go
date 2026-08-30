@@ -2,6 +2,7 @@ package historynotes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"codex_go/tool"
@@ -261,14 +262,100 @@ func NewToolExecutor(action Action, backend *Backend, sessionID string, currentA
 		if err != nil {
 			return nil, tool.RespondToModel(err.Error())
 		}
-		// Rust #41260: the backend enforces the requested output budget before
-		// encryption, so the client returns the result unchanged instead of
-		// applying another size check or truncating an already bounded response.
-		return &tool.Output{Success: true, Body: string(result), Data: map[string]any{"result": string(result)}}, nil
+		return historyNotesToolOutput(result)
 	})
 }
 
 func stringFromAny(value any) string {
 	text, _ := value.(string)
 	return text
+}
+
+// historyNotesToolOutput converts a history/notes backend result into a tool
+// output (Rust HistoryNotesToolOutput, #41292). The backend applies the output
+// budget before encryption, so the result is returned unchanged. Any `images`
+// attachments are converted to `input_image` model content items while being
+// kept out of the logged body and post-tool-use hook response.
+func historyNotesToolOutput(result json.RawMessage) (*tool.Output, error) {
+	var value map[string]any
+	if err := json.Unmarshal(result, &value); err != nil {
+		return nil, tool.RespondToModel("History backend returned invalid JSON.")
+	}
+	imagesRaw, hasImages := value["images"]
+	if hasImages {
+		delete(value, "images")
+	}
+	sanitized, err := json.Marshal(value)
+	if err != nil {
+		return nil, tool.RespondToModel("History backend returned invalid JSON.")
+	}
+	sanitizedText := string(sanitized)
+
+	capacity := 1
+	if hasImages {
+		images, ok := imagesRaw.([]any)
+		if !ok {
+			return nil, tool.RespondToModel("History backend returned invalid image content.")
+		}
+		capacity = 1 + len(images)
+	}
+	contentItems := make([]map[string]any, 0, capacity)
+	if encrypted, ok := value["encrypted_output"].(string); ok {
+		contentItems = append(contentItems, map[string]any{"type": "encrypted_content", "encrypted_content": encrypted})
+	} else {
+		contentItems = append(contentItems, map[string]any{"type": "input_text", "text": sanitizedText})
+	}
+	if hasImages {
+		images, ok := imagesRaw.([]any)
+		if !ok {
+			return nil, tool.RespondToModel("History backend returned invalid image content.")
+		}
+		for _, image := range images {
+			item, ok := image.(map[string]any)
+			if !ok {
+				return nil, tool.RespondToModel("History backend returned invalid image content.")
+			}
+			data, _ := item["data"].(string)
+			mimeType, _ := item["mime_type"].(string)
+			if data == "" || mimeType == "" {
+				return nil, tool.RespondToModel("History backend returned invalid image content.")
+			}
+			detail, ok := historyImageDetail(item["detail"])
+			if !ok {
+				return nil, tool.RespondToModel("History backend returned invalid image content.")
+			}
+			content := map[string]any{"type": "input_image", "image_url": "data:" + mimeType + ";base64," + data}
+			if detail != "" {
+				content["detail"] = detail
+			}
+			contentItems = append(contentItems, content)
+		}
+	}
+	return &tool.Output{
+		Success: true,
+		Body:    sanitizedText,
+		Data: map[string]any{
+			"result":        sanitizedText,
+			"content_items": contentItems,
+		},
+	}, nil
+}
+
+// historyImageDetail validates a history image attachment's detail annotation
+// (Rust ImageDetail) and returns its canonical form; a nil/absent value is valid
+// and returns an empty string.
+func historyImageDetail(raw any) (string, bool) {
+	if raw == nil {
+		return "", true
+	}
+	text, ok := raw.(string)
+	if !ok {
+		return "", false
+	}
+	switch text {
+	case "original", "high", "low", "auto":
+		return text, true
+	default:
+		return "", false
+	}
 }

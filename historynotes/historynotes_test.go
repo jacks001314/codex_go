@@ -268,6 +268,72 @@ func TestHistoryNotesToolOutputPreservesUnboundedResultLikeRust(t *testing.T) {
 	}
 }
 
+func TestHistoryNotesToolOutputConvertsImagesToContentItemsLikeRust(t *testing.T) {
+	out, err := historyNotesToolOutput(json.RawMessage(`{
+		"encrypted_output": "enc_payload",
+		"images": [
+			{"data": "cG5n", "mime_type": "image/png", "detail": "original"},
+			{"data": "anBlZw==", "mime_type": "image/jpeg", "detail": "low"},
+			{"data": "Z2lm", "mime_type": "image/gif"}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("historyNotesToolOutput() error = %v", err)
+	}
+	if strings.Contains(out.Body, "cG5n") || strings.Contains(out.Body, "anBlZw==") {
+		t.Fatalf("body leaked image data: %q", out.Body)
+	}
+	items, ok := out.Data["content_items"].([]map[string]any)
+	if !ok || len(items) != 4 {
+		t.Fatalf("content_items = %#v", out.Data["content_items"])
+	}
+	if items[0]["type"] != "encrypted_content" || items[0]["encrypted_content"] != "enc_payload" {
+		t.Fatalf("first content item = %#v", items[0])
+	}
+	if items[1]["type"] != "input_image" || items[1]["image_url"] != "data:image/png;base64,cG5n" || items[1]["detail"] != "original" {
+		t.Fatalf("second content item = %#v", items[1])
+	}
+	if items[2]["detail"] != "low" {
+		t.Fatalf("third detail = %#v", items[2])
+	}
+	if _, ok := items[3]["detail"]; ok {
+		t.Fatalf("fourth image detail should be omitted: %#v", items[3])
+	}
+}
+
+func TestHistoryNotesToolOutputPlaintextWithImagesLikeRust(t *testing.T) {
+	out, err := historyNotesToolOutput(json.RawMessage(`{"content":"hi","images":[{"data":"cG5n","mime_type":"image/png","detail":"original"}]}`))
+	if err != nil {
+		t.Fatalf("historyNotesToolOutput() error = %v", err)
+	}
+	items, ok := out.Data["content_items"].([]map[string]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("content_items = %#v", out.Data["content_items"])
+	}
+	if items[0]["type"] != "input_text" || items[0]["text"] != `{"content":"hi"}` {
+		t.Fatalf("first content item = %#v", items[0])
+	}
+	if items[1]["type"] != "input_image" || items[1]["image_url"] != "data:image/png;base64,cG5n" || items[1]["detail"] != "original" {
+		t.Fatalf("second content item = %#v", items[1])
+	}
+}
+
+func TestHistoryNotesToolOutputRejectsMalformedImagesLikeRust(t *testing.T) {
+	for _, result := range []string{
+		`{"encrypted_output":"x","images":null}`,
+		`{"encrypted_output":"x","images":{}}`,
+		`{"encrypted_output":"x","images":[null]}`,
+		`{"encrypted_output":"x","images":[{"mime_type":"image/png"}]}`,
+		`{"encrypted_output":"x","images":[{"data":"cG5n"}]}`,
+		`{"encrypted_output":"x","images":[{"data":"cG5n","mime_type":"image/png","detail":"invalid"}]}`,
+	} {
+		_, err := historyNotesToolOutput(json.RawMessage(result))
+		if err == nil || !strings.Contains(err.Error(), "invalid image content") {
+			t.Fatalf("result %s error = %v, want invalid image content", result, err)
+		}
+	}
+}
+
 func TestHistoryNotesBackendSanitizesErrorsLikeRust(t *testing.T) {
 	// A non-2xx response surfaces only a consistent message with the status,
 	// without leaking the underlying detail body.
