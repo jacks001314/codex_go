@@ -82,6 +82,13 @@ func TestAppMcpRoutingPolicy(t *testing.T) {
 	if len(filteredApps) != 0 {
 		t.Fatalf("apps should be cleared when routing unavailable, got %v", filteredApps)
 	}
+
+	// #41230: unauthenticated reads (empty auth mode) also clear apps while
+	// retaining the MCP server alternatives.
+	filteredNames, filteredApps := ApplyAppMcpRoutingPolicy("", mcpNames, apps, nil)
+	if len(filteredNames) != 2 || len(filteredApps) != 0 {
+		t.Fatalf("empty auth MCP = %v apps = %v, want both MCP and no apps", filteredNames, filteredApps)
+	}
 }
 
 func TestAppsRouteAvailable(t *testing.T) {
@@ -101,9 +108,9 @@ func TestAppsRouteAvailable(t *testing.T) {
 
 func TestCollectPluginEnabledCandidates(t *testing.T) {
 	tests := []struct {
-		name   string
-		edits  []ConfigEdit
-		want   map[string]bool
+		name  string
+		edits []ConfigEdit
+		want  map[string]bool
 	}{
 		{
 			name: "direct toggle",

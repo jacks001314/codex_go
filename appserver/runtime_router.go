@@ -8172,7 +8172,29 @@ func (r *RuntimeRouter) handlePluginRead(request *Request) (*plugin.PluginReadRe
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requirePlugins().Read(&params)
+	response, err := r.requirePlugins().Read(&params)
+	if err != nil {
+		return nil, err
+	}
+	r.applyPluginAppMcpRoutingPolicy(response)
+	return response, nil
+}
+
+// applyPluginAppMcpRoutingPolicy applies the legacy plugin app/MCP routing policy
+// to a plugin read result (Rust #41230): apps are omitted when unavailable, while
+// MCP server alternatives are retained, even when no authentication mode is set.
+func (r *RuntimeRouter) applyPluginAppMcpRoutingPolicy(response *plugin.PluginReadResponse) {
+	if r == nil || response == nil {
+		return
+	}
+	authMode := ""
+	if resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout()); err == nil && resolved != nil {
+		authMode = strings.TrimSpace(resolved.Auth.AuthMode)
+	}
+	detail := &response.Plugin
+	names, apps := plugin.ApplyAppMcpRoutingPolicy(authMode, detail.MCPServers, detail.Apps, detail.AppTemplates)
+	detail.MCPServers = names
+	detail.Apps = apps
 }
 
 func (r *RuntimeRouter) handlePluginSkillRead(request *Request) (*plugin.PluginSkillReadResponse, error) {
