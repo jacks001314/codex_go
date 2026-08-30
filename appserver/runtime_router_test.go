@@ -27008,6 +27008,26 @@ func TestWriteStdinApprovalForTurnDisabledFeatureDoesNotGateLikeRust(t *testing.
 	}
 }
 
+func TestWriteStdinApprovalForTurnRejectsNULByteLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	// Rust #41354: a NUL byte cannot be shell-quoted for an accurate review, so
+	// it is rejected before an approval request or write.
+	err := router.writeStdinApprovalForTurn(42, threadID, "turn-1", "\x00REJECTED=1\n")
+	if err == nil || !strings.Contains(err.Error(), "NUL byte") {
+		t.Fatalf("writeStdinApprovalForTurn(NUL) error = %v, want NUL-byte rejection", err)
+	}
+}
+
 func TestPersistentModeInstructionsFragmentLikeRust(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[model]\nreasoning_effort = \"persistent\"\n"), 0o600); err != nil {

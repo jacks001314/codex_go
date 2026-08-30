@@ -12030,6 +12030,12 @@ func (r *RuntimeRouter) writeStdinApprovalForTurn(processID int, threadID string
 	if r == nil {
 		return nil
 	}
+	// Rust #41354: manual approvals shell-quote the proposed input, which cannot
+	// preserve NUL bytes for an accurate review, so reject before any approval
+	// request or write reaches the terminal.
+	if strings.ContainsRune(chars, '\x00') {
+		return fmt.Errorf("terminal input contains a NUL byte and cannot be reviewed safely")
+	}
 	cwd := ""
 	if record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), false, false); err == nil && record != nil {
 		cwd = strings.TrimSpace(record.Metadata.CWD)
