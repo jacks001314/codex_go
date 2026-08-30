@@ -848,3 +848,86 @@ func TestMCPEncryptedContentSerializesAsFunctionOutputItemsLikeRust(t *testing.T
 		t.Fatalf("encrypted output = %#v", encrypted)
 	}
 }
+
+// TestToolExecutionResultHandlerExecutedClassification verifies the Rust
+// ToolCallOutcome mapping introduced for goal-accounting #41454:
+//   - a handler-executed failure (executor returns error) -> HandlerExecuted=true
+//   - a completed (success or non-success output) call -> HandlerExecuted=false
+func TestToolExecutionResultHandlerExecutedClassification(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("boom")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return nil, tool.RespondToModel("handler failed")
+	})); err != nil {
+		t.Fatalf("register boom: %v", err)
+	}
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("zero")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: false, Error: "unsuccessful output"}, nil
+	})); err != nil {
+		t.Fatalf("register zero: %v", err)
+	}
+
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)})
+
+	results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{
+		{ID: "call-boom", Type: "function_call", Name: "boom", CallID: "call-boom", Arguments: `{}`},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteToolItems() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %#v", results)
+	}
+	if !results[0].HandlerExecuted {
+		t.Fatalf("handler failure result.HandlerExecuted = false, want true")
+	}
+
+	results, err = dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{
+		{ID: "call-zero", Type: "function_call", Name: "zero", CallID: "call-zero", Arguments: `{}`},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteToolItems() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %#v", results)
+	}
+	if results[0].HandlerExecuted {
+		t.Fatalf("completed unsuccessful result.HandlerExecuted = true, want false")
+	}
+}
+
+// blockedHookRunner blocks every pre-tool use, exercising the Rust Blocked
+// outcome (handler never runs) for the HandlerExecuted classification.
+type blockedHookRunner struct{}
+
+func (blockedHookRunner) RunPreToolUse(context.Context, *tool.Invocation, *tool.PreToolUsePayload) (*tool.PreToolUseHookOutcome, error) {
+	return &tool.PreToolUseHookOutcome{Blocked: true, BlockReason: "blocked"}, nil
+}
+
+func (blockedHookRunner) RunPostToolUse(context.Context, *tool.Invocation, *tool.PostToolUsePayload) (*tool.PostToolUseHookOutcome, error) {
+	return nil, nil
+}
+
+func TestToolExecutionResultHandlerExecutedBlockedPreHookIsFalse(t *testing.T) {
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{
+		Router: tool.NewRouter(registry),
+		Hooks:  blockedHookRunner{},
+	})
+	results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{
+		{ID: "call-echo", Type: "function_call", Name: "echo", CallID: "call-echo", Arguments: `{}`},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteToolItems() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %#v", results)
+	}
+	if results[0].HandlerExecuted {
+		t.Fatalf("blocked result.HandlerExecuted = true, want false")
+	}
+}

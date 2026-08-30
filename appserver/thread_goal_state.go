@@ -25,6 +25,22 @@ type stateGoalTurnSnapshot struct {
 	LastAccountedUsage model.AgentUsage
 	ConnectionID       string
 	FinishMode         state.GoalAccountingMode
+	// Execution-failure tracking for the active goal (Rust #41454): a turn records a
+	// failed_execution when a default-namespace `exec` tool call ran its handler
+	// and failed, and successful_tool when any tool completed successfully. A
+	// goal is blocked after three consecutive turns of handler-executed exec
+	// failures with no intervening successful tool.
+	SuccessfulTool  bool
+	FailedExecution bool
+}
+
+// goalExecutionFailureState carries the consecutive-execution-failure streak for
+// a thread's active goal (Rust #41454). The counter accumulates across turns for
+// the same goal and resets when a tool succeeds, when the active goal changes,
+// or when the goal is cleared.
+type goalExecutionFailureState struct {
+	GoalID string
+	Turns  int
 }
 
 func goalTokenDeltaForUsage(usage model.AgentUsage) int64 {
@@ -324,7 +340,17 @@ func (r *RuntimeRouter) ensureStateThreadGoalTurnActive(threadID, turnID, goalID
 	if r.goalAccountingTurns == nil {
 		r.goalAccountingTurns = map[string]stateGoalTurnSnapshot{}
 	}
-	if _, exists := r.goalAccountingTurns[key]; exists {
+	if existing, exists := r.goalAccountingTurns[key]; exists {
+		// Rust #41454 mark_current_turn_goal_active: when the active goal changes
+		// mid-turn, reset the per-turn execution-failure flags so the failure
+		// streak does not carry across to the replacement goal.
+		if existing.GoalID != goalID {
+			existing.SuccessfulTool = false
+			existing.FailedExecution = false
+			r.goalAccountingTurns[key] = existing
+			// A replacement goal restarts the per-thread consecutive counter.
+			delete(r.execFailureTurns, strings.TrimSpace(threadID))
+		}
 		r.goalAccountingMu.Unlock()
 		return
 	}
@@ -351,6 +377,50 @@ func (r *RuntimeRouter) clearActiveGoalStateForThread(threadID string) {
 		r.clearStateThreadGoalTurnSnapshot(threadID, strings.TrimSpace(active.TurnID))
 	}
 	r.clearGoalIdleActive()
+	// A cleared goal ends the active-goal execution-failure streak (Rust
+	// #41454 clear_current_turn_goal / clear_active_goal reset the live counter).
+	r.resetGoalExecutionFailure(threadID)
+}
+
+// advanceGoalExecutionFailure evaluates the per-thread consecutive-execution-
+// failure streak for the just-finished turn (Rust #41454 execution_failure_goal).
+// A turn with a successful tool resets the streak; only a turn with a
+// handler-executed `exec` failure advances it. The streak is keyed by thread so
+// it does not leak across threads, and is re-anchored to the active goal when
+// the goal changes. It returns the active goal ID when the streak reaches three.
+func (r *RuntimeRouter) advanceGoalExecutionFailure(threadID, goalID string, snapshot stateGoalTurnSnapshot) string {
+	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(goalID) == "" {
+		return ""
+	}
+	r.goalAccountingMu.Lock()
+	defer r.goalAccountingMu.Unlock()
+	if snapshot.SuccessfulTool {
+		delete(r.execFailureTurns, threadID)
+		return ""
+	}
+	if !snapshot.FailedExecution {
+		return ""
+	}
+	st := r.execFailureTurns[threadID]
+	if st.GoalID != goalID {
+		st.GoalID = goalID
+		st.Turns = 0
+	}
+	st.Turns++
+	r.execFailureTurns[threadID] = st
+	if st.Turns >= 3 {
+		return goalID
+	}
+	return ""
+}
+
+func (r *RuntimeRouter) resetGoalExecutionFailure(threadID string) {
+	if r == nil {
+		return
+	}
+	r.goalAccountingMu.Lock()
+	defer r.goalAccountingMu.Unlock()
+	delete(r.execFailureTurns, strings.TrimSpace(threadID))
 }
 
 func (r *RuntimeRouter) recordGoalTokenUsage(threadID, turnID string, usage model.AgentUsage) {
@@ -705,6 +775,32 @@ func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, compl
 	}
 	if turnErr == nil && outcome != nil && outcome.Goal != nil && outcome.Goal.Status == state.ThreadGoalActive {
 		r.markGoalIdleActive(outcome.Goal.GoalID)
+	}
+	// Rust #41454: account the ending turn (above) before the active-goal
+	// stop. When a thread's active goal reaches three consecutive turns of
+	// handler-executed `exec` failures without an intervening successful tool,
+	// block the goal with the same accounting/status ordering as
+	// ActiveGoalStopReason::ExecutionUnavailable. The streak resets when any
+	// tool succeeds, when the active goal changes, or when the goal is cleared.
+	execFailureGoal := r.advanceGoalExecutionFailure(threadID, snapshot.GoalID, snapshot)
+	if execFailureGoal != "" {
+		current, getErr := r.services.StateRuntime.GetThreadGoal(context.Background(), threadID)
+		if getErr == nil && current != nil && current.GoalID == execFailureGoal &&
+			(current.Status == state.ThreadGoalActive || current.Status == state.ThreadGoalBudgetLimited) {
+			status := state.ThreadGoalBlocked
+			updated, updateErr := r.services.StateRuntime.UpdateThreadGoal(context.Background(), threadID, state.GoalUpdate{
+				Status: &status, ExpectedGoalID: &execFailureGoal,
+			})
+			if updateErr != nil {
+				slog.Warn("failed to block thread goal after repeated execution failures", "thread_id", threadID, "turn_id", turnID, "error", updateErr)
+			} else if updated != nil && updated.Status != current.Status {
+				r.emitStateThreadGoalUpdate(updated, turnID, snapshot.ConnectionID, telemetry.GoalEventKindStatusChanged)
+			}
+			// The goal was blocked, ending the active goal; skip the turn-error
+			// disposition below (there is no longer an active goal to stop).
+			r.resetGoalExecutionFailure(threadID)
+			return
+		}
 	}
 	if turnErr == nil || finishMode == state.GoalAccountingActiveOrComplete {
 		return

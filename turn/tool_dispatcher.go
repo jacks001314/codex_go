@@ -52,6 +52,13 @@ type ToolExecutionResult struct {
 	TelemetryTags map[string]string
 	StartedAt     time.Time
 	FinishedAt    time.Time
+	// HandlerExecuted is true when the tool's handler actually ran. It is false
+	// when the call was blocked/rejected before the executor was reached (for
+	// example a pre-tool hook block). The goal extension uses this to
+	// distinguish a handler-executed failure (Rust ToolCallOutcome::Failed {
+	// handler_executed: true }) from a blocked call when deciding whether an
+	// exec attempt counts toward goal-blocking (#41454).
+	HandlerExecuted bool
 }
 
 type ToolPostExecutionInputItems func(ctx context.Context, invocation *tool.Invocation, output *tool.Output) []any
@@ -435,21 +442,31 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 						nestedOutput.Body, nestedOutput.Error = nestedErr.Error(), nestedErr.Error()
 					}
 				}
-				d.onToolCompleted(nestedCtx, &ToolExecutionResult{Invocation: nested, Output: nestedOutput, Response: ToolResponseFromOutput(nested, nestedOutput), TelemetryTags: d.router.TelemetryTags(nested), StartedAt: nestedStartedAt, FinishedAt: nestedFinishedAt})
+				d.onToolCompleted(nestedCtx, &ToolExecutionResult{Invocation: nested, Output: nestedOutput, Response: ToolResponseFromOutput(nested, nestedOutput), TelemetryTags: d.router.TelemetryTags(nested), StartedAt: nestedStartedAt, FinishedAt: nestedFinishedAt, HandlerExecuted: nestedErr != nil})
 			})
 		}
 	}
 	startedAt := d.nowUTC()
-	var startedAfterPreHooks func(*tool.Invocation)
-	if d.onToolStarted != nil {
-		// Rust #38568: tool start callbacks run after pre-tool hooks (with the
-		// possibly hook-rewritten invocation) and before the executor runs.
-		startedAfterPreHooks = func(updated *tool.Invocation) {
+	// Rust #38568: tool start callbacks run after pre-tool hooks (with the
+	// possibly hook-rewritten invocation) and before the executor runs. We
+	// always install the pre-executor callback (even when no onToolStarted
+	// consumer is registered) so the dispatcher can report whether the handler
+	// was actually reached, which the goal extension uses to distinguish a
+	// handler-executed failure from a pre-tool-hook block (#41454).
+	handlerReached := false
+	startedAfterPreHooks := func(updated *tool.Invocation) {
+		handlerReached = true
+		if d.onToolStarted != nil {
 			d.onToolStarted(toolCtx, updated, startedAt)
 		}
 	}
 	telemetryTags := d.router.TelemetryTags(invocation)
 	output, dispatchErr := d.router.DispatchWithHooksAfterPreHooks(toolCtx, invocation, d.hooks, startedAfterPreHooks)
+	// Rust ToolCallOutcome::Failed { handler_executed: true } is produced only
+	// when the executor returned an error (dispatch error), not when the handler
+	// completed with a success=false output. A blocked pre-tool hook leaves
+	// handlerReached false (Rust ToolCallOutcome::Blocked).
+	handlerExecuted := false
 	if dispatchErr != nil {
 		if cause := context.Cause(toolCtx); cause != nil && !errors.Is(cause, context.Canceled) {
 			dispatchErr = cause
@@ -458,6 +475,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		if callErr.IsFatal() {
 			return nil, dispatchErr
 		}
+		handlerExecuted = handlerReached
 		message := callErr.ModelMessage()
 		body := message
 		if d.router.DeclaresOutputSchema(invocation.ToolName) {
@@ -502,13 +520,14 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	inputItems = append(notifyItems, inputItems...)
 	notifyMu.Unlock()
 	result := &ToolExecutionResult{
-		Invocation:    invocation,
-		Output:        output,
-		Response:      ToolResponseFromOutput(invocation, output),
-		InputItems:    inputItems,
-		TelemetryTags: telemetryTags,
-		StartedAt:     startedAt,
-		FinishedAt:    finishedAt,
+		Invocation:      invocation,
+		Output:          output,
+		Response:        ToolResponseFromOutput(invocation, output),
+		InputItems:      inputItems,
+		TelemetryTags:   telemetryTags,
+		StartedAt:       startedAt,
+		FinishedAt:      finishedAt,
+		HandlerExecuted: handlerExecuted,
 	}
 	if d.onToolCompleted != nil {
 		d.onToolCompleted(toolCtx, result)

@@ -191,5 +191,34 @@ func (r *RuntimeRouter) accountGoalToolProgressForCompletion(threadID, turnID st
 	if execution.Invocation.ToolName.Namespace == "" && execution.Invocation.ToolName.Name == tool.GoalUpdateToolName {
 		return
 	}
+	r.recordGoalToolOutcome(threadID, turnID, execution)
 	r.accountStateThreadGoalProgress(threadID, turnID, execution.FinishedAt, state.GoalAccountingActiveOnly)
+}
+
+// recordGoalToolOutcome mirrors Rust goal-accounting #41454: it marks the active
+// goal's turn as having a successful tool (completing any tool with success
+// resets the execution-failure streak) or a handler-executed `exec` failure
+// (default-namespace `exec` whose handler ran and failed). Everything else
+// (blocked, aborted, non-exec failures) is ignored. The per-thread consecutive
+// failure counter is only consumed at turn stop (finishStateThreadGoalTurn).
+func (r *RuntimeRouter) recordGoalToolOutcome(threadID, turnID string, execution *turn.ToolExecutionResult) {
+	if r == nil || execution == nil || execution.Invocation == nil || execution.Output == nil {
+		return
+	}
+	key := stateGoalTurnKey(threadID, turnID)
+	r.goalAccountingMu.Lock()
+	defer r.goalAccountingMu.Unlock()
+	snapshot, ok := r.goalAccountingTurns[key]
+	if !ok || strings.TrimSpace(snapshot.GoalID) == "" {
+		return
+	}
+	if execution.Output.Success {
+		snapshot.SuccessfulTool = true
+	}
+	if execution.HandlerExecuted && !execution.Output.Success &&
+		execution.Invocation.ToolName.Namespace == "" &&
+		execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
+		snapshot.FailedExecution = true
+	}
+	r.goalAccountingTurns[key] = snapshot
 }
