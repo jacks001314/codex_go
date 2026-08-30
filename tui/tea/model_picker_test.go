@@ -54,3 +54,42 @@ func TestModelPickerRefreshFallsBackToDefaultLikeRust(t *testing.T) {
 		t.Fatalf("default model after refresh = %q, want gpt-fresh", m.State.Model)
 	}
 }
+
+func TestModelPickerRefreshPreservesReasoningSubmenuLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	m := NewModel(state, Options{
+		OnListModels: func(includeHidden bool) ([]codextui.ModelPickerOption, error) {
+			return []codextui.ModelPickerOption{{
+				ID: "gpt-a", Label: "A",
+				SupportedReasoningEfforts: []codextui.ReasoningEffortOption{{Effort: "low", Label: "Low", IsDefault: true}},
+			}}, nil
+		},
+	})
+	m.modelPickerOpts = []codextui.ModelPickerOption{{
+		ID: "gpt-a", Label: "A",
+		SupportedReasoningEfforts: []codextui.ReasoningEffortOption{{Effort: "low", Label: "Low", IsDefault: true}},
+	}}
+	m.openModelPicker()
+	option := m.modelPickerOpts[0]
+	m.openModelReasoningPicker(option)
+	if m.modal == nil || m.modal.modelReasoning == nil || len(m.modal.modelReasoning.Options) != 1 {
+		t.Fatalf("reasoning picker not opened: %+v", m.modal)
+	}
+	// Fetch a refreshed catalog where gpt-a supports two reasoning levels.
+	cmd := m.fetchModelsForPicker()
+	if cmd == nil {
+		t.Fatal("fetchModelsForPicker returned nil")
+	}
+	// Override the fetch result with the updated option.
+	updated, _ := m.Update(ModelsResultMsg{
+		RequestID: m.pendingModelsRequestID,
+		Options: []codextui.ModelPickerOption{{
+			ID: "gpt-a", Label: "A",
+			SupportedReasoningEfforts: []codextui.ReasoningEffortOption{{Effort: "low", Label: "Low", IsDefault: true}, {Effort: "high", Label: "High"}},
+		}},
+	})
+	m = updated.(*Model)
+	if m.modal == nil || m.modal.modelReasoning == nil || len(m.modal.modelReasoning.Options) != 2 {
+		t.Fatalf("reasoning picker not refreshed: %+v", m.modal)
+	}
+}

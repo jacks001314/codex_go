@@ -74,7 +74,7 @@ func (m *Model) applyModelsResult(msg ModelsResultMsg) {
 // refreshModelPicker rebuilds an open model picker from the updated catalog,
 // preserving the highlighted model.
 func (m *Model) refreshModelPicker() {
-	if m == nil || m.modal == nil || m.modal.modelPicker == nil {
+	if m == nil || m.modal == nil {
 		return
 	}
 	// Rust #41467: apply accepted catalog updates to the new-thread default. If
@@ -94,6 +94,21 @@ func (m *Model) refreshModelPicker() {
 		if fallback != "" {
 			m.State.Model = fallback
 		}
+	}
+	// Rust #41467: refresh an open reasoning submenu in place even when the model
+	// picker modal has been replaced by the reasoning modal.
+	if m.modal.modelReasoning != nil && m.modal.modelReasoning.Model.ID != "" {
+		for _, option := range m.modelPickerOpts {
+			if option.ID == m.modal.modelReasoning.Model.ID {
+				if refreshed := codextui.NewModelReasoningPicker(option, m.State.EffectiveReasoningEffort()); refreshed != nil {
+					m.modal.modelReasoning = refreshed
+				}
+				break
+			}
+		}
+	}
+	if m.modal.modelPicker == nil {
+		return
 	}
 	picker := codextui.NewModelPicker(append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...), m.State.Model)
 	if picker == nil || len(picker.Options) == 0 {
