@@ -15,6 +15,7 @@ import (
 
 	"codex_go/agent"
 	"codex_go/compact"
+	"codex_go/mcp"
 	"codex_go/memories"
 	"codex_go/model"
 	"codex_go/rollout"
@@ -883,7 +884,7 @@ func (r *Router) Handle(request *Request) *Response {
 	}
 	result, err := r.dispatch(request)
 	if err != nil {
-		return ErrorResponse(request.ID, errorCode(err), err.Error(), jsonRPCErrorData(err))
+		return ErrorResponse(request.ID, errorCode(err), jsonRPCErrorMessage(err), jsonRPCErrorData(err))
 	}
 	return OK(request.ID, result)
 }
@@ -3655,6 +3656,10 @@ func MarshalMessage(value any) ([]byte, error) {
 }
 
 func errorCode(err error) int {
+	var mcpRemoteErr *mcp.MCPRemoteError
+	if errors.As(err, &mcpRemoteErr) {
+		return int(mcpRemoteErr.Code)
+	}
 	switch {
 	case errors.Is(err, ErrUnknownMethod):
 		return JSONRPCMethodNotFoundErrorCode
@@ -3669,6 +3674,17 @@ func errorCode(err error) int {
 	default:
 		return JSONRPCInternalErrorCode
 	}
+}
+
+// jsonRPCErrorMessage returns the structural MCP error message for a
+// *mcp.MCPRemoteError, otherwise err.Error(). This preserves the remote MCP
+// protocol error text on app-server responses (Rust #41196 mcp_operation_error).
+func jsonRPCErrorMessage(err error) string {
+	var mcpRemoteErr *mcp.MCPRemoteError
+	if errors.As(err, &mcpRemoteErr) {
+		return strings.TrimSpace(mcpRemoteErr.Message)
+	}
+	return err.Error()
 }
 
 // requestValidationErrorCode classifies Request.Validate errors on the wire.
