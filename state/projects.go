@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,16 +25,27 @@ type ProjectRoot struct {
 
 // Project is the stored project record.
 type Project struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Roots      []ProjectRoot     `json:"roots"`
-	Metadata   map[string]string `json:"metadata"`
-	Position   int64             `json:"position"`
-	CreatedAt  int64             `json:"createdAt"`
-	UpdatedAt  int64             `json:"updatedAt"`
-	CreatedAtMS int64            `json:"-"`
-	UpdatedAtMS int64            `json:"-"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Roots       []ProjectRoot     `json:"roots"`
+	Metadata    map[string]string `json:"metadata"`
+	Position    int64             `json:"position"`
+	CreatedAt   int64             `json:"createdAt"`
+	UpdatedAt   int64             `json:"updatedAt"`
+	CreatedAtMS int64             `json:"-"`
+	UpdatedAtMS int64             `json:"-"`
+	// RecencyAtMS is the newest non-archived assigned thread's recency (Unix ms),
+	// used for recency sorting (#41223). Null when no non-archived thread is assigned.
+	RecencyAtMS sql.NullInt64 `json:"-"`
 }
+
+// ProjectSortKey mirrors Rust state::ProjectSortKey (#41223).
+type ProjectSortKey string
+
+const (
+	ProjectSortPosition  ProjectSortKey = "position"
+	ProjectSortRecencyAt ProjectSortKey = "recencyAt"
+)
 
 // CreatedProject reports the created project and whether it was newly created
 // (false when the idempotency key already resolved to a project).
@@ -122,10 +134,11 @@ func (r *StateRuntime) SetThreadProject(ctx context.Context, threadID string, pr
 	return previousValue, true, nil
 }
 
-// ListProjects returns a paginated project listing ordered by position then id
-// (Rust list_projects). limit is clamped to 1..100 by callers; the store
-// fetches limit+1 rows to compute the next cursor.
-func (r *StateRuntime) ListProjects(ctx context.Context, cursor *string, limit int) (*ProjectsPage, error) {
+// ListProjects returns a paginated project listing ordered by manual position or
+// recency (Rust list_projects after #41223). limit is clamped by callers; the
+// store fetches limit+1 rows to compute the next cursor. Recency sorting places
+// projects with no assigned non-archived thread last.
+func (r *StateRuntime) ListProjects(ctx context.Context, cursor *string, limit int, sortKey ProjectSortKey, direction string) (*ProjectsPage, error) {
 	if r == nil || r.stateDB == nil {
 		return nil, errors.New("state runtime is nil")
 	}
@@ -135,52 +148,92 @@ func (r *StateRuntime) ListProjects(ctx context.Context, cursor *string, limit i
 	if limit < 1 {
 		limit = 50
 	}
-	anchor, err := parseProjectCursor(cursor)
+	if sortKey == "" {
+		sortKey = ProjectSortPosition
+	}
+	if direction != "asc" && direction != "desc" {
+		direction = "asc"
+		if sortKey == ProjectSortRecencyAt {
+			direction = "desc"
+		}
+	}
+	anchor, err := parseProjectCursor(cursor, sortKey, direction)
 	if err != nil {
 		return nil, err
 	}
-	var rows *sql.Rows
-	if anchor != nil {
-		rows, err = r.stateDB.QueryContext(ctx,
-			`SELECT id, name, metadata, position, created_at_ms, updated_at_ms FROM projects
-			 WHERE position > ? OR (position = ? AND id > ?)
-			 ORDER BY position ASC, id ASC LIMIT ?`,
-			anchor.position, anchor.position, anchor.id, limit+1)
-	} else {
-		rows, err = r.stateDB.QueryContext(ctx,
-			`SELECT id, name, metadata, position, created_at_ms, updated_at_ms FROM projects
-			 ORDER BY position ASC, id ASC LIMIT ?`, limit+1)
+	column := "p.position"
+	operator := ">"
+	orderColumn := "p.position"
+	nullsLast := false
+	if sortKey == ProjectSortRecencyAt {
+		column = "p.recency_at_ms"
+		orderColumn = "p.recency_at_ms IS NULL ASC, p.recency_at_ms"
+		nullsLast = true
 	}
+	if direction == "desc" {
+		operator = "<"
+	}
+	directionSQL := "ASC"
+	if direction == "desc" {
+		directionSQL = "DESC"
+	}
+	var where string
+	var args []any
+	if anchor != nil {
+		if anchor.value != nil {
+			where = fmt.Sprintf("WHERE (%[1]s %[2]s ? OR (%[1]s = ? AND p.id %[2]s ?))", column, operator)
+			if nullsLast {
+				where += " OR p.recency_at_ms IS NULL"
+			}
+			args = append(args, *anchor.value, *anchor.value, anchor.id)
+		} else {
+			where = "WHERE p.recency_at_ms IS NULL AND p.id " + operator + " ?"
+			args = append(args, anchor.id)
+		}
+	}
+	query := fmt.Sprintf(
+		`WITH project_activity AS (
+			SELECT id, name, metadata, position, created_at_ms, updated_at_ms,
+			       (SELECT MAX(recency_at_ms) FROM threads WHERE project_id = projects.id AND archived = 0) AS recency_at_ms
+			FROM projects
+		), page AS (
+			SELECT * FROM project_activity p %s ORDER BY %s %s, p.id %s LIMIT ?
+		)
+		SELECT p.*, roots.path AS root_path FROM page p
+		LEFT JOIN project_roots roots ON roots.project_id = p.id
+		ORDER BY %s %s, p.id %s, roots.position ASC`,
+		where, orderColumn, directionSQL, directionSQL, orderColumn, directionSQL, directionSQL)
+	args = append(args, limit+1)
+	rows, err := r.stateDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var projects []Project
 	for rows.Next() {
-		project, err := scanProjectRow(rows)
+		var rootPath *string
+		project, err := scanProjectRowWithOptionalRoot(rows, &rootPath)
 		if err != nil {
 			return nil, err
+		}
+		if len(projects) > 0 && projects[len(projects)-1].ID == project.ID {
+			if rootPath != nil {
+				projects[len(projects)-1].Roots = append(projects[len(projects)-1].Roots, ProjectRoot{Path: *rootPath})
+			}
+			continue
+		}
+		if rootPath != nil {
+			project.Roots = append(project.Roots, ProjectRoot{Path: *rootPath})
 		}
 		projects = append(projects, project)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(projects))
-	for _, project := range projects {
-		ids = append(ids, project.ID)
-	}
-	rootsByID, err := r.projectRootsByID(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	for i := range projects {
-		projects[i].Roots = rootsByID[projects[i].ID]
-	}
 	var nextCursor *string
 	if len(projects) > limit {
 		projects = projects[:limit]
-		value := projectCursor(projects[limit-1])
+		value := projectCursor(projects[limit-1], sortKey, direction)
 		nextCursor = &value
 	}
 	return &ProjectsPage{Projects: projects, NextCursor: nextCursor}, nil
@@ -195,7 +248,9 @@ func (r *StateRuntime) GetProject(ctx context.Context, id string) (*Project, err
 		ctx = context.Background()
 	}
 	row := r.stateDB.QueryRowContext(ctx,
-		`SELECT id, name, metadata, position, created_at_ms, updated_at_ms FROM projects WHERE id = ?`, id)
+		`SELECT id, name, metadata, position, created_at_ms, updated_at_ms,
+		        (SELECT MAX(recency_at_ms) FROM threads WHERE project_id = projects.id AND archived = 0) AS recency_at_ms
+		 FROM projects WHERE id = ?`, id)
 	project, err := scanProjectRow(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -312,13 +367,19 @@ func (r *StateRuntime) CreateProject(ctx context.Context, name string, roots []P
 		idempotencyKey, id, now); err != nil {
 		return nil, err
 	}
+	var recencyAtMS sql.NullInt64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT (SELECT MAX(recency_at_ms) FROM threads WHERE project_id = ? AND archived = 0)`,
+		id).Scan(&recencyAtMS); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &CreatedProject{
 		Project: Project{
 			ID: id, Name: name, Roots: cloneProjectRoots(roots), Metadata: cloneStringMap(metadata),
-			Position: position, CreatedAtMS: now, UpdatedAtMS: now,
+			Position: position, CreatedAtMS: now, UpdatedAtMS: now, RecencyAtMS: recencyAtMS,
 		},
 		Created: true,
 	}, nil
@@ -382,6 +443,7 @@ func (r *StateRuntime) UpdateProject(ctx context.Context, id string, name *strin
 	return &Project{
 		ID: id, Name: nextName, Roots: nextRoots, Metadata: nextMetadata,
 		Position: project.Position, CreatedAtMS: project.CreatedAtMS, UpdatedAtMS: now,
+		RecencyAtMS: project.RecencyAtMS,
 	}, boolPtr(true), nil
 }
 
@@ -515,7 +577,8 @@ type rowScanner interface {
 func scanProjectRow(scanner rowScanner) (Project, error) {
 	var id, name, metadataJSON string
 	var position, createdAtMS, updatedAtMS int64
-	if err := scanner.Scan(&id, &name, &metadataJSON, &position, &createdAtMS, &updatedAtMS); err != nil {
+	var recencyAtMS sql.NullInt64
+	if err := scanner.Scan(&id, &name, &metadataJSON, &position, &createdAtMS, &updatedAtMS, &recencyAtMS); err != nil {
 		return Project{}, err
 	}
 	metadata := map[string]string{}
@@ -528,12 +591,38 @@ func scanProjectRow(scanner rowScanner) (Project, error) {
 		ID: id, Name: name, Metadata: metadata, Position: position,
 		CreatedAtMS: createdAtMS, UpdatedAtMS: updatedAtMS,
 		CreatedAt: createdAtMS / 1000, UpdatedAt: updatedAtMS / 1000,
+		RecencyAtMS: recencyAtMS,
+	}, nil
+}
+
+// scanProjectRowWithOptionalRoot scans the project columns plus a nullable root
+// path, used by the joined project/list query.
+func scanProjectRowWithOptionalRoot(scanner rowScanner, rootPath **string) (Project, error) {
+	var id, name, metadataJSON string
+	var position, createdAtMS, updatedAtMS int64
+	var recencyAtMS sql.NullInt64
+	if err := scanner.Scan(&id, &name, &metadataJSON, &position, &createdAtMS, &updatedAtMS, &recencyAtMS, rootPath); err != nil {
+		return Project{}, err
+	}
+	metadata := map[string]string{}
+	if strings.TrimSpace(metadataJSON) != "" {
+		if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+			return Project{}, fmt.Errorf("project metadata is not a string map: %w", err)
+		}
+	}
+	return Project{
+		ID: id, Name: name, Metadata: metadata, Position: position,
+		CreatedAtMS: createdAtMS, UpdatedAtMS: updatedAtMS,
+		CreatedAt: createdAtMS / 1000, UpdatedAt: updatedAtMS / 1000,
+		RecencyAtMS: recencyAtMS,
 	}, nil
 }
 
 func (r *StateRuntime) getProjectInTx(ctx context.Context, tx *sql.Tx, id string) (*Project, error) {
 	row := tx.QueryRowContext(ctx,
-		`SELECT id, name, metadata, position, created_at_ms, updated_at_ms FROM projects WHERE id = ?`, id)
+		`SELECT id, name, metadata, position, created_at_ms, updated_at_ms,
+		        (SELECT MAX(recency_at_ms) FROM threads WHERE project_id = projects.id AND archived = 0) AS recency_at_ms
+		 FROM projects WHERE id = ?`, id)
 	project, err := scanProjectRow(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -622,34 +711,61 @@ func projectThreadIDs(ctx context.Context, tx *sql.Tx, projectID string, archive
 }
 
 type projectCursorValue struct {
-	position int64
-	id       string
+	value *int64
+	id    string
 }
 
-func projectCursor(project Project) string {
-	return fmt.Sprintf("%d|%s", project.Position, project.ID)
+func projectCursor(project Project, sortKey ProjectSortKey, direction string) string {
+	if sortKey == ProjectSortPosition && direction == "asc" {
+		// Retain the legacy ascending-position format for older clients.
+		return fmt.Sprintf("%d|%s", project.Position, project.ID)
+	}
+	key := string(sortKey)
+	value := "null"
+	if sortKey == ProjectSortPosition {
+		value = fmt.Sprintf("%d", project.Position)
+	} else {
+		if project.RecencyAtMS.Valid {
+			value = fmt.Sprintf("%d", project.RecencyAtMS.Int64)
+		}
+	}
+	return fmt.Sprintf("v1|%s|%s|%s|%s", key, direction, value, project.ID)
 }
 
-func parseProjectCursor(cursor *string) (*projectCursorValue, error) {
+func parseProjectCursor(cursor *string, sortKey ProjectSortKey, direction string) (*projectCursorValue, error) {
 	if cursor == nil || strings.TrimSpace(*cursor) == "" {
 		return nil, nil
 	}
 	raw := strings.TrimSpace(*cursor)
+	if len(raw) > 128 {
+		return nil, fmt.Errorf("invalid project cursor: malformed or mismatched sort anchor")
+	}
 	parts := strings.Split(raw, "|")
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid project cursor: %s", raw)
+	key := string(sortKey)
+	var valueStr, id string
+	switch {
+	case len(parts) == 2 && sortKey == ProjectSortPosition && direction == "asc":
+		valueStr, id = parts[0], parts[1]
+	case len(parts) == 5 && parts[0] == "v1" && parts[1] == key && parts[2] == direction:
+		valueStr, id = parts[3], parts[4]
+	default:
+		return nil, fmt.Errorf("invalid project cursor: malformed or mismatched sort anchor")
 	}
-	var position int64
-	if _, err := fmt.Sscanf(parts[0], "%d", &position); err != nil {
-		return nil, fmt.Errorf("invalid project cursor: %s", raw)
+	parsedID, err := uuid.Parse(id)
+	if err != nil || parsedID.String() != id {
+		return nil, fmt.Errorf("invalid project cursor: malformed or mismatched sort anchor")
 	}
-	if fmt.Sprintf("%d", position) != parts[0] || position < 0 || strings.TrimSpace(parts[1]) == "" {
-		return nil, fmt.Errorf("invalid project cursor: %s", raw)
+	var value *int64
+	if valueStr == "null" && sortKey == ProjectSortRecencyAt {
+		value = nil
+	} else {
+		parsed, err := strconv.ParseInt(valueStr, 10, 64)
+		if err != nil || strconv.FormatInt(parsed, 10) != valueStr || (sortKey == ProjectSortPosition && parsed < 0) {
+			return nil, fmt.Errorf("invalid project cursor: malformed or mismatched sort anchor")
+		}
+		value = &parsed
 	}
-	if _, err := uuid.Parse(parts[1]); err != nil {
-		return nil, fmt.Errorf("invalid project cursor: %s", raw)
-	}
-	return &projectCursorValue{position: position, id: parts[1]}, nil
+	return &projectCursorValue{value: value, id: id}, nil
 }
 
 func cloneProjectRoots(roots []ProjectRoot) []ProjectRoot {

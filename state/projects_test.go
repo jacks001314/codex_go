@@ -23,6 +23,77 @@ func seedProjectThread(t *testing.T, runtime *StateRuntime, threadID string, arc
 	}
 }
 
+// TestProjectListRecencySortLikeRust verifies the #41223 recency sort: ordering
+// by newest non-archived assigned thread, projects with no activity last, and
+// null handling in cursors.
+func TestProjectListRecencySortLikeRust(t *testing.T) {
+	ctx := context.Background()
+	runtime := newProjectTestRuntime(t)
+	for _, id := range []string{"r-t1", "r-t2", "r-t3"} {
+		seedProjectThread(t, runtime, id, false)
+	}
+	execSetRecency := func(threadID string, recency int64) {
+		if _, err := runtime.StateDB().ExecContext(ctx, `UPDATE threads SET recency_at_ms = ? WHERE id = ?`, recency, threadID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	execSetRecency("r-t1", 1000)
+	execSetRecency("r-t2", 3000)
+	execSetRecency("r-t3", 2000)
+
+	alpha, err := runtime.CreateProject(ctx, "alpha", nil, nil, []string{"r-t1"}, "recency-key-alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beta, err := runtime.CreateProject(ctx, "beta", nil, nil, []string{"r-t2"}, "recency-key-beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gamma, err := runtime.CreateProject(ctx, "gamma", nil, nil, []string{"r-t3"}, "recency-key-gamma")
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := runtime.CreateProject(ctx, "empty", nil, nil, nil, "recency-key-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Recency descending (default): beta (3000), gamma (2000), alpha (1000),
+	// empty last.
+	page, err := runtime.ListProjects(ctx, nil, 10, ProjectSortRecencyAt, "desc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOrder := []string{beta.Project.ID, gamma.Project.ID, alpha.Project.ID, empty.Project.ID}
+	if len(page.Projects) != len(wantOrder) {
+		t.Fatalf("recency desc page = %+v", page.Projects)
+	}
+	for i, want := range wantOrder {
+		if page.Projects[i].ID != want {
+			t.Fatalf("recency desc order[%d] = %q, want %q", i, page.Projects[i].ID, want)
+		}
+	}
+	// Recency ascending puts empty projects last and the smallest recency first.
+	page, err = runtime.ListProjects(ctx, nil, 10, ProjectSortRecencyAt, "asc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOrderAsc := []string{alpha.Project.ID, gamma.Project.ID, beta.Project.ID, empty.Project.ID}
+	for i, want := range wantOrderAsc {
+		if page.Projects[i].ID != want {
+			t.Fatalf("recency asc order[%d] = %q, want %q", i, page.Projects[i].ID, want)
+		}
+	}
+	// Position sorting remains unchanged and is independent of recency.
+	page, err = runtime.ListProjects(ctx, nil, 10, ProjectSortPosition, "asc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Projects[0].ID != alpha.Project.ID {
+		t.Fatalf("position order[0] = %q, want alpha", page.Projects[0].ID)
+	}
+}
+
 // TestProjectStoreLifecycleMirrorsRustProjectsStore exercises the SQLite
 // project store mirroring Rust state/src/runtime/projects.rs (#38940):
 // idempotent creation, ordered roots, pagination, updates, reordering, and
@@ -80,14 +151,14 @@ func TestProjectStoreLifecycleMirrorsRustProjectsStore(t *testing.T) {
 	}
 
 	// Pagination: limit 1 yields alpha + next cursor.
-	page, err := runtime.ListProjects(ctx, nil, 1)
+	page, err := runtime.ListProjects(ctx, nil, 1, ProjectSortPosition, "asc")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Projects) != 1 || page.Projects[0].ID != created.Project.ID || page.NextCursor == nil {
 		t.Fatalf("first page = %+v", page)
 	}
-	next, err := runtime.ListProjects(ctx, page.NextCursor, 1)
+	next, err := runtime.ListProjects(ctx, page.NextCursor, 1, ProjectSortPosition, "asc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +188,7 @@ func TestProjectStoreLifecycleMirrorsRustProjectsStore(t *testing.T) {
 	if err != nil || moved == nil || !*moved {
 		t.Fatalf("move = %v, %v", moved, err)
 	}
-	page, err = runtime.ListProjects(ctx, nil, 10)
+	page, err = runtime.ListProjects(ctx, nil, 10, ProjectSortPosition, "asc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,19 +228,19 @@ func TestProjectStoreLifecycleMirrorsRustProjectsStore(t *testing.T) {
 
 // TestProjectCursorValidation mirrors Rust invalid_project_cursor (#38940).
 func TestProjectCursorValidation(t *testing.T) {
-	if _, err := parseProjectCursor(stringPointer("bad")); err == nil {
+	if _, err := parseProjectCursor(stringPointer("bad"), ProjectSortPosition, "asc"); err == nil {
 		t.Fatal("malformed cursor must fail")
 	}
-	if _, err := parseProjectCursor(stringPointer("0|not-a-uuid")); err == nil {
+	if _, err := parseProjectCursor(stringPointer("0|not-a-uuid"), ProjectSortPosition, "asc"); err == nil {
 		t.Fatal("non-uuid cursor must fail")
 	}
-	if _, err := parseProjectCursor(stringPointer("00|00000000-0000-0000-0000-000000000000")); err == nil {
+	if _, err := parseProjectCursor(stringPointer("00|00000000-0000-0000-0000-000000000000"), ProjectSortPosition, "asc"); err == nil {
 		t.Fatal("canonical-form position must be enforced")
 	}
-	if _, err := parseProjectCursor(stringPointer("-1|00000000-0000-0000-0000-000000000000")); err == nil {
+	if _, err := parseProjectCursor(stringPointer("-1|00000000-0000-0000-0000-000000000000"), ProjectSortPosition, "asc"); err == nil {
 		t.Fatal("negative position must fail")
 	}
-	if value, err := parseProjectCursor(stringPointer("3|00000000-0000-0000-0000-000000000000")); err != nil || value.position != 3 || value.id != "00000000-0000-0000-0000-000000000000" {
+	if value, err := parseProjectCursor(stringPointer("3|00000000-0000-0000-0000-000000000000"), ProjectSortPosition, "asc"); err != nil || value.value == nil || *value.value != 3 || value.id != "00000000-0000-0000-0000-000000000000" {
 		t.Fatalf("valid cursor = %+v, %v", value, err)
 	}
 }

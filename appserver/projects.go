@@ -25,7 +25,7 @@ const (
 	MethodProjectMove   Method = "project/move"
 	MethodProjectDelete Method = "project/delete"
 
-	NotificationProjectChanged      NotificationMethod = "project/changed"
+	NotificationProjectChanged       NotificationMethod = "project/changed"
 	NotificationThreadProjectUpdated NotificationMethod = "thread/project/updated"
 
 	projectListDefaultLimit = 50
@@ -47,7 +47,18 @@ type Project struct {
 	Position  int64             `json:"position"`
 	CreatedAt int64             `json:"createdAt"`
 	UpdatedAt int64             `json:"updatedAt"`
+	// RecencyAt is the newest non-archived assigned thread's recency (Unix seconds),
+	// null when no non-archived thread is assigned (#41223).
+	RecencyAt *int64 `json:"recencyAt,omitempty"`
 }
+
+// ProjectSortKey mirrors Rust v2::ProjectSortKey (#41223).
+type ProjectSortKey string
+
+const (
+	ProjectSortPosition  ProjectSortKey = "position"
+	ProjectSortRecencyAt ProjectSortKey = "recencyAt"
+)
 
 // ProjectChangeType mirrors Rust v2::ProjectChangeType.
 type ProjectChangeType string
@@ -72,8 +83,10 @@ type ThreadProjectUpdatedNotification struct {
 }
 
 type ProjectListParams struct {
-	Cursor *string `json:"cursor,omitempty"`
-	Limit  *uint32 `json:"limit,omitempty"`
+	Cursor        *string         `json:"cursor,omitempty"`
+	Limit         *uint32         `json:"limit,omitempty"`
+	SortKey       *ProjectSortKey `json:"sortKey,omitempty"`
+	SortDirection *SortDirection  `json:"sortDirection,omitempty"`
 }
 
 type ProjectListResponse struct {
@@ -113,9 +126,9 @@ type ProjectImportResponse struct {
 }
 
 type ProjectUpdateParams struct {
-	ProjectID string            `json:"projectId"`
-	Name      *string           `json:"name,omitempty"`
-	Roots     *[]ProjectRoot    `json:"roots,omitempty"`
+	ProjectID string             `json:"projectId"`
+	Name      *string            `json:"name,omitempty"`
+	Roots     *[]ProjectRoot     `json:"roots,omitempty"`
 	Metadata  *map[string]string `json:"metadata,omitempty"`
 }
 
@@ -213,7 +226,32 @@ func (r *RuntimeRouter) handleProjectListRuntime(request *Request) (*ProjectList
 	if limit > projectListMaxLimit {
 		limit = projectListMaxLimit
 	}
-	page, err := r.services.StateRuntime.ListProjects(context.Background(), params.Cursor, limit)
+	sortKey := state.ProjectSortPosition
+	if params.SortKey != nil {
+		switch *params.SortKey {
+		case ProjectSortPosition:
+			sortKey = state.ProjectSortPosition
+		case ProjectSortRecencyAt:
+			sortKey = state.ProjectSortRecencyAt
+		default:
+			return nil, invalidParams(fmt.Sprintf("unsupported sortKey %q", *params.SortKey))
+		}
+	}
+	direction := "asc"
+	if sortKey == state.ProjectSortRecencyAt {
+		direction = "desc"
+	}
+	if params.SortDirection != nil {
+		switch *params.SortDirection {
+		case SortAsc:
+			direction = "asc"
+		case SortDesc:
+			direction = "desc"
+		default:
+			return nil, invalidParams(fmt.Sprintf("unsupported sortDirection %q", *params.SortDirection))
+		}
+	}
+	page, err := r.services.StateRuntime.ListProjects(context.Background(), params.Cursor, limit, sortKey, direction)
 	if err != nil {
 		if isInvalidProjectCursorError(err) {
 			return nil, invalidParams(err.Error())
@@ -478,6 +516,11 @@ func validateProjectThreadIDs(threadIDs []string) ([]string, error) {
 }
 
 func apiProjectFromStored(project state.Project) Project {
+	var recencyAt *int64
+	if project.RecencyAtMS.Valid && project.RecencyAtMS.Int64 > 0 {
+		value := project.RecencyAtMS.Int64 / 1000
+		recencyAt = &value
+	}
 	return Project{
 		ID:        project.ID,
 		Name:      project.Name,
@@ -486,6 +529,7 @@ func apiProjectFromStored(project state.Project) Project {
 		Position:  project.Position,
 		CreatedAt: project.CreatedAt,
 		UpdatedAt: project.UpdatedAt,
+		RecencyAt: recencyAt,
 	}
 }
 
