@@ -5032,7 +5032,7 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
 	if err != nil {
 		return nil, fmt.Errorf("failed to read current time: %w", err)
 	}
-	text := r.turnEnvironmentContextTextAt(r.environmentContextParams(request.ThreadID, params), current.In(time.Local), localTimezoneName())
+	text := r.turnEnvironmentContextTextAt(r.environmentContextParams(request.ThreadID, params), current.In(time.Local), localTimezoneName(), "")
 	return []compact.Item{{
 		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: current.UTC(),
 	}}, nil
@@ -6202,13 +6202,29 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
 		return nil, fmt.Errorf("failed to read current time: %w", err)
 	}
 	params = r.environmentContextParams(threadID, params)
-	text := r.turnEnvironmentContextTextAt(params, current.In(time.Local), localTimezoneName())
+	shellVersion := r.powershellShellVersionForTurn(ctx, cfg, params)
+	text := r.turnEnvironmentContextTextAt(params, current.In(time.Local), localTimezoneName(), shellVersion)
 	return model.UserMessageInputItem(text), nil
 }
 
 func (r *RuntimeRouter) turnEnvironmentContextInputItem(params *turn.TurnStartParams) any {
 	params = r.environmentContextParams("", params)
-	return model.UserMessageInputItem(r.turnEnvironmentContextTextAt(params, runtimeRouterClockTime(r).In(time.Local), localTimezoneName()))
+	return model.UserMessageInputItem(r.turnEnvironmentContextTextAt(params, runtimeRouterClockTime(r).In(time.Local), localTimezoneName(), ""))
+}
+
+// powershellShellVersionForTurn resolves the selected PowerShell executable's
+// major.minor version when the under-development powershell_shell_version feature
+// is enabled for a single local PowerShell environment (Rust #41232). It returns
+// an empty string otherwise.
+func (r *RuntimeRouter) powershellShellVersionForTurn(ctx context.Context, cfg *config.Config, params *turn.TurnStartParams) string {
+	if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "powershell_shell_version") {
+		return ""
+	}
+	environments := r.unifiedExecEnvironmentsForTurn(params)
+	if len(environments) != 1 || environments[0].Shell == nil || environments[0].Shell.Type != tool.ShellPowerShell {
+		return ""
+	}
+	return queryPowerShellVersion(ctx, environments[0].Shell.Path)
 }
 
 func (r *RuntimeRouter) environmentCurrentTime(ctx context.Context, threadID string, cfg *config.Config) (time.Time, error) {
@@ -6244,7 +6260,7 @@ func (r *RuntimeRouter) environmentContextParams(threadID string, params *turn.T
 	return params
 }
 
-func (r *RuntimeRouter) turnEnvironmentContextTextAt(params *turn.TurnStartParams, now time.Time, timezone string) string {
+func (r *RuntimeRouter) turnEnvironmentContextTextAt(params *turn.TurnStartParams, now time.Time, timezone string, shellVersion string) string {
 	environments := r.unifiedExecEnvironmentsForTurn(params)
 	defaultShellName := r.defaultEnvironmentShellName()
 	var b strings.Builder
@@ -6271,6 +6287,9 @@ func (r *RuntimeRouter) turnEnvironmentContextTextAt(params *turn.TurnStartParam
 			b.WriteString("    </environment>\n")
 		}
 		b.WriteString("  </environments>\n")
+	}
+	if strings.TrimSpace(shellVersion) != "" {
+		fmt.Fprintf(&b, "  <shell_version>%s</shell_version>\n", escapeEnvironmentXML(shellVersion))
 	}
 	fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", escapeEnvironmentXML(now.Format("2006-01-02")))
 	fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))

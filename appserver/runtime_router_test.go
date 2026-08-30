@@ -9555,6 +9555,35 @@ func TestTurnEnvironmentContextReportsSelectedPowerShellLikeRust(t *testing.T) {
 	}
 }
 
+func TestParsePowerShellVersionLikeRust(t *testing.T) {
+	for input, want := range map[string]string{
+		"5.1.19041.1": "5.1",
+		"7.4.0":       "7.4",
+		"7.4":         "7.4",
+		"":            "",
+		"garbage":     "",
+	} {
+		if got := parsePowerShellVersion(input); got != want {
+			t.Fatalf("parsePowerShellVersion(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestTurnEnvironmentContextTextAtRendersPowerShellVersion(t *testing.T) {
+	cwd := t.TempDir()
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "powershell", Path: "powershell.exe"}, cwd)
+	router := NewRuntimeRouter(RuntimeServices{Environment: manager, DefaultCWD: cwd})
+	text := router.turnEnvironmentContextTextAt(&turn.TurnStartParams{CWD: cwd}, runtimeRouterClockTime(router).In(time.Local), localTimezoneName(), "5.1")
+	if !strings.Contains(text, "<shell_version>5.1</shell_version>") {
+		t.Fatalf("environment context missing shell_version: %q", text)
+	}
+	// An empty shell version omits the element.
+	text = router.turnEnvironmentContextTextAt(&turn.TurnStartParams{CWD: cwd}, runtimeRouterClockTime(router).In(time.Local), localTimezoneName(), "")
+	if strings.Contains(text, "<shell_version>") {
+		t.Fatalf("environment context unexpectedly included shell_version: %q", text)
+	}
+}
+
 func TestTurnEnvironmentContextMarksPrimaryWhenMultipleSelectedLikeRust(t *testing.T) {
 	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "/fallback")
 	if err := manager.SetInfo("remote-primary", EnvironmentShellInfo{Name: "zsh", Path: "/bin/zsh"}, "/primary"); err != nil {
