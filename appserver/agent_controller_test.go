@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"codex_go/agent"
+	"codex_go/model"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -377,5 +378,62 @@ func TestRuntimeRouterSubagentRootServiceTierLikeRust(t *testing.T) {
 	// The root thread itself is not a subagent and never inherits a root tier.
 	if got := router.subagentRootServiceTier("root"); got != "" {
 		t.Fatalf("subagentRootServiceTier(root) = %q, want empty", got)
+	}
+}
+
+func TestRuntimeRouterRemoteCompactServiceTierLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	root := &session.Record{
+		ID: "root", SessionID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), Model: "gpt-test", ServiceTier: "priority"},
+	}
+	if err := store.Create(root); err != nil {
+		t.Fatal(err)
+	}
+	child := &session.Record{
+		ID: "child", SessionID: "child", ParentThreadID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: root.Metadata.CWD, Model: "gpt-test", ServiceTier: ""},
+	}
+	if err := store.Create(child); err != nil {
+		t.Fatal(err)
+	}
+	unsupported := &session.Record{
+		ID: "unsupported", SessionID: "unsupported", ParentThreadID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: root.Metadata.CWD, Model: "gpt-plain", ServiceTier: ""},
+	}
+	if err := store.Create(unsupported); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Models: model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{
+			{Slug: "gpt-test", DisplayName: "gpt-test", Visibility: model.VisibilityVisible, SupportedInAPI: true, ServiceTiers: []string{"priority"}},
+			{Slug: "gpt-plain", DisplayName: "gpt-plain", Visibility: model.VisibilityVisible, SupportedInAPI: true},
+		}})),
+	})
+	// A subagent's compaction follows the root tier when the model supports it.
+	childRecord, err := store.Read(session.ThreadID("child"), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := router.remoteCompactServiceTierForRecord(childRecord); got != "priority" {
+		t.Fatalf("remoteCompactServiceTierForRecord(child) = %q, want priority", got)
+	}
+	// A root with no configured tier overrides nothing.
+	rootRecord, err := store.Read(session.ThreadID("root"), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := router.remoteCompactServiceTierForRecord(rootRecord); got != "priority" {
+		t.Fatalf("remoteCompactServiceTierForRecord(root) = %q, want priority", got)
+	}
+	// An unsupported tier is dropped.
+	unsupportedRecord, err := store.Read(session.ThreadID("unsupported"), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := router.remoteCompactServiceTierForRecord(unsupportedRecord); got != "" {
+		t.Fatalf("remoteCompactServiceTierForRecord(unsupported) = %q, want empty", got)
 	}
 }

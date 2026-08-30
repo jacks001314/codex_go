@@ -12,10 +12,35 @@ import (
 
 const defaultRemoteCompactModel = "gpt-5.4-mini"
 
+// remoteCompactServiceTierForRecord resolves the service tier for a remote
+// compaction request. A subagent thread follows its root thread's tier; for any
+// thread the model-support check is applied so an unsupported tier is dropped
+// (mirrors Rust step_context.settings.service_tier under #41308).
+func (r *RuntimeRouter) remoteCompactServiceTierForRecord(record *session.Record) string {
+	if record == nil {
+		return ""
+	}
+	serviceTier := strings.TrimSpace(record.Metadata.ServiceTier)
+	if record.ParentThreadID != "" {
+		if rootTier := r.subagentRootServiceTier(string(record.ID)); rootTier != "" {
+			serviceTier = rootTier
+		}
+	}
+	if serviceTier == "" {
+		return ""
+	}
+	compactModel := firstNonEmpty(record.Metadata.Model, defaultRemoteCompactModel)
+	if info := r.modelInfoForRuntime(compactModel); info != nil {
+		return model.ServiceTierForRequest(info, serviceTier)
+	}
+	return ""
+}
+
 type agentCompactRunner struct {
-	agent      model.AgentRunner
-	model      string
-	providerID string
+	agent       model.AgentRunner
+	model       string
+	providerID  string
+	serviceTier string
 }
 
 func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
@@ -41,6 +66,7 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 			"thread_id":    request.ThreadID,
 			"turn_id":      request.TurnID,
 		},
+		ServiceTier: r.serviceTier,
 	})
 	if err != nil {
 		return nil, err

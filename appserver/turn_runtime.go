@@ -5113,9 +5113,10 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record) compact.R
 		return nil
 	}
 	return &agentCompactRunner{
-		agent:      agent,
-		model:      firstNonEmpty(record.Metadata.Model, defaultRemoteCompactModel),
-		providerID: firstNonEmpty(providerID, model.OpenAIProviderID),
+		agent:       agent,
+		model:       firstNonEmpty(record.Metadata.Model, defaultRemoteCompactModel),
+		providerID:  firstNonEmpty(providerID, model.OpenAIProviderID),
+		serviceTier: r.remoteCompactServiceTierForRecord(record),
 	}
 }
 
