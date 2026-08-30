@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"codex_go/envutil"
-	"codex_go/execserver"
 	"codex_go/execpolicy"
+	"codex_go/execserver"
 	"codex_go/network"
 	"codex_go/plugin"
 	"codex_go/sandbox"
@@ -314,7 +314,15 @@ func (e *ShellExecutor) unifiedExecSpec() Spec {
 	} else if shell != nil && shell.Type == ShellCmd {
 		description += "\n\nThe selected execution environment uses Windows cmd.exe. Write cmd-compatible commands; POSIX heredocs are not supported."
 	}
-	if runtime.GOOS == "windows" {
+	// Rust #41368: Windows safety guidance follows the selected executor's
+	// reported platform when known; an unknown or multi-environment selection
+	// preserves the host-derived guidance.
+	platformOS := e.modelVisiblePlatformOS()
+	includeWindowsGuidance := runtime.GOOS == "windows"
+	if platformOS != "" {
+		includeWindowsGuidance = platformOS == "windows"
+	}
+	if includeWindowsGuidance {
 		description += "\n\n" + unifiedExecWindowsShellGuidance
 	}
 	return Spec{
@@ -342,6 +350,20 @@ func (e *ShellExecutor) modelVisibleShell() *Shell {
 		return e.unifiedExecEnvironments[0].Shell
 	}
 	return e.sessionShell()
+}
+
+// modelVisiblePlatformOS returns the executor OS reported by the selected
+// environment when exactly one environment is selected (Rust #41207/#41368).
+// A multi-environment or unknown/absent platform falls back to the empty string,
+// letting callers preserve host-derived guidance.
+func (e *ShellExecutor) modelVisiblePlatformOS() string {
+	if e == nil {
+		return ""
+	}
+	if len(e.unifiedExecEnvironments) == 1 {
+		return strings.TrimSpace(e.unifiedExecEnvironments[0].PlatformOS)
+	}
+	return ""
 }
 
 func unifiedExecApprovalProperties(additionalPermissions bool) map[string]any {

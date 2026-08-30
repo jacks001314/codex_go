@@ -638,6 +638,32 @@ func TestShellCommandSpecAndArgumentsMatchRustLegacyContract(t *testing.T) {
 	}
 }
 
+func TestUnifiedExecSpecWindowsGuidanceFollowsExecutorPlatformLikeRust(t *testing.T) {
+	exec := func(platformOS string) *ShellExecutor {
+		return NewShellExecutor(&ShellExecutorOptions{
+			ToolName:                PlainName(DefaultExecCommandToolName),
+			UnifiedExec:             NewUnifiedExecManager(),
+			UnifiedExecEnvironments: []UnifiedExecEnvironment{{ID: "env", PlatformOS: platformOS}},
+		})
+	}
+	// A Windows executor includes Windows safety guidance.
+	if spec := exec("windows").Spec(); !strings.Contains(spec.Description, "Windows safety rules:") {
+		t.Fatalf("windows executor guidance = %q", spec.Description)
+	}
+	// A non-Windows executor omits it.
+	if spec := exec("linux").Spec(); strings.Contains(spec.Description, "Windows safety rules:") {
+		t.Fatalf("linux executor guidance = %q", spec.Description)
+	}
+	// An unknown platform falls back to the host-derived guidance.
+	unknown := NewShellExecutor(&ShellExecutorOptions{
+		ToolName:    PlainName(DefaultExecCommandToolName),
+		UnifiedExec: NewUnifiedExecManager(),
+	}).Spec()
+	if got := strings.Contains(unknown.Description, "Windows safety rules:"); got != (runtime.GOOS == "windows") {
+		t.Fatalf("unknown platform guidance = %q, want host-derived", unknown.Description)
+	}
+}
+
 func TestExecCommandArgsDecodeSnakeCasePermissions(t *testing.T) {
 	var args ExecCommandArgs
 	err := json.Unmarshal([]byte(`{
