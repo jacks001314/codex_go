@@ -915,6 +915,11 @@ type Model struct {
 	vimSearchMatches []vimSearchRange
 	// vimSearchIndex is the current match index into vimSearchMatches.
 	vimSearchIndex int
+	// vimSearchOp is the pending d/y/c operator carried into a search so the
+	// accepted search applies it over the cursor->match range (Rust #41586
+	// bottom_pane/textarea/vim_search.rs operator transaction). Empty when the
+	// search is a plain motion.
+	vimSearchOp string
 	// vimHasLastDelete and vimLastDeleteWord record the last completed Vim
 	// delete for dot-repeat (`.`): vimLastDeleteWord mirrors the Rust
 	// VimCommandState::last_change word-delete edit (#40521).

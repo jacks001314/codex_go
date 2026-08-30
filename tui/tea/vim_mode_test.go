@@ -125,6 +125,69 @@ func TestVimSearchQueryFooterLikeRust(t *testing.T) {
 	}
 }
 
+// TestVimOperatorSearchLikeVim pins the Rust #41586 operator transaction: a
+// pending d/y/c combined with a search motion applies the operator over the
+// cursor->match range (forward /, backward ?, and the last-query n).
+func TestVimOperatorSearchLikeVim(t *testing.T) {
+	// d/ deletes from the cursor to the start of the next match.
+	m := vimTestModel("hello world hello")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, '/')
+	if !m.vimSearchMode || m.vimSearchOp != "d" {
+		t.Fatalf("d/ did not begin operator search: mode=%v op=%q", m.vimSearchMode, m.vimSearchOp)
+	}
+	for _, r := range "hello" {
+		m = vimKeyPress(m, r)
+	}
+	m = vimEnter(m)
+	if got := m.composer.Value(); got != "hello hello" {
+		t.Fatalf("d/hello value = %q, want hello hello", got)
+	}
+	if m.vimSearchOp != "" {
+		t.Fatalf("vimSearchOp not cleared after d/hello: %q", m.vimSearchOp)
+	}
+
+	// y/ yanks from the cursor to the start of the next match.
+	m = vimTestModel("hello world hello")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'y')
+	m = vimKeyPress(m, '/')
+	for _, r := range "hello" {
+		m = vimKeyPress(m, r)
+	}
+	m = vimEnter(m)
+	if got := m.vimYank; got != "world " {
+		t.Fatalf("y/hello yank = %q, want world ", got)
+	}
+
+	// c/ changes from the cursor to the match start and enters insert mode.
+	m = vimTestModel("hello world hello")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'c')
+	m = vimKeyPress(m, '/')
+	for _, r := range "hello" {
+		m = vimKeyPress(m, r)
+	}
+	m = vimEnter(m)
+	if got := m.composer.Value(); got != "hello hello" || !m.vimInsert {
+		t.Fatalf("c/hello value = %q insert=%v, want hello hello + insert", got, m.vimInsert)
+	}
+
+	// Backward d? deletes back to the previous match start.
+	m = vimTestModel("hello world hello")
+	m.composer.SetCursor(6)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, '?')
+	for _, r := range "hello" {
+		m = vimKeyPress(m, r)
+	}
+	m = vimEnter(m)
+	if got := m.composer.Value(); got != "world hello" {
+		t.Fatalf("d?hello value = %q, want world hello", got)
+	}
+}
+
 // TestVimModeToggleStartsInNormalModeAndInsertTypes pins the mode state
 // machine: /vim starts normal; i enters insert where keys type (even k, which
 // is a normal-mode motion); Esc returns to normal where x deletes.

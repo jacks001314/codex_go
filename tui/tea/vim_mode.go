@@ -122,6 +122,22 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 				// range (Rust operator motion_jump_bottom).
 				m.jumpToVimBufferLine(true)
 				return true
+			case m.keyMatches("vim_normal", "search_forward", keySpec):
+				// d/ y/ c/ start a search with the pending operator attached
+				// (Rust #41586 vim_search.rs operator transaction).
+				m.startVimSearch(true, m.vimPendingOp)
+				return true
+			case m.keyMatches("vim_normal", "search_backward", keySpec):
+				m.startVimSearch(false, m.vimPendingOp)
+				return true
+			case m.keyMatches("vim_normal", "search_next", keySpec):
+				// d n / y n / c n apply the operator to the next match of the
+				// last query (Rust SearchCommand::Next with VimPending::Operator).
+				m.jumpVimSearchMatch(true)
+				return true
+			case m.keyMatches("vim_normal", "search_prev", keySpec):
+				m.jumpVimSearchMatch(false)
+				return true
 			case m.vimOperatorMotion(keySpec):
 				return true
 			default:
@@ -197,9 +213,9 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	case m.keyMatches("vim_normal", "move_line_end", keySpec):
 		m.composer.CursorEnd()
 	case m.keyMatches("vim_normal", "search_forward", keySpec):
-		m.startVimSearch(true)
+		m.startVimSearch(true, "")
 	case m.keyMatches("vim_normal", "search_backward", keySpec):
-		m.startVimSearch(false)
+		m.startVimSearch(false, "")
 	case m.keyMatches("vim_normal", "search_next", keySpec):
 		m.jumpVimSearchMatch(true)
 	case m.keyMatches("vim_normal", "search_prev", keySpec):
@@ -462,12 +478,18 @@ func (m *Model) clearVimFind() {
 
 // startVimSearch begins a Vim composer search (Rust #41586 vim_search.rs):
 // typed runes become the query until Enter executes it or Esc cancels it.
-func (m *Model) startVimSearch(forward bool) {
+// When operator is non-empty (d / y / c pressed before the search), the
+// accepted search applies that operator over the cursor->match range instead
+// of being a plain motion.
+func (m *Model) startVimSearch(forward bool, operator string) {
 	m.vimSearchMode = true
 	m.vimSearchForward = forward
 	m.vimSearchQuery = ""
 	m.vimSearchMatches = nil
 	m.vimSearchIndex = -1
+	m.vimSearchOp = operator
+	m.vimPendingOp = ""
+	m.vimPendingObject = ""
 }
 
 // cancelVimSearch abandons the active search query and clears its state.
@@ -476,6 +498,7 @@ func (m *Model) cancelVimSearch() {
 	m.vimSearchQuery = ""
 	m.vimSearchMatches = nil
 	m.vimSearchIndex = -1
+	m.vimSearchOp = ""
 }
 
 // renderVimSearchFooter returns the live Vim search query footer (Rust #41586
@@ -490,11 +513,14 @@ func (m *Model) renderVimSearchFooter() string {
 }
 
 // executeVimSearch finds matches for the entered query and lands on the first
-// match relative to the cursor.
+// match relative to the cursor. When a pending d/y/c operator was carried into
+// the search, it applies that operator over the cursor->match range instead.
 func (m *Model) executeVimSearch() {
 	query := m.vimSearchQuery
 	forward := m.vimSearchForward
+	operator := m.vimSearchOp
 	m.vimSearchMode = false
+	m.vimSearchOp = ""
 	m.vimSearchQuery = query
 	if query == "" {
 		m.vimSearchMatches = nil
@@ -507,11 +533,19 @@ func (m *Model) executeVimSearch() {
 		return
 	}
 	m.vimSearchIndex = m.firstVimSearchIndexFrom(m.vimValueByteOffset(), forward)
+	if operator != "" {
+		m.applyVimSearchOperator(operator, m.vimSearchMatches[m.vimSearchIndex].Start)
+		return
+	}
 	m.applyVimSearchMatch()
 }
 
 // jumpVimSearchMatch moves to the next (or previous) search match, wrapping.
 func (m *Model) jumpVimSearchMatch(next bool) {
+	operator := m.vimSearchOp
+	if operator == "" {
+		operator = m.vimPendingOp
+	}
 	if len(m.vimSearchMatches) == 0 {
 		if m.vimSearchQuery == "" {
 			return
@@ -533,7 +567,57 @@ func (m *Model) jumpVimSearchMatch(next bool) {
 			m.vimSearchIndex = len(m.vimSearchMatches) - 1
 		}
 	}
+	if operator != "" {
+		m.vimSearchOp = ""
+		m.vimPendingOp = ""
+		m.applyVimSearchOperator(operator, m.vimSearchMatches[m.vimSearchIndex].Start)
+		return
+	}
 	m.applyVimSearchMatch()
+}
+
+// applyVimSearchOperator applies a pending d/y/c operator to the byte range
+// spanning the cursor and the target search match (Rust #41586
+// bottom_pane/textarea/vim_search.rs apply_vim_search operator transaction).
+func (m *Model) applyVimSearchOperator(operator string, target int) {
+	origin := m.vimValueByteOffset()
+	if origin == target {
+		return
+	}
+	start, end := origin, target
+	if start > end {
+		start, end = end, start
+	}
+	value := m.composer.Value()
+	valueLen := len(value)
+	if start < 0 {
+		start = 0
+	}
+	if end > valueLen {
+		end = valueLen
+	}
+	// A motion end at column zero may be treated as linewise when the spanned
+	// text up to the line start is blank; an exclusive line-start end is
+	// otherwise retracted by one byte.
+	if start <= valueLen {
+		lineStart := vimLineStartByteOffsetFor(value, start)
+		if lineStart > start {
+			lineStart = start
+		}
+		_, colEnd := vimLineColumnForByteOffset(value, end)
+		endsAtLineStart := colEnd == 0 && end <= valueLen
+		linewise := endsAtLineStart && strings.TrimSpace(value[lineStart:start]) == ""
+		if linewise {
+			start = lineStart
+		} else if endsAtLineStart && end > 0 {
+			end--
+		}
+	}
+	m.vimPendingOp = operator
+	if operator == "y" {
+		m.vimSearchMoveCursor(start)
+	}
+	m.applyVimOperatorValueRange(start, end)
 }
 
 // applyVimSearchMatch moves the composer cursor to the current search match.
@@ -570,6 +654,28 @@ func vimLineColumnForByteOffset(value string, offset int) (row int, col int) {
 		return 0, 0
 	}
 	return len(lines) - 1, len(lines[len(lines)-1])
+}
+
+// vimLineStartByteOffsetFor returns the byte offset of the start of the logical
+// line containing offset within value.
+func vimLineStartByteOffsetFor(value string, offset int) int {
+	if offset <= 0 {
+		return 0
+	}
+	lines := strings.Split(value, "\n")
+	remaining := offset
+	start := 0
+	for i, line := range lines {
+		if remaining <= len(line) {
+			return start
+		}
+		remaining -= len(line) + 1
+		start += len(line) + 1
+		if i == len(lines)-1 {
+			return start
+		}
+	}
+	return start
 }
 
 // firstVimSearchIndexFrom returns the match index nearest the cursor in the
