@@ -140,6 +140,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"file-system",
 		"file-watcher",
 		"git-utils",
+		"guardian-context",
 		"history",
 		"hooks",
 		"http-client",

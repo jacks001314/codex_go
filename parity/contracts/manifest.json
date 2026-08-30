@@ -331,7 +331,7 @@
             "kind": "shared-fixtures",
             "rustPaths": [
                 "core/src/tools/handlers/apply_patch_spec.rs",
-                "core/src/tools/handlers/apply_patch.lark"
+                "core/assets/tools/apply_patch.lark"
             ],
             "goPaths": [
                 "applypatch",

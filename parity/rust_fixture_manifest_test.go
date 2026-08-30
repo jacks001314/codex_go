@@ -46,7 +46,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 	return []rustFixtureRoot{
 		{
 			Path:  "cli/tests",
-			Files: 20,
+			Files: 21,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -91,7 +91,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "core/tests/suite",
-			Files: 172,
+			Files: 177,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

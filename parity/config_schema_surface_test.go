@@ -17,6 +17,7 @@ import (
 var configSchemaRustOnlyAllowlist = map[string]string{
 	"experimental_compact_prompt_file":    "Rust experimental compaction feature; not implemented in Go",
 	"experimental_thread_store":           "Rust experimental thread store; Go uses its own session store",
+	"mcp_optional_startup_grace_ms":       "Rust optional MCP startup grace window; Go config does not yet parse the per-server grace override",
 }
 
 // configSchemaGoOnlyAllowlist lists Go-recognized keys absent from Rust's
@@ -58,8 +59,8 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	goKeys := config.KnownTopLevelConfigFields()
 	sort.Strings(goKeys)
 
-	if len(rustKeys) != 95 {
-		t.Fatalf("Rust config.schema.json top-level property count = %d, want 95 (pinned baseline)", len(rustKeys))
+	if len(rustKeys) != 96 {
+		t.Fatalf("Rust config.schema.json top-level property count = %d, want 96 (pinned baseline)", len(rustKeys))
 	}
 	if len(goKeys) != 101 {
 		t.Fatalf("Go recognized top-level config key count = %d, want 101 (pinned baseline)", len(goKeys))

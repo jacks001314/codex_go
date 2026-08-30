@@ -232,6 +232,9 @@ type ModelInfo struct {
 	SupportsParallelToolCalls     bool              `json:"supports_parallel_tool_calls"`
 	ToolMode                      string            `json:"tool_mode"`
 	MultiAgentVersion             string            `json:"multi_agent_version"`
+	// MultiAgentReasoningEffort mirrors Rust ModelInfo.multi_agent_reasoning_effort
+	// (the reasoning effort used for multi-agent work when the user selects Ultra).
+	MultiAgentReasoningEffort     *string           `json:"multi_agent_reasoning_effort,omitempty"`
 	SupportsImageDetailOriginal   bool              `json:"supports_image_detail_original"`
 	ContextWindow                 int64             `json:"context_window"`
 	MaxContextWindow              int64             `json:"max_context_window"`
