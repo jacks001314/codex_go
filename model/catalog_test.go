@@ -517,6 +517,43 @@ func TestModelMessagesToolMessagesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestModelMessagesMultiAgentProactiveRoundTrip(t *testing.T) {
+	proactive := "Use proactive delegation from the model catalog."
+	messages := ModelMessages{
+		MultiAgent: &MultiAgentMessages{
+			Mode: &MultiAgentModeMessages{Proactive: &proactive},
+		},
+	}
+	data, err := json.Marshal(&messages)
+	if err != nil {
+		t.Fatalf("marshal multi-agent proactive messages error = %v", err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatalf("unmarshal marshaled value error = %v", err)
+	}
+	multiAgent, ok := value["multi_agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("multi_agent not serialized: %s", string(data))
+	}
+	mode, ok := multiAgent["mode"].(map[string]any)
+	if !ok {
+		t.Fatalf("multi_agent.mode not serialized: %s", string(data))
+	}
+	if mode["proactive"] != proactive {
+		t.Fatalf("multi_agent.mode = %#v, want proactive %q", mode, proactive)
+	}
+
+	var parsed ModelMessages
+	if err := json.Unmarshal([]byte(`{"multi_agent":{"mode":{"proactive":"Use proactive delegation from the model catalog."}}}`), &parsed); err != nil {
+		t.Fatalf("unmarshal multi-agent proactive messages error = %v", err)
+	}
+	if parsed.MultiAgent == nil || parsed.MultiAgent.Mode == nil ||
+		parsed.MultiAgent.Mode.Proactive == nil || *parsed.MultiAgent.Mode.Proactive != proactive {
+		t.Fatalf("parsed multi-agent proactive = %#v", parsed.MultiAgent)
+	}
+}
+
 func TestServiceTierForRequest(t *testing.T) {
 	info := &ModelInfo{ServiceTiers: []string{"priority", "flex"}}
 	if got := ServiceTierForRequest(info, "fast"); got != "priority" {

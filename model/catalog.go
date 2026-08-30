@@ -86,8 +86,9 @@ type MultiAgentRoleMessages struct {
 }
 
 type MultiAgentModeMessages struct {
-	Explicit *string `json:"explicit,omitempty"`
-	HintText *string `json:"hint_text,omitempty"`
+	Explicit  *string `json:"explicit,omitempty"`
+	Proactive *string `json:"proactive,omitempty"`
+	HintText  *string `json:"hint_text,omitempty"`
 }
 
 // ModelTokenBudgetConfig contains model-owned defaults for the context-window

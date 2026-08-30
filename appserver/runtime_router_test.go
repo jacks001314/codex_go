@@ -13343,6 +13343,68 @@ func TestRuntimeRouterThreadStartIgnoresDeprecatedMultiAgentMode(t *testing.T) {
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 }
 
+func TestMultiAgentModeCatalogText(t *testing.T) {
+	proactiveText := "Use proactive delegation from the model catalog."
+	explicitText := "Use explicit delegation from the model catalog."
+	hintText := "Use the configured delegation policy."
+	empty := ""
+	tests := []struct {
+		name         string
+		mode         string
+		modeMessages *model.MultiAgentModeMessages
+		wantText     string
+		wantSuppress bool
+	}{
+		{
+			name:         "proactive uses catalog proactive override",
+			mode:         string(MultiAgentModeProactive),
+			modeMessages: &model.MultiAgentModeMessages{Proactive: &proactiveText},
+			wantText:     proactiveText,
+		},
+		{
+			name:         "proactive empty catalog value suppresses",
+			mode:         string(MultiAgentModeProactive),
+			modeMessages: &model.MultiAgentModeMessages{Proactive: &empty},
+			wantSuppress: true,
+		},
+		{
+			name:         "proactive missing catalog falls back to built-in",
+			mode:         string(MultiAgentModeProactive),
+			modeMessages: &model.MultiAgentModeMessages{},
+			wantText:     "",
+		},
+		{
+			name:         "proactive hint text takes precedence",
+			mode:         string(MultiAgentModeProactive),
+			modeMessages: &model.MultiAgentModeMessages{HintText: &hintText, Proactive: &proactiveText},
+			wantText:     hintText,
+		},
+		{
+			name:         "non-proactive uses explicit override",
+			mode:         string(MultiAgentModeExplicitRequestOnly),
+			modeMessages: &model.MultiAgentModeMessages{Explicit: &explicitText},
+			wantText:     explicitText,
+		},
+		{
+			name:         "nil mode messages falls back",
+			mode:         string(MultiAgentModeProactive),
+			modeMessages: nil,
+			wantText:     "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotText, gotSuppress := multiAgentModeCatalogText(tt.mode, tt.modeMessages)
+			if gotSuppress != tt.wantSuppress {
+				t.Fatalf("multiAgentModeCatalogText() suppress = %v, want %v", gotSuppress, tt.wantSuppress)
+			}
+			if gotText != tt.wantText {
+				t.Fatalf("multiAgentModeCatalogText() text = %q, want %q", gotText, tt.wantText)
+			}
+		})
+	}
+}
+
 func TestRuntimeRouterTurnStartAppliesExplicitPersonality(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()

@@ -10057,7 +10057,7 @@ func appToolOutputIsDynamic(output *tool.Output) bool {
 }
 
 const explicitRequestOnlyMultiAgentModeText = "Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work."
-const proactiveMultiAgentModeText = "Proactive multi-agent delegation is active. Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies. Use sub-agents when parallel work would materially improve speed or quality. This mode remains active until a later multi-agent mode developer message changes it."
+const proactiveMultiAgentModeText = "Proactive multi-agent delegation is active. Any earlier developer instruction requiring an explicit user request before spawning sub-agents no longer applies. This mode remains active until a later multi-agent mode developer message changes it. User requests override this hint.\n\nIf at any point you can parallelize work by delegating tasks to another agent (no matter if you are root or subagent), you should do so using collaboration tools if it could save time or improve quality."
 
 type personalityWorldStateSnapshot struct {
 	Model       string  `json:"model"`
@@ -10565,6 +10565,7 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 	// Rust's effective_multi_agent_mode uses a configured
 	// multi_agent_mode_hint_text as a custom mode when present.
 	customModeText := ""
+	suppressMode := false
 	if cfg, err := r.effectiveConfigForTurn(params); err == nil && cfg != nil {
 		if agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents()); agentsErr == nil {
 			if v2Config, v2Err := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession); v2Err == nil && v2Config.MultiAgentModeHintText != nil {
@@ -10581,14 +10582,16 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 			}
 			info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
 			if info != nil && info.ModelMessages != nil && info.ModelMessages.MultiAgent != nil && info.ModelMessages.MultiAgent.Mode != nil {
-				modeMessages := info.ModelMessages.MultiAgent.Mode
-				if modeMessages.HintText != nil && strings.TrimSpace(*modeMessages.HintText) != "" {
-					customModeText = strings.TrimSpace(*modeMessages.HintText)
-				} else if mode != string(MultiAgentModeProactive) && modeMessages.Explicit != nil && strings.TrimSpace(*modeMessages.Explicit) != "" {
-					customModeText = strings.TrimSpace(*modeMessages.Explicit)
+				if text, suppress := multiAgentModeCatalogText(mode, info.ModelMessages.MultiAgent.Mode); suppress {
+					suppressMode = true
+				} else if text != "" {
+					customModeText = text
 				}
 			}
 		}
+	}
+	if suppressMode {
+		return nil, nil
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil {
@@ -10635,6 +10638,35 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 	}
 	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<multi_agent_mode>", "</multi_agent_mode>", body))
 	return renderedFragmentInputItem(rendered), nil
+}
+
+// multiAgentModeCatalogText resolves the catalog-provided multi-agent mode
+// message for a given mode (Rust effective_multi_agent_mode, #41457). The
+// precedence is: catalog hint text, then (for proactive mode) the catalog
+// proactive message, then (for non-proactive mode) the catalog explicit message.
+// A catalog proactive/explicit value that is present but empty suppresses the
+// <multi_agent_mode> message (return suppress = true); a missing value falls
+// back to the built-in text (empty text, suppress = false).
+func multiAgentModeCatalogText(mode string, modeMessages *model.MultiAgentModeMessages) (text string, suppress bool) {
+	if modeMessages == nil {
+		return "", false
+	}
+	if modeMessages.HintText != nil && strings.TrimSpace(*modeMessages.HintText) != "" {
+		return strings.TrimSpace(*modeMessages.HintText), false
+	}
+	if mode == string(MultiAgentModeProactive) {
+		if modeMessages.Proactive != nil {
+			if proactive := strings.TrimSpace(*modeMessages.Proactive); proactive != "" {
+				return proactive, false
+			}
+			return "", true
+		}
+		return "", false
+	}
+	if modeMessages.Explicit != nil && strings.TrimSpace(*modeMessages.Explicit) != "" {
+		return strings.TrimSpace(*modeMessages.Explicit), false
+	}
+	return "", false
 }
 
 // multiAgentUsageHintInputItem renders the multi-agent V2 usage hint as a
