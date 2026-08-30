@@ -245,3 +245,45 @@ func TestHistoryNotesForwardsTruncationPolicyLikeRust(t *testing.T) {
 		t.Fatalf("Call() error = %v", err)
 	}
 }
+
+func TestHistoryNotesBackendSanitizesErrorsLikeRust(t *testing.T) {
+	// A non-2xx response surfaces only a consistent message with the status,
+	// without leaking the underlying detail body.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`secret internal detail`))
+	}))
+	defer server.Close()
+	backend := &Backend{BaseURL: server.URL, HTTPDoer: server.Client().Do}
+	_, err := backend.Call(context.Background(), "alpha/history/v2/list_windows", "session-1", "root", map[string]any{})
+	if err == nil || !strings.HasPrefix(err.Error(), operationErrorPrefix) || strings.Contains(err.Error(), "secret internal detail") {
+		t.Fatalf("status error = %v, want sanitized operation error", err)
+	}
+
+	// Invalid JSON returns the sanitized message.
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	defer server2.Close()
+	backend2 := &Backend{BaseURL: server2.URL, HTTPDoer: server2.Client().Do}
+	_, err = backend2.Call(context.Background(), "alpha/history/v2/list_windows", "session-1", "root", map[string]any{})
+	if err == nil || err.Error() != operationErrorPrefix+" The backend returned invalid JSON." {
+		t.Fatalf("invalid-JSON error = %v, want sanitized operation error", err)
+	}
+
+	// An auth failure is sanitized without the underlying error.
+	backend3 := &Backend{
+		BaseURL: server.URL,
+		ApplyAuth: func(*http.Request, []byte) error {
+			return &customAuthError{message: "token refresh failed"}
+		},
+	}
+	_, err = backend3.Call(context.Background(), "alpha/history/v2/list_windows", "session-1", "root", map[string]any{})
+	if err == nil || err.Error() != operationErrorPrefix+" Could not apply backend authentication." || strings.Contains(err.Error(), "token refresh failed") {
+		t.Fatalf("auth error = %v, want sanitized operation error", err)
+	}
+}
+
+type customAuthError struct{ message string }
+
+func (e *customAuthError) Error() string { return e.message }

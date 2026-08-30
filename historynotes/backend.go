@@ -17,6 +17,10 @@ const backendTimeout = 35 * time.Second
 const encryptedToolArgumentsHeader = "x-openai-encrypted-tool-arguments"
 const toolOutputTruncationPolicyHeader = "x-openai-tool-output-truncation-policy"
 
+// operationErrorPrefix mirrors Rust ext/history-notes (#41235): user-facing
+// backend failures use a consistent message that omits underlying error details.
+const operationErrorPrefix = "Unable to perform operation:"
+
 // ToolTruncationPolicy is the serialized form of the output truncation policy
 // forwarded to the history/notes backend (Rust protocol TruncationPolicy,
 // #41062): {"mode":"bytes"|"tokens","limit":N}.
@@ -67,14 +71,14 @@ func (b *Backend) Call(ctx context.Context, path string, sessionID string, curre
 	}
 	body, err := json.Marshal(arguments)
 	if err != nil {
-		return nil, fmt.Errorf("history backend arguments could not be encoded: %w", err)
+		return nil, fmt.Errorf("%s The backend arguments could not be encoded.", operationErrorPrefix)
 	}
 	endpoint := strings.TrimRight(strings.TrimSpace(b.BaseURL), "/") + "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
 	requestCtx, cancel := context.WithTimeout(ctx, backendTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("history backend request could not be built: %w", err)
+		return nil, fmt.Errorf("%s The backend request could not be built.", operationErrorPrefix)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	if encryptedArgumentsRoute(path) {
@@ -83,13 +87,13 @@ func (b *Backend) Call(ctx context.Context, path string, sessionID string, curre
 	if b.ToolTruncationPolicy != nil {
 		encoded, err := json.Marshal(b.ToolTruncationPolicy)
 		if err != nil {
-			return nil, fmt.Errorf("history backend truncation policy could not be encoded: %w", err)
+			return nil, fmt.Errorf("%s Could not encode the output truncation policy.", operationErrorPrefix)
 		}
 		request.Header.Set(toolOutputTruncationPolicyHeader, string(encoded))
 	}
 	if b.ApplyAuth != nil {
 		if err := b.ApplyAuth(request, body); err != nil {
-			return nil, fmt.Errorf("history backend auth failed: %w", err)
+			return nil, fmt.Errorf("%s Could not apply backend authentication.", operationErrorPrefix)
 		}
 	}
 	do := b.HTTPDoer
@@ -98,19 +102,18 @@ func (b *Backend) Call(ctx context.Context, path string, sessionID string, curre
 	}
 	response, err := do(request)
 	if err != nil {
-		return nil, fmt.Errorf("history backend request failed: %w", err)
+		return nil, fmt.Errorf("%s The backend request failed.", operationErrorPrefix)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return nil, fmt.Errorf("history backend request failed with status %s: %s", response.Status, strings.TrimSpace(string(detail)))
+		return nil, fmt.Errorf("%s The backend request failed with status %s.", operationErrorPrefix, response.Status)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 16*1024*1024))
 	if err != nil {
-		return nil, fmt.Errorf("history backend response could not be read: %w", err)
+		return nil, fmt.Errorf("%s The backend response could not be read.", operationErrorPrefix)
 	}
 	if !json.Valid(data) {
-		return nil, fmt.Errorf("history backend returned invalid JSON")
+		return nil, fmt.Errorf("%s The backend returned invalid JSON.", operationErrorPrefix)
 	}
 	return json.RawMessage(data), nil
 }
