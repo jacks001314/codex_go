@@ -506,6 +506,51 @@ func approvalPolicyFromSettingsEvent(raw json.RawMessage) (string, bool) {
 	return policy, policy != ""
 }
 
+// LastPersistedOwnedThreadCWD returns the working directory of the latest
+// thread-owned settings snapshot whose owner matches the resolved thread, or ""
+// when the resumed thread has no owned cwd (Rust #41567). Fork-copied snapshots
+// owned by another thread are ignored so a forked session does not inherit a
+// foreign cwd.
+func LastPersistedOwnedThreadCWD(threadID string, lines []Line) string {
+	threadID = strings.TrimSpace(threadID)
+	fallback := ""
+	for index := len(lines) - 1; index >= 0; index-- {
+		owner, cwd, ok := threadSettingsOwnerAndCWD(lines[index].Payload)
+		if !ok || cwd == "" {
+			continue
+		}
+		if owner == "" && fallback == "" {
+			// Legacy snapshot without an owner: readable for approval policy but
+			// does not override the startup cwd (Rust #41567).
+			continue
+		}
+		if owner == "" {
+			continue
+		}
+		if owner == threadID {
+			return cwd
+		}
+	}
+	return ""
+}
+
+func threadSettingsOwnerAndCWD(raw json.RawMessage) (string, string, bool) {
+	if len(raw) == 0 {
+		return "", "", false
+	}
+	var event struct {
+		Type           string `json:"type"`
+		ThreadID       string `json:"thread_id"`
+		ThreadSettings struct {
+			CWD string `json:"cwd"`
+		} `json:"thread_settings"`
+	}
+	if err := json.Unmarshal(raw, &event); err != nil || strings.TrimSpace(event.Type) != "thread_settings_applied" {
+		return "", "", false
+	}
+	return strings.TrimSpace(event.ThreadID), strings.TrimSpace(event.ThreadSettings.CWD), true
+}
+
 func approvalPolicyFromTurnContext(raw json.RawMessage) (string, bool) {
 	var values map[string]any
 	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {

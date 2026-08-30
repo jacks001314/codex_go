@@ -43,6 +43,7 @@ func TestRecorderCreateAppendLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
+
 	if err := recorder.AppendItem(Item{Type: "user_message", Data: map[string]any{"text": "hello"}}); err != nil {
 		t.Fatalf("AppendItem() error = %v", err)
 	}
@@ -71,6 +72,51 @@ func TestRecorderCreateAppendLoad(t *testing.T) {
 	}
 	if record.Metadata.AgentPath != "/worker" || len(record.Metadata.DynamicTools) != 1 || len(record.Metadata.SelectedCapabilityRoots) != 1 || record.Metadata.MultiAgentVersion != "v2" || len(record.Metadata.ContextWindow) == 0 {
 		t.Fatalf("record metadata high fidelity fields = %#v", record.Metadata)
+	}
+}
+
+// TestLastPersistedOwnedThreadCWDLikeRust verifies the Rust #41567 owned-cwd
+// restore: a resumed thread uses its own settings-snapshot cwd, while a
+// fork-copied snapshot owned by another thread is ignored.
+func TestLastPersistedOwnedThreadCWDLikeRust(t *testing.T) {
+	home := t.TempDir()
+	now := fixedTime()
+	recorder, err := NewRecorder(&CreateParams{
+		CodexHome: home, SessionID: "session-1", ThreadID: "thread-root",
+		Source: "cli", ThreadSource: "user", Originator: "codex",
+		CWD: "/repo", ModelProvider: "openai", HistoryMode: "legacy", MemoryMode: "disabled",
+		Now: now,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	if err := recorder.AppendThreadSettingsAppliedWithOwner("thread-a", "approve", "/a", now); err != nil {
+		t.Fatalf("append owner A error = %v", err)
+	}
+	if err := recorder.AppendThreadSettingsAppliedWithOwner("thread-b", "prompt", "/b", now.Add(time.Second)); err != nil {
+		t.Fatalf("append owner B error = %v", err)
+	}
+	if err := recorder.AppendThreadSettingsApplied("reject", now.Add(2*time.Second)); err != nil {
+		t.Fatalf("append legacy error = %v", err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	lines, _, err := Load(recorder.Path())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := LastPersistedOwnedThreadCWD("thread-b", lines); got != "/b" {
+		t.Fatalf("thread-b owned cwd = %q, want /b", got)
+	}
+	if got := LastPersistedOwnedThreadCWD("thread-a", lines); got != "/a" {
+		t.Fatalf("thread-a owned cwd = %q, want /a", got)
+	}
+	// A thread that is neither owner has no owned cwd (legacy snapshots do not
+	// override the startup cwd).
+	if got := LastPersistedOwnedThreadCWD("thread-c", lines); got != "" {
+		t.Fatalf("thread-c owned cwd = %q, want empty", got)
 	}
 }
 

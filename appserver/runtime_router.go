@@ -6552,11 +6552,19 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 		record.Metadata.ActivePermissionProfile = profile
 	}
 	record.Metadata.Extra["config"] = configOverrides
+	// Rust #41567: persist the thread-owned cwd on the settings snapshot so a
+	// cold resume restores the thread's own working directory.
+	settingsCWD := ""
+	if r.services.ThreadExtras != nil {
+		if settings := r.services.ThreadExtras.Settings(strings.TrimSpace(params.ThreadID)); settings != nil {
+			settingsCWD = strings.TrimSpace(settings.CWD)
+		}
+	}
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return err
 	}
 	appliedPolicy := strings.TrimSpace(record.Metadata.ApprovalPolicy)
-	return r.services.ThreadRouter.appendThreadSettingsApplied(threadID, appliedPolicy, runtimeRouterNow(r).UTC())
+	return r.services.ThreadRouter.appendThreadSettingsAppliedWithOwner(threadID, appliedPolicy, settingsCWD, runtimeRouterNow(r).UTC())
 }
 
 func (r *RuntimeRouter) cleanBackgroundTerminals(params *BackgroundTerminalsCleanParams) (*BackgroundTerminalsCleanResponse, error) {

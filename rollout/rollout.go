@@ -569,23 +569,39 @@ func (r *Recorder) AppendThreadRolledBack(numTurns uint32, now time.Time) error 
 // AppendThreadSettingsApplied persists the settings snapshot used to restore
 // thread-level approval behavior after a cold resume.
 func (r *Recorder) AppendThreadSettingsApplied(approvalPolicy string, now time.Time) error {
+	return r.AppendThreadSettingsAppliedWithOwner("", approvalPolicy, "", now)
+}
+
+// AppendThreadSettingsAppliedWithOwner persists the thread-owned settings
+// snapshot used to restore thread-level approval behavior and working directory
+// after a cold resume. The owner thread ID and cwd let a resumed thread restore
+// its own retained cwd while ignoring snapshots copied from a forking thread
+// (Rust #41567). Snapshots without an owner remain readable but do not override
+// the startup cwd.
+func (r *Recorder) AppendThreadSettingsAppliedWithOwner(threadID, approvalPolicy, cwd string, now time.Time) error {
 	approvalPolicy = strings.TrimSpace(approvalPolicy)
-	if approvalPolicy == "" {
-		return errors.New("approval policy is required")
+	threadID = strings.TrimSpace(threadID)
+	cwd = strings.TrimSpace(cwd)
+	if approvalPolicy == "" && cwd == "" {
+		return errors.New("thread settings require an approval policy or cwd")
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 	payload, err := json.Marshal(struct {
 		Type           string `json:"type"`
+		ThreadID       string `json:"thread_id,omitempty"`
 		ThreadSettings struct {
 			ApprovalPolicy string `json:"approval_policy"`
+			CWD            string `json:"cwd,omitempty"`
 		} `json:"thread_settings"`
 	}{
-		Type: "thread_settings_applied",
+		Type:     "thread_settings_applied",
+		ThreadID: threadID,
 		ThreadSettings: struct {
 			ApprovalPolicy string `json:"approval_policy"`
-		}{ApprovalPolicy: approvalPolicy},
+			CWD            string `json:"cwd,omitempty"`
+		}{ApprovalPolicy: approvalPolicy, CWD: cwd},
 	})
 	if err != nil {
 		return err

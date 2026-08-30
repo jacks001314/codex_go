@@ -475,7 +475,11 @@ func (r *Router) appendThreadRollback(threadID session.ThreadID, numTurns int, n
 }
 
 func (r *Router) appendThreadSettingsApplied(threadID session.ThreadID, approvalPolicy string, now time.Time) error {
-	if r == nil || r.store == nil || strings.TrimSpace(approvalPolicy) == "" {
+	return r.appendThreadSettingsAppliedWithOwner(threadID, approvalPolicy, "", now)
+}
+
+func (r *Router) appendThreadSettingsAppliedWithOwner(threadID session.ThreadID, approvalPolicy, cwd string, now time.Time) error {
+	if r == nil || r.store == nil || (strings.TrimSpace(approvalPolicy) == "" && strings.TrimSpace(cwd) == "") {
 		return nil
 	}
 	path, err := r.findThreadRolloutPath(threadID, false)
@@ -488,7 +492,7 @@ func (r *Router) appendThreadSettingsApplied(threadID session.ThreadID, approval
 	}
 	r.configureThreadHistoryRecorder(recorder, threadID)
 	defer recorder.Close()
-	return recorder.AppendThreadSettingsApplied(approvalPolicy, now)
+	return recorder.AppendThreadSettingsAppliedWithOwner(string(threadID), approvalPolicy, cwd, now)
 }
 
 func (r *Router) latestPersistedApprovalPolicy(record *session.Record) (string, bool) {
@@ -504,6 +508,25 @@ func (r *Router) latestPersistedApprovalPolicy(record *session.Record) (string, 
 		return "", false
 	}
 	return rollout.LatestPersistedApprovalPolicy(lines)
+}
+
+// latestPersistedOwnedThreadCWD returns the working directory recorded on the
+// resumed thread's latest owned settings snapshot (Rust #41567). Fork-copied
+// snapshots owned by another thread are ignored so a forked session does not
+// inherit a foreign cwd.
+func (r *Router) latestPersistedOwnedThreadCWD(threadID string, record *session.Record) string {
+	if r == nil || record == nil {
+		return ""
+	}
+	path := r.threadRolloutPath(record)
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	lines, _, err := rollout.Load(path)
+	if err != nil {
+		return ""
+	}
+	return rollout.LastPersistedOwnedThreadCWD(threadID, lines)
 }
 
 func (r *Router) appendThreadCompacted(threadID session.ThreadID, message string, replacement []session.Item, now time.Time) error {
@@ -1142,7 +1165,10 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
 		path = strings.TrimSpace(*params.Path)
 	}
-	cwd := firstNonEmpty(stringPtrValue(params.CWD), record.Metadata.CWD)
+	// Rust #41567: a cold resume without an explicit cwd restores the thread's
+	// owned settings snapshot cwd (not a fork-copied one from another thread).
+	ownedCWD := r.latestPersistedOwnedThreadCWD(string(record.ID), record)
+	cwd := firstNonEmpty(stringPtrValue(params.CWD), ownedCWD, record.Metadata.CWD)
 	runtimeWorkspaceRoots := threadRecordRuntimeWorkspaceRoots(record, cwd, params.RuntimeWorkspaceRoots)
 	thread := BuildThread(record, path, includeTurns && !paginatedResume)
 	if thread != nil {
