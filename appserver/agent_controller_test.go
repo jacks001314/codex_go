@@ -297,3 +297,47 @@ func TestRuntimeAgentControllerFullHistoryForkDropsInheritedCurrentTimeReminders
 		t.Fatalf("forked items = %#v, want inherited user item without current-time reminder", child.Items)
 	}
 }
+
+func TestRuntimeAgentControllerRootServiceTierForSpawnLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	root := &session.Record{
+		ID: "root", SessionID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), Model: "gpt-root", ServiceTier: "priority"},
+	}
+	if err := store.Create(root); err != nil {
+		t.Fatal(err)
+	}
+	child := &session.Record{
+		ID: "child", SessionID: "child", ParentThreadID: "root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: root.Metadata.CWD, Model: "gpt-child"},
+	}
+	if err := store.Create(child); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	controller := newRuntimeAgentController(router, "child", root.Metadata.CWD, 1).(*runtimeAgentController)
+	if got := controller.rootServiceTierForSpawn(); got != "priority" {
+		t.Fatalf("rootServiceTierForSpawn() = %q, want priority", got)
+	}
+
+	// A root thread without a configured service tier yields no inherited tier.
+	plainRoot := &session.Record{
+		ID: "plain-root", SessionID: "plain-root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), Model: "gpt-plain"},
+	}
+	if err := store.Create(plainRoot); err != nil {
+		t.Fatal(err)
+	}
+	plainChild := &session.Record{
+		ID: "plain-child", SessionID: "plain-child", ParentThreadID: "plain-root", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: root.Metadata.CWD, Model: "gpt-plain-child"},
+	}
+	if err := store.Create(plainChild); err != nil {
+		t.Fatal(err)
+	}
+	plainCtrl := newRuntimeAgentController(router, "plain-child", root.Metadata.CWD, 1).(*runtimeAgentController)
+	if got := plainCtrl.rootServiceTierForSpawn(); got != "" {
+		t.Fatalf("rootServiceTierForSpawn(no tier) = %q, want empty", got)
+	}
+}

@@ -453,7 +453,6 @@ func multiAgentToolSpec(kind MultiAgentToolKind) tool.Spec {
 			"agent_type":       map[string]any{"type": "string", "description": "Optional configured agent role."},
 			"model":            map[string]any{"type": "string", "description": "Optional model override."},
 			"reasoning_effort": map[string]any{"type": "string", "description": "Optional reasoning effort override."},
-			"service_tier":     map[string]any{"type": "string", "description": "Optional service tier override."},
 			"fork_context":     map[string]any{"type": "boolean", "description": "Whether to include the parent context."},
 		}, nil), Parallel: true}
 	case MultiAgentToolSend:

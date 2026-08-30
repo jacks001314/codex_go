@@ -212,8 +212,11 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 			effort := strings.TrimSpace(*args.ReasoningEffort)
 			params.Effort = &effort
 		}
-		if args.ServiceTier != nil {
-			params.ServiceTier = args.ServiceTier
+		// Rust #41308: subagents follow the root thread's service tier, not a
+		// per-spawn override. appServiceTierForTurn drops the tier if the child
+		// model does not support it and is gated on fast_mode, mirroring Rust.
+		if rootTier := c.rootServiceTierForSpawn(); rootTier != "" {
+			params.ServiceTier = stringPtrIfNotEmpty(rootTier)
 			params.ServiceTierSet = true
 		}
 		if _, err := c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, params)); err != nil {
@@ -623,6 +626,23 @@ func (r *RuntimeRouter) runtimeAgentRegistry(rootID string) *agent.Registry {
 	}
 	r.agentRegistries[rootID] = registry
 	return registry
+}
+
+// rootServiceTierForSpawn returns the root thread's currently selected service
+// tier so a subagent follows the root agent tree's tier instead of a per-spawn
+// override (Rust #41308). An empty result leaves the subagent's tier to its own
+// config default; a non-empty tier is applied at turn start subject to the child
+// model's support (via RuntimeRouter.appServiceTierForTurn, which drops an
+// unsupported tier and is gated on fast_mode).
+func (c *runtimeAgentController) rootServiceTierForSpawn() string {
+	if c == nil || c.router == nil || strings.TrimSpace(c.rootID) == "" {
+		return ""
+	}
+	record, err := c.router.threadRecord(session.ThreadID(c.rootID), true, false)
+	if err != nil || record == nil {
+		return ""
+	}
+	return strings.TrimSpace(record.Metadata.ServiceTier)
 }
 
 func runtimeRecordDescendsFrom(record session.Record, rootID session.ThreadID, records []session.Record) bool {
