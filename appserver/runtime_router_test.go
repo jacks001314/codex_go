@@ -10008,6 +10008,26 @@ func TestRuntimeRouterThreadShellCommandEmitsUserShellNotifications(t *testing.T
 	waitForTurnCompletedStatus(t, sink, started.TurnID, TurnStatusCompleted)
 }
 
+func TestShellCommandParamsTimeoutValidationLikeRust(t *testing.T) {
+	// nil (one-hour default), zero (immediate timeout), and a positive value are valid.
+	for _, timeout := range []*int64{nil, int64PtrTest(0), int64PtrTest(28_800_000)} {
+		params := &ShellCommandParams{ThreadID: "thread-1", Command: "echo hi", TimeoutMs: timeout}
+		if err := params.Validate(); err != nil {
+			t.Fatalf("Validate(timeout=%v) error = %v", timeout, err)
+		}
+	}
+	// Negative timeouts are rejected before execution.
+	negative := int64(-1)
+	params := &ShellCommandParams{ThreadID: "thread-1", Command: "echo hi", TimeoutMs: &negative}
+	if err := params.Validate(); err == nil || !strings.Contains(err.Error(), "timeoutMs") {
+		t.Fatalf("Validate(negative) error = %v, want timeoutMs rejection", err)
+	}
+}
+
+func int64PtrTest(value int64) *int64 {
+	return &value
+}
+
 func TestRuntimeRouterThreadShellCommandEnqueuesActiveTurnContext(t *testing.T) {
 	sink := NewNotificationBuffer()
 	mailbox := turn.NewSteerMailbox()

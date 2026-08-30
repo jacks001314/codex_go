@@ -483,8 +483,9 @@ type SettingsUpdatedNotification struct {
 }
 
 type ShellCommandParams struct {
-	ThreadID string `json:"threadId"`
-	Command  string `json:"command"`
+	ThreadID  string `json:"threadId"`
+	Command   string `json:"command"`
+	TimeoutMs *int64 `json:"timeoutMs,omitempty"`
 }
 
 func (p *ShellCommandParams) Validate() error {
@@ -493,6 +494,10 @@ func (p *ShellCommandParams) Validate() error {
 	}
 	if strings.TrimSpace(p.Command) == "" {
 		return fmt.Errorf("%w: command is required", ErrInvalidThreadExtraRequest)
+	}
+	if p.TimeoutMs != nil && *p.TimeoutMs < 0 {
+		// Rust #41384: reject invalid timeouts; zero requests an immediate timeout.
+		return fmt.Errorf("%w: timeoutMs must be non-negative", ErrInvalidThreadExtraRequest)
 	}
 	return nil
 }

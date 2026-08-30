@@ -25,6 +25,7 @@ type threadShellCommandRun struct {
 	CWD        string
 	Standalone bool
 	StartedAt  int64
+	TimeoutMs  *int64
 }
 
 func (r *RuntimeRouter) handleThreadShellCommand(params *ShellCommandParams) (*ShellCommandResponse, error) {
@@ -44,11 +45,12 @@ func (r *RuntimeRouter) handleThreadShellCommand(params *ShellCommandParams) (*S
 		return nil, err
 	}
 	params.Command = command
+	timeoutMs := cloneInt64(params.TimeoutMs)
 	response, err := r.requireThreadExtras().ShellCommand(params)
 	if err != nil {
 		return nil, err
 	}
-	run, err := r.prepareThreadShellCommandRun(threadID, command, cwd)
+	run, err := r.prepareThreadShellCommandRun(threadID, command, cwd, timeoutMs)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +78,7 @@ func (r *RuntimeRouter) threadShellCommandCWD(threadID string) (string, error) {
 	return cwd, nil
 }
 
-func (r *RuntimeRouter) prepareThreadShellCommandRun(threadID string, command string, cwd string) (*threadShellCommandRun, error) {
+func (r *RuntimeRouter) prepareThreadShellCommandRun(threadID string, command string, cwd string, timeoutMs *int64) (*threadShellCommandRun, error) {
 	if active := r.activeRuntimeTurnForShellCommand(threadID); active != nil && strings.TrimSpace(active.TurnID) != "" {
 		return &threadShellCommandRun{
 			ThreadID:   threadID,
@@ -85,6 +87,7 @@ func (r *RuntimeRouter) prepareThreadShellCommandRun(threadID string, command st
 			CWD:        cwd,
 			Standalone: false,
 			StartedAt:  active.StartedAtMS,
+			TimeoutMs:  cloneInt64(timeoutMs),
 		}, nil
 	}
 	start := &turn.TurnStartParams{
@@ -108,6 +111,7 @@ func (r *RuntimeRouter) prepareThreadShellCommandRun(threadID string, command st
 		CWD:        cwd,
 		Standalone: true,
 		StartedAt:  response.Turn.StartedAt,
+		TimeoutMs:  cloneInt64(timeoutMs),
 	}, nil
 }
 
@@ -128,7 +132,13 @@ func (r *RuntimeRouter) runThreadShellCommand(ctx context.Context, run *threadSh
 	}
 	itemID := "user-shell-" + safeIdentifier(run.TurnID) + "-" + safeIdentifier(fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
 	processID := "process-" + safeIdentifier(itemID)
-	runCtx, cancel := context.WithCancel(ctx)
+	// Rust #41384: configurable thread shell-command timeout, defaulting to one
+	// hour; zero requests an immediate timeout.
+	timeout := time.Hour
+	if run.TimeoutMs != nil {
+		timeout = time.Duration(*run.TimeoutMs) * time.Millisecond
+	}
+	runCtx, cancel := context.WithDeadline(ctx, time.Now().Add(timeout))
 	defer cancel()
 	r.registerThreadShellCommandTerminal(run, itemID, processID, cancel)
 	defer r.requireThreadExtras().RemoveBackgroundTerminal(run.ThreadID, processID)
