@@ -389,6 +389,10 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 		go func(reader io.ReadCloser) {
 			defer readers.Done()
 			defer reader.Close()
+			// Rust #41436: answer blocking terminal queries from TTY subprocesses.
+			if process.tty && started.stdin != nil {
+				reader = newTerminalQueryReader(reader, started.stdin)
+			}
 			_, _ = io.Copy(unifiedExecOutputWriter{process: process}, reader)
 		}(reader)
 	}
