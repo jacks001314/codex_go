@@ -10,6 +10,10 @@ import (
 // uses to recognize async user message completions (#39319).
 const DefaultSendUserMessageAsyncToolName = "send_user_message_async"
 
+// defaultSendUserMessageAsyncDescription is the built-in tool description used
+// when the model catalog does not supply a model-owned description (#41461).
+const defaultSendUserMessageAsyncDescription = "Send a concise message that needs the user's attention during ongoing work. The tool returns immediately without ending the turn or waiting for a reply; any reply arrives asynchronously as a new user message. Use this tool to ask for missing information, preferences, constraints, clarification, or approval; report a critical blocker or a finding that may change the task's direction; or answer a user question or status request received while work is still in progress. Use this tool when a message needs the user's immediate attention; use commentary for routine progress and intermediate context. Use clear formatting, such as bolding questions, to make requests easy to notice and answer."
+
 // SendUserMessageAsyncHandler mirrors Rust
 // core/src/tools/handlers/send_user_message_async.rs (#39319/#39601): the
 // model can send a concise, user-visible update or blocking question without
@@ -20,6 +24,10 @@ type SendUserMessageAsyncHandler struct {
 	// EmitAsyncMessage, when set, lets the app-server runtime emit the
 	// message item. The tool surface stays testable without the runtime.
 	EmitAsyncMessage func(message string)
+	// Description overrides the built-in tool description from the model
+	// catalog (#41461). A non-nil value (including an empty string) replaces
+	// the built-in description; nil falls back to it.
+	Description *string
 }
 
 type sendUserMessageAsyncArgs struct {
@@ -29,7 +37,7 @@ type sendUserMessageAsyncArgs struct {
 func (h *SendUserMessageAsyncHandler) Spec() Spec {
 	return Spec{
 		Name:        PlainName(DefaultSendUserMessageAsyncToolName),
-		Description: "Send a concise message that needs the user's attention during ongoing work. The tool returns immediately without ending the turn or waiting for a reply; any reply arrives asynchronously as a new user message. Use this tool to ask for missing information, preferences, constraints, clarification, or approval; report a critical blocker or a finding that may change the task's direction; or answer a user question or status request received while work is still in progress. Use this tool when a message needs the user's immediate attention; use commentary for routine progress and intermediate context. Use clear formatting, such as bolding questions, to make requests easy to notice and answer.",
+		Description: sendUserMessageAsyncDescription(h.Description),
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -43,6 +51,13 @@ func (h *SendUserMessageAsyncHandler) Spec() Spec {
 		},
 		Exposure: ExposureDirectModelOnly,
 	}
+}
+
+func sendUserMessageAsyncDescription(override *string) string {
+	if override != nil {
+		return *override
+	}
+	return defaultSendUserMessageAsyncDescription
 }
 
 func (h *SendUserMessageAsyncHandler) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {

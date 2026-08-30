@@ -93,15 +93,19 @@ type ToolRegistryOptions struct {
 	NewContextWindow             func()
 	// SendUserMessageAsync, when set, emits an asynchronous user-visible
 	// agent message for the send_user_message_async tool (#39319).
-	SendUserMessageAsync     func(message string)
-	DisableWaitAgent         bool
-	DynamicTools             []DynamicToolSpec
-	ThreadID                 string
-	TurnID                   string
-	SessionID                string
-	PluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
-	PluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
-	ExtraTools               []tool.Executor
+	SendUserMessageAsync func(message string)
+	// SendUserMessageAsyncDescription, when set, overrides the built-in
+	// description of the send_user_message_async tool with the model-catalog
+	// value (#41461). A non-nil pointer to an empty string keeps it empty.
+	SendUserMessageAsyncDescription *string
+	DisableWaitAgent                bool
+	DynamicTools                    []DynamicToolSpec
+	ThreadID                        string
+	TurnID                          string
+	SessionID                       string
+	PluginMetricsResolver           func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
+	PluginMeasurementTracker        func(context.Context, plugin.PluginMeasurementBatch)
+	ExtraTools                      []tool.Executor
 	// ExperimentalSupportedTools mirrors Rust model_info.experimental_supported_tools:
 	// tools the selected model declares as supported are registered
 	// conditionally (e.g. test_sync_tool for testing models).
@@ -172,7 +176,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 				}
 			}
 			if supported == "send_user_message_async" {
-				if err := registry.Register(&tool.SendUserMessageAsyncHandler{EmitAsyncMessage: options.SendUserMessageAsync}); err != nil {
+				if err := registry.Register(&tool.SendUserMessageAsyncHandler{EmitAsyncMessage: options.SendUserMessageAsync, Description: options.SendUserMessageAsyncDescription}); err != nil {
 					return nil, err
 				}
 			}

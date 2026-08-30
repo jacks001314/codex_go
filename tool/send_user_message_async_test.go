@@ -43,3 +43,20 @@ func TestSendUserMessageAsyncHandlerRejectsEmpty(t *testing.T) {
 		t.Fatalf("empty message error = %v", err)
 	}
 }
+
+func TestSendUserMessageAsyncHandlerDescriptionOverride(t *testing.T) {
+	// A nil description falls back to the built-in description (no catalog value).
+	if got := (&SendUserMessageAsyncHandler{}).Spec().Description; got != defaultSendUserMessageAsyncDescription {
+		t.Fatalf("default description = %q", got)
+	}
+	// A catalog description replaces the built-in.
+	override := "Ask the user a clarifying question."
+	if got := (&SendUserMessageAsyncHandler{Description: &override}).Spec().Description; got != override {
+		t.Fatalf("override description = %q, want %q", got, override)
+	}
+	// An explicit empty string is preserved (not replaced by the built-in).
+	empty := ""
+	if got := (&SendUserMessageAsyncHandler{Description: &empty}).Spec().Description; got != "" {
+		t.Fatalf("empty description = %q, want empty", got)
+	}
+}

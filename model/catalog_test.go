@@ -475,6 +475,48 @@ func TestModelMessagesConfirmationPoliciesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestModelMessagesToolMessagesRoundTrip(t *testing.T) {
+	desc := "Ask the user a clarifying question."
+	messages := ModelMessages{
+		Tools: &ToolMessages{
+			SendUserMessageAsync: &ToolMessage{Description: &desc},
+		},
+	}
+	data, err := json.Marshal(&messages)
+	if err != nil {
+		t.Fatalf("marshal tools messages error = %v", err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatalf("unmarshal marshaled value error = %v", err)
+	}
+	tools, ok := value["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("tools not serialized: %s", string(data))
+	}
+	tool, ok := tools["send_user_message_async"].(map[string]any)
+	if !ok || tool["description"] != desc {
+		t.Fatalf("send_user_message_async tool = %#v", tools)
+	}
+
+	// A missing description falls back to a nil pointer (built-in), while an
+	// explicit empty string is preserved (Rust #41461).
+	var missing ModelMessages
+	if err := json.Unmarshal([]byte(`{"tools":{"send_user_message_async":{}}}`), &missing); err != nil {
+		t.Fatalf("unmarshal tools messages error = %v", err)
+	}
+	if missing.Tools == nil || missing.Tools.SendUserMessageAsync == nil || missing.Tools.SendUserMessageAsync.Description != nil {
+		t.Fatalf("missing description tools = %#v", missing.Tools)
+	}
+	var empty ModelMessages
+	if err := json.Unmarshal([]byte(`{"tools":{"send_user_message_async":{"description":""}}}`), &empty); err != nil {
+		t.Fatalf("unmarshal empty description tools error = %v", err)
+	}
+	if empty.Tools == nil || empty.Tools.SendUserMessageAsync == nil || empty.Tools.SendUserMessageAsync.Description == nil || *empty.Tools.SendUserMessageAsync.Description != "" {
+		t.Fatalf("empty description tools = %#v", empty.Tools)
+	}
+}
+
 func TestServiceTierForRequest(t *testing.T) {
 	info := &ModelInfo{ServiceTiers: []string{"priority", "flex"}}
 	if got := ServiceTierForRequest(info, "fast"); got != "priority" {

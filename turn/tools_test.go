@@ -523,6 +523,43 @@ func TestBuildToolRegistryClockToolsFollowOptions(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistrySourcesAsyncMessageDescriptionFromCatalog(t *testing.T) {
+	// A model-catalog description replaces the built-in tool description (#41461).
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.ExperimentalSupportedTools = []string{tool.DefaultSendUserMessageAsyncToolName}
+	options.SendUserMessageAsync = func(string) {}
+	override := "Ask the user a clarifying question."
+	options.SendUserMessageAsyncDescription = &override
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(async message) error = %v", err)
+	}
+	spec, ok := registry.Spec(tool.PlainName(tool.DefaultSendUserMessageAsyncToolName))
+	if !ok {
+		t.Fatal("send_user_message_async tool missing")
+	}
+	if spec.Description != override {
+		t.Fatalf("description = %q, want %q", spec.Description, override)
+	}
+
+	// A nil catalog description falls back to the built-in description.
+	defaultSpec := (&tool.SendUserMessageAsyncHandler{}).Spec()
+	options2 := DefaultToolRegistryOptions(t.TempDir())
+	options2.ExperimentalSupportedTools = []string{tool.DefaultSendUserMessageAsyncToolName}
+	options2.SendUserMessageAsync = func(string) {}
+	registry2, err := BuildToolRegistry(options2)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(async message nil) error = %v", err)
+	}
+	spec2, ok := registry2.Spec(tool.PlainName(tool.DefaultSendUserMessageAsyncToolName))
+	if !ok {
+		t.Fatal("send_user_message_async tool missing (nil description)")
+	}
+	if spec2.Description != defaultSpec.Description {
+		t.Fatalf("default description = %q, want built-in %q", spec2.Description, defaultSpec.Description)
+	}
+}
+
 func TestBuildToolRegistryUnifiedExecFeatureGatesWriteStdinLikeRust(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.EnableUnifiedExec = false

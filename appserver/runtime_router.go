@@ -11404,6 +11404,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		}
 		if turnModelInfo.ModelMessages != nil {
 			options.ModelConfirmationPolicies = turnModelInfo.ModelMessages.ConfirmationPolicies
+			if tools := turnModelInfo.ModelMessages.Tools; tools != nil && tools.SendUserMessageAsync != nil {
+				options.SendUserMessageAsyncDescription = tools.SendUserMessageAsync.Description
+			}
 		}
 	}
 	// Rust omits the confirmation-policies request metadata for Guardian review

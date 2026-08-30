@@ -65,6 +65,7 @@ type ModelMessages struct {
 	TokenBudget          *ModelTokenBudgetConfig    `json:"token_budget,omitempty"`
 	AutoReview           *AutoReviewMessages        `json:"auto_review,omitempty"`
 	ConfirmationPolicies *ConfirmationPolicies      `json:"confirmation_policies,omitempty"`
+	Tools                *ToolMessages              `json:"tools,omitempty"`
 }
 
 type CollaborationModeMessages struct {
@@ -118,6 +119,19 @@ type ConfirmationPolicies struct {
 	ComputerUse *string `json:"computer_use,omitempty"`
 }
 
+// ToolMessages mirrors Rust protocol::openai_models::ToolMessages (#41461):
+// model-owned descriptions for built-in tools.
+type ToolMessages struct {
+	SendUserMessageAsync *ToolMessage `json:"send_user_message_async,omitempty"`
+}
+
+// ToolMessage mirrors Rust protocol::openai_models::ToolMessage (#41461):
+// a built-in tool's model-owned message metadata. A missing description uses the
+// built-in description; an explicit empty string leaves the description empty.
+type ToolMessage struct {
+	Description *string `json:"description,omitempty"`
+}
+
 func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		InstructionsTemplate  string                     `json:"instructions_template"`
@@ -127,6 +141,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 		TokenBudget           *ModelTokenBudgetConfig    `json:"token_budget"`
 		AutoReview            *AutoReviewMessages        `json:"auto_review"`
 		ConfirmationPolicies  *ConfirmationPolicies      `json:"confirmation_policies"`
+		Tools                 *ToolMessages              `json:"tools"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -137,6 +152,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	m.TokenBudget = raw.TokenBudget
 	m.AutoReview = raw.AutoReview
 	m.ConfirmationPolicies = raw.ConfirmationPolicies
+	m.Tools = raw.Tools
 	if raw.InstructionsVariables != nil {
 		m.PersonalityDefault = raw.InstructionsVariables["personality_default"]
 		m.PersonalityFriendly = raw.InstructionsVariables["personality_friendly"]
@@ -223,15 +239,15 @@ type ModelInfo struct {
 	// SupportsReasoningSummaries mirrors Rust ModelInfo.supports_reasoning_summary_parameter
 	// (serde default_true: absent means true). The legacy Go wire name
 	// supports_reasoning_summaries is still accepted on parse.
-	SupportsReasoningSummaries    bool              `json:"supports_reasoning_summary_parameter"`
-	DefaultReasoningSummary       string            `json:"default_reasoning_summary"`
-	SupportVerbosity              bool              `json:"support_verbosity"`
-	DefaultVerbosity              string            `json:"default_verbosity"`
-	WebSearchToolType             string            `json:"web_search_tool_type"`
-	TruncationPolicy              TruncationPolicy  `json:"truncation_policy"`
-	SupportsParallelToolCalls     bool              `json:"supports_parallel_tool_calls"`
-	ToolMode                      string            `json:"tool_mode"`
-	MultiAgentVersion             string            `json:"multi_agent_version"`
+	SupportsReasoningSummaries bool             `json:"supports_reasoning_summary_parameter"`
+	DefaultReasoningSummary    string           `json:"default_reasoning_summary"`
+	SupportVerbosity           bool             `json:"support_verbosity"`
+	DefaultVerbosity           string           `json:"default_verbosity"`
+	WebSearchToolType          string           `json:"web_search_tool_type"`
+	TruncationPolicy           TruncationPolicy `json:"truncation_policy"`
+	SupportsParallelToolCalls  bool             `json:"supports_parallel_tool_calls"`
+	ToolMode                   string           `json:"tool_mode"`
+	MultiAgentVersion          string           `json:"multi_agent_version"`
 	// MultiAgentReasoningEffort mirrors Rust ModelInfo.multi_agent_reasoning_effort
 	// (the reasoning effort used for multi-agent work when the user selects Ultra).
 	MultiAgentReasoningEffort     *string           `json:"multi_agent_reasoning_effort,omitempty"`
