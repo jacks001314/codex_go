@@ -8105,9 +8105,26 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 		}, nil
 	}
 	response := r.requirePlugins().List(&params)
-	// Rust #40954: surface marketplaces declared in the effective config stack
-	// (project plugin/marketplace config) in addition to the installed store.
-	if read, err := r.pluginCatalogConfig(params.CWDs); err == nil && read != nil {
+	// Rust #40954/#41208: surface marketplaces declared in the effective config
+	// stack for every requested cwd (project plugin/marketplace config) in
+	// addition to the installed store. The first source wins for duplicate
+	// marketplace names while installed/enabled state merges across repos.
+	cwds := cleanStringSlice(params.CWDs)
+	if len(cwds) == 0 {
+		cwds = []string{""}
+	}
+	for _, cwd := range cwds {
+		if r.services.Config == nil {
+			continue
+		}
+		readParams := &config.ConfigReadParams{}
+		if cwd != "" {
+			readParams.CWD = &cwd
+		}
+		read, err := r.services.Config.Read(readParams)
+		if err != nil || read == nil || pluginCatalogDisabledFromValues(read.Config) {
+			continue
+		}
 		if entries, loadErrors := r.services.Plugins.ResolveConfigMarketplaces(read.Config); len(entries) > 0 || len(loadErrors) > 0 {
 			response.Marketplaces = mergePluginMarketplaceEntries(response.Marketplaces, entries)
 			response.MarketplaceLoadErrors = append(response.MarketplaceLoadErrors, loadErrors...)
