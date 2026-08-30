@@ -766,6 +766,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		DisablePasteBurst:           settings.DisablePasteBurst,
 		ModelPickerOptions:          interactiveModelPickerOptions(root),
 		ServiceTierCommands:         interactiveServiceTierCommands(state.Model),
+		OnListModels:                interactiveOnListModels(root, hasChatGPTAccount),
 		Personality:                 settings.Personality,
 		Notifications:               settings.Notifications,
 		NotificationMethod:          settings.NotificationMethod,
@@ -980,6 +981,57 @@ func interactiveAccountDisplay(account *auth.Account) (string, bool) {
 		}
 	default:
 		return "", false
+	}
+}
+
+// interactiveOnListModels builds the TUI model-picker catalog fetch callback
+// (Rust #41467 "Refresh the TUI model picker from the app server"). It resolves
+// the configured provider and fetches the account-scoped model list on demand,
+// converting it to picker options. The config catalog is kept as the manager's
+// base so a failed refresh preserves the user's configured models; a ChatGPT
+// account uses the fetched account catalog as the source of truth. It returns
+// nil when auth/config cannot be resolved, so the picker keeps its static
+// options (the tea Model ignores a nil/errored/empty refresh).
+func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func(bool) ([]codextui.ModelPickerOption, error) {
+	codexHome := auth.DefaultCodexHome()
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return nil
+	}
+	providerInfo, err := modelpkg.ProviderInfoFromConfig(loaded.Values)
+	if err != nil || providerInfo == nil {
+		return nil
+	}
+	storeOptions := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
+	resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
+	if err != nil || resolved == nil {
+		return nil
+	}
+	provider := modelpkg.CreateRuntimeProviderForID("", *providerInfo, &resolved.Auth)
+	apiProvider, err := provider.APIProvider()
+	if err != nil {
+		return nil
+	}
+	authHeaders, err := provider.APIAuth()
+	if err != nil {
+		return nil
+	}
+	var base *modelpkg.ModelsResponse
+	if catalog := modelpkg.ModelsCatalogFromConfigValues(loaded.Values); catalog != nil {
+		base = catalog
+	}
+	endpoint := modelpkg.NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
+	manager := modelpkg.NewRemoteModelsManagerWithOptions(&modelpkg.RemoteModelsManagerOptions{
+		ModelCatalog:                    base,
+		Endpoint:                        endpoint,
+		UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
+	})
+	if manager == nil {
+		return nil
+	}
+	return func(includeHidden bool) ([]codextui.ModelPickerOption, error) {
+		presets := manager.ListModels(modelpkg.RefreshOnlineIfUncached)
+		return codextui.ModelPickerOptionsFromPresets(presets), nil
 	}
 }
 
