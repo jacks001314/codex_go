@@ -2003,6 +2003,9 @@ func (m *Model) View() string {
 			composer = m.renderComposerRegion(composer)
 		}
 		sections = append(sections, composer)
+		if m.vimSearchMode {
+			sections = append(sections, m.renderVimSearchFooter())
+		}
 		if popup := m.renderSkillPopup(); popup != "" {
 			sections = append(sections, popup)
 		}

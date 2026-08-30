@@ -478,6 +478,17 @@ func (m *Model) cancelVimSearch() {
 	m.vimSearchIndex = -1
 }
 
+// renderVimSearchFooter returns the live Vim search query footer (Rust #41586
+// bottom_pane/textarea/vim_search.rs SearchInput): the direction sigil followed
+// by the query being entered.
+func (m *Model) renderVimSearchFooter() string {
+	prefix := "/"
+	if !m.vimSearchForward {
+		prefix = "?"
+	}
+	return m.footerStyle.Render(prefix + m.vimSearchQuery)
+}
+
 // executeVimSearch finds matches for the entered query and lands on the first
 // match relative to the cursor.
 func (m *Model) executeVimSearch() {

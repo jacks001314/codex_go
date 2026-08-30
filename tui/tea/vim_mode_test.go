@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"strings"
 	"testing"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -98,6 +99,29 @@ func TestVimSearchMotionsLikeRust(t *testing.T) {
 	m = vimEscape(m)
 	if m.vimSearchMode || m.vimSearchQuery != "" {
 		t.Fatalf("esc did not cancel search: mode=%v query=%q", m.vimSearchMode, m.vimSearchQuery)
+	}
+}
+
+// TestVimSearchQueryFooterLikeRust pins the live search-query footer (#41586): a
+// forward search renders "/" + the typed query, and a backward search renders "?".
+func TestVimSearchQueryFooterLikeRust(t *testing.T) {
+	m := vimTestModel("")
+	m = vimKeyPress(m, '/')
+	for _, r := range "hello" {
+		m = vimKeyPress(m, r)
+	}
+	view := m.View()
+	if !strings.Contains(view, "/hello") {
+		t.Fatalf("view does not show the forward search footer: %q", view)
+	}
+	m = vimEscape(m)
+	m = vimKeyPress(m, '?')
+	for _, r := range "world" {
+		m = vimKeyPress(m, r)
+	}
+	view = m.View()
+	if !strings.Contains(view, "?world") {
+		t.Fatalf("view does not show the backward search footer: %q", view)
 	}
 }
 
