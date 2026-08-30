@@ -3265,19 +3265,7 @@ func interactiveDefaultReasoningEffort(modelID string) string {
 func interactiveServiceTierCommands(modelID string) []bottompane.ServiceTierCommand {
 	manager := modelpkg.NewStaticModelsManager(modelpkg.BundledModelsResponse())
 	info := manager.GetModelInfo(strings.TrimSpace(modelID), nil)
-	commands := make([]bottompane.ServiceTierCommand, 0, len(info.ServiceTiers))
-	for _, id := range info.ServiceTiers {
-		id = strings.TrimSpace(id)
-		if id == "" || id == modelpkg.ServiceTierDefaultRequestValue {
-			continue
-		}
-		name := id
-		if id == chatwidget.ServiceTierFastRequestValue {
-			name = "fast"
-		}
-		commands = append(commands, bottompane.ServiceTierCommand{ID: id, Name: name, Description: "Fastest inference with increased plan usage"})
-	}
-	return commands
+	return bottompane.ServiceTierCommandsFromIDs(info.ServiceTiers)
 }
 
 func interactiveFatalExit(stderr io.Writer, message string) error {

@@ -4697,6 +4697,7 @@ func (m *Model) applyModelSetting(args string) bubbletea.Cmd {
 	value := strings.TrimSpace(args)
 	if value != "" {
 		m.State.Model = value
+		m.refreshServiceTierCommands()
 		m.notice = strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model))
 		return nil
 	}

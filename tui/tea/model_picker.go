@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	codextui "codex_go/tui"
+	bottompane "codex_go/tui/bottom_pane"
 	bubbletea "github.com/charmbracelet/bubbletea"
 )
 
@@ -69,6 +70,28 @@ func (m *Model) applyModelsResult(msg ModelsResultMsg) {
 	}
 	m.modelPickerOpts = append([]codextui.ModelPickerOption(nil), msg.Options...)
 	m.refreshModelPicker()
+	m.refreshServiceTierCommands()
+}
+
+// refreshServiceTierCommands recomputes the slash-command service-tier entries
+// for the current model from the model picker catalog (Rust #41467
+// sync_service_tier_commands / set_model). It is called when the selected model
+// changes or the catalog refreshes so the fast-mode / slash-command surface
+// stays in sync with the active model's service tiers.
+func (m *Model) refreshServiceTierCommands() {
+	if m == nil || m.State == nil {
+		return
+	}
+	options := m.modelPickerOpts
+	if len(options) == 0 {
+		options = codextui.BundledModelPickerOptions()
+	}
+	for _, option := range options {
+		if option.ID == m.State.Model {
+			m.serviceTierCommands = bottompane.ServiceTierCommandsFromIDs(option.ServiceTiers)
+			return
+		}
+	}
 }
 
 // refreshModelPicker rebuilds an open model picker from the updated catalog,
@@ -150,6 +173,7 @@ func (m *Model) openModelReasoningPicker(option codextui.ModelPickerOption) {
 	picker := codextui.NewModelReasoningPicker(option, m.State.EffectiveReasoningEffort())
 	if picker == nil || len(picker.Options) == 0 {
 		m.State.Model = option.ID
+		m.refreshServiceTierCommands()
 		m.notice = strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model))
 		return
 	}
@@ -194,6 +218,7 @@ func (m *Model) openPlanReasoningScopePicker(option codextui.ModelPickerOption, 
 	if picker == nil || len(picker.Options) == 0 {
 		m.State.Model = option.ID
 		m.State.PlanModeReasoningEffort = strings.TrimSpace(effort)
+		m.refreshServiceTierCommands()
 		m.notice = strings.TrimSpace(m.State.RenderSetting("Plan Reasoning", m.State.PlanModeReasoningEffort))
 		return
 	}

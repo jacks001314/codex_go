@@ -17,6 +17,7 @@ type ModelPickerOption struct {
 	IsDefault                 bool
 	DefaultReasoningEffort    string
 	SupportedReasoningEfforts []ReasoningEffortOption
+	ServiceTiers              []string
 }
 
 type ReasoningEffortOption struct {
@@ -80,6 +81,7 @@ func ModelPickerOptionsFromPresets(presets []model.ModelPreset) []ModelPickerOpt
 			IsDefault:                 preset.IsDefault,
 			DefaultReasoningEffort:    strings.TrimSpace(preset.DefaultReasoningLevel),
 			SupportedReasoningEfforts: reasoningOptionsForModelPreset(preset),
+			ServiceTiers:              append([]string(nil), preset.ServiceTiers...),
 		})
 	}
 	return options

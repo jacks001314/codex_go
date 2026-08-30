@@ -35,6 +35,31 @@ func TestModelPickerAsyncFetchLikeRust(t *testing.T) {
 	}
 }
 
+// TestRefreshServiceTierCommandsLikeRust pins the Rust #41467
+// sync_service_tier_commands behavior: the slash-command service-tier entries are
+// recomputed from the active model's catalog service tiers when the model
+// changes or the catalog refreshes.
+func TestRefreshServiceTierCommandsLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.Model = "gpt-priority"
+	m := NewModel(state, Options{})
+	m.modelPickerOpts = []codextui.ModelPickerOption{
+		{ID: "gpt-priority", Label: "Priority", ServiceTiers: []string{"priority", "default"}},
+		{ID: "gpt-basic", Label: "Basic", ServiceTiers: []string{"default"}},
+	}
+	// The "priority" tier is surfaced as a "fast" command; "default" is implicit.
+	m.refreshServiceTierCommands()
+	if len(m.serviceTierCommands) != 1 || m.serviceTierCommands[0].ID != "priority" || m.serviceTierCommands[0].Name != "fast" {
+		t.Fatalf("serviceTierCommands for gpt-priority = %#v, want lone fast command", m.serviceTierCommands)
+	}
+	// Switching to a model with only the implicit default tier yields no commands.
+	m.State.Model = "gpt-basic"
+	m.refreshServiceTierCommands()
+	if len(m.serviceTierCommands) != 0 {
+		t.Fatalf("serviceTierCommands for gpt-basic = %#v, want empty", m.serviceTierCommands)
+	}
+}
+
 func TestModelPickerRefreshFallsBackToDefaultLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.Model = "gpt-old"

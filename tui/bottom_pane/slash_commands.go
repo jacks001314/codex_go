@@ -20,6 +20,34 @@ type ServiceTierCommand struct {
 	Description string
 }
 
+// ServiceTierCommandsFromIDs builds the slash-command service-tier entries from
+// a model catalog's ordered service-tier IDs, skipping the implicit "default"
+// tier and naming the fast ("priority") tier "fast" (mirrors Rust
+// service_tiers.rs current_model_service_tier_commands).
+func ServiceTierCommandsFromIDs(ids []string) []ServiceTierCommand {
+	const (
+		defaultRequestValue = "default"
+		fastRequestValue    = "priority"
+	)
+	commands := make([]ServiceTierCommand, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || id == defaultRequestValue {
+			continue
+		}
+		name := id
+		if id == fastRequestValue {
+			name = "fast"
+		}
+		commands = append(commands, ServiceTierCommand{
+			ID:          id,
+			Name:        name,
+			Description: "Fastest inference with increased plan usage",
+		})
+	}
+	return commands
+}
+
 type SlashCommandItemKind string
 
 const (

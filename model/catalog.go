@@ -475,6 +475,7 @@ type ModelPreset struct {
 	DefaultReasoningLevel    string
 	SupportedReasoningLevels []string
 	MultiAgentVersion        string
+	ServiceTiers             []string
 }
 
 type ModelsManagerConfig struct {
@@ -757,6 +758,7 @@ func BuildAvailableModels(remoteModels []ModelInfo) []ModelPreset {
 			DefaultReasoningLevel:    model.DefaultReasoningLevel,
 			SupportedReasoningLevels: cloneStrings(model.SupportedReasoningLevels),
 			MultiAgentVersion:        model.MultiAgentVersion,
+			ServiceTiers:             cloneStrings(model.ServiceTiers),
 		})
 	}
 	if len(presets) > 0 {

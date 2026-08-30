@@ -914,6 +914,7 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 		modelID := modal.planReasoningScope.Model.ID
 		effort := modal.planReasoningScope.Effort
 		m.State.Model = modelID
+		m.refreshServiceTierCommands()
 		notice := strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model))
 		switch scopeOption.Scope {
 		case codextui.PlanReasoningScopeAllModes:
@@ -943,6 +944,7 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 		}
 		m.State.Model = modal.modelReasoning.Model.ID
 		m.State.ReasoningEffort = effort.Effort
+		m.refreshServiceTierCommands()
 		notice := strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model)) + "\n" +
 			strings.TrimSpace(m.State.RenderSetting("Reasoning", m.State.ReasoningEffort))
 		return &PickerDecision{Kind: "model_reasoning", Value: m.State.Model, ReasoningEffort: m.State.ReasoningEffort}, notice, true
@@ -967,6 +969,7 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 	if reasoning != "" {
 		m.State.ReasoningEffort = reasoning
 	}
+	m.refreshServiceTierCommands()
 	return &PickerDecision{Kind: "model", Value: option.ID, ReasoningEffort: m.State.ReasoningEffort}, strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model)), true
 }
 
