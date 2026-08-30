@@ -10463,8 +10463,15 @@ func (r *RuntimeRouter) contextWindowGuidanceWorldStateInputItem(threadID string
 		return nil, err
 	}
 	message = strings.TrimSpace(message)
+	// Rust #41162: the context-window guidance is a world-state section that
+	// renders a one-time diff. A replacement/removal notice informs the model
+	// that previously provided guidance changed or no longer applies, without
+	// repeating stale guidance.
+	const replacementNotice = "This context-window guidance replaces all previously provided context-window guidance."
+	const removalNotice = "The previously provided context-window guidance no longer applies."
+	hadGuidance := len(state.ContextWindowGuidance) > 0
 	if !enabled || message == "" {
-		if len(state.ContextWindowGuidance) == 0 {
+		if !hadGuidance {
 			return nil, nil
 		}
 		state.ContextWindowGuidance = nil
@@ -10472,7 +10479,11 @@ func (r *RuntimeRouter) contextWindowGuidanceWorldStateInputItem(threadID string
 		if err != nil {
 			return nil, err
 		}
-		return nil, r.runtimeSaveThreadRecord(record)
+		if err := r.runtimeSaveThreadRecord(record); err != nil {
+			return nil, err
+		}
+		rendered := contextfrag.RenderStandalone(&contextfrag.ContextWindowGuidance{Message: removalNotice})
+		return renderedFragmentInputItem(rendered), nil
 	}
 	snapshot, err := json.Marshal(message)
 	if err != nil {
@@ -10480,6 +10491,10 @@ func (r *RuntimeRouter) contextWindowGuidanceWorldStateInputItem(threadID string
 	}
 	if sameJSONValue(state.ContextWindowGuidance, snapshot) {
 		return nil, nil
+	}
+	displayMessage := message
+	if hadGuidance {
+		displayMessage = replacementNotice + "\n\n" + message
 	}
 	state.ContextWindowGuidance = snapshot
 	record.Metadata.WorldState, err = session.EncodeWorldState(state)
@@ -10489,7 +10504,7 @@ func (r *RuntimeRouter) contextWindowGuidanceWorldStateInputItem(threadID string
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, err
 	}
-	rendered := contextfrag.RenderStandalone(&contextfrag.ContextWindowGuidance{Message: message})
+	rendered := contextfrag.RenderStandalone(&contextfrag.ContextWindowGuidance{Message: displayMessage})
 	return renderedFragmentInputItem(rendered), nil
 }
 

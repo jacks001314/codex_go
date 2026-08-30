@@ -13151,12 +13151,15 @@ func TestRuntimeRouterContextWindowGuidanceWorldStateDiffs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if texts := messageInputTextsForRole([]any{item}, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "refreshed guidance") {
+	if texts := messageInputTextsForRole([]any{item}, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "This context-window guidance replaces all previously provided context-window guidance.") || !strings.Contains(texts[0], "refreshed guidance") {
 		t.Fatalf("refreshed item = %#v", item)
 	}
 	item, err = router.contextWindowGuidanceWorldStateInputItem(string(threadID), false, "")
-	if err != nil || item != nil {
-		t.Fatalf("disabled item = %#v, error = %v", item, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if texts := messageInputTextsForRole([]any{item}, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "The previously provided context-window guidance no longer applies.") {
+		t.Fatalf("disabled item = %#v", item)
 	}
 	record, err := store.Load(threadID)
 	if err != nil {
@@ -13168,6 +13171,64 @@ func TestRuntimeRouterContextWindowGuidanceWorldStateDiffs(t *testing.T) {
 	}
 	if len(state.ContextWindowGuidance) != 0 {
 		t.Fatalf("guidance was not cleared: %s", record.Metadata.WorldState)
+	}
+}
+
+// TestRuntimeRouterContextWindowGuidanceTransitionsLikeRust mirrors the Rust
+// #41162 guidance-transition table: unchanged/absent stays silent, initial
+// guidance renders, a change renders a replacement notice, removal renders a
+// removal notice, and a fresh blank (no previous guidance) stays silent.
+func TestRuntimeRouterContextWindowGuidanceTransitionsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	threadID := session.ThreadID("thread-context-window-guidance-transitions")
+	if err := store.Create(&session.Record{
+		ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{HistoryMode: string(ThreadHistoryLegacy)},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	t.Cleanup(func() { _ = router.Close() })
+
+	// Absent guidance stays silent.
+	item, err := router.contextWindowGuidanceWorldStateInputItem(string(threadID), false, "")
+	if err != nil || item != nil {
+		t.Fatalf("absent item = %#v, error = %v", item, err)
+	}
+	// Initial guidance renders without a replacement notice.
+	item, err = router.contextWindowGuidanceWorldStateInputItem(string(threadID), true, "guidance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if texts := messageInputTextsForRole([]any{item}, "developer"); len(texts) != 1 || texts[0] != "<context_window_guidance>guidance</context_window_guidance>" {
+		t.Fatalf("initial item = %#v", item)
+	}
+	// Unchanged guidance stays silent.
+	item, err = router.contextWindowGuidanceWorldStateInputItem(string(threadID), true, "guidance")
+	if err != nil || item != nil {
+		t.Fatalf("unchanged item = %#v, error = %v", item, err)
+	}
+	// Changed guidance renders a replacement notice.
+	item, err = router.contextWindowGuidanceWorldStateInputItem(string(threadID), true, "refreshed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if texts := messageInputTextsForRole([]any{item}, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "This context-window guidance replaces all previously provided context-window guidance.") || !strings.Contains(texts[0], "refreshed") {
+		t.Fatalf("changed item = %#v", item)
+	}
+	// Removal renders a removal notice.
+	item, err = router.contextWindowGuidanceWorldStateInputItem(string(threadID), false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if texts := messageInputTextsForRole([]any{item}, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "The previously provided context-window guidance no longer applies.") {
+		t.Fatalf("removal item = %#v", item)
+	}
+	// Blank after removal stays silent (no previous guidance remains).
+	item, err = router.contextWindowGuidanceWorldStateInputItem(string(threadID), false, "")
+	if err != nil || item != nil {
+		t.Fatalf("blank-after-removal item = %#v, error = %v", item, err)
 	}
 }
 
