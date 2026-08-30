@@ -125,6 +125,24 @@ func TestWithoutNotificationMediaOmitItemMediaLikeRust(t *testing.T) {
 	if len(rawContent) != 1 || rawContent[0].(map[string]any)["type"] != "input_text" {
 		t.Fatalf("raw response item output = %#v", rawContent)
 	}
+
+	// #41427: function call output thread items also strip image/audio while
+	// preserving text and encrypted content.
+	fn := ThreadItemPayload{
+		"type":    "function_call_output",
+		"call_id": "call-1",
+		"output": []any{
+			map[string]any{"type": "input_text", "text": "result"},
+			map[string]any{"type": "encrypted_content", "encrypted_content": "enc"},
+			map[string]any{"type": "input_image", "image_url": "data:image/png;base64,xyz"},
+			map[string]any{"type": "input_audio", "audio_url": "data:audio/wav;base64,abc"},
+		},
+	}
+	completed := withoutNotificationMedia(&ItemCompletedNotification{Item: fn}).(*ItemCompletedNotification)
+	fnContent := completed.Item["output"].([]any)
+	if len(fnContent) != 2 || fnContent[0].(map[string]any)["type"] != "input_text" || fnContent[1].(map[string]any)["type"] != "encrypted_content" {
+		t.Fatalf("function call output = %#v", fnContent)
+	}
 }
 
 func TestContextCompactedNotificationUsesDeprecatedRustShape(t *testing.T) {
