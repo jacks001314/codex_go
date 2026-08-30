@@ -3,6 +3,7 @@ package appserver
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"codex_go/rollout"
@@ -25,7 +26,7 @@ func TestCodexHomeMetricsScanLikeRust(t *testing.T) {
 	writeFile(filepath.Join(rollout.ArchivedSessionsSubdir, "a.jsonl"), 30)
 	writeFile(filepath.Join("other", "note.txt"), 5)
 
-	sizes, err := scanCodexHomeSizes(home)
+	sizes, err := scanCodexHomeSizes(home, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,7 @@ func TestCodexHomeMetricsScanLikeRust(t *testing.T) {
 	}
 
 	metrics := state.NewTaskMetrics()
-	recordCodexHomeMetrics(metrics, home)
+	recordCodexHomeMetrics(metrics, home, nil)
 	records := metrics.Records()
 	if len(records) != 3 {
 		t.Fatalf("records = %#v", records)
@@ -48,5 +49,29 @@ func TestCodexHomeMetricsScanLikeRust(t *testing.T) {
 	}
 	if found["codex_home"] != 65 || found[rollout.SessionsSubdir] != 20 || found[rollout.ArchivedSessionsSubdir] != 30 {
 		t.Fatalf("metrics = %#v", found)
+	}
+}
+
+func TestCodexHomeMetricsCancelAbortsScanLikeRust(t *testing.T) {
+	home := t.TempDir()
+	writeFile := func(rel string, size int) {
+		path := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, make([]byte, size), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("config.toml", 10)
+	cancelled := int32(1)
+	_, err := scanCodexHomeSizes(home, func() bool { return atomic.LoadInt32(&cancelled) == 1 })
+	if err == nil {
+		t.Fatal("cancelled scan returned no error")
+	}
+	metrics := state.NewTaskMetrics()
+	recordCodexHomeMetrics(metrics, home, func() bool { return true })
+	if len(metrics.Records()) != 0 {
+		t.Fatalf("cancelled metric records = %#v", metrics.Records())
 	}
 }

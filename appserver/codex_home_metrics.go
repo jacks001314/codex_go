@@ -29,17 +29,28 @@ type codexHomeSizes struct {
 	archivedSessions int64
 }
 
+// codexHomeScanCancel is a cancellation check for the home-size scan; a nil or
+// false-returning check never cancels.
+type codexHomeScanCancel func() bool
+
 // scanCodexHomeSizes sums regular-file lengths under codexHome without reading
-// file contents or following symlinks (Rust #41360 directory_sizes).
-func scanCodexHomeSizes(codexHome string) (codexHomeSizes, error) {
+// file contents or following symlinks (Rust #41360 directory_sizes). Scanning is
+// abandoned (returning os.ErrInvalid) once cancel reports true.
+func scanCodexHomeSizes(codexHome string, cancel codexHomeScanCancel) (codexHomeSizes, error) {
 	var sizes codexHomeSizes
 	if strings.TrimSpace(codexHome) == "" {
+		return sizes, os.ErrInvalid
+	}
+	if cancel != nil && cancel() {
 		return sizes, os.ErrInvalid
 	}
 	sessions := filepath.Join(codexHome, rollout.SessionsSubdir)
 	archived := filepath.Join(codexHome, rollout.ArchivedSessionsSubdir)
 	pending := []string{codexHome}
 	for len(pending) > 0 {
+		if cancel != nil && cancel() {
+			return sizes, os.ErrInvalid
+		}
 		dir := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
 		entries, err := os.ReadDir(dir)
@@ -73,11 +84,11 @@ func scanCodexHomeSizes(codexHome string) (codexHomeSizes, error) {
 
 // recordCodexHomeMetrics scans codexHome and records the size histogram for the
 // whole home and the sessions / archived_sessions subdirectories (Rust #41360).
-func recordCodexHomeMetrics(metrics *state.TaskMetrics, codexHome string) {
+func recordCodexHomeMetrics(metrics *state.TaskMetrics, codexHome string, cancel codexHomeScanCancel) {
 	if metrics == nil {
 		return
 	}
-	sizes, err := scanCodexHomeSizes(codexHome)
+	sizes, err := scanCodexHomeSizes(codexHome, cancel)
 	if err != nil {
 		return
 	}

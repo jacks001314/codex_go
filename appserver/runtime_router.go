@@ -323,6 +323,7 @@ type RuntimeRouter struct {
 	rolloutBudgetExhausted  atomic.Bool
 	closeOnce               sync.Once
 	closeErr                error
+	codexHomeScanCancel     func()
 }
 
 type unifiedExecAnalyticsContext struct {
@@ -910,8 +911,10 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		stateRuntime.SetMetrics(runtimeMetrics)
 	}
 	// Rust #41360: measure local Codex home storage once at startup (background
-	// so it does not delay process initialization).
-	go recordCodexHomeMetrics(runtimeMetrics, codexHome)
+	// so it does not delay process initialization); cancel the scan on shutdown.
+	var codexHomeScanCanceled int32
+	scanCancel := func() bool { return atomic.LoadInt32(&codexHomeScanCanceled) == 1 }
+	go recordCodexHomeMetrics(runtimeMetrics, codexHome, scanCancel)
 	services := RuntimeServices{
 		ThreadRouter:           NewRouter(store),
 		StateRuntime:           stateRuntime,
@@ -982,6 +985,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		services.ManagedNetworkRequirements = cloneRuntimeNetworkRequirements(options.Requirements.Network)
 	}
 	router := NewRuntimeRouter(services)
+	router.codexHomeScanCancel = func() { atomic.StoreInt32(&codexHomeScanCanceled, 1) }
 	router.configureEnvironmentHTTPPolicy()
 	router.configureAnalyticsFromConfig(codexHome, options)
 	router.configureRemoteControlBackendForStartup(codexHome, options)
@@ -1348,6 +1352,9 @@ func (r *RuntimeRouter) Close() error {
 }
 
 func (r *RuntimeRouter) close() error {
+	if r.codexHomeScanCancel != nil {
+		r.codexHomeScanCancel()
+	}
 	r.memoryStartupMu.Lock()
 	r.memoryStartupClosing = true
 	if r.memoryStartupCancel != nil {
