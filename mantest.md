@@ -1,252 +1,214 @@
-# Manual TUI Test — sync29 New TUI Features
+# Codex Go TUI 手工测试 — sync29 新增功能
 
-This is a manual test checklist for the Codex Go TUI features added in the sync29
-alignment. It covers two features:
+本文档是针对 Codex Go TUI 在 **sync29** 对齐中新增功能的**手工测试清单**，覆盖以下两个功能：
 
-1. **Vim composer search + operator-search** (`#41586` / `tui/tea/vim_mode.go`).
-2. **Model picker async catalog refresh + service-tier command refresh** (`#41467` / `tui/tea/model_picker.go`, `app/interactive.go`).
+1. **Vim 编辑器搜索 + 算子搜索**（`#41586` / `tui/tea/vim_mode.go`）。
+2. **模型选择器异步目录刷新 + service-tier 命令刷新**（`#41467` / `tui/tea/model_picker.go`、`app/interactive.go`）。
 
-Each test lists **steps** and the **expected** result. Record PASS/FAIL in a
-totals row at the bottom.
+每个测试均给出**操作步骤**和**预期结果**，请在底部的汇总表中逐项登记 PASS/FAIL。
 
 ---
 
-## Prerequisites
+## 前置条件
 
-- **Build the binary** (Windows):
+- **构建二进制（Windows）**：
 
   ```powershell
   .\scripts\build.ps1 -Output sdktests\.tmp\bin\codex-go.exe -CGO off
   ```
 
-  (Linux/macOS: `./scripts/build.sh`.)
+  （Linux/macOS：`./scripts/build.sh`。）
 
-- **Launch the interactive TUI** from the repo root:
+- **启动交互式 TUI**（在仓库根目录）：
 
   ```powershell
   .\sdktests\.tmp\bin\codex-go.exe
   ```
 
-  (The interactive TUI is the default; `codex-go interactive` also works.)
+  （交互式 TUI 是默认命令；`codex-go interactive` 亦可。）
 
-- **Auth**: a valid API key or ChatGPT login is required for the model-picker
-  account-catalog refresh (feature 2). The Vim search (feature 1) needs no auth.
-- **`fast_mode` feature** (for 2.4): enable it so service-tier slash commands are
-  shown. Set `[features] fast_mode = true` in the project `config.toml` (or run
-  with `--enable fast_mode`).
-- **Text setup**: for the Vim tests, type a two-word sentence such as
-  `hello world hello` in the composer.
+- **认证**：功能 2 的“账户级目录刷新”需要有效的 API key 或 ChatGPT 登录；功能 1 的 Vim 搜索无需认证。
+- **`fast_mode` 特性**（用于 2.4）：需开启该特性才会显示 service-tier 斜杠命令。可在项目 `config.toml` 中设置 `[features] fast_mode = true`，或用 `--enable fast_mode` 启动。
+- **文本准备**：Vim 测试请在编辑器输入一句含两个相同单词的文本，例如 `hello world hello`。
 
 ---
 
-## Feature 1 — Vim composer search + operator-search
+## 功能 1 — Vim 编辑器搜索 + 算子搜索
 
-### 1.1 Enable Vim mode
+### 1.1 启用 Vim 模式
 
-**Steps**
+**操作步骤**
 
-1. In the composer, type `/vim` and press Enter.
-2. Observe the notice and the composer mode.
+1. 在编辑器输入 `/vim` 并回车。
+2. 观察提示文本与编辑器模式。
 
-**Expected**
+**预期结果**
 
-- Notice `Vim mode enabled.`.
-- The composer enters **normal mode** (the insert caret/prompt disappears; keys
-  are now Vim motions rather than text).
-- `/vim` again toggles back to insert-typing mode.
+- 提示 `Vim mode enabled.`。
+- 编辑器进入 **normal 模式**（插入态光标/提示消失，按键不再是普通输入而是 Vim 动作）。
+- 再次输入 `/vim` 会切回普通插入输入模式。
 
----
-
-### 1.2 Composer text search (`/` and `?`)
-
-**Steps**
-
-1. With Vim mode on, press `i`, type `hello world hello`, press Esc.
-2. Press `/` (forward search).
-3. Type `hello`. Observe the live footer.
-4. Press Enter.
-5. Press `n`, then `n`, then `N`, then `N`.
-6. Press `?` (backward search), type `hello`, press Enter.
-
-**Expected**
-
-- While typing after `/`, the footer shows `/hello`; after `?`, it shows
-  `?hello` (a search-query footer with the direction sigil + typed query).
-- After `/hello` + Enter, the cursor lands on the first `hello` (byte offset 0).
-- `n` moves to the second `hello` (byte offset 12); a further `n` wraps back to
-  the first match; `N` moves to the previous match (wrapping).
-- After `?hello` + Enter, the cursor lands on the last `hello` before the cursor
-  (byte offset 12 from the start position).
-- Esc while a search query is active cancels it and clears the footer.
-
-Result: ______ (PASS/FAIL)
+结果：______（PASS/FAIL）
 
 ---
 
-### 1.3 Operator-search (`d/`, `y/`, `c/`, `d?`, `dn`)
+### 1.2 编辑器文本搜索（`/` 与 `?`）
 
-**Setup:** `hello world hello`, Vim normal mode, move the cursor to byte offset 6
-(just before `world`). Press `l` six times (or `0` then `l` x 6) to position the
-cursor there.
+**操作步骤**
 
-**3.1 `d/` — delete to the next match**
+1. Vim 模式开启后，按 `i` 进入插入模式，输入 `hello world hello`，按 Esc 返回 normal 模式。
+2. 按 `/`（向前搜索）。
+3. 输入 `hello`。观察底部实时搜索提示。
+4. 按 Enter。
+5. 依次按 `n`、`n`、`N`、`N`。
+6. 按 `?`（向后搜索），输入 `hello`，按 Enter。
 
-1. Press `d`, then `/`, type `hello`, press Enter.
+**预期结果**
 
-**Expected:** the text from the cursor (offset 6) to the next `hello` (offset 12)
-is deleted, leaving `hello hello`.
+- 按 `/` 后输入过程中，底部提示显示 `/hello`；按 `?` 后显示 `?hello`（带方向符号 + 已输入查询的搜索 footer）。
+- `/hello` + Enter 后，光标落在第一个 `hello`（字节偏移 0）。
+- `n` 跳到第二个 `hello`（字节偏移 12）；再按 `n` 回绕到第一个匹配；`N` 跳到上一个匹配（含回绕）。
+- `?hello` + Enter 后，光标落在光标之前最后一个 `hello`（起始位置对应字节偏移 12）。
+- 搜索进行中按 Esc 会取消并清空该 footer。
 
-**3.2 `y/` — yank to the next match**
-
-1. Recreate `hello world hello`, cursor at offset 6.
-2. Press `y`, then `/`, type `hello`, press Enter.
-
-**Expected:** the yank register holds `world ` (offset 6..12); the composer text
-is unchanged; the cursor moves to the start of the range.
-
-**3.3 `c/` — change to the next match**
-
-1. Recreate `hello world hello`, cursor at offset 6.
-2. Press `c`, then `/`, type `hello`, press Enter.
-
-**Expected:** the range is deleted, leaving `hello hello`, and the TUI enters
-insert mode at the start of the edit.
-
-**3.4 `d?` — delete back to the previous match**
-
-1. Recreate `hello world hello`, cursor at offset 6.
-2. Press `d`, then `?`, type `hello`, press Enter.
-
-**Expected:** the text back to the previous `hello` (offset 0) is deleted,
-leaving `world hello`.
-
-**3.5 `dn` — operator on the next match of the last query**
-
-1. Recreate `hello world hello`, cursor at offset 0.
-2. Press `/`, type `hello`, Enter (lands at the first match, offset 0).
-3. Press `d`, then `n`.
-
-**Expected:** `n` moves the search to the next match (offset 12) and the pending
-`d` operator deletes the cursor→next-match range, leaving `hello` (offset 0..12
-removed). This is a delete, not a plain cursor move.
-
-**Note:** an operator-search where the cursor is already on the match start is a
-no-op (Rust `apply_vim_search` returns early when `origin == target`).
-
-Result: ______ (PASS/FAIL)
+结果：______（PASS/FAIL）
 
 ---
 
-## Feature 2 — Model picker async catalog refresh + service-tier refresh
+### 1.3 算子搜索（`d/`、`y/`、`c/`、`d?`、`dn`）
 
-### 2.1 Open the model picker and cached list
+**公共设置：** 文本为 `hello world hello`，Vim normal 模式，将光标移到字节偏移 6（`world` 之前）。可按 `l` 六次（或 `0` 后按 `l` × 6）定位。
 
-**Steps**
+**3.1 `d/` — 删除到下一匹配**
 
-1. Type `/model` and press Enter.
+1. 依次按 `d`、`/`，输入 `hello`，按 Enter。
 
-**Expected**
+**预期：** 从光标（偏移 6）到下一个 `hello`（偏移 12）之间的文本被删除，得到 `hello hello`。
 
-- A model picker modal opens (title `Select Model`).
-- The cached model list is shown immediately (configured/bundled catalog).
-- The current model is highlighted; the default model is marked `default`.
+**3.2 `y/` — 复制到下一匹配**
 
----
+1. 重新输入 `hello world hello`，光标置于偏移 6。
+2. 依次按 `y`、`/`，输入 `hello`，按 Enter。
 
-### 2.2 Async catalog refresh (in-place)
+**预期：** 复制寄存器保存 `world `（偏移 6..12）；编辑器文本不变；光标移动到该区间的起点。
 
-**Steps**
+**3.3 `c/` — 修改到下一匹配**
 
-1. With the model picker open (from 2.1), wait a moment while the picker fetches
-   the current model catalog from the configured provider (via
-   `interactiveOnListModels`).
-2. Observe the picker without closing it.
+1. 重新输入 `hello world hello`，光标置于偏移 6。
+2. 依次按 `c`、`/`，输入 `hello`，按 Enter。
 
-**Expected (authenticated ChatGPT / API-key account)**
+**预期：** 该区间被删除，得到 `hello hello`，并进入插入模式（光标位于编辑起点）。
 
-- The open picker refreshes in place to the account's current model catalog
-  (the highlighted model is preserved when it is still present).
-- If the current model is no longer in the refreshed catalog, the picker falls
-  back to the catalog default (or the first available model).
-- Stale / failed / empty refresh responses are ignored (the picker keeps the
-  cached choice; no error is surfaced).
-- **Observability caveat:** this in-place refresh is only visible when the
-  fetched catalog actually differs from the cached one. If the account catalog
-  is unchanged, the picker stays exactly as-is (an `unchanged` refresh is a
-  no-op by design). To observe a visible refresh, the cached catalog must be
-  stale relative to the account (e.g. a model was added/removed or the default
-  changed server-side).
+**3.4 `d?` — 反向删除到上一匹配**
 
-**Expected (unauthenticated or offline run)**
+1. 重新输入 `hello world hello`，光标置于偏移 6。
+2. 依次按 `d`、`?`，输入 `hello`，按 Enter。
 
-- The picker keeps the static/configured catalog; no visible error. This is the
-  graceful fallback (the refresh callback returns nil and the tea Model ignores
-  it).
+**预期：** 删除回到上一个 `hello`（偏移 0）之间文本，得到 `world hello`。
 
-Result: ______ (PASS/FAIL)
+**3.5 `dn` — 对上次查询的下一匹配执行算子**
+
+1. 重新输入 `hello world hello`，光标置于偏移 0。
+2. 按 `/`，输入 `hello`，Enter（停在第一个匹配，偏移 0）。
+3. 按 `d`，再按 `n`。
+
+**预期：** `n` 将搜索移到下一匹配（偏移 12），待定的 `d` 算子删除“光标→下一匹配”区间，得到 `hello`（偏移 0..12 被移除）。这是删除动作，而非纯移动光标。
+
+**注意：** 若光标已经在匹配起点，则算子搜索为空操作（Rust `apply_vim_search` 在 `origin == target` 时提前返回）。
+
+结果：______（PASS/FAIL）
 
 ---
 
-### 2.3 Reasoning submenu refresh in place
+## 功能 2 — 模型选择器异步目录刷新 + service-tier 刷新
 
-**Steps**
+### 2.1 打开模型选择器与缓存清单
 
-1. Open `/model`, select a model that has reasoning levels — this opens the
-   reasoning picker (`Select Reasoning Level ...`).
-2. While the reasoning modal is open, let a catalog refresh arrive for that
-   model whose reasoning levels have changed.
+**操作步骤**
 
-**Expected**
+1. 输入 `/model` 并回车。
 
-- The open reasoning submenu refreshes in place with the updated option list.
-- The currently-selected reasoning is preserved when it is still supported.
-- **Observability caveat:** as in 2.2, this is only visible when the refreshed
-  catalog changes that model's reasoning levels; otherwise the submenu stays
-  unchanged.
+**预期结果**
 
-Result: ______ (PASS/FAIL)
+- 弹出模型选择器弹窗（标题 `Select Model`）。
+- 立即显示缓存的模型清单（配置目录 / 内置目录）。
+- 当前模型被高亮；默认模型标记为 `default`。
+
+结果：______（PASS/FAIL）
 
 ---
 
-### 2.4 Service-tier command refresh on model change
+### 2.2 异步目录刷新（就地更新）
 
-**Prerequisite:** enable the `fast_mode` feature so service-tier slash commands
-are shown (see Prerequisites).
+**操作步骤**
 
-**Steps**
+1. 保持模型选择器打开（承接 2.1），稍等片刻，让选择器从配置的 provider 拉取当前模型目录（通过 `interactiveOnListModels`）。
+2. 不关闭选择器，直接观察。
 
-1. With the current model (e.g. one that exposes a fast/priority service tier),
-   type `/` to open the slash popup.
-2. Confirm a service-tier entry (e.g. `/fast`) appears immediately after
-   `/model`.
-3. Open `/model`, pick a different model (one with different service tiers).
-4. Type `/` again and inspect the service-tier entries.
+**预期结果（已认证的 ChatGPT / API-key 账户）**
 
-**Expected**
+- 打开的选择器就地把模型列表刷新为账户当前目录（若当前模型仍在，则保持其高亮）。
+- 若当前模型已不在刷新后的目录中，则回退到目录默认（或第一个可用模型）。
+- 过期 / 失败 / 空响应会被忽略（选择器保持原缓存选择，且不显示错误提示）。
+- **可见性说明：** 只有当拉取到的目录与缓存**确实不同**时，才能观察到这种就地刷新；若目录未变化，则选择器保持原样（“未变化”的刷新按设计为空操作）。要观察到明显刷新，需要缓存目录相对账户已过期（例如服务端新增/移除了某模型，或默认模型发生变化）。
 
-- After step 2, the service-tier slash entry (e.g. `/fast`) reflects the
-  **current** model's service tiers.
-- After stepping to a model with different tiers, the service-tier slash entries
-  update to the **new** model's tiers (the entry appears/disappears or changes
-  accordingly) — they must not remain pinned to the old model.
+**预期结果（未认证或离线运行）**
 
-**Note:** the account-scoped catalog refresh (2.2) plus this refresh keeps the
-service-tier surface aligned with the effective account catalog / active model.
+- 选择器保持静态/配置目录，无可见错误。这是兜底行为（刷新回调返回 nil，tea 侧忽略）。
 
-Result: ______ (PASS/FAIL)
+结果：______（PASS/FAIL）
 
 ---
 
-## Totals
+### 2.3 推理子菜单就地刷新
 
-| Test | Result |
-|------|--------|
-| 1.1 Enable Vim mode | |
-| 1.2 Composer text search | |
-| 1.3 Operator-search | |
-| 2.1 Open model picker | |
-| 2.2 Async catalog refresh | |
-| 2.3 Reasoning submenu refresh | |
-| 2.4 Service-tier command refresh | |
+**操作步骤**
 
-Notes / failures: __________________________________________________
+1. 打开 `/model`，选择一个有推理级别的模型——这会打开推理选择器（`Select Reasoning Level ...`）。
+2. 在推理弹窗仍打开时，让该模型的目录刷新到达，且该模型的推理级别发生变化。
+
+**预期结果**
+
+- 打开的推理子菜单就地刷新为更新后的选项列表。
+- 若当前所选推理级别仍受支持，则保持选中。
+- **可见性说明：** 与 2.2 相同，只有当刷新后的目录改变了该模型的推理级别时才能观察到；否则子菜单不变。
+
+结果：______（PASS/FAIL）
+
+---
+
+### 2.4 service-tier 命令随模型切换刷新
+
+**前置条件：** 开启 `fast_mode` 特性以显示 service-tier 斜杠命令（见“前置条件”）。
+
+**操作步骤**
+
+1. 当前模型为支持 fast/priority service tier 的模型时，输入 `/` 打开斜杠命令弹窗。
+2. 确认 `/model` 之后出现一条 service-tier 条目（例如 `/fast`）。
+3. 打开 `/model`，选择另一个 service tiers 不同的模型。
+4. 再次输入 `/`，检查 service-tier 条目。
+
+**预期结果**
+
+- 第 2 步中，service-tier 斜杠条目（如 `/fast`）反映**当前**模型的 service tiers。
+- 切换到另一模型后，service-tier 斜杠条目更新为**新**模型的 tiers（条目出现/消失或相应变化）——绝不能停留在旧模型的配置上。
+
+**说明：** 账户级目录刷新（2.2）结合此刷新，使 service-tier 界面始终与有效的账户目录 / 当前模型保持一致。
+
+结果：______（PASS/FAIL）
+
+---
+
+## 汇总
+
+| 测试项 | 结果 |
+|--------|------|
+| 1.1 启用 Vim 模式 | |
+| 1.2 编辑器文本搜索 | |
+| 1.3 算子搜索 | |
+| 2.1 打开模型选择器 | |
+| 2.2 异步目录刷新 | |
+| 2.3 推理子菜单刷新 | |
+| 2.4 service-tier 命令刷新 | |
+
+备注 / 失败项：__________________________________________________
