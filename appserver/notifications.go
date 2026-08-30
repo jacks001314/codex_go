@@ -1,6 +1,10 @@
 package appserver
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"codex_go/model"
+)
 
 type ThreadItemPayload map[string]any
 
@@ -510,10 +514,11 @@ type RawResponseItemCompletedNotification struct {
 }
 
 type RawResponseCompletedNotification struct {
-	ThreadID   string               `json:"threadId"`
-	TurnID     string               `json:"turnId"`
-	ResponseID string               `json:"responseId"`
-	Usage      *TokenUsageBreakdown `json:"usage"`
+	ThreadID      string                       `json:"threadId"`
+	TurnID        string                       `json:"turnId"`
+	ResponseID    string                       `json:"responseId"`
+	Usage         *TokenUsageBreakdown         `json:"usage"`
+	UsageMetadata *model.ResponseUsageMetadata `json:"usageMetadata"`
 }
 
 type HookStartedNotification struct {

@@ -250,6 +250,53 @@ func TestReasoningEffortForRequestModelAwareUltraFallback(t *testing.T) {
 	}
 }
 
+func TestUsageMetadataFromStreamEventData(t *testing.T) {
+	amount := "0.00123456789"
+	tests := []struct {
+		name string
+		data string
+		want *ResponseUsageMetadata
+		has  bool
+	}{
+		{
+			name: "string amount is preserved without numeric conversion",
+			data: `{"response":{"id":"resp-1","usage_metadata":{"amount":"0.00123456789"}}}`,
+			want: &ResponseUsageMetadata{Amount: &amount},
+			has:  true,
+		},
+		{
+			name: "empty usage_metadata object is present with null amount",
+			data: `{"response":{"id":"resp-1","usage_metadata":{}}}`,
+			want: &ResponseUsageMetadata{},
+			has:  true,
+		},
+		{
+			name: "missing usage_metadata is absent",
+			data: `{"response":{"id":"resp-1"}}`,
+			want: nil,
+			has:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, has := usageMetadataFromStreamEventData([]byte(tt.data))
+			if has != tt.has {
+				t.Fatalf("has = %v, want %v", has, tt.has)
+			}
+			if !has {
+				return
+			}
+			if tt.want.Amount == nil {
+				if got.Amount != nil {
+					t.Fatalf("Amount = %q, want nil", *got.Amount)
+				}
+			} else if got.Amount == nil || *got.Amount != *tt.want.Amount {
+				t.Fatalf("Amount = %v, want %q", got.Amount, *tt.want.Amount)
+			}
+		})
+	}
+}
+
 func TestResponsesAgentRunnerConcurrentReasoningSummaryStreamOptionsOmittedForNoneSummary(t *testing.T) {
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

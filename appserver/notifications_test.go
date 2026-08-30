@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"codex_go/applypatch"
+	"codex_go/model"
 )
 
 func TestDynamicToolAudioContentJSON(t *testing.T) {
@@ -80,6 +81,20 @@ func TestRawResponseCompletedNotificationIncludesCacheWriteTokens(t *testing.T) 
 		t.Fatalf("MarshalJSON() error = %v", err)
 	}
 	if !strings.Contains(string(data), `"cacheWriteInputTokens":3`) || !strings.Contains(string(data), `"responseId":"resp-1"`) {
+		t.Fatalf("data = %s", data)
+	}
+}
+
+func TestRawResponseCompletedNotificationIncludesUsageMetadata(t *testing.T) {
+	amount := "0.00123456789"
+	data, err := json.Marshal(&RawResponseCompletedNotification{
+		ThreadID: "thread-1", TurnID: "turn-1", ResponseID: "resp-1",
+		UsageMetadata: &model.ResponseUsageMetadata{Amount: &amount},
+	})
+	if err != nil {
+		t.Fatalf("MarshalJSON() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"usageMetadata":{"amount":"0.00123456789"}`) {
 		t.Fatalf("data = %s", data)
 	}
 }

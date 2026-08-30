@@ -833,10 +833,11 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			usage = tokenUsageBreakdownFromAgentUsage(*event.Usage)
 		}
 		r.notify(NotificationRawResponseCompleted, &RawResponseCompletedNotification{
-			ThreadID:   threadID,
-			TurnID:     turnID,
-			ResponseID: strings.TrimSpace(event.ResponseID),
-			Usage:      usage,
+			ThreadID:      threadID,
+			TurnID:        turnID,
+			ResponseID:    strings.TrimSpace(event.ResponseID),
+			Usage:         usage,
+			UsageMetadata: event.UsageMetadata,
 		})
 	}
 }

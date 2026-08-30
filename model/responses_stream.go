@@ -85,8 +85,16 @@ type ResponsesStreamEvent struct {
 	ReasoningDelta     *ResponsesReasoningDelta
 	ReasoningPart      *ResponsesReasoningPart
 	Usage              *AgentUsage
+	UsageMetadata      *ResponseUsageMetadata
 	EndTurn            *bool
 	RawType            string
+}
+
+// ResponseUsageMetadata mirrors Rust protocol::ResponseUsageMetadata (#41087):
+// per-response usage metadata reported by the upstream service. Amount stays a
+// string so high-precision values survive without numeric conversion.
+type ResponseUsageMetadata struct {
+	Amount *string `json:"amount"`
 }
 
 type ResponsesModelReroute struct {
@@ -935,6 +943,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			a.recordAgentItem(&items[i])
 		}
 		usage, hasUsage := usageFromStreamEventData(sse.Data)
+		usageMetadata, hasUsageMetadata := usageMetadataFromStreamEventData(sse.Data)
 		a.responseID = firstNonEmptyResponseValue(a.responseID, responseIDFromEventData(sse.Data))
 		if hasUsage {
 			a.usage = usage
@@ -950,6 +959,9 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		if hasUsage {
 			usageCopy := usage
 			event.Usage = &usageCopy
+		}
+		if hasUsageMetadata {
+			event.UsageMetadata = usageMetadata
 		}
 		emitResponsesStreamEvent(handler, event)
 		return true, nil
@@ -1665,6 +1677,18 @@ func usageFromStreamEventData(data []byte) (AgentUsage, bool) {
 	}
 	usage := usageFromResponses(payload.Response.Usage, "")
 	return usage, true
+}
+
+func usageMetadataFromStreamEventData(data []byte) (*ResponseUsageMetadata, bool) {
+	var payload struct {
+		Response struct {
+			UsageMetadata *ResponseUsageMetadata `json:"usage_metadata"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.Response.UsageMetadata == nil {
+		return nil, false
+	}
+	return payload.Response.UsageMetadata, true
 }
 
 func responseIDFromEventData(data []byte) string {
