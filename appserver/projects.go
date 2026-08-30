@@ -517,7 +517,7 @@ func validateProjectThreadIDs(threadIDs []string) ([]string, error) {
 
 func apiProjectFromStored(project state.Project) Project {
 	var recencyAt *int64
-	if project.RecencyAtMS.Valid && project.RecencyAtMS.Int64 > 0 {
+	if project.RecencyAtMS.Valid {
 		value := project.RecencyAtMS.Int64 / 1000
 		recencyAt = &value
 	}
