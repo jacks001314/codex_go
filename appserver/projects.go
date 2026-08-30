@@ -48,8 +48,8 @@ type Project struct {
 	CreatedAt int64             `json:"createdAt"`
 	UpdatedAt int64             `json:"updatedAt"`
 	// RecencyAt is the newest non-archived assigned thread's recency (Unix seconds),
-	// null when no non-archived thread is assigned (#41223).
-	RecencyAt *int64 `json:"recencyAt,omitempty"`
+	// null when no non-archived thread is assigned (#41223). Always present.
+	RecencyAt *int64 `json:"recencyAt"`
 }
 
 // ProjectSortKey mirrors Rust v2::ProjectSortKey (#41223).
