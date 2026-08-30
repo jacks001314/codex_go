@@ -23,6 +23,7 @@ import (
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/turn"
+	"github.com/google/uuid"
 )
 
 const internalMemorySessionSource = "internal_memory_consolidation"
@@ -49,8 +50,19 @@ func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request mem
 		Config:   map[string]any{"model_provider": e.providerID},
 	}
 	agent := e.router.requireAgentForTurn(turnParams)
+	// Rust #41349: give the memory phase-one user message a stable, prefixed item
+	// ID so retried/resumed extraction requests reuse the same identity.
+	stageOneID := "msg_" + uuid.NewString()
 	response, err := agent.Run(ctx, &model.AgentRequest{
-		Prompt:           request.Input,
+		InputItems: []any{map[string]any{
+			"id":   stageOneID,
+			"type": "message",
+			"role": "user",
+			"content": []map[string]any{{
+				"type": "input_text",
+				"text": request.Input,
+			}},
+		}},
 		Instructions:     request.Instructions,
 		Model:            request.Model,
 		ProviderID:       e.providerID,
@@ -60,6 +72,7 @@ func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request mem
 		ReasoningEffort:  "low",
 		ReasoningSummary: e.reasoningSummary,
 		ServiceTier:      e.serviceTier,
+		ItemIDsEnabled:   true,
 		OutputSchema:     request.OutputSchema,
 		ClientMetadata:   e.detachedClientMetadata(ctx),
 	})

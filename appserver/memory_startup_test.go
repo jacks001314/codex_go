@@ -93,8 +93,21 @@ func TestMemoryStageOneUsesDetachedResponsesRequestLikeRust(t *testing.T) {
 	if request.Model != "gpt-memory" || request.ProviderID != "openai" || request.ReasoningEffort != "low" || request.ReasoningSummary != "auto" || request.ServiceTier != "default" {
 		t.Fatalf("agent request model fields = %+v", request)
 	}
-	if request.Instructions != "extract" || request.Prompt != "rollout" || request.OutputSchema == nil {
+	if request.Instructions != "extract" || request.Prompt != "" || !request.ItemIDsEnabled || len(request.InputItems) != 1 || request.OutputSchema == nil {
 		t.Fatalf("agent request prompt fields = %+v", request)
+	}
+	item, ok := request.InputItems[0].(map[string]any)
+	if !ok {
+		t.Fatalf("memory input item = %#v", request.InputItems[0])
+	}
+	if id, _ := item["id"].(string); !strings.HasPrefix(id, "msg_") {
+		t.Fatalf("memory input item id = %#v", item["id"])
+	}
+	if role, _ := item["role"].(string); role != "user" {
+		t.Fatalf("memory input item role = %#v", item["role"])
+	}
+	if content, _ := item["content"].([]map[string]any); len(content) != 1 || content[0]["text"] != "rollout" {
+		t.Fatalf("memory input item content = %#v", item["content"])
 	}
 	var metadata map[string]any
 	if err := json.Unmarshal([]byte(request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader]), &metadata); err != nil {
