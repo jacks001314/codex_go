@@ -4,9 +4,10 @@ import (
 	"strings"
 
 	codextui "codex_go/tui"
+	bubbletea "github.com/charmbracelet/bubbletea"
 )
 
-func (m *Model) openModelPicker() {
+func (m *Model) openModelPicker() bubbletea.Cmd {
 	options := append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...)
 	if len(options) == 0 {
 		options = codextui.BundledModelPickerOptions()
@@ -14,7 +15,7 @@ func (m *Model) openModelPicker() {
 	picker := codextui.NewModelPicker(options, m.State.Model)
 	if picker == nil || len(picker.Options) == 0 {
 		m.notice = "No models are available right now."
-		return
+		return m.fetchModelsForPicker()
 	}
 	modalOptions := make([]ModalOption, 0, len(picker.Options))
 	for i, option := range picker.Options {
@@ -36,6 +37,67 @@ func (m *Model) openModelPicker() {
 		m.modal.modelPicker = picker
 		m.modal.selected = picker.Selected
 	}
+	return m.fetchModelsForPicker()
+}
+
+// fetchModelsForPicker asynchronously fetches the current model catalog from the
+// app server so the picker does not rely on a stale startup catalog (Rust
+// #41467). It returns nil when no catalog callback is configured.
+func (m *Model) fetchModelsForPicker() bubbletea.Cmd {
+	if m == nil || m.onListModels == nil {
+		return nil
+	}
+	m.nextModelsRequestID++
+	requestID := m.nextModelsRequestID
+	m.pendingModelsRequestID = requestID
+	return func() bubbletea.Msg {
+		options, err := m.onListModels(true)
+		return ModelsResultMsg{RequestID: requestID, Options: options, Err: err}
+	}
+}
+
+// applyModelsResult applies a fetched model catalog to the picker options and
+// refreshes an open model picker in place (Rust #41467). Stale, failed, and
+// empty responses are ignored.
+func (m *Model) applyModelsResult(msg ModelsResultMsg) {
+	if m == nil || msg.RequestID == 0 || msg.RequestID != m.pendingModelsRequestID {
+		return
+	}
+	m.pendingModelsRequestID = 0
+	if msg.Err != nil || len(msg.Options) == 0 {
+		return
+	}
+	m.modelPickerOpts = append([]codextui.ModelPickerOption(nil), msg.Options...)
+	m.refreshModelPicker()
+}
+
+// refreshModelPicker rebuilds an open model picker from the updated catalog,
+// preserving the highlighted model.
+func (m *Model) refreshModelPicker() {
+	if m == nil || m.modal == nil || m.modal.modelPicker == nil {
+		return
+	}
+	picker := codextui.NewModelPicker(append([]codextui.ModelPickerOption(nil), m.modelPickerOpts...), m.State.Model)
+	if picker == nil || len(picker.Options) == 0 {
+		return
+	}
+	selected := m.modal.selected
+	if selected >= len(picker.Options) {
+		selected = len(picker.Options) - 1
+	}
+	m.modal.modelPicker = picker
+	m.modal.selected = selected
+	m.modal.modelPicker.Select(selected)
+	modalOptions := make([]ModalOption, 0, len(picker.Options))
+	for i, option := range picker.Options {
+		modalOptions = append(modalOptions, ModalOption{
+			ID:          option.ID,
+			Label:       modelPickerLabel(option),
+			Description: option.Description,
+			Shortcut:    modelPickerShortcut(i),
+		})
+	}
+	m.modal.options = modalOptions
 }
 
 func (m *Model) openModelReasoningPicker(option codextui.ModelPickerOption) {

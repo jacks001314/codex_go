@@ -322,6 +322,13 @@ type MCPInventoryResultMsg struct {
 	Err       error
 }
 
+// ModelsResultMsg is delivered when an async model-list refresh completes.
+type ModelsResultMsg struct {
+	RequestID uint64
+	Options   []codextui.ModelPickerOption
+	Err       error
+}
+
 type MCPStartupFinishAfterLagMsg struct{}
 
 type mcpStartupFinishAfterLagMsg struct {
@@ -725,6 +732,7 @@ type Options struct {
 	BackgroundProcesses            []historycell.UnifiedExecProcessDetails
 	MCPServers                     []historycell.McpServerStatus
 	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
+	OnListModels                   func(includeHidden bool) ([]codextui.ModelPickerOption, error)
 	MCPStartupExpectedServers      []string
 	InitialMessages                <-chan bubbletea.Msg
 	InitialHistoryCells            []historycell.HistoryCell
@@ -846,6 +854,9 @@ type Model struct {
 	backgroundProcesses             []historycell.UnifiedExecProcessDetails
 	mcpServers                      []historycell.McpServerStatus
 	onReadMCPInventory              func(detail bool) ([]historycell.McpServerStatus, error)
+	onListModels                    func(includeHidden bool) ([]codextui.ModelPickerOption, error)
+	nextModelsRequestID             uint64
+	pendingModelsRequestID          uint64
 	nextMCPInventoryRequestID       uint64
 	pendingMCPInventoryRequestID    uint64
 	pendingMCPInventoryMessageIndex int
@@ -1187,6 +1198,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		backgroundProcesses:             cloneUnifiedExecProcessDetails(options.BackgroundProcesses),
 		mcpServers:                      cloneMcpServerStatuses(options.MCPServers),
 		onReadMCPInventory:              options.OnReadMCPInventory,
+		onListModels:                    options.OnListModels,
 		pendingMCPInventoryMessageIndex: -1,
 		mcpStartup:                      chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
 		initialMessages:                 options.InitialMessages,
@@ -1539,6 +1551,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case MCPInventoryResultMsg:
 		m.applyMCPInventoryResult(msg)
+		return m, nil
+	case ModelsResultMsg:
+		m.applyModelsResult(msg)
 		return m, nil
 	case MCPStartupFinishAfterLagMsg:
 		return m, m.finishMCPStartupAfterLag(0)
@@ -4512,7 +4527,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandStop:
 		return m.applyStopCommand()
 	case codextui.CommandModel:
-		m.applyModelSetting(invocation.Args)
+		return m.applyModelSetting(invocation.Args)
 	case codextui.CommandFast:
 		return m.applyFastServiceTier()
 	case codextui.CommandPersonality:
@@ -4670,14 +4685,14 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	return nil
 }
 
-func (m *Model) applyModelSetting(args string) {
+func (m *Model) applyModelSetting(args string) bubbletea.Cmd {
 	value := strings.TrimSpace(args)
 	if value != "" {
 		m.State.Model = value
 		m.notice = strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model))
-		return
+		return nil
 	}
-	m.openModelPicker()
+	return m.openModelPicker()
 }
 
 func (m *Model) applyApprovalSetting(args string) {
