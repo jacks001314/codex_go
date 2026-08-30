@@ -909,6 +909,9 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	if stateRuntime != nil {
 		stateRuntime.SetMetrics(runtimeMetrics)
 	}
+	// Rust #41360: measure local Codex home storage once at startup (background
+	// so it does not delay process initialization).
+	go recordCodexHomeMetrics(runtimeMetrics, codexHome)
 	services := RuntimeServices{
 		ThreadRouter:           NewRouter(store),
 		StateRuntime:           stateRuntime,
