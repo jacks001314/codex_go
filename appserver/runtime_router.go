@@ -8205,7 +8205,27 @@ func (r *RuntimeRouter) handlePluginInstalled(request *Request) (*plugin.PluginI
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requirePlugins().Installed(&params), nil
+	response := r.requirePlugins().Installed(&params)
+	// Rust #41208: honor per-repository plugin configuration by surfacing
+	// marketplaces declared in the effective config stack for every requested cwd.
+	for _, cwd := range cleanStringSlice(params.CWDs) {
+		if r.services.Config == nil {
+			break
+		}
+		readParams := &config.ConfigReadParams{}
+		if cwd != "" {
+			readParams.CWD = &cwd
+		}
+		read, err := r.services.Config.Read(readParams)
+		if err != nil || read == nil || pluginCatalogDisabledFromValues(read.Config) {
+			continue
+		}
+		if entries, loadErrors := r.services.Plugins.ResolveConfigMarketplaces(read.Config); len(entries) > 0 || len(loadErrors) > 0 {
+			response.Marketplaces = mergePluginMarketplaceEntries(response.Marketplaces, entries)
+			response.MarketplaceLoadErrors = append(response.MarketplaceLoadErrors, loadErrors...)
+		}
+	}
+	return response, nil
 }
 
 func (r *RuntimeRouter) handlePluginRead(request *Request) (*plugin.PluginReadResponse, error) {

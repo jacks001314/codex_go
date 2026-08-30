@@ -62,4 +62,20 @@ func TestPluginListHonorsPerRepositoryConfigLikeRust(t *testing.T) {
 	if !found {
 		t.Fatalf("per-repository marketplace not surfaced: %#v", response.Marketplaces)
 	}
+	// plugin/installed honors the same per-repository config.
+	installed := router.Handle(requestWithParams(t, IntID(2), MethodPluginInstalled, plugin.PluginInstalledParams{CWDs: []string{workspace}}))
+	if installed.Error != nil {
+		t.Fatalf("plugin/installed error = %+v", installed.Error)
+	}
+	installedResponse := installed.Result.(*plugin.PluginInstalledResponse)
+	installedFound := false
+	for _, m := range installedResponse.Marketplaces {
+		if m.Name == "local" {
+			installedFound = true
+			break
+		}
+	}
+	if !installedFound {
+		t.Fatalf("per-repository marketplace not surfaced in installed: %#v", installedResponse.Marketplaces)
+	}
 }
