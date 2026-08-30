@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"sync"
 
 	"codex_go/auth"
+	"codex_go/codexapi"
 	"codex_go/config"
 	"codex_go/features"
 	"codex_go/model"
@@ -327,7 +329,7 @@ func realtimeTurnStartParams(record *session.Record) *turn.TurnStartParams {
 		// Rust #40665: turns started by a realtime handoff are classified with a
 		// "realtime" turn trigger in the Responses request metadata.
 		TurnTrigger: "realtime",
-		Config:     threadRecordConfigOverrides(record),
+		Config:      threadRecordConfigOverrides(record),
 	}
 	if providerID := strings.TrimSpace(record.Metadata.ModelProvider); providerID != "" {
 		if params.Config == nil {
@@ -447,9 +449,11 @@ func realtimeThreadHeaders(record *session.Record, threadID string) http.Header 
 	threadID = strings.TrimSpace(threadID)
 	sessionID := threadID
 	originator := defaultInitializeOriginator
+	threadSource := ""
 	if record != nil {
 		sessionID = firstNonEmpty(strings.TrimSpace(record.SessionID), sessionID)
 		originator = firstNonEmpty(strings.TrimSpace(record.Metadata.Originator), originator)
+		threadSource = strings.TrimSpace(record.Metadata.ThreadSource)
 	}
 	if sessionID != "" {
 		headers.Set("session-id", sessionID)
@@ -460,7 +464,36 @@ func realtimeThreadHeaders(record *session.Record, threadID string) http.Header 
 	if originator != "" {
 		headers.Set("originator", originator)
 	}
+	// Rust #41250: voice calls span zero or many backing turns, so include the
+	// saved thread source (header-safe ASCII JSON) up to the byte limit.
+	if threadSource != "" && len(threadSource) <= realtimeThreadSourceMaxBytes {
+		if metadata, ok := asciiJSONHeaderString(map[string]string{turnMetadataThreadSourceKey: threadSource}); ok {
+			headers.Set(codexapi.ClientCodexTurnMetadataHeader, metadata)
+		}
+	}
 	return headers
+}
+
+const realtimeThreadSourceMaxBytes = 256
+const turnMetadataThreadSourceKey = "thread_source"
+
+// asciiJSONHeaderString encodes value as ASCII-only JSON so it can be used as an
+// HTTP header value; non-ASCII runes are escaped to \uXXXX (Rust
+// to_ascii_json_string, #41250).
+func asciiJSONHeaderString(value any) (string, bool) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", false
+	}
+	var b strings.Builder
+	for _, r := range string(data) {
+		if r >= 0x20 && r < 0x7f {
+			b.WriteRune(r)
+		} else {
+			fmt.Fprintf(&b, "\\u%04x", r)
+		}
+	}
+	return b.String(), true
 }
 
 func mergeHTTPHeaders(destination http.Header, source http.Header) {

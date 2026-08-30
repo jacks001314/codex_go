@@ -9584,6 +9584,50 @@ func TestTurnEnvironmentContextTextAtRendersPowerShellVersion(t *testing.T) {
 	}
 }
 
+func TestRealtimeThreadHeadersIncludeThreadSourceLikeRust(t *testing.T) {
+	record := &session.Record{
+		ID:        session.ThreadID("thread-1"),
+		SessionID: "session-1",
+		Metadata:  session.Metadata{ThreadSource: "user"},
+	}
+	headers := realtimeThreadHeaders(record, "thread-1")
+	if got := headers.Get(codexapi.ClientCodexTurnMetadataHeader); got != `{"thread_source":"user"}` {
+		t.Fatalf("turn metadata = %q, want %q", got, `{"thread_source":"user"}`)
+	}
+	if got := headers.Get("session-id"); got != "session-1" {
+		t.Fatalf("session-id = %q", got)
+	}
+	if got := headers.Get("thread-id"); got != "thread-1" {
+		t.Fatalf("thread-id = %q", got)
+	}
+
+	// An oversized source is omitted (Rust 256-byte limit).
+	big := strings.Repeat("x", realtimeThreadSourceMaxBytes+1)
+	oversized := realtimeThreadHeaders(&session.Record{ID: session.ThreadID("thread-2"), Metadata: session.Metadata{ThreadSource: big}}, "thread-2")
+	if got := oversized.Get(codexapi.ClientCodexTurnMetadataHeader); got != "" {
+		t.Fatalf("oversized turn metadata = %q, want omitted", got)
+	}
+	// An absent source is omitted.
+	empty := realtimeThreadHeaders(&session.Record{ID: session.ThreadID("thread-3")}, "thread-3")
+	if got := empty.Get(codexapi.ClientCodexTurnMetadataHeader); got != "" {
+		t.Fatalf("absent turn metadata = %q, want omitted", got)
+	}
+}
+
+func TestASCIICJSONHeaderStringEscapesNonASCIILikeRust(t *testing.T) {
+	got, ok := asciiJSONHeaderString(map[string]string{"thread_source": "é\r\n\""})
+	if !ok {
+		t.Fatal("asciiJSONHeaderString() ok = false")
+	}
+	if !strings.Contains(got, `\u00e9`) || strings.Contains(got, "é") {
+		t.Fatalf("ascii JSON = %q, want \\u00e9 escape without literal non-ASCII", got)
+	}
+	plain, ok := asciiJSONHeaderString(map[string]string{"thread_source": "user"})
+	if !ok || plain != `{"thread_source":"user"}` {
+		t.Fatalf("ascii JSON plain = %q ok=%v", plain, ok)
+	}
+}
+
 func TestTurnEnvironmentContextMarksPrimaryWhenMultipleSelectedLikeRust(t *testing.T) {
 	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "/fallback")
 	if err := manager.SetInfo("remote-primary", EnvironmentShellInfo{Name: "zsh", Path: "/bin/zsh"}, "/primary"); err != nil {
