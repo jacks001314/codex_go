@@ -33,6 +33,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs d8d7ca73f8 #38625): unified exec is
 	// enabled by default on every platform, including Windows.
 	{Key: "unified_exec", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #42718): gate unified-exec TTY
+	// support behind a feature flag.
+	{Key: "unified_exec_tty", Stage: StageStable, DefaultEnabled: true},
 	{Key: "shell_zsh_fork", Stage: StageUnderDevelopment},
 	{Key: "sleep_tool", Stage: StageStable, DefaultEnabled: true},
 	{Key: "unified_exec_zsh_fork", Stage: StageUnderDevelopment},
@@ -85,6 +88,9 @@ var Registry = []Spec{
 	{Key: "use_legacy_landlock", Stage: StageDeprecated},
 	{Key: "request_rule", Stage: StageRemoved},
 	{Key: "experimental_windows_sandbox", Stage: StageRemoved},
+	// Rust (codex-rs/features/src/lib.rs #42353): managed Windows sandbox
+	// service provisioning.
+	{Key: "windows_sandbox_service", Stage: StageUnderDevelopment},
 	{Key: "elevated_windows_sandbox", Stage: StageRemoved},
 	{Key: "remote_models", Stage: StageRemoved},
 	{Key: "enable_request_compression", Stage: StageStable, DefaultEnabled: true},
@@ -103,6 +109,9 @@ var Registry = []Spec{
 	{Key: "apps", Stage: StageStable, DefaultEnabled: true},
 	{Key: "enable_mcp_apps", Stage: StageUnderDevelopment},
 	{Key: "mcp_2026_07_28", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #42413): coordinated MCP OAuth
+	// refresh across servers sharing an account.
+	{Key: "mcp_oauth_refresh_coordination", Stage: StageUnderDevelopment},
 	{Key: "apps_mcp_path_override", Stage: StageRemoved},
 	{Key: "tool_search", Stage: StageRemoved},
 	{Key: "tool_search_always_defer_mcp_tools", Stage: StageRemoved, DefaultEnabled: true},
@@ -153,6 +162,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs c2bcb9a26b): reuse encrypted parent
 	// compaction when restarting Guardian review sessions.
 	{Key: "guardian_reuse_parent_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #42529): retain thread context for
+	// Guardian reviews.
+	{Key: "guardian_thread_context", Stage: StageUnderDevelopment},
 	{Key: "guardian_ext", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardianv2", Stage: StageUnderDevelopment},
 	{Key: "goals", Stage: StageStable, DefaultEnabled: true},
@@ -188,6 +200,14 @@ var Registry = []Spec{
 	{Key: "retain_client_developer_messages", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "use_agent_identity", Stage: StageUnderDevelopment},
 	{Key: "workspace_dependencies", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #42196): managed Git worktrees.
+	{
+		Key:                         "worktrees",
+		Stage:                       StageExperimental,
+		ExperimentalName:            "Worktrees",
+		ExperimentalMenuDescription: "Create isolated Git worktrees and group sessions by repository.",
+		ExperimentalAnnouncement:    "NEW: Worktrees can now be enabled from /experimental. Restart Codex after enabling it.",
+	},
 	{Key: "psp", Stage: StageUnderDevelopment},
 	// Rust (codex-rs/features/src/lib.rs f5420174da): feature-key surface frozen
 	// during the sync26 static re-target.
@@ -202,6 +222,9 @@ var Registry = []Spec{
 	// added; compaction_image_budget promoted to stable/default-on (sync28).
 	{Key: "write_stdin_approval", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "compaction_image_budget", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #42385): experimental context
+	// management activation.
+	{Key: "context_management", Stage: StageUnderDevelopment},
 }
 
 func preventIdleSleepStage() Stage {

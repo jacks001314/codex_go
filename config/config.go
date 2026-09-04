@@ -444,6 +444,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"analytics":                         {},
 	"agents":                            {},
 	"allow_login_shell":                 {},
+	"allow_symlinked_codex_home":        {},
 	"background_terminal_max_timeout":   {},
 	"apps":                              {},
 	"apps_mcp_product_sku":              {},
@@ -535,6 +536,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"skills":                                     {},
 	"sqlite_home":                                {},
 	"suppress_unstable_features_warning":         {},
+	"thread_unload_delay_secs":                   {},
 	"tool_suggest":                               {},
 	"tools":                                      {},
 	"trusted_projects":                           {},
@@ -1170,6 +1172,37 @@ func (c *Config) AllowLoginShell() bool {
 	}
 	value, ok := c.Values["allow_login_shell"].(bool)
 	return !ok || value
+}
+
+// AllowSymlinkedCodexHome reports whether the execution host opts into
+// trusting symlink targets beneath CODEX_HOME, mirroring Rust
+// allow_symlinked_codex_home (default false). This only applies to writable
+// roots at or beneath CODEX_HOME.
+func (c *Config) AllowSymlinkedCodexHome() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	value, ok := c.Values["allow_symlinked_codex_home"].(bool)
+	return ok && value
+}
+
+// ThreadUnloadDelaySecs returns how long the app server keeps an unloaded
+// thread resident before evicting it, mirroring Rust thread_unload_delay_secs
+// (default 60 seconds).
+func (c *Config) ThreadUnloadDelaySecs() time.Duration {
+	const defaultThreadUnloadDelay = 60 * time.Second
+	if c == nil || c.Values == nil {
+		return defaultThreadUnloadDelay
+	}
+	raw, ok := c.Values["thread_unload_delay_secs"]
+	if !ok || raw == nil {
+		return defaultThreadUnloadDelay
+	}
+	seconds, ok := configInt64(raw)
+	if !ok || seconds < 0 {
+		return defaultThreadUnloadDelay
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (c *Config) WaitAgentEnabled() bool {

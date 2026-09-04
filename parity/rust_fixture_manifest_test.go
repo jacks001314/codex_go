@@ -46,7 +46,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 	return []rustFixtureRoot{
 		{
 			Path:  "cli/tests",
-			Files: 21,
+			Files: 23,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -58,7 +58,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "exec/tests",
-			Files: 20,
+			Files: 21,
 			Owner: "exec, app",
 			Focus: "exec JSON output, prompt/stdin, output schema, resume, sandbox, hooks",
 			Required: []string{
@@ -69,7 +69,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "exec/tests/suite",
-			Files: 17,
+			Files: 18,
 			Owner: "exec",
 			Focus: "codex exec end-to-end suite cases",
 			Required: []string{
@@ -80,7 +80,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "app-server/tests/suite/v2",
-			Files: 119,
+			Files: 127,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -91,7 +91,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "core/tests/suite",
-			Files: 177,
+			Files: 185,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -103,7 +103,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tui/src/chatwidget/tests",
-			Files: 39,
+			Files: 59,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -114,7 +114,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tui/src/chatwidget/tests/snapshots",
-			Files: 14,
+			Files: 27,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{
@@ -123,7 +123,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tools/src",
-			Files: 31,
+			Files: 36,
 			Owner: "tool, turn",
 			Focus: "tool schemas, dynamic tools, MCP tools, tool search",
 			Required: []string{

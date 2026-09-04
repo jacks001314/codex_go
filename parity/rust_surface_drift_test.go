@@ -30,8 +30,8 @@ func TestRustFeatureKeySurfaceAgainstGo(t *testing.T) {
 func TestRustConfigTomlTopLevelSurfaceSnapshot(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	fields := rustStructPublicFields(t, filepath.Join(root, "config", "src", "config_toml.rs"), "ConfigToml")
-	if len(fields) != 99 {
-		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 99", len(fields))
+	if len(fields) != 101 {
+		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 101", len(fields))
 	}
 	for _, required := range []string{
 		"agents",

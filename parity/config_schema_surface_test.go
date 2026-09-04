@@ -58,11 +58,11 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	goKeys := config.KnownTopLevelConfigFields()
 	sort.Strings(goKeys)
 
-	if len(rustKeys) != 96 {
-		t.Fatalf("Rust config.schema.json top-level property count = %d, want 96 (pinned baseline)", len(rustKeys))
+	if len(rustKeys) != 98 {
+		t.Fatalf("Rust config.schema.json top-level property count = %d, want 98 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 102 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 102 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 104 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 104 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)

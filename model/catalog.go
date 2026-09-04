@@ -307,6 +307,33 @@ type ModelInfo struct {
 	ApplyPatchToolType         string   `json:"apply_patch_tool_type"`
 	CompHash                   string   `json:"comp_hash"`
 	ExperimentalSupportedTools []string `json:"experimental_supported_tools"`
+	// Guardian carries the model-owned Guardian coverage policy, mirroring
+	// Rust openai_models::ModelInfo.guardian. A nil policy preserves legacy
+	// behavior; omitted scopes are disabled.
+	Guardian *GuardianModelPolicy `json:"guardian,omitempty"`
+}
+
+// GuardianReviewMode describes how Guardian handles an action when the user
+// selects automatic approval, mirroring Rust openai_models::GuardianReviewMode.
+type GuardianReviewMode string
+
+const (
+	GuardianReviewModeDisabled    GuardianReviewMode = "disabled"
+	GuardianReviewModeSynchronous GuardianReviewMode = "synchronous"
+	GuardianReviewModeAdaptive    GuardianReviewMode = "adaptive"
+	GuardianReviewModeUnknown     GuardianReviewMode = "unknown"
+)
+
+// GuardianModelPolicy carries the model-owned Guardian coverage policy by
+// scope. Omitted scopes are disabled; unknown modes retain synchronous review.
+type GuardianModelPolicy struct {
+	ComputerUse *GuardianReviewMode `json:"computer_use,omitempty"`
+	Shell       *GuardianReviewMode `json:"shell,omitempty"`
+	CodeMode    *GuardianReviewMode `json:"code_mode,omitempty"`
+	FileChanges *GuardianReviewMode `json:"file_changes,omitempty"`
+	MCP         *GuardianReviewMode `json:"mcp,omitempty"`
+	Network     *GuardianReviewMode `json:"network,omitempty"`
+	Permissions *GuardianReviewMode `json:"permissions,omitempty"`
 }
 
 // ModelInfoUpgrade carries the replacement model and informational retirement
