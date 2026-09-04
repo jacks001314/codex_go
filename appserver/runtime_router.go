@@ -11638,6 +11638,8 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		if cfg != nil {
 			options.Shell.MaxOutputTokens = cfg.ToolOutputTokenLimit()
 			options.Shell.Validation.AllowLoginShell = cfg.AllowLoginShell()
+			allowTTY := features.Enabled(cfg.FeatureSettings(), "unified_exec_tty")
+			options.Shell.AllowTTY = &allowTTY
 			options.Shell.Validation.WindowsSandboxLevel = windowsSandboxLevelFromConfigValues(cfg.Values)
 			options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopFromConfigValues(cfg.Values)
 		}

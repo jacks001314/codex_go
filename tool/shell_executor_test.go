@@ -173,6 +173,37 @@ func TestShellExecutorSpecIncludesRuntimeFields(t *testing.T) {
 	}
 }
 
+func TestShellExecutorUnifiedExecTTYGateLikeRust(t *testing.T) {
+	manager := NewUnifiedExecManager()
+	defer manager.Close()
+
+	disabled := false
+	disabledSpec := NewShellExecutor(&ShellExecutorOptions{UnifiedExec: manager, AllowTTY: &disabled}).Spec()
+	properties, ok := disabledSpec.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v", disabledSpec.InputSchema["properties"])
+	}
+	if properties["tty"] != nil {
+		t.Fatalf("tty should be omitted when unified_exec_tty is disabled: %#v", properties["tty"])
+	}
+
+	enabledSpec := NewShellExecutor(&ShellExecutorOptions{UnifiedExec: manager}).Spec()
+	enabledProperties, ok := enabledSpec.InputSchema["properties"].(map[string]any)
+	if !ok || enabledProperties["tty"] == nil {
+		t.Fatalf("tty should be present by default: %#v", enabledProperties)
+	}
+
+	disabledExecutor := NewShellExecutor(&ShellExecutorOptions{UnifiedExec: manager, AllowTTY: &disabled})
+	_, err := disabledExecutor.Execute(context.Background(), &Invocation{
+		CallID:   "tty-call",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"printf hi","tty":true}`},
+	})
+	if err == nil || err.Error() != "TTY execution is disabled by config; omit `tty` or set it to false." {
+		t.Fatalf("explicit TTY error = %v", err)
+	}
+}
+
 func TestUnifiedExecSpecsMatchRustSchemas(t *testing.T) {
 	manager := NewUnifiedExecManager()
 	defer manager.Close()

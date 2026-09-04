@@ -62,6 +62,11 @@ type ShellExecutorOptions struct {
 	// completion (no PTY/session, no write_stdin), exposes a `timeout_ms`
 	// argument, and reports a timed-out command with exit code 124.
 	OneShot bool
+	// AllowTTY controls whether the resumable exec_command exposes and accepts
+	// a `tty` argument (Rust Feature::UnifiedExecTty, #42718). A nil value
+	// defaults to true; when false the `tty` parameter is omitted from the
+	// tool schema and an explicit `tty: true` call is rejected.
+	AllowTTY *bool
 }
 
 type ShellExecutor struct {
@@ -83,6 +88,7 @@ type ShellExecutor struct {
 	pluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	pluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 	oneShot                  bool
+	allowTTY                 bool
 }
 
 type ShellApprovalDecision struct {
@@ -113,6 +119,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 		shell:      NewDefaultShell(),
 		validation: ShellValidationOptions{ApprovalPolicy: sandbox.ApprovalOnRequest},
 		toolName:   PlainName(DefaultExecCommandToolName),
+		allowTTY:   true,
 	}
 	if options == nil {
 		return executor
@@ -144,6 +151,9 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.pluginMetricsResolver = options.PluginMetricsResolver
 	executor.pluginMeasurementTracker = options.PluginMeasurementTracker
 	executor.oneShot = options.OneShot
+	if options.AllowTTY != nil {
+		executor.allowTTY = *options.AllowTTY
+	}
 	return executor
 }
 
@@ -318,10 +328,6 @@ func (e *ShellExecutor) unifiedExecSpec() Spec {
 			"type":        "string",
 			"description": "Working directory for the command. Defaults to the turn cwd.",
 		},
-		"tty": map[string]any{
-			"type":        "boolean",
-			"description": "True allocates a PTY for the command; false or omitted uses plain pipes.",
-		},
 		"yield_time_ms": map[string]any{
 			"type":        "number",
 			"description": yieldTimeDescription,
@@ -334,6 +340,12 @@ func (e *ShellExecutor) unifiedExecSpec() Spec {
 			"type":        "string",
 			"description": "Shell binary to launch. Defaults to the user's default shell.",
 		},
+	}
+	if e.allowTTY {
+		properties["tty"] = map[string]any{
+			"type":        "boolean",
+			"description": "True allocates a PTY for the command; false or omitted uses plain pipes.",
+		}
 	}
 	if e.validation.AllowLoginShell {
 		properties["login"] = map[string]any{
@@ -476,6 +488,9 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		return nil, err
 	}
 	args.MaxOutputTokens = clampShellMaxOutputTokens(args.MaxOutputTokens, e.maxOutputTokens)
+	if args.TTY && !e.allowTTY {
+		return nil, RespondToModel("TTY execution is disabled by config; omit `tty` or set it to false.")
+	}
 	validation := e.validationOptions()
 	sessionShell := e.sessionShell()
 	environment, err := e.resolveUnifiedExecEnvironment(args.EnvironmentID)
