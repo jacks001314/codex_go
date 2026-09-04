@@ -80,6 +80,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodMarketplaceUpgrade):                     true,
 		string(MethodPluginList):                             true,
 		string(MethodPluginInstalled):                        true,
+		string(MethodPluginReconcile):                        true,
 		string(MethodPluginRead):                             true,
 		string(MethodPluginSkillRead):                        true,
 		string(MethodPluginShareSave):                        true,

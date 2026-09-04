@@ -99,6 +99,7 @@ const (
 	MethodMarketplaceUpgrade                     Method = "marketplace/upgrade"
 	MethodPluginList                             Method = "plugin/list"
 	MethodPluginInstalled                        Method = "plugin/installed"
+	MethodPluginReconcile                        Method = "plugin/reconcile"
 	MethodPluginRead                             Method = "plugin/read"
 	MethodPluginSkillRead                        Method = "plugin/skill/read"
 	MethodPluginShareSave                        Method = "plugin/share/save"

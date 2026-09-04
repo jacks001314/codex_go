@@ -127,6 +127,12 @@ func BuildTypeScriptProtocolSchema(experimental bool, internal bool) *ProtocolSc
 			// params absent/nullable.
 			schema.ClientRequests[i].Params = "GetAccountTokenUsageParams"
 		}
+		if schema.ClientRequests[i].Method == string(MethodGetAccountRateLimits) {
+			// Rust emits params?: GetAccountRateLimitsParams in the TypeScript
+			// client surface while the stable JSON request variant keeps its
+			// params as a nullable anyOf reference.
+			schema.ClientRequests[i].Params = "GetAccountRateLimitsParams"
+		}
 	}
 	schema.Notifications = normalizeProtocolMethods(append(schema.Notifications, typeScriptOnlyNotificationMethods()...))
 	schema.Methods = append([]ProtocolMethod(nil), schema.ClientRequests...)
@@ -202,6 +208,7 @@ func baseClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodPluginInstall)},
 		{Method: string(MethodPluginInstalled)},
 		{Method: string(MethodPluginList)},
+		{Method: string(MethodPluginReconcile)},
 		{Method: string(MethodPluginRead)},
 		{Method: string(MethodPluginShareCheckout)},
 		{Method: string(MethodPluginShareDelete)},
@@ -539,6 +546,7 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(MethodPluginInstall):                          {Params: "PluginInstallParams", Result: "PluginInstallResponse"},
 		string(MethodPluginInstalled):                        {Params: "PluginInstalledParams", Result: "PluginInstalledResponse"},
 		string(MethodPluginList):                             {Params: "PluginListParams", Result: "PluginListResponse"},
+		string(MethodPluginReconcile):                        {Params: "PluginReconcileParams", Result: "PluginReconcileResponse"},
 		string(MethodPluginRead):                             {Params: "PluginReadParams", Result: "PluginReadResponse"},
 		string(MethodPluginShareCheckout):                    {Params: "PluginShareCheckoutParams", Result: "PluginShareCheckoutResponse"},
 		string(MethodPluginShareDelete):                      {Params: "PluginShareDeleteParams", Result: "PluginShareDeleteResponse"},

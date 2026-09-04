@@ -1149,18 +1149,18 @@ func (c *Config) OrchestratorSkillsEnabled() bool {
 
 func (c *Config) UpdatePlanEnabled() bool {
 	if c == nil || c.Values == nil {
-		return true
+		return false
 	}
 	tools, ok := c.Values["tools"].(map[string]any)
 	if !ok {
-		return true
+		return false
 	}
 	updatePlan, ok := tools["update_plan"].(map[string]any)
 	if !ok {
-		return true
+		return false
 	}
 	enabled, ok := updatePlan["enabled"].(bool)
-	return !ok || enabled
+	return ok && enabled
 }
 
 // AllowLoginShell reports whether shell tools may expose the `login`

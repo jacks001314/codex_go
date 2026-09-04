@@ -635,8 +635,17 @@ func TestMCPOptionalStartupGrace(t *testing.T) {
 
 func TestToolEnablementUsesRustDefaultsAndNestedConfig(t *testing.T) {
 	defaults := &Config{Values: map[string]any{}}
-	if !defaults.UpdatePlanEnabled() || !defaults.WaitAgentEnabled() {
-		t.Fatal("tool switches should default to enabled")
+	if defaults.UpdatePlanEnabled() {
+		t.Fatal("update_plan should be opt-in (default disabled)")
+	}
+	if !defaults.WaitAgentEnabled() {
+		t.Fatal("wait_agent should default to enabled")
+	}
+	enabledUpdatePlan := &Config{Values: map[string]any{
+		"tools": map[string]any{"update_plan": map[string]any{"enabled": true}},
+	}}
+	if !enabledUpdatePlan.UpdatePlanEnabled() {
+		t.Fatal("explicit tools.update_plan.enabled should enable update_plan")
 	}
 	disabled := &Config{Values: map[string]any{
 		"tools":    map[string]any{"update_plan": map[string]any{"enabled": false}},

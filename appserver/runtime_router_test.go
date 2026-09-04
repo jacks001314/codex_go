@@ -23278,10 +23278,15 @@ func TestRuntimeRouterApplyPatchEmitsTurnDiffUpdated(t *testing.T) {
 }
 
 func TestRuntimeRouterUpdatePlanEmitsTurnPlanUpdated(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[tools.update_plan]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
 		Turns:        turn.NewTurnService(),
 		Agent:        &updatePlanRuntimeAgent{},
 		ThreadStatus: NewThreadStatusManager(),

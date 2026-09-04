@@ -31,6 +31,8 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "collaboration_mode_list", Owner: "appserver", Focus: "collaborationMode/list presets"},
 		{Module: "command_exec", Owner: "appserver", Focus: "command/exec RPC, output streaming, and launch-context env scrubbing"},
 		{Module: "compaction", Owner: "compact, turn", Focus: "thread compaction flow"},
+		{Module: "config_requirements_application", Owner: "config, appserver", Focus: "managed application config requirements enforcement"},
+		{Module: "config_requirements_browser_use", Owner: "config, appserver", Focus: "browser-use config requirements"},
 		{Module: "config_requirements_in_app_browser", Owner: "config, appserver", Focus: "config requirements and in-app browser import gating"},
 		{Module: "config_rpc", Owner: "config, appserver", Focus: "config read/write/requirements RPCs incl. auto-review requirements"},
 		{Module: "connection_handling_websocket", Owner: "appserver", Focus: "websocket connection lifecycle"},
@@ -59,6 +61,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "host_skills", Owner: "prompt, execserver", Focus: "host-provided skill discovery"},
 		{Module: "imagegen_extension", Owner: "tool, model", Focus: "image generation extension"},
 		{Module: "initialize", Owner: "appserver", Focus: "initialize capabilities and protocol setup"},
+		{Module: "luna_reserve", Owner: "appserver, turn", Focus: "Luna Reserve usage and return"},
 		{Module: "marketplace_add", Owner: "plugin", Focus: "marketplace/add RPC"},
 		{Module: "marketplace_remove", Owner: "plugin", Focus: "marketplace/remove RPC"},
 		{Module: "marketplace_upgrade", Owner: "plugin", Focus: "marketplace/upgrade RPC"},
@@ -81,6 +84,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "plugin_install", Owner: "plugin", Focus: "plugin/install RPC and analytics subtypes"},
 		{Module: "plugin_list", Owner: "plugin", Focus: "plugin/list and installed plugins"},
 		{Module: "plugin_read", Owner: "plugin", Focus: "plugin/read and plugin skill read"},
+		{Module: "plugin_reconcile", Owner: "plugin", Focus: "plugin/reconcile RPC and changed-plugin reconciliation"},
 		{Module: "plugin_search", Owner: "plugin", Focus: "experimental plugin/search RPC and remote plugin search"},
 		{Module: "plugin_share", Owner: "plugin", Focus: "plugin share save/list/update/delete"},
 		{Module: "plugin_uninstall", Owner: "plugin", Focus: "plugin/uninstall RPC"},
@@ -107,6 +111,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "sleep", Owner: "tool, turn", Focus: "sleep tool item lifecycle"},
 		{Module: "thread_archive", Owner: "session, appserver", Focus: "thread/archive RPC"},
 		{Module: "thread_delete", Owner: "session, appserver", Focus: "thread/delete RPC"},
+		{Module: "thread_environments", Owner: "session, appserver", Focus: "thread environment lifecycle and reporting"},
 		{Module: "thread_fork", Owner: "session, appserver", Focus: "thread/fork RPC"},
 		{Module: "thread_inject_items", Owner: "session, appserver", Focus: "thread/inject_items RPC"},
 		{Module: "thread_list", Owner: "session, appserver", Focus: "thread/list RPC"},
@@ -127,6 +132,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "thread_timeline", Owner: "session, appserver", Focus: "thread timeline listing and realtime item notifications"},
 		{Module: "thread_unarchive", Owner: "session, appserver", Focus: "thread/unarchive RPC"},
 		{Module: "thread_unsubscribe", Owner: "session, appserver", Focus: "thread/unsubscribe RPC"},
+		{Module: "turn_cost_otel", Owner: "telemetry, appserver", Focus: "turn cost OpenTelemetry export"},
 		{Module: "turn_interrupt", Owner: "turn, appserver", Focus: "turn/interrupt RPC"},
 		{Module: "turn_settings_update", Owner: "turn, appserver", Focus: "turn settings update RPC"},
 		{Module: "turn_start", Owner: "turn, appserver", Focus: "turn/start runtime and notifications"},
@@ -155,7 +161,8 @@ func TestRustAppServerV2SuiteManifestCoversRustModules(t *testing.T) {
 			t.Fatalf("duplicate app-server v2 suite manifest entry for %q: %#v and %#v", entry.Module, previous, entry)
 		}
 		expected[entry.Module] = entry
-		if _, err := os.Stat(filepath.Join(root, entry.Module+".rs")); err != nil {
+		moduleFile := rustAppServerV2ModuleFile(t, filepath.Join(root, "mod.rs"), entry.Module)
+		if _, err := os.Stat(filepath.Join(root, moduleFile)); err != nil {
 			t.Fatalf("manifest module %q does not match a Rust suite file: %v", entry.Module, err)
 		}
 	}
@@ -244,4 +251,26 @@ func rustAppServerV2ModulesFromMod(t *testing.T, path string) []string {
 	}
 	sort.Strings(modules)
 	return modules
+}
+
+func rustAppServerV2ModuleFile(t *testing.T, path string, module string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	lines := strings.Split(string(data), "\n")
+	pathRE := regexp.MustCompile(`#\[path\s*=\s*"([^"]+)"\]`)
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "mod "+module+";" {
+			continue
+		}
+		if i > 0 {
+			if match := pathRE.FindStringSubmatch(lines[i-1]); len(match) == 2 {
+				return match[1]
+			}
+		}
+		return module + ".rs"
+	}
+	return module + ".rs"
 }
