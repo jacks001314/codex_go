@@ -336,6 +336,70 @@ type GuardianModelPolicy struct {
 	Permissions *GuardianReviewMode `json:"permissions,omitempty"`
 }
 
+// GuardianScope identifies an approval category understood by the model-owned
+// Guardian policy, mirroring Rust openai_models::GuardianScope.
+type GuardianScope string
+
+const (
+	GuardianScopeComputerUse GuardianScope = "computer_use"
+	GuardianScopeShell       GuardianScope = "shell"
+	GuardianScopeCodeMode    GuardianScope = "code_mode"
+	GuardianScopeFileChanges GuardianScope = "file_changes"
+	GuardianScopeMCP         GuardianScope = "mcp"
+	GuardianScopeNetwork     GuardianScope = "network"
+	GuardianScopePermissions GuardianScope = "permissions"
+)
+
+// ReviewMode resolves the model-provided Guardian mode for a scope. An omitted
+// scope is disabled, mirroring Rust GuardianModelPolicy::review_mode.
+func (p *GuardianModelPolicy) ReviewMode(scope GuardianScope) GuardianReviewMode {
+	if p == nil {
+		return GuardianReviewModeDisabled
+	}
+	var mode *GuardianReviewMode
+	switch scope {
+	case GuardianScopeComputerUse:
+		mode = p.ComputerUse
+	case GuardianScopeShell:
+		mode = p.Shell
+	case GuardianScopeCodeMode:
+		mode = p.CodeMode
+	case GuardianScopeFileChanges:
+		mode = p.FileChanges
+	case GuardianScopeMCP:
+		mode = p.MCP
+	case GuardianScopeNetwork:
+		mode = p.Network
+	case GuardianScopePermissions:
+		mode = p.Permissions
+	}
+	if mode == nil {
+		return GuardianReviewModeDisabled
+	}
+	return *mode
+}
+
+// GuardianReviewMode returns the model-provided Guardian mode for a scope, or
+// nil when the model carries no Guardian policy (legacy behavior).
+func (m *ModelInfo) GuardianReviewMode(scope GuardianScope) *GuardianReviewMode {
+	if m == nil || m.Guardian == nil {
+		return nil
+	}
+	mode := m.Guardian.ReviewMode(scope)
+	return &mode
+}
+
+// ComputerUseReviewRequired reports whether computer-use actions require
+// Guardian review. A model-owned policy takes precedence over the legacy
+// node_repl_auto_review_required metadata bit, mirroring Rust
+// ModelInfo::computer_use_review_required.
+func (m *ModelInfo) ComputerUseReviewRequired() bool {
+	if mode := m.GuardianReviewMode(GuardianScopeComputerUse); mode != nil {
+		return *mode != GuardianReviewModeDisabled
+	}
+	return m != nil && m.NodeReplAutoReviewRequired
+}
+
 // ModelInfoUpgrade carries the replacement model and informational retirement
 // time advertised by a model-catalog upgrade entry.
 type ModelInfoUpgrade struct {
@@ -427,6 +491,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		ApplyPatchToolType                string                `json:"apply_patch_tool_type"`
 		CompHash                          string                `json:"comp_hash"`
 		ExperimentalSupportedTools        []string              `json:"experimental_supported_tools"`
+		Guardian                          *GuardianModelPolicy  `json:"guardian"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -475,6 +540,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		ApplyPatchToolType:             raw.ApplyPatchToolType,
 		CompHash:                       raw.CompHash,
 		ExperimentalSupportedTools:     cloneStrings(raw.ExperimentalSupportedTools),
+		Guardian:                       raw.Guardian,
 	}
 	if m.BaseInstructions == "" {
 		m.BaseInstructions = BaseInstructions

@@ -1274,3 +1274,63 @@ func TestModelInfoUsableContextWindowLikeRust(t *testing.T) {
 		t.Fatalf("empty model usableContextWindow ok = true, want false")
 	}
 }
+
+func TestModelInfoGuardianReviewPolicy(t *testing.T) {
+	adaptive := GuardianReviewModeAdaptive
+	synchronous := GuardianReviewModeSynchronous
+	disabled := GuardianReviewModeDisabled
+
+	policy := &GuardianModelPolicy{
+		ComputerUse: &adaptive,
+		Shell:       &synchronous,
+	}
+
+	if got := policy.ReviewMode(GuardianScopeComputerUse); got != adaptive {
+		t.Fatalf("computer_use review mode = %q, want %q", got, adaptive)
+	}
+	if got := policy.ReviewMode(GuardianScopeShell); got != synchronous {
+		t.Fatalf("shell review mode = %q, want %q", got, synchronous)
+	}
+	if got := policy.ReviewMode(GuardianScopeCodeMode); got != disabled {
+		t.Fatalf("omitted code_mode review mode = %q, want %q", got, disabled)
+	}
+	if got := (*GuardianModelPolicy)(nil).ReviewMode(GuardianScopeShell); got != disabled {
+		t.Fatalf("nil policy review mode = %q, want %q", got, disabled)
+	}
+
+	withPolicy := &ModelInfo{Guardian: policy}
+	if !withPolicy.ComputerUseReviewRequired() {
+		t.Fatal("adaptive computer_use policy should require review")
+	}
+	disabledPolicy := &ModelInfo{Guardian: &GuardianModelPolicy{ComputerUse: &disabled}}
+	if disabledPolicy.ComputerUseReviewRequired() {
+		t.Fatal("disabled computer_use policy should not require review")
+	}
+	omittedPolicy := &ModelInfo{Guardian: &GuardianModelPolicy{}}
+	if omittedPolicy.ComputerUseReviewRequired() {
+		t.Fatal("omitted computer_use policy should default to disabled (no review)")
+	}
+
+	legacy := &ModelInfo{NodeReplAutoReviewRequired: true}
+	if !legacy.ComputerUseReviewRequired() {
+		t.Fatal("legacy node_repl_auto_review_required should require review when no policy")
+	}
+	legacyOff := &ModelInfo{NodeReplAutoReviewRequired: false}
+	if legacyOff.ComputerUseReviewRequired() {
+		t.Fatal("legacy node_repl_auto_review_required=false should not require review")
+	}
+	if got := legacyOff.GuardianReviewMode(GuardianScopeComputerUse); got != nil {
+		t.Fatalf("GuardianReviewMode without policy = %v, want nil", got)
+	}
+	if got := withPolicy.GuardianReviewMode(GuardianScopeCodeMode); got == nil || *got != disabled {
+		t.Fatalf("GuardianReviewMode omitted code_mode = %v, want disabled", got)
+	}
+
+	var parsed ModelInfo
+	if err := json.Unmarshal([]byte(`{"guardian":{"computer_use":"adaptive","shell":"disabled","code_mode":"future_mode"}}`), &parsed); err != nil {
+		t.Fatalf("unmarshal guardian policy: %v", err)
+	}
+	if parsed.Guardian == nil || parsed.Guardian.ComputerUse == nil || *parsed.Guardian.ComputerUse != adaptive {
+		t.Fatalf("parsed guardian computer_use = %#v, want adaptive", parsed.Guardian)
+	}
+}

@@ -190,8 +190,9 @@ func (r *RuntimeRouter) clearNodeReplReviewEvidence(threadID string) {
 	}
 }
 
-// nodeReplReviewedSequenceForModel is a convenience helper used by callers to
-// derive a node_repl auto-review requirement for a model info.
+// nodeReplReviewedSequenceForModel derives a node_repl auto-review requirement
+// for a model info, honoring a model-provided Guardian computer-use policy over
+// the legacy node_repl_auto_review_required bit (Rust #42744).
 func nodeReplAutoReviewRequiredForModel(info *model.ModelInfo) bool {
-	return info != nil && info.NodeReplAutoReviewRequired
+	return info != nil && info.ComputerUseReviewRequired()
 }
