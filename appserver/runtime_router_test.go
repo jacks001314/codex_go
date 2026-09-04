@@ -13294,7 +13294,7 @@ func TestRuntimeRouterTurnStartPersistsMultiAgentModeWorldState(t *testing.T) {
 
 func TestRuntimeRouterDeferredToolsWorldStateUsesActualRouterAndDoesNotRepeat(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\ndeferred_tool_world_state = true\n"), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\ndeferred_tool_world_state = true\n[tools.update_plan]\nenabled = true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := session.NewStore(t.TempDir())
