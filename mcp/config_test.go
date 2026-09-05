@@ -648,4 +648,7 @@ func TestServerConfigOAuthRefreshModeRoundTrips(t *testing.T) {
 	if McpOAuthRefreshMode("").Effective() != McpOAuthRefreshLegacy {
 		t.Fatal("unset OAuthRefreshMode should default to legacy")
 	}
+	if McpOAuthRefreshMode("").String() != "legacy" {
+		t.Fatalf("String() = %q", McpOAuthRefreshMode("").String())
+	}
 }

@@ -43,6 +43,10 @@ func (m McpOAuthRefreshMode) Effective() McpOAuthRefreshMode {
 	return m
 }
 
+func (m McpOAuthRefreshMode) String() string {
+	return string(m.Effective())
+}
+
 type ServerConfig struct {
 	Command                  string                            `json:"command,omitempty"`
 	Args                     []string                          `json:"args,omitempty"`
