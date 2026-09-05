@@ -87,3 +87,16 @@ func TestMCPHTTPStatusErrorCombinedWWWAuthenticate(t *testing.T) {
 		t.Fatalf("empty challenges = %q", got)
 	}
 }
+
+func TestMCPAuthenticationChallengeToolOutput(t *testing.T) {
+	output, ok := mcpAuthenticationChallengeToolOutput(&mcpHTTPStatusError{StatusCode: 401, WWWAuthenticate: []string{`Bearer realm="a"`}})
+	if !ok || output == nil || output.Success || output.Data["mcp/www_authenticate"] != `Bearer realm="a"` {
+		t.Fatalf("challenge output = %#v, ok=%v", output, ok)
+	}
+	if _, ok := mcpAuthenticationChallengeToolOutput(&mcpHTTPStatusError{StatusCode: 500}); ok {
+		t.Fatal("non-401 should not produce a challenge tool error")
+	}
+	if _, ok := mcpAuthenticationChallengeToolOutput(&mcpHTTPStatusError{StatusCode: 401}); ok {
+		t.Fatal("401 without WWW-Authenticate should not produce a challenge tool error")
+	}
+}

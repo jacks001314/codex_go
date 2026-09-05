@@ -3,7 +3,9 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -229,6 +231,9 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		response, err = e.mcpService().CallTool(callParams)
 	}
 	if err != nil {
+		if output, ok := mcpAuthenticationChallengeToolOutput(err); ok {
+			return output, nil
+		}
 		return nil, err
 	}
 	// Rust #41421: carry the effective per-tool output budget so tool output,
@@ -257,6 +262,27 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		Data:       data,
 		LogPreview: mcpLogPreview(body),
 	}, nil
+}
+
+// mcpAuthenticationChallengeToolOutput converts a 401 Unauthorized MCP
+// response carrying WWW-Authenticate headers into a model-visible tool error
+// with the combined challenge preserved under `mcp/www_authenticate` (Rust
+// #42552). It returns false for other errors so normal handling is unchanged.
+func mcpAuthenticationChallengeToolOutput(err error) (*tool.Output, bool) {
+	var statusErr *mcpHTTPStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnauthorized || len(statusErr.WWWAuthenticate) == 0 {
+		return nil, false
+	}
+	message := statusErr.Error()
+	return &tool.Output{
+		Success:    false,
+		Body:       message,
+		Error:      message,
+		LogPreview: mcpLogPreview(message),
+		Data: map[string]any{
+			"mcp/www_authenticate": statusErr.CombinedWWWAuthenticate(),
+		},
+	}, true
 }
 
 // resolvedOutputTokenLimit returns the configured per-tool output token limit
