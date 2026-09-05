@@ -828,7 +828,24 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			Metadata: event.ModerationMetadata,
 		})
 	case model.ResponsesStreamEventSafetyBuffer:
-		return
+		if event.SafetyBuffering == nil {
+			return
+		}
+		buffering := event.SafetyBuffering
+		var fasterModel *string
+		if buffering.FasterModel != nil && strings.TrimSpace(*buffering.FasterModel) != "" {
+			value := strings.TrimSpace(*buffering.FasterModel)
+			fasterModel = &value
+		}
+		r.notify(NotificationModelSafetyBufferingUpdated, &ModelSafetyBufferingUpdatedNotification{
+			ThreadID:        strings.TrimSpace(threadID),
+			TurnID:          strings.TrimSpace(turnID),
+			Model:           strings.TrimSpace(buffering.Model),
+			UseCases:        append([]string(nil), buffering.UseCases...),
+			Reasons:         append([]string(nil), buffering.Reasons...),
+			ShowBufferingUI: buffering.ShowBufferingUI,
+			FasterModel:     fasterModel,
+		})
 	case model.ResponsesStreamEventCompleted:
 		if state.retrying {
 			state.retrying = false

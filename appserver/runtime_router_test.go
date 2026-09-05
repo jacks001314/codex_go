@@ -22943,7 +22943,7 @@ func TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(modelResponsesSSE(
-			`{"type":"response.metadata","metadata":{"model_reroute":{"from_model":"gpt-test","to_model":"gpt-safe","reason":"high_risk_cyber_activity"},"model_verification":{"verifications":["trusted_access_for_cyber"]},"turn_moderation_metadata":{"category":"cyber"},"safety_buffering":{"model":"gpt-safe","use_cases":["cyber"],"reasons":["policy"],"show_buffering_ui":true,"faster_model":"gpt-fast"}}}`,
+			`{"type":"response.metadata","metadata":{"type":"safety_buffering","model_reroute":{"from_model":"gpt-test","to_model":"gpt-safe","reason":"high_risk_cyber_activity"},"model_verification":{"verifications":["trusted_access_for_cyber"]},"turn_moderation_metadata":{"category":"cyber"},"model":"gpt-safe","use_cases":["cyber"],"reasons":["policy"],"show_buffering_ui":true,"faster_model":"gpt-fast"}}`,
 			`{"type":"response.created","response":{"id":"resp-1"}}`,
 			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
 			`{"type":"response.output_text.delta","delta":"hello "}`,
@@ -23067,7 +23067,24 @@ func TestRuntimeRouterResponsesStreamingEmitsDeltaNotifications(t *testing.T) {
 	if !reflect.DeepEqual(agentDeltas, []string{"hello ", "stream"}) {
 		t.Fatalf("agent message deltas = %#v, want streamed chunks exactly once", agentDeltas)
 	}
-	assertNoModelSafetyBufferingNotification(t, sink, turnID)
+	var buffering *ModelSafetyBufferingUpdatedNotification
+	for _, notification := range sink.List() {
+		if notification != nil && notification.Method == NotificationModelSafetyBufferingUpdated {
+			if payload, ok := notification.Params.(*ModelSafetyBufferingUpdatedNotification); ok {
+				buffering = payload
+				break
+			}
+		}
+	}
+	if buffering == nil {
+		t.Fatalf("model/safetyBuffering/updated notification missing")
+	}
+	if buffering.ThreadID != threadID || buffering.TurnID != turnID || buffering.Model != "gpt-safe" || !buffering.ShowBufferingUI {
+		t.Fatalf("safety buffering notification = %+v", buffering)
+	}
+	if buffering.FasterModel == nil || *buffering.FasterModel != "gpt-fast" {
+		t.Fatalf("safety buffering faster model = %v", buffering.FasterModel)
+	}
 }
 
 func TestRuntimeRouterResponsesStreamingSkipsApplyPatchPatchUpdatedWithoutFeatureLikeRust(t *testing.T) {
@@ -24366,19 +24383,6 @@ func waitForTurnModerationMetadata(t *testing.T, sink *NotificationBuffer, turnI
 	}
 	t.Fatalf("timed out waiting for turn/moderationMetadata for turn %s in %#v", turnID, last)
 	return nil
-}
-
-func assertNoModelSafetyBufferingNotification(t *testing.T, sink *NotificationBuffer, turnID string) {
-	t.Helper()
-	for _, notification := range sink.List() {
-		if notification.Method != NotificationMethod("model/safetyBuffering/updated") {
-			continue
-		}
-		if params, ok := notification.Params.(map[string]any); ok && params["turnId"] == turnID {
-			t.Fatalf("non-Rust model/safetyBuffering notification emitted: %+v", params)
-		}
-		t.Fatalf("non-Rust model/safetyBuffering notification emitted: %+v", notification.Params)
-	}
 }
 
 func waitForTokenUsageUpdated(t *testing.T, sink *NotificationBuffer, turnID string) *ThreadTokenUsageUpdatedNotification {
