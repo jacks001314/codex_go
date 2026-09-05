@@ -471,3 +471,50 @@ func TestThreadOriginatorSurfaceAndListFilter(t *testing.T) {
 		t.Fatalf("nonempty originators error = %v", err)
 	}
 }
+
+func TestThreadModelAndReasoningEffortSurface(t *testing.T) {
+	record := &session.Record{
+		ID:        "thread-model",
+		SessionID: "thread-model",
+		Metadata: session.Metadata{
+			CWD:           t.TempDir(),
+			Model:         "gpt-test",
+			ModelProvider: "openai",
+			Extra:         map[string]any{"config": map[string]any{"model_reasoning_effort": "high"}},
+		},
+	}
+	thread := BuildThread(record, "", false)
+	if thread == nil || thread.Model == nil || *thread.Model != "gpt-test" {
+		t.Fatalf("thread model = %#v", thread)
+	}
+	if thread.ReasoningEffort == nil || *thread.ReasoningEffort != "high" {
+		t.Fatalf("thread reasoningEffort = %#v", thread)
+	}
+	data, err := json.Marshal(thread)
+	if err != nil {
+		t.Fatalf("marshal thread: %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		t.Fatalf("unmarshal thread: %v", err)
+	}
+	if encoded["model"] != "gpt-test" || encoded["reasoningEffort"] != "high" {
+		t.Fatalf("thread JSON model/reasoningEffort = %s", data)
+	}
+
+	absent := BuildThread(&session.Record{ID: "thread-no-model", SessionID: "thread-no-model", Metadata: session.Metadata{CWD: t.TempDir(), ModelProvider: "openai"}}, "", false)
+	if absent == nil || absent.Model != nil || absent.ReasoningEffort != nil {
+		t.Fatalf("absent model/reasoningEffort should be nil: %#v", absent)
+	}
+	absentData, err := json.Marshal(absent)
+	if err != nil {
+		t.Fatalf("marshal absent thread: %v", err)
+	}
+	var absentEncoded map[string]any
+	if err := json.Unmarshal(absentData, &absentEncoded); err != nil {
+		t.Fatalf("unmarshal absent thread: %v", err)
+	}
+	if absentEncoded["model"] != nil || absentEncoded["reasoningEffort"] != nil {
+		t.Fatalf("absent thread JSON model/reasoningEffort = %s", absentData)
+	}
+}

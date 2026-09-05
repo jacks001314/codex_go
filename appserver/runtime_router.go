@@ -3889,6 +3889,7 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	runtimeWorkspaceRoots := threadRuntimeWorkspaceRoots(cwd, params.RuntimeWorkspaceRoots)
 	if modelID != "" {
 		response.Model = modelID
+		response.Thread.Model = stringPtrIfNotEmpty(modelID)
 	}
 	if providerID != "" {
 		response.ModelProvider = providerID
@@ -3896,6 +3897,7 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	}
 	if reasoningEffort != "" {
 		response.ReasoningEffort = stringPtrIfNotEmpty(reasoningEffort)
+		response.Thread.ReasoningEffort = reasoningEffortPtr(reasoningEffort)
 	}
 	response.ServiceTier = stringPtrIfNotEmpty(serviceTier)
 	response.RuntimeWorkspaceRoots = append([]string(nil), runtimeWorkspaceRoots...)

@@ -681,6 +681,8 @@ type Thread struct {
 	ProjectID            *string           `json:"projectId"`
 	HistoryMode          ThreadHistoryMode `json:"historyMode"`
 	ModelProvider        string            `json:"modelProvider"`
+	Model                *string           `json:"model"`
+	ReasoningEffort      *ReasoningEffort  `json:"reasoningEffort"`
 	CreatedAt            int64             `json:"createdAt"`
 	UpdatedAt            int64             `json:"updatedAt"`
 	RecencyAt            *int64            `json:"recencyAt"`
@@ -720,6 +722,8 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		ProjectID            *string           `json:"projectId"`
 		HistoryMode          ThreadHistoryMode `json:"historyMode"`
 		ModelProvider        string            `json:"modelProvider"`
+		Model                *string           `json:"model"`
+		ReasoningEffort      *ReasoningEffort  `json:"reasoningEffort"`
 		CreatedAt            int64             `json:"createdAt"`
 		UpdatedAt            int64             `json:"updatedAt"`
 		RecencyAt            *int64            `json:"recencyAt"`
@@ -748,6 +752,8 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		ProjectID:            t.ProjectID,
 		HistoryMode:          historyMode,
 		ModelProvider:        t.ModelProvider,
+		Model:                t.Model,
+		ReasoningEffort:      t.ReasoningEffort,
 		CreatedAt:            t.CreatedAt,
 		UpdatedAt:            t.UpdatedAt,
 		RecencyAt:            t.RecencyAt,
@@ -3085,6 +3091,8 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		SectionEnteredAt: sectionEnteredAt,
 		HistoryMode:      historyMode,
 		ModelProvider:    modelProvider,
+		Model:            stringPtrIfNotEmpty(record.Metadata.Model),
+		ReasoningEffort:  reasoningEffortFromRecord(record),
 		CreatedAt:        unixOrZero(record.CreatedAt),
 		UpdatedAt:        unixOrZero(record.UpdatedAt),
 		RecencyAt:        recencyAt,
@@ -3106,6 +3114,32 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		normalizeThreadTurnsStatus(thread.Turns, IdleStatus(), false)
 	}
 	return thread
+}
+
+func reasoningEffortFromRecord(record *session.Record) *ReasoningEffort {
+	if record == nil {
+		return nil
+	}
+	overrides := threadRecordConfigOverrides(record)
+	raw, ok := overrides["model_reasoning_effort"].(string)
+	if !ok {
+		return nil
+	}
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil
+	}
+	effort := ReasoningEffort(value)
+	return &effort
+}
+
+func reasoningEffortPtr(value string) *ReasoningEffort {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	effort := ReasoningEffort(value)
+	return &effort
 }
 
 func SessionSourceFromString(value string) SessionSource {
