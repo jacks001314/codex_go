@@ -642,41 +642,45 @@ type streamEnvelopeMsg struct {
 }
 
 type Options struct {
-	Width                         int
-	Height                        int
-	NoAltScreen                   bool
-	Placeholder                   string
-	ModelPickerOptions            []codextui.ModelPickerOption
-	ServiceTierCommands           []bottompane.ServiceTierCommand
-	SessionPickerItems            []codextui.SessionSummary
-	SessionPickerCWD              string
-	SessionPickerView             string
-	ShowSessionHeader             bool
-	SessionHeaderVersion          string
-	OnSubmit                      SubmitFunc
-	OnSubmitRequest               SubmitRequestFunc
-	OnSteerRequest                SteerRequestFunc
-	OnInterrupt                   InterruptFunc
-	OnInterruptMCPStartup         InterruptFunc
-	OnExternalEditor              ExternalEditorFunc
-	OnExternalEditorDirectory     ExternalEditorDirectoryFunc
-	KeymapConfig                  *codextui.KeymapConfig
-	OnKeymapEdit                  KeymapEditFunc
-	OnModalResponse               ModalResponseFunc
-	OnSessionAction               SessionActionFunc
-	OnWorkingDirectoryChange      WorkingDirectoryChangeFunc
-	OnResumeSession               SessionResumeFunc
-	OnRenameThread                ThreadRenameFunc
-	OnLogout                      LogoutFunc
-	OnReadAgents                  AgentThreadReaderFunc
-	OnSwitchAgent                 AgentThreadSwitchFunc
-	AgentsOverviewEmbedded        bool
-	OnAgentsOverviewRefresh       AgentsOverviewRefreshFunc
-	OnAgentsOverviewDispatch      AgentsOverviewDispatchFunc
-	OnAgentsOverviewStop          AgentsOverviewStopFunc
-	OnAgentsOverviewRename        AgentsOverviewRenameFunc
-	OnStartAgentsDaemon           AgentsDaemonStartFunc
-	OnClipboardWrite              func(text string) error
+	Width                     int
+	Height                    int
+	NoAltScreen               bool
+	Placeholder               string
+	ModelPickerOptions        []codextui.ModelPickerOption
+	ServiceTierCommands       []bottompane.ServiceTierCommand
+	SessionPickerItems        []codextui.SessionSummary
+	SessionPickerCWD          string
+	SessionPickerView         string
+	ShowSessionHeader         bool
+	SessionHeaderVersion      string
+	OnSubmit                  SubmitFunc
+	OnSubmitRequest           SubmitRequestFunc
+	OnSteerRequest            SteerRequestFunc
+	OnInterrupt               InterruptFunc
+	OnInterruptMCPStartup     InterruptFunc
+	OnExternalEditor          ExternalEditorFunc
+	OnExternalEditorDirectory ExternalEditorDirectoryFunc
+	KeymapConfig              *codextui.KeymapConfig
+	OnKeymapEdit              KeymapEditFunc
+	OnModalResponse           ModalResponseFunc
+	OnSessionAction           SessionActionFunc
+	OnWorkingDirectoryChange  WorkingDirectoryChangeFunc
+	OnResumeSession           SessionResumeFunc
+	OnRenameThread            ThreadRenameFunc
+	OnLogout                  LogoutFunc
+	OnReadAgents              AgentThreadReaderFunc
+	OnSwitchAgent             AgentThreadSwitchFunc
+	AgentsOverviewEmbedded    bool
+	OnAgentsOverviewRefresh   AgentsOverviewRefreshFunc
+	OnAgentsOverviewDispatch  AgentsOverviewDispatchFunc
+	OnAgentsOverviewStop      AgentsOverviewStopFunc
+	OnAgentsOverviewRename    AgentsOverviewRenameFunc
+	OnStartAgentsDaemon       AgentsDaemonStartFunc
+	OnClipboardWrite          func(text string) error
+	// OnClipboardWriteRich, when set, receives the rendered HTML fragment plus
+	// the plain Markdown for whole-response copies so rich-text destinations
+	// keep formatting (Rust #42847). Code/blockquote copies stay plain.
+	OnClipboardWriteRich          func(html string, text string) error
 	OnReadTokenActivity           TokenActivityReaderFunc
 	OnReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
 	OnConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
@@ -990,6 +994,7 @@ type Model struct {
 	// instead of showing an empty transcript (Rust parity: ThreadEventStore).
 	backgroundThreadEvents            map[string][]protocol.ThreadEvent
 	clipboardWrite                    func(text string) error
+	clipboardWriteRich                func(html string, text string) error
 	onReadTokenActivity               TokenActivityReaderFunc
 	onReadRateLimitResetCredits       RateLimitResetCreditsReaderFunc
 	onConsumeRateLimitResetCredit     RateLimitResetCreditConsumerFunc
@@ -1271,6 +1276,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSwitchAgent:                   options.OnSwitchAgent,
 		backgroundThreadEvents:          map[string][]protocol.ThreadEvent{},
 		clipboardWrite:                  clipboardWrite,
+		clipboardWriteRich:              options.OnClipboardWriteRich,
 		onReadTokenActivity:             options.OnReadTokenActivity,
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,
 		onConsumeRateLimitResetCredit:   options.OnConsumeRateLimitResetCredit,
@@ -5160,7 +5166,13 @@ func (m *Model) applyCopyTargetModalOption(optionID string) bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	}
-	if err := m.clipboardWrite(target.Text); err != nil {
+	var err error
+	if m.clipboardWriteRich != nil && target.ID == chatwidget.CopyTargetWholeID {
+		err = m.clipboardWriteRich(markdown.RenderClipboardHTML(target.Text), target.Text)
+	} else {
+		err = m.clipboardWrite(target.Text)
+	}
+	if err != nil {
 		m.notice = "Copy failed: " + err.Error()
 		m.addErrorHistoryMessage(m.notice)
 		m.refreshTranscript()
