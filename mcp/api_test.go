@@ -612,6 +612,16 @@ func TestMCPServerStatusToolsErrorWireShape(t *testing.T) {
 	}
 }
 
+func TestCloneMCPServerStatusDeepCopiesToolsError(t *testing.T) {
+	message := "tool discovery failed"
+	original := MCPServerStatus{Name: "docs", ToolsError: &message}
+	cloned := cloneMCPServerStatus(original)
+	*cloned.ToolsError = "changed"
+	if original.ToolsError == nil || *original.ToolsError != message {
+		t.Fatalf("original ToolsError = %#v, want %q", original.ToolsError, message)
+	}
+}
+
 func TestMCPServerStatusDetailZeroValueMatchesToolsAndAuthOnly(t *testing.T) {
 	service := NewMCPService(nil)
 	service.SetServer(MCPServerStatus{
