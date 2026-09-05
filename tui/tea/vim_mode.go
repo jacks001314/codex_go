@@ -8,10 +8,106 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 )
 
+// vimDraftSnapshot captures the composer draft before a Vim edit so undo/redo
+// can restore it across normal-mode commands and insert sessions.
+type vimDraftSnapshot struct {
+	value string
+}
+
+const maxVimUndoSteps = 64
+
 // vimSearchRange is a byte-offset match range in the composer draft.
 type vimSearchRange struct {
 	Start int
 	End   int
+}
+
+// vimCurrentDraftSnapshot returns the raw composer draft used by undo/redo.
+func (m *Model) vimCurrentDraftSnapshot() vimDraftSnapshot {
+	if m == nil {
+		return vimDraftSnapshot{}
+	}
+	return vimDraftSnapshot{value: m.composer.Value()}
+}
+
+// vimBeginEdit opens a Vim edit transaction when none is active and reports
+// whether this call created the transaction. Insert sessions and multi-key
+// commands reuse the outer transaction until vimCommitEdit.
+func (m *Model) vimBeginEdit() bool {
+	if m == nil || m.vimEditPending {
+		return false
+	}
+	m.vimEditPending = true
+	m.vimEditSnapshot = m.vimCurrentDraftSnapshot()
+	return true
+}
+
+// vimCommitEdit closes an open Vim transaction, pushing the pre-edit snapshot
+// onto the undo stack when the draft actually changed. New edits clear redo.
+func (m *Model) vimCommitEdit() {
+	if m == nil || !m.vimEditPending {
+		return
+	}
+	m.vimEditPending = false
+	if m.vimEditSnapshot.value == m.composer.Value() {
+		return
+	}
+	m.vimUndoStack = append(m.vimUndoStack, m.vimEditSnapshot)
+	if len(m.vimUndoStack) > maxVimUndoSteps {
+		m.vimUndoStack = m.vimUndoStack[len(m.vimUndoStack)-maxVimUndoSteps:]
+	}
+	m.vimRedoStack = nil
+}
+
+// vimFinishEdit closes a transaction created by the caller of a mutating
+// helper (startedHere) while leaving an enclosing insert-session transaction
+// open for the eventual Esc commit.
+func (m *Model) vimFinishEdit(startedHere bool) {
+	if startedHere {
+		m.vimCommitEdit()
+	}
+}
+
+// vimApplyUndo restores the newest undo snapshot and moves the current draft
+// onto the redo stack (Vim `u`, Rust #41941).
+func (m *Model) vimApplyUndo() bool {
+	if m == nil || len(m.vimUndoStack) == 0 {
+		return false
+	}
+	m.vimRedoStack = append(m.vimRedoStack, m.vimCurrentDraftSnapshot())
+	snapshot := m.vimUndoStack[len(m.vimUndoStack)-1]
+	m.vimUndoStack = m.vimUndoStack[:len(m.vimUndoStack)-1]
+	m.composer.SetValue(snapshot.value)
+	m.vimSetCursorAtByteOffset(len(snapshot.value))
+	return true
+}
+
+// vimApplyRedo restores the newest redo snapshot (Vim ctrl-r, Rust #42140).
+func (m *Model) vimApplyRedo() bool {
+	if m == nil || len(m.vimRedoStack) == 0 {
+		return false
+	}
+	m.vimUndoStack = append(m.vimUndoStack, m.vimCurrentDraftSnapshot())
+	if len(m.vimUndoStack) > maxVimUndoSteps {
+		m.vimUndoStack = m.vimUndoStack[len(m.vimUndoStack)-maxVimUndoSteps:]
+	}
+	snapshot := m.vimRedoStack[len(m.vimRedoStack)-1]
+	m.vimRedoStack = m.vimRedoStack[:len(m.vimRedoStack)-1]
+	m.composer.SetValue(snapshot.value)
+	m.vimSetCursorAtByteOffset(len(snapshot.value))
+	return true
+}
+
+// resetVimEditHistory clears undo/redo state when a draft is replaced by a new
+// prompt, an external editor edit, or a thread switch.
+func (m *Model) resetVimEditHistory() {
+	if m == nil {
+		return
+	}
+	m.vimUndoStack = nil
+	m.vimRedoStack = nil
+	m.vimEditPending = false
+	m.vimEditSnapshot = vimDraftSnapshot{}
 }
 
 // applyVimModeKey dispatches Vim normal/insert mode keys when /vim is enabled
@@ -83,6 +179,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	if m.vimReplaceMode {
 		switch {
 		case keySpec == "esc" || keySpec == "escape":
+			m.vimCommitEdit()
 			m.vimReplaceMode = false
 		case msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1:
 			m.replaceVimCharAdvancing(msg.Runes[0])
@@ -95,6 +192,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	}
 	if m.vimInsert {
 		if keySpec == "esc" {
+			m.vimCommitEdit()
 			m.vimInsert = false
 			m.vimPendingOp = ""
 			m.vimPendingObject = ""
@@ -175,30 +273,42 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		return true
 	}
 	switch {
+	case m.keyMatches("vim_normal", "undo", keySpec):
+		m.vimApplyUndo()
+	case m.keyMatches("vim_normal", "redo", keySpec):
+		m.vimApplyRedo()
 	case m.keyMatches("vim_normal", "enter_insert", keySpec):
+		m.vimBeginEdit()
 		m.vimInsert = true
 	case m.keyMatches("vim_normal", "append_after_cursor", keySpec):
+		m.vimBeginEdit()
 		m.vimCursorRight()
 		m.vimInsert = true
 	case m.keyMatches("vim_normal", "append_line_end", keySpec):
+		m.vimBeginEdit()
 		m.composer.CursorEnd()
 		m.vimInsert = true
 	case m.keyMatches("vim_normal", "insert_line_start", keySpec):
+		m.vimBeginEdit()
 		m.vimCursorLineStartNonBlank()
 		m.vimInsert = true
 	case m.keyMatches("vim_normal", "open_line_below", keySpec):
+		m.vimBeginEdit()
 		m.composer.CursorEnd()
 		m.composer.InsertString("\n")
 		m.vimInsert = true
 	case m.keyMatches("vim_normal", "open_line_above", keySpec):
+		m.vimBeginEdit()
 		m.composer.CursorStart()
 		m.composer.InsertString("\n")
 		m.composer.CursorUp()
 		m.vimInsert = true
 	case m.keyMatches("vim_normal", "substitute_char", keySpec):
+		m.vimBeginEdit()
 		m.deleteVimCharAtCursor()
 		m.vimInsert = true
 	case m.keyMatches("vim_normal", "change_to_line_end", keySpec):
+		m.vimBeginEdit()
 		m.deleteVimToLineEnd()
 		m.vimInsert = true
 	case m.keyMatches("vim_normal", "delete_char", keySpec):
@@ -208,6 +318,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	case m.keyMatches("vim_normal", "replace_char", keySpec):
 		m.vimPendingReplace = true
 	case m.keyMatches("vim_normal", "replace_mode", keySpec):
+		m.vimBeginEdit()
 		m.vimReplaceMode = true
 	case m.keyMatches("vim_normal", "delete_to_line_end", keySpec):
 		m.deleteVimToLineEnd()
@@ -324,10 +435,12 @@ func (m *Model) deleteVimCharAtCursor() {
 	if offset >= len(value) {
 		return
 	}
+	startedEdit := m.vimBeginEdit()
 	_, size := utf8.DecodeRuneInString(value[offset:])
 	m.recordVimDelete(value[offset : offset+size])
 	m.composer.SetValue(value[:offset] + value[offset+size:])
 	m.vimSetCursorAtByteOffset(offset)
+	m.vimFinishEdit(startedEdit)
 }
 
 // recordVimDelete records the last completed Vim delete for dot-repeat (`.`),
@@ -368,8 +481,10 @@ func (m *Model) deleteVimWordAtCursor() {
 	if startByte < 0 || endByte > len(value) || startByte >= endByte {
 		return
 	}
+	startedEdit := m.vimBeginEdit()
 	m.composer.SetValue(value[:startByte] + value[endByte:])
 	m.vimSetCursorAtByteOffset(startByte)
+	m.vimFinishEdit(startedEdit)
 }
 
 // replaceVimCharAtCursor replaces the grapheme under the cursor with ch,
@@ -382,6 +497,7 @@ func (m *Model) replaceVimCharAtCursor(ch rune) {
 	if offset >= len(value) {
 		return
 	}
+	startedEdit := m.vimBeginEdit()
 	_, size := utf8.DecodeRuneInString(value[offset:])
 	replacement := string(ch)
 	next := value[:offset] + replacement + value[offset+size:]
@@ -391,6 +507,7 @@ func (m *Model) replaceVimCharAtCursor(ch rune) {
 	} else {
 		m.vimSetCursorAtByteOffset(offset)
 	}
+	m.vimFinishEdit(startedEdit)
 }
 
 // replaceVimCharAdvancing replaces the rune under the cursor and moves to the
@@ -424,9 +541,11 @@ func (m *Model) deleteVimToLineEnd() {
 	if col >= len(line) {
 		return
 	}
+	startedEdit := m.vimBeginEdit()
 	next := value[:offset] + value[offset+len(line)-col:]
 	m.composer.SetValue(next)
 	m.vimSetCursorAtByteOffset(offset)
+	m.vimFinishEdit(startedEdit)
 }
 
 // deleteVimLine removes the whole current line including its newline (dd).
@@ -437,6 +556,7 @@ func (m *Model) deleteVimLine() {
 	if row < 0 || row >= len(lines) {
 		return
 	}
+	startedEdit := m.vimBeginEdit()
 	offset := 0
 	for i := 0; i < row; i++ {
 		offset += len(lines[i]) + 1
@@ -448,6 +568,7 @@ func (m *Model) deleteVimLine() {
 	next := value[:offset] + value[end:]
 	m.composer.SetValue(next)
 	m.vimSetCursorAtByteOffset(offset)
+	m.vimFinishEdit(startedEdit)
 }
 
 // yankVimLine stores the current line in the Vim yank buffer (Y / yy).
@@ -460,10 +581,12 @@ func (m *Model) pasteVimAfterCursor() {
 	if m.vimYank == "" {
 		return
 	}
+	startedEdit := m.vimBeginEdit()
 	offset := m.vimValueByteOffset()
 	value := m.composer.Value()
 	m.composer.SetValue(value[:offset] + m.vimYank + value[offset:])
 	m.vimSetCursorAtByteOffset(offset + len(m.vimYank))
+	m.vimFinishEdit(startedEdit)
 }
 
 // vimWordMotion moves the cursor by word boundaries on the current line.
@@ -1148,12 +1271,14 @@ func (m *Model) applyVimOperatorValueRange(start, end int) {
 	if start > end {
 		start, end = end, start
 	}
+	startedEdit := m.vimBeginEdit()
 	switch op {
 	case "d":
 		m.recordVimDelete(value[start:end])
 		next := value[:start] + value[end:]
 		m.composer.SetValue(next)
 		m.vimSetCursorAtByteOffset(start)
+		m.vimFinishEdit(startedEdit)
 	case "y":
 		m.vimYank = value[start:end]
 	case "c":
@@ -1161,6 +1286,11 @@ func (m *Model) applyVimOperatorValueRange(start, end int) {
 		m.composer.SetValue(next)
 		m.vimSetCursorAtByteOffset(start)
 		m.vimInsert = true
+		// Keep the transaction open so Esc commits the change + insert session
+		// as one undo step.
+		if !startedEdit {
+			m.vimBeginEdit()
+		}
 	}
 }
 

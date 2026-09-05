@@ -599,6 +599,56 @@ func TestVimReplaceModeOverwritesUntilEscape(t *testing.T) {
 	}
 }
 
+func vimKeyMsg(m *Model, key bubbletea.KeyType) *Model {
+	updated, _ := m.Update(bubbletea.KeyMsg{Type: key})
+	return updated.(*Model)
+}
+
+// TestVimUndoRedoNormalEditsLikeVim pins Rust #41941/#42140: `u` restores the
+// pre-edit draft and ctrl-r reapplies it for normal-mode single commands.
+func TestVimUndoRedoNormalEditsLikeVim(t *testing.T) {
+	m := vimTestModel("hello world")
+	m = vimKeyPress(m, 'x')
+	if got := m.composer.Value(); got != "ello world" {
+		t.Fatalf("x value = %q, want ello world", got)
+	}
+	m = vimKeyPress(m, 'u')
+	if got := m.composer.Value(); got != "hello world" {
+		t.Fatalf("undo after x value = %q, want hello world", got)
+	}
+	m = vimKeyMsg(m, bubbletea.KeyCtrlR)
+	if got := m.composer.Value(); got != "ello world" {
+		t.Fatalf("redo after undo value = %q, want ello world", got)
+	}
+	// Redo stack is exhausted; a second redo keeps the current draft.
+	m = vimKeyMsg(m, bubbletea.KeyCtrlR)
+	if got := m.composer.Value(); got != "ello world" {
+		t.Fatalf("empty redo changed value = %q", got)
+	}
+}
+
+// TestVimUndoInsertSessionRestoresWholeSessionLikeVim ensures an insert
+// session (i ... Esc) is one undo step.
+func TestVimUndoInsertSessionRestoresWholeSessionLikeVim(t *testing.T) {
+	m := vimTestModel("world")
+	m = vimKeyPress(m, 'i')
+	for _, r := range []rune{'h', 'e', 'l', 'l', 'o', ' '} {
+		m = vimKeyPress(m, r)
+	}
+	m = vimEscape(m)
+	if got := m.composer.Value(); got != "hello world" {
+		t.Fatalf("insert session value = %q, want hello world", got)
+	}
+	m = vimKeyPress(m, 'u')
+	if got := m.composer.Value(); got != "world" {
+		t.Fatalf("undo insert session value = %q, want world", got)
+	}
+	m = vimKeyMsg(m, bubbletea.KeyCtrlR)
+	if got := m.composer.Value(); got != "hello world" {
+		t.Fatalf("redo insert session value = %q, want hello world", got)
+	}
+}
+
 // TestVimLineYankPasteAndOperators pins Y/p and dd/yy.
 func TestVimLineYankPasteAndOperators(t *testing.T) {
 	m := vimTestModel("alpha beta")

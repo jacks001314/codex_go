@@ -73,6 +73,8 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("vim_normal", "Vim normal", "move_word_forward", "Move to the start of the next word.", []string{"w"}),
 	keymapAction("vim_normal", "Vim normal", "move_word_backward", "Move to the start of the previous word.", []string{"b"}),
 	keymapAction("vim_normal", "Vim normal", "move_word_end", "Move to the end of the current or next word.", []string{"e"}),
+	keymapAction("vim_normal", "Vim normal", "undo", "Undo the last Vim edit.", []string{"u"}),
+	keymapAction("vim_normal", "Vim normal", "redo", "Redo the last undone Vim edit.", []string{"ctrl-r"}),
 	keymapAction("vim_normal", "Vim normal", "move_line_start", "Move to the start of the line.", []string{"0"}),
 	keymapAction("vim_normal", "Vim normal", "move_line_end", "Move to the end of the line.", []string{"$", "shift-$"}),
 	keymapAction("vim_normal", "Vim normal", "search_forward", "Search forward for a query in the draft.", []string{"/"}),

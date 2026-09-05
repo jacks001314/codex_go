@@ -896,6 +896,12 @@ type Model struct {
 	// vimReplaceMode tracks Vim replace mode (R): typed characters overwrite
 	// the draft under the cursor until Esc returns to normal mode (Rust #42194).
 	vimReplaceMode bool
+	// vimUndoStack/vimRedoStack store bounded composer draft snapshots for Vim
+	// undo (u) and redo (ctrl-r), mirroring Rust vim_history.rs (#41941/#42140).
+	vimUndoStack    []vimDraftSnapshot
+	vimRedoStack    []vimDraftSnapshot
+	vimEditPending  bool
+	vimEditSnapshot vimDraftSnapshot
 	// vimPendingFind tracks a pending Vim find/till motion (f/F/t/T): the next
 	// typed character is the search target. vimFindKind: 0=find, 1=till;
 	// vimFindForward is true for f/t; vimFindOperator carries a pending d/y/c
@@ -2208,6 +2214,7 @@ func (m *Model) TerminalFocused() bool {
 func (m *Model) submitComposer() bubbletea.Cmd {
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()
+	m.resetVimEditHistory()
 	m.slashPopup = slashCommandPopup{}
 	m.skillPopup = skillPopupState{}
 	m.flushCompactCommandGroup()
@@ -2257,6 +2264,7 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 		}
 	}
 	m.composer.Reset()
+	m.resetVimEditHistory()
 	m.slashPopup = slashCommandPopup{}
 	m.skillPopup = skillPopupState{}
 	m.composerMentionBindings = nil
@@ -2375,6 +2383,7 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 	}
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()
+	m.resetVimEditHistory()
 	m.slashPopup = slashCommandPopup{}
 	m.skillPopup = skillPopupState{}
 	if input == "" && len(m.attachments) == 0 {
@@ -2403,6 +2412,7 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 	}
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()
+	m.resetVimEditHistory()
 	m.slashPopup = slashCommandPopup{}
 	m.skillPopup = skillPopupState{}
 	if input == "" && len(m.attachments) == 0 {
