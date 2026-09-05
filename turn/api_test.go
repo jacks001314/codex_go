@@ -221,6 +221,9 @@ func TestTurnSettingsUpdateParamsValidation(t *testing.T) {
 	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", ServiceTier: &tier}).Validate(); err != nil {
 		t.Fatalf("Validate(tier) error = %v", err)
 	}
+	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Model: &modelID, ServiceTier: &tier}).Validate(); err != nil {
+		t.Fatalf("Validate(model+tier) error = %v", err)
+	}
 }
 
 func TestTurnSettingsUpdateParamsSerialization(t *testing.T) {
