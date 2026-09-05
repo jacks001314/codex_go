@@ -581,7 +581,7 @@ func detachedMemoryWorkspace(ctx context.Context, cwd string) (string, codexapi.
 		output, err := gitutil.RunWithTimeout(ctx, 2*time.Second, cwd, args...)
 		return strings.TrimSpace(output), err
 	}
-	root, err := run("rev-parse", "--show-toplevel")
+	root, err := gitutil.DiscoverGitRoot(ctx, cwd)
 	if err != nil || root == "" {
 		return "", codexapi.ClientWorkspaceMetadata{}, false
 	}
