@@ -42,7 +42,13 @@ func (r *RuntimeRouter) requireAgentForTurn(params *turn.TurnStartParams) model.
 	agent, err := r.responsesAgentForTurn(params)
 	if err == nil && agent != nil {
 		r.services.Agent = agent
-		r.ensureGuardianReviewer(agent)
+		prewarm := true
+		if cfg, cfgErr := r.effectiveConfigForTurn(params); cfgErr == nil && cfg != nil {
+			if strings.EqualFold(turnApprovalsReviewerForTurn(cfg, params), string(config.ApprovalsReviewerUser)) {
+				prewarm = false
+			}
+		}
+		r.ensureGuardianReviewerWithPrewarm(agent, prewarm)
 		return agent
 	}
 	r.services.Agent = &model.UnavailableAgentRunner{Err: err}
@@ -50,6 +56,10 @@ func (r *RuntimeRouter) requireAgentForTurn(params *turn.TurnStartParams) model.
 }
 
 func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) GuardianReviewer {
+	return r.ensureGuardianReviewerWithPrewarm(agent, true)
+}
+
+func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunner, prewarm bool) GuardianReviewer {
 	if r == nil {
 		return nil
 	}
@@ -70,11 +80,13 @@ func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) Guardian
 		modelReviewer.environment = r.guardianEnvironmentInputItems
 		modelReviewer.rootUserAuthorization = r.guardianRootUserAuthorizationForTurn
 		r.services.GuardianReviewer = reviewer
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			_ = modelReviewer.Prewarm(ctx)
-		}()
+		if prewarm {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				_ = modelReviewer.Prewarm(ctx)
+			}()
+		}
 	}
 	return reviewer
 }

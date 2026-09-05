@@ -154,6 +154,27 @@ func (a *guardianPrewarmAgent) snapshot() (int, int, []*model.AgentRequest) {
 	return a.prewarms, a.websocketRuns, append([]*model.AgentRequest(nil), a.requests...)
 }
 
+func TestEnsureGuardianReviewerPrewarmSkip(t *testing.T) {
+	agent := &guardianPrewarmAgent{}
+	router := &RuntimeRouter{}
+	router.ensureGuardianReviewerWithPrewarm(agent, false)
+	time.Sleep(50 * time.Millisecond)
+	if prewarms, _, _ := agent.snapshot(); prewarms != 0 {
+		t.Fatalf("prewarm should be skipped, got %d", prewarms)
+	}
+
+	router.services.GuardianReviewer = nil
+	router.ensureGuardianReviewerWithPrewarm(agent, true)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if prewarms, _, _ := agent.snapshot(); prewarms > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("prewarm should run")
+}
+
 func TestModelGuardianReviewerMapsAssessmentDecision(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
