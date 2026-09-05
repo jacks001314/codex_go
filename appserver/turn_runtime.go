@@ -5961,6 +5961,13 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	if err != nil {
 		return nil, err
 	}
+	if r.experimentalContextManagementEligible(cfg, params) {
+		if tokenBudget == nil {
+			tokenBudget = &config.TokenBudgetConfig{}
+		}
+		tokenBudget.Enabled = true
+		tokenBudget.UseHistoryNotesExtension = true
+	}
 	if item, err := r.contextWindowGuidanceWorldStateInputItem(
 		threadID,
 		tokenBudget.Enabled && modelInfo != nil && modelInfo.ContextWindow > 0,
