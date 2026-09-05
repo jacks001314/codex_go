@@ -210,6 +210,17 @@ func TestTurnSettingsUpdateParamsValidation(t *testing.T) {
 	}
 }
 
+func TestTurnSettingsUpdateParamsSerialization(t *testing.T) {
+	reviewer := "user"
+	data, err := json.Marshal(&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", ApprovalsReviewer: &reviewer})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"approvalsReviewer":"user"`) {
+		t.Fatalf("Marshal() = %s", data)
+	}
+}
+
 func TestTurnStartAcceptsTextAtLimitWithMentionInput(t *testing.T) {
 	service := NewTurnService()
 	_, err := service.Start(&TurnStartParams{
