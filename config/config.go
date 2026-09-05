@@ -738,6 +738,13 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 			}
 		}
 	}
+	if contextManagement, ok := features["context_management"].(map[string]any); ok {
+		for key := range contextManagement {
+			if key != "experimental_mode" {
+				return fmt.Errorf("unknown configuration field `%s.context_management.%s`", prefix, key)
+			}
+		}
+	}
 	if nonPrefixed, ok := features["non_prefixed_mcp_tool_names"].(map[string]any); ok {
 		known := map[string]bool{"enabled": true, "server_names": true}
 		for key := range nonPrefixed {
