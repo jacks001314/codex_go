@@ -516,6 +516,9 @@ func validateExecWorktreeRequest(req *Request) error {
 	if req == nil || !req.Exec.Shared.Worktree {
 		return nil
 	}
+	if strings.TrimSpace(req.Root.Remote) != "" {
+		return errors.New("--worktree requires local execution")
+	}
 	if req.Exec.IgnoreUserConfig {
 		return errors.New("--worktree cannot be combined with --ignore-user-config")
 	}

@@ -6690,6 +6690,7 @@ func TestValidateExecWorktreeRequest(t *testing.T) {
 	}{
 		{name: "plain", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}}}, ok: true},
 		{name: "fork", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}, Subcommand: "fork"}}, ok: true},
+		{name: "remote", req: Request{Root: cli.RootOptions{Remote: "remote"}, Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}}}},
 		{name: "ignore user config", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}, IgnoreUserConfig: true}}},
 		{name: "ephemeral", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}, Ephemeral: true}}},
 		{name: "resume", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}, Subcommand: "resume"}}},
