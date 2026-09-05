@@ -769,6 +769,13 @@ func TestStrictConfigAcceptsRecentFeatureKeys(t *testing.T) {
 	if err := validateKnownTopLevelConfigFields(map[string]any{"features": features}); err != nil {
 		t.Fatalf("recent feature keys should be accepted in strict config: %v", err)
 	}
+	if err := validateKnownTopLevelConfigFields(map[string]any{"features": map[string]any{
+		"sqlite":        true,
+		"connectors":    true,
+		"tool_registry": map[string]any{"turn_metadata_includes_tool_info": true},
+	}}); err != nil {
+		t.Fatalf("removed/legacy/nested feature keys should be accepted in strict config: %v", err)
+	}
 }
 
 func TestFeatureSettingsTracksLegacyUsage(t *testing.T) {

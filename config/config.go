@@ -726,7 +726,7 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 		return nil
 	}
 	for key := range features {
-		if !knownStrictFeatureFields[key] {
+		if !featureflags.Known(key) && key != "tool_registry" {
 			return fmt.Errorf("unknown configuration field `%s.%s`", prefix, key)
 		}
 	}
