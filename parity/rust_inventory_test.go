@@ -255,6 +255,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"tui",
 		"turn",
 		"utils",
+		"voicehost",
 		"worktree",
 	}
 }

@@ -840,7 +840,7 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 		"/sandbox :workspace",
 		"/permissions full-access",
 		"/personality pragmatic",
-		"/experimental memories on",
+		"/experimental worktrees on",
 		"hello tui",
 		"/new",
 		"/status",
@@ -858,7 +858,7 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 		"Sandbox: :workspace",
 		"Permissions: approval=never sandbox=:danger-full-access",
 		"Personality set to Pragmatic",
-		"Feature memories enabled.",
+		"Feature worktrees enabled.",
 		"hello tui",
 		"Started a new local thread.",
 		"Thread: new",
@@ -872,7 +872,7 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 		t.Fatalf("ReadFile(config) error = %v", err)
 	}
 	text := string(data)
-	if !strings.Contains(text, `personality = "pragmatic"`) || !strings.Contains(text, "memories = true") {
+	if !strings.Contains(text, `personality = "pragmatic"`) || !strings.Contains(text, "worktrees = true") {
 		t.Fatalf("config missing settings writes:\n%s", text)
 	}
 }

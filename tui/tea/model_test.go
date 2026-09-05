@@ -5219,7 +5219,7 @@ func TestModelRustSlashSettingsDebugAndMCPCommands(t *testing.T) {
 	model := NewModel(state, Options{
 		Width:           90,
 		Height:          24,
-		FeatureSettings: map[string]bool{"memories": true},
+		FeatureSettings: map[string]bool{"worktrees": true},
 		MCPServers: []historycell.McpServerStatus{{
 			Name: "docs",
 			Auth: "OAuth",
@@ -5244,13 +5244,15 @@ func TestModelRustSlashSettingsDebugAndMCPCommands(t *testing.T) {
 
 	typeText(t, model, "/experimental")
 	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Experimental Features") || !strings.Contains(view, "Memories") {
+	if view := model.View(); !strings.Contains(view, "Experimental Features") || !strings.Contains(view, "Worktrees") {
 		t.Fatalf("experimental modal missing:\n%s", view)
 	}
+	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeySpace))
 	model.Update(key(bubbletea.KeyEnter))
-	if model.featureSettings["memories"] {
-		t.Fatalf("memories feature should have toggled off: %#v", model.featureSettings)
+	if model.featureSettings["worktrees"] {
+		t.Fatalf("worktrees feature should have toggled off: %#v", model.featureSettings)
 	}
 
 	typeText(t, model, "/debug-config")
@@ -5336,11 +5338,11 @@ func TestModelSettingsCommandsPersistSelections(t *testing.T) {
 	model := NewModel(state, Options{
 		Width:           90,
 		Height:          24,
-		FeatureSettings: map[string]bool{"memories": true},
+		FeatureSettings: map[string]bool{"worktrees": true},
 		OnWriteSettings: func(edits []SettingsEdit) (SettingsWriteResult, error) {
 			writes = append(writes, append([]SettingsEdit(nil), edits...))
 			result := SettingsWriteResult{
-				FeatureSettings: map[string]bool{"memories": false},
+				FeatureSettings: map[string]bool{"worktrees": false},
 				Personality:     chatwidget.PersonalityPragmatic,
 				FilePath:        `D:\codex\config.toml`,
 			}
@@ -5357,13 +5359,13 @@ func TestModelSettingsCommandsPersistSelections(t *testing.T) {
 		t.Fatalf("personality state/view mismatch: state=%q view=\n%s", state.Personality, model.View())
 	}
 
-	cmd = model.applyExperimentalCommand("memories off")
+	cmd = model.applyExperimentalCommand("worktrees off")
 	runTeaCmd(t, model, cmd)
-	if len(writes) != 2 || len(writes[1]) != 1 || writes[1][0].KeyPath != "features.memories" || writes[1][0].Value != false {
+	if len(writes) != 2 || len(writes[1]) != 1 || writes[1][0].KeyPath != "features.worktrees" || writes[1][0].Value != false {
 		t.Fatalf("experimental writes = %#v", writes)
 	}
-	if model.featureSettings["memories"] {
-		t.Fatalf("memories feature should be false after save: %#v", model.featureSettings)
+	if model.featureSettings["worktrees"] {
+		t.Fatalf("worktrees feature should be false after save: %#v", model.featureSettings)
 	}
 }
 

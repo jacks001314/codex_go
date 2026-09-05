@@ -45,19 +45,23 @@ func TestPersonalityLabelsAndDescriptions(t *testing.T) {
 
 func TestExperimentalFeaturesViewUsesRegistryExperimentalStage(t *testing.T) {
 	view := NewExperimentalFeaturesView(map[string]bool{
-		"memories":      true,
+		"worktrees":     true,
 		"network_proxy": false,
 	})
 	if view.Title != "Experimental Features" || len(view.Items) == 0 {
 		t.Fatalf("view = %#v", view)
 	}
+	foundWorktrees := false
 	foundMemories := false
 	foundStable := false
 	for _, item := range view.Items {
 		if item.Key == "memories" {
 			foundMemories = true
-			if item.Name != "Memories" || item.Description != "Allow Codex to create new memories from conversations and bring relevant memories into new conversations." || !item.Enabled {
-				t.Fatalf("memories item = %#v", item)
+		}
+		if item.Key == "worktrees" {
+			foundWorktrees = true
+			if item.Name != "Worktrees" || item.Description != "Create isolated Git worktrees and group sessions by repository." || !item.Enabled {
+				t.Fatalf("worktrees item = %#v", item)
 			}
 		}
 		if item.Key == "network_proxy" && (item.Name != "Network proxy" || item.Description != "Apply network proxy restrictions to sandboxed sessions that already have network access.") {
@@ -67,8 +71,11 @@ func TestExperimentalFeaturesViewUsesRegistryExperimentalStage(t *testing.T) {
 			foundStable = true
 		}
 	}
-	if !foundMemories {
-		t.Fatalf("memories feature missing: %#v", view.Items)
+	if foundMemories {
+		t.Fatalf("stable memories feature should not be in experimental menu: %#v", view.Items)
+	}
+	if !foundWorktrees {
+		t.Fatalf("worktrees feature missing: %#v", view.Items)
 	}
 	if foundStable {
 		t.Fatalf("stable feature should not be in experimental menu: %#v", view.Items)
