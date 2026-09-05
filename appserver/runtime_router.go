@@ -8373,6 +8373,8 @@ func pluginReconcileSignature(detail plugin.PluginDetail) string {
 		Enabled        bool
 		HasSkills      bool
 		RemotePluginID string
+		Version        *string
+		LocalVersion   *string
 		MCPServers     []string
 		Apps           []plugin.AppSummary
 		Templates      []plugin.AppTemplateSummary
@@ -8381,6 +8383,8 @@ func pluginReconcileSignature(detail plugin.PluginDetail) string {
 		Enabled:        detail.Summary.Enabled,
 		HasSkills:      detail.Summary.HasSkills,
 		RemotePluginID: detail.Summary.RemotePluginID,
+		Version:        detail.Summary.Version,
+		LocalVersion:   detail.Summary.LocalVersion,
 		MCPServers:     detail.MCPServers,
 		Apps:           detail.Apps,
 		Templates:      detail.AppTemplates,
