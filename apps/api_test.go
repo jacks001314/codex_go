@@ -624,4 +624,9 @@ func TestAppToolConfigAnalyticsResultSourceRoundTrips(t *testing.T) {
 	if parsed.AnalyticsResultSource == nil || parsed.AnalyticsResultSource.SourceType != "message_id" {
 		t.Fatalf("AppToolConfigFromMap = %#v", parsed)
 	}
+	cloned := cloneAppToolConfig(parsed)
+	cloned.AnalyticsResultSource.SourceType = "changed"
+	if parsed.AnalyticsResultSource.SourceType != "message_id" {
+		t.Fatal("cloneAppToolConfig should deep-copy analytics result source")
+	}
 }

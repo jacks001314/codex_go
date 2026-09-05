@@ -262,6 +262,22 @@ func AppToolConfigFromMap(values map[string]any) AppToolConfig {
 	return out
 }
 
+func cloneAppToolConfig(config AppToolConfig) AppToolConfig {
+	if config.Enabled != nil {
+		enabled := *config.Enabled
+		config.Enabled = &enabled
+	}
+	if config.ApprovalMode != nil {
+		mode := *config.ApprovalMode
+		config.ApprovalMode = &mode
+	}
+	if config.AnalyticsResultSource != nil {
+		source := *config.AnalyticsResultSource
+		config.AnalyticsResultSource = &source
+	}
+	return config
+}
+
 type AppsDefaultConfig struct {
 	Enabled                  bool             `json:"enabled"`
 	ApprovalsReviewer        *string          `json:"approvals_reviewer"`
