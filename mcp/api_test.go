@@ -580,6 +580,38 @@ func TestMCPServerStatusWireIncludesStateAndError(t *testing.T) {
 	}
 }
 
+func TestMCPServerStatusToolsErrorWireShape(t *testing.T) {
+	message := "tool discovery failed"
+	encoded, err := json.Marshal(&MCPServerStatus{
+		Name:       "docs",
+		State:      MCPServerFailed,
+		Error:      &message,
+		ToolsError: &message,
+	})
+	if err != nil {
+		t.Fatalf("Marshal status returned error: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("Unmarshal status returned error: %v", err)
+	}
+	if payload["toolsError"] != message {
+		t.Fatalf("toolsError = %#v, want %q", payload["toolsError"], message)
+	}
+
+	encodedNull, err := json.Marshal(&MCPServerStatus{Name: "healthy", State: MCPServerReady})
+	if err != nil {
+		t.Fatalf("Marshal healthy status returned error: %v", err)
+	}
+	var healthy map[string]any
+	if err := json.Unmarshal(encodedNull, &healthy); err != nil {
+		t.Fatalf("Unmarshal healthy status returned error: %v", err)
+	}
+	if value, present := healthy["toolsError"]; !present || value != nil {
+		t.Fatalf("healthy toolsError = %#v, present=%v", value, present)
+	}
+}
+
 func TestMCPServerStatusDetailZeroValueMatchesToolsAndAuthOnly(t *testing.T) {
 	service := NewMCPService(nil)
 	service.SetServer(MCPServerStatus{

@@ -253,6 +253,7 @@ type MCPServerStatus struct {
 	PluginID          *string               `json:"pluginId,omitempty"`
 	ServerInfo        *MCPServerInfo        `json:"serverInfo,omitempty"`
 	Tools             []MCPToolInfo         `json:"tools,omitempty"`
+	ToolsError        *string               `json:"toolsError,omitempty"`
 	Resources         []MCPResource         `json:"resources,omitempty"`
 	ResourceTemplates []MCPResourceTemplate `json:"resourceTemplates,omitempty"`
 	AuthStatus        MCPAuthStatus         `json:"authStatus,omitempty"`
@@ -286,6 +287,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		PluginID          *string                           `json:"pluginId"`
 		ServerInfo        *MCPServerInfo                    `json:"serverInfo"`
 		Tools             map[string]MCPToolInfo            `json:"tools"`
+		ToolsError        *string                           `json:"toolsError"`
 		Resources         []mcpServerStatusResource         `json:"resources"`
 		ResourceTemplates []mcpServerStatusResourceTemplate `json:"resourceTemplates"`
 		AuthStatus        MCPAuthStatus                     `json:"authStatus"`
@@ -298,6 +300,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		PluginID:          cloneStringPtr(s.PluginID),
 		ServerInfo:        serverInfo,
 		Tools:             toolMapFromList(s.Tools),
+		ToolsError:        cloneStringPtr(s.ToolsError),
 		Resources:         mcpServerStatusResources(s.Resources),
 		ResourceTemplates: mcpServerStatusResourceTemplates(s.ResourceTemplates),
 		AuthStatus:        authStatus,
@@ -1403,6 +1406,7 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 		}
 		status.State = MCPServerFailed
 		status.Error = &message
+		status.ToolsError = &message
 		status.Tools = nil
 		status.Resources = nil
 		status.ResourceTemplates = nil
