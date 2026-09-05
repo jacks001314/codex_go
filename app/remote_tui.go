@@ -378,11 +378,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnInterrupt: func() bubbletea.Cmd {
 			return interrupts.interruptCommand()
 		},
-		// TODO(sync30 #42380): wire OnSafetyBufferingRetry here once the remote
-		// client can interrupt the active turn, fork it, and start the retried
-		// thread with the faster model. interactiveRemoteTurnCommand currently
-		// resolves the model from state.Model rather than the retry request, so
-		// a direct submit would not switch models.
+		OnSafetyBufferingRetry: func(threadID, turnID, model, prompt string) bubbletea.Cmd {
+			return interactiveRemoteSafetyBufferingRetryCommand(ctx, root, endpoint, state, threadID, turnID, model, prompt, brokers)
+		},
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			brokers.respond(response)
 			return nil
@@ -1825,6 +1823,51 @@ func interactiveRemoteTurnCommand(ctx context.Context, root *cli.RootOptions, en
 			interrupt = interrupts[0]
 		}
 		go runInteractiveRemoteTurn(ctx, root, endpoint, state, request, messages, brokers, interrupt)
+		return codextea.StreamStartedMsg{Messages: messages}
+	}
+}
+
+// interactiveRemoteSafetyBufferingRetryCommand confirms a safety-buffered
+// retry: it interrupts the buffered turn, forks the thread before that turn
+// with the server-selected faster model, and starts a retry on the fork (Rust
+// #42380).
+func interactiveRemoteSafetyBufferingRetryCommand(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, threadID string, turnID string, model string, prompt string, brokers remoteTUIBrokers) bubbletea.Cmd {
+	return func() bubbletea.Msg {
+		messages := make(chan bubbletea.Msg, 256)
+		go func() {
+			defer close(messages)
+			client, err := openRemoteSessionClient(ctx, endpoint)
+			if err != nil {
+				sendRemoteTurnError(messages, err)
+				return
+			}
+			var interruptResponse any
+			if err := remoteSessionRequest(ctx, client, appserver.MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: strings.TrimSpace(threadID), TurnID: strings.TrimSpace(turnID)}, &interruptResponse); err != nil {
+				client.close()
+				sendRemoteTurnError(messages, err)
+				return
+			}
+			forkParams := appserver.ThreadForkParams{ThreadID: strings.TrimSpace(threadID), BeforeTurnID: strings.TrimSpace(turnID)}
+			fasterModel := strings.TrimSpace(model)
+			if fasterModel != "" {
+				forkParams.Model = &fasterModel
+			}
+			var forkResponse appserver.ThreadForkResponse
+			if err := remoteSessionRequest(ctx, client, appserver.MethodThreadFork, forkParams, &forkResponse); err != nil {
+				client.close()
+				sendRemoteTurnError(messages, err)
+				return
+			}
+			client.close()
+			if forkResponse.Thread == nil || strings.TrimSpace(forkResponse.Thread.ID) == "" {
+				sendRemoteTurnError(messages, errors.New("safety retry fork did not return a thread"))
+				return
+			}
+			if state != nil {
+				state.SetThreadID(strings.TrimSpace(forkResponse.Thread.ID))
+			}
+			runInteractiveRemoteTurn(ctx, root, endpoint, state, codextea.SubmitRequest{Prompt: strings.TrimSpace(prompt), Model: fasterModel}, messages, brokers, nil)
+		}()
 		return codextea.StreamStartedMsg{Messages: messages}
 	}
 }
