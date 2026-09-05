@@ -651,4 +651,11 @@ func TestServerConfigOAuthRefreshModeRoundTrips(t *testing.T) {
 	if McpOAuthRefreshMode("").String() != "legacy" {
 		t.Fatalf("String() = %q", McpOAuthRefreshMode("").String())
 	}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal ServerConfig: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"oauth_refresh_mode":"coordinated"`) {
+		t.Fatalf("ServerConfig JSON = %s", encoded)
+	}
 }
