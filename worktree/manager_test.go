@@ -88,6 +88,22 @@ func TestWorktreeOwnerRejectsInvalidRecord(t *testing.T) {
 	}
 }
 
+func TestWorktreeOwnerReturnsEmptyWhenMissing(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	runGit(t, root, "init")
+	manager := NewWorktreeManager(WorktreeSettings{Root: root, AutoCleanupEnabled: true, KeepCount: 15})
+	owner, err := manager.Owner(root)
+	if err != nil {
+		t.Fatalf("Owner() error = %v", err)
+	}
+	if owner != "" {
+		t.Fatalf("Owner() = %q, want empty", owner)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
