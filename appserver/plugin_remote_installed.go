@@ -58,52 +58,62 @@ type remoteInstalledPlugin struct {
 }
 
 func (r *RuntimeRouter) startInstalledRemotePluginSync() {
+	go func() {
+		_ = r.reconcileInstalledRemotePlugins(context.Background())
+	}()
+}
+
+// reconcileInstalledRemotePlugins performs one installed remote-plugin
+// synchronization pass and returns whether the cache was refreshed. It is the
+// synchronous body used by both startup/background sync and plugin/reconcile.
+func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) bool {
 	if r == nil || r.services.Plugins == nil || r.services.Config == nil {
-		return
+		return false
 	}
 	read, err := r.services.Config.Read(&config.ConfigReadParams{})
 	if err != nil || read == nil {
-		return
+		return false
 	}
 	cfg := &config.Config{Values: read.Config}
 	if !features.Enabled(cfg.FeatureSettings(), "plugins") || !features.Enabled(cfg.FeatureSettings(), "remote_plugin") {
-		return
+		return false
 	}
 	if r.services.WorkspaceCodexPluginsEnabled != nil && !*r.services.WorkspaceCodexPluginsEnabled {
-		return
+		return false
 	}
 	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 	if codexHome == "" {
-		return
+		return false
 	}
 	snapshot := r.accountAuthSnapshot(codexHome)
 	token := appDirectoryAuthToken(snapshot)
 	if token == "" {
-		return
+		return false
 	}
 	accountID := auth.AccountIDFromAuthForRestrictions(snapshot)
 	baseURL := strings.TrimRight(cfg.ChatGPTBaseURL(), "/")
 	client := r.accountHTTPClient()
-	service := r.services.Plugins
 	if !markRemoteInstalledPluginSyncInFlight(codexHome) {
-		return
+		return false
 	}
-	go func() {
-		defer clearRemoteInstalledPluginSyncInFlight(codexHome)
-		detailsByMarketplace, ok := fetchInstalledRemotePluginDetails(context.Background(), client, baseURL, token, accountID, codexHome)
-		if !ok {
-			return
-		}
-		for _, marketplaceName := range []string{
-			remoteInstalledGlobalMarketplace,
-			remoteInstalledUserMarketplace,
-			remoteInstalledWorkspaceMarketplace,
-			remoteInstalledWorkspaceSharedMarketplace,
-		} {
-			service.ReplaceInstalledRemotePlugins(marketplaceName, detailsByMarketplace[marketplaceName])
-		}
-		r.effectivePluginsChanged()
-	}()
+	defer clearRemoteInstalledPluginSyncInFlight(codexHome)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	detailsByMarketplace, ok := fetchInstalledRemotePluginDetails(ctx, client, baseURL, token, accountID, codexHome)
+	if !ok {
+		return false
+	}
+	for _, marketplaceName := range []string{
+		remoteInstalledGlobalMarketplace,
+		remoteInstalledUserMarketplace,
+		remoteInstalledWorkspaceMarketplace,
+		remoteInstalledWorkspaceSharedMarketplace,
+	} {
+		r.services.Plugins.ReplaceInstalledRemotePlugins(marketplaceName, detailsByMarketplace[marketplaceName])
+	}
+	r.effectivePluginsChanged()
+	return true
 }
 
 func markRemoteInstalledPluginSyncInFlight(codexHome string) bool {

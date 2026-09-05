@@ -1884,6 +1884,25 @@ func (s *PluginService) Installed(params *PluginInstalledParams) *PluginInstalle
 	}
 }
 
+// InstalledDetails returns deep copies of every installed plugin detail stored
+// by the service, sorted by plugin ID. It is used by runtime reconciliation to
+// diff bundle and enablement changes without leaking mutable plugin state.
+func (s *PluginService) InstalledDetails() []PluginDetail {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	details := make([]PluginDetail, 0, len(s.plugins))
+	for _, detail := range s.plugins {
+		if detail.Summary.Installed && strings.TrimSpace(detail.Summary.ID) != "" {
+			details = append(details, cloneDetail(detail))
+		}
+	}
+	sort.SliceStable(details, func(i, j int) bool { return details[i].Summary.ID < details[j].Summary.ID })
+	return details
+}
+
 func (s *PluginService) EnabledCapabilities() []CapabilitySummary {
 	if s == nil {
 		return nil

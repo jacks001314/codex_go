@@ -8283,14 +8283,73 @@ func (r *RuntimeRouter) handlePluginReconcile(request *Request) (*plugin.PluginR
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	if r != nil {
-		r.startInstalledRemotePluginSync()
+	before := map[string]plugin.PluginDetail{}
+	if r != nil && r.services.Plugins != nil {
+		for _, detail := range r.services.Plugins.InstalledDetails() {
+			before[detail.Summary.ID] = detail
+		}
+	}
+	refreshed := r != nil && r.reconcileInstalledRemotePlugins(context.Background())
+	changed := []plugin.PluginReconcileChangedPlugin{}
+	if r != nil && r.services.Plugins != nil {
+		after := map[string]plugin.PluginDetail{}
+		for _, detail := range r.services.Plugins.InstalledDetails() {
+			after[detail.Summary.ID] = detail
+		}
+		ids := map[string]bool{}
+		for id := range before {
+			ids[id] = true
+		}
+		for id := range after {
+			ids[id] = true
+		}
+		for id := range ids {
+			previous, hadBefore := before[id]
+			current, hasAfter := after[id]
+			if hadBefore == hasAfter && pluginReconcileSignature(previous) == pluginReconcileSignature(current) {
+				continue
+			}
+			detail := current
+			if !hasAfter {
+				detail = previous
+			}
+			changed = append(changed, plugin.PluginReconcileChangedPlugin{
+				ID:        strings.TrimSpace(id),
+				HasMCPS:   len(detail.MCPServers) > 0,
+				HasApps:   len(detail.Apps) > 0 || len(detail.AppTemplates) > 0,
+				HasHooks:  len(detail.Hooks) > 0,
+				HasSkills: detail.Summary.HasSkills,
+			})
+		}
+		sort.SliceStable(changed, func(i, j int) bool { return changed[i].ID < changed[j].ID })
+	}
+	if !refreshed && len(changed) == 0 {
+		changed = []plugin.PluginReconcileChangedPlugin{}
 	}
 	return &plugin.PluginReconcileResponse{
-		ChangedPlugins:                       []plugin.PluginReconcileChangedPlugin{},
+		ChangedPlugins:                       changed,
 		FailedRemotePluginIDs:                []string{},
 		FailedMaterializationRemotePluginIDs: []string{},
 	}, nil
+}
+
+func pluginReconcileSignature(detail plugin.PluginDetail) string {
+	data, _ := json.Marshal(struct {
+		Enabled    bool
+		HasSkills  bool
+		MCPServers []string
+		Apps       []plugin.AppSummary
+		Templates  []plugin.AppTemplateSummary
+		Hooks      []plugin.PluginHookSummary
+	}{
+		Enabled:    detail.Summary.Enabled,
+		HasSkills:  detail.Summary.HasSkills,
+		MCPServers: detail.MCPServers,
+		Apps:       detail.Apps,
+		Templates:  detail.AppTemplates,
+		Hooks:      detail.Hooks,
+	})
+	return string(data)
 }
 
 func (r *RuntimeRouter) handlePluginRead(request *Request) (*plugin.PluginReadResponse, error) {
