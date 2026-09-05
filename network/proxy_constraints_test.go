@@ -222,4 +222,13 @@ func TestNewProxySpecCarriesHeaderInjections(t *testing.T) {
 	if got := spec.HeaderInjections(); len(got) != 1 || got[0].Host != "api.example.com" {
 		t.Fatalf("HeaderInjections() = %#v", got)
 	}
+	original := ProxyConfig{HeaderInjections: []ProxyHeaderInjection{{
+		Host:    "api.example.com",
+		Headers: map[string]string{"x": "y"},
+	}}}
+	cloned := cloneProxyConfig(original)
+	cloned.HeaderInjections[0].Headers["x"] = "changed"
+	if original.HeaderInjections[0].Headers["x"] != "y" {
+		t.Fatal("cloneProxyConfig should deep-copy header injections")
+	}
 }
