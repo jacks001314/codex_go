@@ -688,6 +688,7 @@ type Thread struct {
 	Path                 *string           `json:"path"`
 	CWD                  string            `json:"cwd"`
 	CLIVersion           string            `json:"cliVersion"`
+	Originator           *string           `json:"originator"`
 	Source               SessionSource     `json:"source"`
 	CanAcceptDirectInput *bool             `json:"canAcceptDirectInput"`
 	ThreadSource         *ThreadSource     `json:"threadSource"`
@@ -726,6 +727,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		Path                 *string           `json:"path"`
 		CWD                  string            `json:"cwd"`
 		CLIVersion           string            `json:"cliVersion"`
+		Originator           *string           `json:"originator"`
 		Source               SessionSource     `json:"source"`
 		CanAcceptDirectInput *bool             `json:"canAcceptDirectInput"`
 		ThreadSource         *ThreadSource     `json:"threadSource"`
@@ -753,6 +755,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		Path:                 t.Path,
 		CWD:                  t.CWD,
 		CLIVersion:           t.CLIVersion,
+		Originator:           t.Originator,
 		Source:               t.Source,
 		CanAcceptDirectInput: t.CanAcceptDirectInput,
 		ThreadSource:         t.ThreadSource,
@@ -2248,6 +2251,7 @@ type ThreadListParams struct {
 	SortDirection    SortDirection        `json:"sortDirection,omitempty"`
 	ModelProviders   []string             `json:"modelProviders,omitempty"`
 	SourceKinds      []ThreadSourceKind   `json:"sourceKinds,omitempty"`
+	Originators      []string             `json:"originators,omitempty"`
 	Archived         *bool                `json:"archived,omitempty"`
 	SectionID        OptionalString       `json:"sectionId,omitempty"`
 	CWD              *ThreadListCwdFilter `json:"cwd,omitempty"`
@@ -2412,6 +2416,9 @@ func (p *ThreadListParams) Validate() error {
 	}
 	if err := validateThreadSourceKinds(p.SourceKinds); err != nil {
 		return err
+	}
+	if len(p.Originators) > 0 {
+		return jsonRPCInvalidRequest("originator filtering is not supported by the local app-server")
 	}
 	return nil
 }
@@ -3085,6 +3092,7 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		Path:             threadPath,
 		CWD:              record.Metadata.CWD,
 		CLIVersion:       record.Metadata.CLIVersion,
+		Originator:       stringPtrIfNotEmpty(record.Metadata.Originator),
 		Source:           source,
 		ThreadSource:     threadSource,
 		AgentNickname:    stringPtrIfNotEmpty(record.Metadata.AgentNickname),

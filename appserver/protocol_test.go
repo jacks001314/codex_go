@@ -425,3 +425,49 @@ func TestThreadSectionUpdateParamsAppearanceDoubleOption(t *testing.T) {
 		t.Fatal("expected 64-byte color rejection")
 	}
 }
+
+func TestThreadOriginatorSurfaceAndListFilter(t *testing.T) {
+	record := &session.Record{
+		ID:        "thread-originator",
+		SessionID: "thread-originator",
+		Metadata:  session.Metadata{CWD: t.TempDir(), ModelProvider: "openai", Originator: "codex_vscode", HistoryMode: "legacy"},
+	}
+	thread := BuildThread(record, "", false)
+	if thread == nil || thread.Originator == nil || *thread.Originator != "codex_vscode" {
+		t.Fatalf("thread originator = %#v", thread)
+	}
+	data, err := json.Marshal(thread)
+	if err != nil {
+		t.Fatalf("marshal thread: %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		t.Fatalf("unmarshal thread: %v", err)
+	}
+	if encoded["originator"] != "codex_vscode" {
+		t.Fatalf("thread JSON originator = %#v", encoded["originator"])
+	}
+
+	absent := BuildThread(&session.Record{ID: "thread-no-originator", SessionID: "thread-no-originator", Metadata: session.Metadata{CWD: t.TempDir(), ModelProvider: "openai"}}, "", false)
+	if absent == nil || absent.Originator != nil {
+		t.Fatalf("absent originator = %#v, want nil", absent)
+	}
+	absentData, err := json.Marshal(absent)
+	if err != nil {
+		t.Fatalf("marshal absent originator thread: %v", err)
+	}
+	var absentEncoded map[string]any
+	if err := json.Unmarshal(absentData, &absentEncoded); err != nil {
+		t.Fatalf("unmarshal absent originator thread: %v", err)
+	}
+	if value, present := absentEncoded["originator"]; !present || value != nil {
+		t.Fatalf("absent thread JSON originator = %#v, present=%v", value, present)
+	}
+
+	if err := (&ThreadListParams{}).Validate(); err != nil {
+		t.Fatalf("empty originators should validate: %v", err)
+	}
+	if err := (&ThreadListParams{Originators: []string{"codex_vscode"}}).Validate(); err == nil || err.Error() != "originator filtering is not supported by the local app-server" {
+		t.Fatalf("nonempty originators error = %v", err)
+	}
+}
