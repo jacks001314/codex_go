@@ -369,6 +369,13 @@ func TestBrowserUseAllowWebmcpRequirement(t *testing.T) {
 	if absent == nil || absent.BrowserUse == nil || absent.BrowserUse.AllowWebmcp != nil {
 		t.Fatalf("absent allowWebmcp = %#v", absent)
 	}
+	encoded, err := json.Marshal(absent)
+	if err != nil {
+		t.Fatalf("marshal browser_use requirements: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"browserUse":{"allowWebmcp":null`) {
+		t.Fatalf("allowWebmcp should serialize as null: %s", encoded)
+	}
 }
 
 func TestNetworkHeaderInjectionsParse(t *testing.T) {
