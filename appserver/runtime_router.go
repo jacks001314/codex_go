@@ -11898,7 +11898,8 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.TurnID = strings.TrimSpace(turnID)
 	historyNotesTools := []tool.Executor(nil)
 	if cfg != nil {
-		if tokenBudget, tokenErr := cfg.TokenBudgetConfig(); tokenErr == nil && tokenBudget != nil && tokenBudget.UseHistoryNotesExtension {
+		contextManaged := r.experimentalContextManagementEligible(cfg, params)
+		if tokenBudget, tokenErr := cfg.TokenBudgetConfig(); contextManaged || (tokenErr == nil && tokenBudget != nil && tokenBudget.UseHistoryNotesExtension) {
 			historyNotesTools = r.historyNotesToolsForTurn(cfg, params, threadID)
 		}
 	}
@@ -11925,6 +11926,38 @@ func (r *RuntimeRouter) historyNotesToolsForTurn(cfg *config.Config, params *tur
 		return nil
 	}
 	return historynotes.Tools(backend, sessionID, agentName)
+}
+
+// experimentalContextManagementEligible reports whether the experimental
+// context-management config can activate token-budget context, history notes,
+// and the new_context tool for this thread. It mirrors Rust's provider/backend
+// and ChatGPT subscription restrictions without mutating the config.
+func (r *RuntimeRouter) experimentalContextManagementEligible(cfg *config.Config, params *turn.TurnStartParams) bool {
+	if r == nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "context_management") || !cfg.ContextManagementConfig().ExperimentalMode {
+		return false
+	}
+	modelProviderConfig, err := r.appTurnModelProviderConfig(cfg, params)
+	if err != nil {
+		return false
+	}
+	providerInfo, err := model.ProviderForConfigID(configValues(cfg), modelProviderConfig.ProviderID, stringConfigValue(cfg, "openai_base_url"))
+	if err != nil || providerInfo == nil || !providerInfo.IsOpenAI() {
+		return false
+	}
+	resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())
+	if err != nil || resolved == nil || (&resolved.Auth).BackendMode() != "chatgpt" {
+		return false
+	}
+	account := auth.AccountFromAuth(&resolved.Auth)
+	if account == nil {
+		return false
+	}
+	switch account.PlanType {
+	case auth.PlanPlus, auth.PlanPro, auth.PlanProlite:
+		return true
+	default:
+		return false
+	}
 }
 
 // historyNotesBackendForTurn resolves the history-notes backend for a thread,
@@ -13073,7 +13106,7 @@ func (r *RuntimeRouter) contextStatusForThread(threadID string) func() compact.T
 // the new_context tool: the model can request a fresh context window only when
 // the token-budget feature is enabled for the turn.
 func (r *RuntimeRouter) newContextWindowRequesterForTurn(threadID string, cfg *config.Config) func() {
-	if r == nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "token_budget") {
+	if r == nil || cfg == nil || (!features.Enabled(cfg.FeatureSettings(), "token_budget") && !r.experimentalContextManagementEligible(cfg, nil)) {
 		return nil
 	}
 	return func() {
