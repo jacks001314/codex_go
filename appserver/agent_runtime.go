@@ -122,6 +122,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
 		modelReviewer.environment = r.guardianEnvironmentInputItems
 		modelReviewer.rootUserAuthorization = r.guardianRootUserAuthorizationForTurn
+		modelReviewer.fastDecision = r.emitGuardianV2FastDecision
 		r.services.GuardianReviewer = reviewer
 		if prewarm {
 			go func() {

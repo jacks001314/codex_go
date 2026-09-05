@@ -281,6 +281,50 @@ func (r *RuntimeRouter) emitGuardianV2ClassificationAnalytics(ctx context.Contex
 	sink.TrackCodexGuardianV2Event(ctx, event)
 }
 
+func (r *RuntimeRouter) emitGuardianV2FastDecision(ctx context.Context, threadID, turnID, itemID string) {
+	if r == nil || r.services.Analytics == nil {
+		return
+	}
+	active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+	if active == nil || active.RunConfig == nil || !active.RunConfig.GuardianV2Enabled {
+		return
+	}
+	sink, ok := r.services.Analytics.(telemetry.GuardianV2EventSink)
+	if !ok {
+		return
+	}
+	client, ok := r.analyticsAppServerClient(active.ConnectionID)
+	if !ok {
+		return
+	}
+	if record := r.threadRecordForAnalytics(threadID); record != nil {
+		if originator := strings.TrimSpace(record.Metadata.Originator); originator != "" {
+			client.ProductClientID = originator
+		}
+	}
+	lineage := r.responsesMetadataLineage(threadID)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	event := telemetry.NewGuardianV2FastDecisionEvent(telemetry.GuardianV2EventParams{
+		SessionID:       firstNonEmpty(lineage.SessionID, threadID),
+		AppServerClient: client,
+		Runtime:         telemetry.CurrentRuntimeMetadata(),
+		ThreadSource:    stringPtrIfNotEmpty(lineage.ThreadSource),
+		SubagentSource:  stringPtrIfNotEmpty(lineage.SubagentKind),
+		ParentThreadID:  stringPtrIfNotEmpty(lineage.ParentThreadID),
+		GuardianV2Event: telemetry.GuardianV2Event{
+			ThreadID:     strings.TrimSpace(threadID),
+			TurnID:       strings.TrimSpace(turnID),
+			ItemID:       stringPtrIfNotEmpty(itemID),
+			Model:        stringPtrIfNotEmpty(active.RunConfig.Model),
+			OccurredAtMS: uint64(time.Now().UTC().UnixMilli()),
+			Decision:     "approved",
+		},
+	})
+	sink.TrackCodexGuardianV2Event(ctx, event)
+}
+
 func guardianV2AnalyticsOutcome(status string) string {
 	switch status {
 	case telemetry.ReviewStatusApproved:

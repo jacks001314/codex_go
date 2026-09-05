@@ -44,6 +44,7 @@ type modelGuardianReviewer struct {
 	permissionProfile          func(threadID, turnID string) *sandbox.PermissionProfile
 	nodeReplEvidence           func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
 	rootUserAuthorization      func(threadID, turnID string) []string
+	fastDecision               func(context.Context, string, string, string)
 	timeout                    time.Duration
 }
 
@@ -258,10 +259,16 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		return state.DecisionDenied, "guardian review skipped: risk score lag exceeds max_tool_call_lag", nil
 	}
 	if r.fullAccess != nil && r.fullAccess(threadID, turnID) {
+		if r.fastDecision != nil {
+			r.fastDecision(ctx, threadID, turnID, targetItemID)
+		}
 		return state.DecisionApproved, "full access", nil
 	}
 	if r.approvalsReviewer != nil && strings.EqualFold(r.approvalsReviewer(threadID, turnID), string(config.ApprovalsReviewerUser)) &&
 		action.Type == "mcp_tool_call" && strings.EqualFold(strings.TrimSpace(action.Server), "node_repl") && strings.EqualFold(strings.TrimSpace(action.ToolName), "js") {
+		if r.fastDecision != nil {
+			r.fastDecision(ctx, threadID, turnID, targetItemID)
+		}
 		return state.DecisionApproved, "user approval mode", nil
 	}
 	r.beginToolCall(threadID)
