@@ -2592,6 +2592,10 @@ func LocalRecord(record *Record) *Record {
 
 func cloneMetadata(metadata Metadata) Metadata {
 	metadata.Git = cloneStringMap(metadata.Git)
+	if metadata.DaybreakEnabled != nil {
+		daybreak := *metadata.DaybreakEnabled
+		metadata.DaybreakEnabled = &daybreak
+	}
 	metadata.BaseInstructionsProvenance = cloneBaseInstructionsProvenance(metadata.BaseInstructionsProvenance)
 	metadata.Extra = cloneAnyMap(metadata.Extra)
 	metadata.DynamicTools = cloneRawMessages(metadata.DynamicTools)
