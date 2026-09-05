@@ -835,8 +835,9 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnStartCompactCommand:     interactiveLocalCompactStartCommand(ctx, state, nil),
 		OnStartSide:               sideCoordinator.Start,
 		OnCloseSide:               sideCoordinator.Close,
-		// TODO(sync30 #42380): wire OnSafetyBufferingRetry to the local runner
-		// once the local session layer exposes interrupt+fork+resubmit.
+		OnSafetyBufferingRetry: func(threadID, turnID, model, prompt string) bubbletea.Cmd {
+			return interactiveLocalSafetyBufferingRetryCommand(ctx, root, interactiveTurnRunner(runner), state, store, threadID, turnID, model, prompt, approvalBroker, elicitationBroker, userInputBroker, interrupts)
+		},
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			turnRunner := interactiveTurnRunner(runner)
 			if instructions, side := sideCoordinator.Instructions(state.ThreadID); side {
@@ -2634,6 +2635,77 @@ func interactiveGoalContinuationInputItem(goal appserver.Goal) any {
 			"type": "input_text",
 			"text": rendered.Content,
 		}},
+	}
+}
+
+func interactiveLocalSafetyBufferingRetryCommand(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, store *session.Store, threadID string, turnID string, model string, prompt string, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker, interrupts ...*interactiveInterruptController) bubbletea.Cmd {
+	return func() bubbletea.Msg {
+		interrupted := false
+		if len(interrupts) > 0 && interrupts[0] != nil {
+			interrupted = interrupts[0].interrupt()
+		}
+		if !interrupted {
+			return codextea.TurnInterruptedMsg{Err: errors.New("no active local turn to interrupt for safety retry")}
+		}
+		if err := waitLocalTurnStopped(store, strings.TrimSpace(threadID)); err != nil {
+			return codextea.TurnCompletedMsg{Err: err}
+		}
+		forkParams := appserver.ThreadForkParams{ThreadID: strings.TrimSpace(threadID), BeforeTurnID: strings.TrimSpace(turnID)}
+		fasterModel := strings.TrimSpace(model)
+		if fasterModel != "" {
+			forkParams.Model = &fasterModel
+		}
+		result, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadFork, forkParams)
+		if closeRuntime != nil {
+			defer closeRuntime()
+		}
+		if err != nil {
+			return codextea.TurnCompletedMsg{Err: fmt.Errorf("failed to fork local safety retry: %w", err)}
+		}
+		forkResponse, ok := result.(*appserver.ThreadForkResponse)
+		if !ok || forkResponse.Thread == nil || strings.TrimSpace(forkResponse.Thread.ID) == "" {
+			return codextea.TurnCompletedMsg{Err: errors.New("local safety retry fork did not return a thread")}
+		}
+		if state != nil {
+			state.SetThreadID(strings.TrimSpace(forkResponse.Thread.ID))
+			if fasterModel != "" {
+				state.Model = fasterModel
+			}
+		}
+		return interactiveTurnCommandWithRequest(ctx, root, runner, state, codextea.SubmitRequest{Prompt: strings.TrimSpace(prompt), Model: fasterModel}, approvalBroker, elicitationBroker, userInputBroker, interrupts...)()
+	}
+}
+
+func waitLocalTurnStopped(store *session.Store, threadID string) error {
+	if store == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		result, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadRead, appserver.ThreadReadParams{ThreadID: threadID, IncludeTurns: true})
+		if closeRuntime != nil {
+			closeRuntime()
+		}
+		if err != nil {
+			return err
+		}
+		response, ok := result.(*appserver.ThreadReadResponse)
+		running := false
+		if ok && response != nil && response.Thread != nil {
+			for i := range response.Thread.Turns {
+				if strings.EqualFold(strings.TrimSpace(string(response.Thread.Turns[i].Status)), string(appserver.TurnStatusInProgress)) {
+					running = true
+					break
+				}
+			}
+		}
+		if !running {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("timed out waiting for local safety-buffered turn to stop")
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
