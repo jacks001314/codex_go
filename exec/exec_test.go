@@ -6681,3 +6681,28 @@ func TestExecAgentOriginatorDefaultsToRustCLI(t *testing.T) {
 		t.Fatalf("execAgentOriginator() = %q, want codex_cli_rs", got)
 	}
 }
+
+func TestValidateExecWorktreeRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  Request
+		ok   bool
+	}{
+		{name: "plain", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}}}, ok: true},
+		{name: "fork", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}, Subcommand: "fork"}}, ok: true},
+		{name: "ignore user config", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}, IgnoreUserConfig: true}}},
+		{name: "ephemeral", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}, Ephemeral: true}}},
+		{name: "resume", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}, Subcommand: "resume"}}},
+		{name: "review", req: Request{Exec: cli.ExecOptions{Shared: cli.SharedOptions{Worktree: true}, Subcommand: "review"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateExecWorktreeRequest(&tc.req)
+			if tc.ok && err != nil {
+				t.Fatalf("validateExecWorktreeRequest() error = %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatal("validateExecWorktreeRequest() error = nil")
+			}
+		})
+	}
+}

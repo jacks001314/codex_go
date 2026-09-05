@@ -101,6 +101,7 @@ type SharedOptions struct {
 	DangerouslyBypassHookTrust           bool
 	CWD                                  string
 	AddDirs                              []string
+	Worktree                             bool
 }
 
 type RootOptions struct {
@@ -326,11 +327,11 @@ type CompletionOptions struct {
 }
 
 type DoctorOptions struct {
-	JSON    bool
-	Summary bool
-	All     bool
-	NoColor bool
-	ASCII   bool
+	JSON     bool
+	Summary  bool
+	All      bool
+	NoColor  bool
+	ASCII    bool
 	Feedback bool
 }
 
@@ -3255,6 +3256,12 @@ func parseDebug(args []string, debug *DebugOptions) error {
 func parseSharedOption(args []string, i *int, shared *SharedOptions) (bool, error) {
 	arg := args[*i]
 	switch {
+	case arg == "--worktree":
+		shared.Worktree = true
+		return true, nil
+	case arg == "--no-worktree":
+		shared.Worktree = false
+		return true, nil
 	case arg == "--image" || arg == "-i":
 		value, next, err := requireValue(args, *i, arg)
 		if err != nil {

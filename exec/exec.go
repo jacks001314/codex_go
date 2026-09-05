@@ -140,6 +140,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err := validateExecWorkingDirectory(requestCWD(req)); err != nil {
 		return nil, err
 	}
+	if err := validateExecWorktreeRequest(req); err != nil {
+		return nil, err
+	}
 	cfg, err := config.LoadEffective(
 		r.CodexHome,
 		mergedOverrides(req.Root.ConfigOverrides, req.Exec.ConfigOverrides),
@@ -472,6 +475,33 @@ func validateExecWorkingDirectory(cwd string) error {
 		return fmt.Errorf("working directory %q is not a directory", cwd)
 	}
 	return nil
+}
+
+// validateExecWorktreeRequest enforces the CLI restrictions for the
+// experimental managed-worktree flag before any worktree is allocated
+// (Rust #42652).
+func validateExecWorktreeRequest(req *Request) error {
+	if req == nil || !req.Exec.Shared.Worktree {
+		return nil
+	}
+	if req.Exec.IgnoreUserConfig {
+		return errors.New("--worktree cannot be combined with --ignore-user-config")
+	}
+	if req.Exec.Ephemeral {
+		return errors.New("--worktree cannot be combined with --ephemeral")
+	}
+	switch req.Exec.Subcommand {
+	case "":
+		return nil
+	case "fork":
+		return nil
+	case "resume":
+		return errors.New("--worktree cannot resume an existing session; use codex exec fork --worktree")
+	case "review":
+		return errors.New("--worktree is not supported for code review")
+	default:
+		return errors.New("--worktree is not supported for this exec subcommand")
+	}
 }
 
 func execReviewSubagentMetadata(req *Request) (string, string) {
