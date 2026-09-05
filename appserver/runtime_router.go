@@ -8375,6 +8375,7 @@ func pluginReconcileSignature(detail plugin.PluginDetail) string {
 		RemotePluginID string
 		Version        *string
 		LocalVersion   *string
+		DisabledReason *plugin.PluginDisabledReason
 		MCPServers     []string
 		Apps           []plugin.AppSummary
 		Templates      []plugin.AppTemplateSummary
@@ -8385,6 +8386,7 @@ func pluginReconcileSignature(detail plugin.PluginDetail) string {
 		RemotePluginID: detail.Summary.RemotePluginID,
 		Version:        detail.Summary.Version,
 		LocalVersion:   detail.Summary.LocalVersion,
+		DisabledReason: detail.Summary.DisabledReason,
 		MCPServers:     detail.MCPServers,
 		Apps:           detail.Apps,
 		Templates:      detail.AppTemplates,
