@@ -195,4 +195,14 @@ func TestApplyProxyHeaderInjections(t *testing.T) {
 	if got := request.Header.Get("x-statsig-change-source"); got != "" {
 		t.Fatalf("unmatched host header = %q", got)
 	}
+
+	request, _ = http.NewRequest(http.MethodGet, "https://api.example.com/console/v1", nil)
+	ApplyProxyHeaderInjections(request, []ProxyHeaderInjection{{
+		Host:    "api.example.com",
+		Methods: []string{"POST"},
+		Headers: map[string]string{"x-statsig-change-source": "codex"},
+	}})
+	if got := request.Header.Get("x-statsig-change-source"); got != "" {
+		t.Fatalf("unmatched method header = %q", got)
+	}
 }
