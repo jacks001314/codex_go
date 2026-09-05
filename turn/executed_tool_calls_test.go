@@ -42,6 +42,50 @@ func TestExecutedToolCallRecorderAttachesDirectAttemptToOutput(t *testing.T) {
 	}
 }
 
+func TestExecutedToolCallRecorderRecordsResultSourcesForDirectAndCodeMode(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	direct := &tool.Invocation{CallID: "direct", ToolName: tool.PlainName("echo"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`}}
+	recorder.RecordToolCall(direct, "")
+	if !recorder.RecordToolResultSources(direct, model.NewToolResultSources([]model.ToolResultSource{{Type: "document", ID: "R1"}})) {
+		t.Fatal("direct result source was not recorded")
+	}
+	items, attachment := recorder.AttachPendingToPrompt([]any{&ToolResponseItem{Type: "function_call_output", CallID: "direct", Output: NewFunctionCallOutputPayload("", boolPtr(true))}})
+	if attachment == nil || len(items) != 1 {
+		t.Fatalf("AttachPendingToPrompt() = %#v, %#v", items, attachment)
+	}
+	data, err := json.Marshal(items[0])
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"tool_result_sources":[{"type":"document","id":"R1"}]`) {
+		t.Fatalf("direct attached JSON = %s", data)
+	}
+
+	codeMode := &tool.Invocation{
+		CallID:   "nested",
+		Source:   "code_mode",
+		ToolName: tool.PlainName("nested-tool"),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`},
+		Context:  map[string]any{tool.CodeModeCellIDContextKey: "cell-1"},
+	}
+	recorder.RecordToolCall(codeMode, model.ToolModeCodeMode)
+	if !recorder.RecordToolResultSources(codeMode, model.NewToolResultSources([]model.ToolResultSource{{Type: "room", ID: "R2"}})) {
+		t.Fatal("code mode result source was not recorded")
+	}
+	recorder.RegisterCell("cell-1", "outer")
+	items, attachment = recorder.AttachPendingToPrompt([]any{&ToolResponseItem{Type: "function_call_output", CallID: "outer", Output: NewFunctionCallOutputPayload("", boolPtr(true))}})
+	if attachment == nil || len(items) != 1 {
+		t.Fatalf("code mode AttachPendingToPrompt() = %#v, %#v", items, attachment)
+	}
+	data, err = json.Marshal(items[0])
+	if err != nil {
+		t.Fatalf("code mode Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"tool_result_sources":[{"type":"room","id":"R2"}]`) {
+		t.Fatalf("code mode attached JSON = %s", data)
+	}
+}
+
 func TestExecutedToolCallRecorderRetriesUntilSamplingSucceeds(t *testing.T) {
 	recorder := NewExecutedToolCallRecorder()
 	recorder.RecordToolCall(&tool.Invocation{CallID: "call-retry", ToolName: tool.PlainName("echo"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`}}, "")

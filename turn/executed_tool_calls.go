@@ -31,6 +31,7 @@ type recordedToolCallGroup struct {
 
 type recordedToolCall struct {
 	call      model.ExecutedToolCall
+	callID    string
 	fullBytes int
 }
 
@@ -65,7 +66,7 @@ func (r *ExecutedToolCallRecorder) RecordToolCall(invocation *tool.Invocation, t
 		if groupID == "" {
 			return
 		}
-		r.recordNested(groupID, call, originalBytes)
+		r.recordNested(groupID, invocation.CallID, call, originalBytes)
 		return
 	}
 
@@ -85,7 +86,7 @@ func (r *ExecutedToolCallRecorder) RecordToolCall(invocation *tool.Invocation, t
 	}
 }
 
-func (r *ExecutedToolCallRecorder) recordNested(groupID string, call model.ExecutedToolCall, originalBytes int) {
+func (r *ExecutedToolCallRecorder) recordNested(groupID string, callID string, call model.ExecutedToolCall, originalBytes int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensureState()
@@ -106,7 +107,7 @@ func (r *ExecutedToolCallRecorder) recordNested(groupID string, call model.Execu
 	if maxBytes < 0 {
 		maxBytes = 0
 	}
-	recorded := recordedToolCall{call: call}
+	recorded := recordedToolCall{call: call, callID: strings.TrimSpace(callID)}
 	if pendingCount == maxPendingExecutedToolCalls {
 		recorded.call = model.NewTruncatedExecutedToolCall(call.Name, originalBytes, 0)
 	} else if originalBytes <= maxBytes {
@@ -116,6 +117,43 @@ func (r *ExecutedToolCallRecorder) recordNested(groupID string, call model.Execu
 		recorded.call = model.NewTruncatedExecutedToolCall(call.Name, originalBytes, maxBytes)
 	}
 	group.pending = append(group.pending, recorded)
+}
+
+// RecordToolResultSources attaches host-generated analytics evidence to the
+// matching direct or Code Mode executed-tool call (Rust #42164). Source data
+// only replaces an existing call and is ignored when the call was compacted
+// away or the result arrived for a different retry copy.
+func (r *ExecutedToolCallRecorder) RecordToolResultSources(invocation *tool.Invocation, sources model.ToolResultSources) bool {
+	if r == nil || invocation == nil || strings.TrimSpace(invocation.CallID) == "" {
+		return false
+	}
+	callID := strings.TrimSpace(invocation.CallID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureState()
+	if strings.EqualFold(strings.TrimSpace(invocation.Source), "code_mode") {
+		groupID := codeModeInvocationGroupID(invocation)
+		if groupID == "" {
+			return false
+		}
+		group := r.groups[groupID]
+		if group == nil {
+			return false
+		}
+		for index := range group.pending {
+			if group.pending[index].callID == callID {
+				return group.pending[index].call.SetToolResultSources(sources)
+			}
+		}
+		return false
+	}
+	call, exists := r.direct[callID]
+	if !exists {
+		return false
+	}
+	updated := call.SetToolResultSources(sources)
+	r.direct[callID] = call
+	return updated
 }
 
 func (r *ExecutedToolCallRecorder) RegisterCell(cellID string, outputCallID string) {

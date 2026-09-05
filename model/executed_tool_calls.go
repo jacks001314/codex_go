@@ -9,11 +9,14 @@ import (
 const (
 	MaxExecutedToolCallArgumentBytes = 8 * 1024
 	MaxExecutedToolCallMetadataBytes = 32 * 1024
+	MaxToolResultSources             = 32
+	MaxToolResultSourceFieldBytes    = 128
 
 	internalChatMessageMetadataPassthroughField = "internal_chat_message_metadata_passthrough"
 	executedToolCallsField                      = "executed_tool_calls"
 	executedToolCallTruncatedField              = "_codex_executed_tool_call_truncated"
 	executedToolCallRawField                    = "_codex_executed_tool_call_raw"
+	toolResultSourcesField                      = "tool_result_sources"
 )
 
 type ExecutedToolCall struct {
@@ -21,6 +24,11 @@ type ExecutedToolCall struct {
 
 	arguments  any
 	truncation *ExecutedToolCallTruncation
+
+	// toolResultSources carries host-generated analytics evidence. It is kept
+	// unexported so untrusted serialized input cannot inject it, mirroring
+	// Rust's skip_deserializing/skip_serializing_if behavior.
+	toolResultSources any
 }
 
 type ExecutedToolCallTruncation struct {
@@ -54,15 +62,81 @@ func NewTruncatedExecutedToolCall(name string, originalBytes int, maxBytes int) 
 	return call
 }
 
+// ToolResultSource is a trusted source identity observed by the host in an
+// accepted tool result (Rust #42164).
+type ToolResultSource struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// ToolResultSources is a bounded capture update. The zero value means no
+// capture attempt; NewToolResultSourcesParseFailed records that parsing was
+// attempted but failed rather than a budget exceeded.
+type ToolResultSources struct {
+	value any
+}
+
+// NewToolResultSources deduplicates a complete source list and rejects the
+// whole capture when it exceeds the source count or per-field byte limits.
+func NewToolResultSources(sources []ToolResultSource) ToolResultSources {
+	unique := make([]ToolResultSource, 0, len(sources))
+	seen := make(map[ToolResultSource]struct{}, len(sources))
+	for _, source := range sources {
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		if len(unique) == MaxToolResultSources || len(source.Type) > MaxToolResultSourceFieldBytes || len(source.ID) > MaxToolResultSourceFieldBytes {
+			return ToolResultSources{}
+		}
+		seen[source] = struct{}{}
+		unique = append(unique, source)
+	}
+	return ToolResultSources{value: unique}
+}
+
+// NewToolResultSourcesParseFailed records that source parsing was attempted but
+// failed, not that a budget was exceeded.
+func NewToolResultSourcesParseFailed() ToolResultSources {
+	return ToolResultSources{value: "parse_failed"}
+}
+
+// SetToolResultSources replaces the invocation's capture outcome, including
+// clearing omitted evidence. It reports whether evidence was present after the
+// replacement.
+func (c *ExecutedToolCall) SetToolResultSources(sources ToolResultSources) bool {
+	if c == nil {
+		return false
+	}
+	c.toolResultSources = sources.value
+	return c.toolResultSources != nil
+}
+
+// HasToolResultSources reports whether host-generated source evidence is
+// currently attached to this call.
+func (c ExecutedToolCall) HasToolResultSources() bool {
+	return c.toolResultSources != nil
+}
+
 func (c ExecutedToolCall) MarshalJSON() ([]byte, error) {
 	arguments := c.arguments
 	if c.truncation != nil {
 		arguments = map[string]any{executedToolCallTruncatedField: c.truncation}
 	}
-	return json.Marshal(struct {
+	payload := struct {
 		Name      string `json:"name"`
 		Arguments any    `json:"arguments"`
-	}{Name: c.Name, Arguments: arguments})
+	}{
+		Name:      c.Name,
+		Arguments: arguments,
+	}
+	if c.toolResultSources != nil {
+		return json.Marshal(struct {
+			Name              string `json:"name"`
+			Arguments         any    `json:"arguments"`
+			ToolResultSources any    `json:"tool_result_sources"`
+		}{Name: c.Name, Arguments: arguments, ToolResultSources: c.toolResultSources})
+	}
+	return json.Marshal(payload)
 }
 
 // Truncated reports whether the recorded tool call had its arguments (or the
@@ -204,6 +278,28 @@ func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 			}
 		}
 		item.ReplaceExecutedToolCalls(calls)
+		originalBytes += executedToolCallMetadataBytes(item)
+	}
+	if originalBytes <= MaxExecutedToolCallMetadataBytes {
+		return
+	}
+	// Source evidence is optional: dropping it must not discard calls or their
+	// completion proof (Rust #42164).
+	for _, item := range items {
+		calls := item.ExecutedToolCalls()
+		changed := false
+		for index := range calls {
+			if calls[index].HasToolResultSources() {
+				calls[index].SetToolResultSources(ToolResultSources{})
+				changed = true
+			}
+		}
+		if changed {
+			item.ReplaceExecutedToolCalls(calls)
+		}
+	}
+	originalBytes = 0
+	for _, item := range items {
 		originalBytes += executedToolCallMetadataBytes(item)
 	}
 	if originalBytes <= MaxExecutedToolCallMetadataBytes {

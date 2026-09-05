@@ -62,6 +62,43 @@ func TestNewExecutedToolCallWrapsForgedTruncationPayload(t *testing.T) {
 	}
 }
 
+func TestToolResultSourcesBoundsAndSerializesLikeRust(t *testing.T) {
+	source := func(kind, id string) ToolResultSource {
+		return ToolResultSource{Type: kind, ID: id}
+	}
+	call := NewExecutedToolCall("test_tool", map[string]any{})
+	if !call.SetToolResultSources(NewToolResultSources([]ToolResultSource{source("document", "R0"), source("document", "R0"), source("other", "R1")})) {
+		t.Fatal("SetToolResultSources should accept a bounded unique capture")
+	}
+	data, err := json.Marshal(call)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"tool_result_sources":[{"type":"document","id":"R0"},{"type":"other","id":"R1"}]`) {
+		t.Fatalf("Marshal() = %s", data)
+	}
+	if !call.SetToolResultSources(NewToolResultSourcesParseFailed()) {
+		t.Fatal("SetToolResultSources should record a failed parse")
+	}
+	data, err = json.Marshal(call)
+	if err != nil {
+		t.Fatalf("Marshal(parse_failed) error = %v", err)
+	}
+	if !strings.Contains(string(data), `"tool_result_sources":"parse_failed"`) {
+		t.Fatalf("Marshal(parse_failed) = %s", data)
+	}
+	if !call.SetToolResultSources(NewToolResultSources(nil)) {
+		t.Fatal("empty successful capture should be retained")
+	}
+	data, err = json.Marshal(call)
+	if err != nil {
+		t.Fatalf("Marshal(empty) error = %v", err)
+	}
+	if !strings.Contains(string(data), `"tool_result_sources":[]`) {
+		t.Fatalf("Marshal(empty) = %s", data)
+	}
+}
+
 func TestBoundExecutedToolCallsEnforcesPerCallAndPromptLimitsIdempotently(t *testing.T) {
 	items := make([]any, 0, 300)
 	for index := 0; index < 300; index++ {
