@@ -353,7 +353,8 @@ func nonModelVisibleHistoryItemType(itemType string) bool {
 	case "command_execution", "file_change", "mcp_tool_call", "collab_tool_call", "collab_agent_tool_call", "collabAgentToolCall",
 		"sub_agent_activity", "subAgentActivity", "todo_list", "error",
 		"enteredReviewMode", "entered_review_mode", "exitedReviewMode", "exited_review_mode",
-		"contextCompaction", "context_compaction", "external_session_import_marker":
+		"contextCompaction", "context_compaction", "external_session_import_marker",
+		"configuration_update":
 		return true
 	default:
 		return false

@@ -149,6 +149,18 @@ func TestInputItemsFromRecordOmitsNonModelVisibleThreadItemsLikeRust(t *testing.
 	}
 }
 
+func TestConfigurationUpdateHistoryItemsAreNotReplayed(t *testing.T) {
+	record := &Record{Items: []Item{{
+		ID:   "cfg-1",
+		Type: "configuration_update",
+		Data: map[string]any{"reasoning": map[string]any{"effort": "high"}},
+	}}}
+	items := InputItemsFromRecord(record, nil)
+	if len(items) != 0 {
+		t.Fatalf("configuration_update should be dropped from model history: %#v", items)
+	}
+}
+
 func TestInputItemsFromRecordBuildsMessagesAndToolItems(t *testing.T) {
 	record := &Record{Items: []Item{
 		{ID: "u1", Type: "message", Role: "user", Text: "hello"},
@@ -514,8 +526,8 @@ func sessionMinimalPNGBytes() []byte {
 
 func TestSanitizeHistoryInputItemPreservesContentItemKinds(t *testing.T) {
 	input := map[string]any{
-		"type": "message",
-		"role": "user",
+		"type":    "message",
+		"role":    "user",
 		"content": []any{map[string]any{"type": "input_text", "text": "hi"}},
 		"internal_chat_message_metadata_passthrough": map[string]any{
 			"content_item_kinds": []any{"user.text"},
