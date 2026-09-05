@@ -86,6 +86,7 @@ type ProxyConfig struct {
 	AuditMetadata         ProxyAuditMetadata
 	AuditMetadataProvider ProxyAuditMetadataProvider
 	EnvironmentID         string
+	HeaderInjections      []ProxyHeaderInjection
 }
 
 type ProxySettings struct {

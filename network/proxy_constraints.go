@@ -217,6 +217,7 @@ func applyProxyRequirements(config ProxyConfig, requirements *ProxyRequirements,
 		constraints.AllowLocalBinding = cloneBool(requirements.AllowLocalBinding)
 	}
 	constraints.HeaderInjections = cloneProxyHeaderInjections(requirements.HeaderInjections)
+	config.HeaderInjections = cloneProxyHeaderInjections(requirements.HeaderInjections)
 	return config, constraints
 }
 

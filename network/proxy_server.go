@@ -54,11 +54,12 @@ type ProxyServer struct {
 }
 
 type proxyRuntimePolicy struct {
-	settings     ProxySettings
-	allowMatcher *ProxyDomainMatcher
-	denyMatcher  *ProxyDomainMatcher
-	mitmHooks    ProxyMITMHooksByHost
-	broker       *ProxyCredentialBroker
+	settings         ProxySettings
+	allowMatcher     *ProxyDomainMatcher
+	denyMatcher      *ProxyDomainMatcher
+	mitmHooks        ProxyMITMHooksByHost
+	broker           *ProxyCredentialBroker
+	headerInjections []ProxyHeaderInjection
 }
 
 func StartProxyManagedNetwork(ctx context.Context, config ProxyConfig, baseEnv map[string]string) (*PreparedProxyManagedNetwork, error) {
@@ -107,6 +108,7 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 		cancel()
 		return nil, err
 	}
+	policy.headerInjections = cloneProxyHeaderInjections(config.HeaderInjections)
 	var mitmRuntime *proxyMITMRuntime
 	if settings.MITM {
 		mitmRuntime, err = newProxyMITMRuntime(baseEnv)
@@ -604,6 +606,7 @@ func (s *ProxyServer) handleHTTPMITM(client net.Conn, host string, port uint16) 
 
 func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 	policy := s.runtimePolicy()
+	ApplyProxyHeaderInjections(request, policy.headerInjections)
 	host := proxyHTTPDestinationHost(request)
 	requestPort := uint16(80)
 	policyChecked := false
