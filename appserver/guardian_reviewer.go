@@ -44,8 +44,16 @@ type modelGuardianReviewer struct {
 	permissionProfile          func(threadID, turnID string) *sandbox.PermissionProfile
 	nodeReplEvidence           func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
 	rootUserAuthorization      func(threadID, turnID string) []string
-	fastDecision               func(context.Context, string, string, string)
-	timeout                    time.Duration
+	// Rust #42807 gives extension contributors a request-scoped `decide` hook
+	// (Allow / Reviewed / AskUser) plus structured reasons for a fresh review.
+	// The Go port has no ApprovalReviewContributor extension registry; the
+	// equivalent decision policy lives here as synchronous fast paths (Full
+	// Access approval, user-mode node_repl auto-accept) feeding the shared
+	// model review, and host permission enforcement stays outside the
+	// reviewer. Structured fresh-review reasons are therefore not exposed to
+	// contributors, which makes #42807 rust-coupled for the Go architecture.
+	fastDecision func(context.Context, string, string, string)
+	timeout      time.Duration
 }
 
 // defaultGuardianMaxToolCallLag mirrors Rust
