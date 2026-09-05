@@ -7029,15 +7029,6 @@ func (r *RuntimeRouter) ensureRealtimeThread(threadID string) error {
 			return err
 		}
 	}
-	if r.services.Config != nil {
-		cfg, _, err := r.effectiveRealtimeThreadConfig(threadID)
-		if err != nil {
-			return err
-		}
-		if !features.Enabled(cfg.FeatureSettings(), "realtime_conversation") {
-			return jsonRPCInvalidRequest(fmt.Sprintf("thread %s does not support realtime conversation", strings.TrimSpace(threadID)))
-		}
-	}
 	return nil
 }
 
