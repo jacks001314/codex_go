@@ -58,6 +58,15 @@ func TestPluginReconcileSignatureDetectsDisabledReasonChange(t *testing.T) {
 	}
 }
 
+func TestPluginReconcileSignatureDetectsAvailabilityChange(t *testing.T) {
+	base := plugin.PluginDetail{Summary: plugin.PluginSummary{ID: "acme/weather", Enabled: true, Availability: plugin.PluginAvailable}}
+	next := base
+	next.Summary.Availability = plugin.PluginDisabledByAdmin
+	if pluginReconcileSignature(base) == pluginReconcileSignature(next) {
+		t.Fatal("pluginReconcileSignature should differ when availability changes")
+	}
+}
+
 func pluginDisabledReasonPtr(value plugin.PluginDisabledReason) *plugin.PluginDisabledReason {
 	return &value
 }
