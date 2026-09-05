@@ -60,6 +60,12 @@ func TestWorktreeManagerCreateAndList(t *testing.T) {
 	if err := manager.BindThread(created.Root, "thread-2"); err == nil {
 		t.Fatal("BindThread replaced existing owner")
 	}
+	if err := manager.Remove(created.Root); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	if remaining, err := manager.List(source); err != nil || len(remaining) != 0 {
+		t.Fatalf("List after Remove = %#v, %v", remaining, err)
+	}
 	_ = git
 }
 

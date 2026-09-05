@@ -262,7 +262,8 @@ func (m *WorktreeManager) Remove(checkout string) error {
 		return err
 	}
 	if _, err := gitOutput(sourceRoot, "worktree", "remove", "--force", checkout); err != nil {
-		return err
+		_ = os.RemoveAll(checkout)
+		return removeEmptyBucket(checkout)
 	}
 	return removeEmptyBucket(checkout)
 }
