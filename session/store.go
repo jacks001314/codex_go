@@ -1233,6 +1233,9 @@ func (s *Store) updateMetadataLocked(threadID ThreadID, patch *MetadataPatch, in
 	if patch.Originator != nil {
 		record.Metadata.Originator = *patch.Originator
 	}
+	if patch.DaybreakEnabled != nil {
+		record.Metadata.DaybreakEnabled = patch.DaybreakEnabled
+	}
 	if patch.HistoryMode != nil {
 		record.Metadata.HistoryMode = *patch.HistoryMode
 	}
