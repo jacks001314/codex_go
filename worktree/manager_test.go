@@ -104,6 +104,22 @@ func TestWorktreeOwnerReturnsEmptyWhenMissing(t *testing.T) {
 	}
 }
 
+func TestWorktreeListExcludesNonManagedLayout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	runGit(t, root, "init")
+	manager := NewWorktreeManager(WorktreeSettings{Root: filepath.Join(root, "managed"), AutoCleanupEnabled: true, KeepCount: 15})
+	list, err := manager.List(root)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("List() = %#v, want no non-managed worktrees", list)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
