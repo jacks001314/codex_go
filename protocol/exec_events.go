@@ -16,6 +16,10 @@ type ThreadEvent struct {
 	Delta      *Delta             `json:"delta,omitempty"`
 	RateLimit  *RateLimitSnapshot `json:"rateLimit,omitempty"`
 	TokenUsage *ThreadTokenUsage  `json:"tokenUsage,omitempty"`
+	// StartedAtMS carries the item-started wall clock (Unix epoch
+	// milliseconds) for events whose lifetime needs a live timer, such as a
+	// context compaction item resumed from an app-server snapshot.
+	StartedAtMS *int64 `json:"startedAtMs,omitempty"`
 }
 
 type ThreadTokenUsage struct {
@@ -197,11 +201,11 @@ func AgentMessageItemWithPhase(id, text, phase string) ThreadItem {
 // message sent without ending the current turn.
 func AsyncAgentMessageItem(id, text string) ThreadItem {
 	return ThreadItem{
-		ID:        id,
-		Type:      "agent_message",
-		Text:      text,
-		Phase:     "final_answer",
-		Delivery:  "async",
+		ID:       id,
+		Type:     "agent_message",
+		Text:     text,
+		Phase:    "final_answer",
+		Delivery: "async",
 	}
 }
 
@@ -511,6 +515,15 @@ func ItemStarted(item ThreadItem) ThreadEvent {
 		Type: "item.started",
 		Item: &item,
 	}
+}
+
+// ItemStartedAt returns an item.started event tagged with the item's observed
+// start time so live statuses (for example context compaction) can restore an
+// in-progress timer instead of restarting it.
+func ItemStartedAt(item ThreadItem, startedAtMS int64) ThreadEvent {
+	event := ItemStarted(item)
+	event.StartedAtMS = &startedAtMS
+	return event
 }
 
 func ItemUpdated(item ThreadItem) ThreadEvent {

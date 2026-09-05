@@ -3052,13 +3052,16 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return err
 		}
 		c.sendSideParentStatusChange(payload.ThreadID, codextea.SideParentStatusChangeClearActionable, "")
+		item := remoteProtocolItemFromPayload(payload.Item, false)
+		event := protocol.ItemStarted(item)
+		if strings.EqualFold(strings.TrimSpace(item.Type), "contextCompaction") && payload.StartedAtMS > 0 {
+			event = protocol.ItemStartedAt(item, payload.StartedAtMS)
+		}
 		if !c.notificationThreadIsActive(payload.ThreadID) {
-			item := remoteProtocolItemFromPayload(payload.Item, false)
-			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.ItemStarted(item)})
+			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: event})
 			return nil
 		}
-		item := remoteProtocolItemFromPayload(payload.Item, false)
-		c.send(codextea.ThreadEventMsg{Event: protocol.ItemStarted(item)})
+		c.send(codextea.ThreadEventMsg{Event: event})
 	case appserver.NotificationItemCompleted:
 		var payload appserver.ItemCompletedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

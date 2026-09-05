@@ -4664,14 +4664,107 @@ func TestModelContextCompactionCompletionAddsRustHistoryMarker(t *testing.T) {
 	}
 }
 
+func TestModelLiveContextCompactionTracksElapsedAndCompletesWithDuration(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 120, Height: 30})
+	now := time.Unix(1_700_000_000, 0).UTC()
+	model.now = func() time.Time { return now }
+
+	model.applyItemStarted(&protocol.ThreadItem{ID: "compact-live", Type: "contextCompaction"}, 0)
+	if !model.compactionActive || model.compactionID != "compact-live" || model.compactionStartedAt.IsZero() {
+		t.Fatalf("live compaction state = active:%v id:%q started:%v", model.compactionActive, model.compactionID, model.compactionStartedAt)
+	}
+	if !strings.Contains(utils.StripANSI(model.View()), "Compacting context") {
+		t.Fatalf("live compaction row missing:\n%s", model.View())
+	}
+
+	// A duplicate start for the same id must keep the original wall clock.
+	now = now.Add(30 * time.Second)
+	model.now = func() time.Time { return now }
+	model.applyItemStarted(&protocol.ThreadItem{ID: "compact-live", Type: "contextCompaction"}, 0)
+	model.renderRetryActivity()
+	if got := utils.StripANSI(model.View()); !strings.Contains(got, "Compacting context... (30s)") {
+		t.Fatalf("duplicate start reset the compaction timer:\n%s", got)
+	}
+
+	now = now.Add(45 * time.Second)
+	model.now = func() time.Time { return now }
+	model.renderRetryActivity()
+	if got := utils.StripANSI(model.View()); !strings.Contains(got, "Compacting context... (1m 15s)") {
+		t.Fatalf("compaction timer did not advance to 1m 15s:\n%s", got)
+	}
+
+	model.applyItemCompleted(&protocol.ThreadItem{ID: "compact-live", Type: "contextCompaction"})
+	if model.compactionActive {
+		t.Fatalf("compaction still active after completion: %#v", model.compactionStartedAt)
+	}
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "Context compacted · 1m 15s") {
+		t.Fatalf("live completion duration missing:\n%s", view)
+	}
+}
+
+func TestModelContextCompactionStartedAtRestoresInFlightTimer(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 120, Height: 30})
+	now := time.Unix(1_700_000_000, 0).UTC()
+	startedAtMS := now.Add(-90 * time.Second).UnixMilli()
+	model.now = func() time.Time { return now }
+
+	model.applyItemStarted(&protocol.ThreadItem{ID: "compact-snapshot", Type: "contextCompaction"}, startedAtMS)
+	model.renderRetryActivity()
+	if got := utils.StripANSI(model.View()); !strings.Contains(got, "Compacting context... (1m 30s)") {
+		t.Fatalf("snapshot compaction did not restore elapsed time:\n%s", got)
+	}
+
+	model.applyItemCompleted(&protocol.ThreadItem{ID: "compact-snapshot", Type: "contextCompaction"})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "Context compacted · 1m 30s") {
+		t.Fatalf("snapshot completion duration missing:\n%s", view)
+	}
+}
+
+func TestModelContextCompactionCompletionForUnknownIDKeepsActivePhase(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 120, Height: 30})
+	model.applyItemStarted(&protocol.ThreadItem{ID: "compact-a", Type: "contextCompaction"}, 0)
+
+	model.applyItemCompleted(&protocol.ThreadItem{ID: "compact-b", Type: "contextCompaction"})
+	if !model.compactionActive || model.compactionID != "compact-a" {
+		t.Fatalf("non-matching completion cleared active compaction: active=%v id=%q", model.compactionActive, model.compactionID)
+	}
+
+	model.applyThreadEvent(protocol.ThreadEvent{Type: "turn.completed"})
+	if model.compactionActive {
+		t.Fatalf("turn completion did not clear compaction: id=%q", model.compactionID)
+	}
+}
+
+func TestModelCompactionSurvivesTransientRetryStatus(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 120, Height: 30})
+	model.applyItemStarted(&protocol.ThreadItem{ID: "compact-retry", Type: "contextCompaction"}, 0)
+
+	model.Update(ModelRetryStatusMsg{Message: "Reconnecting... 2/5", Active: true})
+	if got := utils.StripANSI(model.View()); !strings.Contains(got, "Reconnecting... 2/5") || strings.Contains(got, "Compacting context") {
+		t.Fatalf("retry status did not take precedence over compaction:\n%s", got)
+	}
+
+	model.Update(ModelRetryStatusMsg{Active: false})
+	view := utils.StripANSI(model.View())
+	if !model.compactionActive || !strings.Contains(view, "Compacting context...") {
+		t.Fatalf("compaction row not restored after transient retry: active=%v\n%s", model.compactionActive, view)
+	}
+}
+
 func TestModelRendersCanonicalMultiAgentLifecycleWithoutCiphertext(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{})
 	receivers := []string{}
 	prompt := "gAAAA-hidden"
-	model.applyItemStarted(&protocol.ThreadItem{ID: "wait", Type: "collab_tool_call", Tool: "wait", ReceiverThreadIDs: &receivers, Prompt: &prompt})
+	model.applyItemStarted(&protocol.ThreadItem{ID: "wait", Type: "collab_tool_call", Tool: "wait", ReceiverThreadIDs: &receivers, Prompt: &prompt}, 0)
 	model.applyItemCompleted(&protocol.ThreadItem{ID: "wait", Type: "collab_tool_call", Tool: "wait", ReceiverThreadIDs: &receivers})
 	activity := &protocol.ThreadItem{ID: "spawn", Type: "sub_agent_activity", ActivityKind: "started", AgentPath: "/root/worker"}
-	model.applyItemStarted(activity)
+	model.applyItemStarted(activity, 0)
 	model.applyItemCompleted(activity)
 	view := utils.StripANSI(model.View())
 	for _, want := range []string{"Waiting for agents", "Finished waiting", "No agents completed yet"} {

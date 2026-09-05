@@ -824,6 +824,9 @@ type Model struct {
 	retryMessageIndex               int
 	retryActivityMessage            string
 	retryActivityActive             bool
+	compactionActive                bool
+	compactionID                    string
+	compactionStartedAt             time.Time
 	bottom                          []string
 	attachments                     []bottompane.ComposerAttachment
 	composerMentionBindings         []string
@@ -1524,11 +1527,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case ModelCompactionStatusMsg:
 		if msg.Active {
-			m.retryActivityMessage = strings.TrimSpace(msg.Message)
-			m.retryActivityActive = m.retryActivityMessage != ""
-			m.renderRetryActivity()
+			m.startCompactionActivity("", 0, msg.Message)
 		} else {
-			m.clearRetryActivity()
+			m.finishCompactionActivity("", false)
 		}
 		return m, nil
 	case TurnCompletedMsg:
@@ -2850,6 +2851,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.Transcript.lastTurnError = ""
 		m.retryMessageIndex = -1
 		m.retryActivityActive = false
+		m.clearCompactionActivity()
 	case "turn.reconnecting":
 		if event.Item != nil {
 			message := event.Item.Message
@@ -2867,13 +2869,15 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		if event.Item != nil && strings.TrimSpace(event.Item.Message) != "" {
 			message = strings.TrimSpace(event.Item.Message)
 		}
-		m.retryActivityMessage = message
-		m.retryActivityActive = true
-		m.renderRetryActivity()
+		m.startCompactionActivity("", 0, message)
 	case "turn.compacted":
-		m.clearRetryActivity()
+		m.finishCompactionActivity("", true)
 	case "item.started":
-		m.applyItemStarted(event.Item)
+		startedAtMS := int64(0)
+		if event.StartedAtMS != nil {
+			startedAtMS = *event.StartedAtMS
+		}
+		m.applyItemStarted(event.Item, startedAtMS)
 	case "item.completed":
 		cmd = m.applyItemCompleted(event.Item)
 	case "item.delta":
@@ -2885,6 +2889,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.markThreadCompleted(m.State.ThreadID)
 		m.Transcript.lastTurnError = ""
 		m.clearRetryActivity()
+		m.clearCompactionActivity()
 	case "turn.failed", "error":
 		message := "Unknown error"
 		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
@@ -2892,6 +2897,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		}
 		m.setStatus("error")
 		m.clearRetryActivity()
+		m.clearCompactionActivity()
 		m.markActiveToolCallsFailed(message)
 		m.clearCurrentThreadAfterFailure(message)
 		m.addTurnErrorHistoryMessage(message)
@@ -2925,7 +2931,7 @@ func tokenUsageFromProtocol(usage protocol.Usage) codextui.TokenUsage {
 	return codextui.TokenUsage{InputTokens: usage.InputTokens, CachedInputTokens: usage.CachedInputTokens, OutputTokens: usage.OutputTokens, ReasoningOutputTokens: usage.ReasoningOutputTokens, TotalTokens: usage.TotalTokens}
 }
 
-func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
+func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 	if item == nil {
 		return
 	}
@@ -2956,6 +2962,8 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem) {
 		m.proposedPlanState(item.ID)
 	case "imageGeneration":
 		// The completed event carries the saved path.
+	case "contextCompaction", "context_compaction":
+		m.startCompactionActivity(strings.TrimSpace(item.ID), startedAtMS, "Compacting context...")
 	case "enteredReviewMode", "entered_review_mode":
 		m.enterReviewMode(firstNonEmpty(strings.TrimSpace(item.Text), strings.TrimSpace(item.Message)))
 	case "collab_tool_call", "collabAgentToolCall", "collab_agent_tool_call":
@@ -3016,7 +3024,11 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	case "enteredReviewMode", "entered_review_mode":
 		// The started lifecycle event owns the live banner.
 	case "contextCompaction", "context_compaction":
-		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{"Context compacted"}))
+		message, live := m.finishCompactionActivity(strings.TrimSpace(item.ID), false)
+		if !live || strings.TrimSpace(message) == "" {
+			message = "Context compacted"
+		}
+		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{message}))
 	case "collab_tool_call", "collabAgentToolCall", "collab_agent_tool_call":
 		m.renderCollabAgentToolCall(item, true)
 	case "sub_agent_activity", "subAgentActivity":
@@ -4284,6 +4296,9 @@ func (m *Model) renderRetryActivity() {
 	if message == "" {
 		return
 	}
+	if m.compactionActive && strings.HasPrefix(message, "Compacting context") {
+		message = m.compactionActivityText(message)
+	}
 	frames := []string{"◐", "◓", "◑", "◒"}
 	frame := frames[0]
 	if m.animEngine != nil {
@@ -4310,6 +4325,98 @@ func (m *Model) clearRetryActivity() {
 		m.State.BumpMessagesRevision()
 	}
 	m.retryMessageIndex = -1
+	// A retry/reconnect status is transient and must not hide an in-flight
+	// compaction: restore the compaction row once the transient status ends
+	// (Rust #42319 status_controls precedence).
+	if m.compactionActive {
+		m.retryActivityMessage = "Compacting context..."
+		m.retryActivityActive = true
+		m.renderRetryActivity()
+	}
+}
+
+// startCompactionActivity enters (or refreshes) the live context-compaction
+// status. A matching in-flight compaction keeps its wall clock; a new id (or a
+// first status update) restores the clock from the item's startedAtMS when the
+// timestamp predates the current time (Rust #42319 compaction.rs).
+func (m *Model) startCompactionActivity(id string, startedAtMS int64, message string) {
+	if m == nil {
+		return
+	}
+	if m.compactionActive {
+		if id != "" && m.compactionID == id {
+			m.retryActivityMessage = "Compacting context..."
+			m.retryActivityActive = true
+			m.renderRetryActivity()
+			return
+		}
+		if id == "" && m.compactionID != "" {
+			return
+		}
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "Compacting context..."
+	}
+	if !m.compactionActive {
+		m.compactionID = id
+		m.compactionStartedAt = m.currentTime()
+		if startedAtMS > 0 {
+			if restored := time.UnixMilli(startedAtMS); restored.Before(m.compactionStartedAt) {
+				m.compactionStartedAt = restored
+			}
+		}
+		m.compactionActive = true
+	}
+	m.retryActivityMessage = message
+	m.retryActivityActive = true
+	m.renderRetryActivity()
+}
+
+// finishCompactionActivity clears a matching live compaction and returns the
+// completion marker with its measured duration. Non-matching completions are
+// ignored so late or out-of-order notifications cannot clear a newer phase.
+func (m *Model) finishCompactionActivity(id string, fromReplay bool) (string, bool) {
+	if m == nil || !m.compactionActive {
+		return "", false
+	}
+	if id != "" && m.compactionID != id {
+		return "", false
+	}
+	live := !fromReplay && !m.compactionStartedAt.IsZero()
+	message := "Context compacted"
+	if live {
+		elapsed := int64(m.currentTime().Sub(m.compactionStartedAt).Seconds())
+		message += " \u00b7 " + codextui.FormatElapsedCompact(elapsed)
+	}
+	m.clearCompactionActivity()
+	return message, live
+}
+
+// clearCompactionActivity drops live compaction state and removes the status
+// row only when compaction still owns it (a retry/reconnect status takes
+// precedence while compaction is active, mirroring Rust status_controls).
+func (m *Model) clearCompactionActivity() {
+	if m == nil {
+		return
+	}
+	compactionOwnsRow := m.retryActivityActive && strings.HasPrefix(strings.TrimSpace(m.retryActivityMessage), "Compacting context")
+	m.compactionActive = false
+	m.compactionID = ""
+	m.compactionStartedAt = time.Time{}
+	if compactionOwnsRow {
+		m.clearRetryActivity()
+	}
+}
+
+// compactionActivityText appends the live elapsed time to a compaction status
+// row so the timer ticks independently of the turn's running time (#42319).
+func (m *Model) compactionActivityText(message string) string {
+	if m == nil || !m.compactionActive || m.compactionStartedAt.IsZero() {
+		return message
+	}
+	elapsed := m.currentTime().Sub(m.compactionStartedAt)
+	return message + " (" + codextui.FormatElapsedCompact(int64(elapsed.Seconds())) + ")"
 }
 
 func warningMessageFromStatus(status string) (string, bool) {
