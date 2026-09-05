@@ -67,6 +67,15 @@ func TestPluginReconcileSignatureDetectsAvailabilityChange(t *testing.T) {
 	}
 }
 
+func TestPluginReconcileSignatureDetectsAuthPolicyChange(t *testing.T) {
+	base := plugin.PluginDetail{Summary: plugin.PluginSummary{ID: "acme/weather", Enabled: true, AuthPolicy: plugin.AuthOnUse}}
+	next := base
+	next.Summary.AuthPolicy = plugin.AuthOnInstall
+	if pluginReconcileSignature(base) == pluginReconcileSignature(next) {
+		t.Fatal("pluginReconcileSignature should differ when auth policy changes")
+	}
+}
+
 func pluginDisabledReasonPtr(value plugin.PluginDisabledReason) *plugin.PluginDisabledReason {
 	return &value
 }
