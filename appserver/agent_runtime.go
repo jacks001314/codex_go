@@ -11,6 +11,7 @@ import (
 	"codex_go/model"
 	"codex_go/network"
 	"codex_go/sandbox"
+	"codex_go/session"
 	"codex_go/turn"
 )
 
@@ -198,9 +199,55 @@ func (r *RuntimeRouter) runtimeRootUserEvidence(workerThreadID string) []string 
 	if r == nil || strings.TrimSpace(workerThreadID) == "" {
 		return nil
 	}
-	// The Go reviewer currently owns the worker's transcript only; root user
-	// evidence requires reading the root thread store, which is not wired here.
-	return nil
+	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(workerThreadID)), true, true)
+	if err != nil || record == nil {
+		return nil
+	}
+	const maxRootUserEvidenceChars = 3600
+	total := 0
+	var out []string
+	for i := len(record.Items) - 1; i >= 0 && total < maxRootUserEvidenceChars; i-- {
+		item := record.Items[i]
+		if !sessionItemIsUserMessage(&item) {
+			continue
+		}
+		text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
+		if text == "" {
+			continue
+		}
+		chars := len([]rune(text))
+		remaining := maxRootUserEvidenceChars - total
+		if chars > remaining {
+			runes := []rune(text)
+			if remaining > 0 {
+				text = string(runes[:remaining])
+			} else {
+				text = ""
+			}
+			chars = remaining
+		}
+		if text == "" {
+			continue
+		}
+		out = append(out, text)
+		total += chars
+	}
+	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
+		out[left], out[right] = out[right], out[left]
+	}
+	return out
+}
+
+func sessionItemIsUserMessage(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	switch strings.TrimSpace(item.Type) {
+	case "message", "user_message":
+		return strings.EqualFold(strings.TrimSpace(item.Role), "user") || strings.TrimSpace(item.Role) == ""
+	default:
+		return false
+	}
 }
 
 func (r *RuntimeRouter) guardianReviewModelForTurn(threadID, turnID string) string {
