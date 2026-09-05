@@ -175,6 +175,19 @@ func TestEnsureGuardianReviewerPrewarmSkip(t *testing.T) {
 	t.Fatal("prewarm should run")
 }
 
+func TestTurnIsFullAccess(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{"approval_policy": "never", "sandbox_mode": "danger-full-access"}}
+	cwd := t.TempDir()
+	params := &turn.TurnStartParams{CWD: cwd}
+	if !turnIsFullAccess(cfg, cwd, params) {
+		t.Fatal("approval never with danger-full-access should be Full Access")
+	}
+	cfg.Values["approval_policy"] = "on-request"
+	if turnIsFullAccess(cfg, cwd, params) {
+		t.Fatal("on-request approval should not be Full Access")
+	}
+}
+
 func TestModelGuardianReviewerMapsAssessmentDecision(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
