@@ -343,6 +343,14 @@ func TestApplicationNetworkRequirementsParseAndValidate(t *testing.T) {
 	if !strings.Contains(string(encoded), `"application":{"network":{"enabled":true,"domains":{"example.com":"allow","other.example":"deny"}}}`) {
 		t.Fatalf("application JSON = %s", encoded)
 	}
+
+	empty, err := ParseRequirementsTOML([]byte("[application]\n"))
+	if err != nil {
+		t.Fatalf("empty application parse error = %v", err)
+	}
+	if empty != nil {
+		t.Fatalf("empty application section should yield nil requirements, got %#v", empty)
+	}
 }
 
 func TestBrowserUseAllowWebmcpRequirement(t *testing.T) {
