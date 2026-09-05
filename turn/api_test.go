@@ -200,6 +200,16 @@ func TestTurnSteerParamsValidateAllowsApprovalsReviewer(t *testing.T) {
 	}
 }
 
+func TestTurnSettingsUpdateParamsValidation(t *testing.T) {
+	reviewer := "auto_review"
+	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", ApprovalsReviewer: &reviewer}).Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1"}).Validate(); err == nil {
+		t.Fatal("Validate() accepted an empty update")
+	}
+}
+
 func TestTurnStartAcceptsTextAtLimitWithMentionInput(t *testing.T) {
 	service := NewTurnService()
 	_, err := service.Start(&TurnStartParams{

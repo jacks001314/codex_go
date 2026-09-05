@@ -76,6 +76,7 @@ const (
 
 	MethodTurnStart                              Method = "turn/start"
 	MethodTurnSteer                              Method = "turn/steer"
+	MethodTurnSettingsUpdate                     Method = "turn/settings/update"
 	MethodTurnInterrupt                          Method = "turn/interrupt"
 	MethodReviewStart                            Method = "review/start"
 	MethodExperimentalFeatureList                Method = "experimentalFeature/list"

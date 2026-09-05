@@ -253,6 +253,7 @@ func baseClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodTurnInterrupt)},
 		{Method: string(MethodTurnStart)},
 		{Method: string(MethodTurnSteer)},
+		{Method: string(MethodTurnSettingsUpdate)},
 		{Method: string(MethodWindowsSandboxReadiness)},
 		{Method: string(MethodWindowsSandboxSetupStart)},
 	}
@@ -626,6 +627,7 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(MethodTurnInterrupt):                          {Params: "TurnInterruptParams", Result: "TurnInterruptResponse"},
 		string(MethodTurnStart):                              {Params: "TurnStartParams", Result: "TurnStartResponse"},
 		string(MethodTurnSteer):                              {Params: "TurnSteerParams", Result: "TurnSteerResponse"},
+		string(MethodTurnSettingsUpdate):                     {Params: "TurnSettingsUpdateParams", Result: "TurnSettingsUpdateResponse"},
 		string(MethodWindowsSandboxReadiness):                {Result: "WindowsSandboxReadinessResponse"},
 		string(MethodWindowsSandboxSetupStart):               {Params: "WindowsSandboxSetupStartParams", Result: "WindowsSandboxSetupStartResponse"},
 

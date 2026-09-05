@@ -456,6 +456,33 @@ type TurnSteerResponse struct {
 	TurnID string `json:"turnId"`
 }
 
+// TurnSettingsUpdateParams mirrors the Rust turn/settings/update request
+// (#42121). Only approvalsReviewer is currently applied by the Go runtime.
+type TurnSettingsUpdateParams struct {
+	ThreadID          string  `json:"threadId"`
+	TurnID            string  `json:"turnId"`
+	ApprovalsReviewer *string `json:"approvalsReviewer,omitempty"`
+	Model             *string `json:"model,omitempty"`
+	Effort            *string `json:"effort,omitempty"`
+	Summary           *string `json:"summary,omitempty"`
+	ServiceTier       *string `json:"serviceTier,omitempty"`
+}
+
+func (p *TurnSettingsUpdateParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidTurnRequest)
+	}
+	if strings.TrimSpace(p.TurnID) == "" {
+		return fmt.Errorf("%w: turnId is required", ErrInvalidTurnRequest)
+	}
+	if p.ApprovalsReviewer == nil && p.Model == nil && p.Effort == nil && p.Summary == nil && p.ServiceTier == nil {
+		return fmt.Errorf("%w: at least one turn setting update is required", ErrInvalidTurnRequest)
+	}
+	return nil
+}
+
+type TurnSettingsUpdateResponse struct{}
+
 type TurnInterruptResponse struct{}
 
 type TurnRecord struct {

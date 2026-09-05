@@ -57,6 +57,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodThreadRealtimeListVoices):               true,
 		string(MethodTurnStart):                              true,
 		string(MethodTurnSteer):                              true,
+		string(MethodTurnSettingsUpdate):                     true,
 		string(MethodTurnInterrupt):                          true,
 		string(MethodReviewStart):                            true,
 		string(MethodExperimentalFeatureList):                true,

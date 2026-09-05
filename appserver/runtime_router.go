@@ -2219,6 +2219,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handleTurnStart(request)
 	case MethodTurnSteer:
 		return r.handleTurnSteer(request)
+	case MethodTurnSettingsUpdate:
+		return r.handleTurnSettingsUpdate(request)
 	case MethodTurnInterrupt:
 		return r.handleTurnInterrupt(request)
 	case MethodReviewStart:
@@ -6279,6 +6281,27 @@ func (r *RuntimeRouter) updateActiveTurnApprovalsReviewer(params *turn.TurnSteer
 			active.RunConfig.ApprovalsReviewer = effectiveReviewer
 		}
 	})
+}
+
+func (r *RuntimeRouter) handleTurnSettingsUpdate(request *Request) (*turn.TurnSettingsUpdateResponse, error) {
+	var params turn.TurnSettingsUpdateParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, jsonRPCInvalidRequest(err.Error())
+	}
+	if params.ApprovalsReviewer != nil {
+		r.updateActiveTurnApprovalsReviewer(&turn.TurnSteerParams{
+			ThreadID:          params.ThreadID,
+			ExpectedTurnID:    params.TurnID,
+			ApprovalsReviewer: params.ApprovalsReviewer,
+		})
+	}
+	if params.Model != nil || params.Effort != nil || params.Summary != nil || params.ServiceTier != nil {
+		return nil, jsonRPCInvalidRequest("turn settings updates for model, effort, summary, and service tier are not supported")
+	}
+	return &turn.TurnSettingsUpdateResponse{}, nil
 }
 
 func turnSteerRuntimeError(err error) error {
