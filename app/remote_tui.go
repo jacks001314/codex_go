@@ -3178,6 +3178,23 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 				c.send(codextea.StatusMsg{Status: "warning: " + message})
 			}
 		}
+	case appserver.NotificationModelSafetyBufferingUpdated:
+		var payload appserver.ModelSafetyBufferingUpdatedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			return nil
+		}
+		c.send(codextea.ModelSafetyBufferingMsg{
+			ThreadID:        payload.ThreadID,
+			TurnID:          payload.TurnID,
+			Model:           payload.Model,
+			UseCases:        payload.UseCases,
+			Reasons:         payload.Reasons,
+			ShowBufferingUI: payload.ShowBufferingUI,
+			FasterModel:     payload.FasterModel,
+		})
 	case appserver.NotificationWindowsSandboxSetupCompleted:
 		var payload sandbox.WindowsSetupCompletedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

@@ -779,6 +779,14 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		return m.applyCopyTargetModalOption(response.OptionID)
 	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.SafetyBufferingPromptViewID {
+		m.modal = nil
+		if cancelled {
+			m.notice = "No action is required. Codex will keep waiting."
+			return nil
+		}
+		return m.applySafetyBufferingModalOption(response.OptionID)
+	}
 	m.modal = nil
 	if !cancelled && len(modal.options) > 0 {
 		if notice != "" {

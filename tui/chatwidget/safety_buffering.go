@@ -1,5 +1,7 @@
 package chatwidget
 
+import "strings"
+
 const (
 	SafetyBufferingPromptViewID     = "safety-buffering-prompt"
 	SafetyBufferingMessageWithRetry = "This request requires additional safety checks, which can take extra time. Hang tight or retry with a faster model for a quicker response, though it may be less capable of handling complex requests."
@@ -7,8 +9,9 @@ const (
 )
 
 const (
-	SafetyBufferingActionRetry UsageMenuAction = "safety_buffering_retry"
-	SafetyBufferingActionWait  UsageMenuAction = "safety_buffering_wait"
+	SafetyBufferingActionRetry     UsageMenuAction = "safety_buffering_retry"
+	SafetyBufferingActionWait      UsageMenuAction = "safety_buffering_wait"
+	SafetyBufferingActionStopRetry UsageMenuAction = "safety_buffering_stop_retry"
 )
 
 type SafetyBufferingState struct {
@@ -197,6 +200,37 @@ func NewSafetyBufferingPromptView(fasterModel string) SelectionView {
 				ID:              "wait",
 				Name:            "Keep waiting",
 				Action:          SafetyBufferingActionWait,
+				DismissOnSelect: true,
+			},
+		},
+	}
+}
+
+// NewSafetyBufferingConfirmationView shows the Rust #42380 confirmation before
+// a safety-buffered retry: it explains that retrying starts a new thread and
+// re-sends the user's message with the selected faster model.
+func NewSafetyBufferingConfirmationView(fasterModel string) SelectionView {
+	modelLabel := strings.TrimSpace(fasterModel)
+	if modelLabel == "" {
+		modelLabel = "a faster model"
+	}
+	return SelectionView{
+		ViewID:      SafetyBufferingPromptViewID,
+		Title:       "Stop this attempt and retry?",
+		Subtitle:    "This will stop the current attempt and retry in a new thread. Any file changes or other actions already taken will remain.\n\nYour message will be sent again using " + modelLabel + ", which may be less capable on complex tasks.",
+		AllowCancel: true,
+		Items: []SelectionItem{
+			{
+				ID:              "wait",
+				Name:            "Keep waiting",
+				Action:          SafetyBufferingActionWait,
+				DismissOnSelect: true,
+			},
+			{
+				ID:              "stop-retry",
+				Name:            "Stop and retry",
+				Description:     modelLabel,
+				Action:          SafetyBufferingActionStopRetry,
 				DismissOnSelect: true,
 			},
 		},

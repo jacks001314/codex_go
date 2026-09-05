@@ -1,6 +1,9 @@
 package chatwidget
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSafetyBufferingContextGatesAndDismissPromptMatchRust(t *testing.T) {
 	state := SafetyBufferingState{}
@@ -74,5 +77,15 @@ func TestSafetyBufferingResetPrepareAndFailRetryMatchRust(t *testing.T) {
 	}
 	if state.ActiveTurnID != "" || cancel.Prompt != nil || cancel.Eligible {
 		t.Fatalf("state/cancel not cleared: state=%#v cancel=%#v", state, cancel)
+	}
+}
+
+func TestSafetyBufferingConfirmationViewMatchRust(t *testing.T) {
+	view := NewSafetyBufferingConfirmationView("gpt-fast")
+	if view.ViewID != SafetyBufferingPromptViewID || !strings.Contains(view.Title, "Stop this attempt and retry?") {
+		t.Fatalf("confirmation view = %#v", view)
+	}
+	if len(view.Items) != 2 || view.Items[0].Action != SafetyBufferingActionWait || view.Items[1].Action != SafetyBufferingActionStopRetry {
+		t.Fatalf("confirmation items = %#v", view.Items)
 	}
 }

@@ -286,6 +286,18 @@ type ModelCompactionStatusMsg struct {
 	Active  bool
 }
 
+// ModelSafetyBufferingMsg delivers a model/safetyBuffering/updated app-server
+// notification to the tea model (Rust #42380).
+type ModelSafetyBufferingMsg struct {
+	ThreadID        string
+	TurnID          string
+	Model           string
+	UseCases        []string
+	Reasons         []string
+	ShowBufferingUI bool
+	FasterModel     *string
+}
+
 type CompactStartResultMsg struct {
 	Err error
 }
@@ -715,10 +727,14 @@ type Options struct {
 	OnStartReview                 ReviewStartFunc
 	OnStartReviewCommand          ReviewStartCommandFunc
 	OnStartCompactCommand         CompactStartCommandFunc
-	OnStartSide                   SideStartFunc
-	OnCloseSide                   SideCloseFunc
-	OnReadReviewBranches          ReviewBranchesReaderFunc
-	OnReadReviewCommits           ReviewCommitsReaderFunc
+	// OnSafetyBufferingRetry, when set, stops the current attempt and retries
+	// it with the server-selected faster model after user confirmation (Rust
+	// #42380).
+	OnSafetyBufferingRetry func(threadID, turnID, model string) bubbletea.Cmd
+	OnStartSide            SideStartFunc
+	OnCloseSide            SideCloseFunc
+	OnReadReviewBranches   ReviewBranchesReaderFunc
+	OnReadReviewCommits    ReviewCommitsReaderFunc
 
 	HasChatGPTAccount              bool
 	ChatGPTPlanType                string
@@ -1047,6 +1063,10 @@ type Model struct {
 	onStartReview                     ReviewStartFunc
 	onStartReviewCommand              ReviewStartCommandFunc
 	onStartCompactCommand             CompactStartCommandFunc
+	onSafetyBufferingRetry            func(threadID, turnID, model string) bubbletea.Cmd
+	safetyBuffering                   chatwidget.SafetyBufferingState
+	safetyBufferingThreadID           string
+	safetyBufferingFasterModel        string
 	reviewState                       chatwidget.ReviewState
 	reviewTurnID                      string
 	reviewTokenSnapshot               *reviewTokenSnapshot
@@ -1307,6 +1327,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onStartReview:                   options.OnStartReview,
 		onStartReviewCommand:            options.OnStartReviewCommand,
 		onStartCompactCommand:           options.OnStartCompactCommand,
+		onSafetyBufferingRetry:          options.OnSafetyBufferingRetry,
 		onStartSide:                     options.OnStartSide,
 		onCloseSide:                     options.OnCloseSide,
 		onReadReviewBranches:            options.OnReadReviewBranches,
@@ -1540,6 +1561,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		} else {
 			m.finishCompactionActivity("", false)
 		}
+		return m, nil
+	case ModelSafetyBufferingMsg:
+		m.applySafetyBufferingUpdate(msg)
 		return m, nil
 	case TurnCompletedMsg:
 		if m.applyInactiveThreadTurnCompleted(msg) {
