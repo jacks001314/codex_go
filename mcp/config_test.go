@@ -645,4 +645,7 @@ func TestServerConfigOAuthRefreshModeRoundTrips(t *testing.T) {
 	if cloned.OAuthRefreshMode != McpOAuthRefreshCoordinated {
 		t.Fatalf("cloned OAuthRefreshMode = %q", cloned.OAuthRefreshMode)
 	}
+	if McpOAuthRefreshMode("").Effective() != McpOAuthRefreshLegacy {
+		t.Fatal("unset OAuthRefreshMode should default to legacy")
+	}
 }

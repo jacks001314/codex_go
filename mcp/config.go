@@ -34,6 +34,15 @@ const (
 	McpOAuthRefreshCoordinated McpOAuthRefreshMode = "coordinated"
 )
 
+// Effective returns the configured refresh mode, defaulting to legacy when the
+// field is unset (Rust McpOAuthRefreshMode::default is Legacy).
+func (m McpOAuthRefreshMode) Effective() McpOAuthRefreshMode {
+	if m == "" {
+		return McpOAuthRefreshLegacy
+	}
+	return m
+}
+
 type ServerConfig struct {
 	Command                  string                            `json:"command,omitempty"`
 	Args                     []string                          `json:"args,omitempty"`
