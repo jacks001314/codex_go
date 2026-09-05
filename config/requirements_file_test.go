@@ -404,4 +404,11 @@ path_prefixes = ["/console/v1"]
 	if injection.Headers["x-statsig-change-source"] != "codex" {
 		t.Fatalf("headers = %#v", injection.Headers)
 	}
+	encoded, err := json.Marshal(requirements.Network)
+	if err != nil {
+		t.Fatalf("marshal network requirements: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"headerInjections":[{"host":"api.example.com","methods":["POST"],"pathPrefixes":["/console/v1"],"headers":{"x-statsig-change-source":"codex"}}]`) {
+		t.Fatalf("headerInjections JSON = %s", encoded)
+	}
 }
