@@ -94,7 +94,7 @@ func TestRawResponseCompletedNotificationIncludesUsageMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalJSON() error = %v", err)
 	}
-	if !strings.Contains(string(data), `"usageMetadata":{"amount":"0.00123456789"}`) {
+	if !strings.Contains(string(data), `"amount":"0.00123456789"`) || !strings.Contains(string(data), `"metadata":null`) {
 		t.Fatalf("data = %s", data)
 	}
 }

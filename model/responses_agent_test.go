@@ -297,6 +297,23 @@ func TestUsageMetadataFromStreamEventData(t *testing.T) {
 	}
 }
 
+func TestUsageMetadataFromStreamEventDataPreservesRawUsage(t *testing.T) {
+	data := `{"response":{"id":"resp-1","usage_metadata":{"amount":"0.001"},"usage":{"input_tokens":10,"output_tokens":5}}}`
+	got, has := usageMetadataFromStreamEventData([]byte(data))
+	if !has || got == nil || got.Amount == nil || *got.Amount != "0.001" {
+		t.Fatalf("usage_metadata = %#v, has=%v", got, has)
+	}
+	if string(got.Metadata) != `{"input_tokens":10,"output_tokens":5}` {
+		t.Fatalf("metadata = %s", got.Metadata)
+	}
+
+	usageOnly := `{"response":{"id":"resp-2","usage":{"input_tokens":3}}}`
+	gotOnly, hasOnly := usageMetadataFromStreamEventData([]byte(usageOnly))
+	if !hasOnly || gotOnly == nil || gotOnly.Amount != nil || string(gotOnly.Metadata) != `{"input_tokens":3}` {
+		t.Fatalf("usage-only metadata = %#v, has=%v", gotOnly, hasOnly)
+	}
+}
+
 func TestResponsesAgentRunnerConcurrentReasoningSummaryStreamOptionsOmittedForNoneSummary(t *testing.T) {
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

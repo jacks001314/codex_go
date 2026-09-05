@@ -94,7 +94,8 @@ type ResponsesStreamEvent struct {
 // per-response usage metadata reported by the upstream service. Amount stays a
 // string so high-precision values survive without numeric conversion.
 type ResponseUsageMetadata struct {
-	Amount *string `json:"amount"`
+	Amount   *string         `json:"amount"`
+	Metadata json.RawMessage `json:"metadata"`
 }
 
 type ResponsesModelReroute struct {
@@ -1683,12 +1684,23 @@ func usageMetadataFromStreamEventData(data []byte) (*ResponseUsageMetadata, bool
 	var payload struct {
 		Response struct {
 			UsageMetadata *ResponseUsageMetadata `json:"usage_metadata"`
+			Usage         json.RawMessage        `json:"usage"`
 		} `json:"response"`
 	}
-	if err := json.Unmarshal(data, &payload); err != nil || payload.Response.UsageMetadata == nil {
+	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil, false
 	}
-	return payload.Response.UsageMetadata, true
+	metadata := payload.Response.UsageMetadata
+	if len(payload.Response.Usage) > 0 && !bytes.Equal(payload.Response.Usage, []byte("null")) {
+		if metadata == nil {
+			metadata = &ResponseUsageMetadata{}
+		}
+		metadata.Metadata = payload.Response.Usage
+	}
+	if metadata == nil {
+		return nil, false
+	}
+	return metadata, true
 }
 
 func responseIDFromEventData(data []byte) string {
