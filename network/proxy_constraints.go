@@ -445,6 +445,7 @@ func equalStringSets(left map[string]bool, right map[string]bool) bool {
 func cloneProxyConfig(config ProxyConfig) ProxyConfig {
 	clone := config
 	clone.Network = cloneProxySettings(config.Network)
+	clone.HeaderInjections = cloneProxyHeaderInjections(config.HeaderInjections)
 	return clone
 }
 
