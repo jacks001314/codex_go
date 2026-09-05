@@ -122,6 +122,23 @@ func CollectExplicitPluginMentions(input []UserInput, plugins []CapabilitySummar
 	if len(plugins) == 0 {
 		return nil
 	}
+	mentioned := CollectExplicitPluginIDs(input)
+	if len(mentioned) == 0 {
+		return nil
+	}
+	out := make([]CapabilitySummary, 0, len(plugins))
+	for _, plugin := range plugins {
+		if mentioned[plugin.ConfigName] {
+			out = append(out, cloneCapability(&plugin))
+		}
+	}
+	return out
+}
+
+// CollectExplicitPluginIDs returns the exact plugin IDs from explicit
+// plugin:// references, independently of display or mention names. Host
+// plugins use <plugin>@<marketplace> IDs; selected roots may supply opaque IDs.
+func CollectExplicitPluginIDs(input []UserInput) map[string]bool {
 	messages := textMessages(input)
 	mentioned := make(map[string]bool)
 	for _, item := range input {
@@ -139,16 +156,7 @@ func CollectExplicitPluginMentions(input []UserInput, plugins []CapabilitySummar
 			}
 		}
 	}
-	if len(mentioned) == 0 {
-		return nil
-	}
-	out := make([]CapabilitySummary, 0, len(plugins))
-	for _, plugin := range plugins {
-		if mentioned[plugin.ConfigName] {
-			out = append(out, cloneCapability(&plugin))
-		}
-	}
-	return out
+	return mentioned
 }
 
 func RenderExplicitPluginInstructions(plugin *CapabilitySummary, availableMCPServers []string, availableApps []string) (string, bool) {
@@ -349,6 +357,9 @@ func mentionIDFromPath(path string, prefix string) string {
 	}
 	if value == "" {
 		return ""
+	}
+	if index := strings.IndexAny(value, "?#"); index >= 0 {
+		value = value[:index]
 	}
 	return value
 }

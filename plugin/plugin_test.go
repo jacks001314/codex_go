@@ -184,3 +184,28 @@ func names(plugins []CapabilitySummary) []string {
 	}
 	return out
 }
+
+func TestMentionIDFromPathIgnoresQueryParameters(t *testing.T) {
+	if got := pluginConfigNameFromPath("plugin://acme/weather?app=calendar&browserFamily=chrome"); got != "acme/weather" {
+		t.Fatalf("pluginConfigNameFromPath = %q", got)
+	}
+}
+
+func TestCollectExplicitPluginIDsIgnoresDisplayNamesAndQueryParameters(t *testing.T) {
+	got := CollectExplicitPluginIDs([]UserInput{
+		{Type: "text", Text: "use [@alias](plugin://sample@test?app=calendar&browserFamily=chrome)"},
+		{Type: "mention", Path: "plugin://selected-two"},
+	})
+	want := map[string]bool{
+		"sample@test":  true,
+		"selected-two": true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("CollectExplicitPluginIDs() = %#v, want %#v", got, want)
+	}
+	for id := range want {
+		if !got[id] {
+			t.Fatalf("CollectExplicitPluginIDs() = %#v, want %#v", got, want)
+		}
+	}
+}
