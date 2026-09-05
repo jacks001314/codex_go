@@ -67,6 +67,20 @@ func TestRuntimeMCPConfigUsesSharedHTTPClient(t *testing.T) {
 	}
 }
 
+func TestRuntimeMCPConfigPinsCoordinatedOAuthRefreshMode(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	runtimeConfig := router.runtimeMCPConfig(map[string]any{
+		"features": map[string]any{"mcp_oauth_refresh_coordination": true},
+		"mcp_servers": map[string]any{
+			"docs": map[string]any{"url": "https://example.test/mcp", "enabled": true},
+		},
+	}, t.TempDir(), nil, nil)
+	registration, ok := runtimeConfig.Servers["docs"]
+	if !ok || registration.Config.OAuthRefreshMode != mcp.McpOAuthRefreshCoordinated {
+		t.Fatalf("docs OAuthRefreshMode = %#v, ok=%v", registration, ok)
+	}
+}
+
 // TestRuntimeRouterRawReasoningDeltaGatedByShowRawAgentReasoning pins the Rust
 // show_raw_agent_reasoning semantics (default false): raw chain-of-thought
 // reasoning deltas are suppressed unless the config key is enabled.
