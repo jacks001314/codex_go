@@ -528,6 +528,7 @@ type ConfigRequirements struct {
 	FeatureRequirements             map[string]bool                 `json:"featureRequirements,omitempty"`
 	Hooks                           *ManagedHooksRequirements       `json:"hooks,omitempty"`
 	EnforceResidency                *ResidencyRequirement           `json:"enforceResidency,omitempty"`
+	Application                     *ApplicationRequirements        `json:"application,omitempty"`
 	Network                         *NetworkRequirements            `json:"network,omitempty"`
 	Models                          *ModelsRequirements             `json:"models,omitempty"`
 	AllowedLoginMethods             []ForcedLoginMethod             `json:"allowedLoginMethods,omitempty"`
@@ -559,6 +560,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		FeatureRequirements                  map[string]bool           `json:"featureRequirements"`
 		Hooks                                *ManagedHooksRequirements `json:"hooks"`
 		EnforceResidency                     *ResidencyRequirement     `json:"enforceResidency"`
+		Application                          *ApplicationRequirements  `json:"application"`
 		Network                              *NetworkRequirements      `json:"network"`
 		Models                               *ModelsRequirements       `json:"models"`
 		AllowedLoginMethods                  []ForcedLoginMethod       `json:"allowedLoginMethods"`
@@ -585,6 +587,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		FeatureRequirements:                  cloneBoolMap(r.FeatureRequirements),
 		Hooks:                                cloneManagedHooks(r.Hooks),
 		EnforceResidency:                     cloneResidencyRequirementPtr(r.EnforceResidency),
+		Application:                          cloneApplicationRequirements(r.Application),
 		Network:                              cloneNetwork(r.Network),
 		Models:                               cloneModels(r.Models),
 		AllowedLoginMethods:                  forcedLoginMethodsOrNil(r.AllowedLoginMethods),
@@ -639,11 +642,11 @@ func simpleModelNamespace(namespace string) bool {
 }
 
 type BrowserUseRequirements struct {
-	AllowHistoryAccess          *bool                           `json:"allowHistoryAccess,omitempty"`
-	DisableAutoReview           *bool                           `json:"disableAutoReview,omitempty"`
-	AllowGlobalPersistentApproval *bool                          `json:"allowGlobalPersistentApproval,omitempty"`
-	DefaultOriginPolicy         *BrowserUseOriginPolicy         `json:"defaultOriginPolicy,omitempty"`
-	Origins                     map[string]BrowserUseOriginPolicy `json:"origins,omitempty"`
+	AllowHistoryAccess            *bool                             `json:"allowHistoryAccess,omitempty"`
+	DisableAutoReview             *bool                             `json:"disableAutoReview,omitempty"`
+	AllowGlobalPersistentApproval *bool                             `json:"allowGlobalPersistentApproval,omitempty"`
+	DefaultOriginPolicy           *BrowserUseOriginPolicy           `json:"defaultOriginPolicy,omitempty"`
+	Origins                       map[string]BrowserUseOriginPolicy `json:"origins,omitempty"`
 }
 
 func (r *BrowserUseRequirements) MarshalJSON() ([]byte, error) {
@@ -777,7 +780,7 @@ const (
 )
 
 type ComputerUseRequirements struct {
-	AllowLockedComputerUse *bool                            `json:"allowLockedComputerUse,omitempty"`
+	AllowLockedComputerUse  *bool                           `json:"allowLockedComputerUse,omitempty"`
 	AllowPersistentApproval *bool                           `json:"allowPersistentApproval,omitempty"`
 	DefaultAppAccess        *AllowDenyRequirement           `json:"defaultAppAccess,omitempty"`
 	Macos                   *ComputerUseMacosRequirements   `json:"macos,omitempty"`
@@ -786,11 +789,11 @@ type ComputerUseRequirements struct {
 
 func (r *ComputerUseRequirements) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		AllowLockedComputerUse *bool                             `json:"allowLockedComputerUse"`
-		AllowPersistentApproval *bool                            `json:"allowPersistentApproval"`
-		DefaultAppAccess        *AllowDenyRequirement            `json:"defaultAppAccess"`
-		Macos                   *ComputerUseMacosRequirements    `json:"macos"`
-		Windows                 *ComputerUseWindowsRequirements  `json:"windows"`
+		AllowLockedComputerUse  *bool                           `json:"allowLockedComputerUse"`
+		AllowPersistentApproval *bool                           `json:"allowPersistentApproval"`
+		DefaultAppAccess        *AllowDenyRequirement           `json:"defaultAppAccess"`
+		Macos                   *ComputerUseMacosRequirements   `json:"macos"`
+		Windows                 *ComputerUseWindowsRequirements `json:"windows"`
 	}{
 		AllowLockedComputerUse:  cloneBoolPtr(r.AllowLockedComputerUse),
 		AllowPersistentApproval: cloneBoolPtr(r.AllowPersistentApproval),
@@ -817,8 +820,8 @@ func (r *ComputerUseMacosRequirements) MarshalJSON() ([]byte, error) {
 // ComputerUseWindowsRequirements mirrors Rust's Windows AUMID / executable
 // requirements (#39995, #40018).
 type ComputerUseWindowsRequirements struct {
-	Aumids map[string]AllowDenyRequirement           `json:"aumids,omitempty"`
-	Exes   []ComputerUseWindowsExeRequirement        `json:"exes,omitempty"`
+	Aumids map[string]AllowDenyRequirement    `json:"aumids,omitempty"`
+	Exes   []ComputerUseWindowsExeRequirement `json:"exes,omitempty"`
 }
 
 func (r *ComputerUseWindowsRequirements) MarshalJSON() ([]byte, error) {
@@ -940,6 +943,36 @@ const (
 	NetworkAllow NetworkPermission = "allow"
 	NetworkDeny  NetworkPermission = "deny"
 )
+
+// ApplicationRequirements carries managed requirements for application traffic,
+// separate from agent network permissions (Rust #42417).
+type ApplicationRequirements struct {
+	Network *ApplicationNetworkRequirements `json:"network"`
+}
+
+func (r *ApplicationRequirements) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Network *ApplicationNetworkRequirements `json:"network"`
+	}{Network: cloneApplicationNetworkRequirements(r.Network)})
+}
+
+// ApplicationNetworkRequirements describes an exact-domain allow/deny policy
+// for application traffic. When enabled, only explicitly allowed domains may
+// be contacted.
+type ApplicationNetworkRequirements struct {
+	Enabled bool                         `json:"enabled"`
+	Domains map[string]NetworkPermission `json:"domains"`
+}
+
+func (r *ApplicationNetworkRequirements) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Enabled bool                         `json:"enabled"`
+		Domains map[string]NetworkPermission `json:"domains"`
+	}{
+		Enabled: r.Enabled,
+		Domains: cloneNetworkMap(r.Domains),
+	})
+}
 
 type ManagedHooksRequirements struct {
 	ManagedDir        *string               `json:"managedDir,omitempty"`
@@ -3098,6 +3131,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.AutoReview = cloneAutoReview(requirements.AutoReview)
 	clone.Hooks = cloneManagedHooks(requirements.Hooks)
 	clone.EnforceResidency = cloneResidencyRequirementPtr(requirements.EnforceResidency)
+	clone.Application = cloneApplicationRequirements(requirements.Application)
 	clone.Network = cloneNetwork(requirements.Network)
 	clone.Models = cloneModels(requirements.Models)
 	clone.MCPServers = cloneMCPServerRequirements(requirements.MCPServers)
@@ -3346,6 +3380,20 @@ func cloneNetwork(value *NetworkRequirements) *NetworkRequirements {
 	clone.AllowUnixSockets = stringSliceOrNil(value.AllowUnixSockets)
 	clone.AllowLocalBinding = cloneBoolPtr(value.AllowLocalBinding)
 	return &clone
+}
+
+func cloneApplicationRequirements(value *ApplicationRequirements) *ApplicationRequirements {
+	if value == nil {
+		return nil
+	}
+	return &ApplicationRequirements{Network: cloneApplicationNetworkRequirements(value.Network)}
+}
+
+func cloneApplicationNetworkRequirements(value *ApplicationNetworkRequirements) *ApplicationNetworkRequirements {
+	if value == nil {
+		return nil
+	}
+	return &ApplicationNetworkRequirements{Enabled: value.Enabled, Domains: cloneNetworkMap(value.Domains)}
 }
 
 func cloneModels(value *ModelsRequirements) *ModelsRequirements {

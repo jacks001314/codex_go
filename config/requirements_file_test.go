@@ -309,3 +309,38 @@ func TestLoadRequirementsFileIgnoresNonRustNetworkTable(t *testing.T) {
 		t.Fatalf("network = %#v, want Rust-compatible ignored table", requirements.Network)
 	}
 }
+
+func TestApplicationNetworkRequirementsParseAndValidate(t *testing.T) {
+	requirements, err := ParseRequirementsTOML([]byte("[application.network]\nenabled = true\ndomains = { \"Example.COM.\" = \"allow\", \"other.example\" = \"deny\" }\n"))
+	if err != nil {
+		t.Fatalf("ParseRequirementsTOML error = %v", err)
+	}
+	if requirements == nil || requirements.Application == nil || requirements.Application.Network == nil {
+		t.Fatalf("application.network = %#v", requirements)
+	}
+	network := requirements.Application.Network
+	if !network.Enabled {
+		t.Fatalf("enabled = false, want true")
+	}
+	if network.Domains["example.com"] != NetworkAllow || network.Domains["other.example"] != NetworkDeny {
+		t.Fatalf("domains = %#v", network.Domains)
+	}
+
+	for _, invalid := range []string{
+		"[application.network]\ndomains = { \"*.example.com\" = \"allow\" }\n",
+		"[application.network]\ndomains = { \"https://example.com\" = \"allow\" }\n",
+		"[application.network]\ndomains = { \"Example.COM\" = \"allow\", \"example.com.\" = \"deny\" }\n",
+	} {
+		if _, err := ParseRequirementsTOML([]byte(invalid)); err == nil {
+			t.Fatalf("invalid application.network should fail: %s", invalid)
+		}
+	}
+
+	encoded, err := json.Marshal(requirements)
+	if err != nil {
+		t.Fatalf("marshal requirements: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"application":{"network":{"enabled":true,"domains":{"example.com":"allow","other.example":"deny"}}}`) {
+		t.Fatalf("application JSON = %s", encoded)
+	}
+}

@@ -269,6 +269,13 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	if nested, ok := mapAnyKey(values, "experimental_network"); ok {
 		out.Network = networkRequirementsFromMap(nested)
 	}
+	if nested, ok := mapAnyKey(values, "application"); ok {
+		parsed, err := applicationRequirementsFromMap(nested)
+		if err != nil {
+			return nil, err
+		}
+		out.Application = parsed
+	}
 	if nested, ok := mapAnyKey(values, "models"); ok {
 		out.Models = modelsRequirementsFromMap(nested)
 	}
@@ -689,6 +696,85 @@ func normalizeLegacyNetworkRequirements(out *NetworkRequirements) {
 	out.AllowUnixSockets = nil
 }
 
+func applicationRequirementsFromMap(values map[string]any) (*ApplicationRequirements, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	nested, ok := mapAnyKey(values, "network")
+	if !ok {
+		return nil, nil
+	}
+	network, err := applicationNetworkRequirementsFromMap(nested)
+	if err != nil {
+		return nil, err
+	}
+	return &ApplicationRequirements{Network: network}, nil
+}
+
+func applicationNetworkRequirementsFromMap(values map[string]any) (*ApplicationNetworkRequirements, error) {
+	enabled := true
+	if value, ok := boolAnyValue(values["enabled"]); ok {
+		enabled = value
+	}
+	domains := map[string]NetworkPermission{}
+	if raw, ok := values["domains"]; ok {
+		nested, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("application.network.domains must be a table")
+		}
+		for domain, rawPermission := range nested {
+			normalized, err := normalizeApplicationNetworkDomain(domain)
+			if err != nil {
+				return nil, err
+			}
+			permission, ok := networkPermissionFromAny(rawPermission)
+			if !ok {
+				return nil, fmt.Errorf("application.network.domains.%s must be \"allow\" or \"deny\"", domain)
+			}
+			if _, exists := domains[normalized]; exists {
+				return nil, fmt.Errorf("duplicate application.network domain after normalization: %q", domain)
+			}
+			domains[normalized] = permission
+		}
+	}
+	return &ApplicationNetworkRequirements{Enabled: enabled, Domains: domains}, nil
+}
+
+func normalizeApplicationNetworkDomain(domain string) (string, error) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	domain = strings.TrimSuffix(domain, ".")
+	if len(domain) > 253 {
+		return "", fmt.Errorf("application.network.domains requires exact ASCII domain names without URLs, ports, or wildcards")
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return "", fmt.Errorf("application.network.domains requires exact ASCII domain names without URLs, ports, or wildcards")
+		}
+		for i, r := range label {
+			valid := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-'
+			if !valid || (i == 0 && r == '-') || (i == len(label)-1 && r == '-') {
+				return "", fmt.Errorf("application.network.domains requires exact ASCII domain names without URLs, ports, or wildcards")
+			}
+		}
+	}
+	return domain, nil
+}
+
+func networkPermissionFromAny(value any) (NetworkPermission, bool) {
+	raw, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case string(NetworkAllow):
+		return NetworkAllow, true
+	case string(NetworkDeny):
+		return NetworkDeny, true
+	default:
+		return "", false
+	}
+}
+
 func modelsRequirementsFromMap(values map[string]any) *ModelsRequirements {
 	var out ModelsRequirements
 	if nested, ok := mapAnyKey(values, "new_thread", "newThread"); ok {
@@ -804,6 +890,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.FeatureRequirements == nil &&
 			value.Hooks == nil &&
 			value.EnforceResidency == nil &&
+			value.Application == nil &&
 			value.Network == nil &&
 			value.Models == nil &&
 			value.AllowedLoginMethods == nil &&
