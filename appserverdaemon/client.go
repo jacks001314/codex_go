@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"runtime"
 	"strings"
 	"time"
 
@@ -274,9 +273,6 @@ func UpdateLatestReadyStatus(latest *RemoteControlReadyStatus, notification *Rem
 }
 
 func EnableRemoteControlOnSocket(socketPath string, connectTimeout time.Duration, connectRetryDelay time.Duration) (RemoteControlReadyStatus, error) {
-	if runtime.GOOS == "windows" {
-		return RemoteControlReadyStatus{}, ErrUnsupportedPlatform
-	}
 	conn, err := connectUnixSocketWithRetry(socketPath, connectTimeout, connectRetryDelay)
 	if err != nil {
 		return RemoteControlReadyStatus{}, err
@@ -287,9 +283,6 @@ func EnableRemoteControlOnSocket(socketPath string, connectTimeout time.Duration
 }
 
 func DisableRemoteControlOnSocket(socketPath string, connectTimeout time.Duration, connectRetryDelay time.Duration) (RemoteControlReadyStatus, error) {
-	if runtime.GOOS == "windows" {
-		return RemoteControlReadyStatus{}, ErrUnsupportedPlatform
-	}
 	conn, err := connectUnixSocketWithRetry(socketPath, connectTimeout, connectRetryDelay)
 	if err != nil {
 		return RemoteControlReadyStatus{}, err
@@ -300,9 +293,6 @@ func DisableRemoteControlOnSocket(socketPath string, connectTimeout time.Duratio
 }
 
 func ProbeAppServerVersionOnSocket(socketPath string, timeout time.Duration) (string, error) {
-	if runtime.GOOS == "windows" {
-		return "", ErrUnsupportedPlatform
-	}
 	conn, err := connectUnixSocketWithRetry(socketPath, timeout, 25*time.Millisecond)
 	if err != nil {
 		return "", err
