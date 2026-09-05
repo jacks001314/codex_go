@@ -18,6 +18,19 @@ func TestPluginReconcileSignatureDetectsCapabilityChanges(t *testing.T) {
 	}
 }
 
+func TestPluginReconcileSignatureDetectsVersionChanges(t *testing.T) {
+	version := "1.0.0"
+	base := plugin.PluginDetail{
+		Summary: plugin.PluginSummary{ID: "acme/weather", Enabled: true, Version: &version},
+	}
+	next := base
+	nextVersion := "2.0.0"
+	next.Summary.Version = &nextVersion
+	if pluginReconcileSignature(base) == pluginReconcileSignature(next) {
+		t.Fatal("pluginReconcileSignature should differ when versions change")
+	}
+}
+
 func TestRemoteInstalledPluginSyncFailuresSnapshotAndClear(t *testing.T) {
 	clearRemoteInstalledPluginSyncFailures()
 	recordRemoteInstalledPluginMaterializationFailure("acme/weather")
