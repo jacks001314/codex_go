@@ -783,6 +783,15 @@ func optionalStringPointer(value string) *string {
 // session after a parent history rewrite when guardian_reuse_parent_compaction
 // is enabled (Rust c2bcb9a26b). The latest reusable compaction response ID
 // seeds the new session; an absent compaction keeps the existing reviewer.
+// This is the Go equivalent of the sync30 Guardian history-retention and
+// compaction cluster (#41846-#41858, #41861, #41870, #41879,
+// #41931-#42085, #42290, #42579-#42852): review continuity is preserved
+// through the bounded parent-compaction response ID plus model-hash
+// compatibility (#42852), root-conversation authorization and node_repl
+// evidence stay in the review prompt, and missing/oversized/incompatible
+// checkpoints fail closed. Rust's thread-context/structured-subagent history
+// machinery has no Go counterpart, so the cluster is satisfied by these Go
+// mechanisms rather than per-PR ports.
 func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, compacted *compact.Result) {
 	if r == nil || r.services.GuardianReviewer == nil || strings.TrimSpace(threadID) == "" {
 		return
