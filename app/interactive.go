@@ -835,6 +835,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnStartCompactCommand:     interactiveLocalCompactStartCommand(ctx, state, nil),
 		OnStartSide:               sideCoordinator.Start,
 		OnCloseSide:               sideCoordinator.Close,
+		// TODO(sync30 #42380): wire OnSafetyBufferingRetry to the local runner
+		// once the local session layer exposes interrupt+fork+resubmit.
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			turnRunner := interactiveTurnRunner(runner)
 			if instructions, side := sideCoordinator.Instructions(state.ThreadID); side {

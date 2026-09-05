@@ -378,6 +378,11 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnInterrupt: func() bubbletea.Cmd {
 			return interrupts.interruptCommand()
 		},
+		// TODO(sync30 #42380): wire OnSafetyBufferingRetry here once the remote
+		// client can interrupt the active turn, fork it, and start the retried
+		// thread with the faster model. interactiveRemoteTurnCommand currently
+		// resolves the model from state.Model rather than the retry request, so
+		// a direct submit would not switch models.
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			brokers.respond(response)
 			return nil
