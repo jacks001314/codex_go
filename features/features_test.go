@@ -88,7 +88,7 @@ func TestRetainClientDeveloperMessagesFeatureMatchesRust(t *testing.T) {
 
 func TestModelClientBetaFeaturesHeader(t *testing.T) {
 	header := ModelClientBetaFeaturesHeader(map[string]bool{"memories": true, "shell_tool": true})
-	if header != "memories,remote_compaction_v2" {
+	if header != "remote_compaction_v2" {
 		t.Fatalf("header = %q", header)
 	}
 

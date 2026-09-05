@@ -124,25 +124,36 @@ func TestFeatureWireShapeMatchesRust(t *testing.T) {
 func TestDefaultFeatureCatalogUsesRustExperimentalMenuMetadata(t *testing.T) {
 	catalog := DefaultFeatureCatalog()
 	var memories FeatureEntry
-	found := false
+	var networkProxy FeatureEntry
+	memoriesFound := false
+	networkProxyFound := false
 	for _, entry := range catalog {
 		if entry.Key == "memories" {
 			memories = entry
-			found = true
-			break
+			memoriesFound = true
+		}
+		if entry.Key == "network_proxy" {
+			networkProxy = entry
+			networkProxyFound = true
 		}
 	}
-	if !found {
+	if !memoriesFound {
 		t.Fatalf("memories feature missing from catalog: %#v", catalog)
 	}
-	if memories.DisplayName == nil || *memories.DisplayName != "Memories" {
-		t.Fatalf("memories display name = %#v", memories.DisplayName)
+	if memories.Announcement != nil {
+		t.Fatalf("memories is stable and should have no announcement: %#v", memories)
 	}
-	if memories.Description == nil || *memories.Description != "Allow Codex to create new memories from conversations and bring relevant memories into new conversations." {
-		t.Fatalf("memories description = %#v", memories.Description)
+	if !networkProxyFound {
+		t.Fatalf("network_proxy feature missing from catalog: %#v", catalog)
 	}
-	if memories.Announcement == nil || *memories.Announcement != "NEW: Codex can now generate and use memories. Try it now with `/memories`" {
-		t.Fatalf("memories announcement = %#v", memories.Announcement)
+	if networkProxy.DisplayName == nil || *networkProxy.DisplayName != "Network proxy" {
+		t.Fatalf("network_proxy display name = %#v", networkProxy.DisplayName)
+	}
+	if networkProxy.Description == nil || *networkProxy.Description != "Apply network proxy restrictions to sandboxed sessions that already have network access." {
+		t.Fatalf("network_proxy description = %#v", networkProxy.Description)
+	}
+	if networkProxy.Announcement == nil || *networkProxy.Announcement != "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it." {
+		t.Fatalf("network_proxy announcement = %#v", networkProxy.Announcement)
 	}
 }
 
