@@ -241,6 +241,21 @@ func TestModelGuardianReviewerShortCircuitsInFullAccess(t *testing.T) {
 	}
 }
 
+func TestModelGuardianReviewerAutoAcceptsUserModeNodeReplJS(t *testing.T) {
+	reviewer := newModelGuardianReviewer(guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+		t.Fatal("reviewer should not sample in user approval mode")
+		return nil, nil
+	})).(*modelGuardianReviewer)
+	reviewer.approvalsReviewer = func(threadID, turnID string) string { return string(config.ApprovalsReviewerUser) }
+	decision, _, err := reviewer.Review(context.Background(), "thread-user", "turn-user", "", state.Action{Type: "mcp_tool_call", Server: "node_repl", ToolName: "js"})
+	if err != nil {
+		t.Fatalf("Review error = %v", err)
+	}
+	if decision != state.DecisionApproved {
+		t.Fatalf("decision = %v, want approved", decision)
+	}
+}
+
 func TestModelGuardianReviewerMapsAssessmentDecision(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
