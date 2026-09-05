@@ -28,9 +28,10 @@ type ToolRegistryOptions struct {
 	SelectedEnvironmentIDs         []string
 	WaitForEnvironmentToolConfig   *tool.WaitForEnvironmentToolConfig
 
-	Shell       *tool.ShellExecutorOptions
-	ApplyPatch  *tool.ApplyPatchExecutorOptions
-	UnifiedExec *tool.UnifiedExecManager
+	Shell        *tool.ShellExecutorOptions
+	ApplyPatch   *tool.ApplyPatchExecutorOptions
+	UnifiedExec  *tool.UnifiedExecManager
+	CodexVersion string
 
 	MCPService                *mcp.MCPService
 	MCPTools                  []mcp.RuntimeToolInfo
@@ -192,6 +193,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		shellOptions.UnifiedExecThreadID = options.ThreadID
 		shellOptions.UnifiedExecTurnID = options.TurnID
 		shellOptions.SessionID = options.SessionID
+		shellOptions.CodexVersion = options.CodexVersion
 		shellOptions.PluginMetricsResolver = options.PluginMetricsResolver
 		shellOptions.PluginMeasurementTracker = options.PluginMeasurementTracker
 		shellOptions.UnifiedExec = nil

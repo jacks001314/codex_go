@@ -947,6 +947,20 @@ func TestInjectSessionIDEnvShellExecutor(t *testing.T) {
 	}
 }
 
+func TestInjectCodexVersionEnvShellExecutor(t *testing.T) {
+	env := injectCodexVersionEnv(map[string]string{"codex_version": "stale"}, "1.2.3")
+	if env["CODEX_VERSION"] != "1.2.3" {
+		t.Fatalf("CODEX_VERSION = %q", env["CODEX_VERSION"])
+	}
+	if _, ok := env["codex_version"]; ok {
+		t.Fatalf("stale case-variant key survived: %#v", env)
+	}
+	cleared := injectCodexVersionEnv(nil, "")
+	if _, ok := cleared["CODEX_VERSION"]; ok {
+		t.Fatalf("empty codex version should not inject CODEX_VERSION: %#v", cleared)
+	}
+}
+
 // TestOneShotExecSpecRemovesSessionArgsLikeRust verifies the R#41393
 // completion-only `exec_command` surface removes resumable/session arguments and
 // exposes `timeout_ms`.

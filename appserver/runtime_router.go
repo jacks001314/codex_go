@@ -11263,6 +11263,7 @@ func (r *RuntimeRouter) requireToolRouter(cwd string) (*tool.Router, error) {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
+	options.CodexVersion = appServerVersion()
 	options.UnifiedExec = r.services.UnifiedExec
 	if r.services.CodeModeProvider != nil {
 		options.CodeModeProvider = r.services.CodeModeProvider
@@ -11505,6 +11506,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
+	options.CodexVersion = appServerVersion()
 	if table, ok := cfg.Values["shell_environment_policy"].(map[string]any); ok {
 		options.Shell.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(table)
 	}

@@ -1028,6 +1028,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		return r.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(requestCWD(req))
+	options.CodexVersion = execHumanVersion()
 	options.UnifiedExec = r.UnifiedExec
 	if run != nil {
 		options.EnableUnifiedExec = run.UnifiedExecEnabled

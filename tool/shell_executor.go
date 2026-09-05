@@ -45,7 +45,11 @@ type ShellExecutorOptions struct {
 	ShellEnvironmentPolicy map[string]any
 	// SessionID mirrors Rust 97729885d4: the shared root-session ID is exposed
 	// to model-reachable shell commands as CODEX_SESSION_ID.
-	SessionID               string
+	SessionID string
+	// CodexVersion is exposed to model-reachable shell commands as
+	// CODEX_VERSION (Rust #42395). The runtime-provided value overrides stale
+	// inherited or client-provided values.
+	CodexVersion            string
 	UnifiedExecEnvironments []UnifiedExecEnvironment
 	ManagedNetworkResolver  ManagedNetworkResolver
 	// PreserveLineEndings mirrors Rust Feature::ApplyPatchPreserveLineEndings
@@ -82,6 +86,7 @@ type ShellExecutor struct {
 	unifiedExecTurnID        string
 	shellEnvironmentPolicy   map[string]any
 	sessionID                string
+	codexVersion             string
 	unifiedExecEnvironments  []UnifiedExecEnvironment
 	managedNetworkResolver   ManagedNetworkResolver
 	preserveLineEndings      bool
@@ -145,6 +150,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.unifiedExecTurnID = options.UnifiedExecTurnID
 	executor.shellEnvironmentPolicy = cloneShellEnvironmentPolicy(options.ShellEnvironmentPolicy)
 	executor.sessionID = options.SessionID
+	executor.codexVersion = strings.TrimSpace(options.CodexVersion)
 	executor.unifiedExecEnvironments = cloneUnifiedExecEnvironments(options.UnifiedExecEnvironments)
 	executor.managedNetworkResolver = options.ManagedNetworkResolver
 	executor.preserveLineEndings = options.PreserveLineEndings
@@ -560,6 +566,8 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	validation.Env = envutil.InjectApplyPatchEnv(validation.Env, e.preserveLineEndings)
 	// Rust 97729885d4: expose the shared root-session identity to shell commands.
 	validation.Env = injectSessionIDEnv(validation.Env, e.sessionID)
+	// Rust #42395: expose the running harness version to shell commands.
+	validation.Env = injectCodexVersionEnv(validation.Env, e.codexVersion)
 	req, err := BuildShellRequest(args, sessionShell, validation)
 	if err != nil {
 		return nil, RespondToModel(err.Error())
@@ -1062,6 +1070,21 @@ func injectSessionIDEnv(env map[string]string, sessionID string) map[string]stri
 	}
 	if strings.TrimSpace(sessionID) != "" {
 		env["CODEX_SESSION_ID"] = strings.TrimSpace(sessionID)
+	}
+	return env
+}
+
+func injectCodexVersionEnv(env map[string]string, codexVersion string) map[string]string {
+	if env == nil {
+		env = map[string]string{}
+	}
+	for key := range env {
+		if strings.EqualFold(key, "CODEX_VERSION") {
+			delete(env, key)
+		}
+	}
+	if strings.TrimSpace(codexVersion) != "" {
+		env["CODEX_VERSION"] = strings.TrimSpace(codexVersion)
 	}
 	return env
 }
