@@ -1847,6 +1847,11 @@ func interactiveRemoteSafetyBufferingRetryCommand(ctx context.Context, root *cli
 				sendRemoteTurnError(messages, err)
 				return
 			}
+			if err := waitRemoteTurnStopped(ctx, client, strings.TrimSpace(threadID)); err != nil {
+				client.close()
+				sendRemoteTurnError(messages, err)
+				return
+			}
 			forkParams := appserver.ThreadForkParams{ThreadID: strings.TrimSpace(threadID), BeforeTurnID: strings.TrimSpace(turnID)}
 			fasterModel := strings.TrimSpace(model)
 			if fasterModel != "" {
@@ -1869,6 +1874,37 @@ func interactiveRemoteSafetyBufferingRetryCommand(ctx context.Context, root *cli
 			runInteractiveRemoteTurn(ctx, root, endpoint, state, codextea.SubmitRequest{Prompt: strings.TrimSpace(prompt), Model: fasterModel}, messages, brokers, nil)
 		}()
 		return codextea.StreamStartedMsg{Messages: messages}
+	}
+}
+
+// waitRemoteTurnStopped polls thread/read until no turn is still in progress,
+// so a safety-buffered retry can safely fork the interrupted thread.
+func waitRemoteTurnStopped(ctx context.Context, client *remoteAppServerTUIClient, threadID string) error {
+	if strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var response appserver.ThreadReadResponse
+		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadRead, appserver.ThreadReadParams{ThreadID: threadID, IncludeTurns: true}, &response); err != nil {
+			return err
+		}
+		running := false
+		if response.Thread != nil {
+			for i := range response.Thread.Turns {
+				if strings.EqualFold(strings.TrimSpace(string(response.Thread.Turns[i].Status)), string(appserver.TurnStatusInProgress)) {
+					running = true
+					break
+				}
+			}
+		}
+		if !running {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("timed out waiting for safety-buffered turn to stop")
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
