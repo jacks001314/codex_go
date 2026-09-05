@@ -8318,6 +8318,13 @@ func (r *RuntimeRouter) handlePluginReconcile(request *Request) (*plugin.PluginR
 		}
 	}
 	refreshed := r != nil && r.reconcileInstalledRemotePlugins(context.Background())
+	failedRemotePluginIDs, failedMaterializationRemotePluginIDs := takeRemoteInstalledPluginSyncFailures()
+	if failedRemotePluginIDs == nil {
+		failedRemotePluginIDs = []string{}
+	}
+	if failedMaterializationRemotePluginIDs == nil {
+		failedMaterializationRemotePluginIDs = []string{}
+	}
 	changed := []plugin.PluginReconcileChangedPlugin{}
 	if r != nil && r.services.Plugins != nil {
 		after := map[string]plugin.PluginDetail{}
@@ -8356,8 +8363,8 @@ func (r *RuntimeRouter) handlePluginReconcile(request *Request) (*plugin.PluginR
 	}
 	return &plugin.PluginReconcileResponse{
 		ChangedPlugins:                       changed,
-		FailedRemotePluginIDs:                []string{},
-		FailedMaterializationRemotePluginIDs: []string{},
+		FailedRemotePluginIDs:                failedRemotePluginIDs,
+		FailedMaterializationRemotePluginIDs: failedMaterializationRemotePluginIDs,
 	}, nil
 }
 

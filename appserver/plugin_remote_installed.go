@@ -30,6 +30,12 @@ var remoteInstalledPluginSyncs = struct {
 	inFlight map[string]struct{}
 }{inFlight: map[string]struct{}{}}
 
+var remoteInstalledPluginSyncFailures = struct {
+	sync.Mutex
+	failedRemote                []string
+	failedMaterializationRemote []string
+}{}
+
 type remoteInstalledPluginPage struct {
 	Plugins    []remoteInstalledPlugin `json:"plugins"`
 	Pagination struct {
@@ -150,6 +156,7 @@ func (r *RuntimeRouter) accountAuthSnapshot(codexHome string) *auth.AuthDotJSON 
 func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 	Do(*http.Request) (*http.Response, error)
 }, baseURL string, token string, accountID string, codexHome string) (map[string][]plugin.PluginDetail, bool) {
+	clearRemoteInstalledPluginSyncFailures()
 	installed := map[string]remoteInstalledPlugin{}
 	for _, scope := range []string{"GLOBAL", "USER", "WORKSPACE"} {
 		pageToken := ""
@@ -211,7 +218,13 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 		}
 		installedNamesByMarketplace[marketplaceName][name] = struct{}{}
 		root, err := ensureRemoteInstalledPluginCache(ctx, client, codexHome, marketplaceName, candidate)
-		if err != nil || root == "" || !candidate.Enabled {
+		if err != nil || root == "" {
+			if candidate.Enabled {
+				recordRemoteInstalledPluginMaterializationFailure(candidate.ID)
+			}
+			continue
+		}
+		if !candidate.Enabled {
 			continue
 		}
 		var installedAt *int64
@@ -242,6 +255,33 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 		return nil, false
 	}
 	return detailsByMarketplace, true
+}
+
+func clearRemoteInstalledPluginSyncFailures() {
+	remoteInstalledPluginSyncFailures.Lock()
+	remoteInstalledPluginSyncFailures.failedRemote = nil
+	remoteInstalledPluginSyncFailures.failedMaterializationRemote = nil
+	remoteInstalledPluginSyncFailures.Unlock()
+}
+
+func recordRemoteInstalledPluginMaterializationFailure(remotePluginID string) {
+	remotePluginID = strings.TrimSpace(remotePluginID)
+	if remotePluginID == "" {
+		return
+	}
+	remoteInstalledPluginSyncFailures.Lock()
+	remoteInstalledPluginSyncFailures.failedMaterializationRemote = append(remoteInstalledPluginSyncFailures.failedMaterializationRemote, remotePluginID)
+	remoteInstalledPluginSyncFailures.Unlock()
+}
+
+func takeRemoteInstalledPluginSyncFailures() ([]string, []string) {
+	remoteInstalledPluginSyncFailures.Lock()
+	failedRemote := append([]string(nil), remoteInstalledPluginSyncFailures.failedRemote...)
+	failedMaterialization := append([]string(nil), remoteInstalledPluginSyncFailures.failedMaterializationRemote...)
+	remoteInstalledPluginSyncFailures.failedRemote = nil
+	remoteInstalledPluginSyncFailures.failedMaterializationRemote = nil
+	remoteInstalledPluginSyncFailures.Unlock()
+	return failedRemote, failedMaterialization
 }
 
 func remoteInstalledMarketplaceForPlugin(requestedScope string, candidate remoteInstalledPlugin) string {
