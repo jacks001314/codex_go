@@ -61,6 +61,8 @@ type CodexTurnEventParams struct {
 	ThreadID                             string                       `json:"thread_id"`
 	SessionID                            string                       `json:"session_id"`
 	TurnID                               string                       `json:"turn_id"`
+	TurnTrigger                          *string                      `json:"turn_trigger"`
+	CodexTurnSource                      *string                      `json:"codex_turn_source"`
 	SubmissionType                       *string                      `json:"submission_type"`
 	AppServerClient                      CodexAppServerClientMetadata `json:"app_server_client"`
 	Runtime                              CodexRuntimeMetadata         `json:"runtime"`
@@ -120,6 +122,8 @@ type CodexTurnEventInput struct {
 	ThreadID                             string
 	SessionID                            string
 	TurnID                               string
+	TurnTrigger                          string
+	CodexTurnSource                      string
 	SubmissionType                       *string
 	AppServerClient                      CodexAppServerClientMetadata
 	ThreadOriginator                     string
@@ -207,6 +211,8 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			ThreadID:                             input.ThreadID,
 			SessionID:                            input.SessionID,
 			TurnID:                               input.TurnID,
+			TurnTrigger:                          boundedTelemetryString(input.TurnTrigger),
+			CodexTurnSource:                      boundedTelemetryString(input.CodexTurnSource),
 			SubmissionType:                       input.SubmissionType,
 			AppServerClient:                      client,
 			Runtime:                              input.Runtime,
@@ -262,6 +268,14 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			CompletedAt:                          input.CompletedAt,
 		},
 	}
+}
+
+func boundedTelemetryString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 128 {
+		return nil
+	}
+	return &value
 }
 
 func toolCountPtr(counts *CodexTurnToolCounts, value func(CodexTurnToolCounts) int) *int {

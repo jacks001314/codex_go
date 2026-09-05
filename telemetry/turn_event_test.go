@@ -3,34 +3,35 @@ package telemetry
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 	event := NewCodexTurnEvent(CodexTurnEventInput{
-		ThreadID:             "thread-2",
-		SessionID:            "session-thread-2",
-		TurnID:               "turn-2",
-		AppServerClient:      sampleAppServerClientMetadata(),
-		Runtime:              sampleRuntimeMetadata(),
-		ThreadSource:         stringPtrTelemetry("user"),
-		InitializationMode:   "new",
-		Model:                stringPtrTelemetry("gpt-5"),
-		ModelProvider:        "openai",
-		SandboxPolicy:        stringPtrTelemetry("read_only"),
-		ReasoningEffort:      stringPtrTelemetry("high"),
-		ReasoningSummary:     stringPtrTelemetry("detailed"),
-		ServiceTier:          "flex",
-		ApprovalPolicy:       "on-request",
-		ApprovalsReviewer:    "auto_review",
-		SandboxNetworkAccess: true,
-		CollaborationMode:    stringPtrTelemetry("plan"),
-		Personality:          stringPtrTelemetry("pragmatic"),
-		WorkspaceKind:        stringPtrTelemetry("projectless"),
-		NumInputImages:       2,
-		IsFirstTurn:          true,
-		Status:               stringPtrTelemetry("completed"),
-		SteerCount:           intPtrTelemetry(0),
+		ThreadID:                      "thread-2",
+		SessionID:                     "session-thread-2",
+		TurnID:                        "turn-2",
+		AppServerClient:               sampleAppServerClientMetadata(),
+		Runtime:                       sampleRuntimeMetadata(),
+		ThreadSource:                  stringPtrTelemetry("user"),
+		InitializationMode:            "new",
+		Model:                         stringPtrTelemetry("gpt-5"),
+		ModelProvider:                 "openai",
+		SandboxPolicy:                 stringPtrTelemetry("read_only"),
+		ReasoningEffort:               stringPtrTelemetry("high"),
+		ReasoningSummary:              stringPtrTelemetry("detailed"),
+		ServiceTier:                   "flex",
+		ApprovalPolicy:                "on-request",
+		ApprovalsReviewer:             "auto_review",
+		SandboxNetworkAccess:          true,
+		CollaborationMode:             stringPtrTelemetry("plan"),
+		Personality:                   stringPtrTelemetry("pragmatic"),
+		WorkspaceKind:                 stringPtrTelemetry("projectless"),
+		NumInputImages:                2,
+		IsFirstTurn:                   true,
+		Status:                        stringPtrTelemetry("completed"),
+		SteerCount:                    intPtrTelemetry(0),
 		RunningBackgroundProcessCount: intPtrTelemetry(3),
 		TimingProfile: CodexTurnTimingProfile{
 			BeforeFirstSamplingMS:     100,
@@ -57,6 +58,8 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			"thread_id": "thread-2",
 			"session_id": "session-thread-2",
 			"turn_id": "turn-2",
+			"turn_trigger": null,
+			"codex_turn_source": null,
 			"submission_type": null,
 			"app_server_client": {
 				"product_client_id": "codex_cli_rs",
@@ -127,6 +130,50 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("event JSON mismatch\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestCodexTurnEventBoundsTriggerAndSource(t *testing.T) {
+	event := NewCodexTurnEvent(CodexTurnEventInput{
+		ThreadID:        "thread-3",
+		SessionID:       "session-3",
+		TurnID:          "turn-3",
+		TurnTrigger:     "realtime",
+		CodexTurnSource: "codex_vscode",
+		AppServerClient: sampleAppServerClientMetadata(),
+		Runtime:         sampleRuntimeMetadata(),
+		TimingProfile:   CodexTurnTimingProfile{},
+	})
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal event: %v", err)
+	}
+	params := decoded["event_params"].(map[string]any)
+	if params["turn_trigger"] != "realtime" || params["codex_turn_source"] != "codex_vscode" {
+		t.Fatalf("event_params = %#v", params)
+	}
+
+	oversized := NewCodexTurnEvent(CodexTurnEventInput{
+		ThreadID:        "thread-4",
+		SessionID:       "session-4",
+		TurnID:          "turn-4",
+		TurnTrigger:     strings.Repeat("x", 129),
+		CodexTurnSource: strings.Repeat("y", 200),
+	})
+	data, err = json.Marshal(oversized)
+	if err != nil {
+		t.Fatalf("marshal oversized event: %v", err)
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal oversized event: %v", err)
+	}
+	params = decoded["event_params"].(map[string]any)
+	if params["turn_trigger"] != nil || params["codex_turn_source"] != nil {
+		t.Fatalf("oversized trigger/source should be omitted: %#v", params)
 	}
 }
 
@@ -605,8 +652,8 @@ func TestCodexImageGenerationEventSerializesExpectedRustShape(t *testing.T) {
 			TerminalStatus:       ToolItemTerminalStatusFailed,
 			FailureKind:          stringPtrTelemetry(ToolItemFailureKindToolError),
 		},
-		RevisedPromptPresent: true,
-		SavedPathPresent:     true,
+		RevisedPromptPresent:  true,
+		SavedPathPresent:      true,
 		TransparentBackground: &transparent,
 	})
 
