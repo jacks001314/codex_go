@@ -2265,6 +2265,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handlePluginList(request)
 	case MethodPluginInstalled:
 		return r.handlePluginInstalled(request)
+	case MethodPluginReconcile:
+		return r.handlePluginReconcile(request)
 	case MethodPluginRead:
 		return r.handlePluginRead(request)
 	case MethodPluginSkillRead:
@@ -8270,6 +8272,25 @@ func (r *RuntimeRouter) handlePluginInstalled(request *Request) (*plugin.PluginI
 		}
 	}
 	return response, nil
+}
+
+// handlePluginReconcile exposes the plugin/reconcile JSON-RPC method. The Go
+// port performs installed remote-plugin synchronization through the existing
+// startup/background sync path rather than a separate Rust reconciler, so this
+// currently acknowledges the request and returns no changed-plugin details.
+func (r *RuntimeRouter) handlePluginReconcile(request *Request) (*plugin.PluginReconcileResponse, error) {
+	var params plugin.PluginReconcileParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if r != nil {
+		r.startInstalledRemotePluginSync()
+	}
+	return &plugin.PluginReconcileResponse{
+		ChangedPlugins:                       []plugin.PluginReconcileChangedPlugin{},
+		FailedRemotePluginIDs:                []string{},
+		FailedMaterializationRemotePluginIDs: []string{},
+	}, nil
 }
 
 func (r *RuntimeRouter) handlePluginRead(request *Request) (*plugin.PluginReadResponse, error) {

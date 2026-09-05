@@ -918,6 +918,30 @@ type PluginInstalledResponse struct {
 	Plugins               []PluginSummary            `json:"plugins,omitempty"`
 }
 
+// PluginReconcileParams mirrors Rust PluginReconcileParams (#41949). The
+// optional reason is recorded with the reconciliation attempt.
+type PluginReconcileParams struct {
+	Reason *string `json:"reason,omitempty"`
+}
+
+// PluginReconcileChangedPlugin describes runtime categories affected by a
+// plugin bundle, enablement, or removal change.
+type PluginReconcileChangedPlugin struct {
+	ID        string `json:"id"`
+	HasMCPS   bool   `json:"hasMcps"`
+	HasApps   bool   `json:"hasApps"`
+	HasHooks  bool   `json:"hasHooks"`
+	HasSkills bool   `json:"hasSkills"`
+}
+
+// PluginReconcileResponse reports plugins changed by a reconciliation pass and
+// remote-plugin failures observed during that pass.
+type PluginReconcileResponse struct {
+	ChangedPlugins                       []PluginReconcileChangedPlugin `json:"changedPlugins"`
+	FailedRemotePluginIDs                []string                       `json:"failedRemotePluginIds"`
+	FailedMaterializationRemotePluginIDs []string                       `json:"failedMaterializationRemotePluginIds"`
+}
+
 func (r *PluginInstalledResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Marketplaces          []PluginMarketplaceEntry   `json:"marketplaces"`
