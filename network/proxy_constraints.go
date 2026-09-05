@@ -18,6 +18,17 @@ type ProxyRequirements struct {
 	ManagedAllowedDomainsOnly        bool
 	UnixSockets                      *ProxyUnixSocketPermissions
 	AllowLocalBinding                *bool
+	HeaderInjections                 []ProxyHeaderInjection
+}
+
+// ProxyHeaderInjection annotates matching requests with extra headers. It is a
+// requirements-only rule and does not change whether non-matching requests are
+// allowed (Rust #42173).
+type ProxyHeaderInjection struct {
+	Host         string
+	Methods      []string
+	PathPrefixes []string
+	Headers      map[string]string
 }
 
 type ProxyConstraints struct {

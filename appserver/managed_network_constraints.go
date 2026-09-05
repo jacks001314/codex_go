@@ -248,6 +248,26 @@ func proxyRequirementsFromConfig(requirements *config.NetworkRequirements) *netw
 		}
 		out.UnixSockets = &network.ProxyUnixSocketPermissions{Entries: entries}
 	}
+	if requirements.HeaderInjections != nil {
+		out.HeaderInjections = proxyHeaderInjectionsFromConfig(requirements.HeaderInjections)
+	}
+	return out
+}
+
+func proxyHeaderInjectionsFromConfig(values []config.NetworkHeaderInjection) []network.ProxyHeaderInjection {
+	out := make([]network.ProxyHeaderInjection, 0, len(values))
+	for _, value := range values {
+		headers := map[string]string{}
+		for name, header := range value.Headers {
+			headers[name] = header
+		}
+		out = append(out, network.ProxyHeaderInjection{
+			Host:         value.Host,
+			Methods:      append([]string(nil), value.Methods...),
+			PathPrefixes: append([]string(nil), value.PathPrefixes...),
+			Headers:      headers,
+		})
+	}
 	return out
 }
 

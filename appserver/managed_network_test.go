@@ -511,3 +511,15 @@ func waitForManagedNetworkStatus(t *testing.T, request func() int, want int) {
 	}
 	t.Fatalf("managed network status did not become %d", want)
 }
+
+func TestProxyHeaderInjectionsFromConfig(t *testing.T) {
+	out := proxyHeaderInjectionsFromConfig([]config.NetworkHeaderInjection{{
+		Host:         "api.example.com",
+		Methods:      []string{"POST"},
+		PathPrefixes: []string{"/console/v1"},
+		Headers:      map[string]string{"x-statsig-change-source": "codex"},
+	}})
+	if len(out) != 1 || out[0].Host != "api.example.com" || out[0].Headers["x-statsig-change-source"] != "codex" {
+		t.Fatalf("header injections = %#v", out)
+	}
+}
