@@ -94,6 +94,15 @@ func TestPluginReconcileSignatureDetectsEnablementChange(t *testing.T) {
 	}
 }
 
+func TestPluginReconcileSignatureDetectsSkillsChange(t *testing.T) {
+	base := plugin.PluginDetail{Summary: plugin.PluginSummary{ID: "acme/weather", Enabled: true, HasSkills: false}}
+	next := base
+	next.Summary.HasSkills = true
+	if pluginReconcileSignature(base) == pluginReconcileSignature(next) {
+		t.Fatal("pluginReconcileSignature should differ when skills presence changes")
+	}
+}
+
 func pluginDisabledReasonPtr(value plugin.PluginDisabledReason) *plugin.PluginDisabledReason {
 	return &value
 }
