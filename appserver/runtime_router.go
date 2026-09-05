@@ -6216,6 +6216,7 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 		r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, &params, nil, telemetry.TurnSteerResultRejected, turnSteerAnalyticsRejectionReason(err), createdAt)
 		return nil, turnSteerRuntimeError(err)
 	}
+	r.updateActiveTurnApprovalsReviewer(&params)
 	if r.hasRuntimeThreadStore() {
 		if item, ok := sessionItemFromTurnSteer(&params); ok {
 			if _, err := r.runtimeAppendItem(session.ThreadID(params.ThreadID), item); err != nil {
@@ -6251,6 +6252,33 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	r.noteAcceptedTurnSteer(params.ThreadID, params.ExpectedTurnID)
 	r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, &params, stringPtrIfNotEmpty(response.TurnID), telemetry.TurnSteerResultAccepted, nil, createdAt)
 	return response, nil
+}
+
+func (r *RuntimeRouter) updateActiveTurnApprovalsReviewer(params *turn.TurnSteerParams) {
+	if r == nil || params == nil || params.ApprovalsReviewer == nil {
+		return
+	}
+	reviewer := strings.TrimSpace(*params.ApprovalsReviewer)
+	if reviewer == "" {
+		return
+	}
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: params.ThreadID})
+	if err != nil || cfg == nil {
+		return
+	}
+	// Reuse the normal turn-start reviewer resolution so managed/model-required
+	// restrictions continue to apply to the live update.
+	updatedParams := &turn.TurnStartParams{ThreadID: params.ThreadID, ApprovalsReviewer: &reviewer}
+	effectiveReviewer := turnApprovalsReviewerForTurn(cfg, updatedParams)
+	r.threads.UpdateTurn(params.ThreadID, params.ExpectedTurnID, func(active *activeRuntimeTurn) {
+		if active.Params == nil {
+			active.Params = &turn.TurnStartParams{ThreadID: params.ThreadID}
+		}
+		active.Params.ApprovalsReviewer = &effectiveReviewer
+		if active.RunConfig != nil {
+			active.RunConfig.ApprovalsReviewer = effectiveReviewer
+		}
+	})
 }
 
 func turnSteerRuntimeError(err error) error {

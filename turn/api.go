@@ -376,6 +376,7 @@ type TurnSteerParams struct {
 	ExpectedTurnID       string                            `json:"expectedTurnId"`
 	Input                []TurnUserInput                   `json:"input,omitempty"`
 	Prompt               string                            `json:"prompt,omitempty"`
+	ApprovalsReviewer    *string                           `json:"approvalsReviewer,omitempty"`
 	ClientUserMessageID  string                            `json:"clientUserMessageId,omitempty"`
 	ResponsesAPIMetadata map[string]string                 `json:"responsesapiClientMetadata,omitempty"`
 	AdditionalContext    map[string]AdditionalContextEntry `json:"additionalContext,omitempty"`
@@ -387,11 +388,13 @@ func (p *TurnSteerParams) MarshalJSON() ([]byte, error) {
 		ClientUserMessageID string          `json:"clientUserMessageId,omitempty"`
 		Input               []TurnUserInput `json:"input"`
 		ExpectedTurnID      string          `json:"expectedTurnId"`
+		ApprovalsReviewer   *string         `json:"approvalsReviewer,omitempty"`
 	}{
 		ThreadID:            p.ThreadID,
 		ClientUserMessageID: p.ClientUserMessageID,
 		Input:               userInputsForJSONWithPrompt(p.Input, p.Prompt),
 		ExpectedTurnID:      p.ExpectedTurnID,
+		ApprovalsReviewer:   p.ApprovalsReviewer,
 	})
 }
 
