@@ -44,7 +44,7 @@ func (r *RuntimeRouter) requireAgentForTurn(params *turn.TurnStartParams) model.
 		r.services.Agent = agent
 		prewarm := true
 		if cfg, cfgErr := r.effectiveConfigForTurn(params); cfgErr == nil && cfg != nil {
-			if strings.EqualFold(turnApprovalsReviewerForTurn(cfg, params), string(config.ApprovalsReviewerUser)) {
+			if strings.EqualFold(turnApprovalsReviewerForTurn(cfg, params), string(config.ApprovalsReviewerUser)) || turnIsFullAccess(cfg, firstNonEmpty(params.CWD, r.services.DefaultCWD), params) {
 				prewarm = false
 			}
 		}
@@ -53,6 +53,17 @@ func (r *RuntimeRouter) requireAgentForTurn(params *turn.TurnStartParams) model.
 	}
 	r.services.Agent = &model.UnavailableAgentRunner{Err: err}
 	return r.services.Agent
+}
+
+func turnIsFullAccess(cfg *config.Config, cwd string, params *turn.TurnStartParams) bool {
+	if cfg == nil || turnApprovalPolicyForTurn(cfg, params) != sandbox.ApprovalNever {
+		return false
+	}
+	resolution, err := turnSandboxPermissionProfile(cfg, cwd, params)
+	if err != nil || resolution == nil || resolution.Profile == nil || resolution.Profile.HasDenyReadEntries() {
+		return false
+	}
+	return resolution.Profile.SandboxPolicy != nil && resolution.Profile.SandboxPolicy.Kind == sandbox.SandboxDangerFullAccess
 }
 
 func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) GuardianReviewer {
