@@ -2763,6 +2763,7 @@ func applyWindowsSandboxDoctorDiagnostics(check *DoctorCheck, cfg *config.Config
 	}
 	check = check.Detail("windows sandbox level: " + level)
 	restrictions := "inactive"
+	globDepth := "unbounded"
 	if resolution, resolveErr := cfg.ResolveSandboxPermissionProfile("", cwd); resolveErr == nil && resolution != nil && resolution.Profile != nil {
 		deniedReads := len(resolution.Profile.DeniedReadEntries)
 		if deniedReads > 0 {
@@ -2777,12 +2778,11 @@ func applyWindowsSandboxDoctorDiagnostics(check *DoctorCheck, cfg *config.Config
 				Detail(fmt.Sprintf("denied-read rules: %d", deniedReads)).
 				Detail(fmt.Sprintf("denied-read glob rules: %d", globRules))
 		}
-		globDepth := "unbounded"
 		if resolution.GlobScanMaxDepth != nil {
 			globDepth = strconv.Itoa(*resolution.GlobScanMaxDepth)
 		}
-		check = check.Detail("glob scan max depth: " + globDepth)
 	}
+	check = check.Detail("glob scan max depth: " + globDepth)
 	managedSource := "none"
 	if cfg != nil && cfg.Requirements != nil && (len(cfg.Requirements.Permissions) > 0 || cfg.Requirements.DefaultPermissions != nil) {
 		managedSource = "managed requirements"

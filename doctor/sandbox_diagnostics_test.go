@@ -61,3 +61,19 @@ func TestWindowsSandboxDoctorDiagnosticsReportDeniedReadRestrictions(t *testing.
 		t.Fatalf("details = %#v", check.Details)
 	}
 }
+
+func TestWindowsSandboxDoctorDiagnosticsReportGlobDepthAndManagedSource(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{"windows_sandbox": "default"}}
+	check := applyWindowsSandboxDoctorDiagnostics(
+		NewCheck("sandbox.helpers", "sandbox", CheckStatusOK, "sandbox configuration is readable"),
+		cfg,
+		t.TempDir(),
+		t.TempDir(),
+	)
+	if !containsDetail(check, "glob scan max depth: unbounded") {
+		t.Fatalf("glob depth detail missing: %#v", check.Details)
+	}
+	if !containsDetail(check, "managed filesystem source: none") {
+		t.Fatalf("managed filesystem source detail missing: %#v", check.Details)
+	}
+}
