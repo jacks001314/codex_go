@@ -181,6 +181,18 @@ func TestTurnInputRejectsConfigurationUpdate(t *testing.T) {
 	}
 }
 
+func TestTurnSteerParamsCarriesApprovalsReviewer(t *testing.T) {
+	reviewer := "auto_review"
+	params := &TurnSteerParams{ThreadID: "thread-1", ExpectedTurnID: "turn-1", ApprovalsReviewer: &reviewer}
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"approvalsReviewer":"auto_review"`) {
+		t.Fatalf("Marshal() = %s", data)
+	}
+}
+
 func TestTurnStartAcceptsTextAtLimitWithMentionInput(t *testing.T) {
 	service := NewTurnService()
 	_, err := service.Start(&TurnStartParams{
