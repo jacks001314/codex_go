@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"codex_go/compact"
+	"codex_go/config"
 	codexctx "codex_go/context"
 	"codex_go/features"
 	"codex_go/model"
@@ -38,6 +39,7 @@ type modelGuardianReviewer struct {
 	specialty                  func(threadID, turnID string) string
 	nodeReplAutoReviewRequired func(threadID, turnID string) bool
 	fullAccess                 func(threadID, turnID string) bool
+	approvalsReviewer          func(threadID, turnID string) string
 	environment                func(context.Context, string, string) ([]any, error)
 	permissionProfile          func(threadID, turnID string) *sandbox.PermissionProfile
 	nodeReplEvidence           func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
@@ -257,6 +259,10 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	}
 	if r.fullAccess != nil && r.fullAccess(threadID, turnID) {
 		return state.DecisionApproved, "full access", nil
+	}
+	if r.approvalsReviewer != nil && strings.EqualFold(r.approvalsReviewer(threadID, turnID), string(config.ApprovalsReviewerUser)) &&
+		action.Type == "mcp_tool_call" && strings.EqualFold(strings.TrimSpace(action.Server), "node_repl") && strings.EqualFold(strings.TrimSpace(action.ToolName), "js") {
+		return state.DecisionApproved, "user approval mode", nil
 	}
 	r.beginToolCall(threadID)
 	var transcript []string
