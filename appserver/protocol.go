@@ -668,37 +668,46 @@ type ThreadSectionAppearance struct {
 	Color *string `json:"color,omitempty"`
 }
 
+// ThreadEnvironment reports an environment selected by a loaded thread,
+// independent of connection status (Rust #42386).
+type ThreadEnvironment struct {
+	EnvironmentID         string   `json:"environmentId"`
+	CWD                   string   `json:"cwd"`
+	RuntimeWorkspaceRoots []string `json:"runtimeWorkspaceRoots"`
+}
+
 type Thread struct {
-	ID                   string            `json:"id"`
-	Extra                map[string]any    `json:"extra,omitempty"`
-	SessionID            string            `json:"sessionId"`
-	ForkedFromID         *string           `json:"forkedFromId"`
-	ParentThreadID       *string           `json:"parentThreadId"`
-	Preview              string            `json:"preview"`
-	Ephemeral            bool              `json:"ephemeral"`
-	Section              *ThreadSection    `json:"section"`
-	SectionEnteredAt     *int64            `json:"sectionEnteredAt"`
-	ProjectID            *string           `json:"projectId"`
-	HistoryMode          ThreadHistoryMode `json:"historyMode"`
-	ModelProvider        string            `json:"modelProvider"`
-	Model                *string           `json:"model"`
-	ReasoningEffort      *ReasoningEffort  `json:"reasoningEffort"`
-	CreatedAt            int64             `json:"createdAt"`
-	UpdatedAt            int64             `json:"updatedAt"`
-	RecencyAt            *int64            `json:"recencyAt"`
-	Status               ThreadStatus      `json:"status"`
-	Path                 *string           `json:"path"`
-	CWD                  string            `json:"cwd"`
-	CLIVersion           string            `json:"cliVersion"`
-	Originator           *string           `json:"originator"`
-	Source               SessionSource     `json:"source"`
-	CanAcceptDirectInput *bool             `json:"canAcceptDirectInput"`
-	ThreadSource         *ThreadSource     `json:"threadSource"`
-	AgentNickname        *string           `json:"agentNickname"`
-	AgentRole            *string           `json:"agentRole"`
-	GitInfo              *GitInfo          `json:"gitInfo"`
-	Name                 *string           `json:"name"`
-	Turns                []Turn            `json:"turns"`
+	ID                   string              `json:"id"`
+	Environments         []ThreadEnvironment `json:"environments"`
+	Extra                map[string]any      `json:"extra,omitempty"`
+	SessionID            string              `json:"sessionId"`
+	ForkedFromID         *string             `json:"forkedFromId"`
+	ParentThreadID       *string             `json:"parentThreadId"`
+	Preview              string              `json:"preview"`
+	Ephemeral            bool                `json:"ephemeral"`
+	Section              *ThreadSection      `json:"section"`
+	SectionEnteredAt     *int64              `json:"sectionEnteredAt"`
+	ProjectID            *string             `json:"projectId"`
+	HistoryMode          ThreadHistoryMode   `json:"historyMode"`
+	ModelProvider        string              `json:"modelProvider"`
+	Model                *string             `json:"model"`
+	ReasoningEffort      *ReasoningEffort    `json:"reasoningEffort"`
+	CreatedAt            int64               `json:"createdAt"`
+	UpdatedAt            int64               `json:"updatedAt"`
+	RecencyAt            *int64              `json:"recencyAt"`
+	Status               ThreadStatus        `json:"status"`
+	Path                 *string             `json:"path"`
+	CWD                  string              `json:"cwd"`
+	CLIVersion           string              `json:"cliVersion"`
+	Originator           *string             `json:"originator"`
+	Source               SessionSource       `json:"source"`
+	CanAcceptDirectInput *bool               `json:"canAcceptDirectInput"`
+	ThreadSource         *ThreadSource       `json:"threadSource"`
+	AgentNickname        *string             `json:"agentNickname"`
+	AgentRole            *string             `json:"agentRole"`
+	GitInfo              *GitInfo            `json:"gitInfo"`
+	Name                 *string             `json:"name"`
+	Turns                []Turn              `json:"turns"`
 }
 
 func (t *Thread) MarshalJSON() ([]byte, error) {
@@ -711,37 +720,39 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		historyMode = ThreadHistoryLegacy
 	}
 	return json.Marshal(struct {
-		ID                   string            `json:"id"`
-		SessionID            string            `json:"sessionId"`
-		ForkedFromID         *string           `json:"forkedFromId"`
-		ParentThreadID       *string           `json:"parentThreadId"`
-		Preview              string            `json:"preview"`
-		Ephemeral            bool              `json:"ephemeral"`
-		Section              *ThreadSection    `json:"section"`
-		SectionEnteredAt     *int64            `json:"sectionEnteredAt"`
-		ProjectID            *string           `json:"projectId"`
-		HistoryMode          ThreadHistoryMode `json:"historyMode"`
-		ModelProvider        string            `json:"modelProvider"`
-		Model                *string           `json:"model"`
-		ReasoningEffort      *ReasoningEffort  `json:"reasoningEffort"`
-		CreatedAt            int64             `json:"createdAt"`
-		UpdatedAt            int64             `json:"updatedAt"`
-		RecencyAt            *int64            `json:"recencyAt"`
-		Status               ThreadStatus      `json:"status"`
-		Path                 *string           `json:"path"`
-		CWD                  string            `json:"cwd"`
-		CLIVersion           string            `json:"cliVersion"`
-		Originator           *string           `json:"originator"`
-		Source               SessionSource     `json:"source"`
-		CanAcceptDirectInput *bool             `json:"canAcceptDirectInput"`
-		ThreadSource         *ThreadSource     `json:"threadSource"`
-		AgentNickname        *string           `json:"agentNickname"`
-		AgentRole            *string           `json:"agentRole"`
-		GitInfo              *GitInfo          `json:"gitInfo"`
-		Name                 *string           `json:"name"`
-		Turns                []Turn            `json:"turns"`
+		ID                   string              `json:"id"`
+		Environments         []ThreadEnvironment `json:"environments"`
+		SessionID            string              `json:"sessionId"`
+		ForkedFromID         *string             `json:"forkedFromId"`
+		ParentThreadID       *string             `json:"parentThreadId"`
+		Preview              string              `json:"preview"`
+		Ephemeral            bool                `json:"ephemeral"`
+		Section              *ThreadSection      `json:"section"`
+		SectionEnteredAt     *int64              `json:"sectionEnteredAt"`
+		ProjectID            *string             `json:"projectId"`
+		HistoryMode          ThreadHistoryMode   `json:"historyMode"`
+		ModelProvider        string              `json:"modelProvider"`
+		Model                *string             `json:"model"`
+		ReasoningEffort      *ReasoningEffort    `json:"reasoningEffort"`
+		CreatedAt            int64               `json:"createdAt"`
+		UpdatedAt            int64               `json:"updatedAt"`
+		RecencyAt            *int64              `json:"recencyAt"`
+		Status               ThreadStatus        `json:"status"`
+		Path                 *string             `json:"path"`
+		CWD                  string              `json:"cwd"`
+		CLIVersion           string              `json:"cliVersion"`
+		Originator           *string             `json:"originator"`
+		Source               SessionSource       `json:"source"`
+		CanAcceptDirectInput *bool               `json:"canAcceptDirectInput"`
+		ThreadSource         *ThreadSource       `json:"threadSource"`
+		AgentNickname        *string             `json:"agentNickname"`
+		AgentRole            *string             `json:"agentRole"`
+		GitInfo              *GitInfo            `json:"gitInfo"`
+		Name                 *string             `json:"name"`
+		Turns                []Turn              `json:"turns"`
 	}{
 		ID:                   t.ID,
+		Environments:         t.Environments,
 		SessionID:            t.SessionID,
 		ForkedFromID:         t.ForkedFromID,
 		ParentThreadID:       t.ParentThreadID,
@@ -3082,6 +3093,7 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 	}
 	thread := &Thread{
 		ID:               threadID,
+		Environments:     threadEnvironmentsFromRecord(record),
 		SessionID:        sessionID,
 		ForkedFromID:     stringPtrIfNotEmpty(string(record.ForkedFromID)),
 		ParentThreadID:   stringPtrIfNotEmpty(string(record.ParentThreadID)),
@@ -3140,6 +3152,33 @@ func reasoningEffortPtr(value string) *ReasoningEffort {
 	}
 	effort := ReasoningEffort(value)
 	return &effort
+}
+
+func threadEnvironmentsFromRecord(record *session.Record) []ThreadEnvironment {
+	if record == nil || record.Metadata.Extra == nil {
+		return nil
+	}
+	selections := environmentSelectionsFromAny(record.Metadata.Extra[runtimeEnvironmentSelectionsExtraKey])
+	if selections == nil {
+		return nil
+	}
+	out := make([]ThreadEnvironment, 0, len(selections))
+	for _, selected := range selections {
+		cwd := strings.TrimSpace(firstNonEmpty(
+			threadItemStringFromAnyMap(selected, "cwd"),
+			threadItemStringFromAnyMap(selected, "CWD"),
+		))
+		roots := stringSliceFromAny(firstNonNil(selected["workspaceRoots"], selected["workspace_roots"]))
+		if roots == nil {
+			roots = []string{}
+		}
+		out = append(out, ThreadEnvironment{
+			EnvironmentID:         strings.TrimSpace(selectionEnvironmentID(selected)),
+			CWD:                   cwd,
+			RuntimeWorkspaceRoots: roots,
+		})
+	}
+	return out
 }
 
 func SessionSourceFromString(value string) SessionSource {

@@ -518,3 +518,59 @@ func TestThreadModelAndReasoningEffortSurface(t *testing.T) {
 		t.Fatalf("absent thread JSON model/reasoningEffort = %s", absentData)
 	}
 }
+
+func TestThreadEnvironmentsFromRecord(t *testing.T) {
+	record := &session.Record{
+		ID:        "thread-env",
+		SessionID: "thread-env",
+		Metadata: session.Metadata{
+			CWD:           t.TempDir(),
+			ModelProvider: "openai",
+			Extra: map[string]any{
+				runtimeEnvironmentSelectionsExtraKey: []map[string]any{
+					{"environment_id": "primary", "cwd": "/primary", "workspace_roots": []string{"/primary", "/shared"}},
+				},
+			},
+		},
+	}
+	thread := BuildThread(record, "", false)
+	if thread == nil || len(thread.Environments) != 1 {
+		t.Fatalf("thread environments = %#v", thread)
+	}
+	env := thread.Environments[0]
+	if env.EnvironmentID != "primary" || env.CWD != "/primary" || len(env.RuntimeWorkspaceRoots) != 2 || env.RuntimeWorkspaceRoots[1] != "/shared" {
+		t.Fatalf("thread environment = %#v", env)
+	}
+	data, err := json.Marshal(thread)
+	if err != nil {
+		t.Fatalf("marshal thread: %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		t.Fatalf("unmarshal thread: %v", err)
+	}
+	environments, ok := encoded["environments"].([]any)
+	if !ok || len(environments) != 1 {
+		t.Fatalf("thread JSON environments = %s", data)
+	}
+	first := environments[0].(map[string]any)
+	if first["environmentId"] != "primary" || first["cwd"] != "/primary" {
+		t.Fatalf("thread JSON first environment = %#v", first)
+	}
+
+	absent := BuildThread(&session.Record{ID: "thread-no-env", SessionID: "thread-no-env", Metadata: session.Metadata{CWD: t.TempDir(), ModelProvider: "openai"}}, "", false)
+	if absent == nil || absent.Environments != nil {
+		t.Fatalf("absent thread environments = %#v, want nil", absent)
+	}
+	absentData, err := json.Marshal(absent)
+	if err != nil {
+		t.Fatalf("marshal absent thread: %v", err)
+	}
+	var absentEncoded map[string]any
+	if err := json.Unmarshal(absentData, &absentEncoded); err != nil {
+		t.Fatalf("unmarshal absent thread: %v", err)
+	}
+	if value, present := absentEncoded["environments"]; !present || value != nil {
+		t.Fatalf("absent thread JSON environments = %#v, present=%v", value, present)
+	}
+}
