@@ -44,6 +44,22 @@ func TestWorktreeManagerCreateAndList(t *testing.T) {
 	if len(list) != 1 || list[0].Root != created.Root {
 		t.Fatalf("List() = %#v, want %#v", list, created)
 	}
+	if err := manager.BindThread(created.Root, "thread-1"); err != nil {
+		t.Fatalf("BindThread() error = %v", err)
+	}
+	owner, err := manager.Owner(created.Root)
+	if err != nil {
+		t.Fatalf("Owner() error = %v", err)
+	}
+	if owner != "thread-1" {
+		t.Fatalf("Owner() = %q, want thread-1", owner)
+	}
+	if err := manager.BindThread(created.Root, "thread-1"); err != nil {
+		t.Fatalf("rebind same owner error = %v", err)
+	}
+	if err := manager.BindThread(created.Root, "thread-2"); err == nil {
+		t.Fatal("BindThread replaced existing owner")
+	}
 	_ = git
 }
 

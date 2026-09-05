@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,16 @@ import (
 
 	"github.com/google/uuid"
 )
+
+const (
+	worktreeOwnerFilename = "codex-thread.json"
+	worktreeOwnerVersion  = 1
+)
+
+type worktreeOwnerRecord struct {
+	Version       int    `json:"version"`
+	OwnerThreadID string `json:"ownerThreadId"`
+}
 
 // ManagedWorktree describes a Desktop-compatible checkout and the working
 // directory that should be used to start its thread.
@@ -169,6 +180,88 @@ func (m *WorktreeManager) List(sourceCWD string) ([]ManagedWorktree, error) {
 	}
 	sort.Slice(worktrees, func(i, j int) bool { return worktrees[i].Root < worktrees[j].Root })
 	return worktrees, nil
+}
+
+// Owner returns the thread ID bound to a managed worktree, or an empty string
+// when no owner is recorded.
+func (m *WorktreeManager) Owner(checkout string) (string, error) {
+	if m == nil {
+		return "", fmt.Errorf("worktree manager is nil")
+	}
+	path, err := worktreeMetadataPath(checkout)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var record worktreeOwnerRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return "", fmt.Errorf("invalid worktree owner at %s", path)
+	}
+	if record.Version != worktreeOwnerVersion || record.OwnerThreadID == "" {
+		return "", fmt.Errorf("invalid worktree owner at %s", path)
+	}
+	return record.OwnerThreadID, nil
+}
+
+// BindThread atomically binds a managed worktree to a thread ID without
+// replacing another owner.
+func (m *WorktreeManager) BindThread(checkout string, threadID string) error {
+	if m == nil {
+		return fmt.Errorf("worktree manager is nil")
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return fmt.Errorf("worktree owner thread ID cannot be empty")
+	}
+	if existing, err := m.Owner(checkout); err != nil {
+		return err
+	} else if existing == threadID {
+		return nil
+	} else if existing != "" {
+		return fmt.Errorf("worktree already belongs to thread %s", existing)
+	}
+	path, err := worktreeMetadataPath(checkout)
+	if err != nil {
+		return err
+	}
+	record := worktreeOwnerRecord{Version: worktreeOwnerVersion, OwnerThreadID: threadID}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			if existing, ownerErr := m.Owner(checkout); ownerErr == nil && existing == threadID {
+				return nil
+			}
+			return fmt.Errorf("worktree was concurrently assigned to another thread")
+		}
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+func worktreeMetadataPath(checkout string) (string, error) {
+	relative, err := gitStdout(checkout, "rev-parse", "--git-path", worktreeOwnerFilename)
+	if err != nil {
+		return "", err
+	}
+	relative = filepath.Clean(filepath.FromSlash(relative))
+	if filepath.IsAbs(relative) {
+		return relative, nil
+	}
+	return filepath.Join(checkout, relative), nil
 }
 
 func repositoryRoot(cwd string) (string, error) {
