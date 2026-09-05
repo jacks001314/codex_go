@@ -571,8 +571,52 @@ func networkRequirementsFromMap(values map[string]any) *NetworkRequirements {
 	if value, ok := boolAnyKey(values, "allow_local_binding", "allowLocalBinding"); ok {
 		out.AllowLocalBinding = &value
 	}
+	if value, ok := values["header_injections"]; ok {
+		out.HeaderInjections = networkHeaderInjectionsFromAny(value)
+	}
 	normalizeLegacyNetworkRequirements(&out)
 	return &out
+}
+
+func networkHeaderInjectionsFromAny(value any) []NetworkHeaderInjection {
+	switch raw := value.(type) {
+	case []map[string]any:
+		out := make([]NetworkHeaderInjection, 0, len(raw))
+		for _, entry := range raw {
+			out = append(out, networkHeaderInjectionFromMap(entry))
+		}
+		return out
+	case []any:
+		out := make([]NetworkHeaderInjection, 0, len(raw))
+		for _, entry := range raw {
+			if table, ok := entry.(map[string]any); ok {
+				out = append(out, networkHeaderInjectionFromMap(table))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func networkHeaderInjectionFromMap(values map[string]any) NetworkHeaderInjection {
+	var out NetworkHeaderInjection
+	if value, ok := stringAnyKey(values, "host"); ok {
+		out.Host = value
+	}
+	out.Methods, _ = stringListAnyKey(values, "methods")
+	out.PathPrefixes, _ = stringListAnyKey(values, "path_prefixes", "pathPrefixes")
+	out.Headers = map[string]string{}
+	if raw, ok := values["headers"]; ok {
+		if table, ok := raw.(map[string]any); ok {
+			for name, value := range table {
+				if header, ok := value.(string); ok {
+					out.Headers[name] = header
+				}
+			}
+		}
+	}
+	return out
 }
 
 func validateNetworkRequirementsTOML(values map[string]any) error {

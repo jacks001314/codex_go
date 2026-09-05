@@ -906,6 +906,7 @@ type NetworkRequirements struct {
 	UnixSockets                      map[string]NetworkPermission `json:"unixSockets,omitempty"`
 	AllowUnixSockets                 []string                     `json:"allowUnixSockets,omitempty"`
 	AllowLocalBinding                *bool                        `json:"allowLocalBinding,omitempty"`
+	HeaderInjections                 []NetworkHeaderInjection     `json:"headerInjections,omitempty"`
 }
 
 func (r *NetworkRequirements) MarshalJSON() ([]byte, error) {
@@ -923,6 +924,7 @@ func (r *NetworkRequirements) MarshalJSON() ([]byte, error) {
 		UnixSockets                      map[string]NetworkPermission `json:"unixSockets"`
 		AllowUnixSockets                 []string                     `json:"allowUnixSockets"`
 		AllowLocalBinding                *bool                        `json:"allowLocalBinding"`
+		HeaderInjections                 []NetworkHeaderInjection     `json:"headerInjections"`
 	}{
 		Enabled:                          cloneBoolPtr(r.Enabled),
 		HTTPPort:                         cloneUint16Ptr(r.HTTPPort),
@@ -937,7 +939,18 @@ func (r *NetworkRequirements) MarshalJSON() ([]byte, error) {
 		UnixSockets:                      cloneNetworkMap(r.UnixSockets),
 		AllowUnixSockets:                 stringSliceOrNil(r.AllowUnixSockets),
 		AllowLocalBinding:                cloneBoolPtr(r.AllowLocalBinding),
+		HeaderInjections:                 cloneNetworkHeaderInjections(r.HeaderInjections),
 	})
+}
+
+// NetworkHeaderInjection describes a requirements-only header annotation for
+// matching network requests (Rust #42173). It does not change whether
+// non-matching requests are allowed.
+type NetworkHeaderInjection struct {
+	Host         string            `json:"host"`
+	Methods      []string          `json:"methods"`
+	PathPrefixes []string          `json:"pathPrefixes"`
+	Headers      map[string]string `json:"headers"`
 }
 
 type NetworkPermission string
@@ -3383,7 +3396,28 @@ func cloneNetwork(value *NetworkRequirements) *NetworkRequirements {
 	clone.UnixSockets = cloneNetworkMap(value.UnixSockets)
 	clone.AllowUnixSockets = stringSliceOrNil(value.AllowUnixSockets)
 	clone.AllowLocalBinding = cloneBoolPtr(value.AllowLocalBinding)
+	clone.HeaderInjections = cloneNetworkHeaderInjections(value.HeaderInjections)
 	return &clone
+}
+
+func cloneNetworkHeaderInjections(values []NetworkHeaderInjection) []NetworkHeaderInjection {
+	if values == nil {
+		return nil
+	}
+	out := make([]NetworkHeaderInjection, len(values))
+	for i, value := range values {
+		headers := map[string]string{}
+		for name, header := range value.Headers {
+			headers[name] = header
+		}
+		out[i] = NetworkHeaderInjection{
+			Host:         value.Host,
+			Methods:      append([]string(nil), value.Methods...),
+			PathPrefixes: append([]string(nil), value.PathPrefixes...),
+			Headers:      headers,
+		}
+	}
+	return out
 }
 
 func cloneApplicationRequirements(value *ApplicationRequirements) *ApplicationRequirements {

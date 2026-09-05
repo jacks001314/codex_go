@@ -362,3 +362,31 @@ func TestBrowserUseAllowWebmcpRequirement(t *testing.T) {
 		t.Fatalf("absent allowWebmcp = %#v", absent)
 	}
 }
+
+func TestNetworkHeaderInjectionsParse(t *testing.T) {
+	requirements, err := ParseRequirementsTOML([]byte(`
+[experimental_network]
+enabled = true
+
+[[experimental_network.header_injections]]
+host = "api.example.com"
+methods = ["POST"]
+path_prefixes = ["/console/v1"]
+
+[experimental_network.header_injections.headers]
+"x-statsig-change-source" = "codex"
+`))
+	if err != nil {
+		t.Fatalf("ParseRequirementsTOML error = %v", err)
+	}
+	if requirements == nil || requirements.Network == nil || len(requirements.Network.HeaderInjections) != 1 {
+		t.Fatalf("headerInjections = %#v", requirements)
+	}
+	injection := requirements.Network.HeaderInjections[0]
+	if injection.Host != "api.example.com" || len(injection.Methods) != 1 || injection.Methods[0] != "POST" || len(injection.PathPrefixes) != 1 || injection.PathPrefixes[0] != "/console/v1" {
+		t.Fatalf("injection = %#v", injection)
+	}
+	if injection.Headers["x-statsig-change-source"] != "codex" {
+		t.Fatalf("headers = %#v", injection.Headers)
+	}
+}
