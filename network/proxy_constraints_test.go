@@ -206,3 +206,17 @@ func TestApplyProxyHeaderInjections(t *testing.T) {
 		t.Fatalf("unmatched method header = %q", got)
 	}
 }
+
+func TestNewProxySpecCarriesHeaderInjections(t *testing.T) {
+	spec, err := NewProxySpec(ProxyConfig{}, &ProxyRequirements{HeaderInjections: []ProxyHeaderInjection{{
+		Host:    "api.example.com",
+		Methods: []string{"POST"},
+		Headers: map[string]string{"x-statsig-change-source": "codex"},
+	}}}, false)
+	if err != nil {
+		t.Fatalf("NewProxySpec error = %v", err)
+	}
+	if len(spec.constraints.HeaderInjections) != 1 || spec.constraints.HeaderInjections[0].Host != "api.example.com" {
+		t.Fatalf("header injections = %#v", spec.constraints.HeaderInjections)
+	}
+}

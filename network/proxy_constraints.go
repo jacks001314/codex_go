@@ -88,6 +88,7 @@ type ProxyConstraints struct {
 	DenylistExpansionEnabled         *bool
 	AllowUnixSockets                 *[]string
 	AllowLocalBinding                *bool
+	HeaderInjections                 []ProxyHeaderInjection
 }
 
 type ProxyNetworkRule struct {
@@ -206,7 +207,28 @@ func applyProxyRequirements(config ProxyConfig, requirements *ProxyRequirements,
 		settings.AllowLocalBinding = *requirements.AllowLocalBinding
 		constraints.AllowLocalBinding = cloneBool(requirements.AllowLocalBinding)
 	}
+	constraints.HeaderInjections = cloneProxyHeaderInjections(requirements.HeaderInjections)
 	return config, constraints
+}
+
+func cloneProxyHeaderInjections(values []ProxyHeaderInjection) []ProxyHeaderInjection {
+	if values == nil {
+		return nil
+	}
+	out := make([]ProxyHeaderInjection, len(values))
+	for i, value := range values {
+		headers := map[string]string{}
+		for name, header := range value.Headers {
+			headers[name] = header
+		}
+		out[i] = ProxyHeaderInjection{
+			Host:         value.Host,
+			Methods:      append([]string(nil), value.Methods...),
+			PathPrefixes: append([]string(nil), value.PathPrefixes...),
+			Headers:      headers,
+		}
+	}
+	return out
 }
 
 func ValidateProxyPolicyAgainstConstraints(config ProxyConfig, constraints ProxyConstraints) error {
