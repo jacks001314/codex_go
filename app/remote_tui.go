@@ -3466,11 +3466,15 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	if err != nil {
 		return turn.TurnStartParams{}, err
 	}
+	turnModel := strings.TrimSpace(shared.Model)
+	if requestModel := strings.TrimSpace(request.Model); requestModel != "" {
+		turnModel = requestModel
+	}
 	params := turn.TurnStartParams{
 		ThreadID:              threadID,
 		Input:                 inputs,
 		CWD:                   strings.TrimSpace(shared.CWD),
-		Model:                 strings.TrimSpace(shared.Model),
+		Model:                 turnModel,
 		ApprovalPolicy:        remoteStringAny(shared.ApprovalPolicy),
 		SandboxPolicy:         remoteStringAny(shared.Sandbox),
 		Config:                configValues,

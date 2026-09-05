@@ -1392,6 +1392,21 @@ func TestRemoteTurnStartParamsCarriesPlanCollaborationMode(t *testing.T) {
 	}
 }
 
+func TestRemoteTurnStartParamsRequestModelOverridesStateModel(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	state := codextui.NewState(&codextui.Options{Model: "gpt-slow"})
+	params, err := remoteTurnStartParams(&cli.RootOptions{}, state, "thread-retry", codextea.SubmitRequest{
+		Prompt: "retry me",
+		Model:  "gpt-fast",
+	})
+	if err != nil {
+		t.Fatalf("remoteTurnStartParams() error = %v", err)
+	}
+	if params.Model != "gpt-fast" {
+		t.Fatalf("params.Model = %q, want gpt-fast", params.Model)
+	}
+}
+
 func TestRemoteTurnSteerParamsCarriesActiveIDsAndClientMessage(t *testing.T) {
 	params, err := remoteTurnSteerParams("thread-steer", "turn-steer", "client-steer", codextea.SubmitRequest{Prompt: "change direction"})
 	if err != nil {

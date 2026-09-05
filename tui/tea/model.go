@@ -58,7 +58,10 @@ const (
 type SubmitFunc func(prompt string) bubbletea.Cmd
 
 type SubmitRequest struct {
-	Prompt                 string
+	Prompt string
+	// Model, when set, overrides the session model for this submission (used
+	// by safety-buffered retries with the server-selected faster model).
+	Model                  string
 	ServiceTier            string
 	AdditionalInstructions string
 	Attachments            []bottompane.ComposerAttachment
