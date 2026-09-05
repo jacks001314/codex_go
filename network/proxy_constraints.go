@@ -102,6 +102,15 @@ type ProxySpec struct {
 	hardDenyAllowlistMisses bool
 }
 
+// HeaderInjections returns the resolved requirements-only header injection
+// rules, preserving a defensive copy.
+func (s *ProxySpec) HeaderInjections() []ProxyHeaderInjection {
+	if s == nil {
+		return nil
+	}
+	return cloneProxyHeaderInjections(s.constraints.HeaderInjections)
+}
+
 func NewProxySpec(config ProxyConfig, requirements *ProxyRequirements, managedSandboxActive bool) (*ProxySpec, error) {
 	config = cloneProxyConfig(config)
 	constraints := ProxyConstraints{}

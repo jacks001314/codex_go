@@ -219,4 +219,7 @@ func TestNewProxySpecCarriesHeaderInjections(t *testing.T) {
 	if len(spec.constraints.HeaderInjections) != 1 || spec.constraints.HeaderInjections[0].Host != "api.example.com" {
 		t.Fatalf("header injections = %#v", spec.constraints.HeaderInjections)
 	}
+	if got := spec.HeaderInjections(); len(got) != 1 || got[0].Host != "api.example.com" {
+		t.Fatalf("HeaderInjections() = %#v", got)
+	}
 }
