@@ -240,6 +240,28 @@ type AppToolResultSource struct {
 
 type AppToolsConfig map[string]AppToolConfig
 
+// AppToolConfigFromMap parses a single app tool requirement map (Rust
+// AppToolRequirementToml). Unknown result formats are preserved as their raw
+// string so higher-priority rules still override lower ones.
+func AppToolConfigFromMap(values map[string]any) AppToolConfig {
+	var out AppToolConfig
+	if enabled, ok := values["enabled"].(bool); ok {
+		out.Enabled = &enabled
+	}
+	if raw, ok := values["approval_mode"].(string); ok {
+		mode := AppToolApproval(raw)
+		out.ApprovalMode = &mode
+	}
+	if raw, ok := values["analytics_result_source"].(map[string]any); ok {
+		format, _ := raw["format"].(string)
+		sourceType, _ := raw["type"].(string)
+		if format != "" || sourceType != "" {
+			out.AnalyticsResultSource = &AppToolResultSource{Format: format, SourceType: sourceType}
+		}
+	}
+	return out
+}
+
 type AppsDefaultConfig struct {
 	Enabled                  bool             `json:"enabled"`
 	ApprovalsReviewer        *string          `json:"approvals_reviewer"`

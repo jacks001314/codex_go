@@ -614,4 +614,14 @@ func TestAppToolConfigAnalyticsResultSourceRoundTrips(t *testing.T) {
 	if !strings.Contains(string(data), `"analytics_result_source":{"format":"detailed_message_search_v1","type":"message_id"}`) {
 		t.Fatalf("AppToolConfig JSON = %s", data)
 	}
+	parsed := AppToolConfigFromMap(map[string]any{
+		"approval_mode": "prompt",
+		"analytics_result_source": map[string]any{
+			"format": "detailed_message_search_v1",
+			"type":   "message_id",
+		},
+	})
+	if parsed.AnalyticsResultSource == nil || parsed.AnalyticsResultSource.SourceType != "message_id" {
+		t.Fatalf("AppToolConfigFromMap = %#v", parsed)
+	}
 }
