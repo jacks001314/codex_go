@@ -252,6 +252,21 @@ func (m *WorktreeManager) BindThread(checkout string, threadID string) error {
 	return file.Close()
 }
 
+// Remove force-removes a managed worktree and its empty allocation bucket.
+func (m *WorktreeManager) Remove(checkout string) error {
+	if m == nil {
+		return fmt.Errorf("worktree manager is nil")
+	}
+	sourceRoot, err := repositoryRoot(checkout)
+	if err != nil {
+		return err
+	}
+	if _, err := gitOutput(sourceRoot, "worktree", "remove", "--force", checkout); err != nil {
+		return err
+	}
+	return removeEmptyBucket(checkout)
+}
+
 func worktreeMetadataPath(checkout string) (string, error) {
 	relative, err := gitStdout(checkout, "rev-parse", "--git-path", worktreeOwnerFilename)
 	if err != nil {

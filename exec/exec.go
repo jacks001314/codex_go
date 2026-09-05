@@ -43,6 +43,7 @@ import (
 	"codex_go/session"
 	"codex_go/tool"
 	"codex_go/turn"
+	"codex_go/worktree"
 
 	"github.com/google/uuid"
 )
@@ -153,6 +154,31 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
+	var managedWorktreeManager *worktree.WorktreeManager
+	managedWorktreeRoot := ""
+	managedWorktreeBound := false
+	if req.Exec.Shared.Worktree {
+		if !features.Enabled(cfg.FeatureSettings(), "worktrees") {
+			return nil, errors.New("--worktree requires the worktrees feature; enable it with --enable worktrees")
+		}
+		desktop, _ := cfg.Values["desktop"].(map[string]any)
+		settings, err := worktree.FromDesktopConfig(r.CodexHome, desktop)
+		if err != nil {
+			return nil, err
+		}
+		managedWorktreeManager = worktree.NewWorktreeManager(settings)
+		created, err := managedWorktreeManager.Create(requestCWD(req), "")
+		if err != nil {
+			return nil, err
+		}
+		managedWorktreeRoot = created.Root
+		req.Exec.Shared.CWD = created.CWD
+		defer func() {
+			if !managedWorktreeBound && managedWorktreeManager != nil && managedWorktreeRoot != "" {
+				_ = managedWorktreeManager.Remove(managedWorktreeRoot)
+			}
+		}()
+	}
 	authStoreOptions := auth.StoreOptionsFromConfig(cfg.CLIAuthCredentialsStoreMode(), cfg.SecretAuthStorageEnabled())
 	resolvedAuth, err := auth.NewStoreWithOptions(r.CodexHome, authStoreOptions).Resolve()
 	if err != nil {
@@ -190,6 +216,12 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	if resumeContext != nil && resumeContext.Record != nil {
 		threadID = string(resumeContext.Record.ID)
+	}
+	if managedWorktreeManager != nil && managedWorktreeRoot != "" {
+		if err := managedWorktreeManager.BindThread(managedWorktreeRoot, threadID); err != nil {
+			return nil, err
+		}
+		managedWorktreeBound = true
 	}
 	turnID := deterministicTurnID(identityPrompt)
 	installationID := ""
