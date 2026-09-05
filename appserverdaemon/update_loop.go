@@ -188,7 +188,42 @@ func ReexecManagedUpdater(managedCodexBin string) error {
 	if managedCodexBin == "" {
 		return fmt.Errorf("managed Codex binary path is empty")
 	}
-	return exec.Command(managedCodexBin, "app-server", "daemon", "pid-update-loop").Run()
+	pidFile := os.Getenv(UpdaterPIDFileEnv)
+	if pidFile == "" {
+		return exec.Command(managedCodexBin, "app-server", "daemon", "pid-update-loop").Run()
+	}
+	// Rust #42392: start the successor updater detached and wait until it
+	// claims the update PID record (readiness handshake). If it never becomes
+	// ready, terminate it and return the error so the current updater keeps
+	// running with the old PID record intact.
+	backend := NewPIDUpdateLoopBackend(BackendPaths{
+		CodexBin: managedCodexBin,
+		PIDFile:  pidFile,
+	})
+	previousRecord, _ := ReadPIDRecord(pidFile)
+	pid, _, err := startDetachedPIDProcess(backend)
+	if err != nil {
+		return fmt.Errorf("failed to start successor updater: %w", err)
+	}
+	deadline := time.Now().Add(PIDStartTimeout)
+	for {
+		state, err := ReadPIDFileState(pidFile)
+		if err == nil && state.Kind == PIDFileRunning && state.Record != nil && state.Record.PID == pid {
+			if active, err := processMatchesPIDRecord(state.Record); err == nil && active {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			_ = forceTerminatePIDProcess(pid, false)
+			if previousRecord != nil {
+				if previous, activeErr := processMatchesPIDRecord(previousRecord); activeErr == nil && previous {
+					_ = WritePIDRecord(pidFile, previousRecord)
+				}
+			}
+			return fmt.Errorf("successor updater %d did not become ready on %s", pid, pidFile)
+		}
+		time.Sleep(PIDStartPollInterval)
+	}
 }
 
 func ShouldReexecUpdater(mode UpdaterRefreshMode, outcome RestartIfRunningOutcome) bool {
