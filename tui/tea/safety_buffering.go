@@ -5,6 +5,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
 )
 
@@ -81,6 +82,7 @@ func (m *Model) applySafetyBufferingModalOption(optionID string) bubbletea.Cmd {
 		threadID := m.safetyBufferingThreadID
 		turnID := strings.TrimSpace(m.safetyBuffering.ActiveTurnID)
 		model := m.safetyBufferingFasterModel
+		prompt := m.lastUserMessagePrompt()
 		m.clearSafetyBuffering()
 		if m.onSafetyBufferingRetry == nil {
 			m.notice = "Safety retry is unavailable; Codex will keep waiting."
@@ -88,9 +90,24 @@ func (m *Model) applySafetyBufferingModalOption(optionID string) bubbletea.Cmd {
 			m.refreshTranscript()
 			return nil
 		}
-		return m.onSafetyBufferingRetry(threadID, turnID, model)
+		return m.onSafetyBufferingRetry(threadID, turnID, model, prompt)
 	default:
 		m.clearSafetyBuffering()
 		return nil
 	}
+}
+
+// lastUserMessagePrompt returns the most recent user message text so a
+// safety-buffered retry can re-submit the exact prompt on the retried thread.
+func (m *Model) lastUserMessagePrompt() string {
+	if m == nil || m.State == nil {
+		return ""
+	}
+	for i := len(m.State.Messages) - 1; i >= 0; i-- {
+		message := m.State.Messages[i]
+		if message.Role == codextui.RoleUser {
+			return strings.TrimSpace(message.Text)
+		}
+	}
+	return ""
 }

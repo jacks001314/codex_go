@@ -45,12 +45,13 @@ func TestModelSafetyBufferingShowsRetryPromptOnce(t *testing.T) {
 func TestModelSafetyBufferingRetryConfirmationAndStop(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-safety")
+	state.AddMessage(codextui.RoleUser, "retry me please")
 	var retried []string
 	model := NewModel(state, Options{
 		Width:  120,
 		Height: 40,
-		OnSafetyBufferingRetry: func(threadID, turnID, model string) bubbletea.Cmd {
-			retried = append(retried, threadID+"|"+turnID+"|"+model)
+		OnSafetyBufferingRetry: func(threadID, turnID, model, prompt string) bubbletea.Cmd {
+			retried = append(retried, threadID+"|"+turnID+"|"+model+"|"+prompt)
 			return nil
 		},
 	})
@@ -79,7 +80,7 @@ func TestModelSafetyBufferingRetryConfirmationAndStop(t *testing.T) {
 	})
 	model.applySafetyBufferingModalOption("retry")
 	model.applySafetyBufferingModalOption("stop-retry")
-	if len(retried) != 1 || retried[0] != "thread-safety|turn-safety|gpt-fast" {
+	if len(retried) != 1 || retried[0] != "thread-safety|turn-safety|gpt-fast|retry me please" {
 		t.Fatalf("retry callbacks = %#v", retried)
 	}
 }

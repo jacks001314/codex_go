@@ -733,8 +733,9 @@ type Options struct {
 	OnStartCompactCommand         CompactStartCommandFunc
 	// OnSafetyBufferingRetry, when set, stops the current attempt and retries
 	// it with the server-selected faster model after user confirmation (Rust
-	// #42380).
-	OnSafetyBufferingRetry func(threadID, turnID, model string) bubbletea.Cmd
+	// #42380). prompt is the last user message that triggered the buffered
+	// turn so the host can re-submit it on the retried thread.
+	OnSafetyBufferingRetry func(threadID, turnID, model, prompt string) bubbletea.Cmd
 	OnStartSide            SideStartFunc
 	OnCloseSide            SideCloseFunc
 	OnReadReviewBranches   ReviewBranchesReaderFunc
@@ -1068,7 +1069,7 @@ type Model struct {
 	onStartReview                     ReviewStartFunc
 	onStartReviewCommand              ReviewStartCommandFunc
 	onStartCompactCommand             CompactStartCommandFunc
-	onSafetyBufferingRetry            func(threadID, turnID, model string) bubbletea.Cmd
+	onSafetyBufferingRetry            func(threadID, turnID, model, prompt string) bubbletea.Cmd
 	safetyBuffering                   chatwidget.SafetyBufferingState
 	safetyBufferingThreadID           string
 	safetyBufferingFasterModel        string
