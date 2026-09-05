@@ -103,6 +103,15 @@ func TestPluginReconcileSignatureDetectsSkillsChange(t *testing.T) {
 	}
 }
 
+func TestPluginReconcileSignatureDetectsInstallSuggestionChange(t *testing.T) {
+	base := plugin.PluginDetail{Summary: plugin.PluginSummary{ID: "acme/weather", Enabled: true, InstallSuggestion: false}}
+	next := base
+	next.Summary.InstallSuggestion = true
+	if pluginReconcileSignature(base) == pluginReconcileSignature(next) {
+		t.Fatal("pluginReconcileSignature should differ when install suggestion changes")
+	}
+}
+
 func pluginDisabledReasonPtr(value plugin.PluginDisabledReason) *plugin.PluginDisabledReason {
 	return &value
 }

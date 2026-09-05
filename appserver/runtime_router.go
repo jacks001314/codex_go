@@ -8393,35 +8393,37 @@ func (r *RuntimeRouter) handlePluginReconcile(request *Request) (*plugin.PluginR
 
 func pluginReconcileSignature(detail plugin.PluginDetail) string {
 	data, _ := json.Marshal(struct {
-		Enabled        bool
-		HasSkills      bool
-		RemotePluginID string
-		Availability   plugin.PluginAvailability
-		AuthPolicy     plugin.PluginAuthPolicy
-		DisplayNameTag string
-		Version        *string
-		LocalVersion   *string
-		DisabledReason *plugin.PluginDisabledReason
-		InstallPolicy  plugin.PluginInstallPolicy
-		MCPServers     []string
-		Apps           []plugin.AppSummary
-		Templates      []plugin.AppTemplateSummary
-		Hooks          []plugin.PluginHookSummary
+		Enabled           bool
+		HasSkills         bool
+		RemotePluginID    string
+		Availability      plugin.PluginAvailability
+		AuthPolicy        plugin.PluginAuthPolicy
+		DisplayNameTag    string
+		InstallSuggestion bool
+		Version           *string
+		LocalVersion      *string
+		DisabledReason    *plugin.PluginDisabledReason
+		InstallPolicy     plugin.PluginInstallPolicy
+		MCPServers        []string
+		Apps              []plugin.AppSummary
+		Templates         []plugin.AppTemplateSummary
+		Hooks             []plugin.PluginHookSummary
 	}{
-		Enabled:        detail.Summary.Enabled,
-		HasSkills:      detail.Summary.HasSkills,
-		RemotePluginID: detail.Summary.RemotePluginID,
-		Availability:   detail.Summary.Availability,
-		AuthPolicy:     detail.Summary.AuthPolicy,
-		DisplayNameTag: detail.Summary.PluginDisplayNameTag,
-		Version:        detail.Summary.Version,
-		LocalVersion:   detail.Summary.LocalVersion,
-		DisabledReason: detail.Summary.DisabledReason,
-		InstallPolicy:  detail.Summary.InstallPolicy,
-		MCPServers:     detail.MCPServers,
-		Apps:           detail.Apps,
-		Templates:      detail.AppTemplates,
-		Hooks:          detail.Hooks,
+		Enabled:           detail.Summary.Enabled,
+		HasSkills:         detail.Summary.HasSkills,
+		RemotePluginID:    detail.Summary.RemotePluginID,
+		Availability:      detail.Summary.Availability,
+		AuthPolicy:        detail.Summary.AuthPolicy,
+		DisplayNameTag:    detail.Summary.PluginDisplayNameTag,
+		InstallSuggestion: detail.Summary.InstallSuggestion,
+		Version:           detail.Summary.Version,
+		LocalVersion:      detail.Summary.LocalVersion,
+		DisabledReason:    detail.Summary.DisabledReason,
+		InstallPolicy:     detail.Summary.InstallPolicy,
+		MCPServers:        detail.MCPServers,
+		Apps:              detail.Apps,
+		Templates:         detail.AppTemplates,
+		Hooks:             detail.Hooks,
 	})
 	return string(data)
 }
