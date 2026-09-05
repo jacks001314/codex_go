@@ -1216,6 +1216,10 @@ func NewModel(state *codextui.State, options Options) *Model {
 	if clipboardWrite == nil {
 		clipboardWrite = sysclipboard.WriteAll
 	}
+	clipboardWriteRich := options.OnClipboardWriteRich
+	if clipboardWriteRich == nil && options.OnClipboardWrite == nil {
+		clipboardWriteRich = defaultRichClipboardWriter(clipboardWrite)
+	}
 
 	model := &Model{
 		State:                           state,
@@ -1276,7 +1280,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSwitchAgent:                   options.OnSwitchAgent,
 		backgroundThreadEvents:          map[string][]protocol.ThreadEvent{},
 		clipboardWrite:                  clipboardWrite,
-		clipboardWriteRich:              options.OnClipboardWriteRich,
+		clipboardWriteRich:              clipboardWriteRich,
 		onReadTokenActivity:             options.OnReadTokenActivity,
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,
 		onConsumeRateLimitResetCredit:   options.OnConsumeRateLimitResetCredit,
