@@ -212,6 +212,12 @@ func TestTurnSettingsUpdateParamsValidation(t *testing.T) {
 	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1"}).Validate(); err == nil {
 		t.Fatal("Validate() accepted an empty update")
 	}
+	effort := "high"
+	summary := "auto"
+	tier := "priority"
+	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Effort: &effort, Summary: &summary, ServiceTier: &tier}).Validate(); err != nil {
+		t.Fatalf("Validate(all) error = %v", err)
+	}
 }
 
 func TestTurnSettingsUpdateParamsSerialization(t *testing.T) {
