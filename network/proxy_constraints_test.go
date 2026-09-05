@@ -1,6 +1,7 @@
 package network
 
 import (
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -171,5 +172,27 @@ func TestCompileProxyDomainMatcherUsesGlobLibraryWithRustDomainExpansion(t *test
 	}
 	if _, err := CompileProxyDomainMatcher([]string{"**.[*]"}, true); err == nil {
 		t.Fatal("global wildcard deny pattern was accepted")
+	}
+}
+
+func TestApplyProxyHeaderInjections(t *testing.T) {
+	request, _ := http.NewRequest(http.MethodPost, "https://api.example.com/console/v1/x", nil)
+	ApplyProxyHeaderInjections(request, []ProxyHeaderInjection{{
+		Host:         "api.example.com",
+		Methods:      []string{"POST"},
+		PathPrefixes: []string{"/console/v1"},
+		Headers:      map[string]string{"x-statsig-change-source": "codex"},
+	}})
+	if got := request.Header.Get("x-statsig-change-source"); got != "codex" {
+		t.Fatalf("header = %q, want codex", got)
+	}
+
+	request, _ = http.NewRequest(http.MethodGet, "https://other.example.com/console/v1", nil)
+	ApplyProxyHeaderInjections(request, []ProxyHeaderInjection{{
+		Host:    "api.example.com",
+		Headers: map[string]string{"x-statsig-change-source": "codex"},
+	}})
+	if got := request.Header.Get("x-statsig-change-source"); got != "" {
+		t.Fatalf("unmatched host header = %q", got)
 	}
 }

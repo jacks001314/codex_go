@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 )
@@ -29,6 +30,50 @@ type ProxyHeaderInjection struct {
 	Methods      []string
 	PathPrefixes []string
 	Headers      map[string]string
+}
+
+// ApplyProxyHeaderInjections annotates a matching outbound request with the
+// configured header values (Rust #42173). Host matching is ASCII case
+// insensitive; method and path-prefix filters only constrain when non-empty.
+func ApplyProxyHeaderInjections(request *http.Request, injections []ProxyHeaderInjection) {
+	if request == nil || request.URL == nil || len(injections) == 0 {
+		return
+	}
+	host := request.URL.Hostname()
+	method := request.Method
+	path := request.URL.Path
+	for _, injection := range injections {
+		if injection.Host != "" && !strings.EqualFold(injection.Host, host) {
+			continue
+		}
+		if len(injection.Methods) > 0 && !containsFold(injection.Methods, method) {
+			continue
+		}
+		if len(injection.PathPrefixes) > 0 && !hasPathPrefix(path, injection.PathPrefixes) {
+			continue
+		}
+		for name, value := range injection.Headers {
+			request.Header.Set(name, value)
+		}
+	}
+}
+
+func containsFold(values []string, target string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPathPrefix(path string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type ProxyConstraints struct {
