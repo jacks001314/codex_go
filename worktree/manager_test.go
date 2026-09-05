@@ -69,6 +69,25 @@ func TestWorktreeManagerCreateAndList(t *testing.T) {
 	_ = git
 }
 
+func TestWorktreeOwnerRejectsInvalidRecord(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	runGit(t, root, "init")
+	metadataPath, err := worktreeMetadataPath(root)
+	if err != nil {
+		t.Fatalf("worktreeMetadataPath() error = %v", err)
+	}
+	if err := os.WriteFile(metadataPath, []byte(`{"version":99,"ownerThreadId":"thread"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile metadata: %v", err)
+	}
+	manager := NewWorktreeManager(WorktreeSettings{Root: root, AutoCleanupEnabled: true, KeepCount: 15})
+	if _, err := manager.Owner(root); err == nil {
+		t.Fatal("Owner() should reject an invalid version record")
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
