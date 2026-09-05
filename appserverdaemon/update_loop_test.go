@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -63,19 +62,16 @@ func TestCurrentUpdaterIdentityUsesExecutableBytes(t *testing.T) {
 }
 
 func TestUpdateOnceRestartsWhenUpdaterIdentityChanged(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("managed updater reexec is unsupported on Windows")
-	}
 	stubLifecycleManagedDaemon(t)
 	home := t.TempDir()
-	managedBin := filepath.Join(home, "packages", "standalone", "current", "codex")
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	managedBin := daemon.Paths.ManagedCodexBin
 	if err := os.MkdirAll(filepath.Dir(managedBin), 0o700); err != nil {
 		t.Fatalf("MkdirAll managed bin error = %v", err)
 	}
 	if err := os.WriteFile(managedBin, []byte("new"), 0o700); err != nil {
 		t.Fatalf("WriteFile managed bin error = %v", err)
 	}
-	daemon := NewDaemonForCodexHome(home, "codex-go-test")
 	runner := NewLifecycleRunner(daemon)
 	runner.Now = func() time.Time { return fixedDaemonTime() }
 	if _, err := runner.Run(LifecycleStart); err != nil {

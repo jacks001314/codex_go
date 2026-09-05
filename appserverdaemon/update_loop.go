@@ -51,9 +51,6 @@ func DefaultUpdateLoopOptions() *UpdateLoopOptions {
 }
 
 func RunPIDUpdateLoop(ctx context.Context, runner *LifecycleRunner, options *UpdateLoopOptions) error {
-	if runtime.GOOS == "windows" {
-		return ErrUnsupportedPlatform
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -142,11 +139,13 @@ func ManagedExecutableIdentity(path string, options *UpdateLoopOptions) (*instal
 }
 
 func InstallLatestStandalone(ctx context.Context) error {
-	if runtime.GOOS == "windows" {
-		return ErrUnsupportedPlatform
-	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if runtime.GOOS == "windows" {
+		action := install.UpdateAction{Kind: install.UpdateActionStandaloneWin}
+		command, args := action.CommandArgs()
+		return (&install.ExecCommandRunner{}).Run(ctx, command, args)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, InstallScriptEndpoint, nil)
 	if err != nil {
@@ -186,9 +185,6 @@ func InstallLatestStandalone(ctx context.Context) error {
 }
 
 func ReexecManagedUpdater(managedCodexBin string) error {
-	if runtime.GOOS == "windows" {
-		return ErrUnsupportedPlatform
-	}
 	if managedCodexBin == "" {
 		return fmt.Errorf("managed Codex binary path is empty")
 	}
