@@ -217,6 +217,19 @@ func (r *guardianSessionRunner) ResetAfterParentCompaction(responseID string) {
 	// No reusable compaction: preserve the current reviewer context.
 }
 
+// DropStaleParentCompaction clears the seeded parent-compaction checkpoint so
+// strict Guardian thread-context sessions cannot reuse an unusable or
+// incompatible parent checkpoint (Rust #42852).
+func (r *guardianSessionRunner) DropStaleParentCompaction() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.previous = ""
+	r.seeded = ""
+	r.mu.Unlock()
+}
+
 func (r *guardianSessionRunner) SeedForReview(request *model.AgentRequest) {
 	if r == nil || request == nil {
 		return
@@ -774,7 +787,9 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 	if err != nil || cfg == nil {
 		return
 	}
-	if !features.Enabled(cfg.FeatureSettings(), "guardian_reuse_parent_compaction") {
+	threadContext := features.Enabled(cfg.FeatureSettings(), "guardian_thread_context")
+	reuseParentCompaction := features.Enabled(cfg.FeatureSettings(), "guardian_reuse_parent_compaction")
+	if !threadContext && !reuseParentCompaction {
 		return
 	}
 	runner, ok := r.services.GuardianReviewer.(*modelGuardianReviewer)
@@ -795,6 +810,10 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 		// bytes. An oversized latest compaction fails closed: the existing
 		// reviewer context is preserved instead of seeding with older context.
 		responseID = guardianParentCompactionResponseID(compacted, cfg.GuardianV2MaxParentCompactionTokens())
+	}
+	if threadContext && responseID == "" {
+		sessionRunner.DropStaleParentCompaction()
+		return
 	}
 	sessionRunner.ResetAfterParentCompaction(responseID)
 }
