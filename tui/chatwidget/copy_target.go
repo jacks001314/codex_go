@@ -61,7 +61,7 @@ func CopyTargetsFromMarkdown(markdown string) []CopyTarget {
 		}
 		items = append(items, item{
 			label: label,
-			text:  markdown[match[0]:match[1]],
+			text:  fencedCodeTargetText(markdown[match[0]:match[1]]),
 			start: match[0],
 			end:   match[1],
 		})
@@ -74,7 +74,7 @@ func CopyTargetsFromMarkdown(markdown string) []CopyTarget {
 		if qStart < 0 || qEnd <= qStart {
 			return
 		}
-		text := strings.TrimSpace(strings.Join(lines[qStart:qEnd], "\n"))
+		text := blockquoteTargetText(lines[qStart:qEnd])
 		if text == "" {
 			return
 		}
@@ -101,6 +101,35 @@ func CopyTargetsFromMarkdown(markdown string) []CopyTarget {
 		})
 	}
 	return out
+}
+
+// fencedCodeTargetText strips the fenced-code markers and info string so a
+// copied code block is plain source text (Rust markdown.rs CopyTarget::Code).
+func fencedCodeTargetText(fenced string) string {
+	if fenced == "" {
+		return ""
+	}
+	if newline := strings.IndexByte(fenced, '\n'); newline >= 0 {
+		closeIndex := strings.LastIndex(fenced, "```")
+		if closeIndex > newline {
+			content := fenced[newline+1 : closeIndex]
+			return content
+		}
+	}
+	return fenced
+}
+
+// blockquoteTargetText strips the leading `>` markers (and one following
+// space) from each quoted line, matching Rust CopyTarget::Quote.
+func blockquoteTargetText(lines []string) string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimLeft(line, " \t")
+		line = strings.TrimPrefix(line, ">")
+		line = strings.TrimPrefix(line, " ")
+		out = append(out, line)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 func languageFromFence(lang string) string {

@@ -17,12 +17,18 @@ func TestCopyTargetsFromMarkdownExtractsWholeCodeAndQuotesLikeRust(t *testing.T)
 	if targets[1].Label != "Code block (go)" {
 		t.Fatalf("expected go code block label, got %q", targets[1].Label)
 	}
+	if strings.Contains(targets[1].Text, "```") || targets[1].Text != "func main() {}\n" {
+		t.Fatalf("go code target should be plain source: %q", targets[1].Text)
+	}
 	foundQuote := false
 	for _, target := range targets {
 		if target.Label == "Blockquote" {
 			foundQuote = true
 			if !strings.Contains(target.Text, "a quote") {
 				t.Fatalf("blockquote text = %q", target.Text)
+			}
+			if strings.Contains(target.Text, "> a quote") || strings.Contains(target.Text, "> continued") {
+				t.Fatalf("blockquote markers leaked into copy: %q", target.Text)
 			}
 		}
 	}
