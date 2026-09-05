@@ -253,7 +253,6 @@ func baseClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodTurnInterrupt)},
 		{Method: string(MethodTurnStart)},
 		{Method: string(MethodTurnSteer)},
-		{Method: string(MethodTurnSettingsUpdate)},
 		{Method: string(MethodWindowsSandboxReadiness)},
 		{Method: string(MethodWindowsSandboxSetupStart)},
 	}
@@ -307,6 +306,7 @@ func experimentalClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodThreadSearchOccurrences), Experimental: true},
 		{Method: string(MethodThreadSettingsUpdate), Experimental: true},
 		{Method: string(MethodThreadTurnsList), Experimental: true},
+		{Method: string(MethodTurnSettingsUpdate), Experimental: true},
 	}
 }
 

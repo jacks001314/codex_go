@@ -8377,7 +8377,14 @@ func (r *RuntimeRouter) handlePluginReconcile(request *Request) (*plugin.PluginR
 			before[detail.Summary.ID] = detail
 		}
 	}
-	refreshed := r != nil && r.reconcileInstalledRemotePlugins(context.Background())
+	refreshed := false
+	var reconcileErr error
+	if r != nil {
+		refreshed, reconcileErr = r.reconcileInstalledRemotePlugins(context.Background())
+	}
+	if reconcileErr != nil {
+		return nil, fmt.Errorf("failed to reconcile remote installed plugins: %w", reconcileErr)
+	}
 	failedRemotePluginIDs, failedMaterializationRemotePluginIDs := takeRemoteInstalledPluginSyncFailures()
 	if failedRemotePluginIDs == nil {
 		failedRemotePluginIDs = []string{}
@@ -8421,11 +8428,33 @@ func (r *RuntimeRouter) handlePluginReconcile(request *Request) (*plugin.PluginR
 	if !refreshed && len(changed) == 0 {
 		changed = []plugin.PluginReconcileChangedPlugin{}
 	}
+	if refreshed {
+		for _, change := range changed {
+			if change.HasHooks {
+				if err := r.refreshPluginHookRuntimes(); err != nil {
+					return nil, fmt.Errorf("failed to refresh plugin hook runtimes: %w", err)
+				}
+				break
+			}
+		}
+	}
 	return &plugin.PluginReconcileResponse{
 		ChangedPlugins:                       changed,
 		FailedRemotePluginIDs:                failedRemotePluginIDs,
 		FailedMaterializationRemotePluginIDs: failedMaterializationRemotePluginIDs,
 	}, nil
+}
+
+// refreshPluginHookRuntimes rebuilds the dynamically discovered plugin hook
+// sources. Go hook runtimes are re-derived for every turn and hook/list call,
+// so there is no persistent loaded-runtime cache to invalidate; this method
+// exists to preserve the Rust refresh gate and to surface future load failures.
+func (r *RuntimeRouter) refreshPluginHookRuntimes() error {
+	if r == nil {
+		return nil
+	}
+	_ = r.configureHookDiscovery()
+	return nil
 }
 
 func pluginReconcileSignature(detail plugin.PluginDetail) string {

@@ -87,9 +87,9 @@ func TestFetchInstalledRemotePluginDetailsPaginatesAndKeepsDisabledCacheLikeRust
 	}))
 	defer server.Close()
 
-	details, ok := fetchInstalledRemotePluginDetails(context.Background(), server.Client(), server.URL, "token", "account-1", home)
-	if !ok {
-		t.Fatal("fetchInstalledRemotePluginDetails() ok = false")
+	details, err := fetchInstalledRemotePluginDetails(context.Background(), server.Client(), server.URL, "token", "account-1", home)
+	if err != nil {
+		t.Fatalf("fetchInstalledRemotePluginDetails() error = %v", err)
 	}
 	if len(details[remoteInstalledGlobalMarketplace]) != 1 || details[remoteInstalledGlobalMarketplace][0].Summary.Name != "alpha" {
 		t.Fatalf("global details = %#v", details[remoteInstalledGlobalMarketplace])

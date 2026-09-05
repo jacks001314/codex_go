@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -65,50 +66,54 @@ type remoteInstalledPlugin struct {
 
 func (r *RuntimeRouter) startInstalledRemotePluginSync() {
 	go func() {
-		_ = r.reconcileInstalledRemotePlugins(context.Background())
+		_, _ = r.reconcileInstalledRemotePlugins(context.Background())
 	}()
 }
 
 // reconcileInstalledRemotePlugins performs one installed remote-plugin
-// synchronization pass and returns whether the cache was refreshed. It is the
-// synchronous body used by both startup/background sync and plugin/reconcile.
-func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) bool {
+// synchronization pass and returns whether the cache was refreshed plus any
+// fatal error. It is the synchronous body used by both startup/background sync
+// and plugin/reconcile.
+func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) (bool, error) {
 	if r == nil || r.services.Plugins == nil || r.services.Config == nil {
-		return false
+		return false, nil
 	}
 	read, err := r.services.Config.Read(&config.ConfigReadParams{})
 	if err != nil || read == nil {
-		return false
+		if err != nil {
+			return false, fmt.Errorf("read config for installed remote plugins: %w", err)
+		}
+		return false, nil
 	}
 	cfg := &config.Config{Values: read.Config}
 	if !features.Enabled(cfg.FeatureSettings(), "plugins") || !features.Enabled(cfg.FeatureSettings(), "remote_plugin") {
-		return false
+		return false, nil
 	}
 	if r.services.WorkspaceCodexPluginsEnabled != nil && !*r.services.WorkspaceCodexPluginsEnabled {
-		return false
+		return false, nil
 	}
 	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 	if codexHome == "" {
-		return false
+		return false, nil
 	}
 	snapshot := r.accountAuthSnapshot(codexHome)
 	token := appDirectoryAuthToken(snapshot)
 	if token == "" {
-		return false
+		return false, nil
 	}
 	accountID := auth.AccountIDFromAuthForRestrictions(snapshot)
 	baseURL := strings.TrimRight(cfg.ChatGPTBaseURL(), "/")
 	client := r.accountHTTPClient()
 	if !markRemoteInstalledPluginSyncInFlight(codexHome) {
-		return false
+		return false, nil
 	}
 	defer clearRemoteInstalledPluginSyncInFlight(codexHome)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	detailsByMarketplace, ok := fetchInstalledRemotePluginDetails(ctx, client, baseURL, token, accountID, codexHome)
-	if !ok {
-		return false
+	detailsByMarketplace, err := fetchInstalledRemotePluginDetails(ctx, client, baseURL, token, accountID, codexHome)
+	if err != nil {
+		return false, err
 	}
 	for _, marketplaceName := range []string{
 		remoteInstalledGlobalMarketplace,
@@ -119,7 +124,7 @@ func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) boo
 		r.services.Plugins.ReplaceInstalledRemotePlugins(marketplaceName, detailsByMarketplace[marketplaceName])
 	}
 	r.effectivePluginsChanged()
-	return true
+	return true, nil
 }
 
 func markRemoteInstalledPluginSyncInFlight(codexHome string) bool {
@@ -155,7 +160,7 @@ func (r *RuntimeRouter) accountAuthSnapshot(codexHome string) *auth.AuthDotJSON 
 
 func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 	Do(*http.Request) (*http.Response, error)
-}, baseURL string, token string, accountID string, codexHome string) (map[string][]plugin.PluginDetail, bool) {
+}, baseURL string, token string, accountID string, codexHome string) (map[string][]plugin.PluginDetail, error) {
 	clearRemoteInstalledPluginSyncFailures()
 	installed := map[string]remoteInstalledPlugin{}
 	for _, scope := range []string{"GLOBAL", "USER", "WORKSPACE"} {
@@ -163,7 +168,7 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 		for {
 			endpoint, err := url.Parse(baseURL + "/ps/plugins/installed")
 			if err != nil {
-				return nil, false
+				return nil, fmt.Errorf("parse installed plugins endpoint: %w", err)
 			}
 			query := endpoint.Query()
 			query.Set("scope", scope)
@@ -174,7 +179,7 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 			endpoint.RawQuery = query.Encode()
 			request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 			if err != nil {
-				return nil, false
+				return nil, fmt.Errorf("create installed plugins request: %w", err)
 			}
 			request.Header.Set("Authorization", "Bearer "+token)
 			if strings.TrimSpace(accountID) != "" {
@@ -182,13 +187,16 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 			}
 			response, err := client.Do(request)
 			if err != nil {
-				return nil, false
+				return nil, fmt.Errorf("fetch installed plugins: %w", err)
 			}
 			var page remoteInstalledPluginPage
 			decodeErr := json.NewDecoder(response.Body).Decode(&page)
 			_ = response.Body.Close()
 			if response.StatusCode < 200 || response.StatusCode >= 300 || decodeErr != nil {
-				return nil, false
+				if decodeErr != nil {
+					return nil, fmt.Errorf("decode installed plugins response: %w", decodeErr)
+				}
+				return nil, fmt.Errorf("fetch installed plugins: HTTP %d", response.StatusCode)
 			}
 			for _, candidate := range page.Plugins {
 				if strings.TrimSpace(candidate.ID) != "" && strings.TrimSpace(candidate.Name) != "" {
@@ -252,9 +260,9 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 		})
 	}
 	if err := removeStaleRemoteInstalledPluginCaches(codexHome, installedNamesByMarketplace); err != nil {
-		return nil, false
+		return nil, fmt.Errorf("remove stale remote installed plugin caches: %w", err)
 	}
-	return detailsByMarketplace, true
+	return detailsByMarketplace, nil
 }
 
 func clearRemoteInstalledPluginSyncFailures() {
