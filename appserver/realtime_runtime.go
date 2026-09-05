@@ -13,7 +13,6 @@ import (
 	"codex_go/auth"
 	"codex_go/codexapi"
 	"codex_go/config"
-	"codex_go/features"
 	"codex_go/model"
 	"codex_go/network"
 	"codex_go/prompt"
@@ -194,9 +193,6 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 	cfg, record, err := r.effectiveRealtimeThreadConfig(params.ThreadID)
 	if err != nil {
 		return nil, err
-	}
-	if !features.Enabled(cfg.FeatureSettings(), "realtime_conversation") {
-		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s does not support realtime conversation", strings.TrimSpace(params.ThreadID)))
 	}
 
 	turnParams := realtimeTurnStartParams(record)
