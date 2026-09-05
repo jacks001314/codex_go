@@ -1283,6 +1283,12 @@ func interactiveTUISettings(root *cli.RootOptions) codextea.SettingsWriteResult 
 }
 
 func interactiveSettingsWriteHandler(root *cli.RootOptions) codextea.SettingsWriteFunc {
+	// Go equivalent of Rust #42202 local_settings.rs: TUI preferences are
+	// loaded once into the tea Model and persisted through the selected user
+	// config file; resuming/forking/connecting to a thread never re-resolves
+	// the full Config into the Model, so live local preferences are not
+	// replaced by server thread configuration. Account-dependent UI uses the
+	// account status response, not the local model-provider configuration.
 	return func(edits []codextea.SettingsEdit) (codextea.SettingsWriteResult, error) {
 		if len(edits) == 0 {
 			return interactiveLoadSettings(root)
