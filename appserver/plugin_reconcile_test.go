@@ -40,6 +40,15 @@ func TestPluginReconcileSignatureDetectsRemotePluginIDChange(t *testing.T) {
 	}
 }
 
+func TestPluginReconcileSignatureDetectsInstallPolicyChange(t *testing.T) {
+	base := plugin.PluginDetail{Summary: plugin.PluginSummary{ID: "acme/weather", Enabled: true, InstallPolicy: plugin.InstallAllowed}}
+	next := base
+	next.Summary.InstallPolicy = plugin.InstallBlocked
+	if pluginReconcileSignature(base) == pluginReconcileSignature(next) {
+		t.Fatal("pluginReconcileSignature should differ when install policy changes")
+	}
+}
+
 func TestRemoteInstalledPluginSyncFailuresSnapshotAndClear(t *testing.T) {
 	clearRemoteInstalledPluginSyncFailures()
 	recordRemoteInstalledPluginMaterializationFailure("acme/weather")
