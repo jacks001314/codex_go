@@ -205,6 +205,10 @@ func TestTurnSettingsUpdateParamsValidation(t *testing.T) {
 	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", ApprovalsReviewer: &reviewer}).Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
+	modelID := "gpt-5"
+	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Model: &modelID}).Validate(); err != nil {
+		t.Fatalf("Validate(model) error = %v", err)
+	}
 	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1"}).Validate(); err == nil {
 		t.Fatal("Validate() accepted an empty update")
 	}
