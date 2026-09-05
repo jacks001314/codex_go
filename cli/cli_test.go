@@ -793,6 +793,14 @@ func TestParseExecFork(t *testing.T) {
 		t.Fatalf("fork images = %#v", parsed.Exec.Fork.Images)
 	}
 
+	worktreeFork, err := Parse([]string{"exec", "fork", "--worktree", "session-123"})
+	if err != nil {
+		t.Fatalf("Parse exec fork --worktree returned error: %v", err)
+	}
+	if !worktreeFork.Exec.Shared.Worktree || worktreeFork.Exec.Fork.SessionID != "session-123" {
+		t.Fatalf("exec fork --worktree = %#v", worktreeFork.Exec)
+	}
+
 	if _, err := Parse([]string{"exec", "fork"}); err == nil || err.Error() != "exec fork requires SESSION_ID" {
 		t.Fatalf("missing session error = %v", err)
 	}
