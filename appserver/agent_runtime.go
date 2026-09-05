@@ -86,6 +86,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.autoReviewMessages = r.guardianReviewAutoReviewMessagesForTurn
 		modelReviewer.specialty = r.guardianReviewModelSpecialtyForTurn
 		modelReviewer.nodeReplAutoReviewRequired = r.guardianReviewNodeReplAutoReviewRequiredForTurn
+		modelReviewer.fullAccess = r.guardianFullAccessForTurn
 		modelReviewer.permissionProfile = r.guardianReviewPermissionProfileForTurn
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
 		modelReviewer.environment = r.guardianEnvironmentInputItems
@@ -100,6 +101,18 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		}
 	}
 	return reviewer
+}
+
+func (r *RuntimeRouter) guardianFullAccessForTurn(threadID, turnID string) bool {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return false
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return false
+	}
+	return turnIsFullAccess(cfg, firstNonEmpty(active.Params.CWD, r.services.DefaultCWD), active.Params)
 }
 
 func (r *RuntimeRouter) guardianEnvironmentInputItems(ctx context.Context, threadID, turnID string) ([]any, error) {

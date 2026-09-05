@@ -37,6 +37,7 @@ type modelGuardianReviewer struct {
 	autoReviewMessages         func(threadID, turnID string) *model.AutoReviewMessages
 	specialty                  func(threadID, turnID string) string
 	nodeReplAutoReviewRequired func(threadID, turnID string) bool
+	fullAccess                 func(threadID, turnID string) bool
 	environment                func(context.Context, string, string) ([]any, error)
 	permissionProfile          func(threadID, turnID string) *sandbox.PermissionProfile
 	nodeReplEvidence           func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
@@ -253,6 +254,9 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// keeping the established refuse-approval convention.
 	if r.maxToolCallLag > 0 && r.scoreLag(threadID) > r.maxToolCallLag {
 		return state.DecisionDenied, "guardian review skipped: risk score lag exceeds max_tool_call_lag", nil
+	}
+	if r.fullAccess != nil && r.fullAccess(threadID, turnID) {
+		return state.DecisionApproved, "full access", nil
 	}
 	r.beginToolCall(threadID)
 	var transcript []string
