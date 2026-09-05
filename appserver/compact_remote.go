@@ -41,6 +41,7 @@ type agentCompactRunner struct {
 	model       string
 	providerID  string
 	serviceTier string
+	modelHash   string
 }
 
 func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
@@ -84,16 +85,17 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		return nil, nil
 	}
 	return &compact.Result{
-		Status:      compact.StatusCompleted,
-		Request:     *request,
-		Summary:     summary,
-		NewHistory:  compact.BuildCompactedHistory(nil, lastUserCompactItems(history, 1), summary),
-		CompletedAt: time.Now().UTC(),
-		Source:      compact.SourceRemote,
-		ResponseID:  response.ResponseID,
-		Model:       response.Model,
-		ProviderID:  response.ProviderID,
-		Usage:       compactUsageFromAgentUsage(&response.Usage),
+		Status:              compact.StatusCompleted,
+		Request:             *request,
+		Summary:             summary,
+		NewHistory:          compact.BuildCompactedHistory(nil, lastUserCompactItems(history, 1), summary),
+		CompletedAt:         time.Now().UTC(),
+		Source:              compact.SourceRemote,
+		ResponseID:          response.ResponseID,
+		Model:               response.Model,
+		ProviderID:          response.ProviderID,
+		CompactionModelHash: r.modelHash,
+		Usage:               compactUsageFromAgentUsage(&response.Usage),
 	}, nil
 }
 

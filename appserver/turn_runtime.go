@@ -5112,11 +5112,17 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record) compact.R
 	if !r.providerSupportsRemoteCompact(providerID) {
 		return nil
 	}
+	compactModel := firstNonEmpty(record.Metadata.Model, defaultRemoteCompactModel)
+	modelHash := ""
+	if info := r.modelInfoForRuntime(compactModel); info != nil {
+		modelHash = strings.TrimSpace(info.CompHash)
+	}
 	return &agentCompactRunner{
 		agent:       agent,
-		model:       firstNonEmpty(record.Metadata.Model, defaultRemoteCompactModel),
+		model:       compactModel,
 		providerID:  firstNonEmpty(providerID, model.OpenAIProviderID),
 		serviceTier: r.remoteCompactServiceTierForRecord(record),
+		modelHash:   modelHash,
 	}
 }
 

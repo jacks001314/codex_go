@@ -196,7 +196,10 @@ type Result struct {
 	ResponseID  string
 	Model       string
 	ProviderID  string
-	Usage       *Usage
+	// CompactionModelHash records the producing model's comp_hash for strict
+	// Guardian checkpoint compatibility (Rust #42852).
+	CompactionModelHash string
+	Usage               *Usage
 }
 
 type Usage struct {

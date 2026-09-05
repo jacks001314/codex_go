@@ -258,6 +258,22 @@ func (r *RuntimeRouter) guardianReviewModelForTurn(threadID, turnID string) stri
 	return strings.TrimSpace(active.RunConfig.AutoReviewModelOverride)
 }
 
+func (r *RuntimeRouter) guardianReviewModelHashForTurn(threadID, turnID string) string {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.RunConfig == nil {
+		return ""
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return ""
+	}
+	modelID := firstNonEmpty(r.guardianReviewModelForTurn(threadID, turnID), active.RunConfig.Model)
+	if info := r.modelInfoForRuntimeWithConfig(modelID, cfg); info != nil {
+		return strings.TrimSpace(info.CompHash)
+	}
+	return ""
+}
+
 func (r *RuntimeRouter) guardianReviewAutoReviewMessagesForTurn(threadID, turnID string) *model.AutoReviewMessages {
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 	if active == nil || active.Params == nil {

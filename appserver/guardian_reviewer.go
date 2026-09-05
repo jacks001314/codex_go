@@ -815,6 +815,13 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 		sessionRunner.DropStaleParentCompaction()
 		return
 	}
+	if threadContext && compacted != nil && strings.TrimSpace(compacted.CompactionModelHash) != "" {
+		currentHash := r.guardianReviewModelHashForTurn(threadID, compacted.Request.TurnID)
+		if currentHash != "" && currentHash != strings.TrimSpace(compacted.CompactionModelHash) {
+			sessionRunner.DropStaleParentCompaction()
+			return
+		}
+	}
 	sessionRunner.ResetAfterParentCompaction(responseID)
 }
 
