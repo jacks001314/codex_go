@@ -188,6 +188,21 @@ func TestTurnIsFullAccess(t *testing.T) {
 	}
 }
 
+func TestModelGuardianReviewerShortCircuitsInFullAccess(t *testing.T) {
+	reviewer := newModelGuardianReviewer(guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+		t.Fatal("reviewer should not sample in Full Access")
+		return nil, nil
+	})).(*modelGuardianReviewer)
+	reviewer.fullAccess = func(threadID, turnID string) bool { return true }
+	decision, _, err := reviewer.Review(context.Background(), "thread-full", "turn-full", "", state.Action{Type: "command", Command: "echo hi", CWD: "/tmp"})
+	if err != nil {
+		t.Fatalf("Review error = %v", err)
+	}
+	if decision != state.DecisionApproved {
+		t.Fatalf("decision = %v, want approved", decision)
+	}
+}
+
 func TestModelGuardianReviewerMapsAssessmentDecision(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
