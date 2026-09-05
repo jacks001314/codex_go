@@ -1464,6 +1464,15 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		r.attributeCommandExecutionItem(&threadItem)
 		threadItems = append(threadItems, threadItem)
 		payload := threadItemPayload(threadItem)
+		if item.Type == "configuration_update" && params.ExperimentalRawEvents {
+			if raw := configurationUpdateRawResponseItem(item); len(raw) > 0 {
+				r.notify(NotificationRawResponseItemCompleted, &RawResponseItemCompletedNotification{
+					ThreadID: threadID,
+					TurnID:   turnID,
+					Item:     raw,
+				})
+			}
+		}
 		if shouldNotifyRuntimeItemCompleted(threadItem) {
 			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
 				Item:          payload,
@@ -1552,6 +1561,25 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
 	r.clearActiveDiffTracker(threadID, turnID)
+}
+
+func configurationUpdateRawResponseItem(item session.Item) json.RawMessage {
+	if item.Type != "configuration_update" {
+		return nil
+	}
+	reasoning, _ := item.Data["reasoning"].(map[string]any)
+	effort := strings.TrimSpace(stringFromMap(reasoning, "effort"))
+	if effort == "" {
+		return nil
+	}
+	raw, err := json.Marshal(map[string]any{
+		"type":      "configuration_update",
+		"reasoning": map[string]any{"effort": effort},
+	})
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 func (r *RuntimeRouter) notifyCompactionActivity(threadID string, active bool) {
@@ -3860,6 +3888,7 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 	if item, ok := runtimeUserPromptSessionItem(turnID, params, createdAt); ok {
 		items = append(items, item)
 	}
+	items = append(items, trustedConfigurationUpdateSessionItems(params.AdditionalInputItems, turnID, createdAt)...)
 	if result == nil {
 		return items
 	}
@@ -4046,6 +4075,59 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 		executionIndex++
 	}
 	return items
+}
+
+// trustedConfigurationUpdateSessionItems extracts harness-authored
+// configuration_update items from internal additional input items. Client wire
+// inputs cannot reach this path because AdditionalInputItems is not serialized
+// into JSON-RPC parameters.
+func trustedConfigurationUpdateSessionItems(inputs []any, turnID string, createdAt time.Time) []session.Item {
+	items := make([]session.Item, 0, len(inputs))
+	for i, input := range inputs {
+		payload, ok := configurationUpdatePayload(input)
+		if !ok || stringFromMap(payload, "type") != "configuration_update" {
+			continue
+		}
+		reasoning, _ := payload["reasoning"].(map[string]any)
+		effort := strings.TrimSpace(stringFromMap(reasoning, "effort"))
+		if effort == "" {
+			continue
+		}
+		items = append(items, session.Item{
+			ID:        fmt.Sprintf("configuration-update-%s-%d", safeIdentifier(turnID), i),
+			Type:      "configuration_update",
+			CreatedAt: createdAt,
+			Data: map[string]any{
+				"reasoning":        map[string]any{"effort": effort},
+				"harness_metadata": json.RawMessage(`{"harness_authored_configuration":true}`),
+			},
+			Metadata: map[string]any{"turnId": turnID},
+		})
+	}
+	return items
+}
+
+func configurationUpdatePayload(input any) (map[string]any, bool) {
+	switch value := input.(type) {
+	case map[string]any:
+		return value, true
+	case json.RawMessage:
+		var decoded map[string]any
+		if json.Unmarshal(value, &decoded) == nil {
+			return decoded, true
+		}
+	case []byte:
+		var decoded map[string]any
+		if json.Unmarshal(value, &decoded) == nil {
+			return decoded, true
+		}
+	case string:
+		var decoded map[string]any
+		if json.Unmarshal([]byte(value), &decoded) == nil {
+			return decoded, true
+		}
+	}
+	return nil, false
 }
 
 func (r *RuntimeRouter) sessionItemForImageGeneration(threadID string, item *model.AgentItem, createdAt time.Time, metadata map[string]any, responseID string) (session.Item, bool) {

@@ -161,6 +161,29 @@ func TestConfigurationUpdateHistoryItemsAreNotReplayed(t *testing.T) {
 	}
 }
 
+func TestHarnessAuthoredConfigurationUpdateHistoryItemsAreReplayed(t *testing.T) {
+	record := &Record{Items: []Item{{
+		ID:   "cfg-1",
+		Type: "configuration_update",
+		Data: map[string]any{
+			"reasoning":        map[string]any{"effort": "high"},
+			"harness_metadata": json.RawMessage(`{"harness_authored_configuration":true}`),
+		},
+	}}}
+	items := InputItemsFromRecord(record, nil)
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want one trusted configuration update", items)
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok || item["type"] != "configuration_update" {
+		t.Fatalf("item = %#v", items[0])
+	}
+	reasoning, _ := item["reasoning"].(map[string]any)
+	if reasoning["effort"] != "high" {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+}
+
 func TestInputItemsFromRecordBuildsMessagesAndToolItems(t *testing.T) {
 	record := &Record{Items: []Item{
 		{ID: "u1", Type: "message", Role: "user", Text: "hello"},

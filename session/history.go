@@ -158,6 +158,12 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 			}
 		}
 	}
+	if item.Type == "configuration_update" {
+		if !harnessAuthoredConfigurationUpdate(item) {
+			return nil
+		}
+		return configurationUpdateInputItem(item)
+	}
 	if nonModelVisibleHistoryItemType(item.Type) || item.Type == "reasoning" {
 		return nil
 	}
@@ -179,6 +185,55 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 		}
 		return messageInputItem(item, options)
 	}
+}
+
+// configurationUpdateInputItem reconstructs a trusted, harness-authored
+// configuration_update response item for model-history replay.
+func configurationUpdateInputItem(item *Item) map[string]any {
+	if item == nil {
+		return nil
+	}
+	reasoning := mapValue(item.Data, "reasoning")
+	effort := strings.TrimSpace(stringValue(reasoning, "effort"))
+	if effort == "" {
+		return nil
+	}
+	return map[string]any{
+		"type":      "configuration_update",
+		"reasoning": map[string]any{"effort": effort},
+	}
+}
+
+// harnessAuthoredConfigurationUpdate reports whether a persisted
+// configuration_update item carries trusted harness provenance.
+func harnessAuthoredConfigurationUpdate(item *Item) bool {
+	if item == nil || item.Type != "configuration_update" {
+		return false
+	}
+	metadata := harnessMetadata(item.Data)
+	value, _ := metadata["harness_authored_configuration"].(bool)
+	return value
+}
+
+func harnessMetadata(data map[string]any) map[string]any {
+	if data == nil {
+		return nil
+	}
+	switch value := data["harness_metadata"].(type) {
+	case map[string]any:
+		return value
+	case json.RawMessage:
+		var decoded map[string]any
+		if json.Unmarshal(value, &decoded) == nil {
+			return decoded
+		}
+	case string:
+		var decoded map[string]any
+		if json.Unmarshal([]byte(value), &decoded) == nil {
+			return decoded
+		}
+	}
+	return nil
 }
 
 func legacyRolloutItemWrapper(object map[string]any) bool {
