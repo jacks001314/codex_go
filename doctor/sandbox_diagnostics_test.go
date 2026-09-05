@@ -45,3 +45,19 @@ func TestWindowsSandboxDoctorDiagnosticsReportSetupFailureLikeRust(t *testing.T)
 	}
 	_ = os.Remove(filepath.Join(home, ".sandbox", "setup-error.json"))
 }
+
+func TestWindowsSandboxDoctorDiagnosticsReportDeniedReadRestrictions(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{"windows_sandbox": "default"}}
+	check := applyWindowsSandboxDoctorDiagnostics(
+		NewCheck("sandbox.helpers", "sandbox", CheckStatusOK, "sandbox configuration is readable"),
+		cfg,
+		t.TempDir(),
+		t.TempDir(),
+	)
+	if check == nil {
+		t.Fatal("check is nil")
+	}
+	if !containsDetail(check, "denied-read restrictions: inactive") {
+		t.Fatalf("details = %#v", check.Details)
+	}
+}
