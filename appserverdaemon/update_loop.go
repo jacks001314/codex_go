@@ -145,7 +145,7 @@ func InstallLatestStandalone(ctx context.Context) error {
 	if runtime.GOOS == "windows" {
 		action := install.UpdateAction{Kind: install.UpdateActionStandaloneWin}
 		command, args := action.CommandArgs()
-		return (&install.ExecCommandRunner{}).Run(ctx, command, args)
+		return runWindowsUpdateInstaller(ctx, command, args)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, InstallScriptEndpoint, nil)
 	if err != nil {
