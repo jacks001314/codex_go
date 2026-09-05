@@ -8536,6 +8536,14 @@ func (r *RuntimeRouter) configureMCPFromConfig() {
 
 func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
 	base := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, requirements)
+	if rawFeatures, ok := values["features"].(map[string]any); ok {
+		if settings, _ := features.ResolveSettings(rawFeatures); features.Enabled(settings, "mcp_oauth_refresh_coordination") {
+			for name, registration := range base.Servers {
+				registration.Config.OAuthRefreshMode = mcp.McpOAuthRefreshCoordinated
+				base.Servers[name] = registration
+			}
+		}
+	}
 	if r != nil {
 		base.HTTPClient = r.httpClientForConfig(&config.Config{Values: values})
 	}
