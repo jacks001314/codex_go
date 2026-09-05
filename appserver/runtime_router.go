@@ -8370,19 +8370,21 @@ func (r *RuntimeRouter) handlePluginReconcile(request *Request) (*plugin.PluginR
 
 func pluginReconcileSignature(detail plugin.PluginDetail) string {
 	data, _ := json.Marshal(struct {
-		Enabled    bool
-		HasSkills  bool
-		MCPServers []string
-		Apps       []plugin.AppSummary
-		Templates  []plugin.AppTemplateSummary
-		Hooks      []plugin.PluginHookSummary
+		Enabled        bool
+		HasSkills      bool
+		RemotePluginID string
+		MCPServers     []string
+		Apps           []plugin.AppSummary
+		Templates      []plugin.AppTemplateSummary
+		Hooks          []plugin.PluginHookSummary
 	}{
-		Enabled:    detail.Summary.Enabled,
-		HasSkills:  detail.Summary.HasSkills,
-		MCPServers: detail.MCPServers,
-		Apps:       detail.Apps,
-		Templates:  detail.AppTemplates,
-		Hooks:      detail.Hooks,
+		Enabled:        detail.Summary.Enabled,
+		HasSkills:      detail.Summary.HasSkills,
+		RemotePluginID: detail.Summary.RemotePluginID,
+		MCPServers:     detail.MCPServers,
+		Apps:           detail.Apps,
+		Templates:      detail.AppTemplates,
+		Hooks:          detail.Hooks,
 	})
 	return string(data)
 }
