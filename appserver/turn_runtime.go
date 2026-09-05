@@ -5868,6 +5868,7 @@ type appTurnRunConfig struct {
 	IsFirstTurn                     bool
 	ApprovalPolicy                  string
 	ApprovalsReviewer               string
+	GuardianV2Enabled               bool
 	SandboxPolicy                   string
 	SandboxNetworkAccess            bool
 	CollaborationMode               string
@@ -6136,6 +6137,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		IsFirstTurn:                     threadSnapshot.IsFirstTurn,
 		ApprovalPolicy:                  string(approvalPolicy),
 		ApprovalsReviewer:               approvalsReviewer,
+		GuardianV2Enabled:               features.Enabled(cfg.FeatureSettings(), "guardianv2"),
 		SandboxPolicy:                   analyticsSandboxPolicy(permissionProfile, cwd),
 		SandboxNetworkAccess:            analyticsSandboxNetworkAccess(permissionProfile),
 		CollaborationMode:               analyticsCollaborationMode(params),
@@ -6551,6 +6553,7 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		ServiceTier:                          runConfig.ServiceTier,
 		ApprovalPolicy:                       firstNonEmpty(runConfig.ApprovalPolicy, string(sandbox.ApprovalOnRequest)),
 		ApprovalsReviewer:                    firstNonEmpty(runConfig.ApprovalsReviewer, "user"),
+		GuardianV2Enabled:                    runConfig.GuardianV2Enabled,
 		SandboxNetworkAccess:                 runConfig.SandboxNetworkAccess,
 		CollaborationMode:                    stringPtrIfNotEmpty(firstNonEmpty(runConfig.CollaborationMode, "default")),
 		Personality:                          stringPtrIfNotEmpty(runConfig.Personality),

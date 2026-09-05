@@ -79,6 +79,7 @@ type CodexTurnEventParams struct {
 	ServiceTier                          string                       `json:"service_tier"`
 	ApprovalPolicy                       string                       `json:"approval_policy"`
 	ApprovalsReviewer                    string                       `json:"approvals_reviewer"`
+	GuardianV2Enabled                    bool                         `json:"guardian_v2_enabled"`
 	SandboxNetworkAccess                 bool                         `json:"sandbox_network_access"`
 	CollaborationMode                    *string                      `json:"collaboration_mode"`
 	Personality                          *string                      `json:"personality"`
@@ -141,6 +142,7 @@ type CodexTurnEventInput struct {
 	ServiceTier                          string
 	ApprovalPolicy                       string
 	ApprovalsReviewer                    string
+	GuardianV2Enabled                    bool
 	SandboxNetworkAccess                 bool
 	CollaborationMode                    *string
 	Personality                          *string
@@ -229,6 +231,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			ServiceTier:                          serviceTier,
 			ApprovalPolicy:                       input.ApprovalPolicy,
 			ApprovalsReviewer:                    input.ApprovalsReviewer,
+			GuardianV2Enabled:                    input.GuardianV2Enabled,
 			SandboxNetworkAccess:                 input.SandboxNetworkAccess,
 			CollaborationMode:                    input.CollaborationMode,
 			Personality:                          input.Personality,

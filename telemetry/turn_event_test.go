@@ -87,6 +87,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			"service_tier": "flex",
 			"approval_policy": "on-request",
 			"approvals_reviewer": "auto_review",
+			"guardian_v2_enabled": false,
 			"sandbox_network_access": true,
 			"collaboration_mode": "plan",
 			"personality": "pragmatic",
