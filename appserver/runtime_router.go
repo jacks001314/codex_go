@@ -6298,10 +6298,47 @@ func (r *RuntimeRouter) handleTurnSettingsUpdate(request *Request) (*turn.TurnSe
 			ApprovalsReviewer: params.ApprovalsReviewer,
 		})
 	}
-	if params.Model != nil || params.Effort != nil || params.Summary != nil || params.ServiceTier != nil {
-		return nil, jsonRPCInvalidRequest("turn settings updates for model, effort, summary, and service tier are not supported")
-	}
+	r.updateActiveTurnRuntimeSettings(&params)
 	return &turn.TurnSettingsUpdateResponse{}, nil
+}
+
+func (r *RuntimeRouter) updateActiveTurnRuntimeSettings(params *turn.TurnSettingsUpdateParams) {
+	if r == nil || params == nil {
+		return
+	}
+	r.threads.UpdateTurn(params.ThreadID, params.TurnID, func(active *activeRuntimeTurn) {
+		if active == nil {
+			return
+		}
+		if active.Params == nil {
+			active.Params = &turn.TurnStartParams{ThreadID: params.ThreadID}
+		}
+		if params.Model != nil {
+			active.Params.Model = strings.TrimSpace(*params.Model)
+			if active.RunConfig != nil {
+				active.RunConfig.Model = active.Params.Model
+			}
+		}
+		if params.Effort != nil {
+			active.Params.Effort = cloneString(params.Effort)
+			if active.RunConfig != nil {
+				active.RunConfig.ReasoningEffort = strings.TrimSpace(*params.Effort)
+			}
+		}
+		if params.Summary != nil {
+			active.Params.Summary = cloneString(params.Summary)
+			if active.RunConfig != nil {
+				active.RunConfig.ReasoningSummary = strings.TrimSpace(*params.Summary)
+			}
+		}
+		if params.ServiceTier != nil {
+			active.Params.ServiceTier = cloneString(params.ServiceTier)
+			active.Params.ServiceTierSet = true
+			if active.RunConfig != nil {
+				active.RunConfig.ServiceTier = strings.TrimSpace(*params.ServiceTier)
+			}
+		}
+	})
 }
 
 func turnSteerRuntimeError(err error) error {
