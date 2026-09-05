@@ -54,6 +54,9 @@ func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequireme
 
 func browserUseRequirementsFromMap(values map[string]any) *BrowserUseRequirements {
 	var out BrowserUseRequirements
+	if value, ok := boolAnyKey(values, "allow_webmcp", "allowWebmcp"); ok {
+		out.AllowWebmcp = &value
+	}
 	if value, ok := boolAnyKey(values, "allow_history_access", "allowHistoryAccess"); ok {
 		out.AllowHistoryAccess = &value
 	}

@@ -642,6 +642,7 @@ func simpleModelNamespace(namespace string) bool {
 }
 
 type BrowserUseRequirements struct {
+	AllowWebmcp                   *bool                             `json:"allowWebmcp"`
 	AllowHistoryAccess            *bool                             `json:"allowHistoryAccess,omitempty"`
 	DisableAutoReview             *bool                             `json:"disableAutoReview,omitempty"`
 	AllowGlobalPersistentApproval *bool                             `json:"allowGlobalPersistentApproval,omitempty"`
@@ -651,12 +652,14 @@ type BrowserUseRequirements struct {
 
 func (r *BrowserUseRequirements) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
+		AllowWebmcp                   *bool                             `json:"allowWebmcp"`
 		AllowHistoryAccess            *bool                             `json:"allowHistoryAccess"`
 		DisableAutoReview             *bool                             `json:"disableAutoReview"`
 		AllowGlobalPersistentApproval *bool                             `json:"allowGlobalPersistentApproval"`
 		DefaultOriginPolicy           *BrowserUseOriginPolicy           `json:"defaultOriginPolicy"`
 		Origins                       map[string]BrowserUseOriginPolicy `json:"origins"`
 	}{
+		AllowWebmcp:                   cloneBoolPtr(r.AllowWebmcp),
 		AllowHistoryAccess:            cloneBoolPtr(r.AllowHistoryAccess),
 		DisableAutoReview:             cloneBoolPtr(r.DisableAutoReview),
 		AllowGlobalPersistentApproval: cloneBoolPtr(r.AllowGlobalPersistentApproval),
@@ -3235,6 +3238,7 @@ func cloneBrowserUse(value *BrowserUseRequirements) *BrowserUseRequirements {
 		return nil
 	}
 	return &BrowserUseRequirements{
+		AllowWebmcp:                   cloneBoolPtr(value.AllowWebmcp),
 		AllowHistoryAccess:            cloneBoolPtr(value.AllowHistoryAccess),
 		DisableAutoReview:             cloneBoolPtr(value.DisableAutoReview),
 		AllowGlobalPersistentApproval: cloneBoolPtr(value.AllowGlobalPersistentApproval),

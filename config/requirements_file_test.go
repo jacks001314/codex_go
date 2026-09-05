@@ -344,3 +344,21 @@ func TestApplicationNetworkRequirementsParseAndValidate(t *testing.T) {
 		t.Fatalf("application JSON = %s", encoded)
 	}
 }
+
+func TestBrowserUseAllowWebmcpRequirement(t *testing.T) {
+	requirements, err := ParseRequirementsTOML([]byte("[browser_use]\nallow_webmcp = false\n"))
+	if err != nil {
+		t.Fatalf("ParseRequirementsTOML error = %v", err)
+	}
+	if requirements == nil || requirements.BrowserUse == nil || requirements.BrowserUse.AllowWebmcp == nil || *requirements.BrowserUse.AllowWebmcp {
+		t.Fatalf("allowWebmcp = %#v", requirements)
+	}
+
+	absent, err := ParseRequirementsTOML([]byte("[browser_use]\ndisable_auto_review = true\n"))
+	if err != nil {
+		t.Fatalf("ParseRequirementsTOML error = %v", err)
+	}
+	if absent == nil || absent.BrowserUse == nil || absent.BrowserUse.AllowWebmcp != nil {
+		t.Fatalf("absent allowWebmcp = %#v", absent)
+	}
+}
