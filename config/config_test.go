@@ -756,6 +756,21 @@ func TestFeatureRequirementsCanonicalizeAliasesAndIgnoreUnknownLikeRust(t *testi
 	}
 }
 
+func TestStrictConfigAcceptsRecentFeatureKeys(t *testing.T) {
+	features := map[string]any{}
+	for _, key := range []string{
+		"sleep_tool", "powershell_shell_version", "local_thread_store_shared_compression",
+		"omit_app_server_notification_media", "context_management", "worktrees",
+		"guardian_thread_context", "mcp_oauth_refresh_coordination", "unified_exec_tty",
+		"windows_sandbox_service",
+	} {
+		features[key] = true
+	}
+	if err := validateKnownTopLevelConfigFields(map[string]any{"features": features}); err != nil {
+		t.Fatalf("recent feature keys should be accepted in strict config: %v", err)
+	}
+}
+
 func TestFeatureSettingsTracksLegacyUsage(t *testing.T) {
 	dir := t.TempDir()
 	body := `
