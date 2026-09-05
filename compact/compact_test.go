@@ -500,6 +500,13 @@ func TestCompactRemotelyFallsBackToLocal(t *testing.T) {
 	}
 }
 
+func TestResultCarriesCompactionModelHash(t *testing.T) {
+	result := &Result{Status: StatusCompleted, CompactionModelHash: "abc123"}
+	if result.CompactionModelHash != "abc123" {
+		t.Fatalf("CompactionModelHash = %q", result.CompactionModelHash)
+	}
+}
+
 type remoteRunnerFunc func(context.Context, *Request) (*Result, error)
 
 func (f remoteRunnerFunc) Compact(ctx context.Context, request *Request) (*Result, error) {
