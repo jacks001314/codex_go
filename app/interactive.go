@@ -844,6 +844,13 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 				request.AdditionalInstructions = strings.Join(nonEmptyStringsApp([]string{instructions, request.AdditionalInstructions}), "\n\n")
 				turnRunner = sideRunner
 			}
+			if state.ThreadName == "" && len(state.Messages) == 0 {
+				if title := interactiveAutoThreadTitle(request.Prompt); title != "" {
+					if err := interactiveRenameThreadHandler()(state.ThreadID, title); err == nil {
+						state.SetThreadName(title)
+					}
+				}
+			}
 			return interactiveTurnCommandWithRequest(ctx, root, turnRunner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
 		},
 		OnSteerRequest: func(request codextea.SubmitRequest, _ string) error {
@@ -873,6 +880,23 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	}
 	_, err = codextea.Run(ctx, state, options, stdin, stdout)
 	return err
+}
+
+// interactiveAutoThreadTitle derives a provisional thread title from the first
+// user prompt (normalized whitespace, 36-char bound, no slash commands). It is
+// the Go automatic-thread-naming baseline for #42749 until a model-generated
+// title request is available.
+func interactiveAutoThreadTitle(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" || strings.HasPrefix(prompt, "/") {
+		return ""
+	}
+	title := strings.Join(strings.Fields(prompt), " ")
+	runes := []rune(title)
+	if len(runes) > 36 {
+		runes = runes[:36]
+	}
+	return string(runes)
 }
 
 func interactiveStartLocalTUIThread(state *codextui.State, store *session.Store) (string, error) {

@@ -372,6 +372,13 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		PetEnv:                    environmentMapFromEnviron(os.Environ()),
 		OnPostNotification:        interactiveNotificationPoster(stdout),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
+			if state.ThreadName == "" && len(state.Messages) == 0 {
+				if title := interactiveAutoThreadTitle(request.Prompt); title != "" {
+					if err := interactiveRemoteRenameThreadHandler(ctx, endpoint)(state.ThreadID, title); err == nil {
+						state.SetThreadName(title)
+					}
+				}
+			}
 			return interactiveRemoteTurnCommand(ctx, root, endpoint, state, request, brokers, interrupts)
 		},
 		OnSteerRequest: interrupts.steer,
