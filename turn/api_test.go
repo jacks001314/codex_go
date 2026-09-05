@@ -170,6 +170,17 @@ func TestSteerAllowsEmptyInputToResumeActiveTurn(t *testing.T) {
 	}
 }
 
+func TestTurnInputRejectsConfigurationUpdate(t *testing.T) {
+	params := &TurnStartParams{ThreadID: "thread-1", Input: []TurnUserInput{{Type: "configuration_update"}}}
+	if err := params.Validate(); err == nil {
+		t.Fatal("TurnStartParams accepted configuration_update input")
+	}
+	steer := &TurnSteerParams{ThreadID: "thread-1", ExpectedTurnID: "turn-1", Input: []TurnUserInput{{Type: "configuration_update"}}}
+	if err := steer.Validate(); err == nil {
+		t.Fatal("TurnSteerParams accepted configuration_update input")
+	}
+}
+
 func TestTurnStartAcceptsTextAtLimitWithMentionInput(t *testing.T) {
 	service := NewTurnService()
 	_, err := service.Start(&TurnStartParams{

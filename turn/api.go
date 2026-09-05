@@ -326,6 +326,9 @@ func (p *TurnStartParams) Validate() error {
 	if err := validateUserInputTextLimit(p.Prompt, p.Input); err != nil {
 		return err
 	}
+	if err := rejectConfigurationUpdateInput(p.Input); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -401,6 +404,18 @@ func (p *TurnSteerParams) Validate() error {
 	}
 	if err := validateUserInputTextLimit(p.Prompt, p.Input); err != nil {
 		return err
+	}
+	if err := rejectConfigurationUpdateInput(p.Input); err != nil {
+		return err
+	}
+	return nil
+}
+
+func rejectConfigurationUpdateInput(inputs []TurnUserInput) error {
+	for _, input := range inputs {
+		if strings.EqualFold(strings.TrimSpace(input.Type), "configuration_update") {
+			return fmt.Errorf("%w: configuration_update cannot be supplied as turn input", ErrInvalidTurnRequest)
+		}
 	}
 	return nil
 }
