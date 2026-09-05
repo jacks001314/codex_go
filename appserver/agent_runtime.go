@@ -60,10 +60,40 @@ func turnIsFullAccess(cfg *config.Config, cwd string, params *turn.TurnStartPara
 		return false
 	}
 	resolution, err := turnSandboxPermissionProfile(cfg, cwd, params)
-	if err != nil || resolution == nil || resolution.Profile == nil || resolution.Profile.HasDenyReadEntries() {
+	if err != nil || resolution == nil || !permissionProfileIsFullAccess(resolution.Profile) {
 		return false
 	}
-	return resolution.Profile.SandboxPolicy != nil && resolution.Profile.SandboxPolicy.Kind == sandbox.SandboxDangerFullAccess
+	return turnEnvironmentSelectionsHaveFullAccess(params, resolution.Profile)
+}
+
+func permissionProfileIsFullAccess(profile *sandbox.PermissionProfile) bool {
+	return profile != nil && !profile.HasDenyReadEntries() &&
+		profile.SandboxPolicy != nil && profile.SandboxPolicy.Kind == sandbox.SandboxDangerFullAccess
+}
+
+func turnEnvironmentSelectionsHaveFullAccess(params *turn.TurnStartParams, threadProfile *sandbox.PermissionProfile) bool {
+	if params == nil || len(params.Environments) == 0 {
+		return true
+	}
+	for _, selection := range params.Environments {
+		state, err := environmentConfigStateFromAnyMap(selection)
+		if err != nil {
+			return false
+		}
+		switch state.Kind {
+		case EnvironmentConfigPending, EnvironmentConfigFailed:
+			return false
+		case EnvironmentConfigFromThread:
+			if !permissionProfileIsFullAccess(threadProfile) {
+				return false
+			}
+		case EnvironmentConfigReady:
+			if !permissionProfileIsFullAccess(environmentConfigPermissionProfile(state.Config)) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) GuardianReviewer {

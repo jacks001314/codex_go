@@ -188,6 +188,44 @@ func TestTurnIsFullAccess(t *testing.T) {
 	}
 }
 
+func TestTurnIsFullAccessRequiresEverySelectedEnvironmentFullAccess(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{"approval_policy": "never", "sandbox_mode": "danger-full-access"}}
+	cwd := t.TempDir()
+	params := &turn.TurnStartParams{CWD: cwd}
+	fullAccess := sandbox.FullAccessPermissionProfile()
+	profileJSON, err := sandbox.RuntimePermissionProfileJSON(fullAccess)
+	if err != nil {
+		t.Fatalf("RuntimePermissionProfileJSON() error = %v", err)
+	}
+	readyEnvironment := map[string]any{
+		"environmentId": "env-full",
+		"config": map[string]any{
+			"state": "ready",
+			"config": map[string]any{
+				"permission_profile": profileJSON,
+			},
+		},
+	}
+	params.Environments = []map[string]any{readyEnvironment}
+	if !turnIsFullAccess(cfg, cwd, params) {
+		t.Fatal("ready full-access environment should preserve Full Access")
+	}
+	params.Environments = append(params.Environments, map[string]any{
+		"environmentId": "env-pending",
+		"config":        map[string]any{"state": "pending"},
+	})
+	if turnIsFullAccess(cfg, cwd, params) {
+		t.Fatal("pending selected environment should not be Full Access")
+	}
+	params.Environments = []map[string]any{{
+		"environmentId": "env-failed",
+		"config":        map[string]any{"state": "failed", "error": "unavailable"},
+	}}
+	if turnIsFullAccess(cfg, cwd, params) {
+		t.Fatal("failed selected environment should not be Full Access")
+	}
+}
+
 func TestModelGuardianReviewerShortCircuitsInFullAccess(t *testing.T) {
 	reviewer := newModelGuardianReviewer(guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
 		t.Fatal("reviewer should not sample in Full Access")
