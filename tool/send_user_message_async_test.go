@@ -78,3 +78,30 @@ func TestSendUserMessageAsyncHandlerRestrictsToQuestionsLikeRust(t *testing.T) {
 		t.Fatalf("message description = %q, want question-only guidance", got)
 	}
 }
+
+func TestSendMessageToUserAsyncHandlerRegistersFreeformName(t *testing.T) {
+	var emitted string
+	handler := NewSendMessageToUserAsyncHandler(func(message string) {
+		emitted = message
+	})
+	spec := handler.Spec()
+	if spec.Name.Key() != DefaultSendMessageToUserAsyncToolName {
+		t.Fatalf("free-form tool name = %q, want %q", spec.Name.Key(), DefaultSendMessageToUserAsyncToolName)
+	}
+	if !strings.Contains(spec.Description, "report a critical blocker") {
+		t.Fatalf("free-form description missing blocker guidance: %q", spec.Description)
+	}
+	output, err := handler.Execute(context.Background(), &Invocation{
+		ToolName: PlainName(DefaultSendMessageToUserAsyncToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"message":"  blocker found  "}`},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if emitted != "blocker found" {
+		t.Fatalf("emitted message = %q, want blocker found", emitted)
+	}
+	if !strings.Contains(output.Body, `"accepted":true`) {
+		t.Fatalf("output body = %q, want accepted", output.Body)
+	}
+}

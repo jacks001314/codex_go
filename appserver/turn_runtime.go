@@ -266,7 +266,7 @@ func (r *RuntimeRouter) persistentModeInstructionsFragment(cfg *config.Config, p
 	asyncAvailable := false
 	if modelInfo != nil {
 		for _, supported := range modelInfo.ExperimentalSupportedTools {
-			if supported == tool.DefaultSendUserMessageAsyncToolName {
+			if supported == tool.DefaultSendUserMessageAsyncToolName || supported == tool.DefaultSendMessageToUserAsyncToolName {
 				asyncAvailable = true
 				break
 			}
@@ -5823,7 +5823,8 @@ func sessionItemForAppAsyncMessage(turnID string, execution *turn.ToolExecutionR
 	if execution == nil || execution.Invocation == nil || execution.Output == nil {
 		return session.Item{}, false
 	}
-	if execution.Invocation.ToolName.Key() != tool.DefaultSendUserMessageAsyncToolName {
+	toolName := execution.Invocation.ToolName.Key()
+	if toolName != tool.DefaultSendUserMessageAsyncToolName && toolName != tool.DefaultSendMessageToUserAsyncToolName {
 		return session.Item{}, false
 	}
 	message := ""

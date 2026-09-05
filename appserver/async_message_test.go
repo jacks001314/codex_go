@@ -36,6 +36,26 @@ func TestSessionItemForAppAsyncMessageCarriesDelivery(t *testing.T) {
 	}
 }
 
+func TestSessionItemForAppFreeformAsyncMessageCarriesDelivery(t *testing.T) {
+	createdAt := time.Date(2026, 9, 4, 1, 0, 0, 0, time.UTC)
+	execution := &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{ToolName: tool.PlainName(tool.DefaultSendMessageToUserAsyncToolName)},
+		Output: &tool.Output{
+			Success: true,
+			Data: map[string]any{
+				"async_message": map[string]any{"message": "blocker found", "delivery": "async"},
+			},
+		},
+	}
+	item, ok := sessionItemForAppAsyncMessage("turn-1", execution, createdAt, nil)
+	if !ok || item.Type != "agent_message" || item.Text != "blocker found" {
+		t.Fatalf("free-form async item = %#v, ok=%v", item, ok)
+	}
+	if got, _ := item.Metadata["delivery"].(string); got != "async" {
+		t.Fatalf("delivery metadata = %q, want async", got)
+	}
+}
+
 func TestFinalAgentMessageSummarySkipsAsyncMessages(t *testing.T) {
 	items := []ThreadItem{
 		{ID: "async-1", Type: "agent_message", Text: "still working", Delivery: "async"},

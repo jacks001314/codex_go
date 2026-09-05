@@ -11781,10 +11781,15 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.WaitForEnvironmentToolConfig = r.services.WaitForEnvironmentToolConfig
 	if turnModelInfo != nil {
 		sendUserMessageAsyncAdded := false
+		sendMessageToUserAsyncAdded := false
 		for _, supported := range turnModelInfo.ExperimentalSupportedTools {
 			if supported == tool.DefaultSendUserMessageAsyncToolName && !sendUserMessageAsyncAdded {
 				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
 				sendUserMessageAsyncAdded = true
+			}
+			if supported == tool.DefaultSendMessageToUserAsyncToolName && !sendMessageToUserAsyncAdded {
+				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
+				sendMessageToUserAsyncAdded = true
 			}
 		}
 		if turnModelInfo.ModelMessages != nil {

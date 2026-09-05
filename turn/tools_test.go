@@ -560,6 +560,26 @@ func TestBuildToolRegistrySourcesAsyncMessageDescriptionFromCatalog(t *testing.T
 	}
 }
 
+func TestBuildToolRegistryRegistersFreeformAsyncMessageTool(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.ExperimentalSupportedTools = []string{tool.DefaultSendMessageToUserAsyncToolName}
+	options.SendUserMessageAsync = func(string) {}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(free-form async) error = %v", err)
+	}
+	spec, ok := registry.Spec(tool.PlainName(tool.DefaultSendMessageToUserAsyncToolName))
+	if !ok {
+		t.Fatal("send_message_to_user_async tool missing")
+	}
+	if spec.Name.Key() != tool.DefaultSendMessageToUserAsyncToolName {
+		t.Fatalf("tool name = %q", spec.Name.Key())
+	}
+	if _, ok := registry.Spec(tool.PlainName(tool.DefaultSendUserMessageAsyncToolName)); ok {
+		t.Fatal("legacy async tool should not register from the free-form catalog name")
+	}
+}
+
 func TestBuildToolRegistryUnifiedExecFeatureGatesWriteStdinLikeRust(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.EnableUnifiedExec = false

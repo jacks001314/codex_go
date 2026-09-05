@@ -10,17 +10,30 @@ import (
 // uses to recognize async user message completions (#39319).
 const DefaultSendUserMessageAsyncToolName = "send_user_message_async"
 
+// DefaultSendMessageToUserAsyncToolName is the free-form async message tool
+// added by Rust #42354; model catalogs opt in through
+// experimental_supported_tools exactly matching this name.
+const DefaultSendMessageToUserAsyncToolName = "send_message_to_user_async"
+
 // defaultSendUserMessageAsyncDescription is the built-in tool description used
 // when the model catalog does not supply a model-owned description (#41461).
 const defaultSendUserMessageAsyncDescription = "Send a concise message that needs the user's attention during ongoing work. The tool returns immediately without ending the turn or waiting for a reply; any reply arrives asynchronously as a new user message.\nOnly use this tool to ask for missing information, preferences, constraints, clarification, or approval. The message should be concise, easy to read and understand, and at the right level of abstraction that is appropriate for the user and task at hand."
+
+// defaultSendMessageToUserAsyncDescription is the built-in free-form tool
+// description from Rust #42354 send_message_to_user_async.rs.
+const defaultSendMessageToUserAsyncDescription = "Send a concise message that needs the user's attention during ongoing work. The tool returns immediately without ending the turn or waiting for a reply; any reply arrives asynchronously as a new user message. Use this tool to ask for missing information, preferences, constraints, clarification, or approval; report a critical blocker or a finding that may change the task's direction; or answer a user question or status request received while work is still in progress. Use this tool when a message needs the user's immediate attention; use commentary for routine progress and intermediate context. Use clear formatting, such as bolding questions, to make requests easy to notice and answer."
 
 // SendUserMessageAsyncHandler mirrors Rust
 // core/src/tools/handlers/send_user_message_async.rs (#39319/#39601): the
 // model can send a concise, user-visible update or blocking question without
 // ending the turn. The handler is DirectModelOnly so it stays out of code
 // mode; the runtime emits the supplied text as an asynchronous agent message
-// and the tool returns immediately.
+// and the tool returns immediately. ToolName overrides the registered name so
+// the same executor backs the free-form send_message_to_user_async tool
+// (#42354) while preserving the legacy key.
 type SendUserMessageAsyncHandler struct {
+	// ToolName, when set, overrides the legacy tool key.
+	ToolName string
 	// EmitAsyncMessage, when set, lets the app-server runtime emit the
 	// message item. The tool surface stays testable without the runtime.
 	EmitAsyncMessage func(message string)
@@ -30,14 +43,23 @@ type SendUserMessageAsyncHandler struct {
 	Description *string
 }
 
+// NewSendMessageToUserAsyncHandler returns the free-form async message
+// executor registered under the Rust #42354 tool key.
+func NewSendMessageToUserAsyncHandler(emit func(message string)) *SendUserMessageAsyncHandler {
+	return &SendUserMessageAsyncHandler{
+		ToolName:         DefaultSendMessageToUserAsyncToolName,
+		EmitAsyncMessage: emit,
+	}
+}
+
 type sendUserMessageAsyncArgs struct {
 	Message string `json:"message"`
 }
 
 func (h *SendUserMessageAsyncHandler) Spec() Spec {
 	return Spec{
-		Name:        PlainName(DefaultSendUserMessageAsyncToolName),
-		Description: sendUserMessageAsyncDescription(h.Description),
+		Name:        h.toolName(),
+		Description: sendUserMessageAsyncDescription(h.toolName(), h.Description),
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -53,9 +75,19 @@ func (h *SendUserMessageAsyncHandler) Spec() Spec {
 	}
 }
 
-func sendUserMessageAsyncDescription(override *string) string {
+func (h *SendUserMessageAsyncHandler) toolName() ToolName {
+	if h == nil || h.ToolName == "" {
+		return PlainName(DefaultSendUserMessageAsyncToolName)
+	}
+	return PlainName(h.ToolName)
+}
+
+func sendUserMessageAsyncDescription(toolName ToolName, override *string) string {
 	if override != nil {
 		return *override
+	}
+	if toolName == PlainName(DefaultSendMessageToUserAsyncToolName) {
+		return defaultSendMessageToUserAsyncDescription
 	}
 	return defaultSendUserMessageAsyncDescription
 }
@@ -63,7 +95,7 @@ func sendUserMessageAsyncDescription(override *string) string {
 func (h *SendUserMessageAsyncHandler) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
 	_ = ctx
 	if invocation == nil {
-		return nil, fmt.Errorf("send_user_message_async handler received unsupported payload")
+		return nil, fmt.Errorf("%s handler received unsupported payload", h.toolName())
 	}
 	var args sendUserMessageAsyncArgs
 	if err := invocation.DecodeArguments(&args); err != nil {

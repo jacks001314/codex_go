@@ -181,6 +181,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 					return nil, err
 				}
 			}
+			if supported == tool.DefaultSendMessageToUserAsyncToolName {
+				if err := registry.Register(tool.NewSendMessageToUserAsyncHandler(options.SendUserMessageAsync)); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if options.EnableShell {
