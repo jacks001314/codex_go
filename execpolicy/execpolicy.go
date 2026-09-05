@@ -1155,6 +1155,13 @@ const (
 	DangerousCommandPlatformWindows DangerousCommandPlatform = "windows"
 )
 
+func (p DangerousCommandPlatform) String() string {
+	if p == DangerousCommandPlatformWindows {
+		return "windows"
+	}
+	return "posix"
+}
+
 // HostDangerousCommandPlatform returns the platform where the classifier is
 // running (Rust DangerousCommandPlatform::host).
 func HostDangerousCommandPlatform() DangerousCommandPlatform {
