@@ -2530,6 +2530,10 @@ func cloneMCPServerStatus(status MCPServerStatus) MCPServerStatus {
 		value := *status.Error
 		status.Error = &value
 	}
+	if status.ToolsError != nil {
+		value := *status.ToolsError
+		status.ToolsError = &value
+	}
 	for i := range status.Tools {
 		if status.Tools[i].InputSchema != nil {
 			schema := make(map[string]any, len(status.Tools[i].InputSchema))
