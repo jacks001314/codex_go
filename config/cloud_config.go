@@ -260,6 +260,7 @@ func applyCloudConfigBundle(values map[string]any, requirements *ConfigRequireme
 		if err != nil {
 			return nil, fmt.Errorf("%w: failed to parse cloud requirements fragment %s: %s", ErrInvalidCloudConfig, layer.Source.Name, err)
 		}
+		normalizeFeatureRequirementAliases(parsed)
 		mergeConfigMaps(managedRequirementValues, parsed)
 	}
 	managedRequirements, err := configRequirementsFromValidatedMap(managedRequirementValues)
@@ -283,6 +284,29 @@ func applyCloudConfigBundle(values map[string]any, requirements *ConfigRequireme
 		values["default_permissions"] = strings.TrimSpace(defaultProfile)
 	}
 	return mergeConfigRequirements(requirements, managedRequirements), nil
+}
+
+// normalizeFeatureRequirementAliases mirrors Rust #42863: within a single
+// requirements layer, the `feature_requirements` (and Go's `featureRequirements`)
+// alias is moved onto the canonical `features` key before layers are merged, so
+// mixed aliases share one merge path and retain layer precedence. The alias
+// wins over a canonical key in the same layer, matching boolMapAnyKey order.
+func normalizeFeatureRequirementAliases(values map[string]any) {
+	if values == nil {
+		return
+	}
+	for _, key := range []string{"featureRequirements", "feature_requirements"} {
+		raw, ok := values[key]
+		if !ok {
+			continue
+		}
+		nested, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		values["features"] = nested
+		delete(values, key)
+	}
 }
 
 func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequirements {

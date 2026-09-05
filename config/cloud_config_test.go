@@ -22,6 +22,40 @@ func TestCloudConfigLayersFromFragmentsReversesBackendPriority(t *testing.T) {
 	}
 }
 
+func TestFeatureRequirementAliasesMergeWithLayerPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		lowKey  string
+		highKey string
+	}{
+		{lowKey: "features", highKey: "feature_requirements"},
+		{lowKey: "feature_requirements", highKey: "features"},
+	} {
+		t.Run(tc.lowKey+"_"+tc.highKey, func(t *testing.T) {
+			low, err := parseRequirementsTOMLValues([]byte("[" + tc.lowKey + "]\nchronicle = true\nshell_snapshot = false\n"))
+			if err != nil {
+				t.Fatalf("parse low layer: %v", err)
+			}
+			high, err := parseRequirementsTOMLValues([]byte("[" + tc.highKey + "]\nchronicle = false\napps = false\n"))
+			if err != nil {
+				t.Fatalf("parse high layer: %v", err)
+			}
+			normalizeFeatureRequirementAliases(low)
+			normalizeFeatureRequirementAliases(high)
+			merged := map[string]any{}
+			mergeConfigMaps(merged, low)
+			mergeConfigMaps(merged, high)
+			requirements, err := configRequirementsFromValidatedMap(merged)
+			if err != nil {
+				t.Fatalf("configRequirementsFromValidatedMap: %v", err)
+			}
+			features := requirements.FeatureRequirements
+			if features["chronicle"] || features["shell_snapshot"] || features["apps"] {
+				t.Fatalf("merged feature requirements = %#v, want chronicle=false shell_snapshot=false apps=false", features)
+			}
+		})
+	}
+}
+
 func TestCloudConfigLayersResolveRelativePathFields(t *testing.T) {
 	base := t.TempDir()
 	layers, err := CloudConfigLayersFromFragments([]CloudConfigFragment{{ID: "a", Name: "A", Contents: `cache_path = "cache/data"`}}, base)
