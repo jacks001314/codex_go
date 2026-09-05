@@ -2777,7 +2777,17 @@ func applyWindowsSandboxDoctorDiagnostics(check *DoctorCheck, cfg *config.Config
 				Detail(fmt.Sprintf("denied-read rules: %d", deniedReads)).
 				Detail(fmt.Sprintf("denied-read glob rules: %d", globRules))
 		}
+		globDepth := "unbounded"
+		if resolution.GlobScanMaxDepth != nil {
+			globDepth = strconv.Itoa(*resolution.GlobScanMaxDepth)
+		}
+		check = check.Detail("glob scan max depth: " + globDepth)
 	}
+	managedSource := "none"
+	if cfg != nil && cfg.Requirements != nil && (len(cfg.Requirements.Permissions) > 0 || cfg.Requirements.DefaultPermissions != nil) {
+		managedSource = "managed requirements"
+	}
+	check = check.Detail("managed filesystem source: " + managedSource)
 	check = check.Detail("denied-read restrictions: " + restrictions)
 	if report, readErr := windowssandbox.ReadSetupErrorReport(codexHome); readErr == nil && report != nil {
 		message := strings.TrimSpace(report.Message)

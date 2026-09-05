@@ -20,6 +20,9 @@ type SandboxPermissionProfileResolution struct {
 	Profile        *sandbox.PermissionProfile
 	ProfileJSON    string
 	WorkspaceRoots []string
+	// GlobScanMaxDepth is the configured deny-glob expansion limit for managed
+	// restricted profiles; nil means unbounded or not applicable.
+	GlobScanMaxDepth *int
 }
 
 // PermissionProfileSelection is the uncompiled result of
@@ -463,7 +466,13 @@ func runtimeResolutionFromBuilder(profileID string, builder *permissionProfileBu
 	if err != nil {
 		return nil, err
 	}
-	return &SandboxPermissionProfileResolution{ID: profileID, Profile: profile, ProfileJSON: raw, WorkspaceRoots: workspaceRoots}, nil
+	return &SandboxPermissionProfileResolution{
+		ID:               profileID,
+		Profile:          profile,
+		ProfileJSON:      raw,
+		WorkspaceRoots:   workspaceRoots,
+		GlobScanMaxDepth: cloneIntPtrConfig(builder.globScanMaxDepth),
+	}, nil
 }
 
 func (b *permissionProfileBuilder) materializedEntries(cwd string) ([]sandbox.FileSystemSandboxEntry, error) {
