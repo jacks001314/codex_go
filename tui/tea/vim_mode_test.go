@@ -559,6 +559,46 @@ func TestVimReplaceCharAndChangeMotionsLikeVim(t *testing.T) {
 	}
 }
 
+// TestVimReplaceModeOverwritesUntilEscape pins Rust #42194: R enters replace
+// mode where typed characters overwrite the draft under the cursor and
+// advance, Esc returns to normal mode, and typing at the end of the draft
+// appends like insert mode.
+func TestVimReplaceModeOverwritesUntilEscape(t *testing.T) {
+	m := vimTestModel("hello world")
+	m = vimKeyPress(m, 'R')
+	if !m.vimReplaceMode {
+		t.Fatalf("R did not enter replace mode")
+	}
+	for _, r := range []rune{'J', 'a', 'w'} {
+		m = vimKeyPress(m, r)
+	}
+	if got := m.composer.Value(); got != "Jawlo world" {
+		t.Fatalf("replace-mode typing value = %q, want Jawlo world", got)
+	}
+	m = vimEscape(m)
+	if m.vimReplaceMode {
+		t.Fatalf("Esc did not exit replace mode")
+	}
+	if got := m.composer.Value(); got != "Jawlo world" {
+		t.Fatalf("value changed after exiting replace mode: %q", got)
+	}
+
+	// Typing at the end appends and normal-mode edits resume after Esc.
+	m = vimTestModel("ab")
+	m.composer.SetCursor(len("ab"))
+	m = vimKeyPress(m, 'R')
+	m = vimKeyPress(m, 'c')
+	if got := m.composer.Value(); got != "abc" {
+		t.Fatalf("replace at end value = %q, want abc", got)
+	}
+	m = vimEscape(m)
+	m = vimKeyPress(m, 'h')
+	m = vimKeyPress(m, 'x')
+	if got := m.composer.Value(); got != "ab" {
+		t.Fatalf("normal x after replace mode value = %q, want ab", got)
+	}
+}
+
 // TestVimLineYankPasteAndOperators pins Y/p and dd/yy.
 func TestVimLineYankPasteAndOperators(t *testing.T) {
 	m := vimTestModel("alpha beta")

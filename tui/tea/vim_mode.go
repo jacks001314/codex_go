@@ -78,6 +78,21 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 			return true
 		}
 	}
+	// Vim replace mode (R, Rust #42194): typed characters overwrite the draft
+	// under the cursor and advance; Esc returns to normal mode.
+	if m.vimReplaceMode {
+		switch {
+		case keySpec == "esc" || keySpec == "escape":
+			m.vimReplaceMode = false
+		case msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1:
+			m.replaceVimCharAdvancing(msg.Runes[0])
+		case keySpec == "enter":
+			m.replaceVimCharAdvancing('\n')
+		case keySpec == "backspace" || keySpec == "left":
+			m.vimCursorLeft()
+		}
+		return true
+	}
 	if m.vimInsert {
 		if keySpec == "esc" {
 			m.vimInsert = false
@@ -192,6 +207,8 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		m.applyVimDotRepeat()
 	case m.keyMatches("vim_normal", "replace_char", keySpec):
 		m.vimPendingReplace = true
+	case m.keyMatches("vim_normal", "replace_mode", keySpec):
+		m.vimReplaceMode = true
 	case m.keyMatches("vim_normal", "delete_to_line_end", keySpec):
 		m.deleteVimToLineEnd()
 	case m.keyMatches("vim_normal", "move_left", keySpec):
@@ -374,6 +391,27 @@ func (m *Model) replaceVimCharAtCursor(ch rune) {
 	} else {
 		m.vimSetCursorAtByteOffset(offset)
 	}
+}
+
+// replaceVimCharAdvancing replaces the rune under the cursor and moves to the
+// next character, or appends at the end of the draft (Vim replace mode, Rust
+// #42194). A newline replacement moves the cursor into the following line.
+func (m *Model) replaceVimCharAdvancing(ch rune) {
+	if m == nil {
+		return
+	}
+	value := m.composer.Value()
+	offset := m.vimValueByteOffset()
+	replacement := string(ch)
+	if offset >= len(value) {
+		m.composer.SetValue(value + replacement)
+		m.vimSetCursorAtByteOffset(len(value) + len(replacement))
+		return
+	}
+	_, size := utf8.DecodeRuneInString(value[offset:])
+	next := value[:offset] + replacement + value[offset+size:]
+	m.composer.SetValue(next)
+	m.vimSetCursorAtByteOffset(offset + len(replacement))
 }
 
 // deleteVimToLineEnd removes the text from the cursor to the end of the

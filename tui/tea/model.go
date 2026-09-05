@@ -893,6 +893,9 @@ type Model struct {
 	// character replaces the grapheme under the cursor without leaving normal
 	// mode (Rust #39661 vim_normal.replace_char).
 	vimPendingReplace bool
+	// vimReplaceMode tracks Vim replace mode (R): typed characters overwrite
+	// the draft under the cursor until Esc returns to normal mode (Rust #42194).
+	vimReplaceMode bool
 	// vimPendingFind tracks a pending Vim find/till motion (f/F/t/T): the next
 	// typed character is the search target. vimFindKind: 0=find, 1=till;
 	// vimFindForward is true for f/t; vimFindOperator carries a pending d/y/c

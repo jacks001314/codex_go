@@ -87,6 +87,7 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("vim_normal", "Vim normal", "till_char_backward", "Move to just after the previous occurrence of a character.", []string{"shift-t", "T"}),
 	keymapAction("vim_normal", "Vim normal", "delete_char", "Delete the character under the cursor.", []string{"x"}),
 	keymapAction("vim_normal", "Vim normal", "replace_char", "Replace the character under the cursor.", []string{"r"}),
+	keymapAction("vim_normal", "Vim normal", "replace_mode", "Overwrite characters until Esc.", []string{"shift-r", "R"}),
 	keymapAction("vim_normal", "Vim normal", "substitute_char", "Delete the character under the cursor and enter insert mode.", []string{"s"}),
 	keymapAction("vim_normal", "Vim normal", "delete_to_line_end", "Delete from cursor to end of line.", []string{"shift-d", "D"}),
 	keymapAction("vim_normal", "Vim normal", "change_to_line_end", "Change from cursor to end of line and enter insert mode.", []string{"shift-c", "C"}),
