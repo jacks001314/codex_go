@@ -1353,6 +1353,9 @@ func runAppServerDaemon(ctx context.Context, opts cli.AppServerDaemonOptions, st
 	case "version":
 		output, err = runner.Run(appserverdaemon.LifecycleVersion)
 	case "pid-update-loop":
+		if err := appserverdaemon.ClaimManagedUpdaterPID(); err != nil {
+			return err
+		}
 		return appserverdaemon.RunPIDUpdateLoop(ctx, runner, nil)
 	default:
 		return fmt.Errorf("unknown app-server daemon subcommand %s", opts.Action)

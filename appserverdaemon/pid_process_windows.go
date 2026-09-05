@@ -60,6 +60,7 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 		command.Env = os.Environ()
 	}
 	command.Env = append(command.Env, DaemonShutdownFileEnv+"="+daemonShutdownFilePath(backend.PIDFile))
+	command.Env = append(command.Env, UpdaterPIDFileEnv+"="+backend.PIDFile)
 	if err := command.Start(); err != nil {
 		return 0, "", fmt.Errorf("failed to spawn detached app-server process using %s: %w", backend.CodexBin, err)
 	}
