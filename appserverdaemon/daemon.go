@@ -21,6 +21,9 @@ const (
 	StateDirName          = "app-server-daemon"
 	ControlDirName        = "app-server-control"
 	ControlSocketFileName = "app-server-control.sock"
+	// DaemonShutdownFileEnv names the env var carrying the shutdown-request
+	// file a detached pid-managed app server must watch (Rust #42364).
+	DaemonShutdownFileEnv = "CODEX_DAEMON_SHUTDOWN_FILE"
 )
 
 var ErrUnsupportedPlatform = errors.New("codex app-server daemon lifecycle is only supported on Unix platforms")

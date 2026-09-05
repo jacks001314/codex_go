@@ -114,13 +114,13 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 		return runDebug(parsed.Debug, &parsed.Root, stdout)
 	case cli.CommandDoctor:
 		report, err := doctor.Run(&doctor.Options{
-			JSON:    parsed.Doctor.JSON,
-			Summary: parsed.Doctor.Summary,
-			All:     parsed.Doctor.All,
-			NoColor: parsed.Doctor.NoColor,
-			ASCII:   parsed.Doctor.ASCII,
+			JSON:     parsed.Doctor.JSON,
+			Summary:  parsed.Doctor.Summary,
+			All:      parsed.Doctor.All,
+			NoColor:  parsed.Doctor.NoColor,
+			ASCII:    parsed.Doctor.ASCII,
 			Feedback: parsed.Doctor.Feedback,
-			Root:    parsed.Root,
+			Root:     parsed.Root,
 			DispatchPaths: func() *cli.DispatchPaths {
 				if runOpts == nil || runOpts.DispatchPaths == nil {
 					return nil
@@ -1130,6 +1130,12 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 			return fmt.Errorf("unknown app-server subcommand %s", opts.Subcommand[0])
 		}
 	}
+	serverCtx, cancelServer := context.WithCancel(ctx)
+	defer cancelServer()
+	// Detached Windows pid-managed app servers receive graceful shutdown
+	// through CODEX_DAEMON_SHUTDOWN_FILE (Rust #42364); the watcher is a no-op
+	// unless that env var is set.
+	go appserverdaemon.WatchDaemonShutdownRequest(serverCtx, cancelServer)
 	codexHome := auth.DefaultCodexHome()
 	loadedConfig, err := loadAppServerConfig(codexHome, opts, root)
 	if err != nil {
@@ -1165,14 +1171,14 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 		return server.Serve(stdin, stdout)
 	}
 	if strings.HasPrefix(listen, "unix://") {
-		return appserver.ServeUnixSocket(ctx, &appserver.UnixSocketOptions{
+		return appserver.ServeUnixSocket(serverCtx, &appserver.UnixSocketOptions{
 			CodexHome:      codexHome,
 			Listen:         listen,
 			RuntimeOptions: runtimeOptions,
 		})
 	}
 	if strings.HasPrefix(listen, "ws://") {
-		return appserver.ServeWebSocket(ctx, &appserver.WebSocketOptions{
+		return appserver.ServeWebSocket(serverCtx, &appserver.WebSocketOptions{
 			CodexHome:      codexHome,
 			Listen:         listen,
 			Auth:           webSocketAuthSettingsFromCLI(opts),
@@ -1186,14 +1192,14 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 		}
 		if runtimeOptions.RemoteControlStartupMode == appserver.RemoteControlStartupEnabledEphemeral {
 			if appServerStateDBAvailable(codexHome) {
-				return runAppServerRemoteControlOnly(ctx, codexHome, runtimeOptions)
+				return runAppServerRemoteControlOnly(serverCtx, codexHome, runtimeOptions)
 			}
 			return errors.New("no transport configured; remote control disabled because sqlite state db is unavailable")
 		}
 		if runtimeOptions.RemoteControlStartupMode == appserver.RemoteControlStartupResolvePersisted {
-			enabled, err := appServerPersistedRemoteControlEnabled(ctx, codexHome, loadedConfig)
+			enabled, err := appServerPersistedRemoteControlEnabled(serverCtx, codexHome, loadedConfig)
 			if err == nil && enabled {
-				return runAppServerRemoteControlOnly(ctx, codexHome, runtimeOptions)
+				return runAppServerRemoteControlOnly(serverCtx, codexHome, runtimeOptions)
 			}
 		}
 		return errors.New("no transport configured; use --listen or enable remote control")

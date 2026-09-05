@@ -245,7 +245,7 @@ func (b *PIDBackend) Stop() error {
 			continue
 		}
 		pid := record.PID
-		if err := terminatePIDProcess(pid); err != nil {
+		if err := requestGracefulPIDShutdown(b, record); err != nil {
 			return err
 		}
 		started := time.Now()
