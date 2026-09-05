@@ -1288,3 +1288,13 @@ func TestStoreCustomSectionsAppearanceLifecycle(t *testing.T) {
 		t.Fatal("expected pinned section delete rejection")
 	}
 }
+
+func TestCloneMetadataDeepCopiesDaybreakEnabled(t *testing.T) {
+	enabled := true
+	original := Metadata{DaybreakEnabled: &enabled}
+	cloned := cloneMetadata(original)
+	*cloned.DaybreakEnabled = false
+	if original.DaybreakEnabled == nil || !*original.DaybreakEnabled {
+		t.Fatalf("original DaybreakEnabled = %#v, want true", original.DaybreakEnabled)
+	}
+}
