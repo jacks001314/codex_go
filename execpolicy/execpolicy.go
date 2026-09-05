@@ -1148,8 +1148,24 @@ func (r *PrefixRule) effectiveDecision() Decision {
 	return r.Decision
 }
 
-func executableLookupKey(raw string) string {
-	if runtime.GOOS != "windows" {
+type DangerousCommandPlatform string
+
+const (
+	DangerousCommandPlatformPosix   DangerousCommandPlatform = "posix"
+	DangerousCommandPlatformWindows DangerousCommandPlatform = "windows"
+)
+
+// HostDangerousCommandPlatform returns the platform where the classifier is
+// running (Rust DangerousCommandPlatform::host).
+func HostDangerousCommandPlatform() DangerousCommandPlatform {
+	if runtime.GOOS == "windows" {
+		return DangerousCommandPlatformWindows
+	}
+	return DangerousCommandPlatformPosix
+}
+
+func executableLookupKeyForPlatform(raw string, platform DangerousCommandPlatform) string {
+	if platform != DangerousCommandPlatformWindows {
 		return raw
 	}
 	raw = strings.ToLower(raw)
@@ -1159,6 +1175,10 @@ func executableLookupKey(raw string) string {
 		}
 	}
 	return raw
+}
+
+func executableLookupKey(raw string) string {
+	return executableLookupKeyForPlatform(raw, HostDangerousCommandPlatform())
 }
 
 func containsString(values []string, target string) bool {

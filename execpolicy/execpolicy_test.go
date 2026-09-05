@@ -681,3 +681,12 @@ func writePolicy(t *testing.T, body string) string {
 	}
 	return path
 }
+
+func TestExecutableLookupKeyForPlatform(t *testing.T) {
+	if got := executableLookupKeyForPlatform("Git.EXE", DangerousCommandPlatformWindows); got != "git" {
+		t.Fatalf("windows lookup key = %q, want git", got)
+	}
+	if got := executableLookupKeyForPlatform("Git.EXE", DangerousCommandPlatformPosix); got != "Git.EXE" {
+		t.Fatalf("posix lookup key = %q, want Git.EXE", got)
+	}
+}
