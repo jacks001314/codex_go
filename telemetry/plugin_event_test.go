@@ -52,6 +52,7 @@ func TestPluginMeasurementEventsBoundAndValidateLikeRust(t *testing.T) {
 		PluginID:    "sample@test",
 		ExecutionID: "exec-1",
 		Operation:   "run_measure",
+		Originator:  "codex_vscode",
 		Rows: []PluginMeasurementRow{
 			{MeasurementName: "tokens", NumberValue: 12.5, Dimensions: map[string]string{"speed": "fast"}},
 			{MeasurementName: "bad-name", NumberValue: 1, Dimensions: nil},
@@ -65,6 +66,9 @@ func TestPluginMeasurementEventsBoundAndValidateLikeRust(t *testing.T) {
 	}
 	if events[0].EventParams.MeasurementName != "tokens" || events[0].EventParams.Dimensions["speed"] != "fast" {
 		t.Fatalf("event params = %#v", events[0].EventParams)
+	}
+	if events[0].EventParams.Originator != "codex_vscode" {
+		t.Fatalf("originator = %q", events[0].EventParams.Originator)
 	}
 }
 

@@ -11530,12 +11530,17 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 					Dimensions:      row.Dimensions,
 				})
 			}
+			originator := ""
+			if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
+				originator = strings.TrimSpace(record.Metadata.Originator)
+			}
 			client.TrackCodexPluginMeasurementsEvent(ctx, telemetry.CodexPluginMeasurementsInput{
 				ThreadID:    threadID,
 				TurnID:      strings.TrimSpace(turnID),
 				PluginID:    batch.PluginID,
 				ExecutionID: batch.ExecutionID,
 				Operation:   batch.Operation,
+				Originator:  originator,
 				Rows:        rows,
 			})
 		}

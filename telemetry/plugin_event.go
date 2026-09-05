@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"sort"
+	"strings"
 )
 
 const (
@@ -37,6 +38,7 @@ type CodexPluginMeasurementsInput struct {
 	PluginID    string                 `json:"plugin_id"`
 	ExecutionID string                 `json:"execution_id"`
 	Operation   string                 `json:"operation"`
+	Originator  string                 `json:"originator,omitempty"`
 	Rows        []PluginMeasurementRow `json:"rows"`
 }
 
@@ -47,6 +49,7 @@ type CodexPluginMeasurementEventParams struct {
 	PluginID        string            `json:"plugin_id"`
 	ExecutionID     string            `json:"execution_id"`
 	Operation       string            `json:"operation"`
+	Originator      string            `json:"originator,omitempty"`
 	MeasurementName string            `json:"measurement_name"`
 	NumberValue     float64           `json:"number_value"`
 	Dimensions      map[string]string `json:"dimensions,omitempty"`
@@ -110,6 +113,7 @@ func PluginMeasurementEvents(input CodexPluginMeasurementsInput) []CodexPluginMe
 				PluginID:        input.PluginID,
 				ExecutionID:     input.ExecutionID,
 				Operation:       input.Operation,
+				Originator:      strings.TrimSpace(input.Originator),
 				MeasurementName: row.MeasurementName,
 				NumberValue:     row.NumberValue,
 				Dimensions:      dimensions,
