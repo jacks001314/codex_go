@@ -7418,7 +7418,7 @@ func (r *RuntimeRouter) instructionsWithPluginContext(threadID string, cfg *conf
 	}
 	mentioned := plugin.CollectExplicitPluginMentions(pluginUserInputFromTurn(params), capabilities)
 	if len(mentioned) > 0 {
-		mcpTools, _ := r.mcpRuntimeInputsForServiceWithRequired(threadID, cfg, r.mcpServiceForThread(threadID, cfg), r.requiredMCPServersForTurn(threadID, cfg, params))
+		mcpTools, _ := r.mcpRuntimeInputsForServiceWithRequirements(threadID, cfg, r.mcpServiceForThread(threadID, cfg), r.requiredMCPServersForTurn(threadID, cfg, params), r.requiredPluginsForTurn(threadID, cfg, params))
 		appsByID := r.appsForExplicitMentions(threadID, cfg)
 		for _, text := range plugin.BuildPluginInjections(
 			mentioned,

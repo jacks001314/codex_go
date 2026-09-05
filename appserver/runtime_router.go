@@ -11441,7 +11441,8 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	disableWaitAgent := cfg != nil && !cfg.WaitAgentEnabled()
 	mcpService := r.mcpServiceForThread(threadID, cfg)
 	requiredMCPServers := r.requiredMCPServersForTurn(threadID, cfg, params)
-	candidates, mcpTools, mcpConnectors, err := r.prepareTurnToolInputs(ctx, threadID, cfg, mcpService, requiredMCPServers)
+	requiredPlugins := r.requiredPluginsForTurn(threadID, cfg, params)
+	candidates, mcpTools, mcpConnectors, err := r.prepareTurnToolInputs(ctx, threadID, cfg, mcpService, requiredMCPServers, requiredPlugins)
 	if err != nil {
 		return nil, err
 	}
@@ -11952,7 +11953,7 @@ type turnMCPPreparation struct {
 	connectors []mcp.RuntimeConnector
 }
 
-func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID string, cfg *config.Config, mcpService *mcp.MCPService, requiredMCPServers []string) ([]plugin.DiscoverableInfo, []mcp.RuntimeToolInfo, []mcp.RuntimeConnector, error) {
+func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID string, cfg *config.Config, mcpService *mcp.MCPService, requiredMCPServers []string, requiredPlugins []string) ([]plugin.DiscoverableInfo, []mcp.RuntimeToolInfo, []mcp.RuntimeConnector, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -11971,7 +11972,7 @@ func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID stri
 		recommendations <- candidates
 	}()
 	go func() {
-		tools, connectors := r.mcpRuntimeInputsForServiceWithRequired(threadID, cfg, mcpService, requiredMCPServers)
+		tools, connectors := r.mcpRuntimeInputsForServiceWithRequirements(threadID, cfg, mcpService, requiredMCPServers, requiredPlugins)
 		mcpPrepared <- turnMCPPreparation{tools: tools, connectors: connectors}
 	}()
 
@@ -12708,6 +12709,10 @@ func (r *RuntimeRouter) mcpRuntimeInputsForService(threadID string, cfg *config.
 }
 
 func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequired(threadID string, cfg *config.Config, service *mcp.MCPService, requiredServers []string) ([]mcp.RuntimeToolInfo, []mcp.RuntimeConnector) {
+	return r.mcpRuntimeInputsForServiceWithRequirements(threadID, cfg, service, requiredServers, nil)
+}
+
+func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequirements(threadID string, cfg *config.Config, service *mcp.MCPService, requiredServers []string, requiredPlugins []string) ([]mcp.RuntimeToolInfo, []mcp.RuntimeConnector) {
 	if r == nil || service == nil {
 		return nil, nil
 	}
@@ -12721,6 +12726,7 @@ func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequired(threadID string, 
 		ThreadID:             stringPtrIfNotEmpty(strings.TrimSpace(threadID)),
 		Detail:               &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
 		RequiredServers:      append([]string(nil), requiredServers...),
+		RequiredPlugins:      append([]string(nil), requiredPlugins...),
 		NonBlockingOptional:  true,
 		OptionalStartupGrace: optionalStartupGrace,
 	})
@@ -12793,6 +12799,31 @@ func (r *RuntimeRouter) requiredMCPServersForTurn(threadID string, cfg *config.C
 	out := make([]string, 0, len(required))
 	for name := range required {
 		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// requiredPluginsForTurn returns the exact plugin IDs explicitly mentioned in
+// the turn input. These IDs are resolved against selected-plugin MCP servers
+// during catalog capture so a user-mentioned plugin finishes startup even when
+// its server names are not yet known from the loaded plugin capabilities.
+func (r *RuntimeRouter) requiredPluginsForTurn(threadID string, cfg *config.Config, params *turn.TurnStartParams) []string {
+	if r == nil || r.services.Plugins == nil {
+		return nil
+	}
+	if params == nil {
+		return nil
+	}
+	mentioned := plugin.CollectExplicitPluginIDs(pluginUserInputFromTurn(params))
+	if len(mentioned) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(mentioned))
+	for id := range mentioned {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
 	}
 	sort.Strings(out)
 	return out

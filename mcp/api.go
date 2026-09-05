@@ -166,6 +166,7 @@ type MCPListServerStatusParams struct {
 	// Turn-scoped catalog capture can stop waiting for optional startup after a
 	// shared grace period. Management RPCs leave NonBlockingOptional false.
 	RequiredServers      []string      `json:"-"`
+	RequiredPlugins      []string      `json:"-"`
 	NonBlockingOptional  bool          `json:"-"`
 	OptionalStartupGrace time.Duration `json:"-"`
 }
@@ -245,6 +246,10 @@ func (t MCPToolInfo) MarshalJSON() ([]byte, error) {
 
 type MCPServerStatus struct {
 	Name string `json:"name,omitempty"`
+	// source records the catalog registration source used to decide whether a
+	// plugin-contributed server is a selected-plugin server. It is intentionally
+	// internal: the wire status uses PluginID for plugin attribution instead.
+	source CatalogSource
 	// RuntimeStatus reports the current thread-runtime connection state; nil
 	// when unavailable or the active configuration changed (Rust #40068).
 	RuntimeStatus *MCPConnectionStatus `json:"runtimeStatus,omitempty"`
@@ -716,6 +721,7 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 				ServerInfo: &info,
 				State:      MCPServerReady,
 				AuthStatus: authStatus,
+				source:     SourceFromRegistration(&registration),
 			}
 		}
 	}
@@ -1266,10 +1272,16 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 	resultCh := make(chan mcpInventoryStatusResult, len(servers))
 	pending := make(map[int]string, len(servers))
 	required := map[string]bool{}
+	requiredPlugins := map[string]bool{}
 	if params != nil {
 		for _, name := range params.RequiredServers {
 			if name = strings.TrimSpace(name); name != "" {
 				required[name] = true
+			}
+		}
+		for _, pluginID := range params.RequiredPlugins {
+			if pluginID = strings.TrimSpace(pluginID); pluginID != "" {
+				requiredPlugins[pluginID] = true
 			}
 		}
 	}
@@ -1295,7 +1307,9 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		}
 		notifyMCPStartupObserver(observer, name, MCPServerStarting, nil)
 		pending[i] = name
-		if config.Required || required[name] || (IsCodexAppsMCPServerName(name) && len(servers[i].Tools) == 0) {
+		selectedPluginRequired := servers[i].source == CatalogSourceSelectedPlugin &&
+			servers[i].PluginID != nil && requiredPlugins[*servers[i].PluginID]
+		if config.Required || required[name] || selectedPluginRequired || (IsCodexAppsMCPServerName(name) && len(servers[i].Tools) == 0) {
 			requiredIndexes[i] = true
 		}
 		s.markServerStartupStarted(name)
@@ -2502,6 +2516,7 @@ func cancelOAuthLogins(logins []*OAuthLoginServer) {
 func cloneMCPServerStatus(status MCPServerStatus) MCPServerStatus {
 	status.RuntimeStatus = cloneMCPConnectionStatus(status.RuntimeStatus)
 	status.PluginID = cloneStringPtr(status.PluginID)
+	status.source = status.source
 	status.FailureReason = cloneStringPtr(status.FailureReason)
 	status.Server.Args = append([]string(nil), status.Server.Args...)
 	status.Server.Icons = append([]any(nil), status.Server.Icons...)

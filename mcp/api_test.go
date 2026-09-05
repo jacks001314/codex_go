@@ -446,6 +446,62 @@ func TestListStatusCheckedExplicitRequiredServerWaitsPastGrace(t *testing.T) {
 	}
 }
 
+func TestListStatusCheckedRequiredPluginWaitsPastGrace(t *testing.T) {
+	if os.Getenv("MCP_CONCURRENT_FAST_HELPER") == "1" {
+		runMCPHelperServer()
+		return
+	}
+	releaseFile := t.TempDir() + string(os.PathSeparator) + "release-required-plugin"
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable() error = %v", err)
+	}
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"weather": {
+			Source:   "selected_plugin",
+			PluginID: "acme/weather",
+			Config: ServerConfig{
+				Command: executable,
+				Args:    []string{"-test.run=TestListStatusCheckedRequiredPluginWaitsPastGrace", "--"},
+				Env: map[string]string{
+					"MCP_CONCURRENT_FAST_HELPER":   "1",
+					"MCP_OPTIONAL_STARTUP_BARRIER": "1",
+					"MCP_CONCURRENT_RELEASE_FILE":  releaseFile,
+				},
+				Enabled: true, StartupTimeout: 5 * time.Second,
+			},
+		},
+	}})
+	defer service.Close()
+
+	done := make(chan *MCPListServerStatusResponse, 1)
+	go func() {
+		response, _ := service.ListStatusChecked(&MCPListServerStatusParams{
+			Detail:               &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly},
+			RequiredPlugins:      []string{"acme/weather"},
+			NonBlockingOptional:  true,
+			OptionalStartupGrace: 25 * time.Millisecond,
+		})
+		done <- response
+	}()
+	select {
+	case <-done:
+		t.Fatal("required plugin MCP returned before startup completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := os.WriteFile(releaseFile, []byte("ready"), 0o600); err != nil {
+		t.Fatalf("release required plugin helper: %v", err)
+	}
+	select {
+	case response := <-done:
+		if response == nil || len(response.Data) != 1 || len(response.Data[0].Tools) != 1 {
+			t.Fatalf("required plugin MCP response = %#v", response)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("required plugin MCP did not finish after release")
+	}
+}
+
 func TestRequiredCachedMCPServerStaysDormantForSubagentCatalog(t *testing.T) {
 	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
 		"required-cached": {Config: ServerConfig{
