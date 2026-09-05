@@ -49,6 +49,19 @@ func TestPluginReconcileSignatureDetectsInstallPolicyChange(t *testing.T) {
 	}
 }
 
+func TestPluginReconcileSignatureDetectsDisabledReasonChange(t *testing.T) {
+	base := plugin.PluginDetail{Summary: plugin.PluginSummary{ID: "acme/weather", Enabled: true, DisabledReason: pluginDisabledReasonPtr(plugin.PluginDisabledByAdminReason)}}
+	next := base
+	next.Summary.DisabledReason = pluginDisabledReasonPtr(plugin.PluginPlanNotEligibleReason)
+	if pluginReconcileSignature(base) == pluginReconcileSignature(next) {
+		t.Fatal("pluginReconcileSignature should differ when disabled reason changes")
+	}
+}
+
+func pluginDisabledReasonPtr(value plugin.PluginDisabledReason) *plugin.PluginDisabledReason {
+	return &value
+}
+
 func TestRemoteInstalledPluginSyncFailuresSnapshotAndClear(t *testing.T) {
 	clearRemoteInstalledPluginSyncFailures()
 	recordRemoteInstalledPluginMaterializationFailure("acme/weather")
