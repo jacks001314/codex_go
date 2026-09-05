@@ -85,6 +85,15 @@ func TestPluginReconcileSignatureDetectsDisplayNameTagChange(t *testing.T) {
 	}
 }
 
+func TestPluginReconcileSignatureDetectsEnablementChange(t *testing.T) {
+	base := plugin.PluginDetail{Summary: plugin.PluginSummary{ID: "acme/weather", Enabled: true}}
+	next := base
+	next.Summary.Enabled = false
+	if pluginReconcileSignature(base) == pluginReconcileSignature(next) {
+		t.Fatal("pluginReconcileSignature should differ when enablement changes")
+	}
+}
+
 func pluginDisabledReasonPtr(value plugin.PluginDisabledReason) *plugin.PluginDisabledReason {
 	return &value
 }
