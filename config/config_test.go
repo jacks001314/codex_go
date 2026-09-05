@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	featureflags "codex_go/features"
 )
 
 func TestResumeCWDModeAndResolution(t *testing.T) {
@@ -775,6 +777,16 @@ func TestStrictConfigAcceptsRecentFeatureKeys(t *testing.T) {
 		"tool_registry": map[string]any{"turn_metadata_includes_tool_info": true},
 	}}); err != nil {
 		t.Fatalf("removed/legacy/nested feature keys should be accepted in strict config: %v", err)
+	}
+}
+
+func TestStrictConfigAcceptsEveryRegistryFeatureKey(t *testing.T) {
+	features := map[string]any{}
+	for _, spec := range featureflags.Sorted() {
+		features[spec.Key] = true
+	}
+	if err := validateKnownTopLevelConfigFields(map[string]any{"features": features}); err != nil {
+		t.Fatalf("every registry feature key should be accepted in strict config: %v", err)
 	}
 }
 
