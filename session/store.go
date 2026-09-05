@@ -221,6 +221,7 @@ type Metadata struct {
 	Source                     string                      `json:"source,omitempty"`
 	ThreadSource               string                      `json:"thread_source,omitempty"`
 	Originator                 string                      `json:"originator,omitempty"`
+	DaybreakEnabled            *bool                       `json:"daybreak_enabled,omitempty"`
 	HistoryMode                string                      `json:"history_mode,omitempty"`
 	MemoryMode                 string                      `json:"memory_mode,omitempty"`
 	Git                        map[string]string           `json:"git,omitempty"`
@@ -332,6 +333,7 @@ type MetadataPatch struct {
 	Source                  *string
 	ThreadSource            *string
 	Originator              *string
+	DaybreakEnabled         *bool
 	HistoryMode             *string
 	MemoryMode              *string
 	Git                     map[string]string

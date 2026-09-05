@@ -707,6 +707,7 @@ type Thread struct {
 	AgentRole            *string             `json:"agentRole"`
 	GitInfo              *GitInfo            `json:"gitInfo"`
 	Name                 *string             `json:"name"`
+	DaybreakEnabled      *bool               `json:"daybreakEnabled"`
 	Turns                []Turn              `json:"turns"`
 }
 
@@ -749,6 +750,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		AgentRole            *string             `json:"agentRole"`
 		GitInfo              *GitInfo            `json:"gitInfo"`
 		Name                 *string             `json:"name"`
+		DaybreakEnabled      *bool               `json:"daybreakEnabled"`
 		Turns                []Turn              `json:"turns"`
 	}{
 		ID:                   t.ID,
@@ -780,6 +782,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		AgentRole:            t.AgentRole,
 		GitInfo:              t.GitInfo,
 		Name:                 t.Name,
+		DaybreakEnabled:      t.DaybreakEnabled,
 		Turns:                turns,
 	})
 }
@@ -2158,8 +2161,9 @@ func (p *ThreadApproveGuardianDeniedActionParams) Validate() error {
 type ThreadApproveGuardianDeniedActionResponse struct{}
 
 type ThreadMetadataUpdateParams struct {
-	ThreadID string                      `json:"threadId"`
-	GitInfo  *ThreadMetadataGitInfoPatch `json:"gitInfo,omitempty"`
+	ThreadID        string                      `json:"threadId"`
+	GitInfo         *ThreadMetadataGitInfoPatch `json:"gitInfo,omitempty"`
+	DaybreakEnabled *bool                       `json:"daybreakEnabled,omitempty"`
 	// ProjectID is the project assignment as a raw JSON value: absent (nil)
 	// means no change, JSON null means clear, and a JSON string sets the
 	// project. Mirrors Rust Option<StoreClearableField<String>> (#38940); a
@@ -3119,6 +3123,7 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		AgentRole:        stringPtrIfNotEmpty(record.Metadata.AgentRole),
 		GitInfo:          gitInfoFromMap(record.Metadata.Git),
 		Name:             stringPtrIfNotEmpty(record.Title),
+		DaybreakEnabled:  record.Metadata.DaybreakEnabled,
 		Turns:            []Turn{},
 	}
 	if includeTurns {
@@ -5252,12 +5257,15 @@ func MetadataPatchToSessionWithExisting(params *ThreadMetadataUpdateParams, exis
 	patch := session.MetadataPatch{}
 	if params.GitInfo == nil {
 		// Rust #38940: project_id alone is a valid metadata update (the Rust
-		// guard is `git_info.is_none() && project_id.is_none()`).
-		if !projectChanged {
+		// guard is `git_info.is_none() && project_id.is_none()`). Daybreak
+		// alone is also a valid metadata update (#42854).
+		if !projectChanged && params.DaybreakEnabled == nil {
 			return session.MetadataPatch{}, jsonRPCInvalidRequest("thread metadata update must include at least one field")
 		}
+		patch.DaybreakEnabled = cloneOptionalBool(params.DaybreakEnabled)
 		return patch, nil
 	}
+	patch.DaybreakEnabled = cloneOptionalBool(params.DaybreakEnabled)
 	if !params.GitInfo.SHA.Set && !params.GitInfo.Branch.Set && !params.GitInfo.OriginURL.Set {
 		return session.MetadataPatch{}, jsonRPCInvalidRequest("gitInfo must include at least one field")
 	}
@@ -5284,6 +5292,14 @@ func MetadataPatchToSessionWithExisting(params *ThreadMetadataUpdateParams, exis
 		patch.Git["origin_url"] = value
 	}
 	return patch, nil
+}
+
+func cloneOptionalBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 // MetadataProjectUpdate decodes the thread metadata projectId raw value:

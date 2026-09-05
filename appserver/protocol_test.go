@@ -574,3 +574,36 @@ func TestThreadEnvironmentsFromRecord(t *testing.T) {
 		t.Fatalf("absent thread JSON environments = %#v, present=%v", value, present)
 	}
 }
+
+func TestThreadDaybreakEnabledSurfaceAndPatch(t *testing.T) {
+	enabled := true
+	record := &session.Record{
+		ID:        "thread-daybreak",
+		SessionID: "thread-daybreak",
+		Metadata:  session.Metadata{CWD: t.TempDir(), ModelProvider: "openai", DaybreakEnabled: &enabled},
+	}
+	thread := BuildThread(record, "", false)
+	if thread == nil || thread.DaybreakEnabled == nil || !*thread.DaybreakEnabled {
+		t.Fatalf("thread daybreakEnabled = %#v", thread)
+	}
+	data, err := json.Marshal(thread)
+	if err != nil {
+		t.Fatalf("marshal thread: %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		t.Fatalf("unmarshal thread: %v", err)
+	}
+	if encoded["daybreakEnabled"] != true {
+		t.Fatalf("thread JSON daybreakEnabled = %s", data)
+	}
+
+	disabled := false
+	patch, err := MetadataPatchToSession(&ThreadMetadataUpdateParams{ThreadID: "thread-daybreak", DaybreakEnabled: &disabled})
+	if err != nil {
+		t.Fatalf("MetadataPatchToSession: %v", err)
+	}
+	if patch.DaybreakEnabled == nil || *patch.DaybreakEnabled {
+		t.Fatalf("daybreak patch = %#v", patch.DaybreakEnabled)
+	}
+}
