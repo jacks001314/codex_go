@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -10,12 +9,9 @@ import (
 )
 
 func TestInteractiveStartAgentsDaemonPlatformGate(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
 	err := interactiveStartAgentsDaemon()
-	if runtime.GOOS == "windows" {
-		if err == nil || !strings.Contains(err.Error(), "unsupported on Windows") {
-			t.Fatalf("Windows start-daemon error = %v, want unsupported message", err)
-		}
-	} else if err != nil {
+	if err == nil || !strings.Contains(err.Error(), "managed standalone Codex install not found") {
 		t.Fatalf("non-Windows start-daemon error = %v", err)
 	}
 }

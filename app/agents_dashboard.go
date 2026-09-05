@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -277,9 +276,9 @@ func (s *remoteAgentsDashboardSource) Close() {
 // Local (session-store) source
 // ---------------------------------------------------------------------------
 
-// localAgentsDashboardSource reads the local session store. It is the Windows
-// / no-daemon fallback: listing and renaming work, while dispatch and stop
-// require a running background app server (Unix) or --remote.
+// localAgentsDashboardSource reads the local session store. It is the
+// no-daemon fallback: listing and renaming work, while dispatch and stop
+// require a running background app server or --remote.
 type localAgentsDashboardSource struct {
 	store *session.Store
 }
@@ -322,17 +321,15 @@ func (s *localAgentsDashboardSource) Rename(ctx context.Context, threadID, name 
 func (s *localAgentsDashboardSource) Close() {}
 
 // newAgentsDashboardSourceForLocal selects the local dashboard data source:
-// on Unix, the shared background app server is started (Rust #39114) and used
-// through its control socket; elsewhere (or when the daemon is unavailable)
-// the session store fallback is used.
+// the shared background app server is started when possible (Rust #39114) and
+// used through its control socket; when the daemon is unavailable the session
+// store fallback is used.
 func newAgentsDashboardSourceForLocal(ctx context.Context) (agentsDashboardSource, error) {
-	if runtime.GOOS != "windows" {
-		runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
-		if _, err := runner.Run(appserverdaemon.LifecycleStart); err == nil {
-			endpoint := appserverdaemon.NewUnixSocketEndpoint(appserver.AppServerControlSocketPath(auth.DefaultCodexHome()))
-			if client, err := openRemoteSessionClient(ctx, endpoint); err == nil {
-				return newRemoteAgentsDashboardSource(client, ""), nil
-			}
+	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
+	if _, err := runner.Run(appserverdaemon.LifecycleStart); err == nil {
+		endpoint := appserverdaemon.NewUnixSocketEndpoint(appserver.AppServerControlSocketPath(auth.DefaultCodexHome()))
+		if client, err := openRemoteSessionClient(ctx, endpoint); err == nil {
+			return newRemoteAgentsDashboardSource(client, ""), nil
 		}
 	}
 	return &localAgentsDashboardSource{store: newAgentsDashboardStore()}, nil

@@ -1334,9 +1334,6 @@ func uint64Value(value *uint64) uint64 {
 }
 
 func runAppServerDaemon(ctx context.Context, opts cli.AppServerDaemonOptions, stdout io.Writer) error {
-	if err := appserverdaemon.EnsureSupportedPlatform(); err != nil {
-		return err
-	}
 	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
 	var output any
 	var err error

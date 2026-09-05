@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -23,15 +22,6 @@ func TestAppServerDaemonPlatformBoundary(t *testing.T) {
 
 	var stdout bytes.Buffer
 	err := Run(context.Background(), []string{"app-server", "daemon", "bootstrap", "--remote-control"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
-	if runtime.GOOS == "windows" {
-		if err == nil || err.Error() != "codex app-server daemon lifecycle is only supported on Unix platforms" {
-			t.Fatalf("bootstrap error = %v", err)
-		}
-		if stdout.Len() != 0 {
-			t.Fatalf("bootstrap stdout = %q, want empty", stdout.String())
-		}
-		return
-	}
 	if err == nil || !strings.Contains(err.Error(), "managed standalone Codex install not found") {
 		t.Fatalf("bootstrap error = %v", err)
 	}

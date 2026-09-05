@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
-	"runtime"
 
 	"codex_go/appserverdaemon"
 	"codex_go/auth"
@@ -59,12 +57,9 @@ func interactiveRemoteAgentsOverviewRename(ctx context.Context, endpoint *appser
 }
 
 // interactiveStartAgentsDaemon starts the local background app server (Rust
-// start_agents_daemon): on Unix it runs `codex app-server daemon start`
-// through the daemon lifecycle runner; Windows has no local daemon.
+// start_agents_daemon): it runs `codex app-server daemon start` through the
+// daemon lifecycle runner, including the Windows pid-managed daemon.
 func interactiveStartAgentsDaemon() error {
-	if runtime.GOOS == "windows" {
-		return errors.New("the background app server daemon is unsupported on Windows; connect with `codex agents --remote`")
-	}
 	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
 	_, err := runner.Run(appserverdaemon.LifecycleStart)
 	return err
