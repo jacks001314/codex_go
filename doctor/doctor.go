@@ -141,11 +141,11 @@ type DoctorIssue struct {
 }
 
 type Options struct {
-	JSON          bool
-	Summary       bool
-	All           bool
-	NoColor       bool
-	ASCII         bool
+	JSON    bool
+	Summary bool
+	All     bool
+	NoColor bool
+	ASCII   bool
 	// Feedback bounds each database integrity scan when collecting a feedback
 	// attachment (Rust #40688): an incomplete clean scan becomes a warning
 	// rather than a failure.
@@ -2763,8 +2763,20 @@ func applyWindowsSandboxDoctorDiagnostics(check *DoctorCheck, cfg *config.Config
 	}
 	check = check.Detail("windows sandbox level: " + level)
 	restrictions := "inactive"
-	if resolution, resolveErr := cfg.ResolveSandboxPermissionProfile("", cwd); resolveErr == nil && resolution != nil && resolution.Profile != nil && resolution.Profile.HasDenyReadEntries() {
-		restrictions = "active"
+	if resolution, resolveErr := cfg.ResolveSandboxPermissionProfile("", cwd); resolveErr == nil && resolution != nil && resolution.Profile != nil {
+		deniedReads := len(resolution.Profile.DeniedReadEntries)
+		if deniedReads > 0 {
+			restrictions = "active"
+			globRules := 0
+			for _, entry := range resolution.Profile.DeniedReadEntries {
+				if entry.Path.Type == "glob_pattern" {
+					globRules++
+				}
+			}
+			check = check.
+				Detail(fmt.Sprintf("denied-read rules: %d", deniedReads)).
+				Detail(fmt.Sprintf("denied-read glob rules: %d", globRules))
+		}
 	}
 	check = check.Detail("denied-read restrictions: " + restrictions)
 	if report, readErr := windowssandbox.ReadSetupErrorReport(codexHome); readErr == nil && report != nil {
