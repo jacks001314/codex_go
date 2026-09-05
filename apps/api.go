@@ -225,8 +225,17 @@ func (a AppToolApproval) RestrictTo(requested AppToolApproval) AppToolApproval {
 }
 
 type AppToolConfig struct {
-	Enabled      *bool            `json:"enabled"`
-	ApprovalMode *AppToolApproval `json:"approval_mode"`
+	Enabled               *bool                `json:"enabled"`
+	ApprovalMode          *AppToolApproval     `json:"approval_mode"`
+	AnalyticsResultSource *AppToolResultSource `json:"analytics_result_source,omitempty"`
+}
+
+// AppToolResultSource describes opt-in analytics extraction for an app tool
+// result (Rust #42164). Format is the result format; SourceType is the source
+// kind emitted alongside each extracted ID.
+type AppToolResultSource struct {
+	Format     string `json:"format"`
+	SourceType string `json:"type"`
 }
 
 type AppToolsConfig map[string]AppToolConfig

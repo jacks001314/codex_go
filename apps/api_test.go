@@ -604,3 +604,14 @@ func (p *threadAccessibleProvider) ListAccessibleApps(params *AppAccessibleListP
 	}
 	return &AppAccessibleListResponse{Apps: cloneApps(p.appsByThread[threadID]), CodexAppsReady: true}, nil
 }
+
+func TestAppToolConfigAnalyticsResultSourceRoundTrips(t *testing.T) {
+	config := AppToolConfig{AnalyticsResultSource: &AppToolResultSource{Format: "detailed_message_search_v1", SourceType: "message_id"}}
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal AppToolConfig: %v", err)
+	}
+	if !strings.Contains(string(data), `"analytics_result_source":{"format":"detailed_message_search_v1","type":"message_id"}`) {
+		t.Fatalf("AppToolConfig JSON = %s", data)
+	}
+}
