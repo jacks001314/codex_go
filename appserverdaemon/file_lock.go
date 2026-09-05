@@ -18,5 +18,10 @@ func openLockFile(path string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open lock file %s: %w", path, err)
 	}
+	// Windows LockFileEx cannot lock a zero-length range on an empty file, so
+	// every lock file carries one byte regardless of the platform.
+	if info, statErr := file.Stat(); statErr == nil && info.Size() == 0 {
+		_, _ = file.WriteString("\n")
+	}
 	return file, nil
 }
