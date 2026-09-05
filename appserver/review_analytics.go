@@ -227,6 +227,76 @@ func (r *RuntimeRouter) emitGuardianReviewCompletedAnalytics(ctx context.Context
 		StartedAtMS:   notification.StartedAtMS,
 		CompletedAtMS: notification.CompletedAtMS,
 	})
+	r.emitGuardianV2ClassificationAnalytics(ctx, notification, result)
+}
+
+func (r *RuntimeRouter) emitGuardianV2ClassificationAnalytics(ctx context.Context, notification *ItemGuardianApprovalReviewCompletedNotification, result userReviewResult) {
+	if r == nil || r.services.Analytics == nil || notification == nil {
+		return
+	}
+	active := r.activeRuntimeTurnStateSnapshot(notification.ThreadID, notification.TurnID)
+	if active == nil || active.RunConfig == nil || !active.RunConfig.GuardianV2Enabled {
+		return
+	}
+	sink, ok := r.services.Analytics.(telemetry.GuardianV2EventSink)
+	if !ok {
+		return
+	}
+	client, ok := r.analyticsAppServerClient(active.ConnectionID)
+	if !ok {
+		return
+	}
+	if record := r.threadRecordForAnalytics(notification.ThreadID); record != nil {
+		if originator := strings.TrimSpace(record.Metadata.Originator); originator != "" {
+			client.ProductClientID = originator
+		}
+	}
+	lineage := r.responsesMetadataLineage(notification.ThreadID)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var risk *string
+	if notification.Review.RiskLevel != nil {
+		value := string(*notification.Review.RiskLevel)
+		risk = &value
+	}
+	event := telemetry.NewGuardianV2ClassificationEvent(telemetry.GuardianV2EventParams{
+		SessionID:       firstNonEmpty(lineage.SessionID, notification.ThreadID),
+		AppServerClient: client,
+		Runtime:         telemetry.CurrentRuntimeMetadata(),
+		ThreadSource:    stringPtrIfNotEmpty(lineage.ThreadSource),
+		SubagentSource:  stringPtrIfNotEmpty(lineage.SubagentKind),
+		ParentThreadID:  stringPtrIfNotEmpty(lineage.ParentThreadID),
+		GuardianV2Event: telemetry.GuardianV2Event{
+			ThreadID:     strings.TrimSpace(notification.ThreadID),
+			TurnID:       strings.TrimSpace(notification.TurnID),
+			ItemID:       notification.TargetItemID,
+			Model:        stringPtrIfNotEmpty(active.RunConfig.Model),
+			OccurredAtMS: notification.CompletedAtMS,
+			Outcome:      guardianV2AnalyticsOutcome(result.Status),
+			RiskLevel:    risk,
+			DurationMS:   guardianV2DurationMS(notification.StartedAtMS, notification.CompletedAtMS),
+		},
+	})
+	sink.TrackCodexGuardianV2Event(ctx, event)
+}
+
+func guardianV2AnalyticsOutcome(status string) string {
+	switch status {
+	case telemetry.ReviewStatusApproved:
+		return "allow"
+	case telemetry.ReviewStatusDenied:
+		return "deny"
+	default:
+		return "aborted"
+	}
+}
+
+func guardianV2DurationMS(startedAtMS, completedAtMS uint64) uint64 {
+	if completedAtMS < startedAtMS {
+		return 0
+	}
+	return completedAtMS - startedAtMS
 }
 
 func commandExecutionReviewSubject(params *CommandExecutionRequestApprovalParams) (string, string) {
