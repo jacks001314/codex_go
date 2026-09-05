@@ -77,3 +77,13 @@ func TestMCPServerStatusFailureReasonWire(t *testing.T) {
 func fmtWrap(err error, status *mcpHTTPStatusError) error {
 	return errors.Join(err, status)
 }
+
+func TestMCPHTTPStatusErrorCombinedWWWAuthenticate(t *testing.T) {
+	err := &mcpHTTPStatusError{StatusCode: 401, WWWAuthenticate: []string{`Bearer realm="a"`, `Basic realm="b"`}}
+	if got := err.CombinedWWWAuthenticate(); got != `Bearer realm="a", Basic realm="b"` {
+		t.Fatalf("CombinedWWWAuthenticate = %q", got)
+	}
+	if got := (&mcpHTTPStatusError{StatusCode: 401}).CombinedWWWAuthenticate(); got != "" {
+		t.Fatalf("empty challenges = %q", got)
+	}
+}

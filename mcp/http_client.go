@@ -62,6 +62,10 @@ type mcpHTTPStatusError struct {
 	Status     string
 	StatusCode int
 	Detail     string
+	// WWWAuthenticate carries the challenge header values returned with a 401
+	// Unauthorized response, so callers can surface interactive login hints
+	// (Rust #42552).
+	WWWAuthenticate []string
 }
 
 func (e *mcpHTTPStatusError) Error() string {
@@ -76,6 +80,13 @@ func (e *mcpHTTPStatusError) Error() string {
 
 func (e *mcpHTTPStatusError) IsStatus(statusCode int) bool {
 	return e != nil && e.StatusCode == statusCode
+}
+
+func (e *mcpHTTPStatusError) CombinedWWWAuthenticate() string {
+	if e == nil {
+		return ""
+	}
+	return strings.Join(e.WWWAuthenticate, ", ")
 }
 
 type httpClient struct {
@@ -902,7 +913,7 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 			}
 		}
 		detail := strings.TrimSpace(string(body))
-		return nil, 0, &mcpHTTPStatusError{Method: method, Status: response.Status, StatusCode: response.StatusCode, Detail: detail}
+		return nil, 0, &mcpHTTPStatusError{Method: method, Status: response.Status, StatusCode: response.StatusCode, Detail: detail, WWWAuthenticate: response.Header.Values("WWW-Authenticate")}
 	}
 	return response, id, nil
 }
