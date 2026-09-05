@@ -6180,6 +6180,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			SubagentKind:               lineage.SubagentKind,
 			ThreadSource:               lineage.ThreadSource,
 			TurnTrigger:                params.TurnTrigger,
+			CodexVersion:               appServerVersion(),
 			SandboxMode:                permissionProfilePolicyTag(permissionProfile, cwd),
 			AgentName:                  r.agentNameForThread(threadID),
 			AutoReviewEnabled:          autoReviewEnabledForTurn(cfg, params),

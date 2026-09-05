@@ -115,6 +115,19 @@ func TestClientReservedMetadataKeysIncludeNodeReplPolicy(t *testing.T) {
 	}
 }
 
+func TestClientMetadataIncludesCodexVersionInTurnMetadata(t *testing.T) {
+	metadata := NewClientMetadata("installation", "session", "thread", "window")
+	metadata.RequestKind = ClientRequestTurn
+	metadata.CodexVersion = "1.2.3"
+	value := metadata.TurnMetadataValue()
+	if value["codex_version"] != "1.2.3" {
+		t.Fatalf("codex_version = %#v", value["codex_version"])
+	}
+	if !ClientReservedMetadataKeys()["codex_version"] {
+		t.Fatal("codex_version should be reserved metadata")
+	}
+}
+
 func TestClientCompatibilityHeadersOmitUnboundedCodeModeToolNames(t *testing.T) {
 	value := map[string]any{
 		"thread_id": "thread",

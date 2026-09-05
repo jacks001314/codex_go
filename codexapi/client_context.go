@@ -89,17 +89,17 @@ type ClientWorkspaceMetadata struct {
 }
 
 type ClientMetadata struct {
-	InstallationID string
-	SessionID      string
-	ThreadID       string
-	TurnID         string
-	WindowID       string
+	InstallationID  string
+	SessionID       string
+	ThreadID        string
+	TurnID          string
+	WindowID        string
 	ContextWindowID string
 	// WindowNumber is the zero-based number of the current context window,
 	// included in Responses turn metadata (Rust #40987).
 	WindowNumber *uint64
-	RequestKind    ClientRequestKind
-	Compaction     *ClientCompactionMetadata
+	RequestKind  ClientRequestKind
+	Compaction   *ClientCompactionMetadata
 	// AgentName is the canonical agent path for sub-agent turns (Rust #38483).
 	// It is emitted in turn metadata only when set; callers fall back to
 	// "/root" like Rust.
@@ -112,6 +112,7 @@ type ClientMetadata struct {
 	SubagentKind               string
 	ThreadSource               string
 	TurnTrigger                string
+	CodexVersion               string
 	Sandbox                    string
 	SandboxMode                string
 	AutoReviewEnabled          *bool
@@ -195,6 +196,9 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	}
 	if m.TurnTrigger != "" {
 		value["turn_trigger"] = m.TurnTrigger
+	}
+	if m.CodexVersion != "" {
+		value["codex_version"] = m.CodexVersion
 	}
 	if m.Sandbox != "" {
 		value["sandbox"] = m.Sandbox
@@ -322,7 +326,7 @@ func ClientReservedMetadataKeys() map[string]bool {
 		strings.ToLower(ClientOpenAISubagentHeader), "request_kind", "compaction",
 		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id", "parent_turn_id", RootTurnIDKey,
 		"subagent_kind", "thread_source", "sandbox", "sandbox_mode", "workspaces",
-		"turn_trigger",
+		"turn_trigger", "codex_version",
 		AutoReviewEnabledKey, NodeReplAutoReviewRequiredKey, NodeReplDisabledKey, CodeModeToolNamesKey,
 	}
 	out := make(map[string]bool, len(keys))
