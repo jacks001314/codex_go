@@ -49,7 +49,9 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 		width = defaultWidth
 	}
 	text = UnwrapMarkdownFences(text)
+	text, citationLinks := rewriteFileCitations(text, cwd)
 	text, localLinks, webLinks := rewriteLinksWithInfo(text, cwd)
+	localLinks = append(citationLinks, localLinks...)
 	urlPlaceholders, text := protectLongBareURLs(text, width)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
