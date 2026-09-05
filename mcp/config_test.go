@@ -638,3 +638,11 @@ func approvalParamNames(params []RenderedApprovalParam) []string {
 	}
 	return out
 }
+
+func TestServerConfigOAuthRefreshModeRoundTrips(t *testing.T) {
+	config := &ServerConfig{URL: "https://example.test/mcp", OAuthRefreshMode: McpOAuthRefreshCoordinated}
+	cloned := cloneServerConfig(config)
+	if cloned.OAuthRefreshMode != McpOAuthRefreshCoordinated {
+		t.Fatalf("cloned OAuthRefreshMode = %q", cloned.OAuthRefreshMode)
+	}
+}

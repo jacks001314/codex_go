@@ -25,6 +25,15 @@ const (
 	connectorNameTemplateVar           = "{connector_name}"
 )
 
+// McpOAuthRefreshMode selects the owner of MCP OAuth refresh and credential
+// persistence, pinned for the lifetime of a connection (Rust #42128).
+type McpOAuthRefreshMode string
+
+const (
+	McpOAuthRefreshLegacy      McpOAuthRefreshMode = "legacy"
+	McpOAuthRefreshCoordinated McpOAuthRefreshMode = "coordinated"
+)
+
 type ServerConfig struct {
 	Command                  string                            `json:"command,omitempty"`
 	Args                     []string                          `json:"args,omitempty"`
@@ -43,6 +52,7 @@ type ServerConfig struct {
 	Scopes                   []string                          `json:"scopes,omitempty"`
 	ScopesConfigured         bool                              `json:"-"`
 	OAuthServerName          string                            `json:"-"`
+	OAuthRefreshMode         McpOAuthRefreshMode               `json:"oauth_refresh_mode,omitempty"`
 	Auth                     string                            `json:"auth,omitempty"`
 	CodexHome                string                            `json:"-"`
 	Enabled                  bool                              `json:"enabled"`
