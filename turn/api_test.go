@@ -223,6 +223,14 @@ func TestTurnSettingsUpdateParamsSerialization(t *testing.T) {
 	if !strings.Contains(string(data), `"approvalsReviewer":"user"`) {
 		t.Fatalf("Marshal() = %s", data)
 	}
+	modelID := "gpt-5"
+	data, err = json.Marshal(&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Model: &modelID})
+	if err != nil {
+		t.Fatalf("Marshal(model) error = %v", err)
+	}
+	if !strings.Contains(string(data), `"model":"gpt-5"`) {
+		t.Fatalf("Marshal(model) = %s", data)
+	}
 }
 
 func TestTurnStartAcceptsTextAtLimitWithMentionInput(t *testing.T) {
