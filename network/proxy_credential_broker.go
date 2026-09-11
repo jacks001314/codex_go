@@ -140,6 +140,45 @@ func (b *ProxyCredentialBroker) HostRequiresMITM(host string) bool {
 	return false
 }
 
+// HostRequiresHTTPInterception mirrors Rust
+// credential_broker.rs host_protocols_for_environment's `http` bit: a
+// configured provider destination that authorizes plaintext HTTP for the
+// destination requires the tunnel to be intercepted as plaintext HTTP rather
+// than relayed opaquely (#44089).
+func (b *ProxyCredentialBroker) HostRequiresHTTPInterception(host string, port uint16) bool {
+	if b == nil {
+		return false
+	}
+	normalized := NormalizeProxyHost(host)
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if !b.enabled {
+		return false
+	}
+	matches := func(provider *ProxyCredentialProvider) bool {
+		if provider == nil {
+			return false
+		}
+		for _, destination := range provider.Destinations {
+			if destination.Scheme == "http" && destination.MatchesHost(normalized, port) {
+				return true
+			}
+		}
+		return false
+	}
+	for index := range b.credentials {
+		if matches(b.credentials[index].Provider) {
+			return true
+		}
+	}
+	for _, provider := range b.providers {
+		if matches(provider) {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *ProxyCredentialBroker) InjectRequestHeaders(host string, headers map[string][]string) {
 	b.InjectRequestHeadersForDestination("", host, 0, "", headers)
 }

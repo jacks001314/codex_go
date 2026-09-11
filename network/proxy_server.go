@@ -2,6 +2,7 @@ package network
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -17,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -544,7 +546,7 @@ func (s *ProxyServer) handleHTTPConnect(hostPort string, _ *goproxy.ProxyCtx) (*
 	if err != nil {
 		return goproxy.OkConnect, hostPort
 	}
-	mode := s.httpMITMMode(parts.Host)
+	mode := s.httpMITMMode(parts.Host, parts.Port)
 	if mode == proxySOCKS5MITMDisabled {
 		return goproxy.OkConnect, hostPort
 	}
@@ -564,13 +566,13 @@ func (s *ProxyServer) handleHTTPConnect(hostPort string, _ *goproxy.ProxyCtx) (*
 	}, hostPort
 }
 
-func (s *ProxyServer) httpMITMMode(host string) proxySOCKS5MITMMode {
+func (s *ProxyServer) httpMITMMode(host string, port uint16) proxySOCKS5MITMMode {
 	policy := s.runtimePolicy()
 	normalized := NormalizeProxyHost(host)
 	if policy.settings.Mode == ProxyModeLimited || len(policy.mitmHooks[normalized]) > 0 {
 		return proxySOCKS5MITMRequired
 	}
-	if policy.broker.HostRequiresMITM(normalized) {
+	if policy.broker.HostRequiresMITM(normalized) || policy.broker.HostRequiresHTTPInterception(normalized, port) {
 		return proxySOCKS5MITMDetectTLS
 	}
 	return proxySOCKS5MITMDisabled
@@ -586,6 +588,10 @@ func (s *ProxyServer) handleHTTPDetectTLS(_ *http.Request, client net.Conn, host
 	first, err := reader.Peek(1)
 	_ = client.SetReadDeadline(time.Time{})
 	if err != nil || first[0] != 0x16 {
+		if s.runtimePolicy().broker.HostRequiresHTTPInterception(host, port) {
+			s.handlePlaintextHTTPTunnel(client, reader, host, port)
+			return
+		}
 		s.proxyOpaqueTCP(client, reader, host, port)
 		return
 	}
@@ -607,6 +613,156 @@ func (s *ProxyServer) handleHTTPMITM(client net.Conn, host string, port uint16) 
 		return
 	}
 	_ = s.serveMITMHTTP(client, host, port)
+}
+
+const plaintextTunnelInitialReadTimeout = 250 * time.Millisecond
+
+// handlePlaintextHTTPTunnel intercepts plaintext HTTP/1.x traffic inside a
+// CONNECT tunnel for a configured credential destination
+// (network-proxy/src/credential_broker.rs + brokered_tunnel.rs, #44089/#44077).
+// The buffered reader is only consumed once the request is confirmed to be a
+// plain HTTP/1.x request without an Upgrade; anything else falls back to the
+// opaque TCP relay with the buffered bytes intact.
+func (s *ProxyServer) handlePlaintextHTTPTunnel(client net.Conn, reader *bufio.Reader, host string, port uint16) {
+	header, ok := peekTunnelHTTPHeader(client, reader)
+	if !ok || !plaintextTunnelRequestAllowed(header, host, port) {
+		s.proxyOpaqueTCP(client, reader, host, port)
+		return
+	}
+	defer client.Close()
+	policy := s.runtimePolicy()
+	// Egress is direct for a brokered plaintext tunnel; the proxy is the client
+	// already, so no upstream proxy is configured.
+	transport := &http.Transport{
+		Proxy:             nil,
+		ForceAttemptHTTP2: false,
+		DialContext:       (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+	}
+	defer transport.CloseIdleConnections()
+	target := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	for {
+		_ = client.SetReadDeadline(time.Time{})
+		request, err := http.ReadRequest(reader)
+		if err != nil {
+			return
+		}
+		if request.URL == nil {
+			_ = request.Body.Close()
+			return
+		}
+		request.URL.Scheme = "http"
+		request.URL.Host = target
+		request.RequestURI = ""
+		// Keep requests bound to the authorized tunnel destination (Rust
+		// brokered_tunnel rejects mismatched authorities).
+		if !plaintextTunnelAuthorityMatches(request, host, port) {
+			writePlaintextTunnelResponse(client, request, http.StatusBadRequest)
+			return
+		}
+		if reason := s.blockReasonFor(context.Background(), request.Method, ProxyProtocolHTTP, host, port, client.RemoteAddr().String()); reason != "" {
+			writePlaintextTunnelResponse(client, request, http.StatusForbidden)
+			return
+		}
+		removeProxyHopByHopRequestHeaders(request.Header)
+		request.Header.Del("Proxy-Connection")
+		policy.broker.InjectRequestHeadersForDestination("http", host, port, request.URL.Path, map[string][]string(request.Header))
+		response, err := transport.RoundTrip(request)
+		if err != nil {
+			writePlaintextTunnelResponse(client, request, http.StatusBadGateway)
+			return
+		}
+		writeErr := response.Write(client)
+		_ = response.Body.Close()
+		if writeErr != nil || request.Close || response.Close {
+			return
+		}
+	}
+}
+
+// peekTunnelHTTPHeader returns the request header block without consuming it,
+// mirroring the initial-read timeout of the Rust brokered tunnel.
+func peekTunnelHTTPHeader(client net.Conn, reader *bufio.Reader) ([]byte, bool) {
+	if reader == nil {
+		return nil, false
+	}
+	const maxHeaderBytes = 16 << 10
+	_ = client.SetReadDeadline(time.Now().Add(plaintextTunnelInitialReadTimeout))
+	defer client.SetReadDeadline(time.Time{})
+	size := 0
+	for {
+		if size >= maxHeaderBytes {
+			return nil, false
+		}
+		buffer, err := reader.Peek(size + 1)
+		if err != nil {
+			return nil, false
+		}
+		if bytes.Contains(buffer, []byte("\r\n\r\n")) {
+			return append([]byte(nil), buffer...), true
+		}
+		size++
+	}
+}
+
+// plaintextTunnelRequestAllowed reports whether the peeked request is safe to
+// broker as plaintext HTTP/1.x. Upgrades, HTTP/2 prefaces, and non-HTTP bytes
+// stay on the opaque relay.
+func plaintextTunnelRequestAllowed(header []byte, host string, port uint16) bool {
+	if bytes.HasPrefix(header, []byte("PRI * HTTP/2.0")) {
+		return false
+	}
+	request, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(header)))
+	if err != nil {
+		return false
+	}
+	_ = request.Body.Close()
+	if request.ProtoMajor != 1 || request.ProtoMinor > 1 || request.Method == http.MethodConnect {
+		return false
+	}
+	if request.Header.Get("Upgrade") != "" || strings.Contains(strings.ToLower(request.Header.Get("Connection")), "upgrade") {
+		return false
+	}
+	return plaintextTunnelAuthorityMatches(request, host, port)
+}
+
+func plaintextTunnelAuthorityMatches(request *http.Request, host string, port uint16) bool {
+	if request == nil {
+		return false
+	}
+	authority := strings.TrimSpace(request.Host)
+	if authority == "" && request.URL != nil {
+		authority = strings.TrimSpace(request.URL.Host)
+	}
+	if authority == "" {
+		// HTTP/1.0 without a Host header is still bound to the tunnel target.
+		return true
+	}
+	parsedHost, parsedPort, err := net.SplitHostPort(authority)
+	if err != nil {
+		parsedHost = authority
+		parsedPort = ""
+	}
+	if !strings.EqualFold(NormalizeProxyHost(parsedHost), NormalizeProxyHost(host)) {
+		return false
+	}
+	if parsedPort != "" && parsedPort != strconv.Itoa(int(port)) {
+		return false
+	}
+	return true
+}
+
+func writePlaintextTunnelResponse(client net.Conn, request *http.Request, status int) {
+	response := &http.Response{
+		StatusCode: status,
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     http.Header{"Content-Length": []string{"0"}},
+		Body:       http.NoBody,
+		Request:    request,
+	}
+	_ = response.Write(client)
 }
 
 func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
