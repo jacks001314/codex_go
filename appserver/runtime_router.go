@@ -2138,6 +2138,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		if request.Method == MethodThreadMetadataUpdate {
 			return r.handleThreadMetadataUpdateRuntime(request)
 		}
+		if isThreadAttachmentMethod(request.Method) {
+			return r.handleThreadAttachmentRuntime(request)
+		}
 		if request.Method == MethodThreadRollback {
 			if r.shouldNotifyThreadRollbackDeprecation(request) {
 				r.notify(NotificationDeprecationNotice, threadRollbackDeprecationNotice())
@@ -13681,6 +13684,7 @@ func isThreadMethod(method Method) bool {
 		MethodThreadUnsubscribe, MethodThreadMemoryModeSet, MethodMemoryReset,
 		MethodThreadCompactStart, MethodThreadApproveGuardianDeniedAction,
 		MethodThreadMetadataUpdate, MethodThreadSectionMove, MethodThreadList, MethodThreadRead,
+		MethodThreadAttachmentAdd, MethodThreadAttachmentList, MethodThreadAttachmentRemove,
 		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
 		MethodThreadTurnsList, MethodThreadRollback, MethodThreadRevert,
 		MethodThreadQueueAdd, MethodThreadQueueList, MethodThreadQueueUpdate,

@@ -923,6 +923,12 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadApproveGuardianDeniedAction(request)
 	case MethodThreadMetadataUpdate:
 		return r.handleThreadMetadataUpdate(request)
+	case MethodThreadAttachmentAdd:
+		return r.handleThreadAttachmentAdd(request)
+	case MethodThreadAttachmentList:
+		return r.handleThreadAttachmentList(request)
+	case MethodThreadAttachmentRemove:
+		return r.handleThreadAttachmentRemove(request)
 	case MethodThreadSectionMove:
 		return r.handleThreadSectionMove(request)
 	case MethodThreadSectionCreate:
