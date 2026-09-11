@@ -33,6 +33,15 @@ func DefaultProviderCapabilities() ProviderCapabilities {
 	}
 }
 
+// authUsesAPIKey reports whether the resolved auth is an OpenAI API key, which
+// can opt into model discovery (Rust #44392).
+func authUsesAPIKey(snapshot *auth.AuthDotJSON) bool {
+	if snapshot == nil {
+		return false
+	}
+	return snapshot.Mode() == "api-key"
+}
+
 type ProviderAccount struct {
 	Type             string
 	Email            string
@@ -187,11 +196,21 @@ func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) Models
 	if err != nil {
 		return NewStaticModelsManager(BundledModelsResponse())
 	}
+	supportsAPIKeyModels := p.info.IsOpenAI()
+	apiKeyAuth := authUsesAPIKey(p.auth)
+	if supportsAPIKeyModels && apiKeyAuth && strings.TrimSpace(p.info.BaseURL) == "" {
+		// Codex model metadata is served by the Codex backend, not the public
+		// /v1/models API (Rust #44392). Inference keeps its own base URL.
+		apiProvider.BaseURL = ChatGPTCodexBaseURL
+	}
 	endpoint := NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
 	return NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: authHasChatGPTAccount(p.auth),
 		Identity:                        ModelsCatalogIdentity(p.providerID, p.auth, &authHeaders),
+		SupportsAPIKeyModels:            supportsAPIKeyModels,
+		APIKeyAuth:                      apiKeyAuth,
+		CommandAuth:                     p.info.HasCommandAuth(),
 	})
 }
 

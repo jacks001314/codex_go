@@ -11,9 +11,11 @@ import "sync"
 type LazyModelsManager struct {
 	build func() (ModelsManager, error)
 
-	mu     sync.Mutex
-	cached ModelsManager
-	done   bool
+	mu                          sync.Mutex
+	cached                      ModelsManager
+	done                        bool
+	apiKeyModelDiscoverySet     bool
+	apiKeyModelDiscoveryEnabled bool
 }
 
 func NewLazyModelsManager(build func() (ModelsManager, error)) *LazyModelsManager {
@@ -30,15 +32,38 @@ func (m *LazyModelsManager) resolve() ModelsManager {
 		return NewStaticModelsManager(BundledModelsResponse())
 	}
 	m.done = true
-	if m.build == nil {
-		return NewStaticModelsManager(BundledModelsResponse())
+	manager := ModelsManager(nil)
+	if m.build != nil {
+		built, err := m.build()
+		if err == nil {
+			manager = built
+		}
 	}
-	manager, err := m.build()
-	if err != nil || manager == nil {
-		return NewStaticModelsManager(BundledModelsResponse())
+	if manager == nil {
+		manager = NewStaticModelsManager(BundledModelsResponse())
+	}
+	if m.apiKeyModelDiscoverySet {
+		SetAPIKeyModelDiscoveryEnabled(manager, m.apiKeyModelDiscoveryEnabled)
 	}
 	m.cached = manager
 	return manager
+}
+
+// SetAPIKeyModelDiscoveryEnabled forwards the startup API-key discovery policy to
+// the resolved manager, remembering it until the manager is first built (Rust
+// #44392).
+func (m *LazyModelsManager) SetAPIKeyModelDiscoveryEnabled(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.apiKeyModelDiscoverySet = true
+	m.apiKeyModelDiscoveryEnabled = enabled
+	cached := m.cached
+	m.mu.Unlock()
+	if cached != nil {
+		SetAPIKeyModelDiscoveryEnabled(cached, enabled)
+	}
 }
 
 func (m *LazyModelsManager) ListModels(strategy RefreshStrategy) []ModelPreset {

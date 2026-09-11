@@ -48,6 +48,46 @@ func NewHTTPModelsEndpoint(provider *APIProvider, authHeaders *AuthHeaders, http
 	}
 }
 
+// SetAPIKeyModelDiscoveryEnabled records the startup API-key discovery policy
+// (Rust #44392). Static catalogs ignore this setting, and live changes require
+// a new session.
+func (m *RemoteModelsManager) SetAPIKeyModelDiscoveryEnabled(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.apiKeyModelDiscoveryEnabled = enabled
+	m.mu.Unlock()
+}
+
+func (m *RemoteModelsManager) apiKeyModelDiscoveryEnabledValue() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.apiKeyModelDiscoveryEnabled
+}
+
+// SupportsAPIKeyDiscovery reports whether the current provider/auth combination
+// has an authoritative catalog available with OpenAI API keys (Rust #44392).
+func (m *RemoteModelsManager) SupportsAPIKeyDiscovery() bool {
+	if m == nil {
+		return false
+	}
+	return m.supportsAPIKeyModels && !m.commandAuth && m.apiKeyAuth
+}
+
+// remoteCatalogAuthoritative reports whether a visible remote catalog should
+// replace the bundled models. OpenAI API-key discovery catalogs are
+// authoritative just like ChatGPT account catalogs (Rust #44392).
+func (m *RemoteModelsManager) remoteCatalogAuthoritative() bool {
+	if m == nil {
+		return false
+	}
+	return m.useRemoteCatalogAsSourceOfTruth || m.SupportsAPIKeyDiscovery()
+}
+
 func (e *HTTPModelsEndpoint) ListModels(ctx context.Context, etag string) (*ModelsEndpointResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -123,7 +163,14 @@ type RemoteModelsManager struct {
 	// identity scopes the disk cache to the current provider and credentials
 	// (Rust #43906); an empty identity disables cached catalog reuse.
 	identity string
-	now      func() time.Time
+	// supportsAPIKeyModels, apiKeyAuth, and commandAuth describe whether the
+	// current provider/auth combination can discover models with an OpenAI API
+	// key (Rust #44392). Discovery stays disabled until the feature opts in.
+	supportsAPIKeyModels        bool
+	apiKeyAuth                  bool
+	commandAuth                 bool
+	apiKeyModelDiscoveryEnabled bool
+	now                         func() time.Time
 }
 
 type modelsCache struct {
@@ -143,6 +190,14 @@ type RemoteModelsManagerOptions struct {
 	// Identity is the opaque provider/auth identity used to scope cached
 	// catalogs. Empty disables cache reuse.
 	Identity string
+	// SupportsAPIKeyModels reports whether the provider serves an authoritative
+	// catalog for OpenAI API keys (Rust #44392).
+	SupportsAPIKeyModels bool
+	// APIKeyAuth reports whether the active auth is an OpenAI API key.
+	APIKeyAuth bool
+	// CommandAuth reports whether the provider resolves credentials through a
+	// command, which keeps the bundled API-key catalog.
+	CommandAuth bool
 }
 
 func NewRemoteModelsManager(modelCatalog *ModelsResponse, endpoint ModelsEndpoint) *RemoteModelsManager {
@@ -165,7 +220,25 @@ func NewRemoteModelsManagerWithOptions(options *RemoteModelsManagerOptions) *Rem
 		endpoint:                        options.Endpoint,
 		useRemoteCatalogAsSourceOfTruth: options.UseRemoteCatalogAsSourceOfTruth,
 		identity:                        strings.TrimSpace(options.Identity),
+		supportsAPIKeyModels:            options.SupportsAPIKeyModels,
+		apiKeyAuth:                      options.APIKeyAuth,
+		commandAuth:                     options.CommandAuth,
 		now:                             time.Now,
+	}
+}
+
+// APIKeyModelDiscoverySetter is implemented by model managers that can toggle
+// API-key model discovery (Rust #44392). Static catalogs do not implement it, so
+// callers apply the policy through SetAPIKeyModelDiscoveryEnabled.
+type APIKeyModelDiscoverySetter interface {
+	SetAPIKeyModelDiscoveryEnabled(enabled bool)
+}
+
+// SetAPIKeyModelDiscoveryEnabled applies the startup API-key discovery policy to
+// a manager when it supports it.
+func SetAPIKeyModelDiscoveryEnabled(manager ModelsManager, enabled bool) {
+	if setter, ok := manager.(APIKeyModelDiscoverySetter); ok {
+		setter.SetAPIKeyModelDiscoveryEnabled(enabled)
 	}
 }
 
@@ -245,6 +318,11 @@ func (m *RemoteModelsManager) refreshAvailableModels(strategy RefreshStrategy) {
 	if m == nil || m.endpoint == nil {
 		return
 	}
+	// Gate cache loading as well as requests: a session whose API-key discovery
+	// is disabled keeps the bundled models (Rust #44392).
+	if m.SupportsAPIKeyDiscovery() && !m.apiKeyModelDiscoveryEnabledValue() {
+		return
+	}
 	switch strategy {
 	case RefreshOnline:
 		m.fetchAndUpdateModels()
@@ -282,7 +360,7 @@ func (m *RemoteModelsManager) fetchAndUpdateModels() {
 	m.mu.Lock()
 	m.fetched = true
 	if len(response.Models) > 0 {
-		if m.useRemoteCatalogAsSourceOfTruth && hasRemoteSourceOfTruthModel(response.Models) {
+		if m.remoteCatalogAuthoritative() && hasRemoteSourceOfTruthModel(response.Models) {
 			m.remoteModels = cloneModelInfos(response.Models)
 		} else {
 			m.remoteModels = mergeModelInfos(m.remoteModels, response.Models)
@@ -336,7 +414,7 @@ func (m *RemoteModelsManager) tryLoadFreshCache() bool {
 	m.fetched = true
 	m.etag = strings.TrimSpace(cache.ETag)
 	if len(cache.Models) > 0 {
-		if m.useRemoteCatalogAsSourceOfTruth && hasRemoteSourceOfTruthModel(cache.Models) {
+		if m.remoteCatalogAuthoritative() && hasRemoteSourceOfTruthModel(cache.Models) {
 			m.remoteModels = cloneModelInfos(cache.Models)
 		} else {
 			m.remoteModels = mergeModelInfos(m.remoteModels, cache.Models)

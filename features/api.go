@@ -154,7 +154,7 @@ func NewFeatureService(catalog []FeatureEntry) *FeatureService {
 }
 
 func SupportedEnablementKeys() []string {
-	return []string{"auth_elicitation", "memories", "mentions_v2", "remote_control", "remote_plugin", "tool_suggest"}
+	return []string{"api_key_model_discovery", "auth_elicitation", "memories", "mentions_v2", "remote_control", "remote_plugin", "tool_suggest"}
 }
 
 func DefaultFeatureCatalog() []FeatureEntry {

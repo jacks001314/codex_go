@@ -841,13 +841,25 @@ func accountScopedModelsManager(codexHome string, configService *config.ConfigSe
 		}
 		account := auth.AccountFromAuth(&resolved.Auth)
 		hasChatGPTAccount := account != nil && account.Type == auth.AccountChatGPT
+		supportsAPIKeyModels := providerInfo.IsOpenAI()
+		apiKeyAuth := resolved.Auth.Mode() == "api-key"
+		if supportsAPIKeyModels && apiKeyAuth && strings.TrimSpace(providerInfo.BaseURL) == "" {
+			// Codex model metadata is served by the Codex backend, not the
+			// public /v1/models API (Rust #44392). Inference is unaffected.
+			apiProvider.BaseURL = model.ChatGPTCodexBaseURL
+		}
 		endpoint := model.NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
-		return model.NewRemoteModelsManagerWithOptions(&model.RemoteModelsManagerOptions{
+		manager := model.NewRemoteModelsManagerWithOptions(&model.RemoteModelsManagerOptions{
 			ModelCatalog:                    base,
 			Endpoint:                        endpoint,
 			UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
 			Identity:                        model.ModelsCatalogIdentity(providerID, &resolved.Auth, &authHeaders),
-		}), nil
+			SupportsAPIKeyModels:            supportsAPIKeyModels,
+			APIKeyAuth:                      apiKeyAuth,
+			CommandAuth:                     providerInfo.HasCommandAuth(),
+		})
+		model.SetAPIKeyModelDiscoveryEnabled(manager, features.Enabled(cfg.FeatureSettings(), "api_key_model_discovery"))
+		return manager, nil
 	}
 	return model.NewLazyModelsManager(build)
 }
@@ -7376,6 +7388,14 @@ func (r *RuntimeRouter) handleExperimentalFeatureSet(request *Request) (*feature
 	}
 	if r.services.Config != nil && response != nil {
 		r.services.Config.SetFeatureEnablementDefaults(response.Enablement)
+	}
+	if r.services.Models != nil && r.services.Config != nil {
+		// Rust #44392: apply the API-key model discovery policy after feature
+		// enablement changes so live discovery requests honor user overrides.
+		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
+			settings := (&config.Config{Values: read.Config}).FeatureSettings()
+			r.services.Models.SetAPIKeyModelDiscoveryEnabled(features.Enabled(settings, "api_key_model_discovery"))
+		}
 	}
 	return response, nil
 }

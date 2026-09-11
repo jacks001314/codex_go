@@ -199,6 +199,15 @@ func NewModelService(manager ModelsManager) *ModelService {
 	return &ModelService{manager: manager}
 }
 
+// SetAPIKeyModelDiscoveryEnabled applies the API-key model discovery policy to
+// the underlying model manager when it supports it (Rust #44392).
+func (s *ModelService) SetAPIKeyModelDiscoveryEnabled(enabled bool) {
+	if s == nil || s.manager == nil {
+		return
+	}
+	SetAPIKeyModelDiscoveryEnabled(s.manager, enabled)
+}
+
 func (s *ModelService) Info(params *ModelInfoReadParams) *ModelInfo {
 	if params == nil {
 		params = &ModelInfoReadParams{}
