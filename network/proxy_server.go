@@ -570,10 +570,16 @@ func (s *ProxyServer) handleHTTPConnect(hostPort string, _ *goproxy.ProxyCtx) (*
 func (s *ProxyServer) httpMITMMode(host string, port uint16) proxySOCKS5MITMMode {
 	policy := s.runtimePolicy()
 	normalized := NormalizeProxyHost(host)
+	// A configured plaintext destination must be intercepted with TLS-vs-
+	// plaintext detection even in limited mode, so the plaintext broker can
+	// enforce the limited-mode method restrictions (Rust brokered_tunnel).
+	if policy.broker.HostRequiresHTTPInterception(normalized, port) {
+		return proxySOCKS5MITMDetectTLS
+	}
 	if policy.settings.Mode == ProxyModeLimited || len(policy.mitmHooks[normalized]) > 0 {
 		return proxySOCKS5MITMRequired
 	}
-	if policy.broker.HostRequiresMITM(normalized) || policy.broker.HostRequiresHTTPInterception(normalized, port) {
+	if policy.broker.HostRequiresMITM(normalized) {
 		return proxySOCKS5MITMDetectTLS
 	}
 	return proxySOCKS5MITMDisabled
@@ -625,13 +631,28 @@ const plaintextTunnelInitialReadTimeout = 250 * time.Millisecond
 // plain HTTP/1.x request without an Upgrade; anything else falls back to the
 // opaque TCP relay with the buffered bytes intact.
 func (s *ProxyServer) handlePlaintextHTTPTunnel(client net.Conn, reader *bufio.Reader, host string, port uint16) {
+	policy := s.runtimePolicy()
 	header, ok := peekTunnelHTTPHeader(client, reader)
-	if !ok || !plaintextTunnelRequestAllowed(header, host, port) {
+	kind, routable := classifyPlaintextTunnelRequest(header, host, port)
+	if !ok || !routable {
+		if policy.settings.Mode == ProxyModeLimited {
+			// Rust rejects opaque traffic through a brokered destination in
+			// limited mode instead of relaying it unbrokered.
+			writePlaintextTunnelResponse(client, nil, http.StatusForbidden)
+			return
+		}
 		s.proxyOpaqueTCP(client, reader, host, port)
 		return
 	}
+	if kind == plaintextTunnelRequestUpgrade {
+		if policy.settings.Mode == ProxyModeLimited {
+			writePlaintextTunnelResponse(client, nil, http.StatusForbidden)
+			return
+		}
+		s.handlePlaintextTunnelUpgrade(client, reader, host, port)
+		return
+	}
 	defer client.Close()
-	policy := s.runtimePolicy()
 	// Egress is direct for a brokered plaintext tunnel; the proxy is the client
 	// already, so no upstream proxy is configured.
 	transport := &http.Transport{
@@ -705,25 +726,87 @@ func peekTunnelHTTPHeader(client net.Conn, reader *bufio.Reader) ([]byte, bool) 
 	}
 }
 
-// plaintextTunnelRequestAllowed reports whether the peeked request is safe to
-// broker as plaintext HTTP/1.x. Upgrades, HTTP/2 prefaces, and non-HTTP bytes
-// stay on the opaque relay.
-func plaintextTunnelRequestAllowed(header []byte, host string, port uint16) bool {
+type plaintextTunnelRequestKind uint8
+
+const (
+	plaintextTunnelRequestNormal plaintextTunnelRequestKind = iota
+	plaintextTunnelRequestUpgrade
+)
+
+// classifyPlaintextTunnelRequest reports whether the peeked request can be
+// brokered as plaintext HTTP/1.x and, if so, whether it is an Upgrade request
+// (which is brokered by substituting credentials once and then relaying the
+// upgraded connection). HTTP/2 prefaces, nested CONNECT, non-HTTP/1.x bytes, and
+// requests bound to another authority stay on the opaque relay.
+func classifyPlaintextTunnelRequest(header []byte, host string, port uint16) (plaintextTunnelRequestKind, bool) {
 	if bytes.HasPrefix(header, []byte("PRI * HTTP/2.0")) {
-		return false
+		return plaintextTunnelRequestNormal, false
 	}
 	request, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(header)))
 	if err != nil {
-		return false
+		return plaintextTunnelRequestNormal, false
 	}
 	_ = request.Body.Close()
 	if request.ProtoMajor != 1 || request.ProtoMinor > 1 || request.Method == http.MethodConnect {
-		return false
+		return plaintextTunnelRequestNormal, false
+	}
+	if !plaintextTunnelAuthorityMatches(request, host, port) {
+		return plaintextTunnelRequestNormal, false
 	}
 	if request.Header.Get("Upgrade") != "" || strings.Contains(strings.ToLower(request.Header.Get("Connection")), "upgrade") {
-		return false
+		return plaintextTunnelRequestUpgrade, true
 	}
-	return plaintextTunnelAuthorityMatches(request, host, port)
+	return plaintextTunnelRequestNormal, true
+}
+
+// plaintextTunnelRequestAllowed reports whether the peeked request is a plain
+// (non-upgrade) HTTP/1.x request bound to the tunnel destination.
+func plaintextTunnelRequestAllowed(header []byte, host string, port uint16) bool {
+	kind, ok := classifyPlaintextTunnelRequest(header, host, port)
+	return ok && kind == plaintextTunnelRequestNormal
+}
+
+// handlePlaintextTunnelUpgrade brokers an Upgrade request (for example a
+// plaintext WebSocket handshake) by substituting the real credential once and
+// then relaying the upgraded connection in both directions (#44089).
+func (s *ProxyServer) handlePlaintextTunnelUpgrade(client net.Conn, reader *bufio.Reader, host string, port uint16) {
+	request, err := http.ReadRequest(reader)
+	if err != nil {
+		return
+	}
+	defer client.Close()
+	if request.URL == nil || !plaintextTunnelAuthorityMatches(request, host, port) {
+		writePlaintextTunnelResponse(client, request, http.StatusBadRequest)
+		return
+	}
+	if reason := s.blockReasonFor(context.Background(), request.Method, ProxyProtocolHTTP, host, port, client.RemoteAddr().String()); reason != "" {
+		writePlaintextTunnelResponse(client, request, http.StatusForbidden)
+		return
+	}
+	request.URL.Scheme = "http"
+	request.URL.Host = net.JoinHostPort(host, strconv.Itoa(int(port)))
+	request.RequestURI = ""
+	s.runtimePolicy().broker.InjectRequestHeadersForDestination("http", host, port, request.URL.Path, map[string][]string(request.Header))
+	upstream, err := net.DialTimeout("tcp", request.URL.Host, 30*time.Second)
+	if err != nil {
+		writePlaintextTunnelResponse(client, request, http.StatusBadGateway)
+		return
+	}
+	defer upstream.Close()
+	_ = client.SetDeadline(time.Time{})
+	if err := request.Write(upstream); err != nil {
+		return
+	}
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(upstream, reader)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(client, upstream)
+		done <- struct{}{}
+	}()
+	<-done
 }
 
 func plaintextTunnelAuthorityMatches(request *http.Request, host string, port uint16) bool {
@@ -753,6 +836,9 @@ func plaintextTunnelAuthorityMatches(request *http.Request, host string, port ui
 }
 
 func writePlaintextTunnelResponse(client net.Conn, request *http.Request, status int) {
+	if request == nil {
+		request = &http.Request{Method: http.MethodGet, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1}
+	}
 	response := &http.Response{
 		StatusCode: status,
 		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
@@ -1086,10 +1172,13 @@ const (
 func (s *ProxyServer) socks5MITMMode(host string, port uint16) proxySOCKS5MITMMode {
 	policy := s.runtimePolicy()
 	normalized := NormalizeProxyHost(host)
+	if policy.broker.HostRequiresHTTPInterception(normalized, port) {
+		return proxySOCKS5MITMDetectTLS
+	}
 	if policy.settings.Mode == ProxyModeLimited || len(policy.mitmHooks[normalized]) > 0 {
 		return proxySOCKS5MITMRequired
 	}
-	if policy.broker.HostRequiresMITM(normalized) || policy.broker.HostRequiresHTTPInterception(normalized, port) {
+	if policy.broker.HostRequiresMITM(normalized) {
 		return proxySOCKS5MITMDetectTLS
 	}
 	return proxySOCKS5MITMDisabled

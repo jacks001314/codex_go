@@ -44,9 +44,15 @@ func TestPlaintextTunnelRequestAllowedLikeRust(t *testing.T) {
 	if !plaintextTunnelRequestAllowed(allowed, host, port) {
 		t.Fatal("plain HTTP/1.1 request should be brokerable")
 	}
+	upgrade := []byte("GET /ws HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+	if kind, ok := classifyPlaintextTunnelRequest(upgrade, host, port); !ok || kind != plaintextTunnelRequestUpgrade {
+		t.Fatalf("upgrade classification = %v/%v, want upgrade", kind, ok)
+	}
+	if plaintextTunnelRequestAllowed(upgrade, host, port) {
+		t.Fatal("upgrade request is not a plain request")
+	}
 	cases := map[string][]byte{
 		"h2 preface": []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"),
-		"upgrade":    []byte("GET /ws HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"),
 		"connect":    []byte("CONNECT 127.0.0.1:8080 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n"),
 		"other host": []byte("GET / HTTP/1.1\r\nHost: evil.example\r\n\r\n"),
 		"wrong port": []byte("GET / HTTP/1.1\r\nHost: 127.0.0.1:9999\r\n\r\n"),
