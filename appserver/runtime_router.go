@@ -99,6 +99,7 @@ type RuntimeServices struct {
 	Analytics                    telemetry.TurnEventSink
 	SkillShadowMetrics           SkillShadowMetricSink
 	SkillInjectionMetrics        telemetry.MemoryUsageMetricSink
+	TurnMetrics                  telemetry.TurnMetricSink
 	AnalyticsRPCTransport        telemetry.AppServerRPCTransport
 	BrowserOpen                  func(string) error
 	CustomSkills                 *skillprovider.Registry
@@ -1020,6 +1021,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		Feedback:              &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)},
 		SkillShadowMetrics:    runtimeMetrics,
 		SkillInjectionMetrics: runtimeMetrics,
+		TurnMetrics:           runtimeMetrics,
 		DefaultCWD:            codexHome,
 
 		RemoteControlDisabledByRequirements: remoteControlDisabledByRequirements(options),
