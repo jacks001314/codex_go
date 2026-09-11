@@ -396,6 +396,19 @@ func (v *View) BeginRename() bool {
 	return true
 }
 
+// CanOpenWithRight reports whether Right should open the selected task from an
+// empty, focused composer (Rust #44344). Editing metadata (rename) and a
+// non-empty draft keep Right for the editor.
+func (v *View) CanOpenWithRight() bool {
+	if v == nil || v.State.Renaming {
+		return false
+	}
+	if strings.TrimSpace(v.State.Input) != "" {
+		return false
+	}
+	return v.SelectedRow() != nil
+}
+
 // Activate mirrors Rust AgentsOverviewView::activate: dispatch when the
 // input is non-empty, apply the rename when renaming, otherwise open the
 // selected thread.

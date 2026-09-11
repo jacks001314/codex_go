@@ -93,6 +93,43 @@ func TestModelAgentsDashboardNavigationAndSearch(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #44344: Right opens the highlighted task from an empty
+// composer, while a non-empty draft keeps Right for the editor.
+func TestModelAgentsDashboardRightOpensSelectedTask(t *testing.T) {
+	model := NewModel(nil, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+	})
+	openAgentsDashboard(t, model)
+	model.Update(key(bubbletea.KeyDown))
+	if got := model.agentsOverview.SelectedThreadID(); got != "root-2" {
+		t.Fatalf("selection before right = %q, want root-2", got)
+	}
+	updated, _ := model.Update(key(bubbletea.KeyRight))
+	model = updated.(*Model)
+	if model.agentsOverview != nil {
+		t.Fatal("right from an empty composer did not open the selected task")
+	}
+
+	draftModel := NewModel(nil, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+	})
+	openAgentsDashboard(t, draftModel)
+	typeText(t, draftModel, "draft")
+	updated, _ = draftModel.Update(key(bubbletea.KeyRight))
+	draftModel = updated.(*Model)
+	if draftModel.agentsOverview == nil {
+		t.Fatal("right with a non-empty draft must keep the editor, not open the task")
+	}
+}
+
 func TestModelAgentsDashboardDispatchTask(t *testing.T) {
 	var dispatched []string
 	var dispatchedCwd string

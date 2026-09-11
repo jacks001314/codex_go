@@ -215,6 +215,13 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	case "end":
 		m.agentsOverview.JumpBottom()
 		handled = true
+	case "right":
+		// Rust #44344: Right opens the selected task from an empty, focused
+		// composer; a non-empty draft or a connection notice keeps Right for the
+		// editor/unavailable states.
+		if m.agentsOverviewNotice == "" && m.agentsOverview.CanOpenWithRight() {
+			return m.openAgentsOverviewThread(m.agentsOverview.SelectedThreadID())
+		}
 	case "enter":
 		prompt := strings.TrimSpace(m.agentsOverview.State.Input)
 		switch action := m.agentsOverview.Activate(); action {

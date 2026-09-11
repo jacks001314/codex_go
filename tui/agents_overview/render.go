@@ -82,9 +82,15 @@ func (v *View) footerSpans() []span {
 	if row := v.SelectedRow(); row != nil && row.StatusActive {
 		stopStyle = spanBold
 	}
+	// Rust #44344: Right opens the selected task unless metadata editing owns
+	// the editor; otherwise Enter accepts.
+	openHint := "enter"
+	if v != nil && !v.State.Renaming {
+		openHint = "\u2192"
+	}
 	spans := []span{
 		{text: "↑↓", style: spanBold}, {text: " navigate  ", style: spanDim},
-		{text: "enter", style: spanBold}, {text: " open  ", style: spanDim},
+		{text: openHint, style: spanBold}, {text: " open  ", style: spanDim},
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintSearch, "ctrl+f"); ok {
 		spans = append(spans, span{text: binding, style: spanBold}, span{text: " search  ", style: spanDim})

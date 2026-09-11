@@ -231,6 +231,27 @@ func TestApplyRefreshPreservesSelection(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #44344: Right opens the selected task only from an empty
+// composer, and metadata editing keeps the accept binding.
+func TestCanOpenWithRightRequiresEmptyComposerLikeRust(t *testing.T) {
+	view := New(sampleRows(), "", true)
+	if !view.CanOpenWithRight() {
+		t.Fatal("empty composer with a selected row must allow Right to open")
+	}
+	view.TypeChar('x')
+	if view.CanOpenWithRight() {
+		t.Fatal("a non-empty draft must keep Right for the editor")
+	}
+	view.Backspace()
+	view.BeginRename()
+	if view.CanOpenWithRight() {
+		t.Fatal("metadata editing must keep Right for the editor")
+	}
+	if New(nil, "", true).CanOpenWithRight() {
+		t.Fatal("a dashboard without a selected row must not allow Right to open")
+	}
+}
+
 func TestRenderLayout(t *testing.T) {
 	view := New(sampleRows(), "", true)
 	lines := view.Render(120, 24)
@@ -240,7 +261,7 @@ func TestRenderLayout(t *testing.T) {
 		"1 need input   1 working   1 ready",
 		"New task › ",
 		"Describe a task and press enter to dispatch it",
-		"↑↓ navigate  enter open  ctrl+f search  ctrl+s group  ctrl+r rename  ctrl+x stop  esc back",
+		"↑↓ navigate  → open  ctrl+f search  ctrl+s group  ctrl+r rename  ctrl+x stop  esc back",
 		"/work/a  2",
 		"› ● alpha  Working",
 		"/work/b  1",
