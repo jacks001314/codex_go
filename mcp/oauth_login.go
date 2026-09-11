@@ -338,6 +338,79 @@ func ParseMCPOAuthCallback(rawPath string, expectedCallbackPath string) (*OAuthC
 	return nil, errors.New("invalid MCP OAuth callback")
 }
 
+// ParseMCPOAuthCallbackURL validates a pasted OAuth redirect URL before the
+// existing login flow checks state and exchanges the code (Rust #44629). The
+// callback must match this login's redirect URI: no credentials or fragment,
+// every configured redirect query parameter present unchanged, and no response
+// parameter reusing one of their names.
+func ParseMCPOAuthCallbackURL(rawURL string, redirectURL string, expectedCallbackPath string) (*OAuthCallbackResult, error) {
+	if len(rawURL) > 64*1024 {
+		return nil, errors.New("OAuth callback URL exceeds 64 KiB")
+	}
+	callback, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil, errors.New("Invalid OAuth callback URL")
+	}
+	expected, err := url.Parse(strings.TrimSpace(redirectURL))
+	if err != nil {
+		return nil, errors.New("Invalid OAuth redirect URI")
+	}
+	if callback.Fragment != "" || callback.User != nil {
+		return nil, errors.New("OAuth callback URL must not contain credentials or a fragment")
+	}
+	remaining := orderedQueryPairs(callback.RawQuery)
+	expectedParams := orderedQueryPairs(expected.RawQuery)
+	for _, expectedParam := range expectedParams {
+		position := -1
+		for i, param := range remaining {
+			if param == expectedParam {
+				position = i
+				break
+			}
+		}
+		if position < 0 {
+			return nil, errors.New("OAuth callback URL does not match this login's redirect URI")
+		}
+		remaining = append(remaining[:position], remaining[position+1:]...)
+	}
+	for _, param := range remaining {
+		for _, expectedParam := range expectedParams {
+			if param[0] == expectedParam[0] {
+				return nil, errors.New("OAuth callback URL changes this login's redirect query parameters")
+			}
+		}
+	}
+	return ParseMCPOAuthCallback(callback.RequestURI(), expectedCallbackPath)
+}
+
+// orderedQueryPairs decodes query parameters in their original order, matching
+// Rust's `Url::query_pairs`.
+func orderedQueryPairs(rawQuery string) [][2]string {
+	if rawQuery == "" {
+		return nil
+	}
+	pairs := make([][2]string, 0, strings.Count(rawQuery, "&")+1)
+	for _, part := range strings.Split(rawQuery, "&") {
+		if part == "" {
+			continue
+		}
+		name, value := part, ""
+		if index := strings.Index(part, "="); index >= 0 {
+			name, value = part[:index], part[index+1:]
+		}
+		decodedName, err := url.QueryUnescape(name)
+		if err != nil {
+			decodedName = name
+		}
+		decodedValue, err := url.QueryUnescape(value)
+		if err != nil {
+			decodedValue = value
+		}
+		pairs = append(pairs, [2]string{decodedName, decodedValue})
+	}
+	return pairs
+}
+
 func MCPOAuthCallbackID(serverURL string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(serverURL))
 	if err != nil {

@@ -176,6 +176,9 @@ type MCPOptions struct {
 	Command           []string
 	Scopes            []string
 	ConfigOverrides   []string
+	// NoBrowser prints the authorization URL and accepts a pasted callback
+	// instead of launching a browser (Rust #44629).
+	NoBrowser bool
 }
 
 type PluginOptions struct {
@@ -1377,6 +1380,8 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 				i = next
 			case strings.HasPrefix(arg, "--scopes="):
 				mcp.Scopes = append(mcp.Scopes, splitComma(strings.TrimPrefix(arg, "--scopes="))...)
+			case arg == "--no-browser":
+				mcp.NoBrowser = true
 			case arg == "-c" || arg == "--config":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {

@@ -988,6 +988,23 @@ func TestParseRemoteControl(t *testing.T) {
 	}
 }
 
+func TestParseMCPLoginNoBrowserFlag(t *testing.T) {
+	parsed, err := Parse([]string{"mcp", "login", "docs", "--no-browser", "--scopes", "read,write"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !parsed.MCP.NoBrowser || parsed.MCP.Name != "docs" || strings.Join(parsed.MCP.Scopes, ",") != "read,write" {
+		t.Fatalf("parsed = %#v", parsed.MCP)
+	}
+	without, err := Parse([]string{"mcp", "login", "docs"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if without.MCP.NoBrowser {
+		t.Fatal("--no-browser should default off")
+	}
+}
+
 func TestParseMCPAddStdio(t *testing.T) {
 	parsed, err := Parse([]string{"mcp", "add", "fs", "--env", "ROOT=.", "--", "mcp-fs", "--readonly"})
 	if err != nil {

@@ -18,6 +18,104 @@ import (
 	"codex_go/mcp"
 )
 
+// Mirrors Rust #44629: `mcp login --no-browser` completes from a pasted
+// redirect URL, still validating the URL/state before exchanging the code.
+func TestMCPLoginNoBrowserCompletesFromPastedCallback(t *testing.T) {
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/token" {
+			http.NotFound(w, r)
+			return
+		}
+		writeMCPCLIJSON(t, w, map[string]any{
+			"access_token": "pasted-access", "refresh_token": "pasted-refresh", "expires_in": 3600,
+		})
+	}))
+	defer issuer.Close()
+
+	store := mcp.NewOAuthStore(t.TempDir())
+	login, err := mcp.StartOAuthLoginServer(context.Background(), &mcp.OAuthLoginServerOptions{
+		ServerName:            "docs",
+		ServerURL:             "https://mcp.example.test/mcp",
+		ClientID:              "client-1",
+		AuthorizationEndpoint: issuer.URL + "/authorize",
+		TokenEndpoint:         issuer.URL + "/token",
+		State:                 "state-1",
+		Store:                 store,
+		HTTPClient:            issuer.Client(),
+	})
+	if err != nil {
+		t.Fatalf("StartOAuthLoginServer() error = %v", err)
+	}
+	defer func() {
+		_ = login.Cancel(context.Background())
+	}()
+
+	var stdout bytes.Buffer
+	completeMCPCLIOAuthLoginFromInput(
+		context.Background(),
+		login,
+		strings.NewReader(login.RedirectURL+"?code=pasted-code&state=state-1\n"),
+		&stdout,
+	)
+	select {
+	case result := <-login.Done():
+		if result == nil || result.Error != nil || result.Tokens == nil || result.Tokens.AccessToken != "pasted-access" {
+			t.Fatalf("login result = %#v stdout=%q", result, stdout.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for login result; stdout=%q", stdout.String())
+	}
+	tokens, err := store.Load("docs", "https://mcp.example.test/mcp")
+	if err != nil || tokens == nil || tokens.AccessToken != "pasted-access" {
+		t.Fatalf("stored tokens = %#v, %v", tokens, err)
+	}
+
+	// A mismatched state is reported without storing credentials.
+	second, err := mcp.StartOAuthLoginServer(context.Background(), &mcp.OAuthLoginServerOptions{
+		ServerName:            "docs2",
+		ServerURL:             "https://mcp.example.test/mcp",
+		ClientID:              "client-1",
+		AuthorizationEndpoint: issuer.URL + "/authorize",
+		TokenEndpoint:         issuer.URL + "/token",
+		State:                 "state-2",
+		HTTPClient:            issuer.Client(),
+	})
+	if err != nil {
+		t.Fatalf("StartOAuthLoginServer(second) error = %v", err)
+	}
+	defer func() {
+		_ = second.Cancel(context.Background())
+	}()
+	stdout.Reset()
+	completeMCPCLIOAuthLoginFromInput(
+		context.Background(),
+		second,
+		strings.NewReader(second.RedirectURL+"?code=pasted-code&state=wrong\n"),
+		&stdout,
+	)
+	select {
+	case result := <-second.Done():
+		if result == nil || result.Error == nil {
+			t.Fatalf("state mismatch result = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for state mismatch result")
+	}
+}
+
+func TestReadMCPOAuthCallbackInputBoundsSize(t *testing.T) {
+	if got, err := readMCPOAuthCallbackInput(strings.NewReader(" http://127.0.0.1/callback?code=c&state=s \n")); err != nil || got != "http://127.0.0.1/callback?code=c&state=s" {
+		t.Fatalf("read = %q, %v", got, err)
+	}
+	oversized := strings.Repeat("a", mcpCLIOAuthCallbackMaxBytes+2)
+	if _, err := readMCPOAuthCallbackInput(strings.NewReader(oversized)); err == nil || !strings.Contains(err.Error(), "64 KiB") {
+		t.Fatalf("oversized error = %v", err)
+	}
+	if _, err := readMCPOAuthCallbackInput(strings.NewReader("")); err == nil {
+		t.Fatal("empty input should fail")
+	}
+}
+
 func TestMCPCLIStoreUsesConfiguredProxyPolicy(t *testing.T) {
 	home := t.TempDir()
 	writeMCPCLIConfig(t, home, "[features]\nrespect_system_proxy = true\n")

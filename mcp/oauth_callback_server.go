@@ -56,6 +56,12 @@ type OAuthLoginServer struct {
 	done      chan *OAuthLoginServerResult
 	completed chan struct{}
 	once      sync.Once
+
+	// Manual callback completion (`--no-browser`, Rust #44629).
+	session     *OAuthLoginSession
+	tokenClient *OAuthTokenClient
+	store       *OAuthStore
+	serverName  string
 }
 
 func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions) (*OAuthLoginServer, error) {
@@ -116,6 +122,10 @@ func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions
 		Port:             port,
 		done:             make(chan *OAuthLoginServerResult, 1),
 		completed:        make(chan struct{}),
+		session:          session,
+		tokenClient:      NewOAuthTokenClient(options.HTTPClient),
+		store:            options.Store,
+		serverName:       options.ServerName,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(session.CallbackPath, func(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +179,32 @@ func (s *OAuthLoginServer) Done() <-chan *OAuthLoginServerResult {
 		return closed
 	}
 	return s.done
+}
+
+// CompleteWithCallbackURL completes a `--no-browser` login from a pasted
+// redirect URL, validating the URL before the session checks state and
+// exchanges the code (Rust #44629).
+func (s *OAuthLoginServer) CompleteWithCallbackURL(ctx context.Context, rawURL string) (*OAuthTokenSet, error) {
+	if s == nil || s.session == nil {
+		return nil, errors.New("MCP OAuth login server is not running")
+	}
+	if _, err := ParseMCPOAuthCallbackURL(rawURL, s.RedirectURL, s.session.CallbackPath); err != nil {
+		return nil, err
+	}
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil, errors.New("Invalid OAuth callback URL")
+	}
+	tokens, err := s.session.CompleteCallback(ctx, parsed.RequestURI(), s.tokenClient, s.serverName)
+	if err == nil && s.store != nil {
+		err = s.store.Save(tokens)
+	}
+	if err != nil {
+		s.complete(&OAuthLoginServerResult{Error: err})
+		return nil, err
+	}
+	s.complete(&OAuthLoginServerResult{Tokens: tokens})
+	return tokens, nil
 }
 
 func (s *OAuthLoginServer) Cancel(ctx context.Context) error {

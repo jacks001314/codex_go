@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ var openMCPLoginBrowser = auth.OpenBrowser
 const (
 	mcpCLIOAuthDiscoveryTimeout = 2 * time.Second
 	mcpCLIOAuthCallbackTimeout  = 5 * time.Minute
+	mcpCLIOAuthCallbackMaxBytes = 64 * 1024
 )
 
 type mcpCLIConfig struct {
@@ -92,7 +94,7 @@ type mcpGetJSONEntry struct {
 	ToolTimeoutSec    *float64       `json:"tool_timeout_sec"`
 }
 
-func runMCP(ctx context.Context, opts *cli.MCPOptions, stdout io.Writer) error {
+func runMCP(ctx context.Context, opts *cli.MCPOptions, stdin io.Reader, stdout io.Writer) error {
 	store := newMCPCLIStore(auth.DefaultCodexHome())
 	switch opts.Action {
 	case "list":
@@ -104,7 +106,7 @@ func runMCP(ctx context.Context, opts *cli.MCPOptions, stdout io.Writer) error {
 	case "remove":
 		return runMCPRemove(store, opts, stdout)
 	case "login":
-		return runMCPLogin(ctx, store, opts, stdout)
+		return runMCPLogin(ctx, store, opts, stdin, stdout)
 	case "logout":
 		return runMCPLogout(ctx, store, opts, stdout)
 	default:
@@ -276,7 +278,7 @@ func runMCPAdd(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, st
 	case mcpOAuthLoginSupported:
 		fmt.Fprintln(stdout, "Detected OAuth support. Starting OAuth flow…")
 		resolvedScopes := resolveMCPOAuthScopes(nil, false, nil, false, support.Discovery.ScopesSupported)
-		if err := performMCPCLIOAuthLoginRetryWithoutScopes(ctx, store, opts.Name, server, support.Discovery, resolvedScopes, stdout); err != nil {
+		if err := performMCPCLIOAuthLoginRetryWithoutScopes(ctx, store, opts.Name, server, support.Discovery, resolvedScopes, nil, stdout); err != nil {
 			return err
 		}
 		fmt.Fprintln(stdout, "Successfully logged in.")
@@ -302,7 +304,7 @@ func runMCPRemove(store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) er
 	return nil
 }
 
-func runMCPLogin(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, stdout io.Writer) error {
+func runMCPLogin(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, stdin io.Reader, stdout io.Writer) error {
 	cfg, err := store.LoadManaged(ctx, opts.ConfigOverrides)
 	if err != nil {
 		return err
@@ -336,7 +338,7 @@ func runMCPLogin(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, 
 	}
 	resolvedScopes := resolveMCPOAuthScopes(explicitScopes, explicitScopesSet, server.Scopes, configuredScopesSet, discoveredScopes)
 	if support.Kind == mcpOAuthLoginSupported {
-		if err := performMCPCLIOAuthLoginRetryWithoutScopes(ctx, store, opts.Name, server, support.Discovery, resolvedScopes, stdout); err != nil {
+		if err := performMCPCLIOAuthLoginRetryWithoutScopes(ctx, store, opts.Name, server, support.Discovery, resolvedScopes, loginCallbackInput(opts, stdin), stdout); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "Successfully logged in to MCP server '%s'.\n", opts.Name)
@@ -415,8 +417,18 @@ func resolveMCPOAuthScopes(explicit []string, explicitSet bool, configured []str
 	return mcpResolvedOAuthScopes{Source: mcpOAuthScopesEmpty}
 }
 
-func performMCPCLIOAuthLoginRetryWithoutScopes(ctx context.Context, store *mcpCLIStore, name string, server *mcpCLIServer, discovery *mcp.StreamableHTTPOAuthDiscovery, resolvedScopes mcpResolvedOAuthScopes, stdout io.Writer) error {
-	err := performMCPCLIOAuthLogin(ctx, store, name, server, discovery, resolvedScopes, stdout)
+// loginCallbackInput returns the reader for a `--no-browser` login, or nil to
+// use the browser flow (Rust #44629). Manual input is preserved across the
+// discovered-scope retry because the same reader is passed to both attempts.
+func loginCallbackInput(opts *cli.MCPOptions, stdin io.Reader) io.Reader {
+	if opts == nil || !opts.NoBrowser {
+		return nil
+	}
+	return stdin
+}
+
+func performMCPCLIOAuthLoginRetryWithoutScopes(ctx context.Context, store *mcpCLIStore, name string, server *mcpCLIServer, discovery *mcp.StreamableHTTPOAuthDiscovery, resolvedScopes mcpResolvedOAuthScopes, callbackInput io.Reader, stdout io.Writer) error {
+	err := performMCPCLIOAuthLogin(ctx, store, name, server, discovery, resolvedScopes, callbackInput, stdout)
 	if err == nil {
 		return nil
 	}
@@ -424,10 +436,10 @@ func performMCPCLIOAuthLoginRetryWithoutScopes(ctx context.Context, store *mcpCL
 		return err
 	}
 	fmt.Fprintln(stdout, "OAuth provider rejected discovered scopes. Retrying without scopes…")
-	return performMCPCLIOAuthLogin(ctx, store, name, server, discovery, mcpResolvedOAuthScopes{Source: mcpOAuthScopesEmpty}, stdout)
+	return performMCPCLIOAuthLogin(ctx, store, name, server, discovery, mcpResolvedOAuthScopes{Source: mcpOAuthScopesEmpty}, callbackInput, stdout)
 }
 
-func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name string, server *mcpCLIServer, discovery *mcp.StreamableHTTPOAuthDiscovery, resolvedScopes mcpResolvedOAuthScopes, stdout io.Writer) error {
+func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name string, server *mcpCLIServer, discovery *mcp.StreamableHTTPOAuthDiscovery, resolvedScopes mcpResolvedOAuthScopes, callbackInput io.Reader, stdout io.Writer) error {
 	if store == nil || server == nil || discovery == nil {
 		return fmt.Errorf("OAuth login requires a discovered streamable HTTP server")
 	}
@@ -455,7 +467,12 @@ func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name strin
 		_ = login.Cancel(context.Background())
 	}()
 	fmt.Fprintf(stdout, "Authorize `%s` by opening this URL in your browser:\n%s\n\n", name, login.AuthorizationURL)
-	if err := openMCPLoginBrowser(login.AuthorizationURL); err != nil {
+	if callbackInput != nil {
+		// Rust #44629: HTTP callbacks remain supported while waiting for a
+		// pasted redirect URL.
+		fmt.Fprintln(stdout, "Or paste the full redirect URL here:")
+		go completeMCPCLIOAuthLoginFromInput(ctx, login, callbackInput, stdout)
+	} else if err := openMCPLoginBrowser(login.AuthorizationURL); err != nil {
 		fmt.Fprintln(stdout, "(Browser launch failed; please copy the URL above manually.)")
 	}
 	waitCtx, cancelWait := context.WithTimeout(contextOrBackground(ctx), mcpCLIOAuthCallbackTimeout)
@@ -473,6 +490,35 @@ func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name strin
 		}
 		return waitCtx.Err()
 	}
+}
+
+// completeMCPCLIOAuthLoginFromInput reads one pasted redirect URL and completes
+// the login, still validating the URL and state before exchanging the code
+// (Rust #44629).
+func completeMCPCLIOAuthLoginFromInput(ctx context.Context, login *mcp.OAuthLoginServer, reader io.Reader, stdout io.Writer) {
+	line, err := readMCPOAuthCallbackInput(reader)
+	if err != nil {
+		fmt.Fprintf(stdout, "Unable to read the OAuth callback URL: %v\n", err)
+		_ = login.Cancel(context.Background())
+		return
+	}
+	if _, err := login.CompleteWithCallbackURL(contextOrBackground(ctx), line); err != nil {
+		fmt.Fprintf(stdout, "OAuth login failed: %v\n", err)
+	}
+}
+
+func readMCPOAuthCallbackInput(reader io.Reader) (string, error) {
+	if reader == nil {
+		return "", errors.New("OAuth callback input is unavailable")
+	}
+	line, err := bufio.NewReader(io.LimitReader(reader, mcpCLIOAuthCallbackMaxBytes+1)).ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	if len(line) > mcpCLIOAuthCallbackMaxBytes {
+		return "", fmt.Errorf("OAuth callback URL exceeds %d KiB", mcpCLIOAuthCallbackMaxBytes/1024)
+	}
+	return strings.TrimSpace(line), nil
 }
 
 func shouldRetryMCPLoginWithoutScopes(resolvedScopes mcpResolvedOAuthScopes, err error) bool {
