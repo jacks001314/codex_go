@@ -32,6 +32,21 @@ type stateGoalTurnSnapshot struct {
 	// failures with no intervening successful tool.
 	SuccessfulTool  bool
 	FailedExecution bool
+	// Empty-response tracking for automatically admitted goal continuations
+	// (Rust #44320): a turn records has_activity for any user/reasoning/tool/
+	// other item and empty_final for a non-commentary agent message with no
+	// text. Three consecutive empty automatic continuations block the goal.
+	EmptyFinal  bool
+	HasActivity bool
+}
+
+// goalEmptyResponseState carries the consecutive-empty-automatic-continuation
+// streak for a thread's active goal (Rust #44320). The streak resets on
+// activity, on a user turn/abort, and when the active goal changes or clears.
+type goalEmptyResponseState struct {
+	GoalID          string
+	AutomaticTurnID string
+	Turns           int
 }
 
 // goalExecutionFailureState carries the consecutive-execution-failure streak for
@@ -397,6 +412,8 @@ func (r *RuntimeRouter) clearActiveGoalStateForThread(threadID string) {
 	// A cleared goal ends the active-goal execution-failure streak (Rust
 	// #41454 clear_current_turn_goal / clear_active_goal reset the live counter).
 	r.resetGoalExecutionFailure(threadID)
+	// A cleared goal also clears the empty-continuation streak (Rust #44320).
+	r.resetGoalEmptyResponses(threadID)
 }
 
 // advanceGoalExecutionFailure evaluates the per-thread consecutive-execution-
@@ -919,6 +936,26 @@ func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, compl
 			return
 		}
 	}
+	// Rust #44320: three consecutive automatically admitted goal continuations
+	// that finish with an empty final answer and no activity block the goal.
+	emptyResponseGoal := r.advanceGoalEmptyResponses(threadID, turnID, snapshot.GoalID, snapshot)
+	if emptyResponseGoal != "" {
+		current, getErr := r.services.StateRuntime.GetThreadGoal(context.Background(), threadID)
+		if getErr == nil && current != nil && current.GoalID == emptyResponseGoal &&
+			(current.Status == state.ThreadGoalActive || current.Status == state.ThreadGoalBudgetLimited) {
+			status := state.ThreadGoalBlocked
+			updated, updateErr := r.services.StateRuntime.UpdateThreadGoal(context.Background(), threadID, state.GoalUpdate{
+				Status: &status, ExpectedGoalID: &emptyResponseGoal,
+			})
+			if updateErr != nil {
+				slog.Warn("failed to block thread goal after empty continuations", "thread_id", threadID, "turn_id", turnID, "error", updateErr)
+			} else if updated != nil && updated.Status != current.Status {
+				r.emitStateThreadGoalUpdate(updated, turnID, snapshot.ConnectionID, telemetry.GoalEventKindStatusChanged)
+			}
+			r.resetGoalEmptyResponses(threadID)
+			return
+		}
+	}
 	if turnErr == nil || finishMode == state.GoalAccountingActiveOrComplete {
 		return
 	}
@@ -1118,6 +1155,11 @@ func (r *RuntimeRouter) startGoalContinuationTurn(params *turn.TurnStartParams) 
 	}
 	_ = r.persistTurnStartRuntimeWorkspaceRoots(params)
 	_ = r.persistTurnEnvironmentSelections(params)
+	// Rust #44320: identify this host-admitted continuation so an empty final
+	// answer can be attributed to it at turn stop.
+	if response != nil {
+		r.markGoalContinuation(params.ThreadID, response.Turn.ID)
+	}
 	r.startTurnRuntimeAsync(params, response, "")
 	return nil
 }

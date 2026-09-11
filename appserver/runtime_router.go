@@ -284,6 +284,7 @@ type RuntimeRouter struct {
 	goalAccountingTurns     map[string]stateGoalTurnSnapshot
 	goalTurnUsage           map[string]model.AgentUsage
 	execFailureTurns        map[string]goalExecutionFailureState
+	emptyResponseTurns      map[string]goalEmptyResponseState
 	descendantTokenUsage    map[string]int64
 	lastAccountedDescendant map[string]int64
 	goalProgressMu          sync.Mutex
@@ -500,6 +501,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		goalAccountingTurns:     map[string]stateGoalTurnSnapshot{},
 		goalTurnUsage:           map[string]model.AgentUsage{},
 		execFailureTurns:        map[string]goalExecutionFailureState{},
+		emptyResponseTurns:      map[string]goalEmptyResponseState{},
 		descendantTokenUsage:    map[string]int64{},
 		lastAccountedDescendant: map[string]int64{},
 		memoryStartupCtx:        memoryStartupCtx,

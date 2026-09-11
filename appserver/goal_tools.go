@@ -98,6 +98,7 @@ func (r *RuntimeRouter) executeGoalToolCreate(ctx context.Context, invocation *t
 	if _, err := r.services.StateRuntime.SetThreadPreviewIfEmpty(ctx, threadID, goal.Objective); err != nil {
 		slog.Warn("failed to set empty thread preview from goal objective", "thread_id", threadID, "error", err)
 	}
+	r.resetGoalEmptyResponses(threadID)
 	r.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID)
 	r.emitStateThreadGoalUpdate(goal, turnID, "", telemetry.GoalEventKindCreated)
 	return goalToolOutput(goalToolResponseForState(goal, false)), nil
@@ -138,6 +139,7 @@ func (r *RuntimeRouter) executeGoalToolUpdate(ctx context.Context, invocation *t
 	} else {
 		r.clearStateThreadGoalTurnSnapshot(threadID, turnID)
 	}
+	r.resetGoalEmptyResponses(threadID)
 	r.emitStateThreadGoalUpdate(goal, turnID, "", telemetry.GoalEventKindStatusChanged)
 	return goalToolOutput(goalToolResponseForState(goal, status == state.ThreadGoalComplete)), nil
 }
@@ -212,6 +214,9 @@ func (r *RuntimeRouter) recordGoalToolOutcome(threadID, turnID string, execution
 	if !ok || strings.TrimSpace(snapshot.GoalID) == "" {
 		return
 	}
+	// Any tool execution is turn activity for empty-continuation accounting
+	// (Rust #44320 record_item); it also resets the empty streak.
+	snapshot.HasActivity = true
 	if execution.Output.Success {
 		snapshot.SuccessfulTool = true
 	}
@@ -221,4 +226,8 @@ func (r *RuntimeRouter) recordGoalToolOutcome(threadID, turnID string, execution
 		snapshot.FailedExecution = true
 	}
 	r.goalAccountingTurns[key] = snapshot
+	if state, ok := r.emptyResponseTurns[strings.TrimSpace(threadID)]; ok {
+		state.Turns = 0
+		r.emptyResponseTurns[strings.TrimSpace(threadID)] = state
+	}
 }

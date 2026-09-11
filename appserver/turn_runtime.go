@@ -1563,6 +1563,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	completedAt := time.Now().UTC()
 	completedAtUnix := completedAt.Unix()
 	durationMS := completedAt.UnixMilli() - startedAtMS
+	r.recordGoalResultItems(threadID, turnID, params, result)
 	r.finishStateThreadGoalTurn(threadID, turnID, completedAt, model.AgentUsageTotalTokens(result.Usage), nil)
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
@@ -1920,6 +1921,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	r.notifyReviewRuntimeItems(threadID, turnID, items)
 	completedAtUnix := completedAt.Unix()
 	durationMS := completedAt.UnixMilli() - startedAtMS
+	r.recordGoalResultItems(threadID, turnID, params, result)
 	r.finishStateThreadGoalTurn(threadID, turnID, completedAt, model.AgentUsageTotalTokens(result.Usage), nil)
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
