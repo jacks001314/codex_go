@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 986 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 986", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 990 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 990", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -96,7 +96,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/bottom_pane/chat_composer/snapshots",
-			Files:    2,
+			Files:    5,
 			Owner:    "tui/bottom_pane/chat_composer",
 			Focus:    "Astra sparkle effects in the composer",
 			Priority: []string{"composer"},
@@ -268,7 +268,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/snapshots",
-			Files:    165,
+			Files:    166,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
