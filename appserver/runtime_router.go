@@ -2609,7 +2609,7 @@ func (r *RuntimeRouter) runInterruptHook(active *activeRuntimeTurn) {
 		model = strings.TrimSpace(active.Params.Model)
 		permissionMode = strings.TrimSpace(fmt.Sprint(active.Params.ApprovalPolicy))
 	}
-	hooks := r.interruptHooksForCWD(cwd)
+	hooks := r.interruptHooksForCWD(cwd, active.ThreadID)
 	if len(hooks) == 0 {
 		return
 	}
@@ -2626,11 +2626,11 @@ func (r *RuntimeRouter) runInterruptHook(active *activeRuntimeTurn) {
 	}
 }
 
-func (r *RuntimeRouter) interruptHooksForCWD(cwd string) []HookMetadata {
+func (r *RuntimeRouter) interruptHooksForCWD(cwd string, threadID string) []HookMetadata {
 	if r == nil {
 		return nil
 	}
-	hooks := r.hooksForCWD(cwd)
+	hooks := r.hooksForCWD(cwd, threadID)
 	out := make([]HookMetadata, 0, len(hooks))
 	for _, hook := range hooks {
 		if hook.EventName == HookEventInterrupt {
@@ -3501,7 +3501,7 @@ func (r *RuntimeRouter) runSessionEndHookOnce(record *session.Record, reason str
 	}
 	r.sessionEnded[threadID] = struct{}{}
 	r.sessionEndMu.Unlock()
-	hooks := r.hooksForCWD(record.Metadata.CWD)
+	hooks := r.hooksForCWD(record.Metadata.CWD, threadID)
 	if len(hooks) == 0 {
 		return
 	}
@@ -10929,6 +10929,13 @@ func (r *RuntimeRouter) bypassHookTrustFromConfig() bool {
 }
 
 func (r *RuntimeRouter) configureHookDiscovery() *HookDiscoveryService {
+	return r.configureHookDiscoveryForThread("")
+}
+
+// configureHookDiscoveryForThread filters plugin hook sources by the thread's
+// disabled plugins. An empty thread ID keeps every source (Rust #44655).
+func (r *RuntimeRouter) configureHookDiscoveryForThread(threadID string) *HookDiscoveryService {
+	disabled := r.threadDisabledPluginIDs(threadID)
 	r.servicesMu.Lock()
 	base := r.requireHooksDiscovery()
 	codexHome := base.CodexHome
@@ -10938,7 +10945,7 @@ func (r *RuntimeRouter) configureHookDiscovery() *HookDiscoveryService {
 	}
 	var pluginSources []plugin.HookSource
 	if r.services.Plugins != nil {
-		pluginSources = append([]plugin.HookSource(nil), r.services.Plugins.EnabledHookSources()...)
+		pluginSources = filterDisabledPluginHookSources(disabled, r.services.Plugins.EnabledHookSources())
 	}
 	r.servicesMu.Unlock()
 
@@ -10948,6 +10955,31 @@ func (r *RuntimeRouter) configureHookDiscovery() *HookDiscoveryService {
 	discovery.BypassTrust = r.bypassHookTrustFromConfig()
 	discovery.PluginHookSources = pluginSources
 	return discovery
+}
+
+// filterDisabledPluginHookSources drops hook sources contributed by disabled
+// plugins without changing shared plugin state (Rust #44655).
+func filterDisabledPluginHookSources(disabled []string, sources []plugin.HookSource) []plugin.HookSource {
+	if len(sources) == 0 || len(disabled) == 0 {
+		return sources
+	}
+	blocked := make(map[string]struct{}, len(disabled))
+	for _, id := range disabled {
+		if id = strings.TrimSpace(id); id != "" {
+			blocked[id] = struct{}{}
+		}
+	}
+	if len(blocked) == 0 {
+		return sources
+	}
+	filtered := make([]plugin.HookSource, 0, len(sources))
+	for _, source := range sources {
+		if _, ok := blocked[strings.TrimSpace(source.PluginID)]; ok {
+			continue
+		}
+		filtered = append(filtered, source)
+	}
+	return filtered
 }
 
 func (r *RuntimeRouter) hookRunnerConfigured() bool {
@@ -13806,7 +13838,7 @@ func (r *RuntimeRouter) turnHookAdapter(params *turn.TurnStartParams, turnID str
 	if r == nil || params == nil || !r.hookRunnerConfigured() {
 		return nil
 	}
-	hooks := r.hooksForCWD(params.CWD)
+	hooks := r.hooksForCWD(params.CWD, params.ThreadID)
 	return NewToolHookAdapter(r.requireHookRunner(), hooks, params.ThreadID, turnID, params.CWD)
 }
 

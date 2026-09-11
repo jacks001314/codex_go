@@ -35,7 +35,7 @@ func (r *RuntimeRouter) compactHookContext(record *session.Record, request *comp
 		ctx.CWD = record.Metadata.CWD
 		ctx.Model = record.Metadata.Model
 	}
-	ctx.Hooks = r.compactHooksForCWD(ctx.CWD)
+	ctx.Hooks = r.compactHooksForCWD(ctx.CWD, ctx.ThreadID)
 	if len(ctx.Hooks) == 0 {
 		return nil
 	}
@@ -84,11 +84,11 @@ func (r *RuntimeRouter) runPostCompactHooks(ctx context.Context, hookCtx *compac
 	return nil
 }
 
-func (r *RuntimeRouter) compactHooksForCWD(cwd string) []HookMetadata {
-	return r.hooksForCWD(cwd)
+func (r *RuntimeRouter) compactHooksForCWD(cwd string, threadID string) []HookMetadata {
+	return r.hooksForCWD(cwd, threadID)
 }
 
-func (r *RuntimeRouter) hooksForCWD(cwd string) []HookMetadata {
+func (r *RuntimeRouter) hooksForCWD(cwd string, threadID string) []HookMetadata {
 	if r == nil {
 		return nil
 	}
@@ -106,7 +106,7 @@ func (r *RuntimeRouter) hooksForCWD(cwd string) []HookMetadata {
 			}
 		}
 	}
-	discovery := r.configureHookDiscovery()
+	discovery := r.configureHookDiscoveryForThread(threadID)
 	discovered := discovery.Discover(&HookListParams{CWDs: []string{cwd}}, r.services.DefaultCWD)
 	if discovered != nil {
 		for i := range discovered.Data {

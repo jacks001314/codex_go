@@ -112,6 +112,23 @@ func TestDisabledPluginCapabilitiesFilteredLikeRust(t *testing.T) {
 	}
 }
 
+// TestDisabledPluginHookSourcesFilteredLikeRust covers the plugin-hook half of
+// #44655: a disabled plugin's hook sources are excluded from thread-scoped
+// hook discovery.
+func TestDisabledPluginHookSourcesFilteredLikeRust(t *testing.T) {
+	sources := []plugin.HookSource{
+		{PluginID: "a@m", SourcePath: "/a/hooks.json"},
+		{PluginID: "b@m", SourcePath: "/b/hooks.json"},
+	}
+	if got := filterDisabledPluginHookSources(nil, sources); len(got) != 2 {
+		t.Fatalf("no-selection sources = %#v", got)
+	}
+	filtered := filterDisabledPluginHookSources([]string{"a@m"}, sources)
+	if len(filtered) != 1 || filtered[0].PluginID != "b@m" {
+		t.Fatalf("filtered sources = %#v, want only b@m", filtered)
+	}
+}
+
 // TestThreadExtraSettingsDisabledPluginIDsReplacePreserveClearLikeRust covers
 // the #44905 selection semantics: a supplied list replaces, omission/null
 // preserves, and [] clears.
