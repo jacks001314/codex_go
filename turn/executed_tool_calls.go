@@ -22,6 +22,28 @@ type ExecutedToolCallRecorder struct {
 	direct  map[string]model.ExecutedToolCall
 	groups  map[string]*recordedToolCallGroup
 	outputs map[string]string
+	// seenIDs tracks observed call and runtime cell IDs so reused or historical
+	// IDs cannot be presented as fresh evidence (Rust #44472).
+	seenIDs *seenIDs
+	// historySeeded records that the first prompt's supplied history was
+	// indexed. Rust indexes the session's initial history at construction; Go
+	// records are created before the thread's first sampling request, so the
+	// first request input is the equivalent supply.
+	historySeeded bool
+	// canProveWaitCompletion is false when the thread carried prior history, so
+	// inherited wait handles cannot be distinguished from newly allocated ones.
+	canProveWaitCompletion bool
+	// pendingWrapperOrigins holds Code Mode exec/wait wrapper call IDs observed
+	// before their cell is registered.
+	pendingWrapperOrigins map[string]struct{}
+	// invalidCells and invalidGroups retain revoked completeness until the
+	// affected output commits; lost evidence cannot become complete again.
+	invalidCells  map[string]struct{}
+	invalidGroups map[string]struct{}
+	invalidCalls  map[string]struct{}
+	// startedCells records cells whose runtime handle was already observed, so a
+	// later exec/wait registration for the same cell is not treated as reuse.
+	startedCells map[string]struct{}
 }
 
 type recordedToolCallGroup struct {
@@ -46,7 +68,10 @@ type executedToolCallGroupAttachment struct {
 }
 
 func NewExecutedToolCallRecorder() *ExecutedToolCallRecorder {
-	return &ExecutedToolCallRecorder{}
+	return &ExecutedToolCallRecorder{
+		seenIDs:                newSeenIDs(),
+		canProveWaitCompletion: true,
+	}
 }
 
 func (r *ExecutedToolCallRecorder) RecordToolCall(invocation *tool.Invocation, toolMode string) {
@@ -55,6 +80,9 @@ func (r *ExecutedToolCallRecorder) RecordToolCall(invocation *tool.Invocation, t
 	}
 	sourceCodeMode := strings.EqualFold(strings.TrimSpace(invocation.Source), "code_mode")
 	if !sourceCodeMode && codeModeToolMetadataSkipped(invocation, toolMode) {
+		// A Code Mode exec/wait wrapper is not recorded as a call, but its
+		// identity still proves that the eventual cell origin is fresh.
+		r.observeWrapperOrigin(invocation.CallID)
 		return
 	}
 	call, originalBytes := executedToolCallFromInvocation(invocation)
@@ -73,6 +101,9 @@ func (r *ExecutedToolCallRecorder) RecordToolCall(invocation *tool.Invocation, t
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensureState()
+	if !r.seenIDs.observeCallID(invocation.CallID) {
+		r.invalidateCall(invocation.CallID)
+	}
 	if len(r.direct) < maxPendingExecutedToolCalls {
 		if _, exists := r.direct[invocation.CallID]; !exists {
 			r.direct[invocation.CallID] = call
@@ -90,14 +121,23 @@ func (r *ExecutedToolCallRecorder) recordNested(groupID string, callID string, c
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensureState()
+	freshCallID := r.seenIDs.observeCallID(callID)
 	pendingCount := r.pendingNestedCalls()
 	if pendingCount > maxPendingExecutedToolCalls || (len(r.groups) >= maxPendingExecutedToolCalls && r.groups[groupID] == nil) {
+		r.invalidateGroup(groupID)
 		return
 	}
 	group := r.groups[groupID]
 	if group == nil {
 		group = &recordedToolCallGroup{}
 		r.groups[groupID] = group
+	}
+	duplicate := false
+	for index := range group.pending {
+		if group.pending[index].callID == strings.TrimSpace(callID) {
+			duplicate = true
+			break
+		}
 	}
 	maxBytes := model.MaxExecutedToolCallArgumentBytes
 	remaining := maxExecutedToolCallFullArgumentBytesPerItem - group.fullBytes
@@ -110,11 +150,18 @@ func (r *ExecutedToolCallRecorder) recordNested(groupID string, callID string, c
 	recorded := recordedToolCall{call: call, callID: strings.TrimSpace(callID)}
 	if pendingCount == maxPendingExecutedToolCalls {
 		recorded.call = model.NewTruncatedExecutedToolCall(call.Name, originalBytes, 0)
+		r.invalidateGroup(groupID)
 	} else if originalBytes <= maxBytes {
 		recorded.fullBytes = originalBytes
 		group.fullBytes += originalBytes
 	} else {
 		recorded.call = model.NewTruncatedExecutedToolCall(call.Name, originalBytes, maxBytes)
+		r.invalidateGroup(groupID)
+	}
+	// A duplicate call ID cannot be proven to belong to this cell, so revoke
+	// completeness while retaining the recorded attempt (Rust #44472).
+	if duplicate || !freshCallID {
+		r.invalidateGroup(groupID)
 	}
 	group.pending = append(group.pending, recorded)
 }
@@ -213,7 +260,23 @@ func (r *ExecutedToolCallRecorder) registerGroup(groupID string, outputCallID st
 	r.ensureState()
 	if (len(r.groups) >= maxPendingExecutedToolCalls && r.groups[groupID] == nil) ||
 		(len(r.outputs) >= maxPendingExecutedToolCalls && r.outputs[outputCallID] == "") {
+		r.invalidateGroup(groupID)
 		return
+	}
+	freshOrigin := r.observeOrigin(outputCallID)
+	freshCell := true
+	if cellID := strings.TrimPrefix(groupID, "cell:"); cellID != groupID {
+		if _, started := r.startedCells[cellID]; !started {
+			if len(r.startedCells) < maxPendingExecutedToolCalls {
+				r.startedCells[cellID] = struct{}{}
+			}
+			if !r.seenIDs.observeRuntimeCellID(cellID) {
+				freshCell = false
+			}
+		}
+	}
+	if !freshOrigin || !freshCell {
+		r.invalidateGroup(groupID)
 	}
 	if r.groups[groupID] == nil {
 		r.groups[groupID] = &recordedToolCallGroup{}
@@ -230,12 +293,20 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.ensureState()
+	r.seedHistoryOnce(out)
 	if len(r.direct) == 0 && len(r.outputs) == 0 {
 		return out, nil
 	}
 	attachment := &ExecutedToolCallAttachment{}
 	seenDirect := map[string]struct{}{}
 	seenGroups := map[string]struct{}{}
+	outputCounts := map[string]int{}
+	for _, item := range out {
+		if _, callID, ok := executedToolCallOutputIdentity(item); ok && callID != "" {
+			outputCounts[callID]++
+		}
+	}
 	for index := len(out) - 1; index >= 0; index-- {
 		_, callID, ok := executedToolCallOutputIdentity(out[index])
 		if !ok || callID == "" {
@@ -243,17 +314,35 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 		}
 		calls := make([]model.ExecutedToolCall, 0, 4)
 		cellID := ""
-		complete := true
-		if call, exists := r.direct[callID]; exists {
+		// Completeness requires evidence that the supplied history was indexed
+		// and that no reused or ambiguous ID revoked it (Rust #44472).
+		complete := r.historyIndexed()
+		call, hasDirect := r.direct[callID]
+		groupID := r.outputs[callID]
+		if hasDirect {
 			if _, seen := seenDirect[callID]; !seen {
 				calls = append(calls, call)
 				seenDirect[callID] = struct{}{}
 				attachment.directCallIDs = append(attachment.directCallIDs, callID)
 			}
+			if groupID != "" {
+				// The same ID cannot be both a direct call and a cell output.
+				complete = false
+			}
+		} else if r.callInvalid(callID) {
+			complete = false
 		}
-		if groupID := r.outputs[callID]; groupID != "" {
+		if groupID != "" {
 			if strings.HasPrefix(groupID, "cell:") {
 				cellID = strings.TrimPrefix(groupID, "cell:")
+			}
+			if r.groupInvalid(groupID) || outputCounts[callID] > 1 {
+				// Lost, reused, or duplicated evidence cannot become complete again.
+				complete = false
+			}
+			if !r.canProveWaitCompletion && !executedToolCallOutputIsCustom(out[index]) {
+				// Inherited wait handles cannot be proven after resume or fork.
+				complete = false
 			}
 			if _, seen := seenGroups[groupID]; !seen {
 				if group := r.groups[groupID]; group != nil && len(group.pending) > 0 {
@@ -290,6 +379,7 @@ func (r *ExecutedToolCallRecorder) CommitAttachment(attachment *ExecutedToolCall
 	defer r.mu.Unlock()
 	for _, callID := range attachment.directCallIDs {
 		delete(r.direct, callID)
+		delete(r.invalidCalls, callID)
 	}
 	for _, attached := range attachment.groups {
 		group := r.groups[attached.groupID]
@@ -307,6 +397,10 @@ func (r *ExecutedToolCallRecorder) CommitAttachment(attachment *ExecutedToolCall
 		}
 		if len(group.pending) == 0 {
 			delete(r.groups, attached.groupID)
+			delete(r.invalidGroups, attached.groupID)
+			if cellID := strings.TrimPrefix(attached.groupID, "cell:"); cellID != attached.groupID {
+				delete(r.invalidCells, cellID)
+			}
 		}
 		for outputCallID, groupID := range r.outputs {
 			if groupID == attached.groupID {
@@ -326,6 +420,125 @@ func (r *ExecutedToolCallRecorder) ensureState() {
 	if r.outputs == nil {
 		r.outputs = map[string]string{}
 	}
+	if r.seenIDs == nil {
+		r.seenIDs = newSeenIDs()
+	}
+	if r.pendingWrapperOrigins == nil {
+		r.pendingWrapperOrigins = map[string]struct{}{}
+	}
+	if r.invalidCells == nil {
+		r.invalidCells = map[string]struct{}{}
+	}
+	if r.invalidGroups == nil {
+		r.invalidGroups = map[string]struct{}{}
+	}
+	if r.invalidCalls == nil {
+		r.invalidCalls = map[string]struct{}{}
+	}
+	if r.startedCells == nil {
+		r.startedCells = map[string]struct{}{}
+	}
+}
+
+// observeWrapperOrigin records a Code Mode exec/wait wrapper call whose cell is
+// not known yet. A reused wrapper ID is not remembered, so the eventual cell
+// sees a non-fresh origin and withholds completeness (Rust #44472).
+func (r *ExecutedToolCallRecorder) observeWrapperOrigin(callID string) {
+	callID = strings.TrimSpace(callID)
+	if r == nil || callID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureState()
+	if !r.seenIDs.observeCallID(callID) {
+		return
+	}
+	if len(r.pendingWrapperOrigins) < maxPendingExecutedToolCalls {
+		r.pendingWrapperOrigins[callID] = struct{}{}
+	}
+}
+
+// observeOrigin consumes a wrapper origin recorded at submission, otherwise
+// treats the output call ID as a fresh observation.
+func (r *ExecutedToolCallRecorder) observeOrigin(callID string) bool {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return false
+	}
+	if _, ok := r.pendingWrapperOrigins[callID]; ok {
+		delete(r.pendingWrapperOrigins, callID)
+		return true
+	}
+	return r.seenIDs.observeCallID(callID)
+}
+
+func (r *ExecutedToolCallRecorder) invalidateCall(callID string) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" || len(r.invalidCalls) >= maxPendingExecutedToolCalls {
+		return
+	}
+	r.invalidCalls[callID] = struct{}{}
+}
+
+// invalidateGroup revokes completeness for one cell or output grouping. The
+// revocation is sticky: lost or ambiguous evidence cannot become complete again.
+func (r *ExecutedToolCallRecorder) invalidateGroup(groupID string) {
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		return
+	}
+	if cellID := strings.TrimPrefix(groupID, "cell:"); cellID != groupID {
+		if len(r.invalidCells) < maxPendingExecutedToolCalls {
+			r.invalidCells[cellID] = struct{}{}
+		}
+		return
+	}
+	if len(r.invalidGroups) < maxPendingExecutedToolCalls {
+		r.invalidGroups[groupID] = struct{}{}
+	}
+}
+
+func (r *ExecutedToolCallRecorder) groupInvalid(groupID string) bool {
+	if groupID == "" {
+		return false
+	}
+	if _, ok := r.invalidGroups[groupID]; ok {
+		return true
+	}
+	if cellID := strings.TrimPrefix(groupID, "cell:"); cellID != groupID {
+		_, ok := r.invalidCells[cellID]
+		return ok
+	}
+	return false
+}
+
+func (r *ExecutedToolCallRecorder) callInvalid(callID string) bool {
+	_, ok := r.invalidCalls[strings.TrimSpace(callID)]
+	return ok
+}
+
+func (r *ExecutedToolCallRecorder) historyIndexed() bool {
+	return r.seenIDs != nil && r.seenIDs.historyIndexed()
+}
+
+// seedHistoryOnce indexes the thread's supplied history on the recorder's first
+// prompt. The first sampling request happens before this turn records any call,
+// so its input is the equivalent of Rust's InitialHistory.
+func (r *ExecutedToolCallRecorder) seedHistoryOnce(items []any) {
+	if r.historySeeded {
+		return
+	}
+	r.historySeeded = true
+	for _, item := range items {
+		if len(historyObservedIDs(item)) > 0 {
+			// Inherited runtime cell handles cannot be distinguished from newly
+			// allocated ones after resume or fork (Rust #44472).
+			r.canProveWaitCompletion = false
+			break
+		}
+	}
+	r.seenIDs.observeHistory(items)
 }
 
 func (r *ExecutedToolCallRecorder) pendingNestedCalls() int {
@@ -436,6 +649,14 @@ func executedToolCallOutputType(itemType string) bool {
 	default:
 		return false
 	}
+}
+
+// executedToolCallOutputIsCustom reports whether the output came from a custom
+// (Code Mode) tool call. Only these outputs can prove wait completion when the
+// thread carried prior history (Rust #44472).
+func executedToolCallOutputIsCustom(value any) bool {
+	itemType, _, ok := executedToolCallOutputIdentity(value)
+	return ok && strings.TrimSpace(itemType) == "custom_tool_call_output"
 }
 
 func clonePromptOutputWithExecutedToolCalls(value any, calls []model.ExecutedToolCall, cellID string, complete *bool) any {

@@ -286,3 +286,116 @@ func TestExecutedToolCallRecorderAttachesCellCompletenessLikeRust(t *testing.T) 
 	}
 	recorder.CommitAttachment(token)
 }
+
+func executedToolCallCompleteness(t *testing.T, recorder *ExecutedToolCallRecorder, output *ToolResponseItem) any {
+	t.Helper()
+	attached, token := recorder.AttachPendingToPrompt([]any{output})
+	if token == nil {
+		t.Fatal("attachment token is nil")
+	}
+	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(attached)[0])
+	recorder.CommitAttachment(token)
+	metadata, ok := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return metadata["tool_calls_complete"]
+}
+
+func TestExecutedToolCallRecorderWithholdsCompletenessForReusedOrigin(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	recorder.RecordToolCall(&tool.Invocation{
+		CallID: "exec-call", ToolName: tool.PlainName(tool.CodeModeExecToolName),
+		Payload: tool.Payload{Kind: tool.PayloadCustom, Input: `text("running")`},
+	}, model.ToolModeCodeMode)
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-1", "exec-call")
+	reused := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "exec-call", Output: NewFunctionCallOutputPayload("running", nil)}
+	if got := executedToolCallCompleteness(t, recorder, reused); got != true {
+		t.Fatalf("first completeness = %#v, want true", got)
+	}
+
+	// The same origin call ID cannot introduce a second cell; its completeness
+	// is revoked rather than presented as fresh evidence (Rust #44472).
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-2", "cell-1", "second"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-1", "exec-call")
+	if got := executedToolCallCompleteness(t, recorder, reused); got != false {
+		t.Fatalf("reused-origin completeness = %#v, want false", got)
+	}
+}
+
+func TestExecutedToolCallRecorderWithholdsCompletenessForDuplicateOutput(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-1", "out-1")
+	output := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "out-1", Output: NewFunctionCallOutputPayload("done", nil)}
+	attached, token := recorder.AttachPendingToPrompt([]any{output, output})
+	if token == nil {
+		t.Fatal("attachment token is nil")
+	}
+	attachedAny := false
+	for index, item := range model.BoundExecutedToolCallsForPrompt(attached) {
+		object := marshalExecutedToolCallItem(t, item)
+		metadata, ok := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+		if !ok {
+			continue
+		}
+		attachedAny = true
+		if metadata["tool_calls_complete"] != false {
+			t.Fatalf("duplicate-output item %d completeness = %#v, want false", index, metadata["tool_calls_complete"])
+		}
+	}
+	if !attachedAny {
+		t.Fatal("no output carried executed tool call metadata")
+	}
+	recorder.CommitAttachment(token)
+}
+
+func TestExecutedToolCallRecorderWithholdsWaitCompletionAfterHistory(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	// The first prompt supplies prior history, so inherited runtime cell handles
+	// cannot be distinguished from new ones (Rust #44472).
+	if _, token := recorder.AttachPendingToPrompt([]any{
+		map[string]any{"type": "function_call", "call_id": "history-call"},
+	}); token != nil {
+		t.Fatal("history-only attach must not produce an attachment")
+	}
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-1", "wait-out")
+	waitOutput := &ToolResponseItem{Type: "function_call_output", CallID: "wait-out", Output: NewFunctionCallOutputPayload("done", nil)}
+	if got := executedToolCallCompleteness(t, recorder, waitOutput); got != false {
+		t.Fatalf("wait completeness after history = %#v, want false", got)
+	}
+}
+
+func TestExecutedToolCallRecorderAllowsFreshWaitCompletionOnNewThread(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	// A new thread's first prompt carries no history, so a same-session wait can
+	// prove completion.
+	if _, token := recorder.AttachPendingToPrompt([]any{
+		map[string]any{"type": "message", "role": "user", "content": "hi"},
+	}); token != nil {
+		t.Fatal("history-free attach must not produce an attachment")
+	}
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-1", "wait-out")
+	waitOutput := &ToolResponseItem{Type: "function_call_output", CallID: "wait-out", Output: NewFunctionCallOutputPayload("done", nil)}
+	if got := executedToolCallCompleteness(t, recorder, waitOutput); got != true {
+		t.Fatalf("fresh wait completeness = %#v, want true", got)
+	}
+}
+
+func TestExecutedToolCallRecorderWithholdsCompletenessForHistoricalOutputID(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	if _, token := recorder.AttachPendingToPrompt([]any{
+		map[string]any{"type": "function_call_output", "call_id": "out-1"},
+	}); token != nil {
+		t.Fatal("history-only attach must not produce an attachment")
+	}
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-1", "out-1")
+	output := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "out-1", Output: NewFunctionCallOutputPayload("done", nil)}
+	if got := executedToolCallCompleteness(t, recorder, output); got != false {
+		t.Fatalf("historical-ID completeness = %#v, want false", got)
+	}
+}

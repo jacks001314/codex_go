@@ -233,6 +233,16 @@ func (i *AgentItem) ClearExecutedToolCalls() {
 	}
 }
 
+// ExecutedToolCallCellID returns the originating Code Mode cell associated with
+// the item's recorded calls. History seeding observes it so a resumed cell
+// cannot claim a historical ID as fresh (Rust #44472).
+func (i *AgentItem) ExecutedToolCallCellID() string {
+	if i == nil {
+		return ""
+	}
+	return strings.TrimSpace(i.cellID)
+}
+
 // ClearToolResultMetadata omits raw tool-result metadata without changing
 // existing calls, sources, or completion markers (Rust #44336).
 func (i *AgentItem) ClearToolResultMetadata() {
