@@ -62,6 +62,12 @@ type StateRuntime struct {
 	logsDB          *sql.DB
 	goalsDB         *sql.DB
 	memoriesDB      *sql.DB
+	memoriesV2Mu    sync.Mutex
+	memoriesV2DB    *sql.DB
+	// ownsDBs is true only for the runtime that opened the shared databases.
+	// Version-scoped memory store views share those handles and must not close
+	// them.
+	ownsDBs         bool
 	threadHistoryMu sync.Mutex
 	threadHistoryDB *sql.DB
 	metrics         *TaskMetrics
@@ -95,6 +101,7 @@ func InitStateRuntime(ctx context.Context, sqliteConfig SqliteConfig, defaultPro
 		logsDB:          dbs[RuntimeDBLogs],
 		goalsDB:         dbs[RuntimeDBGoals],
 		memoriesDB:      dbs[RuntimeDBMemories],
+		ownsDBs:         true,
 	}
 	if err := runtime.ensureBackfillState(ctx); err != nil {
 		_ = runtime.Close()
@@ -139,6 +146,12 @@ func (c SqliteConfig) OpenMemoriesDB(ctx context.Context) (*sql.DB, error) {
 	return c.openRuntimeDB(ctx, runtimeDBSpec{kind: RuntimeDBMemories, label: "memories DB", path: SqliteConfig.MemoriesDBPath})
 }
 
+// OpenMemoriesV2DB lazily opens the isolated v2 memories database, reusing the
+// memories schema (Rust #43797 open_memories_v2_db).
+func (c SqliteConfig) OpenMemoriesV2DB(ctx context.Context) (*sql.DB, error) {
+	return c.openRuntimeDB(ctx, runtimeDBSpec{kind: RuntimeDBMemories, label: "memories v2 DB", path: SqliteConfig.MemoriesV2DBPath})
+}
+
 func (c SqliteConfig) OpenThreadHistoryDB(ctx context.Context) (*sql.DB, error) {
 	return c.openRuntimeDB(ctx, runtimeDBSpec{kind: RuntimeDBThreadHistory, label: "thread history DB", path: SqliteConfig.ThreadHistoryDBPath})
 }
@@ -153,7 +166,9 @@ func (r *StateRuntime) ThreadUpdatedAtMillis() int64 { return r.threadUpdatedAt.
 func (r *StateRuntime) ThreadRecencyAtMillis() int64 { return r.threadRecencyAt.Load() }
 
 func (r *StateRuntime) Close() error {
-	if r == nil {
+	// Version-scoped memory store views share the owning runtime's database
+	// handles and must not close them.
+	if r == nil || !r.ownsDBs {
 		return nil
 	}
 	r.threadHistoryMu.Lock()
@@ -161,7 +176,12 @@ func (r *StateRuntime) Close() error {
 	r.threadHistoryDB = nil
 	r.closed = true
 	r.threadHistoryMu.Unlock()
+	r.memoriesV2Mu.Lock()
+	memoriesV2DB := r.memoriesV2DB
+	r.memoriesV2DB = nil
+	r.memoriesV2Mu.Unlock()
 	return errors.Join(
+		closeSQLiteDB(memoriesV2DB),
 		closeSQLiteDB(historyDB),
 		closeSQLiteDB(r.memoriesDB),
 		closeSQLiteDB(r.goalsDB),

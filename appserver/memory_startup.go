@@ -288,10 +288,23 @@ func (r *RuntimeRouter) startMemoriesStartupTask(response *ThreadStartResponse, 
 	reasoningSummary := firstNonEmpty(stringConfigValue(cfg, "model_reasoning_summary"), modelInfo.DefaultReasoningSummary)
 	serviceTier := strings.TrimSpace(record.Metadata.ServiceTier)
 	parentProfile := memoryParentPermissionProfile(cfg, record.Metadata.CWD, &params)
+	// Scope memory jobs/outputs to the selected version's store: v2 lazily opens
+	// an isolated memories database while sharing the thread catalog (Rust
+	// #43797).
+	stateRuntime := r.services.StateRuntime
+	memoryVersion := memoryConfig.MemoryVersion()
+	if stateRuntime != nil {
+		store, storeErr := stateRuntime.MemoryStoreForVersion(context.Background(), string(memoryVersion))
+		if storeErr != nil {
+			slog.Warn("failed to open versioned memory store", "memory_version", string(memoryVersion), "error", storeErr)
+			return
+		}
+		stateRuntime = store
+	}
 	pipeline := &memories.StartupPipeline{
-		State:             r.services.StateRuntime,
+		State:             stateRuntime,
 		CodexHome:         r.codexHomeForRollout(),
-		Version:           memoryConfig.MemoryVersion(),
+		Version:           memoryVersion,
 		CurrentThreadID:   response.Thread.ID,
 		Config:            memoryConfig,
 		StageOneModel:     extractModel,

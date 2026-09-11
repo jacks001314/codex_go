@@ -15,11 +15,14 @@ import (
 )
 
 const (
-	MinimumSQLiteVersion        = "3.51.3"
-	StateSQLiteFilename         = "state_5.sqlite"
-	LogsSQLiteFilename          = "logs_2.sqlite"
-	GoalsSQLiteFilename         = "goals_1.sqlite"
-	MemoriesSQLiteFilename      = "memories_1.sqlite"
+	MinimumSQLiteVersion   = "3.51.3"
+	StateSQLiteFilename    = "state_5.sqlite"
+	LogsSQLiteFilename     = "logs_2.sqlite"
+	GoalsSQLiteFilename    = "goals_1.sqlite"
+	MemoriesSQLiteFilename = "memories_1.sqlite"
+	// MemoriesV2SQLiteFilename is the lazily-created isolated v2 memories DB
+	// (Rust #43797 MEMORIES_V2_DB); the thread catalog stays in the state DB.
+	MemoriesV2SQLiteFilename    = "memories_v2_1.sqlite"
 	ThreadHistorySQLiteFilename = "thread_history_1.sqlite"
 	SQLiteMaxOpenConnections    = 5
 )
@@ -96,6 +99,11 @@ func (c SqliteConfig) GoalsDBPath() string {
 
 func (c SqliteConfig) MemoriesDBPath() string {
 	return filepath.Join(c.sqliteHome, MemoriesSQLiteFilename)
+}
+
+// MemoriesV2DBPath is the isolated v2 memories database path (Rust #43797).
+func (c SqliteConfig) MemoriesV2DBPath() string {
+	return filepath.Join(c.sqliteHome, MemoriesV2SQLiteFilename)
 }
 
 func (c SqliteConfig) ThreadHistoryDBPath() string {
