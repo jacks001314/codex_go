@@ -6440,6 +6440,15 @@ func (r *RuntimeRouter) turnEnvironmentContextTextAt(params *turn.TurnStartParam
 	}
 	fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", escapeEnvironmentXML(now.Format("2006-01-02")))
 	fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))
+	if lines := r.environmentContextSubagentLines(strings.TrimSpace(params.ThreadID)); len(lines) > 0 {
+		b.WriteString("  <subagents>\n")
+		for _, line := range lines {
+			b.WriteString("    ")
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		b.WriteString("  </subagents>\n")
+	}
 	b.WriteString("</environment_context>")
 	return b.String()
 }

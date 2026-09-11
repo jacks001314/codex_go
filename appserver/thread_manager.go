@@ -179,6 +179,18 @@ func (m *ThreadManager) LiveThread(threadID session.ThreadID) *session.LiveThrea
 	return liveThread.persistence
 }
 
+// HasLiveThread reports whether a thread is currently loaded in the manager,
+// independent of whether its persistence writer has been opened (Rust's
+// thread manager tracks the loaded thread itself).
+func (m *ThreadManager) HasLiveThread(threadID session.ThreadID) bool {
+	if m == nil || strings.TrimSpace(string(threadID)) == "" {
+		return false
+	}
+	m.liveThreadsMu.Lock()
+	defer m.liveThreadsMu.Unlock()
+	return m.liveThreads[threadID] != nil
+}
+
 func (m *ThreadManager) WithRolloutRecorder(threadID session.ThreadID, open func() (*rollout.Recorder, error), apply func(*rollout.Recorder) error) (bool, error) {
 	if m == nil || strings.TrimSpace(string(threadID)) == "" {
 		return false, nil
