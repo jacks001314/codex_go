@@ -2332,7 +2332,7 @@ func mergeConfigMaps(dst map[string]any, src map[string]any) {
 func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
 	for key, value := range src {
 		childPath := append(append([]string(nil), path...), key)
-		if isMultiAgentV2FeaturePath(childPath) {
+		if _, ok := structuredFeatureName(childPath); ok {
 			// Mirrors Rust merge_toml_values_at_path's multi_agent_v2 handling
 			// (config/src/merge.rs): a legacy boolean toggle converts to an
 			// `enabled` field when merged with a nested table, in either
@@ -2358,6 +2358,12 @@ func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
 		srcMap, srcIsMap := value.(map[string]any)
 		dstMap, dstIsMap := dst[key].(map[string]any)
 		if srcIsMap && dstIsMap {
+			if isCredentialProviderTablePath(childPath) {
+				// Mirrors Rust merge.rs (#44241): a higher-priority provider in
+				// features.network_proxy.credentials displaces lower-priority
+				// providers that declare an overlapping `env` source.
+				displaceCredentialProvidersBySource(dstMap, srcMap)
+			}
 			normalizeConfigKeyAliases(childPath, dstMap)
 			normalizeConfigKeyAliases(childPath, srcMap)
 			if isPermissionNetworkDomainsPath(childPath) {
@@ -2389,6 +2395,105 @@ func isMultiAgentV2FeaturePath(path []string) bool {
 		return true
 	}
 	return len(path) == 4 && path[0] == "profiles" && path[2] == "features" && path[3] == "multi_agent_v2"
+}
+
+// structuredFeatureName mirrors Rust is_structured_feature_path
+// (config/src/merge.rs): the named feature paths whose legacy boolean toggle
+// converts to an `enabled` field when merged with a nested table.
+func structuredFeatureName(path []string) (string, bool) {
+	feature := ""
+	switch {
+	case len(path) == 2 && path[0] == "features":
+		feature = path[1]
+	case len(path) == 4 && path[0] == "profiles" && path[2] == "features":
+		feature = path[3]
+	default:
+		return "", false
+	}
+	switch feature {
+	case "multi_agent_v2", "network_proxy", "sleep_tool":
+		return feature, true
+	default:
+		return "", false
+	}
+}
+
+// isCredentialProviderTablePath reports whether path points at the
+// features.network_proxy.credentials table (including the profile form).
+func isCredentialProviderTablePath(path []string) bool {
+	if len(path) < 2 || path[len(path)-1] != "credentials" {
+		return false
+	}
+	_, ok := structuredFeatureName(path[:len(path)-1])
+	if !ok {
+		return false
+	}
+	return path[len(path)-2] == "network_proxy"
+}
+
+// displaceCredentialProvidersBySource mirrors the #44241 merge rule: when an
+// overlay defines a provider with `env` sources, any lower-priority provider
+// (whose id is not redefined by the overlay) that declares an overlapping
+// source is removed. Windows compares environment names case-insensitively.
+func displaceCredentialProvidersBySource(base map[string]any, overlay map[string]any) {
+	for providerID, rawOverlay := range overlay {
+		overlayProvider, ok := rawOverlay.(map[string]any)
+		if !ok {
+			continue
+		}
+		overlaySources := stringSliceFromAny(overlayProvider["env"])
+		if len(overlaySources) == 0 {
+			continue
+		}
+		for existingID, rawExisting := range base {
+			if existingID == providerID {
+				continue
+			}
+			var existingSources []string
+			if overlayExisting, ok := overlay[existingID].(map[string]any); ok {
+				existingSources = stringSliceFromAny(overlayExisting["env"])
+			}
+			if len(existingSources) == 0 {
+				if existingProvider, ok := rawExisting.(map[string]any); ok {
+					existingSources = stringSliceFromAny(existingProvider["env"])
+				}
+			}
+			if credentialSourcesOverlap(existingSources, overlaySources) {
+				delete(base, existingID)
+			}
+		}
+	}
+}
+
+func credentialSourcesOverlap(existing []string, overlay []string) bool {
+	for _, existingSource := range existing {
+		for _, overlaySource := range overlay {
+			if existingSource == overlaySource {
+				return true
+			}
+			if runtime.GOOS == "windows" && strings.EqualFold(existingSource, overlaySource) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func stringSliceFromAny(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func isPermissionNetworkDomainsPath(path []string) bool {
