@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -65,9 +66,70 @@ func (s *StdioServer) Serve(stdin io.Reader, stdout io.Writer) error {
 	return serveJSONLineConnection(s.router, stdin, stdout)
 }
 
+// stdioShutdownWatchdogTimeout bounds app-server teardown after EOF or SIGTERM
+// (Rust #44523).
+const stdioShutdownWatchdogTimeout = 45 * time.Second
+
+// ServeWithShutdown runs the standalone app-server stdio connection with
+// EOF/SIGTERM cleanup and a bounded shutdown watchdog. On Unix, SIGTERM cancels
+// the connection so cleanup runs (owned commands terminate, session-end hooks
+// execute); if teardown stalls past the watchdog the process exits with status
+// 1 instead of hanging.
+func (s *StdioServer) ServeWithShutdown(stdin io.Reader, stdout io.Writer) error {
+	if s == nil || s.router == nil {
+		return errors.New("app-server stdio router is not configured")
+	}
+	if err := s.router.StartupError(); err != nil {
+		return err
+	}
+	watchdog := &stdioShutdownWatchdog{timeout: stdioShutdownWatchdogTimeout}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopSignals := installStdioShutdownSignals(ctx, cancel, watchdog.arm)
+	defer stopSignals()
+	err := serveJSONLineConnectionContext(s.router, ctx, stdin, stdout, watchdog.arm)
+	s.router.Close()
+	return err
+}
+
+type stdioShutdownWatchdog struct {
+	timeout time.Duration
+	once    sync.Once
+	// onTimeout overrides the default exit behavior in tests.
+	onTimeout func()
+}
+
+// arm starts the shutdown deadline. The first EOF or SIGTERM wins so a later
+// signal never extends the deadline.
+func (w *stdioShutdownWatchdog) arm() {
+	if w == nil {
+		return
+	}
+	w.once.Do(func() {
+		time.AfterFunc(w.timeout, func() {
+			if w.onTimeout != nil {
+				w.onTimeout()
+				return
+			}
+			fmt.Fprintln(os.Stderr, "app-server shutdown timed out; exiting")
+			os.Exit(1)
+		})
+	})
+}
+
 func serveJSONLineConnection(router *RuntimeRouter, stdin io.Reader, stdout io.Writer) error {
+	return serveJSONLineConnectionContext(router, context.Background(), stdin, stdout, nil)
+}
+
+// serveJSONLineConnectionContext serves a JSON-line connection until stdin
+// reaches EOF or ctx is cancelled (Rust #44523). onShutdown runs once when the
+// read loop ends so callers can arm a bounded shutdown watchdog before cleanup.
+func serveJSONLineConnectionContext(router *RuntimeRouter, ctx context.Context, stdin io.Reader, stdout io.Writer, onShutdown func()) error {
 	if router == nil {
 		return errors.New("app-server json-line router is not configured")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	connectionID := "stdio"
 	var writeMu sync.Mutex
@@ -113,58 +175,83 @@ func serveJSONLineConnection(router *RuntimeRouter, stdin io.Reader, stdout io.W
 	var requests sync.WaitGroup
 	started := make(chan struct{})
 	close(started)
-	scanner := bufio.NewScanner(stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		response, request := decodeJSONLine(router, []byte(line))
-		if request == nil {
-			if response != nil {
-				setWriteErr(writeJSONLine(response))
+	lineCh := make(chan string)
+	scanErrCh := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdin)
+		scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+		for scanner.Scan() {
+			select {
+			case lineCh <- scanner.Text():
+			case <-ctx.Done():
+				scanErrCh <- nil
+				return
 			}
-			continue
 		}
-		request.ConnectionID = connectionID
-		waitForPrevious := started
-		started = make(chan struct{})
-		startedForRequest := started
-		requests.Add(1)
-		go func(request *Request) {
-			defer requests.Done()
-			<-waitForPrevious
-			if processID := commandExecProcessIDForStdioOrdering(request); processID != "" {
-				go func() {
-					waitForCommandExecRegistration(router, processID, 500*time.Millisecond)
+		scanErrCh <- scanner.Err()
+	}()
+	var scanErr error
+readLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			break readLoop
+		case err := <-scanErrCh:
+			scanErr = err
+			break readLoop
+		case rawLine := <-lineCh:
+			line := strings.TrimSpace(rawLine)
+			if line == "" {
+				continue
+			}
+			response, request := decodeJSONLine(router, []byte(line))
+			if request == nil {
+				if response != nil {
+					setWriteErr(writeJSONLine(response))
+				}
+				continue
+			}
+			request.ConnectionID = connectionID
+			waitForPrevious := started
+			started = make(chan struct{})
+			startedForRequest := started
+			requests.Add(1)
+			go func(request *Request) {
+				defer requests.Done()
+				<-waitForPrevious
+				if processID := commandExecProcessIDForStdioOrdering(request); processID != "" {
+					go func() {
+						waitForCommandExecRegistration(router, processID, 500*time.Millisecond)
+						close(startedForRequest)
+					}()
+				} else if request.Method != MethodInitialize {
 					close(startedForRequest)
-				}()
-			} else if request.Method != MethodInitialize {
-				close(startedForRequest)
-			}
-			response := router.Handle(request)
-			if request.Method == MethodInitialize {
-				close(startedForRequest)
-			}
-			if response != nil {
-				setWriteErr(writeJSONLine(response))
-				if request.Method == MethodInitialize && response.Error == nil {
-					if notification := router.initializeRemoteControlStatusNotification(); notification != nil {
+				}
+				response := router.Handle(request)
+				if request.Method == MethodInitialize {
+					close(startedForRequest)
+				}
+				if response != nil {
+					setWriteErr(writeJSONLine(response))
+					if request.Method == MethodInitialize && response.Error == nil {
+						if notification := router.initializeRemoteControlStatusNotification(); notification != nil {
+							setWriteErr(writeJSONLine(notification))
+						}
+					}
+					// Rust writes the thread/goal/* response before the
+					// thread/goal/updated|cleared notification; flush any
+					// notifications the handler deferred so they follow their
+					// response on the wire.
+					for _, notification := range router.FlushDeferredGoalNotifications(connectionID) {
 						setWriteErr(writeJSONLine(notification))
 					}
 				}
-				// Rust writes the thread/goal/* response before the
-				// thread/goal/updated|cleared notification; flush any
-				// notifications the handler deferred so they follow their
-				// response on the wire.
-				for _, notification := range router.FlushDeferredGoalNotifications(connectionID) {
-					setWriteErr(writeJSONLine(notification))
-				}
-			}
-		}(request)
+			}(request)
+		}
 	}
-	scanErr := scanner.Err()
+	if onShutdown != nil {
+		onShutdown()
+	}
 	requests.Wait()
 	router.ConnectionClosed(connectionID)
 	if scanErr != nil {

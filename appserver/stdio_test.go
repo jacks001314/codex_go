@@ -121,6 +121,78 @@ func stdioTestRequestWithParams(t *testing.T, id RequestID, method Method, param
 	}
 }
 
+// TestServeJSONLineConnectionArmsShutdownOnEOF covers Rust #44523: reaching EOF
+// ends the read loop and arms the bounded shutdown watchdog once.
+func TestServeJSONLineConnectionArmsShutdownOnEOF(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	defer router.Close()
+	armed := make(chan struct{}, 1)
+	err := serveJSONLineConnectionContext(router, context.Background(), strings.NewReader(""), io.Discard, func() {
+		armed <- struct{}{}
+	})
+	if err != nil {
+		t.Fatalf("serveJSONLineConnectionContext() error = %v", err)
+	}
+	select {
+	case <-armed:
+	default:
+		t.Fatal("shutdown watchdog was not armed on EOF")
+	}
+}
+
+// TestServeJSONLineConnectionStopsOnContextCancel covers the SIGTERM path: a
+// cancelled context ends the read loop and arms the watchdog even while stdin
+// stays open.
+func TestServeJSONLineConnectionStopsOnContextCancel(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	defer router.Close()
+	stdinReader, stdinWriter := io.Pipe()
+	defer stdinWriter.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	armed := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- serveJSONLineConnectionContext(router, ctx, stdinReader, io.Discard, func() {
+			armed <- struct{}{}
+		})
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("serveJSONLineConnectionContext() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("serve did not return after context cancellation")
+	}
+	select {
+	case <-armed:
+	default:
+		t.Fatal("shutdown watchdog was not armed on cancellation")
+	}
+}
+
+func TestStdioShutdownWatchdogArmsOnce(t *testing.T) {
+	fired := make(chan struct{}, 4)
+	watchdog := &stdioShutdownWatchdog{timeout: 10 * time.Millisecond, onTimeout: func() { fired <- struct{}{} }}
+	watchdog.arm()
+	watchdog.arm()
+	watchdog.arm()
+	select {
+	case <-fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown watchdog did not fire")
+	}
+	select {
+	case <-fired:
+		t.Fatal("shutdown watchdog fired more than once; the first deadline must be preserved")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestStdioServerHandlesJSONRPCLine(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewDefaultRuntimeRouter(store, t.TempDir())

@@ -1168,7 +1168,7 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 			CodexHome:      codexHome,
 			RuntimeOptions: runtimeOptions,
 		})
-		return server.Serve(stdin, stdout)
+		return server.ServeWithShutdown(stdin, stdout)
 	}
 	if strings.HasPrefix(listen, "unix://") {
 		return appserver.ServeUnixSocket(serverCtx, &appserver.UnixSocketOptions{
