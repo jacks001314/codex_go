@@ -707,6 +707,41 @@ func TestStoreForkLastTurnID(t *testing.T) {
 	}
 }
 
+// TestStoreForkPreservesMultiAgentVersionAcrossCutoffLikeRust covers Rust
+// #43540/#43545: a fork cutoff that trims turns must not lose the source's
+// multi-agent runtime version. Go persists the version on the thread record, so
+// cloning the record metadata preserves it regardless of the cutoff.
+func TestStoreForkPreservesMultiAgentVersionAcrossCutoffLikeRust(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if err := store.Save(&Record{
+		ID: "source",
+		Metadata: Metadata{
+			CWD:               t.TempDir(),
+			MultiAgentVersion: "v2",
+			RolloutTurns: []TurnSnapshot{
+				{ID: "turn-1", Status: "completed"},
+				{ID: "turn-2", Status: "completed"},
+			},
+		},
+		Items: []Item{
+			{ID: "item-1", Metadata: map[string]any{"turnId": "turn-1"}},
+			{ID: "item-2", Metadata: map[string]any{"turnId": "turn-2"}},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	forked, err := store.Fork("source", ForkOptions{NewID: "fork-cutoff", Mode: ForkAll, LastTurnID: "turn-1"})
+	if err != nil {
+		t.Fatalf("Fork() error = %v", err)
+	}
+	if forked.Metadata.MultiAgentVersion != "v2" {
+		t.Fatalf("forked multi-agent version = %q, want v2", forked.Metadata.MultiAgentVersion)
+	}
+	if got := itemIDs(forked.Items); !reflect.DeepEqual(got, []string{"item-1"}) {
+		t.Fatalf("forked items = %v", got)
+	}
+}
+
 func TestStorePrepareForkBoundaries(t *testing.T) {
 	store := NewStore(t.TempDir())
 	source := &Record{
