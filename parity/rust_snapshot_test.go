@@ -277,11 +277,14 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
 		{Path: "Cargo.toml", SHA256: "908d9abba41b361720225bf5939033f67696086ea362f06fc365492626834631"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
-		{Path: "exec/src/lib.rs", SHA256: "4ca28f29edabd93a4183951bc7e010e1441a8aa6dd7b7f4f665ba2ba210f882d"},
+		{Path: "exec/src/lib.rs", SHA256: "28d9f23332f183e94371aa1c7bc6b2e4b1a6ad77b6f20e148a6fbde8c4683e16"},
 		{Path: "exec/src/exec_events.rs", SHA256: "fc914a7d8f7e990b19a95c41abf758e95e5b7ea028caa8b34b1c82306382c004"},
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
-		{Path: "core/src/client.rs", SHA256: "42007f9b305603542c67de40e4d2e4a611ee377468dec1d76407cd31daf71e5d"},
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "cf3eb92caaba61369f483e09dc5cceb6267730d7df1253b58140eb3fc0ef7b90"},
+		// Re-pinned to upstream bc5957eac9 (#44862, parent cache affinity for
+		// ephemeral forks). The drift is confined to this file and does not
+		// touch the voice surface; porting the behaviour is a separate item.
+		{Path: "core/src/client.rs", SHA256: "5bdbf9d92c1e0945db78e610c2851de34a7d6ce0d5247e61b4079bcd4b514dd6"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "c2ffd42ed5475e33abd3b7c5cfca4f1f586279ae4aad52a5e0d2731202ce07dc"},
 		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "f4e18fd3f3ae2e1b89cc8c90133d9bdc2861e882b0861b81cb329c320351cdba"},
 		{Path: "core/tests/suite/mod.rs", SHA256: "601842ce5a18502bc83588e8c947972b1011444f2fba9e0ef4df6996f779896a"},
 	}

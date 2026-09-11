@@ -185,7 +185,10 @@ func (i *TurnUserInput) MarshalJSON() ([]byte, error) {
 }
 
 type TurnStartParams struct {
-	ThreadID              string            `json:"threadId"`
+	ThreadID string `json:"threadId"`
+	// DisabledPluginIDs replaces this thread's disabled plugin IDs. Omitted or
+	// null preserves the saved list; an empty list clears it (Rust #44905).
+	DisabledPluginIDs     *[]string         `json:"disabledPluginIds,omitempty"`
 	Input                 []TurnUserInput   `json:"input,omitempty"`
 	ToolOutput            *TurnToolOutput   `json:"toolOutput,omitempty"`
 	Prompt                string            `json:"prompt,omitempty"`

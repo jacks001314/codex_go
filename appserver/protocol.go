@@ -1597,6 +1597,8 @@ type ThreadStartResponse struct {
 	ActivePermissionProfile *sandbox.ActivePermissionProfile `json:"activePermissionProfile,omitempty"`
 	MultiAgentMode          MultiAgentMode                   `json:"multiAgentMode,omitempty"`
 	ServiceTier             *string                          `json:"serviceTier,omitempty"`
+	// DisabledPluginIDs is the saved per-thread selection (Rust #44905).
+	DisabledPluginIDs []string `json:"disabledPluginIds,omitempty"`
 }
 
 func (r *ThreadStartResponse) MarshalJSON() ([]byte, error) {
@@ -1614,6 +1616,7 @@ func (r *ThreadStartResponse) MarshalJSON() ([]byte, error) {
 		ActivePermissionProfile *sandbox.ActivePermissionProfile `json:"activePermissionProfile"`
 		MultiAgentMode          MultiAgentMode                   `json:"multiAgentMode"`
 		ServiceTier             *string                          `json:"serviceTier"`
+		DisabledPluginIDs       []string                         `json:"disabledPluginIds"`
 	}{
 		Thread:                  r.Thread,
 		ApprovalPolicy:          threadResponseApprovalPolicy(r.ApprovalPolicy),
@@ -1628,6 +1631,7 @@ func (r *ThreadStartResponse) MarshalJSON() ([]byte, error) {
 		ActivePermissionProfile: cloneActivePermissionProfile(r.ActivePermissionProfile),
 		MultiAgentMode:          threadResponseMultiAgentMode(r.MultiAgentMode),
 		ServiceTier:             cloneString(r.ServiceTier),
+		DisabledPluginIDs:       stringSliceForJSON(r.DisabledPluginIDs),
 	})
 }
 
@@ -1738,6 +1742,8 @@ type ThreadResumeResponse struct {
 	ActivePermissionProfile *sandbox.ActivePermissionProfile `json:"activePermissionProfile,omitempty"`
 	MultiAgentMode          MultiAgentMode                   `json:"multiAgentMode,omitempty"`
 	ServiceTier             *string                          `json:"serviceTier,omitempty"`
+	// DisabledPluginIDs is the saved per-thread selection (Rust #44905).
+	DisabledPluginIDs []string `json:"disabledPluginIds,omitempty"`
 }
 
 func (r *ThreadResumeResponse) MarshalJSON() ([]byte, error) {
@@ -1758,6 +1764,7 @@ func (r *ThreadResumeResponse) MarshalJSON() ([]byte, error) {
 		ActivePermissionProfile *sandbox.ActivePermissionProfile `json:"activePermissionProfile"`
 		MultiAgentMode          MultiAgentMode                   `json:"multiAgentMode"`
 		ServiceTier             *string                          `json:"serviceTier"`
+		DisabledPluginIDs       []string                         `json:"disabledPluginIds"`
 	}{
 		Thread:                  r.Thread,
 		InitialTurnsPage:        r.InitialTurnsPage,
@@ -1775,6 +1782,7 @@ func (r *ThreadResumeResponse) MarshalJSON() ([]byte, error) {
 		ActivePermissionProfile: cloneActivePermissionProfile(r.ActivePermissionProfile),
 		MultiAgentMode:          threadResponseMultiAgentMode(r.MultiAgentMode),
 		ServiceTier:             cloneString(r.ServiceTier),
+		DisabledPluginIDs:       stringSliceForJSON(r.DisabledPluginIDs),
 	})
 }
 
@@ -1966,6 +1974,8 @@ type ThreadForkResponse struct {
 	ActivePermissionProfile *sandbox.ActivePermissionProfile `json:"activePermissionProfile,omitempty"`
 	MultiAgentMode          MultiAgentMode                   `json:"multiAgentMode,omitempty"`
 	ServiceTier             *string                          `json:"serviceTier,omitempty"`
+	// DisabledPluginIDs is the saved per-thread selection (Rust #44905).
+	DisabledPluginIDs []string `json:"disabledPluginIds,omitempty"`
 }
 
 func (r *ThreadForkResponse) MarshalJSON() ([]byte, error) {
@@ -1983,6 +1993,7 @@ func (r *ThreadForkResponse) MarshalJSON() ([]byte, error) {
 		ActivePermissionProfile *sandbox.ActivePermissionProfile `json:"activePermissionProfile"`
 		MultiAgentMode          MultiAgentMode                   `json:"multiAgentMode"`
 		ServiceTier             *string                          `json:"serviceTier"`
+		DisabledPluginIDs       []string                         `json:"disabledPluginIds"`
 	}{
 		Thread:                  r.Thread,
 		ApprovalPolicy:          threadResponseApprovalPolicy(r.ApprovalPolicy),
@@ -1997,6 +2008,7 @@ func (r *ThreadForkResponse) MarshalJSON() ([]byte, error) {
 		ActivePermissionProfile: cloneActivePermissionProfile(r.ActivePermissionProfile),
 		MultiAgentMode:          threadResponseMultiAgentMode(r.MultiAgentMode),
 		ServiceTier:             cloneString(r.ServiceTier),
+		DisabledPluginIDs:       stringSliceForJSON(r.DisabledPluginIDs),
 	})
 }
 
@@ -6153,6 +6165,15 @@ func stringPtrIfNotEmpty(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+// disabledPluginIDsFromRecord returns the persisted per-thread disabled-plugin
+// selection so resume/fork responses restore it (Rust #44905).
+func disabledPluginIDsFromRecord(record *session.Record) []string {
+	if record == nil || record.Metadata.Extra == nil {
+		return nil
+	}
+	return stringSliceFromAny(record.Metadata.Extra["disabled_plugin_ids"])
 }
 
 func metadataOptionalStringValue(value *string, name string) (string, error) {

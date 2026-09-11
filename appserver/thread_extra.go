@@ -269,7 +269,11 @@ func (s *GoalStore) Clear(params *GoalClearParams) (*GoalClearResponse, error) {
 }
 
 type SettingsUpdateParams struct {
-	ThreadID              string                     `json:"threadId"`
+	ThreadID string `json:"threadId"`
+	// DisabledPluginIDs replaces this thread's disabled plugin IDs. Omitted or
+	// null preserves the saved list; an explicit empty list clears it
+	// (Rust #44905).
+	DisabledPluginIDs     *[]string                  `json:"disabledPluginIds,omitempty"`
 	CWD                   *string                    `json:"cwd,omitempty"`
 	ApprovalPolicy        *string                    `json:"approvalPolicy,omitempty"`
 	ApprovalsReviewer     *string                    `json:"approvalsReviewer,omitempty"`
@@ -353,6 +357,9 @@ func (o *ThreadExtraOptionalString) MarshalJSON() ([]byte, error) {
 type SettingsUpdateResponse struct{}
 
 type Settings struct {
+	// DisabledPluginIDs is the saved per-thread selection. It does not yet
+	// filter plugin capabilities (Rust #44905).
+	DisabledPluginIDs       []string       `json:"disabledPluginIds"`
 	CWD                     string         `json:"cwd"`
 	ApprovalPolicy          string         `json:"approvalPolicy"`
 	ApprovalsReviewer       string         `json:"approvalsReviewer"`
@@ -375,6 +382,7 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		return []byte("null"), nil
 	}
 	return json.Marshal(struct {
+		DisabledPluginIDs       []string       `json:"disabledPluginIds"`
 		CWD                     string         `json:"cwd"`
 		ApprovalPolicy          any            `json:"approvalPolicy"`
 		ApprovalsReviewer       string         `json:"approvalsReviewer"`
@@ -389,6 +397,7 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		Personality             *string        `json:"personality"`
 		RuntimeWorkspaceRoots   []string       `json:"runtimeWorkspaceRoots"`
 	}{
+		DisabledPluginIDs:       append([]string{}, s.DisabledPluginIDs...),
 		CWD:                     s.CWD,
 		ApprovalPolicy:          threadSettingsApprovalPolicy(s.ApprovalPolicy),
 		ApprovalsReviewer:       threadSettingsApprovalsReviewer(s.ApprovalsReviewer),
@@ -706,6 +715,9 @@ func (s *ThreadExtraService) UpdateSettings(params *SettingsUpdateParams) (*Sett
 	defer s.mu.Unlock()
 	s.ensureLocked()
 	settings := s.settings[params.ThreadID]
+	if params.DisabledPluginIDs != nil {
+		settings.DisabledPluginIDs = append([]string{}, (*params.DisabledPluginIDs)...)
+	}
 	if params.CWD != nil {
 		settings.CWD = *params.CWD
 	}
@@ -767,6 +779,7 @@ func (s *ThreadExtraService) Settings(threadID string) *Settings {
 }
 
 func cloneSettings(settings Settings) Settings {
+	settings.DisabledPluginIDs = append([]string{}, settings.DisabledPluginIDs...)
 	settings.ActivePermissionProfile = cloneString(settings.ActivePermissionProfile)
 	settings.ServiceTier = cloneString(settings.ServiceTier)
 	settings.Effort = cloneString(settings.Effort)

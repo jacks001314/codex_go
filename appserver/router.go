@@ -1061,6 +1061,7 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 		ServiceTier:             stringPtrIfNotEmpty(serviceTier),
+		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}, nil
 }
 
@@ -1212,6 +1213,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		InstructionSources:      threadRecordInstructionSources(record),
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
+		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}
 	if paginatedResume {
 		response.TurnsBackwardsCursor, response.ItemsBackwardsCursor, err = r.paginatedResumeBackwardsCursors(string(sourceID))
@@ -1384,6 +1386,7 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 		ServiceTier:             stringPtrIfNotEmpty(serviceTier),
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
+		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}
 	if r.state == nil {
 		response.TurnsBackwardsCursor, response.ItemsBackwardsCursor = threadResumeHeadCursors(record)
@@ -1849,6 +1852,7 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		Sandbox:                 params.Sandbox,
 		ServiceTier:             stringPtrIfNotEmpty(record.Metadata.ServiceTier),
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
+		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 	}, nil
 }

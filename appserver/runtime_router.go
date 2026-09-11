@@ -3672,6 +3672,7 @@ func (r *RuntimeRouter) handleEphemeralThreadStartRuntime(request *Request) (*Th
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 		ServiceTier:             stringPtrIfNotEmpty(serviceTier),
+		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}, true, nil
 }
 
@@ -3800,6 +3801,7 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 		ServiceTier:             stringPtrIfNotEmpty(record.Metadata.ServiceTier),
 		RuntimeWorkspaceRoots:   threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil),
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
+		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}, true, nil
 }
 
@@ -5129,6 +5131,7 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 		ServiceTier:             stringPtrIfNotEmpty(record.Metadata.ServiceTier),
 		RuntimeWorkspaceRoots:   threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil),
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
+		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}, true, nil
 }
 
@@ -5977,6 +5980,12 @@ func turnStartSettingsUpdateParams(params *turn.TurnStartParams) (*SettingsUpdat
 	}
 	update := &SettingsUpdateParams{ThreadID: strings.TrimSpace(params.ThreadID)}
 	hasUpdate := false
+	// Rust #44905: a supplied disabled-plugin list replaces the saved selection;
+	// an empty list clears it.
+	if params.DisabledPluginIDs != nil {
+		update.DisabledPluginIDs = params.DisabledPluginIDs
+		hasUpdate = true
+	}
 	if policy, ok := parseTurnApprovalPolicy(params.ApprovalPolicy); ok {
 		value := string(policy)
 		update.ApprovalPolicy = &value
@@ -6058,6 +6067,10 @@ func (r *RuntimeRouter) applyTurnStartSettingsUpdate(params *SettingsUpdateParam
 	service := r.requireThreadExtras()
 	if _, err := service.UpdateSettings(params); err != nil {
 		return
+	}
+	if params.DisabledPluginIDs != nil {
+		// Rust #44905: a turn-start override is a saved thread setting.
+		_ = r.persistThreadSettingsUpdate(params)
 	}
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.invalidateThread(params.ThreadID)
@@ -6172,6 +6185,27 @@ func (r *RuntimeRouter) threadSettingsForTurn(threadID string) *Settings {
 	return r.services.ThreadExtras.Settings(threadID)
 }
 
+// threadDisabledPluginIDs returns the thread's saved disabled-plugin selection,
+// preferring the live settings and falling back to the persisted record
+// snapshot so resume/fork restore it (Rust #44905).
+func (r *RuntimeRouter) threadDisabledPluginIDs(threadID string) []string {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	if settings := r.threadSettingsForTurn(threadID); settings != nil && settings.DisabledPluginIDs != nil {
+		return append([]string{}, settings.DisabledPluginIDs...)
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	if err != nil || record == nil {
+		return nil
+	}
+	return stringSliceFromAny(record.Metadata.Extra["disabled_plugin_ids"])
+}
+
 func applyThreadSettingsToTurnStartParams(params *turn.TurnStartParams, settings *Settings) {
 	if params == nil || settings == nil {
 		return
@@ -6191,6 +6225,12 @@ func applyThreadSettingsToTurnStartParams(params *turn.TurnStartParams, settings
 	if params.Personality == nil && settings.Personality != nil {
 		params.Personality = cloneString(settings.Personality)
 		params.PersonalitySet = settings.PersonalitySet
+	}
+	// Rust #44905: a saved disabled-plugin selection is carried into the turn
+	// unless the caller supplied its own list.
+	if params.DisabledPluginIDs == nil && settings.DisabledPluginIDs != nil {
+		values := append([]string{}, settings.DisabledPluginIDs...)
+		params.DisabledPluginIDs = &values
 	}
 }
 
@@ -6791,7 +6831,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 }
 
 func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams) error {
-	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil) {
+	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil) {
 		return nil
 	}
 	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
@@ -6816,6 +6856,11 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 		record.Metadata.ActivePermissionProfile = profile
 	}
 	record.Metadata.Extra["config"] = configOverrides
+	if params.DisabledPluginIDs != nil {
+		// Rust #44905: persist the per-thread selection so resume and fork
+		// restore it instead of falling back to the config default.
+		record.Metadata.Extra["disabled_plugin_ids"] = append([]string{}, (*params.DisabledPluginIDs)...)
+	}
 	// Rust #41567: persist the thread-owned cwd on the settings snapshot so a
 	// cold resume restores the thread's own working directory.
 	settingsCWD := ""

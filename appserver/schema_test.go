@@ -139,8 +139,8 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// Re-vendored from upstream e3a52b87b2 (#44877, #44893): the exports
 		// gained user-verification enrollment metadata and model
 		// availableAccessPrograms fields.
-		{"stable", stablePrecomputedExports, "a79f4760d0b154007d305b959f2b6dc12cc9329cea89d5ce740a6534df94e743"},
-		{"experimental", experimentalPrecomputedExports, "11bdf23b5a7b155da988d1575f5f3f63edff1c857856d5a516b177bb6690a53f"},
+		{"stable", stablePrecomputedExports, "be509d64265565f00bedd891a6a764de093a3fb3a77f7882806cf8abffc5261a"},
+		{"experimental", experimentalPrecomputedExports, "ce62967c58df7dd4bab3f8d94401fc3df1db9394e20ed222948a79b5f8904828"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

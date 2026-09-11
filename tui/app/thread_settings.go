@@ -57,6 +57,7 @@ func ThreadSettingsUpdateHasChanges(params *appserver.SettingsUpdateParams) bool
 		return false
 	}
 	return params.CWD != nil ||
+		params.DisabledPluginIDs != nil ||
 		params.ApprovalPolicy != nil ||
 		params.ApprovalsReviewer != nil ||
 		params.SandboxPolicy != nil ||
