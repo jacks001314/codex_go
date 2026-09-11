@@ -16496,6 +16496,68 @@ func TestRuntimeRouterAutoCompactsWhenTokenStatusRequiresIt(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #44487: a failed pre-turn compaction must still preserve the
+// accepted prompt in conversation history exactly once, before the failure is
+// reported.
+func TestRuntimeRouterPreTurnCompactFailurePreservesPromptLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	cwd := t.TempDir()
+	hooks := NewHookRegistry()
+	pre := hookRunnerMetadata("pre-turn-compact-stop", HookEventPreCompact, "*", 0)
+	preCommand := hookRunnerOutputCommand(`{"continue":false,"stopReason":"policy asked compact to stop"}`, "")
+	pre.Command = &preCommand
+	if err := hooks.Add(cwd, pre); err != nil {
+		t.Fatalf("Add pre hook error = %v", err)
+	}
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Agent:        newRecordingRuntimeAgent("ok"),
+		Hooks:        hooks,
+		HookRunner:   NewHookRunner(),
+		DefaultCWD:   cwd,
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    cwd,
+		Prompt: "seed context",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	const prompt = "trigger pre-turn compact failure"
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   prompt,
+		Config:   map[string]any{"model_auto_compact_token_limit": 1},
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnTerminalStatus(t, sink, turnID)
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("Read thread error = %v", err)
+	}
+	if record.Metadata.Extra["compaction_error"] == nil {
+		t.Fatalf("pre-turn compaction did not fail: %#v", record.Metadata.Extra)
+	}
+	promptCount := 0
+	for _, item := range record.Items {
+		if item.Text == prompt {
+			promptCount++
+		}
+	}
+	if promptCount != 1 {
+		t.Fatalf("accepted prompt persisted %d times after failed pre-turn compaction, want 1: %#v", promptCount, record.Items)
+	}
+}
+
 func TestRuntimeRouterMidTurnRollOverCompactsWhileSamplingLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
@@ -26378,6 +26440,26 @@ func waitForTurnStartedStatus(t *testing.T, sink *NotificationBuffer, turnID str
 	}
 	t.Fatalf("timed out waiting for turn %s started status %s in notifications %#v", turnID, status, last)
 	return nil
+}
+
+func waitForTurnTerminalStatus(t *testing.T, sink *NotificationBuffer, turnID string) TurnStatus {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []*Notification
+	for time.Now().Before(deadline) {
+		last = sink.List()
+		for _, notification := range last {
+			if notification.Method != NotificationTurnCompleted {
+				continue
+			}
+			if completed, ok := notification.Params.(*TurnCompletedNotification); ok && completed != nil && completed.Turn.ID == turnID {
+				return completed.Turn.Status
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for turn %s to finish in notifications %#v", turnID, last)
+	return ""
 }
 
 func waitForTurnCompletedStatus(t *testing.T, sink *NotificationBuffer, turnID string, status TurnStatus) *TurnCompletedNotification {

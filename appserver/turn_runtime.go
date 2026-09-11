@@ -1320,18 +1320,19 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		})
 		if compactErr != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
-			if ctx.Err() != nil {
-				r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
-			}
+			// Rust #44487: pre-turn compaction runs before the incoming prompt is
+			// recorded, so preserve the accepted prompt on every failure, before
+			// the failure is reported.
+			r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
 			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, compactErr, &turnCompletionAnalyticsContext{ConnectionID: connectionID, Params: params, RunConfig: runConfig})
 			return
 		}
 		// appTurnConfig contains the session history; reload it after compaction.
 		if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime); err != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
-			if ctx.Err() != nil {
-				r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
-			}
+			// Rust #44487: a failed pre-sampling rebuild is still a pre-turn
+			// failure, so the accepted prompt is preserved before the error.
+			r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
 			r.finishTurnWithError(threadID, turnID, startedAtMS, err)
 			return
 		}
