@@ -92,8 +92,10 @@ func NewConsolidationSpawnError(err error) error {
 }
 
 type StartupPipeline struct {
-	State             *state.StateRuntime
-	CodexHome         string
+	State     *state.StateRuntime
+	CodexHome string
+	// Version selects the memory namespace root (Rust #43797); empty selects v1.
+	Version           config.MemoryVersion
 	CurrentThreadID   string
 	Config            config.MemoriesConfig
 	StageOne          StageOneExtractor
@@ -122,7 +124,7 @@ func (p *StartupPipeline) Run(ctx context.Context) (StartupReport, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	root := Root(p.CodexHome)
+	root := RootForVersion(p.CodexHome, p.Version)
 	if err := EnsureLayout(root); err != nil {
 		return report, fmt.Errorf("prepare memories root: %w", err)
 	}
@@ -241,7 +243,7 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 		}
 		return reason
 	}
-	root := Root(p.CodexHome)
+	root := RootForVersion(p.CodexHome, p.Version)
 	if err := PrepareWorkspace(ctx, root); err != nil {
 		return fail("failed_prepare_workspace")
 	}

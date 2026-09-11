@@ -444,6 +444,15 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	if policy, ok := cfg.Values["approval_policy"].(string); ok && strings.TrimSpace(policy) == "untrusted" {
 		return nil, fmt.Errorf(`approval_policy = "untrusted" is no longer supported; remove this setting`)
 	}
+	// Rust #43797: memories.version is a closed enum; an unrecognized value must
+	// fail config load rather than silently falling back to v1.
+	if memories, ok := cfg.Values["memories"].(map[string]any); ok {
+		if raw := memoryString(memories, "version"); raw != nil && strings.TrimSpace(*raw) != "" {
+			if _, valid := ParseMemoryVersion(*raw); !valid {
+				return nil, fmt.Errorf("invalid memories.version %q; expected \"v1\" or \"v2\"", *raw)
+			}
+		}
+	}
 	if opts != nil && opts.StrictConfig {
 		if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {
 			return nil, err

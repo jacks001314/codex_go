@@ -1,5 +1,9 @@
 package config
 
+import (
+	"strings"
+)
+
 const (
 	DefaultMemoriesMaxRolloutsPerStartup          = 2
 	DefaultMemoriesMaxRolloutAgeDays              = int64(10)
@@ -9,14 +13,50 @@ const (
 	DefaultMemoriesMaxUnusedDays                  = int64(30)
 )
 
+// MemoryVersion selects the memory namespace (Rust MemoryVersion, #43797). V1
+// is the default; V2 is opt-in and stores its artifacts in a sibling root.
+type MemoryVersion string
+
+const (
+	MemoryVersionV1 MemoryVersion = "v1"
+	MemoryVersionV2 MemoryVersion = "v2"
+)
+
+// ParseMemoryVersion resolves a configured `memories.version` value. An empty
+// value selects v1 (the default); anything other than v1/v2 is invalid.
+func ParseMemoryVersion(value string) (MemoryVersion, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return MemoryVersionV1, true
+	case string(MemoryVersionV1):
+		return MemoryVersionV1, true
+	case string(MemoryVersionV2):
+		return MemoryVersionV2, true
+	default:
+		return "", false
+	}
+}
+
+// DirectoryName is the sibling root name for the version (Rust
+// MemoryVersion::directory_name).
+func (v MemoryVersion) DirectoryName() string {
+	if v == MemoryVersionV2 {
+		return "memories_v2"
+	}
+	return "memories"
+}
+
 type MemoriesConfig struct {
 	DisableOnExternalContext bool
 	GenerateMemories         bool
 	UseMemories              bool
 	// DualWrite runs v1 and v2 extraction/consolidation concurrently with
 	// isolated stores so v2 can warm in the background (Rust #43827).
-	DualWrite                      bool
-	DedicatedTools                 bool
+	DualWrite      bool
+	DedicatedTools bool
+	// Version is the raw configured `memories.version` value. Use
+	// MemoryVersion() to resolve it (empty selects v1).
+	Version                        *string
 	MaxRawMemoriesForConsolidation int
 	MaxUnusedDays                  int64
 	MaxRolloutAgeDays              int64
@@ -54,6 +94,7 @@ func (c *Config) Memories() MemoriesConfig {
 	result.UseMemories = memoryBool(values, "use_memories", result.UseMemories)
 	result.DualWrite = memoryBool(values, "dual_write", result.DualWrite)
 	result.DedicatedTools = memoryBool(values, "dedicated_tools", result.DedicatedTools)
+	result.Version = memoryString(values, "version")
 	result.MaxRawMemoriesForConsolidation = int(clampMemoryInt(memoryInt(values, "max_raw_memories_for_consolidation", int64(result.MaxRawMemoriesForConsolidation)), 1, 4096))
 	result.MaxUnusedDays = clampMemoryInt(memoryInt(values, "max_unused_days", result.MaxUnusedDays), 0, 365)
 	result.MaxRolloutAgeDays = clampMemoryInt(memoryInt(values, "max_rollout_age_days", result.MaxRolloutAgeDays), 0, 90)
@@ -119,4 +160,17 @@ func clampMemoryInt(value, minimum, maximum int64) int64 {
 		return maximum
 	}
 	return value
+}
+
+// MemoryVersion resolves the configured version, defaulting to v1. An
+// unrecognized value is reported as v1; config load rejects it up front.
+func (c MemoriesConfig) MemoryVersion() MemoryVersion {
+	if c.Version == nil {
+		return MemoryVersionV1
+	}
+	version, ok := ParseMemoryVersion(*c.Version)
+	if !ok {
+		return MemoryVersionV1
+	}
+	return version
 }

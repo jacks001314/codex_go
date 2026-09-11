@@ -8,6 +8,8 @@ package memories
 import (
 	"path/filepath"
 	"strings"
+
+	"codex_go/config"
 )
 
 // MemoryVersionV2Directory is the sibling root for v2 memory artifacts
@@ -27,6 +29,13 @@ var v2SummaryHeadings = []string{
 // V2Root returns the v2 memory root for a Codex home.
 func V2Root(codexHome string) string {
 	return filepath.Join(strings.TrimSpace(codexHome), MemoryVersionV2Directory)
+}
+
+// RootForVersion returns the memory root for the selected version (Rust #43797):
+// v1 artifacts live in `memories`, v2 artifacts in the isolated `memories_v2`
+// sibling root.
+func RootForVersion(codexHome string, version config.MemoryVersion) string {
+	return filepath.Join(strings.TrimSpace(codexHome), version.DirectoryName())
 }
 
 // IsValidV2Summary reports whether a v2 memory summary is complete enough to

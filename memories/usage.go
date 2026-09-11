@@ -32,20 +32,23 @@ func UsageKindsFromCommand(command string) []UsageKind {
 func UsageKindFromPath(path string) (UsageKind, bool) {
 	normalized := strings.ReplaceAll(path, `\`, "/")
 	normalized = filepath.ToSlash(normalized)
-	switch {
-	case strings.Contains(normalized, "memories/MEMORY.md"):
-		return UsageKindMemoryMD, true
-	case strings.Contains(normalized, "memories/memory_summary.md"):
-		return UsageKindMemorySummary, true
-	case strings.Contains(normalized, "memories/raw_memories.md"):
-		return UsageKindRawMemories, true
-	case strings.Contains(normalized, "memories/rollout_summaries/"):
-		return UsageKindRolloutSummaries, true
-	case strings.Contains(normalized, "memories/skills/"):
-		return UsageKindSkills, true
-	default:
-		return "", false
+	// Both memory version roots are recognized (Rust #43797): v1 `memories` and
+	// v2 `memories_v2`.
+	for _, root := range []string{"memories/", "memories_v2/"} {
+		switch {
+		case strings.Contains(normalized, root+"MEMORY.md"):
+			return UsageKindMemoryMD, true
+		case strings.Contains(normalized, root+"memory_summary.md"):
+			return UsageKindMemorySummary, true
+		case strings.Contains(normalized, root+"raw_memories.md"):
+			return UsageKindRawMemories, true
+		case strings.Contains(normalized, root+"rollout_summaries/"):
+			return UsageKindRolloutSummaries, true
+		case strings.Contains(normalized, root+"skills/"):
+			return UsageKindSkills, true
+		}
 	}
+	return "", false
 }
 
 func usageKindsFromFields(fields []string) []UsageKind {

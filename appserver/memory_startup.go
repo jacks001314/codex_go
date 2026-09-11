@@ -283,6 +283,7 @@ func (r *RuntimeRouter) startMemoriesStartupTask(response *ThreadStartResponse, 
 	pipeline := &memories.StartupPipeline{
 		State:             r.services.StateRuntime,
 		CodexHome:         r.codexHomeForRollout(),
+		Version:           memoryConfig.MemoryVersion(),
 		CurrentThreadID:   response.Thread.ID,
 		Config:            memoryConfig,
 		StageOneModel:     extractModel,

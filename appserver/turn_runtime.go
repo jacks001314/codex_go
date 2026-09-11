@@ -7754,7 +7754,7 @@ func (r *RuntimeRouter) instructionsWithMemoryToolContext(cfg *config.Config, in
 	if codexHome == "" {
 		return instructions
 	}
-	fragment := memories.BuildMemoryToolDeveloperInstructions(codexHome)
+	fragment := memories.BuildMemoryToolDeveloperInstructionsForVersion(codexHome, cfg.Memories().MemoryVersion())
 	if fragment == "" {
 		return instructions
 	}

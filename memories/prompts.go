@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"codex_go/config"
 	"codex_go/model"
 	"codex_go/utils"
 )
@@ -95,7 +96,15 @@ func BuildConsolidationPrompt(root string) string {
 // summary is missing or empty (Rust returns None), so callers can skip the
 // fragment exactly like Rust.
 func BuildMemoryToolDeveloperInstructions(codexHome string) string {
-	summaryPath := filepath.Join(codexHome, "memories", MemorySummaryFilename)
+	return BuildMemoryToolDeveloperInstructionsForVersion(codexHome, config.MemoryVersionV1)
+}
+
+// BuildMemoryToolDeveloperInstructionsForVersion renders the fragment from the
+// selected memory version's summary (Rust #43797); v2 reads the isolated
+// `memories_v2` root.
+func BuildMemoryToolDeveloperInstructionsForVersion(codexHome string, version config.MemoryVersion) string {
+	basePath := RootForVersion(codexHome, version)
+	summaryPath := filepath.Join(basePath, MemorySummaryFilename)
 	data, err := os.ReadFile(summaryPath)
 	if err != nil {
 		return ""
@@ -105,7 +114,6 @@ func BuildMemoryToolDeveloperInstructions(codexHome string) string {
 		return ""
 	}
 	memorySummary = utils.FormattedTruncateText(memorySummary, utils.TokensPolicy(MemoryToolDeveloperInstructionsSummaryTokenLimit))
-	basePath := filepath.Join(codexHome, "memories")
 	return renderMemoryTemplate(memoryToolDeveloperInstructionsTemplate, map[string]string{
 		"base_path":      basePath,
 		"memory_summary": memorySummary,
