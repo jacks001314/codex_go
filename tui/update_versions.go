@@ -36,6 +36,55 @@ func IsSourceBuildVersion(version string) bool {
 	return ok && parsed == [3]uint64{}
 }
 
+// IsOfficialServerOlder reports whether an official stable release version is
+// newer than the connected app server version (Rust #43619). Both versions must
+// be strict, non-zero stable triplets: exactly three ASCII-digit components,
+// each with no leading zero. Anything else (development builds, prereleases,
+// extra components, whitespace) is not comparable.
+func IsOfficialServerOlder(client string, server string) bool {
+	clientVersion, clientOK := parseStableReleaseVersion(client)
+	serverVersion, serverOK := parseStableReleaseVersion(server)
+	return clientOK && serverOK && compareVersionTriplet(clientVersion, serverVersion) > 0
+}
+
+func parseStableReleaseVersion(value string) ([3]uint64, bool) {
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return [3]uint64{}, false
+	}
+	var parsed [3]uint64
+	for i, part := range parts {
+		component, ok := parseStableReleaseComponent(part)
+		if !ok {
+			return [3]uint64{}, false
+		}
+		parsed[i] = component
+	}
+	if parsed == [3]uint64{} {
+		return [3]uint64{}, false
+	}
+	return parsed, true
+}
+
+func parseStableReleaseComponent(value string) (uint64, bool) {
+	if value == "" {
+		return 0, false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return 0, false
+		}
+	}
+	if len(value) > 1 && value[0] == '0' {
+		return 0, false
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
 func parsePlainVersion(value string) ([3]uint64, bool) {
 	parts := strings.Split(strings.TrimSpace(value), ".")
 	if len(parts) != 3 {
