@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -160,6 +162,59 @@ func TestHTTPMCPOAuthRefreshRejectsReplacementWithNewIssuer(t *testing.T) {
 }
 
 // An expired replacement is not adopted; the original refresh error remains.
+// Rust #43947: a failed local refresh must not send an unauthenticated tool
+// call; the executor converts the typed error into the reconnect signal.
+func TestMCPHTTPToolCallRequiresAuthenticationWhenRefreshFails(t *testing.T) {
+	var toolRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
+			writeJSON(t, w, map[string]any{
+				"issuer":                 "https://issuer.example.test",
+				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"token_endpoint":         "http://" + r.Host + "/token",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/token":
+			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+		default:
+			toolRequests++
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		}
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	configURL := server.URL + "/mcp"
+	past := time.Now().Add(-time.Hour).UnixMilli()
+	if err := NewOAuthStore(home).Save(&OAuthTokenSet{
+		ServerName:      "docs",
+		ServerURL:       configURL,
+		ClientID:        "client-1",
+		Issuer:          "https://issuer.example.test",
+		AccessToken:     "oauth-old",
+		RefreshToken:    "refresh-old",
+		ExpiresAtMillis: &past,
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	client := &httpClient{
+		config: &ServerConfig{URL: configURL, OAuthServerName: "docs", OAuthClientID: "client-1", CodexHome: home},
+		client: server.Client(),
+	}
+
+	if _, _, err := client.doRPC(context.Background(), "tools/call", map[string]any{"name": "demo"}, "", true); !errors.Is(err, errMCPAuthenticationRequired) {
+		t.Fatalf("doRPC() error = %v, want authentication required", err)
+	}
+	if toolRequests != 0 {
+		t.Fatalf("unauthenticated tool call was sent (%d requests)", toolRequests)
+	}
+
+	output, ok := mcpAuthenticationChallengeToolOutput(errMCPAuthenticationRequired)
+	if !ok || output == nil || output.Success || output.Data["mcp/www_authenticate"] != `Bearer error="invalid_token"` {
+		t.Fatalf("reconnect output = %#v ok=%v", output, ok)
+	}
+}
+
 func TestHTTPMCPOAuthRefreshDoesNotAdoptExpiredReplacement(t *testing.T) {
 	server := oauthRefreshAdoptionServer(t)
 	defer server.Close()

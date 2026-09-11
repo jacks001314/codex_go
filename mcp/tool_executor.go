@@ -269,6 +269,22 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 // with the combined challenge preserved under `mcp/www_authenticate` (Rust
 // #42552). It returns false for other errors so normal handling is unchanged.
 func mcpAuthenticationChallengeToolOutput(err error) (*tool.Output, bool) {
+	// Rust #43947: a local expired credential that could not be refreshed uses
+	// the same reconnect signal as a server-rejected call, with a fixed
+	// challenge so token-endpoint and transport details stay hidden.
+	var authRequired *mcpAuthenticationRequiredError
+	if errors.As(err, &authRequired) {
+		message := authRequired.Error()
+		return &tool.Output{
+			Success:    false,
+			Body:       message,
+			Error:      message,
+			LogPreview: mcpLogPreview(message),
+			Data: map[string]any{
+				"mcp/www_authenticate": `Bearer error="invalid_token"`,
+			},
+		}, true
+	}
 	var statusErr *mcpHTTPStatusError
 	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnauthorized || len(statusErr.WWWAuthenticate) == 0 {
 		return nil, false

@@ -110,6 +110,18 @@ type mcpHTTPStatusError struct {
 	WWWAuthenticate []string
 }
 
+// mcpAuthenticationRequiredError marks a tool call that must not be sent
+// unauthenticated because the local OAuth credential is expired and could not
+// be refreshed (Rust #43947). The tool executor converts it into the reconnect
+// signal without exposing provider or transport details.
+type mcpAuthenticationRequiredError struct{}
+
+func (e *mcpAuthenticationRequiredError) Error() string {
+	return "MCP authentication required. Reconnect to continue using this server."
+}
+
+var errMCPAuthenticationRequired = &mcpAuthenticationRequiredError{}
+
 func (e *mcpHTTPStatusError) Error() string {
 	if e == nil {
 		return ""
@@ -935,6 +947,11 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 		ctx, handshakeCancel = context.WithTimeout(ctx, timeout)
 	}
 	token, oauthToken := c.authorizationBearerToken(false)
+	if method == "tools/call" && oauthToken && strings.TrimSpace(token) == "" {
+		// Rust #43947: a failed local refresh must not send an unauthenticated
+		// tool call; surface the reconnect signal instead.
+		return nil, 0, errMCPAuthenticationRequired
+	}
 	response, err := c.doHTTPRequestContext(ctx, endpoint, data, sessionID, token)
 	if err != nil {
 		if handshakeCancel != nil {
