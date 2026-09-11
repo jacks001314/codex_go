@@ -7198,7 +7198,7 @@ func (r *RuntimeRouter) appsForExplicitMentions(threadID string, cfg *config.Con
 	}
 	service := r.requireApps()
 	if r.services.Plugins != nil {
-		service.SetPluginConnectors(appPluginConnectorsFromCapabilities(r.services.Plugins.EnabledCapabilities()))
+		service.SetPluginConnectors(appPluginConnectorsFromCapabilities(r.pluginCapabilitiesForThread(threadID)))
 	}
 	var configValues map[string]any
 	if cfg != nil {
@@ -7651,7 +7651,7 @@ func (r *RuntimeRouter) instructionsWithPluginContext(threadID string, cfg *conf
 	if r == nil || r.services.Plugins == nil {
 		return strings.TrimSpace(instructions)
 	}
-	capabilities := r.services.Plugins.EnabledCapabilities()
+	capabilities := r.pluginCapabilitiesForThread(threadID)
 	if len(capabilities) == 0 {
 		return strings.TrimSpace(instructions)
 	}
@@ -8030,6 +8030,46 @@ func (r *RuntimeRouter) filterDisabledPluginSkillRoots(threadID string, roots []
 	return filtered
 }
 
+// pluginCapabilitiesForThread drops capabilities contributed by plugins the
+// thread has disabled. A connector shared with an enabled plugin is still
+// contributed by that enabled capability, so only connectors unique to disabled
+// plugins disappear from the thread's app tool catalog (Rust #44655).
+func (r *RuntimeRouter) pluginCapabilitiesForThread(threadID string) []plugin.CapabilitySummary {
+	if r == nil || r.services.Plugins == nil {
+		return nil
+	}
+	return filterDisabledPluginCapabilities(r.threadDisabledPluginIDs(threadID), r.services.Plugins.EnabledCapabilities())
+}
+
+// filterDisabledPluginCapabilities keeps only capabilities whose plugin is not
+// disabled. A connector shared with an enabled plugin is still contributed by
+// that enabled capability.
+func filterDisabledPluginCapabilities(disabled []string, capabilities []plugin.CapabilitySummary) []plugin.CapabilitySummary {
+	if len(capabilities) == 0 {
+		return capabilities
+	}
+	if len(disabled) == 0 {
+		return capabilities
+	}
+	blocked := make(map[string]struct{}, len(disabled))
+	for _, id := range disabled {
+		if id = strings.TrimSpace(id); id != "" {
+			blocked[id] = struct{}{}
+		}
+	}
+	if len(blocked) == 0 {
+		return capabilities
+	}
+	filtered := make([]plugin.CapabilitySummary, 0, len(capabilities))
+	for _, capability := range capabilities {
+		if _, ok := blocked[strings.TrimSpace(capability.ConfigName)]; ok {
+			continue
+		}
+		filtered = append(filtered, capability)
+	}
+	return filtered
+}
+
 func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string) ([]SkillsListEntry, []string, error) {
 	return r.selectedCapabilitySkillEntriesForRuntimeWithSandbox(context.Background(), threadID, nil)
 }
@@ -8124,7 +8164,7 @@ func (r *RuntimeRouter) executorSkillRootPluginIDs(threadID string) map[string]s
 	if err != nil || record == nil {
 		return nil
 	}
-	capabilities := r.services.Plugins.EnabledCapabilities()
+	capabilities := r.pluginCapabilitiesForThread(threadID)
 	if len(capabilities) == 0 {
 		return nil
 	}

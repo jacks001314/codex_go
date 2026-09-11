@@ -90,6 +90,28 @@ func TestRuntimeRouterDisabledPluginMCPContributionsFilteredLikeRust(t *testing.
 	}
 }
 
+// TestDisabledPluginCapabilitiesFilteredLikeRust covers the app-tool half of
+// #44655: a disabled plugin's capability (and the connectors only it
+// contributes) is dropped, while connectors shared with an enabled plugin
+// survive through that enabled capability.
+func TestDisabledPluginCapabilitiesFilteredLikeRust(t *testing.T) {
+	capabilities := []plugin.CapabilitySummary{
+		{Name: "A", ConfigName: "a@m", AppConnectors: []string{"shared", "a-only"}},
+		{Name: "B", ConfigName: "b@m", AppConnectors: []string{"shared", "b-only"}},
+	}
+	if got := filterDisabledPluginCapabilities(nil, capabilities); len(got) != 2 {
+		t.Fatalf("no-selection capabilities = %#v", got)
+	}
+	filtered := filterDisabledPluginCapabilities([]string{"a@m"}, capabilities)
+	if len(filtered) != 1 || filtered[0].ConfigName != "b@m" {
+		t.Fatalf("filtered capabilities = %#v, want only b@m", filtered)
+	}
+	// "shared" survives because the enabled plugin still contributes it.
+	if !reflect.DeepEqual(filtered[0].AppConnectors, []string{"shared", "b-only"}) {
+		t.Fatalf("enabled connectors = %#v", filtered[0].AppConnectors)
+	}
+}
+
 // TestThreadExtraSettingsDisabledPluginIDsReplacePreserveClearLikeRust covers
 // the #44905 selection semantics: a supplied list replaces, omission/null
 // preserves, and [] clears.

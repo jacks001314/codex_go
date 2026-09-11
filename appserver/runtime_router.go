@@ -13262,7 +13262,7 @@ func (r *RuntimeRouter) requiredMCPServersForTurn(threadID string, cfg *config.C
 
 	capabilities := []plugin.CapabilitySummary(nil)
 	if r != nil && r.services.Plugins != nil {
-		capabilities = r.services.Plugins.EnabledCapabilities()
+		capabilities = r.pluginCapabilitiesForThread(threadID)
 		for _, capability := range plugin.CollectExplicitPluginMentions(pluginUserInputFromTurn(params), capabilities) {
 			add(capability.MCPServers...)
 		}
