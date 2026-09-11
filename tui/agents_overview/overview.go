@@ -113,6 +113,10 @@ const (
 	ActionRenameThread
 	// ActionStopThread interrupts the selected row's active turn.
 	ActionStopThread
+	// ActionHideThread hides the selected row locally without stopping it
+	// (Rust #44424). Hidden tasks stay hidden through activity and metadata
+	// refreshes until explicitly resumed.
+	ActionHideThread
 	// ActionExit closes the dashboard (exit_on_cancel standalone mode).
 	ActionExit
 )
@@ -124,6 +128,9 @@ type State struct {
 	Searching      bool
 	StatusGrouping bool
 	Renaming       bool
+	// HiddenThreads is local visibility only; activity and metadata refreshes
+	// never reveal a hidden root (Rust #44424).
+	HiddenThreads map[string]struct{}
 }
 
 // View is the dashboard model.
@@ -145,6 +152,7 @@ const (
 	ShortcutHintToggleGrouping = "toggle_grouping"
 	ShortcutHintRename         = "rename"
 	ShortcutHintStop           = "stop"
+	ShortcutHintHide           = "hide"
 )
 
 // SetShortcutHint overrides the displayed key for one dashboard action. An
@@ -231,6 +239,9 @@ func (v *View) VisibleIndices() []int {
 	search := strings.ToLower(strings.TrimSpace(v.State.Search))
 	visible := make([]int, 0, len(v.Rows))
 	for i := range v.Rows {
+		if v.isHidden(v.Rows[i].ThreadID) {
+			continue
+		}
 		searchable := strings.ToLower(strings.Join([]string{v.Rows[i].Name, v.Rows[i].Preview, v.Rows[i].CWD}, " "))
 		if search == "" || strings.Contains(searchable, search) {
 			visible = append(visible, i)
@@ -479,6 +490,83 @@ func (v *View) StopSelected() Action {
 	return ActionStopThread
 }
 
+// isHidden reports whether threadID is hidden locally (Rust #44424).
+func (v *View) isHidden(threadID string) bool {
+	if v == nil || v.State.HiddenThreads == nil {
+		return false
+	}
+	_, ok := v.State.HiddenThreads[strings.TrimSpace(threadID)]
+	return ok
+}
+
+// HideSelected hides the selected row locally without stopping its task and
+// moves the selection to the next visible row (Rust #44424).
+func (v *View) HideSelected() Action {
+	row := v.SelectedRow()
+	if v == nil || row == nil {
+		return ActionNone
+	}
+	threadID := strings.TrimSpace(row.ThreadID)
+	if threadID == "" {
+		return ActionNone
+	}
+	if v.State.HiddenThreads == nil {
+		v.State.HiddenThreads = map[string]struct{}{}
+	}
+	hiddenIndex := v.Selected
+	v.State.HiddenThreads[threadID] = struct{}{}
+	visible := v.VisibleIndices()
+	if len(visible) == 0 {
+		v.Selected = 0
+		return ActionHideThread
+	}
+	// Move to the next still-visible row after the hidden one, else the last.
+	v.Selected = visible[len(visible)-1]
+	for _, index := range visible {
+		if index > hiddenIndex {
+			v.Selected = index
+			break
+		}
+	}
+	return ActionHideThread
+}
+
+// UnhideThread makes a hidden task visible again; explicit resume clears the
+// local hide (Rust #44424).
+func (v *View) UnhideThread(threadID string) {
+	if v == nil || v.State.HiddenThreads == nil {
+		return
+	}
+	delete(v.State.HiddenThreads, strings.TrimSpace(threadID))
+	v.fitSelection()
+}
+
+// HiddenThreads returns a copy of the locally hidden thread ids so callers can
+// preserve them across dashboard close/reopen (Rust #44424).
+func (v *View) HiddenThreads() map[string]struct{} {
+	if v == nil || len(v.State.HiddenThreads) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(v.State.HiddenThreads))
+	for id := range v.State.HiddenThreads {
+		out[id] = struct{}{}
+	}
+	return out
+}
+
+// SetHiddenThreads restores locally hidden thread ids.
+func (v *View) SetHiddenThreads(hidden map[string]struct{}) {
+	if v == nil || len(hidden) == 0 {
+		return
+	}
+	cloned := make(map[string]struct{}, len(hidden))
+	for id := range hidden {
+		cloned[id] = struct{}{}
+	}
+	v.State.HiddenThreads = cloned
+	v.fitSelection()
+}
+
 // TypeChar appends a rune to the search or task input (Rust KeyCode::Char).
 func (v *View) TypeChar(character rune) {
 	if v == nil {
@@ -539,6 +627,9 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	}
 	view := New(rows, selected, v.ExitOnCancel)
 	view.State = v.State
+	// Hidden roots stay hidden across refreshes; if the restored selection
+	// points at one, move it to a visible row.
+	view.fitSelection()
 	if selected != "" && !containsThreadID(view.Rows, selected) && view.State.Renaming {
 		view.State.Renaming = false
 		view.State.Input = ""

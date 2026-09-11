@@ -804,6 +804,7 @@ type Model struct {
 	agentsOverviewPending      bool
 	agentsOverviewInflight     bool
 	agentsOverviewDrafts       map[string]string
+	agentsOverviewHidden       map[string]struct{}
 	agentsOverviewPendingDraft *string
 	transcriptMessages         transcriptMessageCache
 	overlayMessages            transcriptMessageCache

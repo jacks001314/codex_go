@@ -261,7 +261,7 @@ func TestRenderLayout(t *testing.T) {
 		"1 need input   1 working   1 ready",
 		"New task › ",
 		"Describe a task and press enter to dispatch it",
-		"↑↓ navigate  → open  ctrl+f search  ctrl+s group  ctrl+r rename  ctrl+x stop  esc back",
+		"↑↓ navigate  → open  ctrl+f search  ctrl+s group  ctrl+r rename  ctrl+x stop  ctrl+w hide  esc back",
 		"/work/a  2",
 		"› ● alpha  Working",
 		"/work/b  1",

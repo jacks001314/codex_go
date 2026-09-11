@@ -104,6 +104,9 @@ func (v *View) footerSpans() []span {
 	if binding, ok := v.shortcutHint(ShortcutHintStop, "ctrl+x"); ok {
 		spans = append(spans, span{text: binding, style: stopStyle}, span{text: " stop  ", style: spanDim})
 	}
+	if binding, ok := v.shortcutHint(ShortcutHintHide, "ctrl+w"); ok {
+		spans = append(spans, span{text: binding, style: spanBold}, span{text: " hide  ", style: spanDim})
+	}
 	spans = append(spans, span{text: "esc", style: spanBold}, span{text: " back", style: spanDim})
 	return spans
 }

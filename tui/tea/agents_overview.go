@@ -58,6 +58,8 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	}
 	m.agentsOverviewPendingDraft = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
+	// Rust #44424: hidden tasks stay hidden across dashboard close/reopen.
+	m.agentsOverview.SetHiddenThreads(m.agentsOverviewHidden)
 	m.agentsOverviewNotice = ""
 	m.agentsOverviewBusy = false
 	m.agentsOverviewRefresh = 0
@@ -82,6 +84,7 @@ func (m *Model) applyAgentsOverviewKeymapHints() {
 		{action: agentsoverview.ShortcutHintToggleGrouping, key: "agents.toggle_grouping"},
 		{action: agentsoverview.ShortcutHintRename, key: "agents.rename"},
 		{action: agentsoverview.ShortcutHintStop, key: "agents.stop"},
+		{action: agentsoverview.ShortcutHintHide, key: "agents.hide"},
 	} {
 		context, action, _ := strings.Cut(hint.key, ".")
 		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, context, action)
@@ -266,6 +269,13 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 		handled = true
 	}
+	if m.keyMatches("agents", "hide", keySpec) {
+		// Rust #44424: hide the selected task locally without stopping it.
+		if action := m.agentsOverview.HideSelected(); action == agentsoverview.ActionHideThread {
+			m.notice = ""
+		}
+		handled = true
+	}
 	if keySpec == "ctrl-c" {
 		return bubbletea.Quit
 	}
@@ -334,6 +344,11 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 	if m.State != nil {
 		current = strings.TrimSpace(m.State.ThreadID)
 	}
+	// Rust #44424: explicitly resuming a task clears its local hide.
+	if m.agentsOverview != nil {
+		m.agentsOverview.UnhideThread(threadID)
+	}
+	delete(m.agentsOverviewHidden, threadID)
 	m.closeAgentsOverview()
 	if threadID == "" {
 		m.notice = "This session is no longer available."
@@ -410,6 +425,9 @@ func (m *Model) discardPendingAgentsOverviewDraft() {
 func (m *Model) closeAgentsOverview() {
 	if m == nil {
 		return
+	}
+	if m.agentsOverview != nil {
+		m.agentsOverviewHidden = m.agentsOverview.HiddenThreads()
 	}
 	m.agentsOverview = nil
 	m.agentsOverviewNotice = ""
