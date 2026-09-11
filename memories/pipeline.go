@@ -16,6 +16,7 @@ import (
 	"codex_go/rollout"
 	"codex_go/safety"
 	"codex_go/state"
+	"codex_go/utils"
 )
 
 const (
@@ -36,8 +37,11 @@ type StartupGuard interface {
 }
 
 type StageOneExtractionRequest struct {
-	Model        string
-	ModelInfo    model.ModelInfo
+	Model     string
+	ModelInfo model.ModelInfo
+	// Version selects the extraction contract and prompts (Rust #43800);
+	// empty selects v1.
+	Version      config.MemoryVersion
 	Instructions string
 	Input        string
 	OutputSchema map[string]any
@@ -197,9 +201,10 @@ func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1
 	response, err := p.StageOne.ExtractMemory(ctx, StageOneExtractionRequest{
 		Model:        p.StageOneModel,
 		ModelInfo:    p.StageOneModelInfo,
-		Instructions: StageOneSystemPrompt(),
-		Input:        BuildStageOneInputMessage(p.StageOneModelInfo, claim.Thread.RolloutPath, claim.Thread.CWD, contents),
-		OutputSchema: StageOneOutputSchema(),
+		Version:      p.Version,
+		Instructions: StageOneSystemPromptForVersion(p.Version),
+		Input:        BuildStageOneInputForVersion(p.Version, p.StageOneModelInfo, claim.Thread.RolloutPath, claim.Thread.CWD, claim.Thread.GitBranch, contents),
+		OutputSchema: StageOneOutputSchemaForVersion(p.Version),
 		RolloutPath:  claim.Thread.RolloutPath,
 		RolloutCWD:   claim.Thread.CWD,
 	})
@@ -207,13 +212,13 @@ func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1
 		_, _ = p.State.MarkStage1JobFailed(ctx, claim.Thread.ID, claim.OwnershipToken, err.Error(), StageOneRetryDelaySeconds)
 		return "failed"
 	}
-	response.RawMemory = safety.RedactSecrets(response.RawMemory)
-	response.RolloutSummary = safety.RedactSecrets(response.RolloutSummary)
-	if response.RolloutSlug != nil {
-		redacted := safety.RedactSecrets(*response.RolloutSlug)
-		response.RolloutSlug = &redacted
+	// v2 stores an empty raw memory by design; only the summary is required
+	// (Rust #43800).
+	emptyOutput := response.RolloutSummary == ""
+	if p.Version != config.MemoryVersionV2 && response.RawMemory == "" {
+		emptyOutput = true
 	}
-	if response.RawMemory == "" || response.RolloutSummary == "" {
+	if emptyOutput {
 		updated, _ := p.State.MarkStage1JobSucceededNoOutput(ctx, claim.Thread.ID, claim.OwnershipToken)
 		if updated {
 			return "succeeded_no_output"
@@ -349,6 +354,24 @@ func (p *StartupPipeline) heartbeatPhaseTwo(ctx context.Context, token string, i
 }
 
 func StageOneOutputSchema() map[string]any {
+	return StageOneOutputSchemaForVersion(config.MemoryVersionV1)
+}
+
+// StageOneOutputSchemaForVersion returns the extraction JSON schema for the
+// memory version (Rust #43800): v2 requires only `rollout_summary` and
+// `rollout_slug`, while v1 also requires `raw_memory`.
+func StageOneOutputSchemaForVersion(version config.MemoryVersion) map[string]any {
+	if version == config.MemoryVersionV2 {
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"rollout_summary": map[string]any{"type": "string"},
+				"rollout_slug":    map[string]any{"type": "string"},
+			},
+			"required":             []any{"rollout_summary", "rollout_slug"},
+			"additionalProperties": false,
+		}
+	}
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -362,6 +385,38 @@ func StageOneOutputSchema() map[string]any {
 }
 
 func DecodeStageOneOutput(value string) (StageOneExtractionResponse, error) {
+	return DecodeStageOneOutputForVersion(value, config.MemoryVersionV1)
+}
+
+// DecodeStageOneOutputForVersion parses the version's extraction contract. It
+// redacts secrets before truncation (Rust #43800): v2 accepts only
+// `rollout_summary` and `rollout_slug`, stores an empty raw memory, and
+// truncates the redacted summary to 9,000 bytes.
+func DecodeStageOneOutputForVersion(value string, version config.MemoryVersion) (StageOneExtractionResponse, error) {
+	if version == config.MemoryVersionV2 {
+		decoder := json.NewDecoder(strings.NewReader(value))
+		decoder.DisallowUnknownFields()
+		var payload struct {
+			RolloutSummary string  `json:"rollout_summary"`
+			RolloutSlug    *string `json:"rollout_slug"`
+		}
+		if err := decoder.Decode(&payload); err != nil {
+			return StageOneExtractionResponse{}, err
+		}
+		if payload.RolloutSlug == nil {
+			return StageOneExtractionResponse{}, errors.New("stage-one v2 output requires a string rollout_slug")
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err == nil {
+			return StageOneExtractionResponse{}, errors.New("stage-one output contains trailing JSON")
+		} else if !errors.Is(err, io.EOF) {
+			return StageOneExtractionResponse{}, fmt.Errorf("invalid trailing stage-one output: %w", err)
+		}
+		slug := safety.RedactSecrets(*payload.RolloutSlug)
+		summary := safety.RedactSecrets(payload.RolloutSummary)
+		summary = utils.TruncateText(summary, utils.BytesPolicy(9000))
+		return StageOneExtractionResponse{RawMemory: "", RolloutSummary: summary, RolloutSlug: &slug}, nil
+	}
 	decoder := json.NewDecoder(strings.NewReader(value))
 	decoder.DisallowUnknownFields()
 	var payload struct {
@@ -378,9 +433,15 @@ func DecodeStageOneOutput(value string) (StageOneExtractionResponse, error) {
 	} else if !errors.Is(err, io.EOF) {
 		return StageOneExtractionResponse{}, fmt.Errorf("invalid trailing stage-one output: %w", err)
 	}
-	return StageOneExtractionResponse{
-		RawMemory: payload.RawMemory, RolloutSummary: payload.RolloutSummary, RolloutSlug: payload.RolloutSlug,
-	}, nil
+	response := StageOneExtractionResponse{
+		RawMemory:      safety.RedactSecrets(payload.RawMemory),
+		RolloutSummary: safety.RedactSecrets(payload.RolloutSummary),
+	}
+	if payload.RolloutSlug != nil {
+		redacted := safety.RedactSecrets(*payload.RolloutSlug)
+		response.RolloutSlug = &redacted
+	}
+	return response, nil
 }
 
 func SerializeFilteredRolloutForMemory(path string) (string, error) {

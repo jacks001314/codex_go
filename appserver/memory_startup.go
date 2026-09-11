@@ -83,7 +83,7 @@ func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request mem
 	if strings.TrimSpace(text) == "" {
 		return memories.StageOneExtractionResponse{}, errors.New("memory extraction returned no output")
 	}
-	return memories.DecodeStageOneOutput(text)
+	return memories.DecodeStageOneOutputForVersion(text, request.Version)
 }
 
 func (e *appServerMemoryStageOne) detachedClientMetadata(ctx context.Context) map[string]string {

@@ -26,8 +26,20 @@ const (
 //go:embed templates/stage_one_system.md
 var stageOneSystemPrompt string
 
+// stageOneSystemV2Prompt is Rust's templates/memories/stage_one_system_v2.md,
+// the summary-only extraction instructions for memories.version = v2 (#43800).
+//
+//go:embed templates/stage_one_system_v2.md
+var stageOneSystemV2Prompt string
+
 //go:embed templates/stage_one_input.md
 var stageOneInputTemplate string
+
+// stageOneInputV2Template is Rust's templates/memories/stage_one_input_v2.md
+// (#43800); it adds the rollout cwd/branch hints.
+//
+//go:embed templates/stage_one_input_v2.md
+var stageOneInputV2Template string
 
 //go:embed templates/consolidation.md
 var consolidationPromptTemplate string
@@ -75,6 +87,15 @@ func StageOneSystemPrompt() string {
 	return stageOneSystemPrompt
 }
 
+// StageOneSystemPromptForVersion selects the extraction instructions for the
+// memory version (Rust #43800): v2 uses the summary-only system prompt.
+func StageOneSystemPromptForVersion(version config.MemoryVersion) string {
+	if version == config.MemoryVersionV2 {
+		return stageOneSystemV2Prompt
+	}
+	return stageOneSystemPrompt
+}
+
 func BuildStageOneInputMessage(info model.ModelInfo, rolloutPath, rolloutCWD, rolloutContents string) string {
 	limit := resolvedStageOneTokenLimit(info)
 	truncated := utils.FormattedTruncateText(rolloutContents, utils.TokensPolicy(limit))
@@ -82,6 +103,26 @@ func BuildStageOneInputMessage(info model.ModelInfo, rolloutPath, rolloutCWD, ro
 		"rollout_path":     rolloutPath,
 		"rollout_cwd":      rolloutCWD,
 		"rollout_contents": truncated,
+	})
+}
+
+// BuildStageOneInputForVersion renders the extraction input for the memory
+// version (Rust #43800). v2 uses the cwd/branch-hint input template.
+func BuildStageOneInputForVersion(version config.MemoryVersion, info model.ModelInfo, rolloutPath, rolloutCWD, rolloutGitBranch, rolloutContents string) string {
+	if version != config.MemoryVersionV2 {
+		return BuildStageOneInputMessage(info, rolloutPath, rolloutCWD, rolloutContents)
+	}
+	limit := resolvedStageOneTokenLimit(info)
+	truncated := utils.FormattedTruncateText(rolloutContents, utils.TokensPolicy(limit))
+	branch := strings.TrimSpace(rolloutGitBranch)
+	if branch == "" {
+		branch = "unknown"
+	}
+	return renderMemoryTemplate(stageOneInputV2Template, map[string]string{
+		"rollout_path":       rolloutPath,
+		"rollout_cwd":        rolloutCWD,
+		"rollout_git_branch": branch,
+		"rollout_contents":   truncated,
 	})
 }
 

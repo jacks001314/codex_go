@@ -43,6 +43,74 @@ func TestBuildMemoryToolDeveloperInstructionsForVersionSelectsRoot(t *testing.T)
 	}
 }
 
+func TestStageOneExtractionContractForVersion(t *testing.T) {
+	v1System := StageOneSystemPromptForVersion(config.MemoryVersionV1)
+	v2System := StageOneSystemPromptForVersion(config.MemoryVersionV2)
+	if v1System == v2System {
+		t.Fatal("v1 and v2 extraction system prompts must differ")
+	}
+	if !strings.Contains(v2System, "Return exactly one JSON object with string fields `rollout_summary` and") ||
+		!strings.Contains(v2System, "`rollout_slug`, and no other fields or prose.") {
+		t.Fatalf("v2 system prompt = %q", v2System)
+	}
+
+	v2Schema := StageOneOutputSchemaForVersion(config.MemoryVersionV2)
+	properties, _ := v2Schema["properties"].(map[string]any)
+	if _, hasRawMemory := properties["raw_memory"]; hasRawMemory {
+		t.Fatalf("v2 schema must not include raw_memory: %#v", v2Schema)
+	}
+	if required, _ := v2Schema["required"].([]any); len(required) != 2 {
+		t.Fatalf("v2 schema required = %#v", v2Schema["required"])
+	}
+	v1Schema := StageOneOutputSchemaForVersion(config.MemoryVersionV1)
+	if _, hasRawMemory := v1Schema["properties"].(map[string]any)["raw_memory"]; !hasRawMemory {
+		t.Fatalf("v1 schema must include raw_memory: %#v", v1Schema)
+	}
+}
+
+func TestDecodeStageOneOutputForVersion(t *testing.T) {
+	slug := "rollout-slug"
+	v1, err := DecodeStageOneOutputForVersion(`{"raw_memory":"raw","rollout_summary":"summary","rollout_slug":"rollout-slug"}`, config.MemoryVersionV1)
+	if err != nil {
+		t.Fatalf("v1 decode error = %v", err)
+	}
+	if v1.RawMemory != "raw" || v1.RolloutSummary != "summary" || v1.RolloutSlug == nil || *v1.RolloutSlug != slug {
+		t.Fatalf("v1 decode = %#v", v1)
+	}
+
+	v2, err := DecodeStageOneOutputForVersion(`{"rollout_summary":"summary","rollout_slug":"rollout-slug"}`, config.MemoryVersionV2)
+	if err != nil {
+		t.Fatalf("v2 decode error = %v", err)
+	}
+	if v2.RawMemory != "" || v2.RolloutSummary != "summary" || v2.RolloutSlug == nil || *v2.RolloutSlug != slug {
+		t.Fatalf("v2 decode = %#v", v2)
+	}
+
+	// v2 rejects the v1-only raw_memory field and a null slug.
+	if _, err := DecodeStageOneOutputForVersion(`{"raw_memory":"raw","rollout_summary":"summary","rollout_slug":"slug"}`, config.MemoryVersionV2); err == nil {
+		t.Fatal("v2 decode must reject raw_memory")
+	}
+	if _, err := DecodeStageOneOutputForVersion(`{"rollout_summary":"summary","rollout_slug":null}`, config.MemoryVersionV2); err == nil {
+		t.Fatal("v2 decode must reject a null rollout_slug")
+	}
+
+	// Redaction runs before the 9,000-byte v2 truncation.
+	secret := "sk-" + strings.Repeat("a", 24)
+	long := strings.Repeat("context ", 1_500) + secret
+	decoded, err := DecodeStageOneOutputForVersion(`{"rollout_summary":"`+long+`","rollout_slug":"slug"}`, config.MemoryVersionV2)
+	if err != nil {
+		t.Fatalf("v2 long decode error = %v", err)
+	}
+	// Go's truncation helper appends a marker after the byte budget, so allow a
+	// small margin while proving the summary is bounded.
+	if len(decoded.RolloutSummary) > 9200 {
+		t.Fatalf("v2 summary length = %d, want a bounded summary", len(decoded.RolloutSummary))
+	}
+	if strings.Contains(decoded.RolloutSummary, secret) {
+		t.Fatal("v2 summary must be redacted")
+	}
+}
+
 func TestBuildConsolidationPromptForVersionSelectsTemplate(t *testing.T) {
 	root := t.TempDir()
 	v1 := BuildConsolidationPromptForVersion(root, config.MemoryVersionV1)
@@ -125,6 +193,16 @@ func TestMemoryV2TemplateMatchesRust(t *testing.T) {
 			name: "consolidation_v2.md",
 			path: filepath.Join(root, "memories", "write", "templates", "memories", "consolidation_v2.md"),
 			got:  consolidationV2PromptTemplate,
+		},
+		{
+			name: "stage_one_system_v2.md",
+			path: filepath.Join(root, "memories", "write", "templates", "memories", "stage_one_system_v2.md"),
+			got:  stageOneSystemV2Prompt,
+		},
+		{
+			name: "stage_one_input_v2.md",
+			path: filepath.Join(root, "memories", "write", "templates", "memories", "stage_one_input_v2.md"),
+			got:  stageOneInputV2Template,
 		},
 	} {
 		data, err := os.ReadFile(tc.path)
