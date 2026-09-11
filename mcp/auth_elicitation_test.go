@@ -60,6 +60,72 @@ func TestConnectorAuthFailureRejectsMissingInstallURL(t *testing.T) {
 	}
 }
 
+func connectorAuthFailureMeta(t *testing.T, result *MCPToolCallResponse) map[string]any {
+	t.Helper()
+	meta, ok := result.Meta.(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %#v", result.Meta)
+	}
+	apps, ok := meta[MCPToolCodexAppsMetaKey].(map[string]any)
+	if !ok {
+		t.Fatalf("codex apps meta = %#v", meta[MCPToolCodexAppsMetaKey])
+	}
+	failure, ok := apps[connectorAuthFailureMetaKey].(map[string]any)
+	if !ok {
+		t.Fatalf("auth failure meta = %#v", apps[connectorAuthFailureMetaKey])
+	}
+	return failure
+}
+
+// TestIsConnectorAuthFailureFromToolResultWithoutInstallURL covers Rust #44938:
+// detection is independent of an install URL, while the parser still requires one.
+func TestIsConnectorAuthFailureFromToolResultWithoutInstallURL(t *testing.T) {
+	result := authFailureResult()
+	if !IsConnectorAuthFailureFromToolResult(result, "connector_calendar") {
+		t.Fatal("auth failure should be detected without an install url")
+	}
+	if failure := ConnectorAuthFailureFromToolResult(result, "connector_calendar", "Google Calendar", ""); failure != nil {
+		t.Fatal("parser should still require an install url")
+	}
+}
+
+func TestIsConnectorAuthFailureRequiresTrustedConnectorIdentityAndAuthFlag(t *testing.T) {
+	result := authFailureResult()
+	if IsConnectorAuthFailureFromToolResult(result, "") {
+		t.Fatal("missing connector id should not be detected")
+	}
+	if IsConnectorAuthFailureFromToolResult(result, "connector_drive") {
+		t.Fatal("mismatched connector id should not be detected")
+	}
+
+	ordinaryError := authFailureResult()
+	connectorAuthFailureMeta(t, ordinaryError)[connectorAuthFailureIsAuthFailureKey] = false
+	if IsConnectorAuthFailureFromToolResult(ordinaryError, "connector_calendar") {
+		t.Fatal("an ordinary error should not be detected as an auth failure")
+	}
+
+	successful := authFailureResult()
+	notError := false
+	successful.IsError = &notError
+	if IsConnectorAuthFailureFromToolResult(successful, "connector_calendar") {
+		t.Fatal("a successful result should not be detected as an auth failure")
+	}
+
+	if IsConnectorAuthFailureFromToolResult(nil, "connector_calendar") {
+		t.Fatal("a nil result should not be detected as an auth failure")
+	}
+}
+
+func TestIsConnectorAuthFailureDetectsEachSupportedReason(t *testing.T) {
+	for _, reason := range []string{"missing_link", "oauth_upgrade_required", "reauthentication_required"} {
+		result := authFailureResult()
+		connectorAuthFailureMeta(t, result)[connectorAuthFailureAuthReasonKey] = reason
+		if !IsConnectorAuthFailureFromToolResult(result, "connector_calendar") {
+			t.Fatalf("auth reason %q should be detected", reason)
+		}
+	}
+}
+
 func TestBuildAuthElicitationPlan(t *testing.T) {
 	result := authFailureResult()
 	plan := BuildAuthElicitationPlan(

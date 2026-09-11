@@ -48,27 +48,12 @@ type CodexAppsAuthElicitationPlan struct {
 // MCP tool call result's metadata. It mirrors Rust's
 // connector_auth_failure_from_tool_result.
 func ConnectorAuthFailureFromToolResult(result *MCPToolCallResponse, connectorID string, connectorName string, installURL string) *CodexAppsConnectorAuthFailure {
-	if result == nil || result.IsError == nil || !*result.IsError {
-		return nil
-	}
-
-	authFailure := extractConnectorAuthFailure(result.Meta)
+	authFailure := connectorAuthFailureMetadata(result, connectorID)
 	if authFailure == nil {
 		return nil
 	}
 
-	if isAuthFailure, _ := authFailure[connectorAuthFailureIsAuthFailureKey].(bool); !isAuthFailure {
-		return nil
-	}
-
 	connectorID = strings.TrimSpace(connectorID)
-	if connectorID == "" {
-		return nil
-	}
-	if authConnectorID := stringFromMetaMap(authFailure, connectorAuthFailureConnectorIDKey); authConnectorID != "" && authConnectorID != connectorID {
-		return nil
-	}
-
 	connectorName = strings.TrimSpace(connectorName)
 	if connectorName == "" {
 		connectorName = connectorID
@@ -94,6 +79,38 @@ func ConnectorAuthFailureFromToolResult(result *MCPToolCallResponse, connectorID
 	}
 
 	return failure
+}
+
+// IsConnectorAuthFailureFromToolResult reports whether an MCP tool call result
+// carries a trusted connector auth failure, independently of an install URL
+// (Rust #44938).
+func IsConnectorAuthFailureFromToolResult(result *MCPToolCallResponse, connectorID string) bool {
+	return connectorAuthFailureMetadata(result, connectorID) != nil
+}
+
+// connectorAuthFailureMetadata validates the connector auth failure metadata
+// shared by detection and parsing: an error result, an explicit auth-failure
+// flag, and a nonempty connector identity that does not conflict with the
+// metadata (Rust #44938).
+func connectorAuthFailureMetadata(result *MCPToolCallResponse, connectorID string) map[string]any {
+	if result == nil || result.IsError == nil || !*result.IsError {
+		return nil
+	}
+	authFailure := extractConnectorAuthFailure(result.Meta)
+	if authFailure == nil {
+		return nil
+	}
+	if isAuthFailure, _ := authFailure[connectorAuthFailureIsAuthFailureKey].(bool); !isAuthFailure {
+		return nil
+	}
+	connectorID = strings.TrimSpace(connectorID)
+	if connectorID == "" {
+		return nil
+	}
+	if authConnectorID := stringFromMetaMap(authFailure, connectorAuthFailureConnectorIDKey); authConnectorID != "" && authConnectorID != connectorID {
+		return nil
+	}
+	return authFailure
 }
 
 // BuildAuthElicitationPlan builds a CodexAppsAuthElicitationPlan from a tool
