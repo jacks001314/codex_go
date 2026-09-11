@@ -1031,7 +1031,7 @@ var errSOCKS5MITMHandled = errors.New("SOCKS5 MITM connection handled")
 
 func (s *ProxyServer) handleSOCKS5MITM(_ context.Context, writer io.Writer, request *socks5.Request) error {
 	host, port := socks5Destination(request.RawDestAddr)
-	mode := s.socks5MITMMode(host)
+	mode := s.socks5MITMMode(host, port)
 	if mode == proxySOCKS5MITMDisabled {
 		return nil
 	}
@@ -1049,6 +1049,10 @@ func (s *ProxyServer) handleSOCKS5MITM(_ context.Context, writer io.Writer, requ
 		first, err := reader.Peek(1)
 		_ = source.SetReadDeadline(time.Time{})
 		if err != nil || first[0] != 0x16 {
+			if s.runtimePolicy().broker.HostRequiresHTTPInterception(host, port) {
+				s.handlePlaintextHTTPTunnel(client, reader, host, port)
+				return errSOCKS5MITMHandled
+			}
 			s.proxySOCKS5Opaque(client, reader, host, port)
 			return errSOCKS5MITMHandled
 		}
@@ -1078,13 +1082,13 @@ const (
 	proxySOCKS5MITMDetectTLS
 )
 
-func (s *ProxyServer) socks5MITMMode(host string) proxySOCKS5MITMMode {
+func (s *ProxyServer) socks5MITMMode(host string, port uint16) proxySOCKS5MITMMode {
 	policy := s.runtimePolicy()
 	normalized := NormalizeProxyHost(host)
 	if policy.settings.Mode == ProxyModeLimited || len(policy.mitmHooks[normalized]) > 0 {
 		return proxySOCKS5MITMRequired
 	}
-	if policy.broker.HostRequiresMITM(normalized) {
+	if policy.broker.HostRequiresMITM(normalized) || policy.broker.HostRequiresHTTPInterception(normalized, port) {
 		return proxySOCKS5MITMDetectTLS
 	}
 	return proxySOCKS5MITMDisabled

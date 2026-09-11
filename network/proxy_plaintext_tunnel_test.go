@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	xproxy "golang.org/x/net/proxy"
 )
 
 func TestCredentialDestinationHostRequiresHTTPInterception(t *testing.T) {
@@ -153,5 +155,85 @@ func TestProxyBrokersPlaintextHTTPInsideCONNECTTunnelLikeRust(t *testing.T) {
 	}
 	if authorization := <-seen; authorization != "Bearer "+realValue {
 		t.Fatalf("plaintext tunnel credential = %q, want real value", authorization)
+	}
+}
+
+// TestProxyBrokersPlaintextHTTPOverSOCKS5LikeRust covers the SOCKS5 half of the
+// brokered plaintext tunnel (#44089/#44077).
+func TestProxyBrokersPlaintextHTTPOverSOCKS5LikeRust(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	const realValue = "vk-0123456789abcdef"
+	seen := make(chan string, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		seen <- request.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamHost, upstreamPort, err := net.SplitHostPort(upstreamURL.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamPortNumber, err := parseCredentialPort(upstreamPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	settings := DefaultProxySettings()
+	settings.Enabled = true
+	settings.MITM = true
+	settings.CredentialBroker = true
+	settings.ProxyURL = "http://127.0.0.1:0"
+	settings.SocksURL = "http://127.0.0.1:0"
+	settings.SetAllowedDomains([]string{upstreamHost})
+	settings.CredentialProviders = map[string]CredentialProviderConfig{
+		"vendor": {
+			Env:         []string{"VENDOR_TOKEN"},
+			Patterns:    []string{"vk-[a-z0-9]{16}"},
+			URLPrefixes: []string{upstreamURL.Scheme + "://" + upstreamURL.Host},
+			Auth:        []CredentialAuthMethod{CredentialAuthBearer},
+		},
+	}
+	prepared, err := StartProxyManagedNetwork(context.Background(), ProxyConfig{Network: settings}, map[string]string{"VENDOR_TOKEN": realValue})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Close()
+	dummy := prepared.Env["VENDOR_TOKEN"]
+	if dummy == "" || dummy == realValue {
+		t.Fatalf("virtualized env = %q", dummy)
+	}
+	if !prepared.server.runtimePolicy().broker.HostRequiresHTTPInterception(upstreamHost, upstreamPortNumber) {
+		t.Fatal("broker did not require plaintext HTTP interception")
+	}
+	socksAddress := strings.TrimPrefix(prepared.Env["ALL_PROXY"], "socks5h://")
+	dialer, err := xproxy.SOCKS5("tcp", socksAddress, nil, &net.Dialer{Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &http.Transport{
+		DialContext: func(_ context.Context, network, address string) (net.Conn, error) {
+			return dialer.Dial(network, address)
+		},
+		DisableKeepAlives: true,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	request, _ := http.NewRequest(http.MethodGet, "http://"+upstreamURL.Host+"/v1/models", nil)
+	request.Header.Set("Authorization", "Bearer "+dummy)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("response status = %d", response.StatusCode)
+	}
+	if authorization := <-seen; authorization != "Bearer "+realValue {
+		t.Fatalf("SOCKS5 plaintext tunnel credential = %q, want real value", authorization)
 	}
 }
