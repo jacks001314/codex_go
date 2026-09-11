@@ -11393,14 +11393,10 @@ func (r *RuntimeRouter) persistMCPToolApprovalAmendment(request *mcp.MCPElicitat
 		return fmt.Errorf("MCP tool approval is missing the server name")
 	}
 	keyPath := ""
-	if mcp.IsCodexAppsMCPServerName(serverName) {
-		connectorID := strings.TrimSpace(stringFromMap(meta, "connector_id"))
-		if connectorID == "" {
-			return fmt.Errorf("codex-apps MCP tool approval is missing connector_id")
-		}
-		keyPath = "apps." + configKeyPathSegment(connectorID) + ".tools." + configKeyPathSegment(toolName) + ".approval_mode"
-	} else {
-		keyPath = "mcp_servers." + configKeyPathSegment(serverName) + ".tools." + configKeyPathSegment(toolName) + ".approval_mode"
+	connectorID := strings.TrimSpace(stringFromMap(meta, "connector_id"))
+	keyPath = mcpToolApprovalKeyPath(serverName, connectorID, r.mcpServerPluginID(serverName), toolName)
+	if keyPath == "" {
+		return fmt.Errorf("codex-apps MCP tool approval is missing connector_id")
 	}
 	_, err := r.services.Config.BatchWrite(&config.ConfigBatchWriteParams{
 		Edits: []config.ConfigEdit{{
@@ -11409,6 +11405,39 @@ func (r *RuntimeRouter) persistMCPToolApprovalAmendment(request *mcp.MCPElicitat
 		}},
 	})
 	return err
+}
+
+// mcpToolApprovalKeyPath mirrors Rust's maybe_persist_mcp_tool_approval target:
+// codex-apps approvals are connector-scoped, plugin-contributed servers persist
+// under the plugin's own config section (Rust #44655), and every other server
+// uses the global mcp_servers section. An empty result means the request is
+// missing required metadata.
+func mcpToolApprovalKeyPath(serverName string, connectorID string, pluginID string, toolName string) string {
+	if mcp.IsCodexAppsMCPServerName(serverName) {
+		if strings.TrimSpace(connectorID) == "" {
+			return ""
+		}
+		return "apps." + configKeyPathSegment(connectorID) + ".tools." + configKeyPathSegment(toolName) + ".approval_mode"
+	}
+	if pluginID = strings.TrimSpace(pluginID); pluginID != "" {
+		return "plugins." + configKeyPathSegment(pluginID) + ".mcp_servers." + configKeyPathSegment(serverName) + ".tools." + configKeyPathSegment(toolName) + ".approval_mode"
+	}
+	return "mcp_servers." + configKeyPathSegment(serverName) + ".tools." + configKeyPathSegment(toolName) + ".approval_mode"
+}
+
+// mcpServerPluginID returns the plugin that contributes serverName, if any, so a
+// plugin server's approval lands in the plugin's config section.
+func (r *RuntimeRouter) mcpServerPluginID(serverName string) string {
+	serverName = strings.TrimSpace(serverName)
+	if r == nil || r.services.Plugins == nil || serverName == "" {
+		return ""
+	}
+	for _, contribution := range r.services.Plugins.EnabledMCPServerContributions() {
+		if strings.TrimSpace(contribution.Name) == serverName {
+			return strings.TrimSpace(contribution.PluginID)
+		}
+	}
+	return ""
 }
 
 // configKeyPathSegment escapes a config key path segment (quotes and dots) so

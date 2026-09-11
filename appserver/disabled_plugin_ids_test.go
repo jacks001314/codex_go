@@ -233,6 +233,54 @@ func TestRuntimeRouterActiveDisabledPluginIDsDeferToNextTaskLikeRust(t *testing.
 	}
 }
 
+// TestMCPToolApprovalKeyPathLikeRust covers the approval-persistence half of
+// #44655: a plugin-contributed server persists under the plugin's config
+// section instead of the global mcp_servers section.
+func TestMCPToolApprovalKeyPathLikeRust(t *testing.T) {
+	cases := []struct {
+		name      string
+		server    string
+		connector string
+		pluginID  string
+		tool      string
+		want      string
+	}{
+		{
+			name:      "codex apps connector-scoped",
+			server:    "codex_apps",
+			connector: "connector-1",
+			tool:      "calendar_list_events",
+			want:      "apps.connector-1.tools.calendar_list_events.approval_mode",
+		},
+		{
+			name:   "codex apps missing connector",
+			server: "codex_apps",
+			tool:   "calendar_list_events",
+			want:   "",
+		},
+		{
+			name:     "plugin server plugin-scoped",
+			server:   "computer-use",
+			pluginID: "demo@marketplace",
+			tool:     "click",
+			want:     "plugins.demo@marketplace.mcp_servers.computer-use.tools.click.approval_mode",
+		},
+		{
+			name:   "plain server global",
+			server: "custom",
+			tool:   "search",
+			want:   "mcp_servers.custom.tools.search.approval_mode",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := mcpToolApprovalKeyPath(testCase.server, testCase.connector, testCase.pluginID, testCase.tool); got != testCase.want {
+				t.Fatalf("mcpToolApprovalKeyPath() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
 // TestThreadExtraSettingsDisabledPluginIDsReplacePreserveClearLikeRust covers
 // the #44905 selection semantics: a supplied list replaces, omission/null
 // preserves, and [] clears.
