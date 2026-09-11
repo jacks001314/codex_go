@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -15,6 +16,9 @@ const (
 	maxWaitForEnvironmentCombinedDescriptionBytes = 1024
 	maxWaitForEnvironmentSerializedToolSpecBytes  = 1000
 	defaultWaitForEnvironmentPollInterval         = time.Second
+	// Rust #44277: keep the failure reason small while preserving a UTF-8
+	// boundary.
+	maxWaitForEnvironmentFailureBytes = 256
 )
 
 type WaitForEnvironmentToolConfig struct {
@@ -86,6 +90,27 @@ func (h *WaitForEnvironmentHandler) Spec() Spec {
 	}
 }
 
+// environmentFailureMessage mirrors Rust's environment_failure (#44277): report
+// the startup failure reason (bounded to 256 bytes at a UTF-8 boundary) so the
+// model can explain problems such as an empty repository.
+func environmentFailureMessage(environmentID, reason string) string {
+	return fmt.Sprintf("Environment `%s` failed to start: %s", environmentID, truncateUTF8Bytes(reason, maxWaitForEnvironmentFailureBytes))
+}
+
+func truncateUTF8Bytes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(value) <= limit {
+		return value
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
+}
+
 func (h *WaitForEnvironmentHandler) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
 	if invocation == nil {
 		return nil, fmt.Errorf("%w: invocation is nil", ErrToolInvalidCall)
@@ -110,7 +135,7 @@ func (h *WaitForEnvironmentHandler) Execute(ctx context.Context, invocation *Inv
 	for {
 		status, message, err := h.waiter.Status(ctx, environmentID)
 		if err != nil {
-			return nil, RespondToModel(fmt.Sprintf("Environment `%s` failed to start and is unavailable. Continue without it.", environmentID))
+			return nil, RespondToModel(environmentFailureMessage(environmentID, err.Error()))
 		}
 		switch status {
 		case EnvironmentStatusReady:
@@ -124,10 +149,9 @@ func (h *WaitForEnvironmentHandler) Execute(ctx context.Context, invocation *Inv
 		case EnvironmentStatusUnknown:
 			return nil, RespondToModel(fmt.Sprintf("environment `%s` is neither ready nor starting", environmentID))
 		case EnvironmentStatusDisconnected:
-			_ = message
-			return nil, RespondToModel(fmt.Sprintf("Environment `%s` failed to start and is unavailable. Continue without it.", environmentID))
+			return nil, RespondToModel(environmentFailureMessage(environmentID, message))
 		default:
-			return nil, RespondToModel(fmt.Sprintf("Environment `%s` failed to start and is unavailable. Continue without it.", environmentID))
+			return nil, RespondToModel(environmentFailureMessage(environmentID, message))
 		}
 		timer := time.NewTimer(pollInterval)
 		select {

@@ -3,10 +3,12 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type environmentWaiterFunc func(context.Context, string) (EnvironmentStatus, string, error)
@@ -65,6 +67,43 @@ func TestWaitForEnvironmentHandlerRejectsUnselectedAndStopsOnFailureOrCancellati
 	_, err = pending.Execute(ctx, &Invocation{Payload: Payload{Kind: PayloadFunction, Arguments: `{"environment_id":"env-1"}`}})
 	if err == nil || !strings.Contains(err.Error(), "context canceled") {
 		t.Fatalf("cancel error = %v", err)
+	}
+}
+
+// Rust #44277: report the environment startup failure reason to the model,
+// bounded to 256 bytes at a UTF-8 boundary.
+func TestWaitForEnvironmentHandlerReportsFailureReason(t *testing.T) {
+	invocation := func() *Invocation {
+		return &Invocation{Payload: Payload{Kind: PayloadFunction, Arguments: `{"environment_id":"env-1"}`}}
+	}
+	handler := NewWaitForEnvironmentHandler(environmentWaiterFunc(func(context.Context, string) (EnvironmentStatus, string, error) {
+		return EnvironmentStatusDisconnected, "repository is empty", nil
+	}), []string{"env-1"}, nil)
+	_, err := handler.Execute(context.Background(), invocation())
+	if err == nil || !strings.Contains(err.Error(), "Environment `env-1` failed to start: repository is empty") {
+		t.Fatalf("failure reason = %v", err)
+	}
+
+	long := strings.Repeat("\u00e9", 400) // 800 bytes, a rune boundary at 256
+	truncating := NewWaitForEnvironmentHandler(environmentWaiterFunc(func(context.Context, string) (EnvironmentStatus, string, error) {
+		return EnvironmentStatusDisconnected, long, nil
+	}), []string{"env-1"}, nil)
+	_, err = truncating.Execute(context.Background(), invocation())
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	reason := strings.TrimPrefix(err.Error(), "Environment `env-1` failed to start: ")
+	if len(reason) != maxWaitForEnvironmentFailureBytes || !utf8.ValidString(reason) {
+		t.Fatalf("reason bytes = %d valid=%v", len(reason), utf8.ValidString(reason))
+	}
+
+	transport := NewWaitForEnvironmentHandler(environmentWaiterFunc(func(context.Context, string) (EnvironmentStatus, string, error) {
+		return EnvironmentStatusPending, "", errors.New("connection refused")
+	}), []string{"env-1"}, nil)
+	transport.pollInterval = time.Millisecond
+	_, err = transport.Execute(context.Background(), invocation())
+	if err == nil || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("transport error reason = %v", err)
 	}
 }
 
