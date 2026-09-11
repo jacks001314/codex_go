@@ -131,6 +131,9 @@ func (e *appServerMemoryStageOne) detachedClientMetadata(ctx context.Context) ma
 	}
 	metadata := codexapi.NewClientMetadata(installationID, e.parentThreadID, e.parentThreadID, e.parentThreadID+":0")
 	metadata.RequestKind = codexapi.ClientRequestMemory
+	// Rust #44298: detached memory requests attribute their turn to memory
+	// consolidation.
+	metadata.TurnTrigger = "memory_consolidation"
 	if record, err := e.router.threadRecord(session.ThreadID(e.parentThreadID), true, false); err == nil && record != nil {
 		metadata.SubagentHeader, _ = codexapi.ClientSubagentMetadataFromSource(record.Metadata.Source)
 	}
@@ -226,6 +229,9 @@ func (c *appServerMemoryConsolidator) ConsolidateMemory(ctx context.Context, req
 		RuntimeWorkspaceRoots: []string{request.Root},
 		Effort:                &effort,
 		Config:                memoryConsolidationConfigOverrides(),
+		// Rust #44298: consolidation agent turns attribute their turn to memory
+		// consolidation.
+		TurnTrigger: "memory_consolidation",
 	}
 	turnRequest, err := internalRequest(MethodTurnStart, "memory-consolidation-turn", turnParams)
 	if err != nil {

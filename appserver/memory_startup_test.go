@@ -116,6 +116,9 @@ func TestMemoryStageOneUsesDetachedResponsesRequestLikeRust(t *testing.T) {
 	if metadata["request_kind"] != "memory" || metadata["session_id"] != nil || metadata["thread_id"] != nil || metadata["turn_id"] != nil || metadata["window_id"] != nil {
 		t.Fatalf("detached memory metadata = %#v", metadata)
 	}
+	if metadata["turn_trigger"] != "memory_consolidation" {
+		t.Fatalf("detached memory turn trigger = %#v", metadata["turn_trigger"])
+	}
 	if workspaces, ok := metadata["workspaces"].(map[string]any); !ok || len(workspaces) != 1 {
 		t.Fatalf("detached memory workspaces = %#v", metadata["workspaces"])
 	}
@@ -164,6 +167,9 @@ func TestMemoryConsolidatorRunsInternalEphemeralTurnAndCleansItUp(t *testing.T) 
 	}
 	if metadata["thread_source"] != "memory_consolidation" {
 		t.Fatalf("consolidation turn metadata = %#v", metadata)
+	}
+	if metadata["turn_trigger"] != "memory_consolidation" {
+		t.Fatalf("consolidation turn trigger = %#v", metadata["turn_trigger"])
 	}
 	threadID := request.ThreadID
 	if _, ok := router.threads.EphemeralRecord(session.ThreadID(threadID), true); ok {
