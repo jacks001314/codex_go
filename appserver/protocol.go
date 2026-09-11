@@ -468,6 +468,10 @@ type Request struct {
 	Params       json.RawMessage `json:"params,omitempty"`
 	ConnectionID string          `json:"-"`
 	Internal     bool            `json:"-"`
+	// InternalParams carries the in-process params object for internal
+	// requests whose JSON form cannot represent internal-only fields (for
+	// example TurnStartParams.ParentTurnID/RootTurnID/AdditionalInputItems).
+	InternalParams any `json:"-"`
 }
 
 const defaultRequestConnectionID = "default"

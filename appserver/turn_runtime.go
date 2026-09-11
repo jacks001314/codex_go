@@ -4097,7 +4097,8 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 // trustedConfigurationUpdateSessionItems extracts harness-authored
 // configuration_update items from internal additional input items. Client wire
 // inputs cannot reach this path because AdditionalInputItems is not serialized
-// into JSON-RPC parameters.
+// into JSON-RPC parameters; it is only carried on in-process internal requests
+// via Request.InternalParams.
 func trustedConfigurationUpdateSessionItems(inputs []any, turnID string, createdAt time.Time) []session.Item {
 	items := make([]session.Item, 0, len(inputs))
 	for i, input := range inputs {

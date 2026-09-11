@@ -237,6 +237,7 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		ClientUserMessageID string          `json:"clientUserMessageId,omitempty"`
 		Input               []TurnUserInput `json:"input"`
 		ToolOutput          *TurnToolOutput `json:"toolOutput,omitempty"`
+		TurnTrigger         string          `json:"turnTrigger,omitempty"`
 		CWD                 string          `json:"cwd,omitempty"`
 		ApprovalPolicy      any             `json:"approvalPolicy,omitempty"`
 		ApprovalsReviewer   *string         `json:"approvalsReviewer,omitempty"`
@@ -253,6 +254,7 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		ClientUserMessageID: p.ClientUserMessageID,
 		Input:               userInputsForJSONWithPrompt(p.Input, p.Prompt),
 		ToolOutput:          p.ToolOutput,
+		TurnTrigger:         p.TurnTrigger,
 		CWD:                 p.CWD,
 		ApprovalPolicy:      p.ApprovalPolicy,
 		ApprovalsReviewer:   p.ApprovalsReviewer,

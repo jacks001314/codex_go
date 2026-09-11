@@ -91,6 +91,58 @@ func TestRuntimeAgentControllerReportsNotFound(t *testing.T) {
 	}
 }
 
+// TestRuntimeAgentControllerPropagatesTurnTriggerLikeRust covers Rust #44659:
+// delegated work inherits the initiating turn's trigger so usage can be
+// attributed to that turn.
+func TestRuntimeAgentControllerPropagatesTurnTriggerLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", SessionID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: t.TempDir()}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "delegated", parent.Metadata.CWD, 4, agent.VersionV1, nil).(*runtimeAgentController)
+	if controller.turnTrigger != "delegated" {
+		t.Fatalf("controller turn trigger = %q", controller.turnTrigger)
+	}
+	message := "do the work"
+	child, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "worker", Message: &message})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := router.threads.ActiveTurn(child.AgentID)
+	if active == nil || active.Params == nil {
+		t.Fatalf("child turn was not started: %#v", active)
+	}
+	if active.Params.TurnTrigger != "delegated" || active.Params.RootTurnID != "root-turn" || active.Params.ParentTurnID != "parent-turn" {
+		t.Fatalf("child turn params = %#v", active.Params)
+	}
+}
+
+// TestRuntimeAgentControllerV2SpawnCarriesInternalInputLikeRust verifies the
+// in-process params channel: V2 spawn delivers the inter-agent communication
+// item (AdditionalInputItems is internal-only and not part of the JSON wire).
+func TestRuntimeAgentControllerV2SpawnCarriesInternalInputLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", SessionID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: t.TempDir()}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	controller := newRuntimeAgentControllerWithVersion(router, "parent", parent.Metadata.CWD, 4, agent.VersionV2).(*runtimeAgentController)
+	message := "v2 work"
+	child, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "worker", Message: &message})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := router.threads.ActiveTurn(child.AgentID)
+	if active == nil || active.Params == nil || len(active.Params.AdditionalInputItems) == 0 {
+		t.Fatalf("v2 child turn params = %#v", active)
+	}
+}
+
 func TestRuntimeAgentControllerV1DepthLimitMatchesRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := time.Now().UTC()
@@ -112,7 +164,7 @@ func TestRuntimeAgentControllerV1DepthLimitMatchesRust(t *testing.T) {
 		t.Fatalf("child agent depth = %d, want 1", childRecord.Metadata.AgentDepth)
 	}
 	// A depth-1 agent cannot spawn or resume (Rust default max_depth = 1).
-	childController := newRuntimeAgentControllerForTurn(router, child.AgentID, "", "", childRecord.Metadata.CWD, 4, agent.VersionV1, nil).(*runtimeAgentController)
+	childController := newRuntimeAgentControllerForTurn(router, child.AgentID, "", "", "", childRecord.Metadata.CWD, 4, agent.VersionV1, nil).(*runtimeAgentController)
 	if _, err := childController.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "nested"}); !errors.Is(err, agent.ErrAgentDepthLimitReached) {
 		t.Fatalf("nested spawn error = %v", err)
 	}
@@ -204,7 +256,7 @@ func TestRuntimeAgentControllerChildInheritsTurnEnvironmentSelectionsLikeRust(t 
 }
 
 func TestRuntimeAgentControllerAttributesChildTurnsToParentTurn(t *testing.T) {
-	controller := newRuntimeAgentControllerForTurn(nil, "parent-thread", "parent-turn", "root-turn", t.TempDir(), 1, agent.VersionV1, nil)
+	controller := newRuntimeAgentControllerForTurn(nil, "parent-thread", "parent-turn", "root-turn", "", t.TempDir(), 1, agent.VersionV1, nil)
 	runtimeController, ok := controller.(*runtimeAgentController)
 	if !ok {
 		t.Fatalf("controller = %T", controller)

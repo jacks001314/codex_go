@@ -5443,8 +5443,8 @@ func (r *RuntimeRouter) configWarningsForInitialize() []config.ConfigWarningNoti
 }
 
 func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartResponse, error) {
-	var params turn.TurnStartParams
-	if err := request.DecodeParams(&params); err != nil {
+	params, err := decodeTurnStartParams(request)
+	if err != nil {
 		return nil, err
 	}
 	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
@@ -5453,21 +5453,21 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
 	}
-	r.inheritTurnEnvironmentSelections(&params)
-	if err := r.validateTurnStartEnvironments(&params); err != nil {
+	r.inheritTurnEnvironmentSelections(params)
+	if err := r.validateTurnStartEnvironments(params); err != nil {
 		return nil, err
 	}
 	if params.Permissions != nil && turnStartSandboxPolicyPresent(params.SandboxPolicy) {
 		return nil, jsonRPCInvalidRequest("`permissions` cannot be combined with `sandboxPolicy`")
 	}
-	settingsUpdate, hasSettingsUpdate := turnStartSettingsUpdateParams(&params)
-	if err := r.prepareTurnStartParams(&params); err != nil {
+	settingsUpdate, hasSettingsUpdate := turnStartSettingsUpdateParams(params)
+	if err := r.prepareTurnStartParams(params); err != nil {
 		return nil, err
 	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
-	if err := r.runPendingSessionStartHook(context.Background(), &params); err != nil {
+	if err := r.runPendingSessionStartHook(context.Background(), params); err != nil {
 		return nil, err
 	}
 	reservedRuntime := false
@@ -5477,20 +5477,44 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 		}
 		reservedRuntime = true
 	}
-	response, err := r.requireTurns().Start(&params)
+	response, err := r.requireTurns().Start(params)
 	if err != nil {
 		if reservedRuntime {
 			r.clearActiveRuntimeTurn(params.ThreadID, "")
 		}
 		return nil, err
 	}
-	_ = r.persistTurnStartRuntimeWorkspaceRoots(&params)
-	_ = r.persistTurnEnvironmentSelections(&params)
+	_ = r.persistTurnStartRuntimeWorkspaceRoots(params)
+	_ = r.persistTurnEnvironmentSelections(params)
 	if hasSettingsUpdate {
 		r.applyTurnStartSettingsUpdate(settingsUpdate)
 	}
-	r.startTurnRuntimeAsync(&params, response, request.normalizedConnectionID())
+	r.startTurnRuntimeAsync(params, response, request.normalizedConnectionID())
 	return response, nil
+}
+
+// decodeTurnStartParams decodes turn/start params, preferring the in-process
+// params object for internal requests so internal-only fields
+// (ParentTurnID/RootTurnID/AdditionalInputItems/TurnTrigger/Environments) are
+// not lost at the JSON boundary.
+func decodeTurnStartParams(request *Request) (*turn.TurnStartParams, error) {
+	if request != nil {
+		switch params := request.InternalParams.(type) {
+		case *turn.TurnStartParams:
+			if params != nil {
+				clone := *params
+				return &clone, nil
+			}
+		case turn.TurnStartParams:
+			clone := params
+			return &clone, nil
+		}
+	}
+	var params turn.TurnStartParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return &params, nil
 }
 
 const runtimeEnvironmentSelectionsExtraKey = "runtime_environments"
@@ -12013,7 +12037,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				defaults.DeveloperInstructions = v2Config.SubagentDeveloperInstructions
 			}
 			options.AgentVersion = version
-			options.AgentController = newRuntimeAgentControllerForTurn(r, threadID, turnID, effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, ""), cwd, maxThreads, version, params.Environments)
+			options.AgentController = newRuntimeAgentControllerForTurn(r, threadID, turnID, effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, ""), params.TurnTrigger, cwd, maxThreads, version, params.Environments)
 			if runtimeController, ok := options.AgentController.(*runtimeAgentController); ok {
 				runtimeController.maxDepth = maxDepth
 			}
