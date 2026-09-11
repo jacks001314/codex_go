@@ -28,7 +28,7 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 	if err := os.MkdirAll(filepath.Dir(backend.PIDFile), 0o700); err != nil {
 		return 0, "", fmt.Errorf("failed to create pid directory %s: %w", filepath.Dir(backend.PIDFile), err)
 	}
-	command := exec.Command(backend.CodexBin, backend.CommandArgs()...)
+	command := exec.Command(resolvePIDLaunchBinary(backend.CodexBin), backend.CommandArgs()...)
 	workingDir := filepath.Dir(backend.PIDFile)
 	if workingDir == "" {
 		workingDir = "."

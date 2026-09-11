@@ -16,7 +16,7 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 	if backend == nil {
 		return 0, "", fmt.Errorf("pid backend is nil")
 	}
-	command := exec.Command(backend.CodexBin, backend.CommandArgs()...)
+	command := exec.Command(resolvePIDLaunchBinary(backend.CodexBin), backend.CommandArgs()...)
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
 		return 0, "", err

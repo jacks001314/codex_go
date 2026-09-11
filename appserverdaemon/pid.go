@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"codex_go/install"
 )
 
 const (
@@ -45,6 +47,10 @@ type PIDBackend struct {
 type PIDRecord struct {
 	PID              uint32 `json:"pid"`
 	ProcessStartTime string `json:"processStartTime"`
+	// ExecutableIdentity digests the binary that was launched at start time so
+	// an installer retargeting the selected symlink/junction cannot change which
+	// image is considered running (Rust #43552). Omitted for legacy records.
+	ExecutableIdentity *install.ExecutableIdentity `json:"executableIdentity,omitempty"`
 }
 
 type PIDFileStateKind string
@@ -213,13 +219,66 @@ func (b *PIDBackend) Start() (*uint32, error) {
 		_ = os.Remove(b.PIDFile)
 		return nil, err
 	}
-	record := &PIDRecord{PID: pid, ProcessStartTime: processStartTime}
+	record := &PIDRecord{PID: pid, ProcessStartTime: processStartTime, ExecutableIdentity: launchedExecutableIdentity(b)}
 	if err := WritePIDRecord(b.PIDFile, record); err != nil {
 		_ = terminatePIDProcess(pid)
 		_ = os.Remove(b.PIDFile)
 		return nil, err
 	}
 	return &record.PID, nil
+}
+
+// resolvePIDLaunchBinary resolves the configured binary path before launch so
+// the recorded identity and the launched image agree even when an installer
+// retargets the selected symlink or junction (Rust #43552).
+func resolvePIDLaunchBinary(codexBin string) string {
+	codexBin = strings.TrimSpace(codexBin)
+	if codexBin == "" {
+		return codexBin
+	}
+	if resolved, err := filepath.EvalSymlinks(codexBin); err == nil && strings.TrimSpace(resolved) != "" {
+		return resolved
+	}
+	return codexBin
+}
+
+// launchedExecutableIdentity digests the launch-time binary for pid-managed
+// app-server records. Updates run their own recorded identity elsewhere, and an
+// unreadable binary leaves the field unset (Rust #43552).
+func launchedExecutableIdentity(backend *PIDBackend) *install.ExecutableIdentity {
+	if backend == nil || backend.CommandKind != PIDCommandAppServer {
+		return nil
+	}
+	data, err := os.ReadFile(resolvePIDLaunchBinary(backend.CodexBin))
+	if err != nil {
+		return nil
+	}
+	identity := install.ExecutableIdentityFromBytes(data)
+	return &identity
+}
+
+// RunningExecutableIdentity returns the launch-time executable identity of the
+// active pid-managed app server, or nil when no matching process is running or
+// the record predates the field (Rust #43552).
+func (b *PIDBackend) RunningExecutableIdentity() (*install.ExecutableIdentity, error) {
+	if b == nil {
+		return nil, nil
+	}
+	state, err := ReadPIDFileState(b.PIDFile)
+	if err != nil {
+		return nil, err
+	}
+	if state.Kind != PIDFileRunning || state.Record == nil {
+		return nil, nil
+	}
+	active, err := processMatchesPIDRecord(state.Record)
+	if err != nil {
+		return nil, err
+	}
+	if !active {
+		return nil, nil
+	}
+	return state.Record.ExecutableIdentity, nil
 }
 
 func (b *PIDBackend) Stop() error {
