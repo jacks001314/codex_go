@@ -692,7 +692,7 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 			}
 			info := MCPServerInfo{Name: name, Command: firstNonEmptyMCP(registration.Config.Command, registration.Config.URL), Args: append([]string(nil), registration.Config.Args...)}
 			config := cloneServerConfig(&registration.Config)
-			config.ProtocolMode = runtime.ProtocolMode
+			config.ProtocolMode = effectiveMCPProtocolMode(runtime, name, registration)
 			if strings.TrimSpace(config.OAuthServerName) == "" {
 				config.OAuthServerName = name
 			}

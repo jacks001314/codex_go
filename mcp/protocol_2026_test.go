@@ -33,6 +33,65 @@ func TestRuntimeConfigEnablesMCP20260728OnlyWhenRequested(t *testing.T) {
 	}
 }
 
+// TestHostOwnedAppsProtocolModeIsIndependent covers Rust #44318/#44571: the
+// trusted Codex Apps registration has its own protocol mode
+// (codex_apps_mcp_2026_07_28) independent of other HTTP servers
+// (mcp_2026_07_28).
+func TestHostOwnedAppsProtocolModeIsIndependent(t *testing.T) {
+	auth := &RuntimeAuth{UsesCodexBackend: true, HTTPHeaders: map[string]string{"Authorization": "Bearer token"}}
+
+	defaultOnly := RuntimeConfigFromValuesWithAuth(map[string]any{
+		"features":         map[string]any{"mcp_2026_07_28": true},
+		"chatgpt_base_url": "https://chatgpt.com",
+		"mcp_servers":      map[string]any{"docs": map[string]any{"url": "https://example.test/mcp"}},
+	}, "", auth)
+	service := NewMCPService(defaultOnly)
+	if docs, ok := service.serverConfig("docs"); !ok || docs.ProtocolMode != MCPProtocol20260728 {
+		t.Fatalf("docs protocol mode = %#v, ok=%v, want modern", docs, ok)
+	}
+	if apps, ok := service.serverConfig(CodexAppsServerName); !ok || apps.ProtocolMode != MCPProtocolLegacy {
+		t.Fatalf("apps protocol mode = %#v, ok=%v, want legacy", apps, ok)
+	}
+
+	appsOnly := RuntimeConfigFromValuesWithAuth(map[string]any{
+		"features":         map[string]any{"codex_apps_mcp_2026_07_28": true},
+		"chatgpt_base_url": "https://chatgpt.com",
+		"mcp_servers":      map[string]any{"docs": map[string]any{"url": "https://example.test/mcp"}},
+	}, "", auth)
+	service = NewMCPService(appsOnly)
+	if docs, ok := service.serverConfig("docs"); !ok || docs.ProtocolMode != MCPProtocolLegacy {
+		t.Fatalf("docs protocol mode = %#v, ok=%v, want legacy", docs, ok)
+	}
+	if apps, ok := service.serverConfig(CodexAppsServerName); !ok || apps.ProtocolMode != MCPProtocol20260728 {
+		t.Fatalf("apps protocol mode = %#v, ok=%v, want modern", apps, ok)
+	}
+}
+
+// TestRegistrationProtocolModeOverrideWins covers the extension contribution
+// path from Rust #44571: a registration that selects its own mode wins over
+// the defaults.
+func TestRegistrationProtocolModeOverrideWins(t *testing.T) {
+	runtime := RuntimeConfigFromValues(map[string]any{
+		"features": map[string]any{"mcp_2026_07_28": true},
+		"mcp_servers": map[string]any{
+			"docs": map[string]any{"url": "https://example.test/mcp"},
+		},
+	}, "")
+	override := MCPProtocolLegacy
+	registration := runtime.Servers["docs"]
+	registration.Config.ProtocolModeOverride = &override
+	runtime.Servers["docs"] = registration
+
+	service := NewMCPService(runtime)
+	docs, ok := service.serverConfig("docs")
+	if !ok || docs.ProtocolMode != MCPProtocolLegacy {
+		t.Fatalf("docs protocol mode = %#v, ok=%v, want override legacy", docs, ok)
+	}
+	if docs.ProtocolModeOverride == nil || *docs.ProtocolModeOverride != MCPProtocolLegacy {
+		t.Fatalf("protocol override was not carried: %#v", docs.ProtocolModeOverride)
+	}
+}
+
 func TestMCP2026HTTPDiscoveryMetadataAndMultiRoundInput(t *testing.T) {
 	methods := []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

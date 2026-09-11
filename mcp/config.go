@@ -82,6 +82,11 @@ type ServerConfig struct {
 	CatalogItemLimit         int                               `json:"-"`
 	ApplyHTTPRequest         func(*http.Request, []byte) error `json:"-"`
 	ProtocolMode             MCPProtocolMode                   `json:"-"`
+	// ProtocolModeOverride is set by extension/overlay contributions that
+	// select an HTTP protocol mode for their own server (Rust #44571). When
+	// non-nil it wins over the default and host-owned-Apps modes; nil preserves
+	// the existing default.
+	ProtocolModeOverride *MCPProtocolMode `json:"-"`
 }
 
 func (c *ServerConfig) EffectiveEnvironmentID() string {
@@ -208,7 +213,10 @@ type RuntimeConfig struct {
 	Auth                 *RuntimeAuth
 	Requirements         *managedconfig.ConfigRequirements
 	ProtocolMode         MCPProtocolMode
-	HTTPClient           HTTPDoer
+	// HostOwnedAppsProtocolMode is the independent protocol mode for the
+	// trusted, HTTP Codex Apps registration (Rust #44318/#44571).
+	HostOwnedAppsProtocolMode MCPProtocolMode
+	HTTPClient                HTTPDoer
 }
 
 type HTTPDoer interface {
@@ -231,16 +239,17 @@ func RuntimeConfigFromValuesWithAuth(values map[string]any, codexHome string, ru
 
 func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codexHome string, runtimeAuth *RuntimeAuth, requirements *managedconfig.ConfigRequirements) *RuntimeConfig {
 	out := &RuntimeConfig{
-		Servers:              map[string]ServerRegistration{},
-		AppsEnabled:          appsEnabledFromRuntimeConfigValues(values),
-		ChatGPTBaseURL:       runtimeConfigStringAny(values, "chatgpt_base_url", "chatgptBaseUrl", "chatgptBaseURL"),
-		AppsMCPProductSKU:    runtimeConfigStringAny(values, "apps_mcp_product_sku", "appsMcpProductSku", "appsMCPProductSKU"),
-		CodexHome:            strings.TrimSpace(codexHome),
-		AvailableEnvironment: runtimeConfigStringSliceAny(values, "available_environment", "availableEnvironment"),
-		ConnectorIDs:         runtimeConfigStringSliceAny(values, "connector_ids", "connectorIds"),
-		Auth:                 cloneRuntimeAuth(runtimeAuth),
-		Requirements:         managedconfig.CloneConfigRequirements(requirements),
-		ProtocolMode:         mcpProtocolModeFromValues(values),
+		Servers:                   map[string]ServerRegistration{},
+		AppsEnabled:               appsEnabledFromRuntimeConfigValues(values),
+		ChatGPTBaseURL:            runtimeConfigStringAny(values, "chatgpt_base_url", "chatgptBaseUrl", "chatgptBaseURL"),
+		AppsMCPProductSKU:         runtimeConfigStringAny(values, "apps_mcp_product_sku", "appsMcpProductSku", "appsMCPProductSKU"),
+		CodexHome:                 strings.TrimSpace(codexHome),
+		AvailableEnvironment:      runtimeConfigStringSliceAny(values, "available_environment", "availableEnvironment"),
+		ConnectorIDs:              runtimeConfigStringSliceAny(values, "connector_ids", "connectorIds"),
+		Auth:                      cloneRuntimeAuth(runtimeAuth),
+		Requirements:              managedconfig.CloneConfigRequirements(requirements),
+		ProtocolMode:              mcpProtocolModeFromValues(values),
+		HostOwnedAppsProtocolMode: hostOwnedAppsProtocolModeFromValues(values),
 	}
 	rawServers, ok := runtimeConfigMapAny(values, "mcp_servers", "mcpServers")
 	if !ok {
@@ -1176,6 +1185,10 @@ func cloneServerConfig(config *ServerConfig) ServerConfig {
 		return ServerConfig{}
 	}
 	cloned := *config
+	if config.ProtocolModeOverride != nil {
+		override := *config.ProtocolModeOverride
+		cloned.ProtocolModeOverride = &override
+	}
 	cloned.Args = append([]string(nil), config.Args...)
 	cloned.EnvVars = append([]EnvVar(nil), config.EnvVars...)
 	cloned.Scopes = append([]string(nil), config.Scopes...)

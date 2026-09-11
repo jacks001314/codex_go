@@ -39,18 +39,62 @@ const (
 var errMCPModernProtocolUnsupported = errors.New("MCP server does not support protocol version 2026-07-28")
 
 func mcpProtocolModeFromValues(values map[string]any) MCPProtocolMode {
-	features, _ := values["features"].(map[string]any)
-	switch feature := features["mcp_2026_07_28"].(type) {
-	case bool:
-		if feature {
-			return MCPProtocol20260728
-		}
-	case map[string]any:
-		if enabled, _ := feature["enabled"].(bool); enabled {
-			return MCPProtocol20260728
-		}
+	if mcpFeatureEnabled(values, "mcp_2026_07_28") {
+		return MCPProtocol20260728
 	}
 	return MCPProtocolLegacy
+}
+
+// hostOwnedAppsProtocolModeFromValues mirrors Rust
+// host_owned_apps_protocol_mode (feature codex_apps_mcp_2026_07_28): the
+// trusted, HTTP Codex Apps registration has an independent protocol mode.
+func hostOwnedAppsProtocolModeFromValues(values map[string]any) MCPProtocolMode {
+	if mcpFeatureEnabled(values, "codex_apps_mcp_2026_07_28") {
+		return MCPProtocol20260728
+	}
+	return MCPProtocolLegacy
+}
+
+func mcpFeatureEnabled(values map[string]any, key string) bool {
+	features, _ := values["features"].(map[string]any)
+	switch feature := features[key].(type) {
+	case bool:
+		return feature
+	case map[string]any:
+		if enabled, _ := feature["enabled"].(bool); enabled {
+			return true
+		}
+	}
+	return false
+}
+
+// effectiveMCPProtocolMode mirrors Rust McpConnectionSet resolution (#44571): a
+// registration that selects its own mode wins, otherwise the host-owned Codex
+// Apps registration uses its independent mode and every other server uses the
+// default. The override applies only to Streamable HTTP connections, which is
+// where the HTTP client consults config.ProtocolMode.
+func effectiveMCPProtocolMode(runtime *RuntimeConfig, name string, registration ServerRegistration) MCPProtocolMode {
+	if registration.Config.ProtocolModeOverride != nil {
+		return *registration.Config.ProtocolModeOverride
+	}
+	if runtime == nil {
+		return MCPProtocolLegacy
+	}
+	if isHostOwnedCodexAppsRegistration(name, registration) {
+		return runtime.HostOwnedAppsProtocolMode
+	}
+	return runtime.ProtocolMode
+}
+
+func isHostOwnedCodexAppsRegistration(name string, registration ServerRegistration) bool {
+	// Mirrors Rust McpServerSource::is_host_owned_apps: the exact Apps server
+	// name, a local-environment config, and a compatibility (controller-owned)
+	// source. Extension contributions do not gain host-owned Apps authority.
+	if strings.TrimSpace(name) != CodexAppsServerName || !registration.Config.IsLocalEnvironment() {
+		return false
+	}
+	return registration.Source == string(CatalogSourceCompatibility) ||
+		registration.ContributorID == legacyCodexAppsRegistrationID
 }
 
 func (m MCPProtocolMode) protocolVersion() string {
