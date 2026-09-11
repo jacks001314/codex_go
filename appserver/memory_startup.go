@@ -22,6 +22,7 @@ import (
 	"codex_go/model"
 	"codex_go/sandbox"
 	"codex_go/session"
+	"codex_go/state"
 	"codex_go/turn"
 	"github.com/google/uuid"
 )
@@ -37,6 +38,34 @@ type appServerMemoryStageOne struct {
 	reasoningSummary string
 	serviceTier      string
 	parentProfile    *sandbox.PermissionProfile
+}
+
+// memoryStartupPipelines returns the pipelines to run for a startup: the
+// selected memory version, plus an isolated v2 pipeline when
+// memories.dual_write is enabled and v2 is not already selected (Rust #43827).
+func memoryStartupPipelines(
+	primary *memories.StartupPipeline,
+	memoryConfig config.MemoriesConfig,
+	memoryVersion config.MemoryVersion,
+	stateRuntime *state.StateRuntime,
+	ctx context.Context,
+) []*memories.StartupPipeline {
+	pipelines := []*memories.StartupPipeline{primary}
+	if !memoryConfig.DualWrite || memoryVersion == config.MemoryVersionV2 || stateRuntime == nil {
+		return pipelines
+	}
+	dualStore, dualErr := stateRuntime.MemoryStoreForVersion(ctx, string(config.MemoryVersionV2))
+	if dualErr != nil {
+		slog.Warn("failed to open v2 memory store for dual write", "error", dualErr)
+		return pipelines
+	}
+	if dualStore == nil {
+		return pipelines
+	}
+	dual := *primary
+	dual.State = dualStore
+	dual.Version = config.MemoryVersionV2
+	return append(pipelines, &dual)
 }
 
 func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request memories.StageOneExtractionRequest) (memories.StageOneExtractionResponse, error) {
@@ -327,28 +356,37 @@ func (r *RuntimeRouter) startMemoriesStartupTask(response *ThreadStartResponse, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// memories.dual_write runs v2 extraction/consolidation alongside the
+	// selected version with an isolated store and directory, so v2 can warm in
+	// the background without importing the selected version's notes (Rust
+	// #43827).
+	pipelines := memoryStartupPipelines(pipeline, memoryConfig, memoryVersion, stateRuntime, ctx)
 	r.memoryStartupMu.Lock()
 	if r.memoryStartupClosing || r.threads.IsClosing() || ctx.Err() != nil {
 		r.memoryStartupMu.Unlock()
 		return
 	}
-	r.memoryStartupWG.Add(1)
+	r.memoryStartupWG.Add(len(pipelines))
 	r.memoryStartupMu.Unlock()
-	go func() {
-		defer r.memoryStartupWG.Done()
-		report, runErr := pipeline.Run(ctx)
-		if runErr != nil && ctx.Err() == nil {
-			slog.Warn("memories startup pipeline failed", "thread_id", response.Thread.ID, "error", runErr)
-			return
-		}
-		slog.Debug("memories startup pipeline finished",
-			"thread_id", response.Thread.ID,
-			"stage_one_claimed", report.StageOneClaimed,
-			"stage_one_succeeded", report.StageOneSucceeded,
-			"stage_one_no_output", report.StageOneSucceededEmpty,
-			"stage_one_failed", report.StageOneFailed,
-			"phase_two_status", report.PhaseTwoStatus)
-	}()
+	for _, active := range pipelines {
+		active := active
+		go func() {
+			defer r.memoryStartupWG.Done()
+			report, runErr := active.Run(ctx)
+			if runErr != nil && ctx.Err() == nil {
+				slog.Warn("memories startup pipeline failed", "thread_id", response.Thread.ID, "memory_version", string(active.Version), "error", runErr)
+				return
+			}
+			slog.Debug("memories startup pipeline finished",
+				"thread_id", response.Thread.ID,
+				"memory_version", string(active.Version),
+				"stage_one_claimed", report.StageOneClaimed,
+				"stage_one_succeeded", report.StageOneSucceeded,
+				"stage_one_no_output", report.StageOneSucceededEmpty,
+				"stage_one_failed", report.StageOneFailed,
+				"phase_two_status", report.PhaseTwoStatus)
+		}()
+	}
 }
 
 func (r *RuntimeRouter) primaryEnvironmentConfiguredForMemoryStartup(params *ThreadStartParams, record *session.Record) bool {
