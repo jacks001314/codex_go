@@ -196,7 +196,15 @@ func (p *StartupPipeline) runStageOne(ctx context.Context, report *StartupReport
 }
 
 func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1StartupClaim) string {
-	contents, err := SerializeFilteredRolloutForMemory(claim.Thread.RolloutPath)
+	// v2 selects provenance-tiered evidence with its own token budget; v1 keeps
+	// the filtered serialization (Rust #43800).
+	var contents string
+	var err error
+	if p.Version == config.MemoryVersionV2 {
+		contents, err = SerializeTieredRolloutForMemory(claim.Thread.RolloutPath, resolvedStageOneTokenLimit(p.StageOneModelInfo))
+	} else {
+		contents, err = SerializeFilteredRolloutForMemory(claim.Thread.RolloutPath)
+	}
 	if err != nil {
 		_, _ = p.State.MarkStage1JobFailed(ctx, claim.Thread.ID, claim.OwnershipToken, err.Error(), StageOneRetryDelaySeconds)
 		return "failed"

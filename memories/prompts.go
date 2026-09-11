@@ -139,8 +139,6 @@ func BuildStageOneInputForVersion(version config.MemoryVersion, info model.Model
 	if version != config.MemoryVersionV2 {
 		return BuildStageOneInputMessage(info, rolloutPath, rolloutCWD, rolloutContents)
 	}
-	limit := resolvedStageOneTokenLimit(info)
-	truncated := utils.FormattedTruncateText(rolloutContents, utils.TokensPolicy(limit))
 	branch := strings.TrimSpace(rolloutGitBranch)
 	if branch == "" {
 		branch = "unknown"
@@ -149,7 +147,8 @@ func BuildStageOneInputForVersion(version config.MemoryVersion, info model.Model
 		"rollout_path":       rolloutPath,
 		"rollout_cwd":        rolloutCWD,
 		"rollout_git_branch": branch,
-		"rollout_contents":   truncated,
+		// v2 evidence is already budgeted by serialize_tiered_input upstream.
+		"rollout_contents": rolloutContents,
 	})
 }
 
