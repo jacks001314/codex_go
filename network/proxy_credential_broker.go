@@ -49,11 +49,19 @@ type ProxyCredentialProvider struct {
 	// Patterns are the configured credential patterns used for embedded alias
 	// discovery (#44066). Built-in providers leave this nil.
 	Patterns           []string
-	embeddedMatchers   []*regexp.Regexp
+	embeddedPatterns   []embeddedCredentialPattern
 	DummyValue         func(string) string
 	RequestHeader      func(map[string][]string) (string, bool)
 	RequestHeaderValue func(string) (string, bool)
 	InsertHeader       func(map[string][]string, string)
+}
+
+// embeddedCredentialPattern pairs a configured pattern with whether it carries
+// a distinctive literal prefix, which lets shorter-than-minimum credentials be
+// discovered (Rust has_distinctive_prefix, #44066).
+type embeddedCredentialPattern struct {
+	matcher     *regexp.Regexp
+	distinctive bool
 }
 
 type ProxyCredentialSource struct {
@@ -127,7 +135,7 @@ func (b *ProxyCredentialBroker) VirtualizeChildEnv(env map[string]string) {
 // discovered, and already-generated dummies are never re-registered.
 func (b *ProxyCredentialBroker) virtualizeEmbeddedCredentials(env map[string]string, resolvedEnv map[string]string) {
 	for _, provider := range b.providers {
-		if provider == nil || len(provider.embeddedMatchers) == 0 || len(provider.Sources) == 0 {
+		if provider == nil || len(provider.embeddedPatterns) == 0 || len(provider.Sources) == 0 {
 			continue
 		}
 		hostBinding, ok := provider.Sources[0].HostBinding(resolvedEnv)
@@ -152,10 +160,10 @@ func (b *ProxyCredentialBroker) virtualizeEmbeddedValue(key string, value string
 		end   int
 	}
 	matches := make([]match, 0)
-	for _, matcher := range provider.embeddedMatchers {
-		for _, indices := range matcher.FindAllStringIndex(value, -1) {
+	for _, pattern := range provider.embeddedPatterns {
+		for _, indices := range pattern.matcher.FindAllStringIndex(value, -1) {
 			start, end := indices[0], indices[1]
-			if end-start < minEmbeddedCredentialLength {
+			if end-start < minEmbeddedCredentialLength && !pattern.distinctive {
 				continue
 			}
 			// A complete token: the following byte must not continue the token.
@@ -207,6 +215,10 @@ func (b *ProxyCredentialBroker) virtualizeEmbeddedValue(key string, value string
 
 // minEmbeddedCredentialLength mirrors Rust MIN_EMBEDDED_CREDENTIAL_LENGTH.
 const minEmbeddedCredentialLength = 16
+
+// minDistinctiveCredentialPrefixLength mirrors Rust
+// MIN_DISTINCTIVE_CREDENTIAL_PREFIX_LENGTH.
+const minDistinctiveCredentialPrefixLength = 4
 
 func isCredentialTokenByte(value byte) bool {
 	return value >= '0' && value <= '9' ||

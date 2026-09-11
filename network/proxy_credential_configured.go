@@ -62,7 +62,11 @@ func ConfiguredCredentialProvider(id string, config CredentialProviderConfig) *P
 	provider.Patterns = append([]string(nil), config.Patterns...)
 	for _, pattern := range config.Patterns {
 		if matcher, err := regexp.Compile(pattern); err == nil {
-			provider.embeddedMatchers = append(provider.embeddedMatchers, matcher)
+			prefix, _ := matcher.LiteralPrefix()
+			provider.embeddedPatterns = append(provider.embeddedPatterns, embeddedCredentialPattern{
+				matcher:     matcher,
+				distinctive: len(prefix) >= minDistinctiveCredentialPrefixLength,
+			})
 		}
 	}
 	provider.Sources = []ProxyCredentialSource{{

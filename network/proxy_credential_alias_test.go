@@ -65,6 +65,22 @@ func TestCredentialBrokerEmbeddedAliasGuardsLikeRust(t *testing.T) {
 		}
 	})
 
+	t.Run("distinctive prefix allows a short embedded credential", func(t *testing.T) {
+		broker := NewProxyCredentialBrokerWithProviders(true, []*ProxyCredentialProvider{aliasTestProvider([]string{"sk-live-[a-z]{4}"})})
+		env := map[string]string{"OTHER_VAR": "token sk-live-abcd here"}
+		broker.VirtualizeChildEnv(env)
+		if strings.Contains(env["OTHER_VAR"], "sk-live-abcd") {
+			t.Fatalf("distinctive short credential not virtualized: %q", env["OTHER_VAR"])
+		}
+		// The same length without a distinctive literal prefix stays ignored.
+		plain := NewProxyCredentialBrokerWithProviders(true, []*ProxyCredentialProvider{aliasTestProvider([]string{"[a-z]{4}-[0-9]{4}"})})
+		plainEnv := map[string]string{"OTHER_VAR": "token abcd-1234 here"}
+		plain.VirtualizeChildEnv(plainEnv)
+		if plainEnv["OTHER_VAR"] != "token abcd-1234 here" {
+			t.Fatalf("non-distinctive short match rewritten: %q", plainEnv["OTHER_VAR"])
+		}
+	})
+
 	t.Run("virtualization is idempotent for dummies", func(t *testing.T) {
 		broker := NewProxyCredentialBrokerWithProviders(true, []*ProxyCredentialProvider{aliasTestProvider([]string{"vk-[a-z0-9]{16}"})})
 		env := map[string]string{"OTHER_VAR": "token " + realValue}
