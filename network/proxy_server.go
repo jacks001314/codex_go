@@ -652,6 +652,10 @@ func (s *ProxyServer) handlePlaintextHTTPTunnel(client net.Conn, reader *bufio.R
 		s.handlePlaintextTunnelUpgrade(client, reader, host, port)
 		return
 	}
+	if kind == plaintextTunnelRequestHTTP2 {
+		s.handlePlaintextTunnelHTTP2(client, reader, host, port)
+		return
+	}
 	defer client.Close()
 	// Egress is direct for a brokered plaintext tunnel; the proxy is the client
 	// already, so no upstream proxy is configured.
@@ -731,6 +735,7 @@ type plaintextTunnelRequestKind uint8
 const (
 	plaintextTunnelRequestNormal plaintextTunnelRequestKind = iota
 	plaintextTunnelRequestUpgrade
+	plaintextTunnelRequestHTTP2
 )
 
 // classifyPlaintextTunnelRequest reports whether the peeked request can be
@@ -739,8 +744,10 @@ const (
 // upgraded connection). HTTP/2 prefaces, nested CONNECT, non-HTTP/1.x bytes, and
 // requests bound to another authority stay on the opaque relay.
 func classifyPlaintextTunnelRequest(header []byte, host string, port uint16) (plaintextTunnelRequestKind, bool) {
-	if bytes.HasPrefix(header, []byte("PRI * HTTP/2.0")) {
-		return plaintextTunnelRequestNormal, false
+	if bytes.HasPrefix(header, []byte("PRI * HTTP/2.0\r\n\r\n")) {
+		// HTTP/2 cleartext (prior knowledge): the :authority is inside the
+		// HEADERS frame, and the broker only ever forwards to the tunnel target.
+		return plaintextTunnelRequestHTTP2, true
 	}
 	request, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(header)))
 	if err != nil {
@@ -764,6 +771,64 @@ func classifyPlaintextTunnelRequest(header []byte, host string, port uint16) (pl
 func plaintextTunnelRequestAllowed(header []byte, host string, port uint16) bool {
 	kind, ok := classifyPlaintextTunnelRequest(header, host, port)
 	return ok && kind == plaintextTunnelRequestNormal
+}
+
+// handlePlaintextTunnelHTTP2 brokers an HTTP/2 cleartext (h2c) tunnel: the
+// tunnel connection is served as an HTTP/2 server and every request is
+// forwarded over a fresh h2c connection to the tunnel destination with
+// URL-scoped credential substitution (#44089).
+func (s *ProxyServer) handlePlaintextTunnelHTTP2(client net.Conn, reader *bufio.Reader, host string, port uint16) {
+	defer client.Close()
+	target := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	transport := &http2.Transport{
+		AllowHTTP: true,
+		DialTLSContext: func(ctx context.Context, network, _ string, _ *tls.Config) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, network, target)
+		},
+	}
+	defer transport.CloseIdleConnections()
+	policy := s.runtimePolicy()
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if reason := s.blockReasonFor(request.Context(), request.Method, ProxyProtocolHTTP, host, port, client.RemoteAddr().String()); reason != "" {
+			writer.WriteHeader(http.StatusForbidden)
+			return
+		}
+		outgoing := request.Clone(request.Context())
+		outgoing.URL.Scheme = "http"
+		outgoing.URL.Host = target
+		outgoing.RequestURI = ""
+		outgoing.Header = request.Header.Clone()
+		removeProxyHopByHopRequestHeaders(outgoing.Header)
+		policy.broker.InjectRequestHeadersForDestination("http", host, port, outgoing.URL.Path, map[string][]string(outgoing.Header))
+		response, err := transport.RoundTrip(outgoing)
+		if err != nil {
+			writer.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		defer response.Body.Close()
+		for key, values := range response.Header {
+			if isProxyHopByHopHeader(key) {
+				continue
+			}
+			for _, value := range values {
+				writer.Header().Add(key, value)
+			}
+		}
+		writer.WriteHeader(response.StatusCode)
+		_, _ = io.Copy(writer, response.Body)
+	})
+	server := &http2.Server{}
+	server.ServeConn(&proxyBufferedConn{Conn: client, reader: reader}, &http2.ServeConnOpts{Handler: handler})
+}
+
+func isProxyHopByHopHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "connection", "keep-alive", "proxy-connection", "proxy-authenticate", "proxy-authorization",
+		"te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	default:
+		return false
+	}
 }
 
 // handlePlaintextTunnelUpgrade brokers an Upgrade request (for example a

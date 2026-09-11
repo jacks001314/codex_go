@@ -51,8 +51,11 @@ func TestPlaintextTunnelRequestAllowedLikeRust(t *testing.T) {
 	if plaintextTunnelRequestAllowed(upgrade, host, port) {
 		t.Fatal("upgrade request is not a plain request")
 	}
+	h2Preface := []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+	if kind, ok := classifyPlaintextTunnelRequest(h2Preface, host, port); !ok || kind != plaintextTunnelRequestHTTP2 {
+		t.Fatalf("h2c classification = %v/%v, want h2c", kind, ok)
+	}
 	cases := map[string][]byte{
-		"h2 preface": []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"),
 		"connect":    []byte("CONNECT 127.0.0.1:8080 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n"),
 		"other host": []byte("GET / HTTP/1.1\r\nHost: evil.example\r\n\r\n"),
 		"wrong port": []byte("GET / HTTP/1.1\r\nHost: 127.0.0.1:9999\r\n\r\n"),
