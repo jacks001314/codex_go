@@ -19,6 +19,7 @@ type proxyRawRequestState struct {
 
 type proxyHTTPValidationListener struct {
 	net.Listener
+	tracker *proxyConnTracker
 }
 
 func (l proxyHTTPValidationListener) Accept() (net.Conn, error) {
@@ -26,7 +27,8 @@ func (l proxyHTTPValidationListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &proxyHTTPValidationConn{Conn: conn, state: &proxyRawRequestState{}}, nil
+	untrack := l.tracker.track(conn)
+	return &proxyHTTPValidationConn{Conn: &proxyTrackedConn{Conn: conn, untrack: untrack}, state: &proxyRawRequestState{}}, nil
 }
 
 type proxyHTTPValidationConn struct {

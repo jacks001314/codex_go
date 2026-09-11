@@ -51,6 +51,7 @@ type ProxyServer struct {
 	cancel        context.CancelFunc
 	wait          sync.WaitGroup
 	closeOnce     sync.Once
+	tracker       proxyConnTracker
 }
 
 type proxyRuntimePolicy struct {
@@ -162,12 +163,12 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 			cancel()
 			return nil, fmt.Errorf("start SOCKS5 network proxy: %w", listenErr)
 		}
-		server.socksListener = socksListener
+		server.socksListener = &proxyTrackingListener{Listener: socksListener, tracker: &server.tracker}
 	}
 	server.wait.Add(1)
 	go func() {
 		defer server.wait.Done()
-		_ = server.httpServer.Serve(proxyHTTPValidationListener{Listener: server.httpListener})
+		_ = server.httpServer.Serve(proxyHTTPValidationListener{Listener: server.httpListener, tracker: &server.tracker})
 	}()
 	if server.socksListener != nil {
 		server.wait.Add(1)
@@ -261,6 +262,10 @@ func (s *ProxyServer) Close() error {
 				closeErr = err
 			}
 		}
+		// Hijacked CONNECT tunnels and SOCKS5 connections are not owned by the
+		// HTTP server; close them so teardown does not leave tunnels alive
+		// (Rust #43884).
+		s.tracker.closeAll()
 		s.wait.Wait()
 		if s.mitm != nil {
 			s.mitm.Close()
@@ -939,6 +944,13 @@ func (s *ProxyServer) proxyOpaqueTCP(client net.Conn, reader io.Reader, host str
 	}
 	if validating, ok := client.(*proxyHTTPValidationConn); ok {
 		client = validating.Conn
+	}
+	// Hand the underlying connection to tcpproxy so its TCP half-close
+	// detection keeps working, and release the teardown registration once the
+	// borrowed tunnel finishes (Rust #43884).
+	if raw, release := unwrapProxyTracked(client); release != nil {
+		client = raw
+		defer release()
 	}
 	proxy.HandleConn(&tcpproxy.Conn{Conn: client, Peeked: peeked})
 }

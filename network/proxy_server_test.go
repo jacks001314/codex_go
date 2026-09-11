@@ -79,6 +79,90 @@ func TestProxyManagedNetworkStartsForwardsAndClosesLikeRust(t *testing.T) {
 	}
 }
 
+// TestProxyManagedNetworkClosesActiveTunnelsOnTeardownLikeRust covers Rust
+// #43884: an open HTTP CONNECT tunnel must be closed when the managed proxy
+// tears down, instead of surviving after its owning thread is unloaded.
+func TestProxyManagedNetworkClosesActiveTunnelsOnTeardownLikeRust(t *testing.T) {
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := target.Accept()
+		if acceptErr == nil {
+			accepted <- conn
+		}
+	}()
+
+	settings := DefaultProxySettings()
+	settings.Enabled = true
+	settings.ProxyURL = "http://127.0.0.1:0"
+	settings.SocksURL = "http://127.0.0.1:0"
+	settings.SetAllowedDomains([]string{"127.0.0.1"})
+	settings.AllowLocalBinding = true
+	prepared, err := StartProxyManagedNetwork(context.Background(), ProxyConfig{Network: settings}, nil)
+	if err != nil {
+		t.Fatalf("StartProxyManagedNetwork() error = %v", err)
+	}
+
+	proxyURL, err := url.Parse(prepared.Env["HTTP_PROXY"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := net.DialTimeout("tcp", proxyURL.Host, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial proxy error = %v", err)
+	}
+	defer client.Close()
+	targetAddress := target.Addr().String()
+	if _, err := fmt.Fprintf(client, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", targetAddress, targetAddress); err != nil {
+		t.Fatalf("write CONNECT error = %v", err)
+	}
+	reader := bufio.NewReader(client)
+	status, err := reader.ReadString('\n')
+	if err != nil || !strings.HasPrefix(status, "HTTP/1.") || !strings.Contains(status, " 200 ") {
+		t.Fatalf("CONNECT response = %q err = %v", status, err)
+	}
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			t.Fatalf("read CONNECT headers error = %v", readErr)
+		}
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	var upstream net.Conn
+	select {
+	case upstream = <-accepted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("proxy did not establish the upstream tunnel")
+	}
+	defer upstream.Close()
+
+	// The tunnel carries traffic while the proxy is running.
+	if _, err := client.Write([]byte("ping")); err != nil {
+		t.Fatalf("write tunnel error = %v", err)
+	}
+	_ = upstream.SetReadDeadline(time.Now().Add(2 * time.Second))
+	payload := make([]byte, 4)
+	if _, err := io.ReadFull(upstream, payload); err != nil || string(payload) != "ping" {
+		t.Fatalf("tunnel payload = %q err = %v", payload, err)
+	}
+
+	if err := prepared.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, readErr := client.Read(make([]byte, 1)); readErr == nil {
+		t.Fatal("CONNECT tunnel stayed open after proxy teardown")
+	} else if netErr, ok := readErr.(net.Error); ok && netErr.Timeout() {
+		t.Fatalf("CONNECT tunnel read timed out instead of closing after teardown: %v", readErr)
+	}
+}
+
 func TestProxyManagedNetworkReloadsPolicyWithoutChangingListenersLikeRust(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		_, _ = io.WriteString(w, request.Method)
