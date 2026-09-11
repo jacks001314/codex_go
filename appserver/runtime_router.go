@@ -2491,7 +2491,7 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 	appTurn.ItemsView = TurnItemsNotLoaded
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(params.ThreadID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: params.ThreadID, Turn: appTurn})
-	_ = r.appendRuntimeTurnStarted(params.ThreadID, turnID, startedAt)
+	_ = r.appendRuntimeTurnStarted(params.ThreadID, turnID, rootTurnIDForTurn(nil, turnID), startedAt)
 	_, err = r.compactThread(context.Background(), &runtimeCompactRequest{
 		ThreadID:     params.ThreadID,
 		TurnID:       turnID,

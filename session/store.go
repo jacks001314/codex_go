@@ -268,8 +268,11 @@ const (
 )
 
 type TurnSnapshot struct {
-	ID             string `json:"id"`
-	Status         string `json:"status"`
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	// RootTurnID attributes the turn to the root turn that initiated it
+	// (Rust #44611). Older records omit it.
+	RootTurnID     string `json:"root_turn_id,omitempty"`
 	StartedAt      *int64 `json:"started_at,omitempty"`
 	CompletedAt    *int64 `json:"completed_at,omitempty"`
 	DurationMS     *int64 `json:"duration_ms,omitempty"`

@@ -671,6 +671,13 @@ func (r *Recorder) AppendSecurityRiskScoreWithProvenance(scores map[string]float
 }
 
 func (r *Recorder) AppendTurnStarted(turnID string, startedAt time.Time) error {
+	return r.AppendTurnStartedWithRoot("", turnID, startedAt)
+}
+
+// AppendTurnStartedWithRoot persists a turn-start event with root-turn
+// attribution (Rust #44611): the inherited root turn ID when available,
+// otherwise the caller passes the turn's own ID.
+func (r *Recorder) AppendTurnStartedWithRoot(rootTurnID string, turnID string, startedAt time.Time) error {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return nil
@@ -679,13 +686,15 @@ func (r *Recorder) AppendTurnStarted(turnID string, startedAt time.Time) error {
 		startedAt = time.Now().UTC()
 	}
 	payload, err := json.Marshal(struct {
-		Type      string `json:"type"`
-		TurnID    string `json:"turn_id"`
-		StartedAt int64  `json:"started_at"`
+		Type       string `json:"type"`
+		TurnID     string `json:"turn_id"`
+		RootTurnID string `json:"root_turn_id,omitempty"`
+		StartedAt  int64  `json:"started_at"`
 	}{
-		Type:      "task_started",
-		TurnID:    turnID,
-		StartedAt: startedAt.UTC().Unix(),
+		Type:       "task_started",
+		TurnID:     turnID,
+		RootTurnID: strings.TrimSpace(rootTurnID),
+		StartedAt:  startedAt.UTC().Unix(),
 	})
 	if err != nil {
 		return err

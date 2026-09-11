@@ -143,6 +143,18 @@ func TestRuntimeAgentControllerV2SpawnCarriesInternalInputLikeRust(t *testing.T)
 	}
 }
 
+func TestRootTurnIDForTurnMatchesRust(t *testing.T) {
+	if got := rootTurnIDForTurn(&turn.TurnStartParams{RootTurnID: "root-1"}, "turn-2"); got != "root-1" {
+		t.Fatalf("inherited root = %q, want root-1", got)
+	}
+	if got := rootTurnIDForTurn(&turn.TurnStartParams{}, "turn-2"); got != "turn-2" {
+		t.Fatalf("root fallback = %q, want own turn id", got)
+	}
+	if got := rootTurnIDForTurn(nil, "turn-3"); got != "turn-3" {
+		t.Fatalf("nil params root = %q, want own turn id", got)
+	}
+}
+
 func TestRuntimeAgentControllerV1DepthLimitMatchesRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := time.Now().UTC()

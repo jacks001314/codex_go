@@ -1308,7 +1308,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(threadID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
-	_ = r.appendRuntimeTurnStarted(threadID, turnID, startedAt)
+	_ = r.appendRuntimeTurnStarted(threadID, turnID, rootTurnIDForTurn(params, turnID), startedAt)
 	// Rust records a full context window and compacts before the next user turn.
 	// Do this before persisting/sending the new prompt so the prompt is retained
 	// and the sampling request sees the compacted history.
@@ -3186,10 +3186,21 @@ func (r *RuntimeRouter) persistRuntimeTurnPrompt(threadID string, turnID string,
 	return true
 }
 
-func (r *RuntimeRouter) appendRuntimeTurnStarted(threadID string, turnID string, startedAt time.Time) error {
+func (r *RuntimeRouter) appendRuntimeTurnStarted(threadID string, turnID string, rootTurnID string, startedAt time.Time) error {
 	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
-		return recorder.AppendTurnStarted(turnID, startedAt)
+		return recorder.AppendTurnStartedWithRoot(rootTurnID, turnID, startedAt)
 	})
+}
+
+// rootTurnIDForTurn mirrors Rust #44611: use the inherited root turn ID when
+// available, otherwise the turn's own ID.
+func rootTurnIDForTurn(params *turn.TurnStartParams, turnID string) string {
+	if params != nil {
+		if root := strings.TrimSpace(params.RootTurnID); root != "" {
+			return root
+		}
+	}
+	return strings.TrimSpace(turnID)
 }
 
 func (r *RuntimeRouter) appendRuntimeTurnComplete(threadID string, turnID string, completedAt time.Time, durationMS int64) error {

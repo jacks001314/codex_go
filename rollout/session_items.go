@@ -735,6 +735,8 @@ type rolloutEventPayload struct {
 	Type               string          `json:"type"`
 	TurnID             string          `json:"turn_id"`
 	TurnIDCamel        string          `json:"turnId"`
+	RootTurnID         *string         `json:"root_turn_id"`
+	RootTurnIDCamel    *string         `json:"rootTurnId"`
 	StartedAt          *int64          `json:"started_at"`
 	StartedAtCamel     *int64          `json:"startedAt"`
 	CompletedAt        *int64          `json:"completed_at"`
@@ -839,11 +841,19 @@ func (b *rolloutReplayBuilder) handleEventLine(line *Line, lineIndex int) bool {
 func (b *rolloutReplayBuilder) handleTurnStarted(payload rolloutEventPayload, lineIndex int) {
 	b.finishCurrentTurn()
 	turnID := firstNonEmptyString(payload.TurnID, payload.TurnIDCamel, fmt.Sprintf("rollout-%d", lineIndex))
+	rootTurnID := ""
+	switch {
+	case payload.RootTurnID != nil:
+		rootTurnID = strings.TrimSpace(*payload.RootTurnID)
+	case payload.RootTurnIDCamel != nil:
+		rootTurnID = strings.TrimSpace(*payload.RootTurnIDCamel)
+	}
 	b.current = &rolloutReplayTurn{
 		snapshot: session.TurnSnapshot{
-			ID:        turnID,
-			Status:    "inProgress",
-			StartedAt: firstNonNilInt64(payload.StartedAt, payload.StartedAtCamel),
+			ID:         turnID,
+			Status:     "inProgress",
+			RootTurnID: rootTurnID,
+			StartedAt:  firstNonNilInt64(payload.StartedAt, payload.StartedAtCamel),
 		},
 		openedExplicitly: true,
 	}
