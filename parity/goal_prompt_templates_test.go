@@ -21,10 +21,11 @@ func TestRustGoalPromptTemplatesMatchGo(t *testing.T) {
 	rustRepo := filepath.Dir(root)
 
 	// The goal templates changed in the sync26/sync27 range (#40628 adds the
-	// "No-progress check" to continuation.md), which is newer than the
-	// certification baseline (candidateRustTo). Verify against the current
-	// freeze target so these templates stay pinned to the latest upstream.
-	target := "bde9db1375667c50dcc0c2b52532a4e2672571c2"
+	// "No-progress check" to continuation.md) and again for user-requested
+	// pauses (#44290, fa7af3883d), which are newer than the certification
+	// baseline (candidateRustTo). Verify against the sync31 freeze target so
+	// these templates stay pinned to the latest upstream.
+	target := "c62d191c4c8c0cab7045fca6efc399197334bb6c"
 	continuation := gitOutput(t, rustRepo, "show", target+":codex-rs/ext/goal/templates/goals/continuation.md")
 	budget := gitOutput(t, rustRepo, "show", target+":codex-rs/ext/goal/templates/goals/budget_limit.md")
 	objective := gitOutput(t, rustRepo, "show", target+":codex-rs/ext/goal/templates/goals/objective_updated.md")

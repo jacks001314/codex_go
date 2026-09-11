@@ -133,10 +133,10 @@ func (r *RuntimeRouter) executeGoalToolUpdate(ctx context.Context, invocation *t
 	switch status {
 	case state.ThreadGoalComplete:
 		mode = state.GoalAccountingActiveOrComplete
-	case state.ThreadGoalBlocked:
+	case state.ThreadGoalBlocked, state.ThreadGoalPaused:
 		mode = state.GoalAccountingActiveOrStopped
 	default:
-		return nil, tool.RespondToModel("update_goal can only mark the existing goal complete or blocked; pause, resume, budget-limited, and usage-limited status changes are controlled by the user or system")
+		return nil, tool.RespondToModel("update_goal can only mark the existing goal complete, blocked, or paused at the user's explicit request; resume, budget-limited, and usage-limited status changes are controlled by the user or system")
 	}
 
 	r.accountStateThreadGoalProgress(threadID, turnID, time.Now().UTC(), mode)

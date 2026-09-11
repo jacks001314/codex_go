@@ -135,8 +135,8 @@ func (h *execGoalToolHandler) update(ctx context.Context, invocation *tool.Invoc
 		return nil, tool.RespondToModel(err.Error())
 	}
 	status := strings.TrimSpace(args.Status)
-	if status != string(execGoalComplete) && status != string(execGoalBlocked) {
-		return nil, tool.RespondToModel("update_goal can only mark the existing goal complete or blocked; pause, resume, budget-limited, and usage-limited status changes are controlled by the user or system")
+	if status != string(execGoalComplete) && status != string(execGoalBlocked) && status != string(execGoalPaused) {
+		return nil, tool.RespondToModel("update_goal can only mark the existing goal complete, blocked, or paused at the user's explicit request; resume, budget-limited, and usage-limited status changes are controlled by the user or system")
 	}
 	goal, ok := h.read(threadID)
 	if !ok {

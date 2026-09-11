@@ -142,6 +142,57 @@ func execGoalToolResponseFromOutput(t *testing.T, output *tool.Output) execGoalT
 
 // TestExecGoalToolOutputIsStringOnWire guards against Responses API providers
 // (such as DeepSeek) rejecting structured function_call_output.output objects.
+// Rust #44290: exec's update_goal accepts `paused` at the user's explicit
+// request and still rejects resume/system-limit statuses.
+func TestExecGoalToolUpdatePausesOnExplicitRequest(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("save auth: %v", err)
+	}
+	threadID := "thread-goal-pause"
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	now := time.Now().UTC()
+	if err := store.Save(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{},
+	}); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+	runner := NewRunner(home)
+	runner.setGoalTurnContext(threadID, "turn-1")
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{"goals": true}}}
+	req := &Request{Exec: cli.ExecOptions{Prompt: "work"}}
+	run := &agentRunConfig{Config: cfg, ThreadID: threadID, TurnID: "turn-1"}
+	executors := runner.goalToolExecutorsForRequest(req, run)
+	create := execGoalToolExecutorByName(t, executors, tool.GoalCreateToolName)
+	update := execGoalToolExecutorByName(t, executors, tool.GoalUpdateToolName)
+	ctx := context.Background()
+
+	if _, err := create.Execute(ctx, execGoalToolInvocation(tool.GoalCreateToolName, `{"objective":"pause me"}`)); err != nil {
+		t.Fatalf("create goal: %v", err)
+	}
+	output, err := update.Execute(ctx, execGoalToolInvocation(tool.GoalUpdateToolName, `{"status":"paused"}`))
+	if err != nil {
+		t.Fatalf("update paused: %v", err)
+	}
+	paused := execGoalToolResponseFromOutput(t, output)
+	if paused.Goal == nil || paused.Goal.Status != string(execGoalPaused) {
+		t.Fatalf("paused goal = %#v", paused.Goal)
+	}
+	execAssertStoredGoal(t, store, threadID, "pause me", string(execGoalPaused))
+
+	for _, status := range []string{"active", "usage_limited", "budget_limited"} {
+		if _, err := update.Execute(ctx, execGoalToolInvocation(tool.GoalUpdateToolName, `{"status":"`+status+`"}`)); err == nil ||
+			!strings.Contains(err.Error(), "complete, blocked, or paused") {
+			t.Fatalf("update %s error = %v", status, err)
+		}
+	}
+}
+
 func TestExecGoalToolOutputIsStringOnWire(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {

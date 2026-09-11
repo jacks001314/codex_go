@@ -224,15 +224,79 @@ func goalToolResponseFromOutput(t *testing.T, output *tool.Output) goalToolRespo
 	return response
 }
 
-func TestGoalToolUpdateRejectsNonTerminalStatus(t *testing.T) {
+// Rust #44290: update_goal accepts `paused` at the user's explicit request.
+func TestGoalToolUpdatePausesOnExplicitRequest(t *testing.T) {
+	ctx := context.Background()
+	router, stateRuntime, threadID := newGoalToolTestRouter(t)
+	executors := router.goalToolExecutorsForTurn(&config.Config{Values: map[string]any{
+		"features": map[string]any{"goals": true},
+	}}, threadID, "turn-1")
+	create := goalToolExecutorByName(t, executors, tool.GoalCreateToolName)
+	update := goalToolExecutorByName(t, executors, tool.GoalUpdateToolName)
+
+	if _, err := create.Execute(ctx, goalToolInvocation(tool.GoalCreateToolName, `{"objective":"pause me"}`)); err != nil {
+		t.Fatal(err)
+	}
+	output, err := update.Execute(ctx, goalToolInvocation(tool.GoalUpdateToolName, `{"status":"paused"}`))
+	if err != nil {
+		t.Fatalf("update paused error = %v", err)
+	}
+	response := goalToolResponseFromOutput(t, output)
+	if response.Goal == nil || response.Goal.Status != GoalPaused {
+		t.Fatalf("paused goal = %#v", response)
+	}
+	goal, err := stateRuntime.GetThreadGoal(ctx, threadID)
+	if err != nil || goal == nil || goal.Status != state.ThreadGoalPaused {
+		t.Fatalf("persisted paused goal = %#v, %v", goal, err)
+	}
+}
+
+func TestGoalToolUpdateRejectsResumeAndSystemLimits(t *testing.T) {
 	router, _, threadID := newGoalToolTestRouter(t)
 	executors := router.goalToolExecutorsForTurn(&config.Config{Values: map[string]any{
 		"features": map[string]any{"goals": true},
 	}}, threadID, "turn-1")
 	update := goalToolExecutorByName(t, executors, tool.GoalUpdateToolName)
-	_, err := update.Execute(context.Background(), goalToolInvocation(tool.GoalUpdateToolName, `{"status":"paused"}`))
-	if err == nil || !strings.Contains(err.Error(), "only mark the existing goal complete or blocked") {
+	for _, status := range []string{"active", "usage_limited", "budget_limited"} {
+		_, err := update.Execute(context.Background(), goalToolInvocation(tool.GoalUpdateToolName, `{"status":"`+status+`"}`))
+		if err == nil || !strings.Contains(err.Error(), "complete, blocked, or paused") {
+			t.Fatalf("update %s error = %v", status, err)
+		}
+	}
+}
+
+// Rust #44290: a budget_limited goal keeps that status when a pause is
+// requested, because budget limits take precedence over pausing.
+func TestGoalToolUpdatePauseKeepsBudgetLimited(t *testing.T) {
+	ctx := context.Background()
+	router, stateRuntime, threadID := newGoalToolTestRouter(t)
+	executors := router.goalToolExecutorsForTurn(&config.Config{Values: map[string]any{
+		"features": map[string]any{"goals": true},
+	}}, threadID, "turn-1")
+	create := goalToolExecutorByName(t, executors, tool.GoalCreateToolName)
+	update := goalToolExecutorByName(t, executors, tool.GoalUpdateToolName)
+
+	if _, err := create.Execute(ctx, goalToolInvocation(tool.GoalCreateToolName, `{"objective":"budgeted","token_budget":10}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stateRuntime.AccountThreadGoalUsage(ctx, threadID, 0, 10, state.GoalAccountingActiveOnly, nil); err != nil {
+		t.Fatal(err)
+	}
+	goal, err := stateRuntime.GetThreadGoal(ctx, threadID)
+	if err != nil || goal == nil || goal.Status != state.ThreadGoalBudgetLimited {
+		t.Fatalf("budget-limited goal = %#v, %v", goal, err)
+	}
+	output, err := update.Execute(ctx, goalToolInvocation(tool.GoalUpdateToolName, `{"status":"paused"}`))
+	if err != nil {
 		t.Fatalf("update paused error = %v", err)
+	}
+	response := goalToolResponseFromOutput(t, output)
+	if response.Goal == nil || response.Goal.Status != GoalBudgetLimited {
+		t.Fatalf("paused budget-limited goal = %#v", response)
+	}
+	persisted, err := stateRuntime.GetThreadGoal(ctx, threadID)
+	if err != nil || persisted == nil || persisted.Status != state.ThreadGoalBudgetLimited {
+		t.Fatalf("persisted budget-limited goal = %#v, %v", persisted, err)
 	}
 }
 
