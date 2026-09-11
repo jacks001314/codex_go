@@ -49,28 +49,57 @@ func (p *ModelListParams) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// ModelAccessProgramsSummary is the app-server `model/list` wire shape for
+// discovery access metadata (Rust #44893). Program names are camelCase.
+type ModelAccessProgramsSummary struct {
+	Cyber []string `json:"cyber"`
+}
+
+// ModelAccessProgramsSummaryFromInfo converts catalog metadata (snake_case) to
+// the camelCase app-server wire shape; nil input stays nil.
+func ModelAccessProgramsSummaryFromInfo(programs *ModelAccessPrograms) *ModelAccessProgramsSummary {
+	if programs == nil {
+		return nil
+	}
+	out := &ModelAccessProgramsSummary{Cyber: make([]string, 0, len(programs.Cyber))}
+	for _, program := range programs.Cyber {
+		switch program {
+		case CyberAccessProgramStandard:
+			out.Cyber = append(out.Cyber, "standard")
+		case CyberAccessProgramDaybreakBlue:
+			out.Cyber = append(out.Cyber, "daybreakBlue")
+		case CyberAccessProgramDaybreakRed:
+			out.Cyber = append(out.Cyber, "daybreakRed")
+		}
+	}
+	return out
+}
+
 type ModelSummary struct {
-	ID                        string                  `json:"id"`
-	Model                     string                  `json:"model"`
-	Name                      string                  `json:"name,omitempty"`
-	DisplayName               string                  `json:"displayName"`
-	Description               string                  `json:"description"`
-	ModelSpecialty            *string                 `json:"modelSpecialty,omitempty"`
-	Hidden                    bool                    `json:"hidden"`
-	IsDefault                 bool                    `json:"isDefault"`
-	DefaultReasoningEffort    string                  `json:"defaultReasoningEffort"`
-	SupportedReasoningEfforts []ReasoningEffortOption `json:"supportedReasoningEfforts"`
-	AdditionalSpeedTiers      []string                `json:"additionalSpeedTiers"`
-	ServiceTiers              []ModelServiceTier      `json:"serviceTiers"`
-	DefaultServiceTier        *string                 `json:"defaultServiceTier"`
-	InputModalities           []string                `json:"inputModalities"`
-	SupportsPersonality       bool                    `json:"supportsPersonality"`
-	MultiAgentVersion         *string                 `json:"multiAgentVersion,omitempty"`
-	Upgrade                   *string                 `json:"upgrade"`
-	UpgradeInfo               *ModelUpgradeInfo       `json:"upgradeInfo,omitempty"`
-	AvailabilityNux           *ModelAvailabilityNux   `json:"availabilityNux,omitempty"`
-	ContextWindow             int64                   `json:"contextWindow,omitempty"`
-	SupportsSearchTool        bool                    `json:"supportsSearchTool,omitempty"`
+	// AvailableAccessPrograms is the app-server wire shape (camelCase program
+	// names); nil when the catalog provided no access-program metadata.
+	AvailableAccessPrograms   *ModelAccessProgramsSummary `json:"availableAccessPrograms"`
+	ID                        string                      `json:"id"`
+	Model                     string                      `json:"model"`
+	Name                      string                      `json:"name,omitempty"`
+	DisplayName               string                      `json:"displayName"`
+	Description               string                      `json:"description"`
+	ModelSpecialty            *string                     `json:"modelSpecialty,omitempty"`
+	Hidden                    bool                        `json:"hidden"`
+	IsDefault                 bool                        `json:"isDefault"`
+	DefaultReasoningEffort    string                      `json:"defaultReasoningEffort"`
+	SupportedReasoningEfforts []ReasoningEffortOption     `json:"supportedReasoningEfforts"`
+	AdditionalSpeedTiers      []string                    `json:"additionalSpeedTiers"`
+	ServiceTiers              []ModelServiceTier          `json:"serviceTiers"`
+	DefaultServiceTier        *string                     `json:"defaultServiceTier"`
+	InputModalities           []string                    `json:"inputModalities"`
+	SupportsPersonality       bool                        `json:"supportsPersonality"`
+	MultiAgentVersion         *string                     `json:"multiAgentVersion,omitempty"`
+	Upgrade                   *string                     `json:"upgrade"`
+	UpgradeInfo               *ModelUpgradeInfo           `json:"upgradeInfo,omitempty"`
+	AvailabilityNux           *ModelAvailabilityNux       `json:"availabilityNux,omitempty"`
+	ContextWindow             int64                       `json:"contextWindow,omitempty"`
+	SupportsSearchTool        bool                        `json:"supportsSearchTool,omitempty"`
 }
 
 func (m *ModelSummary) MarshalJSON() ([]byte, error) {
@@ -91,24 +120,25 @@ func (m *ModelSummary) MarshalJSON() ([]byte, error) {
 		inputModalities = []string{}
 	}
 	return json.Marshal(struct {
-		ID                        string                  `json:"id"`
-		Model                     string                  `json:"model"`
-		DisplayName               string                  `json:"displayName"`
-		Description               string                  `json:"description"`
-		ModelSpecialty            *string                 `json:"modelSpecialty"`
-		Hidden                    bool                    `json:"hidden"`
-		IsDefault                 bool                    `json:"isDefault"`
-		DefaultReasoningEffort    string                  `json:"defaultReasoningEffort"`
-		SupportedReasoningEfforts []ReasoningEffortOption `json:"supportedReasoningEfforts"`
-		AdditionalSpeedTiers      []string                `json:"additionalSpeedTiers"`
-		ServiceTiers              []ModelServiceTier      `json:"serviceTiers"`
-		DefaultServiceTier        *string                 `json:"defaultServiceTier"`
-		InputModalities           []string                `json:"inputModalities"`
-		SupportsPersonality       bool                    `json:"supportsPersonality"`
-		MultiAgentVersion         *string                 `json:"multiAgentVersion"`
-		Upgrade                   *string                 `json:"upgrade"`
-		UpgradeInfo               *ModelUpgradeInfo       `json:"upgradeInfo"`
-		AvailabilityNux           *ModelAvailabilityNux   `json:"availabilityNux"`
+		ID                        string                      `json:"id"`
+		Model                     string                      `json:"model"`
+		DisplayName               string                      `json:"displayName"`
+		Description               string                      `json:"description"`
+		ModelSpecialty            *string                     `json:"modelSpecialty"`
+		Hidden                    bool                        `json:"hidden"`
+		IsDefault                 bool                        `json:"isDefault"`
+		DefaultReasoningEffort    string                      `json:"defaultReasoningEffort"`
+		SupportedReasoningEfforts []ReasoningEffortOption     `json:"supportedReasoningEfforts"`
+		AdditionalSpeedTiers      []string                    `json:"additionalSpeedTiers"`
+		ServiceTiers              []ModelServiceTier          `json:"serviceTiers"`
+		DefaultServiceTier        *string                     `json:"defaultServiceTier"`
+		InputModalities           []string                    `json:"inputModalities"`
+		SupportsPersonality       bool                        `json:"supportsPersonality"`
+		MultiAgentVersion         *string                     `json:"multiAgentVersion"`
+		Upgrade                   *string                     `json:"upgrade"`
+		UpgradeInfo               *ModelUpgradeInfo           `json:"upgradeInfo"`
+		AvailabilityNux           *ModelAvailabilityNux       `json:"availabilityNux"`
+		AvailableAccessPrograms   *ModelAccessProgramsSummary `json:"availableAccessPrograms"`
 	}{
 		ID:                        m.ID,
 		Model:                     m.Model,
@@ -128,6 +158,7 @@ func (m *ModelSummary) MarshalJSON() ([]byte, error) {
 		Upgrade:                   m.Upgrade,
 		UpgradeInfo:               m.UpgradeInfo,
 		AvailabilityNux:           m.AvailabilityNux,
+		AvailableAccessPrograms:   m.AvailableAccessPrograms,
 	})
 }
 
@@ -309,6 +340,7 @@ func summaryFromModel(info ModelInfo, hidden bool) ModelSummary {
 		SupportsPersonality:       (&info).SupportsPersonality(),
 		SupportsSearchTool:        info.SupportsSearchTool,
 	}
+	summary.AvailableAccessPrograms = ModelAccessProgramsSummaryFromInfo(info.AvailableAccessPrograms)
 	if version := strings.TrimSpace(info.MultiAgentVersion); version != "" {
 		summary.MultiAgentVersion = &version
 	}

@@ -251,24 +251,69 @@ type TruncationPolicy struct {
 	Limit int64  `json:"limit"`
 }
 
+// CyberAccessProgram is a caller-specific explicit access program advertised by
+// model discovery (Rust core `turn_input::CyberAccessProgram`, snake_case on the
+// catalog wire).
+type CyberAccessProgram string
+
+const (
+	CyberAccessProgramStandard     CyberAccessProgram = "standard"
+	CyberAccessProgramDaybreakBlue CyberAccessProgram = "daybreak_blue"
+	CyberAccessProgramDaybreakRed  CyberAccessProgram = "daybreak_red"
+)
+
+// ModelAccessPrograms mirrors Rust `ModelAccessPrograms` (#44893): discovery
+// metadata that advertises which explicit access programs a caller may select.
+// A non-nil value with an empty Cyber list is distinct from missing metadata.
+type ModelAccessPrograms struct {
+	Cyber []CyberAccessProgram `json:"cyber"`
+}
+
+// UnmarshalJSON ignores unknown cyber program names so a newer server catalog
+// does not prevent older clients from loading it (Rust #44893).
+func (m *ModelAccessPrograms) UnmarshalJSON(data []byte) error {
+	if m == nil {
+		return nil
+	}
+	var raw struct {
+		Cyber []string `json:"cyber"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	programs := make([]CyberAccessProgram, 0, len(raw.Cyber))
+	for _, name := range raw.Cyber {
+		program := CyberAccessProgram(name)
+		switch program {
+		case CyberAccessProgramStandard, CyberAccessProgramDaybreakBlue, CyberAccessProgramDaybreakRed:
+			programs = append(programs, program)
+		}
+	}
+	m.Cyber = programs
+	return nil
+}
+
 type ModelInfo struct {
-	Slug                           string         `json:"slug"`
-	DisplayName                    string         `json:"display_name"`
-	Description                    string         `json:"description"`
-	DefaultReasoningLevel          string         `json:"default_reasoning_level"`
-	SupportedReasoningLevels       []string       `json:"supported_reasoning_levels"`
-	Visibility                     string         `json:"visibility"`
-	SupportedInAPI                 bool           `json:"supported_in_api"`
-	Priority                       int            `json:"priority"`
-	AdditionalSpeedTiers           []string       `json:"additional_speed_tiers"`
-	ServiceTiers                   []string       `json:"service_tiers"`
-	DefaultServiceTier             string         `json:"default_service_tier"`
-	BaseInstructions               string         `json:"base_instructions"`
-	ModelMessages                  *ModelMessages `json:"model_messages"`
-	IncludeSkillsUsageInstructions bool           `json:"include_skills_usage_instructions"`
-	IncludePluginUsageInstructions bool           `json:"include_plugin_usage_instructions"`
-	IncludeAppsUsageInstructions   bool           `json:"include_apps_usage_instructions"`
-	ModelSpecialty                 string         `json:"model_specialty"`
+	Slug                     string   `json:"slug"`
+	DisplayName              string   `json:"display_name"`
+	Description              string   `json:"description"`
+	DefaultReasoningLevel    string   `json:"default_reasoning_level"`
+	SupportedReasoningLevels []string `json:"supported_reasoning_levels"`
+	Visibility               string   `json:"visibility"`
+	SupportedInAPI           bool     `json:"supported_in_api"`
+	Priority                 int      `json:"priority"`
+	AdditionalSpeedTiers     []string `json:"additional_speed_tiers"`
+	ServiceTiers             []string `json:"service_tiers"`
+	DefaultServiceTier       string   `json:"default_service_tier"`
+	// AvailableAccessPrograms is nil when the catalog does not provide
+	// access-program metadata (Rust #44893).
+	AvailableAccessPrograms        *ModelAccessPrograms `json:"available_access_programs,omitempty"`
+	BaseInstructions               string               `json:"base_instructions"`
+	ModelMessages                  *ModelMessages       `json:"model_messages"`
+	IncludeSkillsUsageInstructions bool                 `json:"include_skills_usage_instructions"`
+	IncludePluginUsageInstructions bool                 `json:"include_plugin_usage_instructions"`
+	IncludeAppsUsageInstructions   bool                 `json:"include_apps_usage_instructions"`
+	ModelSpecialty                 string               `json:"model_specialty"`
 	// SupportsReasoningSummaries mirrors Rust ModelInfo.supports_reasoning_summary_parameter
 	// (serde default_true: absent means true). The legacy Go wire name
 	// supports_reasoning_summaries is still accepted on parse.
@@ -283,24 +328,24 @@ type ModelInfo struct {
 	MultiAgentVersion          string           `json:"multi_agent_version"`
 	// MultiAgentReasoningEffort mirrors Rust ModelInfo.multi_agent_reasoning_effort
 	// (the reasoning effort used for multi-agent work when the user selects Ultra).
-	MultiAgentReasoningEffort     *string           `json:"multi_agent_reasoning_effort,omitempty"`
-	SupportsImageDetailOriginal   bool              `json:"supports_image_detail_original"`
-	ContextWindow                 int64             `json:"context_window"`
-	MaxContextWindow              int64             `json:"max_context_window"`
-	AutoCompactTokenLimit         int64             `json:"auto_compact_token_limit"`
-	EffectiveContextWindowPercent int               `json:"effective_context_window_percent"`
-	InputModalities               []string          `json:"input_modalities"`
-	UsedFallbackModelMetadata     bool              `json:"-"`
-	SupportsSearchTool            bool              `json:"supports_search_tool"`
+	MultiAgentReasoningEffort     *string  `json:"multi_agent_reasoning_effort,omitempty"`
+	SupportsImageDetailOriginal   bool     `json:"supports_image_detail_original"`
+	ContextWindow                 int64    `json:"context_window"`
+	MaxContextWindow              int64    `json:"max_context_window"`
+	AutoCompactTokenLimit         int64    `json:"auto_compact_token_limit"`
+	EffectiveContextWindowPercent int      `json:"effective_context_window_percent"`
+	InputModalities               []string `json:"input_modalities"`
+	UsedFallbackModelMetadata     bool     `json:"-"`
+	SupportsSearchTool            bool     `json:"supports_search_tool"`
 	// SupportsExperimentalContext mirrors Rust ModelInfo.supports_experimental_context
 	// (serde default false): whether experimental context management may be
 	// activated at session startup for this model.
-	SupportsExperimentalContext   bool              `json:"supports_experimental_context"`
-	UseResponsesLite              bool              `json:"use_responses_lite"`
-	NodeReplAutoReviewRequired    bool              `json:"node_repl_auto_review_required"`
-	NodeReplDisabled              bool              `json:"node_repl_disabled"`
-	AutoReviewModelOverride       string            `json:"auto_review_model_override"`
-	Upgrade                       *ModelInfoUpgrade `json:"upgrade"`
+	SupportsExperimentalContext bool              `json:"supports_experimental_context"`
+	UseResponsesLite            bool              `json:"use_responses_lite"`
+	NodeReplAutoReviewRequired  bool              `json:"node_repl_auto_review_required"`
+	NodeReplDisabled            bool              `json:"node_repl_disabled"`
+	AutoReviewModelOverride     string            `json:"auto_review_model_override"`
+	Upgrade                     *ModelInfoUpgrade `json:"upgrade"`
 	// AvailabilityNux mirrors Rust ModelInfo.availability_nux (the NUX shown
 	// when the model preset becomes accessible to the user).
 	AvailabilityNux *ModelAvailabilityNux `json:"availability_nux"`
@@ -462,6 +507,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		AdditionalSpeedTiers              []string              `json:"additional_speed_tiers"`
 		ServiceTiers                      []json.RawMessage     `json:"service_tiers"`
 		DefaultServiceTier                any                   `json:"default_service_tier"`
+		AvailableAccessPrograms           *ModelAccessPrograms  `json:"available_access_programs"`
 		BaseInstructions                  string                `json:"base_instructions"`
 		ModelMessages                     *ModelMessages        `json:"model_messages"`
 		IncludeSkillsUsageInstructions    bool                  `json:"include_skills_usage_instructions"`
@@ -513,6 +559,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		AdditionalSpeedTiers:           cloneStrings(raw.AdditionalSpeedTiers),
 		ServiceTiers:                   serviceTierIDsFromJSON(raw.ServiceTiers),
 		DefaultServiceTier:             stringFromJSONValue(raw.DefaultServiceTier),
+		AvailableAccessPrograms:        raw.AvailableAccessPrograms,
 		BaseInstructions:               raw.BaseInstructions,
 		ModelMessages:                  raw.ModelMessages,
 		IncludeSkillsUsageInstructions: raw.IncludeSkillsUsageInstructions,
