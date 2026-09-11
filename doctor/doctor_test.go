@@ -656,11 +656,59 @@ func testSelfSignedCACertPEM(t *testing.T) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
-func TestTerminalCheckFailsForDumbTerminal(t *testing.T) {
-	check := terminalCheck(map[string]string{"TERM": "dumb"}, &Options{})
-	if check.Status != CheckStatusFail || check.Summary != "TERM=dumb - colors and cursor control are disabled" {
-		t.Fatalf("check = %+v", check)
+func TestTerminalCheckDumbRequiresInteractiveStream(t *testing.T) {
+	// Rust #44615: TERM=dumb fails only when stdin or stdout is a real
+	// terminal; a fully non-interactive run gets a warning without a
+	// replacement suggestion.
+	for _, tc := range []struct {
+		stdin    bool
+		stdout   bool
+		stderr   bool
+		expected CheckStatus
+	}{
+		{false, false, false, CheckStatusWarning},
+		{false, false, true, CheckStatusWarning},
+		{false, true, false, CheckStatusFail},
+		{true, false, false, CheckStatusFail},
+	} {
+		term := "dumb"
+		check := terminalCheckFromInputs(&terminalCheckInputs{
+			Info:             &shell.TerminalInfo{Name: shell.TerminalDumb, Term: &term},
+			Env:              map[string]string{"TERM": "dumb"},
+			StdinIsTerminal:  tc.stdin,
+			StdoutIsTerminal: tc.stdout,
+			StderrIsTerminal: tc.stderr,
+			TerminalSize:     terminalSizeProbe{Err: "not detected"},
+		})
+		if check.Status != tc.expected {
+			t.Fatalf("stdin=%t stdout=%t stderr=%t: status = %q, want %q", tc.stdin, tc.stdout, tc.stderr, check.Status, tc.expected)
+		}
+		if len(check.Issues) == 0 || check.Issues[0].Severity != tc.expected {
+			t.Fatalf("stdin=%t stdout=%t stderr=%t: issues = %#v", tc.stdin, tc.stdout, tc.stderr, check.Issues)
+		}
+		if check.Issues[0].Measured == nil || *check.Issues[0].Measured != "TERM=dumb" {
+			t.Fatalf("measured = %#v", check.Issues[0].Measured)
+		}
+		if tc.expected == CheckStatusFail {
+			if check.Issues[0].Remedy == nil || *check.Issues[0].Remedy != "set TERM to a real value, for example xterm-256color" {
+				t.Fatalf("fail reminder = %#v", check.Issues[0].Remedy)
+			}
+			if check.Issues[0].Expected == nil || *check.Issues[0].Expected != "TERM=xterm-256color or another real terminal type" {
+				t.Fatalf("fail expectation = %#v", check.Issues[0].Expected)
+			}
+		} else {
+			if check.Issues[0].Remedy != nil || check.Issues[0].Expected != nil {
+				t.Fatalf("warning should not suggest a replacement: %#v", check.Issues[0])
+			}
+			if !strings.Contains(check.Issues[0].Cause, "non-interactive run") {
+				t.Fatalf("warning cause = %q", check.Issues[0].Cause)
+			}
+		}
 	}
+}
+
+func TestTerminalCheckDumbDetails(t *testing.T) {
+	check := terminalCheck(map[string]string{"TERM": "dumb"}, &Options{})
 	for _, want := range []string{
 		"terminal size: unavailable (not detected)",
 		"color output: disabled (TERM=dumb)",
@@ -673,9 +721,6 @@ func TestTerminalCheckFailsForDumbTerminal(t *testing.T) {
 		if !detailHasPrefix(check, prefix) {
 			t.Fatalf("missing detail prefix %q in %#v", prefix, check.Details)
 		}
-	}
-	if len(check.Issues) != 1 || check.Issues[0].Remedy == nil || *check.Issues[0].Remedy != "set TERM to a real value, for example xterm-256color" {
-		t.Fatalf("issues = %#v", check.Issues)
 	}
 }
 

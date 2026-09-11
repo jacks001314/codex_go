@@ -2131,6 +2131,17 @@ func maxCheckStatus(current CheckStatus, next CheckStatus) CheckStatus {
 	return CheckStatusOK
 }
 
+func checkStatusRank(status CheckStatus) int {
+	switch status {
+	case CheckStatusFail:
+		return 2
+	case CheckStatusWarning:
+		return 1
+	default:
+		return 0
+	}
+}
+
 func mcpCheck(codexHome string, opts *Options) *DoctorCheck {
 	cfg, err := loadEffectiveConfigForDoctor(codexHome, opts)
 	if err != nil {
@@ -3390,11 +3401,16 @@ func terminalCheckFromInputs(inputs *terminalCheckInputs) *DoctorCheck {
 
 	issues := []*DoctorIssue{}
 	if term := strings.TrimSpace(env["TERM"]); term == "dumb" || info.Name == shell.TerminalDumb {
-		issues = append(issues, NewIssue(CheckStatusFail, "TERM=dumb - colors and cursor control are disabled").
-			WithMeasured("TERM=dumb").
-			WithExpected("TERM=xterm-256color or another real terminal type").
-			WithRemedy("set TERM to a real value, for example xterm-256color").
-			WithField("TERM"))
+		// Rust #44615: TERM=dumb is only a failure when stdin or stdout is a
+		// real terminal; a non-interactive run gets a warning without a
+		// replacement suggestion.
+		issue := NewIssue(CheckStatusWarning, "TERM=dumb - colors and cursor control are disabled in this non-interactive run")
+		if inputs.StdinIsTerminal || inputs.StdoutIsTerminal {
+			issue = NewIssue(CheckStatusFail, "TERM=dumb - colors and cursor control are disabled").
+				WithExpected("TERM=xterm-256color or another real terminal type").
+				WithRemedy("set TERM to a real value, for example xterm-256color")
+		}
+		issues = append(issues, issue.WithMeasured("TERM=dumb").WithField("TERM"))
 	}
 	if locale := effectiveTerminalLocale(env); locale != "" && isNonUTF8Locale(locale) {
 		issues = append(issues, NewIssue(CheckStatusWarning, "locale is not UTF-8 - unicode glyphs may render incorrectly").
@@ -3411,6 +3427,11 @@ func terminalCheckFromInputs(inputs *terminalCheckInputs) *DoctorCheck {
 			WithField("TERMINFO_DIRS entry"))
 	}
 	issues = append(issues, terminalSizeIssuesForDoctor(inputs.TerminalSize, env)...)
+	// Rust #44615: order issues by descending severity so failures are not
+	// obscured by warnings.
+	sort.SliceStable(issues, func(i, j int) bool {
+		return checkStatusRank(issues[i].Severity) > checkStatusRank(issues[j].Severity)
+	})
 
 	status := CheckStatusOK
 	summary := "terminal metadata was detected"
