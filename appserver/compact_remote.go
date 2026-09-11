@@ -42,6 +42,9 @@ type agentCompactRunner struct {
 	providerID  string
 	serviceTier string
 	modelHash   string
+	// effort is the pinned request effort for the compaction model when
+	// reasoning-effort overrides apply (Rust #43796).
+	effort string
 }
 
 func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
@@ -67,7 +70,8 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 			"thread_id":    request.ThreadID,
 			"turn_id":      request.TurnID,
 		},
-		ServiceTier: r.serviceTier,
+		ServiceTier:     r.serviceTier,
+		ReasoningEffort: strings.TrimSpace(r.effort),
 	})
 	if err != nil {
 		return nil, err

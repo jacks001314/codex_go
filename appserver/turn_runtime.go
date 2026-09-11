@@ -5254,9 +5254,31 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record) compact.R
 		return nil
 	}
 	compactModel := firstNonEmpty(record.Metadata.Model, defaultRemoteCompactModel)
+	compactInfo := r.modelInfoForRuntime(compactModel)
 	modelHash := ""
-	if info := r.modelInfoForRuntime(compactModel); info != nil {
-		modelHash = strings.TrimSpace(info.CompHash)
+	if compactInfo != nil {
+		modelHash = strings.TrimSpace(compactInfo.CompHash)
+	}
+	// Rust #43796: compaction reuses the pinned request effort when it matches
+	// the model, otherwise resolves the compaction model's effort without
+	// mutating the live pin.
+	compactionEffort := ""
+	compactionParams := &turn.TurnStartParams{
+		ThreadID: string(record.ID),
+		CWD:      strings.TrimSpace(record.Metadata.CWD),
+		Model:    compactModel,
+	}
+	if cfg, cfgErr := r.effectiveConfigForTurn(compactionParams); cfgErr == nil && cfg != nil {
+		overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(cfg, compactionParams, compactInfo, providerID)
+		compactionEffort = r.reasoningEffortForRequest(
+			string(record.ID),
+			reasoningEffortModelSlug(compactInfo, compactModel),
+			appReasoningEffortForTurn(cfg, compactionParams),
+			reasoningEffortFeatureEnabled(cfg),
+			overrideEffort,
+			overrideAvailable,
+			requestEffortCompaction,
+		)
 	}
 	return &agentCompactRunner{
 		agent:       agent,
@@ -5264,6 +5286,7 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record) compact.R
 		providerID:  firstNonEmpty(providerID, model.OpenAIProviderID),
 		serviceTier: r.remoteCompactServiceTierForRecord(record),
 		modelHash:   modelHash,
+		effort:      compactionEffort,
 	}
 }
 
