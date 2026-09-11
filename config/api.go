@@ -2070,6 +2070,7 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 	if params.ExpectedVersion != nil && *params.ExpectedVersion != currentVersion {
 		return nil, configWriteErrorf(ConfigWriteVersionConflict, "Configuration was modified since last read. Fetch latest version and retry.")
 	}
+	credentialBatch := newCredentialProviderBatch(values)
 	for i := range params.Edits {
 		if err := s.rejectManagedAuthWrite(params.Edits[i].KeyPath); err != nil {
 			return nil, err
@@ -2077,10 +2078,12 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 		if err := validateWritableKeyPath(params.Edits[i].KeyPath, params.Edits[i].Value); err != nil {
 			return nil, err
 		}
+		credentialBatch.prepareEdit(values, &params.Edits[i])
 		applyEdit(values, &params.Edits[i])
 		if err := validateCredentialProviderWriteResult(values, params.Edits[i].KeyPath); err != nil {
 			return nil, err
 		}
+		credentialBatch.reconcileAfterEdit(values, &params.Edits[i])
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
@@ -2948,6 +2951,120 @@ func credentialProviderDefinitionComplete(provider map[string]any) bool {
 func anyStringValue(value any) string {
 	text, _ := value.(string)
 	return text
+}
+
+// credentialProviderBatch mirrors Rust's CredentialProviderEdits (#44241) for a
+// config write batch: provider definitions are snapshotted so an ordered batch
+// can restore a displaced provider before a later source upsert, and each edit
+// reconciles source ownership with the same displacement rule as the config
+// merge.
+type credentialProviderBatch struct {
+	definitions map[string]any
+}
+
+func newCredentialProviderBatch(values map[string]any) *credentialProviderBatch {
+	table, _ := getAtPath(values, []string{"features", "network_proxy", "credentials"}).(map[string]any)
+	if table == nil {
+		return &credentialProviderBatch{}
+	}
+	return &credentialProviderBatch{definitions: cloneMap(table)}
+}
+
+// prepareEdit restores a provider's snapshotted definition before an Upsert that
+// re-declares its `env` source, so a partial update of a provider displaced
+// earlier in the batch keeps its inherited settings (patterns, prefixes, auth).
+func (b *credentialProviderBatch) prepareEdit(values map[string]any, edit *ConfigEdit) {
+	if b == nil || len(b.definitions) == 0 || edit == nil {
+		return
+	}
+	strategy := edit.MergeStrategy
+	if strategy == "" {
+		strategy = MergeReplace
+	}
+	if strategy != MergeUpsert {
+		return
+	}
+	_, overlay := credentialProviderEditOverlay(edit)
+	table, _ := getAtPath(values, []string{"features", "network_proxy", "credentials"}).(map[string]any)
+	if table == nil {
+		return
+	}
+	for id, rawOverlay := range overlay {
+		overlayProvider, ok := rawOverlay.(map[string]any)
+		if !ok || overlayProvider["env"] == nil {
+			continue
+		}
+		original, ok := b.definitions[id].(map[string]any)
+		if !ok {
+			continue
+		}
+		current, _ := table[id].(map[string]any)
+		if reflect.DeepEqual(normalizeJSONValue(current), normalizeJSONValue(original)) {
+			continue
+		}
+		table[id] = cloneMap(original)
+	}
+}
+
+// reconcileAfterEdit applies credential source displacement to the file's
+// provider table after an edit, using the overlay's `env` (or the provider's
+// current value) as the owning sources.
+func (b *credentialProviderBatch) reconcileAfterEdit(values map[string]any, edit *ConfigEdit) {
+	if edit == nil {
+		return
+	}
+	_, overlay := credentialProviderEditOverlay(edit)
+	if len(overlay) == 0 {
+		return
+	}
+	table, _ := getAtPath(values, []string{"features", "network_proxy", "credentials"}).(map[string]any)
+	if table == nil {
+		return
+	}
+	resolved := map[string]any{}
+	for id, rawOverlay := range overlay {
+		overlayProvider, ok := rawOverlay.(map[string]any)
+		if ok && overlayProvider["env"] != nil {
+			resolved[id] = overlayProvider
+			continue
+		}
+		if current, ok := table[id]; ok {
+			resolved[id] = current
+		}
+	}
+	if len(resolved) == 0 {
+		return
+	}
+	displaceCredentialProvidersBySource(table, resolved)
+}
+
+// credentialProviderEditOverlay returns the provider ids an edit touches and a
+// sparse provider overlay for the edit (mirroring Rust sparse_overlay for the
+// credentials path). It returns an empty overlay for edits outside
+// features.network_proxy.credentials.
+func credentialProviderEditOverlay(edit *ConfigEdit) ([]string, map[string]any) {
+	if edit == nil {
+		return nil, nil
+	}
+	parts := splitKeyPath(edit.KeyPath)
+	if len(parts) < 3 || parts[0] != "features" || parts[1] != "network_proxy" || parts[2] != "credentials" {
+		return nil, nil
+	}
+	if edit.Value == nil {
+		return nil, nil
+	}
+	if len(parts) == 3 {
+		table, ok := edit.Value.(map[string]any)
+		if !ok {
+			return nil, nil
+		}
+		return parts, cloneMap(table)
+	}
+	var value any = edit.Value
+	for index := len(parts) - 1; index > 3; index-- {
+		value = map[string]any{parts[index]: value}
+	}
+	return parts, map[string]any{parts[3]: value}
 }
 
 func validateWritableKeyPath(keyPath string, value any) error {

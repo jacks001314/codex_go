@@ -91,6 +91,103 @@ func TestConfigWriteAllowsCredentialProviderDraftsAndDeletions(t *testing.T) {
 	}
 }
 
+// TestConfigBatchWriteDisplacesCredentialProvidersLikeRust mirrors #44241's
+// ordered batch handling: a provider written with an overlapping env source
+// displaces the sibling that owned it, while unrelated siblings are untouched.
+func TestConfigBatchWriteDisplacesCredentialProvidersLikeRust(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, "model = \"gpt-5\"\n")
+	service := NewConfigService(home)
+
+	if _, err := service.BatchWrite(&ConfigBatchWriteParams{Edits: []ConfigEdit{
+		{KeyPath: "features.network_proxy.credentials.vendor", Value: completeCredentialProvider(), MergeStrategy: MergeReplace},
+		{KeyPath: "features.network_proxy.credentials.other", Value: map[string]any{
+			"env":          []any{"OTHER_TOKEN"},
+			"patterns":     []any{"ok-[a-z0-9]{16}"},
+			"url_prefixes": []any{"https://api.other.example"},
+			"auth":         []any{"token"},
+		}, MergeStrategy: MergeReplace},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := service.WriteValue(&ConfigValueWriteParams{
+		KeyPath: "features.network_proxy.credentials.replacement",
+		Value: map[string]any{
+			"env":          []any{"VENDOR_TOKEN"},
+			"patterns":     []any{"rk-[a-z0-9]{16}"},
+			"url_prefixes": []any{"https://api.replacement.example"},
+			"auth":         []any{"bearer"},
+		},
+		MergeStrategy: MergeReplace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read, err := service.Read(&ConfigReadParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := credentialProviderTable(t, read.Config)
+	if _, ok := credentials["vendor"]; ok {
+		t.Fatalf("displaced provider survived the write: %#v", credentials)
+	}
+	if _, ok := credentials["replacement"]; !ok {
+		t.Fatalf("replacement provider missing: %#v", credentials)
+	}
+	if _, ok := credentials["other"]; !ok {
+		t.Fatalf("unrelated sibling was removed: %#v", credentials)
+	}
+}
+
+// TestConfigBatchWriteRestoresDisplacedCredentialProviderLikeRust mirrors
+// #44241's ordered-remap restoration: a provider displaced earlier in the batch
+// is restored from its original definition before a later source upsert, so the
+// partial update keeps the inherited settings.
+func TestConfigBatchWriteRestoresDisplacedCredentialProviderLikeRust(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, "model = \"gpt-5\"\n")
+	service := NewConfigService(home)
+
+	if _, err := service.WriteValue(&ConfigValueWriteParams{
+		KeyPath:       "features.network_proxy.credentials.vendor",
+		Value:         completeCredentialProvider(),
+		MergeStrategy: MergeReplace,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	displacer := completeCredentialProvider()
+	displacer["patterns"] = []any{"rk-[a-z0-9]{16}"}
+	displacer["url_prefixes"] = []any{"https://api.displacer.example"}
+	if _, err := service.BatchWrite(&ConfigBatchWriteParams{Edits: []ConfigEdit{
+		{KeyPath: "features.network_proxy.credentials.displacer", Value: displacer, MergeStrategy: MergeReplace},
+		{KeyPath: "features.network_proxy.credentials.vendor", Value: map[string]any{"env": []any{"ROTATED_TOKEN"}}, MergeStrategy: MergeUpsert},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	read, err := service.Read(&ConfigReadParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := credentialProviderTable(t, read.Config)
+	vendor, ok := credentials["vendor"].(map[string]any)
+	if !ok {
+		t.Fatalf("restored provider missing: %#v", credentials)
+	}
+	if env := stringSliceFromAny(vendor["env"]); len(env) != 1 || env[0] != "ROTATED_TOKEN" {
+		t.Fatalf("vendor env = %#v", vendor["env"])
+	}
+	if patterns := stringSliceFromAny(vendor["patterns"]); len(patterns) != 1 || patterns[0] != "vk-[a-z0-9]{16}" {
+		t.Fatalf("restored provider lost its definition: %#v", vendor)
+	}
+	if _, ok := credentials["displacer"]; !ok {
+		t.Fatalf("displacer missing: %#v", credentials)
+	}
+}
+
 // TestConfigWriteReportsCredentialProviderSourceOwnershipOverride mirrors
 // #44241: a written provider displaced by a higher-priority provider that owns
 // the same env source is reported as overridden instead of silently vanishing.
