@@ -27,6 +27,11 @@ type stdioInventory struct {
 	ServerCapabilities json.RawMessage
 }
 
+// mcpStdioStderrDrainGrace bounds how long teardown waits for queued stderr
+// diagnostics before closing the pipe, even when an escaped descendant keeps it
+// open (Rust #43870).
+const mcpStdioStderrDrainGrace = 250 * time.Millisecond
+
 type stdioClient struct {
 	mu                                 sync.Mutex
 	capabilitiesMu                     sync.Mutex
@@ -401,6 +406,10 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	}
 	command := resolveMCPStdioCommand(c.config.Command, launchEnv)
 	cmd := newMCPStdioCommand(command, c.config.Args...)
+	// Rust #43870: an escaped descendant can keep the stderr pipe open after the
+	// server exits. Drain queued diagnostics briefly, then let Wait close the
+	// pipes so descriptors are released.
+	cmd.WaitDelay = mcpStdioStderrDrainGrace
 	if cwd := strings.TrimSpace(c.config.CWD); cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -800,6 +809,11 @@ func waitMCPStdioCommand(cmd *exec.Cmd) error {
 	}()
 	select {
 	case err := <-done:
+		// WaitDelay closing the pipes after the grace period is not a shutdown
+		// failure (Rust #43870).
+		if errors.Is(err, exec.ErrWaitDelay) {
+			return nil
+		}
 		return err
 	case <-time.After(time.Second):
 		return context.DeadlineExceeded

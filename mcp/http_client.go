@@ -950,6 +950,9 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 	if method == "tools/call" && oauthToken && strings.TrimSpace(token) == "" {
 		// Rust #43947: a failed local refresh must not send an unauthenticated
 		// tool call; surface the reconnect signal instead.
+		if handshakeCancel != nil {
+			handshakeCancel()
+		}
 		return nil, 0, errMCPAuthenticationRequired
 	}
 	response, err := c.doHTTPRequestContext(ctx, endpoint, data, sessionID, token)
