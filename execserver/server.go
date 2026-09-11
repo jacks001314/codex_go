@@ -319,10 +319,19 @@ type InitializeParams struct {
 
 type InitializeResponse struct {
 	SessionID string `json:"sessionId"`
+	// EnvironmentInfo is the executor metadata at initialization, with the same
+	// shape as environment/info (Rust #43513).
+	EnvironmentInfo *EnvironmentInfo `json:"environmentInfo,omitempty"`
 }
 
 type EnvironmentInfo struct {
-	Shell                ShellInfo               `json:"shell"`
+	Shell ShellInfo `json:"shell"`
+	// ExecutorVersion is the executor's release version for version-based
+	// compatibility decisions; `0.0.0` when unknown (Rust #43513).
+	ExecutorVersion string `json:"executorVersion"`
+	// ProviderID is the opaque standard-build identity, absent for legacy or
+	// unstamped builds (Rust #43513).
+	ProviderID           string                  `json:"providerId,omitempty"`
 	CWD                  *string                 `json:"cwd"`
 	PlatformOS           string                  `json:"platformOs,omitempty"`
 	UserHomeDir          string                  `json:"userHomeDir,omitempty"`
@@ -1223,9 +1232,9 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		if entry == nil {
-			return InitializeResponse{SessionID: uuid.NewString()}, nil
+			return InitializeResponse{SessionID: uuid.NewString(), EnvironmentInfo: localEnvironmentInfo()}, nil
 		}
-		return InitializeResponse{SessionID: entry.id}, nil
+		return InitializeResponse{SessionID: entry.id, EnvironmentInfo: localEnvironmentInfo()}, nil
 	case MethodEnvironmentInfo:
 		logEnvironmentTrace(ctx, MethodEnvironmentInfo)
 		return localEnvironmentInfo(), nil
@@ -3186,6 +3195,8 @@ func localEnvironmentInfo() *EnvironmentInfo {
 	}
 	return &EnvironmentInfo{
 		Shell:                ShellInfo{Name: detected.Name(), Path: detected.ShellPath},
+		ExecutorVersion:      ExecServerExecutorVersion(),
+		ProviderID:           ExecServerProviderID(),
 		CWD:                  stringPtr(cwd),
 		PlatformOS:           runtime.GOOS,
 		UserHomeDir:          userHomeDir,
