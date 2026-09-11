@@ -111,6 +111,14 @@ func validateCredentialProviderConfig(id string, config CredentialProviderConfig
 	if len(config.URLPrefixes) == 0 && config.URLPrefixFromEnv == nil {
 		return fmt.Errorf("credential provider `%s` has no destination URL prefixes", id)
 	}
+	for _, pattern := range config.Patterns {
+		if _, err := compileCredentialPattern(pattern); err != nil {
+			return fmt.Errorf("invalid credential pattern for provider `%s`: %w", id, err)
+		}
+		if _, ok := GenerateCredentialDummy(pattern, ""); !ok {
+			return fmt.Errorf("credential provider `%s` could not independently generate a matching dummy", id)
+		}
+	}
 	builtin := map[string]bool{}
 	for _, key := range ProxyCredentialBrokerEnvKeys() {
 		builtin[key] = true
