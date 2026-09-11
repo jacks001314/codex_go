@@ -5337,16 +5337,14 @@ func TestModelRustSlashSettingsDebugAndMCPCommands(t *testing.T) {
 
 	typeText(t, model, "/experimental")
 	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Experimental Features") || !strings.Contains(view, "Worktrees") {
+	if view := model.View(); !strings.Contains(view, "Experimental Features") || !strings.Contains(view, "Network proxy") {
 		t.Fatalf("experimental modal missing:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeySpace))
-	model.Update(key(bubbletea.KeyEnter))
-	if model.featureSettings["worktrees"] {
-		t.Fatalf("worktrees feature should have toggled off: %#v", model.featureSettings)
+	// Rust #44870: worktrees is stable and no longer offered in /experimental.
+	if strings.Contains(model.View(), "Worktrees") {
+		t.Fatalf("stable worktrees feature should not be listed in the experimental modal:\n%s", model.View())
 	}
+	model.Update(key(bubbletea.KeyEsc))
 
 	typeText(t, model, "/debug-config")
 	model.Update(key(bubbletea.KeyEnter))
@@ -5435,7 +5433,7 @@ func TestModelSettingsCommandsPersistSelections(t *testing.T) {
 		OnWriteSettings: func(edits []SettingsEdit) (SettingsWriteResult, error) {
 			writes = append(writes, append([]SettingsEdit(nil), edits...))
 			result := SettingsWriteResult{
-				FeatureSettings: map[string]bool{"worktrees": false},
+				FeatureSettings: map[string]bool{"network_proxy": true},
 				Personality:     chatwidget.PersonalityPragmatic,
 				FilePath:        `D:\codex\config.toml`,
 			}
@@ -5452,13 +5450,13 @@ func TestModelSettingsCommandsPersistSelections(t *testing.T) {
 		t.Fatalf("personality state/view mismatch: state=%q view=\n%s", state.Personality, model.View())
 	}
 
-	cmd = model.applyExperimentalCommand("worktrees off")
+	cmd = model.applyExperimentalCommand("network_proxy on")
 	runTeaCmd(t, model, cmd)
-	if len(writes) != 2 || len(writes[1]) != 1 || writes[1][0].KeyPath != "features.worktrees" || writes[1][0].Value != false {
+	if len(writes) != 2 || len(writes[1]) != 1 || writes[1][0].KeyPath != "features.network_proxy" || writes[1][0].Value != true {
 		t.Fatalf("experimental writes = %#v", writes)
 	}
-	if model.featureSettings["worktrees"] {
-		t.Fatalf("worktrees feature should be false after save: %#v", model.featureSettings)
+	if !model.featureSettings["network_proxy"] {
+		t.Fatalf("network_proxy feature should be true after save: %#v", model.featureSettings)
 	}
 }
 

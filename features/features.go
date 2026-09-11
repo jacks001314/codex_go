@@ -212,14 +212,9 @@ var Registry = []Spec{
 	{Key: "retain_client_developer_messages", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "use_agent_identity", Stage: StageUnderDevelopment},
 	{Key: "workspace_dependencies", Stage: StageStable, DefaultEnabled: true},
-	// Rust (codex-rs/features/src/lib.rs #42196): managed Git worktrees.
-	{
-		Key:                         "worktrees",
-		Stage:                       StageExperimental,
-		ExperimentalName:            "Worktrees",
-		ExperimentalMenuDescription: "Create isolated Git worktrees and group sessions by repository.",
-		ExperimentalAnnouncement:    "NEW: Worktrees can now be enabled from /experimental. Restart Codex after enabling it.",
-	},
+	// Rust (codex-rs/features/src/lib.rs #42196, #44870): managed Git
+	// worktrees; stable and enabled by default since #44870.
+	{Key: "worktrees", Stage: StageStable, DefaultEnabled: true},
 	{Key: "psp", Stage: StageUnderDevelopment},
 	// Rust (codex-rs/features/src/lib.rs f5420174da): feature-key surface frozen
 	// during the sync26 static re-target.

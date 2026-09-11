@@ -60,9 +60,6 @@ func TestExperimentalFeaturesViewUsesRegistryExperimentalStage(t *testing.T) {
 		}
 		if item.Key == "worktrees" {
 			foundWorktrees = true
-			if item.Name != "Worktrees" || item.Description != "Create isolated Git worktrees and group sessions by repository." || !item.Enabled {
-				t.Fatalf("worktrees item = %#v", item)
-			}
 		}
 		if item.Key == "network_proxy" && (item.Name != "Network proxy" || item.Description != "Apply network proxy restrictions to sandboxed sessions that already have network access.") {
 			t.Fatalf("network proxy item = %#v", item)
@@ -74,8 +71,10 @@ func TestExperimentalFeaturesViewUsesRegistryExperimentalStage(t *testing.T) {
 	if foundMemories {
 		t.Fatalf("stable memories feature should not be in experimental menu: %#v", view.Items)
 	}
-	if !foundWorktrees {
-		t.Fatalf("worktrees feature missing: %#v", view.Items)
+	// Rust #44870: worktrees is stable and enabled by default, so it is no
+	// longer offered in the experimental menu.
+	if foundWorktrees {
+		t.Fatalf("stable worktrees feature should not be in experimental menu: %#v", view.Items)
 	}
 	if foundStable {
 		t.Fatalf("stable feature should not be in experimental menu: %#v", view.Items)
