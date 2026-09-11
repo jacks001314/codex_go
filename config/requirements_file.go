@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -20,13 +21,24 @@ func LoadRequirementsFile(path string) (*ConfigRequirements, error) {
 		}
 		return nil, err
 	}
-	return ParseRequirementsTOML(data)
+	return ParseRequirementsTOMLWithBaseDir(data, filepath.Dir(path))
 }
 
 func ParseRequirementsTOML(data []byte) (*ConfigRequirements, error) {
+	return ParseRequirementsTOMLWithBaseDir(data, "")
+}
+
+// ParseRequirementsTOMLWithBaseDir parses a requirements document, resolving
+// filesystem denials against the directory that owns the document (Rust #44669).
+func ParseRequirementsTOMLWithBaseDir(data []byte, baseDir string) (*ConfigRequirements, error) {
 	values, err := parseRequirementsTOMLValues(data)
 	if err != nil {
 		return nil, err
+	}
+	if permissions, ok := values["permissions"].(map[string]any); ok {
+		if err := resolveFilesystemDenyReadPaths(permissions, baseDir); err != nil {
+			return nil, err
+		}
 	}
 	return configRequirementsFromValidatedMap(values)
 }

@@ -261,6 +261,11 @@ func applyCloudConfigBundle(values map[string]any, requirements *ConfigRequireme
 			return nil, fmt.Errorf("%w: failed to parse cloud requirements fragment %s: %s", ErrInvalidCloudConfig, layer.Source.Name, err)
 		}
 		normalizeFeatureRequirementAliases(parsed)
+		if permissions, ok := parsed["permissions"].(map[string]any); ok {
+			if err := resolveFilesystemDenyReadPaths(permissions, layer.BaseDir); err != nil {
+				return nil, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
+			}
+		}
 		mergeConfigMaps(managedRequirementValues, parsed)
 	}
 	managedRequirements, err := configRequirementsFromValidatedMap(managedRequirementValues)

@@ -8,26 +8,45 @@ import (
 )
 
 func TestManagedDenyReadEntriesFromPermsExtractsDenyPaths(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "secret")
+	private := filepath.Join(t.TempDir(), "private")
 	perms := map[string]any{
 		"filesystem": map[string]any{
-			"deny_read": []any{"/tmp/secret", "/home/user/private"},
+			"deny_read": []any{secret, private, filepath.Join(private, "*.key")},
 		},
 	}
-	entries := managedDenyReadEntriesFromPerms(perms)
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 deny_read entries, got %d: %+v", len(entries), entries)
+	entries, err := managedDenyReadEntriesFromPerms(perms)
+	if err != nil {
+		t.Fatalf("managedDenyReadEntriesFromPerms: %v", err)
 	}
-	if entries[0].Path.Path != filepath.Clean("/tmp/secret") || entries[0].Access != sandbox.FileSystemAccessDeny {
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 deny_read entries, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].Path.Type != "path" || entries[0].Path.Path != secret || entries[0].Access != sandbox.FileSystemAccessDeny {
 		t.Fatalf("entry = %+v", entries[0])
 	}
+	// A glob keeps its pattern shape instead of being treated as a literal path.
+	if entries[2].Path.Type != "glob_pattern" || entries[2].Path.Pattern != filepath.Join(private, "*.key") {
+		t.Fatalf("glob entry = %+v", entries[2])
+	}
 
-	entries = managedDenyReadEntriesFromPerms(map[string]any{
+	entries, err = managedDenyReadEntriesFromPerms(map[string]any{
 		"filesystem": map[string]any{
-			"deny_read": map[string]any{"/data/secrets": "deny"},
+			"deny_read": map[string]any{secret: "deny"},
 		},
 	})
-	if len(entries) != 1 || entries[0].Path.Path != filepath.Clean("/data/secrets") {
+	if err != nil {
+		t.Fatalf("managedDenyReadEntriesFromPerms: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Path.Path != secret {
 		t.Fatalf("map-form deny_read entries = %+v", entries)
+	}
+
+	// Invalid denials are reported rather than silently skipped.
+	if _, err := managedDenyReadEntriesFromPerms(map[string]any{
+		"filesystem": map[string]any{"deny_read": []any{"bad\x00path"}},
+	}); err == nil {
+		t.Fatal("expected invalid deny_read to fail conversion")
 	}
 }
 

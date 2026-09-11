@@ -10739,7 +10739,13 @@ func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecRespons
 		// Rust c9c6c0daa9: the active feature configuration is authoritative over
 		// client-provided environment values.
 		options.ApplyPatchPreserveLineEndings = r.applyPatchPreserveLineEndingsFromConfig()
-		options.ManagedDenyReadEntries = r.commandExecManagedDenyReadEntries()
+		managedDenyRead, denyReadErr := r.commandExecManagedDenyReadEntries()
+		if denyReadErr != nil {
+			// Rust #44669: invalid managed denials fail the request instead of
+			// being silently skipped.
+			return nil, jsonRPCInvalidRequest(denyReadErr.Error())
+		}
+		options.ManagedDenyReadEntries = managedDenyRead
 	}
 	return r.requireCommandExec().ExecuteWithOptions(nil, &params, r.services.DefaultCWD, r.notify, options)
 }
@@ -10747,50 +10753,42 @@ func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecRespons
 // commandExecManagedDenyReadEntries returns the effective config's managed
 // requirements `[permissions.filesystem] deny_read` rules so request-specific
 // command/exec sandbox policies cannot weaken them (#40004).
-func (r *RuntimeRouter) commandExecManagedDenyReadEntries() []sandbox.FileSystemSandboxEntry {
+func (r *RuntimeRouter) commandExecManagedDenyReadEntries() ([]sandbox.FileSystemSandboxEntry, error) {
 	if r == nil || r.services.Config == nil {
-		return nil
+		return nil, nil
 	}
 	response := r.services.Config.Requirements()
 	if response == nil || response.Requirements == nil || response.Requirements.Permissions == nil {
-		return nil
+		return nil, nil
 	}
 	return managedDenyReadEntriesFromPerms(response.Requirements.Permissions)
 }
 
-func managedDenyReadEntriesFromPerms(perms map[string]any) []sandbox.FileSystemSandboxEntry {
+func managedDenyReadEntriesFromPerms(perms map[string]any) ([]sandbox.FileSystemSandboxEntry, error) {
 	filesystem, ok := perms["filesystem"].(map[string]any)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	raw, ok := filesystem["deny_read"]
 	if !ok {
-		return nil
+		return nil, nil
+	}
+	patterns, err := config.FilesystemDenyReadPatterns(raw)
+	if err != nil {
+		return nil, err
 	}
 	out := []sandbox.FileSystemSandboxEntry(nil)
-	appendPath := func(path string) {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			return
+	for _, pattern := range patterns {
+		path, err := sandbox.ParseDenyReadPath(pattern)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, sandbox.FileSystemSandboxEntry{
-			Path:   sandbox.FileSystemPath{Type: "path", Path: filepath.Clean(path)},
+			Path:   path,
 			Access: sandbox.FileSystemAccessDeny,
 		})
 	}
-	switch items := raw.(type) {
-	case []any:
-		for _, item := range items {
-			if path, ok := item.(string); ok {
-				appendPath(path)
-			}
-		}
-	case map[string]any:
-		for path := range items {
-			appendPath(path)
-		}
-	}
-	return out
+	return out, nil
 }
 
 func (r *RuntimeRouter) commandExecPermissionProfileResolver() CommandExecPermissionProfileResolver {
