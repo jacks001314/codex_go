@@ -18,8 +18,9 @@ const (
 	PIDStartPollInterval              = 50 * time.Millisecond
 	PIDStartTimeout                   = 10 * time.Second
 	PIDStopPollInterval               = 50 * time.Millisecond
-	PIDStopGracePeriod                = 60 * time.Second
-	PIDStopTimeout                    = 70 * time.Second
+	// PIDStopForceTimeout is how long stop waits after the grace period for the
+	// forced termination to take effect (Rust #43572).
+	PIDStopForceTimeout = 10 * time.Second
 )
 
 type BackendPaths struct {
@@ -282,9 +283,23 @@ func (b *PIDBackend) RunningExecutableIdentity() (*install.ExecutableIdentity, e
 }
 
 func (b *PIDBackend) Stop() error {
+	return b.StopWithGrace(DefaultShutdownGraceSeconds)
+}
+
+// StopWithGrace requests a graceful shutdown and force-terminates the process
+// after graceSeconds when it is still alive. Zero forces termination as soon as
+// the graceful request is sent (Rust #43572).
+func (b *PIDBackend) StopWithGrace(graceSeconds int) error {
 	if b == nil {
 		return nil
 	}
+	if graceSeconds < 0 {
+		graceSeconds = 0
+	}
+	if graceSeconds > MaxShutdownGraceSeconds {
+		graceSeconds = MaxShutdownGraceSeconds
+	}
+	forceAfter := time.Duration(graceSeconds) * time.Second
 	for {
 		record, err := b.waitForPIDStart()
 		if err != nil {
@@ -308,7 +323,7 @@ func (b *PIDBackend) Stop() error {
 			return err
 		}
 		started := time.Now()
-		deadline := time.Now().Add(PIDStopTimeout)
+		deadline := time.Now().Add(forceAfter + PIDStopForceTimeout)
 		forced := false
 		for time.Now().Before(deadline) {
 			active, err := processMatchesPIDRecord(record)
@@ -318,7 +333,7 @@ func (b *PIDBackend) Stop() error {
 			if !active {
 				return b.removeStalePIDRecord(record)
 			}
-			if !forced && time.Since(started) >= PIDStopGracePeriod {
+			if !forced && time.Since(started) >= forceAfter {
 				if err := forceTerminatePIDProcess(pid, b.CommandKind == PIDCommandUpdateLoop); err != nil {
 					return err
 				}

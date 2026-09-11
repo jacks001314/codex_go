@@ -190,8 +190,32 @@ const (
 	DecisionRestart        RestartDecision = "restart"
 )
 
+const (
+	// DefaultShutdownGraceSeconds is how long a managed app-server shutdown
+	// waits for a graceful exit before forcing termination (Rust #43572).
+	DefaultShutdownGraceSeconds = 60
+	// MaxShutdownGraceSeconds bounds the configurable grace period.
+	MaxShutdownGraceSeconds = 5 * 60
+)
+
 type DaemonSettings struct {
 	RemoteControlEnabled bool `json:"remoteControlEnabled"`
+	// ShutdownGraceSeconds bounds the managed app-server shutdown grace period.
+	// Nil means the default; valid values are 0 through MaxShutdownGraceSeconds.
+	ShutdownGraceSeconds *int `json:"shutdownGraceSeconds,omitempty"`
+}
+
+// ShutdownGraceSecondsValue resolves the configured grace period, falling back
+// to the default for a missing or out-of-range value.
+func (s *DaemonSettings) ShutdownGraceSecondsValue() int {
+	if s == nil || s.ShutdownGraceSeconds == nil {
+		return DefaultShutdownGraceSeconds
+	}
+	seconds := *s.ShutdownGraceSeconds
+	if seconds < 0 || seconds > MaxShutdownGraceSeconds {
+		return DefaultShutdownGraceSeconds
+	}
+	return seconds
 }
 
 type Paths struct {
@@ -245,7 +269,20 @@ func LoadSettings(path string) (*DaemonSettings, error) {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return nil, fmt.Errorf("failed to parse daemon settings %s: %w", path, err)
 	}
+	if settings.ShutdownGraceSeconds != nil && (*settings.ShutdownGraceSeconds < 0 || *settings.ShutdownGraceSeconds > MaxShutdownGraceSeconds) {
+		return nil, fmt.Errorf("shutdown grace must be between 0 and %d seconds", MaxShutdownGraceSeconds)
+	}
 	return &settings, nil
+}
+
+// LoadSettingsForStop reads the shutdown grace period tolerantly so `daemon
+// stop` still works with unreadable or partially edited settings (Rust #43572).
+func LoadSettingsForStop(path string) *DaemonSettings {
+	settings, err := LoadSettings(path)
+	if err != nil {
+		return &DaemonSettings{}
+	}
+	return settings
 }
 
 func SaveSettings(path string, settings *DaemonSettings) error {
@@ -258,7 +295,20 @@ func SaveSettings(path string, settings *DaemonSettings) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("failed to create daemon settings directory %s: %w", filepath.Dir(path), err)
 	}
-	data, err := json.MarshalIndent(settings, "", "  ")
+	// Read-modify-write so settings written by other versions (for example an
+	// updater block or a custom shutdown grace) survive a save (Rust #43572).
+	values := map[string]any{}
+	if existing, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(existing, &values)
+	}
+	if values == nil {
+		values = map[string]any{}
+	}
+	values["remoteControlEnabled"] = settings.RemoteControlEnabled
+	if settings.ShutdownGraceSeconds != nil {
+		values["shutdownGraceSeconds"] = *settings.ShutdownGraceSeconds
+	}
+	data, err := json.MarshalIndent(values, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to serialize settings: %w", err)
 	}
@@ -417,6 +467,14 @@ func (d *Daemon) LoadSettings() (*DaemonSettings, error) {
 		return &DaemonSettings{}, nil
 	}
 	return LoadSettings(d.Paths.SettingsFile)
+}
+
+// LoadSettingsForStop reads settings tolerantly for the stop command.
+func (d *Daemon) LoadSettingsForStop() *DaemonSettings {
+	if d == nil || d.Paths == nil {
+		return &DaemonSettings{}
+	}
+	return LoadSettingsForStop(d.Paths.SettingsFile)
 }
 
 func (d *Daemon) SaveSettings(settings *DaemonSettings) error {

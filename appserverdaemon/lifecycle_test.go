@@ -426,7 +426,7 @@ func stubLifecycleManagedDaemon(t *testing.T) *lifecycleManagedDaemonStub {
 		pid := stub.nextPID
 		return &pid, nil
 	}
-	stopPIDBackend = func(backend *PIDBackend) error {
+	stopPIDBackend = func(backend *PIDBackend, graceSeconds int) error {
 		if backend != nil && backend.CommandKind == PIDCommandUpdateLoop {
 			stub.updaterRunning = false
 			return nil

@@ -15,7 +15,9 @@ type LifecycleRunner struct {
 }
 
 const (
-	OperationLockTimeout = 75 * time.Second
+	// OperationLockTimeout leaves room for the longest graceful stop plus the
+	// forced-exit check and a restart (Rust #43572).
+	OperationLockTimeout = time.Duration(MaxShutdownGraceSeconds+75) * time.Second
 	OperationLockRetry   = 50 * time.Millisecond
 )
 
@@ -34,7 +36,7 @@ var (
 	ensureManagedCodexBin         = EnsureManagedCodexBin
 	pidBackendIsStartingOrRunning = func(backend *PIDBackend) (bool, error) { return backend.IsStartingOrRunning() }
 	startPIDBackend               = func(backend *PIDBackend) (*uint32, error) { return backend.Start() }
-	stopPIDBackend                = func(backend *PIDBackend) error { return backend.Stop() }
+	stopPIDBackend                = func(backend *PIDBackend, graceSeconds int) error { return backend.StopWithGrace(graceSeconds) }
 	lifecycleReadyTimeout         = RemoteControlReadyTimeout
 	lifecycleReadyRetry           = 50 * time.Millisecond
 	readStderrLogTail             = ReadStderrLogTail
@@ -75,11 +77,8 @@ func (r *LifecycleRunner) Run(command LifecycleCommand) (*LifecycleOutput, error
 			return nil, err
 		}
 		defer lock.Close()
-		settings, err := daemon.LoadSettings()
-		if err != nil {
-			return nil, err
-		}
-		return r.stop(settings)
+		// Stop must work even when settings are unreadable or partially edited.
+		return r.stop(daemon.LoadSettingsForStop())
 	case LifecycleVersion:
 		settings, err := daemon.LoadSettings()
 		if err != nil {
@@ -128,7 +127,7 @@ func (r *LifecycleRunner) bootstrapLocked(options *BootstrapOptions) (*Bootstrap
 	if running, err := pidBackendIsStartingOrRunning(r.appServerBackend(settings)); err != nil {
 		return nil, err
 	} else if running {
-		if err := stopPIDBackend(r.appServerBackend(settings)); err != nil {
+		if err := stopPIDBackend(r.appServerBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
 			return nil, err
 		}
 	}
@@ -138,7 +137,7 @@ func (r *LifecycleRunner) bootstrapLocked(options *BootstrapOptions) (*Bootstrap
 	if running, err := pidBackendIsStartingOrRunning(r.updateLoopBackend(settings)); err != nil {
 		return nil, err
 	} else if running {
-		if err := stopPIDBackend(r.updateLoopBackend(settings)); err != nil {
+		if err := stopPIDBackend(r.updateLoopBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
 			return nil, err
 		}
 	}
@@ -264,7 +263,7 @@ func (r *LifecycleRunner) setRemoteControlLocked(mode RemoteControlMode) (*Remot
 		if err := ensureManagedCodexBin(daemon.Paths.ManagedCodexBin); err != nil {
 			return nil, err
 		}
-		if err := stopPIDBackend(r.appServerBackend(&DaemonSettings{RemoteControlEnabled: previous})); err != nil {
+		if err := stopPIDBackend(r.appServerBackend(&DaemonSettings{RemoteControlEnabled: previous}), settings.ShutdownGraceSecondsValue()); err != nil {
 			return nil, err
 		}
 		if _, err := startPIDBackend(r.appServerBackend(settings)); err != nil {
@@ -343,7 +342,7 @@ func (r *LifecycleRunner) TryRestartIfRunning(mode RestartMode, updaterRefreshMo
 	case DecisionAlreadyCurrent:
 		return RestartAlreadyCurrent, nil
 	case DecisionRestart:
-		if err := stopPIDBackend(r.appServerBackend(settings)); err != nil {
+		if err := stopPIDBackend(r.appServerBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
 			return "", err
 		}
 		if _, err := startPIDBackend(r.appServerBackend(settings)); err != nil {
@@ -419,7 +418,7 @@ func (r *LifecycleRunner) restart(settings *DaemonSettings, backend *BackendKind
 		return nil, err
 	}
 	if running != nil {
-		if err := stopPIDBackend(r.appServerBackend(settings)); err != nil {
+		if err := stopPIDBackend(r.appServerBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
 			return nil, err
 		}
 	}
@@ -441,7 +440,7 @@ func (r *LifecycleRunner) stop(settings *DaemonSettings) (*LifecycleOutput, erro
 		return nil, err
 	}
 	if backend != nil {
-		if err := stopPIDBackend(r.appServerBackend(settings)); err != nil {
+		if err := stopPIDBackend(r.appServerBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
 			return nil, err
 		}
 		return daemon.LifecycleOutput(StatusStopped, backend, nil, nil, r.managedVersion()), nil
