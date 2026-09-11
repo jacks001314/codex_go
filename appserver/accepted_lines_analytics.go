@@ -12,7 +12,7 @@ import (
 )
 
 func (r *RuntimeRouter) emitAcceptedLineFingerprintsAnalyticsEvent(ctx context.Context, threadID string, turnID string, runConfig *appTurnRunConfig, completedAt time.Time) {
-	if r == nil || r.services.Analytics == nil || runConfig == nil {
+	if r == nil || r.services.Analytics == nil || runConfig == nil || r.threadAnalyticsDisabled(threadID) {
 		return
 	}
 	sink, ok := r.services.Analytics.(telemetry.AcceptedLineFingerprintsEventSink)

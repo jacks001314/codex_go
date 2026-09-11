@@ -9,7 +9,7 @@ import (
 )
 
 func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, connectionID string, threadID string, turnID string, item *ThreadItem, runConfig *appTurnRunConfig) {
-	if r == nil || r.services.Analytics == nil || item == nil || runConfig == nil {
+	if r == nil || r.services.Analytics == nil || item == nil || runConfig == nil || r.threadAnalyticsDisabled(threadID) {
 		return
 	}
 	if threadItemWireType(item) != "commandExecution" {

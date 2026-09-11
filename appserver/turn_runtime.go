@@ -110,7 +110,7 @@ func (r *RuntimeRouter) attributeSessionCommandItems(threadID string, turnID str
 // "started" event for a trusted primary-runtime artifact marker command
 // (Rust #38057).
 func (r *RuntimeRouter) emitArtifactOperationForCommandItem(threadID string, turnID string, item *ThreadItem) {
-	if r == nil || r.services.Analytics == nil || item == nil {
+	if r == nil || r.services.Analytics == nil || item == nil || r.threadAnalyticsDisabled(threadID) {
 		return
 	}
 	sink, ok := r.services.Analytics.(telemetry.ArtifactOperationEventSink)
@@ -6311,7 +6311,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			AutoReviewEnabled:          autoReviewEnabledForTurn(cfg, params),
 			NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 			NodeReplDisabled:           &nodeReplDisabled,
-			AnalyticsEnabled:           r.analyticsEnabledOption(),
+			AnalyticsEnabled:           r.analyticsEnabledOptionForThread(threadID),
 			Extra:                      extraMetadata,
 			ResponsesAPIMetadata:       cfg.ResponsesAPIMetadata(),
 			StartedAtMS:                startedAtMS,
@@ -6651,7 +6651,7 @@ func countTurnUserInputImages(inputs []turn.TurnUserInput) int {
 }
 
 func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnStartParams, record *turn.TurnRecord, runConfig *appTurnRunConfig, result *turn.AgentLoopResult, status TurnStatus, startedAt time.Time, completedAt time.Time, durationMS int64, steerCount int, turnError CodexErrorInfo, codexErrorKind *string, codexErrorHTTPStatusCode *uint16, explicitClientInterruptRequestedAtMS *uint64) {
-	if r == nil || r.services.Analytics == nil || params == nil || record == nil || runConfig == nil {
+	if r == nil || r.services.Analytics == nil || params == nil || record == nil || runConfig == nil || r.threadAnalyticsDisabled(params.ThreadID) {
 		return
 	}
 	client, ok := r.analyticsAppServerClient(connectionID)
@@ -6875,7 +6875,7 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 		ThreadSource:               lineage.ThreadSource,
 		NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 		NodeReplDisabled:           &nodeReplDisabled,
-		AnalyticsEnabled:           r.analyticsEnabledOption(),
+		AnalyticsEnabled:           r.analyticsEnabledOptionForThread(params.ThreadID),
 		Extra:                      extraMetadata,
 		ResponsesAPIMetadata:       cfg.ResponsesAPIMetadata(),
 		StartedAtMS:                active.StartedAtMS,
@@ -8856,7 +8856,7 @@ func (r *RuntimeRouter) trackSkillInvocationEvent(ctx context.Context, threadID 
 	if invokeType == telemetry.SkillInvocationTypeImplicit {
 		r.recordSkillShadowInvocation(threadID, turnID, skill)
 	}
-	if r == nil || r.services.Analytics == nil {
+	if r == nil || r.services.Analytics == nil || r.threadAnalyticsDisabled(threadID) {
 		return
 	}
 	sink, ok := r.services.Analytics.(telemetry.SkillInvocationEventSink)

@@ -110,7 +110,7 @@ type reviewAnalyticsInput struct {
 }
 
 func (r *RuntimeRouter) emitReviewAnalyticsEvent(ctx context.Context, input reviewAnalyticsInput) {
-	if r == nil || r.services.Analytics == nil {
+	if r == nil || r.services.Analytics == nil || r.threadAnalyticsDisabled(input.ThreadID) {
 		return
 	}
 	sink, ok := r.services.Analytics.(telemetry.ReviewEventSink)
@@ -231,7 +231,7 @@ func (r *RuntimeRouter) emitGuardianReviewCompletedAnalytics(ctx context.Context
 }
 
 func (r *RuntimeRouter) emitGuardianV2ClassificationAnalytics(ctx context.Context, notification *ItemGuardianApprovalReviewCompletedNotification, result userReviewResult) {
-	if r == nil || r.services.Analytics == nil || notification == nil {
+	if r == nil || r.services.Analytics == nil || notification == nil || r.threadAnalyticsDisabled(notification.ThreadID) {
 		return
 	}
 	active := r.activeRuntimeTurnStateSnapshot(notification.ThreadID, notification.TurnID)
@@ -282,7 +282,7 @@ func (r *RuntimeRouter) emitGuardianV2ClassificationAnalytics(ctx context.Contex
 }
 
 func (r *RuntimeRouter) emitGuardianV2FastDecision(ctx context.Context, threadID, turnID, itemID string) {
-	if r == nil || r.services.Analytics == nil {
+	if r == nil || r.services.Analytics == nil || r.threadAnalyticsDisabled(threadID) {
 		return
 	}
 	active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)

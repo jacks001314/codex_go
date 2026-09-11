@@ -9,7 +9,7 @@ import (
 )
 
 func (r *RuntimeRouter) emitGoalAnalyticsEvent(ctx context.Context, connectionID string, record *session.Record, goal *Goal, eventKind string, turnID *string) {
-	if r == nil || r.services.Analytics == nil || goal == nil || strings.TrimSpace(eventKind) == "" {
+	if r == nil || r.services.Analytics == nil || goal == nil || strings.TrimSpace(eventKind) == "" || r.threadAnalyticsDisabled(goal.ThreadID) {
 		return
 	}
 	sink, ok := r.services.Analytics.(telemetry.GoalEventSink)

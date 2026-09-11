@@ -12,7 +12,7 @@ import (
 )
 
 func (r *RuntimeRouter) emitCompactionAnalyticsEvent(ctx context.Context, connectionID string, record *session.Record, request *compact.Request, result *compact.Result, compactErr error, startedAt time.Time, completedAt time.Time, activeContextTokensBefore int64) {
-	if r == nil || r.services.Analytics == nil || record == nil || request == nil {
+	if r == nil || r.services.Analytics == nil || record == nil || request == nil || r.threadAnalyticsDisabled(string(record.ID)) {
 		return
 	}
 	sink, ok := r.services.Analytics.(telemetry.CompactionEventSink)

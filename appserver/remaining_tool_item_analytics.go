@@ -8,7 +8,7 @@ import (
 )
 
 func (r *RuntimeRouter) emitCollabAgentToolCallAnalyticsEvent(ctx context.Context, connectionID string, threadID string, turnID string, item *ThreadItem, runConfig *appTurnRunConfig) {
-	if r == nil || r.services.Analytics == nil || item == nil || runConfig == nil {
+	if r == nil || r.services.Analytics == nil || item == nil || runConfig == nil || r.threadAnalyticsDisabled(threadID) {
 		return
 	}
 	if threadItemWireType(item) != "collabAgentToolCall" {
@@ -47,7 +47,7 @@ func (r *RuntimeRouter) emitCollabAgentToolCallAnalyticsEvent(ctx context.Contex
 }
 
 func (r *RuntimeRouter) emitWebSearchAnalyticsEvent(ctx context.Context, connectionID string, threadID string, turnID string, item *ThreadItem, runConfig *appTurnRunConfig) {
-	if r == nil || r.services.Analytics == nil || item == nil || runConfig == nil {
+	if r == nil || r.services.Analytics == nil || item == nil || runConfig == nil || r.threadAnalyticsDisabled(threadID) {
 		return
 	}
 	if threadItemWireType(item) != "webSearch" {
@@ -75,7 +75,7 @@ func (r *RuntimeRouter) emitWebSearchAnalyticsEvent(ctx context.Context, connect
 }
 
 func (r *RuntimeRouter) emitImageGenerationAnalyticsEvent(ctx context.Context, connectionID string, threadID string, turnID string, item *ThreadItem, runConfig *appTurnRunConfig) {
-	if r == nil || r.services.Analytics == nil || item == nil || runConfig == nil {
+	if r == nil || r.services.Analytics == nil || item == nil || runConfig == nil || r.threadAnalyticsDisabled(threadID) {
 		return
 	}
 	if threadItemWireType(item) != "imageGeneration" {

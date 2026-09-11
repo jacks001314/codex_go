@@ -11,7 +11,7 @@ import (
 )
 
 func (r *RuntimeRouter) emitCodexTurnSteerAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnSteerParams, acceptedTurnID *string, result string, rejectionReason *string, createdAt time.Time) {
-	if r == nil || r.services.Analytics == nil || params == nil {
+	if r == nil || r.services.Analytics == nil || params == nil || r.threadAnalyticsDisabled(params.ThreadID) {
 		return
 	}
 	sink, ok := r.services.Analytics.(telemetry.TurnSteerEventSink)

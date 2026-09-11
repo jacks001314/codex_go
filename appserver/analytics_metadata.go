@@ -1,10 +1,10 @@
 package appserver
 
-// analyticsEnabledOption reports the selected session analytics client's
-// collection state for Responses turn metadata (Rust #44628). It is omitted
-// when no session analytics context is initialized, matching Rust's
-// `Option<bool>` payload field.
-func (r *RuntimeRouter) analyticsEnabledOption() *bool {
+// analyticsEnabledOptionForThread reports the thread's effective analytics
+// collection state for Responses turn metadata (Rust #44628/#44646). It is
+// omitted when no session analytics context is initialized, and is false when
+// the thread itself opted out through its configuration.
+func (r *RuntimeRouter) analyticsEnabledOptionForThread(threadID string) *bool {
 	if r == nil || r.services.Analytics == nil {
 		return nil
 	}
@@ -13,5 +13,8 @@ func (r *RuntimeRouter) analyticsEnabledOption() *bool {
 		return nil
 	}
 	enabled := provider.Enabled()
+	if enabled && r.threadAnalyticsDisabled(threadID) {
+		enabled = false
+	}
 	return &enabled
 }

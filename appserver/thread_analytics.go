@@ -38,7 +38,7 @@ func (r *RuntimeRouter) emitThreadForkAnalytics(ctx context.Context, connectionI
 }
 
 func (r *RuntimeRouter) emitCodexThreadInitializedAnalyticsEvent(ctx context.Context, connectionID string, thread *Thread, modelID string, initializationMode string, threadOriginator string) {
-	if r == nil || r.services.Analytics == nil || thread == nil {
+	if r == nil || r.services.Analytics == nil || thread == nil || r.threadAnalyticsDisabled(thread.ID) {
 		return
 	}
 	sink, ok := r.services.Analytics.(telemetry.ThreadInitializedEventSink)

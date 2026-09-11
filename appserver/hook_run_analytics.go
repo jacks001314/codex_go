@@ -13,7 +13,7 @@ type hookRunAnalyticsContext struct {
 }
 
 func (r *RuntimeRouter) emitHookRunAnalyticsEvent(ctx context.Context, notification *HookRunCompletedNotification) {
-	if r == nil || r.services.Analytics == nil || notification == nil || notification.TurnID == nil {
+	if r == nil || r.services.Analytics == nil || notification == nil || notification.TurnID == nil || r.threadAnalyticsDisabled(notification.ThreadID) {
 		return
 	}
 	sink, ok := r.services.Analytics.(telemetry.HookRunEventSink)
