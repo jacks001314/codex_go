@@ -67,7 +67,7 @@ func TestManagedNetworkBlockedObserverRecordsWithoutRequirementsLikeRust(t *test
 func TestManagedOnlyRequirementsIgnoreUserAndExecpolicyExpansionWithoutApprovalLikeRust(t *testing.T) {
 	home := t.TempDir()
 	configBody := "approval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n" +
-		"[network_proxy]\n" +
+		"[features.network_proxy]\n" +
 		"enabled = true\n" +
 		"proxy_url = \"http://127.0.0.1:0\"\n" +
 		"enable_socks5 = false\n" +
@@ -132,7 +132,7 @@ func TestManagedOnlyRequirementsIgnoreUserAndExecpolicyExpansionWithoutApprovalL
 func TestConfiguredManagedNetworkWithoutRequirementsDoesNotEnableApprovalFlowLikeRust(t *testing.T) {
 	home := t.TempDir()
 	configBody := "approval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n" +
-		"[network_proxy]\n" +
+		"[features.network_proxy]\n" +
 		"enabled = true\n" +
 		"proxy_url = \"http://127.0.0.1:0\"\n" +
 		"enable_socks5 = false\n" +
@@ -162,7 +162,7 @@ func TestConfiguredManagedNetworkWithoutRequirementsDoesNotEnableApprovalFlowLik
 func TestManagedNetworkBlockedObserverRejectsSingleToolCallLikeRust(t *testing.T) {
 	home := t.TempDir()
 	configBody := "sandbox_mode = \"workspace-write\"\n" +
-		"[network_proxy]\n" +
+		"[features.network_proxy]\n" +
 		"enabled = true\n" +
 		"proxy_url = \"http://127.0.0.1:0\"\n" +
 		"socks_url = \"http://127.0.0.1:0\"\n" +
@@ -235,12 +235,12 @@ func TestManagedNetworkPoliciesAreIsolatedPerThreadLikeRust(t *testing.T) {
 		}
 	}
 	allowedConfig := &config.Config{Values: map[string]any{
-		"sandbox_mode":  "workspace-write",
-		"network_proxy": baseNetwork([]any{"127.0.0.1"}),
+		"sandbox_mode": "workspace-write",
+		"features":     map[string]any{"network_proxy": baseNetwork([]any{"127.0.0.1"})},
 	}}
 	blockedConfig := &config.Config{Values: map[string]any{
-		"sandbox_mode":  "workspace-write",
-		"network_proxy": baseNetwork([]any{"example.com"}),
+		"sandbox_mode": "workspace-write",
+		"features":     map[string]any{"network_proxy": baseNetwork([]any{"example.com"})},
 	}}
 	allowedNetwork, err := router.managedNetworkForTurn("thread-allowed", home, allowedConfig)
 	if err != nil {
@@ -279,13 +279,13 @@ func TestThreadUnloadClosesManagedNetworkAndNextTurnRestartsIt(t *testing.T) {
 	defer router.Close()
 	cfg := &config.Config{Values: map[string]any{
 		"sandbox_mode": "workspace-write",
-		"network_proxy": map[string]any{
+		"features": map[string]any{"network_proxy": map[string]any{
 			"enabled":         true,
 			"proxy_url":       "http://127.0.0.1:0",
 			"enable_socks5":   false,
 			"allowed_domains": []any{"127.0.0.1"},
 			"mode":            "full",
-		},
+		}},
 	}}
 	first, err := router.managedNetworkForTurn("thread-network-unload", home, cfg)
 	if err != nil {
@@ -328,7 +328,7 @@ func uint16Ptr(value uint16) *uint16 {
 
 func TestDefaultRuntimeRouterStartsAndClosesManagedNetworkLikeRust(t *testing.T) {
 	home := t.TempDir()
-	configBody := "[network_proxy]\n" +
+	configBody := "[features.network_proxy]\n" +
 		"enabled = true\n" +
 		"proxy_url = \"http://127.0.0.1:0\"\n" +
 		"enable_socks5 = false\n" +
@@ -379,7 +379,7 @@ func TestDefaultRuntimeRouterStartsManagedNetworkFromPermissionProfileLikeRust(t
 
 func TestDefaultRuntimeRouterHotReloadsManagedNetworkConfigAndExecpolicyLikeRust(t *testing.T) {
 	home := t.TempDir()
-	configBody := "[network_proxy]\n" +
+	configBody := "[features.network_proxy]\n" +
 		"enabled = true\n" +
 		"proxy_url = \"http://127.0.0.1:0\"\n" +
 		"enable_socks5 = false\n" +
@@ -448,7 +448,7 @@ func TestThreadManagedNetworkHotReloadsProjectConfigLayerLikeRust(t *testing.T) 
 	}
 	projectConfigPath := filepath.Join(dotCodex, "config.toml")
 	projectConfig := func(allowed string) string {
-		return "[network_proxy]\n" +
+		return "[features.network_proxy]\n" +
 			"enabled = true\n" +
 			"proxy_url = \"http://127.0.0.1:0\"\n" +
 			"enable_socks5 = false\n" +

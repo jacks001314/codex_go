@@ -9448,7 +9448,7 @@ func TestRuntimeRouterUnifiedExecUsesSelectedRemoteEnvironmentLikeRust(t *testin
 	home := t.TempDir()
 	configBody := "sandbox_mode = \"workspace-write\"\n" +
 		"[features]\nunified_exec = true\n" +
-		"[network_proxy]\n" +
+		"[features.network_proxy]\n" +
 		"enabled = true\n" +
 		"proxy_url = \"http://127.0.0.1:0\"\n" +
 		"enable_socks5 = false\n" +

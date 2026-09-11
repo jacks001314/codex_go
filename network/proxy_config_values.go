@@ -8,13 +8,18 @@ import (
 
 func ProxyConfigFromConfigValues(values map[string]any) (*ProxyConfig, error) {
 	settings := DefaultProxySettings()
-	if raw, exists := values["network_proxy"]; exists && raw != nil {
-		table, ok := raw.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("network_proxy must be a table")
-		}
-		if err := applyProxySettingsTable(&settings, table, "network_proxy"); err != nil {
-			return nil, err
+	// Rust reads the configured-network base from `features.network_proxy`
+	// (codex-rs/core/src/config/mod.rs network_proxy_toml_config); a top-level
+	// `network_proxy` is not part of ConfigToml and is ignored (it carries the
+	// #44691 migration warning). A non-table `features.network_proxy` value is
+	// ignored the same way Rust drops the boolean form.
+	if features, ok := values["features"].(map[string]any); ok {
+		if raw, exists := features["network_proxy"]; exists && raw != nil {
+			if table, ok := raw.(map[string]any); ok {
+				if err := applyProxySettingsTable(&settings, table, "features.network_proxy"); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	profileNetworks, err := selectedPermissionProfileNetworkTables(values)

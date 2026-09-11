@@ -773,7 +773,7 @@ func TestDeniedNetworkPolicyMessageLikeRust(t *testing.T) {
 func TestManagedNetworkProxyRoutesAllowlistMissThroughAppServerApprovalLikeRust(t *testing.T) {
 	home := t.TempDir()
 	configBody := "approval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n" +
-		"[network_proxy]\n" +
+		"[features.network_proxy]\n" +
 		"enabled = true\n" +
 		"proxy_url = \"http://127.0.0.1:0\"\n" +
 		"enable_socks5 = false\n" +

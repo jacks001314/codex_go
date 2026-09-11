@@ -102,7 +102,7 @@ func TestResolveRuntimeAndClampBindAddrs(t *testing.T) {
 
 func TestProxyConfigFromConfigValues(t *testing.T) {
 	config, err := ProxyConfigFromConfigValues(map[string]any{
-		"network_proxy": map[string]any{
+		"features": map[string]any{"network_proxy": map[string]any{
 			"enabled":                            true,
 			"proxy_url":                          "http://127.0.0.1:43128",
 			"enable_socks5":                      false,
@@ -117,7 +117,7 @@ func TestProxyConfigFromConfigValues(t *testing.T) {
 			"domains": map[string]any{
 				"example.com": "deny",
 			},
-		},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("ProxyConfigFromConfigValues error = %v", err)
@@ -140,11 +140,46 @@ func TestProxyConfigFromConfigValues(t *testing.T) {
 	}
 }
 
+// TestProxyConfigReadsFeatureNetworkProxyLikeRust pins the config location:
+// Rust reads the configured-network base from `features.network_proxy`
+// (codex-rs/core/src/config/mod.rs network_proxy_toml_config); a top-level
+// `network_proxy` table is not part of ConfigToml and is ignored (it carries
+// the #44691 migration warning).
+func TestProxyConfigReadsFeatureNetworkProxyLikeRust(t *testing.T) {
+	config, err := ProxyConfigFromConfigValues(map[string]any{
+		"network_proxy": map[string]any{"enabled": true, "mode": "full"},
+		"features": map[string]any{"network_proxy": map[string]any{
+			"enabled":         true,
+			"mode":            "limited",
+			"allowed_domains": []any{"api.openai.com"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.Network.Enabled || config.Network.Mode != ProxyModeLimited {
+		t.Fatalf("feature network proxy settings = %#v", config.Network)
+	}
+	if got := config.Network.AllowedDomains(); !reflect.DeepEqual(got, []string{"api.openai.com"}) {
+		t.Fatalf("allowed domains = %#v", got)
+	}
+
+	topLevelOnly, err := ProxyConfigFromConfigValues(map[string]any{
+		"network_proxy": map[string]any{"enabled": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if topLevelOnly.Network.Enabled {
+		t.Fatalf("top-level network_proxy must be ignored like Rust: %#v", topLevelOnly.Network)
+	}
+}
+
 func TestProxyConfigFromConfigValuesRejectsInvalidRuntime(t *testing.T) {
 	_, err := ProxyConfigFromConfigValues(map[string]any{
-		"network_proxy": map[string]any{
+		"features": map[string]any{"network_proxy": map[string]any{
 			"allow_unix_sockets": []any{"relative.sock"},
-		},
+		}},
 	})
 	if err == nil && runtimeos.GOOS != "windows" {
 		t.Fatal("ProxyConfigFromConfigValues returned nil error")
@@ -153,7 +188,7 @@ func TestProxyConfigFromConfigValuesRejectsInvalidRuntime(t *testing.T) {
 
 func TestProxyConfigFromConfigValuesParsesMITMHooksLikeRust(t *testing.T) {
 	config, err := ProxyConfigFromConfigValues(map[string]any{
-		"network_proxy": map[string]any{
+		"features": map[string]any{"network_proxy": map[string]any{
 			"mitm": true,
 			"mitm_hooks": []any{map[string]any{
 				"host": "api.github.com",
@@ -172,7 +207,7 @@ func TestProxyConfigFromConfigValuesParsesMITMHooksLikeRust(t *testing.T) {
 					}},
 				},
 			}},
-		},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -192,20 +227,20 @@ func TestProxyConfigFromConfigValuesParsesMITMHooksLikeRust(t *testing.T) {
 func TestProxyConfigFromTOMLValuesParsesMITMHooksLikeRust(t *testing.T) {
 	var values map[string]any
 	err := toml.Unmarshal([]byte(`
-[network_proxy]
+[features.network_proxy]
 mitm = true
 
-[[network_proxy.mitm_hooks]]
+[[features.network_proxy.mitm_hooks]]
 host = "api.github.com"
 
-[network_proxy.mitm_hooks.match]
+[features.network_proxy.mitm_hooks.match]
 methods = ["POST"]
 path_prefixes = ["/repos/"]
 
-[network_proxy.mitm_hooks.actions]
+[features.network_proxy.mitm_hooks.actions]
 strip_request_headers = ["Authorization"]
 
-[[network_proxy.mitm_hooks.actions.inject_request_headers]]
+[[features.network_proxy.mitm_hooks.actions.inject_request_headers]]
 name = "Authorization"
 secret_env_var = "GH_TOKEN"
 prefix = "Bearer "
