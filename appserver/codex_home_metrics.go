@@ -24,7 +24,6 @@ var codexHomeSizeBytesBoundaries = []float64{
 }
 
 type codexHomeSizes struct {
-	codexHome        int64
 	sessions         int64
 	archivedSessions int64
 }
@@ -33,9 +32,10 @@ type codexHomeSizes struct {
 // false-returning check never cancels.
 type codexHomeScanCancel func() bool
 
-// scanCodexHomeSizes sums regular-file lengths under codexHome without reading
-// file contents or following symlinks (Rust #41360 directory_sizes). Scanning is
-// abandoned (returning os.ErrInvalid) once cancel reports true.
+// scanCodexHomeSizes sums regular-file lengths under the sessions and
+// archived_sessions directories of codexHome without reading file contents or
+// following symlinks (Rust #43790). Missing session directories are skipped.
+// Scanning is abandoned (returning os.ErrInvalid) once cancel reports true.
 func scanCodexHomeSizes(codexHome string, cancel codexHomeScanCancel) (codexHomeSizes, error) {
 	var sizes codexHomeSizes
 	if strings.TrimSpace(codexHome) == "" {
@@ -46,7 +46,23 @@ func scanCodexHomeSizes(codexHome string, cancel codexHomeScanCancel) (codexHome
 	}
 	sessions := filepath.Join(codexHome, rollout.SessionsSubdir)
 	archived := filepath.Join(codexHome, rollout.ArchivedSessionsSubdir)
-	pending := []string{codexHome}
+	pending := make([]string, 0, 2)
+	for _, root := range []string{sessions, archived} {
+		if cancel != nil && cancel() {
+			return sizes, os.ErrInvalid
+		}
+		// Inspect the roots without following symlinks, just like entries below them.
+		info, err := os.Lstat(root)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return sizes, err
+		}
+		if info.IsDir() {
+			pending = append(pending, root)
+		}
+	}
 	for len(pending) > 0 {
 		if cancel != nil && cancel() {
 			return sizes, os.ErrInvalid
@@ -71,7 +87,6 @@ func scanCodexHomeSizes(codexHome string, cancel codexHomeScanCancel) (codexHome
 				continue
 			}
 			bytes := info.Size()
-			sizes.codexHome += bytes
 			if strings.HasPrefix(path, sessions) {
 				sizes.sessions += bytes
 			} else if strings.HasPrefix(path, archived) {
@@ -83,7 +98,7 @@ func scanCodexHomeSizes(codexHome string, cancel codexHomeScanCancel) (codexHome
 }
 
 // recordCodexHomeMetrics scans codexHome and records the size histogram for the
-// whole home and the sessions / archived_sessions subdirectories (Rust #41360).
+// sessions / archived_sessions subdirectories (Rust #43790).
 func recordCodexHomeMetrics(metrics *state.TaskMetrics, codexHome string, cancel codexHomeScanCancel) {
 	if metrics == nil {
 		return
@@ -96,7 +111,6 @@ func recordCodexHomeMetrics(metrics *state.TaskMetrics, codexHome string, cancel
 		label string
 		bytes int64
 	}{
-		{"codex_home", sizes.codexHome},
 		{rollout.SessionsSubdir, sizes.sessions},
 		{rollout.ArchivedSessionsSubdir, sizes.archivedSessions},
 	} {

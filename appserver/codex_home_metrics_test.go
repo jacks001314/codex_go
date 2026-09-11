@@ -30,14 +30,14 @@ func TestCodexHomeMetricsScanLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sizes.codexHome != 65 || sizes.sessions != 20 || sizes.archivedSessions != 30 {
+	if sizes.sessions != 20 || sizes.archivedSessions != 30 {
 		t.Fatalf("sizes = %+v", sizes)
 	}
 
 	metrics := state.NewTaskMetrics()
 	recordCodexHomeMetrics(metrics, home, nil)
 	records := metrics.Records()
-	if len(records) != 3 {
+	if len(records) != 2 {
 		t.Fatalf("records = %#v", records)
 	}
 	found := map[string]int{}
@@ -47,8 +47,38 @@ func TestCodexHomeMetricsScanLikeRust(t *testing.T) {
 		}
 		found[record.Tags["directory"]] = record.Value
 	}
-	if found["codex_home"] != 65 || found[rollout.SessionsSubdir] != 20 || found[rollout.ArchivedSessionsSubdir] != 30 {
+	if found[rollout.SessionsSubdir] != 20 || found[rollout.ArchivedSessionsSubdir] != 30 {
 		t.Fatalf("metrics = %#v", found)
+	}
+	if _, ok := found["codex_home"]; ok {
+		t.Fatalf("aggregate codex_home sample is still emitted: %#v", found)
+	}
+}
+
+func TestCodexHomeMetricsSkipsMissingAndSymlinkedSessionRootsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	// Missing sessions directories are skipped rather than failing the scan.
+	sizes, err := scanCodexHomeSizes(home, nil)
+	if err != nil {
+		t.Fatalf("scanCodexHomeSizes error = %v", err)
+	}
+	if sizes.sessions != 0 || sizes.archivedSessions != 0 {
+		t.Fatalf("sizes = %+v", sizes)
+	}
+	// A symlinked sessions root must not be followed.
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "s.jsonl"), make([]byte, 40), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(home, rollout.SessionsSubdir)); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	sizes, err = scanCodexHomeSizes(home, nil)
+	if err != nil {
+		t.Fatalf("scanCodexHomeSizes error = %v", err)
+	}
+	if sizes.sessions != 0 {
+		t.Fatalf("sizes = %+v, symlinked sessions root must not be followed", sizes)
 	}
 }
 
