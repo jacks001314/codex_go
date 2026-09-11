@@ -106,6 +106,9 @@ type ProxySettings struct {
 	MITMHooks                                    []ProxyMITMHookConfig
 	CredentialBroker                             bool
 	DangerouslyAllowPlaintextCredentialInjection bool
+	// CredentialProviders holds the validated
+	// features.network_proxy.credentials definitions (#44056).
+	CredentialProviders map[string]CredentialProviderConfig
 }
 
 func DefaultProxySettings() ProxySettings {

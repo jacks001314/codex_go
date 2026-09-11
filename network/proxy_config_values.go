@@ -95,6 +95,13 @@ func applyProxySettingsTable(settings *ProxySettings, table map[string]any, path
 	if value, ok := boolConfigValue(table, "credential_broker"); ok {
 		settings.CredentialBroker = value
 	}
+	if raw, ok := table["credentials"]; ok && raw != nil {
+		providers, err := ParseCredentialProviderConfigs(raw)
+		if err != nil {
+			return err
+		}
+		settings.CredentialProviders = providers
+	}
 	if value, ok := boolConfigValue(table, "dangerously_allow_plaintext_credential_injection"); ok {
 		settings.DangerouslyAllowPlaintextCredentialInjection = value
 	}

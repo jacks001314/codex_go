@@ -462,6 +462,7 @@ func cloneProxySettings(settings ProxySettings) ProxySettings {
 		clone.UnixSockets = &ProxyUnixSocketPermissions{Entries: entries}
 	}
 	clone.MITMHooks = append([]ProxyMITMHookConfig(nil), settings.MITMHooks...)
+	clone.CredentialProviders = cloneCredentialProviders(settings.CredentialProviders)
 	return clone
 }
 
