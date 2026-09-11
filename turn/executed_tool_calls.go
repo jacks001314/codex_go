@@ -307,6 +307,21 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 			outputCounts[callID]++
 		}
 	}
+	// The input index is None when the same call ID appears twice, matching
+	// Rust's input_indices map (Rust #44472).
+	inputIndices := map[string]*int{}
+	for index, item := range out {
+		_, inputCallID, _, _, ok := executedToolCallInputInfo(item)
+		if !ok || inputCallID == "" {
+			continue
+		}
+		if _, exists := inputIndices[inputCallID]; exists {
+			inputIndices[inputCallID] = nil
+			continue
+		}
+		position := index
+		inputIndices[inputCallID] = &position
+	}
 	for index := len(out) - 1; index >= 0; index-- {
 		_, callID, ok := executedToolCallOutputIdentity(out[index])
 		if !ok || callID == "" {
@@ -343,6 +358,15 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 			if !r.canProveWaitCompletion && !executedToolCallOutputIsCustom(out[index]) {
 				// Inherited wait handles cannot be proven after resume or fork.
 				complete = false
+			}
+			if cellID != "" {
+				// An exec/wait output must still be identified by its matching
+				// input; a missing or ambiguous association cannot be repaired by
+				// a later wait (Rust #44472).
+				if inputIndex, present := inputIndices[callID]; !present || inputIndex == nil || *inputIndex >= index ||
+					!codeModeInputMatchesOutput(out[*inputIndex], out[index], callID, cellID) {
+					complete = false
+				}
 			}
 			if _, seen := seenGroups[groupID]; !seen {
 				if group := r.groups[groupID]; group != nil && len(group.pending) > 0 {
@@ -657,6 +681,90 @@ func executedToolCallOutputType(itemType string) bool {
 func executedToolCallOutputIsCustom(value any) bool {
 	itemType, _, ok := executedToolCallOutputIdentity(value)
 	return ok && strings.TrimSpace(itemType) == "custom_tool_call_output"
+}
+
+// executedToolCallInputInfo extracts the identity of an input call item
+// (function, custom, tool-search, or local-shell call). Unsupported shapes
+// report ok=false, mirroring Rust's optional input accessors.
+func executedToolCallInputInfo(value any) (itemType string, callID string, name string, arguments string, ok bool) {
+	switch item := value.(type) {
+	case *model.AgentItem:
+		if item == nil || !executedToolCallInputType(item.Type) {
+			return "", "", "", "", false
+		}
+		return item.Type, strings.TrimSpace(item.CallID), strings.TrimSpace(item.Name), item.Arguments, true
+	case *ToolResponseItem:
+		if item == nil || !executedToolCallInputType(item.Type) {
+			return "", "", "", "", false
+		}
+		return item.Type, strings.TrimSpace(item.CallID), strings.TrimSpace(item.Name), "", true
+	case *trustedExecutedToolCallMapItem:
+		if item == nil {
+			return "", "", "", "", false
+		}
+		return executedToolCallInputInfo(item.value)
+	case map[string]any:
+		itemType = strings.TrimSpace(mapString(item, "type"))
+		if !executedToolCallInputType(itemType) {
+			return "", "", "", "", false
+		}
+		return itemType, strings.TrimSpace(mapString(item, "call_id")), strings.TrimSpace(mapString(item, "name")), mapString(item, "arguments"), true
+	default:
+		return "", "", "", "", false
+	}
+}
+
+func executedToolCallInputType(itemType string) bool {
+	switch strings.TrimSpace(itemType) {
+	case "function_call", "custom_tool_call", "tool_search_call", "local_shell_call":
+		return true
+	default:
+		return false
+	}
+}
+
+// codeModeInputMatchesOutput mirrors Rust's code_mode_input_matches_output: an
+// exec custom call must own the cell output, while a wait function call must
+// reference the same runtime cell. The Rust origin guard (the wait call ID
+// differs from the exec call ID) is implied here because the matching input
+// shares the output's call ID while the cell origin is the exec call ID.
+func codeModeInputMatchesOutput(input any, output any, outputCallID string, runtimeCell string) bool {
+	inputType, inputCallID, inputName, inputArguments, ok := executedToolCallInputInfo(input)
+	if !ok || inputCallID != strings.TrimSpace(outputCallID) {
+		return false
+	}
+	outputType, _, isOutput := executedToolCallOutputIdentity(output)
+	if !isOutput {
+		return false
+	}
+	switch strings.TrimSpace(outputType) {
+	case "custom_tool_call_output":
+		return inputType == "custom_tool_call" && isCodeModeExecName(inputName)
+	case "function_call_output":
+		if inputType != "function_call" || inputName != "wait" {
+			return false
+		}
+		return decodedCellIDArgument(inputArguments) == runtimeCell
+	default:
+		return false
+	}
+}
+
+func isCodeModeExecName(name string) bool {
+	return strings.TrimSpace(name) == tool.CodeModeExecToolName
+}
+
+func decodedCellIDArgument(arguments string) string {
+	arguments = strings.TrimSpace(arguments)
+	if arguments == "" {
+		return ""
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(arguments), &decoded); err != nil {
+		return ""
+	}
+	cellID, _ := decoded["cell_id"].(string)
+	return strings.TrimSpace(cellID)
 }
 
 func clonePromptOutputWithExecutedToolCalls(value any, calls []model.ExecutedToolCall, cellID string, complete *bool) any {

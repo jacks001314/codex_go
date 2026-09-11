@@ -274,9 +274,10 @@ func TestExecutedToolCallRecorderAttachesCellCompletenessLikeRust(t *testing.T) 
 	recorder := NewExecutedToolCallRecorder()
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "exec-call")
+	execInput := codeModeExecInputItem("exec-call")
 	execOutput := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "exec-call", Output: NewFunctionCallOutputPayload("running", nil)}
-	first, token := recorder.AttachPendingToPrompt([]any{execOutput})
-	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(first)[0])
+	first, token := recorder.AttachPendingToPrompt([]any{execInput, execOutput})
+	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(first)[1])
 	metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
 	if metadata["cell_id"] != "cell-1" {
 		t.Fatalf("cell_id = %#v, want cell-1", metadata["cell_id"])
@@ -287,13 +288,23 @@ func TestExecutedToolCallRecorderAttachesCellCompletenessLikeRust(t *testing.T) 
 	recorder.CommitAttachment(token)
 }
 
-func executedToolCallCompleteness(t *testing.T, recorder *ExecutedToolCallRecorder, output *ToolResponseItem) any {
+func codeModeExecInputItem(callID string) *model.AgentItem {
+	return &model.AgentItem{Type: "custom_tool_call", CallID: callID, Name: tool.CodeModeExecToolName, Arguments: `text("running")`}
+}
+
+func codeModeWaitInputItem(callID string, cellID string) *model.AgentItem {
+	return &model.AgentItem{Type: "function_call", CallID: callID, Name: "wait", Arguments: `{"cell_id":"` + cellID + `"}`}
+}
+
+// executedToolCallCompleteness attaches items (the output must be last) and
+// returns the last item's completeness marker.
+func executedToolCallCompleteness(t *testing.T, recorder *ExecutedToolCallRecorder, items ...any) any {
 	t.Helper()
-	attached, token := recorder.AttachPendingToPrompt([]any{output})
+	attached, token := recorder.AttachPendingToPrompt(items)
 	if token == nil {
 		t.Fatal("attachment token is nil")
 	}
-	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(attached)[0])
+	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(attached)[len(items)-1])
 	recorder.CommitAttachment(token)
 	metadata, ok := object["internal_chat_message_metadata_passthrough"].(map[string]any)
 	if !ok {
@@ -311,7 +322,8 @@ func TestExecutedToolCallRecorderWithholdsCompletenessForReusedOrigin(t *testing
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "exec-call")
 	reused := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "exec-call", Output: NewFunctionCallOutputPayload("running", nil)}
-	if got := executedToolCallCompleteness(t, recorder, reused); got != true {
+	execInput := codeModeExecInputItem("exec-call")
+	if got := executedToolCallCompleteness(t, recorder, execInput, reused); got != true {
 		t.Fatalf("first completeness = %#v, want true", got)
 	}
 
@@ -319,7 +331,7 @@ func TestExecutedToolCallRecorderWithholdsCompletenessForReusedOrigin(t *testing
 	// is revoked rather than presented as fresh evidence (Rust #44472).
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-2", "cell-1", "second"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "exec-call")
-	if got := executedToolCallCompleteness(t, recorder, reused); got != false {
+	if got := executedToolCallCompleteness(t, recorder, execInput, reused); got != false {
 		t.Fatalf("reused-origin completeness = %#v, want false", got)
 	}
 }
@@ -329,7 +341,7 @@ func TestExecutedToolCallRecorderWithholdsCompletenessForDuplicateOutput(t *test
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "out-1")
 	output := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "out-1", Output: NewFunctionCallOutputPayload("done", nil)}
-	attached, token := recorder.AttachPendingToPrompt([]any{output, output})
+	attached, token := recorder.AttachPendingToPrompt([]any{codeModeExecInputItem("out-1"), output, output})
 	if token == nil {
 		t.Fatal("attachment token is nil")
 	}
@@ -363,7 +375,7 @@ func TestExecutedToolCallRecorderWithholdsWaitCompletionAfterHistory(t *testing.
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "wait-out")
 	waitOutput := &ToolResponseItem{Type: "function_call_output", CallID: "wait-out", Output: NewFunctionCallOutputPayload("done", nil)}
-	if got := executedToolCallCompleteness(t, recorder, waitOutput); got != false {
+	if got := executedToolCallCompleteness(t, recorder, codeModeWaitInputItem("wait-out", "cell-1"), waitOutput); got != false {
 		t.Fatalf("wait completeness after history = %#v, want false", got)
 	}
 }
@@ -380,7 +392,7 @@ func TestExecutedToolCallRecorderAllowsFreshWaitCompletionOnNewThread(t *testing
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "wait-out")
 	waitOutput := &ToolResponseItem{Type: "function_call_output", CallID: "wait-out", Output: NewFunctionCallOutputPayload("done", nil)}
-	if got := executedToolCallCompleteness(t, recorder, waitOutput); got != true {
+	if got := executedToolCallCompleteness(t, recorder, codeModeWaitInputItem("wait-out", "cell-1"), waitOutput); got != true {
 		t.Fatalf("fresh wait completeness = %#v, want true", got)
 	}
 }
@@ -395,7 +407,72 @@ func TestExecutedToolCallRecorderWithholdsCompletenessForHistoricalOutputID(t *t
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "out-1")
 	output := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "out-1", Output: NewFunctionCallOutputPayload("done", nil)}
-	if got := executedToolCallCompleteness(t, recorder, output); got != false {
+	if got := executedToolCallCompleteness(t, recorder, codeModeExecInputItem("out-1"), output); got != false {
 		t.Fatalf("historical-ID completeness = %#v, want false", got)
+	}
+}
+
+func TestExecutedToolCallRecorderWithholdsCompletenessWithoutMatchingInput(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-1", "out-1")
+	output := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "out-1", Output: NewFunctionCallOutputPayload("done", nil)}
+	// No matching exec input is present, so the association is unproven.
+	if got := executedToolCallCompleteness(t, recorder, output); got != false {
+		t.Fatalf("missing-input completeness = %#v, want false", got)
+	}
+}
+
+func TestExecutedToolCallRecorderWithholdsCompletenessForMismatchedWaitCell(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-1", "wait-out")
+	waitOutput := &ToolResponseItem{Type: "function_call_output", CallID: "wait-out", Output: NewFunctionCallOutputPayload("done", nil)}
+	// The wait input references a different cell, so the association is ambiguous.
+	if got := executedToolCallCompleteness(t, recorder, codeModeWaitInputItem("wait-out", "other-cell"), waitOutput); got != false {
+		t.Fatalf("mismatched-wait completeness = %#v, want false", got)
+	}
+}
+
+func TestExecutedToolCallRecorderWithholdsCompletenessForNonExecCustomInput(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-1", "out-1")
+	output := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "out-1", Output: NewFunctionCallOutputPayload("done", nil)}
+	// A custom input that is not the Code Mode exec tool cannot own the cell.
+	input := &model.AgentItem{Type: "custom_tool_call", CallID: "out-1", Name: "other", Arguments: `{}`}
+	if got := executedToolCallCompleteness(t, recorder, input, output); got != false {
+		t.Fatalf("non-exec custom input completeness = %#v, want false", got)
+	}
+}
+
+func TestCodeModeInputMatchesOutput(t *testing.T) {
+	execOutput := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "exec-1", Output: NewFunctionCallOutputPayload("running", nil)}
+	waitOutput := &ToolResponseItem{Type: "function_call_output", CallID: "wait-1", Output: NewFunctionCallOutputPayload("done", nil)}
+	execInput := map[string]any{"type": "custom_tool_call", "call_id": "exec-1", "name": tool.CodeModeExecToolName}
+	waitInput := map[string]any{"type": "function_call", "call_id": "wait-1", "name": "wait", "arguments": `{"cell_id":"cell-1"}`}
+	cases := []struct {
+		name        string
+		input       any
+		output      any
+		callID      string
+		runtimeCell string
+		want        bool
+	}{
+		{"exec match", execInput, execOutput, "exec-1", "cell-1", true},
+		{"exec output call id mismatch", execInput, execOutput, "exec-2", "cell-1", false},
+		{"exec input wrong tool", map[string]any{"type": "custom_tool_call", "call_id": "exec-1", "name": "other"}, execOutput, "exec-1", "cell-1", false},
+		{"wait match", waitInput, waitOutput, "wait-1", "cell-1", true},
+		{"wait cell mismatch", waitInput, waitOutput, "wait-1", "cell-2", false},
+		{"wait input wrong name", map[string]any{"type": "function_call", "call_id": "wait-1", "name": "exec", "arguments": `{"cell_id":"cell-1"}`}, waitOutput, "wait-1", "cell-1", false},
+		{"output shape mismatch", waitInput, execOutput, "wait-1", "cell-1", false},
+		{"unsupported input", map[string]any{"type": "message", "role": "user"}, execOutput, "exec-1", "cell-1", false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := codeModeInputMatchesOutput(testCase.input, testCase.output, testCase.callID, testCase.runtimeCell); got != testCase.want {
+				t.Fatalf("codeModeInputMatchesOutput() = %v, want %v", got, testCase.want)
+			}
+		})
 	}
 }
