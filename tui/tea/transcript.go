@@ -295,7 +295,9 @@ func (t *TranscriptComponent) insertFinalMessageSeparatorIfNeeded(state *codextu
 	if width < 20 {
 		width = 20
 	}
-	cell := historycell.NewFinalMessageSeparator(nil, nil)
+	// Rust #43558: a live completion falls back to the local clock when no saved
+	// timestamp is available.
+	cell := historycell.NewFinalMessageSeparator(nil, nil).WithCompletedAt(time.Now())
 	state.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
 	t.needsFinalMessageSeparator = false
 }

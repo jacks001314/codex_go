@@ -1867,7 +1867,9 @@ func TestModelRendersCommandExecutionLifecycle(t *testing.T) {
 
 	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("message-1", "已获取本机网络信息。")})
 	view = model.View()
-	if !strings.Contains(view, strings.Repeat("─", 20)) {
+	// Rust #43558: the final-message cell shows dim completion metadata instead
+	// of a horizontal rule.
+	if !strings.Contains(view, "done ") {
 		t.Fatalf("assistant output after command should use the Rust final-message separator:\n%s", view)
 	}
 	if got := countRole(state.Messages, codextui.RoleHistory); got != 2 {
@@ -1905,7 +1907,7 @@ func TestModelCompactCommandActivityGroupsSuccessesAndPreservesTranscript(t *tes
 
 	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("message-1", "Done")})
 	view = model.View()
-	if !strings.Contains(view, strings.Repeat("─", 20)) {
+	if !strings.Contains(view, "done ") {
 		t.Fatalf("assistant output after compact group should use the final-message separator:\n%s", view)
 	}
 	if got := countRole(state.Messages, codextui.RoleHistory); got != 2 {

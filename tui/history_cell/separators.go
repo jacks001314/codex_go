@@ -3,6 +3,7 @@ package historycell
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"codex_go/tui"
 )
@@ -31,41 +32,74 @@ type RuntimeMetricsSummary struct {
 type FinalMessageSeparator struct {
 	ElapsedSeconds *int64
 	RuntimeMetrics *RuntimeMetricsSummary
+	// CompletedAt is the local completion time, when the turn reported one. Rust
+	// #43558 shows "done <time>" after the final answer; times use a twelve-hour
+	// clock, other local days add the date, and other years add the year.
+	CompletedAt *time.Time
+	// DisplayDate fixes "today" at construction so crossing midnight cannot
+	// invalidate cached heights.
+	DisplayDate time.Time
 }
 
 func NewFinalMessageSeparator(elapsedSeconds *int64, runtimeMetrics *RuntimeMetricsSummary) FinalMessageSeparator {
 	return FinalMessageSeparator{
 		ElapsedSeconds: cloneInt64PtrHistory(elapsedSeconds),
 		RuntimeMetrics: cloneRuntimeMetricsSummary(runtimeMetrics),
+		DisplayDate:    separatorDate(time.Now()),
 	}
+}
+
+// WithCompletedAt attaches the turn's local completion time (Rust #43558).
+func (c FinalMessageSeparator) WithCompletedAt(completedAt time.Time) FinalMessageSeparator {
+	c.CompletedAt = &completedAt
+	return c
+}
+
+// WithRuntimeMetrics attaches runtime metrics to the completion metadata.
+func (c FinalMessageSeparator) WithRuntimeMetrics(runtimeMetrics *RuntimeMetricsSummary) FinalMessageSeparator {
+	c.RuntimeMetrics = cloneRuntimeMetricsSummary(runtimeMetrics)
+	return c
+}
+
+// Label returns the joined completion metadata, or "" when there is none. The
+// separator occupies no transcript rows in that case.
+func (c FinalMessageSeparator) Label() string {
+	parts := c.labelParts()
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " \u00b7 ")
 }
 
 func (c FinalMessageSeparator) DisplayLines(width int) []string {
-	width = max(width, 1)
-	parts := c.labelParts()
-	if len(parts) == 0 {
-		return []string{strings.Repeat("\u2500", width)}
+	if width <= 0 {
+		return nil
 	}
-	label := "\u2500 " + strings.Join(parts, " \u2022 ") + " \u2500"
-	runes := []rune(label)
-	if len(runes) >= width {
-		return []string{string(runes[:width])}
+	label := c.Label()
+	if label == "" {
+		return nil
 	}
-	return []string{label + strings.Repeat("\u2500", width-len(runes))}
+	indent := ""
+	if width > 2 {
+		indent = "  "
+	}
+	return wrapSeparatorLabel(label, width, indent)
 }
 
 func (c FinalMessageSeparator) RawLines() []string {
-	parts := c.labelParts()
-	if len(parts) == 0 {
-		return nil
+	if label := c.Label(); label != "" {
+		return []string{label}
 	}
-	return []string{strings.Join(parts, " \u2022 ")}
+	return nil
 }
 
 func (c FinalMessageSeparator) labelParts() []string {
 	parts := []string{}
 	if c.ElapsedSeconds != nil && *c.ElapsedSeconds > 60 {
-		parts = append(parts, "Worked for "+formatElapsedCompact(*c.ElapsedSeconds))
+		parts = append(parts, "Worked for "+formatElapsedFull(*c.ElapsedSeconds))
+	}
+	if c.CompletedAt != nil {
+		parts = append(parts, "done "+formatCompletionTime(*c.CompletedAt, c.displayDate()))
 	}
 	if c.RuntimeMetrics != nil {
 		if label := RuntimeMetricsLabel(*c.RuntimeMetrics); label != "" {
@@ -73,6 +107,93 @@ func (c FinalMessageSeparator) labelParts() []string {
 		}
 	}
 	return parts
+}
+
+func (c FinalMessageSeparator) displayDate() time.Time {
+	if c.DisplayDate.IsZero() {
+		return separatorDate(time.Now())
+	}
+	return c.DisplayDate
+}
+
+func separatorDate(value time.Time) time.Time {
+	local := value.Local()
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
+}
+
+// formatCompletionTime mirrors Rust's timestamp formatting: twelve-hour clock,
+// with the date for other local days and the year for other years.
+func formatCompletionTime(completedAt time.Time, today time.Time) string {
+	local := completedAt.Local()
+	switch {
+	case sameSeparatorDate(local, today):
+		return local.Format("3:04 PM")
+	case local.Year() == today.Year():
+		return local.Format("Jan 2 at 3:04 PM")
+	default:
+		return local.Format("Jan 2, 2006 at 3:04 PM")
+	}
+}
+
+func sameSeparatorDate(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
+}
+
+// formatElapsedFull mirrors Rust's elapsed formatting: every nonzero unit down
+// to seconds ("1h 5m 3s", "5m 3s", "45s"). Callers only show it above 60s.
+func formatElapsedFull(seconds int64) string {
+	hours := seconds / 3600
+	minutes := (seconds % 3600) / 60
+	secs := seconds % 60
+	switch {
+	case hours > 0:
+		return fmt.Sprintf("%dh %dm %ds", hours, minutes, secs)
+	case minutes > 0:
+		return fmt.Sprintf("%dm %ds", minutes, secs)
+	default:
+		return fmt.Sprintf("%ds", secs)
+	}
+}
+
+// wrapSeparatorLabel word-wraps the label to width, applying the indent to
+// every line (Rust uses textwrap with initial/subsequent indents).
+func wrapSeparatorLabel(label string, width int, indent string) []string {
+	indentWidth := len([]rune(indent))
+	contentWidth := width - indentWidth
+	if contentWidth < 1 {
+		indent = ""
+		indentWidth = 0
+		contentWidth = width
+	}
+	words := strings.Fields(label)
+	if len(words) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, 1)
+	current := ""
+	currentWidth := 0
+	for _, word := range words {
+		wordWidth := len([]rune(word))
+		if current == "" {
+			current = word
+			currentWidth = wordWidth
+			continue
+		}
+		if currentWidth+1+wordWidth <= contentWidth {
+			current += " " + word
+			currentWidth += 1 + wordWidth
+			continue
+		}
+		lines = append(lines, indent+current)
+		current = word
+		currentWidth = wordWidth
+	}
+	lines = append(lines, indent+current)
+	// An individual word wider than the content width still occupies its own
+	// line; Rust's textwrap behaves the same way for unbreakable words.
+	return lines
 }
 
 func RuntimeMetricsLabel(summary RuntimeMetricsSummary) string {

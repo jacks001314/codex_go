@@ -3,6 +3,7 @@ package chatwidget
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	historycell "codex_go/tui/history_cell"
 )
@@ -321,6 +322,10 @@ func (s *TurnRuntimeState) OnTaskComplete(params TurnCompleteRuntimeParams) Turn
 				metrics = &copy
 			}
 			separator := historycell.NewFinalMessageSeparator(elapsed, metrics)
+			if !params.FromReplay {
+				// Rust #43558: live completions fall back to the local clock.
+				separator = separator.WithCompletedAt(time.Now())
+			}
 			s.FinalMessageSeparators = append(s.FinalMessageSeparators, separator)
 			s.addHistory(separator)
 			s.HistoryEvents = append(s.HistoryEvents, TurnRuntimeHistoryEvent{Kind: TurnRuntimeHistoryFinalMessageSeparator})

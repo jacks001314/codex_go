@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/tui"
 	"codex_go/utils"
@@ -346,11 +347,82 @@ func TestFinalMessageSeparatorHistoryCell(t *testing.T) {
 	}
 
 	empty := NewFinalMessageSeparator(nil, nil)
-	if got := empty.DisplayLines(8)[0]; got != "────────" {
-		t.Fatalf("empty separator = %q", got)
+	if got := empty.DisplayLines(8); len(got) != 0 {
+		t.Fatalf("empty separator displayed %#v, want no rows", got)
 	}
 	if raw := empty.RawLines(); len(raw) != 0 {
 		t.Fatalf("empty separator raw = %#v", raw)
+	}
+}
+
+func TestFinalMessageSeparatorCompletionTimestampLikeRust(t *testing.T) {
+	today := time.Date(2026, 9, 12, 0, 0, 0, 0, time.Local)
+	cases := []struct {
+		name        string
+		completedAt time.Time
+		want        string
+	}{
+		{
+			name:        "same day uses twelve hour clock",
+			completedAt: time.Date(2026, 9, 12, 14, 32, 0, 0, time.Local),
+			want:        "done 2:32 PM",
+		},
+		{
+			name:        "other day adds the date",
+			completedAt: time.Date(2026, 9, 10, 9, 5, 0, 0, time.Local),
+			want:        "done Sep 10 at 9:05 AM",
+		},
+		{
+			name:        "other year adds the year",
+			completedAt: time.Date(2025, 12, 31, 23, 5, 0, 0, time.Local),
+			want:        "done Dec 31, 2025 at 11:05 PM",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cell := NewFinalMessageSeparator(nil, nil).WithCompletedAt(tc.completedAt)
+			cell.DisplayDate = today
+			lines := cell.DisplayLines(80)
+			if len(lines) != 1 || !strings.Contains(lines[0], tc.want) {
+				t.Fatalf("display = %#v, want %q", lines, tc.want)
+			}
+			// Short turns still show their timestamp without a duration.
+			if strings.Contains(lines[0], "Worked for") {
+				t.Fatalf("short completion showed a duration: %#v", lines)
+			}
+			// The raw line (copy/export path) is unindented and unwrapped.
+			if raw := strings.Join(cell.RawLines(), "\n"); !strings.Contains(raw, tc.want) || strings.HasPrefix(raw, "  ") {
+				t.Fatalf("raw = %q, want %q", raw, tc.want)
+			}
+		})
+	}
+}
+
+func TestFinalMessageSeparatorWrapsMetadataOnNarrowTerminals(t *testing.T) {
+	elapsed := int64(3700)
+	cell := NewFinalMessageSeparator(&elapsed, &RuntimeMetricsSummary{
+		ToolCalls: RuntimeMetricCountDuration{Count: 3, DurationMS: 4200},
+	})
+	cell.DisplayDate = time.Date(2026, 9, 12, 0, 0, 0, 0, time.Local)
+	cell = cell.WithCompletedAt(time.Date(2026, 9, 12, 14, 32, 0, 0, time.Local))
+
+	lines := cell.DisplayLines(28)
+	if len(lines) < 2 {
+		t.Fatalf("narrow separator did not wrap: %#v", lines)
+	}
+	combined := strings.Join(strings.Fields(strings.Join(lines, " ")), " ")
+	for _, want := range []string{"Worked for 1h 1m 40s", "done 2:32 PM", "Local tools: 3 calls (4.2s)"} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("wrapped separator missing %q: %#v", want, lines)
+		}
+	}
+	for _, line := range lines {
+		if len([]rune(line)) > 28 {
+			t.Fatalf("separator line exceeds width: %q", line)
+		}
+		if !strings.HasPrefix(line, "  ") {
+			t.Fatalf("separator line missing indent: %q", line)
+		}
 	}
 }
 
