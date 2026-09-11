@@ -20,6 +20,36 @@ import (
 	"codex_go/auth"
 )
 
+func TestExecStrictConfigRejectsUnknownConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("foo = \"bar\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	err := Run(context.Background(), []string{
+		"exec",
+		"--strict-config",
+		"hello",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "unknown configuration field `foo`") {
+		t.Fatalf("exec strict config error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), nil, 0o600); err != nil {
+		t.Fatalf("clear config returned error: %v", err)
+	}
+	err = Run(context.Background(), []string{
+		"--strict-config",
+		"-c", "foo=bar",
+		"exec",
+		"hello",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "unknown configuration field `foo`") {
+		t.Fatalf("exec root strict override error = %v", err)
+	}
+}
+
 func TestCloudExecAndList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

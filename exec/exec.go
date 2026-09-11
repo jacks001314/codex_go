@@ -144,13 +144,15 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err := validateExecWorktreeRequest(req); err != nil {
 		return nil, err
 	}
-	cfg, err := config.LoadEffective(
-		r.CodexHome,
-		mergedOverrides(req.Root.ConfigOverrides, req.Exec.ConfigOverrides),
-		req.Root.EnableFeatures,
-		req.Root.DisableFeatures,
-		requestCWD(req),
-	)
+	// Rust #42993 re-targeted the strict-config coverage to `codex exec`, which
+	// honors --strict-config from either the root or the exec subcommand.
+	cfg, err := config.LoadEffectiveWithOptions(r.CodexHome, &config.EffectiveOptions{
+		RawOverrides:    mergedOverrides(req.Root.ConfigOverrides, req.Exec.ConfigOverrides),
+		EnableFeatures:  req.Root.EnableFeatures,
+		DisableFeatures: req.Root.DisableFeatures,
+		CWD:             requestCWD(req),
+		StrictConfig:    req.Root.StrictConfig || req.Exec.StrictConfig,
+	})
 	if err != nil {
 		return nil, err
 	}
