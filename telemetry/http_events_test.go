@@ -123,7 +123,7 @@ func TestAnalyticsEventsClientPostsSkillInvocationEventLikeRust(t *testing.T) {
 		if err := json.Unmarshal(payload.Events[0], &event); err != nil {
 			t.Fatalf("decode event error = %v", err)
 		}
-		if event.EventType != SkillInvocationEventType || event.SkillID != "skill-sha1" || event.SkillName != "doc" || event.EventParams.PluginID == nil || *event.EventParams.PluginID != "sample@openai-curated-remote" || event.EventParams.RemotePluginID == nil || *event.EventParams.RemotePluginID != "plugins~Plugin_sample" || event.EventParams.RepoURL != nil {
+		if event.EventType != SkillInvocationEventType || event.SkillID != "skill-sha1" || event.SkillName != "doc" || event.EventParams.PluginID == nil || *event.EventParams.PluginID != "sample@openai-curated-remote" || event.EventParams.RemotePluginID == nil || *event.EventParams.RemotePluginID != "plugins~Plugin_sample" {
 			t.Fatalf("event = %#v", event)
 		}
 	case <-time.After(2 * time.Second):

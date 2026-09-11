@@ -15178,9 +15178,6 @@ func TestResourceBackedSkillInvocationTrackingLikeRust(t *testing.T) {
 		if stringPtrValue(event.EventParams.InvokeType) != telemetry.SkillInvocationTypeImplicit {
 			t.Fatalf("invoke type = %q, want implicit", stringPtrValue(event.EventParams.InvokeType))
 		}
-		if stringPtrValue(event.EventParams.RepoURL) != "" {
-			t.Fatalf("repo url = %q, want empty for resource-backed skill", stringPtrValue(event.EventParams.RepoURL))
-		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for resource-backed skill invocation analytics")
 	}

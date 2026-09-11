@@ -8868,7 +8868,6 @@ func (r *RuntimeRouter) trackSkillInvocationEvent(ctx context.Context, threadID 
 			SkillScope:      stringPtrIfNotEmpty(scope),
 			PluginID:        stringPtrIfNotEmpty(skill.PluginID),
 			RemotePluginID:  stringPtrIfNotEmpty(skill.RemotePluginID),
-			RepoURL:         stringPtrIfNotEmpty(repoURL),
 			ThreadID:        stringPtrIfNotEmpty(threadID),
 			TurnID:          stringPtrIfNotEmpty(turnID),
 			InvokeType:      stringPtrIfNotEmpty(invokeType),
