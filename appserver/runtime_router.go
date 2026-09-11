@@ -9281,6 +9281,12 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 		}
 	}
 	clientTags = applyFeedbackTurnMetadata(clientTags, feedbackMetadata, feedbackMetadataFound)
+	// Rust #44325: report the effective rollout-derived prompt hash alongside the
+	// thread, using the same `prompt_hash` tag that is uploaded.
+	var promptHash *string
+	if value, ok := clientTags["prompt_hash"]; ok && strings.TrimSpace(value) != "" {
+		promptHash = &value
+	}
 	var logsOverride []byte
 	var rolloutPaths []string
 	if params.IncludeLogs {
@@ -9332,7 +9338,7 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 		LogsOverride:        logsOverride,
 		ExtraAttachmentPath: FeedbackAttachmentPaths(rolloutPaths, nil, threadID, nil, params.ExtraLogFiles),
 	})
-	return &FeedbackUploadResponse{ThreadID: threadID}, nil
+	return &FeedbackUploadResponse{ThreadID: threadID, PromptHash: promptHash}, nil
 }
 
 func (r *RuntimeRouter) handleConfigRead(request *Request) (*config.ConfigReadResponse, error) {

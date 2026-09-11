@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"codex_go/session"
 )
 
 func TestFeedbackUploadParamsValidateRequiresClassification(t *testing.T) {
@@ -220,5 +223,67 @@ func TestRingBufferKeepsTail(t *testing.T) {
 	buffer.Write([]byte("1234567"))
 	if got := string(buffer.FeedbackSnapshot()); got != "34567" {
 		t.Fatalf("FeedbackSnapshot() after large write = %q, want 34567", got)
+	}
+}
+
+// Mirrors Rust #44325: the upload response carries a nullable promptHash and
+// serializes it as null when there is no prompt metadata.
+func TestFeedbackUploadResponseJSONMatchesRustSchema(t *testing.T) {
+	data, err := json.Marshal(&FeedbackUploadResponse{ThreadID: "thread-1"})
+	if err != nil {
+		t.Fatalf("Marshal(nil hash) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if value, ok := payload["promptHash"]; !ok || value != nil {
+		t.Fatalf("promptHash key = %#v present=%t in %s", value, ok, data)
+	}
+
+	hash := "9ae77301cc2a30e729c28661b7a0f9490c80a72e7d23277e7e74f0ac81779541"
+	data, err = json.Marshal(&FeedbackUploadResponse{ThreadID: "thread-1", PromptHash: &hash})
+	if err != nil {
+		t.Fatalf("Marshal(hash) error = %v", err)
+	}
+	if !strings.Contains(string(data), `"promptHash":"`+hash+`"`) {
+		t.Fatalf("response JSON = %s", data)
+	}
+}
+
+// Mirrors Rust #44325: the response reports the rollout-derived prompt hash that
+// is uploaded as the `prompt_hash` tag.
+func TestFeedbackUploadReturnsRolloutPromptHashLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	threadRouter := NewRouter(store)
+	now := time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC)
+	record := &session.Record{ID: "thread-hash", SessionID: "thread-hash", CreatedAt: now, UpdatedAt: now, Metadata: session.Metadata{CWD: home, ModelProvider: "openai"}}
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := threadRouter.createThreadRollout(record, record.CreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	contents := strings.Join([]string{
+		`{"timestamp":"2026-08-01T08:00:00Z","type":"session_meta","payload":{"id":"thread-hash","base_instructions":"actual  developer\r\nprompt\t"}}`,
+		`{"timestamp":"2026-08-01T08:00:00Z","type":"turn_context","payload":{"turn_id":"turn-1","model":"reported-model","effort":"high"}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(threadRouter.threadRolloutPath(record), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, Feedback: &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)}})
+	response := router.Handle(requestWithParams(t, IntID(1), MethodFeedbackUpload, FeedbackUploadParams{
+		Classification: "bug", ThreadID: stringPointerAppserver("thread-hash"),
+	}))
+	if response.Error != nil {
+		t.Fatalf("feedback upload error = %+v", response.Error)
+	}
+	upload, ok := response.Result.(*FeedbackUploadResponse)
+	if !ok || upload.PromptHash == nil {
+		t.Fatalf("feedback response = %#v", response.Result)
+	}
+	if want := "9ae77301cc2a30e729c28661b7a0f9490c80a72e7d23277e7e74f0ac81779541"; *upload.PromptHash != want {
+		t.Fatalf("prompt hash = %q, want %q", *upload.PromptHash, want)
 	}
 }

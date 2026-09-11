@@ -56,6 +56,11 @@ func (p *FeedbackUploadParams) Validate() error {
 
 type FeedbackUploadResponse struct {
 	ThreadID string `json:"threadId"`
+	// PromptHash is the whitespace-normalized SHA-256 of the session base
+	// instructions, matching the uploaded `prompt_hash` tag. It does not include
+	// later developer messages and is null when the reported rollout has no
+	// prompt metadata (Rust #44325).
+	PromptHash *string `json:"promptHash"`
 }
 
 type FeedbackDiagnostic struct {
