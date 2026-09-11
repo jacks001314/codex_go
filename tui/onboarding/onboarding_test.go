@@ -62,8 +62,8 @@ func TestRestrictedTrustDirectoryPrompt(t *testing.T) {
 	prompt.ShowWindowsCreateSandboxHint = true
 	lines := strings.Join(prompt.RenderLines(), "\n")
 	for _, want := range []string{
-		"This folder is marked untrusted.",
-		"Opening it will not change its trust setting.",
+		"Config, hooks, and exec policies from untrusted folders stay disabled.",
+		"Opening will not change saved trust.",
 		"> Open restricted",
 		"  Quit",
 		"Press Enter to continue; esc to quit",
@@ -82,6 +82,29 @@ func TestRestrictedTrustDirectoryPrompt(t *testing.T) {
 	prompt.Confirm()
 	if !prompt.Trusted || prompt.Selection != TrustDirectorySelectionTrust {
 		t.Fatalf("restricted open selection = %#v", prompt)
+	}
+}
+
+func TestRestrictedTrustDirectoryPromptForExistingTask(t *testing.T) {
+	prompt := NewTrustDirectoryPrompt("/workspace/project", "/workspace/project")
+	prompt.Restricted = true
+	prompt.ExistingTask = true
+	prompt.Cancel = TrustCancelAgentsOverview
+	lines := strings.Join(prompt.RenderLines(), "\n")
+	for _, want := range []string{
+		"This existing task may retain settings and history",
+		"To use restricted settings, start a new task.",
+		"The folder's trust setting will not change.",
+		"> Open existing task",
+		"  Back to Agent Command Center",
+		"Press Enter to continue; esc to go back",
+	} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("existing-task prompt missing %q:\n%s", want, lines)
+		}
+	}
+	if strings.Contains(lines, "Open restricted") || strings.Contains(lines, "esc to quit") {
+		t.Fatalf("existing-task prompt used the new-task wording:\n%s", lines)
 	}
 }
 
