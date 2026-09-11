@@ -1869,6 +1869,8 @@ func TestModelRendersCommandExecutionLifecycle(t *testing.T) {
 	view = model.View()
 	// Rust #43558: the final-message cell shows dim completion metadata instead
 	// of a horizontal rule.
+	model.Update(TurnCompletedMsg{ThreadID: "thread-1"})
+	view = model.View()
 	if !strings.Contains(view, "done ") {
 		t.Fatalf("assistant output after command should use the Rust final-message separator:\n%s", view)
 	}
@@ -1906,6 +1908,7 @@ func TestModelCompactCommandActivityGroupsSuccessesAndPreservesTranscript(t *tes
 	}
 
 	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("message-1", "Done")})
+	model.Update(TurnCompletedMsg{ThreadID: "thread-1"})
 	view = model.View()
 	if !strings.Contains(view, "done ") {
 		t.Fatalf("assistant output after compact group should use the final-message separator:\n%s", view)

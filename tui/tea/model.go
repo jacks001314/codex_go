@@ -2840,6 +2840,9 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	if strings.TrimSpace(message.AssistantMessage) != "" {
 		m.mergeAssistantFinal(message.AssistantMessage)
 	}
+	// Rust #43558: a successful turn shows its completion metadata after the
+	// final answer, including plain conversational answers.
+	m.Transcript.appendCompletionFooter(m.State, m.width, time.Now())
 	m.setStatus("idle")
 	m.Transcript.lastTurnError = ""
 	m.notice = ""

@@ -234,7 +234,6 @@ func (t *TranscriptComponent) appendAssistantDelta(state *codextui.State, itemID
 	if t == nil || state == nil || delta == "" {
 		return
 	}
-	t.insertFinalMessageSeparatorIfNeeded(state, width)
 	itemID = strings.TrimSpace(itemID)
 	if itemID != "" && t.activeAssistantDeltaItemID != "" && itemID != t.activeAssistantDeltaItemID {
 		state.Messages = append(state.Messages, codextui.Message{Role: codextui.RoleAssistant, Text: delta})
@@ -253,9 +252,6 @@ func (t *TranscriptComponent) appendAssistantDelta(state *codextui.State, itemID
 func (t *TranscriptComponent) mergeAssistantFinal(state *codextui.State, text string, width int) {
 	if t == nil || state == nil {
 		return
-	}
-	if strings.TrimSpace(text) != "" {
-		t.insertFinalMessageSeparatorIfNeeded(state, width)
 	}
 	state.Messages = mergeAssistantFinalToMessages(state.Messages, text)
 	state.BumpMessagesRevision()
@@ -300,6 +296,20 @@ func (t *TranscriptComponent) insertFinalMessageSeparatorIfNeeded(state *codextu
 	cell := historycell.NewFinalMessageSeparator(nil, nil).WithCompletedAt(time.Now())
 	state.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
 	t.needsFinalMessageSeparator = false
+}
+
+// appendCompletionFooter adds the turn's completion metadata after its final
+// answer (Rust #43558). The footer is emitted once per completed turn; a live
+// completion falls back to the local clock when no saved timestamp exists.
+func (t *TranscriptComponent) appendCompletionFooter(state *codextui.State, width int, completedAt time.Time) {
+	if t == nil || state == nil {
+		return
+	}
+	if width < 20 {
+		width = 20
+	}
+	cell := historycell.NewFinalMessageSeparator(nil, nil).WithCompletedAt(completedAt)
+	state.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
 }
 
 // appendAssistantDeltaToMessages is a helper for appending delta text.
