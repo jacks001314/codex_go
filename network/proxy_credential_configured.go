@@ -8,6 +8,7 @@ package network
 import (
 	"encoding/base64"
 	"net/textproto"
+	"regexp"
 	"strings"
 )
 
@@ -57,6 +58,12 @@ func ConfiguredCredentialProvider(id string, config CredentialProviderConfig) *P
 	}
 	if config.URLPrefixFromEnv != nil {
 		provider.DestinationEnvKeys = []string{*config.URLPrefixFromEnv}
+	}
+	provider.Patterns = append([]string(nil), config.Patterns...)
+	for _, pattern := range config.Patterns {
+		if matcher, err := regexp.Compile(pattern); err == nil {
+			provider.embeddedMatchers = append(provider.embeddedMatchers, matcher)
+		}
 	}
 	provider.Sources = []ProxyCredentialSource{{
 		EnvVars:     append([]string(nil), config.Env...),

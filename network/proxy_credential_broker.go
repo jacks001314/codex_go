@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/textproto"
 	"os"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -44,6 +46,10 @@ type ProxyCredentialProvider struct {
 	// DestinationEnvKeys holds environment variables that contribute a
 	// destination at runtime (configured url_prefix_from_env, #44068).
 	DestinationEnvKeys []string
+	// Patterns are the configured credential patterns used for embedded alias
+	// discovery (#44066). Built-in providers leave this nil.
+	Patterns           []string
+	embeddedMatchers   []*regexp.Regexp
 	DummyValue         func(string) string
 	RequestHeader      func(map[string][]string) (string, bool)
 	RequestHeaderValue func(string) (string, bool)
@@ -109,7 +115,104 @@ func (b *ProxyCredentialBroker) VirtualizeChildEnv(env map[string]string) {
 			}
 		}
 	}
+	b.virtualizeEmbeddedCredentials(env, resolvedEnv)
 	b.updateBrokeredCredentialsMarker(env)
+}
+
+// virtualizeEmbeddedCredentials mirrors Rust #44066's alias discovery for
+// configured providers: a credential-shaped token embedded in any child
+// environment value (not just the canonical variable) is replaced with a
+// matching dummy and registered for destination-scoped substitution. Only
+// complete tokens of at least MIN_EMBEDDED_CREDENTIAL_LENGTH bytes are
+// discovered, and already-generated dummies are never re-registered.
+func (b *ProxyCredentialBroker) virtualizeEmbeddedCredentials(env map[string]string, resolvedEnv map[string]string) {
+	for _, provider := range b.providers {
+		if provider == nil || len(provider.embeddedMatchers) == 0 || len(provider.Sources) == 0 {
+			continue
+		}
+		hostBinding, ok := provider.Sources[0].HostBinding(resolvedEnv)
+		if !ok {
+			continue
+		}
+		for key, value := range env {
+			if value == "" || b.isDummyValue(value) {
+				continue
+			}
+			rewritten, changed := b.virtualizeEmbeddedValue(key, value, provider, hostBinding)
+			if changed {
+				env[key] = rewritten
+			}
+		}
+	}
+}
+
+func (b *ProxyCredentialBroker) virtualizeEmbeddedValue(key string, value string, provider *ProxyCredentialProvider, hostBinding ProxyCredentialHostBinding) (string, bool) {
+	type match struct {
+		start int
+		end   int
+	}
+	matches := make([]match, 0)
+	for _, matcher := range provider.embeddedMatchers {
+		for _, indices := range matcher.FindAllStringIndex(value, -1) {
+			start, end := indices[0], indices[1]
+			if end-start < minEmbeddedCredentialLength {
+				continue
+			}
+			// A complete token: the following byte must not continue the token.
+			if end < len(value) && isCredentialTokenByte(value[end]) {
+				continue
+			}
+			if start > 0 && isCredentialTokenByte(value[start-1]) {
+				continue
+			}
+			realValue := value[start:end]
+			if b.isDummyValue(realValue) {
+				continue
+			}
+			matches = append(matches, match{start: start, end: end})
+		}
+	}
+	if len(matches) == 0 {
+		return value, false
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].start != matches[j].start {
+			return matches[i].start < matches[j].start
+		}
+		return matches[i].end > matches[j].end
+	})
+	var builder strings.Builder
+	changed := false
+	last := 0
+	for _, matched := range matches {
+		if matched.start < last {
+			continue
+		}
+		realValue := value[matched.start:matched.end]
+		dummy := b.register(key, provider, hostBinding, realValue)
+		if dummy == "" || dummy == realValue {
+			continue
+		}
+		builder.WriteString(value[last:matched.start])
+		builder.WriteString(dummy)
+		last = matched.end
+		changed = true
+	}
+	if !changed {
+		return value, false
+	}
+	builder.WriteString(value[last:])
+	return builder.String(), true
+}
+
+// minEmbeddedCredentialLength mirrors Rust MIN_EMBEDDED_CREDENTIAL_LENGTH.
+const minEmbeddedCredentialLength = 16
+
+func isCredentialTokenByte(value byte) bool {
+	return value >= '0' && value <= '9' ||
+		value >= 'A' && value <= 'Z' ||
+		value >= 'a' && value <= 'z' ||
+		value == '_' || value == '-'
 }
 
 func (b *ProxyCredentialBroker) HostRequiresMITM(host string) bool {
