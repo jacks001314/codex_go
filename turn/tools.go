@@ -33,10 +33,14 @@ type ToolRegistryOptions struct {
 	UnifiedExec  *tool.UnifiedExecManager
 	CodexVersion string
 
-	MCPService                *mcp.MCPService
-	MCPTools                  []mcp.RuntimeToolInfo
-	MCPConnectors             []mcp.RuntimeConnector
-	MCPExposure               tool.Exposure
+	MCPService    *mcp.MCPService
+	MCPTools      []mcp.RuntimeToolInfo
+	MCPConnectors []mcp.RuntimeConnector
+	MCPExposure   tool.Exposure
+	// MCPAuthElicitation enables the Codex Apps connector URL elicitation flow
+	// for this turn (Rust maybe_request_codex_apps_auth_elicitation); the caller
+	// gates it on the auth_elicitation feature and the approval policy.
+	MCPAuthElicitation        *mcp.AuthElicitationOptions
 	OrchestratorSkillsEnabled *bool
 	SkillProviders            *skillprovider.Registry
 	OpenAIFileRewriter        *mcp.OpenAIFileRewriter
@@ -523,7 +527,9 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			OpenAIFileInputOptionalFields:     info.OpenAIFileInputOptionalFields,
 			AgentPlugin:                       info.AgentPlugin,
 			ConnectorID:                       info.ConnectorID,
+			ConnectorName:                     info.ConnectorName,
 			Model:                             options.Model,
+			AuthElicitation:                   options.MCPAuthElicitation,
 			ConfirmationPolicies:              mcpActorConfirmationPolicies(options.ModelConfirmationPolicies),
 			SuppressActorConfirmationPolicies: options.SuppressActorConfirmationPolicies,
 		})

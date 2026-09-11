@@ -59,6 +59,7 @@ type ToolExecutorOptions struct {
 	ToolInfo                      *MCPToolInfo
 	ToolName                      tool.ToolName
 	ConnectorID                   string
+	ConnectorName                 string
 	Model                         string
 	Parallel                      bool
 	ThreadID                      string
@@ -79,6 +80,20 @@ type ToolExecutorOptions struct {
 	// SuppressActorConfirmationPolicies omits the confirmation-policies metadata
 	// entirely (Guardian review sessions), mirroring Rust's basic-session gate.
 	SuppressActorConfirmationPolicies bool
+	// AuthElicitation enables the Codex Apps connector URL elicitation flow for
+	// this turn (Rust maybe_request_codex_apps_auth_elicitation). The caller
+	// gates it on the auth_elicitation feature and the approval policy.
+	AuthElicitation *AuthElicitationOptions
+}
+
+// AuthElicitationOptions carries the turn-scoped hooks the Codex Apps auth
+// elicitation flow needs. Request asks the client to complete a URL
+// elicitation, RefreshCodexApps re-lists the Codex Apps catalog after the user
+// accepts, and InstallURL resolves the connector install URL.
+type AuthElicitationOptions struct {
+	Request          func(ctx context.Context, request *MCPElicitationRequest) (*MCPElicitationResponse, error)
+	RefreshCodexApps func(ctx context.Context) error
+	InstallURL       func(connectorName string, connectorID string) string
 }
 
 type ToolExecutor struct {
@@ -88,6 +103,7 @@ type ToolExecutor struct {
 	toolInfo                      MCPToolInfo
 	toolName                      tool.ToolName
 	connectorID                   string
+	connectorName                 string
 	model                         string
 	parallel                      bool
 	readOnlyHint                  *bool
@@ -100,6 +116,7 @@ type ToolExecutor struct {
 	agentPlugin                   bool
 	confirmationPolicies          *ActorConfirmationPolicies
 	suppressActorPolicies         bool
+	authElicitation               *AuthElicitationOptions
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -127,12 +144,14 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
 	executor.binding = options.Binding
 	executor.connectorID = strings.TrimSpace(options.ConnectorID)
+	executor.connectorName = strings.TrimSpace(options.ConnectorName)
 	executor.model = strings.TrimSpace(options.Model)
 	executor.openAIFileRewriter = options.OpenAIFileRewriter
 	executor.openAIFileInputOptionalFields = cloneOpenAIFileOptionalFields(options.OpenAIFileInputOptionalFields)
 	executor.agentPlugin = options.AgentPlugin
 	executor.confirmationPolicies = options.ConfirmationPolicies
 	executor.suppressActorPolicies = options.SuppressActorConfirmationPolicies
+	executor.authElicitation = options.AuthElicitation
 	return executor
 }
 
@@ -236,6 +255,10 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		}
 		return nil, err
 	}
+	// Rust maybe_request_codex_apps_auth_elicitation: a Codex Apps tool call that
+	// failed because the connector needs authentication can prompt the client to
+	// authorize it; on acceptance the model receives a completed result to retry.
+	response = e.maybeRequestCodexAppsAuthElicitation(ctx, invocation.CallID, response)
 	// Rust #41421: carry the effective per-tool output budget so tool output,
 	// post-tool hook responses, and resumed sessions share the same truncation
 	// limit. Resolve the configured per-tool limit and truncate the response
@@ -262,6 +285,57 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		Data:       data,
 		LogPreview: mcpLogPreview(body),
 	}, nil
+}
+
+// maybeRequestCodexAppsAuthElicitation mirrors Rust's
+// maybe_request_codex_apps_auth_elicitation: for a Codex Apps tool call whose
+// result carries a connector auth failure, ask the client to complete the
+// connector's URL elicitation and, when the user accepts, refresh the Codex Apps
+// catalog and return a completed result telling the model to retry.
+func (e *ToolExecutor) maybeRequestCodexAppsAuthElicitation(ctx context.Context, callID string, result *MCPToolCallResponse) *MCPToolCallResponse {
+	if e == nil || e.authElicitation == nil || result == nil {
+		return result
+	}
+	if e.resolvedServerName() != RuntimeCodexAppsMCPServerName {
+		return result
+	}
+	connectorID := strings.TrimSpace(e.connectorID)
+	if connectorID == "" {
+		return result
+	}
+	connectorName := strings.TrimSpace(e.connectorName)
+	if connectorName == "" {
+		connectorName = connectorID
+	}
+	installURL := ""
+	if e.authElicitation.InstallURL != nil {
+		installURL = e.authElicitation.InstallURL(connectorName, connectorID)
+	}
+	plan := BuildAuthElicitationPlan(callID, result, connectorID, connectorName, installURL)
+	if plan == nil || plan.Elicitation == nil {
+		return result
+	}
+	if e.authElicitation.Request == nil {
+		return result
+	}
+	elicitationRequest := &MCPElicitationRequest{
+		ServerName:    RuntimeCodexAppsMCPServerName,
+		ThreadID:      e.threadID,
+		TurnID:        e.turnID,
+		Method:        "elicitation/create",
+		Message:       plan.Elicitation.Message,
+		URL:           plan.Elicitation.URL,
+		ElicitationID: plan.Elicitation.ElicitationID,
+		Meta:          plan.Elicitation.Meta,
+	}
+	response, err := e.authElicitation.Request(ctx, elicitationRequest)
+	if err != nil || response == nil || response.Action != MCPElicitationActionAccept {
+		return result
+	}
+	if e.authElicitation.RefreshCodexApps != nil {
+		_ = e.authElicitation.RefreshCodexApps(ctx)
+	}
+	return AuthElicitationCompletedResult(plan.AuthFailure, result.Meta)
 }
 
 // mcpAuthenticationChallengeToolOutput converts a 401 Unauthorized MCP

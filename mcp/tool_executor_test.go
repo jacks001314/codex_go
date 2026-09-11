@@ -515,3 +515,108 @@ func TestMCPToolContextClassifiesConnectorAndPluginLikeRust(t *testing.T) {
 		t.Fatalf("plugin McpTool.Source = %q, want plugin", pre2.McpTool.Source)
 	}
 }
+
+// TestToolExecutorRequestsCodexAppsAuthElicitationLikeRust covers Rust
+// maybe_request_codex_apps_auth_elicitation: a Codex Apps auth failure prompts
+// the client with the connector URL elicitation and, on acceptance, the model
+// receives a completed result after the catalog refresh.
+func TestToolExecutorRequestsCodexAppsAuthElicitationLikeRust(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:    RuntimeCodexAppsMCPServerName,
+		ConnectorID:   "connector_calendar",
+		ConnectorName: "Google Calendar",
+		ThreadID:      "thread-1",
+		TurnID:        "turn-1",
+	})
+	var requests []*MCPElicitationRequest
+	refreshed := false
+	executor.authElicitation = &AuthElicitationOptions{
+		Request: func(_ context.Context, request *MCPElicitationRequest) (*MCPElicitationResponse, error) {
+			requests = append(requests, request)
+			return &MCPElicitationResponse{Action: MCPElicitationActionAccept}, nil
+		},
+		RefreshCodexApps: func(context.Context) error {
+			refreshed = true
+			return nil
+		},
+		InstallURL: func(name string, connectorID string) string {
+			return "https://chatgpt.com/apps/" + name + "/" + connectorID
+		},
+	}
+	result := authFailureResult()
+	got := executor.maybeRequestCodexAppsAuthElicitation(context.Background(), "call-1", result)
+	if len(requests) != 1 {
+		t.Fatalf("elicitation requests = %d, want 1", len(requests))
+	}
+	request := requests[0]
+	if request.ServerName != RuntimeCodexAppsMCPServerName || request.Method != "elicitation/create" {
+		t.Fatalf("request identity = %#v", request)
+	}
+	if request.URL != "https://chatgpt.com/apps/Google Calendar/connector_calendar" {
+		t.Fatalf("request url = %q", request.URL)
+	}
+	if request.ElicitationID != "codex_apps_auth_call-1" || request.ThreadID != "thread-1" || request.TurnID != "turn-1" {
+		t.Fatalf("request ids = %#v", request)
+	}
+	if !refreshed {
+		t.Fatal("catalog was not refreshed after acceptance")
+	}
+	if got == nil || got == result || got.IsError == nil || !*got.IsError {
+		t.Fatalf("completed result = %#v", got)
+	}
+	if !strings.Contains(MCPToolResponseText(got), "Google Calendar") {
+		t.Fatalf("completed result text = %q", MCPToolResponseText(got))
+	}
+	if got.Meta == nil {
+		t.Fatal("completed result dropped the original meta")
+	}
+}
+
+func TestToolExecutorLeavesResultWhenAuthElicitationIsDeclined(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:    RuntimeCodexAppsMCPServerName,
+		ConnectorID:   "connector_calendar",
+		ConnectorName: "Google Calendar",
+	})
+	refreshed := false
+	executor.authElicitation = &AuthElicitationOptions{
+		Request: func(context.Context, *MCPElicitationRequest) (*MCPElicitationResponse, error) {
+			return &MCPElicitationResponse{Action: MCPElicitationActionDecline}, nil
+		},
+		RefreshCodexApps: func(context.Context) error {
+			refreshed = true
+			return nil
+		},
+		InstallURL: func(string, string) string { return "https://example.com/install" },
+	}
+	result := authFailureResult()
+	if got := executor.maybeRequestCodexAppsAuthElicitation(context.Background(), "call-1", result); got != result {
+		t.Fatalf("declined elicitation changed the result: %#v", got)
+	}
+	if refreshed {
+		t.Fatal("declined elicitation must not refresh the catalog")
+	}
+}
+
+func TestToolExecutorSkipsAuthElicitationOutsideCodexApps(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:    "memory",
+		ConnectorID:   "connector_calendar",
+		ConnectorName: "Google Calendar",
+	})
+	requested := false
+	executor.authElicitation = &AuthElicitationOptions{
+		Request: func(context.Context, *MCPElicitationRequest) (*MCPElicitationResponse, error) {
+			requested = true
+			return &MCPElicitationResponse{Action: MCPElicitationActionAccept}, nil
+		},
+		InstallURL: func(string, string) string { return "https://example.com/install" },
+	}
+	result := authFailureResult()
+	if got := executor.maybeRequestCodexAppsAuthElicitation(context.Background(), "call-1", result); got != result {
+		t.Fatalf("non-Codex-Apps result changed: %#v", got)
+	}
+	if requested {
+		t.Fatal("non-Codex-Apps server must not request an elicitation")
+	}
+}

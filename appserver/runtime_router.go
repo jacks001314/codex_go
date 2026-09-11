@@ -12266,6 +12266,13 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.SkillProviders = executorSkillProviders
 	options.MCPTools = mcpTools
 	options.MCPConnectors = mcpConnectors
+	// Rust maybe_request_codex_apps_auth_elicitation: enable the Codex Apps
+	// connector URL elicitation flow when the feature is on and the approval
+	// policy allows agent-initiated MCP elicitations.
+	if options.EnableMCP && cfg != nil && features.Enabled(cfg.FeatureSettings(), "auth_elicitation") &&
+		r.mcpElicitationsAllowedForApproval(cfg, approvalPolicy, r.activeTurnParams(threadID)) {
+		options.MCPAuthElicitation = r.mcpAuthElicitationOptions(mcpService)
+	}
 	if params != nil {
 		options.Model = strings.TrimSpace(params.Model)
 	}
