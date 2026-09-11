@@ -84,6 +84,7 @@ func StartProxyManagedNetwork(ctx context.Context, config ProxyConfig, baseEnv m
 	}
 	prepared := PrepareProxyManagedNetwork(baseEnv, httpAddr, socksAddr, server.socksListener != nil, config.Network.AllowLocalBinding)
 	server.mitm.ApplyChildEnv(prepared.Env)
+	server.runtimePolicy().broker.SetDestinationHints(baseEnv)
 	server.runtimePolicy().broker.VirtualizeChildEnv(prepared.Env)
 	prepared.server = server
 	prepared.baseEnv = cloneProxyEnv(baseEnv)

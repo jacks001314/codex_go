@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/textproto"
+	"os"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -19,6 +22,7 @@ type ProxyCredentialBroker struct {
 	mu          sync.RWMutex
 	enabled     bool
 	providers   []*ProxyCredentialProvider
+	hints       map[string]string
 	credentials []ProxyCredentialRecord
 }
 
@@ -36,7 +40,10 @@ type ProxyCredentialProvider struct {
 	// Destinations are the authorized injection destinations for configured
 	// providers (#44056); built-in providers leave this nil and bind hosts
 	// directly.
-	Destinations       []CredentialDestination
+	Destinations []CredentialDestination
+	// DestinationEnvKeys holds environment variables that contribute a
+	// destination at runtime (configured url_prefix_from_env, #44068).
+	DestinationEnvKeys []string
 	DummyValue         func(string) string
 	RequestHeader      func(map[string][]string) (string, bool)
 	RequestHeaderValue func(string) (string, bool)
@@ -90,9 +97,10 @@ func (b *ProxyCredentialBroker) VirtualizeChildEnv(env map[string]string) {
 		return
 	}
 	env[CredentialBrokerActiveEnvKey] = "1"
+	resolvedEnv := envWithHintFallbacks(env, b.hints)
 	for _, provider := range b.providers {
 		for _, source := range provider.Sources {
-			hostBinding, ok := source.HostBinding(env)
+			hostBinding, ok := source.HostBinding(resolvedEnv)
 			if !ok {
 				continue
 			}
@@ -306,6 +314,111 @@ func (b *ProxyCredentialBroker) envKeys() []string {
 		return nil
 	}
 	return credentialEnvKeys(b.providers)
+}
+
+// SetDestinationHints retains local destination context (built-in provider
+// context keys such as GH_HOST and configured url_prefix_from_env values)
+// without adding it to child environments, mirroring Rust
+// CredentialBrokerContext::capture (#44068). A value present in the supplied
+// environment wins; otherwise the process environment is consulted.
+func (b *ProxyCredentialBroker) SetDestinationHints(env map[string]string) {
+	if b == nil {
+		return
+	}
+	hints := map[string]string{}
+	add := func(key string) {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return
+		}
+		if value, ok := env[key]; ok {
+			hints[key] = value
+			return
+		}
+		if value, ok := os.LookupEnv(key); ok {
+			hints[key] = value
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, provider := range b.providers {
+		for _, key := range provider.ContextEnvVars {
+			add(key)
+		}
+		for _, key := range provider.DestinationEnvKeys {
+			add(key)
+		}
+	}
+	b.hints = hints
+	if runtime.GOOS == "windows" && b.enabled && b.hasAmbiguousWindowsProviderEnv(env) {
+		slog.Warn("credential brokerage disabled because shell environment overrides contain conflicting case-insensitive provider keys")
+		b.enabled = false
+	}
+}
+
+// hasAmbiguousWindowsProviderEnv mirrors #44068: on Windows, provider overrides
+// that differ only by case with different values make brokerage ambiguous, so
+// it is disabled rather than guessing which key wins.
+func (b *ProxyCredentialBroker) hasAmbiguousWindowsProviderEnv(env map[string]string) bool {
+	providerKeys := map[string]bool{}
+	markProviderKey := func(key string) {
+		if key = strings.TrimSpace(key); key != "" {
+			providerKeys[strings.ToLower(key)] = true
+		}
+	}
+	for _, provider := range b.providers {
+		for _, key := range provider.ContextEnvVars {
+			markProviderKey(key)
+		}
+		for _, key := range provider.DestinationEnvKeys {
+			markProviderKey(key)
+		}
+		for _, source := range provider.Sources {
+			for _, key := range source.EnvVars {
+				markProviderKey(key)
+			}
+		}
+	}
+	for key, value := range env {
+		if !providerKeys[strings.ToLower(key)] {
+			continue
+		}
+		for candidate, candidateValue := range env {
+			if candidate == key || !strings.EqualFold(candidate, key) {
+				continue
+			}
+			if value != candidateValue {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// envWithHintFallbacks resolves destination hints for a child environment
+// without changing what the child sees: a present value - including an empty
+// one - overrides the fallback (Rust CredentialBrokerContext::with_fallbacks).
+func envWithHintFallbacks(env map[string]string, hints map[string]string) map[string]string {
+	if len(hints) == 0 {
+		return env
+	}
+	var resolved map[string]string
+	for key, value := range hints {
+		if _, present := env[key]; present {
+			continue
+		}
+		if resolved == nil {
+			resolved = make(map[string]string, len(env)+len(hints))
+			for envKey, envValue := range env {
+				resolved[envKey] = envValue
+			}
+		}
+		resolved[key] = value
+	}
+	if resolved == nil {
+		return env
+	}
+	return resolved
 }
 
 func (r *ProxyCredentialRecord) MatchesHost(host string) bool {

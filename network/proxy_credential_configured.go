@@ -55,6 +55,9 @@ func ConfiguredCredentialProvider(id string, config CredentialProviderConfig) *P
 			configuredInsertHeader(config, headers, value)
 		},
 	}
+	if config.URLPrefixFromEnv != nil {
+		provider.DestinationEnvKeys = []string{*config.URLPrefixFromEnv}
+	}
 	provider.Sources = []ProxyCredentialSource{{
 		EnvVars:     append([]string(nil), config.Env...),
 		HostBinding: configuredHostBinding(config, destinations),
