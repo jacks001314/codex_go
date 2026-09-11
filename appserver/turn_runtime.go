@@ -6283,7 +6283,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		IncludeTimingMetrics:            appIncludeTimingMetrics(cfg),
 		BetaFeaturesHeader:              features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings()),
 		ItemIDsEnabled:                  cfg.FeatureSettings()["item_ids"],
-		PromptCacheKey:                  threadID,
+		PromptCacheKey:                  r.responsesPromptCacheKey(threadID, lineage, threadSnapshot.Ephemeral),
 		ServiceTier:                     serviceTier,
 		Store:                           modelProviderConfig.Store,
 		AttestationProvider:             r.appServerAttestationProvider(),
@@ -6883,6 +6883,50 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 		StartedAtMS:                active.StartedAtMS,
 		UseResponsesLite:           r.modelUsesResponsesLite(modelID),
 	})
+}
+
+// responsesPromptCacheKey mirrors Rust ModelClient::prompt_cache_key plus the
+// ephemeral-fork cache-affinity rule (#44862): an ephemeral root fork reuses its
+// parent's session id as the Responses cache key so ChatGPT routes it to the
+// parent's cache, while the fork keeps its own session/thread identity.
+func (r *RuntimeRouter) responsesPromptCacheKey(threadID string, lineage responsesMetadataLineage, ephemeral bool) string {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" || !ephemeral {
+		return threadID
+	}
+	parentThreadID := strings.TrimSpace(lineage.ForkedFromThreadID)
+	if parentThreadID == "" {
+		return threadID
+	}
+	if record := r.runtimeRecordForThread(threadID); record != nil &&
+		runtimeSessionSourceIsSubagent(strings.TrimSpace(record.Metadata.Source)) {
+		return threadID
+	}
+	parent := r.runtimeRecordForThread(parentThreadID)
+	if parent == nil {
+		return threadID
+	}
+	if sessionID := strings.TrimSpace(parent.SessionID); sessionID != "" {
+		return sessionID
+	}
+	return threadID
+}
+
+// runtimeRecordForThread resolves an ephemeral (in-memory) thread first, then a
+// persisted record.
+func (r *RuntimeRouter) runtimeRecordForThread(threadID string) *session.Record {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
+		return nil
+	}
+	if record, ok := r.ephemeralThreadRecord(session.ThreadID(threadID), false); ok {
+		return record
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil {
+		return nil
+	}
+	return record
 }
 
 func (r *RuntimeRouter) responsesMetadataLineage(threadID string) responsesMetadataLineage {

@@ -30,29 +30,46 @@ func (r *RuntimeRouter) goalToolExecutorsForTurn(cfg *config.Config, threadID, t
 	if r.services.StateRuntime == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return nil
 	}
-	if _, ok := r.ephemeralThreadRecord(session.ThreadID(threadID), false); ok {
-		return nil
-	}
-	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
-	if err != nil || record == nil {
-		return nil
+	// Rust #44862: goal tools remain visible on ephemeral threads (unless the
+	// thread is a sub-agent review), but executing them requires persistent
+	// thread state.
+	record, ephemeral := r.ephemeralThreadRecord(session.ThreadID(threadID), false)
+	if !ephemeral {
+		persisted, err := r.threadRecord(session.ThreadID(threadID), true, false)
+		if err != nil || persisted == nil {
+			return nil
+		}
+		record = persisted
 	}
 	if strings.EqualFold(strings.TrimSpace(record.Metadata.ThreadSource), string(ThreadSourceKindSubAgentReview)) {
 		return nil
 	}
+	executionAllowed := !ephemeral
 
 	var maxGoalTokenBudget *int64
 	if goals, goalsErr := cfg.GoalsConfig(); goalsErr == nil && goals != nil {
 		maxGoalTokenBudget = cloneInt64PtrAppserver(goals.MaxGoalTokenBudget)
 	}
+	rejectEphemeral := func() (*tool.Output, error) {
+		return nil, tool.RespondToModel("Goal tools require a persistent thread.")
+	}
 	return []tool.Executor{
 		tool.NewExecutorFunc(tool.GoalGetToolSpec(), func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+			if !executionAllowed {
+				return rejectEphemeral()
+			}
 			return r.executeGoalToolGet(ctx, invocation, threadID)
 		}),
 		tool.NewExecutorFunc(tool.GoalCreateToolSpec(), func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+			if !executionAllowed {
+				return rejectEphemeral()
+			}
 			return r.executeGoalToolCreate(ctx, invocation, threadID, turnID, maxGoalTokenBudget)
 		}),
 		tool.NewExecutorFunc(tool.GoalUpdateToolSpec(), func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+			if !executionAllowed {
+				return rejectEphemeral()
+			}
 			return r.executeGoalToolUpdate(ctx, invocation, threadID, turnID)
 		}),
 	}

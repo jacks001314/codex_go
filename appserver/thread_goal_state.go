@@ -1013,6 +1013,11 @@ func (r *RuntimeRouter) continueThreadGoalIfIdle(threadID string) {
 	if threadID == "" || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return
 	}
+	// Ephemeral threads have no persistent goal state, so automatic goal
+	// continuation is disabled for them (Rust #44862).
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(threadID), false); ok {
+		return
+	}
 	if r.threads.ActiveTurn(threadID) != nil {
 		return
 	}

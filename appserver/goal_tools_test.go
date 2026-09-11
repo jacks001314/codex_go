@@ -285,3 +285,35 @@ func TestGoalToolGetAndUpdateNoGoal(t *testing.T) {
 		t.Fatalf("update no goal error = %v", err)
 	}
 }
+
+// Mirrors Rust #44862: goal tools stay visible on ephemeral threads, but
+// execution requires persistent thread state.
+func TestGoalToolsVisibleButRejectedOnEphemeralThreads(t *testing.T) {
+	router, _, threadID := newGoalToolTestRouter(t)
+	if !router.threads.SaveEphemeralRecord(&session.Record{
+		ID: session.ThreadID(threadID), SessionID: "ephemeral-session",
+		Metadata: session.Metadata{Extra: map[string]any{"ephemeral": true}},
+	}) {
+		t.Fatal("failed to save ephemeral record")
+	}
+	executors := router.goalToolExecutorsForTurn(&config.Config{Values: map[string]any{
+		"features": map[string]any{"goals": true},
+	}}, threadID, "turn-1")
+	if len(executors) == 0 {
+		t.Fatal("goal tools must stay visible on ephemeral threads")
+	}
+	for _, name := range []string{tool.GoalGetToolName, tool.GoalCreateToolName, tool.GoalUpdateToolName} {
+		executor := goalToolExecutorByName(t, executors, name)
+		arguments := `{}`
+		if name == tool.GoalCreateToolName {
+			arguments = `{"objective":"ephemeral goal"}`
+		}
+		if name == tool.GoalUpdateToolName {
+			arguments = `{"status":"complete"}`
+		}
+		_, err := executor.Execute(context.Background(), goalToolInvocation(name, arguments))
+		if err == nil || !strings.Contains(err.Error(), "Goal tools require a persistent thread.") {
+			t.Fatalf("%s on ephemeral thread error = %v", name, err)
+		}
+	}
+}
