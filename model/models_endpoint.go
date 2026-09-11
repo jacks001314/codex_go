@@ -2,6 +2,8 @@ package model
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/auth"
 )
 
 const modelsEndpointETagHeader = "X-Models-ETag"
@@ -116,20 +120,29 @@ type RemoteModelsManager struct {
 	cachePath                       string
 	cacheTTL                        time.Duration
 	cacheClientVersion              string
-	now                             func() time.Time
+	// identity scopes the disk cache to the current provider and credentials
+	// (Rust #43906); an empty identity disables cached catalog reuse.
+	identity string
+	now      func() time.Time
 }
 
 type modelsCache struct {
-	FetchedAt     time.Time   `json:"fetched_at"`
-	ETag          string      `json:"etag,omitempty"`
-	ClientVersion string      `json:"client_version,omitempty"`
-	Models        []ModelInfo `json:"models"`
+	FetchedAt     time.Time `json:"fetched_at"`
+	ETag          string    `json:"etag,omitempty"`
+	ClientVersion string    `json:"client_version,omitempty"`
+	// Identity is the opaque provider/auth identity captured with the catalog
+	// (Rust #43897). Unscoped legacy entries are cache misses.
+	Identity string      `json:"identity,omitempty"`
+	Models   []ModelInfo `json:"models"`
 }
 
 type RemoteModelsManagerOptions struct {
 	ModelCatalog                    *ModelsResponse
 	Endpoint                        ModelsEndpoint
 	UseRemoteCatalogAsSourceOfTruth bool
+	// Identity is the opaque provider/auth identity used to scope cached
+	// catalogs. Empty disables cache reuse.
+	Identity string
 }
 
 func NewRemoteModelsManager(modelCatalog *ModelsResponse, endpoint ModelsEndpoint) *RemoteModelsManager {
@@ -151,6 +164,7 @@ func NewRemoteModelsManagerWithOptions(options *RemoteModelsManagerOptions) *Rem
 		remoteModels:                    cloneModelInfos(catalog.Models),
 		endpoint:                        options.Endpoint,
 		useRemoteCatalogAsSourceOfTruth: options.UseRemoteCatalogAsSourceOfTruth,
+		identity:                        strings.TrimSpace(options.Identity),
 		now:                             time.Now,
 	}
 }
@@ -281,6 +295,7 @@ func (m *RemoteModelsManager) fetchAndUpdateModels() {
 		FetchedAt:     m.nowLocked(),
 		ETag:          m.etag,
 		ClientVersion: m.cacheClientVersion,
+		Identity:      m.identity,
 		Models:        cloneModelInfos(response.Models),
 	}
 	cachePath := m.cachePath
@@ -298,6 +313,7 @@ func (m *RemoteModelsManager) tryLoadFreshCache() bool {
 	cachePath := m.cachePath
 	cacheTTL := m.cacheTTL
 	clientVersion := m.cacheClientVersion
+	identity := m.identity
 	now := m.nowLocked()
 	m.mu.RUnlock()
 	if cachePath == "" || cacheTTL <= 0 {
@@ -305,6 +321,11 @@ func (m *RemoteModelsManager) tryLoadFreshCache() bool {
 	}
 	cache, err := readModelsCache(cachePath)
 	if err != nil || cache.ClientVersion != clientVersion || !cache.isFresh(now, cacheTTL) {
+		return false
+	}
+	// Cached catalogs are scoped to the current provider/auth identity; unscoped
+	// legacy entries and mismatched identities are cache misses (Rust #43906).
+	if identity == "" || cache.Identity != identity {
 		return false
 	}
 	m.mu.Lock()
@@ -331,6 +352,9 @@ func (m *RemoteModelsManager) renewCacheTTLIfNeeded() {
 	m.mu.RLock()
 	cachePath := m.cachePath
 	cacheTTL := m.cacheTTL
+	clientVersion := m.cacheClientVersion
+	identity := m.identity
+	etag := m.etag
 	now := m.nowLocked()
 	m.mu.RUnlock()
 	if cachePath == "" || cacheTTL <= 0 {
@@ -338,6 +362,11 @@ func (m *RemoteModelsManager) renewCacheTTLIfNeeded() {
 	}
 	cache, err := readModelsCache(cachePath)
 	if err != nil || cache.isFresh(now, cacheTTL/2) {
+		return
+	}
+	// Only extend freshness when the stored version, identity, and ETag still
+	// match (Rust #43906 refresh_ttl).
+	if identity == "" || cache.Identity != identity || cache.ClientVersion != clientVersion || strings.TrimSpace(cache.ETag) != strings.TrimSpace(etag) {
 		return
 	}
 	cache.FetchedAt = now
@@ -383,6 +412,47 @@ func writeModelsCache(path string, cache *modelsCache) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+// ModelsCatalogIdentity returns the opaque provider/auth identity used to scope
+// cached model catalogs (Rust #43897/#43906). It changes when the provider,
+// account (type/email/plan), or credentials change, and is empty when no
+// identity is available so cached reuse is disabled.
+func ModelsCatalogIdentity(providerID string, authSnapshot *auth.AuthDotJSON, authHeaders *AuthHeaders) string {
+	providerID = strings.TrimSpace(providerID)
+	material := []string{providerID}
+	if authSnapshot != nil {
+		if account := auth.AccountFromAuth(authSnapshot); account != nil {
+			email := ""
+			if account.Email != nil {
+				email = strings.TrimSpace(*account.Email)
+			}
+			material = append(material, string(account.Type), string(account.PlanType), email)
+		}
+	}
+	credential := ""
+	if authHeaders != nil {
+		credential = strings.TrimSpace(authHeaders.Headers.Get("Authorization"))
+	}
+	if credential == "" && authSnapshot != nil {
+		credential = strings.TrimSpace(authSnapshot.OpenAIAPIKey)
+	}
+	if credential == "" && authSnapshot != nil {
+		credential = strings.TrimSpace(authSnapshot.PersonalAccessToken)
+	}
+	if credential == "" && authSnapshot != nil {
+		if token, ok := authSnapshot.Tokens["access_token"].(string); ok {
+			credential = strings.TrimSpace(token)
+		}
+	}
+	if credential != "" {
+		sum := sha256.Sum256([]byte(credential))
+		material = append(material, hex.EncodeToString(sum[:]))
+	}
+	if providerID == "" && credential == "" && len(material) <= 1 {
+		return ""
+	}
+	return strings.Join(material, "\x00")
 }
 
 func hasRemoteSourceOfTruthModel(models []ModelInfo) bool {

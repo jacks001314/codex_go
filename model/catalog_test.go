@@ -642,6 +642,7 @@ func TestRemoteModelsManagerThrottlesMatchingETagCacheRenewal(t *testing.T) {
 	manager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: true,
+		Identity:                        "identity-1",
 	})
 	manager.ConfigureCache(home)
 	manager.now = func() time.Time { return now }
@@ -685,17 +686,19 @@ func TestRemoteModelsManagerLoadsFreshDiskCacheAndRejectsStaleOrWrongVersion(t *
 		FetchedAt:     now.Add(-time.Minute),
 		ETag:          "etag-cached",
 		ClientVersion: modelsEndpointClientVersion,
+		Identity:      "identity-1",
 		Models:        []ModelInfo{{Slug: "cached", DisplayName: "Cached", Visibility: VisibilityList, SupportedInAPI: true}},
 	}
 	if err := writeModelsCache(cachePath, cache); err != nil {
 		t.Fatalf("writeModelsCache() error = %v", err)
 	}
 
-	endpoint := &recordingModelsEndpoint{responses: []*ModelsEndpointResponse{{
+	onlineResponse := &ModelsEndpointResponse{
 		Models: []ModelInfo{{Slug: "online", DisplayName: "Online", Visibility: VisibilityList, SupportedInAPI: true}},
 		ETag:   "etag-online",
-	}}}
-	manager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{Endpoint: endpoint, UseRemoteCatalogAsSourceOfTruth: true})
+	}
+	endpoint := &recordingModelsEndpoint{responses: []*ModelsEndpointResponse{onlineResponse, onlineResponse, onlineResponse, onlineResponse}}
+	manager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{Endpoint: endpoint, UseRemoteCatalogAsSourceOfTruth: true, Identity: "identity-1"})
 	manager.ConfigureCache(home)
 	manager.now = func() time.Time { return now }
 	models := manager.ListModels(RefreshOnlineIfUncached)
@@ -707,12 +710,48 @@ func TestRemoteModelsManagerLoadsFreshDiskCacheAndRejectsStaleOrWrongVersion(t *
 	if err := writeModelsCache(cachePath, cache); err != nil {
 		t.Fatalf("writeModelsCache(wrong version) error = %v", err)
 	}
-	manager = NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{Endpoint: endpoint, UseRemoteCatalogAsSourceOfTruth: true})
+	manager = NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{Endpoint: endpoint, UseRemoteCatalogAsSourceOfTruth: true, Identity: "identity-1"})
 	manager.ConfigureCache(home)
 	manager.now = func() time.Time { return now }
 	models = manager.ListModels(RefreshOnlineIfUncached)
 	if len(models) != 1 || models[0].Model != "online" || endpoint.calls != 1 {
 		t.Fatalf("wrong-version fallback models = %#v, calls = %d", models, endpoint.calls)
+	}
+
+	// A cache scoped to a different provider/auth identity is a miss.
+	cache.ClientVersion = modelsEndpointClientVersion
+	cache.Identity = "identity-2"
+	if err := writeModelsCache(cachePath, cache); err != nil {
+		t.Fatalf("writeModelsCache(mismatched identity) error = %v", err)
+	}
+	manager = NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{Endpoint: endpoint, UseRemoteCatalogAsSourceOfTruth: true, Identity: "identity-1"})
+	manager.ConfigureCache(home)
+	manager.now = func() time.Time { return now }
+	models = manager.ListModels(RefreshOnlineIfUncached)
+	if len(models) != 1 || models[0].Model != "online" || endpoint.calls != 2 {
+		t.Fatalf("identity-mismatch fallback models = %#v, calls = %d", models, endpoint.calls)
+	}
+
+	// Unscoped legacy entries are cache misses.
+	cache.Identity = ""
+	if err := writeModelsCache(cachePath, cache); err != nil {
+		t.Fatalf("writeModelsCache(legacy) error = %v", err)
+	}
+	manager = NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{Endpoint: endpoint, UseRemoteCatalogAsSourceOfTruth: true, Identity: "identity-1"})
+	manager.ConfigureCache(home)
+	manager.now = func() time.Time { return now }
+	models = manager.ListModels(RefreshOnlineIfUncached)
+	if len(models) != 1 || models[0].Model != "online" || endpoint.calls != 3 {
+		t.Fatalf("legacy cache fallback models = %#v, calls = %d", models, endpoint.calls)
+	}
+
+	// A manager without an identity never reuses cached catalogs.
+	manager = NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{Endpoint: endpoint, UseRemoteCatalogAsSourceOfTruth: true})
+	manager.ConfigureCache(home)
+	manager.now = func() time.Time { return now }
+	models = manager.ListModels(RefreshOnlineIfUncached)
+	if len(models) != 1 || models[0].Model != "online" || endpoint.calls != 4 {
+		t.Fatalf("unscoped manager fallback models = %#v, calls = %d", models, endpoint.calls)
 	}
 }
 

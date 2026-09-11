@@ -846,6 +846,7 @@ func accountScopedModelsManager(codexHome string, configService *config.ConfigSe
 			ModelCatalog:                    base,
 			Endpoint:                        endpoint,
 			UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
+			Identity:                        model.ModelsCatalogIdentity(providerID, &resolved.Auth, &authHeaders),
 		}), nil
 	}
 	return model.NewLazyModelsManager(build)
@@ -7203,6 +7204,46 @@ func realtimeNotificationPayload(notification *realtime.Notification) (Notificat
 			return "", nil, false
 		}
 		return NotificationThreadRealtimeItemAdded, &ThreadRealtimeItemAddedNotification{ThreadID: params.ThreadID, Item: cloneAnyMap(params.Item)}, true
+	case realtime.NotificationItemStarted:
+		params, ok := notification.Params.(realtime.ItemStartedNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.ItemStartedNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeItemStarted, &ThreadRealtimeItemStartedNotification{ThreadID: params.ThreadID, Item: params.Item}, true
+	case realtime.NotificationItemCompleted:
+		params, ok := notification.Params.(realtime.ItemCompletedNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.ItemCompletedNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeItemCompleted, &ThreadRealtimeItemCompletedNotification{ThreadID: params.ThreadID, Item: params.Item}, true
+	case realtime.NotificationItemTranscriptDelta:
+		params, ok := notification.Params.(realtime.ItemTranscriptDeltaNotification)
+		if !ok {
+			if ptr, ok := notification.Params.(*realtime.ItemTranscriptDeltaNotification); ok && ptr != nil {
+				params = *ptr
+				ok = true
+			}
+		}
+		if !ok {
+			return "", nil, false
+		}
+		return NotificationThreadRealtimeItemTranscriptDelta, &ThreadRealtimeItemTranscriptDeltaNotification{
+			ThreadID: params.ThreadID,
+			ItemID:   params.ItemID,
+			Delta:    params.Delta,
+		}, true
 	case realtime.NotificationTranscriptDelta:
 		params, ok := notification.Params.(realtime.TranscriptDeltaNotification)
 		if !ok {
