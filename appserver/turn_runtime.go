@@ -1469,6 +1469,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 		_ = r.appendRuntimeRollout(threadID, items, startedAt)
 	}
+	r.recordMemoryCitationUsage(threadID, items)
 	r.unifiedExecPersistMu.Unlock()
 	threadItems := make([]ThreadItem, 0, len(items))
 	for _, item := range items {

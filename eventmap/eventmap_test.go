@@ -97,6 +97,26 @@ func TestRawAssistantOutputTextFromItem(t *testing.T) {
 	}
 }
 
+// TestMemoryCitationBodies mirrors Rust
+// codex_utils_stream_parser::citation::strip_citations collecting citation
+// bodies, including the auto-close at EOF behavior.
+func TestMemoryCitationBodies(t *testing.T) {
+	text := "before <oai-mem-citation>first</oai-mem-citation> middle " +
+		"<oai-mem-citation>second</oai-mem-citation> after"
+	if got := MemoryCitationBodies(text); !reflect.DeepEqual(got, []string{"first", "second"}) {
+		t.Fatalf("MemoryCitationBodies() = %#v", got)
+	}
+	if got := MemoryCitationBodies("visible <oai-mem-citation>unterminated"); !reflect.DeepEqual(got, []string{"unterminated"}) {
+		t.Fatalf("unterminated MemoryCitationBodies() = %#v", got)
+	}
+	if got := MemoryCitationBodies("partial <oai-mem-"); got != nil {
+		t.Fatalf("partial MemoryCitationBodies() = %#v", got)
+	}
+	if got := MemoryCitationBodies("no citations here"); got != nil {
+		t.Fatalf("MemoryCitationBodies() = %#v", got)
+	}
+}
+
 func TestImageGenerationArtifactPathAndSave(t *testing.T) {
 	home := t.TempDir()
 	result := base64.StdEncoding.EncodeToString([]byte("png"))

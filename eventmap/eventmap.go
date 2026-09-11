@@ -206,6 +206,30 @@ func StripHiddenAssistantMarkup(text string, planMode bool) string {
 	return text
 }
 
+// MemoryCitationBodies returns the body of every <oai-mem-citation> tag in
+// text, in order, mirroring the citations vector collected by Rust
+// codex_utils_stream_parser::citation::strip_citations. A tag that is not
+// closed before EOF is auto-closed, so its buffered body is still returned; a
+// partial opening tag at EOF contributes nothing.
+func MemoryCitationBodies(text string) []string {
+	const open = "<oai-mem-citation>"
+	const close = "</oai-mem-citation>"
+	var bodies []string
+	for {
+		start := strings.Index(text, open)
+		if start < 0 {
+			return bodies
+		}
+		rest := text[start+len(open):]
+		end := strings.Index(rest, close)
+		if end < 0 {
+			return append(bodies, rest)
+		}
+		bodies = append(bodies, rest[:end])
+		text = rest[end+len(close):]
+	}
+}
+
 func parseUserMessage(item *ResponseItem) (*TurnItem, bool) {
 	if IsContextualUserMessageContent(item.Content) {
 		return nil, false
