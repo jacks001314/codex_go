@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/network"
 	"codex_go/sandbox"
 )
 
@@ -2077,6 +2078,9 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 			return nil, err
 		}
 		applyEdit(values, &params.Edits[i])
+		if err := validateCredentialProviderWriteResult(values, params.Edits[i].KeyPath); err != nil {
+			return nil, err
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
@@ -2798,6 +2802,73 @@ func normalizeSkillConfigPath(path string) string {
 		path = absolute
 	}
 	return filepath.Clean(path)
+}
+
+// validateCredentialProviderWriteResult mirrors Rust #44241's write validation:
+// a write that leaves a complete credential provider under
+// features.network_proxy.credentials must pass the credential broker's compile
+// rules before anything is persisted. Incomplete drafts and explicit deletions
+// are allowed, and validation runs on the merged result so a partial upsert of
+// an existing provider is still checked.
+func validateCredentialProviderWriteResult(values map[string]any, keyPath string) error {
+	parts := splitKeyPath(keyPath)
+	if len(parts) < 3 || parts[0] != "features" || parts[1] != "network_proxy" || parts[2] != "credentials" {
+		return nil
+	}
+	switch {
+	case len(parts) == 3:
+		table, ok := getAtPath(values, parts).(map[string]any)
+		if !ok {
+			return nil
+		}
+		for id, raw := range table {
+			provider, ok := raw.(map[string]any)
+			if !ok || !credentialProviderDefinitionComplete(provider) {
+				continue
+			}
+			if _, err := network.ParseCredentialProviderConfigs(map[string]any{id: provider}); err != nil {
+				return configWriteErrorf(ConfigWriteValidation, "%s", err.Error())
+			}
+		}
+	case len(parts) >= 4:
+		providerPath := parts[:4]
+		provider, ok := getAtPath(values, providerPath).(map[string]any)
+		if !ok {
+			// Explicit deletion (or a non-table draft) is allowed.
+			return nil
+		}
+		if !credentialProviderDefinitionComplete(provider) {
+			return nil
+		}
+		if _, err := network.ParseCredentialProviderConfigs(map[string]any{providerPath[3]: provider}); err != nil {
+			return configWriteErrorf(ConfigWriteValidation, "%s", err.Error())
+		}
+	}
+	return nil
+}
+
+// credentialProviderDefinitionComplete reports whether a provider table carries
+// every field the compile rules require, i.e. it is no longer an incomplete
+// draft. Drafts are intentionally not validated.
+func credentialProviderDefinitionComplete(provider map[string]any) bool {
+	if len(stringSliceFromAny(provider["env"])) == 0 {
+		return false
+	}
+	if len(stringSliceFromAny(provider["patterns"])) == 0 {
+		return false
+	}
+	if len(stringSliceFromAny(provider["url_prefixes"])) == 0 && strings.TrimSpace(anyStringValue(provider["url_prefix_from_env"])) == "" {
+		return false
+	}
+	if len(stringSliceFromAny(provider["auth"])) == 0 {
+		return false
+	}
+	return true
+}
+
+func anyStringValue(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func validateWritableKeyPath(keyPath string, value any) error {
