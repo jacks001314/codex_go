@@ -128,6 +128,10 @@ type AgentLoopRequest struct {
 	StreamHandler                   model.ResponsesStreamHandler
 	ExecutedToolCallMetadataEnabled bool
 	OnSteerCommitted                func(count int)
+	// InstructionsProvider, when set, supplies the instructions for each model
+	// request so a long turn can refresh them between steps. An empty result
+	// means the instructions were cleared (Rust #44675).
+	InstructionsProvider func() string
 }
 
 type AgentLoopResult struct {
@@ -244,9 +248,13 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			inputItems, executedToolCallAttachment = l.executedToolCalls.AttachPendingToPrompt(inputItems)
 		}
 		sampling := timing.BeginSampling(l.now())
+		instructions := request.Instructions
+		if request.InstructionsProvider != nil {
+			instructions = request.InstructionsProvider()
+		}
 		response, err := l.agent.Run(ctx, &model.AgentRequest{
 			Prompt:                       prompt,
-			Instructions:                 request.Instructions,
+			Instructions:                 instructions,
 			InputItems:                   inputItems,
 			PostPromptInputItems:         postPromptInputItemsForIteration(postPromptItems, iteration),
 			Tools:                        append([]any(nil), request.Tools...),

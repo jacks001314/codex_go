@@ -1389,9 +1389,16 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 	}
 	samplingCompaction := r.midTurnSamplingCompaction(threadID, turnID, connectionID, params, runConfig, startedAt)
+	// Rust #44675: a caller-supplied override wins; otherwise an AGENTS.md-derived
+	// thread refreshes its global instructions for every model request.
+	var instructionsProvider func() string
+	if params.BaseInstructions == nil {
+		instructionsProvider = r.turnInstructionsProvider(threadID, runConfig.Instructions)
+	}
 	result, err := runtime.Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       agentPrompt,
 		Instructions:                 runConfig.Instructions,
+		InstructionsProvider:         instructionsProvider,
 		InputItems:                   inputItems,
 		PostPromptInputItems:         postPromptInputItems,
 		HostedTools:                  append([]any(nil), runConfig.HostedTools...),

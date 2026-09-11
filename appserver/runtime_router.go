@@ -3783,10 +3783,12 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 	if loaded, cfgErr := r.effectiveConfigForThreadStart(&params); cfgErr == nil {
 		cfg = loaded
 	}
-	instructions, sources, err := r.threadStartInstructions(&params)
+	parts, err := r.threadStartInstructionParts(&params)
 	if err != nil {
 		return err
 	}
+	instructions := joinInstructionsParts(parts.global, parts.project)
+	sources := parts.sources
 	response.InstructionSources = sources
 	configuredBaseInstructions := ""
 	if cfg != nil {
@@ -3800,6 +3802,14 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 	if strings.TrimSpace(baseInstructions) != "" {
 		record.Metadata.BaseInstructions = baseInstructions
 		record.Metadata.BaseInstructionsProvenance = &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom}
+		// Rust #44675: remember the AGENTS.md split so a running session can
+		// refresh the global part without re-discovering the repository.
+		if stringPtrValue(params.BaseInstructions) == "" && strings.TrimSpace(instructions) != "" {
+			record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+			record.Metadata.Extra["instructions_global"] = strings.TrimSpace(parts.global)
+			record.Metadata.Extra["instructions_project"] = strings.TrimSpace(parts.project)
+			record.Metadata.Extra["instructions_from_agents_md"] = true
+		}
 	} else if params.BaseInstructions != nil {
 		// An explicit empty value suppresses model instructions and is still a
 		// caller-owned choice that must survive a resumed turn.
@@ -3817,6 +3827,7 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 			}
 		}
 	}
+	r.emitInstructionWarnings(response.Thread.ID, parts.warnings)
 	setThreadRecordInstructionSources(record, sources)
 	_ = r.runtimeSaveThreadRecord(record)
 	return nil
@@ -4330,16 +4341,38 @@ func (r *RuntimeRouter) threadStartServiceTier(cfg *config.Config, params *Threa
 }
 
 func (r *RuntimeRouter) threadStartInstructions(params *ThreadStartParams) (string, []string, error) {
-	if r == nil || params == nil {
-		return "", nil, nil
+	parts, err := r.threadStartInstructionParts(params)
+	if err != nil {
+		return "", nil, err
 	}
-	parts := []string{}
-	sources := []string{}
+	return joinInstructionsParts(parts.global, parts.project), parts.sources, nil
+}
+
+// threadStartInstructions holds the separately resolved global and repository
+// instruction sources so a turn can refresh the global part without re-reading
+// the repository snapshot (Rust #44675).
+type threadStartInstructions struct {
+	global   string
+	project  string
+	sources  []string
+	warnings []string
+}
+
+func (r *RuntimeRouter) threadStartInstructionParts(params *ThreadStartParams) (*threadStartInstructions, error) {
+	if r == nil || params == nil {
+		return &threadStartInstructions{}, nil
+	}
+	parts := &threadStartInstructions{}
 	if codexHome := r.codexHomeForInstructions(); codexHome != "" {
-		loaded := config.NewUserInstructionsProvider(codexHome).Load()
-		if loaded != nil && loaded.Instructions != nil && strings.TrimSpace(loaded.Instructions.Text) != "" {
-			parts = append(parts, strings.TrimSpace(loaded.Instructions.Text))
-			sources = appendInstructionSource(sources, loaded.Instructions.Source)
+		loaded := r.refreshGlobalInstructions(codexHome)
+		if text := instructionsText(loaded); text != "" {
+			parts.global = text
+			if loaded != nil && loaded.Instructions != nil {
+				parts.sources = appendInstructionSource(parts.sources, loaded.Instructions.Source)
+			}
+		}
+		if loaded != nil {
+			parts.warnings = append(parts.warnings, loaded.Warnings...)
 		}
 	}
 	if params.Environments == nil {
@@ -4370,22 +4403,19 @@ func (r *RuntimeRouter) threadStartInstructions(params *ThreadStartParams) (stri
 			UntrustedProject: untrustedProject,
 		})
 		if err != nil {
-			return "", nil, err
+			return nil, err
 		}
 		if loaded != nil {
-			projectText := strings.TrimSpace(loaded.Text())
-			if projectText != "" {
-				parts = append(parts, projectText)
-			}
+			parts.project = strings.TrimSpace(loaded.Text())
 			for _, entry := range loaded.Entries {
 				if entry.Provenance != promptctx.InstructionsProvenanceProject || strings.TrimSpace(entry.Contents) == "" {
 					continue
 				}
-				sources = appendInstructionSource(sources, entry.SourcePath)
+				parts.sources = appendInstructionSource(parts.sources, entry.SourcePath)
 			}
 		}
 	}
-	return strings.Join(parts, promptctx.InstructionsAgentsMDSeparator), sources, nil
+	return parts, nil
 }
 
 func (r *RuntimeRouter) codexHomeForInstructions() string {
@@ -6079,6 +6109,9 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 		params.DynamicTools = dynamicToolsFromRecordMetadata(record.Metadata)
 	}
 	params.ExperimentalRawEvents = threadRecordExperimentalRawEvents(record)
+	// Rust #44675: reload global AGENTS.md instructions at each turn boundary so
+	// edits take effect during an active session.
+	r.refreshThreadGlobalInstructions(params, record)
 	if params.BaseInstructions == nil && strings.TrimSpace(record.Metadata.BaseInstructions) != "" && !r.baseInstructionsAreModelGenerated(record) {
 		params.BaseInstructions = cloneString(&record.Metadata.BaseInstructions)
 	} else if params.BaseInstructions == nil && boolFromMap(record.Metadata.Extra, "suppress_model_instructions") {

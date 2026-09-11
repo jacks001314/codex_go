@@ -825,6 +825,42 @@ func contentHasInputText(raw any, want string) bool {
 	return false
 }
 
+func TestAgentLoopRefreshesInstructionsPerStep(t *testing.T) {
+	agent := &fakeLoopAgent{}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:      agent,
+		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}),
+		MaxTurns:   3,
+	})
+	step := 0
+	result, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt:       "run echo",
+		Instructions: "startup instructions",
+		InstructionsProvider: func() string {
+			step++
+			return "refreshed-" + strconv.Itoa(step)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Iterations != 2 || len(agent.requests) != 2 {
+		t.Fatalf("iterations = %d, requests = %d", result.Iterations, len(agent.requests))
+	}
+	for index, request := range agent.requests {
+		want := "refreshed-" + strconv.Itoa(index+1)
+		if request.Instructions != want {
+			t.Fatalf("request %d instructions = %q, want %q", index, request.Instructions, want)
+		}
+	}
+}
+
 func resultInputItemsHaveText(items []any, want string) bool {
 	for _, raw := range items {
 		switch item := raw.(type) {

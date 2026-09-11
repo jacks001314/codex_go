@@ -137,9 +137,13 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			inputItems, executedToolCallAttachment = executedToolCalls.AttachPendingToPrompt(inputItems)
 		}
 		sampling := timing.BeginSampling(r.now())
+		instructions := request.Instructions
+		if request.InstructionsProvider != nil {
+			instructions = request.InstructionsProvider()
+		}
 		response, err := r.agent.Run(ctx, &model.AgentRequest{
 			Prompt:                       request.Prompt,
-			Instructions:                 request.Instructions,
+			Instructions:                 instructions,
 			InputItems:                   inputItems,
 			Tools:                        MergeHostedTools(MergeHostedTools(request.Tools, r.hostedTools), request.HostedTools),
 			Model:                        request.Model,
