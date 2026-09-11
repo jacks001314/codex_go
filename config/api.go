@@ -2390,7 +2390,11 @@ func mergeConfigLayers(layers []Layer) (map[string]any, map[string]LayerMetadata
 			continue
 		}
 		layerValues = cloneMap(layerValues)
-		cloudConfigMergeMap(values, layerValues)
+		// Mirrors Rust merge_toml_values (config/src/merge.rs): the RPC-visible
+		// effective config uses the same normalization/structured-feature merge
+		// as the loader, including credential-provider source displacement
+		// (#44241).
+		mergeConfigMaps(values, layerValues)
 		// Packaged defaults contribute to the effective config but stay out of
 		// origin metadata (Rust #38179).
 		if layers[i].Name.Type == LayerSourcePackagedDefaults {
@@ -2398,7 +2402,32 @@ func mergeConfigLayers(layers []Layer) (map[string]any, map[string]LayerMetadata
 		}
 		fillOrigins("", layerValues, LayerMetadata{Name: layers[i].Name, Version: layers[i].Version}, origins)
 	}
+	pruneDisplacedCredentialProviderOrigins(values, origins)
 	return values, origins
+}
+
+// pruneDisplacedCredentialProviderOrigins mirrors #44241: a provider removed by
+// a higher-priority provider's overlapping source ownership must not appear in
+// the config origins.
+func pruneDisplacedCredentialProviderOrigins(values map[string]any, origins map[string]LayerMetadata) {
+	if len(origins) == 0 {
+		return
+	}
+	credentials, _ := getAtPath(values, []string{"features", "network_proxy", "credentials"}).(map[string]any)
+	const prefix = "features.network_proxy.credentials."
+	for path := range origins {
+		rest, ok := strings.CutPrefix(path, prefix)
+		if !ok {
+			continue
+		}
+		id := rest
+		if index := strings.Index(rest, "."); index >= 0 {
+			id = rest[:index]
+		}
+		if _, present := credentials[id]; !present {
+			delete(origins, path)
+		}
+	}
 }
 
 func cloneLayers(layers []Layer) []Layer {

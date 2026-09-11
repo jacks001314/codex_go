@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func credentialProviderTable(t *testing.T, values map[string]any) map[string]any {
 	t.Helper()
@@ -21,6 +24,38 @@ func credentialProviderTable(t *testing.T, values map[string]any) map[string]any
 
 func credentialLayer(providers map[string]any) map[string]any {
 	return map[string]any{"features": map[string]any{"network_proxy": map[string]any{"credentials": providers}}}
+}
+
+// TestMergeConfigLayersOmitsDisplacedProviderOrigins mirrors #44241: a
+// provider displaced by a higher-priority provider's overlapping source must
+// disappear from both the merged config and its origins.
+func TestMergeConfigLayersPrunesDisplacedProviderOrigins(t *testing.T) {
+	layers := []Layer{
+		{
+			Name:   LayerSource{Type: LayerSourceUser, File: "/home/user/config.toml"},
+			Config: credentialLayer(map[string]any{"old": map[string]any{"env": []any{"VENDOR_TOKEN"}}}),
+		},
+		{
+			Name:   LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: "/managed/config.toml"},
+			Config: credentialLayer(map[string]any{"new": map[string]any{"env": []any{"VENDOR_TOKEN"}}}),
+		},
+	}
+	values, origins := mergeConfigLayers(layers)
+	credentials := credentialProviderTable(t, values)
+	if _, ok := credentials["old"]; ok {
+		t.Fatalf("displaced provider survived the merge: %#v", credentials)
+	}
+	if _, ok := credentials["new"]; !ok {
+		t.Fatalf("overlay provider missing: %#v", credentials)
+	}
+	for path := range origins {
+		if path == "features.network_proxy.credentials.old" || strings.HasPrefix(path, "features.network_proxy.credentials.old.") {
+			t.Fatalf("displaced provider origin retained: %s in %#v", path, origins)
+		}
+	}
+	if _, ok := origins["features.network_proxy.credentials.new.env"]; !ok {
+		t.Fatalf("overlay provider origins missing: %#v", origins)
+	}
 }
 
 // TestMergeConfigMapsDisplacesCredentialProvidersBySource mirrors Rust #44241:
