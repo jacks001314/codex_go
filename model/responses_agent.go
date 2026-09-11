@@ -2511,8 +2511,9 @@ func (r *ResponsesAgentRunner) refreshAuthAfterUnauthorized(ctx context.Context)
 // "Signature expired"), run the configured aws.auth_refresh command once,
 // reload the SDK credentials, and re-sign subsequent requests.
 func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context) error {
-	if r == nil || r.Provider == nil || r.Provider.Name != AmazonBedrockProviderName || r.AWS == nil || r.AWS.AuthRefresh == nil {
-		return errors.New("bedrock aws auth refresh is not configured")
+	if r == nil || r.Provider == nil || r.Provider.Name != AmazonBedrockProviderName || r.AWS == nil ||
+		(r.AWS.AuthRefresh == nil && r.AWS.CredentialExport == nil) {
+		return errors.New("bedrock aws auth recovery is not configured")
 	}
 	// Rust #39274: at most one provider-owned recovery attempt per request.
 	if r.bedrockAuthRecoveryAttempted {
@@ -2520,7 +2521,7 @@ func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context)
 	}
 	r.bedrockAuthRecoveryAttempted = true
 	refresh := r.AWS.AuthRefresh
-	if strings.TrimSpace(refresh.Command) == "" {
+	if refresh != nil && strings.TrimSpace(refresh.Command) == "" {
 		return errors.New("bedrock aws auth refresh command is empty")
 	}
 	// Share refresh state across matching provider configurations so
@@ -2540,7 +2541,10 @@ func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context)
 	r.AWSRefreshInFlight = ch
 	r.AWSRefreshMu.Unlock()
 
-	runErr := r.runBedrockAWSRefreshCommand(ctx, refresh)
+	var runErr error
+	if refresh != nil {
+		runErr = r.runBedrockAWSRefreshCommand(ctx, refresh)
+	}
 
 	r.AWSRefreshMu.Lock()
 	r.AWSRefreshInFlight = nil
@@ -2549,22 +2553,32 @@ func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context)
 	if runErr != nil {
 		return runErr
 	}
-	// Reload the SDK credential chain and re-sign future requests.
-	if r.AWS != nil {
-		awsContext, err := auth.LoadAWSAuthContext(&auth.AWSAuthConfig{
-			Profile: strings.TrimSpace(r.AWS.Profile),
-			Region:  strings.TrimSpace(r.AWS.Region),
-			Service: AmazonBedrockMantleServiceName,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to reload Amazon Bedrock auth after refresh: %w", err)
+	// Reload credentials and re-sign future requests. Configured credential
+	// export re-runs the exporter (#44028); otherwise the SDK chain reloads.
+	awsConfig := &auth.AWSAuthConfig{
+		Profile: strings.TrimSpace(r.AWS.Profile),
+		Region:  strings.TrimSpace(r.AWS.Region),
+		Service: AmazonBedrockMantleServiceName,
+	}
+	var awsContext *auth.AWSAuthContext
+	var err error
+	if exportConfig, ok := bedrockCredentialExportConfig(r.AWS); ok {
+		provider := credentialExportProviderForConfig(exportConfig)
+		if err := provider.Refresh(ctx); err != nil {
+			return fmt.Errorf("failed to export Amazon Bedrock credentials after refresh: %w", err)
 		}
-		if r.Auth == nil {
-			r.Auth = &AuthHeaders{Headers: http.Header{}}
-		}
-		r.Auth.SignRequest = func(ctx context.Context, request *http.Request, body []byte) (*SignedRequest, error) {
-			return signBedrockMantleRequest(awsContext, request, body)
-		}
+		awsContext, err = auth.LoadAWSAuthContextWithProvider(awsConfig, provider)
+	} else {
+		awsContext, err = auth.LoadAWSAuthContext(awsConfig)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to reload Amazon Bedrock auth after refresh: %w", err)
+	}
+	if r.Auth == nil {
+		r.Auth = &AuthHeaders{Headers: http.Header{}}
+	}
+	r.Auth.SignRequest = func(ctx context.Context, request *http.Request, body []byte) (*SignedRequest, error) {
+		return signBedrockMantleRequest(awsContext, request, body)
 	}
 	return nil
 }
@@ -2864,6 +2878,11 @@ func cloneProviderAWSAuthInfo(value *ProviderAWSAuthInfo) *ProviderAWSAuthInfo {
 		return nil
 	}
 	clone := *value
+	if value.CredentialExport != nil {
+		export := *value.CredentialExport
+		export.Args = append([]string(nil), value.CredentialExport.Args...)
+		clone.CredentialExport = &export
+	}
 	if value.AuthRefresh != nil {
 		refresh := *value.AuthRefresh
 		refresh.Args = append([]string(nil), value.AuthRefresh.Args...)

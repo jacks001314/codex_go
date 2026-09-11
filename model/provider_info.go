@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,8 +18,14 @@ const (
 	DefaultWebsocketConnectTimeoutMS uint64 = 15000
 	DefaultProviderAuthTimeoutMS     uint64 = 5000
 	DefaultProviderAuthRefreshMS     uint64 = 300000
-	MaxStreamMaxRetries              uint64 = 100
-	MaxRequestMaxRetries             uint64 = 100
+	// DefaultAWSCredentialExportTimeoutMS mirrors Rust
+	// DEFAULT_AWS_CREDENTIAL_EXPORT_TIMEOUT_MS (#44028).
+	DefaultAWSCredentialExportTimeoutMS uint64 = 30000
+	// MaxAWSCredentialExportOutputBytes bounds credential-export command output
+	// (Rust MAX_CREDENTIAL_OUTPUT_BYTES).
+	MaxAWSCredentialExportOutputBytes        = 64 * 1024
+	MaxStreamMaxRetries               uint64 = 100
+	MaxRequestMaxRetries              uint64 = 100
 
 	OpenAIProviderID                        = "openai"
 	OpenAIProviderName                      = "OpenAI"
@@ -83,9 +90,37 @@ type ProviderAuthInfo struct {
 type ProviderAWSAuthInfo struct {
 	Profile string `json:"profile,omitempty"`
 	Region  string `json:"region,omitempty"`
+	// CredentialExport mirrors Rust #44028: a command whose JSON output supplies
+	// SigV4 signing credentials for Amazon Bedrock.
+	CredentialExport *ProviderCredentialExportInfo `json:"credential_export,omitempty"`
 	// AuthRefresh mirrors Rust #39410: an `aws` command that refreshes
 	// expired AWS SDK credentials for Bedrock sessions, plus a timeout.
 	AuthRefresh *ProviderAuthRefreshInfo `json:"auth_refresh,omitempty"`
+}
+
+type ProviderCredentialExportInfo struct {
+	Command   string   `json:"command,omitempty"`
+	Args      []string `json:"args,omitempty"`
+	TimeoutMS uint64   `json:"timeout_ms,omitempty"`
+}
+
+// ValidateCredentialExport mirrors Rust ModelProviderInfo::validate (#44028):
+// credential export must not be combined with a shared profile, and its
+// command must be a non-empty absolute path or bare executable name.
+func (a *ProviderAWSAuthInfo) ValidateCredentialExport() error {
+	if a == nil || a.CredentialExport == nil {
+		return nil
+	}
+	if strings.TrimSpace(a.Profile) != "" {
+		return errors.New("provider aws.credential_export cannot be combined with aws.profile")
+	}
+	if strings.TrimSpace(a.CredentialExport.Command) == "" {
+		return errors.New("provider aws.credential_export.command must not be empty")
+	}
+	if !providerCommandIsAbsoluteOrBare(a.CredentialExport.Command) {
+		return errors.New("provider aws.credential_export.command must be an absolute path or a bare executable name")
+	}
+	return nil
 }
 
 type ProviderAuthRefreshInfo struct {
@@ -146,6 +181,11 @@ func (p *ProviderInfo) Validate() error {
 		}
 		if len(conflicts) > 0 {
 			return fmt.Errorf("provider aws cannot be combined with %s", strings.Join(conflicts, ", "))
+		}
+		if export := p.AWS.CredentialExport; export != nil {
+			if err := p.AWS.ValidateCredentialExport(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -354,12 +394,27 @@ func cloneProviderAWSAuthInfoConfig(info *ProviderAWSAuthInfo) *ProviderAWSAuthI
 		return nil
 	}
 	clone := *info
+	if info.CredentialExport != nil {
+		export := *info.CredentialExport
+		export.Args = append([]string(nil), info.CredentialExport.Args...)
+		clone.CredentialExport = &export
+	}
 	if info.AuthRefresh != nil {
 		refresh := *info.AuthRefresh
 		refresh.Args = append([]string(nil), info.AuthRefresh.Args...)
 		clone.AuthRefresh = &refresh
 	}
 	return &clone
+}
+
+// providerCommandIsAbsoluteOrBare mirrors Rust's AwsCredentialExport command
+// check (#44028): the executable must be an absolute path or a single bare
+// name, so relative paths and directory-qualified names are rejected.
+func providerCommandIsAbsoluteOrBare(command string) bool {
+	if filepath.IsAbs(command) {
+		return true
+	}
+	return command != "" && filepath.Base(command) == command && !strings.ContainsAny(command, `/\`)
 }
 
 func CreateOpenAIProvider(baseURL string) ProviderInfo {
@@ -451,7 +506,7 @@ func MergeConfiguredProviders(providers map[string]ProviderInfo, configured map[
 			httpHeadersOverride := provider.HTTPHeaders
 			provider.HTTPHeaders = nil
 			if !(&provider).isZero() {
-				return nil, fmt.Errorf("model_providers.%s only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, and `aws.auth_refresh`; other non-default provider fields are not supported", key)
+				return nil, fmt.Errorf("model_providers.%s only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, `aws.credential_export`, and `aws.auth_refresh`; other non-default provider fields are not supported", key)
 			}
 			builtIn := out[key]
 			builtIn.BaseURL = baseURLOverride

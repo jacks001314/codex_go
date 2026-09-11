@@ -16,6 +16,21 @@ func ProvidersFromConfig(values map[string]any, openAIBaseURL string) (map[strin
 	return MergeConfiguredProviders(BuiltInProviders(openAIBaseURL), configured)
 }
 
+func providerCredentialExportTimeoutMSConfig(values map[string]any) (uint64, error) {
+	raw := configValue(values, "timeout_ms")
+	if raw == nil {
+		return DefaultAWSCredentialExportTimeoutMS, nil
+	}
+	value, ok := uint64FromAny(raw)
+	if !ok {
+		return 0, fmt.Errorf("provider aws.credential_export.timeout_ms must be a positive integer")
+	}
+	if value == 0 {
+		return 0, fmt.Errorf("provider aws.credential_export.timeout_ms must be non-zero")
+	}
+	return value, nil
+}
+
 func ProviderForConfigID(values map[string]any, providerID string, openAIBaseURL string) (*ProviderInfo, error) {
 	providerID = strings.TrimSpace(providerID)
 	if providerID == "" {
@@ -70,6 +85,11 @@ func ConfiguredProviderMap(value any) (map[string]ProviderInfo, error) {
 		if isBedrockProviderID(id) {
 			if provider.Auth != nil && strings.TrimSpace(provider.Auth.Command) == "" {
 				return nil, fmt.Errorf("model_providers.%s: provider auth.command must not be empty", id)
+			}
+			if provider.AWS != nil {
+				if err := provider.AWS.ValidateCredentialExport(); err != nil {
+					return nil, fmt.Errorf("model_providers.%s: %w", id, err)
+				}
 			}
 		} else {
 			if err := provider.Validate(); err != nil {
@@ -155,6 +175,17 @@ func providerInfoFromConfig(values map[string]any, validate bool) (*ProviderInfo
 		provider.AWS = &ProviderAWSAuthInfo{
 			Profile: stringConfig(awsConfig, "profile"),
 			Region:  stringConfig(awsConfig, "region"),
+		}
+		if exportConfig, ok := configValue(awsConfig, "credential_export").(map[string]any); ok {
+			timeoutMS, err := providerCredentialExportTimeoutMSConfig(exportConfig)
+			if err != nil {
+				return nil, err
+			}
+			provider.AWS.CredentialExport = &ProviderCredentialExportInfo{
+				Command:   stringConfig(exportConfig, "command"),
+				Args:      stringSliceConfig(exportConfig, "args"),
+				TimeoutMS: timeoutMS,
+			}
 		}
 		if refreshConfig, ok := configValue(awsConfig, "auth_refresh").(map[string]any); ok {
 			timeoutMS, err := providerAuthRefreshTimeoutMSConfig(refreshConfig)

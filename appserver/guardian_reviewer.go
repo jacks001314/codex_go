@@ -804,7 +804,7 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 	if err != nil || cfg == nil {
 		return
 	}
-	threadContext := features.Enabled(cfg.FeatureSettings(), "guardian_thread_context")
+	threadContext := features.Enabled(cfg.FeatureSettings(), "guardianv2.thread_context")
 	reuseParentCompaction := features.Enabled(cfg.FeatureSettings(), "guardian_reuse_parent_compaction")
 	if !threadContext && !reuseParentCompaction {
 		return

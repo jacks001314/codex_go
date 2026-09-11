@@ -25,5 +25,7 @@ codex-go是官方rust版本codex cli的go版本同步实现，需要功能高度
 
 4. git commit and push更新后的go版本codex项目到github远程仓库
 
-5. 总结更新对齐情况
+5. 检查是否还有未落地的功能或是延长的功能，若有，继续执行第2步，否则结束。
+
+6. 总结更新对齐情况
 

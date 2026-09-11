@@ -12091,6 +12091,12 @@ func (r *RuntimeRouter) experimentalContextManagementEligible(cfg *config.Config
 	if err != nil || providerInfo == nil || !providerInfo.IsOpenAI() {
 		return false
 	}
+	// Rust 6af345407d (#43147): experimental context activation also requires
+	// the starting model to advertise supports_experimental_context. Omitted
+	// metadata defaults to false, so an unresolved model stays ineligible.
+	if info := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(modelProviderConfig.Model), cfg); info == nil || !info.SupportsExperimentalContext {
+		return false
+	}
 	resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())
 	if err != nil || resolved == nil || (&resolved.Auth).BackendMode() != "chatgpt" {
 		return false

@@ -763,8 +763,9 @@ func TestStrictConfigAcceptsRecentFeatureKeys(t *testing.T) {
 	for _, key := range []string{
 		"sleep_tool", "powershell_shell_version", "local_thread_store_shared_compression",
 		"omit_app_server_notification_media", "context_management", "worktrees",
-		"guardian_thread_context", "mcp_oauth_refresh_coordination", "unified_exec_tty",
-		"windows_sandbox_service",
+		"guardianv2.thread_context", "mcp_oauth_refresh_coordination", "unified_exec_tty",
+		"windows_sandbox_service", "api_key_model_discovery", "codex_apps_mcp_2026_07_28",
+		"reasoning_effort_override",
 	} {
 		features[key] = true
 	}

@@ -317,7 +317,13 @@ func (p *AmazonBedrockProvider) APIAuth() (AuthHeaders, error) {
 		return AuthHeaders{Headers: headers}, nil
 	}
 	awsConfig := p.awsAuthConfig()
-	awsContext, err := auth.LoadAWSAuthContext(awsConfig)
+	var awsContext *auth.AWSAuthContext
+	var err error
+	if config, ok := p.credentialExportConfig(); ok {
+		awsContext, err = auth.LoadAWSAuthContextWithProvider(awsConfig, credentialExportProviderForConfig(config))
+	} else {
+		awsContext, err = auth.LoadAWSAuthContext(awsConfig)
+	}
 	if err != nil {
 		return AuthHeaders{}, fmt.Errorf("failed to resolve Amazon Bedrock auth: %w", err)
 	}
@@ -391,6 +397,19 @@ func (p *AmazonBedrockProvider) awsAuthConfig() *auth.AWSAuthConfig {
 		config.Region = strings.TrimSpace(p.info.AWS.Region)
 	}
 	return config
+}
+
+// credentialExportConfig returns the configured Bedrock credential-export
+// command, if any (Rust #44028).
+func (p *AmazonBedrockProvider) credentialExportConfig() (ProviderCredentialExportInfo, bool) {
+	return bedrockCredentialExportConfig(p.info.AWS)
+}
+
+func bedrockCredentialExportConfig(info *ProviderAWSAuthInfo) (ProviderCredentialExportInfo, bool) {
+	if info == nil || info.CredentialExport == nil {
+		return ProviderCredentialExportInfo{}, false
+	}
+	return *info.CredentialExport, true
 }
 
 func amazonBedrockMantleBaseURL(region string) (string, error) {

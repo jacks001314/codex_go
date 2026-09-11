@@ -312,7 +312,7 @@ func TestProviderConfigAllowsOnlyAmazonBedrockAWSOverride(t *testing.T) {
 	if err == nil {
 		t.Fatal("ProviderForConfigID returned nil error, want unsupported override failure")
 	}
-	if !strings.Contains(err.Error(), "only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, and `aws.auth_refresh`") {
+	if !strings.Contains(err.Error(), "only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, `aws.credential_export`, and `aws.auth_refresh`") {
 		t.Fatalf("error = %v", err)
 	}
 

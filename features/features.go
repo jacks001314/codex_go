@@ -87,6 +87,9 @@ var Registry = []Spec{
 	{Key: "windows_sandbox_service", Stage: StageUnderDevelopment},
 	{Key: "elevated_windows_sandbox", Stage: StageRemoved},
 	{Key: "remote_models", Stage: StageRemoved},
+	// Rust (codex-rs/features/src/lib.rs #44392): opt-in model discovery for
+	// OpenAI API keys.
+	{Key: "api_key_model_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "enable_request_compression", Stage: StageStable, DefaultEnabled: true},
 	{
 		Key:                         "network_proxy",
@@ -103,6 +106,9 @@ var Registry = []Spec{
 	{Key: "apps", Stage: StageStable, DefaultEnabled: true},
 	{Key: "enable_mcp_apps", Stage: StageUnderDevelopment},
 	{Key: "mcp_2026_07_28", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs eb680c0558 #44318): hosted Codex Apps
+	// get an independent MCP protocol opt-in.
+	{Key: "codex_apps_mcp_2026_07_28", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #42413): coordinated MCP OAuth
 	// refresh across servers sharing an account.
 	{Key: "mcp_oauth_refresh_coordination", Stage: StageUnderDevelopment},
@@ -156,14 +162,18 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs c2bcb9a26b): reuse encrypted parent
 	// compaction when restarting Guardian review sessions.
 	{Key: "guardian_reuse_parent_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
-	// Rust (codex-rs/features/src/lib.rs #42529): retain thread context for
-	// Guardian reviews.
-	{Key: "guardian_thread_context", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs e4ce83419b #43104): retain thread
+	// context for Guardian reviews; renamed from guardian_thread_context into
+	// the guardianv2 configuration namespace.
+	{Key: "guardianv2.thread_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_ext", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardianv2", Stage: StageUnderDevelopment},
 	{Key: "goals", Stage: StageStable, DefaultEnabled: true},
 	{Key: "token_budget", Stage: StageUnderDevelopment},
 	{Key: "rollout_budget", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #43795): pin reasoning effort while
+	// configuration overrides are active.
+	{Key: "reasoning_effort_override", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "current_time_reminder", Stage: StageUnderDevelopment},
 	{Key: "collaboration_modes", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "tool_call_mcp_elicitation", Stage: StageStable, DefaultEnabled: true},

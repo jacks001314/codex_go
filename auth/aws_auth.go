@@ -37,6 +37,40 @@ type AWSAuthCredentials struct {
 	SessionToken    string `json:"sessionToken,omitempty"`
 }
 
+// AWSAccessKeys are exported SigV4 signing credentials supplied on demand.
+type AWSAccessKeys struct {
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+}
+
+// AWSCredentialsProvider supplies AWS access keys without exposing AWS SDK
+// credential types to callers (Rust codex-aws-auth AwsCredentialsProvider).
+// Implementations must return current credentials for every call so request
+// signing observes refreshes, and errors must not contain secrets.
+type AWSCredentialsProvider interface {
+	Credentials(ctx context.Context) (AWSAccessKeys, error)
+}
+
+// awsCredentialsProviderAdapter adapts an AWSCredentialsProvider to the AWS
+// SDK credential provider interface used for SigV4 signing.
+type awsCredentialsProviderAdapter struct {
+	provider AWSCredentialsProvider
+}
+
+func (a awsCredentialsProviderAdapter) Retrieve(ctx context.Context) (awssdk.Credentials, error) {
+	keys, err := a.provider.Credentials(ctx)
+	if err != nil {
+		return awssdk.Credentials{}, err
+	}
+	return awssdk.Credentials{
+		AccessKeyID:     strings.TrimSpace(keys.AccessKeyID),
+		SecretAccessKey: strings.TrimSpace(keys.SecretAccessKey),
+		SessionToken:    strings.TrimSpace(keys.SessionToken),
+		Source:          "codex-bedrock-credential-export",
+	}, nil
+}
+
 type AWSAuthRequestToSign struct {
 	Method  string      `json:"method"`
 	URL     string      `json:"url"`
@@ -86,6 +120,43 @@ func LoadAWSAuthContext(config *AWSAuthConfig) (*AWSAuthContext, error) {
 	return &AWSAuthContext{
 		config:      loaded,
 		credentials: loaded.Credentials,
+		region:      region,
+		service:     normalized.Service,
+	}, nil
+}
+
+// LoadAWSAuthContextWithProvider mirrors Rust
+// AwsAuthContext::load_with_credentials_provider (#44028): resolve the region
+// from the standard AWS config chain, then replace the SDK credential provider
+// with a caller-supplied exporter so signing uses the exported credentials.
+func LoadAWSAuthContextWithProvider(config *AWSAuthConfig, provider AWSCredentialsProvider) (*AWSAuthContext, error) {
+	normalized, err := normalizeAWSAuthConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	if provider == nil {
+		return LoadAWSAuthContext(config)
+	}
+	ctx := context.Background()
+	options := []func(*awsconfig.LoadOptions) error{}
+	if normalized.Profile != "" {
+		options = append(options, awsconfig.WithSharedConfigProfile(normalized.Profile))
+	}
+	if normalized.Region != "" {
+		options = append(options, awsconfig.WithRegion(normalized.Region))
+	}
+	loaded, err := awsconfig.LoadDefaultConfig(ctx, options...)
+	if err != nil {
+		return nil, err
+	}
+	region := strings.TrimSpace(loaded.Region)
+	if region == "" {
+		return nil, ErrAWSAuthMissingRegion
+	}
+	adapter := awsCredentialsProviderAdapter{provider: provider}
+	return &AWSAuthContext{
+		config:      loaded,
+		credentials: adapter,
 		region:      region,
 		service:     normalized.Service,
 	}, nil

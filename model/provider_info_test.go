@@ -223,7 +223,7 @@ func TestMergeConfiguredProvidersRejectsAmazonBedrockUnsupportedOverride(t *test
 	_, err := MergeConfiguredProviders(BuiltInProviders(""), map[string]ProviderInfo{
 		AmazonBedrockProviderID: {Name: "Custom Bedrock"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, and `aws.auth_refresh`") {
+	if err == nil || !strings.Contains(err.Error(), "only supports changing `base_url`, `auth`, `http_headers`, `aws.profile`, `aws.region`, `aws.credential_export`, and `aws.auth_refresh`") {
 		t.Fatalf("error = %v", err)
 	}
 }

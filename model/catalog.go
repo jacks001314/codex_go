@@ -292,6 +292,10 @@ type ModelInfo struct {
 	InputModalities               []string          `json:"input_modalities"`
 	UsedFallbackModelMetadata     bool              `json:"-"`
 	SupportsSearchTool            bool              `json:"supports_search_tool"`
+	// SupportsExperimentalContext mirrors Rust ModelInfo.supports_experimental_context
+	// (serde default false): whether experimental context management may be
+	// activated at session startup for this model.
+	SupportsExperimentalContext   bool              `json:"supports_experimental_context"`
 	UseResponsesLite              bool              `json:"use_responses_lite"`
 	NodeReplAutoReviewRequired    bool              `json:"node_repl_auto_review_required"`
 	NodeReplDisabled              bool              `json:"node_repl_disabled"`
@@ -481,6 +485,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		EffectiveContextWindowPercent     int                   `json:"effective_context_window_percent"`
 		InputModalities                   []string              `json:"input_modalities"`
 		SupportsSearchTool                bool                  `json:"supports_search_tool"`
+		SupportsExperimentalContext       bool                  `json:"supports_experimental_context"`
 		UseResponsesLite                  bool                  `json:"use_responses_lite"`
 		NodeReplAutoReviewRequired        bool                  `json:"node_repl_auto_review_required"`
 		NodeReplDisabled                  bool                  `json:"node_repl_disabled"`
@@ -530,6 +535,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		EffectiveContextWindowPercent:  raw.EffectiveContextWindowPercent,
 		InputModalities:                cloneStrings(raw.InputModalities),
 		SupportsSearchTool:             raw.SupportsSearchTool,
+		SupportsExperimentalContext:    raw.SupportsExperimentalContext,
 		UseResponsesLite:               raw.UseResponsesLite,
 		NodeReplAutoReviewRequired:     raw.NodeReplAutoReviewRequired,
 		NodeReplDisabled:               raw.NodeReplDisabled,

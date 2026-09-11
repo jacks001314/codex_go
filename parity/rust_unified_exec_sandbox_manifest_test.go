@@ -142,6 +142,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"windows_elevated_unified_exec_enforces_managed_deny_reads",
 				"windows_elevated_does_not_create_missing_workspace_metadata",
 				"windows_elevated_enforces_deny_read_and_protects_setup_marker",
+				"windows_elevated_setup_rejects_default_root_deny",
 				"windows_restricted_token_rejects_exact_and_glob_deny_read_policy",
 				"windows_sandbox_cli_preserves_managed_deny_reads_across_launches",
 			},
