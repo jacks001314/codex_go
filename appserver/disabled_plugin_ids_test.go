@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/config"
 	"codex_go/model"
 	"codex_go/plugin"
 	"codex_go/session"
@@ -126,6 +127,31 @@ func TestDisabledPluginHookSourcesFilteredLikeRust(t *testing.T) {
 	filtered := filterDisabledPluginHookSources([]string{"a@m"}, sources)
 	if len(filtered) != 1 || filtered[0].PluginID != "b@m" {
 		t.Fatalf("filtered sources = %#v, want only b@m", filtered)
+	}
+}
+
+// TestRuntimeRouterPluginDiscoverableConfigIncludesThreadDisabledPluginsLikeRust
+// covers the plugin-recommendation half of #44655: a thread's disabled selection
+// feeds the discoverable-candidate filter, so disabled plugins are not suggested.
+func TestRuntimeRouterPluginDiscoverableConfigIncludesThreadDisabledPluginsLikeRust(t *testing.T) {
+	service := NewThreadExtraService()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadExtras: service,
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	ids := []string{"a@m"}
+	if _, err := service.UpdateSettings(&SettingsUpdateParams{ThreadID: "thread-a", DisabledPluginIDs: &ids}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	got := router.pluginDiscoverableConfigForTurn("thread-a", &config.Config{Values: map[string]any{}})
+	if got == nil || !reflect.DeepEqual(got.DisabledPluginIDs, []string{"a@m"}) {
+		t.Fatalf("discoverable config = %#v, want disabled [a@m]", got)
+	}
+	// A thread with no selection contributes nothing.
+	if other := router.pluginDiscoverableConfigForTurn("thread-b", &config.Config{Values: map[string]any{}}); other != nil {
+		t.Fatalf("unrelated-thread config = %#v, want nil", other)
 	}
 }
 

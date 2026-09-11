@@ -6203,7 +6203,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
-	inputItems = append(inputItems, r.recommendedPluginInputItems(cfg)...)
+	inputItems = append(inputItems, r.recommendedPluginInputItems(threadID, cfg)...)
 	inputItems = append(inputItems, r.explicitAppInputItems(threadID, params, cfg)...)
 	currentTimeState := r.newCurrentTimeReminderTurnState(threadID)
 	currentTimeInputItems, currentTimeSessionItems, err := r.currentTimeReminderInputItems(ctx, threadID, turnID, cfg, time.UnixMilli(startedAtMS).UTC(), currentTimeState)
@@ -7147,8 +7147,8 @@ func instructionsAndInputItemsWithAdditionalContext(instructions string, values 
 	return strings.TrimSpace(instructions), inputItems
 }
 
-func (r *RuntimeRouter) recommendedPluginInputItems(cfg *config.Config) []any {
-	candidates := pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurn(cfg))
+func (r *RuntimeRouter) recommendedPluginInputItems(threadID string, cfg *config.Config) []any {
+	candidates := pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurn(threadID, cfg))
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -7263,16 +7263,16 @@ func appEnabledForRuntime(app *apps.AppEntry) bool {
 	return app.Enabled
 }
 
-func (r *RuntimeRouter) pluginInstallCandidatesForTurn(cfg *config.Config) []plugin.DiscoverableInfo {
-	return r.pluginInstallCandidatesForTurnContext(context.Background(), cfg)
+func (r *RuntimeRouter) pluginInstallCandidatesForTurn(threadID string, cfg *config.Config) []plugin.DiscoverableInfo {
+	return r.pluginInstallCandidatesForTurnContext(threadID, context.Background(), cfg)
 }
 
-func (r *RuntimeRouter) pluginInstallCandidatesForTurnContext(ctx context.Context, cfg *config.Config) []plugin.DiscoverableInfo {
+func (r *RuntimeRouter) pluginInstallCandidatesForTurnContext(threadID string, ctx context.Context, cfg *config.Config) []plugin.DiscoverableInfo {
 	if r == nil || r.services.Plugins == nil {
 		return nil
 	}
 	r.configureSuggestedPluginProviderForTurn(cfg)
-	return plugin.ListDiscoverablePlugins(r.services.Plugins.DiscoverableInstallCandidatesContext(ctx), r.pluginDiscoverableConfigForTurn(cfg))
+	return plugin.ListDiscoverablePlugins(r.services.Plugins.DiscoverableInstallCandidatesContext(ctx), r.pluginDiscoverableConfigForTurn(threadID, cfg))
 }
 
 func pluginInstallRecommendationCandidates(candidates []plugin.DiscoverableInfo) []plugin.DiscoverableInfo {
@@ -7286,7 +7286,7 @@ func pluginInstallRecommendationCandidates(candidates []plugin.DiscoverableInfo)
 	return out
 }
 
-func (r *RuntimeRouter) pluginDiscoverableConfigForTurn(cfg *config.Config) *plugin.DiscoverableConfig {
+func (r *RuntimeRouter) pluginDiscoverableConfigForTurn(threadID string, cfg *config.Config) *plugin.DiscoverableConfig {
 	if r == nil {
 		return nil
 	}
@@ -7310,6 +7310,9 @@ func (r *RuntimeRouter) pluginDiscoverableConfigForTurn(cfg *config.Config) *plu
 			out.DisabledPluginIDs = append(out.DisabledPluginIDs, id)
 		}
 	}
+	// Rust #44655: a plugin the thread disabled is not a recommendation
+	// candidate either.
+	out.DisabledPluginIDs = append(out.DisabledPluginIDs, r.threadDisabledPluginIDs(threadID)...)
 	if r.services.Apps != nil {
 		for id, app := range r.appsForExplicitMentions("", &config.Config{Values: values}) {
 			if app.IsAccessible && strings.TrimSpace(id) != "" {

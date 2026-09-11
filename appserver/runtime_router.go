@@ -12491,7 +12491,7 @@ func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID stri
 	go func() {
 		var candidates []plugin.DiscoverableInfo
 		if r != nil {
-			candidates = pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurnContext(ctx, cfg))
+			candidates = pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurnContext(threadID, ctx, cfg))
 		}
 		recommendations <- candidates
 	}()
