@@ -186,6 +186,39 @@ type Layer struct {
 	DisabledReason *string     `json:"disabledReason,omitempty"`
 }
 
+// HasLaunchSetting mirrors Rust codex-rs/tui/src/app/new_session.rs
+// has_launch_setting (#44693): a key counts as an explicit launch choice when it
+// is supplied by a generic `-c key=value` override, or when the
+// highest-precedence layer that supplies it is the user layer with an
+// explicitly selected profile. Settings shadowed by a higher-precedence layer
+// (for example project configuration) do not count, so managed new-thread
+// defaults may still apply.
+//
+// layers must be ordered from lowest to highest precedence (the order returned
+// by ConfigService.Read with IncludeLayers).
+func HasLaunchSetting(layers []Layer, cliKVOverrides []string, key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	for _, override := range cliKVOverrides {
+		if strings.TrimSpace(override) == key {
+			return true
+		}
+	}
+	for index := len(layers) - 1; index >= 0; index-- {
+		values, ok := layers[index].Config.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, present := values[key]; !present {
+			continue
+		}
+		return layers[index].Name.Type == LayerSourceUser && layers[index].Name.Profile != nil
+	}
+	return false
+}
+
 type ConfigReadParams struct {
 	IncludeLayers bool    `json:"includeLayers,omitempty"`
 	CWD           *string `json:"cwd,omitempty"`
