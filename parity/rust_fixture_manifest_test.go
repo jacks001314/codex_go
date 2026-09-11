@@ -90,9 +90,13 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			},
 		},
 		{
-			Path:  "core/tests/suite",
-			// #44915 removed two thread/rollback core test snapshots.
-			Files: 185,
+			Path: "core/tests/suite",
+			// Upstream added core/tests/suite/step_settings/code_mode_notifications.rs
+			// and mcp_ema_config.rs while retiring one earlier fixture (#44865,
+			// #44832); #44915 then removed two thread/rollback snapshots. None
+			// of them touch the voice surface. #44934 later added
+			// scenarios.rs plus two Astra scenario snapshots.
+			Files: 188,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
