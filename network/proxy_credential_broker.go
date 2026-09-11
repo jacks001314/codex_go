@@ -549,6 +549,9 @@ func (b *ProxyCredentialBroker) virtualizeEnvVar(env map[string]string, envVar s
 		return
 	}
 	dummyValue := b.register(envVar, provider, hostBinding, realValue)
+	if dummyValue == "" {
+		return
+	}
 	env[envVar] = dummyValue
 }
 
@@ -559,8 +562,21 @@ func (b *ProxyCredentialBroker) register(envVar string, provider *ProxyCredentia
 		}
 	}
 	dummyValue := ""
-	for dummyValue == "" || dummyValue == realValue || b.isDummyValue(dummyValue) {
+	for attempts := 0; attempts < maxCredentialDummyAttempts; attempts++ {
 		dummyValue = provider.DummyValue(realValue)
+		if dummyValue == "" || dummyValue == realValue || b.isDummyValue(dummyValue) {
+			continue
+		}
+		// Rust #44066: a dummy must not embed another provider's credential,
+		// otherwise alias discovery could attribute it to the wrong provider.
+		if b.dummyEmbedsOtherProviderCredential(dummyValue, provider) {
+			dummyValue = ""
+			continue
+		}
+		break
+	}
+	if dummyValue == "" {
+		return ""
 	}
 	b.credentials = append(b.credentials, ProxyCredentialRecord{
 		EnvVar:      envVar,
@@ -570,6 +586,32 @@ func (b *ProxyCredentialBroker) register(envVar string, provider *ProxyCredentia
 		DummyValue:  dummyValue,
 	})
 	return dummyValue
+}
+
+// dummyEmbedsOtherProviderCredential mirrors #44066's rejection of dummy values
+// that contain a complete token matching another configured provider's pattern.
+func (b *ProxyCredentialBroker) dummyEmbedsOtherProviderCredential(dummyValue string, provider *ProxyCredentialProvider) bool {
+	for _, other := range b.providers {
+		if other == nil || other == provider {
+			continue
+		}
+		for _, pattern := range other.embeddedPatterns {
+			for _, indices := range pattern.matcher.FindAllStringIndex(dummyValue, -1) {
+				start, end := indices[0], indices[1]
+				if end-start < minEmbeddedCredentialLength && !pattern.distinctive {
+					continue
+				}
+				if start > 0 && isCredentialTokenByte(dummyValue[start-1]) {
+					continue
+				}
+				if end < len(dummyValue) && isCredentialTokenByte(dummyValue[end]) {
+					continue
+				}
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (b *ProxyCredentialBroker) isDummyValue(value string) bool {
