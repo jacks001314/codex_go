@@ -1469,8 +1469,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 		_ = r.appendRuntimeRollout(threadID, items, startedAt)
 	}
-	r.recordMemoryCitationUsage(threadID, items)
-	r.emitTurnTokenUsageMetrics(r.services.TurnMetrics, result.ModelResponses(), runConfig.Model, features.Enabled(r.effectiveMCPConfigForThread(threadID).FeatureSettings(), "memories"))
+	hasMemoryCitation := r.recordMemoryCitationUsage(threadID, items)
+	memoryCfg := r.effectiveMCPConfigForThread(threadID)
+	memoryFeatureEnabled := features.Enabled(memoryCfg.FeatureSettings(), "memories")
+	r.emitTurnTokenUsageMetrics(r.services.TurnMetrics, result.ModelResponses(), runConfig.Model, memoryFeatureEnabled)
+	r.emitTurnMemoryMetric(r.services.TurnMetrics, memoryFeatureEnabled, memoryCfg.Memories().UseMemories, hasMemoryCitation)
 	r.unifiedExecPersistMu.Unlock()
 	threadItems := make([]ThreadItem, 0, len(items))
 	for _, item := range items {

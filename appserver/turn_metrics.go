@@ -112,3 +112,26 @@ func (r *RuntimeRouter) emitTurnTokenUsageMetrics(sink telemetry.TurnMetricSink,
 		}
 	}
 }
+
+// emitTurnMemoryMetric records the codex.turn.memory counter (Rust #44656,
+// emit_turn_memory_metric): whether memory reads were allowed, whether the
+// feature/config gates were on, and whether the turn cited memory.
+func (r *RuntimeRouter) emitTurnMemoryMetric(sink telemetry.TurnMetricSink, featureEnabled bool, configUseMemories bool, hasCitations bool) {
+	if sink == nil {
+		return
+	}
+	readAllowed := featureEnabled && configUseMemories
+	sink.Counter(telemetry.TurnMemoryMetric, 1, map[string]string{
+		"read_allowed":        boolTagValue(readAllowed),
+		"feature_enabled":     boolTagValue(featureEnabled),
+		"config_use_memories": boolTagValue(configUseMemories),
+		"has_citations":       boolTagValue(hasCitations),
+	})
+}
+
+func boolTagValue(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}

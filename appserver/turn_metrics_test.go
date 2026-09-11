@@ -44,6 +44,31 @@ func TestTurnTokenUsageByModelAttributesUsageToProducingModel(t *testing.T) {
 	}
 }
 
+// TestEmitTurnMemoryMetricRecordsGates mirrors Rust emit_turn_memory_metric:
+// one codex.turn.memory counter with read_allowed computed from the feature and
+// config gates, plus the individual gate/citation tags.
+func TestEmitTurnMemoryMetricRecordsGates(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	router := NewRuntimeRouter(RuntimeServices{TurnMetrics: metrics})
+	router.emitTurnMemoryMetric(metrics, true, false, true)
+
+	records := metrics.Records()
+	if len(records) != 1 || records[0].Name != telemetry.TurnMemoryMetric || records[0].Kind != "counter" || records[0].Inc != 1 {
+		t.Fatalf("records = %#v", records)
+	}
+	tags := records[0].Tags
+	if tags["read_allowed"] != "false" || tags["feature_enabled"] != "true" ||
+		tags["config_use_memories"] != "false" || tags["has_citations"] != "true" {
+		t.Fatalf("tags = %#v", tags)
+	}
+
+	router.emitTurnMemoryMetric(metrics, true, true, false)
+	last := metrics.Records()[len(metrics.Records())-1]
+	if last.Tags["read_allowed"] != "true" || last.Tags["has_citations"] != "false" {
+		t.Fatalf("second tags = %#v", last.Tags)
+	}
+}
+
 type turnMetricsAgent struct {
 	model string
 	usage model.AgentUsage
@@ -125,6 +150,16 @@ func TestRuntimeRouterTurnCompletionEmitsPerModelTokenUsage(t *testing.T) {
 		if seen[tokenType] != value {
 			t.Fatalf("sample %s = %d, want %d (all %#v)", tokenType, seen[tokenType], value, seen)
 		}
+	}
+
+	memoryRecords := 0
+	for _, record := range metrics.Records() {
+		if record.Name == telemetry.TurnMemoryMetric {
+			memoryRecords++
+		}
+	}
+	if memoryRecords != 1 {
+		t.Fatalf("codex.turn.memory records = %d, want 1", memoryRecords)
 	}
 }
 
