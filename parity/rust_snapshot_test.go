@@ -283,7 +283,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		{Path: "core/src/client.rs", SHA256: "42007f9b305603542c67de40e4d2e4a611ee377468dec1d76407cd31daf71e5d"},
 		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "cf3eb92caaba61369f483e09dc5cceb6267730d7df1253b58140eb3fc0ef7b90"},
 		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "f4e18fd3f3ae2e1b89cc8c90133d9bdc2861e882b0861b81cb329c320351cdba"},
-		{Path: "core/tests/suite/mod.rs", SHA256: "92f40acd24e578e03794655ee706a8759d3c81e14f37c16f2a53e4c61a317751"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "601842ce5a18502bc83588e8c947972b1011444f2fba9e0ef4df6996f779896a"},
 	}
 }
 

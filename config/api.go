@@ -1920,6 +1920,9 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 		values, origins := mergeConfigLayers(layers)
 		s.applyFeatureEnablementDefaults(values, origins)
 		applySupportedFeatureEnablement(values)
+		if err := s.validateMCPEMAAuthConfig(layers, values); err != nil {
+			return nil, err
+		}
 		response := &ConfigReadResponse{Config: values, Origins: origins}
 		if params.IncludeLayers {
 			response.Layers = cloneLayers(rpcLayers(layers))
@@ -1948,11 +1951,43 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 	values, origins := mergeConfigLayers(layers)
 	s.applyFeatureEnablementDefaults(values, origins)
 	applySupportedFeatureEnablement(values)
+	if err := s.validateMCPEMAAuthConfig(layers, values); err != nil {
+		return nil, err
+	}
 	response := &ConfigReadResponse{Config: values, Origins: origins}
 	if params.IncludeLayers {
 		response.Layers = cloneLayers(rpcLayers(layers))
 	}
 	return response, nil
+}
+
+// validateMCPEMAAuthConfig enforces enterprise MCP authorization provenance at
+// the config read boundary (Rust #44832): the trusted IdP must come from one
+// non-project layer, projects cannot re-enable or downgrade enterprise
+// registrations, and use_xaa must be opted in from a non-project layer or a
+// managed requirement.
+func (s *ConfigService) validateMCPEMAAuthConfig(layers []Layer, values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	xaaEnabled := false
+	if featuresTable, ok := values["features"].(map[string]any); ok {
+		if enabled, ok := featuresTable[XAAFeatureKey()].(bool); ok {
+			xaaEnabled = enabled
+		}
+	}
+	servers, _ := values["mcp_servers"].(map[string]any)
+	var featureRequirement *bool
+	s.mu.Lock()
+	if s.requirements != nil && s.requirements.FeatureRequirements != nil {
+		if enabled, ok := s.requirements.FeatureRequirements[XAAFeatureKey()]; ok {
+			value := enabled
+			featureRequirement = &value
+		}
+	}
+	s.mu.Unlock()
+	_, err := ResolveMCPEnterpriseManagedAuth(layers, nil, servers, xaaEnabled, featureRequirement)
+	return err
 }
 
 func (s *ConfigService) applyFeatureEnablementDefaults(values map[string]any, origins map[string]LayerMetadata) {

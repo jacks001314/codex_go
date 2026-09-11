@@ -32,34 +32,37 @@ type mcpCLIConfig struct {
 }
 
 type mcpCLIServer struct {
-	Name                      string                    `json:"name,omitempty"`
-	Type                      string                    `json:"type,omitempty"`
-	Command                   string                    `json:"command,omitempty"`
-	Args                      []string                  `json:"args,omitempty"`
-	Env                       map[string]string         `json:"env,omitempty"`
-	EnvVars                   []mcpCLIEnvVar            `json:"env_vars,omitempty"`
-	CWD                       string                    `json:"cwd,omitempty"`
-	URL                       string                    `json:"url,omitempty"`
-	BearerTokenEnvVar         string                    `json:"bearer_token_env_var,omitempty"`
-	HTTPHeaders               map[string]string         `json:"http_headers,omitempty"`
-	EnvHTTPHeaders            map[string]string         `json:"env_http_headers,omitempty"`
-	HTTPHeadersHelper         string                    `json:"-"`
-	OAuthClientID             string                    `json:"oauth_client_id,omitempty"`
-	OAuthResource             string                    `json:"oauth_resource,omitempty"`
-	Auth                      string                    `json:"auth,omitempty"`
-	EnvironmentID             string                    `json:"environment_id,omitempty"`
-	Enabled                   bool                      `json:"enabled"`
-	DisabledReason            string                    `json:"disabled_reason,omitempty"`
-	Required                  bool                      `json:"required,omitempty"`
-	SupportsParallelToolCalls bool                      `json:"supports_parallel_tool_calls,omitempty"`
-	StartupTimeoutSec         *float64                  `json:"startup_timeout_sec,omitempty"`
-	ToolTimeoutSec            *float64                  `json:"tool_timeout_sec,omitempty"`
-	EnabledTools              []string                  `json:"enabled_tools,omitempty"`
-	DisabledTools             []string                  `json:"disabled_tools,omitempty"`
-	OmitToolsFrom             []string                  `json:"omit_tools_from,omitempty"`
-	Scopes                    []string                  `json:"scopes,omitempty"`
-	DefaultToolsApprovalMode  string                    `json:"default_tools_approval_mode,omitempty"`
-	Tools                     map[string]map[string]any `json:"tools,omitempty"`
+	Name              string            `json:"name,omitempty"`
+	Type              string            `json:"type,omitempty"`
+	Command           string            `json:"command,omitempty"`
+	Args              []string          `json:"args,omitempty"`
+	Env               map[string]string `json:"env,omitempty"`
+	EnvVars           []mcpCLIEnvVar    `json:"env_vars,omitempty"`
+	CWD               string            `json:"cwd,omitempty"`
+	URL               string            `json:"url,omitempty"`
+	BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty"`
+	HTTPHeaders       map[string]string `json:"http_headers,omitempty"`
+	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`
+	HTTPHeadersHelper string            `json:"-"`
+	OAuthClientID     string            `json:"oauth_client_id,omitempty"`
+	OAuthResource     string            `json:"oauth_resource,omitempty"`
+	// OAuthAuthorizationServerIssuer is the EMA resource authorization server
+	// issuer carried through the `[mcp_servers.X.oauth]` table (Rust #44832).
+	OAuthAuthorizationServerIssuer string                    `json:"oauth_authorization_server_issuer,omitempty"`
+	Auth                           string                    `json:"auth,omitempty"`
+	EnvironmentID                  string                    `json:"environment_id,omitempty"`
+	Enabled                        bool                      `json:"enabled"`
+	DisabledReason                 string                    `json:"disabled_reason,omitempty"`
+	Required                       bool                      `json:"required,omitempty"`
+	SupportsParallelToolCalls      bool                      `json:"supports_parallel_tool_calls,omitempty"`
+	StartupTimeoutSec              *float64                  `json:"startup_timeout_sec,omitempty"`
+	ToolTimeoutSec                 *float64                  `json:"tool_timeout_sec,omitempty"`
+	EnabledTools                   []string                  `json:"enabled_tools,omitempty"`
+	DisabledTools                  []string                  `json:"disabled_tools,omitempty"`
+	OmitToolsFrom                  []string                  `json:"omit_tools_from,omitempty"`
+	Scopes                         []string                  `json:"scopes,omitempty"`
+	DefaultToolsApprovalMode       string                    `json:"default_tools_approval_mode,omitempty"`
+	Tools                          map[string]map[string]any `json:"tools,omitempty"`
 }
 
 type mcpCLIEnvVar struct {
@@ -312,6 +315,11 @@ func runMCPLogin(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, 
 		return fmt.Errorf("OAuth login is only supported for streamable HTTP servers.")
 	}
 	runtimeConfig := mcpServerRuntimeConfig(opts.Name, server, store.codexHome)
+	if runtimeConfig.EffectiveAuth() == mcp.ServerAuthEMAAuth {
+		// Enterprise MCP authorization is managed by Codex account sign-in
+		// (Rust #44832); ordinary MCP OAuth login is blocked for EMA.
+		return fmt.Errorf("Enterprise MCP authorization is managed by Codex account sign-in. Open Codex to sign in.")
+	}
 	if runtimeConfig.EffectiveAuth() == mcp.ServerAuthChatGPT && !runtimeConfig.IsLocalEnvironment() {
 		return fmt.Errorf("OAuth login is not supported for executor-owned ChatGPT MCP servers")
 	}
@@ -548,22 +556,23 @@ func mcpServerRuntimeConfig(name string, server *mcpCLIServer, codexHome string)
 		return mcp.ServerConfig{}
 	}
 	return mcp.ServerConfig{
-		Command:           server.Command,
-		Args:              append([]string(nil), server.Args...),
-		Env:               cloneStringMap(server.Env),
-		URL:               server.URL,
-		BearerTokenEnvVar: server.BearerTokenEnvVar,
-		HTTPHeaders:       cloneStringMap(server.HTTPHeaders),
-		EnvHTTPHeaders:    cloneStringMap(server.EnvHTTPHeaders),
-		HTTPHeadersHelper: server.HTTPHeadersHelper,
-		OAuthClientID:     server.OAuthClientID,
-		OAuthResource:     server.OAuthResource,
-		OAuthServerName:   name,
-		CodexHome:         codexHome,
-		Enabled:           server.Enabled,
-		Required:          server.Required,
-		EnvironmentID:     server.EnvironmentID,
-		Auth:              server.Auth,
+		Command:                        server.Command,
+		Args:                           append([]string(nil), server.Args...),
+		Env:                            cloneStringMap(server.Env),
+		URL:                            server.URL,
+		BearerTokenEnvVar:              server.BearerTokenEnvVar,
+		HTTPHeaders:                    cloneStringMap(server.HTTPHeaders),
+		EnvHTTPHeaders:                 cloneStringMap(server.EnvHTTPHeaders),
+		HTTPHeadersHelper:              server.HTTPHeadersHelper,
+		OAuthClientID:                  server.OAuthClientID,
+		OAuthResource:                  server.OAuthResource,
+		OAuthAuthorizationServerIssuer: server.OAuthAuthorizationServerIssuer,
+		OAuthServerName:                name,
+		CodexHome:                      codexHome,
+		Enabled:                        server.Enabled,
+		Required:                       server.Required,
+		EnvironmentID:                  server.EnvironmentID,
+		Auth:                           server.Auth,
 	}
 }
 
@@ -948,6 +957,7 @@ func mcpServerFromConfigValue(name string, table map[string]any) *mcpCLIServer {
 		server.EnvHTTPHeaders = stringMapFromAny(table["env_http_headers"])
 		server.HTTPHeadersHelper = stringFromAny(table["http_headers_helper"])
 		server.OAuthClientID = mcpOAuthClientIDFromConfig(table)
+		server.OAuthAuthorizationServerIssuer = mcpOAuthAuthorizationServerIssuerFromConfig(table)
 		server.OAuthResource = stringFromAny(table["oauth_resource"])
 		return server
 	}
@@ -976,8 +986,15 @@ func mcpServerToConfigValue(server *mcpCLIServer) map[string]any {
 		if server.HTTPHeadersHelper != "" {
 			value["http_headers_helper"] = server.HTTPHeadersHelper
 		}
-		if server.OAuthClientID != "" {
-			value["oauth"] = map[string]any{"client_id": server.OAuthClientID}
+		if server.OAuthClientID != "" || server.OAuthAuthorizationServerIssuer != "" {
+			oauth := map[string]any{}
+			if server.OAuthClientID != "" {
+				oauth["client_id"] = server.OAuthClientID
+			}
+			if server.OAuthAuthorizationServerIssuer != "" {
+				oauth["authorization_server_issuer"] = server.OAuthAuthorizationServerIssuer
+			}
+			value["oauth"] = oauth
 		}
 		if server.OAuthResource != "" {
 			value["oauth_resource"] = server.OAuthResource
@@ -1053,6 +1070,17 @@ func mcpOAuthClientIDFromConfig(table map[string]any) string {
 		return ""
 	}
 	return stringFromAny(oauth["client_id"])
+}
+
+func mcpOAuthAuthorizationServerIssuerFromConfig(table map[string]any) string {
+	if value := stringFromAny(table["oauth_authorization_server_issuer"]); value != "" {
+		return value
+	}
+	oauth, ok := table["oauth"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return stringFromAny(oauth["authorization_server_issuer"])
 }
 
 func mcpEnvVarsFromAny(value any) []mcpCLIEnvVar {

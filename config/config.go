@@ -530,6 +530,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"mcp_oauth_credentials_store":                {},
 	"mcp_oauth_callback_port":                    {},
 	"mcp_oauth_callback_url":                     {},
+	"mcp_enterprise_managed_auth":                {},
 	"mcp_optional_startup_grace_ms":              {},
 	"mcp_servers":                                {},
 	"marketplaces":                               {},
@@ -631,6 +632,14 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 		}
 	}
 	if err := validateKnownMCPServerFields(values["mcp_servers"]); err != nil {
+		return err
+	}
+	if raw, ok := values["mcp_enterprise_managed_auth"]; ok {
+		if _, err := parseMCPEnterpriseManagedAuth(raw); err != nil {
+			return fmt.Errorf("mcp_enterprise_managed_auth: %w", err)
+		}
+	}
+	if err := validateKnownPluginEMAAuthFields(values["plugins"]); err != nil {
 		return err
 	}
 	if err := validateKnownAgentsFields(values["agents"]); err != nil {
@@ -850,11 +859,24 @@ func validateKnownMCPServerFields(value any) error {
 				return fmt.Errorf("unknown configuration field `mcp_servers.%s.%s`", server, key)
 			}
 		}
+		if oauth, ok := fields["oauth"].(map[string]any); ok {
+			for key := range oauth {
+				if !knownStrictMCPServerOAuthFields[key] {
+					return fmt.Errorf("unknown configuration field `mcp_servers.%s.oauth.%s`", server, key)
+				}
+			}
+		}
+	}
+	// oauth.authorization_server_issuer is an EMA-only setting (Rust #44832).
+	if err := validateMCPEMAServerDeclarations(servers); err != nil {
+		return err
 	}
 	return nil
 }
 
-var knownStrictMCPServerFields = map[string]bool{"command": true, "args": true, "env": true, "env_vars": true, "cwd": true, "url": true, "bearer_token_env_var": true, "http_headers": true, "env_http_headers": true, "oauth_client_id": true, "oauth_resource": true, "scopes": true, "enabled": true, "disabled_reason": true, "required": true, "environment_id": true, "auth": true}
+var knownStrictMCPServerFields = map[string]bool{"command": true, "args": true, "env": true, "env_vars": true, "cwd": true, "url": true, "bearer_token_env_var": true, "http_headers": true, "env_http_headers": true, "oauth": true, "oauth_client_id": true, "oauth_callback_port": true, "oauth_callback_url": true, "oauth_resource": true, "scopes": true, "enabled": true, "disabled_reason": true, "required": true, "environment_id": true, "auth": true}
+
+var knownStrictMCPServerOAuthFields = map[string]bool{"client_id": true, "callback_url": true, "callback_port": true, "authorization_server_issuer": true}
 
 func ProjectConfigPath(cwd string) string {
 	return filepath.Join(strings.TrimSpace(cwd), ".gcode", "config.toml")

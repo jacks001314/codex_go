@@ -1659,6 +1659,11 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 	}
 	url := "http://localhost/oauth/" + name
 	if config, ok := s.serverConfig(name); ok && strings.TrimSpace(config.URL) != "" {
+		if config.EffectiveAuth() == ServerAuthEMAAuth {
+			// Enterprise MCP authorization is managed by Codex account sign-in
+			// (Rust #44832); ordinary MCP OAuth login is blocked for EMA.
+			return nil, invalidMCPRequest("EMA MCP connections are not enabled in this version")
+		}
 		if config.EffectiveAuth() == ServerAuthChatGPT && !config.IsLocalEnvironment() {
 			return nil, invalidMCPRequest("OAuth login is not supported for executor-owned ChatGPT MCP servers")
 		}
@@ -2331,6 +2336,11 @@ func (s *MCPService) requiredServerAvailable(name string) error {
 
 func (s *MCPService) authStatusForConfig(name string, config *ServerConfig) MCPAuthStatus {
 	if config == nil || strings.TrimSpace(config.URL) == "" {
+		return MCPAuthUnsupported
+	}
+	if config.EffectiveAuth() == ServerAuthEMAAuth {
+		// EMA connections are not enabled until the runtime stage of the stack
+		// (Rust #44832).
 		return MCPAuthUnsupported
 	}
 	if strings.TrimSpace(config.BearerTokenEnvVar) != "" {

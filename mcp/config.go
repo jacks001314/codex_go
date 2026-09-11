@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,10 +16,14 @@ import (
 )
 
 const (
-	CodexAppsServerName                = "codex_apps"
-	DefaultMCPServerEnvironmentID      = "local"
-	ServerAuthOAuth                    = "oauth"
-	ServerAuthChatGPT                  = "chatgpt"
+	CodexAppsServerName           = "codex_apps"
+	DefaultMCPServerEnvironmentID = "local"
+	ServerAuthOAuth               = "oauth"
+	ServerAuthChatGPT             = "chatgpt"
+	// ServerAuthEMAAuth exchanges an enterprise IdP refresh token for
+	// resource-specific authorization (Rust #44832). EMA connections are not
+	// enabled in this version; the mode only drives config provenance.
+	ServerAuthEMAAuth                  = "ema_auth"
 	codexConnectorsTokenEnvVar         = "CODEX_CONNECTORS_TOKEN"
 	legacyCodexAppsRegistrationID      = "legacy_codex_apps"
 	consequentialTemplateSchemaVersion = 4
@@ -48,40 +53,44 @@ func (m McpOAuthRefreshMode) String() string {
 }
 
 type ServerConfig struct {
-	Command                  string                            `json:"command,omitempty"`
-	Args                     []string                          `json:"args,omitempty"`
-	Env                      map[string]string                 `json:"env,omitempty"`
-	EnvVars                  []EnvVar                          `json:"env_vars,omitempty"`
-	CWD                      string                            `json:"cwd,omitempty"`
-	URL                      string                            `json:"url,omitempty"`
-	BearerTokenEnvVar        string                            `json:"bearer_token_env_var,omitempty"`
-	HTTPHeaders              map[string]string                 `json:"http_headers,omitempty"`
-	EnvHTTPHeaders           map[string]string                 `json:"env_http_headers,omitempty"`
-	HTTPHeadersHelper        string                            `json:"http_headers_helper,omitempty"`
-	OAuthClientID            string                            `json:"oauth_client_id,omitempty"`
-	OAuthCallbackPort        uint16                            `json:"oauth_callback_port,omitempty"`
-	OAuthCallbackURL         string                            `json:"oauth_callback_url,omitempty"`
-	OAuthResource            string                            `json:"oauth_resource,omitempty"`
-	Scopes                   []string                          `json:"scopes,omitempty"`
-	ScopesConfigured         bool                              `json:"-"`
-	OAuthServerName          string                            `json:"-"`
-	OAuthRefreshMode         McpOAuthRefreshMode               `json:"oauth_refresh_mode,omitempty"`
-	Auth                     string                            `json:"auth,omitempty"`
-	CodexHome                string                            `json:"-"`
-	Enabled                  bool                              `json:"enabled"`
-	DisabledReason           string                            `json:"disabled_reason,omitempty"`
-	Required                 bool                              `json:"required,omitempty"`
-	EnabledTools             []string                          `json:"enabled_tools,omitempty"`
-	DisabledTools            []string                          `json:"disabled_tools,omitempty"`
-	OmitToolsFrom            []string                          `json:"omit_tools_from,omitempty"`
-	DefaultToolsApprovalMode *apps.AppToolApproval             `json:"default_tools_approval_mode,omitempty"`
-	Tools                    map[string]ToolConfig             `json:"tools,omitempty"`
-	EnvironmentID            string                            `json:"environment_id,omitempty"`
-	StartupTimeout           time.Duration                     `json:"-"`
-	ToolTimeout              time.Duration                     `json:"-"`
-	CatalogItemLimit         int                               `json:"-"`
-	ApplyHTTPRequest         func(*http.Request, []byte) error `json:"-"`
-	ProtocolMode             MCPProtocolMode                   `json:"-"`
+	Command           string            `json:"command,omitempty"`
+	Args              []string          `json:"args,omitempty"`
+	Env               map[string]string `json:"env,omitempty"`
+	EnvVars           []EnvVar          `json:"env_vars,omitempty"`
+	CWD               string            `json:"cwd,omitempty"`
+	URL               string            `json:"url,omitempty"`
+	BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty"`
+	HTTPHeaders       map[string]string `json:"http_headers,omitempty"`
+	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`
+	HTTPHeadersHelper string            `json:"http_headers_helper,omitempty"`
+	OAuthClientID     string            `json:"oauth_client_id,omitempty"`
+	OAuthCallbackPort uint16            `json:"oauth_callback_port,omitempty"`
+	OAuthCallbackURL  string            `json:"oauth_callback_url,omitempty"`
+	OAuthResource     string            `json:"oauth_resource,omitempty"`
+	// OAuthAuthorizationServerIssuer is the expected resource authorization
+	// server issuer for EMA token exchange (Rust #44832); it is only valid
+	// together with auth = "ema_auth".
+	OAuthAuthorizationServerIssuer string                            `json:"authorization_server_issuer,omitempty"`
+	Scopes                         []string                          `json:"scopes,omitempty"`
+	ScopesConfigured               bool                              `json:"-"`
+	OAuthServerName                string                            `json:"-"`
+	OAuthRefreshMode               McpOAuthRefreshMode               `json:"oauth_refresh_mode,omitempty"`
+	Auth                           string                            `json:"auth,omitempty"`
+	CodexHome                      string                            `json:"-"`
+	Enabled                        bool                              `json:"enabled"`
+	DisabledReason                 string                            `json:"disabled_reason,omitempty"`
+	Required                       bool                              `json:"required,omitempty"`
+	EnabledTools                   []string                          `json:"enabled_tools,omitempty"`
+	DisabledTools                  []string                          `json:"disabled_tools,omitempty"`
+	OmitToolsFrom                  []string                          `json:"omit_tools_from,omitempty"`
+	DefaultToolsApprovalMode       *apps.AppToolApproval             `json:"default_tools_approval_mode,omitempty"`
+	Tools                          map[string]ToolConfig             `json:"tools,omitempty"`
+	EnvironmentID                  string                            `json:"environment_id,omitempty"`
+	StartupTimeout                 time.Duration                     `json:"-"`
+	ToolTimeout                    time.Duration                     `json:"-"`
+	CatalogItemLimit               int                               `json:"-"`
+	ApplyHTTPRequest               func(*http.Request, []byte) error `json:"-"`
+	ProtocolMode                   MCPProtocolMode                   `json:"-"`
 	// ProtocolModeOverride is set by extension/overlay contributions that
 	// select an HTTP protocol mode for their own server (Rust #44571). When
 	// non-nil it wins over the default and host-owned-Apps modes; nil preserves
@@ -147,6 +156,10 @@ func ValidateServerAuth(serverName string, config *ServerConfig) error {
 	if config == nil {
 		return nil
 	}
+	if config.EffectiveAuth() == ServerAuthEMAAuth {
+		// EMA MCP connections are not enabled in this version (Rust #44832).
+		return errors.New("EMA MCP connections are not enabled in this version")
+	}
 	if strings.TrimSpace(config.HTTPHeadersHelper) != "" {
 		if strings.TrimSpace(config.URL) == "" || strings.TrimSpace(config.Command) != "" {
 			return fmt.Errorf("http_headers_helper is only supported for streamable HTTP MCP servers")
@@ -162,6 +175,25 @@ func ValidateServerAuth(serverName string, config *ServerConfig) error {
 		return nil
 	}
 	return fmt.Errorf("executor-owned MCP server `%s` cannot use hosted ChatGPT authentication; configure executor-owned credentials instead", strings.TrimSpace(serverName))
+}
+
+// ValidateEMAAuthTransport mirrors Rust McpServerConfig::validate_ema_auth_transport:
+// EMA requires a host-owned streamable HTTP connection and never falls back to
+// an unrelated bearer token or executor-owned credential (Rust #44832).
+func (c *ServerConfig) ValidateEMAAuthTransport() error {
+	if c == nil || !c.IsLocalEnvironment() {
+		return errors.New("ema_auth requires a host-owned MCP connection")
+	}
+	if strings.TrimSpace(c.URL) == "" || strings.TrimSpace(c.Command) != "" {
+		return errors.New("ema_auth requires streamable HTTP")
+	}
+	if strings.TrimSpace(c.BearerTokenEnvVar) != "" ||
+		len(c.HTTPHeaders) != 0 ||
+		len(c.EnvHTTPHeaders) != 0 ||
+		strings.TrimSpace(c.HTTPHeadersHelper) != "" {
+		return errors.New("ema_auth cannot be combined with alternate HTTP credentials")
+	}
+	return nil
 }
 
 type ToolConfig struct {
@@ -460,6 +492,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 		server.OAuthCallbackPort = runtimeConfigOAuthCallbackPort(values)
 		server.OAuthCallbackURL = runtimeConfigStringAny(values, "oauth_callback_url", "oauthCallbackUrl")
 		server.OAuthResource = runtimeConfigStringAny(values, "oauth_resource", "oauthResource")
+		server.OAuthAuthorizationServerIssuer = runtimeConfigOAuthAuthorizationServerIssuer(values)
 		server.Scopes, server.ScopesConfigured = runtimeConfigOptionalStringSlice(values, "scopes")
 		return server
 	}
@@ -517,6 +550,19 @@ func runtimeConfigOAuthCallbackPort(values map[string]any) uint16 {
 		return 0
 	}
 	return runtimeConfigUint16Any(oauth, "callback_port", "callbackPort", "port")
+}
+
+// runtimeConfigOAuthAuthorizationServerIssuer resolves the EMA resource
+// authorization server issuer from either the flat or nested oauth form.
+func runtimeConfigOAuthAuthorizationServerIssuer(values map[string]any) string {
+	if value := runtimeConfigStringAny(values, "oauth_authorization_server_issuer", "oauthAuthorizationServerIssuer"); value != "" {
+		return value
+	}
+	oauth, ok := runtimeConfigMapAny(values, "oauth")
+	if !ok {
+		return ""
+	}
+	return runtimeConfigStringAny(oauth, "authorization_server_issuer", "authorizationServerIssuer")
 }
 
 func runtimeConfigUint16Any(values map[string]any, keys ...string) uint16 {

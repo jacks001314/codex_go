@@ -95,8 +95,20 @@ func readPluginMCPServerConfigs(pluginRoot string, pluginDataRoot string) map[st
 			MCPServers map[string]map[string]any `json:"mcpServers"`
 		}
 		if json.Unmarshal(data, &payload) == nil && len(payload.MCPServers) > 0 {
-			return payload.MCPServers
+			return dropPluginEMAAuthServers(payload.MCPServers)
 		}
 	}
 	return nil
+}
+
+// dropPluginEMAAuthServers mirrors Rust #44832: a plugin MCP declaration may not
+// select ema_auth. Enterprise authentication is configured in host policy, so
+// the offending declaration is dropped while sibling servers still load.
+func dropPluginEMAAuthServers(servers map[string]map[string]any) map[string]map[string]any {
+	for name, server := range servers {
+		if auth, ok := server["auth"].(string); ok && strings.EqualFold(strings.TrimSpace(auth), "ema_auth") {
+			delete(servers, name)
+		}
+	}
+	return servers
 }

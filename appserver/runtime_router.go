@@ -8858,6 +8858,11 @@ func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string
 		if server == nil {
 			continue
 		}
+		if server.EffectiveAuth() == mcp.ServerAuthEMAAuth {
+			// Plugin MCP declarations cannot select ema_auth; enterprise
+			// authentication is configured in host policy (Rust #44832).
+			continue
+		}
 		if server.Command != "" && server.CWD == "" {
 			server.CWD = contribution.PluginRoot
 		}

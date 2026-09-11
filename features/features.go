@@ -17,6 +17,10 @@ const (
 	StageRemoved          Stage = "removed"
 )
 
+// UseXAAKey is the feature key that enables enterprise refresh-token
+// authorization for configured MCP resources (Rust #44832).
+const UseXAAKey = "use_xaa"
+
 type Spec struct {
 	Key                         string
 	Stage                       Stage
@@ -112,6 +116,10 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #42413): coordinated MCP OAuth
 	// refresh across servers sharing an account.
 	{Key: "mcp_oauth_refresh_coordination", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #44832): enterprise refresh-token
+	// authorization for configured MCP resources; opt-in must come from a
+	// non-project config layer or a managed requirement.
+	{Key: UseXAAKey, Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "apps_mcp_path_override", Stage: StageRemoved},
 	{Key: "tool_search", Stage: StageRemoved},
 	{Key: "tool_search_always_defer_mcp_tools", Stage: StageRemoved, DefaultEnabled: true},
