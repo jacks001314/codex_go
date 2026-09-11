@@ -119,6 +119,8 @@ type fakeAgentsDashboardSource struct {
 	dispatchedCwd string
 	stopped       []string
 	renamed       map[string]string
+	archived      []string
+	deleted       []string
 	dispatchErr   error
 }
 
@@ -142,6 +144,16 @@ func (s *fakeAgentsDashboardSource) Rename(ctx context.Context, threadID, name s
 		s.renamed = map[string]string{}
 	}
 	s.renamed[threadID] = name
+	return nil
+}
+
+func (s *fakeAgentsDashboardSource) Archive(ctx context.Context, threadID string) error {
+	s.archived = append(s.archived, threadID)
+	return nil
+}
+
+func (s *fakeAgentsDashboardSource) Delete(ctx context.Context, threadID string) error {
+	s.deleted = append(s.deleted, threadID)
 	return nil
 }
 

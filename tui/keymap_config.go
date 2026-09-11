@@ -212,11 +212,22 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 		if context == "global" && action == "open_agents" && config.altACustomBindingExists() {
 			return nil, "default", false
 		}
-		// Rust #44424: the default ctrl-w hide binding is disabled when the
-		// agents or list surface already uses ctrl-w, preserving existing
-		// custom shortcuts.
-		if context == "agents" && action == "hide" && config.ctrlWAgentsOrListBindingExists() {
-			return nil, "default", false
+		// Rust #44424/#44433: newly added agents-dashboard defaults yield to an
+		// existing custom binding for the same key on the agents, list, or
+		// global surface, so a new default never shadows existing shortcuts.
+		if context == "agents" {
+			for _, candidate := range []struct {
+				action string
+				alias  string
+			}{
+				{action: "archive", alias: "ctrl-e"},
+				{action: "delete", alias: "delete"},
+				{action: "hide", alias: "ctrl-w"},
+			} {
+				if action == candidate.action && config.agentsAliasConfigured(candidate.alias) {
+					return nil, "default", false
+				}
+			}
 		}
 	}
 	if descriptor, ok := FindKeymapAction(context, action); ok {
@@ -243,17 +254,17 @@ func (c *KeymapConfig) altACustomBindingExists() bool {
 	return false
 }
 
-// ctrlWAgentsOrListBindingExists reports whether the agents or list surface
-// already binds ctrl-w, which would shadow the default hide shortcut
-// (Rust #44424). The default yields to those existing custom bindings.
-func (c *KeymapConfig) ctrlWAgentsOrListBindingExists() bool {
+// agentsAliasConfigured reports whether the agents, list, or global surface
+// already binds the alias, which would shadow a newly added agents-dashboard
+// default (Rust #44424/#44433). The default yields to those existing bindings.
+func (c *KeymapConfig) agentsAliasConfigured(alias string) bool {
 	if c == nil || c.bindings == nil {
 		return false
 	}
-	for _, context := range []string{"agents", "list"} {
+	for _, context := range []string{"agents", "list", "global"} {
 		for _, bindings := range c.bindings[context] {
 			for _, binding := range bindings {
-				if normalized, err := NormalizeKeybindingSpec(binding); err == nil && normalized == "ctrl-w" {
+				if normalized, err := NormalizeKeybindingSpec(binding); err == nil && normalized == alias {
 					return true
 				}
 			}

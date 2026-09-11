@@ -678,6 +678,8 @@ type Options struct {
 	OnAgentsOverviewDispatch  AgentsOverviewDispatchFunc
 	OnAgentsOverviewStop      AgentsOverviewStopFunc
 	OnAgentsOverviewRename    AgentsOverviewRenameFunc
+	OnAgentsOverviewArchive   AgentsOverviewArchiveFunc
+	OnAgentsOverviewDelete    AgentsOverviewDeleteFunc
 	OnStartAgentsDaemon       AgentsDaemonStartFunc
 	OnClipboardWrite          func(text string) error
 	// OnClipboardWriteRich, when set, receives the rendered HTML fragment plus
@@ -978,22 +980,29 @@ type Model struct {
 	onAgentsOverviewDispatch AgentsOverviewDispatchFunc
 	onAgentsOverviewStop     AgentsOverviewStopFunc
 	onAgentsOverviewRename   AgentsOverviewRenameFunc
-	onStartAgentsDaemon      AgentsDaemonStartFunc
-	onExternalEditor         ExternalEditorFunc
-	externalEditorDirectory  ExternalEditorDirectoryFunc
-	keymapConfig             *codextui.KeymapConfig
-	keymapSelectedContext    string
-	keymapSelectedAction     string
-	copyTargets              []chatwidget.CopyTarget
-	onKeymapEdit             KeymapEditFunc
-	onModalResponse          ModalResponseFunc
-	onSessionAction          SessionActionFunc
-	onWorkingDirectoryChange WorkingDirectoryChangeFunc
-	onResumeSession          SessionResumeFunc
-	onRenameThread           ThreadRenameFunc
-	onLogout                 LogoutFunc
-	onReadAgents             AgentThreadReaderFunc
-	onSwitchAgent            AgentThreadSwitchFunc
+	onAgentsOverviewArchive  AgentsOverviewArchiveFunc
+	onAgentsOverviewDelete   AgentsOverviewDeleteFunc
+	agentsOverviewLifecycle  *agentsOverviewLifecycleRequest
+	// agentsOverviewLifecycleProgress is non-empty while an archive/delete RPC
+	// runs; navigation and task switching are blocked during that window
+	// (Rust #44433).
+	agentsOverviewLifecycleProgress string
+	onStartAgentsDaemon             AgentsDaemonStartFunc
+	onExternalEditor                ExternalEditorFunc
+	externalEditorDirectory         ExternalEditorDirectoryFunc
+	keymapConfig                    *codextui.KeymapConfig
+	keymapSelectedContext           string
+	keymapSelectedAction            string
+	copyTargets                     []chatwidget.CopyTarget
+	onKeymapEdit                    KeymapEditFunc
+	onModalResponse                 ModalResponseFunc
+	onSessionAction                 SessionActionFunc
+	onWorkingDirectoryChange        WorkingDirectoryChangeFunc
+	onResumeSession                 SessionResumeFunc
+	onRenameThread                  ThreadRenameFunc
+	onLogout                        LogoutFunc
+	onReadAgents                    AgentThreadReaderFunc
+	onSwitchAgent                   AgentThreadSwitchFunc
 	// backgroundThreadEvents buffers app-server notifications for non-active
 	// (subagent) threads so switching to them can replay in-progress activity
 	// instead of showing an empty transcript (Rust parity: ThreadEventStore).
@@ -1269,6 +1278,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,
 		onAgentsOverviewStop:            options.OnAgentsOverviewStop,
 		onAgentsOverviewRename:          options.OnAgentsOverviewRename,
+		onAgentsOverviewArchive:         options.OnAgentsOverviewArchive,
+		onAgentsOverviewDelete:          options.OnAgentsOverviewDelete,
 		onStartAgentsDaemon:             options.OnStartAgentsDaemon,
 		agentsOverviewDrafts:            map[string]string{},
 		onExternalEditor:                options.OnExternalEditor,
@@ -1768,6 +1779,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		m.agentsOverviewBusy = false
 		return m, m.refreshAgentsOverviewCmd()
+	case agentsOverviewLifecycleMsg:
+		return m, m.applyAgentsOverviewLifecycleResult(msg)
 	case agentsOverviewDaemonMsg:
 		if msg.err != nil {
 			m.notice = "Failed to start background server: " + strings.TrimSpace(msg.err.Error())

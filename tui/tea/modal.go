@@ -703,6 +703,13 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 	}
 	if modal.kind == ModalKindAgents {
 		m.modal = nil
+		if modal.id == agentsOverviewLifecycleModalID {
+			if cancelled {
+				m.notice = "Cancelled"
+				return nil
+			}
+			return m.applyAgentsOverviewLifecycleOption(response.OptionID)
+		}
 		if cancelled {
 			m.notice = ""
 			return nil

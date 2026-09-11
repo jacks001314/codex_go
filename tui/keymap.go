@@ -154,6 +154,8 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("agents", "Agents", "rename", "Rename the selected task.", []string{"ctrl-r"}),
 	keymapAction("agents", "Agents", "stop", "Stop the selected running task.", []string{"ctrl-x"}),
 	keymapAction("agents", "Agents", "hide", "Hide the selected task until explicitly resumed.", []string{"ctrl-w"}),
+	keymapAction("agents", "Agents", "archive", "Archive the selected task and its child agents.", []string{"ctrl-e"}),
+	keymapAction("agents", "Agents", "delete", "Permanently delete the selected task and its child agents.", []string{"delete"}),
 	keymapAction("agents", "Agents", "toggle_grouping", "Toggle grouping tasks by status or project.", []string{"ctrl-s"}),
 	keymapAction("approval", "Approval", "open_fullscreen", "Open approval details fullscreen.", []string{"ctrl-a", "ctrl-shift-a"}),
 	keymapAction("approval", "Approval", "open_thread", "Open the approval source thread when available.", []string{"o"}),

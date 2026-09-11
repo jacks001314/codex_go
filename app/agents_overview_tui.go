@@ -56,6 +56,28 @@ func interactiveRemoteAgentsOverviewRename(ctx context.Context, endpoint *appser
 	}
 }
 
+func interactiveRemoteAgentsOverviewArchive(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewArchiveFunc {
+	return func(threadID string) error {
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		return newRemoteAgentsDashboardSource(client, "").Archive(ctx, threadID)
+	}
+}
+
+func interactiveRemoteAgentsOverviewDelete(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewDeleteFunc {
+	return func(threadID string) error {
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		return newRemoteAgentsDashboardSource(client, "").Delete(ctx, threadID)
+	}
+}
+
 // interactiveStartAgentsDaemon starts the local background app server (Rust
 // start_agents_daemon): it runs `codex app-server daemon start` through the
 // daemon lifecycle runner, including the Windows pid-managed daemon.

@@ -35,6 +35,8 @@ type agentsDashboardSource interface {
 	Dispatch(ctx context.Context, prompt, cwd string) (string, error)
 	Stop(ctx context.Context, threadID string) error
 	Rename(ctx context.Context, threadID, name string) error
+	Archive(ctx context.Context, threadID string) error
+	Delete(ctx context.Context, threadID string) error
 	Close()
 }
 
@@ -266,6 +268,34 @@ func (s *remoteAgentsDashboardSource) Rename(ctx context.Context, threadID, name
 	}, &response)
 }
 
+// Archive archives the thread and its child agents on the app server
+// (Rust #44433).
+func (s *remoteAgentsDashboardSource) Archive(ctx context.Context, threadID string) error {
+	if s == nil || s.client == nil {
+		return errors.New("app-server client is unavailable")
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return errors.New("agent thread id is required to archive")
+	}
+	var response appserver.ThreadArchiveResponse
+	return remoteSessionRequest(ctx, s.client, appserver.MethodThreadArchive, appserver.ThreadArchiveParams{ThreadID: threadID}, &response)
+}
+
+// Delete permanently deletes the thread and its child agents on the app server
+// (Rust #44433).
+func (s *remoteAgentsDashboardSource) Delete(ctx context.Context, threadID string) error {
+	if s == nil || s.client == nil {
+		return errors.New("app-server client is unavailable")
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return errors.New("agent thread id is required to delete")
+	}
+	var response appserver.ThreadDeleteResponse
+	return remoteSessionRequest(ctx, s.client, appserver.MethodThreadDelete, appserver.ThreadDeleteParams{ThreadID: threadID}, &response)
+}
+
 func (s *remoteAgentsDashboardSource) Close() {
 	if s != nil && s.client != nil {
 		s.client.close()
@@ -300,6 +330,14 @@ func (s *localAgentsDashboardSource) Dispatch(ctx context.Context, prompt, cwd s
 
 func (s *localAgentsDashboardSource) Stop(ctx context.Context, threadID string) error {
 	return errors.New("stopping background tasks requires the background app server; start it with `codex app-server daemon start` or connect with `codex agents --remote`")
+}
+
+func (s *localAgentsDashboardSource) Archive(ctx context.Context, threadID string) error {
+	return errors.New("archiving tasks requires the background app server; start it with `codex app-server daemon start` or connect with `codex agents --remote`")
+}
+
+func (s *localAgentsDashboardSource) Delete(ctx context.Context, threadID string) error {
+	return errors.New("deleting tasks requires the background app server; start it with `codex app-server daemon start` or connect with `codex agents --remote`")
 }
 
 func (s *localAgentsDashboardSource) Rename(ctx context.Context, threadID, name string) error {
@@ -357,6 +395,11 @@ type agentsDashboardRenameMsg struct {
 	err error
 }
 
+type agentsDashboardLifecycleMsg struct {
+	action string
+	err    error
+}
+
 type agentsDashboardModel struct {
 	ctx    context.Context
 	view   *agentsoverview.View
@@ -367,6 +410,11 @@ type agentsDashboardModel struct {
 	busy   bool
 	result *agentsDashboardResult
 	done   bool
+	// pendingLifecycle holds "archive" or "delete" while the confirmation is
+	// shown; the destructive action only runs after explicit confirmation
+	// (Rust #44433).
+	pendingLifecycle string
+	pendingThreadID  string
 }
 
 func newAgentsDashboardModel(ctx context.Context, source agentsDashboardSource) *agentsDashboardModel {
@@ -441,6 +489,18 @@ func (m *agentsDashboardModel) Update(message bubbletea.Msg) (bubbletea.Model, b
 		}
 		m.busy = false
 		return m, m.refreshCmd()
+	case agentsDashboardLifecycleMsg:
+		if msg.err != nil {
+			label := "archive"
+			if msg.action == "delete" {
+				label = "delete"
+			}
+			m.notice = "Failed to " + label + " task: " + strings.TrimSpace(msg.err.Error())
+		} else {
+			m.notice = ""
+		}
+		m.busy = false
+		return m, m.refreshCmd()
 	default:
 		return m, nil
 	}
@@ -448,6 +508,23 @@ func (m *agentsDashboardModel) Update(message bubbletea.Msg) (bubbletea.Model, b
 
 func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.done {
+		return nil
+	}
+	// Rust #44433: the archive/delete confirmation owns input until resolved,
+	// with cancel as the safe default.
+	if m.pendingLifecycle != "" {
+		switch msg.String() {
+		case "y", "enter":
+			action := m.pendingLifecycle
+			threadID := m.pendingThreadID
+			m.pendingLifecycle = ""
+			m.pendingThreadID = ""
+			return m.lifecycleCmd(action, threadID)
+		case "n", "esc":
+			m.pendingLifecycle = ""
+			m.pendingThreadID = ""
+			m.notice = "Cancelled"
+		}
 		return nil
 	}
 	switch msg.String() {
@@ -494,6 +571,16 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	case "ctrl+x":
 		if action := m.view.StopSelected(); action == agentsoverview.ActionStopThread {
 			return m.stopCmd(m.view.SelectedThreadID())
+		}
+	case "ctrl+e":
+		if action := m.view.ArchiveSelected(); action == agentsoverview.ActionArchiveThread {
+			m.pendingLifecycle = "archive"
+			m.pendingThreadID = m.view.SelectedThreadID()
+		}
+	case "delete":
+		if action := m.view.DeleteSelected(); action == agentsoverview.ActionDeleteThread {
+			m.pendingLifecycle = "delete"
+			m.pendingThreadID = m.view.SelectedThreadID()
 		}
 	case "ctrl+c":
 		m.done = true
@@ -551,11 +638,41 @@ func (m *agentsDashboardModel) stopCmd(threadID string) bubbletea.Cmd {
 	}
 }
 
+// lifecycleCmd runs a confirmed archive/delete against the dashboard source
+// (Rust #44433).
+func (m *agentsDashboardModel) lifecycleCmd(action string, threadID string) bubbletea.Cmd {
+	if m == nil || m.source == nil || strings.TrimSpace(threadID) == "" || m.busy {
+		return nil
+	}
+	if action == "delete" {
+		m.notice = "Deleting task\u2026"
+	} else {
+		m.notice = "Archiving task\u2026"
+	}
+	m.busy = true
+	return func() bubbletea.Msg {
+		var err error
+		if action == "delete" {
+			err = m.source.Delete(m.ctx, threadID)
+		} else {
+			err = m.source.Archive(m.ctx, threadID)
+		}
+		return agentsDashboardLifecycleMsg{action: action, err: err}
+	}
+}
+
 func (m *agentsDashboardModel) View() string {
 	if m == nil || m.done {
 		return ""
 	}
 	lines := m.view.RenderStyled(m.width, m.height)
+	if m.pendingLifecycle != "" {
+		verb := "Archive"
+		if m.pendingLifecycle == "delete" {
+			verb = "Permanently delete"
+		}
+		lines = append(lines, "  "+verb+" this task and its child agents? (y/n)")
+	}
 	if m.notice != "" {
 		lines = append(lines, "  "+m.notice)
 	}

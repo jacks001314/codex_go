@@ -345,6 +345,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnAgentsOverviewRefresh:   interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
 		OnAgentsOverviewDispatch:  interactiveRemoteAgentsOverviewDispatch(ctx, endpoint),
 		OnAgentsOverviewStop:      interactiveRemoteAgentsOverviewStop(ctx, endpoint),
+		OnAgentsOverviewArchive:   interactiveRemoteAgentsOverviewArchive(ctx, endpoint),
+		OnAgentsOverviewDelete:    interactiveRemoteAgentsOverviewDelete(ctx, endpoint),
 		OnAgentsOverviewRename:    interactiveRemoteAgentsOverviewRename(ctx, endpoint),
 		OnStartAgentsDaemon:       interactiveStartAgentsDaemon,
 		OnWriteSettings:           interactiveRemoteSettingsWriteHandler(ctx, endpoint),

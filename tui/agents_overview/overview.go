@@ -117,6 +117,12 @@ const (
 	// (Rust #44424). Hidden tasks stay hidden through activity and metadata
 	// refreshes until explicitly resumed.
 	ActionHideThread
+	// ActionArchiveThread archives the selected row and its child agents after
+	// confirmation (Rust #44433).
+	ActionArchiveThread
+	// ActionDeleteThread permanently deletes the selected row and its child
+	// agents after confirmation (Rust #44433).
+	ActionDeleteThread
 	// ActionExit closes the dashboard (exit_on_cancel standalone mode).
 	ActionExit
 )
@@ -153,6 +159,8 @@ const (
 	ShortcutHintRename         = "rename"
 	ShortcutHintStop           = "stop"
 	ShortcutHintHide           = "hide"
+	ShortcutHintArchive        = "archive"
+	ShortcutHintDelete         = "delete"
 )
 
 // SetShortcutHint overrides the displayed key for one dashboard action. An
@@ -488,6 +496,24 @@ func (v *View) StopSelected() Action {
 		return ActionNone
 	}
 	return ActionStopThread
+}
+
+// ArchiveSelected returns ActionArchiveThread for a selected row, else none
+// (Rust #44433). The confirmation and server lifecycle work live in the host.
+func (v *View) ArchiveSelected() Action {
+	if v == nil || v.SelectedRow() == nil {
+		return ActionNone
+	}
+	return ActionArchiveThread
+}
+
+// DeleteSelected returns ActionDeleteThread for a selected row, else none
+// (Rust #44433).
+func (v *View) DeleteSelected() Action {
+	if v == nil || v.SelectedRow() == nil {
+		return ActionNone
+	}
+	return ActionDeleteThread
 }
 
 // isHidden reports whether threadID is hidden locally (Rust #44424).

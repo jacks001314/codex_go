@@ -21,7 +21,31 @@ type AgentsOverviewRefreshFunc func(currentThreadID string) ([]agentsoverview.Ro
 type AgentsOverviewDispatchFunc func(prompt string, cwd string) (string, error)
 type AgentsOverviewStopFunc func(threadID string) error
 type AgentsOverviewRenameFunc func(threadID string, name string) error
+type AgentsOverviewArchiveFunc func(threadID string) error
+type AgentsOverviewDeleteFunc func(threadID string) error
 type AgentsDaemonStartFunc func() error
+
+// Agents overview lifecycle confirmation (Rust #44433): archive or permanently
+// delete the selected task and its child agents after explicit confirmation.
+const agentsOverviewLifecycleModalID = "agents-overview-lifecycle"
+
+type agentsOverviewLifecycleAction string
+
+const (
+	agentsOverviewActionArchive agentsOverviewLifecycleAction = "archive"
+	agentsOverviewActionDelete  agentsOverviewLifecycleAction = "delete"
+)
+
+type agentsOverviewLifecycleRequest struct {
+	threadID string
+	action   agentsOverviewLifecycleAction
+}
+
+type agentsOverviewLifecycleMsg struct {
+	threadID string
+	action   agentsOverviewLifecycleAction
+	err      error
+}
 
 type agentsOverviewListMsg struct {
 	rows      []agentsoverview.Row
@@ -65,6 +89,8 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	m.agentsOverviewRefresh = 0
 	m.agentsOverviewPending = false
 	m.agentsOverviewInflight = false
+	m.agentsOverviewLifecycle = nil
+	m.agentsOverviewLifecycleProgress = ""
 	m.applyAgentsOverviewKeymapHints()
 	return m.refreshAgentsOverviewCmd()
 }
@@ -197,6 +223,16 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.agentsOverview == nil {
 		return nil
 	}
+	// A modal opened from the dashboard (Rust #44433 lifecycle confirmations)
+	// owns input until it is resolved.
+	if m.modal != nil {
+		return m.updateModal(msg)
+	}
+	// Rust #44433: an in-flight archive/delete keeps rendering but blocks
+	// navigation and task switching until it finishes.
+	if m.agentsOverviewLifecycleProgress != "" {
+		return nil
+	}
 	keySpec := keySpecFromKeyMsg(msg)
 	handled := false
 	switch msg.String() {
@@ -269,6 +305,18 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 		handled = true
 	}
+	if m.keyMatches("agents", "archive", keySpec) {
+		if action := m.agentsOverview.ArchiveSelected(); action == agentsoverview.ActionArchiveThread {
+			m.openAgentsOverviewLifecycleConfirmation(agentsOverviewActionArchive)
+		}
+		handled = true
+	}
+	if m.keyMatches("agents", "delete", keySpec) {
+		if action := m.agentsOverview.DeleteSelected(); action == agentsoverview.ActionDeleteThread {
+			m.openAgentsOverviewLifecycleConfirmation(agentsOverviewActionDelete)
+		}
+		handled = true
+	}
 	if m.keyMatches("agents", "hide", keySpec) {
 		// Rust #44424: hide the selected task locally without stopping it.
 		if action := m.agentsOverview.HideSelected(); action == agentsoverview.ActionHideThread {
@@ -328,6 +376,111 @@ func (m *Model) renameAgentsOverviewCmd(name string) bubbletea.Cmd {
 		err := m.onAgentsOverviewRename(threadID, name)
 		return agentsOverviewRenameMsg{err: err}
 	}
+}
+
+// openAgentsOverviewLifecycleConfirmation shows the archive/delete confirmation
+// with Cancel selected by default (Rust #44433).
+func (m *Model) openAgentsOverviewLifecycleConfirmation(action agentsOverviewLifecycleAction) {
+	if m == nil || m.agentsOverview == nil || m.agentsOverviewBusy {
+		return
+	}
+	threadID := m.agentsOverview.SelectedThreadID()
+	if threadID == "" {
+		return
+	}
+	name := "Untitled task"
+	if row := m.agentsOverview.SelectedRow(); row != nil {
+		name = row.Title()
+	}
+	title := "Archive \"" + name + "\"?"
+	body := "This stops any running work in this task and its child agents, then archives them. Their history can be restored from the resume picker."
+	confirmLabel := "Archive task and child agents"
+	if action == agentsOverviewActionDelete {
+		title = "Permanently delete \"" + name + "\"?"
+		body = "This stops any running work in this task and its child agents, then permanently deletes their history. This cannot be undone."
+		confirmLabel = "Permanently delete task and child agents"
+	}
+	m.agentsOverviewLifecycle = &agentsOverviewLifecycleRequest{threadID: threadID, action: action}
+	m.openModal(ModalRequestMsg{
+		ID:    agentsOverviewLifecycleModalID,
+		Kind:  ModalKindAgents,
+		Title: title,
+		Body:  body,
+		Options: []ModalOption{
+			{ID: "cancel", Label: "Cancel", Description: "Keep this task"},
+			{ID: "confirm", Label: confirmLabel, Description: "Run the confirmed lifecycle action"},
+		},
+	})
+}
+
+func (m *Model) applyAgentsOverviewLifecycleOption(optionID string) bubbletea.Cmd {
+	request := m.agentsOverviewLifecycle
+	m.agentsOverviewLifecycle = nil
+	if request == nil {
+		return nil
+	}
+	if optionID != "confirm" {
+		m.notice = ""
+		return nil
+	}
+	return m.runAgentsOverviewLifecycleCmd(request)
+}
+
+func (m *Model) runAgentsOverviewLifecycleCmd(request *agentsOverviewLifecycleRequest) bubbletea.Cmd {
+	if m == nil || request == nil || m.agentsOverviewBusy || strings.TrimSpace(request.threadID) == "" {
+		return nil
+	}
+	progress := "Archiving task\u2026"
+	runAvailable := m.onAgentsOverviewArchive != nil
+	if request.action == agentsOverviewActionDelete {
+		progress = "Deleting task\u2026"
+		runAvailable = m.onAgentsOverviewDelete != nil
+	}
+	if !runAvailable {
+		m.agentsOverviewNotice = "The agents dashboard is unavailable in this runtime."
+		return nil
+	}
+	m.agentsOverviewBusy = true
+	m.agentsOverviewLifecycleProgress = progress
+	m.agentsOverviewLifecycle = request
+	action := request.action
+	threadID := request.threadID
+	return func() bubbletea.Msg {
+		var err error
+		if action == agentsOverviewActionDelete {
+			err = m.onAgentsOverviewDelete(threadID)
+		} else {
+			err = m.onAgentsOverviewArchive(threadID)
+		}
+		return agentsOverviewLifecycleMsg{threadID: threadID, action: action, err: err}
+	}
+}
+
+// applyAgentsOverviewLifecycleResult finishes an archive/delete RPC (Rust
+// #44433): refresh the dashboard, keep it open when the current task was
+// removed, and report failures without dropping the attachment or draft.
+func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMsg) bubbletea.Cmd {
+	m.agentsOverviewLifecycleProgress = ""
+	m.agentsOverviewBusy = false
+	m.agentsOverviewLifecycle = nil
+	if msg.err != nil {
+		label := "archive"
+		if msg.action == agentsOverviewActionDelete {
+			label = "delete"
+		}
+		m.agentsOverviewNotice = "Failed to " + label + " task: " + strings.TrimSpace(msg.err.Error())
+		return nil
+	}
+	m.agentsOverviewNotice = ""
+	// Removing the current task leaves the dashboard open but unattached.
+	if m.State != nil && strings.TrimSpace(m.State.ThreadID) == strings.TrimSpace(msg.threadID) {
+		m.State.SetThreadID("")
+		m.State.SetThreadName("")
+	}
+	if m.agentsOverview != nil {
+		m.agentsOverview.UnhideThread(msg.threadID)
+	}
+	return m.refreshAgentsOverviewCmd()
 }
 
 // openAgentsOverviewThread closes the dashboard and attaches to the selected
@@ -435,6 +588,8 @@ func (m *Model) closeAgentsOverview() {
 	m.agentsOverviewRefresh = 0
 	m.agentsOverviewPending = false
 	m.agentsOverviewInflight = false
+	m.agentsOverviewLifecycle = nil
+	m.agentsOverviewLifecycleProgress = ""
 	m.refreshTranscript()
 }
 
@@ -447,6 +602,9 @@ func (m *Model) renderAgentsOverview() string {
 	lines := m.agentsOverview.RenderStyled(m.width, m.height)
 	if m.agentsOverviewNotice != "" {
 		lines = append(lines, "  "+m.agentsOverviewNotice)
+	}
+	if m.agentsOverviewLifecycleProgress != "" {
+		lines = append(lines, "  "+m.agentsOverviewLifecycleProgress)
 	}
 	return strings.Join(lines, "\n")
 }
