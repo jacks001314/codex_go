@@ -2508,7 +2508,7 @@ func (r *Router) handleMemoryReset(request *Request) (*MemoryResetResponse, erro
 	codexHome := codexHomeFromSessionStore(r.store)
 	var err error
 	if r.state != nil {
-		err = r.state.ClearMemoryData(context.Background())
+		err = r.state.ClearAllMemoryData(context.Background())
 	} else {
 		err = clearRustMemoriesSQLiteData(codexHome)
 	}

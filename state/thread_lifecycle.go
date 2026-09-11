@@ -181,7 +181,7 @@ func (r *StateRuntime) DeleteThreadsStrict(ctx context.Context, threadIDs []stri
 		if _, err := r.logsDB.ExecContext(ctx, `DELETE FROM logs WHERE thread_id = ?`, threadID); err != nil {
 			return 0, fmt.Errorf("delete logs for thread %s: %w", threadID, err)
 		}
-		if err := r.deleteThreadMemory(ctx, threadID); err != nil {
+		if err := r.DeleteVersionedThreadMemory(ctx, threadID); err != nil {
 			return 0, err
 		}
 		if _, err := r.goalsDB.ExecContext(ctx, `DELETE FROM thread_goals WHERE thread_id = ?`, threadID); err != nil {

@@ -69,3 +69,63 @@ func TestMemoryStoreForVersionIsolatesStateAndSharesThreadCatalog(t *testing.T) 
 		t.Fatalf("v2 store after view close error = %v", err)
 	}
 }
+
+func TestClearAllMemoryDataCoversEveryVersion(t *testing.T) {
+	ctx := context.Background()
+	runtime := newBackfillTestRuntime(t)
+	insertMemoryThread(t, runtime, "versioned-thread", time.Now().UTC(), "enabled", "cli", false, "preview")
+	store, err := runtime.MemoryStoreForVersion(ctx, "v2")
+	if err != nil {
+		t.Fatalf("v2 store error = %v", err)
+	}
+	insertMemoryOutput(t, runtime, "versioned-thread", 100, "raw", "summary", 0, nil, false)
+	insertMemoryOutput(t, store, "versioned-thread", 100, "raw", "summary", 0, nil, false)
+	assertMemoryTableCount(t, runtime.MemoriesDB(), "stage1_outputs", "thread_id", "versioned-thread", 1)
+	assertMemoryTableCount(t, store.MemoriesDB(), "stage1_outputs", "thread_id", "versioned-thread", 1)
+
+	if err := runtime.ClearAllMemoryData(ctx); err != nil {
+		t.Fatalf("ClearAllMemoryData() error = %v", err)
+	}
+	assertMemoryTableCount(t, runtime.MemoriesDB(), "stage1_outputs", "thread_id", "versioned-thread", 0)
+	assertMemoryTableCount(t, store.MemoriesDB(), "stage1_outputs", "thread_id", "versioned-thread", 0)
+	if !runtime.HasMemoriesV2Database() {
+		t.Fatal("clearing memories must not remove the v2 database file")
+	}
+
+	// Resetting a runtime that never used v2 must not create the v2 database.
+	fresh := newBackfillTestRuntime(t)
+	if err := fresh.ClearAllMemoryData(ctx); err != nil {
+		t.Fatalf("fresh ClearAllMemoryData() error = %v", err)
+	}
+	if fresh.HasMemoriesV2Database() {
+		t.Fatal("reset must not create a v2 memories database")
+	}
+}
+
+func TestDeleteVersionedThreadMemoryCoversEveryVersion(t *testing.T) {
+	ctx := context.Background()
+	runtime := newBackfillTestRuntime(t)
+	insertMemoryThread(t, runtime, "delete-thread", time.Now().UTC(), "enabled", "cli", false, "preview")
+	store, err := runtime.MemoryStoreForVersion(ctx, "v2")
+	if err != nil {
+		t.Fatalf("v2 store error = %v", err)
+	}
+	insertMemoryOutput(t, runtime, "delete-thread", 100, "raw", "summary", 0, nil, false)
+	insertMemoryOutput(t, store, "delete-thread", 100, "raw", "summary", 0, nil, false)
+	assertMemoryTableCount(t, runtime.MemoriesDB(), "stage1_outputs", "thread_id", "delete-thread", 1)
+	assertMemoryTableCount(t, store.MemoriesDB(), "stage1_outputs", "thread_id", "delete-thread", 1)
+
+	if err := runtime.DeleteVersionedThreadMemory(ctx, "delete-thread"); err != nil {
+		t.Fatalf("DeleteVersionedThreadMemory() error = %v", err)
+	}
+	assertMemoryTableCount(t, runtime.MemoriesDB(), "stage1_outputs", "thread_id", "delete-thread", 0)
+	assertMemoryTableCount(t, store.MemoriesDB(), "stage1_outputs", "thread_id", "delete-thread", 0)
+
+	fresh := newBackfillTestRuntime(t)
+	if err := fresh.DeleteVersionedThreadMemory(ctx, "missing-thread"); err != nil {
+		t.Fatalf("fresh DeleteVersionedThreadMemory() error = %v", err)
+	}
+	if fresh.HasMemoriesV2Database() {
+		t.Fatal("deleting thread memory must not create a v2 memories database")
+	}
+}

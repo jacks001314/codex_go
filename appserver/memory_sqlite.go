@@ -104,7 +104,16 @@ func clearRustMemoriesSQLiteData(codexHome string) error {
 	if err != nil {
 		return err
 	}
-	dbPath := config.MemoriesDBPath()
+	// Reset covers every existing memory version (Rust #43797).
+	for _, dbPath := range []string{config.MemoriesDBPath(), config.MemoriesV2DBPath()} {
+		if err := clearRustMemoriesDBFile(config, dbPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func clearRustMemoriesDBFile(config state.SqliteConfig, dbPath string) error {
 	if !regularFileExists(dbPath) {
 		return nil
 	}

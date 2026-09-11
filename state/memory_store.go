@@ -66,3 +66,42 @@ func (r *StateRuntime) HasMemoriesV2Database() bool {
 	_, err := os.Stat(r.sqlite.MemoriesV2DBPath())
 	return err == nil
 }
+
+// ClearAllMemoryData clears memory rows for every existing version without
+// creating a v2 database that was never used (Rust memory_versions.rs
+// clear_all_memory_data, #43797).
+func (r *StateRuntime) ClearAllMemoryData(ctx context.Context) error {
+	if r == nil {
+		return errors.New("state runtime is unavailable")
+	}
+	if err := r.ClearMemoryData(ctx); err != nil {
+		return err
+	}
+	if !r.HasMemoriesV2Database() {
+		return nil
+	}
+	store, err := r.MemoryStoreForVersion(ctx, "v2")
+	if err != nil {
+		return err
+	}
+	return store.ClearMemoryData(ctx)
+}
+
+// DeleteVersionedThreadMemory removes one thread's memory rows from every
+// existing version (Rust delete_versioned_thread_memory, #43797).
+func (r *StateRuntime) DeleteVersionedThreadMemory(ctx context.Context, threadID string) error {
+	if r == nil {
+		return errors.New("state runtime is unavailable")
+	}
+	if err := r.deleteThreadMemory(ctx, threadID); err != nil {
+		return err
+	}
+	if !r.HasMemoriesV2Database() {
+		return nil
+	}
+	store, err := r.MemoryStoreForVersion(ctx, "v2")
+	if err != nil {
+		return err
+	}
+	return store.deleteThreadMemory(ctx, threadID)
+}
