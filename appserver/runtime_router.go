@@ -211,6 +211,8 @@ type RuntimeRouter struct {
 	threads                 *ThreadManager
 	servicesMu              sync.Mutex
 	mu                      sync.RWMutex
+	configWarningsMu        sync.Mutex
+	emittedConfigWarnings   map[string]bool
 	sink                    NotificationSink
 	requests                ServerRequestSink
 	turnsMu                 *sync.Mutex
@@ -3473,6 +3475,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 				r.services.Skills.WatchCWDs([]string{response.Thread.CWD})
 			}
 			r.emitThreadStartAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
+			r.emitThreadConfigWarnings(response.Thread.CWD)
 			if shouldEmitThreadStartedNotification(response.Thread) {
 				r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
 			}
@@ -5454,7 +5457,53 @@ func (r *RuntimeRouter) configWarningsForInitialize() []config.ConfigWarningNoti
 	if r == nil || r.services.Config == nil {
 		return nil
 	}
-	return r.services.Config.Warnings()
+	warnings := r.services.Config.Warnings()
+	// Rust #44691: surface unrecognized settings from the startup layers
+	// (packaged defaults, user, and managed configuration).
+	if ignored := r.services.Config.IgnoredSettingsWarning(""); strings.TrimSpace(ignored) != "" {
+		warnings = append(warnings, config.ConfigWarningNotification{Summary: ignored})
+	}
+	r.rememberEmittedConfigWarnings(warnings)
+	return warnings
+}
+
+func (r *RuntimeRouter) rememberEmittedConfigWarnings(warnings []config.ConfigWarningNotification) {
+	if r == nil || len(warnings) == 0 {
+		return
+	}
+	r.configWarningsMu.Lock()
+	defer r.configWarningsMu.Unlock()
+	if r.emittedConfigWarnings == nil {
+		r.emittedConfigWarnings = map[string]bool{}
+	}
+	for _, warning := range warnings {
+		if summary := strings.TrimSpace(warning.Summary); summary != "" {
+			r.emittedConfigWarnings[summary] = true
+		}
+	}
+}
+
+// emitThreadConfigWarnings emits ignored-configuration warnings for the thread's
+// project layers that were not already delivered at startup (Rust #44691).
+func (r *RuntimeRouter) emitThreadConfigWarnings(cwd string) {
+	if r == nil || r.services.Config == nil {
+		return
+	}
+	ignored := strings.TrimSpace(r.services.Config.IgnoredSettingsWarning(cwd))
+	if ignored == "" {
+		return
+	}
+	r.configWarningsMu.Lock()
+	if r.emittedConfigWarnings == nil {
+		r.emittedConfigWarnings = map[string]bool{}
+	}
+	already := r.emittedConfigWarnings[ignored]
+	r.emittedConfigWarnings[ignored] = true
+	r.configWarningsMu.Unlock()
+	if already {
+		return
+	}
+	r.notify(NotificationConfigWarning, &config.ConfigWarningNotification{Summary: ignored})
 }
 
 func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartResponse, error) {
