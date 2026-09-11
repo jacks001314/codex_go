@@ -78,7 +78,9 @@ func TestChatStreamingReasoningHeadersAndFinalMatchRustCore(t *testing.T) {
 	state.TaskRunning = true
 
 	state.OnReasoningDelta("thinking **Inspecting files** and more")
-	if state.StatusKind != "thinking" || state.StatusHeader != "Inspecting files" {
+	// Rust #43921 trims only a leading `**bold**` span, so an inline span keeps
+	// the whole line.
+	if state.StatusKind != "thinking" || state.StatusHeader != "thinking **Inspecting files** and more" {
 		t.Fatalf("status = %q %q", state.StatusKind, state.StatusHeader)
 	}
 
@@ -96,7 +98,9 @@ func TestChatStreamingReasoningHeadersAndFinalMatchRustCore(t *testing.T) {
 	}
 
 	state.RestoreReasoningStatusHeader()
-	if state.StatusHeader != "Working" || state.StatusKind != "working" {
+	// Rust #43921: the last useful summary is retained through finalization and
+	// restore instead of falling back to "Working".
+	if state.StatusHeader != "next block" || state.StatusKind != "thinking" {
 		t.Fatalf("restored status = %q %q", state.StatusKind, state.StatusHeader)
 	}
 }
@@ -110,5 +114,73 @@ func TestExtractFirstBoldMatchRustCore(t *testing.T) {
 	}
 	if _, ok := ExtractFirstBold("pre **unterminated"); ok {
 		t.Fatal("unterminated bold should be ignored")
+	}
+}
+
+func TestLatestSummaryLineMatchRustCore(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want string
+		ok   bool
+	}{
+		{name: "empty", text: "", ok: false},
+		{name: "comments only", text: "<!-- thinking -->\n\n", ok: false},
+		{name: "bold header", text: "**Planning the change**", want: "Planning the change", ok: true},
+		{name: "bold with suffix", text: "**Planning** the change", want: "Planning the change", ok: true},
+		{name: "heading marks", text: "### Step two", want: "Step two", ok: true},
+		{name: "last usable line", text: "first line\n\nlast line", want: "last line", ok: true},
+		{name: "unterminated bold falls back", text: "**unterminated\nusable line", want: "usable line", ok: true},
+		{name: "empty bold skipped", text: "****\nusable", want: "usable", ok: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := LatestSummaryLine(tc.text)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("LatestSummaryLine(%q) = %q %v, want %q %v", tc.text, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestReasoningStatusHeaderRetainsLatestSummary(t *testing.T) {
+	state := NewChatStreamingState(40)
+	state.TaskRunning = true
+
+	state.OnAgentReasoningDelta("**Step one**")
+	if state.StatusHeader != "Step one" || state.StatusKind != "thinking" {
+		t.Fatalf("delta status = %q %q", state.StatusKind, state.StatusHeader)
+	}
+	state.OnAgentReasoningDelta("\n## Step two")
+	if state.StatusHeader != "Step two" {
+		t.Fatalf("second delta status = %q", state.StatusHeader)
+	}
+	// A later non-usable line must not clear the heading.
+	state.OnAgentReasoningDelta("\n<!-- internal note -->")
+	if state.StatusHeader != "Step two" {
+		t.Fatalf("comment cleared header = %q", state.StatusHeader)
+	}
+	// Finalizing keeps the last useful summary through later tool activity.
+	state.OnAgentReasoningFinal()
+	if state.StatusHeader != "Step two" || state.StatusKind != "thinking" {
+		t.Fatalf("final status = %q %q", state.StatusKind, state.StatusHeader)
+	}
+}
+
+func TestRestoreReasoningStatusHeaderKeepsPrevious(t *testing.T) {
+	state := NewChatStreamingState(40)
+	state.TaskRunning = true
+	state.StatusHeader = "Earlier heading"
+	state.StatusKind = "thinking"
+	state.RestoreReasoningStatusHeader()
+	if state.StatusHeader != "Earlier heading" || state.StatusKind != "thinking" {
+		t.Fatalf("restore kept header = %q %q", state.StatusKind, state.StatusHeader)
+	}
+
+	empty := NewChatStreamingState(40)
+	empty.TaskRunning = true
+	empty.RestoreReasoningStatusHeader()
+	if empty.StatusHeader != "Working" || empty.StatusKind != "working" {
+		t.Fatalf("restore fallback = %q %q", empty.StatusKind, empty.StatusHeader)
 	}
 }

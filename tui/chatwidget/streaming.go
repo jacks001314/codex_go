@@ -122,9 +122,15 @@ func (s *ChatStreamingState) RestoreReasoningStatusHeader() {
 	if s == nil {
 		return
 	}
-	if header, ok := ExtractFirstBold(s.ReasoningBuffer); ok {
+	// Rust #43921: prefer the latest usable summary line, keeping the previous
+	// header when the buffer has no usable line yet.
+	if header, ok := LatestSummaryLine(s.ReasoningBuffer); ok {
 		s.StatusKind = "thinking"
 		s.StatusHeader = header
+		return
+	}
+	if strings.TrimSpace(s.StatusHeader) != "" {
+		s.StatusKind = "thinking"
 		return
 	}
 	if s.TaskRunning {
@@ -234,7 +240,9 @@ func (s *ChatStreamingState) OnAgentReasoningDelta(delta string) {
 		return
 	}
 	s.ReasoningBuffer += delta
-	if header, ok := ExtractFirstBold(s.ReasoningBuffer); ok {
+	// Rust #43921: stream the latest usable summary line; keep the previous
+	// header while the buffer has no usable line.
+	if header, ok := LatestSummaryLine(s.ReasoningBuffer); ok {
 		s.StatusKind = "thinking"
 		s.StatusHeader = header
 	}
@@ -245,6 +253,12 @@ func (s *ChatStreamingState) OnAgentReasoningFinal() {
 		return
 	}
 	s.FullReasoningBuffer += s.ReasoningBuffer
+	// Rust #43921: keep the last useful summary through tool activity and later
+	// empty reasoning items instead of clearing the status header.
+	if header, ok := LatestSummaryLine(s.FullReasoningBuffer); ok {
+		s.StatusKind = "thinking"
+		s.StatusHeader = header
+	}
 	if strings.TrimSpace(s.FullReasoningBuffer) != "" {
 		s.addHistory(historycell.NewReasoningSummaryCell(s.FullReasoningBuffer, false))
 	}
@@ -366,6 +380,35 @@ func ExtractFirstBold(markdown string) (string, bool) {
 		return "", false
 	}
 	return header, true
+}
+
+// LatestSummaryLine mirrors Rust's latest_summary_line (#43921): the last
+// non-empty line that is not an HTML comment, with leading Markdown heading
+// marks removed. A line that opens a `**bold**` span contributes the bold text
+// followed by the remaining suffix; a line with an unterminated span is
+// skipped so an earlier usable line can be used.
+func LatestSummaryLine(text string) (string, bool) {
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || strings.HasPrefix(line, "<!--") {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimLeft(line, "#"))
+		if strings.HasPrefix(line, "**") {
+			stripped := line[2:]
+			end := strings.Index(stripped, "**")
+			if end < 0 {
+				continue
+			}
+			line = stripped[:end] + stripped[end+2:]
+		}
+		if line == "" {
+			continue
+		}
+		return line, true
+	}
+	return "", false
 }
 
 func (s *ChatStreamingState) handleStreamingDelta(delta string) {
