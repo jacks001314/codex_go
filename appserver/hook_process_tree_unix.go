@@ -7,14 +7,20 @@ import (
 	"syscall"
 )
 
-// hookProcessTree runs a hook command in its own process group so the whole
-// tree can be terminated on timeout or cancellation (Rust dd916428cd).
+// hookProcessTree runs a hook command in its own session and process group so
+// the whole tree can be terminated on timeout or cancellation (Rust
+// dd916428cd). A new session also detaches the command from the controlling
+// terminal, where shell startup code that touches the tty could otherwise stop
+// the hook on background terminal I/O (Rust #43876).
 type hookProcessTree struct {
 	cmd *osexec.Cmd
 }
 
 func startHookProcessTree(cmd *osexec.Cmd) (*hookProcessTree, error) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// `setsid` makes the child a session and process-group leader, so killing
+	// the negative PID still tears down the whole tree while the child no longer
+	// inherits the controlling terminal.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
