@@ -69,6 +69,34 @@ func TestEmitTurnMemoryMetricRecordsGates(t *testing.T) {
 	}
 }
 
+// TestEmitTurnToolCallNetworkAndProcessMetrics covers the remaining per-turn
+// metric sources of Rust #44656.
+func TestEmitTurnToolCallNetworkAndProcessMetrics(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	router := NewRuntimeRouter(RuntimeServices{TurnMetrics: metrics})
+
+	router.emitTurnToolCallMetric(metrics, 3, true)
+	router.emitTurnNetworkProxyMetric(metrics, false, true)
+	router.emitTurnRunningProcessesMetric(metrics, "no-such-thread")
+
+	byName := map[string]*state.TaskMetric{}
+	for _, record := range metrics.Records() {
+		byName[record.Name+"/"+record.Kind] = record
+	}
+	toolCall := byName[telemetry.TurnToolCallMetric+"/histogram"]
+	if toolCall == nil || toolCall.Value != 3 || toolCall.Tags[telemetry.TurnTmpMemoryTag] != "true" {
+		t.Fatalf("tool call metric = %#v", toolCall)
+	}
+	network := byName[telemetry.TurnNetworkProxyMetric+"/counter"]
+	if network == nil || network.Inc != 1 || network.Tags["active"] != "false" || network.Tags[telemetry.TurnTmpMemoryTag] != "true" {
+		t.Fatalf("network proxy metric = %#v", network)
+	}
+	processes := byName[telemetry.TurnRunningProcessesMetric+"/histogram"]
+	if processes == nil || processes.Value != 0 {
+		t.Fatalf("running processes metric = %#v", processes)
+	}
+}
+
 type turnMetricsAgent struct {
 	model string
 	usage model.AgentUsage
@@ -160,6 +188,15 @@ func TestRuntimeRouterTurnCompletionEmitsPerModelTokenUsage(t *testing.T) {
 	}
 	if memoryRecords != 1 {
 		t.Fatalf("codex.turn.memory records = %d, want 1", memoryRecords)
+	}
+	counts := map[string]int{}
+	for _, record := range metrics.Records() {
+		counts[record.Name]++
+	}
+	for _, name := range []string{telemetry.TurnMemoryMetric, telemetry.TurnToolCallMetric, telemetry.TurnNetworkProxyMetric, telemetry.TurnRunningProcessesMetric} {
+		if counts[name] != 1 {
+			t.Fatalf("records for %s = %d, want 1 (all %#v)", name, counts[name], counts)
+		}
 	}
 }
 

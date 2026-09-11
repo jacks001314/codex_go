@@ -1474,6 +1474,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	memoryFeatureEnabled := features.Enabled(memoryCfg.FeatureSettings(), "memories")
 	r.emitTurnTokenUsageMetrics(r.services.TurnMetrics, result.ModelResponses(), runConfig.Model, memoryFeatureEnabled)
 	r.emitTurnMemoryMetric(r.services.TurnMetrics, memoryFeatureEnabled, memoryCfg.Memories().UseMemories, hasMemoryCitation)
+	r.emitTurnToolCallMetric(r.services.TurnMetrics, len(result.ToolExecutions), memoryFeatureEnabled)
+	r.emitTurnNetworkProxyMetric(r.services.TurnMetrics, r.managedNetworkProxyActive(), memoryFeatureEnabled)
+	r.emitTurnRunningProcessesMetric(r.services.TurnMetrics, threadID)
 	r.unifiedExecPersistMu.Unlock()
 	threadItems := make([]ThreadItem, 0, len(items))
 	for _, item := range items {

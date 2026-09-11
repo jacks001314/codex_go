@@ -135,3 +135,54 @@ func boolTagValue(value bool) string {
 	}
 	return "false"
 }
+
+// emitTurnToolCallMetric records the codex.turn.tool.call histogram for the
+// turn's dispatched tool calls (Rust #44656 emits turn_state.tool_calls, which
+// is incremented for every dispatched invocation).
+func (r *RuntimeRouter) emitTurnToolCallMetric(sink telemetry.TurnMetricSink, toolCalls int, tmpMemoryEnabled bool) {
+	if sink == nil {
+		return
+	}
+	if toolCalls < 0 {
+		toolCalls = 0
+	}
+	sink.Histogram(telemetry.TurnToolCallMetric, toolCalls, map[string]string{
+		telemetry.TurnTmpMemoryTag: boolTagValue(tmpMemoryEnabled),
+	})
+}
+
+// emitTurnNetworkProxyMetric records the codex.turn.network_proxy counter with
+// the turn's managed-network active state (Rust #44656).
+func (r *RuntimeRouter) emitTurnNetworkProxyMetric(sink telemetry.TurnMetricSink, active bool, tmpMemoryEnabled bool) {
+	if sink == nil {
+		return
+	}
+	sink.Counter(telemetry.TurnNetworkProxyMetric, 1, map[string]string{
+		"active":                   boolTagValue(active),
+		telemetry.TurnTmpMemoryTag: boolTagValue(tmpMemoryEnabled),
+	})
+}
+
+// managedNetworkProxyActive reports whether the host's managed network proxy is
+// enabled (Rust services.network_proxy.current_cfg().enabled).
+func (r *RuntimeRouter) managedNetworkProxyActive() bool {
+	if r == nil || r.services.ManagedNetwork == nil {
+		return false
+	}
+	return r.services.ManagedNetwork.RemoteConfigSnapshot().Network.Enabled
+}
+
+// emitTurnRunningProcessesMetric records how many unified-exec processes are
+// still running for the thread (Rust list_background_terminals().len()). Rust
+// emits a counter; Go records the gauge value as a histogram sample so a
+// zero-count turn is preserved (state.TaskMetrics.Counter promotes 0 to 1).
+func (r *RuntimeRouter) emitTurnRunningProcessesMetric(sink telemetry.TurnMetricSink, threadID string) {
+	if sink == nil {
+		return
+	}
+	count := 0
+	if r != nil && r.services.UnifiedExec != nil {
+		count = len(r.services.UnifiedExec.ListProcesses(strings.TrimSpace(threadID)))
+	}
+	sink.Histogram(telemetry.TurnRunningProcessesMetric, count, nil)
+}
