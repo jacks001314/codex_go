@@ -58,4 +58,64 @@ func TestMCPStatusSetsReauthenticationFailureReason(t *testing.T) {
 	if status.Data[0].Error == nil || !strings.Contains(*status.Data[0].Error, "requires OAuth reauthentication") {
 		t.Fatalf("Error = %#v", status.Data[0].Error)
 	}
+	// Rust #44359: a rejected OAuth credential is reported as logged out in the
+	// status snapshot, not retained from credential presence.
+	if status.Data[0].AuthStatus != MCPAuthNotLoggedIn {
+		t.Fatalf("AuthStatus = %q, want %q", status.Data[0].AuthStatus, MCPAuthNotLoggedIn)
+	}
+}
+
+// Mirrors Rust #44359: only OAuth authentication failures downgrade the auth
+// status; unrelated provider failures and other auth modes keep their status.
+func TestMCPStatusAuthDowngradeOnlyForOAuthAuthenticationFailuresLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		statusCode int
+		config     ServerConfig
+		want       MCPAuthStatus
+	}{
+		{name: "oauth rejected", statusCode: http.StatusUnauthorized, config: ServerConfig{OAuthClientID: "client-1"}, want: MCPAuthNotLoggedIn},
+		{name: "oauth provider error", statusCode: http.StatusInternalServerError, config: ServerConfig{OAuthClientID: "client-1"}, want: MCPAuthOAuth},
+		{name: "bearer rejected", statusCode: http.StatusUnauthorized, config: ServerConfig{BearerTokenEnvVar: "MCP_STATUS_TOKEN"}, want: MCPAuthBearerToken},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/mcp") {
+					w.WriteHeader(test.statusCode)
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			defer server.Close()
+
+			home := t.TempDir()
+			configURL := server.URL + "/mcp"
+			expiresAt := time.Now().Add(time.Hour).UnixMilli()
+			if err := NewOAuthStore(home).Save(&OAuthTokenSet{
+				ServerName:      "docs",
+				ServerURL:       configURL,
+				ClientID:        "client-1",
+				AccessToken:     "oauth-old",
+				RefreshToken:    "refresh-1",
+				ExpiresAtMillis: &expiresAt,
+			}); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+			t.Setenv("MCP_STATUS_TOKEN", "token")
+			config := test.config
+			config.URL = configURL
+			config.Enabled = true
+			service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+				"docs": {Config: config},
+			}, CodexHome: home})
+
+			status, err := service.ListStatusChecked(&MCPListServerStatusParams{Detail: &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly}})
+			if err != nil {
+				t.Fatalf("ListStatusChecked() error = %v", err)
+			}
+			if len(status.Data) != 1 || status.Data[0].AuthStatus != test.want {
+				t.Fatalf("AuthStatus = %#v, want %q", status.Data, test.want)
+			}
+		})
+	}
 }

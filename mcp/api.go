@@ -1435,6 +1435,13 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 		status.ResourceTemplates = nil
 	}
 	status.AuthStatus = s.authStatusForConfig(status.effectiveName(), config)
+	// Rust #44359: status-only discovery has no event channel to report a failed
+	// connection attempt, so an OAuth credential the server rejected is reported
+	// as logged out instead of retaining the credential-presence status. Other
+	// statuses and non-authentication failures keep their status.
+	if err != nil && status.AuthStatus == MCPAuthOAuth && mcpErrAuthenticationRequired(err) {
+		status.AuthStatus = MCPAuthNotLoggedIn
+	}
 	s.recordInventoryStatus(status.effectiveName(), status, true, includeInventory)
 	return mcpInventoryStatusResult{Index: index, Status: status, Err: err}
 }
