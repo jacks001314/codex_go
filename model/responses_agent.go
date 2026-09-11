@@ -597,6 +597,70 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	}
 }
 
+// toolResultMetadataDestinationAllowed reports whether raw tool-result metadata
+// may be sent to the resolved destination: only HTTPS api.openai.com or an
+// allowed ChatGPT host (Rust #44336).
+func toolResultMetadataDestinationAllowed(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsed.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "api.openai.com" {
+		return true
+	}
+	switch host {
+	case "chatgpt.com", "chat.openai.com", "chatgpt-staging.com":
+		return true
+	}
+	return strings.HasSuffix(host, ".chatgpt.com") || strings.HasSuffix(host, ".chatgpt-staging.com")
+}
+
+// filterToolResultMetadataForDestination clears raw tool-result metadata when the
+// resolved request destination is not an allowed OpenAI/ChatGPT HTTPS host. HTTP
+// and WebSocket requests share this filter (Rust #44336).
+func (r *ResponsesAgentRunner) filterToolResultMetadataForDestination(items []any) []any {
+	baseURL := ""
+	if r != nil && r.Provider != nil {
+		baseURL = r.Provider.BaseURL
+	}
+	if toolResultMetadataDestinationAllowed(baseURL) {
+		return items
+	}
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, clearToolResultMetadataInPromptItem(item))
+	}
+	return out
+}
+
+func clearToolResultMetadataInPromptItem(value any) any {
+	switch typed := value.(type) {
+	case *AgentItem:
+		if typed != nil {
+			typed.ClearToolResultMetadata()
+		}
+		return value
+	case map[string]any:
+		metadata, ok := typed[internalChatMessageMetadataPassthroughField].(map[string]any)
+		if !ok {
+			return value
+		}
+		calls, ok := metadata[executedToolCallsField].([]any)
+		if !ok {
+			return value
+		}
+		for _, raw := range calls {
+			if call, ok := raw.(map[string]any); ok {
+				delete(call, toolResultMetadataField)
+			}
+		}
+		return value
+	default:
+		return value
+	}
+}
+
 func (r *ResponsesAgentRunner) RunWebSocket(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
 	return r.runWebSocket(ctx, request, false, false)
 }
@@ -631,7 +695,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
 	}
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: r.gateContentItemKinds(inputItems), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
+		Model: modelID, Instructions: responsesInstructions(request), Input: r.filterToolResultMetadataForDestination(r.gateContentItemKinds(inputItems)), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
 		ServiceTier: ServiceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
 		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
@@ -928,6 +992,9 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
 	}
 	inputItems = r.gateContentItemKinds(inputItems)
+	// Send raw tool-result metadata only to allowed OpenAI/ChatGPT HTTPS
+	// destinations (Rust #44336).
+	inputItems = r.filterToolResultMetadataForDestination(inputItems)
 	// Only Responses WebSocket v2 supports previous_response_id. This HTTP/SSE
 	// runner carries conversation context by sending full history in input.
 	apiRequest := &responsesAgentRequest{

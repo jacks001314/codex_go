@@ -17,6 +17,8 @@ const (
 	executedToolCallTruncatedField              = "_codex_executed_tool_call_truncated"
 	executedToolCallRawField                    = "_codex_executed_tool_call_raw"
 	toolResultSourcesField                      = "tool_result_sources"
+	toolResultMetadataField                     = "tool_result_metadata"
+	toolResultMetadataOmittedMarker             = "omitted_due_to_size_limit"
 )
 
 type ExecutedToolCall struct {
@@ -29,6 +31,10 @@ type ExecutedToolCall struct {
 	// unexported so untrusted serialized input cannot inject it, mirroring
 	// Rust's skip_deserializing/skip_serializing_if behavior.
 	toolResultSources any
+	// toolResultMetadata carries a host-recorded MCP `_meta` snapshot (Rust
+	// #44336). It is unexported so untrusted serialized input cannot inject it,
+	// and its raw values never reach logs.
+	toolResultMetadata ToolResultMetadata
 }
 
 type ExecutedToolCallTruncation struct {
@@ -94,10 +100,64 @@ func NewToolResultSources(sources []ToolResultSource) ToolResultSources {
 	return ToolResultSources{value: unique}
 }
 
-// NewToolResultSourcesParseFailed records that source parsing was attempted but
-// failed, not that a budget was exceeded.
+// NewToolResultSourcesParseFailed records a failed parse using the receiver's
+// existing array-of-sources shape. `parse_failed` is a status marker, not a
+// resource type; its ID is empty (Rust #44336).
 func NewToolResultSourcesParseFailed() ToolResultSources {
-	return ToolResultSources{value: "parse_failed"}
+	return ToolResultSources{value: []ToolResultSource{{Type: "parse_failed"}}}
+}
+
+// ToolResultMetadata is an entire MCP result's `_meta`, or a string marker when
+// omitted due to the size limit (Rust #44336). It is host-recorded only and is
+// never trusted from serialized input; its raw values never reach logs.
+type ToolResultMetadata struct {
+	value any
+}
+
+// NewToolResultMetadata bounds a raw MCP `_meta` snapshot before cloning it. No
+// keys are filtered; an oversized snapshot becomes the omission marker.
+func NewToolResultMetadata(metadata any) ToolResultMetadata {
+	if metadata == nil {
+		return ToolResultMetadata{}
+	}
+	if jsonSize(metadata) > MaxExecutedToolCallMetadataBytes {
+		return OmittedToolResultMetadata()
+	}
+	return ToolResultMetadata{value: metadata}
+}
+
+// OmittedToolResultMetadata is the harness status marker used when raw metadata
+// exceeds the byte limit.
+func OmittedToolResultMetadata() ToolResultMetadata {
+	return ToolResultMetadata{value: toolResultMetadataOmittedMarker}
+}
+
+// IsNone reports whether no snapshot (or omission marker) is recorded.
+func (m ToolResultMetadata) IsNone() bool { return m.value == nil }
+
+// IsSome reports whether the bounded snapshot holds metadata or an omission marker.
+func (m ToolResultMetadata) IsSome() bool { return m.value != nil }
+
+// String redacts raw metadata so it never reaches logs.
+func (m ToolResultMetadata) String() string { return "ToolResultMetadata([redacted])" }
+
+func (m ToolResultMetadata) MarshalJSON() ([]byte, error) {
+	return json.Marshal(m.value)
+}
+
+// SetToolResultMetadata replaces the entire `_meta` snapshot, including with an
+// omission marker. It reports whether metadata (or a marker) is present.
+func (c *ExecutedToolCall) SetToolResultMetadata(metadata ToolResultMetadata) bool {
+	if c == nil {
+		return false
+	}
+	c.toolResultMetadata = metadata
+	return c.toolResultMetadata.IsSome()
+}
+
+// HasToolResultMetadata reports whether a bounded `_meta` snapshot is attached.
+func (c ExecutedToolCall) HasToolResultMetadata() bool {
+	return c.toolResultMetadata.IsSome()
 }
 
 // SetToolResultSources replaces the invocation's capture outcome, including
@@ -130,11 +190,26 @@ func (c ExecutedToolCall) MarshalJSON() ([]byte, error) {
 		Arguments: arguments,
 	}
 	if c.toolResultSources != nil {
+		if c.toolResultMetadata.IsSome() {
+			return json.Marshal(struct {
+				Name               string `json:"name"`
+				Arguments          any    `json:"arguments"`
+				ToolResultSources  any    `json:"tool_result_sources"`
+				ToolResultMetadata any    `json:"tool_result_metadata"`
+			}{Name: c.Name, Arguments: arguments, ToolResultSources: c.toolResultSources, ToolResultMetadata: c.toolResultMetadata.value})
+		}
 		return json.Marshal(struct {
 			Name              string `json:"name"`
 			Arguments         any    `json:"arguments"`
 			ToolResultSources any    `json:"tool_result_sources"`
 		}{Name: c.Name, Arguments: arguments, ToolResultSources: c.toolResultSources})
+	}
+	if c.toolResultMetadata.IsSome() {
+		return json.Marshal(struct {
+			Name               string `json:"name"`
+			Arguments          any    `json:"arguments"`
+			ToolResultMetadata any    `json:"tool_result_metadata"`
+		}{Name: c.Name, Arguments: arguments, ToolResultMetadata: c.toolResultMetadata.value})
 	}
 	return json.Marshal(payload)
 }
@@ -155,6 +230,17 @@ func (i *AgentItem) AppendExecutedToolCalls(calls ...ExecutedToolCall) {
 func (i *AgentItem) ClearExecutedToolCalls() {
 	if i != nil {
 		i.executedToolCalls = nil
+	}
+}
+
+// ClearToolResultMetadata omits raw tool-result metadata without changing
+// existing calls, sources, or completion markers (Rust #44336).
+func (i *AgentItem) ClearToolResultMetadata() {
+	if i == nil {
+		return
+	}
+	for index := range i.executedToolCalls {
+		i.executedToolCalls[index].toolResultMetadata = ToolResultMetadata{}
 	}
 }
 
@@ -278,6 +364,47 @@ func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 			}
 		}
 		item.ReplaceExecutedToolCalls(calls)
+		originalBytes += executedToolCallMetadataBytes(item)
+	}
+	if originalBytes <= MaxExecutedToolCallMetadataBytes {
+		return
+	}
+	// Raw result metadata must not displace existing source evidence, calls, or
+	// completion proof. Oversized snapshots degrade to the omission marker first,
+	// then are dropped entirely (Rust #44336).
+	originalBytes = 0
+	for _, item := range items {
+		calls := item.ExecutedToolCalls()
+		changed := false
+		for index := range calls {
+			if calls[index].HasToolResultMetadata() {
+				calls[index].toolResultMetadata = OmittedToolResultMetadata()
+				changed = true
+			}
+		}
+		if changed {
+			item.ReplaceExecutedToolCalls(calls)
+		}
+		originalBytes += executedToolCallMetadataBytes(item)
+	}
+	if originalBytes <= MaxExecutedToolCallMetadataBytes {
+		return
+	}
+	// Omission markers are optional too; keep the original call budget if they
+	// cannot fit.
+	originalBytes = 0
+	for _, item := range items {
+		calls := item.ExecutedToolCalls()
+		changed := false
+		for index := range calls {
+			if calls[index].HasToolResultMetadata() {
+				calls[index].toolResultMetadata = ToolResultMetadata{}
+				changed = true
+			}
+		}
+		if changed {
+			item.ReplaceExecutedToolCalls(calls)
+		}
 		originalBytes += executedToolCallMetadataBytes(item)
 	}
 	if originalBytes <= MaxExecutedToolCallMetadataBytes {

@@ -84,7 +84,7 @@ func TestToolResultSourcesBoundsAndSerializesLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal(parse_failed) error = %v", err)
 	}
-	if !strings.Contains(string(data), `"tool_result_sources":"parse_failed"`) {
+	if !strings.Contains(string(data), `"tool_result_sources":[{"type":"parse_failed","id":""}]`) {
 		t.Fatalf("Marshal(parse_failed) = %s", data)
 	}
 	if !call.SetToolResultSources(NewToolResultSources(nil)) {

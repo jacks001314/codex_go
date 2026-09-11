@@ -156,6 +156,46 @@ func (r *ExecutedToolCallRecorder) RecordToolResultSources(invocation *tool.Invo
 	return updated
 }
 
+// RecordToolResultMetadata attaches a host-recorded MCP `_meta` snapshot to the
+// matching direct or Code Mode executed-tool call (Rust #44336). MCP capture is
+// disabled today, so this mirrors the Rust recorder for when it is enabled; the
+// snapshot is bounded and never trusted from serialized input.
+func (r *ExecutedToolCallRecorder) RecordToolResultMetadata(invocation *tool.Invocation, metadata any) bool {
+	if r == nil || invocation == nil || strings.TrimSpace(invocation.CallID) == "" || metadata == nil {
+		return false
+	}
+	bounded := model.NewToolResultMetadata(metadata)
+	hasMetadata := bounded.IsSome()
+	callID := strings.TrimSpace(invocation.CallID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureState()
+	if strings.EqualFold(strings.TrimSpace(invocation.Source), "code_mode") {
+		groupID := codeModeInvocationGroupID(invocation)
+		if groupID == "" {
+			return false
+		}
+		group := r.groups[groupID]
+		if group == nil {
+			return false
+		}
+		for index := range group.pending {
+			if group.pending[index].callID == callID {
+				group.pending[index].call.SetToolResultMetadata(bounded)
+				return hasMetadata
+			}
+		}
+		return false
+	}
+	call, exists := r.direct[callID]
+	if !exists {
+		return false
+	}
+	call.SetToolResultMetadata(bounded)
+	r.direct[callID] = call
+	return hasMetadata
+}
+
 func (r *ExecutedToolCallRecorder) RegisterCell(cellID string, outputCallID string) {
 	r.registerGroup("cell:"+strings.TrimSpace(cellID), outputCallID)
 }
