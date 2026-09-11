@@ -38,6 +38,7 @@ const (
 	MethodThreadUnsubscribe                  Method = "thread/unsubscribe"
 	MethodThreadMemoryModeSet                Method = "thread/memoryMode/set"
 	MethodMemoryReset                        Method = "memory/reset"
+	MethodMemoryStatus                       Method = "memory/status"
 	MethodUserVerificationStatus             Method = "userVerification/status"
 	MethodUserVerificationEnroll             Method = "userVerification/enroll"
 	MethodUserVerificationDelete             Method = "userVerification/delete"

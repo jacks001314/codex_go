@@ -2006,6 +2006,7 @@ func experimentalAPIMethod(method Method) bool {
 		MethodThreadIncrementElicitationLegacy,
 		MethodThreadItemsList,
 		MethodThreadMemoryModeSet,
+		MethodMemoryStatus,
 		MethodThreadRealtimeAppendAudio,
 		MethodThreadRealtimeAppendSpeech,
 		MethodThreadRealtimeAppendText,
@@ -2240,6 +2241,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 	switch request.Method {
 	case MethodInitialize:
 		return r.handleInitialize(request)
+	case MethodMemoryStatus:
+		return r.handleMemoryStatus(request)
 	case MethodTurnStart:
 		return r.handleTurnStart(request)
 	case MethodTurnSteer:

@@ -10,9 +10,12 @@ const (
 )
 
 type MemoriesConfig struct {
-	DisableOnExternalContext       bool
-	GenerateMemories               bool
-	UseMemories                    bool
+	DisableOnExternalContext bool
+	GenerateMemories         bool
+	UseMemories              bool
+	// DualWrite runs v1 and v2 extraction/consolidation concurrently with
+	// isolated stores so v2 can warm in the background (Rust #43827).
+	DualWrite                      bool
 	DedicatedTools                 bool
 	MaxRawMemoriesForConsolidation int
 	MaxUnusedDays                  int64
@@ -49,6 +52,7 @@ func (c *Config) Memories() MemoriesConfig {
 	result.DisableOnExternalContext = memoryBool(values, "disable_on_external_context", memoryBool(values, "no_memories_if_mcp_or_web_search", result.DisableOnExternalContext))
 	result.GenerateMemories = memoryBool(values, "generate_memories", result.GenerateMemories)
 	result.UseMemories = memoryBool(values, "use_memories", result.UseMemories)
+	result.DualWrite = memoryBool(values, "dual_write", result.DualWrite)
 	result.DedicatedTools = memoryBool(values, "dedicated_tools", result.DedicatedTools)
 	result.MaxRawMemoriesForConsolidation = int(clampMemoryInt(memoryInt(values, "max_raw_memories_for_consolidation", int64(result.MaxRawMemoriesForConsolidation)), 1, 4096))
 	result.MaxUnusedDays = clampMemoryInt(memoryInt(values, "max_unused_days", result.MaxUnusedDays), 0, 365)

@@ -15,6 +15,9 @@ func ClearRootsContents(codexHome string) error {
 	for _, root := range []string{
 		filepath.Join(codexHome, "memories"),
 		filepath.Join(codexHome, "memories_extensions"),
+		// A memory reset also clears v2 artifacts and consolidation progress
+		// (Rust #43827).
+		V2Root(codexHome),
 	} {
 		if err := clearRootContents(root); err != nil {
 			return err
