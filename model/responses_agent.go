@@ -2306,6 +2306,16 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 		}
 		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: statusCode, Message: message}
 	}
+	// Rust #44492: HTTP 429 quota errors are usage-limit failures, not
+	// retry-limit failures. Recognize the quota error code set and the
+	// `insufficient_quota` type before falling back to the generic
+	// rate-limit handling.
+	if statusCode == http.StatusTooManyRequests && responsesIsQuotaError(payload.Error) {
+		if strings.TrimSpace(message) == "" {
+			message = http.StatusText(statusCode)
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorQuotaExceeded, Status: statusCode, Message: message}
+	}
 	if message == "" {
 		message = http.StatusText(statusCode)
 	}
@@ -2327,6 +2337,25 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 }
 
 const bedrockExpiredSignatureMessage = "Amazon Bedrock rejected the request because its AWS signature has expired. Refresh your AWS credentials and retry. If `AWS_BEARER_TOKEN_BEDROCK` is set, update or unset it, then restart Codex"
+
+// responsesQuotaErrorCodes mirrors Rust #44492's HTTP 429 quota classification.
+var responsesQuotaErrorCodes = map[string]bool{
+	"insufficient_quota":                true,
+	"credit_balance_exhausted":          true,
+	"organization_spend_limit_exceeded": true,
+	"project_spend_limit_exceeded":      true,
+	"organization_usage_limit_exceeded": true,
+}
+
+func responsesIsQuotaError(body *responsesAgentAPIErrorBody) bool {
+	if body == nil {
+		return false
+	}
+	if strings.TrimSpace(body.Type) == "insufficient_quota" {
+		return true
+	}
+	return responsesQuotaErrorCodes[strings.TrimSpace(responseErrorCode(body))]
+}
 
 func mapProviderAPIErrorMessage(providerName string, statusCode int, bodyText string, message string) string {
 	if providerName == AmazonBedrockProviderName && statusCode == http.StatusUnauthorized && strings.Contains(bodyText, "Signature expired:") {
