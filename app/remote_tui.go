@@ -2083,7 +2083,7 @@ func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {
 }
 
 func (c *remoteAppServerTUIClient) startThread(ctx context.Context, root *cli.RootOptions, state *codextui.State) (string, error) {
-	params, err := remoteThreadStartParams(root, state)
+	params, err := c.remoteManagedThreadStartParams(ctx, root, state)
 	if err != nil {
 		return "", err
 	}

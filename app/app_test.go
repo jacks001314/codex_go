@@ -944,7 +944,7 @@ func TestInteractiveStartLocalTUIThreadReservesDisplayedSession(t *testing.T) {
 		ApprovalPolicy: "on-request",
 		Sandbox:        "read-only",
 	})
-	threadID, err := interactiveStartLocalTUIThread(state, store)
+	threadID, err := interactiveStartLocalTUIThread(&cli.RootOptions{}, state, store)
 	if err != nil {
 		t.Fatalf("interactiveStartLocalTUIThread() error = %v", err)
 	}
@@ -3672,6 +3672,18 @@ func TestInteractiveRemoteTurnStartsThreadThenTurnAndStreamsEvents(t *testing.T)
 					"method":  string(appserver.NotificationTurnCompleted),
 					"params":  map[string]any{"threadId": "thread-remote", "turn": map[string]any{"id": "turn-remote", "items": []any{}, "status": "completed"}},
 				})
+			case string(appserver.MethodConfigRead):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"config": map[string]any{}, "origins": map[string]any{}},
+				})
+			case string(appserver.MethodConfigRequirementsRead):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"requirements": map[string]any{}},
+				})
 			default:
 				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
 				return
@@ -3709,9 +3721,21 @@ func TestInteractiveRemoteTurnStartsThreadThenTurnAndStreamsEvents(t *testing.T)
 	if got := remoteTUITestReadString(t, authHeaders); got != "Bearer remote-token" {
 		t.Fatalf("Authorization header = %q", got)
 	}
-	initialize := remoteTUITestReadCapturedRequest(t, requests)
-	threadStart := remoteTUITestReadCapturedRequest(t, requests)
-	turnStart := remoteTUITestReadCapturedRequest(t, requests)
+	// A fresh thread reads the effective config and requirements before
+	// thread/start (managed new-thread defaults, #44693), so skip those while
+	// asserting the initialize -> thread/start -> turn/start ordering.
+	var initialize, threadStart, turnStart remoteTUITestRequest
+	for index := 0; index < 6 && (threadStart.Method == "" || turnStart.Method == ""); index++ {
+		request := remoteTUITestReadCapturedRequest(t, requests)
+		switch request.Method {
+		case string(appserver.MethodInitialize):
+			initialize = request
+		case string(appserver.MethodThreadStart):
+			threadStart = request
+		case string(appserver.MethodTurnStart):
+			turnStart = request
+		}
+	}
 	if initialize.Method != string(appserver.MethodInitialize) || threadStart.Method != string(appserver.MethodThreadStart) || turnStart.Method != string(appserver.MethodTurnStart) {
 		t.Fatalf("methods = %q, %q, %q", initialize.Method, threadStart.Method, turnStart.Method)
 	}
@@ -3968,6 +3992,9 @@ func TestInteractiveRemoteTurnHandlesCommandApprovalServerRequest(t *testing.T) 
 				remoteTUITestSendErr(serverErrs, err)
 				return
 			}
+			if remoteTUITestHandleConfigRequest(ctx, conn, req) {
+				continue
+			}
 			switch req.Method {
 			case string(appserver.MethodInitialize):
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
@@ -4077,6 +4104,9 @@ func TestInteractiveRemoteTurnHandlesUserInputServerRequest(t *testing.T) {
 				}
 				remoteTUITestSendErr(serverErrs, err)
 				return
+			}
+			if remoteTUITestHandleConfigRequest(ctx, conn, req) {
+				continue
 			}
 			switch req.Method {
 			case string(appserver.MethodInitialize):
@@ -4384,7 +4414,7 @@ func TestRemoteAppServerTUIClientUsesUnixSocketJSONLineTransport(t *testing.T) {
 	t.Setenv("CODEX_GO_VERSION", "9.8.7-test")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	requests := make(chan remoteTUITestRequest, 4)
+	requests := make(chan remoteTUITestRequest, 8)
 	serverErrs := make(chan error, 1)
 	state := codextui.NewState(nil)
 	messages := make(chan bubbletea.Msg, 16)
@@ -4421,9 +4451,21 @@ func TestRemoteAppServerTUIClientUsesUnixSocketJSONLineTransport(t *testing.T) {
 	if err := client.readUntilTurnCompleted(ctx); err != nil {
 		t.Fatalf("readUntilTurnCompleted: %v", err)
 	}
-	initialize := remoteTUITestReadCapturedRequest(t, requests)
-	threadStart := remoteTUITestReadCapturedRequest(t, requests)
-	turnStart := remoteTUITestReadCapturedRequest(t, requests)
+	// A fresh thread reads the effective config and requirements before
+	// thread/start (managed new-thread defaults, #44693), so skip those while
+	// asserting the initialize -> thread/start -> turn/start ordering.
+	var initialize, threadStart, turnStart remoteTUITestRequest
+	for index := 0; index < 6 && (threadStart.Method == "" || turnStart.Method == ""); index++ {
+		request := remoteTUITestReadCapturedRequest(t, requests)
+		switch request.Method {
+		case string(appserver.MethodInitialize):
+			initialize = request
+		case string(appserver.MethodThreadStart):
+			threadStart = request
+		case string(appserver.MethodTurnStart):
+			turnStart = request
+		}
+	}
 	if initialize.Method != string(appserver.MethodInitialize) || threadStart.Method != string(appserver.MethodThreadStart) || turnStart.Method != string(appserver.MethodTurnStart) {
 		t.Fatalf("methods = %q, %q, %q", initialize.Method, threadStart.Method, turnStart.Method)
 	}
@@ -5319,6 +5361,24 @@ func remoteTUITestServeJSONLineAppServer(ctx context.Context, conn net.Conn, req
 				remoteTUITestSendErr(errs, err)
 				return
 			}
+		case string(appserver.MethodConfigRead):
+			if err := encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]any{"config": map[string]any{}, "origins": map[string]any{}},
+			}); err != nil {
+				remoteTUITestSendErr(errs, err)
+				return
+			}
+		case string(appserver.MethodConfigRequirementsRead):
+			if err := encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]any{"requirements": map[string]any{}},
+			}); err != nil {
+				remoteTUITestSendErr(errs, err)
+				return
+			}
 		case string(appserver.MethodTurnStart):
 			if err := encoder.Encode(map[string]any{
 				"jsonrpc": "2.0",
@@ -5638,5 +5698,21 @@ func TestSandboxCloudConfigEligibleAuthEducationPlansLikeRust(t *testing.T) {
 	}
 	if sandboxCloudConfigEligibleAuth(nil) {
 		t.Fatal("nil auth must not be cloud-config eligible")
+	}
+}
+
+// remoteTUITestHandleConfigRequest answers the config/read and
+// configRequirements/read requests a fresh thread issues for managed new-thread
+// defaults (#44693) with empty results, reporting whether it handled the request.
+func remoteTUITestHandleConfigRequest(ctx context.Context, conn *websocket.Conn, req remoteTUITestRequest) bool {
+	switch req.Method {
+	case string(appserver.MethodConfigRead):
+		remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"config": map[string]any{}, "origins": map[string]any{}}})
+		return true
+	case string(appserver.MethodConfigRequirementsRead):
+		remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"requirements": map[string]any{}}})
+		return true
+	default:
+		return false
 	}
 }

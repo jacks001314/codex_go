@@ -204,6 +204,11 @@ func (s *remoteAgentsDashboardSource) Dispatch(ctx context.Context, prompt, cwd 
 	if cwd != "" {
 		params.CWD = cwd
 	}
+	// Rust agents_overview.rs applies managed new-thread defaults when creating a
+	// background task thread (#44693).
+	if defaults, layers, ok := s.client.remoteNewThreadModelDefaults(ctx); ok {
+		applyManagedDefaultsToThreadStartParams(&params, s.client.state, defaults, layers, nil, false, false)
+	}
 	var started appserver.ThreadStartResponse
 	if err := remoteSessionRequest(ctx, s.client, appserver.MethodThreadStart, params, &started); err != nil {
 		return "", err

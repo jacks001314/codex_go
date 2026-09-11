@@ -702,7 +702,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	state.AccountDisplay = accountDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
 	store := newSessionStore()
-	threadID, err := interactiveStartLocalTUIThread(state, store)
+	threadID, err := interactiveStartLocalTUIThread(root, state, store)
 	if err != nil {
 		return err
 	}
@@ -899,20 +899,29 @@ func interactiveAutoThreadTitle(prompt string) string {
 	return string(runes)
 }
 
-func interactiveStartLocalTUIThread(state *codextui.State, store *session.Store) (string, error) {
+func interactiveStartLocalTUIThread(root *cli.RootOptions, state *codextui.State, store *session.Store) (string, error) {
 	if state == nil {
 		return "", errors.New("interactive TUI state is nil")
 	}
 	if store == nil {
 		return "", errors.New("interactive TUI session store is nil")
 	}
-	params, err := json.Marshal(appserver.ThreadStartParams{
+	threadStart := appserver.ThreadStartParams{
 		CWD:            strings.TrimSpace(state.CWD),
 		Model:          strings.TrimSpace(state.Model),
 		ModelProvider:  strings.TrimSpace(state.Provider),
 		ApprovalPolicy: strings.TrimSpace(state.ApprovalPolicy),
 		Sandbox:        strings.TrimSpace(state.Sandbox),
-	})
+	}
+	// Rust applies the managed new-thread defaults to the startup config
+	// (tui/src/app/startup.rs + managed_new_thread_defaults.rs, #44693).
+	if defaults, layers, ok := localNewThreadModelDefaults(auth.DefaultCodexHome()); ok {
+		applyManagedDefaultsToThreadStartParams(&threadStart, state, defaults, layers,
+			remoteCLIConfigOverrideKeys(root),
+			root != nil && strings.TrimSpace(root.Shared.Model) != "",
+			false)
+	}
+	params, err := json.Marshal(threadStart)
 	if err != nil {
 		return "", err
 	}
