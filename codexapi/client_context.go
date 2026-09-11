@@ -175,9 +175,11 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 		if m.AgentName != "" {
 			value[AgentNameKey] = m.AgentName
 		}
-		if m.TurnID != "" {
-			value["turn_id"] = m.TurnID
-		}
+	}
+	// Rust #42900: turn identity is reported even for detached memory requests,
+	// which omit only session/thread identity.
+	if m.TurnID != "" {
+		value["turn_id"] = m.TurnID
 	}
 	if m.RequestKind != "" {
 		value["request_kind"] = string(m.RequestKind)

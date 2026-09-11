@@ -134,6 +134,11 @@ func (e *appServerMemoryStageOne) detachedClientMetadata(ctx context.Context) ma
 	// Rust #44298: detached memory requests attribute their turn to memory
 	// consolidation.
 	metadata.TurnTrigger = "memory_consolidation"
+	// Rust #42900: detached memory requests carry a fresh turn identity while
+	// still omitting session and thread identity.
+	memoryTurnID := newMemoryTurnID()
+	metadata.TurnID = memoryTurnID
+	metadata.RootTurnID = memoryTurnID
 	if record, err := e.router.threadRecord(session.ThreadID(e.parentThreadID), true, false); err == nil && record != nil {
 		metadata.SubagentHeader, _ = codexapi.ClientSubagentMetadataFromSource(record.Metadata.Source)
 	}
@@ -147,6 +152,16 @@ func (e *appServerMemoryStageOne) detachedClientMetadata(ctx context.Context) ma
 		metadata.ResponsesAPIMetadata = cfg.ResponsesAPIMetadata()
 	}
 	return metadata.ClientMetadata()
+}
+
+// newMemoryTurnID mirrors Rust's detached-memory turn identity
+// (`Uuid::now_v7()`), falling back to a random UUID if the time-ordered
+// generator is unavailable.
+func newMemoryTurnID() string {
+	if id, err := uuid.NewV7(); err == nil {
+		return id.String()
+	}
+	return uuid.NewString()
 }
 
 type appServerMemoryConsolidator struct {

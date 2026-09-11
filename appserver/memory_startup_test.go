@@ -20,6 +20,8 @@ import (
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/turn"
+
+	"github.com/google/uuid"
 )
 
 type memoryTestAgent struct {
@@ -113,8 +115,17 @@ func TestMemoryStageOneUsesDetachedResponsesRequestLikeRust(t *testing.T) {
 	if err := json.Unmarshal([]byte(request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader]), &metadata); err != nil {
 		t.Fatalf("turn metadata error = %v, metadata = %#v", err, request.ClientMetadata)
 	}
-	if metadata["request_kind"] != "memory" || metadata["session_id"] != nil || metadata["thread_id"] != nil || metadata["turn_id"] != nil || metadata["window_id"] != nil {
+	if metadata["request_kind"] != "memory" || metadata["session_id"] != nil || metadata["thread_id"] != nil || metadata["window_id"] != nil || metadata["installation_id"] != nil {
 		t.Fatalf("detached memory metadata = %#v", metadata)
+	}
+	// Rust #42900: detached memory requests carry a fresh turn identity while
+	// still omitting session and thread identity.
+	turnID, _ := metadata["turn_id"].(string)
+	if turnID == "" || metadata["root_turn_id"] != turnID {
+		t.Fatalf("detached memory turn identity = %#v", metadata)
+	}
+	if _, err := uuid.Parse(turnID); err != nil {
+		t.Fatalf("detached memory turn ID = %q, error = %v", turnID, err)
 	}
 	if metadata["turn_trigger"] != "memory_consolidation" {
 		t.Fatalf("detached memory turn trigger = %#v", metadata["turn_trigger"])
