@@ -52,17 +52,25 @@ func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request mem
 	agent := e.router.requireAgentForTurn(turnParams)
 	// Rust #41349: give the memory phase-one user message a stable, prefixed item
 	// ID so retried/resumed extraction requests reuse the same identity.
-	stageOneID := "msg_" + uuid.NewString()
-	response, err := agent.Run(ctx, &model.AgentRequest{
-		InputItems: []any{map[string]any{
-			"id":   stageOneID,
+	// v2 delivers the input as bounded context messages (Rust #43808).
+	texts := request.InputMessages
+	if len(texts) == 0 {
+		texts = []string{request.Input}
+	}
+	inputItems := make([]any, 0, len(texts))
+	for _, text := range texts {
+		inputItems = append(inputItems, map[string]any{
+			"id":   "msg_" + uuid.NewString(),
 			"type": "message",
 			"role": "user",
 			"content": []map[string]any{{
 				"type": "input_text",
-				"text": request.Input,
+				"text": text,
 			}},
-		}},
+		})
+	}
+	response, err := agent.Run(ctx, &model.AgentRequest{
+		InputItems:       inputItems,
 		Instructions:     request.Instructions,
 		Model:            request.Model,
 		ProviderID:       e.providerID,

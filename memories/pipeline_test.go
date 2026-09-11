@@ -221,3 +221,83 @@ func writeMemoryPipelineRollout(t *testing.T, home, threadID string, now time.Ti
 	}
 	return recorder.Path()
 }
+
+// v2ArtifactConsolidator writes the summary-only v2 artifact contract.
+type v2ArtifactConsolidator struct{}
+
+func (c *v2ArtifactConsolidator) ConsolidateMemory(_ context.Context, request ConsolidationRequest) error {
+	summary := "v1\n## User Profile\nprofile\n## User preferences\nprefs\n## General Tips\ntips\n## What's in Memory\nmemory\n"
+	return os.WriteFile(filepath.Join(request.Root, MemorySummaryFilename), []byte(summary), 0o600)
+}
+
+// Mirrors Rust #43808/#43800: a v2 startup run stores an empty raw memory, sends
+// bounded extraction messages, isolates artifacts under memories_v2, and writes
+// no raw_memories.md.
+func TestStartupPipelineV2UsesBoundedExtractionMessages(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	runtime := newMemoryPipelineRuntime(t, home)
+	updated := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	rolloutPath := writeMemoryPipelineRollout(t, home, "memory-v2-thread", updated)
+	if err := runtime.ReconcileRollout(ctx, rolloutPath, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.StateDB().ExecContext(ctx, `
+UPDATE threads SET memory_mode = 'enabled', preview = 'remember this', updated_at = ?, updated_at_ms = ?
+WHERE id = 'memory-v2-thread'`, updated.Unix(), updated.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+
+	slug := "v2-slug"
+	extractor := &recordingStageOneExtractor{response: StageOneExtractionResponse{
+		RolloutSummary: "v2 summary", RolloutSlug: &slug,
+	}}
+	pipeline := &StartupPipeline{
+		State: runtime, CodexHome: home, CurrentThreadID: "current-thread",
+		Version: config.MemoryVersionV2,
+		Config: config.MemoriesConfig{
+			GenerateMemories: true, UseMemories: true,
+			MaxRawMemoriesForConsolidation: 256, MaxUnusedDays: 30,
+			MaxRolloutAgeDays: 10, MaxRolloutsPerStartup: 2,
+			MinRolloutIdleHours: 1, MinRateLimitRemainingPercent: 25,
+		},
+		StageOne: extractor, StageOneModel: "extract-model",
+		StageOneModelInfo: model.ModelInfo{ContextWindow: 10_000, EffectiveContextWindowPercent: 95},
+		PhaseTwo:          &v2ArtifactConsolidator{}, PhaseTwoModel: "consolidate-model",
+	}
+	report, err := pipeline.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.StageOneSucceeded != 1 || report.StageOneFailed != 0 || report.PhaseTwoStatus != "succeeded" {
+		t.Fatalf("startup report = %+v", report)
+	}
+	if len(extractor.requests) != 1 {
+		t.Fatalf("stage-one requests = %d", len(extractor.requests))
+	}
+	request := extractor.requests[0]
+	if request.Instructions != StageOneSystemPromptForVersion(config.MemoryVersionV2) {
+		t.Fatal("v2 extraction did not use the v2 system prompt")
+	}
+	if strings.TrimSpace(request.Input) != "" || len(request.InputMessages) == 0 {
+		t.Fatalf("v2 extraction input = %q / %#v", request.Input, request.InputMessages)
+	}
+	if _, ok := request.OutputSchema["properties"].(map[string]any)["raw_memory"]; ok {
+		t.Fatalf("v2 output schema = %#v", request.OutputSchema)
+	}
+
+	var rawMemory, summary string
+	if err := runtime.MemoriesDB().QueryRowContext(ctx, `SELECT raw_memory, rollout_summary FROM stage1_outputs WHERE thread_id = 'memory-v2-thread'`).Scan(&rawMemory, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if rawMemory != "" || summary != "v2 summary" {
+		t.Fatalf("v2 stage-one output = %q/%q", rawMemory, summary)
+	}
+	v2Root := RootForVersion(home, config.MemoryVersionV2)
+	if _, err := os.Stat(filepath.Join(v2Root, MemorySummaryFilename)); err != nil {
+		t.Fatalf("v2 summary artifact missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(v2Root, RawMemoriesFilename)); !os.IsNotExist(err) {
+		t.Fatalf("v2 must not write raw_memories.md: %v", err)
+	}
+}

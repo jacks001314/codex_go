@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"codex_go/config"
 	"codex_go/model"
@@ -104,6 +105,32 @@ func BuildStageOneInputMessage(info model.ModelInfo, rolloutPath, rolloutCWD, ro
 		"rollout_cwd":      rolloutCWD,
 		"rollout_contents": truncated,
 	})
+}
+
+// extractionMessageChunkBytes mirrors Rust's 8,900-byte v2 extraction chunk
+// limit (#43808).
+const extractionMessageChunkBytes = 8_900
+
+// ExtractionMessageChunks splits already-budgeted extraction input into bounded,
+// Unicode-safe chunks in order, preserving all evidence (Rust
+// rollout_input::extraction_messages).
+func ExtractionMessageChunks(text string) []string {
+	chunks := []string{}
+	for len(text) > 0 {
+		end := len(text)
+		if end > extractionMessageChunkBytes {
+			end = extractionMessageChunkBytes
+		}
+		for end > 0 && !utf8.ValidString(text[:end]) {
+			end--
+		}
+		if end == 0 {
+			break
+		}
+		chunks = append(chunks, text[:end])
+		text = text[end:]
+	}
+	return chunks
 }
 
 // BuildStageOneInputForVersion renders the extraction input for the memory

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"codex_go/config"
 )
@@ -238,5 +239,31 @@ func TestUsageKindFromPathRecognizesBothMemoryRoots(t *testing.T) {
 		if !ok || kind != want {
 			t.Fatalf("UsageKindFromPath(%q) = %q,%v want %q", path, kind, ok, want)
 		}
+	}
+}
+
+// Mirrors Rust #43808: v2 extraction evidence is split into bounded,
+// Unicode-safe messages that reconstruct the original input without loss.
+func TestExtractionMessageChunksPreserveUnicodeEvidence(t *testing.T) {
+	evidence := strings.Repeat("User correction: 🐈\n", 2_000)
+	chunks := ExtractionMessageChunks(evidence)
+	if len(chunks) < 2 {
+		t.Fatalf("chunks = %d, want the evidence split into multiple bounded messages", len(chunks))
+	}
+	var reconstructed strings.Builder
+	for _, chunk := range chunks {
+		if len(chunk) >= extractionMessageChunkBytes+1 {
+			t.Fatalf("chunk exceeds the 8,900-byte limit: %d", len(chunk))
+		}
+		if !utf8.ValidString(chunk) {
+			t.Fatal("chunk split a UTF-8 code point")
+		}
+		reconstructed.WriteString(chunk)
+	}
+	if reconstructed.String() != evidence {
+		t.Fatal("chunks did not reconstruct the original evidence")
+	}
+	if got := ExtractionMessageChunks(""); len(got) != 0 {
+		t.Fatalf("empty input chunks = %#v", got)
 	}
 }

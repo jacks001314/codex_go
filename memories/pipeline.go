@@ -44,9 +44,12 @@ type StageOneExtractionRequest struct {
 	Version      config.MemoryVersion
 	Instructions string
 	Input        string
-	OutputSchema map[string]any
-	RolloutPath  string
-	RolloutCWD   string
+	// InputMessages carries version-specific extraction input split into
+	// bounded user messages (v2, Rust #43808); when non-empty it replaces Input.
+	InputMessages []string
+	OutputSchema  map[string]any
+	RolloutPath   string
+	RolloutCWD    string
 }
 
 type StageOneExtractionResponse struct {
@@ -198,16 +201,23 @@ func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1
 		_, _ = p.State.MarkStage1JobFailed(ctx, claim.Thread.ID, claim.OwnershipToken, err.Error(), StageOneRetryDelaySeconds)
 		return "failed"
 	}
-	response, err := p.StageOne.ExtractMemory(ctx, StageOneExtractionRequest{
+	input := BuildStageOneInputForVersion(p.Version, p.StageOneModelInfo, claim.Thread.RolloutPath, claim.Thread.CWD, claim.Thread.GitBranch, contents)
+	request := StageOneExtractionRequest{
 		Model:        p.StageOneModel,
 		ModelInfo:    p.StageOneModelInfo,
 		Version:      p.Version,
 		Instructions: StageOneSystemPromptForVersion(p.Version),
-		Input:        BuildStageOneInputForVersion(p.Version, p.StageOneModelInfo, claim.Thread.RolloutPath, claim.Thread.CWD, claim.Thread.GitBranch, contents),
 		OutputSchema: StageOneOutputSchemaForVersion(p.Version),
 		RolloutPath:  claim.Thread.RolloutPath,
 		RolloutCWD:   claim.Thread.CWD,
-	})
+	}
+	if p.Version == config.MemoryVersionV2 {
+		// v2 delivers the extraction input as bounded context messages.
+		request.InputMessages = ExtractionMessageChunks(input)
+	} else {
+		request.Input = input
+	}
+	response, err := p.StageOne.ExtractMemory(ctx, request)
 	if err != nil {
 		_, _ = p.State.MarkStage1JobFailed(ctx, claim.Thread.ID, claim.OwnershipToken, err.Error(), StageOneRetryDelaySeconds)
 		return "failed"
