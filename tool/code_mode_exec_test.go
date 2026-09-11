@@ -129,6 +129,35 @@ func TestCodeModeExecTryCatchAndMultipleTools(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #43873: an explicit JavaScript `undefined` tool argument behaves
+// like an omitted argument (an empty object).
+func TestCodeModeExecUndefinedToolArgumentBehavesLikeOmitted(t *testing.T) {
+	registry := NewRegistry()
+	var mu sync.Mutex
+	received := []string{}
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("record_args")}, func(_ context.Context, invocation *Invocation) (*Output, error) {
+		mu.Lock()
+		received = append(received, invocation.Payload.Arguments)
+		mu.Unlock()
+		return &Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	executor := NewCodeModeExecExecutor(registry)
+	if _, err := executor.Execute(context.Background(), &Invocation{CallID: "undefined-args", Payload: Payload{Kind: PayloadCustom, Input: `
+		await tools.record_args({});
+		await tools.record_args();
+		await tools.record_args(undefined);
+	`}}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 3 || received[0] != "{}" || received[1] != "{}" || received[2] != "{}" {
+		t.Fatalf("received arguments = %#v", received)
+	}
+}
+
 func TestCodeModeExecRejectsFailedShellOutputLikeRust(t *testing.T) {
 	registry := NewRegistry()
 	var calls int
@@ -338,6 +367,28 @@ func TestCodeModeExecHelpersAndSessionStore(t *testing.T) {
 	}
 	if second.Body != "3" {
 		t.Fatalf("stored body = %q", second.Body)
+	}
+}
+
+// Mirrors Rust #43873: storing JavaScript `undefined` reports the existing
+// serializability error and preserves the previously stored value.
+func TestCodeModeExecStoringUndefinedPreservesPreviousValue(t *testing.T) {
+	executor := NewCodeModeExecExecutor(NewRegistry())
+	output, err := executor.Execute(context.Background(), &Invocation{CallID: "store-undefined", Payload: Payload{Kind: PayloadCustom, Input: `
+		store("key", null);
+		try {
+			store("key", undefined);
+		} catch (error) {
+			text(String(error));
+		}
+		text(load("key"));
+	`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Unable to store \"key\". Only plain serializable objects can be stored.\nnull"
+	if output.Body != want {
+		t.Fatalf("body = %q, want %q", output.Body, want)
 	}
 }
 

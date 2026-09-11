@@ -839,13 +839,22 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 	}
 	if err := runtime.Set("store", func(call sobek.FunctionCall) sobek.Value {
 		key := call.Argument(0).String()
+		// Rust's v8_value_to_json returns no JSON value for JavaScript
+		// `undefined` (and for values JSON cannot represent), so storing them
+		// throws and leaves the previous value untouched (#43873).
+		serializeError := func() sobek.Value {
+			return runtime.ToValue(fmt.Sprintf("Unable to store %q. Only plain serializable objects can be stored.", key))
+		}
+		if sobek.IsUndefined(call.Argument(1)) {
+			panic(serializeError())
+		}
 		var value any
 		if err := runtime.ExportTo(call.Argument(1), &value); err != nil {
-			panic(runtime.ToValue(err.Error()))
+			panic(serializeError())
 		}
 		encoded, err := json.Marshal(value)
 		if err != nil {
-			panic(runtime.ToValue("store value must be serializable"))
+			panic(serializeError())
 		}
 		e.storeMu.Lock()
 		e.store[key] = append(json.RawMessage(nil), encoded...)
