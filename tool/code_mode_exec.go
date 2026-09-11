@@ -49,7 +49,11 @@ type codeModeExecExecutor struct {
 	warningEmitted    atomic.Bool
 	remoteCellsMu     sync.RWMutex
 	remoteCells       map[string]*Registry
-	defaultYieldMS    int
+	// remoteCellReleases retains the delegate callback registration for a yielded
+	// cell so notifications and nested calls keep routing to their originating
+	// execution until the cell is cleaned up (Rust #44865).
+	remoteCellReleases map[string]func()
+	defaultYieldMS     int
 }
 
 type CodeModeRemoteProvider interface {
@@ -70,6 +74,10 @@ type CodeModeRemoteSession interface {
 type CodeModeRemoteDelegate interface {
 	Invoke(context.Context, CodeModeRemoteNestedCall) (json.RawMessage, error)
 	Notify(context.Context, string, string, string) error
+	// CellClosed releases the callback registration retained for a cell that the
+	// host closed on its own, so a yielded call's delegate does not outlive it
+	// (Rust #44865).
+	CellClosed(cellID string)
 }
 
 type CodeModeRemoteNestedCall struct {
@@ -178,7 +186,8 @@ type CodeModeRuntime struct {
 func NewCodeModeRuntime(provider CodeModeRemoteProvider, disableFallback bool) *CodeModeRuntime {
 	exec := &codeModeExecExecutor{
 		store: map[string]json.RawMessage{}, cells: map[string]*codeModeCell{}, remoteCells: map[string]*Registry{},
-		provider: provider, disableFallback: disableFallback, defaultYieldMS: int(CodeModeDefaultExecYieldTime / time.Millisecond),
+		remoteCellReleases: map[string]func(){},
+		provider:           provider, disableFallback: disableFallback, defaultYieldMS: int(CodeModeDefaultExecYieldTime / time.Millisecond),
 	}
 	if provider != nil {
 		exec.remote = provider.NewSession(&codeModeRemoteDelegate{exec: exec})
@@ -261,6 +270,11 @@ func (r *CodeModeRuntime) InterruptActiveCells() {
 		for _, cellID := range cellIDs {
 			_, _ = e.remote.Terminate(context.Background(), cellID)
 		}
+	}
+	// Release retained delegates for live cells as part of cancellation cleanup
+	// (Rust #44865).
+	for _, cellID := range remoteIDs {
+		e.forgetRemoteCell(cellID)
 	}
 }
 
@@ -450,7 +464,14 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *Invocation, source string, options codeModeExecOptions) (*Output, error) {
 	delegate, _ := e.remoteDelegate()
 	done := delegate.begin(invocation)
-	defer done()
+	// A yielded cell outlives this call, so its delegate callbacks are released
+	// when the cell completes instead of when execute returns (Rust #44865).
+	releaseOnReturn := true
+	defer func() {
+		if releaseOnReturn {
+			done()
+		}
+	}()
 	definitions := make([]CodeModeRemoteToolDefinition, 0)
 	for _, nested := range e.nestedTools() {
 		name := nested.name
@@ -480,7 +501,9 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 		registry, _ := e.binding()
 		e.remoteCellsMu.Lock()
 		e.remoteCells[response.CellID] = registry
+		e.remoteCellReleases[response.CellID] = done
 		e.remoteCellsMu.Unlock()
+		releaseOnReturn = false
 	}
 	return remoteResponseOutput(invocation.CallID, response, codeModeTokenLimit(options.MaxOutputTokens))
 }
@@ -610,7 +633,12 @@ func (e *codeModeExecExecutor) forgetRemoteCell(cellID string) {
 	}
 	e.remoteCellsMu.Lock()
 	delete(e.remoteCells, cellID)
+	release := e.remoteCellReleases[cellID]
+	delete(e.remoteCellReleases, cellID)
 	e.remoteCellsMu.Unlock()
+	if release != nil {
+		release()
+	}
 }
 
 func (e *codeModeExecExecutor) remoteDelegate() (*codeModeRemoteDelegate, bool) {
@@ -730,6 +758,16 @@ func (d *codeModeRemoteDelegate) Notify(_ context.Context, callID string, _ stri
 		}
 	}
 	return nil
+}
+
+// CellClosed releases the delegate callbacks retained for a cell the host
+// closed without the client observing a terminal wait, mirroring Rust's
+// `CodeModeSessionDelegate::cell_closed` (Rust #44865).
+func (d *codeModeRemoteDelegate) CellClosed(cellID string) {
+	if d == nil || d.exec == nil {
+		return
+	}
+	d.exec.forgetRemoteCell(cellID)
 }
 
 func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTokens int) (*Output, error) {

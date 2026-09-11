@@ -126,6 +126,8 @@ func (d *recordingGrpcDelegate) Invoke(context.Context, tool.CodeModeRemoteNeste
 
 func (d *recordingGrpcDelegate) Notify(context.Context, string, string, string) error { return nil }
 
+func (d *recordingGrpcDelegate) CellClosed(string) {}
+
 // grpcSessionHostServer is a minimal code-mode host answering the handshake
 // and the open/execute/wait/shutdown session operations over the gRPC
 // Transport stream, using the same JSON framing as the client.

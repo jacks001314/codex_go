@@ -818,3 +818,114 @@ func (r *recordingShellRunner) Run(_ context.Context, request *ShellRequest) (*S
 	r.request = request
 	return &ShellResult{Stdout: r.output, ExitCode: 0, HasExitCode: true}, nil
 }
+
+// yieldedCodeModeSession returns a yielded cell on execute and a completed cell
+// on wait/terminate.
+type yieldedCodeModeSession struct {
+	executeResponse CodeModeRemoteResponse
+	settleResponse  CodeModeRemoteResponse
+}
+
+func (s *yieldedCodeModeSession) Execute(context.Context, CodeModeRemoteExecuteRequest) (CodeModeRemoteResponse, error) {
+	return s.executeResponse, nil
+}
+
+func (s *yieldedCodeModeSession) Wait(context.Context, string, uint64) (CodeModeRemoteResponse, error) {
+	return s.settleResponse, nil
+}
+
+func (s *yieldedCodeModeSession) Terminate(context.Context, string) (CodeModeRemoteResponse, error) {
+	return s.settleResponse, nil
+}
+
+func (s *yieldedCodeModeSession) Close() error { return nil }
+
+// Mirrors Rust #44865: a yielded cell retains its callback registration (its
+// owning execution's context) past the execute return, and the registration is
+// released once the cell completes.
+func TestCodeModeYieldedCellRetainsCallbacksUntilCompletion(t *testing.T) {
+	registry := NewRegistry()
+	remote := &yieldedCodeModeSession{
+		executeResponse: CodeModeRemoteResponse{CellID: "yield-cell", State: "yielded"},
+		settleResponse: CodeModeRemoteResponse{
+			CellID:       "yield-cell",
+			State:        "completed",
+			ContentItems: []map[string]any{{"type": "input_text", "text": "done"}},
+		},
+	}
+	exec, wait := NewCodeModeExecutorsWithProvider(registry, &recordingCodeModeRemoteProvider{session: remote}, false)
+	inner, ok := exec.(*codeModeExecExecutor)
+	if !ok {
+		t.Fatalf("executor type = %T", exec)
+	}
+	output, err := exec.Execute(context.Background(), &Invocation{
+		CallID:  "yield-call",
+		Payload: Payload{Kind: PayloadCustom, Input: `text("RUN")`},
+	})
+	if err != nil || output == nil {
+		t.Fatalf("execute output = %#v, error = %v", output, err)
+	}
+	delegate, _ := inner.remoteDelegate()
+	if delegate.invocation("yield-call") == nil {
+		t.Fatal("a yielded cell must retain its delegate callbacks past execute")
+	}
+	inner.remoteCellsMu.RLock()
+	_, tracked := inner.remoteCells["yield-cell"]
+	_, retained := inner.remoteCellReleases["yield-cell"]
+	inner.remoteCellsMu.RUnlock()
+	if !tracked || !retained {
+		t.Fatalf("yielded cell tracking = %v release = %v", tracked, retained)
+	}
+
+	if _, err := wait.Execute(context.Background(), &Invocation{
+		CallID:  "yield-wait",
+		Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"yield-cell"}`},
+	}); err != nil {
+		t.Fatalf("wait error = %v", err)
+	}
+	if delegate.invocation("yield-call") != nil {
+		t.Fatal("callbacks must be released once the cell completes")
+	}
+	inner.remoteCellsMu.RLock()
+	_, tracked = inner.remoteCells["yield-cell"]
+	_, retained = inner.remoteCellReleases["yield-cell"]
+	inner.remoteCellsMu.RUnlock()
+	if tracked || retained {
+		t.Fatalf("cell after completion tracking = %v release = %v", tracked, retained)
+	}
+}
+
+// Mirrors Rust #44865: a host-initiated cell close releases the retained
+// delegate callbacks even though the client never observed a terminal wait.
+func TestCodeModeHostCellCloseReleasesRetainedCallbacks(t *testing.T) {
+	registry := NewRegistry()
+	remote := &yieldedCodeModeSession{
+		executeResponse: CodeModeRemoteResponse{CellID: "closed-cell", State: "yielded"},
+	}
+	exec, _ := NewCodeModeExecutorsWithProvider(registry, &recordingCodeModeRemoteProvider{session: remote}, false)
+	inner, ok := exec.(*codeModeExecExecutor)
+	if !ok {
+		t.Fatalf("executor type = %T", exec)
+	}
+	if _, err := exec.Execute(context.Background(), &Invocation{
+		CallID:  "closed-call",
+		Payload: Payload{Kind: PayloadCustom, Input: `text("RUN")`},
+	}); err != nil {
+		t.Fatalf("execute error = %v", err)
+	}
+	delegate, _ := inner.remoteDelegate()
+	if delegate.invocation("closed-call") == nil {
+		t.Fatal("a yielded cell must retain its delegate callbacks past execute")
+	}
+	delegate.CellClosed("closed-cell")
+	if delegate.invocation("closed-call") != nil {
+		t.Fatal("a host cell close must release the retained callbacks")
+	}
+	inner.remoteCellsMu.RLock()
+	_, tracked := inner.remoteCells["closed-cell"]
+	_, retained := inner.remoteCellReleases["closed-cell"]
+	inner.remoteCellsMu.RUnlock()
+	if tracked || retained {
+		t.Fatalf("cell after host close tracking = %v release = %v", tracked, retained)
+	}
+}

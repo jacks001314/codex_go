@@ -25,6 +25,7 @@ type recordingRemoteDelegate struct {
 	calls       []tool.CodeModeRemoteNestedCall
 	notifies    []string
 	notifyCells []string
+	closedCells []string
 }
 
 func TestCodeModeCellIDGenerationMatchesRust(t *testing.T) {
@@ -58,6 +59,26 @@ func TestGenerationDelegatePrefixesNestedCellIDs(t *testing.T) {
 	}
 	if len(base.notifyCells) != 1 || base.notifyCells[0] != "g3:cell-2" {
 		t.Fatalf("notify cells = %#v", base.notifyCells)
+	}
+	wrapped.CellClosed("cell-3")
+	if len(base.closedCells) != 1 || base.closedCells[0] != "g3:cell-3" {
+		t.Fatalf("closed cells = %#v", base.closedCells)
+	}
+}
+
+// Mirrors Rust #44865: the host's `cell_closed` callback reaches the delegate
+// that owns the cell, and a session without a registered delegate is ignored.
+func TestRemoteConnectionRoutesCellClosedToOwningDelegate(t *testing.T) {
+	delegate := &recordingRemoteDelegate{}
+	connection := newRemoteConnection(&stalledRemoteTransport{})
+	connection.SetDelegate("session-1", delegate)
+	connection.handle(HostToClient{Type: "cell/closed", SessionID: "session-1", CellID: CellID("cell-7")})
+	if len(delegate.closedCells) != 1 || delegate.closedCells[0] != "cell-7" {
+		t.Fatalf("closed cells = %#v", delegate.closedCells)
+	}
+	connection.handle(HostToClient{Type: "cell/closed", SessionID: "unknown-session", CellID: CellID("cell-8")})
+	if len(delegate.closedCells) != 1 {
+		t.Fatalf("unowned cell close reached the delegate: %#v", delegate.closedCells)
 	}
 }
 
@@ -146,6 +167,12 @@ func (d *recordingRemoteDelegate) Notify(_ context.Context, _, cellID, text stri
 	d.notifyCells = append(d.notifyCells, cellID)
 	d.mu.Unlock()
 	return nil
+}
+
+func (d *recordingRemoteDelegate) CellClosed(cellID string) {
+	d.mu.Lock()
+	d.closedCells = append(d.closedCells, cellID)
+	d.mu.Unlock()
 }
 
 func TestWebSocketProviderExecutesAndHandlesDelegates(t *testing.T) {

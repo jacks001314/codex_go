@@ -444,6 +444,10 @@ func (d *codeModeGenerationDelegate) Notify(ctx context.Context, callID string, 
 	return d.delegate.Notify(ctx, callID, publicCodeModeCellID(d.generation, cellID), text)
 }
 
+func (d *codeModeGenerationDelegate) CellClosed(cellID string) {
+	d.delegate.CellClosed(publicCodeModeCellID(d.generation, cellID))
+}
+
 func (s *remoteSession) delegateForGeneration(generation uint64) tool.CodeModeRemoteDelegate {
 	if s.delegate == nil {
 		return nil
@@ -743,7 +747,15 @@ func (c *remoteConnection) handle(message HostToClient) {
 			cancel()
 		}
 	case "cell/closed":
-		// The public executor removes cells after terminal wait responses.
+		// Release the owning execution's retained callbacks. The public executor
+		// already drops cells after a terminal wait response, so this covers the
+		// host closing a cell the client never settled (Rust #44865).
+		c.mu.Lock()
+		delegate := c.delegates[message.SessionID]
+		c.mu.Unlock()
+		if delegate != nil && strings.TrimSpace(message.CellID.String()) != "" {
+			delegate.CellClosed(message.CellID.String())
+		}
 	case "connection/ready", "connection/rejected":
 		c.fail(fmt.Errorf("code-mode host sent a second handshake response"))
 	}
