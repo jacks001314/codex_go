@@ -1997,7 +1997,12 @@ func experimentalAPIMethod(method Method) bool {
 		MethodThreadRealtimeStop,
 		MethodThreadSearch,
 		MethodThreadSettingsUpdate,
-		MethodThreadTurnsList:
+		MethodThreadTurnsList,
+		MethodUserVerificationStatus,
+		MethodUserVerificationEnroll,
+		MethodUserVerificationDelete,
+		MethodUserVerificationVerify,
+		MethodUserVerificationCancel:
 		return true
 	default:
 		return false
@@ -2232,6 +2237,10 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handleExperimentalFeatureList(request)
 	case MethodExperimentalFeatureSet:
 		return r.handleExperimentalFeatureSet(request)
+	case MethodUserVerificationStatus, MethodUserVerificationEnroll,
+		MethodUserVerificationDelete, MethodUserVerificationVerify,
+		MethodUserVerificationCancel:
+		return r.handleUserVerificationRuntime(request)
 	case MethodAppList:
 		return r.handleAppList(request)
 	case MethodAppRead:

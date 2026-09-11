@@ -310,6 +310,11 @@ func experimentalClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodThreadSettingsUpdate), Experimental: true},
 		{Method: string(MethodThreadTurnsList), Experimental: true},
 		{Method: string(MethodTurnSettingsUpdate), Experimental: true},
+		{Method: string(MethodUserVerificationStatus), Experimental: true},
+		{Method: string(MethodUserVerificationEnroll), Experimental: true},
+		{Method: string(MethodUserVerificationDelete), Experimental: true},
+		{Method: string(MethodUserVerificationVerify), Experimental: true},
+		{Method: string(MethodUserVerificationCancel), Experimental: true},
 	}
 }
 
@@ -544,6 +549,11 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(MethodMCPServerEventStreamStart):              {Params: "McpServerEventStreamStartParams", Result: "McpServerEventStreamStartResponse"},
 		string(MethodMCPServerEventStreamStop):               {Params: "McpServerEventStreamStopParams", Result: "McpServerEventStreamStopResponse"},
 		string(MethodMemoryReset):                            {Result: "MemoryResetResponse"},
+		string(MethodUserVerificationStatus):                 {Params: "UserVerificationStatusParams", Result: "UserVerificationStatusResponse"},
+		string(MethodUserVerificationEnroll):                 {Params: "UserVerificationEnrollParams", Result: "UserVerificationEnrollResponse"},
+		string(MethodUserVerificationDelete):                 {Params: "UserVerificationDeleteParams", Result: "UserVerificationDeleteResponse"},
+		string(MethodUserVerificationVerify):                 {Params: "UserVerificationVerifyParams", Result: "UserVerificationVerifyResponse"},
+		string(MethodUserVerificationCancel):                 {Params: "UserVerificationCancelParams", Result: "UserVerificationCancelResponse"},
 		string(MethodMockExperimentalMethod):                 {Params: "MockExperimentalMethodParams", Result: "MockExperimentalMethodResponse"},
 		string(MethodModelList):                              {Params: "ModelListParams", Result: "ModelListResponse"},
 		string(MethodModelProviderCapabilitiesRead):          {Params: "ModelProviderCapabilitiesReadParams", Result: "ModelProviderCapabilitiesReadResponse"},
