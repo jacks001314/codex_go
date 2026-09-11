@@ -260,15 +260,19 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	if err := SyncRolloutSummaries(root, selected, len(selected)); err != nil {
 		return fail("failed_sync_workspace_inputs")
 	}
-	if err := RebuildRawMemoriesFile(root, selected, len(selected)); err != nil {
-		return fail("failed_sync_workspace_inputs")
+	// v2 consolidates straight into memory_summary.md without raw_memories.md
+	// (Rust #43813).
+	if p.Version != config.MemoryVersionV2 {
+		if err := RebuildRawMemoriesFile(root, selected, len(selected)); err != nil {
+			return fail("failed_sync_workspace_inputs")
+		}
 	}
 	PruneOldExtensionResources(root, time.Now().UTC())
 	diff, err := WorkspaceDiff(ctx, root)
 	if err != nil {
 		return fail("failed_workspace_status")
 	}
-	if !diff.HasChanges() && ValidateConsolidationArtifacts(root) == nil {
+	if !diff.HasChanges() && ValidateConsolidationArtifactsForVersion(root, p.Version) == nil {
 		if updated, _ := p.State.MarkGlobalPhase2JobSucceeded(ctx, claim.OwnershipToken, watermark, selected); updated {
 			return "succeeded_no_workspace_changes"
 		}
@@ -285,7 +289,7 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	}
 	go p.heartbeatPhaseTwo(agentCtx, claim.OwnershipToken, interval, cancel, heartbeatDone)
 	agentErr := p.PhaseTwo.ConsolidateMemory(agentCtx, ConsolidationRequest{
-		Root: root, Prompt: BuildConsolidationPrompt(root), Model: p.PhaseTwoModel, ReasoningEffort: "medium",
+		Root: root, Prompt: BuildConsolidationPromptForVersion(root, p.Version), Model: p.PhaseTwoModel, ReasoningEffort: "medium",
 	})
 	cancel()
 	lostOwnership := <-heartbeatDone
@@ -305,7 +309,7 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	if err := removeMemorySymlinks(root); err != nil {
 		return fail("failed_remove_symlinks")
 	}
-	if err := ValidateConsolidationArtifacts(root); err != nil {
+	if err := ValidateConsolidationArtifactsForVersion(root, p.Version); err != nil {
 		return fail("failed_invalid_artifacts")
 	}
 	owned, err := p.State.HeartbeatGlobalPhase2Job(ctx, claim.OwnershipToken, PhaseTwoJobLeaseSeconds)

@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"codex_go/config"
 )
 
 const (
@@ -131,13 +133,23 @@ func ResetWorkspaceBaseline(ctx context.Context, root string) error {
 }
 
 func ValidateConsolidationArtifacts(root string) error {
-	memoryPath := filepath.Join(root, MemoryFilename)
-	info, err := os.Stat(memoryPath)
-	if err != nil {
-		return fmt.Errorf("read consolidated memory artifact %s: %w", memoryPath, err)
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("consolidated memory artifact is not a file: %s", memoryPath)
+	return ValidateConsolidationArtifactsForVersion(root, config.MemoryVersionV1)
+}
+
+// ValidateConsolidationArtifactsForVersion verifies the artifacts required by the
+// selected memory version (Rust #43813): v1 requires MEMORY.md plus a summary
+// starting with `v1`; v2 requires only memory_summary.md, with every required
+// section and under 10,000 UTF-8 bytes.
+func ValidateConsolidationArtifactsForVersion(root string, version config.MemoryVersion) error {
+	if version != config.MemoryVersionV2 {
+		memoryPath := filepath.Join(root, MemoryFilename)
+		info, err := os.Stat(memoryPath)
+		if err != nil {
+			return fmt.Errorf("read consolidated memory artifact %s: %w", memoryPath, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("consolidated memory artifact is not a file: %s", memoryPath)
+		}
 	}
 	summaryPath := filepath.Join(root, MemorySummaryFilename)
 	summary, err := os.ReadFile(summaryPath)
@@ -150,6 +162,24 @@ func ValidateConsolidationArtifacts(root string) error {
 	}
 	if firstLine != "v1" {
 		return fmt.Errorf("memory summary artifact does not start with v1: %s", summaryPath)
+	}
+	if version == config.MemoryVersionV2 {
+		if len(summary) >= maxV2SummaryBytes {
+			return fmt.Errorf("v2 memory summary must be under 10000 UTF-8 bytes")
+		}
+		lines := splitV2SummaryLines(string(summary))
+		for _, heading := range v2SummaryHeadings {
+			found := false
+			for _, line := range lines {
+				if strings.TrimSpace(line) == heading {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("v2 memory summary missing %s", heading)
+			}
+		}
 	}
 	return nil
 }

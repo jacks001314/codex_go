@@ -32,6 +32,13 @@ var stageOneInputTemplate string
 //go:embed templates/consolidation.md
 var consolidationPromptTemplate string
 
+// consolidationV2PromptTemplate is Rust's
+// templates/memories/consolidation_v2.md, used when memories.version = v2
+// (#43813): consolidate straight into memory_summary.md without raw_memories.md.
+//
+//go:embed templates/consolidation_v2.md
+var consolidationV2PromptTemplate string
+
 // memoryToolDeveloperInstructionsV2Template is Rust's
 // templates/memories/read_path_v2.md, used when memories.version = v2 (#43813).
 //
@@ -79,6 +86,13 @@ func BuildStageOneInputMessage(info model.ModelInfo, rolloutPath, rolloutCWD, ro
 }
 
 func BuildConsolidationPrompt(root string) string {
+	return BuildConsolidationPromptForVersion(root, config.MemoryVersionV1)
+}
+
+// BuildConsolidationPromptForVersion renders the consolidation subagent prompt
+// for the selected memory version (Rust #43813); v2 uses the summary-only
+// consolidation template.
+func BuildConsolidationPromptForVersion(root string, version config.MemoryVersion) string {
 	extensionsRoot := filepath.Join(root, ExtensionsSubdir)
 	folderBlock := ""
 	inputsBlock := ""
@@ -87,7 +101,11 @@ func BuildConsolidationPrompt(root string) string {
 		folderBlock = renderMemoryTemplate(extensionsFolderStructure, values)
 		inputsBlock = renderMemoryTemplate(extensionsPrimaryInputs, values)
 	}
-	return renderMemoryTemplate(consolidationPromptTemplate, map[string]string{
+	template := consolidationPromptTemplate
+	if version == config.MemoryVersionV2 {
+		template = consolidationV2PromptTemplate
+	}
+	return renderMemoryTemplate(template, map[string]string{
 		"memory_root":                        root,
 		"memory_extensions_folder_structure": folderBlock,
 		"memory_extensions_primary_inputs":   inputsBlock,

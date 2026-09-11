@@ -43,6 +43,57 @@ func TestBuildMemoryToolDeveloperInstructionsForVersionSelectsRoot(t *testing.T)
 	}
 }
 
+func TestBuildConsolidationPromptForVersionSelectsTemplate(t *testing.T) {
+	root := t.TempDir()
+	v1 := BuildConsolidationPromptForVersion(root, config.MemoryVersionV1)
+	if !strings.Contains(v1, "## Memory Writing Agent: Phase 2 (Consolidation)") ||
+		strings.Contains(v1, "Consolidate the supplied rollout summaries") {
+		t.Fatalf("v1 consolidation prompt = %q", v1)
+	}
+	v2 := BuildConsolidationPromptForVersion(root, config.MemoryVersionV2)
+	if !strings.Contains(v2, "Consolidate the supplied rollout summaries") ||
+		strings.Contains(v2, "## Memory Writing Agent: Phase 2 (Consolidation)") {
+		t.Fatalf("v2 consolidation prompt = %q", v2)
+	}
+	if !strings.Contains(v2, root) {
+		t.Fatalf("v2 consolidation prompt did not substitute memory_root: %q", v2)
+	}
+	if got := BuildConsolidationPrompt(root); !strings.Contains(got, "## Memory Writing Agent: Phase 2 (Consolidation)") {
+		t.Fatalf("default consolidation prompt = %q, want v1", got)
+	}
+}
+
+func TestValidateConsolidationArtifactsForVersion(t *testing.T) {
+	root := t.TempDir()
+	summaryPath := filepath.Join(root, MemorySummaryFilename)
+	if err := os.WriteFile(summaryPath, []byte(validV2Summary()), 0o600); err != nil {
+		t.Fatalf("write summary: %v", err)
+	}
+	// v2 does not require MEMORY.md or raw_memories.md.
+	if err := ValidateConsolidationArtifactsForVersion(root, config.MemoryVersionV2); err != nil {
+		t.Fatalf("v2 validation error = %v", err)
+	}
+	// v1 still requires the MEMORY.md handbook.
+	if err := ValidateConsolidationArtifactsForVersion(root, config.MemoryVersionV1); err == nil {
+		t.Fatal("v1 validation must require MEMORY.md")
+	}
+	// Missing section and oversized summary are rejected for v2.
+	if err := os.WriteFile(summaryPath, []byte(strings.Replace(validV2Summary(), "## General Tips\n", "", 1)), 0o600); err != nil {
+		t.Fatalf("write summary: %v", err)
+	}
+	if err := ValidateConsolidationArtifactsForVersion(root, config.MemoryVersionV2); err == nil ||
+		!strings.Contains(err.Error(), "missing ## General Tips") {
+		t.Fatalf("missing-heading error = %v", err)
+	}
+	if err := os.WriteFile(summaryPath, []byte(validV2Summary()+strings.Repeat("x", maxV2SummaryBytes)), 0o600); err != nil {
+		t.Fatalf("write summary: %v", err)
+	}
+	if err := ValidateConsolidationArtifactsForVersion(root, config.MemoryVersionV2); err == nil ||
+		!strings.Contains(err.Error(), "under 10000 UTF-8 bytes") {
+		t.Fatalf("oversized error = %v", err)
+	}
+}
+
 // The embedded v2 template is byte-pinned to Rust's
 // ext/memories/templates/memories/read_path_v2.md (#43813). The Rust checkout
 // may be CRLF-converted by git on Windows; the canonical content is LF.
@@ -60,13 +111,30 @@ func TestMemoryV2TemplateMatchesRust(t *testing.T) {
 	if root == "" {
 		t.Skip("Rust checkout not available")
 	}
-	data, err := os.ReadFile(filepath.Join(root, "ext", "memories", "templates", "memories", "read_path_v2.md"))
-	if err != nil {
-		t.Skipf("Rust v2 template unavailable: %v", err)
-	}
-	want := strings.ReplaceAll(string(data), "\r\n", "\n")
-	if memoryToolDeveloperInstructionsV2Template != want {
-		t.Fatalf("embedded v2 template differs from Rust:\n--- go ---\n%s\n--- rust ---\n%s", memoryToolDeveloperInstructionsV2Template, want)
+	for _, tc := range []struct {
+		name string
+		path string
+		got  string
+	}{
+		{
+			name: "read_path_v2.md",
+			path: filepath.Join(root, "ext", "memories", "templates", "memories", "read_path_v2.md"),
+			got:  memoryToolDeveloperInstructionsV2Template,
+		},
+		{
+			name: "consolidation_v2.md",
+			path: filepath.Join(root, "memories", "write", "templates", "memories", "consolidation_v2.md"),
+			got:  consolidationV2PromptTemplate,
+		},
+	} {
+		data, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Skipf("Rust template %s unavailable: %v", tc.name, err)
+		}
+		want := strings.ReplaceAll(string(data), "\r\n", "\n")
+		if tc.got != want {
+			t.Fatalf("embedded %s differs from Rust:\n--- go ---\n%s\n--- rust ---\n%s", tc.name, tc.got, want)
+		}
 	}
 }
 
