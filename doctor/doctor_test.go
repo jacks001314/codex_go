@@ -707,6 +707,43 @@ func TestTerminalCheckDumbRequiresInteractiveStream(t *testing.T) {
 	}
 }
 
+// TestConfiguredUpdaterDetailsLikeRust covers Rust #43948: valid updater
+// settings are reported, invalid settings are never reported as effective, and
+// a missing file produces no updater details.
+func TestConfiguredUpdaterDetailsLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(`{"updater":{"autoUpdateEnabled":false,"updateIntervalMinutes":90}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	details := []string{}
+	pushConfiguredUpdaterDetails(&details, path)
+	joined := strings.Join(details, "\n")
+	if !strings.Contains(joined, "automatic updates: disabled (configured)") || !strings.Contains(joined, "update interval: 90 minutes (configured)") {
+		t.Fatalf("configured updater details = %#v", details)
+	}
+
+	for _, contents := range []string{
+		`{"updater":{"autoUpdateEnabled":"no"}}`,
+		`{"updater":{"updateIntervalMinutes":0}}`,
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		invalid := []string{}
+		pushConfiguredUpdaterDetails(&invalid, path)
+		if len(invalid) != 1 || invalid[0] != "configured updater settings: unreadable or invalid" {
+			t.Fatalf("invalid settings %q details = %#v", contents, invalid)
+		}
+	}
+
+	missing := []string{}
+	pushConfiguredUpdaterDetails(&missing, filepath.Join(dir, "missing.json"))
+	if len(missing) != 0 {
+		t.Fatalf("missing settings produced details: %#v", missing)
+	}
+}
+
 // TestRedactDoctorDetailPreservesMissingEnvDiagnostics mirrors Rust #44654:
 // the variable name and "is not set" diagnosis survive redaction, while
 // credential-shaped names and server identifiers are hidden.

@@ -3015,6 +3015,7 @@ func backgroundServerCheck(codexHome string) *DoctorCheck {
 	pushDoctorFileDetail(&details, "settings", paths.SettingsFile)
 	pushDoctorFileDetail(&details, "pid file", paths.PIDFile)
 	pushDoctorFileDetail(&details, "update-loop pid file", paths.UpdatePIDFile)
+	pushConfiguredUpdaterDetails(&details, paths.SettingsFile)
 	details = append(details, "control socket: "+paths.SocketPath)
 	status := backgroundSocketStatusForPath(paths.SocketPath)
 	details = append(details, "status: "+string(status.Status))
@@ -3051,6 +3052,57 @@ func pushDoctorFileDetail(details *[]string, label string, path string) {
 		*details = append(*details, fmt.Sprintf("%s: %s (missing)", label, path))
 	default:
 		*details = append(*details, fmt.Sprintf("%s: %s (%v)", label, path, err))
+	}
+}
+
+// maxDoctorSettingsBytes bounds the app-server settings file read (Rust #43948).
+const maxDoctorSettingsBytes = 16 * 1024
+
+// pushConfiguredUpdaterDetails surfaces the configured app-server updater
+// settings without reporting invalid settings as effective (Rust #43948).
+func pushConfiguredUpdaterDetails(details *[]string, path string) {
+	path = strings.TrimSpace(path)
+	if path == "" || details == nil {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return
+	}
+	if info.Size() > maxDoctorSettingsBytes {
+		*details = append(*details, "configured updater settings: unreadable or invalid")
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > maxDoctorSettingsBytes {
+		*details = append(*details, "configured updater settings: unreadable or invalid")
+		return
+	}
+	var settings struct {
+		Updater *struct {
+			AutoUpdateEnabled     *bool   `json:"autoUpdateEnabled"`
+			UpdateIntervalMinutes *uint32 `json:"updateIntervalMinutes"`
+		} `json:"updater"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil || settings.Updater == nil {
+		if err != nil {
+			*details = append(*details, "configured updater settings: unreadable or invalid")
+		}
+		return
+	}
+	if minutes := settings.Updater.UpdateIntervalMinutes; minutes != nil && *minutes == 0 {
+		*details = append(*details, "configured updater settings: unreadable or invalid")
+		return
+	}
+	if enabled := settings.Updater.AutoUpdateEnabled; enabled != nil {
+		state := "disabled"
+		if *enabled {
+			state = "enabled"
+		}
+		*details = append(*details, "automatic updates: "+state+" (configured)")
+	}
+	if minutes := settings.Updater.UpdateIntervalMinutes; minutes != nil {
+		*details = append(*details, fmt.Sprintf("update interval: %d minutes (configured)", *minutes))
 	}
 }
 
