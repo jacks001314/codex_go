@@ -762,6 +762,7 @@ func TestCodexReviewEventSerializesExpectedRustShape(t *testing.T) {
 }
 
 func TestCodexThreadInitializedEventSerializesExpectedRustShape(t *testing.T) {
+	isWorktree := true
 	event := NewCodexThreadInitializedEvent(CodexThreadInitializedEventInput{
 		ThreadID:           "thread-2",
 		SessionID:          "session-thread-2",
@@ -769,6 +770,7 @@ func TestCodexThreadInitializedEventSerializesExpectedRustShape(t *testing.T) {
 		Runtime:            sampleRuntimeMetadata(),
 		Model:              "gpt-5",
 		Ephemeral:          true,
+		IsWorktree:         &isWorktree,
 		ThreadSource:       stringPtrTelemetry("user"),
 		InitializationMode: "resumed",
 		ParentThreadID:     stringPtrTelemetry("thread-parent"),
@@ -801,6 +803,7 @@ func TestCodexThreadInitializedEventSerializesExpectedRustShape(t *testing.T) {
 			},
 			"model": "gpt-5",
 			"ephemeral": true,
+			"is_worktree": true,
 			"thread_source": "user",
 			"initialization_mode": "resumed",
 			"subagent_source": null,

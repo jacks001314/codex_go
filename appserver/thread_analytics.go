@@ -2,8 +2,11 @@ package appserver
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"codex_go/gitutil"
 	"codex_go/session"
 	"codex_go/telemetry"
 )
@@ -64,6 +67,7 @@ func (r *RuntimeRouter) emitCodexThreadInitializedAnalyticsEvent(ctx context.Con
 		Runtime:            telemetry.CurrentRuntimeMetadata(),
 		Model:              strings.TrimSpace(modelID),
 		Ephemeral:          thread.Ephemeral,
+		IsWorktree:         threadIsWorktree(ctx, thread.CWD),
 		ThreadSource:       threadSourceStringPtr(thread.ThreadSource),
 		InitializationMode: initializationMode,
 		ParentThreadID:     cloneString(parentThreadID),
@@ -71,6 +75,31 @@ func (r *RuntimeRouter) emitCodexThreadInitializedAnalyticsEvent(ctx context.Con
 		CreatedAt:          uint64FromNonNegativeInt64(thread.CreatedAt),
 	})
 	sink.TrackCodexThreadInitializedEvent(ctx, event)
+}
+
+// threadIsWorktree mirrors Rust #43621: classify the thread's checkout as a
+// validated linked Git worktree (`.git` is a file) versus a primary checkout
+// (`.git` is a directory). Null when the checkout is not a Git repository or
+// cannot be inspected.
+func threadIsWorktree(ctx context.Context, cwd string) *bool {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return nil
+	}
+	canonical, err := filepath.Abs(cwd)
+	if err != nil {
+		return nil
+	}
+	root, err := gitutil.DiscoverGitRoot(ctx, canonical)
+	if err != nil || strings.TrimSpace(root) == "" {
+		return nil
+	}
+	info, err := os.Stat(filepath.Join(root, ".git"))
+	if err != nil {
+		return nil
+	}
+	isWorktree := !info.IsDir()
+	return &isWorktree
 }
 
 func (r *RuntimeRouter) threadStartOriginatorForAnalytics(threadID string, request *Request) string {

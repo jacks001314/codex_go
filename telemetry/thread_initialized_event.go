@@ -17,18 +17,22 @@ type CodexThreadInitializedEventRequest struct {
 }
 
 type CodexThreadInitializedEventParams struct {
-	ThreadID           string                       `json:"thread_id"`
-	SessionID          string                       `json:"session_id"`
-	AppServerClient    CodexAppServerClientMetadata `json:"app_server_client"`
-	Runtime            CodexRuntimeMetadata         `json:"runtime"`
-	Model              string                       `json:"model"`
-	Ephemeral          bool                         `json:"ephemeral"`
-	ThreadSource       *string                      `json:"thread_source"`
-	InitializationMode string                       `json:"initialization_mode"`
-	SubagentSource     *string                      `json:"subagent_source"`
-	ParentThreadID     *string                      `json:"parent_thread_id"`
-	ForkedFromThreadID *string                      `json:"forked_from_thread_id"`
-	CreatedAt          uint64                       `json:"created_at"`
+	ThreadID        string                       `json:"thread_id"`
+	SessionID       string                       `json:"session_id"`
+	AppServerClient CodexAppServerClientMetadata `json:"app_server_client"`
+	Runtime         CodexRuntimeMetadata         `json:"runtime"`
+	Model           string                       `json:"model"`
+	Ephemeral       bool                         `json:"ephemeral"`
+	// IsWorktree reports whether the thread's checkout is a validated linked
+	// Git worktree, if known (Rust #43621). Null when the checkout cannot be
+	// classified.
+	IsWorktree         *bool   `json:"is_worktree"`
+	ThreadSource       *string `json:"thread_source"`
+	InitializationMode string  `json:"initialization_mode"`
+	SubagentSource     *string `json:"subagent_source"`
+	ParentThreadID     *string `json:"parent_thread_id"`
+	ForkedFromThreadID *string `json:"forked_from_thread_id"`
+	CreatedAt          uint64  `json:"created_at"`
 }
 
 type CodexThreadInitializedEventInput struct {
@@ -39,6 +43,7 @@ type CodexThreadInitializedEventInput struct {
 	Runtime            CodexRuntimeMetadata
 	Model              string
 	Ephemeral          bool
+	IsWorktree         *bool
 	ThreadSource       *string
 	InitializationMode string
 	SubagentSource     *string
@@ -65,6 +70,7 @@ func NewCodexThreadInitializedEvent(input CodexThreadInitializedEventInput) Code
 			Runtime:            input.Runtime,
 			Model:              input.Model,
 			Ephemeral:          input.Ephemeral,
+			IsWorktree:         input.IsWorktree,
 			ThreadSource:       input.ThreadSource,
 			InitializationMode: initializationMode,
 			SubagentSource:     input.SubagentSource,
