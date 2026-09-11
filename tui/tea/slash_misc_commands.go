@@ -34,6 +34,9 @@ func (m *Model) applyStatusCommand() bubbletea.Cmd {
 	messageIndex := len(m.State.Messages)
 	history := statusHistoryText(card)
 	m.State.AddHistoryLines(strings.Split(history, "\n"), strings.Split(history, "\n"))
+	// Rust #43055: retain the status output so /copy can offer it (and its
+	// fields) until another command or turn supersedes it.
+	m.statusCopyTargets = newStatusCopyTargets(snapshot, cardWidth)
 	m.notice = ""
 	m.refreshTranscript()
 	if !refreshing {
@@ -78,6 +81,9 @@ func (m *Model) applyRateLimitsResult(message RateLimitsResultMsg) bubbletea.Cmd
 		history := statusHistoryText(card)
 		m.State.Messages[pending.messageIndex] = codextui.Message{Role: codextui.RoleHistory, Text: history, RawText: history}
 		m.State.BumpMessagesRevision()
+		if m.statusCopyTargets != nil {
+			m.statusCopyTargets.withSnapshot(pending.snapshot)
+		}
 		m.refreshTranscript()
 	}
 	return m.refreshStatusControlsCmd()

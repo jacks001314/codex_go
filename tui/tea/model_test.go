@@ -1290,7 +1290,7 @@ func TestModelCopiesLastAgentResponse(t *testing.T) {
 	})
 
 	model.Update(key(bubbletea.KeyCtrlO))
-	if !strings.Contains(model.View(), "Copy response as") {
+	if !strings.Contains(model.View(), "Copy to clipboard") {
 		t.Fatalf("copy should open a target picker:\n%s", model.View())
 	}
 	model.Update(key(bubbletea.KeyEnter))
@@ -1333,7 +1333,7 @@ func TestModelSlashCopyLastAgentResponse(t *testing.T) {
 
 	typeText(t, model, "/copy")
 	model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), "Copy response as") {
+	if !strings.Contains(model.View(), "Copy to clipboard") {
 		t.Fatalf("/copy should open a target picker:\n%s", model.View())
 	}
 	model.Update(key(bubbletea.KeyEnter))

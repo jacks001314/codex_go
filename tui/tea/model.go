@@ -1003,6 +1003,9 @@ type Model struct {
 	onLogout                        LogoutFunc
 	onReadAgents                    AgentThreadReaderFunc
 	onSwitchAgent                   AgentThreadSwitchFunc
+	// statusCopyTargets holds the most recent /status output for /copy
+	// (Rust #43055); cleared by any other command, user message, or response.
+	statusCopyTargets *statusCopyTargets
 	// backgroundThreadEvents buffers app-server notifications for non-active
 	// (subagent) threads so switching to them can replay in-progress activity
 	// instead of showing an empty transcript (Rust parity: ThreadEventStore).
@@ -2384,6 +2387,8 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	m.captureIDEContext(&request)
 	displayPrompt := m.promptWithRequestAttachments(request)
 	m.notice = ""
+	// Rust #43055: a new user message returns /copy to response copying.
+	m.statusCopyTargets = nil
 	m.Transcript.lastTurnError = ""
 	m.Transcript.needsFinalMessageSeparator = false
 	m.Transcript.activeAssistantDeltaItemID = ""
@@ -3051,6 +3056,8 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 			m.commitPendingSteers(1)
 		}
 	case "agent_message":
+		// Rust #43055: an assistant response returns /copy to response copying.
+		m.statusCopyTargets = nil
 		if strings.EqualFold(strings.TrimSpace(item.Delivery), "async") {
 			// Rust #39312: an async agent message is user-visible but does not
 			// end the turn, so it renders as a standalone assistant message
@@ -4658,6 +4665,11 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return nil
 	}
 	m.flushCompactCommandGroup()
+	// Rust #43055: any command other than /copy returns /copy to the latest
+	// assistant response.
+	if invocation.Command != codextui.CommandCopy {
+		m.statusCopyTargets = nil
+	}
 	if m.inSideConversation() && !sideSlashCommandAllowed(invocation.Command) {
 		message := sideSlashUnavailableMessage(invocation.Name)
 		if invocation.Command == codextui.CommandRename {
@@ -5145,6 +5157,19 @@ func (m *Model) copyLastAgentResponse() {
 	if m == nil {
 		return
 	}
+	// Rust #43055: /copy prefers the most recent /status output (whole status
+	// plus its fields) until another command or turn supersedes it.
+	if m.statusCopyTargets != nil {
+		targets := m.statusCopyTargets.targets()
+		if len(targets) == 0 {
+			m.notice = "No status to copy"
+			m.addErrorHistoryMessage(m.notice)
+			m.refreshTranscript()
+			return
+		}
+		m.openCopyTargetPicker(targets)
+		return
+	}
 	text, ok := chatwidget.LastAssistantMarkdown(m.State.Messages)
 	if !ok {
 		m.notice = "No agent response to copy"
@@ -5167,8 +5192,23 @@ func (m *Model) copyLastAgentResponse() {
 		m.refreshTranscript()
 		return
 	}
+	m.openCopyTargetPicker(targets)
+}
+
+// openCopyTargetPicker validates the clipboard and opens the /copy picker
+// (Rust #39997/#43055).
+func (m *Model) openCopyTargetPicker(targets []chatwidget.CopyTarget) {
+	if m == nil || len(targets) == 0 {
+		return
+	}
+	if m.clipboardWrite == nil {
+		m.notice = "Copy failed: clipboard is unavailable"
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
+		return
+	}
 	m.copyTargets = targets
-	m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewCopyTargetPickerView(text))
+	m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewCopyTargetPickerViewForTargets(targets))
 }
 
 func (m *Model) applyCopyTargetModalOption(optionID string) bubbletea.Cmd {

@@ -167,9 +167,15 @@ func previewCopyTarget(text string) string {
 	return first
 }
 
-// NewCopyTargetPickerView builds the /copy target picker (#39997).
+// NewCopyTargetPickerView builds the /copy target picker (#39997). Rust #43055
+// renamed the picker to "Copy to clipboard" and reuses it for status fields.
 func NewCopyTargetPickerView(markdown string) SelectionView {
-	targets := CopyTargetsFromMarkdown(markdown)
+	return NewCopyTargetPickerViewForTargets(CopyTargetsFromMarkdown(markdown))
+}
+
+// NewCopyTargetPickerViewForTargets builds the /copy picker from explicit
+// targets (status output and its fields, Rust #43055).
+func NewCopyTargetPickerViewForTargets(targets []CopyTarget) SelectionView {
 	items := make([]SelectionItem, 0, len(targets))
 	for _, target := range targets {
 		items = append(items, SelectionItem{
@@ -183,7 +189,7 @@ func NewCopyTargetPickerView(markdown string) SelectionView {
 	}
 	return SelectionView{
 		ViewID:      CopyTargetPickerViewID,
-		Title:       "Copy response as",
+		Title:       "Copy to clipboard",
 		FooterHint:  standardPopupHintLine,
 		AllowCancel: true,
 		Items:       items,
