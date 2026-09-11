@@ -30,8 +30,12 @@ type ProxyCredentialRecord struct {
 }
 
 type ProxyCredentialProvider struct {
-	ContextEnvVars     []string
-	Sources            []ProxyCredentialSource
+	ContextEnvVars []string
+	Sources        []ProxyCredentialSource
+	// Destinations are the authorized injection destinations for configured
+	// providers (#44056); built-in providers leave this nil and bind hosts
+	// directly.
+	Destinations       []CredentialDestination
 	DummyValue         func(string) string
 	RequestHeader      func(map[string][]string) (string, bool)
 	RequestHeaderValue func(string) (string, bool)

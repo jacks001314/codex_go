@@ -56,8 +56,9 @@ func TestCredentialDestinationParsingLikeRust(t *testing.T) {
 		{value: "api.example.com", want: CredentialDestination{Scheme: "https", Host: "api.example.com", Port: 443}},
 		{value: "localhost:8080", want: CredentialDestination{Scheme: "http", Host: "localhost", Port: 8080}},
 		{value: "127.0.0.1", want: CredentialDestination{Scheme: "http", Host: "127.0.0.1", Port: 80}},
-		{value: "http://api.example.com", want: CredentialDestination{Scheme: "http", Host: "api.example.com", Port: 80}},
+		{value: "http://127.0.0.1:8080", want: CredentialDestination{Scheme: "http", Host: "127.0.0.1", Port: 8080}},
 		{value: "https://api.example.com:8443/prefix", want: CredentialDestination{Scheme: "https", Host: "api.example.com", Port: 8443, PathPrefix: "/prefix"}},
+		{value: "*.example.com", want: CredentialDestination{Scheme: "https", Host: "example.com", Wildcard: true, Port: 443}},
 	}
 	for _, tc := range cases {
 		got, err := parseCredentialDestination(tc.value)
@@ -70,6 +71,41 @@ func TestCredentialDestinationParsingLikeRust(t *testing.T) {
 	}
 	if _, err := parseCredentialDestination("ftp://example.com"); err == nil {
 		t.Fatal("ftp destination should be rejected")
+	}
+	if _, err := parseCredentialDestination("http://api.example.com"); err == nil {
+		t.Fatal("plaintext http for a non-loopback host should be rejected")
+	}
+	if _, err := parseCredentialDestination("https://user@api.example.com"); err == nil {
+		t.Fatal("destination with user information should be rejected")
+	}
+}
+
+func TestCredentialDestinationMatchingLikeRust(t *testing.T) {
+	destination, err := parseCredentialDestination("https://api.vendor.example/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !destination.MatchesRequest("https", "api.vendor.example", 443, "/v1/accounts") {
+		t.Fatal("matching request rejected")
+	}
+	if destination.MatchesRequest("http", "api.vendor.example", 443, "/v1/accounts") {
+		t.Fatal("http request should not match an https destination")
+	}
+	if destination.MatchesRequest("https", "api.vendor.example", 443, "/v2/accounts") {
+		t.Fatal("path outside the prefix should not match")
+	}
+	if destination.MatchesRequest("https", "api.vendor.example", 443, "/v1/../v2") {
+		t.Fatal("unsafe path should not match")
+	}
+	if !destination.RequiresMITM("api.vendor.example", 443) || destination.RequiresMITM("api.vendor.example", 8443) {
+		t.Fatal("requires-mitm mismatch")
+	}
+	wildcard, err := parseCredentialDestination("*.vendor.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !wildcard.MatchesHost("tenant.vendor.example", 443) || wildcard.MatchesHost("vendor.example", 443) || wildcard.MatchesHost("evilvendor.example", 443) {
+		t.Fatal("wildcard host matching mismatch")
 	}
 }
 

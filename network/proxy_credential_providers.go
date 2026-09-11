@@ -41,8 +41,49 @@ type CredentialProviderConfig struct {
 type CredentialDestination struct {
 	Scheme     string
 	Host       string
+	Wildcard   bool
 	Port       uint16
 	PathPrefix string
+}
+
+// MatchesHost mirrors CredentialDestination::matches_host: exact host (or a
+// scoped `*.` wildcard) at the same port.
+func (d CredentialDestination) MatchesHost(host string, port uint16) bool {
+	if d.Port != port {
+		return false
+	}
+	normalized := NormalizeProxyHost(host)
+	if d.Wildcard {
+		return strings.HasSuffix(normalized, "."+d.Host)
+	}
+	return normalized == d.Host
+}
+
+// RequiresMITM mirrors CredentialDestination::requires_mitm.
+func (d CredentialDestination) RequiresMITM(host string, port uint16) bool {
+	return d.Scheme == "https" && d.MatchesHost(host, port)
+}
+
+// MatchesRequest mirrors CredentialDestination::matches_request: scheme,
+// host/port, safe path, and path-prefix authorization.
+func (d CredentialDestination) MatchesRequest(scheme string, host string, port uint16, path string) bool {
+	if scheme != d.Scheme || !d.MatchesHost(host, port) {
+		return false
+	}
+	if !isSafeForAuthorization(path) {
+		return false
+	}
+	if d.PathPrefix == "" {
+		return true
+	}
+	if path == d.PathPrefix {
+		return true
+	}
+	suffix, ok := strings.CutPrefix(path, d.PathPrefix)
+	if !ok {
+		return false
+	}
+	return strings.HasSuffix(d.PathPrefix, "/") || strings.HasPrefix(suffix, "/")
 }
 
 // ParseCredentialProviderConfigs parses and validates the
@@ -181,72 +222,76 @@ func ParseCredentialDestinations(config CredentialProviderConfig) ([]CredentialD
 	return out, nil
 }
 
-// parseCredentialDestination mirrors CredentialDestination::parse: an explicit
-// scheme wins; a bare loopback host implies http; any other bare host implies
-// https. A path becomes the authorized path prefix.
+// parseCredentialDestination mirrors CredentialDestination::parse: HTTPS is
+// required unless the destination targets loopback over HTTP; a leading `*.`
+// scopes a wildcard host; user info, queries, fragments, and empty/multi-label
+// wildcard hosts are rejected.
 func parseCredentialDestination(value string) (CredentialDestination, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return CredentialDestination{}, fmt.Errorf("destination must not be empty")
 	}
-	if strings.Contains(value, "://") {
-		parsed, err := url.Parse(value)
-		if err != nil {
-			return CredentialDestination{}, err
-		}
-		scheme := strings.ToLower(parsed.Scheme)
-		if scheme != "http" && scheme != "https" {
-			return CredentialDestination{}, fmt.Errorf("unsupported destination scheme %q", parsed.Scheme)
-		}
-		host := parsed.Hostname()
-		if host == "" {
-			return CredentialDestination{}, fmt.Errorf("destination %q has no host", value)
-		}
-		port := uint16(0)
-		if parsed.Port() != "" {
-			parsedPort, err := parseCredentialPort(parsed.Port())
-			if err != nil {
-				return CredentialDestination{}, err
-			}
-			port = parsedPort
-		} else if scheme == "https" {
-			port = 443
+	explicitScheme := ""
+	authority := value
+	if index := strings.Index(value, "://"); index >= 0 {
+		explicitScheme = value[:index]
+		authority = value[index+3:]
+	}
+	wildcard := false
+	if strings.HasPrefix(authority, "*.") {
+		wildcard = true
+		authority = authority[2:]
+	}
+	if strings.ContainsAny(authority, "@?#") {
+		return CredentialDestination{}, fmt.Errorf("credential destination cannot include user information, a query, or a fragment")
+	}
+	parsed, err := url.Parse("https://" + authority)
+	if err != nil {
+		return CredentialDestination{}, err
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return CredentialDestination{}, fmt.Errorf("credential destination has no hostname")
+	}
+	normalized := NormalizeProxyHost(host)
+	if normalized == "" || strings.ContainsAny(normalized, "*/") {
+		return CredentialDestination{}, fmt.Errorf("credential destination must have an exact hostname or scoped wildcard")
+	}
+	loopback := !wildcard && isLoopbackCredentialHost(normalized)
+	scheme := ""
+	switch {
+	case explicitScheme == "":
+		if loopback {
+			scheme = "http"
 		} else {
-			port = 80
+			scheme = "https"
 		}
-		return CredentialDestination{Scheme: scheme, Host: NormalizeProxyHost(host), Port: port, PathPrefix: normalizeCredentialPathPrefix(parsed.Path)}, nil
+	case strings.EqualFold(explicitScheme, "https"):
+		scheme = "https"
+	case strings.EqualFold(explicitScheme, "http") && loopback:
+		scheme = "http"
+	default:
+		return CredentialDestination{}, fmt.Errorf("credential destination must use HTTPS unless it targets loopback over HTTP")
 	}
-	hostPart := value
-	pathPart := ""
-	if index := strings.IndexAny(hostPart, "/"); index >= 0 {
-		hostPart, pathPart = hostPart[:index], hostPart[index:]
-	}
-	host := hostPart
-	explicitPort := uint16(0)
-	if parsedHost, parsedPort, err := net.SplitHostPort(hostPart); err == nil {
-		host = parsedHost
-		parsedPortValue, portErr := parseCredentialPort(parsedPort)
+	port := uint16(0)
+	if parsed.Port() != "" {
+		parsedPort, portErr := parseCredentialPort(parsed.Port())
 		if portErr != nil {
 			return CredentialDestination{}, portErr
 		}
-		explicitPort = parsedPortValue
+		port = parsedPort
+	} else if scheme == "http" {
+		port = 80
+	} else {
+		port = 443
 	}
-	if host == "" {
-		return CredentialDestination{}, fmt.Errorf("destination %q has no host", value)
-	}
-	scheme := "https"
-	if isLoopbackCredentialHost(host) {
-		scheme = "http"
-	}
-	port := explicitPort
-	if port == 0 {
-		if scheme == "https" {
-			port = 443
-		} else {
-			port = 80
-		}
-	}
-	return CredentialDestination{Scheme: scheme, Host: NormalizeProxyHost(host), Port: port, PathPrefix: normalizeCredentialPathPrefix(pathPart)}, nil
+	return CredentialDestination{
+		Scheme:     scheme,
+		Host:       normalized,
+		Wildcard:   wildcard,
+		Port:       port,
+		PathPrefix: normalizeCredentialPathPrefix(parsed.Path),
+	}, nil
 }
 
 func parseCredentialPort(value string) (uint16, error) {
@@ -272,6 +317,69 @@ func isLoopbackCredentialHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// isSafeForAuthorization mirrors codex-rs/network-proxy/src/authorization_path.rs:
+// reject path forms that upstreams may decode or normalize into a different
+// resource after authorization (backslashes, encoded separators, and `.`/`..`
+// segments).
+func isSafeForAuthorization(path string) bool {
+	for _, segment := range strings.Split(path, "/") {
+		if !isSafeSegmentForAuthorization(segment) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSafeSegmentForAuthorization(segment string) bool {
+	decodedDots := 0
+	hasNonDot := false
+	for index := 0; index < len(segment); {
+		switch segment[index] {
+		case '.':
+			decodedDots++
+			index++
+		case '\\':
+			return false
+		case '%':
+			if index+2 >= len(segment) {
+				return false
+			}
+			high, okHigh := decodeCredentialHexDigit(segment[index+1])
+			low, okLow := decodeCredentialHexDigit(segment[index+2])
+			if !okHigh || !okLow {
+				return false
+			}
+			decoded := high<<4 | low
+			switch decoded {
+			case '%', '/', '\\':
+				return false
+			case '.':
+				decodedDots++
+			default:
+				hasNonDot = true
+			}
+			index += 3
+		default:
+			hasNonDot = true
+			index++
+		}
+	}
+	return hasNonDot || (decodedDots != 1 && decodedDots != 2)
+}
+
+func decodeCredentialHexDigit(value byte) (byte, bool) {
+	switch {
+	case value >= '0' && value <= '9':
+		return value - '0', true
+	case value >= 'a' && value <= 'f':
+		return value - 'a' + 10, true
+	case value >= 'A' && value <= 'F':
+		return value - 'A' + 10, true
+	default:
+		return 0, false
+	}
 }
 
 func validCredentialEnvKey(key string) bool {
