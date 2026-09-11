@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"fmt"
 	"strings"
 
 	"codex_go/apps"
@@ -18,6 +19,7 @@ func (p *mcpAccessibleAppsProvider) ListAccessibleApps(params *apps.AppAccessibl
 	if params != nil && params.ForceRefetch {
 		p.service.Refresh()
 	}
+	forceRefetch := params != nil && params.ForceRefetch
 	threadID := ""
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
@@ -45,6 +47,11 @@ func (p *mcpAccessibleAppsProvider) ListAccessibleApps(params *apps.AppAccessibl
 			}
 			if !mcp.IsCodexAppsMCPServerName(serverName) {
 				continue
+			}
+			if forceRefetch && status.Data[i].State == mcp.MCPServerFailed && len(status.Data[i].Tools) == 0 {
+				// Rust #43039: report the failed refresh so app/installed keeps
+				// the last working catalog instead of publishing an empty one.
+				return nil, fmt.Errorf("failed to refresh tools for MCP server %q", strings.TrimSpace(serverName))
 			}
 			ready = ready || status.Data[i].State == "" || status.Data[i].State == mcp.MCPServerReady
 			connectorTools = append(connectorTools, mcp.ConnectorToolInfoFromMCPTools(serverName, status.Data[i].Tools)...)
