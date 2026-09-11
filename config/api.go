@@ -2210,6 +2210,9 @@ func (s *ConfigService) overriddenMetadataAfterWrite(edits []ConfigEdit) *Overri
 	}
 	for i := range edits {
 		keyPath := strings.TrimSpace(edits[i].KeyPath)
+		if override := credentialProviderSourceOverride(read, keyPath, edits[i].Value, userPrecedence); override != nil {
+			return override
+		}
 		effective, ok := valueAtPath(read.Config, keyPath)
 		if !ok {
 			continue
@@ -2229,6 +2232,53 @@ func (s *ConfigService) overriddenMetadataAfterWrite(edits []ConfigEdit) *Overri
 			Message:         fmt.Sprintf("%s was written but is overridden by a higher-priority config layer", keyPath),
 			OverridingLayer: origin,
 			EffectiveValue:  effective,
+		}
+	}
+	return nil
+}
+
+// credentialProviderSourceOverride mirrors #44241's override reporting: a write
+// that adds (or edits) a features.network_proxy.credentials provider which the
+// merge then omits because a higher-priority provider owns the same env source
+// is reported as overridden by that provider, instead of silently vanishing.
+func credentialProviderSourceOverride(read *ConfigReadResponse, keyPath string, value any, userPrecedence int16) *OverriddenMetadata {
+	if read == nil {
+		return nil
+	}
+	parts := splitKeyPath(keyPath)
+	if len(parts) < 4 || parts[0] != "features" || parts[1] != "network_proxy" || parts[2] != "credentials" {
+		return nil
+	}
+	providerID := parts[3]
+	credentials, _ := getAtPath(read.Config, []string{"features", "network_proxy", "credentials"}).(map[string]any)
+	if _, present := credentials[providerID]; present {
+		// The provider survived the merge; the generic origin precedence check
+		// covers a value that is nevertheless shadowed.
+		return nil
+	}
+	written, _ := value.(map[string]any)
+	writtenSources := stringSliceFromAny(written["env"])
+	if len(writtenSources) == 0 {
+		return nil
+	}
+	for otherID, raw := range credentials {
+		if otherID == providerID {
+			continue
+		}
+		provider, _ := raw.(map[string]any)
+		if !credentialSourcesOverlap(writtenSources, stringSliceFromAny(provider["env"])) {
+			continue
+		}
+		origin := read.Origins["features.network_proxy.credentials."+otherID]
+		if origin.Name.Precedence() <= userPrecedence {
+			continue
+		}
+		return &OverriddenMetadata{
+			Message: fmt.Sprintf(
+				"features.network_proxy.credentials.%s was written but its credential sources are owned by provider %s in a higher-priority config layer",
+				providerID, otherID),
+			OverridingLayer: origin,
+			EffectiveValue:  provider,
 		}
 	}
 	return nil

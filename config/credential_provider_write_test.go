@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -87,6 +88,40 @@ func TestConfigWriteAllowsCredentialProviderDraftsAndDeletions(t *testing.T) {
 	credentials, _ := networkProxy["credentials"].(map[string]any)
 	if _, ok := credentials["draft"]; ok {
 		t.Fatalf("deleted provider persisted: %#v", credentials)
+	}
+}
+
+// TestConfigWriteReportsCredentialProviderSourceOwnershipOverride mirrors
+// #44241: a written provider displaced by a higher-priority provider that owns
+// the same env source is reported as overridden instead of silently vanishing.
+func TestConfigWriteReportsCredentialProviderSourceOwnershipOverride(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, "model = \"gpt-5\"\n")
+	service := NewConfigService(home)
+	service.SetManagedLayers([]Layer{{
+		Name:    LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: filepath.Join(home, "managed_config.toml")},
+		Version: "managed-v1",
+		Config: credentialLayer(map[string]any{"managed": map[string]any{
+			"env":          []any{"VENDOR_TOKEN"},
+			"patterns":     []any{"vk-[a-z0-9]{16}"},
+			"url_prefixes": []any{"https://api.vendor.example"},
+			"auth":         []any{"bearer"},
+		}}),
+	}})
+
+	response, err := service.WriteValue(&ConfigValueWriteParams{
+		KeyPath:       "features.network_proxy.credentials.user",
+		Value:         completeCredentialProvider(),
+		MergeStrategy: MergeReplace,
+	})
+	if err != nil {
+		t.Fatalf("write error = %v", err)
+	}
+	if response.Status != WriteOKOverridden || response.OverriddenMetadata == nil {
+		t.Fatalf("response = %+v", response)
+	}
+	if response.OverriddenMetadata.OverridingLayer.Name.Type != LayerSourceLegacyManagedConfigFromFile {
+		t.Fatalf("overriding layer = %+v", response.OverriddenMetadata.OverridingLayer)
 	}
 }
 
