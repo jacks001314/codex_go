@@ -32,9 +32,10 @@ func TestTrustDirectoryPromptStateRenderAndSelection(t *testing.T) {
 	for _, want := range []string{
 		"> You are in /workspace/project/sub",
 		"repository root: /workspace/project",
-		"Do you trust the contents of this directory?",
-		"> Yes, continue",
-		"  No, quit",
+		"Trust this folder? Codex can read, edit, and run files here",
+		"Your trust decision will be saved.",
+		"> Trust and continue",
+		"  Quit",
 		"Press Enter to continue and create a sandbox...",
 	} {
 		if !strings.Contains(lines, want) {
@@ -52,6 +53,35 @@ func TestTrustDirectoryPromptStateRenderAndSelection(t *testing.T) {
 	prompt.Trust()
 	if !prompt.Trusted || prompt.ShouldQuit || prompt.Selection != TrustDirectorySelectionTrust {
 		t.Fatalf("trusted prompt = %#v", prompt)
+	}
+}
+
+func TestRestrictedTrustDirectoryPrompt(t *testing.T) {
+	prompt := NewTrustDirectoryPrompt("/workspace/project/sub", "/workspace/project")
+	prompt.Restricted = true
+	prompt.ShowWindowsCreateSandboxHint = true
+	lines := strings.Join(prompt.RenderLines(), "\n")
+	for _, want := range []string{
+		"This folder is marked untrusted.",
+		"Opening it will not change its trust setting.",
+		"> Open restricted",
+		"  Quit",
+		"Press Enter to continue; esc to quit",
+	} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("restricted trust prompt missing %q:\n%s", want, lines)
+		}
+	}
+	// The restricted state hides the Git-root note and never offers to save trust.
+	if strings.Contains(lines, "repository root") {
+		t.Fatalf("restricted prompt should hide the Git-root note:\n%s", lines)
+	}
+	if strings.Contains(lines, "Trust and continue") {
+		t.Fatalf("restricted prompt should not offer to trust:\n%s", lines)
+	}
+	prompt.Confirm()
+	if !prompt.Trusted || prompt.Selection != TrustDirectorySelectionTrust {
+		t.Fatalf("restricted open selection = %#v", prompt)
 	}
 }
 
