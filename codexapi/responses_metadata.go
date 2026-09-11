@@ -8,16 +8,19 @@ import (
 )
 
 const (
-	InstallationIDKey             = "installation_id"
-	SessionIDKey                  = "session_id"
-	ThreadIDKey                   = "thread_id"
-	TurnIDKey                     = "turn_id"
-	WindowIDKey                   = "window_id"
-	ContextWindowIDKey            = "context_window_id"
-	RequestKindKey                = "request_kind"
-	CompactionKey                 = "compaction"
-	CodeModeToolNamesKey          = "code_mode_tool_names"
-	TurnStartedAtUnixMSKey        = "turn_started_at_unix_ms"
+	InstallationIDKey      = "installation_id"
+	SessionIDKey           = "session_id"
+	ThreadIDKey            = "thread_id"
+	TurnIDKey              = "turn_id"
+	WindowIDKey            = "window_id"
+	ContextWindowIDKey     = "context_window_id"
+	RequestKindKey         = "request_kind"
+	CompactionKey          = "compaction"
+	CodeModeToolNamesKey   = "code_mode_tool_names"
+	TurnStartedAtUnixMSKey = "turn_started_at_unix_ms"
+	// AnalyticsEnabledKey reports the selected session analytics client's
+	// collection state (Rust #44628).
+	AnalyticsEnabledKey           = "analytics_enabled"
 	ForkedFromThreadIDKey         = "forked_from_thread_id"
 	ParentThreadIDKey             = "parent_thread_id"
 	ParentTurnIDKey               = "parent_turn_id"
@@ -58,6 +61,7 @@ var reservedMetadataKeys = map[string]bool{
 	CompactionKey:                 true,
 	CodeModeToolNamesKey:          true,
 	TurnStartedAtUnixMSKey:        true,
+	AnalyticsEnabledKey:           true,
 	ForkedFromThreadIDKey:         true,
 	ParentThreadIDKey:             true,
 	ParentTurnIDKey:               true,

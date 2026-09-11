@@ -151,6 +151,71 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildResponsesClientMetadataIncludesAnalyticsEnabled(t *testing.T) {
+	enabled := true
+	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		SessionID:        "session",
+		ThreadID:         "thread",
+		TurnID:           "turn",
+		RequestKind:      codexapi.ClientRequestTurn,
+		AnalyticsEnabled: &enabled,
+		Extra:            map[string]string{"analytics_enabled": "client-supplied"},
+	})
+	var turnMetadata map[string]any
+	if err := json.Unmarshal([]byte(client[codexapi.ClientCodexTurnMetadataHeader]), &turnMetadata); err != nil {
+		t.Fatalf("turn metadata json error = %v", err)
+	}
+	if turnMetadata["analytics_enabled"] != true {
+		t.Fatalf("analytics_enabled = %#v, want true (Rust #44628)", turnMetadata["analytics_enabled"])
+	}
+
+	disabled := false
+	client = BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		SessionID:        "session",
+		ThreadID:         "thread",
+		TurnID:           "turn",
+		RequestKind:      codexapi.ClientRequestTurn,
+		AnalyticsEnabled: &disabled,
+	})
+	if err := json.Unmarshal([]byte(client[codexapi.ClientCodexTurnMetadataHeader]), &turnMetadata); err != nil {
+		t.Fatalf("turn metadata json error = %v", err)
+	}
+	if turnMetadata["analytics_enabled"] != false {
+		t.Fatalf("analytics_enabled = %#v, want false", turnMetadata["analytics_enabled"])
+	}
+
+	client = BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		SessionID:   "session",
+		ThreadID:    "thread",
+		TurnID:      "turn",
+		RequestKind: codexapi.ClientRequestTurn,
+	})
+	var omitted map[string]any
+	if err := json.Unmarshal([]byte(client[codexapi.ClientCodexTurnMetadataHeader]), &omitted); err != nil {
+		t.Fatalf("turn metadata json error = %v", err)
+	}
+	if _, ok := omitted["analytics_enabled"]; ok {
+		t.Fatalf("analytics_enabled should be omitted without session analytics: %#v", omitted)
+	}
+}
+
+func TestMetadataStateAnalyticsEnabled(t *testing.T) {
+	state := NewMetadataState("session", "thread", "turn")
+	if _, ok := state.MetadataValue("model", "")["analytics_enabled"]; ok {
+		t.Fatalf("analytics_enabled should be omitted by default")
+	}
+	enabled := true
+	state.SetAnalyticsEnabled(&enabled)
+	enabled = false // mutating the caller's value must not change the state
+	if got := state.MetadataValue("model", "")["analytics_enabled"]; got != true {
+		t.Fatalf("analytics_enabled = %#v, want true", got)
+	}
+	state.SetAnalyticsEnabled(nil)
+	if _, ok := state.MetadataValue("model", "")["analytics_enabled"]; ok {
+		t.Fatalf("analytics_enabled should be omitted after clearing")
+	}
+}
+
 func TestBuildResponsesClientMetadataIncludesAutoReviewEnabled(t *testing.T) {
 	enabled := true
 	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{

@@ -267,21 +267,24 @@ func cloneBoolPtr(value *bool) *bool {
 }
 
 type MetadataState struct {
-	mu                           sync.RWMutex
-	SessionID                    string
-	ThreadID                     string
-	ForkedFromThreadID           string
-	ParentThreadID               string
-	ParentTurnID                 string
-	RootTurnID                   string
-	SubagentHeader               string
-	SubagentKind                 string
-	ThreadSource                 string
-	TurnID                       string
-	Sandbox                      string
-	SandboxMode                  string
-	Workspaces                   map[string]WorkspaceMetadata
-	TurnStartedAtUnixMS          int64
+	mu                  sync.RWMutex
+	SessionID           string
+	ThreadID            string
+	ForkedFromThreadID  string
+	ParentThreadID      string
+	ParentTurnID        string
+	RootTurnID          string
+	SubagentHeader      string
+	SubagentKind        string
+	ThreadSource        string
+	TurnID              string
+	Sandbox             string
+	SandboxMode         string
+	Workspaces          map[string]WorkspaceMetadata
+	TurnStartedAtUnixMS int64
+	// AnalyticsEnabled reports the selected session analytics client's
+	// collection state (Rust #44628); nil omits the key.
+	AnalyticsEnabled             *bool
 	Extra                        map[string]string
 	UserInputRequestedDuringTurn bool
 }
@@ -306,6 +309,20 @@ func (m *MetadataState) SetTurnStartedAtUnixMS(value int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.TurnStartedAtUnixMS = value
+}
+
+func (m *MetadataState) SetAnalyticsEnabled(value *bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if value == nil {
+		m.AnalyticsEnabled = nil
+		return
+	}
+	clone := *value
+	m.AnalyticsEnabled = &clone
 }
 
 func (m *MetadataState) MarkUserInputRequestedDuringTurn() {
@@ -374,6 +391,9 @@ func (m *MetadataState) MetadataValue(model string, reasoningEffort string) map[
 	if m.TurnStartedAtUnixMS != 0 {
 		value["turn_started_at_unix_ms"] = m.TurnStartedAtUnixMS
 	}
+	if m.AnalyticsEnabled != nil {
+		value[codexapi.AnalyticsEnabledKey] = *m.AnalyticsEnabled
+	}
 	if m.UserInputRequestedDuringTurn {
 		value["user_input_requested_during_turn"] = true
 	}
@@ -412,6 +432,7 @@ type ResponsesClientMetadataOptions struct {
 	AutoReviewEnabled          *bool
 	NodeReplAutoReviewRequired *bool
 	NodeReplDisabled           *bool
+	AnalyticsEnabled           *bool
 	Extra                      map[string]string
 	ResponsesAPIMetadata       map[string]string
 	StartedAtMS                int64
@@ -459,6 +480,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.AutoReviewEnabled = cloneBoolPtr(options.AutoReviewEnabled)
 	metadata.NodeReplAutoReviewRequired = cloneBoolPtr(options.NodeReplAutoReviewRequired)
 	metadata.NodeReplDisabled = cloneBoolPtr(options.NodeReplDisabled)
+	metadata.AnalyticsEnabled = cloneBoolPtr(options.AnalyticsEnabled)
 	metadata.TurnStartedAtUnixMS = options.StartedAtMS
 	metadata.Extra = FilterClientMetadata(options.Extra)
 	metadata.ResponsesAPIMetadata = cloneStringMap(options.ResponsesAPIMetadata)

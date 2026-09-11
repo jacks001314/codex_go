@@ -61,6 +61,7 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 		RequestKind:                codexapi.ClientRequestTurn,
 		NodeReplAutoReviewRequired: &modelInfo.NodeReplAutoReviewRequired,
 		NodeReplDisabled:           &modelInfo.NodeReplDisabled,
+		AnalyticsEnabled:           r.analyticsEnabledOption(),
 		Extra:                      turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), responsesMetadataFromTurnStart(params)),
 		ResponsesAPIMetadata:       cfg.ResponsesAPIMetadata(),
 	})

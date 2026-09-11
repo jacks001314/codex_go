@@ -118,9 +118,13 @@ type ClientMetadata struct {
 	AutoReviewEnabled          *bool
 	NodeReplAutoReviewRequired *bool
 	NodeReplDisabled           *bool
-	Workspaces                 map[string]ClientWorkspaceMetadata
-	TurnStartedAtUnixMS        int64
-	Extra                      map[string]string
+	// AnalyticsEnabled reports the selected session analytics client's
+	// collection state; absent when the request has no initialized session
+	// analytics context (Rust #44628).
+	AnalyticsEnabled    *bool
+	Workspaces          map[string]ClientWorkspaceMetadata
+	TurnStartedAtUnixMS int64
+	Extra               map[string]string
 	// ResponsesAPIMetadata carries bounded, product-owned metadata from the
 	// `responses_api_metadata` config (Rust 9e301c8c9a). Product metadata takes
 	// precedence over client-provided Extra values and is kept out of metadata
@@ -214,6 +218,9 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	}
 	if m.NodeReplDisabled != nil {
 		value[NodeReplDisabledKey] = *m.NodeReplDisabled
+	}
+	if m.AnalyticsEnabled != nil {
+		value[AnalyticsEnabledKey] = *m.AnalyticsEnabled
 	}
 	if len(m.Workspaces) > 0 {
 		value["workspaces"] = m.Workspaces
@@ -325,6 +332,7 @@ func ClientReservedMetadataKeys() map[string]bool {
 		strings.ToLower(ClientCodexTurnMetadataHeader), strings.ToLower(ClientCodexParentThreadIDHeader),
 		strings.ToLower(ClientOpenAISubagentHeader), "request_kind", "compaction",
 		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id", "parent_turn_id", RootTurnIDKey,
+		AnalyticsEnabledKey,
 		"subagent_kind", "thread_source", "sandbox", "sandbox_mode", "workspaces",
 		"turn_trigger", "codex_version",
 		AutoReviewEnabledKey, NodeReplAutoReviewRequiredKey, NodeReplDisabledKey, CodeModeToolNamesKey,
