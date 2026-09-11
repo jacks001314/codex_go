@@ -20,7 +20,9 @@ const (
 	remoteControlEnrollTimeout                       = 30 * time.Second
 	remoteControlServerTokenRefreshBackoffMinSeconds = 24
 	remoteControlServerTokenRefreshBackoffMaxSeconds = 36
-	RemoteControlInstallationIDHeader                = "x-codex-installation-id"
+	// Rust #44311: spread clients across the 30 seconds after a server deadline.
+	remoteControlRetryAfterJitterMaxMillis = 30_000
+	RemoteControlInstallationIDHeader      = "x-codex-installation-id"
 )
 
 type HTTPDoer interface {
@@ -35,6 +37,9 @@ type ServerAPIOptions struct {
 	OS               string
 	Arch             string
 	AppServerVersion string
+	// RetryAfterJitterMillis samples the #44311 jitter added to an explicit
+	// Retry-After deadline once per response. Defaults to 0..30s.
+	RetryAfterJitterMillis func() int
 }
 
 type RemoteControlServerRequestError struct {
@@ -202,7 +207,7 @@ func sendRemoteControlServerRequest[Response any](
 	statusCode := response.StatusCode
 	status := response.Status
 	receivedAt := opts.Now().UTC()
-	retryAt := ParseRetryAfter(headers, receivedAt)
+	retryAt := RetryAfterWithJitter(headers, receivedAt, opts.RetryAfterJitterMillis())
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
 		timedOut := requestTimedOut(ctx, err)
@@ -289,7 +294,8 @@ func ParseRetryAfter(headers http.Header, receivedAt time.Time) *time.Time {
 	}
 	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
 		retryAt := receivedAt.UTC().Add(time.Duration(seconds) * time.Second)
-		if retryAt.After(receivedAt.UTC()) {
+		// Rust #44311: `Retry-After: 0` is still an explicit deadline.
+		if !retryAt.Before(receivedAt.UTC()) {
 			return &retryAt
 		}
 		return nil
@@ -299,10 +305,37 @@ func ParseRetryAfter(headers http.Header, receivedAt time.Time) *time.Time {
 		return nil
 	}
 	retryAt = retryAt.UTC()
-	if retryAt.After(receivedAt.UTC()) {
+	if !retryAt.Before(receivedAt.UTC()) {
 		return &retryAt
 	}
 	return nil
+}
+
+// RetryAfterWithJitter mirrors Rust #44311 `retry_after_with_jitter`: keep the
+// server's deadline as a lower bound, then spread clients over the following 30
+// seconds. Callers sample the jitter once per response so retries that share a
+// response also share a deadline.
+func RetryAfterWithJitter(headers http.Header, receivedAt time.Time, jitterMillis int) *time.Time {
+	retryAt := ParseRetryAfter(headers, receivedAt)
+	if retryAt == nil {
+		return nil
+	}
+	if jitterMillis < 0 {
+		jitterMillis = 0
+	}
+	if jitterMillis > remoteControlRetryAfterJitterMaxMillis {
+		jitterMillis = remoteControlRetryAfterJitterMaxMillis
+	}
+	value := retryAt.UTC().Add(time.Duration(jitterMillis) * time.Millisecond)
+	return &value
+}
+
+func remoteControlRetryAfterJitterMillis() int {
+	value, err := rand.Int(rand.Reader, big.NewInt(remoteControlRetryAfterJitterMaxMillis+1))
+	if err != nil {
+		return 0
+	}
+	return int(value.Int64())
 }
 
 func refreshDeferral(retryAt *time.Time, now time.Time, backoff func() time.Duration) (time.Duration, time.Time) {
@@ -348,6 +381,9 @@ func normalizeServerAPIOptions(opts *ServerAPIOptions) *ServerAPIOptions {
 	}
 	if out.Backoff == nil {
 		out.Backoff = remoteControlServerTokenRefreshBackoff
+	}
+	if out.RetryAfterJitterMillis == nil {
+		out.RetryAfterJitterMillis = remoteControlRetryAfterJitterMillis
 	}
 	if strings.TrimSpace(out.OS) == "" {
 		out.OS = runtime.GOOS

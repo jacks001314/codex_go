@@ -104,9 +104,10 @@ func TestRefreshRemoteControlServerDefersTransientRequiredRefresh(t *testing.T) 
 	auth := &RemoteControlConnectionAuth{AccountID: "account-a"}
 
 	err := RefreshRemoteControlServer(nil, auth, "installation-id", enrollment, &ServerAPIOptions{
-		HTTPClient: server.Client(),
-		Now:        func() time.Time { return now },
-		Backoff:    func() time.Duration { return 30 * time.Second },
+		HTTPClient:             server.Client(),
+		Now:                    func() time.Time { return now },
+		Backoff:                func() time.Duration { return 30 * time.Second },
+		RetryAfterJitterMillis: func() int { return 0 },
 	})
 	if err == nil {
 		t.Fatalf("RefreshRemoteControlServer() unexpectedly succeeded")
@@ -179,5 +180,38 @@ func TestParseRetryAfterSupportsDeltaSecondsAndHTTPDates(t *testing.T) {
 	headers.Set("Retry-After", "invalid")
 	if retryAt := ParseRetryAfter(headers, now); retryAt != nil {
 		t.Fatalf("invalid retryAt = %v", retryAt)
+	}
+}
+
+// Rust #44311: an explicit deadline is a lower bound, jitter spreads clients
+// across the next 30 seconds, and `Retry-After: 0` is still a deadline.
+func TestRetryAfterWithJitterKeepsServerDeadlineAsLowerBound(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	headers := http.Header{"Retry-After": []string{"120"}}
+	base := now.Add(120 * time.Second)
+
+	if got := RetryAfterWithJitter(headers, now, 0); got == nil || !got.Equal(base) {
+		t.Fatalf("zero jitter = %v, want %v", got, base)
+	}
+	if got := RetryAfterWithJitter(headers, now, 30_000); got == nil || !got.Equal(base.Add(30*time.Second)) {
+		t.Fatalf("max jitter = %v, want %v", got, base.Add(30*time.Second))
+	}
+	if got := RetryAfterWithJitter(headers, now, 99_000); got == nil || got.After(base.Add(30*time.Second)) {
+		t.Fatalf("jitter must be bounded to 30s: %v", got)
+	}
+	if got := RetryAfterWithJitter(headers, now, -5); got == nil || !got.Equal(base) {
+		t.Fatalf("negative jitter = %v, want %v", got, base)
+	}
+
+	zero := http.Header{"Retry-After": []string{"0"}}
+	if got := ParseRetryAfter(zero, now); got == nil || !got.Equal(now) {
+		t.Fatalf("Retry-After: 0 should be an explicit deadline, got %v", got)
+	}
+	if got := RetryAfterWithJitter(zero, now, 30_000); got == nil || !got.Equal(now.Add(30*time.Second)) {
+		t.Fatalf("Retry-After: 0 + jitter = %v", got)
+	}
+
+	if got := RetryAfterWithJitter(http.Header{}, now, 0); got != nil {
+		t.Fatalf("missing header = %v, want nil", got)
 	}
 }
