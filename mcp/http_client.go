@@ -28,6 +28,48 @@ const (
 
 var mcpStreamableHTTPRetryDelays = []time.Duration{250 * time.Millisecond, time.Second}
 
+// tokenHasExpired reports whether a stored access token is past its expiry
+// boundary. Rust #43947 uses the real expiry here (not the refresh-skew buffer)
+// so a failed proactive refresh stays an ordinary error while the token is
+// still usable.
+func tokenHasExpired(tokens *OAuthTokenSet, now time.Time) bool {
+	if tokens == nil || tokens.ExpiresAtMillis == nil {
+		return false
+	}
+	return !now.Before(time.UnixMilli(*tokens.ExpiresAtMillis))
+}
+
+// adoptRefreshedOAuthCredential re-reads the OAuth store after a failed refresh
+// so a login completed concurrently can be adopted instead of prompting again
+// (Rust #43947). It returns (nil, nil) when the original error should be
+// returned and (nil, err) when reauthentication is required.
+func (c *httpClient) adoptRefreshedOAuthCredential(previous *OAuthTokenSet, serverName string, codexHome string) (*OAuthTokenSet, error) {
+	if c == nil || c.config == nil {
+		return nil, nil
+	}
+	if !tokenHasExpired(previous, time.Now()) {
+		return nil, nil
+	}
+	replacement, err := NewOAuthStore(codexHome).Load(serverName, c.config.URL)
+	if err != nil || replacement == nil {
+		return nil, nil
+	}
+	if tokenHasExpired(replacement, time.Now()) {
+		return nil, nil
+	}
+	if strings.TrimSpace(replacement.ClientID) == "" || strings.TrimSpace(replacement.AccessToken) == "" {
+		return nil, nil
+	}
+	// Refresh credentials must stay bound to the issuer already validated for
+	// this authorization manager; an unbound or different issuer requires
+	// reauthentication.
+	if strings.TrimSpace(replacement.RefreshToken) != "" &&
+		(strings.TrimSpace(replacement.Issuer) == "" || strings.TrimSpace(replacement.Issuer) != strings.TrimSpace(previous.Issuer)) {
+		return nil, errors.New("MCP OAuth reauthentication required: stored refresh credential issuer changed")
+	}
+	return replacement, nil
+}
+
 type httpRPCResponse struct {
 	JSONRPC string           `json:"jsonrpc"`
 	ID      int64            `json:"id,omitempty"`
@@ -1294,6 +1336,19 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 		ExpiresAtMillis: tokens.ExpiresAtMillis,
 	})
 	if err != nil {
+		// Rust #43947: a browser login can finish while the provider refresh is
+		// in flight. Re-read the store and adopt an unexpired replacement
+		// credential before failing; a failed proactive refresh while the access
+		// token is still valid stays an ordinary error.
+		if !isPermanentMCPOAuthRefreshError(err) {
+			replacement, adoptionErr := c.adoptRefreshedOAuthCredential(tokens, serverName, codexHome)
+			if adoptionErr != nil {
+				return nil, adoptionErr
+			}
+			if replacement != nil {
+				return replacement, nil
+			}
+		}
 		if isPermanentMCPOAuthRefreshError(err) {
 			_, _ = NewOAuthStore(codexHome).Delete(serverName, c.config.URL)
 		}
