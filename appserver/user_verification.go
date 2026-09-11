@@ -72,8 +72,17 @@ type UserVerificationStatusResponse struct {
 
 type UserVerificationEnrollParams struct{}
 
+// UserVerificationEnrollResponse carries the local credential identity plus,
+// since Rust #44877, its public metadata. Algorithm/PublicKey are optional so
+// older app-servers that omit them remain compatible; current servers populate
+// both. The caller completes backend registration and must check both fields
+// before registering.
 type UserVerificationEnrollResponse struct {
 	CredentialID string `json:"credentialId"`
+	// Algorithm is the credential algorithm, `ecdsaP256Sha256X962`.
+	Algorithm *string `json:"algorithm"`
+	// PublicKey is the unpadded base64url SubjectPublicKeyInfo DER encoding.
+	PublicKey *string `json:"publicKey"`
 }
 
 type UserVerificationDeleteParams struct{}
