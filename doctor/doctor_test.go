@@ -707,6 +707,80 @@ func TestTerminalCheckDumbRequiresInteractiveStream(t *testing.T) {
 	}
 }
 
+// TestRedactDoctorDetailPreservesMissingEnvDiagnostics mirrors Rust #44654:
+// the variable name and "is not set" diagnosis survive redaction, while
+// credential-shaped names and server identifiers are hidden.
+func TestRedactDoctorDetailPreservesMissingEnvDiagnostics(t *testing.T) {
+	// Build the AWS-shaped identifiers at runtime so repository secret
+	// scanning does not flag the synthetic fixture.
+	awsKey := "AKIA" + strings.Repeat("A", 16)
+	awsSessionKey := "ASIA" + strings.Repeat("A", 16)
+	for _, prefix := range []string{"env var", "bearer token env var", "header env var"} {
+		for _, tc := range []struct {
+			variable string
+			want     string
+		}{
+			{"DOCS_TOKEN", "DOCS_TOKEN"},
+			{"docs_token", "docs_token"},
+			{"", "<redacted>"},
+			{"TOKEN: SYNTHETIC_CREDENTIAL", "<redacted>"},
+			{"sk-proj-SYNTHETIC_CREDENTIAL", "<redacted>"},
+			{"ghp_SYNTHETIC_CREDENTIAL", "<redacted>"},
+			{"github_pat_SYNTHETIC_CREDENTIAL", "<redacted>"},
+			{awsKey, "<redacted>"},
+			{awsSessionKey, "<redacted>"},
+			{"eyJhbGciOiJIUzI1NiJ9.synthetic.signature", "<redacted>"},
+		} {
+			got := redactDoctorDetail("demo-server: " + prefix + " " + tc.variable + " is not set")
+			want := "demo-server: " + prefix + " " + tc.want + " is not set"
+			if got != want {
+				t.Fatalf("prefix %q variable %q: got %q, want %q", prefix, tc.variable, got, want)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		detail string
+		want   string
+	}{
+		{"demo: command not found (helper --token SYNTHETIC_CREDENTIAL is not set)", "demo: <redacted>"},
+		{"ghp_SYNTHETIC_CREDENTIAL: env var DOCS_TOKEN is not set", "<redacted>: env var DOCS_TOKEN is not set"},
+		{"https://user:pass@example.com: env var DOCS_TOKEN is not set", "https://example.com: env var DOCS_TOKEN is not set"},
+	} {
+		if got := redactDoctorDetail(tc.detail); got != tc.want {
+			t.Fatalf("detail %q: got %q, want %q", tc.detail, got, tc.want)
+		}
+	}
+}
+
+func TestMissingEnvDiagnosticsInJSON(t *testing.T) {
+	check := NewCheck("mcp.config", "mcp", CheckStatusWarning, "missing inputs").
+		Detail("demo: bearer token env var DOCS_TOKEN is not set").
+		Detail("DEMO: header env var DOCS_SECRET is not set").
+		Detail("stdio: env var DOCS_TOKEN is not set").
+		Detail("npm:@modelcontextprotocol/server-sequential.thinking: env var DOCS_TOKEN is not set").
+		Detail("typo: bearer token env var sk-proj-SYNTHETIC_CREDENTIAL is not set")
+	structured, notes := structuredJSONDetails(check.Details)
+	if len(notes) != 0 {
+		t.Fatalf("unexpected notes: %#v", notes)
+	}
+	want := map[string]string{
+		"demo":  "bearer token env var DOCS_TOKEN is not set",
+		"DEMO":  "header env var DOCS_SECRET is not set",
+		"stdio": "env var DOCS_TOKEN is not set",
+		"npm:@modelcontextprotocol/server-sequential.thinking": "env var DOCS_TOKEN is not set",
+		"typo": "bearer token env var <redacted> is not set",
+	}
+	if len(structured) != len(want) {
+		t.Fatalf("structured = %#v", structured)
+	}
+	for key, value := range want {
+		entry, ok := structured[key]
+		if !ok || entry.one != value || len(entry.many) != 0 {
+			t.Fatalf("structured[%q] = %#v, want %q", key, entry, value)
+		}
+	}
+}
+
 func TestTerminalCheckDumbDetails(t *testing.T) {
 	check := terminalCheck(map[string]string{"TERM": "dumb"}, &Options{})
 	for _, want := range []string{

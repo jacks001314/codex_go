@@ -409,6 +409,29 @@ func redactDoctorDetails(values []string) []string {
 }
 
 func redactDoctorDetail(detail string) string {
+	// Rust #44654: preserve missing environment variable diagnostics before
+	// generic secret redaction, because names containing "token"/"secret"
+	// would otherwise hide which MCP input is unset. Configured names are not
+	// trusted to be non-secret, so they are redacted on credential patterns.
+	if server, value, ok := strings.Cut(detail, ": "); ok {
+		for _, prefix := range []string{"env var ", "bearer token env var ", "header env var "} {
+			withoutSuffix, found := strings.CutSuffix(value, " is not set")
+			if !found {
+				continue
+			}
+			variable, found := strings.CutPrefix(withoutSuffix, prefix)
+			if !found {
+				continue
+			}
+			redactedServer := redactDoctorURLs(redactDoctorIdentifier(server))
+			if isPlainDoctorEnvName(variable) {
+				variable = redactDoctorIdentifier(variable)
+			} else {
+				variable = "<redacted>"
+			}
+			return redactedServer + ": " + prefix + variable + " is not set"
+		}
+	}
 	lower := strings.ToLower(detail)
 	label := strings.SplitN(lower, ":", 2)[0]
 	if strings.Contains(label, "env var") {
@@ -436,6 +459,66 @@ func redactDoctorDetail(detail string) string {
 		}
 	}
 	return redactDoctorURLs(detail)
+}
+
+// redactDoctorIdentifier mirrors Rust #44654 redact_identifier: keep ordinary
+// identifiers, but treat credential-shaped values as secrets.
+func redactDoctorIdentifier(identifier string) string {
+	for _, prefix := range []string{"sk-", "sk_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "xoxb-", "xoxp-"} {
+		if strings.HasPrefix(identifier, prefix) {
+			return "<redacted>"
+		}
+	}
+	if len(identifier) == 20 && (strings.HasPrefix(identifier, "AKIA") || strings.HasPrefix(identifier, "ASIA")) && allBytesDoctorUpperOrDigit(identifier) {
+		return "<redacted>"
+	}
+	if identifier == "" || !allBytesDoctorIdentifierSafe(identifier) {
+		return "<redacted>"
+	}
+	return identifier
+}
+
+func isPlainDoctorEnvName(value string) bool {
+	if value == "" {
+		return false
+	}
+	first := value[0]
+	if !(first >= 'A' && first <= 'Z' || first >= 'a' && first <= 'z' || first == '_') {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if !(character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func allBytesDoctorUpperOrDigit(value string) bool {
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if !(character >= 'A' && character <= 'Z' || character >= '0' && character <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func allBytesDoctorIdentifierSafe(value string) bool {
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			continue
+		}
+		switch character {
+		case '_', '-', '.', ':', '@', '/':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func isSafePresenceValueForDoctor(value string) bool {
