@@ -2187,6 +2187,11 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			if err != nil {
 				return nil, err
 			}
+			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
+				// Rust #44655: a resumed session re-derives its active plugin
+				// selection from the resumed settings until the next task.
+				r.clearActiveDisabledPluginIDs(response.Thread.ID)
+			}
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil && !r.threadIsLoaded(response.Thread.ID) {
 				cfg, configErr := r.effectiveMCPConfigForThreadResume(response, request)
 				if configErr != nil {
@@ -4549,6 +4554,14 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	if r.networkApproval != nil {
 		r.networkApproval.clearThread(threadID)
 	}
+	r.clearActiveDisabledPluginIDs(threadID)
+}
+
+func (r *RuntimeRouter) clearActiveDisabledPluginIDs(threadID string) {
+	if r == nil || r.services.ThreadExtras == nil {
+		return
+	}
+	r.services.ThreadExtras.ClearActiveDisabledPluginIDs(threadID)
 }
 
 func (r *RuntimeRouter) subscribeThreadConnection(threadID string, connectionID string) {
@@ -6052,6 +6065,9 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 	applyThreadSettingsToTurnStartParams(params, settings)
 	applyThreadSettingsEnvironmentConfigToTurnStartParams(params, settings)
 	applyCollaborationModeToTurnStartParams(params)
+	// Rust #44655: activate this task's plugin selection for the runtime. A
+	// pending settings change takes effect on the next task, not this one.
+	r.activateThreadDisabledPluginIDs(params, record)
 	if strings.TrimSpace(params.Originator) == "" {
 		params.Originator = strings.TrimSpace(record.Metadata.Originator)
 	}
@@ -6080,6 +6096,25 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 		params.Permissions = &value
 	}
 	return nil
+}
+
+// activateThreadDisabledPluginIDs records the plugin selection the admitted task
+// runs with, preferring an explicit turn override and otherwise the thread's
+// persisted selection (Rust #44655).
+func (r *RuntimeRouter) activateThreadDisabledPluginIDs(params *turn.TurnStartParams, record *session.Record) {
+	if r == nil || params == nil || r.services.ThreadExtras == nil {
+		return
+	}
+	if strings.TrimSpace(params.ThreadID) == "" {
+		return
+	}
+	var ids []string
+	if params.DisabledPluginIDs != nil {
+		ids = append([]string{}, (*params.DisabledPluginIDs)...)
+	} else if record != nil {
+		ids = stringSliceFromAny(record.Metadata.Extra["disabled_plugin_ids"])
+	}
+	r.services.ThreadExtras.SetActiveDisabledPluginIDs(params.ThreadID, ids)
 }
 
 func (r *RuntimeRouter) baseInstructionsAreModelGenerated(record *session.Record) bool {
@@ -6137,6 +6172,13 @@ func (r *RuntimeRouter) threadDisabledPluginIDs(threadID string) []string {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return nil
+	}
+	// The active runtime uses the last admitted task's selection, so a pending
+	// settings change cannot alter a running turn (Rust #44655).
+	if r.services.ThreadExtras != nil {
+		if active, ok := r.services.ThreadExtras.ActiveDisabledPluginIDs(threadID); ok {
+			return active
+		}
 	}
 	if settings := r.threadSettingsForTurn(threadID); settings != nil && settings.DisabledPluginIDs != nil {
 		return append([]string{}, settings.DisabledPluginIDs...)

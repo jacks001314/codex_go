@@ -646,21 +646,23 @@ func PaginateBackgroundTerminals(terminals []BackgroundTerminal, cursor *string,
 }
 
 type ThreadExtraService struct {
-	goals           *GoalStore
-	mu              sync.Mutex
-	settings        map[string]Settings
-	terminals       map[string][]BackgroundTerminal
-	terminalCancels map[string]context.CancelFunc
-	shellHistory    map[string][]string
+	goals                   *GoalStore
+	mu                      sync.Mutex
+	settings                map[string]Settings
+	activeDisabledPluginIDs map[string][]string
+	terminals               map[string][]BackgroundTerminal
+	terminalCancels         map[string]context.CancelFunc
+	shellHistory            map[string][]string
 }
 
 func NewThreadExtraService() *ThreadExtraService {
 	return &ThreadExtraService{
-		goals:           NewGoalStore(),
-		settings:        map[string]Settings{},
-		terminals:       map[string][]BackgroundTerminal{},
-		terminalCancels: map[string]context.CancelFunc{},
-		shellHistory:    map[string][]string{},
+		goals:                   NewGoalStore(),
+		settings:                map[string]Settings{},
+		activeDisabledPluginIDs: map[string][]string{},
+		terminals:               map[string][]BackgroundTerminal{},
+		terminalCancels:         map[string]context.CancelFunc{},
+		shellHistory:            map[string][]string{},
 	}
 }
 
@@ -680,6 +682,9 @@ func (s *ThreadExtraService) ensureLocked() {
 	}
 	if s.settings == nil {
 		s.settings = map[string]Settings{}
+	}
+	if s.activeDisabledPluginIDs == nil {
+		s.activeDisabledPluginIDs = map[string][]string{}
 	}
 	if s.terminals == nil {
 		s.terminals = map[string][]BackgroundTerminal{}
@@ -788,6 +793,57 @@ func cloneSettings(settings Settings) Settings {
 	settings.Personality = cloneString(settings.Personality)
 	settings.RuntimeWorkspaceRoots = append([]string(nil), settings.RuntimeWorkspaceRoots...)
 	return settings
+}
+
+// SetActiveDisabledPluginIDs records the plugin selection of the thread's
+// currently admitted task. A pending settings change stays pending until the
+// next task activates it (Rust #44655).
+func (s *ThreadExtraService) SetActiveDisabledPluginIDs(threadID string, ids []string) {
+	if s == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureLocked()
+	s.activeDisabledPluginIDs[threadID] = append([]string{}, ids...)
+}
+
+// ActiveDisabledPluginIDs returns the last admitted task's selection, reporting
+// whether one has been activated yet.
+func (s *ThreadExtraService) ActiveDisabledPluginIDs(threadID string) ([]string, bool) {
+	if s == nil {
+		return nil, false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids, ok := s.activeDisabledPluginIDs[threadID]
+	if !ok {
+		return nil, false
+	}
+	return append([]string{}, ids...), true
+}
+
+// ClearActiveDisabledPluginIDs forgets the activated selection, so the next
+// task re-activates it from the thread's saved settings.
+func (s *ThreadExtraService) ClearActiveDisabledPluginIDs(threadID string) {
+	if s == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.activeDisabledPluginIDs, threadID)
 }
 
 func (s *ThreadExtraService) ShellCommand(params *ShellCommandParams) (*ShellCommandResponse, error) {

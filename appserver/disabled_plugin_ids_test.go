@@ -155,6 +155,84 @@ func TestRuntimeRouterPluginDiscoverableConfigIncludesThreadDisabledPluginsLikeR
 	}
 }
 
+// TestThreadExtraActiveDisabledPluginIDsActivation covers the storage contract
+// for the last admitted task's selection (#44655 activation timing).
+func TestThreadExtraActiveDisabledPluginIDsActivation(t *testing.T) {
+	service := NewThreadExtraService()
+	if _, ok := service.ActiveDisabledPluginIDs("t"); ok {
+		t.Fatal("expected no active selection before activation")
+	}
+	service.SetActiveDisabledPluginIDs("t", []string{"a@m"})
+	got, ok := service.ActiveDisabledPluginIDs("t")
+	if !ok || !reflect.DeepEqual(got, []string{"a@m"}) {
+		t.Fatalf("active selection = %#v ok=%v, want [a@m]", got, ok)
+	}
+	// Mutating the returned slice must not affect stored state.
+	got[0] = "b@m"
+	if again, _ := service.ActiveDisabledPluginIDs("t"); !reflect.DeepEqual(again, []string{"a@m"}) {
+		t.Fatalf("stored selection mutated: %#v", again)
+	}
+	service.ClearActiveDisabledPluginIDs("t")
+	if _, ok := service.ActiveDisabledPluginIDs("t"); ok {
+		t.Fatal("expected cleared active selection")
+	}
+}
+
+// TestRuntimeRouterActiveDisabledPluginIDsDeferToNextTaskLikeRust covers the
+// #44655 activation timing: a pending settings change does not alter the running
+// task's selection, the next task activates it, and unloading falls back to the
+// saved settings.
+func TestRuntimeRouterActiveDisabledPluginIDsDeferToNextTaskLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+	})
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	ids := []string{"a@m"}
+	if _, err := router.services.ThreadExtras.UpdateSettings(&SettingsUpdateParams{ThreadID: threadID, DisabledPluginIDs: &ids}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if err := router.prepareTurnStartParams(&turn.TurnStartParams{ThreadID: threadID}); err != nil {
+		t.Fatalf("prepareTurnStartParams: %v", err)
+	}
+	if got := router.threadDisabledPluginIDs(threadID); !reflect.DeepEqual(got, []string{"a@m"}) {
+		t.Fatalf("active selection = %#v, want [a@m]", got)
+	}
+
+	// A pending settings change must not affect the running task.
+	next := []string{"b@m"}
+	if _, err := router.services.ThreadExtras.UpdateSettings(&SettingsUpdateParams{ThreadID: threadID, DisabledPluginIDs: &next}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if got := router.threadDisabledPluginIDs(threadID); !reflect.DeepEqual(got, []string{"a@m"}) {
+		t.Fatalf("pending change leaked into the active selection: %#v", got)
+	}
+
+	// The next task activates the pending selection.
+	if err := router.prepareTurnStartParams(&turn.TurnStartParams{ThreadID: threadID}); err != nil {
+		t.Fatalf("prepareTurnStartParams: %v", err)
+	}
+	if got := router.threadDisabledPluginIDs(threadID); !reflect.DeepEqual(got, []string{"b@m"}) {
+		t.Fatalf("next-task selection = %#v, want [b@m]", got)
+	}
+
+	// Unloading drops the activated selection, so a cold read falls back to the
+	// thread's saved settings.
+	router.markThreadUnloaded(threadID)
+	if got := router.threadDisabledPluginIDs(threadID); !reflect.DeepEqual(got, []string{"b@m"}) {
+		t.Fatalf("post-unload selection = %#v, want saved settings [b@m]", got)
+	}
+}
+
 // TestThreadExtraSettingsDisabledPluginIDsReplacePreserveClearLikeRust covers
 // the #44905 selection semantics: a supplied list replaces, omission/null
 // preserves, and [] clears.
