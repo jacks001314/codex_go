@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 983 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 983", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 986 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 986", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -65,7 +65,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 	return []rustTUISnapshotDir{
 		{
 			Path:     "tui/src/app/snapshots",
-			Files:    28,
+			Files:    29,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -184,7 +184,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/chatwidget/tests/snapshots",
-			Files:    44,
+			Files:    45,
 			Owner:    "tui/chatwidget",
 			Focus:    "chatwidget approval request modal and history snapshots",
 			Priority: []string{"approval", "history"},
@@ -268,7 +268,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/snapshots",
-			Files:    164,
+			Files:    165,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},

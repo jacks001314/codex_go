@@ -103,7 +103,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tui/src/chatwidget/tests",
-			Files: 81,
+			Files: 82,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -114,7 +114,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tui/src/chatwidget/tests/snapshots",
-			Files: 44,
+			Files: 45,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{
