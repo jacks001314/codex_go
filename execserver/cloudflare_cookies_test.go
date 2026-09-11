@@ -37,6 +37,45 @@ func TestChatGPTCloudflareCookieStoreMatchesRustAllowlist(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #43895: the __oailb routing cookie is replayed with its host,
+// path, and HTTPS scope, and removed with Max-Age=0.
+func TestChatGPTCloudflareCookieStoreReplaysOailbWithScope(t *testing.T) {
+	jar := newChatGPTCloudflareCookieJar()
+	setURL, _ := url.Parse("https://chatgpt.com/backend-api/codex/responses")
+	jar.SetCookies(setURL, []*http.Cookie{{
+		Name:     "__oailb",
+		Value:    "route",
+		Path:     "/backend-api",
+		MaxAge:   3600,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}})
+
+	followup, _ := url.Parse("https://chatgpt.com/backend-api/ps/mcp")
+	cookies := jar.Cookies(followup)
+	if len(cookies) != 1 || cookies[0].Name != "__oailb" || cookies[0].Value != "route" {
+		t.Fatalf("__oailb cookies = %#v", cookies)
+	}
+	for _, rawURL := range []string{
+		"https://chatgpt.com/",
+		"https://other.chatgpt.com/backend-api/ps/mcp",
+		"https://api.openai.com/backend-api/ps/mcp",
+		"http://chatgpt.com/backend-api/ps/mcp",
+	} {
+		target, _ := url.Parse(rawURL)
+		if cookies := jar.Cookies(target); len(cookies) != 0 {
+			t.Fatalf("__oailb cookies for %s = %#v, want none", rawURL, cookies)
+		}
+	}
+
+	// Max-Age=0 (Go: MaxAge<0) removes the cookie.
+	jar.SetCookies(setURL, []*http.Cookie{{Name: "__oailb", Value: "", Path: "/backend-api", MaxAge: -1, Secure: true}})
+	if cookies := jar.Cookies(followup); len(cookies) != 0 {
+		t.Fatalf("expired __oailb cookies = %#v", cookies)
+	}
+}
+
 func TestChatGPTCloudflareCookieStoreRejectsHTTPAndSuffixTricksLikeRust(t *testing.T) {
 	jar := newChatGPTCloudflareCookieJar()
 	for _, rawURL := range []string{

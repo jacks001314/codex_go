@@ -70,6 +70,10 @@ func isAllowedCloudflareCookieName(name string) bool {
 	switch name {
 	case "__cf_bm", "__cflb", "__cfruid", "__cfseq", "__cfwaitingroom", "_cfuvid", "cf_clearance", "cf_ob_info", "cf_use_ob":
 		return true
+	// `__oailb` is an OpenAI infrastructure routing cookie, not an
+	// authentication cookie (Rust #43895).
+	case "__oailb":
+		return true
 	default:
 		return strings.HasPrefix(name, "cf_chl_")
 	}
