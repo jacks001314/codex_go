@@ -7561,9 +7561,37 @@ func (r *RuntimeRouter) handleAppInstalled(request *Request) (*apps.AppsInstalle
 	}
 	service := r.requireApps()
 	service.SetConfigValues(configValues)
+	r.configureAppAccessibleProvider(service)
 	response, err := service.Installed(&params)
+	usedFallback := false
+	if err != nil && params.ForceRefresh {
+		// Rust #43039: a failed forced refresh keeps the last working catalog
+		// instead of publishing an empty one.
+		fallback := params
+		fallback.ForceRefresh = false
+		if cached, cacheErr := service.Installed(&fallback); cacheErr == nil {
+			response, err, usedFallback = cached, nil, true
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to read installed app runtime state: %w", err)
+	}
+	// Rust #43039: with a thread, callable reflects the refreshed snapshot's
+	// model-visible codex_apps tools eligible under the runtime's generic MCP
+	// policy, not just effective app enablement. A fallback (failed refresh)
+	// keeps the previous snapshot's callable state.
+	if !usedFallback && len(response.Apps) > 0 && r.services.MCP != nil {
+		threadID := ""
+		if params.ThreadID != nil {
+			threadID = strings.TrimSpace(*params.ThreadID)
+		}
+		cfg := &config.Config{Values: configValues}
+		tools, connectors := r.mcpRuntimeInputsForServiceWithRequirements(threadID, cfg, r.services.MCP, nil, nil)
+		callable := mcp.CodexAppsModelVisibleConnectorIDs(tools, connectors)
+		for i := range response.Apps {
+			app := &response.Apps[i]
+			app.Callable = app.Enabled && callable[app.ID]
+		}
 	}
 	return response, nil
 }

@@ -253,6 +253,20 @@ func NormalizeRuntimeToolsForModel(tools []RuntimeToolInfo) []RuntimeToolInfo {
 	return out
 }
 
+// CodexAppsModelVisibleConnectorIDs returns the connector IDs that expose at
+// least one model-visible codex_apps tool allowed by the enabled-connector
+// policy (Rust #43039 app/installed `callable` eligibility).
+func CodexAppsModelVisibleConnectorIDs(tools []RuntimeToolInfo, connectors []RuntimeConnector) map[string]bool {
+	eligible := filterRuntimeCodexApps(NormalizeRuntimeToolsForModel(tools), connectors)
+	out := make(map[string]bool, len(eligible))
+	for i := range eligible {
+		if id := strings.TrimSpace(eligible[i].ConnectorID); id != "" {
+			out[id] = true
+		}
+	}
+	return out
+}
+
 func runtimeCodexAppsCallableNamespace(info RuntimeToolInfo, fallback string) string {
 	base := firstNonEmpty(strings.TrimSpace(fallback), RuntimeCodexAppsMCPServerName)
 	if strings.HasPrefix(base, LegacyMCPToolNamePrefix) || strings.Contains(base, MCPToolNameDelimiter) {
