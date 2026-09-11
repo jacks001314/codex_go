@@ -49,6 +49,23 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 	}
 	for i := range items {
 		if recorder.IsPaginated() {
+			// Harness-authored configuration updates have no core TurnItem
+			// variant; persist them as trusted response_item lines (Rust #43110).
+			if payload, metadata, ok := configurationUpdateRolloutItem(&items[i]); ok {
+				createdAt := itemTime(items[i].CreatedAt, now)
+				line := Line{
+					Type:         "response_item",
+					Timestamp:    createdAt.UTC().Format(time.RFC3339Nano),
+					Item:         payload,
+					ItemMetadata: metadata,
+					ItemID:       items[i].ID,
+					TurnID:       sessionItemTurnID(&items[i], i),
+				}
+				if err := recorder.AppendLine(line); err != nil {
+					return fmt.Errorf("append paginated response item %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)
+				}
+				continue
+			}
 			raw, turnID, err := CoreTurnItemJSONFromSessionItem(&items[i])
 			if err != nil {
 				return fmt.Errorf("encode paginated session item %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)

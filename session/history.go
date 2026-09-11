@@ -150,6 +150,15 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 	if item == nil {
 		return nil
 	}
+	// Trusted configuration updates are reconstructed from their metadata even
+	// when the persisted rollout line carries a raw payload: the Raw fast-path
+	// below would otherwise treat them as untrusted and drop them (Rust #43110).
+	if item.Type == "configuration_update" {
+		if !harnessAuthoredConfigurationUpdate(item) {
+			return nil
+		}
+		return configurationUpdateInputItem(item)
+	}
 	if len(item.Raw) > 0 {
 		var raw any
 		if err := json.Unmarshal(item.Raw, &raw); err == nil {
@@ -157,12 +166,6 @@ func InputItemFromItem(item *Item, options *HistoryBuildOptions) any {
 				return sanitizeHistoryInputItem(raw)
 			}
 		}
-	}
-	if item.Type == "configuration_update" {
-		if !harnessAuthoredConfigurationUpdate(item) {
-			return nil
-		}
-		return configurationUpdateInputItem(item)
 	}
 	if nonModelVisibleHistoryItemType(item.Type) || item.Type == "reasoning" {
 		return nil

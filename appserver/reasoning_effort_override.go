@@ -6,6 +6,7 @@ import (
 	"codex_go/config"
 	"codex_go/features"
 	"codex_go/model"
+	"codex_go/reasoningoverride"
 	"codex_go/turn"
 )
 
@@ -15,50 +16,25 @@ import (
 // an OpenAI model that uses Responses Lite, the sampling request keeps a pinned
 // baseline effort for the current context window while trusted
 // `configuration_update` items carry the selected effort. Only harness-authored
-// items establish an override.
+// items establish an override. The pin and decision logic live in
+// `reasoningoverride` so the app-server and exec entry points share it.
 
-type requestEffortUsage int
-
-const (
-	requestEffortSampling requestEffortUsage = iota
-	requestEffortCompaction
-)
-
-type reasoningEffortPinKind int
+type requestEffortUsage = reasoningoverride.Usage
 
 const (
-	reasoningEffortPinUnset reasoningEffortPinKind = iota
-	// reasoningEffortPinCompacted marks the pin retired by a successful
-	// compaction, so the next sampling request re-establishes the selected
-	// effort without an extra configuration update.
-	reasoningEffortPinCompacted
-	reasoningEffortPinActive
+	requestEffortSampling   = reasoningoverride.UsageSampling
+	requestEffortCompaction = reasoningoverride.UsageCompaction
 )
 
-// reasoningEffortPin mirrors Rust `ReasoningEffortPin`: the original request
-// effort for the current model while configuration updates remain active.
-type reasoningEffortPin struct {
-	kind   reasoningEffortPinKind
-	model  string
-	effort string
-}
+// reasoningEffortPin aliases the shared pin so RuntimeRouter's per-thread map
+// keeps its existing shape.
+type reasoningEffortPin = reasoningoverride.Pin
 
-func (p reasoningEffortPin) get(modelSlug string) (string, bool) {
-	if p.kind == reasoningEffortPinActive && p.model == modelSlug {
-		return p.effort, true
-	}
-	return "", false
-}
-
-func (p *reasoningEffortPin) pin(modelSlug string, effort string) string {
-	if pinned, ok := p.get(modelSlug); ok {
-		return pinned
-	}
-	p.kind = reasoningEffortPinActive
-	p.model = modelSlug
-	p.effort = effort
-	return effort
-}
+const (
+	reasoningEffortPinUnset     = reasoningoverride.PinUnset
+	reasoningEffortPinCompacted = reasoningoverride.PinCompacted
+	reasoningEffortPinActive    = reasoningoverride.PinActive
+)
 
 func (r *RuntimeRouter) reasoningEffortPinState(threadID string) reasoningEffortPin {
 	r.reasoningEffortMu.Lock()
@@ -75,7 +51,7 @@ func (r *RuntimeRouter) setReasoningEffortPinState(threadID string, pin reasonin
 	if r.reasoningEffortPins == nil {
 		r.reasoningEffortPins = map[string]reasoningEffortPin{}
 	}
-	if pin.kind == reasoningEffortPinUnset {
+	if pin.Kind == reasoningEffortPinUnset {
 		delete(r.reasoningEffortPins, threadID)
 		return
 	}
@@ -99,7 +75,7 @@ func (r *RuntimeRouter) markReasoningEffortPinCompacted(threadID string) {
 	if r == nil || strings.TrimSpace(threadID) == "" {
 		return
 	}
-	r.setReasoningEffortPinState(threadID, reasoningEffortPin{kind: reasoningEffortPinCompacted})
+	r.setReasoningEffortPinState(threadID, reasoningEffortPin{Kind: reasoningEffortPinCompacted})
 }
 
 func reasoningEffortFeatureEnabled(cfg *config.Config) bool {
@@ -110,28 +86,19 @@ func reasoningEffortFeatureEnabled(cfg *config.Config) bool {
 // the resolved effort a trusted update may carry, gated on the feature,
 // Responses Lite, an OpenAI provider, and a known (non-custom) effort.
 func (r *RuntimeRouter) effortForConfigurationUpdate(cfg *config.Config, params *turn.TurnStartParams, modelInfo *model.ModelInfo, providerID string) (string, bool) {
-	if r == nil || cfg == nil || modelInfo == nil || !reasoningEffortFeatureEnabled(cfg) {
+	if r == nil || cfg == nil || modelInfo == nil {
 		return "", false
 	}
-	if !modelInfo.UseResponsesLite {
-		return "", false
+	providerOpenAI := false
+	if providerInfo, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url")); err == nil && providerInfo != nil && providerInfo.IsOpenAI() {
+		providerOpenAI = true
 	}
-	providerInfo, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
-	if err != nil || providerInfo == nil || !providerInfo.IsOpenAI() {
-		return "", false
-	}
-	effective := appReasoningEffortForTurn(cfg, params)
-	if effective == "" {
-		effective = strings.TrimSpace(modelInfo.DefaultReasoningLevel)
-	}
-	if effective == "" {
-		return "", false
-	}
-	resolved := model.ResolveReasoningEffort(modelInfo, effective)
-	if resolved == "" || !model.IsKnownReasoningEffort(resolved) {
-		return "", false
-	}
-	return resolved, true
+	return reasoningoverride.EffortForConfigurationUpdate(
+		reasoningEffortFeatureEnabled(cfg),
+		providerOpenAI,
+		modelInfo,
+		appReasoningEffortForTurn(cfg, params),
+	)
 }
 
 // reasoningEffortOverrideInputItems mirrors Rust
@@ -139,89 +106,42 @@ func (r *RuntimeRouter) effortForConfigurationUpdate(cfg *config.Config, params 
 // appends a trusted configuration_update for the selected effort. It must be
 // evaluated before the request effort is pinned for the turn.
 func (r *RuntimeRouter) reasoningEffortOverrideInputItems(threadID, modelSlug, effort string, overrideAvailable bool, historyItems []any) []any {
-	if r == nil || !overrideAvailable || effort == "" {
+	if r == nil {
 		return nil
 	}
-	pin := r.reasoningEffortPinState(threadID)
-	if pin.kind == reasoningEffortPinCompacted {
-		// Only a successful compaction retires the request baseline; the next
-		// update re-activates the pin for the selected effort.
-		pin.pin(modelSlug, effort)
-		r.setReasoningEffortPinState(threadID, pin)
-	}
-	established, establishedIsTail, hasEstablished := latestTrustedReasoningUpdate(historyItems)
-	// Recovery adds no user message: reuse a matching trusted tail update even
-	// before this runtime establishes its pin (Rust #44276).
-	if hasEstablished && establishedIsTail && established == effort {
-		return nil
-	}
-	if pinned, ok := pin.get(modelSlug); ok {
-		compare := pinned
-		if hasEstablished {
-			compare = established
-		}
-		if compare == effort {
-			return nil
-		}
-	}
-	return []any{map[string]any{
-		"type":      "configuration_update",
-		"reasoning": map[string]any{"effort": effort},
-	}}
-}
-
-// latestTrustedReasoningUpdate returns the most recent trusted
-// configuration_update effort in model-visible history, whether it is the last
-// item, and whether one exists. Untrusted updates never reach this input list
-// (history conversion drops them).
-func latestTrustedReasoningUpdate(historyItems []any) (string, bool, bool) {
-	for i := len(historyItems) - 1; i >= 0; i-- {
-		payload, ok := configurationUpdatePayload(historyItems[i])
-		if !ok || stringFromMap(payload, "type") != "configuration_update" {
-			continue
-		}
-		reasoning, _ := payload["reasoning"].(map[string]any)
-		effort := strings.TrimSpace(stringFromMap(reasoning, "effort"))
-		if effort == "" {
-			continue
-		}
-		return effort, i == len(historyItems)-1, true
-	}
-	return "", false, false
+	items, pin := reasoningoverride.OverrideInputItems(
+		r.reasoningEffortPinState(threadID),
+		modelSlug,
+		effort,
+		overrideAvailable,
+		historyItems,
+	)
+	r.setReasoningEffortPinState(threadID, pin)
+	return items
 }
 
 // reasoningEffortForRequest mirrors Rust `Session::reasoning_effort_for_request`.
 // Sampling pins the selected effort for the current model; compaction reuses
 // the pin when it matches and never mutates it.
 func (r *RuntimeRouter) reasoningEffortForRequest(threadID, modelSlug, selectedEffort string, featureEnabled bool, overrideEffort string, overrideAvailable bool, usage requestEffortUsage) string {
-	if r == nil || !featureEnabled {
+	if r == nil {
 		return selectedEffort
 	}
-	if usage == requestEffortCompaction {
-		if pinned, ok := r.reasoningEffortPinState(threadID).get(modelSlug); ok {
-			return pinned
-		}
-	}
-	if !overrideAvailable {
-		if usage == requestEffortSampling {
-			r.clearReasoningEffortPin(threadID)
-		}
-		return selectedEffort
-	}
-	if usage == requestEffortSampling {
-		pin := r.reasoningEffortPinState(threadID)
-		effort := pin.pin(modelSlug, overrideEffort)
-		r.setReasoningEffortPinState(threadID, pin)
-		return effort
-	}
-	return overrideEffort
+	effort, pin := reasoningoverride.RequestEffort(
+		r.reasoningEffortPinState(threadID),
+		modelSlug,
+		selectedEffort,
+		featureEnabled,
+		overrideEffort,
+		overrideAvailable,
+		usage,
+	)
+	r.setReasoningEffortPinState(threadID, pin)
+	return effort
 }
 
 func reasoningEffortModelSlug(modelInfo *model.ModelInfo, fallback string) string {
-	if modelInfo != nil && strings.TrimSpace(modelInfo.Slug) != "" {
-		return strings.TrimSpace(modelInfo.Slug)
-	}
-	return strings.TrimSpace(fallback)
+	return reasoningoverride.ModelSlug(modelInfo, fallback)
 }
 
 func isConfigurationUpdateInputItem(item any) bool {

@@ -29,25 +29,25 @@ func trustedReasoningUpdate(effort string) map[string]any {
 
 func TestReasoningEffortPinLikeRust(t *testing.T) {
 	var pin reasoningEffortPin
-	if _, ok := pin.get("gpt-5"); ok {
+	if _, ok := pin.Get("gpt-5"); ok {
 		t.Fatal("unset pin should have no effort")
 	}
-	if got := pin.pin("gpt-5", "high"); got != "high" {
+	if got := pin.Pin("gpt-5", "high"); got != "high" {
 		t.Fatalf("pin = %q, want high", got)
 	}
-	if got, ok := pin.get("gpt-5"); !ok || got != "high" {
+	if got, ok := pin.Get("gpt-5"); !ok || got != "high" {
 		t.Fatalf("get = %q,%v want high,true", got, ok)
 	}
 	// A different model does not reuse the pin and replaces it.
-	if got := pin.pin("gpt-6", "low"); got != "low" {
+	if got := pin.Pin("gpt-6", "low"); got != "low" {
 		t.Fatalf("pin other model = %q, want low", got)
 	}
-	if _, ok := pin.get("gpt-5"); ok {
+	if _, ok := pin.Get("gpt-5"); ok {
 		t.Fatal("old model should no longer be pinned")
 	}
 	// Compacted pins are not active.
-	pin = reasoningEffortPin{kind: reasoningEffortPinCompacted}
-	if _, ok := pin.get("gpt-5"); ok {
+	pin = reasoningEffortPin{Kind: reasoningEffortPinCompacted}
+	if _, ok := pin.Get("gpt-5"); ok {
 		t.Fatal("compacted pin should not report an effort")
 	}
 }
@@ -64,7 +64,7 @@ func TestReasoningEffortOverrideInputItemsLikeRust(t *testing.T) {
 
 	// Pin now matches and history is empty -> the request pin already covers it
 	// only after it is established; history without an update still records.
-	router.setReasoningEffortPinState(threadID, reasoningEffortPin{kind: reasoningEffortPinActive, model: "gpt-5", effort: "high"})
+	router.setReasoningEffortPinState(threadID, reasoningEffortPin{Kind: reasoningEffortPinActive, Model: "gpt-5", Effort: "high"})
 	if items := router.reasoningEffortOverrideInputItems(threadID, "gpt-5", "high", true, nil); len(items) != 0 {
 		t.Fatalf("matching pin items = %#v, want none", items)
 	}
@@ -101,7 +101,7 @@ func TestReasoningEffortForRequestLikeRust(t *testing.T) {
 	if got := router.reasoningEffortForRequest(threadID, "gpt-5", "high", false, "high", true, requestEffortSampling); got != "high" {
 		t.Fatalf("disabled feature effort = %q, want high", got)
 	}
-	if _, ok := router.reasoningEffortPinState(threadID).get("gpt-5"); ok {
+	if _, ok := router.reasoningEffortPinState(threadID).Get("gpt-5"); ok {
 		t.Fatal("disabled feature must not pin")
 	}
 
@@ -117,7 +117,7 @@ func TestReasoningEffortForRequestLikeRust(t *testing.T) {
 	if got := router.reasoningEffortForRequest(threadID, "gpt-5", "low", true, "medium", true, requestEffortCompaction); got != "high" {
 		t.Fatalf("compaction effort = %q, want pinned high", got)
 	}
-	if got, _ := router.reasoningEffortPinState(threadID).get("gpt-5"); got != "high" {
+	if got, _ := router.reasoningEffortPinState(threadID).Get("gpt-5"); got != "high" {
 		t.Fatalf("compaction mutated pin to %q", got)
 	}
 
@@ -125,7 +125,7 @@ func TestReasoningEffortForRequestLikeRust(t *testing.T) {
 	if got := router.reasoningEffortForRequest(threadID, "gpt-5", "medium", true, "", false, requestEffortSampling); got != "medium" {
 		t.Fatalf("unavailable effort = %q, want medium", got)
 	}
-	if _, ok := router.reasoningEffortPinState(threadID).get("gpt-5"); ok {
+	if _, ok := router.reasoningEffortPinState(threadID).Get("gpt-5"); ok {
 		t.Fatal("unavailable overrides must clear the pin")
 	}
 }

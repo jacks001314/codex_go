@@ -102,6 +102,19 @@ func (r *Recorder) appendPaginatedItem(item Item, now time.Time) error {
 	for i := range item.Content {
 		sessionItem.Content = append(sessionItem.Content, session.ContentPart{Type: item.Content[i].Type, Text: item.Content[i].Text, ImageURL: item.Content[i].ImageURL, Detail: cloneStringPtr(item.Content[i].Detail)})
 	}
+	// Harness-authored configuration updates have no core TurnItem variant; they
+	// persist as trusted response_item rollout lines (Rust #43110).
+	if payload, metadata, ok := configurationUpdateRolloutItem(&sessionItem); ok {
+		line := Line{
+			Type:         "response_item",
+			Timestamp:    now.UTC().Format(time.RFC3339Nano),
+			Item:         payload,
+			ItemMetadata: metadata,
+			ItemID:       item.ID,
+			TurnID:       sessionItemExactTurnID(&sessionItem),
+		}
+		return r.AppendLine(line)
+	}
 	raw, turnID, err := CoreTurnItemJSONFromSessionItem(&sessionItem)
 	if err != nil || len(raw) == 0 {
 		return err

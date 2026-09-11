@@ -37,6 +37,7 @@ import (
 	"codex_go/network"
 	"codex_go/prompt"
 	"codex_go/protocol"
+	"codex_go/reasoningoverride"
 	"codex_go/review"
 	"codex_go/rollout"
 	"codex_go/sandbox"
@@ -103,6 +104,11 @@ type Runner struct {
 	goalMu       *sync.Mutex
 	goalThreadID string
 	goalTurnID   string
+
+	// reasoningEffortMu guards the per-thread reasoning-effort request pin
+	// (Rust #43110/#43795); the map is created lazily.
+	reasoningEffortMu   sync.Mutex
+	reasoningEffortPins map[string]reasoningoverride.Pin
 }
 
 func NewRunner(codexHome string) *Runner {
@@ -302,9 +308,32 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	runPrompt := prompt
 	execStartupItems := execStartupInputItems(req, permissionProfile, approvalPolicy, r.now())
+	historyInputItems := resumeInputItems(resumeContext)
+	if resumeContext != nil {
+		// Rust #43795: a resumed session re-establishes the selected effort.
+		r.setReasoningEffortPinState(threadID, reasoningoverride.Pin{})
+	}
+	// Rust #43110/#43795: decide the trusted configuration update before pinning
+	// the request baseline so the sampling request keeps its pinned effort.
+	overrideItems, requestReasoningEffort := r.execReasoningEffortOverride(
+		threadID, cfg, modelID, &modelInfo, providerID, reasoningEffort,
+		append(append([]any(nil), execStartupItems...), historyInputItems...),
+	)
+	if len(overrideItems) > 0 {
+		req.AdditionalInputItems = append(append([]any(nil), req.AdditionalInputItems...), overrideItems...)
+	}
 	inputItems := append([]any(nil), execStartupItems...)
-	inputItems = append(inputItems, resumeInputItems(resumeContext)...)
-	inputItems = append(inputItems, req.AdditionalInputItems...)
+	inputItems = append(inputItems, historyInputItems...)
+	// Configuration updates follow the accepted input in the request, matching
+	// the app-server ordering.
+	var postPromptInputItems []any
+	for _, item := range req.AdditionalInputItems {
+		if isExecConfigurationUpdateItem(item) {
+			postPromptInputItems = append(postPromptInputItems, item)
+			continue
+		}
+		inputItems = append(inputItems, item)
+	}
 	if len(requestInputs) > 0 {
 		if item := userMessageInputItemFromTurnInputs(prompt, requestInputs, requestCWD(req)); item != nil {
 			inputItems = append(inputItems, item)
@@ -383,6 +412,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		Config:                         cfg,
 		Prompt:                         runPrompt,
 		InputItems:                     inputItems,
+		PostPromptInputItems:           postPromptInputItems,
 		Model:                          modelID,
 		ToolMode:                       model.ResolveToolMode(modelInfo.ToolMode, cfg.FeatureSettings()),
 		CodeModeHostEnabled:            features.Enabled(cfg.FeatureSettings(), "code_mode_host"),
@@ -395,7 +425,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		Originator:                     originator,
 		PreviousResponseID:             resumePreviousResponseID(resumeContext),
 		ParallelToolCalls:              parallelToolCalls,
-		ReasoningEffort:                reasoningEffort,
+		ReasoningEffort:                requestReasoningEffort,
 		ConcurrentReasoningSummaries:   concurrentReasoningSummaries,
 		ModelVerbosity:                 modelVerbosity,
 		IncludeTimingMetrics:           includeTimingMetrics,
@@ -552,10 +582,13 @@ func execReviewSubagentMetadata(req *Request) (string, string) {
 }
 
 type agentRunConfig struct {
-	Config                         *config.Config
-	Prompt                         string
-	Instructions                   string
-	InputItems                     []any
+	Config       *config.Config
+	Prompt       string
+	Instructions string
+	InputItems   []any
+	// PostPromptInputItems are appended after the prompt's user message for the
+	// first sampling request (Rust #43110 trusted configuration updates).
+	PostPromptInputItems           []any
 	Model                          string
 	ToolMode                       string
 	CodeModeHostEnabled            bool
@@ -1046,6 +1079,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		Prompt:                       run.Prompt,
 		Instructions:                 run.Instructions,
 		InputItems:                   append([]any(nil), run.InputItems...),
+		PostPromptInputItems:         append([]any(nil), run.PostPromptInputItems...),
 		HostedTools:                  append([]any(nil), run.HostedTools...),
 		Model:                        run.Model,
 		ToolMode:                     run.ToolMode,
@@ -5150,6 +5184,10 @@ func execAdditionalInputSessionItems(turnID string, inputItems []any, createdAt 
 	}
 	items := make([]session.Item, 0, len(inputItems))
 	for i, item := range inputItems {
+		if update, ok := execConfigurationUpdateSessionItem(turnID, i, item, createdAt, extraMetadata); ok {
+			items = append(items, update)
+			continue
+		}
 		if communication, ok := execAgentCommunicationSessionItem(turnID, i, item, createdAt, extraMetadata); ok {
 			items = append(items, communication)
 			continue
@@ -5172,6 +5210,32 @@ func execAdditionalInputSessionItems(turnID string, inputItems []any, createdAt 
 		})
 	}
 	return items
+}
+
+// execConfigurationUpdateSessionItem persists a trusted reasoning-effort
+// configuration_update (Rust #43110) so it replays as harness-authored history.
+func execConfigurationUpdateSessionItem(turnID string, index int, item any, createdAt time.Time, extraMetadata map[string]any) (session.Item, bool) {
+	raw, ok := item.(map[string]any)
+	if !ok || strings.TrimSpace(execStringFromAny(raw["type"])) != "configuration_update" {
+		return session.Item{}, false
+	}
+	reasoning, _ := raw["reasoning"].(map[string]any)
+	effort := strings.TrimSpace(execStringFromAny(reasoning["effort"]))
+	if effort == "" {
+		return session.Item{}, false
+	}
+	metadata := sessionMetadata(turnID, extraMetadata)
+	metadata["kind"] = "configuration_update"
+	return session.Item{
+		ID:        fmt.Sprintf("configuration-update-%s-%d", safeSessionItemID(turnID), index+1),
+		Type:      "configuration_update",
+		CreatedAt: createdAt,
+		Data: map[string]any{
+			"reasoning":        map[string]any{"effort": effort},
+			"harness_metadata": json.RawMessage(`{"harness_authored_configuration":true}`),
+		},
+		Metadata: metadata,
+	}, true
 }
 
 func execAgentCommunicationSessionItem(turnID string, index int, item any, createdAt time.Time, extraMetadata map[string]any) (session.Item, bool) {
@@ -6136,6 +6200,63 @@ func effectiveReasoningEffort(req *Request, cfg *config.Config) string {
 		stringConfigValue(cfg, "reasoning_effort"),
 		stringConfigValue(cfg, "reasoningEffort"),
 	)
+}
+
+func (r *Runner) reasoningEffortPinState(threadID string) reasoningoverride.Pin {
+	if r == nil {
+		return reasoningoverride.Pin{}
+	}
+	r.reasoningEffortMu.Lock()
+	defer r.reasoningEffortMu.Unlock()
+	if r.reasoningEffortPins == nil {
+		return reasoningoverride.Pin{}
+	}
+	return r.reasoningEffortPins[threadID]
+}
+
+func (r *Runner) setReasoningEffortPinState(threadID string, pin reasoningoverride.Pin) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	r.reasoningEffortMu.Lock()
+	defer r.reasoningEffortMu.Unlock()
+	if r.reasoningEffortPins == nil {
+		r.reasoningEffortPins = map[string]reasoningoverride.Pin{}
+	}
+	if pin.Kind == reasoningoverride.PinUnset {
+		delete(r.reasoningEffortPins, threadID)
+		return
+	}
+	r.reasoningEffortPins[threadID] = pin
+}
+
+// execReasoningEffortOverride mirrors the app-server/Session reasoning-effort
+// override for the exec entry point (Rust #43110/#43795): it returns the trusted
+// configuration_update items to record and the pinned request effort.
+func (r *Runner) execReasoningEffortOverride(threadID string, cfg *config.Config, modelID string, modelInfo *model.ModelInfo, providerID string, selectedEffort string, historyItems []any) ([]any, string) {
+	if r == nil || cfg == nil || modelInfo == nil {
+		return nil, selectedEffort
+	}
+	featureEnabled := features.Enabled(cfg.FeatureSettings(), "reasoning_effort_override")
+	providerOpenAI := false
+	if info, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url")); err == nil && info != nil && info.IsOpenAI() {
+		providerOpenAI = true
+	}
+	overrideEffort, available := reasoningoverride.EffortForConfigurationUpdate(featureEnabled, providerOpenAI, modelInfo, selectedEffort)
+	slug := reasoningoverride.ModelSlug(modelInfo, modelID)
+	pin := r.reasoningEffortPinState(threadID)
+	items, pin := reasoningoverride.OverrideInputItems(pin, slug, overrideEffort, available, historyItems)
+	requestEffort, pin := reasoningoverride.RequestEffort(pin, slug, selectedEffort, featureEnabled, overrideEffort, available, reasoningoverride.UsageSampling)
+	r.setReasoningEffortPinState(threadID, pin)
+	return items, requestEffort
+}
+
+func isExecConfigurationUpdateItem(item any) bool {
+	raw, ok := item.(map[string]any)
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(execStringFromAny(raw["type"])) == "configuration_update"
 }
 
 func reqSharedValue(req *Request, value func(cli.SharedOptions) string) string {

@@ -245,13 +245,35 @@ func writeCanonicalPaginated(file *os.File, meta *SessionMeta, items []session.I
 			}
 			writtenTurns[turnID] = true
 		}
-		raw, _, err := CoreTurnItemJSONFromSessionItem(item)
-		if err != nil || len(raw) == 0 {
-			continue
-		}
 		completedAt := item.CreatedAt
 		if completedAt.IsZero() {
 			completedAt = createdAt
+		}
+		raw, _, err := CoreTurnItemJSONFromSessionItem(item)
+		if err != nil || len(raw) == 0 {
+			// Harness-authored configuration updates persist as trusted
+			// response_item lines (Rust #43110); other unsupported items drop.
+			if payload, metadata, ok := configurationUpdateRolloutItem(item); ok {
+				ordinalCopy := ordinal
+				line := Line{
+					Type:         "response_item",
+					Timestamp:    completedAt.UTC().Format(time.RFC3339Nano),
+					Item:         payload,
+					ItemMetadata: metadata,
+					ItemID:       item.ID,
+					TurnID:       turnID,
+					Ordinal:      &ordinalCopy,
+				}
+				data, marshalErr := json.Marshal(line)
+				if marshalErr != nil {
+					return 0, marshalErr
+				}
+				if _, writeErr := file.Write(append(data, '\n')); writeErr != nil {
+					return 0, writeErr
+				}
+				ordinal++
+			}
+			continue
 		}
 		if err := writeCanonicalCompletedItem(file, raw, turnID, completedAt, ordinal); err != nil {
 			return 0, err
