@@ -18,12 +18,46 @@ func TestClientPromptFormattedInputStripsImageDetailsForLite(t *testing.T) {
 			{Kind: ClientContentImage, ImageURL: "data:", Detail: "high"},
 		},
 	}}
-	got := prompt.FormattedInput(true)
+	got := prompt.FormattedInput(true, true)
 	if got[0].Content[1].Detail != "" {
 		t.Fatalf("FormattedInput(lite) detail = %q, want empty", got[0].Content[1].Detail)
 	}
 	if prompt.Input[0].Content[1].Detail != "high" {
 		t.Fatalf("FormattedInput mutated prompt")
+	}
+}
+
+func TestClientPromptFormattedInputNormalizesOriginalImageDetail(t *testing.T) {
+	prompt := NewClientPrompt()
+	prompt.Input = []ClientResponseItem{{
+		Type: "message",
+		Role: "user",
+		Content: []ClientContentItem{
+			{Kind: ClientContentText, Text: "hello"},
+			{Kind: ClientContentImage, ImageURL: "data:", Detail: "original"},
+		},
+	}}
+	got := prompt.FormattedInput(false, false)
+	if got[0].Content[1].Detail != "high" {
+		t.Fatalf("FormattedInput(unsupported original) detail = %q, want high", got[0].Content[1].Detail)
+	}
+	if prompt.Input[0].Content[1].Detail != "original" {
+		t.Fatalf("FormattedInput mutated stored prompt detail = %q", prompt.Input[0].Content[1].Detail)
+	}
+	kept := prompt.FormattedInput(false, true)
+	if kept[0].Content[1].Detail != "original" {
+		t.Fatalf("FormattedInput(supported original) detail = %q, want original", kept[0].Content[1].Detail)
+	}
+	low := NewClientPrompt()
+	low.Input = []ClientResponseItem{{
+		Type: "message",
+		Role: "user",
+		Content: []ClientContentItem{
+			{Kind: ClientContentImage, ImageURL: "data:", Detail: "low"},
+		},
+	}}
+	if got := low.FormattedInput(false, false); got[0].Content[0].Detail != "low" {
+		t.Fatalf("FormattedInput(non-original detail) = %q, want low", got[0].Content[0].Detail)
 	}
 }
 

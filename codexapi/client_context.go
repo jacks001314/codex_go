@@ -54,14 +54,19 @@ func NewClientPrompt() *ClientPrompt {
 	return &ClientPrompt{OutputSchemaStrict: true}
 }
 
-func (p *ClientPrompt) FormattedInput(useResponsesLite bool) []ClientResponseItem {
+// FormattedInput returns a request copy of the prompt input with image details
+// normalized for the receiving model, mirroring Rust
+// Prompt::get_formatted_input_for_request (#44249): Responses Lite strips image
+// details entirely, while other models downgrade `original` to the default
+// detail when they do not advertise supports_image_detail_original. The stored
+// prompt is never mutated, so switching back to a supporting model retains
+// `original`.
+func (p *ClientPrompt) FormattedInput(useResponsesLite bool, supportsImageDetailOriginal bool) []ClientResponseItem {
 	if p == nil {
 		return nil
 	}
 	input := cloneClientResponseItems(p.Input)
-	if useResponsesLite {
-		stripClientImageDetails(input)
-	}
+	normalizeClientImageDetails(input, useResponsesLite, supportsImageDetailOriginal)
 	return input
 }
 
@@ -419,11 +424,16 @@ func cloneClientResponseItems(items []ClientResponseItem) []ClientResponseItem {
 	return out
 }
 
-func stripClientImageDetails(items []ClientResponseItem) {
+func normalizeClientImageDetails(items []ClientResponseItem, useResponsesLite bool, supportsImageDetailOriginal bool) {
 	for i := range items {
 		for j := range items[i].Content {
-			if items[i].Content[j].Kind == ClientContentImage {
+			if items[i].Content[j].Kind != ClientContentImage {
+				continue
+			}
+			if useResponsesLite {
 				items[i].Content[j].Detail = ""
+			} else if items[i].Content[j].Detail == "original" && !supportsImageDetailOriginal {
+				items[i].Content[j].Detail = "high"
 			}
 		}
 	}

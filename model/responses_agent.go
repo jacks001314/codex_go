@@ -624,8 +624,14 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		modelID = "gpt-5.5"
 	}
 	modelInfo := r.modelInfoForRequest(modelID)
+	inputItems := responsesInputItemsForProvider(request, r.providerName())
+	if !modelInfo.UseResponsesLite {
+		// Rust #44249: downgrade `original` image detail for models that do not
+		// support it before sending the request over the websocket transport.
+		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
+	}
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: r.gateContentItemKinds(responsesInputItemsForProvider(request, r.providerName())), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
+		Model: modelID, Instructions: responsesInstructions(request), Input: r.gateContentItemKinds(inputItems), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
 		ServiceTier: ServiceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
 		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
@@ -915,6 +921,11 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		inputItems = responsesLiteInputItems(inputItems, tools, instructions, request.ThreadID)
 		instructions = ""
 		tools = nil
+	} else {
+		// Rust #44249: request copies downgrade `original` image detail when the
+		// receiving model does not support it. Stored image details are left
+		// untouched so switching back to a supporting model retains `original`.
+		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
 	}
 	inputItems = r.gateContentItemKinds(inputItems)
 	// Only Responses WebSocket v2 supports previous_response_id. This HTTP/SSE
@@ -1875,6 +1886,52 @@ func stripResponsesLiteImageDetailsInPlace(value any) {
 	case []any:
 		for i := range typed {
 			stripResponsesLiteImageDetailsInPlace(typed[i])
+		}
+	}
+}
+
+// normalizeResponseInputImageDetailsForModel mirrors Rust normalize_image_details
+// (client_common.rs, #44249): request copies downgrade `original` to the default
+// detail when the receiving model does not advertise
+// supports_image_detail_original. Stored items are never mutated, so switching
+// back to a supporting model still sends `original`.
+func normalizeResponseInputImageDetailsForModel(items []any, supportsImageDetailOriginal bool) []any {
+	if supportsImageDetailOriginal || len(items) == 0 {
+		return items
+	}
+	out := make([]any, 0, len(items))
+	for i := range items {
+		out = append(out, downgradeResponseInputImageDetail(items[i]))
+	}
+	return out
+}
+
+func downgradeResponseInputImageDetail(value any) any {
+	if value == nil {
+		return nil
+	}
+	normalized, ok := normalizeResponsesInputValue(value)
+	if !ok {
+		normalized = cloneAny(value)
+	}
+	downgradeResponseInputImageDetailInPlace(normalized)
+	return normalized
+}
+
+func downgradeResponseInputImageDetailInPlace(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		if itemType, _ := typed["type"].(string); itemType == "input_image" || itemType == "image" {
+			if detail, ok := typed["detail"].(string); ok && strings.EqualFold(strings.TrimSpace(detail), "original") {
+				typed["detail"] = "high"
+			}
+		}
+		for _, child := range typed {
+			downgradeResponseInputImageDetailInPlace(child)
+		}
+	case []any:
+		for i := range typed {
+			downgradeResponseInputImageDetailInPlace(typed[i])
 		}
 	}
 }
