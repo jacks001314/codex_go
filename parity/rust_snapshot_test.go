@@ -282,7 +282,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
 		{Path: "core/src/client.rs", SHA256: "42007f9b305603542c67de40e4d2e4a611ee377468dec1d76407cd31daf71e5d"},
 		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "cf3eb92caaba61369f483e09dc5cceb6267730d7df1253b58140eb3fc0ef7b90"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "c2b0f252d78c5eff30c50c401214e1304b85aaf77195fc402ec489071c4dd579"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "f4e18fd3f3ae2e1b89cc8c90133d9bdc2861e882b0861b81cb329c320351cdba"},
 		{Path: "core/tests/suite/mod.rs", SHA256: "92f40acd24e578e03794655ee706a8759d3c81e14f37c16f2a53e4c61a317751"},
 	}
 }

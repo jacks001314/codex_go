@@ -33,6 +33,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "compaction", Owner: "compact, turn", Focus: "thread compaction flow"},
 		{Module: "config_requirements_application", Owner: "config, appserver", Focus: "managed application config requirements enforcement"},
 		{Module: "config_requirements_browser_use", Owner: "config, appserver", Focus: "browser-use config requirements"},
+		{Module: "config_requirements_exec", Owner: "config, appserver, exec", Focus: "managed exec requirements with managed unified exec disabled"},
 		{Module: "config_requirements_in_app_browser", Owner: "config, appserver", Focus: "config requirements and in-app browser import gating"},
 		{Module: "config_model_provider_requirements", Owner: "config, model, appserver", Focus: "managed model provider selection and definition enforcement"},
 		{Module: "config_rpc", Owner: "config, appserver", Focus: "config read/write/requirements RPCs incl. auto-review requirements"},
