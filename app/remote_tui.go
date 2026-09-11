@@ -28,11 +28,13 @@ import (
 	"codex_go/doctor"
 	"codex_go/plugin"
 	"codex_go/protocol"
+	"codex_go/realtime"
 	"codex_go/review"
 	"codex_go/sandbox"
 	"codex_go/session"
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	historycell "codex_go/tui/history_cell"
 	idecontext "codex_go/tui/ide_context"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
@@ -1658,11 +1660,38 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread) []codextui.Mess
 				messages = append(messages, message)
 			}
 		}
+		// Rust #43558: restore the saved completion metadata after each
+		// completed turn's items. Replay never falls back to the local clock.
+		if footer, ok := remoteTUICompletionFooterMessage(turn); ok {
+			messages = append(messages, footer)
+		}
 		if turn.Error != nil && strings.TrimSpace(turn.Error.Message) != "" {
 			messages = append(messages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + strings.TrimSpace(turn.Error.Message)})
 		}
 	}
 	return messages
+}
+
+// remoteTUICompletionFooterMessage restores a completed turn's saved completion
+// metadata as a transcript history line (Rust #43558).
+func remoteTUICompletionFooterMessage(turn appserver.Turn) (codextui.Message, bool) {
+	if turn.Status != appserver.TurnStatusCompleted {
+		return codextui.Message{}, false
+	}
+	var elapsedSeconds *int64
+	if turn.DurationMS != nil && *turn.DurationMS >= 0 {
+		value := *turn.DurationMS / 1000
+		elapsedSeconds = &value
+	}
+	cell := historycell.NewFinalMessageSeparator(elapsedSeconds, nil)
+	if turn.CompletedAt != nil {
+		cell = cell.WithCompletedAt(time.Unix(*turn.CompletedAt, 0).Local())
+	}
+	raw := cell.RawLines()
+	if len(raw) == 0 {
+		return codextui.Message{}, false
+	}
+	return codextui.Message{Role: codextui.RoleHistory, Text: raw[0], RawText: raw[0]}, true
 }
 
 func remoteTUIThreadItemIsReviewUserMessage(item appserver.ThreadItem) bool {
