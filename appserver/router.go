@@ -1805,7 +1805,9 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		record.Metadata.ThreadSource = value
 	}
 	applyThreadForkOverrides(record, &params)
-	setThreadRecordPendingSessionStartSource(record, SessionStartSourceStartup)
+	// Rust #44349: a forked thread reports `fork`, not `startup`, so startup
+	// hooks do not re-run for inherited context.
+	setThreadRecordPendingSessionStartSource(record, SessionStartSourceFork)
 	runtimeWorkspaceRoots := threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil)
 	if !params.Ephemeral {
 		if err := r.saveThreadRecord(record); err != nil {

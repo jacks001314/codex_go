@@ -356,6 +356,36 @@ func TestRouterThreadStartSessionStartSourceValidationAndPersistence(t *testing.
 	}
 }
 
+// Rust #44349: a forked thread reports `fork` so startup hooks are not re-run
+// for inherited context.
+func TestRouterThreadForkSessionStartSourceIsFork(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD: t.TempDir(),
+	}))
+	if start.Error != nil {
+		t.Fatalf("start error: %+v", start.Error)
+	}
+	sourceThreadID := start.Result.(*ThreadStartResponse).Thread.ID
+	materializeThreadRolloutForTest(t, router, store, sourceThreadID)
+
+	fork := router.Handle(requestWithParams(t, IntID(2), MethodThreadFork, map[string]any{
+		"threadId": sourceThreadID,
+	}))
+	if fork.Error != nil {
+		t.Fatalf("fork error: %+v", fork.Error)
+	}
+	forkThreadID := fork.Result.(*ThreadForkResponse).Thread.ID
+	record, err := store.Read(session.ThreadID(forkThreadID), true, true)
+	if err != nil {
+		t.Fatalf("Read fork record error = %v", err)
+	}
+	if got := stringFromMap(record.Metadata.Extra, pendingSessionStartSourceExtraKey); got != string(SessionStartSourceFork) {
+		t.Fatalf("pending session start source = %q, want fork; extra = %#v", got, record.Metadata.Extra)
+	}
+}
+
 func TestRouterThreadListEmptySourceKindsDefaultsToInteractiveSources(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)

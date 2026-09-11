@@ -44,6 +44,8 @@ func sessionStartSourceFromString(value string) (SessionStartSource, bool) {
 		return SessionStartSourceClear, true
 	case SessionStartSourceCompact:
 		return SessionStartSourceCompact, true
+	case SessionStartSourceFork:
+		return SessionStartSourceFork, true
 	default:
 		return "", false
 	}

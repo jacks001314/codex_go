@@ -3777,7 +3777,8 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 		record.Metadata.ThreadSource = value
 	}
 	applyThreadForkOverrides(record, &params)
-	setThreadRecordPendingSessionStartSource(record, SessionStartSourceStartup)
+	// Rust #44349: forked threads report `fork`, not `startup`.
+	setThreadRecordPendingSessionStartSource(record, SessionStartSourceFork)
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	record.Metadata.Extra["ephemeral"] = true
 	r.saveEphemeralThreadRecord(record)
@@ -5091,7 +5092,8 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 		record.Metadata.ThreadSource = value
 	}
 	applyThreadForkOverrides(record, &params)
-	setThreadRecordPendingSessionStartSource(record, SessionStartSourceStartup)
+	// Rust #44349: forked threads report `fork`, not `startup`.
+	setThreadRecordPendingSessionStartSource(record, SessionStartSourceFork)
 	if !params.Ephemeral {
 		if err := r.runtimeSaveThreadRecord(record); err != nil {
 			r.rollbackRuntimeForkInitialization(record)

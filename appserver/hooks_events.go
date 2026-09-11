@@ -12,6 +12,9 @@ const (
 	SessionStartSourceResume  SessionStartSource = "resume"
 	SessionStartSourceClear   SessionStartSource = "clear"
 	SessionStartSourceCompact SessionStartSource = "compact"
+	// Rust #44349: histories with a fork parent report `fork` so startup hooks
+	// are not re-run with duplicate startup context.
+	SessionStartSourceFork SessionStartSource = "fork"
 )
 
 type SubagentHookContext struct {
