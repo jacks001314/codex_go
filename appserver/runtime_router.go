@@ -8200,7 +8200,8 @@ func (r *RuntimeRouter) handleSkillsList(request *Request) (*SkillsListResponse,
 	if err != nil {
 		return nil, err
 	}
-	pluginEntries, pluginErrors, err := r.pluginSkillEntriesAndErrorsForRuntime()
+	// skills/list is threadless, so no per-thread plugin exclusion applies.
+	pluginEntries, pluginErrors, err := r.pluginSkillEntriesAndErrorsForRuntime("")
 	if err != nil {
 		return nil, err
 	}
@@ -8931,6 +8932,14 @@ func (r *RuntimeRouter) configureMCPFromConfig() {
 }
 
 func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
+	return r.runtimeMCPConfigForThread("", values, codexHome, runtimeAuth, requirements)
+}
+
+// runtimeMCPConfigForThread builds the MCP runtime config for one thread. An
+// empty thread ID builds the process-wide config; otherwise servers contributed
+// by plugins the thread has disabled are excluded without changing shared
+// plugin state (Rust #44655).
+func (r *RuntimeRouter) runtimeMCPConfigForThread(threadID string, values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
 	base := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, requirements)
 	if rawFeatures, ok := values["features"].(map[string]any); ok {
 		if settings, _ := features.ResolveSettings(rawFeatures); features.Enabled(settings, "mcp_oauth_refresh_coordination") {
@@ -8946,7 +8955,7 @@ func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string
 	if r == nil || r.services.Plugins == nil {
 		return base
 	}
-	contributions := r.services.Plugins.EnabledMCPServerContributions()
+	contributions := r.filterDisabledPluginMCPContributions(threadID, r.services.Plugins.EnabledMCPServerContributions())
 	overlays := make([]mcp.ConfigOverlay, 0, len(contributions))
 	for _, contribution := range contributions {
 		server := mcp.ServerConfigFromValues(contribution.Config)
@@ -8976,6 +8985,36 @@ func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string
 		return base
 	}
 	return mcp.NewManager(nil).RuntimeConfig(*base, overlays)
+}
+
+// filterDisabledPluginMCPContributions drops MCP servers contributed by plugins
+// the thread has disabled. The selection is thread-scoped, so the shared plugin
+// state is untouched (Rust #44655).
+func (r *RuntimeRouter) filterDisabledPluginMCPContributions(threadID string, contributions []plugin.MCPServerContribution) []plugin.MCPServerContribution {
+	if r == nil || len(contributions) == 0 {
+		return contributions
+	}
+	disabled := r.threadDisabledPluginIDs(threadID)
+	if len(disabled) == 0 {
+		return contributions
+	}
+	blocked := make(map[string]struct{}, len(disabled))
+	for _, id := range disabled {
+		if id = strings.TrimSpace(id); id != "" {
+			blocked[id] = struct{}{}
+		}
+	}
+	if len(blocked) == 0 {
+		return contributions
+	}
+	filtered := make([]plugin.MCPServerContribution, 0, len(contributions))
+	for _, contribution := range contributions {
+		if _, ok := blocked[strings.TrimSpace(contribution.PluginID)]; ok {
+			continue
+		}
+		filtered = append(filtered, contribution)
+	}
+	return filtered
 }
 
 func (r *RuntimeRouter) handleMCPServerStatusList(request *Request) (*mcp.MCPListServerStatusResponse, error) {
@@ -11040,7 +11079,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		}
 		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
-		config := r.runtimeMCPConfig(values, codexHome, runtimeAuth, cfg.Requirements)
+		config := r.runtimeMCPConfigForThread(threadID, values, codexHome, runtimeAuth, cfg.Requirements)
 		// Rust #39335: attachment-scoped MCP servers are only enabled when
 		// their environment is selected and available for the thread.
 		config.AvailableEnvironment = append([]string(nil), selectedEnvironmentIDs(r.activeTurnParams(threadID))...)
@@ -13301,7 +13340,7 @@ func (r *RuntimeRouter) skillMetadataForMCPRequirements(threadID string, params 
 	}
 	entries := cloneSkills(response.Skills)
 	if r.services.WorkspaceCodexPluginsEnabled == nil || *r.services.WorkspaceCodexPluginsEnabled {
-		if pluginEntries, pluginErr := r.pluginSkillEntriesForRuntime(); pluginErr == nil {
+		if pluginEntries, pluginErr := r.pluginSkillEntriesForRuntime(threadID); pluginErr == nil {
 			if pluginEntries, pluginErr = r.services.Skills.applyConfigEntries(pluginEntries, listParams.Config); pluginErr == nil {
 				entries = append(entries, pluginEntries...)
 			}

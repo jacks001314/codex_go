@@ -7771,7 +7771,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	skillEntries := cloneSkills(response.Skills)
 	pluginSkillEntries := []SkillsListEntry(nil)
 	if (r.services.WorkspaceCodexPluginsEnabled == nil || *r.services.WorkspaceCodexPluginsEnabled) && (cfg == nil || features.Enabled(cfg.FeatureSettings(), "plugins")) {
-		pluginSkillEntries, err = r.pluginSkillEntriesForRuntime()
+		pluginSkillEntries, err = r.pluginSkillEntriesForRuntime(threadID)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -7973,16 +7973,16 @@ func nonEmpty(values []string) []string {
 	return out
 }
 
-func (r *RuntimeRouter) pluginSkillEntriesForRuntime() ([]SkillsListEntry, error) {
-	entries, _, err := r.pluginSkillEntriesAndErrorsForRuntime()
+func (r *RuntimeRouter) pluginSkillEntriesForRuntime(threadID string) ([]SkillsListEntry, error) {
+	entries, _, err := r.pluginSkillEntriesAndErrorsForRuntime(threadID)
 	return entries, err
 }
 
-func (r *RuntimeRouter) pluginSkillEntriesAndErrorsForRuntime() ([]SkillsListEntry, []SkillErrorInfo, error) {
+func (r *RuntimeRouter) pluginSkillEntriesAndErrorsForRuntime(threadID string) ([]SkillsListEntry, []SkillErrorInfo, error) {
 	if r == nil || r.services.Plugins == nil {
 		return nil, nil, nil
 	}
-	roots := r.services.Plugins.EnabledSkillRoots()
+	roots := r.filterDisabledPluginSkillRoots(threadID, r.services.Plugins.EnabledSkillRoots())
 	entries := make([]SkillsListEntry, 0)
 	errors := make([]SkillErrorInfo, 0)
 	for _, root := range roots {
@@ -7998,6 +7998,36 @@ func (r *RuntimeRouter) pluginSkillEntriesAndErrorsForRuntime() ([]SkillsListEnt
 		}
 	}
 	return entries, errors, nil
+}
+
+// filterDisabledPluginSkillRoots drops skill roots contributed by plugins the
+// thread has disabled, without modifying shared plugin state. A disabled
+// selection only affects this thread's capability projection (Rust #44655).
+func (r *RuntimeRouter) filterDisabledPluginSkillRoots(threadID string, roots []plugin.EnabledSkillRoot) []plugin.EnabledSkillRoot {
+	if r == nil || len(roots) == 0 {
+		return roots
+	}
+	disabled := r.threadDisabledPluginIDs(threadID)
+	if len(disabled) == 0 {
+		return roots
+	}
+	blocked := make(map[string]struct{}, len(disabled))
+	for _, id := range disabled {
+		if id = strings.TrimSpace(id); id != "" {
+			blocked[id] = struct{}{}
+		}
+	}
+	if len(blocked) == 0 {
+		return roots
+	}
+	filtered := make([]plugin.EnabledSkillRoot, 0, len(roots))
+	for _, root := range roots {
+		if _, ok := blocked[strings.TrimSpace(root.PluginID)]; ok {
+			continue
+		}
+		filtered = append(filtered, root)
+	}
+	return filtered
 }
 
 func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string) ([]SkillsListEntry, []string, error) {

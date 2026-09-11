@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"codex_go/model"
+	"codex_go/plugin"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -14,6 +15,79 @@ import (
 func disabledPluginIDsPtr(values []string) *[]string {
 	cloned := append([]string{}, values...)
 	return &cloned
+}
+
+// TestRuntimeRouterDisabledPluginSkillRootsFilteredLikeRust covers #44655's
+// per-thread plugin exclusion for skills: a disabled plugin contributes no
+// skill roots without changing shared plugin state, and clearing the selection
+// restores them.
+func TestRuntimeRouterDisabledPluginSkillRootsFilteredLikeRust(t *testing.T) {
+	service := NewThreadExtraService()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadExtras: service,
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	roots := []plugin.EnabledSkillRoot{
+		{PluginID: "a@m", PluginNamespace: "A", Root: "/a/skills"},
+		{PluginID: "b@m", PluginNamespace: "B", Root: "/b/skills"},
+	}
+	if got := router.filterDisabledPluginSkillRoots("thread-a", roots); len(got) != 2 {
+		t.Fatalf("no-selection roots = %#v", got)
+	}
+
+	ids := []string{"a@m"}
+	if _, err := service.UpdateSettings(&SettingsUpdateParams{ThreadID: "thread-a", DisabledPluginIDs: &ids}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	filtered := router.filterDisabledPluginSkillRoots("thread-a", roots)
+	if len(filtered) != 1 || filtered[0].PluginID != "b@m" {
+		t.Fatalf("filtered roots = %#v, want only b@m", filtered)
+	}
+	// The selection is thread-scoped: another thread keeps every root.
+	if got := router.filterDisabledPluginSkillRoots("thread-b", roots); len(got) != 2 {
+		t.Fatalf("unrelated-thread roots = %#v", got)
+	}
+	// Clearing the selection restores the disabled plugin's roots.
+	if _, err := service.UpdateSettings(&SettingsUpdateParams{ThreadID: "thread-a", DisabledPluginIDs: disabledPluginIDsPtr([]string{})}); err != nil {
+		t.Fatalf("UpdateSettings clear: %v", err)
+	}
+	if got := router.filterDisabledPluginSkillRoots("thread-a", roots); len(got) != 2 {
+		t.Fatalf("cleared roots = %#v", got)
+	}
+}
+
+// TestRuntimeRouterDisabledPluginMCPContributionsFilteredLikeRust covers the MCP
+// half of #44655: a disabled plugin's MCP servers are omitted from that thread's
+// runtime config, while other threads keep them.
+func TestRuntimeRouterDisabledPluginMCPContributionsFilteredLikeRust(t *testing.T) {
+	service := NewThreadExtraService()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadExtras: service,
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	contributions := []plugin.MCPServerContribution{
+		{Name: "a-server", PluginID: "a@m", Config: map[string]any{"command": "a"}},
+		{Name: "b-server", PluginID: "b@m", Config: map[string]any{"command": "b"}},
+	}
+	if got := router.filterDisabledPluginMCPContributions("thread-a", contributions); len(got) != 2 {
+		t.Fatalf("no-selection contributions = %#v", got)
+	}
+	ids := []string{"a@m"}
+	if _, err := service.UpdateSettings(&SettingsUpdateParams{ThreadID: "thread-a", DisabledPluginIDs: &ids}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	filtered := router.filterDisabledPluginMCPContributions("thread-a", contributions)
+	if len(filtered) != 1 || filtered[0].Name != "b-server" {
+		t.Fatalf("filtered contributions = %#v, want only b-server", filtered)
+	}
+	// The selection is thread-scoped.
+	if got := router.filterDisabledPluginMCPContributions("thread-b", contributions); len(got) != 2 {
+		t.Fatalf("unrelated-thread contributions = %#v", got)
+	}
 }
 
 // TestThreadExtraSettingsDisabledPluginIDsReplacePreserveClearLikeRust covers
