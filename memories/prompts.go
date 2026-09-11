@@ -32,6 +32,12 @@ var stageOneInputTemplate string
 //go:embed templates/consolidation.md
 var consolidationPromptTemplate string
 
+// memoryToolDeveloperInstructionsV2Template is Rust's
+// templates/memories/read_path_v2.md, used when memories.version = v2 (#43813).
+//
+//go:embed templates/read_path_v2.md
+var memoryToolDeveloperInstructionsV2Template string
+
 const extensionsFolderStructure = `
 Memory extensions (under {{ memory_extensions_root }}/):
 
@@ -114,7 +120,12 @@ func BuildMemoryToolDeveloperInstructionsForVersion(codexHome string, version co
 		return ""
 	}
 	memorySummary = utils.FormattedTruncateText(memorySummary, utils.TokensPolicy(MemoryToolDeveloperInstructionsSummaryTokenLimit))
-	return renderMemoryTemplate(memoryToolDeveloperInstructionsTemplate, map[string]string{
+	template := memoryToolDeveloperInstructionsTemplate
+	if version == config.MemoryVersionV2 {
+		// v2 uses dedicated read instructions (Rust #43813).
+		template = memoryToolDeveloperInstructionsV2Template
+	}
+	return renderMemoryTemplate(template, map[string]string{
 		"base_path":      basePath,
 		"memory_summary": memorySummary,
 	})
