@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"codex_go/auth"
+	"codex_go/codexapi"
 	"codex_go/config"
 	"codex_go/model"
 	"codex_go/sandbox"
@@ -277,6 +278,31 @@ func TestModelGuardianReviewerMapsAssessmentDecision(t *testing.T) {
 				t.Fatalf("decision=%s reason=%q err=%v", decision, reason, err)
 			}
 		})
+	}
+}
+
+func TestModelGuardianReviewerEmitsTurnTriggerMetadata(t *testing.T) {
+	reviewer := &modelGuardianReviewer{agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+		metadataJSON := strings.TrimSpace(request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader])
+		if metadataJSON == "" {
+			t.Fatalf("guardian review missing turn metadata: %#v", request.ClientMetadata)
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+			t.Fatalf("turn metadata json error = %v metadata=%q", err, metadataJSON)
+		}
+		if metadata["turn_trigger"] != "guardian_review" {
+			t.Fatalf("turn_trigger = %#v metadata=%#v", metadata["turn_trigger"], metadata)
+		}
+		if request.ClientMetadata["x-openai-subagent"] != "guardian" ||
+			request.ClientMetadata["parent_turn_id"] != "turn-trigger" ||
+			request.ClientMetadata["target_item_id"] != "call-trigger" {
+			t.Fatalf("client metadata = %#v", request.ClientMetadata)
+		}
+		return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"reviewed"}`}, nil
+	})}
+	if _, _, err := reviewer.Review(context.Background(), "thread-trigger", "turn-trigger", "call-trigger", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "calendar"}); err != nil {
+		t.Fatalf("Review error = %v", err)
 	}
 }
 

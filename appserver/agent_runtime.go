@@ -8,6 +8,7 @@ import (
 	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/features"
+	"codex_go/install"
 	"codex_go/model"
 	"codex_go/network"
 	"codex_go/sandbox"
@@ -121,6 +122,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.approvalsReviewer = r.guardianApprovalsReviewerForTurn
 		modelReviewer.permissionProfile = r.guardianReviewPermissionProfileForTurn
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
+		modelReviewer.installationID = r.guardianInstallationID
 		modelReviewer.environment = r.guardianEnvironmentInputItems
 		modelReviewer.rootUserAuthorization = r.guardianRootUserAuthorizationForTurn
 		modelReviewer.fastDecision = r.emitGuardianV2FastDecision
@@ -339,6 +341,21 @@ func (r *RuntimeRouter) guardianReviewPermissionProfileForTurn(threadID, turnID 
 		readOnly = &profile
 	}
 	return readOnly
+}
+
+// guardianInstallationID resolves the Codex installation id attached to
+// guardian review turn metadata (Rust #44298). It is best-effort: an
+// unavailable id leaves the metadata field empty.
+func (r *RuntimeRouter) guardianInstallationID() string {
+	if r == nil {
+		return ""
+	}
+	codexHome := strings.TrimSpace(r.codexHomeForRollout())
+	if codexHome == "" {
+		return ""
+	}
+	id, _ := install.ResolveInstallationID(codexHome)
+	return strings.TrimSpace(id)
 }
 
 func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*model.ResponsesAgentRunner, error) {

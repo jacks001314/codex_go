@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/compact"
 	"codex_go/config"
 	codexctx "codex_go/context"
@@ -54,6 +55,9 @@ type modelGuardianReviewer struct {
 	// contributors, which makes #42807 rust-coupled for the Go architecture.
 	fastDecision func(context.Context, string, string, string)
 	timeout      time.Duration
+	// installationID supplies the Codex installation id for the review
+	// request's turn metadata (Rust #44298).
+	installationID func() string
 }
 
 // defaultGuardianMaxToolCallLag mirrors Rust
@@ -358,19 +362,15 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 	}
 	reviewRequest := &model.AgentRequest{
-		Prompt:       prompt,
-		InputItems:   inputItems,
-		Model:        r.modelForTurn(threadID, turnID),
-		TaskKind:     model.AgentTaskReview,
-		ThreadID:     threadID,
-		TurnID:       turnID,
-		Originator:   "guardian",
-		OutputSchema: guardianAssessmentOutputSchema(),
-		ClientMetadata: map[string]string{
-			"x-openai-subagent": "guardian",
-			"parent_turn_id":    turnID,
-			"target_item_id":    targetItemID,
-		},
+		Prompt:         prompt,
+		InputItems:     inputItems,
+		Model:          r.modelForTurn(threadID, turnID),
+		TaskKind:       model.AgentTaskReview,
+		ThreadID:       threadID,
+		TurnID:         turnID,
+		Originator:     "guardian",
+		OutputSchema:   guardianAssessmentOutputSchema(),
+		ClientMetadata: r.reviewClientMetadata(threadID, turnID, targetItemID),
 	}
 	if r.permissionProfile != nil {
 		reviewRequest.PermissionProfile = r.permissionProfile(threadID, turnID)
@@ -428,6 +428,34 @@ func (r *modelGuardianReviewer) autoReviewMessagesForTurn(threadID, turnID strin
 		return nil
 	}
 	return r.autoReviewMessages(threadID, turnID)
+}
+
+// reviewClientMetadata builds the guardian review request's client metadata.
+// Rust #44298 attributes guardian reviews to the `guardian_review` turn trigger
+// and emits it in x-codex-turn-metadata; Go's reviewer issues a direct agent
+// request, so the review reuses the parent turn's identity.
+func (r *modelGuardianReviewer) reviewClientMetadata(threadID, turnID, targetItemID string) map[string]string {
+	installationID := ""
+	if r != nil && r.installationID != nil {
+		installationID = strings.TrimSpace(r.installationID())
+	}
+	metadata := codexapi.NewClientMetadata(installationID, threadID, threadID, "")
+	metadata.RequestKind = codexapi.ClientRequestTurn
+	metadata.TurnTrigger = "guardian_review"
+	metadata.TurnID = turnID
+	metadata.ParentTurnID = turnID
+	metadata.RootTurnID = turnID
+	metadata.SubagentHeader = "guardian"
+	targetItemID = strings.TrimSpace(targetItemID)
+	if targetItemID != "" {
+		metadata.Extra["target_item_id"] = targetItemID
+	}
+	client := metadata.ClientMetadata()
+	if targetItemID != "" {
+		// Preserve the historical top-level key alongside the turn metadata.
+		client["target_item_id"] = targetItemID
+	}
+	return client
 }
 
 // guardianRejectionMessage mirrors Rust run_guardian_review (#39741): the
