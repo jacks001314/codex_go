@@ -18,6 +18,7 @@ const (
 type ProxyCredentialBroker struct {
 	mu          sync.RWMutex
 	enabled     bool
+	providers   []*ProxyCredentialProvider
 	credentials []ProxyCredentialRecord
 }
 
@@ -53,7 +54,19 @@ type ProxyCredentialHostBinding struct {
 }
 
 func NewProxyCredentialBroker(enabled bool) *ProxyCredentialBroker {
-	return &ProxyCredentialBroker{enabled: enabled}
+	return &ProxyCredentialBroker{enabled: enabled, providers: credentialProviders()}
+}
+
+// NewProxyCredentialBrokerWithProviders builds a broker that also serves
+// declarative, config-backed credential families (#44056).
+func NewProxyCredentialBrokerWithProviders(enabled bool, configured []*ProxyCredentialProvider) *ProxyCredentialBroker {
+	providers := append([]*ProxyCredentialProvider(nil), credentialProviders()...)
+	for _, provider := range configured {
+		if provider != nil {
+			providers = append(providers, provider)
+		}
+	}
+	return &ProxyCredentialBroker{enabled: enabled, providers: providers}
 }
 
 func (b *ProxyCredentialBroker) Enabled() bool {
@@ -77,7 +90,7 @@ func (b *ProxyCredentialBroker) VirtualizeChildEnv(env map[string]string) {
 		return
 	}
 	env[CredentialBrokerActiveEnvKey] = "1"
-	for _, provider := range credentialProviders() {
+	for _, provider := range b.providers {
 		for _, source := range provider.Sources {
 			hostBinding, ok := source.HostBinding(env)
 			if !ok {
@@ -106,10 +119,36 @@ func (b *ProxyCredentialBroker) HostRequiresMITM(host string) bool {
 			return true
 		}
 	}
+	// Declarative providers require MITM for their HTTPS destinations even
+	// before any command has virtualized credentials into their env (#44056).
+	for _, provider := range b.providers {
+		for _, destination := range provider.Destinations {
+			if destination.Scheme != "https" {
+				continue
+			}
+			if destination.Wildcard {
+				if strings.HasSuffix(normalized, "."+destination.Host) {
+					return true
+				}
+				continue
+			}
+			if normalized == destination.Host {
+				return true
+			}
+		}
+	}
 	return false
 }
 
 func (b *ProxyCredentialBroker) InjectRequestHeaders(host string, headers map[string][]string) {
+	b.InjectRequestHeadersForDestination("", host, 0, "", headers)
+}
+
+// InjectRequestHeadersForDestination injects the matching credential for a
+// concrete request destination. Configured providers are only authorized for
+// destinations they declared (scheme/host/port/path); built-in providers keep
+// their host-binding behavior (network-proxy/src/credential_broker.rs #44056).
+func (b *ProxyCredentialBroker) InjectRequestHeadersForDestination(scheme string, host string, port uint16, path string, headers map[string][]string) {
 	if b == nil {
 		return
 	}
@@ -121,9 +160,14 @@ func (b *ProxyCredentialBroker) InjectRequestHeaders(host string, headers map[st
 	}
 	matching := make([]*ProxyCredentialRecord, 0)
 	for index := range b.credentials {
-		if (&b.credentials[index]).MatchesHost(normalized) {
-			matching = append(matching, &b.credentials[index])
+		credential := &b.credentials[index]
+		if !credential.MatchesHost(normalized) {
+			continue
 		}
+		if credential.Provider != nil && !credential.Provider.authorizesDestination(scheme, normalized, port, path) {
+			continue
+		}
+		matching = append(matching, credential)
 	}
 	credential := selectCredential(headers, matching)
 	if credential == nil {
@@ -134,6 +178,29 @@ func (b *ProxyCredentialBroker) InjectRequestHeaders(host string, headers map[st
 		return
 	}
 	credential.Provider.InsertHeader(headers, headerValue)
+}
+
+// authorizesDestination reports whether a provider may substitute credentials
+// for the request destination. Providers without declared destinations are the
+// built-ins, whose credential records already carry a host binding.
+func (p *ProxyCredentialProvider) authorizesDestination(scheme string, host string, port uint16, path string) bool {
+	if p == nil || len(p.Destinations) == 0 {
+		return true
+	}
+	if scheme == "" {
+		for _, destination := range p.Destinations {
+			if destination.Wildcard && destination.MatchesHost(host, destination.Port) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, destination := range p.Destinations {
+		if destination.MatchesRequest(scheme, host, port, path) {
+			return true
+		}
+	}
+	return false
 }
 
 func ProxyBrokeredCredentialDummyEnvKeys(env map[string]string) []string {
@@ -168,9 +235,13 @@ func ProxyBrokeredCredentialEnvKeys(env map[string]string) []string {
 }
 
 func ProxyCredentialBrokerEnvKeys() []string {
+	return credentialEnvKeys(credentialProviders())
+}
+
+func credentialEnvKeys(providers []*ProxyCredentialProvider) []string {
 	seen := map[string]bool{}
 	keys := []string{}
-	for _, provider := range credentialProviders() {
+	for _, provider := range providers {
 		for _, key := range provider.ContextEnvVars {
 			if !seen[key] {
 				seen[key] = true
@@ -187,6 +258,15 @@ func ProxyCredentialBrokerEnvKeys() []string {
 		}
 	}
 	return keys
+}
+
+// envKeys returns every environment key the broker virtualizes, including
+// declarative providers (#44056).
+func (b *ProxyCredentialBroker) envKeys() []string {
+	if b == nil {
+		return nil
+	}
+	return credentialEnvKeys(b.providers)
 }
 
 func (r *ProxyCredentialRecord) MatchesHost(host string) bool {
@@ -236,7 +316,7 @@ func (b *ProxyCredentialBroker) isDummyValue(value string) bool {
 
 func (b *ProxyCredentialBroker) updateBrokeredCredentialsMarker(env map[string]string) {
 	entries := [][2]string{}
-	for _, key := range ProxyCredentialBrokerEnvKeys() {
+	for _, key := range b.envKeys() {
 		value, ok := env[key]
 		if ok && b.isDummyValue(value) {
 			entries = append(entries, [2]string{key, value})

@@ -237,7 +237,7 @@ func buildProxyRuntimePolicy(settings ProxySettings) (*proxyRuntimePolicy, error
 		allowMatcher: allowMatcher,
 		denyMatcher:  denyMatcher,
 		mitmHooks:    hooks,
-		broker:       NewProxyCredentialBroker(settings.CredentialBroker),
+		broker:       NewProxyCredentialBrokerWithProviders(settings.CredentialBroker, ConfiguredCredentialProviders(settings.CredentialProviders)),
 	}, nil
 }
 
@@ -658,7 +658,15 @@ func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.Prox
 		}
 	}
 	if isMITM || policy.settings.DangerouslyAllowPlaintextCredentialInjection {
-		policy.broker.InjectRequestHeaders(host, request.Header)
+		scheme := "http"
+		if isMITM {
+			scheme = "https"
+		}
+		path := "/"
+		if request.URL != nil && request.URL.Path != "" {
+			path = request.URL.Path
+		}
+		policy.broker.InjectRequestHeadersForDestination(scheme, host, requestPort, path, request.Header)
 	}
 	removeProxyHopByHopRequestHeaders(request.Header)
 	return request, nil
