@@ -61,7 +61,6 @@ codex features list                   查看功能开关
 codex mcp ...                         管理 MCP server 配置和登录
 codex plugin ...                      管理插件和 marketplace
 codex app-server ...                  启动或管理 app-server
-codex mcp-server                      以 MCP server 方式运行 Codex
 codex sandbox -- COMMAND              在权限配置下运行命令
 codex doctor                          环境诊断
 codex completion [SHELL]              生成 shell completion

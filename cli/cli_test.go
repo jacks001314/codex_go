@@ -24,7 +24,6 @@ func TestRustSubcommandSurfaceParity(t *testing.T) {
 		{name: "logout", args: []string{"logout"}, want: CommandLogout},
 		{name: "mcp", args: []string{"mcp", "list"}, want: CommandMCP},
 		{name: "plugin", args: []string{"plugin", "list"}, want: CommandPlugin},
-		{name: "mcp-server", args: []string{"mcp-server"}, want: CommandMCPServer},
 		{name: "app-server", args: []string{"app-server", "--listen", "off"}, want: CommandAppServer},
 		{name: "remote-control", args: []string{"remote-control", "pair"}, want: CommandRemoteControl},
 		{name: "app", args: []string{"app", "."}, want: CommandApp},
@@ -287,8 +286,6 @@ func normalizeRustCommandName(name string) string {
 		return "app-server"
 	case "RemoteControl":
 		return "remote-control"
-	case "McpServer":
-		return "mcp-server"
 	case "ExecServer":
 		return "exec-server"
 	case "ResponsesApiProxy":
@@ -575,7 +572,6 @@ func TestAllowRootStrictConfigForSupportedSubcommands(t *testing.T) {
 	}{
 		{name: "exec", args: []string{"--strict-config", "exec", "hello"}},
 		{name: "review", args: []string{"--strict-config", "review", "hello"}},
-		{name: "mcp-server", args: []string{"--strict-config", "mcp-server"}},
 		{name: "exec-server", args: []string{"--strict-config", "exec-server", "--listen", "stdio"}},
 		{name: "app-server runtime", args: []string{"--strict-config", "app-server", "--listen", "off"}},
 		{name: "resume", args: []string{"--strict-config", "resume", "--last"}},
@@ -1246,16 +1242,6 @@ func TestParseApplyRejectsExtraPatchArguments(t *testing.T) {
 	_, err := Parse([]string{"apply", "patch-one", "patch-two"})
 	if err == nil || err.Error() != "apply accepts at most one PATCH" {
 		t.Fatalf("Parse error = %v", err)
-	}
-}
-
-func TestParseMCPServer(t *testing.T) {
-	parsed, err := Parse([]string{"mcp-server", "--strict-config"})
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
-	}
-	if parsed.Command != CommandMCPServer || !parsed.MCPServer.StrictConfig {
-		t.Fatalf("parsed = %#v", parsed)
 	}
 }
 

@@ -45,8 +45,6 @@ func cmdSurfaceCases(cmds []string) []cliSurfaceCase {
 			cases = append(cases, cliSurfaceCase{name: cmd, args: []string{cmd, "list"}})
 		case "plugin":
 			cases = append(cases, cliSurfaceCase{name: cmd, args: []string{cmd, "list"}})
-		case "mcp-server":
-			cases = append(cases, cliSurfaceCase{name: cmd, args: []string{cmd}})
 		case "app-server":
 			cases = append(cases, cliSurfaceCase{name: cmd, args: []string{cmd, "--listen", "off"}})
 		case "remote-control":

@@ -20,56 +20,6 @@ import (
 	"codex_go/auth"
 )
 
-func TestMCPServerInitialize(t *testing.T) {
-	var stdout bytes.Buffer
-	input := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"test","version":"1"}}}` + "\n"
-	if err := Run(context.Background(), []string{"mcp-server"}, strings.NewReader(input), &stdout, &bytes.Buffer{}); err != nil {
-		t.Fatalf("mcp-server returned error: %v", err)
-	}
-	if !strings.Contains(stdout.String(), `"id":1`) ||
-		!strings.Contains(stdout.String(), `"name":"codex-mcp-server"`) ||
-		!strings.Contains(stdout.String(), `"listChanged":true`) {
-		t.Fatalf("stdout = %q", stdout.String())
-	}
-}
-
-func TestMCPServerStrictConfigRejectsUnknownConfig(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("CODEX_HOME", home)
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("foo = \"bar\"\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile config returned error: %v", err)
-	}
-
-	err := Run(context.Background(), []string{
-		"mcp-server",
-		"--strict-config",
-	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "unknown configuration field `foo`") {
-		t.Fatalf("mcp-server strict config error = %v", err)
-	}
-
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), nil, 0o600); err != nil {
-		t.Fatalf("clear config returned error: %v", err)
-	}
-	err = Run(context.Background(), []string{
-		"--strict-config",
-		"-c", "foo=bar",
-		"mcp-server",
-	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "unknown configuration field `foo`") {
-		t.Fatalf("mcp-server root strict override error = %v", err)
-	}
-}
-
-func TestMCPServerRejectsWorkloadIdentityLikeRust(t *testing.T) {
-	t.Setenv(auth.OpenAIFederationRuleIDEnv, "rule-one")
-	t.Setenv(auth.OpenAIIdentityTokenFileEnv, "")
-	err := Run(context.Background(), []string{"mcp-server"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "workload identity is not supported by `codex mcp-server`") {
-		t.Fatalf("mcp-server workload identity error = %v", err)
-	}
-}
-
 func TestCloudExecAndList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

@@ -23,7 +23,6 @@ const (
 	CommandLogout            Command = "logout"
 	CommandMCP               Command = "mcp"
 	CommandPlugin            Command = "plugin"
-	CommandMCPServer         Command = "mcp-server"
 	CommandAppServer         Command = "app-server"
 	CommandApp               Command = "app"
 	CommandRemoteControl     Command = "remote-control"
@@ -57,7 +56,6 @@ var knownCommands = map[string]Command{
 	"logout":              CommandLogout,
 	"mcp":                 CommandMCP,
 	"plugin":              CommandPlugin,
-	"mcp-server":          CommandMCPServer,
 	"app-server":          CommandAppServer,
 	"remote-control":      CommandRemoteControl,
 	"app":                 CommandApp,
@@ -225,10 +223,6 @@ type ExecpolicyOptions struct {
 	Pretty                 bool
 	ResolveHostExecutables bool
 	Command                []string
-}
-
-type MCPServerOptions struct {
-	StrictConfig bool
 }
 
 type CloudOptions struct {
@@ -422,7 +416,6 @@ type Parsed struct {
 	Plugin            PluginOptions
 	Sandbox           SandboxOptions
 	Execpolicy        ExecpolicyOptions
-	MCPServer         MCPServerOptions
 	Cloud             CloudOptions
 	ResponsesAPIProxy ResponsesAPIProxyOptions
 	StdioToUDS        StdioToUDSOptions
@@ -486,7 +479,7 @@ func Parse(args []string) (*Parsed, error) {
 
 func strictConfigUnsupportedBeforeSubcommandParse(command Command) bool {
 	switch command {
-	case CommandInteractive, CommandExec, CommandReview, CommandMCPServer, CommandExecServer,
+	case CommandInteractive, CommandExec, CommandReview, CommandExecServer,
 		CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandDoctor,
 		CommandAppServer:
 		return false
@@ -513,8 +506,6 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 		return p, parseMCP(args, &p.MCP)
 	case CommandPlugin:
 		return p, parsePlugin(args, &p.Plugin)
-	case CommandMCPServer:
-		return p, parseMCPServer(args, &p.MCPServer)
 	case CommandSandbox:
 		return p, parseSandbox(args, &p.Sandbox)
 	case CommandExecpolicy:
@@ -600,7 +591,7 @@ func validateTUISharedOptions(shared SharedOptions) error {
 
 func (p *Parsed) unsupportedStrictConfigSubcommandName() string {
 	switch p.Command {
-	case CommandInteractive, CommandExec, CommandReview, CommandMCPServer, CommandExecServer,
+	case CommandInteractive, CommandExec, CommandReview, CommandExecServer,
 		CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandDoctor, CommandQueue:
 		return ""
 	case CommandAppServer:
@@ -1914,21 +1905,6 @@ func parseExecpolicy(args []string, execpolicy *ExecpolicyOptions) error {
 		}
 	default:
 		return fmt.Errorf("unknown execpolicy subcommand %s", execpolicy.Action)
-	}
-	return nil
-}
-
-func parseMCPServer(args []string, mcpServer *MCPServerOptions) error {
-	for _, arg := range args {
-		switch arg {
-		case "--strict-config":
-			mcpServer.StrictConfig = true
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("unknown mcp-server option %s", arg)
-			}
-			return fmt.Errorf("mcp-server does not accept argument %s", arg)
-		}
 	}
 	return nil
 }

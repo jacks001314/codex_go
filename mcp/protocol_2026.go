@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	defaultMCPProtocol               = "2025-06-18"
 	modernMCPProtocol                = "2026-07-28"
 	mcpProtocolVersionEnvVar         = "CODEX_MCP_PROTOCOL_VERSION"
 	maxModernMCPMessageBytes         = 8 * 1024 * 1024

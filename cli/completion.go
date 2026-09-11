@@ -99,7 +99,6 @@ func codexCompletionSpec() *completionNode {
 			),
 			node("remove", pluginSelectorCompletionOptions()),
 		),
-		node("mcp-server", []string{"--strict-config"}),
 		node("app-server", appServerCompletionOptions(),
 			node("daemon", nil,
 				node("bootstrap", []string{"--remote-control"}),

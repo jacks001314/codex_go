@@ -12,7 +12,6 @@ func TestProductionDefaultsDoNotInstallLocalAgentOrMemoryMCPStubs(t *testing.T) 
 	checks := []struct{ path, forbidden string }{
 		{filepath.Join(root, "appserver", "runtime_router.go"), "Agent:        model.NewLocalAgentRunner()"},
 		{filepath.Join(root, "appserver", "agent_runtime.go"), "r.services.Agent = model.NewLocalAgentRunner()"},
-		{filepath.Join(root, "mcp", "server_stdio.go"), "server.runner = NewMemoryCodexToolRunner()"},
 		{filepath.Join(root, "exec", "exec.go"), "UseResponsesAPI: false"},
 	}
 	for _, check := range checks {

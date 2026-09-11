@@ -30,7 +30,6 @@ import (
 	"codex_go/execserver"
 	"codex_go/features"
 	"codex_go/install"
-	"codex_go/mcp"
 	"codex_go/model"
 	codexnetwork "codex_go/network"
 	"codex_go/rollout"
@@ -146,8 +145,6 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 		return runAppServer(ctx, parsed.AppServer, &parsed.Root, stdout, stderr, stdin)
 	case cli.CommandApp:
 		return runDesktopApp(&parsed.App, stdout)
-	case cli.CommandMCPServer:
-		return runMCPServer(ctx, &parsed.MCPServer, &parsed.Root, stdin, stdout)
 	case cli.CommandCloud:
 		return runCloud(ctx, &parsed.Cloud, stdin, stdout)
 	case cli.CommandResponsesAPIProxy:
@@ -219,7 +216,6 @@ func rootHelpText() string {
 		"  logout          Remove stored authentication credentials",
 		"  mcp             Manage external MCP servers for Codex",
 		"  plugin          Manage Codex plugins",
-		"  mcp-server      Start Codex as an MCP server (stdio)",
 		"  app-server      [experimental] Run the app server or related tooling",
 		"  remote-control  [experimental] Manage the app-server daemon with remote control enabled",
 		"  app             Launch the Codex desktop app (opens the app installer if missing)",
@@ -709,50 +705,6 @@ func runExecpolicy(opts *cli.ExecpolicyOptions, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("unknown execpolicy subcommand %s", opts.Action)
 	}
-}
-
-func runMCPServer(ctx context.Context, opts *cli.MCPServerOptions, root *cli.RootOptions, stdin io.Reader, stdout io.Writer) error {
-	if opts == nil {
-		opts = &cli.MCPServerOptions{}
-	}
-	// Rust #39657: the standalone MCP server is deprecated; keep serving after
-	// the warning.
-	fmt.Fprintln(os.Stderr, "warning: `codex mcp-server` is deprecated and will be removed in a future release.")
-	codexHome := auth.DefaultCodexHome()
-	if auth.IsWorkloadIdentitySelected() {
-		return errors.New("workload identity is not supported by `codex mcp-server`")
-	}
-	if _, err := config.LoadEffectiveWithOptions(codexHome, mcpServerConfigLoadOptions(opts, root)); err != nil {
-		return err
-	}
-	return mcp.ServeStdio(ctx, &mcp.StdioServerOptions{
-		Runner: newCodexMCPRunner(codexHome, mcpServerRootOptions(root)),
-	}, stdin, stdout)
-}
-
-func mcpServerConfigLoadOptions(opts *cli.MCPServerOptions, root *cli.RootOptions) *config.EffectiveOptions {
-	strictConfig := opts != nil && opts.StrictConfig
-	loadOpts := &config.EffectiveOptions{StrictConfig: strictConfig}
-	if root != nil {
-		loadOpts.RawOverrides = append(loadOpts.RawOverrides, root.ConfigOverrides...)
-		loadOpts.EnableFeatures = append(loadOpts.EnableFeatures, root.EnableFeatures...)
-		loadOpts.DisableFeatures = append(loadOpts.DisableFeatures, root.DisableFeatures...)
-		loadOpts.StrictConfig = loadOpts.StrictConfig || root.StrictConfig
-	}
-	return loadOpts
-}
-
-func mcpServerRootOptions(root *cli.RootOptions) cli.RootOptions {
-	if root == nil {
-		return cli.RootOptions{}
-	}
-	out := *root
-	out.ConfigOverrides = append([]string(nil), root.ConfigOverrides...)
-	out.EnableFeatures = append([]string(nil), root.EnableFeatures...)
-	out.DisableFeatures = append([]string(nil), root.DisableFeatures...)
-	out.Shared.Images = append([]string(nil), root.Shared.Images...)
-	out.Shared.AddDirs = append([]string(nil), root.Shared.AddDirs...)
-	return out
 }
 
 func runStdioToUDS(opts *cli.StdioToUDSOptions, stdin io.Reader, stdout io.Writer) error {
