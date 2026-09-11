@@ -93,6 +93,7 @@ type httpClient struct {
 	config                             *ServerConfig
 	client                             *http.Client
 	mu                                 sync.Mutex
+	capabilitiesMu                     sync.Mutex
 	closed                             bool
 	nextID                             atomic.Int64
 	initialized                        bool
@@ -109,8 +110,11 @@ type httpClient struct {
 	negotiatedProtocolVersion          string
 	retrySleep                         func(time.Duration)
 	supportsSandboxStateMetaCapability bool
-	initializeDeadline                 time.Time
-	initializeDeadlineOn               bool
+	// serverCapabilities is the initialized server's advertised capabilities
+	// object (Rust #44826); nil when unavailable.
+	serverCapabilities   json.RawMessage
+	initializeDeadline   time.Time
+	initializeDeadlineOn bool
 }
 
 type httpClientCallOptions struct {
@@ -183,8 +187,13 @@ func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, thre
 	result := &stdioInventory{}
 	options := &httpClientCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots}
 	tools, err := listMCPHTTPTools(client, options)
+	// Capabilities are captured during the initialization that the tools call
+	// triggers, so read them after the attempt even when discovery failed.
+	if client != nil {
+		result.ServerCapabilities = client.serverCapabilitiesRaw()
+	}
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	result.Tools = tools
 	if resources, err := listMCPHTTPResources(client, options); err == nil {
@@ -612,6 +621,9 @@ func (c *httpClient) applyCallOptions(options *httpClientCallOptions) {
 
 func (c *httpClient) initialize(ctx context.Context) (string, error) {
 	started := time.Now()
+	c.capabilitiesMu.Lock()
+	c.serverCapabilities = nil
+	c.capabilitiesMu.Unlock()
 	response, requestID, err := c.doRPC(ctx, "initialize", mcpClientInitializeParams(c.openAIForm), "", true)
 	if err != nil {
 		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), "failure", time.Since(started))
@@ -639,11 +651,17 @@ func (c *httpClient) initialize(ctx context.Context) (string, error) {
 	}
 	recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), outcome, time.Since(started))
 	c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(rpc.Result)
+	c.capabilitiesMu.Lock()
+	c.serverCapabilities = mcpServerCapabilitiesFromInitializeResult(rpc.Result)
+	c.capabilitiesMu.Unlock()
 	return response.Header.Get(mcpHTTPSessionIDHeader), nil
 }
 
 func (c *httpClient) discover(ctx context.Context) (string, error) {
 	started := time.Now()
+	c.capabilitiesMu.Lock()
+	c.serverCapabilities = nil
+	c.capabilitiesMu.Unlock()
 	response, requestID, err := c.doRPC(ctx, "server/discover", map[string]any{}, "", true)
 	if err != nil {
 		recordProtocolDiscoveryMetrics("auto", "failure", time.Since(started))
@@ -665,7 +683,21 @@ func (c *httpClient) discover(ctx context.Context) (string, error) {
 	}
 	recordProtocolDiscoveryMetrics("auto", "modern", time.Since(started))
 	c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(rpc.Result)
+	c.capabilitiesMu.Lock()
+	c.serverCapabilities = mcpServerCapabilitiesFromInitializeResult(rpc.Result)
+	c.capabilitiesMu.Unlock()
 	return response.Header.Get(mcpHTTPSessionIDHeader), nil
+}
+
+// serverCapabilitiesRaw returns the advertised capabilities captured during
+// initialization (Rust #44826), or nil when unavailable.
+func (c *httpClient) serverCapabilitiesRaw() json.RawMessage {
+	if c == nil {
+		return nil
+	}
+	c.capabilitiesMu.Lock()
+	defer c.capabilitiesMu.Unlock()
+	return cloneMCPRawMessage(c.serverCapabilities)
 }
 
 func (c *httpClient) notifyInitialized(ctx context.Context, sessionID string) error {

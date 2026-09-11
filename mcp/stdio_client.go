@@ -22,10 +22,14 @@ type stdioInventory struct {
 	Tools             []MCPToolInfo
 	Resources         []MCPResource
 	ResourceTemplates []MCPResourceTemplate
+	// ServerCapabilities is the initialized server's advertised capabilities
+	// object (Rust #44826), independent of tool discovery success.
+	ServerCapabilities json.RawMessage
 }
 
 type stdioClient struct {
 	mu                                 sync.Mutex
+	capabilitiesMu                     sync.Mutex
 	writeMu                            sync.Mutex
 	closed                             bool
 	config                             *ServerConfig
@@ -44,6 +48,9 @@ type stdioClient struct {
 	openAIForm                         bool
 	protocolMode                       MCPProtocolMode
 	supportsSandboxStateMetaCapability bool
+	// serverCapabilities is the initialized server's advertised capabilities
+	// object (Rust #44826); nil when unavailable or before initialization.
+	serverCapabilities json.RawMessage
 }
 
 // os/exec copies a child's output from background goroutines. Keep each
@@ -128,8 +135,13 @@ func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, th
 	result := &stdioInventory{}
 	options := &stdioCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots}
 	tools, err := listMCPStdioTools(client, options)
+	// Capabilities are captured during the initialization that the tools call
+	// triggers, so read them after the attempt even when discovery failed.
+	if client != nil {
+		result.ServerCapabilities = client.serverCapabilitiesRaw()
+	}
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	result.Tools = tools
 	if resources, err := listMCPStdioResources(client, options); err == nil {
@@ -419,6 +431,9 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	c.stderr = stderr
 	c.started = true
 	c.initialized = false
+	c.capabilitiesMu.Lock()
+	c.serverCapabilities = nil
+	c.capabilitiesMu.Unlock()
 	c.protocolMode = protocolMode
 	c.pending = map[int64]*stdioPendingCall{}
 	c.pendingOrder = nil
@@ -438,6 +453,9 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 			negotiatedModern = true
 			c.mu.Lock()
 			c.initialized = true
+			c.capabilitiesMu.Lock()
+			c.serverCapabilities = mcpServerCapabilitiesFromInitializeResult(response.Result)
+			c.capabilitiesMu.Unlock()
 			c.mu.Unlock()
 			return nil
 		}
@@ -471,6 +489,9 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	}
 	c.mu.Lock()
 	c.initialized = true
+	c.capabilitiesMu.Lock()
+	c.serverCapabilities = mcpServerCapabilitiesFromInitializeResult(response.Result)
+	c.capabilitiesMu.Unlock()
 	c.mu.Unlock()
 	return nil
 }
@@ -516,6 +537,17 @@ func (c *stdioClient) callTimeout() time.Duration {
 		}
 	}
 	return 15 * time.Second
+}
+
+// serverCapabilitiesRaw returns the advertised capabilities captured during
+// initialization (Rust #44826), or nil when unavailable.
+func (c *stdioClient) serverCapabilitiesRaw() json.RawMessage {
+	if c == nil {
+		return nil
+	}
+	c.capabilitiesMu.Lock()
+	defer c.capabilitiesMu.Unlock()
+	return cloneMCPRawMessage(c.serverCapabilities)
 }
 
 func (c *stdioClient) currentStderr() *stdioOutputBuffer {

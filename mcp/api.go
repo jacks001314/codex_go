@@ -255,17 +255,20 @@ type MCPServerStatus struct {
 	RuntimeStatus *MCPConnectionStatus `json:"runtimeStatus,omitempty"`
 	// PluginID reports the owning plugin for plugin-contributed servers and is
 	// nil for servers from other sources (Rust 78d3665d15).
-	PluginID          *string               `json:"pluginId,omitempty"`
-	ServerInfo        *MCPServerInfo        `json:"serverInfo,omitempty"`
-	Tools             []MCPToolInfo         `json:"tools,omitempty"`
-	ToolsError        *string               `json:"toolsError,omitempty"`
-	Resources         []MCPResource         `json:"resources,omitempty"`
-	ResourceTemplates []MCPResourceTemplate `json:"resourceTemplates,omitempty"`
-	AuthStatus        MCPAuthStatus         `json:"authStatus,omitempty"`
-	Server            MCPServerInfo         `json:"server"`
-	State             MCPServerStartupState `json:"state"`
-	Error             *string               `json:"error,omitempty"`
-	FailureReason     *string               `json:"failureReason,omitempty"`
+	PluginID   *string        `json:"pluginId,omitempty"`
+	ServerInfo *MCPServerInfo `json:"serverInfo,omitempty"`
+	// ServerCapabilities carries the initialized server's advertised
+	// capabilities object, or null when unavailable (Rust #44826).
+	ServerCapabilities json.RawMessage       `json:"serverCapabilities,omitempty"`
+	Tools              []MCPToolInfo         `json:"tools,omitempty"`
+	ToolsError         *string               `json:"toolsError,omitempty"`
+	Resources          []MCPResource         `json:"resources,omitempty"`
+	ResourceTemplates  []MCPResourceTemplate `json:"resourceTemplates,omitempty"`
+	AuthStatus         MCPAuthStatus         `json:"authStatus,omitempty"`
+	Server             MCPServerInfo         `json:"server"`
+	State              MCPServerStartupState `json:"state"`
+	Error              *string               `json:"error,omitempty"`
+	FailureReason      *string               `json:"failureReason,omitempty"`
 }
 
 func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
@@ -287,31 +290,33 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		state = MCPServerReady
 	}
 	return json.Marshal(struct {
-		Name              string                            `json:"name"`
-		RuntimeStatus     *MCPConnectionStatus              `json:"runtimeStatus"`
-		PluginID          *string                           `json:"pluginId"`
-		ServerInfo        *MCPServerInfo                    `json:"serverInfo"`
-		Tools             map[string]MCPToolInfo            `json:"tools"`
-		ToolsError        *string                           `json:"toolsError"`
-		Resources         []mcpServerStatusResource         `json:"resources"`
-		ResourceTemplates []mcpServerStatusResourceTemplate `json:"resourceTemplates"`
-		AuthStatus        MCPAuthStatus                     `json:"authStatus"`
-		State             MCPServerStartupState             `json:"state"`
-		Error             *string                           `json:"error,omitempty"`
-		FailureReason     *string                           `json:"failureReason,omitempty"`
+		Name               string                            `json:"name"`
+		RuntimeStatus      *MCPConnectionStatus              `json:"runtimeStatus"`
+		PluginID           *string                           `json:"pluginId"`
+		ServerInfo         *MCPServerInfo                    `json:"serverInfo"`
+		ServerCapabilities json.RawMessage                   `json:"serverCapabilities"`
+		Tools              map[string]MCPToolInfo            `json:"tools"`
+		ToolsError         *string                           `json:"toolsError"`
+		Resources          []mcpServerStatusResource         `json:"resources"`
+		ResourceTemplates  []mcpServerStatusResourceTemplate `json:"resourceTemplates"`
+		AuthStatus         MCPAuthStatus                     `json:"authStatus"`
+		State              MCPServerStartupState             `json:"state"`
+		Error              *string                           `json:"error,omitempty"`
+		FailureReason      *string                           `json:"failureReason,omitempty"`
 	}{
-		Name:              name,
-		RuntimeStatus:     cloneMCPConnectionStatus(s.RuntimeStatus),
-		PluginID:          cloneStringPtr(s.PluginID),
-		ServerInfo:        serverInfo,
-		Tools:             toolMapFromList(s.Tools),
-		ToolsError:        cloneStringPtr(s.ToolsError),
-		Resources:         mcpServerStatusResources(s.Resources),
-		ResourceTemplates: mcpServerStatusResourceTemplates(s.ResourceTemplates),
-		AuthStatus:        authStatus,
-		State:             state,
-		Error:             cloneStringPtr(s.Error),
-		FailureReason:     cloneStringPtr(s.FailureReason),
+		Name:               name,
+		RuntimeStatus:      cloneMCPConnectionStatus(s.RuntimeStatus),
+		PluginID:           cloneStringPtr(s.PluginID),
+		ServerInfo:         serverInfo,
+		ServerCapabilities: cloneMCPRawMessage(s.ServerCapabilities),
+		Tools:              toolMapFromList(s.Tools),
+		ToolsError:         cloneStringPtr(s.ToolsError),
+		Resources:          mcpServerStatusResources(s.Resources),
+		ResourceTemplates:  mcpServerStatusResourceTemplates(s.ResourceTemplates),
+		AuthStatus:         authStatus,
+		State:              state,
+		Error:              cloneStringPtr(s.Error),
+		FailureReason:      cloneStringPtr(s.FailureReason),
 	})
 }
 
@@ -1400,6 +1405,10 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 
 func (s *MCPService) inventoryStatusForConfig(index int, name string, config *ServerConfig, status MCPServerStatus, includeInventory bool, threadID string) mcpInventoryStatusResult {
 	inventory, err := s.listInventoryForConfig(name, config, threadID)
+	status.ServerCapabilities = nil
+	if inventory != nil {
+		status.ServerCapabilities = cloneMCPRawMessage(inventory.ServerCapabilities)
+	}
 	if err == nil {
 		status.Tools = inventory.Tools
 		if includeInventory {
@@ -1482,6 +1491,9 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 	current.State = status.State
 	current.Error = cloneStringPtr(status.Error)
 	current.AuthStatus = status.AuthStatus
+	// Capabilities come from the latest connection attempt; a failed
+	// initialization clears them (Rust #44826).
+	current.ServerCapabilities = cloneMCPRawMessage(status.ServerCapabilities)
 	if includeTools {
 		current.Tools = append([]MCPToolInfo(nil), status.Tools...)
 	}
@@ -2517,6 +2529,7 @@ func cloneMCPServerStatus(status MCPServerStatus) MCPServerStatus {
 	status.RuntimeStatus = cloneMCPConnectionStatus(status.RuntimeStatus)
 	status.PluginID = cloneStringPtr(status.PluginID)
 	status.source = status.source
+	status.ServerCapabilities = cloneMCPRawMessage(status.ServerCapabilities)
 	status.FailureReason = cloneStringPtr(status.FailureReason)
 	status.Server.Args = append([]string(nil), status.Server.Args...)
 	status.Server.Icons = append([]any(nil), status.Server.Icons...)

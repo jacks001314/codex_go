@@ -336,6 +336,112 @@ func TestHTTPMCPAppliesStaticAndEnvironmentHeaders(t *testing.T) {
 	}
 }
 
+// TestMCPStatusExposesAdvertisedCapabilitiesLikeRust covers Rust #44826:
+// capabilities captured during initialization, including extensions, are
+// returned in both detail modes even when tool discovery fails.
+func TestMCPStatusExposesAdvertisedCapabilitiesLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": defaultMCPProtocol,
+				"capabilities":    map[string]any{"tools": map[string]any{}, "extensions": map[string]any{"io.example/feature": true}},
+				"serverInfo":      map[string]string{"name": "docs", "version": "1"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeHTTPMCPError(t, w, request.ID, -32000, "tools unavailable")
+		default:
+			writeHTTPMCPError(t, w, request.ID, -32601, "not found")
+		}
+	}))
+	defer server.Close()
+
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"docs": {Config: ServerConfig{URL: server.URL, Enabled: true, HTTPHeaders: map[string]string{"Authorization": "Bearer configured"}}},
+	}})
+	defer service.Close()
+	for _, mode := range []MCPServerStatusDetailMode{MCPServerStatusDetailFull, MCPServerStatusDetailToolsAndAuthOnly} {
+		response, err := service.ListStatusChecked(&MCPListServerStatusParams{Detail: &MCPServerStatusDetail{Mode: mode}})
+		if err != nil {
+			t.Fatalf("ListStatusChecked(%s) error = %v", mode, err)
+		}
+		if len(response.Data) != 1 {
+			t.Fatalf("status data (%s) = %#v", mode, response.Data)
+		}
+		status := response.Data[0]
+		if status.ToolsError == nil {
+			t.Fatalf("toolsError missing for %s: %#v", mode, status)
+		}
+		var capabilities map[string]any
+		if err := json.Unmarshal(status.ServerCapabilities, &capabilities); err != nil {
+			t.Fatalf("serverCapabilities (%s) = %s, error %v", mode, status.ServerCapabilities, err)
+		}
+		extensions, _ := capabilities["extensions"].(map[string]any)
+		if extensions["io.example/feature"] != true {
+			t.Fatalf("serverCapabilities extensions (%s) = %#v", mode, extensions)
+		}
+	}
+}
+
+// TestMCPStatusSerializesUnavailableCapabilitiesAsNullLikeRust covers the
+// Rust #44826 null contract: when initialization fails, no capabilities are
+// captured and the wire field is null.
+func TestMCPStatusSerializesUnavailableCapabilitiesAsNullLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		writeHTTPMCPError(t, w, request.ID, -32000, "initialize unavailable")
+	}))
+	defer server.Close()
+
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"docs": {Config: ServerConfig{URL: server.URL, Enabled: true, HTTPHeaders: map[string]string{"Authorization": "Bearer configured"}}},
+	}})
+	defer service.Close()
+	response, err := service.ListStatusChecked(&MCPListServerStatusParams{Detail: &MCPServerStatusDetail{Mode: MCPServerStatusDetailFull}})
+	if err != nil {
+		t.Fatalf("ListStatusChecked() error = %v", err)
+	}
+	if len(response.Data) != 1 || len(response.Data[0].ServerCapabilities) != 0 {
+		t.Fatalf("status = %#v, want unavailable capabilities", response.Data)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var payload struct {
+		Data []map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(payload.Data) != 1 || !strings.EqualFold(string(payload.Data[0]["serverCapabilities"]), "null") {
+		t.Fatalf("serverCapabilities wire value = %s, want null", payload.Data[0]["serverCapabilities"])
+	}
+}
+
 func TestHTTPMCPRuntimeHeadersOverrideConfiguredAuthorization(t *testing.T) {
 	var gotAuthorization, gotProtocol string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
