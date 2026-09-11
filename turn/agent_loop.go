@@ -78,17 +78,22 @@ type AgentLoop struct {
 }
 
 type AgentLoopRequest struct {
-	Prompt                          string
-	Instructions                    string
-	Model                           string
-	ToolMode                        string
-	DisableCodeModeFallback         bool
-	ProviderID                      string
-	TaskKind                        model.AgentTaskKind
-	ThreadID                        string
-	TurnID                          string
-	Originator                      string
-	InputItems                      []any
+	Prompt                  string
+	Instructions            string
+	Model                   string
+	ToolMode                string
+	DisableCodeModeFallback bool
+	ProviderID              string
+	TaskKind                model.AgentTaskKind
+	ThreadID                string
+	TurnID                  string
+	Originator              string
+	InputItems              []any
+	// PostPromptInputItems are appended after the prompt's user message (and
+	// after InputItems when there is no prompt) for the first sampling request,
+	// then folded into the turn's input for later iterations. Rust records
+	// trusted reasoning-effort configuration updates after accepted input.
+	PostPromptInputItems            []any
 	SteerMailbox                    *SteerMailbox
 	Tools                           []any
 	HostedTools                     []any
@@ -137,6 +142,16 @@ type AgentLoopResult struct {
 	TimingProfile     *Profile
 	SamplingFollowUps int
 	Compactions       int
+}
+
+// postPromptInputItemsForIteration only supplies the turn-level post-prompt
+// items to the first sampling request. Later iterations already carry them in
+// the accumulated input history, so re-sending them would duplicate the items.
+func postPromptInputItemsForIteration(items []any, iteration int) []any {
+	if iteration == 0 {
+		return items
+	}
+	return nil
 }
 
 func (r *AgentLoopResult) ModelResponses() []*model.AgentResponse {
@@ -201,6 +216,8 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 	timing.MarkTurnStarted(l.now())
 	prompt := strings.TrimSpace(request.Prompt)
 	promptAppended := false
+	postPromptItems := request.PostPromptInputItems
+	postPromptAppended := false
 	previousResponseID := strings.TrimSpace(request.PreviousResponseID)
 	clientMetadata := transformClientMetadata(request.ClientMetadata, request.ClientMetadataTransform)
 	for iteration := 0; ; iteration++ {
@@ -231,6 +248,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			Prompt:                       prompt,
 			Instructions:                 request.Instructions,
 			InputItems:                   inputItems,
+			PostPromptInputItems:         postPromptInputItemsForIteration(postPromptItems, iteration),
 			Tools:                        append([]any(nil), request.Tools...),
 			Model:                        request.Model,
 			ProviderID:                   request.ProviderID,
@@ -281,6 +299,14 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 		}
 		prompt = ""
+		if !postPromptAppended && len(postPromptItems) > 0 {
+			for _, item := range postPromptItems {
+				if item != nil {
+					result.InputItems = append(result.InputItems, item)
+				}
+			}
+			postPromptAppended = true
+		}
 		for i := range response.Items {
 			if !isToolAgentItem(&response.Items[i]) {
 				item := response.Items[i]

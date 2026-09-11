@@ -1053,12 +1053,9 @@ func responsesReasoningParam(request *AgentRequest, info *ModelInfo) *responsesR
 	if effort == "" {
 		effort = strings.TrimSpace(info.DefaultReasoningLevel)
 	}
-	effort = reasoningEffortForRequest(info, effort)
-	// Rust #40799: keep "persistent" in local settings, but the Responses API
-	// calls it "disabled".
-	if effort == "persistent" {
-		effort = "disabled"
-	}
+	// Rust #40799/#43110: shared model-owned normalization keeps "persistent"
+	// in local settings but sends "disabled" to the Responses API.
+	effort = ResolveReasoningEffort(info, effort)
 	summary := strings.TrimSpace(request.ReasoningSummary)
 	if summary == "" {
 		summary = strings.TrimSpace(info.DefaultReasoningSummary)
@@ -1652,6 +1649,11 @@ func responsesInputItems(request *AgentRequest) []any {
 	}
 	if strings.TrimSpace(request.Prompt) != "" {
 		items = append(items, responsesUserMessage(strings.TrimSpace(request.Prompt)))
+	}
+	for i := range request.PostPromptInputItems {
+		if request.PostPromptInputItems[i] != nil {
+			items = append(items, request.PostPromptInputItems[i])
+		}
 	}
 	items = BoundExecutedToolCallsForPrompt(items)
 	if !request.Store && !request.ItemIDsEnabled {

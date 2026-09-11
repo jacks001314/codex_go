@@ -325,6 +325,8 @@ type RuntimeRouter struct {
 	rolloutBudget           *runtimeutil.Budget
 	rolloutBudgetCharged    atomic.Bool
 	rolloutBudgetExhausted  atomic.Bool
+	reasoningEffortMu       sync.Mutex
+	reasoningEffortPins     map[string]reasoningEffortPin
 	closeOnce               sync.Once
 	closeErr                error
 	codexHomeScanCancel     func()
@@ -2230,6 +2232,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			r.replayPendingServerRequestsForThread(result)
 			r.notifyRestoredTokenUsage(result)
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
+				// Rust #43795: a resumed session re-establishes the selected effort.
+				r.clearReasoningEffortPin(response.Thread.ID)
 				r.continueThreadGoalIfIdle(response.Thread.ID)
 				r.maybeDispatchQueuedSubmissionIfIdle(response.Thread.ID)
 			}
@@ -2646,6 +2650,8 @@ func (r *RuntimeRouter) handleThreadRollbackRuntime(request *Request) (*ThreadRo
 		return nil, fmt.Errorf("%w: unexpected thread/rollback response %T", ErrInvalidRequest, result)
 	}
 	r.clearNodeReplReviewEvidence(params.ThreadID)
+	// Rust #43795: rollback re-establishes the selected effort on the next send.
+	r.clearReasoningEffortPin(params.ThreadID)
 	return response, nil
 }
 

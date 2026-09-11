@@ -1338,10 +1338,24 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 	}
 	r.updateActiveRuntimeTurnAnalytics(threadID, turnID, connectionID, runConfig)
+	// Rust #43110: record the trusted reasoning-effort update with this turn so
+	// ordinary rollback removes it too. It is persisted after accepted input.
+	if len(runConfig.OverrideInputItems) > 0 {
+		params.AdditionalInputItems = append(params.AdditionalInputItems, runConfig.OverrideInputItems...)
+	}
 	promptPersisted = r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
 	agentPrompt := promptFromTurnStart(params)
 	inputItems := append([]any(nil), runConfig.InputItems...)
-	inputItems = append(inputItems, params.AdditionalInputItems...)
+	// Configuration updates are carried as post-prompt items so they follow the
+	// accepted user input in the sampling request, matching Rust's history order.
+	var postPromptInputItems []any
+	for _, item := range params.AdditionalInputItems {
+		if isConfigurationUpdateInputItem(item) {
+			postPromptInputItems = append(postPromptInputItems, item)
+			continue
+		}
+		inputItems = append(inputItems, item)
+	}
 	// Rust 6f647caa9b: async hook results recorded before the user prompt
 	// appear ahead of the new prompt in conversation history.
 	inputItems = append(inputItems, r.asyncHookContextInputItems(threadID)...)
@@ -1379,6 +1393,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		Prompt:                       agentPrompt,
 		Instructions:                 runConfig.Instructions,
 		InputItems:                   inputItems,
+		PostPromptInputItems:         postPromptInputItems,
 		HostedTools:                  append([]any(nil), runConfig.HostedTools...),
 		SteerMailbox:                 r.requireSteerMailbox(),
 		Model:                        runConfig.Model,
@@ -5065,6 +5080,10 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	// rewrites, seeding them with the latest reusable compaction when the
 	// guardian_reuse_parent_compaction feature is enabled.
 	r.resetGuardianAfterParentCompaction(request.ThreadID, compacted)
+	// Rust #43796: a successful compaction retires the request-effort baseline so
+	// the next sampling request re-establishes the selected effort without a
+	// redundant configuration update.
+	r.markReasoningEffortPinCompacted(request.ThreadID)
 	return &ContextCompactedNotification{
 		ThreadID:    request.ThreadID,
 		TurnID:      request.TurnID,
@@ -6011,6 +6030,9 @@ type appTurnRunConfig struct {
 	ParallelToolCalls               bool
 	ReasoningEffort                 string
 	ReasoningSummary                string
+	// OverrideInputItems holds trusted reasoning-effort configuration_update
+	// items this turn should record after accepted input (Rust #43110).
+	OverrideInputItems              []any
 	ConcurrentReasoningSummaries    bool
 	ModelVerbosity                  string
 	IncludeTimingMetrics            bool
@@ -6258,6 +6280,13 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		nodeReplDisabled = modelInfo.NodeReplDisabled
 	}
 	toolMode = model.ResolveToolMode(toolMode, cfg.FeatureSettings())
+	// Reasoning-effort overrides (Rust #43110/#43795): decide the trusted update
+	// before pinning the request baseline for this context window.
+	reasoningEffortFeature := reasoningEffortFeatureEnabled(cfg)
+	reasoningEffortModel := reasoningEffortModelSlug(modelInfo, modelProviderConfig.Model)
+	overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(cfg, params, modelInfo, modelProviderConfig.ProviderID)
+	overrideInputItems := r.reasoningEffortOverrideInputItems(threadID, reasoningEffortModel, overrideEffort, overrideAvailable, historyItems)
+	requestReasoningEffort := r.reasoningEffortForRequest(threadID, reasoningEffortModel, appReasoningEffortForTurn(cfg, params), reasoningEffortFeature, overrideEffort, overrideAvailable, requestEffortSampling)
 	return &appTurnRunConfig{
 		Model:                           modelProviderConfig.Model,
 		AutoReviewModelOverride:         autoReviewModelOverride,
@@ -6290,8 +6319,9 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		PostToolInputItems:              postToolInputItems,
 		PreviousResponseID:              previousResponseID,
 		ParallelToolCalls:               r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
-		ReasoningEffort:                 appReasoningEffortForTurn(cfg, params),
+		ReasoningEffort:                 requestReasoningEffort,
 		ReasoningSummary:                stringPtrValue(params.Summary),
+		OverrideInputItems:              overrideInputItems,
 		ConcurrentReasoningSummaries:    features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
 		ModelVerbosity:                  firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),
 		IncludeTimingMetrics:            appIncludeTimingMetrics(cfg),

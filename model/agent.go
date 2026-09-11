@@ -20,9 +20,14 @@ const (
 )
 
 type AgentRequest struct {
-	Prompt                       string
-	Instructions                 string
-	InputItems                   []any
+	Prompt       string
+	Instructions string
+	InputItems   []any
+	// PostPromptInputItems are appended to the model input after the prompt's
+	// user message (and after InputItems when there is no prompt). Rust #43110
+	// records trusted reasoning-effort configuration updates after accepted
+	// input so they follow the user message in the request.
+	PostPromptInputItems         []any
 	Tools                        []any
 	Model                        string
 	ProviderID                   string
