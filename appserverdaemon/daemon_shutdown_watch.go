@@ -9,6 +9,14 @@ import (
 
 var daemonShutdownPollInterval = 200 * time.Millisecond
 
+// daemonShutdownRequest is the JSON payload the pid-managed app server watches
+// in its CODEX_DAEMON_SHUTDOWN_FILE (Rust #42364). It is defined for every
+// platform because the watcher runs unconditionally; only Windows writes the
+// request file (see pid_shutdown_windows.go).
+type daemonShutdownRequest struct {
+	PID uint32 `json:"pid"`
+}
+
 // WatchDaemonShutdownRequest polls the CODEX_DAEMON_SHUTDOWN_FILE for a
 // shutdown request addressed to the current PID and cancels ctx when one
 // arrives (Rust #42364). Requests for other PIDs and malformed files are

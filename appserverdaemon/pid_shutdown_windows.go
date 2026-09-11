@@ -8,12 +8,6 @@ import (
 	"path/filepath"
 )
 
-// daemonShutdownRequest is the JSON payload the pid-managed app server watches
-// in its CODEX_DAEMON_SHUTDOWN_FILE (Rust #42364).
-type daemonShutdownRequest struct {
-	PID uint32 `json:"pid"`
-}
-
 func daemonShutdownFilePath(pidFile string) string {
 	return pidPathWithExtension(pidFile, "shutdown")
 }
