@@ -47,6 +47,34 @@ func TestCredentialBrokerDestinationHintsSurviveEnvFilteringLikeRust(t *testing.
 			t.Fatal("static destination binding lost")
 		}
 	})
+
+	t.Run("destination rotation rebinds existing aliases", func(t *testing.T) {
+		broker := NewProxyCredentialBrokerWithProviders(true, []*ProxyCredentialProvider{ConfiguredCredentialProvider("vendor", config)})
+		broker.SetDestinationHints(map[string]string{envKey: "tenant1.vendor.example"})
+		broker.VirtualizeChildEnv(map[string]string{"VENDOR_TOKEN": realValue})
+		if !broker.HostRequiresMITM("tenant1.vendor.example") {
+			t.Fatal("initial destination missing")
+		}
+		broker.SetDestinationHints(map[string]string{envKey: "tenant2.vendor.example"})
+		broker.VirtualizeChildEnv(map[string]string{"VENDOR_TOKEN": realValue})
+		if broker.HostRequiresMITM("tenant1.vendor.example") {
+			t.Fatal("stale destination alias was not reconciled")
+		}
+		if !broker.HostRequiresMITM("tenant2.vendor.example") {
+			t.Fatal("rotated destination missing")
+		}
+	})
+
+	t.Run("absent destination preserves the registration", func(t *testing.T) {
+		broker := NewProxyCredentialBrokerWithProviders(true, []*ProxyCredentialProvider{ConfiguredCredentialProvider("vendor", config)})
+		broker.SetDestinationHints(map[string]string{envKey: "tenant1.vendor.example"})
+		broker.VirtualizeChildEnv(map[string]string{"VENDOR_TOKEN": realValue})
+		broker.SetDestinationHints(map[string]string{})
+		broker.VirtualizeChildEnv(map[string]string{"VENDOR_TOKEN": realValue})
+		if !broker.HostRequiresMITM("tenant1.vendor.example") {
+			t.Fatal("registration lost when the destination variable became absent")
+		}
+	})
 }
 
 // TestCredentialBrokerDisablesOnAmbiguousWindowsProviderEnvLikeRust mirrors

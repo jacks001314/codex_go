@@ -112,6 +112,7 @@ func (b *ProxyCredentialBroker) VirtualizeChildEnv(env map[string]string) {
 	}
 	env[CredentialBrokerActiveEnvKey] = "1"
 	resolvedEnv := envWithHintFallbacks(env, b.hints)
+	b.pruneStaleCredentialBindings(resolvedEnv)
 	for _, provider := range b.providers {
 		for _, source := range provider.Sources {
 			hostBinding, ok := source.HostBinding(resolvedEnv)
@@ -125,6 +126,47 @@ func (b *ProxyCredentialBroker) VirtualizeChildEnv(env map[string]string) {
 	}
 	b.virtualizeEmbeddedCredentials(env, resolvedEnv)
 	b.updateBrokeredCredentialsMarker(env)
+}
+
+// pruneStaleCredentialBindings drops registrations whose provider now resolves a
+// different destination, mirroring #44066's reconciliation during token/
+// destination rotation: an alias must not stay bound to a host the provider is
+// no longer authorized for. Registrations whose provider has no current binding
+// (for example because a hint was absent) are preserved.
+func (b *ProxyCredentialBroker) pruneStaleCredentialBindings(resolvedEnv map[string]string) {
+	if len(b.credentials) == 0 {
+		return
+	}
+	kept := b.credentials[:0]
+	for index := range b.credentials {
+		credential := b.credentials[index]
+		provider := credential.Provider
+		if provider == nil || len(provider.Sources) == 0 {
+			kept = append(kept, credential)
+			continue
+		}
+		if len(provider.DestinationEnvKeys) > 0 {
+			present := false
+			for _, key := range provider.DestinationEnvKeys {
+				if _, ok := resolvedEnv[key]; ok {
+					present = true
+					break
+				}
+			}
+			if !present {
+				// The destination variable is absent: preserve the existing
+				// registration instead of dropping it (Rust #44068/#44066).
+				kept = append(kept, credential)
+				continue
+			}
+		}
+		current, ok := provider.Sources[0].HostBinding(resolvedEnv)
+		if !ok || (&credential.HostBinding).Equal(current) {
+			kept = append(kept, credential)
+			continue
+		}
+	}
+	b.credentials = kept
 }
 
 // virtualizeEmbeddedCredentials mirrors Rust #44066's alias discovery for
