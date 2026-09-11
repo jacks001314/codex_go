@@ -23,7 +23,9 @@ const (
 	ProxyDefaultNoProxyValue     = "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 )
 
-var NoProxyEnvKeys = []string{"NO_PROXY", "no_proxy", "npm_config_noproxy", "NPM_CONFIG_NOPROXY", "YARN_NO_PROXY", "BUNDLE_NO_PROXY"}
+// Rust #44931 removed YARN_NO_PROXY: Yarn's no-proxy variable is not honored by
+// the managed proxy environment.
+var NoProxyEnvKeys = []string{"NO_PROXY", "no_proxy", "npm_config_noproxy", "NPM_CONFIG_NOPROXY", "BUNDLE_NO_PROXY"}
 
 func ProxyURLEnvValue(env map[string]string, canonicalKey string) (string, bool) {
 	if value, ok := env[canonicalKey]; ok {

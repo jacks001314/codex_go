@@ -1093,6 +1093,47 @@ func TestModelInstructionsPersonalityTemplate(t *testing.T) {
 	}
 }
 
+func TestModelInstructionsFixedTemplateIgnoresPersonality(t *testing.T) {
+	// Rust #44930: bundled GPT-5.4 and GPT-5.5 replaced their selectable
+	// personality templates with fixed friendly instructions, so personality is
+	// unsupported and a submitted personality override leaves them unchanged.
+	info := ModelInfo{
+		BaseInstructions: "base",
+		ModelMessages: &ModelMessages{
+			InstructionsTemplate: "You are Codex, a coding agent based on GPT-5.",
+		},
+	}
+	if info.SupportsPersonality() {
+		t.Fatal("fixed-instruction model must not support personality")
+	}
+	for _, personality := range []string{"friendly", "pragmatic", "none", "default", ""} {
+		if got := info.ModelInstructions(personality); got != "You are Codex, a coding agent based on GPT-5." {
+			t.Fatalf("ModelInstructions(%q) = %q", personality, got)
+		}
+	}
+}
+
+func TestBundledCatalogFixedTemplatesReportNoPersonalitySupport(t *testing.T) {
+	catalog, err := loadBundledModelsResponse()
+	if err != nil {
+		t.Skipf("bundled Rust catalog unavailable: %v", err)
+	}
+	manager := NewStaticModelsManager(catalog)
+	for _, slug := range []string{"gpt-5.4", "gpt-5.5"} {
+		info := manager.GetModelInfo(slug, nil)
+		if info.ModelMessages == nil || strings.Contains(info.ModelMessages.InstructionsTemplate, personalityPlaceholder) {
+			// Older catalog revisions still ship selectable personality templates.
+			continue
+		}
+		if info.SupportsPersonality() {
+			t.Fatalf("%s fixed instructions still support personality", slug)
+		}
+		if got := info.ModelInstructions("pragmatic"); got != info.ModelMessages.InstructionsTemplate {
+			t.Fatalf("%s ModelInstructions(pragmatic) = %q", slug, got)
+		}
+	}
+}
+
 func TestAmazonBedrockModelCatalog(t *testing.T) {
 	manager := NewStaticModelsManager(AmazonBedrockModelCatalog())
 	models := manager.ListModels(RefreshOffline)
