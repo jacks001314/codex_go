@@ -301,14 +301,16 @@ func (t *TranscriptComponent) insertFinalMessageSeparatorIfNeeded(state *codextu
 // appendCompletionFooter adds the turn's completion metadata after its final
 // answer (Rust #43558). The footer is emitted once per completed turn; a live
 // completion falls back to the local clock when no saved timestamp exists.
-func (t *TranscriptComponent) appendCompletionFooter(state *codextui.State, width int, completedAt time.Time) {
+// elapsedSeconds comes from the protocol turn duration and is only shown when
+// it exceeds sixty seconds.
+func (t *TranscriptComponent) appendCompletionFooter(state *codextui.State, width int, elapsedSeconds *int64, completedAt time.Time) {
 	if t == nil || state == nil {
 		return
 	}
 	if width < 20 {
 		width = 20
 	}
-	cell := historycell.NewFinalMessageSeparator(nil, nil).WithCompletedAt(completedAt)
+	cell := historycell.NewFinalMessageSeparator(elapsedSeconds, nil).WithCompletedAt(completedAt)
 	state.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
 }
 

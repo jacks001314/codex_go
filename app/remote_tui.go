@@ -62,6 +62,9 @@ type remoteAppServerTUIClient struct {
 	codexHome       string
 	turnCompleted   bool
 	turnInterrupted bool
+	// turnDurationMS carries the completed turn's protocol duration so the TUI
+	// can show "Worked for" completion metadata (Rust #43558).
+	turnDurationMS *int64
 }
 
 type remoteWebSocketTransport struct {
@@ -1968,7 +1971,7 @@ func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoi
 		return
 	}
 	if !client.turnInterrupted {
-		messages <- codextea.TurnCompletedMsg{ThreadID: threadID}
+		messages <- codextea.TurnCompletedMsg{ThreadID: threadID, DurationMS: client.turnDurationMS}
 	}
 }
 
@@ -3084,6 +3087,12 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		}
 		c.noteNotificationThreadID(payload.ThreadID)
 		c.turnCompleted = true
+		if payload.Turn.DurationMS != nil {
+			value := *payload.Turn.DurationMS
+			c.turnDurationMS = &value
+		} else {
+			c.turnDurationMS = nil
+		}
 		if payload.Turn.Status == appserver.TurnStatusInterrupted {
 			c.turnInterrupted = true
 			c.send(codextea.TurnInterruptedMsg{})

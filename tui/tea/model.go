@@ -308,7 +308,9 @@ type CompactStartResultMsg struct {
 type TurnCompletedMsg struct {
 	ThreadID         string
 	AssistantMessage string
-	Err              error
+	// DurationMS is the protocol turn duration, when the completion carried one.
+	DurationMS *int64
+	Err        error
 }
 
 type TurnInterruptedMsg struct {
@@ -2842,7 +2844,12 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	}
 	// Rust #43558: a successful turn shows its completion metadata after the
 	// final answer, including plain conversational answers.
-	m.Transcript.appendCompletionFooter(m.State, m.width, time.Now())
+	var elapsedSeconds *int64
+	if message.DurationMS != nil && *message.DurationMS >= 0 {
+		value := *message.DurationMS / 1000
+		elapsedSeconds = &value
+	}
+	m.Transcript.appendCompletionFooter(m.State, m.width, elapsedSeconds, time.Now())
 	m.setStatus("idle")
 	m.Transcript.lastTurnError = ""
 	m.notice = ""
