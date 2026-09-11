@@ -129,6 +129,7 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 		m.notice = "No sessions available."
 		return nil
 	}
+	picker.ThemeID = m.tuiTheme
 	picker.Density = m.sessionPickerDensity
 	visible := picker.VisibleItems()
 	if len(visible) == 0 {

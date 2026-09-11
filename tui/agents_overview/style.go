@@ -1,6 +1,7 @@
 package agentsoverview
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/mattn/go-runewidth"
@@ -46,6 +47,18 @@ func (s spanStyle) sgr() string {
 type span struct {
 	text  string
 	style spanStyle
+	// color is an optional "#rrggbb" foreground applied after style, used for
+	// deterministic per-thread identity colors (Rust #44857 thread_color).
+	color string
+}
+
+// threadTitleSpan renders a row title with the thread's identity color when one
+// is available, otherwise with the given fallback style.
+func threadTitleSpan(title string, color string, fallback spanStyle) span {
+	if color != "" {
+		return span{text: title, style: spanPlain, color: color}
+	}
+	return span{text: title, style: fallback}
 }
 
 // groupDotStyle maps a status group to its marker color (Rust status()).
@@ -71,17 +84,44 @@ func joinSpans(spans []span) string {
 	return builder.String()
 }
 
+// threadColorSGR converts a "#rrggbb" identity color to a truecolor foreground
+// SGR sequence, matching the tui package's thread color encoding.
+func threadColorSGR(color string) string {
+	color = strings.TrimPrefix(strings.TrimSpace(color), "#")
+	if len(color) != 6 {
+		return ""
+	}
+	value, err := strconv.ParseUint(color, 16, 32)
+	if err != nil {
+		return ""
+	}
+	return "\x1b[38;2;" + strconv.Itoa(int(value>>16)&0xff) + ";" + strconv.Itoa(int(value>>8)&0xff) + ";" + strconv.Itoa(int(value)&0xff) + "m"
+}
+
 // renderStyledSpans encodes a line with ANSI SGR sequences.
 func renderStyledSpans(spans []span) string {
 	var builder strings.Builder
 	for _, s := range spans {
-		if s.style == spanPlain || s.text == "" {
+		if s.text == "" {
 			builder.WriteString(s.text)
 			continue
 		}
-		builder.WriteString(s.style.sgr())
-		builder.WriteString(s.text)
-		builder.WriteString("\x1b[0m")
+		switch {
+		case s.color != "":
+			if sgr := threadColorSGR(s.color); sgr != "" {
+				builder.WriteString(sgr)
+				builder.WriteString(s.text)
+				builder.WriteString("\x1b[39m")
+				continue
+			}
+			builder.WriteString(s.text)
+		case s.style == spanPlain:
+			builder.WriteString(s.text)
+		default:
+			builder.WriteString(s.style.sgr())
+			builder.WriteString(s.text)
+			builder.WriteString("\x1b[0m")
+		}
 	}
 	return builder.String()
 }

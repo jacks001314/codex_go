@@ -82,6 +82,7 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	}
 	m.agentsOverviewPendingDraft = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
+	m.wireAgentsOverviewThemeColors(m.agentsOverview)
 	// Rust #44424: hidden tasks stay hidden across dashboard close/reopen.
 	m.agentsOverview.SetHiddenThreads(m.agentsOverviewHidden)
 	m.agentsOverviewNotice = ""
@@ -119,6 +120,20 @@ func (m *Model) applyAgentsOverviewKeymapHints() {
 			binding = bindings[0]
 		}
 		m.agentsOverview.SetShortcutHint(hint.action, binding)
+	}
+}
+
+// wireAgentsOverviewThemeColors lets the dashboard color task titles with
+// deterministic per-thread identity colors from the active syntax theme
+// (Rust #44857). The resolver reads the live theme id so a theme change is
+// reflected on the next render.
+func (m *Model) wireAgentsOverviewThemeColors(view *agentsoverview.View) {
+	if view == nil {
+		return
+	}
+	view.UseThemeColors = true
+	view.ThreadColor = func(threadID string) string {
+		return codextui.ThreadColorForTheme(threadID, m.tuiTheme)
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 )
 
 // Rust parity: codex-rs/tui/src/resume_picker.rs.
@@ -180,17 +182,22 @@ type SessionPickerState struct {
 	Expanded       map[string]bool
 	Loading        bool
 	Error          string
+	// UseThemeColors enables deterministic per-thread identity colors on
+	// session titles (Rust #44857). ThemeID selects the accent palette.
+	UseThemeColors bool
+	ThemeID        string
 }
 
 func NewSessionPickerState(action SessionPickerAction, items []SessionSummary, filterCWD string) *SessionPickerState {
 	state := &SessionPickerState{
-		Action:       action,
-		Items:        append([]SessionSummary(nil), items...),
-		FilterMode:   SessionFilterModeFromShowAll(false, filterCWD),
-		FilterCWD:    filterCWD,
-		SortKey:      SessionSortUpdatedAt,
-		ToolbarFocus: SessionPickerToolbarFilter,
-		Expanded:     map[string]bool{},
+		Action:         action,
+		Items:          append([]SessionSummary(nil), items...),
+		UseThemeColors: true,
+		FilterMode:     SessionFilterModeFromShowAll(false, filterCWD),
+		FilterCWD:      filterCWD,
+		SortKey:        SessionSortUpdatedAt,
+		ToolbarFocus:   SessionPickerToolbarFilter,
+		Expanded:       map[string]bool{},
 	}
 	state.clampSelection()
 	return state
@@ -437,10 +444,10 @@ func (s *SessionPickerState) RenderRows(width int, now time.Time) []string {
 	for index, item := range visible {
 		selected := index == s.Selected
 		if s.Density == SessionDensityDense {
-			rows = append(rows, renderDenseSessionRow(item, selected, width, now))
+			rows = append(rows, s.renderDenseSessionRow(item, selected, width, now))
 			continue
 		}
-		rows = append(rows, renderComfortableSessionRow(item, selected, width, now)...)
+		rows = append(rows, s.renderComfortableSessionRow(item, selected, width, now)...)
 		if s.Expanded[item.ThreadID] {
 			rows = append(rows, renderExpandedSessionRows(item, width)...)
 		}
@@ -662,15 +669,36 @@ func sessionMatchesQuery(item SessionSummary, query string) bool {
 	return strings.Contains(haystack, query)
 }
 
-func renderDenseSessionRow(item SessionSummary, selected bool, width int, now time.Time) string {
+// sessionTitleColor returns the truecolor SGR prefix for a row title, or ""
+// when theme colors are disabled, the thread id is empty, or the theme has no
+// accents (Rust #44857: fall back to the terminal default).
+func (s *SessionPickerState) sessionTitleColor(item SessionSummary) string {
+	if s == nil || !s.UseThemeColors || strings.TrimSpace(item.ThreadID) == "" {
+		return ""
+	}
+	return ThreadColorSGR(ThreadColorForTheme(item.ThreadID, s.ThemeID))
+}
+
+func (s *SessionPickerState) renderDenseSessionRow(item SessionSummary, selected bool, width int, now time.Time) string {
 	prefix := SelectionPrefix(selected)
 	updated := item.UpdatedAt
 	if updated.IsZero() {
 		updated = item.CreatedAt
 	}
-	row := prefix + padDisplayRight(relativeTime(updated, now), sessionPickerDateWidth) + item.DisplayPreview()
+	date := padDisplayRight(relativeTime(updated, now), sessionPickerDateWidth)
+	title := item.DisplayPreview()
 	if width > 0 {
-		row = TruncateWithEllipsis(row, width)
+		available := width - DisplayWidth(prefix) - DisplayWidth(date)
+		if available < 0 {
+			available = 0
+		}
+		title = TruncateWithEllipsis(title, available)
+	}
+	row := prefix + date + title
+	if color := s.sessionTitleColor(item); color != "" {
+		// Keep the identity accent on the title only; reset to the terminal
+		// default afterwards.
+		row = prefix + date + color + title + "\x1b[39m"
 	}
 	if selected {
 		row = RenderSelectedRow(row)
@@ -678,7 +706,7 @@ func renderDenseSessionRow(item SessionSummary, selected bool, width int, now ti
 	return row
 }
 
-func renderComfortableSessionRow(item SessionSummary, selected bool, width int, now time.Time) []string {
+func (s *SessionPickerState) renderComfortableSessionRow(item SessionSummary, selected bool, width int, now time.Time) []string {
 	prefix := SelectionPrefix(selected)
 	title := prefix + item.DisplayPreview()
 	lines := AdaptiveWrapLine(title, WrapOptions{
@@ -686,8 +714,15 @@ func renderComfortableSessionRow(item SessionSummary, selected bool, width int, 
 		SubsequentIndent: "  ",
 		BreakWords:       true,
 	})
-	if selected {
-		for i := range lines {
+	color := s.sessionTitleColor(item)
+	for i := range lines {
+		if color != "" {
+			// The marker/indent occupies the first two display columns.
+			lines[i] = colorThreadTitleLine(lines[i], color)
+		}
+		if selected {
+			// Selection bold/blue wraps the whole line; the identity color set
+			// on the title survives (Rust keeps thread colors when selected).
 			lines[i] = RenderSelectedRow(lines[i])
 		}
 	}
@@ -713,6 +748,26 @@ func renderComfortableSessionRow(item SessionSummary, selected bool, width int, 
 		})...)
 	}
 	return lines
+}
+
+// colorThreadTitleLine applies the identity color to a row's title text while
+// leaving the two-column marker/indent prefix unstyled.
+func colorThreadTitleLine(line string, color string) string {
+	if color == "" {
+		return line
+	}
+	const prefixWidth = 2
+	if DisplayWidth(line) <= prefixWidth {
+		return color + line + "\x1b[39m"
+	}
+	runes := []rune(line)
+	used := 0
+	index := 0
+	for index < len(runes) && used < prefixWidth {
+		used += runewidth.RuneWidth(runes[index])
+		index++
+	}
+	return string(runes[:index]) + color + string(runes[index:]) + "\x1b[39m"
 }
 
 func renderExpandedSessionRows(item SessionSummary, width int) []string {

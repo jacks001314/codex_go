@@ -239,7 +239,7 @@ func (v *View) renderRowSpans(index int, projectGrouping bool) []span {
 		{text: " ", style: spanPlain},
 		{text: row.Group.Dot(), style: groupDotStyle(row.Group)},
 		{text: " ", style: spanPlain},
-		{text: row.Title(), style: spanPlain},
+		v.titleSpan(row.ThreadID, row.Title(), spanPlain),
 	}
 	if row.IsCurrent {
 		spans = append(spans, span{text: "  current", style: spanDim})
@@ -260,7 +260,7 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	var lines [][]span
 	lines = append(lines, []span{{text: "Task details", style: spanBold}})
 	lines = append(lines, nil)
-	lines = append(lines, []span{{text: row.Title(), style: spanBold}})
+	lines = append(lines, []span{v.titleSpan(row.ThreadID, row.Title(), spanBold)})
 	lines = append(lines, []span{
 		{text: row.Group.Dot(), style: groupDotStyle(row.Group)},
 		{text: " ", style: spanPlain},

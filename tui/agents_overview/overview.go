@@ -147,6 +147,23 @@ type View struct {
 	ExitOnCancel bool
 	Completion   Completion
 	hints        map[string]string
+
+	// UseThemeColors enables deterministic per-thread identity colors on row
+	// and detail titles (Rust #44857). ThreadColor resolves a thread id to an
+	// accent color ("#rrggbb"), returning "" to fall back to the default style.
+	UseThemeColors bool
+	ThreadColor    func(threadID string) string
+}
+
+// titleSpan styles a task title. Identity colors win over the fallback style
+// when theme colors are enabled and the resolver returns an accent.
+func (v *View) titleSpan(threadID string, title string, fallback spanStyle) span {
+	if v != nil && v.UseThemeColors && v.ThreadColor != nil {
+		if color := v.ThreadColor(threadID); color != "" {
+			return threadTitleSpan(title, color, fallback)
+		}
+	}
+	return span{text: title, style: fallback}
 }
 
 // ShortcutHintKey identifies a dashboard footer shortcut. The tea layer
