@@ -7401,21 +7401,6 @@ func TestRuntimeRouterReviewStartRejectsDetachedDeliveryForPaginatedParentLikeRu
 	}
 }
 
-func TestRuntimeRouterThreadRollbackRejectsPaginatedThreadLikeRust(t *testing.T) {
-	store := session.NewStore(t.TempDir())
-	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), ThreadStatus: NewThreadStatusManager()})
-	defer router.Close()
-	started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), HistoryMode: ThreadHistoryPaginated}))
-	if started.Error != nil {
-		t.Fatalf("thread start = %+v", started.Error)
-	}
-	threadID := started.Result.(*ThreadStartResponse).Thread.ID
-	response := router.Handle(requestWithParams(t, IntID(2), MethodThreadRollback, ThreadRollbackParams{ThreadID: threadID, NumTurns: 1}))
-	if response.Error == nil || response.Error.Code != -32600 || response.Error.Message != "paginated threads do not support thread/rollback" {
-		t.Fatalf("rollback response = %+v", response)
-	}
-}
-
 func TestRuntimeRouterReviewStartRunsReviewTurnAndEmitsExitLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	home := t.TempDir()
@@ -21699,114 +21684,6 @@ func TestRuntimeRouterThreadLifecycleNotifications(t *testing.T) {
 		t.Fatalf("delete error: %+v", deleted.Error)
 	}
 	if !sinkHasMethod(sink, NotificationThreadNameUpdated) || !sinkHasMethod(sink, NotificationThreadArchived) || !sinkHasMethod(sink, NotificationThreadDeleted) {
-		t.Fatalf("notifications = %+v", sink.List())
-	}
-}
-
-func TestRuntimeRouterThreadRollbackEmitsDeprecationNotice(t *testing.T) {
-	store := session.NewStore(t.TempDir())
-	createRecord(t, store, "thread-a", fixedTime())
-	sink := NewNotificationBuffer()
-	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
-	router.SetNotificationSink(sink)
-	router.requireThreadStatus().UpsertThread("thread-a", false)
-
-	rollback := router.Handle(requestWithParams(t, IntID(1), MethodThreadRollback, ThreadRollbackParams{
-		ThreadID: "thread-a",
-		NumTurns: 1,
-	}))
-	if rollback.Error != nil {
-		t.Fatalf("rollback error: %+v", rollback.Error)
-	}
-	notifications := sink.List()
-	if len(notifications) == 0 || notifications[0].Method != NotificationDeprecationNotice {
-		t.Fatalf("notifications = %+v", notifications)
-	}
-	notice, ok := notifications[0].Params.(*DeprecationNoticeNotification)
-	if !ok || notice.Summary != "thread/rollback is deprecated and will be removed soon" {
-		t.Fatalf("notice = %#v", notifications[0].Params)
-	}
-}
-
-func TestRuntimeRouterThreadRollbackRejectsNotLoadedThread(t *testing.T) {
-	store := session.NewStore(t.TempDir())
-	createRecord(t, store, "thread-a", fixedTime())
-	sink := NewNotificationBuffer()
-	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
-	router.SetNotificationSink(sink)
-
-	rollback := router.Handle(requestWithParams(t, IntID(1), MethodThreadRollback, ThreadRollbackParams{
-		ThreadID: "thread-a",
-		NumTurns: 1,
-	}))
-	if rollback.Error == nil || rollback.Error.Code != -32600 || rollback.Error.Message != "thread not found: thread-a" {
-		t.Fatalf("rollback response = %+v", rollback)
-	}
-	record, err := store.Read("thread-a", true, true)
-	if err != nil {
-		t.Fatalf("read thread: %v", err)
-	}
-	if len(record.Items) != 2 {
-		t.Fatalf("record items were mutated by rejected rollback: %+v", record.Items)
-	}
-	notifications := sink.List()
-	if len(notifications) == 0 || notifications[0].Method != NotificationDeprecationNotice {
-		t.Fatalf("notifications = %+v", notifications)
-	}
-}
-
-func TestRuntimeRouterThreadRollbackSuppressesDeprecationNoticeForCodexTUI(t *testing.T) {
-	store := session.NewStore(t.TempDir())
-	sink := NewNotificationBuffer()
-	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
-	router.SetNotificationSink(sink)
-
-	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
-		ClientInfo: ClientInfo{Name: "codex-tui", Version: "0.1.0"},
-	})
-	initialize.ConnectionID = "conn-tui"
-	if response := router.Handle(initialize); response.Error != nil {
-		t.Fatalf("initialize error: %+v", response.Error)
-	}
-
-	rollback := requestWithParams(t, IntID(2), MethodThreadRollback, ThreadRollbackParams{
-		ThreadID: "missing-thread",
-		NumTurns: 1,
-	})
-	rollback.ConnectionID = "conn-tui"
-	response := router.Handle(rollback)
-	if response.Error == nil {
-		t.Fatalf("rollback response = %+v, want error", response)
-	}
-	if sinkHasMethod(sink, NotificationDeprecationNotice) {
-		t.Fatalf("notifications = %+v", sink.List())
-	}
-}
-
-func TestRuntimeRouterThreadRollbackDeprecationNoticeUsesExactCodexTUIName(t *testing.T) {
-	store := session.NewStore(t.TempDir())
-	sink := NewNotificationBuffer()
-	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
-	router.SetNotificationSink(sink)
-
-	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
-		ClientInfo: ClientInfo{Name: " codex-tui ", Version: "0.1.0"},
-	})
-	initialize.ConnectionID = "conn-padded-tui"
-	if response := router.Handle(initialize); response.Error != nil {
-		t.Fatalf("initialize error: %+v", response.Error)
-	}
-
-	rollback := requestWithParams(t, IntID(2), MethodThreadRollback, ThreadRollbackParams{
-		ThreadID: "missing-thread",
-		NumTurns: 1,
-	})
-	rollback.ConnectionID = "conn-padded-tui"
-	response := router.Handle(rollback)
-	if response.Error == nil {
-		t.Fatalf("rollback response = %+v, want error", response)
-	}
-	if !sinkHasMethod(sink, NotificationDeprecationNotice) {
 		t.Fatalf("notifications = %+v", sink.List())
 	}
 }

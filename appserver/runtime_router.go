@@ -1859,17 +1859,6 @@ func (r *RuntimeRouter) connectionNotificationMethodOptedOut(connectionID string
 	return ok
 }
 
-func (r *RuntimeRouter) shouldNotifyThreadRollbackDeprecation(request *Request) bool {
-	if r == nil || request == nil {
-		return true
-	}
-	info, ok := r.connectionClientInfo(request.normalizedConnectionID())
-	if !ok {
-		return true
-	}
-	return info.Name != "codex-tui"
-}
-
 func (r *RuntimeRouter) rejectUninitializedConnection(request *Request) error {
 	if r == nil || request == nil || requestAllowsUninitializedConnection(request.Method) {
 		return nil
@@ -2167,12 +2156,6 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		}
 		if isThreadAttachmentMethod(request.Method) {
 			return r.handleThreadAttachmentRuntime(request)
-		}
-		if request.Method == MethodThreadRollback {
-			if r.shouldNotifyThreadRollbackDeprecation(request) {
-				r.notify(NotificationDeprecationNotice, threadRollbackDeprecationNotice())
-			}
-			return r.handleThreadRollbackRuntime(request)
 		}
 		if request.Method == MethodThreadRevert {
 			return r.handleThreadRevertRuntime(request)
@@ -2610,49 +2593,6 @@ func (r *RuntimeRouter) handleThreadItemsListRuntime(request *Request) (*ThreadI
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/items/list is unavailable before first user message", record.ID))
 	}
 	return BuildItemsResponse(record, &params)
-}
-
-func (r *RuntimeRouter) handleThreadRollbackRuntime(request *Request) (*ThreadRollbackResponse, error) {
-	if r == nil || r.services.ThreadRouter == nil {
-		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
-	}
-	var params ThreadRollbackParams
-	if err := request.DecodeParams(&params); err != nil {
-		return nil, err
-	}
-	// Mirrors Rust core/src/session/handlers.rs thread_rollback: a num_turns < 1
-	// request surfaces the ThreadRollbackFailed codexErrorInfo.
-	if params.NumTurns < 1 {
-		return nil, threadRollbackFailed("numTurns must be >= 1")
-	}
-	if err := params.Validate(); err != nil {
-		return nil, err
-	}
-	if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
-		return nil, err
-	}
-	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false)
-	if err != nil {
-		return nil, threadReadError(params.ThreadID, err)
-	}
-	if threadUsesPaginatedHistory(record) {
-		return nil, jsonRPCInvalidRequest("paginated threads do not support thread/rollback")
-	}
-	if r.activeRuntimeTurnSnapshot(params.ThreadID) != nil {
-		return nil, threadRollbackFailed("Cannot rollback while a turn is in progress.")
-	}
-	result, err := r.services.ThreadRouter.dispatch(request)
-	if err != nil {
-		return nil, err
-	}
-	response, ok := result.(*ThreadRollbackResponse)
-	if !ok {
-		return nil, fmt.Errorf("%w: unexpected thread/rollback response %T", ErrInvalidRequest, result)
-	}
-	r.clearNodeReplReviewEvidence(params.ThreadID)
-	// Rust #43795: rollback re-establishes the selected effort on the next send.
-	r.clearReasoningEffortPin(params.ThreadID)
-	return response, nil
 }
 
 // runInterruptHook discovers and runs the managed Interrupt hooks for a turn
@@ -13928,7 +13868,7 @@ func isThreadMethod(method Method) bool {
 		MethodThreadMetadataUpdate, MethodThreadSectionMove, MethodThreadList, MethodThreadRead,
 		MethodThreadAttachmentAdd, MethodThreadAttachmentList, MethodThreadAttachmentRemove,
 		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
-		MethodThreadTurnsList, MethodThreadRollback, MethodThreadRevert,
+		MethodThreadTurnsList, MethodThreadRevert,
 		MethodThreadQueueAdd, MethodThreadQueueList, MethodThreadQueueUpdate,
 		MethodThreadQueueDelete, MethodThreadQueueReorder, MethodThreadQueueStart,
 		MethodThreadInjectItems:

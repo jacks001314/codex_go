@@ -284,8 +284,8 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// ephemeral forks). The drift is confined to this file and does not
 		// touch the voice surface; porting the behaviour is a separate item.
 		{Path: "core/src/client.rs", SHA256: "5bdbf9d92c1e0945db78e610c2851de34a7d6ce0d5247e61b4079bcd4b514dd6"},
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "c2ffd42ed5475e33abd3b7c5cfca4f1f586279ae4aad52a5e0d2731202ce07dc"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "f4e18fd3f3ae2e1b89cc8c90133d9bdc2861e882b0861b81cb329c320351cdba"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "65cce34c9d63b6ef59747926df59a2774bbbfb84309be5e3477759aaa32afa98"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "1ac8b2ec0007a38e8724839fabaca6e9824e19589f106daab752fd00aaebb285"},
 		{Path: "core/tests/suite/mod.rs", SHA256: "601842ce5a18502bc83588e8c947972b1011444f2fba9e0ef4df6996f779896a"},
 	}
 }

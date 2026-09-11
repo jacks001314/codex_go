@@ -458,23 +458,6 @@ func (r *Router) appendThreadRollout(threadID session.ThreadID, items []session.
 	return rollout.AppendSessionItems(recorder, items, now)
 }
 
-func (r *Router) appendThreadRollback(threadID session.ThreadID, numTurns int, now time.Time) error {
-	if r == nil || r.store == nil || numTurns < 0 {
-		return nil
-	}
-	path, err := r.findThreadRolloutPath(threadID, false)
-	if err != nil {
-		return nil
-	}
-	recorder, err := rollout.Resume(path)
-	if err != nil {
-		return err
-	}
-	r.configureThreadHistoryRecorder(recorder, threadID)
-	defer recorder.Close()
-	return recorder.AppendThreadRolledBack(uint32(numTurns), now)
-}
-
 func (r *Router) appendThreadSettingsApplied(threadID session.ThreadID, approvalPolicy string, now time.Time) error {
 	return r.appendThreadSettingsAppliedWithOwner(threadID, approvalPolicy, "", now)
 }
@@ -951,8 +934,6 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadItemsList(request)
 	case MethodThreadTurnsList:
 		return r.handleThreadTurnsList(request)
-	case MethodThreadRollback:
-		return r.handleThreadRollback(request)
 	case MethodThreadRevert:
 		return r.handleThreadRevert(request)
 	case MethodThreadQueueAdd:
@@ -3421,43 +3402,6 @@ func (r *Router) handleThreadLoadedList(request *Request) (*ThreadLoadedListResp
 		next = &value
 	}
 	return &ThreadLoadedListResponse{Data: append([]string(nil), ids[start:end]...), NextCursor: next}, nil
-}
-
-func (r *Router) handleThreadRollback(request *Request) (*ThreadRollbackResponse, error) {
-	var params ThreadRollbackParams
-	if err := request.DecodeParams(&params); err != nil {
-		return nil, err
-	}
-	// Mirrors Rust core/src/session/handlers.rs thread_rollback: a num_turns < 1
-	// request surfaces the ThreadRollbackFailed codexErrorInfo.
-	if params.NumTurns < 1 {
-		return nil, threadRollbackFailed("numTurns must be >= 1")
-	}
-	if err := params.Validate(); err != nil {
-		return nil, err
-	}
-	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
-	if err != nil {
-		if !errors.Is(err, session.ErrThreadNotFound) {
-			return nil, err
-		}
-		record, err = r.repairThreadRecordFromRollout(session.ThreadID(params.ThreadID))
-		if err != nil {
-			return nil, err
-		}
-	}
-	if threadUsesPaginatedHistory(record) {
-		return nil, jsonRPCInvalidRequest("paginated threads do not support thread/rollback")
-	}
-	record.Items = rollbackItems(record.Items, params.NumTurns)
-	record.UpdatedAt = r.now().UTC()
-	record.RecencyAt = record.UpdatedAt
-	if err := r.saveThreadRecord(record); err != nil {
-		return nil, err
-	}
-	_ = r.appendThreadRollback(record.ID, params.NumTurns, record.UpdatedAt)
-	path := r.threadRolloutPath(record)
-	return &ThreadRollbackResponse{Thread: BuildThread(record, path, true)}, nil
 }
 
 func (r *Router) handleThreadRevert(request *Request) (*ThreadRevertResponse, error) {

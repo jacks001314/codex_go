@@ -110,48 +110,6 @@ func TestRouterStartPromptDoesNotMaterializeThreadLikeRust(t *testing.T) {
 	}
 }
 
-// TestRouterThreadRollbackValidationSurfacesThreadRollbackFailedLikeRust pins
-// the Rust ThreadRollbackFailed codexErrorInfo: rollback requests with
-// num_turns < 1 (and, on the runtime router, an active turn) fail with the
-// structured error data carrying codexErrorInfo=threadRollbackFailed
-// (mirrors core/src/session/handlers.rs + bespoke_event_handling.rs).
-func TestRouterThreadRollbackValidationSurfacesThreadRollbackFailedLikeRust(t *testing.T) {
-	store := session.NewStore(t.TempDir())
-	now := time.Now().UTC()
-	if err := store.Create(&session.Record{ID: "thread-rollback-validation", CreatedAt: now, UpdatedAt: now, RecencyAt: now}); err != nil {
-		t.Fatalf("create thread: %v", err)
-	}
-	router := NewRouter(store)
-
-	response := router.Handle(requestWithParams(t, IntID(50), MethodThreadRollback, ThreadRollbackParams{
-		ThreadID: "thread-rollback-validation",
-		NumTurns: 0,
-	}))
-	if response.Error == nil {
-		t.Fatal("rollback with NumTurns=0 should fail")
-	}
-	if response.Error.Message != "numTurns must be >= 1" {
-		t.Fatalf("error message = %q", response.Error.Message)
-	}
-	if got, ok := response.Error.Data["codexErrorInfo"].(string); !ok || got != "threadRollbackFailed" {
-		t.Fatalf("error data = %#v, want codexErrorInfo=threadRollbackFailed", response.Error.Data)
-	}
-
-	// num_turns >= 1 passes validation (rolling back an empty legacy thread is
-	// a no-op success) and never carries the ThreadRollbackFailed surface.
-	valid := router.Handle(requestWithParams(t, IntID(51), MethodThreadRollback, ThreadRollbackParams{
-		ThreadID: "thread-rollback-validation",
-		NumTurns: 1,
-	}))
-	if valid.Error == nil {
-		// Success path: no error payload to inspect.
-		return
-	}
-	if _, ok := valid.Error.Data["codexErrorInfo"]; ok {
-		t.Fatalf("non-validation rollback failure should not carry ThreadRollbackFailed: %#v", valid.Error.Data)
-	}
-}
-
 func TestRouterThreadResumeRestoresPersistedApprovalPolicy(t *testing.T) {
 	now := fixedTime()
 	store := session.NewStore(t.TempDir())
@@ -3827,7 +3785,7 @@ func TestRouterForkReservesSourceWriterBeforeCreatingTarget(t *testing.T) {
 	}
 }
 
-func TestRouterSearchLoadedTurnsRollbackAndInjectItems(t *testing.T) {
+func TestRouterSearchLoadedTurnsAndInjectItems(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
 	router.SetClock(func() time.Time { return fixedTime().Add(10 * time.Second) })
@@ -3950,19 +3908,6 @@ func TestRouterSearchLoadedTurnsRollbackAndInjectItems(t *testing.T) {
 		t.Fatalf("injected text = %q", got)
 	}
 
-	invalidRollback := router.Handle(requestWithParams(t, IntID(50), MethodThreadRollback, ThreadRollbackParams{ThreadID: "thread-a"}))
-	if invalidRollback.Error == nil || invalidRollback.Error.Code != -32600 || invalidRollback.Error.Message != "numTurns must be >= 1" {
-		t.Fatalf("invalid rollback error = %+v", invalidRollback.Error)
-	}
-
-	rollback := router.Handle(requestWithParams(t, IntID(5), MethodThreadRollback, ThreadRollbackParams{ThreadID: "thread-a", NumTurns: 1}))
-	if rollback.Error != nil {
-		t.Fatalf("rollback error: %+v", rollback.Error)
-	}
-	rollbackResult := rollback.Result.(*ThreadRollbackResponse)
-	if len(rollbackResult.Thread.Turns) != 2 {
-		t.Fatalf("rollback turns = %+v", rollbackResult.Thread.Turns)
-	}
 }
 
 func TestRouterInjectItemsMarksClientDeveloperMessagesWhenFeatureEnabled(t *testing.T) {
@@ -4011,7 +3956,7 @@ func TestRouterInjectItemsMarksClientDeveloperMessagesWhenFeatureEnabled(t *test
 	}
 }
 
-func TestRouterInjectItemsAndRollbackRepairRolloutOnlyThread(t *testing.T) {
+func TestRouterInjectItemsRepairRolloutOnlyThread(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
 	router.SetClock(func() time.Time { return fixedTime().Add(10 * time.Second) })
@@ -4055,44 +4000,12 @@ func TestRouterInjectItemsAndRollbackRepairRolloutOnlyThread(t *testing.T) {
 		t.Fatalf("record items after inject = %+v", record.Items)
 	}
 
-	rollback := router.Handle(requestWithParams(t, IntID(2), MethodThreadRollback, ThreadRollbackParams{
-		ThreadID: "thread-rollout",
-		NumTurns: 1,
-	}))
-	if rollback.Error != nil {
-		t.Fatalf("rollback error: %+v", rollback.Error)
-	}
-	rollbackResult := rollback.Result.(*ThreadRollbackResponse)
-	if len(rollbackResult.Thread.Turns) != 1 {
-		t.Fatalf("rollback turns = %+v", rollbackResult.Thread.Turns)
-	}
-	if rollbackResult.Thread.SessionID != "session-rollout" {
-		t.Fatalf("rollback thread SessionID = %q, want session-rollout", rollbackResult.Thread.SessionID)
-	}
-	rollbackData, err := json.Marshal(rollback.Result)
-	if err != nil {
-		t.Fatalf("Marshal(thread/rollback result) error = %v", err)
-	}
-	var rollbackPayload map[string]any
-	if err := json.Unmarshal(rollbackData, &rollbackPayload); err != nil {
-		t.Fatalf("Unmarshal(thread/rollback result) error = %v", err)
-	}
-	rollbackThreadPayload, ok := rollbackPayload["thread"].(map[string]any)
-	if !ok {
-		t.Fatalf("thread/rollback payload thread = %T, want object", rollbackPayload["thread"])
-	}
-	if value, ok := rollbackThreadPayload["name"]; !ok || value != nil {
-		t.Fatalf("thread/rollback payload thread.name = %v, present=%v; want explicit null", value, ok)
-	}
-	if value, ok := rollbackThreadPayload["sessionId"].(string); !ok || value != "session-rollout" {
-		t.Fatalf("thread/rollback payload thread.sessionId = %v, present=%v; want session-rollout", rollbackThreadPayload["sessionId"], ok)
-	}
 	fromRollout, err := rollout.RecordFromPath(recorder.Path(), false)
 	if err != nil {
 		t.Fatalf("RecordFromPath() error = %v", err)
 	}
-	if len(fromRollout.Items) != 2 || fromRollout.Items[0].Text != "from rollout" {
-		t.Fatalf("rollout items after rollback = %+v", fromRollout.Items)
+	if len(fromRollout.Items) != 3 || fromRollout.Items[0].Text != "from rollout" || fromRollout.Items[2].Text != "injected" {
+		t.Fatalf("rollout items after inject = %+v", fromRollout.Items)
 	}
 }
 

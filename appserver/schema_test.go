@@ -136,11 +136,10 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		data []byte
 		want string
 	}{
-		// Re-vendored from upstream e3a52b87b2 (#44877, #44893): the exports
-		// gained user-verification enrollment metadata and model
-		// availableAccessPrograms fields.
-		{"stable", stablePrecomputedExports, "be509d64265565f00bedd891a6a764de093a3fb3a77f7882806cf8abffc5261a"},
-		{"experimental", experimentalPrecomputedExports, "ce62967c58df7dd4bab3f8d94401fc3df1db9394e20ed222948a79b5f8904828"},
+		// Re-vendored from upstream 3052bbcf8c (#44915): the deprecated
+		// thread/rollback request/response types were removed.
+		{"stable", stablePrecomputedExports, "1cf697bb71c007d9529216032b59a1f1115d394a19ce4a0147818a39234860b7"},
+		{"experimental", experimentalPrecomputedExports, "b9325378a401615fa109d537c4c38ee4f31d3b9ae7264f15dec12422228cea2b"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -336,7 +335,6 @@ func TestProtocolPayloadsValidateAgainstRustSchemas(t *testing.T) {
 		{"ThreadLoadedListResponse", sampleRustSchemaThreadLoadedListResponse()},
 		{"ThreadResumeResponse", sampleRustSchemaThreadResumeResponse()},
 		{"ThreadForkResponse", sampleRustSchemaThreadForkResponse()},
-		{"ThreadRollbackResponse", &ThreadRollbackResponse{Thread: sampleRustSchemaThreadWithTurns()}},
 		{"ThreadMetadataUpdateResponse", &ThreadMetadataUpdateResponse{Thread: sampleRustSchemaThread()}},
 		{"ThreadStartedNotification", &ThreadStartedNotification{Thread: sampleRustSchemaThread()}},
 		{"ThreadNameUpdatedNotification", &ThreadNameUpdatedNotification{ThreadID: "thread-schema"}},

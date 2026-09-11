@@ -56,7 +56,6 @@ const (
 	MethodThreadBackgroundTerminalsClean     Method = "thread/backgroundTerminals/clean"
 	MethodThreadBackgroundTerminalsList      Method = "thread/backgroundTerminals/list"
 	MethodThreadBackgroundTerminalsTerminate Method = "thread/backgroundTerminals/terminate"
-	MethodThreadRollback                     Method = "thread/rollback"
 	MethodThreadRevert                       Method = "thread/revert"
 	MethodThreadQueueAdd                     Method = "thread/queue/add"
 	MethodThreadQueueList                    Method = "thread/queue/list"
@@ -276,41 +275,6 @@ func (e *jsonRPCInvalidRequestError) Is(target error) bool {
 
 func jsonRPCInvalidRequest(message string) error {
 	return &jsonRPCInvalidRequestError{message: message}
-}
-
-// threadRollbackFailedError carries the Rust ThreadRollbackFailed codexErrorInfo
-// on thread/rollback request validation failures (num_turns < 1, active turn),
-// mirroring codex-rs core/src/session/handlers.rs. The structured error data
-// makes the app-server RPC response surface the codexErrorInfo like Rust's
-// bespoke event handling (bespoke_event_handling.rs).
-type threadRollbackFailedError struct {
-	message string
-}
-
-func (e *threadRollbackFailedError) Error() string {
-	if e == nil {
-		return ""
-	}
-	return e.message
-}
-
-func (e *threadRollbackFailedError) Unwrap() error {
-	return ErrInvalidRequest
-}
-
-func (e *threadRollbackFailedError) Is(target error) bool {
-	// Rust surfaces rollback failures via invalid_request (-32600) with the
-	// ThreadRollbackFailed codexErrorInfo; the request-level classification
-	// must stay invalid-request, not invalid-params.
-	return target == ErrJSONRPCInvalidRequest || target == ErrInvalidRequest
-}
-
-func (e *threadRollbackFailedError) JSONRPCErrorData() map[string]any {
-	return map[string]any{"codexErrorInfo": "threadRollbackFailed"}
-}
-
-func threadRollbackFailed(message string) error {
-	return &threadRollbackFailedError{message: message}
 }
 
 // obsoletePermissionProfileError rejects the removed `permissionProfile`
@@ -2703,25 +2667,6 @@ func (r *ThreadSearchResponse) MarshalJSON() ([]byte, error) {
 		NextCursor:      r.NextCursor,
 		BackwardsCursor: r.BackwardsCursor,
 	})
-}
-
-type ThreadRollbackParams struct {
-	ThreadID string `json:"threadId"`
-	NumTurns int    `json:"numTurns"`
-}
-
-func (p *ThreadRollbackParams) Validate() error {
-	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
-		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
-	}
-	if p.NumTurns < 1 {
-		return jsonRPCInvalidRequest("numTurns must be >= 1")
-	}
-	return nil
-}
-
-type ThreadRollbackResponse struct {
-	Thread *Thread `json:"thread"`
 }
 
 // ThreadRevertParams replaces a paginated thread's durable history with the
@@ -5641,45 +5586,6 @@ func turnStatusFromSnapshot(value string) TurnStatus {
 	default:
 		return TurnStatus(value)
 	}
-}
-
-func rollbackItems(items []session.Item, numTurns int) []session.Item {
-	if numTurns <= 0 || len(items) == 0 {
-		return append([]session.Item(nil), items...)
-	}
-	turnIDs := []string{}
-	seen := map[string]bool{}
-	for index, item := range items {
-		threadItem := BuildThreadItem(item)
-		turnID := threadItem.TurnID
-		if turnID == "" {
-			turnID = fallbackTurnID(index)
-		}
-		if !seen[turnID] {
-			seen[turnID] = true
-			turnIDs = append(turnIDs, turnID)
-		}
-	}
-	if numTurns >= len(turnIDs) {
-		return []session.Item{}
-	}
-	drop := map[string]bool{}
-	for _, id := range turnIDs[len(turnIDs)-numTurns:] {
-		drop[id] = true
-	}
-	result := make([]session.Item, 0, len(items))
-	for index, item := range items {
-		threadItem := BuildThreadItem(item)
-		turnID := threadItem.TurnID
-		if turnID == "" {
-			turnID = fallbackTurnID(index)
-		}
-		if drop[turnID] {
-			continue
-		}
-		result = append(result, item)
-	}
-	return result
 }
 
 func fallbackTurnID(index int) string {

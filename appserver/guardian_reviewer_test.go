@@ -789,23 +789,6 @@ func TestThreadElicitationRuntimePausesUnifiedExec(t *testing.T) {
 	}
 }
 
-func TestThreadRollbackRejectsActiveTurnLikeRust(t *testing.T) {
-	store := session.NewStore(t.TempDir())
-	threadRouter := NewRouter(store)
-	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, DefaultCWD: t.TempDir()})
-	router.rememberConnectionClientInfo("default", ClientInfo{Name: "test", Version: "1"})
-	started := threadRouter.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
-	threadID := started.Result.(*ThreadStartResponse).Thread.ID
-	router.markResponseThreadLoaded(started.Result, "default")
-	if err := router.registerActiveRuntimeTurn(threadID, "turn-active", func() {}, time.Now().UnixMilli(), &turn.TurnStartParams{ThreadID: threadID}); err != nil {
-		t.Fatal(err)
-	}
-	response := router.Handle(requestWithParams(t, IntID(2), MethodThreadRollback, ThreadRollbackParams{ThreadID: threadID, NumTurns: 1}))
-	if response.Error == nil || response.Error.Message != "Cannot rollback while a turn is in progress." {
-		t.Fatalf("response=%#v", response.Error)
-	}
-}
-
 func TestAccountDeviceLoginRuntimeCompletesAndCancels(t *testing.T) {
 	t.Run("complete", func(t *testing.T) {
 		home := t.TempDir()

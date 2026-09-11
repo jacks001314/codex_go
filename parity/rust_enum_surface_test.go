@@ -94,10 +94,13 @@ func TestRustEventMsgWireNamesCoverRecordedSurface(t *testing.T) {
 }
 
 // rustErrorCodeEmissionGaps documents Rust error-code wire values that Go does
-// not emit yet, with the reason so the gap stays auditable and shrinks as Go
-// wires the emitting paths. Currently empty: every CodexErrorInfo and
-// ConfigWriteErrorCode wire value is present in Go production code.
-var rustErrorCodeEmissionGaps = map[string]string{}
+// not emit, with the reason so the gap stays auditable. Rust retains
+// `threadRollbackFailed` only for legacy rollout/error deserialization after the
+// deprecated thread/rollback API was removed (#44915); Go's app-server no
+// longer has an emitting path for it.
+var rustErrorCodeEmissionGaps = map[string]string{
+	"threadRollbackFailed": "legacy-only error code retained by Rust for historical rollout deserialization after thread/rollback removal (#44915)",
+}
 
 // TestRustErrorCodeSurfaceAgainstGo is the L0 enum-inventory check for error
 // codes: every wire value of the app-server v2 CodexErrorInfo and
