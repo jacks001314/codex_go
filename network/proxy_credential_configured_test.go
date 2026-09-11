@@ -128,3 +128,24 @@ func TestConfiguredCredentialProviderDynamicDestination(t *testing.T) {
 		t.Fatalf("dynamic hosts = %#v", binding.ExactHosts)
 	}
 }
+
+// TestConfiguredCredentialDummyPreservesBasicShape mirrors Rust
+// preserves_usable_auth_methods: a Basic-auth dummy must keep whether the real
+// value serializes a whole `user:password` pair.
+func TestConfiguredCredentialDummyPreservesBasicShape(t *testing.T) {
+	config := CredentialProviderConfig{
+		Env:         []string{"VENDOR_TOKEN"},
+		Patterns:    []string{"[a-z:]{8}"},
+		URLPrefixes: []string{"https://api.vendor.example"},
+		Auth:        []CredentialAuthMethod{CredentialAuthBasic},
+	}
+	provider := configuredTestProvider(t, config)
+	realValue := "abcd:efg"
+	dummy := provider.DummyValue(realValue)
+	if dummy == "" || dummy == realValue {
+		t.Fatalf("dummy = %q", dummy)
+	}
+	if !strings.Contains(dummy, ":") {
+		t.Fatalf("basic dummy lost the `:` component split: %q", dummy)
+	}
+}

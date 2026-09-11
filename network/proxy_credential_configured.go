@@ -38,12 +38,12 @@ func ConfiguredCredentialProvider(id string, config CredentialProviderConfig) *P
 	if err != nil {
 		return nil
 	}
-	patterns := append([]string(nil), config.Patterns...)
+	providerConfig := config
 	provider := &ProxyCredentialProvider{
 		ContextEnvVars: append([]string(nil), config.Env...),
 		Destinations:   destinations,
 		DummyValue: func(realValue string) string {
-			return configuredDummyValue(patterns, realValue)
+			return configuredDummyValue(providerConfig, realValue)
 		},
 		RequestHeaderValue: func(value string) (string, bool) {
 			return configuredRequestHeaderValue(config, value)
@@ -62,17 +62,48 @@ func ConfiguredCredentialProvider(id string, config CredentialProviderConfig) *P
 	return provider
 }
 
-func configuredDummyValue(patterns []string, realValue string) string {
-	for _, pattern := range patterns {
+func configuredDummyValue(config CredentialProviderConfig, realValue string) string {
+	for _, pattern := range config.Patterns {
 		matches, err := credentialPatternMatches(pattern, realValue)
 		if err != nil || !matches {
 			continue
 		}
-		if dummy, ok := GenerateCredentialDummy(pattern, realValue); ok {
+		for attempt := 0; attempt < maxCredentialDummyAttempts; attempt++ {
+			dummy, ok := GenerateCredentialDummy(pattern, realValue)
+			if !ok || dummy == realValue {
+				continue
+			}
+			if !preservesUsableAuthMethods(config, realValue, dummy) {
+				continue
+			}
 			return dummy
 		}
 	}
 	return ""
+}
+
+// preservesUsableAuthMethods mirrors Rust
+// ConfiguredCredentialProvider::preserves_usable_auth_methods: every declared
+// auth method must still translate a dummy-shaped header, Basic dummies must
+// keep whether the value carried a `:`, and the header value must not gain
+// surrounding whitespace.
+func preservesUsableAuthMethods(config CredentialProviderConfig, realValue string, dummyValue string) bool {
+	for _, method := range config.Auth {
+		if method == CredentialAuthBasic && strings.Contains(realValue, ":") != strings.Contains(dummyValue, ":") {
+			return false
+		}
+		if _, realOK := configuredRequestHeaderValueForMethod(config, method, realValue); !realOK {
+			continue
+		}
+		dummyHeader, dummyOK := configuredRequestHeaderValueForMethod(config, method, dummyValue)
+		if !dummyOK {
+			return false
+		}
+		if strings.TrimSpace(dummyHeader) != dummyHeader {
+			return false
+		}
+	}
+	return true
 }
 
 func configuredHostBinding(config CredentialProviderConfig, static []CredentialDestination) func(map[string]string) (ProxyCredentialHostBinding, bool) {
@@ -122,29 +153,35 @@ func configuredHeaderName(config CredentialProviderConfig) string {
 
 func configuredRequestHeaderValue(config CredentialProviderConfig, value string) (string, bool) {
 	for _, method := range config.Auth {
-		var headerValue string
-		switch method {
-		case CredentialAuthBearer:
-			headerValue = "Bearer " + value
-		case CredentialAuthToken:
-			headerValue = "token " + value
-		case CredentialAuthBasic:
-			headerValue = "Basic " + base64.StdEncoding.EncodeToString([]byte(value))
-		case CredentialAuthHeader:
-			prefix := ""
-			if config.Prefix != nil {
-				prefix = *config.Prefix
-			}
-			headerValue = prefix + value
-		default:
-			continue
+		if headerValue, ok := configuredRequestHeaderValueForMethod(config, method, value); ok {
+			return headerValue, true
 		}
-		if err := validateHeaderValue(headerValue); err != nil {
-			continue
-		}
-		return headerValue, true
 	}
 	return "", false
+}
+
+func configuredRequestHeaderValueForMethod(config CredentialProviderConfig, method CredentialAuthMethod, value string) (string, bool) {
+	var headerValue string
+	switch method {
+	case CredentialAuthBearer:
+		headerValue = "Bearer " + value
+	case CredentialAuthToken:
+		headerValue = "token " + value
+	case CredentialAuthBasic:
+		headerValue = "Basic " + base64.StdEncoding.EncodeToString([]byte(value))
+	case CredentialAuthHeader:
+		prefix := ""
+		if config.Prefix != nil {
+			prefix = *config.Prefix
+		}
+		headerValue = prefix + value
+	default:
+		return "", false
+	}
+	if err := validateHeaderValue(headerValue); err != nil {
+		return "", false
+	}
+	return headerValue, true
 }
 
 func configuredRequestHeader(config CredentialProviderConfig, headers map[string][]string) (string, bool) {
