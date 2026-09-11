@@ -22,12 +22,12 @@ const (
 )
 
 type StreamableHTTPOAuthDiscovery struct {
-	AuthorizationEndpoint             string
-	TokenEndpoint                     string
-	RegistrationEndpoint              string
-	ScopesSupported                   []string
-	Resource                          string
-	AuthorizationServer               string
+	AuthorizationEndpoint string
+	TokenEndpoint         string
+	RegistrationEndpoint  string
+	ScopesSupported       []string
+	Resource              string
+	AuthorizationServer   string
 	// Issuer is the authorization server issuer discovered for the MCP
 	// server (Rust #39615): refresh tokens are bound to this issuer.
 	Issuer                            string
@@ -233,6 +233,15 @@ func discoverMCPOAuthAuthorizationServer(ctx context.Context, client *http.Clien
 	for _, candidate := range candidates {
 		metadata, ok, err := fetchMCPOAuthAuthorizationServerMetadata(ctx, client, candidate)
 		if err != nil {
+			// Rust #44636: a candidate-local 503 may still be recoverable
+			// through the same issuer's OIDC discovery endpoints.
+			fallback, fallbackOK, fallbackErr := fetchMCPOAuthOIDCDiscoveryFallback(ctx, client, candidate, err)
+			if fallbackErr != nil {
+				return nil, false, fallbackErr
+			}
+			if fallbackOK {
+				return discoveryFromMCPOAuthAuthorizationMetadata(serverURL, fallback), true, nil
+			}
 			lastErr = err
 			continue
 		}
@@ -244,6 +253,108 @@ func discoverMCPOAuthAuthorizationServer(ctx context.Context, client *http.Clien
 		return nil, false, lastErr
 	}
 	return nil, false, nil
+}
+
+// mcpOAuthMetadataHTTPStatusError carries the HTTP status of a failed metadata
+// request so callers can distinguish a recoverable 503 (Rust #44636).
+type mcpOAuthMetadataHTTPStatusError struct {
+	URL        string
+	StatusCode int
+	Status     string
+	Detail     string
+}
+
+func (e *mcpOAuthMetadataHTTPStatusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Detail != "" {
+		return fmt.Sprintf("MCP OAuth metadata %s failed: %s: %s", e.URL, e.Status, e.Detail)
+	}
+	return fmt.Sprintf("MCP OAuth metadata %s failed: %s", e.URL, e.Status)
+}
+
+// mcpOAuthOIDCFallbackURLs returns the same issuer's OIDC discovery endpoints in
+// RMCP's order (Rust #44636): the well-known-prefixed candidate first, then the
+// path-suffixed one when the issuer has a path component.
+func mcpOAuthOIDCFallbackURLs(candidateURL string) []string {
+	parsed, err := url.Parse(strings.TrimSpace(candidateURL))
+	if err != nil {
+		return nil
+	}
+	issuerPath, ok := strings.CutPrefix(parsed.Path, mcpOAuthAuthorizationServerWellKnownPath)
+	if !ok || (issuerPath != "" && !strings.HasPrefix(issuerPath, "/")) {
+		return nil
+	}
+	base := *parsed
+	base.RawQuery = ""
+	base.Fragment = ""
+	candidates := make([]string, 0, 2)
+	prefixed := base
+	prefixed.Path = "/.well-known/openid-configuration" + issuerPath
+	prefixed.RawPath = ""
+	candidates = append(candidates, prefixed.String())
+	if issuerPath != "" {
+		suffixed := base
+		suffixed.Path = issuerPath + "/.well-known/openid-configuration"
+		suffixed.RawPath = ""
+		candidates = append(candidates, suffixed.String())
+	}
+	return uniqueNonEmptyStrings(candidates)
+}
+
+// fetchMCPOAuthOIDCDiscoveryFallback tries the issuer's OIDC endpoints after a
+// 503 on its OAuth authorization-server metadata, keeping the original error as
+// the discovery failure when no candidate is usable (Rust #44636).
+func fetchMCPOAuthOIDCDiscoveryFallback(ctx context.Context, client *http.Client, candidateURL string, originalErr error) (*oauthAuthorizationServerMetadata, bool, error) {
+	var statusErr *mcpOAuthMetadataHTTPStatusError
+	if !errors.As(originalErr, &statusErr) || statusErr.StatusCode != http.StatusServiceUnavailable {
+		return nil, false, nil
+	}
+	fallbackURLs := mcpOAuthOIDCFallbackURLs(candidateURL)
+	if len(fallbackURLs) == 0 {
+		return nil, false, nil
+	}
+	// Do not follow fallback redirects: RMCP owns discovery redirect policy.
+	fallbackClient := mcpOAuthNoRedirectClient(client)
+	for _, fallbackURL := range fallbackURLs {
+		metadata, ok, err := fetchMCPOAuthAuthorizationServerMetadata(ctx, fallbackClient, fallbackURL)
+		if err == nil {
+			if ok {
+				return metadata, true, nil
+			}
+			continue
+		}
+		var fallbackStatus *mcpOAuthMetadataHTTPStatusError
+		if !errors.As(err, &fallbackStatus) {
+			return nil, false, err
+		}
+		switch fallbackStatus.StatusCode {
+		case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusServiceUnavailable:
+			continue
+		case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
+			return nil, false, err
+		default:
+			if fallbackStatus.StatusCode >= 500 {
+				return nil, false, err
+			}
+			// Any other response keeps the original discovery error instead of
+			// enabling a lower-priority endpoint fallback.
+			return nil, false, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func mcpOAuthNoRedirectClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	clone := *client
+	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &clone
 }
 
 func discoverMCPOAuthProtectedResource(ctx context.Context, client *http.Client, serverURL string) (*oauthProtectedResourceMetadata, error) {
@@ -387,10 +498,12 @@ func fetchMCPOAuthMetadata(ctx context.Context, client *http.Client, metadataURL
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		detail := strings.TrimSpace(string(body))
-		if detail != "" {
-			return false, fmt.Errorf("MCP OAuth metadata %s failed: %s: %s", metadataURL, response.Status, detail)
+		return false, &mcpOAuthMetadataHTTPStatusError{
+			URL:        metadataURL,
+			StatusCode: response.StatusCode,
+			Status:     response.Status,
+			Detail:     detail,
 		}
-		return false, fmt.Errorf("MCP OAuth metadata %s failed: %s", metadataURL, response.Status)
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, mcpOAuthMetadataMaxBytes)).Decode(out); err != nil {
 		return false, err
