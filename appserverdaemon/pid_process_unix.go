@@ -59,15 +59,21 @@ func processMatchesPIDRecord(record *PIDRecord) (bool, error) {
 	if record == nil || record.PID == 0 {
 		return false, nil
 	}
-	if !pidProcessExists(record.PID) {
-		return false, nil
-	}
-	startTime, err := readPIDProcessStartTime(record.PID)
+	state, startTime, err := readPIDProcessDetails(record.PID)
 	if err != nil {
 		if !pidProcessExists(record.PID) {
 			return false, nil
 		}
 		return false, err
+	}
+	// An unreaped zombie still passes kill(pid, 0) and retains its start time on
+	// platforms without /proc, but it can no longer run the app-server or
+	// updater (Rust #43504).
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(state)), "Z") {
+		if startTime == record.ProcessStartTime {
+			reapZombiePIDProcess(record.PID)
+		}
+		return false, nil
 	}
 	return startTime == record.ProcessStartTime, nil
 }
@@ -106,15 +112,28 @@ func pidProcessExists(pid uint32) bool {
 }
 
 func readPIDProcessStartTime(pid uint32) (string, error) {
-	output, err := exec.Command("ps", "-p", strconv.Itoa(int(pid)), "-o", "lstart=").Output()
+	_, startTime, err := readPIDProcessDetails(pid)
+	return startTime, err
+}
+
+// readPIDProcessDetails returns the process stat code and start time read in a
+// single `ps` invocation so a zombie is identified without a race.
+func readPIDProcessDetails(pid uint32) (string, string, error) {
+	output, err := exec.Command("ps", "-p", strconv.Itoa(int(pid)), "-o", "stat=", "-o", "lstart=").Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to read start time for pid-managed app server %d: %w", pid, err)
+		return "", "", fmt.Errorf("failed to read start time for pid-managed app server %d: %w", pid, err)
 	}
-	startTime := stringsTrimSpaceASCII(string(output))
+	details := stringsTrimSpaceASCII(string(output))
+	state := ""
+	startTime := ""
+	if index := strings.IndexAny(details, " \t"); index >= 0 {
+		state = stringsTrimSpaceASCII(details[:index])
+		startTime = stringsTrimSpaceASCII(details[index+1:])
+	}
 	if startTime == "" {
-		return "", fmt.Errorf("pid-managed app server %d has no recorded start time", pid)
+		return "", "", fmt.Errorf("pid-managed app server %d has no recorded start time", pid)
 	}
-	return startTime, nil
+	return state, startTime, nil
 }
 
 func stringsTrimSpaceASCII(value string) string {
