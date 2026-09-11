@@ -302,6 +302,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	}
 	applyManagedApprovalsReviewerGuardianV2Override(values, requirements)
 	applyManagedAuthBackendOverride(values, requirements)
+	applyManagedModelProviderOverride(values, requirements)
 	return &Config{Values: values, Requirements: requirements}, nil
 }
 
@@ -318,6 +319,45 @@ func applyManagedAuthBackendOverride(values map[string]any, requirements *Config
 	}
 	if requirements.ChatgptBaseURL != nil {
 		values["chatgpt_base_url"] = *requirements.ChatgptBaseURL
+	}
+}
+
+// applyManagedModelProviderOverride mirrors Rust #44650: a required
+// model_provider overrides local and session configuration, and each required
+// provider definition replaces the corresponding local entry wholesale
+// (including authentication and headers).
+func applyManagedModelProviderOverride(values map[string]any, requirements *ConfigRequirements) {
+	if values == nil || requirements == nil {
+		return
+	}
+	if requirements.ModelProvider != nil {
+		values["model_provider"] = *requirements.ModelProvider
+	}
+	if len(requirements.ModelProviders) == 0 {
+		return
+	}
+	providers, _ := values["model_providers"].(map[string]any)
+	if providers == nil {
+		providers = map[string]any{}
+	}
+	for id, definition := range requirements.ModelProviders {
+		providers[id] = cloneManagedProviderDefinition(definition)
+	}
+	values["model_providers"] = providers
+}
+
+func cloneManagedProviderDefinition(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneMap(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for index := range typed {
+			out[index] = cloneManagedProviderDefinition(typed[index])
+		}
+		return out
+	default:
+		return typed
 	}
 }
 

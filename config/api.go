@@ -515,29 +515,35 @@ type ConfigRequirements struct {
 	// Permissions carries the managed [permissions] profile catalog from
 	// requirements (Rust ConfigRequirementsToml.permissions, #39752). It is
 	// internal and not part of the app-server wire ConfigRequirements schema.
-	Permissions                     map[string]any                  `json:"-"`
-	AllowedWebSearchModes           []WebSearchMode                 `json:"allowedWebSearchModes,omitempty"`
-	AllowManagedHooksOnly           *bool                           `json:"allowManagedHooksOnly,omitempty"`
-	AllowBrowserAndComputerUse      *bool                           `json:"allowBrowserAndComputerUse,omitempty"`
-	AllowAppshots                   *bool                           `json:"allowAppshots,omitempty"`
-	AllowRemoteControl              *bool                           `json:"allowRemoteControl,omitempty"`
-	ComputerUse                     *ComputerUseRequirements        `json:"computerUse,omitempty"`
-	BrowserUse                      *BrowserUseRequirements         `json:"browserUse,omitempty"`
-	InAppBrowser                    *InAppBrowserRequirements       `json:"inAppBrowser,omitempty"`
-	AutoReview                      *AutoReviewRequirements         `json:"autoReview,omitempty"`
-	FeatureRequirements             map[string]bool                 `json:"featureRequirements,omitempty"`
-	Hooks                           *ManagedHooksRequirements       `json:"hooks,omitempty"`
-	EnforceResidency                *ResidencyRequirement           `json:"enforceResidency,omitempty"`
-	Application                     *ApplicationRequirements        `json:"application,omitempty"`
-	Network                         *NetworkRequirements            `json:"network,omitempty"`
-	Models                          *ModelsRequirements             `json:"models,omitempty"`
-	AllowedLoginMethods             []ForcedLoginMethod             `json:"allowedLoginMethods,omitempty"`
-	AllowedChatGPTWorkspaces        []string                        `json:"allowedChatGPTWorkspaces,omitempty"`
-	CliAuthCredentialsStore         *AuthCredentialsStoreMode       `json:"cliAuthCredentialsStore,omitempty"`
-	ChatgptBaseURL                  *string                         `json:"chatgptBaseUrl,omitempty"`
-	AdditionalDeveloperInstructions *string                         `json:"additionalDeveloperInstructions,omitempty"`
-	MCPServers                      map[string]MCPServerRequirement `json:"-"`
-	Plugins                         map[string]PluginRequirements   `json:"-"`
+	Permissions                     map[string]any            `json:"-"`
+	AllowedWebSearchModes           []WebSearchMode           `json:"allowedWebSearchModes,omitempty"`
+	AllowManagedHooksOnly           *bool                     `json:"allowManagedHooksOnly,omitempty"`
+	AllowBrowserAndComputerUse      *bool                     `json:"allowBrowserAndComputerUse,omitempty"`
+	AllowAppshots                   *bool                     `json:"allowAppshots,omitempty"`
+	AllowRemoteControl              *bool                     `json:"allowRemoteControl,omitempty"`
+	ComputerUse                     *ComputerUseRequirements  `json:"computerUse,omitempty"`
+	BrowserUse                      *BrowserUseRequirements   `json:"browserUse,omitempty"`
+	InAppBrowser                    *InAppBrowserRequirements `json:"inAppBrowser,omitempty"`
+	AutoReview                      *AutoReviewRequirements   `json:"autoReview,omitempty"`
+	FeatureRequirements             map[string]bool           `json:"featureRequirements,omitempty"`
+	Hooks                           *ManagedHooksRequirements `json:"hooks,omitempty"`
+	EnforceResidency                *ResidencyRequirement     `json:"enforceResidency,omitempty"`
+	Application                     *ApplicationRequirements  `json:"application,omitempty"`
+	Network                         *NetworkRequirements      `json:"network,omitempty"`
+	Models                          *ModelsRequirements       `json:"models,omitempty"`
+	AllowedLoginMethods             []ForcedLoginMethod       `json:"allowedLoginMethods,omitempty"`
+	AllowedChatGPTWorkspaces        []string                  `json:"allowedChatGPTWorkspaces,omitempty"`
+	CliAuthCredentialsStore         *AuthCredentialsStoreMode `json:"cliAuthCredentialsStore,omitempty"`
+	ChatgptBaseURL                  *string                   `json:"chatgptBaseUrl,omitempty"`
+	AdditionalDeveloperInstructions *string                   `json:"additionalDeveloperInstructions,omitempty"`
+	// ModelProvider is the exact provider selection required by managed
+	// policy (Rust #44650).
+	ModelProvider *string `json:"modelProvider,omitempty"`
+	// ModelProviders are complete required provider definitions, using
+	// config.toml field names and values.
+	ModelProviders map[string]any                  `json:"modelProviders,omitempty"`
+	MCPServers     map[string]MCPServerRequirement `json:"-"`
+	Plugins        map[string]PluginRequirements   `json:"-"`
 }
 
 func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
@@ -568,6 +574,8 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		CliAuthCredentialsStore              *AuthCredentialsStoreMode `json:"cliAuthCredentialsStore"`
 		ChatgptBaseURL                       *string                   `json:"chatgptBaseUrl"`
 		AdditionalDeveloperInstructions      *string                   `json:"additionalDeveloperInstructions"`
+		ModelProvider                        *string                   `json:"modelProvider"`
+		ModelProviders                       map[string]any            `json:"modelProviders"`
 	}{
 		AllowedApprovalPolicies:              permissionPoliciesOrNil(r.AllowedApprovalPolicies),
 		AllowedApprovalsReviewers:            approvalsReviewersOrNil(r.AllowedApprovalsReviewers),
@@ -595,7 +603,18 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		CliAuthCredentialsStore:              cloneAuthCredentialsStoreMode(r.CliAuthCredentialsStore),
 		ChatgptBaseURL:                       cloneStringPtr(r.ChatgptBaseURL),
 		AdditionalDeveloperInstructions:      cloneStringPtr(r.AdditionalDeveloperInstructions),
+		ModelProvider:                        cloneStringPtr(r.ModelProvider),
+		ModelProviders:                       cloneAnyMapOrNil(r.ModelProviders),
 	})
+}
+
+// cloneAnyMapOrNil deep-clones a JSON object while preserving nil, so absent
+// managed fields serialize as null rather than {}.
+func cloneAnyMapOrNil(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	return cloneMap(values)
 }
 
 // AutoReviewRequiredForModel mirrors Rust's auto_review_required_for_model
@@ -2052,6 +2071,16 @@ func (s *ConfigService) rejectManagedAuthWrite(keyPath string) error {
 	}
 	parts := splitKeyPath(keyPath)
 	if len(parts) != 1 {
+		// Provider IDs may contain dots, so compare the remaining path against
+		// the managed provider IDs (Rust #44650).
+		if len(parts) > 1 && parts[0] == "model_providers" && len(s.requirements.ModelProviders) > 0 {
+			rest := strings.Join(parts[1:], ".")
+			for id := range s.requirements.ModelProviders {
+				if rest == id || strings.HasPrefix(rest, id+".") {
+					return configWriteErrorf(ConfigWriteValidation, "model_providers.%s is managed by requirements and cannot be written", id)
+				}
+			}
+		}
 		return nil
 	}
 	switch parts[0] {
@@ -2062,6 +2091,14 @@ func (s *ConfigService) rejectManagedAuthWrite(keyPath string) error {
 	case "chatgpt_base_url":
 		if s.requirements.ChatgptBaseURL != nil {
 			return configWriteErrorf(ConfigWriteValidation, "chatgpt_base_url is managed by requirements and cannot be written")
+		}
+	case "model_provider":
+		if s.requirements.ModelProvider != nil {
+			return configWriteErrorf(ConfigWriteValidation, "model_provider is managed by requirements and cannot be written")
+		}
+	case "model_providers":
+		if len(s.requirements.ModelProviders) > 0 {
+			return configWriteErrorf(ConfigWriteValidation, "model_providers is managed by requirements and cannot be written")
 		}
 	}
 	return nil
@@ -3154,6 +3191,8 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.Plugins = clonePluginRequirements(requirements.Plugins)
 	clone.CliAuthCredentialsStore = cloneAuthCredentialsStoreMode(requirements.CliAuthCredentialsStore)
 	clone.ChatgptBaseURL = cloneStringPtr(requirements.ChatgptBaseURL)
+	clone.ModelProvider = cloneStringPtr(requirements.ModelProvider)
+	clone.ModelProviders = cloneAnyMapOrNil(requirements.ModelProviders)
 	return &clone
 }
 

@@ -250,6 +250,14 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 		baseURL := strings.TrimSpace(value)
 		out.ChatgptBaseURL = &baseURL
 	}
+	// Rust #44650: managed model provider selection and definitions.
+	if value, ok := stringAnyKey(values, "model_provider", "modelProvider"); ok && strings.TrimSpace(value) != "" {
+		provider := strings.TrimSpace(value)
+		out.ModelProvider = &provider
+	}
+	if nested, ok := mapAnyKey(values, "model_providers", "modelProviders"); ok && len(nested) > 0 {
+		out.ModelProviders = cloneMap(nested)
+	}
 	if nested, ok := mapAnyKey(values, "browser_use", "browserUse"); ok {
 		out.BrowserUse = browserUseRequirementsFromMap(nested)
 	}
@@ -944,6 +952,8 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.AllowedChatGPTWorkspaces == nil &&
 			value.CliAuthCredentialsStore == nil &&
 			value.ChatgptBaseURL == nil &&
+			value.ModelProvider == nil &&
+			value.ModelProviders == nil &&
 			value.MCPServers == nil &&
 			value.Plugins == nil)
 }
