@@ -15,6 +15,7 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
+	"codex_go/session"
 	tuiapp "codex_go/tui/app"
 	"codex_go/tui/chatwidget"
 )
@@ -181,5 +182,54 @@ func TestInteractiveRemotePromptEditHandlerRejectsSteer(t *testing.T) {
 			t.Fatalf("server error: %v", err)
 		}
 	default:
+	}
+}
+
+// TestPromptImageExtractionFromPersistedUserMessages covers the resumed-thread
+// half of prompt restoration: a replayed user message must expose its local and
+// remote images so backtracking can rebuild the composer attachments.
+func TestPromptImageExtractionFromPersistedUserMessages(t *testing.T) {
+	remoteItem := appserver.ThreadItem{
+		ID: "u1", Type: "userMessage", Role: "user", Text: "look",
+		Content: []appserver.ThreadItemContent{
+			{Type: "local_image", ImageURL: "/tmp/a.png"},
+			{Type: "input_image", ImageURL: "https://example.test/b.png"},
+			{Type: "input_image"},
+			{Type: "input_audio", AudioURL: "data:audio/wav;base64,zzz"},
+		},
+	}
+	message, ok := remoteTUIMessageFromThreadItem(remoteItem)
+	if !ok {
+		t.Fatal("remote user message should convert")
+	}
+	if message.UserPrompt != "look" {
+		t.Fatalf("remote UserPrompt = %q", message.UserPrompt)
+	}
+	if len(message.UserPromptLocalImages) != 1 || message.UserPromptLocalImages[0] != "/tmp/a.png" {
+		t.Fatalf("remote local images = %#v", message.UserPromptLocalImages)
+	}
+	if len(message.UserPromptRemoteImages) != 1 || message.UserPromptRemoteImages[0] != "https://example.test/b.png" {
+		t.Fatalf("remote remote images = %#v", message.UserPromptRemoteImages)
+	}
+
+	localItem := session.Item{
+		ID: "u2", Type: "userMessage", Role: "user", Text: "look",
+		Content: []session.ContentPart{
+			{Type: "local_image", ImageURL: "/tmp/c.png"},
+			{Type: "input_image", ImageURL: "https://example.test/d.png"},
+		},
+	}
+	localMessage, ok := interactiveSessionMessageFromItem(localItem)
+	if !ok {
+		t.Fatal("local user message should convert")
+	}
+	if localMessage.UserPrompt != "look" {
+		t.Fatalf("local UserPrompt = %q", localMessage.UserPrompt)
+	}
+	if len(localMessage.UserPromptLocalImages) != 1 || localMessage.UserPromptLocalImages[0] != "/tmp/c.png" {
+		t.Fatalf("local local images = %#v", localMessage.UserPromptLocalImages)
+	}
+	if len(localMessage.UserPromptRemoteImages) != 1 || localMessage.UserPromptRemoteImages[0] != "https://example.test/d.png" {
+		t.Fatalf("local remote images = %#v", localMessage.UserPromptRemoteImages)
 	}
 }

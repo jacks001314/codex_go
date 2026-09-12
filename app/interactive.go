@@ -2591,7 +2591,15 @@ func interactiveSessionMessageFromItem(item session.Item) (codextui.Message, boo
 	switch {
 	case itemType == "usermessage" || role == "user":
 		text := interactiveSessionItemUserText(item)
-		return codextui.Message{Role: codextui.RoleUser, Text: text, RawText: text}, strings.TrimSpace(text) != ""
+		localImages, remoteImages := interactiveSessionPromptImages(item.Content)
+		return codextui.Message{
+			Role:                   codextui.RoleUser,
+			Text:                   text,
+			RawText:                text,
+			UserPrompt:             text,
+			UserPromptLocalImages:  localImages,
+			UserPromptRemoteImages: remoteImages,
+		}, strings.TrimSpace(text) != ""
 	case itemType == "imagegeneration" || itemType == "imagegenerationcall":
 		text := interactiveSessionItemImageGenerationText(item)
 		if text == "" {
@@ -2730,6 +2738,25 @@ func interactiveSessionItemUserText(item session.Item) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// interactiveSessionPromptImages splits a persisted user message's content into
+// the local file paths and remote URLs a backtracked prompt restores (Rust
+// user_message_display_from_inputs: LocalImage vs Image).
+func interactiveSessionPromptImages(contents []session.ContentPart) (localImages []string, remoteImages []string) {
+	for _, content := range contents {
+		switch normalizedThreadItemContentType(content.Type) {
+		case "localimage":
+			if path := strings.TrimSpace(content.ImageURL); path != "" {
+				localImages = append(localImages, path)
+			}
+		case "inputimage", "image":
+			if url := strings.TrimSpace(content.ImageURL); url != "" {
+				remoteImages = append(remoteImages, url)
+			}
+		}
+	}
+	return localImages, remoteImages
 }
 
 func interactiveSessionItemReasoningText(item session.Item) string {

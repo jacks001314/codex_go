@@ -1979,7 +1979,15 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem) (codextui.Message
 	switch {
 	case itemType == "usermessage" || role == "user":
 		text := remoteTUIThreadItemUserText(item)
-		return codextui.Message{Role: codextui.RoleUser, Text: text, RawText: text}, strings.TrimSpace(text) != ""
+		localImages, remoteImages := remoteTUIThreadItemPromptImages(item.Content)
+		return codextui.Message{
+			Role:                   codextui.RoleUser,
+			Text:                   text,
+			RawText:                text,
+			UserPrompt:             text,
+			UserPromptLocalImages:  localImages,
+			UserPromptRemoteImages: remoteImages,
+		}, strings.TrimSpace(text) != ""
 	case itemType == "agentmessage" || itemType == "assistantmessage" || role == "assistant":
 		text := strings.TrimSpace(item.Text)
 		return codextui.Message{Role: codextui.RoleAssistant, Text: text, RawText: text}, text != ""
@@ -2032,6 +2040,34 @@ func remoteTUIThreadItemUserText(item appserver.ThreadItem) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// remoteTUIThreadItemPromptImages splits a persisted user message's content into
+// the local file paths and remote URLs a backtracked prompt restores (Rust
+// user_message_display_from_inputs: LocalImage vs Image).
+func remoteTUIThreadItemPromptImages(contents []appserver.ThreadItemContent) (localImages []string, remoteImages []string) {
+	for _, content := range contents {
+		switch normalizedThreadItemContentType(content.Type) {
+		case "localimage":
+			if path := strings.TrimSpace(content.ImageURL); path != "" {
+				localImages = append(localImages, path)
+			}
+		case "inputimage", "image":
+			if url := strings.TrimSpace(content.ImageURL); url != "" {
+				remoteImages = append(remoteImages, url)
+			}
+		}
+	}
+	return localImages, remoteImages
+}
+
+// normalizedThreadItemContentType lowercases a content type and drops separators
+// so local_image/localImage and input_image/inputImage both match.
+func normalizedThreadItemContentType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "_", "")
+	value = strings.ReplaceAll(value, "-", "")
+	return value
 }
 
 func remoteTUIThreadItemReasoningText(item appserver.ThreadItem) string {
