@@ -298,7 +298,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		}
 		// Rust #43921: restore the switched-to turn's active reasoning heading.
 		m.resetReasoningSummaryHeader()
-		m.workingStatusHeader = strings.TrimSpace(message.Response.WorkingStatusHeader)
+		m.setWorkingStatusHeader(message.Response.WorkingStatusHeader)
 		m.reasoningResumeTurnID = strings.TrimSpace(message.Response.WorkingReasoningTurnID)
 		m.reasoningItemID = strings.TrimSpace(message.Response.WorkingReasoningItemID)
 	}

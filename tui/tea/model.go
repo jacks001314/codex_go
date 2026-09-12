@@ -1071,6 +1071,9 @@ type Model struct {
 	// workingStatusHeader is the live reasoning summary line shown as the
 	// working indicator's header (Rust #43921).
 	workingStatusHeader string
+	// workingHeaderStartedAt restarts the summary-shimmer phase whenever the
+	// header text changes (Rust StatusIndicatorWidget::update_header, #43921).
+	workingHeaderStartedAt time.Time
 	// reasoningSummaryBuffers accumulates streaming reasoning summaries per
 	// item so the status row can show the latest usable line (Rust #43921).
 	reasoningSummaryBuffers map[string]string
@@ -2632,7 +2635,22 @@ func (m *Model) applyWorkingStatusHeader(msg WorkingStatusHeaderMsg) {
 			return
 		}
 	}
-	m.workingStatusHeader = strings.TrimSpace(msg.Text)
+	m.setWorkingStatusHeader(msg.Text)
+}
+
+// setWorkingStatusHeader updates the live status header and restarts the
+// summary-shimmer phase only when the text actually changes (Rust
+// StatusIndicatorWidget::update_header, #43921).
+func (m *Model) setWorkingStatusHeader(text string) {
+	if m == nil {
+		return
+	}
+	text = strings.TrimSpace(text)
+	if m.workingStatusHeader == text {
+		return
+	}
+	m.workingStatusHeader = text
+	m.workingHeaderStartedAt = m.currentTime()
 }
 
 // applyReasoningSummaryDelta accumulates a streaming reasoning summary fragment
@@ -2670,7 +2688,7 @@ func (m *Model) applyReasoningSummaryDelta(delta *protocol.Delta) {
 	if !ok {
 		return
 	}
-	m.workingStatusHeader = header
+	m.setWorkingStatusHeader(header)
 }
 
 // applyReasoningItemStarted mirrors Rust ChatWidget::on_reasoning_item_started:
@@ -2725,7 +2743,7 @@ func (m *Model) restoreReasoningStatusHeader() {
 	if !ok {
 		return
 	}
-	m.workingStatusHeader = header
+	m.setWorkingStatusHeader(header)
 }
 
 // reasoningHeaderUpdateBlocked reports whether another status owner must keep
@@ -2749,7 +2767,7 @@ func (m *Model) resetReasoningSummaryHeader() {
 		return
 	}
 	m.reasoningSummaryBuffers = nil
-	m.workingStatusHeader = ""
+	m.setWorkingStatusHeader("")
 	m.reasoningItemID = ""
 	m.reasoningResumeTurnID = ""
 }
@@ -3293,9 +3311,15 @@ func (m *Model) syncTaskRunningTimer() {
 		if m.taskStartedAt.IsZero() {
 			m.taskStartedAt = m.currentTime()
 		}
+		// Rust #43921: a fresh StatusIndicatorWidget starts the shimmer phase
+		// when the turn begins.
+		if m.workingHeaderStartedAt.IsZero() {
+			m.workingHeaderStartedAt = m.currentTime()
+		}
 		return
 	}
 	m.taskStartedAt = time.Time{}
+	m.workingHeaderStartedAt = time.Time{}
 }
 
 func (m *Model) renderWorkingIndicator() string {
@@ -3305,6 +3329,9 @@ func (m *Model) renderWorkingIndicator() string {
 	now := m.currentTime()
 	if m.taskStartedAt.IsZero() {
 		m.taskStartedAt = now
+	}
+	if m.workingHeaderStartedAt.IsZero() {
+		m.workingHeaderStartedAt = m.taskStartedAt
 	}
 	indicator := codextui.NewStatusIndicator(m.taskStartedAt)
 	if m.mcpStartupActive && strings.TrimSpace(m.mcpStartupHeader) != "" {
@@ -3335,44 +3362,46 @@ func (m *Model) renderWorkingIndicator() string {
 	return strings.Join(lines, "\n")
 }
 
-const workingHighlightTicksPerLetter = 3
-
 func (m *Model) renderWorkingHeader(header string) string {
-	runes := []rune(header)
-	if len(runes) == 0 {
+	if m == nil || strings.TrimSpace(header) == "" {
 		return ""
 	}
-	tick := 0
-	if m != nil && m.animEngine != nil {
-		tick = m.animEngine.CurrentTick()
+	motion := codextui.MotionModeFromAnimationsEnabled(m.animationsEnabled)
+	var elapsed time.Duration
+	if !m.workingHeaderStartedAt.IsZero() {
+		elapsed = m.currentTime().Sub(m.workingHeaderStartedAt)
 	}
-	active := (tick / workingHighlightTicksPerLetter) % len(runes)
+	spans := codextui.SummaryShimmer(header, elapsed, motion)
 	reset := "\x1b[0m"
 	dim := "\x1b[2m"
-	if m != nil {
-		if m.Styles.ExecCell.Reset != "" {
-			reset = m.Styles.ExecCell.Reset
-		}
-		if m.Styles.Chat.DimText != "" {
-			dim = m.Styles.Chat.DimText
-		}
+	if m.Styles.ExecCell.Reset != "" {
+		reset = m.Styles.ExecCell.Reset
 	}
-
+	if m.Styles.Chat.DimText != "" {
+		dim = m.Styles.Chat.DimText
+	}
 	var out strings.Builder
-	if active > 0 {
-		out.WriteString(dim)
-		out.WriteString(string(runes[:active]))
-		out.WriteString(reset)
-	}
-	out.WriteString("\x1b[1m")
-	out.WriteRune(runes[active])
-	out.WriteString(reset)
-	if active+1 < len(runes) {
-		out.WriteString(dim)
-		out.WriteString(string(runes[active+1:]))
-		out.WriteString(reset)
+	for _, span := range spans {
+		switch span.Style {
+		case codextui.SummaryShimmerDim:
+			out.WriteString(dim)
+			out.WriteString(span.Text)
+			out.WriteString(reset)
+		case codextui.SummaryShimmerColor:
+			out.WriteString(summaryShimmerForeground(span.Foreground))
+			out.WriteString(span.Text)
+			out.WriteString(reset)
+		default:
+			out.WriteString(span.Text)
+		}
 	}
 	return out.String()
+}
+
+// summaryShimmerForeground emits a truecolor foreground escape for a shimmer
+// band grapheme.
+func summaryShimmerForeground(color codextui.RGB) string {
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", color.R, color.G, color.B)
 }
 
 func (m *Model) interruptHintBinding() string {

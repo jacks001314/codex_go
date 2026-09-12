@@ -397,7 +397,7 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	m.setStatus(status)
 	// Rust #43921: restore the resumed turn's active reasoning heading.
 	m.resetReasoningSummaryHeader()
-	m.workingStatusHeader = strings.TrimSpace(response.WorkingStatusHeader)
+	m.setWorkingStatusHeader(response.WorkingStatusHeader)
 	m.reasoningResumeTurnID = strings.TrimSpace(response.WorkingReasoningTurnID)
 	m.reasoningItemID = strings.TrimSpace(response.WorkingReasoningItemID)
 	m.activeSide = nil

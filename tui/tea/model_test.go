@@ -311,7 +311,10 @@ func TestModelWorkingIndicatorMatchesRust(t *testing.T) {
 	}
 }
 
-func TestModelWorkingIndicatorHighlightsLettersInSequence(t *testing.T) {
+// TestModelWorkingIndicatorShimmerKeepsTextAndLayout covers Rust #43921: the
+// status header shimmers smoothly over time without changing the status text or
+// layout, and reduced motion leaves the header unstyled.
+func TestModelWorkingIndicatorShimmerKeepsTextAndLayout(t *testing.T) {
 	start := time.Unix(100, 0)
 	state := codextui.NewState(nil)
 	state.SetStatus("running")
@@ -320,28 +323,23 @@ func TestModelWorkingIndicatorHighlightsLettersInSequence(t *testing.T) {
 	model.now = func() time.Time { return start }
 
 	first := model.renderWorkingIndicator()
-	for range workingHighlightTicksPerLetter {
-		model.animEngine.Advance()
+	if !strings.Contains(utils.StripANSI(first), "\u2022 Working") {
+		t.Fatalf("working indicator missing header: %q", first)
 	}
+	// Advancing the animation clock must not change the status text or layout.
+	model.now = func() time.Time { return start.Add(500 * time.Millisecond) }
 	second := model.renderWorkingIndicator()
-	if first == second {
-		t.Fatalf("Working highlight did not advance to the next letter: %q", first)
-	}
 	if got := utils.StripANSI(first); got != utils.StripANSI(second) {
 		t.Fatalf("animation changed the status text or layout: %q != %q", got, utils.StripANSI(second))
 	}
-	if !strings.Contains(first, "\x1b[1mW\x1b[0m") {
-		t.Fatalf("first frame should highlight W: %q", first)
-	}
-	if !strings.Contains(second, "\x1b[1mo\x1b[0m") {
-		t.Fatalf("second frame should highlight o: %q", second)
-	}
 
-	for range workingHighlightTicksPerLetter * (len([]rune("Working")) - 1) {
-		model.animEngine.Advance()
-	}
-	if cycled := model.renderWorkingIndicator(); cycled != first {
-		t.Fatalf("Working highlight did not cycle back to W: %q", cycled)
+	// Reduced motion renders the header verbatim (no shimmer styling).
+	disabled := false
+	reduced := NewModel(state, Options{Width: 80, Height: 18, AnimationsEnabled: &disabled})
+	reduced.taskStartedAt = start
+	reduced.now = func() time.Time { return start }
+	if got := reduced.renderWorkingIndicator(); !strings.Contains(got, "\u2022 Working") {
+		t.Fatalf("reduced-motion indicator = %q", got)
 	}
 }
 
