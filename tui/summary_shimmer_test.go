@@ -30,6 +30,9 @@ func TestSummaryShimmerMidpointMatchesRust(t *testing.T) {
 // reduced motion renders the text unstyled, and an unknown palette renders it
 // dim instead of animating.
 func TestSummaryShimmerReducedMotionAndUnknownPalette(t *testing.T) {
+	// Force the unknown-palette path regardless of the host console palette.
+	restoreColors := SetDefaultTerminalColorsForTest(nil)
+	defer restoreColors()
 	fg := RGB{R: 240, G: 240, B: 240}
 	bg := RGB{R: 16, G: 16, B: 16}
 	reduced := SummaryShimmerSpansAt("Working", time.Second, MotionReduced, fg, bg, true)
@@ -114,6 +117,8 @@ func TestSummaryShimmerPreservesGraphemes(t *testing.T) {
 
 // TestDefaultTerminalColorsSeam covers the palette cache and its test seam.
 func TestDefaultTerminalColorsSeam(t *testing.T) {
+	forceUnavailable := SetDefaultTerminalColorsForTest(nil)
+	defer forceUnavailable()
 	if _, ok := defaultTerminalColors(); ok {
 		t.Fatal("unset palette must report unavailable")
 	}
@@ -128,5 +133,36 @@ func TestDefaultTerminalColorsSeam(t *testing.T) {
 	restore()
 	if _, ok := defaultTerminalColors(); ok {
 		t.Fatal("restored palette must report unavailable")
+	}
+}
+
+func consoleColorTable() [16]uint32 {
+	return [16]uint32{
+		0x00000000, 0x00000080, 0x00008000, 0x00008080, 0x00800000, 0x00800080, 0x00808000,
+		0x00c0c0c0, 0x00808080, 0x000000ff, 0x0000ff00, 0x0000ffff, 0x00ff0000, 0x00ff00ff,
+		0x00ffff00, 0x00ffffff,
+	}
+}
+
+// TestDecodeConsoleDefaultColorsMatchesRust covers Rust's Windows console
+// palette fallback vectors (#43921 / terminal_probe/windows_tests.rs).
+func TestDecodeConsoleDefaultColorsMatchesRust(t *testing.T) {
+	cases := []struct {
+		attributes uint16
+		want       DefaultColors
+	}{
+		{0x21, DefaultColors{FG: RGBColor{R: 128}, BG: RGBColor{G: 128}}},
+		{0xe9, DefaultColors{FG: RGBColor{R: 255}, BG: RGBColor{G: 255, B: 255}}},
+		{0x43, DefaultColors{FG: RGBColor{R: 0x33, G: 0x22, B: 0x11}, BG: RGBColor{R: 0xcc, G: 0xbb, B: 0xaa}}},
+		// COMMON_LVB_REVERSE_VIDEO must not change the decoded attribute indices.
+		{0x8021, DefaultColors{FG: RGBColor{R: 128}, BG: RGBColor{G: 128}}},
+	}
+	colors := consoleColorTable()
+	colors[3] = 0x00112233
+	colors[4] = 0x00aabbcc
+	for _, tc := range cases {
+		if got := decodeConsoleDefaultColors(tc.attributes, colors); got != tc.want {
+			t.Errorf("decodeConsoleDefaultColors(%#x) = %#v, want %#v", tc.attributes, got, tc.want)
+		}
 	}
 }
