@@ -626,7 +626,7 @@ func (s *State) RenderFrame() string {
 		}
 	}
 	builder.WriteString("----------------------------------------\n")
-	builder.WriteString("Commands: /help /keymap /status /usage /goal /statusline /title /debug-config /new /clear /copy /raw /diff /ps /stop /model /personality /permissions /approval /sandbox /experimental /mcp /skills /plugins /apps /review /rename /theme /pets /plan /side /btw /agent /subagents /ide /vim /import /hooks /memories /feedback /resume /fork /archive /unarchive /delete /attach /image /url-image /clear-attachments /editor /logout /quit /exit\n")
+	builder.WriteString("Commands: /help /keymap /status /usage /goal /statusline /title /debug-config /new /clear /copy /raw /diff /ps /stop /model /permissions /approval /sandbox /experimental /mcp /skills /plugins /apps /review /rename /theme /pets /plan /side /btw /agent /subagents /ide /vim /import /hooks /memories /feedback /resume /fork /archive /unarchive /delete /attach /image /url-image /clear-attachments /editor /logout /quit /exit\n")
 	return builder.String()
 }
 
@@ -649,7 +649,6 @@ func (s *State) RenderHelp() string {
 		"  /ps                   list background terminals",
 		"  /stop                 stop all background terminals",
 		"  /model [MODEL]        show or set the model for following turns",
-		"  /personality          choose a communication style for Codex",
 		"  /permissions          open Rust-style model permissions menu",
 		"  /approval [POLICY]    show or set approval policy: untrusted, on-request, never",
 		"  /sandbox [PROFILE]    show or set sandbox profile",
