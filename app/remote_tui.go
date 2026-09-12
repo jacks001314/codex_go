@@ -396,6 +396,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		AgentsOverviewEmbedded:    false,
 		OnAgentsOverviewRefresh:   interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
+		OnAgentsOverviewUsage:     interactiveRemoteAgentsOverviewUsage(ctx, endpoint),
 		OnAgentsOverviewDispatch:  interactiveRemoteAgentsOverviewDispatch(ctx, endpoint),
 		OnAgentsOverviewStop:      interactiveRemoteAgentsOverviewStop(ctx, endpoint),
 		OnAgentsOverviewArchive:   interactiveRemoteAgentsOverviewArchive(ctx, endpoint),
@@ -3436,11 +3437,15 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
 			return err
 		}
+		event := protocol.TokenUsageUpdated(remoteThreadTokenUsage(payload.TokenUsage))
 		if !c.notificationThreadIsActive(payload.ThreadID) {
+			// Rust #44970: the agents dashboard tracks a task's live token totals
+			// for its usage lines even while another thread is active.
+			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: event})
 			return nil
 		}
 		c.noteNotificationThreadID(payload.ThreadID)
-		c.send(codextea.ThreadEventMsg{Event: protocol.TokenUsageUpdated(remoteThreadTokenUsage(payload.TokenUsage))})
+		c.send(codextea.ThreadEventMsg{Event: event})
 	case appserver.NotificationItemGuardianApprovalReviewStarted:
 		var payload appserver.ItemGuardianApprovalReviewStartedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

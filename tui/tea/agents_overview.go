@@ -271,11 +271,13 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 	}
 	m.agentsOverviewNotice = ""
 	m.agentsOverview.ApplyRefresh(message.rows, m.agentsOverview.SelectedThreadID())
+	m.syncAgentsOverviewUsageLines()
+	usageCmd := m.refreshAgentsOverviewUsageCmd()
 	if m.agentsOverviewPending {
 		m.agentsOverviewPending = false
-		return m.refreshAgentsOverviewCmd()
+		return bubbletea.Batch(m.refreshAgentsOverviewCmd(), usageCmd)
 	}
-	return nil
+	return usageCmd
 }
 
 // updateAgentsOverviewKey routes keys to the dashboard while it is active.
@@ -293,6 +295,7 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m.agentsOverviewLifecycleProgress != "" {
 		return nil
 	}
+	selectedBefore := m.agentsOverview.Selected
 	keySpec := keySpecFromKeyMsg(msg)
 	handled := false
 	switch msg.String() {
@@ -407,6 +410,10 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 				m.agentsOverview.TypeChar(r)
 			}
 		}
+	}
+	// Rust #44970: the selected task's usage estimate follows the selection.
+	if m.agentsOverview != nil && m.agentsOverview.Selected != selectedBefore {
+		return m.refreshAgentsOverviewUsageCmd()
 	}
 	return nil
 }

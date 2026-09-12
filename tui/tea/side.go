@@ -541,6 +541,14 @@ func (m *Model) applyThreadScopedEvent(msg ThreadScopedEventMsg) bubbletea.Cmd {
 	}
 	// Background subagent thread: keep a bounded replay buffer so switching to
 	// the agent later can render its in-progress activity (Rust parity).
+	// Rust #44970: the dashboard keeps a task's live token totals for its usage
+	// lines, so those notifications are tracked instead of buffered.
+	if msg.Event.Type == "thread.token_usage.updated" && m.agentsOverview != nil &&
+		agentsOverviewThreadListed(m.agentsOverview.Rows, threadID) {
+		input, output := agentsOverviewUsageTokenTotals(msg.Event.TokenUsage)
+		m.applyAgentsOverviewUsageTokens(threadID, input, output)
+		return nil
+	}
 	m.bufferBackgroundThreadEvent(threadID, msg.Event)
 	return nil
 }

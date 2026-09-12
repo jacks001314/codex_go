@@ -254,6 +254,9 @@ type View struct {
 	// prompt (Rust #44027). The caller owns the underlying files; the view only
 	// renders them above the prompt.
 	attachments []string
+	// usageLines holds the pre-rendered token/usage-estimate lines for a task,
+	// shown in the details pane (Rust #44970 agents_overview.usage).
+	usageLines map[string][]string
 }
 
 // SetAttachments replaces the pending attachment labels rendered above the
@@ -271,6 +274,50 @@ func (v *View) AttachmentLabels() []string {
 		return nil
 	}
 	return append([]string(nil), v.attachments...)
+}
+
+// SetUsageLines replaces the pre-rendered usage lines shown in the task
+// details for a thread (Rust #44970). Empty lines clear the entry.
+func (v *View) SetUsageLines(threadID string, lines []string) {
+	if v == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	if len(lines) == 0 {
+		delete(v.usageLines, threadID)
+		return
+	}
+	if v.usageLines == nil {
+		v.usageLines = map[string][]string{}
+	}
+	v.usageLines[threadID] = append([]string(nil), lines...)
+}
+
+// usageLinesFor returns the usage lines for a thread.
+func (v *View) usageLinesFor(threadID string) []string {
+	if v == nil || v.usageLines == nil {
+		return nil
+	}
+	lines := v.usageLines[strings.TrimSpace(threadID)]
+	if len(lines) == 0 {
+		return nil
+	}
+	return lines
+}
+
+// pruneUsageLines drops usage entries whose thread is no longer listed.
+func (v *View) pruneUsageLines() {
+	if v == nil || len(v.usageLines) == 0 {
+		return
+	}
+	for threadID := range v.usageLines {
+		if !containsThreadID(v.Rows, threadID) {
+			delete(v.usageLines, threadID)
+		}
+	}
 }
 
 // projectGroup is a row's project-grouping identity. With linked worktrees
@@ -896,7 +943,9 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	view := New(rows, selected, v.ExitOnCancel)
 	view.State = v.State
 	view.worktreesEnabled = v.worktreesEnabled
+	view.usageLines = v.usageLines
 	view.recomputeProjectGroups()
+	view.pruneUsageLines()
 	// Hidden roots stay hidden across refreshes; if the restored selection
 	// points at one, move it to a visible row.
 	view.fitSelection()

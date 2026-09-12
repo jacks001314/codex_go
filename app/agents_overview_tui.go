@@ -2,7 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
+	"math"
+	"strings"
 
+	"codex_go/appserver"
 	"codex_go/appserverdaemon"
 	"codex_go/auth"
 	agentsoverview "codex_go/tui/agents_overview"
@@ -76,6 +80,86 @@ func interactiveRemoteAgentsOverviewDelete(ctx context.Context, endpoint *appser
 		defer client.close()
 		return newRemoteAgentsDashboardSource(client, "").Delete(ctx, threadID)
 	}
+}
+
+// interactiveRemoteAgentsOverviewUsage reads the selected task's usage
+// estimate through the app server's thread-scoped account/usage/read (Rust
+// #44970 fetch_thread_usage -> ThreadUsageOutcome).
+func interactiveRemoteAgentsOverviewUsage(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewUsageReaderFunc {
+	return func(threadID string) (codextea.AgentsOverviewUsageResult, error) {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			return codextea.AgentsOverviewUsageResult{}, errors.New("dashboard usage requires a thread id")
+		}
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return codextea.AgentsOverviewUsageResult{}, err
+		}
+		defer client.close()
+		scoped := threadID
+		var response auth.GetAccountTokenUsageResponse
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodGetAccountTokenUsage, auth.GetAccountTokenUsageParams{ThreadID: &scoped}, &response); err != nil {
+			return codextea.AgentsOverviewUsageResult{}, err
+		}
+		if response.ThreadUsage == nil {
+			return codextea.AgentsOverviewUsageResult{Outcome: codextea.AgentsOverviewUsageDisabled}, nil
+		}
+		return codextea.AgentsOverviewUsageResult{
+			Outcome: codextea.AgentsOverviewUsageAvailable,
+			Usage:   agentsOverviewThreadUsageFromAuth(response.ThreadUsage),
+		}, nil
+	}
+}
+
+// agentsOverviewThreadUsageFromAuth maps the app-server's thread usage into the
+// dashboard shape, summing only complete non-negative breakdown groups (Rust
+// agents_overview_usage::usage_lines try_fold).
+func agentsOverviewThreadUsageFromAuth(usage *auth.ThreadUsage) codextea.AgentsOverviewThreadUsage {
+	out := codextea.AgentsOverviewThreadUsage{}
+	if usage == nil {
+		return out
+	}
+	out.ThreadID = strings.TrimSpace(usage.ThreadID)
+	out.EstimatedCreditsMicros = usage.EstimatedUsageCreditsMicros
+	if usage.EstimatedUsageUSDMicros != nil {
+		usd := *usage.EstimatedUsageUSDMicros
+		out.EstimatedUSDMicros = &usd
+	}
+	out.HasGroups = len(usage.Groups) > 0
+	if len(usage.Groups) == 0 {
+		return out
+	}
+	input, inputOK := int64(0), true
+	output, outputOK := int64(0), true
+	for _, group := range usage.Groups {
+		if group.InputTokens == nil || *group.InputTokens < 0 {
+			inputOK = false
+		} else {
+			input = saturatingAddInt64(input, *group.InputTokens)
+		}
+		if group.OutputTokens == nil || *group.OutputTokens < 0 {
+			outputOK = false
+		} else {
+			output = saturatingAddInt64(output, *group.OutputTokens)
+		}
+	}
+	if inputOK {
+		out.GroupInputTokens = &input
+	}
+	if outputOK {
+		out.GroupOutputTokens = &output
+	}
+	return out
+}
+
+func saturatingAddInt64(a int64, b int64) int64 {
+	sum := a + b
+	if sum < a {
+		return math.MaxInt64
+	}
+	return sum
 }
 
 // interactiveStartAgentsDaemon starts the local background app server (Rust

@@ -269,11 +269,20 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 		{text: "Model: ", style: spanDim},
 		{text: ModelName(row.Model), style: spanPlain},
 	})
+	// Rust #44970: token totals and estimated usage render after the model.
+	usage := v.usageLinesFor(row.ThreadID)
+	for _, rendered := range usage {
+		lines = append(lines, []span{{text: rendered, style: spanDim}})
+	}
 	if strings.TrimSpace(row.GitBranch) != "" {
 		lines = append(lines, nil)
 		lines = append(lines, []span{{text: "Branch", style: spanDim}})
 		lines = append(lines, []span{{text: strings.TrimSpace(row.GitBranch), style: spanPlain}})
 	}
+	// promptStart marks where the original prompt begins; when usage is present
+	// and the details would exceed the pane, the prompt is dropped so activity
+	// and usage keep their lines (Rust #44970).
+	promptStart := len(lines)
 	lines = append(lines, nil)
 	// Rust #44752: the bounded prompt preview keeps its explicit line breaks and
 	// is limited to two rendered lines with an ellipsis marker.
@@ -303,6 +312,9 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 		lines = append(lines, []span{{text: rendered, raw: markdown}})
 	}
 
+	if len(usage) > 0 && len(lines) > height && promptStart < len(lines) {
+		lines = lines[:promptStart]
+	}
 	out := make([]string, 0, height)
 	lines = append(lines, nil)
 	for _, spans := range lines {

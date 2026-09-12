@@ -776,13 +776,16 @@ type Options struct {
 	OnSwitchAgent             AgentThreadSwitchFunc
 	AgentsOverviewEmbedded    bool
 	OnAgentsOverviewRefresh   AgentsOverviewRefreshFunc
-	OnAgentsOverviewDispatch  AgentsOverviewDispatchFunc
-	OnAgentsOverviewStop      AgentsOverviewStopFunc
-	OnAgentsOverviewRename    AgentsOverviewRenameFunc
-	OnAgentsOverviewArchive   AgentsOverviewArchiveFunc
-	OnAgentsOverviewDelete    AgentsOverviewDeleteFunc
-	OnStartAgentsDaemon       AgentsDaemonStartFunc
-	OnClipboardWrite          func(text string) error
+	// OnAgentsOverviewUsage reads the selected task's usage estimate for the
+	// dashboard details (Rust #44970). Nil disables the token/usage surface.
+	OnAgentsOverviewUsage    AgentsOverviewUsageReaderFunc
+	OnAgentsOverviewDispatch AgentsOverviewDispatchFunc
+	OnAgentsOverviewStop     AgentsOverviewStopFunc
+	OnAgentsOverviewRename   AgentsOverviewRenameFunc
+	OnAgentsOverviewArchive  AgentsOverviewArchiveFunc
+	OnAgentsOverviewDelete   AgentsOverviewDeleteFunc
+	OnStartAgentsDaemon      AgentsDaemonStartFunc
+	OnClipboardWrite         func(text string) error
 	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
 	// /voice unavailable for this runtime.
 	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
@@ -1021,10 +1024,19 @@ type Model struct {
 	terminalSize               func() (int, int, error)
 	agentsOverviewHidden       map[string]struct{}
 	agentsOverviewPendingDraft *string
-	transcriptMessages         transcriptMessageCache
-	overlayMessages            transcriptMessageCache
-	lastTranscriptContent      string
-	lastTranscriptHeight       int
+	// agentsOverviewUsage caches per-task usage estimates/totals, and
+	// agentsOverviewUsageDisabled records an account-wide unavailable
+	// capability (Rust #44970). The pending thread/request pair guards an
+	// in-flight fetch so only the latest result applies.
+	agentsOverviewUsage               map[string]*agentsOverviewUsageEntry
+	agentsOverviewUsageDisabled       bool
+	agentsOverviewUsagePendingThread  string
+	agentsOverviewUsagePendingRequest uint64
+	agentsOverviewUsageNextRequest    uint64
+	transcriptMessages                transcriptMessageCache
+	overlayMessages                   transcriptMessageCache
+	lastTranscriptContent             string
+	lastTranscriptHeight              int
 
 	width                  int
 	height                 int
@@ -1233,6 +1245,7 @@ type Model struct {
 	pendingServerProfile      string
 	agentsOverviewEmbedded    bool
 	onAgentsOverviewRefresh   AgentsOverviewRefreshFunc
+	onAgentsOverviewUsage     AgentsOverviewUsageReaderFunc
 	onAgentsOverviewDispatch  AgentsOverviewDispatchFunc
 	onAgentsOverviewStop      AgentsOverviewStopFunc
 	onAgentsOverviewRename    AgentsOverviewRenameFunc
@@ -1550,6 +1563,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		sizeMonitorEnabled:              terminalSizeMonitorNeeded(runtime.GOOS, os.Getenv),
 		agentsOverviewEmbedded:          options.AgentsOverviewEmbedded,
 		onAgentsOverviewRefresh:         options.OnAgentsOverviewRefresh,
+		onAgentsOverviewUsage:           options.OnAgentsOverviewUsage,
+		agentsOverviewUsage:             map[string]*agentsOverviewUsageEntry{},
 		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,
 		onAgentsOverviewStop:            options.OnAgentsOverviewStop,
 		onAgentsOverviewRename:          options.OnAgentsOverviewRename,
@@ -2083,6 +2098,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case agentsOverviewListMsg:
 		return m, m.applyAgentsOverviewList(msg)
+	case agentsOverviewUsageLoadedMsg:
+		return m, m.applyAgentsOverviewUsageLoaded(msg)
+	case agentsOverviewUsageRefreshMsg:
+		return m, m.refreshAgentsOverviewUsageCmd()
 	case agentsOverviewDispatchMsg:
 		if msg.err != nil {
 			m.agentsOverviewNotice = "Failed to start background task: " + strings.TrimSpace(msg.err.Error())
@@ -5302,6 +5321,11 @@ func (m *Model) applyRateLimitSnapshot(snapshot chatwidget.RateLimitSnapshot) bu
 		m.rateLimitSnapshots = map[string]chatwidget.RateLimitSnapshot{}
 	}
 	if strings.TrimSpace(snapshot.PlanType) != "" {
+		// Rust #44970: an account/plan change invalidates cached dashboard usage
+		// and the disabled-capability state.
+		if plan := strings.TrimSpace(snapshot.PlanType); plan != m.chatGPTPlanType {
+			m.clearAgentsOverviewUsage()
+		}
 		m.chatGPTPlanType = strings.TrimSpace(snapshot.PlanType)
 	} else if m.chatGPTPlanType != "" {
 		snapshot.PlanType = m.chatGPTPlanType
