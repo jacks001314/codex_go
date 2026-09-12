@@ -1145,11 +1145,11 @@ func TestRunAddsStartupEnvironmentContextInputItems(t *testing.T) {
 }
 
 func TestExecPermissionsInstructionsForNeverForbidsSandboxOverridesLikeRust(t *testing.T) {
-	never := execPermissionsInstructions(nil, sandbox.ApprovalNever)
+	never := execPermissionsInstructions(nil, nil, sandbox.PermissionPromptProfileOptions{ApprovalPolicy: sandbox.ApprovalNever})
 	if !strings.Contains(never, "Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.") {
 		t.Fatalf("never permissions instructions = %q", never)
 	}
-	onRequest := execPermissionsInstructions(nil, sandbox.ApprovalOnRequest)
+	onRequest := execPermissionsInstructions(nil, nil, sandbox.PermissionPromptProfileOptions{ApprovalPolicy: sandbox.ApprovalOnRequest})
 	if strings.Contains(onRequest, "Do not provide the `sandbox_permissions`") {
 		t.Fatalf("on-request permissions instructions unexpectedly forbid overrides: %q", onRequest)
 	}

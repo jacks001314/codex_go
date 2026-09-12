@@ -36,6 +36,9 @@ type PermissionPromptReviewer string
 
 const PermissionPromptAutoReview PermissionPromptReviewer = "auto_review"
 
+// permissionPromptNetworkPlaceholder mirrors Rust NETWORK_ACCESS_PLACEHOLDER.
+const permissionPromptNetworkPlaceholder = "{{ network_access }}"
+
 type PermissionPromptConfig struct {
 	SandboxMode                    PermissionPromptSandboxMode
 	NetworkAccess                  PermissionPromptNetworkAccess
@@ -49,79 +52,183 @@ type PermissionPromptConfig struct {
 	RequestPermissionsToolEnabled  bool
 	GranularAllowedCategories      []string
 	GranularAutomaticallyRejected  []string
+	// PermissionMessages carries the model catalog's sandbox-mode overrides
+	// (Rust PermissionMessages); a missing mode falls back to the built-in
+	// template and an empty override drops the sandbox section entirely.
+	PermissionMessages *PermissionPromptPermissionMessages
+	// ApprovalMessages carries the model catalog's approval-policy overrides
+	// (Rust ApprovalMessages); a missing policy falls back to the built-in
+	// templates.
+	ApprovalMessages *PermissionPromptApprovalMessages
 }
 
+// PermissionPromptPermissionMessages mirrors Rust
+// codex_protocol::openai_models::PermissionMessages.
+type PermissionPromptPermissionMessages struct {
+	DangerFullAccess *string
+	WorkspaceWrite   *string
+	ReadOnly         *string
+}
+
+// PermissionPromptApprovalMessages mirrors Rust
+// codex_protocol::openai_models::ApprovalMessages.
+type PermissionPromptApprovalMessages struct {
+	OnRequest           *string
+	OnRequestAutoReview *string
+	Never               *string
+	UnlessTrusted       *string
+}
+
+// BuildPermissionPrompt ports Rust prompts::PermissionsInstructions: sections
+// are appended with a single newline separator and the body ends with a
+// newline, so the rendered fragment reads
+// `<permissions instructions>\n<body></permissions instructions>`.
 func BuildPermissionPrompt(config *PermissionPromptConfig) string {
 	if config == nil {
 		config = &PermissionPromptConfig{}
 	}
-	sections := []string{
-		sandboxPromptText(config.SandboxMode, config.NetworkAccess),
-		approvalPromptText(config),
+	text := ""
+	if sandbox := sandboxPromptText(config.SandboxMode, config.NetworkAccess, config.PermissionMessages); sandbox != "" {
+		text = appendPermissionSection(text, sandbox)
 	}
+	text = appendPermissionSection(text, approvalPromptText(config))
 	if roots := writableRootsText(config.WritableRoots); roots != "" {
-		sections = append(sections, roots)
+		text = appendPermissionSection(text, roots)
 	}
 	if denied := deniedReadsText(config.DeniedReadPaths, config.DeniedReadGlobs); denied != "" {
-		sections = append(sections, denied)
+		text = appendPermissionSection(text, denied)
 	}
-	text := strings.Join(nonEmpty(sections), "\n\n")
 	if !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
 	return text
 }
 
-func sandboxPromptText(mode PermissionPromptSandboxMode, network PermissionPromptNetworkAccess) string {
+// appendPermissionSection ports Rust append_section: a newline is inserted
+// before the section unless the text already ends with one.
+func appendPermissionSection(text string, section string) string {
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return text + section
+}
+
+// sandboxPromptText ports Rust sandbox_text: a catalog override is used when
+// present (with only the exact `{{ network_access }}` placeholder replaced),
+// otherwise the built-in template applies.
+func sandboxPromptText(
+	mode PermissionPromptSandboxMode,
+	network PermissionPromptNetworkAccess,
+	messages *PermissionPromptPermissionMessages,
+) string {
+	// Go safety defaults: Rust callers always pass resolved enum values, but an
+	// unset field would otherwise render as an empty mode or network access.
 	if mode == "" {
 		mode = PermissionPromptWorkspaceWrite
 	}
 	if network == "" {
 		network = PermissionPromptNetworkRestricted
 	}
+	if override := permissionMessageForMode(messages, mode); override != nil {
+		if *override == "" {
+			return ""
+		}
+		return strings.ReplaceAll(*override, permissionPromptNetworkPlaceholder, string(network))
+	}
+	template := permissionPromptSandboxTemplate(mode)
+	return strings.ReplaceAll(template, permissionPromptNetworkPlaceholder, string(network))
+}
+
+func permissionMessageForMode(messages *PermissionPromptPermissionMessages, mode PermissionPromptSandboxMode) *string {
+	if messages == nil {
+		return nil
+	}
 	switch mode {
 	case PermissionPromptDangerFullAccess:
-		return "Filesystem sandboxing is disabled. Network access is " + string(network) + "."
+		return messages.DangerFullAccess
 	case PermissionPromptReadOnly:
-		return "Filesystem sandboxing is read-only. Network access is " + string(network) + "."
+		return messages.ReadOnly
 	default:
-		return "Filesystem sandboxing is workspace-write. Network access is " + string(network) + "."
+		return messages.WorkspaceWrite
 	}
 }
 
+func permissionPromptSandboxTemplate(mode PermissionPromptSandboxMode) string {
+	switch mode {
+	case PermissionPromptDangerFullAccess:
+		return permissionPromptSandboxDangerFullAccess
+	case PermissionPromptReadOnly:
+		return permissionPromptSandboxReadOnly
+	default:
+		return permissionPromptSandboxWorkspaceWrite
+	}
+}
+
+// approvalPromptText ports Rust approval_text.
 func approvalPromptText(config *PermissionPromptConfig) string {
+	if selected := approvalMessageForPolicy(config); selected != nil {
+		return *selected
+	}
+	var text string
 	switch config.ApprovalPolicy {
 	case PermissionPromptApprovalNever:
-		return "Approval policy is `never`: do not request escalated permissions."
+		text = permissionPromptApprovalNever
 	case PermissionPromptApprovalUnlessTrusted:
-		return withRequestPermissions("Approval policy is `unless_trusted`: request approval when sandboxed work needs elevated access.", config.RequestPermissionsToolEnabled)
+		text = withRequestPermissions(permissionPromptApprovalUnlessTrusted, config.RequestPermissionsToolEnabled)
 	case PermissionPromptApprovalGranular:
-		return granularText(config)
+		text = granularText(config)
 	default:
-		sections := []string{"Approval policy is `on_request`: request approval when a command or filesystem action needs elevated permissions."}
+		onRequestRule := permissionPromptApprovalOnRequest
 		if config.ExecPermissionApprovalsEnabled {
-			sections = append(sections, "Use shell permission approval for later shell-like commands that need it.")
+			onRequestRule = permissionPromptApprovalOnRequestRuleRequestPermission
 		}
+		sections := []string{strings.TrimSuffix(onRequestRule, "\n")}
 		if config.RequestPermissionsToolEnabled {
 			sections = append(sections, requestPermissionsToolText())
 		}
 		if prefixes := approvedPrefixesText(config.ApprovedCommandPrefixes); prefixes != "" {
 			sections = append(sections, prefixes)
 		}
+		text = strings.Join(sections, "\n\n")
+	}
+	if config.ApprovalsReviewer == PermissionPromptAutoReview && config.ApprovalPolicy != PermissionPromptApprovalNever {
+		text = strings.TrimSuffix(text, "\n") + "\n\n" + autoReviewText()
+	}
+	return text
+}
+
+// approvalMessageForPolicy ports Rust's catalog approval-message selection: a
+// catalog message wins when present, and Granular has no catalog variant.
+func approvalMessageForPolicy(config *PermissionPromptConfig) *string {
+	messages := config.ApprovalMessages
+	if messages == nil {
+		return nil
+	}
+	switch config.ApprovalPolicy {
+	case PermissionPromptApprovalOnRequest:
 		if config.ApprovalsReviewer == PermissionPromptAutoReview {
-			sections = append(sections, autoReviewText())
+			return messages.OnRequestAutoReview
 		}
-		return strings.Join(sections, "\n\n")
+		return messages.OnRequest
+	case PermissionPromptApprovalNever:
+		return messages.Never
+	case PermissionPromptApprovalUnlessTrusted:
+		return messages.UnlessTrusted
+	default:
+		return nil
 	}
 }
 
 func granularText(config *PermissionPromptConfig) string {
-	sections := []string{"# Approval Requests\n\nApproval policy is `granular`. Categories set to false are automatically rejected instead of prompting the user."}
+	sections := []string{"# Approval Requests\n\nApproval policy is `granular`. Categories set to `false` are automatically rejected instead of prompting the user."}
 	if len(config.GranularAllowedCategories) > 0 {
 		sections = append(sections, "These approval categories may still prompt the user when needed:\n"+bulletList(config.GranularAllowedCategories))
 	}
 	if len(config.GranularAutomaticallyRejected) > 0 {
 		sections = append(sections, "These approval categories are automatically rejected instead of prompting the user:\n"+bulletList(config.GranularAutomaticallyRejected))
+	}
+	if config.ExecPermissionApprovalsEnabled && granularCategoryAllowed(config.GranularAllowedCategories, "sandbox_approval") {
+		sections = append(sections, strings.TrimSuffix(permissionPromptApprovalOnRequestRuleRequestPermission, "\n"))
 	}
 	if config.RequestPermissionsToolEnabled {
 		sections = append(sections, requestPermissionsToolText())
@@ -129,10 +236,16 @@ func granularText(config *PermissionPromptConfig) string {
 	if prefixes := approvedPrefixesText(config.ApprovedCommandPrefixes); prefixes != "" {
 		sections = append(sections, prefixes)
 	}
-	if config.ApprovalsReviewer == PermissionPromptAutoReview {
-		sections = append(sections, autoReviewText())
-	}
 	return strings.Join(sections, "\n\n")
+}
+
+func granularCategoryAllowed(categories []string, category string) bool {
+	for _, value := range categories {
+		if strings.TrimSpace(value) == category {
+			return true
+		}
+	}
+	return false
 }
 
 func withRequestPermissions(text string, enabled bool) string {
@@ -143,11 +256,11 @@ func withRequestPermissions(text string, enabled bool) string {
 }
 
 func requestPermissionsToolText() string {
-	return "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Request only the permissions required for the task."
+	return "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task."
 }
 
 func autoReviewText() string {
-	return "`approvals_reviewer` is `auto_review`: sandbox escalations with require_escalated will be reviewed for policy compliance."
+	return "`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval."
 }
 
 func writableRootsText(roots []string) string {
@@ -161,46 +274,56 @@ func writableRootsText(roots []string) string {
 		wrapped[i] = "`" + root + "`"
 	}
 	if len(wrapped) == 1 {
-		return "The writable root is " + wrapped[0] + "."
+		// The leading space mirrors Rust writable_roots_text, which is appended
+		// to the preceding section.
+		return " The writable root is " + wrapped[0] + "."
 	}
-	return "The writable roots are " + strings.Join(wrapped, ", ") + "."
+	return " The writable roots are " + strings.Join(wrapped, ", ") + "."
 }
 
 func deniedReadsText(paths []string, globs []string) string {
-	var entries []string
-	for _, path := range paths {
+	// Rust emits the denied roots first, then the denied globs.
+	sortedPaths := append([]string(nil), paths...)
+	sort.Strings(sortedPaths)
+	sortedGlobs := append([]string(nil), globs...)
+	sort.Strings(sortedGlobs)
+	entries := make([]string, 0, len(sortedPaths)+len(sortedGlobs))
+	for _, path := range sortedPaths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
 		entries = append(entries, "- path `"+path+"`")
 	}
-	for _, glob := range globs {
+	for _, glob := range sortedGlobs {
+		if strings.TrimSpace(glob) == "" {
+			continue
+		}
 		entries = append(entries, "- glob `"+glob+"`")
 	}
 	if len(entries) == 0 {
 		return ""
 	}
-	sort.Strings(entries)
 	return "## Denied filesystem reads\nThe active permission profile denies reading these paths/globs. Do not request escalation or additional permissions to read them; these denials are policy restrictions.\n" + strings.Join(entries, "\n")
 }
 
 func approvedPrefixesText(prefixes [][]string) string {
-	if len(prefixes) == 0 {
-		return ""
-	}
-	formatted := make([]string, 0, len(prefixes))
+	copied := make([][]string, 0, len(prefixes))
 	for _, prefix := range prefixes {
 		if len(prefix) == 0 {
 			continue
 		}
-		quoted := make([]string, len(prefix))
-		for i, part := range prefix {
-			quoted[i] = fmt.Sprintf("%q", part)
-		}
-		formatted = append(formatted, "["+strings.Join(quoted, ", ")+"]")
+		copied = append(copied, append([]string(nil), prefix...))
 	}
-	if len(formatted) == 0 {
+	if len(copied) == 0 {
 		return ""
 	}
-	sort.Strings(formatted)
-	return "## Approved command prefixes\nThe following prefix rules have already been approved: " + strings.Join(formatted, ", ")
+	// Rust uses protocol::models::format_allow_prefixes for the approved-prefix
+	// section.
+	rendered := FormatAllowPrefixes(copied)
+	if rendered == "" {
+		return ""
+	}
+	return "## Approved command prefixes\nThe following prefix rules have already been approved: " + rendered
 }
 
 const (
@@ -292,21 +415,11 @@ func nthRuneByteIndex(value string, nth int) int {
 }
 
 func bulletList(values []string) string {
-	values = append([]string(nil), values...)
-	sort.Strings(values)
-	var lines []string
+	// Rust preserves the category order it builds (sandbox_approval, rules,
+	// skill_approval, request_permissions, mcp_elicitations).
+	lines := make([]string, 0, len(values))
 	for _, value := range values {
 		lines = append(lines, "- `"+value+"`")
 	}
 	return strings.Join(lines, "\n")
-}
-
-func nonEmpty(values []string) []string {
-	out := values[:0]
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			out = append(out, value)
-		}
-	}
-	return out
 }

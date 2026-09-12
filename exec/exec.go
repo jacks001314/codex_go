@@ -307,7 +307,11 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		}
 	}
 	runPrompt := prompt
-	execStartupItems := execStartupInputItems(req, permissionProfile, approvalPolicy, r.now())
+	execStartupItems := execStartupInputItems(req, permissionProfile, sandbox.PermissionPromptProfileOptions{
+		ApprovalPolicy:                 approvalPolicy,
+		ExecPermissionApprovalsEnabled: features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
+		RequestPermissionsToolEnabled:  features.Enabled(cfg.FeatureSettings(), "request_permissions_tool"),
+	}, r.now())
 	historyInputItems := resumeInputItems(resumeContext)
 	if resumeContext != nil {
 		// Rust #43795: a resumed session re-establishes the selected effort.
@@ -1850,9 +1854,14 @@ func requestCWD(req *Request) string {
 	return "."
 }
 
-func execStartupInputItems(req *Request, permissions *config.SandboxPermissionProfileResolution, approvalPolicy sandbox.AskForApproval, now time.Time) []any {
+func execStartupInputItems(
+	req *Request,
+	permissions *config.SandboxPermissionProfileResolution,
+	promptOptions sandbox.PermissionPromptProfileOptions,
+	now time.Time,
+) []any {
 	items := make([]any, 0, 2)
-	if item := developerMessageInputItem(execPermissionsInstructions(permissions, approvalPolicy)); item != nil {
+	if item := developerMessageInputItem(execPermissionsInstructions(req, permissions, promptOptions)); item != nil {
 		items = append(items, item)
 	}
 	if item := model.UserMessageInputItem(execEnvironmentContext(req, permissions, now)); item != nil {
@@ -1876,36 +1885,20 @@ func developerMessageInputItem(text string) any {
 	}
 }
 
-func execPermissionsInstructions(permissions *config.SandboxPermissionProfileResolution, approvalPolicy sandbox.AskForApproval) string {
-	mode := sandboxPermissionProfileID(permissions)
-	if mode == "" {
-		mode = "default"
+// execPermissionsInstructions ports Rust's permissions instructions fragment
+// (codex_prompts::PermissionsInstructions) using the resolved permission
+// profile, the approval policy, and the turn's feature flags.
+func execPermissionsInstructions(
+	req *Request,
+	permissions *config.SandboxPermissionProfileResolution,
+	promptOptions sandbox.PermissionPromptProfileOptions,
+) string {
+	var profile *sandbox.PermissionProfile
+	if permissions != nil {
+		profile = permissions.Profile
 	}
-	network := "restricted"
-	if permissions == nil || permissions.Profile == nil || permissions.Profile.AllowsNetwork() {
-		network = "enabled"
-	}
-	var detail string
-	switch {
-	case permissions != nil && permissions.Profile != nil && permissions.Profile.Disabled:
-		detail = "No filesystem sandboxing - all commands are permitted."
-	case mode == sandbox.BuiltInPermissionProfileReadOnly || mode == ":read-only":
-		detail = "Filesystem access is read-only unless additional permissions are granted."
-	case mode == sandbox.BuiltInPermissionProfileWorkspace || mode == ":workspace" || mode == "workspace-write":
-		detail = "Filesystem writes are restricted to the current workspace unless additional permissions are granted."
-	default:
-		detail = "Filesystem access follows the configured permission profile."
-	}
-	approval := ""
-	if approvalPolicy == sandbox.ApprovalNever {
-		// Match Rust PermissionsInstructions: when approvals can never be
-		// requested, explicitly prevent the model from adding a per-command
-		// sandbox override. Without this instruction models commonly add
-		// require_escalated to network commands even when the active profile
-		// already grants network access, and the command is then rejected.
-		approval = "\nApproval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected."
-	}
-	return fmt.Sprintf("<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `%s`: %s Network access is %s.%s\n</permissions instructions>", mode, detail, network, approval)
+	body := sandbox.BuildPermissionPromptForProfile(profile, absoluteRequestCWD(req), promptOptions)
+	return sandbox.RenderPermissionInstructions(body)
 }
 
 func execEnvironmentContext(req *Request, permissions *config.SandboxPermissionProfileResolution, now time.Time) string {
