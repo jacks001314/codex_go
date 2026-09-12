@@ -2474,22 +2474,57 @@ func (c *remoteAppServerTUIClient) startThread(ctx context.Context, root *cli.Ro
 	if err != nil {
 		return "", err
 	}
-	id, err := c.sendRequest(ctx, appserver.MethodThreadStart, params)
-	if err != nil {
-		return "", err
-	}
+	taskToolsAvailable := len(params.DynamicTools) > 0
 	var response appserver.ThreadStartResponse
-	if err := c.waitResponse(ctx, id, &response); err != nil {
-		return "", err
+	for attempt := 0; ; attempt++ {
+		id, err := c.sendRequest(ctx, appserver.MethodThreadStart, params)
+		if err != nil {
+			return "", err
+		}
+		if err := c.waitResponse(ctx, id, &response); err != nil {
+			// Rust request_thread_start_with_history_fallback: a server that does
+			// not support the TUI dynamic-tools namespace starts the thread
+			// without it instead of failing the bootstrap.
+			if attempt == 0 && taskToolsAvailable && remoteDynamicToolsUnsupportedError(err) {
+				params.DynamicTools = nil
+				taskToolsAvailable = false
+				continue
+			}
+			return "", err
+		}
+		break
 	}
 	if response.Thread == nil || strings.TrimSpace(response.Thread.ID) == "" {
 		return "", errors.New("thread/start response did not include a thread id")
 	}
 	threadID := strings.TrimSpace(response.Thread.ID)
+	// The TUI only offers task mentions for threads that host the task-tool
+	// namespace (Rust AppServerSession::task_tools_available).
+	c.send(codextea.TaskToolsAvailableMsg{ThreadID: threadID, Available: taskToolsAvailable})
 	if c.state == nil || strings.TrimSpace(c.state.ThreadID) != threadID {
 		c.send(codextea.ThreadEventMsg{Event: protocol.ThreadStarted(threadID)})
 	}
 	return threadID, nil
+}
+
+// remoteDynamicToolsUnsupportedError mirrors Rust's start-thread downgrade
+// matcher: an invalid request/params error naming the dynamic-tools surface
+// means the server is too old for the namespace.
+func remoteDynamicToolsUnsupportedError(err error) bool {
+	var rpcErr *remoteRPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	if rpcErr.Code != jsonRPCInvalidRequestCode && rpcErr.Code != appserver.JSONRPCInvalidParamsErrorCode {
+		return false
+	}
+	message := strings.ToLower(rpcErr.Message)
+	for _, field := range []string{"dynamictools", "dynamic tool", "namespace", "inputschema"} {
+		if strings.Contains(message, field) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *remoteAppServerTUIClient) startTurn(ctx context.Context, root *cli.RootOptions, state *codextui.State, threadID string, request codextea.SubmitRequest) (string, error) {

@@ -17,6 +17,66 @@ type DynamicToolThreadStartedMsg struct {
 	TaskToolsAvailable bool
 }
 
+// TaskToolsAvailableMsg reports whether a thread's app server accepted the
+// codex_tui task-tool namespace. Task mentions are only enabled for threads that
+// host it (Rust AppServerSession::task_tools_available /
+// chat_widget.set_task_mentions_enabled).
+type TaskToolsAvailableMsg struct {
+	ThreadID  string
+	Available bool
+}
+
+// applyTaskToolsAvailable records the capability, which gates the mention
+// popup's task search.
+func (m *Model) applyTaskToolsAvailable(message TaskToolsAvailableMsg) {
+	if m == nil {
+		return
+	}
+	threadID := strings.TrimSpace(message.ThreadID)
+	if threadID == "" {
+		return
+	}
+	if m.taskToolThreads == nil {
+		m.taskToolThreads = map[string]bool{}
+	}
+	if message.Available {
+		m.taskToolThreads[threadID] = true
+		return
+	}
+	delete(m.taskToolThreads, threadID)
+}
+
+// taskMentionsEnabled reports whether the current thread can reference tasks
+// (Rust chat_widget.task_mentions_enabled, set from task_tools_available).
+func (m *Model) taskMentionsEnabled() bool {
+	if m == nil || m.onSearchTasks == nil {
+		return false
+	}
+	threadID := m.currentThreadID()
+	if threadID == "" {
+		return false
+	}
+	return m.taskToolThreads[threadID]
+}
+
+// inheritTaskToolCapability mirrors Rust's fork handling: forking an available
+// thread keeps the namespace for the child (the fork carries the parent's
+// capability) instead of re-registering it.
+func (m *Model) inheritTaskToolCapability(parentThreadID string, childThreadID string) {
+	if m == nil {
+		return
+	}
+	parentThreadID = strings.TrimSpace(parentThreadID)
+	childThreadID = strings.TrimSpace(childThreadID)
+	if parentThreadID == "" || childThreadID == "" || !m.taskToolThreads[parentThreadID] {
+		return
+	}
+	if m.taskToolThreads == nil {
+		m.taskToolThreads = map[string]bool{}
+	}
+	m.taskToolThreads[childThreadID] = true
+}
+
 // applyDynamicToolThreadStarted records the dispatched task and refreshes an open
 // dashboard so it appears immediately.
 func (m *Model) applyDynamicToolThreadStarted(msg DynamicToolThreadStartedMsg) bubbletea.Cmd {

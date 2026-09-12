@@ -153,7 +153,9 @@ func (m *Model) refreshMentionPopup() bubbletea.Cmd {
 	// Rust task_mentions::spawn_search: a debounced/generation-guarded
 	// thread/search + thread/list merge populates the task candidates. An empty
 	// query clears them immediately.
-	if m.onSearchTasks != nil && (newPopup || previousQuery != query) {
+	// Task mentions are only offered for threads that host the task-tool
+	// namespace (Rust chat_widget.set_task_mentions_enabled).
+	if m.taskMentionsEnabled() && (newPopup || previousQuery != query) {
 		m.mentionTaskSearchGeneration++
 		generation := m.mentionTaskSearchGeneration
 		if strings.TrimSpace(query) == "" {

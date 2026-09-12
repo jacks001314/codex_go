@@ -330,6 +330,7 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 			}
 			m.upsertSessionItem(*summary)
 			m.State.SetThreadID(summary.ThreadID)
+			m.inheritTaskToolCapability(threadID, summary.ThreadID)
 			decision.Value = summary.ThreadID
 			return decision, "Forked session " + summary.ThreadID, true
 		}

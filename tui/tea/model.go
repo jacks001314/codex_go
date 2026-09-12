@@ -1226,8 +1226,11 @@ type Model struct {
 	// mentionTasks holds the current task-mention search results; the search is
 	// only wired when the thread's app server has the task tools available
 	// (Rust chat_widget.set_task_mentions_enabled).
-	mentionTasks                    []codextui.TaskMention
-	mentionTaskSearchGeneration     uint64
+	mentionTasks                []codextui.TaskMention
+	mentionTaskSearchGeneration uint64
+	// taskToolThreads records the threads whose app server accepted the codex_tui
+	// task-tool namespace (Rust AppServerSession::task_tools_available).
+	taskToolThreads                 map[string]bool
 	mentionPluginInventory          []plugin.PluginSummary
 	mentionPluginInventoryReady     bool
 	mentionPluginInventoryLoading   bool
@@ -2296,6 +2299,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case TaskMentionSearchResultMsg:
 		m.applyTaskMentionSearchResult(msg)
+		return m, nil
+	case TaskToolsAvailableMsg:
+		m.applyTaskToolsAvailable(msg)
 		return m, nil
 	case ExperimentalFeaturesResultMsg:
 		m.applyExperimentalFeaturesResult(msg)

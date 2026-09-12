@@ -16,7 +16,9 @@ import (
 // query clears the task rows without issuing a request.
 func TestModelTaskMentionSearchPopulatesTaskCandidatesLikeRust(t *testing.T) {
 	var queries []string
-	model := NewModel(codextui.NewState(nil), Options{
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-1")
+	model := NewModel(state, Options{
 		OnSearchTasks: func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
 			queries = append(queries, query+"|"+currentThreadID)
 			return []codextui.TaskMention{{
@@ -27,11 +29,12 @@ func TestModelTaskMentionSearchPopulatesTaskCandidatesLikeRust(t *testing.T) {
 			}}, nil
 		},
 	})
+	model.Update(TaskToolsAvailableMsg{ThreadID: "thread-1", Available: true})
 
 	model.Update(runes("@"))
 	_, cmd := model.Update(runes("r"))
 	runTeaCmd(t, model, cmd)
-	if len(queries) != 1 || queries[0] != "r|" {
+	if len(queries) != 1 || queries[0] != "r|thread-1" {
 		t.Fatalf("task searches = %#v, want one query for the current thread", queries)
 	}
 	if model.mentionPopup == nil {
@@ -78,5 +81,53 @@ func TestModelTaskMentionSearchPopulatesTaskCandidatesLikeRust(t *testing.T) {
 	}
 	if len(model.mentionTasks) != 0 {
 		t.Fatalf("task rows not cleared: %#v", model.mentionTasks)
+	}
+}
+
+// TestModelTaskMentionsRequireTaskToolsLikeRust covers Rust
+// chat_widget.set_task_mentions_enabled(task_tools_available): the task search
+// only runs for threads whose app server accepted the task-tool namespace, and a
+// fork inherits the parent's capability.
+func TestModelTaskMentionsRequireTaskToolsLikeRust(t *testing.T) {
+	var queries []string
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-1")
+	model := NewModel(state, Options{
+		OnSearchTasks: func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
+			queries = append(queries, query)
+			return []codextui.TaskMention{{ThreadID: "task-1", Title: "Task"}}, nil
+		},
+	})
+
+	// Without the capability the popup issues no task search.
+	model.Update(runes("@"))
+	_, cmd := model.Update(runes("r"))
+	runTeaCmd(t, model, cmd)
+	if len(queries) != 0 {
+		t.Fatalf("task search ran without task tools: %#v", queries)
+	}
+
+	// After the thread's start reports the namespace, the search runs.
+	model.Update(TaskToolsAvailableMsg{ThreadID: "thread-1", Available: true})
+	_, cmd = model.Update(runes("q"))
+	runTeaCmd(t, model, cmd)
+	if len(queries) != 1 || queries[0] != "rq" {
+		t.Fatalf("task searches = %#v", queries)
+	}
+
+	// A fork of an available thread inherits the capability.
+	model.inheritTaskToolCapability("thread-1", "thread-forked")
+	if !model.taskToolThreads["thread-forked"] {
+		t.Fatalf("fork did not inherit task tools: %#v", model.taskToolThreads)
+	}
+	// A fork of an unavailable thread does not gain it.
+	model.inheritTaskToolCapability("thread-plain", "thread-plain-fork")
+	if model.taskToolThreads["thread-plain-fork"] {
+		t.Fatalf("fork gained task tools without the parent: %#v", model.taskToolThreads)
+	}
+	// An explicit unavailable report clears a remembered thread.
+	model.Update(TaskToolsAvailableMsg{ThreadID: "thread-1", Available: false})
+	if model.taskMentionsEnabled() {
+		t.Fatalf("task mentions stayed enabled: %#v", model.taskToolThreads)
 	}
 }
