@@ -192,7 +192,16 @@ func (e *echoCanceller) processCapture(capture []float64) []float64 {
 			gradIm := (xRe[bin]*errIm[bin] - xIm[bin]*errRe[bin]) / denominator
 			hRe[bin] += e.step * gradRe
 			hIm[bin] += e.step * gradIm
+			// Fail safe: a divergent tap would otherwise poison the filter.
+			if !isFiniteTap(hRe[bin]) || !isFiniteTap(hIm[bin]) {
+				e.reset()
+				return output
+			}
 		}
 	}
 	return output
+}
+
+func isFiniteTap(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && math.Abs(value) < 1e9
 }

@@ -127,62 +127,79 @@ func (b *SplitFlapBoard) AnimationTick(elapsed time.Duration) (int, bool) {
 	return int(elapsed / SplitFlapFrameInterval), true
 }
 
-// Animate renders one display line for the given elapsed time. Reduced motion
-// returns the original line untouched.
+// AnimateLine renders one display line. Reduced motion returns it untouched.
 func (b *SplitFlapBoard) AnimateLine(displayText string, width int, elapsed time.Duration) string {
-	if b == nil {
-		return displayText
-	}
-	if !b.Animated {
-		return displayText
+	return b.AnimateLines([]string{displayText}, width, elapsed)[0]
+}
+
+// AnimateLines renders every non-empty line with one shared glyph index, the
+// runway animation on the final non-empty line, and padding to width. Reduced
+// motion returns the original lines untouched.
+func (b *SplitFlapBoard) AnimateLines(lines []string, width int, elapsed time.Duration) []string {
+	if b == nil || !b.Animated {
+		return lines
 	}
 	now := b.StartedAt.Add(elapsed)
 	phaseElapsed := now.Sub(b.PhaseStartedAt)
 	glyphIndex := 0
 	wordUnsettled := false
-	var out strings.Builder
-	graphemes := uniseg.NewGraphemes(displayText)
-	for graphemes.Next() {
-		grapheme := graphemes.Str()
-		if splitFlapIsFlippable(grapheme) {
-			position := glyphIndex
-			glyphIndex++
-			arrival := b.StartedAt
-			if position < len(b.TileArrivals) {
-				arrival = b.TileArrivals[position]
-			}
-			text, flipping := splitFlapGlyph(grapheme, position, now.Sub(arrival), phaseElapsed, b.FlapSample)
-			if flipping {
-				wordUnsettled = true
-			}
-			out.WriteString(text)
+	finalLine := -1
+	for index, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			finalLine = index
+		}
+	}
+	out := make([]string, len(lines))
+	for lineIndex, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			out[lineIndex] = line
 			continue
 		}
-		if strings.TrimSpace(grapheme) == "" {
-			wordUnsettled = false
+		var builder strings.Builder
+		graphemes := uniseg.NewGraphemes(line)
+		for graphemes.Next() {
+			grapheme := graphemes.Str()
+			if splitFlapIsFlippable(grapheme) {
+				position := glyphIndex
+				glyphIndex++
+				arrival := b.StartedAt
+				if position < len(b.TileArrivals) {
+					arrival = b.TileArrivals[position]
+				}
+				text, flipping := splitFlapGlyph(grapheme, position, now.Sub(arrival), phaseElapsed, b.FlapSample)
+				if flipping {
+					wordUnsettled = true
+				}
+				builder.WriteString(text)
+				continue
+			}
+			if strings.TrimSpace(grapheme) == "" {
+				wordUnsettled = false
+			}
+			if wordUnsettled && splitFlapIsPunctuation(grapheme) {
+				builder.WriteString(" ")
+			} else {
+				builder.WriteString(grapheme)
+			}
 		}
-		if wordUnsettled && splitFlapIsPunctuation(grapheme) {
-			out.WriteString(" ")
-		} else {
-			out.WriteString(grapheme)
+		text := builder.String()
+		remaining := width - runewidth.StringWidth(text)
+		if lineIndex == finalLine && b.IsAnimating(elapsed) && remaining > 1 && len(b.FlapSample) > 0 &&
+			len(b.TileArrivals) > 0 && now.Sub(b.TileArrivals[0]) >= SplitFlapTileSettleDuration {
+			phase := int(phaseElapsed / SplitFlapFrameInterval)
+			count := min(remaining-1, 3)
+			runway := make([]byte, 0, count)
+			for index := 0; index < count; index++ {
+				runway = append(runway, b.FlapSample[(phase+index)%len(b.FlapSample)])
+			}
+			text += " " + string(runway)
 		}
-	}
-	text := out.String()
-	remaining := width - runewidth.StringWidth(text)
-	if b.IsAnimating(elapsed) && remaining > 1 && len(b.FlapSample) > 0 &&
-		len(b.TileArrivals) > 0 && now.Sub(b.TileArrivals[0]) >= SplitFlapTileSettleDuration {
-		phase := int(phaseElapsed / SplitFlapFrameInterval)
-		count := min(remaining-1, 3)
-		runway := make([]byte, 0, count)
-		for index := 0; index < count; index++ {
-			runway = append(runway, b.FlapSample[(phase+index)%len(b.FlapSample)])
+		if padding := width - runewidth.StringWidth(text); padding > 0 {
+			text += strings.Repeat(" ", padding)
 		}
-		text += " " + string(runway)
+		out[lineIndex] = text
 	}
-	if padding := width - runewidth.StringWidth(text); padding > 0 {
-		text += strings.Repeat(" ", padding)
-	}
-	return text
+	return out
 }
 
 func splitFlapFlippableGlyphs(target string) string {

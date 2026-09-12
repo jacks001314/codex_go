@@ -288,6 +288,8 @@ LRU 缓存；Go 侧本轮已补齐（`audioutil` 包 + 接入用户消息音频�
 | 回声消除 | `dsp_aec.go` | 10 ms/480 分块频域自适应滤波（PBFDAF）：FFT 1024、13 分区 ≈130 ms 尾长、跨分区共享功率归一化、步长 0.15（>0.22 发散） |
 | 降噪 | `dsp_ns.go` | 512/256 sqrt-Hann STFT 谱减；噪声底快降慢升 + 帧能量语音门控（冻结） |
 | AGC | `dsp_agc.go` | 目标 RMS 0.05、增益 [1/8, 8]、快攻(0.5)慢放(0.05)、0.98 限幅 |
+| 高通滤波 | `dsp_filter.go` | 80 Hz 二阶 biquad（RBJ，Q=1/√2）——对齐 WebRTC APM 的 capture high-pass 级 |
+| 流延迟对齐 | `dsp_filter.go` `delayLine` + `dsp_apm.go` | `setStreamDelayMS` 现在**真正生效**：按毫秒延迟回声参考，`processRender` 走延迟线（对齐 WebRTC `set_stream_delay_ms`） |
 | 重采样 | `dsp_resample.go` | 窗口 sinc 流式重采样（256 相位表、Blackman 窗、下采样带限）+ Rust `Converter` 等价：480 样本块、时间戳、FIFO 背压 |
 | APM 编排 | `dsp_apm.go` | `processRender`/`processCapture`/`reset`（对应 sonora 的 render/capture 接口） |
 
@@ -307,6 +309,9 @@ LRU 缓存；Go 侧本轮已补齐（`audioutil` 包 + 接入用户消息音频�
 | AGC | 弱语音抬升、强语音不削波 |
 | 重采样 | 48k identity 逐样本相等；24k→48k 样本数 +2%（99 块/1s）；44.1k→48k 的 1 kHz 音调重建为 **1000.0 Hz**；超 1 s 背压报错 |
 | 稳定性 | 全链输出有限值（无 NaN/Inf） |
+
+捕获链顺序对齐 WebRTC APM：**高通 → 回声消除 → 降噪 → AGC**。回声消除器新增
+**发散保护**（任一抽头非有限或超界即重置滤波器），防止双讲/极端输入下滤波发散。
 
 与 Rust 的差异（诚实说明）：
 
@@ -405,3 +410,15 @@ realtimeSessionClosed|role=|presentation=|outcome=ended|text=absent
 `realtime_split_flap.rs` 的动画核心（tile 到达时间表、flap glyph 采样、标点掩码、
 runway 尾部动画、reduced-motion 直通、滑动窗口保留已稳定 tile），测试
 `splitflap_test.go` 复现 Rust 快照帧序列。
+
+**TUI 表现层续（同日）**：
+
+- **cell 集成**：`tui/chatwidget/splitflap_cell.go` 提供 `SplitFlapTranscriptCell`，
+  包装任意 `historycell.HistoryCell`：`DisplayLines` 走多行共享字形索引的动画
+  （runway 只在最后一个非空行），`RawLines` 保持原文以便复制，`AnimationTick`
+  供渲染循环排帧。Rust 的 per-span 颜色（黑底/青紫余晖/翻动灰）在 Go 的
+  纯文本 cell 模型下不可表达，已在注释中登记。
+- **语音状态快照矩阵**：`tui/bottom_pane/voice_strip_matrix_test.go` 冻结 7 个主要
+  会话状态的完整两行渲染（inactive / connecting-animated / connecting-reduced /
+  listening / muted-hint / speaking / retrying），对齐 Rust
+  `voice_footer_renders_the_main_conversation_states` 的快照方式。
