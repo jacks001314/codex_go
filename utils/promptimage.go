@@ -132,6 +132,7 @@ func loadForPromptBytes(path string, fileBytes []byte, mode Mode, limits *Resize
 	if err != nil {
 		return EncodedImage{}, err
 	}
+	metadata := extractPromptImageMetadata(format, fileBytes)
 	preparedWidth, preparedHeight := OutputDimensions(sourceWidth, sourceHeight, mode, limits)
 	resized := preparedWidth != sourceWidth || preparedHeight != sourceHeight
 	if !resized && canPreservePromptImageSourceBytes(format) {
@@ -159,7 +160,7 @@ func loadForPromptBytes(path string, fileBytes []byte, mode Mode, limits *Resize
 		// observable contract with a documented container difference.
 		targetFormat = promptImageFormatPNG
 	}
-	encoded, mime, err := encodePromptImage(target, targetFormat)
+	encoded, mime, err := encodePromptImage(target, targetFormat, metadata)
 	if err != nil {
 		return EncodedImage{}, &ProcessingError{Kind: "encode_error", Reason: path + ": " + err.Error()}
 	}
@@ -252,7 +253,7 @@ func resizePromptImage(src image.Image, targetWidth uint32, targetHeight uint32)
 }
 
 // encodePromptImage mirrors Rust encode_image: JPEG at quality 85, otherwise PNG.
-func encodePromptImage(img image.Image, format promptImageFormat) ([]byte, string, error) {
+func encodePromptImage(img image.Image, format promptImageFormat, metadata promptImageMetadata) ([]byte, string, error) {
 	var buf bytes.Buffer
 	if format == promptImageFormatJPEG {
 		// JPEG cannot represent alpha; flatten onto white as Rust's encoder does.
@@ -262,12 +263,12 @@ func encodePromptImage(img image.Image, format promptImageFormat) ([]byte, strin
 		if err := jpeg.Encode(&buf, flattened, &jpeg.Options{Quality: 85}); err != nil {
 			return nil, "", err
 		}
-		return buf.Bytes(), "image/jpeg", nil
+		return applyPromptImageMetadata(promptImageFormatJPEG, buf.Bytes(), metadata), "image/jpeg", nil
 	}
 	if err := png.Encode(&buf, img); err != nil {
 		return nil, "", err
 	}
-	return buf.Bytes(), "image/png", nil
+	return applyPromptImageMetadata(promptImageFormatPNG, buf.Bytes(), metadata), "image/png", nil
 }
 
 func OutputDimensions(width uint32, height uint32, mode Mode, limits *ResizeLimits) (uint32, uint32) {
