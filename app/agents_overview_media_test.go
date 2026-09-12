@@ -174,3 +174,31 @@ func decodeDataURLPayload(t *testing.T, url string, wantMIME string) []byte {
 	}
 	return decoded
 }
+
+// TestAgentsOverviewTaskInputsCarryTextElements covers Rust #44027's mention
+// elements: the dashboard's first-turn prompt text carries the composer's
+// byte-range elements, and invalid ranges are dropped.
+func TestAgentsOverviewTaskInputsCarryTextElements(t *testing.T) {
+	prompt := "$imagegen make a chart"
+	request := codextea.SubmitRequest{
+		Prompt: prompt,
+		TextElements: []codextea.ComposerTextElement{
+			{Start: 0, End: len("$imagegen"), Placeholder: "$imagegen"},
+			{Start: 5, End: 4, Placeholder: "invalid"},
+		},
+	}
+	inputs, err := agentsOverviewTaskInputs(request, false)
+	if err != nil {
+		t.Fatalf("task inputs: %v", err)
+	}
+	if len(inputs) != 1 || inputs[0].Type != "text" {
+		t.Fatalf("inputs = %#v", inputs)
+	}
+	elements := inputs[0].TextElements
+	if len(elements) != 1 || elements[0].ByteRange.Start != 0 || elements[0].ByteRange.End != uint(len("$imagegen")) {
+		t.Fatalf("text elements = %#v", elements)
+	}
+	if elements[0].Placeholder == nil || *elements[0].Placeholder != "$imagegen" {
+		t.Fatalf("placeholder = %#v", elements[0].Placeholder)
+	}
+}

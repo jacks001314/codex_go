@@ -70,8 +70,12 @@ type SubmitRequest struct {
 	Attachments            []bottompane.ComposerAttachment
 	MentionBindings        []string
 	MentionCatalog         chatwidget.SubmissionMentionCatalog
-	IDEContext             *idecontext.IdeContext
-	CollaborationMode      *chatwidget.CollaborationMode
+	// TextElements are the composer's structured byte-range elements (mentions
+	// and placeholders); they are mapped onto the trimmed prompt and sent as the
+	// turn input's text_elements (Rust #44027 textarea elements).
+	TextElements      []ComposerTextElement
+	IDEContext        *idecontext.IdeContext
+	CollaborationMode *chatwidget.CollaborationMode
 	// InternalInputItems are turn input items that reach the model but are not
 	// rendered as a user message. Goal continuations use them to start work on
 	// an active objective without a visible prompt (mirrors Rust's internal
@@ -1110,21 +1114,25 @@ type Model struct {
 	reasoningRecoveredAfterRefresh bool
 	// commandLifecycle tracks unified-exec processes and the background-terminal
 	// wait streak that owns the status row until output arrives (Rust #43921).
-	commandLifecycle                chatwidget.CommandLifecycleState
-	mcpStartupActive                bool
-	mcpStartupGeneration            uint64
-	mcpStartupFinishPending         bool
-	initialMessages                 <-chan bubbletea.Msg
-	notice                          string
-	retryMessageIndex               int
-	retryActivityMessage            string
-	retryActivityActive             bool
-	compactionActive                bool
-	compactionID                    string
-	compactionStartedAt             time.Time
-	bottom                          []string
-	attachments                     []bottompane.ComposerAttachment
-	composerMentionBindings         []string
+	commandLifecycle        chatwidget.CommandLifecycleState
+	mcpStartupActive        bool
+	mcpStartupGeneration    uint64
+	mcpStartupFinishPending bool
+	initialMessages         <-chan bubbletea.Msg
+	notice                  string
+	retryMessageIndex       int
+	retryActivityMessage    string
+	retryActivityActive     bool
+	compactionActive        bool
+	compactionID            string
+	compactionStartedAt     time.Time
+	bottom                  []string
+	attachments             []bottompane.ComposerAttachment
+	composerMentionBindings []string
+	// composerElements tracks the composer's structured text elements (byte
+	// ranges plus placeholders) so mentions reach the turn input as
+	// text_elements (Rust textarea::text_elements).
+	composerElements                []ComposerTextElement
 	misalignmentPolicyStopped       bool
 	modal                           *modalState
 	skillPopup                      skillPopupState
@@ -2437,7 +2445,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		m.activityFollow = m.transcript.AtBottom()
 	}
 	var composerCmd bubbletea.Cmd
+	composerBefore := m.composer.Value()
 	m.composer, composerCmd = m.composer.Update(message)
+	m.syncComposerElements(composerBefore)
 	m.refreshSlashPopup()
 	skillPopupCmd := m.refreshSkillPopup()
 	return m, bubbletea.Batch(cmd, composerCmd, skillPopupCmd)
@@ -3074,7 +3084,9 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composer.Value())
+	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
 	m.composer.Reset()
+	m.composerElements = nil
 	m.resetVimEditHistory()
 	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
@@ -3098,6 +3110,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		Attachments:     cloneComposerAttachments(m.attachments),
 		MentionBindings: m.activeComposerMentionBindings(input),
 		MentionCatalog:  m.submissionMentionCatalog(),
+		TextElements:    textElements,
 	}
 	m.attachments = nil
 	m.composerMentionBindings = nil
@@ -3252,7 +3265,9 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composer.Value())
+	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
 	m.composer.Reset()
+	m.composerElements = nil
 	m.resetVimEditHistory()
 	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
@@ -3265,6 +3280,7 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 		Attachments:     cloneComposerAttachments(m.attachments),
 		MentionBindings: m.activeComposerMentionBindings(input),
 		MentionCatalog:  m.submissionMentionCatalog(),
+		TextElements:    textElements,
 	}
 	m.attachments = nil
 	m.composerMentionBindings = nil
@@ -3290,7 +3306,9 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composer.Value())
+	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
 	m.composer.Reset()
+	m.composerElements = nil
 	m.resetVimEditHistory()
 	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
@@ -3303,6 +3321,7 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 		Attachments:     cloneComposerAttachments(m.attachments),
 		MentionBindings: m.activeComposerMentionBindings(input),
 		MentionCatalog:  m.submissionMentionCatalog(),
+		TextElements:    textElements,
 	}
 	m.attachments = nil
 	m.composerMentionBindings = nil

@@ -189,6 +189,7 @@ func cloneSubmitRequest(request SubmitRequest) SubmitRequest {
 		Attachments:            cloneComposerAttachments(request.Attachments),
 		MentionBindings:        append([]string(nil), request.MentionBindings...),
 		MentionCatalog:         cloneSubmissionMentionCatalog(request.MentionCatalog),
+		TextElements:           cloneComposerTextElements(request.TextElements),
 		IDEContext:             cloneIDEContext(request.IDEContext),
 		CollaborationMode:      cloneCollaborationMode(request.CollaborationMode),
 		InternalInputItems:     cloneAnySlice(request.InternalInputItems),

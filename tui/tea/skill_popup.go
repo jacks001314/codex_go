@@ -393,8 +393,15 @@ func (m *Model) insertMentionSelection(selection mentionsv2.Selection) {
 	}
 	runes := []rune(m.composer.Value())
 	text := string(runes[:start]) + insert + " " + string(runes[end:])
+	insertStart := len(string(runes[:start]))
+	insertEnd := insertStart + len(insert)
 	m.composer.SetValue(text)
 	m.composer.CursorEnd()
+	// Rust records the mention as an atomic text element so the turn input
+	// carries its byte range and placeholder (textarea::insert_element).
+	if selection.Kind == mentionsv2.SelectionTool || selection.Kind == mentionsv2.SelectionFile {
+		m.registerComposerElement(text, insertStart, insertEnd)
+	}
 	if selection.Kind == mentionsv2.SelectionTool {
 		m.addComposerMentionBinding(insert + "|" + strings.TrimSpace(selection.Path))
 	}

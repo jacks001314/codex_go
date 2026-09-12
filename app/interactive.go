@@ -358,12 +358,20 @@ func (c *interactiveInterruptController) steer(request codextea.SubmitRequest, c
 	prompt := strings.TrimSpace(request.Prompt)
 	if request.IDEContext != nil {
 		if prompt != "" {
-			inputs = append([]turn.TurnUserInput{{Type: "text", Text: prompt}}, inputs...)
+			inputs = append([]turn.TurnUserInput{{
+				Type:         "text",
+				Text:         prompt,
+				TextElements: turnTextElementsFromComposer(request.TextElements),
+			}}, inputs...)
 			prompt = ""
 		}
 		idecontext.ApplyIDEContextToUserInput(request.IDEContext, &inputs)
 	} else if prompt != "" {
-		inputs = append(inputs, turn.TurnUserInput{Type: "text", Text: prompt})
+		inputs = append(inputs, turn.TurnUserInput{
+			Type:         "text",
+			Text:         prompt,
+			TextElements: turnTextElementsFromComposer(request.TextElements),
+		})
 		prompt = ""
 	}
 	item := codexexec.UserMessageInputItemFromTurnInputs(prompt, inputs, cwd)
@@ -3055,12 +3063,20 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	}), "\n\n")
 	if request.IDEContext != nil {
 		if prompt != "" {
-			inputs = append([]turn.TurnUserInput{{Type: "text", Text: prompt}}, inputs...)
+			inputs = append([]turn.TurnUserInput{{
+				Type:         "text",
+				Text:         prompt,
+				TextElements: turnTextElementsFromComposer(request.TextElements),
+			}}, inputs...)
 			prompt = ""
 		}
 		idecontext.ApplyIDEContextToUserInput(request.IDEContext, &inputs)
 	} else if len(inputs) > 0 && prompt != "" {
-		inputs = append(inputs, turn.TurnUserInput{Type: "text", Text: prompt})
+		inputs = append(inputs, turn.TurnUserInput{
+			Type:         "text",
+			Text:         prompt,
+			TextElements: turnTextElementsFromComposer(request.TextElements),
+		})
 		prompt = ""
 	}
 	execOpts := cli.ExecOptions{
