@@ -260,6 +260,9 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 	}
 	m.invalidateAppsScope()
 	if m.State != nil {
+		// Rust #43994: the switched-to thread must not inherit transcript state
+		// (tool-call display, retry, review) from the thread that was active.
+		m.resetThreadScopedState()
 		m.State.SetThreadID(entry.ThreadID)
 		messages := append([]codextui.Message(nil), message.Response.Messages...)
 		// Only replay the buffer when the persisted thread is empty (the typical

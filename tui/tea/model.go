@@ -3434,15 +3434,17 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	switch event.Type {
 	case "thread.started":
 		if current := strings.TrimSpace(m.State.ThreadID); current != "" && current != strings.TrimSpace(event.ThreadID) {
-			m.toolRequestRuntime = chatwidget.ToolRequestRuntimeState{}
-			m.resetReviewModeState()
+			// Rust #43994: drop the previous thread's transcript state before
+			// the replacement thread's history can be repopulated.
+			cmd = bubbletea.Batch(cmd, m.closeTranscriptOverlay())
+			m.resetThreadScopedState()
 		}
 		m.State.SetThreadID(event.ThreadID)
 		m.markThreadStarted(event.ThreadID)
 		m.persistPendingThreadName()
 		if objective := strings.TrimSpace(m.pendingGoalObjective); objective != "" {
 			m.pendingGoalObjective = ""
-			cmd = m.prepareGoalSet(objective)
+			cmd = bubbletea.Batch(cmd, m.prepareGoalSet(objective))
 		}
 	case "turn.started":
 		m.setStatus("running")

@@ -360,6 +360,9 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 		threadID = strings.TrimSpace(response.Summary.ThreadID)
 	}
 	m.resetAgentPickerRefresh(true)
+	// Rust #43994: the resumed thread's replay must not inherit transcript
+	// state from the thread that was open before.
+	m.resetThreadScopedState()
 	m.State.SetThreadID(threadID)
 	if response.Summary != nil {
 		m.State.SetThreadName(response.Summary.Title)

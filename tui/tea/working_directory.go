@@ -111,6 +111,9 @@ func (m *Model) applyWorkingDirectoryChangeResult(msg WorkingDirectoryChangeResu
 	}
 	m.invalidateAppsScope()
 	m.resetAgentPickerRefresh(true)
+	// Rust #43994: the replacement session must not inherit transcript state
+	// from the directory the session left.
+	m.resetThreadScopedState()
 	m.State.SetThreadID(strings.TrimSpace(msg.Summary.ThreadID))
 	if title := strings.TrimSpace(msg.Summary.Title); title != "" {
 		m.State.SetThreadName(title)
