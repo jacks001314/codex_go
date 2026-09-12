@@ -38,6 +38,41 @@ func TestUserMessagePreviewText(t *testing.T) {
 	}
 }
 
+// TestUserMessageDisplayFromInputsDecodesTaskLinksLikeRust mirrors Rust
+// chatwidget::user_message_display: a stored task link covered by its mention
+// element displays as `@title`, while a bare link without the element is left
+// as-is.
+func TestUserMessageDisplayFromInputsDecodesTaskLinksLikeRust(t *testing.T) {
+	title := "Review the migration"
+	link := "[@" + title + "](thread://task-123)"
+	placeholder := "@" + title
+	display := UserMessageDisplayFromInputs([]turn.TurnUserInput{{
+		Type: "text",
+		Text: link + " next",
+		TextElements: []turn.TextElement{{
+			ByteRange:   turn.ByteRange{Start: 0, End: uint(len(link))},
+			Placeholder: &placeholder,
+		}},
+	}})
+	if display.Message != "@"+title+" next" {
+		t.Fatalf("decoded display = %q", display.Message)
+	}
+	if len(display.TextElements) != 1 {
+		t.Fatalf("decoded elements = %#v", display.TextElements)
+	}
+	element := display.TextElements[0]
+	if element.Placeholder == nil || *element.Placeholder != placeholder {
+		t.Fatalf("placeholder = %#v", element.Placeholder)
+	}
+	if got := display.Message[element.ByteRange.Start:element.ByteRange.End]; got != placeholder {
+		t.Fatalf("element range = %q", got)
+	}
+	literal := UserMessageDisplayFromInputs([]turn.TurnUserInput{{Type: "text", Text: link}})
+	if literal.Message != link {
+		t.Fatalf("literal display = %q", literal.Message)
+	}
+}
+
 func TestThreadComposerStateHasContent(t *testing.T) {
 	if (ThreadComposerState{}).HasContent() {
 		t.Fatal("empty composer should not have content")

@@ -8,6 +8,8 @@ package tui
 import (
 	"strings"
 	"unicode/utf8"
+
+	"codex_go/turn"
 )
 
 const (
@@ -103,6 +105,66 @@ func FormatTaskLink(title string, path string) string {
 	escaped = strings.ReplaceAll(escaped, "](", "]\\(")
 	escaped = strings.ReplaceAll(escaped, "]", "\\]")
 	return "[@" + escaped + "](" + path + ")"
+}
+
+// DecodeTaskLinks mirrors Rust decode_task_links: render a stored task link back
+// as its `@title` mention when a text element covers exactly that link and its
+// placeholder matches the title. The message-display path uses this so history
+// shows the mention the user typed instead of the guarded link.
+func DecodeTaskLinks(text string, elements []turn.TextElement) (string, []turn.TextElement) {
+	if !strings.Contains(text, "thread://") {
+		return text, elements
+	}
+	var decoded strings.Builder
+	decoded.Grow(len(text))
+	decodedElements := make([]turn.TextElement, 0, len(elements))
+	offset := 0
+	for _, element := range elements {
+		start := int(element.ByteRange.Start)
+		end := int(element.ByteRange.End)
+		if start < offset || !UTF8RangeValid(text, start, end) {
+			continue
+		}
+		value := text[start:end]
+		decoded.WriteString(text[offset:start])
+		decodedStart := decoded.Len()
+		if name, _, linkEnd, ok := ParseTaskLink(text, start); ok && linkEnd == end {
+			if placeholder, ok := textElementPlaceholder(element, text); ok {
+				if trimmed, ok := strings.CutPrefix(placeholder, "@"); ok && trimmed == name {
+					decoded.WriteString("@")
+					decoded.WriteString(name)
+					decodedElements = append(decodedElements, turn.TextElement{
+						ByteRange:   turn.ByteRange{Start: uint(decodedStart), End: uint(decoded.Len())},
+						Placeholder: element.Placeholder,
+					})
+					offset = end
+					continue
+				}
+			}
+		}
+		decoded.WriteString(value)
+		decodedElements = append(decodedElements, turn.TextElement{
+			ByteRange:   turn.ByteRange{Start: uint(decodedStart), End: uint(decoded.Len())},
+			Placeholder: element.Placeholder,
+		})
+		offset = end
+	}
+	decoded.WriteString(text[offset:])
+	return decoded.String(), decodedElements
+}
+
+// textElementPlaceholder mirrors Rust TextElement::placeholder: the recorded
+// placeholder, else the element's own text.
+func textElementPlaceholder(element turn.TextElement, text string) (string, bool) {
+	if element.Placeholder != nil {
+		return *element.Placeholder, true
+	}
+	start := int(element.ByteRange.Start)
+	end := int(element.ByteRange.End)
+	if !UTF8RangeValid(text, start, end) {
+		return "", false
+	}
+	return text[start:end], true
 }
 
 // UTF8Boundary reports whether index is a valid UTF-8 char boundary in value,

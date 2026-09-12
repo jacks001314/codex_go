@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	codextui "codex_go/tui"
 	idecontext "codex_go/tui/ide_context"
 	"codex_go/turn"
 )
@@ -336,6 +337,9 @@ func UserMessageDisplayFromInputs(items []turn.TurnUserInput) UserMessageDisplay
 			appendTextWithRebasedElementsString(&message.Text, &message.TextElements, item.Text, item.TextElements)
 		}
 	}
+	// Rust chatwidget::user_message_display decodes stored task links back into
+	// their `@title` mention for display.
+	message.Text, message.TextElements = codextui.DecodeTaskLinks(message.Text, message.TextElements)
 	return UserMessageDisplayFromParts(message)
 }
 

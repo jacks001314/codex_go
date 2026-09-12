@@ -57,7 +57,7 @@ func TestTaskMentionHistoryRoundTripsLikeRust(t *testing.T) {
 	}
 	malformed := "[@é](thread://task-123)"
 	for _, end := range []int{3, len(malformed) + 1} {
-		decodedText, decodedElements := DecodeTaskLinks(malformed, []turn.TextElement{{
+		decodedText, decodedElements := tui.DecodeTaskLinks(malformed, []turn.TextElement{{
 			ByteRange: turn.ByteRange{Start: 0, End: uint(end)},
 		}})
 		if decodedText != malformed || len(decodedElements) != 0 {
@@ -65,7 +65,7 @@ func TestTaskMentionHistoryRoundTripsLikeRust(t *testing.T) {
 		}
 	}
 	literal := "[@actual](thread://task-456)"
-	decodedText, _ := DecodeTaskLinks(literal+" "+literal, []turn.TextElement{
+	decodedText, _ := tui.DecodeTaskLinks(literal+" "+literal, []turn.TextElement{
 		{ByteRange: turn.ByteRange{Start: 0, End: uint(len(literal))}},
 		placeholderElement(len(literal)+1, len(literal)*2+1, "@actual"),
 	})

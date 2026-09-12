@@ -123,51 +123,6 @@ func ApplyTaskReferences(items []turn.TurnUserInput, bindings []MentionBinding, 
 	items[textIndex] = item
 }
 
-// DecodeTaskLinks mirrors Rust decode_task_links: render a task link back as
-// its `@title` mention when a text element covers exactly that link and its
-// placeholder matches the title.
-func DecodeTaskLinks(text string, elements []turn.TextElement) (string, []turn.TextElement) {
-	if !strings.Contains(text, "thread://") {
-		return text, elements
-	}
-	var decoded strings.Builder
-	decoded.Grow(len(text))
-	decodedElements := make([]turn.TextElement, 0, len(elements))
-	offset := 0
-	for _, element := range elements {
-		start := int(element.ByteRange.Start)
-		end := int(element.ByteRange.End)
-		if start < offset || !tui.UTF8RangeValid(text, start, end) {
-			continue
-		}
-		value := text[start:end]
-		decoded.WriteString(text[offset:start])
-		decodedStart := decoded.Len()
-		if name, _, linkEnd, ok := tui.ParseTaskLink(text, start); ok && linkEnd == end {
-			if placeholder, ok := textElementPlaceholder(element, text); ok {
-				if trimmed, ok := strings.CutPrefix(placeholder, "@"); ok && trimmed == name {
-					decoded.WriteString("@")
-					decoded.WriteString(name)
-					decodedElements = append(decodedElements, turn.TextElement{
-						ByteRange:   turn.ByteRange{Start: uint(decodedStart), End: uint(decoded.Len())},
-						Placeholder: element.Placeholder,
-					})
-					offset = end
-					continue
-				}
-			}
-		}
-		decoded.WriteString(value)
-		decodedElements = append(decodedElements, turn.TextElement{
-			ByteRange:   turn.ByteRange{Start: uint(decodedStart), End: uint(decoded.Len())},
-			Placeholder: element.Placeholder,
-		})
-		offset = end
-	}
-	decoded.WriteString(text[offset:])
-	return decoded.String(), decodedElements
-}
-
 // taskMentionInsertionOffset mirrors Rust's request-heading search: the first
 // heading occurrence that is not covered by a text element.
 func taskMentionInsertionOffset(text string, elements []turn.TextElement) (int, bool) {
@@ -208,20 +163,6 @@ func matchesMentionBinding(value string, binding MentionBinding) bool {
 		return false
 	}
 	return value[len(sigil):] == binding.Mention
-}
-
-// textElementPlaceholder mirrors Rust TextElement::placeholder: the recorded
-// placeholder, else the element's own text.
-func textElementPlaceholder(element turn.TextElement, text string) (string, bool) {
-	if element.Placeholder != nil {
-		return *element.Placeholder, true
-	}
-	start := int(element.ByteRange.Start)
-	end := int(element.ByteRange.End)
-	if !tui.UTF8RangeValid(text, start, end) {
-		return "", false
-	}
-	return text[start:end], true
 }
 
 func taskMentionContainsString(values []string, value string) bool {
