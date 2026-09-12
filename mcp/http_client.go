@@ -144,13 +144,16 @@ func (e *mcpHTTPStatusError) CombinedWWWAuthenticate() string {
 }
 
 type httpClient struct {
-	config                             *ServerConfig
-	client                             *http.Client
-	mu                                 sync.Mutex
-	capabilitiesMu                     sync.Mutex
-	closed                             bool
-	nextID                             atomic.Int64
-	initialized                        bool
+	config         *ServerConfig
+	client         *http.Client
+	mu             sync.Mutex
+	capabilitiesMu sync.Mutex
+	closed         bool
+	nextID         atomic.Int64
+	initialized    bool
+	// startupComplete mirrors `initialized` without the mutex so connection
+	// reuse can distinguish a ready client from a pending startup (Rust #40636).
+	startupComplete                    atomic.Bool
 	sessionID                          string
 	serverName                         string
 	threadID                           string
@@ -514,6 +517,7 @@ func (c *httpClient) Close() error {
 	sessionID := strings.TrimSpace(c.sessionID)
 	c.sessionID = ""
 	c.initialized = false
+	c.startupComplete.Store(false)
 	c.closed = true
 	c.mu.Unlock()
 	if sessionID == "" {
@@ -529,6 +533,13 @@ func (c *httpClient) isClosed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.closed
+}
+
+// isInitialized reports whether the MCP handshake completed for this
+// connection (Rust #40636 startup_complete). A ready connection can be reused
+// across a startup-timeout config change; a pending startup cannot.
+func (c *httpClient) isInitialized() bool {
+	return c != nil && c.startupComplete.Load()
 }
 
 func (c *httpClient) deleteSession(sessionID string) error {
@@ -764,6 +775,7 @@ func (c *httpClient) notifyInitialized(ctx context.Context, sessionID string) er
 
 func (c *httpClient) reinitialize(ctx context.Context) error {
 	c.initialized = false
+	c.startupComplete.Store(false)
 	c.sessionID = ""
 	c.beginHandshake(ctx)
 	defer c.endHandshake()
@@ -780,6 +792,7 @@ func (c *httpClient) reinitialize(ctx context.Context) error {
 			if err == nil {
 				c.sessionID = sessionID
 				c.initialized = true
+				c.startupComplete.Store(true)
 				return nil
 			}
 			if isMCPDiscoveryFallbackError(err) {
@@ -794,6 +807,7 @@ func (c *httpClient) reinitialize(ctx context.Context) error {
 			err = c.notifyInitialized(ctx, sessionID)
 			if err == nil {
 				c.initialized = true
+				c.startupComplete.Store(true)
 				return nil
 			}
 		}

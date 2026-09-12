@@ -2175,7 +2175,7 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 	sharedHTTPClientKey := s.sharedHTTPClientKey
 	key := mcpHTTPConnectionCacheKey(config, openAIForm, sharedHTTPClientKey)
 	if cached := s.httpClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
-		cached.startupTimeout == config.StartupTimeout {
+		(cached.client.isInitialized() || cached.startupTimeout == config.StartupTimeout) {
 		s.mu.Unlock()
 		return cached.client
 	}
@@ -2255,7 +2255,7 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 	authChanges := s.authChangeSource
 	key := mcpConnectionCacheKey(config, openAIForm)
 	if cached := s.stdioClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
-		cached.startupTimeout == config.StartupTimeout {
+		(cached.client.isInitialized() || cached.startupTimeout == config.StartupTimeout) {
 		s.mu.Unlock()
 		return cached.client
 	}

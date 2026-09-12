@@ -728,6 +728,18 @@ func (c *stdioClient) isClosed() bool {
 	return c.closed
 }
 
+// isInitialized reports whether the MCP handshake completed for this
+// connection (Rust #40636 startup_complete). A ready connection can be reused
+// across a startup-timeout config change; a pending startup cannot.
+func (c *stdioClient) isInitialized() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.initialized
+}
+
 func (c *stdioClient) closeLocked() error {
 	c.closed = true
 	c.stopAuthChangeWatcherLocked()
