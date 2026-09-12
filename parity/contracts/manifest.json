@@ -1159,6 +1159,20 @@
             "phase": "P1",
             "status": "complete",
             "verifier": "TestRustThreadRealtimeSurfaceAgainstGo"
+        },
+        {
+            "id": "audio-preparation",
+            "kind": "source-surface",
+            "rustPaths": [
+                "utils/audio/src/lib.rs",
+                "protocol/src/local_media.rs"
+            ],
+            "goPaths": [
+                "audioutil/audio.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestRustAudioPreparationConstantsAgainstGo;TestRustAudioCanonicalMIMEMatchesGo"
         }
     ]
 }

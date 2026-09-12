@@ -373,3 +373,10 @@ kind=Playback default=true  name="Speaker (Realtek(R) Audio)"                  n
 `appserver/audio_preparation_test.go`（消息音频准备）。既有用例
 `TestUserMessageInputItemFromTurnUserInputsContentKinds` 的音频载荷由非法 base64
 （`BBB`，Rust 同样会拒绝）改为合法 `YXVkaW8=`，以匹配新的准备语义。
+
+**L1 静态契约**：新增 `parity/rust_audio_preparation_test.go` 并在
+`parity/contracts/manifest.json` 登记 `audio-preparation`（verifier
+`TestRustAudioPreparationConstantsAgainstGo` / `TestRustAudioCanonicalMIMEMatchesGo`）：
+把 3 段占位符文本、`MAX_PROMPT_AUDIO_INPUT_BYTES`（50 MiB）、
+`AUDIO_TOKENS_PER_SECOND`（10）与 Rust `canonical_audio_mime` 的别名表全部冻结到
+Rust 源（别名 ≥8 条逐条比对 Go `CanonicalAudioMIME`）。
