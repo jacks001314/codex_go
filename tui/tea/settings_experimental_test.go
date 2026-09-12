@@ -165,3 +165,180 @@ func TestModelExperimentalReadbackWarningLikeRust(t *testing.T) {
 		t.Fatalf("applied notice = %q", applied.notice)
 	}
 }
+
+// TestExperimentalFeatureEditMatchesRust covers the two edit rules: the generic
+// popup path clears the override when disabling a default-enabled feature, and
+// the unmigrated controls clear it when disabling a default-off feature
+// (build_feature_enabled_edit).
+func TestExperimentalFeatureEditMatchesRust(t *testing.T) {
+	cases := []struct {
+		name         string
+		item         chatwidget.ExperimentalFeatureOption
+		wantKeyPath  string
+		wantValueNil bool
+		wantValue    any
+	}{
+		{name: "enable generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: true}, wantKeyPath: "features.beta", wantValue: true},
+		{name: "disable default-on generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: false, DefaultEnabled: true}, wantKeyPath: "features.beta", wantValueNil: true},
+		{name: "disable default-off generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: false}, wantKeyPath: "features.beta", wantValue: false},
+		{name: "enable idle sleep", item: chatwidget.ExperimentalFeatureOption{Key: "prevent_idle_sleep", Enabled: true}, wantKeyPath: "features.prevent_idle_sleep", wantValue: true},
+		{name: "disable idle sleep", item: chatwidget.ExperimentalFeatureOption{Key: "prevent_idle_sleep", Enabled: false}, wantKeyPath: "features.prevent_idle_sleep", wantValueNil: true},
+		{name: "disable guardian default-on", item: chatwidget.ExperimentalFeatureOption{Key: "guardian_approval", Enabled: false, DefaultEnabled: true}, wantKeyPath: "features.guardian_approval", wantValue: false},
+	}
+	for _, testCase := range cases {
+		edit := experimentalFeatureEdit(testCase.item)
+		if edit.KeyPath != testCase.wantKeyPath {
+			t.Fatalf("%s: key path = %q, want %q", testCase.name, edit.KeyPath, testCase.wantKeyPath)
+		}
+		if testCase.wantValueNil {
+			if edit.Value != nil {
+				t.Fatalf("%s: value = %#v, want nil", testCase.name, edit.Value)
+			}
+			continue
+		}
+		if edit.Value != testCase.wantValue {
+			t.Fatalf("%s: value = %#v, want %#v", testCase.name, edit.Value, testCase.wantValue)
+		}
+	}
+}
+
+// TestModelExperimentalPopupSavesLikeRust covers Rust
+// ExperimentalFeaturesView's save flow: read-only rows refuse toggles, an
+// in-flight save blocks toggles and keeps the popup open with the saving status,
+// and a clean readback closes it.
+func TestModelExperimentalPopupSavesLikeRust(t *testing.T) {
+	var writes [][]SettingsEdit
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-1")
+	model := NewModel(state, Options{
+		OnReadExperimentalFeatures: func(string) ([]ExperimentalFeatureEntry, error) {
+			return []ExperimentalFeatureEntry{
+				{Name: "beta_feature", DisplayName: "Beta feature", Stage: "beta", Enabled: false},
+				{Name: "guardian_approval", DisplayName: "Guardian approval", Stage: "beta", Enabled: true, DefaultEnabled: true},
+			}, nil
+		},
+		OnWriteSettings: func(edits []SettingsEdit) (SettingsWriteResult, error) {
+			writes = append(writes, append([]SettingsEdit(nil), edits...))
+			return SettingsWriteResult{FeatureSettings: map[string]bool{"beta_feature": true, "guardian_approval": true}}, nil
+		},
+	})
+	typeText(t, model, "/experimental")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if len(model.experimentalItems) != 2 || model.modal == nil {
+		t.Fatalf("popup state = %#v modal=%#v", model.experimentalItems, model.modal)
+	}
+	if model.experimentalItems[0].Writable == false {
+		t.Fatalf("beta feature should be writable: %#v", model.experimentalItems[0])
+	}
+	if model.experimentalItems[1].Writable {
+		t.Fatalf("guardian approval should be read-only: %#v", model.experimentalItems[1])
+	}
+
+	// The writable row toggles.
+	model.Update(key(bubbletea.KeySpace))
+	if !model.experimentalItems[0].Enabled {
+		t.Fatal("writable row did not toggle")
+	}
+	// The read-only row can be highlighted but refuses to toggle.
+	model.Update(key(bubbletea.KeyDown))
+	if model.modal.selected != 1 {
+		t.Fatalf("selection = %d, want the read-only row", model.modal.selected)
+	}
+	model.Update(key(bubbletea.KeySpace))
+	if !model.experimentalItems[1].Enabled {
+		t.Fatal("read-only row toggled")
+	}
+	model.Update(key(bubbletea.KeyUp))
+	if model.modal.selected != 0 {
+		t.Fatalf("selection = %d, want the writable row", model.modal.selected)
+	}
+
+	_, saveCmd := model.Update(key(bubbletea.KeyEnter))
+	if !model.experimentalFeaturesSaving {
+		t.Fatal("save did not start")
+	}
+	if model.modal == nil {
+		t.Fatal("popup closed before the write resolved")
+	}
+	if model.experimentalFeaturesStatus != "Saving experimental features…" {
+		t.Fatalf("saving status = %q", model.experimentalFeaturesStatus)
+	}
+	// A toggle during the save is refused.
+	model.Update(key(bubbletea.KeySpace))
+	if !model.experimentalItems[0].Enabled {
+		t.Fatal("toggle applied while a save was in flight")
+	}
+
+	runTeaCmd(t, model, saveCmd)
+	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "features.beta_feature" || writes[0][0].Value != true {
+		t.Fatalf("writes = %#v", writes)
+	}
+	if model.modal != nil {
+		t.Fatal("popup stayed open after a clean readback")
+	}
+	if model.experimentalFeaturesSaving || len(model.experimentalFeatureUnconfirmed) != 0 {
+		t.Fatalf("save state = saving:%v unconfirmed:%#v", model.experimentalFeaturesSaving, model.experimentalFeatureUnconfirmed)
+	}
+}
+
+// TestModelExperimentalPopupRetainsUnconfirmedOnFailureLikeRust covers Rust's
+// unconfirmed retry: a failed save keeps the popup open with the error status,
+// retains the dirty keys, and a later accept re-sends them even after the user
+// reverts the row to its baseline.
+func TestModelExperimentalPopupRetainsUnconfirmedOnFailureLikeRust(t *testing.T) {
+	attempt := 0
+	var writes [][]SettingsEdit
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-1")
+	model := NewModel(state, Options{
+		OnReadExperimentalFeatures: func(string) ([]ExperimentalFeatureEntry, error) {
+			return []ExperimentalFeatureEntry{
+				{Name: "beta_feature", DisplayName: "Beta feature", Stage: "beta", Enabled: false},
+			}, nil
+		},
+		OnWriteSettings: func(edits []SettingsEdit) (SettingsWriteResult, error) {
+			attempt++
+			writes = append(writes, append([]SettingsEdit(nil), edits...))
+			if attempt == 1 {
+				return SettingsWriteResult{}, errors.New("write failed")
+			}
+			return SettingsWriteResult{FeatureSettings: map[string]bool{"beta_feature": false}}, nil
+		},
+	})
+	typeText(t, model, "/experimental")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	model.Update(key(bubbletea.KeySpace))
+	_, saveCmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, saveCmd)
+	if model.modal == nil {
+		t.Fatal("popup closed after a failed save")
+	}
+	if model.experimentalFeaturesSaving {
+		t.Fatal("saving flag stayed set after a failure")
+	}
+	if model.experimentalFeaturesStatus != "write failed" {
+		t.Fatalf("failure status = %q", model.experimentalFeaturesStatus)
+	}
+	if len(model.experimentalFeatureUnconfirmed) != 1 || model.experimentalFeatureUnconfirmed[0] != "beta_feature" {
+		t.Fatalf("unconfirmed = %#v", model.experimentalFeatureUnconfirmed)
+	}
+
+	// Reverting the row to its baseline still resends the corrective write.
+	model.Update(key(bubbletea.KeySpace))
+	if model.experimentalItems[0].Enabled {
+		t.Fatal("row did not revert")
+	}
+	_, retryCmd := model.Update(key(bubbletea.KeyEnter))
+	if !model.experimentalFeaturesSaving {
+		t.Fatal("retry did not start")
+	}
+	runTeaCmd(t, model, retryCmd)
+	if len(writes) != 2 || len(writes[1]) != 1 || writes[1][0].KeyPath != "features.beta_feature" || writes[1][0].Value != false {
+		t.Fatalf("retry writes = %#v", writes)
+	}
+	if model.modal != nil {
+		t.Fatal("popup stayed open after the successful retry")
+	}
+}

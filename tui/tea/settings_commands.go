@@ -82,7 +82,7 @@ func (m *Model) openExperimentalMenu() bubbletea.Cmd {
 		}
 	} else {
 		view := chatwidget.NewExperimentalFeaturesView(m.featureSettings)
-		m.experimentalItems = append([]chatwidget.ExperimentalFeatureOption(nil), view.Items...)
+		m.setExperimentalItems(append([]chatwidget.ExperimentalFeatureOption(nil), view.Items...))
 		if len(view.Items) == 0 {
 			m.notice = "No experimental features available."
 			m.refreshTranscript()
@@ -131,18 +131,6 @@ func (m *Model) applyExperimentalCommand(args string) bubbletea.Cmd {
 	}})
 }
 
-func (m *Model) applyExperimentalModalOption(optionID string) bubbletea.Cmd {
-	if m == nil {
-		return nil
-	}
-	if len(m.experimentalItems) == 0 {
-		m.notice = "Experimental Features"
-		m.refreshTranscript()
-		return nil
-	}
-	return m.setExperimentalFeatures(m.experimentalItems)
-}
-
 func parseExperimentalToggle(value string, toggleValue bool) (bool, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "on", "true", "enable", "enabled", "yes":
@@ -174,14 +162,7 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 			changed++
 		}
 		m.featureSettings[key] = item.Enabled
-		// Rust experimental_features::write: enabling writes true, disabling a
-		// default-enabled feature clears the override (null) instead of writing
-		// false, and disabling a default-off feature writes false.
-		value := any(item.Enabled)
-		if !item.Enabled && item.DefaultEnabled {
-			value = nil
-		}
-		edits = append(edits, SettingsEdit{KeyPath: "features." + key, Value: value})
+		edits = append(edits, experimentalFeatureEdit(item))
 	}
 	switch {
 	case len(items) == 1:
@@ -223,10 +204,15 @@ func experimentalModalOptions(items []chatwidget.ExperimentalFeatureOption) []Mo
 }
 
 func experimentalFeatureLabel(item chatwidget.ExperimentalFeatureOption) string {
+	label := "[ ] "
 	if item.Enabled {
-		return "[x] " + item.Name
+		label = "[x] "
 	}
-	return "[ ] " + item.Name
+	label += item.Name
+	if !item.Writable {
+		label += " (read-only)"
+	}
+	return label
 }
 
 func (m *Model) toggleExperimentalSelection() {
@@ -237,8 +223,61 @@ func (m *Model) toggleExperimentalSelection() {
 	if index < 0 || index >= len(m.experimentalItems) || index >= len(m.modal.options) {
 		return
 	}
+	// Rust toggle_selected: read-only rows and an in-flight save refuse toggles.
+	if !m.experimentalItems[index].Writable || m.experimentalFeaturesSaving {
+		return
+	}
 	m.experimentalItems[index].Enabled = !m.experimentalItems[index].Enabled
 	m.modal.options[index].Label = experimentalFeatureLabel(m.experimentalItems[index])
+}
+
+// updateExperimentalModal handles the /experimental popup's keys. Space toggles
+// the selected writable feature, Enter saves and keeps the popup open while the
+// write is in flight, and a second Enter or Esc closes it while the write
+// finishes (Rust ExperimentalFeaturesView::handle_key_event / on_ctrl_c).
+func (m *Model) updateExperimentalModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+	if m == nil || m.modal == nil || m.modal.kind != ModalKindExperimental {
+		return nil
+	}
+	switch message.Type {
+	case bubbletea.KeyEsc:
+		// Rust on_ctrl_c: retry the unconfirmed rows (or save pending changes),
+		// then close; the write continues independently.
+		cmd := m.saveExperimentalFeatures()
+		m.modal = nil
+		m.refreshTranscript()
+		return cmd
+	case bubbletea.KeySpace:
+		m.toggleExperimentalSelection()
+		return nil
+	case bubbletea.KeyEnter:
+		if m.experimentalFeaturesSaving || !m.experimentalFeaturesHaveUpdates() {
+			m.modal = nil
+			m.refreshTranscript()
+			return nil
+		}
+		return m.saveExperimentalFeatures()
+	case bubbletea.KeyUp:
+		m.moveModalSelection(-1)
+		m.disarmModalOption()
+		return nil
+	case bubbletea.KeyDown, bubbletea.KeyTab:
+		m.moveModalSelection(1)
+		m.disarmModalOption()
+		return nil
+	case bubbletea.KeyRunes:
+		switch string(message.Runes) {
+		case " ":
+			m.toggleExperimentalSelection()
+		case "k":
+			m.moveModalSelection(-1)
+			m.disarmModalOption()
+		case "j":
+			m.moveModalSelection(1)
+			m.disarmModalOption()
+		}
+	}
+	return nil
 }
 
 func experimentalFeatureVisible(key string) bool {
@@ -293,6 +332,16 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	}
 	m.pendingSettingsRequestID = 0
 	if msg.Err != nil {
+		if msg.Kind == settingsWriteKindExperimental {
+			// Rust keeps the popup open with the failure as its status and retains
+			// the unconfirmed selections for an explicit retry.
+			m.experimentalFeaturesSaving = false
+			m.experimentalFeaturesStatus = msg.Err.Error()
+			m.refreshExperimentalModal()
+			m.notice = "Failed to save settings: " + msg.Err.Error()
+			m.refreshTranscript()
+			return
+		}
 		if msg.Kind == settingsWriteKindServiceTier {
 			m.notice = "Failed to save default service tier: " + msg.Err.Error()
 		} else if msg.Kind == settingsWriteKindMemories {
@@ -406,6 +455,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	}
 	if experimentalOverridden {
 		m.notice = "Changes were saved, but the configured values differ from your selections. A higher-priority setting may override them."
+	}
+	if msg.Kind == settingsWriteKindExperimental {
+		m.applyExperimentalWriteReadback(experimentalOverridden)
 	}
 	m.refreshTranscript()
 }

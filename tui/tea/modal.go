@@ -276,6 +276,11 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	if m.modal.unarchivePrompt != nil {
 		return m.updateUnarchivePromptModal(message)
 	}
+	if m.modal.kind == ModalKindExperimental {
+		// The popup owns its keys: toggling, saving, and the in-flight guard
+		// (Rust ExperimentalFeaturesView).
+		return m.updateExperimentalModal(message)
+	}
 	if m.modal.sessionPicker != nil {
 		return m.updateSessionPickerModal(message)
 	}
@@ -716,14 +721,6 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			return nil
 		}
 		return m.applyPermissionsModalOption(response.OptionID)
-	}
-	if modal.kind == ModalKindExperimental {
-		m.modal = nil
-		if cancelled {
-			m.notice = "Cancelled"
-			return nil
-		}
-		return m.applyExperimentalModalOption(response.OptionID)
 	}
 	if modal.kind == ModalKindRateLimitSwitch {
 		m.modal = nil

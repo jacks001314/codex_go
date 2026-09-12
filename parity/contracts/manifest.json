@@ -965,7 +965,7 @@
             ],
             "phase": "P2",
             "status": "complete",
-            "verifier": "TestFetchExperimentalFeaturesMatchesRust;TestFetchExperimentalFeaturesGuardsMatchRust;TestModelExperimentalMenuUsesServerCatalogLikeRust;TestModelExperimentalWritesClearDefaultOverridesLikeRust;TestModelExperimentalReadbackWarningLikeRust;TestFeatureStageMappingMatchesRust"
+            "verifier": "TestFetchExperimentalFeaturesMatchesRust;TestFetchExperimentalFeaturesGuardsMatchRust;TestModelExperimentalMenuUsesServerCatalogLikeRust;TestModelExperimentalWritesClearDefaultOverridesLikeRust;TestModelExperimentalReadbackWarningLikeRust;TestExperimentalFeatureEditMatchesRust;TestModelExperimentalPopupSavesLikeRust;TestModelExperimentalPopupRetainsUnconfirmedOnFailureLikeRust;TestFeatureStageMappingMatchesRust"
         },
         {
             "id": "agents-dashboard-command",

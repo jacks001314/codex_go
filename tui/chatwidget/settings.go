@@ -31,6 +31,10 @@ type ExperimentalFeatureOption struct {
 	// disabling the feature clears the config override (Rust
 	// experimental_features::write).
 	DefaultEnabled bool
+	// Writable is false for the unmigrated controls the popup must not toggle
+	// through the generic write path (Rust
+	// ExperimentalFeaturesView::pre_draw_tick writable).
+	Writable bool
 }
 
 type ExperimentalFeaturesViewModel struct {
@@ -220,6 +224,7 @@ func NewExperimentalFeaturesView(settings map[string]bool) ExperimentalFeaturesV
 			Description:    spec.ExperimentalMenuDescription,
 			Enabled:        features.Enabled(settings, spec.Key),
 			DefaultEnabled: spec.DefaultEnabled,
+			Writable:       true,
 		})
 	}
 	return ExperimentalFeaturesViewModel{

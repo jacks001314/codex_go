@@ -1550,42 +1550,49 @@ type Model struct {
 	// in-flight /experimental save so the readback can warn when a higher-priority
 	// setting overrides it (Rust experimental_features::write readback).
 	pendingExperimentalFeatureUpdates map[string]bool
-	currentGoal                       *appserver.Goal
-	goalObservedAt                    time.Time
-	pendingGoalObjective              string
-	hasChatGPTAccount                 bool
-	chatGPTPlanType                   string
-	availableRateLimitResetCredits    *int64
-	nextUsageRequestID                uint64
-	pendingTokenActivityRequestID     uint64
-	pendingRateLimitResetRequestID    uint64
-	pendingRateLimitResetForPopup     bool
-	pendingRateLimitResetPostConsume  bool
-	nextDiffRequestID                 uint64
-	pendingDiffRequestID              uint64
-	nextGoalRequestID                 uint64
-	pendingGoalRequestID              uint64
-	nextSettingsRequestID             uint64
-	pendingSettingsRequestID          uint64
-	submitted                         []string
-	inputHistory                      []string
-	inputHistoryIndex                 int
-	inputHistoryDraft                 string
-	inputHistoryActive                bool
-	submitRequests                    []SubmitRequest
-	queued                            []queuedSubmission
-	pendingSteers                     []pendingSteerSubmission
-	rejectedSteers                    []queuedSubmission
-	editorActive                      bool
-	toolCalls                         map[string]*toolCallDisplayState
-	mcpToolCalls                      map[string]*mcpToolCallDisplayState
-	webSearches                       map[string]*webSearchDisplayState
-	renderedFileChanges               map[string]bool
-	activeProposedPlans               map[string]*proposedPlanDisplayState
-	startedThreadIDs                  map[string]bool
-	completedThreadIDs                map[string]bool
-	pendingThreadName                 bool
-	taskStartedAt                     time.Time
+	// experimentalFeatureBaseline is the popup's save baseline (Rust
+	// initial_enabled), experimentalFeatureUnconfirmed keeps the rows whose save is
+	// not yet confirmed for an explicit retry, and experimentalFeaturesSaving
+	// guards a second save while one is in flight.
+	experimentalFeatureBaseline      map[string]bool
+	experimentalFeatureUnconfirmed   []string
+	experimentalFeaturesSaving       bool
+	currentGoal                      *appserver.Goal
+	goalObservedAt                   time.Time
+	pendingGoalObjective             string
+	hasChatGPTAccount                bool
+	chatGPTPlanType                  string
+	availableRateLimitResetCredits   *int64
+	nextUsageRequestID               uint64
+	pendingTokenActivityRequestID    uint64
+	pendingRateLimitResetRequestID   uint64
+	pendingRateLimitResetForPopup    bool
+	pendingRateLimitResetPostConsume bool
+	nextDiffRequestID                uint64
+	pendingDiffRequestID             uint64
+	nextGoalRequestID                uint64
+	pendingGoalRequestID             uint64
+	nextSettingsRequestID            uint64
+	pendingSettingsRequestID         uint64
+	submitted                        []string
+	inputHistory                     []string
+	inputHistoryIndex                int
+	inputHistoryDraft                string
+	inputHistoryActive               bool
+	submitRequests                   []SubmitRequest
+	queued                           []queuedSubmission
+	pendingSteers                    []pendingSteerSubmission
+	rejectedSteers                   []queuedSubmission
+	editorActive                     bool
+	toolCalls                        map[string]*toolCallDisplayState
+	mcpToolCalls                     map[string]*mcpToolCallDisplayState
+	webSearches                      map[string]*webSearchDisplayState
+	renderedFileChanges              map[string]bool
+	activeProposedPlans              map[string]*proposedPlanDisplayState
+	startedThreadIDs                 map[string]bool
+	completedThreadIDs               map[string]bool
+	pendingThreadName                bool
+	taskStartedAt                    time.Time
 
 	composerPasteEnterUntil *time.Time
 	now                     func() time.Time
