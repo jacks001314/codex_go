@@ -1409,11 +1409,13 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 			return codextea.SessionResumeResponse{}, err
 		}
 		return codextea.SessionResumeResponse{
-			Summary:             remoteTUISessionSummaryFromThread(thread, false),
-			Messages:            remoteTUIThreadMessagesFromThread(thread),
-			Status:              remoteTUIStatusFromThread(thread),
-			TokenUsage:          remoteThreadTokenUsageFromThread(thread),
-			WorkingStatusHeader: remoteTUIThreadActiveReasoningHeading(thread),
+			Summary:                remoteTUISessionSummaryFromThread(thread, false),
+			Messages:               remoteTUIThreadMessagesFromThread(thread),
+			Status:                 remoteTUIStatusFromThread(thread),
+			TokenUsage:             remoteThreadTokenUsageFromThread(thread),
+			WorkingStatusHeader:    remoteTUIThreadActiveReasoningHeading(thread),
+			WorkingReasoningTurnID: remoteTUIThreadActiveReasoningTurnID(thread),
+			WorkingReasoningItemID: remoteTUIThreadActiveReasoningItemID(thread),
 		}, nil
 	}
 }
@@ -1576,10 +1578,12 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 		primaryThreadID = strings.TrimSpace(*thread.ParentThreadID)
 	}
 	return codextea.AgentThreadSwitchResponse{
-		Entry:               remoteTUIAgentEntryFromThread(thread, primaryThreadID),
-		Messages:            remoteTUIThreadMessagesFromThread(thread),
-		Status:              remoteTUIStatusFromThread(thread),
-		WorkingStatusHeader: remoteTUIThreadActiveReasoningHeading(thread),
+		Entry:                  remoteTUIAgentEntryFromThread(thread, primaryThreadID),
+		Messages:               remoteTUIThreadMessagesFromThread(thread),
+		Status:                 remoteTUIStatusFromThread(thread),
+		WorkingStatusHeader:    remoteTUIThreadActiveReasoningHeading(thread),
+		WorkingReasoningTurnID: remoteTUIThreadActiveReasoningTurnID(thread),
+		WorkingReasoningItemID: remoteTUIThreadActiveReasoningItemID(thread),
 	}, nil
 }
 
@@ -1800,6 +1804,26 @@ func remoteTUIThreadActiveReasoningHeading(thread *appserver.Thread) string {
 		return heading
 	}
 	return ""
+}
+
+// remoteTUIThreadActiveReasoningTurnID returns the resumed in-progress turn's
+// id when its trailing item is an active reasoning item (Rust #43921).
+func remoteTUIThreadActiveReasoningTurnID(thread *appserver.Thread) string {
+	turnID, _, _, ok := remoteTUIThreadActiveReasoning(thread)
+	if !ok {
+		return ""
+	}
+	return turnID
+}
+
+// remoteTUIThreadActiveReasoningItemID returns the active reasoning item's id
+// for a resumed or switched-to thread (Rust #43921).
+func remoteTUIThreadActiveReasoningItemID(thread *appserver.Thread) string {
+	_, itemID, _, ok := remoteTUIThreadActiveReasoning(thread)
+	if !ok {
+		return ""
+	}
+	return itemID
 }
 
 // remoteTUICompletionFooterMessage restores a completed turn's saved completion

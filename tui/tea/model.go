@@ -135,6 +135,11 @@ type SessionResumeResponse struct {
 	// WorkingStatusHeader seeds the live reasoning summary heading for a resumed
 	// in-progress turn (Rust #43921).
 	WorkingStatusHeader string
+	// WorkingReasoningTurnID / WorkingReasoningItemID seed the resumed turn's
+	// active reasoning identity so unrelated reasoning notifications cannot move
+	// the live heading (Rust #43921 StatusState).
+	WorkingReasoningTurnID string
+	WorkingReasoningItemID string
 }
 
 type AgentThreadReaderFunc func(currentThreadID string) ([]codextui.AgentThreadEntry, error)
@@ -148,6 +153,10 @@ type AgentThreadSwitchResponse struct {
 	// WorkingStatusHeader seeds the live reasoning summary heading for a
 	// switched-to in-progress turn (Rust #43921).
 	WorkingStatusHeader string
+	// WorkingReasoningTurnID / WorkingReasoningItemID seed the switched-to
+	// turn's active reasoning identity (Rust #43921 StatusState).
+	WorkingReasoningTurnID string
+	WorkingReasoningItemID string
 }
 
 type TokenActivityReaderFunc func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error)
@@ -981,7 +990,13 @@ type Model struct {
 	workingStatusHeader string
 	// reasoningSummaryBuffers accumulates streaming reasoning summaries per
 	// item so the status row can show the latest usable line (Rust #43921).
-	reasoningSummaryBuffers         map[string]string
+	reasoningSummaryBuffers map[string]string
+	// reasoningItemID is the active reasoning item allowed to move the live
+	// heading; reasoningResumeTurnID marks a resumed in-progress turn whose
+	// first reasoning update may arrive without an item/started event
+	// (Rust #43921 StatusState).
+	reasoningItemID                 string
+	reasoningResumeTurnID           string
 	mcpStartupActive                bool
 	mcpStartupGeneration            uint64
 	mcpStartupFinishPending         bool
@@ -2438,22 +2453,107 @@ func (m *Model) applyWorkingStatusHeader(msg WorkingStatusHeaderMsg) {
 }
 
 // applyReasoningSummaryDelta accumulates a streaming reasoning summary fragment
-// and shows the latest usable line as the working indicator's header
+// and shows the latest usable line as the working indicator's header. Only the
+// active reasoning item may move the heading, and the heading is held while a
+// safety-buffering wait or an active compaction owns the status row
 // (Rust #43921).
 func (m *Model) applyReasoningSummaryDelta(delta *protocol.Delta) {
 	if m == nil || delta == nil {
 		return
 	}
-	key := strings.TrimSpace(delta.ItemID)
+	itemID := strings.TrimSpace(delta.ItemID)
+	if itemID == "" {
+		return
+	}
+	if m.reasoningItemID != "" && itemID != m.reasoningItemID {
+		// Unrelated reasoning while an active item is known (Rust gates deltas
+		// on the active reasoning item id).
+		return
+	}
+	if m.reasoningItemID == "" {
+		// A resumed in-progress turn's first reasoning update can arrive without
+		// an item/started event; adopt it as the active item.
+		m.reasoningItemID = itemID
+		m.reasoningResumeTurnID = ""
+	}
 	if m.reasoningSummaryBuffers == nil {
 		m.reasoningSummaryBuffers = map[string]string{}
 	}
-	m.reasoningSummaryBuffers[key] += delta.Text
-	header, ok := chatwidget.LatestSummaryLine(m.reasoningSummaryBuffers[key])
+	m.reasoningSummaryBuffers[itemID] += delta.Text
+	if m.reasoningHeaderUpdateBlocked() {
+		return
+	}
+	header, ok := chatwidget.LatestSummaryLine(m.reasoningSummaryBuffers[itemID])
 	if !ok {
 		return
 	}
 	m.workingStatusHeader = header
+}
+
+// applyReasoningItemStarted mirrors Rust ChatWidget::on_reasoning_item_started:
+// a new item whose id differs from a resumed item closes the previous snapshot,
+// re-selecting an already active item is a no-op, and otherwise the new item
+// becomes the only one allowed to move the heading while the previous usable
+// heading is retained until a new summary line arrives.
+func (m *Model) applyReasoningItemStarted(itemID string) {
+	if m == nil {
+		return
+	}
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return
+	}
+	if strings.TrimSpace(m.reasoningResumeTurnID) != "" && m.reasoningItemID != itemID {
+		m.finalizeReasoningSummary()
+	}
+	if m.reasoningItemID == itemID {
+		return
+	}
+	m.reasoningItemID = itemID
+	m.reasoningResumeTurnID = ""
+	if m.reasoningSummaryBuffers != nil {
+		delete(m.reasoningSummaryBuffers, itemID)
+	}
+	m.restoreReasoningStatusHeader()
+}
+
+// finalizeReasoningSummary mirrors Rust ChatWidget::on_agent_reasoning_final's
+// status behavior: the last useful summary stays in the heading through later
+// tool activity and empty reasoning items; only the active identity is cleared.
+func (m *Model) finalizeReasoningSummary() {
+	if m == nil {
+		return
+	}
+	m.reasoningItemID = ""
+	m.reasoningResumeTurnID = ""
+}
+
+// restoreReasoningStatusHeader re-derives the heading from the active item's
+// buffer, retaining the previous usable heading while the new buffer has none
+// (Rust #43921).
+func (m *Model) restoreReasoningStatusHeader() {
+	if m == nil || m.reasoningHeaderUpdateBlocked() {
+		return
+	}
+	if m.reasoningItemID == "" {
+		return
+	}
+	header, ok := chatwidget.LatestSummaryLine(m.reasoningSummaryBuffers[m.reasoningItemID])
+	if !ok {
+		return
+	}
+	m.workingStatusHeader = header
+}
+
+// reasoningHeaderUpdateBlocked reports whether another status owner must keep
+// the heading (Rust: safety buffering wait, unified-exec wait streak, active
+// compaction, pending guardian review). Go's tea model tracks safety buffering
+// and compaction; the remaining owners are not modeled here.
+func (m *Model) reasoningHeaderUpdateBlocked() bool {
+	if m == nil {
+		return true
+	}
+	return m.safetyBuffering.IsWaiting() || m.compactionActive
 }
 
 // resetReasoningSummaryHeader clears the live reasoning status heading at a
@@ -2464,6 +2564,8 @@ func (m *Model) resetReasoningSummaryHeader() {
 	}
 	m.reasoningSummaryBuffers = nil
 	m.workingStatusHeader = ""
+	m.reasoningItemID = ""
+	m.reasoningResumeTurnID = ""
 }
 
 func fitTerminalLine(line string, width int) string {
@@ -3374,6 +3476,10 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 		// Streaming deltas create the visible assistant message.
 	case "plan":
 		m.proposedPlanState(item.ID)
+	case "reasoning":
+		// Rust #43921: only the active reasoning item may move the heading, and a
+		// resumed item's start closes the previous snapshot.
+		m.applyReasoningItemStarted(item.ID)
 	case "imageGeneration":
 		// The completed event carries the saved path.
 	case "contextCompaction", "context_compaction":
@@ -3426,6 +3532,9 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		}
 	case "plan":
 		m.completeProposedPlan(item)
+	case "reasoning":
+		// Rust #43921: keep the last useful summary through later activity.
+		m.finalizeReasoningSummary()
 	case "command_execution":
 		m.renderCommandExecutionItem(item)
 	case "mcp_tool_call":
