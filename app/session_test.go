@@ -479,6 +479,26 @@ func TestSessionResumeAmbiguousNameRejectedLikeRust(t *testing.T) {
 	}
 }
 
+// TestSessionArchiveAmbiguousNameRejectedLikeRust covers the archive/delete
+// resolver: every match is enumerated before a label is resolved.
+func TestSessionArchiveAmbiguousNameRejectedLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedAppSessionTime()
+	for _, record := range []*session.Record{
+		{ID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Title: "Shared", Preview: "one", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{Source: "cli", HistoryMode: "legacy"}},
+		{ID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", Title: "Shared", Preview: "two", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{Source: "cli", HistoryMode: "legacy"}},
+	} {
+		if err := store.Save(record); err != nil {
+			t.Fatalf("Save %s returned error: %v", record.ID, err)
+		}
+	}
+	archived := false
+	_, err := sessionIDByNameWithArchiveFilter(store, "Shared", &archived)
+	if err == nil || !strings.Contains(err.Error(), "Multiple sessions match 'Shared'") {
+		t.Fatalf("archive duplicate name error = %v", err)
+	}
+}
+
 func TestSessionRemoteFlagsValidateBeforeLocalStore(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

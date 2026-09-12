@@ -885,10 +885,21 @@ func sessionIDByNameWithArchiveFilter(store *session.Store, name string, archive
 	if store == nil {
 		return "", errors.New("session store is nil")
 	}
-	// Rust 9c8f9ce897: local workspaces trust SQLite names first, then scan
-	// and repair only after a miss or an unusable rollout path.
-	if id, found := sessionIDBySQLiteName(store, name, archived); found {
-		return id, nil
+	var ids []session.ThreadID
+	seen := map[session.ThreadID]bool{}
+	add := func(id session.ThreadID) {
+		if strings.TrimSpace(string(id)) == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	// Rust 9c8f9ce897: local workspaces trust SQLite names first, then scan and
+	// repair only after a miss or an unusable rollout path. Rust #43315: every
+	// match is collected so a duplicate label is rejected rather than resolved
+	// to the most recent entry.
+	for _, id := range sessionIDsBySQLiteName(store, name, archived) {
+		add(id)
 	}
 	for _, archivedValue := range []bool{false, true} {
 		if archived != nil && *archived != archivedValue {
@@ -900,7 +911,7 @@ func sessionIDByNameWithArchiveFilter(store *session.Store, name string, archive
 		}
 		for _, candidate := range candidates {
 			if candidate.Meta != nil && interactiveSessionSource(candidate.Meta.Source) {
-				return session.ThreadID(candidate.Meta.ID), nil
+				add(session.ThreadID(candidate.Meta.ID))
 			}
 		}
 	}
@@ -919,38 +930,46 @@ func sessionIDByNameWithArchiveFilter(store *session.Store, name string, archive
 		}
 		records = append(records, inactive...)
 	}
-	matches := make([]session.Record, 0, len(records))
 	for i := range records {
 		if !isInteractiveSession(&records[i]) {
 			continue
 		}
-		recordName := strings.TrimSpace(records[i].Title)
-		if recordName == "" {
-			recordName = strings.TrimSpace(string(records[i].ID))
-		}
-		if recordName == name {
-			matches = append(matches, records[i])
+		if localSessionLabel(records[i]) == name {
+			add(records[i].ID)
 		}
 	}
-	if len(matches) == 0 {
+	if len(ids) == 0 {
 		return "", fmt.Errorf("No %s session found matching '%s'.", sessionMutationSearchScope(archived), name)
 	}
-	sortSessionRecordsByRecency(matches)
-	return matches[0].ID, nil
+	if len(ids) > 1 {
+		// Rust #43315: distinct label matches must be disambiguated by UUID.
+		return "", ambiguousSessionNameError(name, string(ids[0]), string(ids[1]))
+	}
+	return ids[0], nil
 }
 
 func sessionIDBySQLiteName(store *session.Store, name string, archived *bool) (session.ThreadID, bool) {
-	if store == nil {
+	ids := sessionIDsBySQLiteName(store, name, archived)
+	if len(ids) == 0 {
 		return "", false
+	}
+	return ids[0], true
+}
+
+// sessionIDsBySQLiteName returns every valid state-database match for a label,
+// newest first (Rust #43315 enumerates all matches before deciding).
+func sessionIDsBySQLiteName(store *session.Store, name string, archived *bool) []session.ThreadID {
+	if store == nil {
+		return nil
 	}
 	codexHome := sessionCodexHome(store)
 	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
 	if err != nil {
-		return "", false
+		return nil
 	}
 	runtime, err := state.InitStateRuntime(context.Background(), sqliteConfig, "openai")
 	if err != nil {
-		return "", false
+		return nil
 	}
 	defer runtime.Close()
 	var candidates []state.ThreadListRow
@@ -968,10 +987,17 @@ func sessionIDBySQLiteName(store *session.Store, name string, archived *bool) (s
 			}
 		}
 	}
-	if len(candidates) == 0 {
-		return "", false
+	ids := make([]session.ThreadID, 0, len(candidates))
+	seen := map[session.ThreadID]bool{}
+	for _, candidate := range candidates {
+		id := session.ThreadID(candidate.ID)
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
 	}
-	return session.ThreadID(candidates[0].ID), true
+	return ids
 }
 
 func sqliteSessionRolloutValid(codexHome string, row state.ThreadListRow, archived bool) bool {
