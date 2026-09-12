@@ -122,7 +122,7 @@ GainController2}`。
 | 会话相位机/字幕/电平 | `chatwidget/realtime.rs` (~73 KB) | `tui/chatwidget/voice.go` (~30 KB) |
 | 字幕历史 cell | inline | `tui/history_cell/spoken.go` |
 | split-flap 动画字幕板 | `chatwidget/realtime_split_flap.rs` | 未实现 |
-| 独立 realtime 设置面板 | `chatwidget/realtime_settings.rs` | 内联处理 |
+| 语音设置选择面板 | `chatwidget/realtime_settings.rs`（标题 "Select voice" / 副标题 "Applies to your next voice conversation."；保存确认 "Voice set to X. Applies to your next voice conversation."） | `tui/chatwidget/voice_picker.go` + `tui/tea` 保存确认：**文案已对齐**（标题/副标题/确认语与 Rust 快照逐字一致）；仍是 Go 的弹层实现，非独立模块 |
 | 语音快照矩阵 | 30+ 语音快照 | 以单元测试为主 |
 
 ## 7. 打包与运行时
