@@ -3157,6 +3157,12 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 			sendAfterCancel(codextea.TurnInterruptedMsg{ThreadID: requestedThreadID, Err: ctx.Err()})
 			return
 		}
+		// Rust on_cyber_policy_error: a blocked cyber-safety response renders the
+		// Daybreak-aware refusal cell instead of the generic turn error.
+		if cyberPolicyError(err) {
+			send(codextea.CyberPolicyErrorMsg{ThreadID: requestedThreadID})
+			return
+		}
 		send(codextea.TurnCompletedMsg{ThreadID: requestedThreadID, Err: err})
 		return
 	}

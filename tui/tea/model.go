@@ -847,6 +847,10 @@ type Options struct {
 	// (Rust `tui.auto_recap = false`). The zero value keeps them enabled, which
 	// matches Rust's default.
 	DisableAutoRecap bool
+	// OnDaybreakNotice resolves the account's Daybreak access state for the
+	// refusal copy (Rust daybreak::Notice). A nil hook uses the neutral Limited
+	// copy, which is also Rust's pending/failed default.
+	OnDaybreakNotice func(model string) codextui.DaybreakNotice
 	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
 	// /voice unavailable for this runtime.
 	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
@@ -1372,6 +1376,7 @@ type Model struct {
 	onExportTranscript     TranscriptExportFunc
 	onGenerateRecap        RecapGenerateFunc
 	recapInFlight          bool
+	onDaybreakNotice       func(model string) codextui.DaybreakNotice
 	// recap tracks the automatic recap deadline and turn accounting (Rust
 	// RecapState).
 	recap            tuiapp.RecapState
@@ -1689,6 +1694,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		clipboardWriteRich:              clipboardWriteRich,
 		onExportTranscript:              options.OnExportTranscript,
 		onGenerateRecap:                 options.OnGenerateRecap,
+		onDaybreakNotice:                options.OnDaybreakNotice,
 		disableAutoRecap:                options.DisableAutoRecap,
 		recapLoadingIndex:               -1,
 		onReadTokenActivity:             options.OnReadTokenActivity,
@@ -2127,6 +2133,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyRecapGeneratedMsg(msg)
 	case recapCheckMsg:
 		return m, m.applyRecapCheck(m.currentTime())
+	case CyberPolicyErrorMsg:
+		return m, m.applyCyberPolicyErrorMsg(msg)
 	case DebugConfigResultMsg:
 		m.applyDebugConfigResult(msg)
 		return m, nil

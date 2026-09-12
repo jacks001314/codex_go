@@ -3689,6 +3689,12 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.ErrorEvent(text)})
 			return nil
 		}
+		// Rust on_cyber_policy_error: a blocked cyber-safety response renders the
+		// Daybreak-aware refusal cell instead of the generic turn error.
+		if turnErrorIsCyberPolicy(payload.Error) {
+			c.send(codextea.CyberPolicyErrorMsg{ThreadID: payload.ThreadID})
+			return nil
+		}
 		text := strings.TrimSpace(payload.Error.Message)
 		if text == "" {
 			text = "remote app-server error"
