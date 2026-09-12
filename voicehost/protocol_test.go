@@ -169,3 +169,136 @@ func TestRuntimeEnvironmentIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestProtocolAudioMessagesMatchRustWireShape(t *testing.T) {
+	tests := []struct {
+		name    string
+		message Message
+		want    string
+	}{
+		{name: "transport timed out", message: NewSimpleMessage(TypeTransportTimedOut), want: `{"type":"transportTimedOut"}`},
+		{name: "open devices", message: NewSimpleMessage(TypeOpenDevices), want: `{"type":"openDevices"}`},
+		{name: "devices opened", message: NewSimpleMessage(TypeDevicesOpened), want: `{"type":"devicesOpened"}`},
+		{name: "audio controls applied", message: NewSimpleMessage(TypeAudioControlsApplied), want: `{"type":"audioControlsApplied"}`},
+		{name: "inspect audio", message: NewSimpleMessage(TypeInspectAudio), want: `{"type":"inspectAudio"}`},
+		{
+			name:    "set audio controls",
+			message: NewAudioControlsMessage(AudioControls{MicrophoneMuted: true}),
+			want:    `{"type":"setAudioControls","controls":{"microphoneMuted":true,"speakerSuppressed":false}}`,
+		},
+		{
+			name:    "audio state",
+			message: NewAudioStateMessage(AudioState{MicrophonePeak: 1024, SpeakerPeak: 2048}),
+			want:    `{"type":"audioState","state":{"microphonePeak":1024,"speakerPeak":2048}}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := json.Marshal(test.message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != test.want {
+				t.Fatalf("wire = %s, want %s", encoded, test.want)
+			}
+			frame, err := EncodeFrame(test.message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := DecodeFrame(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reencoded, err := json.Marshal(decoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(reencoded) != test.want {
+				t.Fatalf("round trip = %s, want %s", reencoded, test.want)
+			}
+		})
+	}
+}
+
+func TestProtocolRejectsInvalidAudioMessages(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "controls missing", payload: `{"type":"setAudioControls"}`},
+		{name: "controls null", payload: `{"type":"setAudioControls","controls":null}`},
+		{name: "controls array", payload: `{"type":"setAudioControls","controls":[]}`},
+		{name: "controls empty", payload: `{"type":"setAudioControls","controls":{}}`},
+		{name: "controls partial", payload: `{"type":"setAudioControls","controls":{"microphoneMuted":false}}`},
+		{name: "controls unknown field", payload: `{"type":"setAudioControls","controls":{"microphoneMuted":false,"speakerSuppressed":false,"extra":1}}`},
+		{name: "controls wrong type", payload: `{"type":"setAudioControls","controls":{"microphoneMuted":"no","speakerSuppressed":false}}`},
+		{name: "state missing", payload: `{"type":"audioState"}`},
+		{name: "state null", payload: `{"type":"audioState","state":null}`},
+		{name: "state empty", payload: `{"type":"audioState","state":{}}`},
+		{name: "state unknown field", payload: `{"type":"audioState","state":{"microphonePeak":0,"speakerPeak":0,"extra":1}}`},
+		{name: "state negative", payload: `{"type":"audioState","state":{"microphonePeak":-1,"speakerPeak":0}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var message Message
+			err := json.Unmarshal([]byte(test.payload), &message)
+			if !errors.Is(err, ErrInvalidMessage) {
+				t.Fatalf("error = %v, want ErrInvalidMessage", err)
+			}
+		})
+	}
+}
+
+func TestProtocolRejectsEmptySDPWithBothSentinels(t *testing.T) {
+	var message Message
+	err := json.Unmarshal([]byte(`{"type":"offer","sdp":""}`), &message)
+	if !errors.Is(err, ErrInvalidSessionDescription) {
+		t.Fatalf("error = %v, want ErrInvalidSessionDescription", err)
+	}
+	if !errors.Is(err, ErrInvalidMessage) {
+		t.Fatalf("error = %v, want ErrInvalidMessage to remain matchable", err)
+	}
+}
+
+func TestHelperExitStageCodesAreUniqueAndComplete(t *testing.T) {
+	codes := []int{20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 39}
+	seen := make(map[int]bool, len(codes))
+	for _, code := range codes {
+		stage, ok := HelperExitStageFromCode(code)
+		if !ok {
+			t.Fatalf("code %d is not mapped", code)
+		}
+		if stage.Code() != code {
+			t.Fatalf("code %d round trip = %d", code, stage.Code())
+		}
+		if seen[code] {
+			t.Fatalf("code %d is mapped twice", code)
+		}
+		seen[code] = true
+		if stage.String() == "" {
+			t.Fatalf("code %d has no label", code)
+		}
+	}
+	for _, reserved := range []int{0, 1, 19, 34, 38, 40} {
+		if _, ok := HelperExitStageFromCode(reserved); ok {
+			t.Fatalf("reserved code %d was mapped", reserved)
+		}
+	}
+}
+
+func TestHelperExitErrorUnwraps(t *testing.T) {
+	err := withExitStage(HelperExitReply, ErrInvalidMessage)
+	var exitErr *HelperExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %v, want *HelperExitError", err)
+	}
+	if exitErr.Stage != HelperExitReply {
+		t.Fatalf("stage = %v, want %v", exitErr.Stage, HelperExitReply)
+	}
+	if !errors.Is(err, ErrInvalidMessage) {
+		t.Fatalf("wrapped error = %v, want ErrInvalidMessage", err)
+	}
+	if withExitStage(HelperExitReply, nil) != nil {
+		t.Fatal("a nil failure must stay nil")
+	}
+}

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "description": "Pinned native inputs for the packaged voice runtime. Checksums establish input identity, not security or license approval.",
+  "sources": [
+    {
+      "name": "opus",
+      "version": "1.5.2",
+      "url": "https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz",
+      "sha256": "65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1",
+      "bytes": 7839412,
+      "license": "BSD-3-Clause",
+      "purpose": "Audio codec linked into the voice helper through a packaged runtime"
+    }
+  ],
+  "buildTools": [
+    {
+      "name": "ninja",
+      "version": "1.12.1",
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip",
+      "sha256": "f550fec705b6d6ff58f2db3c374c2277a37691678d6aba463adcbb129108467a",
+      "platform": "windows",
+      "purpose": "CMake build program; not a runtime component"
+    }
+  ]
+}

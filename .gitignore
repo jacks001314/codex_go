@@ -11,5 +11,10 @@ bin/
 !sandbox/windowssandbox/bin/
 !sandbox/windowssandbox/bin/**
 dist/
+# Prepared native voice runtime inputs and outputs. The pinned manifest and
+# prepare script are committed; downloaded archives and built libraries are not.
+third_party/voice/cache/
+third_party/voice/work/
+third_party/voice/build/
 func.md
 npm_token.md

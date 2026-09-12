@@ -8,6 +8,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	"codex_go/features"
 	codextui "codex_go/tui"
 	historycell "codex_go/tui/history_cell"
 )
@@ -124,7 +125,12 @@ func sessionLookupFields(item codextui.SessionSummary) []string {
 }
 
 func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea.Cmd {
-	picker := codextui.NewSessionPickerState(action, m.sessionItems, m.sessionCWD)
+	picker := codextui.NewSessionPickerState(
+		action,
+		m.sessionItems,
+		m.sessionCWD,
+		codextui.SessionPickerWorktreeCWDs(m.sessionCWD, features.Enabled(m.featureSettings, "worktrees"))...,
+	)
 	if picker == nil {
 		m.notice = "No sessions available."
 		return nil

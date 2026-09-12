@@ -19,14 +19,17 @@ const (
 	MethodStop         Method = "thread/realtime/stop"
 	MethodListVoices   Method = "thread/realtime/listVoices"
 
-	NotificationStarted          NotificationMethod = "thread/realtime/started"
-	NotificationItemAdded        NotificationMethod = "thread/realtime/itemAdded"
-	NotificationTranscriptDelta  NotificationMethod = "thread/realtime/transcript/delta"
-	NotificationTranscriptDone   NotificationMethod = "thread/realtime/transcript/done"
-	NotificationOutputAudioDelta NotificationMethod = "thread/realtime/outputAudio/delta"
-	NotificationSDP              NotificationMethod = "thread/realtime/sdp"
-	NotificationError            NotificationMethod = "thread/realtime/error"
-	NotificationClosed           NotificationMethod = "thread/realtime/closed"
+	NotificationStarted             NotificationMethod = "thread/realtime/started"
+	NotificationItemAdded           NotificationMethod = "thread/realtime/itemAdded"
+	NotificationItemStarted         NotificationMethod = "thread/realtime/item/started"
+	NotificationItemTranscriptDelta NotificationMethod = "thread/realtime/item/transcript/delta"
+	NotificationItemCompleted       NotificationMethod = "thread/realtime/item/completed"
+	NotificationTranscriptDelta     NotificationMethod = "thread/realtime/transcript/delta"
+	NotificationTranscriptDone      NotificationMethod = "thread/realtime/transcript/done"
+	NotificationOutputAudioDelta    NotificationMethod = "thread/realtime/outputAudio/delta"
+	NotificationSDP                 NotificationMethod = "thread/realtime/sdp"
+	NotificationError               NotificationMethod = "thread/realtime/error"
+	NotificationClosed              NotificationMethod = "thread/realtime/closed"
 )
 
 var (
@@ -183,8 +186,9 @@ func (c *AudioChunk) UnmarshalJSON(data []byte) error {
 }
 
 type StartTransport struct {
-	Type string `json:"type"`
-	SDP  string `json:"sdp,omitempty"`
+	Type   string `json:"type"`
+	SDP    string `json:"sdp,omitempty"`
+	CallID string `json:"callId,omitempty"`
 }
 
 func WebsocketTransport() *StartTransport {
@@ -193,6 +197,12 @@ func WebsocketTransport() *StartTransport {
 
 func WebRTCTransport(sdp string) *StartTransport {
 	return &StartTransport{Type: "webrtc", SDP: sdp}
+}
+
+// ExistingCallTransport attaches to a realtime call the client already created
+// and negotiated. Core connects a sideband to the call instead of creating one.
+func ExistingCallTransport(callID string) *StartTransport {
+	return &StartTransport{Type: "existingCall", CallID: callID}
 }
 
 func (t *StartTransport) Validate() error {
@@ -204,6 +214,11 @@ func (t *StartTransport) Validate() error {
 		return nil
 	case "webrtc":
 		return nil
+	case "existingCall":
+		if strings.TrimSpace(t.CallID) == "" {
+			return fmt.Errorf("%w: existing realtime calls require a call id", ErrInvalidRealtimeRequest)
+		}
+		return nil
 	default:
 		return fmt.Errorf("%w: unsupported transport %q", ErrInvalidRealtimeRequest, t.Type)
 	}
@@ -214,8 +229,9 @@ func (t *StartTransport) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("transport is required")
 	}
 	var wire struct {
-		Type *string `json:"type"`
-		SDP  *string `json:"sdp"`
+		Type   *string `json:"type"`
+		SDP    *string `json:"sdp"`
+		CallID *string `json:"callId"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
@@ -233,6 +249,12 @@ func (t *StartTransport) UnmarshalJSON(data []byte) error {
 		}
 		*t = StartTransport{Type: "webrtc", SDP: *wire.SDP}
 		return nil
+	case "existingCall":
+		if wire.CallID == nil {
+			return fmt.Errorf("missing field callId")
+		}
+		*t = StartTransport{Type: "existingCall", CallID: *wire.CallID}
+		return nil
 	default:
 		return fmt.Errorf("unknown variant %s", *wire.Type)
 	}
@@ -244,6 +266,12 @@ func (t StartTransport) MarshalJSON() ([]byte, error) {
 			Type string `json:"type"`
 			SDP  string `json:"sdp"`
 		}{Type: t.Type, SDP: t.SDP})
+	}
+	if t.Type == "existingCall" {
+		return json.Marshal(struct {
+			Type   string `json:"type"`
+			CallID string `json:"callId"`
+		}{Type: t.Type, CallID: t.CallID})
 	}
 	return json.Marshal(struct {
 		Type string `json:"type"`
@@ -261,12 +289,15 @@ type StartParams struct {
 	Model                               *string                   `json:"model,omitempty"`
 	OutputModality                      OutputModality            `json:"outputModality"`
 	IncludeStartupContext               *bool                     `json:"includeStartupContext,omitempty"`
-	InitialItems                        []InitialTextItem         `json:"initialItems,omitempty"`
-	Prompt                              OptionalString            `json:"prompt,omitempty"`
-	RealtimeSessionID                   *string                   `json:"realtimeSessionId,omitempty"`
-	Transport                           *StartTransport           `json:"transport,omitempty"`
-	Version                             *Version                  `json:"version,omitempty"`
-	Voice                               *Voice                    `json:"voice,omitempty"`
+	// DelegationAckFiller controls whether a realtime V3 delegation produces an
+	// acknowledgement filler. A nil value preserves the Realtime API default.
+	DelegationAckFiller *bool             `json:"delegationAckFiller,omitempty"`
+	InitialItems        []InitialTextItem `json:"initialItems,omitempty"`
+	Prompt              OptionalString    `json:"prompt,omitempty"`
+	RealtimeSessionID   *string           `json:"realtimeSessionId,omitempty"`
+	Transport           *StartTransport   `json:"transport,omitempty"`
+	Version             *Version          `json:"version,omitempty"`
+	Voice               *Voice            `json:"voice,omitempty"`
 }
 
 func (p StartParams) MarshalJSON() ([]byte, error) {
@@ -286,6 +317,7 @@ func (p StartParams) MarshalJSON() ([]byte, error) {
 		Model                               *string                   `json:"model"`
 		OutputModality                      OutputModality            `json:"outputModality"`
 		IncludeStartupContext               *bool                     `json:"includeStartupContext"`
+		DelegationAckFiller                 *bool                     `json:"delegationAckFiller"`
 		InitialItems                        []InitialTextItem         `json:"initialItems"`
 		Prompt                              *OptionalString           `json:"prompt,omitempty"`
 		RealtimeSessionID                   *string                   `json:"realtimeSessionId"`
@@ -303,6 +335,7 @@ func (p StartParams) MarshalJSON() ([]byte, error) {
 		Model:                               p.Model,
 		OutputModality:                      p.OutputModality,
 		IncludeStartupContext:               p.IncludeStartupContext,
+		DelegationAckFiller:                 p.DelegationAckFiller,
 		InitialItems:                        p.InitialItems,
 		Prompt:                              prompt,
 		RealtimeSessionID:                   p.RealtimeSessionID,
@@ -369,6 +402,12 @@ func isKnownVoice(voice Voice) bool {
 	return false
 }
 
+// IsKnownVoice reports whether a voice name is one of the builtin voices, which
+// is what parsing a configured voice accepts.
+func IsKnownVoice(voice Voice) bool {
+	return isKnownVoice(voice)
+}
+
 func (p *StartParams) Validate() error {
 	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
 		return fmt.Errorf("%w: threadId is required", ErrInvalidRealtimeRequest)
@@ -423,6 +462,17 @@ func (p *StartParams) validateVersion(version Version, transport *StartTransport
 	if transport != nil && transport.Type == "webrtc" && version == VersionV2 {
 		return fmt.Errorf("%w: AVAS realtime calls require realtime v1 or v3", ErrInvalidRealtimeRequest)
 	}
+	if transport != nil && transport.Type == "existingCall" {
+		if version == VersionV2 {
+			return fmt.Errorf("%w: AVAS realtime calls require realtime v1 or v3", ErrInvalidRealtimeRequest)
+		}
+		includeStartupContext := p.IncludeStartupContext == nil || *p.IncludeStartupContext
+		hasSessionConfiguration := includeStartupContext || p.Prompt.Set || len(p.InitialItems) > 0 ||
+			p.Model != nil || p.Voice != nil || p.DelegationAckFiller != nil
+		if hasSessionConfiguration {
+			return fmt.Errorf("%w: existing realtime calls do not support session configuration options", ErrInvalidRealtimeRequest)
+		}
+	}
 	return nil
 }
 
@@ -444,7 +494,7 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 	}
 	if p.Version != nil {
 		version = *p.Version
-	} else if transport.Type == "webrtc" {
+	} else if transport.Type == "webrtc" || transport.Type == "existingCall" {
 		version = VersionV1
 	}
 	if err := p.validateVersion(version, transport); err != nil {
@@ -462,6 +512,11 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 		model = *p.Model
 	}
 	voice := defaultVoice
+	if transport.Type == "existingCall" {
+		// An existing call keeps its own negotiated voice, so the configured
+		// default is ignored.
+		voice = ""
+	}
 	if voice == "" {
 		voices := BuiltinVoices()
 		voice = voices.DefaultForVersion(version)
@@ -503,6 +558,7 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 		CodexResponseHandoffMode:            handoffModeValue(p.CodexResponseHandoffMode),
 		CodexResponseHandoffChannelPrefixes: cloneStringSliceMap(p.CodexResponseHandoffChannelPrefixes),
 		InitialItems:                        append([]InitialTextItem(nil), p.InitialItems...),
+		DelegationAckFiller:                 p.DelegationAckFiller,
 	}, nil
 }
 
@@ -800,6 +856,9 @@ type SessionConfig struct {
 	CodexResponseHandoffMode            CodexResponseHandoffMode
 	CodexResponseHandoffChannelPrefixes map[string][]string
 	InitialItems                        []InitialTextItem
+	// DelegationAckFiller is the resolved acknowledgement filler setting; a nil
+	// value preserves the Realtime API default.
+	DelegationAckFiller *bool
 }
 
 type StartOptions struct {
@@ -830,6 +889,7 @@ type Manager struct {
 	streams            map[string]*codexOutputStream
 	sidebands          map[string]*realtimeSideband
 	connections        map[string]*realtimeTransportSession
+	history            map[string]*RealtimeHistoryState
 	transport          *TransportBackendConfig
 	notificationSink   func(Notification)
 	eventSink          func(string, Event)
@@ -934,6 +994,7 @@ func NewManager() *Manager {
 		streams:     map[string]*codexOutputStream{},
 		sidebands:   map[string]*realtimeSideband{},
 		connections: map[string]*realtimeTransportSession{},
+		history:     map[string]*RealtimeHistoryState{},
 		startLocks:  map[string]*sync.Mutex{},
 		now:         time.Now,
 	}
@@ -1382,7 +1443,7 @@ func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (
 	var sideband *realtimeSideband
 	var connection *realtimeTransportSession
 	if config.Transport.Type == "websocket" && backend != nil && backend.WebsocketBaseURL != "" {
-		connection, err = dialRealtimeTransport(startContext, config.ThreadID, backend, config, "", true)
+		connection, err = dialRealtimeTransport(startContext, config.ThreadID, backend, config, "", realtimeInitializeNewSession)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1394,6 +1455,12 @@ func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (
 		}
 		sdpAnswer = call.SDP
 		sideband = newRealtimeSideband(config.ThreadID, call.CallID, backend, config)
+	}
+	if config.Transport.Type == "existingCall" && backend != nil && backend.SidebandBaseURL != "" {
+		// The client already created and negotiated the call; Core only joins
+		// its sideband control socket.
+		sideband = newRealtimeSideband(config.ThreadID, config.Transport.CallID, backend, config)
+		sideband.existingCall = true
 	}
 
 	m.mu.Lock()
@@ -1435,6 +1502,11 @@ func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (
 			sdpAnswer = "answer:" + config.Transport.SDP
 		}
 		notifications = append(notifications, NewSDPNotification(config.ThreadID, sdpAnswer))
+	}
+	// The canonical timeline records the session boundary after the transport
+	// notifications, matching the reducer's after-event ordering.
+	if effects := m.historyFor(config.ThreadID).StartSession(config.RealtimeSessionID); !effects.Empty() {
+		notifications = append(notifications, historyItemNotifications(config.ThreadID, effects)...)
 	}
 	return stateSnapshot, notifications, nil
 }
@@ -1495,19 +1567,22 @@ func (m *Manager) AppendSpeech(params *AppendSpeechParams) (*SessionState, error
 	return state, nil
 }
 
-func (m *Manager) Stop(params *StopParams, reason string) (*SessionState, Notification, error) {
+// Stop closes the session and returns the notifications it produced: any
+// canonical timeline items sealed by the close, followed by the closed
+// notification itself.
+func (m *Manager) Stop(params *StopParams, reason string) (*SessionState, []Notification, error) {
 	if err := params.Validate(); err != nil {
-		return nil, Notification{}, err
+		return nil, nil, err
 	}
 	if m == nil {
-		return nil, Notification{}, fmt.Errorf("%w: manager is nil", ErrInvalidRealtimeRequest)
+		return nil, nil, fmt.Errorf("%w: manager is nil", ErrInvalidRealtimeRequest)
 	}
 	m.mu.Lock()
 	m.ensureLocked()
 	state, ok := m.sessions[params.ThreadID]
 	if !ok || state.ClosedAt != nil {
 		m.mu.Unlock()
-		return nil, Notification{}, fmt.Errorf("%w: %s", ErrRealtimeNotRunning, params.ThreadID)
+		return nil, nil, fmt.Errorf("%w: %s", ErrRealtimeNotRunning, params.ThreadID)
 	}
 	now := m.now().UTC()
 	state.LastActivity = now
@@ -1533,7 +1608,20 @@ func (m *Manager) Stop(params *StopParams, reason string) (*SessionState, Notifi
 		_ = connection.close()
 		m.flushRealtimeTranscriptTail(connection)
 	}
-	return snapshot, NewClosedNotification(params.ThreadID, reason), nil
+	// Closing the timeline publishes the sealed segments and the session
+	// boundary before the caller reports the session as closed.
+	notifications := m.takeSessionClosedNotifications(params.ThreadID)
+	notifications = append(notifications, NewClosedNotification(params.ThreadID, reason))
+	return snapshot, notifications, nil
+}
+
+// takeSessionClosedNotifications seals the thread timeline and returns its item
+// notifications.
+func (m *Manager) takeSessionClosedNotifications(threadID string) []Notification {
+	if m == nil {
+		return nil
+	}
+	return historyItemNotifications(threadID, m.historyFor(threadID).SessionClosed())
 }
 
 func (m *Manager) State(threadID string) (*SessionState, bool) {
@@ -1594,6 +1682,9 @@ func (m *Manager) ensureLocked() {
 	if m.startLocks == nil {
 		m.startLocks = map[string]*sync.Mutex{}
 	}
+	if m.history == nil {
+		m.history = map[string]*RealtimeHistoryState{}
+	}
 }
 
 func (m *Manager) startLock(threadID string) *sync.Mutex {
@@ -1622,6 +1713,28 @@ type StartedNotification struct {
 type ItemAddedNotification struct {
 	ThreadID string         `json:"threadId"`
 	Item     map[string]any `json:"item"`
+}
+
+// ItemStartedNotification reports a canonical timeline item that started
+// streaming.
+type ItemStartedNotification struct {
+	ThreadID string       `json:"threadId"`
+	Item     RealtimeItem `json:"item"`
+}
+
+// ItemCompletedNotification reports a canonical timeline item published after
+// its content completed.
+type ItemCompletedNotification struct {
+	ThreadID string       `json:"threadId"`
+	Item     RealtimeItem `json:"item"`
+}
+
+// ItemTranscriptDeltaNotification reports text appended to an active realtime
+// transcript item.
+type ItemTranscriptDeltaNotification struct {
+	ThreadID string `json:"threadId"`
+	ItemID   string `json:"itemId"`
+	Delta    string `json:"delta"`
 }
 
 type TranscriptDeltaNotification struct {

@@ -33,10 +33,10 @@ type CustomPromptView struct {
 	Submitted  []string
 	Completion CustomPromptCompletion
 
-	pasteBurst  PasteBurst
-	cursor      int
-	vimEnabled  bool
-	vimInsert   bool
+	pasteBurst   PasteBurst
+	cursor       int
+	vimEnabled   bool
+	vimInsert    bool
 	vimPendingOp string
 }
 

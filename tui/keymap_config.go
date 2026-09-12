@@ -212,6 +212,11 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 		if context == "global" && action == "open_agents" && config.altACustomBindingExists() {
 			return nil, "default", false
 		}
+		// Rust: the default ctrl-x binding for voice mute is disabled when the
+		// main surface already uses ctrl-x, preserving existing shortcuts.
+		if context == "chat" && action == "toggle_voice_mute" && config.ctrlXMainSurfaceBindingExists() {
+			return nil, "default", false
+		}
 		// Rust #44424/#44433: newly added agents-dashboard defaults yield to an
 		// existing custom binding for the same key on the agents, list, or
 		// global surface, so a new default never shadows existing shortcuts.
@@ -246,6 +251,26 @@ func (c *KeymapConfig) altACustomBindingExists() bool {
 		for _, bindings := range actions {
 			for _, binding := range bindings {
 				if binding == "alt-a" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// ctrlXMainSurfaceBindingExists reports whether a main-surface action already
+// binds ctrl-x, which shadows the default voice-mute shortcut. Only the
+// contexts that can consume main-surface input are considered, matching the
+// Rust resolver.
+func (c *KeymapConfig) ctrlXMainSurfaceBindingExists() bool {
+	if c == nil || c.bindings == nil {
+		return false
+	}
+	for _, context := range []string{"global", "chat", "composer", "editor", "vim_normal", "vim_operator", "vim_text_object"} {
+		for _, bindings := range c.bindings[context] {
+			for _, binding := range bindings {
+				if normalized, err := NormalizeKeybindingSpec(binding); err == nil && normalized == "ctrl-x" {
 					return true
 				}
 			}

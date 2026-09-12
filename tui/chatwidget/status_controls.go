@@ -117,30 +117,30 @@ func (s StatusLineGitSummary) BranchChangesText() (string, bool) {
 }
 
 type StatusControlsRuntime struct {
-	CWD                 string
-	ProjectName         string
-	ProjectRoot         string
-	ModelName           string
-	ReasoningEffort     string
-	StatusText          string
-	Permissions         string
-	ApprovalMode        string
-	ContextWindowSize   *int64
-	LastTokenUsage      StatusTokenUsage
-	TotalTokenUsage     StatusTokenUsage
-	ThreadID            string
-	FastMode            bool
+	CWD               string
+	ProjectName       string
+	ProjectRoot       string
+	ModelName         string
+	ReasoningEffort   string
+	StatusText        string
+	Permissions       string
+	ApprovalMode      string
+	ContextWindowSize *int64
+	LastTokenUsage    StatusTokenUsage
+	TotalTokenUsage   StatusTokenUsage
+	ThreadID          string
+	FastMode          bool
 	// ModelSupportsFastMode is true when the currently selected model exposes a
 	// Fast/priority service tier. When false the fast-mode status item is
 	// omitted (Rust #39999 hides the value for catalogued unsupported models).
 	ModelSupportsFastMode bool
-	RawOutput           bool
-	ThreadTitle         string
-	WorkspaceHeadline   string
-	TaskProgress        string
-	CodexVersion        string
-	HasCodexBackendAuth bool
-	RateLimitSnapshots  map[string]RateLimitSnapshot
+	RawOutput             bool
+	ThreadTitle           string
+	WorkspaceHeadline     string
+	TaskProgress          string
+	CodexVersion          string
+	HasCodexBackendAuth   bool
+	RateLimitSnapshots    map[string]RateLimitSnapshot
 }
 
 type StatusControlsState struct {

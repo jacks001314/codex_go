@@ -403,21 +403,21 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 		return chatwidget.StatusControlsRuntime{CWD: cwd, ProjectName: projectName, ProjectRoot: cwd}
 	}
 	return chatwidget.StatusControlsRuntime{
-		CWD:                cwd,
-		ProjectName:        projectName,
-		ProjectRoot:        cwd,
-		ModelName:          strings.TrimSpace(m.State.Model),
-		ReasoningEffort:    m.State.EffectiveReasoningEffort(),
-		StatusText:         strings.TrimSpace(m.State.Status),
-		Permissions:        strings.TrimSpace(m.State.Sandbox),
-		ApprovalMode:       strings.TrimSpace(m.State.ApprovalPolicy),
-		ThreadID:           strings.TrimSpace(m.State.ThreadID),
-		RawOutput:          m.rawOutput,
+		CWD:                   cwd,
+		ProjectName:           projectName,
+		ProjectRoot:           cwd,
+		ModelName:             strings.TrimSpace(m.State.Model),
+		ReasoningEffort:       m.State.EffectiveReasoningEffort(),
+		StatusText:            strings.TrimSpace(m.State.Status),
+		Permissions:           strings.TrimSpace(m.State.Sandbox),
+		ApprovalMode:          strings.TrimSpace(m.State.ApprovalPolicy),
+		ThreadID:              strings.TrimSpace(m.State.ThreadID),
+		RawOutput:             m.rawOutput,
 		ModelSupportsFastMode: modelSupportsFastMode(m.serviceTierCommands),
-		ThreadTitle:        strings.TrimSpace(m.State.ThreadID),
-		TaskProgress:       m.goalTaskProgress(),
-		CodexVersion:       "codex_go",
-		RateLimitSnapshots: cloneRateLimitSnapshots(m.rateLimitSnapshots),
+		ThreadTitle:           strings.TrimSpace(m.State.ThreadID),
+		TaskProgress:          m.goalTaskProgress(),
+		CodexVersion:          "codex_go",
+		RateLimitSnapshots:    cloneRateLimitSnapshots(m.rateLimitSnapshots),
 	}
 }
 

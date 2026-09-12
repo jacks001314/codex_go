@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"codex_go/model"
+	"codex_go/realtime"
 )
 
 type ThreadItemPayload map[string]any
@@ -330,6 +331,33 @@ type ThreadRealtimeStartedNotification struct {
 type ThreadRealtimeItemAddedNotification struct {
 	ThreadID string `json:"threadId"`
 	Item     any    `json:"item"`
+}
+
+// ThreadRealtimeItem is a thread-scoped realtime item in the canonical
+// timeline. The realtime reducer owns the wire shape, so the app-server carries
+// it verbatim.
+type ThreadRealtimeItem = realtime.RealtimeItem
+
+// ThreadRealtimeItemStartedNotification reports a canonical timeline item that
+// started streaming.
+type ThreadRealtimeItemStartedNotification struct {
+	ThreadID string             `json:"threadId"`
+	Item     ThreadRealtimeItem `json:"item"`
+}
+
+// ThreadRealtimeItemCompletedNotification reports a canonical timeline item
+// published after its content completed.
+type ThreadRealtimeItemCompletedNotification struct {
+	ThreadID string             `json:"threadId"`
+	Item     ThreadRealtimeItem `json:"item"`
+}
+
+// ThreadRealtimeItemTranscriptDeltaNotification reports text appended to an
+// active realtime transcript item.
+type ThreadRealtimeItemTranscriptDeltaNotification struct {
+	ThreadID string `json:"threadId"`
+	ItemID   string `json:"itemId"`
+	Delta    string `json:"delta"`
 }
 
 type ThreadRealtimeTranscriptDeltaNotification struct {

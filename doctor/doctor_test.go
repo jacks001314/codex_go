@@ -68,6 +68,7 @@ func TestReportBuildsLocalChecks(t *testing.T) {
 		{"installation", "install"},
 		{"runtime.provenance", "runtime"},
 		{"runtime.search", "search"},
+		{"voice.runtime", "voice"},
 		{"config.load", "config"},
 		{"auth.credentials", "auth"},
 		{"updates.status", "updates"},

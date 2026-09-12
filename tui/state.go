@@ -741,6 +741,7 @@ const (
 	CommandElevateSandbox   Command = "setup-default-sandbox"
 	CommandSandboxReadRoot  Command = "sandbox-add-read-dir"
 	CommandRollout          Command = "rollout"
+	CommandVoice            Command = "voice"
 	CommandTestApproval     Command = "test-approval"
 	CommandMemoryDrop       Command = "debug-m-drop"
 	CommandMemoryUpdate     Command = "debug-m-update"
@@ -882,6 +883,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandSandboxReadRoot, Args: args, Name: name}, true
 	case "/rollout":
 		return &CommandInvocation{Command: CommandRollout, Args: args, Name: name}, true
+	case "/voice":
+		return &CommandInvocation{Command: CommandVoice, Args: args, Name: name}, true
 	case "/test-approval":
 		return &CommandInvocation{Command: CommandTestApproval, Args: args, Name: name}, true
 	case "/debug-m-drop":

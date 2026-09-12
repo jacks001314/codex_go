@@ -48,25 +48,25 @@ const (
 type TurnRuntimeErrorOutcome string
 
 const (
-	TurnRuntimeErrorNone              TurnRuntimeErrorOutcome = ""
-	TurnRuntimeErrorRejectedSteer     TurnRuntimeErrorOutcome = "rejected_steer"
-	TurnRuntimeErrorCyberPolicy       TurnRuntimeErrorOutcome = "cyber_policy"
+	TurnRuntimeErrorNone                        TurnRuntimeErrorOutcome = ""
+	TurnRuntimeErrorRejectedSteer               TurnRuntimeErrorOutcome = "rejected_steer"
+	TurnRuntimeErrorCyberPolicy                 TurnRuntimeErrorOutcome = "cyber_policy"
 	TurnRuntimeErrorMisalignmentPolicyViolation TurnRuntimeErrorOutcome = "misalignment_policy_violation"
-	TurnRuntimeErrorSafetyAccessBlock TurnRuntimeErrorOutcome = "safety_access_block"
-	TurnRuntimeErrorServerOverloaded  TurnRuntimeErrorOutcome = "server_overloaded"
-	TurnRuntimeErrorRateLimit         TurnRuntimeErrorOutcome = "rate_limit"
-	TurnRuntimeErrorGeneric           TurnRuntimeErrorOutcome = "generic_error"
+	TurnRuntimeErrorSafetyAccessBlock           TurnRuntimeErrorOutcome = "safety_access_block"
+	TurnRuntimeErrorServerOverloaded            TurnRuntimeErrorOutcome = "server_overloaded"
+	TurnRuntimeErrorRateLimit                   TurnRuntimeErrorOutcome = "rate_limit"
+	TurnRuntimeErrorGeneric                     TurnRuntimeErrorOutcome = "generic_error"
 )
 
 type TurnRuntimeCodexErrorKind string
 
 const (
-	TurnRuntimeCodexErrorActiveTurnNotSteerable     TurnRuntimeCodexErrorKind = "ActiveTurnNotSteerable"
-	TurnRuntimeCodexErrorCyberPolicy                TurnRuntimeCodexErrorKind = "CyberPolicy"
+	TurnRuntimeCodexErrorActiveTurnNotSteerable      TurnRuntimeCodexErrorKind = "ActiveTurnNotSteerable"
+	TurnRuntimeCodexErrorCyberPolicy                 TurnRuntimeCodexErrorKind = "CyberPolicy"
 	TurnRuntimeCodexErrorMisalignmentPolicyViolation TurnRuntimeCodexErrorKind = "MisalignmentPolicyViolation"
-	TurnRuntimeCodexErrorServerOverloaded           TurnRuntimeCodexErrorKind = "ServerOverloaded"
-	TurnRuntimeCodexErrorUsageLimitExceeded         TurnRuntimeCodexErrorKind = "UsageLimitExceeded"
-	TurnRuntimeCodexErrorResponseTooManyFailedTries TurnRuntimeCodexErrorKind = "ResponseTooManyFailedAttempts"
+	TurnRuntimeCodexErrorServerOverloaded            TurnRuntimeCodexErrorKind = "ServerOverloaded"
+	TurnRuntimeCodexErrorUsageLimitExceeded          TurnRuntimeCodexErrorKind = "UsageLimitExceeded"
+	TurnRuntimeCodexErrorResponseTooManyFailedTries  TurnRuntimeCodexErrorKind = "ResponseTooManyFailedAttempts"
 )
 
 type TurnRuntimeCodexErrorInfo struct {

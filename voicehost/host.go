@@ -18,12 +18,18 @@ const (
 	hostHandshakeDeadline             = 5 * time.Second
 	hostRuntimeInitializationDeadline = 30 * time.Second
 	hostTransportDeadline             = 20 * time.Second
+	hostDeviceDeadline                = 5 * time.Second
 	hostShutdownDeadline              = 5 * time.Second
 )
 
 // ErrVoiceHostExited indicates the helper process ended before or while a
 // protocol exchange completed.
 var ErrVoiceHostExited = errors.New("voice helper exited")
+
+// ErrVoiceNegotiationTimedOut indicates the helper reported that answer
+// negotiation exceeded its deadline. The helper has already retired and the
+// caller may negotiate again from a fresh process.
+var ErrVoiceNegotiationTimedOut = errors.New("voice negotiation timed out")
 
 // VoiceHost owns one helper process. Dropping or closing it terminates the
 // process. A successful handshake establishes compatibility only, not an active
@@ -65,7 +71,9 @@ func Connect(ctx context.Context, executable string, buildCommit string) (*Voice
 		return nil, fmt.Errorf("start voice helper: %w", err)
 	}
 	host := &VoiceHost{process: command, stdin: stdin, stdout: stdout}
-	requestContext, cancel := context.WithTimeout(ctx, hostHandshakeDeadline)
+	// Startup-linked native libraries load before the helper can acknowledge
+	// Hello, so the handshake shares the runtime initialization budget.
+	requestContext, cancel := context.WithTimeout(ctx, hostRuntimeInitializationDeadline)
 	defer cancel()
 	response, err := host.request(requestContext, NewHello(1, buildCommit))
 	if err != nil {
@@ -108,10 +116,55 @@ func (h *VoiceHost) ApplyAnswer(ctx context.Context, sdp SessionDescription) err
 	if err != nil {
 		return err
 	}
+	if response.Type == TypeTransportTimedOut {
+		// The helper has already retired; reap it so the caller can negotiate
+		// again from a clean process.
+		h.terminate()
+		return ErrVoiceNegotiationTimedOut
+	}
 	if response.Type != TypeTransportReady {
 		return fmt.Errorf("unexpected voice helper response %q", response.Type)
 	}
 	return nil
+}
+
+// OpenDevices opens the local microphone and speaker. It is only valid after a
+// successful answer, so nothing captures audio before the peer is ready.
+func (h *VoiceHost) OpenDevices(ctx context.Context) error {
+	response, err := h.exchange(ctx, NewSimpleMessage(TypeOpenDevices), hostDeviceDeadline)
+	if err != nil {
+		return err
+	}
+	if response.Type != TypeDevicesOpened {
+		return fmt.Errorf("unexpected voice helper response %q", response.Type)
+	}
+	return nil
+}
+
+// SetAudioControls applies an ordered privacy snapshot and returns only after
+// the helper has invalidated the previous capture and render generations.
+func (h *VoiceHost) SetAudioControls(ctx context.Context, controls AudioControls) error {
+	response, err := h.exchange(ctx, NewAudioControlsMessage(controls), hostDeviceDeadline)
+	if err != nil {
+		return err
+	}
+	if response.Type != TypeAudioControlsApplied {
+		return fmt.Errorf("unexpected voice helper response %q", response.Type)
+	}
+	return nil
+}
+
+// InspectAudio consumes the accumulated levels and detects helper loss even
+// when neither device is producing audio.
+func (h *VoiceHost) InspectAudio(ctx context.Context) (AudioState, error) {
+	response, err := h.exchange(ctx, NewSimpleMessage(TypeInspectAudio), hostDeviceDeadline)
+	if err != nil {
+		return AudioState{}, err
+	}
+	if response.Type != TypeAudioState || response.State == nil {
+		return AudioState{}, fmt.Errorf("unexpected voice helper response %q", response.Type)
+	}
+	return *response.State, nil
 }
 
 // InitializeRuntime initializes the packaged native runtime without opening
@@ -218,6 +271,11 @@ func (h *VoiceHost) wait(ctx context.Context) error {
 		}
 		var exitError *exec.ExitError
 		if errors.As(err, &exitError) && exitError.ExitCode() != 0 {
+			// The exit code is a same-build stage contract; report the phase
+			// instead of any untyped child output.
+			if stage, ok := HelperExitStageFromCode(exitError.ExitCode()); ok {
+				return fmt.Errorf("%w: exit code %d (%s)", ErrVoiceHostExited, exitError.ExitCode(), stage)
+			}
 			return fmt.Errorf("%w: %v", ErrVoiceHostExited, err)
 		}
 		return err

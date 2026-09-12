@@ -40,6 +40,7 @@ import (
 	pets "codex_go/tui/pets"
 	streamingpkg "codex_go/tui/streaming"
 	"codex_go/tui/styles"
+	"codex_go/voicehost"
 )
 
 const (
@@ -359,6 +360,55 @@ type ThreadEventMsg struct {
 type ThreadScopedEventMsg struct {
 	ThreadID string
 	Event    protocol.ThreadEvent
+}
+
+// VoiceNotificationMsg carries one decoded realtime notification into the
+// model's local voice session state.
+type VoiceNotificationMsg struct {
+	Notification chatwidget.VoiceNotification
+}
+
+// VoiceAnswerResultMsg reports the outcome of applying a remote answer.
+type VoiceAnswerResultMsg struct {
+	AttemptID uint64
+	Err       error
+}
+
+// VoiceSettingsMsg carries the supported voices and the saved preference.
+type VoiceSettingsMsg struct {
+	Voices  []string
+	Current string
+	Err     error
+}
+
+// VoiceSavedMsg reports a persisted voice preference.
+type VoiceSavedMsg struct {
+	Voice string
+	Err   error
+}
+
+// VoiceHelperAttachedMsg reports that the local helper started and owns the
+// offer, which the strip needs before it can call capture live.
+type VoiceHelperAttachedMsg struct {
+	AttemptID uint64
+}
+
+// VoiceSpeechResultMsg reports the outcome of asking the app-server to speak an
+// answer into the realtime conversation.
+type VoiceSpeechResultMsg struct {
+	ItemID string
+	Err    error
+}
+
+// voiceMeterTickMsg samples the local helper's audio levels while a voice
+// session runs.
+type voiceMeterTickMsg struct{}
+
+// voiceMeterTickCmd schedules the next level sample.
+func voiceMeterTickCmd() bubbletea.Cmd {
+	return bubbletea.Tick(chatwidget.VoiceMicrophoneMeterInterval, func(time.Time) bubbletea.Msg {
+		return voiceMeterTickMsg{}
+	})
 }
 
 type HookOutputEntry struct {
@@ -684,6 +734,23 @@ type Options struct {
 	OnAgentsOverviewDelete    AgentsOverviewDeleteFunc
 	OnStartAgentsDaemon       AgentsDaemonStartFunc
 	OnClipboardWrite          func(text string) error
+	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
+	// /voice unavailable for this runtime.
+	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
+	// OnVoiceApplyAnswer hands a remote answer to the local helper.
+	OnVoiceApplyAnswer func(threadID string, attemptID uint64, answer string) bubbletea.Cmd
+	// OnVoiceCloseHelper closes and reaps the local helper.
+	OnVoiceCloseHelper func()
+	// OnVoiceSetMicrophoneMuted applies the microphone state to the helper.
+	OnVoiceSetMicrophoneMuted func(muted bool) error
+	// OnVoicePeaks samples and clears the helper's audio levels.
+	OnVoicePeaks func() (uint16, uint16)
+	// OnVoiceSettings fetches the supported voices and the saved preference.
+	OnVoiceSettings func() bubbletea.Cmd
+	// OnVoiceSaveVoice persists a voice preference.
+	OnVoiceSaveVoice func(voice string) bubbletea.Cmd
+	// OnVoiceAppendSpeech speaks a delegated answer into the realtime session.
+	OnVoiceAppendSpeech func(itemID string, text string) bubbletea.Cmd
 	// OnClipboardWriteRich, when set, receives the rendered HTML fragment plus
 	// the plain Markdown for whole-response copies so rich-text destinations
 	// keep formatting (Rust #42847). Code/blockquote copies stay plain.
@@ -789,6 +856,46 @@ type Model struct {
 	Transcript TranscriptComponent
 	Composer   ComposerComponent
 	StatusBar  StatusBarComponent
+
+	// VoiceConversation is the local voice session state owned by this model.
+	VoiceConversation chatwidget.VoiceConversationState
+	// onVoiceConversationStart starts a voice session when the runtime layer has
+	// wired a packaged helper to this model.
+	onVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
+	// onVoiceApplyAnswer hands a remote answer to the local helper.
+	onVoiceApplyAnswer func(threadID string, attemptID uint64, answer string) bubbletea.Cmd
+	// onVoiceCloseHelper closes and reaps the local helper.
+	onVoiceCloseHelper func()
+	// onVoiceSetMicrophoneMuted applies the microphone state to the helper.
+	onVoiceSetMicrophoneMuted func(muted bool) error
+	// onVoicePeaks samples and clears the helper's audio levels.
+	onVoicePeaks func() (uint16, uint16)
+	// onVoiceSettings fetches the supported voices and the saved preference.
+	onVoiceSettings func() bubbletea.Cmd
+	// onVoiceSaveVoice persists a voice preference.
+	onVoiceSaveVoice func(voice string) bubbletea.Cmd
+	// onVoiceAppendSpeech speaks a delegated answer into the conversation.
+	onVoiceAppendSpeech func(itemID string, text string) bubbletea.Cmd
+	// voicePreference is the voice the user last selected.
+	voicePreference string
+	// renderedVoiceTranscripts tracks captions already written to the
+	// transcript, so a re-render cannot duplicate them.
+	renderedVoiceTranscripts map[chatwidget.VoiceTranscriptRecord]bool
+	// voiceAttemptCounter identifies each local startup attempt so late async
+	// results can be discarded.
+	voiceAttemptCounter uint64
+	// audioMeterHistory holds recent microphone/speaker intensities for the
+	// voice strip, newest last.
+	audioMeterHistory []voiceMeterSample
+	// speakerActiveUntil keeps the "speaking" activity visible after silence.
+	speakerActiveUntil time.Time
+	// voiceStripStartedAt anchors the strip's connecting spinner.
+	voiceStripStartedAt time.Time
+	// voiceStripActivity is the last rendered activity label.
+	voiceStripActivity string
+	// realtimeHelperAttached reports whether the local helper is running, which
+	// the strip treats as live capture while the session is still starting.
+	realtimeHelperAttached bool
 
 	// Animation
 	animEngine *anim.Engine
@@ -1338,6 +1445,14 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onImportExternalAgent:           options.OnImportExternalAgent,
 		pendingExternalAgentImports:     map[string]bool{},
 		onReadRolloutPath:               options.OnReadRolloutPath,
+		onVoiceConversationStart:        options.OnVoiceConversationStart,
+		onVoiceApplyAnswer:              options.OnVoiceApplyAnswer,
+		onVoiceCloseHelper:              options.OnVoiceCloseHelper,
+		onVoiceSetMicrophoneMuted:       options.OnVoiceSetMicrophoneMuted,
+		onVoicePeaks:                    options.OnVoicePeaks,
+		onVoiceSettings:                 options.OnVoiceSettings,
+		onVoiceSaveVoice:                options.OnVoiceSaveVoice,
+		onVoiceAppendSpeech:             options.OnVoiceAppendSpeech,
 		onReadHooks:                     options.OnReadHooks,
 		onWriteHookConfig:               options.OnWriteHookConfig,
 		onReadPlugins:                   options.OnReadPlugins,
@@ -1644,6 +1759,33 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			cmd = bubbletea.Batch(cmd, m.refreshAgentsOverviewCmd())
 		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
+	case VoiceNotificationMsg:
+		cmd := m.handleVoiceNotification(msg.Notification)
+		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
+	case VoiceAnswerResultMsg:
+		cmd := m.handleVoiceAnswerResult(msg)
+		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
+	case VoiceSettingsMsg:
+		m.applyVoiceSettings(msg)
+		return m, nil
+	case VoiceHelperAttachedMsg:
+		if m.VoiceConversation.Running() && msg.AttemptID == m.VoiceConversation.AttemptID {
+			m.realtimeHelperAttached = true
+			m.voiceStripStartedAt = m.currentTime()
+		}
+		return m, m.refreshStatusControlsCmd()
+	case VoiceSavedMsg:
+		m.applyVoiceSaved(msg)
+		return m, nil
+	case VoiceSpeechResultMsg:
+		m.handleVoiceSpeechResult(msg)
+		return m, m.refreshStatusControlsCmd()
+	case voiceMeterTickMsg:
+		if !m.VoiceConversation.Running() {
+			return m, nil
+		}
+		m.sampleVoicePeaks()
+		return m, voiceMeterTickCmd()
 	case HookRunMsg:
 		m.applyHookRun(msg)
 		return m, nil
@@ -1963,6 +2105,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			m.clearComposerPasteWindow()
 			return m, m.interruptRunningTask()
 		}
+		if m.keyMatches("chat", "toggle_voice_mute", keySpec) {
+			m.clearComposerPasteWindow()
+			m.toggleVoiceMicrophoneFromKey()
+			return m, m.refreshStatusControlsCmd()
+		}
 		if m.keyMatches("global", "open_external_editor", keySpec) {
 			m.clearComposerPasteWindow()
 			return m, m.openExternalEditor()
@@ -2088,6 +2235,9 @@ func (m *Model) View() string {
 	if strings.TrimSpace(m.notice) != "" {
 		sections = append(sections, m.footerStyle.Render(m.notice))
 	}
+	for _, line := range m.voiceStripLines(m.width) {
+		sections = append(sections, m.footerStyle.Render(fitTerminalLine(line, m.width)))
+	}
 	if sideLabel := strings.TrimSpace(m.sideContextLabel()); sideLabel != "" && sideLabel != strings.TrimSpace(m.notice) {
 		sections = append(sections, m.footerStyle.Render(fitTerminalLine(sideLabel, m.width)))
 	}
@@ -2099,6 +2249,94 @@ func (m *Model) View() string {
 	}
 	sections = append(sections, m.footerStyle.Render(fitTerminalLine(footerHelpText, m.width)))
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+// voiceStripState builds the composer strip for the current session. It reports
+// false when no strip should render.
+func (m *Model) voiceStripState() (bottompane.VoiceStripState, bool) {
+	if m == nil {
+		return bottompane.VoiceStripState{}, false
+	}
+	phase := m.VoiceConversation.Phase
+	if phase != chatwidget.VoicePhaseStarting && phase != chatwidget.VoicePhaseActive {
+		return bottompane.VoiceStripState{}, false
+	}
+	stripPhase := bottompane.VoiceStripConnecting
+	if phase == chatwidget.VoicePhaseActive {
+		stripPhase = bottompane.VoiceStripActive
+	}
+	state := bottompane.VoiceStripState{
+		Phase:           stripPhase,
+		MicrophoneLive:  m.voiceMicrophoneIsListening(),
+		MicrophoneMuted: m.VoiceConversation.MicrophoneMuted,
+		Activity:        m.voiceStripActivityLabel(),
+		MuteHint:        m.voiceMuteHint(),
+		StartedAt:       m.voiceStripStartedAt,
+		Animations:      true,
+	}
+	for _, sample := range m.audioMeterHistory {
+		state.MicrophoneHistory = append(state.MicrophoneHistory, sample.microphone)
+		state.SpeakerHistory = append(state.SpeakerHistory, sample.speaker)
+	}
+	return state, true
+}
+
+// voiceStripLines renders the composer strip, or nothing when inactive.
+func (m *Model) voiceStripLines(width int) []string {
+	state, ok := m.voiceStripState()
+	if !ok {
+		return nil
+	}
+	return bottompane.VoiceStripLines(width, state)
+}
+
+// voiceMicrophoneIsListening mirrors the Rust check: capture counts as live
+// once the session is active, or while starting with a helper attached.
+func (m *Model) voiceMicrophoneIsListening() bool {
+	if m == nil || m.VoiceConversation.MicrophoneMuted {
+		return false
+	}
+	if strings.TrimSpace(m.VoiceConversation.ThreadID) == "" ||
+		m.VoiceConversation.ThreadID != m.State.ThreadID {
+		return false
+	}
+	switch m.VoiceConversation.Phase {
+	case chatwidget.VoicePhaseActive:
+		return true
+	case chatwidget.VoicePhaseStarting:
+		return m.realtimeHelperAttached
+	default:
+		return false
+	}
+}
+
+// voiceStripActivityLabel selects the activity shown beside the marker.
+func (m *Model) voiceStripActivityLabel() string {
+	if m == nil {
+		return ""
+	}
+	switch {
+	case m.VoiceConversation.Phase == chatwidget.VoicePhaseStarting:
+		return "connecting"
+	case m.VoiceConversation.MicrophoneMuted:
+		return "muted"
+	case m.VoiceConversation.SpeakerPeak > 0 || m.currentTime().Before(m.speakerActiveUntil):
+		return "speaking"
+	default:
+		return "listening"
+	}
+}
+
+// voiceMuteHint renders the configured mute binding, when one exists.
+func (m *Model) voiceMuteHint() string {
+	if m == nil {
+		return ""
+	}
+	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "chat", "toggle_voice_mute")
+	if len(bindings) == 0 {
+		return ""
+	}
+	return bindings[0]
 }
 
 func (m *Model) regionChromeEnabled() bool {
@@ -2970,6 +3208,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.Transcript.lastTurnError = ""
 		m.clearRetryActivity()
 		m.clearCompactionActivity()
+		m.VoiceConversation.ClearVoiceDelegatedTurn()
 	case "turn.failed", "error":
 		message := "Unknown error"
 		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
@@ -3062,6 +3301,12 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	}
 	switch item.Type {
 	case "user_message", "userMessage":
+		// A realtime delegation prompt marks the active turn as speakable, so
+		// its final answer is voiced into the conversation instead of only
+		// rendered.
+		if _, ok := chatwidget.RealtimeDelegationInput(firstNonEmpty(item.Text, item.Message)); ok {
+			m.VoiceConversation.MarkVoiceDelegatedTurn()
+		}
 		if len(m.pendingSteers) > 0 && m.pendingSteers[0].ID == strings.TrimSpace(item.ID) {
 			m.commitPendingSteers(1)
 		}
@@ -3077,6 +3322,11 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		} else if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {
 			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
 		} else {
+			if speech, ok := m.VoiceConversation.TakeVoiceSpeech(item.ID, item.Text); ok {
+				// The spoken answer arrives as a voice caption, so it is not
+				// rendered inline; a failed delivery restores it.
+				return m.deliverVoiceSpeech(item.ID, speech)
+			}
 			m.mergeAssistantFinal(item.Text)
 		}
 	case "plan":
@@ -4876,6 +5126,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandMemoryDrop, codextui.CommandMemoryUpdate:
 		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{invocation.Name, "", "Memory maintenance requires app-server support."}))
 		m.notice = "Memory maintenance"
+	case codextui.CommandVoice:
+		return m.applyVoiceCommand(invocation.Args)
 	case codextui.CommandLogout:
 		return m.applyLogoutCommand()
 	default:
@@ -4883,6 +5135,334 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	}
 	m.refreshTranscript()
 	return nil
+}
+
+// applyVoiceCommand handles /voice for the model's local voice session. A
+// session starts only when the runtime layer has wired a packaged helper; every
+// other form reports a bounded result instead of silently doing nothing.
+func (m *Model) applyVoiceCommand(args string) bubbletea.Cmd {
+	decision := chatwidget.ParseVoiceCommand(args)
+	switch decision.Kind {
+	case chatwidget.VoiceCommandUsage:
+		m.recordVoiceCommandResult(decision.Message)
+		return nil
+	case chatwidget.VoiceCommandMute:
+		message := "Microphone unmuted."
+		if m.VoiceConversation.ToggleVoiceMicrophone() {
+			message = "Microphone muted."
+		}
+		// The remembered state also applies to the next session, so a failure
+		// here is reported without discarding the user's choice.
+		if err := m.applyVoiceMicrophoneMute(); err != nil {
+			message = "Microphone state could not be applied: " + err.Error()
+		}
+		m.recordVoiceCommandResult(message)
+		return nil
+	case chatwidget.VoiceCommandSettings:
+		return m.requestVoiceSettings()
+	case chatwidget.VoiceCommandStop:
+		if m.VoiceConversation.Inactive() {
+			m.recordVoiceCommandResult("Voice conversations are not running.")
+			return nil
+		}
+		m.VoiceConversation.BeginVoiceStop()
+		m.recordVoiceCommandResult("Stopping voice conversation.")
+		m.closeVoiceHelper()
+		return nil
+	}
+
+	if !m.VoiceConversation.Inactive() {
+		m.VoiceConversation.BeginVoiceStop()
+		m.recordVoiceCommandResult("Stopping voice conversation.")
+		m.closeVoiceHelper()
+		return nil
+	}
+	availability := chatwidget.CheckVoiceCommandAvailability(chatwidget.VoiceCommandContext{
+		Phase:             m.VoiceConversation.Phase,
+		FeatureEnabled:    true,
+		PlatformSupported: voicehost.IsSupported(),
+		ThreadID:          m.State.ThreadID,
+		SideConversation:  m.inSideConversation(),
+	})
+	if !availability.Allowed {
+		m.recordVoiceCommandResult(availability.Message)
+		return nil
+	}
+	if m.onVoiceConversationStart == nil {
+		m.recordVoiceCommandResult("Voice conversations are unavailable in this build: no packaged voice helper is wired.")
+		return nil
+	}
+	m.voiceAttemptCounter++
+	m.VoiceConversation.BeginVoiceConversation(m.State.ThreadID, m.voiceAttemptCounter)
+	m.recordVoiceCommandResult("Starting voice conversation.")
+	return m.onVoiceConversationStart(m.VoiceConversation.ThreadID, m.VoiceConversation.AttemptID)
+}
+
+// recordVoiceCommandResult surfaces a bounded /voice result to the user.
+func (m *Model) recordVoiceCommandResult(message string) {
+	m.notice = message
+	m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{"/voice", "", message}))
+}
+
+// requestVoiceSettings fetches the supported voices and the saved preference.
+func (m *Model) requestVoiceSettings() bubbletea.Cmd {
+	if m == nil || m.onVoiceSettings == nil {
+		m.recordVoiceCommandResult("Voice settings are unavailable in this runtime.")
+		return nil
+	}
+	return m.onVoiceSettings()
+}
+
+// applyVoiceSettings opens the picker once the voices are known.
+func (m *Model) applyVoiceSettings(msg VoiceSettingsMsg) {
+	if m == nil {
+		return
+	}
+	if msg.Err != nil {
+		m.recordVoiceCommandResult("Failed to read voice settings: " + msg.Err.Error())
+		return
+	}
+	m.voicePreference = strings.TrimSpace(msg.Current)
+	m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewVoicePickerView(msg.Current, msg.Voices))
+}
+
+// applyVoicePickerOption persists the selected voice.
+func (m *Model) applyVoicePickerOption(optionID string) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	voice, ok := chatwidget.VoiceFromPickerOption(optionID)
+	if !ok {
+		m.notice = "Voice selection failed: unknown option"
+		return nil
+	}
+	if m.onVoiceSaveVoice == nil {
+		m.notice = "Voice settings are unavailable in this runtime."
+		return nil
+	}
+	return m.onVoiceSaveVoice(voice)
+}
+
+// applyVoiceSaved records a persisted voice preference.
+func (m *Model) applyVoiceSaved(msg VoiceSavedMsg) {
+	if m == nil {
+		return
+	}
+	if msg.Err != nil {
+		m.recordVoiceCommandResult("Failed to save voice: " + msg.Err.Error())
+		return
+	}
+	m.voicePreference = strings.TrimSpace(msg.Voice)
+	m.recordVoiceCommandResult("Voice set to " + m.voicePreference + ".")
+}
+
+// handleVoiceNotification folds one realtime notification into the local voice
+// session and applies the resulting action.
+func (m *Model) handleVoiceNotification(notification chatwidget.VoiceNotification) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	if !m.VoiceConversation.Running() {
+		// Late transcript events can still arrive after the session ended.
+		m.VoiceConversation.ApplyVoiceNotification(notification)
+		return nil
+	}
+	effect := m.VoiceConversation.ApplyVoiceNotification(notification)
+	if !effect.Handled {
+		return nil
+	}
+	if effect.Message != "" {
+		m.recordVoiceCommandResult(effect.Message)
+	}
+	var cmd bubbletea.Cmd
+	if effect.PublishSDP != "" {
+		cmd = m.publishVoiceAnswer(effect.PublishSDP)
+	}
+	if effect.CloseHelper {
+		m.closeVoiceHelper()
+	}
+	// Rendering is deduplicated, so a completed caption appears exactly once
+	// whether it arrived live or while the session was stopping.
+	m.refreshVoiceTranscript()
+	return cmd
+}
+
+// publishVoiceAnswer hands the remote answer to the local helper. Without a
+// wired helper the answer is recorded as unapplied rather than silently kept.
+func (m *Model) publishVoiceAnswer(answer string) bubbletea.Cmd {
+	if m.onVoiceApplyAnswer == nil {
+		m.recordVoiceCommandResult("Voice answer received but no local helper is wired.")
+		return nil
+	}
+	// Restore the remembered microphone state before audio can flow, matching
+	// the Rust restore that precedes negotiation completion.
+	_ = m.applyVoiceMicrophoneMute()
+	return m.onVoiceApplyAnswer(m.VoiceConversation.ThreadID, m.VoiceConversation.AttemptID, answer)
+}
+
+// applyVoiceMicrophoneMute pushes the remembered microphone state to the
+// running helper. Without a helper or a wired runtime it is a no-op.
+func (m *Model) applyVoiceMicrophoneMute() error {
+	if m.onVoiceSetMicrophoneMuted == nil || !m.VoiceConversation.Running() {
+		return nil
+	}
+	return m.onVoiceSetMicrophoneMuted(m.VoiceConversation.MicrophoneMuted)
+}
+
+// toggleVoiceMicrophoneFromKey mirrors the Rust shortcut: it acts only on a
+// running conversation and otherwise leaves the state untouched.
+func (m *Model) toggleVoiceMicrophoneFromKey() {
+	if m == nil || m.VoiceConversation.Inactive() {
+		return
+	}
+	message := "Microphone unmuted."
+	if m.VoiceConversation.ToggleVoiceMicrophone() {
+		message = "Microphone muted."
+	}
+	if err := m.applyVoiceMicrophoneMute(); err != nil {
+		message = "Microphone state could not be applied: " + err.Error()
+	}
+	m.notice = message
+}
+
+// handleVoiceAnswerResult records the outcome of applying a remote answer.
+func (m *Model) handleVoiceAnswerResult(msg VoiceAnswerResultMsg) bubbletea.Cmd {
+	if m == nil || !m.VoiceConversation.Running() || msg.AttemptID != m.VoiceConversation.AttemptID {
+		return nil
+	}
+	if msg.Err != nil {
+		if msg.Err == voicehost.ConnectionNegotiationTimedOut {
+			outcome := m.VoiceConversation.FailVoiceStartup(true, false)
+			m.recordVoiceCommandResult(outcome.Message)
+		} else {
+			m.VoiceConversation.RecordVoiceFailure()
+			m.VoiceConversation.BeginVoiceStop()
+			m.recordVoiceCommandResult("Voice connection failed: " + msg.Err.Error())
+		}
+		m.closeVoiceHelper()
+		return nil
+	}
+	m.VoiceConversation.MarkVoiceWebRTCConnected()
+	if m.VoiceConversation.Phase != chatwidget.VoicePhaseActive {
+		return nil
+	}
+	// Levels are sampled only while the session is live.
+	m.sampleVoicePeaks()
+	return voiceMeterTickCmd()
+}
+
+// sampleVoicePeaks refreshes the rendered meters from the local helper.
+func (m *Model) sampleVoicePeaks() {
+	if m == nil || m.onVoicePeaks == nil {
+		return
+	}
+	microphone, speaker := m.onVoicePeaks()
+	m.VoiceConversation.SetVoiceAudioState(microphone, speaker)
+	m.pushVoiceMeterSample(microphone, speaker)
+}
+
+// voiceMeterSample is one rendered meter frame.
+type voiceMeterSample struct {
+	microphone uint8
+	speaker    uint8
+}
+
+// pushVoiceMeterSample records one intensity pair for the voice strip. A quiet
+// channel is released immediately instead of waiting for old peaks to scroll
+// out, matching the Rust sampler.
+func (m *Model) pushVoiceMeterSample(microphonePeak uint16, speakerPeak uint16) {
+	if m == nil {
+		return
+	}
+	if m.VoiceConversation.MicrophoneMuted {
+		microphonePeak = 0
+	}
+	microphone := chatwidget.VoiceMeterIntensity(microphonePeak)
+	speaker := chatwidget.VoiceMeterIntensity(speakerPeak)
+	for index := range m.audioMeterHistory {
+		if microphone == 0 {
+			m.audioMeterHistory[index].microphone = 0
+		}
+		if speaker == 0 {
+			m.audioMeterHistory[index].speaker = 0
+		}
+	}
+	if len(m.audioMeterHistory) >= chatwidget.VoiceMeterHistoryCapacity {
+		m.audioMeterHistory = m.audioMeterHistory[1:]
+	}
+	m.audioMeterHistory = append(m.audioMeterHistory, voiceMeterSample{microphone: microphone, speaker: speaker})
+	if speaker > 0 {
+		m.speakerActiveUntil = m.currentTime().Add(chatwidget.VoiceSpeakerActivityHold)
+	}
+}
+
+// closeVoiceHelper retires the local helper and clears the streamed caption.
+func (m *Model) closeVoiceHelper() {
+	m.VoiceConversation.FinishVoiceLiveTranscripts()
+	m.refreshVoiceTranscript()
+	m.realtimeHelperAttached = false
+	// Answers that never reached the conversation must still be readable, so
+	// they are rendered normally instead of being dropped.
+	m.restoreUndeliveredVoiceSpeech()
+	if m.onVoiceCloseHelper != nil {
+		m.onVoiceCloseHelper()
+	}
+}
+
+// deliverVoiceSpeech sends a delegated answer into the realtime conversation.
+// Without a speech transport the answer is rendered normally, which keeps it
+// visible rather than silently dropped.
+func (m *Model) deliverVoiceSpeech(itemID string, text string) bubbletea.Cmd {
+	if m.onVoiceAppendSpeech == nil {
+		m.VoiceConversation.AcceptVoiceSpeech(itemID)
+		m.mergeAssistantFinal(text)
+		return nil
+	}
+	return m.onVoiceAppendSpeech(itemID, text)
+}
+
+// handleVoiceSpeechResult records the delivery outcome and restores an answer
+// whose delivery failed.
+func (m *Model) handleVoiceSpeechResult(msg VoiceSpeechResultMsg) {
+	if m == nil {
+		return
+	}
+	if msg.Err == nil {
+		m.VoiceConversation.AcceptVoiceSpeech(msg.ItemID)
+		return
+	}
+	text, ok := m.VoiceConversation.RestoreVoiceSpeech(msg.ItemID)
+	if ok {
+		m.mergeAssistantFinal(text)
+	}
+	m.recordVoiceCommandResult("The spoken answer could not be delivered: " + msg.Err.Error())
+	m.refreshTranscript()
+}
+
+// restoreUndeliveredVoiceSpeech renders every answer that was queued for speech
+// but never delivered.
+func (m *Model) restoreUndeliveredVoiceSpeech() {
+	if m == nil {
+		return
+	}
+	for _, pending := range m.VoiceConversation.TakeUndeliveredVoiceSpeech() {
+		m.mergeAssistantFinal(pending.Text)
+	}
+}
+
+// refreshVoiceTranscript renders every retained caption that has not been shown
+// yet, so a stopped session still leaves its transcript behind.
+func (m *Model) refreshVoiceTranscript() {
+	if m.renderedVoiceTranscripts == nil {
+		m.renderedVoiceTranscripts = map[chatwidget.VoiceTranscriptRecord]bool{}
+	}
+	for _, record := range m.VoiceConversation.Accepted {
+		if m.renderedVoiceTranscripts[record] {
+			continue
+		}
+		m.renderedVoiceTranscripts[record] = true
+		m.applyHistoryCell(historycell.NewSpokenHistoryCell(string(record.Role), record.Text))
+	}
 }
 
 func (m *Model) applyModelSetting(args string) bubbletea.Cmd {
@@ -5181,12 +5761,6 @@ func (m *Model) copyLastAgentResponse() {
 	text, ok := chatwidget.LastAssistantMarkdown(m.State.Messages)
 	if !ok {
 		m.notice = "No agent response to copy"
-		m.addErrorHistoryMessage(m.notice)
-		m.refreshTranscript()
-		return
-	}
-	if m.clipboardWrite == nil {
-		m.notice = "Copy failed: clipboard is unavailable"
 		m.addErrorHistoryMessage(m.notice)
 		m.refreshTranscript()
 		return

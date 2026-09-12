@@ -31,8 +31,18 @@ const (
 	TypeOffer             MessageType = "offer"
 	TypeApplyAnswer       MessageType = "applyAnswer"
 	TypeTransportReady    MessageType = "transportReady"
-	TypeClose             MessageType = "close"
-	TypeClosed            MessageType = "closed"
+	// TypeTransportTimedOut reports that answer negotiation exceeded its
+	// deadline. The helper exits after sending it and the parent reaps the
+	// process before considering a fresh negotiation.
+	TypeTransportTimedOut    MessageType = "transportTimedOut"
+	TypeOpenDevices          MessageType = "openDevices"
+	TypeDevicesOpened        MessageType = "devicesOpened"
+	TypeSetAudioControls     MessageType = "setAudioControls"
+	TypeAudioControlsApplied MessageType = "audioControlsApplied"
+	TypeInspectAudio         MessageType = "inspectAudio"
+	TypeAudioState           MessageType = "audioState"
+	TypeClose                MessageType = "close"
+	TypeClosed               MessageType = "closed"
 )
 
 var (
@@ -97,6 +107,103 @@ type Message struct {
 	Protocol    *uint32             `json:"protocol,omitempty"`
 	BuildCommit string              `json:"buildCommit,omitempty"`
 	SDP         *SessionDescription `json:"sdp,omitempty"`
+	Controls    *AudioControls      `json:"controls,omitempty"`
+	State       *AudioState         `json:"state,omitempty"`
+}
+
+// AudioControls carries the ordered privacy transitions for an active session.
+// Both fields are always present on the wire, matching the Rust control struct
+// that denies unknown fields and applies no defaults.
+type AudioControls struct {
+	MicrophoneMuted   bool `json:"microphoneMuted"`
+	SpeakerSuppressed bool `json:"speakerSuppressed"`
+}
+
+// UnmarshalJSON rejects unknown or missing control fields.
+func (c *AudioControls) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
+	}
+	if fields == nil {
+		return fmt.Errorf("%w: controls object is required", ErrInvalidMessage)
+	}
+	for key := range fields {
+		switch key {
+		case "microphoneMuted", "speakerSuppressed":
+		default:
+			return fmt.Errorf("%w: unknown field %q", ErrInvalidMessage, key)
+		}
+	}
+	microphoneMuted, err := requireBoolField(fields, "microphoneMuted")
+	if err != nil {
+		return err
+	}
+	speakerSuppressed, err := requireBoolField(fields, "speakerSuppressed")
+	if err != nil {
+		return err
+	}
+	*c = AudioControls{MicrophoneMuted: microphoneMuted, SpeakerSuppressed: speakerSuppressed}
+	return nil
+}
+
+// AudioState reports accumulated levels only; it never carries audio. Peaks are
+// cleared by the reader that consumes them.
+type AudioState struct {
+	MicrophonePeak uint16 `json:"microphonePeak"`
+	SpeakerPeak    uint16 `json:"speakerPeak"`
+}
+
+// UnmarshalJSON rejects unknown or missing level fields.
+func (s *AudioState) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
+	}
+	if fields == nil {
+		return fmt.Errorf("%w: state object is required", ErrInvalidMessage)
+	}
+	for key := range fields {
+		switch key {
+		case "microphonePeak", "speakerPeak":
+		default:
+			return fmt.Errorf("%w: unknown field %q", ErrInvalidMessage, key)
+		}
+	}
+	microphonePeak, err := requireUint16Field(fields, "microphonePeak")
+	if err != nil {
+		return err
+	}
+	speakerPeak, err := requireUint16Field(fields, "speakerPeak")
+	if err != nil {
+		return err
+	}
+	*s = AudioState{MicrophonePeak: microphonePeak, SpeakerPeak: speakerPeak}
+	return nil
+}
+
+func requireBoolField(fields map[string]json.RawMessage, name string) (bool, error) {
+	raw, ok := fields[name]
+	if !ok {
+		return false, fmt.Errorf("%w: missing field %s", ErrInvalidMessage, name)
+	}
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, fmt.Errorf("%w: field %s must be a boolean", ErrInvalidMessage, name)
+	}
+	return value, nil
+}
+
+func requireUint16Field(fields map[string]json.RawMessage, name string) (uint16, error) {
+	raw, ok := fields[name]
+	if !ok {
+		return 0, fmt.Errorf("%w: missing field %s", ErrInvalidMessage, name)
+	}
+	var value uint16
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, fmt.Errorf("%w: field %s must be an unsigned 16-bit integer", ErrInvalidMessage, name)
+	}
+	return value, nil
 }
 
 // NewHello returns a hello message carrying the protocol version and exact
@@ -115,18 +222,29 @@ func NewSDPMessage(messageType MessageType, sdp SessionDescription) Message {
 	return Message{Type: messageType, SDP: &sdp}
 }
 
+// NewAudioControlsMessage returns a message carrying ordered privacy
+// transitions.
+func NewAudioControlsMessage(controls AudioControls) Message {
+	return Message{Type: TypeSetAudioControls, Controls: &controls}
+}
+
+// NewAudioStateMessage returns a message carrying accumulated audio levels.
+func NewAudioStateMessage(state AudioState) Message {
+	return Message{Type: TypeAudioState, State: &state}
+}
+
 // UnmarshalJSON rejects unknown fields and validates each message variant.
 func (m *Message) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
 	}
 	if fields == nil {
 		return fmt.Errorf("%w: message is required", ErrInvalidMessage)
 	}
 	for key := range fields {
 		switch key {
-		case "type", "protocol", "buildCommit", "sdp":
+		case "type", "protocol", "buildCommit", "sdp", "controls", "state":
 		default:
 			return fmt.Errorf("%w: unknown field %q", ErrInvalidMessage, key)
 		}
@@ -137,7 +255,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	}
 	var messageType MessageType
 	if err := json.Unmarshal(typeRaw, &messageType); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
 	}
 	message := Message{Type: messageType}
 	switch messageType {
@@ -147,7 +265,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 			BuildCommit string  `json:"buildCommit"`
 		}
 		if err := json.Unmarshal(data, &wire); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
 		}
 		if wire.Protocol == nil {
 			return fmt.Errorf("%w: missing field protocol", ErrInvalidMessage)
@@ -159,13 +277,37 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 			SDP *SessionDescription `json:"sdp"`
 		}
 		if err := json.Unmarshal(data, &wire); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
 		}
 		if wire.SDP == nil {
 			return fmt.Errorf("%w: missing field sdp", ErrInvalidMessage)
 		}
 		message.SDP = wire.SDP
-	case TypeReady, TypeInitializeRuntime, TypeRuntimeReady, TypeStartTransport, TypeTransportReady, TypeClose, TypeClosed:
+	case TypeSetAudioControls:
+		var wire struct {
+			Controls *AudioControls `json:"controls"`
+		}
+		if err := json.Unmarshal(data, &wire); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
+		}
+		if wire.Controls == nil {
+			return fmt.Errorf("%w: missing field controls", ErrInvalidMessage)
+		}
+		message.Controls = wire.Controls
+	case TypeAudioState:
+		var wire struct {
+			State *AudioState `json:"state"`
+		}
+		if err := json.Unmarshal(data, &wire); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
+		}
+		if wire.State == nil {
+			return fmt.Errorf("%w: missing field state", ErrInvalidMessage)
+		}
+		message.State = wire.State
+	case TypeReady, TypeInitializeRuntime, TypeRuntimeReady, TypeStartTransport,
+		TypeTransportReady, TypeTransportTimedOut, TypeOpenDevices, TypeDevicesOpened,
+		TypeAudioControlsApplied, TypeInspectAudio, TypeClose, TypeClosed:
 	default:
 		return fmt.Errorf("%w: unknown message type %q", ErrInvalidMessage, messageType)
 	}
@@ -193,7 +335,17 @@ func (m Message) Validate() error {
 		if m.SDP == nil || m.SDP.sdp == "" {
 			return fmt.Errorf("%w: sdp is required", ErrInvalidMessage)
 		}
-	case TypeReady, TypeInitializeRuntime, TypeRuntimeReady, TypeStartTransport, TypeTransportReady, TypeClose, TypeClosed:
+	case TypeSetAudioControls:
+		if m.Controls == nil {
+			return fmt.Errorf("%w: controls are required", ErrInvalidMessage)
+		}
+	case TypeAudioState:
+		if m.State == nil {
+			return fmt.Errorf("%w: state is required", ErrInvalidMessage)
+		}
+	case TypeReady, TypeInitializeRuntime, TypeRuntimeReady, TypeStartTransport,
+		TypeTransportReady, TypeTransportTimedOut, TypeOpenDevices, TypeDevicesOpened,
+		TypeAudioControlsApplied, TypeInspectAudio, TypeClose, TypeClosed:
 	default:
 		return fmt.Errorf("%w: unknown message type %q", ErrInvalidMessage, m.Type)
 	}
@@ -217,6 +369,16 @@ func (m Message) MarshalJSON() ([]byte, error) {
 			Type MessageType         `json:"type"`
 			SDP  *SessionDescription `json:"sdp"`
 		}{Type: m.Type, SDP: m.SDP})
+	case TypeSetAudioControls:
+		return json.Marshal(struct {
+			Type     MessageType    `json:"type"`
+			Controls *AudioControls `json:"controls"`
+		}{Type: m.Type, Controls: m.Controls})
+	case TypeAudioState:
+		return json.Marshal(struct {
+			Type  MessageType `json:"type"`
+			State *AudioState `json:"state"`
+		}{Type: m.Type, State: m.State})
 	default:
 		return json.Marshal(struct {
 			Type MessageType `json:"type"`

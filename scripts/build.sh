@@ -110,6 +110,36 @@ set -- build -trimpath -buildvcs=false -ldflags "-s -w -X codex_go/doctor.buildV
 set -- "$@" ./cmd/codex-code-mode-host
 (cd "$ROOT" && go "$@")
 echo "==> Built $HOST_OUTPUT"
+
+# The voice helper ships inside the package's private voice runtime. It is
+# stamped with the same identity as the CLI so the same-build handshake holds.
+VOICE_BIN_DIR=$(dirname -- "$OUTPUT")/codex-resources/voice/bin
+mkdir -p "$VOICE_BIN_DIR"
+VOICE_OUTPUT="$VOICE_BIN_DIR/codex-voice-host$EXT"
+set -- build -trimpath -buildvcs=false -ldflags "-s -w -X main.buildCommit=$VERSION" -o "$VOICE_OUTPUT"
+[ "$RACE" -eq 1 ] && set -- "$@" -race
+[ "$REBUILD" -eq 1 ] && set -- "$@" -a
+set -- "$@" ./cmd/codex-voice-host
+(cd "$ROOT" && go "$@")
+echo "==> Built $VOICE_OUTPUT"
+
+# The packaged codec ships beside the helper. It is prepared per platform by
+# third_party/voice/prepare_opus.py; a build without it produces a helper that
+# runs the control plane but carries no audio.
+case "$TARGET_GOOS" in
+  windows) VOICE_LIBRARY=libopus.dll ;;
+  darwin) VOICE_LIBRARY=libopus.0.dylib ;;
+  *) VOICE_LIBRARY=libopus.so.0 ;;
+esac
+PREPARED_CODEC="$ROOT/third_party/voice/build/$TARGET_GOOS-$TARGET_GOARCH/lib/$VOICE_LIBRARY"
+if [ -f "$PREPARED_CODEC" ]; then
+  VOICE_LIB_DIR=$(dirname -- "$OUTPUT")/codex-resources/voice/lib
+  mkdir -p "$VOICE_LIB_DIR"
+  cp -f "$PREPARED_CODEC" "$VOICE_LIB_DIR/$VOICE_LIBRARY"
+  echo "==> Staged voice codec $VOICE_LIBRARY"
+else
+  echo "==> WARNING: voice codec for $TARGET_GOOS/$TARGET_GOARCH is not prepared; run third_party/voice/prepare_opus.py --platform $TARGET_GOOS-$TARGET_GOARCH"
+fi
 if [ "$TARGET_GOOS/$TARGET_GOARCH" = "$HOST_GOOS/$HOST_GOARCH" ]; then
   "$OUTPUT" --version
 fi

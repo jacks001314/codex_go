@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -24,6 +25,12 @@ func main() {
 		os.Exit(2)
 	}
 	if err := voicehost.RunHost(context.Background(), os.Stdin, os.Stdout, buildCommit); err != nil {
+		var exitErr *voicehost.HelperExitError
+		if errors.As(err, &exitErr) {
+			// The stage code is a same-build contract with the parent, which
+			// classifies the failure without reading child output.
+			os.Exit(exitErr.Stage.Code())
+		}
 		os.Exit(1)
 	}
 }

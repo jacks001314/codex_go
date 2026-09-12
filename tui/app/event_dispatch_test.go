@@ -84,9 +84,9 @@ func TestDescribeExitReasonDistinguishesStates(t *testing.T) {
 
 func TestAppExitInfoFormatsDisconnectGuidance(t *testing.T) {
 	info := &AppExitInfo{
-		ThreadID:    "thread-1",
-		ExitReason:  ExitReasonTurnInterrupted,
-		ResumeHint:  "resume: codex resume thread-1",
+		ThreadID:   "thread-1",
+		ExitReason: ExitReasonTurnInterrupted,
+		ResumeHint: "resume: codex resume thread-1",
 		Disconnect: &DisconnectInfo{Command: []string{"codex", "--remote", "wss://host:443"}, StopHint: "press esc"},
 	}
 	lines := info.FormatExitMessages()

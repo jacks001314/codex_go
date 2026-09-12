@@ -2,6 +2,7 @@ package voicehost
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -27,11 +28,16 @@ type MiniAudioRuntime struct {
 	context *malgo.AllocatedContext
 	started bool
 	devices map[*malgo.Device]struct{}
+	// pipeline owns the bounded device buffers and the ordered mute epochs.
+	pipeline *pcmPipeline
 }
 
 // NewMiniAudioRuntime returns an inactive miniaudio runtime.
 func NewMiniAudioRuntime() *MiniAudioRuntime {
-	return &MiniAudioRuntime{devices: map[*malgo.Device]struct{}{}}
+	return &MiniAudioRuntime{
+		devices:  map[*malgo.Device]struct{}{},
+		pipeline: newPCMPipeline(),
+	}
 }
 
 // Name returns the runtime's stable identifier.
@@ -45,16 +51,19 @@ func (r *MiniAudioRuntime) Start(ctx context.Context, config SessionConfig) erro
 		ctx = context.Background()
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.started {
+		r.mu.Unlock()
 		return nil
 	}
 	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
+		r.mu.Unlock()
 		return fmt.Errorf("initialize miniaudio: %w", err)
 	}
 	r.context = context
 	r.started = true
+	r.mu.Unlock()
+	r.resetPipeline()
 	return nil
 }
 
@@ -82,7 +91,17 @@ func (r *MiniAudioRuntime) Stop() error {
 		_ = context.Uninit()
 		context.Free()
 	}
+	r.resetPipeline()
 	return nil
+}
+
+// resetPipeline starts a fresh bounded buffer set so a later session cannot
+// observe the previous session's audio or mute epochs.
+func (r *MiniAudioRuntime) resetPipeline() {
+	if r == nil {
+		return
+	}
+	r.pipeline = newPCMPipeline()
 }
 
 // ListInputDevices returns capture devices visible to miniaudio.
@@ -103,6 +122,74 @@ func (r *MiniAudioRuntime) OpenInput(ctx context.Context, deviceID string) (Audi
 // OpenOutput opens a playback device and returns a PCM sink.
 func (r *MiniAudioRuntime) OpenOutput(ctx context.Context, deviceID string) (AudioSink, error) {
 	return r.openSink(ctx, malgo.Playback, deviceID)
+}
+
+// SetControls applies the ordered privacy snapshot by advancing the pipeline's
+// mute epochs. Capture stops producing audible blocks while the microphone is
+// muted; playback discards writes while the speaker is suppressed.
+func (r *MiniAudioRuntime) SetControls(controls AudioControls) error {
+	if r == nil || r.pipeline == nil {
+		return errors.New("miniaudio runtime is required")
+	}
+	r.pipeline.setControls(controls)
+	return nil
+}
+
+// AudioState returns the accumulated peaks and clears them, matching the Rust
+// helper's take-on-read behaviour.
+func (r *MiniAudioRuntime) AudioState() AudioState {
+	if r == nil || r.pipeline == nil {
+		return AudioState{}
+	}
+	return r.pipeline.takeState()
+}
+
+// pcmPeak returns the normalized peak of signed 16-bit little-endian samples as
+// an unsigned 16-bit level. The Rust helper derives the same scale from f32
+// samples, so the reported magnitude stays comparable.
+func pcmPeak(data []byte) uint16 {
+	return uint16(pcmS16Peak(s16leSamples(data)))
+}
+
+// s16leSamples decodes signed 16-bit little-endian bytes, ignoring an odd
+// trailing byte.
+func s16leSamples(data []byte) []int16 {
+	count := len(data) / 2
+	if count == 0 {
+		return nil
+	}
+	samples := make([]int16, count)
+	for index := 0; index < count; index++ {
+		samples[index] = int16(binary.LittleEndian.Uint16(data[index*2:]))
+	}
+	return samples
+}
+
+// samplesS16LE encodes samples as signed 16-bit little-endian bytes.
+func samplesS16LE(samples []int16) []byte {
+	data := make([]byte, len(samples)*2)
+	for index, sample := range samples {
+		binary.LittleEndian.PutUint16(data[index*2:], uint16(sample))
+	}
+	return data
+}
+
+// renderPlayback fills one device output callback from the playback queue.
+// Absent audio renders as silence so the device clock keeps advancing.
+func renderPlayback(output []byte, pipeline *pcmPipeline) {
+	if len(output) < 2 {
+		clear(output)
+		return
+	}
+	var state audioBlock
+	for offset := 0; offset+1 < len(output); offset += 2 {
+		sample, ok := pipeline.nextPlaybackSample(&state)
+		if !ok {
+			clear(output[offset:])
+			return
+		}
+		binary.LittleEndian.PutUint16(output[offset:], uint16(sample))
+	}
 }
 
 func (r *MiniAudioRuntime) listDevices(ctx context.Context, kind malgo.DeviceType) ([]Device, error) {
@@ -135,7 +222,7 @@ func (r *MiniAudioRuntime) openSource(ctx context.Context, kind malgo.DeviceType
 	if err != nil {
 		return nil, err
 	}
-	return &miniaudioSource{device: device, buffer: buffer, format: format, runtime: r}, nil
+	return &miniaudioSource{device: device, buffer: buffer, format: format, runtime: r, pipeline: r.currentPipeline()}, nil
 }
 
 func (r *MiniAudioRuntime) openSink(ctx context.Context, kind malgo.DeviceType, deviceID string) (AudioSink, error) {
@@ -143,7 +230,19 @@ func (r *MiniAudioRuntime) openSink(ctx context.Context, kind malgo.DeviceType, 
 	if err != nil {
 		return nil, err
 	}
-	return &miniaudioSink{device: device, buffer: buffer, format: format, runtime: r}, nil
+	return &miniaudioSink{device: device, buffer: buffer, format: format, runtime: r, pipeline: r.currentPipeline()}, nil
+}
+
+// currentPipeline returns the pipeline a device handle should bind to. The
+// handle keeps that pointer for its whole lifetime so a later session reset
+// cannot redirect in-flight callbacks.
+func (r *MiniAudioRuntime) currentPipeline() *pcmPipeline {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pipeline
 }
 
 func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType, deviceID string, format AudioFormat) (*malgo.Device, *pcmBuffer, AudioFormat, error) {
@@ -171,6 +270,9 @@ func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType
 		nativeID = &decoded
 	}
 	buffer := newPCMBuffer(pcmBufferBytes(format, 2*time.Second))
+	// Bind the callback to the pipeline this device opened against, so a later
+	// session reset cannot redirect in-flight callbacks.
+	pipeline := r.pipeline
 	switch kind {
 	case malgo.Capture:
 		config.Capture.Format = miniaudioFormat
@@ -180,7 +282,9 @@ func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType
 		}
 		device, err := malgo.InitDevice(context.Context, config, malgo.DeviceCallbacks{
 			Data: func(_, input []byte, _ uint32) {
-				buffer.Append(input)
+				// Capture admits callbacks through the packer so only complete
+				// blocks with a live generation reach the encoder.
+				pipeline.pushCapture(s16leSamples(input), time.Now())
 			},
 		})
 		if err != nil {
@@ -200,7 +304,7 @@ func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType
 		}
 		device, err := malgo.InitDevice(context.Context, config, malgo.DeviceCallbacks{
 			Data: func(output, _ []byte, _ uint32) {
-				buffer.Drain(output)
+				renderPlayback(output, pipeline)
 			},
 		})
 		if err != nil {
@@ -357,10 +461,13 @@ type miniaudioSource struct {
 	buffer    *pcmBuffer
 	format    AudioFormat
 	runtime   *MiniAudioRuntime
+	pipeline  *pcmPipeline
 	closeOnce sync.Once
 }
 
-// Read returns the next available PCM frame, blocking until data arrives.
+// Read returns the next packed capture block, blocking until one is available.
+// While the microphone is muted no audible block is produced, so the caller
+// keeps its own clock alive by sending generated silence.
 func (s *miniaudioSource) Read(ctx context.Context) (Frame, error) {
 	if s == nil {
 		return Frame{}, io.EOF
@@ -368,21 +475,24 @@ func (s *miniaudioSource) Read(ctx context.Context) (Frame, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	frameBytes := s.format.SampleRate / 50 * s.format.Channels * 2
-	if frameBytes <= 0 {
-		frameBytes = 960
+	for {
+		if block, ok := s.pipeline.readCapture(time.Now()); ok {
+			return Frame{
+				Data:       samplesS16LE(block.samples[:block.length]),
+				Format:     s.format,
+				Samples:    block.length,
+				CapturedAt: block.at.UTC(),
+			}, nil
+		}
+		if s.device == nil {
+			return Frame{}, io.EOF
+		}
+		select {
+		case <-ctx.Done():
+			return Frame{}, ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
-	data := make([]byte, frameBytes)
-	count, err := s.buffer.Read(ctx, data)
-	if err != nil {
-		return Frame{}, err
-	}
-	return Frame{
-		Data:       data[:count],
-		Format:     s.format,
-		Samples:    count / (s.format.Channels * 2),
-		CapturedAt: time.Now().UTC(),
-	}, nil
 }
 
 // Close releases the capture device.
@@ -406,10 +516,12 @@ type miniaudioSink struct {
 	buffer    *pcmBuffer
 	format    AudioFormat
 	runtime   *MiniAudioRuntime
+	pipeline  *pcmPipeline
 	closeOnce sync.Once
 }
 
-// Write queues PCM for playback.
+// Write queues PCM for playback. Audio written while the speaker is suppressed
+// is discarded so a later unmute cannot replay stale output.
 func (s *miniaudioSink) Write(ctx context.Context, frame Frame) error {
 	if s == nil {
 		return io.EOF
@@ -422,7 +534,26 @@ func (s *miniaudioSink) Write(ctx context.Context, frame Frame) error {
 		return ctx.Err()
 	default:
 	}
-	s.buffer.Append(frame.Data)
+	if !s.pipeline.sessionServiced() {
+		// No media session is being serviced yet, so rendered output stays
+		// silent rather than draining an unowned buffer.
+		return nil
+	}
+	samples := s16leSamples(frame.Data)
+	if len(samples) == 0 {
+		return nil
+	}
+	at := frame.CapturedAt
+	if at.IsZero() {
+		at = time.Now()
+	}
+	for offset := 0; offset < len(samples); offset += audioBlockSamples {
+		end := min(offset+audioBlockSamples, len(samples))
+		var block audioBlock
+		block.length = copy(block.samples[:], samples[offset:end])
+		block.at = at.Add(time.Duration(int64(offset) * int64(time.Second) / 48000))
+		s.pipeline.pushPlayback(block)
+	}
 	return nil
 }
 
@@ -443,3 +574,11 @@ func (s *miniaudioSink) Close() error {
 }
 
 var _ Runtime = (*MiniAudioRuntime)(nil)
+var _ ControlRuntime = (*MiniAudioRuntime)(nil)
+
+// Pipeline exposes the bounded buffer set the opened devices were bound to.
+func (r *MiniAudioRuntime) Pipeline() *pcmPipeline {
+	return r.currentPipeline()
+}
+
+var _ MediaRuntime = (*MiniAudioRuntime)(nil)

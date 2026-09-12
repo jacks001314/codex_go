@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/ice/v4"
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
 )
 
 const (
@@ -42,6 +44,15 @@ type VoiceTransport interface {
 	Close() error
 }
 
+// Ready reports whether the ordered event channel is open. A transport that
+// never opened, or whose channel closed after opening, reports false.
+func (t *Transport) Ready() bool {
+	if t == nil {
+		return false
+	}
+	return t.opened.Load() && !t.closed.Load()
+}
+
 // Transport owns one WebRTC peer and its locally created ordered event channel.
 // It mirrors the Rust voice helper transport: candidate admission is bounded
 // before the answer can mutate the peer, remotely opened channels are rejected,
@@ -50,12 +61,94 @@ type Transport struct {
 	peer      *webrtc.PeerConnection
 	channel   *webrtc.DataChannel
 	ready     chan struct{}
+	opened    atomic.Bool
+	closed    atomic.Bool
 	readyOnce sync.Once
 	failed    chan error
 	closeOnce sync.Once
+	sender    *rtpAudioSender
 }
 
 var _ VoiceTransport = (*Transport)(nil)
+
+// RTPPacketSink receives one inbound Opus payload with its source identity and
+// arrival time.
+type RTPPacketSink func(payload []byte, ssrc uint32, at time.Time)
+
+// rtpAudioSender adapts the local Opus track to the helper's media contract. A
+// nil payload writes a header-only packet that advances the peer's clock.
+type rtpAudioSender struct {
+	track *webrtc.TrackLocalStaticSample
+}
+
+// SendFrame writes one encoded frame. The track owns RTP packetization, so the
+// header only documents the contract the helper is responsible for.
+func (s *rtpAudioSender) SendFrame(payload []byte, header voiceRTPHeader, at time.Time) error {
+	if s == nil || s.track == nil {
+		return errors.New("voice audio track is unavailable")
+	}
+	return s.track.WriteSample(media.Sample{Data: payload, Duration: voiceFrameDuration})
+}
+
+// EnableAudio attaches the local Opus track and the inbound RTP sink. It must
+// be called before Offer so the track appears in the SDP.
+func (t *Transport) EnableAudio(sink RTPPacketSink) error {
+	if t == nil || t.peer == nil {
+		return ErrVoiceTransportClosed
+	}
+	if t.sender != nil {
+		return errors.New("voice audio is already enabled")
+	}
+	codec := webrtc.RTPCodecCapability{
+		MimeType:     webrtc.MimeTypeOpus,
+		ClockRate:    opusClockRate,
+		Channels:     2,
+		SDPFmtpLine:  "minptime=10;useinbandfec=1",
+		RTCPFeedback: nil,
+	}
+	track, err := webrtc.NewTrackLocalStaticSample(codec, "microphone", "realtime")
+	if err != nil {
+		return fmt.Errorf("create voice audio track: %w", err)
+	}
+	sender, err := t.peer.AddTrack(track)
+	if err != nil {
+		return fmt.Errorf("attach voice audio track: %w", err)
+	}
+	t.sender = &rtpAudioSender{track: track}
+	// Drain RTCP so the sender's interceptors keep running for the session's
+	// lifetime.
+	go func() {
+		buffer := make([]byte, 1500)
+		for {
+			if _, _, readErr := sender.Read(buffer); readErr != nil {
+				return
+			}
+		}
+	}()
+	if sink != nil {
+		t.peer.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+			for {
+				packet, _, readErr := remote.ReadRTP()
+				if readErr != nil {
+					return
+				}
+				if packet == nil || uint8(packet.PayloadType) != opusPayloadType {
+					continue
+				}
+				sink(append([]byte(nil), packet.Payload...), uint32(packet.SSRC), time.Now())
+			}
+		})
+	}
+	return nil
+}
+
+// AudioSender returns the enabled outbound track, if any.
+func (t *Transport) AudioSender() voiceSender {
+	if t == nil || t.sender == nil {
+		return nil
+	}
+	return t.sender
+}
 
 // NewTransport creates a WebRTC peer with the ordered oai-events data channel.
 // It does not start a session or establish connectivity.
@@ -89,12 +182,15 @@ func NewTransport() (*Transport, error) {
 		failed:  make(chan error, 1),
 	}
 	channel.OnOpen(func() {
+		transport.opened.Store(true)
 		transport.readyOnce.Do(func() { close(transport.ready) })
 	})
 	channel.OnClose(func() {
+		transport.closed.Store(true)
 		transport.signalFailure(ErrVoiceTransportClosed)
 	})
 	channel.OnError(func(err error) {
+		transport.closed.Store(true)
 		transport.signalFailure(fmt.Errorf("voice event channel: %w", err))
 	})
 	peer.OnDataChannel(func(remote *webrtc.DataChannel) {
@@ -176,6 +272,7 @@ func (t *Transport) Close() error {
 	}
 	var err error
 	t.closeOnce.Do(func() {
+		t.closed.Store(true)
 		err = t.peer.Close()
 	})
 	return err

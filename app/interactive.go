@@ -2024,9 +2024,11 @@ func interactiveKeymapEditMessage(edit codextui.KeymapEdit) string {
 }
 
 func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSummary {
+	settings := interactiveTUISettings(root)
 	items, err := codextui.LoadSessionSummariesFromStore(newSessionStore(), codextui.SessionSourceOptions{
-		CWD:             interactiveSessionPickerCWD(root),
-		IncludeArchived: true,
+		CWD:              interactiveSessionPickerCWD(root),
+		IncludeArchived:  true,
+		WorktreesEnabled: features.Enabled(settings.FeatureSettings, "worktrees"),
 	})
 	if err != nil {
 		return nil

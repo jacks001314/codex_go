@@ -37,10 +37,13 @@ type realtimeWebRTCCall struct {
 type realtimeSideband struct {
 	threadID string
 	callID   string
-	backend  *TransportBackendConfig
-	config   *SessionConfig
-	ctx      context.Context
-	cancel   context.CancelFunc
+	// existingCall marks a client-created call whose own session configuration
+	// must not be overwritten by the sideband.
+	existingCall bool
+	backend      *TransportBackendConfig
+	config       *SessionConfig
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 type realtimeTransportSession struct {
@@ -327,28 +330,33 @@ func (m *Manager) startRealtimeSideband(sideband *realtimeSideband) {
 	}
 	go func() {
 		defer m.backgroundTaskWait.Done()
-		// Rust #39257: reconnect frameless WebRTC sideband sockets after
-		// unexpected transport loss with capped exponential backoff, while a
-		// terminal handshake status (404/410) completes the session.
-		attempt := 0
+		// Rust #39257: only frameless sidebands reconnect after unexpected
+		// transport loss, with uncapped attempts and capped exponential
+		// backoff. A terminal handshake status (404/410) completes the session.
+		rapidDisconnects := 0
 		for {
-			connection, err := dialRealtimeTransport(sideband.ctx, sideband.threadID, sideband.backend, sideband.config, sideband.callID, false)
+			initialization := realtimeInitializeLegacyWebrtcSideband
+			if sideband.existingCall {
+				initialization = realtimeInitializeExistingCall
+			}
+			connection, err := dialRealtimeTransport(sideband.ctx, sideband.threadID, sideband.backend, sideband.config, sideband.callID, initialization)
 			if err != nil {
 				if realtimeHandshakeTerminal(err) {
 					return
 				}
-				if attempt == 0 {
+				if rapidDisconnects == 0 {
 					m.notifySidebandError(sideband, fmt.Errorf("connect realtime sideband: %w", err))
 				}
-				attempt++
-				if sideband.ctx.Err() != nil || !m.sidebandShouldReconnect(sideband) || attempt > realtimeSidebandMaxReconnectAttempts {
+				if sideband.ctx.Err() != nil || !m.sidebandShouldReconnect(sideband) {
 					return
 				}
-				if !sleepSidebandReconnect(sideband.ctx, realtimeSidebandReconnectDelay(attempt)) {
+				rapidDisconnects++
+				if !sleepSidebandReconnect(sideband.ctx, realtimeSidebandReconnectDelay(rapidDisconnects)) {
 					return
 				}
 				continue
 			}
+			connectedAt := time.Now()
 			m.mu.Lock()
 			state := m.sessions[sideband.threadID]
 			if m.shutdown || sideband.ctx.Err() != nil || m.sidebands[sideband.threadID] != sideband || state == nil || state.ClosedAt != nil {
@@ -373,18 +381,28 @@ func (m *Manager) startRealtimeSideband(sideband *realtimeSideband) {
 			if sideband.ctx.Err() != nil || !m.sidebandShouldReconnect(sideband) {
 				return
 			}
-			attempt++
-			if attempt > realtimeSidebandMaxReconnectAttempts {
+			// Only frameless (live) transports keep reconnecting; a legacy
+			// sideband reports the loss and finishes the session.
+			if sideband.config != nil && sideband.config.Version != VersionV3 {
 				return
 			}
-			if !sleepSidebandReconnect(sideband.ctx, realtimeSidebandReconnectDelay(attempt)) {
+			if time.Since(connectedAt) >= realtimeSidebandStableConnection {
+				rapidDisconnects = 0
+			}
+			rapidDisconnects++
+			if !sleepSidebandReconnect(sideband.ctx, realtimeSidebandReconnectDelay(rapidDisconnects)) {
 				return
 			}
 		}
 	}()
 }
 
-const realtimeSidebandMaxReconnectAttempts = 5
+// realtimeSidebandStableConnection is how long a sideband must stay connected
+// before its disconnect history is forgotten.
+const realtimeSidebandStableConnection = 30 * time.Second
+
+// realtimeSidebandReconnectBase matches the Rust reconnect base delay.
+const realtimeSidebandReconnectBase = 200 * time.Millisecond
 
 func (m *Manager) sidebandShouldReconnect(sideband *realtimeSideband) bool {
 	if m == nil || sideband == nil {
@@ -400,8 +418,9 @@ func realtimeSidebandReconnectDelay(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	delay := time.Duration(250*(1<<min(attempt-1, 4))) * time.Millisecond
-	if delay > 5*time.Second {
+	shift := min(attempt-1, 5)
+	delay := realtimeSidebandReconnectBase * time.Duration(1<<shift)
+	if delay <= 0 || delay > 5*time.Second {
 		return 5 * time.Second
 	}
 	return delay
@@ -706,6 +725,11 @@ func (m *Manager) handleRealtimeTransportEvent(connection *realtimeTransportSess
 	if notification, ok := NotificationFromEvent(connection.threadID, event); ok && sink != nil {
 		sink(notification)
 	}
+	for _, itemNotification := range m.observeTimelineEvent(connection.threadID, event) {
+		if sink != nil {
+			sink(itemNotification)
+		}
+	}
 }
 
 func (m *Manager) finishRealtimeTransport(connection *realtimeTransportSession, reason string, transportErr error) {
@@ -733,7 +757,13 @@ func (m *Manager) finishRealtimeTransport(connection *realtimeTransportSession, 
 	if sink != nil && transportErr != nil {
 		sink(Notification{Method: NotificationError, Params: ErrorNotification{ThreadID: connection.threadID, Message: transportErr.Error()}})
 	}
+	// The timeline closes before the session reports itself closed, mirroring
+	// the order where the closed event seals any remaining segments.
+	itemNotifications := m.takeSessionClosedNotifications(connection.threadID)
 	if sink != nil {
+		for _, itemNotification := range itemNotifications {
+			sink(itemNotification)
+		}
 		sink(NewClosedNotification(connection.threadID, reason))
 	}
 }

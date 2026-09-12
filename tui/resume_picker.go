@@ -175,6 +175,10 @@ type SessionPickerState struct {
 	Query          string
 	FilterMode     SessionFilterMode
 	FilterCWD      string
+	// FilterCWDs is the expanded directory filter (the requested directory plus
+	// linked worktrees' corresponding directories, Rust #43279). When empty the
+	// picker falls back to FilterCWD.
+	FilterCWDs     []string
 	ProviderFilter string
 	SortKey        SessionSortKey
 	Density        SessionListDensity
@@ -188,13 +192,14 @@ type SessionPickerState struct {
 	ThemeID        string
 }
 
-func NewSessionPickerState(action SessionPickerAction, items []SessionSummary, filterCWD string) *SessionPickerState {
+func NewSessionPickerState(action SessionPickerAction, items []SessionSummary, filterCWD string, filterCWDs ...string) *SessionPickerState {
 	state := &SessionPickerState{
 		Action:         action,
 		Items:          append([]SessionSummary(nil), items...),
 		UseThemeColors: true,
 		FilterMode:     SessionFilterModeFromShowAll(false, filterCWD),
 		FilterCWD:      filterCWD,
+		FilterCWDs:     append([]string(nil), filterCWDs...),
 		SortKey:        SessionSortUpdatedAt,
 		ToolbarFocus:   SessionPickerToolbarFilter,
 		Expanded:       map[string]bool{},
@@ -210,6 +215,12 @@ func (s *SessionPickerState) VisibleItems() []SessionSummary {
 	query := strings.ToLower(strings.TrimSpace(s.Query))
 	provider := strings.ToLower(strings.TrimSpace(s.ProviderFilter))
 	filterCWD := cleanPathForCompare(s.FilterCWD)
+	filterCWDSet := map[string]bool{}
+	for _, cwd := range s.FilterCWDs {
+		if cleaned := cleanPathForCompare(cwd); cleaned != "" {
+			filterCWDSet[cleaned] = true
+		}
+	}
 	items := make([]SessionSummary, 0, len(s.Items))
 	for _, item := range s.Items {
 		switch s.Action {
@@ -223,8 +234,15 @@ func (s *SessionPickerState) VisibleItems() []SessionSummary {
 				continue
 			}
 		}
-		if s.FilterMode == SessionFilterCWD && filterCWD != "" && cleanPathForCompare(item.CWD) != filterCWD {
-			continue
+		if s.FilterMode == SessionFilterCWD {
+			itemCWD := cleanPathForCompare(item.CWD)
+			if len(filterCWDSet) > 0 {
+				if !filterCWDSet[itemCWD] {
+					continue
+				}
+			} else if filterCWD != "" && itemCWD != filterCWD {
+				continue
+			}
 		}
 		if provider != "" && strings.ToLower(strings.TrimSpace(item.Provider)) != provider {
 			continue

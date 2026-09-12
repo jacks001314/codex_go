@@ -684,6 +684,10 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			phase := streamAgentMessagePhase(event.Item)
 			state.agentItemPhases[item.ID] = phase
 			r.requireRealtime().BeginCodexOutput(threadID, item.ID, phase)
+			r.observeRealtimeAgentItem(threadID, turnID, item.ID, item.Text, false)
+		}
+		if item.Type == "imageGeneration" {
+			r.promoteRealtimeAgentItem(threadID, turnID, item.ID)
 		}
 		if state.planMode && item.Type == "agent_message" {
 			if event.Item != nil && event.Item.Text != "" {
@@ -703,7 +707,11 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			itemID := firstNonEmpty(event.ItemID, event.Item.ID, "agent-message-"+safeIdentifier(turnID))
 			phase := state.agentItemPhases[itemID]
 			r.notifyRealtime(r.requireRealtime().CompleteCodexOutput(threadID, itemID, phase, event.Item.Text))
+			r.observeRealtimeAgentItem(threadID, turnID, itemID, event.Item.Text, true)
 			delete(state.agentItemPhases, itemID)
+		}
+		if event.Item != nil && event.Item.Type == "image_generation_call" {
+			r.promoteRealtimeAgentItem(threadID, turnID, firstNonEmpty(event.ItemID, event.Item.ID))
 		}
 		if len(event.RawItem) == 0 {
 			return
@@ -733,6 +741,7 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			return
 		}
 		r.notifyRealtime(r.requireRealtime().StreamCodexOutput(threadID, itemID, event.Delta))
+		r.streamRealtimeAgentDelta(threadID, turnID, itemID, event.Delta)
 		r.notify(NotificationAgentMessageDelta, &AgentMessageDeltaNotification{
 			ThreadID: threadID,
 			TurnID:   turnID,
@@ -1308,6 +1317,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(threadID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
+	r.bindRealtimeTurn(threadID, turnID)
 	_ = r.appendRuntimeTurnStarted(threadID, turnID, rootTurnIDForTurn(params, turnID), startedAt)
 	// Rust records a full context window and compacts before the next user turn.
 	// Do this before persisting/sending the new prompt so the prompt is retained

@@ -15,7 +15,22 @@ import (
 
 const realtimeContextAppendMaxBytes = 500
 
-func dialRealtimeTransport(ctx context.Context, threadID string, backend *TransportBackendConfig, config *SessionConfig, callID string, initialize bool) (*realtimeTransportSession, error) {
+// realtimeInitialization selects how a websocket joins its realtime session.
+type realtimeInitialization int
+
+const (
+	// realtimeInitializeNewSession opens a fresh session: it sends the session
+	// update and, for frameless sessions, waits for session.started.
+	realtimeInitializeNewSession realtimeInitialization = iota
+	// realtimeInitializeLegacyWebrtcSideband joins an existing WebRTC call and
+	// sends the session update only for non-frameless parsers.
+	realtimeInitializeLegacyWebrtcSideband
+	// realtimeInitializeExistingCall joins a client-created call without
+	// overwriting its session configuration.
+	realtimeInitializeExistingCall
+)
+
+func dialRealtimeTransport(ctx context.Context, threadID string, backend *TransportBackendConfig, config *SessionConfig, callID string, initialization realtimeInitialization) (*realtimeTransportSession, error) {
 	endpoint, err := realtimeWebsocketURL(backend, config, callID)
 	if err != nil {
 		return nil, err
@@ -43,14 +58,18 @@ func dialRealtimeTransport(ctx context.Context, threadID string, backend *Transp
 	}
 	connectionCtx, cancel := context.WithCancel(ctx)
 	connection := &realtimeTransportSession{threadID: threadID, config: *config, conn: conn, ctx: connectionCtx, cancel: cancel}
-	if initialize || config.Version != VersionV3 {
+	// An existing call keeps its own negotiated configuration, so Core only
+	// joins the control socket.
+	initializeSession := initialization == realtimeInitializeNewSession ||
+		(initialization == realtimeInitializeLegacyWebrtcSideband && config.Version != VersionV3)
+	if initializeSession {
 		if err := connection.writeJSON(realtimeSessionUpdate(config)); err != nil {
 			connection.cancel()
 			conn.CloseNow()
 			return nil, fmt.Errorf("initialize realtime websocket: %w", err)
 		}
 	}
-	if initialize && config.Version == VersionV3 {
+	if initialization == realtimeInitializeNewSession && config.Version == VersionV3 {
 		for {
 			messageType, payload, err := conn.Read(connectionCtx)
 			if err != nil {

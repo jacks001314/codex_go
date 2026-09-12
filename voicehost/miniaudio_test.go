@@ -81,3 +81,101 @@ func equalBytes(left, right []byte) bool {
 	}
 	return true
 }
+
+func TestPCMReportingComparesToNativeScale(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want uint16
+	}{
+		{name: "silence", data: []byte{0, 0, 0, 0}, want: 0},
+		{name: "empty", data: nil, want: 0},
+		{name: "positive peak", data: []byte{0x10, 0x27}, want: 20000},
+		{name: "negative peak", data: []byte{0xf0, 0xd8}, want: 20000},
+		{name: "saturates", data: []byte{0x00, 0x80}, want: 65535},
+		{name: "odd tail ignored", data: []byte{0x00, 0x80, 0x7f}, want: 65535},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := pcmPeak(test.data); got != test.want {
+				t.Fatalf("peak = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeAudioStateClearsOnRead(t *testing.T) {
+	runtime := NewMiniAudioRuntime()
+	recordUint32Peak(&runtime.pipeline.microphonePeak, 10)
+	recordUint32Peak(&runtime.pipeline.speakerPeak, 20)
+	recordUint32Peak(&runtime.pipeline.microphonePeak, 5)
+	state := runtime.AudioState()
+	if state.MicrophonePeak != 10 || state.SpeakerPeak != 20 {
+		t.Fatalf("state = %+v", state)
+	}
+	if cleared := runtime.AudioState(); cleared.MicrophonePeak != 0 || cleared.SpeakerPeak != 0 {
+		t.Fatalf("second read = %+v, want cleared", cleared)
+	}
+}
+
+func TestMutedCaptureProducesNoAudibleBlock(t *testing.T) {
+	runtime := NewMiniAudioRuntime()
+	if err := runtime.SetControls(AudioControls{MicrophoneMuted: true}); err != nil {
+		t.Fatal(err)
+	}
+	block := make([]int16, audioBlockSamples)
+	for index := range block {
+		block[index] = 20000
+	}
+	if !runtime.pipeline.pushCapture(block, time.Now()) {
+		t.Fatal("a muted capture callback must be accepted")
+	}
+	if _, ok := runtime.pipeline.readCapture(time.Now()); ok {
+		t.Fatal("muted capture produced an audible block")
+	}
+	if state := runtime.AudioState(); state.MicrophonePeak != 0 {
+		t.Fatalf("muted capture recorded a peak: %+v", state)
+	}
+}
+
+func TestUnmutedCaptureRecordsPeak(t *testing.T) {
+	runtime := NewMiniAudioRuntime()
+	if err := runtime.SetControls(AudioControls{}); err != nil {
+		t.Fatal(err)
+	}
+	block := make([]int16, audioBlockSamples)
+	block[0] = 10000
+	// The first accepted callback only establishes the unmute boundary.
+	runtime.pipeline.pushCapture(block, time.Now())
+	runtime.pipeline.pushCapture(block, time.Now().Add(10*time.Millisecond))
+	if _, ok := runtime.pipeline.readCapture(time.Now().Add(10 * time.Millisecond)); !ok {
+		t.Fatal("unmuted capture produced no block")
+	}
+	if state := runtime.AudioState(); state.MicrophonePeak != 20000 {
+		t.Fatalf("state = %+v", state)
+	}
+}
+
+func TestSuppressedPlaybackDiscardsAudio(t *testing.T) {
+	runtime := NewMiniAudioRuntime()
+	runtime.pipeline.recordSessionStart()
+	if err := runtime.SetControls(AudioControls{SpeakerSuppressed: true}); err != nil {
+		t.Fatal(err)
+	}
+	sink := &miniaudioSink{format: defaultSessionFormat, runtime: runtime, pipeline: runtime.pipeline}
+	if err := sink.Write(context.Background(), Frame{Data: []byte{0x10, 0x27}, Format: defaultSessionFormat}); err != nil {
+		t.Fatal(err)
+	}
+	if queued := runtime.pipeline.playback.length(); queued != 0 {
+		t.Fatalf("suppressed playback queued %d blocks", queued)
+	}
+	if err := runtime.SetControls(AudioControls{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Write(context.Background(), Frame{Data: []byte{0x10, 0x27}, Format: defaultSessionFormat}); err != nil {
+		t.Fatal(err)
+	}
+	if queued := runtime.pipeline.playback.length(); queued != 1 {
+		t.Fatalf("unsuppressed playback queued %d blocks, want 1", queued)
+	}
+}

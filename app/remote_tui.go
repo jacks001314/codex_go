@@ -26,6 +26,7 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	"codex_go/doctor"
+	"codex_go/features"
 	"codex_go/plugin"
 	"codex_go/protocol"
 	"codex_go/realtime"
@@ -321,6 +322,40 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	interactiveRemoteTrustCheck(ctx, endpoint, root, shouldRunInteractiveTUI(stdin, stdout))
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
+	// The TUI owns the voice helper and relays its handshake through the
+	// app-server on a dedicated connection, so a media session never competes
+	// with the interactive read loop.
+	voice := newVoiceRuntime(voiceRuntimeOptions{
+		// The packaged helper is stamped with the same version, so the
+		// same-build handshake succeeds in releases and in dev builds.
+		buildCommit:      doctor.Version(),
+		realtimeSettings: interactiveRemoteRealtimeSettings(endpoint),
+		listVoices:       interactiveRemoteRealtimeVoices(endpoint),
+		startSession: func(callCtx context.Context, params realtime.StartParams) error {
+			client, err := openRemoteSessionClient(callCtx, endpoint)
+			if err != nil {
+				return err
+			}
+			defer client.close()
+			id, err := client.sendRequest(callCtx, appserver.MethodThreadRealtimeStart, params)
+			if err != nil {
+				return err
+			}
+			return client.waitResponse(callCtx, id, nil)
+		},
+		stopSession: func(callCtx context.Context, threadID string) error {
+			client, err := openRemoteSessionClient(callCtx, endpoint)
+			if err != nil {
+				return err
+			}
+			defer client.close()
+			id, err := client.sendRequest(callCtx, appserver.MethodThreadRealtimeStop, realtime.StopParams{ThreadID: threadID})
+			if err != nil {
+				return err
+			}
+			return client.waitResponse(callCtx, id, nil)
+		},
+	})
 	options := codextea.Options{
 		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
 		LocalDaemonSession:          interactiveRemoteEndpointIsLocal(endpoint),
@@ -432,6 +467,22 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			return interactiveRemoteStartWindowsSandboxSetup(ctx, endpoint, mode, setupCWD)
 		},
 		OnOpenDesktopThread: interactiveOpenDesktopThread,
+		OnVoiceConversationStart: func(threadID string, attemptID uint64) bubbletea.Cmd {
+			return voice.startCmd(threadID, attemptID)
+		},
+		OnVoiceApplyAnswer: func(threadID string, attemptID uint64, answer string) bubbletea.Cmd {
+			return voice.applyAnswerCmd(threadID, attemptID, answer)
+		},
+		OnVoiceCloseHelper: voice.close,
+		OnVoiceSetMicrophoneMuted: func(muted bool) error {
+			return voice.setMicrophoneMuted(muted)
+		},
+		OnVoicePeaks:     voice.peaks,
+		OnVoiceSettings:  interactiveRemoteVoiceSettings(endpoint),
+		OnVoiceSaveVoice: interactiveRemoteVoiceSaver(endpoint),
+		OnVoiceAppendSpeech: interactiveRemoteSpeechSender(endpoint, func() string {
+			return state.ThreadID
+		}),
 		OnReadRolloutPath: func(threadID string) (string, error) {
 			if strings.TrimSpace(threadID) == "" {
 				return "", nil
@@ -1374,7 +1425,10 @@ func remoteTUIThreadListParams(root *cli.RootOptions, archived bool) appserver.T
 		},
 	}
 	if cwd := interactiveSessionPickerCWD(root); cwd != "" {
-		params.CWD = &appserver.ThreadListCwdFilter{Values: []string{cwd}}
+		settings := interactiveTUISettings(root)
+		params.CWD = &appserver.ThreadListCwdFilter{
+			Values: codextui.SessionPickerWorktreeCWDs(cwd, features.Enabled(settings.FeatureSettings, "worktrees")),
+		}
 	}
 	return params
 }
@@ -3339,6 +3393,9 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			},
 		})
 	default:
+		if voice, ok := DecodeThreadRealtimeNotification(method, message.Params); ok {
+			c.send(voice)
+		}
 	}
 	return nil
 }

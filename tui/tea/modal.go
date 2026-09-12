@@ -777,6 +777,14 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		return m.applyCopyTargetModalOption(response.OptionID)
 	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.VoicePickerViewID {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Voice unchanged"
+			return nil
+		}
+		return m.applyVoicePickerOption(response.OptionID)
+	}
 	if modal.kind == ModalKindGeneric && modal.id == chatwidget.SafetyBufferingPromptViewID {
 		m.modal = nil
 		if cancelled {

@@ -52,54 +52,57 @@ import (
 )
 
 type RuntimeServices struct {
-	ThreadRouter                 *Router
-	StateRuntime                 *state.StateRuntime
-	CloseStateRuntime            bool
-	LogDBHandler                 *state.LogDBHandler
-	LogDBInstallation            *state.LogDBInstallation
-	CloseLogDBInstallation       bool
-	ThreadExtras                 *ThreadExtraService
-	Realtime                     *realtime.Manager
-	FS                           *FSService
-	Remote                       *remotecontrol.Manager
-	Environment                  *EnvironmentManager
-	Windows                      *sandbox.WindowsManager
-	WindowsSetupRunner           WindowsSandboxSetupRunner
-	Feedback                     *FeedbackSnapshot
-	Config                       *config.ConfigService
-	Account                      *auth.AccountManager
-	AccountOAuthOptions          *auth.OAuthOptions
-	Hooks                        *HookRegistry
-	HooksDiscovery               *HookDiscoveryService
-	HookRunner                   *HookRunner
-	Skills                       *SkillsService
-	Plugins                      *plugin.PluginService
-	Models                       *model.ModelService
-	Permissions                  *sandbox.PermissionProfileService
-	Collaboration                *CollaborationModeService
-	MCP                          *mcp.MCPService
-	Features                     *features.FeatureService
-	Apps                         *apps.AppService
-	Turns                        *turn.TurnService
-	SteerMailbox                 *turn.SteerMailbox
-	ThreadStatus                 *ThreadStatusManager
-	Agent                        model.AgentRunner
-	GuardianReviewer             GuardianReviewer
-	CompactRunner                compact.RemoteRunner
-	ToolRouter                   *tool.Router
-	TurnRuntime                  *turn.Runtime
-	Reviews                      *review.Service
-	Misc                         *MiscService
-	CommandExec                  *CommandExecService
-	Processes                    *ProcessService
-	ServerRequests               *ServerRequestBroker
-	AccountHTTP                  chatgptapi.HTTPDoer
-	HTTPClient                   model.HTTPDoer
-	SpawnGraph                   agent.Store
-	Analytics                    telemetry.TurnEventSink
-	SkillShadowMetrics           SkillShadowMetricSink
-	SkillInjectionMetrics        telemetry.MemoryUsageMetricSink
-	TurnMetrics                  telemetry.TurnMetricSink
+	ThreadRouter           *Router
+	StateRuntime           *state.StateRuntime
+	CloseStateRuntime      bool
+	LogDBHandler           *state.LogDBHandler
+	LogDBInstallation      *state.LogDBInstallation
+	CloseLogDBInstallation bool
+	ThreadExtras           *ThreadExtraService
+	Realtime               *realtime.Manager
+	FS                     *FSService
+	Remote                 *remotecontrol.Manager
+	Environment            *EnvironmentManager
+	Windows                *sandbox.WindowsManager
+	WindowsSetupRunner     WindowsSandboxSetupRunner
+	Feedback               *FeedbackSnapshot
+	Config                 *config.ConfigService
+	Account                *auth.AccountManager
+	AccountOAuthOptions    *auth.OAuthOptions
+	Hooks                  *HookRegistry
+	HooksDiscovery         *HookDiscoveryService
+	HookRunner             *HookRunner
+	Skills                 *SkillsService
+	Plugins                *plugin.PluginService
+	Models                 *model.ModelService
+	Permissions            *sandbox.PermissionProfileService
+	Collaboration          *CollaborationModeService
+	MCP                    *mcp.MCPService
+	Features               *features.FeatureService
+	Apps                   *apps.AppService
+	Turns                  *turn.TurnService
+	SteerMailbox           *turn.SteerMailbox
+	ThreadStatus           *ThreadStatusManager
+	Agent                  model.AgentRunner
+	GuardianReviewer       GuardianReviewer
+	CompactRunner          compact.RemoteRunner
+	ToolRouter             *tool.Router
+	TurnRuntime            *turn.Runtime
+	Reviews                *review.Service
+	Misc                   *MiscService
+	CommandExec            *CommandExecService
+	Processes              *ProcessService
+	ServerRequests         *ServerRequestBroker
+	AccountHTTP            chatgptapi.HTTPDoer
+	HTTPClient             model.HTTPDoer
+	SpawnGraph             agent.Store
+	Analytics              telemetry.TurnEventSink
+	SkillShadowMetrics     SkillShadowMetricSink
+	SkillInjectionMetrics  telemetry.MemoryUsageMetricSink
+	TurnMetrics            telemetry.TurnMetricSink
+	// VoiceMetrics receives the voice session lifecycle counters. The Go port
+	// reports product counters from the app-server, which owns the session.
+	VoiceMetrics                 telemetry.MemoryUsageMetricSink
 	AnalyticsRPCTransport        telemetry.AppServerRPCTransport
 	BrowserOpen                  func(string) error
 	CustomSkills                 *skillprovider.Registry
@@ -309,27 +312,30 @@ type RuntimeRouter struct {
 	realtimeOpsQueues       map[string]chan func(context.Context)
 	realtimeEventMu         sync.Mutex
 	realtimeEventLocks      map[string]*sync.Mutex
-	internalMemoryThreads   sync.Map
-	sessionEndMu            sync.Mutex
-	sessionEnded            map[string]struct{}
-	agentRegistry           *agent.Registry
-	agentRegistryMu         sync.Mutex
-	agentRegistries         map[string]*agent.Registry
-	agentActivityMu         sync.Mutex
-	agentActivity           map[string]chan string
-	agentMessagesMu         sync.Mutex
-	agentMessages           map[string][]any
-	nodeReplEvidenceMu      sync.Mutex
-	nodeReplEvidence        map[string]*codexctx.NodeReplReviewEvidence
-	rolloutBudgetOnce       sync.Once
-	rolloutBudget           *runtimeutil.Budget
-	rolloutBudgetCharged    atomic.Bool
-	rolloutBudgetExhausted  atomic.Bool
-	reasoningEffortMu       sync.Mutex
-	reasoningEffortPins     map[string]reasoningEffortPin
-	closeOnce               sync.Once
-	closeErr                error
-	codexHomeScanCancel     func()
+	// voiceDurationRecorded deduplicates the voice session duration metric,
+	// which is recorded once per completed session.
+	voiceDurationRecorded  map[string]bool
+	internalMemoryThreads  sync.Map
+	sessionEndMu           sync.Mutex
+	sessionEnded           map[string]struct{}
+	agentRegistry          *agent.Registry
+	agentRegistryMu        sync.Mutex
+	agentRegistries        map[string]*agent.Registry
+	agentActivityMu        sync.Mutex
+	agentActivity          map[string]chan string
+	agentMessagesMu        sync.Mutex
+	agentMessages          map[string][]any
+	nodeReplEvidenceMu     sync.Mutex
+	nodeReplEvidence       map[string]*codexctx.NodeReplReviewEvidence
+	rolloutBudgetOnce      sync.Once
+	rolloutBudget          *runtimeutil.Budget
+	rolloutBudgetCharged   atomic.Bool
+	rolloutBudgetExhausted atomic.Bool
+	reasoningEffortMu      sync.Mutex
+	reasoningEffortPins    map[string]reasoningEffortPin
+	closeOnce              sync.Once
+	closeErr               error
+	codexHomeScanCancel    func()
 }
 
 type unifiedExecAnalyticsContext struct {
@@ -1021,6 +1027,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		SkillShadowMetrics:    runtimeMetrics,
 		SkillInjectionMetrics: runtimeMetrics,
 		TurnMetrics:           runtimeMetrics,
+		VoiceMetrics:          runtimeMetrics,
 		DefaultCWD:            codexHome,
 
 		RemoteControlDisabledByRequirements: remoteControlDisabledByRequirements(options),
@@ -3070,12 +3077,6 @@ func (r *RuntimeRouter) handleThreadMetadataUpdateRuntime(request *Request) (*Th
 		r.notifyThreadProjectUpdated(request, params.ThreadID, projectUpdate)
 	}
 	return response, nil
-}
-
-func threadRollbackDeprecationNotice() *DeprecationNoticeNotification {
-	return &DeprecationNoticeNotification{
-		Summary: "thread/rollback is deprecated and will be removed soon",
-	}
 }
 
 func isThreadLifecycleNotificationMethod(method Method) bool {
@@ -7367,7 +7368,11 @@ func (r *RuntimeRouter) ensureRealtimeThread(threadID string) error {
 
 func (r *RuntimeRouter) notifyRealtime(notifications []realtime.Notification) {
 	for i := range notifications {
-		method, params, ok := realtimeNotificationPayload(&notifications[i])
+		notification := &notifications[i]
+		if notification.Method == realtime.NotificationClosed {
+			r.recordVoiceSessionDuration(notification)
+		}
+		method, params, ok := realtimeNotificationPayload(notification)
 		if !ok {
 			continue
 		}

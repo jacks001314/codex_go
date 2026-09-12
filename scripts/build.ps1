@@ -111,6 +111,39 @@ $hostArguments += "./cmd/codex-code-mode-host"
 & go @hostArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "==> Built $HostOutput"
+
+# The voice helper ships inside the package's private voice runtime. It is
+# stamped with the same identity as the CLI so the same-build handshake holds.
+$VoiceBinDir = Join-Path (Split-Path -Parent $Output) "codex-resources/voice/bin"
+New-Item -ItemType Directory -Force -Path $VoiceBinDir | Out-Null
+$VoiceOutput = Join-Path $VoiceBinDir "codex-voice-host$Extension"
+$voiceLdflags = "-s -w -X main.buildCommit=$ResolvedVersion"
+$voiceArguments = @("build", "-trimpath", "-buildvcs=false", "-ldflags", $voiceLdflags, "-o", $VoiceOutput)
+if ($Race) { $voiceArguments += "-race" }
+if ($Rebuild) { $voiceArguments += "-a" }
+$voiceArguments += "./cmd/codex-voice-host"
+& go @voiceArguments
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host "==> Built $VoiceOutput"
+
+# The packaged codec ships beside the helper. It is prepared per platform by
+# third_party/voice/prepare_opus.py; a build without it produces a helper that
+# runs the control plane but carries no audio.
+$VoiceLibraryNames = @{
+    "windows" = "libopus.dll"
+    "darwin"  = "libopus.0.dylib"
+    "linux"   = "libopus.so.0"
+}
+$VoiceLibraryName = $VoiceLibraryNames[$GOOS]
+$PreparedCodec = Join-Path $Root "third_party/voice/build/$GOOS-$GOARCH/lib/$VoiceLibraryName"
+if (Test-Path -LiteralPath $PreparedCodec) {
+    $VoiceLibDir = Join-Path (Split-Path -Parent $Output) "codex-resources/voice/lib"
+    New-Item -ItemType Directory -Force -Path $VoiceLibDir | Out-Null
+    Copy-Item -LiteralPath $PreparedCodec -Destination (Join-Path $VoiceLibDir $VoiceLibraryName) -Force
+    Write-Host "==> Staged voice codec $VoiceLibraryName"
+} else {
+    Write-Warning "voice codec for $GOOS/$GOARCH is not prepared; run third_party/voice/prepare_opus.py --platform $GOOS-$GOARCH"
+}
 if ($GOOS -eq $HostGOOS -and $GOARCH -eq $HostGOARCH) {
     & $Output --version
 }

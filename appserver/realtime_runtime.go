@@ -32,6 +32,7 @@ func (r *RuntimeRouter) startRealtimeConversationAsync(params realtime.StartPara
 			_, notifications, startErr := r.requireRealtime().StartWithOptions(&params, options)
 			err = startErr
 			if err == nil {
+				r.recordVoiceMetric(voiceSessionStartMetric, 1)
 				r.notifyRealtime(notifications)
 				return
 			}
@@ -39,6 +40,7 @@ func (r *RuntimeRouter) startRealtimeConversationAsync(params realtime.StartPara
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			return
 		}
+		r.recordVoiceMetric(voiceSessionFailureMetric, 1)
 		r.notifyRealtime([]realtime.Notification{{
 			Method: realtime.NotificationError,
 			Params: realtime.ErrorNotification{ThreadID: strings.TrimSpace(params.ThreadID), Message: err.Error()},
@@ -47,6 +49,69 @@ func (r *RuntimeRouter) startRealtimeConversationAsync(params realtime.StartPara
 }
 
 const realtimeOperationQueueCapacity = 256
+
+// Voice session lifecycle counters. The Go port reports product counters from
+// the app-server, which owns the realtime session; the TUI layer has no metric
+// sink. The Rust TUI names are reused so both implementations agree.
+const (
+	voiceSessionStartMetric    = "codex.voice.session.start"
+	voiceSessionEndedMetric    = "codex.voice.session.ended"
+	voiceSessionFailureMetric  = "codex.voice.session.failure"
+	voiceSessionDurationMetric = "codex.voice.session.duration"
+)
+
+// recordVoiceMetric emits one voice lifecycle counter when a sink is wired.
+func (r *RuntimeRouter) recordVoiceMetric(name string, inc int) {
+	if r == nil || r.services.VoiceMetrics == nil {
+		return
+	}
+	r.services.VoiceMetrics.Counter(name, inc, nil)
+}
+
+// recordVoiceSessionDuration reports how long a voice session lasted. The
+// duration is available once the session is closed, so it is recorded when the
+// closed notification is forwarded and only once per thread.
+func (r *RuntimeRouter) recordVoiceSessionDuration(notification *realtime.Notification) {
+	if r == nil || r.services.VoiceMetrics == nil || r.services.Realtime == nil || notification == nil {
+		return
+	}
+	params, ok := notification.Params.(realtime.ClosedNotification)
+	if !ok {
+		if ptr, ok := notification.Params.(*realtime.ClosedNotification); ok && ptr != nil {
+			params = *ptr
+		} else {
+			return
+		}
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	if threadID == "" {
+		return
+	}
+	state, ok := r.services.Realtime.State(threadID)
+	if !ok || state == nil || state.ClosedAt == nil {
+		return
+	}
+	duration := state.ClosedAt.Sub(state.StartedAt)
+	if duration < 0 || !r.claimVoiceDuration(threadID) {
+		return
+	}
+	r.services.VoiceMetrics.RecordDuration(voiceSessionDurationMetric, duration, nil)
+}
+
+// claimVoiceDuration reports whether this thread's duration has still to be
+// recorded.
+func (r *RuntimeRouter) claimVoiceDuration(threadID string) bool {
+	r.realtimeEventMu.Lock()
+	defer r.realtimeEventMu.Unlock()
+	if r.voiceDurationRecorded == nil {
+		r.voiceDurationRecorded = map[string]bool{}
+	}
+	if r.voiceDurationRecorded[threadID] {
+		return false
+	}
+	r.voiceDurationRecorded[threadID] = true
+	return true
+}
 
 func (r *RuntimeRouter) enqueueRealtimeOperation(threadID string, operation func(context.Context)) bool {
 	ctx, queue, ok := r.realtimeOperationQueue(threadID, operation)
@@ -155,14 +220,15 @@ func (r *RuntimeRouter) stopRealtimeConversationAsync(params realtime.StopParams
 		}
 		_, notification, err := r.requireRealtime().Stop(&params, "requested")
 		if errors.Is(err, realtime.ErrRealtimeNotRunning) {
-			notification = realtime.NewClosedNotification(params.ThreadID, "requested")
+			notification = []realtime.Notification{realtime.NewClosedNotification(params.ThreadID, "requested")}
 			err = nil
 		}
 		if err != nil {
 			r.notifyRealtimeOperationError(params.ThreadID, err)
 			return
 		}
-		r.notifyRealtime([]realtime.Notification{notification})
+		r.recordVoiceMetric(voiceSessionEndedMetric, 1)
+		r.notifyRealtime(notification)
 	})
 }
 
@@ -594,4 +660,54 @@ func escapeRealtimeXMLText(value string) string {
 	value = strings.ReplaceAll(value, "&", "&amp;")
 	value = strings.ReplaceAll(value, "<", "&lt;")
 	return strings.ReplaceAll(value, ">", "&gt;")
+}
+
+// realtimeTimelineActive reports whether the thread has an open realtime
+// session recorded in the canonical timeline. Every timeline observation is
+// gated on it so ordinary turns pay nothing.
+func (r *RuntimeRouter) realtimeTimelineActive(threadID string) bool {
+	if r == nil || r.services.Realtime == nil {
+		return false
+	}
+	return r.services.Realtime.ActiveRealtimeSessionID(threadID) != ""
+}
+
+// bindRealtimeTurn records which realtime session produced a backing turn, so
+// later item promotions can resolve their session.
+func (r *RuntimeRouter) bindRealtimeTurn(threadID, turnID string) {
+	if r == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return
+	}
+	if !r.realtimeTimelineActive(threadID) {
+		return
+	}
+	r.requireRealtime().SetActiveTurn(threadID, turnID)
+	r.requireRealtime().BindTurnSession(threadID, turnID)
+}
+
+// observeRealtimeAgentItem records a backing agent message in the canonical
+// timeline.
+func (r *RuntimeRouter) observeRealtimeAgentItem(threadID, turnID, itemID, text string, completed bool) {
+	if r == nil || strings.TrimSpace(itemID) == "" || !r.realtimeTimelineActive(threadID) {
+		return
+	}
+	r.notifyRealtime(r.requireRealtime().ObserveAgentItem(threadID, turnID, itemID, text, completed))
+}
+
+// streamRealtimeAgentDelta records streamed agent text in the canonical
+// timeline.
+func (r *RuntimeRouter) streamRealtimeAgentDelta(threadID, turnID, itemID, delta string) {
+	if r == nil || delta == "" || strings.TrimSpace(itemID) == "" || !r.realtimeTimelineActive(threadID) {
+		return
+	}
+	r.notifyRealtime(r.requireRealtime().StreamAgentMessageDelta(threadID, turnID, itemID, delta))
+}
+
+// promoteRealtimeAgentItem records a whole-item promotion for a backing agent
+// item that completed as a self-contained visual result.
+func (r *RuntimeRouter) promoteRealtimeAgentItem(threadID, turnID, itemID string) {
+	if r == nil || strings.TrimSpace(itemID) == "" || !r.realtimeTimelineActive(threadID) {
+		return
+	}
+	r.notifyRealtime(r.requireRealtime().PromoteAgentItem(threadID, turnID, itemID))
 }

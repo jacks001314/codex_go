@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"codex_go/appserver"
+	"codex_go/gitutil"
 	"codex_go/rollout"
 	"codex_go/session"
 )
@@ -18,6 +19,28 @@ type SessionSourceOptions struct {
 	CWD                   string
 	Search                string
 	ModelProvider         string
+	// WorktreesEnabled expands the directory filter to the corresponding
+	// directories of the repository's linked worktrees (Rust #43279).
+	WorktreesEnabled bool
+}
+
+// SessionPickerWorktreeCWDs returns the picker's directory filter: the
+// requested directory, plus its linked worktrees' corresponding directories
+// when the `worktrees` feature is enabled. It falls back to the requested
+// directory alone when the checkout identity cannot be validated.
+func SessionPickerWorktreeCWDs(cwd string, worktreesEnabled bool) []string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return nil
+	}
+	if !worktreesEnabled {
+		return []string{cwd}
+	}
+	cwds, ok := gitutil.LinkedWorktreeCWDs(cwd)
+	if !ok || len(cwds) == 0 {
+		return []string{cwd}
+	}
+	return cwds
 }
 
 func LoadSessionSummariesFromStore(store *session.Store, options SessionSourceOptions) ([]SessionSummary, error) {
@@ -68,7 +91,7 @@ func AppServerThreadListParamsForSessionPicker(options SessionSourceOptions) app
 		Archived:      &archived,
 	}
 	if cwd := strings.TrimSpace(options.CWD); cwd != "" {
-		params.CWD = &appserver.ThreadListCwdFilter{Values: []string{cwd}}
+		params.CWD = &appserver.ThreadListCwdFilter{Values: SessionPickerWorktreeCWDs(cwd, options.WorktreesEnabled)}
 	}
 	if search := strings.TrimSpace(options.Search); search != "" {
 		params.SearchTerm = &search
@@ -106,7 +129,7 @@ func loadSessionRecordsByArchived(store *session.Store, archived bool, options S
 		IncludeHistory: false,
 	}
 	if cwd := strings.TrimSpace(options.CWD); cwd != "" {
-		listOptions.CWDs = []string{cwd}
+		listOptions.CWDs = SessionPickerWorktreeCWDs(cwd, options.WorktreesEnabled)
 	}
 	if provider := strings.TrimSpace(options.ModelProvider); provider != "" {
 		listOptions.ModelProviders = []string{provider}

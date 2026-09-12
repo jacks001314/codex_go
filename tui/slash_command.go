@@ -67,6 +67,7 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "setup-default-sandbox", Command: CommandElevateSandbox, Description: "set up elevated agent sandbox"},
 		{Name: "sandbox-add-read-dir", Command: CommandSandboxReadRoot, Description: "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"},
 		{Name: "rollout", Command: CommandRollout, Description: "print the rollout file path"},
+		{Name: "voice", Command: CommandVoice, Description: "start or stop a voice conversation; /voice mute toggles the microphone"},
 		{Name: "test-approval", Command: CommandTestApproval, Description: "debug approval flow"},
 		{Name: "debug-m-drop", Command: CommandMemoryDrop, Description: "debug memory drop"},
 		{Name: "debug-m-update", Command: CommandMemoryUpdate, Description: "debug memory update"},

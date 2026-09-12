@@ -37,6 +37,7 @@ import (
 	"codex_go/sandbox/windowssandbox"
 	"codex_go/session"
 	"codex_go/shell"
+	"codex_go/voicehost"
 
 	"github.com/coder/websocket"
 	"github.com/pelletier/go-toml/v2"
@@ -203,6 +204,7 @@ func (b *Builder) Build(opts *Options) *Report {
 		b.timed(func() *DoctorCheck { return installCheck(codexHome, !opts.Summary, b.currentExe) }),
 		b.timed(func() *DoctorCheck { return runtimeCheckForDoctor(codexHome, b.currentExe) }),
 		b.timed(searchCheck),
+		b.timed(func() *DoctorCheck { return voiceRuntimeCheck(codexHome, b.currentExe) }),
 		b.timed(func() *DoctorCheck { return configCheck(codexHome, opts) }),
 		b.timed(func() *DoctorCheck { return authCheck(codexHome, opts) }),
 		b.timed(func() *DoctorCheck { return b.updatesCheck(codexHome, opts) }),
@@ -659,6 +661,43 @@ func runtimeCheckForDoctor(codexHome string, currentExe func() (string, error)) 
 		details = append(details, "current executable: "+exe)
 	}
 	return NewCheck("runtime.provenance", "runtime", CheckStatusOK, summary).DetailsList(details)
+}
+
+// voiceRuntimeCheck reports the packaged voice runtime: whether the helper is
+// present, its stamped build identity, and whether an audio codec ships with
+// it. Voice media requires both; the control plane only requires the helper.
+func voiceRuntimeCheck(codexHome string, currentExe func() (string, error)) *DoctorCheck {
+	exe, err := currentExeForDoctor(currentExe)
+	if err != nil {
+		return NewCheck("voice.runtime", "voice", CheckStatusOK, "voice runtime is not checked for a source build").
+			Detail("current executable: none")
+	}
+	installContext := doctorInstallContextForDoctor(exe, codexHome)
+	if installContext == nil || installContext.PackageLayout == nil {
+		return NewCheck("voice.runtime", "voice", CheckStatusOK, "voice runtime is only bundled in a package install")
+	}
+	status, inspectErr := voicehost.InspectRuntimePackage(installContext.PackageLayout.PackageDir)
+	if inspectErr != nil {
+		return NewCheck("voice.runtime", "voice", CheckStatusWarning, "voice runtime could not be inspected").
+			Detail("inspection error: " + inspectErr.Error())
+	}
+	if !status.HelperPresent {
+		return NewCheck("voice.runtime", "voice", CheckStatusOK, "voice helper is not bundled").
+			Detail("expected: " + filepath.Join(status.PackageDir, filepath.FromSlash(voicehost.VoiceRuntimeDirectory), "bin"))
+	}
+	details := []string{"helper: " + status.HelperPath}
+	if status.BuildCommit != "" {
+		details = append(details, "helper build commit: "+status.BuildCommit)
+	}
+	if status.CodecPresent {
+		details = append(details, "audio codec: available")
+		if status.CodecPath != "" {
+			details = append(details, "codec: "+status.CodecPath)
+		}
+	} else {
+		details = append(details, "audio codec: missing (voice media is unavailable)")
+	}
+	return NewCheck("voice.runtime", "voice", CheckStatusOK, "voice runtime is bundled for this platform").DetailsList(details)
 }
 
 func installCheck(codexHome string, showDetails bool, currentExe func() (string, error)) *DoctorCheck {

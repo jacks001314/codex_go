@@ -3,6 +3,7 @@ package telemetry
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"codex_go/memories"
 	"codex_go/state"
@@ -23,6 +24,10 @@ const (
 
 type MemoryUsageMetricSink interface {
 	Counter(name string, inc int, tags map[string]string)
+	// RecordDuration records one duration observation. The voice session
+	// lifecycle uses it for codex.voice.session.duration, which the Rust client
+	// reports as a duration rather than a counter.
+	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }
 
 type MemoryUsageShellCommandParams struct {

@@ -75,6 +75,27 @@ type Runtime interface {
 	OpenOutput(ctx context.Context, deviceID string) (AudioSink, error)
 }
 
+// ControlRuntime is implemented by runtimes that apply ordered privacy
+// controls and report accumulated levels for devices opened by the helper. A
+// runtime that does not implement it still speaks the control protocol; the
+// helper then reports default levels and records the controls without applying
+// them.
+type ControlRuntime interface {
+	// SetControls applies a complete control snapshot. Implementations must
+	// keep the transition ordered so a later control always follows an earlier
+	// one.
+	SetControls(controls AudioControls) error
+	// AudioState returns accumulated peaks and clears them.
+	AudioState() AudioState
+}
+
+// MediaRuntime is implemented by runtimes whose device callbacks feed the
+// helper's bounded audio pipeline. The media session drives that pipeline.
+type MediaRuntime interface {
+	// Pipeline returns the buffer set the opened devices were bound to.
+	Pipeline() *pcmPipeline
+}
+
 // NullRuntime is a Runtime implementation for lifecycle-only hosts. It exposes
 // no devices and rejects audio opens, matching a helper-only voice package.
 type NullRuntime struct{}

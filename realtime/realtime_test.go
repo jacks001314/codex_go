@@ -40,10 +40,10 @@ func TestAudioChunkValidate(t *testing.T) {
 func TestRealtimeSidebandReconnectHelpersLikeRust(t *testing.T) {
 	// Rust #39257: reconnect uses capped exponential backoff, honors context
 	// cancellation, and treats 404/410 handshake statuses as terminal.
-	if got := realtimeSidebandReconnectDelay(1); got != 250*time.Millisecond {
+	if got := realtimeSidebandReconnectDelay(1); got != 200*time.Millisecond {
 		t.Fatalf("reconnect delay(1) = %v", got)
 	}
-	if got := realtimeSidebandReconnectDelay(2); got != 500*time.Millisecond {
+	if got := realtimeSidebandReconnectDelay(2); got != 400*time.Millisecond {
 		t.Fatalf("reconnect delay(2) = %v", got)
 	}
 	if got := realtimeSidebandReconnectDelay(10); got > 5*time.Second {
@@ -303,6 +303,7 @@ func TestStopCancelsPendingWebRTCSidebandHandshake(t *testing.T) {
 	if err := <-callRequest; err != nil {
 		t.Fatal(err)
 	}
+	notifications = stripRealtimeTimelineNotifications(notifications)
 	if len(notifications) != 2 || notifications[1].Method != NotificationSDP {
 		t.Fatalf("start notifications = %#v", notifications)
 	}
@@ -320,8 +321,11 @@ func TestStopCancelsPendingWebRTCSidebandHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stop realtime: %v", err)
 	}
-	if closed.Method != NotificationClosed {
+	if len(closed) != 3 || closed[0].Method != NotificationItemStarted || closed[1].Method != NotificationItemCompleted || closed[2].Method != NotificationClosed {
 		t.Fatalf("closed notification = %#v", closed)
+	}
+	if closed[1].Params.(ItemCompletedNotification).Item.Content.Kind != RealtimeItemKindSessionClosed {
+		t.Fatalf("closed item = %#v", closed[1].Params)
 	}
 	release()
 	select {
@@ -553,19 +557,25 @@ func TestBinaryRealtimeFrameEmitsErrorThenClosedLikeRust(t *testing.T) {
 
 	manager := NewManager()
 	manager.SetTransportBackend(&TransportBackendConfig{WebsocketBaseURL: server.URL})
-	notifications := make(chan Notification, 4)
+	notifications := make(chan Notification, 8)
 	manager.SetNotificationSink(func(notification Notification) { notifications <- notification })
 	version := VersionV2
 	if _, _, err := manager.Start(&StartParams{ThreadID: "thread-binary", OutputModality: OutputAudio, Version: &version}); err != nil {
 		t.Fatalf("start V2 realtime: %v", err)
 	}
 	first := waitRealtimeNotification(t, notifications)
-	second := waitRealtimeNotification(t, notifications)
 	if first.Method != NotificationError || first.Params.(ErrorNotification).Message != "unexpected binary realtime websocket event" {
 		t.Fatalf("first binary notification = %#v", first)
 	}
-	if second.Method != NotificationClosed || second.Params.(ClosedNotification).Reason == nil || *second.Params.(ClosedNotification).Reason != "error" {
-		t.Fatalf("second binary notification = %#v", second)
+	last := waitRealtimeNotification(t, notifications)
+	for last.Method != NotificationClosed {
+		if !isRealtimeTimelineNotification(last.Method) {
+			t.Fatalf("unexpected binary notification = %#v", last)
+		}
+		last = waitRealtimeNotification(t, notifications)
+	}
+	if last.Params.(ClosedNotification).Reason == nil || *last.Params.(ClosedNotification).Reason != "error" {
+		t.Fatalf("closed binary notification = %#v", last)
 	}
 }
 
@@ -798,6 +808,7 @@ func TestManagerRealWebsocketV3IsBidirectionalAndOrdered(t *testing.T) {
 			ThreadID: "thread-v3", OutputModality: OutputAudio, Version: &version,
 			InitialItems: []InitialTextItem{{Role: RoleDeveloper, Text: "Remember this."}},
 		})
+		started = stripRealtimeTimelineNotifications(started)
 		if err == nil && (len(started) != 1 || started[0].Method != NotificationStarted) {
 			err = fmt.Errorf("start notifications = %#v", started)
 		}
@@ -853,13 +864,19 @@ func TestManagerRealWebsocketV3IsBidirectionalAndOrdered(t *testing.T) {
 
 	wantMethods := []NotificationMethod{NotificationTranscriptDelta, NotificationTranscriptDone, NotificationOutputAudioDelta, NotificationItemAdded, NotificationClosed}
 	for _, want := range wantMethods {
-		select {
-		case notification := <-notifications:
-			if notification.Method != want {
-				t.Fatalf("notification method = %s, want %s", notification.Method, want)
+		for {
+			select {
+			case notification := <-notifications:
+				if isRealtimeTimelineNotification(notification.Method) {
+					continue
+				}
+				if notification.Method != want {
+					t.Fatalf("notification method = %s, want %s", notification.Method, want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("timed out waiting for %s", want)
 			}
-		case <-time.After(5 * time.Second):
-			t.Fatalf("timed out waiting for %s", want)
+			break
 		}
 	}
 	foundHandoff := false
@@ -912,6 +929,7 @@ func TestStartParamsValidateV3InitialItemsAndHandoffMode(t *testing.T) {
 	}
 	manager := NewManager()
 	state, notifications, err := manager.Start(&params)
+	notifications = stripRealtimeTimelineNotifications(notifications)
 	if err != nil || state == nil || len(notifications) != 1 || notifications[0].Method != NotificationStarted {
 		t.Fatalf("start state=%#v notifications=%#v err=%v", state, notifications, err)
 	}
@@ -1376,10 +1394,12 @@ func TestManagerLifecycle(t *testing.T) {
 	if state.StartedAt != now || state.Config.Version != VersionV1 {
 		t.Fatalf("state = %+v", state)
 	}
+	notifications = stripRealtimeTimelineNotifications(notifications)
 	if len(notifications) != 2 || notifications[0].Method != NotificationStarted || notifications[1].Method != NotificationSDP {
 		t.Fatalf("notifications = %+v", notifications)
 	}
 	restarted, restartNotifications, err := manager.Start(&StartParams{ThreadID: "thread-a", OutputModality: OutputText})
+	restartNotifications = stripRealtimeTimelineNotifications(restartNotifications)
 	if err != nil || restarted == nil || restarted.TextInputs != 0 || len(restartNotifications) != 1 || restartNotifications[0].Method != NotificationStarted {
 		t.Fatalf("second start did not replace session: state=%#v notifications=%#v err=%v", restarted, restartNotifications, err)
 	}
@@ -1414,7 +1434,7 @@ func TestManagerLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	if state.ClosedAt == nil || closed.Method != NotificationClosed {
+	if state.ClosedAt == nil || len(closed) == 0 || closed[len(closed)-1].Method != NotificationClosed {
 		t.Fatalf("closed = %+v notification=%+v", state, closed)
 	}
 	if _, err := manager.AppendText(&AppendTextParams{ThreadID: "thread-a", Text: "again"}); !errors.Is(err, ErrRealtimeNotRunning) {
@@ -1434,6 +1454,7 @@ func TestManagerZeroValueIsUsable(t *testing.T) {
 	if state == nil || state.Config.ThreadID != "thread-a" || state.Config.Version != VersionV2 {
 		t.Fatalf("state = %+v", state)
 	}
+	notifications = stripRealtimeTimelineNotifications(notifications)
 	if len(notifications) != 1 || notifications[0].Method != NotificationStarted {
 		t.Fatalf("notifications = %+v", notifications)
 	}
@@ -1448,7 +1469,7 @@ func TestManagerZeroValueIsUsable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	if closed.ClosedAt == nil || notification.Method != NotificationClosed {
+	if closed.ClosedAt == nil || len(notification) == 0 || notification[len(notification)-1].Method != NotificationClosed {
 		t.Fatalf("closed = %+v notification=%+v", closed, notification)
 	}
 }
@@ -1637,4 +1658,29 @@ func validAudio() AudioChunk {
 
 func fixedTime() time.Time {
 	return time.Date(2026, 6, 29, 8, 0, 0, 0, time.UTC)
+}
+
+// stripRealtimeTimelineNotifications removes the canonical timeline
+// notifications, which carry time-ordered identifiers and are asserted by the
+// dedicated history tests instead.
+func stripRealtimeTimelineNotifications(notifications []Notification) []Notification {
+	filtered := make([]Notification, 0, len(notifications))
+	for _, notification := range notifications {
+		if isRealtimeTimelineNotification(notification.Method) {
+			continue
+		}
+		filtered = append(filtered, notification)
+	}
+	return filtered
+}
+
+// isRealtimeTimelineNotification reports whether a notification carries a
+// canonical timeline item rather than session or transport state.
+func isRealtimeTimelineNotification(method NotificationMethod) bool {
+	switch method {
+	case NotificationItemStarted, NotificationItemCompleted, NotificationItemTranscriptDelta:
+		return true
+	default:
+		return false
+	}
 }
