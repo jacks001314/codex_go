@@ -450,6 +450,11 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	if _, ok := cfg.Values["experimental_thread_store_endpoint"]; ok {
 		return nil, errors.New("`experimental_thread_store_endpoint` is no longer supported; remove it from config.toml")
 	}
+	// Rust deserializes `mcp_oauth_credentials_store` as an enum, so an
+	// unrecognized value fails the load rather than silently defaulting.
+	if err := ValidateMCPOAuthCredentialsStoreMode(cfg.Values); err != nil {
+		return nil, err
+	}
 	// Rust #43797: memories.version is a closed enum; an unrecognized value must
 	// fail config load rather than silently falling back to v1.
 	if memories, ok := cfg.Values["memories"].(map[string]any); ok {
@@ -1710,6 +1715,57 @@ func (c *Config) BackgroundTerminalMaxTimeoutMS() uint64 {
 		}
 	}
 	return DefaultBackgroundTerminalMaxTimeoutMS
+}
+
+// MCPOAuthCredentialsStoreModeValues lists the accepted
+// `mcp_oauth_credentials_store` values (Rust OAuthCredentialsStoreMode).
+var MCPOAuthCredentialsStoreModeValues = []string{"auto", "file", "keyring"}
+
+// ValidateMCPOAuthCredentialsStoreMode rejects an unrecognized
+// `mcp_oauth_credentials_store` value, mirroring Rust's enum deserialization,
+// which fails the config load.
+func ValidateMCPOAuthCredentialsStoreMode(values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	for _, key := range []string{"mcp_oauth_credentials_store", "mcpOauthCredentialsStore"} {
+		raw, ok := values[key]
+		if !ok {
+			continue
+		}
+		text, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("invalid %s: expected one of %s", key, strings.Join(MCPOAuthCredentialsStoreModeValues, ", "))
+		}
+		switch strings.ToLower(strings.TrimSpace(text)) {
+		case "", "auto", "file", "keyring":
+		default:
+			return fmt.Errorf("invalid %s %q; expected one of %s", key, text, strings.Join(MCPOAuthCredentialsStoreModeValues, ", "))
+		}
+	}
+	return nil
+}
+
+// MCPOAuthCredentialsStoreMode returns the configured MCP OAuth credential
+// store mode (default auto), mirroring Rust
+// `mcp_oauth_credentials_store`.
+func (c *Config) MCPOAuthCredentialsStoreMode() string {
+	if c == nil || c.Values == nil {
+		return "auto"
+	}
+	for _, key := range []string{"mcp_oauth_credentials_store", "mcpOauthCredentialsStore"} {
+		if raw, ok := c.Values[key].(string); ok {
+			switch strings.ToLower(strings.TrimSpace(raw)) {
+			case "file":
+				return "file"
+			case "keyring":
+				return "keyring"
+			case "", "auto":
+				return "auto"
+			}
+		}
+	}
+	return "auto"
 }
 
 func stringFromConfigValue(value any) string {

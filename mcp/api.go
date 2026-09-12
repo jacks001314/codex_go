@@ -694,7 +694,7 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 		service.sharedHTTPClient = runtime.HTTPClient
 		service.sharedHTTPClientKey = mcpHTTPDoerIdentity(runtime.HTTPClient)
 		if strings.TrimSpace(runtime.CodexHome) != "" {
-			service.oauth = NewOAuthStore(runtime.CodexHome)
+			service.oauth = NewOAuthStoreWithMode(runtime.CodexHome, runtime.OAuthCredentialsStoreMode)
 		}
 		for name, registration := range runtime.Servers {
 			name = strings.TrimSpace(name)
@@ -1819,7 +1819,7 @@ func (s *MCPService) oauthStoreForConfig(config *ServerConfig) *OAuthStore {
 		return s.oauth
 	}
 	if home := strings.TrimSpace(config.CodexHome); home != "" {
-		return NewOAuthStore(home)
+		return NewOAuthStoreWithMode(home, config.OAuthCredentialsStoreMode)
 	}
 	return nil
 }
@@ -2418,7 +2418,7 @@ func (s *MCPService) authStatusForConfig(name string, config *ServerConfig) MCPA
 	}
 	store := s.oauth
 	if store == nil && strings.TrimSpace(config.CodexHome) != "" {
-		store = NewOAuthStore(config.CodexHome)
+		store = NewOAuthStoreWithMode(config.CodexHome, config.OAuthCredentialsStoreMode)
 	}
 	if store == nil {
 		if strings.TrimSpace(config.OAuthClientID) != "" || strings.TrimSpace(config.OAuthResource) != "" {

@@ -39,6 +39,9 @@ type OAuthTokenSet struct {
 
 type OAuthStore struct {
 	CodexHome string
+	// Mode is the configured credential store mode (Rust
+	// OAuthCredentialsStoreMode); an empty value means auto.
+	Mode OAuthCredentialsStoreMode
 }
 
 type oauthFallbackEntry struct {
@@ -56,12 +59,63 @@ type oauthFallbackEntry struct {
 }
 
 func NewOAuthStore(codexHome string) *OAuthStore {
-	return &OAuthStore{CodexHome: codexHome}
+	return NewOAuthStoreWithMode(codexHome, OAuthCredentialsStoreAuto)
+}
+
+// NewOAuthStoreWithMode builds a store for an explicit mode.
+func NewOAuthStoreWithMode(codexHome string, mode OAuthCredentialsStoreMode) *OAuthStore {
+	if _, ok := ParseOAuthCredentialsStoreMode(string(mode)); !ok {
+		mode = OAuthCredentialsStoreAuto
+	}
+	return &OAuthStore{CodexHome: codexHome, Mode: mode}
+}
+
+// effectiveMode resolves the store for this instance. Rust resolves the store
+// once per client lifetime ("once an MCP client loads credentials from one
+// store, that client keeps the resolved store"), so auto is resolved on every
+// call from the fixed availability of the platform: without a keyring backend
+// auto always means the credentials file.
+func (s *OAuthStore) effectiveMode() OAuthCredentialsStoreMode {
+	if s == nil {
+		return OAuthCredentialsStoreAuto
+	}
+	mode, ok := ParseOAuthCredentialsStoreMode(string(s.Mode))
+	if !ok {
+		mode = OAuthCredentialsStoreAuto
+	}
+	if mode == OAuthCredentialsStoreAuto && MCPOAuthKeyringAvailable {
+		return OAuthCredentialsStoreKeyring
+	}
+	if mode == OAuthCredentialsStoreAuto {
+		return OAuthCredentialsStoreFile
+	}
+	return mode
+}
+
+// keyringUnavailable reports the Rust "keyring when available, otherwise fail"
+// outcome for the keyring mode.
+func (s *OAuthStore) keyringUnavailable() error {
+	if s == nil || s.effectiveMode() != OAuthCredentialsStoreKeyring {
+		return nil
+	}
+	if MCPOAuthKeyringAvailable {
+		return nil
+	}
+	return errors.New(MCPOAuthKeyringUnavailableError)
+}
+
+// KeyringUnavailable reports whether this store cannot persist credentials
+// because keyring storage was required but is unavailable.
+func (s *OAuthStore) KeyringUnavailable() bool {
+	return s != nil && s.effectiveMode() == OAuthCredentialsStoreKeyring && !MCPOAuthKeyringAvailable
 }
 
 func (s *OAuthStore) Load(serverName string, serverURL string) (*OAuthTokenSet, error) {
 	if s == nil {
 		return nil, errors.New("MCP OAuth store is nil")
+	}
+	if err := s.keyringUnavailable(); err != nil {
+		return nil, err
 	}
 	oauthFallbackMu.Lock()
 	defer oauthFallbackMu.Unlock()
@@ -94,6 +148,9 @@ func (s *OAuthStore) Load(serverName string, serverURL string) (*OAuthTokenSet, 
 func (s *OAuthStore) Save(tokens *OAuthTokenSet) error {
 	if s == nil {
 		return errors.New("MCP OAuth store is nil")
+	}
+	if err := s.keyringUnavailable(); err != nil {
+		return err
 	}
 	if tokens == nil {
 		return errors.New("MCP OAuth tokens are required")
@@ -143,6 +200,9 @@ func (s *OAuthStore) saveWithLockHeld(tokens *OAuthTokenSet) error {
 func (s *OAuthStore) Delete(serverName string, serverURL string) (bool, error) {
 	if s == nil {
 		return false, errors.New("MCP OAuth store is nil")
+	}
+	if err := s.keyringUnavailable(); err != nil {
+		return false, err
 	}
 	// Serialize credential mutations across processes (Rust delete_oauth_tokens
 	// acquires the credential lock before deleting).

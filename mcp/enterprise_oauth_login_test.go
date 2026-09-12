@@ -147,7 +147,7 @@ func TestStartEnterpriseOAuthLoginStagesCredentials(t *testing.T) {
 	authority, err := CommitEnterpriseOAuthCredentials(home, credentials.Tokens, credentials.CommitGeneration(), func() *string {
 		value := "account-1"
 		return &value
-	})
+	}, OAuthCredentialsStoreAuto)
 	if err != nil || authority != "account-1" {
 		t.Fatalf("commit = (%q, %v)", authority, err)
 	}
@@ -317,7 +317,7 @@ func TestDeleteEnterpriseOAuthTokensInvalidatesStagedAttempt(t *testing.T) {
 	const name = "enterprise"
 	const issuer = "https://idp.example.com"
 
-	attempt, err := AcquireEnterpriseOAuthCredentialGuard(home, name, issuer)
+	attempt, err := AcquireEnterpriseOAuthCredentialGuard(home, name, issuer, OAuthCredentialsStoreAuto)
 	if err != nil {
 		t.Fatalf("acquire attempt guard: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestDeleteEnterpriseOAuthTokensInvalidatesStagedAttempt(t *testing.T) {
 		t.Fatalf("save grant: %v", err)
 	}
 
-	removed, err := DeleteEnterpriseOAuthTokens(home, name, issuer)
+	removed, err := DeleteEnterpriseOAuthTokens(home, name, issuer, OAuthCredentialsStoreAuto)
 	if err != nil || !removed {
 		t.Fatalf("delete enterprise tokens = (%v, %v), want (true, nil)", removed, err)
 	}
@@ -344,7 +344,7 @@ func TestDeleteEnterpriseOAuthTokensInvalidatesStagedAttempt(t *testing.T) {
 	}
 
 	// The staged attempt is stale: its generation no longer matches.
-	stale, err := AcquireEnterpriseOAuthCredentialGuard(home, name, issuer)
+	stale, err := AcquireEnterpriseOAuthCredentialGuard(home, name, issuer, OAuthCredentialsStoreAuto)
 	if err != nil {
 		t.Fatalf("reacquire guard: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestDeleteEnterpriseOAuthTokensInvalidatesStagedAttempt(t *testing.T) {
 	}
 
 	// A second logout has no grant but still reports false without error.
-	removed, err = DeleteEnterpriseOAuthTokens(home, name, issuer)
+	removed, err = DeleteEnterpriseOAuthTokens(home, name, issuer, OAuthCredentialsStoreAuto)
 	if err != nil || removed {
 		t.Fatalf("second delete = (%v, %v), want (false, nil)", removed, err)
 	}
@@ -376,7 +376,7 @@ func TestCommitEnterpriseOAuthCredentialsMatchesRust(t *testing.T) {
 		AccessToken: "access", RefreshToken: "refresh",
 	}
 
-	guard, err := AcquireEnterpriseOAuthCredentialGuard(home, name, issuer)
+	guard, err := AcquireEnterpriseOAuthCredentialGuard(home, name, issuer, OAuthCredentialsStoreAuto)
 	if err != nil {
 		t.Fatalf("acquire guard: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestCommitEnterpriseOAuthCredentialsMatchesRust(t *testing.T) {
 	authority, err := CommitEnterpriseOAuthCredentials(home, tokens, generation, func() *string {
 		value := "account-1"
 		return &value
-	})
+	}, OAuthCredentialsStoreAuto)
 	if err != nil || authority != "account-1" {
 		t.Fatalf("commit = (%q, %v)", authority, err)
 	}
@@ -404,7 +404,7 @@ func TestCommitEnterpriseOAuthCredentialsMatchesRust(t *testing.T) {
 	if _, err := CommitEnterpriseOAuthCredentials(home, tokens, staleGeneration, func() *string {
 		called = true
 		return nil
-	}); err == nil {
+	}, OAuthCredentialsStoreAuto); err == nil {
 		t.Fatal("a stale generation must be rejected")
 	}
 	if called {
@@ -414,7 +414,7 @@ func TestCommitEnterpriseOAuthCredentialsMatchesRust(t *testing.T) {
 	// A current generation with a nil authority proof is rejected.
 	if _, err := CommitEnterpriseOAuthCredentials(home, tokens, generation, func() *string {
 		return nil
-	}); err == nil {
+	}, OAuthCredentialsStoreAuto); err == nil {
 		t.Fatal("a nil authority proof must be rejected")
 	}
 }

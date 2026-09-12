@@ -97,6 +97,11 @@ type ServerConfig struct {
 	// non-nil it wins over the default and host-owned-Apps modes; nil preserves
 	// the existing default.
 	ProtocolModeOverride *MCPProtocolMode `json:"-"`
+	// OAuthCredentialsStoreMode carries the process-wide
+	// `mcp_oauth_credentials_store` value down to this server so OAuth
+	// refreshes use the configured credential store (Rust
+	// OAuthCredentialsStoreMode).
+	OAuthCredentialsStoreMode OAuthCredentialsStoreMode `json:"-"`
 }
 
 func (c *ServerConfig) EffectiveEnvironmentID() string {
@@ -258,6 +263,9 @@ type RuntimeConfig struct {
 	// A server absent from this map has no published authority, so its calls
 	// and elicitations are rejected (#40728).
 	ServerPermissionProfiles map[string]*sandbox.PermissionProfile
+	// OAuthCredentialsStoreMode is Rust's `mcp_oauth_credentials_store`
+	// (auto by default) applied to MCP OAuth credential storage.
+	OAuthCredentialsStoreMode OAuthCredentialsStoreMode
 }
 
 type HTTPDoer interface {
@@ -291,6 +299,7 @@ func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codex
 		Requirements:              managedconfig.CloneConfigRequirements(requirements),
 		ProtocolMode:              mcpProtocolModeFromValues(values),
 		HostOwnedAppsProtocolMode: hostOwnedAppsProtocolModeFromValues(values),
+		OAuthCredentialsStoreMode: runtimeOAuthCredentialsStoreMode(values),
 	}
 	rawServers, ok := runtimeConfigMapAny(values, "mcp_servers", "mcpServers")
 	if !ok {
@@ -315,6 +324,9 @@ func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codex
 		}
 		if config.OAuthCallbackURL == "" {
 			config.OAuthCallbackURL = runtimeConfigStringAny(values, "mcp_oauth_callback_url", "mcpOauthCallbackUrl")
+		}
+		if config.OAuthCredentialsStoreMode == "" {
+			config.OAuthCredentialsStoreMode = out.OAuthCredentialsStoreMode
 		}
 		out.Servers[name] = ServerRegistration{
 			Name:   name,

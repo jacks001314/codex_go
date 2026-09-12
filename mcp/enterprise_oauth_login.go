@@ -151,7 +151,12 @@ type EnterpriseOAuthCredentialGuard struct {
 
 // AcquireEnterpriseOAuthCredentialGuard acquires the credential lock and opens
 // the generation file for one enterprise credential.
-func AcquireEnterpriseOAuthCredentialGuard(codexHome string, credentialName string, issuer string) (*EnterpriseOAuthCredentialGuard, error) {
+func AcquireEnterpriseOAuthCredentialGuard(
+	codexHome string,
+	credentialName string,
+	issuer string,
+	mode OAuthCredentialsStoreMode,
+) (*EnterpriseOAuthCredentialGuard, error) {
 	lock, err := acquireMCPOAuthCredentialLockForServer(codexHome, credentialName, issuer)
 	if err != nil {
 		return nil, errors.New("failed to lock enterprise credentials")
@@ -162,7 +167,7 @@ func AcquireEnterpriseOAuthCredentialGuard(codexHome string, credentialName stri
 		return nil, errors.New("failed to open enterprise login generation")
 	}
 	return &EnterpriseOAuthCredentialGuard{
-		store:          NewOAuthStore(codexHome),
+		store:          NewOAuthStoreWithMode(codexHome, mode),
 		credentialName: strings.TrimSpace(credentialName),
 		issuer:         strings.TrimSpace(issuer),
 		generationFile: generationFile,
@@ -199,8 +204,13 @@ func (g *EnterpriseOAuthCredentialGuard) Close() {
 
 // DeleteEnterpriseOAuthTokens invalidates earlier enterprise logins across
 // processes, then deletes any stored grant.
-func DeleteEnterpriseOAuthTokens(codexHome string, credentialName string, issuer string) (bool, error) {
-	guard, err := AcquireEnterpriseOAuthCredentialGuard(codexHome, credentialName, issuer)
+func DeleteEnterpriseOAuthTokens(
+	codexHome string,
+	credentialName string,
+	issuer string,
+	mode OAuthCredentialsStoreMode,
+) (bool, error) {
+	guard, err := AcquireEnterpriseOAuthCredentialGuard(codexHome, credentialName, issuer, mode)
 	if err != nil {
 		return false, err
 	}
@@ -213,12 +223,18 @@ func DeleteEnterpriseOAuthTokens(codexHome string, credentialName string, issuer
 // caller's authority proof. isCurrent returns a pointer to the proof, or nil
 // when the attempt no longer matches the active account or configuration (Rust
 // EnterpriseOAuthCredentials::commit_if).
-func CommitEnterpriseOAuthCredentials[T any](codexHome string, tokens *OAuthTokenSet, generation mcpOAuthEnterpriseGeneration, isCurrent func() *T) (T, error) {
+func CommitEnterpriseOAuthCredentials[T any](
+	codexHome string,
+	tokens *OAuthTokenSet,
+	generation mcpOAuthEnterpriseGeneration,
+	isCurrent func() *T,
+	mode OAuthCredentialsStoreMode,
+) (T, error) {
 	var zero T
 	if tokens == nil {
 		return zero, errors.New("failed to store enterprise credentials")
 	}
-	guard, err := AcquireEnterpriseOAuthCredentialGuard(codexHome, tokens.ServerName, tokens.ServerURL)
+	guard, err := AcquireEnterpriseOAuthCredentialGuard(codexHome, tokens.ServerName, tokens.ServerURL, mode)
 	if err != nil {
 		return zero, err
 	}

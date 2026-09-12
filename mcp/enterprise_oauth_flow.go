@@ -221,6 +221,9 @@ type EnterpriseOAuthLoginOptions struct {
 	RedirectURL    string
 	HTTPClient     *http.Client
 	Timeout        time.Duration
+	// OAuthCredentialsStoreMode is the configured `mcp_oauth_credentials_store`
+	// for the credential the guard commits.
+	OAuthCredentialsStoreMode OAuthCredentialsStoreMode
 }
 
 // EnterpriseOAuthLoginHandle owns an enterprise authorization attempt. It
@@ -253,7 +256,7 @@ func StartEnterpriseOAuthLogin(ctx context.Context, options *EnterpriseOAuthLogi
 	}
 	// Capture the generation before discovery or browser setup, then release
 	// the lock while the user signs in.
-	guard, err := AcquireEnterpriseOAuthCredentialGuard(options.CodexHome, credentialName, issuer)
+	guard, err := AcquireEnterpriseOAuthCredentialGuard(options.CodexHome, credentialName, issuer, options.OAuthCredentialsStoreMode)
 	if err != nil {
 		return nil, err
 	}

@@ -50,7 +50,7 @@ func (c *httpClient) adoptRefreshedOAuthCredential(previous *OAuthTokenSet, serv
 	if !tokenHasExpired(previous, time.Now()) {
 		return nil, nil
 	}
-	replacement, err := NewOAuthStore(codexHome).Load(serverName, c.config.URL)
+	replacement, err := NewOAuthStoreWithMode(codexHome, c.config.OAuthCredentialsStoreMode).Load(serverName, c.config.URL)
 	if err != nil || replacement == nil {
 		return nil, nil
 	}
@@ -1303,7 +1303,7 @@ func (c *httpClient) authorizationBearerToken(forceRefresh bool) (string, bool) 
 		return "", false
 	}
 	serverName = c.config.OAuthCredentialName(serverName)
-	tokens, err := NewOAuthStore(codexHome).Load(serverName, c.config.URL)
+	tokens, err := NewOAuthStoreWithMode(codexHome, c.config.OAuthCredentialsStoreMode).Load(serverName, c.config.URL)
 	if err != nil || tokens == nil {
 		return "", false
 	}
@@ -1335,7 +1335,7 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 	if c == nil || c.config == nil || tokens == nil {
 		return nil, errors.New("HTTP MCP OAuth refresh requires client and tokens")
 	}
-	store := NewOAuthStore(codexHome)
+	store := NewOAuthStoreWithMode(codexHome, c.config.OAuthCredentialsStoreMode)
 	// Hold the cross-process credential lock through the authoritative reread,
 	// the provider request, and persistence (Rust refresh_transaction). A
 	// competitor that already refreshed is adopted instead of replaying its
