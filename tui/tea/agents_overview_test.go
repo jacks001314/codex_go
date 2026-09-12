@@ -9,6 +9,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	"codex_go/appserver"
 	"codex_go/protocol"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
@@ -323,6 +324,50 @@ func TestModelAgentsDashboardOpenCurrentThreadIsNoop(t *testing.T) {
 	}
 	if len(switched) != 0 {
 		t.Fatalf("switched = %v, want none", switched)
+	}
+}
+
+// TestModelAgentsDashboardOpenReadOnlyAppliesSnapshot covers Rust #44969: a
+// task managed by another app server opens as a frozen read-only history
+// snapshot with the resumed settings applied and the composer protected.
+func TestModelAgentsDashboardOpenReadOnlyAppliesSnapshot(t *testing.T) {
+	cwd := "D:/repo"
+	state := codextui.NewState(nil)
+	state.SetThreadID("root-1")
+	model := NewModel(state, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(currentThreadID string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+		OnSwitchAgent: func(threadID string) (AgentThreadSwitchResponse, error) {
+			return AgentThreadSwitchResponse{
+				Entry:          codextui.AgentThreadEntry{ThreadID: threadID, AgentNickname: "agent"},
+				Status:         "running",
+				ReadOnly:       true,
+				ThreadSettings: &appserver.Settings{CWD: cwd},
+			}, nil
+		},
+	})
+	openAgentsDashboard(t, model)
+	model.agentsOverview.Selected = 1 // root-2
+	updated, command := model.Update(key(bubbletea.KeyEnter))
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("open returned no attach command")
+	}
+	model.Update(command())
+	if !model.readOnlyThread {
+		t.Fatal("a task managed elsewhere must open read-only")
+	}
+	if model.State == nil || model.State.CWD != cwd {
+		t.Fatalf("read-only snapshot did not apply the resumed settings: %#v", model.State)
+	}
+	if strings.TrimSpace(model.composer.Value()) != "" {
+		t.Fatalf("read-only composer = %q, want empty", model.composer.Value())
+	}
+	if notice := model.renderReadOnlyThreadNotice(); !strings.Contains(notice, "open in another app") {
+		t.Fatalf("read-only notice = %q", notice)
 	}
 }
 

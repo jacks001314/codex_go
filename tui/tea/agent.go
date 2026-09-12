@@ -268,7 +268,10 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		// Only replay the buffer when the persisted thread is empty (the typical
 		// running-agent case). Completed content is authoritative once persisted,
 		// and replaying item events on top of it would duplicate messages.
-		if len(messages) == 0 {
+		// Rust #44969: a read-only snapshot skips buffered request replay so the
+		// frozen history is not rewritten by events observed while another app
+		// owns the task.
+		if len(messages) == 0 && !message.Response.ReadOnly {
 			buffered := m.backgroundThreadEvents[entry.ThreadID]
 			for _, event := range buffered {
 				messages = applyBufferedThreadEventToMessages(messages, event)
@@ -303,6 +306,13 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 	m.upsertAgentEntry(entry)
 	m.setActiveAgentLabel(entry)
 	m.notice = entry.DisplayLabel()
+	// Rust #43253/#43330: the resumed thread owns its settings, and Rust #44969
+	// opens a task managed by another app server as a read-only history snapshot
+	// instead of refusing to attach.
+	if message.Response.ThreadSettings != nil {
+		m.applyThreadSettingsValues(*message.Response.ThreadSettings)
+	}
+	m.setReadOnlyThread(message.Response.ReadOnly)
 	m.restorePendingAgentsOverviewDraft()
 	m.refreshTranscript()
 }

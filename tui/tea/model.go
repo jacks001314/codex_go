@@ -174,6 +174,12 @@ type AgentThreadSwitchResponse struct {
 	// turn's active reasoning identity (Rust #43921 StatusState).
 	WorkingReasoningTurnID string
 	WorkingReasoningItemID string
+	// ThreadSettings carries the resumed thread's server-owned settings
+	// (Rust #43253/#43330); nil when the server did not report them.
+	ThreadSettings *appserver.Settings
+	// ReadOnly marks a switch that fell back to a frozen read-only history
+	// snapshot because another app server already owns the task (Rust #44969).
+	ReadOnly bool
 }
 
 type TokenActivityReaderFunc func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error)

@@ -1644,9 +1644,35 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 		return codextea.AgentThreadSwitchResponse{}, err
 	}
 	defer client.close()
+	// Rust #44969: attach through thread/resume so the server owns the writer and
+	// reports the thread's settings. When another app server already owns the
+	// task the resume fails with the active-writer conflict, so fall back to a
+	// frozen read-only history snapshot instead of refusing to open it.
+	var resumed appserver.ThreadResumeResponse
+	resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, appserver.ThreadResumeParams{ThreadID: threadID}, &resumed)
+	if resumeErr == nil && resumed.Thread != nil {
+		response := remoteTUIAgentSwitchResponseFromThread(resumed.Thread)
+		response.ThreadSettings = remoteTUISettingsFromResume(&resumed)
+		return response, nil
+	}
+	if !remoteTUIResumeConflict(resumeErr) {
+		return codextea.AgentThreadSwitchResponse{}, resumeErr
+	}
 	thread, err := remoteTUIReadThread(ctx, client, threadID, true)
 	if err != nil {
 		return codextea.AgentThreadSwitchResponse{}, err
+	}
+	response := remoteTUIAgentSwitchResponseFromThread(thread)
+	response.ReadOnly = true
+	return response, nil
+}
+
+// remoteTUIAgentSwitchResponseFromThread builds the agent-switch response from
+// a thread snapshot shared by the resume and read-only fallback paths.
+func remoteTUIAgentSwitchResponseFromThread(thread *appserver.Thread) codextea.AgentThreadSwitchResponse {
+	threadID := ""
+	if thread != nil {
+		threadID = strings.TrimSpace(thread.ID)
 	}
 	primaryThreadID := threadID
 	if thread != nil && thread.ParentThreadID != nil && strings.TrimSpace(*thread.ParentThreadID) != "" {
@@ -1661,7 +1687,7 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 		WorkingStatusHeader:    remoteTUIThreadActiveReasoningHeading(thread),
 		WorkingReasoningTurnID: remoteTUIThreadActiveReasoningTurnID(thread),
 		WorkingReasoningItemID: remoteTUIThreadActiveReasoningItemID(thread),
-	}, nil
+	}
 }
 
 func remoteTUIResolveAgentPrimaryThread(ctx context.Context, client *remoteAppServerTUIClient, currentThreadID string) (string, []*appserver.Thread, error) {

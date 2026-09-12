@@ -5124,6 +5124,104 @@ func TestInteractiveRemoteSwitchAgentThreadReadsTranscript(t *testing.T) {
 			switch req.Method {
 			case string(appserver.MethodInitialize):
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadResume):
+				var params appserver.ThreadResumeParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-worker" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/resume params = %#v", params))
+					return
+				}
+				thread := remoteAgentTestThread("thread-worker", "Scout", "review", "subagent", "active", &parent, turns)
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+					"thread":        thread,
+					"cwd":           "D:/repo",
+					"model":         "gpt-5.2-codex",
+					"modelProvider": "openai",
+				}})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	response, err := interactiveRemoteSwitchAgentThread(ctx, endpoint, "thread-worker")
+	if err != nil {
+		t.Fatalf("switch agent error = %v", err)
+	}
+	if response.Entry.ThreadID != "thread-worker" || response.Entry.AgentNickname != "Scout" || response.Entry.AgentRole != "review" || response.Entry.IsPrimary {
+		t.Fatalf("entry = %#v", response.Entry)
+	}
+	if response.Status != "running" {
+		t.Fatalf("status = %q, want running", response.Status)
+	}
+	if len(response.Messages) != 2 || response.Messages[0].Role != codextui.RoleUser || response.Messages[0].Text != "worker prompt" || response.Messages[1].Role != codextui.RoleAssistant || response.Messages[1].Text != "worker answer" {
+		t.Fatalf("messages = %#v", response.Messages)
+	}
+	if initialize := remoteTUITestReadCapturedRequest(t, requests); initialize.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("initialize method = %s", initialize.Method)
+	}
+	if resume := remoteTUITestReadCapturedRequest(t, requests); resume.Method != string(appserver.MethodThreadResume) {
+		t.Fatalf("resume method = %s", resume.Method)
+	}
+	if response.ReadOnly || response.ThreadSettings == nil || response.ThreadSettings.CWD != "D:/repo" || response.ThreadSettings.Model != "gpt-5.2-codex" {
+		t.Fatalf("resume settings = %#v (readOnly=%v)", response.ThreadSettings, response.ReadOnly)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+// TestInteractiveRemoteSwitchAgentThreadFallsBackToReadOnlyHistory covers Rust
+// #44969: opening a task managed by another app server attaches to a frozen
+// read-only history snapshot instead of failing.
+func TestInteractiveRemoteSwitchAgentThreadFallsBackToReadOnlyHistory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	parent := "thread-main"
+	turns := []any{map[string]any{
+		"id":     "turn-worker",
+		"status": "completed",
+		"items": []any{
+			map[string]any{"id": "user-1", "type": "userMessage", "text": "worker prompt"},
+			map[string]any{"id": "agent-1", "type": "agentMessage", "text": "worker answer"},
+		},
+	}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadResume):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{
+					"code":    -32000,
+					"message": "thread thread-worker already has an active writer",
+				}})
 			case string(appserver.MethodThreadRead):
 				var params appserver.ThreadReadParams
 				if err := json.Unmarshal(req.Params, &params); err != nil {
@@ -5150,17 +5248,20 @@ func TestInteractiveRemoteSwitchAgentThreadReadsTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("switch agent error = %v", err)
 	}
-	if response.Entry.ThreadID != "thread-worker" || response.Entry.AgentNickname != "Scout" || response.Entry.AgentRole != "review" || response.Entry.IsPrimary {
-		t.Fatalf("entry = %#v", response.Entry)
+	if !response.ReadOnly {
+		t.Fatal("a task managed elsewhere must open read-only")
 	}
-	if response.Status != "running" {
-		t.Fatalf("status = %q, want running", response.Status)
+	if response.ThreadSettings != nil {
+		t.Fatalf("read-only fallback settings = %#v, want nil", response.ThreadSettings)
 	}
-	if len(response.Messages) != 2 || response.Messages[0].Role != codextui.RoleUser || response.Messages[0].Text != "worker prompt" || response.Messages[1].Role != codextui.RoleAssistant || response.Messages[1].Text != "worker answer" {
-		t.Fatalf("messages = %#v", response.Messages)
+	if response.Entry.ThreadID != "thread-worker" || len(response.Messages) != 2 {
+		t.Fatalf("entry = %#v messages = %#v", response.Entry, response.Messages)
 	}
 	if initialize := remoteTUITestReadCapturedRequest(t, requests); initialize.Method != string(appserver.MethodInitialize) {
 		t.Fatalf("initialize method = %s", initialize.Method)
+	}
+	if resume := remoteTUITestReadCapturedRequest(t, requests); resume.Method != string(appserver.MethodThreadResume) {
+		t.Fatalf("resume method = %s", resume.Method)
 	}
 	if read := remoteTUITestReadCapturedRequest(t, requests); read.Method != string(appserver.MethodThreadRead) {
 		t.Fatalf("read method = %s", read.Method)
