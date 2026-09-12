@@ -266,9 +266,12 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	if limit := e.resolvedOutputTokenLimit(); limit > 0 {
 		truncateMCPResponseToOutputTokenLimit(response, limit)
 	}
-	body := MCPToolResponseText(response)
+	// Rust #40737: MCP results become typed function-call output content items.
+	// Encrypted content and unstructured content stay as content items, while
+	// structured content is serialized to text.
+	body, contentItems, useContentItems := mcpFunctionCallOutput(response)
 	data := mcpToolResponseData(response)
-	if contentItems := mcpToolModelContentItems(response); len(contentItems) > 0 {
+	if useContentItems {
 		data["content_items"] = contentItems
 	}
 	data["server"] = e.resolvedServerName()
@@ -661,28 +664,126 @@ func MCPToolResponseText(response *MCPToolCallResponse) string {
 	return string(encoded)
 }
 
+// mcpFunctionCallOutput mirrors Rust CallToolResult::as_function_call_output_payload
+// (#40737): a single encrypted content item forces content items, otherwise a
+// non-null structured result is serialized to text, and everything else becomes
+// typed content items.
+func mcpFunctionCallOutput(response *MCPToolCallResponse) (body string, contentItems []any, useContentItems bool) {
+	contentItems = mcpToolModelContentItems(response)
+	for _, item := range contentItems {
+		if entry, ok := item.(map[string]any); ok && entry["type"] == "encrypted_content" {
+			return MCPToolResponseText(response), contentItems, true
+		}
+	}
+	if response != nil && response.StructuredContent != nil {
+		encoded, err := json.Marshal(response.StructuredContent)
+		if err != nil {
+			return err.Error(), nil, false
+		}
+		return string(encoded), nil, false
+	}
+	return MCPToolResponseText(response), contentItems, true
+}
+
+// MCP content metadata keys mirror Rust CODEX_ENCRYPTED_CONTENT_META_KEY /
+// CODEX_IMAGE_DETAIL_META_KEY.
+const (
+	mcpEncryptedContentMetaKey = "codex/encryptedContent"
+	mcpImageDetailMetaKey      = "codex/imageDetail"
+)
+
+// mcpToolModelContentItems mirrors Rust convert_mcp_content_to_items: text,
+// image, and audio become typed items; unknown or malformed content is
+// preserved as serialized text so no result is silently dropped.
 func mcpToolModelContentItems(response *MCPToolCallResponse) []any {
 	if response == nil {
-		return nil
+		return []any{}
 	}
 	items := make([]any, 0, len(response.Content))
 	for i := range response.Content {
-		item := response.Content[i].Map()
-		switch item["type"] {
-		case "text":
-			text, _ := item["text"].(string)
-			items = append(items, map[string]any{"type": "input_text", "text": text})
-		case "encrypted_content":
-			encrypted, _ := item["encrypted_content"].(string)
-			if encrypted != "" {
-				items = append(items, map[string]any{
-					"type":              "encrypted_content",
-					"encrypted_content": encrypted,
-				})
-			}
-		}
+		items = append(items, mcpContentToModelItem(response.Content[i].Map()))
 	}
 	return items
+}
+
+func mcpContentToModelItem(content map[string]any) any {
+	contentType, _ := content["type"].(string)
+	switch contentType {
+	case "text":
+		text, ok := content["text"].(string)
+		if !ok {
+			return mcpUnknownContentItem(content)
+		}
+		if meta, ok := content["_meta"].(map[string]any); ok {
+			if encrypted, _ := meta[mcpEncryptedContentMetaKey].(bool); encrypted {
+				return map[string]any{"type": "encrypted_content", "encrypted_content": text}
+			}
+		}
+		return map[string]any{"type": "input_text", "text": text}
+	case "image":
+		data, ok := content["data"].(string)
+		if !ok {
+			return mcpUnknownContentItem(content)
+		}
+		return map[string]any{
+			"type":      "input_image",
+			"image_url": mcpContentDataURL(data, mcpContentMimeType(content)),
+			"detail":    mcpContentImageDetail(content),
+		}
+	case "audio":
+		data, ok := content["data"].(string)
+		if !ok {
+			return mcpUnknownContentItem(content)
+		}
+		return map[string]any{
+			"type":      "input_audio",
+			"audio_url": mcpContentDataURL(data, mcpContentMimeType(content)),
+		}
+	default:
+		return mcpUnknownContentItem(content)
+	}
+}
+
+// mcpContentDataURL builds a data URL when the payload is not already one.
+func mcpContentDataURL(data string, mimeType string) string {
+	if strings.HasPrefix(data, "data:") {
+		return data
+	}
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = "application/octet-stream"
+	}
+	return "data:" + mimeType + ";base64," + data
+}
+
+func mcpContentMimeType(content map[string]any) string {
+	if value, ok := content["mimeType"].(string); ok && strings.TrimSpace(value) != "" {
+		return value
+	}
+	if value, ok := content["mime_type"].(string); ok && strings.TrimSpace(value) != "" {
+		return value
+	}
+	return ""
+}
+
+// mcpContentImageDetail mirrors Rust's default image detail (`high`) and its
+// `codex/imageDetail` override.
+func mcpContentImageDetail(content map[string]any) string {
+	meta, _ := content["_meta"].(map[string]any)
+	detail, _ := meta[mcpImageDetailMetaKey].(string)
+	switch detail {
+	case "auto", "low", "high", "original":
+		return detail
+	default:
+		return "high"
+	}
+}
+
+func mcpUnknownContentItem(content map[string]any) any {
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return map[string]any{"type": "input_text", "text": "<content>"}
+	}
+	return map[string]any{"type": "input_text", "text": string(encoded)}
 }
 
 func mcpHookToolInput(rawArguments string) any {

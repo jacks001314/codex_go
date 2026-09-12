@@ -458,9 +458,8 @@ func TestMCPToolResponseDataShape(t *testing.T) {
 func TestMCPToolModelContentItemsPreserveEncryptedContentLikeRust(t *testing.T) {
 	response := &MCPToolCallResponse{Content: []MCPToolCallContent{
 		{Type: "text", Text: "Lookup completed"},
-		{Type: "encrypted_content", Raw: map[string]any{
-			"type":              "encrypted_content",
-			"encrypted_content": "gAAAA-test",
+		{Type: "text", Text: "gAAAA-test", Raw: map[string]any{
+			"_meta": map[string]any{"codex/encryptedContent": true},
 		}},
 	}}
 	got := mcpToolModelContentItems(response)
@@ -470,6 +469,75 @@ func TestMCPToolModelContentItemsPreserveEncryptedContentLikeRust(t *testing.T) 
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("content items = %#v, want %#v", got, want)
+	}
+}
+
+// Mirrors Rust convert_mcp_content_to_items (#40737): media and unknown
+// content are preserved as typed items instead of dropping or flattening them.
+func TestMCPToolModelContentItemsConvertMediaAndUnknownLikeRust(t *testing.T) {
+	response := &MCPToolCallResponse{Content: []MCPToolCallContent{
+		{Type: "text", Text: "hello"},
+		{Type: "image", Raw: map[string]any{
+			"type":     "image",
+			"data":     "data:image/png;base64,Zm9v",
+			"mimeType": "image/png",
+		}},
+		{Type: "image", Raw: map[string]any{
+			"type":     "image",
+			"data":     "Zm9v",
+			"mimeType": "image/png",
+			"_meta":    map[string]any{"codex/imageDetail": "original"},
+		}},
+		{Type: "audio", Raw: map[string]any{
+			"type":     "audio",
+			"data":     "Zm9v",
+			"mimeType": "audio/wav",
+		}},
+		{Type: "resource", Raw: map[string]any{
+			"type": "resource",
+			"uri":  "file:///tmp/x",
+		}},
+	}}
+	got := mcpToolModelContentItems(response)
+	want := []any{
+		map[string]any{"type": "input_text", "text": "hello"},
+		map[string]any{"type": "input_image", "image_url": "data:image/png;base64,Zm9v", "detail": "high"},
+		map[string]any{"type": "input_image", "image_url": "data:image/png;base64,Zm9v", "detail": "original"},
+		map[string]any{"type": "input_audio", "audio_url": "data:audio/wav;base64,Zm9v"},
+		map[string]any{"type": "input_text", "text": `{"type":"resource","uri":"file:///tmp/x"}`},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("content items = %#v, want %#v", got, want)
+	}
+}
+
+func TestMCPFunctionCallOutputPrefersStructuredTextUnlessEncrypted(t *testing.T) {
+	// Structured content is serialized to text and does not also become content
+	// items (Rust #40737).
+	structured := &MCPToolCallResponse{
+		Content:           []MCPToolCallContent{{Type: "text", Text: "hello"}},
+		StructuredContent: map[string]any{"answer": 42},
+	}
+	body, items, useItems := mcpFunctionCallOutput(structured)
+	if body != `{"answer":42}` || items != nil || useItems {
+		t.Fatalf("structured output = %q, %#v, %t", body, items, useItems)
+	}
+
+	// A single encrypted content item forces content items even when structured
+	// content is present.
+	encrypted := &MCPToolCallResponse{
+		Content: []MCPToolCallContent{
+			{Type: "text", Text: "opaque", Raw: map[string]any{"_meta": map[string]any{"codex/encryptedContent": true}}},
+		},
+		StructuredContent: map[string]any{"answer": 42},
+	}
+	_, items, useItems = mcpFunctionCallOutput(encrypted)
+	if !useItems || len(items) != 1 {
+		t.Fatalf("encrypted output items = %#v, use=%t", items, useItems)
+	}
+	entry, _ := items[0].(map[string]any)
+	if entry["type"] != "encrypted_content" || entry["encrypted_content"] != "opaque" {
+		t.Fatalf("encrypted item = %#v", entry)
 	}
 }
 
