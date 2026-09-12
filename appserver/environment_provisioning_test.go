@@ -268,7 +268,7 @@ func TestFailureAndDroppedRegistrationAreTerminal(t *testing.T) {
 		t.Fatalf("CompleteFailed() error = %v", err)
 	}
 	status, err := manager.Status(&EnvironmentStatusParams{EnvironmentID: "failed"})
-	if err != nil || status.Status != EnvironmentStatusDisconnected || status.Error == nil || !strings.HasSuffix(*status.Error, "provisioning failed") {
+	if err != nil || status.Status != EnvironmentStatusDisconnected || status.Error == nil || *status.Error != "environment unavailable: provisioning failed" {
 		t.Fatalf("Status(failed) = %+v, %v", status, err)
 	}
 	if got := failedProvider.callCount(); got != 0 {
@@ -282,7 +282,7 @@ func TestFailureAndDroppedRegistrationAreTerminal(t *testing.T) {
 	}
 	dropped.Abandon()
 	status, err = manager.Status(&EnvironmentStatusParams{EnvironmentID: "dropped"})
-	if err != nil || status.Status != EnvironmentStatusDisconnected || status.Error == nil || !strings.Contains(*status.Error, "registration ended before completion") {
+	if err != nil || status.Status != EnvironmentStatusDisconnected || status.Error == nil || *status.Error != "environment unavailable: environment registration ended before completion" {
 		t.Fatalf("Status(dropped) = %+v, %v", status, err)
 	}
 	if got := droppedProvider.callCount(); got != 0 {
@@ -296,7 +296,7 @@ func TestFailureAndDroppedRegistrationAreTerminal(t *testing.T) {
 	}
 }
 
-func TestInvalidReadyInfoIsTerminal(t *testing.T) {
+func TestInvalidReadyInfoFailsTheProvisioningGate(t *testing.T) {
 	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
 	provider := &failingNoiseProvider{}
 	registration, err := manager.RegisterDeferredNoiseEnvironment("tools", provider)
@@ -317,6 +317,23 @@ func TestInvalidReadyInfoIsTerminal(t *testing.T) {
 	}
 	if got := provider.callCount(); got != 0 {
 		t.Fatalf("provider called %d times, want 0", got)
+	}
+
+	// A corrected ready report recovers the same environment instance.
+	selected := provisionedReadyInfo("selected-root", "tools")
+	reported, err := manager.ReportProvisioningStatus("tools", &selected, nil, provider)
+	if err != nil || reported == nil {
+		t.Fatalf("ReportProvisioningStatus(corrected ready) = %#v, %v", reported, err)
+	}
+	status, statusErr = manager.Status(&EnvironmentStatusParams{EnvironmentID: "tools"})
+	if statusErr != nil || status.Status != EnvironmentStatusDisconnected || status.Error == nil || !strings.Contains(*status.Error, "test Noise provider called") {
+		t.Fatalf("Status(after recovery) = %+v, %v", status, statusErr)
+	}
+	if got := manager.SelectedCapabilityRoots("tools"); len(got) != 1 || got[0].ID != "selected-root" {
+		t.Fatalf("SelectedCapabilityRoots(after recovery) = %+v, want selected-root", got)
+	}
+	if got := provider.callCount(); got != 1 {
+		t.Fatalf("provider called %d times, want 1", got)
 	}
 }
 
@@ -501,13 +518,20 @@ func TestFailureReleasesTheExistingPendingEnvironmentWithoutConnecting(t *testin
 	}
 }
 
-func TestRepeatedFailurePreservesTheFirstErrorAndRejectsReady(t *testing.T) {
+func TestRepeatedFailurePreservesTheFirstErrorUntilReady(t *testing.T) {
 	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
 	provider := &failingNoiseProvider{}
 	first := "first failure"
 	failed, err := manager.ReportProvisioningStatus("tools", nil, &first, provider)
 	if err != nil || failed == nil {
 		t.Fatalf("ReportProvisioningStatus(first failure) = %#v, %v", failed, err)
+	}
+	status, err := manager.Status(&EnvironmentStatusParams{EnvironmentID: "tools"})
+	if err != nil || status.Status != EnvironmentStatusDisconnected || status.Error == nil || *status.Error != "environment unavailable: first failure" {
+		t.Fatalf("Status(failed) = %+v, %v", status, err)
+	}
+	if got := provider.callCount(); got != 0 {
+		t.Fatalf("provider called %d times, want 0", got)
 	}
 
 	different := "different failure"
@@ -519,23 +543,41 @@ func TestRepeatedFailurePreservesTheFirstErrorAndRejectsReady(t *testing.T) {
 		t.Fatalf("failure = %q, want first failure preserved", failure)
 	}
 
+	// Invalid ready information cannot recover a failed environment and leaves
+	// the first error in place.
 	invalidReady := provisionedReadyInfo("selected-root", "other")
-	if _, err := manager.ReportProvisioningStatus("tools", &invalidReady, nil, provider); err == nil || !strings.Contains(err.Error(), "first failure") {
-		t.Fatalf("ReportProvisioningStatus(ready after failure) error = %v, want first failure", err)
+	if _, err := manager.ReportProvisioningStatus("tools", &invalidReady, nil, provider); err == nil || !strings.Contains(err.Error(), "belong to environment") {
+		t.Fatalf("ReportProvisioningStatus(invalid ready after failure) error = %v, want belong-to-environment", err)
 	}
-	validReady := provisionedReadyInfo("selected-root", "tools")
-	if _, err := manager.ReportProvisioningStatus("tools", &validReady, nil, provider); err == nil || !strings.Contains(err.Error(), "first failure") {
-		t.Fatalf("ReportProvisioningStatus(valid ready after failure) error = %v, want first failure", err)
+	if _, _, failure := failed.Provisioning.Current(); failure != "first failure" {
+		t.Fatalf("failure after invalid ready = %q, want first failure preserved", failure)
 	}
 	if got := manager.SelectedCapabilityRoots("tools"); len(got) != 0 {
 		t.Fatalf("SelectedCapabilityRoots = %+v, want empty", got)
 	}
-	status, err := manager.Status(&EnvironmentStatusParams{EnvironmentID: "tools"})
-	if err != nil || status.Status != EnvironmentStatusDisconnected || status.Error == nil || !strings.HasSuffix(*status.Error, "first failure") {
-		t.Fatalf("Status = %+v, %v", status, err)
-	}
 	if got := provider.callCount(); got != 0 {
 		t.Fatalf("provider called %d times, want 0", got)
+	}
+
+	// A valid ready report recovers the same environment instance, refreshes
+	// the capability roots, and re-enables connection attempts.
+	validReady := provisionedReadyInfo("selected-root", "tools")
+	ready, err := manager.ReportProvisioningStatus("tools", &validReady, nil, provider)
+	if err != nil || ready == nil {
+		t.Fatalf("ReportProvisioningStatus(valid ready after failure) = %#v, %v", ready, err)
+	}
+	if ready.Provisioning != failed.Provisioning {
+		t.Fatal("recovery should preserve the same provisioning instance")
+	}
+	if got := manager.SelectedCapabilityRoots("tools"); len(got) != 1 || got[0].ID != "selected-root" {
+		t.Fatalf("SelectedCapabilityRoots = %+v, want selected-root", got)
+	}
+	status, err = manager.Status(&EnvironmentStatusParams{EnvironmentID: "tools"})
+	if err != nil || status.Status != EnvironmentStatusDisconnected || status.Error == nil || !strings.Contains(*status.Error, "test Noise provider called") {
+		t.Fatalf("Status(after recovery) = %+v, %v", status, err)
+	}
+	if got := provider.callCount(); got != 1 {
+		t.Fatalf("provider called %d times, want 1", got)
 	}
 }
 

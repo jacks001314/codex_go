@@ -50,9 +50,10 @@ type EnvironmentReadyInfo struct {
 
 // ProvisioningState tracks a provisioned Noise environment from Pending through
 // Ready or Failed. The same instance is preserved across materialization and
-// status reports; terminal transitions are idempotent and contradictory
-// transitions are rejected. A nil ProvisioningState on a record means the
-// environment is ordinary and connects eagerly.
+// status reports: a valid Ready report recovers a failed provisioning attempt,
+// a late failure cannot replace Ready, and repeated failures keep the first
+// error. A nil ProvisioningState on a record means the environment is ordinary
+// and connects eagerly.
 type ProvisioningState struct {
 	mu        sync.Mutex
 	status    ProvisioningStatusKind
@@ -75,39 +76,33 @@ func (s *ProvisioningState) Current() (ProvisioningStatusKind, *EnvironmentReady
 	return s.status, cloneEnvironmentReadyInfo(s.readyInfo), s.failure
 }
 
-// applyReady transitions Pending->Ready (validating ready info) or refreshes
-// ready info on an already Ready environment. A Ready report after Failed is a
-// contradictory transition; invalid ready info fails a Pending environment.
+// applyReady records a Ready report. Valid ready information moves any state to
+// Ready, so a corrected report can recover a failed provisioning attempt while
+// preserving the same environment instance, and refreshes ready info on an
+// already Ready environment. Invalid ready information fails a Pending
+// environment but leaves an already Ready or Failed environment unchanged.
 func (s *ProvisioningState) applyReady(environmentID string, readyInfo *EnvironmentReadyInfo) error {
 	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	switch s.status {
-	case ProvisioningFailed:
-		return fmt.Errorf("environment `%s` provisioning already failed: %s", environmentID, s.failure)
-	case ProvisioningReady:
-		if err := validateEnvironmentReadyInfo(environmentID, readyInfo); err != nil {
-			return err
-		}
-		s.readyInfo = cloneEnvironmentReadyInfo(readyInfo)
-		return nil
-	default: // Pending
-		if err := validateEnvironmentReadyInfo(environmentID, readyInfo); err != nil {
+	if err := validateEnvironmentReadyInfo(environmentID, readyInfo); err != nil {
+		if s.status == ProvisioningPending {
 			s.status = ProvisioningFailed
 			s.failure = err.Error()
-			return err
 		}
-		s.readyInfo = cloneEnvironmentReadyInfo(readyInfo)
-		s.status = ProvisioningReady
-		return nil
+		return err
 	}
+	s.readyInfo = cloneEnvironmentReadyInfo(readyInfo)
+	s.status = ProvisioningReady
+	s.failure = ""
+	return nil
 }
 
-// applyFailure transitions Pending->Failed, keeping the first error. Repeating
-// a failure on an already Failed environment is idempotent; a failure after
-// Ready is a contradictory transition.
+// applyFailure transitions Pending->Failed, keeping the first error until a
+// Ready report arrives. Repeating a failure on an already Failed environment is
+// idempotent; a late failure cannot replace Ready.
 func (s *ProvisioningState) applyFailure(environmentID, failure string) error {
 	if s == nil {
 		return nil
@@ -433,10 +428,11 @@ func (m *EnvironmentManager) MaterializePendingNoiseEnvironment(environmentID st
 // ReportProvisioningStatus records a Ready or Failed provisioning result for an
 // environment. Ordinary environments are ignored. A provisioned environment
 // keeps the same record from Pending through Ready or Failed, and is created if
-// the report arrives first. Ready updates capability roots; Failed keeps the
-// first error. Repeating the same result is allowed, but changing between Ready
-// and Failed is rejected. Invalid Ready information fails an existing Pending
-// environment but does not create a missing environment.
+// the report arrives first. Ready updates capability roots and recovers a
+// failed provisioning attempt; Failed keeps the first error until a Ready
+// report arrives, and a late failure cannot replace Ready. Invalid Ready
+// information fails an existing Pending environment but does not create a
+// missing environment.
 func (m *EnvironmentManager) ReportProvisioningStatus(environmentID string, readyInfo *EnvironmentReadyInfo, failure *string, providerIfMissing execserverclient.NoiseRendezvousConnectProvider) (*EnvironmentRecord, error) {
 	environmentID = strings.TrimSpace(environmentID)
 	if environmentID == "" {
@@ -745,9 +741,12 @@ func (m *EnvironmentManager) StatusContext(ctx context.Context, params *Environm
 			// Delay connection attempts until provisioning completes.
 			return &EnvironmentStatusResponse{Status: EnvironmentStatusPending}, nil
 		case ProvisioningFailed:
+			// Report the provisioning failure without starting a connection.
+			// Rust surfaces the same wrapped message via
+			// ExecServerError::ProvisioningFailed ("environment unavailable: ...").
 			return &EnvironmentStatusResponse{
 				Status: EnvironmentStatusDisconnected,
-				Error:  environmentStringPtr(failure),
+				Error:  environmentStringPtr("environment unavailable: " + failure),
 			}, nil
 		case ProvisioningReady:
 			// Provisioning succeeded; attempt the connection below.
