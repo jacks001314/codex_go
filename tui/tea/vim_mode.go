@@ -110,6 +110,20 @@ func (m *Model) resetVimEditHistory() {
 	m.vimEditSnapshot = vimDraftSnapshot{}
 }
 
+// enterVimInsertAfterSubmission returns the composer to Vim Insert mode after a
+// submission or draft transition when Vim is enabled, clearing pending
+// operators (Rust #41921: fresh Vim drafts start in Insert).
+func (m *Model) enterVimInsertAfterSubmission() {
+	if m == nil || !m.vimMode {
+		return
+	}
+	m.vimInsert = true
+	m.vimPendingOp = ""
+	m.vimPendingObject = ""
+	m.vimPendingFind = false
+	m.vimPendingReplace = false
+}
+
 // applyVimModeKey dispatches Vim normal/insert mode keys when /vim is enabled
 // (m.vimMode), mirroring Rust's bottom_pane/chat_composer.rs Vim support. In
 // normal mode the registered vim_normal actions are handled through the
@@ -127,6 +141,18 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	if m.vimSearchMode {
 		if keySpec == "esc" {
 			m.cancelVimSearch()
+			return true
+		}
+		if keySpec == "backspace" {
+			// Rust #41921: Backspace on an empty query cancels the search and any
+			// pending operator without changing the draft; otherwise it removes
+			// the last query character.
+			if m.vimSearchQuery == "" {
+				m.cancelVimSearch()
+				return true
+			}
+			query := []rune(m.vimSearchQuery)
+			m.vimSearchQuery = string(query[:len(query)-1])
 			return true
 		}
 		if keySpec == "enter" {

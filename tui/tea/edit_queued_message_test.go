@@ -63,6 +63,9 @@ func TestEditQueuedMessageVimHistoryUpEditAndRequeueCycleLikeRust(t *testing.T) 
 	}
 
 	for _, expected := range []string{"first queued message", "first queued message edited"} {
+		// Rust #41921: queuing returns the composer to Insert mode, so the test
+		// returns to Normal mode before the history-up binding.
+		model.vimInsert = false
 		updated, _ := model.Update(keyRunes('k'))
 		model = updated.(*Model)
 		if got := model.composer.Value(); got != expected {
@@ -95,6 +98,9 @@ func TestEditQueuedMessageVimHistoryUpUsesRemappedBindingLikeRust(t *testing.T) 
 	model.vimMode = true
 	model.composer.SetValue("queued message")
 	model.queueComposer(false)
+	// Rust #41921: queuing leaves the composer in Insert mode; the normal-mode
+	// binding only fires after returning to Normal mode.
+	model.vimInsert = false
 
 	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
 	model = updated.(*Model)

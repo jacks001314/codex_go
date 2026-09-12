@@ -622,9 +622,9 @@ func (m *Model) toggleVimMode() {
 		return
 	}
 	m.vimMode = !m.vimMode
-	// Rust starts the composer in Vim normal mode when /vim is enabled; the
-	// pending operator and yank state reset on every toggle.
-	m.vimInsert = false
+	// Rust #41921: enabling Vim starts the composer in Insert mode; the pending
+	// operator and yank state reset on every toggle.
+	m.vimInsert = m.vimMode
 	m.vimPendingOp = ""
 	if m.vimMode {
 		m.notice = "Vim mode enabled."

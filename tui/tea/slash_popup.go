@@ -240,6 +240,8 @@ func (m *Model) dispatchSelectedSlashCommand() (bubbletea.Cmd, bool) {
 		return nil, false
 	}
 	m.composer.Reset()
+	// Rust #41921: slash-command dispatch returns the composer to Vim Insert.
+	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
 	invocation, ok := codextui.ParseCommand("/" + item.Name)
 	if !ok {

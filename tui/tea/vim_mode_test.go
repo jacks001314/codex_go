@@ -188,17 +188,15 @@ func TestVimOperatorSearchLikeVim(t *testing.T) {
 	}
 }
 
-// TestVimModeToggleStartsInNormalModeAndInsertTypes pins the mode state
-// machine: /vim starts normal; i enters insert where keys type (even k, which
-// is a normal-mode motion); Esc returns to normal where x deletes.
-func TestVimModeToggleStartsInNormalModeAndInsertTypes(t *testing.T) {
-	m := vimTestModel("")
-	if !m.vimMode || m.vimInsert {
-		t.Fatalf("vimMode=%v vimInsert=%v, want enabled + normal mode", m.vimMode, m.vimInsert)
-	}
-	m = vimKeyPress(m, 'i')
-	if !m.vimInsert {
-		t.Fatal("i did not enter insert mode")
+// TestVimModeToggleStartsInInsertModeAndNormalMotions pins the mode state
+// machine: enabling Vim starts Insert (Rust #41921), where keys type (even k,
+// a normal-mode motion); Esc returns to Normal where x deletes, and i re-enters
+// Insert.
+func TestVimModeToggleStartsInInsertModeAndNormalMotions(t *testing.T) {
+	m := NewModel(codextui.NewState(nil), Options{Width: 200, Height: 36})
+	m.toggleVimMode()
+	if !m.vimMode || !m.vimInsert {
+		t.Fatalf("vimMode=%v vimInsert=%v, want enabled + insert mode", m.vimMode, m.vimInsert)
 	}
 	m = vimKeyPress(m, 'k')
 	if got := m.composer.Value(); got != "k" {
@@ -212,6 +210,55 @@ func TestVimModeToggleStartsInNormalModeAndInsertTypes(t *testing.T) {
 	m = vimKeyPress(m, 'x')
 	if got := m.composer.Value(); got != "" {
 		t.Fatalf("composer after x = %q, want empty (delete_char)", got)
+	}
+	m = vimKeyPress(m, 'i')
+	if !m.vimInsert {
+		t.Fatal("i did not re-enter insert mode")
+	}
+}
+
+// TestVimSubmittedDraftStartsInInsertModeLikeRust covers #41921: submissions
+// and slash dispatch return the composer to Insert mode.
+func TestVimSubmittedDraftStartsInInsertModeLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(m *Model)
+	}{
+		{"submission", func(m *Model) { m.composer.SetValue("hello"); m.submitComposer() }},
+		{"queued submission", func(m *Model) { m.composer.SetValue("hello"); m.queueComposer(false) }},
+		{"slash dispatch", func(m *Model) { m.composer.SetValue("/status"); m.submitComposer() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := vimTestModel("")
+			tc.run(m)
+			if !m.vimInsert {
+				t.Fatalf("vimInsert = false after %s, want insert mode", tc.name)
+			}
+		})
+	}
+}
+
+// TestVimSearchBackspaceCancelsEmptyQueryLikeRust covers #41921: Backspace on
+// an empty Vim search query cancels the search (and any pending operator)
+// without changing the draft.
+func TestVimSearchBackspaceCancelsEmptyQueryLikeRust(t *testing.T) {
+	m := vimTestModel("hello world")
+	m.composer.SetCursor(0)
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, '/')
+	if !m.vimSearchMode {
+		t.Fatal("slash did not start a Vim search")
+	}
+	updated, _ := m.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
+	m = updated.(*Model)
+	if m.vimSearchMode {
+		t.Fatal("backspace did not cancel the empty search")
+	}
+	if m.vimPendingOp != "" {
+		t.Fatalf("pending operator = %q, want cleared", m.vimPendingOp)
+	}
+	if got := m.composer.Value(); got != "hello world" {
+		t.Fatalf("draft changed by the cancelled search: %q", got)
 	}
 }
 
@@ -686,7 +733,11 @@ func TestVimInsertModeKeepsQueuedMessageIntactLikeRust(t *testing.T) {
 	m := vimTestModel("queued message")
 	m.queueComposer(false)
 	m.composer.SetValue("")
-	m = vimKeyPress(m, 'i')
+	// Rust #41921: a queued submission leaves the composer in Insert mode, so k
+	// types instead of restoring the queued follow-up.
+	if !m.vimInsert {
+		t.Fatal("queued submission should return to Vim Insert mode")
+	}
 	m = vimKeyPress(m, 'k')
 	if got := m.composer.Value(); got != "k" {
 		t.Fatalf("insert-mode k = %q, want k typed", got)

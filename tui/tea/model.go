@@ -2514,6 +2514,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()
 	m.resetVimEditHistory()
+	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
 	m.skillPopup = skillPopupState{}
 	m.flushCompactCommandGroup()
@@ -2564,6 +2565,7 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 	}
 	m.composer.Reset()
 	m.resetVimEditHistory()
+	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
 	m.skillPopup = skillPopupState{}
 	m.composerMentionBindings = nil
@@ -2685,6 +2687,7 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()
 	m.resetVimEditHistory()
+	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
 	m.skillPopup = skillPopupState{}
 	if input == "" && len(m.attachments) == 0 {
@@ -2714,6 +2717,7 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()
 	m.resetVimEditHistory()
+	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
 	m.skillPopup = skillPopupState{}
 	if input == "" && len(m.attachments) == 0 {
