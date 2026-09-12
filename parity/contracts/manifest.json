@@ -1108,9 +1108,10 @@
             "verifier": "TestSedReadPathRejectsInPlaceMutationsLikeRust;TestSedReadPathKeepsOperandsAfterDoubleDash"
         },
         {
-            "id": "queue-by-name-most-recent-session",
+            "id": "queue-by-name-unique-session",
             "kind": "source-surface",
             "rustPaths": [
+                "tui/src/named_session_lookup.rs",
                 "tui/src/session_archive_commands.rs",
                 "tui/src/session_queue_commands.rs"
             ],
@@ -1119,7 +1120,7 @@
             ],
             "phase": "P1",
             "status": "complete",
-            "verifier": "TestSessionIDByUniqueActiveNamePrefersMostRecentDuplicateLikeRust;TestSessionIDByUniqueActiveNameLikeRust"
+            "verifier": "TestSessionIDByUniqueActiveNameRejectsDuplicateLabelsLikeRust;TestSessionIDByUniqueActiveNameLikeRust;TestLookupRemoteSessionByNameRejectsDistinctMatches"
         },
         {
             "id": "voice-control-protocol",

@@ -443,7 +443,7 @@ func TestSessionResumeByName(t *testing.T) {
 	if err := store.Save(&session.Record{ID: "older", Title: "Design", Preview: "old", CreatedAt: now, UpdatedAt: now, RecencyAt: now}); err != nil {
 		t.Fatalf("Save older returned error: %v", err)
 	}
-	if err := store.Save(&session.Record{ID: "newer", Title: "Design", Preview: "new", CreatedAt: now, UpdatedAt: now.Add(time.Minute), RecencyAt: now.Add(time.Minute)}); err != nil {
+	if err := store.Save(&session.Record{ID: "newer", Title: "Other", Preview: "new", CreatedAt: now, UpdatedAt: now.Add(time.Minute), RecencyAt: now.Add(time.Minute)}); err != nil {
 		t.Fatalf("Save newer returned error: %v", err)
 	}
 
@@ -451,8 +451,31 @@ func TestSessionResumeByName(t *testing.T) {
 	if err := Run(context.Background(), []string{"resume", "Design"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("resume positional name returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), `"id": "newer"`) {
+	if !strings.Contains(stdout.String(), `"id": "older"`) {
 		t.Fatalf("resume positional stdout = %q", stdout.String())
+	}
+}
+
+// TestSessionResumeAmbiguousNameRejectedLikeRust covers Rust #43315: a label
+// that matches two sessions must be disambiguated with a UUID.
+func TestSessionResumeAmbiguousNameRejectedLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	now := fixedAppSessionTime()
+	for _, record := range []*session.Record{
+		{ID: "older", Title: "Design", Preview: "old", CreatedAt: now, UpdatedAt: now, RecencyAt: now},
+		{ID: "newer", Title: "Design", Preview: "new", CreatedAt: now, UpdatedAt: now.Add(time.Minute), RecencyAt: now.Add(time.Minute)},
+	} {
+		if err := store.Save(record); err != nil {
+			t.Fatalf("Save %s returned error: %v", record.ID, err)
+		}
+	}
+
+	err := Run(context.Background(), []string{"resume", "Design"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "Multiple sessions match 'Design'") ||
+		!strings.Contains(err.Error(), "older") || !strings.Contains(err.Error(), "newer") {
+		t.Fatalf("resume ambiguous name error = %v", err)
 	}
 }
 
@@ -579,15 +602,13 @@ func TestSessionRemoteCommandsResolveNameThroughAppServer(t *testing.T) {
 					return
 				}
 				archived := params.Archived != nil && *params.Archived
-				name := ""
-				if params.SearchTerm != nil {
-					name = *params.SearchTerm
-				}
+				// Rust #43315: the client lists the collection and matches the
+				// label locally, so the fixture returns the whole collection.
 				var data []any
 				switch {
-				case !archived && name == "Remote Active":
+				case !archived:
 					data = []any{remoteSessionTestThread("thread-active", "Remote Active", false, 2)}
-				case archived && name == "Remote Archived":
+				case archived:
 					data = []any{remoteSessionTestThread("thread-archived", "Remote Archived", true, 0)}
 				}
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"data": data, "nextCursor": nil, "backwardsCursor": nil}})
@@ -601,8 +622,16 @@ func TestSessionRemoteCommandsResolveNameThroughAppServer(t *testing.T) {
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": remoteSessionTestThread("thread-forked", "Remote Forked", false, 2)}})
 				return
 			case string(appserver.MethodThreadRead):
-				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": remoteSessionTestThread("thread-active", "Remote Active", false, 2)}})
-				return
+				var params appserver.ThreadReadParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				thread := remoteSessionTestThread("thread-active", "Remote Active", false, 2)
+				if params.ThreadID == "thread-archived" {
+					thread = remoteSessionTestThread("thread-archived", "Remote Archived", true, 0)
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": thread}})
 			default:
 				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
 				return

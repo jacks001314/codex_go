@@ -35,7 +35,10 @@ func TestSessionIDByUniqueActiveNameLikeRust(t *testing.T) {
 	}
 }
 
-func TestSessionIDByUniqueActiveNamePrefersMostRecentDuplicateLikeRust(t *testing.T) {
+// TestSessionIDByUniqueActiveNameRejectsDuplicateLabelsLikeRust covers Rust
+// #43315: a duplicated session label must be disambiguated with a UUID instead
+// of targeting the most recent match.
+func TestSessionIDByUniqueActiveNameRejectsDuplicateLabelsLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	older := time.Now().UTC().Add(-2 * time.Hour)
 	newer := time.Now().UTC().Add(-1 * time.Hour)
@@ -47,12 +50,11 @@ func TestSessionIDByUniqueActiveNamePrefersMostRecentDuplicateLikeRust(t *testin
 			t.Fatalf("Create(%s) error = %v", record.ID, err)
 		}
 	}
-	id, err := sessionIDByUniqueActiveName(store, "shared-name")
-	if err != nil {
-		t.Fatalf("sessionIDByUniqueActiveName() error = %v", err)
-	}
-	if id != "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" {
-		t.Fatalf("duplicate name resolved to %q, want the most recent session", id)
+	_, err := sessionIDByUniqueActiveName(store, "shared-name")
+	if err == nil || !strings.Contains(err.Error(), "Multiple sessions match 'shared-name'") ||
+		!strings.Contains(err.Error(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") ||
+		!strings.Contains(err.Error(), "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb") {
+		t.Fatalf("duplicate name error = %v", err)
 	}
 }
 

@@ -560,7 +560,7 @@ func resolveRemoteSessionTargetForResume(ctx context.Context, client *remoteAppS
 			if isUUIDLike(target) {
 				return remoteResolvedSessionTarget{threadID: target}, nil
 			}
-			return lookupRemoteSessionByExactName(ctx, client, target, false, opts)
+			return lookupRemoteSessionByExactName(ctx, client, target, sessionCollectionActive, opts)
 		}
 		if opts.Last {
 			thread, err := latestRemoteSession(ctx, client, opts)
@@ -583,44 +583,23 @@ func resolveRemoteSessionMutationTarget(ctx context.Context, client *remoteAppSe
 	}
 	switch action {
 	case remoteSessionActionArchive:
-		return lookupRemoteSessionByExactName(ctx, client, target, false, opts)
+		return lookupRemoteSessionByExactName(ctx, client, target, sessionCollectionActive, opts)
 	case remoteSessionActionUnarchive:
-		return lookupRemoteSessionByExactName(ctx, client, target, true, opts)
+		return lookupRemoteSessionByExactName(ctx, client, target, sessionCollectionArchived, opts)
 	case remoteSessionActionDelete:
-		if resolved, err := lookupRemoteSessionByExactName(ctx, client, target, false, opts); err == nil {
-			return resolved, nil
+		// Rust #43315: delete resolves across both collections in one lookup so a
+		// duplicate label in either collection is reported as ambiguous.
+		thread, err := lookupRemoteSessionByName(ctx, client, target, []sessionCollection{sessionCollectionActive, sessionCollectionArchived}, opts)
+		if err != nil {
+			return remoteResolvedSessionTarget{}, err
 		}
-		return lookupRemoteSessionByExactName(ctx, client, target, true, opts)
+		if thread == nil {
+			return remoteResolvedSessionTarget{}, fmt.Errorf("No active or archived session found matching '%s'.", target)
+		}
+		return remoteSessionTargetFromThread(thread)
 	default:
-		return lookupRemoteSessionByExactName(ctx, client, target, false, opts)
+		return lookupRemoteSessionByExactName(ctx, client, target, sessionCollectionActive, opts)
 	}
-}
-
-func lookupRemoteSessionByExactName(ctx context.Context, client *remoteAppServerTUIClient, name string, archived bool, opts *cli.SessionOptions) (remoteResolvedSessionTarget, error) {
-	for _, search := range []bool{true, false} {
-		cursor := (*string)(nil)
-		for {
-			params := remoteThreadListParams(opts, archived, 100)
-			params.Cursor = cursor
-			if search {
-				params.SearchTerm = &name
-			}
-			var response appserver.ThreadListResponse
-			if err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response); err != nil {
-				return remoteResolvedSessionTarget{}, fmt.Errorf("failed to list sessions while resolving session name: %w", err)
-			}
-			for i := range response.Data {
-				if remoteThreadDisplayName(&response.Data[i]) == name {
-					return remoteSessionTargetFromThread(&response.Data[i])
-				}
-			}
-			if response.NextCursor == nil || strings.TrimSpace(*response.NextCursor) == "" {
-				break
-			}
-			cursor = response.NextCursor
-		}
-	}
-	return remoteResolvedSessionTarget{}, fmt.Errorf("No %s session found matching '%s'.", remoteSessionSearchScope(archived), name)
 }
 
 func latestRemoteSession(ctx context.Context, client *remoteAppServerTUIClient, opts *cli.SessionOptions) (*appserver.Thread, error) {
@@ -857,19 +836,22 @@ func latestSessionID(store *session.Store, opts *cli.SessionOptions) (session.Th
 }
 
 func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string) (session.ThreadID, error) {
+	var legacyIDs []session.ThreadID
+	seen := map[session.ThreadID]bool{}
 	if store != nil {
-		// Rust c38a60ded2 (#37157): candidates are filtered before ranking
-		// (source eligibility) and the most recently modified eligible legacy
-		// duplicate wins, so an ineligible newer entry cannot shadow an older
-		// usable session.
 		includeNonInteractive := opts != nil && opts.IncludeNonInteractive
 		candidates, err := rollout.FindThreadMetaCandidatesByNameInCollection(sessionCodexHome(store), name, false, nil, nil)
 		if err != nil {
 			return "", err
 		}
 		for _, candidate := range candidates {
-			if candidate.Meta != nil && resumableSessionSource(candidate.Meta.Source, includeNonInteractive) {
-				return session.ThreadID(candidate.Meta.ID), nil
+			if candidate.Meta == nil || !resumableSessionSource(candidate.Meta.Source, includeNonInteractive) {
+				continue
+			}
+			id := session.ThreadID(candidate.Meta.ID)
+			if !seen[id] {
+				seen[id] = true
+				legacyIDs = append(legacyIDs, id)
 			}
 		}
 	}
@@ -877,21 +859,26 @@ func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string
 	if err != nil {
 		return "", err
 	}
-	matches := make([]session.Record, 0, len(records))
-	for i := range records {
-		recordName := strings.TrimSpace(records[i].Title)
-		if recordName == "" {
-			recordName = strings.TrimSpace(string(records[i].ID))
+	recordIDs := make([]session.ThreadID, 0, len(records))
+	for index := range records {
+		if localSessionLabel(records[index]) != name {
+			continue
 		}
-		if recordName == name {
-			matches = append(matches, records[i])
+		id := records[index].ID
+		if !seen[id] {
+			seen[id] = true
+			recordIDs = append(recordIDs, id)
 		}
 	}
-	if len(matches) == 0 {
+	ids := append(legacyIDs, recordIDs...)
+	if len(ids) == 0 {
 		return "", fmt.Errorf("No session found matching '%s'.", name)
 	}
-	sortSessionRecordsByRecency(matches)
-	return matches[0].ID, nil
+	if len(ids) > 1 {
+		// Rust #43315: distinct label matches must be disambiguated by UUID.
+		return "", ambiguousSessionNameError(name, string(ids[0]), string(ids[1]))
+	}
+	return ids[0], nil
 }
 
 func sessionIDByNameWithArchiveFilter(store *session.Store, name string, archived *bool) (session.ThreadID, error) {
@@ -1412,34 +1399,22 @@ func sessionIDByUniqueActiveName(store *session.Store, name string) (session.Thr
 	if store == nil {
 		return "", errors.New("session store is nil")
 	}
-	// Prefer state-database matches before falling back to rollout scanning;
-	// ListThreadRowsByName returns the most recent match first (#39385).
-	if id, found := sessionIDBySQLiteName(store, name, sessionArchivedFilter(false)); found {
-		return id, nil
-	}
 	records, err := listSessionsByArchived(store, false)
 	if err != nil {
 		return "", err
 	}
-	var matches []session.Record
-	for i := range records {
-		recordName := strings.TrimSpace(records[i].Title)
-		if recordName == "" {
-			recordName = strings.TrimSpace(string(records[i].ID))
-		}
-		if recordName == name {
-			matches = append(matches, records[i])
-		}
+	record, found, err := uniqueSessionRecordByName(name, records)
+	if err != nil {
+		return "", err
 	}
-	if len(matches) == 0 {
+	if !found {
 		return "", fmt.Errorf("No active session found matching '%s'.", name)
 	}
-	sortSessionRecordsByRecency(matches)
-	return matches[0].ID, nil
+	return record.ID, nil
 }
 
-// lookupRemoteSessionUniqueByName scans remote active sessions for an exact
-// name match and prefers the most recent duplicate (Rust #39092/#39385).
+// lookupRemoteSessionUniqueByName resolves a remote active session by its
+// displayed label, rejecting distinct matches (Rust #43315).
 func lookupRemoteSessionUniqueByName(ctx context.Context, client *remoteAppServerTUIClient, name string, opts *cli.SessionOptions) (remoteResolvedSessionTarget, error) {
 	// Queue messages can target interactive, exec, and custom sessions, so the
 	// lookup does not restrict source kinds.
@@ -1448,45 +1423,14 @@ func lookupRemoteSessionUniqueByName(ctx context.Context, client *remoteAppServe
 		*searchOpts = *opts
 	}
 	searchOpts.IncludeNonInteractive = true
-	var matches []remoteResolvedSessionTarget
-	var best *appserver.Thread
-	cursor := (*string)(nil)
-	for {
-		params := remoteThreadListParams(searchOpts, false, 100)
-		params.Cursor = cursor
-		params.SearchTerm = &name
-		var response appserver.ThreadListResponse
-		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response); err != nil {
-			return remoteResolvedSessionTarget{}, fmt.Errorf("failed to list sessions while resolving session name: %w", err)
-		}
-		for i := range response.Data {
-			if remoteThreadDisplayName(&response.Data[i]) == name {
-				target, err := remoteSessionTargetFromThread(&response.Data[i])
-				if err == nil {
-					matches = append(matches, target)
-					if best == nil || remoteThreadRecency(&response.Data[i]) > remoteThreadRecency(best) {
-						best = &response.Data[i]
-					}
-				}
-			}
-		}
-		if response.NextCursor == nil || strings.TrimSpace(*response.NextCursor) == "" {
-			break
-		}
-		cursor = response.NextCursor
+	thread, err := lookupRemoteSessionByName(ctx, client, name, []sessionCollection{sessionCollectionActive}, searchOpts)
+	if err != nil {
+		return remoteResolvedSessionTarget{}, err
 	}
-	switch len(matches) {
-	case 0:
+	if thread == nil {
 		return remoteResolvedSessionTarget{}, fmt.Errorf("No active session found matching '%s'.", name)
-	case 1:
-		return matches[0], nil
-	default:
-		target, err := remoteSessionTargetFromThread(best)
-		if err != nil {
-			return remoteResolvedSessionTarget{}, err
-		}
-		return target, nil
 	}
+	return remoteSessionTargetFromThread(thread)
 }
 
 func remoteThreadRecency(thread *appserver.Thread) int64 {
