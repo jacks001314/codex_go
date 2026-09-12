@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"codex_go/appserverdaemon"
+	codextea "codex_go/tui/tea"
 )
 
 func TestInteractiveStartAgentsDaemonPlatformGate(t *testing.T) {
@@ -33,7 +34,7 @@ func TestInteractiveRemoteAgentsOverviewHandlersWireRemoteSource(t *testing.T) {
 	if _, err := refresh(""); err == nil {
 		t.Fatal("refresh against unreachable endpoint succeeded, want error")
 	}
-	if _, err := dispatch("prompt", ""); err == nil {
+	if _, err := dispatch(codextea.SubmitRequest{Prompt: "prompt"}, ""); err == nil {
 		t.Fatal("dispatch against unreachable endpoint succeeded, want error")
 	}
 	if err := stop("thread-1"); err == nil {

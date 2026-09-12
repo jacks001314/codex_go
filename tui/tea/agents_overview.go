@@ -9,7 +9,9 @@ import (
 	"codex_go/features"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	bottompane "codex_go/tui/bottom_pane"
 	"codex_go/tui/markdown"
+	sysclipboard "github.com/atotto/clipboard"
 )
 
 // In-session `/agents` dashboard (Rust #39094/#39112). The dashboard is a
@@ -20,7 +22,10 @@ import (
 // background server on Unix.
 
 type AgentsOverviewRefreshFunc func(currentThreadID string) ([]agentsoverview.Row, error)
-type AgentsOverviewDispatchFunc func(prompt string, cwd string) (string, error)
+
+// AgentsOverviewDispatchFunc starts a background task from the dashboard. The
+// request carries the prompt plus any image attachments (Rust #44027).
+type AgentsOverviewDispatchFunc func(request SubmitRequest, cwd string) (string, error)
 type AgentsOverviewStopFunc func(threadID string) error
 type AgentsOverviewRenameFunc func(threadID string, name string) error
 type AgentsOverviewArchiveFunc func(threadID string) error
@@ -58,6 +63,7 @@ type agentsOverviewListMsg struct {
 type agentsOverviewDispatchMsg struct {
 	threadID string
 	err      error
+	request  SubmitRequest
 }
 
 type agentsOverviewStopMsg struct {
@@ -96,6 +102,7 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	m.agentsOverviewLifecycle = nil
 	m.agentsOverviewLifecycleProgress = ""
 	m.applyAgentsOverviewKeymapHints()
+	m.syncAgentsOverviewAttachmentLabels()
 	return m.refreshAgentsOverviewCmd()
 }
 
@@ -346,6 +353,7 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.keyMatches("agents", "new_task", keySpec) {
 		m.agentsOverview.ClearNew()
+		m.setAgentsOverviewAttachments(nil)
 		handled = true
 	}
 	if m.keyMatches("agents", "rename", keySpec) {
@@ -385,6 +393,21 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 			m.agentsOverview.TypeChar(r)
 		}
 	}
+	if msg.Type == bubbletea.KeyCtrlV {
+		// Rust #44027: image pasting is enabled in the overview composer; fall
+		// back to clipboard text when no image is available.
+		if path, err := pasteImageFromClipboard(); err == nil {
+			m.setAgentsOverviewAttachments(append(cloneComposerAttachments(m.agentsOverviewAttachments),
+				bottompane.ComposerAttachment{Kind: bottompane.AttachmentImage, Path: path}))
+			m.notice = "Attached image " + path
+			return nil
+		}
+		if text, err := sysclipboard.ReadAll(); err == nil && text != "" {
+			for _, r := range text {
+				m.agentsOverview.TypeChar(r)
+			}
+		}
+	}
 	return nil
 }
 
@@ -398,11 +421,83 @@ func (m *Model) dispatchAgentsOverviewCmd(prompt string) bubbletea.Cmd {
 			cwd = strings.TrimSpace(row.CWD)
 		}
 	}
+	request := SubmitRequest{
+		Prompt:          prompt,
+		Attachments:     cloneComposerAttachments(m.agentsOverviewAttachments),
+		MentionBindings: m.activeComposerMentionBindings(prompt),
+		MentionCatalog:  m.submissionMentionCatalog(),
+	}
 	m.agentsOverviewBusy = true
 	return func() bubbletea.Msg {
-		threadID, err := m.onAgentsOverviewDispatch(prompt, cwd)
-		return agentsOverviewDispatchMsg{threadID: threadID, err: err}
+		threadID, err := m.onAgentsOverviewDispatch(request, cwd)
+		return agentsOverviewDispatchMsg{threadID: threadID, err: err, request: request}
 	}
+}
+
+// setAgentsOverviewAttachments replaces the pending dashboard task attachments
+// and refreshes the rendered labels (Rust #44027).
+func (m *Model) setAgentsOverviewAttachments(attachments []bottompane.ComposerAttachment) {
+	if m == nil {
+		return
+	}
+	m.agentsOverviewAttachments = cloneComposerAttachments(attachments)
+	m.syncAgentsOverviewAttachmentLabels()
+}
+
+// syncAgentsOverviewAttachmentLabels mirrors the pending attachments into the
+// dashboard view.
+func (m *Model) syncAgentsOverviewAttachmentLabels() {
+	if m == nil || m.agentsOverview == nil {
+		return
+	}
+	if len(m.agentsOverviewAttachments) == 0 {
+		m.agentsOverview.SetAttachments(nil)
+		return
+	}
+	labels := make([]string, 0, len(m.agentsOverviewAttachments))
+	for _, attachment := range m.agentsOverviewAttachments {
+		labels = append(labels, "  "+attachmentKindLabel(attachment.Kind)+": "+attachment.Label())
+	}
+	m.agentsOverview.SetAttachments(labels)
+}
+
+// restoreAgentsOverviewPrompt restores an unsent task prompt and its
+// attachments after a dispatch failure (Rust #44027). A newer draft typed while
+// the task was starting is preserved; the failed request's images are then
+// reported by path so they can be re-attached.
+func (m *Model) restoreAgentsOverviewPrompt(request SubmitRequest) {
+	if m == nil || m.agentsOverview == nil {
+		return
+	}
+	if strings.TrimSpace(m.agentsOverview.State.Input) == "" {
+		m.agentsOverview.State.Input = request.Prompt
+		m.setAgentsOverviewAttachments(request.Attachments)
+		return
+	}
+	if paths := agentsOverviewAttachmentPaths(request.Attachments); len(paths) > 0 {
+		notice := strings.TrimSpace(m.agentsOverviewNotice)
+		if notice != "" {
+			notice += " "
+		}
+		m.agentsOverviewNotice = notice + "Reattach image(s): " + strings.Join(paths, ", ")
+	}
+}
+
+func agentsOverviewAttachmentPaths(attachments []bottompane.ComposerAttachment) []string {
+	paths := make([]string, 0, len(attachments))
+	for _, attachment := range attachments {
+		switch attachment.Kind {
+		case bottompane.AttachmentImage:
+			if path := strings.TrimSpace(attachment.Path); path != "" {
+				paths = append(paths, path)
+			}
+		case bottompane.AttachmentRemoteImage:
+			if url := strings.TrimSpace(attachment.URL); url != "" {
+				paths = append(paths, url)
+			}
+		}
+	}
+	return paths
 }
 
 func (m *Model) stopAgentsOverviewCmd(threadID string) bubbletea.Cmd {

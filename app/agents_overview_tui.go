@@ -24,13 +24,13 @@ func interactiveRemoteAgentsOverviewRefresh(ctx context.Context, endpoint *appse
 }
 
 func interactiveRemoteAgentsOverviewDispatch(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewDispatchFunc {
-	return func(prompt string, cwd string) (string, error) {
+	return func(request codextea.SubmitRequest, cwd string) (string, error) {
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
 			return "", err
 		}
 		defer client.close()
-		return newRemoteAgentsDashboardSource(client, "").Dispatch(ctx, prompt, cwd)
+		return newRemoteAgentsDashboardSource(client, "").Dispatch(ctx, request, cwd)
 	}
 }
 

@@ -967,18 +967,21 @@ type Model struct {
 	// Overlay stack (new architecture)
 	overlays *overlay.Overlay
 
-	transcript                 viewport.Model
-	composer                   textarea.Model
-	activityFollow             bool
-	overlay                    *chatwidget.TranscriptOverlay
-	slashPopup                 slashCommandPopup
-	agentsOverview             *agentsoverview.View
-	agentsOverviewNotice       string
-	agentsOverviewBusy         bool
-	agentsOverviewRefresh      int
-	agentsOverviewPending      bool
-	agentsOverviewInflight     bool
-	agentsOverviewDrafts       map[string]string
+	transcript             viewport.Model
+	composer               textarea.Model
+	activityFollow         bool
+	overlay                *chatwidget.TranscriptOverlay
+	slashPopup             slashCommandPopup
+	agentsOverview         *agentsoverview.View
+	agentsOverviewNotice   string
+	agentsOverviewBusy     bool
+	agentsOverviewRefresh  int
+	agentsOverviewPending  bool
+	agentsOverviewInflight bool
+	agentsOverviewDrafts   map[string]string
+	// agentsOverviewAttachments holds the pending image attachments for the
+	// dashboard's new-task prompt (Rust #44027).
+	agentsOverviewAttachments  []bottompane.ComposerAttachment
 	agentsOverviewHidden       map[string]struct{}
 	agentsOverviewPendingDraft *string
 	transcriptMessages         transcriptMessageCache
@@ -2023,8 +2026,12 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case agentsOverviewDispatchMsg:
 		if msg.err != nil {
 			m.agentsOverviewNotice = "Failed to start background task: " + strings.TrimSpace(msg.err.Error())
+			// Rust #44027: restore the unsent prompt and attachments (or report
+			// their paths when a newer draft is present).
+			m.restoreAgentsOverviewPrompt(msg.request)
 		} else if strings.TrimSpace(msg.threadID) != "" {
 			m.agentsOverviewNotice = "Dispatched task " + msg.threadID
+			m.setAgentsOverviewAttachments(nil)
 		}
 		m.agentsOverviewBusy = false
 		return m, m.refreshAgentsOverviewCmd()
@@ -2106,6 +2113,14 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			// Terminal commonly delivers Ctrl+V/right-click paste through this
 			// path rather than as KeyCtrlV.
 			if pasted := string(msg.Runes); pasted != "" && m.modal == nil {
+				// Rust #44027: the dashboard composer owns typing/paste while
+				// the overview is open.
+				if m.agentsOverview != nil {
+					for _, r := range pasted {
+						m.agentsOverview.TypeChar(r)
+					}
+					return m, nil
+				}
 				// Rust #42897: pasting opens the editable Other choice.
 				if m.asyncQuestions.Expanded() && m.asyncQuestions.HasOptions() {
 					m.asyncQuestions.SelectOther()

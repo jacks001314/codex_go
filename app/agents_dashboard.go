@@ -15,6 +15,7 @@ import (
 	"codex_go/cli"
 	"codex_go/session"
 	agentsoverview "codex_go/tui/agents_overview"
+	codextea "codex_go/tui/tea"
 	"codex_go/turn"
 )
 
@@ -32,7 +33,7 @@ type agentsDashboardResult struct {
 // local fallback reads the session store directly.
 type agentsDashboardSource interface {
 	List(ctx context.Context) ([]agentsoverview.Row, error)
-	Dispatch(ctx context.Context, prompt, cwd string) (string, error)
+	Dispatch(ctx context.Context, request codextea.SubmitRequest, cwd string) (string, error)
 	Stop(ctx context.Context, threadID string) error
 	Rename(ctx context.Context, threadID, name string) error
 	Archive(ctx context.Context, threadID string) error
@@ -192,11 +193,11 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 	return agentsOverviewRowsFromThreads(threads, ""), nil
 }
 
-func (s *remoteAgentsDashboardSource) Dispatch(ctx context.Context, prompt, cwd string) (string, error) {
+func (s *remoteAgentsDashboardSource) Dispatch(ctx context.Context, request codextea.SubmitRequest, cwd string) (string, error) {
 	if s == nil || s.client == nil {
 		return "", errors.New("app-server client is unavailable")
 	}
-	prompt = strings.TrimSpace(prompt)
+	prompt := strings.TrimSpace(request.Prompt)
 	if prompt == "" {
 		return "", errors.New("task prompt must not be empty")
 	}
@@ -213,6 +214,17 @@ func (s *remoteAgentsDashboardSource) Dispatch(ctx context.Context, prompt, cwd 
 	if defaults, layers, ok := s.client.remoteNewThreadModelDefaults(ctx); ok {
 		applyManagedDefaultsToThreadStartParams(&params, s.client.state, defaults, layers, nil, false, false)
 	}
+	// Rust #44027: images are rejected before a thread starts when the resolved
+	// model is text-only.
+	if len(request.Attachments) > 0 {
+		if err := s.rejectTextOnlyModelForImages(ctx, params.Model); err != nil {
+			return "", err
+		}
+	}
+	inputs, err := agentsOverviewTaskInputs(request, !interactiveRemoteEndpointIsLocal(s.client.endpoint))
+	if err != nil {
+		return "", err
+	}
 	var started appserver.ThreadStartResponse
 	if err := remoteSessionRequest(ctx, s.client, appserver.MethodThreadStart, params, &started); err != nil {
 		return "", err
@@ -227,7 +239,7 @@ func (s *remoteAgentsDashboardSource) Dispatch(ctx context.Context, prompt, cwd 
 	var turnStarted turn.TurnStartResponse
 	if err := remoteSessionRequest(ctx, s.client, appserver.MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
-		Input:    []turn.TurnUserInput{{Type: "text", Text: prompt}},
+		Input:    inputs,
 	}, &turnStarted); err != nil {
 		return threadID, err
 	}
@@ -333,7 +345,7 @@ func (s *localAgentsDashboardSource) List(ctx context.Context) ([]agentsoverview
 	return agentsOverviewRowsFromRecords(records, ""), nil
 }
 
-func (s *localAgentsDashboardSource) Dispatch(ctx context.Context, prompt, cwd string) (string, error) {
+func (s *localAgentsDashboardSource) Dispatch(ctx context.Context, request codextea.SubmitRequest, cwd string) (string, error) {
 	return "", errors.New("dispatching background tasks requires the background app server; start it with `codex app-server daemon start` or connect with `codex agents --remote`")
 }
 
@@ -635,7 +647,7 @@ func (m *agentsDashboardModel) dispatchCmd(prompt string) bubbletea.Cmd {
 	}
 	m.busy = true
 	return func() bubbletea.Msg {
-		threadID, err := m.source.Dispatch(m.ctx, prompt, cwd)
+		threadID, err := m.source.Dispatch(m.ctx, codextea.SubmitRequest{Prompt: prompt}, cwd)
 		return agentsDashboardDispatchMsg{threadID: threadID, err: err}
 	}
 }

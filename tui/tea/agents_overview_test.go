@@ -146,8 +146,8 @@ func TestModelAgentsDashboardDispatchTask(t *testing.T) {
 			refreshed++
 			return agentsOverviewTestRows(), nil
 		},
-		OnAgentsOverviewDispatch: func(prompt string, cwd string) (string, error) {
-			dispatched = append(dispatched, prompt)
+		OnAgentsOverviewDispatch: func(request SubmitRequest, cwd string) (string, error) {
+			dispatched = append(dispatched, request.Prompt)
 			dispatchedCwd = cwd
 			return "new-1", nil
 		},

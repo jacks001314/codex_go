@@ -10,6 +10,7 @@ import (
 	"codex_go/appserver"
 	"codex_go/session"
 	agentsoverview "codex_go/tui/agents_overview"
+	codextea "codex_go/tui/tea"
 )
 
 func dashboardThreadRows() []*appserver.Thread {
@@ -128,8 +129,8 @@ func (s *fakeAgentsDashboardSource) List(ctx context.Context) ([]agentsoverview.
 	return s.rows, s.listErr
 }
 
-func (s *fakeAgentsDashboardSource) Dispatch(ctx context.Context, prompt, cwd string) (string, error) {
-	s.dispatched = append(s.dispatched, prompt)
+func (s *fakeAgentsDashboardSource) Dispatch(ctx context.Context, request codextea.SubmitRequest, cwd string) (string, error) {
+	s.dispatched = append(s.dispatched, request.Prompt)
 	s.dispatchedCwd = cwd
 	return "new-1", s.dispatchErr
 }

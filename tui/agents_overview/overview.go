@@ -250,6 +250,27 @@ type View struct {
 	// owns the terminal markup, so callers inject it; nil keeps the plain text
 	// preview.
 	RenderMarkdown func(text string, width int) []string
+	// attachments are the pending image attachment labels for the new-task
+	// prompt (Rust #44027). The caller owns the underlying files; the view only
+	// renders them above the prompt.
+	attachments []string
+}
+
+// SetAttachments replaces the pending attachment labels rendered above the
+// new-task prompt (Rust #44027).
+func (v *View) SetAttachments(labels []string) {
+	if v == nil {
+		return
+	}
+	v.attachments = append([]string(nil), labels...)
+}
+
+// AttachmentLabels returns the current pending attachment labels.
+func (v *View) AttachmentLabels() []string {
+	if v == nil {
+		return nil
+	}
+	return append([]string(nil), v.attachments...)
 }
 
 // projectGroup is a row's project-grouping identity. With linked worktrees

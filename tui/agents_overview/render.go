@@ -41,7 +41,8 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	}
 	lines = append(lines, renderLine(inset, []span{{text: strings.Repeat("─", dividerWidth), style: spanDim}}, maxWidth, styled))
 
-	bodyHeight := termHeight - 5 // header + summary + divider + prompt + footer
+	attachmentLines := len(v.attachments)
+	bodyHeight := termHeight - 5 - attachmentLines // header + summary + divider + attachments + prompt + footer
 	if bodyHeight < 3 {
 		bodyHeight = 3
 	}
@@ -61,6 +62,10 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		lines = append(lines, v.renderRows(bodyHeight, bodyWidth, styled)...)
 	}
 
+	// pending image attachments (Rust #44027)
+	for _, label := range v.attachments {
+		lines = append(lines, renderLine(inset, []span{{text: label, style: spanDim}}, maxWidth, styled))
+	}
 	// prompt
 	label, input, placeholder := v.Prompt()
 	prompt := []span{{text: label, style: spanCyanBold}, {text: input, style: spanPlain}}
