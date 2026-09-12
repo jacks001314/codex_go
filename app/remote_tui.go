@@ -326,6 +326,33 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	interactiveRemoteTrustCheck(ctx, endpoint, root, shouldRunInteractiveTUI(stdin, stdout))
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
+	// Rust daybreak::prefetch_notice: read the account's Daybreak eligibility in
+	// the background for a local openai-provider session; the refusal copy falls
+	// back to the neutral notice until the read lands.
+	daybreakCache := &daybreakNoticeCache{}
+	daybreakProvider := ""
+	if state != nil {
+		daybreakProvider = strings.TrimSpace(state.Provider)
+	}
+	if interactiveRemoteEndpointIsLocal(endpoint) && strings.EqualFold(daybreakProvider, "openai") {
+		prefetchDaybreakNotice(ctx, daybreakCache, func(callCtx context.Context) (appserver.AuthStatusResponse, error) {
+			client, err := openRemoteSessionClient(callCtx, endpoint)
+			if err != nil {
+				return appserver.AuthStatusResponse{}, err
+			}
+			defer client.close()
+			includeToken := true
+			refreshToken := false
+			var response appserver.AuthStatusResponse
+			if err := remoteSessionRequest(callCtx, client, appserver.MethodGetAuthStatus, appserver.AuthStatusParams{
+				IncludeToken: &includeToken,
+				RefreshToken: &refreshToken,
+			}, &response); err != nil {
+				return appserver.AuthStatusResponse{}, err
+			}
+			return response, nil
+		}, interactiveDaybreakBaseURL(), auth.DefaultCodexHome())
+	}
 	// The TUI owns the voice helper and relays its handshake through the
 	// app-server on a dedicated connection, so a media session never competes
 	// with the interactive read loop.
@@ -384,10 +411,13 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint),
 		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
-		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),
-		OnLogout:                    interactiveRemoteLogoutHandler(ctx, endpoint),
-		KeymapConfig:                keymapConfig,
-		OnKeymapEdit:                interactiveRemoteKeymapEditHandler(ctx, endpoint),
+		OnDaybreakNotice: func(model string) codextui.DaybreakNotice {
+			return daybreakNoticeForModel(daybreakProvider, daybreakCache, model)
+		},
+		OnRenameThread: interactiveRemoteRenameThreadHandler(ctx, endpoint),
+		OnLogout:       interactiveRemoteLogoutHandler(ctx, endpoint),
+		KeymapConfig:   keymapConfig,
+		OnKeymapEdit:   interactiveRemoteKeymapEditHandler(ctx, endpoint),
 		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
 			if strings.TrimSpace(currentThreadID) == "" && state != nil {
 				currentThreadID = state.ThreadID
