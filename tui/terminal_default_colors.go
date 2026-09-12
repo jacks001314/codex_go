@@ -1,6 +1,17 @@
 package tui
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
+
+// terminalColorProbeTimeout mirrors Rust's DEFAULT_TIMEOUT for the OSC 10/11
+// probe.
+const terminalColorProbeTimeout = 100 * time.Millisecond
+
+// terminalColorProbeQuery is Rust's combined OSC 10 (foreground) and OSC 11
+// (background) query, each terminated with ST.
+const terminalColorProbeQuery = "\x1b]10;?\x1b\\\x1b]11;?\x1b\\"
 
 // Rust parity: codex-rs/tui/src/terminal_palette.rs (#43921). The palette cache
 // records the terminal's default foreground/background colors once. Rust fills
@@ -22,6 +33,19 @@ var (
 // terminal_palette::default_colors).
 func DefaultTerminalColors() (DefaultColors, bool) {
 	return defaultTerminalColors()
+}
+
+// ProbeTerminalDefaultColors queries the terminal's OSC 10/11 default colors and
+// installs them into the palette cache (Rust terminal_probe::default_colors plus
+// set_default_colors_from_startup_probe). It must run before the TUI's input loop
+// starts; hosts without a probe report false.
+func ProbeTerminalDefaultColors(timeout time.Duration) bool {
+	colors, ok := probePlatformTerminalDefaultColors(timeout)
+	if !ok {
+		return false
+	}
+	SetDefaultColorsFromStartupProbe(&colors)
+	return true
 }
 
 // defaultTerminalColors reports the cached terminal default colors. Like Rust's

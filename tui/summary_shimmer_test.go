@@ -166,3 +166,15 @@ func TestDecodeConsoleDefaultColorsMatchesRust(t *testing.T) {
 		}
 	}
 }
+
+// TestTerminalColorProbeQueryMatchesRust pins the combined OSC 10/11 query
+// (Rust terminal_probe::default_colors writes the same bytes).
+func TestTerminalColorProbeQueryMatchesRust(t *testing.T) {
+	want := "\x1b]10;?\x1b\\\x1b]11;?\x1b\\"
+	if terminalColorProbeQuery != want {
+		t.Fatalf("probe query = %q, want %q", terminalColorProbeQuery, want)
+	}
+	if terminalColorProbeTimeout != 100*time.Millisecond {
+		t.Fatalf("probe timeout = %s, want 100ms (Rust DEFAULT_TIMEOUT)", terminalColorProbeTimeout)
+	}
+}

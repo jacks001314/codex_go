@@ -87,6 +87,25 @@ type SubmitRequest struct {
 	LiteralInput bool
 }
 
+// probeTerminalColorsForTUI runs the bounded terminal color probe only when the
+// TUI owns real terminal stdio, so tests and piped sessions are untouched.
+func probeTerminalColorsForTUI(input io.Reader, output io.Writer) {
+	inputFile, inputOK := input.(*os.File)
+	outputFile, outputOK := output.(*os.File)
+	if !inputOK || !outputOK || inputFile == nil || outputFile == nil {
+		return
+	}
+	inputInfo, err := inputFile.Stat()
+	if err != nil || inputInfo.Mode()&os.ModeCharDevice == 0 {
+		return
+	}
+	outputInfo, err := outputFile.Stat()
+	if err != nil || outputInfo.Mode()&os.ModeCharDevice == 0 {
+		return
+	}
+	codextui.ProbeTerminalDefaultColors(100 * time.Millisecond)
+}
+
 type SubmitRequestFunc func(request SubmitRequest) bubbletea.Cmd
 
 type SteerRequestFunc func(request SubmitRequest, clientID string) error
@@ -1839,6 +1858,10 @@ func detectTerminalSize(input io.Reader, output io.Writer) (int, int, bool) {
 }
 
 func Run(ctx context.Context, state *codextui.State, options Options, input io.Reader, output io.Writer) (*Model, error) {
+	// Install the terminal's OSC 10/11 default colors before the input loop
+	// starts so the summary shimmer can blend against the real palette
+	// (Rust terminal_probe::default_colors at TUI startup).
+	probeTerminalColorsForTUI(input, output)
 	final, err := NewProgram(ctx, state, options, input, output).Run()
 	if err != nil {
 		return nil, err

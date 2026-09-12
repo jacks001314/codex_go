@@ -5,6 +5,7 @@ package tui
 import (
 	"encoding/binary"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -41,4 +42,12 @@ func platformTerminalDefaultColors() (DefaultColors, bool) {
 		colorTable[i] = binary.LittleEndian.Uint32(info[consoleScreenBufferInfoExColorTable+4*i:])
 	}
 	return decodeConsoleDefaultColors(attributes, colorTable), true
+}
+
+// probePlatformTerminalDefaultColors reports no OSC probe on Windows: the
+// console color table above is the platform source (Rust prefers a terminal OSC
+// response there too, which needs the Windows console input-replay path Go does
+// not port).
+func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, bool) {
+	return DefaultColors{}, false
 }
