@@ -1294,8 +1294,8 @@ func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOpti
 	items := []codextui.SessionSummary{}
 	for _, archived := range []bool{false, true} {
 		params := remoteTUIThreadListParams(root, archived)
-		var response appserver.ThreadListResponse
-		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response); err != nil {
+		response, err := remoteThreadListWithCwdFallback(ctx, client, params)
+		if err != nil {
 			return nil
 		}
 		for i := range response.Data {
@@ -1431,6 +1431,39 @@ func remoteTUIThreadListParams(root *cli.RootOptions, archived bool) appserver.T
 		}
 	}
 	return params
+}
+
+// remoteThreadListWithCwdFallback lists threads, retrying once with the
+// originally requested directory when an older daemon rejects the array-valued
+// cwd filter (Rust #43279 app_server_session/thread_list.rs). Discovery orders
+// the requested directory first, so the first value is the fallback.
+func remoteThreadListWithCwdFallback(ctx context.Context, client *remoteAppServerTUIClient, params appserver.ThreadListParams) (*appserver.ThreadListResponse, error) {
+	for {
+		var response appserver.ThreadListResponse
+		err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response)
+		if err == nil {
+			return &response, nil
+		}
+		var rpc *remoteRPCError
+		if !errors.As(err, &rpc) {
+			return nil, err
+		}
+		if rpc.Code != appserver.JSONRPCInvalidRequestErrorCode &&
+			rpc.Code != appserver.JSONRPCInvalidParamsErrorCode {
+			return nil, err
+		}
+		if !strings.Contains(rpc.Message, "invalid type: sequence") ||
+			!strings.Contains(rpc.Message, "expected a string") {
+			return nil, err
+		}
+		// Only a multi-directory filter is retried; Rust matches
+		// ThreadListCwdFilter::Many here, and discovery orders the requested
+		// directory first.
+		if params.CWD == nil || len(params.CWD.Values) < 2 {
+			return nil, err
+		}
+		params.CWD = &appserver.ThreadListCwdFilter{Values: params.CWD.Values[:1]}
+	}
 }
 
 func remoteTUISessionSummaryFromThread(thread *appserver.Thread, archived bool) *codextui.SessionSummary {
@@ -2214,6 +2247,21 @@ func (c *remoteAppServerTUIClient) sendRequest(ctx context.Context, method appse
 	return id, nil
 }
 
+// remoteRPCError carries the JSON-RPC error code and message returned by a
+// remote app-server so callers can react to specific legacy-daemon failures
+// (Rust #43279's single-directory cwd fallback).
+type remoteRPCError struct {
+	Code    int
+	Message string
+}
+
+func (e *remoteRPCError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
 func (c *remoteAppServerTUIClient) waitResponse(ctx context.Context, id int64, target any) error {
 	want := fmt.Sprint(id)
 	for {
@@ -2230,7 +2278,7 @@ func (c *remoteAppServerTUIClient) waitResponse(ctx context.Context, id int64, t
 				continue
 			}
 			if message.Error != nil {
-				return errors.New(strings.TrimSpace(message.Error.Message))
+				return &remoteRPCError{Code: message.Error.Code, Message: strings.TrimSpace(message.Error.Message)}
 			}
 			if target != nil && len(message.Result) > 0 {
 				if err := json.Unmarshal(message.Result, target); err != nil {
