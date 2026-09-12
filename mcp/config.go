@@ -71,27 +71,30 @@ type ServerConfig struct {
 	// OAuthAuthorizationServerIssuer is the expected resource authorization
 	// server issuer for EMA token exchange (Rust #44832); it is only valid
 	// together with auth = "ema_auth".
-	OAuthAuthorizationServerIssuer string                            `json:"authorization_server_issuer,omitempty"`
-	Scopes                         []string                          `json:"scopes,omitempty"`
-	ScopesConfigured               bool                              `json:"-"`
-	OAuthServerName                string                            `json:"-"`
-	OAuthRefreshMode               McpOAuthRefreshMode               `json:"oauth_refresh_mode,omitempty"`
-	Auth                           string                            `json:"auth,omitempty"`
-	CodexHome                      string                            `json:"-"`
-	Enabled                        bool                              `json:"enabled"`
-	DisabledReason                 string                            `json:"disabled_reason,omitempty"`
-	Required                       bool                              `json:"required,omitempty"`
-	EnabledTools                   []string                          `json:"enabled_tools,omitempty"`
-	DisabledTools                  []string                          `json:"disabled_tools,omitempty"`
-	OmitToolsFrom                  []string                          `json:"omit_tools_from,omitempty"`
-	DefaultToolsApprovalMode       *apps.AppToolApproval             `json:"default_tools_approval_mode,omitempty"`
-	Tools                          map[string]ToolConfig             `json:"tools,omitempty"`
-	EnvironmentID                  string                            `json:"environment_id,omitempty"`
-	StartupTimeout                 time.Duration                     `json:"-"`
-	ToolTimeout                    time.Duration                     `json:"-"`
-	CatalogItemLimit               int                               `json:"-"`
-	ApplyHTTPRequest               func(*http.Request, []byte) error `json:"-"`
-	ProtocolMode                   MCPProtocolMode                   `json:"-"`
+	OAuthAuthorizationServerIssuer string              `json:"authorization_server_issuer,omitempty"`
+	Scopes                         []string            `json:"scopes,omitempty"`
+	ScopesConfigured               bool                `json:"-"`
+	OAuthServerName                string              `json:"-"`
+	OAuthRefreshMode               McpOAuthRefreshMode `json:"oauth_refresh_mode,omitempty"`
+	Auth                           string              `json:"auth,omitempty"`
+	CodexHome                      string              `json:"-"`
+	Enabled                        bool                `json:"enabled"`
+	DisabledReason                 string              `json:"disabled_reason,omitempty"`
+	Required                       bool                `json:"required,omitempty"`
+	// SupportsParallelToolCalls advertises every tool from this server as safe
+	// for parallel execution (Rust McpServerConfig::supports_parallel_tool_calls).
+	SupportsParallelToolCalls bool                              `json:"supports_parallel_tool_calls,omitempty"`
+	EnabledTools              []string                          `json:"enabled_tools,omitempty"`
+	DisabledTools             []string                          `json:"disabled_tools,omitempty"`
+	OmitToolsFrom             []string                          `json:"omit_tools_from,omitempty"`
+	DefaultToolsApprovalMode  *apps.AppToolApproval             `json:"default_tools_approval_mode,omitempty"`
+	Tools                     map[string]ToolConfig             `json:"tools,omitempty"`
+	EnvironmentID             string                            `json:"environment_id,omitempty"`
+	StartupTimeout            time.Duration                     `json:"-"`
+	ToolTimeout               time.Duration                     `json:"-"`
+	CatalogItemLimit          int                               `json:"-"`
+	ApplyHTTPRequest          func(*http.Request, []byte) error `json:"-"`
+	ProtocolMode              MCPProtocolMode                   `json:"-"`
 	// ProtocolModeOverride is set by extension/overlay contributions that
 	// select an HTTP protocol mode for their own server (Rust #44571). When
 	// non-nil it wins over the default and host-owned-Apps modes; nil preserves
@@ -496,6 +499,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 	server.DisabledReason = runtimeConfigStringAny(values, "disabled_reason", "disabledReason")
 	server.Auth = runtimeConfigString(values, "auth")
 	server.EnvironmentID = runtimeConfigStringAny(values, "environment_id", "environmentId")
+	server.SupportsParallelToolCalls = runtimeConfigBoolAny(values, "supports_parallel_tool_calls", "supportsParallelToolCalls")
 	server.StartupTimeout = runtimeConfigDurationAny(values, "startup_timeout_sec", "startupTimeoutSec", "startup_timeout_ms", "startupTimeoutMs")
 	server.ToolTimeout = runtimeConfigDurationAny(values, "tool_timeout_sec", "toolTimeoutSec", "tool_timeout_ms", "toolTimeoutMs")
 	server.EnabledTools = runtimeConfigStringSliceAny(values, "enabled_tools", "enabledTools")
@@ -549,6 +553,17 @@ func runtimeConfigStringAny(values map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// runtimeConfigBoolAny returns the first boolean value among the keys (Rust
+// config values are typed, so a mistyped entry is ignored rather than coerced).
+func runtimeConfigBoolAny(values map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		if value, ok := values[key].(bool); ok {
+			return value
+		}
+	}
+	return false
 }
 
 func runtimeConfigOAuthClientID(values map[string]any) string {

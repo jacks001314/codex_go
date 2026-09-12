@@ -513,8 +513,34 @@ func mcpOmitToolsFromByServer(service *mcp.MCPService, tools []mcp.RuntimeToolIn
 	return omitByServer
 }
 
+// mcpServerParallelToolCalls resolves each server's parallel-tool-call opt-in
+// from the effective runtime configuration (Rust
+// McpServerMetadata::supports_parallel_tool_calls).
+func mcpServerParallelToolCalls(service *mcp.MCPService, tools []mcp.RuntimeToolInfo) map[string]bool {
+	parallelByServer := map[string]bool{}
+	if service == nil {
+		return parallelByServer
+	}
+	for i := range tools {
+		serverName := strings.TrimSpace(tools[i].ServerName)
+		if serverName == "" {
+			continue
+		}
+		if _, seen := parallelByServer[serverName]; seen {
+			continue
+		}
+		config, ok := service.ServerConfigForServer(serverName)
+		parallelByServer[serverName] = ok && config.SupportsParallelToolCalls
+	}
+	return parallelByServer
+}
+
 func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, tools []mcp.RuntimeToolInfo, exposure tool.Exposure) error {
 	tools = mcp.NormalizeRuntimeToolsForModel(tools)
+	// Rust's per-server opt-in marks every tool from the server as safe for
+	// parallel tool calls (McpServerMetadata::supports_parallel_tool_calls ->
+	// ToolInfo::supports_parallel_tool_calls).
+	parallelByServer := mcpServerParallelToolCalls(options.MCPService, tools)
 	for i := range tools {
 		info := tools[i]
 		executor := mcp.NewToolExecutor(&mcp.ToolExecutorOptions{
@@ -528,6 +554,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 				Annotations: info.Tool.Annotations,
 				Meta:        info.Meta,
 			},
+			Parallel:                          parallelByServer[strings.TrimSpace(info.ServerName)],
 			ToolName:                          tool.NamespacedName(info.CallableNamespace, info.CallableName),
 			ThreadID:                          options.ThreadID,
 			TurnID:                            options.TurnID,

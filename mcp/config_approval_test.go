@@ -337,3 +337,28 @@ func TestCloneServerConfigWithApprovalMode(t *testing.T) {
 func ptrAppToolApproval(a apps.AppToolApproval) *apps.AppToolApproval {
 	return &a
 }
+
+// TestRuntimeServerConfigFromValuesSupportsParallelToolCalls mirrors Rust's
+// `McpServerConfig::supports_parallel_tool_calls` scalar: a typed boolean is
+// honored (either spelling), and anything else leaves it unset.
+func TestRuntimeServerConfigFromValuesSupportsParallelToolCalls(t *testing.T) {
+	tests := []struct {
+		name   string
+		values map[string]any
+		want   bool
+	}{
+		{"snake_case true", map[string]any{"command": "test", "supports_parallel_tool_calls": true}, true},
+		{"camelCase true", map[string]any{"command": "test", "supportsParallelToolCalls": true}, true},
+		{"explicit false", map[string]any{"command": "test", "supports_parallel_tool_calls": false}, false},
+		{"absent", map[string]any{"command": "test"}, false},
+		{"mistyped", map[string]any{"command": "test", "supports_parallel_tool_calls": "yes"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := runtimeServerConfigFromValues(tt.values)
+			if config == nil || config.SupportsParallelToolCalls != tt.want {
+				t.Fatalf("SupportsParallelToolCalls = %#v, want %v", config, tt.want)
+			}
+		})
+	}
+}
