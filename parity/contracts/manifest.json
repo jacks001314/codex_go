@@ -912,6 +912,23 @@
             "verifier": "TestArchivedSessionGuidanceLikeRust;TestUnarchivePromptRenderLikeRust;TestUnarchivePromptKeysLikeRust;TestModelArchivedResumePromptsToUnarchiveAndRetriesLikeRust;TestInteractiveResumeAndForkRejectArchivedSessionsLikeRust"
         },
         {
+            "id": "task-mentions",
+            "kind": "source-surface",
+            "rustPaths": [
+                "tui/src/task_mentions.rs",
+                "tui/src/mention_codec.rs"
+            ],
+            "goPaths": [
+                "tui/task_mentions.go",
+                "tui/mention_codec.go",
+                "tui/bottom_pane/task_mentions.go",
+                "tui/bottom_pane/task_mentions_test.go"
+            ],
+            "phase": "P2",
+            "status": "complete",
+            "verifier": "TestTaskMentionHistoryRoundTripsLikeRust;TestTaskReferenceContextMergesWithIDEContextLikeRust;TestTaskReferenceHeadingInsideTitleLikeRust"
+        },
+        {
             "id": "agents-dashboard-command",
             "kind": "source-surface",
             "rustPaths": [

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"codex_go/turn"
 )
 
 // Rust parity: codex-rs/tui/src/mention_codec.rs.
@@ -22,6 +24,9 @@ type LinkedMention struct {
 type DecodedHistoryText struct {
 	Text     string
 	Mentions []LinkedMention
+	// TaskMentionRanges holds the decoded `@title` byte ranges for the task
+	// links that parse_task_link recognized (Rust task_mention_ranges).
+	TaskMentionRanges [][2]int
 }
 
 func EncodeMention(kind string, id string) string {
@@ -29,6 +34,14 @@ func EncodeMention(kind string, id string) string {
 }
 
 func EncodeHistoryMentions(text string, mentions []LinkedMention) string {
+	return EncodeHistoryMentionsAtElements(text, mentions, nil)
+}
+
+// EncodeHistoryMentionsAtElements mirrors Rust
+// encode_history_mentions_at_elements: plugin-text mentions whose path is a
+// valid thread path round-trip as guarded task links, and their text elements
+// identify the (possibly multiword, escaped) mention span.
+func EncodeHistoryMentionsAtElements(text string, mentions []LinkedMention, elements []turn.TextElement) string {
 	if text == "" || len(mentions) == 0 {
 		return text
 	}
@@ -48,9 +61,39 @@ func EncodeHistoryMentions(text string, mentions []LinkedMention) string {
 	bytes := []byte(text)
 	var out strings.Builder
 	out.Grow(len(text))
+	queueFront := func(sigil rune, name string) (string, bool) {
+		queue := mentionsByToken[mentionToken{Sigil: sigil, Name: name}]
+		if len(queue) == 0 {
+			return "", false
+		}
+		return queue[0], true
+	}
+	popFront := func(sigil rune, name string) string {
+		token := mentionToken{Sigil: sigil, Name: name}
+		queue := mentionsByToken[token]
+		path := queue[0]
+		mentionsByToken[token] = queue[1:]
+		return path
+	}
 	for index := 0; index < len(bytes); {
 		if bytes[index] == byte(ToolMentionSigil) || bytes[index] == byte(PluginTextMentionSigil) {
 			sigil := rune(bytes[index])
+			if sigil == PluginTextMentionSigil {
+				if element, ok := elementStartingAt(elements, index); ok {
+					nameStart := index + 1
+					nameEnd := int(element.ByteRange.End)
+					if UTF8RangeValid(text, nameStart, nameEnd) {
+						name := text[nameStart:nameEnd]
+						if front, ok := queueFront(sigil, name); ok {
+							if _, isThread := ValidThreadPath(front); isThread {
+								out.WriteString(FormatTaskLink(name, popFront(sigil, name)))
+								index += 1 + len(name)
+								continue
+							}
+						}
+					}
+				}
+			}
 			if sigil == ToolMentionSigil || startsPlaintextMention(text, index) {
 				nameStart := index + 1
 				if nameStart < len(bytes) && isMentionNameByte(bytes[nameStart]) {
@@ -60,11 +103,11 @@ func EncodeHistoryMentions(text string, mentions []LinkedMention) string {
 					}
 					name := text[nameStart:nameEnd]
 					if sigil == ToolMentionSigil || endsPlaintextMention(bytes, nameEnd) {
-						token := mentionToken{Sigil: sigil, Name: name}
-						queue := mentionsByToken[token]
-						if len(queue) > 0 {
-							path := queue[0]
-							mentionsByToken[token] = queue[1:]
+						// Thread paths are only encoded through their text element
+						// (Rust's `valid_thread_path(path).is_none()` guard).
+						front, ok := queueFront(sigil, name)
+						if _, isThread := ValidThreadPath(front); ok && !isThread {
+							path := popFront(sigil, name)
 							out.WriteByte('[')
 							out.WriteRune(sigil)
 							out.WriteString(name)
@@ -94,7 +137,19 @@ func DecodeHistoryMentionsWithAtMentions(text string, atMentionsEnabled bool) De
 	var out strings.Builder
 	out.Grow(len(text))
 	mentions := []LinkedMention{}
+	taskMentionRanges := [][2]int{}
 	for index := 0; index < len(bytes); {
+		if atMentionsEnabled {
+			if name, path, end, ok := ParseTaskLink(text, index); ok {
+				start := out.Len()
+				out.WriteRune('@')
+				out.WriteString(name)
+				taskMentionRanges = append(taskMentionRanges, [2]int{start, out.Len()})
+				mentions = append(mentions, LinkedMention{Sigil: '@', Mention: name, Path: path})
+				index = end
+				continue
+			}
+		}
 		if bytes[index] == '[' {
 			if sigil, name, path, end, ok := parseHistoryLinkedMention(text, bytes, index, atMentionsEnabled); ok {
 				out.WriteRune(sigil)
@@ -108,7 +163,16 @@ func DecodeHistoryMentionsWithAtMentions(text string, atMentionsEnabled bool) De
 		out.WriteRune(ch)
 		index += size
 	}
-	return DecodedHistoryText{Text: out.String(), Mentions: mentions}
+	return DecodedHistoryText{Text: out.String(), Mentions: mentions, TaskMentionRanges: taskMentionRanges}
+}
+
+func elementStartingAt(elements []turn.TextElement, index int) (turn.TextElement, bool) {
+	for _, element := range elements {
+		if int(element.ByteRange.Start) == index {
+			return element, true
+		}
+	}
+	return turn.TextElement{}, false
 }
 
 type mentionToken struct {
