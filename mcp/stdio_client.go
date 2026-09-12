@@ -53,6 +53,10 @@ type stdioClient struct {
 	openAIForm                         bool
 	protocolMode                       MCPProtocolMode
 	supportsSandboxStateMetaCapability bool
+	// elicitationCancellations remembers server cancellations for this
+	// connection so elicitations return `cancel` instead of hanging
+	// (Rust #44238). It is reset for every new connection attempt.
+	elicitationCancellations mcpElicitationCancellationMemory
 	// serverCapabilities is the initialized server's advertised capabilities
 	// object (Rust #44826); nil when unavailable or before initialization.
 	serverCapabilities json.RawMessage
@@ -446,6 +450,8 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	c.protocolMode = protocolMode
 	c.pending = map[int64]*stdioPendingCall{}
 	c.pendingOrder = nil
+	// Cancellation state belongs to one connection attempt (Rust #44238).
+	c.elicitationCancellations.reset()
 	c.mu.Unlock()
 	go c.readLoop(cmd, stdout)
 
@@ -613,7 +619,14 @@ func (c *stdioClient) handleReadFrame(data []byte) error {
 		pending := c.activePendingCall()
 		ctx, serverName, elicitation, progress := pendingStdioHandlers(pending)
 		if len(envelope.ID) == 0 {
-			return handleMCPClientNotification(ctx, serverName, progress, envelope.Method, envelope.Params)
+			return c.handleClientNotification(ctx, serverName, progress, envelope.Method, envelope.Params)
+		}
+		if isMCPElicitationMethod(envelope.Method) {
+			// Handle elicitations off the read loop so a server
+			// `notifications/cancelled` frame still reaches the pending
+			// elicitation instead of waiting behind it (Rust #44238).
+			c.dispatchElicitationRequest(ctx, serverName, elicitation, envelope.Method, envelope.ID, envelope.Params)
+			return nil
 		}
 		result, rpcErr := mcpClientRequestResult(ctx, serverName, elicitation, envelope.Method, envelope.ID, envelope.Params)
 		response := map[string]any{
@@ -636,6 +649,53 @@ func (c *stdioClient) handleReadFrame(data []byte) error {
 	}
 	c.deliverResponse(&response)
 	return nil
+}
+
+// handleClientNotification routes server notifications, remembering
+// cancellations that belong to an elicitation before delegating to the shared
+// progress handler.
+func (c *stdioClient) handleClientNotification(ctx context.Context, serverName string, progress MCPProgressHandler, method string, params json.RawMessage) error {
+	if strings.TrimSpace(method) == "notifications/cancelled" {
+		if id := mcpCancelledNotificationRequestID(params); len(id) > 0 {
+			c.elicitationCancellations.remember(id)
+		}
+		return nil
+	}
+	return handleMCPClientNotification(ctx, serverName, progress, method, params)
+}
+
+// dispatchElicitationRequest answers a server elicitation on its own goroutine
+// so the read loop can keep observing cancellation notifications.
+func (c *stdioClient) dispatchElicitationRequest(ctx context.Context, serverName string, elicitation MCPElicitationHandler, method string, id json.RawMessage, params json.RawMessage) {
+	cmd := c.currentCommand()
+	requestID := append(json.RawMessage(nil), id...)
+	go func() {
+		result := c.elicitationRequestResult(ctx, serverName, elicitation, method, requestID, params)
+		if err := c.writeFrame(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      requestID,
+			"result":  result,
+		}); err != nil {
+			c.failTransportFor(cmd, err)
+		}
+	}()
+}
+
+// elicitationRequestResult returns `cancel` when the elicitation was cancelled
+// by its client (ctx) or by a server `notifications/cancelled` for its request
+// id, for every elicitation kind rather than only user verification
+// (Rust #44238). Remembered cancellations are consumed so a reused request id
+// starts fresh.
+func (c *stdioClient) elicitationRequestResult(ctx context.Context, serverName string, elicitation MCPElicitationHandler, method string, id json.RawMessage, params json.RawMessage) any {
+	if c.elicitationCancellations.take(id) || mcpContextCancelled(ctx) {
+		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
+	}
+	result := mcpElicitationResult(ctx, serverName, elicitation, method, id, params)
+	if c.elicitationCancellations.cancelled(id) || mcpContextCancelled(ctx) {
+		c.elicitationCancellations.forget(id)
+		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
+	}
+	return result
 }
 
 func (c *stdioClient) Close() error {

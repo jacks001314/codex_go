@@ -48,12 +48,22 @@ func (f MCPElicitationHandlerFunc) HandleMCPElicitation(ctx context.Context, req
 }
 
 func mcpElicitationResult(ctx context.Context, serverName string, handler MCPElicitationHandler, method string, id json.RawMessage, params json.RawMessage) any {
+	// A cancelled request answers `cancel` for every elicitation kind rather
+	// than waiting on a response that will never be used (Rust #44238).
+	if mcpContextCancelled(ctx) {
+		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
+	}
 	request := parseMCPElicitationRequest(serverName, method, id, params)
 	request.ThreadID, request.TurnID = mcpElicitationContextFromContext(ctx)
 	if handler == nil {
 		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
 	}
 	response, err := handler.HandleMCPElicitation(ctx, request)
+	if mcpContextCancelled(ctx) {
+		// The handler raced the cancellation; the caller no longer wants the
+		// answer, so report cancellation instead of a late accept/decline.
+		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
+	}
 	if err != nil {
 		return &MCPElicitationResponse{
 			Action: MCPElicitationActionDecline,
