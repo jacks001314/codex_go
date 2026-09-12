@@ -12407,6 +12407,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if table, ok := cfg.Values["shell_environment_policy"].(map[string]any); ok {
 		options.Shell.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(table)
 	}
+	// Rust UnifiedExecProcessManager::new(config.background_terminal_max_timeout):
+	// the configured background-terminal timeout caps unified-exec yields.
+	if r.services.UnifiedExec != nil {
+		r.services.UnifiedExec.SetMaxEmptyPollYieldTime(cfg.BackgroundTerminalMaxTimeoutMS())
+	}
 	options.UnifiedExec = r.services.UnifiedExec
 	if r.services.CodeModeProvider != nil {
 		options.CodeModeProvider = r.services.CodeModeProvider

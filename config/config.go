@@ -1678,6 +1678,40 @@ func (c *Config) IncludePermissionsInstructions() bool {
 	return true
 }
 
+// DefaultBackgroundTerminalMaxTimeoutMS mirrors Rust
+// unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS (and the value in
+// config/defaults.toml).
+const DefaultBackgroundTerminalMaxTimeoutMS = 300_000
+
+// BackgroundTerminalMaxTimeoutMS ports Rust's
+// `background_terminal_max_timeout`: the cap on how long a unified-exec call
+// yields to a background terminal before returning. The caller clamps it to the
+// minimum yield time (Rust MIN_EMPTY_YIELD_TIME_MS).
+func (c *Config) BackgroundTerminalMaxTimeoutMS() uint64 {
+	if c == nil || c.Values == nil {
+		return DefaultBackgroundTerminalMaxTimeoutMS
+	}
+	switch value := c.Values["background_terminal_max_timeout"].(type) {
+	case int:
+		if value > 0 {
+			return uint64(value)
+		}
+	case int64:
+		if value > 0 {
+			return uint64(value)
+		}
+	case float64:
+		if value > 0 {
+			return uint64(value)
+		}
+	case uint64:
+		if value > 0 {
+			return value
+		}
+	}
+	return DefaultBackgroundTerminalMaxTimeoutMS
+}
+
 func stringFromConfigValue(value any) string {
 	if raw, ok := value.(string); ok {
 		return strings.TrimSpace(raw)

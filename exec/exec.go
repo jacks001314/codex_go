@@ -258,6 +258,10 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	approvalPolicy := effectiveExecApprovalPolicy(cfg, req)
+	// Rust UnifiedExecProcessManager::new(config.background_terminal_max_timeout).
+	if r.UnifiedExec != nil {
+		r.UnifiedExec.SetMaxEmptyPollYieldTime(cfg.BackgroundTerminalMaxTimeoutMS())
+	}
 	taskKind := taskKind(req)
 	agent, err := r.agentForRun(cfg, resolvedAuth, providerID, authStoreOptions)
 	if err != nil {

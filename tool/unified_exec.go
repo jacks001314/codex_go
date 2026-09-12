@@ -73,7 +73,7 @@ type UnifiedExecManager struct {
 	mu                      sync.Mutex
 	nextID                  int
 	maxProcesses            int
-	maxEmptyPollYieldTimeMS uint64
+	maxEmptyPollYieldTimeMS atomic.Uint64
 	processes               map[int]*unifiedExecProcess
 	pausedThreads           map[string]chan struct{}
 	// writeStdinApproval, when set, is invoked before non-empty stdin is
@@ -305,12 +305,34 @@ func NewUnifiedExecManagerWithOptions(maxProcesses int, maxEmptyPollYieldTimeMS 
 	if maxEmptyPollYieldTimeMS < unifiedExecMinEmptyPollYieldMS {
 		maxEmptyPollYieldTimeMS = unifiedExecMinEmptyPollYieldMS
 	}
-	return &UnifiedExecManager{
-		nextID:                  1,
-		maxProcesses:            maxProcesses,
-		maxEmptyPollYieldTimeMS: maxEmptyPollYieldTimeMS,
-		processes:               map[int]*unifiedExecProcess{},
+	manager := &UnifiedExecManager{
+		nextID:       1,
+		maxProcesses: maxProcesses,
+		processes:    map[int]*unifiedExecProcess{},
 	}
+	manager.setMaxEmptyPollYieldTime(maxEmptyPollYieldTimeMS)
+	return manager
+}
+
+func (m *UnifiedExecManager) setMaxEmptyPollYieldTime(maxEmptyPollYieldTimeMS uint64) {
+	if m == nil {
+		return
+	}
+	if maxEmptyPollYieldTimeMS < unifiedExecMinEmptyPollYieldMS {
+		maxEmptyPollYieldTimeMS = unifiedExecMinEmptyPollYieldMS
+	}
+	m.maxEmptyPollYieldTimeMS.Store(maxEmptyPollYieldTimeMS)
+}
+
+// SetMaxEmptyPollYieldTime ports Rust
+// UnifiedExecProcessManager::new(config.background_terminal_max_timeout): the
+// configured background-terminal timeout caps how long a unified-exec call
+// yields, clamped to the minimum empty-poll yield time.
+func (m *UnifiedExecManager) SetMaxEmptyPollYieldTime(maxEmptyPollYieldTimeMS uint64) {
+	if m == nil {
+		return
+	}
+	m.setMaxEmptyPollYieldTime(maxEmptyPollYieldTimeMS)
 }
 
 func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID string) (*ShellResult, error) {
@@ -1171,8 +1193,8 @@ func (m *UnifiedExecManager) clampWriteYield(value uint64, empty bool) uint64 {
 		if value < unifiedExecMinEmptyPollYieldMS {
 			value = unifiedExecMinEmptyPollYieldMS
 		}
-		if value > m.maxEmptyPollYieldTimeMS {
-			value = m.maxEmptyPollYieldTimeMS
+		if max := m.maxEmptyPollYieldTimeMS.Load(); value > max {
+			value = max
 		}
 		return value
 	}
