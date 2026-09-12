@@ -5405,6 +5405,15 @@ func remoteTUITestServeJSONLineAppServer(ctx context.Context, conn net.Conn, req
 				remoteTUITestSendErr(errs, err)
 				return
 			}
+		case string(appserver.MethodModelList):
+			if err := encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]any{"data": []any{}},
+			}); err != nil {
+				remoteTUITestSendErr(errs, err)
+				return
+			}
 		case string(appserver.MethodTurnStart):
 			if err := encoder.Encode(map[string]any{
 				"jsonrpc": "2.0",
@@ -5737,6 +5746,11 @@ func remoteTUITestHandleConfigRequest(ctx context.Context, conn *websocket.Conn,
 		return true
 	case string(appserver.MethodConfigRequirementsRead):
 		remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"requirements": map[string]any{}}})
+		return true
+	case string(appserver.MethodModelList):
+		// Rust #43177: the TUI may resolve the server's default model from its
+		// catalog; an empty catalog leaves the bootstrap model in place.
+		remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"data": []any{}}})
 		return true
 	default:
 		return false

@@ -13,6 +13,7 @@ import (
 	"codex_go/appserver"
 	"codex_go/cli"
 	"codex_go/config"
+	modelpkg "codex_go/model"
 	codextui "codex_go/tui"
 )
 
@@ -21,15 +22,100 @@ func (c *remoteAppServerTUIClient) remoteManagedThreadStartParams(ctx context.Co
 	if err != nil {
 		return params, err
 	}
-	defaults, layers, ok := c.remoteNewThreadModelDefaults(ctx)
+	cwd := strings.TrimSpace(params.CWD)
+	defaults, layers, effective, ok := c.remoteNewThreadModelDefaults(ctx, cwd)
 	if !ok {
 		return params, nil
 	}
+	// Rust #43177: the server's config/read values seed model and reasoning
+	// effort for launches that did not choose them explicitly.
+	applyServerEffectiveLaunchDefaults(
+		&params,
+		effective,
+		layers,
+		remoteCLIConfigOverrideKeys(root),
+		root != nil && strings.TrimSpace(root.Shared.Model) != "",
+		c.serverCatalogDefaultModel(ctx),
+	)
 	applyManagedDefaultsToThreadStartParams(&params, state, defaults, layers,
 		remoteCLIConfigOverrideKeys(root),
 		root != nil && strings.TrimSpace(root.Shared.Model) != "",
 		params.ServiceTierSet)
 	return params, nil
+}
+
+// applyServerEffectiveLaunchDefaults overlays the server's effective config
+// onto a thread/start request for settings the user did not choose explicitly
+// (Rust #43177). Explicit CLI `--model`/profile/generic overrides win; when the
+// server reports no configured model the server catalog's default is used.
+func applyServerEffectiveLaunchDefaults(
+	params *appserver.ThreadStartParams,
+	effective map[string]any,
+	layers []config.Layer,
+	cliKVOverrides []string,
+	harnessModelSet bool,
+	catalogDefault func() (string, bool),
+) {
+	if params == nil {
+		return
+	}
+	if !harnessModelSet && !config.HasLaunchSetting(layers, cliKVOverrides, "model") {
+		model := ""
+		if effective != nil {
+			if value, ok := effective["model"].(string); ok {
+				model = strings.TrimSpace(value)
+			}
+		}
+		if model == "" && catalogDefault != nil {
+			if fallback, ok := catalogDefault(); ok {
+				model = strings.TrimSpace(fallback)
+			}
+		}
+		if model != "" {
+			params.Model = model
+		}
+	}
+	if !config.HasLaunchSetting(layers, cliKVOverrides, "model_reasoning_effort") {
+		effort := ""
+		if effective != nil {
+			if value, ok := effective["model_reasoning_effort"].(string); ok {
+				effort = strings.TrimSpace(value)
+			}
+		}
+		if effort != "" {
+			if params.Config == nil {
+				params.Config = map[string]any{}
+			}
+			params.Config["model_reasoning_effort"] = effort
+		}
+	}
+}
+
+// serverCatalogDefaultModel resolves the server model catalog's default model
+// (Rust #43177: `is_default`, else the first catalog entry).
+func (c *remoteAppServerTUIClient) serverCatalogDefaultModel(ctx context.Context) func() (string, bool) {
+	return func() (string, bool) {
+		if c == nil {
+			return "", false
+		}
+		var listed modelpkg.ModelListResponse
+		if err := remoteSessionRequest(ctx, c, appserver.MethodModelList, modelpkg.ModelListParams{}, &listed); err != nil {
+			return "", false
+		}
+		presets := listed.Data
+		if len(presets) == 0 {
+			presets = listed.Models
+		}
+		for index := range presets {
+			if presets[index].IsDefault {
+				return strings.TrimSpace(presets[index].Model), true
+			}
+		}
+		if len(presets) > 0 {
+			return strings.TrimSpace(presets[0].Model), true
+		}
+		return "", false
+	}
 }
 
 // applyManagedDefaultsToThreadStartParams overlays the managed new-thread
@@ -89,24 +175,26 @@ func applyManagedDefaultsToThreadStartParams(
 	}
 }
 
-// remoteNewThreadModelDefaults reads the effective config layers and the
-// requirements' models.newThread defaults. It reports ok=false when either the
-// RPC fails or the server has no managed new-thread defaults, in which case the
-// launch selection is left untouched (Rust's `Some(defaults)` check).
-func (c *remoteAppServerTUIClient) remoteNewThreadModelDefaults(ctx context.Context) (*codextui.ManagedNewThreadDefaults, []config.Layer, bool) {
+// remoteNewThreadModelDefaults reads the destination's effective config and the
+// requirements' models.newThread defaults (Rust #43177/#43261: config/read for
+// the relevant working directory). It reports ok=false when config/read fails,
+// leaving the launch selection untouched; a nil defaults value means the server
+// configures no managed new-thread defaults.
+func (c *remoteAppServerTUIClient) remoteNewThreadModelDefaults(ctx context.Context, cwd string) (*codextui.ManagedNewThreadDefaults, []config.Layer, map[string]any, bool) {
+	params := config.ConfigReadParams{IncludeLayers: true}
+	if trimmed := strings.TrimSpace(cwd); trimmed != "" {
+		params.CWD = &trimmed
+	}
 	var read config.ConfigReadResponse
-	if err := c.remoteConfigRequest(ctx, appserver.MethodConfigRead, config.ConfigReadParams{IncludeLayers: true}, &read); err != nil {
-		return nil, nil, false
+	if err := c.remoteConfigRequest(ctx, appserver.MethodConfigRead, params, &read); err != nil {
+		return nil, nil, nil, false
 	}
 	var requirements config.ConfigRequirementsReadResponse
 	if err := c.remoteConfigRequest(ctx, appserver.MethodConfigRequirementsRead, map[string]any{}, &requirements); err != nil {
-		return nil, read.Layers, false
+		return nil, read.Layers, read.Config, true
 	}
 	defaults := newThreadModelDefaultsFromRequirements(requirements.Requirements)
-	if defaults == nil {
-		return nil, read.Layers, false
-	}
-	return defaults, read.Layers, true
+	return defaults, read.Layers, read.Config, true
 }
 
 // newThreadModelDefaultsFromRequirements converts the wire requirements into

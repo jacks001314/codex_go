@@ -209,9 +209,11 @@ func (s *remoteAgentsDashboardSource) Dispatch(ctx context.Context, request code
 	if cwd != "" {
 		params.CWD = cwd
 	}
-	// Rust agents_overview.rs applies managed new-thread defaults when creating a
-	// background task thread (#44693).
-	if defaults, layers, ok := s.client.remoteNewThreadModelDefaults(ctx); ok {
+	// Rust agents_overview.rs applies the destination's server defaults and the
+	// managed new-thread defaults when creating a background task thread
+	// (#43177/#43261/#44693).
+	if defaults, layers, effective, ok := s.client.remoteNewThreadModelDefaults(ctx, params.CWD); ok {
+		applyServerEffectiveLaunchDefaults(&params, effective, layers, nil, false, s.client.serverCatalogDefaultModel(ctx))
 		applyManagedDefaultsToThreadStartParams(&params, s.client.state, defaults, layers, nil, false, false)
 	}
 	// Rust #44027: images are rejected before a thread starts when the resolved
