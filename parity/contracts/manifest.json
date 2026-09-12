@@ -892,7 +892,7 @@
             ],
             "phase": "P1",
             "status": "complete",
-            "verifier": "TestConfigEditsAreSessionDefaultsOnlyMatchesRust;TestConfigBatchWriteHonorsReloadUserConfigLikeRust;TestConfigValueWriteClearsDerivedCachesLikeRust;TestExperimentalFeatureSetRefreshesLikeRust;TestEffectivePluginsChangedRefreshesDerivedStateLikeRust;TestMarketplaceUpgradeWithoutChangesDoesNotRefreshLikeRust"
+            "verifier": "TestConfigEditsAreSessionDefaultsOnlyMatchesRust;TestConfigBatchWriteHonorsReloadUserConfigLikeRust;TestConfigValueWriteClearsDerivedCachesLikeRust;TestExperimentalFeatureSetRefreshesLikeRust;TestEffectivePluginsChangedRefreshesDerivedStateLikeRust;TestMarketplaceUpgradeWithoutChangesDoesNotRefreshLikeRust;TestAuthChangeRefreshesPluginCachesAndMCPRuntimesLikeRust;TestMCPOAuthLoginCompletionInvalidatesRuntimesLikeRust"
         },
         {
             "id": "queue-cli-command",

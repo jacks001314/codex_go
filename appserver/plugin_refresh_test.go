@@ -1,11 +1,13 @@
 package appserver
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
 	"codex_go/config"
 	"codex_go/features"
+	"codex_go/mcp"
 	"codex_go/plugin"
 	"codex_go/session"
 )
@@ -145,5 +147,68 @@ func TestExperimentalFeatureSetRefreshesLikeRust(t *testing.T) {
 	}
 	if router.testMCPEpoch() != before {
 		t.Fatal("unknown enablement key triggered a reload")
+	}
+}
+
+// TestAuthChangeRefreshesPluginCachesAndMCPRuntimesLikeRust covers Rust's
+// spawn_effective_plugins_changed_task (account login/logout/session switch):
+// the plugin/skill caches clear and the loaded threads' MCP runtimes invalidate.
+func TestAuthChangeRefreshesPluginCachesAndMCPRuntimesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	router := newPluginRefreshTestRouter(t, home)
+	router.services.Skills.mu.Lock()
+	router.services.Skills.cache = map[string]skillsCacheEntry{"seed": {}}
+	router.services.Skills.mu.Unlock()
+	before := router.testMCPEpoch()
+
+	router.refreshPluginCachesAndMCPRuntimes()
+
+	router.services.Skills.mu.Lock()
+	cached := len(router.services.Skills.cache)
+	router.services.Skills.mu.Unlock()
+	if cached != 0 {
+		t.Fatalf("auth change left %d skills cache entries", cached)
+	}
+	if router.testMCPEpoch() == before {
+		t.Fatal("auth change did not invalidate the MCP runtimes")
+	}
+}
+
+// TestMCPOAuthLoginCompletionInvalidatesRuntimesLikeRust covers Rust
+// mcp_processor's post-login invalidation: a successful OAuth login invalidates
+// the MCP runtimes, a failed one does not, and the completion notification is
+// always sent.
+func TestMCPOAuthLoginCompletionInvalidatesRuntimesLikeRust(t *testing.T) {
+	var notifications []NotificationMethod
+	invalidations := 0
+	handler := &appserverMCPOAuthLoginCompletionHandler{
+		notify:             func(method NotificationMethod, _ any) { notifications = append(notifications, method) },
+		invalidateRuntimes: func() { invalidations++ },
+	}
+	handler.HandleMCPOAuthLoginCompleted(context.Background(), &mcp.MCPOAuthLoginCompletion{
+		Name:    "server",
+		Success: true,
+	})
+	if invalidations != 1 {
+		t.Fatalf("successful login invalidations = %d, want 1", invalidations)
+	}
+	if len(notifications) != 1 || notifications[0] != NotificationMCPServerOauthLoginCompleted {
+		t.Fatalf("notifications = %#v", notifications)
+	}
+	handler.HandleMCPOAuthLoginCompleted(context.Background(), &mcp.MCPOAuthLoginCompletion{
+		Name:    "server",
+		Success: false,
+		Error:   "cancelled",
+	})
+	if invalidations != 1 {
+		t.Fatalf("failed login invalidations = %d, want 1", invalidations)
+	}
+	if len(notifications) != 2 {
+		t.Fatalf("notifications = %#v", notifications)
+	}
+	// An unnamed completion changes nothing.
+	handler.HandleMCPOAuthLoginCompleted(context.Background(), &mcp.MCPOAuthLoginCompletion{Success: true})
+	if invalidations != 1 || len(notifications) != 2 {
+		t.Fatalf("unnamed completion was handled: invalidations=%d notifications=%#v", invalidations, notifications)
 	}
 }

@@ -9798,7 +9798,7 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 		r.requireAccount().ApplyAuthSnapshot(snapshot)
 		r.configureMCPFromConfig()
 		r.maybeStartCuratedRepoSync(false)
-		r.clearRecommendedPluginsCache()
+		r.refreshPluginCachesAndMCPRuntimes()
 		r.noteAuthChanged()
 	}
 	if response != nil && response.LoginID == "" {
@@ -10022,7 +10022,7 @@ func (r *RuntimeRouter) awaitAccountLoginRuntime(loginID string, done <-chan err
 	r.maybeStartCuratedRepoSync(false)
 	r.requireAccount().CompleteLogin(loginID, auth.AccountFromAuth(&resolved.Auth), "")
 	r.noteAuthChanged()
-	r.clearRecommendedPluginsCache()
+	r.refreshPluginCachesAndMCPRuntimes()
 	r.notify(NotificationAccountLoginCompleted, &auth.AccountLoginCompletedNotification{LoginID: &loginID, Success: true})
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 }
@@ -10082,7 +10082,7 @@ func (r *RuntimeRouter) handleAccountSessionsLogout(request *Request) (*auth.Acc
 	}
 	r.configureMCPFromConfig()
 	r.maybeStartCuratedRepoSync(false)
-	r.clearRecommendedPluginsCache()
+	r.refreshPluginCachesAndMCPRuntimes()
 	r.noteAuthChanged()
 	r.retireRemoteControlForAuthChange(context.Background())
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
@@ -10100,7 +10100,7 @@ func (r *RuntimeRouter) handleAccountSessionsSwitch(request *Request) (*auth.Acc
 	}
 	r.configureMCPFromConfig()
 	r.maybeStartCuratedRepoSync(false)
-	r.clearRecommendedPluginsCache()
+	r.refreshPluginCachesAndMCPRuntimes()
 	r.noteAuthChanged()
 	r.retireRemoteControlForAuthChange(context.Background())
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
@@ -10127,7 +10127,7 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 	}
 	r.configureMCPFromConfig()
 	r.maybeStartCuratedRepoSync(false)
-	r.clearRecommendedPluginsCache()
+	r.refreshPluginCachesAndMCPRuntimes()
 	r.noteAuthChanged()
 	r.retireRemoteControlForAuthChange(context.Background())
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
@@ -11348,7 +11348,10 @@ func (r *RuntimeRouter) configureMCPService(service *mcp.MCPService) {
 	service.SetRootsProvider(mcp.MCPRootsProviderFunc(func(threadID string) []mcp.MCPRoot {
 		return r.mcpRootsForThread(threadID)
 	}))
-	service.SetOAuthLoginCompletionHandler(&appserverMCPOAuthLoginCompletionHandler{notify: r.notify})
+	service.SetOAuthLoginCompletionHandler(&appserverMCPOAuthLoginCompletionHandler{
+		notify:             r.notify,
+		invalidateRuntimes: r.mcpRuntimes.invalidateAll,
+	})
 	service.SetOpenAIFormElicitationEnabled(r.anyConnectionMCPOpenAIFormElicitation())
 	// Opted-in stdio servers receive auth change notifications (Rust #43428).
 	service.SetAuthChangeSource(routerMCPAuthChangeSource{router: r})

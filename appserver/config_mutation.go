@@ -80,3 +80,15 @@ func (r *RuntimeRouter) reloadUserConfigForLoadedThreads() {
 	r.configureMCPFromConfig()
 	r.mcpRuntimes.invalidateAll()
 }
+
+// refreshPluginCachesAndMCPRuntimes mirrors Rust's
+// spawn_effective_plugins_changed_task (account login/logout/session switches):
+// the plugin/skill caches are cleared and the loaded threads' MCP runtimes are
+// invalidated so the next use rebuilds them from the new credentials.
+func (r *RuntimeRouter) refreshPluginCachesAndMCPRuntimes() {
+	if r == nil {
+		return
+	}
+	r.clearConfigDerivedCaches()
+	r.mcpRuntimes.invalidateAll()
+}

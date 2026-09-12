@@ -9,6 +9,10 @@ import (
 
 type appserverMCPOAuthLoginCompletionHandler struct {
 	notify func(NotificationMethod, any)
+	// invalidateRuntimes mirrors Rust's post-login
+	// thread_manager.invalidate_mcp_runtimes(): a successful login changes the
+	// servers' credentials, so the loaded threads rebuild their MCP runtimes.
+	invalidateRuntimes func()
 }
 
 func (h *appserverMCPOAuthLoginCompletionHandler) HandleMCPOAuthLoginCompleted(ctx context.Context, completion *mcp.MCPOAuthLoginCompletion) {
@@ -27,6 +31,9 @@ func (h *appserverMCPOAuthLoginCompletionHandler) HandleMCPOAuthLoginCompleted(c
 	var errText *string
 	if value := strings.TrimSpace(completion.Error); value != "" {
 		errText = &value
+	}
+	if completion.Success && h.invalidateRuntimes != nil {
+		h.invalidateRuntimes()
 	}
 	h.notify(NotificationMCPServerOauthLoginCompleted, &MCPServerOauthLoginCompletedNotification{
 		Name:     name,
