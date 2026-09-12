@@ -212,3 +212,27 @@ func TestRemoteTUIPermissionDiscoveryTimesOut(t *testing.T) {
 		t.Fatalf("timeout error = %v", err)
 	}
 }
+
+// TestRemoteTUIExplicitPermissionProfileConfig covers Rust's
+// explicit_permission_profile_mode gate: a default profile or a profiles table
+// enables discovery, while an empty/unrelated config keeps the legacy presets.
+func TestRemoteTUIExplicitPermissionProfileConfig(t *testing.T) {
+	cases := []struct {
+		name   string
+		values map[string]any
+		want   bool
+	}{
+		{"default profile", map[string]any{"default_permissions": "dev"}, true},
+		{"profiles table", map[string]any{"permissions": map[string]any{
+			"dev": map[string]any{"filesystem": map[string]any{}},
+		}}, true},
+		{"persisted id only", map[string]any{"permissions": map[string]any{"default": "dev"}}, false},
+		{"empty", map[string]any{}, false},
+		{"unrelated", map[string]any{"model": "gpt-5.2-codex"}, false},
+	}
+	for _, tc := range cases {
+		if got := remoteTUIExplicitPermissionProfileConfig(tc.values); got != tc.want {
+			t.Errorf("%s: explicit = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

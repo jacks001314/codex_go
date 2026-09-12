@@ -75,7 +75,7 @@ func remoteTUIPermissionDiscovery(ctx context.Context, client *remoteAppServerTU
 			}
 			return nil, false, err
 		}
-		if _, ok := read.Config["default_permissions"].(string); !ok {
+		if !remoteTUIExplicitPermissionProfileConfig(read.Config) {
 			return []chatwidget.CustomPermissionProfile{}, false, nil
 		}
 	}
@@ -129,6 +129,30 @@ func remoteTUIPermissionDiscovery(ctx context.Context, client *remoteAppServerTU
 		cursor = &next
 	}
 	return nil, false, errors.New("Permission discovery exceeded its pagination limit. Try /permissions again.")
+}
+
+// remoteTUIExplicitPermissionProfileConfig mirrors Rust
+// Config::explicit_permission_profile_mode: an explicit default profile
+// (`default_permissions`) or the profiles config syntax (a `permissions` table
+// defining profiles) puts the server in explicit-profile mode, so a remote
+// thread discovers its named profiles instead of falling back to presets.
+func remoteTUIExplicitPermissionProfileConfig(configValues map[string]any) bool {
+	if _, ok := configValues["default_permissions"].(string); ok {
+		return true
+	}
+	permissions, ok := configValues["permissions"].(map[string]any)
+	if !ok {
+		return false
+	}
+	for name, value := range permissions {
+		if strings.TrimSpace(name) == "default" {
+			continue
+		}
+		if _, isProfile := value.(map[string]any); isProfile {
+			return true
+		}
+	}
+	return false
 }
 
 // remoteTUIHasActiveNamedProfile mirrors Rust's
