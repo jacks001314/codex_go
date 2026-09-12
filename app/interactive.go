@@ -1464,6 +1464,35 @@ func interactiveStatusLineUseColors(values map[string]any) *bool {
 	return &enabled
 }
 
+// interactiveEmbeddedReasoningOverrides mirrors Rust new_thread_reasoning_overrides
+// (#43921) for the embedded TUI: new threads default to detailed reasoning
+// summaries, and concurrent reasoning summaries stay opt-in and are disabled
+// when summaries are off. The effective `model_reasoning_summary` config value
+// wins when set.
+func interactiveEmbeddedReasoningOverrides(root *cli.RootOptions) []string {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return nil
+	}
+	summary := ""
+	if value, ok := loaded.Values["model_reasoning_summary"].(string); ok {
+		summary = strings.TrimSpace(value)
+	}
+	if summary == "" {
+		summary = "detailed"
+	}
+	explicitConcurrent := false
+	if features, ok := loaded.Values["features"].(map[string]any); ok {
+		if value, ok := features["concurrent_reasoning_summaries"].(bool); ok {
+			explicitConcurrent = value
+		}
+	}
+	return []string{
+		"model_reasoning_summary=" + summary,
+		fmt.Sprintf("features.concurrent_reasoning_summaries=%t", explicitConcurrent && !strings.EqualFold(summary, "none")),
+	}
+}
+
 func interactivePluginMarketplacesFromConfig(values map[string]any) (map[string]bool, map[string]bool) {
 	userMarketplaces := map[string]bool{}
 	gitMarketplaces := map[string]bool{}
@@ -2867,6 +2896,10 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	if state != nil && strings.TrimSpace(state.Personality) != "" {
 		turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), "personality="+strings.TrimSpace(state.Personality))
 	}
+	// The embedded TUI defaults new threads to detailed reasoning summaries and
+	// keeps concurrent summaries opt-in (Rust #43921). exec re-resolves config
+	// per turn, so the overrides are applied to every interactive turn.
+	turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), interactiveEmbeddedReasoningOverrides(root)...)
 	additionalInstructions := ""
 	var additionalInputItems []any
 	if _, ok := runner.(*codexexec.Runner); ok {
