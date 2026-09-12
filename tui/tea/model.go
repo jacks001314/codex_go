@@ -417,6 +417,16 @@ type ThreadScopedEventMsg struct {
 	Event    protocol.ThreadEvent
 }
 
+// TerminalInteractionMsg carries one unified-exec terminal interaction from the
+// app server (Rust #43921): an empty Stdin polls a background terminal and owns
+// the status row until the streak is flushed.
+type TerminalInteractionMsg struct {
+	ThreadID  string
+	ItemID    string
+	ProcessID string
+	Stdin     string
+}
+
 // VoiceNotificationMsg carries one decoded realtime notification into the
 // model's local voice session state.
 type VoiceNotificationMsg struct {
@@ -1081,8 +1091,11 @@ type Model struct {
 	// heading; reasoningResumeTurnID marks a resumed in-progress turn whose
 	// first reasoning update may arrive without an item/started event
 	// (Rust #43921 StatusState).
-	reasoningItemID                 string
-	reasoningResumeTurnID           string
+	reasoningItemID       string
+	reasoningResumeTurnID string
+	// commandLifecycle tracks unified-exec processes and the background-terminal
+	// wait streak that owns the status row until output arrives (Rust #43921).
+	commandLifecycle                chatwidget.CommandLifecycleState
 	mcpStartupActive                bool
 	mcpStartupGeneration            uint64
 	mcpStartupFinishPending         bool
@@ -1946,6 +1959,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			cmd = bubbletea.Batch(cmd, m.refreshAgentsOverviewCmd())
 		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
+	case TerminalInteractionMsg:
+		return m, m.applyTerminalInteraction(msg)
 	case VoiceNotificationMsg:
 		cmd := m.handleVoiceNotification(msg.Notification)
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
@@ -2748,16 +2763,110 @@ func (m *Model) restoreReasoningStatusHeader() {
 
 // reasoningHeaderUpdateBlocked reports whether another status owner must keep
 // the heading (Rust: safety buffering wait, unified-exec wait streak, active
-// compaction, pending guardian review). Go's tea model tracks safety buffering
-// compaction, and pending guardian reviews; a unified-exec wait streak is not
-// modeled here.
+// compaction, pending guardian review).
 func (m *Model) reasoningHeaderUpdateBlocked() bool {
 	if m == nil {
 		return true
 	}
 	return m.safetyBuffering.IsWaiting() ||
+		m.commandLifecycle.UnifiedExecWait != nil ||
 		m.compactionActive ||
 		!m.toolRequestRuntime.PendingGuardianReviewStatus.IsEmpty()
+}
+
+// noteUnifiedExecCommandStarted records a unified-exec startup command so a
+// later empty-stdin terminal interaction can own the status row (Rust #43921
+// track_unified_exec_process_begin).
+func (m *Model) noteUnifiedExecCommandStarted(item *protocol.ThreadItem) {
+	if m == nil || item == nil {
+		return
+	}
+	if execCommandSourceForItem(item) != execcell.ExecSourceUnifiedExecStartup {
+		return
+	}
+	callID := strings.TrimSpace(item.CallID)
+	if callID == "" {
+		callID = strings.TrimSpace(item.ID)
+	}
+	processID := strings.TrimSpace(metadataString(item.Metadata, "processId"))
+	command := strings.TrimSpace(item.Command)
+	if command == "" {
+		command = strings.TrimSpace(item.Text)
+	}
+	m.commandLifecycle.TrackUnifiedExecProcessBegin(callID, processID, command)
+}
+
+// noteUnifiedExecCommandCompleted ends the tracked process and releases the wait
+// streak that owned its status row (Rust #43921 on_command_execution_completed).
+func (m *Model) noteUnifiedExecCommandCompleted(item *protocol.ThreadItem) {
+	if m == nil || item == nil {
+		return
+	}
+	callID := strings.TrimSpace(item.CallID)
+	if callID == "" {
+		callID = strings.TrimSpace(item.ID)
+	}
+	processID := strings.TrimSpace(metadataString(item.Metadata, "processId"))
+	if wait := m.commandLifecycle.UnifiedExecWait; wait != nil && processID != "" && wait.ProcessID == processID {
+		m.finishUnifiedExecWaitStreak()
+	}
+	m.commandLifecycle.TrackUnifiedExecProcessEnd(callID, processID)
+}
+
+// applyTerminalInteraction routes one unified-exec terminal interaction through
+// the command lifecycle (Rust #43921 on_terminal_interaction): an empty stdin
+// poll shows the waiting status and starts/extends the wait streak, a typed
+// stdin flushes it and renders the interaction, and a process change flushes the
+// previous streak.
+func (m *Model) applyTerminalInteraction(msg TerminalInteractionMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	if threadID := strings.TrimSpace(msg.ThreadID); threadID != "" && m.State != nil {
+		if current := strings.TrimSpace(m.State.ThreadID); current != "" && threadID != current {
+			return nil
+		}
+	}
+	result := m.commandLifecycle.OnTerminalInteraction(
+		strings.TrimSpace(msg.ProcessID),
+		msg.Stdin,
+		m.isTaskRunning(),
+	)
+	if result.FlushedWait != nil {
+		m.finishUnifiedExecWaitStreak()
+	}
+	if result.WaitingStatus {
+		// The status row shows the waiting header while the reasoning heading is
+		// retained underneath and restored on flush.
+		m.setWorkingStatusHeader(result.Status)
+	}
+	if result.InsertedInteraction != nil {
+		m.applyHistoryCell(historycell.NewUnifiedExecInteraction(
+			result.InsertedInteraction.CommandDisplay,
+			result.InsertedInteraction.Stdin,
+		))
+	}
+	m.refreshTranscript()
+	return nil
+}
+
+// finishUnifiedExecWaitStreak clears the wait streak and restores the reasoning
+// heading (Rust flush_unified_exec_wait_streak).
+func (m *Model) finishUnifiedExecWaitStreak() {
+	if m == nil {
+		return
+	}
+	// OnTerminalInteraction already clears the streak before reporting a flushed
+	// wait, so decide from the current state instead of the flush result.
+	hadWait := m.commandLifecycle.UnifiedExecWait != nil
+	waitingHeader := strings.EqualFold(strings.TrimSpace(m.workingStatusHeader), "Waiting for background terminal")
+	if _, ok := m.commandLifecycle.FlushUnifiedExecWaitStreak(); !ok && !hadWait && !waitingHeader {
+		return
+	}
+	if waitingHeader {
+		m.setWorkingStatusHeader("")
+	}
+	m.restoreReasoningStatusHeader()
 }
 
 // resetReasoningSummaryHeader clears the live reasoning status heading at a
@@ -3336,6 +3445,14 @@ func (m *Model) renderWorkingIndicator() string {
 	indicator := codextui.NewStatusIndicator(m.taskStartedAt)
 	if m.mcpStartupActive && strings.TrimSpace(m.mcpStartupHeader) != "" {
 		indicator.Header = m.mcpStartupHeader
+	} else if strings.EqualFold(strings.TrimSpace(m.workingStatusHeader), "Waiting for background terminal") {
+		// Rust #43921: the wait streak owns the status row and shows the tracked
+		// command as its detail until the process is flushed.
+		indicator.Header = strings.TrimSpace(m.workingStatusHeader)
+		if wait := m.commandLifecycle.UnifiedExecWait; wait != nil && strings.TrimSpace(wait.CommandDisplay) != "" {
+			indicator.Details = strings.TrimSpace(wait.CommandDisplay)
+			indicator.DetailsMaxLines = 1
+		}
 	} else if header := strings.TrimSpace(m.workingStatusHeader); header != "" {
 		// Rust #43921: stream the latest reasoning summary line as the status row.
 		indicator.Header = header
@@ -3485,6 +3602,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	m.deferPendingSteers()
 	if message.Err != nil {
 		m.setStatus("error")
+		m.finishUnifiedExecWaitStreak()
 		m.resetReasoningSummaryHeader()
 		errorMessage := message.Err.Error()
 		if chatwidget.IsMisalignmentPolicyViolationMessage(errorMessage) {
@@ -3636,6 +3754,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.applyProposedPlanDelta(event.Delta)
 	case "turn.completed":
 		m.setStatus("idle")
+		m.finishUnifiedExecWaitStreak()
 		m.resetReasoningSummaryHeader()
 		m.markThreadCompleted(m.State.ThreadID)
 		m.Transcript.lastTurnError = ""
@@ -3700,6 +3819,7 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 	switch item.Type {
 	case "command_execution":
 		m.Transcript.finishAssistantPreambleBeforeTool()
+		m.noteUnifiedExecCommandStarted(item)
 		m.renderCommandExecutionItem(item)
 	case "mcp_tool_call":
 		m.Transcript.finishAssistantPreambleBeforeTool()
@@ -3791,6 +3911,7 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		// Rust #43921: keep the last useful summary through later activity.
 		m.finalizeReasoningSummary()
 	case "command_execution":
+		m.noteUnifiedExecCommandCompleted(item)
 		m.renderCommandExecutionItem(item)
 	case "mcp_tool_call":
 		m.renderMCPToolCallItem(item, true)

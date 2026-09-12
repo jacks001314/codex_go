@@ -3446,6 +3446,23 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		}
 		c.noteNotificationThreadID(payload.ThreadID)
 		c.send(codextea.ThreadEventMsg{Event: event})
+	case appserver.NotificationTerminalInteraction:
+		var payload appserver.TerminalInteractionNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			return nil
+		}
+		c.noteNotificationThreadID(payload.ThreadID)
+		// Rust #43921: an empty stdin polls a background terminal, which owns the
+		// status row until the process produces output or the user types.
+		c.send(codextea.TerminalInteractionMsg{
+			ThreadID:  payload.ThreadID,
+			ItemID:    payload.ItemID,
+			ProcessID: payload.ProcessID,
+			Stdin:     payload.Stdin,
+		})
 	case appserver.NotificationItemGuardianApprovalReviewStarted:
 		var payload appserver.ItemGuardianApprovalReviewStartedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
@@ -4096,6 +4113,11 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 		// Carry the command execution source so the TUI can group consecutive
 		// successful Agent / unified-exec startup commands (Rust #38921).
 		item.Metadata = map[string]any{"source": firstNonEmptyLocal(remotePayloadString(payload, "source"), string(appserver.CommandExecutionSourceAgent))}
+		// Rust #43921: the process id lets the status row track a unified-exec
+		// wait streak for the task's background terminals.
+		if processID := remotePayloadString(payload, "processId"); processID != "" {
+			item.Metadata["processId"] = processID
+		}
 		return item
 	case "mcpToolCall":
 		status := remotePayloadString(payload, "status")
