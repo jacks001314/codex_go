@@ -8971,6 +8971,10 @@ func (r *RuntimeRouter) handlePluginInstall(request *Request) (*plugin.PluginIns
 		r.emitPluginInstallFailedAnalyticsEvent(context.Background(), request.normalizedConnectionID(), &params, err)
 		return nil, err
 	}
+	// Rust #42593: a successful install changes the effective plugin set, so
+	// refresh the plugin/skill caches and the MCP runtimes before the caller can
+	// use the plugin's servers from threads loaded before the install.
+	r.effectivePluginsChanged()
 	if response != nil {
 		if detail := pluginAnalyticsDetailByID(service, response.PluginID); detail != nil {
 			r.emitPluginStateAnalyticsEvent(context.Background(), request.normalizedConnectionID(), telemetry.CodexPluginInstalledEventType, detail)
