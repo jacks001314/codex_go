@@ -139,6 +139,11 @@ type modalState struct {
 	sessionPicker          *codextui.SessionPickerState
 	sessionAction          *codextui.SessionSelection
 	exitAfterSessionAction bool
+	// unarchivePrompt hosts the archived-conversation confirmation and
+	// retrySelection is the resume/fork to retry after unarchiving (Rust
+	// unarchive_prompt.rs + session_start.rs).
+	unarchivePrompt        *unarchivePromptState
+	retrySelection         *codextui.SessionSelection
 	themePicker            *codextui.ThemePicker
 	themeFilter            string
 	themeSubtitle          string
@@ -267,6 +272,9 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.modal.feedback != nil {
 		return m.updateFeedbackModal(message)
+	}
+	if m.modal.unarchivePrompt != nil {
+		return m.updateUnarchivePromptModal(message)
 	}
 	if m.modal.sessionPicker != nil {
 		return m.updateSessionPickerModal(message)
@@ -1231,6 +1239,9 @@ func (m *Model) renderModal() string {
 	}
 	if m.modal.keymapCapture != nil {
 		return m.renderKeymapCapture()
+	}
+	if m.modal.unarchivePrompt != nil {
+		return m.modal.unarchivePrompt.render()
 	}
 	if m.modal.sessionPicker != nil {
 		return m.renderSessionPickerModal()

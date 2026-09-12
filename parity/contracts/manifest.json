@@ -895,6 +895,23 @@
             "verifier": "TestParseQueueCommandLikeRust;TestRunSessionQueueRejectsImagesLikeRust;TestQueueUnsupportedServerErrorWrapsMethodNotFoundLikeRust;TestQueueUnsupportedServerErrorRecognizesOnlyUnsupportedLikeRust;TestNewQueueClientMessageIDIsUUIDv7LikeRust"
         },
         {
+            "id": "unarchive-prompt",
+            "kind": "source-surface",
+            "rustPaths": [
+                "tui/src/unarchive_prompt.rs",
+                "tui/src/session_start.rs"
+            ],
+            "goPaths": [
+                "tui/tea/unarchive_prompt.go",
+                "tui/tea/unarchive_prompt_test.go",
+                "app/interactive.go",
+                "app/unarchive_prompt_test.go"
+            ],
+            "phase": "P2",
+            "status": "complete",
+            "verifier": "TestArchivedSessionGuidanceLikeRust;TestUnarchivePromptRenderLikeRust;TestUnarchivePromptKeysLikeRust;TestModelArchivedResumePromptsToUnarchiveAndRetriesLikeRust;TestInteractiveResumeAndForkRejectArchivedSessionsLikeRust"
+        },
+        {
             "id": "agents-dashboard-command",
             "kind": "source-surface",
             "rustPaths": [

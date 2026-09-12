@@ -281,6 +281,11 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 		if m.onResumeSession != nil {
 			response, err := m.onResumeSession(selection)
 			if err != nil {
+				// Rust session_start.rs: an archived conversation is offered for
+				// unarchiving and retried instead of failing the resume.
+				if _, ok := archivedSessionGuidanceForThread(err, threadID); ok && m.openUnarchivePrompt(threadID, "resume", selection) {
+					return nil, "", false
+				}
 				message := strings.TrimSpace(err.Error())
 				if message == "" {
 					message = "unknown error"
@@ -306,6 +311,10 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 	case codextui.SessionSelectionFork:
 		summary, err := m.runSessionAction(selection)
 		if err != nil {
+			// Rust session_start.rs: forking an archived conversation prompts too.
+			if _, ok := archivedSessionGuidanceForThread(err, threadID); ok && m.openUnarchivePrompt(threadID, "fork", selection) {
+				return nil, "", false
+			}
 			return nil, err.Error(), true
 		}
 		if summary != nil && strings.TrimSpace(summary.ThreadID) != "" {

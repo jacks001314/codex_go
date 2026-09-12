@@ -2268,6 +2268,11 @@ func interactiveSessionActionHandler(root *cli.RootOptions) codextea.SessionActi
 		}
 		switch selection.Kind {
 		case codextui.SessionSelectionFork:
+			// Match the app server's thread/fork: an archived source cannot be
+			// forked until it is unarchived (Rust thread_resume/fork gating).
+			if record, err := store.Read(threadID, true, true); err == nil && record != nil && record.Archived {
+				return nil, archivedSessionStartError(threadID)
+			}
 			record, err := store.Fork(threadID, session.ForkOptions{Mode: session.ForkAll})
 			if err != nil {
 				return nil, err
@@ -2502,6 +2507,15 @@ func reconcileStateForDesktopHandoff(codexHome string, rolloutPath string) error
 	return nil
 }
 
+// archivedSessionStartError mirrors the app server's archived-session guidance
+// (appserver.threadResumeArchivedError) so the local resume/fork handlers can
+// surface it and the TUI can offer to unarchive and retry (Rust
+// session_start.rs complete_session_start).
+func archivedSessionStartError(threadID session.ThreadID) error {
+	id := strings.TrimSpace(string(threadID))
+	return errors.New("session " + id + " is archived. Run `codex unarchive " + id + "` to unarchive it first.")
+}
+
 func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResumeFunc {
 	return func(selection codextui.SessionSelection) (codextea.SessionResumeResponse, error) {
 		store := newSessionStore()
@@ -2512,6 +2526,11 @@ func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResu
 		record, err := store.Read(threadID, true, true)
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err
+		}
+		// Rust session_start.rs: the embedded app server rejects resuming an
+		// archived conversation so the TUI can offer to unarchive and retry.
+		if record != nil && record.Archived {
+			return codextea.SessionResumeResponse{}, archivedSessionStartError(threadID)
 		}
 		if interactiveRepairImageGenerationItems(record, auth.DefaultCodexHome()) {
 			_ = store.Save(record)
