@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 990 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 990", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 991 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 991", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -65,7 +65,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 	return []rustTUISnapshotDir{
 		{
 			Path:     "tui/src/app/snapshots",
-			Files:    30,
+			Files:    31,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
