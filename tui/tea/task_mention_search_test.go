@@ -125,9 +125,48 @@ func TestModelTaskMentionsRequireTaskToolsLikeRust(t *testing.T) {
 	if model.taskToolThreads["thread-plain-fork"] {
 		t.Fatalf("fork gained task tools without the parent: %#v", model.taskToolThreads)
 	}
-	// An explicit unavailable report clears a remembered thread.
+	// A downgraded start reports no capability instead of forgetting an earlier
+	// one (Rust only remembers positive capability).
 	model.Update(TaskToolsAvailableMsg{ThreadID: "thread-1", Available: false})
+	if !model.taskMentionsEnabled() {
+		t.Fatalf("downgrade forgot a remembered thread: %#v", model.taskToolThreads)
+	}
+	// A thread that was never reported and has no persisted marker stays disabled.
+	model.State.SetThreadID("thread-never-started")
 	if model.taskMentionsEnabled() {
-		t.Fatalf("task mentions stayed enabled: %#v", model.taskToolThreads)
+		t.Fatalf("unknown thread enabled task mentions: %#v", model.taskToolThreads)
+	}
+}
+
+// TestModelTaskMentionsUsePersistedCapabilityLikeRust covers Rust
+// AppServerSession::task_tools_available's marker-directory half: a thread the
+// current process has not seen still counts as available when the app reports a
+// persisted capability.
+func TestModelTaskMentionsUsePersistedCapabilityLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-persisted")
+	var queries []string
+	persisted := map[string]bool{"thread-persisted": true, "thread-unknown": false}
+	model := NewModel(state, Options{
+		OnSearchTasks: func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
+			queries = append(queries, query)
+			return nil, nil
+		},
+		OnTaskToolsAvailable: func(threadID string) bool { return persisted[threadID] },
+	})
+
+	model.Update(runes("@"))
+	_, cmd := model.Update(runes("r"))
+	runTeaCmd(t, model, cmd)
+	if len(queries) != 1 || queries[0] != "r" {
+		t.Fatalf("persisted capability not consulted: %#v", queries)
+	}
+
+	// A thread without a persisted marker and no in-session report stays disabled.
+	state.SetThreadID("thread-unknown")
+	_, cmd = model.Update(runes("s"))
+	runTeaCmd(t, model, cmd)
+	if len(queries) != 1 {
+		t.Fatalf("unavailable thread ran a task search: %#v", queries)
 	}
 }

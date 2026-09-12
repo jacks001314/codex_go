@@ -992,10 +992,14 @@ type Options struct {
 	// OnReadExperimentalFeatures reads the app server's experimentalFeature/list
 	// catalog for the /experimental popup (Rust experimental_features::fetch).
 	OnReadExperimentalFeatures ExperimentalFeaturesReaderFunc
-	OnReadApps                 AppListReaderFunc
-	OnStartReview              ReviewStartFunc
-	OnStartReviewCommand       ReviewStartCommandFunc
-	OnStartCompactCommand      CompactStartCommandFunc
+	// OnTaskToolsAvailable reports whether a thread persisted the task-tool
+	// capability from an earlier process (Rust
+	// AppServerSession::task_tools_available capability directory).
+	OnTaskToolsAvailable  func(threadID string) bool
+	OnReadApps            AppListReaderFunc
+	OnStartReview         ReviewStartFunc
+	OnStartReviewCommand  ReviewStartCommandFunc
+	OnStartCompactCommand CompactStartCommandFunc
 	// OnSafetyBufferingRetry, when set, stops the current attempt and retries
 	// it with the server-selected faster model after user confirmation (Rust
 	// #42380). prompt is the last user message that triggered the buffered
@@ -1508,6 +1512,7 @@ type Model struct {
 	onFuzzyFileSearch                 FuzzyFileSearchReaderFunc
 	onSearchTasks                     TaskMentionSearchFunc
 	onReadExperimentalFeatures        ExperimentalFeaturesReaderFunc
+	onTaskToolsAvailable              func(threadID string) bool
 	onReadApps                        AppListReaderFunc
 	onStartReview                     ReviewStartFunc
 	onStartReviewCommand              ReviewStartCommandFunc
@@ -1825,6 +1830,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onFuzzyFileSearch:               options.OnFuzzyFileSearch,
 		onSearchTasks:                   options.OnSearchTasks,
 		onReadExperimentalFeatures:      options.OnReadExperimentalFeatures,
+		onTaskToolsAvailable:            options.OnTaskToolsAvailable,
 		onReadApps:                      options.OnReadApps,
 		onStartReview:                   options.OnStartReview,
 		onStartReviewCommand:            options.OnStartReviewCommand,

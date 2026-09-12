@@ -36,14 +36,16 @@ func (m *Model) applyTaskToolsAvailable(message TaskToolsAvailableMsg) {
 	if threadID == "" {
 		return
 	}
+	// Rust only remembers positive capability (AppServerSession::task_tools_available
+	// is a set plus the persisted marker directory); a thread whose start was
+	// downgraded reports no capability instead of forgetting an earlier one.
+	if !message.Available {
+		return
+	}
 	if m.taskToolThreads == nil {
 		m.taskToolThreads = map[string]bool{}
 	}
-	if message.Available {
-		m.taskToolThreads[threadID] = true
-		return
-	}
-	delete(m.taskToolThreads, threadID)
+	m.taskToolThreads[threadID] = true
 }
 
 // taskMentionsEnabled reports whether the current thread can reference tasks
@@ -56,7 +58,15 @@ func (m *Model) taskMentionsEnabled() bool {
 	if threadID == "" {
 		return false
 	}
-	return m.taskToolThreads[threadID]
+	if available, ok := m.taskToolThreads[threadID]; ok {
+		return available
+	}
+	// A thread started by an earlier process keeps its persisted capability
+	// (Rust AppServerSession::task_tools_available marker directory).
+	if m.onTaskToolsAvailable != nil {
+		return m.onTaskToolsAvailable(threadID)
+	}
+	return false
 }
 
 // inheritTaskToolCapability mirrors Rust's fork handling: forking an available

@@ -615,6 +615,11 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// this app server, so task mentions are enabled for it (Rust
 		// chat_widget.set_task_mentions_enabled(task_tools_available)).
 		OnSearchTasks: interactiveRemoteTaskMentionSearch(ctx, endpoint),
+		// Threads started by an earlier process keep their persisted task-tool
+		// capability (Rust AppServerSession::task_tools_available).
+		OnTaskToolsAvailable: func(threadID string) bool {
+			return remoteTaskToolThreadAvailable(auth.DefaultCodexHome(), threadID)
+		},
 		// /experimental is populated from this server's feature catalog (Rust
 		// experimental_features::fetch) instead of the compiled registry.
 		OnReadExperimentalFeatures: interactiveRemoteExperimentalFeatures(ctx, endpoint),
@@ -2499,7 +2504,11 @@ func (c *remoteAppServerTUIClient) startThread(ctx context.Context, root *cli.Ro
 	}
 	threadID := strings.TrimSpace(response.Thread.ID)
 	// The TUI only offers task mentions for threads that host the task-tool
-	// namespace (Rust AppServerSession::task_tools_available).
+	// namespace (Rust AppServerSession::task_tools_available), and persists the
+	// capability so a later process can still offer them.
+	if taskToolsAvailable {
+		rememberRemoteTaskToolThread(auth.DefaultCodexHome(), threadID)
+	}
 	c.send(codextea.TaskToolsAvailableMsg{ThreadID: threadID, Available: taskToolsAvailable})
 	if c.state == nil || strings.TrimSpace(c.state.ThreadID) != threadID {
 		c.send(codextea.ThreadEventMsg{Event: protocol.ThreadStarted(threadID)})
