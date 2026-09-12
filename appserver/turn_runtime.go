@@ -6036,40 +6036,40 @@ func providerFromTurnStart(params *turn.TurnStartParams) string {
 }
 
 type appTurnRunConfig struct {
-	Model                           string
-	AutoReviewModelOverride         string
-	ToolMode                        string
-	DisableCodeModeFallback         bool
-	ProviderID                      string
-	Instructions                    string
-	Originator                      string
-	ClientMetadata                  map[string]string
-	SessionID                       string
-	ThreadSource                    string
-	SubagentSource                  string
-	ParentThreadID                  string
-	ParentTurnID                    string
-	RootTurnID                      string
-	Ephemeral                       bool
-	WorkspaceKind                   string
-	NumInputImages                  int
-	IsFirstTurn                     bool
-	ApprovalPolicy                  string
-	ApprovalsReviewer               string
-	GuardianV2Enabled               bool
-	SandboxPolicy                   string
-	SandboxNetworkAccess            bool
-	CollaborationMode               string
-	Personality                     string
-	InputItems                      []any
-	HostedTools                     []any
-	SessionItems                    []session.Item
-	ExtraSessionItems               func() []session.Item
-	PostToolInputItems              turn.ToolPostExecutionInputItems
-	PreviousResponseID              string
-	ParallelToolCalls               bool
-	ReasoningEffort                 string
-	ReasoningSummary                string
+	Model                   string
+	AutoReviewModelOverride string
+	ToolMode                string
+	DisableCodeModeFallback bool
+	ProviderID              string
+	Instructions            string
+	Originator              string
+	ClientMetadata          map[string]string
+	SessionID               string
+	ThreadSource            string
+	SubagentSource          string
+	ParentThreadID          string
+	ParentTurnID            string
+	RootTurnID              string
+	Ephemeral               bool
+	WorkspaceKind           string
+	NumInputImages          int
+	IsFirstTurn             bool
+	ApprovalPolicy          string
+	ApprovalsReviewer       string
+	GuardianV2Enabled       bool
+	SandboxPolicy           string
+	SandboxNetworkAccess    bool
+	CollaborationMode       string
+	Personality             string
+	InputItems              []any
+	HostedTools             []any
+	SessionItems            []session.Item
+	ExtraSessionItems       func() []session.Item
+	PostToolInputItems      turn.ToolPostExecutionInputItems
+	PreviousResponseID      string
+	ParallelToolCalls       bool
+	ReasoningEffort         string
+	ReasoningSummary        string
 	// OverrideInputItems holds trusted reasoning-effort configuration_update
 	// items this turn should record after accepted input (Rust #43110).
 	OverrideInputItems              []any
@@ -6354,7 +6354,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		PreviousResponseID:              previousResponseID,
 		ParallelToolCalls:               r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
 		ReasoningEffort:                 requestReasoningEffort,
-		ReasoningSummary:                stringPtrValue(params.Summary),
+		ReasoningSummary:                turnReasoningSummary(cfg, params),
 		OverrideInputItems:              overrideInputItems,
 		ConcurrentReasoningSummaries:    features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
 		ModelVerbosity:                  firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),
@@ -6403,6 +6403,20 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 // autoReviewEnabledForTurn mirrors Rust routes_approval_policy_to_guardian
 // (Rust f2a6f2585c): auto-review is enabled when the effective approval policy
 // routes to Guardian (on-request or granular) with the auto_review reviewer.
+// turnReasoningSummary resolves the reasoning summary sent with the model
+// request: an explicit turn/settings override wins, otherwise the effective
+// `model_reasoning_summary` config value applies (Rust
+// TurnContext::reasoning_summary, #43921). The model's default applies when
+// neither is set.
+func turnReasoningSummary(cfg *config.Config, params *turn.TurnStartParams) string {
+	if params != nil && params.Summary != nil {
+		if value := strings.TrimSpace(*params.Summary); value != "" {
+			return value
+		}
+	}
+	return stringConfigValue(cfg, "model_reasoning_summary")
+}
+
 func autoReviewEnabledForTurn(cfg *config.Config, params *turn.TurnStartParams) *bool {
 	enabled := false
 	policy := turnApprovalPolicyForTurn(cfg, params)
