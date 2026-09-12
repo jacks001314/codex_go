@@ -155,6 +155,22 @@ func (c *mcpRuntimeCoordinator) isCurrent(threadID string, service *mcp.MCPServi
 	return !c.closed && binding != nil && binding.service == service
 }
 
+// publishedService returns the currently published MCP service for a thread
+// without building or refreshing it.
+func (c *mcpRuntimeCoordinator) publishedService(threadID string) *mcp.MCPService {
+	threadID = strings.TrimSpace(threadID)
+	if c == nil || threadID == "" {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	binding := c.bindings[threadID]
+	if binding == nil {
+		return nil
+	}
+	return binding.service
+}
+
 // schedulePrewarm coalesces best-effort refresh requests for one thread. Rust
 // uses a bounded per-session channel for the same reason: exact turn setup is
 // the correctness path, while background work should only prepare the newest

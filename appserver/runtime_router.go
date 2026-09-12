@@ -11335,6 +11335,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		// Rust #39335: attachment-scoped MCP servers are only enabled when
 		// their environment is selected and available for the thread.
 		config.AvailableEnvironment = append([]string(nil), selectedEnvironmentIDs(r.activeTurnParams(threadID))...)
+		r.applyMCPPermissionAuthority(config, threadID, r.currentMCPElicitationAuthority(threadID, "", "").PermissionProfile)
 		return config
 	}
 	service := r.mcpRuntimes.serviceForThread(threadID, cfg, authRevision, func(cfg *config.Config) *mcp.MCPService {
@@ -11466,12 +11467,102 @@ func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID, serverName, con
 	if resolution, err := turnSandboxPermissionProfile(cfg, cwd, params); err == nil && resolution != nil {
 		authority.PermissionProfile = resolution.Profile
 	}
+	// Rust #40728: an MCP server's elicitation uses the authority published for
+	// that server, not the thread-wide authority. A published runtime without an
+	// entry for this server has no authority for it, so the elicitation is
+	// declined (handled by the caller).
+	if serverName = strings.TrimSpace(serverName); serverName != "" {
+		if service := r.publishedMCPServiceForThread(threadID); service != nil && service.HasPublishedPermissionAuthority() {
+			authority.ServerAuthorityPublished = true
+			authority.PermissionProfile = nil
+			if profile, ok := service.PermissionProfileForServer(serverName); ok {
+				authority.PermissionProfile = profile
+			}
+		}
+	}
 	// Rust 2230d64464 (#38108): MCP tool call approvals resolve the reviewer
 	// per server/per connector from the apps config layers, validated against
 	// the managed approvals_reviewer requirements, before falling back to the
 	// thread-level reviewer.
 	authority.ApprovalsReviewer = mcpApprovalsReviewerForElicitation(cfg, authority.ApprovalsReviewer, serverName, connectorID, params.Model)
 	return authority
+}
+
+// threadEnvironmentSelections returns the thread's currently selected turn
+// environments, preferring the active turn and falling back to the persisted
+// selection (Rust session turn_environments()).
+func (r *RuntimeRouter) threadEnvironmentSelections(threadID string) []map[string]any {
+	if r == nil {
+		return nil
+	}
+	if params := r.activeTurnParams(threadID); params != nil && len(params.Environments) > 0 {
+		return params.Environments
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return nil
+	}
+	return environmentSelectionsFromAny(record.Metadata.Extra[runtimeEnvironmentSelectionsExtraKey])
+}
+
+// applyMCPPermissionAuthority publishes the per-server authority carried by a
+// thread's MCP runtime (Rust #40728). Executor-attached servers use the
+// authority of their selected environment; the controller-owned Apps server,
+// local servers, and selected-plugin servers use the thread authority; a server
+// whose authority cannot be resolved gets no entry, so its calls and
+// elicitations are rejected rather than inheriting another owner's authority.
+func (r *RuntimeRouter) applyMCPPermissionAuthority(runtime *mcp.RuntimeConfig, threadID string, threadProfile *sandbox.PermissionProfile) {
+	if r == nil || runtime == nil {
+		return
+	}
+	runtime.PermissionProfile = threadProfile
+	selections := r.threadEnvironmentSelections(threadID)
+	environmentProfiles := map[string]*sandbox.PermissionProfile{}
+	for _, selection := range selections {
+		environmentID := selectionEnvironmentID(selection)
+		if environmentID == "" {
+			continue
+		}
+		state, err := environmentConfigStateFromAnyMap(selection)
+		if err != nil || state.Kind != EnvironmentConfigReady {
+			continue
+		}
+		if profile := environmentConfigPermissionProfile(state.Config); profile != nil {
+			environmentProfiles[environmentID] = profile
+		}
+	}
+	// Go keeps attachment-scoped servers usable before any environment is
+	// selected (see mcpServerEnvironmentAvailable), so pre-attachment servers
+	// inherit the thread authority instead of failing closed. Rust does not
+	// offer those servers at all, so there is no Rust behavior to match here.
+	if len(selections) == 0 && runtime.PermissionProfile != nil {
+		for _, registration := range runtime.Servers {
+			if !registration.Config.Enabled {
+				continue
+			}
+			environmentID := registration.Config.EffectiveEnvironmentID()
+			if environmentID == "" {
+				continue
+			}
+			if _, ok := environmentProfiles[environmentID]; !ok {
+				environmentProfiles[environmentID] = runtime.PermissionProfile
+			}
+		}
+	}
+	runtime.SetServerPermissionProfiles(environmentProfiles)
+}
+
+// publishedMCPServiceForThread returns the thread's current MCP runtime without
+// building or refreshing it.
+func (r *RuntimeRouter) publishedMCPServiceForThread(threadID string) *mcp.MCPService {
+	if r == nil || r.mcpRuntimes == nil {
+		return nil
+	}
+	return r.mcpRuntimes.publishedService(threadID)
 }
 
 // mcpApprovalsReviewerForElicitation mirrors Rust's

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/sandbox"
 )
 
 var ErrInvalidMCPRequest = errors.New("invalid mcp request")
@@ -647,6 +649,10 @@ type MCPService struct {
 	authChangeSource    MCPAuthChangeSource
 	sharedHTTPClient    HTTPDoer
 	sharedHTTPClientKey string
+	// permissionProfile / serverPermissionProfiles are the authority published
+	// with this runtime (Rust #40728).
+	permissionProfile        *sandbox.PermissionProfile
+	serverPermissionProfiles map[string]*sandbox.PermissionProfile
 	// TrustedAccess, when set, attaches host-owned openai/entitlementContext
 	// metadata to eligible plugin MCP calls (Rust TrustedAccessContext,
 	// #40992/#41005).
@@ -732,6 +738,15 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 				source:     SourceFromRegistration(&registration),
 			}
 		}
+		service.permissionProfile = cloneMCPPermissionProfile(runtime.PermissionProfile)
+		// A non-nil map means the runtime published authority; servers absent
+		// from it have none and their calls are rejected (Rust #40728).
+		if runtime.ServerPermissionProfiles != nil {
+			service.serverPermissionProfiles = make(map[string]*sandbox.PermissionProfile, len(runtime.ServerPermissionProfiles))
+			for name, profile := range runtime.ServerPermissionProfiles {
+				service.serverPermissionProfiles[strings.TrimSpace(name)] = cloneMCPPermissionProfile(profile)
+			}
+		}
 	}
 	return service
 }
@@ -812,6 +827,8 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	s.oauth = refreshed.oauth
 	s.sharedHTTPClient = refreshed.sharedHTTPClient
 	s.sharedHTTPClientKey = refreshed.sharedHTTPClientKey
+	s.permissionProfile = refreshed.permissionProfile
+	s.serverPermissionProfiles = refreshed.serverPermissionProfiles
 	s.generation++
 	if s.resourceCache == nil {
 		s.resourceCache = NewMCPResourceCache(nil)

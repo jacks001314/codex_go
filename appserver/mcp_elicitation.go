@@ -42,6 +42,10 @@ type mcpElicitationAuthority struct {
 	ApprovalsReviewer     string
 	PermissionProfile     *sandbox.PermissionProfile
 	AllowsMCPElicitations bool
+	// ServerAuthorityPublished reports that the thread's MCP runtime published
+	// per-server authority. When set and PermissionProfile is nil, the server
+	// has no owner permissions and the elicitation must be declined (Rust #40728).
+	ServerAuthorityPublished bool
 }
 
 func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Context, request *mcp.MCPElicitationRequest) (*mcp.MCPElicitationResponse, error) {
@@ -58,6 +62,11 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 			threadID = strings.TrimSpace(request.ThreadID)
 		}
 		authority = h.authority(threadID, mcpElicitationServerName(request), mcpElicitationConnectorID(request))
+	}
+	// Rust #40728: a server whose published authority is unavailable must not
+	// surface an elicitation at all.
+	if authority.ServerAuthorityPublished && authority.PermissionProfile == nil {
+		return mcpElicitationDeclineWithoutMessage(), nil
 	}
 	switch authority.ApprovalPolicy {
 	case sandbox.ApprovalNever:
@@ -156,6 +165,12 @@ func mcpElicitationRequestsPersistentApproval(response *MCPElicitationRequestRes
 
 func mcpElicitationAutoDecline() *mcp.MCPElicitationResponse {
 	return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionDecline, Meta: map[string]any{"approvals_reviewer": "auto_review"}}
+}
+
+// mcpElicitationDeclineWithoutMessage mirrors Rust
+// mcp_elicitation_decline_without_message: a fail-closed decline with no meta.
+func mcpElicitationDeclineWithoutMessage() *mcp.MCPElicitationResponse {
+	return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionDecline}
 }
 
 func mcpElicitationPermissionAutoApproved(profile *sandbox.PermissionProfile) bool {

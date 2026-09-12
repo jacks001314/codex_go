@@ -13,6 +13,7 @@ import (
 
 	"codex_go/apps"
 	managedconfig "codex_go/config"
+	"codex_go/sandbox"
 )
 
 const (
@@ -249,6 +250,14 @@ type RuntimeConfig struct {
 	// trusted, HTTP Codex Apps registration (Rust #44318/#44571).
 	HostOwnedAppsProtocolMode MCPProtocolMode
 	HTTPClient                HTTPDoer
+	// PermissionProfile is the thread execution authority published with this
+	// MCP runtime (Rust McpConfig.permission_profile).
+	PermissionProfile *sandbox.PermissionProfile
+	// ServerPermissionProfiles maps enabled servers to the exact attachment
+	// authority published for them (Rust McpConfig.server_permission_profiles).
+	// A server absent from this map has no published authority, so its calls
+	// and elicitations are rejected (#40728).
+	ServerPermissionProfiles map[string]*sandbox.PermissionProfile
 }
 
 type HTTPDoer interface {

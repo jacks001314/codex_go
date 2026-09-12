@@ -10,10 +10,19 @@ type Binding struct {
 	service    *MCPService
 	generation uint64
 	tools      map[string]map[string]bool
+	// authorityPublished reports whether this runtime published per-server
+	// permission authority (Rust #40728). When true, a server absent from
+	// authority has no owner permissions and its calls are rejected.
+	authorityPublished bool
+	authority          map[string]bool
 }
 
 func (s *MCPService) CaptureBinding(statuses []MCPServerStatus) *Binding {
 	b := &Binding{service: s, generation: s.Generation(), tools: map[string]map[string]bool{}}
+	if s != nil && s.HasPublishedPermissionAuthority() {
+		b.authorityPublished = true
+		b.authority = map[string]bool{}
+	}
 	for _, status := range statuses {
 		if status.State != "" && status.State != MCPServerReady {
 			continue
@@ -29,6 +38,11 @@ func (s *MCPService) CaptureBinding(statuses []MCPServerStatus) *Binding {
 			}
 		}
 		b.tools[server] = set
+		if b.authorityPublished {
+			if _, ok := s.PermissionProfileForServer(server); ok {
+				b.authority[server] = true
+			}
+		}
 	}
 	return b
 }
@@ -49,6 +63,9 @@ func (b *Binding) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, err
 	tool := strings.TrimSpace(firstNonEmptyMCP(params.Tool, params.ToolName))
 	if !b.tools[server][tool] {
 		return nil, fmt.Errorf("%w: MCP tool %q was not present in captured catalog for server %q", ErrInvalidMCPRequest, tool, server)
+	}
+	if b.authorityPublished && !b.authority[server] {
+		return nil, fmt.Errorf("%w: MCP server %q has no published permission authority", ErrInvalidMCPRequest, server)
 	}
 	response, err := b.service.CallTool(params)
 	if err != nil {
