@@ -366,6 +366,31 @@ func (v *View) SetWorktreesEnabled(enabled bool) {
 	v.recomputeProjectGroups()
 }
 
+// SetRowModel patches a listed task's model in place (Rust #44957: a
+// thread/settings/updated model change reaches the command center without
+// waiting for the next thread-list refresh). It reports whether a row changed.
+func (v *View) SetRowModel(threadID string, model string) bool {
+	if v == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	model = strings.TrimSpace(model)
+	for i := range v.Rows {
+		if strings.TrimSpace(v.Rows[i].ThreadID) != threadID {
+			continue
+		}
+		if v.Rows[i].Model == model {
+			return false
+		}
+		v.Rows[i].Model = model
+		return true
+	}
+	return false
+}
+
 func (g projectGroup) equal(other projectGroup) bool {
 	return g.commonDir == other.commonDir && g.relativeCWD == other.relativeCWD
 }

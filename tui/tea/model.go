@@ -427,6 +427,15 @@ type TerminalInteractionMsg struct {
 	Stdin     string
 }
 
+// ThreadScopedSettingsUpdatedMsg carries one thread's server-owned settings
+// update for a thread that is not active, so the agents dashboard can patch its
+// retained row immediately (Rust #44957). Active-thread updates use
+// ThreadSettingsUpdatedMsg and apply to the session state.
+type ThreadScopedSettingsUpdatedMsg struct {
+	ThreadID string
+	Settings appserver.Settings
+}
+
 // VoiceNotificationMsg carries one decoded realtime notification into the
 // model's local voice session state.
 type VoiceNotificationMsg struct {
@@ -1972,6 +1981,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
 	case TerminalInteractionMsg:
 		return m, m.applyTerminalInteraction(msg)
+	case ThreadScopedSettingsUpdatedMsg:
+		return m, m.applyThreadScopedSettingsUpdated(msg)
 	case VoiceNotificationMsg:
 		cmd := m.handleVoiceNotification(msg.Notification)
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())

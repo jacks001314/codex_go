@@ -3428,6 +3428,9 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		// apply them so resumed or forked tasks stop inheriting the previous
 		// task's permissions and model.
 		if !c.notificationThreadIsActive(payload.ThreadID) {
+			// Rust #44957: the command center patches the listed task's model
+			// from a background thread's settings update immediately.
+			c.send(codextea.ThreadScopedSettingsUpdatedMsg{ThreadID: payload.ThreadID, Settings: payload.ThreadSettings})
 			return nil
 		}
 		c.noteNotificationThreadID(payload.ThreadID)

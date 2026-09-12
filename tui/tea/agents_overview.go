@@ -765,3 +765,17 @@ func (m *Model) renderAgentsOverview() string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// applyThreadScopedSettingsUpdated patches a listed task's model from a
+// non-active thread's settings update (Rust #44957: the command center reflects
+// a model change without waiting for the next thread-list refresh).
+func (m *Model) applyThreadScopedSettingsUpdated(msg ThreadScopedSettingsUpdatedMsg) bubbletea.Cmd {
+	if m == nil || m.agentsOverview == nil {
+		return nil
+	}
+	if !m.agentsOverview.SetRowModel(msg.ThreadID, msg.Settings.Model) {
+		return nil
+	}
+	m.refreshTranscript()
+	return nil
+}

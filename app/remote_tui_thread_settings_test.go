@@ -11,9 +11,10 @@ import (
 	codextea "codex_go/tui/tea"
 )
 
-// TestRemoteTUIRoutesThreadSettingsUpdated covers Rust #43330/#43340: the
-// app-server settings notification reaches the TUI for the active thread and is
-// dropped for other threads.
+// TestRemoteTUIRoutesThreadSettingsUpdated covers Rust #43330/#43340/#44957: the
+// app-server settings notification applies to the active thread, while another
+// thread's update is forwarded thread-scoped so the agents dashboard can patch
+// its retained row.
 func TestRemoteTUIRoutesThreadSettingsUpdated(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-a")
@@ -46,7 +47,10 @@ func TestRemoteTUIRoutesThreadSettingsUpdated(t *testing.T) {
 		t.Fatal("active-thread settings notification was dropped")
 	}
 
-	otherParams, err := json.Marshal(appserver.SettingsUpdatedNotification{ThreadID: "thread-b"})
+	otherParams, err := json.Marshal(appserver.SettingsUpdatedNotification{
+		ThreadID:       "thread-b",
+		ThreadSettings: appserver.Settings{Model: "background-model"},
+	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -58,7 +62,14 @@ func TestRemoteTUIRoutesThreadSettingsUpdated(t *testing.T) {
 	}
 	select {
 	case msg := <-messages:
-		t.Fatalf("inactive-thread settings notification forwarded: %#v", msg)
+		scoped, ok := msg.(codextea.ThreadScopedSettingsUpdatedMsg)
+		if !ok {
+			t.Fatalf("message = %T, want ThreadScopedSettingsUpdatedMsg", msg)
+		}
+		if scoped.ThreadID != "thread-b" || scoped.Settings.Model != "background-model" {
+			t.Fatalf("scoped settings message = %#v", scoped)
+		}
 	default:
+		t.Fatal("inactive-thread settings notification was dropped")
 	}
 }
