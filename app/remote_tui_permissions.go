@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -31,10 +33,25 @@ func remoteTUIListPermissionProfiles(ctx context.Context, client *remoteAppServe
 	discoveryCtx, cancel := context.WithTimeout(ctx, remoteTUIpermissionDiscoveryTimeout)
 	defer cancel()
 	profiles, explicitProfileMode, err := remoteTUIPermissionDiscovery(discoveryCtx, client)
-	if err != nil && errors.Is(err, context.DeadlineExceeded) {
+	if remoteTUIPermissionDiscoveryTimedOut(discoveryCtx, err) {
 		return nil, false, errors.New("Permission discovery timed out. Try /permissions again.")
 	}
 	return profiles, explicitProfileMode, err
+}
+
+// remoteTUIPermissionDiscoveryTimedOut reports whether the bounded discovery
+// budget elapsed. The transport read deadline can surface a bare net timeout
+// before the context observes its own deadline, so both are treated as the
+// timeout Rust's tokio::time::timeout produces.
+func remoteTUIPermissionDiscoveryTimedOut(ctx context.Context, err error) bool {
+	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func remoteTUIPermissionDiscovery(ctx context.Context, client *remoteAppServerTUIClient) ([]chatwidget.CustomPermissionProfile, bool, error) {
