@@ -1297,7 +1297,7 @@ func (c *httpClient) authorizationBearerToken(forceRefresh bool) (string, bool) 
 		if strings.TrimSpace(tokens.RefreshToken) == "" {
 			return "", true
 		}
-		refreshed, err := c.refreshOAuthTokenForRequest(tokens, serverName, codexHome)
+		refreshed, err := c.refreshOAuthTokenForRequest(tokens, serverName, codexHome, true)
 		if err != nil || refreshed == nil {
 			return "", true
 		}
@@ -1310,16 +1310,45 @@ func (c *httpClient) authorizationBearerToken(forceRefresh bool) (string, bool) 
 	if strings.TrimSpace(tokens.RefreshToken) == "" {
 		return "", true
 	}
-	refreshed, err := c.refreshOAuthTokenForRequest(tokens, serverName, codexHome)
+	refreshed, err := c.refreshOAuthTokenForRequest(tokens, serverName, codexHome, false)
 	if err != nil || refreshed == nil {
 		return "", true
 	}
 	return refreshed.AccessTokenForRequest(time.Now()), true
 }
 
-func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverName string, codexHome string) (*OAuthTokenSet, error) {
+func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverName string, codexHome string, force bool) (*OAuthTokenSet, error) {
 	if c == nil || c.config == nil || tokens == nil {
 		return nil, errors.New("HTTP MCP OAuth refresh requires client and tokens")
+	}
+	store := NewOAuthStore(codexHome)
+	// Hold the cross-process credential lock through the authoritative reread,
+	// the provider request, and persistence (Rust refresh_transaction). A
+	// competitor that already refreshed is adopted instead of replaying its
+	// rotating refresh token.
+	lock, err := acquireMCPOAuthCredentialLockForServer(codexHome, serverName, c.config.URL)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Release()
+	latest, err := store.Load(serverName, c.config.URL)
+	if err != nil {
+		return nil, err
+	}
+	if latest == nil {
+		return nil, fmt.Errorf("OAuth tokens for server %s were removed before refresh; authorization required", serverName)
+	}
+	now := time.Now()
+	if !force && tokenNeedsRefresh(tokens.ExpiresAtMillis, now) && latest.AccessTokenForRequest(now) != "" {
+		// The pre-lock snapshot was only a hint; this locked reread is
+		// authoritative, so adopt a winner from another process. Refresh
+		// credentials must remain bound to the issuer already validated for
+		// this connection.
+		if strings.TrimSpace(latest.RefreshToken) != "" &&
+			(strings.TrimSpace(latest.Issuer) == "" || strings.TrimSpace(latest.Issuer) != strings.TrimSpace(tokens.Issuer)) {
+			return nil, errors.New("MCP OAuth reauthentication required: stored refresh credential issuer changed")
+		}
+		return latest, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mcpOAuthLoginDiscoveryMaxTimeout)
 	defer cancel()
@@ -1335,11 +1364,11 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 	// reauthentication, and an unexpired access token can still be used
 	// without exposing the refresh token.
 	discoveredIssuer := strings.TrimSpace(discovery.Issuer)
-	storedIssuer := strings.TrimSpace(tokens.Issuer)
+	storedIssuer := strings.TrimSpace(latest.Issuer)
 	if storedIssuer != "" && discoveredIssuer != "" && !strings.EqualFold(storedIssuer, discoveredIssuer) {
 		return nil, fmt.Errorf("MCP OAuth refresh issuer changed: stored %q, discovered %q", storedIssuer, discoveredIssuer)
 	}
-	clientID := strings.TrimSpace(tokens.ClientID)
+	clientID := strings.TrimSpace(latest.ClientID)
 	if clientID == "" {
 		clientID = strings.TrimSpace(c.config.OAuthClientID)
 	}
@@ -1347,13 +1376,13 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 		ServerName:      serverName,
 		ServerURL:       c.config.URL,
 		ClientID:        clientID,
-		ClientSecret:    tokens.ClientSecret,
+		ClientSecret:    latest.ClientSecret,
 		Issuer:          discoveredIssuer,
 		TokenEndpoint:   discovery.TokenEndpoint,
-		AccessToken:     tokens.AccessToken,
-		RefreshToken:    tokens.RefreshToken,
-		Scopes:          tokens.Scopes,
-		ExpiresAtMillis: tokens.ExpiresAtMillis,
+		AccessToken:     latest.AccessToken,
+		RefreshToken:    latest.RefreshToken,
+		Scopes:          latest.Scopes,
+		ExpiresAtMillis: latest.ExpiresAtMillis,
 	})
 	if err != nil {
 		// Rust #43947: a browser login can finish while the provider refresh is
@@ -1361,7 +1390,7 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 		// credential before failing; a failed proactive refresh while the access
 		// token is still valid stays an ordinary error.
 		if !isPermanentMCPOAuthRefreshError(err) {
-			replacement, adoptionErr := c.adoptRefreshedOAuthCredential(tokens, serverName, codexHome)
+			replacement, adoptionErr := c.adoptRefreshedOAuthCredential(latest, serverName, codexHome)
 			if adoptionErr != nil {
 				return nil, adoptionErr
 			}
@@ -1370,11 +1399,11 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 			}
 		}
 		if isPermanentMCPOAuthRefreshError(err) {
-			_, _ = NewOAuthStore(codexHome).Delete(serverName, c.config.URL)
+			_, _ = store.deleteWithLockHeld(serverName, c.config.URL)
 		}
 		return nil, err
 	}
-	if err := NewOAuthStore(codexHome).Save(refreshed); err != nil {
+	if err := store.saveWithLockHeld(refreshed); err != nil {
 		return nil, err
 	}
 	return refreshed, nil

@@ -103,6 +103,19 @@ func (s *OAuthStore) Save(tokens *OAuthTokenSet) error {
 	if strings.TrimSpace(tokens.AccessToken) == "" {
 		return errors.New("MCP OAuth access token is required")
 	}
+	// Serialize credential mutations across processes (Rust save_oauth_tokens
+	// acquires the credential lock before persisting).
+	lock, err := acquireMCPOAuthCredentialLockForServer(s.CodexHome, tokens.ServerName, tokens.ServerURL)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	return s.saveWithLockHeld(tokens)
+}
+
+// saveWithLockHeld persists tokens while the caller retains the matching
+// credential lock. Mirrors Rust save_oauth_tokens_with_lock_held.
+func (s *OAuthStore) saveWithLockHeld(tokens *OAuthTokenSet) error {
 	oauthFallbackMu.Lock()
 	defer oauthFallbackMu.Unlock()
 	file, err := s.readFallbackFile()
@@ -127,6 +140,19 @@ func (s *OAuthStore) Delete(serverName string, serverURL string) (bool, error) {
 	if s == nil {
 		return false, errors.New("MCP OAuth store is nil")
 	}
+	// Serialize credential mutations across processes (Rust delete_oauth_tokens
+	// acquires the credential lock before deleting).
+	lock, err := acquireMCPOAuthCredentialLockForServer(s.CodexHome, serverName, serverURL)
+	if err != nil {
+		return false, err
+	}
+	defer lock.Release()
+	return s.deleteWithLockHeld(serverName, serverURL)
+}
+
+// deleteWithLockHeld removes tokens while the caller retains the matching
+// credential lock. Mirrors Rust delete_oauth_tokens_with_lock_held.
+func (s *OAuthStore) deleteWithLockHeld(serverName string, serverURL string) (bool, error) {
 	oauthFallbackMu.Lock()
 	defer oauthFallbackMu.Unlock()
 	file, err := s.readFallbackFile()

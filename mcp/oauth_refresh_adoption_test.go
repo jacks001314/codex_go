@@ -79,7 +79,7 @@ func TestHTTPMCPOAuthRefreshAdoptsConcurrentLogin(t *testing.T) {
 	}
 	client := &httpClient{config: &ServerConfig{URL: configURL, OAuthClientID: "client-1"}, client: server.Client()}
 
-	refreshed, err := client.refreshOAuthTokenForRequest(previous, "docs", home)
+	refreshed, err := client.refreshOAuthTokenForRequest(previous, "docs", home, false)
 	if err != nil || refreshed == nil {
 		t.Fatalf("refreshOAuthTokenForRequest() = %#v, %v; want adopted replacement", refreshed, err)
 	}
@@ -118,7 +118,7 @@ func TestHTTPMCPOAuthRefreshKeepsErrorWhileTokenValid(t *testing.T) {
 	}
 	client := &httpClient{config: &ServerConfig{URL: configURL, OAuthClientID: "client-1"}, client: server.Client()}
 
-	refreshed, err := client.refreshOAuthTokenForRequest(previous, "docs", home)
+	refreshed, err := client.refreshOAuthTokenForRequest(previous, "docs", home, false)
 	if err == nil || refreshed != nil {
 		t.Fatalf("refresh while token valid = %#v, %v; want original error", refreshed, err)
 	}
@@ -155,7 +155,7 @@ func TestHTTPMCPOAuthRefreshRejectsReplacementWithNewIssuer(t *testing.T) {
 	}
 	client := &httpClient{config: &ServerConfig{URL: configURL, OAuthClientID: "client-1"}, client: server.Client()}
 
-	refreshed, err := client.refreshOAuthTokenForRequest(previous, "docs", home)
+	refreshed, err := client.refreshOAuthTokenForRequest(previous, "docs", home, false)
 	if err == nil || refreshed != nil || !strings.Contains(err.Error(), "reauthentication required") {
 		t.Fatalf("issuer-changed replacement = %#v, %v", refreshed, err)
 	}
@@ -243,7 +243,7 @@ func TestHTTPMCPOAuthRefreshDoesNotAdoptExpiredReplacement(t *testing.T) {
 	}
 	client := &httpClient{config: &ServerConfig{URL: configURL, OAuthClientID: "client-1"}, client: server.Client()}
 
-	refreshed, err := client.refreshOAuthTokenForRequest(previous, "docs", home)
+	refreshed, err := client.refreshOAuthTokenForRequest(previous, "docs", home, false)
 	if err == nil || refreshed != nil {
 		t.Fatalf("expired replacement = %#v, %v; want original error", refreshed, err)
 	}
