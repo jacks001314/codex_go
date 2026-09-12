@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -474,7 +475,7 @@ func (s *SessionPickerState) RenderRows(width int, now time.Time) []string {
 			rows = append(rows, s.renderComfortableSessionRow(item, selected, width, now)...)
 		}
 		if s.Expanded[item.ThreadID] {
-			rows = append(rows, renderExpandedSessionRows(item, width)...)
+			rows = append(rows, renderExpandedSessionRows(item, width, now)...)
 			rows = append(rows, s.renderTranscriptPreviewLines(item.ThreadID, width)...)
 		}
 	}
@@ -796,26 +797,110 @@ func colorThreadTitleLine(line string, color string) string {
 	return string(runes[:index]) + color + string(runes[index:]) + "\x1b[39m"
 }
 
-func renderExpandedSessionRows(item SessionSummary, width int) []string {
+// sessionMetaBranchIcon is Rust SESSION_META_BRANCH_ICON.
+const sessionMetaBranchIcon = "\ue0a0"
+
+// renderExpandedSessionRows mirrors Rust render_expanded_session_details: the
+// labeled Session/Created/Updated/Directory/Branch block followed by the
+// conversation header the preview lines hang off.
+func renderExpandedSessionRows(item SessionSummary, width int, now time.Time) []string {
+	threadID := strings.TrimSpace(item.ThreadID)
+	title := strings.TrimSpace(item.Title)
+	session := "-"
+	switch {
+	case title != "" && threadID != "":
+		session = title + " (" + threadID + ")"
+	case title != "":
+		session = title
+	case threadID != "":
+		session = threadID
+	}
+	branch := strings.TrimSpace(item.Branch)
+	if branch == "" {
+		branch = "no branch"
+	}
 	details := []string{
-		"Thread: " + item.ThreadID,
-		"Path: " + item.Path,
+		expandedDetailLine("Session:", session, width),
+		expandedTimeDetailLine("Created:", item.CreatedAt, now, width),
+		expandedTimeDetailLine("Updated:", item.UpdatedAt, now, width),
+		expandedDetailLine("Directory:", displaySessionDirectory(item.CWD), width),
+		expandedDetailLine("Branch:", sessionMetaBranchIcon+" "+branch, width),
+		"  \u2502",
+		"  \u2502 Conversation:",
 	}
-	if item.CWD != "" {
-		details = append(details, "Directory: "+item.CWD)
+	return details
+}
+
+// expandedDetailLine mirrors Rust expanded_detail_line: a fixed-width dim label
+// with a truncated value.
+func expandedDetailLine(label string, value string, width int) string {
+	const labelWidth = 10
+	valueWidth := width - 4 - labelWidth - 2
+	if valueWidth < 1 {
+		valueWidth = 1
 	}
-	out := []string{}
-	for _, detail := range details {
-		if strings.TrimSpace(detail) == "" {
-			continue
+	padded := label
+	if pad := labelWidth - DisplayWidth(label); pad > 0 {
+		padded += strings.Repeat(" ", pad)
+	}
+	return "  \u2502 " + padded + "  " + TruncateToWidth(value, valueWidth)
+}
+
+// expandedTimeDetailLine mirrors Rust expanded_time_detail_line.
+func expandedTimeDetailLine(label string, ts time.Time, now time.Time, width int) string {
+	if ts.IsZero() {
+		return expandedDetailLine(label, "-", width)
+	}
+	value := relativeTimeLong(now, ts) + " \u00b7 " + ts.Format("2006-01-02 15:04:05")
+	return expandedDetailLine(label, value, width)
+}
+
+// relativeTimeLong mirrors Rust format_relative_time_long.
+func relativeTimeLong(reference time.Time, ts time.Time) string {
+	if reference.IsZero() {
+		reference = time.Now()
+	}
+	seconds := int64(reference.Sub(ts) / time.Second)
+	if seconds < 0 {
+		seconds = 0
+	}
+	switch {
+	case seconds == 0:
+		return "now"
+	case seconds < 60:
+		return pluralTime(seconds, "second")
+	case seconds < 3600:
+		return pluralTime(seconds/60, "minute")
+	case seconds < 24*3600:
+		return pluralTime(seconds/3600, "hour")
+	default:
+		return pluralTime(seconds/(24*3600), "day")
+	}
+}
+
+func pluralTime(value int64, unit string) string {
+	if value == 1 {
+		return "1 " + unit + " ago"
+	}
+	return FormatInt(value) + " " + unit + "s ago"
+}
+
+// displaySessionDirectory mirrors Rust format_directory_display with no max
+// width: home-relative paths use "~".
+func displaySessionDirectory(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "-"
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		if rel, err := filepath.Rel(home, trimmed); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if rel == "." {
+				return "~"
+			}
+			return "~" + string(filepath.Separator) + rel
 		}
-		out = append(out, AdaptiveWrapLine("    "+detail, WrapOptions{
-			Width:            width,
-			SubsequentIndent: "    ",
-			BreakWords:       true,
-		})...)
 	}
-	return out
+	return trimmed
 }
 
 func cleanPathForCompare(path string) string {

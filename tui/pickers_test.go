@@ -147,13 +147,16 @@ func TestSessionPickerRenderDensityExpansionAndPaging(t *testing.T) {
 		t.Fatalf("comfortable rows = %#v", rows)
 	}
 	picker.ToggleExpanded("thread-0")
-	if rows := strings.Join(picker.RenderRows(80, now), "\n"); !strings.Contains(rows, "Thread: thread-0") {
-		t.Fatalf("expanded rows = %s", rows)
+	expanded := strings.Join(picker.RenderRows(80, now), "\n")
+	for _, want := range []string{"Session:    Session 0 (thread-0)", "Conversation:", "no branch"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded rows missing %q =\n%s", want, expanded)
+		}
 	}
 	picker.ToggleDensity()
 	// Rust renders an expanded row's details in dense mode too.
 	denseRows := picker.RenderRows(40, now)
-	if !strings.Contains(strings.Join(denseRows, "\n"), "Thread: thread-0") {
+	if !strings.Contains(strings.Join(denseRows, "\n"), "Conversation:") {
 		t.Fatalf("dense expanded rows = %#v", denseRows)
 	}
 	picker.ToggleExpanded("thread-0")
@@ -713,5 +716,35 @@ func TestRequestUserInputStatePreservesOtherAndMasksSecretDraft(t *testing.T) {
 	body := state.RenderBody(80)
 	if strings.Contains(body, "s3cr3t") || !strings.Contains(body, "Answer: ******") {
 		t.Fatalf("secret body was not masked:\n%s", body)
+	}
+}
+
+// TestSessionPickerExpandedDetailHelpersMatchRust pins the long relative-time
+// form, the fixed-width label layout, and the directory display.
+func TestSessionPickerExpandedDetailHelpersMatchRust(t *testing.T) {
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		offset time.Duration
+		want   string
+	}{
+		{0, "now"},
+		{30 * time.Second, "30 seconds ago"},
+		{time.Minute, "1 minute ago"},
+		{2 * time.Hour, "2 hours ago"},
+		{26 * time.Hour, "1 day ago"},
+		{3 * 24 * time.Hour, "3 days ago"},
+	} {
+		if got := relativeTimeLong(now, now.Add(-test.offset)); got != test.want {
+			t.Fatalf("relativeTimeLong(%v) = %q, want %q", test.offset, got, test.want)
+		}
+	}
+	if got := expandedDetailLine("Created:", "-", 40); got != "  \u2502 Created:    -" {
+		t.Fatalf("expandedDetailLine = %q", got)
+	}
+	if got := displaySessionDirectory("  "); got != "-" {
+		t.Fatalf("displaySessionDirectory(blank) = %q", got)
+	}
+	if got := displaySessionDirectory("D:\\work\\repo"); !strings.Contains(got, "work") {
+		t.Fatalf("displaySessionDirectory = %q", got)
 	}
 }
