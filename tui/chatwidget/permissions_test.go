@@ -181,23 +181,11 @@ func TestPermissionModeActionDecisionOrderMatchesRust(t *testing.T) {
 		t.Fatalf("enable sandbox decision = %#v", enableSandbox)
 	}
 
-	worldWritable := PermissionModeActionDecisionForPreset(PermissionModeActionContext{
-		Preset:                        presets["auto"],
-		Reviewer:                      ApprovalsReviewerUser,
-		IsWindows:                     true,
-		WindowsSandboxLevel:           WindowsSandboxLevelUnelevated,
-		WorldWritableWarningAvailable: true,
-	})
-	if worldWritable.Kind != PermissionModeActionOpenWorldWritableWarning {
-		t.Fatalf("world writable decision = %#v", worldWritable)
-	}
-
 	autoReview := PermissionModeActionDecisionForPreset(PermissionModeActionContext{
-		Preset:                        presets["auto"],
-		Reviewer:                      ApprovalsReviewerAutoReview,
-		IsWindows:                     true,
-		WindowsSandboxLevel:           WindowsSandboxLevelDisabled,
-		WorldWritableWarningAvailable: true,
+		Preset:              presets["auto"],
+		Reviewer:            ApprovalsReviewerAutoReview,
+		IsWindows:           true,
+		WindowsSandboxLevel: WindowsSandboxLevelDisabled,
 	})
 	if autoReview.Kind != PermissionModeActionApply {
 		t.Fatalf("auto-review decision = %#v", autoReview)

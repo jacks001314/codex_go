@@ -34,11 +34,4 @@ func TestWindowsSandboxStateMatchesRustCore(t *testing.T) {
 	if !state.SetupStarted || !state.SetupStartedAt.Equal(started) {
 		t.Fatalf("setup start state = %#v", state)
 	}
-	state.SkipWorldWritableScanOnce = true
-	if !state.ConsumeSkipWorldWritableScan() {
-		t.Fatal("expected first skip consume to return true")
-	}
-	if state.ConsumeSkipWorldWritableScan() {
-		t.Fatal("expected one-shot skip to be consumed")
-	}
 }

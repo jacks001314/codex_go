@@ -87,20 +87,18 @@ const (
 	PermissionModeActionOpenFullAccessConfirmation     PermissionModeActionKind = "open_full_access_confirmation"
 	PermissionModeActionEnableWindowsSandboxForAgent   PermissionModeActionKind = "enable_windows_sandbox_for_agent"
 	PermissionModeActionOpenWindowsSandboxEnablePrompt PermissionModeActionKind = "open_windows_sandbox_enable_prompt"
-	PermissionModeActionOpenWorldWritableWarning       PermissionModeActionKind = "open_world_writable_warning"
 )
 
 type PermissionModeActionContext struct {
-	Preset                        ApprovalPreset
-	Label                         string
-	Reviewer                      ApprovalsReviewer
-	ProfileID                     string
-	ReturnToPermissions           bool
-	HideFullAccessWarning         bool
-	IsWindows                     bool
-	WindowsSandboxLevel           WindowsSandboxLevel
-	WindowsSandboxSetupComplete   bool
-	WorldWritableWarningAvailable bool
+	Preset                      ApprovalPreset
+	Label                       string
+	Reviewer                    ApprovalsReviewer
+	ProfileID                   string
+	ReturnToPermissions         bool
+	HideFullAccessWarning       bool
+	IsWindows                   bool
+	WindowsSandboxLevel         WindowsSandboxLevel
+	WindowsSandboxSetupComplete bool
 }
 
 type PermissionModeActionDecision struct {
@@ -237,10 +235,6 @@ func PermissionModeActionDecisionForPreset(context PermissionModeActionContext) 
 				return base
 			}
 			base.Kind = PermissionModeActionOpenWindowsSandboxEnablePrompt
-			return base
-		}
-		if context.WorldWritableWarningAvailable {
-			base.Kind = PermissionModeActionOpenWorldWritableWarning
 			return base
 		}
 	}

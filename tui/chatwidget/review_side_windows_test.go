@@ -131,24 +131,6 @@ func TestWindowsSandboxFallbackPromptView(t *testing.T) {
 	}
 }
 
-func TestWorldWritableWarningConfirmationView(t *testing.T) {
-	view := NewWorldWritableWarningConfirmationView("Agent mode", []string{`C:\repo`, `D:\tmp`}, 2, false)
-	header := strings.Join(view.HeaderLines, "\n")
-	for _, want := range []string{"writable by Everyone", `  - C:\repo`, "and 2 more"} {
-		if !strings.Contains(header, want) {
-			t.Fatalf("header missing %q:\n%s", want, header)
-		}
-	}
-	if len(view.Items) != 2 || view.Items[0].Description != "Apply Agent mode for this session" || view.Items[1].Name != "Continue and don't warn again" {
-		t.Fatalf("items = %+v", view.Items)
-	}
-
-	failed := NewWorldWritableWarningConfirmationView("Read-Only mode", nil, 0, true)
-	if !strings.Contains(strings.Join(failed.HeaderLines, "\n"), "couldn't complete the world-writable scan") {
-		t.Fatalf("failed header = %+v", failed.HeaderLines)
-	}
-}
-
 func TestWindowsSandboxSetupStatus(t *testing.T) {
 	inProgress := WindowsSandboxSetupInProgressStatus()
 	if inProgress.ComposerInputEnabled || inProgress.Status != "Setting up sandbox..." || inProgress.Details == "" || inProgress.InterruptHintVisible {

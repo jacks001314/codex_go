@@ -12,9 +12,8 @@ type PlatformAction string
 const PlatformActionOpenURL PlatformAction = "open_url"
 
 type WindowsSandboxState struct {
-	SetupStartedAt            time.Time
-	SetupStarted              bool
-	SkipWorldWritableScanOnce bool
+	SetupStartedAt time.Time
+	SetupStarted   bool
 }
 
 func (s *WindowsSandboxState) MarkSetupStarted(at time.Time) {
@@ -23,14 +22,6 @@ func (s *WindowsSandboxState) MarkSetupStarted(at time.Time) {
 	}
 	s.SetupStartedAt = at
 	s.SetupStarted = true
-}
-
-func (s *WindowsSandboxState) ConsumeSkipWorldWritableScan() bool {
-	if s == nil || !s.SkipWorldWritableScanOnce {
-		return false
-	}
-	s.SkipWorldWritableScanOnce = false
-	return true
 }
 
 func SideReturnShortcutMatches(key string, control bool, press bool) bool {

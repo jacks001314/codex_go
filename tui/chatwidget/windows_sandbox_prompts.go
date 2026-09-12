@@ -8,8 +8,6 @@ const (
 	WindowsSandboxActionSetupElevated UsageMenuAction = "windows_sandbox_setup_elevated"
 	WindowsSandboxActionUseLegacy     UsageMenuAction = "windows_sandbox_use_legacy"
 	WindowsSandboxActionQuit          UsageMenuAction = "windows_sandbox_quit"
-	WindowsSandboxActionContinue      UsageMenuAction = "windows_sandbox_continue"
-	WindowsSandboxActionRemember      UsageMenuAction = "windows_sandbox_continue_remember"
 )
 
 type WindowsSandboxMode string
@@ -109,46 +107,6 @@ func NewWindowsSandboxFallbackPromptView(allowUnelevated bool, setupChoiceRequir
 		Items:          items,
 		AllowCancel:    true,
 		ReopenOnCancel: setupChoiceRequired,
-	}
-}
-
-func NewWorldWritableWarningConfirmationView(modeLabel string, samplePaths []string, extraCount int, failedScan bool) SelectionView {
-	modeLabel = strings.TrimSpace(modeLabel)
-	if modeLabel == "" {
-		modeLabel = "Agent mode"
-	}
-	header := []string{}
-	if failedScan {
-		header = append(header, "We couldn't complete the world-writable scan, so protections cannot be verified. The Windows sandbox cannot guarantee protection in "+modeLabel+".")
-	} else {
-		header = append(header, "The Windows sandbox cannot protect writes to folders that are writable by Everyone. Consider removing write access for Everyone from the following folders:")
-	}
-	for _, path := range samplePaths {
-		if path = strings.TrimSpace(path); path != "" {
-			header = append(header, "  - "+path)
-		}
-	}
-	if extraCount > 0 {
-		header = append(header, "and "+intString(extraCount)+" more")
-	}
-	return SelectionView{
-		HeaderLines: header,
-		FooterHint:  standardPopupHintLine,
-		AllowCancel: true,
-		Items: []SelectionItem{
-			{
-				Name:            "Continue",
-				Description:     "Apply " + modeLabel + " for this session",
-				Action:          WindowsSandboxActionContinue,
-				DismissOnSelect: true,
-			},
-			{
-				Name:            "Continue and don't warn again",
-				Description:     "Enable " + modeLabel + " and remember this choice",
-				Action:          WindowsSandboxActionRemember,
-				DismissOnSelect: true,
-			},
-		},
 	}
 }
 
