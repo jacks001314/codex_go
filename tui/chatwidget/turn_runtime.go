@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/tui"
 	historycell "codex_go/tui/history_cell"
 )
 
@@ -124,6 +125,10 @@ type TurnRuntimeState struct {
 	Tools           ToolLifecycleState
 	// ChatGPTPlanType routes cyber Trusted Access links by plan (Rust #40504).
 	ChatGPTPlanType string
+	// DaybreakNoticeForModel resolves the cached Daybreak eligibility for the
+	// current model at cyber-error time (Rust on_cyber_policy_error). Nil uses
+	// the neutral Limited copy.
+	DaybreakNoticeForModel func() tui.DaybreakNotice
 
 	InputQueue InputQueueState
 
@@ -510,7 +515,11 @@ func (s *TurnRuntimeState) OnCyberPolicyError() {
 	s.InputQueue.SubmitPendingSteersAfterInterrupt = false
 	s.FinalizeTurn()
 	s.LastErrorOutcome = TurnRuntimeErrorCyberPolicy
-	s.addHistoryEvent(TurnRuntimeHistoryCyberPolicy, "", historycell.NewCyberPolicyErrorEvent(s.ChatGPTPlanType))
+	notice := tui.DaybreakNoticeLimited
+	if s.DaybreakNoticeForModel != nil {
+		notice = s.DaybreakNoticeForModel()
+	}
+	s.addHistoryEvent(TurnRuntimeHistoryCyberPolicy, "", historycell.NewCyberPolicyErrorEvent(notice))
 	s.RequestRedraw()
 	s.MaybeSendNextQueuedInput()
 }

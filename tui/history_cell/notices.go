@@ -72,45 +72,62 @@ func NewWarningEvent(message string) PrefixedWrappedHistoryCell {
 }
 
 type SafetyAccessBlockCell struct {
-	Body             string
-	TrustedAccessURL string
+	Title   string
+	Body    string
+	Actions []SafetyAccessAction
+}
+
+// SafetyAccessAction is one labeled link rendered under the block body.
+type SafetyAccessAction struct {
+	Label string
+	URL   string
 }
 
 func NewSafetyAccessBlockEvent() SafetyAccessBlockCell {
 	return SafetyAccessBlockCell{
-		Body:             "We take extra caution with requests involving biological research and applications that could pose safety risks. If you’re a researcher at an approved organization, you may be able to apply for Trusted Access.",
-		TrustedAccessURL: "https://openai.com/form/trusted-access-for-life-sciences",
+		Title: "This content can't be shown",
+		Body:  "We take extra caution with requests involving biological research and applications that could pose safety risks. Eligible researchers can apply for Trusted Access.",
+		Actions: []SafetyAccessAction{
+			{Label: "Trusted Access", URL: "https://chatgpt.com/r/b749fb02595e04c3007a54375f3f4374"},
+			{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL},
+		},
 	}
 }
 
-// routeCyberTrustedAccessURL picks the individual Trusted Access page for
-// consumer ChatGPT plans and the enterprise application otherwise, mirroring
-// Rust #40504.
-func routeCyberTrustedAccessURL(planType string) string {
-	switch strings.ToLower(strings.TrimSpace(planType)) {
-	case "free", "go", "plus", "pro", "prolite", "business premium":
-		return "https://chatgpt.com/cyber/"
+// NewCyberPolicyErrorEvent renders the Daybreak-aware cyber refusal copy (Rust
+// new_cyber_policy_error_event).
+func NewCyberPolicyErrorEvent(notice tui.DaybreakNotice) SafetyAccessBlockCell {
+	cell := SafetyAccessBlockCell{Title: "This content can\u2019t be shown"}
+	switch notice {
+	case tui.DaybreakNoticeApply:
+		cell.Body = "We take extra care with some cybersecurity requests. If you\u2019re doing authorized security work, apply for Daybreak to get broader access."
+		cell.Actions = []SafetyAccessAction{
+			{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL},
+			{Label: "Apply for Daybreak", URL: "https://openai.com/form/enterprise-trusted-access-for-cyber/"},
+		}
+	case tui.DaybreakNoticeAstra:
+		cell.Body = "Daybreak isn\u2019t available for Astra. Some cybersecurity requests may still be limited."
+		cell.Actions = []SafetyAccessAction{{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL}}
 	default:
-		return "https://openai.com/form/enterprise-trusted-access-for-cyber/"
+		cell.Body = "We take extra care with some cybersecurity requests."
+		cell.Actions = []SafetyAccessAction{{Label: "Learn more", URL: SafetyAccessBlockLearnMoreURL}}
 	}
-}
-
-func NewCyberPolicyErrorEvent(planType string) SafetyAccessBlockCell {
-	return SafetyAccessBlockCell{
-		Body:             "We take extra caution with cybersecurity requests. If you’re a security professional, you may be able to apply for Trusted Access.",
-		TrustedAccessURL: routeCyberTrustedAccessURL(planType),
-	}
+	return cell
 }
 
 func (c SafetyAccessBlockCell) DisplayLines(width int) []string {
 	width = max(width, 1)
 	wrapWidth := max(width-2, 1)
-	lines := []string{"\u24d8 " + SafetyAccessBlockTitle}
-	for _, line := range []string{
-		"  " + c.Body,
-		"  Trusted Access: " + c.TrustedAccessURL,
-		"  Learn more: " + SafetyAccessBlockLearnMoreURL,
-	} {
+	title := c.Title
+	if title == "" {
+		title = SafetyAccessBlockTitle
+	}
+	lines := []string{"\u24d8 " + title}
+	candidates := []string{"  " + c.Body}
+	for _, action := range c.Actions {
+		candidates = append(candidates, "  "+action.Label+": "+action.URL)
+	}
+	for _, line := range candidates {
 		lines = append(lines, tui.AdaptiveWrapLine(line, tui.WrapOptions{
 			Width:            wrapWidth,
 			SubsequentIndent: "  ",
@@ -121,12 +138,15 @@ func (c SafetyAccessBlockCell) DisplayLines(width int) []string {
 }
 
 func (c SafetyAccessBlockCell) RawLines() []string {
-	return []string{
-		SafetyAccessBlockTitle,
-		c.Body,
-		"Trusted Access: " + c.TrustedAccessURL,
-		"Learn more: " + SafetyAccessBlockLearnMoreURL,
+	title := c.Title
+	if title == "" {
+		title = SafetyAccessBlockTitle
 	}
+	lines := []string{title, c.Body}
+	for _, action := range c.Actions {
+		lines = append(lines, action.Label+": "+action.URL)
+	}
+	return lines
 }
 
 type DeprecationNoticeCell struct {

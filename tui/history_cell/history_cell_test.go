@@ -305,11 +305,14 @@ func TestNoticeHistoryCells(t *testing.T) {
 
 	safety := NewSafetyAccessBlockEvent()
 	safetyDisplay := strings.Join(safety.DisplayLines(80), "\n")
-	if !strings.Contains(safetyDisplay, SafetyAccessBlockTitle) || !strings.Contains(safetyDisplay, "you’re a researcher") || !strings.Contains(safetyDisplay, "Trusted Access: https://openai.com/form/trusted-access-for-life-sciences") {
+	if !strings.Contains(safetyDisplay, SafetyAccessBlockTitle) || !strings.Contains(safetyDisplay, "Trusted Access: https://chatgpt.com/r/b749fb02595e04c3007a54375f3f4374") {
 		t.Fatalf("safety display:\n%s", safetyDisplay)
 	}
-	cyber := NewCyberPolicyErrorEvent("")
-	if got := strings.Join(cyber.RawLines(), "\n"); !strings.Contains(got, "you’re a security professional") || !strings.Contains(got, "https://openai.com/form/enterprise-trusted-access-for-cyber/") {
+	if got := strings.Join(safety.RawLines(), "\n"); !strings.Contains(got, "Eligible researchers can apply for Trusted Access") {
+		t.Fatalf("safety raw:\n%s", got)
+	}
+	cyber := NewCyberPolicyErrorEvent(tui.DaybreakNoticeApply)
+	if got := strings.Join(cyber.RawLines(), "\n"); !strings.Contains(got, "you\u2019re doing authorized security work") || !strings.Contains(got, "https://openai.com/form/enterprise-trusted-access-for-cyber/") {
 		t.Fatalf("cyber raw:\n%s", got)
 	}
 
@@ -680,17 +683,26 @@ func TestExecHistoryCells(t *testing.T) {
 	}
 }
 
-func TestCyberTrustedAccessURLRoutesByPlan(t *testing.T) {
-	individual := "https://chatgpt.com/cyber/"
-	enterprise := "https://openai.com/form/enterprise-trusted-access-for-cyber/"
-	for _, plan := range []string{"free", "go", "plus", "pro", "prolite", "business premium"} {
-		if got := routeCyberTrustedAccessURL(plan); got != individual {
-			t.Fatalf("route(%q) = %q, want individual %q", plan, got, individual)
-		}
+func TestCyberPolicyCopyFollowsDaybreakNotice(t *testing.T) {
+	learnMore := "Learn more: " + SafetyAccessBlockLearnMoreURL
+
+	apply := NewCyberPolicyErrorEvent(tui.DaybreakNoticeApply)
+	if got := strings.Join(apply.RawLines(), "\n"); !strings.Contains(got, "This content can\u2019t be shown") ||
+		!strings.Contains(got, "apply for Daybreak to get broader access") ||
+		!strings.Contains(got, "Apply for Daybreak: https://openai.com/form/enterprise-trusted-access-for-cyber/") ||
+		!strings.Contains(got, learnMore) {
+		t.Fatalf("apply raw:\n%s", got)
 	}
-	for _, plan := range []string{"enterprise", "", "unknown"} {
-		if got := routeCyberTrustedAccessURL(plan); got != enterprise {
-			t.Fatalf("route(%q) = %q, want enterprise %q", plan, got, enterprise)
-		}
+
+	astra := NewCyberPolicyErrorEvent(tui.DaybreakNoticeAstra)
+	if got := strings.Join(astra.RawLines(), "\n"); !strings.Contains(got, "Daybreak isn\u2019t available for Astra") ||
+		strings.Contains(got, "Apply for Daybreak:") || !strings.Contains(got, learnMore) {
+		t.Fatalf("astra raw:\n%s", got)
+	}
+
+	limited := NewCyberPolicyErrorEvent(tui.DaybreakNoticeLimited)
+	if got := strings.Join(limited.RawLines(), "\n"); !strings.Contains(got, "We take extra care with some cybersecurity requests.") ||
+		strings.Contains(got, "Apply for Daybreak:") || !strings.Contains(got, learnMore) {
+		t.Fatalf("limited raw:\n%s", got)
 	}
 }
