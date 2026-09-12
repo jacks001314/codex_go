@@ -4472,8 +4472,13 @@ func (r *RuntimeRouter) threadStartInstructionParts(params *ThreadStartParams) (
 // for untrusted projects while user-level instructions are preserved.
 func (r *RuntimeRouter) loadProjectInstructionsFor(cwd string, cfg *config.Config) (string, []string, error) {
 	maxBytes := config.DefaultProjectDocMaxBytes
+	var rootMarkers, fallbackNames []string
 	if cfg != nil {
 		maxBytes = cfg.ProjectDocMaxBytes()
+		// Rust core/src/agents_md.rs: project-root markers and the configured
+		// fallback filenames participate in project-doc discovery.
+		rootMarkers = cfg.ProjectRootMarkers()
+		fallbackNames = cfg.ProjectDocFallbackFilenames()
 	}
 	var denyRead func(string) bool
 	if cfg != nil {
@@ -4484,6 +4489,8 @@ func (r *RuntimeRouter) loadProjectInstructionsFor(cwd string, cfg *config.Confi
 	}
 	loaded, err := promptctx.LoadProjectInstructions(promptctx.InstructionsLoadConfig{
 		CWD:              cwd,
+		RootMarkers:      rootMarkers,
+		FallbackNames:    fallbackNames,
 		MaxBytes:         maxBytes,
 		DenyRead:         denyRead,
 		UntrustedProject: strings.EqualFold(projectTrustLabel(cfg, cwd), "untrusted"),

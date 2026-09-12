@@ -6216,7 +6216,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	}
 	inputItems = append(inputItems, additionalInputItems...)
 	collaborationModeSessionItems := []session.Item{}
-	if item, err := r.collaborationModeWorldStateInputItem(threadID, params, modelInfo); err != nil {
+	if item, err := r.collaborationModeWorldStateInputItem(threadID, params, modelInfo, cfg); err != nil {
 		return nil, err
 	} else if item != nil {
 		inputItems = append(inputItems, item)
@@ -10510,7 +10510,12 @@ type realtimeWorldStateSnapshot struct {
 
 const collaborationModeInstructionsKind = "collaboration_mode"
 
-func (r *RuntimeRouter) collaborationModeWorldStateInputItem(threadID string, params *turn.TurnStartParams, info *model.ModelInfo) (any, error) {
+func (r *RuntimeRouter) collaborationModeWorldStateInputItem(threadID string, params *turn.TurnStartParams, info *model.ModelInfo, cfg *config.Config) (any, error) {
+	// Rust core/src/session/world_state.rs: the section is omitted entirely when
+	// `include_collaboration_mode_instructions` is false.
+	if !cfg.IncludeCollaborationModeInstructions() {
+		return nil, nil
+	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil {
 		return nil, err

@@ -6,10 +6,58 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/config"
 	"codex_go/model"
 	"codex_go/session"
 	"codex_go/turn"
 )
+
+// TestCollaborationModeWorldStateHonorsIncludeFlagLikeRust mirrors Rust
+// core/src/session/world_state.rs: the collaboration-mode section is omitted
+// entirely (and nothing is persisted) when
+// `include_collaboration_mode_instructions` is false.
+func TestCollaborationModeWorldStateHonorsIncludeFlagLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-collaboration-include-flag")
+	now := time.Now().UTC()
+	if err := store.Create(&session.Record{
+		ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{HistoryMode: string(ThreadHistoryLegacy)},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	t.Cleanup(func() { _ = router.Close() })
+
+	defaultText := "catalog default instructions"
+	info := &model.ModelInfo{Slug: "catalog-model", ModelMessages: &model.ModelMessages{
+		CollaborationModes: &model.CollaborationModeMessages{Default: &defaultText},
+	}}
+	params := collaborationModeParamsForTest("default", "catalog-model", "legacy instructions")
+
+	disabled := &config.Config{Values: map[string]any{"include_collaboration_mode_instructions": false}}
+	item, err := router.collaborationModeWorldStateInputItem(string(threadID), params, info, disabled)
+	if err != nil {
+		t.Fatalf("collaborationModeWorldStateInputItem() error = %v", err)
+	}
+	if item != nil {
+		t.Fatalf("item = %#v, want nil when the section is disabled", item)
+	}
+	record, err := store.Load(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Metadata.WorldState) != 0 {
+		t.Fatalf("world state was persisted while disabled: %s", record.Metadata.WorldState)
+	}
+
+	enabled := &config.Config{Values: map[string]any{}}
+	item, err = router.collaborationModeWorldStateInputItem(string(threadID), params, info, enabled)
+	if err != nil {
+		t.Fatalf("collaborationModeWorldStateInputItem() error = %v", err)
+	}
+	assertCollaborationModeItemText(t, item, "<collaboration_mode>"+defaultText+"</collaboration_mode>")
+}
 
 func TestCollaborationModeWorldStateMatchesCatalogAndModelChanges(t *testing.T) {
 	store := session.NewStore(t.TempDir())
@@ -31,7 +79,7 @@ func TestCollaborationModeWorldStateMatchesCatalogAndModelChanges(t *testing.T) 
 	}}
 	params := collaborationModeParamsForTest("default", "catalog-model-a", "legacy instructions")
 
-	item, err := router.collaborationModeWorldStateInputItem(string(threadID), params, info)
+	item, err := router.collaborationModeWorldStateInputItem(string(threadID), params, info, nil)
 	if err != nil {
 		t.Fatalf("initial collaboration state error = %v", err)
 	}
@@ -40,7 +88,7 @@ func TestCollaborationModeWorldStateMatchesCatalogAndModelChanges(t *testing.T) 
 		t.Fatalf("catalog instructions did not override legacy: %#v", item)
 	}
 
-	unchanged, err := router.collaborationModeWorldStateInputItem(string(threadID), params, info)
+	unchanged, err := router.collaborationModeWorldStateInputItem(string(threadID), params, info, nil)
 	if err != nil || unchanged != nil {
 		t.Fatalf("unchanged collaboration state item = %#v, err = %v", unchanged, err)
 	}
@@ -58,13 +106,13 @@ func TestCollaborationModeWorldStateMatchesCatalogAndModelChanges(t *testing.T) 
 	if err := store.Save(record); err != nil {
 		t.Fatal(err)
 	}
-	unchanged, err = router.collaborationModeWorldStateInputItem(string(threadID), params, info)
+	unchanged, err = router.collaborationModeWorldStateInputItem(string(threadID), params, info, nil)
 	if err != nil || unchanged != nil {
 		t.Fatalf("retained collaboration state item = %#v, err = %v", unchanged, err)
 	}
 
 	params = collaborationModeParamsForTest("plan", "catalog-model-a", "legacy plan instructions")
-	item, err = router.collaborationModeWorldStateInputItem(string(threadID), params, info)
+	item, err = router.collaborationModeWorldStateInputItem(string(threadID), params, info, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +123,7 @@ func TestCollaborationModeWorldStateMatchesCatalogAndModelChanges(t *testing.T) 
 		CollaborationModes: &model.CollaborationModeMessages{Plan: &modelBText},
 	}}
 	params = collaborationModeParamsForTest("plan", "catalog-model-b", "legacy plan instructions")
-	item, err = router.collaborationModeWorldStateInputItem(string(threadID), params, modelB)
+	item, err = router.collaborationModeWorldStateInputItem(string(threadID), params, modelB, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +157,7 @@ func TestCollaborationModeWorldStatePreservesExplicitEmptyAndClearsMissing(t *te
 	info := &model.ModelInfo{Slug: "catalog-model", ModelMessages: &model.ModelMessages{
 		CollaborationModes: &model.CollaborationModeMessages{Default: &empty},
 	}}
-	item, err := router.collaborationModeWorldStateInputItem(string(threadID), collaborationModeParamsForTest("default", "catalog-model", "legacy"), info)
+	item, err := router.collaborationModeWorldStateInputItem(string(threadID), collaborationModeParamsForTest("default", "catalog-model", "legacy"), info, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +175,7 @@ func TestCollaborationModeWorldStatePreservesExplicitEmptyAndClearsMissing(t *te
 	missing := &model.ModelInfo{Slug: "catalog-model", ModelMessages: &model.ModelMessages{
 		CollaborationModes: &model.CollaborationModeMessages{},
 	}}
-	item, err = router.collaborationModeWorldStateInputItem(string(threadID), collaborationModeParamsForTest("plan", "catalog-model", ""), missing)
+	item, err = router.collaborationModeWorldStateInputItem(string(threadID), collaborationModeParamsForTest("plan", "catalog-model", ""), missing, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +192,7 @@ func TestCollaborationModeWorldStatePreservesExplicitEmptyAndClearsMissing(t *te
 	if err := json.Unmarshal(state.CollaborationMode, &cleared); err != nil || cleared.Mode != "plan" || cleared.Instructions == "" {
 		t.Fatalf("persisted cleared snapshot = %s, err = %v", state.CollaborationMode, err)
 	}
-	item, err = router.collaborationModeWorldStateInputItem(string(threadID), collaborationModeParamsForTest("plan", "catalog-model", ""), missing)
+	item, err = router.collaborationModeWorldStateInputItem(string(threadID), collaborationModeParamsForTest("plan", "catalog-model", ""), missing, nil)
 	if err != nil || item != nil {
 		t.Fatalf("absent-to-absent collaboration item = %#v, err = %v", item, err)
 	}
@@ -160,7 +208,7 @@ func TestCollaborationModeWorldStatePreservesExplicitEmptyAndClearsMissing(t *te
 	refresh := &model.ModelInfo{Slug: "catalog-model", ModelMessages: &model.ModelMessages{
 		CollaborationModes: &model.CollaborationModeMessages{Default: &defaultText},
 	}}
-	item, err = router.collaborationModeWorldStateInputItem(string(threadID), collaborationModeParamsForTest("default", "catalog-model", "stale legacy"), refresh)
+	item, err = router.collaborationModeWorldStateInputItem(string(threadID), collaborationModeParamsForTest("default", "catalog-model", "stale legacy"), refresh, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

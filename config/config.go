@@ -1630,6 +1630,40 @@ func (c *Config) ProjectDocMaxBytes() int {
 	return DefaultProjectDocMaxBytes
 }
 
+// ProjectDocFallbackFilenames ports the config half of Rust
+// core/src/agents_md.rs::candidate_filenames: extra project-doc filenames tried
+// after `AGENTS.override.md` and `AGENTS.md`, in order and without duplicates.
+func (c *Config) ProjectDocFallbackFilenames() []string {
+	if c == nil || c.Values == nil {
+		return nil
+	}
+	return stringListFromConfigValue(c.Values["project_doc_fallback_filenames"])
+}
+
+// ProjectRootMarkers ports Rust's `project_root_markers`: the markers used to
+// detect the project root when walking parent directories. An empty result
+// leaves the default marker list to the discovery helper (Rust defaults to
+// [".git"]).
+func (c *Config) ProjectRootMarkers() []string {
+	if c == nil || c.Values == nil {
+		return nil
+	}
+	return projectRootMarkersFromValues(c.Values)
+}
+
+// IncludeCollaborationModeInstructions ports Rust's
+// `include_collaboration_mode_instructions` (default true): when false the
+// collaboration-mode world state is omitted from model requests.
+func (c *Config) IncludeCollaborationModeInstructions() bool {
+	if c == nil || c.Values == nil {
+		return true
+	}
+	if value, ok := c.Values["include_collaboration_mode_instructions"].(bool); ok {
+		return value
+	}
+	return true
+}
+
 func stringFromConfigValue(value any) string {
 	if raw, ok := value.(string); ok {
 		return strings.TrimSpace(raw)
