@@ -13,7 +13,7 @@
             ],
             "phase": "P1",
             "status": "complete",
-            "verifier": "TestRustFeatureKeySurfaceAgainstGo"
+            "verifier": "TestRustFeatureKeySurfaceAgainstGo;TestFeaturesRegistryMatchesRust"
         },
         {
             "id": "tool-schema-policy",
