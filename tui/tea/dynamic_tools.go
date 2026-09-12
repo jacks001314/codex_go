@@ -1,0 +1,49 @@
+package tea
+
+import (
+	"strings"
+
+	bubbletea "github.com/charmbracelet/bubbletea"
+)
+
+// DynamicToolThreadStartedMsg reports a task the TUI started or resumed while
+// serving a codex_tui dynamic tool call (Rust
+// AppEvent::DynamicToolThreadStarted). The dashboard tracks it as a dispatched
+// task.
+type DynamicToolThreadStartedMsg struct {
+	ThreadID string
+	// TaskToolsAvailable records whether the child also hosts the task-tool
+	// namespace (Rust app_server.remember_task_tool_thread).
+	TaskToolsAvailable bool
+}
+
+// applyDynamicToolThreadStarted records the dispatched task and refreshes an open
+// dashboard so it appears immediately.
+func (m *Model) applyDynamicToolThreadStarted(msg DynamicToolThreadStartedMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	threadID := strings.TrimSpace(msg.ThreadID)
+	if threadID == "" {
+		return nil
+	}
+	if m.dynamicToolThreads == nil {
+		m.dynamicToolThreads = map[string]bool{}
+	}
+	m.dynamicToolThreads[threadID] = true
+	if m.agentsOverview == nil {
+		return nil
+	}
+	// Refresh the open dashboard so the dispatched task appears; Rust also marks
+	// it as dispatched before the next list refresh.
+	return m.refreshAgentsOverviewCmd()
+}
+
+// IsDynamicToolThread reports whether a task was started through the TUI's
+// dynamic tools.
+func (m *Model) IsDynamicToolThread(threadID string) bool {
+	if m == nil || m.dynamicToolThreads == nil {
+		return false
+	}
+	return m.dynamicToolThreads[strings.TrimSpace(threadID)]
+}

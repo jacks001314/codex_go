@@ -4257,13 +4257,9 @@ func TestRemoteServerRequestLongTailResponses(t *testing.T) {
 		wantCode int
 		wantErr  string
 	}{
-		{
-			name:     "dynamic tool",
-			method:   appserver.ServerRequestDynamicToolCall,
-			params:   `{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"lookup","arguments":{}}`,
-			wantCode: -32000,
-			wantErr:  "Dynamic tool calls are not available in TUI yet.",
-		},
+		// The dynamic tool call path is served by the TUI's task-tool namespace
+		// now; unknown tool names surface inside the tool response (see
+		// dynamic_tools_test.go).
 		{
 			name:     "attestation",
 			method:   appserver.ServerRequestAttestationGenerate,

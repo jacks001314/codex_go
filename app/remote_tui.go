@@ -2665,7 +2665,17 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 		if err := remoteDecodeServerRequestParams(params, &payload); err != nil {
 			return nil, -32602, err
 		}
-		return nil, -32000, errors.New("Dynamic tool calls are not available in TUI yet.")
+		// Rust dynamic_tools::execute: the TUI serves its task-management
+		// namespace for the app server that issued the call.
+		template, err := remoteThreadStartParams(c.root, c.state)
+		if err != nil {
+			return nil, -32000, err
+		}
+		result := ExecuteDynamicTool(ctx, c, payload, DynamicToolOptions{
+			ThreadStartParams:        template,
+			RegisterBackgroundThread: c.registerDynamicToolThread,
+		})
+		return result, 0, nil
 	case appserver.ServerRequestChatGPTAuthTokensRefresh:
 		var payload auth.ChatGPTAuthTokensRefreshParams
 		if err := remoteDecodeServerRequestParams(params, &payload); err != nil {
@@ -2700,6 +2710,18 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 	default:
 		return nil, -32000, fmt.Errorf("Unsupported app-server request: %s", method)
 	}
+}
+
+// registerDynamicToolThread tells the TUI about a task a dynamic tool started or
+// resumed, so the dashboard can track it (Rust
+// AppEvent::DynamicToolThreadStarted).
+func (c *remoteAppServerTUIClient) registerDynamicToolThread(threadID string, taskToolsAvailable bool) error {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return errors.New("background task requires a thread id")
+	}
+	c.send(codextea.DynamicToolThreadStartedMsg{ThreadID: threadID, TaskToolsAvailable: taskToolsAvailable})
+	return nil
 }
 
 func (c *remoteAppServerTUIClient) chatGPTAuthTokensRefresh(ctx context.Context, params *auth.ChatGPTAuthTokensRefreshParams) (*appserver.ChatGPTAuthTokensRefreshResponse, error) {
@@ -3998,6 +4020,11 @@ func remoteThreadStartParams(root *cli.RootOptions, state *codextui.State) (apps
 		Sandbox:               remoteStringAny(shared.Sandbox),
 		Config:                configValues,
 		ExperimentalRawEvents: true,
+	}
+	// The TUI hosts the codex_tui task-management dynamic tools for this app
+	// server (Rust dynamic_tools_mcp / ThreadToolTransport).
+	if specs, err := DynamicToolSpecsRaw(); err == nil {
+		params.DynamicTools = specs
 	}
 	if state != nil && strings.TrimSpace(state.Personality) != "" {
 		personality := strings.TrimSpace(state.Personality)

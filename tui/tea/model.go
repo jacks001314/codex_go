@@ -1393,6 +1393,9 @@ type Model struct {
 	// sessionTranscriptThreadID identifies the picker transcript overlay's
 	// session so a late load result is ignored after the overlay changes.
 	sessionTranscriptThreadID string
+	// dynamicToolThreads tracks tasks the TUI started or resumed while serving a
+	// codex_tui dynamic tool call (Rust DynamicToolThreadStarted).
+	dynamicToolThreads map[string]bool
 	// recap tracks the automatic recap deadline and turn accounting (Rust
 	// RecapState).
 	recap            tuiapp.RecapState
@@ -2159,6 +2162,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case SessionTranscriptMsg:
 		m.applySessionTranscript(msg)
 		return m, nil
+	case DynamicToolThreadStartedMsg:
+		return m, m.applyDynamicToolThreadStarted(msg)
 	case DebugConfigResultMsg:
 		m.applyDebugConfigResult(msg)
 		return m, nil
