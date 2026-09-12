@@ -547,6 +547,16 @@ func AgentMessageDelta(itemID string, text string) ThreadEvent {
 	}
 }
 
+// ReasoningSummaryDelta carries a streaming reasoning summary fragment for the
+// working status row (Rust #43921). It is emitted on the internal stream only,
+// so the exec JSON contract is unchanged.
+func ReasoningSummaryDelta(itemID string, text string) ThreadEvent {
+	return ThreadEvent{
+		Type:  "item.reasoning.delta",
+		Delta: &Delta{ItemID: itemID, Text: text},
+	}
+}
+
 func ToolCallInputDelta(itemID string, callID string, input string) ThreadEvent {
 	return ThreadEvent{
 		Type:  "item.delta",

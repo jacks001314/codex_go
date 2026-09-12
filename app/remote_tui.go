@@ -68,6 +68,10 @@ type remoteAppServerTUIClient struct {
 	// turnDurationMS carries the completed turn's protocol duration so the TUI
 	// can show "Worked for" completion metadata (Rust #43558).
 	turnDurationMS *int64
+	// reasoningBuffers accumulates streaming reasoning summaries per
+	// turn+item so the status row can show the latest usable line
+	// (Rust #43921).
+	reasoningBuffers map[string]string
 }
 
 type remoteWebSocketTransport struct {
@@ -3204,6 +3208,7 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return nil
 		}
 		c.noteNotificationThreadID(payload.ThreadID)
+		c.resetReasoningStatus(payload.ThreadID)
 		c.send(codextea.ThreadEventMsg{Event: protocol.TurnStarted()})
 	case appserver.NotificationTurnCompleted:
 		var payload appserver.TurnCompletedNotification
@@ -3218,6 +3223,7 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return nil
 		}
 		c.noteNotificationThreadID(payload.ThreadID)
+		c.resetReasoningStatus(payload.ThreadID)
 		c.turnCompleted = true
 		if payload.Turn.DurationMS != nil {
 			value := *payload.Turn.DurationMS
@@ -3270,6 +3276,24 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		}
 		c.send(codextea.ModelRetryStatusMsg{Active: false})
 		c.send(codextea.ThreadEventMsg{Event: protocol.AgentMessageDelta(payload.ItemID, payload.Delta)})
+	case appserver.NotificationReasoningSummaryTextDelta:
+		var payload appserver.ReasoningSummaryTextDeltaNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			return nil
+		}
+		c.recordReasoningSummaryDelta(payload.ThreadID, payload.TurnID, payload.ItemID, payload.Delta)
+	case appserver.NotificationReasoningSummaryPartAdded:
+		var payload appserver.ReasoningSummaryPartAddedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			return nil
+		}
+		c.recordReasoningSummaryDelta(payload.ThreadID, payload.TurnID, payload.ItemID, "\n")
 	case appserver.NotificationPlanDelta:
 		var payload appserver.PlanDeltaNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
@@ -3613,6 +3637,35 @@ func (c *remoteAppServerTUIClient) send(message bubbletea.Msg) {
 		return
 	}
 	c.messages <- message
+}
+
+// recordReasoningSummaryDelta appends a streaming reasoning summary fragment
+// and publishes the latest usable line as the working indicator's header
+// (Rust #43921).
+func (c *remoteAppServerTUIClient) recordReasoningSummaryDelta(threadID string, turnID string, itemID string, delta string) {
+	if c == nil || delta == "" {
+		return
+	}
+	key := strings.TrimSpace(turnID) + "|" + strings.TrimSpace(itemID)
+	if c.reasoningBuffers == nil {
+		c.reasoningBuffers = map[string]string{}
+	}
+	c.reasoningBuffers[key] += delta
+	header, ok := chatwidget.LatestSummaryLine(c.reasoningBuffers[key])
+	if !ok {
+		return
+	}
+	c.send(codextea.WorkingStatusHeaderMsg{ThreadID: strings.TrimSpace(threadID), Text: header})
+}
+
+// resetReasoningStatus drops accumulated reasoning summaries and clears the
+// live status header at a turn boundary (Rust #43921).
+func (c *remoteAppServerTUIClient) resetReasoningStatus(threadID string) {
+	if c == nil {
+		return
+	}
+	c.reasoningBuffers = nil
+	c.send(codextea.WorkingStatusHeaderMsg{ThreadID: strings.TrimSpace(threadID)})
 }
 
 func remoteThreadStartParams(root *cli.RootOptions, state *codextui.State) (appserver.ThreadStartParams, error) {

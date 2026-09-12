@@ -291,6 +291,14 @@ type ModelRetryStatusMsg struct {
 	Active  bool
 }
 
+// WorkingStatusHeaderMsg replaces the working indicator's header with the
+// latest streaming reasoning summary line (Rust #43921). An empty Text (or
+// Text for another thread) clears the override so the default header returns.
+type WorkingStatusHeaderMsg struct {
+	ThreadID string
+	Text     string
+}
+
 type ModelCompactionStatusMsg struct {
 	Message string
 	Active  bool
@@ -959,9 +967,15 @@ type Model struct {
 	// startup command executions so they render as one compact "Ran N commands"
 	// history cell (Rust #38921). It is reset at interaction boundaries and
 	// whenever a non-groupable or failed command breaks the run.
-	compactCommandGroup             *compactCommandGroupState
-	mcpStartup                      chatwidget.McpStartupRoundState
-	mcpStartupHeader                string
+	compactCommandGroup *compactCommandGroupState
+	mcpStartup          chatwidget.McpStartupRoundState
+	mcpStartupHeader    string
+	// workingStatusHeader is the live reasoning summary line shown as the
+	// working indicator's header (Rust #43921).
+	workingStatusHeader string
+	// reasoningSummaryBuffers accumulates streaming reasoning summaries per
+	// item so the status row can show the latest usable line (Rust #43921).
+	reasoningSummaryBuffers         map[string]string
 	mcpStartupActive                bool
 	mcpStartupGeneration            uint64
 	mcpStartupFinishPending         bool
@@ -1956,6 +1970,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case WorkingDirectoryChangeResultMsg:
 		m.applyWorkingDirectoryChangeResult(msg)
 		return m, nil
+	case WorkingStatusHeaderMsg:
+		m.applyWorkingStatusHeader(msg)
+		return m, nil
 	case AgentNavigateResultMsg:
 		return m, m.applyAgentNavigateResult(msg)
 	case SkillsListResultMsg:
@@ -2396,6 +2413,51 @@ func annotateComposerHyperlinks(content string) string {
 		lines[i] = codextui.AnnotateWebURLsInLine(line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// applyWorkingStatusHeader records the live reasoning summary heading shown by
+// the working indicator. Updates for another thread are ignored, and an empty
+// Text restores the default header (Rust #43921).
+func (m *Model) applyWorkingStatusHeader(msg WorkingStatusHeaderMsg) {
+	if m == nil {
+		return
+	}
+	threadID := strings.TrimSpace(msg.ThreadID)
+	if threadID != "" && m.State != nil {
+		if current := strings.TrimSpace(m.State.ThreadID); current != "" && threadID != current {
+			return
+		}
+	}
+	m.workingStatusHeader = strings.TrimSpace(msg.Text)
+}
+
+// applyReasoningSummaryDelta accumulates a streaming reasoning summary fragment
+// and shows the latest usable line as the working indicator's header
+// (Rust #43921).
+func (m *Model) applyReasoningSummaryDelta(delta *protocol.Delta) {
+	if m == nil || delta == nil {
+		return
+	}
+	key := strings.TrimSpace(delta.ItemID)
+	if m.reasoningSummaryBuffers == nil {
+		m.reasoningSummaryBuffers = map[string]string{}
+	}
+	m.reasoningSummaryBuffers[key] += delta.Text
+	header, ok := chatwidget.LatestSummaryLine(m.reasoningSummaryBuffers[key])
+	if !ok {
+		return
+	}
+	m.workingStatusHeader = header
+}
+
+// resetReasoningSummaryHeader clears the live reasoning status heading at a
+// turn boundary (Rust #43921).
+func (m *Model) resetReasoningSummaryHeader() {
+	if m == nil {
+		return
+	}
+	m.reasoningSummaryBuffers = nil
+	m.workingStatusHeader = ""
 }
 
 func fitTerminalLine(line string, width int) string {
@@ -2936,6 +2998,9 @@ func (m *Model) renderWorkingIndicator() string {
 	indicator := codextui.NewStatusIndicator(m.taskStartedAt)
 	if m.mcpStartupActive && strings.TrimSpace(m.mcpStartupHeader) != "" {
 		indicator.Header = m.mcpStartupHeader
+	} else if header := strings.TrimSpace(m.workingStatusHeader); header != "" {
+		// Rust #43921: stream the latest reasoning summary line as the status row.
+		indicator.Header = header
 	}
 	indicator.InterruptHint = m.interruptHintBinding()
 	indicator.SetInterruptHintVisible(indicator.InterruptHint != "")
@@ -3079,6 +3144,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	m.deferPendingSteers()
 	if message.Err != nil {
 		m.setStatus("error")
+		m.resetReasoningSummaryHeader()
 		errorMessage := message.Err.Error()
 		if chatwidget.IsMisalignmentPolicyViolationMessage(errorMessage) {
 			return m.applyMisalignmentPolicyViolation(errorMessage)
@@ -3185,6 +3251,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		}
 	case "turn.started":
 		m.setStatus("running")
+		m.resetReasoningSummaryHeader()
 		m.Transcript.lastTurnError = ""
 		m.retryMessageIndex = -1
 		m.retryActivityActive = false
@@ -3219,10 +3286,13 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		cmd = m.applyItemCompleted(event.Item)
 	case "item.delta":
 		m.applyDelta(event.Delta)
+	case "item.reasoning.delta":
+		m.applyReasoningSummaryDelta(event.Delta)
 	case "item.plan.delta":
 		m.applyProposedPlanDelta(event.Delta)
 	case "turn.completed":
 		m.setStatus("idle")
+		m.resetReasoningSummaryHeader()
 		m.markThreadCompleted(m.State.ThreadID)
 		m.Transcript.lastTurnError = ""
 		m.clearRetryActivity()

@@ -767,6 +767,15 @@ func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
 			c.completedAgentItems[itemID] = true
 			c.emit(protocol.ItemCompleted(protocol.AgentMessageItemWithPhase(itemID, event.Item.Text, agentMessagePhase(event.Item))))
 		}
+	case model.ResponsesStreamEventReasoningSummaryTextDelta:
+		// Rust #43921: stream the latest reasoning summary line to the status
+		// row. Internal only, so the exec JSON event contract is unchanged.
+		if event.Delta != "" {
+			c.emitInternal(protocol.ReasoningSummaryDelta(firstNonEmpty(event.ItemID, "reasoning"), event.Delta))
+		}
+	case model.ResponsesStreamEventReasoningSummaryPartAdded:
+		// A new summary part starts a fresh line so the latest usable line wins.
+		c.emitInternal(protocol.ReasoningSummaryDelta(firstNonEmpty(event.ItemID, "reasoning"), "\n"))
 	case model.ResponsesStreamEventModelReroute:
 		if message := modelRerouteErrorMessage(event.Reroute); message != "" {
 			c.emit(protocol.ItemCompleted(protocol.ErrorItem("model-reroute", message)))

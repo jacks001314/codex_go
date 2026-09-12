@@ -10,6 +10,8 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	"codex_go/mcp"
+	"codex_go/model"
+	"codex_go/protocol"
 )
 
 // TestRunAgentRequestUsesConfiguredReasoningSummaryLikeRust covers #43921's
@@ -42,5 +44,36 @@ func TestRunAgentRequestUsesConfiguredReasoningSummaryLikeRust(t *testing.T) {
 	}
 	if agent.request.ReasoningSummary != "concise" {
 		t.Fatalf("agent request reasoning summary = %q, want concise", agent.request.ReasoningSummary)
+	}
+}
+
+// TestExecReasoningSummaryStreamsInternallyOnly covers Rust #43921's status-row
+// feed: reasoning summary deltas reach the internal (TUI) handler without
+// changing the exec JSON event contract.
+func TestExecReasoningSummaryStreamsInternallyOnly(t *testing.T) {
+	var internal []protocol.ThreadEvent
+	sink := &execEventSink{internalHandler: func(event protocol.ThreadEvent) { internal = append(internal, event) }}
+	collector := &execStreamEventCollector{sink: sink}
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind:   model.ResponsesStreamEventReasoningSummaryTextDelta,
+		ItemID: "reasoning-1",
+		Delta:  "## Step one",
+	})
+	collector.Handle(&model.ResponsesStreamEvent{
+		Kind:   model.ResponsesStreamEventReasoningSummaryPartAdded,
+		ItemID: "reasoning-1",
+	})
+
+	if len(internal) != 2 {
+		t.Fatalf("internal reasoning events = %#v, want two", internal)
+	}
+	if internal[0].Type != "item.reasoning.delta" || internal[0].Delta == nil || internal[0].Delta.Text != "## Step one" {
+		t.Fatalf("reasoning delta event = %#v", internal[0])
+	}
+	if internal[1].Delta == nil || internal[1].Delta.Text != "\n" {
+		t.Fatalf("reasoning section break = %#v", internal[1])
+	}
+	if events := sink.Events(); len(events) != 0 {
+		t.Fatalf("reasoning events leaked into the JSON stream: %#v", events)
 	}
 }
