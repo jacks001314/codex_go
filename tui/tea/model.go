@@ -1001,13 +1001,16 @@ type Model struct {
 	computerActivityMessageIndex int
 	// readOnlyThread marks a conversation opened read-only because another app
 	// owns it (Rust #43253).
-	readOnlyThread             bool
-	agentsOverviewHidden       map[string]struct{}
-	agentsOverviewPendingDraft *string
-	transcriptMessages         transcriptMessageCache
-	overlayMessages            transcriptMessageCache
-	lastTranscriptContent      string
-	lastTranscriptHeight       int
+	readOnlyThread bool
+	// workingDirectoryChangePending tracks a deferred /cd request so another
+	// one is rejected until it finishes (Rust #43376).
+	workingDirectoryChangePending bool
+	agentsOverviewHidden          map[string]struct{}
+	agentsOverviewPendingDraft    *string
+	transcriptMessages            transcriptMessageCache
+	overlayMessages               transcriptMessageCache
+	lastTranscriptContent         string
+	lastTranscriptHeight          int
 
 	width                  int
 	height                 int

@@ -71,33 +71,55 @@ func (m *Model) applyWorkingDirectoryChangeCommand(args string) bubbletea.Cmd {
 		m.addErrorHistoryMessage("Changing directories with a named profile is not supported.")
 		return nil
 	}
+	// Rust #43376: reject another request while one is pending.
+	if m.workingDirectoryChangePending {
+		m.addErrorHistoryMessage("Changing directories requires an idle primary session without queued input.")
+		m.refreshTranscript()
+		return nil
+	}
 	threadID := strings.TrimSpace(m.State.ThreadID)
 	target := strings.TrimSpace(args)
 	if target == "" {
 		target = "~"
+	}
+	if m.onWorkingDirectoryChange == nil {
+		// Rust #43376: remote workspaces and execution environments have no
+		// local directory to change.
+		if !m.localSession {
+			m.addErrorHistoryMessage("Changing directories is not supported for remote workspaces or remote execution environments.")
+		} else {
+			m.addErrorHistoryMessage("Changing directories requires an idle primary session without queued input.")
+		}
+		m.refreshTranscript()
+		return nil
 	}
 	if !m.canChangeWorkingDirectory(threadID) {
 		m.addErrorHistoryMessage("Changing directories requires an idle primary session without queued input.")
 		m.refreshTranscript()
 		return nil
 	}
+	m.workingDirectoryChangePending = true
 	return m.requestWorkingDirectoryChange(threadID, target)
 }
 
 func (m *Model) requestWorkingDirectoryChange(threadID string, target string) bubbletea.Cmd {
+	sourceCWD := ""
+	if m != nil && m.State != nil {
+		sourceCWD = strings.TrimSpace(m.State.CWD)
+	}
 	return func() bubbletea.Msg {
-		resolved, err := resolveWorkingDirectory(target, strings.TrimSpace(m.State.CWD))
+		resolved, err := resolveWorkingDirectory(target, sourceCWD)
 		if err != nil {
-			return WorkingDirectoryChangeResultMsg{ThreadID: threadID, Error: err.Error()}
+			return WorkingDirectoryChangeResultMsg{ThreadID: threadID, SourceCWD: sourceCWD, Error: err.Error()}
 		}
 		if m.onWorkingDirectoryChange == nil {
-			return WorkingDirectoryChangeResultMsg{ThreadID: threadID, CWD: resolved, Error: "working directory change is unavailable"}
+			return WorkingDirectoryChangeResultMsg{ThreadID: threadID, SourceCWD: sourceCWD, CWD: resolved, Error: "working directory change is unavailable"}
 		}
 		summary, err := m.onWorkingDirectoryChange(threadID, resolved)
 		if err != nil {
-			return WorkingDirectoryChangeResultMsg{ThreadID: threadID, CWD: resolved, Error: err.Error()}
+			return WorkingDirectoryChangeResultMsg{ThreadID: threadID, SourceCWD: sourceCWD, CWD: resolved, Error: err.Error()}
 		}
-		return WorkingDirectoryChangeResultMsg{ThreadID: threadID, CWD: resolved, Summary: summary}
+		return WorkingDirectoryChangeResultMsg{ThreadID: threadID, SourceCWD: sourceCWD, CWD: resolved, Summary: summary}
 	}
 }
 
@@ -107,6 +129,22 @@ func (m *Model) requestWorkingDirectoryChange(threadID string, target string) bu
 // conversation history the fork preserved.
 func (m *Model) applyWorkingDirectoryChangeResult(msg WorkingDirectoryChangeResultMsg) {
 	if m == nil || m.State == nil {
+		return
+	}
+	m.workingDirectoryChangePending = false
+	// Rust #43376: recheck the source session before applying the deferred
+	// change; the source must still be the active primary session at its
+	// original directory and eligible for the change.
+	if sourceThreadID := strings.TrimSpace(msg.ThreadID); sourceThreadID != "" &&
+		sourceThreadID != strings.TrimSpace(m.State.ThreadID) {
+		m.addErrorHistoryMessage("Changing directories requires an idle primary session without queued input.")
+		m.refreshTranscript()
+		return
+	}
+	if sourceCWD := strings.TrimSpace(msg.SourceCWD); sourceCWD != "" &&
+		sourceCWD != strings.TrimSpace(m.State.CWD) {
+		m.addErrorHistoryMessage("Changing directories requires an idle primary session without queued input.")
+		m.refreshTranscript()
 		return
 	}
 	if strings.TrimSpace(msg.Error) != "" {
@@ -155,9 +193,12 @@ func (m *Model) applyWorkingDirectoryChangeResult(msg WorkingDirectoryChangeResu
 // backend completes the fork, the replacement session summary.
 type WorkingDirectoryChangeResultMsg struct {
 	ThreadID string
-	CWD      string
-	Summary  *codextui.SessionSummary
-	Error    string
+	// SourceCWD is the directory the request was made from, rechecked before
+	// the deferred change applies (Rust #43376).
+	SourceCWD string
+	CWD       string
+	Summary   *codextui.SessionSummary
+	Error     string
 }
 
 func resolveWorkingDirectory(path string, base string) (string, error) {
