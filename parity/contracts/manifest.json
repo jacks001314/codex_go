@@ -877,6 +877,24 @@
             "verifier": "TestManagedAuthBackendRequirementsOverrideUserConfigLikeRust;TestManagedAuthBackendWriteRejectedLikeRust;TestManagedAuthBackendIgnoredInCloudRequirementsLikeRust"
         },
         {
+            "id": "config-batch-write-mutation",
+            "kind": "source-surface",
+            "rustPaths": [
+                "app-server/src/request_processors/config_processor.rs",
+                "app-server/src/effective_plugin_change.rs"
+            ],
+            "goPaths": [
+                "appserver/config_mutation.go",
+                "appserver/config_mutation_test.go",
+                "appserver/plugin_refresh_test.go",
+                "app/remote_tui.go",
+                "app/remote_trust.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestConfigEditsAreSessionDefaultsOnlyMatchesRust;TestConfigBatchWriteHonorsReloadUserConfigLikeRust;TestConfigValueWriteClearsDerivedCachesLikeRust;TestExperimentalFeatureSetRefreshesLikeRust;TestEffectivePluginsChangedRefreshesDerivedStateLikeRust;TestMarketplaceUpgradeWithoutChangesDoesNotRefreshLikeRust"
+        },
+        {
             "id": "queue-cli-command",
             "kind": "source-surface",
             "rustPaths": [

@@ -66,6 +66,9 @@ func persistRemoteProjectTrust(ctx context.Context, client *remoteAppServerTUICl
 	}
 	var response config.ConfigWriteResponse
 	return remoteSessionRequest(ctx, client, appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
+		// Rust config_update::write_trusted_project goes through
+		// write_config_batch, which reloads the user config.
+		ReloadUserConfig: true,
 		Edits: []config.ConfigEdit{{
 			KeyPath:       "projects." + strconv.Quote(path) + ".trust_level",
 			Value:         level,

@@ -7657,6 +7657,12 @@ func (r *RuntimeRouter) handleExperimentalFeatureSet(request *Request) (*feature
 			r.services.Models.SetAPIKeyModelDiscoveryEnabled(features.Enabled(settings, "api_key_model_discovery"))
 		}
 	}
+	// Rust experimental_feature_enablement_set: clear the config-derived caches
+	// and, when anything was set, reload the user config for the loaded threads.
+	r.clearConfigDerivedCaches()
+	if response != nil && len(response.Enablement) > 0 {
+		r.reloadUserConfigForLoadedThreads()
+	}
 	return response, nil
 }
 
@@ -8603,7 +8609,16 @@ func (r *RuntimeRouter) handleMarketplaceUpgrade(request *Request) (*plugin.Mark
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requirePlugins().UpgradeMarketplace(&params)
+	response, err := r.requirePlugins().UpgradeMarketplace(&params)
+	if err != nil {
+		return nil, err
+	}
+	// Rust marketplace_upgrade refreshes the plugin consumers only when a root
+	// actually changed.
+	if response != nil && len(response.UpgradedRoots) > 0 {
+		r.effectivePluginsChanged()
+	}
+	return response, nil
 }
 
 func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListResponse, error) {
@@ -8925,7 +8940,13 @@ func (r *RuntimeRouter) handlePluginShareSave(request *Request) (*plugin.PluginS
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requirePlugins().SaveShare(&params)
+	response, err := r.requirePlugins().SaveShare(&params)
+	if err != nil {
+		return nil, err
+	}
+	// Rust plugin_share_save clears the plugin-derived caches.
+	r.clearConfigDerivedCaches()
+	return response, nil
 }
 
 func (r *RuntimeRouter) handlePluginShareUpdateTargets(request *Request) (*plugin.PluginShareUpdateTargetsResponse, error) {
@@ -8933,7 +8954,13 @@ func (r *RuntimeRouter) handlePluginShareUpdateTargets(request *Request) (*plugi
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requirePlugins().UpdateShareTargets(&params)
+	response, err := r.requirePlugins().UpdateShareTargets(&params)
+	if err != nil {
+		return nil, err
+	}
+	// Rust plugin_share_update_targets clears the plugin-derived caches.
+	r.clearConfigDerivedCaches()
+	return response, nil
 }
 
 func (r *RuntimeRouter) handlePluginShareList(request *Request) (*plugin.PluginShareListResponse, error) {
@@ -8949,7 +8976,13 @@ func (r *RuntimeRouter) handlePluginShareCheckout(request *Request) (*plugin.Plu
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requirePlugins().CheckoutShare(&params)
+	response, err := r.requirePlugins().CheckoutShare(&params)
+	if err != nil {
+		return nil, err
+	}
+	// Rust plugin_share_checkout clears the plugin-derived caches.
+	r.clearConfigDerivedCaches()
+	return response, nil
 }
 
 func (r *RuntimeRouter) handlePluginShareDelete(request *Request) (*plugin.PluginShareDeleteResponse, error) {
@@ -8957,7 +8990,13 @@ func (r *RuntimeRouter) handlePluginShareDelete(request *Request) (*plugin.Plugi
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requirePlugins().DeleteShare(&params)
+	response, err := r.requirePlugins().DeleteShare(&params)
+	if err != nil {
+		return nil, err
+	}
+	// Rust plugin_share_delete clears the plugin-derived caches.
+	r.clearConfigDerivedCaches()
+	return response, nil
 }
 
 func (r *RuntimeRouter) handlePluginInstall(request *Request) (*plugin.PluginInstallResponse, error) {
@@ -8994,6 +9033,9 @@ func (r *RuntimeRouter) handlePluginUninstall(request *Request) (*plugin.PluginU
 	if err != nil {
 		return nil, err
 	}
+	// Rust plugin_uninstall reloads the config and refreshes the plugin-derived
+	// caches, MCP runtimes, and hook runtimes.
+	r.effectivePluginsChanged()
 	if detail != nil {
 		r.emitPluginStateAnalyticsEvent(context.Background(), request.normalizedConnectionID(), telemetry.CodexPluginUninstalledEventType, detail)
 	}
@@ -9633,7 +9675,13 @@ func (r *RuntimeRouter) handleConfigValueWrite(request *Request) (*config.Config
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireConfig().WriteValue(&params)
+	response, err := r.requireConfig().WriteValue(&params)
+	if err != nil {
+		return nil, err
+	}
+	// Rust config_value_write runs handle_config_mutation after the write.
+	r.clearConfigDerivedCaches()
+	return response, nil
 }
 
 func (r *RuntimeRouter) handleConfigBatchWrite(request *Request) (*config.ConfigWriteResponse, error) {
@@ -9641,7 +9689,12 @@ func (r *RuntimeRouter) handleConfigBatchWrite(request *Request) (*config.Config
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireConfig().BatchWrite(&params)
+	response, err := r.requireConfig().BatchWrite(&params)
+	if err != nil {
+		return nil, err
+	}
+	r.applyConfigBatchWriteMutation(&params)
+	return response, nil
 }
 
 func (r *RuntimeRouter) handleExternalAgentConfigDetect(request *Request) (*config.ExternalAgentConfigDetectResponse, error) {
@@ -10092,11 +10145,14 @@ func (r *RuntimeRouter) effectivePluginsChanged() {
 	if r == nil {
 		return
 	}
-	r.clearRecommendedPluginsCache()
-	if r.services.Skills != nil {
-		r.services.Skills.ClearCache()
-	}
+	// Rust on_effective_plugins_changed: clear the plugin/skill caches, then
+	// refresh the config-derived MCP and hook runtimes of the loaded threads.
+	r.clearConfigDerivedCaches()
 	r.configureMCPFromConfig()
+	r.mcpRuntimes.invalidateAll()
+	if err := r.refreshPluginHookRuntimes(); err != nil {
+		slog.Warn("failed to refresh hook runtimes after a plugin change", "error", err)
+	}
 }
 
 func (r *RuntimeRouter) maybeStartCuratedRepoSync(force bool) {

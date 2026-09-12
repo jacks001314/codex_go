@@ -884,7 +884,12 @@ func interactiveRemoteSettingsWriteHandler(ctx context.Context, endpoint *appser
 			return interactiveRemoteReadSettings(reqCtx, client)
 		}
 		var response config.ConfigWriteResponse
-		if err := remoteSessionRequest(reqCtx, client, appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{Edits: configEdits}, &response); err != nil {
+		// Rust config_update::write_config_batch always asks the server to reload
+		// the user config so the running session picks up the change.
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
+			Edits:            configEdits,
+			ReloadUserConfig: true,
+		}, &response); err != nil {
 			return codextea.SettingsWriteResult{}, err
 		}
 		result, err := interactiveRemoteReadSettings(reqCtx, client)
