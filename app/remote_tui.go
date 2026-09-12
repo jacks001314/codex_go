@@ -1413,6 +1413,10 @@ func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appser
 			if err := remoteSessionRequest(ctx, client, appserver.MethodThreadFork, params, &response); err != nil {
 				return nil, err
 			}
+			// Rust inherits the parent's task-tool capability for the fork.
+			if response.Thread != nil {
+				inheritRemoteTaskToolCapability(auth.DefaultCodexHome(), threadID, response.Thread.ID)
+			}
 			return remoteTUISessionSummaryFromThread(response.Thread, false), nil
 		case codextui.SessionSelectionArchive:
 			var response appserver.ThreadArchiveResponse

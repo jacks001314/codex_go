@@ -51,4 +51,14 @@ func TestTaskToolCapabilityMarkersLikeRust(t *testing.T) {
 	if remoteTaskToolThreadAvailable("", "thread-1") {
 		t.Fatal("empty codex home should not report availability")
 	}
+	// Fork inheritance: the child keeps the parent's capability only when the
+	// parent had it.
+	inheritRemoteTaskToolCapability(home, "thread-1", "thread-1-fork")
+	if !remoteTaskToolThreadAvailable(home, "thread-1-fork") {
+		t.Fatal("fork did not inherit the parent capability")
+	}
+	inheritRemoteTaskToolCapability(home, "thread-plain", "thread-plain-fork")
+	if remoteTaskToolThreadAvailable(home, "thread-plain-fork") {
+		t.Fatal("fork gained a capability its parent never had")
+	}
 }

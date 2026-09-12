@@ -62,3 +62,14 @@ func capabilityMarkerName(threadID string) string {
 	}
 	return name
 }
+
+// inheritRemoteTaskToolCapability mirrors Rust's fork inheritance
+// (AppServerSession::fork_thread_with_permission_mode): a fork of a thread that
+// hosts the task-tool namespace keeps the capability, so a later process
+// resuming the fork still offers task references.
+func inheritRemoteTaskToolCapability(codexHome string, parentThreadID string, childThreadID string) {
+	if !remoteTaskToolThreadAvailable(codexHome, parentThreadID) {
+		return
+	}
+	rememberRemoteTaskToolThread(codexHome, childThreadID)
+}
