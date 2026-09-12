@@ -93,6 +93,22 @@ func TestFileCitationDirectiveUnquotedAndMultiple(t *testing.T) {
 	}
 }
 
+// TestFileCitationParserUsesSharedDirectiveGrammar pins the rewiring onto
+// tui.ParseAssistantDirectiveWithBudget: duplicate keys are rejected and the
+// directive range stops at the closing brace, excluding trailing markdown.
+func TestFileCitationParserUsesSharedDirectiveGrammar(t *testing.T) {
+	budget := 1 << 20
+	if directive, ok := parseFileCitationDirective(`:codex-file-citation{path="/a" path="/b"}`, 0, &budget); ok {
+		t.Fatalf("duplicate attribute keys must be rejected: %#v", directive)
+	}
+	budget = 1 << 20
+	raw := `:codex-file-citation{path="/tmp/a.txt"}`
+	directive, ok := parseFileCitationDirective(raw+" trailing text", 0, &budget)
+	if !ok || directive.name != fileCitationName || directive.end != len(raw) {
+		t.Fatalf("directive = %#v ok=%v, want end %d", directive, ok, len(raw))
+	}
+}
+
 func TestFileCitationParserSupportsLiteralAndBackslashQuoting(t *testing.T) {
 	budget := 1 << 20
 	literalPath, ok := parseFileCitationDirective(`:codex-file-citation{path="C:\repo\" purpose="output"}`, 0, &budget)

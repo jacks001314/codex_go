@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	codextui "codex_go/tui"
+
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	gmtext "github.com/yuin/goldmark/text"
@@ -130,134 +132,29 @@ type fileCitationDirective struct {
 // Citations prefer literal quoting (backslash is data) with backslash escaping
 // as the fallback, matching the Rust scanner order for file citations.
 func parseFileCitationDirective(source string, start int, budget *int) (fileCitationDirective, bool) {
-	if parsed, ok := parseFileCitationDirectiveMode(source, start, budget, false); ok {
-		return parsed, true
-	}
-	return parseFileCitationDirectiveMode(source, start, budget, true)
-}
-
-func parseFileCitationDirectiveMode(source string, start int, budget *int, backslashEscapes bool) (fileCitationDirective, bool) {
-	pos := start
-	colonCount := 0
-	for pos < len(source) && source[pos] == ':' {
-		colonCount++
-		pos++
-	}
-	if colonCount < 1 || colonCount > 3 || !spendCitationBudget(budget, colonCount+1) {
+	if start < 0 || start > len(source) {
 		return fileCitationDirective{}, false
 	}
-	nameStart := pos
-	for pos < len(source) && isFileCitationNameByte(source[pos]) {
-		pos++
+	sub := source[start:]
+	// Rust's scanner tries literal quoting first for file citations (backslash
+	// is data) and escaped quoting first for other directives, sharing one scan
+	// budget across offsets and modes.
+	modes := []codextui.QuoteEscaping{codextui.QuoteEscapingLiteral, codextui.QuoteEscapingBackslash}
+	if !strings.HasPrefix(strings.TrimLeft(sub, ":"), fileCitationName+"{") {
+		modes = []codextui.QuoteEscaping{codextui.QuoteEscapingBackslash, codextui.QuoteEscapingLiteral}
 	}
-	name := source[nameStart:pos]
-	if name == "" || !spendCitationBudget(budget, pos-nameStart+1) || pos >= len(source) || source[pos] != '{' {
-		return fileCitationDirective{}, false
-	}
-	pos++
-	attributes := map[string]string{}
-	for {
-		for pos < len(source) && (source[pos] == ' ' || source[pos] == '\t') {
-			pos++
-		}
-		if !spendCitationBudget(budget, 1) {
-			return fileCitationDirective{}, false
-		}
-		if pos >= len(source) {
-			return fileCitationDirective{}, false
-		}
-		if source[pos] == '}' {
-			return fileCitationDirective{name: name, end: pos + 1, attributes: attributes}, true
-		}
-		keyStart := pos
-		for pos < len(source) && isFileCitationNameByte(source[pos]) {
-			pos++
-		}
-		key := source[keyStart:pos]
-		if key == "" || !spendCitationBudget(budget, pos-keyStart+1) {
-			return fileCitationDirective{}, false
-		}
-		for pos < len(source) && (source[pos] == ' ' || source[pos] == '\t') {
-			pos++
-		}
-		if pos >= len(source) || source[pos] != '=' {
-			return fileCitationDirective{}, false
-		}
-		pos++
-		for pos < len(source) && (source[pos] == ' ' || source[pos] == '\t') {
-			pos++
-		}
-		if pos >= len(source) {
-			return fileCitationDirective{}, false
-		}
-		var value string
-		var ok bool
-		if source[pos] == '"' || source[pos] == '\'' {
-			delimiter := source[pos]
-			pos++
-			value, pos, ok = scanFileCitationQuoted(source, pos, delimiter, backslashEscapes)
-			if !ok {
-				return fileCitationDirective{}, false
-			}
-		} else {
-			valueStart := pos
-			for pos < len(source) && !isFileCitationValueEnd(source[pos]) {
-				if source[pos] == '\n' || source[pos] == '\r' {
-					return fileCitationDirective{}, false
-				}
-				pos++
-			}
-			if pos == valueStart {
-				return fileCitationDirective{}, false
-			}
-			value = source[valueStart:pos]
-		}
-		if _, exists := attributes[key]; exists {
-			return fileCitationDirective{}, false
-		}
-		attributes[key] = value
-	}
-}
-
-func scanFileCitationQuoted(source string, pos int, delimiter byte, backslashEscapes bool) (string, int, bool) {
-	var sb strings.Builder
-	for pos < len(source) {
-		ch := source[pos]
-		if ch == delimiter {
-			return sb.String(), pos + 1, true
-		}
-		if ch == '\n' || ch == '\r' {
-			return "", pos, false
-		}
-		if backslashEscapes && ch == '\\' && pos+1 < len(source) && (source[pos+1] == delimiter || source[pos+1] == '\\') {
-			sb.WriteByte(source[pos+1])
-			pos += 2
+	for _, mode := range modes {
+		directive, ok := codextui.ParseAssistantDirectiveWithBudget(sub, mode, budget)
+		if !ok {
 			continue
 		}
-		sb.WriteByte(ch)
-		pos++
+		return fileCitationDirective{
+			name:       directive.Name,
+			end:        start + len(directive.Raw),
+			attributes: directive.Attributes,
+		}, true
 	}
-	return "", pos, false
-}
-
-func isFileCitationNameByte(ch byte) bool {
-	return ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-'
-}
-
-func isFileCitationValueEnd(ch byte) bool {
-	return ch == ' ' || ch == '\t' || ch == '}'
-}
-
-func spendCitationBudget(budget *int, scanned int) bool {
-	if budget == nil || *budget < 0 {
-		return true
-	}
-	if scanned > *budget {
-		*budget = 0
-		return false
-	}
-	*budget -= scanned
-	return true
+	return fileCitationDirective{}, false
 }
 
 // citationDestinationAndDisplay joins relative citation paths against cwd and
