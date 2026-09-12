@@ -6100,7 +6100,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	if err != nil {
 		return nil, err
 	}
-	modelInfo := r.modelInfoForRuntimeWithConfig(modelProviderConfig.Model, cfg)
+	modelInfo := r.modelInfoForAppTurn(modelProviderConfig.Model, cfg, params)
 	baseInstructionsExplicit := params != nil && params.BaseInstructions != nil
 	instructions, err := appBaseInstructionsForConfig(cfg)
 	if err != nil {
@@ -6122,17 +6122,11 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		}
 	}
 	inputItems := append([]any(nil), historyItems...)
-	modelPersonalityItems, err := r.modelPersonalityWorldStateInputItems(
-		threadID,
-		modelInfo,
-		personality,
-		instructions,
-		features.Enabled(cfg.FeatureSettings(), "personality"),
-	)
+	modelWorldStateItems, err := r.modelWorldStateInputItems(threadID, modelInfo, instructions)
 	if err != nil {
 		return nil, err
 	}
-	inputItems = append(inputItems, modelPersonalityItems...)
+	inputItems = append(inputItems, modelWorldStateItems...)
 	if item, err := r.managedDeveloperInstructionsInputItem(cfg); err != nil {
 		return nil, err
 	} else if item != nil {
@@ -9437,6 +9431,7 @@ func modelConfigForAppTurn(cfg *config.Config) *model.ModelsManagerConfig {
 		PersonalityEnabled: features.Enabled(settings, "personality"),
 	}
 	if cfg != nil {
+		out.Personality = stringConfigValue(cfg, "personality")
 		out.ModelContextWindow = int64(intFromAny(cfg.Values["model_context_window"]))
 		out.ModelAutoCompactTokenLimit = int64(intFromAny(cfg.Values["model_auto_compact_token_limit"]))
 	}
@@ -9560,7 +9555,13 @@ func (r *RuntimeRouter) modelInfoForRuntimeWithConfig(modelID string, cfg *confi
 	if strings.TrimSpace(modelID) == "" {
 		return nil
 	}
-	modelConfig := modelConfigForAppTurn(cfg)
+	return r.modelInfoForRuntimeWithModelsConfig(modelID, cfg, modelConfigForAppTurn(cfg))
+}
+
+func (r *RuntimeRouter) modelInfoForRuntimeWithModelsConfig(modelID string, cfg *config.Config, modelConfig *model.ModelsManagerConfig) *model.ModelInfo {
+	if strings.TrimSpace(modelID) == "" {
+		return nil
+	}
 	var values map[string]any
 	if cfg != nil {
 		values = cfg.Values
@@ -9570,6 +9571,27 @@ func (r *RuntimeRouter) modelInfoForRuntimeWithConfig(modelID string, cfg *confi
 		return &info
 	}
 	return r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID, Config: modelConfig})
+}
+
+// modelInfoForAppTurn resolves a model with the turn's personality selection
+// folded into the models-manager config, so an explicit `personality = "none"`
+// opt-out strips the baked personality section (Rust #44946).
+func (r *RuntimeRouter) modelInfoForAppTurn(modelID string, cfg *config.Config, params *turn.TurnStartParams) *model.ModelInfo {
+	if strings.TrimSpace(modelID) == "" {
+		return nil
+	}
+	modelConfig := modelConfigForAppTurn(cfg)
+	modelConfig.Personality = appPersonalityForTurn(cfg, params)
+	return r.modelInfoForRuntimeWithModelsConfig(modelID, cfg, modelConfig)
+}
+
+// modelInfoForRuntimeWithPersonality resolves a model with only the personality
+// selection folded in, mirroring the models-manager personality opt-out without
+// changing any other effective config.
+func (r *RuntimeRouter) modelInfoForRuntimeWithPersonality(modelID string, cfg *config.Config, personality string) *model.ModelInfo {
+	modelConfig := modelConfigForAppTurn(cfg)
+	modelConfig.Personality = strings.TrimSpace(personality)
+	return r.modelInfoForRuntimeWithModelsConfig(modelID, cfg, modelConfig)
 }
 
 func (r *RuntimeRouter) modelUsesResponsesLite(modelID string) bool {
@@ -10704,7 +10726,10 @@ func (r *RuntimeRouter) realtimeWorldStateInputItem(threadID string, cfg *config
 	return renderedFragmentInputItem(rendered), nil
 }
 
-func (r *RuntimeRouter) modelPersonalityWorldStateInputItems(threadID string, info *model.ModelInfo, personality string, baseInstructions string, personalityEnabled bool) ([]any, error) {
+// modelWorldStateInputItems emits the model-switch world-state instruction when
+// the thread moves to a different model. Rust #44946 removed the
+// `<personality_spec>` world-state section entirely.
+func (r *RuntimeRouter) modelWorldStateInputItems(threadID string, info *model.ModelInfo, baseInstructions string) ([]any, error) {
 	if info == nil || strings.TrimSpace(info.Slug) == "" {
 		return nil, nil
 	}
@@ -10718,7 +10743,7 @@ func (r *RuntimeRouter) modelPersonalityWorldStateInputItems(threadID string, in
 	}
 
 	currentModel := strings.TrimSpace(info.Slug)
-	modelInstructions := info.ModelInstructions(personality)
+	modelInstructions := info.ModelInstructions("")
 	previousModel, modelKnown := decodeWorldStateModel(state.Model)
 	if !modelKnown {
 		contextModel, _, contextKnown := previousTurnContextModelPersonality(record.Metadata.TurnContext)
@@ -10736,36 +10761,6 @@ func (r *RuntimeRouter) modelPersonalityWorldStateInputItems(threadID string, in
 	}
 	changed := !sameJSONValue(state.Model, modelSnapshot)
 	state.Model = modelSnapshot
-
-	if personalityEnabled {
-		currentPersonality := worldStateOptionalString(personality)
-		current := personalityWorldStateSnapshot{Model: currentModel, Personality: currentPersonality}
-		previous, previousKnown := decodePersonalityWorldState(state.Personality)
-		if !previousKnown {
-			if contextModel, contextPersonality, contextKnown := previousTurnContextModelPersonality(record.Metadata.TurnContext); contextKnown {
-				previous = personalityWorldStateSnapshot{Model: contextModel, Personality: contextPersonality}
-				previousKnown = true
-			}
-		}
-		personalityChanged := previousKnown && previous.Model == current.Model && !sameOptionalString(previous.Personality, current.Personality)
-		personalityAbsent := !previousKnown && len(state.Personality) == 0
-		personalityIsBaked := info.SupportsPersonality() && baseInstructions == modelInstructions
-		if (personalityChanged || (personalityAbsent && !personalityIsBaked)) && current.Personality != nil {
-			if spec, ok := info.PersonalityMessage(*current.Personality); ok && strings.TrimSpace(spec) != "" {
-				rendered := contextfrag.RenderStandalone(&contextfrag.PersonalitySpecInstructions{Spec: spec})
-				items = append(items, renderedFragmentInputItem(rendered))
-			}
-		}
-		personalitySnapshot, err := json.Marshal(current)
-		if err != nil {
-			return nil, err
-		}
-		changed = changed || !sameJSONValue(state.Personality, personalitySnapshot)
-		state.Personality = personalitySnapshot
-	} else if len(state.Personality) > 0 {
-		state.Personality = nil
-		changed = true
-	}
 
 	if !changed {
 		return items, nil
@@ -10894,21 +10889,6 @@ func decodeWorldStateModel(raw json.RawMessage) (string, bool) {
 	return strings.TrimSpace(value), true
 }
 
-func decodePersonalityWorldState(raw json.RawMessage) (personalityWorldStateSnapshot, bool) {
-	if len(raw) == 0 {
-		return personalityWorldStateSnapshot{}, false
-	}
-	var value personalityWorldStateSnapshot
-	if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value.Model) == "" {
-		return personalityWorldStateSnapshot{}, false
-	}
-	value.Model = strings.TrimSpace(value.Model)
-	if value.Personality != nil {
-		value.Personality = worldStateOptionalString(*value.Personality)
-	}
-	return value, true
-}
-
 func previousTurnContextModelPersonality(raw json.RawMessage) (string, *string, bool) {
 	if len(raw) == 0 {
 		return "", nil, false
@@ -10929,13 +10909,6 @@ func worldStateOptionalString(value string) *string {
 		return nil
 	}
 	return &value
-}
-
-func sameOptionalString(left *string, right *string) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
 }
 
 func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.TurnStartParams) (any, error) {

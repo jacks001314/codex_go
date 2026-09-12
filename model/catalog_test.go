@@ -1010,7 +1010,7 @@ func TestPersonalityDisabledFallsBackToBaseInstructionsForLocalPersonalityModels
 	}
 }
 
-func TestPersonalityDisabledRendersDefaultPersonalityIntoTemplate(t *testing.T) {
+func TestRetiredPersonalityLeavesLegacyTemplateLiteral(t *testing.T) {
 	model := ModelInfo{
 		BaseInstructions: "base",
 		ModelMessages: &ModelMessages{
@@ -1021,11 +1021,8 @@ func TestPersonalityDisabledRendersDefaultPersonalityIntoTemplate(t *testing.T) 
 		},
 	}
 	updated := WithConfigOverrides(model, &ModelsManagerConfig{PersonalityEnabled: false})
-	if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != "Hello default" {
-		t.Fatalf("ModelMessages = %#v, want instructions_template = %q", updated.ModelMessages, "Hello default")
-	}
-	if updated.ModelMessages.PersonalityDefault != "" || updated.ModelMessages.PersonalityFriendly != "" || updated.ModelMessages.PersonalityPragmatic != "" {
-		t.Fatalf("personality variables should be cleared: %#v", updated.ModelMessages)
+	if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != "Hello {{ personality }}" {
+		t.Fatalf("ModelMessages = %#v, want the literal legacy template", updated.ModelMessages)
 	}
 }
 
@@ -1038,7 +1035,8 @@ func TestInstructionOverridesPreserveCollaborationModeMessages(t *testing.T) {
 		wantInstructionsTmpl string
 	}{
 		{name: "base instructions", config: &ModelsManagerConfig{BaseInstructions: "override", PersonalityEnabled: true}, wantInstructionsTmpl: "override"},
-		{name: "personality disabled", config: &ModelsManagerConfig{PersonalityEnabled: false}, wantInstructionsTmpl: "Hello "},
+		{name: "personality none", config: &ModelsManagerConfig{PersonalityEnabled: true, Personality: "none"}, wantInstructionsTmpl: "Hello {{ personality }}"},
+		{name: "personality disabled", config: &ModelsManagerConfig{PersonalityEnabled: false}, wantInstructionsTmpl: "Hello {{ personality }}"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			info := ModelInfo{
@@ -1060,14 +1058,11 @@ func TestInstructionOverridesPreserveCollaborationModeMessages(t *testing.T) {
 			if updated.ModelMessages.InstructionsTemplate != test.wantInstructionsTmpl {
 				t.Fatalf("instructions_template = %q, want %q", updated.ModelMessages.InstructionsTemplate, test.wantInstructionsTmpl)
 			}
-			if updated.ModelMessages.PersonalityFriendly != "" || updated.ModelMessages.PersonalityPragmatic != "" {
-				t.Fatalf("personality variables were not cleared: %#v", updated.ModelMessages)
-			}
 		})
 	}
 }
 
-func TestModelInstructionsPersonalityTemplate(t *testing.T) {
+func TestModelInstructionsIgnoresLegacyPersonalityVariables(t *testing.T) {
 	info := ModelInfo{
 		BaseInstructions: "base",
 		ModelMessages: &ModelMessages{
@@ -1077,19 +1072,55 @@ func TestModelInstructionsPersonalityTemplate(t *testing.T) {
 			PersonalityPragmatic: "pragmatic",
 		},
 	}
-	if got := info.ModelInstructions("friendly"); got != "Hello friendly" {
-		t.Fatalf("friendly instructions = %q", got)
+	for _, personality := range []string{"friendly", "pragmatic", "none", ""} {
+		if got := info.ModelInstructions(personality); got != "Hello {{ personality }}" {
+			t.Fatalf("%q instructions = %q, want the literal template", personality, got)
+		}
 	}
-	if got := info.ModelInstructions("none"); got != "Hello " {
-		t.Fatalf("none instructions = %q", got)
-	}
-	if !info.SupportsPersonality() {
-		t.Fatal("SupportsPersonality = false")
+	if info.SupportsPersonality() {
+		t.Fatal("SupportsPersonality = true, want false after Rust #44946")
 	}
 
 	info.ModelMessages.InstructionsTemplate = ""
 	if got := info.ModelInstructions("friendly"); got != "base" {
 		t.Fatalf("missing template instructions = %q", got)
+	}
+}
+
+func TestPersonalityNoneStripsBakedPersonalitySection(t *testing.T) {
+	template := "# Intro\nhello\n\n# Personality\nbe nice\n\n# Tools\nuse tools\n"
+	newModel := func() ModelInfo {
+		return ModelInfo{
+			BaseInstructions: "base",
+			ModelMessages:    &ModelMessages{InstructionsTemplate: template},
+		}
+	}
+
+	stripped := WithConfigOverrides(newModel(), &ModelsManagerConfig{PersonalityEnabled: true, Personality: "none"})
+	if stripped.ModelMessages == nil || stripped.ModelMessages.InstructionsTemplate != "# Intro\nhello\n\n# Tools\nuse tools\n" {
+		t.Fatalf("personality-none template = %#v", stripped.ModelMessages)
+	}
+
+	// Any other selection (or no selection) keeps the literal template.
+	for _, config := range []*ModelsManagerConfig{
+		{PersonalityEnabled: true, Personality: "friendly"},
+		{PersonalityEnabled: true},
+		{PersonalityEnabled: false, Personality: "none"},
+	} {
+		kept := WithConfigOverrides(newModel(), config)
+		if kept.ModelMessages == nil || kept.ModelMessages.InstructionsTemplate != template {
+			t.Fatalf("config %#v template = %#v", config, kept.ModelMessages)
+		}
+	}
+
+	// A trailing personality section is stripped to the end of the template.
+	trailing := ModelInfo{
+		BaseInstructions: "base",
+		ModelMessages:    &ModelMessages{InstructionsTemplate: "# Intro\nhi\n\n# Personality\nbe nice\n"},
+	}
+	strippedTrailing := WithConfigOverrides(trailing, &ModelsManagerConfig{PersonalityEnabled: true, Personality: "none"})
+	if strippedTrailing.ModelMessages.InstructionsTemplate != "# Intro\nhi\n\n" {
+		t.Fatalf("trailing personality template = %q", strippedTrailing.ModelMessages.InstructionsTemplate)
 	}
 }
 

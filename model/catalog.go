@@ -55,6 +55,64 @@ During longer work, send short progress updates at meaningful points. Do not wai
 
 const personalityPlaceholder = "{{ personality }}"
 
+// personalitySectionHeader is the "# Personality" H1 heading whose section is
+// removed when the `personality = "none"` opt-out is active (Rust #44946).
+const personalitySectionHeader = "# Personality"
+
+// stripPersonalitySection removes the "# Personality" section, from its heading
+// up to the next H1 heading (or the end of the instructions).
+func stripPersonalitySection(instructions string) string {
+	sectionStart := -1
+	sectionEnd := -1
+	offset := 0
+	for _, lineWithEnding := range splitInclusiveNewlines(instructions) {
+		line := strings.TrimSuffix(lineWithEnding, "\n")
+		line = strings.TrimSuffix(line, "\r")
+		if sectionStart >= 0 {
+			if isH1Heading(line) {
+				sectionEnd = offset
+				break
+			}
+		} else if line == personalitySectionHeader {
+			sectionStart = offset
+		}
+		offset += len(lineWithEnding)
+	}
+	if sectionStart < 0 {
+		return instructions
+	}
+	if sectionEnd < 0 {
+		sectionEnd = len(instructions)
+	}
+	return instructions[:sectionStart] + instructions[sectionEnd:]
+}
+
+// splitInclusiveNewlines splits text like Rust's str::split_inclusive('\n').
+func splitInclusiveNewlines(text string) []string {
+	if text == "" {
+		return nil
+	}
+	out := make([]string, 0, strings.Count(text, "\n")+1)
+	for len(text) > 0 {
+		if index := strings.IndexByte(text, '\n'); index >= 0 {
+			out = append(out, text[:index+1])
+			text = text[index+1:]
+			continue
+		}
+		out = append(out, text)
+		break
+	}
+	return out
+}
+
+func isH1Heading(line string) bool {
+	rest, ok := strings.CutPrefix(line, "#")
+	if !ok {
+		return false
+	}
+	return rest == "" || strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, "\t")
+}
+
 type ModelMessages struct {
 	InstructionsTemplate string                     `json:"instructions_template,omitempty"`
 	PersonalityDefault   string                     `json:"-"`
@@ -193,7 +251,9 @@ func (m *ModelMessages) PersonalityMessage(personality string) (string, bool) {
 }
 
 func (m *ModelInfo) SupportsPersonality() bool {
-	return m != nil && m.ModelMessages != nil && m.ModelMessages.SupportsPersonality()
+	// Rust #44946 retires Friendly/Pragmatic personality selection: generated
+	// model presets always report `supports_personality = false`.
+	return false
 }
 
 func (m *ModelInfo) PersonalityMessage(personality string) (string, bool) {
@@ -208,8 +268,10 @@ func (m *ModelInfo) ModelInstructions(personality string) string {
 		return BaseInstructions
 	}
 	if m.ModelMessages != nil && strings.TrimSpace(m.ModelMessages.InstructionsTemplate) != "" {
-		message, _ := m.ModelMessages.PersonalityMessage(personality)
-		return strings.ReplaceAll(m.ModelMessages.InstructionsTemplate, personalityPlaceholder, message)
+		// Rust #44946: the instruction template is literal text; legacy
+		// personality variables are ignored, so a leftover `{{ personality }}`
+		// placeholder is retained verbatim.
+		return m.ModelMessages.InstructionsTemplate
 	}
 	return m.BaseInstructions
 }
@@ -630,6 +692,10 @@ type ModelsManagerConfig struct {
 	ToolOutputTokenLimit            int64
 	BaseInstructions                string
 	PersonalityEnabled              bool
+	// Personality is the resolved personality selection (if any). Rust #44946
+	// only uses it to honor an explicit `personality = "none"` opt-out by
+	// stripping the baked personality section.
+	Personality                     string
 	ModelSupportsReasoningSummaries *bool
 	ModelCatalog                    *ModelsResponse
 }
@@ -1107,7 +1173,7 @@ func ModelInfoFromSlug(slug string) ModelInfo {
 		SupportedInAPI:                 true,
 		Priority:                       99,
 		BaseInstructions:               BaseInstructions,
-		ModelMessages:                  localPersonalityMessagesForSlug(slug),
+		ModelMessages:                  localModelMessages(),
 		IncludeSkillsUsageInstructions: true,
 		IncludeAppsUsageInstructions:   false,
 		DefaultReasoningSummary:        "auto",
@@ -1184,17 +1250,11 @@ func WithConfigOverrides(model ModelInfo, config *ModelsManagerConfig) ModelInfo
 	if config.BaseInstructions != "" {
 		model.BaseInstructions = config.BaseInstructions
 		setInstructionsTemplate(&model, config.BaseInstructions)
-	} else if !config.PersonalityEnabled {
-		usesLocalPersonalityTemplate := model.UsedFallbackModelMetadata &&
-			(model.Slug == "gpt-5.2-codex" || model.Slug == "exp-codex-personality")
-		if usesLocalPersonalityTemplate {
-			setInstructionsTemplate(&model, BaseInstructions)
-		} else if messages := model.ModelMessages; messages != nil && strings.TrimSpace(messages.InstructionsTemplate) != "" {
-			personalityDefault, _ := messages.PersonalityMessage("")
-			setInstructionsTemplate(&model, strings.ReplaceAll(messages.InstructionsTemplate, personalityPlaceholder, personalityDefault))
-		} else {
-			clearInstructionVariables(&model)
-		}
+	} else if config.PersonalityEnabled && strings.TrimSpace(config.Personality) == "none" &&
+		model.ModelMessages != nil && strings.TrimSpace(model.ModelMessages.InstructionsTemplate) != "" {
+		// Rust #44946: an explicit `personality = "none"` opt-out strips the
+		// baked personality section from the model's literal template.
+		model.ModelMessages.InstructionsTemplate = stripPersonalitySection(model.ModelMessages.InstructionsTemplate)
 	}
 	return model
 }
@@ -1222,22 +1282,6 @@ func setInstructionsTemplate(model *ModelInfo, template string) {
 	// Rust #41072: the override also drops the catalog-provided confirmation-
 	// policy documents (with_config_overrides sets confirmation_policies: None).
 	messages.ConfirmationPolicies = nil
-}
-
-// clearInstructionVariables removes the personality instruction source while
-// preserving non-instruction message fields.
-func clearInstructionVariables(model *ModelInfo) {
-	if model == nil || model.ModelMessages == nil {
-		return
-	}
-	messages := model.ModelMessages
-	messages.InstructionsTemplate = ""
-	messages.PersonalityDefault = ""
-	messages.PersonalityFriendly = ""
-	messages.PersonalityPragmatic = ""
-	if messages.CollaborationModes == nil && messages.TokenBudget == nil {
-		model.ModelMessages = nil
-	}
 }
 
 func ConstructModelInfoFromCandidates(model string, candidates []ModelInfo, config *ModelsManagerConfig) ModelInfo {
@@ -1326,18 +1370,10 @@ func findModelByNamespacedSuffix(model string, candidates []ModelInfo) (ModelInf
 	return findModelByLongestPrefix(suffix, candidates)
 }
 
-func localPersonalityMessagesForSlug(slug string) *ModelMessages {
-	switch slug {
-	case "gpt-5.2-codex", "exp-codex-personality":
-		return &ModelMessages{
-			InstructionsTemplate: "You are gcode, a coding agent based on GPT-5.\n\n{{ personality }}\n\n" + BaseInstructions,
-			PersonalityDefault:   "",
-			PersonalityFriendly:  "You optimize for team morale and being a supportive teammate as much as code quality.",
-			PersonalityPragmatic: "You are a deeply pragmatic, effective software engineer.",
-		}
-	default:
-		return nil
-	}
+// localModelMessages mirrors Rust #44946: fallback model metadata uses the
+// standard literal prompt with no personality template.
+func localModelMessages() *ModelMessages {
+	return &ModelMessages{InstructionsTemplate: BaseInstructions}
 }
 
 func bedrockModel(slug string, priority int) ModelInfo {

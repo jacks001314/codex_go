@@ -156,10 +156,6 @@ func TestModelSwitchAndTokenBudget(t *testing.T) {
 	if modelSwitch == nil || modelSwitch.Content != "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\nnew model instructions\n</model_switch>" {
 		t.Fatalf("model switch fragment = %#v", modelSwitch)
 	}
-	personality := RenderStandalone(&PersonalitySpecInstructions{Spec: "be pragmatic"})
-	if personality == nil || personality.Content != "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \nbe pragmatic </personality_spec>" {
-		t.Fatalf("personality fragment = %#v", personality)
-	}
 	if got := (&TokenBudgetContext{Used: 10, Limit: 100}).Body(); !strings.Contains(got, "90 remaining") {
 		t.Fatalf("TokenBudgetContext = %q", got)
 	}

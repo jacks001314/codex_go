@@ -529,9 +529,6 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		router.services.UnifiedExec = tool.NewUnifiedExecManager()
 	}
 	router.services.UnifiedExec.SetWriteStdinApproval(router.writeStdinApprovalForTurn)
-	if router.services.Config != nil {
-		_, _ = router.services.Config.MaybeMigratePersonality()
-	}
 	router.services.ServerRequests.SetRequestedCallback(router.noteServerRequestPending)
 	router.services.ServerRequests.SetResolvedCallback(router.notifyServerRequestResolved)
 	router.services.ServerRequests.SetResolvedResponseCallback(router.handleServerRequestResolvedResponse)
@@ -3832,11 +3829,11 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 		record.Metadata.BaseInstructionsProvenance = &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceCustom}
 	} else if len(sources) == 0 {
 		modelID := firstNonEmpty(strings.TrimSpace(params.Model), strings.TrimSpace(record.Metadata.Model))
-		if info := r.modelInfoForRuntime(modelID); info != nil {
-			personality := stringPtrValue(params.Personality)
-			if cfg != nil {
-				personality = firstNonEmpty(personality, stringConfigValue(cfg, "personality"))
-			}
+		personality := stringPtrValue(params.Personality)
+		if cfg != nil {
+			personality = firstNonEmpty(personality, stringConfigValue(cfg, "personality"))
+		}
+		if info := r.modelInfoForRuntimeWithPersonality(modelID, cfg, personality); info != nil {
 			if generated := strings.TrimSpace(info.ModelInstructions(personality)); generated != "" {
 				record.Metadata.BaseInstructions = generated
 				record.Metadata.BaseInstructionsProvenance = &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceModel, Model: info.Slug}

@@ -13035,7 +13035,7 @@ func TestRuntimeRouterTurnStartSettingsOverrideEmitsThreadSettingsUpdated(t *tes
 	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
 }
 
-func TestRuntimeRouterModelPersonalityWorldStateDiffs(t *testing.T) {
+func TestRuntimeRouterModelSwitchWorldStateDiffs(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := fixedTime()
 	threadID := session.ThreadID("thread-model-personality-world-state")
@@ -13062,31 +13062,26 @@ func TestRuntimeRouterModelPersonalityWorldStateDiffs(t *testing.T) {
 	}
 	oldModel := &model.ModelInfo{Slug: "gpt-old", ModelMessages: modelMessages}
 
-	items, err := router.modelPersonalityWorldStateInputItems(string(threadID), oldModel, "friendly", "custom base", true)
+	// Rust #44946 removed the `<personality_spec>` world-state section entirely,
+	// so only model switches emit contextual instructions.
+	items, err := router.modelWorldStateInputItems(string(threadID), oldModel, "custom base")
 	if err != nil {
 		t.Fatalf("initial world state: %v", err)
 	}
-	if texts := messageInputTextsForRole(items, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "<personality_spec>") || !strings.Contains(texts[0], "friendly spec") {
+	if len(items) != 0 {
 		t.Fatalf("initial world-state items = %#v", items)
 	}
-	items, err = router.modelPersonalityWorldStateInputItems(string(threadID), oldModel, "friendly", "custom base", true)
+	items, err = router.modelWorldStateInputItems(string(threadID), oldModel, "custom base")
 	if err != nil || len(items) != 0 {
 		t.Fatalf("unchanged world state items = %#v, error = %v", items, err)
 	}
-	items, err = router.modelPersonalityWorldStateInputItems(string(threadID), oldModel, "pragmatic", "custom base", true)
-	if err != nil {
-		t.Fatalf("personality change world state: %v", err)
-	}
-	if texts := messageInputTextsForRole(items, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "pragmatic spec") || strings.Contains(texts[0], "<model_switch>") {
-		t.Fatalf("personality change items = %#v", items)
-	}
 
 	newModel := &model.ModelInfo{Slug: "gpt-new", ModelMessages: modelMessages}
-	items, err = router.modelPersonalityWorldStateInputItems(string(threadID), newModel, "pragmatic", "custom base", true)
+	items, err = router.modelWorldStateInputItems(string(threadID), newModel, "custom base")
 	if err != nil {
 		t.Fatalf("model change world state: %v", err)
 	}
-	if texts := messageInputTextsForRole(items, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "<model_switch>") || !strings.Contains(texts[0], "BASE pragmatic spec") || strings.Contains(texts[0], "<personality_spec>") {
+	if texts := messageInputTextsForRole(items, "developer"); len(texts) != 1 || !strings.Contains(texts[0], "<model_switch>") || !strings.Contains(texts[0], "BASE {{ personality }}") || strings.Contains(texts[0], "<personality_spec>") {
 		t.Fatalf("model change items = %#v", items)
 	}
 	record, err := store.Load(threadID)
@@ -13098,9 +13093,11 @@ func TestRuntimeRouterModelPersonalityWorldStateDiffs(t *testing.T) {
 		t.Fatalf("DecodeWorldState() error = %v", err)
 	}
 	persistedModel, modelKnown := decodeWorldStateModel(state.Model)
-	persistedPersonality, personalityKnown := decodePersonalityWorldState(state.Personality)
-	if !modelKnown || persistedModel != "gpt-new" || !personalityKnown || persistedPersonality.Model != "gpt-new" || persistedPersonality.Personality == nil || *persistedPersonality.Personality != "pragmatic" {
-		t.Fatalf("persisted model/personality world state = %s", record.Metadata.WorldState)
+	if !modelKnown || persistedModel != "gpt-new" {
+		t.Fatalf("persisted model world state = %s", record.Metadata.WorldState)
+	}
+	if len(state.Personality) != 0 {
+		t.Fatalf("personality world state should no longer be written: %s", state.Personality)
 	}
 }
 
@@ -13573,7 +13570,7 @@ func TestCollaborationModeDefaultQuestionGuidanceLikeRust(t *testing.T) {
 	}
 }
 
-func TestRuntimeRouterTurnStartAppliesExplicitPersonality(t *testing.T) {
+func TestRuntimeRouterTurnStartIgnoresDeprecatedPersonality(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
@@ -13602,15 +13599,56 @@ func TestRuntimeRouterTurnStartAppliesExplicitPersonality(t *testing.T) {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
-	if !strings.Contains(request.Instructions, "Base friendly personality") ||
+	if !strings.Contains(request.Instructions, "Base {{ personality }}") ||
 		strings.Contains(request.Instructions, "<personality_spec>") ||
 		agentRequestInputItemsContain(request, "<personality_spec>") {
-		t.Fatalf("initial baked personality should not emit an update: %#v", request)
+		t.Fatalf("deprecated personality override should be ignored: %#v", request)
 	}
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
-func TestRuntimeRouterTurnStartChangesPersonalityMidThreadLikeRust(t *testing.T) {
+func TestRuntimeRouterTurnStartPersonalityNoneStripsBakedSection(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       personalitySectionModelServiceForRuntimeTest(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		Model: "personality-section-model",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, map[string]any{
+		"threadId":    threadID,
+		"prompt":      "hello",
+		"personality": "none",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	request := waitForRuntimeAgentRequest(t, agent)
+	if strings.Contains(request.Instructions, "# Personality") ||
+		strings.Contains(request.Instructions, "be pragmatic") ||
+		strings.Contains(request.Instructions, "<personality_spec>") ||
+		agentRequestInputItemsContain(request, "<personality_spec>") {
+		t.Fatalf("personality-none instructions = %q", request.Instructions)
+	}
+	if !strings.Contains(request.Instructions, "# Intro") {
+		t.Fatalf("personality-none instructions lost surrounding sections = %q", request.Instructions)
+	}
+	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterTurnStartIgnoresPersonalityChangeMidThread(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
@@ -13638,7 +13676,7 @@ func TestRuntimeRouterTurnStartChangesPersonalityMidThreadLikeRust(t *testing.T)
 		t.Fatalf("first turn start error: %+v", firstTurn.Error)
 	}
 	firstRequest := waitForRuntimeAgentRequest(t, agent)
-	if !strings.Contains(firstRequest.Instructions, "Base default personality") || strings.Contains(firstRequest.Instructions, "<personality_spec>") {
+	if !strings.Contains(firstRequest.Instructions, "Base {{ personality }}") || strings.Contains(firstRequest.Instructions, "<personality_spec>") {
 		t.Fatalf("first instructions = %q", firstRequest.Instructions)
 	}
 	firstTurnID := firstTurn.Result.(*turn.TurnStartResponse).Turn.ID
@@ -13653,10 +13691,10 @@ func TestRuntimeRouterTurnStartChangesPersonalityMidThreadLikeRust(t *testing.T)
 		t.Fatalf("second turn start error: %+v", secondTurn.Error)
 	}
 	secondRequest := waitForRuntimeAgentRequest(t, agent)
-	if !strings.Contains(secondRequest.Instructions, "Base friendly personality") ||
+	if !strings.Contains(secondRequest.Instructions, "Base {{ personality }}") ||
 		strings.Contains(secondRequest.Instructions, "<personality_spec>") ||
-		!agentRequestInputItemsContain(secondRequest, "<personality_spec>") {
-		t.Fatalf("personality change should emit a standalone developer item: %#v", secondRequest)
+		agentRequestInputItemsContain(secondRequest, "<personality_spec>") {
+		t.Fatalf("deprecated personality change should emit no developer item: %#v", secondRequest)
 	}
 	secondTurnID := secondTurn.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
@@ -13753,7 +13791,7 @@ func TestRuntimeRouterThreadResumeAppliesPersonalityOverrideLikeRust(t *testing.
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
 	if request.Model != modelID ||
-		!strings.Contains(request.Instructions, "Base friendly personality") ||
+		!strings.Contains(request.Instructions, "Base {{ personality }}") ||
 		strings.Contains(request.Instructions, "<personality_spec>") ||
 		agentRequestInputItemsContain(request, "<personality_spec>") {
 		t.Fatalf("agent request = %#v", request)
@@ -13762,7 +13800,7 @@ func TestRuntimeRouterThreadResumeAppliesPersonalityOverrideLikeRust(t *testing.
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 }
 
-func TestRuntimeRouterTurnStartUsesConfigPersonalityTemplate(t *testing.T) {
+func TestRuntimeRouterTurnStartIgnoresConfigPersonalityTemplate(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"personality-model\"\npersonality = \"pragmatic\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile config returned error: %v", err)
@@ -13793,43 +13831,44 @@ func TestRuntimeRouterTurnStartUsesConfigPersonalityTemplate(t *testing.T) {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
-	if request.Model != "personality-model" || !strings.Contains(request.Instructions, "Base pragmatic personality") {
+	if request.Model != "personality-model" || !strings.Contains(request.Instructions, "Base {{ personality }}") {
 		t.Fatalf("agent request = %#v", request)
 	}
 	if strings.Contains(request.Instructions, "<personality_spec>") {
-		t.Fatalf("config personality should be baked, not emitted as update: %q", request.Instructions)
+		t.Fatalf("retired config personality should be ignored: %q", request.Instructions)
 	}
 	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
-func TestRuntimeRouterStartupMigratesPragmaticPersonalityLikeRust(t *testing.T) {
+func TestRuntimeRouterStartupDoesNotMigratePersonality(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"personality-model\"\n"), 0o600); err != nil {
+	configBody := []byte("model = \"personality-model\"\n")
+	if err := os.WriteFile(config.ConfigPath(home), configBody, 0o600); err != nil {
 		t.Fatalf("WriteFile config returned error: %v", err)
 	}
-	writeRuntimeRouterPersonalityMigrationRollout(t, home)
+	writeRuntimeRouterMigrationRollout(t, home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
-	sink := NewNotificationBuffer()
-	agent := newRecordingRuntimeAgent("ok")
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
 		Config:       config.NewConfigService(home),
 		Turns:        turn.NewTurnService(),
-		Agent:        agent,
+		Agent:        newRecordingRuntimeAgent("ok"),
 		ThreadStatus: NewThreadStatusManager(),
 		Models:       personalityModelServiceForRuntimeTest(),
 	})
-	router.SetNotificationSink(sink)
+	t.Cleanup(func() { _ = router.Close() })
 
+	// Rust #32274 removed the personality migration: startup must not rewrite
+	// config.toml or leave a migration marker.
 	body, err := os.ReadFile(config.ConfigPath(home))
 	if err != nil {
 		t.Fatalf("ReadFile config returned error: %v", err)
 	}
-	if !strings.Contains(string(body), `personality = "pragmatic"`) {
-		t.Fatalf("config.toml after migration = %s", body)
+	if string(body) != string(configBody) {
+		t.Fatalf("config.toml changed at startup = %s", body)
 	}
-	if _, err := os.Stat(filepath.Join(home, config.PersonalityMigrationFilename)); err != nil {
-		t.Fatalf("personality migration marker stat error = %v", err)
+	if _, err := os.Stat(filepath.Join(home, ".personality_migration")); !os.IsNotExist(err) {
+		t.Fatalf("personality migration marker should not be written: %v", err)
 	}
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
@@ -13838,19 +13877,6 @@ func TestRuntimeRouterStartupMigratesPragmaticPersonalityLikeRust(t *testing.T) 
 	if threadStart.Error != nil {
 		t.Fatalf("thread start error: %+v", threadStart.Error)
 	}
-	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
-	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
-		ThreadID: threadID,
-		Prompt:   "hello",
-	}))
-	if turnStart.Error != nil {
-		t.Fatalf("turn start error: %+v", turnStart.Error)
-	}
-	request := waitForRuntimeAgentRequest(t, agent)
-	if !strings.Contains(request.Instructions, "Base pragmatic personality") || strings.Contains(request.Instructions, "<personality_spec>") {
-		t.Fatalf("instructions after migration = %q", request.Instructions)
-	}
-	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterThreadStartEmptyInstructionOverrideSuppressesModelInstructions(t *testing.T) {
@@ -25886,7 +25912,7 @@ func waitForImageGenerationAnalyticsEvent(t *testing.T, sink *recordingTurnEvent
 	}
 }
 
-func writeRuntimeRouterPersonalityMigrationRollout(t *testing.T, home string) {
+func writeRuntimeRouterMigrationRollout(t *testing.T, home string) {
 	t.Helper()
 	root := filepath.Join(home, rollout.SessionsSubdir, "2025", "01", "01")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -25939,6 +25965,19 @@ func personalityModelServiceForRuntimeTest() *model.ModelService {
 
 func agentRequestInputItemsContain(request model.AgentRequest, want string) bool {
 	return strings.Contains(inputItemText(request.InputItems), want)
+}
+
+func personalitySectionModelServiceForRuntimeTest() *model.ModelService {
+	return model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+		Slug:             "personality-section-model",
+		DisplayName:      "personality-section-model",
+		Visibility:       model.VisibilityVisible,
+		SupportedInAPI:   true,
+		BaseInstructions: "# Intro\nhello\n\n# Personality\nbe pragmatic\n\n# Tools\nuse tools\n",
+		ModelMessages: &model.ModelMessages{
+			InstructionsTemplate: "# Intro\nhello\n\n# Personality\nbe pragmatic\n\n# Tools\nuse tools\n",
+		},
+	}}}))
 }
 
 func slicesContainString(values []string, want string) bool {

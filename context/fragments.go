@@ -551,22 +551,6 @@ func (m *ModelSwitchInstructions) Body() string {
 	return fmt.Sprintf("The active model changed from `%s` to `%s`.", m.From, m.To)
 }
 
-type PersonalitySpecInstructions struct {
-	Spec string
-}
-
-func (p *PersonalitySpecInstructions) Role() string {
-	return RoleDeveloper
-}
-
-func (p *PersonalitySpecInstructions) Markers() (string, string) {
-	return "<personality_spec>", "</personality_spec>"
-}
-
-func (p *PersonalitySpecInstructions) Body() string {
-	return fmt.Sprintf(" The user has requested a new communication style. Future messages should adhere to the following personality: \n%s ", p.Spec)
-}
-
 type TokenBudgetContext struct {
 	Used      int
 	Limit     int
@@ -674,10 +658,6 @@ func (u *UserInstructions) ContentKind() string {
 
 func (m *ModelSwitchInstructions) ContentKind() string {
 	return "model_switch.instructions"
-}
-
-func (p *PersonalitySpecInstructions) ContentKind() string {
-	return "personality.spec_instructions"
 }
 
 func (c *ContextWindowGuidance) ContentKind() string {
