@@ -82,6 +82,29 @@ func TestValidateMCPServerTransportFieldsLikeRust(t *testing.T) {
 			table: map[string]any{"enabled": true},
 			want:  "invalid transport",
 		},
+		{
+			name:  "nested tool fields",
+			table: map[string]any{"command": "mcp", "tools": map[string]any{"search": map[string]any{"approval_mode": "prompt", "output_token_limit": 10}}},
+		},
+		{
+			name:  "unknown nested tool field",
+			table: map[string]any{"command": "mcp", "tools": map[string]any{"search": map[string]any{"approval_modes": "prompt"}}},
+			want:  "unknown configuration field `mcp_servers.srv.tools.search.approval_modes`",
+		},
+		{
+			name:  "env vars entries",
+			table: map[string]any{"command": "mcp", "env_vars": []any{"PATH", map[string]any{"name": "TOKEN", "source": "remote"}}},
+		},
+		{
+			name:  "unknown env vars field",
+			table: map[string]any{"command": "mcp", "env_vars": []any{map[string]any{"name": "TOKEN", "sources": "local"}}},
+			want:  "unknown configuration field `mcp_servers.srv.env_vars.sources`",
+		},
+		{
+			name:  "unsupported env vars source",
+			table: map[string]any{"command": "mcp", "env_vars": []any{map[string]any{"name": "TOKEN", "source": "vault"}}},
+			want:  "unsupported env_vars source `vault`; expected `local` or `remote`",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -96,7 +119,7 @@ func TestValidateMCPServerTransportFieldsLikeRust(t *testing.T) {
 			case !strings.Contains(err.Error(), tt.want):
 				t.Fatalf("error = %q, want it to contain %q", err, tt.want)
 			}
-			if !strings.Contains(err.Error(), "mcp_servers.srv:") {
+			if !strings.Contains(err.Error(), "mcp_servers.srv") {
 				t.Fatalf("error %q does not name the server", err)
 			}
 		})

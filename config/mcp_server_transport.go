@@ -32,6 +32,61 @@ func validateMCPServerTransportFields(value any) error {
 		if err := validateMCPServerTransportTable(table); err != nil {
 			return fmt.Errorf("mcp_servers.%s: %w", name, err)
 		}
+		if err := validateMCPServerNestedFields(name, table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// knownStrictMCPToolFields mirrors Rust's `McpServerToolConfig`
+// (`config/src/mcp_types.rs`, `#[schemars(deny_unknown_fields)]`).
+var knownStrictMCPToolFields = map[string]bool{"approval_mode": true, "output_token_limit": true}
+
+// validateMCPServerNestedFields covers the nested shapes Rust rejects at
+// deserialization: an unknown per-tool field, an unknown `env_vars` config
+// field, and an unsupported `env_vars` source.
+func validateMCPServerNestedFields(name string, table map[string]any) error {
+	if tools, ok := table["tools"].(map[string]any); ok {
+		toolNames := make([]string, 0, len(tools))
+		for toolName := range tools {
+			toolNames = append(toolNames, toolName)
+		}
+		sort.Strings(toolNames)
+		for _, toolName := range toolNames {
+			toolTable, ok := tools[toolName].(map[string]any)
+			if !ok {
+				continue
+			}
+			keys := make([]string, 0, len(toolTable))
+			for key := range toolTable {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				if !knownStrictMCPToolFields[key] {
+					return fmt.Errorf("unknown configuration field `mcp_servers.%s.tools.%s.%s`", name, toolName, key)
+				}
+			}
+		}
+	}
+	envVars, ok := table["env_vars"].([]any)
+	if !ok {
+		return nil
+	}
+	for _, raw := range envVars {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		for key := range entry {
+			if key != "name" && key != "source" {
+				return fmt.Errorf("unknown configuration field `mcp_servers.%s.env_vars.%s`", name, key)
+			}
+		}
+		if source := strings.TrimSpace(mcpTransportString(entry["source"])); source != "" && source != "local" && source != "remote" {
+			return fmt.Errorf("mcp_servers.%s: unsupported env_vars source `%s`; expected `local` or `remote`", name, source)
+		}
 	}
 	return nil
 }
