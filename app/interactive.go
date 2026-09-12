@@ -1422,6 +1422,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		FeedbackEnabled:         interactiveFeedbackEnabledFromConfig(values),
 		DisablePasteBurst:       loaded.DisablePasteBurst(),
 		AnimationsEnabled:       interactiveAnimationsEnabled(values),
+		StatusLineUseColors:     interactiveStatusLineUseColors(values),
 		Personality:             interactivePersonalityFromConfig(values),
 		Notifications:           interactiveNotificationSettingsFromConfig(values),
 		NotificationMethod:      interactiveNotificationMethodFromConfig(values),
@@ -1448,6 +1449,19 @@ func interactiveAnimationsEnabled(values map[string]any) *bool {
 	}
 	effective := codextui.EffectiveAnimations(configured)
 	return &effective
+}
+
+// interactiveStatusLineUseColors resolves the configured
+// `tui.status_line_use_colors` value (Rust #44857). The TUI config default is
+// enabled, matching Rust's `Tui::default` (`status_line_use_colors: true`).
+func interactiveStatusLineUseColors(values map[string]any) *bool {
+	enabled := true
+	if raw, ok := interactiveTUIConfig(values)["status_line_use_colors"]; ok {
+		if configured, ok := raw.(bool); ok {
+			enabled = configured
+		}
+	}
+	return &enabled
 }
 
 func interactivePluginMarketplacesFromConfig(values map[string]any) (map[string]bool, map[string]bool) {

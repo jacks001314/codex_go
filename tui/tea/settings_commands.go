@@ -288,6 +288,12 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	if msg.Result.AnimationsEnabled != nil {
 		m.animationsEnabled = *msg.Result.AnimationsEnabled
 	}
+	if msg.Result.StatusLineUseColors != nil {
+		m.statusLineUseColors = *msg.Result.StatusLineUseColors
+		if m.statusControls != nil {
+			m.statusControls.StatusLineUseThemeColors = m.statusLineUseColors
+		}
+	}
 	if msg.Result.Notifications != nil {
 		m.notificationSettings = notificationSettingsOrDefault(msg.Result.Notifications)
 	}

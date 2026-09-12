@@ -198,7 +198,10 @@ type SettingsWriteResult struct {
 	// AnimationsEnabled is the effective `tui.animations` value after the host
 	// motion preference is applied (Rust #44666). Nil preserves the current
 	// value.
-	AnimationsEnabled       *bool
+	AnimationsEnabled *bool
+	// StatusLineUseColors is the configured `tui.status_line_use_colors`
+	// value (Rust #44857). Nil preserves the current value.
+	StatusLineUseColors     *bool
 	Personality             chatwidget.Personality
 	Notifications           *chatwidget.NotificationsSetting
 	NotificationMethod      codextui.NotificationMethod
@@ -768,7 +771,10 @@ type Options struct {
 	// AnimationsEnabled is the effective `tui.animations` value: the configured
 	// preference combined with the host motion preference (Rust #44666). Nil
 	// defaults to enabled.
-	AnimationsEnabled           *bool
+	AnimationsEnabled *bool
+	// StatusLineUseColors is the configured `tui.status_line_use_colors` value
+	// (Rust #44857). Nil defaults to enabled.
+	StatusLineUseColors         *bool
 	OnReadDebugConfig           DebugConfigReaderFunc
 	OnReadGoal                  GoalReaderFunc
 	OnSetGoal                   GoalSetterFunc
@@ -1090,6 +1096,7 @@ type Model struct {
 	localDaemonSession       bool
 	localSession             bool
 	animationsEnabled        bool
+	statusLineUseColors      bool
 	agentsOverviewEmbedded   bool
 	onAgentsOverviewRefresh  AgentsOverviewRefreshFunc
 	onAgentsOverviewDispatch AgentsOverviewDispatchFunc
@@ -1393,6 +1400,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		localDaemonSession:              options.LocalDaemonSession,
 		localSession:                    options.LocalSession,
 		animationsEnabled:               options.AnimationsEnabled == nil || *options.AnimationsEnabled,
+		statusLineUseColors:             options.StatusLineUseColors == nil || *options.StatusLineUseColors,
 		agentsOverviewEmbedded:          options.AgentsOverviewEmbedded,
 		onAgentsOverviewRefresh:         options.OnAgentsOverviewRefresh,
 		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,
@@ -1517,6 +1525,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 	model.animEngine = anim.NewEngine(20)
 	model.overlays = overlay.NewOverlay(true)
 	model.statusControls = chatwidget.NewStatusControlsState(model.statusControlsRuntime())
+	// Seed the status-line color preference from `tui.status_line_use_colors`
+	// (Rust #44857).
+	model.statusControls.StatusLineUseThemeColors = model.statusLineUseColors
 	if options.StatusLineItems != nil {
 		model.statusControls.StatusLineConfigured = true
 		model.statusControls.StatusLineIDs = append([]string(nil), options.StatusLineItems...)

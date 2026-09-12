@@ -355,6 +355,9 @@ func (m *Model) ensureStatusControls() {
 	}
 	if m.statusControls == nil {
 		m.statusControls = chatwidget.NewStatusControlsState(m.statusControlsRuntime())
+		// The configured `tui.status_line_use_colors` seeds the status line and
+		// its setup preview (Rust #44857).
+		m.statusControls.StatusLineUseThemeColors = m.statusLineUseColors
 	}
 	m.syncStatusControlsRuntime()
 }
@@ -427,6 +430,15 @@ func (m *Model) renderStatusHeader() string {
 	}
 	result := m.refreshStatusControls()
 	if m.statusLineConfiguredByUser && m.statusControls != nil && m.statusControls.StatusLineConfigured && result.StatusLineRendered && strings.TrimSpace(result.StatusLineText) != "" {
+		if m.statusLineUseColors {
+			threadColor := ""
+			if threadID := strings.TrimSpace(m.State.ThreadID); threadID != "" {
+				threadColor = codextui.ThreadColorSGR(codextui.ThreadColorForTheme(threadID, m.tuiTheme))
+			}
+			return result.StatusLine.RenderStyled(threadColor, func(accent bottompane.StatusLineAccent) string {
+				return statusLineAccentSGR(m.tuiTheme, accent)
+			}, true)
+		}
 		return result.StatusLineText
 	}
 	if m.State != nil {

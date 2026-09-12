@@ -142,7 +142,7 @@ func (m *Model) wireAgentsOverviewThemeColors(view *agentsoverview.View) {
 	if view == nil {
 		return
 	}
-	view.UseThemeColors = true
+	view.UseThemeColors = m.statusLineUseColors
 	view.ThreadColor = func(threadID string) string {
 		return codextui.ThreadColorForTheme(threadID, m.tuiTheme)
 	}

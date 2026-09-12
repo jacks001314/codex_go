@@ -137,6 +137,7 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 	}
 	picker.ThemeID = m.tuiTheme
 	picker.Density = m.sessionPickerDensity
+	picker.UseThemeColors = m.statusLineUseColors
 	visible := picker.VisibleItems()
 	if len(visible) == 0 {
 		m.notice = "No sessions available to " + action.Label() + "."
