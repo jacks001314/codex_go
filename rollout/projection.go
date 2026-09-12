@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -57,7 +56,6 @@ func readProjectionStepsData(data []byte, startOffset uint64, expectedOrdinal ui
 	steps := make([]ProjectionStep, 0)
 	nextOrdinal := expectedOrdinal
 	nextOffset := startOffset
-	pendingRejected := uint64(0)
 	lineStart := startOffset
 	for _, physicalLine := range bytes.SplitAfter(data[:completeByteCount], []byte{'\n'}) {
 		if len(physicalLine) == 0 {
@@ -65,41 +63,57 @@ func readProjectionStepsData(data []byte, startOffset uint64, expectedOrdinal ui
 		}
 		lineEnd := lineStart + uint64(len(physicalLine))
 		if len(bytes.TrimSpace(physicalLine)) == 0 {
-			if pendingRejected == 0 {
-				nextOffset = lineEnd
-			}
+			nextOffset = lineEnd
 			lineStart = lineEnd
 			continue
 		}
 
 		var raw map[string]json.RawMessage
 		if err := json.Unmarshal(physicalLine, &raw); err != nil || raw == nil {
-			pendingRejected++
+			// Rust #42369: skip malformed records while advancing the byte
+			// checkpoint so later valid history still materializes.
+			nextOffset = lineEnd
 			lineStart = lineEnd
 			continue
 		}
 		ordinal, hasOrdinal := projectionOrdinal(raw["ordinal"])
 		line, recognized := projectionLine(physicalLine, raw)
 		if !recognized {
-			pendingRejected++
+			// Unknown records only advance the byte checkpoint; a writer that
+			// could not decode this line may reuse its ordinal, so keep the
+			// ordinal available for the next decoded line to resolve.
+			nextOffset = lineEnd
 			lineStart = lineEnd
 			continue
 		}
 		if !hasOrdinal {
-			return nil, startOffset, fmt.Errorf("paginated rollout line is missing an ordinal")
+			nextOffset = lineEnd
+			lineStart = lineEnd
+			continue
 		}
 		if validate != nil && validate(line) != nil {
-			pendingRejected++
+			// Rust #42369: an invalid record cannot contribute history, so skip
+			// its ordinal range instead of stalling the projection.
+			if ordinal == ^uint64(0) {
+				return nil, startOffset, errors.New("rollout ordinal exceeds integer range")
+			}
+			steps = append(steps, ProjectionStep{
+				Kind:                ProjectionSkippedOrdinalRange,
+				Ordinal:             nextOrdinal,
+				EndOrdinalExclusive: ordinal + 1,
+			})
+			nextOrdinal = ordinal + 1
+			nextOffset = lineEnd
 			lineStart = lineEnd
 			continue
 		}
 		if ordinal < nextOrdinal {
-			return nil, startOffset, fmt.Errorf("rollout projection expected ordinal %d, got %d", nextOrdinal, ordinal)
+			// Duplicate or regressed ordinal: skip the record and keep moving.
+			nextOffset = lineEnd
+			lineStart = lineEnd
+			continue
 		}
 		skipped := ordinal - nextOrdinal
-		if skipped > pendingRejected {
-			return nil, startOffset, fmt.Errorf("rollout projection expected ordinal %d, got %d; %d rejected rollout lines cannot cover that gap", nextOrdinal, ordinal, pendingRejected)
-		}
 		if skipped > 0 {
 			steps = append(steps, ProjectionStep{
 				Kind:                ProjectionSkippedOrdinalRange,
@@ -110,7 +124,6 @@ func readProjectionStepsData(data []byte, startOffset uint64, expectedOrdinal ui
 		if ordinal == ^uint64(0) {
 			return nil, startOffset, errors.New("rollout ordinal exceeds integer range")
 		}
-		pendingRejected = 0
 		line.Ordinal = &ordinal
 		steps = append(steps, ProjectionStep{
 			Kind:            ProjectionLine,

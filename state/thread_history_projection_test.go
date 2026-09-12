@@ -30,14 +30,17 @@ func TestMaterializeThreadHistorySkipsInferredMalformedOrdinalGapLikeRust(t *tes
 	}
 }
 
-func TestMaterializeThreadHistoryWaitsForUnprojectableLinesLikeRust(t *testing.T) {
+func TestMaterializeThreadHistorySkipsUnknownRecordsAndKeepsOrdinalLikeRust(t *testing.T) {
 	db, path := openProjectionFixture(t, historyMetaLine(0))
 	assertMaterialized(t, db, path)
 	before := requireProjectionState(t, db)
 	appendProjectionFixture(t, path, `{"timestamp":"2025-01-01T00:00:00Z","ordinal":1,"type":"future_item","payload":{}}`+"\n")
 	assertMaterialized(t, db, path)
-	if got := requireProjectionState(t, db); got != before {
-		t.Fatalf("unprojectable tail advanced state: before=%+v after=%+v", before, got)
+	// Rust #42369: the unknown record advances the byte checkpoint but leaves
+	// its ordinal pending for a valid retry.
+	info, _ := os.Stat(path)
+	if got := requireProjectionState(t, db); got.NextRolloutByteOffset != uint64(info.Size()) || got.NextRolloutOrdinal != before.NextRolloutOrdinal {
+		t.Fatalf("unprojectable tail state = %+v, want offset %d ordinal %d", got, info.Size(), before.NextRolloutOrdinal)
 	}
 	appendProjectionFixture(t, path,
 		historyTurnLine(1, "retry-turn", "2025-01-01T00:00:00Z")+
@@ -86,16 +89,17 @@ func TestMaterializeThreadHistoryUsesEventTimestampBeforeRolloutTimestampLikeRus
 	}
 }
 
-func TestMaterializeThreadHistoryDefersInvalidFallbackTimestampLikeRust(t *testing.T) {
+func TestMaterializeThreadHistorySkipsInvalidFallbackTimestampLikeRust(t *testing.T) {
 	db, path := openProjectionFixture(t, historyMetaLine(0))
 	assertMaterialized(t, db, path)
-	before := requireProjectionState(t, db)
 	appendProjectionFixture(t, path, `{"timestamp":"not-a-timestamp","ordinal":1,"type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"UserMessage","id":"user-bad","content":[]}}}`+"\n")
 	assertMaterialized(t, db, path)
-	if got := requireProjectionState(t, db); got != before {
-		t.Fatalf("invalid fallback timestamp advanced state: before=%+v after=%+v", before, got)
+	// Rust #42369: an invalid record cannot contribute history, so its ordinal
+	// range is skipped and the projection keeps moving.
+	if got := requireProjectionState(t, db); got.NextRolloutOrdinal != 2 {
+		t.Fatalf("invalid fallback timestamp state = %+v, want ordinal 2", got)
 	}
-	appendProjectionFixture(t, path, `{"timestamp":"also-invalid","ordinal":1,"type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","started_at_ms":7,"item":{"type":"UserMessage","id":"user-good","content":[]}}}`+"\n")
+	appendProjectionFixture(t, path, `{"timestamp":"also-invalid","ordinal":2,"type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","started_at_ms":7,"item":{"type":"UserMessage","id":"user-good","content":[]}}}`+"\n")
 	assertMaterialized(t, db, path)
 	var createdAt int64
 	if err := db.QueryRow(`SELECT created_at_ms FROM thread_items WHERE thread_id = ? AND item_id = ?`, "thread-1", "user-good").Scan(&createdAt); err != nil || createdAt != 7 {

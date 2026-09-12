@@ -213,13 +213,16 @@ func TestReadProjectionStepsDefersRejectedRetryLikeRust(t *testing.T) {
 	}
 }
 
-func TestReadProjectionStepsLeavesUnprojectableTailPendingLikeRust(t *testing.T) {
+func TestReadProjectionStepsSkipsUnknownRecordsAndKeepsOrdinalLikeRust(t *testing.T) {
 	path := writeProjectionFixture(t, `{"ordinal":0,"type":"future_item","payload":{}}`+"\n")
 	steps, nextOffset, err := ReadProjectionSteps(path, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(steps) != 0 || nextOffset != 0 {
+	// Rust #42369: unknown records only advance the byte checkpoint so a valid
+	// retry can reuse their ordinal.
+	info, _ := os.Stat(path)
+	if len(steps) != 0 || nextOffset != uint64(info.Size()) {
 		t.Fatalf("steps/offset = %#v/%d", steps, nextOffset)
 	}
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
@@ -235,27 +238,36 @@ func TestReadProjectionStepsLeavesUnprojectableTailPendingLikeRust(t *testing.T)
 	if len(steps) != 3 || steps[0].Ordinal != 0 || steps[1].Kind != ProjectionSkippedOrdinalRange || steps[1].Ordinal != 1 || steps[1].EndOrdinalExclusive != 2 || steps[2].Ordinal != 2 {
 		t.Fatalf("steps = %#v", steps)
 	}
+	info, _ = os.Stat(path)
+	if nextOffset != uint64(info.Size()) {
+		t.Fatalf("next offset = %d, want %d", nextOffset, info.Size())
+	}
+}
+
+func TestReadProjectionStepsSkipsUnexplainedOrdinalGapLikeRust(t *testing.T) {
+	path := writeProjectionFixture(t, "{not json}\n"+projectionLineJSON(3, "turn-3"))
+	steps, nextOffset, err := ReadProjectionSteps(path, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The malformed line is skipped and the forward gap becomes a skipped range.
+	if len(steps) != 2 || steps[0].Kind != ProjectionSkippedOrdinalRange || steps[0].Ordinal != 0 || steps[0].EndOrdinalExclusive != 3 || steps[1].Kind != ProjectionLine || steps[1].Ordinal != 3 {
+		t.Fatalf("steps = %#v", steps)
+	}
 	info, _ := os.Stat(path)
 	if nextOffset != uint64(info.Size()) {
 		t.Fatalf("next offset = %d, want %d", nextOffset, info.Size())
 	}
 }
 
-func TestReadProjectionStepsRejectsUnexplainedOrdinalGapLikeRust(t *testing.T) {
-	path := writeProjectionFixture(t, "{not json}\n"+projectionLineJSON(3, "turn-3"))
-	_, nextOffset, err := ReadProjectionSteps(path, 0, 0)
-	if err == nil || !strings.Contains(err.Error(), "cannot cover that gap") || nextOffset != 0 {
-		t.Fatalf("error/offset = %v/%d", err, nextOffset)
-	}
-}
-
-func TestReadProjectionStepsAdvancesOnlyBlankPrefixLikeRust(t *testing.T) {
+func TestReadProjectionStepsAdvancesPastBlankAndMalformedLinesLikeRust(t *testing.T) {
 	path := writeProjectionFixture(t, "\n \t\r\n{not json}\n")
 	steps, nextOffset, err := ReadProjectionSteps(path, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(steps) != 0 || nextOffset != 5 {
+	info, _ := os.Stat(path)
+	if len(steps) != 0 || nextOffset != uint64(info.Size()) {
 		t.Fatalf("steps/offset = %#v/%d", steps, nextOffset)
 	}
 }
