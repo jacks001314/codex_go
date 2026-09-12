@@ -129,3 +129,44 @@ func TestBacktrackSelectionForPromptRejectsMissingOrdinal(t *testing.T) {
 		t.Fatal("an out-of-range ordinal should not resolve")
 	}
 }
+
+func TestBacktrackSelectionRestoresPromptAttachmentsAndElements(t *testing.T) {
+	state := &codextui.State{}
+	state.SetThreadID("thread-1")
+	state.AddUserPromptMessage(
+		"describe this\n\nAttachments:\n- image: /tmp/chart.png",
+		"describe this",
+		[]string{"/tmp/chart.png"},
+		[]string{"https://example.test/remote.png"},
+		[]codextui.MessageTextElement{{Start: 0, End: 13, Placeholder: "describe this"}},
+	)
+	state.AddMessage(codextui.RoleAssistant, "ok")
+
+	var backtrack BacktrackState
+	backtrack.Prime("thread-1")
+	backtrack.NthUserMessage = 0
+	selection, ok := backtrack.BacktrackSelection("thread-1", state.Messages)
+	if !ok {
+		t.Fatal("the user prompt should resolve")
+	}
+	// The composer restores the prompt, not the rendered attachment listing.
+	if selection.Prompt.Text != "describe this" {
+		t.Fatalf("prompt text = %q, want the original prompt", selection.Prompt.Text)
+	}
+	if len(selection.Prompt.LocalImages) != 1 || selection.Prompt.LocalImages[0] != "/tmp/chart.png" {
+		t.Fatalf("local images = %#v", selection.Prompt.LocalImages)
+	}
+	if len(selection.Prompt.RemoteImageURLs) != 1 || selection.Prompt.RemoteImageURLs[0] != "https://example.test/remote.png" {
+		t.Fatalf("remote images = %#v", selection.Prompt.RemoteImageURLs)
+	}
+	if len(selection.Prompt.TextElements) != 1 {
+		t.Fatalf("text elements = %#v", selection.Prompt.TextElements)
+	}
+	element := selection.Prompt.TextElements[0]
+	if element.ByteRange.Start != 0 || element.ByteRange.End != 13 {
+		t.Fatalf("element range = %#v", element.ByteRange)
+	}
+	if element.Placeholder == nil || *element.Placeholder != "describe this" {
+		t.Fatalf("element placeholder = %#v", element.Placeholder)
+	}
+}

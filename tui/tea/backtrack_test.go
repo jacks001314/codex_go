@@ -8,6 +8,7 @@ import (
 
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
+	bottompane "codex_go/tui/bottom_pane"
 )
 
 func backtrackTestModel(t *testing.T, onPromptEdit PromptEditFunc, messages ...codextui.Message) *Model {
@@ -197,6 +198,111 @@ func TestModelBacktrackSideConversationRejected(t *testing.T) {
 	}
 	if text := modelMessageText(model); !strings.Contains(text, "Editing previous prompts is unavailable in side conversations.") {
 		t.Fatalf("missing side-conversation notice:\n%s", text)
+	}
+}
+
+func TestModelBacktrackRestoresPromptInsteadOfRenderedAttachmentListing(t *testing.T) {
+	var selection tuiapp.PromptEditSelection
+	onPromptEdit := func(prompt tuiapp.PromptEditSelection) (SessionResumeResponse, error) {
+		selection = prompt
+		return SessionResumeResponse{Summary: &codextui.SessionSummary{ThreadID: "thread-forked"}}, nil
+	}
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-1")
+	state.AddUserPromptMessage(
+		"describe\n\nAttachments:\n- image: /tmp/chart.png",
+		"describe",
+		[]string{"/tmp/chart.png"},
+		[]string{"https://example.test/remote.png"},
+		[]codextui.MessageTextElement{{Start: 0, End: 8, Placeholder: "describe"}},
+	)
+	model := NewModel(state, Options{Width: 80, Height: 24, OnPromptEdit: onPromptEdit})
+	model.backtrack.Prime("thread-1")
+	model.backtrack.NthUserMessage = 0
+
+	model.Update(key(bubbletea.KeyEnter))
+
+	if selection.Prompt.Text != "describe" || len(selection.Prompt.LocalImages) != 1 {
+		t.Fatalf("selection prompt = %#v", selection.Prompt)
+	}
+	if got := model.composer.Value(); got != "describe" {
+		t.Fatalf("composer = %q, want the original prompt (no attachment listing)", got)
+	}
+	if len(model.attachments) != 2 {
+		t.Fatalf("attachments = %#v, want the local and remote image", model.attachments)
+	}
+	if model.attachments[0].Kind != bottompane.AttachmentImage || model.attachments[0].Path != "/tmp/chart.png" {
+		t.Fatalf("local attachment = %#v", model.attachments[0])
+	}
+	if model.attachments[1].Kind != bottompane.AttachmentRemoteImage || model.attachments[1].URL != "https://example.test/remote.png" {
+		t.Fatalf("remote attachment = %#v", model.attachments[1])
+	}
+	if len(model.composerElements) != 1 || model.composerElements[0].Placeholder != "describe" {
+		t.Fatalf("composer elements = %#v", model.composerElements)
+	}
+}
+
+func TestModelSubmitRecordsRestorablePromptState(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:             80,
+		Height:            24,
+		DisablePasteBurst: true,
+		OnSubmitRequest:   func(SubmitRequest) bubbletea.Cmd { return nil },
+	})
+	model.attachments = []bottompane.ComposerAttachment{
+		{Kind: bottompane.AttachmentImage, Path: "/tmp/chart.png"},
+		{Kind: bottompane.AttachmentRemoteImage, URL: "https://example.test/r.png"},
+	}
+	typeText(t, model, "describe")
+	model.Update(key(bubbletea.KeyEnter))
+
+	var user *codextui.Message
+	for index := range model.State.Messages {
+		if model.State.Messages[index].Role == codextui.RoleUser {
+			user = &model.State.Messages[index]
+		}
+	}
+	if user == nil {
+		t.Fatal("submitting should append a user message")
+	}
+	// The rendered entry keeps the attachment listing for display.
+	if !strings.Contains(user.Text, "Attachments:") {
+		t.Fatalf("rendered user message = %q, want the attachment listing", user.Text)
+	}
+	// The restorable prompt is the submitted text and its attachments.
+	if user.UserPrompt != "describe" {
+		t.Fatalf("UserPrompt = %q, want describe", user.UserPrompt)
+	}
+	if len(user.UserPromptLocalImages) != 1 || user.UserPromptLocalImages[0] != "/tmp/chart.png" {
+		t.Fatalf("local images = %#v", user.UserPromptLocalImages)
+	}
+	if len(user.UserPromptRemoteImages) != 1 || user.UserPromptRemoteImages[0] != "https://example.test/r.png" {
+		t.Fatalf("remote images = %#v", user.UserPromptRemoteImages)
+	}
+}
+
+func TestUserPromptMessageStateCollectsAttachmentsAndElements(t *testing.T) {
+	request := SubmitRequest{
+		Prompt: "  hello  ",
+		Attachments: []bottompane.ComposerAttachment{
+			{Kind: bottompane.AttachmentImage, Path: "/tmp/a.png"},
+			{Kind: bottompane.AttachmentImage},
+			{Kind: bottompane.AttachmentRemoteImage, URL: "https://example.test/b.png"},
+		},
+		TextElements: []ComposerTextElement{{Start: 2, End: 7, Placeholder: "hello"}},
+	}
+	text, local, remote, elements := userPromptMessageState(request)
+	if text != "hello" {
+		t.Fatalf("text = %q, want the trimmed prompt", text)
+	}
+	if len(local) != 1 || local[0] != "/tmp/a.png" {
+		t.Fatalf("local = %#v", local)
+	}
+	if len(remote) != 1 || remote[0] != "https://example.test/b.png" {
+		t.Fatalf("remote = %#v", remote)
+	}
+	if len(elements) != 1 || elements[0].Start != 2 || elements[0].End != 7 || elements[0].Placeholder != "hello" {
+		t.Fatalf("elements = %#v", elements)
 	}
 }
 

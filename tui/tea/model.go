@@ -3276,7 +3276,8 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	m.Transcript.lastTurnError = ""
 	m.Transcript.needsFinalMessageSeparator = false
 	m.Transcript.activeAssistantDeltaItemID = ""
-	m.State.AddMessage(codextui.RoleUser, displayPrompt)
+	promptText, localImages, remoteImages, promptElements := userPromptMessageState(request)
+	m.State.AddUserPromptMessage(displayPrompt, promptText, localImages, remoteImages, promptElements)
 	if m.onSubmit == nil && m.onSubmitRequest == nil {
 		m.setStatus("pending")
 	} else {
@@ -3425,7 +3426,9 @@ func (m *Model) commitPendingSteers(count int) {
 		count = min(max(count, 1), len(m.pendingSteers))
 	}
 	for _, pending := range m.pendingSteers[:count] {
-		m.State.AddMessage(codextui.RoleUser, m.promptWithRequestAttachments(pending.Request))
+		display := m.promptWithRequestAttachments(pending.Request)
+		promptText, localImages, remoteImages, promptElements := userPromptMessageState(pending.Request)
+		m.State.AddUserPromptMessage(display, promptText, localImages, remoteImages, promptElements)
 	}
 	m.pendingSteers = append([]pendingSteerSubmission(nil), m.pendingSteers[count:]...)
 	m.refreshTranscript()

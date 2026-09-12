@@ -5,6 +5,7 @@ import (
 
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
+	"codex_go/turn"
 )
 
 // This file ports the pure half of Rust tui/src/app_backtrack.rs: the backtrack
@@ -143,10 +144,28 @@ func BacktrackSelectionForPrompt(threadID string, messages []codextui.Message, n
 	if !ok {
 		return PromptEditSelection{}, false
 	}
+	message := messages[index]
+	prompt := chatwidget.ThreadComposerState{
+		Text:            message.UserPrompt,
+		LocalImages:     append([]string(nil), message.UserPromptLocalImages...),
+		RemoteImageURLs: append([]string(nil), message.UserPromptRemoteImages...),
+	}
+	if prompt.Text == "" {
+		// Messages reconstructed from history or built by tests carry only the
+		// rendered transcript text.
+		prompt.Text = message.Text
+	}
+	for _, element := range message.UserPromptTextElements {
+		placeholder := element.Placeholder
+		prompt.TextElements = append(prompt.TextElements, turn.TextElement{
+			ByteRange:   turn.ByteRange{Start: uint(element.Start), End: uint(element.End)},
+			Placeholder: &placeholder,
+		})
+	}
 	return PromptEditSelection{
 		ThreadID:    strings.TrimSpace(threadID),
 		UserOrdinal: nth,
-		Prompt:      chatwidget.ThreadComposerState{Text: messages[index].Text},
+		Prompt:      prompt,
 	}, true
 }
 

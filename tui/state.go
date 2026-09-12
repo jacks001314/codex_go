@@ -23,6 +23,27 @@ type Message struct {
 	Role    MessageRole
 	Text    string
 	RawText string
+	// UserPrompt carries the original submitted prompt for a user message so
+	// backtracking can restore it exactly (Rust UserHistoryCell's
+	// message/local_image_paths/remote_image_urls/text_elements). Text above is
+	// the rendered transcript entry, which may append an attachment listing or
+	// other display-only markup.
+	UserPrompt string
+	// UserPromptLocalImages / UserPromptRemoteImages are the attachments the
+	// prompt was submitted with.
+	UserPromptLocalImages  []string
+	UserPromptRemoteImages []string
+	// UserPromptTextElements are the composer's structured byte-range elements
+	// relative to UserPrompt.
+	UserPromptTextElements []MessageTextElement
+}
+
+// MessageTextElement is a structured byte range inside a user prompt (a mention
+// or attachment placeholder) preserved for prompt restoration.
+type MessageTextElement struct {
+	Start       int
+	End         int
+	Placeholder string
 }
 
 type Options struct {
@@ -136,6 +157,29 @@ func (s *State) AddMessage(role MessageRole, text string) {
 		return
 	}
 	s.Messages = append(s.Messages, Message{Role: role, Text: text})
+	s.BumpMessagesRevision()
+}
+
+// AddUserPromptMessage appends a user message that remembers the prompt it was
+// submitted with, so backtracking can restore the prompt text, its attachments,
+// and its text elements rather than the rendered transcript entry (Rust
+// UserHistoryCell).
+func (s *State) AddUserPromptMessage(displayText string, prompt string, localImages []string, remoteImages []string, textElements []MessageTextElement) {
+	if s == nil {
+		return
+	}
+	displayText = strings.TrimSpace(displayText)
+	if displayText == "" {
+		return
+	}
+	s.Messages = append(s.Messages, Message{
+		Role:                   RoleUser,
+		Text:                   displayText,
+		UserPrompt:             prompt,
+		UserPromptLocalImages:  append([]string(nil), localImages...),
+		UserPromptRemoteImages: append([]string(nil), remoteImages...),
+		UserPromptTextElements: append([]MessageTextElement(nil), textElements...),
+	})
 	s.BumpMessagesRevision()
 }
 

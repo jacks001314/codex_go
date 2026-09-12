@@ -5,6 +5,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
@@ -287,8 +288,48 @@ func (m *Model) restoreComposerPrompt(prompt chatwidget.ThreadComposerState) {
 		}
 		m.attachments = append(m.attachments, bottompane.ComposerAttachment{Kind: bottompane.AttachmentRemoteImage, URL: url})
 	}
+	m.composerElements = nil
+	for _, element := range prompt.TextElements {
+		start := int(element.ByteRange.Start)
+		end := int(element.ByteRange.End)
+		placeholder := prompt.Text
+		if element.Placeholder != nil {
+			placeholder = *element.Placeholder
+		}
+		if start < 0 || end > len(prompt.Text) || start >= end {
+			continue
+		}
+		if placeholder != "" && prompt.Text[start:end] != placeholder {
+			continue
+		}
+		m.composerElements = append(m.composerElements, ComposerTextElement{Start: start, End: end, Placeholder: prompt.Text[start:end]})
+	}
 	m.extendComposerPasteWindow(m.currentTime())
 	m.refreshSlashPopup()
+}
+
+// userPromptMessageState extracts the restorable prompt state from a submission
+// so the transcript message can rebuild the composer draft when backtracking
+// (Rust UserHistoryCell).
+func userPromptMessageState(request SubmitRequest) (string, []string, []string, []codextui.MessageTextElement) {
+	var localImages, remoteImages []string
+	for _, attachment := range request.Attachments {
+		switch attachment.Kind {
+		case bottompane.AttachmentImage:
+			if strings.TrimSpace(attachment.Path) != "" {
+				localImages = append(localImages, attachment.Path)
+			}
+		case bottompane.AttachmentRemoteImage:
+			if strings.TrimSpace(attachment.URL) != "" {
+				remoteImages = append(remoteImages, attachment.URL)
+			}
+		}
+	}
+	var elements []codextui.MessageTextElement
+	for _, element := range request.TextElements {
+		elements = append(elements, codextui.MessageTextElement{Start: element.Start, End: element.End, Placeholder: element.Placeholder})
+	}
+	return strings.TrimSpace(request.Prompt), localImages, remoteImages, elements
 }
 
 // resetBacktrackState clears the state machine, the composer hint, and any
