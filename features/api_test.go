@@ -169,3 +169,31 @@ func marshalObjectForTest(t *testing.T, value any) map[string]any {
 	}
 	return payload
 }
+
+// TestFeatureStageMappingMatchesRust covers Rust catalog_processor.rs's
+// exhaustive stage mapping: only the Experimental lifecycle stage is reported as
+// beta; deprecated and removed flags keep their own wire stages (so a Beta-only
+// menu never offers them).
+func TestFeatureStageMappingMatchesRust(t *testing.T) {
+	cases := map[Stage]FeatureAPIStage{
+		StageExperimental:     FeatureStageBeta,
+		StageUnderDevelopment: FeatureStageUnderDevelopment,
+		StageStable:           FeatureStageStable,
+		StageDeprecated:       FeatureStageDeprecated,
+		StageRemoved:          FeatureStageRemoved,
+	}
+	for stage, want := range cases {
+		if got := stageFromFeature(stage); got != want {
+			t.Fatalf("stageFromFeature(%q) = %q, want %q", stage, got, want)
+		}
+	}
+	// The default catalog must report each registry entry's own stage.
+	for _, entry := range DefaultFeatureCatalog() {
+		if entry.Key == "remote_control" && entry.Stage != FeatureStageRemoved {
+			t.Fatalf("remote_control stage = %q, want removed", entry.Stage)
+		}
+		if entry.Key == "network_proxy" && entry.Stage != FeatureStageBeta {
+			t.Fatalf("network_proxy stage = %q, want beta", entry.Stage)
+		}
+	}
+}

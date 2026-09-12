@@ -189,6 +189,12 @@ func stageFromFeature(stage Stage) FeatureAPIStage {
 		return FeatureStageStable
 	case StageUnderDevelopment:
 		return FeatureStageUnderDevelopment
+	case StageDeprecated:
+		return FeatureStageDeprecated
+	case StageRemoved:
+		return FeatureStageRemoved
+	case StageExperimental:
+		return FeatureStageBeta
 	default:
 		return FeatureStageBeta
 	}
