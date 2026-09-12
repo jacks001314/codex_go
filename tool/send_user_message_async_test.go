@@ -91,6 +91,14 @@ func TestSendMessageToUserAsyncHandlerRegistersFreeformName(t *testing.T) {
 	if !strings.Contains(spec.Description, "report a critical blocker") {
 		t.Fatalf("free-form description missing blocker guidance: %q", spec.Description)
 	}
+	// Rust #42677 narrowed the guidance: requesting missing information is the
+	// structured request_user_input_async tool's job, not this one.
+	if strings.Contains(spec.Description, "ask for missing information") {
+		t.Fatalf("free-form description still carries the removed guidance: %q", spec.Description)
+	}
+	if spec.Description != defaultSendMessageToUserAsyncDescription {
+		t.Fatalf("free-form description = %q", spec.Description)
+	}
 	output, err := handler.Execute(context.Background(), &Invocation{
 		ToolName: PlainName(DefaultSendMessageToUserAsyncToolName),
 		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"message":"  blocker found  "}`},
