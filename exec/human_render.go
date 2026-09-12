@@ -15,13 +15,45 @@ import (
 type execHumanRenderer struct {
 	stderr   io.Writer
 	withAnsi bool
+	// showAgentReasoning mirrors Rust's `show_agent_reasoning`
+	// (`!hide_agent_reasoning`): reasoning items are rendered to stderr.
+	showAgentReasoning bool
+	// showRawAgentReasoning selects raw reasoning content over the summary
+	// (Rust show_raw_agent_reasoning).
+	showRawAgentReasoning bool
 }
 
 func newExecHumanRenderer(stderr io.Writer, colorFlag string) *execHumanRenderer {
+	return newExecHumanRendererWithReasoning(stderr, colorFlag, true, false)
+}
+
+// newExecHumanRendererWithReasoning builds the renderer with Rust's reasoning
+// flags resolved from the config.
+func newExecHumanRendererWithReasoning(
+	stderr io.Writer,
+	colorFlag string,
+	showAgentReasoning bool,
+	showRawAgentReasoning bool,
+) *execHumanRenderer {
 	return &execHumanRenderer{
-		stderr:   stderr,
-		withAnsi: execHumanRendererWithAnsi(colorFlag, stderr),
+		stderr:                stderr,
+		withAnsi:              execHumanRendererWithAnsi(colorFlag, stderr),
+		showAgentReasoning:    showAgentReasoning,
+		showRawAgentReasoning: showRawAgentReasoning,
 	}
+}
+
+// reasoningText ports Rust reasoning_text: raw content wins when enabled and
+// non-empty, otherwise the summary; an empty result renders nothing.
+func reasoningText(summary []string, content []string, showRawAgentReasoning bool) (string, bool) {
+	entries := summary
+	if showRawAgentReasoning && len(content) > 0 {
+		entries = content
+	}
+	if len(entries) == 0 {
+		return "", false
+	}
+	return strings.Join(entries, "\n"), true
 }
 
 func execHumanRendererWithAnsi(colorFlag string, stderr io.Writer) bool {
@@ -102,6 +134,17 @@ func (h *execHumanRenderer) renderItemCompleted(item protocol.ThreadItem) {
 		h.renderMCPToolCallCompleted(item)
 	case "web_search":
 		fmt.Fprintf(h.stderr, "%s %s\n", h.style(ansiBold, "web search:"), item.Query)
+	case "reasoning":
+		// Rust renders the reasoning item completion dimmed, and only when agent
+		// reasoning is not hidden.
+		if !h.showAgentReasoning {
+			return
+		}
+		text, ok := reasoningText(item.Summary, item.Content, h.showRawAgentReasoning)
+		if !ok || strings.TrimSpace(text) == "" {
+			return
+		}
+		fmt.Fprintln(h.stderr, h.style(ansiDim, text))
 	case "error":
 		fmt.Fprintf(h.stderr, "%s %s\n", h.style(ansiYellow+ansiBold, "warning:"), item.Message)
 	}

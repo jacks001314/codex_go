@@ -488,6 +488,56 @@ func TestExecEmptyToolModeResolvesToDirectLikeRust(t *testing.T) {
 	}
 }
 
+// TestReasoningTextMatchesRust mirrors Rust's reasoning_text vectors: the raw
+// content is used when enabled and non-empty, otherwise the summary.
+func TestReasoningTextMatchesRust(t *testing.T) {
+	text, ok := reasoningText([]string{"summary"}, []string{"raw"}, false)
+	if !ok || text != "summary" {
+		t.Fatalf("hidden raw reasoning = %q, ok=%v, want summary", text, ok)
+	}
+	text, ok = reasoningText([]string{"summary"}, []string{"raw"}, true)
+	if !ok || text != "raw" {
+		t.Fatalf("shown raw reasoning = %q, ok=%v, want raw", text, ok)
+	}
+	text, ok = reasoningText([]string{"a", "b"}, nil, true)
+	if !ok || text != "a\nb" {
+		t.Fatalf("summary join = %q, ok=%v", text, ok)
+	}
+	if _, ok := reasoningText(nil, nil, true); ok {
+		t.Fatal("empty reasoning must not render")
+	}
+}
+
+// TestExecHumanRendererRendersReasoningLikeRust covers reasoning item rendering
+// and the hide_agent_reasoning gate.
+func TestExecHumanRendererRendersReasoningLikeRust(t *testing.T) {
+	item := protocol.ThreadItem{ID: "r1", Type: "reasoning", Summary: []string{"thinking"}, Content: []string{"raw thinking"}}
+
+	var hidden bytes.Buffer
+	newExecHumanRendererWithReasoning(&hidden, "never", false, false).HandleEvent(protocol.ItemCompleted(item))
+	if hidden.String() != "" {
+		t.Fatalf("hidden reasoning rendered: %q", hidden.String())
+	}
+
+	var dimmed bytes.Buffer
+	newExecHumanRendererWithReasoning(&dimmed, "never", true, false).HandleEvent(protocol.ItemCompleted(item))
+	if got := dimmed.String(); got != "thinking\n" {
+		t.Fatalf("summary reasoning output = %q", got)
+	}
+
+	var raw bytes.Buffer
+	newExecHumanRendererWithReasoning(&raw, "never", true, true).HandleEvent(protocol.ItemCompleted(item))
+	if got := raw.String(); got != "raw thinking\n" {
+		t.Fatalf("raw reasoning output = %q", got)
+	}
+
+	var empty bytes.Buffer
+	newExecHumanRendererWithReasoning(&empty, "never", true, false).HandleEvent(protocol.ItemCompleted(protocol.ThreadItem{ID: "r2", Type: "reasoning"}))
+	if empty.String() != "" {
+		t.Fatalf("empty reasoning rendered: %q", empty.String())
+	}
+}
+
 func TestExecHumanRendererRendersRuntimeWarningLikeRust(t *testing.T) {
 	var stderr bytes.Buffer
 	renderer := newExecHumanRenderer(&stderr, "never")
@@ -5085,7 +5135,10 @@ func TestEmitFinalEventsIncludesAgentMessagesAfterStreaming(t *testing.T) {
 	}
 }
 
-func TestEmitFinalEventsDropsReasoningWithoutSummary(t *testing.T) {
+// TestEmitFinalEventsKeepsReasoningWithRawContentLikeRust: Rust's protocol
+// reasoning item carries both `summary` and `content`, so an item with only raw
+// reasoning content is still emitted; only an item with neither is dropped.
+func TestEmitFinalEventsKeepsReasoningWithRawContentLikeRust(t *testing.T) {
 	result := &turn.AgentLoopResult{
 		Response: &model.AgentResponse{
 			Items: []model.AgentItem{{
@@ -5110,8 +5163,14 @@ func TestEmitFinalEventsDropsReasoningWithoutSummary(t *testing.T) {
 		t.Fatalf("emitFinalEventsFromAgentResult() error = %v", err)
 	}
 	events := sink.Events()
-	if execEventItemIndex(events, "reasoning-empty") >= 0 || execEventItemIndex(events, "reasoning-blank") >= 0 {
-		t.Fatalf("empty reasoning should not emit item events: %#v", events)
+	index := execEventItemIndex(events, "reasoning-empty")
+	if index < 0 {
+		t.Fatalf("reasoning with raw content should emit an item event: %#v", events)
+	} else if events[index].Item == nil || len(events[index].Item.Content) == 0 || len(events[index].Item.Summary) != 0 {
+		t.Fatalf("raw reasoning item = %#v", events[index])
+	}
+	if execEventItemIndex(events, "reasoning-blank") >= 0 {
+		t.Fatalf("blank reasoning should not emit item events: %#v", events)
 	}
 	if execEventItemIndex(events, "msg-final") < 0 {
 		t.Fatalf("final message missing from events: %#v", events)

@@ -273,7 +273,13 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	eventSink := newExecEventSink(stdout, req.Exec.JSON)
 	eventSink.internalHandler = req.InternalEventHandler
 	if !req.Exec.JSON && stderr != nil {
-		eventSink.human = newExecHumanRenderer(stderr, execColorFlagValue(req.Exec))
+		eventSink.human = newExecHumanRendererWithReasoning(
+			stderr,
+			execColorFlagValue(req.Exec),
+			// Rust EventProcessorWithHumanOutput::create_with_ansi.
+			!cfg.HideAgentReasoning(),
+			cfg.ShowRawAgentReasoning(),
+		)
 	}
 	if err := eventSink.Emit(protocol.ThreadStarted(threadID)); err != nil {
 		return nil, err
@@ -2383,14 +2389,17 @@ func protocolItemFromStreamAgentItem(item *model.AgentItem) protocol.ThreadItem 
 	case "", "agent_message":
 		return protocol.AgentMessageItemWithPhase(firstNonEmpty(item.ID, "agent-message"), item.Text, agentMessagePhase(item))
 	case "reasoning":
-		text := reasoningSummaryText(item.Data)
-		if strings.TrimSpace(text) == "" {
+		summary := reasoningSummaryStrings(item.Data)
+		content := reasoningContentStrings(item.Data)
+		if len(summary) == 0 && len(content) == 0 {
 			return protocol.ThreadItem{}
 		}
 		return protocol.ThreadItem{
-			ID:   firstNonEmpty(item.ID, "reasoning"),
-			Type: "reasoning",
-			Text: text,
+			ID:      firstNonEmpty(item.ID, "reasoning"),
+			Type:    "reasoning",
+			Summary: summary,
+			Content: content,
+			Text:    reasoningSummaryText(item.Data),
 		}
 	case "image_generation_call":
 		return protocolImageGenerationItemFromAgentItem(item)
@@ -2576,7 +2585,26 @@ func reasoningSummaryStrings(data map[string]any) []string {
 	if data == nil {
 		return nil
 	}
-	value, ok := data["summary"]
+	return reasoningStringsFromKeys(data, "summary")
+}
+
+// reasoningContentStrings reads a reasoning item's raw content, mirroring the
+// app-server protocol's `reasoningContent`/`content` mapping.
+func reasoningContentStrings(data map[string]any) []string {
+	if data == nil {
+		return nil
+	}
+	return reasoningStringsFromKeys(data, "reasoningContent", "content")
+}
+
+func reasoningStringsFromKeys(data map[string]any, keys ...string) []string {
+	var value any
+	var ok bool
+	for _, key := range keys {
+		if value, ok = data[key]; ok {
+			break
+		}
+	}
 	if !ok {
 		return nil
 	}

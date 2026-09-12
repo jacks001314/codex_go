@@ -88,6 +88,12 @@ type ThreadItem struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
 
+	// Summary and Content carry a reasoning item's summary lines and raw
+	// reasoning content, mirroring Rust's ThreadItem::Reasoning { summary,
+	// content }.
+	Summary []string `json:"summary,omitempty"`
+	Content []string `json:"content,omitempty"`
+
 	Message               string                       `json:"message,omitempty"`
 	Text                  string                       `json:"text,omitempty"`
 	Phase                 string                       `json:"phase,omitempty"`

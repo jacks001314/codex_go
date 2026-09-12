@@ -91,6 +91,20 @@ func (c *Config) ShowRawAgentReasoning() bool {
 	return value
 }
 
+// HideAgentReasoning reports whether agent reasoning items should be hidden from
+// the human-readable output, mirroring Rust hide_agent_reasoning (default
+// false). `codex exec` shows reasoning when this is false.
+func (c *Config) HideAgentReasoning() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	value, ok := c.Values["hide_agent_reasoning"].(bool)
+	if !ok {
+		return false
+	}
+	return value
+}
+
 // SQLiteHome returns the configured SQLite data directory override, mirroring
 // Rust sqlite_home. Empty when unset (callers fall back to CODEX_SQLITE_HOME
 // and then the codex home).
