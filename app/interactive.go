@@ -739,6 +739,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
 		LocalSession:                true,
 		AnimationsEnabled:           settings.AnimationsEnabled,
+		QuestionEscBack:             settings.QuestionEscBack,
 		SessionPickerItems:          interactiveSessionPickerItems(root),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
@@ -1423,6 +1424,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		DisablePasteBurst:       loaded.DisablePasteBurst(),
 		AnimationsEnabled:       interactiveAnimationsEnabled(values),
 		StatusLineUseColors:     interactiveStatusLineUseColors(values),
+		QuestionEscBack:         interactiveQuestionEscBack(values),
 		Personality:             interactivePersonalityFromConfig(values),
 		Notifications:           interactiveNotificationSettingsFromConfig(values),
 		NotificationMethod:      interactiveNotificationMethodFromConfig(values),
@@ -1457,6 +1459,19 @@ func interactiveAnimationsEnabled(values map[string]any) *bool {
 func interactiveStatusLineUseColors(values map[string]any) *bool {
 	enabled := true
 	if raw, ok := interactiveTUIConfig(values)["status_line_use_colors"]; ok {
+		if configured, ok := raw.(bool); ok {
+			enabled = configured
+		}
+	}
+	return &enabled
+}
+
+// interactiveQuestionEscBack resolves the configured `tui.question_esc_back`
+// value (Rust #42889). The TUI config default is enabled, matching Rust's
+// `Tui::default` (`question_esc_back: true`).
+func interactiveQuestionEscBack(values map[string]any) *bool {
+	enabled := true
+	if raw, ok := interactiveTUIConfig(values)["question_esc_back"]; ok {
 		if configured, ok := raw.(bool); ok {
 			enabled = configured
 		}

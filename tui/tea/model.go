@@ -216,7 +216,10 @@ type SettingsWriteResult struct {
 	AnimationsEnabled *bool
 	// StatusLineUseColors is the configured `tui.status_line_use_colors`
 	// value (Rust #44857). Nil preserves the current value.
-	StatusLineUseColors     *bool
+	StatusLineUseColors *bool
+	// QuestionEscBack is the configured `tui.question_esc_back` value (Rust
+	// #42889). Nil preserves the current value.
+	QuestionEscBack         *bool
 	Personality             chatwidget.Personality
 	Notifications           *chatwidget.NotificationsSetting
 	NotificationMethod      codextui.NotificationMethod
@@ -797,7 +800,11 @@ type Options struct {
 	AnimationsEnabled *bool
 	// StatusLineUseColors is the configured `tui.status_line_use_colors` value
 	// (Rust #44857). Nil defaults to enabled.
-	StatusLineUseColors         *bool
+	StatusLineUseColors *bool
+	// QuestionEscBack is the configured `tui.question_esc_back` value (Rust
+	// #42889): Escape returns from an async question to the composer while
+	// preserving the answer draft. Nil defaults to enabled.
+	QuestionEscBack             *bool
 	OnReadDebugConfig           DebugConfigReaderFunc
 	OnReadGoal                  GoalReaderFunc
 	OnSetGoal                   GoalSetterFunc
@@ -1116,30 +1123,42 @@ type Model struct {
 	// vimHasLastDelete and vimLastDeleteWord record the last completed Vim
 	// delete for dot-repeat (`.`): vimLastDeleteWord mirrors the Rust
 	// VimCommandState::last_change word-delete edit (#40521).
-	vimHasLastDelete         bool
-	vimLastDeleteWord        bool
-	petRuntime               *petRuntime
-	petCodexHome             string
-	petEnv                   map[string]string
-	petFetch                 pets.AssetFetchFunc
-	petLoadPending           string
-	onSubmit                 SubmitFunc
-	onSubmitRequest          SubmitRequestFunc
-	onSteerRequest           SteerRequestFunc
-	onInterrupt              InterruptFunc
-	onInterruptMCPStartup    InterruptFunc
-	localDaemonSession       bool
-	localSession             bool
-	animationsEnabled        bool
-	statusLineUseColors      bool
-	agentsOverviewEmbedded   bool
-	onAgentsOverviewRefresh  AgentsOverviewRefreshFunc
-	onAgentsOverviewDispatch AgentsOverviewDispatchFunc
-	onAgentsOverviewStop     AgentsOverviewStopFunc
-	onAgentsOverviewRename   AgentsOverviewRenameFunc
-	onAgentsOverviewArchive  AgentsOverviewArchiveFunc
-	onAgentsOverviewDelete   AgentsOverviewDeleteFunc
-	agentsOverviewLifecycle  *agentsOverviewLifecycleRequest
+	vimHasLastDelete      bool
+	vimLastDeleteWord     bool
+	petRuntime            *petRuntime
+	petCodexHome          string
+	petEnv                map[string]string
+	petFetch              pets.AssetFetchFunc
+	petLoadPending        string
+	onSubmit              SubmitFunc
+	onSubmitRequest       SubmitRequestFunc
+	onSteerRequest        SteerRequestFunc
+	onInterrupt           InterruptFunc
+	onInterruptMCPStartup InterruptFunc
+	localDaemonSession    bool
+	localSession          bool
+	animationsEnabled     bool
+	statusLineUseColors   bool
+	questionEscBack       bool
+	// asyncQuestions retains pending async questions with their drafts
+	// (Rust #42891 bottom_pane.questions).
+	asyncQuestions bottompane.AsyncQuestions
+	// asyncQuestionMainDraft stashes the composer draft while the async question
+	// editor owns the composer, because Go uses one composer where Rust keeps a
+	// separate main composer and question editor.
+	asyncQuestionMainDraft string
+	// asyncQuestionAnswerInFlight marks an accepted question answer so the
+	// new-prompt question clearing (#44328) does not drop the remaining
+	// questions.
+	asyncQuestionAnswerInFlight bool
+	agentsOverviewEmbedded      bool
+	onAgentsOverviewRefresh     AgentsOverviewRefreshFunc
+	onAgentsOverviewDispatch    AgentsOverviewDispatchFunc
+	onAgentsOverviewStop        AgentsOverviewStopFunc
+	onAgentsOverviewRename      AgentsOverviewRenameFunc
+	onAgentsOverviewArchive     AgentsOverviewArchiveFunc
+	onAgentsOverviewDelete      AgentsOverviewDeleteFunc
+	agentsOverviewLifecycle     *agentsOverviewLifecycleRequest
 	// agentsOverviewLifecycleProgress is non-empty while an archive/delete RPC
 	// runs; navigation and task switching are blocked during that window
 	// (Rust #44433).
@@ -1436,6 +1455,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		localSession:                    options.LocalSession,
 		animationsEnabled:               options.AnimationsEnabled == nil || *options.AnimationsEnabled,
 		statusLineUseColors:             options.StatusLineUseColors == nil || *options.StatusLineUseColors,
+		questionEscBack:                 options.QuestionEscBack == nil || *options.QuestionEscBack,
+		asyncQuestions:                  *bottompane.NewAsyncQuestions(),
 		agentsOverviewEmbedded:          options.AgentsOverviewEmbedded,
 		onAgentsOverviewRefresh:         options.OnAgentsOverviewRefresh,
 		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,
@@ -2138,6 +2159,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if m.applyTranscriptNavigationKey(msg) {
 			return m, nil
 		}
+		if m.applyAsyncQuestionKey(msg, keySpec) {
+			return m, nil
+		}
 		if m.applyEditQueuedMessageKey(msg, keySpec) {
 			return m, nil
 		}
@@ -2175,6 +2199,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		if m.keyMatches("composer", "submit", keySpec) {
 			m.clearComposerPasteWindow()
+			if m.asyncQuestions.Expanded() && m.asyncQuestions.UnansweredCount() > 0 {
+				return m, m.submitAsyncQuestionAnswer(m.isUserTurnPendingOrRunning())
+			}
 			if m.isUserTurnPendingOrRunning() {
 				if cmd, handled := m.submitRunningSlashCommand(); handled {
 					return m, cmd
@@ -2185,6 +2212,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		if m.keyMatches("composer", "queue", keySpec) {
 			m.clearComposerPasteWindow()
+			if m.asyncQuestions.Expanded() && m.asyncQuestions.UnansweredCount() > 0 {
+				return m, m.submitAsyncQuestionAnswer(true)
+			}
 			if m.isUserTurnPendingOrRunning() {
 				if cmd, handled := m.submitRunningSlashCommand(); handled {
 					return m, cmd
@@ -2723,6 +2753,8 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	}
 	m.attachments = nil
 	m.composerMentionBindings = nil
+	// Rust #44328: a new prompt clears the previous prompt's pending questions.
+	m.clearAsyncQuestionsForNewPrompt()
 	return m.submitRequest(request, false)
 }
 
@@ -2885,6 +2917,11 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 	}
 	m.attachments = nil
 	m.composerMentionBindings = nil
+	// Rust #44328: queueing a new prompt clears the previous prompt's pending
+	// questions, while local commands preserve them.
+	if _, ok := codextui.ParseCommand(input); !ok {
+		m.clearAsyncQuestionsForNewPrompt()
+	}
 	m.queued = append(m.queued, queuedSubmission{
 		Request:      cloneSubmitRequest(request),
 		ParseCommand: parseCommand,
@@ -3523,6 +3560,11 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 			// without becoming the turn's final answer.
 			m.Transcript.finishAssistantPreambleBeforeTool()
 			m.applyHistoryCell(historycell.NewAgentMessageCell([]string{item.Text}, true))
+			// Rust #42891: structured async questions become pending local
+			// questions the composer can answer inline.
+			if questions := bottompane.ParseAsyncUserInputQuestions(item.Metadata["questions"]); len(questions) > 0 {
+				m.asyncQuestions.Append(item.ID, questions)
+			}
 		} else if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {
 			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
 		} else {
@@ -6317,6 +6359,7 @@ func (m *Model) renderBottomPane() string {
 		lines = append(lines, preview.RenderLines(max(m.width-2, 4))...)
 	}
 	lines = append(lines, m.bottom...)
+	lines = append(lines, m.renderAsyncQuestions()...)
 	return strings.Join(lines, "\n")
 }
 

@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -130,3 +131,63 @@ func TestSessionItemForAppStructuredAsyncQuestions(t *testing.T) {
 }
 
 var _ = session.Item{}
+
+// TestThreadItemAgentMessageWireShapeMatchesRust pins the v2
+// `ThreadItem::AgentMessage` wire shape: Rust's schema always serializes
+// `phase`, `memoryCitation`, `delivery`, and `questions`, with absent optionals
+// as explicit nulls. The async question payload rides on `questions` (#42178),
+// and async agent messages carry `delivery: "async"` (#39312).
+func TestThreadItemAgentMessageWireShapeMatchesRust(t *testing.T) {
+	questions := []any{
+		map[string]any{"title": "Which database?", "options": []any{"Postgres", "SQLite"}},
+		map[string]any{"title": "Deadline?"},
+	}
+	async := BuildThreadItem(session.Item{
+		ID:   "agent-message-1",
+		Type: "agent_message",
+		Role: "assistant",
+		Text: "need input",
+		Metadata: map[string]any{
+			"delivery":  "async",
+			"questions": questions,
+		},
+	})
+	decoded := marshaledThreadItem(t, async)
+	if decoded["delivery"] != "async" {
+		t.Fatalf("delivery = %#v, want async", decoded["delivery"])
+	}
+	payload, ok := decoded["questions"].([]any)
+	if !ok || len(payload) != 2 {
+		t.Fatalf("questions = %#v, want two entries", decoded["questions"])
+	}
+	first, _ := payload[0].(map[string]any)
+	if first["title"] != "Which database?" {
+		t.Fatalf("first question = %#v", first)
+	}
+
+	plain := marshaledThreadItem(t, BuildThreadItem(session.Item{
+		ID:   "agent-message-2",
+		Type: "agent_message",
+		Role: "assistant",
+		Text: "done",
+	}))
+	for _, key := range []string{"phase", "memoryCitation", "delivery", "questions"} {
+		value, present := plain[key]
+		if !present || value != nil {
+			t.Fatalf("%s = %#v (present=%v), want explicit null", key, value, present)
+		}
+	}
+}
+
+func marshaledThreadItem(t *testing.T, item ThreadItem) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(&item)
+	if err != nil {
+		t.Fatalf("marshal thread item: %v", err)
+	}
+	decoded := map[string]any{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal thread item: %v", err)
+	}
+	return decoded
+}

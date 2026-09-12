@@ -372,7 +372,13 @@ func NormalizeKeybindingSpec(raw string) (string, error) {
 		}
 	}
 	out = append(out, key)
-	return strings.Join(out, "-"), nil
+	normalized := strings.Join(out, "-")
+	// Rust normalizes Ctrl+5 to Ctrl+] for key matching and conflict detection
+	// (tui/src/key_hint.rs); some terminals encode Ctrl+] as Ctrl+5.
+	if normalized == "ctrl-5" {
+		normalized = "ctrl-]"
+	}
+	return normalized, nil
 }
 
 func HandleKeymapCommand(args string, config *KeymapConfig, apply KeymapEditApplier) (*KeymapCommandResult, error) {

@@ -992,6 +992,8 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			Text           string `json:"text"`
 			Phase          any    `json:"phase"`
 			MemoryCitation any    `json:"memoryCitation"`
+			Delivery       any    `json:"delivery"`
+			Questions      any    `json:"questions"`
 			ResponseID     string `json:"responseId,omitempty"`
 		}{
 			Type:           "agentMessage",
@@ -999,6 +1001,8 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			Text:           i.Text,
 			Phase:          threadItemAnyFromData(i.Data, "phase", "messagePhase"),
 			MemoryCitation: threadItemAnyFromData(i.Data, "memoryCitation", "memory_citation"),
+			Delivery:       agentMessageDelivery(i),
+			Questions:      threadItemAnyFromData(i.Data, "questions"),
 			ResponseID:     i.ResponseID,
 		})
 	case "plan":
@@ -3750,6 +3754,23 @@ func threadItemDelivery(item session.Item) string {
 		return strings.TrimSpace(value)
 	}
 	return ""
+}
+
+// agentMessageDelivery mirrors Rust's v2 `AgentMessage.delivery`
+// (`Option<AgentMessageDelivery>`, so absent serializes as an explicit null).
+// Rust only ever emits `async` (#39312), which the thread item carries in its
+// Delivery field (set by BuildThreadItem) or its data map.
+func agentMessageDelivery(item *ThreadItem) any {
+	if item == nil {
+		return nil
+	}
+	if delivery := strings.TrimSpace(item.Delivery); delivery != "" {
+		return delivery
+	}
+	if delivery, ok := item.Data["delivery"].(string); ok && strings.TrimSpace(delivery) != "" {
+		return strings.TrimSpace(delivery)
+	}
+	return nil
 }
 
 func threadItemContentFromSession(content []session.ContentPart) []ThreadItemContent {

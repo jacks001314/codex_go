@@ -294,6 +294,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 			m.statusControls.StatusLineUseThemeColors = m.statusLineUseColors
 		}
 	}
+	if msg.Result.QuestionEscBack != nil {
+		m.questionEscBack = *msg.Result.QuestionEscBack
+	}
 	if msg.Result.Notifications != nil {
 		m.notificationSettings = notificationSettingsOrDefault(msg.Result.Notifications)
 	}

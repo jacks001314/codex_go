@@ -1431,6 +1431,38 @@ func TestRemoteProtocolUserMessageMapsCommittedSteer(t *testing.T) {
 	}
 }
 
+// TestRemoteProtocolAgentMessageCarriesDeliveryAndQuestions pins the app-server
+// v2 agentMessage surface (Rust #39312/#42178): async delivery and the
+// structured async questions must reach the TUI item, where the pending
+// question editor consumes them.
+func TestRemoteProtocolAgentMessageCarriesDeliveryAndQuestions(t *testing.T) {
+	item := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"type":     "agentMessage",
+		"id":       "agent-message-1",
+		"text":     "Which database?",
+		"delivery": "async",
+		"questions": []any{
+			map[string]any{"title": "Which database?", "options": []any{"Postgres", "SQLite"}},
+		},
+	}, true)
+	if item.Type != "agent_message" || item.Delivery != "async" {
+		t.Fatalf("agent message item = %#v", item)
+	}
+	questions, ok := item.Metadata["questions"].([]any)
+	if !ok || len(questions) != 1 {
+		t.Fatalf("questions metadata = %#v", item.Metadata["questions"])
+	}
+
+	plain := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"type": "agentMessage",
+		"id":   "agent-message-2",
+		"text": "done",
+	}, true)
+	if plain.Delivery != "" || plain.Metadata != nil {
+		t.Fatalf("plain agent message = %#v", plain)
+	}
+}
+
 func TestInteractiveSubmitInputsIncludesSelectedSkill(t *testing.T) {
 	inputs := interactiveSubmitInputs(codextea.SubmitRequest{
 		Prompt:          "$imagegen",

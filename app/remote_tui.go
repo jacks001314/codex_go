@@ -365,6 +365,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		LocalDaemonSession:          interactiveRemoteEndpointIsLocal(endpoint),
 		LocalSession:                interactiveRemoteEndpointIsLocal(endpoint),
 		AnimationsEnabled:           settings.AnimationsEnabled,
+		QuestionEscBack:             settings.QuestionEscBack,
 		SessionPickerItems:          interactiveRemoteSessionPickerItems(ctx, root, endpoint),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
@@ -3913,7 +3914,18 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 	case "userMessage":
 		return protocol.ThreadItem{ID: id, Type: "user_message", Text: remoteUserMessageText(payload)}
 	case "agentMessage":
-		return protocol.AgentMessageItemWithPhase(id, remotePayloadString(payload, "text"), remotePayloadString(payload, "phase"))
+		item := protocol.AgentMessageItemWithPhase(id, remotePayloadString(payload, "text"), remotePayloadString(payload, "phase"))
+		// Rust v2 AgentMessage carries the async delivery marker and the
+		// structured async questions (#39312/#42178); the TUI keeps the
+		// questions on the item metadata for the pending-question editor.
+		item.Delivery = remotePayloadString(payload, "delivery")
+		if questions, ok := payload["questions"]; ok && questions != nil {
+			if item.Metadata == nil {
+				item.Metadata = map[string]any{}
+			}
+			item.Metadata["questions"] = questions
+		}
+		return item
 	case "commandExecution":
 		command := remotePayloadString(payload, "command")
 		status := remotePayloadString(payload, "status")

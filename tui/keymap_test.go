@@ -175,6 +175,8 @@ func TestNormalizeKeybindingSpecRustAliases(t *testing.T) {
 		"spacebar":                "space",
 		"F24":                     "f24",
 		"minus":                   "minus",
+		// Rust normalizes Ctrl+5 to Ctrl+] for matching and conflicts #42889.
+		"ctrl-5": "ctrl-]",
 	}
 	for input, want := range tests {
 		got, err := NormalizeKeybindingSpec(input)
@@ -284,5 +286,31 @@ func TestHandleKeymapCommandSupportsGlobalComposerFallback(t *testing.T) {
 	}
 	if !KeymapActionHasBinding(result.Config, "composer", "submit", "ctrl-s") {
 		t.Fatalf("global submit fallback is not active")
+	}
+}
+
+// TestAsyncQuestionKeymapActionsResolveDefaults pins the question navigation
+// defaults added with Rust #42889 and the updated edit_queued_message label.
+func TestAsyncQuestionKeymapActionsResolveDefaults(t *testing.T) {
+	config := NewKeymapConfig()
+	for action, want := range map[string]string{
+		"edit_queued_message": "alt-up,shift-left",
+		"prompt_stack_back":   "alt-down,shift-right",
+		"skip_question":       "ctrl-]",
+	} {
+		bindings, source, custom := ResolvedKeymapBindings(config, "chat", action)
+		if custom || source != "default" || strings.Join(bindings, ",") != want {
+			t.Fatalf("chat.%s resolved bindings = %#v source=%q custom=%v, want %s", action, bindings, source, custom, want)
+		}
+	}
+
+	var editDescription string
+	for _, action := range KeymapActions(KeymapActionFilter{}) {
+		if action.Context == "chat" && action.Action == "edit_queued_message" {
+			editDescription = action.Description
+		}
+	}
+	if !strings.Contains(editDescription, "Move up through questions") {
+		t.Fatalf("edit_queued_message description = %q", editDescription)
 	}
 }
