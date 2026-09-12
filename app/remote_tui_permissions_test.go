@@ -187,7 +187,7 @@ func TestRemoteTUIPermissionDiscoveryRequiresDefaultPermissions(t *testing.T) {
 // budget: an unresponsive server reports the retry message.
 func TestRemoteTUIPermissionDiscoveryTimesOut(t *testing.T) {
 	previous := remoteTUIpermissionDiscoveryTimeout
-	remoteTUIpermissionDiscoveryTimeout = 50 * time.Millisecond
+	remoteTUIpermissionDiscoveryTimeout = 250 * time.Millisecond
 	t.Cleanup(func() { remoteTUIpermissionDiscoveryTimeout = previous })
 
 	clientConn, serverConn := net.Pipe()
