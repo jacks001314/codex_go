@@ -2,25 +2,19 @@ package app
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"net/http"
+	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	bottompane "codex_go/tui/bottom_pane"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
+	"codex_go/utils"
 
 	"codex_go/appserver"
 	modelpkg "codex_go/model"
 )
-
-// maxPromptImageInputBytes bounds the local image snapshot the dashboard sends
-// to a remote workspace (Rust #44027 read_bounded_local_media). Rust resizes
-// before encoding; Go sends the source bytes under this sanity guard.
-const maxPromptImageInputBytes = 32 * 1024 * 1024
 
 // agentsOverviewTaskInputs builds the first-turn inputs for a dashboard
 // background task: image attachments first, then the prompt text, matching
@@ -61,42 +55,45 @@ func agentsOverviewTaskInputs(request codextea.SubmitRequest, snapshotLocalImage
 }
 
 // localImageDataURL snapshots a local image into a portable data URL so a
-// remote workspace can read it (Rust #44027 snapshot_local_user_input).
+// remote workspace can read it (Rust #44027 snapshot_local_user_input): the
+// bytes are read under Rust's prompt-image bound, then decoded and either
+// preserved byte-for-byte (PNG/JPEG/WebP within 2048px) or resized/encoded.
 func localImageDataURL(path string) (string, error) {
-	info, err := os.Stat(path)
+	data, err := readBoundedPromptImage(path)
 	if err != nil {
 		return "", err
 	}
-	if info.Size() > maxPromptImageInputBytes {
-		return "", fmt.Errorf("image input exceeds %d bytes", maxPromptImageInputBytes)
-	}
-	data, err := os.ReadFile(path)
+	encoded, err := utils.LoadForPromptBytes(path, data, utils.ModeResizeToFit)
 	if err != nil {
 		return "", err
 	}
-	if len(data) > maxPromptImageInputBytes {
-		return "", fmt.Errorf("image input exceeds %d bytes", maxPromptImageInputBytes)
-	}
-	return "data:" + imageMIMEForData(path, data) + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+	return utils.DataURLFromBytes(encoded.Mime, encoded.Bytes), nil
 }
 
-// imageMIMEForData resolves the image MIME type from the extension, falling
-// back to content sniffing for unknown extensions.
-func imageMIMEForData(path string, data []byte) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".png":
-		return "image/png"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
+// readBoundedPromptImage mirrors Rust read_bounded_local_media for image input:
+// a file larger than the prompt-image bound fails without being loaded whole.
+func readBoundedPromptImage(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
 	}
-	if detected := strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0]); strings.HasPrefix(detected, "image/") {
-		return detected
+	maxBytes := int64(utils.MaxPromptImageInputBytes)
+	if info.Size() > maxBytes {
+		return nil, fmt.Errorf("image input exceeds %d bytes", maxBytes)
 	}
-	return "application/octet-stream"
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("image input exceeds %d bytes", maxBytes)
+	}
+	return data, nil
 }
 
 // rejectTextOnlyModelForImages fails the dashboard task before a thread starts
