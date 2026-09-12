@@ -15,6 +15,33 @@ func editorKey(keyType bubbletea.KeyType) bubbletea.KeyMsg {
 	return bubbletea.KeyMsg{Type: keyType}
 }
 
+// TestEditorKillBufferSurvivesNewSessionLikeRust pins #44742: replacing the
+// composer for a new session keeps the editor kill buffer, so a line killed
+// before the switch can still be yanked into the replacement composer.
+func TestEditorKillBufferSurvivesNewSessionLikeRust(t *testing.T) {
+	m := vimTestModel("saved line")
+	m.composer.SetCursor(len("saved line"))
+	updated, _ := m.Update(editorKey(bubbletea.KeyCtrlU))
+	m = updated.(*Model)
+	if got := m.composerKillBuffer; got != "saved line" {
+		t.Fatalf("kill buffer = %q, want saved line", got)
+	}
+	m.State.SetThreadID("thread-old")
+
+	m.startFreshNamedSession("", "Started a new local thread.")
+	if got := m.composerKillBuffer; got != "saved line" {
+		t.Fatalf("kill buffer after /new = %q, want saved line", got)
+	}
+
+	m.composer.SetValue("new line")
+	m.composer.SetCursor(len("new line"))
+	updated, _ = m.Update(editorKey(bubbletea.KeyCtrlY))
+	m = updated.(*Model)
+	if got := m.composer.Value(); got != "new linesaved line" {
+		t.Fatalf("value after yank = %q, want new linesaved line", got)
+	}
+}
+
 // TestEditorKillLineEndAndStartLikeRust pins ctrl-k (kill to line end) and
 // ctrl-u (kill to line start) on a single line.
 func TestEditorKillLineEndAndStartLikeRust(t *testing.T) {
