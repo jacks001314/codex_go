@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/envutil"
 )
 
 const InstalledMarketplacesDir = ".tmp/marketplaces"
@@ -259,7 +262,19 @@ func runMarketplaceGit(cwd *string, automatic bool, args ...string) error {
 func runMarketplaceGitOutput(cwd *string, automatic bool, args ...string) (string, error) {
 	command := exec.Command("git", args...)
 	if automatic {
-		command.Env = isolatedPluginGitEnv()
+		// Rust #42324: resolve the Git executable from trusted installation
+		// directories and give it a trusted PATH so a workspace-controlled PATH
+		// cannot inject the main executable or its transports/credential helpers.
+		gitBinary, ok := envutil.TrustedExecutable("git")
+		if !ok {
+			return "", errors.New("no Git executable found in trusted installation directories")
+		}
+		env, ok := isolatedPluginGitEnv()
+		if !ok {
+			return "", errors.New("failed to construct a trusted Git PATH")
+		}
+		command = exec.Command(gitBinary, args...)
+		command.Env = env
 	} else {
 		command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	}
@@ -279,8 +294,14 @@ var isolatedGitConfigPathValue string
 // isolatedPluginGitEnv returns an environment for automatic plugin git
 // operations with repository-scoped Git configuration variables removed and
 // global/system config pointed at an empty trusted file so ambient config
-// cannot redirect remotes or invoke helpers (Rust #39520).
-func isolatedPluginGitEnv() []string {
+// cannot redirect remotes or invoke helpers (Rust #39520). The PATH is rebuilt
+// from trusted installation directories and Git transport override variables
+// are dropped (Rust #42324); ok is false when no trusted directories exist.
+func isolatedPluginGitEnv() ([]string, bool) {
+	trustedPath, ok := envutil.TrustedSystemPath()
+	if !ok {
+		return nil, false
+	}
 	isolatedGitConfigOnce.Do(func() {
 		dir, err := os.MkdirTemp("", "codex-plugin-git-")
 		if err != nil {
@@ -299,6 +320,8 @@ func isolatedPluginGitEnv() []string {
 		switch {
 		case name == "GIT_CONFIG_COUNT", name == "GIT_CONFIG_PARAMETERS",
 			name == "GIT_CONFIG_SYSTEM", name == "GIT_CONFIG_GLOBAL",
+			name == "GIT_EXEC_PATH", name == "GIT_TEMPLATE_DIR", name == "DEVELOPER_DIR",
+			strings.EqualFold(name, "PATH"),
 			strings.HasPrefix(name, "GIT_CONFIG_KEY_"), strings.HasPrefix(name, "GIT_CONFIG_VALUE_"):
 			continue
 		default:
@@ -309,5 +332,7 @@ func isolatedPluginGitEnv() []string {
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL="+isolatedGitConfigPathValue,
-	)
+		"PATH="+trustedPath,
+		"NoDefaultCurrentDirectoryInExePath=1",
+	), true
 }
