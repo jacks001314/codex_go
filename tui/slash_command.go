@@ -34,6 +34,7 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "compact", Command: CommandCompact, Description: "summarize conversation to prevent hitting the context limit"},
 		{Name: "clear", Command: CommandClear, Description: "clear the visible transcript"},
 		{Name: "copy", Command: CommandCopy, Description: "copy last response as markdown"},
+		{Name: "export", Command: CommandExport, Description: "export the conversation as markdown"},
 		{Name: "raw", Command: CommandRaw, Description: "toggle raw scrollback mode for copy-friendly terminal selection"},
 		{Name: "diff", Command: CommandDiff, Description: "show git diff (including untracked files)"},
 		{Name: "ps", Command: CommandPs, Description: "list background terminals"},

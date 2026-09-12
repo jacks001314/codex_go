@@ -820,6 +820,14 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		return m.applyCopyTargetModalOption(response.OptionID)
 	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.TranscriptExportPickerViewID {
+		m.modal = nil
+		if cancelled {
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyTranscriptExportModalOption(response.OptionID)
+	}
 	if modal.kind == ModalKindGeneric && modal.id == chatwidget.VoicePickerViewID {
 		m.modal = nil
 		if cancelled {

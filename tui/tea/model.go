@@ -833,6 +833,10 @@ type Options struct {
 	OnAgentsOverviewDelete   AgentsOverviewDeleteFunc
 	OnStartAgentsDaemon      AgentsDaemonStartFunc
 	OnClipboardWrite         func(text string) error
+	// OnExportTranscript renders the active conversation as Markdown for
+	// /export (Rust transcript_export.rs). A nil hook leaves /export
+	// unavailable for this runtime.
+	OnExportTranscript TranscriptExportFunc
 	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
 	// /voice unavailable for this runtime.
 	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
@@ -1355,6 +1359,7 @@ type Model struct {
 	backgroundThreadEvents            map[string][]protocol.ThreadEvent
 	clipboardWrite                    func(text string) error
 	clipboardWriteRich                func(html string, text string) error
+	onExportTranscript                TranscriptExportFunc
 	onReadTokenActivity               TokenActivityReaderFunc
 	onReadRateLimitResetCredits       RateLimitResetCreditsReaderFunc
 	onConsumeRateLimitResetCredit     RateLimitResetCreditConsumerFunc
@@ -1663,6 +1668,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		backgroundThreadEvents:          map[string][]protocol.ThreadEvent{},
 		clipboardWrite:                  clipboardWrite,
 		clipboardWriteRich:              clipboardWriteRich,
+		onExportTranscript:              options.OnExportTranscript,
 		onReadTokenActivity:             options.OnReadTokenActivity,
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,
 		onConsumeRateLimitResetCredit:   options.OnConsumeRateLimitResetCredit,
@@ -5824,6 +5830,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		m.startFreshNamedSession(invocation.Args, "Started a fresh session.")
 	case codextui.CommandCopy:
 		m.copyLastAgentResponse()
+	case codextui.CommandExport:
+		return m.applyExportCommand(invocation.Args)
 	case codextui.CommandRaw:
 		return m.applyRawOutputCommand(invocation.Args)
 	case codextui.CommandDiff:

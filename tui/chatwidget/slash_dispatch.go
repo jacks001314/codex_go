@@ -396,6 +396,7 @@ func CommandSupportsInlineArgs(command codextui.Command) bool {
 		codextui.CommandIde,
 		codextui.CommandKeymap,
 		codextui.CommandMcp,
+		codextui.CommandExport,
 		codextui.CommandRaw,
 		codextui.CommandUsage,
 		codextui.CommandPets,
@@ -412,6 +413,7 @@ func CommandSupportsInlineArgs(command codextui.Command) bool {
 func CommandAvailableInSideConversation(command codextui.Command) bool {
 	switch command {
 	case codextui.CommandCopy,
+		codextui.CommandExport,
 		codextui.CommandRaw,
 		codextui.CommandDiff,
 		codextui.CommandMention,
@@ -433,6 +435,7 @@ func CommandAvailableDuringTask(command codextui.Command) bool {
 		codextui.CommandWorktree,
 		codextui.CommandInit,
 		codextui.CommandCompact,
+		codextui.CommandExport,
 		codextui.CommandKeymap,
 		codextui.CommandVim,
 		codextui.CommandElevateSandbox,

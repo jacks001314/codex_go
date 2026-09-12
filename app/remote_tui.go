@@ -382,6 +382,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint),
 		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state),
+		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint),
 		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),
 		OnLogout:                    interactiveRemoteLogoutHandler(ctx, endpoint),
 		KeymapConfig:                keymapConfig,

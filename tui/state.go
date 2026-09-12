@@ -751,6 +751,7 @@ const (
 	CommandCompact          Command = "compact"
 	CommandClear            Command = "clear"
 	CommandCopy             Command = "copy"
+	CommandExport           Command = "export"
 	CommandRaw              Command = "raw"
 	CommandDiff             Command = "diff"
 	CommandPs               Command = "ps"
@@ -860,6 +861,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandClear, Args: args, Name: name}, true
 	case "/copy":
 		return &CommandInvocation{Command: CommandCopy, Args: args, Name: name}, true
+	case "/export":
+		return &CommandInvocation{Command: CommandExport, Args: args, Name: name}, true
 	case "/raw":
 		return &CommandInvocation{Command: CommandRaw, Args: args, Name: name}, true
 	case "/diff":
