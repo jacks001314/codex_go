@@ -915,9 +915,13 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnVoiceAppendSpeech: interactiveLocalSpeechSender(nil, func() string {
 			return state.ThreadID
 		}),
-		KeymapConfig:               interactiveKeymapConfig(root),
-		OnKeymapEdit:               interactiveKeymapEditHandler(root),
-		OnWriteSettings:            interactiveSettingsWriteHandler(root),
+		KeymapConfig:    interactiveKeymapConfig(root),
+		OnKeymapEdit:    interactiveKeymapEditHandler(root),
+		OnWriteSettings: interactiveSettingsWriteHandler(root),
+		// /experimental is populated from the embedded app server's catalog
+		// resolved through the same config service (Rust
+		// experimental_features::fetch).
+		OnReadExperimentalFeatures: interactiveLocalExperimentalFeatures(root),
 		OnWriteMemorySettings:      interactiveMemorySettingsWriteHandler(root),
 		OnResetMemories:            interactiveMemoryResetHandler(),
 		OnSubmitFeedback:           interactiveFeedbackSubmitHandler(),

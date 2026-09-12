@@ -932,6 +932,24 @@
             "verifier": "TestTaskMentionHistoryRoundTripsLikeRust;TestTaskReferenceContextMergesWithIDEContextLikeRust;TestTaskReferenceHeadingInsideTitleLikeRust;TestSearchCatalogTaskCandidatesMatchRust;TestModelTaskMentionSearchPopulatesTaskCandidatesLikeRust;TestSearchTaskMentionsMatchesRust;TestSearchTaskMentionsWindowsCWDFirstMatchesRust;TestApplySubmitTaskReferencesEncodesTaskMentionsLikeRust"
         },
         {
+            "id": "experimental-feature-catalog",
+            "kind": "source-surface",
+            "rustPaths": [
+                "tui/src/experimental_features.rs",
+                "app-server/src/request_processors/catalog_processor.rs",
+                "app-server-protocol/src/protocol/v2/experimental_feature.rs"
+            ],
+            "goPaths": [
+                "app/experimental_features.go",
+                "app/experimental_features_test.go",
+                "tui/tea/experimental_features.go",
+                "features/api.go"
+            ],
+            "phase": "P2",
+            "status": "complete",
+            "verifier": "TestFetchExperimentalFeaturesMatchesRust;TestFetchExperimentalFeaturesGuardsMatchRust;TestModelExperimentalMenuUsesServerCatalogLikeRust;TestModelExperimentalWritesClearDefaultOverridesLikeRust;TestModelExperimentalReadbackWarningLikeRust;TestFeatureStageMappingMatchesRust"
+        },
+        {
             "id": "agents-dashboard-command",
             "kind": "source-surface",
             "rustPaths": [

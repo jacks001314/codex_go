@@ -59,24 +59,44 @@ func (m *Model) applyFastServiceTier() bubbletea.Cmd {
 	return m.writeSettings(settingsWriteKindServiceTier, []SettingsEdit{{KeyPath: "service_tier", Value: configValue}})
 }
 
-func (m *Model) openExperimentalMenu() {
+// openExperimentalMenu opens the /experimental popup. Rust populates it from the
+// app server's experimentalFeature/list catalog (starting with an empty list and
+// a loading status); the compiled registry is only a fallback when no reader is
+// wired.
+func (m *Model) openExperimentalMenu() bubbletea.Cmd {
 	if m == nil {
-		return
+		return nil
 	}
-	view := chatwidget.NewExperimentalFeaturesView(m.featureSettings)
-	m.experimentalItems = append([]chatwidget.ExperimentalFeatureOption(nil), view.Items...)
-	if len(view.Items) == 0 {
-		m.notice = "No experimental features available."
-		m.refreshTranscript()
-		return
+	m.experimentalItems = nil
+	m.experimentalFeaturesStatus = ""
+	m.experimentalFeaturesGeneration++
+	generation := m.experimentalFeaturesGeneration
+	var cmd bubbletea.Cmd
+	if m.onReadExperimentalFeatures != nil {
+		m.experimentalFeaturesStatus = experimentalFeaturesLoadingStatus
+		reader := m.onReadExperimentalFeatures
+		threadID := m.currentThreadID()
+		cmd = func() bubbletea.Msg {
+			entries, err := reader(threadID)
+			return ExperimentalFeaturesResultMsg{Generation: generation, Features: entries, Err: err}
+		}
+	} else {
+		view := chatwidget.NewExperimentalFeaturesView(m.featureSettings)
+		m.experimentalItems = append([]chatwidget.ExperimentalFeatureOption(nil), view.Items...)
+		if len(view.Items) == 0 {
+			m.notice = "No experimental features available."
+			m.refreshTranscript()
+			return nil
+		}
 	}
 	m.openModal(ModalRequestMsg{
 		ID:      "experimental",
 		Kind:    ModalKindExperimental,
-		Title:   view.Title,
-		Body:    "Toggle experimental features. Changes are saved to config.toml.",
+		Title:   "Experimental Features",
+		Body:    experimentalModalBody(m.experimentalFeaturesStatus),
 		Options: experimentalModalOptions(m.experimentalItems),
 	})
+	return cmd
 }
 
 func (m *Model) applyExperimentalCommand(args string) bubbletea.Cmd {
@@ -85,8 +105,7 @@ func (m *Model) applyExperimentalCommand(args string) bubbletea.Cmd {
 	}
 	fields := strings.Fields(args)
 	if len(fields) == 0 {
-		m.openExperimentalMenu()
-		return nil
+		return m.openExperimentalMenu()
 	}
 	key := strings.TrimSpace(fields[0])
 	if !experimentalFeatureVisible(key) {
@@ -105,9 +124,10 @@ func (m *Model) applyExperimentalCommand(args string) bubbletea.Cmd {
 		enabled = parsed
 	}
 	return m.setExperimentalFeatures([]chatwidget.ExperimentalFeatureOption{{
-		Key:     key,
-		Name:    key,
-		Enabled: enabled,
+		Key:            key,
+		Name:           key,
+		Enabled:        enabled,
+		DefaultEnabled: features.Defaults()[key],
 	}})
 }
 
@@ -145,7 +165,6 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 	}
 	edits := make([]SettingsEdit, 0, len(items))
 	changed := 0
-	defaults := features.Defaults()
 	for _, item := range items {
 		key := strings.TrimSpace(item.Key)
 		if key == "" {
@@ -159,7 +178,7 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 		// default-enabled feature clears the override (null) instead of writing
 		// false, and disabling a default-off feature writes false.
 		value := any(item.Enabled)
-		if !item.Enabled && defaults[key] {
+		if !item.Enabled && item.DefaultEnabled {
 			value = nil
 		}
 		edits = append(edits, SettingsEdit{KeyPath: "features." + key, Value: value})
@@ -179,6 +198,13 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 	}
 	m.refreshTranscript()
 	if m.onWriteSettings != nil && len(edits) > 0 {
+		requested := make(map[string]bool, len(items))
+		for _, item := range items {
+			if key := strings.TrimSpace(item.Key); key != "" {
+				requested[key] = item.Enabled
+			}
+		}
+		m.pendingExperimentalFeatureUpdates = requested
 		return m.writeSettings(settingsWriteKindExperimental, edits)
 	}
 	return nil
@@ -284,6 +310,19 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	if msg.Result.FeatureSettings != nil {
 		m.featureSettings = cloneBoolMapTea(msg.Result.FeatureSettings)
 	}
+	// Rust experimental_features::write readback: a saved value that differs from
+	// the selection (or a higher-priority setting winning) warns instead of
+	// reporting a plain save.
+	experimentalOverridden := false
+	if msg.Kind == settingsWriteKindExperimental && len(m.pendingExperimentalFeatureUpdates) > 0 {
+		for key, requested := range m.pendingExperimentalFeatureUpdates {
+			if features.Enabled(m.featureSettings, key) != requested {
+				experimentalOverridden = true
+				break
+			}
+		}
+	}
+	m.pendingExperimentalFeatureUpdates = nil
 	if msg.Result.UseMemories != nil {
 		m.useMemories = *msg.Result.UseMemories
 	}
@@ -364,6 +403,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 		default:
 			m.notice = "Settings saved to " + strings.TrimSpace(msg.Result.FilePath) + "."
 		}
+	}
+	if experimentalOverridden {
+		m.notice = "Changes were saved, but the configured values differ from your selections. A higher-priority setting may override them."
 	}
 	m.refreshTranscript()
 }

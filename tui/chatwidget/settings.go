@@ -27,6 +27,10 @@ type ExperimentalFeatureOption struct {
 	Name        string
 	Description string
 	Enabled     bool
+	// DefaultEnabled mirrors the catalog's defaultEnabled, which decides whether
+	// disabling the feature clears the config override (Rust
+	// experimental_features::write).
+	DefaultEnabled bool
 }
 
 type ExperimentalFeaturesViewModel struct {
@@ -211,10 +215,11 @@ func NewExperimentalFeaturesView(settings map[string]bool) ExperimentalFeaturesV
 			continue
 		}
 		items = append(items, ExperimentalFeatureOption{
-			Key:         spec.Key,
-			Name:        spec.ExperimentalName,
-			Description: spec.ExperimentalMenuDescription,
-			Enabled:     features.Enabled(settings, spec.Key),
+			Key:            spec.Key,
+			Name:           spec.ExperimentalName,
+			Description:    spec.ExperimentalMenuDescription,
+			Enabled:        features.Enabled(settings, spec.Key),
+			DefaultEnabled: spec.DefaultEnabled,
 		})
 	}
 	return ExperimentalFeaturesViewModel{
@@ -229,4 +234,3 @@ func experimentalMenuVisible(spec features.Spec) bool {
 		strings.TrimSpace(spec.ExperimentalName) != "" &&
 		strings.TrimSpace(spec.ExperimentalMenuDescription) != ""
 }
-

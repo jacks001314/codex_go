@@ -989,10 +989,13 @@ type Options struct {
 	OnWriteSkillEnabled         SkillEnabledWriteFunc
 	OnFuzzyFileSearch           FuzzyFileSearchReaderFunc
 	OnSearchTasks               TaskMentionSearchFunc
-	OnReadApps                  AppListReaderFunc
-	OnStartReview               ReviewStartFunc
-	OnStartReviewCommand        ReviewStartCommandFunc
-	OnStartCompactCommand       CompactStartCommandFunc
+	// OnReadExperimentalFeatures reads the app server's experimentalFeature/list
+	// catalog for the /experimental popup (Rust experimental_features::fetch).
+	OnReadExperimentalFeatures ExperimentalFeaturesReaderFunc
+	OnReadApps                 AppListReaderFunc
+	OnStartReview              ReviewStartFunc
+	OnStartReviewCommand       ReviewStartCommandFunc
+	OnStartCompactCommand      CompactStartCommandFunc
 	// OnSafetyBufferingRetry, when set, stops the current attempt and retries
 	// it with the server-selected faster model after user confirmation (Rust
 	// #42380). prompt is the last user message that triggered the buffered
@@ -1501,6 +1504,7 @@ type Model struct {
 	nextSkillWriteRequestID           uint64
 	onFuzzyFileSearch                 FuzzyFileSearchReaderFunc
 	onSearchTasks                     TaskMentionSearchFunc
+	onReadExperimentalFeatures        ExperimentalFeaturesReaderFunc
 	onReadApps                        AppListReaderFunc
 	onStartReview                     ReviewStartFunc
 	onStartReviewCommand              ReviewStartCommandFunc
@@ -1529,6 +1533,15 @@ type Model struct {
 	pendingPermissionItem             *chatwidget.PermissionMenuItem
 	hideFullAccessWarning             bool
 	experimentalItems                 []chatwidget.ExperimentalFeatureOption
+	// experimentalFeaturesStatus is the popup's discovery status line and
+	// experimentalFeaturesGeneration guards stale catalog reads (Rust
+	// ExperimentalFeaturesView discovery_status/catalog_rx).
+	experimentalFeaturesStatus     string
+	experimentalFeaturesGeneration uint64
+	// pendingExperimentalFeatureUpdates holds the requested enablement of an
+	// in-flight /experimental save so the readback can warn when a higher-priority
+	// setting overrides it (Rust experimental_features::write readback).
+	pendingExperimentalFeatureUpdates map[string]bool
 	currentGoal                       *appserver.Goal
 	goalObservedAt                    time.Time
 	pendingGoalObjective              string
@@ -1808,6 +1821,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onWriteSkillEnabled:             options.OnWriteSkillEnabled,
 		onFuzzyFileSearch:               options.OnFuzzyFileSearch,
 		onSearchTasks:                   options.OnSearchTasks,
+		onReadExperimentalFeatures:      options.OnReadExperimentalFeatures,
 		onReadApps:                      options.OnReadApps,
 		onStartReview:                   options.OnStartReview,
 		onStartReviewCommand:            options.OnStartReviewCommand,
@@ -2282,6 +2296,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case TaskMentionSearchResultMsg:
 		m.applyTaskMentionSearchResult(msg)
+		return m, nil
+	case ExperimentalFeaturesResultMsg:
+		m.applyExperimentalFeaturesResult(msg)
 		return m, nil
 	case AppListResultMsg:
 		m.applyAppListResult(msg)

@@ -615,6 +615,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// this app server, so task mentions are enabled for it (Rust
 		// chat_widget.set_task_mentions_enabled(task_tools_available)).
 		OnSearchTasks: interactiveRemoteTaskMentionSearch(ctx, endpoint),
+		// /experimental is populated from this server's feature catalog (Rust
+		// experimental_features::fetch) instead of the compiled registry.
+		OnReadExperimentalFeatures: interactiveRemoteExperimentalFeatures(ctx, endpoint),
 		OnReadApps: func(threadID string, forceRefetch bool) (appsapi.AppListResponse, error) {
 			if strings.TrimSpace(threadID) == "" && state != nil {
 				threadID = state.ThreadID
