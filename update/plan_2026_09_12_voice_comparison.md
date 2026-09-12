@@ -223,3 +223,50 @@ LRU 缓存；Go 侧无对等实现。
 - 7 个 `GST_*` 运行时环境键序与取值（`GST_REGISTRY` 允许平台条件值）；
 - 18 个 helper 退出阶段码（正向 code + `HelperExitStageFromCode` 反向）；
 - 17 个 `thread/realtime/*` 方法与通知名。
+
+## 11. 真机回环验证（2026-09-12）
+
+环境（本机 Windows）：
+
+- 输入：`麦克风阵列 (适用于数字麦克风的英特尔® 智音技术)`（default）
+- 输出：`Speaker (Realtek(R) Audio)`（default）、`LEN LI2364 (HD Audio Driver for Display Audio)`
+
+门控用例（`CODEX_VOICE_REAL_DEVICE=1`）：
+
+| 用例 | 内容 | 结果 |
+|---|---|---|
+| `TestRealDeviceLoopback` | 真机采集 + 真机扬声器播放 1 kHz 音调，计墙钟/样本时长比 | ✅ PASS |
+| `TestRealDeviceInputProbe` | 逐个枚举输入设备并采集，报告峰值 | ✅ PASS |
+| `TestSelectedDeviceIDFailsClosedWithoutPanic` | 非门控：非法 device id 必须返回错误而非崩溃 | ✅ PASS |
+
+实测数据：
+
+- 采集：**48000 Hz**、480 样本/块；基线 9600 样本/208 ms（比值 1.040），
+  播放期间 48000 样本/996 ms（比值 **0.996**）→ 墙钟与 `samples/48000` 一致。
+  若设备仍按 24 kHz 而管线按 48 kHz，比值会接近 2.0；此结果确认修复有效。
+- 扬声器：播放音调时 `speakerPeak = 24000`（振幅 12000 × 2），真实渲染成功。
+- **声学耦合成立**：麦克风峰值由静默基线 **48 → 265**（约 5.5×），
+  即麦克风确实拾取到了扬声器播放的音调。
+
+### 11.1 回环过程中发现并修复的真实缺陷：选定 device id 触发 cgo panic
+
+- 现象：`ListInputDevices` 返回的设备 id 再传给 `OpenInput`/`OpenOutput` 时，
+  `malgo.InitDevice` **panic**：`runtime error: argument of cgo function has Go
+  pointer to unpinned Go pointer`。默认设备（id 为空）不受影响，所以此前未被发现。
+- 根因：`miniaudio.go` 用 `nativeID = &decoded; config.Capture.DeviceID =
+  unsafe.Pointer(nativeID)` 把 **Go 内存**塞进 device config；`malgo` 的
+  `DeviceConfig.toC()` 会把该 Go 指针放进一个 Go 内存里的 C 结构再传给
+  `ma_device_init`，触发 cgo "Go pointer to unpinned Go pointer" 检查
+  （`malgo.DeviceID.Pointer()` 本身用的是 `C.CBytes`，说明预期是 C 内存/固定内存）。
+- 修复：
+  1. `openDevice` 用 `runtime.Pinner` 固定 device id 内存，`defer Unpin()`；
+  2. 新增 `initMiniAudioDevice` 包装 `malgo.InitDevice`，`recover()` 把后端
+     panic 转成 typed error（对齐 Rust 的 fail-closed 语义，而不是让 helper 崩溃）。
+- 回归：`TestSelectedDeviceIDFailsClosedWithoutPanic`（硬件无关）+ 门控
+  `TestRealDeviceInputProbe` / `TestRealDeviceLoopback`。
+
+### 11.2 仍存差异（真机验证后）
+
+- 麦克风默认设备在静默时也接近 0 电平，是设备/环境特性，非代码问题。
+- DSP（重采样/AEC/NS/AGC）仍缺；本次通过"设备与管线同频 48 kHz"规避了速率问题，
+  但设备非 48 kHz 时依赖 miniaudio 内部转换，且没有回声消除。

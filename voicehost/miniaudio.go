@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -262,12 +263,19 @@ func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType
 	config := malgo.DefaultDeviceConfig(kind)
 	config.SampleRate = uint32(format.SampleRate)
 	var nativeID *malgo.DeviceID
+	// A selected device id is Go memory referenced from the C device config, so
+	// it must stay pinned across ma_device_init; the cgo pointer check rejects
+	// an unpinned Go pointer reachable from the config. The zero value of a
+	// Pinner is ready to use, and Unpin is a no-op before any Pin.
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
 	if strings.TrimSpace(deviceID) != "" {
 		decoded, err := decodeDeviceID(deviceID)
 		if err != nil {
 			return nil, nil, AudioFormat{}, err
 		}
 		nativeID = &decoded
+		pinner.Pin(nativeID)
 	}
 	buffer := newPCMBuffer(pcmBufferBytes(format, 2*time.Second))
 	// Bind the callback to the pipeline this device opened against, so a later
@@ -280,7 +288,7 @@ func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType
 		if nativeID != nil {
 			config.Capture.DeviceID = unsafe.Pointer(nativeID)
 		}
-		device, err := malgo.InitDevice(context.Context, config, malgo.DeviceCallbacks{
+		device, err := initMiniAudioDevice(context.Context, config, malgo.DeviceCallbacks{
 			Data: func(_, input []byte, _ uint32) {
 				// Capture admits callbacks through the packer so only complete
 				// blocks with a live generation reach the encoder.
@@ -302,7 +310,7 @@ func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType
 		if nativeID != nil {
 			config.Playback.DeviceID = unsafe.Pointer(nativeID)
 		}
-		device, err := malgo.InitDevice(context.Context, config, malgo.DeviceCallbacks{
+		device, err := initMiniAudioDevice(context.Context, config, malgo.DeviceCallbacks{
 			Data: func(output, _ []byte, _ uint32) {
 				renderPlayback(output, pipeline)
 			},
@@ -319,6 +327,24 @@ func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType
 	default:
 		return nil, nil, AudioFormat{}, fmt.Errorf("unsupported miniaudio device type %d", kind)
 	}
+}
+
+// initMiniAudioDevice wraps malgo.InitDevice so a native backend panic becomes a
+// typed error. Some endpoint IDs make a backend panic inside device
+// initialization; the helper must fail closed with an exit stage instead of
+// crashing the process.
+func initMiniAudioDevice(
+	malgoContext malgo.Context,
+	config malgo.DeviceConfig,
+	callbacks malgo.DeviceCallbacks,
+) (device *malgo.Device, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			device = nil
+			err = fmt.Errorf("miniaudio device initialization panicked: %v", recovered)
+		}
+	}()
+	return malgo.InitDevice(malgoContext, config, callbacks)
 }
 
 func (r *MiniAudioRuntime) releaseDevice(device *malgo.Device) {
