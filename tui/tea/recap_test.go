@@ -208,3 +208,36 @@ func TestModelAutomaticRecapFailureSchedulesOneRetryPerRevision(t *testing.T) {
 		t.Fatal("a retry must only be scheduled once per turn revision")
 	}
 }
+
+func TestModelAutoRecapHonorsConfiguredDisable(t *testing.T) {
+	base := time.Now()
+	disabled := false
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-1")
+	state.AddMessage(codextui.RoleUser, "hi")
+	state.AddMessage(codextui.RoleAssistant, "hello")
+	model := NewModel(state, Options{
+		Width:     80,
+		Height:    24,
+		AutoRecap: &disabled,
+		OnGenerateRecap: func(string, RecapThreadOptions, string, map[string]any) (string, error) {
+			t.Fatal("a disabled automatic recap must not run")
+			return "", nil
+		},
+	})
+	if !model.disableAutoRecap {
+		t.Fatal("AutoRecap=false should disable scheduled recaps")
+	}
+	now := base
+	model.now = func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		model.Update(TurnCompletedMsg{ThreadID: "thread-1"})
+	}
+	if _, cmd := model.Update(bubbletea.BlurMsg{}); cmd != nil {
+		t.Fatal("a disabled automatic recap must not schedule a check")
+	}
+	now = base.Add(tuiapp.RecapDelay)
+	if cmd := model.applyRecapCheck(now); cmd != nil {
+		t.Fatal("a disabled automatic recap must not run at the deadline")
+	}
+}

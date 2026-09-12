@@ -269,7 +269,10 @@ type SettingsWriteResult struct {
 	StatusLineUseColors *bool
 	// QuestionEscBack is the configured `tui.question_esc_back` value (Rust
 	// #42889). Nil preserves the current value.
-	QuestionEscBack         *bool
+	QuestionEscBack *bool
+	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
+	// Nil preserves the current value; the config default is enabled.
+	AutoRecap               *bool
 	Personality             chatwidget.Personality
 	Notifications           *chatwidget.NotificationsSetting
 	NotificationMethod      codextui.NotificationMethod
@@ -843,10 +846,9 @@ type Options struct {
 	// OnGenerateRecap runs the temporary structured recap turn for /recap (Rust
 	// recap.rs). A nil hook leaves /recap unavailable for this runtime.
 	OnGenerateRecap RecapGenerateFunc
-	// DisableAutoRecap turns off scheduled recaps for unfocused conversations
-	// (Rust `tui.auto_recap = false`). The zero value keeps them enabled, which
-	// matches Rust's default.
-	DisableAutoRecap bool
+	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
+	// Nil keeps scheduled recaps enabled, matching Rust's config default.
+	AutoRecap *bool
 	// OnDaybreakNotice resolves the account's Daybreak access state for the
 	// refusal copy (Rust daybreak::Notice). A nil hook uses the neutral Limited
 	// copy, which is also Rust's pending/failed default.
@@ -1695,7 +1697,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onExportTranscript:              options.OnExportTranscript,
 		onGenerateRecap:                 options.OnGenerateRecap,
 		onDaybreakNotice:                options.OnDaybreakNotice,
-		disableAutoRecap:                options.DisableAutoRecap,
+		disableAutoRecap:                options.AutoRecap != nil && !*options.AutoRecap,
 		recapLoadingIndex:               -1,
 		onReadTokenActivity:             options.OnReadTokenActivity,
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,

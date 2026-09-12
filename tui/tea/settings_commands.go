@@ -297,6 +297,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	if msg.Result.QuestionEscBack != nil {
 		m.questionEscBack = *msg.Result.QuestionEscBack
 	}
+	if msg.Result.AutoRecap != nil {
+		m.disableAutoRecap = !*msg.Result.AutoRecap
+	}
 	if msg.Result.Notifications != nil {
 		m.notificationSettings = notificationSettingsOrDefault(msg.Result.Notifications)
 	}

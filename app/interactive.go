@@ -865,6 +865,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		LocalSession:                true,
 		AnimationsEnabled:           settings.AnimationsEnabled,
 		QuestionEscBack:             settings.QuestionEscBack,
+		AutoRecap:                   settings.AutoRecap,
 		LocalWorktreeOperations:     true,
 		WorktreesEnabled:            worktreeEnabled,
 		WorktreeSettings:            worktreeSettings,
@@ -1557,6 +1558,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		AnimationsEnabled:       interactiveAnimationsEnabled(values),
 		StatusLineUseColors:     interactiveStatusLineUseColors(values),
 		QuestionEscBack:         interactiveQuestionEscBack(values),
+		AutoRecap:               interactiveAutoRecap(values),
 		Personality:             interactivePersonalityFromConfig(values),
 		Notifications:           interactiveNotificationSettingsFromConfig(values),
 		NotificationMethod:      interactiveNotificationMethodFromConfig(values),
@@ -1604,6 +1606,19 @@ func interactiveStatusLineUseColors(values map[string]any) *bool {
 func interactiveQuestionEscBack(values map[string]any) *bool {
 	enabled := true
 	if raw, ok := interactiveTUIConfig(values)["question_esc_back"]; ok {
+		if configured, ok := raw.(bool); ok {
+			enabled = configured
+		}
+	}
+	return &enabled
+}
+
+// interactiveAutoRecap resolves the configured `tui.auto_recap` value (Rust
+// local_settings). The TUI config default is enabled, matching Rust's
+// `Tui::default` (`auto_recap: true`).
+func interactiveAutoRecap(values map[string]any) *bool {
+	enabled := true
+	if raw, ok := interactiveTUIConfig(values)["auto_recap"]; ok {
 		if configured, ok := raw.(bool); ok {
 			enabled = configured
 		}
