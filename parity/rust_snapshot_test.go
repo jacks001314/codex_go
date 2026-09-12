@@ -285,7 +285,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// touch the voice surface; porting the behaviour is a separate item.
 		{Path: "core/src/client.rs", SHA256: "5bdbf9d92c1e0945db78e610c2851de34a7d6ce0d5247e61b4079bcd4b514dd6"},
 		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "65cce34c9d63b6ef59747926df59a2774bbbfb84309be5e3477759aaa32afa98"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "1ac8b2ec0007a38e8724839fabaca6e9824e19589f106daab752fd00aaebb285"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "ae50f42033d4a558f7f87d1ed7687b5f0da7626570998242004f33fe9f8ad4f1"},
 		{Path: "core/tests/suite/mod.rs", SHA256: "d02ff1a3b5e266c121cf890e220e5919a1c5a21e9f6304112be8f52a5a88e0f7"},
 	}
 }

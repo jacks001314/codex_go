@@ -34,6 +34,12 @@ type ThreadManager struct {
 	liveThreadsMu sync.Mutex
 	liveThreads   map[session.ThreadID]*managedLiveThread
 
+	// providerRoutes retains the model provider route each live thread started
+	// with, so managed policy changes can be detected against it (Rust #44944
+	// keeps the thread's resolved Config for the same purpose).
+	providerRoutesMu sync.Mutex
+	providerRoutes   map[session.ThreadID]threadModelProviderRoute
+
 	terminalMu sync.Mutex
 	terminals  map[string]struct{}
 
@@ -51,6 +57,7 @@ func NewThreadManager(status *ThreadStatusManager) *ThreadManager {
 		ephemeral:     map[string]*session.Record{},
 		subscriptions: map[string]map[string]struct{}{},
 		liveThreads:   map[session.ThreadID]*managedLiveThread{},
+		providerRoutes: map[session.ThreadID]threadModelProviderRoute{},
 		terminals:     map[string]struct{}{},
 		status:        status,
 	}
@@ -127,6 +134,7 @@ func (m *ThreadManager) ReleaseLiveThreads(threadIDs []session.ThreadID) {
 		}
 	}
 	m.liveThreadsMu.Unlock()
+	m.clearModelProviderRoutes(threadIDs)
 	for i := len(liveThreads) - 1; i >= 0; i-- {
 		_ = liveThreads[i].Close()
 	}
@@ -148,6 +156,7 @@ func (m *ThreadManager) CloseLiveThreads() error {
 		delete(m.liveThreads, threadID)
 	}
 	m.liveThreadsMu.Unlock()
+	m.clearModelProviderRoutes(threadIDs)
 	var closeErr error
 	for _, liveThread := range liveThreads {
 		if err := liveThread.Close(); closeErr == nil && err != nil {
@@ -155,6 +164,41 @@ func (m *ThreadManager) CloseLiveThreads() error {
 		}
 	}
 	return closeErr
+}
+
+// SetModelProviderRoute records the provider route a live thread started with.
+func (m *ThreadManager) SetModelProviderRoute(threadID session.ThreadID, route threadModelProviderRoute) {
+	if m == nil || strings.TrimSpace(string(threadID)) == "" {
+		return
+	}
+	m.providerRoutesMu.Lock()
+	if m.providerRoutes == nil {
+		m.providerRoutes = map[session.ThreadID]threadModelProviderRoute{}
+	}
+	m.providerRoutes[threadID] = route
+	m.providerRoutesMu.Unlock()
+}
+
+// ModelProviderRoute returns the retained provider route for a live thread.
+func (m *ThreadManager) ModelProviderRoute(threadID session.ThreadID) (threadModelProviderRoute, bool) {
+	if m == nil {
+		return threadModelProviderRoute{}, false
+	}
+	m.providerRoutesMu.Lock()
+	defer m.providerRoutesMu.Unlock()
+	route, ok := m.providerRoutes[threadID]
+	return route, ok
+}
+
+func (m *ThreadManager) clearModelProviderRoutes(threadIDs []session.ThreadID) {
+	if m == nil || len(threadIDs) == 0 {
+		return
+	}
+	m.providerRoutesMu.Lock()
+	for _, threadID := range threadIDs {
+		delete(m.providerRoutes, threadID)
+	}
+	m.providerRoutesMu.Unlock()
 }
 
 func (m *ThreadManager) LiveThreadCount() int {

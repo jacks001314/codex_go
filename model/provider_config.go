@@ -16,6 +16,41 @@ func ProvidersFromConfig(values map[string]any, openAIBaseURL string) (map[strin
 	return MergeConfiguredProviders(BuiltInProviders(openAIBaseURL), configured)
 }
 
+// RequiredModelProviderDefinition resolves one managed `model_providers`
+// requirement entry into the complete provider definition the policy requires
+// for providerID (Rust #44944 ConfigManager::check_thread_model_provider).
+// Bedrock overrides are merged onto the bundled provider; every other provider
+// id is used verbatim. A malformed or incomplete definition is an error, so a
+// policy that cannot describe a usable provider rejects the request instead of
+// silently passing the comparison.
+func RequiredModelProviderDefinition(providerID string, definition any) (*ProviderInfo, error) {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		return nil, nil
+	}
+	raw, ok := definition.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("model_providers.%s must be a table", providerID)
+	}
+	configured, err := ConfiguredProviderMap(map[string]any{providerID: raw})
+	if err != nil {
+		return nil, err
+	}
+	provider, ok := configured[providerID]
+	if !ok {
+		return nil, nil
+	}
+	if isBedrockProviderID(providerID) {
+		merged, err := MergeConfiguredProviders(BuiltInProviders(""), map[string]ProviderInfo{providerID: provider})
+		if err != nil {
+			return nil, err
+		}
+		builtIn := merged[providerID]
+		return &builtIn, nil
+	}
+	return &provider, nil
+}
+
 func providerCredentialExportTimeoutMSConfig(values map[string]any) (uint64, error) {
 	raw := configValue(values, "timeout_ms")
 	if raw == nil {

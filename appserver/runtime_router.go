@@ -2215,6 +2215,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			r.markThreadResumeSessionStartSource(result, request)
 			r.markResponseThreadLoaded(result, request.normalizedConnectionID())
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
+				r.captureThreadModelProviderRouteByID(response.Thread.ID)
 				r.emitThreadResumeAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 			}
 			r.replayPendingServerRequestsForThread(result)
@@ -2488,6 +2489,10 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 		return nil, err
 	}
 	if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
+		return nil, err
+	}
+	// Rust #44944: manual compaction is gated on the retained provider route.
+	if err := r.checkThreadModelProviderForID(params.ThreadID); err != nil {
 		return nil, err
 	}
 	started, err := r.requireTurns().Start(&turn.TurnStartParams{ThreadID: params.ThreadID, Originator: "compact"})
@@ -2779,6 +2784,11 @@ func (r *RuntimeRouter) handleThreadQueueStartRuntime(request *Request) (*Thread
 	}
 	threadID := strings.TrimSpace(params.ThreadID)
 	if err := r.ensureDirectInputAllowed(request, threadID); err != nil {
+		return nil, err
+	}
+	// Rust #44944: starting a queued message admits a turn, so the retained
+	// provider route must still match managed requirements.
+	if err := r.checkThreadModelProviderForID(threadID); err != nil {
 		return nil, err
 	}
 	if err := r.requireLoadedThreadForRuntimeOp(threadID); err != nil {
@@ -3416,6 +3426,8 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			r.applyThreadStartOriginator(response, request)
 			r.markRuntimeSeedRollout(response, request)
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			// Rust #44944: retain the provider route this thread was admitted with.
+			r.captureThreadModelProviderRouteByID(response.Thread.ID)
 			if request.Method == MethodThreadStart && r.services.StateRuntime != nil {
 				var startParams ThreadStartParams
 				if request.DecodeParams(&startParams) == nil && startParams.ProjectID != nil {
@@ -3445,6 +3457,8 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 				r.networkApproval.syncApprovedHostsForFork(forkParams.ThreadID, response.Thread.ID)
 			}
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			// Rust #44944: the fork inherits its own retained provider route.
+			r.captureThreadModelProviderRouteByID(response.Thread.ID)
 			r.emitThreadForkAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 			r.notifyRestoredTokenUsage(response)
 			if shouldEmitThreadStartedNotification(response.Thread) {
@@ -5545,6 +5559,11 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
 		return nil, err
 	}
+	// Rust #44944: reject input to a thread whose retained provider route no
+	// longer matches managed model provider requirements.
+	if err := r.checkThreadModelProviderForID(params.ThreadID); err != nil {
+		return nil, err
+	}
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
 	}
@@ -6408,6 +6427,10 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
 		return nil, err
 	}
+	// Rust #44944: steer shares the retained-provider check with turn/start.
+	if err := r.checkThreadModelProviderForID(params.ThreadID); err != nil {
+		return nil, err
+	}
 	connectionID := request.normalizedConnectionID()
 	createdAt := runtimeRouterNow(r).UTC()
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
@@ -6617,6 +6640,10 @@ func (r *RuntimeRouter) handleReviewStart(request *Request) (*review.StartRespon
 		return nil, err
 	}
 	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	// Rust #44944: reviews run on the parent thread's retained provider route.
+	if err := r.checkThreadModelProviderForID(params.ThreadID); err != nil {
 		return nil, err
 	}
 	reviewThreadID, err := r.prepareDetachedReviewThread(request, &params)
@@ -6983,6 +7010,20 @@ func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string
 	}
 	if err := params.Validate(); err != nil {
 		return nil, err
+	}
+	// Rust #44944: an active goal can immediately inject an objective or start
+	// an idle turn, so it is gated on the retained provider route. Pausing,
+	// completing, or clearing a goal must stay possible after policy changes.
+	resultingGoalStatus := GoalActive
+	if params.Status != nil {
+		resultingGoalStatus = *params.Status
+	} else if status, ok := r.existingGoalStatus(params.ThreadID); ok {
+		resultingGoalStatus = status
+	}
+	if resultingGoalStatus == GoalActive {
+		if err := r.checkThreadModelProviderForID(params.ThreadID); err != nil {
+			return nil, err
+		}
 	}
 	if r != nil && r.services.StateRuntime != nil && r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil {
 		response, existing, record, err := r.setStateThreadGoal(params)

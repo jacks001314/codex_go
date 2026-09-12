@@ -82,6 +82,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "model_auto_review", Owner: "appserver, config", Focus: "auto_review required-on-models enforcement and requirements exposure"},
 		{Module: "model_list", Owner: "model", Focus: "model/list RPC"},
 		{Module: "model_provider_capabilities_read", Owner: "model", Focus: "modelProvider/capabilities/read RPC"},
+		{Module: "model_provider_enforcement", Owner: "appserver, config", Focus: "managed model provider requirements enforced on existing threads"},
 		{Module: "multi_agent_v2_developer_instructions", Owner: "agent, prompt", Focus: "multi-agent developer instruction propagation"},
 		{Module: "otel", Owner: "telemetry, appserver", Focus: "OpenTelemetry provider reload after account and config changes"},
 		{Module: "output_schema", Owner: "model, turn", Focus: "turn output schema propagation"},
