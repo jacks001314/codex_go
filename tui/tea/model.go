@@ -1093,6 +1093,10 @@ type Model struct {
 	// (Rust #43921 StatusState).
 	reasoningItemID       string
 	reasoningResumeTurnID string
+	// reasoningRecoveredAfterRefresh marks a restored active reasoning item whose
+	// earlier deltas may have been missed, so the completed item's complete
+	// summary reconciles with the streamed buffers (Rust #43921).
+	reasoningRecoveredAfterRefresh bool
 	// commandLifecycle tracks unified-exec processes and the background-terminal
 	// wait streak that owns the status row until output arrives (Rust #43921).
 	commandLifecycle                chatwidget.CommandLifecycleState
@@ -2719,6 +2723,7 @@ func (m *Model) applyReasoningItemStarted(itemID string) {
 	if itemID == "" {
 		return
 	}
+	m.reasoningRecoveredAfterRefresh = false
 	if strings.TrimSpace(m.reasoningResumeTurnID) != "" && m.reasoningItemID != itemID {
 		m.finalizeReasoningSummary()
 	}
@@ -2742,6 +2747,47 @@ func (m *Model) finalizeReasoningSummary() {
 	}
 	m.reasoningItemID = ""
 	m.reasoningResumeTurnID = ""
+	m.reasoningRecoveredAfterRefresh = false
+}
+
+// completeReasoningItem consumes a completed reasoning item. When the active
+// item was restored after a refresh, its earlier deltas may be missing, so the
+// complete item reconciles the buffers before the heading is finalized (Rust
+// #43921 reasoning_recovered_after_refresh).
+func (m *Model) completeReasoningItem(item *protocol.ThreadItem) {
+	if m == nil {
+		return
+	}
+	if m.reasoningRecoveredAfterRefresh {
+		if text := strings.TrimSpace(itemText(item)); text != "" {
+			itemID := strings.TrimSpace(item.ID)
+			if itemID == "" {
+				itemID = m.reasoningItemID
+			}
+			if itemID != "" && (m.reasoningItemID == "" || itemID == m.reasoningItemID) {
+				// A refreshed snapshot can omit the active item and its earlier
+				// deltas; replace the partial stream with the complete summary.
+				m.reasoningItemID = itemID
+				if m.reasoningSummaryBuffers == nil {
+					m.reasoningSummaryBuffers = map[string]string{}
+				}
+				m.reasoningSummaryBuffers[itemID] = text
+				m.restoreReasoningStatusHeader()
+			}
+		}
+	}
+	m.finalizeReasoningSummary()
+}
+
+// itemText reads an item's text, tolerating a nil item.
+func itemText(item *protocol.ThreadItem) string {
+	if item == nil {
+		return ""
+	}
+	if strings.TrimSpace(item.Text) != "" {
+		return strings.TrimSpace(item.Text)
+	}
+	return strings.TrimSpace(item.Message)
 }
 
 // restoreReasoningStatusHeader re-derives the heading from the active item's
@@ -3908,8 +3954,9 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	case "plan":
 		m.completeProposedPlan(item)
 	case "reasoning":
-		// Rust #43921: keep the last useful summary through later activity.
-		m.finalizeReasoningSummary()
+		// Rust #43921: keep the last useful summary through later activity, and
+		// reconcile a refreshed stream with the completed item.
+		m.completeReasoningItem(item)
 	case "command_execution":
 		m.noteUnifiedExecCommandCompleted(item)
 		m.renderCommandExecutionItem(item)

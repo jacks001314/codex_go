@@ -4166,6 +4166,17 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 			remotePayloadString(payload, "query"),
 			action,
 		)
+	case "reasoning":
+		// Rust #43921: a completed reasoning item carries the complete summary,
+		// which a refreshed snapshot reconciles against partial live deltas.
+		parts := []string{}
+		for _, key := range []string{"summary", "reasoningContent", "content"} {
+			parts = append(parts, remoteTUIAnyStrings(payload[key])...)
+		}
+		if text := remotePayloadString(payload, "text"); text != "" {
+			parts = append(parts, text)
+		}
+		return protocol.ThreadItem{ID: id, Type: "reasoning", Text: strings.Join(parts, "\n")}
 	default:
 		itemType := strings.TrimSpace(wireType)
 		if itemType == "" {

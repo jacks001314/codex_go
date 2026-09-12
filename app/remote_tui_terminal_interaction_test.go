@@ -82,3 +82,22 @@ func TestRemoteProtocolItemCarriesProcessID(t *testing.T) {
 		t.Fatalf("item metadata = %#v", item.Metadata)
 	}
 }
+
+// TestRemoteProtocolItemCarriesReasoningSummary covers Rust #43921's
+// reconciliation prerequisite: a completed reasoning item keeps its complete
+// summary so a refreshed stream can be reconciled.
+func TestRemoteProtocolItemCarriesReasoningSummary(t *testing.T) {
+	item := remoteProtocolItemFromPayload(appserver.ThreadItemPayload{
+		"id":      "reasoning-1",
+		"type":    "reasoning",
+		"summary": []any{"## Complete summary", "Details"},
+		"content": []any{"raw reasoning"},
+	}, true)
+	if item.ID != "reasoning-1" || item.Type != "reasoning" {
+		t.Fatalf("reasoning item = %#v", item)
+	}
+	want := "## Complete summary\nDetails\nraw reasoning"
+	if item.Text != want {
+		t.Fatalf("reasoning text = %q, want %q", item.Text, want)
+	}
+}
