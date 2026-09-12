@@ -625,23 +625,26 @@ func (c *MCPToolCallContent) Map() map[string]any {
 }
 
 type MCPService struct {
-	mu                  sync.Mutex
-	servers             map[string]MCPServerStatus
-	configs             map[string]ServerConfig
-	dynamicConfig       map[string]bool
-	required            map[string]bool
-	starting            map[string]int
-	httpClients         map[string]*cachedMCPHTTPClient
-	stdioClients        map[string]*cachedMCPStdioClient
-	oauthLogins         map[string]*OAuthLoginServer
-	oauth               *OAuthStore
-	resourceCache       *MCPResourceCache
-	elicitation         MCPElicitationHandler
-	progress            MCPProgressHandler
-	roots               MCPRootsProvider
-	oauthComplete       MCPOAuthLoginCompletionHandler
-	openAIForm          bool
-	generation          uint64
+	mu            sync.Mutex
+	servers       map[string]MCPServerStatus
+	configs       map[string]ServerConfig
+	dynamicConfig map[string]bool
+	required      map[string]bool
+	starting      map[string]int
+	httpClients   map[string]*cachedMCPHTTPClient
+	stdioClients  map[string]*cachedMCPStdioClient
+	oauthLogins   map[string]*OAuthLoginServer
+	oauth         *OAuthStore
+	resourceCache *MCPResourceCache
+	elicitation   MCPElicitationHandler
+	progress      MCPProgressHandler
+	roots         MCPRootsProvider
+	oauthComplete MCPOAuthLoginCompletionHandler
+	openAIForm    bool
+	generation    uint64
+	// authChangeSource, when set, lets opted-in stdio servers receive auth
+	// change notifications (Rust #43428).
+	authChangeSource    MCPAuthChangeSource
 	sharedHTTPClient    HTTPDoer
 	sharedHTTPClientKey string
 	// TrustedAccess, when set, attaches host-owned openai/entitlementContext
@@ -2237,13 +2240,18 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 		name = strings.TrimSpace(config.Command)
 	}
 	if s == nil || name == "" {
-		return newMCPStdioClient(config)
+		client := newMCPStdioClient(config)
+		if s != nil {
+			client.authChanges = s.authChangeSourceSnapshot()
+		}
+		return client
 	}
 	s.mu.Lock()
 	if s.stdioClients == nil {
 		s.stdioClients = map[string]*cachedMCPStdioClient{}
 	}
 	openAIForm := s.openAIForm
+	authChanges := s.authChangeSource
 	key := mcpConnectionCacheKey(config, openAIForm)
 	if cached := s.stdioClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
 		cached.startupTimeout == config.StartupTimeout {
@@ -2252,10 +2260,38 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 	}
 	old := s.deleteStdioClientLocked(name)
 	client := newMCPStdioClientWithOpenAIForm(config, openAIForm)
+	client.authChanges = authChanges
 	s.stdioClients[name] = &cachedMCPStdioClient{key: key, client: client, startupTimeout: config.StartupTimeout}
 	s.mu.Unlock()
 	closeStdioClients([]*stdioClient{old})
 	return client
+}
+
+// authChangeSourceSnapshot returns the configured auth-change source.
+func (s *MCPService) authChangeSourceSnapshot() MCPAuthChangeSource {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.authChangeSource
+}
+
+// SetAuthChangeSource installs the source used to notify opted-in stdio MCP
+// servers about credential and ownership changes (Rust #43428). It is a no-op
+// when the service is nil. Later stdio connections inherit the current source.
+func (s *MCPService) SetAuthChangeSource(source MCPAuthChangeSource) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authChangeSource = source
+}
+
+// AuthChangeSource returns the installed auth-change source, or nil.
+func (s *MCPService) AuthChangeSource() MCPAuthChangeSource {
+	return s.authChangeSourceSnapshot()
 }
 
 func (s *MCPService) elicitationHandler() MCPElicitationHandler {

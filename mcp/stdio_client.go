@@ -57,6 +57,11 @@ type stdioClient struct {
 	// connection so elicitations return `cancel` instead of hanging
 	// (Rust #44238). It is reset for every new connection attempt.
 	elicitationCancellations mcpElicitationCancellationMemory
+	// authChanges, when set, lets this stdio connection notify an opted-in
+	// server about credential/ownership changes (Rust #43428). authChangeStop
+	// tears down the watcher for the current connection.
+	authChanges    MCPAuthChangeSource
+	authChangeStop func()
 	// serverCapabilities is the initialized server's advertised capabilities
 	// object (Rust #44826); nil when unavailable or before initialization.
 	serverCapabilities json.RawMessage
@@ -310,7 +315,7 @@ func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdio
 }
 
 func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, method string, params any) (*stdioRPCResponse, error) {
-	params = mcpParamsWithProtocolMetadata(params, c.protocolModeSnapshot(), c.openAIForm)
+	params = mcpParamsWithProtocolMetadataAndAuthChange(params, c.protocolModeSnapshot(), c.openAIForm, c.authChanges != nil)
 	cmd := c.currentCommand()
 	id := c.nextRequestID()
 	pending := &stdioPendingCall{
@@ -404,6 +409,13 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 		}
 		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), outcome, time.Since(started))
 	}()
+	defer func() {
+		// Start auth-change notifications only after initialization succeeds so
+		// an opted-in server receives the current revisions (Rust #43428).
+		if err == nil {
+			c.startMCPAuthChangeWatcher()
+		}
+	}()
 	protocolMode, launchEnv, stripProtocolMarker, err := mcpStdioLaunchConfig(c.config)
 	if err != nil {
 		return err
@@ -483,7 +495,7 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 		c.mu.Unlock()
 	}
 
-	response, err := c.doRequest(ctx, options, "initialize", mcpClientInitializeParams(c.openAIForm))
+	response, err := c.doRequest(ctx, options, "initialize", mcpClientInitializeParamsWithAuthChange(c.openAIForm, c.authChanges != nil))
 	if err != nil {
 		_ = c.Close()
 		return decorateMCPStdioError(err, stderr)
@@ -718,6 +730,7 @@ func (c *stdioClient) isClosed() bool {
 
 func (c *stdioClient) closeLocked() error {
 	c.closed = true
+	c.stopAuthChangeWatcherLocked()
 	pending := c.pendingCallsLocked()
 	stderr := c.stderr
 	var waitErr error
@@ -842,6 +855,7 @@ func (c *stdioClient) failTransportFor(owner *exec.Cmd, err error) {
 	c.started = false
 	c.initialized = false
 	c.initializing = false
+	c.stopAuthChangeWatcherLocked()
 	if c.initDone != nil {
 		close(c.initDone)
 		c.initDone = nil
@@ -940,9 +954,13 @@ func (c *stdioClient) protocolModeSnapshot() MCPProtocolMode {
 }
 
 func mcpClientInitializeParams(openAIForm bool) map[string]any {
+	return mcpClientInitializeParamsWithAuthChange(openAIForm, false)
+}
+
+func mcpClientInitializeParamsWithAuthChange(openAIForm bool, advertiseAuthChange bool) map[string]any {
 	return map[string]any{
 		"protocolVersion": defaultMCPProtocol,
-		"capabilities":    mcpClientCapabilities(openAIForm),
+		"capabilities":    mcpClientCapabilitiesWithAuthChange(openAIForm, advertiseAuthChange),
 		"clientInfo": map[string]string{
 			"name":    "codex-go",
 			"version": "go-port",

@@ -106,6 +106,13 @@ func (m MCPProtocolMode) protocolVersion() string {
 }
 
 func mcpClientCapabilities(openAIForm bool) map[string]any {
+	return mcpClientCapabilitiesWithAuthChange(openAIForm, false)
+}
+
+// mcpClientCapabilitiesWithAuthChange mirrors mcpClientCapabilities and also
+// offers the experimental auth-change capability when a source is attached
+// (Rust #43428).
+func mcpClientCapabilitiesWithAuthChange(openAIForm bool, advertiseAuthChange bool) map[string]any {
 	capabilities := map[string]any{
 		"roots": map[string]any{"listChanged": false},
 	}
@@ -114,10 +121,17 @@ func mcpClientCapabilities(openAIForm bool) map[string]any {
 			"openai/form": map[string]any{},
 		}
 	}
+	if advertiseAuthChange {
+		mcpAdvertiseAuthChangeCapability(capabilities)
+	}
 	return capabilities
 }
 
 func mcpParamsWithProtocolMetadata(params any, mode MCPProtocolMode, openAIForm bool) any {
+	return mcpParamsWithProtocolMetadataAndAuthChange(params, mode, openAIForm, false)
+}
+
+func mcpParamsWithProtocolMetadataAndAuthChange(params any, mode MCPProtocolMode, openAIForm bool, advertiseAuthChange bool) any {
 	if mode != MCPProtocol20260728 {
 		return params
 	}
@@ -135,7 +149,7 @@ func mcpParamsWithProtocolMetadata(params any, mode MCPProtocolMode, openAIForm 
 	}
 	meta[mcpProtocolVersionMetadataKey] = modernMCPProtocol
 	meta[mcpClientInfoMetadataKey] = map[string]string{"name": "codex-go", "version": "go-port"}
-	meta[mcpClientCapabilitiesMetadataKey] = mcpClientCapabilities(openAIForm)
+	meta[mcpClientCapabilitiesMetadataKey] = mcpClientCapabilitiesWithAuthChange(openAIForm, advertiseAuthChange)
 	out["_meta"] = meta
 	return out
 }

@@ -11280,6 +11280,8 @@ func (r *RuntimeRouter) configureMCPService(service *mcp.MCPService) {
 	}))
 	service.SetOAuthLoginCompletionHandler(&appserverMCPOAuthLoginCompletionHandler{notify: r.notify})
 	service.SetOpenAIFormElicitationEnabled(r.anyConnectionMCPOpenAIFormElicitation())
+	// Opted-in stdio servers receive auth change notifications (Rust #43428).
+	service.SetAuthChangeSource(routerMCPAuthChangeSource{router: r})
 	if handler, ok := service.ElicitationHandler().(*appserverMCPElicitationHandler); ok && r.anyConnectionMCPStandardFormInput() {
 		// Rust 4b0e2a0bff: enable full-access form input only after the
 		// session has started so required MCP servers cannot block startup
