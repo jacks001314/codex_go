@@ -65,6 +65,25 @@ func TestStatusLineUseColorsSeedsStatusControlsAndOverview(t *testing.T) {
 	}
 }
 
+// TestWireAgentsOverviewSetsMarkdownRenderer covers Rust #44752: the dashboard
+// injects a markdown renderer so the task-details prompt preview is styled.
+func TestWireAgentsOverviewSetsMarkdownRenderer(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 120, Height: 40, TUITheme: "catppuccin-mocha"})
+	view := &agentsoverview.View{}
+	model.wireAgentsOverviewThemeColors(view)
+	if view.RenderMarkdown == nil {
+		t.Fatal("agents overview markdown renderer is not wired")
+	}
+	lines := view.RenderMarkdown("**bold** text", 38)
+	if len(lines) == 0 {
+		t.Fatal("markdown renderer returned no lines")
+	}
+	if joined := strings.Join(lines, "\n"); !strings.Contains(joined, "bold") {
+		t.Fatalf("markdown render = %q", joined)
+	}
+}
+
 func TestRenderStatusHeaderUsesThemeColors(t *testing.T) {
 	enabled := true
 	state := codextui.NewState(nil)

@@ -50,6 +50,40 @@ type span struct {
 	// color is an optional "#rrggbb" foreground applied after style, used for
 	// deterministic per-thread identity colors (Rust #44857 thread_color).
 	color string
+	// raw marks text that is already styled (for example markdown rendered to
+	// ANSI). Raw text is emitted as-is when styled and stripped for plain
+	// rendering, and its width is measured with the escape sequences removed
+	// (Rust #44752).
+	raw bool
+}
+
+// stripANSISGR removes SGR escape sequences so plain rendering and width
+// measurement ignore pre-styled content.
+func stripANSISGR(value string) string {
+	if !strings.Contains(value, "\x1b[") {
+		return value
+	}
+	var builder strings.Builder
+	for i := 0; i < len(value); {
+		if value[i] == 0x1b && i+1 < len(value) && value[i+1] == '[' {
+			j := i + 2
+			for j < len(value) && (value[j] < 0x40 || value[j] > 0x7e) {
+				j++
+			}
+			if j < len(value) {
+				j++
+			}
+			i = j
+			continue
+		}
+		builder.WriteByte(value[i])
+		i++
+	}
+	return builder.String()
+}
+
+func ansiAwareWidth(value string) int {
+	return runewidth.StringWidth(stripANSISGR(value))
 }
 
 // threadTitleSpan renders a row title with the thread's identity color when one
@@ -106,6 +140,10 @@ func renderStyledSpans(spans []span) string {
 			builder.WriteString(s.text)
 			continue
 		}
+		if s.raw {
+			builder.WriteString(s.text)
+			continue
+		}
 		switch {
 		case s.color != "":
 			if sgr := threadColorSGR(s.color); sgr != "" {
@@ -128,7 +166,7 @@ func renderStyledSpans(spans []span) string {
 
 // spansWidth is the display width of the unstyled text.
 func spansWidth(spans []span) int {
-	return runewidth.StringWidth(joinSpans(spans))
+	return ansiAwareWidth(joinSpans(spans))
 }
 
 // truncateSpans cuts a line to maxWidth of display width, keeping styles on
@@ -140,7 +178,7 @@ func truncateSpans(spans []span, maxWidth int) []span {
 	remaining := maxWidth
 	out := make([]span, 0, len(spans))
 	for _, s := range spans {
-		width := runewidth.StringWidth(s.text)
+		width := ansiAwareWidth(s.text)
 		if width == 0 {
 			continue
 		}
@@ -148,6 +186,11 @@ func truncateSpans(spans []span, maxWidth int) []span {
 			out = append(out, s)
 			remaining -= width
 			continue
+		}
+		if s.raw {
+			// Pre-rendered lines are already wrapped by their renderer; drop a
+			// line that still does not fit rather than splitting escape codes.
+			break
 		}
 		if remaining > 0 {
 			out = append(out, span{text: truncateToWidth(s.text, remaining), style: s.style})
@@ -164,7 +207,14 @@ func renderLine(prefix string, spans []span, maxWidth int, styled bool) string {
 		available = 0
 	}
 	spans = truncateSpans(spans, available)
-	text := joinSpans(spans)
+	text := ""
+	for _, s := range spans {
+		if s.raw {
+			text += stripANSISGR(s.text)
+			continue
+		}
+		text += s.text
+	}
 	if styled {
 		text = renderStyledSpans(spans)
 	}

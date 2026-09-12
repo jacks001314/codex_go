@@ -277,13 +277,25 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	if preview == "" {
 		preview = "No prompt available."
 	}
-	prompt := wrapPreviewLines(preview, width)
+	// The renderer supplies styled lines; plain rendering strips the styling so
+	// both modes show the parsed markdown text (Rust #44752).
+	markdown := v.RenderMarkdown != nil && preview != "No prompt available."
+	var prompt []string
+	if markdown {
+		prompt = v.RenderMarkdown(preview, width)
+		if len(prompt) == 0 {
+			markdown = false
+		}
+	}
+	if len(prompt) == 0 {
+		prompt = wrapPreviewLines(preview, width)
+	}
 	if len(prompt) > 2 {
 		prompt = prompt[:2]
 		prompt[1] = "\u2026"
 	}
-	for _, wrapped := range prompt {
-		lines = append(lines, []span{{text: wrapped, style: spanPlain}})
+	for _, rendered := range prompt {
+		lines = append(lines, []span{{text: rendered, raw: markdown}})
 	}
 
 	out := make([]string, 0, height)

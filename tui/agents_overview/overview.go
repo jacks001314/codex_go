@@ -245,6 +245,11 @@ type View struct {
 	// accent color ("#rrggbb"), returning "" to fall back to the default style.
 	UseThemeColors bool
 	ThreadColor    func(threadID string) string
+	// RenderMarkdown renders the task-details prompt preview into styled,
+	// already width-wrapped lines (Rust #44752). The terminal-agnostic core
+	// owns the terminal markup, so callers inject it; nil keeps the plain text
+	// preview.
+	RenderMarkdown func(text string, width int) []string
 }
 
 // projectGroup is a row's project-grouping identity. With linked worktrees

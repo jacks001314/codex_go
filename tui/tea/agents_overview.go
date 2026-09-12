@@ -9,6 +9,7 @@ import (
 	"codex_go/features"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/markdown"
 )
 
 // In-session `/agents` dashboard (Rust #39094/#39112). The dashboard is a
@@ -146,6 +147,32 @@ func (m *Model) wireAgentsOverviewThemeColors(view *agentsoverview.View) {
 	view.ThreadColor = func(threadID string) string {
 		return codextui.ThreadColorForTheme(threadID, m.tuiTheme)
 	}
+	// Rust #44752: the task-details prompt preview renders markdown into styled
+	// lines. The core cannot measure ANSI, so the renderer returns lines already
+	// wrapped to the requested width.
+	view.RenderMarkdown = func(text string, width int) []string {
+		if width <= 0 || strings.TrimSpace(text) == "" {
+			return nil
+		}
+		rendered, err := markdown.RenderWithThemeCwd(text, width, m.tuiTheme, m.overviewCWD())
+		if err != nil {
+			return nil
+		}
+		lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+			lines = lines[:len(lines)-1]
+		}
+		return lines
+	}
+}
+
+// overviewCWD returns the working directory used to resolve local file links in
+// the dashboard's markdown preview.
+func (m *Model) overviewCWD() string {
+	if m == nil || m.State == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.State.CWD)
 }
 
 func (m *Model) openAgentsUnavailableSelection() bubbletea.Cmd {
