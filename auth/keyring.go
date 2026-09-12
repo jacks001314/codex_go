@@ -9,6 +9,18 @@ import (
 
 var ErrKeyringSecretNotFound = errors.New("secret not found")
 
+// OSKeyringAvailable reports whether this build has a durable OS keyring
+// backend. Go does not link one: KeyringStore is an in-process map used as a
+// seam for tests, so production keyring storage cannot persist credentials.
+// Rust's credentials-store modes fall back to the file when keyring storage is
+// unavailable (auto) and fail when it is required (keyring), which is what the
+// auth storage backends do here.
+const OSKeyringAvailable = false
+
+// KeyringUnavailableError reports that keyring-backed credentials were
+// required but no durable keyring backend exists in this build.
+const KeyringUnavailableError = "OS keyring storage is unavailable; set cli_auth_credentials_store = \"file\" or \"auto\""
+
 type KeyringBackendKind string
 
 const (

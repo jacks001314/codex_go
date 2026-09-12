@@ -285,26 +285,24 @@ func TestSearchCommandPathReadinessRejectsDirectory(t *testing.T) {
 	}
 }
 
-func TestAuthCheckUsesConfiguredKeyringStore(t *testing.T) {
+// TestAuthCheckReportsUnavailableKeyringStoreLikeRust covers the doctor check
+// on a host without an OS keyring: the keyring mode cannot be read, so the
+// check fails with the access error instead of reporting a logged-in session.
+func TestAuthCheckReportsUnavailableKeyringStoreLikeRust(t *testing.T) {
 	clearDoctorAuthEnv(t)
 	home := t.TempDir()
 	if err := os.WriteFile(config.ConfigPath(home), []byte(`cli_auth_credentials_store = "keyring"`), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	if err := auth.NewStoreWithOptions(home, auth.StoreOptionsFromConfig("keyring", false)).Save(auth.FromAPIKey("sk-keyring")); err != nil {
-		t.Fatalf("save keyring auth: %v", err)
+	if err := auth.NewStoreWithOptions(home, auth.StoreOptionsFromConfig("keyring", false)).Save(auth.FromAPIKey("sk-keyring")); err == nil {
+		t.Fatal("saving keyring auth without an OS keyring must fail")
 	}
 
 	check := authCheck(home, &Options{})
-	if check.Status != CheckStatusOK {
-		t.Fatalf("status = %s details=%v", check.Status, check.Details)
+	if check.Status != CheckStatusFail || check.Summary != "stored credentials could not be read" {
+		t.Fatalf("check = %+v, want the unreadable-storage failure", check)
 	}
-	for _, want := range []string{
-		"auth storage mode: Keyring",
-		"auth file: " + filepath.Join(home, "auth.json"),
-		"stored auth mode: api_key",
-		"stored API key: true",
-	} {
+	for _, want := range []string{auth.KeyringUnavailableError} {
 		if !containsDetail(check, want) {
 			t.Fatalf("missing auth detail %q in %#v", want, check.Details)
 		}

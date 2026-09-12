@@ -4845,25 +4845,27 @@ func TestRuntimeRouterGetAuthStatusReadsAuthStore(t *testing.T) {
 	}
 }
 
-func TestDefaultRuntimeRouterReadsConfiguredKeyringAuthStore(t *testing.T) {
+// TestDefaultRuntimeRouterKeyringAuthStoreFailsWithoutAnOSKeyringLikeRust pins
+// Rust's contract when keyring storage is unavailable: the keyring mode cannot
+// persist credentials, so the runtime reports an unauthenticated session
+// instead of reading a memory-only store.
+func TestDefaultRuntimeRouterKeyringAuthStoreFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
 	clearAuthEnvAppserver(t)
 	home := t.TempDir()
 	if err := os.WriteFile(config.ConfigPath(home), []byte(`cli_auth_credentials_store = "keyring"`), 0o600); err != nil {
 		t.Fatalf("WriteFile config returned error: %v", err)
 	}
 	store := auth.NewStoreWithOptions(home, auth.StoreOptionsFromConfig("keyring", false))
-	if err := store.Save(auth.FromAPIKey("sk-keyring")); err != nil {
-		t.Fatalf("Save keyring auth error: %v", err)
+	if err := store.Save(auth.FromAPIKey("sk-keyring")); err == nil || !strings.Contains(err.Error(), auth.KeyringUnavailableError) {
+		t.Fatalf("Save keyring auth error = %v, want the keyring-unavailable error", err)
 	}
 	router := NewDefaultRuntimeRouter(session.NewStore(filepath.Join(home, "sessions")), home)
 
 	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAuthStatus, AuthStatusParams{}))
-	if response.Error != nil {
-		t.Fatalf("get auth status = %+v", response)
-	}
-	status := response.Result.(*AuthStatusResponse)
-	if !status.Authenticated || status.AuthMethod == nil || *status.AuthMethod != string(AuthModeAPIKey) {
-		t.Fatalf("status = %+v", status)
+	// Rust surfaces the unreadable keyring store instead of reporting a logged-in
+	// session.
+	if response.Error == nil || !strings.Contains(response.Error.Message, auth.KeyringUnavailableError) {
+		t.Fatalf("get auth status = %+v, want the keyring-unavailable error", response)
 	}
 	if _, err := os.Stat(filepath.Join(home, "auth.json")); !os.IsNotExist(err) {
 		t.Fatalf("auth.json should not exist for keyring auth: %v", err)

@@ -307,16 +307,33 @@ func (s *fileAuthStorage) Source() string {
 type keyringAuthStorage struct {
 	codexHome string
 	keyring   *KeyringStore
+	// available reports whether the keyring can durably hold credentials: an
+	// explicitly injected store is the test seam, otherwise this build has no OS
+	// keyring.
+	available bool
 }
 
 func newKeyringAuthStorage(codexHome string, backend KeyringBackendKind, store *KeyringStore) *keyringAuthStorage {
+	injected := store != nil
 	if store == nil {
 		store = NewKeyringStore(backend)
 	}
-	return &keyringAuthStorage{codexHome: codexHome, keyring: store}
+	return &keyringAuthStorage{codexHome: codexHome, keyring: store, available: injected || OSKeyringAvailable}
+}
+
+// keyringUnavailable reports the Rust "keyring when available, otherwise fail"
+// outcome for this storage.
+func (s *keyringAuthStorage) keyringUnavailable() error {
+	if s == nil || s.available {
+		return nil
+	}
+	return errors.New(KeyringUnavailableError)
 }
 
 func (s *keyringAuthStorage) Load() (*AuthDotJSON, error) {
+	if err := s.keyringUnavailable(); err != nil {
+		return nil, err
+	}
 	value, err := s.keyring.Get(authKeyringService, authStoreKey(s.codexHome))
 	if errors.Is(err, ErrKeyringSecretNotFound) {
 		return nil, nil
@@ -332,6 +349,9 @@ func (s *keyringAuthStorage) Load() (*AuthDotJSON, error) {
 }
 
 func (s *keyringAuthStorage) Save(auth AuthDotJSON) error {
+	if err := s.keyringUnavailable(); err != nil {
+		return err
+	}
 	data, err := json.Marshal(auth)
 	if err != nil {
 		return err
@@ -346,6 +366,9 @@ func (s *keyringAuthStorage) Save(auth AuthDotJSON) error {
 }
 
 func (s *keyringAuthStorage) Delete() (bool, error) {
+	if err := s.keyringUnavailable(); err != nil {
+		return false, err
+	}
 	keyringRemoved, err := s.keyring.Delete(authKeyringService, authStoreKey(s.codexHome))
 	if err != nil {
 		return false, fmt.Errorf("failed to delete auth from keyring: %w", err)

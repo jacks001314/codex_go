@@ -142,6 +142,45 @@ func TestAutoStoreModeFallsBackToFileWhenKeyringEmpty(t *testing.T) {
 	}
 }
 
+// TestKeyringStoreModeFailsWithoutAnOSKeyringLikeRust pins Rust's "keyring when
+// available, otherwise fail": this build has no OS keyring, so requiring it
+// must surface an error instead of silently keeping credentials in memory.
+func TestKeyringStoreModeFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStoreWithOptions(dir, &StoreOptions{Mode: AuthCredentialsStoreKeyring})
+	if err := store.Save(FromAPIKey("sk-keyring")); err == nil || !strings.Contains(err.Error(), KeyringUnavailableError) {
+		t.Fatalf("Save() error = %v, want the keyring-unavailable error", err)
+	}
+	if _, err := store.Load(); err == nil || !strings.Contains(err.Error(), KeyringUnavailableError) {
+		t.Fatalf("Load() error = %v, want the keyring-unavailable error", err)
+	}
+	if _, err := store.Delete(); err == nil || !strings.Contains(err.Error(), KeyringUnavailableError) {
+		t.Fatalf("Delete() error = %v, want the keyring-unavailable error", err)
+	}
+}
+
+// TestAutoStoreModePersistsToFileWithoutAnOSKeyringLikeRust covers Rust's
+// documented auto fallback: without keyring storage the credentials file is the
+// durable store, so a save must reach it.
+func TestAutoStoreModePersistsToFileWithoutAnOSKeyringLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStoreWithOptions(dir, &StoreOptions{Mode: AuthCredentialsStoreAuto})
+	if err := store.Save(FromAPIKey("sk-auto")); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "auth.json")); err != nil {
+		t.Fatalf("auto mode did not persist to auth.json: %v", err)
+	}
+	reloaded := NewStoreWithOptions(dir, &StoreOptions{Mode: AuthCredentialsStoreAuto})
+	loaded, err := reloaded.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded == nil || loaded.OpenAIAPIKey != "sk-auto" {
+		t.Fatalf("loaded auth = %+v", loaded)
+	}
+}
+
 func TestEphemeralStoreModeIsInMemoryOnly(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStoreWithOptions(dir, &StoreOptions{Mode: AuthCredentialsStoreEphemeral})

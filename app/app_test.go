@@ -192,19 +192,32 @@ func TestLoginStatusUsesEnv(t *testing.T) {
 	}
 }
 
-func TestLoginUsesConfiguredKeyringAuthStore(t *testing.T) {
+// TestLoginWithKeyringStoreFailsWithoutAnOSKeyringLikeRust covers Rust's
+// credentials-store contract on a host without a keyring: the keyring mode
+// fails instead of silently keeping credentials in memory, and the auto mode
+// falls back to the credentials file.
+func TestLoginWithKeyringStoreFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="keyring"`, "login", "--with-api-key"}, strings.NewReader("sk-keyring\n"), &stdout, &bytes.Buffer{}); err != nil {
-		t.Fatalf("login returned error: %v", err)
+	err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="keyring"`, "login", "--with-api-key"}, strings.NewReader("sk-keyring\n"), &stdout, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), auth.KeyringUnavailableError) {
+		t.Fatalf("keyring login error = %v, want the keyring-unavailable error", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "auth.json")); !os.IsNotExist(err) {
-		t.Fatalf("auth.json should not exist for keyring login: %v", err)
+		t.Fatalf("auth.json should not exist after a failed keyring login: %v", err)
 	}
 
 	stdout.Reset()
-	if err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="keyring"`, "login", "status"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="auto"`, "login", "--with-api-key"}, strings.NewReader("sk-keyring\n"), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("auto login returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "auth.json")); err != nil {
+		t.Fatalf("auto login did not persist auth.json: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="auto"`, "login", "status"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("status returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Logged in using an API key") {
