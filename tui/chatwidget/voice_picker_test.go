@@ -28,6 +28,9 @@ func TestVoicePickerViewMarksCurrentVoice(t *testing.T) {
 	if !view.Searchable || !view.AllowCancel {
 		t.Fatalf("view = %#v", view)
 	}
+	if view.Title != "Select voice" || view.Subtitle != "Applies to your next voice conversation." {
+		t.Fatalf("copy drifted from Rust: title=%q subtitle=%q", view.Title, view.Subtitle)
+	}
 }
 
 func TestVoicePickerViewHandlesAnEmptyCatalog(t *testing.T) {

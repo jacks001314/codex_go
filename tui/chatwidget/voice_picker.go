@@ -32,9 +32,10 @@ func NewVoicePickerView(current string, voices []string) SelectionView {
 		items = append(items, SelectionItem{Name: "No voices are available", Disabled: true})
 	}
 	return SelectionView{
-		ViewID:               VoicePickerViewID,
-		Title:                "Voice",
-		Subtitle:             "Applies to future voice conversations",
+		ViewID: VoicePickerViewID,
+		// Copy matches the Rust realtime settings snapshot.
+		Title:                "Select voice",
+		Subtitle:             "Applies to your next voice conversation.",
 		FooterHint:           standardPopupHintLine,
 		AllowCancel:          true,
 		Searchable:           true,

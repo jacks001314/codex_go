@@ -327,7 +327,7 @@ func TestModelVoiceSettingsOpensPickerAndSaves(t *testing.T) {
 	if model.voicePreference != "cove" {
 		t.Fatalf("preference = %q", model.voicePreference)
 	}
-	if model.notice != "Voice set to cove." {
+	if model.notice != "Voice set to cove. Applies to your next voice conversation." {
 		t.Fatalf("notice = %q", model.notice)
 	}
 }
