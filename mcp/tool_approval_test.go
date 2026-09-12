@@ -355,6 +355,82 @@ func TestParseMCPToolApprovalResponseLikeRust(t *testing.T) {
 	}
 }
 
+// TestParseMCPToolApprovalElicitationResponseLikeRust mirrors Rust
+// parse_mcp_tool_approval_elicitation_response.
+func TestParseMCPToolApprovalElicitationResponseLikeRust(t *testing.T) {
+	const questionID = "mcp_tool_call_approval_call-1"
+	tests := []struct {
+		name    string
+		action  string
+		meta    any
+		content any
+		want    MCPToolApprovalDecision
+	}{
+		{name: "accept", action: "accept", want: MCPToolApprovalApprove},
+		{
+			name:   "accept for session",
+			action: "accept",
+			meta:   map[string]any{"persist": "session"},
+			want:   MCPToolApprovalApproveForSession,
+		},
+		{
+			name:   "accept and remember",
+			action: "accept",
+			meta:   map[string]any{"persist": "always"},
+			want:   MCPToolApprovalApproveAndRemember,
+		},
+		{
+			name:    "accept with a user-input answer",
+			action:  "accept",
+			content: map[string]any{questionID: MCPToolApprovalAcceptForSession},
+			want:    MCPToolApprovalApproveForSession,
+		},
+		{
+			name:    "accept with an unrelated answer stays approved",
+			action:  "accept",
+			content: map[string]any{"other": MCPToolApprovalAccept},
+			want:    MCPToolApprovalApprove,
+		},
+		{name: "decline rejects", action: "decline", want: MCPToolApprovalReject},
+		{name: "cancel aborts", action: "cancel", want: MCPToolApprovalDeny},
+		{name: "unknown aborts", action: "weird", want: MCPToolApprovalDeny},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := ParseMCPToolApprovalElicitationResponse(testCase.action, testCase.meta, testCase.content, questionID); got != testCase.want {
+				t.Fatalf("ParseMCPToolApprovalElicitationResponse() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestToolExecutorUsesTheRejectionMessageLikeRust covers the distinct model
+// text for a rejected (declined) call versus an aborted one.
+func TestToolExecutorUsesTheRejectionMessageLikeRust(t *testing.T) {
+	service := newToolApprovalTestService(map[string]any{"command": "docs-server"})
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		Service:    service,
+		ServerName: "docs",
+		ToolName:   tool.NamespacedName("docs", "search"),
+		ToolInfo:   &MCPToolInfo{Name: "search"},
+		ThreadID:   "thread-1",
+		TurnID:     "turn-1",
+		ToolApproval: &ToolApprovalOptions{
+			Handler: MCPToolApprovalHandlerFunc(func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
+				return MCPToolApprovalReject, nil
+			}),
+			ApprovalPolicy: sandbox.ApprovalOnRequest,
+		},
+	})
+	denied, err := executor.approveToolCallIfNeeded(context.Background(), "call-1", nil)
+	if err != nil {
+		t.Fatalf("approveToolCallIfNeeded() error = %v", err)
+	}
+	if denied == nil || denied.Success || denied.Body != MCPToolApprovalRejectedMessage {
+		t.Fatalf("rejection output = %#v", denied)
+	}
+}
+
 // TestNormalizeMCPToolApprovalDecisionLikeRust mirrors Rust
 // normalize_approval_decision_for_mode.
 func TestNormalizeMCPToolApprovalDecisionLikeRust(t *testing.T) {

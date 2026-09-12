@@ -28,6 +28,11 @@ type appserverMCPToolApprovalHandler struct {
 	// gate: only when it is on may the prompt offer "allow and don't ask me
 	// again".
 	persistentApprovalAllowed bool
+	// elicitationEnabled mirrors Rust's tool_call_mcp_elicitation feature: when
+	// on, the approval is surfaced as an MCP elicitation form (with the same
+	// enablement as the persistent-approval option, since Rust gates both on the
+	// same feature).
+	elicitationEnabled bool
 }
 
 // appsRequirementsForConfig returns the managed app requirements, if any.
@@ -85,6 +90,7 @@ func (r *RuntimeRouter) newAppserverMCPToolApprovalOptions(
 			turnID:                    strings.TrimSpace(turnID),
 			approvalPolicy:            approvalPolicy,
 			persistentApprovalAllowed: persistent,
+			elicitationEnabled:        persistent,
 		},
 	}
 }
@@ -118,15 +124,23 @@ func (h *appserverMCPToolApprovalHandler) ApproveMCPToolCall(ctx context.Context
 		promptOptions,
 		"",
 	)
-	response, err := h.responder(ctx, &tool.RequestUserInputArgs{Questions: []tool.UserInputQuestion{question}})
-	if err != nil {
-		// Rust's request_user_input failure aborts the call.
-		return mcp.MCPToolApprovalDeny, nil
+	var decision mcp.MCPToolApprovalDecision
+	if h.elicitationEnabled {
+		elicitationDecision, err := h.approveViaElicitation(ctx, request, questionID, question)
+		if err != nil {
+			// A failed elicitation aborts the call, matching Rust.
+			return mcp.MCPToolApprovalDeny, nil
+		}
+		decision = elicitationDecision
+	} else {
+		response, err := h.responder(ctx, &tool.RequestUserInputArgs{Questions: []tool.UserInputQuestion{question}})
+		if err != nil {
+			// Rust's request_user_input failure aborts the call.
+			return mcp.MCPToolApprovalDeny, nil
+		}
+		decision = mcp.ParseMCPToolApprovalResponse(response, questionID)
 	}
-	decision := mcp.NormalizeMCPToolApprovalDecision(
-		mcp.ParseMCPToolApprovalResponse(response, questionID),
-		request.ApprovalMode,
-	)
+	decision = mcp.NormalizeMCPToolApprovalDecision(decision, request.ApprovalMode)
 	if request.SessionKey == nil {
 		return decision, nil
 	}
@@ -142,6 +156,108 @@ func (h *appserverMCPToolApprovalHandler) ApproveMCPToolCall(ctx context.Context
 		}
 	}
 	return decision, nil
+}
+
+// MCP tool approval elicitation values and labels (Rust codex_protocol's
+// mcp_approval_meta plus the TUI's approval_action option values).
+const (
+	mcpToolApprovalElicitationField   = "decision"
+	mcpToolApprovalResponseMode       = "approval_action"
+	mcpToolApprovalRequestType        = "approval_request"
+	mcpToolApprovalKind               = "mcp_tool_call"
+	mcpToolApprovalAcceptValue        = "accept"
+	mcpToolApprovalAcceptSessionValue = "accept_session"
+	mcpToolApprovalAcceptAlwaysValue  = "accept_always"
+	mcpToolApprovalDeclineValue       = "decline"
+	mcpToolApprovalCancelValue        = "cancel"
+	mcpToolApprovalAcceptLabel        = "Allow"
+	mcpToolApprovalAcceptSessionLabel = "Allow for this session"
+	mcpToolApprovalAcceptAlwaysLabel  = "Allow and don't ask me again"
+	mcpToolApprovalDeclineLabel       = "Reject"
+	mcpToolApprovalCancelLabel        = "Cancel"
+)
+
+// approveViaElicitation ports Rust's tool-call MCP elicitation path: the
+// approval is surfaced as an elicitation form whose single select field carries
+// the approval values the TUI maps back to accept/session/always/decline/cancel
+// (Rust sends an empty form plus `codex_approval_kind` meta; Go's TUI detects
+// the approval from `response_mode` or that select field, so both are sent).
+func (h *appserverMCPToolApprovalHandler) approveViaElicitation(
+	ctx context.Context,
+	request *mcp.MCPToolApprovalRequest,
+	questionID string,
+	question tool.UserInputQuestion,
+) (mcp.MCPToolApprovalDecision, error) {
+	if h == nil || h.router == nil {
+		return mcp.MCPToolApprovalDeny, nil
+	}
+	values := []any{mcpToolApprovalAcceptValue}
+	labels := []any{mcpToolApprovalAcceptLabel}
+	if request.AllowSessionRemember {
+		values = append(values, mcpToolApprovalAcceptSessionValue)
+		labels = append(labels, mcpToolApprovalAcceptSessionLabel)
+	}
+	if request.AllowPersistentApproval {
+		values = append(values, mcpToolApprovalAcceptAlwaysValue)
+		labels = append(labels, mcpToolApprovalAcceptAlwaysLabel)
+	}
+	values = append(values, mcpToolApprovalDeclineValue, mcpToolApprovalCancelValue)
+	labels = append(labels, mcpToolApprovalDeclineLabel, mcpToolApprovalCancelLabel)
+	meta := map[string]any{
+		"response_mode":       mcpToolApprovalResponseMode,
+		"codex_request_type":  mcpToolApprovalRequestType,
+		"codex_approval_kind": mcpToolApprovalKind,
+		"tool_name":           request.Tool,
+	}
+	if request.Arguments != nil {
+		meta["tool_params"] = request.Arguments
+	}
+	if title := strings.TrimSpace(request.ToolTitle); title != "" {
+		meta["tool_title"] = title
+	}
+	if description := strings.TrimSpace(request.ToolDescription); description != "" {
+		meta["tool_description"] = description
+	}
+	if connectorID := strings.TrimSpace(request.ConnectorID); connectorID != "" {
+		meta["connector_id"] = connectorID
+	}
+	switch {
+	case request.AllowSessionRemember && request.AllowPersistentApproval:
+		meta["persist"] = []any{"session", "always"}
+	case request.AllowSessionRemember:
+		meta["persist"] = "session"
+	case request.AllowPersistentApproval:
+		meta["persist"] = "always"
+	}
+	elicitation := &mcp.MCPElicitationRequest{
+		ServerName:    strings.TrimSpace(request.Server),
+		ThreadID:      h.threadID,
+		TurnID:        h.turnID,
+		Method:        "elicitation/create",
+		ElicitationID: questionID,
+		Message:       question.Question,
+		RequestedSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				mcpToolApprovalElicitationField: map[string]any{
+					"type":      "string",
+					"enum":      values,
+					"enumNames": labels,
+				},
+			},
+		},
+		Meta: meta,
+	}
+	var response MCPElicitationRequestResponse
+	if err := h.router.requireServerRequests().Request(ctx, ServerRequestMCPElicitation, appserverMCPElicitationParams(elicitation), &response); err != nil {
+		return mcp.MCPToolApprovalDeny, err
+	}
+	return mcp.ParseMCPToolApprovalElicitationResponse(
+		string(response.Action),
+		response.Meta,
+		response.Content,
+		questionID,
+	), nil
 }
 
 // persistApproval reuses the elicitation-path persistence so the amendment lands

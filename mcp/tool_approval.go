@@ -51,11 +51,20 @@ const (
 	// MCPToolApprovalApproveAndRemember persists the choice as a config
 	// amendment (Rust ReviewDecision::ApprovedMcpPolicyAmendment).
 	MCPToolApprovalApproveAndRemember
+	// MCPToolApprovalReject is a user *rejection* (Rust
+	// ReviewDecision::Denied), which reports a different message than an
+	// aborted prompt.
+	MCPToolApprovalReject
 )
 
 // MCPToolApprovalDeniedMessage is the model-visible text for an aborted call
 // (Rust notify_mcp_tool_call_skip with "user cancelled MCP tool call").
 const MCPToolApprovalDeniedMessage = "user cancelled MCP tool call"
+
+// MCPToolApprovalRejectedMessage is the model-visible text when the user
+// explicitly rejects an MCP tool call (Rust
+// parse_mcp_tool_approval_elicitation_response's decline path).
+const MCPToolApprovalRejectedMessage = "user rejected MCP tool call"
 
 // MCPToolCallBlockedByAppConfigurationMessage is Rust's model-visible text for
 // a Codex Apps tool the app configuration disables
@@ -322,6 +331,74 @@ func BuildMCPToolApprovalQuestion(
 	}
 }
 
+// ParseMCPToolApprovalElicitationResponse ports Rust
+// parse_mcp_tool_approval_elicitation_response: an accepted elicitation uses the
+// requested persist mode when present, otherwise its content is read as a
+// user-input answer and an unanswered accept counts as approved; a declined
+// elicitation is a rejection and anything else aborts.
+func ParseMCPToolApprovalElicitationResponse(
+	action string,
+	meta any,
+	content any,
+	questionID string,
+) MCPToolApprovalDecision {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "accept":
+		if values, ok := meta.(map[string]any); ok {
+			if persist, ok := values["persist"].(string); ok {
+				switch strings.ToLower(strings.TrimSpace(persist)) {
+				case "session":
+					return MCPToolApprovalApproveForSession
+				case "always":
+					return MCPToolApprovalApproveAndRemember
+				}
+			}
+		}
+		if decision := ParseMCPToolApprovalResponse(mcpToolApprovalElicitationContent(content), questionID); decision != MCPToolApprovalDeny {
+			return decision
+		}
+		return MCPToolApprovalApprove
+	case "decline":
+		return MCPToolApprovalReject
+	default:
+		return MCPToolApprovalDeny
+	}
+}
+
+// mcpToolApprovalElicitationContent ports Rust
+// request_user_input_response_from_elicitation_content: an elicitation content
+// object maps question ids to string or string-list answers.
+func mcpToolApprovalElicitationContent(content any) *tool.UserInputResponse {
+	values, ok := content.(map[string]any)
+	if !ok {
+		return &tool.UserInputResponse{Answers: map[string]string{}}
+	}
+	response := &tool.UserInputResponse{Answers: map[string]string{}}
+	for key, raw := range values {
+		switch typed := raw.(type) {
+		case string:
+			response.Answers[key] = typed
+		case []string:
+			if response.StructuredAnswers == nil {
+				response.StructuredAnswers = map[string][]string{}
+			}
+			response.StructuredAnswers[key] = append([]string(nil), typed...)
+		case []any:
+			for _, item := range typed {
+				text, ok := item.(string)
+				if !ok {
+					continue
+				}
+				if response.StructuredAnswers == nil {
+					response.StructuredAnswers = map[string][]string{}
+				}
+				response.StructuredAnswers[key] = append(response.StructuredAnswers[key], text)
+			}
+		}
+	}
+	return response
+}
+
 // ParseMCPToolApprovalResponse ports Rust parse_mcp_tool_approval_response: an
 // unanswered question aborts the call, session/persistent choices win over the
 // plain accept, and any other answer cancels.
@@ -466,6 +543,9 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		return nil, nil
 	default:
 		body := MCPToolApprovalDeniedMessage
+		if decision == MCPToolApprovalReject {
+			body = MCPToolApprovalRejectedMessage
+		}
 		return &tool.Output{
 			Success:    false,
 			Body:       body,

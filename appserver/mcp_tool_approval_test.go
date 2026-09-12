@@ -11,6 +11,108 @@ import (
 	"codex_go/tool"
 )
 
+// TestAppserverMCPToolApprovalUsesElicitationLikeRust covers the elicitation
+// transport used when tool_call_mcp_elicitation is enabled: the request carries
+// the approval schema and meta the TUI renders, and the answer maps back to the
+// session-remember or persistent-approval decision.
+func TestAppserverMCPToolApprovalUsesElicitationLikeRust(t *testing.T) {
+	run := func(t *testing.T, action MCPElicitationAction, meta map[string]any) (mcp.MCPToolApprovalDecision, *MCPElicitationRequestParams, *appserverMCPToolApprovalHandler) {
+		t.Helper()
+		router := NewRuntimeRouter(RuntimeServices{})
+		t.Cleanup(func() { _ = router.Close() })
+		var params *MCPElicitationRequestParams
+		router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+			if request.Method != ServerRequestMCPElicitation {
+				t.Errorf("unexpected server request %s", request.Method)
+				return
+			}
+			params, _ = request.Params.(*MCPElicitationRequestParams)
+			router.requireServerRequests().Resolve(OK(request.ID, &MCPElicitationRequestResponse{Action: action, Meta: meta}))
+		}))
+		handler := &appserverMCPToolApprovalHandler{
+			router: router,
+			responder: func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+				t.Error("the elicitation transport must not fall back to user input")
+				return nil, nil
+			},
+			threadID:                  "thread-1",
+			turnID:                    "turn-1",
+			approvalPolicy:            sandbox.ApprovalOnRequest,
+			persistentApprovalAllowed: true,
+			elicitationEnabled:        true,
+		}
+		sessionKey := mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"}
+		decision, err := handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
+			Server:                  "docs",
+			Tool:                    "search",
+			ToolTitle:               "Search docs",
+			ApprovalMode:            apps.AppToolApprovalAuto,
+			CallID:                  "call-1",
+			SessionKey:              &sessionKey,
+			AllowSessionRemember:    true,
+			AllowPersistentApproval: true,
+		})
+		if err != nil {
+			t.Fatalf("ApproveMCPToolCall() error = %v", err)
+		}
+		return decision, params, handler
+	}
+
+	decision, params, handler := run(t, MCPElicitationActionAccept, map[string]any{"persist": "session"})
+	if decision != mcp.MCPToolApprovalApproveForSession {
+		t.Fatalf("decision = %v, want a session approval", decision)
+	}
+	if !handler.router.mcpToolApprovalRemembered("thread-1", mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"}) {
+		t.Fatal("session approval was not remembered")
+	}
+	if params == nil {
+		t.Fatal("no elicitation request was sent")
+	}
+	if params.ElicitationID != "mcp_tool_call_approval_call-1" || params.Mode == "" {
+		t.Fatalf("elicitation params = %#v", params)
+	}
+	meta, _ := params.Meta.(map[string]any)
+	for key, want := range map[string]any{
+		"response_mode":       "approval_action",
+		"codex_request_type":  "approval_request",
+		"codex_approval_kind": "mcp_tool_call",
+		"tool_name":           "search",
+		"tool_title":          "Search docs",
+		"connector_id":        nil,
+	} {
+		if want == nil {
+			continue
+		}
+		if meta[key] != want {
+			t.Fatalf("elicitation meta[%s] = %#v, want %#v (meta=%#v)", key, meta[key], want, meta)
+		}
+	}
+	schema, ok := params.RequestedSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("requested schema = %#v", params.RequestedSchema)
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	field, _ := properties["decision"].(map[string]any)
+	values, _ := field["enum"].([]any)
+	wantValues := []string{"accept", "accept_session", "accept_always", "decline", "cancel"}
+	if len(values) != len(wantValues) {
+		t.Fatalf("approval options = %#v", values)
+	}
+	for index, want := range wantValues {
+		if values[index] != want {
+			t.Fatalf("option %d = %#v, want %q", index, values[index], want)
+		}
+	}
+
+	declineDecision, _, declineHandler := run(t, MCPElicitationActionDecline, nil)
+	if declineDecision != mcp.MCPToolApprovalReject {
+		t.Fatalf("decline decision = %v, want a rejection", declineDecision)
+	}
+	if declineHandler.router.mcpToolApprovalRemembered("thread-1", mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"}) {
+		t.Fatal("a rejected call must not be remembered")
+	}
+}
+
 func newMCPToolApprovalTestHandler(
 	responder tool.UserInputResponder,
 	persistent bool,
