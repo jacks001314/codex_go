@@ -35,7 +35,7 @@ func TestExecPolicyAmendmentSavedReportsThroughWorldStateLikeRust(t *testing.T) 
 
 	// The first turn emits the full instructions (which list the approved
 	// prefix) and persists the section snapshot.
-	first, err := router.permissionsWorldStateInputItem(threadID, params, cfg)
+	first, err := router.permissionsWorldStateInputItem(threadID, params, nil, cfg)
 	if err != nil {
 		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
@@ -46,7 +46,7 @@ func TestExecPolicyAmendmentSavedReportsThroughWorldStateLikeRust(t *testing.T) 
 
 	// The instructions hash is unchanged, so only the newly approved prefix is
 	// reported, exactly once.
-	second, err := router.permissionsWorldStateInputItem(threadID, params, cfg)
+	second, err := router.permissionsWorldStateInputItem(threadID, params, nil, cfg)
 	if err != nil {
 		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestExecPolicyAmendmentSavedReportsThroughWorldStateLikeRust(t *testing.T) 
 	if got := permissionsInputItemText(t, second); got != want {
 		t.Fatalf("saved prefix text = %q, want %q", got, want)
 	}
-	third, err := router.permissionsWorldStateInputItem(threadID, params, cfg)
+	third, err := router.permissionsWorldStateInputItem(threadID, params, nil, cfg)
 	if err != nil {
 		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
