@@ -8,6 +8,7 @@ import (
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
 	"codex_go/eventmap"
+	"codex_go/session"
 	codextui "codex_go/tui"
 	codextea "codex_go/tui/tea"
 )
@@ -185,5 +186,42 @@ func transcriptPreviewAssistantMarkdown(text string) string {
 func reverseTranscriptPreviewLines(lines []codextui.TranscriptPreviewLine) {
 	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
 		lines[i], lines[j] = lines[j], lines[i]
+	}
+}
+
+// interactiveRemoteSessionTranscriptHandler loads a session's full transcript
+// for the resume picker's ctrl+t overlay (Rust PickerLoadRequest::Transcript).
+func interactiveRemoteSessionTranscriptHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.SessionTranscriptFunc {
+	return func(threadID string) ([]codextui.Message, error) {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			return nil, errors.New("session transcript requires a thread id")
+		}
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		defer client.close()
+		thread, err := remoteTUIReadThread(ctx, client, threadID, true)
+		if err != nil {
+			return nil, err
+		}
+		return remoteTUIThreadMessagesFromThread(thread), nil
+	}
+}
+
+// interactiveSessionTranscriptHandler loads the embedded session's transcript
+// from the local store.
+func interactiveSessionTranscriptHandler() codextea.SessionTranscriptFunc {
+	return func(threadID string) ([]codextui.Message, error) {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			return nil, errors.New("session transcript requires a thread id")
+		}
+		record, err := newSessionStore().Read(session.ThreadID(threadID), true, true)
+		if err != nil {
+			return nil, err
+		}
+		return interactiveSessionMessagesFromRecord(record), nil
 	}
 }

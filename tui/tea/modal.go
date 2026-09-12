@@ -514,6 +514,12 @@ func (m *Model) updateSessionPickerModal(message bubbletea.KeyMsg) bubbletea.Cmd
 			}
 			return nil
 		}
+	case bubbletea.KeyCtrlT:
+		if item, ok := picker.SelectedItem(); ok {
+			// Rust open_selected_transcript: ctrl+t opens the selected session's
+			// full transcript in the pager overlay.
+			return m.openSelectedSessionTranscript(item)
+		}
 	case bubbletea.KeyBackspace:
 		if picker.Query != "" {
 			runes := []rune(picker.Query)

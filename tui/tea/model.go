@@ -858,6 +858,10 @@ type Options struct {
 	// resume_picker_transcript_preview.rs). Nil leaves expanded rows without a
 	// conversation preview.
 	OnLoadTranscriptPreview TranscriptPreviewFunc
+	// OnReadSessionTranscript loads a session's full transcript for the resume
+	// picker's ctrl+t overlay (Rust PickerLoadRequest::Transcript). Nil leaves
+	// the overlay showing a failure notice.
+	OnReadSessionTranscript SessionTranscriptFunc
 	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
 	// /voice unavailable for this runtime.
 	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
@@ -1385,6 +1389,10 @@ type Model struct {
 	recapInFlight           bool
 	onDaybreakNotice        func(model string) codextui.DaybreakNotice
 	onLoadTranscriptPreview TranscriptPreviewFunc
+	onReadSessionTranscript SessionTranscriptFunc
+	// sessionTranscriptThreadID identifies the picker transcript overlay's
+	// session so a late load result is ignored after the overlay changes.
+	sessionTranscriptThreadID string
 	// recap tracks the automatic recap deadline and turn accounting (Rust
 	// RecapState).
 	recap            tuiapp.RecapState
@@ -1704,6 +1712,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onGenerateRecap:                 options.OnGenerateRecap,
 		onDaybreakNotice:                options.OnDaybreakNotice,
 		onLoadTranscriptPreview:         options.OnLoadTranscriptPreview,
+		onReadSessionTranscript:         options.OnReadSessionTranscript,
 		disableAutoRecap:                options.AutoRecap != nil && !*options.AutoRecap,
 		recapLoadingIndex:               -1,
 		onReadTokenActivity:             options.OnReadTokenActivity,
@@ -2146,6 +2155,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyCyberPolicyErrorMsg(msg)
 	case TranscriptPreviewMsg:
 		m.applyTranscriptPreview(msg)
+		return m, nil
+	case SessionTranscriptMsg:
+		m.applySessionTranscript(msg)
 		return m, nil
 	case DebugConfigResultMsg:
 		m.applyDebugConfigResult(msg)
@@ -6150,7 +6162,7 @@ func (m *Model) applyVoiceSaved(msg VoiceSavedMsg) {
 		return
 	}
 	m.voicePreference = strings.TrimSpace(msg.Voice)
-	m.recordVoiceCommandResult("Voice set to " + m.voicePreference + ".")
+	m.recordVoiceCommandResult("Voice set to " + m.voicePreference + ". Applies to your next voice conversation.")
 }
 
 // handleVoiceNotification folds one realtime notification into the local voice
@@ -6513,6 +6525,7 @@ func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
 	wasBacktrack := m.backtrack.OverlayPreviewActive
 	m.overlay = nil
 	m.overlayTranscript = false
+	m.sessionTranscriptThreadID = ""
 	m.backtrack.OverlayPreviewActive = false
 	if wasBacktrack {
 		// Rust close_transcript_overlay: a closed preview clears all backtrack
@@ -6618,9 +6631,14 @@ func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.overlay == nil {
 		return nil
 	}
-	// Rust app_backtrack: with the overlay open, Esc begins the backtrack
-	// preview; once the preview is active, Esc/Left step to an older prompt,
-	// Right steps to a newer one, and Enter confirms the highlighted prompt.
+	// Rust app_backtrack: with the *transcript* overlay open, Esc begins the
+	// backtrack preview; once the preview is active, Esc/Left step to an older
+	// prompt, Right steps to a newer one, and Enter confirms the highlighted
+	// prompt. Other pagers (/diff, the resume picker's session transcript) keep
+	// their own keymap instead.
+	if !m.overlayTranscript {
+		return m.updatePagerOverlayKey(msg)
+	}
 	if msg.Type == bubbletea.KeyEsc {
 		if m.backtrack.OverlayPreviewActive {
 			m.stepBacktrackAndHighlight(false)
@@ -6640,6 +6658,14 @@ func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		case bubbletea.KeyEnter:
 			return m.confirmOverlayBacktrack()
 		}
+	}
+	return m.updatePagerOverlayKey(msg)
+}
+
+// updatePagerOverlayKey applies the pager keymap to an open overlay.
+func (m *Model) updatePagerOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
+	if m == nil || m.overlay == nil {
+		return nil
 	}
 	keySpec := keySpecFromKeyMsg(msg)
 	if m.keyMatches("pager", "close", keySpec) || m.keyMatches("pager", "close_transcript", keySpec) {

@@ -416,6 +416,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			return daybreakNoticeForModel(daybreakProvider, daybreakCache, model)
 		},
 		OnLoadTranscriptPreview: interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
+		OnReadSessionTranscript: interactiveRemoteSessionTranscriptHandler(ctx, endpoint),
 		OnRenameThread:          interactiveRemoteRenameThreadHandler(ctx, endpoint),
 		OnLogout:                interactiveRemoteLogoutHandler(ctx, endpoint),
 		KeymapConfig:            keymapConfig,
