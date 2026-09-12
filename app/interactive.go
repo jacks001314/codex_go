@@ -882,6 +882,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnResumeSession:             interactiveResumeSessionHandler(root),
 		OnPromptEdit:                interactivePromptEditHandler(root),
 		OnExportTranscript:          interactiveTranscriptExportHandler(),
+		OnLoadTranscriptPreview:     interactiveTranscriptPreviewHandler(),
 		OnRenameThread:              interactiveRenameThreadHandler(),
 		OnLogout:                    interactiveLogoutHandler(ctx, root),
 		OnOpenDesktopThread:         interactiveOpenDesktopThread,

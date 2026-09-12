@@ -151,6 +151,12 @@ func TestSessionPickerRenderDensityExpansionAndPaging(t *testing.T) {
 		t.Fatalf("expanded rows = %s", rows)
 	}
 	picker.ToggleDensity()
+	// Rust renders an expanded row's details in dense mode too.
+	denseRows := picker.RenderRows(40, now)
+	if !strings.Contains(strings.Join(denseRows, "\n"), "Thread: thread-0") {
+		t.Fatalf("dense expanded rows = %#v", denseRows)
+	}
+	picker.ToggleExpanded("thread-0")
 	if rows := picker.RenderRows(40, now); len(rows) != len(items) || !strings.Contains(rows[0], "now") {
 		t.Fatalf("dense rows = %#v", rows)
 	}

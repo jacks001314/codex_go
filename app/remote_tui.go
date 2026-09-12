@@ -415,10 +415,11 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnDaybreakNotice: func(model string) codextui.DaybreakNotice {
 			return daybreakNoticeForModel(daybreakProvider, daybreakCache, model)
 		},
-		OnRenameThread: interactiveRemoteRenameThreadHandler(ctx, endpoint),
-		OnLogout:       interactiveRemoteLogoutHandler(ctx, endpoint),
-		KeymapConfig:   keymapConfig,
-		OnKeymapEdit:   interactiveRemoteKeymapEditHandler(ctx, endpoint),
+		OnLoadTranscriptPreview: interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
+		OnRenameThread:          interactiveRemoteRenameThreadHandler(ctx, endpoint),
+		OnLogout:                interactiveRemoteLogoutHandler(ctx, endpoint),
+		KeymapConfig:            keymapConfig,
+		OnKeymapEdit:            interactiveRemoteKeymapEditHandler(ctx, endpoint),
 		OnReadAgents: func(currentThreadID string) ([]codextui.AgentThreadEntry, error) {
 			if strings.TrimSpace(currentThreadID) == "" && state != nil {
 				currentThreadID = state.ThreadID

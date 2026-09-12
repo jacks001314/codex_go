@@ -853,6 +853,11 @@ type Options struct {
 	// refusal copy (Rust daybreak::Notice). A nil hook uses the neutral Limited
 	// copy, which is also Rust's pending/failed default.
 	OnDaybreakNotice func(model string) codextui.DaybreakNotice
+	// OnLoadTranscriptPreview lazily loads a session's newest transcript lines
+	// for the resume picker's expanded rows (Rust
+	// resume_picker_transcript_preview.rs). Nil leaves expanded rows without a
+	// conversation preview.
+	OnLoadTranscriptPreview TranscriptPreviewFunc
 	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
 	// /voice unavailable for this runtime.
 	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
@@ -1372,13 +1377,14 @@ type Model struct {
 	// backgroundThreadEvents buffers app-server notifications for non-active
 	// (subagent) threads so switching to them can replay in-progress activity
 	// instead of showing an empty transcript (Rust parity: ThreadEventStore).
-	backgroundThreadEvents map[string][]protocol.ThreadEvent
-	clipboardWrite         func(text string) error
-	clipboardWriteRich     func(html string, text string) error
-	onExportTranscript     TranscriptExportFunc
-	onGenerateRecap        RecapGenerateFunc
-	recapInFlight          bool
-	onDaybreakNotice       func(model string) codextui.DaybreakNotice
+	backgroundThreadEvents  map[string][]protocol.ThreadEvent
+	clipboardWrite          func(text string) error
+	clipboardWriteRich      func(html string, text string) error
+	onExportTranscript      TranscriptExportFunc
+	onGenerateRecap         RecapGenerateFunc
+	recapInFlight           bool
+	onDaybreakNotice        func(model string) codextui.DaybreakNotice
+	onLoadTranscriptPreview TranscriptPreviewFunc
 	// recap tracks the automatic recap deadline and turn accounting (Rust
 	// RecapState).
 	recap            tuiapp.RecapState
@@ -1697,6 +1703,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onExportTranscript:              options.OnExportTranscript,
 		onGenerateRecap:                 options.OnGenerateRecap,
 		onDaybreakNotice:                options.OnDaybreakNotice,
+		onLoadTranscriptPreview:         options.OnLoadTranscriptPreview,
 		disableAutoRecap:                options.AutoRecap != nil && !*options.AutoRecap,
 		recapLoadingIndex:               -1,
 		onReadTokenActivity:             options.OnReadTokenActivity,
@@ -2137,6 +2144,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyRecapCheck(m.currentTime())
 	case CyberPolicyErrorMsg:
 		return m, m.applyCyberPolicyErrorMsg(msg)
+	case TranscriptPreviewMsg:
+		m.applyTranscriptPreview(msg)
+		return m, nil
 	case DebugConfigResultMsg:
 		m.applyDebugConfigResult(msg)
 		return m, nil

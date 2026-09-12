@@ -504,7 +504,15 @@ func (m *Model) updateSessionPickerModal(message bubbletea.KeyMsg) bubbletea.Cmd
 		picker.ToggleDensity()
 	case bubbletea.KeyCtrlE:
 		if item, ok := picker.SelectedItem(); ok {
+			wasExpanded := picker.Expanded[item.ThreadID]
 			picker.ToggleExpanded(item.ThreadID)
+			m.syncSessionPickerModalSelection()
+			if !wasExpanded {
+				// The expanded row shows the conversation preview, which is
+				// loaded lazily (Rust toggle_selected_expansion).
+				return m.requestTranscriptPreview(item)
+			}
+			return nil
 		}
 	case bubbletea.KeyBackspace:
 		if picker.Query != "" {

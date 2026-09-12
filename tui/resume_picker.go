@@ -188,8 +188,11 @@ type SessionPickerState struct {
 	Density        SessionListDensity
 	ToolbarFocus   SessionPickerToolbarControl
 	Expanded       map[string]bool
-	Loading        bool
-	Error          string
+	// TranscriptPreviews caches the lazy conversation preview of each expanded
+	// session (Rust TranscriptPreviewState).
+	TranscriptPreviews map[string]TranscriptPreviewState
+	Loading            bool
+	Error              string
 	// UseThemeColors enables deterministic per-thread identity colors on
 	// session titles (Rust #44857). ThemeID selects the accent palette.
 	UseThemeColors bool
@@ -467,11 +470,12 @@ func (s *SessionPickerState) RenderRows(width int, now time.Time) []string {
 		selected := index == s.Selected
 		if s.Density == SessionDensityDense {
 			rows = append(rows, s.renderDenseSessionRow(item, selected, width, now))
-			continue
+		} else {
+			rows = append(rows, s.renderComfortableSessionRow(item, selected, width, now)...)
 		}
-		rows = append(rows, s.renderComfortableSessionRow(item, selected, width, now)...)
 		if s.Expanded[item.ThreadID] {
 			rows = append(rows, renderExpandedSessionRows(item, width)...)
+			rows = append(rows, s.renderTranscriptPreviewLines(item.ThreadID, width)...)
 		}
 	}
 	return rows
