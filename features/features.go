@@ -189,7 +189,7 @@ var Registry = []Spec{
 	{Key: "personality", Stage: StageStable, DefaultEnabled: true},
 	{Key: "artifact", Stage: StageUnderDevelopment},
 	{Key: "fast_mode", Stage: StageStable, DefaultEnabled: true},
-	{Key: "realtime_conversation", Stage: StageRemoved},
+	{Key: "realtime_conversation", Stage: StageStable, DefaultEnabled: true},
 	{Key: "remote_control", Stage: StageRemoved},
 	{Key: "image_detail_original", Stage: StageRemoved},
 	{Key: "tui_app_server", Stage: StageRemoved, DefaultEnabled: true},

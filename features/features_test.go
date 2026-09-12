@@ -71,6 +71,28 @@ func TestDefaultsIncludesStableShellTool(t *testing.T) {
 	}
 }
 
+// TestRealtimeConversationFeatureIsStableAndOnLikeRust pins Rust #44921, which
+// moved realtime_conversation from experimental/off to stable/on. Go consumes
+// this key only through the feature registry (voice RPCs stay gated by the
+// experimental API capability), so the registry metadata is the alignment.
+func TestRealtimeConversationFeatureIsStableAndOnLikeRust(t *testing.T) {
+	if !Known("realtime_conversation") {
+		t.Fatal("realtime_conversation should be known")
+	}
+	if !Defaults()["realtime_conversation"] {
+		t.Fatal("realtime_conversation default = false, want true (Rust #44921)")
+	}
+	for _, spec := range Registry {
+		if spec.Key == "realtime_conversation" {
+			if spec.Stage != StageStable || !spec.DefaultEnabled {
+				t.Fatalf("realtime_conversation spec = %#v, want stable and enabled by default", spec)
+			}
+			return
+		}
+	}
+	t.Fatal("realtime_conversation is missing from Registry")
+}
+
 func TestRetainClientDeveloperMessagesFeatureMatchesRust(t *testing.T) {
 	if !Known("retain_client_developer_messages") {
 		t.Fatal("retain_client_developer_messages should be known")

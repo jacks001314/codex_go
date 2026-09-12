@@ -164,16 +164,17 @@ RTP 全程 48 kHz；`voicehost/manager_test.go` 的 24000 断言同步改为 480
 
 > 仍建议实机（真实麦克风/扬声器）验证一次音频回环；静态不一致已消除。
 
-### 8.2 `realtime_conversation` feature stage 漂移（voice-owned，未改）
+### 8.2 `realtime_conversation` feature stage 漂移（**已修复**）
 
 - Rust：`features/src/lib.rs` — `key: "realtime_conversation", stage:
   Stage::Stable, default_enabled: true`（commit `3f59eb965a` #44921）。
-- Go：`features/features.go:192` — `{Key: "realtime_conversation", Stage:
-  StageRemoved}`（`DefaultEnabled` 缺省 false）。
-- 影响：Go 端语义上"默认关闭"，需在 config 显式
-  `[features] realtime_conversation = true` 才启用；与上游默认开启不一致。
-- 归属：`update/plan_2026_09_12.md` 已记录 #44921 为 voice 进程负责的
-  alignment 工作，本轮**未改动**，仅登记。
+- Go：`features/features.go` 已由 `{Stage: StageRemoved}` 改为
+  `{Key: "realtime_conversation", Stage: StageStable, DefaultEnabled: true}`，
+  与上游一致；新增回归 `features.TestRealtimeConversationFeatureIsStableAndOnLikeRust`。
+- 说明：Go 的 voice RPC 实际由 **experimental API capability** 门控（代码中没有
+  `features.Enabled(..., "realtime_conversation")` 消费点），因此这次是**注册表元数据对齐**：
+  `feature/list` 的 stage 由 beta→stable、enabled 默认由 false→true，配置
+  `[features] realtime_conversation = false` 仍可关闭。
 
 ### 8.3 DSP 缺失（**已实现，见 §12**）
 
