@@ -1,6 +1,9 @@
 package sandbox
 
 import (
+	"crypto/sha1"
+	"encoding/binary"
+	"encoding/hex"
 	"path/filepath"
 	"strings"
 )
@@ -15,6 +18,28 @@ const (
 // RenderPermissionInstructions wraps a prompt body in Rust's fragment markers.
 func RenderPermissionInstructions(body string) string {
 	return PermissionInstructionsOpenTag + body + PermissionInstructionsCloseTag
+}
+
+// worldStateFragmentDomain mirrors Rust's WorldStateHash domain separator.
+const worldStateFragmentDomain = "codex-world-state-fragment-v1\x00"
+
+// WorldStateFragmentHash ports Rust WorldStateHash::from_fragment: SHA-1 over
+// the domain separator plus the fragment role and rendered text, each written
+// length-prefixed after CRLF normalization.
+func WorldStateFragmentHash(role string, rendered string) string {
+	hasher := sha1.New()
+	_, _ = hasher.Write([]byte(worldStateFragmentDomain))
+	writeWorldStateHashComponent(hasher, role)
+	writeWorldStateHashComponent(hasher, rendered)
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+func writeWorldStateHashComponent(hasher interface{ Write([]byte) (int, error) }, value string) {
+	normalized := strings.ReplaceAll(value, "\r\n", "\n")
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(normalized)))
+	_, _ = hasher.Write(length[:])
+	_, _ = hasher.Write([]byte(normalized))
 }
 
 // PermissionPromptProfileOptions carries the turn-scoped inputs Rust's

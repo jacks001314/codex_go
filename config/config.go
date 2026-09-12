@@ -1664,6 +1664,20 @@ func (c *Config) IncludeCollaborationModeInstructions() bool {
 	return true
 }
 
+// IncludePermissionsInstructions ports Rust's
+// `include_permissions_instructions` (default true): when false the full
+// permissions instructions are replaced by the compact approved-prefix
+// section.
+func (c *Config) IncludePermissionsInstructions() bool {
+	if c == nil || c.Values == nil {
+		return true
+	}
+	if value, ok := c.Values["include_permissions_instructions"].(bool); ok {
+		return value
+	}
+	return true
+}
+
 func stringFromConfigValue(value any) string {
 	if raw, ok := value.(string); ok {
 		return strings.TrimSpace(raw)

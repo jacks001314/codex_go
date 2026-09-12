@@ -6215,6 +6215,15 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		inputItems = append(inputItems, item)
 	}
 	inputItems = append(inputItems, additionalInputItems...)
+	permissionsSessionItems := []session.Item{}
+	if item, err := r.permissionsWorldStateInputItem(threadID, params, cfg); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+		if persisted, ok := permissionsWorldStateSessionItemForTurn(turnID, item, time.UnixMilli(startedAtMS).UTC()); ok {
+			permissionsSessionItems = append(permissionsSessionItems, persisted)
+		}
+	}
 	collaborationModeSessionItems := []session.Item{}
 	if item, err := r.collaborationModeWorldStateInputItem(threadID, params, modelInfo, cfg); err != nil {
 		return nil, err
@@ -6264,6 +6273,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	instructions = r.instructionsWithMemoryToolContext(cfg, instructions)
 	sessionItems := append([]session.Item(nil), currentTimeSessionItems...)
 	sessionItems = append(sessionItems, realtimeStateSessionItems...)
+	sessionItems = append(sessionItems, permissionsSessionItems...)
 	sessionItems = append(sessionItems, collaborationModeSessionItems...)
 	sessionItems = append(sessionItems, skillInstructionSessionItemsForTurn(turnID, skillInputItems, time.UnixMilli(startedAtMS).UTC())...)
 	var extraSessionItemsMu sync.Mutex
