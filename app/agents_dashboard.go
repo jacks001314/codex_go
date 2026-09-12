@@ -66,6 +66,9 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID 
 			Preview:  strings.TrimSpace(thread.Preview),
 			CWD:      strings.TrimSpace(thread.CWD),
 		}
+		if thread.Model != nil {
+			row.Model = strings.TrimSpace(*thread.Model)
+		}
 		if thread.Name != nil {
 			row.Name = strings.TrimSpace(*thread.Name)
 		}
@@ -109,6 +112,7 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 			Name:     strings.TrimSpace(record.Title),
 			Preview:  strings.TrimSpace(record.Preview),
 			CWD:      strings.TrimSpace(record.Metadata.CWD),
+			Model:    strings.TrimSpace(record.Metadata.Model),
 		}
 		if branch, ok := record.Metadata.Git["branch"]; ok {
 			row.GitBranch = strings.TrimSpace(branch)
@@ -624,7 +628,7 @@ func (m *agentsDashboardModel) dispatchCmd(prompt string) bubbletea.Cmd {
 		return nil
 	}
 	cwd := ""
-	if !m.view.State.StatusGrouping {
+	if m.view.State.Grouping == agentsoverview.GroupingProject {
 		if row := m.view.SelectedRow(); row != nil {
 			cwd = strings.TrimSpace(row.CWD)
 		}

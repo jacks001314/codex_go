@@ -14,6 +14,69 @@ func sampleRows() []Row {
 	}
 }
 
+// TestModelGroupingLikeRust covers #44957: Ctrl+S cycles project -> status ->
+// model, model grouping sorts by model with "Unknown" for missing names, the
+// footer and details report the model, and the cycle wraps back to project.
+func TestModelGroupingLikeRust(t *testing.T) {
+	rows := []Row{
+		{ThreadID: "t-1", Name: "alpha", CWD: "/work/a", Model: "gpt-5.4", Group: GroupWorking},
+		{ThreadID: "t-2", Name: "beta", CWD: "/work/b", Model: "gpt-5.5", Group: GroupReady},
+		{ThreadID: "t-3", Name: "gamma", CWD: "/work/c", Model: "gpt-5.4", Group: GroupReady},
+		{ThreadID: "t-4", Name: "delta", CWD: "/work/d", Group: GroupFinished},
+	}
+	view := New(rows, "", false)
+	if view.State.Grouping != GroupingProject {
+		t.Fatalf("default grouping = %v, want project", view.State.Grouping)
+	}
+	view.ToggleGrouping()
+	if view.State.Grouping != GroupingStatus {
+		t.Fatalf("first toggle = %v, want status", view.State.Grouping)
+	}
+	view.ToggleGrouping()
+	if view.State.Grouping != GroupingModel {
+		t.Fatalf("second toggle = %v, want model", view.State.Grouping)
+	}
+
+	// Model grouping orders by model name, keeping host order within a group.
+	visible := view.VisibleIndices()
+	order := make([]string, 0, len(visible))
+	for _, index := range visible {
+		order = append(order, view.Rows[index].ThreadID)
+	}
+	// "Unknown" sorts before lowercase model names, matching Rust's byte-wise
+	// group key.
+	want := []string{"t-4", "t-1", "t-3", "t-2"}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Fatalf("model grouping order = %v, want %v", order, want)
+	}
+
+	joined := strings.Join(view.Render(140, 30), "\n")
+	for _, wantText := range []string{"gpt-5.4  2", "gpt-5.5  1", "Unknown  1", "ctrl+s group: model"} {
+		if !strings.Contains(joined, wantText) {
+			t.Errorf("model grouping render missing %q:\n%s", wantText, joined)
+		}
+	}
+
+	// The cycle wraps back to project grouping.
+	view.ToggleGrouping()
+	if view.State.Grouping != GroupingProject {
+		t.Fatalf("third toggle = %v, want project", view.State.Grouping)
+	}
+	if !strings.Contains(strings.Join(view.Render(140, 30), "\n"), "ctrl+s group: project") {
+		t.Error("project grouping footer hint missing")
+	}
+
+	// Task details report the model, using Unknown when it is missing.
+	details := strings.Join(view.Render(140, 30), "\n")
+	if !strings.Contains(details, "Model: gpt-5.4") {
+		t.Errorf("model detail missing:\n%s", details)
+	}
+	empty := New([]Row{{ThreadID: "t-9", Name: "n", CWD: "/work/z"}}, "", false)
+	if !strings.Contains(strings.Join(empty.Render(140, 30), "\n"), "Model: Unknown") {
+		t.Error("missing model should render as Unknown")
+	}
+}
+
 func TestGroupForStatusLikeRust(t *testing.T) {
 	cases := []struct {
 		status           string
@@ -98,8 +161,8 @@ func TestProjectGroupingSortsByCWD(t *testing.T) {
 	}
 	// status grouping keeps host order
 	view.ToggleGrouping()
-	if !view.State.StatusGrouping {
-		t.Fatal("ToggleGrouping did not enable status grouping")
+	if view.State.Grouping != GroupingStatus {
+		t.Fatalf("ToggleGrouping = %v, want status", view.State.Grouping)
 	}
 	visible = view.VisibleIndices()
 	if len(visible) != 3 {

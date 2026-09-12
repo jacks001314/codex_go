@@ -318,11 +318,11 @@ func TestAgentsDashboardSearchAndGrouping(t *testing.T) {
 		t.Fatal("esc did not exit search")
 	}
 	model.Update(keyPress(bubbletea.KeyCtrlS))
-	if !model.view.State.StatusGrouping {
-		t.Fatal("ctrl+s did not toggle status grouping")
+	if model.view.State.Grouping != agentsoverview.GroupingStatus {
+		t.Fatalf("ctrl+s grouping = %v, want status", model.view.State.Grouping)
 	}
 	model.Update(keyPress(bubbletea.KeyCtrlN))
-	if !model.view.State.StatusGrouping || model.view.State.Searching || model.view.State.Input != "" {
+	if model.view.State.Grouping != agentsoverview.GroupingStatus || model.view.State.Searching || model.view.State.Input != "" {
 		t.Fatalf("ctrl+n did not clear: %#v", model.view.State)
 	}
 }

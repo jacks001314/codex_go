@@ -366,7 +366,7 @@ func (m *Model) dispatchAgentsOverviewCmd(prompt string) bubbletea.Cmd {
 		return nil
 	}
 	cwd := ""
-	if !m.agentsOverview.State.StatusGrouping {
+	if m.agentsOverview.State.Grouping == agentsoverview.GroupingProject {
 		if row := m.agentsOverview.SelectedRow(); row != nil {
 			cwd = strings.TrimSpace(row.CWD)
 		}

@@ -96,7 +96,8 @@ func (v *View) footerSpans() []span {
 		spans = append(spans, span{text: binding, style: spanBold}, span{text: " search  ", style: spanDim})
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintToggleGrouping, "ctrl+s"); ok {
-		spans = append(spans, span{text: binding, style: spanBold}, span{text: " group  ", style: spanDim})
+		// Rust #44957: the footer reports the active grouping mode.
+		spans = append(spans, span{text: binding, style: spanBold}, span{text: " " + v.State.Grouping.Label() + "  ", style: spanDim})
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintRename, "ctrl+r"); ok {
 		spans = append(spans, span{text: binding, style: spanBold}, span{text: " rename  ", style: spanDim})
@@ -155,7 +156,7 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 	if len(visible) == 0 {
 		return nil
 	}
-	projectGrouping := !v.State.StatusGrouping
+	grouping := v.State.Grouping
 	selPos := 0
 	for i, index := range visible {
 		if index == v.Selected {
@@ -168,10 +169,7 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 	first := selPos
 	accumulated := 1
 	for first > 0 {
-		previous := &v.Rows[visible[first-1]]
-		current := &v.Rows[visible[first]]
-		groupChanged := (projectGrouping && !v.projectGroupAt(visible[first-1]).equal(v.projectGroupAt(visible[first]))) ||
-			(!projectGrouping && previous.Group != current.Group)
+		groupChanged := !v.sameGroup(grouping, visible[first-1], visible[first])
 		added := 1
 		if groupChanged {
 			added = 1 + 1 // group header + separator
@@ -189,11 +187,7 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 		if len(lines) >= height {
 			break
 		}
-		row := &v.Rows[index]
-		group := v.projectGroupAt(index).heading
-		if !projectGrouping {
-			group = row.Group.Label()
-		}
+		group := v.groupHeading(grouping, index)
 		if previousGroup == nil || *previousGroup != group {
 			if previousGroup != nil {
 				if len(lines) >= height {
@@ -206,11 +200,7 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 			}
 			count := 0
 			for i := range v.Rows {
-				if projectGrouping {
-					if v.projectGroupAt(i).equal(v.projectGroupAt(index)) {
-						count++
-					}
-				} else if v.Rows[i].Group == row.Group {
+				if v.sameGroup(grouping, i, index) {
 					count++
 				}
 			}
@@ -223,7 +213,7 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 		if len(lines) >= height {
 			break
 		}
-		lines = append(lines, renderLine("", v.renderRowSpans(index, projectGrouping), listWidth, styled))
+		lines = append(lines, renderLine("", v.renderRowSpans(index, grouping != GroupingStatus), listWidth, styled))
 	}
 	return lines
 }
@@ -269,6 +259,11 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	lines = append(lines, nil)
 	lines = append(lines, []span{{text: "Project", style: spanDim}})
 	lines = append(lines, []span{{text: row.CWD, style: spanPlain}})
+	// Rust #44957: task details show the task's model.
+	lines = append(lines, []span{
+		{text: "Model: ", style: spanDim},
+		{text: ModelName(row.Model), style: spanPlain},
+	})
 	if strings.TrimSpace(row.GitBranch) != "" {
 		lines = append(lines, nil)
 		lines = append(lines, []span{{text: "Branch", style: spanDim}})

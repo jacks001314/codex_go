@@ -88,8 +88,13 @@ func TestModelAgentsDashboardNavigationAndSearch(t *testing.T) {
 		t.Fatalf("esc did not exit search: %#v", model.agentsOverview.State)
 	}
 	model.Update(key(bubbletea.KeyCtrlS))
-	if !model.agentsOverview.State.StatusGrouping {
-		t.Fatal("ctrl+s did not enable status grouping")
+	if model.agentsOverview.State.Grouping != agentsoverview.GroupingStatus {
+		t.Fatalf("ctrl+s grouping = %v, want status", model.agentsOverview.State.Grouping)
+	}
+	// Rust #44957: the toggle cycles on to model grouping.
+	model.Update(key(bubbletea.KeyCtrlS))
+	if model.agentsOverview.State.Grouping != agentsoverview.GroupingModel {
+		t.Fatalf("second ctrl+s grouping = %v, want model", model.agentsOverview.State.Grouping)
 	}
 }
 

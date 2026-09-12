@@ -32,6 +32,7 @@ func GroupForStatus(statusType string, waitingOnApproval, waitingOnUserInput boo
 		if waitingOnApproval || waitingOnUserInput {
 			return GroupNeedsYou
 		}
+
 		return GroupWorking
 	case "idle":
 		return GroupReady
@@ -40,6 +41,54 @@ func GroupForStatus(statusType string, waitingOnApproval, waitingOnUserInput boo
 	default: // "notLoaded" and unknown statuses
 		return GroupFinished
 	}
+}
+
+// Grouping is the dashboard's task grouping mode, cycled by the toggle
+// shortcut (Rust #44957 AgentsOverviewGrouping).
+type Grouping int
+
+const (
+	// GroupingProject groups by project directory (or repository when linked
+	// worktrees are enabled).
+	GroupingProject Grouping = iota
+	// GroupingStatus groups by task status.
+	GroupingStatus
+	// GroupingModel groups by the task's model.
+	GroupingModel
+)
+
+// Next returns the next grouping mode in the toggle cycle.
+func (g Grouping) Next() Grouping {
+	switch g {
+	case GroupingStatus:
+		return GroupingModel
+	case GroupingModel:
+		return GroupingProject
+	default:
+		return GroupingStatus
+	}
+}
+
+// Label is the footer hint text for the active grouping mode (Rust
+// agents_overview_render).
+func (g Grouping) Label() string {
+	switch g {
+	case GroupingStatus:
+		return "group: status"
+	case GroupingModel:
+		return "group: model"
+	default:
+		return "group: project"
+	}
+}
+
+// ModelName is the group label for a row's model; missing or empty names group
+// as "Unknown" (Rust agents_overview_grouping::model_name).
+func ModelName(model string) string {
+	if name := strings.TrimSpace(model); name != "" {
+		return name
+	}
+	return "Unknown"
 }
 
 func (g Group) Label() string {
@@ -72,10 +121,13 @@ func (g Group) Dot() string {
 
 // Row is one root thread shown by the dashboard.
 type Row struct {
-	ThreadID     string
-	Name         string
-	Preview      string
-	CWD          string
+	ThreadID string
+	Name     string
+	Preview  string
+	CWD      string
+	// Model is the task's model; an empty value groups as "Unknown"
+	// (Rust #44957).
+	Model        string
 	GitBranch    string
 	Group        Group
 	IsCurrent    bool
@@ -134,11 +186,11 @@ const (
 
 // State is the mutable view state preserved across dashboard refreshes.
 type State struct {
-	Input          string
-	Search         string
-	Searching      bool
-	StatusGrouping bool
-	Renaming       bool
+	Input     string
+	Search    string
+	Searching bool
+	Grouping  Grouping
+	Renaming  bool
 	// HiddenThreads is local visibility only; activity and metadata refreshes
 	// never reveal a hidden root (Rust #44424).
 	HiddenThreads map[string]struct{}
@@ -342,29 +394,32 @@ func (v *View) VisibleIndices() []int {
 			visible = append(visible, i)
 		}
 	}
-	if !v.State.StatusGrouping {
+	switch v.State.Grouping {
+	case GroupingModel:
+		// Model grouping: sort by model name while preserving host recency
+		// order within a group (Rust #44957).
+		v.stableSortByGroupKey(visible, func(index int) string {
+			return ModelName(v.Rows[index].Model)
+		})
+	case GroupingStatus:
+		// Status grouping keeps the host's recency order.
+	default:
 		// Project grouping: sort by the project-group key (linked checkouts of
 		// one repository share a key, Rust #43279) while preserving host
 		// recency order within a group.
-		v.stableSortByProject(visible)
+		v.stableSortByGroupKey(visible, func(index int) string {
+			group := v.projectGroupAt(index)
+			return group.commonDir + "\x00" + group.relativeCWD
+		})
 	}
 	return visible
 }
 
-func (v *View) stableSortByProject(indices []int) {
-	// insertion sort keeps host recency order within the same project.
-	groups := v.projectGroups
-	if len(groups) != len(v.Rows) {
-		// Defensive: rows applied without recomputing groups.
-		v.recomputeProjectGroups()
-		groups = v.projectGroups
-	}
+// stableSortByGroupKey sorts rows by a group key with an insertion sort, which
+// keeps the host's recency order within each group.
+func (v *View) stableSortByGroupKey(indices []int, key func(index int) string) {
 	less := func(left int, right int) bool {
-		a, b := groups[left], groups[right]
-		if a.commonDir != b.commonDir {
-			return a.commonDir < b.commonDir
-		}
-		return a.relativeCWD < b.relativeCWD
+		return key(left) < key(right)
 	}
 	for i := 1; i < len(indices); i++ {
 		key := indices[i]
@@ -471,13 +526,44 @@ func (v *View) PageUp() {
 	}
 }
 
-// ToggleGrouping switches between project (cwd) and status grouping.
+// ToggleGrouping cycles project -> status -> model grouping (Rust #44957).
 func (v *View) ToggleGrouping() {
 	if v == nil {
 		return
 	}
-	v.State.StatusGrouping = !v.State.StatusGrouping
+	v.State.Grouping = v.State.Grouping.Next()
 	v.fitSelection()
+}
+
+// sameGroup reports whether two rows share the active grouping's group (Rust
+// AgentsOverviewView::same_group).
+func (v *View) sameGroup(grouping Grouping, left int, right int) bool {
+	if v == nil || left < 0 || right < 0 || left >= len(v.Rows) || right >= len(v.Rows) {
+		return false
+	}
+	switch grouping {
+	case GroupingStatus:
+		return v.Rows[left].Group == v.Rows[right].Group
+	case GroupingModel:
+		return ModelName(v.Rows[left].Model) == ModelName(v.Rows[right].Model)
+	default:
+		return v.projectGroupAt(left).equal(v.projectGroupAt(right))
+	}
+}
+
+// groupHeading is the rendered header for a row's group (Rust #44957).
+func (v *View) groupHeading(grouping Grouping, index int) string {
+	if v == nil || index < 0 || index >= len(v.Rows) {
+		return ""
+	}
+	switch grouping {
+	case GroupingStatus:
+		return v.Rows[index].Group.Label()
+	case GroupingModel:
+		return ModelName(v.Rows[index].Model)
+	default:
+		return v.projectGroupAt(index).heading
+	}
 }
 
 // ToggleSearch enters or leaves search mode (Rust ctrl+f).
