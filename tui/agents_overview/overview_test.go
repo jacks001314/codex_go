@@ -14,6 +14,48 @@ func sampleRows() []Row {
 	}
 }
 
+// TestPreviewMarkdownLikeRust covers #44752's bounded preview: control
+// characters other than newlines and tabs are stripped, the text is capped at
+// 512 characters, and the details prompt keeps explicit line breaks while being
+// limited to two rendered lines.
+func TestPreviewMarkdownLikeRust(t *testing.T) {
+	if got := PreviewMarkdown("a\x00b\tc\nd\x07e"); got != "ab\tc\nde" {
+		t.Fatalf("PreviewMarkdown = %q, want ab\\tc\\nde", got)
+	}
+	if got := PreviewMarkdown(strings.Repeat("x", 600)); len([]rune(got)) != 512 {
+		t.Fatalf("PreviewMarkdown length = %d, want 512", len([]rune(got)))
+	}
+	// Filtered control characters do not consume the preview budget.
+	mixed := "\x00" + strings.Repeat("y", 512)
+	if got := PreviewMarkdown(mixed); got != strings.Repeat("y", 512) {
+		t.Fatalf("PreviewMarkdown(mixed) length = %d, want 512", len([]rune(got)))
+	}
+
+	view := New([]Row{{ThreadID: "t-1", CWD: "/work/a", Preview: "alpha beta\ngamma delta\nepsilon"}}, "", false)
+	lines := view.Render(140, 30)
+	promptIndex := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "Prompt" {
+			promptIndex = i
+			break
+		}
+	}
+	if promptIndex < 0 {
+		t.Fatalf("details prompt section missing:\n%s", strings.Join(lines, "\n"))
+	}
+	var section []string
+	for _, line := range lines[promptIndex+1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			break
+		}
+		section = append(section, trimmed)
+	}
+	if len(section) != 2 || section[0] != "alpha beta" || section[1] != "\u2026" {
+		t.Fatalf("prompt preview section = %#v, want [alpha beta, …]", section)
+	}
+}
+
 // TestModelGroupingLikeRust covers #44957: Ctrl+S cycles project -> status ->
 // model, model grouping sorts by model with "Unknown" for missing names, the
 // footer and details report the model, and the cycle wraps back to project.
@@ -337,7 +379,7 @@ func TestRenderLayout(t *testing.T) {
 		}
 	}
 	// Details pane appears on wide terminals.
-	for _, want := range []string{"Task details", "Latest activity", "fix the parser"} {
+	for _, want := range []string{"Task details", "Prompt", "fix the parser"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("details pane missing %q:\n%s", want, joined)
 		}
@@ -349,7 +391,7 @@ func TestRenderDetailsShowsNoActivityPlaceholder(t *testing.T) {
 	view.Selected = 3 // t-4 has no name/preview
 	lines := view.Render(120, 24)
 	joined := strings.Join(lines, "\n")
-	for _, want := range []string{"Task details", "Untitled task", "No activity yet."} {
+	for _, want := range []string{"Task details", "Untitled task", "No prompt available."} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("details pane missing %q:\n%s", want, joined)
 		}
@@ -375,7 +417,7 @@ func TestRenderNarrowTerminalSkipsDetails(t *testing.T) {
 	if strings.Contains(joined, "Task details") {
 		t.Errorf("details pane rendered on narrow terminal:\n%s", joined)
 	}
-	if strings.Contains(joined, "Latest activity") {
+	if strings.Contains(joined, "Prompt") {
 		t.Errorf("activity rendered on narrow terminal:\n%s", joined)
 	}
 }

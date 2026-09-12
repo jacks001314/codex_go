@@ -11,6 +11,7 @@ package agentsoverview
 import (
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"codex_go/gitutil"
 )
@@ -32,7 +33,6 @@ func GroupForStatus(statusType string, waitingOnApproval, waitingOnUserInput boo
 		if waitingOnApproval || waitingOnUserInput {
 			return GroupNeedsYou
 		}
-
 		return GroupWorking
 	case "idle":
 		return GroupReady
@@ -41,6 +41,26 @@ func GroupForStatus(statusType string, waitingOnApproval, waitingOnUserInput boo
 	default: // "notLoaded" and unknown statuses
 		return GroupFinished
 	}
+}
+
+// PreviewMarkdown bounds an overview text preview to Rust's 512-character
+// limit, preserving newlines and tabs for layout while stripping other control
+// characters (Rust agents_overview_details::preview_markdown, #44752).
+func PreviewMarkdown(text string) string {
+	const previewChars = 512
+	var builder strings.Builder
+	kept := 0
+	for _, r := range text {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			continue
+		}
+		if kept >= previewChars {
+			break
+		}
+		builder.WriteRune(r)
+		kept++
+	}
+	return builder.String()
 }
 
 // Grouping is the dashboard's task grouping mode, cycled by the toggle
@@ -137,12 +157,21 @@ type Row struct {
 // Title mirrors Rust: thread name, else preview, else "Untitled task".
 func (r Row) Title() string {
 	if strings.TrimSpace(r.Name) != "" {
-		return strings.TrimSpace(r.Name)
+		return firstLine(strings.TrimSpace(r.Name))
 	}
 	if strings.TrimSpace(r.Preview) != "" {
-		return strings.TrimSpace(r.Preview)
+		return firstLine(strings.TrimSpace(r.Preview))
 	}
 	return "Untitled task"
+}
+
+// firstLine mirrors Rust's display_title, which renders only the first line of
+// a task name or preview.
+func firstLine(value string) string {
+	if index := strings.IndexByte(value, '\n'); index >= 0 {
+		return strings.TrimSpace(value[:index])
+	}
+	return value
 }
 
 // Completion reports how the dashboard view ended.

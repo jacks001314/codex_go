@@ -270,12 +270,19 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 		lines = append(lines, []span{{text: strings.TrimSpace(row.GitBranch), style: spanPlain}})
 	}
 	lines = append(lines, nil)
-	lines = append(lines, []span{{text: "Latest activity", style: spanDim}})
-	preview := strings.TrimSpace(row.Preview)
+	// Rust #44752: the bounded prompt preview keeps its explicit line breaks and
+	// is limited to two rendered lines with an ellipsis marker.
+	lines = append(lines, []span{{text: "Prompt", style: spanDim}})
+	preview := PreviewMarkdown(row.Preview)
 	if preview == "" {
-		preview = "No activity yet."
+		preview = "No prompt available."
 	}
-	for _, wrapped := range wordWrap(preview, width) {
+	prompt := wrapPreviewLines(preview, width)
+	if len(prompt) > 2 {
+		prompt = prompt[:2]
+		prompt[1] = "\u2026"
+	}
+	for _, wrapped := range prompt {
 		lines = append(lines, []span{{text: wrapped, style: spanPlain}})
 	}
 
@@ -323,6 +330,19 @@ func truncateToWidth(value string, maxWidth int) string {
 		total += runeWidth
 	}
 	return builder.String()
+}
+
+// wrapPreviewLines word-wraps a preview while preserving its explicit line
+// breaks and tabs (Rust #44752).
+func wrapPreviewLines(value string, maxWidth int) []string {
+	if value == "" {
+		return nil
+	}
+	out := []string{}
+	for _, raw := range strings.Split(value, "\n") {
+		out = append(out, wordWrap(strings.TrimSuffix(raw, "\r"), maxWidth)...)
+	}
+	return out
 }
 
 func wordWrap(value string, maxWidth int) []string {
