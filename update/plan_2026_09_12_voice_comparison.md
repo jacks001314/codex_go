@@ -121,7 +121,7 @@ GainController2}`。
 | voice strip / 静音控制 | `bottom_pane/voice_strip.rs` | `tui/bottom_pane/voice_strip.go` |
 | 会话相位机/字幕/电平 | `chatwidget/realtime.rs` (~73 KB) | `tui/chatwidget/voice.go` (~30 KB) |
 | 字幕历史 cell | inline | `tui/history_cell/spoken.go` |
-| split-flap 动画字幕板 | `chatwidget/realtime_split_flap.rs` | 未实现 |
+| split-flap 动画字幕板 | `chatwidget/realtime_split_flap.rs` | **动画核心已实现**：`tui/chatwidget/splitflap.go`（tile 到达调度、flap 采样、punctuation 掩码、runway、reduced-motion、滑窗保留），帧序列与 Rust 快照逐字一致（`› ATGG AG` / `› GGTT ET GAT` / `› GATE 73 TEG`）；TUI 样式/超链接线集成待做 |
 | 语音设置选择面板 | `chatwidget/realtime_settings.rs`（标题 "Select voice" / 副标题 "Applies to your next voice conversation."；保存确认 "Voice set to X. Applies to your next voice conversation."） | `tui/chatwidget/voice_picker.go` + `tui/tea` 保存确认：**文案已对齐**（标题/副标题/确认语与 Rust 快照逐字一致）；仍是 Go 的弹层实现，非独立模块 |
 | 语音快照矩阵 | 30+ 语音快照 | 以单元测试为主 |
 
@@ -380,3 +380,28 @@ kind=Playback default=true  name="Speaker (Realtek(R) Audio)"                  n
 把 3 段占位符文本、`MAX_PROMPT_AUDIO_INPUT_BYTES`（50 MiB）、
 `AUDIO_TOKENS_PER_SECOND`（10）与 Rust `canonical_audio_mime` 的别名表全部冻结到
 Rust 源（别名 ≥8 条逐条比对 Go `CanonicalAudioMIME`）。
+
+## 15. voice 域 L2 录制-重放门禁（2026-09-12）
+
+新增 `realtime/replay_test.go` + `realtime/testdata/voice_session.jsonl`：把一段
+realtime 事件流（startSession → transcript delta/done【user】→ bindTurn →
+transcript delta/done【assistant】→ agentItem/promote → sealUserInput → sessionClosed）
+重放进 Go 的 canonical realtime reducer（`RealtimeHistoryState`），并把产出的 item
+表面冻结为 golden：
+
+```
+realtimeSessionStarted|role=|presentation=|outcome=|text=absent
+transcriptSegment|role=user|presentation=|outcome=|text=present
+transcriptSegment|role=assistant|presentation=|outcome=|text=present
+bemItemPromoted|role=|presentation=wholeItem|outcome=|text=absent
+realtimeSessionClosed|role=|presentation=|outcome=ended|text=absent
+```
+
+按 L2 归一化规则，**模型文本只记 presence（不比对措辞）**；未知 op 直接失败，避免
+静默吞事件。录制来源说明：上游 Rust 只提供 realtime 通知 **schema**，没有真实会话录制，
+故该 fixture 由 Rust 协议契约派生——上游 schema 或 Go reducer 漂移都会使其失败。
+
+同类第一块 TUI 表现层：`tui/chatwidget/splitflap.go` 实现 Rust
+`realtime_split_flap.rs` 的动画核心（tile 到达时间表、flap glyph 采样、标点掩码、
+runway 尾部动画、reduced-motion 直通、滑动窗口保留已稳定 tile），测试
+`splitflap_test.go` 复现 Rust 快照帧序列。

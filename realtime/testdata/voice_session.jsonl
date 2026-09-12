@@ -1,0 +1,10 @@
+{"op":"startSession","sessionId":"session-1"}
+{"op":"transcriptDelta","role":"user","delta":"what is the "}
+{"op":"transcriptDone","role":"user","text":"what is the weather"}
+{"op":"bindTurn","turnId":"turn-1"}
+{"op":"transcriptDelta","role":"assistant","delta":"it is sunny"}
+{"op":"transcriptDone","role":"assistant","text":"it is sunny today"}
+{"op":"agentItem","turnId":"turn-1","itemId":"item-1","text":"sunny","completed":true}
+{"op":"promote","turnId":"turn-1","itemId":"item-1","presentationKind":"wholeItem"}
+{"op":"sealUserInput"}
+{"op":"sessionClosed"}
