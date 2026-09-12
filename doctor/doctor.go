@@ -3795,26 +3795,15 @@ func isNonUTF8Locale(value string) bool {
 	return !strings.Contains(value, "utf-8") && !strings.Contains(value, "utf8")
 }
 
-const gitCommandTimeout = 2 * time.Second
-
 type gitCheckInputs struct {
-	SelectedGit     string
-	GitCandidates   []string
-	GitVersion      string
-	GitExecPath     string
-	GitBuildOptions string
-	RepoRoot        string
-	GitEntry        string
-	Branch          string
-	CoreFSMonitor   string
+	SelectedGit   string
+	GitCandidates []string
+	RepoRoot      string
+	GitEntry      string
 }
 
-type parsedGitVersion struct {
-	Major int
-	Minor int
-	Patch int
-}
-
+// gitCheck inspects Git executable locations and repository metadata without
+// running Git (Rust #42324): PATH entries are untrusted data.
 func gitCheck(cwd string) *DoctorCheck {
 	selectedGit, _ := exec.LookPath("git")
 	candidates := gitCandidatesFromPath(os.Getenv("PATH"))
@@ -3826,13 +3815,6 @@ func gitCheck(cwd string) *DoctorCheck {
 	}
 	if repoRoot != "" {
 		inputs.GitEntry = gitEntrySummary(repoRoot)
-	}
-	if selectedGit != "" {
-		inputs.GitVersion = gitOutputForDoctor(selectedGit, cwd, "--version")
-		inputs.GitExecPath = gitOutputForDoctor(selectedGit, cwd, "--exec-path")
-		inputs.GitBuildOptions = gitOutputForDoctor(selectedGit, cwd, "version", "--build-options")
-		inputs.Branch = gitOutputForDoctor(selectedGit, cwd, "rev-parse", "--abbrev-ref", "HEAD")
-		inputs.CoreFSMonitor = gitOutputForDoctor(selectedGit, cwd, "config", "--get", "core.fsmonitor")
 	}
 	return gitCheckFromInputs(inputs)
 }
@@ -3851,49 +3833,28 @@ func gitCheckFromInputs(inputs *gitCheckInputs) *DoctorCheck {
 	for index, path := range inputs.GitCandidates {
 		details = append(details, fmt.Sprintf("PATH git #%d: %s", index+1, path))
 	}
-	pushOptionalDoctorDetail(&details, "git version", inputs.GitVersion)
-	pushOptionalDoctorDetail(&details, "git exec path", inputs.GitExecPath)
-	pushOptionalDoctorDetail(&details, "git build options", inputs.GitBuildOptions)
 	if strings.TrimSpace(inputs.RepoRoot) != "" {
 		details = append(details, "repo detected: true")
 		details = append(details, "repo root: "+inputs.RepoRoot)
 	} else {
 		details = append(details, "repo detected: false")
 	}
-	pushOptionalDoctorDetail(&details, ".git entry", inputs.GitEntry)
-	pushOptionalDoctorDetail(&details, "git branch", normalizedGitBranch(inputs.Branch))
-	pushOptionalDoctorDetail(&details, "core.fsmonitor", inputs.CoreFSMonitor)
+	if trimmed := strings.TrimSpace(inputs.GitEntry); trimmed != "" {
+		details = append(details, ".git entry: "+trimmed)
+	}
+	details = append(details, "git execution: not inspected (PATH helpers are not executed)")
 
-	check := NewCheck("git.environment", "git", CheckStatusOK, gitSummary(inputs)).DetailsList(details)
-	switch {
-	case strings.TrimSpace(inputs.SelectedGit) != "" && strings.TrimSpace(inputs.GitVersion) == "":
-		check.Status = CheckStatusWarning
-		check.Summary = "Git executable found but could not be run"
-		check.Issue(NewIssue(CheckStatusWarning, "Git executable was found on PATH but did not return a version").
-			WithExpected("git --version succeeds").
-			WithRemedy("Fix the selected Git executable or PATH so Codex can inspect Git metadata.").
-			WithField("git version").
-			WithField("selected git"))
-	case strings.TrimSpace(inputs.SelectedGit) == "" && strings.TrimSpace(inputs.RepoRoot) != "":
+	summary := "git executable not found"
+	if strings.TrimSpace(inputs.SelectedGit) != "" {
+		summary = "git executable found; execution not verified"
+	}
+	check := NewCheck("git.environment", "git", CheckStatusOK, summary).DetailsList(details)
+	if strings.TrimSpace(inputs.SelectedGit) == "" && strings.TrimSpace(inputs.RepoRoot) != "" {
 		check.Status = CheckStatusWarning
 		check.Summary = "Git repository detected but git executable was not found"
 		check.Issue(NewIssue(CheckStatusWarning, "Git repository detected but git executable was not found").
 			WithExpected("git available on PATH").
 			WithRemedy("Install Git or fix PATH so Codex can inspect repository metadata.").
-			WithField("selected git"))
-	case oldWindowsGitWarning(inputs.GitVersion, runtime.GOOS == "windows") != "":
-		cause := oldWindowsGitWarning(inputs.GitVersion, runtime.GOOS == "windows")
-		check.Status = CheckStatusWarning
-		check.Summary = cause
-		measured := strings.TrimSpace(inputs.GitVersion)
-		if measured == "" {
-			measured = "unknown"
-		}
-		check.Issue(NewIssue(CheckStatusWarning, cause).
-			WithMeasured(measured).
-			WithExpected("current Git for Windows").
-			WithRemedy("Update Git for Windows or the bundled Git executable Codex resolves first.").
-			WithField("git version").
 			WithField("selected git"))
 	}
 	return check
@@ -3951,32 +3912,6 @@ func gitExecutableNames() []string {
 	return []string{"git"}
 }
 
-func gitOutputForDoctor(gitPath string, cwd string, args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
-	defer cancel()
-	command := exec.CommandContext(ctx, gitPath, args...)
-	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
-	if strings.TrimSpace(cwd) != "" {
-		command.Dir = cwd
-	}
-	output, err := command.Output()
-	if err != nil {
-		return ""
-	}
-	return normalizedCommandOutput(output)
-}
-
-func normalizedCommandOutput(output []byte) string {
-	lines := []string{}
-	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			lines = append(lines, line)
-		}
-	}
-	return strings.Join(lines, "; ")
-}
-
 func gitRepoRootForDoctor(cwd string) string {
 	if strings.TrimSpace(cwd) == "" {
 		cwd = "."
@@ -4020,90 +3955,6 @@ func gitEntrySummary(repoRoot string) string {
 	default:
 		return "other"
 	}
-}
-
-func gitSummary(inputs *gitCheckInputs) string {
-	if inputs == nil {
-		return "git executable not found"
-	}
-	if version := strings.TrimSpace(inputs.GitVersion); version != "" {
-		return version
-	}
-	if strings.TrimSpace(inputs.SelectedGit) != "" {
-		return "git executable found; version unavailable"
-	}
-	return "git executable not found"
-}
-
-func pushOptionalDoctorDetail(details *[]string, label string, value string) {
-	if strings.TrimSpace(value) != "" {
-		*details = append(*details, label+": "+strings.TrimSpace(value))
-	}
-}
-
-func normalizedGitBranch(branch string) string {
-	branch = strings.TrimSpace(branch)
-	if branch == "HEAD" {
-		return "detached HEAD"
-	}
-	return branch
-}
-
-func oldWindowsGitWarning(version string, isWindows bool) string {
-	if !isWindows {
-		return ""
-	}
-	version = strings.TrimSpace(version)
-	if version == "" {
-		return ""
-	}
-	if strings.Contains(strings.ToLower(version), "msysgit") {
-		return "old msysgit installation may corrupt Windows TUI rendering"
-	}
-	parsed, ok := parseGitVersion(version)
-	if !ok {
-		return ""
-	}
-	if parsed.Major < 2 || (parsed.Major == 2 && parsed.Minor <= 34) {
-		return "old Git for Windows may corrupt Windows TUI rendering"
-	}
-	return ""
-}
-
-func parseGitVersion(version string) (parsedGitVersion, bool) {
-	version = strings.TrimSpace(version)
-	if !strings.HasPrefix(version, "git version ") {
-		return parsedGitVersion{}, false
-	}
-	version = strings.TrimPrefix(version, "git version ")
-	if version == "" {
-		return parsedGitVersion{}, false
-	}
-	numeric := strings.Fields(version)
-	if len(numeric) == 0 {
-		return parsedGitVersion{}, false
-	}
-	base := strings.SplitN(numeric[0], ".windows.", 2)[0]
-	parts := strings.Split(base, ".")
-	if len(parts) < 2 {
-		return parsedGitVersion{}, false
-	}
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return parsedGitVersion{}, false
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return parsedGitVersion{}, false
-	}
-	patch := 0
-	if len(parts) > 2 {
-		patch, err = strconv.Atoi(parts[2])
-		if err != nil {
-			return parsedGitVersion{}, false
-		}
-	}
-	return parsedGitVersion{Major: major, Minor: minor, Patch: patch}, true
 }
 
 var defaultTerminalTitleItems = []string{"activity", "project-name"}

@@ -960,30 +960,28 @@ func TestGitCheckWarnsWhenRepoHasNoGitExecutable(t *testing.T) {
 	}
 }
 
-func TestGitCheckWarnsWhenSelectedGitCannotReportVersion(t *testing.T) {
+func TestGitCheckDoesNotRunGitLikeRust(t *testing.T) {
 	check := gitCheckFromInputs(&gitCheckInputs{
 		SelectedGit: "/usr/bin/git",
 		RepoRoot:    "/repo",
 	})
-	if check.Status != CheckStatusWarning || check.Summary != "Git executable found but could not be run" {
+	if check.Status != CheckStatusOK || check.Summary != "git executable found; execution not verified" {
 		t.Fatalf("check = %+v", check)
 	}
-	if len(check.Issues) != 1 || check.Issues[0].Expected == nil || *check.Issues[0].Expected != "git --version succeeds" {
+	if len(check.Issues) != 0 {
 		t.Fatalf("issues = %#v", check.Issues)
+	}
+	if !containsDetail(check, "git execution: not inspected (PATH helpers are not executed)") {
+		t.Fatalf("details = %#v", check.Details)
 	}
 }
 
 func TestGitCheckReportsCandidatesAndRepoMetadata(t *testing.T) {
 	check := gitCheckFromInputs(&gitCheckInputs{
-		SelectedGit:     "/usr/bin/git",
-		GitCandidates:   []string{"/usr/bin/git", "/opt/bin/git"},
-		GitVersion:      "git version 2.54.0",
-		GitExecPath:     "/usr/libexec/git-core",
-		GitBuildOptions: "cpu: x86_64",
-		RepoRoot:        "/repo",
-		GitEntry:        "directory",
-		Branch:          "main",
-		CoreFSMonitor:   "false",
+		SelectedGit:   "/usr/bin/git",
+		GitCandidates: []string{"/usr/bin/git", "/opt/bin/git"},
+		RepoRoot:      "/repo",
+		GitEntry:      "directory",
 	})
 	if check.Status != CheckStatusOK {
 		t.Fatalf("check = %+v", check)
@@ -991,48 +989,14 @@ func TestGitCheckReportsCandidatesAndRepoMetadata(t *testing.T) {
 	for _, want := range []string{
 		"PATH git entries: 2",
 		"PATH git #1: /usr/bin/git",
-		"git version: git version 2.54.0",
 		"repo detected: true",
-		"git branch: main",
-		"core.fsmonitor: false",
+		"repo root: /repo",
+		".git entry: directory",
+		"git execution: not inspected (PATH helpers are not executed)",
 	} {
 		if !containsDetail(check, want) {
 			t.Fatalf("missing detail %q in %#v", want, check.Details)
 		}
-	}
-}
-
-func TestGitCheckNormalizesDetachedHead(t *testing.T) {
-	check := gitCheckFromInputs(&gitCheckInputs{
-		SelectedGit: "/usr/bin/git",
-		GitVersion:  "git version 2.54.0",
-		Branch:      "HEAD",
-	})
-	if !containsDetail(check, "git branch: detached HEAD") {
-		t.Fatalf("details = %#v", check.Details)
-	}
-}
-
-func TestParseGitVersionForWindows(t *testing.T) {
-	parsed, ok := parseGitVersion("git version 2.34.1.windows.1")
-	if !ok || parsed.Major != 2 || parsed.Minor != 34 || parsed.Patch != 1 {
-		t.Fatalf("parsed = %+v ok=%t", parsed, ok)
-	}
-	parsed, ok = parseGitVersion("git version 2.54.0.windows.1")
-	if !ok || parsed.Major != 2 || parsed.Minor != 54 || parsed.Patch != 0 {
-		t.Fatalf("parsed = %+v ok=%t", parsed, ok)
-	}
-}
-
-func TestOldWindowsGitWarning(t *testing.T) {
-	if got := oldWindowsGitWarning("git version 2.34.1.windows.1", true); got != "old Git for Windows may corrupt Windows TUI rendering" {
-		t.Fatalf("warning = %q", got)
-	}
-	if got := oldWindowsGitWarning("git version 2.54.0.windows.1", true); got != "" {
-		t.Fatalf("warning = %q", got)
-	}
-	if got := oldWindowsGitWarning("git version 2.34.1.windows.1", false); got != "" {
-		t.Fatalf("warning = %q", got)
 	}
 }
 
