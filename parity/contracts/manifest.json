@@ -506,7 +506,7 @@
             ],
             "phase": "P2",
             "status": "complete",
-            "verifier": "TestVimModeToggleStartsInNormalModeAndInsertTypes;TestVimMotionsMoveCursorLikeVim;TestVimEditsDeleteAndChangeLikeVim;TestVimLineYankPasteAndOperators;TestVimInsertModeKeepsQueuedMessageIntactLikeRust;TestVimOperatorMotionsDeleteYankChangeLikeVim;TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim;TestVimLineOperatorRepeatsAndEscCancel;TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim;TestVimBigWordTextObjectLikeVim"
+            "verifier": "TestVimModeToggleStartsInInsertModeAndNormalMotions;TestVimSubmittedDraftStartsInInsertModeLikeRust;TestVimSearchBackspaceCancelsEmptyQueryLikeRust;TestVimMotionsMoveCursorLikeVim;TestVimEditsDeleteAndChangeLikeVim;TestVimLineYankPasteAndOperators;TestVimInsertModeKeepsQueuedMessageIntactLikeRust;TestVimOperatorMotionsDeleteYankChangeLikeVim;TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim;TestVimLineOperatorRepeatsAndEscCancel;TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim;TestVimBigWordTextObjectLikeVim"
         },
         {
             "id": "session-startup-prewarm",
