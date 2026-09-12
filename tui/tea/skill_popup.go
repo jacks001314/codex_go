@@ -3,6 +3,7 @@ package tea
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -156,8 +157,7 @@ func (m *Model) refreshMentionPopup() bubbletea.Cmd {
 	// Task mentions are only offered for threads that host the task-tool
 	// namespace (Rust chat_widget.set_task_mentions_enabled).
 	if m.taskMentionsEnabled() && (newPopup || previousQuery != query) {
-		m.mentionTaskSearchGeneration++
-		generation := m.mentionTaskSearchGeneration
+		generation, shared := m.nextTaskSearchGeneration()
 		if strings.TrimSpace(query) == "" {
 			m.mentionTasks = nil
 			m.mentionPopup.SetCandidates(m.mentionCandidates())
@@ -169,6 +169,12 @@ func (m *Model) refreshMentionPopup() bubbletea.Cmd {
 			}
 			cwd := strings.TrimSpace(m.sessionCWD)
 			commands = append(commands, func() bubbletea.Msg {
+				// Rust task_mentions::spawn_search debounces and drops superseded
+				// requests before issuing them.
+				time.Sleep(taskMentionSearchDebounce)
+				if shared.Load() != generation {
+					return nil
+				}
 				matches, err := searcher(query, currentThreadID, cwd)
 				return TaskMentionSearchResultMsg{Generation: generation, Query: query, Matches: matches, Err: err}
 			})

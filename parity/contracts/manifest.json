@@ -947,7 +947,7 @@
             ],
             "phase": "P2",
             "status": "complete",
-            "verifier": "TestTaskMentionHistoryRoundTripsLikeRust;TestTaskReferenceContextMergesWithIDEContextLikeRust;TestTaskReferenceHeadingInsideTitleLikeRust;TestSearchCatalogTaskCandidatesMatchRust;TestModelTaskMentionSearchPopulatesTaskCandidatesLikeRust;TestModelTaskMentionsRequireTaskToolsLikeRust;TestModelTaskMentionsUsePersistedCapabilityLikeRust;TestTaskToolCapabilityMarkersLikeRust;TestSearchTaskMentionsMatchesRust;TestSearchTaskMentionsWindowsCWDFirstMatchesRust;TestApplySubmitTaskReferencesEncodesTaskMentionsLikeRust;TestRemoteStartThreadRetriesWithoutDynamicToolsLikeRust;TestTaskMentionCodecMatchesRust;TestUserMessageDisplayFromInputsDecodesTaskLinksLikeRust"
+            "verifier": "TestTaskMentionHistoryRoundTripsLikeRust;TestTaskReferenceContextMergesWithIDEContextLikeRust;TestTaskReferenceHeadingInsideTitleLikeRust;TestSearchCatalogTaskCandidatesMatchRust;TestModelTaskMentionSearchPopulatesTaskCandidatesLikeRust;TestModelTaskMentionSearchDebouncesLikeRust;TestModelTaskMentionsRequireTaskToolsLikeRust;TestModelTaskMentionsUsePersistedCapabilityLikeRust;TestTaskToolCapabilityMarkersLikeRust;TestSearchTaskMentionsMatchesRust;TestSearchTaskMentionsWindowsCWDFirstMatchesRust;TestApplySubmitTaskReferencesEncodesTaskMentionsLikeRust;TestRemoteStartThreadRetriesWithoutDynamicToolsLikeRust;TestTaskMentionCodecMatchesRust;TestUserMessageDisplayFromInputsDecodesTaskLinksLikeRust"
         },
         {
             "id": "experimental-feature-catalog",

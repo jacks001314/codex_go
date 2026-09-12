@@ -170,3 +170,31 @@ func TestModelTaskMentionsUsePersistedCapabilityLikeRust(t *testing.T) {
 		t.Fatalf("unavailable thread ran a task search: %#v", queries)
 	}
 }
+
+// TestModelTaskMentionSearchDebouncesLikeRust covers Rust
+// task_mentions::spawn_search's debounce: a request superseded while it waits is
+// dropped before it reaches the app server.
+func TestModelTaskMentionSearchDebouncesLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-1")
+	var queries []string
+	model := NewModel(state, Options{
+		OnSearchTasks: func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
+			queries = append(queries, query)
+			return nil, nil
+		},
+	})
+	model.Update(TaskToolsAvailableMsg{ThreadID: "thread-1", Available: true})
+
+	model.Update(runes("@"))
+	_, firstCmd := model.Update(runes("a"))
+	_, secondCmd := model.Update(runes("b"))
+	runTeaCmd(t, model, firstCmd)
+	if len(queries) != 0 {
+		t.Fatalf("superseded search reached the app server: %#v", queries)
+	}
+	runTeaCmd(t, model, secondCmd)
+	if len(queries) != 1 || queries[0] != "ab" {
+		t.Fatalf("task searches = %#v", queries)
+	}
+}

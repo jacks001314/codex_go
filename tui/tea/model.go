@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	sysclipboard "github.com/atotto/clipboard"
@@ -1234,7 +1235,11 @@ type Model struct {
 	mentionTaskSearchGeneration uint64
 	// taskToolThreads records the threads whose app server accepted the codex_tui
 	// task-tool namespace (Rust AppServerSession::task_tools_available).
-	taskToolThreads                 map[string]bool
+	taskToolThreads map[string]bool
+	// taskSearchGeneration mirrors mentionTaskSearchGeneration for the search
+	// command, which checks it after the debounce to drop superseded requests
+	// (Rust task_mentions::spawn_search generation).
+	taskSearchGeneration            *atomic.Uint64
 	mentionPluginInventory          []plugin.PluginSummary
 	mentionPluginInventoryReady     bool
 	mentionPluginInventoryLoading   bool

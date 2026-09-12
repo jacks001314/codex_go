@@ -2,9 +2,27 @@ package tea
 
 import (
 	"strings"
+	"sync/atomic"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 )
+
+// taskMentionSearchDebounce mirrors Rust task_mentions::SEARCH_DEBOUNCE.
+const taskMentionSearchDebounce = 100 * time.Millisecond
+
+// nextTaskSearchGeneration bumps the task-search generation and returns it
+// together with the shared counter the debounced search command checks, so a
+// superseded request is dropped before it reaches the app server (Rust's
+// AtomicU64 generation in task_mentions::spawn_search).
+func (m *Model) nextTaskSearchGeneration() (uint64, *atomic.Uint64) {
+	m.mentionTaskSearchGeneration++
+	if m.taskSearchGeneration == nil {
+		m.taskSearchGeneration = new(atomic.Uint64)
+	}
+	m.taskSearchGeneration.Store(m.mentionTaskSearchGeneration)
+	return m.mentionTaskSearchGeneration, m.taskSearchGeneration
+}
 
 // DynamicToolThreadStartedMsg reports a task the TUI started or resumed while
 // serving a codex_tui dynamic tool call (Rust
