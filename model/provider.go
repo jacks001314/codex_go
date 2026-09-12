@@ -270,7 +270,9 @@ func (p *AmazonBedrockProvider) Capabilities() ProviderCapabilities {
 	return ProviderCapabilities{
 		NamespaceTools:  true,
 		ImageGeneration: false,
-		WebSearch:       false,
+		// Rust AmazonBedrockModelProvider::capabilities: web search is available
+		// on the Mantle endpoint and unsupported on the Bedrock Runtime endpoint.
+		WebSearch: p.info.Name == AmazonBedrockProviderName,
 	}
 }
 

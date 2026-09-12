@@ -6228,7 +6228,9 @@ func modelSupportsParallelToolCalls(modelID string) bool {
 	}
 	manager := model.NewStaticModelsManager(model.BundledModelsResponse())
 	info := manager.GetModelInfo(modelID, nil)
-	return info.SupportsParallelToolCalls && !info.UseResponsesLite
+	// Rust build_prompt always sets `parallel_tool_calls: true` and the request
+	// applies only the responses-lite gate.
+	return !info.UseResponsesLite
 }
 
 // managedResidencyForConfig resolves the managed `enforce_residency`

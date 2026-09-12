@@ -7712,6 +7712,48 @@ func TestRuntimeRouterModelProviderCapabilitiesReadMatchesRust(t *testing.T) {
 	}
 }
 
+// TestRuntimeRouterModelProviderCapabilitiesReadUsesConfiguredProviderLikeRust
+// covers the provider-backed half: Rust loads the latest config, builds the
+// configured provider and reports that provider's capabilities, so the Bedrock
+// Mantle provider reports web search while the Runtime provider does not.
+func TestRuntimeRouterModelProviderCapabilitiesReadUsesConfiguredProviderLikeRust(t *testing.T) {
+	cases := []struct {
+		provider string
+		want     model.ProviderCapabilitiesReadResponse
+	}{
+		{
+			provider: model.AmazonBedrockProviderID,
+			want:     model.ProviderCapabilitiesReadResponse{NamespaceTools: true, ImageGeneration: false, WebSearch: true},
+		},
+		{
+			provider: model.AmazonBedrockRuntimeProviderID,
+			want:     model.ProviderCapabilitiesReadResponse{NamespaceTools: true, ImageGeneration: false, WebSearch: false},
+		},
+		{
+			provider: "openai",
+			want:     model.ProviderCapabilitiesReadResponse{NamespaceTools: true, ImageGeneration: true, WebSearch: true},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
+			home := t.TempDir()
+			body := "model_provider = \"" + tc.provider + "\"\n"
+			if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {
+				t.Fatalf("WriteFile(config.toml) error = %v", err)
+			}
+			router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+			response := router.Handle(requestWithParams(t, IntID(1), MethodModelProviderCapabilitiesRead, model.ProviderCapabilitiesReadParams{}))
+			if response.Error != nil {
+				t.Fatalf("modelProvider/capabilities/read error = %+v", response.Error)
+			}
+			got := response.Result.(*model.ProviderCapabilitiesReadResponse)
+			if *got != tc.want {
+				t.Fatalf("capabilities = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRuntimeRouterMemoryResetClearsMemoriesAndPreservesThreadsLikeRust(t *testing.T) {
 	root := t.TempDir()
 	store := session.NewStore(root)

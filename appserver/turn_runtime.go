@@ -9602,7 +9602,10 @@ func (r *RuntimeRouter) modelSupportsParallelToolCalls(modelID string) bool {
 		return false
 	}
 	info := r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID})
-	return info != nil && info.SupportsParallelToolCalls && !info.UseResponsesLite
+	// Rust build_prompt always sets `parallel_tool_calls: true` and the request
+	// applies only the responses-lite gate (client.rs: `prompt.parallel_tool_calls
+	// && !model_info.use_responses_lite`); the catalog carries no such flag.
+	return info != nil && !info.UseResponsesLite
 }
 
 func (r *RuntimeRouter) modelInfoForRuntime(modelID string) *model.ModelInfo {

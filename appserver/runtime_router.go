@@ -9085,6 +9085,22 @@ func (r *RuntimeRouter) handleModelProviderCapabilitiesRead(request *Request) (*
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	// Rust model_provider_capabilities_read loads the latest config, builds the
+	// configured provider, and reports that provider's capabilities (the
+	// catalog-derived values are only a fallback when no config is available).
+	if r.services.Config != nil {
+		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
+			providerID := strings.TrimSpace(stringFromMap(read.Config, "model_provider"))
+			if providerInfo, err := model.ProviderForConfigID(read.Config, providerID, strings.TrimSpace(stringFromMap(read.Config, "openai_base_url"))); err == nil && providerInfo != nil {
+				capabilities := model.CreateRuntimeProviderForID(providerID, *providerInfo, nil).Capabilities()
+				return &model.ProviderCapabilitiesReadResponse{
+					NamespaceTools:  capabilities.NamespaceTools,
+					ImageGeneration: capabilities.ImageGeneration,
+					WebSearch:       capabilities.WebSearch,
+				}, nil
+			}
+		}
+	}
 	return r.requireModels().ProviderCapabilities(&params), nil
 }
 
