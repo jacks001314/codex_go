@@ -239,8 +239,8 @@ type RuntimeRouter struct {
 	// session.tool_approvals).
 	mcpToolApprovalsMu sync.Mutex
 	mcpToolApprovals   map[string]map[mcp.MCPToolApprovalKey]bool
-	authRevisionMu        sync.Mutex
-	authRevision          uint64
+	authRevisionMu     sync.Mutex
+	authRevision       uint64
 	// authOwnerRevision is the ownership half of Rust's AuthChangeState
 	// (#43428): it advances only when the credential owner (auth mode or the
 	// ChatGPT user/workspace pair) changes, unlike authRevision which advances
@@ -13694,7 +13694,57 @@ func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequirements(threadID stri
 		}
 	}
 	tools = r.annotateRuntimeMCPToolsWithPluginSources(tools)
+	tools = filterCodexAppsRuntimeTools(tools, cfg)
 	return tools, r.mcpRuntimeConnectorsForTurn(threadID, cfg)
+}
+
+// filterCodexAppsRuntimeTools ports Rust
+// mcp_tool_exposure::filter_codex_apps_mcp_tools: a Codex Apps tool is exposed
+// to the model only when it is model-visible, carries a connector id, and
+// satisfies the app configuration's enablement policy (destructive/open-world
+// hints included). Non-app tools are untouched.
+func filterCodexAppsRuntimeTools(tools []mcp.RuntimeToolInfo, cfg *config.Config) []mcp.RuntimeToolInfo {
+	if len(tools) == 0 {
+		return tools
+	}
+	var evaluator *apps.AppToolPolicyEvaluator
+	if cfg != nil {
+		evaluator = apps.NewAppToolPolicyEvaluator(apps.AppsConfigFromValues(cfg.Values))
+	}
+	filtered := make([]mcp.RuntimeToolInfo, 0, len(tools))
+	for _, tool := range tools {
+		if !mcp.IsCodexAppsMCPServerName(tool.ServerName) {
+			filtered = append(filtered, tool)
+			continue
+		}
+		if !(&tool).IsModelVisible() {
+			continue
+		}
+		connectorID := strings.TrimSpace(tool.ConnectorID)
+		if connectorID == "" {
+			continue
+		}
+		if evaluator != nil {
+			annotations := tool.Tool.Annotations
+			var destructiveHint, openWorldHint *bool
+			if annotations != nil {
+				destructiveHint = annotations.DestructiveHint
+				openWorldHint = annotations.OpenWorldHint
+			}
+			policy := evaluator.Policy(apps.AppToolPolicyInput{
+				ConnectorID:     connectorID,
+				ToolName:        tool.Tool.Name,
+				ToolTitle:       tool.Tool.Title,
+				DestructiveHint: destructiveHint,
+				OpenWorldHint:   openWorldHint,
+			})
+			if !policy.Enabled {
+				continue
+			}
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
 }
 
 func (r *RuntimeRouter) requiredMCPServersForTurn(threadID string, cfg *config.Config, params *turn.TurnStartParams) []string {

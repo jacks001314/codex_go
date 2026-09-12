@@ -57,6 +57,11 @@ const (
 // (Rust notify_mcp_tool_call_skip with "user cancelled MCP tool call").
 const MCPToolApprovalDeniedMessage = "user cancelled MCP tool call"
 
+// MCPToolCallBlockedByAppConfigurationMessage is Rust's model-visible text for
+// a Codex Apps tool the app configuration disables
+// (notify_mcp_tool_call_skip "MCP tool call blocked by app configuration").
+const MCPToolCallBlockedByAppConfigurationMessage = "MCP tool call blocked by app configuration"
+
 // MCPToolApprovalKey identifies a remembered approval. Rust keys on the server,
 // the tool, and the connector/plugin identity; Go's MCP service configuration is
 // already resolved per server, so the server/tool pair is exact within a thread.
@@ -123,6 +128,10 @@ type ToolApprovalOptions struct {
 	// PermissionProfileForServer resolves the authority published for a server
 	// (Rust PreparedMcpCall::permission_profile); nil leaves the profile unknown.
 	PermissionProfileForServer func(server string) *sandbox.PermissionProfile
+	// AppPolicy resolves the Codex Apps tool policy (Rust
+	// connectors::AppToolPolicyEvaluator). Nil leaves codex_apps approvals
+	// server-driven, which is how Go behaved before this port.
+	AppPolicy *apps.AppToolPolicyEvaluator
 }
 
 // NormalizeAppToolApprovalMode maps the unset value to Rust's Default
@@ -385,14 +394,36 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		return nil, nil
 	}
 	server := e.resolvedServerName()
-	// Codex Apps tool approvals stay server-driven (the hosted server raises the
-	// elicitation); the local gate only covers custom MCP servers.
-	if IsCodexAppsMCPServerName(server) {
-		return nil, nil
-	}
 	toolName := e.resolvedRemoteToolName()
-	mode := NormalizeAppToolApprovalMode(e.mcpService().ToolApprovalMode(server, toolName))
 	annotations := runtimeToolAnnotations(e.toolInfo.Annotations)
+	mode := NormalizeAppToolApprovalMode(e.mcpService().ToolApprovalMode(server, toolName))
+	if IsCodexAppsMCPServerName(server) {
+		if options.AppPolicy == nil {
+			// The hosted server raises its own approval elicitations.
+			return nil, nil
+		}
+		// Rust mcp_tool_call.rs: Codex Apps tools resolve their enablement and
+		// approval mode from the app configuration, and a disabled tool never
+		// runs.
+		policy := options.AppPolicy.Policy(apps.AppToolPolicyInput{
+			ConnectorID:     e.connectorID,
+			ToolName:        toolName,
+			ToolTitle:       e.toolInfo.Title,
+			DestructiveHint: annotations.DestructiveHint,
+			OpenWorldHint:   annotations.OpenWorldHint,
+		})
+		if !policy.Enabled {
+			body := MCPToolCallBlockedByAppConfigurationMessage
+			return &tool.Output{
+				Success:    false,
+				Body:       body,
+				Error:      body,
+				Data:       map[string]any{"server": server, "tool": toolName, "blocked": true},
+				LogPreview: body,
+			}, nil
+		}
+		mode = NormalizeAppToolApprovalMode(policy.Approval)
+	}
 	var profile *sandbox.PermissionProfile
 	if options.PermissionProfileForServer != nil {
 		profile = options.PermissionProfileForServer(server)

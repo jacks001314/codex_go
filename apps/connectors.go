@@ -12,7 +12,14 @@ type AppsConfig struct {
 }
 
 type AppConfig struct {
-	Enabled *bool
+	Enabled                  *bool
+	ApprovalsReviewer        *string
+	DestructiveEnabled       *bool
+	OpenWorldEnabled         *bool
+	DefaultToolsApprovalMode *AppToolApproval
+	DefaultToolsEnabled      *bool
+	Tools                    AppToolsConfig
+	Links                    *AppLinksConfig
 }
 
 func MergeConnectors(connectors []AppEntry, accessibleConnectors []AppEntry) []AppEntry {
@@ -233,6 +240,20 @@ func AppsConfigFromValues(values map[string]any) *AppsConfig {
 		if enabled, ok := defaultValues["enabled"].(bool); ok {
 			out.Default.Enabled = enabled
 		}
+		if destructive, ok := defaultValues["destructive_enabled"].(bool); ok {
+			out.Default.DestructiveEnabled = destructive
+		}
+		if openWorld, ok := defaultValues["open_world_enabled"].(bool); ok {
+			out.Default.OpenWorldEnabled = openWorld
+		}
+		if reviewer, ok := defaultValues["approvals_reviewer"].(string); ok && strings.TrimSpace(reviewer) != "" {
+			value := strings.TrimSpace(reviewer)
+			out.Default.ApprovalsReviewer = &value
+		}
+		if mode, ok := defaultValues["default_tools_approval_mode"].(string); ok {
+			value := AppToolApproval(strings.TrimSpace(mode))
+			out.Default.DefaultToolsApprovalMode = &value
+		}
 	}
 	for key, value := range raw {
 		key = strings.TrimSpace(key)
@@ -243,18 +264,93 @@ func AppsConfigFromValues(values map[string]any) *AppsConfig {
 		if !ok {
 			continue
 		}
-		app := AppConfig{}
-		if enabled, ok := table["enabled"].(bool); ok {
-			app.Enabled = boolPtrApps(enabled)
+		app := appConfigFromMap(table)
+		if !appConfigIsSet(app) {
+			continue
 		}
-		if app.Enabled != nil {
-			out.Apps[key] = app
-		}
+		out.Apps[key] = app
 	}
 	if out.Default == nil && len(out.Apps) == 0 {
 		return nil
 	}
 	return out
+}
+
+// appConfigFromMap parses one `[apps.<id>]` table (Rust
+// codex_config::types::AppConfig).
+func appConfigFromMap(table map[string]any) AppConfig {
+	app := AppConfig{}
+	if enabled, ok := table["enabled"].(bool); ok {
+		app.Enabled = boolPtrApps(enabled)
+	}
+	if reviewer, ok := table["approvals_reviewer"].(string); ok && strings.TrimSpace(reviewer) != "" {
+		value := strings.TrimSpace(reviewer)
+		app.ApprovalsReviewer = &value
+	}
+	for key, target := range map[string]**bool{
+		"destructive_enabled":   &app.DestructiveEnabled,
+		"open_world_enabled":    &app.OpenWorldEnabled,
+		"default_tools_enabled": &app.DefaultToolsEnabled,
+	} {
+		if value, ok := table[key].(bool); ok {
+			*target = boolPtrApps(value)
+		}
+	}
+	if mode, ok := table["default_tools_approval_mode"].(string); ok {
+		value := AppToolApproval(strings.TrimSpace(mode))
+		app.DefaultToolsApprovalMode = &value
+	}
+	if tools, ok := table["tools"].(map[string]any); ok {
+		parsed := AppToolsConfig{}
+		for name, raw := range tools {
+			name = strings.TrimSpace(name)
+			entry, ok := raw.(map[string]any)
+			if name == "" || !ok {
+				continue
+			}
+			parsed[name] = AppToolConfigFromMap(entry)
+		}
+		if len(parsed) > 0 {
+			app.Tools = parsed
+		}
+	}
+	if links, ok := table["links"].(map[string]any); ok {
+		parsed := &AppLinksConfig{Links: map[string]AppLinkConfig{}}
+		for id, raw := range links {
+			id = strings.TrimSpace(id)
+			entry, ok := raw.(map[string]any)
+			if id == "" || !ok {
+				continue
+			}
+			link := AppLinkConfig{}
+			if reviewer, ok := entry["approvals_reviewer"].(string); ok && strings.TrimSpace(reviewer) != "" {
+				value := strings.TrimSpace(reviewer)
+				link.ApprovalsReviewer = &value
+			}
+			if mode, ok := entry["default_tools_approval_mode"].(string); ok {
+				value := AppToolApproval(strings.TrimSpace(mode))
+				link.DefaultToolsApprovalMode = &value
+			}
+			parsed.Links[id] = link
+		}
+		if len(parsed.Links) > 0 {
+			app.Links = parsed
+		}
+	}
+	return app
+}
+
+// appConfigIsSet reports whether any per-app setting was configured, so an
+// empty table does not create a phantom entry.
+func appConfigIsSet(app AppConfig) bool {
+	return app.Enabled != nil ||
+		app.ApprovalsReviewer != nil ||
+		app.DestructiveEnabled != nil ||
+		app.OpenWorldEnabled != nil ||
+		app.DefaultToolsApprovalMode != nil ||
+		app.DefaultToolsEnabled != nil ||
+		len(app.Tools) > 0 ||
+		app.Links != nil
 }
 
 func mergeDirectorySnapshots(directory []AppEntry, local []AppEntry) []AppEntry {

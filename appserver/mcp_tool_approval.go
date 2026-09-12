@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"codex_go/apps"
 	"codex_go/config"
 	"codex_go/features"
 	"codex_go/mcp"
@@ -48,11 +49,16 @@ func (r *RuntimeRouter) newAppserverMCPToolApprovalOptions(
 		return nil
 	}
 	persistent := false
+	cfgValues := map[string]any(nil)
 	if cfg != nil {
 		persistent = features.Enabled(cfg.FeatureSettings(), "tool_call_mcp_elicitation")
+		cfgValues = cfg.Values
 	}
 	return &mcp.ToolApprovalOptions{
 		ApprovalPolicy: approvalPolicy,
+		// Rust mcp_tool_call.rs builds the app policy from the same config layer
+		// stack the turn uses.
+		AppPolicy: apps.NewAppToolPolicyEvaluator(apps.AppsConfigFromValues(cfgValues)),
 		PermissionProfileForServer: func(server string) *sandbox.PermissionProfile {
 			profile, ok := service.PermissionProfileForServer(server)
 			if !ok {

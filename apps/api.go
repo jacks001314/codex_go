@@ -286,6 +286,19 @@ type AppsDefaultConfig struct {
 	DefaultToolsApprovalMode *AppToolApproval `json:"default_tools_approval_mode"`
 }
 
+// AppLinkConfig holds approval settings for one connected account of an app
+// (Rust codex_config::types::AppLinkConfig, flattened under
+// `[apps.<id>.links]`).
+type AppLinkConfig struct {
+	ApprovalsReviewer        *string
+	DefaultToolsApprovalMode *AppToolApproval
+}
+
+// AppLinksConfig folds per-account settings for one app.
+type AppLinksConfig struct {
+	Links map[string]AppLinkConfig
+}
+
 type AppReview struct {
 	Status string `json:"status"`
 }

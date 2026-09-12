@@ -9,6 +9,101 @@ import (
 	"codex_go/tool"
 )
 
+// TestToolExecutorHonorsCodexAppsPolicyLikeRust covers the codex_apps half of
+// the gate: a tool the app configuration disables never runs, and an enabled
+// tool uses the app approval mode instead of the custom-server mode.
+func TestToolExecutorHonorsCodexAppsPolicyLikeRust(t *testing.T) {
+	appConfig := func(values map[string]any) *apps.AppToolPolicyEvaluator {
+		return apps.NewAppToolPolicyEvaluator(apps.AppsConfigFromValues(map[string]any{"apps": values}))
+	}
+	tests := []struct {
+		name         string
+		appPolicy    *apps.AppToolPolicyEvaluator
+		annotations  map[string]any
+		wantPrompted bool
+		wantMode     apps.AppToolApproval
+		wantBlocked  bool
+	}{
+		{
+			name: "disabled tool is blocked",
+			appPolicy: appConfig(map[string]any{
+				"drive": map[string]any{"tools": map[string]any{"files/read": map[string]any{"enabled": false}}},
+			}),
+			wantBlocked: true,
+		},
+		{
+			name:        "disabled app blocks its tools",
+			appPolicy:   appConfig(map[string]any{"drive": map[string]any{"enabled": false}}),
+			wantBlocked: true,
+		},
+		{
+			name: "app approval mode prompts",
+			appPolicy: appConfig(map[string]any{
+				"drive": map[string]any{"default_tools_approval_mode": "prompt"},
+			}),
+			wantPrompted: true,
+			wantMode:     apps.AppToolApprovalPrompt,
+		},
+		{
+			name:      "approve mode skips the prompt",
+			appPolicy: appConfig(map[string]any{"drive": map[string]any{"default_tools_approval_mode": "approve"}}),
+		},
+		{
+			name:         "unconfigured app uses the hint policy",
+			appPolicy:    appConfig(map[string]any{}),
+			wantPrompted: true,
+			wantMode:     apps.AppToolApprovalAuto,
+		},
+		{
+			name:         "no evaluator keeps approvals server-driven",
+			appPolicy:    nil,
+			wantPrompted: false,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			prompted := false
+			handler := MCPToolApprovalHandlerFunc(func(_ context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
+				prompted = true
+				if testCase.wantMode != "" && request.ApprovalMode != testCase.wantMode {
+					t.Errorf("approval mode = %q, want %q", request.ApprovalMode, testCase.wantMode)
+				}
+				return MCPToolApprovalApprove, nil
+			})
+			executor := NewToolExecutor(&ToolExecutorOptions{
+				Service:     NewMCPService(nil),
+				ServerName:  RuntimeCodexAppsMCPServerName,
+				ConnectorID: "drive",
+				ToolName:    tool.NamespacedName(RuntimeCodexAppsMCPServerName, "files/read"),
+				ToolInfo:    &MCPToolInfo{Name: "files/read", Annotations: testCase.annotations},
+				ThreadID:    "thread-1",
+				TurnID:      "turn-1",
+				ToolApproval: &ToolApprovalOptions{
+					Handler:        handler,
+					ApprovalPolicy: sandbox.ApprovalOnRequest,
+					AppPolicy:      testCase.appPolicy,
+				},
+			})
+			denied, err := executor.approveToolCallIfNeeded(context.Background(), "call-1", nil)
+			if err != nil {
+				t.Fatalf("approveToolCallIfNeeded() error = %v", err)
+			}
+			if prompted != testCase.wantPrompted {
+				t.Fatalf("prompted = %v, want %v", prompted, testCase.wantPrompted)
+			}
+			if testCase.wantBlocked {
+				if denied == nil || denied.Success || denied.Body != MCPToolCallBlockedByAppConfigurationMessage {
+					t.Fatalf("blocked output = %#v", denied)
+				}
+				return
+			}
+			if denied != nil {
+				t.Fatalf("denied output = %#v, want nil", denied)
+			}
+		})
+	}
+}
+
 func boolPtrMCPApproval(value bool) *bool { return &value }
 
 func approvalModePtr(mode apps.AppToolApproval) *apps.AppToolApproval { return &mode }
