@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/mattn/go-runewidth"
+
+	"codex_go/tui/footerhint"
 )
 
 // Render produces the plain-text dashboard lines for the given terminal
@@ -42,7 +44,15 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	lines = append(lines, renderLine(inset, []span{{text: strings.Repeat("─", dividerWidth), style: spanDim}}, maxWidth, styled))
 
 	attachmentLines := len(v.attachments)
-	bodyHeight := termHeight - 5 - attachmentLines // header + summary + divider + attachments + prompt + footer
+	// renderLine renders the footer inside the inset, so pack the hints to the
+	// same content width the rows are drawn into.
+	footerWidth := maxWidth - len(inset)
+	if footerWidth < 1 {
+		footerWidth = 1
+	}
+	footerRows := v.footerHintRows(footerWidth)
+	// header + summary + divider + attachments + prompt + footer rows
+	bodyHeight := termHeight - 4 - attachmentLines - len(footerRows)
 	if bodyHeight < 3 {
 		bodyHeight = 3
 	}
@@ -78,11 +88,15 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	}
 	lines = append(lines, renderLine(inset, prompt, maxWidth, styled))
 	// footer
-	lines = append(lines, renderLine(inset, v.footerSpans(), maxWidth, styled))
+	for _, row := range footerRows {
+		lines = append(lines, renderLine(inset, row, maxWidth, styled))
+	}
 	return lines
 }
 
-func (v *View) footerSpans() []span {
+// footerHints returns each footer hint as its own span group, in Rust's order
+// (agents_overview_render.rs).
+func (v *View) footerHints() [][]span {
 	stopStyle := spanDim
 	if row := v.SelectedRow(); row != nil && row.StatusActive {
 		stopStyle = spanBold
@@ -93,34 +107,124 @@ func (v *View) footerSpans() []span {
 	if v != nil && !v.State.Renaming {
 		openHint = "\u2192"
 	}
-	spans := []span{
-		{text: "↑↓", style: spanBold}, {text: " navigate  ", style: spanDim},
-		{text: openHint, style: spanBold}, {text: " open  ", style: spanDim},
+	hints := [][]span{
+		{{text: "\u2191\u2193", style: spanBold}, {text: " navigate", style: spanDim}},
+		{{text: openHint, style: spanBold}, {text: " open", style: spanDim}},
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintSearch, "ctrl+f"); ok {
-		spans = append(spans, span{text: binding, style: spanBold}, span{text: " search  ", style: spanDim})
+		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " search", style: spanDim}})
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintToggleGrouping, "ctrl+s"); ok {
 		// Rust #44957: the footer reports the active grouping mode.
-		spans = append(spans, span{text: binding, style: spanBold}, span{text: " " + v.State.Grouping.Label() + "  ", style: spanDim})
+		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " " + v.State.Grouping.Label(), style: spanDim}})
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintRename, "ctrl+r"); ok {
-		spans = append(spans, span{text: binding, style: spanBold}, span{text: " rename  ", style: spanDim})
+		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " rename", style: spanDim}})
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintStop, "ctrl+x"); ok {
-		spans = append(spans, span{text: binding, style: stopStyle}, span{text: " stop  ", style: spanDim})
+		hints = append(hints, []span{{text: binding, style: stopStyle}, {text: " stop", style: spanDim}})
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintHide, "ctrl+w"); ok {
-		spans = append(spans, span{text: binding, style: spanBold}, span{text: " hide  ", style: spanDim})
+		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " hide", style: spanDim}})
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintArchive, "ctrl+e"); ok {
-		spans = append(spans, span{text: binding, style: spanBold}, span{text: " archive  ", style: spanDim})
+		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " archive", style: spanDim}})
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintDelete, "delete"); ok {
-		spans = append(spans, span{text: binding, style: spanBold}, span{text: " delete  ", style: spanDim})
+		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " delete", style: spanDim}})
 	}
-	spans = append(spans, span{text: "esc", style: spanBold}, span{text: " back", style: spanDim})
-	return spans
+	hints = append(hints, []span{{text: "esc", style: spanBold}, {text: " back", style: spanDim}})
+	return hints
+}
+
+// footerHintRows packs the footer hints into display rows, choosing the
+// separator width from whether every hint fits on one line and word-wrapping a
+// hint that is wider than the terminal (Rust footer_hint::wrap_hint_rows +
+// word_wrap_lines).
+func (v *View) footerHintRows(maxWidth int) [][]span {
+	hints := v.footerHints()
+	if len(hints) == 0 {
+		return nil
+	}
+	total := 0
+	for _, hint := range hints {
+		total += spansWidth(hint)
+	}
+	separator := " "
+	if total+(len(hints)-1)*2 <= maxWidth {
+		separator = "  "
+	}
+	rows := footerhint.WrapHintRows(hints, maxWidth, len(separator), spansWidth)
+	out := make([][]span, 0, len(rows))
+	for _, row := range rows {
+		joined := make([]span, 0, len(row)*3)
+		for index, hint := range row {
+			if index > 0 {
+				joined = append(joined, span{text: separator, style: spanDim})
+			}
+			joined = append(joined, hint...)
+		}
+		if maxWidth <= 0 || spansWidth(joined) <= maxWidth {
+			out = append(out, joined)
+			continue
+		}
+		out = append(out, splitSpansToWidth(joined, maxWidth)...)
+	}
+	return out
+}
+
+// splitSpansToWidth hard-splits a composed hint at display-width boundaries,
+// preserving each span's style (Rust word_wrap_lines' over-long-word path).
+// WrapHintRows only emits a row wider than the terminal when a single hint is
+// oversized, so this never runs for a multi-hint row.
+func splitSpansToWidth(spans []span, maxWidth int) [][]span {
+	if maxWidth <= 0 {
+		return [][]span{spans}
+	}
+	lines := make([][]span, 0, 2)
+	current := make([]span, 0, len(spans))
+	used := 0
+	for _, s := range spans {
+		if s.raw {
+			continue
+		}
+		text := s.text
+		for text != "" {
+			if used >= maxWidth {
+				lines = append(lines, current)
+				current = make([]span, 0, len(spans))
+				used = 0
+			}
+			part, rest := cutByWidth(text, maxWidth-used)
+			if part == "" {
+				break
+			}
+			current = append(current, span{text: part, style: s.style, color: s.color})
+			used += ansiAwareWidth(part)
+			text = rest
+		}
+	}
+	if len(current) > 0 || len(lines) == 0 {
+		lines = append(lines, current)
+	}
+	return lines
+}
+
+// cutByWidth returns the longest prefix of value fitting maxWidth display
+// columns plus the remainder.
+func cutByWidth(value string, maxWidth int) (string, string) {
+	if maxWidth <= 0 {
+		return "", value
+	}
+	used := 0
+	for index, r := range value {
+		width := runewidth.RuneWidth(r)
+		if used+width > maxWidth {
+			return value[:index], value[index:]
+		}
+		used += width
+	}
+	return value, ""
 }
 
 func formatSummary(needsYou, working, ready int) string {

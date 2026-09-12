@@ -81,13 +81,13 @@ func TestRenderStyledFooterUsesResolvedShortcutHints(t *testing.T) {
 	view.SetShortcutHint(ShortcutHintSearch, "ctrl-l")
 	view.SetShortcutHint(ShortcutHintStop, "")
 	styled := strings.Join(view.RenderStyled(120, 24), "\n")
-	if !strings.Contains(styled, "ctrl-l") || !strings.Contains(styled, " search  ") {
+	if !strings.Contains(styled, "ctrl-l") || !strings.Contains(styled, " search") {
 		t.Errorf("custom search hint missing:\n%s", styled)
 	}
 	if strings.Contains(styled, "ctrl+f") {
 		t.Errorf("default search hint should be replaced:\n%s", styled)
 	}
-	if strings.Contains(styled, " stop  ") || strings.Contains(styled, "ctrl+x") {
+	if strings.Contains(styled, " stop") || strings.Contains(styled, "ctrl+x") {
 		t.Errorf("unbound stop hint should be hidden:\n%s", styled)
 	}
 	if !strings.Contains(styled, "ctrl+s") || !strings.Contains(styled, "ctrl+r") {
@@ -103,5 +103,22 @@ func TestRenderStyledLineWidths(t *testing.T) {
 				t.Errorf("RenderStyled(%dx%d) line width %d > %d: %q", dims[0], dims[1], width, dims[0], line)
 			}
 		}
+	}
+}
+
+// TestFooterWrapsWholeHintsOnNarrowTerminals pins Rust's footer_hint behavior:
+// hints move to additional rows instead of being clipped mid-label.
+func TestFooterWrapsWholeHintsOnNarrowTerminals(t *testing.T) {
+	view := New(sampleRows(), "", false)
+	view.Selected = 0
+	styled := strings.Join(view.RenderStyled(60, 24), "\n")
+	plain := stripANSIForTest(styled)
+	for _, label := range []string{"navigate", "open", "search", "rename", "hide", "archive", "delete", "back"} {
+		if !strings.Contains(plain, label) {
+			t.Fatalf("footer hint %q missing (truncated?):\n%s", label, plain)
+		}
+	}
+	if strings.Contains(plain, "esc ba\n") || strings.HasSuffix(plain, "esc ba") {
+		t.Fatalf("footer hint was clipped mid-label:\n%s", plain)
 	}
 }
