@@ -95,7 +95,12 @@ func interactivePromptEditHandler(root *cli.RootOptions) codextea.PromptEditFunc
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err
 		}
-		source := tuiapp.ThreadSessionState{ThreadID: threadID, CWD: strings.TrimSpace(sourceThread.CWD)}
+		source := tuiapp.ThreadSessionState{
+			ThreadID:        threadID,
+			CWD:             strings.TrimSpace(sourceThread.CWD),
+			Model:           remoteTUIThreadModel(sourceThread),
+			ModelProviderID: remoteTUIThreadProvider(sourceThread),
+		}
 		result := tuiapp.ApplyPromptEdit(context.Background(), localPromptEditClient{store: store}, source, sourceThread.Turns, selection)
 		if message := strings.TrimSpace(result.ErrorMessage); message != "" {
 			return codextea.SessionResumeResponse{}, errors.New(strings.TrimPrefix(message, "Failed to branch before the selected prompt: "))
@@ -135,8 +140,9 @@ func (c localPromptEditClient) ForkThread(_ context.Context, params appserver.Th
 
 func (c localPromptEditClient) StartFreshThread(_ context.Context, source tuiapp.ThreadSessionState) (*appserver.ThreadStartResponse, error) {
 	params := appserver.ThreadStartParams{
-		CWD:   strings.TrimSpace(source.CWD),
-		Model: strings.TrimSpace(source.Model),
+		CWD:           strings.TrimSpace(source.CWD),
+		Model:         strings.TrimSpace(source.Model),
+		ModelProvider: strings.TrimSpace(source.ModelProviderID),
 	}
 	result, closeRuntime, err := localSessionRouterRequest(c.store, appserver.MethodThreadStart, params)
 	if closeRuntime != nil {
