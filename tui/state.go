@@ -749,6 +749,7 @@ const (
 	CommandWorktree         Command = "worktree"
 	CommandInit             Command = "init"
 	CommandCompact          Command = "compact"
+	CommandRecap            Command = "recap"
 	CommandClear            Command = "clear"
 	CommandCopy             Command = "copy"
 	CommandExport           Command = "export"
@@ -857,6 +858,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandInit, Args: args, Name: name}, true
 	case "/compact":
 		return &CommandInvocation{Command: CommandCompact, Args: args, Name: name}, true
+	case "/recap":
+		return &CommandInvocation{Command: CommandRecap, Args: args, Name: name}, true
 	case "/clear":
 		return &CommandInvocation{Command: CommandClear, Args: args, Name: name}, true
 	case "/copy":

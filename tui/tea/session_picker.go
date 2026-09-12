@@ -371,6 +371,7 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	// state from the thread that was open before.
 	m.resetThreadScopedState()
 	m.State.SetThreadID(threadID)
+	m.seedRecapProgress(response.CompletedTurns)
 	if response.Summary != nil {
 		m.State.SetThreadName(response.Summary.Title)
 		if cwd := strings.TrimSpace(response.Summary.CWD); cwd != "" {

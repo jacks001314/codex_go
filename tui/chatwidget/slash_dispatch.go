@@ -435,6 +435,7 @@ func CommandAvailableDuringTask(command codextui.Command) bool {
 		codextui.CommandWorktree,
 		codextui.CommandInit,
 		codextui.CommandCompact,
+		codextui.CommandRecap,
 		codextui.CommandExport,
 		codextui.CommandKeymap,
 		codextui.CommandVim,

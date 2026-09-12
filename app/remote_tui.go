@@ -383,6 +383,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint),
+		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
 		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),
 		OnLogout:                    interactiveRemoteLogoutHandler(ctx, endpoint),
 		KeymapConfig:                keymapConfig,
@@ -1449,7 +1450,23 @@ func remoteTUIResumeResponseFromThread(thread *appserver.Thread) codextea.Sessio
 		WorkingStatusHeader:    remoteTUIThreadActiveReasoningHeading(thread),
 		WorkingReasoningTurnID: remoteTUIThreadActiveReasoningTurnID(thread),
 		WorkingReasoningItemID: remoteTUIThreadActiveReasoningItemID(thread),
+		CompletedTurns:         remoteTUICompletedTurnCount(thread),
 	}
+}
+
+// remoteTUICompletedTurnCount counts a thread's completed turns for the
+// automatic-recap accounting (Rust RecapProgress::from_turns).
+func remoteTUICompletedTurnCount(thread *appserver.Thread) int {
+	if thread == nil {
+		return 0
+	}
+	count := 0
+	for _, turn := range thread.Turns {
+		if strings.EqualFold(strings.TrimSpace(string(turn.Status)), string(appserver.TurnStatusCompleted)) {
+			count++
+		}
+	}
+	return count
 }
 
 // remoteTUIResumeConflict reports whether a resume failed because another owner

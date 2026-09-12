@@ -177,6 +177,9 @@ type SessionResumeResponse struct {
 	// ReadOnly marks a resume that fell back to a read-only history snapshot
 	// because another app owns the conversation (Rust #43253).
 	ReadOnly bool
+	// CompletedTurns seeds the automatic-recap accounting for the resumed thread
+	// (Rust RecapState::seed_from_turns).
+	CompletedTurns int
 }
 
 type AgentThreadReaderFunc func(currentThreadID string) ([]codextui.AgentThreadEntry, error)
@@ -837,6 +840,13 @@ type Options struct {
 	// /export (Rust transcript_export.rs). A nil hook leaves /export
 	// unavailable for this runtime.
 	OnExportTranscript TranscriptExportFunc
+	// OnGenerateRecap runs the temporary structured recap turn for /recap (Rust
+	// recap.rs). A nil hook leaves /recap unavailable for this runtime.
+	OnGenerateRecap RecapGenerateFunc
+	// DisableAutoRecap turns off scheduled recaps for unfocused conversations
+	// (Rust `tui.auto_recap = false`). The zero value keeps them enabled, which
+	// matches Rust's default.
+	DisableAutoRecap bool
 	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
 	// /voice unavailable for this runtime.
 	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
@@ -1356,10 +1366,19 @@ type Model struct {
 	// backgroundThreadEvents buffers app-server notifications for non-active
 	// (subagent) threads so switching to them can replay in-progress activity
 	// instead of showing an empty transcript (Rust parity: ThreadEventStore).
-	backgroundThreadEvents            map[string][]protocol.ThreadEvent
-	clipboardWrite                    func(text string) error
-	clipboardWriteRich                func(html string, text string) error
-	onExportTranscript                TranscriptExportFunc
+	backgroundThreadEvents map[string][]protocol.ThreadEvent
+	clipboardWrite         func(text string) error
+	clipboardWriteRich     func(html string, text string) error
+	onExportTranscript     TranscriptExportFunc
+	onGenerateRecap        RecapGenerateFunc
+	recapInFlight          bool
+	// recap tracks the automatic recap deadline and turn accounting (Rust
+	// RecapState).
+	recap            tuiapp.RecapState
+	disableAutoRecap bool
+	// recapLoadingIndex is the transcript message index of the transient recap
+	// loading row, or -1 when none is shown.
+	recapLoadingIndex                 int
 	onReadTokenActivity               TokenActivityReaderFunc
 	onReadRateLimitResetCredits       RateLimitResetCreditsReaderFunc
 	onConsumeRateLimitResetCredit     RateLimitResetCreditConsumerFunc
@@ -1669,6 +1688,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		clipboardWrite:                  clipboardWrite,
 		clipboardWriteRich:              clipboardWriteRich,
 		onExportTranscript:              options.OnExportTranscript,
+		onGenerateRecap:                 options.OnGenerateRecap,
+		disableAutoRecap:                options.DisableAutoRecap,
+		recapLoadingIndex:               -1,
 		onReadTokenActivity:             options.OnReadTokenActivity,
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,
 		onConsumeRateLimitResetCredit:   options.OnConsumeRateLimitResetCredit,
@@ -1949,10 +1971,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case bubbletea.FocusMsg:
 		m.terminalFocused = true
+		m.noteRecapFocusGained()
 		return m, nil
 	case bubbletea.BlurMsg:
 		m.terminalFocused = false
-		return m, nil
+		return m, m.noteRecapFocusLost()
 	case StatusMsg:
 		if warning, ok := warningMessageFromStatus(msg.Status); ok {
 			m.setStatus("warning")
@@ -1986,13 +2009,17 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			return m, m.refreshStatusControlsCmd()
 		}
 		cmd := m.applyTurnCompleted(msg)
-		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued())
+		recapStatus := appserver.TurnStatusCompleted
+		if msg.Err != nil {
+			recapStatus = appserver.TurnStatusFailed
+		}
+		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(recapStatus))
 	case TurnInterruptedMsg:
 		if m.applyInactiveThreadTurnInterrupted(msg) {
 			return m, m.refreshStatusControlsCmd()
 		}
 		m.applyTurnInterrupted(msg)
-		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitNextQueued())
+		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(appserver.TurnStatusInterrupted))
 	case SteerResultMsg:
 		m.applySteerResult(msg)
 		return m, nil
@@ -2096,6 +2123,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyRateLimitResetConsumeResult(msg)
 	case DiffResultMsg:
 		return m, m.applyDiffResult(msg)
+	case RecapGeneratedMsg:
+		return m, m.applyRecapGeneratedMsg(msg)
+	case recapCheckMsg:
+		return m, m.applyRecapCheck(m.currentTime())
 	case DebugConfigResultMsg:
 		m.applyDebugConfigResult(msg)
 		return m, nil
@@ -5832,6 +5863,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		m.copyLastAgentResponse()
 	case codextui.CommandExport:
 		return m.applyExportCommand(invocation.Args)
+	case codextui.CommandRecap:
+		return m.applyRecapCommand()
 	case codextui.CommandRaw:
 		return m.applyRawOutputCommand(invocation.Args)
 	case codextui.CommandDiff:

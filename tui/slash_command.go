@@ -32,6 +32,7 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "worktree", Command: CommandWorktree, Description: "start or continue a conversation in a new worktree"},
 		{Name: "init", Command: CommandInit, Description: "create an AGENTS.md file with instructions for Codex"},
 		{Name: "compact", Command: CommandCompact, Description: "summarize conversation to prevent hitting the context limit"},
+		{Name: "recap", Command: CommandRecap, Description: "summarize the current conversation now"},
 		{Name: "clear", Command: CommandClear, Description: "clear the visible transcript"},
 		{Name: "copy", Command: CommandCopy, Description: "copy last response as markdown"},
 		{Name: "export", Command: CommandExport, Description: "export the conversation as markdown"},
