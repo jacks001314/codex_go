@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
@@ -69,11 +71,51 @@ func interactiveWindowsSandboxStartupPrompt(root *cli.RootOptions, requirements 
 	}
 }
 
-func interactiveRemoteWindowsSandboxStartupPrompt(root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, requirements *chatwidget.PermissionRequirements) *codextea.WindowsSandboxStartupPrompt {
+func interactiveRemoteWindowsSandboxStartupPrompt(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, requirements *chatwidget.PermissionRequirements) *codextea.WindowsSandboxStartupPrompt {
 	if !interactiveRemoteEndpointIsLocal(endpoint) {
 		return nil
 	}
+	// Rust #44939: a local app server owns sandbox readiness. When it reports
+	// ready, elevated setup is already in place and the TUI must not prompt;
+	// the TUI's own setup files are not authoritative for a daemon connection.
+	if interactiveRemoteWindowsSandboxReady(ctx, endpoint) {
+		return nil
+	}
 	return interactiveWindowsSandboxStartupPrompt(root, requirements)
+}
+
+// windowsSandboxReadyViaClient queries the connected app server's
+// windowsSandbox/readiness status (Rust #44939 windows_sandbox_ready).
+func windowsSandboxReadyViaClient(ctx context.Context, client *remoteAppServerTUIClient) bool {
+	if client == nil {
+		return false
+	}
+	id, err := client.sendRequest(ctx, appserver.MethodWindowsSandboxReadiness, nil)
+	if err != nil {
+		return false
+	}
+	var response sandbox.WindowsReadinessResponse
+	if err := client.waitResponse(ctx, id, &response); err != nil {
+		return false
+	}
+	return response.Status == sandbox.WindowsReadinessReady
+}
+
+// interactiveRemoteWindowsSandboxReady queries readiness from a local app
+// server, bounded like Rust's 5-second readiness timeout. An unavailable or
+// slow server reports not-ready so the configured behavior is preserved.
+func interactiveRemoteWindowsSandboxReady(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) bool {
+	if runtime.GOOS != "windows" || !interactiveRemoteEndpointIsLocal(endpoint) {
+		return false
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	client, err := openRemoteSessionClient(callCtx, endpoint)
+	if err != nil {
+		return false
+	}
+	defer client.close()
+	return windowsSandboxReadyViaClient(callCtx, client)
 }
 
 func interactiveWindowsSandboxLevel(values map[string]any) chatwidget.WindowsSandboxLevel {

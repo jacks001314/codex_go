@@ -365,7 +365,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		ShowSessionHeader:           true,
 		SessionHeaderVersion:        doctor.Version(),
 		InitialHistoryCells:         interactiveUpdateHistoryCells(root),
-		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(root, endpoint, settings.PermissionRequirements),
+		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(ctx, root, endpoint, settings.PermissionRequirements),
 		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint),
 		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint),
 		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),
