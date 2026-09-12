@@ -96,7 +96,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #44832); #44915 then removed two thread/rollback snapshots. None
 			// of them touch the voice surface. #44934 later added
 			// scenarios.rs plus two Astra scenario snapshots.
-			Files: 188,
+			// #44948 added two more scenarios snapshots (async questions,
+			// plugin refresh).
+			Files: 190,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
