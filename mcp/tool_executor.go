@@ -84,6 +84,10 @@ type ToolExecutorOptions struct {
 	// this turn (Rust maybe_request_codex_apps_auth_elicitation). The caller
 	// gates it on the auth_elicitation feature and the approval policy.
 	AuthElicitation *AuthElicitationOptions
+	// ToolApproval enables the custom-MCP-server tool approval policy for this
+	// turn (Rust mcp_tool_call.rs maybe_request_mcp_tool_approval). Nil disables
+	// the gate.
+	ToolApproval *ToolApprovalOptions
 }
 
 // AuthElicitationOptions carries the turn-scoped hooks the Codex Apps auth
@@ -117,6 +121,7 @@ type ToolExecutor struct {
 	confirmationPolicies          *ActorConfirmationPolicies
 	suppressActorPolicies         bool
 	authElicitation               *AuthElicitationOptions
+	toolApproval                  *ToolApprovalOptions
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -152,6 +157,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.confirmationPolicies = options.ConfirmationPolicies
 	executor.suppressActorPolicies = options.SuppressActorConfirmationPolicies
 	executor.authElicitation = options.AuthElicitation
+	executor.toolApproval = options.ToolApproval
 	return executor
 }
 
@@ -236,6 +242,11 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	// must be rejected instead of running with another owner's authority.
 	if err := e.ensureServerPermissionAuthority(); err != nil {
 		return nil, err
+	}
+	// Rust mcp_tool_call.rs maybe_request_mcp_tool_approval: a custom MCP server
+	// can require the user to approve a call before it runs.
+	if denied, err := e.approveToolCallIfNeeded(ctx, invocation.CallID, arguments); err != nil || denied != nil {
+		return denied, err
 	}
 	callParams := &MCPToolCallParams{
 		ServerName: e.resolvedServerName(),

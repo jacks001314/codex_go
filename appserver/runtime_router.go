@@ -234,6 +234,11 @@ type RuntimeRouter struct {
 	requestAttestation    map[string]bool
 	mcpOpenAIForm         map[string]bool
 	mcpStandardFormInput  map[string]bool
+	// mcpToolApprovalsMu guards mcpToolApprovals, the per-thread store of
+	// session-remembered custom MCP tool approvals (Rust
+	// session.tool_approvals).
+	mcpToolApprovalsMu sync.Mutex
+	mcpToolApprovals   map[string]map[mcp.MCPToolApprovalKey]bool
 	authRevisionMu        sync.Mutex
 	authRevision          uint64
 	// authOwnerRevision is the ownership half of Rust's AuthChangeState
@@ -914,7 +919,7 @@ func accountScopedModelsManager(codexHome string, configService *config.ConfigSe
 			ModelCatalog:                    base,
 			Endpoint:                        endpoint,
 			UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
-			Identity:                        model.ModelsCatalogIdentity(providerID, &resolved.Auth, &authHeaders),
+			Identity:                        model.ModelsCatalogIdentity(providerInfo, &resolved.Auth, &authHeaders),
 			SupportsAPIKeyModels:            supportsAPIKeyModels,
 			APIKeyAuth:                      apiKeyAuth,
 			CommandAuth:                     providerInfo.HasCommandAuth(),
@@ -4667,6 +4672,7 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	r.skillWarningsMu.Lock()
 	delete(r.skillWarnings, threadID)
 	r.skillWarningsMu.Unlock()
+	r.forgetMCPToolApprovals(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
 		slog.Warn("failed to close thread code-mode runtime", "thread_id", threadID, "error", err)
 	}
@@ -12575,6 +12581,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.SkillProviders = executorSkillProviders
 	options.MCPTools = mcpTools
 	options.MCPConnectors = mcpConnectors
+	// Rust mcp_tool_call.rs maybe_request_mcp_tool_approval: gate custom MCP
+	// tool calls on their configured approval mode.
+	options.MCPToolApproval = r.newAppserverMCPToolApprovalOptions(cfg, mcpService, threadID, turnID, approvalPolicy)
 	// Rust maybe_request_codex_apps_auth_elicitation: enable the Codex Apps
 	// connector URL elicitation flow when the feature is on and the approval
 	// policy allows agent-initiated MCP elicitations.

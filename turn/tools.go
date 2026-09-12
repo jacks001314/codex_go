@@ -37,6 +37,10 @@ type ToolRegistryOptions struct {
 	MCPTools      []mcp.RuntimeToolInfo
 	MCPConnectors []mcp.RuntimeConnector
 	MCPExposure   tool.Exposure
+	// MCPToolApproval enables Rust's custom-MCP-server tool approval policy
+	// (mcp_tool_call.rs maybe_request_mcp_tool_approval). Nil leaves the gate
+	// off, which mirrors a runtime without a client to ask.
+	MCPToolApproval *mcp.ToolApprovalOptions
 	// MCPAuthElicitation enables the Codex Apps connector URL elicitation flow
 	// for this turn (Rust maybe_request_codex_apps_auth_elicitation); the caller
 	// gates it on the auth_elicitation feature and the approval policy.
@@ -535,6 +539,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			ConnectorName:                     info.ConnectorName,
 			Model:                             options.Model,
 			AuthElicitation:                   options.MCPAuthElicitation,
+			ToolApproval:                      options.MCPToolApproval,
 			ConfirmationPolicies:              mcpActorConfirmationPolicies(options.ModelConfirmationPolicies),
 			SuppressActorConfirmationPolicies: options.SuppressActorConfirmationPolicies,
 		})
