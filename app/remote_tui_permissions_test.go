@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"codex_go/appserver"
 	codextui "codex_go/tui"
@@ -29,11 +30,6 @@ func permissionProfileServer(t *testing.T, serverConn net.Conn, results []map[st
 			if err := decoder.Decode(&request); err != nil {
 				return
 			}
-			if len(results) == 0 {
-				return
-			}
-			result := results[0]
-			results = results[1:]
 			if errCode != 0 {
 				_ = encoder.Encode(map[string]any{
 					"jsonrpc": "2.0",
@@ -42,6 +38,20 @@ func permissionProfileServer(t *testing.T, serverConn net.Conn, results []map[st
 				})
 				continue
 			}
+			if request.Method == string(appserver.MethodConfigRead) {
+				// Rust #43340 gates server discovery on a string
+				// default_permissions in the effective config.
+				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{
+					"config":  map[string]any{"default_permissions": "workspace"},
+					"origins": map[string]any{},
+				}})
+				continue
+			}
+			if len(results) == 0 {
+				return
+			}
+			result := results[0]
+			results = results[1:]
 			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
 		}
 	}()
@@ -66,9 +76,12 @@ func TestRemoteTUIListPermissionProfilesPaginates(t *testing.T) {
 		{"data": []any{map[string]any{"id": "read-only-remote", "description": "Read only", "allowed": true}}, "nextCursor": next},
 		{"data": []any{map[string]any{"id": "trusted", "allowed": false}}, "nextCursor": nil},
 	}, 0)
-	profiles, err := remoteTUIListPermissionProfiles(context.Background(), client)
+	profiles, explicit, err := remoteTUIListPermissionProfiles(context.Background(), client)
 	if err != nil {
 		t.Fatalf("list permission profiles: %v", err)
+	}
+	if !explicit {
+		t.Fatal("a server with configured profiles must report explicit mode")
 	}
 	if len(profiles) != 2 {
 		t.Fatalf("profiles = %#v", profiles)
@@ -90,7 +103,7 @@ func TestRemoteTUIListPermissionProfilesRejectsDuplicates(t *testing.T) {
 			map[string]any{"id": "dup", "allowed": true},
 		}, "nextCursor": nil},
 	}, 0)
-	_, err := remoteTUIListPermissionProfiles(context.Background(), client)
+	_, _, err := remoteTUIListPermissionProfiles(context.Background(), client)
 	if err == nil || err.Error() != "The server returned duplicate permission profiles." {
 		t.Fatalf("duplicate error = %v", err)
 	}
@@ -100,7 +113,7 @@ func TestRemoteTUIListPermissionProfilesRejectsDuplicates(t *testing.T) {
 // mapping.
 func TestRemoteTUIListPermissionProfilesUnsupported(t *testing.T) {
 	client := newPermissionProfileClient(t, []map[string]any{{}}, -32601)
-	if _, err := remoteTUIListPermissionProfiles(context.Background(), client); !errors.Is(err, codextea.ErrNamedPermissionProfilesUnsupported) {
+	if _, _, err := remoteTUIListPermissionProfiles(context.Background(), client); !errors.Is(err, codextea.ErrNamedPermissionProfilesUnsupported) {
 		t.Fatalf("unsupported error = %v", err)
 	}
 }
@@ -125,3 +138,77 @@ func TestRemoteTUIPermissionRequestUnsupportedMapping(t *testing.T) {
 }
 
 var _ = appserver.MethodPermissionProfileList
+
+// TestRemoteTUIPermissionDiscoveryRequiresDefaultPermissions covers Rust
+// #43340's precheck: without a string default_permissions the server reports no
+// explicit profiles and the picker keeps its local presets.
+func TestRemoteTUIPermissionDiscoveryRequiresDefaultPermissions(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	go func() {
+		defer serverConn.Close()
+		decoder := json.NewDecoder(serverConn)
+		encoder := json.NewEncoder(serverConn)
+		for {
+			var request struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if err := decoder.Decode(&request); err != nil {
+				return
+			}
+			if request.Method != string(appserver.MethodConfigRead) {
+				t.Errorf("unexpected method %s after the precheck", request.Method)
+				return
+			}
+			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{
+				"config":  map[string]any{},
+				"origins": map[string]any{},
+			}})
+		}
+	}()
+	client := &remoteAppServerTUIClient{
+		state:     codextui.NewState(nil),
+		transport: &remoteJSONLineTransport{conn: clientConn, reader: bufio.NewReader(clientConn)},
+	}
+	profiles, explicit, err := remoteTUIListPermissionProfiles(context.Background(), client)
+	if err != nil {
+		t.Fatalf("discovery error = %v", err)
+	}
+	if explicit {
+		t.Fatal("a server without default_permissions must not report explicit mode")
+	}
+	if len(profiles) != 0 {
+		t.Fatalf("profiles = %#v, want none", profiles)
+	}
+}
+
+// TestRemoteTUIPermissionDiscoveryTimesOut covers Rust #43340's 10-second
+// budget: an unresponsive server reports the retry message.
+func TestRemoteTUIPermissionDiscoveryTimesOut(t *testing.T) {
+	previous := remoteTUIpermissionDiscoveryTimeout
+	remoteTUIpermissionDiscoveryTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { remoteTUIpermissionDiscoveryTimeout = previous })
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	go func() {
+		// Hold the connection open without answering so the request deadline
+		// fires inside remoteTUIPermissionDiscovery.
+		defer serverConn.Close()
+		buffer := make([]byte, 4096)
+		for {
+			if _, err := serverConn.Read(buffer); err != nil {
+				return
+			}
+		}
+	}()
+	client := &remoteAppServerTUIClient{
+		state:     codextui.NewState(nil),
+		transport: &remoteJSONLineTransport{conn: clientConn, reader: bufio.NewReader(clientConn)},
+	}
+	_, _, err := remoteTUIListPermissionProfiles(context.Background(), client)
+	if err == nil || err.Error() != "Permission discovery timed out. Try /permissions again." {
+		t.Fatalf("timeout error = %v", err)
+	}
+}

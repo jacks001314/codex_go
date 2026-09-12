@@ -192,12 +192,19 @@ func NewPermissionProfilesPopupView(config PermissionMenuConfig) PermissionMenuV
 		items = append(items, builtinPermissionModeSelectionItem(config, preset, ReadOnlyProfile, preset.Label, preset.Description, preset.Approval, ApprovalsReviewerUser))
 	}
 	for _, profile := range config.CustomProfiles {
+		// Rust PermissionDiscovery::disabled_reason: a named profile is disabled
+		// by the server's allowed flag or by the requirements' allowed profiles,
+		// approval policies, and reviewers.
+		disabled := disabledReasonForAllowed(profile.Allowed)
+		if disabled == "" {
+			disabled = permissionRequirementsDisabledReason(config.Requirements, profile.ID, config.CurrentApprovalPolicy, config.CurrentReviewer)
+		}
 		items = append(items, PermissionMenuItem{
 			ID:              profile.ID,
 			Name:            profile.ID,
 			Description:     firstNonEmptyPermission(profile.Description, "Configured permission profile."),
 			Current:         config.CurrentProfileID == profile.ID,
-			DisabledReason:  disabledReasonForAllowed(profile.Allowed),
+			DisabledReason:  disabled,
 			DismissOnSelect: true,
 			ProfileID:       profile.ID,
 		})

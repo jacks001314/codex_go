@@ -20,7 +20,11 @@ var ErrNamedPermissionProfilesUnsupported = errors.New("named permission profile
 // profiles (Rust #43340 permission discovery).
 type permissionProfilesLoadedMsg struct {
 	profiles []chatwidget.CustomPermissionProfile
-	err      error
+	// explicitProfileMode is false when the server has no configured permission
+	// profiles, so the picker keeps its local built-in presets (Rust #43340
+	// PermissionDiscovery::explicit_profile_mode).
+	explicitProfileMode bool
+	err                 error
 }
 
 // selectServerPermissionProfile asks the server to adopt a named profile and
@@ -71,9 +75,41 @@ func (m *Model) remoteNamedPermissionProfileActive() bool {
 	return profileID != "" && !strings.HasPrefix(profileID, ":")
 }
 
+// permissionsRetryOptionID is the retry item of the failed-discovery view
+// (Rust #43340 shows a "Update Model Permissions" retry view on error).
+const permissionsRetryOptionID = "permissions-retry"
+
+// openPermissionsMenu mirrors Rust open_permissions_popup: the server-named flow
+// (loading view plus bounded discovery) is used once the picker knows the server
+// uses explicit profiles, has already listed them, or the thread has an active
+// named profile; otherwise the local built-in presets open immediately.
 func (m *Model) openPermissionsMenu() bubbletea.Cmd {
-	if m == nil {
+	if m == nil || m.State == nil {
 		return nil
+	}
+	if m.onListPermissionProfiles == nil {
+		m.showPermissionsMenu(false)
+		return nil
+	}
+	if !m.permissionProfilesExplicit && len(m.permissionProfiles) == 0 &&
+		!m.remoteNamedPermissionProfileActive() && m.permissionProfilesDiscovered {
+		m.showPermissionsMenu(false)
+		return nil
+	}
+	m.showPermissionsLoadingView()
+	if m.permissionProfilesLoading {
+		return nil
+	}
+	m.permissionProfilesLoading = true
+	return m.fetchPermissionProfilesCmd()
+}
+
+// showPermissionsMenu renders the picker in named-profile (explicit) or legacy
+// local-preset mode (Rust open_permission_profiles_popup /
+// open_legacy_permissions_popup).
+func (m *Model) showPermissionsMenu(explicit bool) {
+	if m == nil || m.State == nil {
+		return
 	}
 	config := chatwidget.PermissionMenuConfig{
 		IncludeReadOnly:        true,
@@ -84,7 +120,7 @@ func (m *Model) openPermissionsMenu() bubbletea.Cmd {
 		Requirements:           m.permissionRequirements,
 		WindowsDegradedSandbox: false,
 	}
-	if m.onListPermissionProfiles != nil {
+	if explicit {
 		// Rust #43340: the connected server owns named profiles, so the picker
 		// lists its discovery result instead of local presets only.
 		config.ExplicitPermissionProfileMode = true
@@ -100,11 +136,25 @@ func (m *Model) openPermissionsMenu() bubbletea.Cmd {
 		Body:    strings.TrimSpace(view.FooterNote),
 		Options: permissionModalOptions(view.Items),
 	})
-	if m.onListPermissionProfiles == nil || m.permissionProfilesLoading {
-		return nil
+}
+
+// showPermissionsLoadingView shows Rust's discovery loading view.
+func (m *Model) showPermissionsLoadingView() {
+	if m == nil {
+		return
 	}
-	m.permissionProfilesLoading = true
-	return m.fetchPermissionProfilesCmd()
+	m.permissionItems = nil
+	m.pendingPermissionItem = nil
+	m.openModal(ModalRequestMsg{
+		ID:    "permissions",
+		Kind:  ModalKindPermissions,
+		Title: "Update Model Permissions",
+		Options: []ModalOption{{
+			ID:       "permissions-loading",
+			Label:    "Loading permission profiles\u2026",
+			Disabled: true,
+		}},
+	})
 }
 
 // fetchPermissionProfilesCmd loads the server's named permission profiles.
@@ -114,50 +164,56 @@ func (m *Model) fetchPermissionProfilesCmd() bubbletea.Cmd {
 	}
 	loader := m.onListPermissionProfiles
 	return func() bubbletea.Msg {
-		profiles, err := loader()
-		return permissionProfilesLoadedMsg{profiles: profiles, err: err}
+		profiles, explicitProfileMode, err := loader()
+		return permissionProfilesLoadedMsg{profiles: profiles, explicitProfileMode: explicitProfileMode, err: err}
 	}
 }
 
-// applyPermissionProfilesLoaded stores a discovery result and refreshes the
-// open permissions menu.
+// applyPermissionProfilesLoaded stores a discovery result and shows the popup
+// Rust selects for it: the retry view on failure, the legacy preset popup when
+// the server reports no explicit profiles, and the named-profile popup
+// otherwise (Rust on_permission_profiles_loaded).
 func (m *Model) applyPermissionProfilesLoaded(msg permissionProfilesLoadedMsg) {
 	if m == nil {
 		return
 	}
 	m.permissionProfilesLoading = false
 	if msg.err != nil {
-		m.permissionProfilesErr = "Failed to load permissions: " + strings.TrimSpace(msg.err.Error())
-		if errors.Is(msg.err, ErrNamedPermissionProfilesUnsupported) {
-			m.permissionProfilesErr = "This server does not support permission discovery. Upgrade the Codex server to use this menu."
-		}
-		m.notice = m.permissionProfilesErr
-		m.refreshTranscript()
+		// A failed discovery leaves the picker undecided so Retry re-runs it
+		// (Rust open_permissions_popup's gate is unchanged by a failure).
+		m.permissionProfilesErr = strings.TrimSpace(msg.err.Error())
+		m.openPermissionDiscoveryRetryView(m.permissionProfilesErr)
 		return
 	}
+	m.permissionProfilesDiscovered = true
 	m.permissionProfilesErr = ""
+	m.permissionProfilesExplicit = msg.explicitProfileMode
 	m.permissionProfiles = append([]chatwidget.CustomPermissionProfile(nil), msg.profiles...)
 	if m.modal == nil || m.modal.kind != ModalKindPermissions {
 		return
 	}
-	// Rebuild the open menu with the discovered profiles.
-	view := chatwidget.NewPermissionsPopupView(chatwidget.PermissionMenuConfig{
-		ExplicitPermissionProfileMode: true,
-		IncludeReadOnly:               true,
-		HideFullAccessWarning:         m.hideFullAccessWarning,
-		CurrentApprovalPolicy:         currentPermissionApprovalPolicy(m),
-		CurrentReviewer:               currentApprovalsReviewer(m),
-		CurrentProfileID:              strings.TrimSpace(m.State.Sandbox),
-		Requirements:                  m.permissionRequirements,
-		CustomProfiles:                append([]chatwidget.CustomPermissionProfile(nil), m.permissionProfiles...),
-	})
-	m.permissionItems = append([]chatwidget.PermissionMenuItem(nil), view.Items...)
-	m.modal.title = view.Title
-	m.modal.body = strings.TrimSpace(view.FooterNote)
-	m.modal.options = permissionModalOptions(view.Items)
-	if m.modal.selected >= len(m.modal.options) {
-		m.modal.selected = 0
+	m.showPermissionsMenu(msg.explicitProfileMode)
+}
+
+// openPermissionDiscoveryRetryView shows Rust's failed-discovery view: the raw
+// error as the subtitle and a single Retry item.
+func (m *Model) openPermissionDiscoveryRetryView(message string) {
+	if m == nil {
+		return
 	}
+	m.permissionItems = nil
+	m.pendingPermissionItem = nil
+	m.openModal(ModalRequestMsg{
+		ID:    "permissions",
+		Kind:  ModalKindPermissions,
+		Title: "Update Model Permissions",
+		Body:  strings.TrimSpace(message),
+		Options: []ModalOption{{
+			ID:          permissionsRetryOptionID,
+			Label:       "Retry",
+			Description: "Retry permission discovery",
+		}},
+	})
 }
 
 func permissionModalOptions(items []chatwidget.PermissionMenuItem) []ModalOption {
@@ -189,6 +245,10 @@ func permissionModalOptions(items []chatwidget.PermissionMenuItem) []ModalOption
 func (m *Model) applyPermissionsModalOption(optionID string) bubbletea.Cmd {
 	if m == nil {
 		return nil
+	}
+	if optionID == permissionsRetryOptionID {
+		// Rust #43340: Retry on the failed-discovery view re-runs the flow.
+		return m.openPermissionsMenu()
 	}
 	if strings.HasPrefix(optionID, fullAccessConfirmationPrefix) {
 		return m.applyFullAccessConfirmation(strings.TrimPrefix(optionID, fullAccessConfirmationPrefix))

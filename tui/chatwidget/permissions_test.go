@@ -134,6 +134,49 @@ func TestPermissionProfilesPopupViewIncludesBuiltinsAndCustomProfiles(t *testing
 	}
 }
 
+// TestPermissionProfilesPopupAppliesRequirementsToCustomProfiles covers Rust
+// #43340's disabled_reason for named profiles: the requirements' allowed
+// profiles, approval policies, and reviewers disable a profile the server
+// reports as allowed.
+func TestPermissionProfilesPopupAppliesRequirementsToCustomProfiles(t *testing.T) {
+	view := NewPermissionProfilesPopupView(PermissionMenuConfig{
+		CurrentApprovalPolicy: ApprovalOnRequest,
+		CurrentReviewer:       ApprovalsReviewerUser,
+		CustomProfiles: []CustomPermissionProfile{
+			{ID: "dev", Allowed: true},
+			{ID: "other", Allowed: true},
+		},
+		Requirements: PermissionRequirements{
+			AllowedProfiles:         map[string]bool{"dev": true},
+			AllowedApprovalPolicies: []ApprovalPolicy{ApprovalOnRequest},
+			AllowedReviewers:        []ApprovalsReviewer{ApprovalsReviewerUser},
+		},
+	})
+	byID := map[string]PermissionMenuItem{}
+	for _, item := range view.Items {
+		byID[item.ID] = item
+	}
+	if dev, ok := byID["dev"]; !ok || dev.DisabledReason != "" {
+		t.Fatalf("allowed profile = %#v", dev)
+	}
+	if other, ok := byID["other"]; !ok || other.DisabledReason != "Disabled by requirements." {
+		t.Fatalf("disallowed profile = %#v", other)
+	}
+
+	// A disallowed approval policy or reviewer also disables a named profile.
+	view = NewPermissionProfilesPopupView(PermissionMenuConfig{
+		CurrentApprovalPolicy: ApprovalOnRequest,
+		CurrentReviewer:       ApprovalsReviewerUser,
+		CustomProfiles:        []CustomPermissionProfile{{ID: "dev", Allowed: true}},
+		Requirements: PermissionRequirements{
+			AllowedApprovalPolicies: []ApprovalPolicy{ApprovalNever},
+		},
+	})
+	if view.Items[len(view.Items)-1].DisabledReason != "Disabled by requirements." {
+		t.Fatalf("approval-policy gate = %#v", view.Items[len(view.Items)-1])
+	}
+}
+
 func TestPermissionModeActionDecisionOrderMatchesRust(t *testing.T) {
 	presets := approvalPresetsByID()
 	fullAccess := PermissionModeActionDecisionForPreset(PermissionModeActionContext{

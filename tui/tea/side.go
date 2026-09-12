@@ -239,6 +239,12 @@ func (m *Model) startSideConversation(commandName string, userMessage string) bu
 		m.showSideCommandMessage(commandName, userMessage, SideAlreadyOpenMessage)
 		return nil
 	}
+	// Rust #43340: side conversations fork the parent thread, so a pending
+	// named-profile selection blocks starting one.
+	if strings.TrimSpace(m.pendingServerProfile) != "" {
+		m.showSideCommandMessage(commandName, userMessage, "Wait for permissions to update before forking.")
+		return nil
+	}
 	if m.onStartSide == nil {
 		m.showSideCommandMessage(commandName, userMessage, "Side conversation requests require app-server thread routing.")
 		return nil

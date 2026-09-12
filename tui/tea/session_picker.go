@@ -235,6 +235,13 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
+	// Rust #43340: a pending named-profile selection blocks forking so the new
+	// thread cannot be created with the previous permissions.
+	if strings.TrimSpace(m.pendingServerProfile) != "" {
+		m.addErrorHistoryMessage("Wait for permissions to update before forking.")
+		m.refreshTranscript()
+		return nil
+	}
 	selection := codextui.SessionSelection{
 		Kind: codextui.SessionSelectionFork,
 		Target: codextui.SessionTarget{

@@ -4,20 +4,63 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
+	"codex_go/config"
 	"codex_go/sandbox"
 	chatwidget "codex_go/tui/chatwidget"
 	codextea "codex_go/tui/tea"
 )
 
+// remoteTUIpermissionDiscoveryTimeout mirrors Rust's 10-second permission
+// discovery budget (#43340). It is a variable so tests can shrink the budget.
+var remoteTUIpermissionDiscoveryTimeout = 10 * time.Second
+
 // remoteTUIListPermissionProfiles discovers the connected app server's named
 // permission profiles, mirroring permission_discovery::fetch's bounded
-// pagination and duplicate check (Rust #43340).
-func remoteTUIListPermissionProfiles(ctx context.Context, client *remoteAppServerTUIClient) ([]chatwidget.CustomPermissionProfile, error) {
+// pagination and duplicate check (Rust #43340). The boolean reports the
+// server's explicit-profile mode: a remote thread without an active named
+// profile only offers server profiles when the effective config declares a
+// string default_permissions, otherwise discovery yields the local presets.
+func remoteTUIListPermissionProfiles(ctx context.Context, client *remoteAppServerTUIClient) ([]chatwidget.CustomPermissionProfile, bool, error) {
 	if client == nil {
-		return nil, errors.New("app-server client is unavailable")
+		return nil, false, errors.New("app-server client is unavailable")
+	}
+	discoveryCtx, cancel := context.WithTimeout(ctx, remoteTUIpermissionDiscoveryTimeout)
+	defer cancel()
+	profiles, explicitProfileMode, err := remoteTUIPermissionDiscovery(discoveryCtx, client)
+	if err != nil && errors.Is(err, context.DeadlineExceeded) {
+		return nil, false, errors.New("Permission discovery timed out. Try /permissions again.")
+	}
+	return profiles, explicitProfileMode, err
+}
+
+func remoteTUIPermissionDiscovery(ctx context.Context, client *remoteAppServerTUIClient) ([]chatwidget.CustomPermissionProfile, bool, error) {
+	cwd := ""
+	if client.state != nil {
+		cwd = strings.TrimSpace(client.state.CWD)
+	}
+	// Rust permission_discovery::fetch: the daemon's catalog cannot see this
+	// invocation's profiles, so a remote thread without an active named profile
+	// only uses server discovery when the effective config sets
+	// default_permissions.
+	if !remoteTUIHasActiveNamedProfile(client) {
+		params := config.ConfigReadParams{}
+		if cwd != "" {
+			params.CWD = &cwd
+		}
+		var read config.ConfigReadResponse
+		if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, params, &read); err != nil {
+			if remoteTUIPermissionDiscoveryUnsupported(err) {
+				return nil, false, codextea.ErrNamedPermissionProfilesUnsupported
+			}
+			return nil, false, err
+		}
+		if _, ok := read.Config["default_permissions"].(string); !ok {
+			return []chatwidget.CustomPermissionProfile{}, false, nil
+		}
 	}
 	const pageLimit = 100
 	const maxPages = 10
@@ -30,15 +73,15 @@ func remoteTUIListPermissionProfiles(ctx context.Context, client *remoteAppServe
 		if cursor != nil {
 			params.Cursor = cursor
 		}
-		if cwd := strings.TrimSpace(client.state.CWD); cwd != "" {
+		if cwd != "" {
 			params.CWD = &cwd
 		}
 		var listed sandbox.PermissionProfileListResponse
 		if err := remoteSessionRequest(ctx, client, appserver.MethodPermissionProfileList, params, &listed); err != nil {
 			if remoteTUIPermissionDiscoveryUnsupported(err) {
-				return nil, codextea.ErrNamedPermissionProfilesUnsupported
+				return nil, false, codextea.ErrNamedPermissionProfilesUnsupported
 			}
-			return nil, err
+			return nil, false, err
 		}
 		if len(listed.Data) > pageLimit {
 			break
@@ -49,7 +92,7 @@ func remoteTUIListPermissionProfiles(ctx context.Context, client *remoteAppServe
 				continue
 			}
 			if seenIDs[id] {
-				return nil, errors.New("The server returned duplicate permission profiles.")
+				return nil, false, errors.New("The server returned duplicate permission profiles.")
 			}
 			seenIDs[id] = true
 			profiles = append(profiles, chatwidget.CustomPermissionProfile{
@@ -59,7 +102,7 @@ func remoteTUIListPermissionProfiles(ctx context.Context, client *remoteAppServe
 			})
 		}
 		if listed.NextCursor == nil || strings.TrimSpace(*listed.NextCursor) == "" {
-			return profiles, nil
+			return profiles, true, nil
 		}
 		next := strings.TrimSpace(*listed.NextCursor)
 		if seenCursors[next] {
@@ -68,7 +111,17 @@ func remoteTUIListPermissionProfiles(ctx context.Context, client *remoteAppServe
 		seenCursors[next] = true
 		cursor = &next
 	}
-	return nil, errors.New("Permission discovery exceeded its pagination limit. Try /permissions again.")
+	return nil, false, errors.New("Permission discovery exceeded its pagination limit. Try /permissions again.")
+}
+
+// remoteTUIHasActiveNamedProfile mirrors Rust's
+// permissions.active_permission_profile() check for the discovery gate.
+func remoteTUIHasActiveNamedProfile(client *remoteAppServerTUIClient) bool {
+	if client == nil || client.state == nil {
+		return false
+	}
+	profileID := strings.TrimSpace(client.state.Sandbox)
+	return profileID != "" && !strings.HasPrefix(profileID, ":")
 }
 
 // remoteTUIPermissionDiscoveryUnsupported mirrors discovery_error: an older
@@ -110,11 +163,11 @@ func remoteTUIPermissionUpdateUnsupported(err error) bool {
 
 // interactiveRemoteListPermissionProfiles loads the server's named permission
 // profiles for the /permissions picker.
-func interactiveRemoteListPermissionProfiles(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func() ([]chatwidget.CustomPermissionProfile, error) {
-	return func() ([]chatwidget.CustomPermissionProfile, error) {
+func interactiveRemoteListPermissionProfiles(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func() ([]chatwidget.CustomPermissionProfile, bool, error) {
+	return func() ([]chatwidget.CustomPermissionProfile, bool, error) {
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		defer client.close()
 		return remoteTUIListPermissionProfiles(ctx, client)

@@ -856,9 +856,11 @@ type Options struct {
 	OnStartManagedWorktree      StartManagedWorktreeFunc
 	OnManagedWorktreeChanged    func()
 	// OnListPermissionProfiles discovers the connected app server's named
-	// permission profiles for the /permissions picker (Rust #43340). Nil keeps
-	// the picker on local presets only.
-	OnListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, error)
+	// permission profiles for the /permissions picker (Rust #43340). The boolean
+	// reports the server's explicit-profile mode: false means the server has no
+	// configured permission profiles, so the picker falls back to its local
+	// built-in presets. Nil keeps the picker on local presets only.
+	OnListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, bool, error)
 	// OnUpdateThreadPermissions asks the connected app server to adopt a named
 	// permission profile for the thread (Rust #43340; thread/settings/update).
 	OnUpdateThreadPermissions func(threadID string, profileID string) error
@@ -1257,21 +1259,26 @@ type Model struct {
 	onManagedWorktreeChanged func()
 	worktreePopupRequestID   string
 	// Named permission profile discovery and pending selection (Rust #43340).
-	onListPermissionProfiles  func() ([]chatwidget.CustomPermissionProfile, error)
+	onListPermissionProfiles  func() ([]chatwidget.CustomPermissionProfile, bool, error)
 	onUpdateThreadPermissions func(threadID string, profileID string) error
 	permissionProfiles        []chatwidget.CustomPermissionProfile
 	permissionProfilesLoading bool
-	permissionProfilesErr     string
-	pendingServerProfile      string
-	agentsOverviewEmbedded    bool
-	onAgentsOverviewRefresh   AgentsOverviewRefreshFunc
-	onAgentsOverviewUsage     AgentsOverviewUsageReaderFunc
-	onAgentsOverviewDispatch  AgentsOverviewDispatchFunc
-	onAgentsOverviewStop      AgentsOverviewStopFunc
-	onAgentsOverviewRename    AgentsOverviewRenameFunc
-	onAgentsOverviewArchive   AgentsOverviewArchiveFunc
-	onAgentsOverviewDelete    AgentsOverviewDeleteFunc
-	agentsOverviewLifecycle   *agentsOverviewLifecycleRequest
+	// permissionProfilesExplicit records the server's explicit-profile mode from
+	// the last discovery, and permissionProfilesDiscovered whether one has run
+	// (Rust #43340 PermissionDiscovery).
+	permissionProfilesExplicit   bool
+	permissionProfilesDiscovered bool
+	permissionProfilesErr        string
+	pendingServerProfile         string
+	agentsOverviewEmbedded       bool
+	onAgentsOverviewRefresh      AgentsOverviewRefreshFunc
+	onAgentsOverviewUsage        AgentsOverviewUsageReaderFunc
+	onAgentsOverviewDispatch     AgentsOverviewDispatchFunc
+	onAgentsOverviewStop         AgentsOverviewStopFunc
+	onAgentsOverviewRename       AgentsOverviewRenameFunc
+	onAgentsOverviewArchive      AgentsOverviewArchiveFunc
+	onAgentsOverviewDelete       AgentsOverviewDeleteFunc
+	agentsOverviewLifecycle      *agentsOverviewLifecycleRequest
 	// agentsOverviewLifecycleProgress is non-empty while an archive/delete RPC
 	// runs; navigation and task switching are blocked during that window
 	// (Rust #44433).

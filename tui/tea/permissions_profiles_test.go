@@ -16,6 +16,9 @@ type permissionProfileRecorder struct {
 	listErr  error
 	updErr   error
 	profiles []chatwidget.CustomPermissionProfile
+	// explicit overrides the discovery mode; nil means the server reports
+	// explicit profiles (the common case for these tests).
+	explicit *bool
 }
 
 func (r *permissionProfileRecorder) model(taskRunning bool) *Model {
@@ -23,9 +26,13 @@ func (r *permissionProfileRecorder) model(taskRunning bool) *Model {
 	model := NewModel(codextui.NewState(nil), Options{
 		Width:  120,
 		Height: 40,
-		OnListPermissionProfiles: func() ([]chatwidget.CustomPermissionProfile, error) {
+		OnListPermissionProfiles: func() ([]chatwidget.CustomPermissionProfile, bool, error) {
 			recorder.lists++
-			return recorder.profiles, recorder.listErr
+			explicit := true
+			if recorder.explicit != nil {
+				explicit = *recorder.explicit
+			}
+			return recorder.profiles, explicit, recorder.listErr
 		},
 		OnUpdateThreadPermissions: func(threadID string, profileID string) error {
 			recorder.updates = append(recorder.updates, threadID+"|"+profileID)
