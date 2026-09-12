@@ -909,7 +909,28 @@ func validateKnownMCPServerFields(value any) error {
 	return nil
 }
 
-var knownStrictMCPServerFields = map[string]bool{"command": true, "args": true, "env": true, "env_vars": true, "cwd": true, "url": true, "bearer_token_env_var": true, "http_headers": true, "env_http_headers": true, "oauth": true, "oauth_client_id": true, "oauth_callback_port": true, "oauth_callback_url": true, "oauth_resource": true, "scopes": true, "enabled": true, "disabled_reason": true, "required": true, "environment_id": true, "auth": true}
+// knownStrictMCPServerFields mirrors Rust's `RawMcpServerConfig`
+// (`config/src/mcp_types.rs`, `#[schemars(deny_unknown_fields)]`). Every field
+// Go parses must be accepted here, or a valid Rust config fails Go's strict
+// load. `oauth_client_id`/`oauth_callback_port`/`oauth_callback_url` and
+// `disabled_reason` are retained as legacy Go-only spellings.
+var knownStrictMCPServerFields = map[string]bool{
+	// stdio transport
+	"command": true, "args": true, "env": true, "env_vars": true, "cwd": true,
+	// streamable HTTP transport
+	"url": true, "bearer_token": true, "bearer_token_env_var": true,
+	"http_headers": true, "env_http_headers": true, "http_headers_helper": true,
+	// shared
+	"environment_id": true, "auth": true,
+	"startup_timeout_sec": true, "startup_timeout_ms": true, "tool_timeout_sec": true,
+	"enabled": true, "required": true, "supports_parallel_tool_calls": true,
+	"omit_tools_from": true, "default_tools_approval_mode": true,
+	"enabled_tools": true, "disabled_tools": true, "scopes": true,
+	"oauth": true, "oauth_resource": true, "name": true, "tools": true,
+	// legacy Go-only spellings
+	"oauth_client_id": true, "oauth_callback_port": true, "oauth_callback_url": true,
+	"disabled_reason": true,
+}
 
 var knownStrictMCPServerOAuthFields = map[string]bool{"client_id": true, "callback_url": true, "callback_port": true, "authorization_server_issuer": true}
 

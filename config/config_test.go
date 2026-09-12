@@ -568,6 +568,59 @@ func TestOmitLegacyMCPToolPrefixSupportsGlobalAndServerModes(t *testing.T) {
 	}
 }
 
+// TestStrictConfigAcceptsRustMCPServerFields mirrors Rust's
+// `RawMcpServerConfig` (`#[schemars(deny_unknown_fields)]`): every field Rust
+// accepts on `mcp_servers.<name>` must load under Go's strict mode, and an
+// unknown field must still be rejected.
+func TestStrictConfigAcceptsRustMCPServerFields(t *testing.T) {
+	valid := map[string]any{"mcp_servers": map[string]any{"srv": map[string]any{
+		// stdio transport
+		"command": "npx",
+		"args":    []any{"-y", "pkg"},
+		"env":     map[string]any{"A": "b"},
+		"env_vars": []any{
+			"PATH",
+			map[string]any{"name": "TOKEN", "source": "local"},
+		},
+		"cwd": "/tmp",
+		// streamable HTTP transport
+		"url":                  "https://example.com/mcp",
+		"bearer_token":         "tok",
+		"bearer_token_env_var": "TOK",
+		"http_headers":         map[string]any{"X-Test": "y"},
+		"env_http_headers":     map[string]any{"Y-Test": "VAR"},
+		"http_headers_helper":  "helper",
+		// shared
+		"environment_id":               "local",
+		"auth":                         "oauth",
+		"startup_timeout_sec":          1.5,
+		"startup_timeout_ms":           1500,
+		"tool_timeout_sec":             30.0,
+		"enabled":                      true,
+		"required":                     true,
+		"supports_parallel_tool_calls": true,
+		"omit_tools_from":              []any{"model"},
+		"default_tools_approval_mode":  "prompt",
+		"enabled_tools":                []any{"a"},
+		"disabled_tools":               []any{"b"},
+		"scopes":                       []any{"scope"},
+		"oauth":                        map[string]any{"client_id": "client"},
+		"oauth_resource":               "resource",
+		"name":                         "legacy-display-name",
+		"tools": map[string]any{"a": map[string]any{
+			"approval_mode":      "prompt",
+			"output_token_limit": 10,
+		}},
+	}}}
+	if err := validateKnownTopLevelConfigFields(valid); err != nil {
+		t.Fatalf("valid Rust MCP server fields rejected: %v", err)
+	}
+	invalid := map[string]any{"mcp_servers": map[string]any{"srv": map[string]any{"future_field": true}}}
+	if err := validateKnownTopLevelConfigFields(invalid); err == nil {
+		t.Fatal("strict config should reject an unknown mcp_servers field")
+	}
+}
+
 func TestAllowLoginShellDefaultsTrueLikeRust(t *testing.T) {
 	cfg := &Config{Values: map[string]any{}}
 	if !cfg.AllowLoginShell() {
