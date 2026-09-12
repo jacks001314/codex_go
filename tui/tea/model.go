@@ -880,6 +880,10 @@ type Options struct {
 	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
 	// /voice unavailable for this runtime.
 	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
+	// OnVoiceNotifications streams realtime voice notifications for the local
+	// helper session. The router that owns the session must outlive the start
+	// request, so a nil hook would leave the session stuck in connecting.
+	OnVoiceNotifications func() <-chan VoiceNotificationMsg
 	// OnVoiceApplyAnswer hands a remote answer to the local helper.
 	OnVoiceApplyAnswer func(threadID string, attemptID uint64, answer string) bubbletea.Cmd
 	// OnVoiceCloseHelper closes and reaps the local helper.
@@ -1046,6 +1050,9 @@ type Model struct {
 	// onVoiceConversationStart starts a voice session when the runtime layer has
 	// wired a packaged helper to this model.
 	onVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
+	// onVoiceNotifications delivers realtime notifications from the session's
+	// persistent runtime router.
+	onVoiceNotifications func() <-chan VoiceNotificationMsg
 	// onVoiceApplyAnswer hands a remote answer to the local helper.
 	onVoiceApplyAnswer func(threadID string, attemptID uint64, answer string) bubbletea.Cmd
 	// onVoiceCloseHelper closes and reaps the local helper.
@@ -1776,6 +1783,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		pendingExternalAgentImports:     map[string]bool{},
 		onReadRolloutPath:               options.OnReadRolloutPath,
 		onVoiceConversationStart:        options.OnVoiceConversationStart,
+		onVoiceNotifications:            options.OnVoiceNotifications,
 		onVoiceApplyAnswer:              options.OnVoiceApplyAnswer,
 		onVoiceCloseHelper:              options.OnVoiceCloseHelper,
 		onVoiceSetMicrophoneMuted:       options.OnVoiceSetMicrophoneMuted,
@@ -2112,7 +2120,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyThreadScopedSettingsUpdated(msg)
 	case VoiceNotificationMsg:
 		cmd := m.handleVoiceNotification(msg.Notification)
-		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
+		// Keep exactly one reader outstanding while the session is live.
+		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.waitVoiceNotificationCmd())
 	case VoiceAnswerResultMsg:
 		cmd := m.handleVoiceAnswerResult(msg)
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
@@ -6136,7 +6145,29 @@ func (m *Model) applyVoiceCommand(args string) bubbletea.Cmd {
 	m.voiceAttemptCounter++
 	m.VoiceConversation.BeginVoiceConversation(m.State.ThreadID, m.voiceAttemptCounter)
 	m.recordVoiceCommandResult("Starting voice conversation.")
-	return m.onVoiceConversationStart(m.VoiceConversation.ThreadID, m.VoiceConversation.AttemptID)
+	return bubbletea.Batch(
+		m.onVoiceConversationStart(m.VoiceConversation.ThreadID, m.VoiceConversation.AttemptID),
+		m.waitVoiceNotificationCmd(),
+	)
+}
+
+// waitVoiceNotificationCmd receives the next realtime voice notification. The
+// caller re-issues it after each message so exactly one reader is outstanding.
+func (m *Model) waitVoiceNotificationCmd() bubbletea.Cmd {
+	if m == nil || m.onVoiceNotifications == nil {
+		return nil
+	}
+	channel := m.onVoiceNotifications()
+	if channel == nil {
+		return nil
+	}
+	return func() bubbletea.Msg {
+		message, ok := <-channel
+		if !ok {
+			return nil
+		}
+		return message
+	}
 }
 
 // recordVoiceCommandResult surfaces a bounded /voice result to the user.

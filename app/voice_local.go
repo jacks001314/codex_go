@@ -2,9 +2,10 @@ package app
 
 // Embedded (local) TUI voice wiring. The remote TUI drives voice through a
 // remote app-server endpoint; the embedded TUI owns an in-process runtime
-// router, so the same callbacks are implemented against appserver.Request. The
-// TUI still owns the helper and the media path; the app-server only relays the
-// offer and drives the realtime session.
+// router. That router must outlive the start request, because the realtime
+// session delivers its SDP answer and transcripts as notifications: a router
+// created per request would be closed before the answer arrives and the TUI
+// would wait forever in the connecting phase.
 
 import (
 	"context"
@@ -12,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
@@ -26,11 +28,104 @@ import (
 // connection so a media session never competes with the interactive loop.
 const interactiveVoiceConnectionID = "local-tui-voice"
 
-func interactiveLocalVoiceRouterFactory() interactiveGoalRouter {
-	return appserver.NewDefaultRuntimeRouter(newSessionStore(), auth.DefaultCodexHome())
+// interactiveVoiceRouter is the request surface the voice callbacks need. The
+// router is owned by the session and is never closed per request.
+type interactiveVoiceRouter interface {
+	Handle(request *appserver.Request) *appserver.Response
 }
 
-func localVoiceRequest(router interactiveGoalRouter, id appserver.RequestID, method appserver.Method, params any) (any, error) {
+// interactiveVoiceRouterFactory yields the persistent router.
+type interactiveVoiceRouterFactory func() interactiveVoiceRouter
+
+// localVoiceSession owns one long-lived in-process app-server runtime for the
+// embedded TUI's voice sessions and forwards realtime notifications to the TUI.
+type localVoiceSession struct {
+	mu            sync.Mutex
+	router        *appserver.RuntimeRouter
+	notifications chan codextea.VoiceNotificationMsg
+	closed        bool
+}
+
+func newLocalVoiceSession() *localVoiceSession {
+	return &localVoiceSession{notifications: make(chan codextea.VoiceNotificationMsg, 64)}
+}
+
+func (s *localVoiceSession) ensureRouter() interactiveVoiceRouter {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	if s.router != nil {
+		return s.router
+	}
+	router := appserver.NewDefaultRuntimeRouter(newSessionStore(), auth.DefaultCodexHome())
+	router.SetNotificationSink(appserver.NotificationSinkFunc(func(notification *appserver.Notification) {
+		if notification == nil {
+			return
+		}
+		message, ok := realtimeNotificationMessage(notification)
+		if !ok {
+			return
+		}
+		select {
+		case s.notifications <- message:
+		default:
+			// The TUI is behind; drop rather than stall the runtime.
+		}
+	}))
+	s.router = router
+	return router
+}
+
+// realtimeNotificationMessage maps one runtime notification to the TUI's voice
+// message, decoding the payload from its wire shape the way the remote TUI's
+// notification reader does.
+func realtimeNotificationMessage(notification *appserver.Notification) (codextea.VoiceNotificationMsg, bool) {
+	if notification == nil {
+		return codextea.VoiceNotificationMsg{}, false
+	}
+	raw, err := json.Marshal(notification.Params)
+	if err != nil {
+		return codextea.VoiceNotificationMsg{}, false
+	}
+	return DecodeThreadRealtimeNotification(notification.Method, raw)
+}
+
+// Notifications streams realtime voice messages for the TUI to consume.
+func (s *localVoiceSession) Notifications() <-chan codextea.VoiceNotificationMsg {
+	if s == nil {
+		return nil
+	}
+	return s.notifications
+}
+
+// Close releases the runtime and stops the notification stream.
+func (s *localVoiceSession) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	router := s.router
+	s.router = nil
+	closed := s.closed
+	s.closed = true
+	s.mu.Unlock()
+	if router != nil {
+		_ = router.Close()
+	}
+	if !closed {
+		close(s.notifications)
+	}
+}
+
+func localVoiceRequest(router interactiveVoiceRouter, id appserver.RequestID, method appserver.Method, params any) (any, error) {
+	if router == nil {
+		return nil, fmt.Errorf("%s failed in TUI: app-server is unavailable", method)
+	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("%s failed in TUI: %w", method, err)
@@ -52,22 +147,21 @@ func localVoiceRequest(router interactiveGoalRouter, id appserver.RequestID, met
 }
 
 // interactiveLocalVoiceCallbacks builds the voiceRuntime callbacks against the
-// in-process runtime router, mirroring the remote helpers.
-func interactiveLocalVoiceCallbacks(factory interactiveGoalRouterFactory) (
+// persistent in-process router.
+func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory) (
 	func(context.Context) VoiceSettings,
 	func(context.Context) realtime.VoicesList,
 	func(context.Context, realtime.StartParams) error,
 	func(context.Context, string) error,
 ) {
 	if factory == nil {
-		factory = interactiveLocalVoiceRouterFactory
+		factory = func() interactiveVoiceRouter { return nil }
 	}
 	settings := func(ctx context.Context) VoiceSettings {
 		router := factory()
 		if router == nil {
 			return VoiceSettings{}
 		}
-		defer router.Close()
 		if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
 			return VoiceSettings{}
 		}
@@ -86,7 +180,6 @@ func interactiveLocalVoiceCallbacks(factory interactiveGoalRouterFactory) (
 		if router == nil {
 			return realtime.BuiltinVoices()
 		}
-		defer router.Close()
 		if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
 			return realtime.BuiltinVoices()
 		}
@@ -105,7 +198,6 @@ func interactiveLocalVoiceCallbacks(factory interactiveGoalRouterFactory) (
 		if router == nil {
 			return errors.New("thread/realtime/start failed in TUI: app-server is unavailable")
 		}
-		defer router.Close()
 		if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
 			return err
 		}
@@ -117,7 +209,6 @@ func interactiveLocalVoiceCallbacks(factory interactiveGoalRouterFactory) (
 		if router == nil {
 			return errors.New("thread/realtime/stop failed in TUI: app-server is unavailable")
 		}
-		defer router.Close()
 		if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
 			return err
 		}
@@ -130,12 +221,8 @@ func interactiveLocalVoiceCallbacks(factory interactiveGoalRouterFactory) (
 }
 
 // interactiveLocalVoiceSettings opens the voice picker with the local catalog.
-func interactiveLocalVoiceSettings(factory interactiveGoalRouterFactory) func() bubbletea.Cmd {
-	_, voices, _, _ := interactiveLocalVoiceCallbacks(factory)
-	settings := func(ctx context.Context) VoiceSettings {
-		settingsFn, _, _, _ := interactiveLocalVoiceCallbacks(factory)
-		return settingsFn(ctx)
-	}
+func interactiveLocalVoiceSettings(factory interactiveVoiceRouterFactory) func() bubbletea.Cmd {
+	settings, voices, _, _ := interactiveLocalVoiceCallbacks(factory)
 	return func() bubbletea.Cmd {
 		return func() bubbletea.Msg {
 			ctx := context.Background()
@@ -155,22 +242,18 @@ func interactiveLocalVoiceSettings(factory interactiveGoalRouterFactory) func() 
 
 // interactiveLocalVoiceSaver persists the chosen voice through the local config
 // write RPC and confirms it is the effective preference.
-func interactiveLocalVoiceSaver(factory interactiveGoalRouterFactory) func(voice string) bubbletea.Cmd {
+func interactiveLocalVoiceSaver(factory interactiveVoiceRouterFactory) func(voice string) bubbletea.Cmd {
+	settings, _, _, _ := interactiveLocalVoiceCallbacks(factory)
 	return func(voice string) bubbletea.Cmd {
 		return func() bubbletea.Msg {
-			router := factory
+			router := factory()
 			if router == nil {
-				router = interactiveLocalVoiceRouterFactory
-			}
-			handle := router()
-			if handle == nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: errors.New("config write failed in TUI: app-server is unavailable")}
 			}
-			defer handle.Close()
-			if err := initializeLocalTUIConnection(handle.Handle, interactiveVoiceConnectionID); err != nil {
+			if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: err}
 			}
-			if _, err := localVoiceRequest(handle, appserver.IntID(2), appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
+			if _, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
 				Edits: []config.ConfigEdit{{
 					KeyPath:       "realtime.voice",
 					Value:         voice,
@@ -179,9 +262,8 @@ func interactiveLocalVoiceSaver(factory interactiveGoalRouterFactory) func(voice
 			}); err != nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: err}
 			}
-			settingsFn, _, _, _ := interactiveLocalVoiceCallbacks(factory)
 			ctx := context.Background()
-			if effective := settingsFn(ctx); effective.VoiceSet && strings.TrimSpace(effective.Voice) != voice {
+			if effective := settings(ctx); effective.VoiceSet && strings.TrimSpace(effective.Voice) != voice {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: errors.New("the saved voice is overridden by a managed setting")}
 			}
 			return codextea.VoiceSavedMsg{Voice: voice}
@@ -190,7 +272,7 @@ func interactiveLocalVoiceSaver(factory interactiveGoalRouterFactory) func(voice
 }
 
 // interactiveLocalSpeechSender speaks one delegated answer into the thread.
-func interactiveLocalSpeechSender(factory interactiveGoalRouterFactory, threadID func() string) func(itemID string, text string) bubbletea.Cmd {
+func interactiveLocalSpeechSender(factory interactiveVoiceRouterFactory, threadID func() string) func(itemID string, text string) bubbletea.Cmd {
 	return func(itemID string, text string) bubbletea.Cmd {
 		return func() bubbletea.Msg {
 			target := ""
@@ -200,19 +282,14 @@ func interactiveLocalSpeechSender(factory interactiveGoalRouterFactory, threadID
 			if target == "" {
 				return codextea.VoiceSpeechResultMsg{ItemID: itemID, Err: errors.New("no active thread to speak into")}
 			}
-			router := factory
+			router := factory()
 			if router == nil {
-				router = interactiveLocalVoiceRouterFactory
-			}
-			handle := router()
-			if handle == nil {
 				return codextea.VoiceSpeechResultMsg{ItemID: itemID, Err: errors.New("thread/realtime/appendSpeech failed in TUI: app-server is unavailable")}
 			}
-			defer handle.Close()
-			if err := initializeLocalTUIConnection(handle.Handle, interactiveVoiceConnectionID); err != nil {
+			if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
 				return codextea.VoiceSpeechResultMsg{ItemID: itemID, Err: err}
 			}
-			_, err := localVoiceRequest(handle, appserver.IntID(2), appserver.MethodThreadRealtimeAppendSpeech, realtime.AppendSpeechParams{
+			_, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodThreadRealtimeAppendSpeech, realtime.AppendSpeechParams{
 				ThreadID: target,
 				Text:     text,
 			})

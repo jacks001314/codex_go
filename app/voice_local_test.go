@@ -12,7 +12,6 @@ import (
 
 type recordingInteractiveVoiceRouter struct {
 	requests []*appserver.Request
-	closed   int
 }
 
 func (r *recordingInteractiveVoiceRouter) Handle(request *appserver.Request) *appserver.Response {
@@ -37,14 +36,9 @@ func (r *recordingInteractiveVoiceRouter) Handle(request *appserver.Request) *ap
 	}
 }
 
-func (r *recordingInteractiveVoiceRouter) Close() error {
-	r.closed++
-	return nil
-}
-
 func TestInteractiveLocalVoiceCallbacksUseAppServerProtocol(t *testing.T) {
 	router := &recordingInteractiveVoiceRouter{}
-	settings, voices, start, stop := interactiveLocalVoiceCallbacks(func() interactiveGoalRouter { return router })
+	settings, voices, start, stop := interactiveLocalVoiceCallbacks(func() interactiveVoiceRouter { return router })
 
 	if got := settings(context.Background()); !got.VoiceSet || got.Voice != "juniper" {
 		t.Fatalf("settings = %#v, want juniper", got)
@@ -85,7 +79,7 @@ func TestInteractiveLocalVoiceCallbacksUseAppServerProtocol(t *testing.T) {
 }
 
 func TestInteractiveLocalVoiceSettingsFallsBackToBuiltinCatalog(t *testing.T) {
-	settings := interactiveLocalVoiceSettings(func() interactiveGoalRouter { return nil })
+	settings := interactiveLocalVoiceSettings(func() interactiveVoiceRouter { return nil })
 	message := settings()()
 	result, ok := message.(codextea.VoiceSettingsMsg)
 	if !ok {
@@ -93,5 +87,26 @@ func TestInteractiveLocalVoiceSettingsFallsBackToBuiltinCatalog(t *testing.T) {
 	}
 	if len(result.Voices) == 0 || result.Current == "" {
 		t.Fatalf("builtin settings = %#v", result)
+	}
+}
+
+// TestRealtimeNotificationMessageMapsWirePayloads covers the sink bridge the
+// local session uses to forward realtime notifications to the TUI.
+func TestRealtimeNotificationMessageMapsWirePayloads(t *testing.T) {
+	message, ok := realtimeNotificationMessage(appserver.NewNotification(
+		appserver.NotificationThreadRealtimeSDP,
+		appserver.ThreadRealtimeSDPNotification{SDP: "v=0"},
+	))
+	if !ok {
+		t.Fatal("SDP notification was not mapped")
+	}
+	if message.Notification.Text != "v=0" {
+		t.Fatalf("mapped message = %#v", message)
+	}
+	if _, ok := realtimeNotificationMessage(appserver.NewNotification(appserver.NotificationTurnStarted, struct{}{})); ok {
+		t.Fatal("unrelated notification was mapped to a voice message")
+	}
+	if _, ok := realtimeNotificationMessage(nil); ok {
+		t.Fatal("nil notification was mapped")
 	}
 }

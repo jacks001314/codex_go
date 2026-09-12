@@ -864,7 +864,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	// The TUI owns the voice helper and relays its handshake through the
 	// in-process app-server, so the embedded TUI exposes the same /voice
 	// surface as the remote TUI.
-	voiceSettings, voiceVoices, voiceStart, voiceStop := interactiveLocalVoiceCallbacks(nil)
+	voiceSession := newLocalVoiceSession()
+	voiceSettings, voiceVoices, voiceStart, voiceStop := interactiveLocalVoiceCallbacks(voiceSession.ensureRouter)
 	voice := newVoiceRuntime(voiceRuntimeOptions{
 		buildCommit:      doctor.Version(),
 		realtimeSettings: voiceSettings,
@@ -902,6 +903,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnVoiceConversationStart: func(threadID string, attemptID uint64) bubbletea.Cmd {
 			return voice.startCmd(threadID, attemptID)
 		},
+		OnVoiceNotifications: voiceSession.Notifications,
 		OnVoiceApplyAnswer: func(threadID string, attemptID uint64, answer string) bubbletea.Cmd {
 			return voice.applyAnswerCmd(threadID, attemptID, answer)
 		},
