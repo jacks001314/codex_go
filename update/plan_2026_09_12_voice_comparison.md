@@ -175,10 +175,11 @@ RTP 全程 48 kHz；`voicehost/manager_test.go` 的 24000 断言同步改为 480
 - 归属：`update/plan_2026_09_12.md` 已记录 #44921 为 voice 进程负责的
   alignment 工作，本轮**未改动**，仅登记。
 
-### 8.3 DSP 缺失（最大功能差距）
+### 8.3 DSP 缺失（**已实现，见 §12**）
 
-Go 只有有界缓冲/打包/mute 时序，无重采样、无 AEC/NS/AGC。直接影响回声、
-噪声与设备兼容性。
+原先 Go 只有有界缓冲/打包/mute 时序，无重采样、无 AEC/NS/AGC。
+本轮已补齐回声消除 / 降噪 / AGC（见 §12），重采样由"设备固定 48 kHz +
+miniaudio 内部转换"覆盖（未单独实现 rubato 等价）。
 
 ### 8.4 输入音频准备（`utils/audio`）缺失
 
@@ -270,3 +271,46 @@ LRU 缓存；Go 侧无对等实现。
 - 麦克风默认设备在静默时也接近 0 电平，是设备/环境特性，非代码问题。
 - DSP（重采样/AEC/NS/AGC）仍缺；本次通过"设备与管线同频 48 kHz"规避了速率问题，
   但设备非 48 kHz 时依赖 miniaudio 内部转换，且没有回声消除。
+
+## 12. DSP 缺口实现（2026-09-12）
+
+新增纯 Go DSP 链路并接入媒体路径（`media.go`）：
+
+```
+解码后的播放音频 ──(render reference)──► AEC
+麦克风 480 样本块 ──► AEC ──► NS ──► AGC ──► 20 ms Opus 编码
+```
+
+| 模块 | 文件 | 说明 |
+|---|---|---|
+| FFT | `dsp_fft.go` | 迭代 radix-2 复数 FFT/IFFT（1/N 归一化），供 AEC/NS 复用 |
+| 回声消除 | `dsp_aec.go` | 10 ms/480 分块频域自适应滤波（PBFDAF）：FFT 1024、13 分区 ≈130 ms 尾长、跨分区共享功率归一化、步长 0.15（>0.22 发散） |
+| 降噪 | `dsp_ns.go` | 512/256 sqrt-Hann STFT 谱减；噪声底快降慢升 + 帧能量语音门控（冻结） |
+| AGC | `dsp_agc.go` | 目标 RMS 0.05、增益 [1/8, 8]、快攻(0.5)慢放(0.05)、0.98 限幅 |
+| APM 编排 | `dsp_apm.go` | `processRender`/`processCapture`/`reset`（对应 sonora 的 render/capture 接口） |
+
+接入点（`media.go`）：
+
+- 播放：每个 480 样本解码块在入播放队列前喂给 `apm.processRender`（仅在扬声器未抑制时），作为回声参考。
+- 采集：`pumpCapture` 的每个 480 样本块先过 `apm.processCapture`（AEC→NS→AGC）再组装 20 ms 帧。
+- mute：`setControls` 在麦克风静音时 `apm.reset()` 并丢弃半包，避免跨边界历史泄漏。
+
+实测（确定性合成信号，非门控）：
+
+| 指标 | 结果 |
+|---|---|
+| AEC 回声抑制 | 回声能量降到 **17.79%**（衰减 ~82%） |
+| AEC 差分（有/无参考） | 全链 47.7% vs 对照 100% |
+| NS 稳态噪声 | 残留 **23.4%**（突发语音保留通过） |
+| AGC | 弱语音抬升、强语音不削波 |
+| 稳定性 | 全链输出有限值（无 NaN/Inf） |
+
+与 Rust 的差异（诚实说明）：
+
+- Rust 用 `rubato` sinc 重采样 + `sonora`(WebRTC APM)；Go 是**纯 Go 近似**，不是比特级等价。
+- 重采样：Rust 显式把设备原生率归一到 48 kHz；Go 通过设备请求 48 kHz 让 miniaudio
+  内部转换，未单独实现 rubato 等价的 sinc 重采样器。
+- `setStreamDelayMS` 仅记录诊断值：Go 的分区自适应滤波在其尾长内自行吸收
+  render/capture 延迟，无需显式对齐。
+
+测试：`dsp_aec_test.go`、`dsp_stages_test.go`、`dsp_apm_test.go`。

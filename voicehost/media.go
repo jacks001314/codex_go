@@ -58,6 +58,31 @@ func SetDefaultVoiceCodec(codec VoiceCodec) {
 	defaultVoiceCodec = codec
 }
 
+// samplesToFloat converts 16-bit PCM to the normalized range the DSP stages use.
+func samplesToFloat(samples []int16) []float64 {
+	values := make([]float64, len(samples))
+	for index, sample := range samples {
+		values[index] = float64(sample) / 32768
+	}
+	return values
+}
+
+// floatToSamples converts normalized DSP output back to 16-bit PCM with
+// saturation instead of wrap-around.
+func floatToSamples(values []float64) []int16 {
+	samples := make([]int16, len(values))
+	for index, value := range values {
+		scaled := value * 32768
+		if scaled > 32767 {
+			scaled = 32767
+		} else if scaled < -32768 {
+			scaled = -32768
+		}
+		samples[index] = int16(scaled)
+	}
+	return samples
+}
+
 // codecReady reports whether an audio codec is available for this session.
 func (m *mediaSession) codecReady() bool {
 	return m != nil && m.track != nil && m.track.codec != nil
@@ -368,6 +393,9 @@ type mediaSession struct {
 	playout  *voicePlayout
 	pipeline *pcmPipeline
 	clock    func() time.Time
+	// apm runs echo cancellation, noise suppression, and gain control over the
+	// capture path, using the decoded playback as the echo reference.
+	apm *audioProcessor
 
 	// pending accumulates capture blocks into whole 20 ms Opus frames, matching
 	// the Rust helper's encoder cadence and keeping the RTP clock exact.
@@ -382,6 +410,7 @@ func newMediaSession(codec VoiceCodec, pipeline *pcmPipeline, sender voiceSender
 		playout:  newVoicePlayout(),
 		pipeline: pipeline,
 		clock:    time.Now,
+		apm:      newAudioProcessor(),
 	}
 	// Devices open after negotiation and the startup controls are applied
 	// before media flows, so a session that never suppresses the speaker is
@@ -463,6 +492,9 @@ func (m *mediaSession) drainPlayout(now time.Time) error {
 			var block audioBlock
 			block.length = copy(block.samples[:], samples[offset:end])
 			block.at = packet.at
+			if m.apm != nil && m.pipeline.speaker.current()%2 == 0 {
+				m.apm.processRender(samplesToFloat(block.samples[:block.length]))
+			}
 			m.pipeline.pushPlayback(block)
 		}
 	}
@@ -483,7 +515,11 @@ func (m *mediaSession) pumpCapture(now time.Time) (int, error) {
 		if m.pendingAt.IsZero() {
 			m.pendingAt = block.at
 		}
-		m.pending = append(m.pending, block.samples[:block.length]...)
+		samples := block.samples[:block.length]
+		if m.apm != nil {
+			samples = floatToSamples(m.apm.processCapture(samplesToFloat(samples)))
+		}
+		m.pending = append(m.pending, samples...)
 		for len(m.pending) >= voiceFrameSamples {
 			frame := m.pending[:voiceFrameSamples]
 			if err := m.track.send(frame, m.pendingAt); err != nil {
@@ -517,6 +553,9 @@ func (m *mediaSession) setControls(controls AudioControls) error {
 	}
 	if controls.MicrophoneMuted {
 		m.dropPendingCapture()
+		if m.apm != nil {
+			m.apm.reset()
+		}
 	}
 	if m.pipeline != nil {
 		m.pipeline.setControls(controls)
