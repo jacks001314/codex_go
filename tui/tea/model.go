@@ -146,6 +146,12 @@ type SessionResumeResponse struct {
 	// the live heading (Rust #43921 StatusState).
 	WorkingReasoningTurnID string
 	WorkingReasoningItemID string
+	// ThreadSettings carries the resumed thread's server-owned settings
+	// (Rust #43253/#43330/#43340); nil when the server did not report them.
+	ThreadSettings *appserver.Settings
+	// ReadOnly marks a resume that fell back to a read-only history snapshot
+	// because another app owns the conversation (Rust #43253).
+	ReadOnly bool
 }
 
 type AgentThreadReaderFunc func(currentThreadID string) ([]codextui.AgentThreadEntry, error)
@@ -986,12 +992,15 @@ type Model struct {
 	// compact history cell (Rust #43576).
 	computerActivityGroup        *historycell.ComputerActivityCell
 	computerActivityMessageIndex int
-	agentsOverviewHidden         map[string]struct{}
-	agentsOverviewPendingDraft   *string
-	transcriptMessages           transcriptMessageCache
-	overlayMessages              transcriptMessageCache
-	lastTranscriptContent        string
-	lastTranscriptHeight         int
+	// readOnlyThread marks a conversation opened read-only because another app
+	// owns it (Rust #43253).
+	readOnlyThread             bool
+	agentsOverviewHidden       map[string]struct{}
+	agentsOverviewPendingDraft *string
+	transcriptMessages         transcriptMessageCache
+	overlayMessages            transcriptMessageCache
+	lastTranscriptContent      string
+	lastTranscriptHeight       int
 
 	width                  int
 	height                 int
@@ -2143,6 +2152,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if m.agentsOverview != nil {
 			return m, m.updateAgentsOverviewKey(msg)
 		}
+		if m.readOnlyThread {
+			// Rust #43253: a conversation owned by another app accepts only the
+			// notice's advertised keys (R retry, exit, transcript).
+			return m, m.handleReadOnlyThreadKey(msg, keySpecFromKeyMsg(msg))
+		}
 		switch msg.Type {
 		case bubbletea.KeyCtrlC:
 			if m.modal != nil && (m.modal.customPrompt != nil || m.modal.manageSkills != nil || m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil) {
@@ -2367,6 +2381,9 @@ func (m *Model) View() string {
 		sections = append(sections, m.bottomStyle.Render("Save and close external editor to continue."))
 	} else if m.windowsSandboxSetupActive {
 		sections = append(sections, m.bottomStyle.Render(m.renderWindowsSandboxSetupStatus()))
+	} else if m.readOnlyThread {
+		// Rust #43253: the read-only notice replaces the composer.
+		sections = append(sections, m.bottomStyle.Render(m.renderReadOnlyThreadNotice()))
 	} else {
 		if working := m.renderWorkingIndicator(); working != "" {
 			sections = append(sections, m.bottomStyle.Render(working))
@@ -2797,6 +2814,10 @@ func (m *Model) TerminalFocused() bool {
 }
 
 func (m *Model) submitComposer() bubbletea.Cmd {
+	if m != nil && m.readOnlyThread {
+		// Rust #43253: a conversation owned by another app accepts no input.
+		return nil
+	}
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()
 	m.resetVimEditHistory()
@@ -2972,6 +2993,9 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
+	if m.readOnlyThread {
+		return nil
+	}
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()
 	m.resetVimEditHistory()
@@ -3006,6 +3030,9 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 func (m *Model) steerComposer() bubbletea.Cmd {
 	if m == nil || m.onSteerRequest == nil {
 		return m.queueComposer(true)
+	}
+	if m.readOnlyThread {
+		return nil
 	}
 	input := strings.TrimSpace(m.composer.Value())
 	m.composer.Reset()

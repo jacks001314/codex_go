@@ -1408,20 +1408,88 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 			return codextea.SessionResumeResponse{}, err
 		}
 		defer client.close()
+		// Rust #43253: resume through the app server so the server owns the
+		// writer and reports the thread's saved settings. When another app owns
+		// the conversation the resume fails with the active-writer conflict and
+		// the TUI falls back to a read-only history snapshot.
+		var resumed appserver.ThreadResumeResponse
+		resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, appserver.ThreadResumeParams{ThreadID: threadID}, &resumed)
+		if resumeErr == nil && resumed.Thread != nil {
+			response := remoteTUIResumeResponseFromThread(resumed.Thread)
+			response.ThreadSettings = remoteTUISettingsFromResume(&resumed)
+			return response, nil
+		}
+		if !remoteTUIResumeConflict(resumeErr) {
+			return codextea.SessionResumeResponse{}, resumeErr
+		}
 		thread, err := remoteTUIReadThread(ctx, client, threadID, true)
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err
 		}
-		return codextea.SessionResumeResponse{
-			Summary:                remoteTUISessionSummaryFromThread(thread, false),
-			Messages:               remoteTUIThreadMessagesFromThread(thread),
-			Status:                 remoteTUIStatusFromThread(thread),
-			TokenUsage:             remoteThreadTokenUsageFromThread(thread),
-			WorkingStatusHeader:    remoteTUIThreadActiveReasoningHeading(thread),
-			WorkingReasoningTurnID: remoteTUIThreadActiveReasoningTurnID(thread),
-			WorkingReasoningItemID: remoteTUIThreadActiveReasoningItemID(thread),
-		}, nil
+		response := remoteTUIResumeResponseFromThread(thread)
+		response.ReadOnly = true
+		return response, nil
 	}
+}
+
+// remoteTUIResumeResponseFromThread builds the TUI resume response from a
+// thread snapshot shared by the resume and read-only fallback paths.
+func remoteTUIResumeResponseFromThread(thread *appserver.Thread) codextea.SessionResumeResponse {
+	return codextea.SessionResumeResponse{
+		Summary:                remoteTUISessionSummaryFromThread(thread, false),
+		Messages:               remoteTUIThreadMessagesFromThread(thread),
+		Status:                 remoteTUIStatusFromThread(thread),
+		TokenUsage:             remoteThreadTokenUsageFromThread(thread),
+		WorkingStatusHeader:    remoteTUIThreadActiveReasoningHeading(thread),
+		WorkingReasoningTurnID: remoteTUIThreadActiveReasoningTurnID(thread),
+		WorkingReasoningItemID: remoteTUIThreadActiveReasoningItemID(thread),
+	}
+}
+
+// remoteTUIResumeConflict reports whether a resume failed because another owner
+// holds the thread's writer (Rust #43253 external writer detection).
+func remoteTUIResumeConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already has an active writer")
+}
+
+// remoteTUISettingsFromResume converts a resume response's thread settings into
+// the settings shape the TUI applies (Rust #43330/#43340).
+func remoteTUISettingsFromResume(resumed *appserver.ThreadResumeResponse) *appserver.Settings {
+	if resumed == nil {
+		return nil
+	}
+	settings := appserver.Settings{
+		CWD:                   strings.TrimSpace(resumed.CWD),
+		Model:                 strings.TrimSpace(resumed.Model),
+		ModelProvider:         strings.TrimSpace(resumed.ModelProvider),
+		ApprovalPolicy:        remoteSettingsString(resumed.ApprovalPolicy),
+		SandboxPolicy:         remoteSettingsString(resumed.Sandbox),
+		Effort:                resumed.ReasoningEffort,
+		ServiceTier:           resumed.ServiceTier,
+		DisabledPluginIDs:     append([]string(nil), resumed.DisabledPluginIDs...),
+		RuntimeWorkspaceRoots: append([]string(nil), resumed.RuntimeWorkspaceRoots...),
+	}
+	if resumed.ApprovalsReviewer != nil {
+		settings.ApprovalsReviewer = strings.TrimSpace(*resumed.ApprovalsReviewer)
+	}
+	if resumed.ActivePermissionProfile != nil {
+		if id := strings.TrimSpace(resumed.ActivePermissionProfile.ID); id != "" {
+			settings.ActivePermissionProfile = &id
+		}
+	}
+	return &settings
+}
+
+// remoteSettingsString normalizes a settings value that may arrive as a plain
+// string or a structured object.
+func remoteSettingsString(value any) string {
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return ""
 }
 
 func remoteTUIThreadListParams(root *cli.RootOptions, archived bool) appserver.ThreadListParams {

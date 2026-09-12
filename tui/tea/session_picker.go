@@ -379,6 +379,12 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 			m.State.Provider = provider
 		}
 	}
+	// Rust #43253/#43330: the resume response carries the thread's server-owned
+	// settings, and a read-only fallback replaces the composer with a notice.
+	if response.ThreadSettings != nil {
+		m.applyThreadSettingsValues(*response.ThreadSettings)
+	}
+	m.setReadOnlyThread(response.ReadOnly)
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
 	m.State.BumpMessagesRevision()
 	if response.TokenUsage != nil {

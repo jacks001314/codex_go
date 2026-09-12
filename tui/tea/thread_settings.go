@@ -27,7 +27,17 @@ func (m *Model) applyThreadSettingsUpdated(msg ThreadSettingsUpdatedMsg) bubblet
 	if threadID == "" || threadID != strings.TrimSpace(m.State.ThreadID) {
 		return nil
 	}
-	settings := msg.Settings
+	m.applyThreadSettingsValues(msg.Settings)
+	return nil
+}
+
+// applyThreadSettingsValues applies one settings snapshot to the TUI state
+// (shared by the settings notification and the resume response, Rust
+// #43330/#43340).
+func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
+	if m == nil || m.State == nil {
+		return
+	}
 	cwdChanged := false
 	if cwd := strings.TrimSpace(settings.CWD); cwd != "" && cwd != strings.TrimSpace(m.State.CWD) {
 		m.State.CWD = cwd
@@ -73,5 +83,4 @@ func (m *Model) applyThreadSettingsUpdated(msg ThreadSettingsUpdatedMsg) bubblet
 		m.invalidateAppsScope()
 	}
 	m.refreshTranscript()
-	return nil
 }
