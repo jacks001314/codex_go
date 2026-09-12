@@ -3321,6 +3321,19 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return nil
 		}
 		c.send(codextea.ThreadEventMsg{Event: protocol.TurnCompleted(protocol.Usage{})})
+	case appserver.NotificationThreadSettingsUpdated:
+		var payload appserver.SettingsUpdatedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		// Rust #43330/#43340: the app server owns the thread's saved settings;
+		// apply them so resumed or forked tasks stop inheriting the previous
+		// task's permissions and model.
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			return nil
+		}
+		c.noteNotificationThreadID(payload.ThreadID)
+		c.send(codextea.ThreadSettingsUpdatedMsg{ThreadID: payload.ThreadID, Settings: payload.ThreadSettings})
 	case appserver.NotificationThreadTokenUsageUpdated:
 		var payload appserver.ThreadTokenUsageUpdatedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

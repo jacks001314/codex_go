@@ -1910,6 +1910,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case WorktreeBrowserRemovedMsg:
 		m.applyWorktreeBrowserRemoved(msg)
 		return m, nil
+	case ThreadSettingsUpdatedMsg:
+		return m, m.applyThreadSettingsUpdated(msg)
 	case HookRunMsg:
 		m.applyHookRun(msg)
 		return m, nil
