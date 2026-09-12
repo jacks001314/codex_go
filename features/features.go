@@ -21,6 +21,11 @@ const (
 // authorization for configured MCP resources (Rust #44832).
 const UseXAAKey = "use_xaa"
 
+// remoteCompactionV2Key is the retired remote-compaction toggle that stays in
+// the model-client beta features header (Rust
+// `Session::build_model_client_beta_features_header`).
+const remoteCompactionV2Key = "remote_compaction_v2"
+
 type Spec struct {
 	Key                         string
 	Stage                       Stage
@@ -203,7 +208,10 @@ var Registry = []Spec{
 	{Key: "workspace_owner_usage_nudge", Stage: StageRemoved},
 	{Key: "responses_websockets", Stage: StageRemoved},
 	{Key: "responses_websockets_v2", Stage: StageRemoved},
-	{Key: "remote_compaction_v2", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs): remote compaction v2 is retired as a
+	// toggle - Stage::Removed, disabled, and skipped by `apply_map` - while the
+	// model-client beta header still advertises it unconditionally.
+	{Key: remoteCompactionV2Key, Stage: StageRemoved},
 	// Rust (codex-rs/features/src/lib.rs da898490fc #38601): keep active
 	// sampling turns alive until a failed network connection recovers.
 	{Key: "unbounded_connection_retries", Stage: StageStable, DefaultEnabled: true},
@@ -289,19 +297,19 @@ func ModelClientBetaFeaturesHeader(settings map[string]bool) string {
 	}
 	keys := []string{}
 	for _, spec := range Registry {
-		if !featureAdvertisedInModelClientHeader(&spec) || !effective[spec.Key] {
+		// Rust build_model_client_beta_features_header: remote compaction stays
+		// advertised unconditionally; the other entries are experimental
+		// features the user has enabled.
+		if spec.Key == remoteCompactionV2Key {
+			keys = append(keys, spec.Key)
+			continue
+		}
+		if spec.Stage != StageExperimental || !effective[spec.Key] {
 			continue
 		}
 		keys = append(keys, spec.Key)
 	}
 	return strings.Join(keys, ",")
-}
-
-func featureAdvertisedInModelClientHeader(spec *Spec) bool {
-	if spec == nil {
-		return false
-	}
-	return spec.Stage == StageExperimental || spec.Key == "remote_compaction_v2"
 }
 
 func Sorted() []Spec {

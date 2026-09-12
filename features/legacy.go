@@ -40,9 +40,13 @@ var ignoredFeatureKeys = map[string]bool{
 	"apps_mcp_path_override":             true,
 	"image_detail_original":              true,
 	"resize_all_images":                  true,
+	"item_ids":                           true,
 	"plugin_hooks":                       true,
-	"skill_env_var_dependency_prompt":    true,
-	"terminal_resize_reflow":             true,
+	// Rust apply_map skips the remote-compaction toggle; the beta header
+	// advertises the key unconditionally instead.
+	remoteCompactionV2Key:             true,
+	"skill_env_var_dependency_prompt": true,
+	"terminal_resize_reflow":          true,
 }
 
 // CanonicalKey returns the canonical feature key for a canonical key or accepted

@@ -114,9 +114,50 @@ func TestModelClientBetaFeaturesHeader(t *testing.T) {
 		t.Fatalf("header = %q", header)
 	}
 
+	// Rust build_model_client_beta_features_header advertises remote compaction
+	// unconditionally, and apply_map ignores the retired toggle, so an explicit
+	// false cannot remove it.
 	header = ModelClientBetaFeaturesHeader(map[string]bool{"remote_compaction_v2": false})
-	if header != "" {
-		t.Fatalf("header with remote compaction disabled = %q", header)
+	if header != "remote_compaction_v2" {
+		t.Fatalf("header with the retired toggle cleared = %q", header)
+	}
+
+	// Enabled experimental features are advertised in registry order.
+	header = ModelClientBetaFeaturesHeader(map[string]bool{"network_proxy": true})
+	if header != "network_proxy,remote_compaction_v2" {
+		t.Fatalf("header with an enabled experiment = %q", header)
+	}
+
+	var spec *Spec
+	for i := range Registry {
+		if Registry[i].Key == "remote_compaction_v2" {
+			spec = &Registry[i]
+		}
+	}
+	if spec == nil {
+		t.Fatal("remote_compaction_v2 is missing from Registry")
+	}
+	if spec.Stage != StageRemoved || spec.DefaultEnabled {
+		t.Fatalf("remote_compaction_v2 spec = %#v, want removed and disabled by default", *spec)
+	}
+}
+
+// TestResolveSettingsIgnoresRetiredTogglesLikeRust covers Rust's `apply_map`
+// skip list: a config entry for a retired feature is recorded but never applied.
+func TestResolveSettingsIgnoresRetiredTogglesLikeRust(t *testing.T) {
+	settings, _ := ResolveSettings(map[string]any{
+		"remote_compaction_v2": true,
+		"item_ids":             false,
+		"memories":             true,
+	})
+	if _, ok := settings["remote_compaction_v2"]; ok {
+		t.Fatalf("remote_compaction_v2 toggle was applied: %#v", settings)
+	}
+	if _, ok := settings["item_ids"]; ok {
+		t.Fatalf("item_ids toggle was applied: %#v", settings)
+	}
+	if !settings["memories"] {
+		t.Fatalf("memories = %#v, want the surviving toggle applied", settings)
 	}
 }
 
