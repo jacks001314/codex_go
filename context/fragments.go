@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -531,6 +532,66 @@ type ModelSwitchInstructions struct {
 	From         string
 	To           string
 	Instructions string
+}
+
+// AnsweredQuestion mirrors Rust's context-fragments AnsweredQuestion: bounded
+// framing that accompanies an explicitly submitted user answer without
+// repeating an unbounded model-authored prompt (#6ae8dcf6e1).
+type AnsweredQuestion struct {
+	Question string
+}
+
+// answeredQuestionMaxBytes bounds the question framing to 512 UTF-8 bytes.
+const answeredQuestionMaxBytes = 512
+
+func NewAnsweredQuestion(question string) *AnsweredQuestion {
+	end := floorCharBoundary(question, minInt(len(question), answeredQuestionMaxBytes))
+	return &AnsweredQuestion{Question: question[:end]}
+}
+
+func (a *AnsweredQuestion) Role() string {
+	return RoleUser
+}
+
+// Markers are empty: the answered-question framing is unmarked, so it never
+// matches arbitrary text (Rust ContextualUserFragment::type_markers).
+func (a *AnsweredQuestion) Markers() (string, string) {
+	return "", ""
+}
+
+func (a *AnsweredQuestion) Body() string {
+	question := ""
+	if a != nil {
+		question = a.Question
+	}
+	question = strings.NewReplacer("\n", " ", "\r", " ").Replace(question)
+	return "> " + question + "\n\n"
+}
+
+func (a *AnsweredQuestion) ContentKind() string {
+	return "user.answered_question"
+}
+
+// floorCharBoundary returns the largest index <= index that starts a UTF-8
+// rune (Rust str::floor_char_boundary).
+func floorCharBoundary(text string, index int) int {
+	if index <= 0 {
+		return 0
+	}
+	if index >= len(text) {
+		return len(text)
+	}
+	for index > 0 && !utf8.RuneStart(text[index]) {
+		index--
+	}
+	return index
+}
+
+func minInt(left int, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func (m *ModelSwitchInstructions) Role() string {

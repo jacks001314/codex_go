@@ -7,6 +7,32 @@ import (
 	"time"
 )
 
+func TestAnsweredQuestionFramingIsBoundedAndKeepsUnicodeBoundaries(t *testing.T) {
+	text := strings.Repeat("é\n", 1000)
+	fragment := NewAnsweredQuestion(text)
+	rendered := RenderStandalone(fragment)
+	if rendered == nil || rendered.Role != RoleUser || rendered.ContentKind != "user.answered_question" {
+		t.Fatalf("AnsweredQuestion rendered = %#v", rendered)
+	}
+	if len(rendered.Content) > 516 {
+		t.Fatalf("AnsweredQuestion content length = %d, want <= 516", len(rendered.Content))
+	}
+	want := "> " + strings.ReplaceAll(text[:floorCharBoundary(text, 512)], "\n", " ") + "\n\n"
+	if rendered.Content != want {
+		t.Fatalf("AnsweredQuestion content = %q, want %q", rendered.Content, want)
+	}
+	if open, close := fragment.Markers(); open != "" || close != "" {
+		t.Fatalf("AnsweredQuestion markers = %q/%q, want empty", open, close)
+	}
+}
+
+func TestAnsweredQuestionFlattensLineBreaks(t *testing.T) {
+	rendered := RenderStandalone(NewAnsweredQuestion("first\r\nsecond\nthird"))
+	if rendered.Content != "> first  second third\n\n" {
+		t.Fatalf("AnsweredQuestion content = %q", rendered.Content)
+	}
+}
+
 func TestRenderWrapsMarkers(t *testing.T) {
 	rendered := Render(NewSimpleFragment(RoleDeveloper, "<x>", "</x>", "\nhello\n"))
 	if rendered == nil {
