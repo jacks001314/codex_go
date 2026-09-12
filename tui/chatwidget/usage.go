@@ -38,6 +38,9 @@ type SelectionItem struct {
 	Action                     UsageMenuAction
 	DismissOnSelect            bool
 	DismissParentOnChildAccept bool
+	// RequireExplicitConfirmation makes the item arm on the first activation
+	// and act only on a second one (Rust #44744).
+	RequireExplicitConfirmation bool
 }
 
 type SelectionView struct {

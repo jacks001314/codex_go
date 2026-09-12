@@ -54,6 +54,11 @@ type ModalOption struct {
 	DisabledGutterMarker string
 	Shortcut             string
 	Disabled             bool
+	// RequireConfirmation arms the option on its first activation and only
+	// runs it on a second activation (Rust SelectionItem
+	// require_explicit_confirmation, #44744). Destructive options such as
+	// permanent deletion keep this; archive does not.
+	RequireConfirmation bool
 }
 
 type ModalRequestMsg struct {
@@ -122,6 +127,9 @@ type modalState struct {
 	columnWidth       bottompane.ColumnWidthConfig
 	descriptionLayout bottompane.SelectionDescriptionLayout
 	keymapCapture     *keymapCaptureState
+	// armedOptionID tracks an option whose RequireConfirmation gate has been
+	// passed once; a second activation runs it (Rust #44744).
+	armedOptionID string
 
 	elicitation            *bottompane.ElicitationFormRequest
 	modelPicker            *codextui.ModelPicker
@@ -218,6 +226,7 @@ func normalizeModalOptions(options []ModalOption) []ModalOption {
 			DisabledGutterMarker: strings.TrimSpace(option.DisabledGutterMarker),
 			Shortcut:             strings.ToLower(strings.TrimSpace(option.Shortcut)),
 			Disabled:             option.Disabled,
+			RequireConfirmation:  option.RequireConfirmation,
 		})
 	}
 	return out
@@ -341,15 +350,14 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	case bubbletea.KeyEsc:
 		return m.respondModal(true)
 	case bubbletea.KeyEnter:
-		if m.modal.options[m.modal.selected].Disabled {
-			return nil
-		}
-		return m.respondModal(false)
+		return m.activateModalOption(m.modal.selected)
 	case bubbletea.KeyUp:
 		m.moveModalSelection(-1)
+		m.disarmModalOption()
 		return nil
 	case bubbletea.KeyDown, bubbletea.KeyTab:
 		m.moveModalSelection(1)
+		m.disarmModalOption()
 		return nil
 	case bubbletea.KeyRunes:
 		key := strings.ToLower(string(message.Runes))
@@ -361,12 +369,42 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 				continue
 			}
 			if option.Shortcut == key || fmt.Sprintf("%d", i+1) == key {
-				m.modal.selected = i
-				return m.respondModal(false)
+				return m.activateModalOption(i)
 			}
 		}
 	}
 	return nil
+}
+
+// activateModalOption selects an option and runs it, except that an option
+// marked RequireConfirmation is only armed on the first activation (Rust
+// #44744: destructive actions keep an explicit second confirmation while
+// archiving acts immediately).
+func (m *Model) activateModalOption(index int) bubbletea.Cmd {
+	if m == nil || m.modal == nil || index < 0 || index >= len(m.modal.options) {
+		return nil
+	}
+	option := m.modal.options[index]
+	if option.Disabled {
+		return nil
+	}
+	m.modal.selected = index
+	if option.RequireConfirmation && m.modal.armedOptionID != option.ID {
+		m.modal.armedOptionID = option.ID
+		m.modal.footerNote = "Press enter again to confirm."
+		return nil
+	}
+	m.modal.armedOptionID = ""
+	m.modal.footerNote = ""
+	return m.respondModal(false)
+}
+
+func (m *Model) disarmModalOption() {
+	if m == nil || m.modal == nil || m.modal.armedOptionID == "" {
+		return
+	}
+	m.modal.armedOptionID = ""
+	m.modal.footerNote = ""
 }
 
 func (m *Model) updateCustomPromptModal(message bubbletea.KeyMsg) bubbletea.Cmd {

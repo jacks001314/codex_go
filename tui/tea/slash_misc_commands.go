@@ -667,6 +667,7 @@ func (m *Model) openSelectionViewModal(kind ModalKind, view chatwidget.Selection
 			DisabledReason:       item.DisabledReason,
 			DisabledGutterMarker: item.DisabledGutterMarker,
 			Disabled:             item.Disabled || strings.TrimSpace(item.DisabledReason) != "",
+			RequireConfirmation:  item.RequireExplicitConfirmation,
 		})
 	}
 	body := strings.TrimSpace(view.Subtitle)

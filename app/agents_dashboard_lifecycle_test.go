@@ -51,8 +51,19 @@ func TestAgentsDashboardArchiveAndDeleteRequireConfirmationLikeRust(t *testing.T
 		t.Fatalf("delete confirmation missing:\n%s", model.View())
 	}
 	updated, command = model.Update(keyPress(bubbletea.KeyEnter))
+	// Rust #44744: permanent deletion keeps an explicit second confirmation.
+	if command != nil || len(source.deleted) != 0 {
+		t.Fatalf("first delete confirmation ran the action: cmd=%v deleted=%#v", command != nil, source.deleted)
+	}
+	if !model.pendingLifecycleArmed {
+		t.Fatal("first delete confirmation did not arm the explicit confirmation")
+	}
+	if !strings.Contains(model.View(), "Press y again to permanently delete") {
+		t.Fatalf("second delete confirmation missing:\n%s", model.View())
+	}
+	updated, command = model.Update(keyPress(bubbletea.KeyEnter))
 	if command == nil {
-		t.Fatal("confirm returned no delete command")
+		t.Fatal("second confirmation returned no delete command")
 	}
 	if _, _ = updated.Update(command()); len(source.deleted) != 1 || source.deleted[0] != "root-1" {
 		t.Fatalf("deleted = %#v, want [root-1]", source.deleted)

@@ -95,8 +95,17 @@ func TestModelAgentsDeleteDetachesRemovedCurrentTaskLikeRust(t *testing.T) {
 	model.Update(key(bubbletea.KeyDown))
 	updated, cmd := model.Update(key(bubbletea.KeyEnter))
 	model = updated.(*Model)
+	// Rust #44744: permanent deletion keeps an explicit second confirmation.
+	if cmd != nil || len(calls.deleted) != 0 {
+		t.Fatalf("first confirmation ran the deletion: cmd=%#v deleted=%#v", cmd, calls.deleted)
+	}
+	if model.modal == nil {
+		t.Fatal("delete confirmation closed before the explicit confirmation")
+	}
+	updated, cmd = model.Update(key(bubbletea.KeyEnter))
+	model = updated.(*Model)
 	if cmd == nil {
-		t.Fatal("confirm returned no lifecycle command")
+		t.Fatal("second confirmation returned no lifecycle command")
 	}
 	updated, _ = model.Update(cmd())
 	model = updated.(*Model)
@@ -109,6 +118,53 @@ func TestModelAgentsDeleteDetachesRemovedCurrentTaskLikeRust(t *testing.T) {
 	}
 	if strings.TrimSpace(model.State.ThreadID) != "" {
 		t.Fatalf("current thread not detached: %q", model.State.ThreadID)
+	}
+}
+
+// TestModelAgentsConfirmationNumberKeysLikeRust covers #44744: the archive
+// confirmation's number shortcut acts immediately, while permanent deletion
+// keeps an explicit second confirmation.
+func TestModelAgentsConfirmationNumberKeysLikeRust(t *testing.T) {
+	runeKey := func(r rune) bubbletea.KeyMsg {
+		return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}}
+	}
+
+	calls := &agentsLifecycleCalls{}
+	archive := newAgentsLifecycleModel(t, calls, nil, nil)
+	openAgentsDashboard(t, archive)
+	archive.Update(key(bubbletea.KeyCtrlE))
+	updated, cmd := archive.Update(runeKey('2'))
+	archive = updated.(*Model)
+	if cmd == nil {
+		t.Fatal("the archive number shortcut should act immediately")
+	}
+	updated, _ = archive.Update(cmd())
+	archive = updated.(*Model)
+	if len(calls.archived) != 1 || calls.archived[0] != "root-1" {
+		t.Fatalf("archived = %#v, want [root-1]", calls.archived)
+	}
+
+	deleteCalls := &agentsLifecycleCalls{}
+	remove := newAgentsLifecycleModel(t, deleteCalls, nil, nil)
+	openAgentsDashboard(t, remove)
+	remove.Update(key(bubbletea.KeyDelete))
+	updated, cmd = remove.Update(runeKey('2'))
+	remove = updated.(*Model)
+	if cmd != nil || len(deleteCalls.deleted) != 0 {
+		t.Fatalf("the delete number shortcut must not act on the first press: cmd=%v deleted=%#v", cmd != nil, deleteCalls.deleted)
+	}
+	if remove.modal == nil {
+		t.Fatal("delete confirmation closed before the explicit confirmation")
+	}
+	updated, cmd = remove.Update(runeKey('2'))
+	remove = updated.(*Model)
+	if cmd == nil {
+		t.Fatal("the second delete confirmation should run the action")
+	}
+	updated, _ = remove.Update(cmd())
+	remove = updated.(*Model)
+	if len(deleteCalls.deleted) != 1 || deleteCalls.deleted[0] != "root-1" {
+		t.Fatalf("deleted = %#v, want [root-1]", deleteCalls.deleted)
 	}
 }
 

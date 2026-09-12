@@ -434,7 +434,9 @@ func (m *Model) openAgentsOverviewLifecycleConfirmation(action agentsOverviewLif
 		Body:  body,
 		Options: []ModalOption{
 			{ID: "cancel", Label: "Cancel", Description: "Keep this task"},
-			{ID: "confirm", Label: confirmLabel, Description: "Run the confirmed lifecycle action"},
+			// Rust #44744: archiving acts on the first confirmation; permanent
+			// deletion keeps an explicit second confirmation.
+			{ID: "confirm", Label: confirmLabel, Description: "Run the confirmed lifecycle action", RequireConfirmation: action == agentsOverviewActionDelete},
 		},
 	})
 }

@@ -420,6 +420,9 @@ type agentsDashboardModel struct {
 	// (Rust #44433).
 	pendingLifecycle string
 	pendingThreadID  string
+	// pendingLifecycleArmed marks that the explicit confirmation required for
+	// permanent deletion has been requested once (Rust #44744).
+	pendingLifecycleArmed bool
 }
 
 func newAgentsDashboardModel(ctx context.Context, source agentsDashboardSource, worktreesEnabled ...bool) *agentsDashboardModel {
@@ -526,14 +529,22 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m.pendingLifecycle != "" {
 		switch msg.String() {
 		case "y", "enter":
+			// Rust #44744: archiving acts on the first confirmation; permanent
+			// deletion requires an explicit second confirmation.
+			if m.pendingLifecycle == "delete" && !m.pendingLifecycleArmed {
+				m.pendingLifecycleArmed = true
+				return nil
+			}
 			action := m.pendingLifecycle
 			threadID := m.pendingThreadID
 			m.pendingLifecycle = ""
 			m.pendingThreadID = ""
+			m.pendingLifecycleArmed = false
 			return m.lifecycleCmd(action, threadID)
 		case "n", "esc":
 			m.pendingLifecycle = ""
 			m.pendingThreadID = ""
+			m.pendingLifecycleArmed = false
 			m.notice = "Cancelled"
 		}
 		return nil
@@ -587,11 +598,13 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		if action := m.view.ArchiveSelected(); action == agentsoverview.ActionArchiveThread {
 			m.pendingLifecycle = "archive"
 			m.pendingThreadID = m.view.SelectedThreadID()
+			m.pendingLifecycleArmed = false
 		}
 	case "delete":
 		if action := m.view.DeleteSelected(); action == agentsoverview.ActionDeleteThread {
 			m.pendingLifecycle = "delete"
 			m.pendingThreadID = m.view.SelectedThreadID()
+			m.pendingLifecycleArmed = false
 		}
 	case "ctrl+c":
 		m.done = true
@@ -682,7 +695,11 @@ func (m *agentsDashboardModel) View() string {
 		if m.pendingLifecycle == "delete" {
 			verb = "Permanently delete"
 		}
-		lines = append(lines, "  "+verb+" this task and its child agents? (y/n)")
+		prompt := "  " + verb + " this task and its child agents? (y/n)"
+		if m.pendingLifecycleArmed {
+			prompt = "  Press y again to permanently delete this task and its child agents, or n to cancel."
+		}
+		lines = append(lines, prompt)
 	}
 	if m.notice != "" {
 		lines = append(lines, "  "+m.notice)
