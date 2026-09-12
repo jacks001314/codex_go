@@ -2548,12 +2548,15 @@ func (m *Model) restoreReasoningStatusHeader() {
 // reasoningHeaderUpdateBlocked reports whether another status owner must keep
 // the heading (Rust: safety buffering wait, unified-exec wait streak, active
 // compaction, pending guardian review). Go's tea model tracks safety buffering
-// and compaction; the remaining owners are not modeled here.
+// compaction, and pending guardian reviews; a unified-exec wait streak is not
+// modeled here.
 func (m *Model) reasoningHeaderUpdateBlocked() bool {
 	if m == nil {
 		return true
 	}
-	return m.safetyBuffering.IsWaiting() || m.compactionActive
+	return m.safetyBuffering.IsWaiting() ||
+		m.compactionActive ||
+		!m.toolRequestRuntime.PendingGuardianReviewStatus.IsEmpty()
 }
 
 // resetReasoningSummaryHeader clears the live reasoning status heading at a

@@ -89,6 +89,18 @@ func TestReasoningHeadingHeldWhileStatusOwnerActiveLikeRust(t *testing.T) {
 	if model.workingStatusHeader != "Visible" {
 		t.Fatalf("heading = %q, want held while compacting", model.workingStatusHeader)
 	}
+
+	model.compactionActive = false
+	model.toolRequestRuntime.PendingGuardianReviewStatus.StartOrUpdate("review-1", "Reviewing command")
+	model.Update(ThreadEventMsg{Event: protocol.ReasoningSummaryDelta("reasoning-1", "\n## Hidden by review")})
+	if model.workingStatusHeader != "Visible" {
+		t.Fatalf("heading = %q, want held during a pending guardian review", model.workingStatusHeader)
+	}
+	model.toolRequestRuntime.PendingGuardianReviewStatus.Finish("review-1")
+	model.Update(ThreadEventMsg{Event: protocol.ReasoningSummaryDelta("reasoning-1", "\n## Visible again")})
+	if model.workingStatusHeader != "Visible again" {
+		t.Fatalf("heading = %q, want Visible again after the review finishes", model.workingStatusHeader)
+	}
 }
 
 // Mirrors Rust #43921's resume restore: the resumed in-progress turn seeds the
