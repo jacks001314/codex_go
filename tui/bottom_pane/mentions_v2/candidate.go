@@ -30,6 +30,7 @@ type MentionType string
 const (
 	MentionTypePlugin    MentionType = "plugin"
 	MentionTypeSkill     MentionType = "skill"
+	MentionTypeTask      MentionType = "task"
 	MentionTypeFile      MentionType = "file"
 	MentionTypeDirectory MentionType = "directory"
 )
@@ -44,6 +45,8 @@ func (t MentionType) Label() string {
 		return "Plugin"
 	case MentionTypeSkill:
 		return "Skill"
+	case MentionTypeTask:
+		return "Task"
 	case MentionTypeFile:
 		return "File"
 	case MentionTypeDirectory:

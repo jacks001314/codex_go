@@ -150,6 +150,28 @@ func (m *Model) refreshMentionPopup() bubbletea.Cmd {
 			return MentionFileSearchResultMsg{Generation: generation, Query: query, Matches: response.Files, Err: err}
 		})
 	}
+	// Rust task_mentions::spawn_search: a debounced/generation-guarded
+	// thread/search + thread/list merge populates the task candidates. An empty
+	// query clears them immediately.
+	if m.onSearchTasks != nil && (newPopup || previousQuery != query) {
+		m.mentionTaskSearchGeneration++
+		generation := m.mentionTaskSearchGeneration
+		if strings.TrimSpace(query) == "" {
+			m.mentionTasks = nil
+			m.mentionPopup.SetCandidates(m.mentionCandidates())
+		} else {
+			searcher := m.onSearchTasks
+			currentThreadID := ""
+			if m.State != nil {
+				currentThreadID = strings.TrimSpace(m.State.ThreadID)
+			}
+			cwd := strings.TrimSpace(m.sessionCWD)
+			commands = append(commands, func() bubbletea.Msg {
+				matches, err := searcher(query, currentThreadID, cwd)
+				return TaskMentionSearchResultMsg{Generation: generation, Query: query, Matches: matches, Err: err}
+			})
+		}
+	}
 	return bubbletea.Batch(commands...)
 }
 
@@ -200,7 +222,19 @@ func mentionPopupTokenKey(start int, end int, query string) string {
 }
 
 func (m *Model) mentionCandidates() []mentionsv2.Candidate {
-	return mentionsv2.BuildSearchCatalog(m.mentionSkillMetadata(), m.mentionPluginSummaries())
+	return mentionsv2.BuildSearchCatalogWithTasks(m.mentionSkillMetadata(), m.mentionPluginSummaries(), m.mentionTasks)
+}
+
+func (m *Model) applyTaskMentionSearchResult(message TaskMentionSearchResultMsg) {
+	if m == nil || m.mentionPopup == nil || message.Generation != m.mentionTaskSearchGeneration || message.Query != m.mentionPopup.Query {
+		return
+	}
+	if message.Err != nil {
+		m.mentionTasks = nil
+	} else {
+		m.mentionTasks = append([]codextui.TaskMention(nil), message.Matches...)
+	}
+	m.mentionPopup.SetCandidates(m.mentionCandidates())
 }
 
 func (m *Model) mentionSkillMetadata() []mentionsv2.SkillMetadata {

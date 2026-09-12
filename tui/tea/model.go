@@ -339,6 +339,12 @@ type SkillEnabledWriteFunc func(path string, enabled bool) (effectiveEnabled boo
 
 type FuzzyFileSearchReaderFunc func(query string, cwd string, cancellationToken string) (appserver.FuzzyFileSearchResponse, error)
 
+// TaskMentionSearchFunc searches same-host tasks for the mention popup (Rust
+// task_mentions::spawn_search). It is only provided when the thread's app server
+// serves the codex_tui task tools, mirroring
+// chat_widget.set_task_mentions_enabled(task_tools_available).
+type TaskMentionSearchFunc func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error)
+
 type AppListReaderFunc func(threadID string, forceRefetch bool) (appsapi.AppListResponse, error)
 
 type ReviewStartFunc func(params review.StartParams) (review.StartResponse, error)
@@ -682,6 +688,15 @@ type MentionFileSearchResultMsg struct {
 	Err        error
 }
 
+// TaskMentionSearchResultMsg carries one task-mention search result (Rust
+// task_mentions::spawn_search -> AppEvent::TaskSearchResult).
+type TaskMentionSearchResultMsg struct {
+	Generation uint64
+	Query      string
+	Matches    []codextui.TaskMention
+	Err        error
+}
+
 type AppListResultMsg struct {
 	ThreadID        string
 	ScopeGeneration uint64
@@ -969,6 +984,7 @@ type Options struct {
 	OnReadSkills                SkillsListReaderFunc
 	OnWriteSkillEnabled         SkillEnabledWriteFunc
 	OnFuzzyFileSearch           FuzzyFileSearchReaderFunc
+	OnSearchTasks               TaskMentionSearchFunc
 	OnReadApps                  AppListReaderFunc
 	OnStartReview               ReviewStartFunc
 	OnStartReviewCommand        ReviewStartCommandFunc
@@ -1190,13 +1206,18 @@ type Model struct {
 	// composerElements tracks the composer's structured text elements (byte
 	// ranges plus placeholders) so mentions reach the turn input as
 	// text_elements (Rust textarea::text_elements).
-	composerElements                []ComposerTextElement
-	misalignmentPolicyStopped       bool
-	modal                           *modalState
-	skillPopup                      skillPopupState
-	mentionPopup                    *mentionsv2.Popup
-	mentionDismissedToken           string
-	mentionFileSearchGeneration     uint64
+	composerElements            []ComposerTextElement
+	misalignmentPolicyStopped   bool
+	modal                       *modalState
+	skillPopup                  skillPopupState
+	mentionPopup                *mentionsv2.Popup
+	mentionDismissedToken       string
+	mentionFileSearchGeneration uint64
+	// mentionTasks holds the current task-mention search results; the search is
+	// only wired when the thread's app server has the task tools available
+	// (Rust chat_widget.set_task_mentions_enabled).
+	mentionTasks                    []codextui.TaskMention
+	mentionTaskSearchGeneration     uint64
 	mentionPluginInventory          []plugin.PluginSummary
 	mentionPluginInventoryReady     bool
 	mentionPluginInventoryLoading   bool
@@ -1472,6 +1493,7 @@ type Model struct {
 	onWriteSkillEnabled               SkillEnabledWriteFunc
 	nextSkillWriteRequestID           uint64
 	onFuzzyFileSearch                 FuzzyFileSearchReaderFunc
+	onSearchTasks                     TaskMentionSearchFunc
 	onReadApps                        AppListReaderFunc
 	onStartReview                     ReviewStartFunc
 	onStartReviewCommand              ReviewStartCommandFunc
@@ -1777,6 +1799,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadSkills:                    options.OnReadSkills,
 		onWriteSkillEnabled:             options.OnWriteSkillEnabled,
 		onFuzzyFileSearch:               options.OnFuzzyFileSearch,
+		onSearchTasks:                   options.OnSearchTasks,
 		onReadApps:                      options.OnReadApps,
 		onStartReview:                   options.OnStartReview,
 		onStartReviewCommand:            options.OnStartReviewCommand,
@@ -2247,6 +2270,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case MentionFileSearchResultMsg:
 		m.applyMentionFileSearchResult(msg)
+		return m, nil
+	case TaskMentionSearchResultMsg:
+		m.applyTaskMentionSearchResult(msg)
 		return m, nil
 	case AppListResultMsg:
 		m.applyAppListResult(msg)

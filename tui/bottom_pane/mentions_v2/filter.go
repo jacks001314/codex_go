@@ -77,6 +77,11 @@ func sortRows(rows []SearchResult, filter string) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		a := rows[i]
 		b := rows[j]
+		// Rust filter.rs: two task rows compare Equal so the provider's
+		// current-cwd-first ordering survives the sort.
+		if a.MentionType == MentionTypeTask && b.MentionType == MentionTypeTask {
+			return false
+		}
 		if orderA, orderB := mentionTypeOrder(a.MentionType), mentionTypeOrder(b.MentionType); orderA != orderB {
 			return orderA < orderB
 		}
@@ -107,10 +112,12 @@ func mentionTypeOrder(mentionType MentionType) int {
 		return 0
 	case MentionTypeSkill:
 		return 1
-	case MentionTypeFile, MentionTypeDirectory:
+	case MentionTypeTask:
 		return 2
-	default:
+	case MentionTypeFile, MentionTypeDirectory:
 		return 3
+	default:
+		return 4
 	}
 }
 

@@ -611,6 +611,10 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			}
 			return interactiveRemoteFuzzyFileSearch(ctx, endpoint, query, searchCWD, cancellationToken)
 		},
+		// The remote TUI registers the codex_tui task-management namespace with
+		// this app server, so task mentions are enabled for it (Rust
+		// chat_widget.set_task_mentions_enabled(task_tools_available)).
+		OnSearchTasks: interactiveRemoteTaskMentionSearch(ctx, endpoint),
 		OnReadApps: func(threadID string, forceRefetch bool) (appsapi.AppListResponse, error) {
 			if strings.TrimSpace(threadID) == "" && state != nil {
 				threadID = state.ThreadID
@@ -1238,6 +1242,24 @@ func remoteTUIAccountRequestContext(ctx context.Context) (context.Context, conte
 		ctx = context.Background()
 	}
 	return context.WithTimeout(ctx, remoteTUIAccountRequestTimeout)
+}
+
+// interactiveRemoteTaskMentionSearch mirrors Rust task_mentions::spawn_search
+// against the remote app server: thread/search and thread/list merged into the
+// mention popup's task candidates.
+func interactiveRemoteTaskMentionSearch(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.TaskMentionSearchFunc {
+	return func(query string, currentThreadID string, cwd string) ([]codextui.TaskMention, error) {
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		defer client.close()
+		return searchTaskMentions(reqCtx, func(requestCtx context.Context, method appserver.Method, params any, target any) error {
+			return remoteSessionRequest(requestCtx, client, method, params, target)
+		}, query, strings.TrimSpace(currentThreadID), cwd), nil
+	}
 }
 
 func trimStringPtrRemote(value *string) *string {
@@ -4084,6 +4106,7 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	if request.IDEContext != nil {
 		idecontext.ApplyIDEContextToUserInput(request.IDEContext, &inputs)
 	}
+	inputs = applySubmitTaskReferences(inputs, request.MentionBindings, threadID)
 	if len(inputs) == 0 {
 		return turn.TurnStartParams{}, errors.New("remote turn/start requires user input")
 	}
@@ -4145,6 +4168,7 @@ func remoteTurnSteerParams(threadID string, turnID string, clientID string, requ
 	if request.IDEContext != nil {
 		idecontext.ApplyIDEContextToUserInput(request.IDEContext, &inputs)
 	}
+	inputs = applySubmitTaskReferences(inputs, request.MentionBindings, threadID)
 	if len(inputs) == 0 {
 		return turn.TurnSteerParams{}, errors.New("remote turn/steer requires user input")
 	}

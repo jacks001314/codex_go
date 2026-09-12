@@ -1,6 +1,10 @@
 package mentionsv2
 
-import "strings"
+import (
+	"strings"
+
+	"codex_go/tui"
+)
 
 // Rust parity subset: codex-rs/tui/src/bottom_pane/mentions_v2/search_catalog.rs.
 
@@ -33,6 +37,54 @@ func BuildSearchCatalog(skills []SkillMetadata, plugins []PluginCapabilitySummar
 		candidates = append(candidates, PluginCandidate(plugin))
 	}
 	return candidates
+}
+
+// BuildSearchCatalogWithTasks mirrors Rust build_search_catalog's ordering:
+// skills, then plugins, then the discovered task mentions.
+func BuildSearchCatalogWithTasks(skills []SkillMetadata, plugins []PluginCapabilitySummary, tasks []tui.TaskMention) []Candidate {
+	candidates := BuildSearchCatalog(skills, plugins)
+	return append(candidates, TaskCandidates(tasks)...)
+}
+
+// TaskCandidates maps the current task-mention search results to candidates.
+func TaskCandidates(tasks []tui.TaskMention) []Candidate {
+	out := make([]Candidate, 0, len(tasks))
+	for _, task := range tasks {
+		out = append(out, TaskCandidate(task))
+	}
+	return out
+}
+
+// TaskCandidate mirrors the task arm of Rust's build_search_catalog: the title
+// is whitespace-normalized and clamped to MAX_TASK_TITLE_CHARS, the cwd is the
+// description when present, and the selection inserts `@title` linked to
+// `thread://<id>`.
+func TaskCandidate(task tui.TaskMention) Candidate {
+	title := truncateCatalogRunes(strings.Join(strings.Fields(task.Title), " "), tui.MaxTaskTitleChars)
+	return Candidate{
+		ID:          task.ThreadID,
+		Label:       title,
+		DisplayName: title,
+		Description: task.CWD,
+		SearchTerms: []string{
+			title,
+			truncateCatalogRunes(task.CWD, tui.MaxTaskTitleChars),
+			truncateCatalogRunes(task.Snippet, tui.MaxTaskTitleChars),
+		},
+		MentionType: MentionTypeTask,
+		Selection:   ToolSelection("@"+title, "thread://"+task.ThreadID),
+	}
+}
+
+func truncateCatalogRunes(value string, limit int) string {
+	if limit < 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
 func NewSearchCatalog(skills []SkillMetadata, plugins []PluginCapabilitySummary) SearchCatalog {

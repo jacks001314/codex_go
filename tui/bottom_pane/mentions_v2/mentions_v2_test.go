@@ -257,3 +257,68 @@ func rowNames(rows []SearchResult) []string {
 	}
 	return out
 }
+
+// TestSearchCatalogTaskCandidatesMatchRust mirrors the task arm of Rust
+// build_search_catalog plus the task ordering/acceptance rules.
+func TestSearchCatalogTaskCandidatesMatchRust(t *testing.T) {
+	tasks := []codextui.TaskMention{{
+		ThreadID: "task-123",
+		Title:    "  Fix   the\nparser  ",
+		CWD:      `D:\repo`,
+		Snippet:  "snippet",
+	}}
+	candidates := BuildSearchCatalogWithTasks(nil, nil, tasks)
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.DisplayName != "Fix the parser" || candidate.Label != "Fix the parser" {
+		t.Fatalf("display name = %q label = %q", candidate.DisplayName, candidate.Label)
+	}
+	if candidate.Description != `D:\repo` || candidate.MentionType != MentionTypeTask {
+		t.Fatalf("candidate = %#v", candidate)
+	}
+	wantTerms := []string{"Fix the parser", `D:\repo`, "snippet"}
+	if !reflect.DeepEqual(candidate.SearchTerms, wantTerms) {
+		t.Fatalf("search terms = %#v, want %#v", candidate.SearchTerms, wantTerms)
+	}
+	if candidate.Selection.Kind != SelectionTool || candidate.Selection.InsertText != "@Fix the parser" ||
+		candidate.Selection.Path != "thread://task-123" {
+		t.Fatalf("selection = %#v", candidate.Selection)
+	}
+	if MentionTypeTask.Label() != "Task" || MentionTypeTask.Tag() != "Task  " || MentionTypeTask.IsFilesystem() {
+		t.Fatalf("task mention type metadata = %q/%q/%v", MentionTypeTask.Label(), MentionTypeTask.Tag(), MentionTypeTask.IsFilesystem())
+	}
+	// Rust builds skills, then plugins, then tasks.
+	ordered := BuildSearchCatalogWithTasks(
+		[]SkillMetadata{{Name: "imagegen", Path: "skill://imagegen"}},
+		[]PluginCapabilitySummary{{ConfigName: "sample@market", DisplayName: "Sample"}},
+		tasks,
+	)
+	if len(ordered) != 3 || ordered[0].MentionType != MentionTypeSkill ||
+		ordered[1].MentionType != MentionTypePlugin || ordered[2].MentionType != MentionTypeTask {
+		t.Fatalf("catalog order = %#v", ordered)
+	}
+	// A long title is clamped to MAX_TASK_TITLE_CHARS runes.
+	long := strings.Repeat("x", codextui.MaxTaskTitleChars+5)
+	clamped := BuildSearchCatalogWithTasks(nil, nil, []codextui.TaskMention{{ThreadID: "t", Title: long}})[0]
+	if len([]rune(clamped.DisplayName)) != codextui.MaxTaskTitleChars {
+		t.Fatalf("clamped title length = %d", len([]rune(clamped.DisplayName)))
+	}
+	// Task rows stay in provider order and are visible only in Results mode.
+	rows := FilteredCandidates(candidates, nil, "", SearchModeResults, false)
+	if len(rows) != 1 || rows[0].MentionType != MentionTypeTask {
+		t.Fatalf("results rows = %#v", rows)
+	}
+	if FilteredCandidates(candidates, nil, "", SearchModeTools, false) != nil && len(FilteredCandidates(candidates, nil, "", SearchModeTools, false)) != 0 {
+		t.Fatalf("tools mode should not accept task rows")
+	}
+	unsorted := []SearchResult{
+		{DisplayName: "b", MentionType: MentionTypeTask},
+		{DisplayName: "a", MentionType: MentionTypeTask},
+	}
+	sortRows(unsorted, "")
+	if unsorted[0].DisplayName != "b" || unsorted[1].DisplayName != "a" {
+		t.Fatalf("task rows reordered: %#v", unsorted)
+	}
+}

@@ -374,6 +374,7 @@ func (c *interactiveInterruptController) steer(request codextea.SubmitRequest, c
 		})
 		prompt = ""
 	}
+	inputs = applySubmitTaskReferences(inputs, request.MentionBindings, threadID)
 	item := codexexec.UserMessageInputItemFromTurnInputs(prompt, inputs, cwd)
 	if item == nil {
 		return errors.New("steer input must not be empty")
@@ -3169,6 +3170,7 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		})
 		prompt = ""
 	}
+	inputs = applySubmitTaskReferences(inputs, request.MentionBindings, requestedThreadID)
 	execOpts := cli.ExecOptions{
 		Prompt:                strings.TrimSpace(prompt),
 		Shared:                turnRoot.Shared,
