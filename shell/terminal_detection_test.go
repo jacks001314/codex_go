@@ -48,6 +48,7 @@ func TestDetectNamedTerminals(t *testing.T) {
 		{name: "apple term program", env: map[string]string{"TERM_PROGRAM": "Apple_Terminal"}, wantName: TerminalAppleTerminal, wantToken: "Apple_Terminal"},
 		{name: "apple session", env: map[string]string{"TERM_SESSION_ID": "A1B2C3"}, wantName: TerminalAppleTerminal, wantToken: "Apple_Terminal"},
 		{name: "ghostty", env: map[string]string{"TERM_PROGRAM": "Ghostty"}, wantName: TerminalGhostty, wantToken: "Ghostty"},
+		{name: "ghostty resources", env: map[string]string{"GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty"}, wantName: TerminalGhostty, wantToken: "Ghostty"},
 		{name: "vscode", env: map[string]string{"TERM_PROGRAM": "vscode", "TERM_PROGRAM_VERSION": "1.86.0"}, wantName: TerminalVSCode, wantToken: "vscode/1.86.0"},
 		{name: "warp", env: map[string]string{"TERM_PROGRAM": "WarpTerminal", "TERM_PROGRAM_VERSION": "v0.2025.12.10.08.12.stable_03"}, wantName: TerminalWarp, wantToken: "WarpTerminal/v0.2025.12.10.08.12.stable_03"},
 		{name: "wezterm version", env: map[string]string{"WEZTERM_VERSION": "2024.2"}, wantName: TerminalWezTerm, wantToken: "WezTerm/2024.2"},
@@ -89,69 +90,65 @@ func TestDetectPriority(t *testing.T) {
 	}
 }
 
-func TestDetectTmuxUnderlyingTerminal(t *testing.T) {
-	env := &MapEnvironment{
-		Values: map[string]string{
-			"TERM_PROGRAM":         "tmux",
-			"TERM_PROGRAM_VERSION": "3.4",
-			"TMUX":                 "/tmp/tmux",
-		},
-		TmuxClient: TmuxClientInfo{
-			TermType: stringPtr("ghostty 1.2.3"),
-			TermName: stringPtr("xterm-256color"),
-		},
-	}
+func TestDetectTmuxMultiplexer(t *testing.T) {
+	env := &MapEnvironment{Values: map[string]string{
+		"TMUX":                 "/tmp/tmux-1000/default,123,0",
+		"TERM_PROGRAM":         "tmux",
+		"TERM_PROGRAM_VERSION": "3.5a",
+	}}
 	info := Detect(env)
-	if info.Name != TerminalGhostty || info.Multiplexer == nil || info.Multiplexer.Name != MultiplexerTmux {
-		t.Fatalf("unexpected info: %+v", info)
+	if info.Name != TerminalUnknown || info.TermProgram != nil || info.Version != nil || info.Term != nil {
+		t.Fatalf("info = %+v, want bare unknown with tmux multiplexer", info)
 	}
-	if got := info.UserAgentToken(); got != "ghostty/1.2.3" {
-		t.Fatalf("UserAgentToken() = %q", got)
+	if info.Multiplexer == nil || info.Multiplexer.Name != MultiplexerTmux || info.Multiplexer.Version == nil || *info.Multiplexer.Version != "3.5a" {
+		t.Fatalf("multiplexer = %+v, want tmux 3.5a", info.Multiplexer)
+	}
+	if got := info.UserAgentToken(); got != "unknown" {
+		t.Fatalf("UserAgentToken() = %q, want unknown", got)
 	}
 }
 
-func TestDetectTmuxClientTermNameFallback(t *testing.T) {
-	env := &MapEnvironment{
-		Values: map[string]string{
-			"TERM_PROGRAM": "tmux",
-			"TMUX":         "/tmp/tmux",
-		},
-		TmuxClient: TmuxClientInfo{
-			TermName: stringPtr("xterm-256color"),
-		},
+// TestDetectTmuxPreservesSafeUnderlyingTerminalIdentifiers mirrors Rust's
+// tmux_preserves_safe_underlying_terminal_identifiers (#42324): detection must
+// recover the underlying terminal from environment variables instead of
+// executing a PATH-provided tmux helper.
+func TestDetectTmuxPreservesSafeUnderlyingTerminalIdentifiers(t *testing.T) {
+	cases := []struct {
+		variable string
+		value    string
+		wantName TerminalName
+		wantVer  *string
+	}{
+		{variable: "WEZTERM_VERSION", value: "2024.2", wantName: TerminalWezTerm, wantVer: stringPtr("2024.2")},
+		{variable: "ITERM_SESSION_ID", value: "w0t1p0", wantName: TerminalIterm2},
+		{variable: "KITTY_WINDOW_ID", value: "1", wantName: TerminalKitty},
+		{variable: "WT_SESSION", value: "session", wantName: TerminalWindowsTerminal},
+		{variable: "ALACRITTY_SOCKET", value: "/tmp/alacritty", wantName: TerminalAlacritty},
+		{variable: "GHOSTTY_RESOURCES_DIR", value: "/Applications/Ghostty.app/Contents/Resources/ghostty", wantName: TerminalGhostty},
 	}
-	info := Detect(env)
-	if info.Name != TerminalUnknown || info.Term == nil || *info.Term != "xterm-256color" {
-		t.Fatalf("unexpected info: %+v", info)
-	}
-	if got := info.UserAgentToken(); got != "xterm-256color" {
-		t.Fatalf("UserAgentToken() = %q", got)
-	}
-}
-
-func TestDetectTmuxMultiplexerVersion(t *testing.T) {
-	env := &MapEnvironment{
-		Values: map[string]string{
+	for _, tc := range cases {
+		env := &MapEnvironment{Values: map[string]string{
+			"TMUX":                 "/tmp/tmux-1000/default,123,0",
 			"TERM_PROGRAM":         "tmux",
-			"TERM_PROGRAM_VERSION": "3.6a",
-			"TMUX_PANE":            "%1",
-		},
-		TmuxClient: TmuxClientInfo{
-			TermType: stringPtr("WezTerm"),
-		},
-	}
-	info := Detect(env)
-	if info.Multiplexer == nil || info.Multiplexer.Version == nil || *info.Multiplexer.Version != "3.6a" {
-		t.Fatalf("multiplexer = %+v, want tmux version 3.6a", info.Multiplexer)
+			"TERM_PROGRAM_VERSION": "3.5a",
+			"TERM":                 "screen-256color",
+			tc.variable:            tc.value,
+		}}
+		info := Detect(env)
+		if info.Name != tc.wantName || info.TermProgram != nil || info.Term != nil {
+			t.Fatalf("%s: info = %+v, want %q without term program or term", tc.variable, info, tc.wantName)
+		}
+		if (info.Version == nil) != (tc.wantVer == nil) || (tc.wantVer != nil && *info.Version != *tc.wantVer) {
+			t.Fatalf("%s: version = %v, want %v", tc.variable, info.Version, tc.wantVer)
+		}
+		if info.Multiplexer == nil || info.Multiplexer.Name != MultiplexerTmux || info.Multiplexer.Version == nil || *info.Multiplexer.Version != "3.5a" {
+			t.Fatalf("%s: multiplexer = %+v, want tmux 3.5a", tc.variable, info.Multiplexer)
+		}
 	}
 }
 
 func TestDetectZellijAndSanitizesUserAgent(t *testing.T) {
-	version := "0.41.0 beta"
-	env := &MapEnvironment{
-		Values: map[string]string{"ZELLIJ": "1", "WEZTERM_VERSION": "20240203 beta"},
-		Zellij: &version,
-	}
+	env := &MapEnvironment{Values: map[string]string{"ZELLIJ": "1", "WEZTERM_VERSION": "20240203 beta"}}
 	info := Detect(env)
 	if !info.IsZellij() {
 		t.Fatalf("IsZellij() = false")
@@ -168,36 +165,6 @@ func TestDetectZellijVersion(t *testing.T) {
 	}
 	if info.Multiplexer.Version == nil || *info.Multiplexer.Version != "0.43.1" {
 		t.Fatalf("multiplexer version = %+v, want 0.43.1", info.Multiplexer.Version)
-	}
-
-	version := "0.44.1"
-	info = Detect(&MapEnvironment{Values: map[string]string{"ZELLIJ": "1"}, Zellij: &version})
-	if info.Multiplexer == nil || info.Multiplexer.Version == nil || *info.Multiplexer.Version != "0.44.1" {
-		t.Fatalf("multiplexer = %+v, want zellij 0.44.1", info.Multiplexer)
-	}
-}
-
-func TestParseZellijVersion(t *testing.T) {
-	cases := []struct {
-		input string
-		want  *string
-	}{
-		{input: "zellij 0.44.1", want: stringPtr("0.44.1")},
-		{input: "0.44.1", want: stringPtr("0.44.1")},
-		{input: "", want: nil},
-	}
-
-	for _, tc := range cases {
-		got := parseZellijVersion(tc.input)
-		if tc.want == nil {
-			if got != nil {
-				t.Fatalf("parseZellijVersion(%q) = %q, want nil", tc.input, *got)
-			}
-			continue
-		}
-		if got == nil || *got != *tc.want {
-			t.Fatalf("parseZellijVersion(%q) = %v, want %q", tc.input, got, *tc.want)
-		}
 	}
 }
 

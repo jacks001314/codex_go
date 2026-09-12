@@ -137,11 +137,8 @@ func TestInstallCheckReportsNPMRootMatchLikeRust(t *testing.T) {
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
 	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", packageRoot)
-	withNPMRootCommandForDoctor(t, func() (string, error) {
-		return npmRoot + "\n", nil
-	})
-	withCodexPathEntriesCommandForDoctor(t, func() (string, error) {
-		return filepath.Join(home, "bin", "codex") + "\n" + filepath.Join(home, "other", "codex") + "\n", nil
+	withCodexPathCandidatesForDoctor(t, func() []string {
+		return []string{filepath.Join(home, "bin", "codex"), filepath.Join(home, "other", "codex")}
 	})
 
 	check := installCheck(home, true, func() (string, error) {
@@ -157,45 +154,32 @@ func TestInstallCheckReportsNPMRootMatchLikeRust(t *testing.T) {
 		"managed package root: " + packageRoot,
 		"PATH codex entries: 2",
 		"PATH codex #1: " + filepath.Join(home, "bin", "codex"),
-		"npm update target: " + packageRoot,
+		"npm update target: not inspected (PATH helpers are not executed)",
 	} {
 		if !containsDetail(check, want) {
 			t.Fatalf("missing detail %q in %#v", want, check.Details)
 		}
+	}
+	if check.Remediation != nil {
+		t.Fatalf("remediation = %#v, want none", check.Remediation)
 	}
 }
 
-func TestInstallCheckReportsNPMRootMismatchLikeRust(t *testing.T) {
+func TestInstallCheckDeduplicatesPathEntriesLikeRust(t *testing.T) {
 	home := t.TempDir()
-	runningRoot := filepath.Join(home, "running", "@jacks001314", "codex-go")
-	npmRoot := filepath.Join(home, "npm")
-	npmPackageRoot := filepath.Join(npmRoot, "@jacks001314", "codex-go")
+	entry := filepath.Join(home, "bin", "codex")
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
-	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", runningRoot)
-	withNPMRootCommandForDoctor(t, func() (string, error) {
-		return npmRoot + "\n", nil
-	})
-	withCodexPathEntriesCommandForDoctor(t, func() (string, error) {
-		return "", nil
+	unsetEnvForDoctor(t, "CODEX_MANAGED_PACKAGE_ROOT")
+	withCodexPathCandidatesForDoctor(t, func() []string {
+		return []string{entry, entry, filepath.Join(home, "other", "codex")}
 	})
 
 	check := installCheck(home, false, func() (string, error) {
-		return filepath.Join(home, "bin", "codex"), nil
+		return entry, nil
 	})
-	if check.Status != CheckStatusFail || check.Summary != "npm install -g @jacks001314/codex-go@latest would update a different install" {
-		t.Fatalf("check = %+v", check)
-	}
-	for _, want := range []string{
-		"running package root: " + runningRoot,
-		"npm package root: " + npmPackageRoot,
-	} {
-		if !containsDetail(check, want) {
-			t.Fatalf("missing detail %q in %#v", want, check.Details)
-		}
-	}
-	if check.Remediation == nil || !strings.Contains(*check.Remediation, "Fix PATH or npm prefix") || !strings.Contains(*check.Remediation, runningRoot) || !strings.Contains(*check.Remediation, npmPackageRoot) {
-		t.Fatalf("remediation = %#v", check.Remediation)
+	if !containsDetail(check, "PATH codex entries: 2") {
+		t.Fatalf("details = %#v, want two deduplicated entries", check.Details)
 	}
 }
 
@@ -204,12 +188,8 @@ func TestInstallCheckReportsMissingNPMPackageRootLikeRust(t *testing.T) {
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_PACKAGE_ROOT")
-	withNPMRootCommandForDoctor(t, func() (string, error) {
-		t.Fatal("npm root should not be called without CODEX_MANAGED_PACKAGE_ROOT")
-		return "", nil
-	})
-	withCodexPathEntriesCommandForDoctor(t, func() (string, error) {
-		return "", nil
+	withCodexPathCandidatesForDoctor(t, func() []string {
+		return nil
 	})
 
 	check := installCheck(home, false, func() (string, error) {
@@ -228,12 +208,8 @@ func TestInstallCheckIgnoresInheritedManagedEnvForCargoBinaryLikeRust(t *testing
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	t.Setenv("CODEX_MANAGED_BY_BUN", "")
 	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", filepath.Join(home, "npm", "@jacks001314", "codex-go"))
-	withNPMRootCommandForDoctor(t, func() (string, error) {
-		t.Fatal("npm root should not be called for target/release binary")
-		return "", nil
-	})
-	withCodexPathEntriesCommandForDoctor(t, func() (string, error) {
-		return "", nil
+	withCodexPathCandidatesForDoctor(t, func() []string {
+		return nil
 	})
 
 	check := installCheck(home, false, func() (string, error) {
@@ -950,8 +926,7 @@ func TestTerminalCheckIncludesTmuxAndWindowsDetailsLikeRust(t *testing.T) {
 		StreamSupportsColor: true,
 		TerminalSize:        terminalSizeProbe{Columns: 100, Rows: 40},
 		TmuxDetails: []string{
-			"tmux client termtype: xterm-256color",
-			"tmux extended-keys: unavailable",
+			"tmux options: not inspected (PATH helpers are not executed)",
 		},
 		WindowsConsoleDetails: []string{
 			"console input code page: 65001",
@@ -963,8 +938,7 @@ func TestTerminalCheckIncludesTmuxAndWindowsDetailsLikeRust(t *testing.T) {
 	}
 	for _, want := range []string{
 		"multiplexer: tmux",
-		"tmux client termtype: xterm-256color",
-		"tmux extended-keys: unavailable",
+		"tmux options: not inspected (PATH helpers are not executed)",
 		"console input code page: 65001",
 		"stdout console mode: 0x00000004 (VT processing: true)",
 	} {
@@ -1235,9 +1209,6 @@ func TestUpdatesCheckReportsNPMRootMatchLikeRust(t *testing.T) {
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
 	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", packageRoot)
-	withNPMRootCommandForDoctor(t, func() (string, error) {
-		return npmRoot + "\n", nil
-	})
 	builder := NewBuilder()
 	builder.currentExe = func() (string, error) {
 		return filepath.Join(home, "bin", "codex"), nil
@@ -1248,55 +1219,19 @@ func TestUpdatesCheckReportsNPMRootMatchLikeRust(t *testing.T) {
 	if check.Status != CheckStatusWarning || check.Summary != "update configuration is locally consistent" {
 		t.Fatalf("check = %+v", check)
 	}
-	if !containsDetail(check, "npm update target: "+packageRoot) {
+	if !containsDetail(check, "npm update target: not inspected (PATH helpers are not executed)") {
 		t.Fatalf("details = %#v", check.Details)
 	}
-}
-
-func TestUpdatesCheckReportsNPMRootMismatchLikeRust(t *testing.T) {
-	home := t.TempDir()
-	runningRoot := filepath.Join(home, "running", "@jacks001314", "codex-go")
-	npmRoot := filepath.Join(home, "npm")
-	npmPackageRoot := filepath.Join(npmRoot, "@jacks001314", "codex-go")
-	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
-	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
-	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", runningRoot)
-	withNPMRootCommandForDoctor(t, func() (string, error) {
-		return npmRoot + "\n", nil
-	})
-	builder := NewBuilder()
-	builder.currentExe = func() (string, error) {
-		return filepath.Join(home, "bin", "codex"), nil
-	}
-	builder.httpClient = localOnlyHTTPClient(t)
-
-	check := builder.updatesCheck(home, &Options{})
-	if check.Status != CheckStatusFail || check.Summary != "update would target a different npm install" {
-		t.Fatalf("check = %+v", check)
-	}
-	for _, want := range []string{
-		"running package root: " + runningRoot,
-		"npm package root: " + npmPackageRoot,
-		"latest version probe:",
-	} {
-		if !containsDetail(check, want) {
-			t.Fatalf("missing detail %q in %#v", want, check.Details)
-		}
-	}
-	if check.Remediation == nil || !strings.Contains(*check.Remediation, "Fix PATH or npm prefix") || !strings.Contains(*check.Remediation, runningRoot) || !strings.Contains(*check.Remediation, npmPackageRoot) {
-		t.Fatalf("remediation = %#v", check.Remediation)
+	if check.Remediation != nil {
+		t.Fatalf("remediation = %#v, want none", check.Remediation)
 	}
 }
 
-func TestUpdatesCheckReportsMissingNPMPackageRootLikeRust(t *testing.T) {
+func TestUpdatesCheckDoesNotRequirePackageRootProvenanceLikeRust(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_PACKAGE_ROOT")
-	withNPMRootCommandForDoctor(t, func() (string, error) {
-		t.Fatal("npm root should not be called without CODEX_MANAGED_PACKAGE_ROOT")
-		return "", nil
-	})
 	builder := NewBuilder()
 	builder.currentExe = func() (string, error) {
 		return filepath.Join(home, "bin", "codex"), nil
@@ -1304,11 +1239,14 @@ func TestUpdatesCheckReportsMissingNPMPackageRootLikeRust(t *testing.T) {
 	builder.httpClient = localOnlyHTTPClient(t)
 
 	check := builder.updatesCheck(home, &Options{})
-	if check.Status != CheckStatusWarning || check.Summary != "npm update target could not be proven" {
+	if check.Status != CheckStatusWarning || check.Summary != "update configuration is locally consistent" {
 		t.Fatalf("check = %+v", check)
 	}
-	if check.Remediation == nil || *check.Remediation != "Reinstall or update Codex so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT." {
-		t.Fatalf("remediation = %#v", check.Remediation)
+	if !containsDetail(check, "npm update target: not inspected (PATH helpers are not executed)") {
+		t.Fatalf("details = %#v", check.Details)
+	}
+	if check.Remediation != nil {
+		t.Fatalf("remediation = %#v, want none", check.Remediation)
 	}
 }
 
@@ -1317,10 +1255,6 @@ func TestUpdatesCheckIgnoresInheritedNPMEnvForCargoBinaryLikeRust(t *testing.T) 
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
 	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
 	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", filepath.Join(home, "npm", "@jacks001314", "codex-go"))
-	withNPMRootCommandForDoctor(t, func() (string, error) {
-		t.Fatal("npm root should not be called for target/debug binary")
-		return "", nil
-	})
 	builder := NewBuilder()
 	builder.currentExe = func() (string, error) {
 		return filepath.Join(home, "target", "debug", "codex"), nil
@@ -3069,21 +3003,12 @@ func unsetEnvForDoctor(t *testing.T, key string) {
 	})
 }
 
-func withNPMRootCommandForDoctor(t *testing.T, fn func() (string, error)) {
+func withCodexPathCandidatesForDoctor(t *testing.T, fn func() []string) {
 	t.Helper()
-	old := runNPMRootCommandForDoctor
-	runNPMRootCommandForDoctor = fn
+	old := codexPathCandidatesForDoctor
+	codexPathCandidatesForDoctor = fn
 	t.Cleanup(func() {
-		runNPMRootCommandForDoctor = old
-	})
-}
-
-func withCodexPathEntriesCommandForDoctor(t *testing.T, fn func() (string, error)) {
-	t.Helper()
-	old := runCodexPathEntriesCommandForDoctor
-	runCodexPathEntriesCommandForDoctor = fn
-	t.Cleanup(func() {
-		runCodexPathEntriesCommandForDoctor = old
+		codexPathCandidatesForDoctor = old
 	})
 }
 

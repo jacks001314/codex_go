@@ -59,7 +59,6 @@ const narrowTerminalRows = 24
 var buildVersion = "0.0.0"
 
 var terminalColorEnvVarsForDoctor = []string{"COLORTERM", "NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "FORCE_COLOR", "COLORFGBG"}
-var tmuxOptionNamesForDoctor = []string{"extended-keys", "xterm-keys", "allow-passthrough", "set-clipboard", "focus-events"}
 
 var mcpHTTPProbeURL = defaultMCPHTTPProbeURL
 var probeBackgroundAppServerVersion = appserverdaemon.ProbeAppServerVersionOnSocket
@@ -739,25 +738,13 @@ func installCheck(codexHome string, showDetails bool, currentExe func() (string,
 	}
 
 	if doctorManagedByNPM(exe) {
-		switch rootCheck := npmGlobalRootCheckForDoctor(); rootCheck.Kind {
-		case npmRootCheckMatch:
-			details = append(details, "npm update target: "+rootCheck.PackageRoot)
-		case npmRootCheckMismatch:
-			status = CheckStatusFail
-			summary = "npm install -g @jacks001314/codex-go@latest would update a different install"
-			remediation = fmt.Sprintf("Fix PATH or npm prefix so the running package root (%s) matches the npm global package root (%s).", rootCheck.RunningPackageRoot, rootCheck.NPMPackageRoot)
-			details = append(details,
-				"running package root: "+rootCheck.RunningPackageRoot,
-				"npm package root: "+rootCheck.NPMPackageRoot,
-			)
-		case npmRootCheckMissingPackageRoot:
+		// PATH entries are untrusted data: never execute the npm helper they
+		// select (Rust #42324).
+		details = append(details, "npm update target: not inspected (PATH helpers are not executed)")
+		if _, ok := os.LookupEnv("CODEX_MANAGED_PACKAGE_ROOT"); !ok {
 			status = maxCheckStatus(status, CheckStatusWarning)
 			summary = "npm-managed launch is missing package-root provenance"
 			remediation = "Reinstall or update Codex so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
-		case npmRootCheckNpmUnavailable:
-			status = maxCheckStatus(status, CheckStatusWarning)
-			summary = "npm-managed launch could not inspect npm global root"
-			details = append(details, "npm root -g failed: "+rootCheck.Error)
 		}
 	}
 	check := NewCheck("installation", "install", status, summary).DetailsList(details)
@@ -1958,25 +1945,7 @@ type versionCacheInfo struct {
 	DismissedVersion string `json:"dismissed_version"`
 }
 
-type npmRootCheckKind string
-
-const (
-	npmRootCheckMatch              npmRootCheckKind = "match"
-	npmRootCheckMismatch           npmRootCheckKind = "mismatch"
-	npmRootCheckMissingPackageRoot npmRootCheckKind = "missing_package_root"
-	npmRootCheckNpmUnavailable     npmRootCheckKind = "npm_unavailable"
-)
-
-type npmRootCheck struct {
-	Kind               npmRootCheckKind
-	PackageRoot        string
-	RunningPackageRoot string
-	NPMPackageRoot     string
-	Error              string
-}
-
-var runNPMRootCommandForDoctor = defaultRunNPMRootCommandForDoctor
-var runCodexPathEntriesCommandForDoctor = defaultRunCodexPathEntriesCommandForDoctor
+var codexPathCandidatesForDoctor = defaultCodexPathCandidatesForDoctor
 
 func (b *Builder) updatesCheck(codexHome string, opts *Options) *DoctorCheck {
 	cfg, err := loadEffectiveConfigForDoctor(codexHome, opts)
@@ -2004,28 +1973,10 @@ func (b *Builder) updatesCheck(codexHome string, opts *Options) *DoctorCheck {
 
 	status := CheckStatusOK
 	summary := "update configuration is locally consistent"
-	var remediation string
 	if doctorManagedByNPM(exe) {
-		switch rootCheck := npmGlobalRootCheckForDoctor(); rootCheck.Kind {
-		case npmRootCheckMatch:
-			details = append(details, "npm update target: "+rootCheck.PackageRoot)
-		case npmRootCheckMismatch:
-			status = CheckStatusFail
-			summary = "update would target a different npm install"
-			details = append(details,
-				"running package root: "+rootCheck.RunningPackageRoot,
-				"npm package root: "+rootCheck.NPMPackageRoot,
-			)
-			remediation = fmt.Sprintf("Fix PATH or npm prefix so the running package root (%s) matches the npm global package root (%s).", rootCheck.RunningPackageRoot, rootCheck.NPMPackageRoot)
-		case npmRootCheckMissingPackageRoot:
-			status = maxCheckStatus(status, CheckStatusWarning)
-			summary = "npm update target could not be proven"
-			remediation = "Reinstall or update Codex so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
-		case npmRootCheckNpmUnavailable:
-			status = maxCheckStatus(status, CheckStatusWarning)
-			summary = "npm update target could not be inspected"
-			details = append(details, "npm root -g failed: "+rootCheck.Error)
-		}
+		// PATH entries are untrusted data: never execute the npm helper they
+		// select (Rust #42324).
+		details = append(details, "npm update target: not inspected (PATH helpers are not executed)")
 	}
 	ctx, cancel := contextWithTimeoutForDoctor(5 * time.Second)
 	defer cancel()
@@ -2046,11 +1997,7 @@ func (b *Builder) updatesCheck(codexHome string, opts *Options) *DoctorCheck {
 		status = maxCheckStatus(status, CheckStatusWarning)
 		details = append(details, "latest version probe: "+err.Error())
 	}
-	check := NewCheck("updates.status", "updates", status, summary).DetailsList(details)
-	if remediation != "" {
-		check.Remediate(remediation)
-	}
-	return check
+	return NewCheck("updates.status", "updates", status, summary).DetailsList(details)
 }
 
 func contextWithTimeoutForDoctor(timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -2141,97 +2088,46 @@ func inheritedManagedEnvForCargoBinary(currentExe string) bool {
 	return false
 }
 
-func npmGlobalRootCheckForDoctor() npmRootCheck {
-	runningPackageRoot, ok := os.LookupEnv("CODEX_MANAGED_PACKAGE_ROOT")
-	if !ok {
-		return npmRootCheck{Kind: npmRootCheckMissingPackageRoot}
-	}
-	output, err := runNPMRootCommandForDoctor()
-	if err != nil {
-		return npmRootCheck{Kind: npmRootCheckNpmUnavailable, Error: err.Error()}
-	}
-	npmRoot := ""
-	for _, line := range strings.Split(output, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			npmRoot = trimmed
-			break
-		}
-	}
-	if npmRoot == "" {
-		return npmRootCheck{Kind: npmRootCheckNpmUnavailable, Error: "empty output from npm root -g"}
-	}
-	return compareNpmPackageRootsForDoctor(runningPackageRoot, npmRoot)
-}
-
 func codexPathEntriesForDoctor() []string {
-	output, err := runCodexPathEntriesCommandForDoctor()
-	if err != nil {
-		return nil
-	}
 	entries := []string{}
-	for _, line := range strings.Split(output, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			entries = append(entries, trimmed)
+	seen := map[string]struct{}{}
+	for _, candidate := range codexPathCandidatesForDoctor() {
+		if _, ok := seen[candidate]; ok {
+			continue
 		}
+		seen[candidate] = struct{}{}
+		entries = append(entries, candidate)
 	}
 	return entries
 }
 
-func defaultRunCodexPathEntriesCommandForDoctor() (string, error) {
-	program := "which"
-	args := []string{"-a", "codex"}
+// defaultCodexPathCandidatesForDoctor lists every `codex` executable on PATH
+// without running a PATH-selected `which`/`where` helper (Rust #42324 uses the
+// in-process which::which_all). Windows honors PATHEXT, and Unix entries must be
+// executable files.
+func defaultCodexPathCandidatesForDoctor() []string {
+	pathEnv := os.Getenv("PATH")
+	if strings.TrimSpace(pathEnv) == "" {
+		return nil
+	}
+	extensions := []string{""}
 	if runtime.GOOS == "windows" {
-		program = "where"
-		args = []string{"codex"}
+		extensions = append(extensions, windowsPathExts()...)
 	}
-	return runDoctorCommandOutput(program, args...)
-}
-
-func compareNpmPackageRootsForDoctor(runningPackageRoot string, npmRoot string) npmRootCheck {
-	npmPackageRoot := filepath.Join(npmRoot, "@jacks001314", "codex-go")
-	if normalizePathForDoctorCompare(runningPackageRoot) == normalizePathForDoctorCompare(npmPackageRoot) {
-		return npmRootCheck{Kind: npmRootCheckMatch, PackageRoot: npmPackageRoot}
-	}
-	return npmRootCheck{
-		Kind:               npmRootCheckMismatch,
-		RunningPackageRoot: runningPackageRoot,
-		NPMPackageRoot:     npmPackageRoot,
-	}
-}
-
-func normalizePathForDoctorCompare(path string) string {
-	normalized := filepath.Clean(path)
-	if resolved, err := filepath.EvalSymlinks(normalized); err == nil {
-		normalized = resolved
-	}
-	normalized = filepath.ToSlash(normalized)
-	if runtime.GOOS == "windows" {
-		normalized = strings.ToLower(normalized)
-	}
-	return normalized
-}
-
-func defaultRunNPMRootCommandForDoctor() (string, error) {
-	program := "npm"
-	if runtime.GOOS == "windows" {
-		program = "npm.cmd"
-	}
-	return runDoctorCommandOutput(program, "root", "-g")
-}
-
-func runDoctorCommandOutput(program string, args ...string) (string, error) {
-	output, err := exec.Command(program, args...).Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			stderr := strings.TrimSpace(string(exitErr.Stderr))
-			if stderr != "" {
-				return "", fmt.Errorf("%s", stderr)
-			}
+	var candidates []string
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			continue
 		}
-		return "", err
+		for _, extension := range extensions {
+			candidate := filepath.Join(dir, "codex"+extension)
+			if executablePathExists(candidate) != nil {
+				continue
+			}
+			candidates = append(candidates, candidate)
+		}
 	}
-	return string(output), nil
+	return candidates
 }
 
 func pushEnvPathDetailForDoctor(details *[]string, label string, name string) {
@@ -3505,7 +3401,9 @@ func terminalCheck(env map[string]string, opts *Options) *DoctorCheck {
 		WindowsConsoleDetails: windowsConsoleDetailsForDoctor(),
 	}
 	if info != nil && info.Multiplexer != nil && info.Multiplexer.Name == shell.MultiplexerTmux {
-		inputs.TmuxDetails = tmuxDiagnosticDetailsForDoctor()
+		// PATH entries are untrusted data: never execute a tmux helper they
+		// select (Rust #42324).
+		inputs.TmuxDetails = []string{"tmux options: not inspected (PATH helpers are not executed)"}
 	}
 	return terminalCheckFromInputs(inputs)
 }
@@ -3754,40 +3652,6 @@ func terminalSizeIssuesForDoctor(size terminalSizeProbe, env map[string]string) 
 			WithField("LINES"))
 	}
 	return issues
-}
-
-func tmuxDiagnosticDetailsForDoctor() []string {
-	details := []string{}
-	if value := tmuxDisplayMessageForDoctor("#{client_termtype}"); value != "" {
-		details = append(details, "tmux client termtype: "+value)
-	}
-	if value := tmuxDisplayMessageForDoctor("#{client_termname}"); value != "" {
-		details = append(details, "tmux client termname: "+value)
-	}
-	for _, option := range tmuxOptionNamesForDoctor {
-		value := tmuxOptionValueForDoctor(option)
-		if value == "" {
-			value = "unavailable"
-		}
-		details = append(details, "tmux "+option+": "+value)
-	}
-	return details
-}
-
-func tmuxOptionValueForDoctor(option string) string {
-	output, err := exec.Command("tmux", "show-options", "-gqv", option).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
-}
-
-func tmuxDisplayMessageForDoctor(format string) string {
-	output, err := exec.Command("tmux", "display-message", "-p", format).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
 }
 
 func terminalMultiplexerNameForDoctor(multiplexer *shell.Multiplexer) string {

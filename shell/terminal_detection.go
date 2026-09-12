@@ -1,8 +1,11 @@
+// Package shell terminal detection feeds terminal metadata into user-agent
+// logging and terminal-specific configuration. Detection only reads the
+// environment; it must not execute helpers selected by an untrusted PATH
+// (Rust #42324).
 package shell
 
 import (
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 )
@@ -69,15 +72,8 @@ func (t *TerminalInfo) IsZellij() bool {
 	return t != nil && t.Multiplexer != nil && t.Multiplexer.Name == MultiplexerZellij
 }
 
-type TmuxClientInfo struct {
-	TermType *string
-	TermName *string
-}
-
 type Environment interface {
 	Var(name string) (string, bool)
-	TmuxClientInfo() TmuxClientInfo
-	ZellijVersion() *string
 }
 
 type ProcessEnvironment struct{}
@@ -86,26 +82,8 @@ func (e *ProcessEnvironment) Var(name string) (string, bool) {
 	return os.LookupEnv(name)
 }
 
-func (e *ProcessEnvironment) TmuxClientInfo() TmuxClientInfo {
-	return TmuxClientInfo{
-		TermType: tmuxDisplayMessage("#{client_termtype}"),
-		TermName: tmuxDisplayMessage("#{client_termname}"),
-	}
-}
-
-func (e *ProcessEnvironment) ZellijVersion() *string {
-	if value, ok := e.Var("ZELLIJ_VERSION"); ok {
-		if trimmed := noneIfWhitespace(value); trimmed != nil {
-			return trimmed
-		}
-	}
-	return zellijVersionFromCommand()
-}
-
 type MapEnvironment struct {
-	Values     map[string]string
-	TmuxClient TmuxClientInfo
-	Zellij     *string
+	Values map[string]string
 }
 
 func (e *MapEnvironment) Var(name string) (string, bool) {
@@ -114,26 +92,6 @@ func (e *MapEnvironment) Var(name string) (string, bool) {
 	}
 	value, ok := e.Values[name]
 	return value, ok
-}
-
-func (e *MapEnvironment) TmuxClientInfo() TmuxClientInfo {
-	if e == nil {
-		return TmuxClientInfo{}
-	}
-	return e.TmuxClient
-}
-
-func (e *MapEnvironment) ZellijVersion() *string {
-	if e == nil {
-		return nil
-	}
-	if e.Zellij != nil {
-		return cloneString(e.Zellij)
-	}
-	if value, ok := e.Var("ZELLIJ_VERSION"); ok {
-		return noneIfWhitespace(value)
-	}
-	return nil
 }
 
 var (
@@ -157,13 +115,11 @@ func Detect(env Environment) *TerminalInfo {
 		env = &ProcessEnvironment{}
 	}
 	multiplexer := detectMultiplexer(env)
-	if termProgram := nonEmptyEnv(env, "TERM_PROGRAM"); termProgram != nil {
-		if strings.EqualFold(*termProgram, "tmux") && multiplexer != nil && multiplexer.Name == MultiplexerTmux {
-			if terminal := terminalFromTmuxClientInfo(env.TmuxClientInfo(), multiplexer); terminal != nil {
-				return terminal
-			}
-		}
+	if termProgram := nonEmptyEnv(env, "TERM_PROGRAM"); termProgram != nil && !strings.EqualFold(*termProgram, "tmux") {
 		return fromTermProgram(terminalNameFromTermProgram(*termProgram), *termProgram, nonEmptyEnv(env, "TERM_PROGRAM_VERSION"), multiplexer)
+	}
+	if hasNonEmptyEnv(env, "GHOSTTY_RESOURCES_DIR") {
+		return fromName(TerminalGhostty, nil, multiplexer)
 	}
 	if hasEnv(env, "WEZTERM_VERSION") {
 		return fromName(TerminalWezTerm, nonEmptyEnv(env, "WEZTERM_VERSION"), multiplexer)
@@ -203,21 +159,7 @@ func detectMultiplexer(env Environment) *Multiplexer {
 		return &Multiplexer{Name: MultiplexerTmux, Version: tmuxVersionFromEnv(env)}
 	}
 	if hasNonEmptyEnv(env, "ZELLIJ") || hasNonEmptyEnv(env, "ZELLIJ_SESSION_NAME") || hasNonEmptyEnv(env, "ZELLIJ_VERSION") {
-		return &Multiplexer{Name: MultiplexerZellij, Version: env.ZellijVersion()}
-	}
-	return nil
-}
-
-func terminalFromTmuxClientInfo(info TmuxClientInfo, multiplexer *Multiplexer) *TerminalInfo {
-	termType := optionalTrim(info.TermType)
-	termName := optionalTrim(info.TermName)
-	if termType != nil {
-		program, version := splitProgramAndVersion(*termType)
-		name := terminalNameFromTermProgram(program)
-		return &TerminalInfo{Name: name, TermProgram: &program, Version: version, Term: termName, Multiplexer: cloneMultiplexer(multiplexer)}
-	}
-	if termName != nil {
-		return fromTerm(*termName, multiplexer)
+		return &Multiplexer{Name: MultiplexerZellij, Version: nonEmptyEnv(env, "ZELLIJ_VERSION")}
 	}
 	return nil
 }
@@ -246,18 +188,6 @@ func tmuxVersionFromEnv(env Environment) *string {
 		return nil
 	}
 	return nonEmptyEnv(env, "TERM_PROGRAM_VERSION")
-}
-
-func splitProgramAndVersion(value string) (string, *string) {
-	parts := strings.Fields(value)
-	if len(parts) == 0 {
-		return "", nil
-	}
-	if len(parts) == 1 {
-		return parts[0], nil
-	}
-	version := parts[1]
-	return parts[0], &version
 }
 
 func terminalNameFromTermProgram(value string) TerminalName {
@@ -349,33 +279,6 @@ func sanitizeHeaderValue(value string) string {
 	return builder.String()
 }
 
-func zellijVersionFromCommand() *string {
-	output, err := exec.Command("zellij", "--version").Output()
-	if err != nil {
-		return nil
-	}
-	return parseZellijVersion(strings.TrimSpace(string(output)))
-}
-
-func parseZellijVersion(value string) *string {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	parts := strings.Fields(value)
-	if len(parts) >= 2 && strings.EqualFold(parts[0], "zellij") {
-		return &parts[1]
-	}
-	return &value
-}
-
-func tmuxDisplayMessage(format string) *string {
-	output, err := exec.Command("tmux", "display-message", "-p", format).Output()
-	if err != nil {
-		return nil
-	}
-	return noneIfWhitespace(strings.TrimSpace(string(output)))
-}
-
 func nonEmptyEnv(env Environment, name string) *string {
 	value, ok := env.Var(name)
 	if !ok {
@@ -408,13 +311,6 @@ func noneIfWhitespace(value string) *string {
 		return nil
 	}
 	return &value
-}
-
-func optionalTrim(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	return noneIfWhitespace(strings.TrimSpace(*value))
 }
 
 func cloneString(value *string) *string {
