@@ -737,6 +737,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	readAgents, switchAgent := interactiveLocalAgentCallbacks(nil)
 	options := codextea.Options{
 		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
+		LocalSession:                true,
 		SessionPickerItems:          interactiveSessionPickerItems(root),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,

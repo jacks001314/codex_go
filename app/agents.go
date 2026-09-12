@@ -11,7 +11,10 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
+	"codex_go/auth"
 	"codex_go/cli"
+	"codex_go/config"
+	"codex_go/features"
 	"codex_go/session"
 )
 
@@ -51,7 +54,9 @@ func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *
 			}
 			source := newRemoteAgentsDashboardSource(client, cwdOverride)
 			defer source.Close()
-			result, err := runAgentsDashboard(ctx, source, opts, stdin, stdout)
+			// A remote workspace owns its sandbox and checkouts, so linked
+			// worktree grouping stays off (Rust #43279).
+			result, err := runAgentsDashboard(ctx, source, opts, stdin, stdout, false)
 			if err != nil {
 				return err
 			}
@@ -65,13 +70,24 @@ func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *
 			return err
 		}
 		defer source.Close()
-		result, err := runAgentsDashboard(ctx, source, opts, stdin, stdout)
+		result, err := runAgentsDashboard(ctx, source, opts, stdin, stdout, localAgentsWorktreesEnabled())
 		if err != nil {
 			return err
 		}
 		return writeAgentsOpenedSession(ctx, result, nil, stdout)
 	}
 	return runLocalAgentsOverview(stdout)
+}
+
+// localAgentsWorktreesEnabled reports whether the local agents dashboard should
+// group linked checkouts of the same repository (Rust #43279). The local
+// dashboard always targets a local workspace, so only the feature gate applies.
+func localAgentsWorktreesEnabled() bool {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), nil)
+	if err != nil || loaded == nil {
+		return false
+	}
+	return features.Enabled(loaded.FeatureSettings(), "worktrees")
 }
 
 func runLocalAgentsOverview(stdout io.Writer) error {

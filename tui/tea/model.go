@@ -764,47 +764,51 @@ type Options struct {
 	OnReadGitDiff                 GitDiffReaderFunc
 	OnStopBackgroundTerminals     StopBackgroundTerminalsFunc
 	LocalDaemonSession            bool
-	OnReadDebugConfig             DebugConfigReaderFunc
-	OnReadGoal                    GoalReaderFunc
-	OnSetGoal                     GoalSetterFunc
-	OnClearGoal                   GoalClearerFunc
-	OnGoalEditText                GoalEditTextFunc
-	OnGoalDraftMaterialize        GoalDraftMaterializeFunc
-	OnGoalContinuation            GoalContinuationFunc
-	OnWriteSettings               SettingsWriteFunc
-	OnUpdateCollaborationMode     CollaborationModeUpdateFunc
-	OnWriteMemorySettings         MemorySettingsWriteFunc
-	OnResetMemories               MemoryResetFunc
-	OnSubmitFeedback              FeedbackSubmitFunc
-	OnReadIDEContext              IDEContextReaderFunc
-	OnApproveAutoReviewDenial     AutoReviewDenialApproveFunc
-	OnStartWindowsSandboxSetup    WindowsSandboxSetupFunc
-	WindowsSandboxStartupPrompt   *WindowsSandboxStartupPrompt
-	OnOpenDesktopThread           DesktopThreadOpenFunc
-	OnSandboxReadDir              SandboxReadDirFunc
-	OnDetectExternalAgent         ExternalAgentDetectFunc
-	OnImportExternalAgent         ExternalAgentImportFunc
-	OnReadRolloutPath             RolloutPathReaderFunc
-	OnReadHooks                   HooksListReaderFunc
-	OnWriteHookConfig             HookConfigWriteFunc
-	OnReadPlugins                 PluginListReaderFunc
-	OnReadPlugin                  PluginReadFunc
-	OnInstallPlugin               PluginInstallFunc
-	OnUninstallPlugin             PluginUninstallFunc
-	OnWritePluginEnabled          PluginEnabledWriteFunc
-	OnAddMarketplace              MarketplaceAddFunc
-	OnRemoveMarketplace           MarketplaceRemoveFunc
-	OnUpgradeMarketplace          MarketplaceUpgradeFunc
-	OnOpenPluginURL               PluginOpenURLFunc
-	PluginUserMarketplaces        map[string]bool
-	PluginGitMarketplaces         map[string]bool
-	OnReadSkills                  SkillsListReaderFunc
-	OnWriteSkillEnabled           SkillEnabledWriteFunc
-	OnFuzzyFileSearch             FuzzyFileSearchReaderFunc
-	OnReadApps                    AppListReaderFunc
-	OnStartReview                 ReviewStartFunc
-	OnStartReviewCommand          ReviewStartCommandFunc
-	OnStartCompactCommand         CompactStartCommandFunc
+	// LocalSession reports that the session's workspace and executors are
+	// local, so agents-overview project grouping may expand across linked
+	// worktrees (Rust #43279).
+	LocalSession                bool
+	OnReadDebugConfig           DebugConfigReaderFunc
+	OnReadGoal                  GoalReaderFunc
+	OnSetGoal                   GoalSetterFunc
+	OnClearGoal                 GoalClearerFunc
+	OnGoalEditText              GoalEditTextFunc
+	OnGoalDraftMaterialize      GoalDraftMaterializeFunc
+	OnGoalContinuation          GoalContinuationFunc
+	OnWriteSettings             SettingsWriteFunc
+	OnUpdateCollaborationMode   CollaborationModeUpdateFunc
+	OnWriteMemorySettings       MemorySettingsWriteFunc
+	OnResetMemories             MemoryResetFunc
+	OnSubmitFeedback            FeedbackSubmitFunc
+	OnReadIDEContext            IDEContextReaderFunc
+	OnApproveAutoReviewDenial   AutoReviewDenialApproveFunc
+	OnStartWindowsSandboxSetup  WindowsSandboxSetupFunc
+	WindowsSandboxStartupPrompt *WindowsSandboxStartupPrompt
+	OnOpenDesktopThread         DesktopThreadOpenFunc
+	OnSandboxReadDir            SandboxReadDirFunc
+	OnDetectExternalAgent       ExternalAgentDetectFunc
+	OnImportExternalAgent       ExternalAgentImportFunc
+	OnReadRolloutPath           RolloutPathReaderFunc
+	OnReadHooks                 HooksListReaderFunc
+	OnWriteHookConfig           HookConfigWriteFunc
+	OnReadPlugins               PluginListReaderFunc
+	OnReadPlugin                PluginReadFunc
+	OnInstallPlugin             PluginInstallFunc
+	OnUninstallPlugin           PluginUninstallFunc
+	OnWritePluginEnabled        PluginEnabledWriteFunc
+	OnAddMarketplace            MarketplaceAddFunc
+	OnRemoveMarketplace         MarketplaceRemoveFunc
+	OnUpgradeMarketplace        MarketplaceUpgradeFunc
+	OnOpenPluginURL             PluginOpenURLFunc
+	PluginUserMarketplaces      map[string]bool
+	PluginGitMarketplaces       map[string]bool
+	OnReadSkills                SkillsListReaderFunc
+	OnWriteSkillEnabled         SkillEnabledWriteFunc
+	OnFuzzyFileSearch           FuzzyFileSearchReaderFunc
+	OnReadApps                  AppListReaderFunc
+	OnStartReview               ReviewStartFunc
+	OnStartReviewCommand        ReviewStartCommandFunc
+	OnStartCompactCommand       CompactStartCommandFunc
 	// OnSafetyBufferingRetry, when set, stops the current attempt and retries
 	// it with the server-selected faster model after user confirmation (Rust
 	// #42380). prompt is the last user message that triggered the buffered
@@ -1084,6 +1088,7 @@ type Model struct {
 	onInterrupt              InterruptFunc
 	onInterruptMCPStartup    InterruptFunc
 	localDaemonSession       bool
+	localSession             bool
 	agentsOverviewEmbedded   bool
 	onAgentsOverviewRefresh  AgentsOverviewRefreshFunc
 	onAgentsOverviewDispatch AgentsOverviewDispatchFunc
@@ -1386,6 +1391,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onInterrupt:                     options.OnInterrupt,
 		onInterruptMCPStartup:           options.OnInterruptMCPStartup,
 		localDaemonSession:              options.LocalDaemonSession,
+		localSession:                    options.LocalSession,
 		agentsOverviewEmbedded:          options.AgentsOverviewEmbedded,
 		onAgentsOverviewRefresh:         options.OnAgentsOverviewRefresh,
 		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,

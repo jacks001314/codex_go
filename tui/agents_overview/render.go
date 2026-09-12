@@ -170,7 +170,7 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 	for first > 0 {
 		previous := &v.Rows[visible[first-1]]
 		current := &v.Rows[visible[first]]
-		groupChanged := (projectGrouping && previous.CWD != current.CWD) ||
+		groupChanged := (projectGrouping && !v.projectGroupAt(visible[first-1]).equal(v.projectGroupAt(visible[first]))) ||
 			(!projectGrouping && previous.Group != current.Group)
 		added := 1
 		if groupChanged {
@@ -190,7 +190,7 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 			break
 		}
 		row := &v.Rows[index]
-		group := row.CWD
+		group := v.projectGroupAt(index).heading
 		if !projectGrouping {
 			group = row.Group.Label()
 		}
@@ -207,7 +207,7 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 			count := 0
 			for i := range v.Rows {
 				if projectGrouping {
-					if v.Rows[i].CWD == row.CWD {
+					if v.projectGroupAt(i).equal(v.projectGroupAt(index)) {
 						count++
 					}
 				} else if v.Rows[i].Group == row.Group {

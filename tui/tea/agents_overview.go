@@ -6,6 +6,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	"codex_go/features"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 )
@@ -82,6 +83,7 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	}
 	m.agentsOverviewPendingDraft = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
+	m.agentsOverview.SetWorktreesEnabled(m.agentsOverviewWorktreesEnabled())
 	m.wireAgentsOverviewThemeColors(m.agentsOverview)
 	// Rust #44424: hidden tasks stay hidden across dashboard close/reopen.
 	m.agentsOverview.SetHiddenThreads(m.agentsOverviewHidden)
@@ -94,6 +96,15 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	m.agentsOverviewLifecycleProgress = ""
 	m.applyAgentsOverviewKeymapHints()
 	return m.refreshAgentsOverviewCmd()
+}
+
+// agentsOverviewWorktreesEnabled groups linked checkouts in the dashboard when
+// the worktrees feature is on and the session is local (Rust #43279).
+func (m *Model) agentsOverviewWorktreesEnabled() bool {
+	if m == nil {
+		return false
+	}
+	return m.localSession && features.Enabled(m.featureSettings, "worktrees")
 }
 
 // applyAgentsOverviewKeymapHints resolves the agents-dashboard shortcuts from

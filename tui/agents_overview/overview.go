@@ -8,7 +8,12 @@
 // a future in-session `/agents` view.
 package agentsoverview
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+
+	"codex_go/gitutil"
+)
 
 // Group classifies a root thread for the dashboard's status grouping.
 type Group int
@@ -148,11 +153,75 @@ type View struct {
 	Completion   Completion
 	hints        map[string]string
 
+	// worktreesEnabled groups rows from linked checkouts of the same repository
+	// under the primary checkout (Rust #43279), and projectGroups carries the
+	// resolved group key/heading for every row.
+	worktreesEnabled bool
+	projectGroups    []projectGroup
+
 	// UseThemeColors enables deterministic per-thread identity colors on row
 	// and detail titles (Rust #44857). ThreadColor resolves a thread id to an
 	// accent color ("#rrggbb"), returning "" to fall back to the default style.
 	UseThemeColors bool
 	ThreadColor    func(threadID string) string
+}
+
+// projectGroup is a row's project-grouping identity. With linked worktrees
+// enabled the key is the repository's shared administrative directory plus the
+// directory within the checkout, and the heading points at the primary
+// checkout's corresponding directory (Rust AgentsOverviewProjectGroup).
+type projectGroup struct {
+	commonDir   string
+	relativeCWD string
+	heading     string
+}
+
+func projectGroupForRow(row Row, worktreesEnabled bool) projectGroup {
+	if worktreesEnabled {
+		if identity, ok := gitutil.RepositoryIdentityForCWD(row.CWD); ok {
+			return projectGroup{
+				commonDir:   identity.CommonDir,
+				relativeCWD: identity.RelativeCWD,
+				heading:     filepath.Join(identity.PrimaryRoot, identity.RelativeCWD),
+			}
+		}
+	}
+	return projectGroup{commonDir: row.CWD, heading: row.CWD}
+}
+
+func (v *View) recomputeProjectGroups() {
+	if v == nil {
+		return
+	}
+	v.projectGroups = make([]projectGroup, len(v.Rows))
+	for i := range v.Rows {
+		v.projectGroups[i] = projectGroupForRow(v.Rows[i], v.worktreesEnabled)
+	}
+}
+
+// SetWorktreesEnabled toggles linked-checkout grouping (Rust #43279).
+func (v *View) SetWorktreesEnabled(enabled bool) {
+	if v == nil {
+		return
+	}
+	v.worktreesEnabled = enabled
+	v.recomputeProjectGroups()
+}
+
+func (g projectGroup) equal(other projectGroup) bool {
+	return g.commonDir == other.commonDir && g.relativeCWD == other.relativeCWD
+}
+
+// projectGroupAt returns the resolved project group for a row index, computing
+// groups defensively if rows were applied without a refresh.
+func (v *View) projectGroupAt(index int) projectGroup {
+	if v == nil || index < 0 || index >= len(v.Rows) {
+		return projectGroup{}
+	}
+	if len(v.projectGroups) != len(v.Rows) {
+		v.recomputeProjectGroups()
+	}
+	return v.projectGroups[index]
 }
 
 // titleSpan styles a task title. Identity colors win over the fallback style
@@ -219,6 +288,7 @@ func New(rows []Row, selectedThreadID string, exitOnCancel bool) *View {
 		Selected:     selected,
 		ExitOnCancel: exitOnCancel,
 	}
+	view.recomputeProjectGroups()
 	view.fitSelection()
 	return view
 }
@@ -273,19 +343,33 @@ func (v *View) VisibleIndices() []int {
 		}
 	}
 	if !v.State.StatusGrouping {
-		// Project grouping: sort by cwd then updated-at recency is handled by
-		// the host (rows arrive sorted); here we keep a stable cwd ordering.
-		stableSortByCWD(visible, v.Rows)
+		// Project grouping: sort by the project-group key (linked checkouts of
+		// one repository share a key, Rust #43279) while preserving host
+		// recency order within a group.
+		v.stableSortByProject(visible)
 	}
 	return visible
 }
 
-func stableSortByCWD(indices []int, rows []Row) {
+func (v *View) stableSortByProject(indices []int) {
 	// insertion sort keeps host recency order within the same project.
+	groups := v.projectGroups
+	if len(groups) != len(v.Rows) {
+		// Defensive: rows applied without recomputing groups.
+		v.recomputeProjectGroups()
+		groups = v.projectGroups
+	}
+	less := func(left int, right int) bool {
+		a, b := groups[left], groups[right]
+		if a.commonDir != b.commonDir {
+			return a.commonDir < b.commonDir
+		}
+		return a.relativeCWD < b.relativeCWD
+	}
 	for i := 1; i < len(indices); i++ {
 		key := indices[i]
 		j := i - 1
-		for j >= 0 && rows[indices[j]].CWD > rows[key].CWD {
+		for j >= 0 && less(key, indices[j]) {
 			indices[j+1] = indices[j]
 			j--
 		}
@@ -670,6 +754,8 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	}
 	view := New(rows, selected, v.ExitOnCancel)
 	view.State = v.State
+	view.worktreesEnabled = v.worktreesEnabled
+	view.recomputeProjectGroups()
 	// Hidden roots stay hidden across refreshes; if the restored selection
 	// points at one, move it to a visible row.
 	view.fitSelection()

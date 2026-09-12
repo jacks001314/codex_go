@@ -359,6 +359,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	options := codextea.Options{
 		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
 		LocalDaemonSession:          interactiveRemoteEndpointIsLocal(endpoint),
+		LocalSession:                interactiveRemoteEndpointIsLocal(endpoint),
 		SessionPickerItems:          interactiveRemoteSessionPickerItems(ctx, root, endpoint),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,

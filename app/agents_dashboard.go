@@ -422,14 +422,20 @@ type agentsDashboardModel struct {
 	pendingThreadID  string
 }
 
-func newAgentsDashboardModel(ctx context.Context, source agentsDashboardSource) *agentsDashboardModel {
-	return &agentsDashboardModel{
+func newAgentsDashboardModel(ctx context.Context, source agentsDashboardSource, worktreesEnabled ...bool) *agentsDashboardModel {
+	model := &agentsDashboardModel{
 		ctx:    ctx,
 		view:   agentsoverview.New(nil, "", true),
 		source: source,
 		width:  100,
 		height: 24,
 	}
+	// Rust #43279: linked checkouts of one repository group together when the
+	// worktrees feature is on and the session is local.
+	if len(worktreesEnabled) > 0 && worktreesEnabled[0] {
+		model.view.SetWorktreesEnabled(true)
+	}
+	return model
 }
 
 func (m *agentsDashboardModel) Init() bubbletea.Cmd {
@@ -690,11 +696,11 @@ func (m *agentsDashboardModel) View() string {
 
 // runAgentsDashboard runs the interactive agents-overview dashboard until the
 // user exits (esc) or opens a root session (enter on a row).
-func runAgentsDashboard(ctx context.Context, source agentsDashboardSource, opts *cli.AgentsOptions, stdin io.Reader, stdout io.Writer) (*agentsDashboardResult, error) {
+func runAgentsDashboard(ctx context.Context, source agentsDashboardSource, opts *cli.AgentsOptions, stdin io.Reader, stdout io.Writer, worktreesEnabled bool) (*agentsDashboardResult, error) {
 	if source == nil {
 		return nil, errors.New("agents dashboard source is unavailable")
 	}
-	model := newAgentsDashboardModel(ctx, source)
+	model := newAgentsDashboardModel(ctx, source, worktreesEnabled)
 	programOptions := []bubbletea.ProgramOption{bubbletea.WithInput(stdin), bubbletea.WithOutput(stdout)}
 	if opts == nil || !opts.NoAltScreen {
 		programOptions = append(programOptions, bubbletea.WithAltScreen())
