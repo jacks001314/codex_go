@@ -5,31 +5,61 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"codex_go/config"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/tool"
 	"codex_go/turn"
 )
 
-func TestExecPolicyAmendmentSavedIsInjectedAfterToolLikeRust(t *testing.T) {
+// TestExecPolicyAmendmentSavedReportsThroughWorldStateLikeRust covers the
+// Rust ApprovedCommandPrefixSaved behavior: a newly approved prefix is reported
+// once by the permissions world-state diff (the instructions hash excludes the
+// prefixes, so only the prefix delta changes).
+func TestExecPolicyAmendmentSavedReportsThroughWorldStateLikeRust(t *testing.T) {
 	router := newExecPolicySavedTestRouter(t)
-	router.rememberExecPolicyAmendmentSaved("thread-exec", "turn-exec", []string{"echo", "amendment-ok"})
-	var persisted []session.Item
-	postTool := router.execPolicyPostToolInputItems("thread-exec", "turn-exec", nil, func(items []session.Item) {
-		persisted = append(persisted, items...)
-	})
-	input := postTool(context.Background(), nil, nil)
+	const threadID = "thread-exec"
+	now := time.Now().UTC()
+	if err := router.services.ThreadRouter.store.Create(&session.Record{
+		ID: session.ThreadID(threadID), SessionID: threadID, CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{HistoryMode: string(ThreadHistoryLegacy), Extra: map[string]any{}},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	params := &turn.TurnStartParams{ThreadID: threadID, CWD: router.services.DefaultCWD}
+	cfg := &config.Config{Values: map[string]any{}}
+
+	// The first turn emits the full instructions (which list the approved
+	// prefix) and persists the section snapshot.
+	first, err := router.permissionsWorldStateInputItem(threadID, params, cfg)
+	if err != nil {
+		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
+	}
+	if first == nil || !strings.Contains(permissionsInputItemText(t, first), sandbox.PermissionInstructionsOpenTag) {
+		t.Fatalf("first section = %#v", first)
+	}
+	router.rememberExecPolicyAmendmentSaved(threadID, "turn-exec", []string{"echo", "amendment-ok"})
+
+	// The instructions hash is unchanged, so only the newly approved prefix is
+	// reported, exactly once.
+	second, err := router.permissionsWorldStateInputItem(threadID, params, cfg)
+	if err != nil {
+		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
+	}
 	want := "Approved command prefix saved:\n- [\"echo\", \"amendment-ok\"]"
-	if len(input) != 1 || len(persisted) != 1 || persisted[0].Role != "developer" || persisted[0].Text != want {
-		t.Fatalf("input=%#v persisted=%#v", input, persisted)
+	if got := permissionsInputItemText(t, second); got != want {
+		t.Fatalf("saved prefix text = %q, want %q", got, want)
 	}
-	if got := inputMessageText(input[0]); got != want {
-		t.Fatalf("input text = %q, want %q", got, want)
+	third, err := router.permissionsWorldStateInputItem(threadID, params, cfg)
+	if err != nil {
+		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
-	if repeated := postTool(context.Background(), nil, nil); len(repeated) != 0 {
-		t.Fatalf("saved prefix was injected more than once: %#v", repeated)
+	if third != nil {
+		t.Fatalf("saved prefix was reported more than once: %#v", third)
 	}
 }
 
@@ -82,8 +112,8 @@ func TestShellApprovalSkipsExecPolicyAmendmentForCyberModelLikeRust(t *testing.T
 	if received == nil || len(stringSliceFromAny(received.ProposedExecPolicyAmendment)) != 0 {
 		t.Fatalf("cyber-model approval proposed an exec-policy amendment: %#v", received)
 	}
-	if fragments := router.execPolicySaved.take("thread-cyber", "turn-cyber"); len(fragments) != 0 {
-		t.Fatalf("cyber-model approval saved reusable prefix fragments: %#v", fragments)
+	if prefixes := router.execPolicySaved.approvedPrefixes("thread-cyber"); len(prefixes) != 0 {
+		t.Fatalf("cyber-model approval saved reusable prefixes: %#v", prefixes)
 	}
 }
 
@@ -114,9 +144,9 @@ func TestShellApprovalWithExecpolicyAmendmentRemembersPrefix(t *testing.T) {
 	if err != nil || !decision.Approved {
 		t.Fatalf("approval decision = %#v err = %v", decision, err)
 	}
-	fragments := router.execPolicySaved.take("thread-exec", "turn-exec")
-	if len(fragments) != 1 || !reflect.DeepEqual(fragments[0].prefix, []string{"echo", "amendment-ok"}) {
-		t.Fatalf("saved fragments = %#v", fragments)
+	prefixes := router.execPolicySaved.approvedPrefixes("thread-exec")
+	if len(prefixes) != 1 || !reflect.DeepEqual(prefixes[0], []string{"echo", "amendment-ok"}) {
+		t.Fatalf("saved prefixes = %#v", prefixes)
 	}
 }
 

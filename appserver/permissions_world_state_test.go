@@ -144,8 +144,66 @@ func TestPermissionsWorldStateHonorsIncludeFlagLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(record.Metadata.WorldState) != 0 {
-		t.Fatalf("world state persisted while disabled: %s", record.Metadata.WorldState)
+	// The compact section persists its prefix set, but no permissions
+	// instructions snapshot is written.
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		t.Fatalf("DecodeWorldState() error = %v", err)
+	}
+	if len(state.PermissionInstructions) != 0 {
+		t.Fatalf("permissions section persisted while disabled: %s", state.PermissionInstructions)
+	}
+	if string(state.ApprovedCommandPrefixes) != "[]" {
+		t.Fatalf("compact prefix snapshot = %s, want []", state.ApprovedCommandPrefixes)
+	}
+}
+
+// TestCompactPermissionsWorldStateReportsSavedPrefixesLikeRust covers Rust
+// CompactPermissionsState: with the full instructions disabled, only newly
+// approved prefixes are reported, and nothing is emitted before the section has
+// a previous snapshot.
+func TestCompactPermissionsWorldStateReportsSavedPrefixesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-compact-permissions")
+	now := time.Now().UTC()
+	if err := store.Create(&session.Record{
+		ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{HistoryMode: string(ThreadHistoryLegacy), Extra: map[string]any{}},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	t.Cleanup(func() { _ = router.Close() })
+
+	params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: home}
+	cfg := &config.Config{Values: map[string]any{"include_permissions_instructions": false}}
+	first, err := router.permissionsWorldStateInputItem(string(threadID), params, cfg)
+	if err != nil {
+		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
+	}
+	if first != nil {
+		t.Fatalf("compact section emitted without a previous snapshot: %#v", first)
+	}
+
+	router.rememberExecPolicyAmendmentSaved(string(threadID), "turn-1", []string{"echo", "amendment-ok"})
+	second, err := router.permissionsWorldStateInputItem(string(threadID), params, cfg)
+	if err != nil {
+		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
+	}
+	want := "Approved command prefix saved:\n- [\"echo\", \"amendment-ok\"]"
+	if got := permissionsInputItemText(t, second); got != want {
+		t.Fatalf("compact saved prefix = %q, want %q", got, want)
+	}
+	third, err := router.permissionsWorldStateInputItem(string(threadID), params, cfg)
+	if err != nil {
+		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
+	}
+	if third != nil {
+		t.Fatalf("compact saved prefix repeated: %#v", third)
 	}
 }
 

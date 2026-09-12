@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -40,11 +41,63 @@ type PrefixRule struct {
 	Source           string
 }
 
+// AllowedPrefixes ports Rust Policy::get_allowed_prefixes: every allow rule's
+// pattern, with per-token alternatives rendered as `[a|b]` (Rust
+// render_pattern_token). Prefixes are canonicalized so callers can compare sets.
+func (p *Policy) AllowedPrefixes() [][]string {
+	if p == nil {
+		return nil
+	}
+	out := make([][]string, 0, len(p.Rules))
+	for _, rule := range p.Rules {
+		if rule.Decision != DecisionAllow {
+			continue
+		}
+		prefix := make([]string, 0, len(rule.Pattern))
+		for _, token := range rule.Pattern {
+			switch len(token) {
+			case 0:
+				continue
+			case 1:
+				prefix = append(prefix, token[0])
+			default:
+				prefix = append(prefix, "["+strings.Join(token, "|")+"]")
+			}
+		}
+		if len(prefix) > 0 {
+			out = append(out, prefix)
+		}
+	}
+	return CanonicalCommandPrefixes(out)
+}
+
 type NetworkRule struct {
 	Host          string
 	Protocol      string
 	Decision      Decision
 	Justification string
+}
+
+// CanonicalCommandPrefixes sorts and dedupes prefixes by their token sequence
+// so a prefix set can be compared and persisted deterministically.
+func CanonicalCommandPrefixes(prefixes [][]string) [][]string {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([][]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		key := strings.Join(prefix, "\x00")
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, append([]string(nil), prefix...))
+	}
+	sort.Slice(out, func(i int, j int) bool {
+		return strings.Join(out[i], "\x00") < strings.Join(out[j], "\x00")
+	})
+	return out
 }
 
 type RuleMatch struct {

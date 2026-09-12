@@ -4,123 +4,115 @@ package appserver
 // the world-state diff in permissions.rs (Rust 1bbfb5cfad). After an
 // exec-policy amendment is approved, the newly saved command prefix is reported
 // to the model exactly once as "Approved command prefix saved:" instead of
-// re-injecting the full permissions instructions.
+// re-injecting the full permissions instructions. The report comes from the
+// permissions world-state diff (appserver/permissions_world_state.go), which
+// compares the thread's accumulated approved prefixes against the persisted
+// section snapshot.
 
 import (
-	"context"
-	"fmt"
+	"os"
 	"strings"
 	"sync"
-	"time"
 
+	"codex_go/execpolicy"
 	"codex_go/sandbox"
-	"codex_go/session"
-	"codex_go/tool"
-	"codex_go/turn"
 )
 
 const approvedCommandPrefixSavedMessagePrefix = "Approved command prefix saved:"
 
-type execPolicySavedFragment struct {
-	prefix []string
-}
-
 type execPolicySavedState struct {
-	mu    sync.Mutex
-	saved map[string][]execPolicySavedFragment
+	mu       sync.Mutex
+	approved map[string][][]string
 }
 
 func newExecPolicySavedState() *execPolicySavedState {
-	return &execPolicySavedState{saved: map[string][]execPolicySavedFragment{}}
+	return &execPolicySavedState{approved: map[string][][]string{}}
 }
 
-func execPolicySavedKey(threadID string, turnID string) string {
-	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
-}
-
-func (s *execPolicySavedState) remember(threadID string, turnID string, prefix []string) {
+// remember records a prefix approved during a thread, deduped like Rust's
+// per-session exec policy.
+func (s *execPolicySavedState) remember(threadID string, prefix []string) {
 	if s == nil || len(prefix) == 0 {
 		return
 	}
-	key := execPolicySavedKey(threadID, turnID)
-	if key == "\x00" {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
 		return
 	}
-	cloned := append([]string(nil), prefix...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.saved[key] = append(s.saved[key], execPolicySavedFragment{prefix: cloned})
+	prefixes := append(s.approved[threadID], append([]string(nil), prefix...))
+	s.approved[threadID] = execpolicy.CanonicalCommandPrefixes(prefixes)
 }
 
-func (s *execPolicySavedState) take(threadID string, turnID string) []execPolicySavedFragment {
+// approvedPrefixes returns the prefixes approved during a thread.
+func (s *execPolicySavedState) approvedPrefixes(threadID string) [][]string {
 	if s == nil {
 		return nil
 	}
-	key := execPolicySavedKey(threadID, turnID)
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fragments := append([]execPolicySavedFragment(nil), s.saved[key]...)
-	delete(s.saved, key)
-	return fragments
-}
-
-func execPolicySavedText(fragment execPolicySavedFragment) string {
-	if len(fragment.prefix) == 0 {
-		return ""
+	stored := s.approved[threadID]
+	out := make([][]string, 0, len(stored))
+	for _, prefix := range stored {
+		out = append(out, append([]string(nil), prefix...))
 	}
-	prefixes := sandbox.FormatAllowPrefixes([][]string{fragment.prefix})
-	if strings.TrimSpace(prefixes) == "" {
-		return ""
-	}
-	return approvedCommandPrefixSavedMessagePrefix + "\n" + prefixes
+	return out
 }
 
 func (r *RuntimeRouter) rememberExecPolicyAmendmentSaved(threadID string, turnID string, prefix []string) {
-	if r == nil || r.execPolicySaved == nil || len(prefix) == 0 {
+	if r == nil || r.execPolicySaved == nil {
 		return
 	}
-	r.execPolicySaved.remember(threadID, turnID, prefix)
+	r.execPolicySaved.remember(threadID, prefix)
 }
 
-// execPolicyPostToolInputItems drains amendments saved during tool execution
-// and reports each newly approved command prefix to the model exactly once,
-// mirroring Rust's ApprovedCommandPrefixSaved world-state diff.
-func (r *RuntimeRouter) execPolicyPostToolInputItems(threadID string, turnID string, base turn.ToolPostExecutionInputItems, appendSessionItems func([]session.Item)) turn.ToolPostExecutionInputItems {
-	if r == nil || r.execPolicySaved == nil {
-		return base
+// approvedCommandPrefixesForThread returns the thread's approved command
+// prefixes: the on-disk exec policy's allow prefixes plus the prefixes approved
+// through exec-policy amendments during this session (Rust's session
+// `exec_policy.current_for_prefix_rules`).
+func (r *RuntimeRouter) approvedCommandPrefixesForThread(threadID string) [][]string {
+	prefixes := [][]string(nil)
+	if policy := r.loadedExecPolicy(); policy != nil {
+		prefixes = append(prefixes, policy.AllowedPrefixes()...)
 	}
-	return func(ctx context.Context, invocation *tool.Invocation, output *tool.Output) []any {
-		items := []any{}
-		if base != nil {
-			items = append(items, base(ctx, invocation, output)...)
-		}
-		fragments := r.execPolicySaved.take(threadID, turnID)
-		if len(fragments) == 0 {
-			return items
-		}
-		createdAt := time.Now().UTC()
-		if output != nil && !output.CompletedAt.IsZero() {
-			createdAt = output.CompletedAt.UTC()
-		}
-		sessionItems := make([]session.Item, 0, len(fragments))
-		for index, fragment := range fragments {
-			text := execPolicySavedText(fragment)
-			if text == "" {
-				continue
-			}
-			items = append(items, modelInputTextMessage("developer", text))
-			sessionItems = append(sessionItems, session.Item{
-				ID:        fmt.Sprintf("exec-policy-saved-%s-%d", safeIdentifier(turnID), index+1),
-				Type:      "message",
-				Role:      "developer",
-				Text:      text,
-				CreatedAt: createdAt,
-				Metadata:  appTurnMetadata(turnID, map[string]any{"kind": "approved_command_prefix_saved"}),
-			})
-		}
-		if appendSessionItems != nil {
-			appendSessionItems(sessionItems)
-		}
-		return items
+	if r != nil && r.execPolicySaved != nil {
+		prefixes = append(prefixes, r.execPolicySaved.approvedPrefixes(threadID)...)
 	}
+	return execpolicy.CanonicalCommandPrefixes(prefixes)
+}
+
+// loadedExecPolicy loads the on-disk exec policy, tolerating a missing file
+// (Rust's session policy starts empty when no rules file exists).
+func (r *RuntimeRouter) loadedExecPolicy() *execpolicy.Policy {
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
+	if codexHome == "" {
+		return nil
+	}
+	path := execpolicy.DefaultPolicyPath(codexHome)
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	policy, err := execpolicy.LoadPolicies([]string{path})
+	if err != nil {
+		return nil
+	}
+	return policy
+}
+
+// approvedCommandPrefixSavedText renders Rust's ApprovedCommandPrefixSaved
+// fragment body for the newly approved prefixes.
+func approvedCommandPrefixSavedText(added [][]string) string {
+	rendered := sandbox.FormatAllowPrefixes(execpolicy.CanonicalCommandPrefixes(added))
+	if strings.TrimSpace(rendered) == "" {
+		return ""
+	}
+	return approvedCommandPrefixSavedMessagePrefix + "\n" + rendered
 }

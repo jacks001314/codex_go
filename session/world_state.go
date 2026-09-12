@@ -8,10 +8,15 @@ type WorldState struct {
 	ContextWindowGuidance  json.RawMessage `json:"contextWindowGuidance,omitempty"`
 	CollaborationMode      json.RawMessage `json:"collaborationMode,omitempty"`
 	PermissionInstructions json.RawMessage `json:"permissionInstructions,omitempty"`
-	RealtimeConversation   json.RawMessage `json:"realtimeConversation,omitempty"`
-	MultiAgentMode         json.RawMessage `json:"multiAgentMode,omitempty"`
-	MultiAgentUsageHint    json.RawMessage `json:"multiAgentUsageHint,omitempty"`
-	Tools                  json.RawMessage `json:"tools,omitempty"`
+	// ApprovedCommandPrefixes carries the compact permissions world-state
+	// section (Rust CompactPermissionsState, section id
+	// `approved_command_prefixes`): the approved prefix set used when the full
+	// permissions instructions are disabled.
+	ApprovedCommandPrefixes json.RawMessage `json:"approvedCommandPrefixes,omitempty"`
+	RealtimeConversation    json.RawMessage `json:"realtimeConversation,omitempty"`
+	MultiAgentMode          json.RawMessage `json:"multiAgentMode,omitempty"`
+	MultiAgentUsageHint     json.RawMessage `json:"multiAgentUsageHint,omitempty"`
+	Tools                   json.RawMessage `json:"tools,omitempty"`
 }
 
 func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
@@ -27,6 +32,7 @@ func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
 	state.ContextWindowGuidance = append(json.RawMessage(nil), state.ContextWindowGuidance...)
 	state.CollaborationMode = append(json.RawMessage(nil), state.CollaborationMode...)
 	state.PermissionInstructions = append(json.RawMessage(nil), state.PermissionInstructions...)
+	state.ApprovedCommandPrefixes = append(json.RawMessage(nil), state.ApprovedCommandPrefixes...)
 	state.RealtimeConversation = append(json.RawMessage(nil), state.RealtimeConversation...)
 	state.MultiAgentMode = append(json.RawMessage(nil), state.MultiAgentMode...)
 	state.MultiAgentUsageHint = append(json.RawMessage(nil), state.MultiAgentUsageHint...)
