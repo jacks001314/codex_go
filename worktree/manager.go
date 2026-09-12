@@ -3,6 +3,7 @@ package worktree
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -266,6 +267,63 @@ func (m *WorktreeManager) Remove(checkout string) error {
 		return removeEmptyBucket(checkout)
 	}
 	return removeEmptyBucket(checkout)
+}
+
+// RemoveManaged removes a currently registered managed worktree from the
+// repository containing sourceCWD, refusing the current checkout (including
+// path aliases) and any checkout with local changes, untracked files, or
+// ignored files (Rust #43942). Thread history is preserved.
+func (m *WorktreeManager) RemoveManaged(sourceCWD string, root string) error {
+	if m == nil {
+		return fmt.Errorf("worktree manager is nil")
+	}
+	checkouts, err := m.List(sourceCWD)
+	if err != nil {
+		return err
+	}
+	var checkout *ManagedWorktree
+	for i := range checkouts {
+		if checkouts[i].Root == root {
+			checkout = &checkouts[i]
+			break
+		}
+	}
+	if checkout == nil {
+		return fmt.Errorf("%s is not a managed worktree in this repository", root)
+	}
+	resolvedSource, err := filepath.EvalSymlinks(sourceCWD)
+	if err != nil {
+		return fmt.Errorf("cannot resolve current directory %s", sourceCWD)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(checkout.Root)
+	if err != nil {
+		return fmt.Errorf("cannot resolve worktree %s", checkout.Root)
+	}
+	if pathWithin(resolvedRoot, resolvedSource) {
+		return errors.New("switch to another checkout before deleting the current worktree")
+	}
+	// git worktree remove refuses dirty or untracked files but not ignored ones.
+	ignored, err := gitOutput(checkout.Root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z")
+	if err != nil {
+		return err
+	}
+	if len(ignored) > 0 {
+		return errors.New("worktree contains ignored local files; remove them before deleting it")
+	}
+	if _, err := gitOutput(checkout.SourceRoot, "worktree", "remove", root); err != nil {
+		return err
+	}
+	return removeEmptyBucket(root)
+}
+
+// pathWithin reports whether child is parent or lives inside parent. Both
+// paths are expected to be canonical.
+func pathWithin(parent string, child string) bool {
+	relative, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
 func worktreeMetadataPath(checkout string) (string, error) {

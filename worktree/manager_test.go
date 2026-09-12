@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -117,6 +118,75 @@ func TestWorktreeListExcludesNonManagedLayout(t *testing.T) {
 	}
 	if len(list) != 0 {
 		t.Fatalf("List() = %#v, want no non-managed worktrees", list)
+	}
+}
+
+// TestWorktreeManagerRemoveManagedSafety covers Rust #43942: managed removal
+// refuses the current checkout and ignored local files, and removes a clean
+// registered checkout.
+func TestWorktreeManagerRemoveManagedSafety(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	source := t.TempDir()
+	runGit(t, source, "init")
+	runGit(t, source, "config", "user.email", "test@example.com")
+	runGit(t, source, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(source, "file.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	runGit(t, source, "add", "file.txt")
+	runGit(t, source, "commit", "-m", "initial")
+
+	settings, err := FromDesktopConfig(t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("FromDesktopConfig() error = %v", err)
+	}
+	manager := NewWorktreeManager(settings)
+	created, err := manager.Create(source, "")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// An unrelated path is not a managed worktree of this repository.
+	if err := manager.RemoveManaged(source, t.TempDir()); err == nil || !strings.Contains(err.Error(), "not a managed worktree") {
+		t.Fatalf("unrelated root error = %v", err)
+	}
+
+	// The current checkout cannot delete itself, including through a path alias.
+	if err := manager.RemoveManaged(created.Root, created.Root); err == nil || !strings.Contains(err.Error(), "switch to another checkout") {
+		t.Fatalf("current checkout error = %v", err)
+	}
+	link := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(created.Root, link); err == nil {
+		if err := manager.RemoveManaged(link, created.Root); err == nil || !strings.Contains(err.Error(), "switch to another checkout") {
+			t.Fatalf("alias checkout error = %v", err)
+		}
+	}
+
+	// Ignored local files block removal.
+	if err := os.WriteFile(filepath.Join(created.Root, ".gitignore"), []byte("*.log\n"), 0o600); err != nil {
+		t.Fatalf("write gitignore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(created.Root, "debug.log"), []byte("ignored\n"), 0o600); err != nil {
+		t.Fatalf("write ignored file: %v", err)
+	}
+	if err := manager.RemoveManaged(source, created.Root); err == nil || !strings.Contains(err.Error(), "ignored local files") {
+		t.Fatalf("ignored files error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(created.Root, "debug.log")); err != nil {
+		t.Fatalf("remove ignored file: %v", err)
+	}
+	if err := os.Remove(filepath.Join(created.Root, ".gitignore")); err != nil {
+		t.Fatalf("remove gitignore: %v", err)
+	}
+
+	// A clean registered checkout is removed and dropped from the list.
+	if err := manager.RemoveManaged(source, created.Root); err != nil {
+		t.Fatalf("RemoveManaged() error = %v", err)
+	}
+	if remaining, err := manager.List(source); err != nil || len(remaining) != 0 {
+		t.Fatalf("List after RemoveManaged = %#v, %v", remaining, err)
 	}
 }
 
