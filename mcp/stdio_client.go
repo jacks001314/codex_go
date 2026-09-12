@@ -416,11 +416,18 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 			c.startMCPAuthChangeWatcher()
 		}
 	}()
-	protocolMode, launchEnv, stripProtocolMarker, err := mcpStdioLaunchConfig(c.config)
+	protocolMode, launchEnv, _, err := mcpStdioLaunchConfig(c.config)
 	if err != nil {
 		return err
 	}
-	command := resolveMCPStdioCommand(c.config.Command, launchEnv)
+	// Rust create_env_for_mcp_server: a local stdio server receives only the
+	// default variables, the config's env_vars, the custom CA settings, and the
+	// explicit env overrides - never the whole parent environment.
+	childEnv, err := createEnvForMCPServer(launchEnv, c.config.EnvVars)
+	if err != nil {
+		return err
+	}
+	command := resolveMCPStdioCommand(c.config.Command, childEnv)
 	cmd := newMCPStdioCommand(command, c.config.Args...)
 	// Rust #43870: an escaped descendant can keep the stderr pipe open after the
 	// server exits. Drain queued diagnostics briefly, then let Wait close the
@@ -429,12 +436,8 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	if cwd := strings.TrimSpace(c.config.CWD); cwd != "" {
 		cmd.Dir = cwd
 	}
-	baseEnv := os.Environ()
-	if stripProtocolMarker {
-		baseEnv = withoutEnvironmentVariable(baseEnv, mcpProtocolVersionEnvVar)
-	}
-	baseEnv = append(baseEnv, mcpCustomCAEnvPairs(launchEnv)...)
-	cmd.Env = append(baseEnv, envPairs(launchEnv)...)
+	// A non-nil empty slice clears the environment; a nil slice would inherit it.
+	cmd.Env = append([]string{}, envPairs(childEnv)...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -1123,18 +1126,6 @@ func mcpStdioLaunchConfig(config *ServerConfig) (MCPProtocolMode, map[string]str
 		return MCPProtocolLegacy, nil, true, fmt.Errorf("unsupported %s `%s` for stdio MCP server; expected `%s`", mcpProtocolVersionEnvVar, requestedVersion, modernMCPProtocol)
 	}
 	return MCPProtocol20260728, env, true, nil
-}
-
-func withoutEnvironmentVariable(env []string, target string) []string {
-	out := make([]string, 0, len(env))
-	for _, entry := range env {
-		name, _, _ := strings.Cut(entry, "=")
-		if strings.EqualFold(name, target) {
-			continue
-		}
-		out = append(out, entry)
-	}
-	return out
 }
 
 // mcpCustomCAEnvKeys mirrors Rust codex_network_proxy::CUSTOM_CA_ENV_KEYS: the
