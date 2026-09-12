@@ -145,6 +145,7 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 	}
 	edits := make([]SettingsEdit, 0, len(items))
 	changed := 0
+	defaults := features.Defaults()
 	for _, item := range items {
 		key := strings.TrimSpace(item.Key)
 		if key == "" {
@@ -154,7 +155,14 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 			changed++
 		}
 		m.featureSettings[key] = item.Enabled
-		edits = append(edits, SettingsEdit{KeyPath: "features." + key, Value: item.Enabled})
+		// Rust experimental_features::write: enabling writes true, disabling a
+		// default-enabled feature clears the override (null) instead of writing
+		// false, and disabling a default-off feature writes false.
+		value := any(item.Enabled)
+		if !item.Enabled && defaults[key] {
+			value = nil
+		}
+		edits = append(edits, SettingsEdit{KeyPath: "features." + key, Value: value})
 	}
 	switch {
 	case len(items) == 1:
