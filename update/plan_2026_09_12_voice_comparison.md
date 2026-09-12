@@ -79,7 +79,7 @@ TUI/app ──(app-server RPC thread/realtime/*)──► app-server
 | build commit | hello 带精确 buildCommit，不匹配 fail-closed — 一致 |
 | 退出阶段码 | `HelperExitStage` 数值同构 |
 | 环境白名单 | systemroot/home/proxy/ALSA 等 — 一致 |
-| 差异 | Go 额外有 `transportTimedOut / inspectAudio / audioState` |
+| 消息集 | **完全一致**：两侧都是 17 个变体（含 `transportTimedOut` / `inspectAudio` / `audioState`），无差异 |
 
 ## 4. 媒体面（核心差异）
 
@@ -135,7 +135,7 @@ GainController2}`。
 
 ## 8. 发现（按优先级）
 
-### 8.1 ⚠️ 24 kHz 设备 / 48 kHz 编码链 不一致（疑似缺陷，静态确认）
+### 8.1 24 kHz 设备 / 48 kHz 编码链 不一致（**已修复**）
 
 证据（Go，逐行核对）：
 
@@ -155,17 +155,14 @@ GainController2}`。
 编码 → 远端 2× 变速/音高偏移；且 `audioPacker` 的时间戳按 48 kHz 步进，会以
 半速漂移。Rust 正是用 rubato 把设备采样率归一到 48 kHz 来规避。
 
-现状限制：既有的两个测试把这一不一致**固化**了下来
-（`voicehost/manager_test.go:76/81` 断言 `Format.SampleRate == 24000`；
-`voicehost/runtime_package_test.go:339/343` 断言 SDP `opus/48000`），
-所以它不是靠现有测试能发现的。
+修法（采用方案 1，无重采样方案）：`voicehost/hostmain.go` 的
+`defaultSessionFormat.SampleRate` 由 24000 改为 **48000**，让设备、打包、Opus、
+RTP 全程 48 kHz；`voicehost/manager_test.go` 的 24000 断言同步改为 48000。
+新增回归测试 `voicehost.TestDefaultSessionFormatMatchesOpusRTPPipeline`，锁定
+`defaultSessionFormat.SampleRate == opusClockRate`、`audioBlockSamples == 10 ms`、
+`voiceFrameSamples == 20 ms`，防止再次漂移。
 
-可能修法（二选一，需 voice owner 决策 + 实机验证）：
-1. 无重采样方案：把 `defaultSessionFormat.SampleRate` 改为 `48000`，让设备、
-   打包、Opus、RTP 全程 48 kHz（同步更新上述两处 24000 断言）；
-2. 对齐 Rust：保留设备原生率，补 rubato 等价的重采样到 48 kHz。
-
-> 该结论为静态推断，**未接真实麦克风验证**；但代码内部不自洽是确定的。
+> 仍建议实机（真实麦克风/扬声器）验证一次音频回环；静态不一致已消除。
 
 ### 8.2 `realtime_conversation` feature stage 漂移（voice-owned，未改）
 
@@ -206,3 +203,23 @@ LRU 缓存；Go 侧无对等实现。
    roundtrip fixture；方法/通知名、退出阶段码做 manifest 快照。
 5. 动态抽验（L2/L3）：mute 边界、静音保活、字幕时序，用录制-重放或
    `/voice` 黑盒场景。
+
+## 10. L1 静态契约（本轮已落地）
+
+新增 `parity/rust_voice_contract_test.go`，并在
+`parity/contracts/manifest.json` 登记 3 条 contract：
+
+| contract id | Rust oracle | Go | verifier |
+|---|---|---|---|
+| `voice-control-protocol` | `realtime-webrtc/src/protocol.rs` | `voicehost/protocol.go` | `TestRustVoiceControlProtocolSurfaceAgainstGo` |
+| `voice-helper-exit-stages` | `realtime-webrtc/src/helper_exit.rs` | `voicehost/helper_exit.go` | `TestRustVoiceHelperExitStagesAgainstGo` |
+| `thread-realtime-surface` | `app-server-protocol/src/protocol/common.rs` | `realtime/realtime.go` | `TestRustThreadRealtimeSurfaceAgainstGo` |
+
+覆盖内容：
+
+- 帧界 `MAX_FRAME_BYTES`（128 KiB）、SDP 界（64 KiB，含空/超限拒绝行为）；
+- 17 个控制消息的**双向 round-trip**（大端 u32 长度前缀 + 逐类型编码/解码）
+  与消息集对齐；
+- 7 个 `GST_*` 运行时环境键序与取值（`GST_REGISTRY` 允许平台条件值）；
+- 18 个 helper 退出阶段码（正向 code + `HelperExitStageFromCode` 反向）；
+- 17 个 `thread/realtime/*` 方法与通知名。

@@ -1120,6 +1120,45 @@
             "phase": "P1",
             "status": "complete",
             "verifier": "TestSessionIDByUniqueActiveNamePrefersMostRecentDuplicateLikeRust;TestSessionIDByUniqueActiveNameLikeRust"
+        },
+        {
+            "id": "voice-control-protocol",
+            "kind": "source-surface",
+            "rustPaths": [
+                "realtime-webrtc/src/protocol.rs"
+            ],
+            "goPaths": [
+                "voicehost/protocol.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestRustVoiceControlProtocolSurfaceAgainstGo"
+        },
+        {
+            "id": "voice-helper-exit-stages",
+            "kind": "source-surface",
+            "rustPaths": [
+                "realtime-webrtc/src/helper_exit.rs"
+            ],
+            "goPaths": [
+                "voicehost/helper_exit.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestRustVoiceHelperExitStagesAgainstGo"
+        },
+        {
+            "id": "thread-realtime-surface",
+            "kind": "source-surface",
+            "rustPaths": [
+                "app-server-protocol/src/protocol/common.rs"
+            ],
+            "goPaths": [
+                "realtime/realtime.go"
+            ],
+            "phase": "P1",
+            "status": "complete",
+            "verifier": "TestRustThreadRealtimeSurfaceAgainstGo"
         }
     ]
 }

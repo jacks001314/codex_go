@@ -73,12 +73,12 @@ func TestManagerUpdateSnapshot(t *testing.T) {
 	snapshot, err := manager.UpdateSnapshot("session-c", func(session *Session) {
 		session.RuntimeName = "fake"
 		session.InputDeviceID = "mic-1"
-		session.Format = AudioFormat{SampleRate: 24000, Channels: 1, Encoding: AudioEncodingS16LE}
+		session.Format = AudioFormat{SampleRate: 48000, Channels: 1, Encoding: AudioEncodingS16LE}
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.RuntimeName != "fake" || snapshot.InputDeviceID != "mic-1" || snapshot.Format.SampleRate != 24000 {
+	if snapshot.RuntimeName != "fake" || snapshot.InputDeviceID != "mic-1" || snapshot.Format.SampleRate != 48000 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }

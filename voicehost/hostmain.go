@@ -24,8 +24,10 @@ var ErrIncompatibleVoiceHelper = errors.New("incompatible voice helper")
 var ErrInvalidVoiceControlSequence = errors.New("invalid voice control sequence")
 
 // defaultSessionFormat is the native PCM format used before device discovery or
-// configuration is added to the control protocol.
-var defaultSessionFormat = AudioFormat{SampleRate: 24000, Channels: 1, Encoding: AudioEncodingS16LE}
+// configuration is added to the control protocol. The helper has no resampler,
+// so the device, the bounded packer, the Opus codec, and the RTP clock must all
+// agree on the 48 kHz Opus rate.
+var defaultSessionFormat = AudioFormat{SampleRate: 48000, Channels: 1, Encoding: AudioEncodingS16LE}
 
 // RunHost runs the voice helper protocol over stdin and stdout. It owns WebRTC
 // negotiation and the packaged runtime, but never opens audio devices through

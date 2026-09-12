@@ -397,3 +397,23 @@ func mustSDP(t *testing.T, value string) SessionDescription {
 	}
 	return sdp
 }
+
+// TestDefaultSessionFormatMatchesOpusRTPPipeline locks the device PCM format to
+// the Opus RTP pipeline. The helper has no resampler, so a device rate that
+// differs from opusClockRate would make the 480-sample block timing and the
+// 960-sample (20 ms) frames silently wrong.
+func TestDefaultSessionFormatMatchesOpusRTPPipeline(t *testing.T) {
+	if defaultSessionFormat.SampleRate != opusClockRate {
+		t.Fatalf("default session rate = %d, want Opus clock %d",
+			defaultSessionFormat.SampleRate, opusClockRate)
+	}
+	if defaultSessionFormat.Channels != 1 || defaultSessionFormat.Encoding != AudioEncodingS16LE {
+		t.Fatalf("default session format = %+v", defaultSessionFormat)
+	}
+	if want := opusClockRate / 100; audioBlockSamples != want {
+		t.Fatalf("audioBlockSamples = %d, want %d (10 ms at %d Hz)", audioBlockSamples, want, opusClockRate)
+	}
+	if want := opusClockRate / 50; voiceFrameSamples != want {
+		t.Fatalf("voiceFrameSamples = %d, want %d (20 ms at %d Hz)", voiceFrameSamples, want, opusClockRate)
+	}
+}
