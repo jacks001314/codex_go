@@ -10,6 +10,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"codex_go/apps"
 	"codex_go/sandbox"
 )
 
@@ -315,6 +316,13 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 			return nil, err
 		}
 		out.Plugins = parsed
+	}
+	if nested, ok := mapAnyKey(values, "apps"); ok {
+		parsed, err := apps.AppsRequirementsFromMap(nested)
+		if err != nil {
+			return nil, err
+		}
+		out.Apps = parsed
 	}
 	if configRequirementsEmpty(&out) {
 		return nil, nil
@@ -967,7 +975,8 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.ModelProvider == nil &&
 			value.ModelProviders == nil &&
 			value.MCPServers == nil &&
-			value.Plugins == nil)
+			value.Plugins == nil &&
+			len(value.Apps) == 0)
 }
 
 func mapAnyKey(values map[string]any, keys ...string) (map[string]any, bool) {

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/apps"
 	"codex_go/network"
 	"codex_go/sandbox"
 )
@@ -578,6 +579,10 @@ type ConfigRequirements struct {
 	ModelProviders map[string]any                  `json:"modelProviders,omitempty"`
 	MCPServers     map[string]MCPServerRequirement `json:"-"`
 	Plugins        map[string]PluginRequirements   `json:"-"`
+	// Apps carries the managed app requirements (Rust
+	// ConfigRequirementsToml.apps): app disablement and per-tool approval
+	// modes enforced by Cloud/MDM layers. Internal, like MCPServers/Plugins.
+	Apps apps.AppsRequirements `json:"-"`
 }
 
 func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
@@ -3524,6 +3529,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.Models = cloneModels(requirements.Models)
 	clone.MCPServers = cloneMCPServerRequirements(requirements.MCPServers)
 	clone.Plugins = clonePluginRequirements(requirements.Plugins)
+	clone.Apps = apps.CloneAppsRequirements(requirements.Apps)
 	clone.CliAuthCredentialsStore = cloneAuthCredentialsStoreMode(requirements.CliAuthCredentialsStore)
 	clone.ChatgptBaseURL = cloneStringPtr(requirements.ChatgptBaseURL)
 	clone.ModelProvider = cloneStringPtr(requirements.ModelProvider)

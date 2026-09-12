@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"codex_go/apps"
 )
 
 var ErrInvalidCloudConfig = errors.New("invalid cloud config")
@@ -401,6 +403,11 @@ func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequireme
 	}
 	if overlay.Plugins != nil {
 		out.Plugins = clonePluginRequirements(overlay.Plugins)
+	}
+	if len(overlay.Apps) > 0 {
+		// Rust merge_app_requirements_descending: either layer can disable an
+		// app, and an exact per-tool approval keeps the higher-precedence value.
+		out.Apps = apps.MergeAppRequirementsDescending(out.Apps, overlay.Apps)
 	}
 	return out
 }

@@ -3,11 +3,36 @@ package appserver
 import (
 	"testing"
 
+	"codex_go/apps"
 	"codex_go/config"
 	"codex_go/mcp"
 )
 
 func boolPtrAppPolicy(value bool) *bool { return &value }
+
+// TestFilterCodexAppsRuntimeToolsHonorsManagedRequirementsLikeRust covers the
+// managed requirement path: a Cloud/MDM layer can disable an app that the user
+// config leaves enabled.
+func TestFilterCodexAppsRuntimeToolsHonorsManagedRequirementsLikeRust(t *testing.T) {
+	disabled := false
+	enabled := true
+	tool := codexAppsTool("files/read", "drive", boolPtrAppPolicy(true))
+	cfg := &config.Config{
+		Values: map[string]any{"apps": map[string]any{"drive": map[string]any{"enabled": true}}},
+		Requirements: &config.ConfigRequirements{Apps: apps.AppsRequirements{
+			"drive": {Enabled: &disabled},
+		}},
+	}
+	if got := filterCodexAppsRuntimeTools([]mcp.RuntimeToolInfo{tool}, cfg); len(got) != 0 {
+		t.Fatalf("managed disablement ignored: %#v", got)
+	}
+	cfg.Requirements = &config.ConfigRequirements{Apps: apps.AppsRequirements{
+		"drive": {Enabled: &enabled},
+	}}
+	if got := filterCodexAppsRuntimeTools([]mcp.RuntimeToolInfo{tool}, cfg); len(got) != 1 {
+		t.Fatalf("managed enablement rejected the tool: %#v", got)
+	}
+}
 
 func codexAppsTool(name string, connectorID string, modelVisible *bool) mcp.RuntimeToolInfo {
 	return mcp.RuntimeToolInfo{

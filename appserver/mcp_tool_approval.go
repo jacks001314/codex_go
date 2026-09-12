@@ -30,6 +30,14 @@ type appserverMCPToolApprovalHandler struct {
 	persistentApprovalAllowed bool
 }
 
+// appsRequirementsForConfig returns the managed app requirements, if any.
+func appsRequirementsForConfig(cfg *config.Config) apps.AppsRequirements {
+	if cfg == nil || cfg.Requirements == nil {
+		return nil
+	}
+	return cfg.Requirements.Apps
+}
+
 var _ mcp.MCPToolApprovalHandler = (*appserverMCPToolApprovalHandler)(nil)
 
 // newAppserverMCPToolApprovalOptions builds the executor options for a turn, or
@@ -58,7 +66,10 @@ func (r *RuntimeRouter) newAppserverMCPToolApprovalOptions(
 		ApprovalPolicy: approvalPolicy,
 		// Rust mcp_tool_call.rs builds the app policy from the same config layer
 		// stack the turn uses.
-		AppPolicy: apps.NewAppToolPolicyEvaluator(apps.AppsConfigFromValues(cfgValues)),
+		AppPolicy: apps.NewAppToolPolicyEvaluatorWithRequirements(
+			apps.AppsConfigFromValues(cfgValues),
+			appsRequirementsForConfig(cfg),
+		),
 		PermissionProfileForServer: func(server string) *sandbox.PermissionProfile {
 			profile, ok := service.PermissionProfileForServer(server)
 			if !ok {

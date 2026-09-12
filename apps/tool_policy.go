@@ -32,7 +32,8 @@ type AppToolPolicyInput struct {
 // snapshot (Rust AppToolPolicyEvaluator). Callers should build one per exposure
 // or call batch.
 type AppToolPolicyEvaluator struct {
-	config *AppsConfig
+	config       *AppsConfig
+	requirements AppsRequirements
 }
 
 // NewAppToolPolicyEvaluator returns an evaluator over the merged apps config.
@@ -40,12 +41,29 @@ func NewAppToolPolicyEvaluator(config *AppsConfig) *AppToolPolicyEvaluator {
 	return &AppToolPolicyEvaluator{config: config}
 }
 
+// NewAppToolPolicyEvaluatorWithRequirements mirrors Rust's from_parts: the
+// requirement constraints are folded into the effective config (so a managed
+// `enabled = false` disables the app) and the requirement's exact tool approval
+// keeps the highest precedence.
+func NewAppToolPolicyEvaluatorWithRequirements(config *AppsConfig, requirements AppsRequirements) *AppToolPolicyEvaluator {
+	return &AppToolPolicyEvaluator{
+		config:       effectiveAppsConfig(config, requirements),
+		requirements: requirements,
+	}
+}
+
 // Policy returns the effective enablement and approval mode for one tool.
 func (e *AppToolPolicyEvaluator) Policy(input AppToolPolicyInput) AppToolPolicy {
 	if e == nil || e.config == nil {
+		// Rust app_tool_policy_from_apps_config with no apps config still honors
+		// a managed tool approval.
+		if approval, ok := e.managedApproval(input); ok {
+			return AppToolPolicy{Enabled: true, Approval: approval}
+		}
 		return DefaultAppToolPolicy()
 	}
-	return appToolPolicyFromConfig(e.config, input)
+	approval, hasManagedApproval := e.managedApproval(input)
+	return appToolPolicyFromConfig(e.config, approval, hasManagedApproval, input)
 }
 
 // AppEnabled returns the effective enablement for one connector (Rust
@@ -102,10 +120,61 @@ func AppIsEnabled(config *AppsConfig, connectorID string) bool {
 	return *app.Enabled
 }
 
-func appToolPolicyFromConfig(config *AppsConfig, input AppToolPolicyInput) AppToolPolicy {
+// effectiveAppsConfig ports Rust effective_apps_config: the requirements'
+// `enabled = false` constraint is applied on top of the user config, and an
+// unconfigured result stays nil.
+func effectiveAppsConfig(config *AppsConfig, requirements AppsRequirements) *AppsConfig {
+	if len(requirements) == 0 {
+		return config
+	}
+	out := &AppsConfig{Apps: map[string]AppConfig{}}
+	if config != nil {
+		if config.Default != nil {
+			defaults := *config.Default
+			out.Default = &defaults
+		}
+		for appID, app := range config.Apps {
+			out.Apps[appID] = app
+		}
+	}
+	for appID, requirement := range requirements {
+		if requirement.Enabled == nil || *requirement.Enabled {
+			continue
+		}
+		app := out.Apps[strings.TrimSpace(appID)]
+		disabled := false
+		app.Enabled = &disabled
+		out.Apps[strings.TrimSpace(appID)] = app
+	}
+	return out
+}
+
+// managedApproval ports Rust managed_app_tool_approval: a managed requirement
+// for the exact tool outranks every configured mode.
+func (e *AppToolPolicyEvaluator) managedApproval(input AppToolPolicyInput) (AppToolApproval, bool) {
+	if e == nil || len(e.requirements) == 0 {
+		return AppToolApprovalAuto, false
+	}
+	requirement, ok := e.requirements[strings.TrimSpace(input.ConnectorID)]
+	if !ok {
+		return AppToolApprovalAuto, false
+	}
+	tool, ok := requirement.Tools[strings.TrimSpace(input.ToolName)]
+	if !ok || tool.ApprovalMode == nil {
+		return AppToolApprovalAuto, false
+	}
+	return normalizeAppToolApproval(*tool.ApprovalMode), true
+}
+
+func appToolPolicyFromConfig(
+	config *AppsConfig,
+	managedApproval AppToolApproval,
+	hasManagedApproval bool,
+	input AppToolPolicyInput,
+) AppToolPolicy {
 	app, hasApp := config.Apps[strings.TrimSpace(input.ConnectorID)]
 	toolConfig, hasToolConfig := appToolConfigFor(app, hasApp, input)
-	approval := appToolApprovalFor(config, app, hasApp, toolConfig, hasToolConfig, input)
+	approval := appToolApprovalFor(config, app, hasApp, toolConfig, hasToolConfig, managedApproval, hasManagedApproval, input)
 	enabled := appToolEnabledFor(config, app, hasApp, toolConfig, hasToolConfig, input)
 	return AppToolPolicy{Enabled: enabled, Approval: approval}
 }
@@ -135,8 +204,13 @@ func appToolApprovalFor(
 	hasApp bool,
 	toolConfig AppToolConfig,
 	hasToolConfig bool,
+	managedApproval AppToolApproval,
+	hasManagedApproval bool,
 	input AppToolPolicyInput,
 ) AppToolApproval {
+	if hasManagedApproval {
+		return managedApproval
+	}
 	if hasToolConfig && toolConfig.ApprovalMode != nil {
 		return normalizeAppToolApproval(*toolConfig.ApprovalMode)
 	}

@@ -13709,7 +13709,10 @@ func filterCodexAppsRuntimeTools(tools []mcp.RuntimeToolInfo, cfg *config.Config
 	}
 	var evaluator *apps.AppToolPolicyEvaluator
 	if cfg != nil {
-		evaluator = apps.NewAppToolPolicyEvaluator(apps.AppsConfigFromValues(cfg.Values))
+		evaluator = apps.NewAppToolPolicyEvaluatorWithRequirements(
+			apps.AppsConfigFromValues(cfg.Values),
+			appsRequirementsForConfig(cfg),
+		)
 	}
 	filtered := make([]mcp.RuntimeToolInfo, 0, len(tools))
 	for _, tool := range tools {
