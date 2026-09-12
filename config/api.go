@@ -545,8 +545,12 @@ type ConfigRequirements struct {
 	AllowedApprovalsReviewers            []ApprovalsReviewer       `json:"allowedApprovalsReviewers,omitempty"`
 	AllowedSandboxModes                  []sandbox.SandboxMode     `json:"allowedSandboxModes,omitempty"`
 	AllowedWindowsSandboxImplementations []WindowsSandboxSetupMode `json:"allowedWindowsSandboxImplementations,omitempty"`
-	AllowedPermissionProfiles            map[string]bool           `json:"allowedPermissionProfiles,omitempty"`
-	DefaultPermissions                   *string                   `json:"defaultPermissions,omitempty"`
+	// WindowsSandboxPrivateDesktop is the managed `windows.sandbox_private_desktop`
+	// requirement (Rust ConfigRequirementsToml.windows). It overrides the user
+	// config's `[windows] sandbox_private_desktop`.
+	WindowsSandboxPrivateDesktop *bool           `json:"windowsSandboxPrivateDesktop,omitempty"`
+	AllowedPermissionProfiles    map[string]bool `json:"allowedPermissionProfiles,omitempty"`
+	DefaultPermissions           *string         `json:"defaultPermissions,omitempty"`
 	// Permissions carries the managed [permissions] profile catalog from
 	// requirements (Rust ConfigRequirementsToml.permissions, #39752). It is
 	// internal and not part of the app-server wire ConfigRequirements schema.
@@ -591,6 +595,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowedApprovalsReviewers            []ApprovalsReviewer       `json:"allowedApprovalsReviewers"`
 		AllowedSandboxModes                  []sandbox.SandboxMode     `json:"allowedSandboxModes"`
 		AllowedWindowsSandboxImplementations []WindowsSandboxSetupMode `json:"allowedWindowsSandboxImplementations"`
+		WindowsSandboxPrivateDesktop         *bool                     `json:"windowsSandboxPrivateDesktop"`
 		AllowedPermissionProfiles            map[string]bool           `json:"allowedPermissionProfiles"`
 		DefaultPermissions                   *string                   `json:"defaultPermissions"`
 		AllowedWebSearchModes                []WebSearchMode           `json:"allowedWebSearchModes"`
@@ -620,6 +625,7 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AllowedApprovalsReviewers:            approvalsReviewersOrNil(r.AllowedApprovalsReviewers),
 		AllowedSandboxModes:                  sandboxModesOrNil(r.AllowedSandboxModes),
 		AllowedWindowsSandboxImplementations: windowsSandboxModesOrNil(r.AllowedWindowsSandboxImplementations),
+		WindowsSandboxPrivateDesktop:         cloneBoolPtr(r.WindowsSandboxPrivateDesktop),
 		AllowedPermissionProfiles:            cloneBoolMap(r.AllowedPermissionProfiles),
 		DefaultPermissions:                   cloneStringPtr(r.DefaultPermissions),
 		AllowedWebSearchModes:                webSearchModesOrNil(r.AllowedWebSearchModes),
@@ -3509,6 +3515,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.AllowedApprovalsReviewers = cloneSlice(requirements.AllowedApprovalsReviewers)
 	clone.AllowedSandboxModes = cloneSlice(requirements.AllowedSandboxModes)
 	clone.AllowedWindowsSandboxImplementations = cloneSlice(requirements.AllowedWindowsSandboxImplementations)
+	clone.WindowsSandboxPrivateDesktop = cloneBoolPtr(requirements.WindowsSandboxPrivateDesktop)
 	clone.AllowedPermissionProfiles = cloneBoolMap(requirements.AllowedPermissionProfiles)
 	clone.Permissions = cloneMap(requirements.Permissions)
 	clone.AllowedWebSearchModes = cloneSlice(requirements.AllowedWebSearchModes)

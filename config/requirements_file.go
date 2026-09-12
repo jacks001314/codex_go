@@ -199,6 +199,20 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 			out.AllowedWindowsSandboxImplementations = append(out.AllowedWindowsSandboxImplementations, WindowsSandboxSetupMode(value))
 		}
 	}
+	// Rust ConfigRequirementsToml.windows (WindowsRequirementsToml): the managed
+	// Windows sandbox implementation restriction and private-desktop setting.
+	if nested, ok := mapAnyKey(values, "windows"); ok {
+		implementations, present, err := windowsSandboxImplementationsFromMap(nested)
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			out.AllowedWindowsSandboxImplementations = implementations
+		}
+		if value, ok := boolAnyKey(nested, "sandbox_private_desktop", "sandboxPrivateDesktop"); ok {
+			out.WindowsSandboxPrivateDesktop = &value
+		}
+	}
 	if values, ok := boolMapAnyKey(values, "allowed_permission_profiles", "allowedPermissionProfiles"); ok {
 		out.AllowedPermissionProfiles = values
 	}
@@ -949,6 +963,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.AllowedApprovalsReviewers == nil &&
 			value.AllowedSandboxModes == nil &&
 			value.AllowedWindowsSandboxImplementations == nil &&
+			value.WindowsSandboxPrivateDesktop == nil &&
 			value.AllowedPermissionProfiles == nil &&
 			value.DefaultPermissions == nil &&
 			value.AdditionalDeveloperInstructions == nil &&
@@ -977,6 +992,58 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.MCPServers == nil &&
 			value.Plugins == nil &&
 			len(value.Apps) == 0)
+}
+
+// windowsSandboxImplementationsFromMap parses
+// `[windows] allowed_sandbox_implementations` (Rust WindowsRequirementsToml).
+// An empty list is rejected, mirroring Rust's ConstraintError::empty_field.
+func windowsSandboxImplementationsFromMap(values map[string]any) ([]WindowsSandboxSetupMode, bool, error) {
+	raw, ok := anyKey(values, "allowed_sandbox_implementations", "allowedSandboxImplementations")
+	if !ok {
+		return nil, false, nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, false, fmt.Errorf("windows.allowed_sandbox_implementations must be a list")
+	}
+	if len(list) == 0 {
+		return nil, false, fmt.Errorf("windows.allowed_sandbox_implementations must not be empty")
+	}
+	out := make([]WindowsSandboxSetupMode, 0, len(list))
+	for _, item := range list {
+		value, ok := item.(string)
+		if !ok {
+			return nil, false, fmt.Errorf("windows.allowed_sandbox_implementations entries must be strings")
+		}
+		out = append(out, WindowsSandboxSetupMode(value))
+	}
+	return out, true, nil
+}
+
+// ResolveWindowsSandboxPrivateDesktop ports Rust
+// resolve_windows_sandbox_private_desktop plus the managed requirement
+// constraint (core/src/config/requirements.rs): the config's
+// `[windows] sandbox_private_desktop` defaults to true, and a managed
+// `windows.sandbox_private_desktop` requirement overrides it. The
+// `permissions` fallback preserves Go configurations written before this port.
+func ResolveWindowsSandboxPrivateDesktop(values map[string]any, requirements *ConfigRequirements) bool {
+	resolved := true
+	// Legacy Go shape, kept as a fallback for configurations written before this
+	// port; the canonical Rust `[windows]` table wins when it is present.
+	if permissions, ok := values["permissions"].(map[string]any); ok {
+		if value, ok := boolAnyKey(permissions, "windows_sandbox_private_desktop", "windowsSandboxPrivateDesktop"); ok {
+			resolved = value
+		}
+	}
+	if windows, ok := values["windows"].(map[string]any); ok {
+		if value, ok := boolAnyKey(windows, "sandbox_private_desktop", "sandboxPrivateDesktop"); ok {
+			resolved = value
+		}
+	}
+	if requirements != nil && requirements.WindowsSandboxPrivateDesktop != nil {
+		resolved = *requirements.WindowsSandboxPrivateDesktop
+	}
+	return resolved
 }
 
 func mapAnyKey(values map[string]any, keys ...string) (map[string]any, bool) {

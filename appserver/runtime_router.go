@@ -12550,7 +12550,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			allowTTY := features.Enabled(cfg.FeatureSettings(), "unified_exec_tty")
 			options.Shell.AllowTTY = &allowTTY
 			options.Shell.Validation.WindowsSandboxLevel = windowsSandboxLevelFromConfigValues(cfg.Values)
-			options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopFromConfigValues(cfg.Values)
+			options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopForTurn(cfg)
 		}
 		if guardianTurnStart(params) {
 			options.Shell.Validation.WindowsSandboxProxySettingsMode = execserver.WindowsSandboxProxySettingsPreserve
@@ -12981,12 +12981,17 @@ func (r *RuntimeRouter) configBaseDirForAgents() string {
 }
 
 func windowsSandboxPrivateDesktopFromConfigValues(values map[string]any) bool {
-	permissions, _ := values["permissions"].(map[string]any)
-	value, _ := permissions["windows_sandbox_private_desktop"].(bool)
-	if !value {
-		value, _ = permissions["windowsSandboxPrivateDesktop"].(bool)
+	return config.ResolveWindowsSandboxPrivateDesktop(values, nil)
+}
+
+// windowsSandboxPrivateDesktopForTurn resolves the knob against the turn's
+// managed requirements (Rust core/src/config/requirements.rs): a managed
+// `windows.sandbox_private_desktop` overrides the user config.
+func windowsSandboxPrivateDesktopForTurn(cfg *config.Config) bool {
+	if cfg == nil {
+		return config.ResolveWindowsSandboxPrivateDesktop(nil, nil)
 	}
-	return value
+	return config.ResolveWindowsSandboxPrivateDesktop(cfg.Values, cfg.Requirements)
 }
 
 func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartParams) []tool.UnifiedExecEnvironment {
