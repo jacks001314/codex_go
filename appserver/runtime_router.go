@@ -210,32 +210,38 @@ type RuntimeRouterOptions struct {
 }
 
 type RuntimeRouter struct {
-	services                RuntimeServices
-	config                  *config.ConfigService
-	threads                 *ThreadManager
-	servicesMu              sync.Mutex
-	mu                      sync.RWMutex
-	configWarningsMu        sync.Mutex
-	emittedConfigWarnings   map[string]bool
-	sink                    NotificationSink
-	requests                ServerRequestSink
-	turnsMu                 *sync.Mutex
-	active                  map[string]*activeRuntimeTurn
-	diffs                   map[string]*runtimeutil.DiffTracker
-	ephemeralMu             *sync.RWMutex
-	ephemeralThreads        map[string]*session.Record
-	subscriptionsMu         *sync.Mutex
-	threadSubscriptions     map[string]map[string]struct{}
-	clientInfoMu            sync.RWMutex
-	clientInfo              map[string]ClientInfo
-	notificationOptOut      map[string]map[NotificationMethod]struct{}
-	experimentalAPI         map[string]bool
-	diagnosticsGauges       *serverDiagnosticsGaugeRegistry
-	requestAttestation      map[string]bool
-	mcpOpenAIForm           map[string]bool
-	mcpStandardFormInput    map[string]bool
-	authRevisionMu          sync.Mutex
-	authRevision            uint64
+	services              RuntimeServices
+	config                *config.ConfigService
+	threads               *ThreadManager
+	servicesMu            sync.Mutex
+	mu                    sync.RWMutex
+	configWarningsMu      sync.Mutex
+	emittedConfigWarnings map[string]bool
+	sink                  NotificationSink
+	requests              ServerRequestSink
+	turnsMu               *sync.Mutex
+	active                map[string]*activeRuntimeTurn
+	diffs                 map[string]*runtimeutil.DiffTracker
+	ephemeralMu           *sync.RWMutex
+	ephemeralThreads      map[string]*session.Record
+	subscriptionsMu       *sync.Mutex
+	threadSubscriptions   map[string]map[string]struct{}
+	clientInfoMu          sync.RWMutex
+	clientInfo            map[string]ClientInfo
+	notificationOptOut    map[string]map[NotificationMethod]struct{}
+	experimentalAPI       map[string]bool
+	diagnosticsGauges     *serverDiagnosticsGaugeRegistry
+	requestAttestation    map[string]bool
+	mcpOpenAIForm         map[string]bool
+	mcpStandardFormInput  map[string]bool
+	authRevisionMu        sync.Mutex
+	authRevision          uint64
+	// authOwnerRevision is the ownership half of Rust's AuthChangeState
+	// (#43428): it advances only when the credential owner (auth mode or the
+	// ChatGPT user/workspace pair) changes, unlike authRevision which advances
+	// on any refresh-relevant credential change.
+	authOwnerRevision       uint64
+	authChangeTracker       *auth.AuthChangeTracker
 	authChanged             chan struct{}
 	mcpEventStreams         *mcpEventStreamManager
 	skillShadowMu           sync.Mutex
@@ -493,6 +499,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		mcpStandardFormInput:    map[string]bool{},
 		mcpRuntimes:             newMCPRuntimeCoordinator(),
 		authChanged:             make(chan struct{}),
+		authChangeTracker:       auth.NewAuthChangeTracker(nil),
 		mcpEventStreams:         newMCPEventStreamManager(),
 		commandApprovals:        map[string]struct{}{},
 		fileApprovals:           map[string]struct{}{},
@@ -687,8 +694,15 @@ func (r *RuntimeRouter) noteAuthChanged() {
 	if r == nil {
 		return
 	}
+	// Track ownership separately from the monotonic revision so consumers can
+	// drop cached credentials/connections only when the account identity
+	// changes (Rust AuthChangeState, #43428). Reading the snapshot before
+	// taking authRevisionMu keeps the two locks independent.
+	snapshot := r.requireAccount().AuthSnapshot()
+	state := r.authChangeTracker.NoteAuth(snapshot)
 	r.authRevisionMu.Lock()
 	r.authRevision++
+	r.authOwnerRevision = state.OwnerGeneration
 	close(r.authChanged)
 	r.authChanged = make(chan struct{})
 	r.authRevisionMu.Unlock()
@@ -696,6 +710,18 @@ func (r *RuntimeRouter) noteAuthChanged() {
 		r.mcpRuntimes.invalidateAll()
 	}
 	r.prewarmLoadedMCPThreads()
+}
+
+// authOwnerRevisionSnapshot returns the credential-ownership revision, which
+// advances only on login, logout, or a change of user, workspace, or auth mode
+// (Rust AuthChangeState.owner_generation).
+func (r *RuntimeRouter) authOwnerRevisionSnapshot() uint64 {
+	if r == nil {
+		return 0
+	}
+	r.authRevisionMu.Lock()
+	defer r.authRevisionMu.Unlock()
+	return r.authOwnerRevision
 }
 
 func (r *RuntimeRouter) authChangedChannel() <-chan struct{} {
