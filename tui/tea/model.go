@@ -1165,6 +1165,7 @@ type Model struct {
 	pendingExternalAgentImports       map[string]bool
 	onReadRolloutPath                 RolloutPathReaderFunc
 	windowsSandboxSetupActive         bool
+	windowsSandboxSetupMode           chatwidget.WindowsSandboxMode
 	windowsSandboxSetupStatus         chatwidget.WindowsSandboxSetupStatus
 	onReadHooks                       HooksListReaderFunc
 	onWriteHookConfig                 HookConfigWriteFunc

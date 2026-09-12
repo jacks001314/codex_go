@@ -112,7 +112,7 @@ func (m *Model) applyWindowsSandboxSetupCommand(mode chatwidget.WindowsSandboxMo
 		m.refreshTranscript()
 		return nil
 	}
-	m.startWindowsSandboxSetupStatus()
+	m.startWindowsSandboxSetupStatus(mode)
 	setup := m.windowsSandboxSetup
 	cwd := strings.TrimSpace(m.sessionCWD)
 	return func() bubbletea.Msg {
@@ -125,12 +125,13 @@ func (m *Model) applyWindowsSandboxSetupCommand(mode chatwidget.WindowsSandboxMo
 	}
 }
 
-func (m *Model) startWindowsSandboxSetupStatus() {
+func (m *Model) startWindowsSandboxSetupStatus(mode chatwidget.WindowsSandboxMode) {
 	if m == nil {
 		return
 	}
 	status := chatwidget.WindowsSandboxSetupInProgressStatus()
 	m.windowsSandboxSetupActive = true
+	m.windowsSandboxSetupMode = mode
 	m.windowsSandboxSetupStatus = status
 	m.notice = status.Status
 	m.refreshTranscript()
@@ -175,14 +176,25 @@ func (m *Model) applyWindowsSandboxSetupResult(msg WindowsSandboxSetupResultMsg)
 		return
 	}
 	if msg.Outcome.Completion != nil {
+		m.windowsSandboxSetupActive = true
+		m.windowsSandboxSetupMode = msg.Mode
 		m.applyWindowsSandboxSetupCompleted(*msg.Outcome.Completion)
 		return
 	}
-	m.startWindowsSandboxSetupStatus()
+	m.startWindowsSandboxSetupStatus(msg.Mode)
 }
 
 func (m *Model) applyWindowsSandboxSetupCompleted(completion WindowsSandboxSetupCompletion) {
 	if m == nil {
+		return
+	}
+	// Rust #44945: ignore a completion notification for a different mode. The
+	// pending setup keeps its locked input and status until its own completion
+	// (or an explicit restart) arrives.
+	if m.windowsSandboxSetupActive &&
+		completion.Mode != "" &&
+		m.windowsSandboxSetupMode != "" &&
+		completion.Mode != m.windowsSandboxSetupMode {
 		return
 	}
 	m.clearWindowsSandboxSetupStatus()
@@ -204,6 +216,7 @@ func (m *Model) clearWindowsSandboxSetupStatus() {
 		return
 	}
 	m.windowsSandboxSetupActive = false
+	m.windowsSandboxSetupMode = ""
 	m.windowsSandboxSetupStatus = chatwidget.WindowsSandboxSetupClearedStatus()
 }
 

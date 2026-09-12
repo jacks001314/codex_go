@@ -5160,6 +5160,49 @@ func TestModelWindowsSandboxSetupUsesCallbackAndCompletion(t *testing.T) {
 	}
 }
 
+func TestModelWindowsSandboxSetupIgnoresCompletionForDifferentMode(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{
+		Width:  90,
+		Height: 24,
+		OnStartWindowsSandboxSetup: func(mode chatwidget.WindowsSandboxMode, cwd string) (WindowsSandboxSetupOutcome, error) {
+			// Rust #44945: a start whose completion has not arrived keeps the
+			// setup pending and input locked.
+			return WindowsSandboxSetupOutcome{Started: true}, nil
+		},
+	})
+
+	typeText(t, model, "/setup-default-sandbox")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if !model.windowsSandboxSetupActive {
+		t.Fatal("setup should stay pending until its completion arrives")
+	}
+
+	// A completion for a different mode must not clear the pending setup.
+	model.Update(WindowsSandboxSetupCompletedMsg{Completion: WindowsSandboxSetupCompletion{
+		Mode:    chatwidget.WindowsSandboxModeUnelevated,
+		Success: true,
+	}})
+	if !model.windowsSandboxSetupActive {
+		t.Fatalf("different-mode completion cleared the pending setup:\n%s", model.View())
+	}
+	if strings.Contains(model.View(), "Windows sandbox setup completed.") {
+		t.Fatalf("different-mode completion leaked a notice:\n%s", model.View())
+	}
+
+	model.Update(WindowsSandboxSetupCompletedMsg{Completion: WindowsSandboxSetupCompletion{
+		Mode:    chatwidget.WindowsSandboxModeElevated,
+		Success: true,
+	}})
+	if model.windowsSandboxSetupActive {
+		t.Fatal("matching completion should clear the pending setup")
+	}
+	if !strings.Contains(model.View(), "Windows sandbox setup completed.") {
+		t.Fatalf("completion notice missing:\n%s", model.View())
+	}
+}
+
 func TestModelWindowsSandboxStartupPromptMatchesRustFlow(t *testing.T) {
 	var calls []chatwidget.WindowsSandboxMode
 	model := NewModel(codextui.NewState(nil), Options{
