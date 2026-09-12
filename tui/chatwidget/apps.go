@@ -10,6 +10,10 @@ const AppsSelectionViewID = "connectors-selection"
 
 const AppsActionOpenLink UsageMenuAction = "apps_open_link"
 
+// AppsActionRetry re-runs the apps directory request from the failure popup
+// (Rust #43074).
+const AppsActionRetry UsageMenuAction = "apps_retry"
+
 func AppsLoadingView() SelectionView {
 	return SelectionView{
 		ViewID:      AppsSelectionViewID,
@@ -24,16 +28,30 @@ func AppsLoadingView() SelectionView {
 	}
 }
 
-func AppsErrorView(message string) SelectionView {
+// AppsRetryView is the retryable failure popup Rust shows when the app
+// directory request fails with no cached or partial list: a generic failure
+// message plus a Retry action, without exposing the raw request error
+// (Rust #43074 connectors_error_popup_params).
+func AppsRetryView() SelectionView {
 	return SelectionView{
 		ViewID:      AppsSelectionViewID,
 		Title:       "Apps",
-		Subtitle:    strings.TrimSpace(message),
+		Subtitle:    "Failed to load apps.",
+		FooterHint:  standardPopupHintLine,
 		AllowCancel: true,
-		Items: []SelectionItem{{
-			Name:            "Close",
-			DismissOnSelect: true,
-		}},
+		Items: []SelectionItem{
+			{
+				Name:        "App directory unavailable",
+				Description: "The app directory request failed. Retry, or press Esc to continue.",
+				Disabled:    true,
+			},
+			{
+				ID:          string(AppsActionRetry),
+				Name:        "Retry",
+				Description: "Reload installed and available apps.",
+				Action:      AppsActionRetry,
+			},
+		},
 	}
 }
 

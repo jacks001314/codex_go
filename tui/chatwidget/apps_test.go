@@ -98,13 +98,21 @@ func TestAppsCatalogViewPreservesRawConnectorFieldsMatchRust(t *testing.T) {
 	}
 }
 
-func TestAppsLoadingAndErrorViews(t *testing.T) {
+func TestAppsLoadingAndRetryViews(t *testing.T) {
 	loading := AppsLoadingView()
 	if loading.Title != "Apps" || loading.Subtitle != "Loading installed and available apps..." || len(loading.Items) != 1 || !loading.Items[0].Disabled {
 		t.Fatalf("loading = %+v", loading)
 	}
-	errored := AppsErrorView("Apps: failed")
-	if errored.Title != "Apps" || !strings.Contains(errored.Subtitle, "failed") || !errored.Items[0].DismissOnSelect {
-		t.Fatalf("error = %+v", errored)
+	// Rust #43074: the failure popup is generic (no raw request error) and
+	// offers a Retry action.
+	retry := AppsRetryView()
+	if retry.ViewID != AppsSelectionViewID || retry.Title != "Apps" || retry.Subtitle != "Failed to load apps." {
+		t.Fatalf("retry view = %+v", retry)
+	}
+	if len(retry.Items) != 2 || !retry.Items[0].Disabled || retry.Items[0].Name != "App directory unavailable" {
+		t.Fatalf("retry items = %+v", retry.Items)
+	}
+	if retry.Items[1].Name != "Retry" || retry.Items[1].Action != AppsActionRetry || retry.Items[1].Description != "Reload installed and available apps." {
+		t.Fatalf("retry action = %+v", retry.Items[1])
 	}
 }

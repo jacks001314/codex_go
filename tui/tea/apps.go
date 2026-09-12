@@ -45,7 +45,9 @@ func (m *Model) applyAppListResult(message AppListResultMsg) {
 		return
 	}
 	if message.Err != nil {
-		m.openSelectionViewModal(ModalKindGeneric, chatwidget.AppsErrorView("Apps: "+strings.TrimSpace(message.Err.Error())))
+		// Rust #43074: show a generic failure popup with a Retry action instead
+		// of the raw request error (which stays out of the UI).
+		m.openSelectionViewModal(ModalKindGeneric, chatwidget.AppsRetryView())
 		return
 	}
 	m.openAppsView(message.Response)
