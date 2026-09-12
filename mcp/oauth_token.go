@@ -175,6 +175,11 @@ func oauth2TokenToSet(token *oauth2.Token, options *oauthTokenSetOptions) *OAuth
 		expiresAt := token.Expiry.UnixMilli()
 		tokens.ExpiresAtMillis = &expiresAt
 	}
+	// Rust keeps the full token response, so an enterprise OIDC identity
+	// assertion (id_token) must survive the exchange for later validation.
+	if idToken, ok := token.Extra("id_token").(string); ok {
+		tokens.IDToken = strings.TrimSpace(idToken)
+	}
 	return tokens
 }
 

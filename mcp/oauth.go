@@ -23,13 +23,16 @@ const (
 )
 
 type OAuthTokenSet struct {
-	ServerName      string   `json:"server_name"`
-	ServerURL       string   `json:"server_url"`
-	ClientID        string   `json:"client_id"`
-	ClientSecret    string   `json:"client_secret,omitempty"`
-	Issuer          string   `json:"issuer,omitempty"`
-	AccessToken     string   `json:"access_token"`
-	RefreshToken    string   `json:"refresh_token,omitempty"`
+	ServerName   string `json:"server_name"`
+	ServerURL    string `json:"server_url"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret,omitempty"`
+	Issuer       string `json:"issuer,omitempty"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	// IDToken is the OIDC identity assertion returned by an enterprise IdP
+	// login (Rust #43844 keeps the full token response including `id_token`).
+	IDToken         string   `json:"id_token,omitempty"`
 	Scopes          []string `json:"scopes,omitempty"`
 	ExpiresAtMillis *int64   `json:"expires_at,omitempty"`
 }
@@ -47,6 +50,7 @@ type oauthFallbackEntry struct {
 	AccessToken     string   `json:"access_token"`
 	ExpiresAtMillis *int64   `json:"expires_at,omitempty"`
 	RefreshToken    *string  `json:"refresh_token,omitempty"`
+	IDToken         *string  `json:"id_token,omitempty"`
 	Scopes          []string `json:"scopes,omitempty"`
 	ExecutorOwned   bool     `json:"executor_owned,omitempty"`
 }
@@ -329,6 +333,9 @@ func oauthTokenSetFromFallbackEntry(entry *oauthFallbackEntry) *OAuthTokenSet {
 	if entry.RefreshToken != nil {
 		tokens.RefreshToken = *entry.RefreshToken
 	}
+	if entry.IDToken != nil {
+		tokens.IDToken = *entry.IDToken
+	}
 	return tokens
 }
 
@@ -345,6 +352,9 @@ func oauthFallbackEntryFromTokenSet(tokens *OAuthTokenSet) *oauthFallbackEntry {
 	}
 	if refresh := strings.TrimSpace(tokens.RefreshToken); refresh != "" {
 		entry.RefreshToken = &refresh
+	}
+	if idToken := strings.TrimSpace(tokens.IDToken); idToken != "" {
+		entry.IDToken = &idToken
 	}
 	if secret := strings.TrimSpace(tokens.ClientSecret); secret != "" {
 		entry.ClientSecret = &secret
