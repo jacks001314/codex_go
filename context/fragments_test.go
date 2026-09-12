@@ -218,7 +218,7 @@ func TestImageResizeNoticeRendersRustShape(t *testing.T) {
 func TestPersistentModeInstructionsLikeRust(t *testing.T) {
 	// Persistent effort + async availability -> developer fragment with the
 	// tailored approval channel.
-	frag := PersistentModeInstructions("persistent", "", true, false)
+	frag := PersistentModeInstructions("persistent", nil, true, false)
 	if frag == nil {
 		t.Fatal("persistent effort produced nil fragment")
 	}
@@ -236,27 +236,45 @@ func TestPersistentModeInstructionsLikeRust(t *testing.T) {
 		t.Fatalf("body missing async approval channel:\n%s", frag.Body())
 	}
 
-	// No async available -> no channel suffix.
-	fragNoAsync := PersistentModeInstructions("persistent", "", false, false)
-	if fragNoAsync == nil || strings.Contains(fragNoAsync.Body(), "send_user_message_async") {
+	// No async available -> the channel placeholder is replaced with an empty
+	// string (the asset's own prose may still name the async tool).
+	const channelSuffix = "proposed action via functions.send_user_message_async and obtain approval"
+	fragNoAsync := PersistentModeInstructions("persistent", nil, false, false)
+	if fragNoAsync == nil || strings.Contains(fragNoAsync.Body(), channelSuffix) ||
+		!strings.Contains(fragNoAsync.Body(), "proposed action and obtain approval") {
 		t.Fatalf("no-async body = %#v", fragNoAsync)
 	}
 
 	// Non-persistent effort -> nil.
-	if frag := PersistentModeInstructions("medium", "", true, false); frag != nil {
+	if frag := PersistentModeInstructions("medium", nil, true, false); frag != nil {
 		t.Fatalf("non-persistent produced fragment")
 	}
 
 	// Guardian session -> nil.
-	if frag := PersistentModeInstructions("persistent", "", true, true); frag != nil {
+	if frag := PersistentModeInstructions("persistent", nil, true, true); frag != nil {
 		t.Fatalf("guardian session produced fragment")
 	}
 
 	// Catalog instructions override the bundled default.
 	catalog := "Custom persistent guidance for {{ approval_request_channel }}."
-	fragCustom := PersistentModeInstructions("persistent", catalog, true, false)
+	fragCustom := PersistentModeInstructions("persistent", &catalog, true, false)
 	if !strings.Contains(fragCustom.Body(), "Custom persistent guidance for") || !strings.Contains(fragCustom.Body(), "via functions.send_user_message_async") {
 		t.Fatalf("catalog body = %#v", fragCustom.Body())
+	}
+
+	// Rust distinguishes a missing catalog value (bundled default) from an
+	// explicit empty string (section disabled), so the bundled default must not
+	// leak into the explicit-empty case.
+	empty := ""
+	fragEmpty := PersistentModeInstructions("persistent", &empty, true, false)
+	if fragEmpty == nil || strings.Contains(fragEmpty.Body(), "## Proactivity") {
+		t.Fatalf("explicit empty catalog instructions = %#v", fragEmpty)
+	}
+
+	// The bundled default is Rust's core/assets/persistent_mode.md.
+	if !strings.HasPrefix(strings.TrimSpace(persistentModeDefaultInstructions), "## Proactivity") ||
+		!strings.Contains(persistentModeDefaultInstructions, "{{ approval_request_channel }}") {
+		t.Fatalf("bundled persistent-mode default is not the Rust asset:\n%s", persistentModeDefaultInstructions)
 	}
 }
 

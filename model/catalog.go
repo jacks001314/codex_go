@@ -122,10 +122,16 @@ type ModelMessages struct {
 	MultiAgent           *MultiAgentMessages        `json:"multi_agent,omitempty"`
 	TokenBudget          *ModelTokenBudgetConfig    `json:"token_budget,omitempty"`
 	AutoReview           *AutoReviewMessages        `json:"auto_review,omitempty"`
-	Approvals            *ApprovalMessages          `json:"approval,omitempty"`
-	Permissions          *PermissionMessages        `json:"permissions,omitempty"`
-	ConfirmationPolicies *ConfirmationPolicies      `json:"confirmation_policies,omitempty"`
-	Tools                *ToolMessages              `json:"tools,omitempty"`
+	// Approvals is the catalog's `approvals` object (Rust
+	// ModelMessages::approvals); missing or null uses the built-in texts.
+	Approvals *ApprovalMessages `json:"approvals,omitempty"`
+	// PersistentInstructions is the catalog's fixed persistent-mode developer
+	// guidance (Rust ModelMessages::persistent_instructions); missing or null
+	// uses the bundled default and an explicit empty string disables it.
+	PersistentInstructions *string               `json:"persistent_instructions,omitempty"`
+	Permissions            *PermissionMessages   `json:"permissions,omitempty"`
+	ConfirmationPolicies   *ConfirmationPolicies `json:"confirmation_policies,omitempty"`
+	Tools                  *ToolMessages         `json:"tools,omitempty"`
 }
 
 type CollaborationModeMessages struct {
@@ -212,16 +218,17 @@ type ToolMessage struct {
 
 func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		InstructionsTemplate  string                     `json:"instructions_template"`
-		InstructionsVariables map[string]string          `json:"instructions_variables"`
-		CollaborationModes    *CollaborationModeMessages `json:"collaboration_modes"`
-		MultiAgent            *MultiAgentMessages        `json:"multi_agent"`
-		TokenBudget           *ModelTokenBudgetConfig    `json:"token_budget"`
-		AutoReview            *AutoReviewMessages        `json:"auto_review"`
-		Approvals             *ApprovalMessages          `json:"approval"`
-		Permissions           *PermissionMessages        `json:"permissions"`
-		ConfirmationPolicies  *ConfirmationPolicies      `json:"confirmation_policies"`
-		Tools                 *ToolMessages              `json:"tools"`
+		InstructionsTemplate   string                     `json:"instructions_template"`
+		InstructionsVariables  map[string]string          `json:"instructions_variables"`
+		CollaborationModes     *CollaborationModeMessages `json:"collaboration_modes"`
+		MultiAgent             *MultiAgentMessages        `json:"multi_agent"`
+		TokenBudget            *ModelTokenBudgetConfig    `json:"token_budget"`
+		AutoReview             *AutoReviewMessages        `json:"auto_review"`
+		Approvals              *ApprovalMessages          `json:"approvals"`
+		PersistentInstructions *string                    `json:"persistent_instructions"`
+		Permissions            *PermissionMessages        `json:"permissions"`
+		ConfirmationPolicies   *ConfirmationPolicies      `json:"confirmation_policies"`
+		Tools                  *ToolMessages              `json:"tools"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -232,6 +239,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	m.TokenBudget = raw.TokenBudget
 	m.AutoReview = raw.AutoReview
 	m.Approvals = raw.Approvals
+	m.PersistentInstructions = raw.PersistentInstructions
 	m.Permissions = raw.Permissions
 	m.ConfirmationPolicies = raw.ConfirmationPolicies
 	m.Tools = raw.Tools

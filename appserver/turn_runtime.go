@@ -274,11 +274,11 @@ func (r *RuntimeRouter) persistentModeInstructionsFragment(cfg *config.Config, p
 			}
 		}
 	}
-	catalogInstructions := ""
-	if record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, false); err == nil && record != nil {
-		if meta, ok := record.Metadata.Extra["persistent_instructions"].(string); ok {
-			catalogInstructions = meta
-		}
+	// Rust uses the model catalog's persistent_instructions (missing uses the
+	// bundled default, an explicit empty string disables the section).
+	var catalogInstructions *string
+	if modelInfo != nil && modelInfo.ModelMessages != nil {
+		catalogInstructions = modelInfo.ModelMessages.PersistentInstructions
 	}
 	return contextfrag.PersistentModeInstructions(effort, catalogInstructions, asyncAvailable, false)
 }
