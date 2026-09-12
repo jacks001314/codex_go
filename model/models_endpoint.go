@@ -2,8 +2,6 @@ package model
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"codex_go/auth"
 )
 
 const modelsEndpointETagHeader = "X-Models-ETag"
@@ -490,47 +486,6 @@ func writeModelsCache(path string, cache *modelsCache) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o600)
-}
-
-// ModelsCatalogIdentity returns the opaque provider/auth identity used to scope
-// cached model catalogs (Rust #43897/#43906). It changes when the provider,
-// account (type/email/plan), or credentials change, and is empty when no
-// identity is available so cached reuse is disabled.
-func ModelsCatalogIdentity(providerID string, authSnapshot *auth.AuthDotJSON, authHeaders *AuthHeaders) string {
-	providerID = strings.TrimSpace(providerID)
-	material := []string{providerID}
-	if authSnapshot != nil {
-		if account := auth.AccountFromAuth(authSnapshot); account != nil {
-			email := ""
-			if account.Email != nil {
-				email = strings.TrimSpace(*account.Email)
-			}
-			material = append(material, string(account.Type), string(account.PlanType), email)
-		}
-	}
-	credential := ""
-	if authHeaders != nil {
-		credential = strings.TrimSpace(authHeaders.Headers.Get("Authorization"))
-	}
-	if credential == "" && authSnapshot != nil {
-		credential = strings.TrimSpace(authSnapshot.OpenAIAPIKey)
-	}
-	if credential == "" && authSnapshot != nil {
-		credential = strings.TrimSpace(authSnapshot.PersonalAccessToken)
-	}
-	if credential == "" && authSnapshot != nil {
-		if token, ok := authSnapshot.Tokens["access_token"].(string); ok {
-			credential = strings.TrimSpace(token)
-		}
-	}
-	if credential != "" {
-		sum := sha256.Sum256([]byte(credential))
-		material = append(material, hex.EncodeToString(sum[:]))
-	}
-	if providerID == "" && credential == "" && len(material) <= 1 {
-		return ""
-	}
-	return strings.Join(material, "\x00")
 }
 
 func hasRemoteSourceOfTruthModel(models []ModelInfo) bool {

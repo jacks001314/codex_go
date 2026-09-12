@@ -207,6 +207,31 @@ func accountIDFromAgentIdentity(value any) string {
 	}
 }
 
+// ChatGPTPlanTypeRawFromAuth returns the unparsed ChatGPT plan string carried by
+// the auth snapshot (Rust `CodexAuth::get_chatgpt_plan_type_raw`). Unknown plans
+// keep their raw value so callers can tell them apart from a missing plan or
+// from a different unrecognized plan.
+func ChatGPTPlanTypeRawFromAuth(snapshot *AuthDotJSON) string {
+	if snapshot == nil {
+		return ""
+	}
+	if plan := firstNonEmptyAccount(
+		stringFromAny(snapshot.Tokens, "plan_type"),
+		stringFromAny(snapshot.Tokens, "chatgpt_plan_type"),
+		stringFromAny(snapshot.Tokens, "planType"),
+		stringFromAny(snapshot.Tokens, "chatgptPlanType"),
+	); plan != "" {
+		return strings.TrimSpace(plan)
+	}
+	for _, key := range []string{"access_token", "id_token"} {
+		claims := ChatGPTClaimsFromJWT(stringFromAny(snapshot.Tokens, key))
+		if strings.TrimSpace(claims.PlanType) != "" {
+			return strings.TrimSpace(claims.PlanType)
+		}
+	}
+	return ""
+}
+
 func accountFromAgentIdentity(value any) *Account {
 	record := agentIdentityRecordFromAny(value)
 	if record != nil {

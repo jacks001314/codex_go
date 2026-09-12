@@ -207,7 +207,7 @@ func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) Models
 	return NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: authHasChatGPTAccount(p.auth),
-		Identity:                        ModelsCatalogIdentity(p.providerID, p.auth, &authHeaders),
+		Identity:                        ModelsCatalogIdentity(&p.info, p.auth, &authHeaders),
 		SupportsAPIKeyModels:            supportsAPIKeyModels,
 		APIKeyAuth:                      apiKeyAuth,
 		CommandAuth:                     p.info.HasCommandAuth(),
