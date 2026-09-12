@@ -29,6 +29,7 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "pwd", Command: CommandPwd, Aliases: []string{"cwd"}, Description: "show the current working directory"},
 		{Name: "debug-config", Command: CommandDebugConfig, Description: "show config layers and requirements"},
 		{Name: "new", Command: CommandNew, Description: "start a new chat during a conversation"},
+		{Name: "worktree", Command: CommandWorktree, Description: "start or continue a conversation in a new worktree"},
 		{Name: "init", Command: CommandInit, Description: "create an AGENTS.md file with instructions for Codex"},
 		{Name: "compact", Command: CommandCompact, Description: "summarize conversation to prevent hitting the context limit"},
 		{Name: "clear", Command: CommandClear, Description: "clear the visible transcript"},

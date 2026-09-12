@@ -702,6 +702,7 @@ const (
 	CommandTitle            Command = "title"
 	CommandDebugConfig      Command = "debug-config"
 	CommandNew              Command = "new"
+	CommandWorktree         Command = "worktree"
 	CommandInit             Command = "init"
 	CommandCompact          Command = "compact"
 	CommandClear            Command = "clear"
@@ -805,6 +806,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandDebugConfig, Args: args, Name: name}, true
 	case "/new":
 		return &CommandInvocation{Command: CommandNew, Args: args, Name: name}, true
+	case "/worktree":
+		return &CommandInvocation{Command: CommandWorktree, Args: args, Name: name}, true
 	case "/init":
 		return &CommandInvocation{Command: CommandInit, Args: args, Name: name}, true
 	case "/compact":

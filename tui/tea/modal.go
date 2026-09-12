@@ -42,6 +42,7 @@ const (
 	ModalKindGoal            ModalKind = "goal"
 	ModalKindWindowsSandbox  ModalKind = "windows_sandbox"
 	ModalKindRunningTaskExit ModalKind = "running_task_exit"
+	ModalKindWorktree        ModalKind = "worktree"
 	ModalKindGeneric         ModalKind = "generic"
 )
 
@@ -153,6 +154,7 @@ type modalState struct {
 	externalAgentMigration *externalAgentMigrationModalState
 	hooksBrowser           *hooksBrowserModalState
 	pluginBrowser          *pluginBrowserModalState
+	worktreeBrowser        *worktreeBrowserState
 }
 
 func DefaultApprovalOptions() []ModalOption {
@@ -250,6 +252,9 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.modal.pluginBrowser != nil {
 		return m.updatePluginBrowserModal(message)
+	}
+	if m.modal.worktreeBrowser != nil {
+		return m.updateWorktreeBrowserModal(message)
 	}
 	if m.modal.customPrompt != nil {
 		return m.updateCustomPromptModal(message)
@@ -1192,6 +1197,9 @@ func (m *Model) renderModal() string {
 	}
 	if m.modal.pluginBrowser != nil {
 		return m.renderPluginBrowserModal()
+	}
+	if m.modal.worktreeBrowser != nil {
+		return m.renderWorktreeBrowserModal()
 	}
 	if m.modal.customPrompt != nil {
 		return strings.Join(m.modal.customPrompt.Rows(), "\n")

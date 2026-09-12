@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"codex_go/gitutil"
 	"codex_go/worktree"
 )
 
@@ -78,6 +80,18 @@ type WorktreeOwnerLookupFunc func(threadID string) (WorktreeOwnerLookup, bool)
 // worktreeOwnerTitleMaxChars bounds an owner title to Rust's 80-character limit
 // (79 characters plus an ellipsis).
 const worktreeOwnerTitleMaxChars = 80
+
+// ManagedWorktreeRepositoryAvailable reports whether cwd lives inside a Git
+// repository, the local prerequisite for managed-worktree operations
+// (Rust #43120 get_git_repo_root).
+func ManagedWorktreeRepositoryAvailable(cwd string) bool {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return false
+	}
+	root, err := gitutil.DiscoverGitRoot(context.Background(), cwd)
+	return err == nil && strings.TrimSpace(root) != ""
+}
 
 // ListManagedWorktreeEntries mirrors Rust worktree_browser::list: the managed
 // linked checkouts of the repository containing cwd, each carrying an owner
@@ -279,7 +293,7 @@ func WorktreeBrowserActionItems(entry WorktreeBrowserEntry, requestCWD string) [
 		Name:   "Copy working directory",
 		Action: WorktreeBrowserAction{Kind: WorktreeActionCopy, Path: entry.CWD},
 	})
-	canDelete := !worktreePathWithin(entry.Root, requestCWD)
+	canDelete := !WorktreePathWithin(entry.Root, requestCWD)
 	deleteItem := WorktreeBrowserActionItem{
 		Name:   "Delete worktree",
 		Action: WorktreeBrowserAction{Kind: WorktreeActionRemove, Path: entry.Root},
@@ -313,7 +327,7 @@ func RemoveManagedWorktree(settings worktree.WorktreeSettings, sourceCWD string,
 
 // worktreePathWithin reports whether child is root or inside root, using the
 // same component-wise semantics as Rust's Path::starts_with.
-func worktreePathWithin(root string, child string) bool {
+func WorktreePathWithin(root string, child string) bool {
 	root = filepath.Clean(strings.TrimSpace(root))
 	child = filepath.Clean(strings.TrimSpace(child))
 	if root == "" || child == "" {

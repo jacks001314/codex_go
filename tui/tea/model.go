@@ -41,6 +41,7 @@ import (
 	streamingpkg "codex_go/tui/streaming"
 	"codex_go/tui/styles"
 	"codex_go/voicehost"
+	"codex_go/worktree"
 )
 
 const (
@@ -122,6 +123,11 @@ type SessionActionFunc func(selection codextui.SessionSelection) (*codextui.Sess
 type WorkingDirectoryChangeFunc func(threadID string, cwd string) (*codextui.SessionSummary, error)
 
 type SessionResumeFunc func(selection codextui.SessionSelection) (SessionResumeResponse, error)
+
+// StartManagedWorktreeFunc creates a managed checkout for the active session
+// and returns the conversation now attached to it (Rust #43120). Mode is "new"
+// (fresh conversation) or "fork" (continue the current conversation).
+type StartManagedWorktreeFunc func(mode string, name string, cwd string, threadID string) (SessionResumeResponse, error)
 
 type ThreadRenameFunc func(threadID string, name string) error
 
@@ -804,7 +810,21 @@ type Options struct {
 	// QuestionEscBack is the configured `tui.question_esc_back` value (Rust
 	// #42889): Escape returns from an async question to the composer while
 	// preserving the answer draft. Nil defaults to enabled.
-	QuestionEscBack             *bool
+	QuestionEscBack *bool
+	// Managed worktree support (Rust #43120/#43286). WorktreesEnabled and
+	// LocalWorktreeOperations gate the `/worktree` command;
+	// WorktreeRepositoryAvailable overrides the Git-repository check;
+	// OnWorktreeOwnerLookup resolves a worktree owner thread summary;
+	// OnStartManagedWorktree creates the checkout and returns the attached
+	// session; OnManagedWorktreeChanged refreshes session discovery after a
+	// deletion.
+	WorktreesEnabled            bool
+	LocalWorktreeOperations     bool
+	WorktreeSettings            worktree.WorktreeSettings
+	WorktreeRepositoryAvailable func(cwd string) bool
+	OnWorktreeOwnerLookup       func(threadID string) (codextui.WorktreeOwnerLookup, bool)
+	OnStartManagedWorktree      StartManagedWorktreeFunc
+	OnManagedWorktreeChanged    func()
 	OnReadDebugConfig           DebugConfigReaderFunc
 	OnReadGoal                  GoalReaderFunc
 	OnSetGoal                   GoalSetterFunc
@@ -1151,14 +1171,23 @@ type Model struct {
 	// new-prompt question clearing (#44328) does not drop the remaining
 	// questions.
 	asyncQuestionAnswerInFlight bool
-	agentsOverviewEmbedded      bool
-	onAgentsOverviewRefresh     AgentsOverviewRefreshFunc
-	onAgentsOverviewDispatch    AgentsOverviewDispatchFunc
-	onAgentsOverviewStop        AgentsOverviewStopFunc
-	onAgentsOverviewRename      AgentsOverviewRenameFunc
-	onAgentsOverviewArchive     AgentsOverviewArchiveFunc
-	onAgentsOverviewDelete      AgentsOverviewDeleteFunc
-	agentsOverviewLifecycle     *agentsOverviewLifecycleRequest
+	// Managed worktree support (Rust #43120/#43286).
+	worktreesEnabled         bool
+	localWorktreeOperations  bool
+	worktreeSettings         worktree.WorktreeSettings
+	worktreeRepoCheck        func(cwd string) bool
+	onWorktreeOwnerLookup    func(threadID string) (codextui.WorktreeOwnerLookup, bool)
+	onStartManagedWorktree   func(mode string, name string, cwd string, threadID string) (SessionResumeResponse, error)
+	onManagedWorktreeChanged func()
+	worktreePopupRequestID   string
+	agentsOverviewEmbedded   bool
+	onAgentsOverviewRefresh  AgentsOverviewRefreshFunc
+	onAgentsOverviewDispatch AgentsOverviewDispatchFunc
+	onAgentsOverviewStop     AgentsOverviewStopFunc
+	onAgentsOverviewRename   AgentsOverviewRenameFunc
+	onAgentsOverviewArchive  AgentsOverviewArchiveFunc
+	onAgentsOverviewDelete   AgentsOverviewDeleteFunc
+	agentsOverviewLifecycle  *agentsOverviewLifecycleRequest
 	// agentsOverviewLifecycleProgress is non-empty while an archive/delete RPC
 	// runs; navigation and task switching are blocked during that window
 	// (Rust #44433).
@@ -1457,6 +1486,13 @@ func NewModel(state *codextui.State, options Options) *Model {
 		statusLineUseColors:             options.StatusLineUseColors == nil || *options.StatusLineUseColors,
 		questionEscBack:                 options.QuestionEscBack == nil || *options.QuestionEscBack,
 		asyncQuestions:                  *bottompane.NewAsyncQuestions(),
+		worktreesEnabled:                options.WorktreesEnabled,
+		localWorktreeOperations:         options.LocalWorktreeOperations,
+		worktreeSettings:                options.WorktreeSettings,
+		worktreeRepoCheck:               options.WorktreeRepositoryAvailable,
+		onWorktreeOwnerLookup:           options.OnWorktreeOwnerLookup,
+		onStartManagedWorktree:          options.OnStartManagedWorktree,
+		onManagedWorktreeChanged:        options.OnManagedWorktreeChanged,
 		agentsOverviewEmbedded:          options.AgentsOverviewEmbedded,
 		onAgentsOverviewRefresh:         options.OnAgentsOverviewRefresh,
 		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,
@@ -1862,6 +1898,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, voiceMeterTickCmd()
 	case asyncQuestionCountdownMsg:
 		return m, m.asyncQuestionCountdownCmd()
+	case WorktreeBrowserLoadedMsg:
+		return m, m.applyWorktreeBrowserLoaded(msg)
+	case WorktreeBrowserRemovedMsg:
+		m.applyWorktreeBrowserRemoved(msg)
+		return m, nil
 	case HookRunMsg:
 		m.applyHookRun(msg)
 		return m, nil
@@ -5221,6 +5262,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return m.applyDebugConfigCommand()
 	case codextui.CommandNew:
 		m.startFreshNamedSession(invocation.Args, "Started a new local thread.")
+	case codextui.CommandWorktree:
+		return m.applyWorktreeCommand(invocation.Args)
 	case codextui.CommandInit:
 		return m.submitRequest(SubmitRequest{Prompt: initCommandPrompt()}, false)
 	case codextui.CommandCompact:

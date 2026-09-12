@@ -47,6 +47,8 @@ import (
 	idecontext "codex_go/tui/ide_context"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
+	"codex_go/worktree"
+	"github.com/google/uuid"
 )
 
 const remoteAddressUsage = "expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
@@ -95,6 +97,120 @@ func interactiveExternalEditorDirectoryHandler(root *cli.RootOptions, codexHome 
 // (#38894): fork the current local thread at the new cwd (preserving
 // conversation history), patch the fork's cwd, archive the old thread, and
 // return the replacement session summary for the TUI to attach.
+// interactiveWorktreeSettings resolves the managed-worktree configuration for
+// the local session: the `worktrees` feature flag plus the desktop worktree
+// pool settings (Rust #43120).
+func interactiveWorktreeSettings(root *cli.RootOptions) (worktree.WorktreeSettings, bool) {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil {
+		return worktree.WorktreeSettings{}, false
+	}
+	if !features.Enabled(loaded.FeatureSettings(), "worktrees") {
+		return worktree.WorktreeSettings{}, false
+	}
+	desktop, _ := loaded.Values["desktop"].(map[string]any)
+	settings, err := worktree.FromDesktopConfig(auth.DefaultCodexHome(), desktop)
+	if err != nil {
+		return worktree.WorktreeSettings{}, false
+	}
+	return settings, true
+}
+
+// interactiveWorktreeOwnerLookup resolves a managed worktree's recorded owner
+// thread to the metadata the browser displays.
+func interactiveWorktreeOwnerLookup(threadID string) (codextui.WorktreeOwnerLookup, bool) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return codextui.WorktreeOwnerLookup{}, false
+	}
+	store := newSessionStore()
+	record, err := store.Read(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return codextui.WorktreeOwnerLookup{}, false
+	}
+	summary := firstSessionSummary(store, record)
+	if summary == nil {
+		return codextui.WorktreeOwnerLookup{}, false
+	}
+	return codextui.WorktreeOwnerLookup{
+		ID:        summary.ThreadID,
+		Name:      summary.Title,
+		Preview:   summary.Preview,
+		UpdatedAt: summary.UpdatedAt.Unix(),
+		Archived:  summary.Archived,
+	}, true
+}
+
+// interactiveStartManagedWorktreeHandler creates a managed checkout and opens
+// the requested conversation inside it, binding the created thread to the
+// worktree so the browser can offer it later (Rust #43120).
+func interactiveStartManagedWorktreeHandler(settings worktree.WorktreeSettings) codextea.StartManagedWorktreeFunc {
+	return func(mode string, name string, cwd string, threadID string) (codextea.SessionResumeResponse, error) {
+		cwd = strings.TrimSpace(cwd)
+		threadID = strings.TrimSpace(threadID)
+		if cwd == "" {
+			return codextea.SessionResumeResponse{}, errors.New("managed worktrees require a working directory")
+		}
+		manager := worktree.NewWorktreeManager(settings)
+		created, err := manager.Create(cwd, "")
+		if err != nil {
+			return codextea.SessionResumeResponse{}, err
+		}
+		store := newSessionStore()
+		var record *session.Record
+		if mode == "new" {
+			record, err = createManagedWorktreeSession(store, created.CWD, name)
+		} else {
+			if threadID == "" {
+				_ = manager.Remove(created.Root)
+				return codextea.SessionResumeResponse{}, errors.New("continuing a conversation requires a thread id")
+			}
+			record, err = store.Fork(session.ThreadID(threadID), session.ForkOptions{Mode: session.ForkAll})
+			if err == nil {
+				worktreeCWD := created.CWD
+				record, err = store.UpdateMetadata(record.ID, &session.MetadataPatch{CWD: &worktreeCWD}, false)
+			}
+		}
+		if err != nil {
+			_ = manager.Remove(created.Root)
+			return codextea.SessionResumeResponse{}, err
+		}
+		if err := manager.BindThread(created.Root, string(record.ID)); err != nil {
+			_ = manager.Remove(created.Root)
+			return codextea.SessionResumeResponse{}, err
+		}
+		return codextea.SessionResumeResponse{
+			Summary:  firstSessionSummary(store, record),
+			Messages: interactiveSessionMessagesFromRecord(record),
+			Status:   "idle",
+		}, nil
+	}
+}
+
+// createManagedWorktreeSession starts a fresh thread rooted at the created
+// checkout.
+func createManagedWorktreeSession(store *session.Store, cwd string, name string) (*session.Record, error) {
+	now := time.Now().UTC()
+	threadID, err := uuid.NewV7()
+	if err != nil {
+		threadID = uuid.New()
+	}
+	record := &session.Record{
+		ID:        session.ThreadID(threadID.String()),
+		Title:     strings.TrimSpace(name),
+		CreatedAt: now,
+		UpdatedAt: now,
+		Metadata: session.Metadata{
+			CWD:    strings.TrimSpace(cwd),
+			Source: "cli",
+		},
+	}
+	if err := store.Create(record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
 func interactiveWorkingDirectoryChangeHandler(root *cli.RootOptions) codextea.WorkingDirectoryChangeFunc {
 	return func(threadID string, cwd string) (*codextui.SessionSummary, error) {
 		store := newSessionStore()
@@ -735,11 +851,17 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	interrupts := newInteractiveInterruptController()
 	readGoal, setGoal, clearGoal, editGoalText, materializeGoalDraft := interactiveLocalGoalCallbacks(nil)
 	readAgents, switchAgent := interactiveLocalAgentCallbacks(nil)
+	worktreeSettings, worktreeEnabled := interactiveWorktreeSettings(root)
 	options := codextea.Options{
 		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
 		LocalSession:                true,
 		AnimationsEnabled:           settings.AnimationsEnabled,
 		QuestionEscBack:             settings.QuestionEscBack,
+		LocalWorktreeOperations:     true,
+		WorktreesEnabled:            worktreeEnabled,
+		WorktreeSettings:            worktreeSettings,
+		OnWorktreeOwnerLookup:       interactiveWorktreeOwnerLookup,
+		OnStartManagedWorktree:      interactiveStartManagedWorktreeHandler(worktreeSettings),
 		SessionPickerItems:          interactiveSessionPickerItems(root),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,

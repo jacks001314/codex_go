@@ -361,11 +361,14 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 	})
 	options := codextea.Options{
-		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
-		LocalDaemonSession:          interactiveRemoteEndpointIsLocal(endpoint),
-		LocalSession:                interactiveRemoteEndpointIsLocal(endpoint),
-		AnimationsEnabled:           settings.AnimationsEnabled,
-		QuestionEscBack:             settings.QuestionEscBack,
+		NoAltScreen:        root != nil && root.Shared.NoAltScreen,
+		LocalDaemonSession: interactiveRemoteEndpointIsLocal(endpoint),
+		LocalSession:       interactiveRemoteEndpointIsLocal(endpoint),
+		AnimationsEnabled:  settings.AnimationsEnabled,
+		QuestionEscBack:    settings.QuestionEscBack,
+		// Remote sessions only see the worktrees feature flag; managed worktree
+		// operations stay local (Rust #43120/#43286).
+		WorktreesEnabled:            interactiveRemoteWorktreesEnabled(root),
 		SessionPickerItems:          interactiveRemoteSessionPickerItems(ctx, root, endpoint),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
@@ -3873,6 +3876,17 @@ func remoteTurnSteerParams(threadID string, turnID string, clientID string, requ
 		Input:               inputs,
 		ClientUserMessageID: strings.TrimSpace(clientID),
 	}, nil
+}
+
+// interactiveRemoteWorktreesEnabled reports whether the `worktrees` feature is
+// enabled for a remote session. Managed worktree operations stay local, so only
+// the flag itself reaches the remote TUI (Rust #43120/#43286).
+func interactiveRemoteWorktreesEnabled(root *cli.RootOptions) bool {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil {
+		return false
+	}
+	return features.Enabled(loaded.FeatureSettings(), "worktrees")
 }
 
 func remoteSharedOptions(root *cli.RootOptions, state *codextui.State) cli.SharedOptions {

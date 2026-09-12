@@ -430,6 +430,7 @@ func CommandAvailableDuringTask(command codextui.Command) bool {
 		codextui.CommandArchive,
 		codextui.CommandDelete,
 		codextui.CommandFork,
+		codextui.CommandWorktree,
 		codextui.CommandInit,
 		codextui.CommandCompact,
 		codextui.CommandKeymap,
