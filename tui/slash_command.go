@@ -65,7 +65,6 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "app", Command: CommandApp, Description: "continue this session in Codex Desktop"},
 		{Name: "import", Command: CommandImport, Description: "import setup, this project, and recent chats from Claude Code"},
 		{Name: "setup-default-sandbox", Command: CommandElevateSandbox, Description: "set up elevated agent sandbox"},
-		{Name: "sandbox-add-read-dir", Command: CommandSandboxReadRoot, Description: "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"},
 		{Name: "rollout", Command: CommandRollout, Description: "print the rollout file path"},
 		{Name: "voice", Command: CommandVoice, Description: "start or stop a voice conversation; /voice mute toggles the microphone"},
 		{Name: "test-approval", Command: CommandTestApproval, Description: "debug approval flow"},

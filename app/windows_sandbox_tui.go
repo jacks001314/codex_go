@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -214,60 +213,6 @@ func interactiveRunWindowsSandboxSetup(router *appserver.RuntimeRouter, mode cha
 			Error:   strings.TrimSpace(stringPtrValue(result.Error)),
 		},
 	}, nil
-}
-
-func interactiveSandboxReadDirHandler(root *cli.RootOptions) codextea.SandboxReadDirFunc {
-	if runtime.GOOS != "windows" {
-		return nil
-	}
-	return func(path string) (string, error) {
-		cwd := interactiveSessionPickerCWD(root)
-		if strings.TrimSpace(cwd) == "" {
-			var err error
-			cwd, err = os.Getwd()
-			if err != nil {
-				return "", err
-			}
-		}
-		absoluteCWD, err := filepath.Abs(cwd)
-		if err != nil {
-			return "", err
-		}
-		absoluteCWD = filepath.Clean(absoluteCWD)
-		codexHome := auth.DefaultCodexHome()
-		loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
-		if err != nil {
-			return "", err
-		}
-		resolved, err := loaded.ResolveSandboxPermissionProfile("", absoluteCWD)
-		if err != nil {
-			return "", err
-		}
-		if resolved == nil || resolved.Profile == nil {
-			profile := sandbox.WorkspaceWritePermissionProfile()
-			resolved = &config.SandboxPermissionProfileResolution{Profile: &profile}
-		}
-		workspaceRoots := append([]string(nil), resolved.WorkspaceRoots...)
-		if len(workspaceRoots) == 0 {
-			workspaceRoots = []string{absoluteCWD}
-		}
-		return windowssandbox.GrantReadRootNonElevated(&windowssandbox.ReadRootGrantRequest{
-			PermissionProfile: resolved.Profile,
-			WorkspaceRoots:    workspaceRoots,
-			CommandCWD:        absoluteCWD,
-			Env:               environmentMapFromEnviron(os.Environ()),
-			CodexHome:         codexHome,
-		}, path)
-	}
-}
-
-func interactiveRemoteSandboxReadDirHandler(root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.SandboxReadDirFunc {
-	if !interactiveRemoteEndpointIsLocal(endpoint) {
-		return func(string) (string, error) {
-			return "", errors.New("sandbox read access cannot be changed through a remote app-server connection")
-		}
-	}
-	return interactiveSandboxReadDirHandler(root)
 }
 
 func interactiveRemoteEndpointIsLocal(endpoint *appserverdaemon.RemoteAppServerEndpoint) bool {

@@ -219,22 +219,3 @@ func (m *Model) clearWindowsSandboxSetupStatus() {
 	m.windowsSandboxSetupMode = ""
 	m.windowsSandboxSetupStatus = chatwidget.WindowsSandboxSetupClearedStatus()
 }
-
-func (m *Model) applySandboxReadDirResult(result SandboxReadDirResultMsg) {
-	if m == nil {
-		return
-	}
-	if result.Err != nil {
-		m.notice = "Error: " + result.Err.Error()
-		m.addErrorHistoryMessage(m.notice)
-		m.refreshTranscript()
-		return
-	}
-	path := strings.TrimSpace(result.CanonicalPath)
-	if path == "" {
-		path = strings.TrimSpace(result.RequestedPath)
-	}
-	m.notice = "Sandbox read access granted for " + path
-	m.addInfoHistoryMessage(m.notice)
-	m.refreshTranscript()
-}

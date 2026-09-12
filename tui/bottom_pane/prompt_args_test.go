@@ -12,7 +12,6 @@ func TestParseSlashNameMatchesRust(t *testing.T) {
 	}{
 		{line: "/model gpt-5 high", name: "model", rest: "gpt-5 high", restOffset: 7, ok: true},
 		{line: "/clear", name: "clear", rest: "", restOffset: 6, ok: true},
-		{line: "/sandbox-add-read-dir   C:/tmp", name: "sandbox-add-read-dir", rest: "C:/tmp", restOffset: 24, ok: true},
 		{line: "/", ok: false},
 		{line: "model", ok: false},
 	}

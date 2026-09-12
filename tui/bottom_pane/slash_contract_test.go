@@ -10,7 +10,7 @@ import (
 func TestRustSlashCommandOrderBaseline20260728(t *testing.T) {
 	want := []string{
 		"model", "ide", "permissions", "keymap", "vim", "setup-default-sandbox",
-		"sandbox-add-read-dir", "experimental", "approve", "memories", "skills",
+		"experimental", "approve", "memories", "skills",
 		"import", "hooks", "review", "rename", "new", "archive", "delete", "resume",
 		"fork", "app", "init", "compact", "plan", "goal", "agent", "side", "btw",
 		"copy", "raw", "diff", "mention", "status", "usage", "debug-config", "title",
@@ -81,7 +81,6 @@ func TestRustSlashInlineArgContractIsExhaustive(t *testing.T) {
 		codextui.CommandPets:            true,
 		codextui.CommandSide:            true,
 		codextui.CommandResume:          true,
-		codextui.CommandSandboxReadRoot: true,
 	}
 	flags := BuiltinCommandFlags{
 		CollaborationModesEnabled:   true,

@@ -706,7 +706,6 @@ func commandAvailableDuringTask(command codextui.Command) bool {
 		codextui.CommandKeymap,
 		codextui.CommandVim,
 		codextui.CommandElevateSandbox,
-		codextui.CommandSandboxReadRoot,
 		codextui.CommandExperimental,
 		codextui.CommandMemories,
 		codextui.CommandImport,

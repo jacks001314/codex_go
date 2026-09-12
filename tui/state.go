@@ -671,7 +671,6 @@ func (s *State) RenderHelp() string {
 		"  /memories             configure memory use and generation",
 		"  /feedback             send logs to maintainers",
 		"  /setup-default-sandbox set up elevated agent sandbox",
-		"  /sandbox-add-read-dir PATH let the sandbox read a directory",
 		"  /resume               choose a previous session to resume",
 		"  /fork                 choose a previous session to fork",
 		"  /archive              archive a previous session",
@@ -739,7 +738,6 @@ const (
 	CommandApp              Command = "app"
 	CommandImport           Command = "import"
 	CommandElevateSandbox   Command = "setup-default-sandbox"
-	CommandSandboxReadRoot  Command = "sandbox-add-read-dir"
 	CommandRollout          Command = "rollout"
 	CommandVoice            Command = "voice"
 	CommandTestApproval     Command = "test-approval"
@@ -879,8 +877,6 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandImport, Args: args, Name: name}, true
 	case "/setup-default-sandbox":
 		return &CommandInvocation{Command: CommandElevateSandbox, Args: args, Name: name}, true
-	case "/sandbox-add-read-dir":
-		return &CommandInvocation{Command: CommandSandboxReadRoot, Args: args, Name: name}, true
 	case "/rollout":
 		return &CommandInvocation{Command: CommandRollout, Args: args, Name: name}, true
 	case "/voice":

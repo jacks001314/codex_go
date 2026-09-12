@@ -87,8 +87,7 @@ func (i SlashCommandItem) SupportsInlineArgs() bool {
 		codextui.CommandUsage,
 		codextui.CommandPets,
 		codextui.CommandSide,
-		codextui.CommandResume,
-		codextui.CommandSandboxReadRoot:
+		codextui.CommandResume:
 		return true
 	default:
 		return false
@@ -116,7 +115,6 @@ func (i SlashCommandItem) AvailableDuringTask() bool {
 		codextui.CommandKeymap,
 		codextui.CommandVim,
 		codextui.CommandElevateSandbox,
-		codextui.CommandSandboxReadRoot,
 		codextui.CommandExperimental,
 		codextui.CommandMemories,
 		codextui.CommandImport,
@@ -278,10 +276,6 @@ func appendBuiltinFrameIfAvailable(out []SlashCommandItem, frame codextui.SlashC
 
 func builtinFrameAvailable(frame codextui.SlashCommandFrame, flags BuiltinCommandFlags) bool {
 	switch frame.Command {
-	case codextui.CommandSandboxReadRoot:
-		if runtime.GOOS != "windows" {
-			return false
-		}
 	case codextui.CommandApp:
 		if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
 			return false
@@ -392,7 +386,6 @@ var rustSlashCommandOrder = []string{
 	"keymap",
 	"vim",
 	"setup-default-sandbox",
-	"sandbox-add-read-dir",
 	"experimental",
 	"approve",
 	"memories",
@@ -449,7 +442,6 @@ var rustSlashCommandDescriptions = map[string]string{
 	"keymap":                "remap TUI shortcuts",
 	"vim":                   "toggle Vim mode for the composer",
 	"setup-default-sandbox": "set up elevated agent sandbox",
-	"sandbox-add-read-dir":  "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>",
 	"experimental":          "toggle experimental features",
 	"approve":               "approve one retry of a recent auto-review denial",
 	"memories":              "configure memory use and generation",

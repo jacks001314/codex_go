@@ -78,7 +78,7 @@ func TestQueuedSlashPromptBareCommandServiceTierUnknownAndSubmitMatchRust(t *tes
 }
 
 func TestSlashCommandCapabilityTablesMatchRust(t *testing.T) {
-	for _, command := range []codextui.Command{codextui.CommandReview, codextui.CommandRename, codextui.CommandNew, codextui.CommandClear, codextui.CommandPlan, codextui.CommandGoal, codextui.CommandIde, codextui.CommandKeymap, codextui.CommandMcp, codextui.CommandRaw, codextui.CommandUsage, codextui.CommandPets, codextui.CommandSide, codextui.CommandResume, codextui.CommandSandboxReadRoot} {
+	for _, command := range []codextui.Command{codextui.CommandReview, codextui.CommandRename, codextui.CommandNew, codextui.CommandClear, codextui.CommandPlan, codextui.CommandGoal, codextui.CommandIde, codextui.CommandKeymap, codextui.CommandMcp, codextui.CommandRaw, codextui.CommandUsage, codextui.CommandPets, codextui.CommandSide, codextui.CommandResume} {
 		if !CommandSupportsInlineArgs(command) {
 			t.Fatalf("%s should support inline args", command)
 		}
@@ -290,10 +290,6 @@ func TestPreparedSlashArgsMiscInlineBranchesMatchRust(t *testing.T) {
 	resume := DispatchPreparedSlashArgs(PreparedSlashArgsContext{Command: codextui.CommandResume, Args: "thread name"})
 	if resume.Action != PreparedSlashArgsResumeSession {
 		t.Fatalf("resume = %#v", resume)
-	}
-	sandbox := DispatchPreparedSlashArgs(PreparedSlashArgsContext{Command: codextui.CommandSandboxReadRoot, Args: `D:\data`})
-	if sandbox.Action != PreparedSlashArgsSandboxReadRoot || sandbox.Args != `D:\data` {
-		t.Fatalf("sandbox = %#v", sandbox)
 	}
 	pet := DispatchPreparedSlashArgs(PreparedSlashArgsContext{Command: codextui.CommandPets, Args: "off"})
 	if pet.Action != PreparedSlashArgsPetDisabled {

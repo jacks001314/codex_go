@@ -2170,16 +2170,12 @@ func TestInteractiveWindowsSandboxStartupPromptUsesEffectiveConfig(t *testing.T)
 	}
 }
 
-func TestInteractiveRemoteSandboxReadDirRejectsNonLocalEndpoint(t *testing.T) {
-	handler := interactiveRemoteSandboxReadDirHandler(&cli.RootOptions{}, appserverdaemon.NewWebSocketEndpoint("wss://example.com/rpc", nil))
-	if handler == nil {
-		t.Fatal("remote handler is nil")
-	}
-	if _, err := handler(`D:\data`); err == nil || !strings.Contains(err.Error(), "remote app-server") {
-		t.Fatalf("remote handler error = %v", err)
-	}
+func TestInteractiveRemoteEndpointIsLocalClassifiesLoopback(t *testing.T) {
 	if !interactiveRemoteEndpointIsLocal(appserverdaemon.NewWebSocketEndpoint("ws://127.0.0.1:4500/rpc", nil)) {
 		t.Fatal("loopback endpoint was not considered local")
+	}
+	if interactiveRemoteEndpointIsLocal(appserverdaemon.NewWebSocketEndpoint("wss://example.com/rpc", nil)) {
+		t.Fatal("remote endpoint was considered local")
 	}
 }
 

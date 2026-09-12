@@ -229,7 +229,6 @@ type AutoReviewDenialApproveFunc func(threadID string, entry chatwidget.AutoRevi
 
 type WindowsSandboxSetupFunc func(mode chatwidget.WindowsSandboxMode, cwd string) (WindowsSandboxSetupOutcome, error)
 type DesktopThreadOpenFunc func(threadID string) error
-type SandboxReadDirFunc func(path string) (canonicalPath string, err error)
 type ExternalAgentDetectFunc func(cwd string, migrationSource string) (config.ExternalAgentConfigDetectResponse, error)
 type ExternalAgentImportCompletion struct {
 	Completed config.ExternalAgentConfigImportCompletedNotification
@@ -527,12 +526,6 @@ type WindowsSandboxSetupResultMsg struct {
 	Err     error
 }
 
-type SandboxReadDirResultMsg struct {
-	RequestedPath string
-	CanonicalPath string
-	Err           error
-}
-
 type MemoryResetResultMsg struct {
 	Err error
 }
@@ -793,7 +786,6 @@ type Options struct {
 	OnStartWindowsSandboxSetup  WindowsSandboxSetupFunc
 	WindowsSandboxStartupPrompt *WindowsSandboxStartupPrompt
 	OnOpenDesktopThread         DesktopThreadOpenFunc
-	OnSandboxReadDir            SandboxReadDirFunc
 	OnDetectExternalAgent       ExternalAgentDetectFunc
 	OnImportExternalAgent       ExternalAgentImportFunc
 	OnReadRolloutPath           RolloutPathReaderFunc
@@ -1172,7 +1164,6 @@ type Model struct {
 	windowsSandboxSetup               WindowsSandboxSetupFunc
 	windowsSandboxSetupChoiceRequired bool
 	onOpenDesktopThread               DesktopThreadOpenFunc
-	onSandboxReadDir                  SandboxReadDirFunc
 	appsScopeGeneration               uint64
 	onDetectExternalAgent             ExternalAgentDetectFunc
 	onImportExternalAgent             ExternalAgentImportFunc
@@ -1457,7 +1448,6 @@ func NewModel(state *codextui.State, options Options) *Model {
 		feedbackEnabled:                 boolPtrValueTeaDefault(options.FeedbackEnabled, true),
 		windowsSandboxSetup:             options.OnStartWindowsSandboxSetup,
 		onOpenDesktopThread:             options.OnOpenDesktopThread,
-		onSandboxReadDir:                options.OnSandboxReadDir,
 		onDetectExternalAgent:           options.OnDetectExternalAgent,
 		onImportExternalAgent:           options.OnImportExternalAgent,
 		pendingExternalAgentImports:     map[string]bool{},
@@ -1877,9 +1867,6 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case WindowsSandboxSetupCompletedMsg:
 		m.applyWindowsSandboxSetupCompleted(msg.Completion)
-		return m, nil
-	case SandboxReadDirResultMsg:
-		m.applySandboxReadDirResult(msg)
 		return m, nil
 	case HooksListResultMsg:
 		m.applyHooksListResult(msg)
@@ -5095,24 +5082,6 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return m.applyExternalAgentImportCommand()
 	case codextui.CommandElevateSandbox:
 		return m.applyWindowsSandboxSetupCommand(chatwidget.WindowsSandboxModeElevated)
-	case codextui.CommandSandboxReadRoot:
-		path := strings.TrimSpace(invocation.Args)
-		if path == "" {
-			m.notice = "Usage: /sandbox-add-read-dir <absolute-directory-path>"
-			m.addErrorHistoryMessage(m.notice)
-		} else if m.onSandboxReadDir == nil {
-			m.notice = "Sandbox read directory request is unavailable in this runtime."
-			m.addErrorHistoryMessage(m.notice)
-		} else {
-			m.notice = "Granting sandbox read access to " + path + " ..."
-			m.addInfoHistoryMessage(m.notice)
-			grant := m.onSandboxReadDir
-			m.refreshTranscript()
-			return func() bubbletea.Msg {
-				canonicalPath, err := grant(path)
-				return SandboxReadDirResultMsg{RequestedPath: path, CanonicalPath: canonicalPath, Err: err}
-			}
-		}
 	case codextui.CommandRollout:
 		path := ""
 		if m.onReadRolloutPath != nil {

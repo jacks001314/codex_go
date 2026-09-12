@@ -503,7 +503,6 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			}
 			return *thread.Path, nil
 		},
-		OnSandboxReadDir:      interactiveRemoteSandboxReadDirHandler(root, endpoint),
 		OnDetectExternalAgent: interactiveRemoteExternalAgentDetectHandler(endpoint),
 		OnReadHooks: func(cwd string) (appserver.HookListResponse, error) {
 			hooksCWD := strings.TrimSpace(cwd)

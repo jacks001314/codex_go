@@ -5844,15 +5844,13 @@ func TestModelRuntimeBackedSlashCommands(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{CWD: `D:\repo`})
 	state.SetThreadID("thread-runtime")
 	opened := ""
-	granted := ""
 	model := NewModel(state, Options{
 		OnOpenDesktopThread: func(threadID string) error { opened = threadID; return nil },
 		OnReadRolloutPath:   func(threadID string) (string, error) { return `D:\rollouts\thread-runtime.jsonl`, nil },
-		OnSandboxReadDir:    func(path string) (string, error) { granted = path; return `D:\canonical-data`, nil },
 		FeatureSettings:     map[string]bool{"memories": true, "memory_generation": false},
 	})
 
-	for _, command := range []string{"/app", "/rollout", `/sandbox-add-read-dir D:\data`, "/memories"} {
+	for _, command := range []string{"/app", "/rollout", "/memories"} {
 		invocation, ok := codextui.ParseCommand(command)
 		if !ok {
 			t.Fatalf("ParseCommand(%q) failed", command)
@@ -5869,23 +5867,8 @@ func TestModelRuntimeBackedSlashCommands(t *testing.T) {
 	if !rolloutHistoryFound {
 		t.Fatalf("/rollout did not add a Rust-style info history event: %#v", state.Messages)
 	}
-	sandboxStartFound := false
-	sandboxCompletedFound := false
-	for _, message := range state.Messages {
-		if message.Role != codextui.RoleHistory {
-			continue
-		}
-		sandboxStartFound = sandboxStartFound || strings.Contains(message.RawText, `Granting sandbox read access to D:\data ...`)
-		sandboxCompletedFound = sandboxCompletedFound || strings.Contains(message.RawText, `Sandbox read access granted for D:\canonical-data`)
-	}
-	if !sandboxStartFound || !sandboxCompletedFound {
-		t.Fatalf("sandbox read-root history start=%v completed=%v messages=%#v", sandboxStartFound, sandboxCompletedFound, state.Messages)
-	}
 	if opened != "thread-runtime" {
 		t.Fatalf("opened thread = %q", opened)
-	}
-	if granted != `D:\data` {
-		t.Fatalf("granted path = %q", granted)
 	}
 	if model.modal == nil || model.modal.kind != ModalKindMemories {
 		t.Fatalf("memories modal = %#v", model.modal)
@@ -6057,45 +6040,6 @@ func TestModelExternalAgentImportChoosesBetweenDetectedSources(t *testing.T) {
 	runTeaCmd(t, model, cmd)
 	if importedSource != "cursor" {
 		t.Fatalf("imported source = %q", importedSource)
-	}
-}
-
-func TestModelSandboxReadDirUsageAndFailureMatchRustHistory(t *testing.T) {
-	state := codextui.NewState(nil)
-	model := NewModel(state, Options{
-		OnSandboxReadDir: func(path string) (string, error) {
-			return "", errors.New("access denied")
-		},
-	})
-
-	usage, ok := codextui.ParseCommand("/sandbox-add-read-dir")
-	if !ok {
-		t.Fatal("ParseCommand usage failed")
-	}
-	runTeaCmd(t, model, model.applyCommand(usage))
-
-	failure, ok := codextui.ParseCommand(`/sandbox-add-read-dir D:\private`)
-	if !ok {
-		t.Fatal("ParseCommand failure failed")
-	}
-	runTeaCmd(t, model, model.applyCommand(failure))
-
-	want := []string{
-		"Usage: /sandbox-add-read-dir <absolute-directory-path>",
-		`Granting sandbox read access to D:\private ...`,
-		"Error: access denied",
-	}
-	for _, text := range want {
-		found := false
-		for _, message := range state.Messages {
-			if message.Role == codextui.RoleHistory && strings.Contains(message.RawText, text) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("history missing %q: %#v", text, state.Messages)
-		}
 	}
 }
 

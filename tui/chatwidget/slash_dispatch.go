@@ -81,7 +81,6 @@ const (
 	PreparedSlashArgsStartSideConversation  PreparedSlashArgsActionKind = "start_side_conversation"
 	PreparedSlashArgsReviewCustom           PreparedSlashArgsActionKind = "review_custom"
 	PreparedSlashArgsResumeSession          PreparedSlashArgsActionKind = "resume_session"
-	PreparedSlashArgsSandboxReadRoot        PreparedSlashArgsActionKind = "sandbox_read_root"
 	PreparedSlashArgsPetDisabled            PreparedSlashArgsActionKind = "pet_disabled"
 	PreparedSlashArgsSelectPet              PreparedSlashArgsActionKind = "select_pet"
 	PreparedSlashArgsError                  PreparedSlashArgsActionKind = "error"
@@ -311,10 +310,6 @@ func DispatchPreparedSlashArgs(context PreparedSlashArgsContext) PreparedSlashAr
 		decision.Action = PreparedSlashArgsResumeSession
 		decision.Args = args
 		return decision
-	case codextui.CommandSandboxReadRoot:
-		decision.Action = PreparedSlashArgsSandboxReadRoot
-		decision.Args = args
-		return decision
 	case codextui.CommandPets:
 		if petDisableArg(trimmed) {
 			decision.Action = PreparedSlashArgsPetDisabled
@@ -407,8 +402,7 @@ func CommandSupportsInlineArgs(command codextui.Command) bool {
 		codextui.CommandSide,
 		codextui.CommandResume,
 		codextui.CommandFork,
-		codextui.CommandCd,
-		codextui.CommandSandboxReadRoot:
+		codextui.CommandCd:
 		return true
 	default:
 		return false
@@ -441,7 +435,6 @@ func CommandAvailableDuringTask(command codextui.Command) bool {
 		codextui.CommandKeymap,
 		codextui.CommandVim,
 		codextui.CommandElevateSandbox,
-		codextui.CommandSandboxReadRoot,
 		codextui.CommandExperimental,
 		codextui.CommandMemories,
 		codextui.CommandImport,

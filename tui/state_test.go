@@ -156,7 +156,6 @@ func TestParseCommand(t *testing.T) {
 		{input: "/approve", command: CommandAutoReview, ok: true},
 		{input: "/import", command: CommandImport, ok: true},
 		{input: "/setup-default-sandbox", command: CommandElevateSandbox, ok: true},
-		{input: "/sandbox-add-read-dir D:\\tmp", command: CommandSandboxReadRoot, args: "D:\\tmp", ok: true},
 		{input: "/rollout", command: CommandRollout, ok: true},
 		{input: "/test-approval", command: CommandTestApproval, ok: true},
 		{input: "/cd /tmp", command: CommandCd, args: "/tmp", ok: true},
@@ -207,7 +206,6 @@ func TestSlashCommandFrameDescriptionsMatchRust(t *testing.T) {
 		"memories":             "configure memory use and generation",
 		"app":                  "continue this session in Codex Desktop",
 		"import":               "import setup, this project, and recent chats from Claude Code",
-		"sandbox-add-read-dir": "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>",
 		"rollout":              "print the rollout file path",
 	}
 	for name, description := range want {

@@ -760,7 +760,6 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnReadIDEContext:            interactiveIDEContextReader,
 		OnApproveAutoReviewDenial:   interactiveApproveAutoReviewDenialHandler(),
 		OnStartWindowsSandboxSetup:  interactiveWindowsSandboxSetupHandler(root),
-		OnSandboxReadDir:            interactiveSandboxReadDirHandler(root),
 		FeatureSettings:             settings.FeatureSettings,
 		UseMemories:                 settings.UseMemories,
 		GenerateMemories:            settings.GenerateMemories,
