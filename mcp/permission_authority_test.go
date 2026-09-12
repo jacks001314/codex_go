@@ -1,10 +1,12 @@
 package mcp
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"codex_go/sandbox"
+	"codex_go/tool"
 )
 
 func mcpTestThreadProfile() *sandbox.PermissionProfile {
@@ -50,6 +52,45 @@ func TestMCPServerPermissionProfilesResolutionLikeRust(t *testing.T) {
 		if _, ok := runtimeConfig.PermissionProfileForServer(name); ok {
 			t.Fatalf("%s must have no published authority", name)
 		}
+	}
+}
+
+// Mirrors Rust PreparedMcpCall::new returning None on the production MCP tool
+// execution path (#40728).
+func TestMCPToolExecutorRejectsServerWithoutPublishedAuthorityLikeRust(t *testing.T) {
+	allowed := mcpTestThreadProfile()
+	service := NewMCPService(&RuntimeConfig{
+		ServerPermissionProfiles: map[string]*sandbox.PermissionProfile{"allowed": allowed},
+		Servers: map[string]ServerRegistration{
+			"allowed": {Config: ServerConfig{Enabled: true}},
+			"denied":  {Config: ServerConfig{Enabled: true}},
+		},
+	})
+	invocation := func() *tool.Invocation {
+		return &tool.Invocation{
+			CallID:   "call-mcp",
+			ToolName: tool.NamespacedName("denied", "run"),
+			Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`},
+		}
+	}
+	deniedExecutor := NewToolExecutor(&ToolExecutorOptions{
+		Service:    service,
+		ServerName: "denied",
+		ToolInfo:   &MCPToolInfo{Name: "run"},
+	})
+	if _, err := deniedExecutor.Execute(context.Background(), invocation()); err == nil || !strings.Contains(err.Error(), "no published permission authority") {
+		t.Fatalf("denied execute error = %v, want missing-authority rejection", err)
+	}
+
+	allowedExecutor := NewToolExecutor(&ToolExecutorOptions{
+		Service:    service,
+		ServerName: "allowed",
+		ToolInfo:   &MCPToolInfo{Name: "run"},
+	})
+	allowedInvocation := invocation()
+	allowedInvocation.ToolName = tool.NamespacedName("allowed", "run")
+	if _, err := allowedExecutor.Execute(context.Background(), allowedInvocation); err != nil && strings.Contains(err.Error(), "no published permission authority") {
+		t.Fatalf("allowed execute error = %v, want no authority rejection", err)
 	}
 }
 

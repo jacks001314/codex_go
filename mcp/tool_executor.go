@@ -232,6 +232,11 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		rewrittenArguments = rewritten
 	}
 	meta := e.requestMetaForCall(invocation.CallID)
+	// Rust #40728: a server whose published permission authority is unavailable
+	// must be rejected instead of running with another owner's authority.
+	if err := e.ensureServerPermissionAuthority(); err != nil {
+		return nil, err
+	}
 	callParams := &MCPToolCallParams{
 		ServerName: e.resolvedServerName(),
 		ToolName:   e.resolvedRemoteToolName(),
@@ -583,6 +588,22 @@ func (e *ToolExecutor) mcpService() *MCPService {
 		return NewMCPService(nil)
 	}
 	return e.service
+}
+
+// ensureServerPermissionAuthority mirrors Rust PreparedMcpCall::new returning
+// None when the server's published permission authority is unavailable
+// (#40728): the call is rejected rather than inheriting another owner's
+// authority. Runtimes that never published authority keep the legacy behavior.
+func (e *ToolExecutor) ensureServerPermissionAuthority() error {
+	service := e.mcpService()
+	if service == nil || !service.HasPublishedPermissionAuthority() {
+		return nil
+	}
+	server := e.resolvedServerName()
+	if _, ok := service.PermissionProfileForServer(server); ok {
+		return nil
+	}
+	return fmt.Errorf("%w: MCP server %q has no published permission authority", ErrInvalidMCPRequest, server)
 }
 
 func (e *ToolExecutor) hookToolName() *tool.HookToolName {

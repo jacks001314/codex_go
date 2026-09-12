@@ -11519,6 +11519,13 @@ func (r *RuntimeRouter) applyMCPPermissionAuthority(runtime *mcp.RuntimeConfig, 
 	if r == nil || runtime == nil {
 		return
 	}
+	if threadProfile == nil {
+		// Go's effective default sandbox when no profile is configured is
+		// workspace-write. Publish it so authority resolution never fails closed
+		// for a server that merely inherits the thread authority.
+		defaultProfile := sandbox.WorkspaceWritePermissionProfile()
+		threadProfile = &defaultProfile
+	}
 	runtime.PermissionProfile = threadProfile
 	selections := r.threadEnvironmentSelections(threadID)
 	environmentProfiles := map[string]*sandbox.PermissionProfile{}
