@@ -9921,6 +9921,7 @@ func (r *RuntimeRouter) handleAccountSessionsLogout(request *Request) (*auth.Acc
 	r.maybeStartCuratedRepoSync(false)
 	r.clearRecommendedPluginsCache()
 	r.noteAuthChanged()
+	r.retireRemoteControlForAuthChange(context.Background())
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil
 }
@@ -9938,6 +9939,7 @@ func (r *RuntimeRouter) handleAccountSessionsSwitch(request *Request) (*auth.Acc
 	r.maybeStartCuratedRepoSync(false)
 	r.clearRecommendedPluginsCache()
 	r.noteAuthChanged()
+	r.retireRemoteControlForAuthChange(context.Background())
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil
 }
@@ -9964,6 +9966,7 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 	r.maybeStartCuratedRepoSync(false)
 	r.clearRecommendedPluginsCache()
 	r.noteAuthChanged()
+	r.retireRemoteControlForAuthChange(context.Background())
 	r.notify(NotificationAccountUpdated, r.requireAccount().AccountUpdated())
 	return response, nil
 }

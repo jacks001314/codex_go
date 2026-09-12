@@ -352,6 +352,59 @@ func (m *Manager) Disable(params *DisableParams) (*DisableResponse, *StatusChang
 	return response, notification
 }
 
+// RetireForAuthChange tears down a live remote-control session whose
+// authentication owner went away (logout or account switch): the desired state
+// becomes disabled until the user enables it again, and the session's
+// enrollment, client, and pairing state is discarded so it cannot carry over to
+// a different owner (Rust #44341).
+//
+// The disabled preference is persisted against the retired owner's account when
+// a stored enrollment still carries it; logout has already cleared the live
+// auth, so an auth-requiring disable would fail here.
+func (m *Manager) RetireForAuthChange(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.mu.Lock()
+	backend := cloneManagerBackendOptions(m.backend)
+	enrollment := cloneManagerEnrollment(m.enrollment)
+	active := m.status != StatusDisabled || enrollment != nil
+	m.mu.Unlock()
+	if !active {
+		return nil
+	}
+
+	var persistErr error
+	if backend != nil && backend.Store != nil && backend.Target != nil &&
+		strings.TrimSpace(backend.Target.WebSocketURL) != "" &&
+		enrollment != nil && strings.TrimSpace(enrollment.AccountID) != "" {
+		if err := backend.ensureReady(); err != nil {
+			persistErr = err
+		} else if _, err := backend.Store.SetRemoteControlEnabled(
+			ctx,
+			backend.Target.WebSocketURL,
+			enrollment.AccountID,
+			backend.AppServerClientName,
+			false,
+		); err != nil {
+			persistErr = err
+		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureLocked()
+	m.status = StatusDisabled
+	m.environmentID = nil
+	m.enrollment = nil
+	m.clientByEnv = map[string]map[string]Client{}
+	m.pairings = map[string]*pairing{}
+	return persistErr
+}
+
 func (m *Manager) DisableContext(ctx context.Context, params *DisableParams) (*DisableResponse, *StatusChangedNotification, error) {
 	if m == nil {
 		return nil, nil, nil
