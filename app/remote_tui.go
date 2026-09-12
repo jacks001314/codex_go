@@ -72,6 +72,11 @@ type remoteAppServerTUIClient struct {
 	// turn+item so the status row can show the latest usable line
 	// (Rust #43921).
 	reasoningBuffers map[string]string
+	// taskTools, when set, is the session's local task-tools MCP host. The
+	// client then points thread/start and thread/fork at the hosted
+	// `codex_tui` MCP server instead of the app-server dynamic-tools callback
+	// transport (Rust ThreadToolTransport::Mcp vs ::Dynamic).
+	taskTools *taskToolsMCPHost
 }
 
 type remoteWebSocketTransport struct {
@@ -326,6 +331,14 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	interactiveRemoteTrustCheck(ctx, endpoint, root, shouldRunInteractiveTUI(stdin, stdout))
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
+	// A local-daemon TUI hosts its codex_tui task tools as a local MCP server
+	// (Rust AppServerSession::start_dynamic_tool_mcp); a remote workspace keeps
+	// the app-server dynamic-tools callback transport.
+	taskToolsHost := &taskToolsMCPHost{}
+	if !interactiveRemoteEndpointIsLocal(endpoint) {
+		taskToolsHost = nil
+	}
+	defer taskToolsHost.close()
 	// Rust daybreak::prefetch_notice: read the account's Daybreak eligibility in
 	// the background for a local openai-provider session; the refusal copy falls
 	// back to the neutral notice until the read lands.
@@ -471,14 +484,14 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 					}
 				}
 			}
-			return interactiveRemoteTurnCommand(ctx, root, endpoint, state, request, brokers, interrupts)
+			return interactiveRemoteTurnCommandWithTaskTools(ctx, root, endpoint, state, request, brokers, taskToolsHost, interrupts)
 		},
 		OnSteerRequest: interrupts.steer,
 		OnInterrupt: func() bubbletea.Cmd {
 			return interrupts.interruptCommand()
 		},
 		OnSafetyBufferingRetry: func(threadID, turnID, model, prompt string) bubbletea.Cmd {
-			return interactiveRemoteSafetyBufferingRetryCommand(ctx, root, endpoint, state, threadID, turnID, model, prompt, brokers)
+			return interactiveRemoteSafetyBufferingRetryCommand(ctx, root, endpoint, state, threadID, turnID, model, prompt, brokers, taskToolsHost)
 		},
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			brokers.respond(response)
@@ -632,7 +645,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnStartReviewCommand:  interactiveRemoteReviewStartCommand(ctx, root, endpoint, state, brokers, interrupts),
 		OnStartCompactCommand: interactiveRemoteCompactStartCommand(ctx, root, endpoint, state, brokers),
 		OnStartSide: func(params codextea.SideStartParams) (codextea.SideStartResponse, error) {
-			return interactiveRemoteStartSide(ctx, root, endpoint, state, params)
+			return interactiveRemoteStartSide(ctx, root, endpoint, state, params, taskToolsHost)
 		},
 		OnCloseSide: func(params codextea.SideCloseParams) (codextea.SideCloseResponse, error) {
 			return interactiveRemoteCloseSide(ctx, endpoint, params)
@@ -1130,7 +1143,11 @@ func interactiveRemoteStartReview(ctx context.Context, endpoint *appserverdaemon
 	return response, nil
 }
 
-func interactiveRemoteStartSide(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, params codextea.SideStartParams) (codextea.SideStartResponse, error) {
+func interactiveRemoteStartSide(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, params codextea.SideStartParams, taskTools ...*taskToolsMCPHost) (codextea.SideStartResponse, error) {
+	var taskToolsHost *taskToolsMCPHost
+	if len(taskTools) > 0 {
+		taskToolsHost = taskTools[0]
+	}
 	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
 	defer cancel()
 	client, err := openRemoteSessionClient(reqCtx, endpoint)
@@ -1149,6 +1166,9 @@ func interactiveRemoteStartSide(ctx context.Context, root *cli.RootOptions, endp
 	if err != nil {
 		return codextea.SideStartResponse{}, err
 	}
+	// A side conversation forked from a task-tools thread keeps the namespace
+	// (Rust ThreadToolTransport::configure_mcp).
+	mergeTaskToolsMCPConfig(&forkParams.Config, taskToolsHost)
 	var forkResponse appserver.ThreadForkResponse
 	if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadFork, forkParams, &forkResponse); err != nil {
 		return codextea.SideStartResponse{}, err
@@ -1916,6 +1936,46 @@ func remoteTUIAgentThreadDescendsFrom(thread *appserver.Thread, primaryThreadID 
 	return false
 }
 
+// hasTaskToolsMCP reports whether the session hosts the codex_tui task tools as
+// a local MCP server (Rust ThreadToolTransport::Mcp).
+func (c *remoteAppServerTUIClient) hasTaskToolsMCP() bool {
+	return c != nil && c.taskTools != nil && len(c.taskTools.configValues()) > 0
+}
+
+// applyTaskToolTransport selects the thread-tool transport for a thread/start
+// request, mirroring Rust ThreadToolTransport::configure: with the hosted MCP
+// server the thread drops the dynamic-tools namespace and instead carries the
+// `mcp_servers.codex_tui` config override; otherwise the app-server callback
+// transport carries the namespace specs.
+func (c *remoteAppServerTUIClient) applyTaskToolTransport(params *appserver.ThreadStartParams) {
+	if params == nil {
+		return
+	}
+	if overrides := c.taskToolsConfigOverrides(); len(overrides) > 0 {
+		params.DynamicTools = nil
+		if params.Config == nil {
+			params.Config = map[string]any{}
+		}
+		for key, value := range overrides {
+			params.Config[key] = value
+		}
+		return
+	}
+	if specs, err := DynamicToolSpecsRaw(); err == nil {
+		params.DynamicTools = specs
+	}
+}
+
+// taskToolsConfigOverrides returns the thread-config overrides that point a
+// thread at the hosted MCP server (nil when the session uses the callback
+// transport).
+func (c *remoteAppServerTUIClient) taskToolsConfigOverrides() map[string]any {
+	if c == nil || c.taskTools == nil {
+		return nil
+	}
+	return c.taskTools.configValues()
+}
+
 func remoteTUIStatusFromThread(thread *appserver.Thread) string {
 	if thread == nil {
 		return "idle"
@@ -2258,13 +2318,17 @@ func remoteTUIAnyStrings(value any) []string {
 }
 
 func interactiveRemoteTurnCommand(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, request codextea.SubmitRequest, brokers remoteTUIBrokers, interrupts ...*remoteTUIInterruptController) bubbletea.Cmd {
+	return interactiveRemoteTurnCommandWithTaskTools(ctx, root, endpoint, state, request, brokers, nil, interrupts...)
+}
+
+func interactiveRemoteTurnCommandWithTaskTools(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, request codextea.SubmitRequest, brokers remoteTUIBrokers, taskTools *taskToolsMCPHost, interrupts ...*remoteTUIInterruptController) bubbletea.Cmd {
 	return func() bubbletea.Msg {
 		messages := make(chan bubbletea.Msg, 256)
 		var interrupt *remoteTUIInterruptController
 		if len(interrupts) > 0 {
 			interrupt = interrupts[0]
 		}
-		go runInteractiveRemoteTurn(ctx, root, endpoint, state, request, messages, brokers, interrupt)
+		go runInteractiveRemoteTurn(ctx, root, endpoint, state, request, messages, brokers, interrupt, taskTools)
 		return codextea.StreamStartedMsg{Messages: messages}
 	}
 }
@@ -2273,7 +2337,11 @@ func interactiveRemoteTurnCommand(ctx context.Context, root *cli.RootOptions, en
 // retry: it interrupts the buffered turn, forks the thread before that turn
 // with the server-selected faster model, and starts a retry on the fork (Rust
 // #42380).
-func interactiveRemoteSafetyBufferingRetryCommand(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, threadID string, turnID string, model string, prompt string, brokers remoteTUIBrokers) bubbletea.Cmd {
+func interactiveRemoteSafetyBufferingRetryCommand(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, threadID string, turnID string, model string, prompt string, brokers remoteTUIBrokers, taskTools ...*taskToolsMCPHost) bubbletea.Cmd {
+	var taskToolsHost *taskToolsMCPHost
+	if len(taskTools) > 0 {
+		taskToolsHost = taskTools[0]
+	}
 	return func() bubbletea.Msg {
 		messages := make(chan bubbletea.Msg, 256)
 		go func() {
@@ -2295,6 +2363,7 @@ func interactiveRemoteSafetyBufferingRetryCommand(ctx context.Context, root *cli
 				return
 			}
 			forkParams := appserver.ThreadForkParams{ThreadID: strings.TrimSpace(threadID), BeforeTurnID: strings.TrimSpace(turnID)}
+			mergeTaskToolsMCPConfig(&forkParams.Config, taskToolsHost)
 			fasterModel := strings.TrimSpace(model)
 			if fasterModel != "" {
 				forkParams.Model = &fasterModel
@@ -2313,10 +2382,30 @@ func interactiveRemoteSafetyBufferingRetryCommand(ctx context.Context, root *cli
 			if state != nil {
 				state.SetThreadID(strings.TrimSpace(forkResponse.Thread.ID))
 			}
-			runInteractiveRemoteTurn(ctx, root, endpoint, state, codextea.SubmitRequest{Prompt: strings.TrimSpace(prompt), Model: fasterModel}, messages, brokers, nil)
+			runInteractiveRemoteTurn(ctx, root, endpoint, state, codextea.SubmitRequest{Prompt: strings.TrimSpace(prompt), Model: fasterModel}, messages, brokers, nil, taskToolsHost)
 		}()
 		return codextea.StreamStartedMsg{Messages: messages}
 	}
+}
+
+// mergeTaskToolsMCPConfig adds the hosted task-tools server to a fork/resume
+// config override map (Rust ThreadToolTransport::configure_mcp).
+func mergeTaskToolsMCPConfig(config *map[string]any, host *taskToolsMCPHost) {
+	if config == nil {
+		return
+	}
+	overrides := host.configValues()
+	if len(overrides) == 0 {
+		return
+	}
+	merged := *config
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	for key, value := range overrides {
+		merged[key] = value
+	}
+	*config = merged
 }
 
 // waitRemoteTurnStopped polls thread/read until no turn is still in progress,
@@ -2350,7 +2439,7 @@ func waitRemoteTurnStopped(ctx context.Context, client *remoteAppServerTUIClient
 	}
 }
 
-func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, request codextea.SubmitRequest, messages chan<- bubbletea.Msg, brokers remoteTUIBrokers, interrupts *remoteTUIInterruptController) {
+func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, request codextea.SubmitRequest, messages chan<- bubbletea.Msg, brokers remoteTUIBrokers, interrupts *remoteTUIInterruptController, hosts ...*taskToolsMCPHost) {
 	defer close(messages)
 	if ctx == nil {
 		ctx = context.Background()
@@ -2363,6 +2452,9 @@ func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoi
 		brokers:  brokers,
 		dial:     websocket.Dial,
 	}
+	if len(hosts) > 0 {
+		client.taskTools = hosts[0]
+	}
 	if err := client.connect(ctx); err != nil {
 		sendRemoteTurnError(messages, err)
 		return
@@ -2371,6 +2463,15 @@ func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoi
 	if err := client.initialize(ctx); err != nil {
 		sendRemoteTurnError(messages, err)
 		return
+	}
+	// The session's task-tools MCP server outlives this per-turn client; the
+	// client becomes its live connection for the duration of the turn
+	// (Rust DynamicToolMcpServer::reconnect/suspend).
+	if client.taskTools != nil {
+		if template, err := remoteThreadStartParams(root, state); err == nil {
+			client.taskTools.attach(client, template, client.registerDynamicToolThread)
+			defer client.taskTools.suspend()
+		}
 	}
 	threadID := ""
 	if state != nil {
@@ -2488,7 +2589,8 @@ func (c *remoteAppServerTUIClient) startThread(ctx context.Context, root *cli.Ro
 	if err != nil {
 		return "", err
 	}
-	taskToolsAvailable := len(params.DynamicTools) > 0
+	c.applyTaskToolTransport(&params)
+	taskToolsAvailable := len(params.DynamicTools) > 0 || c.hasTaskToolsMCP()
 	var response appserver.ThreadStartResponse
 	for attempt := 0; ; attempt++ {
 		id, err := c.sendRequest(ctx, appserver.MethodThreadStart, params)
