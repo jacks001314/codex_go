@@ -981,13 +981,17 @@ type Model struct {
 	agentsOverviewDrafts   map[string]string
 	// agentsOverviewAttachments holds the pending image attachments for the
 	// dashboard's new-task prompt (Rust #44027).
-	agentsOverviewAttachments  []bottompane.ComposerAttachment
-	agentsOverviewHidden       map[string]struct{}
-	agentsOverviewPendingDraft *string
-	transcriptMessages         transcriptMessageCache
-	overlayMessages            transcriptMessageCache
-	lastTranscriptContent      string
-	lastTranscriptHeight       int
+	agentsOverviewAttachments []bottompane.ComposerAttachment
+	// computerActivityGroup accumulates adjacent CUA MCP calls into one
+	// compact history cell (Rust #43576).
+	computerActivityGroup        *historycell.ComputerActivityCell
+	computerActivityMessageIndex int
+	agentsOverviewHidden         map[string]struct{}
+	agentsOverviewPendingDraft   *string
+	transcriptMessages           transcriptMessageCache
+	overlayMessages              transcriptMessageCache
+	lastTranscriptContent        string
+	lastTranscriptHeight         int
 
 	width                  int
 	height                 int
@@ -3357,6 +3361,7 @@ func (m *Model) shouldSubmitOnTab() bool {
 
 func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	m.flushCompactCommandGroup()
+	m.flushComputerActivityGroup()
 	m.deferPendingSteers()
 	if message.Err != nil {
 		m.setStatus("error")
@@ -3416,6 +3421,7 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 		return
 	}
 	m.flushCompactCommandGroup()
+	m.flushComputerActivityGroup()
 	m.deferPendingSteers()
 	m.setStatus("idle")
 	text := "Interrupted current turn."
@@ -3561,6 +3567,11 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 	if item == nil {
 		return
 	}
+	// Rust #43576: any item other than a CUA call ends the computer-activity
+	// group.
+	if !isComputerActivityItem(item) {
+		m.flushComputerActivityGroup()
+	}
 	if item.Type != "command_execution" {
 		// A new non-command item is an interaction boundary for compact command
 		// groups (Rust #38921 chatwidget add_to_history / tool_requests).
@@ -3608,6 +3619,11 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		return nil
 	}
 	var countdownCmd bubbletea.Cmd
+	// Rust #43576: any item other than a CUA call ends the computer-activity
+	// group.
+	if !isComputerActivityItem(item) {
+		m.flushComputerActivityGroup()
+	}
 	if item.Type != "command_execution" {
 		m.flushCompactCommandGroup()
 	}
@@ -4066,6 +4082,79 @@ func (m *Model) flushCompactCommandGroup() {
 	m.Transcript.needsFinalMessageSeparator = true
 }
 
+// flushComputerActivityGroup ends a computer-activity group (Rust #43576): the
+// rendered cell stays in place while the live accumulation state resets, so
+// later CUA calls start their own group. Groups with running calls are kept.
+func (m *Model) flushComputerActivityGroup() {
+	if m == nil || m.computerActivityGroup == nil || m.computerActivityGroup.IsActive() {
+		return
+	}
+	m.computerActivityGroup = nil
+	m.computerActivityMessageIndex = -1
+	m.Transcript.needsFinalMessageSeparator = true
+}
+
+// isComputerActivityItem reports whether an item is a CUA MCP call, the only
+// items that join a computer-activity group (Rust #43576).
+func isComputerActivityItem(item *protocol.ThreadItem) bool {
+	if item == nil {
+		return false
+	}
+	if normalizeThreadItemProtocolType(item.Type) != "mcp_tool_call" {
+		return false
+	}
+	return historycell.IsComputerActivityServer(item.Server)
+}
+
+// appendComputerActivityCall folds one CUA call into the active group cell and
+// re-renders its history message (Rust update_computer_activity).
+func (m *Model) appendComputerActivityCall(item *protocol.ThreadItem) {
+	if m == nil || item == nil {
+		return
+	}
+	id := firstNonEmpty(strings.TrimSpace(item.ID), strings.TrimSpace(item.CallID))
+	if id == "" {
+		return
+	}
+	if m.computerActivityGroup == nil {
+		m.computerActivityGroup = &historycell.ComputerActivityCell{}
+		m.computerActivityMessageIndex = -1
+		m.Transcript.finishAssistantPreambleBeforeTool()
+	}
+	invocation := historycell.McpInvocation{Server: strings.TrimSpace(item.Server), Tool: strings.TrimSpace(item.Tool)}
+	if item.Arguments != nil {
+		invocation.Arguments = compactMCPArguments(*item.Arguments)
+	}
+	call := historycell.McpToolCallCell{CallID: id, Invocation: invocation}
+	if mcpToolCallInProgress(item.Status) {
+		m.computerActivityGroup.Start(call)
+		m.Transcript.needsFinalMessageSeparator = false
+	} else {
+		m.computerActivityGroup.Complete(call, mcpToolResultFromProtocolItem(item))
+		m.Transcript.needsFinalMessageSeparator = true
+	}
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	m.computerActivityMessageIndex = m.upsertHistoryMessage(
+		m.computerActivityMessageIndex,
+		m.computerActivityGroup.DisplayLines(width),
+		m.computerActivityGroup.RawLines(),
+	)
+}
+
+// normalizeThreadItemProtocolType maps a protocol item type to the
+// app-server's camelCase item kind.
+func normalizeThreadItemProtocolType(itemType string) string {
+	switch strings.TrimSpace(itemType) {
+	case "mcp_tool_call", "mcpToolCall":
+		return "mcp_tool_call"
+	default:
+		return strings.TrimSpace(itemType)
+	}
+}
+
 // execCommandSourceForItem reads the command execution source from item
 // metadata (set by the app layer when translating app-server payloads) with a
 // default of Agent, mirroring the wire default in Rust protocol.rs.
@@ -4104,6 +4193,13 @@ func (m *Model) renderMCPToolCallItem(item *protocol.ThreadItem, completed bool)
 	if id == "" {
 		return
 	}
+	// Rust #43576: CUA calls group into one compact computer-activity cell
+	// instead of rendering a call per row.
+	if historycell.IsComputerActivityServer(item.Server) {
+		m.appendComputerActivityCall(item)
+		return
+	}
+	m.flushComputerActivityGroup()
 	if m.mcpToolCalls == nil {
 		m.mcpToolCalls = map[string]*mcpToolCallDisplayState{}
 	}
@@ -4240,12 +4336,31 @@ func mcpToolResultFromProtocolItem(item *protocol.ThreadItem) historycell.McpToo
 		return historycell.McpToolResult{}
 	}
 	content := make([]string, 0, len(item.Result.Content))
+	hasImage := false
 	for _, block := range item.Result.Content {
+		if mcpContentBlockHasImage(block) {
+			hasImage = true
+		}
 		if text := mcpContentBlockText(block); text != "" {
 			content = append(content, text)
 		}
 	}
-	return historycell.McpToolResult{Content: content}
+	return historycell.McpToolResult{Content: content, HasImage: hasImage}
+}
+
+// mcpContentBlockHasImage reports whether an MCP result block carries image
+// content (Rust #43576: computer-activity previews prefer screenshots).
+func mcpContentBlockHasImage(block any) bool {
+	value, ok := block.(map[string]any)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(fmt.Sprint(value["type"]))) {
+	case "image", "image_url":
+		return true
+	default:
+		return false
+	}
 }
 
 func mcpContentBlockText(block any) string {
@@ -4392,7 +4507,27 @@ func (m *Model) renderToolCallState(state *toolCallDisplayState, outputItem *pro
 }
 
 func (m *Model) markActiveToolCallsFailed(message string) {
-	if m == nil || len(m.toolCalls) == 0 {
+	if m == nil {
+		return
+	}
+	// Rust #43576: running computer calls fail and end their group with the
+	// turn.
+	if m.computerActivityGroup != nil && m.computerActivityGroup.IsActive() {
+		m.computerActivityGroup.MarkFailed(message)
+		if m.computerActivityMessageIndex >= 0 {
+			width := m.width
+			if width < 20 {
+				width = 20
+			}
+			m.computerActivityMessageIndex = m.upsertHistoryMessage(
+				m.computerActivityMessageIndex,
+				m.computerActivityGroup.DisplayLines(width),
+				m.computerActivityGroup.RawLines(),
+			)
+		}
+		m.flushComputerActivityGroup()
+	}
+	if len(m.toolCalls) == 0 {
 		return
 	}
 	seen := map[*toolCallDisplayState]bool{}

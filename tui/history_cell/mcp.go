@@ -21,6 +21,9 @@ type McpToolResult struct {
 	Content []string
 	Error   string
 	IsError bool
+	// HasImage reports that the result carried image content, which computer
+	// activity previews prefer as the row summary (Rust #43576).
+	HasImage bool
 }
 
 type McpToolCallCell struct {
@@ -397,9 +400,10 @@ func cloneMcpToolResult(result *McpToolResult) *McpToolResult {
 		return nil
 	}
 	return &McpToolResult{
-		Content: append([]string(nil), result.Content...),
-		Error:   result.Error,
-		IsError: result.IsError,
+		Content:  append([]string(nil), result.Content...),
+		Error:    result.Error,
+		IsError:  result.IsError,
+		HasImage: result.HasImage,
 	}
 }
 
