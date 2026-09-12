@@ -193,7 +193,7 @@ func TestBedrockGPT56ModelsUseLongContextWindowLikeRust(t *testing.T) {
 	for _, model := range catalog.Models {
 		want := int64(272000)
 		switch model.Slug {
-		case AmazonBedrockGPT56SolModelID, AmazonBedrockGPT56TerraModelID, AmazonBedrockGPT56LunaModelID:
+		case AmazonBedrockGPT56SolModelID, AmazonBedrockGPT6AstraModelID, AmazonBedrockGPT56TerraModelID, AmazonBedrockGPT56LunaModelID:
 			want = 872000
 		}
 		if model.MaxContextWindow != want {
@@ -1169,11 +1169,12 @@ func TestAmazonBedrockModelCatalog(t *testing.T) {
 	manager := NewStaticModelsManager(AmazonBedrockModelCatalog())
 	models := manager.ListModels(RefreshOffline)
 	want := []string{
-		AmazonBedrockGPT55ModelID,
-		AmazonBedrockGPT54ModelID,
 		AmazonBedrockGPT56SolModelID,
+		AmazonBedrockGPT6AstraModelID,
 		AmazonBedrockGPT56TerraModelID,
 		AmazonBedrockGPT56LunaModelID,
+		AmazonBedrockGPT55ModelID,
+		AmazonBedrockGPT54ModelID,
 	}
 	if len(models) != len(want) {
 		t.Fatalf("models len = %d", len(models))

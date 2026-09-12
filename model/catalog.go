@@ -687,11 +687,11 @@ type ModelPreset struct {
 }
 
 type ModelsManagerConfig struct {
-	ModelContextWindow              int64
-	ModelAutoCompactTokenLimit      int64
-	ToolOutputTokenLimit            int64
-	BaseInstructions                string
-	PersonalityEnabled              bool
+	ModelContextWindow         int64
+	ModelAutoCompactTokenLimit int64
+	ToolOutputTokenLimit       int64
+	BaseInstructions           string
+	PersonalityEnabled         bool
 	// Personality is the resolved personality selection (if any). Rust #44946
 	// only uses it to honor an explicit `personality = "none"` opt-out by
 	// stripping the baked personality section.
@@ -930,15 +930,106 @@ func fallbackBundledModelsResponse() ModelsResponse {
 }
 
 func AmazonBedrockModelCatalog() ModelsResponse {
-	return ModelsResponse{
+	// Rust #42619: the Bedrock catalog preserves each bundled OpenAI model's
+	// metadata while overriding the Bedrock slug, display name, priority, and
+	// (for the GPT-5 generation) the context windows. GPT-5.6/Astra keep the
+	// bundled long-context metadata.
+	bundled := BundledModelsResponse()
+	return normalizeBedrockCatalog(ModelsResponse{
 		Models: []ModelInfo{
-			bedrockModel(AmazonBedrockGPT55ModelID, 0),
-			bedrockModel(AmazonBedrockGPT54ModelID, 10),
-			bedrockModelWithMaxContextWindow(AmazonBedrockGPT56SolModelID, 20, 872000),
-			bedrockModelWithMaxContextWindow(AmazonBedrockGPT56TerraModelID, 30, 872000),
-			bedrockModelWithMaxContextWindow(AmazonBedrockGPT56LunaModelID, 40, 872000),
+			bedrockModel(bundled, "gpt-5.6-sol", AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol", 0),
+			bedrockModel(bundled, "gpt-6-astra", AmazonBedrockGPT6AstraModelID, "GPT-6-Astra", 1),
+			bedrockModel(bundled, "gpt-5.6-terra", AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 2),
+			bedrockModel(bundled, "gpt-5.6-luna", AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 3),
+			gpt5BedrockModel(bundled, "gpt-5.5", AmazonBedrockGPT55ModelID, "GPT-5.5", 4),
+			gpt5BedrockModel(bundled, "gpt-5.4", AmazonBedrockGPT54ModelID, "GPT-5.4", 5),
 		},
+	})
+}
+
+// normalizeBedrockCatalog mirrors Rust normalize_bedrock_catalog: Amazon
+// Bedrock only supports the implicit "default" tier, rejects the multimodal
+// search content types, and does not support multi-agent V2 response items.
+func normalizeBedrockCatalog(catalog ModelsResponse) ModelsResponse {
+	for i := range catalog.Models {
+		model := &catalog.Models[i]
+		model.AdditionalSpeedTiers = nil
+		model.ServiceTiers = nil
+		model.DefaultServiceTier = ""
+		model.WebSearchToolType = "text"
+		model.MultiAgentVersion = "v1"
 	}
+	return catalog
+}
+
+// bedrockModel builds a GPT-5.6/Astra Bedrock entry from its bundled OpenAI
+// model, keeping the bundled context windows and clearing tool-selection
+// metadata Bedrock does not use (Rust bedrock_model).
+func bedrockModel(bundled ModelsResponse, openAISlug string, bedrockSlug string, displayName string, priority int) ModelInfo {
+	model := bundledModelBySlug(bundled, openAISlug)
+	model.Slug = bedrockSlug
+	model.DisplayName = displayName
+	model.Priority = priority
+	model.Visibility = VisibilityList
+	model.AvailabilityNux = nil
+	model.Upgrade = nil
+	model.UseResponsesLite = false
+	model.ToolMode = ""
+	// Rust #39102: the GPT-5.6/Astra Bedrock variants allow context-window
+	// overrides up to 872,000 tokens.
+	model.MaxContextWindow = 872000
+	model.SupportedReasoningLevels = withoutReasoningLevel(model.SupportedReasoningLevels, "ultra")
+	return model
+}
+
+// gpt5BedrockModel builds a GPT-5/5.4 Bedrock entry from its bundled OpenAI
+// model, pinning the shared 272,000-token Bedrock context window (Rust
+// gpt_5_bedrock_model).
+func gpt5BedrockModel(bundled ModelsResponse, openAISlug string, bedrockSlug string, displayName string, priority int) ModelInfo {
+	model := bundledModelBySlug(bundled, openAISlug)
+	model.Slug = bedrockSlug
+	model.DisplayName = displayName
+	model.Priority = priority
+	model.ContextWindow = 272000
+	model.MaxContextWindow = 272000
+	model.Visibility = VisibilityList
+	model.AvailabilityNux = nil
+	model.Upgrade = nil
+	return model
+}
+
+func bundledModelBySlug(bundled ModelsResponse, slug string) ModelInfo {
+	for _, model := range bundled.Models {
+		if model.Slug == slug {
+			return cloneModelInfo(model)
+		}
+	}
+	// The code fallback catalog may predate a bundled slug; keep the Bedrock
+	// catalog usable with the shared Bedrock window.
+	return ModelInfo{
+		Slug:                          slug,
+		DisplayName:                   slug,
+		SupportedInAPI:                true,
+		Visibility:                    VisibilityList,
+		ContextWindow:                 272000,
+		MaxContextWindow:              272000,
+		EffectiveContextWindowPercent: 95,
+		InputModalities:               []string{"text"},
+	}
+}
+
+func withoutReasoningLevel(levels []string, level string) []string {
+	if len(levels) == 0 {
+		return levels
+	}
+	out := make([]string, 0, len(levels))
+	for _, candidate := range levels {
+		if strings.EqualFold(strings.TrimSpace(candidate), level) {
+			continue
+		}
+		out = append(out, candidate)
+	}
+	return out
 }
 
 func WithDefaultOnlyServiceTier(catalog ModelsResponse) ModelsResponse {
@@ -1374,33 +1465,6 @@ func findModelByNamespacedSuffix(model string, candidates []ModelInfo) (ModelInf
 // standard literal prompt with no personality template.
 func localModelMessages() *ModelMessages {
 	return &ModelMessages{InstructionsTemplate: BaseInstructions}
-}
-
-func bedrockModel(slug string, priority int) ModelInfo {
-	return bedrockModelWithMaxContextWindow(slug, priority, 272000)
-}
-
-// bedrockModelWithMaxContextWindow mirrors Rust #39102: Amazon Bedrock GPT-5.6
-// variants allow context-window overrides up to 872,000 tokens while GPT-5.5 and
-// GPT-5.4 keep the shared 272,000-token Bedrock window.
-func bedrockModelWithMaxContextWindow(slug string, priority int, maxContextWindow int64) ModelInfo {
-	return ModelInfo{
-		Slug:                           slug,
-		DisplayName:                    slug,
-		Visibility:                     VisibilityVisible,
-		SupportedInAPI:                 true,
-		Priority:                       priority,
-		BaseInstructions:               BaseInstructions,
-		IncludeSkillsUsageInstructions: true,
-		TruncationPolicy:               TruncationPolicy{Mode: TruncationModeBytes, Limit: 10000},
-		ContextWindow:                  272000,
-		MaxContextWindow:               maxContextWindow,
-		EffectiveContextWindowPercent:  95,
-		InputModalities:                []string{"text"},
-		// Rust #39804: Amazon Bedrock does not support multi-agent V2 response
-		// items, so every Bedrock catalog model advertises multi-agent V1.
-		MultiAgentVersion: "v1",
-	}
 }
 
 func cloneModelInfos(in []ModelInfo) []ModelInfo {
