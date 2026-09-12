@@ -3,9 +3,46 @@ package bottompane
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/turn"
 )
+
+// TestAsyncQuestionsCollapsedCountdown covers Rust #42903: newly arrived
+// collapsed questions carry a 30s countdown that only shows in its last 20
+// seconds and is snoozed once the editor is opened or used.
+func TestAsyncQuestionsCollapsedCountdown(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	state := NewAsyncQuestions()
+	state.AppendAt("message", []AsyncUserInputQuestion{{Title: "Which?"}}, now)
+
+	if _, ok := state.Countdown(now); ok {
+		t.Fatal("countdown must stay hidden with more than 20 seconds left")
+	}
+	if text, ok := state.Countdown(now.Add(12 * time.Second)); !ok || text != "18s" {
+		t.Fatalf("countdown = (%q, %v), want 18s", text, ok)
+	}
+	if text, ok := state.Countdown(now.Add(25 * time.Second)); !ok || text != "5s" {
+		t.Fatalf("countdown = (%q, %v), want 5s", text, ok)
+	}
+	if _, ok := state.Countdown(now.Add(31 * time.Second)); ok {
+		t.Fatal("an expired countdown must disappear")
+	}
+
+	state.SnoozeAutoResolution()
+	if _, ok := state.Countdown(now.Add(25 * time.Second)); ok {
+		t.Fatal("snoozing must clear the countdown")
+	}
+
+	// A question that arrives while the editor is open carries no countdown.
+	open := NewAsyncQuestions()
+	open.AppendAt("message", []AsyncUserInputQuestion{{Title: "Which?"}}, now)
+	open.SetExpanded(true, "")
+	open.AppendAt("next", []AsyncUserInputQuestion{{Title: "Second?"}}, now)
+	if _, ok := open.Countdown(now.Add(25 * time.Second)); ok {
+		t.Fatal("questions arriving while expanded must not start a countdown")
+	}
+}
 
 func TestParseAsyncUserInputQuestionsMirrorsRustWireShape(t *testing.T) {
 	parsed := ParseAsyncUserInputQuestions([]any{

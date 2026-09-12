@@ -3,11 +3,13 @@ package tea
 import (
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"codex_go/protocol"
 	codextui "codex_go/tui"
 	"codex_go/tui/bottom_pane"
 	"codex_go/tui/styles"
@@ -22,6 +24,22 @@ import (
 // asyncQuestionEditorActive reports whether the model holds pending questions.
 func (m *Model) asyncQuestionEditorActive() bool {
 	return m != nil && m.asyncQuestions.UnansweredCount() > 0
+}
+
+// asyncQuestionCountdownMsg refreshes the collapsed question countdown. Bubble
+// Tea has no frame delay, so the model schedules its own one-second tick while
+// a countdown is active (Rust #42903 next_frame_delay).
+type asyncQuestionCountdownMsg struct{}
+
+// asyncQuestionCountdownCmd schedules the next countdown refresh, or returns nil
+// once no question has an active countdown.
+func (m *Model) asyncQuestionCountdownCmd() bubbletea.Cmd {
+	if m == nil || m.asyncQuestions.TimerRemaining(m.currentTime()) <= 0 {
+		return nil
+	}
+	return bubbletea.Tick(time.Second, func(time.Time) bubbletea.Msg {
+		return asyncQuestionCountdownMsg{}
+	})
 }
 
 // applyAsyncQuestionKey routes question navigation, skip, escape, and choice
@@ -44,13 +62,14 @@ func (m *Model) applyAsyncQuestionKey(msg bubbletea.KeyMsg, keySpec string) (bub
 		}
 		return nil, false
 	}
+	// Opening or using the editor stops the collapsed countdown (Rust #42903).
+	m.asyncQuestions.SnoozeAutoResolution()
 	switch {
 	case m.keyMatches("chat", "skip_question", keySpec):
 		m.acceptAsyncQuestion()
 		return nil, true
 	case m.keyMatches("chat", "edit_queued_message", keySpec):
-		m.navigateAsyncQuestions(true)
-		return nil, true
+		return nil, m.advanceAsyncQuestionsOrRestoreQueued()
 	case m.keyMatches("chat", "prompt_stack_back", keySpec):
 		m.navigateAsyncQuestions(false)
 		return nil, true
@@ -189,6 +208,25 @@ func (m *Model) navigateAsyncQuestions(forward bool) {
 	}
 }
 
+// advanceAsyncQuestionsOrRestoreQueued mirrors Rust #42903: forward navigation
+// from the last question collapses the editor and hands the key to the
+// queued-message edit so the latest queued message becomes the main draft. It
+// reports whether the key was consumed.
+func (m *Model) advanceAsyncQuestionsOrRestoreQueued() bool {
+	draft, moved := m.asyncQuestions.Navigate(true, m.composer.Value())
+	if moved {
+		m.composer.SetValue(draft)
+		m.resetVimEditHistory()
+		return true
+	}
+	if len(m.queued) > 0 && m.modal == nil && !m.slashPopup.Active && !m.skillPopup.Active {
+		m.collapseAsyncQuestions()
+		// Let applyEditQueuedMessageKey restore the latest queued message.
+		return false
+	}
+	return true
+}
+
 // expandAsyncQuestions gives the composer over to the focused question draft,
 // stashing the main composer draft so collapsing restores it.
 func (m *Model) expandAsyncQuestions() {
@@ -303,6 +341,30 @@ func (m *Model) clearAsyncQuestionsForNewPrompt() {
 	m.asyncQuestionMainDraft = ""
 }
 
+// appendBufferedAsyncQuestions retains questions carried by buffered live
+// notifications when switching to a background thread (Rust #42903). Historical
+// turn replay never passes through the buffer, so answered questions stay
+// handled.
+func (m *Model) appendBufferedAsyncQuestions(events []protocol.ThreadEvent) {
+	if m == nil || len(events) == 0 {
+		return
+	}
+	for _, event := range events {
+		if event.Type != "item.completed" || event.Item == nil {
+			continue
+		}
+		item := event.Item
+		if !strings.EqualFold(strings.TrimSpace(item.Type), "agent_message") {
+			continue
+		}
+		questions := bottompane.ParseAsyncUserInputQuestions(item.Metadata["questions"])
+		if len(questions) == 0 {
+			continue
+		}
+		m.asyncQuestions.AppendAt(item.ID, questions, m.currentTime())
+	}
+}
+
 // asyncQuestionChoicesVisible reports whether the focused question's suggested
 // choices fit the rows available below the transcript. Rust blocks submitting a
 // choice that the terminal cannot display in full (#42894).
@@ -346,10 +408,16 @@ func (m *Model) renderAsyncQuestions() []string {
 	if !m.asyncQuestions.Expanded() {
 		line := "  " + m.dimAsyncQuestionText("?") + " " +
 			m.accentAsyncQuestionText(questionCountLabel(count))
-		if binding := m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "Alt+Up"); binding != "" {
-			line += m.dimAsyncQuestionText(" · " + binding + " to answer")
+		if countdown, ok := m.asyncQuestions.Countdown(m.currentTime()); ok {
+			line += m.dimAsyncQuestionText(" · " + countdown)
 		}
-		return []string{line}
+		lines := []string{line}
+		// Rust #42903 keeps the edit binding on its own line so the countdown
+		// never crowds it out.
+		if binding := m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "Alt+Up"); binding != "" {
+			lines = append(lines, m.dimAsyncQuestionText("    "+binding+" to answer"))
+		}
+		return lines
 	}
 	lines := []string{}
 	if count > 1 {

@@ -3,6 +3,7 @@ package tea
 import (
 	"strings"
 	"testing"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
@@ -404,5 +405,108 @@ func TestAsyncQuestionsBlockClippedChoice(t *testing.T) {
 	roomy = updated.(*Model)
 	if requests := roomy.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != "> Which database should we deploy to production?\n\nPostgres" {
 		t.Fatalf("roomy submitted requests = %#v", requests)
+	}
+}
+
+// TestAsyncQuestionsCollapsedCountdownAppearsAndSnoozes covers Rust #42903: a
+// newly arrived collapsed question shows a countdown in its last 20 seconds and
+// opening the editor stops it.
+func TestAsyncQuestionsCollapsedCountdownAppearsAndSnoozes(t *testing.T) {
+	now := fixedTeaTime()
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
+	model.State.SetThreadID("thread-questions")
+	model.now = func() time.Time { return now }
+
+	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which?"}})
+	if strings.Contains(model.View(), " · 30s") {
+		t.Fatalf("countdown should be hidden with 30 seconds left:\n%s", model.View())
+	}
+
+	now = now.Add(15 * time.Second)
+	if view := model.View(); !strings.Contains(view, " · 15s") {
+		t.Fatalf("countdown missing:\n%s", view)
+	}
+
+	// Opening the editor snoozes the countdown for every pending question.
+	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	model = updated.(*Model)
+	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model = updated.(*Model)
+	if view := model.View(); strings.Contains(view, " · 15s") {
+		t.Fatalf("countdown must clear after the editor is opened:\n%s", view)
+	}
+}
+
+// TestAsyncQuestionsForwardNavigationRestoresQueuedMessage covers Rust #42903:
+// forward navigation from the last question collapses the editor and restores
+// the latest queued message as the main composer draft.
+func TestAsyncQuestionsForwardNavigationRestoresQueuedMessage(t *testing.T) {
+	model := newAsyncQuestionModel()
+	model.composer.SetValue("queued follow-up")
+	model.queueComposer(false)
+	if len(model.queued) != 1 {
+		t.Fatalf("seeded queue = %d, want 1", len(model.queued))
+	}
+	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which?"}})
+
+	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	model = updated.(*Model)
+	if !model.asyncQuestions.Expanded() {
+		t.Fatal("Alt+Up must focus the question editor")
+	}
+	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	model = updated.(*Model)
+
+	if model.asyncQuestions.Expanded() {
+		t.Fatal("forward navigation past the last question must collapse the editor")
+	}
+	if got := model.composer.Value(); got != "queued follow-up" {
+		t.Fatalf("composer = %q, want the restored queued message", got)
+	}
+	if len(model.queued) != 0 {
+		t.Fatalf("queue = %#v, want the restored message removed", model.queued)
+	}
+	if model.asyncQuestions.UnansweredCount() != 1 {
+		t.Fatal("restoring a queued message must not consume the question")
+	}
+}
+
+// TestAsyncQuestionsBufferedLiveQuestionsAppearOnAgentSwitch covers Rust #42903:
+// buffered live notifications from a background subagent introduce questions
+// when switching to that thread.
+func TestAsyncQuestionsBufferedLiveQuestionsAppearOnAgentSwitch(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-main")
+	model := NewModel(state, Options{
+		OnSwitchAgent: func(threadID string) (AgentThreadSwitchResponse, error) {
+			return AgentThreadSwitchResponse{
+				Entry:    codextui.AgentThreadEntry{ThreadID: threadID, AgentNickname: "Scout", AgentRole: "worker"},
+				Messages: nil,
+				Status:   "running",
+			}, nil
+		},
+	})
+	model.Update(ThreadScopedEventMsg{ThreadID: "thread-worker", Event: protocol.ThreadEvent{
+		Type: "item.completed",
+		Item: asyncQuestionItem("question-buffered", []any{map[string]any{"title": "Buffered?"}}),
+	}})
+	if model.asyncQuestions.UnansweredCount() != 0 {
+		t.Fatal("questions from an inactive thread must not surface before the switch")
+	}
+
+	model.Update(AgentSwitchResultMsg{
+		ThreadID: "thread-worker",
+		Response: AgentThreadSwitchResponse{
+			Entry:    codextui.AgentThreadEntry{ThreadID: "thread-worker", AgentNickname: "Scout", AgentRole: "worker"},
+			Status:   "running",
+			Messages: nil,
+		},
+	})
+	if model.asyncQuestions.UnansweredCount() != 1 {
+		t.Fatalf("questions after switch = %d, want 1", model.asyncQuestions.UnansweredCount())
+	}
+	question, ok := model.asyncQuestions.CurrentQuestion()
+	if !ok || question.Title != "Buffered?" {
+		t.Fatalf("buffered question = %#v (ok=%v)", question, ok)
 	}
 }

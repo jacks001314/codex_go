@@ -270,6 +270,9 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 			for _, event := range buffered {
 				messages = applyBufferedThreadEventToMessages(messages, event)
 			}
+			// Rust #42903: buffered live notifications can introduce async
+			// questions; historical turn replay cannot.
+			m.appendBufferedAsyncQuestions(buffered)
 		}
 		delete(m.backgroundThreadEvents, entry.ThreadID)
 		m.State.Messages = messages

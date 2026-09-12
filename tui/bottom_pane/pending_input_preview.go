@@ -12,6 +12,10 @@ type PendingInputPreview struct {
 	QueuedMessages   []string
 	EditBinding      string
 	InterruptBinding string
+	// HasQuestions keeps the queued follow-up group visible alongside pending
+	// async questions and suppresses the edit-queued hint, which the question
+	// summary owns instead (Rust #42903).
+	HasQuestions bool
 }
 
 func NewPendingInputPreview() *PendingInputPreview {
@@ -37,7 +41,7 @@ func (p *PendingInputPreview) RenderLines(width int) []string {
 	if p == nil || width < 4 {
 		return nil
 	}
-	if len(p.PendingSteers) == 0 && len(p.RejectedSteers) == 0 && len(p.QueuedMessages) == 0 {
+	if len(p.PendingSteers) == 0 && len(p.RejectedSteers) == 0 && len(p.QueuedMessages) == 0 && !p.HasQuestions {
 		return nil
 	}
 	lines := []string{}
@@ -60,7 +64,7 @@ func (p *PendingInputPreview) RenderLines(width int) []string {
 			pushPreview(&lines, width, steer)
 		}
 	}
-	if len(p.QueuedMessages) > 0 {
+	if len(p.QueuedMessages) > 0 || p.HasQuestions {
 		if len(lines) > 0 {
 			lines = append(lines, "")
 		}
@@ -68,7 +72,7 @@ func (p *PendingInputPreview) RenderLines(width int) []string {
 		for _, message := range p.QueuedMessages {
 			pushPreview(&lines, width, message)
 		}
-		if p.EditBinding != "" {
+		if len(p.QueuedMessages) > 0 && !p.HasQuestions && p.EditBinding != "" {
 			lines = append(lines, "    "+p.EditBinding+" edit last queued message")
 		}
 	}

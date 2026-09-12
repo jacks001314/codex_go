@@ -1860,6 +1860,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		m.sampleVoicePeaks()
 		return m, voiceMeterTickCmd()
+	case asyncQuestionCountdownMsg:
+		return m, m.asyncQuestionCountdownCmd()
 	case HookRunMsg:
 		m.applyHookRun(msg)
 		return m, nil
@@ -3541,6 +3543,7 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	if item == nil {
 		return nil
 	}
+	var countdownCmd bubbletea.Cmd
 	if item.Type != "command_execution" {
 		m.flushCompactCommandGroup()
 	}
@@ -3567,7 +3570,10 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 			// Rust #42891: structured async questions become pending local
 			// questions the composer can answer inline.
 			if questions := bottompane.ParseAsyncUserInputQuestions(item.Metadata["questions"]); len(questions) > 0 {
-				m.asyncQuestions.Append(item.ID, questions)
+				if m.asyncQuestions.AppendAt(item.ID, questions, m.currentTime()) {
+					// Rust #42903: start the collapsed countdown refresh.
+					countdownCmd = m.asyncQuestionCountdownCmd()
+				}
 			}
 		} else if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {
 			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
@@ -3619,7 +3625,7 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	case "sub_agent_activity", "subAgentActivity":
 		m.renderSubAgentActivity(item)
 	}
-	return nil
+	return countdownCmd
 }
 
 // applyMisalignmentPolicyViolation stops the affected chat: the active turn
@@ -6346,8 +6352,10 @@ func (m *Model) renderBottomPane() string {
 	if len(m.attachments) > 0 {
 		lines = append(lines, m.renderAttachmentLine())
 	}
-	if len(m.pendingSteers) > 0 || len(m.rejectedSteers) > 0 || len(m.queued) > 0 {
+	hasAsyncQuestions := m.asyncQuestionEditorActive()
+	if len(m.pendingSteers) > 0 || len(m.rejectedSteers) > 0 || len(m.queued) > 0 || hasAsyncQuestions {
 		preview := bottompane.NewPendingInputPreview()
+		preview.HasQuestions = hasAsyncQuestions
 		preview.PendingSteers = make([]string, 0, len(m.pendingSteers))
 		for _, pending := range m.pendingSteers {
 			preview.PendingSteers = append(preview.PendingSteers, queuedSubmissionSummary(pending.Request))

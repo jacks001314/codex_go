@@ -3,6 +3,7 @@ package bottompane
 import (
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"codex_go/context"
@@ -33,15 +34,24 @@ const (
 	// otherOptionLabel is the editable free-text choice appended to a question
 	// with suggestions (Rust #42897).
 	otherOptionLabel = "Other"
+	// asyncQuestionAutoResolveWindow is how long a newly arrived collapsed
+	// question shows its countdown (Rust #42903).
+	asyncQuestionAutoResolveWindow = 30 * time.Second
+	// asyncQuestionCountdownVisibleAfter bounds when the countdown appears.
+	asyncQuestionCountdownVisibleAfter = 20 * time.Second
 )
 
 // PendingAsyncQuestion retains one unanswered question, its choice selection,
 // and its draft answer. SelectedOption indexes the suggested options, with
 // len(Options) selecting the appended Other choice.
 type PendingAsyncQuestion struct {
+	MessageID      string
 	Question       AsyncUserInputQuestion
 	SelectedOption int
 	Draft          string
+	// ExpiresAt drives the collapsed countdown; the zero value means the
+	// question has been snoozed by opening or using the editor.
+	ExpiresAt time.Time
 }
 
 // AsyncQuestions is the locally retained async-question editor state.
@@ -128,6 +138,12 @@ func asyncUserInputQuestionFromValue(value any) (AsyncUserInputQuestion, bool) {
 // AsyncQuestions::append. An already-seen message ID or an empty list is a
 // no-op. It reports whether the pending set grew.
 func (q *AsyncQuestions) Append(messageID string, questions []AsyncUserInputQuestion) bool {
+	return q.AppendAt(messageID, questions, time.Now())
+}
+
+// AppendAt is Append with an explicit arrival time so the collapsed countdown
+// and its tests are deterministic (Rust #42903).
+func (q *AsyncQuestions) AppendAt(messageID string, questions []AsyncUserInputQuestion, now time.Time) bool {
 	if q == nil || len(questions) == 0 {
 		return false
 	}
@@ -142,8 +158,16 @@ func (q *AsyncQuestions) Append(messageID string, questions []AsyncUserInputQues
 		q.seen[messageID] = struct{}{}
 	}
 	wasEmpty := len(q.pending) == 0
+	var expiresAt time.Time
+	if !q.expanded {
+		expiresAt = now.Add(asyncQuestionAutoResolveWindow)
+	}
 	for _, question := range questions {
-		q.pending = append(q.pending, PendingAsyncQuestion{Question: filterAsyncUserInputQuestionOptions(question)})
+		q.pending = append(q.pending, PendingAsyncQuestion{
+			MessageID: messageID,
+			Question:  filterAsyncUserInputQuestionOptions(question),
+			ExpiresAt: expiresAt,
+		})
 	}
 	if wasEmpty {
 		q.current = 0
@@ -414,6 +438,54 @@ func (q *AsyncQuestions) SetExpanded(expanded bool, draft string) {
 	}
 	q.storeCurrentDraft(draft)
 	q.expanded = expanded && len(q.pending) > 0
+	if q.expanded {
+		q.SnoozeAutoResolution()
+	}
+}
+
+// SnoozeAutoResolution clears the collapsed countdown for every pending
+// question, mirroring Rust's `snooze_auto_resolution`: opening or using the
+// editor stops the countdown.
+func (q *AsyncQuestions) SnoozeAutoResolution() {
+	if q == nil {
+		return
+	}
+	for index := range q.pending {
+		q.pending[index].ExpiresAt = time.Time{}
+	}
+}
+
+// TimerRemaining returns the shortest positive countdown remaining, or zero
+// when no question has an active countdown.
+func (q *AsyncQuestions) TimerRemaining(now time.Time) time.Duration {
+	if q == nil {
+		return 0
+	}
+	remaining := time.Duration(0)
+	for _, question := range q.pending {
+		if question.ExpiresAt.IsZero() {
+			continue
+		}
+		left := question.ExpiresAt.Sub(now)
+		if left <= 0 {
+			continue
+		}
+		if remaining == 0 || left < remaining {
+			remaining = left
+		}
+	}
+	return remaining
+}
+
+// Countdown renders the collapsed countdown ("12s") once at most 20 seconds
+// remain, matching Rust's `countdown`.
+func (q *AsyncQuestions) Countdown(now time.Time) (string, bool) {
+	remaining := q.TimerRemaining(now)
+	if remaining <= 0 || remaining > asyncQuestionCountdownVisibleAfter {
+		return "", false
+	}
+	seconds := int((remaining + time.Second - 1) / time.Second)
+	return strconv.Itoa(seconds) + "s", true
 }
 
 // Navigate moves the focused question, returning the draft to restore and
