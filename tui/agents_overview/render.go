@@ -279,6 +279,26 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 		lines = append(lines, []span{{text: "Branch", style: spanDim}})
 		lines = append(lines, []span{{text: strings.TrimSpace(row.GitBranch), style: spanPlain}})
 	}
+	// Rust #44752: the details pane also shows the task's last delivered agent
+	// message, rendered from markdown with the task's working directory.
+	if message := strings.TrimSpace(row.LastMessage); message != "" {
+		lines = append(lines, nil)
+		lines = append(lines, []span{{text: "Last message", style: spanDim}})
+		rendered := v.RenderMarkdown != nil
+		var messageLines []string
+		if rendered {
+			messageLines = v.RenderMarkdown(message, width)
+			if len(messageLines) == 0 {
+				rendered = false
+			}
+		}
+		if len(messageLines) == 0 {
+			messageLines = wrapPreviewLines(message, width)
+		}
+		for _, line := range messageLines {
+			lines = append(lines, []span{{text: line, raw: rendered}})
+		}
+	}
 	// promptStart marks where the original prompt begins; when usage is present
 	// and the details would exceed the pane, the prompt is dropped so activity
 	// and usage keep their lines (Rust #44970).

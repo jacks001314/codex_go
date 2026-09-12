@@ -15,6 +15,7 @@ import (
 	"codex_go/cli"
 	"codex_go/session"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/markdown"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
 )
@@ -118,6 +119,9 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 		if branch, ok := record.Metadata.Git["branch"]; ok {
 			row.GitBranch = strings.TrimSpace(branch)
 		}
+		// Local records only carry items when their history was materialized; the
+		// dashboard listing skips history, so this is best-effort.
+		row.LastMessage = lastAgentMessagePreviewFromSessionItems(record.Items)
 		row.Group, row.StatusActive = localAgentGroupForRecord(record)
 		row.IsCurrent = strings.EqualFold(strings.TrimSpace(string(record.ID)), currentThreadID)
 		rows = append(rows, row)
@@ -190,7 +194,70 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 			threads = append(threads, thread)
 		}
 	}
-	return agentsOverviewRowsFromThreads(threads, ""), nil
+	rows := agentsOverviewRowsFromThreads(threads, "")
+	s.attachLastMessages(ctx, rows)
+	return rows, nil
+}
+
+// attachLastMessages fills each task's details-pane "Last message" from the
+// latest turn's final agent message (Rust agents_overview_threads reads
+// thread/turns/list with limit 1; Rust fans the reads out, Go issues them on the
+// dashboard's existing sequential read path).
+func (s *remoteAgentsDashboardSource) attachLastMessages(ctx context.Context, rows []agentsoverview.Row) {
+	if s == nil || s.client == nil {
+		return
+	}
+	limit := 1
+	for i := range rows {
+		threadID := strings.TrimSpace(rows[i].ThreadID)
+		if threadID == "" {
+			continue
+		}
+		var page appserver.TurnsPage
+		if err := remoteSessionRequest(ctx, s.client, appserver.MethodThreadTurnsList, appserver.ThreadTurnsListParams{
+			ThreadID: threadID,
+			Limit:    &limit,
+		}, &page); err != nil {
+			continue
+		}
+		if len(page.Data) == 0 {
+			continue
+		}
+		rows[i].LastMessage = lastAgentMessagePreview(page.Data[0].Items)
+	}
+}
+
+// lastAgentMessagePreview previews the latest agent message in a turn, matching
+// Rust preview_agent_message (unwrap markdown fences, then bound the preview).
+func lastAgentMessagePreview(items []appserver.ThreadItem) string {
+	for i := len(items) - 1; i >= 0; i-- {
+		if !strings.EqualFold(strings.TrimSpace(items[i].Type), "agentMessage") {
+			continue
+		}
+		if text := previewAgentMessage(items[i].Text); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func previewAgentMessage(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return agentsoverview.PreviewMarkdown(markdown.UnwrapMarkdownFences(text))
+}
+
+func lastAgentMessagePreviewFromSessionItems(items []session.Item) string {
+	for i := len(items) - 1; i >= 0; i-- {
+		if !strings.EqualFold(strings.TrimSpace(items[i].Type), "agentMessage") {
+			continue
+		}
+		if text := previewAgentMessage(items[i].Text); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func (s *remoteAgentsDashboardSource) Dispatch(ctx context.Context, request codextea.SubmitRequest, cwd string) (string, error) {

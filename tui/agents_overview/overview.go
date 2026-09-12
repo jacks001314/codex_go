@@ -147,8 +147,12 @@ type Row struct {
 	CWD      string
 	// Model is the task's model; an empty value groups as "Unknown"
 	// (Rust #44957).
-	Model        string
-	GitBranch    string
+	Model     string
+	GitBranch string
+	// LastMessage is the latest agent message in the task's most recent turn,
+	// previewed for the details pane (Rust agents_overview_details
+	// last_message via thread/turns/list).
+	LastMessage  string
 	Group        Group
 	IsCurrent    bool
 	StatusActive bool // an active turn is running (enables ctrl+x stop)
