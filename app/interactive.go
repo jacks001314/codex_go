@@ -860,6 +860,17 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	readGoal, setGoal, clearGoal, editGoalText, materializeGoalDraft := interactiveLocalGoalCallbacks(nil)
 	readAgents, switchAgent := interactiveLocalAgentCallbacks(nil)
 	worktreeSettings, worktreeEnabled := interactiveWorktreeSettings(root)
+	// The TUI owns the voice helper and relays its handshake through the
+	// in-process app-server, so the embedded TUI exposes the same /voice
+	// surface as the remote TUI.
+	voiceSettings, voiceVoices, voiceStart, voiceStop := interactiveLocalVoiceCallbacks(nil)
+	voice := newVoiceRuntime(voiceRuntimeOptions{
+		buildCommit:      doctor.Version(),
+		realtimeSettings: voiceSettings,
+		listVoices:       voiceVoices,
+		startSession:     voiceStart,
+		stopSession:      voiceStop,
+	})
 	options := codextea.Options{
 		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
 		LocalSession:                true,
@@ -887,29 +898,43 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnRenameThread:              interactiveRenameThreadHandler(),
 		OnLogout:                    interactiveLogoutHandler(ctx, root),
 		OnOpenDesktopThread:         interactiveOpenDesktopThread,
-		KeymapConfig:                interactiveKeymapConfig(root),
-		OnKeymapEdit:                interactiveKeymapEditHandler(root),
-		OnWriteSettings:             interactiveSettingsWriteHandler(root),
-		OnWriteMemorySettings:       interactiveMemorySettingsWriteHandler(root),
-		OnResetMemories:             interactiveMemoryResetHandler(),
-		OnSubmitFeedback:            interactiveFeedbackSubmitHandler(),
-		OnReadIDEContext:            interactiveIDEContextReader,
-		OnApproveAutoReviewDenial:   interactiveApproveAutoReviewDenialHandler(),
-		OnStartWindowsSandboxSetup:  interactiveWindowsSandboxSetupHandler(root),
-		FeatureSettings:             settings.FeatureSettings,
-		UseMemories:                 settings.UseMemories,
-		GenerateMemories:            settings.GenerateMemories,
-		FeedbackEnabled:             settings.FeedbackEnabled,
-		DisablePasteBurst:           settings.DisablePasteBurst,
-		ModelPickerOptions:          interactiveModelPickerOptions(root),
-		ServiceTierCommands:         interactiveServiceTierCommands(state.Model),
-		OnListModels:                interactiveOnListModels(root, hasChatGPTAccount),
-		Personality:                 settings.Personality,
-		Notifications:               settings.Notifications,
-		NotificationMethod:          settings.NotificationMethod,
-		NotificationCondition:       settings.NotificationCondition,
-		PermissionRequirements:      settings.PermissionRequirements,
-		MCPServers:                  mcpStatuses,
+		OnVoiceConversationStart: func(threadID string, attemptID uint64) bubbletea.Cmd {
+			return voice.startCmd(threadID, attemptID)
+		},
+		OnVoiceApplyAnswer: func(threadID string, attemptID uint64, answer string) bubbletea.Cmd {
+			return voice.applyAnswerCmd(threadID, attemptID, answer)
+		},
+		OnVoiceCloseHelper:        voice.close,
+		OnVoiceSetMicrophoneMuted: func(muted bool) error { return voice.setMicrophoneMuted(muted) },
+		OnVoicePeaks:              voice.peaks,
+		OnVoiceSettings:           interactiveLocalVoiceSettings(nil),
+		OnVoiceSaveVoice:          interactiveLocalVoiceSaver(nil),
+		OnVoiceAppendSpeech: interactiveLocalSpeechSender(nil, func() string {
+			return state.ThreadID
+		}),
+		KeymapConfig:               interactiveKeymapConfig(root),
+		OnKeymapEdit:               interactiveKeymapEditHandler(root),
+		OnWriteSettings:            interactiveSettingsWriteHandler(root),
+		OnWriteMemorySettings:      interactiveMemorySettingsWriteHandler(root),
+		OnResetMemories:            interactiveMemoryResetHandler(),
+		OnSubmitFeedback:           interactiveFeedbackSubmitHandler(),
+		OnReadIDEContext:           interactiveIDEContextReader,
+		OnApproveAutoReviewDenial:  interactiveApproveAutoReviewDenialHandler(),
+		OnStartWindowsSandboxSetup: interactiveWindowsSandboxSetupHandler(root),
+		FeatureSettings:            settings.FeatureSettings,
+		UseMemories:                settings.UseMemories,
+		GenerateMemories:           settings.GenerateMemories,
+		FeedbackEnabled:            settings.FeedbackEnabled,
+		DisablePasteBurst:          settings.DisablePasteBurst,
+		ModelPickerOptions:         interactiveModelPickerOptions(root),
+		ServiceTierCommands:        interactiveServiceTierCommands(state.Model),
+		OnListModels:               interactiveOnListModels(root, hasChatGPTAccount),
+		Personality:                settings.Personality,
+		Notifications:              settings.Notifications,
+		NotificationMethod:         settings.NotificationMethod,
+		NotificationCondition:      settings.NotificationCondition,
+		PermissionRequirements:     settings.PermissionRequirements,
+		MCPServers:                 mcpStatuses,
 		OnReadMCPInventory: func(detail bool) ([]historycell.McpServerStatus, error) {
 			if mcpService == nil {
 				return nil, nil
