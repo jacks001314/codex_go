@@ -61,6 +61,16 @@ func (m *Model) applyWorkingDirectoryChangeCommand(args string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
+	// Rust #43340: a pending named-profile selection or an active named remote
+	// profile blocks directory changes.
+	if m.pendingServerProfile != "" {
+		m.addErrorHistoryMessage("Wait for permissions to update before changing directories.")
+		return nil
+	}
+	if m.remoteNamedPermissionProfileActive() {
+		m.addErrorHistoryMessage("Changing directories with a named profile is not supported.")
+		return nil
+	}
 	threadID := strings.TrimSpace(m.State.ThreadID)
 	target := strings.TrimSpace(args)
 	if target == "" {

@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"errors"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -11,9 +12,68 @@ import (
 
 const fullAccessConfirmationPrefix = "full-access-confirm:"
 
-func (m *Model) openPermissionsMenu() {
+// ErrNamedPermissionProfilesUnsupported reports that the connected app server
+// cannot select named permission profiles (Rust #43340: an older server).
+var ErrNamedPermissionProfilesUnsupported = errors.New("named permission profiles are not supported by this app server")
+
+// permissionProfilesLoadedMsg carries the connected server's named permission
+// profiles (Rust #43340 permission discovery).
+type permissionProfilesLoadedMsg struct {
+	profiles []chatwidget.CustomPermissionProfile
+	err      error
+}
+
+// selectServerPermissionProfile asks the server to adopt a named profile and
+// tracks the selection until the server confirms it (Rust #43340).
+func (m *Model) selectServerPermissionProfile(item chatwidget.PermissionMenuItem) bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	if m.pendingServerProfile != "" {
+		m.notice = "Wait for permissions to update before changing permissions."
+		m.refreshTranscript()
+		return nil
+	}
+	threadID := strings.TrimSpace(m.State.ThreadID)
+	if threadID == "" {
+		m.notice = "Wait for the task to connect before selecting permissions."
+		m.refreshTranscript()
+		return nil
+	}
+	if m.isTaskRunning() {
+		m.notice = "Wait for the current turn to finish before changing permissions."
+		m.refreshTranscript()
+		return nil
+	}
+	profileID := strings.TrimSpace(item.ProfileID)
+	if err := m.onUpdateThreadPermissions(threadID, profileID); err != nil {
+		if errors.Is(err, ErrNamedPermissionProfilesUnsupported) {
+			m.notice = "Named profiles require a newer app server."
+		} else {
+			m.notice = "Failed to select permissions: " + strings.TrimSpace(err.Error())
+		}
+		m.refreshTranscript()
+		return nil
+	}
+	m.pendingServerProfile = profileID
+	m.notice = "Permission selection requested: " + profileID
+	m.refreshTranscript()
+	return nil
+}
+
+// remoteNamedPermissionProfileActive reports whether a non-built-in profile
+// selected on the connected server is active (Rust #43340).
+func (m *Model) remoteNamedPermissionProfileActive() bool {
+	if m == nil || m.State == nil || m.onUpdateThreadPermissions == nil {
+		return false
+	}
+	profileID := strings.TrimSpace(m.State.Sandbox)
+	return profileID != "" && !strings.HasPrefix(profileID, ":")
+}
+
+func (m *Model) openPermissionsMenu() bubbletea.Cmd {
 	if m == nil {
-		return
+		return nil
 	}
 	config := chatwidget.PermissionMenuConfig{
 		IncludeReadOnly:        true,
@@ -23,6 +83,12 @@ func (m *Model) openPermissionsMenu() {
 		CurrentProfileID:       strings.TrimSpace(m.State.Sandbox),
 		Requirements:           m.permissionRequirements,
 		WindowsDegradedSandbox: false,
+	}
+	if m.onListPermissionProfiles != nil {
+		// Rust #43340: the connected server owns named profiles, so the picker
+		// lists its discovery result instead of local presets only.
+		config.ExplicitPermissionProfileMode = true
+		config.CustomProfiles = append([]chatwidget.CustomPermissionProfile(nil), m.permissionProfiles...)
 	}
 	view := chatwidget.NewPermissionsPopupView(config)
 	m.permissionItems = append([]chatwidget.PermissionMenuItem(nil), view.Items...)
@@ -34,6 +100,64 @@ func (m *Model) openPermissionsMenu() {
 		Body:    strings.TrimSpace(view.FooterNote),
 		Options: permissionModalOptions(view.Items),
 	})
+	if m.onListPermissionProfiles == nil || m.permissionProfilesLoading {
+		return nil
+	}
+	m.permissionProfilesLoading = true
+	return m.fetchPermissionProfilesCmd()
+}
+
+// fetchPermissionProfilesCmd loads the server's named permission profiles.
+func (m *Model) fetchPermissionProfilesCmd() bubbletea.Cmd {
+	if m == nil || m.onListPermissionProfiles == nil {
+		return nil
+	}
+	loader := m.onListPermissionProfiles
+	return func() bubbletea.Msg {
+		profiles, err := loader()
+		return permissionProfilesLoadedMsg{profiles: profiles, err: err}
+	}
+}
+
+// applyPermissionProfilesLoaded stores a discovery result and refreshes the
+// open permissions menu.
+func (m *Model) applyPermissionProfilesLoaded(msg permissionProfilesLoadedMsg) {
+	if m == nil {
+		return
+	}
+	m.permissionProfilesLoading = false
+	if msg.err != nil {
+		m.permissionProfilesErr = "Failed to load permissions: " + strings.TrimSpace(msg.err.Error())
+		if errors.Is(msg.err, ErrNamedPermissionProfilesUnsupported) {
+			m.permissionProfilesErr = "This server does not support permission discovery. Upgrade the Codex server to use this menu."
+		}
+		m.notice = m.permissionProfilesErr
+		m.refreshTranscript()
+		return
+	}
+	m.permissionProfilesErr = ""
+	m.permissionProfiles = append([]chatwidget.CustomPermissionProfile(nil), msg.profiles...)
+	if m.modal == nil || m.modal.kind != ModalKindPermissions {
+		return
+	}
+	// Rebuild the open menu with the discovered profiles.
+	view := chatwidget.NewPermissionsPopupView(chatwidget.PermissionMenuConfig{
+		ExplicitPermissionProfileMode: true,
+		IncludeReadOnly:               true,
+		HideFullAccessWarning:         m.hideFullAccessWarning,
+		CurrentApprovalPolicy:         currentPermissionApprovalPolicy(m),
+		CurrentReviewer:               currentApprovalsReviewer(m),
+		CurrentProfileID:              strings.TrimSpace(m.State.Sandbox),
+		Requirements:                  m.permissionRequirements,
+		CustomProfiles:                append([]chatwidget.CustomPermissionProfile(nil), m.permissionProfiles...),
+	})
+	m.permissionItems = append([]chatwidget.PermissionMenuItem(nil), view.Items...)
+	m.modal.title = view.Title
+	m.modal.body = strings.TrimSpace(view.FooterNote)
+	m.modal.options = permissionModalOptions(view.Items)
+	if m.modal.selected >= len(m.modal.options) {
+		m.modal.selected = 0
+	}
 }
 
 func permissionModalOptions(items []chatwidget.PermissionMenuItem) []ModalOption {
@@ -121,14 +245,20 @@ func (m *Model) applyPermissionSelection(item chatwidget.PermissionMenuItem) bub
 	if m == nil || m.State == nil {
 		return nil
 	}
+	profileID := strings.TrimSpace(item.ProfileID)
+	// Rust #43340: a named (non-built-in) profile is owned by the connected app
+	// server and must be selected through thread/settings/update.
+	if profileID != "" && !strings.HasPrefix(profileID, ":") && m.onUpdateThreadPermissions != nil {
+		return m.selectServerPermissionProfile(item)
+	}
 	if item.ApprovalPolicy != nil {
 		m.State.ApprovalPolicy = string(*item.ApprovalPolicy)
 	}
 	if item.Reviewer != nil {
 		m.approvalsReviewer = *item.Reviewer
 	}
-	if strings.TrimSpace(item.ProfileID) != "" {
-		m.State.Sandbox = strings.TrimSpace(item.ProfileID)
+	if profileID != "" {
+		m.State.Sandbox = profileID
 	}
 	m.notice = ""
 	m.applyHistoryCell(historycell.NewInfoEvent("Permissions updated to "+strings.TrimSpace(item.Name), ""))

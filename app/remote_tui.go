@@ -368,7 +368,10 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		QuestionEscBack:    settings.QuestionEscBack,
 		// Remote sessions only see the worktrees feature flag; managed worktree
 		// operations stay local (Rust #43120/#43286).
-		WorktreesEnabled:            interactiveRemoteWorktreesEnabled(root),
+		WorktreesEnabled: interactiveRemoteWorktreesEnabled(root),
+		// Rust #43340: the connected server owns named permission profiles.
+		OnListPermissionProfiles:    interactiveRemoteListPermissionProfiles(ctx, endpoint),
+		OnUpdateThreadPermissions:   interactiveRemoteUpdateThreadPermissions(ctx, endpoint),
 		SessionPickerItems:          interactiveRemoteSessionPickerItems(ctx, root, endpoint),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,

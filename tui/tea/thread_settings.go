@@ -27,6 +27,9 @@ func (m *Model) applyThreadSettingsUpdated(msg ThreadSettingsUpdatedMsg) bubblet
 	if threadID == "" || threadID != strings.TrimSpace(m.State.ThreadID) {
 		return nil
 	}
+	// Rust #43340: the server confirming the thread's settings completes any
+	// pending named-profile selection.
+	m.pendingServerProfile = ""
 	m.applyThreadSettingsValues(msg.Settings)
 	return nil
 }

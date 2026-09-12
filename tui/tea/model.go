@@ -835,6 +835,13 @@ type Options struct {
 	OnWorktreeOwnerLookup       func(threadID string) (codextui.WorktreeOwnerLookup, bool)
 	OnStartManagedWorktree      StartManagedWorktreeFunc
 	OnManagedWorktreeChanged    func()
+	// OnListPermissionProfiles discovers the connected app server's named
+	// permission profiles for the /permissions picker (Rust #43340). Nil keeps
+	// the picker on local presets only.
+	OnListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, error)
+	// OnUpdateThreadPermissions asks the connected app server to adopt a named
+	// permission profile for the thread (Rust #43340; thread/settings/update).
+	OnUpdateThreadPermissions   func(threadID string, profileID string) error
 	OnReadDebugConfig           DebugConfigReaderFunc
 	OnReadGoal                  GoalReaderFunc
 	OnSetGoal                   GoalSetterFunc
@@ -1200,14 +1207,21 @@ type Model struct {
 	onStartManagedWorktree   func(mode string, name string, cwd string, threadID string) (SessionResumeResponse, error)
 	onManagedWorktreeChanged func()
 	worktreePopupRequestID   string
-	agentsOverviewEmbedded   bool
-	onAgentsOverviewRefresh  AgentsOverviewRefreshFunc
-	onAgentsOverviewDispatch AgentsOverviewDispatchFunc
-	onAgentsOverviewStop     AgentsOverviewStopFunc
-	onAgentsOverviewRename   AgentsOverviewRenameFunc
-	onAgentsOverviewArchive  AgentsOverviewArchiveFunc
-	onAgentsOverviewDelete   AgentsOverviewDeleteFunc
-	agentsOverviewLifecycle  *agentsOverviewLifecycleRequest
+	// Named permission profile discovery and pending selection (Rust #43340).
+	onListPermissionProfiles  func() ([]chatwidget.CustomPermissionProfile, error)
+	onUpdateThreadPermissions func(threadID string, profileID string) error
+	permissionProfiles        []chatwidget.CustomPermissionProfile
+	permissionProfilesLoading bool
+	permissionProfilesErr     string
+	pendingServerProfile      string
+	agentsOverviewEmbedded    bool
+	onAgentsOverviewRefresh   AgentsOverviewRefreshFunc
+	onAgentsOverviewDispatch  AgentsOverviewDispatchFunc
+	onAgentsOverviewStop      AgentsOverviewStopFunc
+	onAgentsOverviewRename    AgentsOverviewRenameFunc
+	onAgentsOverviewArchive   AgentsOverviewArchiveFunc
+	onAgentsOverviewDelete    AgentsOverviewDeleteFunc
+	agentsOverviewLifecycle   *agentsOverviewLifecycleRequest
 	// agentsOverviewLifecycleProgress is non-empty while an archive/delete RPC
 	// runs; navigation and task switching are blocked during that window
 	// (Rust #44433).
@@ -1513,6 +1527,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onWorktreeOwnerLookup:           options.OnWorktreeOwnerLookup,
 		onStartManagedWorktree:          options.OnStartManagedWorktree,
 		onManagedWorktreeChanged:        options.OnManagedWorktreeChanged,
+		onListPermissionProfiles:        options.OnListPermissionProfiles,
+		onUpdateThreadPermissions:       options.OnUpdateThreadPermissions,
 		agentsOverviewEmbedded:          options.AgentsOverviewEmbedded,
 		onAgentsOverviewRefresh:         options.OnAgentsOverviewRefresh,
 		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,
@@ -1918,6 +1934,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, voiceMeterTickCmd()
 	case asyncQuestionCountdownMsg:
 		return m, m.asyncQuestionCountdownCmd()
+	case permissionProfilesLoadedMsg:
+		m.applyPermissionProfilesLoaded(msg)
+		return m, nil
 	case WorktreeBrowserLoadedMsg:
 		return m, m.applyWorktreeBrowserLoaded(msg)
 	case WorktreeBrowserRemovedMsg:
@@ -5502,7 +5521,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandEditor:
 		return m.openExternalEditor()
 	case codextui.CommandPermissions:
-		m.openPermissionsMenu()
+		return m.openPermissionsMenu()
 	case codextui.CommandApproval:
 		m.applyApprovalSetting(invocation.Args)
 	case codextui.CommandSandbox:
