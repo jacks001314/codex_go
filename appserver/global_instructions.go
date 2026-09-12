@@ -83,9 +83,11 @@ func (r *RuntimeRouter) refreshThreadGlobalInstructions(params *turn.TurnStartPa
 	projectConfig := r.threadProjectInstructionsConfig(currentCWD)
 	currentTrust := projectTrustLabel(projectConfig, currentCWD)
 	projectSnapshotChanged := currentCWD != storedCWD || currentTrust != storedTrust
+	projectSources := []string(nil)
 	if projectSnapshotChanged {
-		if refreshedProject, _, err := r.loadProjectInstructionsFor(currentCWD, projectConfig); err == nil {
+		if refreshedProject, sources, err := r.loadProjectInstructionsFor(currentCWD, projectConfig); err == nil {
 			projectText = refreshedProject
+			projectSources = sources
 			record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 			record.Metadata.Extra["instructions_project"] = refreshedProject
 			record.Metadata.Extra["instructions_project_cwd"] = currentCWD
@@ -93,12 +95,16 @@ func (r *RuntimeRouter) refreshThreadGlobalInstructions(params *turn.TurnStartPa
 		}
 	}
 	globalText, _ := record.Metadata.Extra["instructions_global"].(string)
+	globalSource := ""
 	if codexHome := r.codexHomeForInstructions(); codexHome != "" {
 		refreshed := r.refreshGlobalInstructions(codexHome)
 		if refreshed != nil {
 			// Report fresh warnings even when the retained snapshot is unchanged.
 			r.emitInstructionWarnings(params.ThreadID, refreshed.Warnings)
 			globalText = instructionsText(refreshed)
+			if refreshed.Instructions != nil {
+				globalSource = strings.TrimSpace(refreshed.Instructions.Source)
+			}
 		}
 	}
 	combined := joinInstructionsParts(globalText, projectText)
@@ -106,6 +112,15 @@ func (r *RuntimeRouter) refreshThreadGlobalInstructions(params *turn.TurnStartPa
 		return
 	}
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	if projectSnapshotChanged {
+		// The repository snapshot moved; record the refreshed source list.
+		sources := make([]string, 0, len(projectSources)+1)
+		if globalSource != "" {
+			sources = append(sources, globalSource)
+		}
+		sources = append(sources, projectSources...)
+		setThreadRecordInstructionSources(record, sources)
+	}
 	if strings.TrimSpace(combined) == "" {
 		// The source was removed or blank: fall back to model/config instructions.
 		record.Metadata.BaseInstructions = ""

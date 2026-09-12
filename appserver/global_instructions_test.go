@@ -3,6 +3,7 @@ package appserver
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"codex_go/config"
@@ -125,6 +126,11 @@ func TestRuntimeRouterReDiscoversProjectInstructionsWhenCWDChanges(t *testing.T)
 	if got, _ := record.Metadata.Extra["instructions_project_cwd"].(string); got != firstCWD {
 		t.Fatalf("stored project cwd = %q, want %q", got, firstCWD)
 	}
+	// The second working directory contributes repository instructions.
+	secondAgents := filepath.Join(secondCWD, config.DefaultAgentsMDFilename)
+	if err := os.WriteFile(secondAgents, []byte("project second"), 0o600); err != nil {
+		t.Fatalf("write second AGENTS.md: %v", err)
+	}
 
 	params := &turn.TurnStartParams{ThreadID: threadID, CWD: secondCWD}
 	if err := router.prepareTurnStartParams(params); err != nil {
@@ -136,5 +142,18 @@ func TestRuntimeRouterReDiscoversProjectInstructionsWhenCWDChanges(t *testing.T)
 	}
 	if got, _ := updated.Metadata.Extra["instructions_project_cwd"].(string); got != secondCWD {
 		t.Fatalf("re-discovered project cwd = %q, want %q", got, secondCWD)
+	}
+	if !strings.Contains(updated.Metadata.BaseInstructions, "project second") {
+		t.Fatalf("base instructions = %q, want the re-discovered project text", updated.Metadata.BaseInstructions)
+	}
+	sources := stringSliceFromAny(updated.Metadata.Extra["instruction_sources"])
+	found := false
+	for _, source := range sources {
+		if source == secondAgents {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("instruction sources = %#v, want %q", sources, secondAgents)
 	}
 }
