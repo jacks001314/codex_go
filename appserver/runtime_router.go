@@ -6690,6 +6690,16 @@ func (r *RuntimeRouter) handleReviewStart(request *Request) (*review.StartRespon
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	// Rust #42602: detached review delivery is deprecated. Emit the
+	// connection-scoped notice before validation so callers still see it when
+	// the request is later rejected.
+	if reviewDeliveryDetached(&params) {
+		details := "Use thread/start followed by review/start with delivery \"inline\" for a separate review thread, or thread/fork followed by turn/start with your own review instructions."
+		r.notifyToConnection(request.normalizedConnectionID(), NotificationDeprecationNotice, &DeprecationNoticeNotification{
+			Summary: "review/start with delivery \"detached\" is deprecated and will be removed in a future release.",
+			Details: &details,
+		})
+	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
