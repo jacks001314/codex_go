@@ -2581,7 +2581,6 @@ func cancelOAuthLogins(logins []*OAuthLoginServer) {
 func cloneMCPServerStatus(status MCPServerStatus) MCPServerStatus {
 	status.RuntimeStatus = cloneMCPConnectionStatus(status.RuntimeStatus)
 	status.PluginID = cloneStringPtr(status.PluginID)
-	status.source = status.source
 	status.ServerCapabilities = cloneMCPRawMessage(status.ServerCapabilities)
 	status.FailureReason = cloneStringPtr(status.FailureReason)
 	status.Server.Args = append([]string(nil), status.Server.Args...)
