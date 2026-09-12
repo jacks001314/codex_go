@@ -24,10 +24,24 @@ type AsyncUserInputQuestion struct {
 	Options []string
 }
 
-// PendingAsyncQuestion retains one unanswered question and its draft answer.
+const (
+	// asyncQuestionMaxOptions and asyncQuestionMaxOptionBytes bound the
+	// model-authored suggestions before they are cloned or rendered
+	// (Rust #42894).
+	asyncQuestionMaxOptions     = 32
+	asyncQuestionMaxOptionBytes = 512
+	// otherOptionLabel is the editable free-text choice appended to a question
+	// with suggestions (Rust #42897).
+	otherOptionLabel = "Other"
+)
+
+// PendingAsyncQuestion retains one unanswered question, its choice selection,
+// and its draft answer. SelectedOption indexes the suggested options, with
+// len(Options) selecting the appended Other choice.
 type PendingAsyncQuestion struct {
-	Question AsyncUserInputQuestion
-	Draft    string
+	Question       AsyncUserInputQuestion
+	SelectedOption int
+	Draft          string
 }
 
 // AsyncQuestions is the locally retained async-question editor state.
@@ -129,7 +143,7 @@ func (q *AsyncQuestions) Append(messageID string, questions []AsyncUserInputQues
 	}
 	wasEmpty := len(q.pending) == 0
 	for _, question := range questions {
-		q.pending = append(q.pending, PendingAsyncQuestion{Question: question})
+		q.pending = append(q.pending, PendingAsyncQuestion{Question: filterAsyncUserInputQuestionOptions(question)})
 	}
 	if wasEmpty {
 		q.current = 0
@@ -168,6 +182,215 @@ func (q *AsyncQuestions) CurrentQuestion() (AsyncUserInputQuestion, bool) {
 		return AsyncUserInputQuestion{}, false
 	}
 	return q.pending[q.current].Question, true
+}
+
+// filterAsyncUserInputQuestionOptions bounds model-authored suggestions before
+// they are retained or rendered: at most 32 labels, each at most 512 bytes
+// (Rust #42894). Filtering everything out leaves a free-text question.
+func filterAsyncUserInputQuestionOptions(question AsyncUserInputQuestion) AsyncUserInputQuestion {
+	if question.Options == nil {
+		return question
+	}
+	filtered := make([]string, 0, len(question.Options))
+	for _, label := range question.Options {
+		if len(filtered) >= asyncQuestionMaxOptions {
+			break
+		}
+		if len(label) > asyncQuestionMaxOptionBytes {
+			continue
+		}
+		filtered = append(filtered, label)
+	}
+	question.Options = filtered
+	return question
+}
+
+// HasOptions reports whether the focused question has usable suggestions.
+func (q *AsyncQuestions) HasOptions() bool {
+	if q == nil || q.current < 0 || q.current >= len(q.pending) {
+		return false
+	}
+	return len(q.pending[q.current].Question.Options) > 0
+}
+
+// NamedOptionCount returns the number of suggested options on the focused
+// question.
+func (q *AsyncQuestions) NamedOptionCount() int {
+	if q == nil || q.current < 0 || q.current >= len(q.pending) {
+		return 0
+	}
+	return len(q.pending[q.current].Question.Options)
+}
+
+// ChoiceCount returns the number of selectable rows: every suggested option
+// plus the appended editable Other choice (Rust #42897).
+func (q *AsyncQuestions) ChoiceCount() int {
+	if !q.HasOptions() {
+		return 0
+	}
+	return q.NamedOptionCount() + 1
+}
+
+// OtherSelected reports whether the editable Other choice is focused.
+func (q *AsyncQuestions) OtherSelected() bool {
+	return q != nil && q.HasOptions() && q.pending[q.current].SelectedOption == q.NamedOptionCount()
+}
+
+// FocusIsNotes reports whether the composer edits the answer text: either the
+// question has no suggestions or the editable Other choice is focused.
+func (q *AsyncQuestions) FocusIsNotes() bool {
+	return q != nil && (!q.HasOptions() || q.OtherSelected())
+}
+
+// SelectedOptionIndex returns the focused choice index.
+func (q *AsyncQuestions) SelectedOptionIndex() int {
+	if q == nil || q.current < 0 || q.current >= len(q.pending) {
+		return 0
+	}
+	return q.pending[q.current].SelectedOption
+}
+
+// SelectOption focuses a choice row, including the appended Other row.
+func (q *AsyncQuestions) SelectOption(index int) {
+	if q == nil || q.current < 0 || q.current >= len(q.pending) {
+		return
+	}
+	if index < 0 || index >= q.ChoiceCount() {
+		return
+	}
+	q.pending[q.current].SelectedOption = index
+}
+
+// SelectOther focuses the editable Other choice.
+func (q *AsyncQuestions) SelectOther() {
+	if q == nil || !q.HasOptions() {
+		return
+	}
+	q.SelectOption(q.NamedOptionCount())
+}
+
+// MoveSelection moves the focused choice by one row, wrapping at the ends.
+func (q *AsyncQuestions) MoveSelection(forward bool) bool {
+	count := q.ChoiceCount()
+	if count == 0 {
+		return false
+	}
+	next := q.SelectedOptionIndex() + 1
+	if !forward {
+		next = q.SelectedOptionIndex() - 1
+	}
+	if next < 0 {
+		next = count - 1
+	}
+	if next >= count {
+		next = 0
+	}
+	q.SelectOption(next)
+	return true
+}
+
+// PageSelection moves the focused choice by one page, clamped to the list. Go
+// renders the whole option list, so a page spans every row and the move lands
+// on the first or last choice (Rust clamps by the visible row count).
+func (q *AsyncQuestions) PageSelection(forward bool) bool {
+	count := q.ChoiceCount()
+	if count == 0 {
+		return false
+	}
+	if forward {
+		q.SelectOption(count - 1)
+	} else {
+		q.SelectOption(0)
+	}
+	return true
+}
+
+// JumpSelection moves the focused choice to the first or last row.
+func (q *AsyncQuestions) JumpSelection(top bool) bool {
+	count := q.ChoiceCount()
+	if count == 0 {
+		return false
+	}
+	if top {
+		q.SelectOption(0)
+	} else {
+		q.SelectOption(count - 1)
+	}
+	return true
+}
+
+// OtherPlaceholder is the editable choice's placeholder. A suggested option
+// literally named Other forces a distinct placeholder (Rust #42897).
+func (q *AsyncQuestions) OtherPlaceholder() string {
+	if question, ok := q.CurrentQuestion(); ok {
+		for _, label := range question.Options {
+			if strings.EqualFold(label, otherOptionLabel) {
+				return "Other (write an answer)"
+			}
+		}
+	}
+	return otherOptionLabel
+}
+
+// OtherLabel is the text shown on the Other choice row: the placeholder while
+// the row is focused, otherwise a bounded preview of the custom draft.
+func (q *AsyncQuestions) OtherLabel() string {
+	placeholder := q.OtherPlaceholder()
+	if q == nil || q.OtherSelected() {
+		return placeholder
+	}
+	draft := strings.TrimSpace(q.CurrentDraft())
+	if draft == "" {
+		return placeholder
+	}
+	return truncateAsyncQuestionPreview(draft)
+}
+
+// AnswerText mirrors Rust's AsyncQuestions::go_next_or_submit text selection:
+// the focused suggested option's label, or the trimmed live draft when the
+// editable Other choice (or a free-text question) is focused. The caller passes
+// the composer's current text because Go keeps one live composer. A blank draft
+// is not a ready answer.
+func (q *AsyncQuestions) AnswerText(draft string) (string, bool) {
+	if q == nil {
+		return "", false
+	}
+	if q.FocusIsNotes() {
+		text := strings.TrimSpace(draft)
+		if text == "" {
+			return "", false
+		}
+		return text, true
+	}
+	index := q.SelectedOptionIndex()
+	question, ok := q.CurrentQuestion()
+	if !ok || index < 0 || index >= len(question.Options) {
+		return "", false
+	}
+	return question.Options[index], true
+}
+
+// AnswerIsNamedChoice reports whether the pending answer is a suggested option
+// rather than custom text; only named choices require the visibility guard.
+func (q *AsyncQuestions) AnswerIsNamedChoice() bool {
+	return q != nil && q.HasOptions() && !q.OtherSelected()
+}
+
+// truncateAsyncQuestionPreview bounds the Other row preview like Rust: 512
+// bytes at a rune boundary, then 128 graphemes (approximated by runes).
+func truncateAsyncQuestionPreview(text string) string {
+	if len(text) > asyncQuestionMaxOptionBytes {
+		end := asyncQuestionMaxOptionBytes
+		for end > 0 && !utf8.RuneStart(text[end]) {
+			end--
+		}
+		text = text[:end]
+	}
+	runes := []rune(text)
+	if len(runes) > 128 {
+		runes = runes[:128]
+	}
+	return string(runes)
 }
 
 // ProgressPrefixText mirrors Rust's "N of total" progress label.

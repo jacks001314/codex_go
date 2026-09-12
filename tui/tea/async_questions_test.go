@@ -264,3 +264,145 @@ func TestAsyncQuestionsNavigationKeepsPerQuestionDrafts(t *testing.T) {
 		t.Fatal("backward navigation at the first question must collapse the editor")
 	}
 }
+
+func withChoiceQuestion(t *testing.T) *Model {
+	t.Helper()
+	model := newAsyncQuestionModel()
+	model = feedAsyncQuestions(t, model, "question-1", []any{
+		map[string]any{"title": "Which database?", "options": []any{"Postgres", "SQLite"}},
+	})
+	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	return updated.(*Model)
+}
+
+// TestAsyncQuestionsRenderAndSubmitSelectedChoice covers Rust #42894: suggested
+// answers render as numbered choices with a default selection, and Enter
+// submits the selected label.
+func TestAsyncQuestionsRenderAndSubmitSelectedChoice(t *testing.T) {
+	model := withChoiceQuestion(t)
+	view := model.View()
+	for _, want := range []string{"› 1. Postgres", "  2. SQLite", "  3. Other", "Enter submit"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("choice view missing %q:\n%s", want, view)
+		}
+	}
+
+	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model = updated.(*Model)
+	requests := model.SubmittedRequests()
+	if len(requests) != 1 || requests[0].Prompt != "> Which database?\n\nPostgres" {
+		t.Fatalf("submitted requests = %#v", requests)
+	}
+	if model.asyncQuestions.UnansweredCount() != 0 {
+		t.Fatal("answering must consume the question")
+	}
+}
+
+// TestAsyncQuestionsArrowNavigationSelectsNextChoice covers list navigation
+// moving the focused choice.
+func TestAsyncQuestionsArrowNavigationSelectsNextChoice(t *testing.T) {
+	model := withChoiceQuestion(t)
+	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyDown})
+	model = updated.(*Model)
+	if model.asyncQuestions.SelectedOptionIndex() != 1 {
+		t.Fatalf("selection = %d, want 1", model.asyncQuestions.SelectedOptionIndex())
+	}
+	if view := model.View(); !strings.Contains(view, "› 2. SQLite") {
+		t.Fatalf("selection marker missing:\n%s", view)
+	}
+	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model = updated.(*Model)
+	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != "> Which database?\n\nSQLite" {
+		t.Fatalf("submitted requests = %#v", requests)
+	}
+}
+
+// TestAsyncQuestionsDigitShortcutSubmitsNamedChoice covers Rust #42894's digit
+// shortcuts submitting a named choice directly.
+func TestAsyncQuestionsDigitShortcutSubmitsNamedChoice(t *testing.T) {
+	model := withChoiceQuestion(t)
+	updated, _ := model.Update(keyRunes('2'))
+	model = updated.(*Model)
+	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != "> Which database?\n\nSQLite" {
+		t.Fatalf("submitted requests = %#v", requests)
+	}
+	if model.asyncQuestions.UnansweredCount() != 0 {
+		t.Fatal("digit submission must consume the question")
+	}
+}
+
+// TestAsyncQuestionsTypingOpensOther covers Rust #42897: typing (including the
+// printable default list keys) opens the editable Other choice instead of
+// navigating, and the custom draft is submitted as the answer.
+func TestAsyncQuestionsTypingOpensOther(t *testing.T) {
+	model := withChoiceQuestion(t)
+	updated, _ := model.Update(keyRunes('k'))
+	model = updated.(*Model)
+	if model.composer.Value() != "k" {
+		t.Fatalf("composer = %q, want the typed Other draft", model.composer.Value())
+	}
+	if !model.asyncQuestions.OtherSelected() {
+		t.Fatalf("selection = %d, want the Other row", model.asyncQuestions.SelectedOptionIndex())
+	}
+	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model = updated.(*Model)
+	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != "> Which database?\n\nk" {
+		t.Fatalf("submitted requests = %#v", requests)
+	}
+}
+
+// TestAsyncQuestionsBlankOtherIsNotSubmitted pins Rust #42897's blank-Other
+// rejection.
+func TestAsyncQuestionsBlankOtherIsNotSubmitted(t *testing.T) {
+	model := withChoiceQuestion(t)
+	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyDown})
+	model = updated.(*Model)
+	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyDown})
+	model = updated.(*Model)
+	if !model.asyncQuestions.OtherSelected() {
+		t.Fatal("two moves should focus the Other row")
+	}
+	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model = updated.(*Model)
+	if len(model.SubmittedRequests()) != 0 {
+		t.Fatalf("blank Other submitted: %#v", model.SubmittedRequests())
+	}
+	if model.asyncQuestions.UnansweredCount() != 1 {
+		t.Fatal("blank Other must keep the question pending")
+	}
+}
+
+// TestAsyncQuestionsBlockClippedChoice mirrors Rust #42894's visibility guard: a
+// suggested option the terminal cannot show in full must not be submittable.
+func TestAsyncQuestionsBlockClippedChoice(t *testing.T) {
+	options := []any{"Postgres", "SQLite", "MySQL", "Oracle", "SQL Server"}
+	feed := func(height int) *Model {
+		model := NewModel(codextui.NewState(nil), Options{Width: 60, Height: height})
+		model.State.SetThreadID("thread-questions")
+		model = feedAsyncQuestions(t, model, "question-1", []any{
+			map[string]any{"title": "Which database should we deploy to production?", "options": options},
+		})
+		updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+		return updated.(*Model)
+	}
+
+	clipped := feed(8)
+	updated, _ := clipped.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	clipped = updated.(*Model)
+	if len(clipped.SubmittedRequests()) != 0 {
+		t.Fatalf("clipped choice was submitted: %#v", clipped.SubmittedRequests())
+	}
+	if !strings.Contains(clipped.View(), "Expand terminal to read the entire option") {
+		t.Fatalf("missing clipped-choice notice:\n%s", clipped.View())
+	}
+	if clipped.asyncQuestions.UnansweredCount() != 1 {
+		t.Fatal("clipped choice must keep the question pending")
+	}
+
+	roomy := feed(60)
+	updated, _ = roomy.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	roomy = updated.(*Model)
+	if requests := roomy.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != "> Which database should we deploy to production?\n\nPostgres" {
+		t.Fatalf("roomy submitted requests = %#v", requests)
+	}
+}

@@ -2059,6 +2059,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			// Terminal commonly delivers Ctrl+V/right-click paste through this
 			// path rather than as KeyCtrlV.
 			if pasted := string(msg.Runes); pasted != "" && m.modal == nil {
+				// Rust #42897: pasting opens the editable Other choice.
+				if m.asyncQuestions.Expanded() && m.asyncQuestions.HasOptions() {
+					m.asyncQuestions.SelectOther()
+				}
 				m.composer.InsertString(pasted)
 				m.extendComposerPasteWindow(m.currentTime())
 				m.refreshSlashPopup()
@@ -2159,8 +2163,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if m.applyTranscriptNavigationKey(msg) {
 			return m, nil
 		}
-		if m.applyAsyncQuestionKey(msg, keySpec) {
-			return m, nil
+		if cmd, handled := m.applyAsyncQuestionKey(msg, keySpec); handled {
+			return m, cmd
 		}
 		if m.applyEditQueuedMessageKey(msg, keySpec) {
 			return m, nil

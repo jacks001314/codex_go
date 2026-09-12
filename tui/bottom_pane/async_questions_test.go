@@ -183,3 +183,137 @@ func TestBuildAsyncQuestionAnswerFramesAndBoundsTheAnswer(t *testing.T) {
 		t.Fatalf("framed multiline answer = %q", framed)
 	}
 }
+
+// TestAsyncQuestionsBoundSuggestedOptions covers Rust #42894: at most 32
+// suggestions, labels longer than 512 bytes dropped, and a question whose
+// suggestions all drop behaves as free text.
+func TestAsyncQuestionsBoundSuggestedOptions(t *testing.T) {
+	state := NewAsyncQuestions()
+	options := make([]string, 0, 40)
+	for index := 0; index < 40; index++ {
+		options = append(options, "option")
+	}
+	options = append(options, strings.Repeat("x", asyncQuestionMaxOptionBytes+1))
+	state.Append("message", []AsyncUserInputQuestion{{Title: "Bounded", Options: options}})
+	question, _ := state.CurrentQuestion()
+	if len(question.Options) != asyncQuestionMaxOptions {
+		t.Fatalf("bounds option count = %d, want %d", len(question.Options), asyncQuestionMaxOptions)
+	}
+	for _, label := range question.Options {
+		if len(label) > asyncQuestionMaxOptionBytes {
+			t.Fatalf("oversized suggestion retained: %d bytes", len(label))
+		}
+	}
+	if !state.HasOptions() || state.ChoiceCount() != asyncQuestionMaxOptions+1 {
+		t.Fatalf("choice count = %d (hasOptions=%v)", state.ChoiceCount(), state.HasOptions())
+	}
+
+	allOversized := NewAsyncQuestions()
+	allOversized.Append("next", []AsyncUserInputQuestion{{Title: "Free", Options: []string{strings.Repeat("y", asyncQuestionMaxOptionBytes+1)}}})
+	if allOversized.HasOptions() || !allOversized.FocusIsNotes() {
+		t.Fatal("a question whose suggestions all drop must behave as free text")
+	}
+}
+
+// TestAsyncQuestionsChoiceSelectionAndAnswer covers Rust #42894/#42897's choice
+// model: a default selection, wrapping navigation with the appended Other row,
+// and answer text taken from the focused choice or the editable draft.
+func TestAsyncQuestionsChoiceSelectionAndAnswer(t *testing.T) {
+	state := NewAsyncQuestions()
+	state.Append("message", []AsyncUserInputQuestion{{Title: "Which?", Options: []string{"Postgres", "SQLite"}}})
+	state.SetExpanded(true, "")
+	if state.SelectedOptionIndex() != 0 || state.OtherSelected() || state.FocusIsNotes() {
+		t.Fatalf("default selection = %d (other=%v notes=%v)", state.SelectedOptionIndex(), state.OtherSelected(), state.FocusIsNotes())
+	}
+	if state.ChoiceCount() != 3 {
+		t.Fatalf("choice count = %d, want 3 (two suggestions plus Other)", state.ChoiceCount())
+	}
+	if text, ready := state.AnswerText(""); !ready || text != "Postgres" {
+		t.Fatalf("default answer = (%q, %v)", text, ready)
+	}
+	if !state.AnswerIsNamedChoice() {
+		t.Fatal("the default selection is a named choice")
+	}
+
+	state.MoveSelection(true)
+	if state.SelectedOptionIndex() != 1 {
+		t.Fatalf("move down selection = %d", state.SelectedOptionIndex())
+	}
+	if text, _ := state.AnswerText(""); text != "SQLite" {
+		t.Fatalf("second choice answer = %q", text)
+	}
+	state.MoveSelection(true)
+	if !state.OtherSelected() || !state.FocusIsNotes() || state.AnswerIsNamedChoice() {
+		t.Fatalf("third row must focus Other: %+v", state)
+	}
+	if _, ready := state.AnswerText("   "); ready {
+		t.Fatal("a blank Other answer must not be ready")
+	}
+	if text, ready := state.AnswerText("  custom answer  "); !ready || text != "custom answer" {
+		t.Fatalf("Other answer = (%q, %v)", text, ready)
+	}
+
+	// Wrapping continues through Other back to the first suggestion.
+	state.MoveSelection(true)
+	if state.SelectedOptionIndex() != 0 {
+		t.Fatalf("wrapped selection = %d", state.SelectedOptionIndex())
+	}
+	state.MoveSelection(false)
+	if !state.OtherSelected() {
+		t.Fatalf("backward wrap selection = %d", state.SelectedOptionIndex())
+	}
+	state.JumpSelection(true)
+	if state.SelectedOptionIndex() != 0 {
+		t.Fatalf("jump top = %d", state.SelectedOptionIndex())
+	}
+	state.JumpSelection(false)
+	if !state.OtherSelected() {
+		t.Fatalf("jump bottom = %d", state.SelectedOptionIndex())
+	}
+	state.PageSelection(false)
+	if state.SelectedOptionIndex() != 0 {
+		t.Fatalf("page up = %d", state.SelectedOptionIndex())
+	}
+	state.PageSelection(true)
+	if !state.OtherSelected() {
+		t.Fatalf("page down = %d", state.SelectedOptionIndex())
+	}
+}
+
+// TestAsyncQuestionsOtherPlaceholderDistinguishesSuggestedOther covers Rust
+// #42897: a suggested option literally named Other gets a distinct placeholder.
+func TestAsyncQuestionsOtherPlaceholderDistinguishesSuggestedOther(t *testing.T) {
+	plain := NewAsyncQuestions()
+	plain.Append("message", []AsyncUserInputQuestion{{Title: "Q", Options: []string{"A"}}})
+	if got := plain.OtherPlaceholder(); got != otherOptionLabel {
+		t.Fatalf("placeholder = %q, want %q", got, otherOptionLabel)
+	}
+	if got := plain.OtherLabel(); got != otherOptionLabel {
+		t.Fatalf("Other row label = %q, want the placeholder", got)
+	}
+
+	named := NewAsyncQuestions()
+	named.Append("message", []AsyncUserInputQuestion{{Title: "Q", Options: []string{"other", "A"}}})
+	if got := named.OtherPlaceholder(); got != "Other (write an answer)" {
+		t.Fatalf("named-Other placeholder = %q", got)
+	}
+	named.SelectOther()
+	if got := named.OtherPlaceholder(); got != "Other (write an answer)" {
+		t.Fatalf("selected placeholder = %q", got)
+	}
+
+	// A non-focused Other row previews the custom draft, bounded like Rust.
+	drafting := NewAsyncQuestions()
+	drafting.Append("message", []AsyncUserInputQuestion{{Title: "Q", Options: []string{"A"}}})
+	drafting.Append("next", []AsyncUserInputQuestion{{Title: "Q2"}})
+	drafting.SetExpanded(true, "")
+	drafting.Navigate(true, strings.Repeat("d", 600))
+	drafting.Navigate(false, "")
+	preview := drafting.OtherLabel()
+	if len(preview) > 128 || strings.ContainsAny(preview, "\n") {
+		t.Fatalf("Other preview = %q (%d runes)", preview, len([]rune(preview)))
+	}
+	if preview == otherOptionLabel {
+		t.Fatal("a non-empty draft must preview instead of the placeholder")
+	}
+}
