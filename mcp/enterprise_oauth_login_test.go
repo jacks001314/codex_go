@@ -1,7 +1,11 @@
 package mcp
 
 import (
+	"context"
+	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -9,6 +13,171 @@ import (
 
 	"golang.org/x/oauth2"
 )
+
+// enterpriseTestIdP serves RMCP-shaped discovery metadata and a token endpoint.
+func enterpriseTestIdP(t *testing.T, mutate func(metadata map[string]any), tokenResponse func() map[string]any) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case mcpOAuthAuthorizationServerWellKnownPath:
+			metadata := map[string]any{
+				"issuer":                                "http://" + r.Host,
+				"authorization_endpoint":                "http://" + r.Host + "/authorize",
+				"token_endpoint":                        "http://" + r.Host + "/token",
+				"token_endpoint_auth_methods_supported": []string{"none"},
+			}
+			if mutate != nil {
+				mutate(metadata)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(metadata)
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(tokenResponse())
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// TestResolveEnterpriseAuthorizationMetadataStrictness covers Rust #43844's
+// discovery validation: published metadata bound to the configured issuer,
+// validated endpoints, and an advertised public-client auth method.
+func TestResolveEnterpriseAuthorizationMetadataStrictness(t *testing.T) {
+	ctx := context.Background()
+	server := enterpriseTestIdP(t, nil, func() map[string]any { return map[string]any{} })
+	metadata, err := resolveEnterpriseAuthorizationMetadata(ctx, server.URL, nil)
+	if err != nil {
+		t.Fatalf("resolve metadata: %v", err)
+	}
+	if metadata.Issuer != server.URL || metadata.AuthorizationEndpoint != server.URL+"/authorize" || metadata.TokenEndpoint != server.URL+"/token" {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+
+	// A metadata issuer that differs only by a root trailing slash passes the
+	// discovery binding but fails the exact enterprise comparison.
+	slashOnly := enterpriseTestIdP(t, func(metadata map[string]any) {
+		metadata["issuer"] = metadata["issuer"].(string) + "/"
+	}, func() map[string]any { return map[string]any{} })
+	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, slashOnly.URL, nil); err == nil ||
+		!strings.Contains(err.Error(), "does not match configuration") {
+		t.Fatalf("root-slash issuer error = %v", err)
+	}
+
+	// A mismatched published issuer aborts discovery.
+	mismatched := enterpriseTestIdP(t, func(metadata map[string]any) {
+		metadata["issuer"] = "https://other.example.com"
+	}, func() map[string]any { return map[string]any{} })
+	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, mismatched.URL, nil); err == nil {
+		t.Fatal("a mismatched issuer must be rejected")
+	}
+
+	// Public-client token endpoint authentication must be advertised.
+	noPublicAuth := enterpriseTestIdP(t, func(metadata map[string]any) {
+		metadata["token_endpoint_auth_methods_supported"] = []string{"client_secret_basic"}
+	}, func() map[string]any { return map[string]any{} })
+	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, noPublicAuth.URL, nil); err == nil ||
+		!strings.Contains(err.Error(), "public-client") {
+		t.Fatalf("public-client error = %v", err)
+	}
+
+	// An issuer with no published metadata is rejected.
+	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer empty.Close()
+	if _, err := resolveEnterpriseAuthorizationMetadata(ctx, empty.URL, nil); err == nil ||
+		!strings.Contains(err.Error(), "must publish authorization metadata") {
+		t.Fatalf("missing metadata error = %v", err)
+	}
+}
+
+// TestStartEnterpriseOAuthLoginStagesCredentials covers Rust #43844's staged
+// login: the authorization URL drops resource indicators and forces consent,
+// browser completion validates the grant without storing it, and only the
+// explicit commit persists the credential.
+func TestStartEnterpriseOAuthLoginStagesCredentials(t *testing.T) {
+	ctx := context.Background()
+	clientID := "eci-prd-pub-codex-123"
+	var server *httptest.Server
+	server = enterpriseTestIdP(t, nil, func() map[string]any {
+		return map[string]any{
+			"access_token":  "access-1",
+			"token_type":    "Bearer",
+			"refresh_token": "refresh-1",
+			"id_token":      mcpEMATestJWT(t, map[string]any{"alg": "ES256"}, mcpEMATestClaims(server.URL, clientID, "")),
+		}
+	})
+	home := t.TempDir()
+	handle, err := StartEnterpriseOAuthLogin(ctx, &EnterpriseOAuthLoginOptions{
+		CodexHome:      home,
+		CredentialName: "enterprise",
+		Issuer:         server.URL,
+		ClientID:       clientID,
+		RedirectURL:    "http://127.0.0.1:1455/callback",
+	})
+	if err != nil {
+		t.Fatalf("start enterprise login: %v", err)
+	}
+	authURL, err := url.Parse(handle.AuthorizationURL())
+	if err != nil {
+		t.Fatalf("parse authorization URL: %v", err)
+	}
+	if authURL.Query().Get("prompt") != "consent" || authURL.Query().Has("resource") {
+		t.Fatalf("authorization URL = %q", handle.AuthorizationURL())
+	}
+	if state := authURL.Query().Get("state"); state == "" || state != handle.session.State {
+		t.Fatalf("authorization state = %q, want %q", state, handle.session.State)
+	}
+
+	credentials, err := handle.Complete(ctx, "/callback?code=code-1&state="+url.QueryEscape(handle.session.State))
+	if err != nil {
+		t.Fatalf("complete enterprise login: %v", err)
+	}
+	if credentials.Tokens == nil || credentials.Tokens.RefreshToken != "refresh-1" {
+		t.Fatalf("staged credentials = %#v", credentials.Tokens)
+	}
+	// Browser completion alone must not persist the grant.
+	if loaded, err := NewOAuthStore(home).Load("enterprise", server.URL); err != nil || loaded != nil {
+		t.Fatalf("grant before commit = (%#v, %v), want none", loaded, err)
+	}
+
+	authority, err := CommitEnterpriseOAuthCredentials(home, credentials.Tokens, credentials.CommitGeneration(), func() *string {
+		value := "account-1"
+		return &value
+	})
+	if err != nil || authority != "account-1" {
+		t.Fatalf("commit = (%q, %v)", authority, err)
+	}
+	if loaded, err := NewOAuthStore(home).Load("enterprise", server.URL); err != nil || loaded == nil || loaded.AccessToken != "access-1" {
+		t.Fatalf("stored grant = (%#v, %v)", loaded, err)
+	}
+}
+
+// TestEnterpriseOAuthLoginRejectsIncompleteGrant covers the staged validation:
+// a token response without a refresh token or OIDC identity assertion cannot be
+// staged.
+func TestEnterpriseOAuthLoginRejectsIncompleteGrant(t *testing.T) {
+	ctx := context.Background()
+	server := enterpriseTestIdP(t, nil, func() map[string]any {
+		return map[string]any{"access_token": "access-1", "token_type": "Bearer"}
+	})
+	handle, err := StartEnterpriseOAuthLogin(ctx, &EnterpriseOAuthLoginOptions{
+		CodexHome:      t.TempDir(),
+		CredentialName: "enterprise",
+		Issuer:         server.URL,
+		ClientID:       "client-1",
+		RedirectURL:    "http://127.0.0.1:1455/callback",
+	})
+	if err != nil {
+		t.Fatalf("start enterprise login: %v", err)
+	}
+	if _, err := handle.Complete(ctx, "/callback?code=code-1&state="+url.QueryEscape(handle.session.State)); err == nil {
+		t.Fatal("a grant without a refresh token must not be staged")
+	}
+}
 
 // TestOAuthTokenSetCapturesIDToken covers Rust #43844's prerequisite: the OIDC
 // identity assertion returned by the exchange survives into the stored grant
