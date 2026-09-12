@@ -83,4 +83,50 @@ func TestSessionItemForAppAsyncMessageIgnoresOtherTools(t *testing.T) {
 	}
 }
 
+// TestSessionItemForAppStructuredAsyncQuestions covers Rust #42178: the
+// structured request_user_input_async tool becomes an async agent message whose
+// item carries the questions for the TUI to render.
+func TestSessionItemForAppStructuredAsyncQuestions(t *testing.T) {
+	createdAt := time.Date(2026, 9, 12, 1, 0, 0, 0, time.UTC)
+	questions := []any{
+		map[string]any{"title": "Which database?", "options": []any{"Postgres", "SQLite"}},
+		map[string]any{"title": "Deadline?"},
+	}
+	execution := &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{ToolName: tool.PlainName(tool.DefaultRequestUserInputAsyncToolName)},
+		Output: &tool.Output{
+			Success: true,
+			Data: map[string]any{
+				"async_questions": map[string]any{
+					"message":   "Which database?\n- Postgres\n- SQLite\n\nDeadline?",
+					"questions": questions,
+					"delivery":  "async",
+				},
+			},
+		},
+	}
+	item, ok := sessionItemForAppAsyncMessage("turn-1", execution, createdAt, nil)
+	if !ok {
+		t.Fatal("structured async question item not produced")
+	}
+	if item.Type != "agent_message" || item.Role != "assistant" || item.Text != "Which database?\n- Postgres\n- SQLite\n\nDeadline?" {
+		t.Fatalf("item = %#v", item)
+	}
+	if got, _ := item.Metadata["delivery"].(string); got != "async" {
+		t.Fatalf("delivery metadata = %q, want async", got)
+	}
+	threadItem := BuildThreadItem(item)
+	if threadItem.Delivery != "async" {
+		t.Fatalf("thread item delivery = %q, want async", threadItem.Delivery)
+	}
+	emitted, _ := threadItem.Data["questions"].([]any)
+	if len(emitted) != 2 {
+		t.Fatalf("thread item questions = %#v", threadItem.Data["questions"])
+	}
+	first, _ := emitted[0].(map[string]any)
+	if first["title"] != "Which database?" {
+		t.Fatalf("first question = %#v", first)
+	}
+}
+
 var _ = session.Item{}

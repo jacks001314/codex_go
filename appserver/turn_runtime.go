@@ -266,7 +266,9 @@ func (r *RuntimeRouter) persistentModeInstructionsFragment(cfg *config.Config, p
 	asyncAvailable := false
 	if modelInfo != nil {
 		for _, supported := range modelInfo.ExperimentalSupportedTools {
-			if supported == tool.DefaultSendUserMessageAsyncToolName || supported == tool.DefaultSendMessageToUserAsyncToolName {
+			if supported == tool.DefaultSendUserMessageAsyncToolName ||
+				supported == tool.DefaultSendMessageToUserAsyncToolName ||
+				supported == tool.DefaultRequestUserInputAsyncToolName {
 				asyncAvailable = true
 				break
 			}
@@ -5923,12 +5925,21 @@ func sessionItemForAppAsyncMessage(turnID string, execution *turn.ToolExecutionR
 		return session.Item{}, false
 	}
 	toolName := execution.Invocation.ToolName.Key()
-	if toolName != tool.DefaultSendUserMessageAsyncToolName && toolName != tool.DefaultSendMessageToUserAsyncToolName {
+	switch toolName {
+	case tool.DefaultSendUserMessageAsyncToolName,
+		tool.DefaultSendMessageToUserAsyncToolName,
+		tool.DefaultRequestUserInputAsyncToolName:
+	default:
 		return session.Item{}, false
 	}
 	message := ""
+	var questions any
 	if value, ok := execution.Output.Data["async_message"].(map[string]any); ok {
 		message, _ = value["message"].(string)
+	}
+	if value, ok := execution.Output.Data["async_questions"].(map[string]any); ok {
+		message, _ = value["message"].(string)
+		questions = value["questions"]
 	}
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -5938,6 +5949,11 @@ func sessionItemForAppAsyncMessage(turnID string, execution *turn.ToolExecutionR
 	metadata := appTimingMetadata(appTurnMetadata(turnID, cloneAnyMap(responseMetadata)), execution.StartedAt, execution.FinishedAt)
 	metadata["toolName"] = execution.Invocation.ToolName.Key()
 	metadata["delivery"] = "async"
+	if questions != nil {
+		// Rust #42178: structured questions ride on the async agent message so
+		// the TUI can render selectable answers.
+		metadata["questions"] = questions
+	}
 	return session.Item{
 		ID:        "agent-message-" + safeIdentifier(turnID) + "-" + safeIdentifier(callID),
 		Type:      "agent_message",

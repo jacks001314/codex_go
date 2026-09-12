@@ -12273,6 +12273,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if turnModelInfo != nil {
 		sendUserMessageAsyncAdded := false
 		sendMessageToUserAsyncAdded := false
+		requestUserInputAsyncAdded := false
 		for _, supported := range turnModelInfo.ExperimentalSupportedTools {
 			if supported == tool.DefaultSendUserMessageAsyncToolName && !sendUserMessageAsyncAdded {
 				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
@@ -12281,6 +12282,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			if supported == tool.DefaultSendMessageToUserAsyncToolName && !sendMessageToUserAsyncAdded {
 				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
 				sendMessageToUserAsyncAdded = true
+			}
+			if supported == tool.DefaultRequestUserInputAsyncToolName && !requestUserInputAsyncAdded {
+				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
+				requestUserInputAsyncAdded = true
 			}
 		}
 		if turnModelInfo.ModelMessages != nil {

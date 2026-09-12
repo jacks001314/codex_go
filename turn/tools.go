@@ -190,6 +190,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 					return nil, err
 				}
 			}
+			if supported == tool.DefaultRequestUserInputAsyncToolName {
+				if err := registry.Register(&tool.RequestUserInputAsyncHandler{}); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if options.EnableShell {
