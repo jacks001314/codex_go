@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -841,7 +842,10 @@ type Options struct {
 	OnListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, error)
 	// OnUpdateThreadPermissions asks the connected app server to adopt a named
 	// permission profile for the thread (Rust #43340; thread/settings/update).
-	OnUpdateThreadPermissions   func(threadID string, profileID string) error
+	OnUpdateThreadPermissions func(threadID string, profileID string) error
+	// TerminalSize overrides the terminal-size probe used by the tmux resize
+	// monitor (Rust #43603); nil uses the process terminal.
+	TerminalSize                func() (int, int, error)
 	OnReadDebugConfig           DebugConfigReaderFunc
 	OnReadGoal                  GoalReaderFunc
 	OnSetGoal                   GoalSetterFunc
@@ -1005,12 +1009,16 @@ type Model struct {
 	// workingDirectoryChangePending tracks a deferred /cd request so another
 	// one is rejected until it finishes (Rust #43376).
 	workingDirectoryChangePending bool
-	agentsOverviewHidden          map[string]struct{}
-	agentsOverviewPendingDraft    *string
-	transcriptMessages            transcriptMessageCache
-	overlayMessages               transcriptMessageCache
-	lastTranscriptContent         string
-	lastTranscriptHeight          int
+	// sizeMonitorEnabled polls the terminal size under tmux, where SIGWINCH can
+	// be lost (Rust #43603); terminalSize is the injectable probe.
+	sizeMonitorEnabled         bool
+	terminalSize               func() (int, int, error)
+	agentsOverviewHidden       map[string]struct{}
+	agentsOverviewPendingDraft *string
+	transcriptMessages         transcriptMessageCache
+	overlayMessages            transcriptMessageCache
+	lastTranscriptContent      string
+	lastTranscriptHeight       int
 
 	width                  int
 	height                 int
@@ -1532,6 +1540,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onManagedWorktreeChanged:        options.OnManagedWorktreeChanged,
 		onListPermissionProfiles:        options.OnListPermissionProfiles,
 		onUpdateThreadPermissions:       options.OnUpdateThreadPermissions,
+		terminalSize:                    options.TerminalSize,
+		sizeMonitorEnabled:              terminalSizeMonitorNeeded(runtime.GOOS, os.Getenv),
 		agentsOverviewEmbedded:          options.AgentsOverviewEmbedded,
 		onAgentsOverviewRefresh:         options.OnAgentsOverviewRefresh,
 		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,
@@ -1786,6 +1796,10 @@ func resolveStyles(custom *styles.Styles) styles.Styles {
 }
 func (m *Model) Init() bubbletea.Cmd {
 	commands := []bubbletea.Cmd{m.composer.Focus()}
+	if m.sizeMonitorEnabled {
+		// Rust #43603: recover resize notifications tmux can drop.
+		commands = append(commands, m.sizeMonitorTickCmd())
+	}
 	if m.animEngine != nil {
 		commands = append(commands, m.animEngine.TickCmd())
 	}
@@ -1940,6 +1954,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case permissionProfilesLoadedMsg:
 		m.applyPermissionProfilesLoaded(msg)
 		return m, nil
+	case terminalSizePollMsg:
+		m.applyTerminalSizePoll()
+		return m, m.sizeMonitorTickCmd()
 	case WorktreeBrowserLoadedMsg:
 		return m, m.applyWorktreeBrowserLoaded(msg)
 	case WorktreeBrowserRemovedMsg:
