@@ -101,3 +101,42 @@ func TestRemoteProtocolItemCarriesReasoningSummary(t *testing.T) {
 		t.Fatalf("reasoning text = %q, want %q", item.Text, want)
 	}
 }
+
+// TestRemoteTUIBuffersBackgroundReasoningDeltas covers Rust #43921's
+// buffered-replay prerequisite: reasoning deltas for a non-active thread are
+// forwarded thread-scoped so a later switch can restore the active item, while
+// the active thread keeps the client-side heading recording.
+func TestRemoteTUIBuffersBackgroundReasoningDeltas(t *testing.T) {
+	messages := make(chan bubbletea.Msg, 1)
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-main")
+	client := &remoteAppServerTUIClient{state: state, messages: messages}
+	params, err := json.Marshal(appserver.ReasoningSummaryTextDeltaNotification{
+		ThreadID: "thread-other",
+		TurnID:   "turn-1",
+		ItemID:   "reasoning-1",
+		Delta:    "## Buffered",
+	})
+	if err != nil {
+		t.Fatalf("marshal delta: %v", err)
+	}
+	if err := client.handleNotification(remoteAppServerMessage{
+		Method: string(appserver.NotificationReasoningSummaryTextDelta),
+		Params: params,
+	}); err != nil {
+		t.Fatalf("handle background reasoning delta: %v", err)
+	}
+	select {
+	case message := <-messages:
+		scoped, ok := message.(codextea.ThreadScopedEventMsg)
+		if !ok {
+			t.Fatalf("message = %T, want ThreadScopedEventMsg", message)
+		}
+		if scoped.ThreadID != "thread-other" || scoped.Event.Type != "item.reasoning.delta" || scoped.Event.Delta == nil ||
+			scoped.Event.Delta.ItemID != "reasoning-1" || scoped.Event.Delta.Text != "## Buffered" {
+			t.Fatalf("scoped reasoning event = %#v", scoped)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background reasoning delta was dropped")
+	}
+}

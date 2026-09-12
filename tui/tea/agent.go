@@ -7,6 +7,7 @@ import (
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 )
 
@@ -265,6 +266,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		m.resetThreadScopedState()
 		m.State.SetThreadID(entry.ThreadID)
 		messages := append([]codextui.Message(nil), message.Response.Messages...)
+		buffered := m.backgroundThreadEvents[entry.ThreadID]
 		// Only replay the buffer when the persisted thread is empty (the typical
 		// running-agent case). Completed content is authoritative once persisted,
 		// and replaying item events on top of it would duplicate messages.
@@ -272,7 +274,6 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		// frozen history is not rewritten by events observed while another app
 		// owns the task.
 		if len(messages) == 0 && !message.Response.ReadOnly {
-			buffered := m.backgroundThreadEvents[entry.ThreadID]
 			for _, event := range buffered {
 				messages = applyBufferedThreadEventToMessages(messages, event)
 			}
@@ -305,6 +306,12 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		// item reconciles the stream (Rust #43921 restore_active_reasoning_item).
 		m.reasoningRecoveredAfterRefresh = strings.TrimSpace(message.Response.WorkingReasoningItemID) != "" ||
 			strings.TrimSpace(message.Response.WorkingStatusHeader) != ""
+		// Rust #43921 ReasoningReplay: when the read snapshot identifies no active
+		// reasoning item, restore it from the buffered deltas so the heading
+		// survives earlier evictions.
+		if m.reasoningItemID == "" && !message.Response.ReadOnly {
+			m.replayBufferedReasoning(buffered)
+		}
 	}
 	m.activeSide = nil
 	m.upsertAgentEntry(entry)
@@ -319,6 +326,45 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 	m.setReadOnlyThread(message.Response.ReadOnly)
 	m.restorePendingAgentsOverviewDraft()
 	m.refreshTranscript()
+}
+
+// replayBufferedReasoning restores a switched-to thread's active reasoning item
+// from its buffered events when the read snapshot did not identify one (Rust
+// #43921 ReasoningReplay). The first reasoning item with buffered deltas becomes
+// the active item and its streamed summary seeds the heading, so the live
+// heading survives events the bounded buffer already replayed.
+func (m *Model) replayBufferedReasoning(events []protocol.ThreadEvent) {
+	if m == nil || m.reasoningItemID != "" {
+		return
+	}
+	itemID := ""
+	for _, event := range events {
+		if event.Type != "item.reasoning.delta" || event.Delta == nil {
+			continue
+		}
+		deltaItemID := strings.TrimSpace(event.Delta.ItemID)
+		if deltaItemID == "" {
+			continue
+		}
+		if itemID == "" {
+			itemID = deltaItemID
+		}
+		if deltaItemID != itemID {
+			continue
+		}
+		if m.reasoningSummaryBuffers == nil {
+			m.reasoningSummaryBuffers = map[string]string{}
+		}
+		m.reasoningSummaryBuffers[itemID] += event.Delta.Text
+	}
+	if itemID == "" {
+		return
+	}
+	if _, ok := chatwidget.LatestSummaryLine(m.reasoningSummaryBuffers[itemID]); !ok {
+		return
+	}
+	m.reasoningItemID = itemID
+	m.restoreReasoningStatusHeader()
 }
 
 func (m *Model) navigateAgent(direction int) bubbletea.Cmd {

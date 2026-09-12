@@ -3498,6 +3498,9 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return err
 		}
 		if !c.notificationThreadIsActive(payload.ThreadID) {
+			// Rust #43921: buffered reasoning deltas let a later switch restore the
+			// active reasoning item mid-replay.
+			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.ReasoningSummaryDelta(payload.ItemID, payload.Delta)})
 			return nil
 		}
 		c.recordReasoningSummaryDelta(payload.ThreadID, payload.TurnID, payload.ItemID, payload.Delta)
@@ -3507,6 +3510,7 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return err
 		}
 		if !c.notificationThreadIsActive(payload.ThreadID) {
+			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.ReasoningSummaryDelta(payload.ItemID, "\n")})
 			return nil
 		}
 		c.recordReasoningSummaryDelta(payload.ThreadID, payload.TurnID, payload.ItemID, "\n")
