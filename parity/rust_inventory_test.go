@@ -207,6 +207,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"apps",
 		"appserver",
 		"appserverdaemon",
+		"audioutil",
 		"auth",
 		"chatgptapi",
 		"cli",

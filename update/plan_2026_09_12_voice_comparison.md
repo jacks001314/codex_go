@@ -182,10 +182,10 @@ RTP 全程 48 kHz；`voicehost/manager_test.go` 的 24000 断言同步改为 480
 本轮已补齐回声消除 / 降噪 / AGC（见 §12），重采样由"设备固定 48 kHz +
 miniaudio 内部转换"覆盖（未单独实现 rubato 等价）。
 
-### 8.4 输入音频准备（`utils/audio`）缺失
+### 8.4 输入音频准备（`utils/audio`）（**已实现，见 §14**）
 
 Rust 有音频 data URL 归一化、时长→token 估算、超限/不支持格式占位符与
-LRU 缓存；Go 侧无对等实现。
+LRU 缓存；Go 侧本轮已补齐（`audioutil` 包 + 接入用户消息音频构造点）。
 
 ### 8.5 原生依赖模型不同（已实测）
 
@@ -351,3 +351,25 @@ kind=Playback default=true  name="Speaker (Realtek(R) Audio)"                  n
 
 **结论**：DSP 算法缺口已闭合；"设备原生率"这一实现路径在本平台被证据否定，登记为
 **N/A（平台数据缺失）**，不作为待办。
+
+## 14. 输入音频准备（`utils/audio`）实现（2026-09-12）
+
+新增 `audioutil` 包，对应 Rust `codex-utils-audio`：
+
+| 能力 | 说明 |
+|---|---|
+| 占位符 | 处理失败 / 超限 / 不支持格式三段文本，与 Rust 逐字一致 |
+| canonical MIME | wav（x-wav/wave/vnd.wave）→ `audio/wav`；mpeg/mp3 → `audio/mpeg`；mp4/m4a/x-m4a → `audio/mp4`；webm/ogg 保持 |
+| `PrepareAudioURL` | 校验 data URL、base64、大小上限（解码 50 MiB，编码上限按 base64 膨胀）→ 重新编码为规范化 data URL |
+| `EstimateAudioTokenCount` | 优先按容器时长 `ceil(seconds * 10)`；无法解析时回退 `ceil(len(url)/4)`（对齐 Rust `approx_token_count`）；32 条 LRU 缓存 |
+| 时长解析 | wav（RIFF byteRate/data）、mp3（帧头 + Xing/Info 或 CBR 估算）、mp4（moov/mvhd）、webm（EBML Info Duration/TimecodeScale）、ogg（末页 granule + OpusHead/Vorbis 采样率） |
+
+接入点：`appserver/audio_preparation.go` 的 `audioInputContentBlock` 已用于
+`inputContentFromTurnUserInputs`（远程 audio URL）与 `localAudioInputContentBlocks`
+（本地音频文件）——可用音频被规范化保留为 `input_audio`，不可用的替换为
+`input_text` 占位符（与 Rust `prepare_response_items` 行为一致）。
+
+测试：`audioutil/audio_test.go`（canonical/占位符/空载荷/超限/token 估算/5 种容器时长）、
+`appserver/audio_preparation_test.go`（消息音频准备）。既有用例
+`TestUserMessageInputItemFromTurnUserInputsContentKinds` 的音频载荷由非法 base64
+（`BBB`，Rust 同样会拒绝）改为合法 `YXVkaW8=`，以匹配新的准备语义。

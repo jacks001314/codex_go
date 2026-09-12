@@ -9961,7 +9961,7 @@ func inputContentFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) 
 			continue
 		}
 		if audioURL := strings.TrimSpace(input.URL); audioURL != "" && strings.EqualFold(inputType, "audio") {
-			content = append(content, map[string]any{"type": "input_audio", "audio_url": audioURL})
+			content = append(content, audioInputContentBlock(audioURL))
 			continue
 		}
 		if path := strings.TrimSpace(input.Path); path != "" && strings.EqualFold(inputType, "localAudio") {
@@ -10005,7 +10005,7 @@ func localAudioInputContentBlocks(path string) []map[string]any {
 	if err != nil {
 		return []map[string]any{{"type": "input_text", "text": fmt.Sprintf("Codex could not read the local audio at `%s`: %v", path, err)}}
 	}
-	return []map[string]any{{"type": "input_audio", "audio_url": dataURLFromBytes(data)}}
+	return []map[string]any{audioInputContentBlock(dataURLFromBytes(data))}
 }
 
 func dataURLFromBytes(data []byte) string {

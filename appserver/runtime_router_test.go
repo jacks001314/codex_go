@@ -26793,7 +26793,7 @@ func TestUserMessageInputItemFromTurnUserInputsContentKinds(t *testing.T) {
 	inputs := []turn.TurnUserInput{
 		{Text: "some text"},
 		{Type: "image", URL: "data:image/png;base64,AAA"},
-		{Type: "audio", URL: "data:audio/wav;base64,BBB"},
+		{Type: "audio", URL: "data:audio/wav;base64,YXVkaW8="},
 	}
 	item := userMessageInputItemFromTurnUserInputs(prompt, inputs)
 	if item == nil {
