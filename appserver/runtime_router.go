@@ -702,14 +702,41 @@ func (r *RuntimeRouter) noteAuthChanged() {
 	state := r.authChangeTracker.NoteAuth(snapshot)
 	r.authRevisionMu.Lock()
 	r.authRevision++
+	ownerChanged := state.OwnerGeneration != r.authOwnerRevision
 	r.authOwnerRevision = state.OwnerGeneration
 	close(r.authChanged)
 	r.authChanged = make(chan struct{})
 	r.authRevisionMu.Unlock()
+	if ownerChanged {
+		// Credential changes keep the cached model client, but a new account
+		// owner must not reuse its websocket connection or routing state
+		// (Rust #44489).
+		r.resetAuthOwnedModelState()
+	}
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.invalidateAll()
 	}
 	r.prewarmLoadedMCPThreads()
+}
+
+// resetAuthOwnedModelState drops a cached responses agent built by this router
+// (so the next turn rebuilds it from the current credential snapshot) and
+// clears the current agent's auth-owned websocket/routing caches. Injected or
+// custom agent runners are left in place: they own their credential lifecycle
+// and are not ours to discard.
+func (r *RuntimeRouter) resetAuthOwnedModelState() {
+	if r == nil {
+		return
+	}
+	r.servicesMu.Lock()
+	agent := r.services.Agent
+	if _, builtByRouter := agent.(*model.ResponsesAgentRunner); builtByRouter {
+		r.services.Agent = nil
+	}
+	r.servicesMu.Unlock()
+	if resettable, ok := agent.(interface{ ResetAuthOwnedCaches() }); ok && resettable != nil {
+		resettable.ResetAuthOwnedCaches()
+	}
 }
 
 // authOwnerRevisionSnapshot returns the credential-ownership revision, which

@@ -3245,3 +3245,24 @@ func TestResponsesReasoningParamPersistentTranslatesToDisabled(t *testing.T) {
 		t.Fatalf("reasoning effort = %#v, want disabled (Rust #40799)", r)
 	}
 }
+
+// TestResponsesAgentRunnerResetAuthOwnedCaches covers Rust #44489: a new
+// credential owner must not reuse the previous owner's websocket connection or
+// per-turn routing state.
+func TestResponsesAgentRunnerResetAuthOwnedCaches(t *testing.T) {
+	runner := &ResponsesAgentRunner{
+		websocketSessions: &responsesWebsocketSessionCache{
+			sessions: map[string]*responsesWebsocketSession{
+				"thread:t:turn:u": {conn: nil},
+			},
+		},
+		turnState: &responsesTurnStateCache{turnID: "turn-1", value: "route-1"},
+	}
+	runner.ResetAuthOwnedCaches()
+	if len(runner.websocketSessions.sessions) != 0 {
+		t.Fatalf("cached websocket sessions = %d, want 0 after auth ownership change", len(runner.websocketSessions.sessions))
+	}
+	if runner.turnState.turnID != "" || runner.turnState.value != "" {
+		t.Fatalf("turn state = %q/%q, want cleared after auth ownership change", runner.turnState.turnID, runner.turnState.value)
+	}
+}

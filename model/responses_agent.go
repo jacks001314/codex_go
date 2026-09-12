@@ -454,6 +454,35 @@ func (r *ResponsesAgentRunner) websocketsDisabled() bool {
 	return r.websocketSessions.disabled
 }
 
+// ResetAuthOwnedCaches drops cached Responses WebSocket connections and the
+// per-turn routing state so the next request reconnects with the current
+// credential owner and sends the full input with fresh routing state
+// (Rust #44489). It intentionally leaves the provider-level websocket
+// capability flag alone: that reflects provider/config support, not auth.
+func (r *ResponsesAgentRunner) ResetAuthOwnedCaches() {
+	if r == nil {
+		return
+	}
+	if r.websocketSessions != nil {
+		r.websocketSessions.mu.Lock()
+		for key, session := range r.websocketSessions.sessions {
+			if session != nil {
+				session.mu.Lock()
+				closeResponsesWebsocketSession(session, "auth ownership changed")
+				session.mu.Unlock()
+			}
+			delete(r.websocketSessions.sessions, key)
+		}
+		r.websocketSessions.mu.Unlock()
+	}
+	if r.turnState != nil {
+		r.turnState.mu.Lock()
+		r.turnState.turnID = ""
+		r.turnState.value = ""
+		r.turnState.mu.Unlock()
+	}
+}
+
 func (r *ResponsesAgentRunner) disableWebsockets() {
 	if r == nil || r.websocketSessions == nil {
 		return

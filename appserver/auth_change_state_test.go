@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"codex_go/auth"
+	"codex_go/model"
 )
 
 // TestRuntimeRouterAuthOwnerRevisionTracksIdentityChanges covers the app-server
@@ -36,16 +37,43 @@ func TestRuntimeRouterAuthOwnerRevisionTracksIdentityChanges(t *testing.T) {
 	}
 
 	// Account switch changes ownership.
+	router.services.Agent = &model.ResponsesAgentRunner{}
 	router.requireAccount().ApplyAuthSnapshot(snapshot("user-b", "workspace-a", "token-3"))
 	router.noteAuthChanged()
 	if got := router.authOwnerRevisionSnapshot(); got != 2 {
 		t.Fatalf("account switch owner revision = %d, want 2", got)
 	}
+	if router.services.Agent != nil {
+		t.Fatal("cached responses agent survived an auth ownership change")
+	}
 
 	// Logout clears the owner.
+	router.services.Agent = &model.ResponsesAgentRunner{}
 	router.requireAccount().ApplyAuthSnapshot(nil)
 	router.noteAuthChanged()
 	if got := router.authOwnerRevisionSnapshot(); got != 3 {
 		t.Fatalf("logout owner revision = %d, want 3", got)
+	}
+	if router.services.Agent != nil {
+		t.Fatal("cached responses agent survived logout")
+	}
+
+	// A same-owner token refresh must not drop the cached agent.
+	router.requireAccount().ApplyAuthSnapshot(snapshot("user-c", "workspace-c", "token-4"))
+	router.noteAuthChanged()
+	router.services.Agent = &model.ResponsesAgentRunner{}
+	router.requireAccount().ApplyAuthSnapshot(snapshot("user-c", "workspace-c", "token-5"))
+	router.noteAuthChanged()
+	if router.services.Agent == nil {
+		t.Fatal("same-owner token refresh dropped the cached responses agent")
+	}
+
+	// Injected/custom runners are not owned by the router and must survive.
+	custom := &model.UnavailableAgentRunner{}
+	router.services.Agent = custom
+	router.requireAccount().ApplyAuthSnapshot(snapshot("user-d", "workspace-d", "token-6"))
+	router.noteAuthChanged()
+	if router.services.Agent != custom {
+		t.Fatal("injected agent runner was discarded on an auth ownership change")
 	}
 }
