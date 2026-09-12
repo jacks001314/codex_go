@@ -4988,6 +4988,15 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	if request.TurnID == "" {
 		request.TurnID = string(newThreadID())
 	}
+	// Rust core/src/compact.rs: an unset prompt falls back to the configured
+	// compact prompt (config value or experimental compact prompt file).
+	if strings.TrimSpace(request.Prompt) == "" {
+		prompt, promptErr := r.compactPromptForRecord(record)
+		if promptErr != nil {
+			return nil, nil, promptErr
+		}
+		request.Prompt = prompt
+	}
 	hookCtx := r.compactHookContext(record, request)
 	initialContext, err := r.runPreCompactHooks(ctx, hookCtx)
 	if err != nil {

@@ -444,6 +444,12 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	if policy, ok := cfg.Values["approval_policy"].(string); ok && strings.TrimSpace(policy) == "untrusted" {
 		return nil, fmt.Errorf(`approval_policy = "untrusted" is no longer supported; remove this setting`)
 	}
+	// Rust core/src/config/mod.rs::load_config rejects the removed remote
+	// thread-store endpoint for the same reason: a stale config must fail fast
+	// instead of silently falling back to local persistence.
+	if _, ok := cfg.Values["experimental_thread_store_endpoint"]; ok {
+		return nil, errors.New("`experimental_thread_store_endpoint` is no longer supported; remove it from config.toml")
+	}
 	// Rust #43797: memories.version is a closed enum; an unrecognized value must
 	// fail config load rather than silently falling back to v1.
 	if memories, ok := cfg.Values["memories"].(map[string]any); ok {
@@ -512,6 +518,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"disable_paste_burst":               {},
 	"audio":                             {},
 	"experimental_realtime_ws_base_url": {},
+	"experimental_compact_prompt_file":  {},
 	"experimental_realtime_webrtc_call_base_url": {},
 	"experimental_realtime_ws_model":             {},
 	"experimental_realtime_ws_backend_prompt":    {},

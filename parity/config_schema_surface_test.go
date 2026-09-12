@@ -15,8 +15,7 @@ import (
 // properties that Go intentionally does not recognize. Each entry carries the
 // reason so the list is auditable and can shrink as Go implements more keys.
 var configSchemaRustOnlyAllowlist = map[string]string{
-	"experimental_compact_prompt_file": "Rust experimental compaction feature; not implemented in Go",
-	"experimental_thread_store":        "Rust experimental thread store; Go uses its own session store",
+	"experimental_thread_store": "Rust experimental thread store; Go uses its own session store and app-server tests inject a store directly (Rust's ThreadStoreToml only has local/in_memory, and in_memory is schemars-skipped test plumbing)",
 }
 
 // configSchemaGoOnlyAllowlist lists Go-recognized keys absent from Rust's
@@ -61,8 +60,8 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	if len(rustKeys) != 99 {
 		t.Fatalf("Rust config.schema.json top-level property count = %d, want 99 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 105 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 105 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 106 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 106 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)
