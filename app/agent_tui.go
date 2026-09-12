@@ -99,6 +99,9 @@ func interactiveLocalSwitchAgentThread(store *session.Store, threadID string) (c
 		Entry:    localAgentEntryFromRecord(record, primaryThreadID),
 		Messages: interactiveSessionMessagesFromRecord(record),
 		Status:   status,
+		// Rust #43360: carry the thread's app-server model metadata.
+		Model:    strings.TrimSpace(record.Metadata.Model),
+		Provider: strings.TrimSpace(record.Metadata.ModelProvider),
 	}, nil
 }
 

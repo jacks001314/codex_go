@@ -156,25 +156,29 @@ func (c SessionPickerToolbarControl) Toggle() SessionPickerToolbarControl {
 }
 
 type SessionSummary struct {
-	ThreadID  string
-	Path      string
-	Title     string
-	Preview   string
-	CWD       string
-	Branch    string
-	Provider  string
+	ThreadID string
+	Path     string
+	Title    string
+	Preview  string
+	CWD      string
+	Branch   string
+	Provider string
+	// Model is the thread's restored model from app-server metadata
+	// (Rust #43360): resuming or switching applies it so later turns use the
+	// thread's model instead of the local default.
+	Model     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	Archived  bool
 }
 
 type SessionPickerState struct {
-	Action         SessionPickerAction
-	Items          []SessionSummary
-	Selected       int
-	Query          string
-	FilterMode     SessionFilterMode
-	FilterCWD      string
+	Action     SessionPickerAction
+	Items      []SessionSummary
+	Selected   int
+	Query      string
+	FilterMode SessionFilterMode
+	FilterCWD  string
 	// FilterCWDs is the expanded directory filter (the requested directory plus
 	// linked worktrees' corresponding directories, Rust #43279). When empty the
 	// picker falls back to FilterCWD.

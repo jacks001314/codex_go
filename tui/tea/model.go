@@ -156,6 +156,10 @@ type AgentThreadSwitchResponse struct {
 	Entry    codextui.AgentThreadEntry
 	Messages []codextui.Message
 	Status   string
+	// Model / Provider are the switched-to thread's app-server metadata
+	// (Rust #43360): restoring them keeps later turns on the thread's model.
+	Model    string
+	Provider string
 	// WorkingStatusHeader seeds the live reasoning summary heading for a
 	// switched-to in-progress turn (Rust #43921).
 	WorkingStatusHeader string

@@ -114,6 +114,39 @@ func TestStateRenderStatusCardUsesRustPermissionDefaults(t *testing.T) {
 	}
 }
 
+// TestStateRenderStatusCardShowsServerProviderForAttachedThread covers Rust
+// #43359: the provider id comes from the attached thread's server metadata and
+// is shown verbatim (built-in providers included); without a thread it is
+// omitted.
+func TestStateRenderStatusCardShowsServerProviderForAttachedThread(t *testing.T) {
+	unattached := NewState(&Options{Provider: "openai"})
+	if card := unattached.RenderStatusCardWidth(80); strings.Contains(card, "Model provider:") {
+		t.Fatalf("provider must be omitted without a thread:\n%s", card)
+	}
+
+	attached := NewState(&Options{Provider: "openai"})
+	attached.SetThreadID("thread-1")
+	if card := attached.RenderStatusCardWidth(80); !statusCardHasProvider(card, "openai") {
+		t.Fatalf("provider missing for an attached thread:\n%s", card)
+	}
+
+	custom := NewState(&Options{Provider: "server-ollama"})
+	custom.SetThreadID("thread-1")
+	if card := custom.RenderStatusCardWidth(80); !statusCardHasProvider(card, "server-ollama") {
+		t.Fatalf("custom provider missing:\n%s", card)
+	}
+}
+
+func statusCardHasProvider(card string, provider string) bool {
+	for _, line := range strings.Split(card, "\n") {
+		if !strings.Contains(line, "Model provider:") {
+			continue
+		}
+		return strings.Contains(line, provider)
+	}
+	return false
+}
+
 func TestParseCommand(t *testing.T) {
 	tests := []struct {
 		input   string
@@ -190,23 +223,23 @@ func TestSlashCommandFrameDescriptionsMatchRust(t *testing.T) {
 		frames[frame.Name] = frame
 	}
 	want := map[string]string{
-		"model":                "choose what model and reasoning effort to use",
-		"ide":                  "include current selection, open files, and other context from your IDE",
-		"permissions":          "choose what Codex is allowed to do",
-		"keymap":               "remap TUI shortcuts",
-		"review":               "review my current changes and find issues",
-		"side":                 "start a side conversation in an ephemeral fork",
-		"copy":                 "copy last response as markdown",
-		"raw":                  "toggle raw scrollback mode for copy-friendly terminal selection",
-		"diff":                 "show git diff (including untracked files)",
-		"status":               "show current session configuration and token usage",
-		"usage":                "view account usage or use a usage limit reset",
-		"mcp":                  "list configured MCP tools; use /mcp verbose for details",
-		"approve":              "approve one retry of a recent auto-review denial",
-		"memories":             "configure memory use and generation",
-		"app":                  "continue this session in Codex Desktop",
-		"import":               "import setup, this project, and recent chats from Claude Code",
-		"rollout":              "print the rollout file path",
+		"model":       "choose what model and reasoning effort to use",
+		"ide":         "include current selection, open files, and other context from your IDE",
+		"permissions": "choose what Codex is allowed to do",
+		"keymap":      "remap TUI shortcuts",
+		"review":      "review my current changes and find issues",
+		"side":        "start a side conversation in an ephemeral fork",
+		"copy":        "copy last response as markdown",
+		"raw":         "toggle raw scrollback mode for copy-friendly terminal selection",
+		"diff":        "show git diff (including untracked files)",
+		"status":      "show current session configuration and token usage",
+		"usage":       "view account usage or use a usage limit reset",
+		"mcp":         "list configured MCP tools; use /mcp verbose for details",
+		"approve":     "approve one retry of a recent auto-review denial",
+		"memories":    "configure memory use and generation",
+		"app":         "continue this session in Codex Desktop",
+		"import":      "import setup, this project, and recent chats from Claude Code",
+		"rollout":     "print the rollout file path",
 	}
 	for name, description := range want {
 		frame, ok := frames[name]

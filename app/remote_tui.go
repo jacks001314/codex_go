@@ -1585,6 +1585,8 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 		Entry:                  remoteTUIAgentEntryFromThread(thread, primaryThreadID),
 		Messages:               remoteTUIThreadMessagesFromThread(thread),
 		Status:                 remoteTUIStatusFromThread(thread),
+		Model:                  remoteTUIThreadModel(thread),
+		Provider:               remoteTUIThreadProvider(thread),
 		WorkingStatusHeader:    remoteTUIThreadActiveReasoningHeading(thread),
 		WorkingReasoningTurnID: remoteTUIThreadActiveReasoningTurnID(thread),
 		WorkingReasoningItemID: remoteTUIThreadActiveReasoningItemID(thread),
@@ -1644,6 +1646,22 @@ func remoteTUIReadThread(ctx context.Context, client *remoteAppServerTUIClient, 
 		return nil, fmt.Errorf("thread/read returned no thread for %s", strings.TrimSpace(threadID))
 	}
 	return response.Thread, nil
+}
+
+// remoteTUIThreadModel / remoteTUIThreadProvider read the server-reported
+// thread metadata the TUI applies when switching or resuming (Rust #43360).
+func remoteTUIThreadModel(thread *appserver.Thread) string {
+	if thread == nil || thread.Model == nil {
+		return ""
+	}
+	return strings.TrimSpace(*thread.Model)
+}
+
+func remoteTUIThreadProvider(thread *appserver.Thread) string {
+	if thread == nil {
+		return ""
+	}
+	return strings.TrimSpace(thread.ModelProvider)
 }
 
 func remoteTUIAgentEntryFromThread(thread *appserver.Thread, primaryThreadID string) codextui.AgentThreadEntry {

@@ -122,6 +122,14 @@ func (m *Model) applyWorkingDirectoryChangeResult(msg WorkingDirectoryChangeResu
 		m.State.CWD = cwd
 		m.sessionCWD = cwd
 	}
+	// Rust #43360: the replacement session keeps its server-reported model and
+	// provider.
+	if model := strings.TrimSpace(msg.Summary.Model); model != "" {
+		m.State.Model = model
+	}
+	if provider := strings.TrimSpace(msg.Summary.Provider); provider != "" {
+		m.State.Provider = provider
+	}
 	m.activeSide = nil
 	m.activeAgentLabel = ""
 	if m.statusControls != nil {

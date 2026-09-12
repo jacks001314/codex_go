@@ -370,6 +370,14 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 			m.State.CWD = cwd
 			m.sessionCWD = cwd
 		}
+		// Rust #43360: restore the thread's server-reported model and provider
+		// so the resumed conversation keeps running on its own model.
+		if model := strings.TrimSpace(response.Summary.Model); model != "" {
+			m.State.Model = model
+		}
+		if provider := strings.TrimSpace(response.Summary.Provider); provider != "" {
+			m.State.Provider = provider
+		}
 	}
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
 	m.State.BumpMessagesRevision()

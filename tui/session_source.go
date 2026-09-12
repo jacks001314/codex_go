@@ -177,7 +177,8 @@ func sessionSummaryFromRecord(store *session.Store, record *session.Record) Sess
 		Preview:   strings.TrimSpace(record.Preview),
 		CWD:       record.Metadata.CWD,
 		Branch:    record.Metadata.Git["branch"],
-		Provider:  firstNonEmpty(record.Metadata.ModelProvider, record.Metadata.Model),
+		Provider:  strings.TrimSpace(record.Metadata.ModelProvider),
+		Model:     strings.TrimSpace(record.Metadata.Model),
 		CreatedAt: record.CreatedAt,
 		UpdatedAt: sessionRecordPickerTime(record),
 		Archived:  record.Archived,
@@ -200,6 +201,10 @@ func sessionSummaryFromAppServerThread(thread *appserver.Thread, archived bool) 
 	if thread.Name != nil && strings.TrimSpace(*thread.Name) != "" {
 		title = strings.TrimSpace(*thread.Name)
 	}
+	model := ""
+	if thread.Model != nil {
+		model = strings.TrimSpace(*thread.Model)
+	}
 	return SessionSummary{
 		ThreadID:  strings.TrimSpace(thread.ID),
 		Path:      path,
@@ -207,7 +212,8 @@ func sessionSummaryFromAppServerThread(thread *appserver.Thread, archived bool) 
 		Preview:   strings.TrimSpace(thread.Preview),
 		CWD:       thread.CWD,
 		Branch:    branch,
-		Provider:  thread.ModelProvider,
+		Provider:  strings.TrimSpace(thread.ModelProvider),
+		Model:     model,
 		CreatedAt: unixSecondsTime(thread.CreatedAt),
 		UpdatedAt: appServerThreadRecency(thread),
 		Archived:  archived,

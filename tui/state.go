@@ -214,7 +214,10 @@ func (s *State) RenderStatusCardWidth(width int) string {
 		s = NewState(nil)
 	}
 	availableInnerWidth := width - 4
-	provider := statusModelProvider(s.Provider)
+	// Rust #43359: the status card shows the server-reported model provider id
+	// only once a thread is attached, and shows it verbatim (including the
+	// built-in providers).
+	provider := statusModelProvider(s.Provider, s.ThreadID)
 	reasoning := displayValue(s.EffectiveReasoningEffort(), "default")
 	model := displayValue(s.Model, "default") + " (reasoning " + reasoning + ", summaries auto)"
 	header := " >_ gcode"
@@ -400,14 +403,11 @@ func truncateStatusRow(value string, width int) string {
 	return TruncateToWidth(value, width-1) + "…"
 }
 
-func statusModelProvider(provider string) string {
-	provider = strings.TrimSpace(provider)
-	switch strings.ToLower(provider) {
-	case "", "openai", "codex", "openai-codex":
+func statusModelProvider(provider string, threadID string) string {
+	if strings.TrimSpace(threadID) == "" {
 		return ""
-	default:
-		return provider
 	}
+	return strings.TrimSpace(provider)
 }
 
 func statusPermissions(sandbox string, approval string) string {
