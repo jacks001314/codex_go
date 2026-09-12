@@ -880,54 +880,71 @@ func accountScopedModelsManager(codexHome string, configService *config.ConfigSe
 		if err != nil || read == nil {
 			return nil, err
 		}
-		cfg := &config.Config{Values: read.Config}
-		providerID := strings.TrimSpace(stringFromMap(read.Config, "model_provider"))
-		providerInfo, err := model.ProviderForConfigID(read.Config, providerID, strings.TrimSpace(stringFromMap(read.Config, "openai_base_url")))
-		if err != nil || providerInfo == nil {
-			return nil, err
-		}
-		storeOptions := auth.StoreOptionsFromConfig(cfg.CLIAuthCredentialsStoreMode(), cfg.SecretAuthStorageEnabled())
-		storeOptions.WorkloadIdentity = &auth.WorkloadIdentityAuthOptions{ChatGPTBaseURL: cfg.ChatGPTBaseURL()}
-		resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
-		if err != nil || resolved == nil {
-			return nil, err
-		}
-		provider := model.CreateRuntimeProviderForID(providerID, *providerInfo, &resolved.Auth)
-		apiProvider, err := provider.APIProvider()
-		if err != nil {
-			return nil, err
-		}
-		authHeaders, err := provider.APIAuth()
-		if err != nil {
-			return nil, err
-		}
-		var base *model.ModelsResponse
-		if catalog := model.ModelsCatalogFromConfigValues(read.Config); catalog != nil {
-			base = catalog
-		}
-		account := auth.AccountFromAuth(&resolved.Auth)
-		hasChatGPTAccount := account != nil && account.Type == auth.AccountChatGPT
-		supportsAPIKeyModels := providerInfo.IsOpenAI()
-		apiKeyAuth := resolved.Auth.Mode() == "api-key"
-		if supportsAPIKeyModels && apiKeyAuth && strings.TrimSpace(providerInfo.BaseURL) == "" {
-			// Codex model metadata is served by the Codex backend, not the
-			// public /v1/models API (Rust #44392). Inference is unaffected.
-			apiProvider.BaseURL = model.ChatGPTCodexBaseURL
-		}
-		endpoint := model.NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
-		manager := model.NewRemoteModelsManagerWithOptions(&model.RemoteModelsManagerOptions{
-			ModelCatalog:                    base,
-			Endpoint:                        endpoint,
-			UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
-			Identity:                        model.ModelsCatalogIdentity(providerInfo, &resolved.Auth, &authHeaders),
-			SupportsAPIKeyModels:            supportsAPIKeyModels,
-			APIKeyAuth:                      apiKeyAuth,
-			CommandAuth:                     providerInfo.HasCommandAuth(),
-		})
-		model.SetAPIKeyModelDiscoveryEnabled(manager, features.Enabled(cfg.FeatureSettings(), "api_key_model_discovery"))
-		return manager, nil
+		return buildAccountScopedModelsManager(codexHome, read, configService.Requirements())
 	}
 	return model.NewLazyModelsManager(build)
+}
+
+// buildAccountScopedModelsManager resolves the account-scoped catalog manager
+// from an already-read effective config plus the managed requirements.
+func buildAccountScopedModelsManager(codexHome string, read *config.ConfigReadResponse, requirements *config.ConfigRequirementsReadResponse) (model.ModelsManager, error) {
+	if read == nil {
+		return nil, errors.New("config read is required")
+	}
+	cfg := &config.Config{Values: read.Config}
+	providerID := strings.TrimSpace(stringFromMap(read.Config, "model_provider"))
+	providerInfo, err := model.ProviderForConfigID(read.Config, providerID, strings.TrimSpace(stringFromMap(read.Config, "openai_base_url")))
+	if err != nil || providerInfo == nil {
+		return nil, err
+	}
+	storeOptions := auth.StoreOptionsFromConfig(cfg.CLIAuthCredentialsStoreMode(), cfg.SecretAuthStorageEnabled())
+	storeOptions.WorkloadIdentity = &auth.WorkloadIdentityAuthOptions{ChatGPTBaseURL: cfg.ChatGPTBaseURL()}
+	resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
+	if err != nil || resolved == nil {
+		return nil, err
+	}
+	// Rust sets the process-wide residency requirement from the resolved
+	// managed config and enforces it on the catalog request and identity.
+	residency := managedResidencyFromRequirements(requirements)
+	provider := model.CreateRuntimeProviderWithResidency(
+		providerID,
+		*providerInfo,
+		&resolved.Auth,
+		residency,
+	)
+	apiProvider, err := provider.APIProvider()
+	if err != nil {
+		return nil, err
+	}
+	authHeaders, err := provider.APIAuth()
+	if err != nil {
+		return nil, err
+	}
+	var base *model.ModelsResponse
+	if catalog := model.ModelsCatalogFromConfigValues(read.Config); catalog != nil {
+		base = catalog
+	}
+	account := auth.AccountFromAuth(&resolved.Auth)
+	hasChatGPTAccount := account != nil && account.Type == auth.AccountChatGPT
+	supportsAPIKeyModels := providerInfo.IsOpenAI()
+	apiKeyAuth := resolved.Auth.Mode() == "api-key"
+	if supportsAPIKeyModels && apiKeyAuth && strings.TrimSpace(providerInfo.BaseURL) == "" {
+		// Codex model metadata is served by the Codex backend, not the
+		// public /v1/models API (Rust #44392). Inference is unaffected.
+		apiProvider.BaseURL = model.ChatGPTCodexBaseURL
+	}
+	endpoint := model.NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
+	manager := model.NewRemoteModelsManagerWithOptions(&model.RemoteModelsManagerOptions{
+		ModelCatalog:                    base,
+		Endpoint:                        endpoint,
+		UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
+		Identity:                        model.ModelsCatalogIdentity(providerInfo, &resolved.Auth, &authHeaders, residency),
+		SupportsAPIKeyModels:            supportsAPIKeyModels,
+		APIKeyAuth:                      apiKeyAuth,
+		CommandAuth:                     providerInfo.HasCommandAuth(),
+	})
+	model.SetAPIKeyModelDiscoveryEnabled(manager, features.Enabled(cfg.FeatureSettings(), "api_key_model_discovery"))
+	return manager, nil
 }
 
 func (r *RuntimeRouter) resolveAuthWithLoginRestrictions(codexHome string) (*auth.ResolvedAuth, error) {

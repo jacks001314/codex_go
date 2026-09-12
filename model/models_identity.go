@@ -44,7 +44,7 @@ func hasStableAccountAuthMode(mode string) bool {
 // values differently, so a cache file written by one implementation is a miss
 // for the other. Only the scoping rules - which inputs change the identity -
 // are required to match Rust.
-func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSON, authHeaders *AuthHeaders) string {
+func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSON, authHeaders *AuthHeaders, residency string) string {
 	if provider == nil {
 		return ""
 	}
@@ -83,6 +83,9 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 	if err != nil {
 		return ""
 	}
+	// Rust enforces the managed residency requirement on the provider before
+	// digesting it, so the residency header is part of the identity.
+	apiProvider.ApplyManagedResidency(residency)
 	if authHeaders == nil && (!stableAccount || explicitBearer) {
 		resolved, err := ResolveProviderAuth(authSnapshot, *provider)
 		if err != nil {

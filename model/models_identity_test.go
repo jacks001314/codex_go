@@ -31,13 +31,13 @@ func chatGPTCatalogAuth(t *testing.T, email, user, account, plan, signature stri
 func catalogIdentity(t *testing.T, provider *ProviderInfo, snapshot *auth.AuthDotJSON) string {
 	t.Helper()
 	if snapshot == nil {
-		return ModelsCatalogIdentity(provider, nil, nil)
+		return ModelsCatalogIdentity(provider, nil, nil, "")
 	}
 	headers, err := ResolveProviderAuth(snapshot, *provider)
 	if err != nil {
 		t.Fatalf("ResolveProviderAuth: %v", err)
 	}
-	return ModelsCatalogIdentity(provider, snapshot, &headers)
+	return ModelsCatalogIdentity(provider, snapshot, &headers, "")
 }
 
 // Mirrors Rust
@@ -132,8 +132,30 @@ func TestModelsCatalogIdentityUnavailableWhenEnvKeyIsMissing(t *testing.T) {
 	snapshot := auth.FromAPIKey("api-key")
 	// Resolving auth also fails for a missing env key, so the identity is
 	// computed directly: it must not fall back to an unscoped digest.
-	if got := ModelsCatalogIdentity(&provider, &snapshot, nil); got != "" {
+	if got := ModelsCatalogIdentity(&provider, &snapshot, nil, ""); got != "" {
 		t.Fatalf("identity = %q, want empty when the provider env key is missing", got)
+	}
+}
+
+// The managed residency requirement is enforced on the provider before the
+// digest, so it scopes the catalog (Rust enforce_managed_residency).
+func TestModelsCatalogIdentityTracksManagedResidency(t *testing.T) {
+	provider := CreateOpenAIProvider("https://example.com/v1")
+	snapshot := auth.FromAPIKey("api-key")
+	headers, err := ResolveProviderAuth(&snapshot, provider)
+	if err != nil {
+		t.Fatalf("ResolveProviderAuth: %v", err)
+	}
+	without := ModelsCatalogIdentity(&provider, &snapshot, &headers, "")
+	withUS := ModelsCatalogIdentity(&provider, &snapshot, &headers, "us")
+	if without == "" || withUS == "" {
+		t.Fatalf("identities = %q / %q, want both scoped", without, withUS)
+	}
+	if without == withUS {
+		t.Fatal("identity did not change with the managed residency requirement")
+	}
+	if padded := ModelsCatalogIdentity(&provider, &snapshot, &headers, "  us  "); padded != withUS {
+		t.Fatalf("identity = %q, want the trimmed residency to match %q", padded, withUS)
 	}
 }
 

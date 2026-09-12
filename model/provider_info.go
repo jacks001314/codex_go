@@ -236,6 +236,24 @@ func (p *ProviderInfo) ToAPIProvider(authMode string) (APIProvider, error) {
 	}, nil
 }
 
+// ApplyManagedResidency mirrors Rust's `enforce_managed_residency`: a managed
+// residency requirement adds the internal residency header to every request the
+// provider makes (and, because the header map is digested, to the model-catalog
+// identity). An empty requirement leaves the provider untouched.
+func (p *APIProvider) ApplyManagedResidency(residency string) {
+	if p == nil {
+		return
+	}
+	residency = strings.TrimSpace(residency)
+	if residency == "" {
+		return
+	}
+	if p.Headers == nil {
+		p.Headers = http.Header{}
+	}
+	p.Headers.Set(ResidencyHeaderName, residency)
+}
+
 func (p *ProviderInfo) BuildHeaderMap() http.Header {
 	headers := http.Header{}
 	for key, value := range p.HTTPHeaders {

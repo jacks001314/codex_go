@@ -1268,7 +1268,12 @@ func (r *Runner) imageGenerationOptionsForRun(cfg *config.Config, resolvedAuth *
 	if err != nil {
 		return nil, err
 	}
-	runtimeProvider := model.CreateRuntimeProviderForID(providerID, *provider, snapshot)
+	runtimeProvider := model.CreateRuntimeProviderWithResidency(
+		providerID,
+		*provider,
+		snapshot,
+		managedResidencyForConfig(cfg),
+	)
 	modelInfo := model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, nil)
 	if !imageGenerationStandaloneEnabled(*provider, runtimeProvider.Capabilities(), &modelInfo, snapshot, cfg.FeatureSettings()) {
 		return nil, nil
@@ -1493,7 +1498,12 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
 		if snapshot == nil && provider.RequiresOpenAIAuth && !providerHasStandaloneAuth(*provider) {
 			return nil, errors.New("OpenAI authentication is required; run `codex login` or set OPENAI_API_KEY")
 		}
-		runtimeProvider := model.CreateRuntimeProviderForID(providerID, *provider, snapshot)
+		runtimeProvider := model.CreateRuntimeProviderWithResidency(
+			providerID,
+			*provider,
+			snapshot,
+			managedResidencyForConfig(cfg),
+		)
 		agent, err := model.NewResponsesAgentRunnerFromRuntimeProviderWithAuth(providerID, runtimeProvider, r.httpClientForConfig(cfg), r.CodexHome, snapshot)
 		if err != nil {
 			return nil, err
@@ -1502,6 +1512,9 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
 		agent.AuthIssuer = cfg.ChatGPTBaseURL()
 		agent.AgentIdentity = agentIdentityOptionsForExec(cfg)
 		agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
+		// Rust sets the process-wide enforce_residency from config; the exec
+		// path mirrors it on every model request.
+		agent.Residency = managedResidencyForConfig(cfg)
 		return agent, nil
 	}
 	return model.NewLocalAgentRunner(), nil
@@ -6216,6 +6229,15 @@ func modelSupportsParallelToolCalls(modelID string) bool {
 	manager := model.NewStaticModelsManager(model.BundledModelsResponse())
 	info := manager.GetModelInfo(modelID, nil)
 	return info.SupportsParallelToolCalls && !info.UseResponsesLite
+}
+
+// managedResidencyForConfig resolves the managed `enforce_residency`
+// requirement (Rust Config::enforce_residency) for the exec run.
+func managedResidencyForConfig(cfg *config.Config) string {
+	if cfg != nil && cfg.Requirements != nil && cfg.Requirements.EnforceResidency != nil {
+		return string(*cfg.Requirements.EnforceResidency)
+	}
+	return ""
 }
 
 func modelUsesResponsesLite(modelID string) bool {

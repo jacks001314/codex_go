@@ -381,7 +381,12 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	if snapshot == nil && provider.RequiresOpenAIAuth {
 		return nil, nil
 	}
-	runtimeProvider := model.CreateRuntimeProviderForID(runConfig.ProviderID, *provider, snapshot)
+	runtimeProvider := model.CreateRuntimeProviderWithResidency(
+		runConfig.ProviderID,
+		*provider,
+		snapshot,
+		managedResidencyForConfig(cfg),
+	)
 	agent, err := model.NewResponsesAgentRunnerFromRuntimeProviderWithAuth(runConfig.ProviderID, runtimeProvider, r.httpClientForConfig(cfg), codexHome, snapshot)
 	if err != nil {
 		return nil, err
@@ -402,6 +407,15 @@ func managedResidencyForConfig(cfg *config.Config) string {
 		return string(*cfg.Requirements.EnforceResidency)
 	}
 	return ""
+}
+
+// managedResidencyFromRequirements resolves the managed residency requirement
+// (Rust `enforce_residency`) from a config-requirements read.
+func managedResidencyFromRequirements(response *config.ConfigRequirementsReadResponse) string {
+	if response == nil || response.Requirements == nil || response.Requirements.EnforceResidency == nil {
+		return ""
+	}
+	return string(*response.Requirements.EnforceResidency)
 }
 
 func (r *RuntimeRouter) appTurnModelProviderConfig(cfg *config.Config, params *turn.TurnStartParams) (*appTurnRunConfig, error) {

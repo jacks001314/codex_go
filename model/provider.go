@@ -79,10 +79,33 @@ func CreateRuntimeProviderForID(providerID string, info ProviderInfo, snapshot *
 	return &ConfiguredProvider{providerID: providerID, info: info, auth: snapshot}
 }
 
+// CreateRuntimeProviderWithResidency builds a provider with the managed
+// residency requirement already resolved (Rust sets the process-wide
+// `enforce_residency` from config; Go threads the resolved value through).
+func CreateRuntimeProviderWithResidency(providerID string, info ProviderInfo, snapshot *auth.AuthDotJSON, residency string) RuntimeProvider {
+	provider := CreateRuntimeProviderForID(providerID, info, snapshot)
+	if configured, ok := provider.(*ConfiguredProvider); ok {
+		configured.SetManagedResidency(residency)
+	}
+	return provider
+}
+
 type ConfiguredProvider struct {
 	providerID string
 	info       ProviderInfo
 	auth       *auth.AuthDotJSON
+	// residency is the managed `enforce_residency` requirement applied to this
+	// provider's requests and catalog identity (Rust Config::enforce_residency).
+	residency string
+}
+
+// SetManagedResidency records the managed residency requirement for this
+// provider (Rust's process-wide `enforce_residency`, applied per config here).
+func (p *ConfiguredProvider) SetManagedResidency(residency string) {
+	if p == nil {
+		return
+	}
+	p.residency = strings.TrimSpace(residency)
 }
 
 func (p *ConfiguredProvider) Info() ProviderInfo {
@@ -166,7 +189,12 @@ func (p *ConfiguredProvider) APIProvider() (APIProvider, error) {
 	if p.auth != nil {
 		authMode = p.auth.BackendMode()
 	}
-	return p.info.ToAPIProvider(authMode)
+	apiProvider, err := p.info.ToAPIProvider(authMode)
+	if err != nil {
+		return APIProvider{}, err
+	}
+	apiProvider.ApplyManagedResidency(p.residency)
+	return apiProvider, nil
 }
 
 func (p *ConfiguredProvider) RuntimeBaseURL() (string, error) {
@@ -207,7 +235,7 @@ func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) Models
 	return NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: authHasChatGPTAccount(p.auth),
-		Identity:                        ModelsCatalogIdentity(&p.info, p.auth, &authHeaders),
+		Identity:                        ModelsCatalogIdentity(&p.info, p.auth, &authHeaders, p.residency),
 		SupportsAPIKeyModels:            supportsAPIKeyModels,
 		APIKeyAuth:                      apiKeyAuth,
 		CommandAuth:                     p.info.HasCommandAuth(),
