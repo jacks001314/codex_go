@@ -39,6 +39,8 @@ type OAuthLoginServerOptions struct {
 	ClientRegistration MCPServerOauthClientRegistration
 	CIMDAdvertised     *bool
 	PublicClientAuth   *bool
+	// CallbackMode selects the OAuth callback mix-up defense (Rust #40691).
+	CallbackMode MCPOAuthCallbackMode
 }
 
 type OAuthLoginServerResult struct {
@@ -89,9 +91,27 @@ func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	redirectURL := strings.TrimSpace(options.RedirectURL)
-	if redirectURL == "" {
-		redirectURL = fmt.Sprintf("http://%s:%d/callback/%s", host, port, callbackID)
+	callbackMode := options.CallbackMode
+	if callbackMode == "" {
+		callbackMode = MCPOAuthCallbackSpecific
+	}
+	resolvedCallback, err := ResolveMCPOAuthCallbackURL(options.ServerURL, mcpOAuthOptionalString(options.RedirectURL), callbackMode)
+	if err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+	redirectURL, err := insertMCPOAuthListenerPort(resolvedCallback, port)
+	if err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+	if strings.TrimSpace(options.RedirectURL) == "" && host != "127.0.0.1" {
+		// Preserve an explicitly requested listener host for the ephemeral
+		// default callback.
+		if parsed, parseErr := url.Parse(redirectURL); parseErr == nil {
+			parsed.Host = net.JoinHostPort(host, strconv.Itoa(int(port)))
+			redirectURL = parsed.String()
+		}
 	}
 	session, err := NewOAuthLoginSessionWithClientRegistration(ctx, &OAuthLoginSessionOptions{
 		ServerURL:             options.ServerURL,
@@ -110,6 +130,7 @@ func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions
 		CallbackID:            callbackID,
 		CIMDAdvertised:        options.CIMDAdvertised,
 		PublicClientAuth:      options.PublicClientAuth,
+		CallbackMode:          callbackMode,
 	}, options.HTTPClient)
 	if err != nil {
 		_ = listener.Close()

@@ -1770,6 +1770,7 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 		ClientRegistration:    registration,
 		CIMDAdvertised:        &discovery.ClientIDMetadataDocumentSupported,
 		PublicClientAuth:      &discovery.PublicClientTokenAuthSupported,
+		CallbackMode:          discovery.CallbackMode,
 	})
 	if err != nil {
 		return "", false

@@ -33,16 +33,20 @@ type StreamableHTTPOAuthDiscovery struct {
 	Issuer                            string
 	ClientIDMetadataDocumentSupported bool
 	PublicClientTokenAuthSupported    bool
+	// CallbackMode is the OAuth mix-up defense advertised by the authorization
+	// server (Rust #40691).
+	CallbackMode MCPOAuthCallbackMode
 }
 
 type oauthAuthorizationServerMetadata struct {
-	Issuer                            string   `json:"issuer"`
-	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
-	TokenEndpoint                     string   `json:"token_endpoint"`
-	RegistrationEndpoint              string   `json:"registration_endpoint"`
-	ScopesSupported                   []string `json:"scopes_supported"`
-	ClientIDMetadataDocumentSupported bool     `json:"client_id_metadata_document_supported"`
-	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+	Issuer                                     string   `json:"issuer"`
+	AuthorizationEndpoint                      string   `json:"authorization_endpoint"`
+	TokenEndpoint                              string   `json:"token_endpoint"`
+	RegistrationEndpoint                       string   `json:"registration_endpoint"`
+	ScopesSupported                            []string `json:"scopes_supported"`
+	ClientIDMetadataDocumentSupported          bool     `json:"client_id_metadata_document_supported"`
+	TokenEndpointAuthMethodsSupported          []string `json:"token_endpoint_auth_methods_supported"`
+	AuthorizationResponseIssParameterSupported bool     `json:"authorization_response_iss_parameter_supported"`
 }
 
 type oauthProtectedResourceMetadata struct {
@@ -519,6 +523,12 @@ func discoveryFromMCPOAuthAuthorizationMetadata(serverURL string, metadata *oaut
 	if authorizationServer == "" {
 		authorizationServer = strings.TrimSpace(serverURL)
 	}
+	callbackMode, err := MCPOAuthCallbackModeForDiscovery(metadata.AuthorizationResponseIssParameterSupported, metadata.Issuer)
+	if err != nil {
+		// Rust maps a missing metadata issuer to the callback-specific fallback
+		// (`callback_mode(..).unwrap_or(CallbackSpecific)`).
+		callbackMode = MCPOAuthCallbackSpecific
+	}
 	return &StreamableHTTPOAuthDiscovery{
 		AuthorizationEndpoint:             strings.TrimSpace(metadata.AuthorizationEndpoint),
 		TokenEndpoint:                     strings.TrimSpace(metadata.TokenEndpoint),
@@ -528,6 +538,7 @@ func discoveryFromMCPOAuthAuthorizationMetadata(serverURL string, metadata *oaut
 		Issuer:                            authorizationServer,
 		ClientIDMetadataDocumentSupported: metadata.ClientIDMetadataDocumentSupported,
 		PublicClientTokenAuthSupported:    metadataHasPublicClientTokenAuth(metadata.TokenEndpointAuthMethodsSupported),
+		CallbackMode:                      callbackMode,
 	}
 }
 

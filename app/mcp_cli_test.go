@@ -728,6 +728,25 @@ approval_mode = "prompt"
 	}
 }
 
+func TestMCPCLIServerOAuthCallbackURLRoundTrips(t *testing.T) {
+	table := map[string]any{
+		"url": "https://mcp.example.test/mcp",
+		"oauth": map[string]any{
+			"client_id":    "client-1",
+			"callback_url": "http://127.0.0.1/callback/abc123",
+		},
+	}
+	server := mcpServerFromConfigValue("docs", table)
+	if server == nil || server.OAuthCallbackURL != "http://127.0.0.1/callback/abc123" {
+		t.Fatalf("OAuthCallbackURL = %#v", server)
+	}
+	out := mcpServerToConfigValue(server)
+	oauth, ok := out["oauth"].(map[string]any)
+	if !ok || oauth["callback_url"] != "http://127.0.0.1/callback/abc123" || oauth["client_id"] != "client-1" {
+		t.Fatalf("oauth = %#v", out["oauth"])
+	}
+}
+
 func TestMCPLoginUsesConfiguredScopes(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

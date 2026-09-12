@@ -119,6 +119,7 @@ func (s *MCPService) performOAuthDependencyLogin(ctx context.Context, name strin
 		Timeout:               timeout,
 		CIMDAdvertised:        &discovery.ClientIDMetadataDocumentSupported,
 		PublicClientAuth:      &discovery.PublicClientTokenAuthSupported,
+		CallbackMode:          discovery.CallbackMode,
 	})
 	if err != nil {
 		return err

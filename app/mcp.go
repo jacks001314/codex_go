@@ -47,7 +47,11 @@ type mcpCLIServer struct {
 	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`
 	HTTPHeadersHelper string            `json:"-"`
 	OAuthClientID     string            `json:"oauth_client_id,omitempty"`
-	OAuthResource     string            `json:"oauth_resource,omitempty"`
+	// OAuthCallbackURL is the registered callback persisted with an existing
+	// OAuth client so its provider keeps the exact redirect it expects
+	// (Rust #40691).
+	OAuthCallbackURL string `json:"oauth_callback_url,omitempty"`
+	OAuthResource    string `json:"oauth_resource,omitempty"`
 	// OAuthAuthorizationServerIssuer is the EMA resource authorization server
 	// issuer carried through the `[mcp_servers.X.oauth]` table (Rust #44832).
 	OAuthAuthorizationServerIssuer string                    `json:"oauth_authorization_server_issuer,omitempty"`
@@ -446,16 +450,28 @@ func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name strin
 	httpClient := mcpCLIHTTPClientWithTimeout(store.httpClient, mcpCLIOAuthDiscoveryTimeout)
 	startCtx, cancelStart := context.WithTimeout(contextOrBackground(ctx), mcpCLIOAuthDiscoveryTimeout)
 	runtimeConfig := mcpServerRuntimeConfig(name, server, store.codexHome)
+	// A registered client keeps the exact callback its provider expects; an
+	// existing client ID without a stored callback resolves the mix-up defense
+	// from the discovered metadata (Rust #40691).
+	redirectURL := strings.TrimSpace(server.OAuthCallbackURL)
+	if redirectURL == "" && strings.TrimSpace(server.OAuthClientID) != "" {
+		if resolved, resolveErr := mcp.ResolveMCPOAuthCallbackURL(server.URL, nil, discovery.CallbackMode); resolveErr == nil {
+			redirectURL = resolved
+		}
+	}
 	login, err := mcp.StartOAuthLoginServer(startCtx, &mcp.OAuthLoginServerOptions{
 		ServerName:            runtimeConfig.OAuthCredentialName(name),
 		ServerURL:             server.URL,
 		ClientID:              strings.TrimSpace(server.OAuthClientID),
+		Issuer:                strings.TrimSpace(discovery.Issuer),
 		RegistrationEndpoint:  discovery.RegistrationEndpoint,
 		ClientName:            "Codex",
 		AuthorizationEndpoint: discovery.AuthorizationEndpoint,
 		TokenEndpoint:         discovery.TokenEndpoint,
 		Resource:              firstNonEmptyLocal(server.OAuthResource, discovery.Resource),
 		Scopes:                append([]string(nil), resolvedScopes.Scopes...),
+		CallbackMode:          discovery.CallbackMode,
+		RedirectURL:           redirectURL,
 		Store:                 mcp.NewOAuthStore(store.codexHome),
 		HTTPClient:            httpClient,
 	})
@@ -1003,6 +1019,7 @@ func mcpServerFromConfigValue(name string, table map[string]any) *mcpCLIServer {
 		server.EnvHTTPHeaders = stringMapFromAny(table["env_http_headers"])
 		server.HTTPHeadersHelper = stringFromAny(table["http_headers_helper"])
 		server.OAuthClientID = mcpOAuthClientIDFromConfig(table)
+		server.OAuthCallbackURL = mcpOAuthCallbackURLFromConfig(table)
 		server.OAuthAuthorizationServerIssuer = mcpOAuthAuthorizationServerIssuerFromConfig(table)
 		server.OAuthResource = stringFromAny(table["oauth_resource"])
 		return server
@@ -1032,10 +1049,13 @@ func mcpServerToConfigValue(server *mcpCLIServer) map[string]any {
 		if server.HTTPHeadersHelper != "" {
 			value["http_headers_helper"] = server.HTTPHeadersHelper
 		}
-		if server.OAuthClientID != "" || server.OAuthAuthorizationServerIssuer != "" {
+		if server.OAuthClientID != "" || server.OAuthAuthorizationServerIssuer != "" || server.OAuthCallbackURL != "" {
 			oauth := map[string]any{}
 			if server.OAuthClientID != "" {
 				oauth["client_id"] = server.OAuthClientID
+			}
+			if server.OAuthCallbackURL != "" {
+				oauth["callback_url"] = server.OAuthCallbackURL
 			}
 			if server.OAuthAuthorizationServerIssuer != "" {
 				oauth["authorization_server_issuer"] = server.OAuthAuthorizationServerIssuer
@@ -1116,6 +1136,17 @@ func mcpOAuthClientIDFromConfig(table map[string]any) string {
 		return ""
 	}
 	return stringFromAny(oauth["client_id"])
+}
+
+func mcpOAuthCallbackURLFromConfig(table map[string]any) string {
+	if value := stringFromAny(table["oauth_callback_url"]); value != "" {
+		return value
+	}
+	oauth, ok := table["oauth"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return stringFromAny(oauth["callback_url"])
 }
 
 func mcpOAuthAuthorizationServerIssuerFromConfig(table map[string]any) string {

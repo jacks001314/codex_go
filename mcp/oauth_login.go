@@ -32,6 +32,8 @@ type OAuthLoginSessionOptions struct {
 	CallbackID            string
 	CIMDAdvertised        *bool
 	PublicClientAuth      *bool
+	// CallbackMode selects the OAuth callback mix-up defense (Rust #40691).
+	CallbackMode MCPOAuthCallbackMode
 }
 
 type OAuthLoginSession struct {
@@ -46,6 +48,7 @@ type OAuthLoginSession struct {
 	State            string
 	AuthorizationURL string
 	Scopes           []string
+	CallbackMode     MCPOAuthCallbackMode
 }
 
 type OAuthCallbackResult struct {
@@ -100,6 +103,10 @@ func NewOAuthLoginSession(options *OAuthLoginSessionOptions) (*OAuthLoginSession
 	}
 	verifier := oauth2.GenerateVerifier()
 	scopes := normalizeMCPOAuthScopes(options.Scopes)
+	callbackMode := options.CallbackMode
+	if callbackMode == "" {
+		callbackMode = MCPOAuthCallbackSpecific
+	}
 	config := &oauth2.Config{
 		ClientID:     strings.TrimSpace(options.ClientID),
 		ClientSecret: strings.TrimSpace(options.ClientSecret),
@@ -127,6 +134,7 @@ func NewOAuthLoginSession(options *OAuthLoginSessionOptions) (*OAuthLoginSession
 		State:            state,
 		AuthorizationURL: config.AuthCodeURL(state, authOptions...),
 		Scopes:           scopes,
+		CallbackMode:     callbackMode,
 	}, nil
 }
 
@@ -287,6 +295,26 @@ func mcpOAuthNativeRedirectSupported(redirectURL string, callbackID string) bool
 	return parsed.RawQuery == "" && parsed.Fragment == "" && parsed.User == nil
 }
 
+// validateCallbackIssuer rejects a missing or mismatched authorization-response
+// issuer before the code is exchanged. MCP authorization servers that include
+// `iss` must advertise support, and clients must validate it (Rust #40691,
+// RFC 9207 / RFC 9700 authorization-server mix-up defense).
+func (s *OAuthLoginSession) validateCallbackIssuer(rawPath string) error {
+	if s == nil || s.CallbackMode != MCPOAuthCallbackIssuerBound {
+		return nil
+	}
+	parsed, err := url.Parse(strings.TrimSpace(rawPath))
+	if err != nil {
+		return errors.New("MCP OAuth callback URL is invalid")
+	}
+	issuer := strings.TrimSpace(parsed.Query().Get("iss"))
+	expected := strings.TrimSpace(s.Issuer)
+	if expected == "" || issuer != expected {
+		return errors.New("MCP OAuth callback issuer does not match the authorization server metadata")
+	}
+	return nil
+}
+
 func (s *OAuthLoginSession) CompleteCallback(ctx context.Context, rawPath string, client *OAuthTokenClient, serverName string) (*OAuthTokenSet, error) {
 	if s == nil {
 		return nil, errors.New("MCP OAuth login session is nil")
@@ -294,6 +322,11 @@ func (s *OAuthLoginSession) CompleteCallback(ctx context.Context, rawPath string
 	callback, err := ParseMCPOAuthCallback(rawPath, s.CallbackPath)
 	if err != nil {
 		return nil, err
+	}
+	if s.CallbackMode == MCPOAuthCallbackIssuerBound {
+		if err := s.validateCallbackIssuer(rawPath); err != nil {
+			return nil, err
+		}
 	}
 	if callback.State != s.State {
 		return nil, errors.New("MCP OAuth callback state mismatch")
@@ -428,6 +461,9 @@ func AppendMCPOAuthCallbackID(redirectURI string, callbackID string) (string, er
 	parsed, err := url.Parse(strings.TrimSpace(redirectURI))
 	if err != nil {
 		return "", err
+	}
+	if mcpOAuthLastPathSegment(parsed.Path) == strings.TrimSpace(callbackID) {
+		return parsed.String(), nil
 	}
 	path := parsed.Path
 	if strings.HasSuffix(path, "/") {
