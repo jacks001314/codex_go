@@ -54,26 +54,24 @@ func TestInteractiveLocalVoiceCallbacksUseAppServerProtocol(t *testing.T) {
 		t.Fatalf("stop: %v", err)
 	}
 
-	wantPairs := []struct {
-		init appserver.Method
-		op   appserver.Method
-	}{
-		{appserver.MethodInitialize, appserver.MethodConfigRead},
-		{appserver.MethodInitialize, appserver.MethodThreadRealtimeListVoices},
-		{appserver.MethodInitialize, appserver.MethodThreadRealtimeStart},
-		{appserver.MethodInitialize, appserver.MethodThreadRealtimeStop},
+	// The session initializes the connection once, so the callbacks issue only
+	// their own request; a per-request initialize would fail as already
+	// initialized.
+	wantMethods := []appserver.Method{
+		appserver.MethodConfigRead,
+		appserver.MethodThreadRealtimeListVoices,
+		appserver.MethodThreadRealtimeStart,
+		appserver.MethodThreadRealtimeStop,
 	}
-	if len(router.requests) != 2*len(wantPairs) {
-		t.Fatalf("requests = %d, want %d", len(router.requests), 2*len(wantPairs))
+	if len(router.requests) != len(wantMethods) {
+		t.Fatalf("requests = %d, want %d", len(router.requests), len(wantMethods))
 	}
-	for index, pair := range wantPairs {
-		if router.requests[2*index].Method != pair.init || router.requests[2*index+1].Method != pair.op {
-			t.Fatalf("request[%d]=%s request[%d]=%s", 2*index, router.requests[2*index].Method, 2*index+1, router.requests[2*index+1].Method)
+	for index, method := range wantMethods {
+		if router.requests[index].Method != method {
+			t.Fatalf("request[%d] = %s, want %s", index, router.requests[index].Method, method)
 		}
-		for _, position := range []int{2 * index, 2*index + 1} {
-			if router.requests[position].ConnectionID != interactiveVoiceConnectionID {
-				t.Fatalf("request[%d] connection = %q", position, router.requests[position].ConnectionID)
-			}
+		if router.requests[index].ConnectionID != interactiveVoiceConnectionID {
+			t.Fatalf("request[%d] connection = %q", index, router.requests[index].ConnectionID)
 		}
 	}
 }

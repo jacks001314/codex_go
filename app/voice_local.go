@@ -44,6 +44,8 @@ type localVoiceSession struct {
 	router        *appserver.RuntimeRouter
 	notifications chan codextea.VoiceNotificationMsg
 	closed        bool
+	// initErr records a failed one-time connection initialization.
+	initErr error
 }
 
 func newLocalVoiceSession() *localVoiceSession {
@@ -64,9 +66,6 @@ func (s *localVoiceSession) ensureRouter() interactiveVoiceRouter {
 	}
 	router := appserver.NewDefaultRuntimeRouter(newSessionStore(), auth.DefaultCodexHome())
 	router.SetNotificationSink(appserver.NotificationSinkFunc(func(notification *appserver.Notification) {
-		if notification == nil {
-			return
-		}
 		message, ok := realtimeNotificationMessage(notification)
 		if !ok {
 			return
@@ -77,6 +76,11 @@ func (s *localVoiceSession) ensureRouter() interactiveVoiceRouter {
 			// The TUI is behind; drop rather than stall the runtime.
 		}
 	}))
+	// A connection is initialized exactly once per router and later requests
+	// reuse it; re-initializing fails with "Already initialized".
+	if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
+		s.initErr = err
+	}
 	s.router = router
 	return router
 }
@@ -147,7 +151,8 @@ func localVoiceRequest(router interactiveVoiceRouter, id appserver.RequestID, me
 }
 
 // interactiveLocalVoiceCallbacks builds the voiceRuntime callbacks against the
-// persistent in-process router.
+// persistent in-process router. The router is initialized once by the session;
+// the callbacks only issue their own requests.
 func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory) (
 	func(context.Context) VoiceSettings,
 	func(context.Context) realtime.VoicesList,
@@ -160,9 +165,6 @@ func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory) (
 	settings := func(ctx context.Context) VoiceSettings {
 		router := factory()
 		if router == nil {
-			return VoiceSettings{}
-		}
-		if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
 			return VoiceSettings{}
 		}
 		result, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodConfigRead, config.ConfigReadParams{})
@@ -180,9 +182,6 @@ func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory) (
 		if router == nil {
 			return realtime.BuiltinVoices()
 		}
-		if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
-			return realtime.BuiltinVoices()
-		}
 		result, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodThreadRealtimeListVoices, realtime.ListVoicesParams{})
 		if err != nil {
 			return realtime.BuiltinVoices()
@@ -198,9 +197,6 @@ func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory) (
 		if router == nil {
 			return errors.New("thread/realtime/start failed in TUI: app-server is unavailable")
 		}
-		if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
-			return err
-		}
 		_, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodThreadRealtimeStart, params)
 		return err
 	}
@@ -208,9 +204,6 @@ func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory) (
 		router := factory()
 		if router == nil {
 			return errors.New("thread/realtime/stop failed in TUI: app-server is unavailable")
-		}
-		if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
-			return err
 		}
 		_, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodThreadRealtimeStop, realtime.StopParams{
 			ThreadID: strings.TrimSpace(threadID),
@@ -250,9 +243,6 @@ func interactiveLocalVoiceSaver(factory interactiveVoiceRouterFactory) func(voic
 			if router == nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: errors.New("config write failed in TUI: app-server is unavailable")}
 			}
-			if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
-				return codextea.VoiceSavedMsg{Voice: voice, Err: err}
-			}
 			if _, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
 				Edits: []config.ConfigEdit{{
 					KeyPath:       "realtime.voice",
@@ -285,9 +275,6 @@ func interactiveLocalSpeechSender(factory interactiveVoiceRouterFactory, threadI
 			router := factory()
 			if router == nil {
 				return codextea.VoiceSpeechResultMsg{ItemID: itemID, Err: errors.New("thread/realtime/appendSpeech failed in TUI: app-server is unavailable")}
-			}
-			if err := initializeLocalTUIConnection(router.Handle, interactiveVoiceConnectionID); err != nil {
-				return codextea.VoiceSpeechResultMsg{ItemID: itemID, Err: err}
 			}
 			_, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodThreadRealtimeAppendSpeech, realtime.AppendSpeechParams{
 				ThreadID: target,
