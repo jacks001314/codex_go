@@ -244,7 +244,14 @@ func readGitPath(path string, relativeTo string, prefix string) (string, bool) {
 	if value == "" || strings.ContainsAny(value, "\n\r") {
 		return "", false
 	}
-	return canonicalizeNative(filepath.Join(relativeTo, value))
+	// Git writes absolute gitdir/commondir paths (with forward slashes on
+	// Windows). Rust's Path::join replaces the base for an absolute argument,
+	// while Go's filepath.Join concatenates, so resolve explicitly.
+	resolved := value
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(relativeTo, resolved)
+	}
+	return canonicalizeNative(resolved)
 }
 
 // relativeWithin mirrors Rust Path::strip_prefix: it reports the relative path
