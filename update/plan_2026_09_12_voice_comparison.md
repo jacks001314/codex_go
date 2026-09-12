@@ -319,3 +319,34 @@ LRU 缓存；Go 侧无对等实现。
   render/capture 延迟，无需显式对齐。
 
 测试：`dsp_aec_test.go`、`dsp_stages_test.go`、`dsp_apm_test.go`。
+
+## 13. 设备原生率路径评估（结论：**不做**，附证据）
+
+原计划（"像 Rust 一样按设备原生率打开设备，再自行重采样到 48 kHz，让重采样器上热路径"）
+经实测**不成立**：
+
+探测方法：`MiniAudioRuntime.Start` 后用 `context.Context.Devices(kind)` 读取
+`malgo.DeviceInfo.Formats`（原生数据格式/采样率列表）。本机结果：
+
+```
+kind=Capture  default=true  name="麦克风阵列 (适用于数字麦克风的英特尔® 智音技术)"  nativeFormats: <empty>
+kind=Playback default=true  name="Speaker (Realtek(R) Audio)"                  nativeFormats: <empty>
+```
+
+即 **WASAPI 端点不暴露原生采样率列表**，"选择原生率"没有可靠的数据来源。对比之下：
+
+- Rust 用 CPAL，可枚举设备支持的格式；选不到时会走平台的默认/共享模式。
+- Go 走 miniaudio：请求 48 kHz，共享模式下由 miniaudio 内部完成硬件率→48k 转换
+  （这正是当前已验证通过的路径）。
+
+因此：
+
+1. **功能结果与 Rust 等价**：任意硬件率最终都进 48 kHz 管线。
+2. 强行改成"原生率打开 + 自研重采样"会**改动已验证的 48 kHz 路径**（含真机回环），
+   而在本平台**没有收益、也无法验证**（拿不到原生率）。
+3. 显式重采样器（`dsp_resample.go`）已实现并测试，作为**可用组件**保留：一旦出现
+   非 48 kHz 需求（例如某设备拒绝 48 kHz），可直接在设备回调边界接入
+   （capture: 设备率→48k；playback: 48k→设备率），无需再写算法。
+
+**结论**：DSP 算法缺口已闭合；"设备原生率"这一实现路径在本平台被证据否定，登记为
+**N/A（平台数据缺失）**，不作为待办。
