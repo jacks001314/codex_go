@@ -75,6 +75,23 @@ func (r *RuntimeRouter) refreshThreadGlobalInstructions(params *turn.TurnStartPa
 		return
 	}
 	projectText, _ := record.Metadata.Extra["instructions_project"].(string)
+	// Rust #44675: re-discover the repository snapshot when the working directory
+	// or the project trust level changed; otherwise reuse the captured one.
+	storedCWD, _ := record.Metadata.Extra["instructions_project_cwd"].(string)
+	storedTrust, _ := record.Metadata.Extra["instructions_project_trust"].(string)
+	currentCWD := firstNonEmpty(strings.TrimSpace(params.CWD), strings.TrimSpace(record.Metadata.CWD))
+	projectConfig := r.threadProjectInstructionsConfig(currentCWD)
+	currentTrust := projectTrustLabel(projectConfig, currentCWD)
+	projectSnapshotChanged := currentCWD != storedCWD || currentTrust != storedTrust
+	if projectSnapshotChanged {
+		if refreshedProject, _, err := r.loadProjectInstructionsFor(currentCWD, projectConfig); err == nil {
+			projectText = refreshedProject
+			record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+			record.Metadata.Extra["instructions_project"] = refreshedProject
+			record.Metadata.Extra["instructions_project_cwd"] = currentCWD
+			record.Metadata.Extra["instructions_project_trust"] = currentTrust
+		}
+	}
 	globalText, _ := record.Metadata.Extra["instructions_global"].(string)
 	if codexHome := r.codexHomeForInstructions(); codexHome != "" {
 		refreshed := r.refreshGlobalInstructions(codexHome)
@@ -85,7 +102,7 @@ func (r *RuntimeRouter) refreshThreadGlobalInstructions(params *turn.TurnStartPa
 		}
 	}
 	combined := joinInstructionsParts(globalText, projectText)
-	if strings.TrimSpace(combined) == strings.TrimSpace(record.Metadata.BaseInstructions) {
+	if !projectSnapshotChanged && strings.TrimSpace(combined) == strings.TrimSpace(record.Metadata.BaseInstructions) {
 		return
 	}
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
@@ -100,6 +117,23 @@ func (r *RuntimeRouter) refreshThreadGlobalInstructions(params *turn.TurnStartPa
 	record.Metadata.BaseInstructions = combined
 	record.Metadata.Extra["instructions_global"] = strings.TrimSpace(globalText)
 	_ = r.runtimeSaveThreadRecord(record)
+}
+
+// threadProjectInstructionsConfig reads the effective configuration for a cwd so
+// repository instruction discovery can re-evaluate trust and doc limits.
+func (r *RuntimeRouter) threadProjectInstructionsConfig(cwd string) *config.Config {
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	readParams := &config.ConfigReadParams{}
+	if strings.TrimSpace(cwd) != "" {
+		readParams.CWD = &cwd
+	}
+	read, err := r.services.Config.Read(readParams)
+	if err != nil || read == nil {
+		return nil
+	}
+	return &config.Config{Values: read.Config}
 }
 
 // turnInstructionsProvider returns a per-request instruction provider for a

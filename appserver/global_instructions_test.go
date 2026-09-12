@@ -88,3 +88,53 @@ func TestRuntimeRouterRefreshesGlobalInstructionsAtTurnBoundary(t *testing.T) {
 		t.Fatalf("removed source kept %q", after.Metadata.BaseInstructions)
 	}
 }
+
+// TestRuntimeRouterReDiscoversProjectInstructionsWhenCWDChanges covers the
+// Rust #44675 repository half: moving the thread to a different working
+// directory re-discovers the repository instruction snapshot.
+func TestRuntimeRouterReDiscoversProjectInstructionsWhenCWDChanges(t *testing.T) {
+	codexHome := t.TempDir()
+	store := session.NewStore(filepath.Join(codexHome, "sessions"))
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Models:       model.NewModelService(nil),
+	})
+	if err := os.WriteFile(filepath.Join(codexHome, config.DefaultAgentsMDFilename), []byte("global"), 0o600); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	firstCWD := filepath.Join(t.TempDir(), "first")
+	secondCWD := filepath.Join(t.TempDir(), "second")
+	if err := os.MkdirAll(firstCWD, 0o700); err != nil {
+		t.Fatalf("mkdir first cwd: %v", err)
+	}
+	if err := os.MkdirAll(secondCWD, 0o700); err != nil {
+		t.Fatalf("mkdir second cwd: %v", err)
+	}
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: firstCWD}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	record, err := router.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		t.Fatalf("thread record: %v", err)
+	}
+	if got, _ := record.Metadata.Extra["instructions_project_cwd"].(string); got != firstCWD {
+		t.Fatalf("stored project cwd = %q, want %q", got, firstCWD)
+	}
+
+	params := &turn.TurnStartParams{ThreadID: threadID, CWD: secondCWD}
+	if err := router.prepareTurnStartParams(params); err != nil {
+		t.Fatalf("prepareTurnStartParams: %v", err)
+	}
+	updated, err := router.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || updated == nil {
+		t.Fatalf("thread record: %v", err)
+	}
+	if got, _ := updated.Metadata.Extra["instructions_project_cwd"].(string); got != secondCWD {
+		t.Fatalf("re-discovered project cwd = %q, want %q", got, secondCWD)
+	}
+}

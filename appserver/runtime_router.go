@@ -3808,6 +3808,8 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 			record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 			record.Metadata.Extra["instructions_global"] = strings.TrimSpace(parts.global)
 			record.Metadata.Extra["instructions_project"] = strings.TrimSpace(parts.project)
+			record.Metadata.Extra["instructions_project_cwd"] = strings.TrimSpace(parts.projectCWD)
+			record.Metadata.Extra["instructions_project_trust"] = strings.TrimSpace(parts.projectTrust)
 			record.Metadata.Extra["instructions_from_agents_md"] = true
 		}
 	} else if params.BaseInstructions != nil {
@@ -4356,6 +4358,11 @@ type threadStartInstructions struct {
 	project  string
 	sources  []string
 	warnings []string
+	// projectCWD and projectTrust record the environment facts the repository
+	// snapshot was resolved with, so a turn can re-discover it when either
+	// changes (Rust #44675).
+	projectCWD   string
+	projectTrust string
 }
 
 func (r *RuntimeRouter) threadStartInstructionParts(params *ThreadStartParams) (*threadStartInstructions, error) {
@@ -4376,46 +4383,71 @@ func (r *RuntimeRouter) threadStartInstructionParts(params *ThreadStartParams) (
 		}
 	}
 	if params.Environments == nil {
-		maxBytes := config.DefaultProjectDocMaxBytes
-		if cfg, err := r.effectiveConfigForThreadStart(params); err == nil && cfg != nil {
-			maxBytes = cfg.ProjectDocMaxBytes()
-		}
 		cwd := r.effectiveThreadStartCWD(params)
-		var denyRead func(string) bool
-		untrustedProject := false
-		if cfg, cfgErr := r.effectiveConfigForThreadStart(params); cfgErr == nil && cfg != nil {
-			// Rust #39837: project-scoped AGENTS.md discovery is skipped for
-			// untrusted projects while user-level instructions are preserved.
-			if root := config.ActiveProjectRoot(cwd); root != "" {
-				if level, ok := config.ProjectTrustLevelForTarget(cfg.Values, root); ok && strings.EqualFold(level, "untrusted") {
-					untrustedProject = true
-				}
-			}
-			if resolution, resolveErr := turnSandboxPermissionProfile(cfg, cwd, nil); resolveErr == nil && resolution != nil && resolution.Profile != nil {
-				profile := resolution.Profile
-				denyRead = func(path string) bool { return profile.DeniesReadPath(path) }
-			}
-		}
-		loaded, err := promptctx.LoadProjectInstructions(promptctx.InstructionsLoadConfig{
-			CWD:              cwd,
-			MaxBytes:         maxBytes,
-			DenyRead:         denyRead,
-			UntrustedProject: untrustedProject,
-		})
+		cfg, _ := r.effectiveConfigForThreadStart(params)
+		projectText, projectSources, err := r.loadProjectInstructionsFor(cwd, cfg)
 		if err != nil {
 			return nil, err
 		}
-		if loaded != nil {
-			parts.project = strings.TrimSpace(loaded.Text())
-			for _, entry := range loaded.Entries {
-				if entry.Provenance != promptctx.InstructionsProvenanceProject || strings.TrimSpace(entry.Contents) == "" {
-					continue
-				}
-				parts.sources = appendInstructionSource(parts.sources, entry.SourcePath)
-			}
-		}
+		parts.project = projectText
+		parts.sources = append(parts.sources, projectSources...)
+		parts.projectCWD = cwd
+		parts.projectTrust = projectTrustLabel(cfg, cwd)
 	}
 	return parts, nil
+}
+
+// loadProjectInstructionsFor resolves repository-scoped instructions for a cwd
+// using the supplied configuration. Rust #39837: project discovery is skipped
+// for untrusted projects while user-level instructions are preserved.
+func (r *RuntimeRouter) loadProjectInstructionsFor(cwd string, cfg *config.Config) (string, []string, error) {
+	maxBytes := config.DefaultProjectDocMaxBytes
+	if cfg != nil {
+		maxBytes = cfg.ProjectDocMaxBytes()
+	}
+	var denyRead func(string) bool
+	if cfg != nil {
+		if resolution, resolveErr := turnSandboxPermissionProfile(cfg, cwd, nil); resolveErr == nil && resolution != nil && resolution.Profile != nil {
+			profile := resolution.Profile
+			denyRead = func(path string) bool { return profile.DeniesReadPath(path) }
+		}
+	}
+	loaded, err := promptctx.LoadProjectInstructions(promptctx.InstructionsLoadConfig{
+		CWD:              cwd,
+		MaxBytes:         maxBytes,
+		DenyRead:         denyRead,
+		UntrustedProject: strings.EqualFold(projectTrustLabel(cfg, cwd), "untrusted"),
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	if loaded == nil {
+		return "", nil, nil
+	}
+	var sources []string
+	for _, entry := range loaded.Entries {
+		if entry.Provenance != promptctx.InstructionsProvenanceProject || strings.TrimSpace(entry.Contents) == "" {
+			continue
+		}
+		sources = appendInstructionSource(sources, entry.SourcePath)
+	}
+	return strings.TrimSpace(loaded.Text()), sources, nil
+}
+
+// projectTrustLabel returns the active project's trust level for a cwd, or an
+// empty label when no trust decision applies.
+func projectTrustLabel(cfg *config.Config, cwd string) string {
+	if cfg == nil {
+		return ""
+	}
+	root := config.ActiveProjectRoot(cwd)
+	if root == "" {
+		return ""
+	}
+	if level, ok := config.ProjectTrustLevelForTarget(cfg.Values, root); ok {
+		return strings.ToLower(strings.TrimSpace(level))
+	}
+	return ""
 }
 
 func (r *RuntimeRouter) codexHomeForInstructions() string {
