@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/turn"
@@ -52,7 +53,7 @@ func TestPermissionsWorldStateInputItemLikeRust(t *testing.T) {
 	params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: home}
 	cfg := &config.Config{Values: map[string]any{}}
 
-	item, err := router.permissionsWorldStateInputItem(string(threadID), params, cfg)
+	item, err := router.permissionsWorldStateInputItem(string(threadID), params, nil, cfg)
 	if err != nil {
 		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
@@ -81,7 +82,7 @@ func TestPermissionsWorldStateInputItemLikeRust(t *testing.T) {
 	}
 
 	// Unchanged instructions must not emit again.
-	repeat, err := router.permissionsWorldStateInputItem(string(threadID), params, cfg)
+	repeat, err := router.permissionsWorldStateInputItem(string(threadID), params, nil, cfg)
 	if err != nil {
 		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
@@ -91,7 +92,7 @@ func TestPermissionsWorldStateInputItemLikeRust(t *testing.T) {
 
 	// A changed approval policy changes the hash, so the fragment is emitted.
 	changed := &config.Config{Values: map[string]any{"approval_policy": "never"}}
-	changedItem, err := router.permissionsWorldStateInputItem(string(threadID), params, changed)
+	changedItem, err := router.permissionsWorldStateInputItem(string(threadID), params, nil, changed)
 	if err != nil {
 		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
@@ -133,7 +134,7 @@ func TestPermissionsWorldStateHonorsIncludeFlagLikeRust(t *testing.T) {
 
 	params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: home}
 	cfg := &config.Config{Values: map[string]any{"include_permissions_instructions": false}}
-	item, err := router.permissionsWorldStateInputItem(string(threadID), params, cfg)
+	item, err := router.permissionsWorldStateInputItem(string(threadID), params, nil, cfg)
 	if err != nil {
 		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
@@ -181,7 +182,7 @@ func TestCompactPermissionsWorldStateReportsSavedPrefixesLikeRust(t *testing.T) 
 
 	params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: home}
 	cfg := &config.Config{Values: map[string]any{"include_permissions_instructions": false}}
-	first, err := router.permissionsWorldStateInputItem(string(threadID), params, cfg)
+	first, err := router.permissionsWorldStateInputItem(string(threadID), params, nil, cfg)
 	if err != nil {
 		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
@@ -190,7 +191,7 @@ func TestCompactPermissionsWorldStateReportsSavedPrefixesLikeRust(t *testing.T) 
 	}
 
 	router.rememberExecPolicyAmendmentSaved(string(threadID), "turn-1", []string{"echo", "amendment-ok"})
-	second, err := router.permissionsWorldStateInputItem(string(threadID), params, cfg)
+	second, err := router.permissionsWorldStateInputItem(string(threadID), params, nil, cfg)
 	if err != nil {
 		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
@@ -198,12 +199,56 @@ func TestCompactPermissionsWorldStateReportsSavedPrefixesLikeRust(t *testing.T) 
 	if got := permissionsInputItemText(t, second); got != want {
 		t.Fatalf("compact saved prefix = %q, want %q", got, want)
 	}
-	third, err := router.permissionsWorldStateInputItem(string(threadID), params, cfg)
+	third, err := router.permissionsWorldStateInputItem(string(threadID), params, nil, cfg)
 	if err != nil {
 		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
 	}
 	if third != nil {
 		t.Fatalf("compact saved prefix repeated: %#v", third)
+	}
+}
+
+// TestPermissionsWorldStateUsesCatalogMessagesLikeRust pins the model-catalog
+// overrides: Rust's PermissionMessages / ApprovalMessages replace the built-in
+// sandbox and approval sections.
+func TestPermissionsWorldStateUsesCatalogMessagesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-permissions-catalog")
+	now := time.Now().UTC()
+	if err := store.Create(&session.Record{
+		ID: threadID, SessionID: string(threadID), CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{HistoryMode: string(ThreadHistoryLegacy), Extra: map[string]any{}},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	t.Cleanup(func() { _ = router.Close() })
+
+	sandboxText := "catalog sandbox text"
+	approvalText := "catalog approval text"
+	modelInfo := &model.ModelInfo{
+		Slug: "catalog-model",
+		ModelMessages: &model.ModelMessages{
+			Permissions: &model.PermissionMessages{WorkspaceWrite: &sandboxText},
+			Approvals:   &model.ApprovalMessages{OnRequest: &approvalText},
+		},
+	}
+	params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: home}
+	cfg := &config.Config{Values: map[string]any{}}
+	item, err := router.permissionsWorldStateInputItem(string(threadID), params, modelInfo, cfg)
+	if err != nil {
+		t.Fatalf("permissionsWorldStateInputItem() error = %v", err)
+	}
+	text := permissionsInputItemText(t, item)
+	if !strings.Contains(text, sandboxText) || !strings.Contains(text, approvalText) {
+		t.Fatalf("catalog messages were not used: %q", text)
+	}
+	if strings.Contains(text, "Network access is") {
+		t.Fatalf("built-in sandbox template survived a catalog override: %q", text)
 	}
 }
 

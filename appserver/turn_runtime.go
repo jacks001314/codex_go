@@ -6216,7 +6216,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	}
 	inputItems = append(inputItems, additionalInputItems...)
 	permissionsSessionItems := []session.Item{}
-	if item, err := r.permissionsWorldStateInputItem(threadID, params, cfg); err != nil {
+	if item, err := r.permissionsWorldStateInputItem(threadID, params, modelInfo, cfg); err != nil {
 		return nil, err
 	} else if item != nil {
 		inputItems = append(inputItems, item)

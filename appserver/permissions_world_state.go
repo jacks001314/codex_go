@@ -9,6 +9,7 @@ import (
 	contextfrag "codex_go/context"
 	"codex_go/execpolicy"
 	"codex_go/features"
+	"codex_go/model"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/turn"
@@ -66,6 +67,7 @@ func permissionProfileForTurn(cfg *config.Config, params *turn.TurnStartParams, 
 func (r *RuntimeRouter) permissionPromptOptionsForTurn(
 	threadID string,
 	params *turn.TurnStartParams,
+	modelInfo *model.ModelInfo,
 	cfg *config.Config,
 ) sandbox.PermissionPromptProfileOptions {
 	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
@@ -79,6 +81,25 @@ func (r *RuntimeRouter) permissionPromptOptionsForTurn(
 		options.Granular = granularApprovalConfigForTurn(cfg, params)
 	}
 	options.ApprovedCommandPrefixes = r.approvedCommandPrefixesForThread(threadID)
+	if modelInfo != nil && modelInfo.ModelMessages != nil {
+		// Rust ApprovalPromptContext / PermissionMessages: catalog texts replace
+		// the built-in approval and sandbox sections.
+		if messages := modelInfo.ModelMessages.Approvals; messages != nil {
+			options.ApprovalMessages = &sandbox.PermissionPromptApprovalMessages{
+				OnRequest:           messages.OnRequest,
+				OnRequestAutoReview: messages.OnRequestAutoReview,
+				Never:               messages.Never,
+				UnlessTrusted:       messages.UnlessTrusted,
+			}
+		}
+		if messages := modelInfo.ModelMessages.Permissions; messages != nil {
+			options.PermissionMessages = &sandbox.PermissionPromptPermissionMessages{
+				DangerFullAccess: messages.DangerFullAccess,
+				WorkspaceWrite:   messages.WorkspaceWrite,
+				ReadOnly:         messages.ReadOnly,
+			}
+		}
+	}
 	return options
 }
 
@@ -122,6 +143,7 @@ func granularApprovalConfigForTurn(cfg *config.Config, params *turn.TurnStartPar
 func (r *RuntimeRouter) permissionsWorldStateInputItem(
 	threadID string,
 	params *turn.TurnStartParams,
+	modelInfo *model.ModelInfo,
 	cfg *config.Config,
 ) (any, error) {
 	if cfg == nil {
@@ -141,7 +163,7 @@ func (r *RuntimeRouter) permissionsWorldStateInputItem(
 		// prefixes are reported.
 		return r.compactPermissionsWorldStateUpdate(record, state, threadID)
 	}
-	options := r.permissionPromptOptionsForTurn(threadID, params, cfg)
+	options := r.permissionPromptOptionsForTurn(threadID, params, modelInfo, cfg)
 	rendered, hash := r.permissionsInstructionsForTurn(params, cfg, options)
 	current := permissionsWorldStateSnapshot{
 		Instructions:            hash,

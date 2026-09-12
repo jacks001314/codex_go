@@ -122,6 +122,8 @@ type ModelMessages struct {
 	MultiAgent           *MultiAgentMessages        `json:"multi_agent,omitempty"`
 	TokenBudget          *ModelTokenBudgetConfig    `json:"token_budget,omitempty"`
 	AutoReview           *AutoReviewMessages        `json:"auto_review,omitempty"`
+	Approvals            *ApprovalMessages          `json:"approval,omitempty"`
+	Permissions          *PermissionMessages        `json:"permissions,omitempty"`
 	ConfirmationPolicies *ConfirmationPolicies      `json:"confirmation_policies,omitempty"`
 	Tools                *ToolMessages              `json:"tools,omitempty"`
 }
@@ -129,6 +131,23 @@ type ModelMessages struct {
 type CollaborationModeMessages struct {
 	Default *string `json:"default"`
 	Plan    *string `json:"plan"`
+}
+
+// ApprovalMessages mirrors Rust protocol::openai_models::ApprovalMessages:
+// catalog-provided approval-policy texts that replace the built-in ones.
+type ApprovalMessages struct {
+	OnRequest           *string `json:"on_request,omitempty"`
+	OnRequestAutoReview *string `json:"on_request_auto_review,omitempty"`
+	Never               *string `json:"never,omitempty"`
+	UnlessTrusted       *string `json:"unless_trusted,omitempty"`
+}
+
+// PermissionMessages mirrors Rust protocol::openai_models::PermissionMessages:
+// catalog-provided sandbox-mode texts that replace the built-in templates.
+type PermissionMessages struct {
+	DangerFullAccess *string `json:"danger_full_access,omitempty"`
+	WorkspaceWrite   *string `json:"workspace_write,omitempty"`
+	ReadOnly         *string `json:"read_only,omitempty"`
 }
 
 // MultiAgentMessages mirrors Rust MultiAgentMessages: model-catalog messages
@@ -199,6 +218,8 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 		MultiAgent            *MultiAgentMessages        `json:"multi_agent"`
 		TokenBudget           *ModelTokenBudgetConfig    `json:"token_budget"`
 		AutoReview            *AutoReviewMessages        `json:"auto_review"`
+		Approvals             *ApprovalMessages          `json:"approval"`
+		Permissions           *PermissionMessages        `json:"permissions"`
 		ConfirmationPolicies  *ConfirmationPolicies      `json:"confirmation_policies"`
 		Tools                 *ToolMessages              `json:"tools"`
 	}
@@ -210,6 +231,8 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	m.MultiAgent = raw.MultiAgent
 	m.TokenBudget = raw.TokenBudget
 	m.AutoReview = raw.AutoReview
+	m.Approvals = raw.Approvals
+	m.Permissions = raw.Permissions
 	m.ConfirmationPolicies = raw.ConfirmationPolicies
 	m.Tools = raw.Tools
 	if raw.InstructionsVariables != nil {
