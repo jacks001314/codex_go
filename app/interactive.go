@@ -3702,8 +3702,6 @@ func (s *interactiveSession) HandleCommand(input string) (handled bool, exit boo
 		err = s.handleSandboxCommand(invocation.Args)
 	case codextui.CommandPermissions:
 		err = s.handlePermissionsCommand(invocation.Args)
-	case codextui.CommandPersonality:
-		err = s.handlePersonalityCommand(invocation.Args)
 	case codextui.CommandExperimental:
 		err = s.handleExperimentalCommand(invocation.Args)
 	default:
@@ -3788,55 +3786,6 @@ func (s *interactiveSession) handlePermissionsCommand(args string) error {
 	}
 	_, err := fmt.Fprintf(s.Stdout, "Permissions: approval=%s sandbox=%s\n", displayInteractiveValue(s.UI.ApprovalPolicy), displayInteractiveValue(s.UI.Sandbox))
 	return err
-}
-
-func (s *interactiveSession) handlePersonalityCommand(args string) error {
-	value := strings.ToLower(strings.TrimSpace(args))
-	if value == "" || value == "show" || value == "status" {
-		current := s.UI.Personality
-		if strings.TrimSpace(current) == "" {
-			settings := interactiveTUISettings(&s.Root)
-			current = string(settings.Personality)
-		}
-		_, err := fmt.Fprint(s.Stdout, s.UI.RenderSetting("Personality", current))
-		return err
-	}
-	personality, ok := interactiveParsePersonality(value)
-	if !ok {
-		_, err := fmt.Fprintln(s.Stdout, "Personality must be one of friendly, pragmatic, none.")
-		return err
-	}
-	_, err := interactiveSettingsWriteHandler(&s.Root)([]codextea.SettingsEdit{{
-		KeyPath: "personality",
-		Value:   string(personality),
-	}})
-	if err != nil {
-		_, writeErr := fmt.Fprintln(s.Stdout, "Personality:", err)
-		if writeErr != nil {
-			return writeErr
-		}
-		return nil
-	}
-	s.UI.Personality = string(personality)
-	_, err = fmt.Fprintf(s.Stdout, "Personality set to %s\n", chatwidget.PersonalityLabel(personality))
-	return err
-}
-
-func interactiveParsePersonality(value string) (chatwidget.Personality, bool) {
-	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
-	if len(fields) == 0 {
-		return "", false
-	}
-	switch fields[0] {
-	case string(chatwidget.PersonalityFriendly):
-		return chatwidget.PersonalityFriendly, true
-	case string(chatwidget.PersonalityPragmatic):
-		return chatwidget.PersonalityPragmatic, true
-	case string(chatwidget.PersonalityNone):
-		return chatwidget.PersonalityNone, true
-	default:
-		return "", false
-	}
 }
 
 func (s *interactiveSession) handleExperimentalCommand(args string) error {

@@ -24,7 +24,6 @@ const (
 	ModalKindStatusLine      ModalKind = "status_line"
 	ModalKindTitle           ModalKind = "terminal_title"
 	ModalKindPermissions     ModalKind = "permissions"
-	ModalKindPersonality     ModalKind = "personality"
 	ModalKindExperimental    ModalKind = "experimental"
 	ModalKindRateLimitSwitch ModalKind = "rate_limit_switch"
 	ModalKindReview          ModalKind = "review"
@@ -652,14 +651,6 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			return nil
 		}
 		return m.applyPermissionsModalOption(response.OptionID)
-	}
-	if modal.kind == ModalKindPersonality {
-		m.modal = nil
-		if cancelled {
-			m.notice = "Cancelled"
-			return nil
-		}
-		return m.applyPersonalityModalOption(response.OptionID)
 	}
 	if modal.kind == ModalKindExperimental {
 		m.modal = nil

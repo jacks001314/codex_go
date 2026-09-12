@@ -15,7 +15,7 @@ func TestRustSlashCommandOrderBaseline20260728(t *testing.T) {
 		"fork", "app", "init", "compact", "plan", "goal", "agent", "side", "btw",
 		"copy", "raw", "diff", "mention", "status", "usage", "debug-config", "title",
 		"statusline", "theme", "pets", "mcp", "apps", "plugins", "logout", "quit",
-		"exit", "feedback", "rollout", "ps", "stop", "clear", "personality",
+		"exit", "feedback", "rollout", "ps", "stop", "clear",
 		"test-approval", "subagents", "debug-m-drop", "debug-m-update",
 	}
 	if !reflect.DeepEqual(rustSlashCommandOrder, want) {
@@ -31,7 +31,6 @@ func TestRustSlashPopupUsesCanonicalNamesAndKeepsCompatibilityAliasesForDispatch
 		TokenActivityCommandEnabled: true,
 		ServiceTierCommandsEnabled:  true,
 		GoalCommandEnabled:          true,
-		PersonalityCommandEnabled:   true,
 		AllowElevateSandbox:         true,
 	}
 
@@ -90,7 +89,6 @@ func TestRustSlashInlineArgContractIsExhaustive(t *testing.T) {
 		PluginsCommandEnabled:       true,
 		TokenActivityCommandEnabled: true,
 		GoalCommandEnabled:          true,
-		PersonalityCommandEnabled:   true,
 		AllowElevateSandbox:         true,
 	}
 	for _, item := range BuiltinsForInput(flags) {

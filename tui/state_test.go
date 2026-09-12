@@ -136,7 +136,6 @@ func TestParseCommand(t *testing.T) {
 		{input: "/stop", command: CommandStop, ok: true},
 		{input: "/clean", command: CommandStop, ok: true},
 		{input: "/permissions", command: CommandPermissions, ok: true},
-		{input: "/personality", command: CommandPersonality, ok: true},
 		{input: "/experimental", command: CommandExperimental, ok: true},
 		{input: "/mcp verbose", command: CommandMcp, args: "verbose", ok: true},
 		{input: "/skills", command: CommandSkills, ok: true},

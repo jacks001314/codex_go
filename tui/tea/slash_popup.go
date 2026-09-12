@@ -129,7 +129,6 @@ func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 		TokenActivityCommandEnabled: m.hasChatGPTAccount,
 		ServiceTierCommandsEnabled:  features.Enabled(m.featureSettings, "fast_mode"),
 		GoalCommandEnabled:          features.Enabled(m.featureSettings, "goals"),
-		PersonalityCommandEnabled:   features.Enabled(m.featureSettings, "personality"),
 		AllowElevateSandbox:         m.windowsSandboxSetup != nil,
 		SideConversationActive:      m.inSideConversation(),
 	}

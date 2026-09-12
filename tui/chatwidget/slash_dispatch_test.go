@@ -313,7 +313,6 @@ func slashDispatchTestFlags() bottompane.BuiltinCommandFlags {
 		TokenActivityCommandEnabled: true,
 		ServiceTierCommandsEnabled:  true,
 		GoalCommandEnabled:          true,
-		PersonalityCommandEnabled:   true,
 		AllowElevateSandbox:         true,
 	}
 }

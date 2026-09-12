@@ -75,7 +75,6 @@ type ThreadSettingsApplyResult struct {
 	RefreshEffectiveServiceTier bool
 	RefreshStatusSurfaces       bool
 	SyncServiceTierCommands     bool
-	SyncPersonalityCommand      bool
 	RefreshSkillsForCurrentCWD  bool
 	RefreshPluginMentions       bool
 	RequestRedraw               bool
@@ -304,7 +303,6 @@ func (s *ThreadSettingsRuntimeState) ApplyThreadSettings(update ThreadSettingsRu
 		RefreshEffectiveServiceTier: true,
 		RefreshStatusSurfaces:       true,
 		SyncServiceTierCommands:     true,
-		SyncPersonalityCommand:      true,
 		RefreshSkillsForCurrentCWD:  cwdChanged,
 		RefreshPluginMentions:       true,
 		RequestRedraw:               true,

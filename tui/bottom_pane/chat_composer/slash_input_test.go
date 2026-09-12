@@ -17,7 +17,6 @@ func slashInputForTest() SlashInput {
 		TokenActivityCommandEnabled: true,
 		ServiceTierCommandsEnabled:  true,
 		GoalCommandEnabled:          true,
-		PersonalityCommandEnabled:   true,
 		AllowElevateSandbox:         true,
 	}, []bottompane.ServiceTierCommand{{
 		ID:          "fast",

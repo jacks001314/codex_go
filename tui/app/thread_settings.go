@@ -42,16 +42,6 @@ func ThreadPlanModeSettingUpdateParams(threadID string, collaborationMode map[st
 	}
 }
 
-func ThreadPersonalitySettingUpdateParams(threadID string, personality string) *appserver.SettingsUpdateParams {
-	if threadID == "" {
-		return nil
-	}
-	return &appserver.SettingsUpdateParams{
-		ThreadID:    threadID,
-		Personality: &personality,
-	}
-}
-
 func ThreadSettingsUpdateHasChanges(params *appserver.SettingsUpdateParams) bool {
 	if params == nil {
 		return false

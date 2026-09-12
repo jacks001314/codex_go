@@ -12,13 +12,25 @@ import (
 )
 
 const (
-	settingsWriteKindPersonality         = "personality"
 	settingsWriteKindExperimental        = "experimental"
 	settingsWriteKindRateLimitModelNudge = "rate_limit_model_nudge"
 	settingsWriteKindTheme               = "theme"
 	settingsWriteKindPet                 = "pet"
 	settingsWriteKindServiceTier         = "service_tier"
 )
+
+// initialPersonality carries the configured personality into the model's
+// state. Rust #44935 removed TUI personality selection, so there is no
+// implicit default.
+func initialPersonality(state *codextui.State, configured chatwidget.Personality) chatwidget.Personality {
+	if value := strings.TrimSpace(string(configured)); value != "" {
+		return chatwidget.Personality(value)
+	}
+	if state != nil {
+		return chatwidget.Personality(strings.TrimSpace(state.Personality))
+	}
+	return ""
+}
 
 func (m *Model) applyFastServiceTier() bubbletea.Cmd {
 	if m == nil || m.State == nil {
@@ -45,133 +57,6 @@ func (m *Model) applyFastServiceTier() bubbletea.Cmd {
 		configValue = "fast"
 	}
 	return m.writeSettings(settingsWriteKindServiceTier, []SettingsEdit{{KeyPath: "service_tier", Value: configValue}})
-}
-
-func initialPersonality(state *codextui.State, configured chatwidget.Personality) chatwidget.Personality {
-	if strings.TrimSpace(string(configured)) != "" {
-		return normalizePersonalityTea(configured)
-	}
-	if state != nil && strings.TrimSpace(state.Personality) != "" {
-		return normalizePersonalityTea(chatwidget.Personality(state.Personality))
-	}
-	return chatwidget.PersonalityFriendly
-}
-
-func normalizePersonalityTea(personality chatwidget.Personality) chatwidget.Personality {
-	switch chatwidget.Personality(strings.ToLower(strings.TrimSpace(string(personality)))) {
-	case chatwidget.PersonalityPragmatic:
-		return chatwidget.PersonalityPragmatic
-	case chatwidget.PersonalityNone:
-		return chatwidget.PersonalityNone
-	default:
-		return chatwidget.PersonalityFriendly
-	}
-}
-
-func (m *Model) openPersonalityMenu() {
-	if m == nil {
-		return
-	}
-	if !features.Enabled(m.featureSettings, "personality") {
-		m.notice = "Personality selection is disabled by features.personality=false."
-		m.refreshTranscript()
-		return
-	}
-	model := ""
-	if m.State != nil {
-		model = m.State.Model
-	}
-	result := chatwidget.NewPersonalityPopup(m.personality, true, true, model)
-	switch result.Kind {
-	case chatwidget.SettingsPopupInfo, chatwidget.SettingsPopupError:
-		m.notice = result.Message
-		m.refreshTranscript()
-		return
-	}
-	options := make([]ModalOption, 0, len(result.View.Items))
-	for _, item := range result.View.Items {
-		description := strings.TrimSpace(item.Description)
-		if item.Current {
-			if description != "" {
-				description += " "
-			}
-			description += "(current)"
-		}
-		options = append(options, ModalOption{
-			ID:          string(item.Personality),
-			Label:       item.Name,
-			Description: description,
-			Disabled:    item.Disabled,
-		})
-	}
-	m.openModal(ModalRequestMsg{
-		ID:      "personality",
-		Kind:    ModalKindPersonality,
-		Title:   result.View.Title,
-		Body:    result.View.Subtitle,
-		Options: options,
-	})
-}
-
-func (m *Model) applyPersonalityCommand(args string) bubbletea.Cmd {
-	if m == nil {
-		return nil
-	}
-	if strings.TrimSpace(args) == "" {
-		m.openPersonalityMenu()
-		return nil
-	}
-	personality, ok := parsePersonalityArgument(args)
-	if !ok {
-		m.notice = "Usage: /personality [friendly|pragmatic|none]"
-		m.refreshTranscript()
-		return nil
-	}
-	return m.setPersonality(personality)
-}
-
-func parsePersonalityArgument(args string) (chatwidget.Personality, bool) {
-	fields := strings.Fields(strings.ToLower(strings.TrimSpace(args)))
-	if len(fields) == 0 {
-		return "", false
-	}
-	switch fields[0] {
-	case string(chatwidget.PersonalityFriendly):
-		return chatwidget.PersonalityFriendly, true
-	case string(chatwidget.PersonalityPragmatic):
-		return chatwidget.PersonalityPragmatic, true
-	case string(chatwidget.PersonalityNone):
-		return chatwidget.PersonalityNone, true
-	default:
-		return "", false
-	}
-}
-
-func (m *Model) applyPersonalityModalOption(optionID string) bubbletea.Cmd {
-	if m == nil {
-		return nil
-	}
-	return m.setPersonality(normalizePersonalityTea(chatwidget.Personality(optionID)))
-}
-
-func (m *Model) setPersonality(personality chatwidget.Personality) bubbletea.Cmd {
-	if m == nil {
-		return nil
-	}
-	m.personality = personality
-	if m.State != nil {
-		m.State.Personality = string(personality)
-	}
-	m.notice = "Personality set to " + chatwidget.PersonalityLabel(personality)
-	m.refreshTranscript()
-	cmds := []bubbletea.Cmd{m.refreshStatusControlsCmd()}
-	if m.onWriteSettings != nil {
-		cmds = append(cmds, m.writeSettings(settingsWriteKindPersonality, []SettingsEdit{{
-			KeyPath: "personality",
-			Value:   string(personality),
-		}}))
-	}
-	return bubbletea.Batch(cmds...)
 }
 
 func (m *Model) openExperimentalMenu() {
@@ -400,12 +285,6 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	if msg.Result.FeedbackEnabled != nil {
 		m.feedbackEnabled = *msg.Result.FeedbackEnabled
 	}
-	if strings.TrimSpace(string(msg.Result.Personality)) != "" {
-		m.personality = normalizePersonalityTea(msg.Result.Personality)
-		if m.State != nil {
-			m.State.Personality = string(m.personality)
-		}
-	}
 	if msg.Result.Notifications != nil {
 		m.notificationSettings = notificationSettingsOrDefault(msg.Result.Notifications)
 	}
@@ -443,8 +322,6 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	}
 	if strings.TrimSpace(msg.Result.FilePath) != "" {
 		switch msg.Kind {
-		case settingsWriteKindPersonality:
-			m.notice = "Personality set to " + chatwidget.PersonalityLabel(m.personality) + ". Saved to " + strings.TrimSpace(msg.Result.FilePath) + "."
 		case settingsWriteKindExperimental:
 			m.notice = "Experimental features saved to " + strings.TrimSpace(msg.Result.FilePath) + "."
 		case settingsWriteKindMemories:

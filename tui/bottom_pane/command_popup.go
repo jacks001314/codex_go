@@ -56,7 +56,6 @@ type CommandPopupFlags struct {
 	TokenActivityCommandEnabled  bool
 	ServiceTierCommandsEnabled   bool
 	GoalCommandEnabled           bool
-	PersonalityCommandEnabled    bool
 	WindowsDegradedSandboxActive bool
 	SideConversationActive       bool
 }
@@ -75,7 +74,6 @@ func NewCommandPopup(flags CommandPopupFlags, serviceTierCommands []ServiceTierC
 		TokenActivityCommandEnabled: flags.TokenActivityCommandEnabled,
 		ServiceTierCommandsEnabled:  flags.ServiceTierCommandsEnabled,
 		GoalCommandEnabled:          flags.GoalCommandEnabled,
-		PersonalityCommandEnabled:   flags.PersonalityCommandEnabled,
 		AllowElevateSandbox:         flags.WindowsDegradedSandboxActive,
 		SideConversationActive:      flags.SideConversationActive,
 	}

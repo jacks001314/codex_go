@@ -81,15 +81,9 @@ func TestThreadSettingUpdateBuildersMatchRust(t *testing.T) {
 		t.Fatalf("ThreadPlanModeSettingUpdateParams() = %#v", plan)
 	}
 
-	personality := ThreadPersonalitySettingUpdateParams("thread-1", "pragmatic")
-	if personality == nil || personality.Personality == nil || *personality.Personality != "pragmatic" {
-		t.Fatalf("ThreadPersonalitySettingUpdateParams() = %#v", personality)
-	}
-
 	if ThreadModelSettingUpdateParams("", "gpt-5", nil) != nil ||
 		ThreadReasoningSettingUpdateParams("", nil, nil) != nil ||
-		ThreadPlanModeSettingUpdateParams("", nil) != nil ||
-		ThreadPersonalitySettingUpdateParams("", "pragmatic") != nil {
+		ThreadPlanModeSettingUpdateParams("", nil) != nil {
 		t.Fatal("empty thread id builders should return nil")
 	}
 }

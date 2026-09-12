@@ -22,27 +22,6 @@ const (
 	SettingsPopupError SettingsPopupKind = "error"
 )
 
-type PersonalityPopupResult struct {
-	Kind    SettingsPopupKind
-	Message string
-	View    PersonalityPopupView
-}
-
-type PersonalityPopupView struct {
-	Title      string
-	Subtitle   string
-	FooterHint string
-	Items      []PersonalityOption
-}
-
-type PersonalityOption struct {
-	Personality Personality
-	Name        string
-	Description string
-	Current     bool
-	Disabled    bool
-}
-
 type ExperimentalFeatureOption struct {
 	Key         string
 	Name        string
@@ -60,7 +39,6 @@ type SettingsFeature string
 
 const (
 	SettingsFeatureFastMode               SettingsFeature = "fast_mode"
-	SettingsFeaturePersonality            SettingsFeature = "personality"
 	SettingsFeaturePlugins                SettingsFeature = "plugins"
 	SettingsFeatureGoals                  SettingsFeature = "goals"
 	SettingsFeatureMentionsV2             SettingsFeature = "mentions_v2"
@@ -104,7 +82,6 @@ type SettingsRuntimeUpdateResult struct {
 	RefreshStatusSurfaces         bool
 	RefreshEffectiveServiceTier   bool
 	SyncServiceTierCommands       bool
-	SyncPersonalityCommand        bool
 	SyncPluginsCommand            bool
 	RefreshPluginMentions         bool
 	SyncGoalCommand               bool
@@ -124,37 +101,6 @@ type SettingsRuntimeUpdateResult struct {
 	TokenActivityCommandEnabled   bool
 }
 
-func NewPersonalityPopup(current Personality, sessionConfigured bool, modelSupportsPersonality bool, currentModel string) PersonalityPopupResult {
-	if !sessionConfigured {
-		return PersonalityPopupResult{
-			Kind:    SettingsPopupInfo,
-			Message: "Personality selection is disabled until startup completes.",
-		}
-	}
-	if !modelSupportsPersonality {
-		model := strings.TrimSpace(currentModel)
-		if model == "" {
-			model = "current model"
-		}
-		return PersonalityPopupResult{
-			Kind:    SettingsPopupError,
-			Message: "Current model (" + model + ") doesn't support personalities. Try /model to pick a different model.",
-		}
-	}
-	return PersonalityPopupResult{
-		Kind: SettingsPopupOK,
-		View: PersonalityPopupView{
-			Title:      "Select Personality",
-			Subtitle:   "Choose a communication style for Codex.",
-			FooterHint: standardPopupHintLine,
-			Items: []PersonalityOption{
-				personalityOption(PersonalityFriendly, current, false),
-				personalityOption(PersonalityPragmatic, current, false),
-			},
-		},
-	}
-}
-
 func (s *SettingsRuntimeState) SetFeatureEnabled(feature SettingsFeature, enabled bool) SettingsRuntimeUpdateResult {
 	if s == nil {
 		return SettingsRuntimeUpdateResult{}
@@ -168,8 +114,6 @@ func (s *SettingsRuntimeState) SetFeatureEnabled(feature SettingsFeature, enable
 	case SettingsFeatureFastMode:
 		result.RefreshEffectiveServiceTier = true
 		result.SyncServiceTierCommands = true
-	case SettingsFeaturePersonality:
-		result.SyncPersonalityCommand = true
 	case SettingsFeaturePlugins:
 		result.SyncPluginsCommand = true
 		result.RefreshPluginMentions = true
@@ -260,42 +204,6 @@ func (s *SettingsRuntimeState) UpdateAccountState(hasChatGPTAccount bool, hasCod
 	return result
 }
 
-func personalityOption(personality Personality, current Personality, disabled bool) PersonalityOption {
-	return PersonalityOption{
-		Personality: personality,
-		Name:        PersonalityLabel(personality),
-		Description: PersonalityDescription(personality),
-		Current:     normalizedPersonality(current) == normalizedPersonality(personality),
-		Disabled:    disabled,
-	}
-}
-
-func PersonalityLabel(personality Personality) string {
-	switch normalizedPersonality(personality) {
-	case PersonalityNone:
-		return "None"
-	case PersonalityFriendly:
-		return "Friendly"
-	case PersonalityPragmatic:
-		return "Pragmatic"
-	default:
-		return string(personality)
-	}
-}
-
-func PersonalityDescription(personality Personality) string {
-	switch normalizedPersonality(personality) {
-	case PersonalityNone:
-		return "No personality instructions."
-	case PersonalityFriendly:
-		return "Warm, collaborative, and helpful."
-	case PersonalityPragmatic:
-		return "Concise, task-focused, and direct."
-	default:
-		return ""
-	}
-}
-
 func NewExperimentalFeaturesView(settings map[string]bool) ExperimentalFeaturesViewModel {
 	items := []ExperimentalFeatureOption{}
 	for _, spec := range features.Registry {
@@ -322,13 +230,3 @@ func experimentalMenuVisible(spec features.Spec) bool {
 		strings.TrimSpace(spec.ExperimentalMenuDescription) != ""
 }
 
-func normalizedPersonality(personality Personality) Personality {
-	switch Personality(strings.ToLower(strings.TrimSpace(string(personality)))) {
-	case PersonalityNone:
-		return PersonalityNone
-	case PersonalityPragmatic:
-		return PersonalityPragmatic
-	default:
-		return PersonalityFriendly
-	}
-}

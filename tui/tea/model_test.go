@@ -5329,17 +5329,6 @@ func TestModelRustSlashSettingsDebugAndMCPCommands(t *testing.T) {
 		}},
 	})
 
-	typeText(t, model, "/personality")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Select Personality") || !strings.Contains(view, "Pragmatic") {
-		t.Fatalf("personality modal missing:\n%s", view)
-	}
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
-	if state.Personality != string(chatwidget.PersonalityPragmatic) {
-		t.Fatalf("Personality = %q, want pragmatic", state.Personality)
-	}
-
 	typeText(t, model, "/experimental")
 	model.Update(key(bubbletea.KeyEnter))
 	if view := model.View(); !strings.Contains(view, "Experimental Features") || !strings.Contains(view, "Network proxy") {
@@ -5439,25 +5428,15 @@ func TestModelSettingsCommandsPersistSelections(t *testing.T) {
 			writes = append(writes, append([]SettingsEdit(nil), edits...))
 			result := SettingsWriteResult{
 				FeatureSettings: map[string]bool{"network_proxy": true},
-				Personality:     chatwidget.PersonalityPragmatic,
 				FilePath:        `D:\codex\config.toml`,
 			}
 			return result, nil
 		},
 	})
 
-	cmd := model.applyPersonalityCommand("pragmatic")
+	cmd := model.applyExperimentalCommand("network_proxy on")
 	runTeaCmd(t, model, cmd)
-	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "personality" || writes[0][0].Value != "pragmatic" {
-		t.Fatalf("personality writes = %#v", writes)
-	}
-	if state.Personality != string(chatwidget.PersonalityPragmatic) || !strings.Contains(model.View(), "Saved to") {
-		t.Fatalf("personality state/view mismatch: state=%q view=\n%s", state.Personality, model.View())
-	}
-
-	cmd = model.applyExperimentalCommand("network_proxy on")
-	runTeaCmd(t, model, cmd)
-	if len(writes) != 2 || len(writes[1]) != 1 || writes[1][0].KeyPath != "features.network_proxy" || writes[1][0].Value != true {
+	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "features.network_proxy" || writes[0][0].Value != true {
 		t.Fatalf("experimental writes = %#v", writes)
 	}
 	if !model.featureSettings["network_proxy"] {

@@ -839,7 +839,6 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 		"/approval never",
 		"/sandbox :workspace",
 		"/permissions full-access",
-		"/personality pragmatic",
 		"/experimental network_proxy on",
 		"hello tui",
 		"/new",
@@ -857,7 +856,6 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 		"Approval: never",
 		"Sandbox: :workspace",
 		"Permissions: approval=never sandbox=:danger-full-access",
-		"Personality set to Pragmatic",
 		"Feature network_proxy enabled.",
 		"hello tui",
 		"Started a new local thread.",
@@ -872,7 +870,7 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 		t.Fatalf("ReadFile(config) error = %v", err)
 	}
 	text := string(data)
-	if !strings.Contains(text, `personality = "pragmatic"`) || !strings.Contains(text, "network_proxy = true") {
+	if !strings.Contains(text, "network_proxy = true") {
 		t.Fatalf("config missing settings writes:\n%s", text)
 	}
 }

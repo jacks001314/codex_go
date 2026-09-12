@@ -179,7 +179,6 @@ func (s SlashInput) CommandPopup(filterText string) *bottompane.CommandPopup {
 		TokenActivityCommandEnabled:  s.CommandFlags.TokenActivityCommandEnabled,
 		ServiceTierCommandsEnabled:   s.CommandFlags.ServiceTierCommandsEnabled,
 		GoalCommandEnabled:           s.CommandFlags.GoalCommandEnabled,
-		PersonalityCommandEnabled:    s.CommandFlags.PersonalityCommandEnabled,
 		WindowsDegradedSandboxActive: s.CommandFlags.AllowElevateSandbox,
 		SideConversationActive:       s.CommandFlags.SideConversationActive,
 	}, s.ServiceTierCommands)

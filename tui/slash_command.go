@@ -38,7 +38,6 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "ps", Command: CommandPs, Description: "list background terminals"},
 		{Name: "stop", Command: CommandStop, Aliases: []string{"clean"}, Description: "stop all background terminals"},
 		{Name: "model", Command: CommandModel, Description: "choose what model and reasoning effort to use"},
-		{Name: "personality", Command: CommandPersonality, Description: "choose communication style"},
 		{Name: "plan", Command: CommandPlan, Description: "switch to Plan mode"},
 		{Name: "agent", Command: CommandAgent, Description: "switch active agent thread"},
 		{Name: "subagents", Command: CommandAgent, Description: "switch active agent thread"},

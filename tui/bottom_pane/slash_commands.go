@@ -141,7 +141,6 @@ type BuiltinCommandFlags struct {
 	TokenActivityCommandEnabled bool
 	ServiceTierCommandsEnabled  bool
 	GoalCommandEnabled          bool
-	PersonalityCommandEnabled   bool
 	AllowElevateSandbox         bool
 	SideConversationActive      bool
 }
@@ -311,10 +310,6 @@ func builtinFrameAvailable(frame codextui.SlashCommandFrame, flags BuiltinComman
 		if !flags.GoalCommandEnabled {
 			return false
 		}
-	case codextui.CommandPersonality:
-		if !flags.PersonalityCommandEnabled {
-			return false
-		}
 	}
 	if flags.SideConversationActive && !sideConversationCommandAllowed(frame.Command) {
 		return false
@@ -441,7 +436,6 @@ var rustSlashCommandOrder = []string{
 	"ps",
 	"stop",
 	"clear",
-	"personality",
 	"test-approval",
 	"subagents",
 	"debug-m-drop",
@@ -499,7 +493,6 @@ var rustSlashCommandDescriptions = map[string]string{
 	"ps":                    "list background terminals",
 	"stop":                  "stop all background terminals",
 	"clear":                 "clear the terminal and start a new chat",
-	"personality":           "choose a communication style for Codex",
 	"test-approval":         "test approval request",
 	"subagents":             "switch the active agent thread",
 	"debug-m-drop":          "DO NOT USE",

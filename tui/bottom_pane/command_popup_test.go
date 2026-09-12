@@ -98,7 +98,7 @@ func TestCommandPopupFlagsMatchRustVisibility(t *testing.T) {
 		t.Fatalf("plan should be hidden when collaboration modes are disabled")
 	}
 
-	popup = NewCommandPopup(CommandPopupFlags{CollaborationModesEnabled: true, PersonalityCommandEnabled: true}, nil)
+	popup = NewCommandPopup(CommandPopupFlags{CollaborationModesEnabled: true}, nil)
 	popup.OnComposerTextChange("/plan")
 	if selected, ok := popup.SelectedItem(); !ok || selected.Name != "plan" {
 		t.Fatalf("selected = %#v ok=%v, want plan", selected, ok)
@@ -120,7 +120,6 @@ func TestCommandPopupRustOrderIncludesPlanGoalUsageAndPlugins(t *testing.T) {
 		PluginsCommandEnabled:        true,
 		TokenActivityCommandEnabled:  true,
 		GoalCommandEnabled:           true,
-		PersonalityCommandEnabled:    true,
 		WindowsDegradedSandboxActive: true,
 	}
 	popup := NewCommandPopup(flags, nil)
@@ -138,7 +137,6 @@ func TestCommandPopupRustOrderIncludesPlanGoalUsageAndPlugins(t *testing.T) {
 	assertBefore("plan", "goal")
 	assertBefore("status", "usage")
 	assertBefore("mcp", "plugins")
-	assertBefore("clear", "personality")
 }
 
 func TestCommandPopupRowsUseSelectedColorBarAndScroll(t *testing.T) {
@@ -201,7 +199,6 @@ func TestSlashCommandHelpersMatchRustGatingAndAliases(t *testing.T) {
 		TokenActivityCommandEnabled: true,
 		ServiceTierCommandsEnabled:  true,
 		GoalCommandEnabled:          true,
-		PersonalityCommandEnabled:   true,
 		AllowElevateSandbox:         true,
 	}
 	if command, ok := FindBuiltinCommand("goooooal", flags); !ok || command.Name != "goal" {

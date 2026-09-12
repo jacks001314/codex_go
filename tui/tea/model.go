@@ -4732,8 +4732,6 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return m.applyModelSetting(invocation.Args)
 	case codextui.CommandFast:
 		return m.applyFastServiceTier()
-	case codextui.CommandPersonality:
-		return m.applyPersonalityCommand(invocation.Args)
 	case codextui.CommandPlan:
 		return m.applyPlanCommand(invocation.Args)
 	case codextui.CommandAgent:
