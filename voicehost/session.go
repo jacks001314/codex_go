@@ -147,11 +147,49 @@ func IsSupported() bool {
 	if !supportedPlatform() {
 		return false
 	}
-	layout := installPackageLayout()
-	if layout == nil {
-		return false
+	return VoicePackageDir() != ""
+}
+
+// VoicePackageDir resolves the directory that owns codex-resources/voice. It
+// accepts both the release package layout reported by the install context and
+// the development layout that scripts/build.* produce, where codex-resources
+// sits beside the running executable. It returns "" when neither carries the
+// helper.
+func VoicePackageDir() string {
+	if layout := installPackageLayout(); layout != nil && packageHasHelper(layout.PackageDir) {
+		return layout.PackageDir
 	}
-	return packageHasHelper(layout.PackageDir)
+	executable, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return voicePackageDirBesideExecutable(executable)
+}
+
+// voicePackageDirBesideExecutable reports the development layout's package dir:
+// the executable's own directory when it carries codex-resources/voice.
+func voicePackageDirBesideExecutable(executable string) string {
+	if strings.TrimSpace(executable) == "" {
+		return ""
+	}
+	dir := filepath.Dir(executable)
+	if packageHasHelper(dir) {
+		return dir
+	}
+	return ""
+}
+
+// SupportMessage returns the precise reason voice is unavailable, or "" when it
+// is available. The platform sentence is reserved for a genuinely unsupported
+// platform; a missing runtime is reported as such instead of blaming the host.
+func SupportMessage() string {
+	if !supportedPlatform() {
+		return "Voice requires macOS, an MSVC-based Windows build, or a glibc-based Linux build."
+	}
+	if VoicePackageDir() == "" {
+		return "Voice runtime is not installed for this build (codex-resources/voice helper not found)."
+	}
+	return ""
 }
 
 // IsSupportedPackage reports whether the named package carries a voice helper.
@@ -247,11 +285,10 @@ func (RealtimeSession) StartWithOptions(ctx context.Context, options SessionOpti
 	packageDir := strings.TrimSpace(options.PackageDir)
 	if executable == "" {
 		if packageDir == "" {
-			layout := installPackageLayout()
-			if layout == nil {
+			packageDir = VoicePackageDir()
+			if packageDir == "" {
 				return nil, ConnectionFailed
 			}
-			packageDir = layout.PackageDir
 		}
 		resolved, err := resolvePackageExecutable(packageDir)
 		if err != nil {

@@ -865,9 +865,12 @@ func normalizeVoicePhase(phase VoiceConversationPhase) VoiceConversationPhase {
 
 // VoiceCommandContext is the TUI state that gates a voice command.
 type VoiceCommandContext struct {
-	Phase              VoiceConversationPhase
-	FeatureEnabled     bool
-	PlatformSupported  bool
+	Phase             VoiceConversationPhase
+	FeatureEnabled    bool
+	PlatformSupported bool
+	// PlatformMessage overrides the refusal text when voice is unavailable for
+	// a reason more specific than the platform (for example a missing runtime).
+	PlatformMessage    string
 	ThreadID           string
 	SideConversation   bool
 	BlockedDirectInput bool
@@ -886,6 +889,9 @@ func CheckVoiceCommandAvailability(context VoiceCommandContext) VoiceCommandAvai
 		return VoiceCommandAvailability{Message: "Voice conversations are not enabled."}
 	}
 	if !context.PlatformSupported {
+		if message := strings.TrimSpace(context.PlatformMessage); message != "" {
+			return VoiceCommandAvailability{Message: message}
+		}
 		return VoiceCommandAvailability{Message: "Voice requires macOS, an MSVC-based Windows build, or a glibc-based Linux build."}
 	}
 	if context.SideConversation {

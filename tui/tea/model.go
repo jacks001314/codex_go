@@ -6095,6 +6095,7 @@ func (m *Model) applyVoiceCommand(args string) bubbletea.Cmd {
 		Phase:             m.VoiceConversation.Phase,
 		FeatureEnabled:    true,
 		PlatformSupported: voicehost.IsSupported(),
+		PlatformMessage:   voicehost.SupportMessage(),
 		ThreadID:          m.State.ThreadID,
 		SideConversation:  m.inSideConversation(),
 	})
