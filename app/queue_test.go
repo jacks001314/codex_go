@@ -8,6 +8,7 @@ import (
 
 	"codex_go/cli"
 	"codex_go/session"
+	"github.com/google/uuid"
 )
 
 // TestSessionIDByUniqueActiveNameLikeRust mirrors Rust queue.rs session lookup
@@ -102,5 +103,69 @@ func TestQueueUnsupportedServerErrorWrapsMethodNotFoundLikeRust(t *testing.T) {
 	other := errors.New("some other failure")
 	if queueUnsupportedServerError(other, false) != other {
 		t.Fatalf("non-method-not-found error was wrapped: %v", other)
+	}
+}
+
+// TestQueueUnsupportedServerErrorRecognizesOnlyUnsupportedLikeRust mirrors
+// Rust session_queue_commands_tests::recognizes_only_definitively_unsupported_queue_errors:
+// only a genuinely unknown method (or the experimental API gate) is reported as
+// an unsupported server, never an ordinary request failure.
+func TestQueueUnsupportedServerErrorRecognizesOnlyUnsupportedLikeRust(t *testing.T) {
+	cases := []struct {
+		name        string
+		err         error
+		unsupported bool
+	}{
+		{
+			name:        "method not found",
+			err:         &remoteRPCError{Code: -32601, Message: "Method not found"},
+			unsupported: true,
+		},
+		{
+			name:        "experimental api gate",
+			err:         &remoteRPCError{Code: -32600, Message: "thread/queue/add requires experimentalApi capability"},
+			unsupported: true,
+		},
+		{
+			name:        "unknown variant",
+			err:         &remoteRPCError{Code: -32600, Message: "Invalid request: unknown variant `thread/queue/add`, expected `thread/list`"},
+			unsupported: true,
+		},
+		{
+			name:        "queue bound violation",
+			err:         &remoteRPCError{Code: -32600, Message: "queue cannot contain more than 100 submissions"},
+			unsupported: false,
+		},
+		{
+			name:        "transport failure",
+			err:         errors.New("request timed out"),
+			unsupported: false,
+		},
+	}
+	for _, tc := range cases {
+		if got := isUnsupportedQueueError(tc.err); got != tc.unsupported {
+			t.Fatalf("%s: isUnsupportedQueueError() = %v, want %v", tc.name, got, tc.unsupported)
+		}
+		if wrapped := queueUnsupportedServerError(tc.err, true); tc.unsupported != (wrapped != tc.err) {
+			t.Fatalf("%s: queueUnsupportedServerError wrapped = %v, want unsupported %v", tc.name, wrapped, tc.unsupported)
+		}
+	}
+	for _, err := range []error{nil, &remoteRPCError{Code: -32700, Message: "Parse error"}} {
+		if isUnsupportedQueueError(err) {
+			t.Fatalf("isUnsupportedQueueError(%v) = true, want false", err)
+		}
+	}
+}
+
+// TestNewQueueClientMessageIDIsUUIDv7LikeRust mirrors Rust's `Uuid::now_v7()`
+// submission id (the version nibble must be 7).
+func TestNewQueueClientMessageIDIsUUIDv7LikeRust(t *testing.T) {
+	id := newQueueClientMessageID()
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		t.Fatalf("newQueueClientMessageID() = %q, not a UUID: %v", id, err)
+	}
+	if parsed.Version() != 7 {
+		t.Fatalf("newQueueClientMessageID() version = %d, want 7", parsed.Version())
 	}
 }

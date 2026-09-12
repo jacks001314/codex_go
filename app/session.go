@@ -1359,7 +1359,7 @@ func runLocalSessionQueue(opts *cli.SessionOptions, message string, stdout io.Wr
 	result, closeRuntime, err := localSessionRouterRequest(store, appserver.MethodThreadQueueAdd, appserver.ThreadQueueAddParams{
 		ThreadID:            string(threadID),
 		Input:               []any{map[string]any{"type": "text", "text": message}},
-		ClientUserMessageID: uuid.NewString(),
+		ClientUserMessageID: newQueueClientMessageID(),
 	})
 	if closeRuntime != nil {
 		defer closeRuntime()
@@ -1396,7 +1396,7 @@ func runRemoteSessionQueue(ctx context.Context, endpoint *appserverdaemon.Remote
 	if err := remoteSessionRequest(ctx, client, appserver.MethodThreadQueueAdd, appserver.ThreadQueueAddParams{
 		ThreadID:            threadID,
 		Input:               []any{map[string]any{"type": "text", "text": message}},
-		ClientUserMessageID: uuid.NewString(),
+		ClientUserMessageID: newQueueClientMessageID(),
 	}, &response); err != nil {
 		return queueUnsupportedServerError(err, true)
 	}
@@ -1469,19 +1469,64 @@ func remoteThreadRecency(thread *appserver.Thread) int64 {
 	return thread.UpdatedAt
 }
 
-// queueUnsupportedServerError wraps thread/queue/add method-not-found failures
-// with a server upgrade hint (Rust #39092).
-func queueUnsupportedServerError(err error, remote bool) error {
+// JSON-RPC codes and the queue method gate mirrored from Rust
+// session_queue_commands.rs.
+const (
+	jsonRPCInvalidRequestCode = -32600
+	jsonRPCMethodNotFoundCode = -32601
+	threadQueueAddMethod      = "thread/queue/add"
+)
+
+// experimentalRequiredQueueMessage mirrors Rust's
+// `experimental_required_message("thread/queue/add")`.
+const experimentalRequiredQueueMessage = threadQueueAddMethod + " requires experimentalApi capability"
+
+// isUnsupportedQueueError recognizes only definitively unsupported
+// thread/queue/add errors (Rust session_queue_commands.rs
+// `is_unsupported_queue_error`): the method is unknown to an older server (-32601,
+// or a -32600 "unknown variant" deserialization failure), or the server gates it
+// behind the experimental API. Ordinary request failures - for example a queue
+// bound violation - are not reported as an unsupported method.
+func isUnsupportedQueueError(err error) bool {
 	if err == nil {
-		return nil
+		return false
 	}
-	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "method not found") || strings.Contains(message, "-32601") {
-		server := "local app-server daemon"
-		if remote {
-			server = "remote app server"
+	var rpcErr *remoteRPCError
+	if errors.As(err, &rpcErr) {
+		switch rpcErr.Code {
+		case jsonRPCMethodNotFoundCode:
+			return true
+		case jsonRPCInvalidRequestCode:
+			message := strings.TrimSpace(rpcErr.Message)
+			return message == experimentalRequiredQueueMessage ||
+				strings.HasPrefix(message, "Invalid request: unknown variant `"+threadQueueAddMethod+"`")
 		}
-		return fmt.Errorf("the %s does not support thread/queue/add; update or restart the %s: %w", server, server, err)
+		return false
 	}
-	return err
+	// The embedded router flattens JSON-RPC errors to text, so the legacy
+	// method-not-found wording stays recognized there.
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "method not found") || strings.Contains(message, "-32601")
+}
+
+// queueUnsupportedServerError wraps an unsupported thread/queue/add failure with
+// a server upgrade hint (Rust #39092/#39385).
+func queueUnsupportedServerError(err error, remote bool) error {
+	if err == nil || !isUnsupportedQueueError(err) {
+		return err
+	}
+	server := "local app-server daemon"
+	if remote {
+		server = "remote app server"
+	}
+	return fmt.Errorf("the %s does not support thread/queue/add; update or restart the %s: %w", server, server, err)
+}
+
+// newQueueClientMessageID mirrors Rust's `Uuid::now_v7()` queue submission id.
+func newQueueClientMessageID() string {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return uuid.NewString()
+	}
+	return id.String()
 }

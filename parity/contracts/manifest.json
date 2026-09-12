@@ -892,7 +892,7 @@
             ],
             "phase": "P1",
             "status": "complete",
-            "verifier": "TestParseQueueCommandLikeRust;TestRunSessionQueueRejectsImagesLikeRust;TestQueueUnsupportedServerErrorWrapsMethodNotFoundLikeRust"
+            "verifier": "TestParseQueueCommandLikeRust;TestRunSessionQueueRejectsImagesLikeRust;TestQueueUnsupportedServerErrorWrapsMethodNotFoundLikeRust;TestQueueUnsupportedServerErrorRecognizesOnlyUnsupportedLikeRust;TestNewQueueClientMessageIDIsUUIDv7LikeRust"
         },
         {
             "id": "agents-dashboard-command",
