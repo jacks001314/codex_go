@@ -66,3 +66,31 @@ func TestThreadReasoningDeltaDrivesIndicator(t *testing.T) {
 		t.Fatalf("working status header = %q, want cleared", model.workingStatusHeader)
 	}
 }
+
+// TestResumeAndSwitchSeedReasoningHeading covers Rust #43921's resume/switch
+// restore: the active reasoning heading is seeded from the resumed or
+// switched-to thread snapshot.
+func TestResumeAndSwitchSeedReasoningHeading(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 12})
+
+	model.applyResumeResponse("thread-a", SessionResumeResponse{
+		Status:              "running",
+		WorkingStatusHeader: "Step one",
+	})
+	if model.workingStatusHeader != "Step one" {
+		t.Fatalf("resume heading = %q, want Step one", model.workingStatusHeader)
+	}
+
+	model.applyAgentSwitchResult(AgentSwitchResultMsg{
+		ThreadID: "thread-b",
+		Response: AgentThreadSwitchResponse{
+			Entry:               codextui.AgentThreadEntry{ThreadID: "thread-b"},
+			Status:              "running",
+			WorkingStatusHeader: "Step two",
+		},
+	})
+	if model.workingStatusHeader != "Step two" {
+		t.Fatalf("switch heading = %q, want Step two", model.workingStatusHeader)
+	}
+}

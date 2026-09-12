@@ -279,6 +279,9 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 			status = "idle"
 		}
 		m.setStatus(status)
+		// Rust #43921: restore the switched-to turn's active reasoning heading.
+		m.resetReasoningSummaryHeader()
+		m.workingStatusHeader = strings.TrimSpace(message.Response.WorkingStatusHeader)
 	}
 	m.activeSide = nil
 	m.upsertAgentEntry(entry)

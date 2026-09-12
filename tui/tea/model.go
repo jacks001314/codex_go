@@ -132,6 +132,9 @@ type SessionResumeResponse struct {
 	Messages   []codextui.Message
 	Status     string
 	TokenUsage *protocol.ThreadTokenUsage
+	// WorkingStatusHeader seeds the live reasoning summary heading for a resumed
+	// in-progress turn (Rust #43921).
+	WorkingStatusHeader string
 }
 
 type AgentThreadReaderFunc func(currentThreadID string) ([]codextui.AgentThreadEntry, error)
@@ -142,6 +145,9 @@ type AgentThreadSwitchResponse struct {
 	Entry    codextui.AgentThreadEntry
 	Messages []codextui.Message
 	Status   string
+	// WorkingStatusHeader seeds the live reasoning summary heading for a
+	// switched-to in-progress turn (Rust #43921).
+	WorkingStatusHeader string
 }
 
 type TokenActivityReaderFunc func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error)

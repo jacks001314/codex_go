@@ -1409,10 +1409,11 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 			return codextea.SessionResumeResponse{}, err
 		}
 		return codextea.SessionResumeResponse{
-			Summary:    remoteTUISessionSummaryFromThread(thread, false),
-			Messages:   remoteTUIThreadMessagesFromThread(thread),
-			Status:     remoteTUIStatusFromThread(thread),
-			TokenUsage: remoteThreadTokenUsageFromThread(thread),
+			Summary:             remoteTUISessionSummaryFromThread(thread, false),
+			Messages:            remoteTUIThreadMessagesFromThread(thread),
+			Status:              remoteTUIStatusFromThread(thread),
+			TokenUsage:          remoteThreadTokenUsageFromThread(thread),
+			WorkingStatusHeader: remoteTUIThreadActiveReasoningHeading(thread),
 		}, nil
 	}
 }
@@ -1575,9 +1576,10 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 		primaryThreadID = strings.TrimSpace(*thread.ParentThreadID)
 	}
 	return codextea.AgentThreadSwitchResponse{
-		Entry:    remoteTUIAgentEntryFromThread(thread, primaryThreadID),
-		Messages: remoteTUIThreadMessagesFromThread(thread),
-		Status:   remoteTUIStatusFromThread(thread),
+		Entry:               remoteTUIAgentEntryFromThread(thread, primaryThreadID),
+		Messages:            remoteTUIThreadMessagesFromThread(thread),
+		Status:              remoteTUIStatusFromThread(thread),
+		WorkingStatusHeader: remoteTUIThreadActiveReasoningHeading(thread),
 	}, nil
 }
 
@@ -1717,10 +1719,16 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread) []codextui.Mess
 	if thread == nil {
 		return nil
 	}
+	activeTurnID, activeItemID, _, hasActiveReasoning := remoteTUIThreadActiveReasoning(thread)
 	messages := []codextui.Message{}
 	inReviewMode := false
 	for _, turn := range thread.Turns {
 		for _, item := range turn.Items {
+			// Rust #43921: the trailing reasoning item of an in-progress turn is
+			// the live status heading, not a committed transcript entry.
+			if hasActiveReasoning && turn.ID == activeTurnID && item.ID == activeItemID {
+				continue
+			}
 			itemType := remoteTUINormalizedThreadItemType(item.Type)
 			switch itemType {
 			case "enteredreviewmode":
@@ -1762,6 +1770,36 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread) []codextui.Mess
 		}
 	}
 	return messages
+}
+
+// remoteTUIThreadActiveReasoning returns the live reasoning item of a thread
+// whose latest turn is in progress and whose trailing item is a reasoning item
+// (Rust #43921). The heading is the item's latest usable summary line.
+func remoteTUIThreadActiveReasoning(thread *appserver.Thread) (turnID string, itemID string, heading string, ok bool) {
+	if thread == nil || len(thread.Turns) == 0 {
+		return "", "", "", false
+	}
+	turn := thread.Turns[len(thread.Turns)-1]
+	if turn.Status != appserver.TurnStatusInProgress || len(turn.Items) == 0 {
+		return "", "", "", false
+	}
+	item := turn.Items[len(turn.Items)-1]
+	if remoteTUINormalizedThreadItemType(item.Type) != "reasoning" {
+		return "", "", "", false
+	}
+	if line, found := chatwidget.LatestSummaryLine(remoteTUIThreadItemReasoningText(item)); found {
+		heading = line
+	}
+	return turn.ID, item.ID, heading, true
+}
+
+// remoteTUIThreadActiveReasoningHeading returns just the live reasoning heading
+// for a resumed or switched-to thread, or "" when none applies.
+func remoteTUIThreadActiveReasoningHeading(thread *appserver.Thread) string {
+	if _, _, heading, ok := remoteTUIThreadActiveReasoning(thread); ok {
+		return heading
+	}
+	return ""
 }
 
 // remoteTUICompletionFooterMessage restores a completed turn's saved completion
