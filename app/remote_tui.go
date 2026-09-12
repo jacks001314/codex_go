@@ -360,6 +360,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
 		LocalDaemonSession:          interactiveRemoteEndpointIsLocal(endpoint),
 		LocalSession:                interactiveRemoteEndpointIsLocal(endpoint),
+		AnimationsEnabled:           settings.AnimationsEnabled,
 		SessionPickerItems:          interactiveRemoteSessionPickerItems(ctx, root, endpoint),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,

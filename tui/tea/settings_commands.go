@@ -285,6 +285,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	if msg.Result.FeedbackEnabled != nil {
 		m.feedbackEnabled = *msg.Result.FeedbackEnabled
 	}
+	if msg.Result.AnimationsEnabled != nil {
+		m.animationsEnabled = *msg.Result.AnimationsEnabled
+	}
 	if msg.Result.Notifications != nil {
 		m.notificationSettings = notificationSettingsOrDefault(msg.Result.Notifications)
 	}

@@ -738,6 +738,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	options := codextea.Options{
 		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
 		LocalSession:                true,
+		AnimationsEnabled:           settings.AnimationsEnabled,
 		SessionPickerItems:          interactiveSessionPickerItems(root),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
@@ -1421,6 +1422,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		GenerateMemories:        interactiveMemoryBoolFromConfig(values, "generate_memories"),
 		FeedbackEnabled:         interactiveFeedbackEnabledFromConfig(values),
 		DisablePasteBurst:       loaded.DisablePasteBurst(),
+		AnimationsEnabled:       interactiveAnimationsEnabled(values),
 		Personality:             interactivePersonalityFromConfig(values),
 		Notifications:           interactiveNotificationSettingsFromConfig(values),
 		NotificationMethod:      interactiveNotificationMethodFromConfig(values),
@@ -1433,6 +1435,20 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		PluginUserMarketplaces:  userMarketplaces,
 		PluginGitMarketplaces:   gitMarketplaces,
 	}
+}
+
+// interactiveAnimationsEnabled resolves the effective `tui.animations` value:
+// the configured preference combined with the host motion preference
+// (Rust #44666). The TUI config default is enabled.
+func interactiveAnimationsEnabled(values map[string]any) *bool {
+	configured := true
+	if raw, ok := interactiveTUIConfig(values)["animations"]; ok {
+		if enabled, ok := raw.(bool); ok {
+			configured = enabled
+		}
+	}
+	effective := codextui.EffectiveAnimations(configured)
+	return &effective
 }
 
 func interactivePluginMarketplacesFromConfig(values map[string]any) (map[string]bool, map[string]bool) {

@@ -298,8 +298,9 @@ func (m *Model) loadPetCmd(petID string) bubbletea.Cmd {
 	codexHome := m.petCodexHome
 	env := m.petEnv
 	fetch := m.petFetch
+	animationsEnabled := m.animationsEnabled
 	return func() bubbletea.Msg {
-		state, err := pets.LoadAmbientPet(petID, codexHome, true, env, fetch)
+		state, err := pets.LoadAmbientPet(petID, codexHome, animationsEnabled, env, fetch)
 		return petLoadMsg{petID: petID, state: state, err: err}
 	}
 }

@@ -190,11 +190,15 @@ type SettingsEdit struct {
 }
 
 type SettingsWriteResult struct {
-	FeatureSettings         map[string]bool
-	UseMemories             *bool
-	GenerateMemories        *bool
-	FeedbackEnabled         *bool
-	DisablePasteBurst       bool
+	FeatureSettings   map[string]bool
+	UseMemories       *bool
+	GenerateMemories  *bool
+	FeedbackEnabled   *bool
+	DisablePasteBurst bool
+	// AnimationsEnabled is the effective `tui.animations` value after the host
+	// motion preference is applied (Rust #44666). Nil preserves the current
+	// value.
+	AnimationsEnabled       *bool
 	Personality             chatwidget.Personality
 	Notifications           *chatwidget.NotificationsSetting
 	NotificationMethod      codextui.NotificationMethod
@@ -767,7 +771,11 @@ type Options struct {
 	// LocalSession reports that the session's workspace and executors are
 	// local, so agents-overview project grouping may expand across linked
 	// worktrees (Rust #43279).
-	LocalSession                bool
+	LocalSession bool
+	// AnimationsEnabled is the effective `tui.animations` value: the configured
+	// preference combined with the host motion preference (Rust #44666). Nil
+	// defaults to enabled.
+	AnimationsEnabled           *bool
 	OnReadDebugConfig           DebugConfigReaderFunc
 	OnReadGoal                  GoalReaderFunc
 	OnSetGoal                   GoalSetterFunc
@@ -1089,6 +1097,7 @@ type Model struct {
 	onInterruptMCPStartup    InterruptFunc
 	localDaemonSession       bool
 	localSession             bool
+	animationsEnabled        bool
 	agentsOverviewEmbedded   bool
 	onAgentsOverviewRefresh  AgentsOverviewRefreshFunc
 	onAgentsOverviewDispatch AgentsOverviewDispatchFunc
@@ -1392,6 +1401,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onInterruptMCPStartup:           options.OnInterruptMCPStartup,
 		localDaemonSession:              options.LocalDaemonSession,
 		localSession:                    options.LocalSession,
+		animationsEnabled:               options.AnimationsEnabled == nil || *options.AnimationsEnabled,
 		agentsOverviewEmbedded:          options.AgentsOverviewEmbedded,
 		onAgentsOverviewRefresh:         options.OnAgentsOverviewRefresh,
 		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,
@@ -3726,7 +3736,7 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 		m.flushCompactCommandGroup()
 	}
 
-	cell := execcell.NewExecCell(call, false)
+	cell := execcell.NewExecCell(call, m.animationsEnabled)
 	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
 	if !inProgress && execcell.IsGroupableSource(call.Source) && call.Output != nil && call.Output.ExitCode == 0 {
 		// Seed a compact group with the completed command so the next groupable
@@ -4068,7 +4078,7 @@ func (m *Model) renderToolCallState(state *toolCallDisplayState, outputItem *pro
 		started := state.StartedAt
 		call.StartTime = &started
 	}
-	cell := execcell.NewExecCell(call, false)
+	cell := execcell.NewExecCell(call, m.animationsEnabled)
 	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
 	if output != nil {
 		state.Completed = true
@@ -4127,7 +4137,7 @@ func (m *Model) renderToolCallFailure(state *toolCallDisplayState, message strin
 		Source:   execcell.ExecSourceAgent,
 		Duration: duration,
 	}
-	cell := execcell.NewExecCell(call, false)
+	cell := execcell.NewExecCell(call, m.animationsEnabled)
 	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
 	state.Completed = true
 }
