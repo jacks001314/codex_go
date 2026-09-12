@@ -416,8 +416,15 @@ runway 尾部动画、reduced-motion 直通、滑动窗口保留已稳定 tile�
 - **cell 集成**：`tui/chatwidget/splitflap_cell.go` 提供 `SplitFlapTranscriptCell`，
   包装任意 `historycell.HistoryCell`：`DisplayLines` 走多行共享字形索引的动画
   （runway 只在最后一个非空行），`RawLines` 保持原文以便复制，`AnimationTick`
-  供渲染循环排帧。Rust 的 per-span 颜色（黑底/青紫余晖/翻动灰）在 Go 的
-  纯文本 cell 模型下不可表达，已在注释中登记。
+  供渲染循环排帧。
+- **cell 模型扩展（带样式行）**：`tui/history_cell/styled.go` 新增
+  `CellStyle`/`StyledSpan`/`StyledLine` 与可选接口 `StyledHistoryCell`（基类
+  `HistoryCell` 仍是纯文本，所有既有 cell 与调用方不变）。`splitflap_styled.go`
+  按 Rust 规则上色：整行黑底灰字、翻动中深灰、落定余晖按说话人（user 青 / assistant 品红）、
+  行首 `›` 青、`•` 品红、runway 深灰。测试保证
+  `PlainLines(DisplayStyledLines(w)) == DisplayLines(w)`（两条路径文本不漂移）。
+  **剩余**：渲染侧（`State.AddHistoryLines` 目前把 display 行合成纯文本 `Text` 存储）
+  尚未消费 styled 行，接线属后续改动。
 - **语音状态快照矩阵**：`tui/bottom_pane/voice_strip_matrix_test.go` 冻结 7 个主要
   会话状态的完整两行渲染（inactive / connecting-animated / connecting-reduced /
   listening / muted-hint / speaking / retrying），对齐 Rust

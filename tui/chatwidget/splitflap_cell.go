@@ -24,6 +24,19 @@ type SplitFlapTranscriptCell struct {
 	Now func() time.Time
 }
 
+// DisplayStyledLines renders the animated caption with per-span colour. The
+// plain DisplayLines projection always equals PlainLines(DisplayStyledLines).
+func (c SplitFlapTranscriptCell) DisplayStyledLines(width int) []historycell.StyledLine {
+	if c.Inner == nil {
+		return nil
+	}
+	lines := c.Inner.DisplayLines(width)
+	if c.Board == nil {
+		return historycell.StyledLinesFromPlain(lines)
+	}
+	return c.Board.AnimateStyledLines(lines, width, c.elapsed())
+}
+
 // NewSplitFlapTranscriptCell builds the animated cell for one transcript row.
 // previous reuses settled tiles when it is the same speaker's retained prefix.
 func NewSplitFlapTranscriptCell(inner historycell.HistoryCell, role string, previous *SplitFlapTranscriptCell, discardedPrefixBytes int, animated bool, now time.Time) SplitFlapTranscriptCell {
