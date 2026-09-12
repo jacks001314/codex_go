@@ -67,3 +67,52 @@ func TestApplyPromptEditFailureRestoresSelectionComposerAndSessionLikeRust(t *te
 		t.Fatalf("error = %q", result.ErrorMessage)
 	}
 }
+
+func TestPromptEditBeforeTurnIDSkipsReviewAndEmptyPromptsLikeRust(t *testing.T) {
+	turns := []appserver.Turn{
+		{ID: "turn-1", Items: []appserver.ThreadItem{{ID: "u1", Type: "userMessage", Text: "first"}}},
+		{ID: "turn-review", Items: []appserver.ThreadItem{
+			{ID: "review-start", Type: "enteredReviewMode", Text: "changes against main"},
+			{ID: "u2", Type: "userMessage", Text: "review prompt"},
+			{ID: "review-end", Type: "exitedReviewMode", Text: "review complete"},
+		}},
+		{ID: "turn-empty", Items: []appserver.ThreadItem{{ID: "u3", Type: "userMessage", Text: "   "}}},
+		{ID: "turn-2", Items: []appserver.ThreadItem{{ID: "u4", Type: "userMessage", Text: "second"}}},
+	}
+
+	// The review-mode prompt and the whitespace-only input are hidden, so the
+	// second visible prompt is "second" and resolves to turn-2.
+	before, err := promptEditBeforeTurnID(turns, 1)
+	if err != nil || before != "turn-2" {
+		t.Fatalf("beforeTurnID = %q err=%v, want turn-2", before, err)
+	}
+	if _, err := promptEditBeforeTurnID(turns, 2); err == nil {
+		t.Fatal("a third visible prompt should not exist")
+	}
+}
+
+func TestPromptEditBeforeTurnIDRejectsSteersAndInProgressTurnsLikeRust(t *testing.T) {
+	steered := []appserver.Turn{{
+		ID: "turn-1",
+		Items: []appserver.ThreadItem{
+			{ID: "u1", Type: "userMessage", Text: "initial"},
+			{ID: "u2", Type: "userMessage", Text: "steer"},
+		},
+	}}
+	if _, err := promptEditBeforeTurnID(steered, 1); err == nil || err.Error() != "the selected prompt is a steer and cannot be branched independently" {
+		t.Fatalf("steer err = %v", err)
+	}
+
+	running := []appserver.Turn{{
+		ID:     "turn-1",
+		Status: appserver.TurnStatusInProgress,
+		Items:  []appserver.ThreadItem{{ID: "u1", Type: "userMessage", Text: "initial"}},
+	}}
+	if _, err := promptEditBeforeTurnID(running, 0); err == nil || err.Error() != "the selected prompt belongs to a turn that is still in progress" {
+		t.Fatalf("in-progress err = %v", err)
+	}
+
+	if before, err := promptEditBeforeTurnID(steered, 0); err != nil || before != "turn-1" {
+		t.Fatalf("first prompt beforeTurnID = %q err=%v", before, err)
+	}
+}

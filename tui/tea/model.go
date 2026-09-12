@@ -30,6 +30,7 @@ import (
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 	"codex_go/tui/anim"
+	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
 	mentionsv2 "codex_go/tui/bottom_pane/mentions_v2"
 	chatwidget "codex_go/tui/chatwidget"
@@ -812,12 +813,16 @@ type Options struct {
 	OnSessionAction           SessionActionFunc
 	OnWorkingDirectoryChange  WorkingDirectoryChangeFunc
 	OnResumeSession           SessionResumeFunc
-	OnRenameThread            ThreadRenameFunc
-	OnLogout                  LogoutFunc
-	OnReadAgents              AgentThreadReaderFunc
-	OnSwitchAgent             AgentThreadSwitchFunc
-	AgentsOverviewEmbedded    bool
-	OnAgentsOverviewRefresh   AgentsOverviewRefreshFunc
+	// OnPromptEdit branches before a transcript prompt selected via backtrack
+	// ("Esc Esc to edit previous message") and returns the branched session.
+	// A nil hook leaves prompt editing unavailable for this runtime.
+	OnPromptEdit            PromptEditFunc
+	OnRenameThread          ThreadRenameFunc
+	OnLogout                LogoutFunc
+	OnReadAgents            AgentThreadReaderFunc
+	OnSwitchAgent           AgentThreadSwitchFunc
+	AgentsOverviewEmbedded  bool
+	OnAgentsOverviewRefresh AgentsOverviewRefreshFunc
 	// OnAgentsOverviewUsage reads the selected task's usage estimate for the
 	// dashboard details (Rust #44970). Nil disables the token/usage surface.
 	OnAgentsOverviewUsage    AgentsOverviewUsageReaderFunc
@@ -1088,8 +1093,13 @@ type Model struct {
 	overlayAltScreen       bool
 	sessionPickerAltScreen bool
 	overlayTranscript      bool
-	rateLimitWarnings      chatwidget.RateLimitWarningState
-	warningDisplay         chatwidget.WarningDisplayState
+	// backtrack tracks the Esc-to-edit-prompt state machine (Rust
+	// app_backtrack::BacktrackState) and escBacktrackHint advertises the second
+	// Esc in the composer footer once it is primed.
+	backtrack         tuiapp.BacktrackState
+	escBacktrackHint  bool
+	rateLimitWarnings chatwidget.RateLimitWarningState
+	warningDisplay    chatwidget.WarningDisplayState
 
 	terminalFocused          bool
 	rawOutput                bool
@@ -1331,6 +1341,7 @@ type Model struct {
 	onSessionAction                 SessionActionFunc
 	onWorkingDirectoryChange        WorkingDirectoryChangeFunc
 	onResumeSession                 SessionResumeFunc
+	onPromptEdit                    PromptEditFunc
 	onRenameThread                  ThreadRenameFunc
 	onLogout                        LogoutFunc
 	onReadAgents                    AgentThreadReaderFunc
@@ -1643,6 +1654,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSessionAction:                 options.OnSessionAction,
 		onWorkingDirectoryChange:        options.OnWorkingDirectoryChange,
 		onResumeSession:                 options.OnResumeSession,
+		onPromptEdit:                    options.OnPromptEdit,
+		backtrack:                       tuiapp.BacktrackState{NthUserMessage: tuiapp.BacktrackNoSelection},
 		onRenameThread:                  options.OnRenameThread,
 		onLogout:                        options.OnLogout,
 		onReadAgents:                    options.OnReadAgents,
@@ -2360,6 +2373,25 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			}
 		}
 		keySpec := keySpecFromKeyMsg(msg)
+		// Rust app_backtrack: Esc primes/advances prompt editing, Enter confirms
+		// a primed selection, and any other key cancels the primed state.
+		switch msg.Type {
+		case bubbletea.KeyEsc:
+			if m.shouldHandleBacktrackEsc() {
+				return m, m.handleBacktrackEscKey()
+			}
+			if m.shouldRejectSideBacktrackEsc() {
+				m.rejectSideBacktrackEsc()
+				return m, nil
+			}
+		case bubbletea.KeyEnter:
+			if tuiapp.ShouldConfirmBacktrackFromMain(m.backtrack.Primed, m.backtrack.NthUserMessage, m.backtrackComposerEmpty()) {
+				return m, m.confirmBacktrackFromMain()
+			}
+		}
+		if m.backtrack.Primed && tuiapp.ShouldResetPrimedBacktrackOnKeyPress(true, keySpec) {
+			m.resetBacktrackState()
+		}
 		if m.keyMatches("global", "toggle_side_conversation", keySpec) ||
 			(keySpec == "ctrl-7" && m.keyMatches("global", "toggle_side_conversation", "ctrl-/")) {
 			return m, m.toggleSideConversation()
@@ -2556,7 +2588,13 @@ func (m *Model) View() string {
 	if m.ideContext.Enabled {
 		sections = append(sections, m.footerStyle.Render("IDE context"))
 	}
-	sections = append(sections, m.footerStyle.Render(fitTerminalLine(footerHelpText, m.width)))
+	footerLine := footerHelpText
+	if m.escBacktrackHint {
+		// Rust show_esc_backtrack_hint replaces the composer footer with the
+		// second-Esc prompt once backtrack mode is primed.
+		footerLine = bottompane.EscHintLine(true)
+	}
+	sections = append(sections, m.footerStyle.Render(fitTerminalLine(footerLine, m.width)))
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
@@ -6408,8 +6446,15 @@ func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
 	if m == nil || m.overlay == nil {
 		return nil
 	}
+	wasBacktrack := m.backtrack.OverlayPreviewActive
 	m.overlay = nil
 	m.overlayTranscript = false
+	m.backtrack.OverlayPreviewActive = false
+	if wasBacktrack {
+		// Rust close_transcript_overlay: a closed preview clears all backtrack
+		// state so a later Esc starts over instead of resuming a stale selection.
+		m.resetBacktrackState()
+	}
 	// Restore the wheel-to-terminal behavior once the overlay is gone; mouse
 	// tracking was never enabled, so the alternate screen is the only mode to
 	// leave.
@@ -6476,6 +6521,9 @@ func (m *Model) syncTranscriptOverlay() {
 	if content := m.renderTranscriptOverlayCached(); content != m.overlay.Content() {
 		m.overlay.SetContent(content)
 	}
+	if m.backtrack.OverlayPreviewActive {
+		m.refreshBacktrackHighlight()
+	}
 }
 
 // renderTranscriptOverlayCached renders the expanded transcript overlay
@@ -6505,6 +6553,29 @@ func (m *Model) activeTUITheme() string {
 func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.overlay == nil {
 		return nil
+	}
+	// Rust app_backtrack: with the overlay open, Esc begins the backtrack
+	// preview; once the preview is active, Esc/Left step to an older prompt,
+	// Right steps to a newer one, and Enter confirms the highlighted prompt.
+	if msg.Type == bubbletea.KeyEsc {
+		if m.backtrack.OverlayPreviewActive {
+			m.stepBacktrackAndHighlight(false)
+		} else {
+			m.beginOverlayBacktrackPreview()
+		}
+		return nil
+	}
+	if m.backtrack.OverlayPreviewActive {
+		switch msg.Type {
+		case bubbletea.KeyLeft:
+			m.stepBacktrackAndHighlight(false)
+			return nil
+		case bubbletea.KeyRight:
+			m.stepBacktrackAndHighlight(true)
+			return nil
+		case bubbletea.KeyEnter:
+			return m.confirmOverlayBacktrack()
+		}
 	}
 	keySpec := keySpecFromKeyMsg(msg)
 	if m.keyMatches("pager", "close", keySpec) || m.keyMatches("pager", "close_transcript", keySpec) {
@@ -6951,16 +7022,28 @@ func renderTranscriptWithHistoryMode(state *codextui.State, raw bool, width int,
 // the per-message cache when a message's render inputs are unchanged. Passing a
 // nil cache disables caching and renders the whole history from scratch.
 func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, cwd string) string {
+	content, _ := renderTranscriptMessagesWithRanges(cache, state, raw, width, themeID, expandedHistory, cwd)
+	return content
+}
+
+// renderTranscriptMessagesWithRanges renders the transcript into display lines
+// (reusing the per-message cache) and reports each message's 0-based content
+// line range. The ranges index the rendered content the transcript overlay
+// shows, so a caller can highlight a message in place (Rust pager overlay
+// cells).
+func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, cwd string) (string, [][2]int) {
 	if state == nil || len(state.Messages) == 0 {
-		return "No messages yet."
+		return "No messages yet.", nil
 	}
 	if raw {
-		return renderRawTranscript(state)
+		return renderRawTranscript(state), nil
 	}
 	if width < 20 {
 		width = 20
 	}
 	var builder strings.Builder
+	ranges := make([][2]int, len(state.Messages))
+	line := 0
 	first := true
 	for i, message := range state.Messages {
 		key := transcriptMessageKey{
@@ -6991,17 +7074,20 @@ func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.St
 		}
 		if !first {
 			builder.WriteString("\n\n")
+			line += 2
 		}
 		builder.WriteString(strings.TrimRight(strings.Join(lines, "\n"), "\r\n"))
+		ranges[i] = [2]int{line, line + len(lines)}
+		line += len(lines)
 		first = false
 	}
 	if cache != nil && len(cache.messages) > len(state.Messages) {
 		cache.messages = cache.messages[:len(state.Messages)]
 	}
 	if builder.Len() == 0 {
-		return "No messages yet."
+		return "No messages yet.", nil
 	}
-	return builder.String()
+	return builder.String(), ranges
 }
 
 func transcriptMessageDisplayLines(message codextui.Message, width int, themeID string, expandedHistory bool, cwd string) []string {

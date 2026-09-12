@@ -381,6 +381,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(ctx, root, endpoint, settings.PermissionRequirements),
 		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint),
 		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint),
+		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state),
 		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),
 		OnLogout:                    interactiveRemoteLogoutHandler(ctx, endpoint),
 		KeymapConfig:                keymapConfig,

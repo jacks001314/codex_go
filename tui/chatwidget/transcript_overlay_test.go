@@ -47,6 +47,78 @@ func TestTranscriptOverlayViewFitsHeaderAndHelp(t *testing.T) {
 	}
 }
 
+func TestTranscriptOverlayHighlightRangeRendersReverseVideo(t *testing.T) {
+	overlay := NewTranscriptOverlay(40, 8, "alpha\nbeta\ngamma")
+	if _, _, ok := overlay.HighlightRange(); ok {
+		t.Fatal("a fresh overlay should have no highlight")
+	}
+
+	overlay.SetHighlightRange(1, 2)
+	start, end, ok := overlay.HighlightRange()
+	if !ok || start != 1 || end != 2 {
+		t.Fatalf("HighlightRange = %d,%d,%v want 1,2,true", start, end, ok)
+	}
+	// Content() reports the base transcript, not the highlighted rendering.
+	if overlay.Content() != "alpha\nbeta\ngamma" {
+		t.Fatalf("Content = %q", overlay.Content())
+	}
+	view := overlay.View()
+	if !strings.Contains(view, reverseVideoOn+"beta"+reverseVideoOff) {
+		t.Fatalf("highlighted line missing reverse video:\n%q", view)
+	}
+	if strings.Contains(view, reverseVideoOn+"alpha") || strings.Contains(view, reverseVideoOn+"gamma") {
+		t.Fatalf("unselected lines must stay plain:\n%q", view)
+	}
+
+	overlay.ClearHighlightRange()
+	if _, _, ok := overlay.HighlightRange(); ok {
+		t.Fatal("ClearHighlightRange left a highlight")
+	}
+	if strings.Contains(overlay.View(), reverseVideoOn) {
+		t.Fatalf("cleared overlay still renders reverse video:\n%q", overlay.View())
+	}
+}
+
+func TestTranscriptOverlayHighlightReassertsReverseAfterReset(t *testing.T) {
+	overlay := NewTranscriptOverlay(40, 8, "plain\n\x1b[31mred\x1b[0m tail")
+	overlay.SetHighlightRange(1, 2)
+	view := overlay.View()
+	if !strings.Contains(view, "\x1b[0m"+reverseVideoOn) {
+		t.Fatalf("an inner SGR reset must re-assert the highlight:\n%q", view)
+	}
+}
+
+func TestTranscriptOverlayHighlightScrollsIntoView(t *testing.T) {
+	overlay := NewTranscriptOverlay(48, 8, numberedTranscript(40))
+	if overlay.YOffset() == 0 {
+		t.Fatal("expected the overlay to start at the bottom")
+	}
+	overlay.SetHighlightRange(0, 1)
+	if offset := overlay.YOffset(); offset > 0 {
+		t.Fatalf("highlight above the viewport should scroll up, offset=%d", offset)
+	}
+
+	overlay.ApplyPagerAction(PagerJumpTop)
+	overlay.SetHighlightRange(38, 40)
+	if offset := overlay.YOffset(); offset < 34 {
+		t.Fatalf("highlight below the viewport should scroll down, offset=%d", offset)
+	}
+}
+
+func TestTranscriptOverlayHighlightInvalidRangeClears(t *testing.T) {
+	overlay := NewTranscriptOverlay(40, 8, "alpha\nbeta")
+	overlay.SetHighlightRange(0, 1)
+	overlay.SetHighlightRange(2, 1)
+	if _, _, ok := overlay.HighlightRange(); ok {
+		t.Fatal("an inverted range should clear the highlight")
+	}
+	overlay.SetHighlightRange(0, 1)
+	overlay.SetHighlightRange(-1, 2)
+	if _, _, ok := overlay.HighlightRange(); ok {
+		t.Fatal("a negative start should clear the highlight")
+	}
+}
+
 func TestLastAssistantMarkdown(t *testing.T) {
 	messages := []codextui.Message{
 		{Role: codextui.RoleAssistant, Text: " first "},

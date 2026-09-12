@@ -80,6 +80,9 @@ func TestApplyPromptEditWithStoreFindsBufferedPrompt(t *testing.T) {
 	// The selected prompt lives in the replay buffer only.
 	store.EnqueueNotification(ServerEvent{Name: ServerNotificationTurnStarted, TurnID: "turn-2", Turn: &appserver.Turn{ID: "turn-2", Status: appserver.TurnStatusInProgress}})
 	store.EnqueueNotification(ServerEvent{Name: ServerNotificationItemCompleted, TurnID: "turn-2", Item: &appserver.ThreadItem{ID: "item-2", Type: "message", Role: "user", Text: "second"}})
+	// Rust backtrack_fork_before_turn_id rejects a prompt whose turn is still in
+	// progress, so the live turn is completed before it can be reopened.
+	store.EnqueueNotification(ServerEvent{Name: ServerNotificationTurnCompleted, TurnID: "turn-2", Turn: &appserver.Turn{ID: "turn-2", Status: appserver.TurnStatusCompleted}})
 
 	source := ThreadSessionState{ThreadID: "source", CWD: "/repo"}
 	result := ApplyPromptEditWithStore(context.Background(), client, source, store, PromptEditSelection{

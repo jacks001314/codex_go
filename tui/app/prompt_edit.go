@@ -92,12 +92,36 @@ func promptEditBeforeTurnID(turns []appserver.Turn, ordinal int) (string, error)
 		return "", fmt.Errorf("selected prompt index is invalid")
 	}
 	seen := 0
+	reviewMode := false
 	for _, turn := range turns {
+		userMessagesInTurn := 0
 		for _, item := range turn.Items {
+			switch normalizedPromptEditItemType(item) {
+			case "enteredreviewmode":
+				reviewMode = true
+				continue
+			case "exitedreviewmode":
+				reviewMode = false
+				continue
+			}
 			if !promptEditUserItem(item) {
 				continue
 			}
+			isSteer := userMessagesInTurn > 0
+			userMessagesInTurn++
+			// Rust backtrack_fork_before_turn_id resolves the ordinal against the
+			// same visible projection the transcript renders: review-mode prompts
+			// and display-empty inputs are hidden.
+			if reviewMode || strings.TrimSpace(item.Text) == "" {
+				continue
+			}
 			if seen == ordinal {
+				if isSteer {
+					return "", fmt.Errorf("the selected prompt is a steer and cannot be branched independently")
+				}
+				if strings.EqualFold(strings.TrimSpace(string(turn.Status)), string(appserver.TurnStatusInProgress)) {
+					return "", fmt.Errorf("the selected prompt belongs to a turn that is still in progress")
+				}
 				return turn.ID, nil
 			}
 			seen++
@@ -109,6 +133,14 @@ func promptEditBeforeTurnID(turns []appserver.Turn, ordinal int) (string, error)
 func promptEditUserItem(item appserver.ThreadItem) bool {
 	typeName := strings.TrimSpace(item.Type)
 	return item.Role != "assistant" && (typeName == "message" || typeName == "user_message" || typeName == "userMessage")
+}
+
+// normalizedPromptEditItemType lowercases an item type so review-mode markers
+// are recognized in both the snake_case and camelCase wire spellings.
+func normalizedPromptEditItemType(item appserver.ThreadItem) string {
+	normalized := strings.ToLower(strings.TrimSpace(item.Type))
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	return normalized
 }
 
 func threadSessionStateFromPromptEditResponse(thread *appserver.Thread, source ThreadSessionState) ThreadSessionState {

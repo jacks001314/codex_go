@@ -22,6 +22,9 @@ const (
 	defaultOverlayWidth  = 80
 	defaultOverlayHeight = 24
 	minOverlayBodyHeight = 1
+
+	reverseVideoOn  = "\x1b[7m"
+	reverseVideoOff = "\x1b[27m"
 )
 
 // TranscriptOverlay mirrors Rust chatwidget's Ctrl+T transcript pager: a
@@ -33,6 +36,11 @@ type TranscriptOverlay struct {
 	height   int
 	content  string
 	title    string
+	// highlightStart/highlightEnd bound the 0-based, end-exclusive content line
+	// range drawn in reverse video (Rust PagerView::set_highlight_cell).
+	highlightStart int
+	highlightEnd   int
+	hasHighlight   bool
 }
 
 func NewTranscriptOverlay(width int, height int, content string) *TranscriptOverlay {
@@ -80,7 +88,7 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 	}
 	o.width = width
 	o.height = height
-	o.viewport.SetContent(o.content)
+	o.viewport.SetContent(o.viewContent())
 	if follow {
 		o.viewport.GotoBottom()
 		return
@@ -99,12 +107,104 @@ func (o *TranscriptOverlay) SetContent(content string) {
 	follow := o.content == "" || o.viewport.AtBottom()
 	offset := o.viewport.YOffset
 	o.content = content
-	o.viewport.SetContent(content)
+	o.viewport.SetContent(o.viewContent())
 	if follow {
 		o.viewport.GotoBottom()
 		return
 	}
 	o.viewport.SetYOffset(offset)
+}
+
+// SetHighlightRange highlights content lines [start, end) (0-based, end
+// exclusive) in reverse video, mirroring the selected user message in Rust's
+// backtrack preview. An empty or inverted range clears the highlight.
+func (o *TranscriptOverlay) SetHighlightRange(start int, end int) {
+	if o == nil {
+		return
+	}
+	if start < 0 || end <= start {
+		o.ClearHighlightRange()
+		return
+	}
+	if o.hasHighlight && o.highlightStart == start && o.highlightEnd == end {
+		return
+	}
+	o.highlightStart = start
+	o.highlightEnd = end
+	o.hasHighlight = true
+	o.viewport.SetContent(o.viewContent())
+	o.scrollToHighlight()
+}
+
+// ClearHighlightRange removes any highlight and restores the plain content.
+func (o *TranscriptOverlay) ClearHighlightRange() {
+	if o == nil || !o.hasHighlight {
+		return
+	}
+	o.hasHighlight = false
+	o.highlightStart = 0
+	o.highlightEnd = 0
+	o.viewport.SetContent(o.viewContent())
+}
+
+// HighlightRange reports the active highlight range, if any.
+func (o *TranscriptOverlay) HighlightRange() (int, int, bool) {
+	if o == nil || !o.hasHighlight {
+		return 0, 0, false
+	}
+	return o.highlightStart, o.highlightEnd, true
+}
+
+// viewContent is the content the viewport renders: the base content, with the
+// highlighted lines wrapped in reverse video when a highlight is active.
+func (o *TranscriptOverlay) viewContent() string {
+	if o == nil || !o.hasHighlight || o.content == "" {
+		return o.content
+	}
+	lines := strings.Split(o.content, "\n")
+	if o.highlightStart >= len(lines) {
+		return o.content
+	}
+	end := o.highlightEnd
+	if end > len(lines) {
+		end = len(lines)
+	}
+	for index := o.highlightStart; index < end; index++ {
+		lines[index] = reverseVideoLine(lines[index])
+	}
+	return strings.Join(lines, "\n")
+}
+
+// scrollToHighlight keeps the selected message on screen without snapping the
+// viewport to the top when it is already visible.
+func (o *TranscriptOverlay) scrollToHighlight() {
+	if o == nil || !o.hasHighlight {
+		return
+	}
+	if o.highlightStart < o.viewport.YOffset {
+		o.viewport.SetYOffset(o.highlightStart)
+		return
+	}
+	bodyHeight := o.viewport.Height
+	if bodyHeight <= 0 {
+		return
+	}
+	if o.highlightEnd > o.viewport.YOffset+bodyHeight {
+		offset := o.highlightEnd - bodyHeight
+		if offset < 0 {
+			offset = 0
+		}
+		o.viewport.SetYOffset(offset)
+	}
+}
+
+// reverseVideoLine wraps one rendered line in reverse video, re-asserting the
+// attribute after every full SGR reset so an embedded color cannot cancel the
+// highlight mid-line (Rust applies the reversed style to the whole cell).
+func reverseVideoLine(line string) string {
+	line = strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+reverseVideoOn)
+	line = strings.ReplaceAll(line, "\x1b[m", "\x1b[m"+reverseVideoOn)
+	return reverseVideoOn + line + reverseVideoOff
 }
 
 func (o *TranscriptOverlay) Content() string {
