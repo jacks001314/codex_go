@@ -42,6 +42,7 @@ import (
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/session"
+	"codex_go/telemetry"
 	"codex_go/tool"
 	"codex_go/turn"
 	"codex_go/worktree"
@@ -105,6 +106,12 @@ type Runner struct {
 	goalThreadID string
 	goalTurnID   string
 
+	// otelProvider is the per-run OTEL provider built from the effective config
+	// (Rust's exec builds an OtelProvider at startup and installs its metrics
+	// client on the model client). A subagent runner is a copy of its parent, so
+	// each copy builds and shuts down its own provider.
+	otelProvider *telemetry.OtelProvider
+
 	// reasoningEffortMu guards the per-thread reasoning-effort request pin
 	// (Rust #43110/#43795); the map is created lazily.
 	reasoningEffortMu   sync.Mutex
@@ -162,6 +169,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
+	r.configureOtelProvider(cfg, req)
+	defer r.shutdownOtelProvider(context.Background())
 	var managedWorktreeManager *worktree.WorktreeManager
 	managedWorktreeRoot := ""
 	managedWorktreeBound := false
@@ -1520,6 +1529,12 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
 		// Rust sets the process-wide enforce_residency from config; the exec
 		// path mirrors it on every model request.
 		agent.Residency = managedResidencyForConfig(cfg)
+		// Rust installs the OTEL provider's metrics client on the model client,
+		// so the model-side metrics (api requests, SSE events, websocket
+		// requests) export when a metrics exporter is configured.
+		if sink := r.otelMetricsSink(); sink != nil {
+			agent.Metrics = sink
+		}
 		return agent, nil
 	}
 	return model.NewLocalAgentRunner(), nil
