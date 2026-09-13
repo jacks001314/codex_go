@@ -423,10 +423,39 @@ func TestCompactRemotelyRetainsBoundedDelegatedTasksAndDropsCompletions(t *testi
 func TestEncryptedAgentMessageTokenEstimateUsesPlaintextApproximation(t *testing.T) {
 	encrypted := strings.Repeat("z", 160)
 	item := structuredAgentMessageItem(t, "task", "Message Type: NEW_TASK\n", encrypted)
-	visibleBytes := len(item.Raw) - len(encrypted) + (len(encrypted)*9+15)/16
+	// Rust #45094 estimates the model-visible content (author, recipient, text)
+	// rather than the serialized envelope, charging encrypted content through
+	// its plaintext-length approximation.
+	visibleBytes := len("/root") + len("/root/worker") + len("Message Type: NEW_TASK\n") + (len(encrypted)*9+15)/16
 	want := (visibleBytes + 3) / 4
 	if got := EstimateItemTokens(&item); got != want {
 		t.Fatalf("EstimateItemTokens() = %d, want %d", got, want)
+	}
+}
+
+// TestAgentMessageTokenEstimateIgnoresEnvelopeMetadataLikeRust pins the point of
+// Rust #45094 for the compact path: transport metadata (an id, extra fields,
+// JSON escaping) must not inflate the estimate, because the estimate charges
+// only model-visible content.
+func TestAgentMessageTokenEstimateIgnoresEnvelopeMetadataLikeRust(t *testing.T) {
+	plain := structuredAgentMessageItem(t, "task", "Message Type: NEW_TASK\n", "")
+	raw, err := json.Marshal(map[string]any{
+		"type":      "agent_message",
+		"id":        "msg_0123456789abcdef0123456789abcdef",
+		"author":    "/root",
+		"recipient": "/root/worker",
+		"metadata":  map[string]any{"sequence": 42, "note": "caf\u00e9 \u2014 escaped \"quotes\""},
+		"content":   []any{map[string]any{"type": "input_text", "text": "Message Type: NEW_TASK\n"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noisy := Item{ID: "task", Type: "agent_message", Raw: raw}
+	if len(raw) <= len(plain.Raw) {
+		t.Fatalf("noisy envelope should be longer: noisy=%d plain=%d", len(raw), len(plain.Raw))
+	}
+	if got, want := EstimateItemTokens(&noisy), EstimateItemTokens(&plain); got != want {
+		t.Fatalf("estimate inflated by envelope metadata: got %d want %d", got, want)
 	}
 }
 

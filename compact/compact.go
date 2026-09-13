@@ -551,18 +551,46 @@ func EstimateItemTokens(item *Item) int {
 	if item == nil {
 		return 0
 	}
-	if isStructuredAgentMessage(item) && len(item.Raw) > 0 {
-		visibleBytes := len(item.Raw)
-		for _, encrypted := range agentMessageEncryptedContents(item) {
-			visibleBytes -= len(encrypted)
-			visibleBytes += (len(encrypted)*9 + 15) / 16
-		}
-		if visibleBytes < 0 {
-			visibleBytes = 0
-		}
-		return (visibleBytes + 3) / 4
+	if isStructuredAgentMessage(item) {
+		return (agentMessageModelVisibleBytes(item) + 3) / 4
 	}
 	return EstimateTextTokens(ItemText(item))
+}
+
+// agentMessageModelVisibleBytes mirrors Rust's content-based estimate for an
+// agent message (core/src/context_manager/history.rs after #45094): the author
+// and recipient plus each content block, rather than the serialized JSON
+// envelope (which would add keys, quoting, and escaping). Encrypted content is
+// charged through its plaintext-length approximation.
+func agentMessageModelVisibleBytes(item *Item) int {
+	author, recipient := agentMessageAuthorRecipient(item)
+	bytes := len(author) + len(recipient)
+	for _, content := range rawAgentMessageContent(item) {
+		block, ok := content.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(fmt.Sprint(block["type"])) {
+		case "input_text":
+			if text, ok := block["text"].(string); ok {
+				bytes += len(text)
+			}
+		case "encrypted_content":
+			if encrypted, ok := block["encrypted_content"].(string); ok {
+				bytes += encryptedFunctionOutputByteEstimate(len(encrypted))
+			}
+		}
+	}
+	if bytes < 0 {
+		bytes = 0
+	}
+	return bytes
+}
+
+// encryptedFunctionOutputByteEstimate mirrors Rust's
+// estimate_encrypted_function_output_length (encoded_len * 9 / 16, rounded up).
+func encryptedFunctionOutputByteEstimate(encodedLen int) int {
+	return (encodedLen*9 + 15) / 16
 }
 
 func isStructuredAgentMessage(item *Item) bool {
@@ -622,20 +650,6 @@ func firstAgentMessageInputText(item *Item) (string, bool) {
 		return text, ok
 	}
 	return "", false
-}
-
-func agentMessageEncryptedContents(item *Item) []string {
-	var encrypted []string
-	for _, content := range rawAgentMessageContent(item) {
-		block, ok := content.(map[string]any)
-		if !ok || strings.TrimSpace(fmt.Sprint(block["type"])) != "encrypted_content" {
-			continue
-		}
-		if value, ok := block["encrypted_content"].(string); ok {
-			encrypted = append(encrypted, value)
-		}
-	}
-	return encrypted
 }
 
 func rawAgentMessageContent(item *Item) []any {
