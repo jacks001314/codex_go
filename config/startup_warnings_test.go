@@ -66,6 +66,51 @@ func TestStartupWarningsForRequirementsLikeRust(t *testing.T) {
 	}
 }
 
+// TestConfigWarningsForCWDAggregatesProducersLikeRust pins the shared app-server
+// and exec entry point: unrecognized settings, malformed agent roles, and the
+// requirement-driven warnings are reported together for the layers visible from
+// cwd.
+func TestConfigWarningsForCWDAggregatesProducersLikeRust(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	userConfig := "approval_policy = \"never\"\nunknown_setting = true\n\n[projects.\"" + strings.ReplaceAll(repo, `\`, `\\`) + "\"]\ntrust_level = \"trusted\"\n"
+	if err := os.WriteFile(ConfigPath(home), []byte(userConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("allowed_approval_policies = [\"on-request\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dotCodex := filepath.Join(repo, ".gcode")
+	if err := os.MkdirAll(dotCodex, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dotCodex, "config.toml"), []byte("[agents.worker]\nnickname_candidates = [\"Scout\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	warnings := NewConfigService(home).ConfigWarningsForCWD(repo)
+	var hasRequirement, hasIgnored, hasAgentRole bool
+	for _, warning := range warnings {
+		if strings.Contains(warning, "`approval_policy` is disallowed by requirements") {
+			hasRequirement = true
+		}
+		if strings.Contains(warning, "unknown_setting") {
+			hasIgnored = true
+		}
+		if strings.Contains(warning, "Ignoring malformed agent role definition: agent role `worker` must define a description") {
+			hasAgentRole = true
+		}
+	}
+	if !hasRequirement || !hasIgnored || !hasAgentRole {
+		t.Fatalf("ConfigWarningsForCWD() = %#v", warnings)
+	}
+}
+
 // TestConfigServiceReadSurfacesStartupWarnings pins the app-server surfacing:
 // config/read records the requirement-driven warnings like Rust's
 // ConfigWarningNotification list.

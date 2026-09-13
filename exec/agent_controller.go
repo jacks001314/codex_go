@@ -220,6 +220,12 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 	if err != nil {
 		return nil, err
 	}
+	// Rust load_agent_roles builds the catalog from the config layer stack, so a
+	// project's declared roles and `<config_folder>/agents` role files apply to
+	// the exec run's cwd as well.
+	if layered, _ := config.NewConfigService(r.CodexHome).AgentRolesForCWD(requestCWD(req)); len(layered) > 0 {
+		agentsConfig.Roles = layered
+	}
 	modelsManager := execModelsManagerForAgent(agentRunner)
 	version := execMultiAgentVersionForRun(req, cfg, agentsConfig, modelsManager)
 	if version == "" {

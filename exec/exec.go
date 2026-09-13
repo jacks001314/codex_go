@@ -360,6 +360,11 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	streamCollector := &execStreamEventCollector{sink: eventSink, workingDirectory: requestCWD(req)}
 	streamCollector.streamAssistantDeltas = req.Exec.StreamAssistantDeltas
+	// Rust passes config.startup_warnings into the exec session, whose client
+	// renders each as a warning item.
+	for _, warning := range config.NewConfigService(r.CodexHome).ConfigWarningsForCWD(requestCWD(req)) {
+		streamCollector.Warning(warning)
+	}
 	mcpService, mcpTools, mcpConnectors := r.configuredMCPRuntimeForConfig(cfg, resolvedAuth)
 	var webSearchOptions *turn.WebSearchOptions
 	var imageGenerationOptions *turn.ImageGenerationOptions

@@ -42,6 +42,39 @@ func (s *ConfigService) StartupWarningsForCWD(cwd string) []string {
 	return StartupWarnings(values, requirements)
 }
 
+// ConfigWarningsForCWD reports every app-server config warning for the layers
+// visible from cwd: unrecognized settings, unsupported project-local keys,
+// malformed agent-role definitions, and the requirement-driven startup warnings
+// (Rust's config.startup_warnings plus the loader diagnostics the app-server
+// forwards). Returns nil when nothing is reported.
+func (s *ConfigService) ConfigWarningsForCWD(cwd string) []string {
+	if s == nil {
+		return nil
+	}
+	var warnings []string
+	if ignored := strings.TrimSpace(s.IgnoredSettingsWarning(cwd)); ignored != "" {
+		warnings = append(warnings, ignored)
+	}
+	for _, warning := range s.ProjectIgnoredConfigKeysWarnings(cwd) {
+		if summary := strings.TrimSpace(warning); summary != "" {
+			warnings = append(warnings, summary)
+		}
+	}
+	if _, roleWarnings := s.AgentRolesForCWD(cwd); len(roleWarnings) > 0 {
+		for _, warning := range roleWarnings {
+			if summary := strings.TrimSpace(warning); summary != "" {
+				warnings = append(warnings, summary)
+			}
+		}
+	}
+	for _, warning := range s.StartupWarningsForCWD(cwd) {
+		if summary := strings.TrimSpace(warning); summary != "" {
+			warnings = append(warnings, summary)
+		}
+	}
+	return warnings
+}
+
 // StartupWarnings reports the requirement-driven overrides and fallbacks that
 // apply to the given effective configuration, in a stable order.
 func StartupWarnings(values map[string]any, requirements *ConfigRequirements) []string {

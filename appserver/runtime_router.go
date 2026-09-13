@@ -5684,30 +5684,11 @@ func (r *RuntimeRouter) emitThreadConfigWarnings(cwd string) {
 		return
 	}
 	var summaries []string
-	if ignored := strings.TrimSpace(r.services.Config.IgnoredSettingsWarning(cwd)); ignored != "" {
-		summaries = append(summaries, ignored)
-	}
-	for _, warning := range r.services.Config.ProjectIgnoredConfigKeysWarnings(cwd) {
-		if summary := strings.TrimSpace(warning); summary != "" {
-			summaries = append(summaries, summary)
-		}
-	}
-	// Rust load_agent_roles reports malformed role definitions as startup
-	// warnings for the thread's layers.
-	if _, roleWarnings := r.services.Config.AgentRolesForCWD(cwd); len(roleWarnings) > 0 {
-		for _, warning := range roleWarnings {
-			if summary := strings.TrimSpace(warning); summary != "" {
-				summaries = append(summaries, summary)
-			}
-		}
-	}
 	// Rust thread_processor emits the thread config's startup_warnings, which
-	// can include project-scoped requirement conflicts absent at initialization.
-	for _, warning := range r.services.Config.StartupWarningsForCWD(cwd) {
-		if summary := strings.TrimSpace(warning); summary != "" {
-			summaries = append(summaries, summary)
-		}
-	}
+	// include the loader diagnostics (unrecognized settings, unsupported
+	// project-local keys, malformed agent roles) and the requirement-driven
+	// warnings for the thread's layers.
+	summaries = append(summaries, r.services.Config.ConfigWarningsForCWD(cwd)...)
 	if len(summaries) == 0 {
 		return
 	}
