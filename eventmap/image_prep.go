@@ -15,6 +15,8 @@ import (
 
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/webp"
+
+	"codex_go/utils"
 )
 
 const (
@@ -342,6 +344,10 @@ func prepareImagePrepDecoded(payload []byte, limits PromptImageResizeLimits) (*I
 	if err != nil {
 		return nil, err
 	}
+	// Rust preserves the source's RGB ICC profile and EXIF payload across the
+	// re-encoding paths (apply_image_metadata); Go's stdlib encoders cannot write
+	// them, so the container metadata is re-inserted after encoding.
+	metadata := utils.ExtractPromptImageSourceMetadata(payload)
 	targetWidth, targetHeight := PromptImageOutputDimensionsForLimits(sourceWidth, sourceHeight, limits)
 	if targetWidth == sourceWidth && targetHeight == sourceHeight {
 		if canImagePrepPreserveSourceBytes(format) {
@@ -356,7 +362,7 @@ func prepareImagePrepDecoded(payload []byte, limits PromptImageResizeLimits) (*I
 			}, nil
 		}
 		resized := resizeImagePrep(img, targetWidth, targetHeight)
-		encoded, mime, err := encodeImagePrep(resized, imagePrepFormatPNG)
+		encoded, mime, err := encodeImagePrep(resized, imagePrepFormatPNG, metadata)
 		if err != nil {
 			return nil, err
 		}
@@ -378,7 +384,7 @@ func prepareImagePrepDecoded(payload []byte, limits PromptImageResizeLimits) (*I
 	default:
 		targetFormat = imagePrepFormatPNG
 	}
-	encoded, mime, err := encodeImagePrep(resized, targetFormat)
+	encoded, mime, err := encodeImagePrep(resized, targetFormat, metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -489,8 +495,9 @@ func resizeImagePrep(src image.Image, targetWidth uint32, targetHeight uint32) i
 }
 
 // encodeImagePrep encodes the resized image as PNG (lossless RGBA) or JPEG
-// (quality 85), mirroring Rust encode_image (PNG RGBA8 / JPEG q85).
-func encodeImagePrep(img image.Image, format imagePrepFormat) ([]byte, string, error) {
+// (quality 85), mirroring Rust encode_image (PNG RGBA8 / JPEG q85), and
+// re-applies the source's RGB ICC profile and EXIF payload.
+func encodeImagePrep(img image.Image, format imagePrepFormat, metadata utils.PromptImageSourceMetadata) ([]byte, string, error) {
 	var buf bytes.Buffer
 	switch format {
 	case imagePrepFormatJPEG:
@@ -502,12 +509,12 @@ func encodeImagePrep(img image.Image, format imagePrepFormat) ([]byte, string, e
 		if err := jpeg.Encode(&buf, flattened, &jpeg.Options{Quality: 85}); err != nil {
 			return nil, "", fmt.Errorf("encode jpeg: %w", err)
 		}
-		return buf.Bytes(), "image/jpeg", nil
+		return utils.ApplyPromptImageMetadataToContainer("image/jpeg", buf.Bytes(), metadata), "image/jpeg", nil
 	default:
 		if err := png.Encode(&buf, img); err != nil {
 			return nil, "", fmt.Errorf("encode png: %w", err)
 		}
-		return buf.Bytes(), "image/png", nil
+		return utils.ApplyPromptImageMetadataToContainer("image/png", buf.Bytes(), metadata), "image/png", nil
 	}
 }
 

@@ -236,9 +236,14 @@ func interactiveLocalVoiceSettings(factory interactiveVoiceRouterFactory) func()
 // interactiveLocalVoiceSaver persists the chosen voice through the local config
 // write RPC and confirms it is the effective preference.
 func interactiveLocalVoiceSaver(factory interactiveVoiceRouterFactory) func(voice string) bubbletea.Cmd {
+	if factory == nil {
+		factory = func() interactiveVoiceRouter { return nil }
+	}
 	settings, _, _, _ := interactiveLocalVoiceCallbacks(factory)
 	return func(voice string) bubbletea.Cmd {
 		return func() bubbletea.Msg {
+			// The factory is defaulted above, so a missing local runtime
+			// degrades to this error instead of a nil call.
 			router := factory()
 			if router == nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: errors.New("config write failed in TUI: app-server is unavailable")}
@@ -263,6 +268,9 @@ func interactiveLocalVoiceSaver(factory interactiveVoiceRouterFactory) func(voic
 
 // interactiveLocalSpeechSender speaks one delegated answer into the thread.
 func interactiveLocalSpeechSender(factory interactiveVoiceRouterFactory, threadID func() string) func(itemID string, text string) bubbletea.Cmd {
+	if factory == nil {
+		factory = func() interactiveVoiceRouter { return nil }
+	}
 	return func(itemID string, text string) bubbletea.Cmd {
 		return func() bubbletea.Msg {
 			target := ""

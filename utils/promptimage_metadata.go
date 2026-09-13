@@ -17,6 +17,49 @@ type promptImageMetadata struct {
 	exif       []byte
 }
 
+// PromptImageSourceMetadata mirrors Rust's ImageMetadata: the RGB ICC profile
+// and EXIF payload (orientation) read from a decoded source container. Other
+// format-specific metadata is intentionally not copied.
+type PromptImageSourceMetadata struct {
+	ICCProfile []byte
+	EXIF       []byte
+}
+
+// Empty reports whether any preserved metadata is present.
+func (m PromptImageSourceMetadata) Empty() bool {
+	return len(m.ICCProfile) == 0 && len(m.EXIF) == 0
+}
+
+// ExtractPromptImageSourceMetadata reads the RGB ICC profile and EXIF payload
+// from a PNG or JPEG source container, mirroring Rust's decoder accessors. Go has
+// no container reader for the remaining formats, so they report no metadata.
+func ExtractPromptImageSourceMetadata(payload []byte) PromptImageSourceMetadata {
+	format, err := promptImageGuessFormat(payload)
+	if err != nil {
+		return PromptImageSourceMetadata{}
+	}
+	metadata := extractPromptImageMetadata(format, payload)
+	return PromptImageSourceMetadata{ICCProfile: metadata.iccProfile, EXIF: metadata.exif}
+}
+
+// ApplyPromptImageMetadataToContainer inserts the source metadata into freshly
+// encoded PNG or JPEG bytes (Rust's apply_image_metadata); mime selects the
+// container and any other value leaves the bytes untouched.
+func ApplyPromptImageMetadataToContainer(mime string, encoded []byte, metadata PromptImageSourceMetadata) []byte {
+	if metadata.Empty() {
+		return encoded
+	}
+	restored := promptImageMetadata{iccProfile: metadata.ICCProfile, exif: metadata.EXIF}
+	switch mime {
+	case "image/png":
+		return applyPromptImageMetadata(promptImageFormatPNG, encoded, restored)
+	case "image/jpeg":
+		return applyPromptImageMetadata(promptImageFormatJPEG, encoded, restored)
+	default:
+		return encoded
+	}
+}
+
 func (m promptImageMetadata) empty() bool {
 	return len(m.iccProfile) == 0 && len(m.exif) == 0
 }

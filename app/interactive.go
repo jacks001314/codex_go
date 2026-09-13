@@ -929,9 +929,12 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnVoiceCloseHelper:        voice.close,
 		OnVoiceSetMicrophoneMuted: func(muted bool) error { return voice.setMicrophoneMuted(muted) },
 		OnVoicePeaks:              voice.peaks,
-		OnVoiceSettings:           interactiveLocalVoiceSettings(nil),
-		OnVoiceSaveVoice:          interactiveLocalVoiceSaver(nil),
-		OnVoiceAppendSpeech: interactiveLocalSpeechSender(nil, func() string {
+		// The picker, the saver, and delegated speech share the same
+		// persistent voice router as the start/stop callbacks; a nil factory
+		// here would fall back to the builtin catalog and fail to persist.
+		OnVoiceSettings:  interactiveLocalVoiceSettings(voiceSession.ensureRouter),
+		OnVoiceSaveVoice: interactiveLocalVoiceSaver(voiceSession.ensureRouter),
+		OnVoiceAppendSpeech: interactiveLocalSpeechSender(voiceSession.ensureRouter, func() string {
 			return state.ThreadID
 		}),
 		KeymapConfig:    interactiveKeymapConfig(root),

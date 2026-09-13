@@ -88,6 +88,62 @@ func TestInteractiveLocalVoiceSettingsFallsBackToBuiltinCatalog(t *testing.T) {
 	}
 }
 
+// A nil factory must degrade to a reported error, not a nil function call: the
+// embedded TUI wires these hooks before a voice session exists.
+func TestInteractiveLocalVoiceHooksTolerateNilFactory(t *testing.T) {
+	message := interactiveLocalVoiceSaver(nil)("maple")()
+	if saved, ok := message.(codextea.VoiceSavedMsg); !ok || saved.Err == nil {
+		t.Fatalf("nil-factory save = %#v, want an error", message)
+	}
+
+	message = interactiveLocalSpeechSender(nil, func() string { return "thread-1" })("item-1", "hello")()
+	if spoken, ok := message.(codextea.VoiceSpeechResultMsg); !ok || spoken.Err == nil {
+		t.Fatalf("nil-factory speech = %#v, want an error", message)
+	}
+}
+
+func TestInteractiveLocalVoiceSaverPersistsThroughRouter(t *testing.T) {
+	router := &recordingInteractiveVoiceRouter{}
+	message := interactiveLocalVoiceSaver(func() interactiveVoiceRouter { return router })("juniper")()
+	saved, ok := message.(codextea.VoiceSavedMsg)
+	if !ok {
+		t.Fatalf("save message = %T", message)
+	}
+	if saved.Err != nil || saved.Voice != "juniper" {
+		t.Fatalf("save = %#v, want juniper without error", saved)
+	}
+	wantMethods := []appserver.Method{appserver.MethodConfigBatchWrite, appserver.MethodConfigRead}
+	if len(router.requests) != len(wantMethods) {
+		t.Fatalf("requests = %d, want %d", len(router.requests), len(wantMethods))
+	}
+	for index, method := range wantMethods {
+		if router.requests[index].Method != method {
+			t.Fatalf("request[%d] = %s, want %s", index, router.requests[index].Method, method)
+		}
+	}
+}
+
+func TestInteractiveLocalSpeechSenderPostsThroughRouter(t *testing.T) {
+	router := &recordingInteractiveVoiceRouter{}
+	message := interactiveLocalSpeechSender(
+		func() interactiveVoiceRouter { return router },
+		func() string { return " thread-1 " },
+	)("item-1", "hello")()
+	spoken, ok := message.(codextea.VoiceSpeechResultMsg)
+	if !ok {
+		t.Fatalf("speech message = %T", message)
+	}
+	if spoken.Err != nil || spoken.ItemID != "item-1" {
+		t.Fatalf("speech = %#v, want item-1 without error", spoken)
+	}
+	if len(router.requests) != 1 || router.requests[0].Method != appserver.MethodThreadRealtimeAppendSpeech {
+		t.Fatalf("requests = %#v", router.requests)
+	}
+	if router.requests[0].ConnectionID != interactiveVoiceConnectionID {
+		t.Fatalf("connection = %q", router.requests[0].ConnectionID)
+	}
+}
+
 // TestRealtimeNotificationMessageMapsWirePayloads covers the sink bridge the
 // local session uses to forward realtime notifications to the TUI.
 func TestRealtimeNotificationMessageMapsWirePayloads(t *testing.T) {
