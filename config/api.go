@@ -1982,6 +1982,7 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 		if err := s.validateMCPEMAAuthConfig(layers, values); err != nil {
 			return nil, err
 		}
+		s.recordStartupWarnings(values)
 		response := &ConfigReadResponse{Config: values, Origins: origins}
 		if params.IncludeLayers {
 			response.Layers = cloneLayers(rpcLayers(layers))
@@ -2013,11 +2014,50 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 	if err := s.validateMCPEMAAuthConfig(layers, values); err != nil {
 		return nil, err
 	}
+	s.recordStartupWarnings(values)
 	response := &ConfigReadResponse{Config: values, Origins: origins}
 	if params.IncludeLayers {
 		response.Layers = cloneLayers(rpcLayers(layers))
 	}
 	return response, nil
+}
+
+// recordStartupWarnings merges the requirement-driven startup warnings for the
+// effective configuration into the service's config warnings, mirroring Rust's
+// app-server, which pushes `config.startup_warnings` into its
+// ConfigWarningNotification list. Duplicates are ignored, matching Rust's
+// initial-warning dedup.
+func (s *ConfigService) recordStartupWarnings(values map[string]any) {
+	if s == nil || values == nil {
+		return
+	}
+	s.mu.Lock()
+	requirements := cloneRequirements(s.requirements)
+	s.mu.Unlock()
+	for _, warning := range StartupWarnings(values, requirements) {
+		s.appendConfigWarningOnce(ConfigWarningNotification{Summary: warning})
+	}
+}
+
+func (s *ConfigService) appendConfigWarningOnce(warning ConfigWarningNotification) {
+	if s == nil {
+		return
+	}
+	cloned := ConfigWarningNotification{
+		Summary: warning.Summary,
+		Details: cloneStringPtr(warning.Details),
+		Path:    cloneStringPtr(warning.Path),
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.warnings {
+		if existing.Summary == cloned.Summary &&
+			stringPtrEqual(existing.Details, cloned.Details) &&
+			stringPtrEqual(existing.Path, cloned.Path) {
+			return
+		}
+	}
+	s.warnings = append(s.warnings, cloned)
 }
 
 // validateMCPEMAAuthConfig enforces enterprise MCP authorization provenance at
@@ -4039,6 +4079,14 @@ func cloneStringPtr(value *string) *string {
 	}
 	clone := *value
 	return &clone
+}
+
+// stringPtrEqual compares two optional strings by value.
+func stringPtrEqual(left *string, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func cloneAuthCredentialsStoreMode(value *AuthCredentialsStoreMode) *AuthCredentialsStoreMode {
