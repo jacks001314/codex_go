@@ -322,6 +322,24 @@ func responsesStreamErrorHTTPStatus(err error) *uint16 {
 	return &value
 }
 
+// requestServiceTier reports the service tier the request carries, which Rust
+// reads from the session telemetry's inference-request metadata.
+func requestServiceTier(request *AgentRequest) string {
+	if request == nil {
+		return ""
+	}
+	return strings.TrimSpace(request.ServiceTier)
+}
+
+// requestReasoningEffort reports the reasoning effort the request carries, which
+// Rust reads from the session telemetry's inference-request metadata.
+func requestReasoningEffort(request *AgentRequest) string {
+	if request == nil {
+		return ""
+	}
+	return strings.TrimSpace(request.ReasoningEffort)
+}
+
 func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
 	// Rust instruments the client's stream call with `stream_request`
 	// (core/src/session/turn.rs); the span carries the request's diagnostics
@@ -421,6 +439,10 @@ func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, requ
 	tracer := telemetryTracerFor(telemetrySink)
 	streamCtx, receivingStreamSpan := tracer.StartSpan(ctx, nil, ReceivingStreamSpanName, nil)
 	defer receivingStreamSpan.End()
+	// Rust measures the response's time to first token from the streaming
+	// consumer's start to the first output item (client.rs `ttft_ms`).
+	streamStartedAt := time.Now()
+	var ttftMillis *int64
 	for {
 		if err := streamCtx.Err(); err != nil {
 			return nil, err
@@ -460,6 +482,19 @@ func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, requ
 			Err:       err,
 		})
 		recordResponsesSpan(handleResponsesSpan, streamedEvent)
+		if streamedEvent != nil && streamedEvent.Kind == ResponsesStreamEventOutputAdded && ttftMillis == nil {
+			elapsed := time.Since(streamStartedAt).Milliseconds()
+			ttftMillis = &elapsed
+		}
+		if streamedEvent != nil && streamedEvent.Kind == ResponsesStreamEventCompleted &&
+			streamedEvent.Usage != nil && telemetrySink != nil {
+			telemetrySink.RecordSSEEventCompleted(ctx, SSECompletedRecord{
+				Usage:           *streamedEvent.Usage,
+				TTFTMillis:      ttftMillis,
+				ServiceTier:     requestServiceTier(request),
+				ReasoningEffort: requestReasoningEffort(request),
+			})
+		}
 		receivingSpan.End()
 		handleResponsesSpan.End()
 		if err != nil {

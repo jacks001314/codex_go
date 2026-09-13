@@ -440,6 +440,7 @@ type recordingTelemetrySink struct {
 	spans             []*recordingTelemetrySpan
 	apiRequests       []APIRequestRecord
 	websocketRequests []WebsocketRequestRecord
+	sseCompleted      []SSECompletedRecord
 }
 
 // recordingTelemetrySpan captures one span's lifecycle, so the tests can assert
@@ -482,10 +483,69 @@ func (s *recordingTelemetrySink) RecordWebsocketRequest(_ context.Context, recor
 	s.websocketRequests = append(s.websocketRequests, record)
 }
 
+func (s *recordingTelemetrySink) RecordSSEEventCompleted(_ context.Context, record SSECompletedRecord) {
+	s.sseCompleted = append(s.sseCompleted, record)
+}
+
 type telemetryRecord struct {
 	name   string
 	fields map[string]string
 	only   map[string]string
+}
+
+// A completed streamed response reports its usage and time to first token: the
+// record Rust emits from the streaming consumer (SessionTelemetry::sse_event_completed).
+func TestParseResponsesStreamRecordsCompletedUsageLikeRust(t *testing.T) {
+	sink := &recordingTelemetrySink{}
+	_, err := parseResponsesStreamWithMetrics(
+		context.Background(),
+		strings.NewReader(responsesSSE(
+			`{"type":"response.output_item.added","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-1","output":[{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":7,"input_tokens_details":{"cached_tokens":2},"output_tokens":3,"output_tokens_details":{"reasoning_tokens":1},"total_tokens":10}}}`,
+		)),
+		&AgentRequest{Prompt: "hello", Model: "gpt-test", ServiceTier: "priority", ReasoningEffort: "high"},
+		"openai",
+		nil,
+		nil,
+		sink,
+	)
+	if err != nil {
+		t.Fatalf("parseResponsesStreamWithMetrics() error = %v", err)
+	}
+	if len(sink.sseCompleted) != 1 {
+		t.Fatalf("completed records = %#v", sink.sseCompleted)
+	}
+	record := sink.sseCompleted[0]
+	if record.Usage.InputTokens != 7 || record.Usage.OutputTokens != 3 || record.Usage.TotalTokens != 10 {
+		t.Fatalf("record = %#v", record)
+	}
+	if record.Usage.CachedInputTokens != 2 || record.Usage.ReasoningOutputTokens != 1 {
+		t.Fatalf("record = %#v", record)
+	}
+	if record.TTFTMillis == nil {
+		t.Fatalf("record has no time to first token: %#v", record)
+	}
+	if record.ServiceTier != "priority" || record.ReasoningEffort != "high" {
+		t.Fatalf("record = %#v", record)
+	}
+
+	// A completion without usage reports nothing (Rust only calls the emitter for
+	// a response that carries usage).
+	empty := &recordingTelemetrySink{}
+	if _, err := parseResponsesStreamWithMetrics(
+		context.Background(),
+		strings.NewReader(responsesSSE(`{"type":"response.completed","response":{"id":"resp-1","output":[{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`)),
+		&AgentRequest{Prompt: "hello", Model: "gpt-test"},
+		"openai",
+		nil,
+		nil,
+		empty,
+	); err != nil {
+		t.Fatalf("parseResponsesStreamWithMetrics() error = %v", err)
+	}
+	if len(empty.sseCompleted) != 0 {
+		t.Fatalf("completed records = %#v", empty.sseCompleted)
+	}
 }
 
 // The client's streaming loop opens Rust's span tree: one receiving_stream per

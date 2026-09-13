@@ -22,6 +22,16 @@ type MetricsSink interface {
 	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }
 
+// SSECompletedRecord carries the values of a completed model response for the
+// `codex.sse_event` record (Rust's SessionTelemetry::sse_event_completed).
+type SSECompletedRecord struct {
+	Usage AgentUsage
+	// TTFTMillis is absent when the stream never reported an output item.
+	TTFTMillis      *int64
+	ServiceTier     string
+	ReasoningEffort string
+}
+
 // WebsocketRequestRecord carries the values of one websocket request send
 // (Rust's SessionTelemetry::record_websocket_request).
 type WebsocketRequestRecord struct {
@@ -74,6 +84,8 @@ type SessionTelemetrySink interface {
 	RecordAPIRequest(ctx context.Context, record APIRequestRecord)
 	// RecordWebsocketRequest reports one websocket request send.
 	RecordWebsocketRequest(ctx context.Context, record WebsocketRequestRecord)
+	// RecordSSEEventCompleted reports a completed model response's usage.
+	RecordSSEEventCompleted(ctx context.Context, record SSECompletedRecord)
 }
 
 // Metric names mirror codex-rs/otel/src/metrics/names.rs.

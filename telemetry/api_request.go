@@ -11,6 +11,46 @@ import (
 // half is recorded by the model client (which cannot import this package); the
 // diagnostic record is emitted here from the client's per-attempt values.
 
+// RecordSSEEventCompleted mirrors SessionTelemetry::sse_event_completed: the
+// token counts and timing of a completed model response, on both the log record
+// and the span event.
+func (t *SessionTelemetry) RecordSSEEventCompleted(ctx context.Context, record model.SSECompletedRecord) {
+	if t == nil || t.Logs == nil {
+		return
+	}
+	usage := record.Usage
+	fields := map[string]string{
+		"event.kind":         "response.completed",
+		"input_token_count":  strconv.FormatInt(usage.InputTokens, 10),
+		"output_token_count": strconv.FormatInt(usage.OutputTokens, 10),
+		"tool_token_count":   strconv.FormatInt(usage.TotalTokens, 10),
+	}
+	// Rust reports these counts only when the response carried them; Go's usage
+	// keeps a zero value for an absent count, so zero stays absent.
+	for _, optional := range []struct {
+		key   string
+		value int64
+	}{
+		{"cached_token_count", usage.CachedInputTokens},
+		{"cache_write_token_count", usage.CacheWriteInputTokens},
+		{"reasoning_token_count", usage.ReasoningOutputTokens},
+	} {
+		if optional.value != 0 {
+			fields[optional.key] = strconv.FormatInt(optional.value, 10)
+		}
+	}
+	if record.TTFTMillis != nil {
+		fields["ttft_ms"] = strconv.FormatInt(*record.TTFTMillis, 10)
+	}
+	if record.ServiceTier != "" {
+		fields["service_tier"] = record.ServiceTier
+	}
+	if record.ReasoningEffort != "" {
+		fields["model_reasoning_effort"] = record.ReasoningEffort
+	}
+	t.LogAndTraceEvent(ctx, "codex.sse_event", fields, nil, nil)
+}
+
 // RecordWebsocketRequest emits the diagnostic records for one websocket request
 // send (Rust's SessionTelemetry::record_websocket_request): the duration and
 // outcome, the auth environment, whether the connection was reused, and the

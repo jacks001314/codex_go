@@ -8,6 +8,128 @@ import (
 	"codex_go/model"
 )
 
+// The completed-response record carries the token counts, the time to first
+// token, and the inference settings on both records, and omits the counts a
+// response did not report.
+func TestRecordSSEEventCompletedRoutesLogAndTraceLikeRust(t *testing.T) {
+	logBodies := make(chan map[string]any, 1)
+	logServer := newLogBatchServer(t, logBodies)
+	defer logServer.Close()
+	traceBodies := make(chan map[string]any, 1)
+	traceServer := newTraceBatchServer(t, traceBodies)
+	defer traceServer.Close()
+
+	logsClient := NewLogsClient(LogsClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       logServer.URL + "/v1/logs",
+		ExportInterval: -1,
+	})
+	tracesClient := NewTracesClient(TracesClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       traceServer.URL + "/v1/traces",
+		ExportInterval: -1,
+	})
+	session := NewSessionTelemetry(SessionTelemetryMetadata{ConversationID: "thread-1"})
+	session.Logs = logsClient
+	span := tracesClient.Tracer().StartSpan("handle_responses", nil)
+	ttft := int64(137)
+	session.RecordSSEEventCompleted(WithSpan(context.Background(), span), model.SSECompletedRecord{
+		Usage: model.AgentUsage{
+			InputTokens:           7,
+			CachedInputTokens:     2,
+			CacheWriteInputTokens: 4,
+			OutputTokens:          3,
+			ReasoningOutputTokens: 1,
+			TotalTokens:           10,
+		},
+		TTFTMillis:      &ttft,
+		ServiceTier:     "priority",
+		ReasoningEffort: "high",
+	})
+	span.End()
+	if err := logsClient.Flush(context.Background()); err != nil {
+		t.Fatalf("logs Flush() error = %v", err)
+	}
+	if err := tracesClient.Flush(context.Background()); err != nil {
+		t.Fatalf("traces Flush() error = %v", err)
+	}
+
+	want := map[string]string{
+		"event.name":              "codex.sse_event",
+		"event.kind":              "response.completed",
+		"input_token_count":       "7",
+		"output_token_count":      "3",
+		"tool_token_count":        "10",
+		"cached_token_count":      "2",
+		"cache_write_token_count": "4",
+		"reasoning_token_count":   "1",
+		"ttft_ms":                 "137",
+		"service_tier":            "priority",
+		"model_reasoning_effort":  "high",
+	}
+	select {
+	case body := <-logBodies:
+		_, record := singleLogRecord(t, body)
+		attributes := logRecordAttributes(t, record)
+		for key, value := range want {
+			if got := attributes[key]; got != value {
+				t.Fatalf("log attribute %s = %q, want %q", key, got, value)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the logs endpoint did not receive the completed record")
+	}
+
+	select {
+	case body := <-traceBodies:
+		spans := body["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+		events := spans[0].(map[string]any)["events"].([]any)
+		if len(events) != 1 {
+			t.Fatalf("span events = %#v", events)
+		}
+		attributes := spanEventAttributes(t, events[0].(map[string]any))
+		for key, value := range want {
+			if got := attributes[key]; got != value {
+				t.Fatalf("span event attribute %s = %q, want %q", key, got, value)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the traces endpoint did not receive the completed event")
+	}
+}
+
+// A response that reported no cache or reasoning counts leaves those fields
+// absent, and a stream that never reported an output item has no ttft.
+func TestRecordSSEEventCompletedOmitsUnsetCounts(t *testing.T) {
+	logBodies := make(chan map[string]any, 1)
+	logServer := newLogBatchServer(t, logBodies)
+	defer logServer.Close()
+	logsClient := NewLogsClient(LogsClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       logServer.URL + "/v1/logs",
+		ExportInterval: -1,
+	})
+	session := NewSessionTelemetry(SessionTelemetryMetadata{ConversationID: "thread-1"})
+	session.Logs = logsClient
+	session.RecordSSEEventCompleted(context.Background(), model.SSECompletedRecord{
+		Usage: model.AgentUsage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10},
+	})
+	if err := logsClient.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	body := <-logBodies
+	_, record := singleLogRecord(t, body)
+	attributes := logRecordAttributes(t, record)
+	for _, absent := range []string{"cached_token_count", "cache_write_token_count", "reasoning_token_count", "ttft_ms", "service_tier", "model_reasoning_effort"} {
+		if _, ok := attributes[absent]; ok {
+			t.Fatalf("record reported %s: %#v", absent, attributes)
+		}
+	}
+	if attributes["input_token_count"] != "7" || attributes["tool_token_count"] != "10" {
+		t.Fatalf("record attributes = %#v", attributes)
+	}
+}
+
 // Rust's websocket request record: the outcome, the auth environment, the
 // reused connection, and the agent identity reach both records.
 func TestRecordWebsocketRequestRoutesLogAndTraceLikeRust(t *testing.T) {
