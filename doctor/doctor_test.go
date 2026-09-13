@@ -289,6 +289,11 @@ func TestSearchCommandPathReadinessRejectsDirectory(t *testing.T) {
 // on a host without an OS keyring: the keyring mode cannot be read, so the
 // check fails with the access error instead of reporting a logged-in session.
 func TestAuthCheckReportsUnavailableKeyringStoreLikeRust(t *testing.T) {
+	// Pin the keyring-unavailable backend (this build has a durable keyring on
+	// Windows) so the Rust unreadable-store behavior stays covered.
+	previousKeyring := auth.OSKeyringAvailable
+	auth.OSKeyringAvailable = false
+	t.Cleanup(func() { auth.OSKeyringAvailable = previousKeyring })
 	clearDoctorAuthEnv(t)
 	home := t.TempDir()
 	if err := os.WriteFile(config.ConfigPath(home), []byte(`cli_auth_credentials_store = "keyring"`), 0o600); err != nil {

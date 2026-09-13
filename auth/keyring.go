@@ -5,17 +5,18 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"codex_go/keyring"
 )
 
 var ErrKeyringSecretNotFound = errors.New("secret not found")
 
 // OSKeyringAvailable reports whether this build has a durable OS keyring
-// backend. Go does not link one: KeyringStore is an in-process map used as a
-// seam for tests, so production keyring storage cannot persist credentials.
-// Rust's credentials-store modes fall back to the file when keyring storage is
-// unavailable (auto) and fail when it is required (keyring), which is what the
-// auth storage backends do here.
-const OSKeyringAvailable = false
+// backend (Windows Credential Manager). Rust's credentials-store modes fall back
+// to the file when keyring storage is unavailable (auto) and fail when it is
+// required (keyring), which is what the auth storage backends do here. It is a
+// var so tests can pin the unavailable behavior deterministically.
+var OSKeyringAvailable = keyring.Available()
 
 // KeyringUnavailableError reports that keyring-backed credentials were
 // required but no durable keyring backend exists in this build.
@@ -40,6 +41,9 @@ func ResolveKeyringBackendFromSecretAuthStorage(enabled bool) KeyringBackendKind
 type KeyringStore struct {
 	backend KeyringBackendKind
 	values  map[string]string
+	// osStore, when set, is the durable platform backend. The in-process map
+	// remains for injected test seams and hosts without a keyring.
+	osStore keyring.Store
 }
 
 var defaultKeyringValues = struct {
@@ -54,6 +58,16 @@ func NewKeyringStore(backend KeyringBackendKind) *KeyringStore {
 	return &KeyringStore{backend: backend, values: defaultKeyringValues.values}
 }
 
+// NewOSKeyringStore returns a store backed by the durable platform keyring.
+// Go does not model Rust's aggregate "secrets" namespace, so both keyring
+// backends resolve to the OS keyring here.
+func NewOSKeyringStore(backend KeyringBackendKind) *KeyringStore {
+	if backend == "" || backend == KeyringBackendAuto {
+		backend = KeyringBackendDirect
+	}
+	return &KeyringStore{backend: backend, osStore: keyring.New()}
+}
+
 func (s *KeyringStore) Backend() KeyringBackendKind {
 	if s == nil {
 		return KeyringBackendDirect
@@ -64,6 +78,9 @@ func (s *KeyringStore) Backend() KeyringBackendKind {
 func (s *KeyringStore) Set(service string, account string, secret string) error {
 	if s == nil {
 		return fmt.Errorf("keyring store is nil")
+	}
+	if s.osStore != nil {
+		return s.osStore.Save(service, account, secret)
 	}
 	key := secretKey(service, account)
 	if key == "" {
@@ -79,6 +96,13 @@ func (s *KeyringStore) Get(service string, account string) (string, error) {
 	if s == nil {
 		return "", ErrKeyringSecretNotFound
 	}
+	if s.osStore != nil {
+		value, err := s.osStore.Load(service, account)
+		if errors.Is(err, keyring.ErrNotFound) {
+			return "", ErrKeyringSecretNotFound
+		}
+		return value, err
+	}
 	key := secretKey(service, account)
 	defaultKeyringValues.Lock()
 	defer defaultKeyringValues.Unlock()
@@ -92,6 +116,9 @@ func (s *KeyringStore) Get(service string, account string) (string, error) {
 func (s *KeyringStore) Delete(service string, account string) (bool, error) {
 	if s == nil {
 		return false, nil
+	}
+	if s.osStore != nil {
+		return s.osStore.Delete(service, account)
 	}
 	key := secretKey(service, account)
 	defaultKeyringValues.Lock()

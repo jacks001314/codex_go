@@ -316,7 +316,11 @@ type keyringAuthStorage struct {
 func newKeyringAuthStorage(codexHome string, backend KeyringBackendKind, store *KeyringStore) *keyringAuthStorage {
 	injected := store != nil
 	if store == nil {
-		store = NewKeyringStore(backend)
+		if OSKeyringAvailable {
+			store = NewOSKeyringStore(backend)
+		} else {
+			store = NewKeyringStore(backend)
+		}
 	}
 	return &keyringAuthStorage{codexHome: codexHome, keyring: store, available: injected || OSKeyringAvailable}
 }

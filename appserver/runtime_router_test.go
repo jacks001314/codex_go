@@ -4850,6 +4850,11 @@ func TestRuntimeRouterGetAuthStatusReadsAuthStore(t *testing.T) {
 // persist credentials, so the runtime reports an unauthenticated session
 // instead of reading a memory-only store.
 func TestDefaultRuntimeRouterKeyringAuthStoreFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
+	// Pin the keyring-unavailable backend (this build has a durable keyring on
+	// Windows) so the Rust fallback/failure behavior stays covered.
+	previousKeyring := auth.OSKeyringAvailable
+	auth.OSKeyringAvailable = false
+	t.Cleanup(func() { auth.OSKeyringAvailable = previousKeyring })
 	clearAuthEnvAppserver(t)
 	home := t.TempDir()
 	if err := os.WriteFile(config.ConfigPath(home), []byte(`cli_auth_credentials_store = "keyring"`), 0o600); err != nil {

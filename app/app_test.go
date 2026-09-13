@@ -197,6 +197,11 @@ func TestLoginStatusUsesEnv(t *testing.T) {
 // fails instead of silently keeping credentials in memory, and the auto mode
 // falls back to the credentials file.
 func TestLoginWithKeyringStoreFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
+	// Pin the keyring-unavailable backend: this build has a durable keyring on
+	// Windows, and the test covers Rust's documented fallback/failure behavior.
+	previousKeyring := auth.OSKeyringAvailable
+	auth.OSKeyringAvailable = false
+	t.Cleanup(func() { auth.OSKeyringAvailable = previousKeyring })
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	var stdout bytes.Buffer

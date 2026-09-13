@@ -146,6 +146,7 @@ func TestAutoStoreModeFallsBackToFileWhenKeyringEmpty(t *testing.T) {
 // available, otherwise fail": this build has no OS keyring, so requiring it
 // must surface an error instead of silently keeping credentials in memory.
 func TestKeyringStoreModeFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
+	withoutOSKeyring(t)
 	dir := t.TempDir()
 	store := NewStoreWithOptions(dir, &StoreOptions{Mode: AuthCredentialsStoreKeyring})
 	if err := store.Save(FromAPIKey("sk-keyring")); err == nil || !strings.Contains(err.Error(), KeyringUnavailableError) {
@@ -163,6 +164,7 @@ func TestKeyringStoreModeFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
 // documented auto fallback: without keyring storage the credentials file is the
 // durable store, so a save must reach it.
 func TestAutoStoreModePersistsToFileWithoutAnOSKeyringLikeRust(t *testing.T) {
+	withoutOSKeyring(t)
 	dir := t.TempDir()
 	store := NewStoreWithOptions(dir, &StoreOptions{Mode: AuthCredentialsStoreAuto})
 	if err := store.Save(FromAPIKey("sk-auto")); err != nil {
@@ -330,5 +332,49 @@ func TestBedrockAPIKeyAuthDebugRedactsSecretLikeRust(t *testing.T) {
 		if !strings.Contains(got, "us-east-1") {
 			t.Fatalf("%s did not retain the region: %s", verb, got)
 		}
+	}
+}
+
+// withoutOSKeyring pins the keyring-unavailable behavior for a test, restoring
+// the platform value afterward.
+func withoutOSKeyring(t *testing.T) {
+	t.Helper()
+	previous := OSKeyringAvailable
+	OSKeyringAvailable = false
+	t.Cleanup(func() { OSKeyringAvailable = previous })
+}
+
+// TestKeyringStoreModeUsesTheOSKeyringWhenAvailable covers the durable backend:
+// keyring mode persists through the OS keyring and does not leave an auth.json
+// behind. It skips on hosts without a keyring.
+func TestKeyringStoreModeUsesTheOSKeyringWhenAvailable(t *testing.T) {
+	if !OSKeyringAvailable {
+		t.Skip("no durable OS keyring backend on this host")
+	}
+	dir := t.TempDir()
+	store := NewStoreWithOptions(dir, &StoreOptions{Mode: AuthCredentialsStoreKeyring})
+	if err := store.Save(FromAPIKey("sk-keyring")); err != nil {
+		if strings.Contains(err.Error(), KeyringUnavailableError) {
+			t.Skipf("keyring unavailable: %v", err)
+		}
+		t.Fatalf("Save() error = %v", err)
+	}
+	t.Cleanup(func() { _, _ = store.Delete() })
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded == nil || loaded.OpenAIAPIKey != "sk-keyring" {
+		t.Fatalf("loaded auth = %+v", loaded)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "auth.json")); !os.IsNotExist(err) {
+		t.Fatalf("keyring save must not keep auth.json, stat err = %v", err)
+	}
+	removed, err := store.Delete()
+	if err != nil || !removed {
+		t.Fatalf("Delete = %v, %v", removed, err)
+	}
+	if _, err := store.Load(); err != nil {
+		t.Fatalf("Load after Delete error = %v", err)
 	}
 }
