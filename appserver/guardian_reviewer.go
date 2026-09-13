@@ -69,6 +69,9 @@ type modelGuardianReviewer struct {
 	// subagentThread reports whether the review's thread is a delegated
 	// subagent, which selects Rust's delegated_subagent approval source.
 	subagentThread func(threadID string) bool
+	// warn surfaces a guardian warning notification (Rust's
+	// EventMsg::GuardianWarning) for a timeout or a failed review.
+	warn func(threadID string, message string)
 }
 
 // defaultGuardianMaxToolCallLag mirrors Rust
@@ -428,6 +431,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "prompt_build_error"
 		emitReviewMetrics()
+		r.emitWarning(threadID, message)
 		return state.DecisionDenied, message, nil
 	}
 	store := r.store
@@ -461,6 +465,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			attribution.TerminalStatus = "failed_closed"
 			attribution.FailureReason = "session_error"
 			emitReviewMetrics()
+			r.emitWarning(threadID, message)
 			return state.DecisionDenied, message, nil
 		}
 	}
@@ -505,7 +510,9 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			attribution.TerminalStatus = "timed_out"
 			attribution.FailureReason = "timeout"
 			emitReviewMetrics()
-			return state.DecisionTimedOut, guardianTimeoutMessage(r.autoReviewMessagesForTurn(threadID, turnID)), finishErr
+			timeoutMessage := guardianTimeoutMessage(r.autoReviewMessagesForTurn(threadID, turnID))
+			r.emitWarning(threadID, timeoutMessage)
+			return state.DecisionTimedOut, timeoutMessage, finishErr
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(reviewCtx.Err(), context.Canceled) {
 			completed, finishErr := store.Abort(event.ID, "Guardian review was aborted.")
@@ -527,6 +534,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "session_error"
 		emitReviewMetrics()
+		r.emitWarning(threadID, message)
 		return state.DecisionDenied, message, nil
 	}
 	assessment, err := state.ParseAssessment([]byte(guardianAssessmentText(response)))
@@ -539,6 +547,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "parse_error"
 		emitReviewMetrics()
+		r.emitWarning(threadID, message)
 		return state.DecisionDenied, message, nil
 	}
 	completed, err := store.Complete(event.ID, *assessment)
@@ -642,6 +651,15 @@ func (r *modelGuardianReviewer) emit(threadID string, event *state.Event) {
 	if r != nil && r.notify != nil && event != nil {
 		r.notify(threadID, event)
 	}
+}
+
+// emitWarning surfaces a guardian warning notification (Rust's
+// EventMsg::GuardianWarning for a timeout or a failed review).
+func (r *modelGuardianReviewer) emitWarning(threadID, message string) {
+	if r == nil || r.warn == nil || strings.TrimSpace(message) == "" {
+		return
+	}
+	r.warn(threadID, message)
 }
 
 func (r *modelGuardianReviewer) recordDecision(threadID, turnID string, decision state.ReviewDecision) {

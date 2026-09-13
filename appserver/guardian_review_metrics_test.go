@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,12 +184,14 @@ func TestModelGuardianReviewerEmitsMetricsLikeRust(t *testing.T) {
 // subagent thread reports the delegated approval source.
 func TestModelGuardianReviewerFailureMetricsLikeRust(t *testing.T) {
 	metrics := state.NewTaskMetrics()
+	var warnings []string
 	reviewer := &modelGuardianReviewer{
 		agent: &guardianSessionRunner{agent: guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
 			return &model.AgentResponse{Message: "not-json"}, nil
 		})},
 		metrics:        metrics,
 		subagentThread: func(string) bool { return true },
+		warn:           func(_ string, message string) { warnings = append(warnings, message) },
 	}
 	decision, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{
 		Type: "apply_patch", CWD: t.TempDir(), Files: []string{"a.txt"},
@@ -213,12 +216,17 @@ func TestModelGuardianReviewerFailureMetricsLikeRust(t *testing.T) {
 	if records := guardianMetricRecords(metrics, telemetry.GuardianReviewTokenUsageMetric); len(records) != 0 {
 		t.Fatalf("token histograms = %#v", records)
 	}
+	// Rust warns the session about the failed review.
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "Automatic approval review failed:") {
+		t.Fatalf("warnings = %#v", warnings)
+	}
 }
 
 // A timed-out review reports Rust's denied decision with the timed_out terminal
 // status.
 func TestModelGuardianReviewerTimeoutMetricsLikeRust(t *testing.T) {
 	metrics := state.NewTaskMetrics()
+	var warnings []string
 	reviewer := &modelGuardianReviewer{
 		timeout: time.Millisecond,
 		agent: &guardianSessionRunner{agent: guardianAgentFunc(func(ctx context.Context, _ *model.AgentRequest) (*model.AgentResponse, error) {
@@ -226,6 +234,7 @@ func TestModelGuardianReviewerTimeoutMetricsLikeRust(t *testing.T) {
 			return nil, ctx.Err()
 		})},
 		metrics: metrics,
+		warn:    func(_ string, message string) { warnings = append(warnings, message) },
 	}
 	if _, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{
 		Type: "command", Source: state.CommandSourceShell, Command: "echo hi", CWD: t.TempDir(),
@@ -239,5 +248,8 @@ func TestModelGuardianReviewerTimeoutMetricsLikeRust(t *testing.T) {
 	if counters[0].Tags["decision"] != "denied" || counters[0].Tags["terminal_status"] != "timed_out" ||
 		counters[0].Tags["failure_reason"] != "timeout" {
 		t.Fatalf("counter tags = %#v", counters[0].Tags)
+	}
+	if len(warnings) != 1 || warnings[0] != state.GuardianTimeoutMessage() {
+		t.Fatalf("warnings = %#v", warnings)
 	}
 }

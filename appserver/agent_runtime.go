@@ -129,6 +129,12 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.fastDecision = r.emitGuardianV2FastDecision
 		modelReviewer.metrics = r.services.TurnMetrics
 		modelReviewer.subagentThread = r.turnThreadIsSubagent
+		modelReviewer.warn = func(threadID, message string) {
+			if strings.TrimSpace(message) == "" {
+				return
+			}
+			r.notify(NotificationGuardianWarning, &GuardianWarningNotification{ThreadID: threadID, Message: message})
+		}
 		r.services.GuardianReviewer = reviewer
 		if prewarm {
 			go func() {
