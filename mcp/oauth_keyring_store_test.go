@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -16,6 +17,49 @@ type fakeKeyring struct {
 	values   map[string]string
 	failSave error
 	failLoad error
+}
+
+// TestComputeMCPOAuthStoreKeyLikeRust pins the store-key shape: enterprise
+// (ema-idp:) credentials are isolated per Codex home, ordinary servers ignore
+// the home, and executor-owned servers use the ":" separator.
+func TestComputeMCPOAuthStoreKeyLikeRust(t *testing.T) {
+	homeA := t.TempDir()
+	homeB := t.TempDir()
+	keyA, err := computeMCPOAuthStoreKey(homeA, "ema-idp:acme", "https://idp.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyB, err := computeMCPOAuthStoreKey(homeB, "ema-idp:acme", "https://idp.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keyA == keyB {
+		t.Fatal("enterprise store keys must be isolated per codex home")
+	}
+	if !strings.HasPrefix(keyA, "ema-idp:acme|") {
+		t.Fatalf("enterprise key = %q", keyA)
+	}
+	ordinaryA, err := computeMCPOAuthStoreKey(homeA, "docs", "https://example.com/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinaryB, err := computeMCPOAuthStoreKey(homeB, "docs", "https://example.com/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordinaryA != ordinaryB {
+		t.Fatalf("ordinary store keys must not depend on the codex home: %q vs %q", ordinaryA, ordinaryB)
+	}
+	executor, err := computeMCPOAuthStoreKey("", "executor:acme", "https://example.com/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(executor, "executor:acme:") {
+		t.Fatalf("executor key = %q", executor)
+	}
+	if _, err := computeMCPOAuthStoreKey("", "ema-idp:acme", "https://idp.example.com"); err == nil {
+		t.Fatal("enterprise key without a codex home must fail")
+	}
 }
 
 func newFakeKeyring() *fakeKeyring {

@@ -19,7 +19,7 @@ func TestEnterpriseGenerationFileLifecycle(t *testing.T) {
 	}
 	defer file.close()
 
-	storeKey, err := computeMCPOAuthStoreKey("enterprise", "https://idp.example.com")
+	storeKey, err := computeMCPOAuthStoreKey(home, "enterprise", "https://idp.example.com")
 	if err != nil {
 		t.Fatalf("store key: %v", err)
 	}

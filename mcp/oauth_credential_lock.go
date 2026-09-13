@@ -31,7 +31,7 @@ type mcpOAuthCredentialLock struct {
 // acquireMCPOAuthCredentialLockForServer acquires the credential lock for one
 // server credential, scoped to the same Codex home as the OAuth store.
 func acquireMCPOAuthCredentialLockForServer(codexHome string, serverName string, serverURL string) (*mcpOAuthCredentialLock, error) {
-	storeKey, err := computeMCPOAuthStoreKey(serverName, serverURL)
+	storeKey, err := computeMCPOAuthStoreKey(codexHome, serverName, serverURL)
 	if err != nil {
 		return nil, err
 	}

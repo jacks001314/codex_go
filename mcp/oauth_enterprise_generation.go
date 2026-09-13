@@ -41,7 +41,7 @@ func openMCPOAuthEnterpriseGenerationFile(codexHome string, credentialName strin
 	if codexHome == "" {
 		return nil, errors.New("failed to open enterprise login generation: CODEX_HOME is required")
 	}
-	storeKey, err := computeMCPOAuthStoreKey(credentialName, issuer)
+	storeKey, err := computeMCPOAuthStoreKey(codexHome, credentialName, issuer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open enterprise login generation: %w", err)
 	}

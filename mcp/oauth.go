@@ -25,6 +25,9 @@ const (
 	// mcpOAuthKeyringService mirrors Rust's `KEYRING_SERVICE`; the account is the
 	// computed store key for the server.
 	mcpOAuthKeyringService = "Codex MCP Credentials"
+	// mcpOAuthEnterpriseServerPrefix marks enterprise (EMA) credentials, whose
+	// store key also covers the Codex home (Rust `ema-idp:`).
+	mcpOAuthEnterpriseServerPrefix = "ema-idp:"
 )
 
 type OAuthTokenSet struct {
@@ -168,7 +171,7 @@ func (s *OAuthStore) Load(serverName string, serverURL string) (*OAuthTokenSet, 
 // loadFromKeyring reads the direct-keyring entry for the server
 // (Rust load_oauth_tokens_from_direct_keyring).
 func (s *OAuthStore) loadFromKeyring(serverName string, serverURL string) (*OAuthTokenSet, error) {
-	key, err := computeMCPOAuthStoreKey(serverName, serverURL)
+	key, err := computeMCPOAuthStoreKey(s.CodexHome, serverName, serverURL)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +196,7 @@ func (s *OAuthStore) loadFromFile(serverName string, serverURL string) (*OAuthTo
 	if err != nil || len(file) == 0 {
 		return nil, err
 	}
-	key, err := computeMCPOAuthStoreKey(serverName, serverURL)
+	key, err := computeMCPOAuthStoreKey(s.CodexHome, serverName, serverURL)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +264,7 @@ func (s *OAuthStore) Save(tokens *OAuthTokenSet) error {
 // saveToKeyring persists tokens in the direct keyring
 // (Rust save_oauth_tokens_to_direct_keyring).
 func (s *OAuthStore) saveToKeyring(tokens *OAuthTokenSet) error {
-	key, err := computeMCPOAuthStoreKey(tokens.ServerName, tokens.ServerURL)
+	key, err := computeMCPOAuthStoreKey(s.CodexHome, tokens.ServerName, tokens.ServerURL)
 	if err != nil {
 		return err
 	}
@@ -287,7 +290,7 @@ func (s *OAuthStore) saveWithLockHeld(tokens *OAuthTokenSet) error {
 	if file == nil {
 		file = map[string]*oauthFallbackEntry{}
 	}
-	key, err := computeMCPOAuthStoreKey(tokens.ServerName, tokens.ServerURL)
+	key, err := computeMCPOAuthStoreKey(s.CodexHome, tokens.ServerName, tokens.ServerURL)
 	if err != nil {
 		return err
 	}
@@ -333,7 +336,7 @@ func (s *OAuthStore) Delete(serverName string, serverURL string) (bool, error) {
 // deleteKeyringEntry removes the direct-keyring entry for the server
 // (Rust delete_oauth_tokens_from_direct_keyring).
 func (s *OAuthStore) deleteKeyringEntry(serverName string, serverURL string) (bool, error) {
-	key, err := computeMCPOAuthStoreKey(serverName, serverURL)
+	key, err := computeMCPOAuthStoreKey(s.CodexHome, serverName, serverURL)
 	if err != nil {
 		return false, err
 	}
@@ -349,7 +352,7 @@ func (s *OAuthStore) deleteWithLockHeld(serverName string, serverURL string) (bo
 	if err != nil || len(file) == 0 {
 		return false, err
 	}
-	key, err := computeMCPOAuthStoreKey(serverName, serverURL)
+	key, err := computeMCPOAuthStoreKey(s.CodexHome, serverName, serverURL)
 	if err != nil {
 		return false, err
 	}
@@ -548,18 +551,31 @@ func oauthFallbackEntryFromTokenSet(tokens *OAuthTokenSet) *oauthFallbackEntry {
 	return entry
 }
 
-func computeMCPOAuthStoreKey(serverName string, serverURL string) (string, error) {
+// computeMCPOAuthStoreKey mirrors Rust's `compute_store_key`: the readable name,
+// a separator ("." for executor-owned servers), and the first 16 hex digits of
+// the SHA-256 of the credential payload. Enterprise credentials add the
+// canonical Codex home to the hashed payload because the OS keyring is shared
+// across homes.
+func computeMCPOAuthStoreKey(codexHome string, serverName string, serverURL string) (string, error) {
 	serverName = strings.TrimSpace(serverName)
 	serverURL = strings.TrimSpace(serverURL)
 	if serverName == "" || serverURL == "" {
 		return "", fmt.Errorf("MCP OAuth server name and URL are required")
 	}
 	executorOwned := strings.HasPrefix(serverName, "executor:")
+	enterpriseOwned := strings.HasPrefix(serverName, mcpOAuthEnterpriseServerPrefix)
 	serverName = strings.TrimPrefix(serverName, "local:")
 	payload := map[string]any{
 		"type":    mcpOAuthServerType,
 		"url":     serverURL,
 		"headers": map[string]string{},
+	}
+	if enterpriseOwned {
+		canonical, err := canonicalMCPOAuthCodexHome(codexHome)
+		if err != nil {
+			return "", err
+		}
+		payload["codex_home"] = canonical
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -571,6 +587,24 @@ func computeMCPOAuthStoreKey(serverName string, serverURL string) (string, error
 		separator = ":"
 	}
 	return serverName + separator + hex.EncodeToString(sum[:])[:16], nil
+}
+
+// canonicalMCPOAuthCodexHome mirrors Rust's use of find_codex_home +
+// create_dir_all + canonicalize for the enterprise store key.
+func canonicalMCPOAuthCodexHome(codexHome string) (string, error) {
+	codexHome = strings.TrimSpace(codexHome)
+	if codexHome == "" {
+		return "", errors.New("MCP OAuth enterprise credentials require CODEX_HOME")
+	}
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		return "", err
+	}
+	if canonical, err := filepath.EvalSymlinks(codexHome); err == nil {
+		if absolute, absErr := filepath.Abs(canonical); absErr == nil {
+			return absolute, nil
+		}
+	}
+	return filepath.Abs(codexHome)
 }
 
 func tokenNeedsRefresh(expiresAtMillis *int64, now time.Time) bool {
