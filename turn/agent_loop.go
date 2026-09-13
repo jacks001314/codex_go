@@ -77,6 +77,17 @@ type AgentLoop struct {
 	executedToolCalls *ExecutedToolCallRecorder
 }
 
+// AgentStepSettings are the execution settings that issue one sampling step
+// (Rust session::step_settings::ResolvedStepSettings as the loop observes it).
+// The loop asks for them before every step after the first, so a mid-turn
+// turn/settings/update applies to the following step instead of only to the
+// next turn.
+type AgentStepSettings struct {
+	Model           string
+	ReasoningEffort string
+	ClientMetadata  map[string]string
+}
+
 type AgentLoopRequest struct {
 	Prompt                  string
 	Instructions            string
@@ -93,24 +104,28 @@ type AgentLoopRequest struct {
 	// after InputItems when there is no prompt) for the first sampling request,
 	// then folded into the turn's input for later iterations. Rust records
 	// trusted reasoning-effort configuration updates after accepted input.
-	PostPromptInputItems            []any
-	SteerMailbox                    *SteerMailbox
-	Tools                           []any
-	HostedTools                     []any
-	Store                           bool
-	PreviousResponseID              string
-	ParallelToolCalls               bool
-	ReasoningEffort                 string
-	ReasoningSummary                string
-	ConcurrentReasoningSummaries    bool
-	ModelVerbosity                  string
-	IncludeTimingMetrics            bool
-	BetaFeaturesHeader              string
-	ItemIDsEnabled                  bool
-	ServiceTier                     string
-	PromptCacheKey                  string
-	ClientMetadata                  map[string]string
-	ClientMetadataTransform         ClientMetadataTransform
+	PostPromptInputItems         []any
+	SteerMailbox                 *SteerMailbox
+	Tools                        []any
+	HostedTools                  []any
+	Store                        bool
+	PreviousResponseID           string
+	ParallelToolCalls            bool
+	ReasoningEffort              string
+	ReasoningSummary             string
+	ConcurrentReasoningSummaries bool
+	ModelVerbosity               string
+	IncludeTimingMetrics         bool
+	BetaFeaturesHeader           string
+	ItemIDsEnabled               bool
+	ServiceTier                  string
+	PromptCacheKey               string
+	ClientMetadata               map[string]string
+	ClientMetadataTransform      ClientMetadataTransform
+	// StepSettings, when set, refreshes the model, reasoning effort, and client
+	// metadata of every step after the first (Rust Session::update_step_settings
+	// reaching a later sampling step).
+	StepSettings                    func() *AgentStepSettings
 	AttestationProvider             codexapi.AttestationProvider
 	OutputSchema                    any
 	DisableHostedImageGeneration    bool
@@ -225,6 +240,23 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 	previousResponseID := strings.TrimSpace(request.PreviousResponseID)
 	clientMetadata := transformClientMetadata(request.ClientMetadata, request.ClientMetadataTransform)
 	for iteration := 0; ; iteration++ {
+		// The step's captured settings refresh the step first, so a mid-turn
+		// settings update applies here (Rust Session::update_step_settings); a
+		// steer's own metadata then wins for the keys it defines, and later
+		// steps keep it because the steer path records it on the turn.
+		stepModel := strings.TrimSpace(request.Model)
+		stepReasoningEffort := request.ReasoningEffort
+		if iteration > 0 && request.StepSettings != nil {
+			if settings := request.StepSettings(); settings != nil {
+				if modelID := strings.TrimSpace(settings.Model); modelID != "" {
+					stepModel = modelID
+				}
+				stepReasoningEffort = settings.ReasoningEffort
+				if len(settings.ClientMetadata) > 0 {
+					clientMetadata = transformClientMetadata(settings.ClientMetadata, request.ClientMetadataTransform)
+				}
+			}
+		}
 		if steer := drainSteer(l.steerMailbox, request); steer != nil {
 			if len(steer.InputItems) > 0 {
 				result.InputItems = append(result.InputItems, steer.InputItems...)
@@ -262,7 +294,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			InputItems:                   inputItems,
 			PostPromptInputItems:         postPromptInputItemsForIteration(postPromptItems, iteration),
 			Tools:                        append([]any(nil), request.Tools...),
-			Model:                        request.Model,
+			Model:                        stepModel,
 			ProviderID:                   request.ProviderID,
 			TaskKind:                     request.TaskKind,
 			ThreadID:                     request.ThreadID,
@@ -271,7 +303,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			Store:                        request.Store,
 			PreviousResponseID:           previousResponseID,
 			ParallelToolCalls:            request.ParallelToolCalls,
-			ReasoningEffort:              request.ReasoningEffort,
+			ReasoningEffort:              stepReasoningEffort,
 			ReasoningSummary:             request.ReasoningSummary,
 			ConcurrentReasoningSummaries: request.ConcurrentReasoningSummaries,
 			ModelVerbosity:               request.ModelVerbosity,

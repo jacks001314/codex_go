@@ -110,8 +110,15 @@ func (r *RuntimeRouter) mcpTurnMetadataProvider(threadID string, turnID string) 
 		if active == nil || active.RunConfig == nil {
 			return nil
 		}
+		// The document describes the issuing step, so a mid-turn settings update
+		// refreshes the captured model and reasoning effort first (Rust
+		// ExecutionMetadata::from_settings).
+		metadata := active.RunConfig.ClientMetadata
+		if refreshed := stepTurnClientMetadata(metadata, active.RunConfig.Model, active.RunConfig.ReasoningEffort); len(refreshed) > 0 {
+			metadata = refreshed
+		}
 		return turn.MCPTurnMetadataFromResponsesMetadata(
-			active.RunConfig.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader],
+			metadata[codexapi.ClientCodexTurnMetadataHeader],
 			r.turnUserInputRequested(threadID, turnID),
 		)
 	}
@@ -1517,6 +1524,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		PromptCacheKey:               runConfig.PromptCacheKey,
 		ServiceTier:                  runConfig.ServiceTier,
 		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
+		StepSettings:                 r.turnStepSettingsProvider(threadID, turnID),
 		AttestationProvider:          runConfig.AttestationProvider,
 		OutputSchema:                 params.OutputSchema,
 		PostToolInputItems:           runConfig.PostToolInputItems,
@@ -7055,7 +7063,20 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 	if r == nil || params == nil || len(params.ResponsesAPIMetadata) == 0 {
 		return nil
 	}
-	active := r.activeRuntimeTurnStateSnapshot(params.ThreadID, params.ExpectedTurnID)
+	return r.activeTurnClientMetadata(params.ThreadID, params.ExpectedTurnID, params.ResponsesAPIMetadata)
+}
+
+// activeTurnClientMetadata rebuilds a running turn's request metadata from its
+// captured settings and lineage (Rust ExecutionMetadata::from_settings): the
+// caller supplies any per-request extra metadata to merge over the configured
+// entries.
+func (r *RuntimeRouter) activeTurnClientMetadata(threadID string, turnID string, requestMetadata map[string]string) map[string]string {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
 	if active == nil {
 		return nil
 	}
@@ -7063,9 +7084,9 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 	if err != nil {
 		cfg = nil
 	}
-	extraMetadata := turn.MergeClientMetadata(nil, params.ResponsesAPIMetadata)
+	extraMetadata := turn.MergeClientMetadata(nil, requestMetadata)
 	if cfg != nil {
-		extraMetadata = turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), params.ResponsesAPIMetadata)
+		extraMetadata = turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), requestMetadata)
 	}
 	installationID := ""
 	if r.services.Config != nil {
@@ -7087,14 +7108,14 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 			nodeReplDisabled = info.NodeReplDisabled
 		}
 	}
-	lineage := r.responsesMetadataLineage(params.ThreadID)
+	lineage := r.responsesMetadataLineage(threadID)
 	parentTurnID := ""
 	rootTurnID := ""
 	if active.Params != nil {
 		parentTurnID = active.Params.ParentTurnID
 		rootTurnID = active.Params.RootTurnID
 	}
-	rootTurnID = effectiveRootTurnID(rootTurnID, params.ExpectedTurnID, parentTurnID, lineage.SubagentHeader)
+	rootTurnID = effectiveRootTurnID(rootTurnID, turnID, parentTurnID, lineage.SubagentHeader)
 	reasoningEffort := ""
 	if active.RunConfig != nil {
 		reasoningEffort = strings.TrimSpace(active.RunConfig.ReasoningEffort)
@@ -7104,10 +7125,10 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 	}
 	return turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 		InstallationID:             installationID,
-		SessionID:                  firstNonEmpty(lineage.SessionID, params.ThreadID),
-		ThreadID:                   params.ThreadID,
-		TurnID:                     params.ExpectedTurnID,
-		WindowID:                   params.ThreadID + ":1",
+		SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
+		ThreadID:                   threadID,
+		TurnID:                     turnID,
+		WindowID:                   threadID + ":1",
 		RequestKind:                codexapi.ClientRequestTurn,
 		ForkedFromThreadID:         lineage.ForkedFromThreadID,
 		ParentThreadID:             lineage.ParentThreadID,
@@ -7120,12 +7141,73 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 		ReasoningEffort:            reasoningEffort,
 		NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 		NodeReplDisabled:           &nodeReplDisabled,
-		AnalyticsEnabled:           r.analyticsEnabledOptionForThread(params.ThreadID),
+		AnalyticsEnabled:           r.analyticsEnabledOptionForThread(threadID),
 		Extra:                      extraMetadata,
 		ResponsesAPIMetadata:       cfg.ResponsesAPIMetadata(),
 		StartedAtMS:                active.StartedAtMS,
 		UseResponsesLite:           r.modelUsesResponsesLite(modelID),
 	})
+}
+
+// turnStepSettingsProvider reports the settings that issue each sampling step of
+// a running turn (Rust session::step_settings::ResolvedStepSettings): a mid-turn
+// turn/settings/update is written to the active turn, so the next step's model,
+// reasoning effort, and request metadata describe the new settings instead of
+// the turn's initial ones.
+func (r *RuntimeRouter) turnStepSettingsProvider(threadID string, turnID string) func() *turn.AgentStepSettings {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	return func() *turn.AgentStepSettings {
+		if r == nil {
+			return nil
+		}
+		active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+		if active == nil {
+			return nil
+		}
+		settings := &turn.AgentStepSettings{}
+		if active.RunConfig != nil {
+			settings.Model = strings.TrimSpace(active.RunConfig.Model)
+			settings.ReasoningEffort = strings.TrimSpace(active.RunConfig.ReasoningEffort)
+			settings.ClientMetadata = stepTurnClientMetadata(active.RunConfig.ClientMetadata, settings.Model, settings.ReasoningEffort)
+		}
+		if settings.Model == "" && active.Params != nil {
+			settings.Model = strings.TrimSpace(active.Params.Model)
+		}
+		return settings
+	}
+}
+
+// stepTurnClientMetadata refreshes the captured model and reasoning effort inside
+// a turn's request metadata document while preserving every other entry
+// (Rust ExecutionMetadata::apply_to writes both into the metadata extra).
+func stepTurnClientMetadata(metadata map[string]string, modelID string, reasoningEffort string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	raw := strings.TrimSpace(metadata[codexapi.ClientCodexTurnMetadataHeader])
+	if raw == "" {
+		return nil
+	}
+	var document map[string]any
+	if err := json.Unmarshal([]byte(raw), &document); err != nil || len(document) == 0 {
+		return nil
+	}
+	if trimmed := strings.TrimSpace(modelID); trimmed != "" {
+		document[codexapi.ModelKey] = trimmed
+	}
+	if trimmed := strings.TrimSpace(reasoningEffort); trimmed != "" {
+		document[codexapi.ReasoningEffortKey] = trimmed
+	} else {
+		delete(document, codexapi.ReasoningEffortKey)
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		return nil
+	}
+	out := cloneStringMap(metadata)
+	out[codexapi.ClientCodexTurnMetadataHeader] = string(encoded)
+	return out
 }
 
 // responsesPromptCacheKey mirrors Rust ModelClient::prompt_cache_key plus the

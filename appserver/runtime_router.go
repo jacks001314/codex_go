@@ -6729,12 +6729,19 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 		}
 	}
 	noticeEnabled := r.imageResizeNoticeEnabledForSteer(&params)
+	steerMetadata := r.steerClientMetadata(&params)
 	if inputItems := inputItemsFromTurnSteerWithNotice(&params, noticeEnabled); len(inputItems) > 0 {
+		if len(steerMetadata) > 0 {
+			// Rust merges a steer's responsesapi_client_metadata into the turn's
+			// metadata state, so the turn's later sampling steps keep reporting
+			// it instead of falling back to the turn-start entries.
+			r.rememberTurnSteerMetadata(params.ThreadID, params.ExpectedTurnID, steerMetadata)
+		}
 		if err := r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{
 			ThreadID:       params.ThreadID,
 			TurnID:         params.ExpectedTurnID,
 			InputItems:     inputItems,
-			ClientMetadata: r.steerClientMetadata(&params),
+			ClientMetadata: steerMetadata,
 		}); err != nil {
 			return nil, err
 		}
@@ -6742,6 +6749,28 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	r.noteAcceptedTurnSteer(params.ThreadID, params.ExpectedTurnID)
 	r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, &params, stringPtrIfNotEmpty(response.TurnID), telemetry.TurnSteerResultAccepted, nil, createdAt)
 	return response, nil
+}
+
+// rememberTurnSteerMetadata records a steer's request metadata on the active
+// turn so every later sampling step reports it (Rust's
+// TurnMetadataState::set_responsesapi_client_metadata merge).
+func (r *RuntimeRouter) rememberTurnSteerMetadata(threadID string, turnID string, metadata map[string]string) {
+	if r == nil || len(metadata) == 0 {
+		return
+	}
+	r.threads.UpdateTurn(strings.TrimSpace(threadID), strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
+		if active == nil || active.RunConfig == nil {
+			return
+		}
+		merged := cloneStringMap(active.RunConfig.ClientMetadata)
+		if merged == nil {
+			merged = map[string]string{}
+		}
+		for key, value := range metadata {
+			merged[key] = value
+		}
+		active.RunConfig.ClientMetadata = merged
+	})
 }
 
 func (r *RuntimeRouter) updateActiveTurnApprovalsReviewer(params *turn.TurnSteerParams) {

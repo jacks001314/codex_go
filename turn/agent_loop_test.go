@@ -875,3 +875,60 @@ func resultInputItemsHaveText(items []any, want string) bool {
 	}
 	return false
 }
+
+// Rust Session::update_step_settings: a settings update during a turn applies to
+// the following sampling step, so its request carries the new model, reasoning
+// effort, and request metadata instead of the turn's initial ones.
+func TestAgentLoopRefreshesStepSettingsLikeRust(t *testing.T) {
+	agent := &failAfterToolLoopAgent{recover: true}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:      agent,
+		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}),
+		MaxTurns:   3,
+	})
+
+	stepCalls := 0
+	_, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt:          "run echo",
+		Model:           "gpt-initial",
+		ReasoningEffort: "low",
+		ClientMetadata: map[string]string{
+			"x-codex-turn-metadata": `{"thread_id":"thread-1","model":"gpt-initial","reasoning_effort":"low"}`,
+		},
+		StepSettings: func() *AgentStepSettings {
+			stepCalls++
+			return &AgentStepSettings{
+				Model:           "gpt-updated",
+				ReasoningEffort: "high",
+				ClientMetadata: map[string]string{
+					"x-codex-turn-metadata": `{"thread_id":"thread-1","model":"gpt-updated","reasoning_effort":"high"}`,
+				},
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(agent.requests) != 2 {
+		t.Fatalf("sampling requests = %d, want 2", len(agent.requests))
+	}
+	if first := agent.requests[0]; first.Model != "gpt-initial" || first.ReasoningEffort != "low" {
+		t.Fatalf("first step settings = %q/%q, want the turn's initial ones", first.Model, first.ReasoningEffort)
+	}
+	second := agent.requests[1]
+	if second.Model != "gpt-updated" || second.ReasoningEffort != "high" {
+		t.Fatalf("second step settings = %q/%q, want the updated ones", second.Model, second.ReasoningEffort)
+	}
+	if metadata := second.ClientMetadata["x-codex-turn-metadata"]; !strings.Contains(metadata, "gpt-updated") {
+		t.Fatalf("second step metadata = %q, want the updated model", metadata)
+	}
+	if stepCalls != 1 {
+		t.Fatalf("step settings callbacks = %d, want 1 (only after the first step)", stepCalls)
+	}
+}
