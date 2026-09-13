@@ -4399,6 +4399,25 @@ func threadStartEffectivePermissionsTrustProject(cfg *config.Config, cwd string,
 	return len(profile.SandboxPolicy.GetWritableRootsWithCWD(cwd)) > 0
 }
 
+// rejectDisallowedPermissionProfileOverride mirrors the Rust app-server checks
+// (turn_processor build_thread_settings_overrides and
+// command_exec_processor): an explicit permission-profile override that managed
+// requirements disallow is rejected with the requirement warning, while the
+// startup config path is allowed to fall back to the required default.
+func rejectDisallowedPermissionProfileOverride(cfg *config.Config, prefix string, explicit *string) error {
+	if cfg == nil || explicit == nil {
+		return nil
+	}
+	selected := strings.TrimSpace(*explicit)
+	if selected == "" {
+		return nil
+	}
+	if warning := cfg.PermissionProfileRequirementWarningFor(selected); warning != "" {
+		return jsonRPCInvalidRequest(prefix + ": " + warning)
+	}
+	return nil
+}
+
 func threadStartTrustTarget(cwd string) string {
 	cwd = cleanRuntimeWorkspaceRoot(cwd)
 	if cwd == "" {
@@ -5726,6 +5745,19 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if params.Permissions != nil && turnStartSandboxPolicyPresent(params.SandboxPolicy) {
 		return nil, jsonRPCInvalidRequest("`permissions` cannot be combined with `sandboxPolicy`")
 	}
+	// Rust turn_processor build_thread_settings_overrides: an explicit settings
+	// update whose permission profile managed requirements disallow is rejected
+	// before the turn starts, instead of accepting the requirement-constrained
+	// fallback the startup config path allows.
+	if params.Permissions != nil {
+		cfg, cfgErr := r.effectiveConfigForTurn(params)
+		if cfgErr != nil {
+			return nil, cfgErr
+		}
+		if err := rejectDisallowedPermissionProfileOverride(cfg, "invalid thread settings override", params.Permissions); err != nil {
+			return nil, err
+		}
+	}
 	settingsUpdate, hasSettingsUpdate := turnStartSettingsUpdateParams(params)
 	if err := r.prepareTurnStartParams(params); err != nil {
 		return nil, err
@@ -7001,6 +7033,21 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		}
 		if params.Permissions != nil && params.SandboxPolicy != nil {
 			return nil, jsonRPCInvalidRequest("`permissions` cannot be combined with `sandboxPolicy`")
+		}
+		// Rust turn_processor build_thread_settings_overrides rejects an
+		// explicit permission profile that managed requirements disallow.
+		if params.Permissions != nil {
+			cwd, cwdErr := r.threadShellCommandCWD(params.ThreadID)
+			if cwdErr != nil {
+				return nil, jsonRPCInvalidRequest("invalid thread settings override: " + cwdErr.Error())
+			}
+			cfg, cfgErr := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: params.ThreadID, CWD: cwd})
+			if cfgErr != nil {
+				return nil, jsonRPCInvalidRequest("invalid thread settings override: " + cfgErr.Error())
+			}
+			if err := rejectDisallowedPermissionProfileOverride(cfg, "invalid thread settings override", params.Permissions); err != nil {
+				return nil, err
+			}
 		}
 		service := r.requireThreadExtras()
 		response, err := service.UpdateSettings(&params)
@@ -11061,6 +11108,9 @@ func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecRespons
 	options := &CommandExecOptions{ConnectionID: request.normalizedConnectionID()}
 	if r != nil && r.services.Config != nil {
 		options.PermissionProfileResolver = r.commandExecPermissionProfileResolver()
+		if requirements := r.services.Config.Requirements(); requirements != nil {
+			options.PermissionRequirements = requirements.Requirements
+		}
 		// Rust c9c6c0daa9: the active feature configuration is authoritative over
 		// client-provided environment values.
 		options.ApplyPatchPreserveLineEndings = r.applyPatchPreserveLineEndingsFromConfig()

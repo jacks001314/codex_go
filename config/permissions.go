@@ -204,7 +204,18 @@ func (c *Config) PermissionProfileRequirementWarning() string {
 		return ""
 	}
 	configured := stringFromConfigValue(c.Values["default_permissions"])
-	_, warning, err := c.resolveRequirementDefaultPermissionProfile(configured)
+	return c.PermissionProfileRequirementWarningFor(configured)
+}
+
+// PermissionProfileRequirementWarningFor reports the requirement fallback
+// warning for an explicit profile selection. The startup config path accepts the
+// fallback; an explicit request override must be rejected instead (Rust's
+// app-server checks the startup warning for the override-driven load).
+func (c *Config) PermissionProfileRequirementWarningFor(selected string) string {
+	if c == nil {
+		return ""
+	}
+	_, warning, err := c.resolveRequirementDefaultPermissionProfile(selected)
 	if err != nil {
 		return ""
 	}

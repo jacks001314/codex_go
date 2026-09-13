@@ -199,6 +199,63 @@ func TestCommandExecSandboxPolicyRequiringRunnerUsesSandboxRunner(t *testing.T) 
 	}
 }
 
+// Mirrors Rust command_exec_processor: an explicit permissionProfile the managed
+// requirements disallow is rejected with the requirement warning instead of
+// silently taking the startup fallback.
+func TestCommandExecRejectsDisallowedPermissionProfileOverrideLikeRust(t *testing.T) {
+	service := NewCommandExecService()
+	cwd := t.TempDir()
+	disallowed := ":danger-full-access"
+	required := "managed"
+	requirements := &config.ConfigRequirements{
+		DefaultPermissions:        &required,
+		AllowedPermissionProfiles: map[string]bool{"managed": true},
+	}
+	params := &CommandExecParams{
+		Command:           commandExecTestOutputCommand("ok", ""),
+		PermissionProfile: &disallowed,
+	}
+	resolverCalled := false
+	_, err := service.ExecuteWithOptions(context.Background(), params, cwd, nil, &CommandExecOptions{
+		PermissionRequirements: requirements,
+		PermissionProfileResolver: func(gotProfileID string, gotCWD string) (*CommandExecPermissionProfileResolution, error) {
+			resolverCalled = true
+			return nil, nil
+		},
+	})
+	if resolverCalled {
+		t.Fatal("resolver was called for a profile the requirements disallow")
+	}
+	want := "invalid permission profile: Configured value for `permission_profile` is disallowed by requirements; falling back from `:danger-full-access` to required value `managed`."
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+
+	// An allowed profile resolves through the request's own resolver.
+	oldRunner := runCommandExecSandboxed
+	runCommandExecSandboxed = func(ctx context.Context, req *tool.ShellRequest) (*tool.ShellResult, error) {
+		return &tool.ShellResult{ExitCode: 0, Stdout: "ok"}, nil
+	}
+	defer func() { runCommandExecSandboxed = oldRunner }()
+	allowed := "managed"
+	params.PermissionProfile = &allowed
+	resolverCalled = false
+	response, err := service.ExecuteWithOptions(context.Background(), params, cwd, nil, &CommandExecOptions{
+		PermissionRequirements: requirements,
+		PermissionProfileResolver: func(gotProfileID string, gotCWD string) (*CommandExecPermissionProfileResolution, error) {
+			resolverCalled = true
+			profile := sandbox.WorkspaceWritePermissionProfile()
+			return &CommandExecPermissionProfileResolution{ID: gotProfileID, Profile: &profile}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteWithOptions() error = %v", err)
+	}
+	if !resolverCalled || response == nil || response.ExitCode != 0 {
+		t.Fatalf("resolverCalled = %v response = %+v", resolverCalled, response)
+	}
+}
+
 func TestCommandExecCustomPermissionProfileResolverLikeRust(t *testing.T) {
 	service := NewCommandExecService()
 	cwd := t.TempDir()

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/config"
 	"codex_go/envutil"
 	codexexec "codex_go/exec"
 	"codex_go/network"
@@ -146,6 +147,10 @@ type CommandExecOptions struct {
 	// weaken them. They are merged into the resolved profile and conflicting
 	// overrides are rejected.
 	ManagedDenyReadEntries []sandbox.FileSystemSandboxEntry
+	// PermissionRequirements carries the managed requirements so an explicit
+	// permissionProfile override the allow-list disallows is rejected (Rust
+	// command_exec_processor).
+	PermissionRequirements *config.ConfigRequirements
 	// ApplyPatchPreserveLineEndings carries the apply_patch line-ending
 	// rollout state (Rust c9c6c0daa9) into command/exec child processes.
 	ApplyPatchPreserveLineEndings bool
@@ -753,6 +758,14 @@ func resolveCommandExecSandbox(params *CommandExecParams, cwd string, resolver C
 		profileID := strings.TrimSpace(*params.PermissionProfile)
 		if profileID == "" {
 			return nil, jsonRPCInvalidRequest("command/exec permissionProfile must not be empty")
+		}
+		// Rust command_exec_processor: an explicit permission-profile override
+		// that requirements disallow is rejected instead of accepting the
+		// requirement-constrained fallback the startup config path allows.
+		if options != nil && options.PermissionRequirements != nil {
+			if warning := (&config.Config{Requirements: options.PermissionRequirements}).PermissionProfileRequirementWarningFor(profileID); warning != "" {
+				return nil, jsonRPCInvalidRequest("invalid permission profile: " + warning)
+			}
 		}
 		resolved, err := resolver(profileID, cwd)
 		if err != nil {
