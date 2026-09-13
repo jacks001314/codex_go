@@ -68,6 +68,9 @@ type MetricsClientOptions struct {
 	HTTPClient     HTTPDoer
 	// TLS configures the OTLP HTTP transport when no HTTPClient is supplied.
 	TLS *OTLPHTTPTLSConfig
+	// Protocol selects the OTLP HTTP payload encoding (json by default, or
+	// binary for the protobuf body).
+	Protocol string
 	// Statsig marks the built-in metrics route: it resolves the Statsig endpoint
 	// when that build enables it and applies the Statsig-disabled metric list.
 	Statsig bool
@@ -188,6 +191,7 @@ func NewMetricsClient(options MetricsClientOptions) *MetricsClient {
 		HTTPClient: options.HTTPClient,
 		Timeout:    options.Timeout,
 		TLS:        options.TLS,
+		Protocol:   options.Protocol,
 	})
 	if client.exporter == nil {
 		return client

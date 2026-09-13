@@ -97,12 +97,14 @@ func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
 }
 
 // metricsClientOptions maps the resolved metrics exporter onto the client. The
-// Go exporter speaks OTLP/HTTP JSON only, so the gRPC and HTTP-binary transports
-// Rust supports disable export here and are reported instead.
+// Go exporter speaks OTLP/HTTP (JSON or binary protobuf); the gRPC transport
+// Rust supports disables export here and is reported instead.
 func metricsClientOptions(settings OtelSettings, exporter OtelExporter) (MetricsClientOptions, bool) {
 	switch exporter.Kind {
 	case OtelExporterOtlpHTTP:
-		if exporter.Protocol != "" && exporter.Protocol != OtelHTTPProtocolJSON {
+		switch exporter.Protocol {
+		case "", OtelHTTPProtocolJSON, OtelHTTPProtocolBinary:
+		default:
 			slog.Warn("OTLP HTTP metrics protocol is not supported", "protocol", exporter.Protocol)
 			return MetricsClientOptions{}, false
 		}
@@ -113,6 +115,7 @@ func metricsClientOptions(settings OtelSettings, exporter OtelExporter) (Metrics
 			Endpoint:       exporter.Endpoint,
 			Headers:        exporter.Headers,
 			TLS:            exporter.TLS,
+			Protocol:       exporter.Protocol,
 		}, true
 	case OtelExporterOtlpGRPC:
 		slog.Warn("OTLP gRPC metrics export is not supported", "endpoint", exporter.Endpoint)

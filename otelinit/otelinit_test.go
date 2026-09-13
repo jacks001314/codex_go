@@ -93,22 +93,36 @@ func TestBuildProviderRequiresAnalytics(t *testing.T) {
 	}
 }
 
-// The transports Go cannot speak (gRPC and OTLP/HTTP binary) leave the provider
-// disabled instead of failing startup.
+// The gRPC transport Go cannot speak leaves the provider disabled instead of
+// failing startup.
 func TestBuildProviderUnsupportedTransportsStayDisabled(t *testing.T) {
-	for name, exporter := range map[string]map[string]any{
-		"gRPC": {"otlp-grpc": map[string]any{"endpoint": "https://metrics.test:4317"}},
-		"binary": {"otlp-http": map[string]any{
-			"endpoint": "https://metrics.test/v1/metrics",
-			"protocol": config.OtelHTTPProtocolBinary,
+	cfg := &config.Config{Values: map[string]any{
+		"analytics": map[string]any{"enabled": true},
+		"otel": map[string]any{"metrics_exporter": map[string]any{
+			"otlp-grpc": map[string]any{"endpoint": "https://metrics.test:4317"},
 		}},
-	} {
-		cfg := &config.Config{Values: map[string]any{
-			"analytics": map[string]any{"enabled": true},
-			"otel":      map[string]any{"metrics_exporter": exporter},
-		}}
-		if provider, err := BuildProvider(Options{Config: cfg, ServiceName: "codex-app-server"}); err != nil || provider != nil {
-			t.Fatalf("%s provider = %#v err = %v", name, provider, err)
-		}
+	}}
+	if provider, err := BuildProvider(Options{Config: cfg, ServiceName: "codex-app-server"}); err != nil || provider != nil {
+		t.Fatalf("gRPC provider = %#v err = %v", provider, err)
+	}
+}
+
+// The OTLP/HTTP binary protocol builds a working provider.
+func TestBuildProviderOTLPHTTPBinary(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{
+		"analytics": map[string]any{"enabled": true},
+		"otel": map[string]any{"metrics_exporter": map[string]any{
+			"otlp-http": map[string]any{
+				"endpoint": "https://metrics.test/v1/metrics",
+				"protocol": config.OtelHTTPProtocolBinary,
+			},
+		}},
+	}}
+	provider, err := BuildProvider(Options{Config: cfg, ServiceName: "codex-app-server"})
+	if err != nil || provider == nil || provider.Metrics() == nil || !provider.Metrics().Enabled() {
+		t.Fatalf("binary provider = %#v err = %v", provider, err)
+	}
+	if err := provider.Shutdown(t.Context()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
 	}
 }

@@ -44,16 +44,21 @@ func TestNewOtelProviderMetricsOnlyLikeRust(t *testing.T) {
 	}); err != nil || provider != nil {
 		t.Fatalf("empty-endpoint provider = %#v err = %v", provider, err)
 	}
-	// The gRPC and HTTP-binary transports Rust supports have no Go exporter, so
-	// the provider stays disabled instead of failing.
-	for _, unsupported := range []OtelExporter{
-		{Kind: OtelExporterOtlpGRPC, Endpoint: "https://metrics.test:4317"},
-		{Kind: OtelExporterOtlpHTTP, Endpoint: "https://metrics.test/v1/metrics", Protocol: OtelHTTPProtocolBinary},
-	} {
-		if provider, err := NewOtelProvider(OtelSettings{MetricsExporter: unsupported}); err != nil || provider != nil {
-			t.Fatalf("unsupported provider = %#v err = %v", provider, err)
-		}
+	// The gRPC transport Rust supports has no Go exporter, so the provider stays
+	// disabled instead of failing.
+	if provider, err := NewOtelProvider(OtelSettings{
+		MetricsExporter: OtelExporter{Kind: OtelExporterOtlpGRPC, Endpoint: "https://metrics.test:4317"},
+	}); err != nil || provider != nil {
+		t.Fatalf("unsupported provider = %#v err = %v", provider, err)
 	}
+	// The OTLP/HTTP binary protocol is supported.
+	binary, err := NewOtelProvider(OtelSettings{
+		MetricsExporter: OtelExporter{Kind: OtelExporterOtlpHTTP, Endpoint: "https://metrics.test/v1/metrics", Protocol: OtelHTTPProtocolBinary},
+	})
+	if err != nil || binary == nil || binary.Metrics() == nil || binary.Metrics().exporter.protocol != OtelHTTPProtocolBinary {
+		t.Fatalf("binary provider = %#v err = %v", binary, err)
+	}
+	_ = binary.Shutdown(context.Background())
 
 	provider, err := NewOtelProvider(OtelSettings{
 		Environment:     "test",

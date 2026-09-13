@@ -3,8 +3,8 @@
 //
 // Go has no OTLP tracing or logging pipeline yet, so the log/trace exporter
 // settings are carried onto the settings but only the metrics exporter produces
-// a provider. The provider build never fails for an unsupported transport; the
-// telemetry package reports the unsupported OTLP variants and stays disabled.
+// a provider. The provider build never fails for the unsupported OTLP gRPC
+// transport; the telemetry package reports it and stays disabled.
 package otelinit
 
 import (

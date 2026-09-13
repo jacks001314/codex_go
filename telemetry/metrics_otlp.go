@@ -13,13 +13,20 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 // Rust parity: codex-rs/otel/src/metrics (client.rs + config.rs) and
-// codex-rs/otel/src/otlp.rs. Metrics are exported over OTLP/HTTP with JSON
-// payloads and DELTA temporality, matching the Rust client's
-// `with_temporality(Temporality::Delta)` reader and its `Protocol::HttpJson`
-// Statsig default.
+// codex-rs/otel/src/otlp.rs. Metrics are exported over OTLP/HTTP with DELTA
+// temporality, matching the Rust client's `with_temporality(Temporality::Delta)`
+// reader. The payload is the protobuf JSON mapping or, for
+// `Protocol::HttpBinary`, the protobuf encoding built from the OTLP proto
+// definitions.
 
 const (
 	// OTLP aggregation temporality values (opentelemetry-proto).
@@ -142,6 +149,7 @@ type OTLPMetricsExporter struct {
 	httpClient   HTTPDoer
 	timeout      time.Duration
 	requireHTTPS bool
+	protocol     string
 }
 
 // OTLPMetricsExporterOptions configures the transport. An empty Endpoint
@@ -154,6 +162,9 @@ type OTLPMetricsExporterOptions struct {
 	// TLS mirrors Rust's OtelTlsConfig for the OTLP HTTP exporter. A nil value
 	// uses the platform roots through the default transport.
 	TLS *OTLPHTTPTLSConfig
+	// Protocol selects the OTLP/HTTP payload encoding: OtelHTTPProtocolJSON
+	// (the default) or OtelHTTPProtocolBinary.
+	Protocol string
 }
 
 // OTLPHTTPTLSConfig mirrors codex-otel's OtelTlsConfig for OTLP HTTP: the CA
@@ -195,6 +206,7 @@ func NewOTLPMetricsExporter(options OTLPMetricsExporterOptions) *OTLPMetricsExpo
 		httpClient:   client,
 		timeout:      timeout,
 		requireHTTPS: requireHTTPS,
+		protocol:     options.Protocol,
 	}
 }
 
@@ -251,9 +263,24 @@ func (e *OTLPMetricsExporter) Export(ctx context.Context, request OTLPExportMetr
 	if len(request.ResourceMetrics) == 0 {
 		return nil
 	}
-	payload, err := request.MarshalJSON()
-	if err != nil {
-		return err
+	var payload []byte
+	contentType := "application/json"
+	if e.protocol == OtelHTTPProtocolBinary {
+		encoded, err := request.protoRequest()
+		if err != nil {
+			return err
+		}
+		payload, err = proto.Marshal(encoded)
+		if err != nil {
+			return err
+		}
+		contentType = "application/x-protobuf"
+	} else {
+		var err error
+		payload, err = request.MarshalJSON()
+		if err != nil {
+			return err
+		}
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -267,7 +294,7 @@ func (e *OTLPMetricsExporter) Export(ctx context.Context, request OTLPExportMetr
 	if err != nil {
 		return err
 	}
-	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Content-Type", contentType)
 	for key, value := range e.headers {
 		httpRequest.Header.Set(key, value)
 	}
@@ -439,6 +466,148 @@ func otlpNumberDataPoints(dataPoints []OTLPNumberDataPoint) ([]otlpNumberDataPoi
 		out = append(out, encoded)
 	}
 	return out, nil
+}
+
+// protoRequest converts the internal batch into the OTLP protobuf message used
+// by the OTLP/HTTP binary transport. The payload is built from the authoritative
+// OTLP proto definitions instead of a hand-encoded layout, so the field numbers
+// and types match what a collector expects.
+func (r OTLPExportMetricsRequest) protoRequest() (*collectormetricspb.ExportMetricsServiceRequest, error) {
+	request := &collectormetricspb.ExportMetricsServiceRequest{}
+	for _, resource := range r.ResourceMetrics {
+		scopeMetrics := make([]*metricspb.ScopeMetrics, 0, len(resource.ScopeMetrics))
+		for _, scoped := range resource.ScopeMetrics {
+			metrics := make([]*metricspb.Metric, 0, len(scoped.Metrics))
+			for _, metric := range scoped.Metrics {
+				encoded, err := metric.protoMetric()
+				if err != nil {
+					return nil, err
+				}
+				metrics = append(metrics, encoded)
+			}
+			scopeMetrics = append(scopeMetrics, &metricspb.ScopeMetrics{
+				Scope:   &commonpb.InstrumentationScope{Name: scoped.Scope.Name, Version: scoped.Scope.Version},
+				Metrics: metrics,
+			})
+		}
+		request.ResourceMetrics = append(request.ResourceMetrics, &metricspb.ResourceMetrics{
+			Resource:     &resourcepb.Resource{Attributes: protoAttributes(resource.Resource.Attributes)},
+			ScopeMetrics: scopeMetrics,
+		})
+	}
+	return request, nil
+}
+
+func (m OTLPMetric) protoMetric() (*metricspb.Metric, error) {
+	metric := &metricspb.Metric{Name: m.Name, Description: m.Description, Unit: m.Unit}
+	switch {
+	case m.Sum != nil && m.Histogram == nil && m.Gauge == nil:
+		dataPoints, err := protoNumberDataPoints(m.Sum)
+		if err != nil {
+			return nil, err
+		}
+		metric.Data = &metricspb.Metric_Sum{Sum: &metricspb.Sum{
+			DataPoints:             dataPoints,
+			AggregationTemporality: protoTemporality(m.Temporality),
+			IsMonotonic:            m.Monotonic,
+		}}
+	case m.Gauge != nil && m.Sum == nil && m.Histogram == nil:
+		dataPoints, err := protoNumberDataPoints(m.Gauge)
+		if err != nil {
+			return nil, err
+		}
+		metric.Data = &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{DataPoints: dataPoints}}
+	case m.Histogram != nil && m.Sum == nil && m.Gauge == nil:
+		dataPoints := make([]*metricspb.HistogramDataPoint, 0, len(m.Histogram))
+		for _, dataPoint := range m.Histogram {
+			startTime, err := parseUnixNano(dataPoint.StartTimeUnixNano)
+			if err != nil {
+				return nil, fmt.Errorf("OTLP metric %q start time: %w", m.Name, err)
+			}
+			timeNano, err := parseUnixNano(dataPoint.TimeUnixNano)
+			if err != nil {
+				return nil, fmt.Errorf("OTLP metric %q time: %w", m.Name, err)
+			}
+			bucketCounts := make([]uint64, 0, len(dataPoint.BucketCounts))
+			for _, count := range dataPoint.BucketCounts {
+				if count < 0 {
+					return nil, fmt.Errorf("OTLP metric %q has a negative bucket count", m.Name)
+				}
+				bucketCounts = append(bucketCounts, uint64(count))
+			}
+			dataPoints = append(dataPoints, &metricspb.HistogramDataPoint{
+				Attributes:        protoAttributes(dataPoint.Attributes),
+				StartTimeUnixNano: startTime,
+				TimeUnixNano:      timeNano,
+				Count:             uint64(dataPoint.Count),
+				Sum:               dataPoint.Sum,
+				BucketCounts:      bucketCounts,
+				ExplicitBounds:    dataPoint.ExplicitBounds,
+			})
+		}
+		metric.Data = &metricspb.Metric_Histogram{Histogram: &metricspb.Histogram{
+			DataPoints:             dataPoints,
+			AggregationTemporality: protoTemporality(m.Temporality),
+		}}
+	default:
+		return nil, fmt.Errorf("OTLP metric %q must carry exactly one instrument", m.Name)
+	}
+	return metric, nil
+}
+
+func protoNumberDataPoints(dataPoints []OTLPNumberDataPoint) ([]*metricspb.NumberDataPoint, error) {
+	out := make([]*metricspb.NumberDataPoint, 0, len(dataPoints))
+	for _, dataPoint := range dataPoints {
+		startTime, err := parseUnixNano(dataPoint.StartTimeUnixNano)
+		if err != nil {
+			return nil, err
+		}
+		timeNano, err := parseUnixNano(dataPoint.TimeUnixNano)
+		if err != nil {
+			return nil, err
+		}
+		point := &metricspb.NumberDataPoint{
+			Attributes:        protoAttributes(dataPoint.Attributes),
+			StartTimeUnixNano: startTime,
+			TimeUnixNano:      timeNano,
+		}
+		switch {
+		case dataPoint.AsInt != nil:
+			point.Value = &metricspb.NumberDataPoint_AsInt{AsInt: *dataPoint.AsInt}
+		case dataPoint.AsDouble != nil:
+			point.Value = &metricspb.NumberDataPoint_AsDouble{AsDouble: *dataPoint.AsDouble}
+		}
+		out = append(out, point)
+	}
+	return out, nil
+}
+
+func protoAttributes(tags []MetricTagValue) []*commonpb.KeyValue {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make([]*commonpb.KeyValue, 0, len(tags))
+	for _, tag := range tags {
+		out = append(out, &commonpb.KeyValue{
+			Key:   tag.Key,
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: tag.Value}},
+		})
+	}
+	return out
+}
+
+func protoTemporality(temporality int) metricspb.AggregationTemporality {
+	if temporality == 0 || temporality == otlpTemporalityDelta {
+		return metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA
+	}
+	return metricspb.AggregationTemporality(temporality)
+}
+
+func parseUnixNano(value string) (uint64, error) {
+	if value == "" {
+		return 0, nil
+	}
+	return strconv.ParseUint(value, 10, 64)
 }
 
 // resolveMetricsExportTimeout mirrors otlp::resolve_otlp_timeout for the
