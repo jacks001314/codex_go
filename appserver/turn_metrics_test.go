@@ -4,12 +4,14 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"codex_go/config"
 	"codex_go/model"
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/telemetry"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -247,5 +249,86 @@ func TestEmitTurnTokenUsageMetricsEmitsPerModelSamples(t *testing.T) {
 		if record.Value != 0 || record.Tags["model"] != "gpt-5" || record.Tags[telemetry.TurnTmpMemoryTag] != "false" {
 			t.Fatalf("empty turn record = %#v", record)
 		}
+	}
+}
+
+// TestEmitToolCallMetricsLikeRust mirrors Rust's
+// SessionTelemetry::tool_result_with_tags: one codex.tool.call counter and one
+// codex.tool.call.duration_ms histogram per completed tool call, tagged by the
+// flat tool name, success, and the executor telemetry tags (without the
+// trace-only mcp_server fields).
+func TestEmitToolCallMetricsLikeRust(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	router := NewRuntimeRouter(RuntimeServices{TurnMetrics: metrics})
+	started := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	router.emitToolCallMetrics(metrics, &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{ToolName: tool.PlainName("shell"), Source: "model"},
+		Output:     &tool.Output{Success: true},
+		TelemetryTags: map[string]string{
+			"tool_tag":          "exec",
+			"mcp_server":        "calendar",
+			"mcp_server_origin": "connector",
+		},
+		StartedAt:  started,
+		FinishedAt: started.Add(25 * time.Millisecond),
+	})
+
+	records := metrics.Records()
+	if len(records) != 2 {
+		t.Fatalf("records = %#v", records)
+	}
+	counter, duration := records[0], records[1]
+	if counter.Kind != "counter" || counter.Name != telemetry.ToolCallCountMetric || counter.Inc != 1 {
+		t.Fatalf("counter = %#v", counter)
+	}
+	if counter.Tags["tool"] != "shell" || counter.Tags["success"] != "true" || counter.Tags["tool_tag"] != "exec" {
+		t.Fatalf("counter tags = %#v", counter.Tags)
+	}
+	if _, ok := counter.Tags["mcp_server"]; ok {
+		t.Fatalf("mcp_server leaked into the metric tags: %#v", counter.Tags)
+	}
+	if duration.Kind != "duration" || duration.Name != telemetry.ToolCallDurationMetric || duration.DurationMS != 25 {
+		t.Fatalf("duration = %#v", duration)
+	}
+
+	// A failure without an output reports success=false.
+	failed := state.NewTaskMetrics()
+	router.emitToolCallMetrics(failed, &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{ToolName: tool.NamespacedName("mcp__calendar", "lookup")},
+		StartedAt:  started,
+		FinishedAt: started,
+	})
+	failedRecords := failed.Records()
+	if len(failedRecords) != 2 || failedRecords[0].Tags["success"] != "false" ||
+		failedRecords[0].Tags["tool"] != "mcp__calendar.lookup" {
+		t.Fatalf("failed records = %#v", failedRecords)
+	}
+
+	// A missing execution or invocation records nothing.
+	empty := state.NewTaskMetrics()
+	router.emitToolCallMetrics(empty, nil)
+	router.emitToolCallMetrics(empty, &turn.ToolExecutionResult{})
+	if records := empty.Records(); len(records) != 0 {
+		t.Fatalf("empty records = %#v", records)
+	}
+}
+
+// The tool-completed notifier emits the per-call metrics before its
+// notification-only branches.
+func TestRuntimeToolCompletedNotifierEmitsToolCallMetrics(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	router := NewRuntimeRouter(RuntimeServices{TurnMetrics: metrics})
+	notifier := router.runtimeToolCompletedNotifier("thread-a", "turn-a", t.TempDir(), false)
+	started := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	notifier(context.Background(), &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{ToolName: tool.PlainName("apply_patch"), Source: "model"},
+		Output:     &tool.Output{Success: true},
+		StartedAt:  started,
+		FinishedAt: started.Add(3 * time.Millisecond),
+	})
+	records := metrics.Records()
+	if len(records) != 2 || records[0].Name != telemetry.ToolCallCountMetric ||
+		records[1].Name != telemetry.ToolCallDurationMetric {
+		t.Fatalf("records = %#v", records)
 	}
 }

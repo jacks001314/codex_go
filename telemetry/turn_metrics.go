@@ -1,5 +1,7 @@
 package telemetry
 
+import "time"
+
 // Turn-scoped OTel-style metric names live in metric_names.go
 // (codex-rs/otel/src/metrics/names.rs).
 
@@ -26,4 +28,7 @@ const (
 type TurnMetricSink interface {
 	Counter(name string, inc int, tags map[string]string)
 	Histogram(name string, value int, tags map[string]string)
+	// RecordDuration records Rust's millisecond duration histogram (codex-otel's
+	// `record_duration`, with the millisecond unit and bucket boundaries).
+	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }

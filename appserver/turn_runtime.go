@@ -2306,6 +2306,11 @@ func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID str
 		if r == nil || execution == nil || execution.Invocation == nil {
 			return
 		}
+		// Rust emits the per-tool-call counter and duration histogram when the
+		// call completes (SessionTelemetry::tool_result_with_tags); the notifier
+		// runs for every completed dispatch, before its notification-only
+		// branches.
+		r.emitToolCallMetrics(r.services.TurnMetrics, execution)
 		r.recordNodeReplReviewEvidence(threadID, execution)
 		r.accountGoalToolProgressForCompletion(threadID, turnID, execution)
 		if item, ok := collaborationCompletedThreadItem(execution, threadID, turnID); ok {

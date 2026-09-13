@@ -6,6 +6,7 @@ import (
 
 	"codex_go/model"
 	"codex_go/telemetry"
+	"codex_go/turn"
 )
 
 // turnTokenUsage is one model's accumulated token usage for a turn.
@@ -149,6 +150,34 @@ func (r *RuntimeRouter) emitTurnToolCallMetric(sink telemetry.TurnMetricSink, to
 	sink.Histogram(telemetry.TurnToolCallMetric, toolCalls, map[string]string{
 		telemetry.TurnTmpMemoryTag: boolTagValue(tmpMemoryEnabled),
 	})
+}
+
+// emitToolCallMetrics records Rust's per-tool-call metrics
+// (SessionTelemetry::tool_result_with_tags): the codex.tool.call counter and the
+// codex.tool.call.duration_ms histogram, tagged by the flat tool name, success,
+// and the executor's telemetry tags. mcp_server/mcp_server_origin are trace-only
+// fields in Rust, so they stay out of the metric tags.
+func (r *RuntimeRouter) emitToolCallMetrics(sink telemetry.TurnMetricSink, execution *turn.ToolExecutionResult) {
+	if sink == nil || execution == nil || execution.Invocation == nil {
+		return
+	}
+	tags := make(map[string]string, len(execution.TelemetryTags)+2)
+	for key, value := range execution.TelemetryTags {
+		if key == "mcp_server" || key == "mcp_server_origin" {
+			continue
+		}
+		tags[key] = value
+	}
+	tags["tool"] = execution.Invocation.ToolName.Key()
+	success := execution.Output != nil && execution.Output.Success
+	tags["success"] = boolTagValue(success)
+
+	sink.Counter(telemetry.ToolCallCountMetric, 1, tags)
+	duration := execution.FinishedAt.Sub(execution.StartedAt)
+	if duration < 0 {
+		duration = 0
+	}
+	sink.RecordDuration(telemetry.ToolCallDurationMetric, duration, tags)
 }
 
 // emitTurnNetworkProxyMetric records the codex.turn.network_proxy counter with
