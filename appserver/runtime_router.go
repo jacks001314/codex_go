@@ -2363,6 +2363,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
 				r.captureThreadModelProviderRouteByID(response.Thread.ID)
 				r.emitThreadResumeAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
+				r.emitThreadStartedMetric(context.Background(), response.Thread)
 			}
 			r.replayPendingServerRequestsForThread(result)
 			r.notifyRestoredTokenUsage(result)
@@ -3621,6 +3622,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 				r.services.Skills.WatchCWDs([]string{response.Thread.CWD})
 			}
 			r.emitThreadStartAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
+			r.emitThreadStartedMetric(context.Background(), response.Thread)
 			r.emitThreadConfigWarnings(response.Thread.CWD)
 			if shouldEmitThreadStartedNotification(response.Thread) {
 				r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
@@ -3638,6 +3640,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			// Rust #44944: the fork inherits its own retained provider route.
 			r.captureThreadModelProviderRouteByID(response.Thread.ID)
 			r.emitThreadForkAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
+			r.emitThreadStartedMetric(context.Background(), response.Thread)
 			r.notifyRestoredTokenUsage(response)
 			if shouldEmitThreadStartedNotification(response.Thread) {
 				r.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(response.Thread)})
