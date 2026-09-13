@@ -222,6 +222,15 @@ func hookRunnerOutputCommand(stdout string, stderr string) string {
 	return script
 }
 
+// hookRunnerPermissionRequestDenyCommand writes a denial reason to stderr and
+// exits 2, Rust's stderr-based PermissionRequest deny.
+func hookRunnerPermissionRequestDenyCommand(message string) string {
+	if runtime.GOOS == "windows" {
+		return powershellEncodedCommand("[Console]::Error.Write(" + powerShellSingleQuote(message) + "); exit 2")
+	}
+	return "printf " + shellQuote(message) + " 1>&2; exit 2"
+}
+
 func hookRunnerExitCommand(code int) string {
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf("exit /b %d", code)
@@ -253,4 +262,74 @@ func powershellEncodedScript(script string) string {
 		binary.LittleEndian.PutUint16(data[i*2:], value)
 	}
 	return base64.StdEncoding.EncodeToString(data)
+}
+
+// Rust resolve_permission_request_decision: any deny wins, otherwise the last
+// allow wins, and a handler that cannot apply control effects contributes no
+// verdict.
+func TestHookRunnerFoldsPermissionRequestDecisionLikeRust(t *testing.T) {
+	run := func(t *testing.T, hooks ...HookMetadata) *HookRunResult {
+		t.Helper()
+		runner := NewHookRunner()
+		result, err := runner.Run(context.Background(), &HookRunRequest{
+			ThreadID:  "thread-1",
+			CWD:       t.TempDir(),
+			EventName: HookEventPermissionRequest,
+			InputJSON: "{}",
+			Hooks:     hooks,
+		})
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		return result
+	}
+	allow := func(t *testing.T, key string, order int64) HookMetadata {
+		t.Helper()
+		command := hookRunnerOutputCommand(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, "")
+		hook := hookRunnerMetadata(key, HookEventPermissionRequest, "", order)
+		hook.Command = &command
+		return hook
+	}
+	deny := func(t *testing.T, key string, order int64, message string) HookMetadata {
+		t.Helper()
+		command := hookRunnerOutputCommand(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"`+message+`"}}}`, "")
+		hook := hookRunnerMetadata(key, HookEventPermissionRequest, "", order)
+		hook.Command = &command
+		return hook
+	}
+
+	if result := run(t, allow(t, "a", 0), allow(t, "b", 1)); result.PermissionRequestDecision == nil ||
+		result.PermissionRequestDecision.Kind != HookPermissionRequestAllow {
+		t.Fatalf("allows = %#v", result.PermissionRequestDecision)
+	}
+	denied := run(t, allow(t, "a", 0), deny(t, "b", 1, "repo deny"), allow(t, "c", 2))
+	if denied.PermissionRequestDecision == nil || denied.PermissionRequestDecision.Kind != HookPermissionRequestDeny ||
+		denied.PermissionRequestDecision.Message == nil || *denied.PermissionRequestDecision.Message != "repo deny" {
+		t.Fatalf("deny fold = %#v", denied.PermissionRequestDecision)
+	}
+	if !denied.Blocked || denied.BlockReason != "repo deny" {
+		t.Fatalf("deny did not block: %#v", denied)
+	}
+	if result := run(t); result.PermissionRequestDecision != nil {
+		t.Fatalf("no handlers produced a verdict: %#v", result.PermissionRequestDecision)
+	}
+
+	// An untrusted handler's verdict is never applied (Rust
+	// can_apply_control_effects).
+	untrusted := allow(t, "u", 0)
+	untrusted.TrustStatus = HookTrustUntrusted
+	untrusted.BypassTrust = false
+	if result := run(t, untrusted); result.PermissionRequestDecision != nil {
+		t.Fatalf("untrusted handler produced a verdict: %#v", result.PermissionRequestDecision)
+	}
+
+	// Exit code 2 with a denial reason is a deny verdict.
+	exitTwo := hookRunnerMetadata("e2", HookEventPermissionRequest, "", 0)
+	command := hookRunnerPermissionRequestDenyCommand("policy says no")
+	exitTwo.Command = &command
+	fromExit := run(t, exitTwo)
+	if fromExit.PermissionRequestDecision == nil || fromExit.PermissionRequestDecision.Kind != HookPermissionRequestDeny ||
+		fromExit.PermissionRequestDecision.Message == nil || *fromExit.PermissionRequestDecision.Message != "policy says no" {
+		t.Fatalf("exit-code-2 deny = %#v", fromExit.PermissionRequestDecision)
+	}
 }

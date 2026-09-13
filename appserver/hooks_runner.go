@@ -73,6 +73,11 @@ type HookRunResult struct {
 	UpdatedInput       any
 	AdditionalContexts []string
 	FeedbackMessage    string
+	// PermissionRequestDecision is the folded verdict of a PermissionRequest
+	// run: any deny wins, otherwise the last allow wins, otherwise nil - Rust
+	// resolve_permission_request_decision. Matched handlers that cannot apply
+	// control effects never contribute a verdict.
+	PermissionRequestDecision *HookPermissionRequestDecision
 }
 
 type hookCommandRunResult struct {
@@ -139,7 +144,14 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 		}
 		completed := completedHookSummary(metadata, runResult, hookRunStatus(request.EventName, runResult), hookOutputEntries(request.EventName, runResult))
 		completed = hookSummaryWithRunIDSuffix(completed, request.RunIDSuffix)
-		mergeHookRunEffect(result, hookRunEffect(request.EventName, runResult))
+		effect := hookRunEffect(request.EventName, runResult)
+		if request.EventName == HookEventPermissionRequest && !hookTrustAllowsExecution(&metadata) {
+			// Rust can_apply_control_effects: an untrusted handler's verdict is
+			// never applied, even though its run and output are still reported.
+			effect.PermissionRequestAllow = false
+			effect.PermissionRequestDeny = nil
+		}
+		mergeHookRunEffect(result, effect)
 		emitHookRunMetrics(r.Metrics, &completed)
 		r.notify(NotificationHookCompleted, &HookRunCompletedNotification{
 			ThreadID: request.ThreadID,
@@ -856,6 +868,11 @@ type hookRunEffectResult struct {
 	UpdatedInput       any
 	AdditionalContexts []string
 	FeedbackMessages   []string
+	// PermissionRequestAllow records an explicit allow verdict so the fold can
+	// keep the last allow when no handler denies.
+	PermissionRequestAllow bool
+	// PermissionRequestDeny records a deny verdict with its message.
+	PermissionRequestDeny *HookPermissionRequestDecision
 }
 
 func hookRunEffect(event HookEventName, runResult *hookCommandRunResult) *hookRunEffectResult {
@@ -868,6 +885,15 @@ func hookRunEffect(event HookEventName, runResult *hookCommandRunResult) *hookRu
 			effect.Blocked = true
 			effect.BlockReason = text
 			effect.FeedbackMessages = append(effect.FeedbackMessages, text)
+			if event == HookEventPermissionRequest {
+				// Rust: exit code 2 with a denial reason on stderr is a deny
+				// verdict (an empty stderr is a failure with no verdict).
+				message := text
+				effect.PermissionRequestDeny = &HookPermissionRequestDecision{
+					Kind:    HookPermissionRequestDeny,
+					Message: &message,
+				}
+			}
 		}
 		return effect
 	}
@@ -912,11 +938,23 @@ func hookRunEffect(event HookEventName, runResult *hookCommandRunResult) *hookRu
 		if output == nil || output.InvalidReason != nil {
 			return effect
 		}
-		if output.Decision != nil && output.Decision.Kind == HookPermissionRequestDeny && output.Decision.Message != nil {
-			effect.Blocked = true
-			effect.BlockReason = strings.TrimSpace(*output.Decision.Message)
-			if effect.BlockReason != "" {
-				effect.FeedbackMessages = append(effect.FeedbackMessages, effect.BlockReason)
+		if output.Decision != nil {
+			switch output.Decision.Kind {
+			case HookPermissionRequestAllow:
+				effect.PermissionRequestAllow = true
+			case HookPermissionRequestDeny:
+				message := ""
+				if output.Decision.Message != nil {
+					message = strings.TrimSpace(*output.Decision.Message)
+				}
+				deny := &HookPermissionRequestDecision{Kind: HookPermissionRequestDeny}
+				if message != "" {
+					deny.Message = &message
+					effect.Blocked = true
+					effect.BlockReason = message
+					effect.FeedbackMessages = append(effect.FeedbackMessages, message)
+				}
+				effect.PermissionRequestDeny = deny
 			}
 		}
 	case HookEventPostToolUse:
@@ -1012,6 +1050,16 @@ func mergeHookRunEffect(result *HookRunResult, effect *hookRunEffectResult) {
 		if result.StopReason == "" {
 			result.StopReason = effect.StopReason
 		}
+	}
+	// Rust resolve_permission_request_decision: any deny is final, so it is
+	// recorded once and no later allow can overrule it; otherwise the last
+	// allow wins.
+	denied := result.PermissionRequestDecision != nil && result.PermissionRequestDecision.Kind == HookPermissionRequestDeny
+	switch {
+	case effect.PermissionRequestDeny != nil && !denied:
+		result.PermissionRequestDecision = effect.PermissionRequestDeny
+	case effect.PermissionRequestAllow && !denied:
+		result.PermissionRequestDecision = &HookPermissionRequestDecision{Kind: HookPermissionRequestAllow}
 	}
 	if effect.UpdatedInput != nil {
 		result.UpdatedInput = effect.UpdatedInput
