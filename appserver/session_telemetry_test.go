@@ -191,6 +191,152 @@ func TestSessionTelemetryMetadataForThread(t *testing.T) {
 	}
 }
 
+// An approval resolution reports who decided what: the Guardian-resolved
+// approvals carry the automated-reviewer source and the opaque decision
+// (Rust's SessionTelemetry::tool_decision via approvals::record_resolution).
+func TestApprovalDecisionsReportToolDecisionLikeRust(t *testing.T) {
+	received := make(chan map[string]any, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case received <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	cwd := t.TempDir()
+	configBody := fmt.Sprintf("model = \"gpt-5.4\"\napprovals_reviewer = \"auto_review\"\n\n[otel.exporter.otlp-http]\nendpoint = %q\nprotocol = \"json\"\n",
+		server.URL+"/v1/logs")
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config error = %v", err)
+	}
+	decisions := []state.ReviewDecision{state.DecisionApproved, state.DecisionDenied, state.DecisionAborted}
+	reasons := []string{"", "too destructive", "turn aborted"}
+	for index, decision := range decisions {
+		router := NewRuntimeRouter(RuntimeServices{
+			DefaultCWD:       cwd,
+			Config:           config.NewConfigService(home),
+			GuardianReviewer: &fakeGuardianReviewer{decision: decision, reason: reasons[index]},
+		})
+		router.configureOtelMetrics(home, nil, state.NewTaskMetrics())
+		params := &turn.TurnStartParams{ThreadID: "thread-1", CWD: cwd, Model: "gpt-5.4"}
+		if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, params); err != nil {
+			t.Fatalf("RegisterTurn() error = %v", err)
+		}
+		approval := router.shellApprovalForTurn("thread-1", "turn-1", false)
+		_, _ = approval(context.Background(), &tool.ShellApprovalRequest{
+			Request: &tool.ShellRequest{HookCommand: "rm -rf build", CWD: cwd},
+			Invocation: &tool.Invocation{
+				CallID:   fmt.Sprintf("call-%d", index+1),
+				ToolName: tool.PlainName("shell"),
+			},
+		})
+		if err := router.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}
+
+	want := []map[string]string{
+		{"decision": "approved", "source": "automated_reviewer", "call_id": "call-1"},
+		{"decision": "denied", "source": "automated_reviewer", "call_id": "call-2"},
+		{"decision": "abort", "source": "automated_reviewer", "call_id": "call-3"},
+	}
+	records := []map[string]string{}
+	deadline := time.After(3 * time.Second)
+	for len(records) < len(want) {
+		select {
+		case payload := <-received:
+			for _, attributes := range toolDecisionRecords(t, payload) {
+				records = append(records, attributes)
+			}
+		case <-deadline:
+			t.Fatalf("records = %#v, want %d", records, len(want))
+		}
+	}
+	for index, expected := range want {
+		attributes := records[index]
+		for key, value := range expected {
+			if got := attributes[key]; got != value {
+				t.Fatalf("record %d attribute %s = %q, want %q", index, key, got, value)
+			}
+		}
+		if attributes["tool_name"] != "shell" || attributes["tool_namespace"] != "functions" {
+			t.Fatalf("record %d = %#v", index, attributes)
+		}
+		if attributes["conversation.id"] != "thread-1" {
+			t.Fatalf("record %d = %#v", index, attributes)
+		}
+	}
+}
+
+// toolDecisionRecords returns the codex.tool_decision records of one captured
+// OTLP logs payload.
+func toolDecisionRecords(t *testing.T, payload map[string]any) []map[string]string {
+	t.Helper()
+	records := []map[string]string{}
+	resourceLogs, _ := payload["resourceLogs"].([]any)
+	for _, resourceEntry := range resourceLogs {
+		scopeLogs, _ := resourceEntry.(map[string]any)["scopeLogs"].([]any)
+		for _, scopeEntry := range scopeLogs {
+			logRecords, _ := scopeEntry.(map[string]any)["logRecords"].([]any)
+			for _, recordEntry := range logRecords {
+				record, ok := recordEntry.(map[string]any)
+				if !ok {
+					continue
+				}
+				attributes := map[string]string{}
+				for _, entry := range record["attributes"].([]any) {
+					attribute := entry.(map[string]any)
+					attributes[attribute["key"].(string)] = attribute["value"].(map[string]any)["stringValue"].(string)
+				}
+				if attributes["event.name"] == "codex.tool_decision" {
+					records = append(records, attributes)
+				}
+			}
+		}
+	}
+	return records
+}
+
+// The user's approval answers map onto Rust's opaque decision strings.
+func TestApprovalDecisionStringsLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		decision any
+		want     string
+	}{
+		{CommandExecutionApprovalAccept, "approved"},
+		{CommandExecutionApprovalAcceptForSession, "approved_for_session"},
+		{CommandExecutionApprovalAcceptWithExecpolicyAmendment, "approved_with_amendment"},
+		{CommandExecutionApprovalDecline, "denied"},
+		{CommandExecutionApprovalCancel, "abort"},
+		{map[string]any{"applyNetworkPolicyAmendment": map[string]any{"network_policy_amendment": map[string]any{"action": "allow"}}}, "approved_with_network_policy_allow"},
+		{map[string]any{"applyNetworkPolicyAmendment": map[string]any{"network_policy_amendment": map[string]any{"action": "deny"}}}, "denied_with_network_policy_deny"},
+		{"unknown", ""},
+	} {
+		if got := commandExecutionApprovalToolDecision(testCase.decision); got != testCase.want {
+			t.Fatalf("command decision %#v = %q, want %q", testCase.decision, got, testCase.want)
+		}
+	}
+	for _, testCase := range []struct {
+		decision any
+		want     string
+	}{
+		{FileChangeApprovalAccept, "approved"},
+		{FileChangeApprovalAcceptForSession, "approved_for_session"},
+		{FileChangeApprovalDecline, "denied"},
+		{FileChangeApprovalCancel, "abort"},
+		{"unknown", ""},
+	} {
+		if got := fileChangeApprovalToolDecision(testCase.decision); got != testCase.want {
+			t.Fatalf("file change decision %#v = %q, want %q", testCase.decision, got, testCase.want)
+		}
+	}
+}
+
 // The request span is reachable while its request is dispatched, and its W3C
 // trace context is what a started turn carries into the model request (Rust's
 // OutgoingMessageSender::register_request_context +

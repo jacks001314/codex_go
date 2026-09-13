@@ -93,6 +93,26 @@ func (r *RuntimeRouter) sessionTelemetryMetadataForThread(threadID string) telem
 	return metadata
 }
 
+// emitToolDecisionRecords mirrors SessionTelemetry::tool_decision at one
+// approval resolution point (Rust's approvals::record_resolution): who decided
+// what for this tool call, with the tool identity Rust reports.
+func (r *RuntimeRouter) emitToolDecisionRecords(ctx context.Context, threadID string, toolName tool.ToolName, callID string, decision string, source string) {
+	if strings.TrimSpace(decision) == "" {
+		return
+	}
+	session := r.sessionTelemetryForThread(threadID)
+	if session == nil {
+		return
+	}
+	telemetry.EmitToolDecision(ctx, session, telemetry.ToolDecisionEvent{
+		ToolName:      strings.TrimSpace(toolName.Name),
+		ToolNamespace: strings.TrimSpace(toolName.Namespace),
+		CallID:        strings.TrimSpace(callID),
+		Decision:      decision,
+		Source:        source,
+	})
+}
+
 // providerEnvKeyForSession resolves the env key of the provider a session uses
 // (Rust's session provider `env_key`), or "" when the provider has none.
 func providerEnvKeyForSession(cfg *config.Config) string {

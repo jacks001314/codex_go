@@ -13939,12 +13939,16 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, itemID, "Bash", nil, shellPermissionRequestToolInput(request.Request)); ok && verdict != nil {
 			switch verdict.Kind {
 			case HookPermissionRequestAllow:
+				r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
+					telemetry.ToolDecisionApproved, telemetry.ToolDecisionSourceConfig)
 				return tool.ShellApprovalDecision{Approved: true}, nil
 			case HookPermissionRequestDeny:
 				reason := ""
 				if verdict.Message != nil {
 					reason = strings.TrimSpace(*verdict.Message)
 				}
+				r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
+					telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceConfig)
 				return tool.ShellApprovalDecision{DenyReason: reason}, nil
 			}
 		}
@@ -13953,11 +13957,17 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		if reviewer := r.approvalsReviewerForTurn(threadID, turnID); reviewer.RoutesToGuardian() {
 			outcome := r.reviewApprovalWithGuardian(ctx, threadID, turnID, itemID, commandApprovalAction(request.Request))
 			if outcome.Abort {
+				r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
+					telemetry.ToolDecisionAbort, telemetry.ToolDecisionSourceAutomatedReviewer)
 				return tool.ShellApprovalDecision{}, fmt.Errorf("%s", outcome.DenyReason)
 			}
 			if outcome.Approved {
+				r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
+					telemetry.ToolDecisionApproved, telemetry.ToolDecisionSourceAutomatedReviewer)
 				return tool.ShellApprovalDecision{Approved: true}, nil
 			}
+			r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
+				telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceAutomatedReviewer)
 			return tool.ShellApprovalDecision{DenyReason: outcome.DenyReason}, nil
 		}
 		// Rust e734a1a5c1: cyber-specialized models and models listed in
@@ -13972,6 +13982,10 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		if err := r.requireServerRequests().Request(ctx, ServerRequestCommandExecutionApproval, params, &response); err != nil {
 			return tool.ShellApprovalDecision{}, err
 		}
+		// The user's answer is the final resolution
+		// (ApprovalResolutionSource::User).
+		r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
+			commandExecutionApprovalToolDecision(response.Decision), telemetry.ToolDecisionSourceUser)
 		switch approvalDecisionString(response.Decision) {
 		case string(CommandExecutionApprovalAccept):
 			return tool.ShellApprovalDecision{Approved: true}, nil
@@ -13994,6 +14008,40 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		default:
 			return tool.ShellApprovalDecision{}, nil
 		}
+	}
+}
+
+// shellApprovalToolName reports the tool the approval belongs to: the
+// invocation's tool name, which Rust's ApprovalContext carries.
+func shellApprovalToolName(invocation *tool.Invocation) tool.ToolName {
+	if invocation == nil {
+		return tool.ToolName{}
+	}
+	return invocation.ToolName
+}
+
+// commandExecutionApprovalToolDecision maps one command approval answer onto the
+// opaque decision string Rust's ReviewDecision reports; an answer Go does not
+// recognize reports nothing.
+func commandExecutionApprovalToolDecision(raw any) string {
+	switch decision := approvalDecisionString(raw); decision {
+	case string(CommandExecutionApprovalAccept):
+		return telemetry.ToolDecisionApproved
+	case string(CommandExecutionApprovalAcceptForSession):
+		return telemetry.ToolDecisionApprovedForSession
+	case string(CommandExecutionApprovalAcceptWithExecpolicyAmendment):
+		return telemetry.ToolDecisionApprovedWithAmendment
+	case string(CommandExecutionApprovalDecline):
+		return telemetry.ToolDecisionDenied
+	case string(CommandExecutionApprovalCancel):
+		return telemetry.ToolDecisionAbort
+	case string(CommandExecutionApprovalApplyNetworkPolicyAmendment):
+		if commandExecutionApprovalDecisionNetworkAction(raw) == string(NetworkPolicyRuleAllow) {
+			return telemetry.ToolDecisionApprovedWithNetworkPolicyAllow
+		}
+		return telemetry.ToolDecisionDeniedWithNetworkPolicyDeny
+	default:
+		return ""
 	}
 }
 
@@ -14028,12 +14076,16 @@ func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string
 		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, itemID, "apply_patch", []string{"Write", "Edit"}, applyPatchPermissionRequestToolInput(request.Patch)); ok && verdict != nil {
 			switch verdict.Kind {
 			case HookPermissionRequestAllow:
+				r.emitToolDecisionRecords(ctx, threadID, applyPatchApprovalToolName(request.Invocation), itemID,
+					telemetry.ToolDecisionApproved, telemetry.ToolDecisionSourceConfig)
 				return tool.ApplyPatchApprovalDecision{Approved: true}, nil
 			case HookPermissionRequestDeny:
 				reason := ""
 				if verdict.Message != nil {
 					reason = strings.TrimSpace(*verdict.Message)
 				}
+				r.emitToolDecisionRecords(ctx, threadID, applyPatchApprovalToolName(request.Invocation), itemID,
+					telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceConfig)
 				return tool.ApplyPatchApprovalDecision{DenyReason: reason}, nil
 			}
 		}
@@ -14042,11 +14094,17 @@ func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string
 		if reviewer := r.approvalsReviewerForTurn(threadID, turnID); reviewer.RoutesToGuardian() {
 			outcome := r.reviewApprovalWithGuardian(ctx, threadID, turnID, itemID, applyPatchApprovalAction(request))
 			if outcome.Abort {
+				r.emitToolDecisionRecords(ctx, threadID, applyPatchApprovalToolName(request.Invocation), itemID,
+					telemetry.ToolDecisionAbort, telemetry.ToolDecisionSourceAutomatedReviewer)
 				return tool.ApplyPatchApprovalDecision{}, fmt.Errorf("%s", outcome.DenyReason)
 			}
 			if outcome.Approved {
+				r.emitToolDecisionRecords(ctx, threadID, applyPatchApprovalToolName(request.Invocation), itemID,
+					telemetry.ToolDecisionApproved, telemetry.ToolDecisionSourceAutomatedReviewer)
 				return tool.ApplyPatchApprovalDecision{Approved: true}, nil
 			}
+			r.emitToolDecisionRecords(ctx, threadID, applyPatchApprovalToolName(request.Invocation), itemID,
+				telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceAutomatedReviewer)
 			return tool.ApplyPatchApprovalDecision{DenyReason: outcome.DenyReason}, nil
 		}
 		params := &FileChangeRequestApprovalParams{
@@ -14059,6 +14117,8 @@ func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string
 		if err := r.requireServerRequests().Request(ctx, ServerRequestFileChangeApproval, params, &response); err != nil {
 			return tool.ApplyPatchApprovalDecision{}, err
 		}
+		r.emitToolDecisionRecords(ctx, threadID, applyPatchApprovalToolName(request.Invocation), itemID,
+			fileChangeApprovalToolDecision(response.Decision), telemetry.ToolDecisionSourceUser)
 		switch approvalDecisionString(response.Decision) {
 		case string(FileChangeApprovalAccept):
 			return tool.ApplyPatchApprovalDecision{Approved: true}, nil
@@ -14068,6 +14128,31 @@ func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string
 		default:
 			return tool.ApplyPatchApprovalDecision{}, nil
 		}
+	}
+}
+
+// applyPatchApprovalToolName reports the tool a patch approval belongs to.
+func applyPatchApprovalToolName(invocation *tool.Invocation) tool.ToolName {
+	if invocation == nil {
+		return tool.ToolName{}
+	}
+	return invocation.ToolName
+}
+
+// fileChangeApprovalToolDecision maps one file-change approval answer onto the
+// opaque decision string Rust's ReviewDecision reports.
+func fileChangeApprovalToolDecision(raw any) string {
+	switch decision := approvalDecisionString(raw); decision {
+	case string(FileChangeApprovalAccept):
+		return telemetry.ToolDecisionApproved
+	case string(FileChangeApprovalAcceptForSession):
+		return telemetry.ToolDecisionApprovedForSession
+	case string(FileChangeApprovalDecline):
+		return telemetry.ToolDecisionDenied
+	case string(FileChangeApprovalCancel):
+		return telemetry.ToolDecisionAbort
+	default:
+		return ""
 	}
 }
 
