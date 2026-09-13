@@ -81,3 +81,29 @@ func TestDefaultWorktreeBaseWithoutConventionalBranch(t *testing.T) {
 		t.Fatal("DefaultWorktreeBase() succeeded without a default branch")
 	}
 }
+
+// Rust's worktree session check compares the requested and applied checkout
+// directories, resolving symlinks when both exist.
+func TestPathsEqualResolvesSymlinksLikeRust(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "checkout")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if !PathsEqual(nested, filepath.Join(root, "checkout")) {
+		t.Fatal("identical paths must compare equal")
+	}
+	if !PathsEqual(nested, filepath.Join(root, ".", "checkout", "..", "checkout")) {
+		t.Fatal("unclean but equivalent paths must compare equal")
+	}
+	if PathsEqual(nested, filepath.Join(root, "other")) {
+		t.Fatal("different paths compared equal")
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(nested, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if !PathsEqual(link, nested) {
+		t.Fatal("a symlink to a checkout must compare equal to the checkout")
+	}
+}

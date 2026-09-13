@@ -428,6 +428,12 @@ func safeWorktreeCWD(root, cwd string) bool {
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
+// PathsEqual reports whether two checkout paths name the same directory,
+// resolving symlinks when both exist (Rust's cwds_differ comparison).
+func PathsEqual(left string, right string) bool {
+	return samePath(left, right)
+}
+
 func samePath(left, right string) bool {
 	if filepath.Clean(left) == filepath.Clean(right) {
 		return true

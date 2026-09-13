@@ -88,6 +88,11 @@ func interactiveRemoteAgentsOverviewNewWorktree(ctx context.Context, endpoint *a
 		if err != nil {
 			return codextea.AgentThreadSwitchResponse{}, retainedWorktreeSessionError(manager, checkout, err)
 		}
+		// Rust rejects a session the server did not actually place in the new
+		// checkout: the worktree would otherwise stay unattached.
+		if started != nil && strings.TrimSpace(started.CWD) != "" && !worktree.PathsEqual(started.CWD, checkout.CWD) {
+			return codextea.AgentThreadSwitchResponse{}, retainedWorktreeSessionError(manager, checkout, errors.New("the server did not apply the worktree directory"))
+		}
 		threadID := ""
 		if started != nil && started.Thread != nil {
 			threadID = strings.TrimSpace(started.Thread.ID)
