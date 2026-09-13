@@ -2412,6 +2412,9 @@ func sanitizeProjectConfigValues(values map[string]any, broker CredentialBrokerP
 		return nil
 	}
 	var ignored []string
+	// Rust's PROJECT_LOCAL_CONFIG_DENYLIST, in order. The realtime ws model,
+	// backend prompt, startup context, start instructions, and the realtime
+	// table are user-settable, so project-local config may set them too.
 	for _, key := range []string{
 		"openai_base_url",
 		"chatgpt_base_url",
@@ -2422,13 +2425,8 @@ func sanitizeProjectConfigValues(values map[string]any, broker CredentialBrokerP
 		"notify",
 		"profile",
 		"profiles",
-		"experimental_realtime_ws_base_url",
 		"experimental_realtime_webrtc_call_base_url",
-		"experimental_realtime_ws_model",
-		"experimental_realtime_ws_backend_prompt",
-		"experimental_realtime_ws_startup_context",
-		"experimental_realtime_start_instructions",
-		"realtime",
+		"experimental_realtime_ws_base_url",
 		"otel",
 	} {
 		if _, ok := values[key]; ok {

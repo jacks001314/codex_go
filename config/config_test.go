@@ -776,6 +776,67 @@ func TestResponsesAPIMetadataAccessorAndProjectSanitize(t *testing.T) {
 	}
 }
 
+// Mirrors Rust's PROJECT_LOCAL_CONFIG_DENYLIST exactly: the credential-routing
+// keys are stripped and reported, while the realtime ws model/backend
+// prompt/startup context, the start instructions, and the realtime table are
+// user-settable and survive project-local config.
+func TestProjectLocalConfigDenylistMatchesRust(t *testing.T) {
+	denylisted := []string{
+		"openai_base_url",
+		"chatgpt_base_url",
+		"apps_mcp_product_sku",
+		"responses_api_metadata",
+		"model_provider",
+		"model_providers",
+		"notify",
+		"profile",
+		"profiles",
+		"experimental_realtime_webrtc_call_base_url",
+		"experimental_realtime_ws_base_url",
+		"otel",
+	}
+	preserved := []string{
+		"experimental_realtime_ws_model",
+		"experimental_realtime_ws_backend_prompt",
+		"experimental_realtime_ws_startup_context",
+		"experimental_realtime_start_instructions",
+		"realtime",
+	}
+	values := map[string]any{}
+	for _, key := range denylisted {
+		values[key] = "configured"
+	}
+	for _, key := range preserved {
+		values[key] = "configured"
+	}
+
+	ignored := sanitizeProjectConfigValues(values, CredentialBrokerProjectUnconfigured, nil)
+	reported := func(key string) bool {
+		for _, entry := range ignored {
+			if entry == key {
+				return true
+			}
+		}
+		return false
+	}
+	for _, key := range denylisted {
+		if _, ok := values[key]; ok {
+			t.Fatalf("%s must be ignored in project-local config", key)
+		}
+		if !reported(key) {
+			t.Fatalf("%s must be reported as ignored: %#v", key, ignored)
+		}
+	}
+	for _, key := range preserved {
+		if _, ok := values[key]; !ok {
+			t.Fatalf("%s must survive project-local config: %#v", key, values)
+		}
+		if reported(key) {
+			t.Fatalf("%s must not be reported as ignored: %#v", key, ignored)
+		}
+	}
+}
+
 func TestFeatureRequirementsOverrideDefaultAndCLISettingsLikeRust(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("[features]\nin_app_updates = false\n"), 0o600); err != nil {
