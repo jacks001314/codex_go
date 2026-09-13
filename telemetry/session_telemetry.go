@@ -44,6 +44,9 @@ type SessionTelemetryMetadata struct {
 	Slug  string
 	// LogUserPrompts gates whether prompt text may reach the log record.
 	LogUserPrompts bool
+	// AuthEnv reports which auth-related environment variables the process sees
+	// (Rust's SessionTelemetry::with_auth_env).
+	AuthEnv AuthEnvTelemetryMetadata
 	// AppVersion is the Codex version reporting the record.
 	AppVersion string
 	// TerminalType is the client's terminal name.

@@ -3858,6 +3858,14 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			r.applyThreadStartOriginator(response, request)
 			r.markRuntimeSeedRollout(response, request)
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
+			if request.Method == MethodThreadStart {
+				// Rust reports the session-start telemetry when the core session is
+				// constructed, before the thread-started event.
+				var startParams ThreadStartParams
+				_ = request.DecodeParams(&startParams)
+				r.emitConversationStartsRecords(context.Background(), response.Thread.ID,
+					r.effectiveConfigForSessionTelemetry(), &startParams)
+			}
 			// Rust #44944: retain the provider route this thread was admitted with.
 			r.captureThreadModelProviderRouteByID(response.Thread.ID)
 			if request.Method == MethodThreadStart && r.services.StateRuntime != nil {
@@ -6915,6 +6923,19 @@ func dynamicToolsFromMetadata(extra map[string]any) []turn.DynamicToolSpec {
 		return nil
 	}
 	return tools
+}
+
+// effectiveConfigForSessionTelemetry resolves the effective config the
+// session-start telemetry reads, or nil when it cannot be read.
+func (r *RuntimeRouter) effectiveConfigForSessionTelemetry() *config.Config {
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return nil
+	}
+	return &config.Config{Values: read.Config}
 }
 
 func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerResponse, error) {

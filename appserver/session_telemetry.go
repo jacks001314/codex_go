@@ -2,11 +2,14 @@ package appserver
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"codex_go/auth"
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/protocol"
+	"codex_go/sandbox"
 	"codex_go/telemetry"
 	"codex_go/tool"
 	"codex_go/turn"
@@ -49,7 +52,14 @@ func (r *RuntimeRouter) sessionTelemetryMetadataForThread(threadID string) telem
 	}
 	if r.services.Config != nil {
 		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
-			metadata.LogUserPrompts = (&config.Config{Values: read.Config}).Otel().LogUserPrompt
+			cfg := &config.Config{Values: read.Config}
+			metadata.LogUserPrompts = cfg.Otel().LogUserPrompt
+			metadata.AuthEnv = telemetry.CollectAuthEnvTelemetry(
+				providerEnvKeyForSession(cfg),
+				// The app-server does not enable the CODEX_API_KEY environment
+				// variable (Rust's app-server passes false to shared_from_config).
+				false,
+			)
 		}
 	}
 	if active := r.activeTurnForNetworkApprovalThread(threadID, ""); active != nil {
@@ -81,6 +91,167 @@ func (r *RuntimeRouter) sessionTelemetryMetadataForThread(threadID string) telem
 		}
 	}
 	return metadata
+}
+
+// providerEnvKeyForSession resolves the env key of the provider a session uses
+// (Rust's session provider `env_key`), or "" when the provider has none.
+func providerEnvKeyForSession(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	provider, err := model.ProviderForConfigID(configValues(cfg), stringConfigValue(cfg, "model_provider"),
+		stringConfigValue(cfg, "openai_base_url"))
+	if err != nil || provider == nil {
+		return ""
+	}
+	return strings.TrimSpace(provider.EnvKey)
+}
+
+// emitConversationStartsRecords mirrors SessionTelemetry::conversation_starts:
+// the record a session reports when its thread starts, carrying the model and
+// permission settings, the auth environment, and the enabled MCP servers.
+func (r *RuntimeRouter) emitConversationStartsRecords(ctx context.Context, threadID string, cfg *config.Config, params *ThreadStartParams) {
+	session := r.sessionTelemetryForThread(threadID)
+	if session == nil {
+		return
+	}
+	telemetry.EmitConversationStarts(ctx, session, r.conversationStartsEvent(cfg, params))
+}
+
+// conversationStartsEvent resolves the values the session-start record reports
+// from the effective config and the thread-start request.
+func (r *RuntimeRouter) conversationStartsEvent(cfg *config.Config, params *ThreadStartParams) telemetry.ConversationStartsEvent {
+	event := telemetry.ConversationStartsEvent{
+		ReasoningEffort:  stringConfigValue(cfg, "model_reasoning_effort"),
+		ReasoningSummary: firstNonEmpty(stringConfigValue(cfg, "model_reasoning_summary"), "auto"),
+	}
+	providerID := stringConfigValue(cfg, "model_provider")
+	cwd := ""
+	if params != nil {
+		providerID = firstNonEmpty(strings.TrimSpace(params.ModelProvider), providerID)
+		cwd = strings.TrimSpace(params.CWD)
+	}
+	provider, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
+	if err == nil && provider != nil {
+		event.ProviderName = firstNonEmpty(strings.TrimSpace(provider.Name), providerID)
+	} else {
+		event.ProviderName = providerID
+	}
+	event.ContextWindow = intConfigValue(cfg, "model_context_window")
+	event.AutoCompactTokenLimit = intConfigValue(cfg, "model_auto_compact_token_limit")
+	event.ApprovalPolicy = conversationStartsApprovalPolicy(cfg, params)
+	event.SandboxPolicy = r.conversationStartsSandboxPolicy(cfg, params, cwd)
+	event.MCPServers = enabledMCPServerNames(cfg)
+	return event
+}
+
+// conversationStartsApprovalPolicy mirrors the resolved approval policy Rust
+// reports: the request's policy when it sets one, otherwise the config value,
+// otherwise the runtime's default.
+func conversationStartsApprovalPolicy(cfg *config.Config, params *ThreadStartParams) string {
+	var turnParams *turn.TurnStartParams
+	if params != nil {
+		turnParams = &turn.TurnStartParams{ApprovalPolicy: params.ApprovalPolicy}
+	}
+	return string(turnApprovalPolicyForTurn(cfg, turnParams))
+}
+
+// conversationStartsSandboxPolicy mirrors the legacy sandbox policy Rust's
+// Display reports for the session's effective permission profile.
+func (r *RuntimeRouter) conversationStartsSandboxPolicy(cfg *config.Config, params *ThreadStartParams, cwd string) string {
+	var turnParams *turn.TurnStartParams
+	if params != nil {
+		if strings.TrimSpace(params.CWD) != "" {
+			cwd = strings.TrimSpace(params.CWD)
+		}
+		turnParams = &turn.TurnStartParams{SandboxPolicy: params.Sandbox, Permissions: params.Permissions}
+	}
+	resolution, err := turnSandboxPermissionProfile(cfg, cwd, turnParams)
+	if err == nil {
+		if policy := telemetrySandboxPolicy(resolution, cwd); policy != "" {
+			return policy
+		}
+	}
+	// Rust reports the SandboxMode enum default when the config selects no
+	// sandbox (config_types.rs: `#[default] ReadOnly`).
+	return firstNonEmpty(stringConfigValue(cfg, "sandbox_mode"), string(sandbox.SandboxReadOnly))
+}
+
+// telemetrySandboxPolicy mirrors Rust's SandboxPolicy Display names
+// (kebab-case) for the session's effective permission profile; the analytics
+// projection of the same profile uses snake_case names.
+func telemetrySandboxPolicy(resolution *config.SandboxPermissionProfileResolution, cwd string) string {
+	if resolution == nil || resolution.Profile == nil {
+		return ""
+	}
+	profile := resolution.Profile
+	if profile.Disabled {
+		return "danger-full-access"
+	}
+	policy := profile.SandboxPolicy
+	if policy == nil {
+		if profile.AllowsNetwork() {
+			return "danger-full-access"
+		}
+		return "read-only"
+	}
+	if policy.HasFullDiskWriteAccess() {
+		if profile.AllowsNetwork() {
+			return "danger-full-access"
+		}
+		return "external-sandbox"
+	}
+	if len(policy.GetWritableRootsWithCWD(cwd)) == 0 {
+		return "read-only"
+	}
+	return "workspace-write"
+}
+
+// enabledMCPServerNames lists the configured MCP servers that are not disabled
+// (Rust's effective_mcp_servers filtered by `enabled`).
+func enabledMCPServerNames(cfg *config.Config) []string {
+	if cfg == nil || cfg.Values == nil {
+		return nil
+	}
+	servers, _ := cfg.Values["mcp_servers"].(map[string]any)
+	if len(servers) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(servers))
+	for name, entry := range servers {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if table, ok := entry.(map[string]any); ok {
+			if enabled, ok := table["enabled"].(bool); ok && !enabled {
+				continue
+			}
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// intConfigValue reads an integer config value, or nil when it is absent.
+func intConfigValue(cfg *config.Config, key string) *int64 {
+	if cfg == nil || cfg.Values == nil {
+		return nil
+	}
+	switch value := cfg.Values[key].(type) {
+	case int:
+		converted := int64(value)
+		return &converted
+	case int64:
+		converted := value
+		return &converted
+	case float64:
+		converted := int64(value)
+		return &converted
+	default:
+		return nil
+	}
 }
 
 // emitUserPromptRecords mirrors SessionTelemetry::user_prompt at the point a

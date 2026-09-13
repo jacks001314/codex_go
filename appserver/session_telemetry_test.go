@@ -261,6 +261,103 @@ func TestRequestSpanTraceFollowsTheTurnLikeRust(t *testing.T) {
 	}
 }
 
+// A thread start reports the session-start telemetry: the provider, model and
+// permission settings, the auth environment, and the enabled MCP servers
+// (Rust's SessionTelemetry::conversation_starts, emitted when the core session
+// starts).
+func TestThreadStartEmitsConversationStartsLikeRust(t *testing.T) {
+	received := make(chan map[string]any, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case received <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	home := t.TempDir()
+	configToml := fmt.Sprintf(`[otel.exporter.otlp-http]
+endpoint = %q
+protocol = "json"
+
+[mcp_servers.docs]
+command = "npx"
+
+[mcp_servers.disabled_server]
+command = "npx"
+enabled = false
+`, server.URL+"/v1/logs")
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configToml), 0o600); err != nil {
+		t.Fatalf("WriteFile config.toml error = %v", err)
+	}
+
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	router.configureOtelMetrics(home, nil, state.NewTaskMetrics())
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	if err := router.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case payload := <-received:
+			resourceLogs, _ := payload["resourceLogs"].([]any)
+			if len(resourceLogs) == 0 {
+				continue
+			}
+			for _, scopeEntry := range resourceLogs[0].(map[string]any)["scopeLogs"].([]any) {
+				for _, recordEntry := range scopeEntry.(map[string]any)["logRecords"].([]any) {
+					record := recordEntry.(map[string]any)
+					attributes := map[string]string{}
+					for _, entry := range record["attributes"].([]any) {
+						attribute := entry.(map[string]any)
+						attributes[attribute["key"].(string)] = attribute["value"].(map[string]any)["stringValue"].(string)
+					}
+					if attributes["event.name"] != "codex.conversation_starts" {
+						continue
+					}
+					if attributes["conversation.id"] != threadID {
+						t.Fatalf("conversation.id = %q, want %q", attributes["conversation.id"], threadID)
+					}
+					if attributes["provider_name"] == "" {
+						t.Fatalf("record = %#v", attributes)
+					}
+					// Only the enabled MCP servers are reported.
+					if attributes["mcp_servers"] != "docs" {
+						t.Fatalf("mcp_servers = %q", attributes["mcp_servers"])
+					}
+					if attributes["reasoning_summary"] != "auto" {
+						t.Fatalf("reasoning_summary = %q", attributes["reasoning_summary"])
+					}
+					if attributes["auth.env_openai_api_key_present"] != "true" ||
+						attributes["auth.env_codex_api_key_enabled"] != "false" {
+						t.Fatalf("auth env = %#v", attributes)
+					}
+					if attributes["sandbox_policy"] == "" || attributes["approval_policy"] == "" {
+						t.Fatalf("permission settings = %#v", attributes)
+					}
+					return
+				}
+			}
+		case <-deadline:
+			t.Fatal("the OTLP logs endpoint did not receive the session-start record")
+		}
+	}
+}
+
 // A turn start reports its user prompt through the logs pipeline, and the
 // `otel.log_user_prompt` setting decides whether the text or the redaction
 // marker reaches the record (Rust's SessionTelemetry::user_prompt).
