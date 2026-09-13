@@ -104,11 +104,17 @@ func interactiveExternalEditorDirectoryHandler(root *cli.RootOptions, codexHome 
 // when the local TUI starts - the requirement-driven startup warnings plus the
 // ignored-configuration notice - which the TUI coalesces into its startup
 // warnings entry (Rust config.startup_warnings -> ConfigWarning notifications).
-func interactiveStartupConfigWarnings(codexHome string, cwd string) []string {
+func interactiveStartupConfigWarnings(codexHome string, cwd string, theme string) []string {
 	service := config.NewConfigService(codexHome)
 	warnings := service.StartupWarningsForCWD(cwd)
 	if ignored := strings.TrimSpace(service.IgnoredSettingsWarning(cwd)); ignored != "" {
 		warnings = append(warnings, ignored)
+	}
+	// Rust validates the final config's `tui.theme` when the TUI applies the
+	// syntax-highlight override and pushes the notice into the same startup
+	// warnings list.
+	if themeWarning := codextui.ThemeStartupWarning(theme, codexHome); themeWarning != "" {
+		warnings = append(warnings, themeWarning)
 	}
 	return warnings
 }
@@ -955,7 +961,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		NotificationCondition:      settings.NotificationCondition,
 		PermissionRequirements:     settings.PermissionRequirements,
 		MCPServers:                 mcpStatuses,
-		StartupConfigWarnings:      interactiveStartupConfigWarnings(auth.DefaultCodexHome(), strings.TrimSpace(state.CWD)),
+		StartupConfigWarnings:      interactiveStartupConfigWarnings(auth.DefaultCodexHome(), strings.TrimSpace(state.CWD), settings.TUITheme),
 		OnReadMCPInventory: func(detail bool) ([]historycell.McpServerStatus, error) {
 			if mcpService == nil {
 				return nil, nil

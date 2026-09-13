@@ -472,6 +472,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		PermissionRequirements:    settings.PermissionRequirements,
 		HideRateLimitModelNudge:   settings.HideRateLimitModelNudge,
 		TUITheme:                  settings.TUITheme,
+		StartupConfigWarnings:     remoteTUIStartupConfigWarnings(settings.TUITheme),
 		TUIPet:                    settings.TUIPet,
 		CodexHome:                 auth.DefaultCodexHome(),
 		PetEnv:                    environmentMapFromEnviron(os.Environ()),
@@ -1212,6 +1213,17 @@ func interactiveRemoteCloseSide(ctx context.Context, endpoint *appserverdaemon.R
 		return codextea.SideCloseResponse{}, err
 	}
 	return codextea.SideCloseResponse{}, nil
+}
+
+// remoteTUIStartupConfigWarnings reports the TUI-side startup warnings for the
+// remote app. Rust validates the final config's `tui.theme` when it applies the
+// syntax-highlight override and pushes the notice into the same startup
+// warnings list the app-server config warnings use.
+func remoteTUIStartupConfigWarnings(theme string) []string {
+	if warning := codextui.ThemeStartupWarning(theme, auth.DefaultCodexHome()); warning != "" {
+		return []string{warning}
+	}
+	return nil
 }
 
 func interactiveRemoteReadSkills(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, cwd string, forceReload bool) (appserver.SkillsListResponse, error) {

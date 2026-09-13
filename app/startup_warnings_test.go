@@ -27,7 +27,7 @@ func TestInteractiveStartupConfigWarningsLikeRust(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("allowed_approval_policies = [\"on-request\"]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	warnings := interactiveStartupConfigWarnings(home, "")
+	warnings := interactiveStartupConfigWarnings(home, "", "bogus-theme")
 	var requirementWarning, ignoredWarning bool
 	for _, warning := range warnings {
 		if strings.Contains(warning, "Configured value for `approval_policy` is disallowed by requirements") {
@@ -40,6 +40,15 @@ func TestInteractiveStartupConfigWarningsLikeRust(t *testing.T) {
 	if !requirementWarning || !ignoredWarning {
 		t.Fatalf("interactiveStartupConfigWarnings() = %#v", warnings)
 	}
+	var themeWarning bool
+	for _, warning := range warnings {
+		if strings.Contains(warning, "Theme \"bogus-theme\" not found.") {
+			themeWarning = true
+		}
+	}
+	if !themeWarning {
+		t.Fatalf("theme warning missing: %#v", warnings)
+	}
 
 	model := codextea.NewModel(codextui.NewState(nil), codextea.Options{
 		Width:                 100,
@@ -47,13 +56,27 @@ func TestInteractiveStartupConfigWarningsLikeRust(t *testing.T) {
 		ShowSessionHeader:     true,
 		StartupConfigWarnings: warnings,
 	})
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "\u26a0 2 startup issues") {
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "\u26a0 3 startup issues") {
 		t.Fatalf("startup warnings not rendered:\n%s", view)
 	}
 }
 
 // Mirrors Rust's chatwidget ServerNotification::ConfigWarning: the remote TUI
 // forwards the notification into the model's startup warning path.
+// Mirrors Rust's TUI-side theme validation for the remote app.
+func TestRemoteTUIStartupConfigWarningsLikeRust(t *testing.T) {
+	if got := remoteTUIStartupConfigWarnings(""); got != nil {
+		t.Fatalf("remoteTUIStartupConfigWarnings(unset) = %#v", got)
+	}
+	if got := remoteTUIStartupConfigWarnings("ansi"); got != nil {
+		t.Fatalf("remoteTUIStartupConfigWarnings(bundled) = %#v", got)
+	}
+	got := remoteTUIStartupConfigWarnings("bogus-theme")
+	if len(got) != 1 || !strings.Contains(got[0], "Theme \"bogus-theme\" not found.") {
+		t.Fatalf("remoteTUIStartupConfigWarnings(unknown) = %#v", got)
+	}
+}
+
 func TestRemoteConfigWarningFeedsStartupWarningsLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	messages := make(chan bubbletea.Msg, 1)
