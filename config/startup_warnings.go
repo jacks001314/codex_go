@@ -76,8 +76,17 @@ func (s *ConfigService) ConfigWarningsForCWD(cwd string) []string {
 }
 
 // StartupWarnings reports the requirement-driven overrides and fallbacks that
-// apply to the given effective configuration, in a stable order.
+// apply to the given effective configuration, in a stable order, followed by
+// the `otel.*` trace-metadata warnings (Rust appends otel::resolve_config's
+// warnings last).
 func StartupWarnings(values map[string]any, requirements *ConfigRequirements) []string {
+	warnings := requirementStartupWarnings(values, requirements)
+	return append(warnings, OtelStartupWarnings(values)...)
+}
+
+// requirementStartupWarnings reports the requirement-driven overrides and
+// fallbacks that apply to the given effective configuration, in a stable order.
+func requirementStartupWarnings(values map[string]any, requirements *ConfigRequirements) []string {
 	if values == nil || requirements == nil {
 		return nil
 	}
