@@ -1650,6 +1650,9 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequest(httpRequest *http.Request)
 func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, accept string, maxRetries uint64) (*http.Response, error) {
 	var lastErr error
 	retryTooManyRequests := apiRequest != nil && apiRequest.Stream
+	// retryAfterUnauthorized mirrors Rust's PendingUnauthorizedRetry: the attempt
+	// that follows a 401 recovery reports that it retried.
+	retryAfterUnauthorized := false
 	for attempt := uint64(0); attempt <= maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1680,6 +1683,7 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 		// Rust's RequestTelemetry::on_request fires per HTTP attempt, before the
 		// retry decision, so retries each record an api_request sample.
 		r.recordAPIRequest(status, err, attemptDuration)
+		r.recordAPIRequestRecord(ctx, request, apiRequest, httpRequest, httpResponse, attempt, err, attemptDuration, retryAfterUnauthorized)
 		responsesDiagnostic("http.result", map[string]any{
 			"thread_id":       request.ThreadID,
 			"turn_id":         request.TurnID,
@@ -1694,6 +1698,9 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 			lastErr = err
 			if httpResponse != nil && httpResponse.StatusCode == http.StatusUnauthorized {
 				_ = r.refreshAuthAfterUnauthorized(ctx)
+				retryAfterUnauthorized = true
+			} else {
+				retryAfterUnauthorized = false
 			}
 			delay := responsesRetryDelay(httpResponse, attempt+1)
 			if httpResponse != nil && httpResponse.Body != nil {

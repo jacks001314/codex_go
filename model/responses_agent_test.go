@@ -2295,6 +2295,67 @@ func TestResponsesAgentRunnerRefreshesCommandAuthAfterUnauthorized(t *testing.T)
 	}
 }
 
+// Every HTTP attempt reports its api-request record: the attempt number, the
+// status, the provider-relative endpoint, the auth header the provider attached,
+// the response's request id / cf-ray / auth-error headers, and whether the
+// attempt followed a 401 recovery (Rust's RequestTelemetry::on_request).
+func TestResponsesAgentRunnerRecordsAPIAttemptsLikeRust(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.Header().Set("x-request-id", "req-401")
+			w.Header().Set("cf-ray", "ray-401")
+			w.Header().Set("x-openai-authorization-error", "missing_authorization_header")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-auth","model":"gpt-test","output_text":"ok"}`))
+	}))
+	defer server.Close()
+
+	sink := &recordingTelemetrySink{}
+	initialAuth := BearerAuthHeaders("token", "", false)
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{BaseURL: server.URL + "/v1", RequestMaxRetries: 1},
+		Auth:     &initialAuth,
+	})
+	runner.Telemetry = sink
+	runner.AgentIdentityTelemetry = &codexapi.AgentIdentityTelemetry{AgentID: "agent-1", TaskID: "task-1"}
+	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"}); err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	if len(sink.apiRequests) != 2 {
+		t.Fatalf("records = %#v", sink.apiRequests)
+	}
+	first := sink.apiRequests[0]
+	if first.Attempt != 0 || first.Status == nil || *first.Status != http.StatusUnauthorized {
+		t.Fatalf("first record = %#v", first)
+	}
+	if first.Endpoint != "/responses" || !first.AuthHeaderAttached || first.AuthHeaderName != "authorization" {
+		t.Fatalf("first record = %#v", first)
+	}
+	if first.RequestID != "req-401" || first.CFRay != "ray-401" ||
+		first.AuthError != "missing_authorization_header" {
+		t.Fatalf("first record = %#v", first)
+	}
+	if first.RetryAfterUnauthorized || first.ErrorMessage != "" {
+		t.Fatalf("first record = %#v", first)
+	}
+	if first.AgentID != "agent-1" || first.TaskID != "task-1" {
+		t.Fatalf("first record = %#v", first)
+	}
+
+	second := sink.apiRequests[1]
+	if second.Attempt != 1 || !second.RetryAfterUnauthorized {
+		t.Fatalf("second record = %#v", second)
+	}
+	if second.Status == nil || *second.Status != http.StatusOK || second.Endpoint != "/responses" {
+		t.Fatalf("second record = %#v", second)
+	}
+}
+
 func TestResponsesAgentRunnerRefreshesChatGPTAuthAfterUnauthorized(t *testing.T) {
 	home := t.TempDir()
 	initialSnapshot := &auth.AuthDotJSON{

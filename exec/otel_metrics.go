@@ -8,6 +8,7 @@ import (
 
 	"codex_go/config"
 	"codex_go/doctor"
+	"codex_go/model"
 	"codex_go/otelinit"
 	"codex_go/protocol"
 	"codex_go/telemetry"
@@ -44,14 +45,36 @@ func (r *Runner) configureOtelProvider(cfg *config.Config, req *Request) {
 		}
 		r.otelOriginator = execAgentOriginator(req)
 		r.otelToolResultLimits = cfg.Otel().ToolResult
+		r.otelAuthEnv = execAuthEnvTelemetry(cfg)
 		return
 	}
 	r.otelProvider = provider
 	r.otelOriginator = execAgentOriginator(req)
 	r.otelToolResultLimits = cfg.Otel().ToolResult
+	r.otelAuthEnv = execAuthEnvTelemetry(cfg)
 	// Rust's exec records the process-start counter with the "codex_exec"
 	// originator.
 	telemetry.RecordProcessStartOnce(provider.Metrics(), "codex_exec")
+}
+
+// execAuthEnvTelemetry mirrors codex-login's collect_auth_env_telemetry for the
+// run's provider; the exec binary does not enable the CODEX_API_KEY variable.
+func execAuthEnvTelemetry(cfg *config.Config) telemetry.AuthEnvTelemetryMetadata {
+	envKey := ""
+	if cfg != nil {
+		providerID := ""
+		if value, ok := cfg.Values["model_provider"].(string); ok {
+			providerID = strings.TrimSpace(value)
+		}
+		baseURL := ""
+		if value, ok := cfg.Values["openai_base_url"].(string); ok {
+			baseURL = strings.TrimSpace(value)
+		}
+		if provider, err := model.ProviderForConfigID(cfg.Values, providerID, baseURL); err == nil && provider != nil {
+			envKey = strings.TrimSpace(provider.EnvKey)
+		}
+	}
+	return telemetry.CollectAuthEnvTelemetry(envKey, false)
 }
 
 // otelMetricsSink returns the run's metrics client when OTEL metrics are
@@ -73,6 +96,7 @@ func (r *Runner) sessionTelemetryForRun() *telemetry.SessionTelemetry {
 	session := telemetry.NewSessionTelemetry(telemetry.SessionTelemetryMetadata{
 		AppVersion: doctor.Version(),
 		Originator: strings.TrimSpace(r.otelOriginator),
+		AuthEnv:    r.otelAuthEnv,
 	})
 	if client := r.otelProvider.Logs(); client != nil {
 		session.Logs = client

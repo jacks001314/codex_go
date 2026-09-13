@@ -435,9 +435,10 @@ func TestParseResponsesStreamRecordsSSEDiagnosticsLikeRust(t *testing.T) {
 
 // recordingTelemetrySink captures the diagnostic records the client emits.
 type recordingTelemetrySink struct {
-	logged []telemetryRecord
-	traced []telemetryRecord
-	spans  []*recordingTelemetrySpan
+	logged      []telemetryRecord
+	traced      []telemetryRecord
+	spans       []*recordingTelemetrySpan
+	apiRequests []APIRequestRecord
 }
 
 // recordingTelemetrySpan captures one span's lifecycle, so the tests can assert
@@ -470,6 +471,10 @@ func (s *recordingTelemetrySink) StartSpan(_ context.Context, parent TelemetrySp
 	}
 	s.spans = append(s.spans, span)
 	return context.Background(), span
+}
+
+func (s *recordingTelemetrySink) RecordAPIRequest(_ context.Context, record APIRequestRecord) {
+	s.apiRequests = append(s.apiRequests, record)
 }
 
 type telemetryRecord struct {

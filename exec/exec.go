@@ -118,6 +118,9 @@ type Runner struct {
 	// otelToolResultLimits is the `otel.tool_result` log byte budget resolved
 	// from the run's config.
 	otelToolResultLimits protocol.ToolResultLogConfig
+	// otelAuthEnv reports which auth-related environment variables the run sees
+	// (Rust's SessionTelemetry::with_auth_env).
+	otelAuthEnv telemetry.AuthEnvTelemetryMetadata
 
 	// reasoningEffortMu guards the per-thread reasoning-effort request pin
 	// (Rust #43110/#43795); the map is created lazily.

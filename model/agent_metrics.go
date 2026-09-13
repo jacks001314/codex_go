@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,30 @@ type MetricsSink interface {
 	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }
 
+// APIRequestRecord carries the per-attempt values of one model HTTP request
+// (Rust's RequestTelemetry::on_request).
+type APIRequestRecord struct {
+	Attempt  uint64
+	Duration time.Duration
+	// Status is absent when the attempt failed before a response arrived.
+	Status *int
+	// ErrorMessage is absent when the attempt succeeded.
+	ErrorMessage string
+	// Endpoint is the provider-relative route (e.g. "/responses").
+	Endpoint               string
+	AuthHeaderAttached     bool
+	AuthHeaderName         string
+	RetryAfterUnauthorized bool
+	RecoveryMode           string
+	RecoveryPhase          string
+	RequestID              string
+	CFRay                  string
+	AuthError              string
+	AuthErrorCode          string
+	AgentID                string
+	TaskID                 string
+}
+
 // SessionTelemetrySink receives the diagnostic records for the model client's
 // events: Rust's log_event! / trace_event! macros, whose session metadata the
 // sink owns, plus the spans the client instrumentation opens. The model package
@@ -34,6 +59,8 @@ type SessionTelemetrySink interface {
 	// receiving_stream, handle_responses, receiving) and returns the context
 	// carrying it, so records emitted while it is open attach to it.
 	StartSpan(ctx context.Context, parent TelemetrySpan, name string, attributes map[string]string) (context.Context, TelemetrySpan)
+	// RecordAPIRequest reports one model HTTP attempt.
+	RecordAPIRequest(ctx context.Context, record APIRequestRecord)
 }
 
 // Metric names mirror codex-rs/otel/src/metrics/names.rs.
@@ -90,6 +117,45 @@ type sseEventTelemetry struct {
 	Success   bool
 	Duration  time.Duration
 	Err       error
+}
+
+// recordAPIRequestRecord mirrors the record half of
+// SessionTelemetry::record_api_request, which Rust's RequestTelemetry::on_request
+// reports for every HTTP attempt (the metric half stays in recordAPIRequest).
+func (r *ResponsesAgentRunner) recordAPIRequestRecord(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, httpRequest *http.Request, httpResponse *http.Response, attempt uint64, transportErr error, duration time.Duration, retryAfterUnauthorized bool) {
+	if r == nil || r.Telemetry == nil || apiRequest == nil {
+		return
+	}
+	record := APIRequestRecord{
+		Attempt:                attempt,
+		Duration:               duration,
+		Endpoint:               r.responsesEndpoint(apiRequest.Model, request).Path(),
+		RetryAfterUnauthorized: retryAfterUnauthorized,
+	}
+	if httpRequest != nil {
+		// Rust reports the auth header the provider attached
+		// (codex-api's auth_header_telemetry): only `authorization` counts.
+		if strings.TrimSpace(httpRequest.Header.Get("Authorization")) != "" {
+			record.AuthHeaderAttached = true
+			record.AuthHeaderName = "authorization"
+		}
+	}
+	if httpResponse != nil {
+		status := httpResponse.StatusCode
+		record.Status = &status
+		record.RequestID = responseHeaderValue(httpResponse.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader)
+		record.CFRay = responseHeaderValue(httpResponse.Header, "cf-ray")
+		record.AuthError = responseHeaderValue(httpResponse.Header, "x-openai-authorization-error")
+		record.AuthErrorCode = responseAuthorizationErrorCode(httpResponse.Header)
+	}
+	if transportErr != nil {
+		record.ErrorMessage = transportErr.Error()
+	}
+	if r.AgentIdentityTelemetry != nil {
+		record.AgentID = r.AgentIdentityTelemetry.AgentID
+		record.TaskID = r.AgentIdentityTelemetry.TaskID
+	}
+	r.Telemetry.RecordAPIRequest(ctx, record)
 }
 
 // recordSSEEvent mirrors SessionTelemetry's sse_event/sse_event_failed: one
