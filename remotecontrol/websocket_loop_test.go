@@ -96,17 +96,39 @@ func TestRemoteControlWebsocketLoopRetiresOnAuthOwnerChangeWhileConnected(t *tes
 	var clientConnsMu sync.Mutex
 	var clientConns []*websocket.Conn
 	connected := make(chan *websocket.Conn, 4)
+	connectCursors := make(chan *string, 4)
 	loop := NewRemoteControlWebsocketLoop(manager, &RemoteControlWebsocketLoopOptions{
 		StatusPollInterval:        time.Millisecond,
 		ConnectionShutdownTimeout: 100 * time.Millisecond,
 		AuthRevision:              func(context.Context) (uint64, error) { return authRevision.Load(), nil },
 		ReconnectDelay:            func(*uint64) (time.Duration, bool) { return time.Millisecond, false },
-		Connect: func(context.Context, *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
+		Connect: func(_ context.Context, options *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
+			var cursor *string
+			if options != nil && options.SubscribeCursor != nil {
+				value := *options.SubscribeCursor
+				cursor = &value
+			}
+			select {
+			case connectCursors <- cursor:
+			default:
+			}
 			clientConn, serverConn := connectedRemoteControlWebsocketPair(t)
 			clientConnsMu.Lock()
 			clientConns = append(clientConns, clientConn)
 			clientConnsMu.Unlock()
-			connected <- clientConn
+			// Answer the close handshake so the loop's Conn.Close does not wait
+			// for a peer that never reads.
+			go func(c *websocket.Conn) {
+				for {
+					if _, _, err := c.Read(context.Background()); err != nil {
+						return
+					}
+				}
+			}(clientConn)
+			select {
+			case connected <- clientConn:
+			default:
+			}
 			return serverConn, nil, nil
 		},
 	})
@@ -130,15 +152,40 @@ func TestRemoteControlWebsocketLoopRetiresOnAuthOwnerChangeWhileConnected(t *tes
 	case <-time.After(2 * time.Second):
 		t.Fatal("remote control websocket loop did not connect")
 	}
+	if cursor := <-connectCursors; cursor != nil {
+		t.Fatalf("first connect cursor = %q, want none", *cursor)
+	}
 	// Let the loop finish its post-connect auth snapshot and enter the live poll;
 	// a change recorded as that baseline would not be an owner change.
 	time.Sleep(50 * time.Millisecond)
+
+	// A live subscription cursor must not survive the identity change.
+	cursor := "cursor-1"
+	loop.stateMu.Lock()
+	loop.state.SubscribeCursor = &cursor
+	loop.stateMu.Unlock()
 
 	// The authentication owner changes while the relay is live.
 	authRevision.Store(1)
 	waitForRemoteControlStatus(t, manager, StatusDisabled)
 	if manager.enrollment != nil {
 		t.Fatalf("enrollment survived the auth owner change: %#v", manager.enrollment)
+	}
+	loop.stateMu.Lock()
+	if loop.state.SubscribeCursor != nil {
+		t.Fatalf("replay cursor survived the auth owner change: %q", *loop.state.SubscribeCursor)
+	}
+	loop.stateMu.Unlock()
+
+	// Re-enabling starts a replacement session with fresh replay state.
+	manager.Enable(&EnableParams{Ephemeral: true})
+	select {
+	case <-connected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote control websocket loop did not restart after re-enable")
+	}
+	if cursor := <-connectCursors; cursor != nil {
+		t.Fatalf("replacement connect cursor = %q, want none", *cursor)
 	}
 
 	cancel()

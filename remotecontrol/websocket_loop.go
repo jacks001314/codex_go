@@ -161,6 +161,7 @@ func (l *RemoteControlWebsocketLoop) Run(ctx context.Context) error {
 			// stays disabled (clearing client, replay, and enrollment state) until
 			// the user enables remote control again.
 			_ = l.manager.RetireForAuthChange(ctx)
+			l.resetSessionState()
 			reconnectAttempt = 0
 			l.manager.ResetAuthRecovery()
 			continue
@@ -290,6 +291,19 @@ func (l *RemoteControlWebsocketLoop) connectionPollReason(
 		return remoteControlConnectionEndedAuthChanged
 	}
 	return ""
+}
+
+// resetSessionState drops the relay's per-session replay state so the next
+// session starts fresh instead of resuming the retired owner's stream (Rust
+// #44341: a replacement session gets fresh client, replay, and enrollment
+// state).
+func (l *RemoteControlWebsocketLoop) resetSessionState() {
+	if l == nil {
+		return
+	}
+	l.stateMu.Lock()
+	l.state = NewWebsocketState()
+	l.stateMu.Unlock()
 }
 
 func (l *RemoteControlWebsocketLoop) waitConnectionWorkers(errCh <-chan error) {
