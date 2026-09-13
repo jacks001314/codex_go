@@ -98,7 +98,8 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// scenarios.rs plus two Astra scenario snapshots.
 			// #44948 added two more scenarios snapshots (async questions,
 			// plugin refresh).
-			Files: 190,
+			// #45185 added core/tests/suite/direct_tool_metadata.rs.
+			Files: 191,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

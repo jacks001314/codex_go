@@ -19,6 +19,10 @@ const (
 	SandboxTypeMacosSeatbelt          SandboxType = "macosSeatbelt"
 	SandboxTypeLinuxSeccomp           SandboxType = "linuxSeccomp"
 	SandboxTypeWindowsRestrictedToken SandboxType = "windowsRestrictedToken"
+	// SandboxTypeWindowsMxc is Rust's SandboxType::WindowsMxc (the native MXC
+	// Windows sandbox). Go records its identity; the MXC launcher itself is not
+	// ported (Rust #45176).
+	SandboxTypeWindowsMxc SandboxType = "windowsMxc"
 )
 
 // SandboxViolationEvent is a normalized violation observed by sandbox enforcement.
@@ -33,6 +37,7 @@ const (
 	SandboxViolationBackendManagedNetworkProxy SandboxViolationBackend = "managed_network_proxy"
 	SandboxViolationBackendSeatbelt            SandboxViolationBackend = "seatbelt"
 	SandboxViolationBackendWindowsSandbox      SandboxViolationBackend = "windows_sandbox"
+	SandboxViolationBackendWindowsMxc          SandboxViolationBackend = "windows_mxc"
 )
 
 type FileSystemSandboxViolation struct {
@@ -249,6 +254,8 @@ func sandboxViolationBackendForType(sandboxType SandboxType) (SandboxViolationBa
 		return SandboxViolationBackendLinuxSandbox, true
 	case SandboxTypeWindowsRestrictedToken:
 		return SandboxViolationBackendWindowsSandbox, true
+	case SandboxTypeWindowsMxc:
+		return SandboxViolationBackendWindowsMxc, true
 	default:
 		return "", false
 	}

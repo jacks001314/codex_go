@@ -66,7 +66,8 @@ func (s *ProcessSandboxType) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	switch ProcessSandboxType(value) {
-	case ProcessSandboxNone, ProcessSandboxMacosSeatbelt, ProcessSandboxLinuxSeccomp, ProcessSandboxWindowsRestrictedToken:
+	case ProcessSandboxNone, ProcessSandboxMacosSeatbelt, ProcessSandboxLinuxSeccomp,
+		ProcessSandboxWindowsRestrictedToken, ProcessSandboxWindowsMxc:
 		*s = ProcessSandboxType(value)
 		return nil
 	default:
@@ -432,6 +433,8 @@ const (
 	ProcessSandboxMacosSeatbelt          ProcessSandboxType = "macosSeatbelt"
 	ProcessSandboxLinuxSeccomp           ProcessSandboxType = "linuxSeccomp"
 	ProcessSandboxWindowsRestrictedToken ProcessSandboxType = "windowsRestrictedToken"
+	// ProcessSandboxWindowsMxc is Rust's ProcessSandboxType::WindowsMxc.
+	ProcessSandboxWindowsMxc ProcessSandboxType = "windowsMxc"
 )
 
 type ReadParams struct {
@@ -1693,6 +1696,8 @@ func processSandboxTypeToProtocol(sandboxType sandbox.SandboxType) ProcessSandbo
 		return ProcessSandboxLinuxSeccomp
 	case sandbox.SandboxTypeWindowsRestrictedToken:
 		return ProcessSandboxWindowsRestrictedToken
+	case sandbox.SandboxTypeWindowsMxc:
+		return ProcessSandboxWindowsMxc
 	default:
 		return ProcessSandboxNone
 	}
@@ -1710,6 +1715,8 @@ func SandboxTypeFromProtocol(sandboxType *ProcessSandboxType) *sandbox.SandboxTy
 		value = sandbox.SandboxTypeLinuxSeccomp
 	case ProcessSandboxWindowsRestrictedToken:
 		value = sandbox.SandboxTypeWindowsRestrictedToken
+	case ProcessSandboxWindowsMxc:
+		value = sandbox.SandboxTypeWindowsMxc
 	}
 	return &value
 }

@@ -28,6 +28,7 @@ func TestRustProcessSandboxTypeSurfaceAgainstGo(t *testing.T) {
 		string(execserver.ProcessSandboxMacosSeatbelt),
 		string(execserver.ProcessSandboxLinuxSeccomp),
 		string(execserver.ProcessSandboxWindowsRestrictedToken),
+		string(execserver.ProcessSandboxWindowsMxc),
 	}
 	sort.Strings(rustWire)
 	sort.Strings(goWire)

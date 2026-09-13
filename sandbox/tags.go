@@ -11,6 +11,10 @@ const (
 	WindowsSandboxElevated   WindowsSandboxLevel = "elevated"
 	WindowsSandboxDefault    WindowsSandboxLevel = "default"
 	WindowsSandboxUnelevated WindowsSandboxLevel = "unelevated"
+	// WindowsSandboxMxc mirrors Rust's WindowsSandboxLevel::Mxc. The level exists
+	// for identity/tag parity; Go does not select it because the native MXC
+	// launcher is not ported (Rust #45176).
+	WindowsSandboxMxc WindowsSandboxLevel = "mxc"
 )
 
 func PermissionProfileSandboxTag(permissionKind safety.PermissionProfileKind, policy safety.FileSystemPolicy, networkEnabled bool, windowsLevel WindowsSandboxLevel, platformSandbox string) string {
@@ -26,6 +30,9 @@ func PermissionProfileSandboxTag(permissionKind safety.PermissionProfileKind, po
 	}
 	if windowsLevel == WindowsSandboxElevated {
 		return "windows_elevated"
+	}
+	if windowsLevel == WindowsSandboxMxc {
+		return "windows_mxc"
 	}
 	if platformSandbox == "" || windowsLevel == WindowsSandboxDisabled {
 		return "none"
