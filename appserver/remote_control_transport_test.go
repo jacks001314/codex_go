@@ -3,10 +3,12 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"codex_go/auth"
 	"codex_go/remotecontrol"
 )
 
@@ -165,6 +167,82 @@ func readRemoteControlTransportMessage(t *testing.T, writer <-chan remotecontrol
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for remote control outgoing message")
 		return nil
+	}
+}
+
+// TestRemoteControlTransportRejectsRetiredAuthOwner covers Rust #44341: a
+// remote-control connection is bound to the authentication owner that opened
+// it, so once the owner changes its incoming messages and queued RPCs are
+// rejected instead of running as the previous user, while a connection opened
+// under the new owner still works.
+func TestRemoteControlTransportRejectsRetiredAuthOwner(t *testing.T) {
+	manager := remotecontrol.NewManager("codex", "installation-id")
+	manager.Enable(&remotecontrol.EnableParams{Ephemeral: true})
+	router := NewRuntimeRouter(RuntimeServices{Remote: manager})
+	server := NewRemoteControlTransportServer(router, nil)
+	writer := make(chan remotecontrol.RemoteClientOutgoingMessage, 8)
+	server.openConnection(remotecontrol.RemoteClientTransportEvent{
+		Type:         remotecontrol.RemoteClientConnectionOpened,
+		ConnectionID: 1,
+		Writer:       writer,
+	})
+
+	send := func(remoteID remotecontrol.RemoteClientConnectionID, method string, id int) {
+		server.handleIncomingMessage(context.Background(), remotecontrol.RemoteClientTransportEvent{
+			Type:         remotecontrol.RemoteClientIncomingMessage,
+			ConnectionID: remoteID,
+			Message:      []byte(`{"jsonrpc":"2.0","id":` + strconv.Itoa(id) + `,"method":"` + method + `","params":{}}`),
+		})
+	}
+	initialize := func(remoteID remotecontrol.RemoteClientConnectionID, id int, out <-chan remotecontrol.RemoteClientOutgoingMessage) {
+		t.Helper()
+		server.handleIncomingMessage(context.Background(), remotecontrol.RemoteClientTransportEvent{
+			Type:         remotecontrol.RemoteClientIncomingMessage,
+			ConnectionID: remoteID,
+			Message: []byte(`{"jsonrpc":"2.0","id":` + strconv.Itoa(id) +
+				`,"method":"initialize","params":{"clientInfo":{"name":"remote","version":"1"},"capabilities":{"experimentalApi":true}}}`),
+		})
+		if response := readRemoteControlTransportMessage(t, out); string(response["id"]) != strconv.Itoa(id) || len(response["result"]) == 0 {
+			t.Fatalf("initialize response = %s", marshalRawMapForTest(response))
+		}
+		_ = readRemoteControlTransportMessage(t, out) // status notification
+	}
+
+	initialize(1, 1, writer)
+	send(1, "remoteControl/status/read", 2)
+	if response := readRemoteControlTransportMessage(t, writer); string(response["id"]) != "2" || len(response["result"]) == 0 {
+		t.Fatalf("first response = %s", marshalRawMapForTest(response))
+	}
+
+	// The authentication owner changes: the existing connection is retired.
+	router.requireAccount().ApplyAuthSnapshot(&auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"access_token":    "token-b",
+			"chatgpt_user_id": "user-b",
+			"account_id":      "workspace-b",
+		},
+	})
+	router.noteAuthChanged()
+
+	send(1, "remoteControl/status/read", 3)
+	select {
+	case outgoing := <-writer:
+		t.Fatalf("retired owner connection produced a response: %s", outgoing.Message)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// A connection opened under the new owner is admitted normally.
+	newWriter := make(chan remotecontrol.RemoteClientOutgoingMessage, 8)
+	server.openConnection(remotecontrol.RemoteClientTransportEvent{
+		Type:         remotecontrol.RemoteClientConnectionOpened,
+		ConnectionID: 2,
+		Writer:       newWriter,
+	})
+	initialize(2, 4, newWriter)
+	send(2, "remoteControl/status/read", 5)
+	if response := readRemoteControlTransportMessage(t, newWriter); string(response["id"]) != "5" || len(response["result"]) == 0 {
+		t.Fatalf("new owner response = %s", marshalRawMapForTest(response))
 	}
 }
 

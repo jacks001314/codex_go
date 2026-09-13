@@ -35,6 +35,12 @@ type remoteControlTransportConnection struct {
 	writer       chan remotecontrol.RemoteClientOutgoingMessage
 	disconnect   func()
 	initialized  bool
+	// authOwner is the authentication ownership generation that opened this
+	// connection. Remote-control connections are the only ones bound to an auth
+	// owner (Rust ConnectionAuth, #44341): once it changes, the connection's
+	// incoming messages and queued RPCs are rejected so work cannot carry over to
+	// a different signed-in user or account.
+	authOwner uint64
 }
 
 func NewRemoteControlTransportServer(router *RuntimeRouter, events <-chan remotecontrol.RemoteClientTransportEvent) *RemoteControlTransportServer {
@@ -107,6 +113,7 @@ func (s *RemoteControlTransportServer) openConnection(event remotecontrol.Remote
 		connectionID: remoteControlConnectionIDString(event.ConnectionID),
 		writer:       event.Writer,
 		disconnect:   event.Disconnect,
+		authOwner:    connectionAuthOwner(s.Router),
 	}
 }
 
@@ -133,6 +140,9 @@ func (s *RemoteControlTransportServer) handleIncomingMessage(ctx context.Context
 	if conn == nil {
 		return
 	}
+	if !s.connectionAuthCurrent(conn) {
+		return
+	}
 	request.ConnectionID = conn.connectionID
 	if !conn.initialized && request.Method != MethodInitialize {
 		s.sendValueToRemoteID(ctx, event.ConnectionID, ErrorResponse(request.ID, -32600, "Not initialized", nil))
@@ -156,6 +166,13 @@ func (s *RemoteControlTransportServer) handleIncomingMessage(ctx context.Context
 	s.requests.Add(1)
 	go func() {
 		defer s.requests.Done()
+		// Re-check before the handler starts: a change detected after admission
+		// must not let the queued RPC run under the previous owner (Rust #44341
+		// closes the connection's RPC gate so queued handlers never acquire a
+		// permit).
+		if !s.connectionAuthCurrent(conn) {
+			return
+		}
 		response := s.Router.Handle(request)
 		if response != nil {
 			s.sendValueToRemoteID(ctx, event.ConnectionID, response)
@@ -333,6 +350,24 @@ func (s *RemoteControlTransportServer) connectionOptedOut(connectionID string, m
 	}
 	_, ok := methods[method]
 	return ok
+}
+
+// connectionAuthOwner captures a connection's authentication ownership
+// generation (Rust ConnectionAuth::capture, #44341).
+func connectionAuthOwner(router *RuntimeRouter) uint64 {
+	if router == nil {
+		return 0
+	}
+	return router.authOwnerRevisionSnapshot()
+}
+
+// connectionAuthCurrent reports whether the connection still belongs to the
+// router's current authentication owner.
+func (s *RemoteControlTransportServer) connectionAuthCurrent(conn *remoteControlTransportConnection) bool {
+	if s == nil || conn == nil {
+		return false
+	}
+	return conn.authOwner == connectionAuthOwner(s.Router)
 }
 
 func (s *RemoteControlTransportServer) remoteControlStatusUnchanged(status *remotecontrol.StatusChangedNotification) bool {
