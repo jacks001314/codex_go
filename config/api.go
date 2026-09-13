@@ -2460,6 +2460,24 @@ func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, e
 		Version: configVersion(userValues),
 		Config:  cloneMap(userValues),
 	})
+	managedLayers := s.managedLayersForRead()
+	// Rust #44241: the project sanitizer reads the credential-broker state and
+	// provider env bindings from the trusted layers (packaged defaults, user,
+	// managed) before project config is merged.
+	trustedBrokerValues := map[string]any{}
+	if packagedDefaults != nil {
+		if values, ok := packagedDefaults.Config.(map[string]any); ok {
+			mergeConfigMaps(trustedBrokerValues, cloneMap(values))
+		}
+	}
+	mergeConfigMaps(trustedBrokerValues, cloneMap(userValues))
+	for _, managed := range managedLayers {
+		if values, ok := managed.Config.(map[string]any); ok {
+			mergeConfigMaps(trustedBrokerValues, cloneMap(values))
+		}
+	}
+	brokerState := CredentialBrokerProjectStateForValues(trustedBrokerValues)
+	trustedProviderEnvKeys := CredentialBrokerProviderEnvKeys(trustedBrokerValues)
 	if ProjectConfigEnabled(userValues, cwd) {
 		for _, dotCodexFolder := range ProjectDotCodexFolders(cwd) {
 			path := filepath.Join(dotCodexFolder, "config.toml")
@@ -2469,7 +2487,7 @@ func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, e
 			}
 			if exists {
 				resolveProjectRelativeConfigValues(projectValues, dotCodexFolder)
-				sanitizeProjectConfigValues(projectValues)
+				sanitizeProjectConfigValues(projectValues, brokerState, trustedProviderEnvKeys)
 			}
 			layers = append(layers, Layer{
 				Name: LayerSource{
@@ -2492,7 +2510,7 @@ func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, e
 			layers = append(layers, *profileLayer)
 		}
 	}
-	layers = append(layers, s.managedLayersForRead()...)
+	layers = append(layers, managedLayers...)
 	return layers, nil
 }
 

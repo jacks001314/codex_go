@@ -770,7 +770,7 @@ func TestResponsesAPIMetadataAccessorAndProjectSanitize(t *testing.T) {
 		t.Fatalf("ResponsesAPIMetadata = %#v", metadata)
 	}
 	values := map[string]any{"responses_api_metadata": map[string]any{"sku": "pro"}}
-	sanitizeProjectConfigValues(values)
+	sanitizeProjectConfigValues(values, CredentialBrokerProjectUnconfigured, nil)
 	if _, ok := values["responses_api_metadata"]; ok {
 		t.Fatalf("responses_api_metadata must be ignored in project-local config: %#v", values)
 	}

@@ -311,6 +311,21 @@ func (s *ConfigService) ProjectIgnoredConfigKeysWarnings(cwd string) []string {
 // ProjectIgnoredConfigKeysWarningsForLayers reports the stripped project-local
 // keys per project layer, in the layer order Rust discovers them.
 func ProjectIgnoredConfigKeysWarningsForLayers(layers []Layer) []string {
+	// Rust #44241: the sanitizer reads the credential-broker state and provider
+	// env bindings from the trusted layers, so the warning matches what the
+	// loader stripped.
+	trustedBrokerValues := map[string]any{}
+	for _, layer := range layers {
+		if layer.Name.Type == LayerSourceProject {
+			continue
+		}
+		if values, ok := layer.Config.(map[string]any); ok {
+			mergeConfigMaps(trustedBrokerValues, cloneMap(values))
+		}
+	}
+	brokerState := CredentialBrokerProjectStateForValues(trustedBrokerValues)
+	trustedProviderEnvKeys := CredentialBrokerProviderEnvKeys(trustedBrokerValues)
+
 	var warnings []string
 	for _, layer := range layers {
 		if layer.Name.Type != LayerSourceProject {
@@ -324,7 +339,7 @@ func ProjectIgnoredConfigKeysWarningsForLayers(layers []Layer) []string {
 		if err != nil || !exists {
 			continue
 		}
-		ignored := sanitizeProjectConfigValues(cloneMap(raw))
+		ignored := sanitizeProjectConfigValues(cloneMap(raw), brokerState, trustedProviderEnvKeys)
 		if len(ignored) == 0 {
 			continue
 		}

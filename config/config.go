@@ -264,6 +264,11 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		}
 	}
 	if cwd != "" && !ignoreProjectConfig && ProjectConfigEnabled(discoveryValues, cwd) {
+		// Rust #44241: derive the credential-broker protections from the trusted
+		// layers before project config is merged, so a repository cannot rebind
+		// providers the trusted configuration already bound.
+		brokerState := CredentialBrokerProjectStateForValues(discoveryValues)
+		trustedProviderEnvKeys := CredentialBrokerProviderEnvKeys(discoveryValues)
 		for _, path := range projectConfigPathsWithMarkers(cwd, projectRootMarkersFromValues(discoveryValues)) {
 			projectValues, exists, err := loadConfigFileIfExists(path)
 			if err != nil {
@@ -271,7 +276,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			}
 			if exists {
 				resolveProjectRelativeConfigValues(projectValues, filepath.Dir(path))
-				sanitizeProjectConfigValues(projectValues)
+				sanitizeProjectConfigValues(projectValues, brokerState, trustedProviderEnvKeys)
 				mergeConfigMaps(values, projectValues)
 			}
 		}
@@ -2402,7 +2407,7 @@ func canonicalProjectPath(path string) string {
 // the project-local settings that repository contents may not control and
 // returns the ignored key paths, which the loader reports back to the user
 // (Rust project_ignored_config_keys_warning).
-func sanitizeProjectConfigValues(values map[string]any) []string {
+func sanitizeProjectConfigValues(values map[string]any, broker CredentialBrokerProjectState, trustedProviderEnvKeys []string) []string {
 	if values == nil {
 		return nil
 	}
@@ -2432,12 +2437,71 @@ func sanitizeProjectConfigValues(values map[string]any) []string {
 		}
 	}
 	if features, ok := values["features"].(map[string]any); ok {
+		// Rust sanitize_project_config: a configured credential broker owns the
+		// shell-snapshot and network-proxy feature switches, so a project cannot
+		// change the broker state or rebind its providers.
+		if broker == CredentialBrokerProjectEnabled {
+			if _, ok := features["shell_snapshot"]; ok {
+				delete(features, "shell_snapshot")
+				ignored = append(ignored, "features.shell_snapshot")
+			}
+		}
 		if _, ok := features["respect_system_proxy"]; ok {
 			delete(features, "respect_system_proxy")
 			ignored = append(ignored, "features.respect_system_proxy")
 		}
+		if broker != CredentialBrokerProjectUnconfigured {
+			if _, ok := features["network_proxy"].(bool); ok {
+				delete(features, "network_proxy")
+				ignored = append(ignored, "features.network_proxy")
+			}
+		}
+		// The broker definition and credentials never come from a project,
+		// configured broker or not (Rust sanitize_project_config).
+		if networkProxy, ok := features["network_proxy"].(map[string]any); ok {
+			if _, ok := networkProxy["credential_broker"]; ok {
+				delete(networkProxy, "credential_broker")
+				ignored = append(ignored, "features.network_proxy.credential_broker")
+			}
+			if _, ok := networkProxy["credentials"]; ok {
+				delete(networkProxy, "credentials")
+				ignored = append(ignored, "features.network_proxy.credentials")
+			}
+			if broker != CredentialBrokerProjectUnconfigured {
+				if _, ok := networkProxy["enabled"]; ok {
+					delete(networkProxy, "enabled")
+					ignored = append(ignored, "features.network_proxy.enabled")
+				}
+			}
+		}
 		if len(features) == 0 {
 			delete(values, "features")
+		}
+	}
+	if broker == CredentialBrokerProjectEnabled {
+		if policy, ok := values["shell_environment_policy"].(map[string]any); ok {
+			if _, ok := policy["experimental_use_profile"]; ok {
+				delete(policy, "experimental_use_profile")
+				ignored = append(ignored, "shell_environment_policy.experimental_use_profile")
+			}
+			if overrides, ok := policy["set"].(map[string]any); ok {
+				keys := make([]string, 0, len(overrides))
+				for key := range overrides {
+					keys = append(keys, key)
+				}
+				sort.Strings(keys)
+				for _, key := range keys {
+					// Child startup overrides and the trusted providers' env
+					// bindings must not be rebound by a repository.
+					if strings.EqualFold(key, "ZDOTDIR") ||
+						strings.EqualFold(key, "BASH_ENV") ||
+						isCredentialBrokerProviderEnvKey(key) ||
+						matchesTrustedProviderEnvKey(key, trustedProviderEnvKeys) {
+						delete(overrides, key)
+						ignored = append(ignored, "shell_environment_policy.set."+key)
+					}
+				}
+			}
 		}
 	}
 	// Repository contents must not turn an ordinary key into a permission
@@ -2456,6 +2520,18 @@ func sanitizeProjectConfigValues(values map[string]any) []string {
 		}
 	}
 	return ignored
+}
+
+// matchesTrustedProviderEnvKey reports whether a project shell override targets
+// an env key a trusted credential provider binds (Rust's
+// trusted_provider_env_keys comparison).
+func matchesTrustedProviderEnvKey(key string, trustedProviderEnvKeys []string) bool {
+	for _, candidate := range trustedProviderEnvKeys {
+		if credentialEnvKeyMatches(key, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveProjectRelativeConfigValues(values map[string]any, dotCodexDir string) {

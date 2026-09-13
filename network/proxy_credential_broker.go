@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/textproto"
+	"net/url"
 	"os"
 	"regexp"
 	"runtime"
@@ -790,12 +791,64 @@ var githubProvider = ProxyCredentialProvider{
 	InsertHeader:       insertAuthorizationHeader,
 }
 
+// providerEnvValue reads a provider environment key, comparing
+// case-insensitively on Windows (Rust env_value / env_key_matches).
+func providerEnvValue(env map[string]string, key string) (string, bool) {
+	if value, ok := env[key]; ok {
+		return value, true
+	}
+	if runtime.GOOS == "windows" {
+		for candidate, value := range env {
+			if strings.EqualFold(candidate, key) {
+				return value, true
+			}
+		}
+	}
+	return "", false
+}
+
+// trustedCredentialBrokerHost mirrors Rust's trusted_credential_broker_host: an
+// HTTPS base URL without user information contributes its normalized host.
+func trustedCredentialBrokerHost(baseURL string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
+		return "", false
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return "", false
+	}
+	normalized := NormalizeProxyHost(host)
+	if normalized == "" {
+		return "", false
+	}
+	return normalized, true
+}
+
 var openAIProvider = ProxyCredentialProvider{
+	// Rust's built-in OpenAI provider binds OPENAI_BASE_URL as a destination
+	// context key (network-proxy/src/credential_broker/providers/openai.rs), so
+	// the broker treats it as a provider env key and keeps it out of child
+	// environments.
+	ContextEnvVars: []string{"OPENAI_BASE_URL"},
 	Sources: []ProxyCredentialSource{
 		{
 			EnvVars: []string{"OPENAI_API_KEY"},
-			HostBinding: func(map[string]string) (ProxyCredentialHostBinding, bool) {
-				return ProxyCredentialHostBinding{ExactHosts: []string{"api.openai.com"}}, true
+			HostBinding: func(env map[string]string) (ProxyCredentialHostBinding, bool) {
+				hosts := []string{"api.openai.com"}
+				if baseURL, ok := providerEnvValue(env, "OPENAI_BASE_URL"); ok && strings.TrimSpace(baseURL) != "" {
+					host, trusted := trustedCredentialBrokerHost(baseURL)
+					if !trusted {
+						// Rust's invalidates_host_binding: an untrusted base URL
+						// disables the binding instead of brokering to the default
+						// host.
+						return ProxyCredentialHostBinding{}, false
+					}
+					if host != hosts[0] {
+						hosts = append(hosts, host)
+					}
+				}
+				return ProxyCredentialHostBinding{ExactHosts: hosts}, true
 			},
 		},
 	},

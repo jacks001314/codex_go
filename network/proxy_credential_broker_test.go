@@ -110,10 +110,47 @@ func TestCredentialBrokerDisabledRemovesMarkers(t *testing.T) {
 func TestCredentialBrokerEnvKeys(t *testing.T) {
 	env := map[string]string{CredentialBrokerActiveEnvKey: "1"}
 	keys := ProxyBrokeredCredentialEnvKeys(env)
-	for _, want := range []string{"GH_HOST", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "OPENAI_API_KEY"} {
+	for _, want := range []string{"GH_HOST", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL"} {
 		if !sliceContains(keys, want) {
 			t.Fatalf("missing %s in %#v", want, keys)
 		}
+	}
+}
+
+// The built-in OpenAI provider binds OPENAI_BASE_URL as a destination context
+// key like Rust (network-proxy/src/credential_broker/providers/openai.rs), so a
+// base-URL override is a provider env key rather than a plain child variable.
+func TestCredentialBrokerTreatsOpenAIBaseURLAsProviderEnvKey(t *testing.T) {
+	if !sliceContains(ProxyCredentialBrokerEnvKeys(), "OPENAI_BASE_URL") {
+		t.Fatalf("provider env keys = %#v", ProxyCredentialBrokerEnvKeys())
+	}
+	broker := NewProxyCredentialBroker(true)
+	broker.SetDestinationHints(map[string]string{"OPENAI_BASE_URL": "https://tenant.openai.example/v1"})
+	child := map[string]string{"OPENAI_API_KEY": "sk-proj-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH"}
+	broker.VirtualizeChildEnv(child)
+	if _, leaked := child["OPENAI_BASE_URL"]; leaked {
+		t.Fatalf("OPENAI_BASE_URL destination hint leaked into the child env: %#v", child)
+	}
+	if !broker.HostRequiresMITM("tenant.openai.example") {
+		t.Fatal("the OPENAI_BASE_URL hint did not contribute a destination")
+	}
+	if child["OPENAI_API_KEY"] == "sk-proj-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH" {
+		t.Fatalf("credential was not virtualized: %#v", child)
+	}
+}
+
+// An untrusted OPENAI_BASE_URL invalidates the OpenAI binding instead of
+// brokering the credential to the default host (Rust invalidates_host_binding).
+func TestCredentialBrokerOpenAIBaseURLInvalidatesUntrustedBinding(t *testing.T) {
+	broker := NewProxyCredentialBroker(true)
+	broker.SetDestinationHints(map[string]string{"OPENAI_BASE_URL": "http://tenant.openai.example/v1"})
+	child := map[string]string{"OPENAI_API_KEY": "sk-proj-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH"}
+	broker.VirtualizeChildEnv(child)
+	if child["OPENAI_API_KEY"] != "sk-proj-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH" {
+		t.Fatalf("an untrusted base URL still virtualized the credential: %#v", child)
+	}
+	if broker.HostRequiresMITM("api.openai.com") {
+		t.Fatal("an untrusted base URL still bound the default host")
 	}
 }
 
