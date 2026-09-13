@@ -19,6 +19,7 @@ import (
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
+	"codex_go/telemetry"
 	"codex_go/turn"
 )
 
@@ -62,6 +63,12 @@ type modelGuardianReviewer struct {
 	// installationID supplies the Codex installation id for the review
 	// request's turn metadata (Rust #44298).
 	installationID func() string
+	// metrics receives the guardian review metrics (Rust's
+	// emit_guardian_review_metrics).
+	metrics telemetry.TurnMetricSink
+	// subagentThread reports whether the review's thread is a delegated
+	// subagent, which selects Rust's delegated_subagent approval source.
+	subagentThread func(threadID string) bool
 }
 
 // defaultGuardianMaxToolCallLag mirrors Rust
@@ -157,6 +164,43 @@ type guardianSessionRunner struct {
 	agent    model.AgentRunner
 	previous string
 	seeded   string
+	// priorReview mirrors Rust's guardian review transcript cursor: set once a
+	// review ran in this guardian session, so the next review reports
+	// had_prior_review_context = true.
+	priorReview bool
+}
+
+// reviewSessionAttribution mirrors Rust's GuardianReviewSessionKind selection
+// plus the prior-review cursor: a session seeded from the parent's compaction is
+// an ephemeral fork, a session with a previous response is the reused trunk, and
+// anything else is a new trunk.
+func (r *guardianSessionRunner) reviewSessionAttribution() (kind string, hadPriorContext *bool) {
+	if r == nil {
+		kind = "none"
+		return kind, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case strings.TrimSpace(r.seeded) != "":
+		kind = "ephemeral_forked"
+	case strings.TrimSpace(r.previous) != "":
+		kind = "trunk_reused"
+	default:
+		kind = "trunk_new"
+	}
+	prior := r.priorReview
+	return kind, &prior
+}
+
+// markPriorReview records that a review ran in this guardian session.
+func (r *guardianSessionRunner) markPriorReview() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.priorReview = true
+	r.mu.Unlock()
 }
 
 type guardianPrewarmer interface {
@@ -319,6 +363,13 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		return state.DecisionApproved, "user approval mode", nil
 	}
 	r.beginToolCall(threadID)
+	// The review attempt starts here: Rust builds ReviewReport/tracking before
+	// the prompt, and the metrics duration is measured from that point.
+	reviewStartedAt := time.Now().UTC()
+	attribution := r.newGuardianReviewAttribution(threadID, turnID, action)
+	emitReviewMetrics := func() {
+		r.emitGuardianReviewMetrics(attribution, guardianReviewMetricsDurationMS(reviewStartedAt.UnixMilli(), time.Now().UTC()))
+	}
 	var transcript []string
 	if r.transcript != nil {
 		transcript = r.transcript(threadID)
@@ -351,6 +402,10 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 	}
 	if err != nil {
+		attribution.Decision = state.DecisionAborted
+		attribution.TerminalStatus = "aborted"
+		attribution.FailureReason = "prompt_build_error"
+		emitReviewMetrics()
 		return state.DecisionAborted, "", err
 	}
 	store := r.store
@@ -359,6 +414,10 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	}
 	event, err := store.Start(turnID, targetItemID, action)
 	if err != nil {
+		attribution.Decision = state.DecisionAborted
+		attribution.TerminalStatus = "aborted"
+		attribution.FailureReason = "session_error"
+		emitReviewMetrics()
 		return state.DecisionAborted, "", err
 	}
 	r.emit(threadID, event)
@@ -375,6 +434,10 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			completed, _ := store.Abort(event.ID, err.Error())
 			r.emit(threadID, completed)
 			r.recordDecision(threadID, turnID, state.DecisionAborted)
+			attribution.Decision = state.DecisionAborted
+			attribution.TerminalStatus = "aborted"
+			attribution.FailureReason = "session_error"
+			emitReviewMetrics()
 			return state.DecisionAborted, "", err
 		}
 	}
@@ -401,6 +464,11 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		runner.SeedForReview(reviewRequest)
 	}
 	response, err := r.agent.Run(reviewCtx, reviewRequest)
+	if runner, ok := r.agent.(*guardianSessionRunner); ok {
+		// Rust records the reviewed-transcript cursor once a review ran in the
+		// guardian session.
+		runner.markPriorReview()
+	}
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(reviewCtx.Err(), context.DeadlineExceeded) {
 			completed, finishErr := store.Timeout(event.ID)
@@ -408,6 +476,10 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 				r.emit(threadID, completed)
 			}
 			r.recordDecision(threadID, turnID, state.DecisionTimedOut)
+			attribution.Decision = state.DecisionTimedOut
+			attribution.TerminalStatus = "timed_out"
+			attribution.FailureReason = "timeout"
+			emitReviewMetrics()
 			return state.DecisionTimedOut, guardianTimeoutMessage(r.autoReviewMessagesForTurn(threadID, turnID)), finishErr
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(reviewCtx.Err(), context.Canceled) {
@@ -416,11 +488,19 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 				r.emit(threadID, completed)
 			}
 			r.recordDecision(threadID, turnID, state.DecisionAborted)
+			attribution.Decision = state.DecisionAborted
+			attribution.TerminalStatus = "aborted"
+			attribution.FailureReason = "cancelled"
+			emitReviewMetrics()
 			return state.DecisionAborted, "", finishErr
 		}
 		completed, _ := store.Abort(event.ID, err.Error())
 		r.emit(threadID, completed)
 		r.recordDecision(threadID, turnID, state.DecisionAborted)
+		attribution.Decision = state.DecisionAborted
+		attribution.TerminalStatus = "aborted"
+		attribution.FailureReason = "session_error"
+		emitReviewMetrics()
 		return state.DecisionAborted, "", err
 	}
 	assessment, err := state.ParseAssessment([]byte(guardianAssessmentText(response)))
@@ -428,16 +508,42 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		completed, _ := store.Abort(event.ID, "Guardian returned an invalid assessment.")
 		r.emit(threadID, completed)
 		r.recordDecision(threadID, turnID, state.DecisionAborted)
+		attribution.Decision = state.DecisionAborted
+		attribution.TerminalStatus = "aborted"
+		attribution.FailureReason = "parse_error"
+		emitReviewMetrics()
 		return state.DecisionAborted, "", err
 	}
 	completed, err := store.Complete(event.ID, *assessment)
 	if err != nil {
+		attribution.Decision = state.DecisionAborted
+		attribution.TerminalStatus = "aborted"
+		attribution.FailureReason = "session_error"
+		emitReviewMetrics()
 		return state.DecisionAborted, "", err
 	}
 	r.emit(threadID, completed)
 	decision := state.DecisionFromEvent(completed)
 	r.recordDecision(threadID, turnID, decision)
 	r.markScored(threadID)
+	riskLevel := assessment.RiskLevel
+	userAuthorization := assessment.UserAuthorization
+	outcome := assessment.Outcome
+	attribution.Decision = decision
+	if decision == state.DecisionApproved {
+		attribution.TerminalStatus = "approved"
+	} else {
+		attribution.TerminalStatus = "denied"
+	}
+	attribution.FailureReason = "none"
+	attribution.RiskLevel = &riskLevel
+	attribution.UserAuthorization = &userAuthorization
+	attribution.Outcome = &outcome
+	if response != nil {
+		usage := response.Usage
+		attribution.TokenUsage = &usage
+	}
+	emitReviewMetrics()
 	rationale := assessment.Rationale
 	if decision == state.DecisionDenied {
 		rationale = guardianRejectionMessage(r.autoReviewMessagesForTurn(threadID, turnID), rationale)
