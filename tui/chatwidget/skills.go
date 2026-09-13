@@ -2,11 +2,92 @@ package chatwidget
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 
 	"codex_go/apps"
 	"codex_go/appserver"
 )
+
+// Rust parity: codex-rs/tui/src/app/startup_prompts.rs skill-load warnings and
+// app.rs errors_for_cwd. The startup window decides whether these land in the
+// coalesced startup warnings entry or in the ordinary warning path
+// (tui/src/app/thread_routing.rs handle_skills_list_response).
+
+type SkillLoadWarningKey struct {
+	Path    string
+	Message string
+}
+
+// SkillLoadWarningState suppresses diagnostics that are already active
+// (Rust App::skill_load_warnings).
+type SkillLoadWarningState struct {
+	active map[SkillLoadWarningKey]bool
+}
+
+func NewSkillLoadWarningState() *SkillLoadWarningState {
+	return &SkillLoadWarningState{active: map[SkillLoadWarningKey]bool{}}
+}
+
+func (s *SkillLoadWarningState) Clear() {
+	if s == nil {
+		return
+	}
+	s.active = map[SkillLoadWarningKey]bool{}
+}
+
+// NewlyActiveErrors returns the errors that were not already active, mirroring
+// Rust's newly_active_errors.
+func (s *SkillLoadWarningState) NewlyActiveErrors(errors []appserver.SkillErrorInfo) []appserver.SkillErrorInfo {
+	if s == nil {
+		s = NewSkillLoadWarningState()
+	}
+	previous := s.active
+	current := map[SkillLoadWarningKey]bool{}
+	newlyActive := []appserver.SkillErrorInfo{}
+	for _, skillError := range errors {
+		key := SkillLoadWarningKey{
+			Path:    skillError.Path,
+			Message: skillError.Message,
+		}
+		if current[key] {
+			continue
+		}
+		current[key] = true
+		if !previous[key] {
+			newlyActive = append(newlyActive, skillError)
+		}
+	}
+	s.active = current
+	return newlyActive
+}
+
+// SkillLoadWarningMessages mirrors Rust's skill_load_warning_messages: a
+// summary line followed by one line per affected SKILL.md file.
+func SkillLoadWarningMessages(errors []appserver.SkillErrorInfo) []string {
+	if len(errors) == 0 {
+		return nil
+	}
+	messages := []string{
+		"Skipped loading " + strconv.FormatUint(uint64(len(errors)), 10) + " skill(s) due to invalid SKILL.md files.",
+	}
+	for _, skillError := range errors {
+		messages = append(messages, skillError.Path+": "+skillError.Message)
+	}
+	return messages
+}
+
+// SkillErrorsForCWD mirrors Rust's errors_for_cwd: the skill errors recorded for
+// the given cwd entry.
+func SkillErrorsForCWD(response appserver.SkillsListResponse, cwd string) []appserver.SkillErrorInfo {
+	cwd = strings.TrimSpace(cwd)
+	for _, entry := range response.Data {
+		if strings.TrimSpace(entry.CWD) == cwd {
+			return append([]appserver.SkillErrorInfo(nil), entry.Errors...)
+		}
+	}
+	return nil
+}
 
 const SkillsMenuViewID = "skills-menu"
 

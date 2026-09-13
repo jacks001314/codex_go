@@ -434,6 +434,15 @@ type StartupConfigWarningMsg struct {
 	Message string
 }
 
+// StartupSkillsListMsg carries the startup `skills/list` result, which feeds the
+// skill inventory and the invalid SKILL.md warnings (Rust
+// AppEvent::SkillsListLoaded).
+type StartupSkillsListMsg struct {
+	CWD      string
+	Response appserver.SkillsListResponse
+	Err      error
+}
+
 type MCPInventoryResultMsg struct {
 	RequestID uint64
 	Servers   []historycell.McpServerStatus
@@ -1239,17 +1248,22 @@ type Model struct {
 	startupWarningsIndex    int
 	startupWarningsComplete bool
 	sessionHeaderShown      bool
-	initialMessages         <-chan bubbletea.Msg
-	notice                  string
-	retryMessageIndex       int
-	retryActivityMessage    string
-	retryActivityActive     bool
-	compactionActive        bool
-	compactionID            string
-	compactionStartedAt     time.Time
-	bottom                  []string
-	attachments             []bottompane.ComposerAttachment
-	composerMentionBindings []string
+	// skillLoadWarnings tracks the active invalid-SKILL.md diagnostics (Rust
+	// App::skill_load_warnings) and skillLoadWarningsComplete closes the startup
+	// window for them once the initial skills list has been handled.
+	skillLoadWarnings         *chatwidget.SkillLoadWarningState
+	skillLoadWarningsComplete bool
+	initialMessages           <-chan bubbletea.Msg
+	notice                    string
+	retryMessageIndex         int
+	retryActivityMessage      string
+	retryActivityActive       bool
+	compactionActive          bool
+	compactionID              string
+	compactionStartedAt       time.Time
+	bottom                    []string
+	attachments               []bottompane.ComposerAttachment
+	composerMentionBindings   []string
 	// composerElements tracks the composer's structured text elements (byte
 	// ranges plus placeholders) so mentions reach the turn input as
 	// text_elements (Rust textarea::text_elements).
@@ -1748,6 +1762,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		activityFollow:                  true,
 		retryMessageIndex:               -1,
 		startupWarningsIndex:            -1,
+		skillLoadWarnings:               chatwidget.NewSkillLoadWarningState(),
 		composer:                        composer,
 		noAltScreen:                     options.NoAltScreen,
 		terminalFocused:                 true,
@@ -2087,6 +2102,11 @@ func (m *Model) Init() bubbletea.Cmd {
 	if m.onReadBackendBanner != nil {
 		commands = append(commands, m.backendBannerCmd())
 	}
+	if m.onReadSkills != nil {
+		// Rust refresh_startup_skills: the initial skills refresh runs in the
+		// background so the first frame is not delayed.
+		commands = append(commands, m.startupSkillsCmd())
+	}
 	if m.initialMessages != nil {
 		commands = append(commands, waitForStream(m.initialMessages))
 	}
@@ -2186,6 +2206,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyMCPStartupUpdate(msg)
 	case StartupConfigWarningMsg:
 		m.applyStartupConfigWarning(msg.Message)
+		return m, nil
+	case StartupSkillsListMsg:
+		m.applyStartupSkillsList(msg)
 		return m, nil
 	case MCPStartupInventoryMsg:
 		m.mcpServers = cloneMcpServerStatuses(msg.Servers)
@@ -3764,6 +3787,75 @@ func (m *Model) finishMCPStartupAfterLag(generation uint64) bubbletea.Cmd {
 		return m.submitNextQueued()
 	}
 	return nil
+}
+
+// startupSkillsCmd mirrors Rust's App::refresh_startup_skills: the initial
+// skills refresh runs without delaying the first frame and its result feeds the
+// inventory and the invalid SKILL.md warnings.
+func (m *Model) startupSkillsCmd() bubbletea.Cmd {
+	if m == nil || m.onReadSkills == nil {
+		return nil
+	}
+	reader := m.onReadSkills
+	cwd := strings.TrimSpace(m.sessionCWD)
+	return func() bubbletea.Msg {
+		response, err := reader(cwd, false)
+		return StartupSkillsListMsg{CWD: cwd, Response: response, Err: err}
+	}
+}
+
+// applyStartupSkillsList mirrors Rust's handle_skills_list_result for the
+// startup refresh: the inventory is updated, the newly active invalid
+// SKILL.md diagnostics coalesce into the startup warnings entry (without the
+// summary line, since the per-file diagnostics already name every skill) while
+// the startup window is open, and the window closes afterwards.
+func (m *Model) applyStartupSkillsList(message StartupSkillsListMsg) {
+	if m == nil {
+		return
+	}
+	cwd := strings.TrimSpace(message.CWD)
+	if sessionCWD := strings.TrimSpace(m.sessionCWD); cwd != "" && sessionCWD != "" && cwd != sessionCWD {
+		// Rust: a startup result for a different cwd only closes the window.
+		m.skillLoadWarningsComplete = true
+		return
+	}
+	if message.Err != nil {
+		m.applyHistoryCell(historycell.NewErrorEvent("failed to load skills on startup: " + strings.TrimSpace(message.Err.Error())))
+		m.skillLoadWarningsComplete = true
+		return
+	}
+	response := message.Response
+	m.skillsInventory = &response
+	m.skillsInventoryCWD = cwd
+	m.skillsInventoryErr = ""
+	m.skillsInventoryLoading = false
+	m.applySkillLoadWarnings(cwd, response)
+	m.skillLoadWarningsComplete = true
+}
+
+// applySkillLoadWarnings mirrors Rust's handle_skills_list_response: the newly
+// active invalid SKILL.md diagnostics coalesce into the startup warnings entry
+// (without the summary line, since the per-file diagnostics already name every
+// affected skill) while the startup window is open, and otherwise take the
+// ordinary warning path.
+func (m *Model) applySkillLoadWarnings(cwd string, response appserver.SkillsListResponse) {
+	if m == nil {
+		return
+	}
+	if m.skillLoadWarnings == nil {
+		m.skillLoadWarnings = chatwidget.NewSkillLoadWarningState()
+	}
+	active := m.skillLoadWarnings.NewlyActiveErrors(chatwidget.SkillErrorsForCWD(response, cwd))
+	warnings := chatwidget.SkillLoadWarningMessages(active)
+	if m.skillLoadWarningsComplete {
+		for _, warning := range warnings {
+			m.applyWarningMessage(warning)
+		}
+		return
+	}
+	if len(warnings) > 1 {
+		m.mergeStartupWarnings(historycell.NewStartupWarnings(warnings[1:]))
+	}
 }
 
 // applyStartupConfigWarning mirrors Rust's chatwidget handling of

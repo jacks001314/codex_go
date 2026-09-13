@@ -36,6 +36,9 @@ func (m *Model) applySkillsListResult(message SkillsListResultMsg) {
 		m.skillsInventoryCWD = strings.TrimSpace(message.CWD)
 		m.skillsInventoryErr = ""
 		m.skillsInventoryLoading = false
+		// Rust routes ListSkills through handle_skills_list_result too, so a
+		// refresh reports newly active invalid SKILL.md diagnostics.
+		m.applySkillLoadWarnings(strings.TrimSpace(message.CWD), response)
 		if m.mentionPopup != nil {
 			m.mentionPopup.SetCandidates(m.mentionCandidates())
 		}

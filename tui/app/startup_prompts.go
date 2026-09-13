@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"codex_go/appserver"
 	"codex_go/model"
 )
 
@@ -20,63 +19,6 @@ const (
 type StartupPrompt struct {
 	Title string
 	Body  string
-}
-
-type SkillLoadWarningKey struct {
-	Path    string
-	Message string
-}
-
-type SkillLoadWarningState struct {
-	active map[SkillLoadWarningKey]bool
-}
-
-func NewSkillLoadWarningState() *SkillLoadWarningState {
-	return &SkillLoadWarningState{active: map[SkillLoadWarningKey]bool{}}
-}
-
-func (s *SkillLoadWarningState) Clear() {
-	if s == nil {
-		return
-	}
-	s.active = map[SkillLoadWarningKey]bool{}
-}
-
-func (s *SkillLoadWarningState) NewlyActiveErrors(errors []appserver.SkillErrorInfo) []appserver.SkillErrorInfo {
-	if s == nil {
-		s = NewSkillLoadWarningState()
-	}
-	previous := s.active
-	current := map[SkillLoadWarningKey]bool{}
-	newlyActive := []appserver.SkillErrorInfo{}
-	for _, skillError := range errors {
-		key := SkillLoadWarningKey{
-			Path:    skillError.Path,
-			Message: skillError.Message,
-		}
-		if current[key] {
-			continue
-		}
-		current[key] = true
-		if !previous[key] {
-			newlyActive = append(newlyActive, skillError)
-		}
-	}
-	s.active = current
-	return newlyActive
-}
-
-func SkillLoadWarningMessages(errors []appserver.SkillErrorInfo) []string {
-	if len(errors) == 0 {
-		return nil
-	}
-	messages := []string{
-		"Skipped loading " + formatUintForStartupPrompts(uint64(len(errors))) + " skill(s) due to invalid SKILL.md files.",
-	}
-	for _, skillError := range errors {
-		messages = append(messages, skillError.Path+": "+skillError.Message)
-	}
-	return messages
 }
 
 type StartupTooltipOverride struct {

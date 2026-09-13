@@ -37,6 +37,11 @@ func (m *Model) resetThreadScopedState() {
 	// transcript.
 	m.startupWarnings = historycell.StartupWarningsCell{}
 	m.startupWarningsIndex = -1
+	// Rust history_ui clears the active skill-load diagnostics with the
+	// thread-scoped history.
+	if m.skillLoadWarnings != nil {
+		m.skillLoadWarnings.Clear()
+	}
 	m.clearCompactionActivity()
 	m.toolRequestRuntime = chatwidget.ToolRequestRuntimeState{}
 	m.resetReviewModeState()

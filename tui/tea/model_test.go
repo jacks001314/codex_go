@@ -2229,6 +2229,67 @@ func TestModelMCPStartupInterruptIgnoresLateTerminalUpdates(t *testing.T) {
 	}
 }
 
+// Mirrors Rust's startup skill-load warnings: the initial skills refresh feeds
+// the startup warnings entry with the per-file diagnostics (the summary line is
+// dropped because the diagnostics already name every affected skill), repeated
+// active errors stay suppressed, and the startup window closes afterwards.
+func TestModelStartupSkillLoadWarningsLikeRust(t *testing.T) {
+	cwd := "D:/repo"
+	skillError := appserver.SkillErrorInfo{Path: cwd + "/.gcode/skills/abc/SKILL.md", Message: "invalid description"}
+	response := appserver.SkillsListResponse{Data: []appserver.SkillsListEntry{{
+		CWD:    cwd,
+		Errors: []appserver.SkillErrorInfo{skillError},
+	}}}
+	reader := func(gotCWD string, _ bool) (appserver.SkillsListResponse, error) {
+		if gotCWD != cwd {
+			t.Fatalf("skills cwd = %q, want %q", gotCWD, cwd)
+		}
+		return response, nil
+	}
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:             100,
+		Height:            24,
+		ShowSessionHeader: true,
+		SessionPickerCWD:  cwd,
+		OnReadSkills:      reader,
+	})
+	if cmd := model.Init(); cmd == nil {
+		t.Fatal("Init() should request the startup skills list")
+	}
+	model.Update(StartupSkillsListMsg{CWD: cwd, Response: response})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "\u26a0 1 startup issue") {
+		t.Fatalf("startup skill warning missing from the summary:\n%s", view)
+	}
+	if strings.Contains(view, "Skipped loading") {
+		t.Fatalf("the summary line should be dropped for skill diagnostics:\n%s", view)
+	}
+	raw := model.State.Messages[model.startupWarningsIndex].RawText
+	if !strings.Contains(raw, "invalid description") {
+		t.Fatalf("transcript details = %q", raw)
+	}
+	if !model.skillLoadWarningsComplete {
+		t.Fatal("the startup skills window should close after the initial load")
+	}
+	// A repeated active error stays suppressed.
+	model.Update(StartupSkillsListMsg{CWD: cwd, Response: response})
+	view = utils.StripANSI(model.View())
+	if !strings.Contains(view, "\u26a0 1 startup issue") {
+		t.Fatalf("repeated active error changed the summary:\n%s", view)
+	}
+	// A runtime refresh with a new error uses the ordinary warning path
+	// (Rust's runtime refresh).
+	changed := appserver.SkillsListResponse{Data: []appserver.SkillsListEntry{{
+		CWD:    cwd,
+		Errors: []appserver.SkillErrorInfo{{Path: cwd + "/.gcode/skills/xyz/SKILL.md", Message: "missing name"}},
+	}}}
+	model.Update(SkillsListResultMsg{CWD: cwd, Response: changed})
+	view = utils.StripANSI(model.View())
+	if !strings.Contains(view, "Skipped loading 1 skill(s) due to invalid SKILL.md files.") {
+		t.Fatalf("runtime skill warning missing:\n%s", view)
+	}
+}
+
 func TestModelStreamsUpdatePlanIntoPlanCell(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})
