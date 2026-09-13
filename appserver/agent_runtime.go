@@ -117,6 +117,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.model = r.guardianReviewModelForTurn
 		modelReviewer.autoReviewMessages = r.guardianReviewAutoReviewMessagesForTurn
 		modelReviewer.specialty = r.guardianReviewModelSpecialtyForTurn
+		modelReviewer.maxToolCallLagFor = r.guardianMaxToolCallLagForTurn
 		modelReviewer.nodeReplAutoReviewRequired = r.guardianReviewNodeReplAutoReviewRequiredForTurn
 		modelReviewer.fullAccess = r.guardianFullAccessForTurn
 		modelReviewer.approvalsReviewer = r.guardianApprovalsReviewerForTurn
@@ -136,6 +137,39 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		}
 	}
 	return reviewer
+}
+
+// guardianMaxToolCallLagForTurn resolves the stale-score bound for the review's
+// turn, mirroring Rust's GuardianV2Config resolution: the configured
+// `[features.guardianv2].max_tool_call_lag` wins, then the model catalog's
+// `model_messages.guardian_v2.max_tool_call_lag`, then Rust's default.
+func (r *RuntimeRouter) guardianMaxToolCallLagForTurn(threadID, turnID string) int {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return defaultGuardianMaxToolCallLag
+	}
+	var cfg *config.Config
+	if effective, err := r.effectiveConfigForTurn(active.Params); err == nil {
+		cfg = effective
+	}
+	info := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(active.Params.Model), cfg)
+	return guardianMaxToolCallLag(cfg, info)
+}
+
+// guardianMaxToolCallLag resolves the bound from a config plus model info
+// (Rust `configured.max_tool_call_lag.or(model_defaults.max_tool_call_lag)`
+// with `DEFAULT_MAX_TOOL_CALL_LAG` as the fallback).
+func guardianMaxToolCallLag(cfg *config.Config, info *model.ModelInfo) int {
+	if cfg != nil {
+		if lag, ok := cfg.GuardianV2MaxToolCallLag(); ok {
+			return lag
+		}
+	}
+	if info != nil && info.ModelMessages != nil && info.ModelMessages.GuardianV2 != nil &&
+		info.ModelMessages.GuardianV2.MaxToolCallLag != nil && *info.ModelMessages.GuardianV2.MaxToolCallLag > 0 {
+		return *info.ModelMessages.GuardianV2.MaxToolCallLag
+	}
+	return defaultGuardianMaxToolCallLag
 }
 
 func (r *RuntimeRouter) guardianFullAccessForTurn(threadID, turnID string) bool {

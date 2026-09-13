@@ -89,3 +89,34 @@ func TestBundledCatalogCarriesModelMessagesLikeRust(t *testing.T) {
 		t.Fatal("no bundled model parsed its catalog persistent_instructions")
 	}
 }
+
+// TestModelMessagesParsesGuardianV2LikeRust pins the catalog's
+// `model_messages.guardian_v2` shape (Rust GuardianV2ModelConfig); Go consumes
+// max_tool_call_lag as the stale-score bound's model default.
+func TestModelMessagesParsesGuardianV2LikeRust(t *testing.T) {
+	var messages ModelMessages
+	if err := json.Unmarshal([]byte(`{
+		"guardian_v2": {
+			"classifier_instructions": "classify",
+			"review_threshold_basis_points": 5000,
+			"max_tool_call_lag": 4,
+			"reasoning_effort": "low",
+			"max_action_tokens": 10000,
+			"transcript": {"sources": ["tool_calls"]}
+		}
+	}`), &messages); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if messages.GuardianV2 == nil {
+		t.Fatal("guardian_v2 did not parse")
+	}
+	if messages.GuardianV2.MaxToolCallLag == nil || *messages.GuardianV2.MaxToolCallLag != 4 {
+		t.Fatalf("max_tool_call_lag = %#v", messages.GuardianV2.MaxToolCallLag)
+	}
+	if messages.GuardianV2.ClassifierInstructions == nil || *messages.GuardianV2.ClassifierInstructions != "classify" {
+		t.Fatalf("classifier_instructions = %#v", messages.GuardianV2.ClassifierInstructions)
+	}
+	if len(messages.GuardianV2.Transcript) == 0 {
+		t.Fatal("transcript was not retained")
+	}
+}

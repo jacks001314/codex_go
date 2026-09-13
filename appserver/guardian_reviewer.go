@@ -26,12 +26,15 @@ type GuardianReviewer interface {
 }
 
 type modelGuardianReviewer struct {
-	agent                      model.AgentRunner
-	store                      *state.ReviewStore
-	breaker                    *state.CircuitBreaker
-	scoreMu                    sync.Mutex
-	scoreProgress              map[string]*guardianScoreProgress
-	maxToolCallLag             int
+	agent          model.AgentRunner
+	store          *state.ReviewStore
+	breaker        *state.CircuitBreaker
+	scoreMu        sync.Mutex
+	scoreProgress  map[string]*guardianScoreProgress
+	maxToolCallLag int
+	// maxToolCallLagFor, when set, resolves the bound for the review's turn
+	// (configured value -> model catalog default -> Rust's default).
+	maxToolCallLagFor          func(threadID, turnID string) int
 	notify                     func(threadID string, event *state.Event)
 	interrupt                  func(threadID, turnID string)
 	transcript                 func(threadID string) []string
@@ -62,7 +65,7 @@ type modelGuardianReviewer struct {
 
 // defaultGuardianMaxToolCallLag mirrors Rust
 // GuardianV2Config::DEFAULT_MAX_TOOL_CALL_LAG (#39001).
-const defaultGuardianMaxToolCallLag = 3
+const defaultGuardianMaxToolCallLag = 2
 
 // guardianScoreProgress tracks the latest tool call and the latest scored tool
 // call per thread (Rust GuardianV2ScoreProgress, #39001): approval review is
@@ -128,6 +131,24 @@ func (r *modelGuardianReviewer) SetMaxToolCallLag(lag int) {
 		lag = defaultGuardianMaxToolCallLag
 	}
 	r.maxToolCallLag = lag
+}
+
+// maxToolCallLagValue resolves the stale-score bound for one review: the
+// per-turn resolver (configured value -> model catalog default -> Rust's
+// default) wins, then an explicit SetMaxToolCallLag, then the default.
+func (r *modelGuardianReviewer) maxToolCallLagValue(threadID, turnID string) int {
+	if r == nil {
+		return defaultGuardianMaxToolCallLag
+	}
+	if r.maxToolCallLagFor != nil {
+		if lag := r.maxToolCallLagFor(threadID, turnID); lag > 0 {
+			return lag
+		}
+	}
+	if r.maxToolCallLag > 0 {
+		return r.maxToolCallLag
+	}
+	return defaultGuardianMaxToolCallLag
 }
 
 type guardianSessionRunner struct {
@@ -280,7 +301,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// than max_tool_call_lag tool calls. The Go simplified reviewer fails closed
 	// (no stale-score auto-approval), mirroring the stale-data guard while
 	// keeping the established refuse-approval convention.
-	if r.maxToolCallLag > 0 && r.scoreLag(threadID) > r.maxToolCallLag {
+	if lag := r.maxToolCallLagValue(threadID, turnID); lag > 0 && r.scoreLag(threadID) > lag {
 		return state.DecisionDenied, "guardian review skipped: risk score lag exceeds max_tool_call_lag", nil
 	}
 	if r.fullAccess != nil && r.fullAccess(threadID, turnID) {

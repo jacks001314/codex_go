@@ -1136,21 +1136,21 @@ func (c *Config) GuardianV2MaxParentCompactionTokens() int {
 }
 
 // GuardianV2MaxToolCallLag returns the configured
-// [features.guardianv2].max_tool_call_lag bound (default 3; non-positive or
-// unset values fall back to the default), mirroring Rust
-// GuardianV2Config::max_tool_call_lag (#39001).
-func (c *Config) GuardianV2MaxToolCallLag() int {
-	const defaultMaxToolCallLag = 3
+// [features.guardianv2].max_tool_call_lag bound and whether it was set,
+// mirroring Rust GuardianV2Config::max_tool_call_lag (#39001, a `usize`
+// option). The model catalog's `guardian_v2` default fills in when the config
+// leaves it unset, and DEFAULT_MAX_TOOL_CALL_LAG (2) is the final fallback.
+func (c *Config) GuardianV2MaxToolCallLag() (int, bool) {
 	if c == nil || c.Values == nil {
-		return defaultMaxToolCallLag
+		return 0, false
 	}
 	featuresTable, ok := c.Values["features"].(map[string]any)
 	if !ok {
-		return defaultMaxToolCallLag
+		return 0, false
 	}
 	guardianV2, ok := featuresTable["guardianv2"].(map[string]any)
 	if !ok {
-		return defaultMaxToolCallLag
+		return 0, false
 	}
 	value := int64(0)
 	switch typed := guardianV2["max_tool_call_lag"].(type) {
@@ -1168,9 +1168,9 @@ func (c *Config) GuardianV2MaxToolCallLag() int {
 		}
 	}
 	if value <= 0 {
-		return defaultMaxToolCallLag
+		return 0, false
 	}
-	return int(value)
+	return int(value), true
 }
 
 // FreeGuardianEnabled returns whether Guardian may route eligible inference

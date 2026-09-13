@@ -990,29 +990,30 @@ sources = ["tool_outputs", "reasoning"]
 	if got := cfg.GuardianV2MaxParentCompactionTokens(); got != 256 {
 		t.Fatalf("max_parent_compaction_tokens = %d, want 256", got)
 	}
-	if got := cfg.GuardianV2MaxToolCallLag(); got != 2 {
-		t.Fatalf("max_tool_call_lag = %d, want 2", got)
+	if got, ok := cfg.GuardianV2MaxToolCallLag(); !ok || got != 2 {
+		t.Fatalf("max_tool_call_lag = %d (set=%v), want a configured 2", got, ok)
 	}
 }
 
 // TestGuardianV2MaxToolCallLagDefaultsLikeRust mirrors Rust
-// GuardianV2Config::max_tool_call_lag (#39001): default 3; non-positive values
-// fall back to the default.
+// GuardianV2Config::max_tool_call_lag (#39001): the accessor reports whether the
+// config set the value (the model catalog supplies a lower-priority default and
+// DEFAULT_MAX_TOOL_CALL_LAG is 2); non-positive values are unset.
 func TestGuardianV2MaxToolCallLagDefaultsLikeRust(t *testing.T) {
-	if got := (&Config{}).GuardianV2MaxToolCallLag(); got != 3 {
-		t.Fatalf("default = %d, want 3", got)
+	if _, ok := (&Config{}).GuardianV2MaxToolCallLag(); ok {
+		t.Fatal("empty config reported a configured max_tool_call_lag")
 	}
 	configured := &Config{Values: map[string]any{
 		"features": map[string]any{"guardianv2": map[string]any{"max_tool_call_lag": int64(7)}},
 	}}
-	if got := configured.GuardianV2MaxToolCallLag(); got != 7 {
-		t.Fatalf("configured = %d, want 7", got)
+	if got, ok := configured.GuardianV2MaxToolCallLag(); !ok || got != 7 {
+		t.Fatalf("configured = %d (set=%v), want 7", got, ok)
 	}
 	nonPositive := &Config{Values: map[string]any{
 		"features": map[string]any{"guardianv2": map[string]any{"max_tool_call_lag": int64(0)}},
 	}}
-	if got := nonPositive.GuardianV2MaxToolCallLag(); got != 3 {
-		t.Fatalf("non-positive = %d, want default 3", got)
+	if _, ok := nonPositive.GuardianV2MaxToolCallLag(); ok {
+		t.Fatal("non-positive max_tool_call_lag reported as configured")
 	}
 }
 

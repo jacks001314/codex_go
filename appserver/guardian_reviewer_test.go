@@ -952,3 +952,37 @@ func waitForAccountLoginNotification(t *testing.T, sink *NotificationBuffer, log
 	}
 	t.Fatalf("login notification %s success=%v not found", loginID, success)
 }
+
+// TestGuardianMaxToolCallLagLikeRust mirrors Rust's GuardianV2Config resolution
+// of max_tool_call_lag: the configured [features.guardianv2] value wins, then
+// the model catalog's model_messages.guardian_v2.max_tool_call_lag, then
+// DEFAULT_MAX_TOOL_CALL_LAG (2).
+func TestGuardianMaxToolCallLagLikeRust(t *testing.T) {
+	configured := &config.Config{Values: map[string]any{
+		"features": map[string]any{"guardianv2": map[string]any{"max_tool_call_lag": int64(7)}},
+	}}
+	modelLag := 5
+	info := &model.ModelInfo{ModelMessages: &model.ModelMessages{
+		GuardianV2: &model.GuardianV2ModelConfig{MaxToolCallLag: &modelLag},
+	}}
+	if got := guardianMaxToolCallLag(configured, info); got != 7 {
+		t.Fatalf("configured lag = %d, want 7", got)
+	}
+	if got := guardianMaxToolCallLag(&config.Config{}, info); got != 5 {
+		t.Fatalf("model default lag = %d, want 5", got)
+	}
+	if got := guardianMaxToolCallLag(&config.Config{}, nil); got != 2 {
+		t.Fatalf("fallback lag = %d, want Rust's default 2", got)
+	}
+	if got := guardianMaxToolCallLag(&config.Config{}, &model.ModelInfo{}); got != 2 {
+		t.Fatalf("lag with model info but no guardian config = %d, want 2", got)
+	}
+	reviewer := &modelGuardianReviewer{}
+	if got := reviewer.maxToolCallLagValue("thread", "turn"); got != 2 {
+		t.Fatalf("reviewer lag = %d, want the default 2", got)
+	}
+	reviewer.maxToolCallLagFor = func(string, string) int { return 9 }
+	if got := reviewer.maxToolCallLagValue("thread", "turn"); got != 9 {
+		t.Fatalf("reviewer lag = %d, want the per-turn resolver value 9", got)
+	}
+}

@@ -120,7 +120,11 @@ type ModelMessages struct {
 	PersistentInstructions *string               `json:"persistent_instructions,omitempty"`
 	Permissions            *PermissionMessages   `json:"permissions,omitempty"`
 	ConfirmationPolicies   *ConfirmationPolicies `json:"confirmation_policies,omitempty"`
-	Tools                  *ToolMessages         `json:"tools,omitempty"`
+	// GuardianV2 carries the catalog's Guardian v2 model defaults (Rust
+	// ModelMessages::guardian_v2). Go consumes max_tool_call_lag; the remaining
+	// classifier fields belong to Rust's async scorer, which Go does not have.
+	GuardianV2 *GuardianV2ModelConfig `json:"guardian_v2,omitempty"`
+	Tools      *ToolMessages          `json:"tools,omitempty"`
 }
 
 type CollaborationModeMessages struct {
@@ -143,6 +147,19 @@ type PermissionMessages struct {
 	DangerFullAccess *string `json:"danger_full_access,omitempty"`
 	WorkspaceWrite   *string `json:"workspace_write,omitempty"`
 	ReadOnly         *string `json:"read_only,omitempty"`
+}
+
+// GuardianV2ModelConfig mirrors Rust
+// protocol::openai_models::GuardianV2ModelConfig: the model catalog's Guardian
+// v2 defaults, overlaid by `[features.guardianv2]` configuration.
+type GuardianV2ModelConfig struct {
+	ClassifierInstructions         *string         `json:"classifier_instructions,omitempty"`
+	ReviewThresholdBasisPoints     *int            `json:"review_threshold_basis_points,omitempty"`
+	MaxToolCallLag                 *int            `json:"max_tool_call_lag,omitempty"`
+	ReasoningEffort                *string         `json:"reasoning_effort,omitempty"`
+	MaxActionTokens                *int            `json:"max_action_tokens,omitempty"`
+	MaxClassifierInstructionTokens *int            `json:"max_classifier_instruction_tokens,omitempty"`
+	Transcript                     json.RawMessage `json:"transcript,omitempty"`
 }
 
 // MultiAgentMessages mirrors Rust MultiAgentMessages: model-catalog messages
@@ -217,6 +234,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 		PersistentInstructions *string                    `json:"persistent_instructions"`
 		Permissions            *PermissionMessages        `json:"permissions"`
 		ConfirmationPolicies   *ConfirmationPolicies      `json:"confirmation_policies"`
+		GuardianV2             *GuardianV2ModelConfig     `json:"guardian_v2"`
 		Tools                  *ToolMessages              `json:"tools"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -231,6 +249,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	m.PersistentInstructions = raw.PersistentInstructions
 	m.Permissions = raw.Permissions
 	m.ConfirmationPolicies = raw.ConfirmationPolicies
+	m.GuardianV2 = raw.GuardianV2
 	m.Tools = raw.Tools
 	if raw.InstructionsVariables != nil {
 		m.PersonalityDefault = raw.InstructionsVariables["personality_default"]
