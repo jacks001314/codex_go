@@ -986,3 +986,33 @@ func TestGuardianMaxToolCallLagLikeRust(t *testing.T) {
 		t.Fatalf("reviewer lag = %d, want the per-turn resolver value 9", got)
 	}
 }
+
+// TestAppServiceTierForTurnHonorsPerTurnOverrideLikeRust mirrors Rust's
+// TurnStartOptions.service_tier: the per-turn override wins for the turn (and
+// "default" means standard speed) without consulting the thread/config tier.
+func TestAppServiceTierForTurnHonorsPerTurnOverrideLikeRust(t *testing.T) {
+	models := model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
+		Slug:           "gpt-test",
+		DisplayName:    "GPT Test",
+		Visibility:     model.VisibilityVisible,
+		SupportedInAPI: true,
+		ServiceTiers:   []string{"priority"},
+	}}}))
+	router := NewRuntimeRouter(RuntimeServices{Models: models})
+	cfg := &config.Config{Values: map[string]any{"service_tier": "priority"}}
+
+	perTurn := "priority"
+	got := router.appServiceTierForTurn(cfg, &turn.TurnStartParams{ServiceTierForTurn: &perTurn}, "gpt-test")
+	if got != "priority" {
+		t.Fatalf("per-turn tier = %q, want priority", got)
+	}
+	// "fast" normalizes to the request value, and "default" clears it.
+	fast := "fast"
+	if got := router.appServiceTierForTurn(cfg, &turn.TurnStartParams{ServiceTierForTurn: &fast}, "gpt-test"); got != "priority" {
+		t.Fatalf("per-turn fast tier = %q, want priority", got)
+	}
+	standard := "default"
+	if got := router.appServiceTierForTurn(cfg, &turn.TurnStartParams{ServiceTierForTurn: &standard}, "gpt-test"); got != "" {
+		t.Fatalf("per-turn default tier = %q, want standard speed", got)
+	}
+}

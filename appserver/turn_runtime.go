@@ -9554,6 +9554,13 @@ func appIncludeTimingMetrics(cfg *config.Config) bool {
 }
 
 func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.TurnStartParams, modelID string) string {
+	if params != nil && params.ServiceTierForTurn != nil {
+		// Rust applies TurnStartOptions.service_tier to the turn's settings copy
+		// after persisting the thread settings, so a per-turn override wins for
+		// this turn without changing the thread's tier (turn_context.rs).
+		info := r.modelInfoForRuntime(modelID)
+		return model.ServiceTierForRequest(info, stringPtrValue(params.ServiceTierForTurn))
+	}
 	settings := map[string]bool{}
 	if cfg != nil {
 		settings = cfg.FeatureSettings()

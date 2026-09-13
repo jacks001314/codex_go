@@ -206,10 +206,15 @@ type TurnStartParams struct {
 	Environments          []map[string]any  `json:"environments,omitempty"`
 	ServiceTier           *string           `json:"serviceTier,omitempty"`
 	ServiceTierSet        bool              `json:"-"`
-	Effort                *string           `json:"effort,omitempty"`
-	Summary               *string           `json:"summary,omitempty"`
-	OutputSchema          any               `json:"outputSchema,omitempty"`
-	CollaborationMode     map[string]any    `json:"collaborationMode,omitempty"`
+	// ServiceTierForTurn overrides the service tier only for the turn this
+	// request starts ("default" for standard speed); it does not change the
+	// thread's tier and is ignored when the request steers a turn (Rust
+	// TurnStartParams::service_tier_for_turn).
+	ServiceTierForTurn *string        `json:"serviceTierForTurn,omitempty"`
+	Effort             *string        `json:"effort,omitempty"`
+	Summary            *string        `json:"summary,omitempty"`
+	OutputSchema       any            `json:"outputSchema,omitempty"`
+	CollaborationMode  map[string]any `json:"collaborationMode,omitempty"`
 	// Deprecated: accepted for old app-server clients, but ignored by runtime.
 	MultiAgentMode        *string                           `json:"multiAgentMode,omitempty"`
 	Personality           *string                           `json:"personality,omitempty"`
