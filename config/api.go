@@ -2634,7 +2634,51 @@ func (s *ConfigService) DetectExternalAgentConfig(params *ExternalAgentConfigDet
 			}
 		}
 	}
-	return &ExternalAgentConfigDetectResponse{Items: items}
+	return &ExternalAgentConfigDetectResponse{
+		Items:      items,
+		Connectors: s.DetectExternalSessionConnectors(params.MigrationSource, externalMigrationItemSessions(items)),
+	}
+}
+
+// externalMigrationItemSessions flattens the session migrations carried by the
+// detect items, keeping only paths that still exist (Rust filters
+// `session.path.is_file()` before connector detection).
+func externalMigrationItemSessions(items []ExternalAgentConfigMigrationItem) []SessionMigration {
+	var sessions []SessionMigration
+	for _, item := range items {
+		if item.Details == nil {
+			continue
+		}
+		for _, session := range item.Details.Sessions {
+			if strings.TrimSpace(session.Path) == "" {
+				continue
+			}
+			if _, err := os.Stat(session.Path); err != nil {
+				continue
+			}
+			sessions = append(sessions, session)
+		}
+	}
+	return sessions
+}
+
+// RecordDetectedExternalSessionConnectors persists the connector names
+// attributed to the detected sessions (Rust's detect handler recording
+// detected_connector_records) so a later connector-candidates read can report
+// them.
+func (s *ConfigService) RecordDetectedExternalSessionConnectors(params *ExternalAgentConfigDetectParams, items []ExternalAgentConfigMigrationItem) error {
+	if s == nil {
+		return nil
+	}
+	migrationSource := (*string)(nil)
+	if params != nil {
+		migrationSource = params.MigrationSource
+	}
+	sessions := externalMigrationItemSessions(items)
+	if len(sessions) == 0 {
+		return nil
+	}
+	return RecordDetectedExternalSessionConnectors(s.codexHome, s.DetectExternalSessionConnectorNamesBySourcePath(migrationSource, sessions))
 }
 
 func (s *ConfigService) ImportExternalAgentConfig(params *ExternalAgentConfigImportParams) (*ExternalAgentConfigImportResponse, *ExternalAgentConfigImportCompletedNotification) {
@@ -4085,7 +4129,7 @@ func migrationItemsForJSON(values []ExternalAgentConfigMigrationItem) []External
 }
 
 func detectedConnectorCandidatesForJSON(values []ExternalAgentDetectedConnectorCandidate) []ExternalAgentDetectedConnectorCandidate {
-	if values == nil {
+	if len(values) == 0 {
 		return []ExternalAgentDetectedConnectorCandidate{}
 	}
 	return append([]ExternalAgentDetectedConnectorCandidate(nil), values...)

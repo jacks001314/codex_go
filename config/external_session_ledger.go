@@ -19,6 +19,14 @@ var externalSessionLedgerMu sync.Mutex
 
 type externalSessionImportLedger struct {
 	Records []externalSessionImportRecord `json:"records"`
+	// DetectedConnectorRecords mirrors Rust's detected_connector_records: the
+	// connector names seen while detecting (not yet importing) external sessions.
+	DetectedConnectorRecords []detectedExternalSessionConnectorRecord `json:"detected_connector_records"`
+}
+
+type detectedExternalSessionConnectorRecord struct {
+	SourcePath     string   `json:"source_path"`
+	ConnectorNames []string `json:"connector_names"`
 }
 
 type externalSessionImportRecord struct {
@@ -273,7 +281,86 @@ func loadExternalSessionImportLedger(codexHome string) (externalSessionImportLed
 	if ledger.Records == nil {
 		ledger.Records = []externalSessionImportRecord{}
 	}
+	if ledger.DetectedConnectorRecords == nil {
+		ledger.DetectedConnectorRecords = []detectedExternalSessionConnectorRecord{}
+	}
 	return ledger, nil
+}
+
+// RecordDetectedExternalSessionConnectors mirrors Rust
+// record_detected_session_connectors: persist the connector names attributed to
+// detected (not necessarily imported) external sessions so a later connector
+// candidates read can report them.
+func RecordDetectedExternalSessionConnectors(codexHome string, connectorNamesBySourcePath map[string][]string) error {
+	if len(connectorNamesBySourcePath) == 0 {
+		return nil
+	}
+	externalSessionLedgerMu.Lock()
+	defer externalSessionLedgerMu.Unlock()
+	ledger, err := loadExternalSessionImportLedger(codexHome)
+	if err != nil {
+		return err
+	}
+	sourcePaths := make([]string, 0, len(connectorNamesBySourcePath))
+	for sourcePath := range connectorNamesBySourcePath {
+		sourcePaths = append(sourcePaths, sourcePath)
+	}
+	sort.Strings(sourcePaths)
+	for _, sourcePath := range sourcePaths {
+		names := connectorNamesBySourcePath[sourcePath]
+		if len(names) == 0 {
+			continue
+		}
+		canonical, err := externalCanonicalSourcePath(sourcePath)
+		if err != nil {
+			return err
+		}
+		index := -1
+		for recordIndex := range ledger.DetectedConnectorRecords {
+			if externalSamePath(ledger.DetectedConnectorRecords[recordIndex].SourcePath, canonical) {
+				index = recordIndex
+				break
+			}
+		}
+		if index >= 0 {
+			ledger.DetectedConnectorRecords[index].ConnectorNames = appendExternalConnectorNames(
+				ledger.DetectedConnectorRecords[index].ConnectorNames, names)
+			continue
+		}
+		ledger.DetectedConnectorRecords = append(ledger.DetectedConnectorRecords, detectedExternalSessionConnectorRecord{
+			SourcePath:     canonical,
+			ConnectorNames: appendExternalConnectorNames(nil, names),
+		})
+	}
+	return saveExternalSessionImportLedger(codexHome, ledger)
+}
+
+// externalCanonicalSourcePath is Rust's canonical_source_path
+// (fs::canonicalize): resolve symlinks and make the path absolute.
+func externalCanonicalSourcePath(path string) (string, error) {
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(canonical)
+}
+
+// appendExternalConnectorNames appends names case-insensitively deduplicated
+// (Rust append_connector_names).
+func appendExternalConnectorNames(existing []string, additional []string) []string {
+	for _, name := range additional {
+		duplicate := false
+		for _, prior := range existing {
+			if strings.EqualFold(prior, name) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			existing = append(existing, name)
+		}
+	}
+	return existing
 }
 
 func externalSessionSourceState(sourcePath string) (string, string, *int64, error) {
@@ -320,6 +407,14 @@ func ImportedConnectorCandidates(codexHome string) []ExternalAgentImportedConnec
 		return nil
 	}
 	namesBySource := map[string][]string{}
+	// Detected (unimported) sessions contribute their connectors too, matching
+	// Rust's read_imported_connector_candidates.
+	for _, record := range ledger.DetectedConnectorRecords {
+		if len(record.ConnectorNames) == 0 {
+			continue
+		}
+		namesBySource[record.SourcePath] = append(namesBySource[record.SourcePath], record.ConnectorNames...)
+	}
 	for _, record := range ledger.Records {
 		if len(record.ConnectorNames) == 0 {
 			continue

@@ -9797,7 +9797,12 @@ func (r *RuntimeRouter) handleExternalAgentConfigDetect(request *Request) (*conf
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	return r.requireConfig().DetectExternalAgentConfig(&params), nil
+	service := r.requireConfig()
+	response := service.DetectExternalAgentConfig(&params)
+	if err := service.RecordDetectedExternalSessionConnectors(&params, response.Items); err != nil {
+		return nil, fmt.Errorf("failed to record detected connector candidates: %w", err)
+	}
+	return response, nil
 }
 
 func (r *RuntimeRouter) handleExternalAgentConfigImport(request *Request) (*config.ExternalAgentConfigImportResponse, error) {

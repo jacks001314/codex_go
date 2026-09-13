@@ -39,6 +39,65 @@ func (s *ConfigService) DetectExternalSessionConnectors(migrationSource *string,
 	return detectExternalClaudeSessionConnectorCandidates(sessions, externalConnectorMetadataRootsForHome(home))
 }
 
+// DetectExternalSessionConnectorNamesBySourcePath reports the connector display
+// names attributed to each detected session path (Rust
+// detect_session_connectors_by_source_path). The detect handler records these in
+// the ledger's detected-connector records.
+func (s *ConfigService) DetectExternalSessionConnectorNamesBySourcePath(migrationSource *string, sessions []SessionMigration) map[string][]string {
+	source := normalizeExternalMigrationSource(migrationSource)
+	home := s.externalAgentHomeForSource(source)
+	namesBySourcePath := map[string][]string{}
+	if len(sessions) == 0 {
+		return namesBySourcePath
+	}
+	if source == externalMigrationSourceCursor {
+		namesByServerID := cachedExternalCursorConnectorNames(home)
+		if len(namesByServerID) == 0 {
+			return namesBySourcePath
+		}
+		for _, session := range sessions {
+			names := externalCursorSessionConnectorNames(session.Path, namesByServerID)
+			if len(names) == 0 {
+				continue
+			}
+			namesBySourcePath[session.Path] = sortedExternalConnectorNames(names)
+		}
+		return namesBySourcePath
+	}
+	roots := externalConnectorMetadataRootsForHome(home)
+	attributions := make([]externalSessionConnectorAttribution, 0, len(sessions))
+	for _, session := range sessions {
+		attribution := readExternalSessionConnectorAttribution(session.Path)
+		attribution.Roots = roots
+		if attribution.SessionID != "" && len(attribution.ServerIDs) != 0 {
+			attributions = append(attributions, attribution)
+		}
+	}
+	namesBySessionID := detectExternalSessionConnectors(attributions)
+	for _, session := range sessions {
+		sessionID := strings.TrimSpace(strings.TrimSuffix(filepath.Base(session.Path), filepath.Ext(session.Path)))
+		if names := namesBySessionID[sessionID]; len(names) > 0 {
+			namesBySourcePath[session.Path] = append([]string(nil), names...)
+		}
+	}
+	return namesBySourcePath
+}
+
+// sortedExternalConnectorNames returns the display names of a
+// lowercased-key map in key order.
+func sortedExternalConnectorNames(names map[string]string) []string {
+	keys := make([]string, 0, len(names))
+	for key := range names {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, names[key])
+	}
+	return out
+}
+
 func detectExternalClaudeSessionConnectorCandidates(sessions []SessionMigration, roots []string) []ExternalAgentDetectedConnectorCandidate {
 	attributions := make([]externalSessionConnectorAttribution, 0, len(sessions))
 	for _, session := range sessions {
