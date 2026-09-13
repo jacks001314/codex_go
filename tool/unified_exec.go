@@ -192,13 +192,16 @@ type UnifiedExecEvent struct {
 	Command     []string
 	HookCommand string
 	CWD         string
-	ProcessID   int
-	Output      string
-	Input       string
-	ExitCode    int
-	Duration    time.Duration
-	StartedAt   time.Time
-	TimedOut    bool
+	// TTY reports whether the session was started with tty=true (Rust
+	// Feature::UnifiedExecTty); it is set on the begin event.
+	TTY       bool
+	ProcessID int
+	Output    string
+	Input     string
+	ExitCode  int
+	Duration  time.Duration
+	StartedAt time.Time
+	TimedOut  bool
 }
 
 type UnifiedExecEventSink func(UnifiedExecEvent)
@@ -398,6 +401,7 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 		Command:     append([]string(nil), process.command...),
 		HookCommand: process.hookCommand,
 		CWD:         process.cwd,
+		TTY:         process.tty,
 		ProcessID:   process.id,
 		StartedAt:   process.startedAt,
 	})

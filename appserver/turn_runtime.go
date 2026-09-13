@@ -2585,6 +2585,13 @@ func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID stri
 		processID := strconv.Itoa(event.ProcessID)
 		switch event.Kind {
 		case tool.UnifiedExecEventBegin:
+			// Rust's emit_unified_exec_tty_metric: one codex.tool.unified_exec
+			// counter per exec_command invocation, tagged by tty.
+			if r.services.TurnMetrics != nil {
+				r.services.TurnMetrics.Counter(telemetry.ToolCallUnifiedExecMetric, 1, map[string]string{
+					"tty": boolTagValue(event.TTY),
+				})
+			}
 			if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.RunConfig != nil {
 				r.rememberUnifiedExecAnalytics(threadID, turnID, callID, active.ConnectionID, active.RunConfig)
 			}

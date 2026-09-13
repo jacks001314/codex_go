@@ -332,3 +332,37 @@ func TestRuntimeToolCompletedNotifierEmitsToolCallMetrics(t *testing.T) {
 		t.Fatalf("records = %#v", records)
 	}
 }
+
+// Mirrors Rust's emit_unified_exec_tty_metric: one codex.tool.unified_exec
+// counter per unified-exec begin event, tagged by tty; other event kinds do not
+// record it.
+func TestRuntimeUnifiedExecEventSinkEmitsTTYMetricLikeRust(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	router := NewRuntimeRouter(RuntimeServices{TurnMetrics: metrics})
+	emit := router.runtimeUnifiedExecEventSink("thread-a", "turn-a")
+	if emit == nil {
+		t.Fatal("unified exec sink is nil")
+	}
+	emit(tool.UnifiedExecEvent{
+		Kind:      tool.UnifiedExecEventBegin,
+		CallID:    "call-tty",
+		ProcessID: 7,
+		TTY:       true,
+		StartedAt: time.Now(),
+	})
+	emit(tool.UnifiedExecEvent{Kind: tool.UnifiedExecEventOutputDelta, CallID: "call-tty", ProcessID: 7, Output: "hi"})
+
+	unified := 0
+	for _, record := range metrics.Records() {
+		if record.Name != telemetry.ToolCallUnifiedExecMetric {
+			continue
+		}
+		unified++
+		if record.Kind != "counter" || record.Inc != 1 || record.Tags["tty"] != "true" {
+			t.Fatalf("unified exec record = %#v", record)
+		}
+	}
+	if unified != 1 {
+		t.Fatalf("unified exec counters = %d", unified)
+	}
+}
