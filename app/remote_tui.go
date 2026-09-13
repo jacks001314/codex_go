@@ -3712,6 +3712,20 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return nil
 		}
 		c.send(codextea.ThreadEventMsg{Event: protocol.TurnCompleted(protocol.Usage{})})
+	// Rust chatwidget ServerNotification::ConfigWarning: startup config
+	// warnings coalesce into the startup warnings entry until the first turn.
+	case appserver.NotificationConfigWarning:
+		var payload config.ConfigWarningNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		summary := strings.TrimSpace(payload.Summary)
+		if details := strings.TrimSpace(stringPtrValue(payload.Details)); details != "" {
+			summary += ": " + details
+		}
+		if summary != "" {
+			c.send(codextea.StartupConfigWarningMsg{Message: summary})
+		}
 	case appserver.NotificationThreadSettingsUpdated:
 		var payload appserver.SettingsUpdatedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

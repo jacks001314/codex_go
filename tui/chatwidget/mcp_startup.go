@@ -20,8 +20,23 @@ const (
 )
 
 type McpStartupStatus struct {
-	Kind  McpStartupStatusKind
+	Kind McpStartupStatusKind
+	// Error carries the startup error text surfaced to the user.
 	Error string
+	// FailureReason mirrors Rust's McpServerStartupFailureReason (for example
+	// "reauthenticationRequired"), which marks the server as needing sign-in in
+	// the startup warnings summary.
+	FailureReason string
+}
+
+// MCPStartupInterruptedMessage is Rust's cancelled-server diagnostic.
+func MCPStartupInterruptedMessage(cancelled []string) string {
+	return "MCP startup interrupted. The following servers were not initialized: " + strings.Join(cancelled, ", ")
+}
+
+// MCPStartupIncompleteMessage is Rust's failed-server diagnostic.
+func MCPStartupIncompleteMessage(failed []string) string {
+	return "MCP startup incomplete (failed: " + strings.Join(failed, ", ") + ")"
 }
 
 type McpStartupRoundState struct {
@@ -97,7 +112,7 @@ func (s *McpStartupRoundState) Update(server string, status McpStartupStatus, co
 		activatedPendingRound = true
 	} else {
 		if status.Kind == McpStartupFailed {
-			if previous, ok := s.Status[server]; !ok || previous.Kind != McpStartupFailed || previous.Error != status.Error {
+			if previous, ok := s.Status[server]; !ok || previous.Kind != McpStartupFailed || previous.Error != status.Error || previous.FailureReason != status.FailureReason {
 				warnings = append(warnings, status.Error)
 			}
 		}
@@ -144,10 +159,10 @@ func (s *McpStartupRoundState) Finish() McpStartupUpdateResult {
 	}
 	warnings := []string{}
 	if len(cancelled) > 0 {
-		warnings = append(warnings, "MCP startup interrupted. The following servers were not initialized: "+strings.Join(cancelled, ", "))
+		warnings = append(warnings, MCPStartupInterruptedMessage(cancelled))
 	}
 	if len(failed) > 0 {
-		warnings = append(warnings, "MCP startup incomplete (failed: "+strings.Join(failed, ", ")+")")
+		warnings = append(warnings, MCPStartupIncompleteMessage(failed))
 	}
 	s.Status = map[string]McpStartupStatus{}
 	s.IgnoreUpdatesUntilNextStart = true

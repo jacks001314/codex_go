@@ -426,6 +426,14 @@ type MCPStartupInventoryMsg struct {
 	Servers []historycell.McpServerStatus
 }
 
+// StartupConfigWarningMsg carries one app-server ConfigWarning notification into
+// the model. During startup the warning coalesces into the startup warnings
+// entry; afterwards it takes the normal warning path (Rust chatwidget
+// ServerNotification::ConfigWarning).
+type StartupConfigWarningMsg struct {
+	Message string
+}
+
 type MCPInventoryResultMsg struct {
 	RequestID uint64
 	Servers   []historycell.McpServerStatus
@@ -1036,21 +1044,25 @@ type Options struct {
 	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
 	OnListModels                   func(includeHidden bool) ([]codextui.ModelPickerOption, error)
 	MCPStartupExpectedServers      []string
-	InitialMessages                <-chan bubbletea.Msg
-	InitialHistoryCells            []historycell.HistoryCell
-	FeatureSettings                map[string]bool
-	UseMemories                    *bool
-	GenerateMemories               *bool
-	FeedbackEnabled                *bool
-	DisablePasteBurst              bool
-	Personality                    chatwidget.Personality
-	HideRateLimitModelNudge        *bool
-	TUITheme                       string
-	TUIPet                         string
-	CodexHome                      string
-	PetEnv                         map[string]string
-	PetFetch                       pets.AssetFetchFunc
-	TUIThemeStyles                 *styles.Styles
+	// StartupConfigWarnings carries the requirement-driven config warnings known
+	// at startup so they coalesce into the startup warnings entry (Rust
+	// config.startup_warnings -> ConfigWarning notifications).
+	StartupConfigWarnings   []string
+	InitialMessages         <-chan bubbletea.Msg
+	InitialHistoryCells     []historycell.HistoryCell
+	FeatureSettings         map[string]bool
+	UseMemories             *bool
+	GenerateMemories        *bool
+	FeedbackEnabled         *bool
+	DisablePasteBurst       bool
+	Personality             chatwidget.Personality
+	HideRateLimitModelNudge *bool
+	TUITheme                string
+	TUIPet                  string
+	CodexHome               string
+	PetEnv                  map[string]string
+	PetFetch                pets.AssetFetchFunc
+	TUIThemeStyles          *styles.Styles
 }
 
 type Model struct {
@@ -1218,6 +1230,15 @@ type Model struct {
 	mcpStartupActive        bool
 	mcpStartupGeneration    uint64
 	mcpStartupFinishPending bool
+	// startupWarnings coalesces the startup diagnostics into one history entry
+	// directly below the session splash (Rust StartupWarningsCell +
+	// App::merge_startup_warnings); startupWarningsIndex tracks that entry so
+	// later merges replace it in place, and startupWarningsComplete switches
+	// late warnings back to the normal warning path.
+	startupWarnings         historycell.StartupWarningsCell
+	startupWarningsIndex    int
+	startupWarningsComplete bool
+	sessionHeaderShown      bool
 	initialMessages         <-chan bubbletea.Msg
 	notice                  string
 	retryMessageIndex       int
@@ -1726,6 +1747,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		transcript:                      transcript,
 		activityFollow:                  true,
 		retryMessageIndex:               -1,
+		startupWarningsIndex:            -1,
 		composer:                        composer,
 		noAltScreen:                     options.NoAltScreen,
 		terminalFocused:                 true,
@@ -1932,6 +1954,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		if cell != nil {
 			model.addHistoryCell(cell)
 		}
+	}
+	for _, warning := range options.StartupConfigWarnings {
+		model.applyStartupConfigWarning(warning)
 	}
 	if options.WindowsSandboxStartupPrompt != nil {
 		model.openWindowsSandboxEnablePrompt(*options.WindowsSandboxStartupPrompt)
@@ -2159,6 +2184,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	case MCPStartupUpdateMsg:
 		return m, m.applyMCPStartupUpdate(msg)
+	case StartupConfigWarningMsg:
+		m.applyStartupConfigWarning(msg.Message)
+		return m, nil
 	case MCPStartupInventoryMsg:
 		m.mcpServers = cloneMcpServerStatuses(msg.Servers)
 		return m, nil
@@ -3689,10 +3717,7 @@ func (m *Model) applyMCPStartupUpdate(message MCPStartupUpdateMsg) bubbletea.Cmd
 		status.Error = "MCP client for `" + message.Name + "` failed to start"
 	}
 	result := m.mcpStartup.Update(message.Name, status, false)
-	for _, warning := range result.Warnings {
-		m.applyHistoryCell(historycell.NewWarningEvent(warning))
-		m.notice = warning
-	}
+	m.applyMCPStartupWarnings(message.Name, status, result)
 	if result.Finished {
 		m.mcpStartupActive = false
 		m.mcpStartupHeader = ""
@@ -3727,10 +3752,7 @@ func (m *Model) finishMCPStartupAfterLag(generation uint64) bubbletea.Cmd {
 		return nil
 	}
 	result := m.mcpStartup.FinishAfterLag()
-	for _, warning := range result.Warnings {
-		m.applyHistoryCell(historycell.NewWarningEvent(warning))
-		m.notice = warning
-	}
+	m.applyMCPStartupWarnings("", chatwidget.McpStartupStatus{}, result)
 	if result.Finished {
 		m.mcpStartupActive = false
 		m.mcpStartupHeader = ""
@@ -3742,6 +3764,67 @@ func (m *Model) finishMCPStartupAfterLag(generation uint64) bubbletea.Cmd {
 		return m.submitNextQueued()
 	}
 	return nil
+}
+
+// applyStartupConfigWarning mirrors Rust's chatwidget handling of
+// ServerNotification::ConfigWarning: before the startup window closes the
+// warning joins the coalesced startup entry and is remembered so a later
+// duplicate stays suppressed; afterwards it uses the normal warning path.
+func (m *Model) applyStartupConfigWarning(message string) {
+	if m == nil {
+		return
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	if m.startupWarningsComplete {
+		m.applyWarningMessage(message)
+		return
+	}
+	if !m.warningDisplay.ShouldDisplay(message) {
+		return
+	}
+	m.warningDisplay.MarkStartupConfigWarning(message)
+	m.mergeStartupWarnings(historycell.NewStartupWarnings([]string{message}))
+}
+
+// applyMCPStartupWarnings mirrors Rust's ChatWidget::add_mcp_startup_warning:
+// during startup the diagnostics coalesce into the StartupWarningsCell (with the
+// failed servers and their sign-in subset); once the startup window is over they
+// take the normal warning path.
+func (m *Model) applyMCPStartupWarnings(name string, status chatwidget.McpStartupStatus, result chatwidget.McpStartupUpdateResult) {
+	if m == nil || len(result.Warnings) == 0 {
+		return
+	}
+	if m.startupWarningsComplete {
+		for _, warning := range result.Warnings {
+			m.applyWarningMessage(warning)
+		}
+		return
+	}
+	if result.Finished {
+		if len(result.Cancelled) > 0 {
+			m.mergeStartupWarnings(historycell.NewMCPStartupWarnings(
+				[]string{chatwidget.MCPStartupInterruptedMessage(result.Cancelled)},
+				result.Cancelled,
+				"",
+			))
+		}
+		if len(result.Failed) > 0 {
+			m.mergeStartupWarnings(historycell.NewMCPStartupWarnings(
+				[]string{chatwidget.MCPStartupIncompleteMessage(result.Failed)},
+				result.Failed,
+				"",
+			))
+		}
+		return
+	}
+	if status.Kind == chatwidget.McpStartupFailed {
+		// A promoted buffered round can surface several failures at once; keep
+		// one entry per failed server and merge them into the same cell.
+		m.mergeStartupWarnings(historycell.NewMCPStartupWarnings(result.Warnings, []string{name}, status.FailureReason))
+	}
 }
 
 func (m *Model) isTaskRunning() bool {
@@ -3935,6 +4018,7 @@ func (m *Model) addHistoryCell(cell historycell.HistoryCell) {
 		width = 20
 	}
 	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
+	m.renderStartupWarnings()
 }
 
 func (m *Model) shouldSubmitOnTab() bool {
@@ -4057,6 +4141,9 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 			m.resetThreadScopedState()
 		}
 		m.State.SetThreadID(event.ThreadID)
+		// The startup warnings entry was waiting for a thread id (Rust
+		// pending_header).
+		m.renderStartupWarnings()
 		m.markThreadStarted(event.ThreadID)
 		m.persistPendingThreadName()
 		if objective := strings.TrimSpace(m.pendingGoalObjective); objective != "" {
@@ -4065,6 +4152,10 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		}
 	case "turn.started":
 		m.setStatus("running")
+		// Rust warning_display_state.startup_complete: after the first turn the
+		// startup window is over, so later diagnostics use the warning path.
+		m.startupWarningsComplete = true
+		m.renderStartupWarnings()
 		m.resetReasoningSummaryHeader()
 		m.Transcript.lastTurnError = ""
 		m.retryMessageIndex = -1
@@ -5197,6 +5288,104 @@ func (m *Model) upsertHistoryMessage(index int, displayLines []string, rawLines 
 	return len(m.State.Messages) - 1
 }
 
+// mergeStartupWarnings mirrors Rust's App::merge_startup_warnings: the incoming
+// diagnostics are coalesced into the single startup-warnings entry directly
+// below the session splash, messages are deduplicated, and the summary picks up
+// the configured Ctrl+T binding as its transcript hint.
+func (m *Model) mergeStartupWarnings(incoming historycell.StartupWarningsCell) {
+	if m == nil || m.State == nil {
+		return
+	}
+	merged := m.startupWarnings.Merge(incoming)
+	if len(merged.Messages) == 0 {
+		return
+	}
+	merged.TranscriptHint = m.startupWarningsHint()
+	m.startupWarnings = merged
+	m.renderStartupWarnings()
+}
+
+// startupWarningsHint mirrors Rust's primary_binding(open_transcript) lookup:
+// the first configured binding, rendered the way the footer renders it.
+func (m *Model) startupWarningsHint() string {
+	if m == nil || m.keymapConfig == nil {
+		return ""
+	}
+	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "global", "open_transcript")
+	if len(bindings) == 0 {
+		return ""
+	}
+	return displayKeyBinding(bindings[0])
+}
+
+// startupWarningsPending mirrors Rust's pending_header: the entry stays hidden
+// until the session splash exists or the thread id is known.
+func (m *Model) startupWarningsPending() bool {
+	if m == nil || m.State == nil {
+		return true
+	}
+	return !m.sessionHeaderShown && strings.TrimSpace(m.State.ThreadID) == ""
+}
+
+// renderStartupWarnings re-renders the coalesced entry, replacing it in place
+// once it exists and otherwise inserting it directly below the session splash.
+func (m *Model) renderStartupWarnings() {
+	if m == nil || m.State == nil || len(m.startupWarnings.Messages) == 0 {
+		return
+	}
+	cell := m.startupWarnings
+	cell.PendingHeader = m.startupWarningsPending()
+	width := m.width
+	if width < 20 {
+		width = 20
+	}
+	display := cell.DisplayLines(width)
+	if len(display) == 0 {
+		return
+	}
+	raw := cell.RawLines()
+	if m.startupWarningsIndex >= 0 && m.startupWarningsIndex < len(m.State.Messages) {
+		m.startupWarningsIndex = m.upsertHistoryMessage(m.startupWarningsIndex, display, raw)
+		m.refreshTranscript()
+		return
+	}
+	index := 0
+	if m.sessionHeaderShown && len(m.State.Messages) > 0 {
+		index = 1
+	}
+	m.startupWarningsIndex = m.insertHistoryMessageAt(index, display, raw)
+	m.refreshTranscript()
+}
+
+// insertHistoryMessageAt splices a history entry at index so the startup
+// warnings can sit directly below the session splash, keeping the tracked retry
+// activity index valid.
+func (m *Model) insertHistoryMessageAt(index int, displayLines []string, rawLines []string) int {
+	if m == nil || m.State == nil {
+		return -1
+	}
+	display := strings.TrimRight(strings.Join(displayLines, "\n"), "\r\n")
+	if strings.TrimSpace(display) == "" {
+		return -1
+	}
+	raw := strings.TrimRight(strings.Join(rawLines, "\n"), "\r\n")
+	if index < 0 {
+		index = 0
+	}
+	if index > len(m.State.Messages) {
+		index = len(m.State.Messages)
+	}
+	message := codextui.Message{Role: codextui.RoleHistory, Text: display, RawText: raw}
+	m.State.Messages = append(m.State.Messages, codextui.Message{})
+	copy(m.State.Messages[index+1:], m.State.Messages[index:])
+	m.State.Messages[index] = message
+	if m.retryMessageIndex >= index {
+		m.retryMessageIndex++
+	}
+	m.State.BumpMessagesRevision()
+	return index
+}
+
 func (m *Model) toolCallStateForItem(item *protocol.ThreadItem, create bool) *toolCallDisplayState {
 	if m == nil || item == nil {
 		return nil
@@ -5618,8 +5807,12 @@ func hookStatusFromMessage(status string, running bool) chatwidget.HookStatus {
 
 func (m *Model) addStartupSessionHeader(version string) {
 	if m == nil || m.State == nil || len(m.State.Messages) > 0 {
+		if m != nil {
+			m.renderStartupWarnings()
+		}
 		return
 	}
+	m.sessionHeaderShown = true
 	cwd := strings.TrimSpace(m.State.CWD)
 	if cwd == "" {
 		cwd = strings.TrimSpace(m.sessionCWD)
@@ -5640,6 +5833,8 @@ func (m *Model) addStartupSessionHeader(version string) {
 		width = 20
 	}
 	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
+	// The startup warnings entry waits for the splash (Rust pending_header).
+	m.renderStartupWarnings()
 }
 
 func (m *Model) applyHistoryCell(cell historycell.HistoryCell) {
@@ -6581,6 +6776,9 @@ func (m *Model) resize(width int, height int) {
 	}
 	m.composer.SetWidth(composerWidth)
 	m.composer.SetHeight(defaultComposerHeight)
+	// The startup warnings summary is width-sensitive (Rust reflows it on
+	// resize).
+	m.renderStartupWarnings()
 	m.refreshTranscript()
 }
 

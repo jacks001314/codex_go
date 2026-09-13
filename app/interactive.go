@@ -100,6 +100,19 @@ func interactiveExternalEditorDirectoryHandler(root *cli.RootOptions, codexHome 
 // interactiveWorktreeSettings resolves the managed-worktree configuration for
 // the local session: the `worktrees` feature flag plus the desktop worktree
 // pool settings (Rust #43120).
+// interactiveStartupConfigWarnings reports the app-server config warnings known
+// when the local TUI starts - the requirement-driven startup warnings plus the
+// ignored-configuration notice - which the TUI coalesces into its startup
+// warnings entry (Rust config.startup_warnings -> ConfigWarning notifications).
+func interactiveStartupConfigWarnings(codexHome string, cwd string) []string {
+	service := config.NewConfigService(codexHome)
+	warnings := service.StartupWarningsForCWD(cwd)
+	if ignored := strings.TrimSpace(service.IgnoredSettingsWarning(cwd)); ignored != "" {
+		warnings = append(warnings, ignored)
+	}
+	return warnings
+}
+
 func interactiveWorktreeSettings(root *cli.RootOptions) (worktree.WorktreeSettings, bool) {
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
 	if err != nil {
@@ -942,6 +955,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		NotificationCondition:      settings.NotificationCondition,
 		PermissionRequirements:     settings.PermissionRequirements,
 		MCPServers:                 mcpStatuses,
+		StartupConfigWarnings:      interactiveStartupConfigWarnings(auth.DefaultCodexHome(), strings.TrimSpace(state.CWD)),
 		OnReadMCPInventory: func(detail bool) ([]historycell.McpServerStatus, error) {
 			if mcpService == nil {
 				return nil, nil
@@ -1274,7 +1288,7 @@ func interactiveMCPStartupMessages(ctx context.Context, service *mcp.MCPService,
 		var finalUpdate *codextea.MCPStartupUpdateMsg
 		response, err := service.ListStatusCheckedWithObserver(&mcp.MCPListServerStatusParams{
 			Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailFull},
-		}, func(name string, status mcp.MCPServerStartupState, startupErr error) {
+		}, func(name string, status mcp.MCPServerStartupState, failureReason *string, startupErr error) {
 			kind := chatwidget.McpStartupStatusKind(status)
 			if kind == "" {
 				kind = chatwidget.McpStartupFailed
@@ -1283,7 +1297,11 @@ func interactiveMCPStartupMessages(ctx context.Context, service *mcp.MCPService,
 			if startupErr != nil {
 				message = startupErr.Error()
 			}
-			update := codextea.MCPStartupUpdateMsg{Name: name, Status: chatwidget.McpStartupStatus{Kind: kind, Error: message}}
+			reason := ""
+			if failureReason != nil {
+				reason = strings.TrimSpace(*failureReason)
+			}
+			update := codextea.MCPStartupUpdateMsg{Name: name, Status: chatwidget.McpStartupStatus{Kind: kind, Error: message, FailureReason: reason}}
 			if kind != chatwidget.McpStartupStarting && expectedSet[name] {
 				settledExpected[name] = true
 			}

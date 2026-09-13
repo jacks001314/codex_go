@@ -186,7 +186,7 @@ func TestListStatusCheckedObserverReportsStartupLifecycle(t *testing.T) {
 	var updates []update
 	response, err := service.ListStatusCheckedWithObserver(&MCPListServerStatusParams{
 		Detail: &MCPServerStatusDetail{Mode: MCPServerStatusDetailFull},
-	}, func(name string, status MCPServerStartupState, startupErr error) {
+	}, func(name string, status MCPServerStartupState, _ *string, startupErr error) {
 		updates = append(updates, update{name: name, status: status, err: startupErr})
 	})
 	if err != nil || response == nil {
@@ -239,7 +239,7 @@ func TestListStatusCheckedInitializesServersConcurrently(t *testing.T) {
 	var updates []mcpStartupTestUpdate
 	response, err := service.ListStatusCheckedWithObserver(&MCPListServerStatusParams{
 		Detail: &MCPServerStatusDetail{Mode: MCPServerStatusDetailFull},
-	}, func(name string, status MCPServerStartupState, startupErr error) {
+	}, func(name string, status MCPServerStartupState, _ *string, startupErr error) {
 		updates = append(updates, mcpStartupTestUpdate{name: name, status: status})
 		if name == "fast" && status == MCPServerReady {
 			if err := os.WriteFile(releaseFile, []byte("ready"), 0o600); err != nil {

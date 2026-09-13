@@ -50,7 +50,10 @@ const (
 	MCPServerStopped   MCPServerStartupState = "stopped"
 )
 
-type MCPStartupObserver func(name string, status MCPServerStartupState, err error)
+// MCPStartupObserver reports one server's startup transition. failureReason
+// mirrors Rust's McpServerStartupFailureReason (for example
+// "reauthenticationRequired") and is nil unless the server failed.
+type MCPStartupObserver func(name string, status MCPServerStartupState, failureReason *string, err error)
 
 type MCPAuthStatus string
 
@@ -1318,7 +1321,7 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 			continue
 		}
 		if dynamicConfigs[name] && (params == nil || params.Detail == nil) {
-			notifyMCPStartupObserver(observer, name, servers[i].State, nil)
+			notifyMCPStartupObserver(observer, name, servers[i].State, servers[i].FailureReason, nil)
 			continue
 		}
 		// Rust #38217: a required server with cached tool definitions may stay
@@ -1327,10 +1330,10 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		if params != nil && params.NonBlockingOptional &&
 			servers[i].State == MCPServerReady && len(servers[i].Tools) > 0 &&
 			(config.Required || required[name]) {
-			notifyMCPStartupObserver(observer, name, MCPServerReady, nil)
+			notifyMCPStartupObserver(observer, name, MCPServerReady, nil, nil)
 			continue
 		}
-		notifyMCPStartupObserver(observer, name, MCPServerStarting, nil)
+		notifyMCPStartupObserver(observer, name, MCPServerStarting, nil, nil)
 		pending[i] = name
 		selectedPluginRequired := servers[i].source == CatalogSourceSelectedPlugin &&
 			servers[i].PluginID != nil && requiredPlugins[*servers[i].PluginID]
@@ -1355,9 +1358,9 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 			if result.Status.Error != nil {
 				observerErr = errors.New(*result.Status.Error)
 			}
-			notifyMCPStartupObserver(observer, name, MCPServerFailed, observerErr)
+			notifyMCPStartupObserver(observer, name, MCPServerFailed, result.Status.FailureReason, observerErr)
 		} else {
-			notifyMCPStartupObserver(observer, name, result.Status.State, nil)
+			notifyMCPStartupObserver(observer, name, result.Status.State, result.Status.FailureReason, nil)
 		}
 	}
 	// Rust #41199: a zero optional_mcp_startup_grace disables the shared grace,
@@ -1468,9 +1471,9 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 
 const mcpFailureReasonReauthenticationRequired = "reauthenticationRequired"
 
-func notifyMCPStartupObserver(observer MCPStartupObserver, name string, status MCPServerStartupState, err error) {
+func notifyMCPStartupObserver(observer MCPStartupObserver, name string, status MCPServerStartupState, failureReason *string, err error) {
 	if observer != nil {
-		observer(name, status, err)
+		observer(name, status, cloneStringPtr(failureReason), err)
 	}
 }
 

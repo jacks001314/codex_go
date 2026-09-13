@@ -2,6 +2,7 @@ package tea
 
 import (
 	chatwidget "codex_go/tui/chatwidget"
+	historycell "codex_go/tui/history_cell"
 )
 
 // resetThreadScopedState drops transcript state owned by the previous thread so
@@ -32,6 +33,10 @@ func (m *Model) resetThreadScopedState() {
 	m.retryMessageIndex = -1
 	m.retryActivityActive = false
 	m.retryActivityMessage = ""
+	// The coalesced startup warnings entry is part of the previous thread's
+	// transcript.
+	m.startupWarnings = historycell.StartupWarningsCell{}
+	m.startupWarningsIndex = -1
 	m.clearCompactionActivity()
 	m.toolRequestRuntime = chatwidget.ToolRequestRuntimeState{}
 	m.resetReviewModeState()

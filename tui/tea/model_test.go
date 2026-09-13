@@ -2101,7 +2101,7 @@ func TestModelMCPStartupDoesNotBlockConfiguredInput(t *testing.T) {
 
 func TestModelMCPStartupFailureWarningsMatchRust(t *testing.T) {
 	state := codextui.NewState(nil)
-	model := NewModel(state, Options{MCPStartupExpectedServers: []string{"alpha", "beta"}})
+	model := NewModel(state, Options{MCPStartupExpectedServers: []string{"alpha", "beta"}, ShowSessionHeader: true})
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
 	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: "alpha handshake failed"}})
@@ -2111,18 +2111,104 @@ func TestModelMCPStartupFailureWarningsMatchRust(t *testing.T) {
 	if strings.Contains(view, "MCP startup incomplete (failed: alpha)") {
 		t.Fatalf("final MCP startup warning should wait for lag:\n%s", view)
 	}
-	for _, want := range []string{"alpha handshake failed", "Starting MCP servers"} {
+	for _, want := range []string{"\u26a0 1 MCP startup issue", "Starting MCP servers"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("MCP startup warning missing %q:\n%s", want, view)
 		}
+	}
+	// Rust keeps the individual diagnostics in the transcript, not in the
+	// summary line (StartupWarningsCell::display_lines vs transcript_lines).
+	if strings.Contains(view, "alpha handshake failed") {
+		t.Fatalf("individual startup diagnostics belong in the transcript:\n%s", view)
+	}
+	if raw := model.State.Messages[model.startupWarningsIndex].RawText; !strings.Contains(raw, "alpha handshake failed") {
+		t.Fatalf("transcript details = %q, want the MCP error", raw)
 	}
 	if cmd == nil {
 		t.Fatal("settled MCP startup should schedule finish lag")
 	}
 	model.Update(mcpStartupFinishAfterLagMsg{Generation: model.mcpStartupGeneration})
 	view = utils.StripANSI(model.View())
-	if !strings.Contains(view, "MCP startup incomplete (failed: alpha)") {
+	if !strings.Contains(view, "\u26a0 1 MCP startup issue") {
 		t.Fatalf("final MCP startup warning missing after lag:\n%s", view)
+	}
+	if raw := model.State.Messages[model.startupWarningsIndex].RawText; !strings.Contains(raw, "MCP startup incomplete (failed: alpha)") {
+		t.Fatalf("transcript details after lag = %q", raw)
+	}
+}
+
+// Mirrors Rust's startup_warnings_wait_for_splash_and_coalesce_with_full_details:
+// the entry stays hidden until the session splash exists, then renders the
+// coalesced summary with the individual diagnostics kept in the transcript.
+func TestModelStartupWarningsWaitForSplashLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 18})
+	model.mergeStartupWarnings(historycell.NewMCPStartupWarnings(
+		[]string{"MCP alpha failed to start."},
+		[]string{"alpha"},
+		"",
+	))
+	if len(model.State.Messages) != 0 {
+		t.Fatalf("startup warnings before the splash = %#v, want none", model.State.Messages)
+	}
+	model.addStartupSessionHeader("0.1.0")
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "\u26a0 1 MCP startup issue") {
+		t.Fatalf("startup warnings after the splash missing:\n%s", view)
+	}
+	if raw := model.State.Messages[model.startupWarningsIndex].RawText; !strings.Contains(raw, "MCP alpha failed to start.") {
+		t.Fatalf("transcript details = %q", raw)
+	}
+}
+
+// Mirrors Rust's mcp_startup_summary_counts_servers_and_sign_in_subset and the
+// mixed summary: unique sources, the MCP breakdown, the sign-in subset, and the
+// transcript hint.
+func TestModelStartupWarningsSignInSubsetAndHintLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 24, ShowSessionHeader: true})
+	model.mergeStartupWarnings(historycell.NewStartupWarnings([]string{"Skill manifest is invalid."}))
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		failureReason := ""
+		if name != "gamma" {
+			failureReason = historycell.MCPStartupFailureReauthenticationRequired
+		}
+		model.mergeStartupWarnings(historycell.NewMCPStartupWarnings(
+			[]string{"MCP " + name + ": connection unavailable"},
+			[]string{name},
+			failureReason,
+		))
+	}
+	// A repeated diagnostic must not change the summary.
+	model.mergeStartupWarnings(historycell.NewStartupWarnings([]string{"Skill manifest is invalid."}))
+	view := utils.StripANSI(model.View())
+	want := "\u26a0 4 startup issues (3 MCP; 2 need sign-in) \u00b7 Ctrl+T for details"
+	if !strings.Contains(view, want) {
+		t.Fatalf("startup summary missing %q:\n%s", want, view)
+	}
+	raw := model.State.Messages[model.startupWarningsIndex].RawText
+	for _, detail := range []string{"Skill manifest is invalid.", "MCP alpha: connection unavailable", "MCP gamma: connection unavailable"} {
+		if !strings.Contains(raw, detail) {
+			t.Fatalf("transcript details %q missing %q", raw, detail)
+		}
+	}
+}
+
+// Mirrors Rust's warning_display_state.startup_complete: once a turn starts,
+// later MCP diagnostics use the normal warning path instead of the coalesced
+// startup entry.
+func TestModelStartupWarningsCompleteAfterTurnStartLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 18, ShowSessionHeader: true})
+	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	if !model.startupWarningsComplete {
+		t.Fatal("turn start should finish the startup warning window")
+	}
+	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: "alpha handshake failed"}})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "alpha handshake failed") {
+		t.Fatalf("late MCP diagnostic should use the warning path:\n%s", view)
+	}
+	if strings.Contains(view, "startup issue") {
+		t.Fatalf("late MCP diagnostic should not create a startup summary:\n%s", view)
 	}
 }
 
@@ -8507,4 +8593,49 @@ func countMessageText(messages []codextui.Message, role codextui.MessageRole, te
 		}
 	}
 	return count
+}
+
+// Mirrors Rust's chatwidget ConfigWarning handling: before the startup window
+// closes the warning joins the coalesced startup entry, a duplicate stays
+// suppressed, and after the first turn the same warning uses the normal warning
+// path.
+func TestModelStartupConfigWarningsLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:             100,
+		Height:            24,
+		ShowSessionHeader: true,
+		StartupConfigWarnings: []string{
+			"Configured value for `approval_policy` is disallowed by requirements.",
+		},
+	})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "\u26a0 1 startup issue") {
+		t.Fatalf("initial config warning missing from the startup summary:\n%s", view)
+	}
+	// A later duplicate is suppressed (Rust startup_config_warnings).
+	model.Update(StartupConfigWarningMsg{Message: "Configured value for `approval_policy` is disallowed by requirements."})
+	view = utils.StripANSI(model.View())
+	if strings.Count(view, "Configured value for `approval_policy`") != 0 {
+		t.Fatalf("duplicate config warning rendered:\n%s", view)
+	}
+	if !strings.Contains(view, "\u26a0 1 startup issue") {
+		t.Fatalf("duplicate config warning changed the summary:\n%s", view)
+	}
+	// A distinct warning still merges.
+	model.Update(StartupConfigWarningMsg{Message: "Ignored unsupported project-local config keys in /repo/.gcode/config.toml."})
+	view = utils.StripANSI(model.View())
+	if !strings.Contains(view, "\u26a0 2 startup issues") {
+		t.Fatalf("second config warning missing from the summary:\n%s", view)
+	}
+	raw := model.State.Messages[model.startupWarningsIndex].RawText
+	if !strings.Contains(raw, "Ignored unsupported project-local config keys") {
+		t.Fatalf("transcript details = %q", raw)
+	}
+	// After the first turn the startup window is closed.
+	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	model.Update(StartupConfigWarningMsg{Message: "Late configuration warning."})
+	view = utils.StripANSI(model.View())
+	if !strings.Contains(view, "Late configuration warning.") {
+		t.Fatalf("late config warning should use the warning path:\n%s", view)
+	}
 }
