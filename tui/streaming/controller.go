@@ -1,8 +1,10 @@
 package streaming
 
 import (
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"codex_go/eventmap"
 	"codex_go/tui"
@@ -11,6 +13,25 @@ import (
 )
 
 // Rust parity: codex-rs/tui/src/streaming/controller.rs.
+
+// maxProsePreviewBytes bounds the disposable prose preview (Rust
+// streaming/prose_preview.rs MAX_PREVIEW_BYTES).
+const maxProsePreviewBytes = 8192
+
+// prosePreview mirrors Rust's ProsePreview: a bounded, disposable render of the
+// unterminated trailing source. Its lines never enter the stable queue or
+// scrollback; newline commitment and finalization render the original source
+// independently.
+type prosePreview struct {
+	lines   []string
+	scanned int
+	safeLen int
+	hasPipe bool
+}
+
+func (p *prosePreview) reset() {
+	*p = prosePreview{}
+}
 
 // currentStreamTheme holds the active TUI theme used for streaming markdown
 // rendering. It is set by the model each frame; an empty value keeps the
@@ -35,6 +56,7 @@ type streamCore struct {
 	enqueuedStableLen int
 	emittedStableLen  int
 	holdbackScanner   *TableHoldbackScanner
+	preview           prosePreview
 	now               func() time.Time
 	hasVisualization  bool
 	theme             string
@@ -58,16 +80,86 @@ func (c *streamCore) pushDelta(delta string) bool {
 	if delta == "" {
 		return false
 	}
+	// A committed newline ends the current unterminated prose (Rust
+	// StreamCore::push_delta resets the preview when the delta contains '\n').
+	if strings.Contains(delta, "\n") {
+		c.preview.reset()
+	}
 	c.pendingSource += delta
 	committed := c.commitCompleteSource()
-	if committed == "" {
+	enqueued := false
+	if committed != "" {
+		c.rawSource += committed
+		c.hasVisualization = c.hasVisualization || strings.Contains(committed, tui.InlineVisualizationDirectivePrefix)
+		c.holdbackScanner.PushSourceChunk(committed)
+		c.renderedLines = c.renderSourceLines(c.rawSource)
+		enqueued = c.syncStableQueue()
+	}
+	return enqueued || c.refreshProsePreview()
+}
+
+// refreshProsePreview re-renders the disposable preview of the unterminated
+// trailing source and reports whether it changed. Rust StreamCore::refresh_preview.
+func (c *streamCore) refreshProsePreview() bool {
+	if !c.holdbackScanner.AllowsProsePreview() {
+		if len(c.preview.lines) == 0 {
+			return false
+		}
+		c.preview.reset()
+		return true
+	}
+	source := c.pendingSource
+	if source == "" {
+		if len(c.preview.lines) == 0 {
+			return false
+		}
+		c.preview.reset()
+		return true
+	}
+	if c.preview.scanned > len(source) {
+		c.preview.reset()
+	}
+	if c.preview.scanned < len(source) {
+		if strings.Contains(source[c.preview.scanned:], "|") {
+			c.preview.hasPipe = true
+		}
+		c.preview.scanned = len(source)
+	}
+	// Indented and quoted lines may belong to nested code blocks, so their
+	// newline holdback is preserved; a pipe (table) or fence start also keeps
+	// the previous safe preview instead of guessing at the missing structure.
+	if !(c.preview.hasPipe ||
+		strings.HasPrefix(source, " ") ||
+		strings.HasPrefix(source, "\t") ||
+		strings.HasPrefix(source, ">") ||
+		strings.HasPrefix(source, "```") ||
+		strings.HasPrefix(source, "~~~") ||
+		source == "`" || source == "``" || source == "~" || source == "~~") {
+		c.preview.safeLen = len(source)
+	}
+	safe := source
+	if c.preview.safeLen < len(safe) {
+		safe = safe[:c.preview.safeLen]
+	}
+	start := 0
+	if len(safe) > maxProsePreviewBytes {
+		start = len(safe) - maxProsePreviewBytes
+		for start < len(safe) && !utf8.RuneStart(safe[start]) {
+			start++
+		}
+	}
+	var lines []string
+	if start < len(safe) {
+		lines = c.renderSourceLines(safe[start:])
+	}
+	if start > 0 {
+		lines = append([]string{"…"}, lines...)
+	}
+	if slices.Equal(c.preview.lines, lines) {
 		return false
 	}
-	c.rawSource += committed
-	c.hasVisualization = c.hasVisualization || strings.Contains(committed, tui.InlineVisualizationDirectivePrefix)
-	c.holdbackScanner.PushSourceChunk(committed)
-	c.renderedLines = c.renderSourceLines(c.rawSource)
-	return c.syncStableQueue()
+	c.preview.lines = lines
+	return true
 }
 
 func (c *streamCore) commitCompleteSource() string {
@@ -128,7 +220,10 @@ func (c *streamCore) oldestQueuedAge(now time.Time) *time.Duration {
 
 func (c *streamCore) currentTailLines() []string {
 	start := min(c.enqueuedStableLen, len(c.renderedLines))
-	return append([]string(nil), c.renderedLines[start:]...)
+	lines := append([]string(nil), c.renderedLines[start:]...)
+	// The committed-source tail may be followed by a bounded prose preview of
+	// the unterminated trailing line (Rust StreamCore::current_tail_lines).
+	return append(lines, c.preview.lines...)
 }
 
 func (c *streamCore) hasTail() bool {
@@ -142,6 +237,7 @@ func (c *streamCore) setWidth(width int) {
 	hadPendingQueue := len(c.queue) > 0
 	hadLiveTail := c.hasTail()
 	c.width = width
+	c.refreshProsePreview()
 	if c.rawSource == "" {
 		return
 	}

@@ -2,6 +2,7 @@ package streaming
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"codex_go/utils"
 	"testing"
@@ -334,4 +335,77 @@ func stripANSILines(lines []string) []string {
 		out[i] = utils.StripANSI(l)
 	}
 	return out
+}
+
+// TestStreamControllerPreviewsUnterminatedProse pins Rust #45135: prose stays
+// visible before a newline arrives, without entering the stable queue, and the
+// committed line then renders on its own without duplicating the preview.
+func TestStreamControllerPreviewsUnterminatedProse(t *testing.T) {
+	controller := NewStreamController(80)
+	if !controller.Push("streaming prose without newline") {
+		t.Fatal("push should report a preview change")
+	}
+	if controller.QueuedLines() != 0 {
+		t.Fatalf("preview must stay out of the stable queue: %d", controller.QueuedLines())
+	}
+	if got := strings.Join(controller.CurrentTailLines(), "\n"); got != "streaming prose without newline" {
+		t.Fatalf("preview tail = %q", got)
+	}
+
+	controller.Push("\n")
+	if got := strings.Join(controller.CurrentTailLines(), "\n"); got != "" {
+		t.Fatalf("preview survived the newline: %q", got)
+	}
+	cell, idle := controller.OnCommitTick()
+	if cell == nil || !idle || strings.Join(cell.RawLines(), "\n") != "streaming prose without newline" {
+		t.Fatalf("committed cell=%#v idle=%v", cell, idle)
+	}
+	if lines := controller.CurrentTailLines(); len(lines) != 0 {
+		t.Fatalf("tail after commit = %#v", lines)
+	}
+}
+
+// TestStreamControllerProsePreviewBoundedAtRuneBoundary pins the 8 KiB bound
+// with an ellipsis and a Unicode-safe cut for a long single-line response.
+func TestStreamControllerProsePreviewBoundedAtRuneBoundary(t *testing.T) {
+	controller := NewStreamController(80)
+	controller.Push(strings.Repeat("世", maxProsePreviewBytes))
+	lines := controller.CurrentTailLines()
+	if len(lines) == 0 || lines[0] != "…" {
+		t.Fatalf("expected an ellipsis for an oversized preview: %#v", lines)
+	}
+	joined := strings.Join(lines, "\n")
+	if !utf8.ValidString(joined) {
+		t.Fatal("prose preview split a multi-byte rune")
+	}
+	if len(controller.core.preview.lines) == 0 {
+		t.Fatal("preview was not retained")
+	}
+}
+
+// TestStreamControllerProsePreviewRetainsSafeTextOnPipe pins the table holdback
+// rule: once a pipe reveals table structure, the last safe prose preview stays.
+func TestStreamControllerProsePreviewRetainsSafeTextOnPipe(t *testing.T) {
+	controller := NewStreamController(80)
+	controller.Push("safe prose")
+	if got := strings.Join(controller.CurrentTailLines(), "\n"); got != "safe prose" {
+		t.Fatalf("initial preview = %q", got)
+	}
+	controller.Push(" | a |")
+	if got := strings.Join(controller.CurrentTailLines(), "\n"); got != "safe prose" {
+		t.Fatalf("preview after pipe = %q, want the last safe prose", got)
+	}
+}
+
+// TestStreamControllerProsePreviewReflowsOnResize pins that a width change
+// re-renders the disposable preview.
+func TestStreamControllerProsePreviewReflowsOnResize(t *testing.T) {
+	controller := NewStreamController(80)
+	controller.Push(strings.Repeat("word ", 40))
+	wide := len(controller.CurrentTailLines())
+	controller.SetWidth(20)
+	narrow := len(controller.CurrentTailLines())
+	if narrow <= wide {
+		t.Fatalf("preview did not reflow: wide=%d narrow=%d", wide, narrow)
+	}
 }

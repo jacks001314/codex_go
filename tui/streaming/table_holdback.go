@@ -58,6 +58,13 @@ func (s *TableHoldbackScanner) State() TableHoldbackState {
 	return TableHoldbackState{Kind: TableHoldbackNone}
 }
 
+// AllowsProsePreview mirrors Rust's TableHoldbackScanner::allows_prose_preview:
+// partial prose can be previewed only outside a confirmed/pending table and
+// outside a fenced code block.
+func (s *TableHoldbackScanner) AllowsProsePreview() bool {
+	return s.State().Kind == TableHoldbackNone
+}
+
 func (s *TableHoldbackScanner) PushSourceChunk(sourceChunk string) {
 	if sourceChunk == "" {
 		return
