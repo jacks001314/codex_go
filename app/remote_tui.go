@@ -1003,7 +1003,6 @@ func interactiveRemoteApproveAutoReviewDenialHandler(ctx context.Context, endpoi
 		params := appserver.ThreadApproveGuardianDeniedActionParams{
 			ThreadID: strings.TrimSpace(threadID),
 			Event:    append(json.RawMessage(nil), entry.Event...),
-			ActionID: strings.TrimSpace(entry.ID),
 		}
 		var response appserver.ThreadApproveGuardianDeniedActionResponse
 		return remoteSessionRequest(reqCtx, client, appserver.MethodThreadApproveGuardianDeniedAction, params, &response)

@@ -1016,3 +1016,31 @@ func TestAppServiceTierForTurnHonorsPerTurnOverrideLikeRust(t *testing.T) {
 		t.Fatalf("per-turn default tier = %q, want standard speed", got)
 	}
 }
+
+// TestApproveGuardianDeniedActionRejectsNonObjectEventLikeRust covers Rust's
+// typed event deserialization: the field is required and must be a Guardian
+// assessment object, so null or a scalar fails the request.
+func TestApproveGuardianDeniedActionRejectsNonObjectEventLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	cases := []struct {
+		name  string
+		event json.RawMessage
+		want  string
+	}{
+		{"missing", nil, "event is required"},
+		{"null", json.RawMessage("null"), "event is required"},
+		{"scalar", json.RawMessage(`"denied"`), "invalid Guardian denial event"},
+		{"array", json.RawMessage(`[]`), "invalid Guardian denial event"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := router.handleThreadApproveGuardianDeniedActionRuntime(requestWithParams(t, IntID(1), MethodThreadApproveGuardianDeniedAction, ThreadApproveGuardianDeniedActionParams{
+				ThreadID: "thread-1",
+				Event:    tc.event,
+			}))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}

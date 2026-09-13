@@ -2138,16 +2138,18 @@ func (p *ThreadCompactStartParams) Validate() error {
 type ThreadCompactStartResponse struct{}
 
 type ThreadApproveGuardianDeniedActionParams struct {
-	ThreadID string          `json:"threadId"`
-	Event    json.RawMessage `json:"event,omitempty"`
-	ActionID string          `json:"actionId,omitempty"`
+	ThreadID string `json:"threadId"`
+	// Event is the serialized `codex_protocol::protocol::GuardianAssessmentEvent`
+	// (Rust ThreadApproveGuardianDeniedActionParams::event, required).
+	Event json.RawMessage `json:"event"`
 }
 
 func (p *ThreadApproveGuardianDeniedActionParams) Validate() error {
 	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
 		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
 	}
-	if len(bytes.TrimSpace(p.Event)) == 0 && strings.TrimSpace(p.ActionID) == "" {
+	event := bytes.TrimSpace(p.Event)
+	if len(event) == 0 || bytes.Equal(event, []byte("null")) {
 		return jsonRPCInvalidRequest("event is required")
 	}
 	return nil

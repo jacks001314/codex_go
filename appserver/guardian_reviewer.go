@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -685,6 +686,11 @@ func (r *RuntimeRouter) handleThreadApproveGuardianDeniedActionRuntime(request *
 	var event state.Event
 	if err := json.Unmarshal(params.Event, &event); err != nil {
 		return nil, jsonRPCInvalidRequest("invalid Guardian denial event: " + err.Error())
+	}
+	// Rust deserializes the field into a typed GuardianAssessmentEvent, so a
+	// non-object payload fails the request instead of silently no-opping.
+	if trimmed := bytes.TrimSpace(params.Event); len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, jsonRPCInvalidRequest("invalid Guardian denial event: expected an object")
 	}
 	if event.Status != state.StatusDenied {
 		return &ThreadApproveGuardianDeniedActionResponse{}, nil
