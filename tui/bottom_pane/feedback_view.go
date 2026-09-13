@@ -2,6 +2,9 @@ package bottompane
 
 import (
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"codex_go/appserver"
 	"codex_go/tui"
@@ -58,6 +61,9 @@ type FeedbackNoteView struct {
 	IncludeLogs bool
 	TextArea    TextAreaState
 	Complete    bool
+	// pasteBurst mirrors Rust #45116: rapid unbracketed paste input inserts
+	// newlines, and Enter submits only once the paste burst window has lapsed.
+	pasteBurst PasteBurst
 }
 
 func NewFeedbackNoteView(category FeedbackChoice, turnID string, includeLogs bool) *FeedbackNoteView {
@@ -102,25 +108,70 @@ func (v *FeedbackNoteView) Paste(text string) bool {
 		return false
 	}
 	v.TextArea.InsertString(text)
+	v.pasteBurst.ClearAfterExplicitPaste()
 	return true
 }
 
 func (v *FeedbackNoteView) HandleKey(key string) (FeedbackSubmit, bool) {
+	return v.HandleKeyAt(key, time.Now())
+}
+
+// HandleKeyAt is the time-aware key entry point the paste-burst suppression
+// needs (Rust #45116 `handle_key_event_at`). Callers that do not care about
+// burst timing can keep using HandleKey.
+func (v *FeedbackNoteView) HandleKeyAt(key string, now time.Time) (FeedbackSubmit, bool) {
 	if v == nil {
 		return FeedbackSubmit{}, false
 	}
-	switch strings.ToLower(strings.TrimSpace(key)) {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	switch normalized {
 	case "esc", "ctrl+c":
 		v.Cancel()
 		return FeedbackSubmit{}, false
 	case "enter":
+		if v.pasteBurst.DirectInsertNewlineShouldInsert(now) {
+			v.pasteBurst.ExtendWindow(now)
+			v.TextArea.InsertString("\n")
+			return FeedbackSubmit{}, false
+		}
 		return v.Submit(), true
 	case "shift+enter", "ctrl+enter", "alt+enter":
 		v.TextArea.InsertString("\n")
+		v.pasteBurst.ClearAfterExplicitPaste()
+	case "tab":
+		inBurst := v.pasteBurst.DirectInsertNewlineShouldInsert(now)
+		v.TextArea.InsertString("\t")
+		if inBurst {
+			v.pasteBurst.ExtendWindow(now)
+		}
 	default:
+		if strings.HasPrefix(normalized, "paste:") {
+			v.Paste(strings.TrimPrefix(key, "paste:"))
+			return FeedbackSubmit{}, false
+		}
+		if isPlainFeedbackCharKey(key) {
+			_, pasteLike := v.pasteBurst.OnPlainCharNoHold(now)
+			v.TextArea.HandleKey(key)
+			if pasteLike {
+				v.pasteBurst.ExtendWindow(now)
+			}
+			return FeedbackSubmit{}, false
+		}
 		v.TextArea.HandleKey(key)
+		v.pasteBurst.ClearAfterExplicitPaste()
 	}
 	return FeedbackSubmit{}, false
+}
+
+// isPlainFeedbackCharKey reports whether key is a single printable character
+// (Rust's `!has_ctrl_or_alt(modifiers)` plain-char arm). Named keys such as
+// "backspace" or "left" are handled by the text area without burst tracking.
+func isPlainFeedbackCharKey(key string) bool {
+	if key == "" || utf8.RuneCountInString(key) != 1 {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(key)
+	return r != utf8.RuneError && !unicode.IsControl(r)
 }
 
 func (v *FeedbackNoteView) Rows(width int) []string {

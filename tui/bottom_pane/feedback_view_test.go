@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/appserver"
 )
@@ -69,6 +70,49 @@ func TestFeedbackNoteViewSubmitCancelPasteAndRowsMatchRustCore(t *testing.T) {
 		if !bottomPaneContainsRow(rows, want) {
 			t.Fatalf("rows missing %q:\n%s", want, strings.Join(rows, "\n"))
 		}
+	}
+}
+
+// TestFeedbackNoteViewMultilinePasteBurstMatchesRust pins Rust #45116 at the
+// view layer: rapid unbracketed input keeps newlines/tabs in the note, Enter
+// inserts instead of submitting while the burst window is open, and submits
+// once it lapses.
+func TestFeedbackNoteViewMultilinePasteBurstMatchesRust(t *testing.T) {
+	view := NewFeedbackNoteView(FeedbackBug, "", false)
+	now := time.Unix(1_700_000_000, 0)
+	for _, ch := range "ab" {
+		view.HandleKeyAt(string(ch), now)
+	}
+	if submit, ok := view.HandleKeyAt("enter", now); ok {
+		t.Fatalf("enter submitted during a paste burst: %#v", submit)
+	}
+	for _, ch := range "cd" {
+		view.HandleKeyAt(string(ch), now)
+	}
+	view.HandleKeyAt("tab", now)
+	view.HandleKeyAt("e", now)
+	if got := view.TextArea.Text; got != "ab\ncd\te" {
+		t.Fatalf("note during burst = %q", got)
+	}
+	now = now.Add(time.Second)
+	submit, ok := view.HandleKeyAt("enter", now)
+	if !ok || submit.Reason == nil || *submit.Reason != "ab\ncd\te" {
+		t.Fatalf("submit after burst = %#v ok=%v", submit, ok)
+	}
+}
+
+// TestFeedbackNoteViewExplicitPasteClearsBurstMatchesRust covers the other half
+// of Rust #45116: an explicit paste persists whole and a following Enter
+// submits immediately.
+func TestFeedbackNoteViewExplicitPasteClearsBurstMatchesRust(t *testing.T) {
+	view := NewFeedbackNoteView(FeedbackBug, "", false)
+	now := time.Unix(1_700_000_000, 0)
+	if !view.Paste("line1\nline2") {
+		t.Fatal("Paste should accept non-empty text")
+	}
+	submit, ok := view.HandleKeyAt("enter", now)
+	if !ok || submit.Reason == nil || *submit.Reason != "line1\nline2" {
+		t.Fatalf("submit after explicit paste = %#v ok=%v", submit, ok)
 	}
 }
 

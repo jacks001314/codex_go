@@ -6190,6 +6190,7 @@ func TestModelFeedbackFlowSubmitsOptionalNoteWithoutLogs(t *testing.T) {
 func TestModelFeedbackFlowIncludesNoteAndLogs(t *testing.T) {
 	var submitted appserver.FeedbackUploadParams
 	model := NewModel(codextui.NewState(nil), Options{
+		DisablePasteBurst: true,
 		OnSubmitFeedback: func(params appserver.FeedbackUploadParams) (appserver.FeedbackUploadResponse, error) {
 			submitted = params
 			return appserver.FeedbackUploadResponse{ThreadID: "feedback-1"}, nil
@@ -6223,6 +6224,84 @@ func TestModelFeedbackDisabledByConfiguration(t *testing.T) {
 	model.Update(key(bubbletea.KeyEnter))
 	if model.modal != nil {
 		t.Fatalf("disabled feedback modal did not close: %#v", model.modal)
+	}
+}
+
+// TestModelFeedbackNoteMultilinePasteBurstDoesNotSubmitEarly pins Rust #45116:
+// an unbracketed multiline paste must insert newlines into the note instead of
+// submitting the form at the first newline, and Enter submits only after the
+// burst window has lapsed.
+func TestModelFeedbackNoteMultilinePasteBurstDoesNotSubmitEarly(t *testing.T) {
+	var submitted appserver.FeedbackUploadParams
+	model := NewModel(codextui.NewState(nil), Options{
+		OnSubmitFeedback: func(params appserver.FeedbackUploadParams) (appserver.FeedbackUploadResponse, error) {
+			submitted = params
+			return appserver.FeedbackUploadResponse{ThreadID: "feedback-1"}, nil
+		},
+	})
+	now := time.Unix(1_700_000_000, 0)
+	model.now = func() time.Time { return now }
+	typeText(t, model, "/feedback")
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyEnter))
+	if model.modal == nil || model.modal.feedback == nil || model.modal.feedback.stage != feedbackStageNote {
+		t.Fatalf("feedback note stage not reached: %#v", model.modal)
+	}
+
+	// Rapid input: chars and newlines arrive within the burst interval.
+	typeText(t, model, "ab")
+	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+		t.Fatal("enter submitted during the paste burst instead of inserting a newline")
+	}
+	typeText(t, model, "cd")
+	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+		t.Fatal("second burst enter submitted instead of inserting a newline")
+	}
+	typeText(t, model, "x")
+	model.Update(key(bubbletea.KeyTab))
+	typeText(t, model, "y")
+
+	now = now.Add(time.Second)
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatalf("enter did not submit after the burst lapsed; note=%q", model.modal.feedback.note)
+	}
+	runTeaCmd(t, model, cmd)
+	if submitted.Reason == nil || *submitted.Reason != "ab\ncd\nx\ty" {
+		t.Fatalf("submitted note = %#v, want the whole multiline paste", submitted.Reason)
+	}
+}
+
+// TestModelFeedbackNoteBracketedPasteSubmitsImmediately pins the other half of
+// Rust #45116: a bracketed paste stays in the report form, leaves the burst
+// state clear, and a following Enter submits the complete note.
+func TestModelFeedbackNoteBracketedPasteSubmitsImmediately(t *testing.T) {
+	var submitted appserver.FeedbackUploadParams
+	model := NewModel(codextui.NewState(nil), Options{
+		OnSubmitFeedback: func(params appserver.FeedbackUploadParams) (appserver.FeedbackUploadResponse, error) {
+			submitted = params
+			return appserver.FeedbackUploadResponse{ThreadID: "feedback-1"}, nil
+		},
+	})
+	now := time.Unix(1_700_000_000, 0)
+	model.now = func() time.Time { return now }
+	typeText(t, model, "/feedback")
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyEnter))
+
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("line1\nline2"), Paste: true})
+	if model.modal == nil || model.modal.feedback == nil {
+		t.Fatal("bracketed paste closed the report form")
+	}
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("enter after a bracketed paste did not submit")
+	}
+	runTeaCmd(t, model, cmd)
+	if submitted.Reason == nil || *submitted.Reason != "line1\nline2" {
+		t.Fatalf("submitted note = %#v, want the bracketed paste", submitted.Reason)
 	}
 }
 

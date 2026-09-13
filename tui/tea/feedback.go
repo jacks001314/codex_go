@@ -7,6 +7,7 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	"codex_go/appserver"
+	bottompane "codex_go/tui/bottom_pane"
 	historycell "codex_go/tui/history_cell"
 )
 
@@ -34,6 +35,10 @@ type feedbackModalState struct {
 	category    feedbackCategory
 	includeLogs bool
 	note        string
+	// pasteBurst mirrors Rust #45116: a rapid unbracketed paste of a multiline
+	// note inserts newlines instead of submitting at the first newline, and the
+	// burst window keeps Enter from submitting until the paste has settled.
+	pasteBurst bottompane.PasteBurst
 }
 
 func (m *Model) openFeedbackFlow() {
@@ -137,21 +142,61 @@ func feedbackNoteTitle(category feedbackCategory) string {
 
 func (m *Model) updateFeedbackNote(message bubbletea.KeyMsg) bubbletea.Cmd {
 	state := m.modal.feedback
+	now := m.currentTime()
 	switch message.Type {
 	case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
 		m.modal = nil
 	case bubbletea.KeyEnter:
+		if !m.disablePasteBurst && state.pasteBurst.DirectInsertNewlineShouldInsert(now) {
+			// A newline inside a rapid paste burst is note content, not submit.
+			state.pasteBurst.ExtendWindow(now)
+			state.note += "\n"
+			return nil
+		}
+		if message.Alt {
+			state.note += "\n"
+			return nil
+		}
 		m.modal = nil
 		return m.submitFeedback(state.category, state.note, state.includeLogs)
 	case bubbletea.KeyCtrlJ:
 		state.note += "\n"
+		state.pasteBurst.ClearAfterExplicitPaste()
+	case bubbletea.KeyTab:
+		inBurst := !m.disablePasteBurst && state.pasteBurst.DirectInsertNewlineShouldInsert(now)
+		state.note += "\t"
+		if inBurst {
+			state.pasteBurst.ExtendWindow(now)
+		}
 	case bubbletea.KeyBackspace:
 		runes := []rune(state.note)
 		if len(runes) > 0 {
 			state.note = string(runes[:len(runes)-1])
 		}
+		state.pasteBurst.ClearAfterExplicitPaste()
 	case bubbletea.KeyRunes:
+		if message.Paste {
+			// A bracketed paste is explicit input: keep it whole and end any
+			// burst so a following Enter submits immediately.
+			state.note += string(message.Runes)
+			state.pasteBurst.ClearAfterExplicitPaste()
+			return nil
+		}
+		if message.Alt {
+			state.note += string(message.Runes)
+			state.pasteBurst.ClearAfterExplicitPaste()
+			return nil
+		}
+		pasteLike := false
+		if !m.disablePasteBurst {
+			_, pasteLike = state.pasteBurst.OnPlainCharNoHold(now)
+		}
 		state.note += string(message.Runes)
+		if pasteLike {
+			state.pasteBurst.ExtendWindow(now)
+		}
+	default:
+		state.pasteBurst.ClearAfterExplicitPaste()
 	}
 	return nil
 }
