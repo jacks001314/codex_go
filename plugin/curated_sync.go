@@ -1,12 +1,51 @@
 package plugin
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 const OpenAIPluginsGitURL = "https://github.com/openai/plugins.git"
+
+// CuratedSyncMetrics reports one curated plugin startup-sync attempt (Rust's
+// emit_curated_plugins_startup_sync_counter): the transport ("git") and whether
+// it succeeded, with Final marking the final-metric sample.
+type CuratedSyncMetrics struct {
+	Transport string
+	Status    string
+	Final     bool
+}
+
+// CuratedSyncMetricsObserver receives every curated-sync metric sample. The
+// plugin package cannot import codex_go/telemetry (telemetry reaches back here
+// through tool), so the app layer installs the sink.
+type CuratedSyncMetricsObserver func(CuratedSyncMetrics)
+
+// SetCuratedSyncMetricsObserver installs the observer used to record curated
+// plugin startup-sync metrics. A nil observer disables recording.
+func (s *PluginService) SetCuratedSyncMetricsObserver(observer CuratedSyncMetricsObserver) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.curatedSyncMetricsObserver = observer
+}
+
+func (s *PluginService) recordCuratedSyncMetrics(transport string, status string, final bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	observer := s.curatedSyncMetricsObserver
+	s.mu.Unlock()
+	if observer == nil {
+		return
+	}
+	observer(CuratedSyncMetrics{Transport: transport, Status: status, Final: final})
+}
 
 func (s *PluginService) HasConfiguredCuratedPlugins() bool {
 	if s == nil {
@@ -64,7 +103,18 @@ func (s *PluginService) StartCuratedRepoSync(onChanged func()) bool {
 		s.mu.Lock()
 		s.curatedSyncInFlight = false
 		s.mu.Unlock()
-		if err == nil && onChanged != nil {
+		if err != nil {
+			// Rust falls back to its GitHub HTTP and export-archive transports
+			// here; Go has only the git transport, so it records the failed
+			// attempt and no final sample (Rust's final names a fallback
+			// transport).
+			s.recordCuratedSyncMetrics("git", "failure", false)
+			slog.Warn("curated plugin sync failed", "error", err)
+			return
+		}
+		s.recordCuratedSyncMetrics("git", "success", false)
+		s.recordCuratedSyncMetrics("git", "success", true)
+		if onChanged != nil {
 			onChanged()
 		}
 	}()

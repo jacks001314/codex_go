@@ -1318,6 +1318,7 @@ type PluginService struct {
 	modelProviderID               string
 	targetCuratedMarketplace      TargetCuratedMarketplace
 	curatedSyncInFlight           bool
+	curatedSyncMetricsObserver    CuratedSyncMetricsObserver
 }
 
 func (s *PluginService) SetShareBackend(backend PluginShareBackend) {

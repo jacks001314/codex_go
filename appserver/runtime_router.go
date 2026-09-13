@@ -1070,6 +1070,18 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	pluginService := plugin.NewPluginService()
 	pluginService.SetCodexHome(codexHome)
 	runtimeMetrics := state.NewTaskMetrics()
+	// Rust records the curated-plugin startup-sync counters from the sync
+	// itself; the plugin package reports them through this observer.
+	pluginService.SetCuratedSyncMetricsObserver(func(sample plugin.CuratedSyncMetrics) {
+		metric := telemetry.CuratedPluginsStartupSyncMetric
+		if sample.Final {
+			metric = telemetry.CuratedPluginsStartupSyncFinalMetric
+		}
+		runtimeMetrics.Counter(metric, 1, map[string]string{
+			"transport": sample.Transport,
+			"status":    sample.Status,
+		})
+	})
 	if stateRuntime != nil {
 		stateRuntime.SetMetrics(runtimeMetrics)
 	}
