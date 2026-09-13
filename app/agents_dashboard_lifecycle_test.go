@@ -9,20 +9,20 @@ import (
 )
 
 // TestAgentsDashboardArchiveAndDeleteRequireConfirmationLikeRust covers
-// #44433 for the standalone dashboard: ctrl+e archives and Delete deletes the
+// #44433 for the standalone dashboard: a archives and Delete deletes the
 // selected task, both only after explicit confirmation.
 func TestAgentsDashboardArchiveAndDeleteRequireConfirmationLikeRust(t *testing.T) {
 	source := newFakeDashboardSource()
-	model := newAgentsDashboardModel(context.Background(), source)
+	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
 	if got := model.view.SelectedThreadID(); got != "root-1" {
 		t.Fatalf("initial selection = %q, want root-1", got)
 	}
 
 	// Cancel is the safe default: esc clears the pending action without a call.
-	model.Update(keyPress(bubbletea.KeyCtrlE))
+	model.Update(keyRunes('a'))
 	if model.pendingLifecycle != "archive" {
-		t.Fatalf("ctrl+e pending action = %q, want archive", model.pendingLifecycle)
+		t.Fatalf("a pending action = %q, want archive", model.pendingLifecycle)
 	}
 	if !strings.Contains(model.View(), "Archive this task") {
 		t.Fatalf("archive confirmation missing:\n%s", model.View())
@@ -33,7 +33,7 @@ func TestAgentsDashboardArchiveAndDeleteRequireConfirmationLikeRust(t *testing.T
 	}
 
 	// Confirm archives the selected task and refreshes.
-	model.Update(keyPress(bubbletea.KeyCtrlE))
+	model.Update(keyRunes('a'))
 	updated, command := model.Update(keyRunes('y'))
 	if command == nil {
 		t.Fatal("confirm returned no archive command")

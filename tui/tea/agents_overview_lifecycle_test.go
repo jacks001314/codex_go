@@ -34,16 +34,16 @@ func newAgentsLifecycleModel(t *testing.T, calls *agentsLifecycleCalls, archiveE
 	})
 }
 
-// TestModelAgentsLifecycleConfirmationLikeRust covers #44433: ctrl+e/deletes
+// TestModelAgentsLifecycleConfirmationLikeRust covers #44433: a/deletes
 // require confirmation with Cancel selected by default, and cancel runs nothing.
 func TestModelAgentsLifecycleConfirmationLikeRust(t *testing.T) {
 	calls := &agentsLifecycleCalls{}
 	model := newAgentsLifecycleModel(t, calls, nil, nil)
 	openAgentsDashboard(t, model)
 
-	model.Update(key(bubbletea.KeyCtrlE))
+	model.Update(agentsKeyEvent('a'))
 	if model.modal == nil || !strings.Contains(model.modal.title, "Archive") {
-		t.Fatalf("ctrl+e did not open the archive confirmation: %#v", model.modal)
+		t.Fatalf("a did not open the archive confirmation: %#v", model.modal)
 	}
 	// Cancel is selected by default, so plain Enter cancels.
 	updated, cmd := model.Update(key(bubbletea.KeyEnter))
@@ -58,9 +58,9 @@ func TestModelAgentsLifecycleConfirmationLikeRust(t *testing.T) {
 		t.Fatal("cancel closed the dashboard")
 	}
 
-	model.Update(key(bubbletea.KeyCtrlE))
+	model.Update(agentsKeyEvent('a'))
 	if model.modal == nil {
-		t.Fatalf("second ctrl+e did not reopen the confirmation (selected=%q rows=%d)", model.agentsOverview.SelectedThreadID(), len(model.agentsOverview.Rows))
+		t.Fatalf("second a did not reopen the confirmation (selected=%q rows=%d)", model.agentsOverview.SelectedThreadID(), len(model.agentsOverview.Rows))
 	}
 	model.Update(key(bubbletea.KeyDown))
 	updated, cmd = model.Update(key(bubbletea.KeyEnter))
@@ -132,7 +132,7 @@ func TestModelAgentsConfirmationNumberKeysLikeRust(t *testing.T) {
 	calls := &agentsLifecycleCalls{}
 	archive := newAgentsLifecycleModel(t, calls, nil, nil)
 	openAgentsDashboard(t, archive)
-	archive.Update(key(bubbletea.KeyCtrlE))
+	archive.Update(agentsKeyEvent('a'))
 	updated, cmd := archive.Update(runeKey('2'))
 	archive = updated.(*Model)
 	if cmd == nil {
@@ -174,7 +174,7 @@ func TestModelAgentsLifecycleFailureKeepsAttachmentLikeRust(t *testing.T) {
 	model.State.SetThreadID("root-1")
 	openAgentsDashboard(t, model)
 
-	model.Update(key(bubbletea.KeyCtrlE))
+	model.Update(agentsKeyEvent('a'))
 	model.Update(key(bubbletea.KeyDown))
 	updated, cmd := model.Update(key(bubbletea.KeyEnter))
 	model = updated.(*Model)

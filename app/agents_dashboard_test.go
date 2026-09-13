@@ -10,7 +10,6 @@ import (
 	"codex_go/appserver"
 	"codex_go/session"
 	agentsoverview "codex_go/tui/agents_overview"
-	codextea "codex_go/tui/tea"
 )
 
 func dashboardThreadRows() []*appserver.Thread {
@@ -114,25 +113,23 @@ func TestLocalAgentGroupForRecord(t *testing.T) {
 }
 
 type fakeAgentsDashboardSource struct {
-	rows          []agentsoverview.Row
-	listErr       error
-	dispatched    []string
-	dispatchedCwd string
-	stopped       []string
-	renamed       map[string]string
-	archived      []string
-	deleted       []string
-	dispatchErr   error
+	rows        []agentsoverview.Row
+	listErr     error
+	newSessions []string
+	stopped     []string
+	renamed     map[string]string
+	archived    []string
+	deleted     []string
+	newErr      error
 }
 
 func (s *fakeAgentsDashboardSource) List(ctx context.Context) ([]agentsoverview.Row, error) {
 	return s.rows, s.listErr
 }
 
-func (s *fakeAgentsDashboardSource) Dispatch(ctx context.Context, request codextea.SubmitRequest, cwd string) (string, error) {
-	s.dispatched = append(s.dispatched, request.Prompt)
-	s.dispatchedCwd = cwd
-	return "new-1", s.dispatchErr
+func (s *fakeAgentsDashboardSource) NewSession(ctx context.Context, cwd string) (string, error) {
+	s.newSessions = append(s.newSessions, cwd)
+	return "new-1", s.newErr
 }
 
 func (s *fakeAgentsDashboardSource) Stop(ctx context.Context, threadID string) error {
@@ -177,7 +174,7 @@ func keyPress(keyType bubbletea.KeyType) bubbletea.KeyMsg {
 
 func TestAgentsDashboardLoadsAndRenders(t *testing.T) {
 	source := newFakeDashboardSource()
-	model := newAgentsDashboardModel(context.Background(), source)
+	model := newAgentsDashboardModel(context.Background(), source, nil)
 	command := model.Init()
 	if command == nil {
 		t.Fatal("Init returned no refresh command")
@@ -199,36 +196,44 @@ func TestAgentsDashboardLoadsAndRenders(t *testing.T) {
 	}
 }
 
-func TestAgentsDashboardDispatchTask(t *testing.T) {
+// Rust #45255: `n` starts a session in the selected checkout without sending a
+// turn, and the host receives it as the dashboard's opened session.
+func TestAgentsDashboardNewSession(t *testing.T) {
 	source := newFakeDashboardSource()
-	model := newAgentsDashboardModel(context.Background(), source)
+	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
 
-	// Type "add tests" and press enter -> dispatch with selected project cwd.
-	for _, r := range "add tests" {
-		model.Update(keyRunes(r))
-	}
-	updated, command := model.Update(keyPress(bubbletea.KeyEnter))
+	updated, command := model.Update(keyRunes('n'))
 	if command == nil {
-		t.Fatal("enter returned no dispatch command")
+		t.Fatal("n returned no new-session command")
 	}
 	message := command()
 	updated, _ = updated.Update(message)
 	finished := updated.(*agentsDashboardModel)
-	if len(source.dispatched) != 1 || source.dispatched[0] != "add tests" {
-		t.Fatalf("dispatched = %v", source.dispatched)
+	if len(source.newSessions) != 1 || source.newSessions[0] != "/work/a" {
+		t.Fatalf("new session cwds = %v, want [/work/a]", source.newSessions)
 	}
-	if source.dispatchedCwd != "/work/a" {
-		t.Fatalf("dispatch cwd = %q, want selected project cwd /work/a", source.dispatchedCwd)
+	if !finished.done || finished.result == nil {
+		t.Fatalf("dashboard result = %#v done=%v", finished.result, finished.done)
 	}
-	if !strings.Contains(finished.View(), "Dispatched task new-1") {
-		t.Fatalf("notice missing dispatch confirmation:\n%s", finished.View())
+	if finished.result.OpenedThreadID != "new-1" || !finished.result.NewSession || finished.result.CWD != "/work/a" {
+		t.Fatalf("result = %#v", finished.result)
+	}
+
+	// Typing outside the editor no longer composes a task.
+	typed := newAgentsDashboardModel(context.Background(), source, nil)
+	typed.view.ApplyRefresh(source.rows, "")
+	for _, r := range "add tests" {
+		typed.Update(keyRunes(r))
+	}
+	if typed.view.State.Input != "" {
+		t.Fatalf("browsing accepted text input: %q", typed.view.State.Input)
 	}
 }
 
 func TestAgentsDashboardOpenSelectedThread(t *testing.T) {
 	source := newFakeDashboardSource()
-	model := newAgentsDashboardModel(context.Background(), source)
+	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
 	model.view.Selected = 1
 	updated, command := model.Update(keyPress(bubbletea.KeyEnter))
@@ -246,7 +251,7 @@ func TestAgentsDashboardOpenSelectedThread(t *testing.T) {
 
 func TestAgentsDashboardExitOnEsc(t *testing.T) {
 	source := newFakeDashboardSource()
-	model := newAgentsDashboardModel(context.Background(), source)
+	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
 	updated, command := model.Update(keyPress(bubbletea.KeyEsc))
 	if command == nil {
@@ -262,12 +267,12 @@ func TestAgentsDashboardExitOnEsc(t *testing.T) {
 
 func TestAgentsDashboardStopSelected(t *testing.T) {
 	source := newFakeDashboardSource()
-	model := newAgentsDashboardModel(context.Background(), source)
+	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
 	model.view.Selected = 0 // root-1 active
-	updated, command := model.Update(keyPress(bubbletea.KeyCtrlX))
+	updated, command := model.Update(keyRunes('x'))
 	if command == nil {
-		t.Fatal("ctrl+x returned no stop command")
+		t.Fatal("x returned no stop command")
 	}
 	message := command()
 	updated, _ = updated.Update(message)
@@ -280,12 +285,12 @@ func TestAgentsDashboardStopSelected(t *testing.T) {
 
 func TestAgentsDashboardRenameSelected(t *testing.T) {
 	source := newFakeDashboardSource()
-	model := newAgentsDashboardModel(context.Background(), source)
+	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
 	model.view.Selected = 1
-	model.Update(keyPress(bubbletea.KeyCtrlR))
+	model.Update(keyRunes('r'))
 	if !model.view.State.Renaming {
-		t.Fatal("ctrl+r did not start renaming")
+		t.Fatal("r did not start renaming")
 	}
 	model.Update(keyRunes(' ', 'v', '2'))
 	updated, command := model.Update(keyPress(bubbletea.KeyEnter))
@@ -302,11 +307,11 @@ func TestAgentsDashboardRenameSelected(t *testing.T) {
 
 func TestAgentsDashboardSearchAndGrouping(t *testing.T) {
 	source := newFakeDashboardSource()
-	model := newAgentsDashboardModel(context.Background(), source)
+	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
-	model.Update(keyPress(bubbletea.KeyCtrlF))
+	model.Update(keyRunes('f'))
 	if !model.view.State.Searching {
-		t.Fatal("ctrl+f did not enter search")
+		t.Fatal("f did not enter search")
 	}
 	for _, r := range "idle" {
 		model.Update(keyRunes(r))
@@ -318,20 +323,22 @@ func TestAgentsDashboardSearchAndGrouping(t *testing.T) {
 	if model.view.State.Searching {
 		t.Fatal("esc did not exit search")
 	}
-	model.Update(keyPress(bubbletea.KeyCtrlS))
+	model.Update(keyRunes('g'))
 	if model.view.State.Grouping != agentsoverview.GroupingStatus {
-		t.Fatalf("ctrl+s grouping = %v, want status", model.view.State.Grouping)
+		t.Fatalf("g grouping = %v, want status", model.view.State.Grouping)
 	}
-	model.Update(keyPress(bubbletea.KeyCtrlN))
+	// Rust #45255: browsing ignores text input now that the task composer is
+	// gone, so the grouping mode and editor state stay untouched.
+	model.Update(keyRunes('z'))
 	if model.view.State.Grouping != agentsoverview.GroupingStatus || model.view.State.Searching || model.view.State.Input != "" {
-		t.Fatalf("ctrl+n did not clear: %#v", model.view.State)
+		t.Fatalf("browsing mutated the view state: %#v", model.view.State)
 	}
 }
 
 func TestAgentsDashboardListErrorShowsNotice(t *testing.T) {
 	source := newFakeDashboardSource()
 	source.listErr = context.DeadlineExceeded
-	model := newAgentsDashboardModel(context.Background(), source)
+	model := newAgentsDashboardModel(context.Background(), source, nil)
 	command := model.Init()
 	updated, _ := model.Update(command())
 	finished := updated.(*agentsDashboardModel)

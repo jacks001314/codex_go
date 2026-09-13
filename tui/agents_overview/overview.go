@@ -193,10 +193,6 @@ type Action int
 
 const (
 	ActionNone Action = iota
-	// ActionDispatchTask starts a new background task; the prompt is the
-	// trimmed input and CWD is the selected row's cwd when project grouping
-	// is active (Rust dispatch_agents_overview_task).
-	ActionDispatchTask
 	// ActionOpenThread opens the selected root session (completion accepted).
 	ActionOpenThread
 	// ActionRenameThread renames the selected row to the trimmed input.
@@ -219,6 +215,9 @@ const (
 
 // State is the mutable view state preserved across dashboard refreshes.
 type State struct {
+	// Input is the rename editor's contents (Rust editing_metadata input). The
+	// command center no longer composes tasks, so it is only written while
+	// renaming.
 	Input     string
 	Search    string
 	Searching bool
@@ -254,30 +253,9 @@ type View struct {
 	// owns the terminal markup, so callers inject it; nil keeps the plain text
 	// preview.
 	RenderMarkdown func(text string, width int) []string
-	// attachments are the pending image attachment labels for the new-task
-	// prompt (Rust #44027). The caller owns the underlying files; the view only
-	// renders them above the prompt.
-	attachments []string
 	// usageLines holds the pre-rendered token/usage-estimate lines for a task,
 	// shown in the details pane (Rust #44970 agents_overview.usage).
 	usageLines map[string][]string
-}
-
-// SetAttachments replaces the pending attachment labels rendered above the
-// new-task prompt (Rust #44027).
-func (v *View) SetAttachments(labels []string) {
-	if v == nil {
-		return
-	}
-	v.attachments = append([]string(nil), labels...)
-}
-
-// AttachmentLabels returns the current pending attachment labels.
-func (v *View) AttachmentLabels() []string {
-	if v == nil {
-		return nil
-	}
-	return append([]string(nil), v.attachments...)
 }
 
 // SetUsageLines replaces the pre-rendered usage lines shown in the task
@@ -424,6 +402,7 @@ func (v *View) titleSpan(threadID string, title string, fallback spanStyle) span
 // AgentsKeymap::primary_hint / #39142).
 const (
 	ShortcutHintSearch         = "search"
+	ShortcutHintNewTask        = "new_task"
 	ShortcutHintToggleGrouping = "toggle_grouping"
 	ShortcutHintRename         = "rename"
 	ShortcutHintStop           = "stop"
@@ -708,19 +687,8 @@ func (v *View) ToggleSearch() {
 	}
 }
 
-// ClearNew resets the new-task/search/rename state (Rust ctrl+n).
-func (v *View) ClearNew() {
-	if v == nil {
-		return
-	}
-	v.State.Search = ""
-	v.State.Searching = false
-	v.State.Renaming = false
-	v.State.Input = ""
-}
-
-// BeginRename starts renaming the selected row (Rust ctrl+r). It returns
-// false when the current input is not empty.
+// BeginRename starts renaming the selected row. It returns false when the
+// current input is not empty.
 func (v *View) BeginRename() bool {
 	row := v.SelectedRow()
 	if v == nil || v.State.Input != "" || row == nil {
@@ -733,43 +701,33 @@ func (v *View) BeginRename() bool {
 	return true
 }
 
-// CanOpenWithRight reports whether Right should open the selected task from an
-// empty, focused composer (Rust #44344). Editing metadata (rename) and a
-// non-empty draft keep Right for the editor.
+// CanOpenWithRight reports whether Right should open the selected task
+// (Rust #44344/#45255: MoveRight activates unless metadata editing owns the
+// editor).
 func (v *View) CanOpenWithRight() bool {
-	if v == nil || v.State.Renaming {
-		return false
-	}
-	if strings.TrimSpace(v.State.Input) != "" {
+	if v == nil || v.State.Renaming || v.State.Searching {
 		return false
 	}
 	return v.SelectedRow() != nil
 }
 
-// Activate mirrors Rust AgentsOverviewView::activate: dispatch when the
-// input is non-empty, apply the rename when renaming, otherwise open the
-// selected thread.
+// Activate mirrors Rust AgentsOverviewView::activate (#45255): apply the
+// rename when renaming with a non-empty name, otherwise open the selected
+// thread (clearing an active search).
 func (v *View) Activate() Action {
 	if v == nil {
 		return ActionNone
 	}
 	trimmed := strings.TrimSpace(v.State.Input)
-	if !v.State.Searching && v.State.Input != "" && trimmed == "" {
-		return ActionNone
-	}
-	if !v.State.Searching && trimmed != "" {
-		if v.State.Renaming {
-			if row := v.SelectedRow(); row != nil {
-				v.State.Renaming = false
-				v.State.Input = ""
-				return ActionRenameThread
-			}
+	if v.State.Renaming && trimmed != "" {
+		if row := v.SelectedRow(); row != nil {
 			v.State.Renaming = false
 			v.State.Input = ""
-			return ActionNone
+			return ActionRenameThread
 		}
+		v.State.Renaming = false
 		v.State.Input = ""
-		return ActionDispatchTask
+		return ActionNone
 	}
 	if row := v.SelectedRow(); row != nil && !v.State.Renaming {
 		if v.State.Searching {
@@ -911,51 +869,58 @@ func (v *View) SetHiddenThreads(hidden map[string]struct{}) {
 	v.fitSelection()
 }
 
-// TypeChar appends a rune to the search or task input (Rust KeyCode::Char).
+// editingMetadata reports whether the search or rename field owns text input
+// (Rust AgentsOverviewViewState::editing_metadata).
+func (v *View) editingMetadata() bool {
+	return v != nil && (v.State.Searching || v.State.Renaming)
+}
+
+// TypeChar appends a rune to the search or rename field (Rust KeyCode::Char,
+// which is only consumed while editing metadata; otherwise the character is a
+// dashboard shortcut).
 func (v *View) TypeChar(character rune) {
-	if v == nil {
+	if !v.editingMetadata() {
 		return
 	}
-	if v.State.Searching {
-		v.State.Search += string(character)
-		v.fitSelection()
-	} else {
-		v.State.Input += string(character)
-	}
+	v.editInput(func(current string) string { return current + string(character) })
 }
 
-// Backspace pops the last rune (Rust KeyCode::Backspace).
+// Backspace pops the last rune of the search or rename field (Rust
+// KeyCode::Backspace while editing metadata).
 func (v *View) Backspace() {
-	if v == nil {
+	if !v.editingMetadata() {
 		return
 	}
-	if v.State.Searching {
-		runes := []rune(v.State.Search)
-		if len(runes) > 0 {
-			v.State.Search = string(runes[:len(runes)-1])
-			v.fitSelection()
+	v.editInput(func(current string) string {
+		runes := []rune(current)
+		if len(runes) == 0 {
+			return current
 		}
-		return
-	}
-	runes := []rune(v.State.Input)
-	if len(runes) > 0 {
-		v.State.Input = string(runes[:len(runes)-1])
-	}
+		return string(runes[:len(runes)-1])
+	})
 }
 
-// Paste appends sanitized pasted text to the active input (Rust handle_paste).
+// Paste appends sanitized pasted text to the search or rename field (Rust
+// handle_paste; the task composer that owned pasted images is gone).
 func (v *View) Paste(text string) {
-	if v == nil {
+	if !v.editingMetadata() {
 		return
 	}
 	text = strings.ReplaceAll(text, "\r", "")
 	text = strings.ReplaceAll(text, "\n", " ")
+	v.editInput(func(current string) string { return current + text })
+}
+
+// editInput applies an edit to the search field while searching and to the
+// rename field otherwise, restarting the search selection like Rust's
+// edit_input.
+func (v *View) editInput(edit func(current string) string) {
 	if v.State.Searching {
-		v.State.Search += text
+		v.State.Search = edit(v.State.Search)
 		v.fitSelection()
-	} else {
-		v.State.Input += text
+		return
 	}
+	v.State.Input = edit(v.State.Input)
 }
 
 // ApplyRefresh replaces the rows while preserving the selection (Rust
@@ -1001,11 +966,12 @@ func containsThreadID(rows []Row, threadID string) bool {
 	return false
 }
 
-// Prompt returns the active prompt label, input and placeholder text,
-// mirroring Rust AgentsOverviewView::render prompt area.
+// Prompt returns the metadata editor's label, input and placeholder text,
+// mirroring Rust AgentsOverviewView::render's editor row. The command center
+// has no task composer, so browsing renders nothing.
 func (v *View) Prompt() (label, input, placeholder string) {
 	if v == nil {
-		return "New task › ", "", ""
+		return "", "", ""
 	}
 	switch {
 	case v.State.Searching:
@@ -1013,9 +979,6 @@ func (v *View) Prompt() (label, input, placeholder string) {
 	case v.State.Renaming:
 		return "Rename › ", v.State.Input, ""
 	default:
-		if v.State.Input == "" {
-			return "New task › ", "", "Describe a task and press enter to dispatch it"
-		}
-		return "New task › ", v.State.Input, ""
+		return "", "", ""
 	}
 }

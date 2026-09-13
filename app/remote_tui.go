@@ -443,40 +443,40 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSwitchAgent: func(threadID string) (codextea.AgentThreadSwitchResponse, error) {
 			return interactiveRemoteSwitchAgentThread(ctx, endpoint, threadID)
 		},
-		AgentsOverviewEmbedded:    false,
-		OnAgentsOverviewRefresh:   interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
-		OnAgentsOverviewUsage:     interactiveRemoteAgentsOverviewUsage(ctx, endpoint),
-		OnAgentsOverviewDispatch:  interactiveRemoteAgentsOverviewDispatch(ctx, endpoint),
-		OnAgentsOverviewStop:      interactiveRemoteAgentsOverviewStop(ctx, endpoint),
-		OnAgentsOverviewArchive:   interactiveRemoteAgentsOverviewArchive(ctx, endpoint),
-		OnAgentsOverviewDelete:    interactiveRemoteAgentsOverviewDelete(ctx, endpoint),
-		OnAgentsOverviewRename:    interactiveRemoteAgentsOverviewRename(ctx, endpoint),
-		OnStartAgentsDaemon:       interactiveStartAgentsDaemon,
-		OnWriteSettings:           interactiveRemoteSettingsWriteHandler(ctx, endpoint),
-		OnUpdateCollaborationMode: interactiveRemoteCollaborationModeUpdateHandler(ctx, endpoint),
-		OnWriteMemorySettings:     interactiveRemoteMemorySettingsWriteHandler(ctx, endpoint),
-		OnResetMemories:           interactiveRemoteMemoryResetHandler(ctx, endpoint),
-		OnSubmitFeedback:          interactiveRemoteFeedbackSubmitHandler(ctx, endpoint),
-		OnReadIDEContext:          interactiveIDEContextReader,
-		OnApproveAutoReviewDenial: interactiveRemoteApproveAutoReviewDenialHandler(ctx, endpoint),
-		FeatureSettings:           settings.FeatureSettings,
-		UseMemories:               settings.UseMemories,
-		GenerateMemories:          settings.GenerateMemories,
-		FeedbackEnabled:           settings.FeedbackEnabled,
-		ModelPickerOptions:        interactiveModelPickerOptions(root),
-		ServiceTierCommands:       interactiveServiceTierCommands(state.Model),
-		Personality:               settings.Personality,
-		Notifications:             settings.Notifications,
-		NotificationMethod:        settings.NotificationMethod,
-		NotificationCondition:     settings.NotificationCondition,
-		PermissionRequirements:    settings.PermissionRequirements,
-		HideRateLimitModelNudge:   settings.HideRateLimitModelNudge,
-		TUITheme:                  settings.TUITheme,
-		StartupConfigWarnings:     remoteTUIStartupConfigWarnings(settings.TUITheme),
-		TUIPet:                    settings.TUIPet,
-		CodexHome:                 auth.DefaultCodexHome(),
-		PetEnv:                    environmentMapFromEnviron(os.Environ()),
-		OnPostNotification:        interactiveNotificationPoster(stdout),
+		AgentsOverviewEmbedded:     false,
+		OnAgentsOverviewRefresh:    interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
+		OnAgentsOverviewUsage:      interactiveRemoteAgentsOverviewUsage(ctx, endpoint),
+		OnAgentsOverviewNewSession: interactiveRemoteAgentsOverviewNewSession(ctx, endpoint),
+		OnAgentsOverviewStop:       interactiveRemoteAgentsOverviewStop(ctx, endpoint),
+		OnAgentsOverviewArchive:    interactiveRemoteAgentsOverviewArchive(ctx, endpoint),
+		OnAgentsOverviewDelete:     interactiveRemoteAgentsOverviewDelete(ctx, endpoint),
+		OnAgentsOverviewRename:     interactiveRemoteAgentsOverviewRename(ctx, endpoint),
+		OnStartAgentsDaemon:        interactiveStartAgentsDaemon,
+		OnWriteSettings:            interactiveRemoteSettingsWriteHandler(ctx, endpoint),
+		OnUpdateCollaborationMode:  interactiveRemoteCollaborationModeUpdateHandler(ctx, endpoint),
+		OnWriteMemorySettings:      interactiveRemoteMemorySettingsWriteHandler(ctx, endpoint),
+		OnResetMemories:            interactiveRemoteMemoryResetHandler(ctx, endpoint),
+		OnSubmitFeedback:           interactiveRemoteFeedbackSubmitHandler(ctx, endpoint),
+		OnReadIDEContext:           interactiveIDEContextReader,
+		OnApproveAutoReviewDenial:  interactiveRemoteApproveAutoReviewDenialHandler(ctx, endpoint),
+		FeatureSettings:            settings.FeatureSettings,
+		UseMemories:                settings.UseMemories,
+		GenerateMemories:           settings.GenerateMemories,
+		FeedbackEnabled:            settings.FeedbackEnabled,
+		ModelPickerOptions:         interactiveModelPickerOptions(root),
+		ServiceTierCommands:        interactiveServiceTierCommands(state.Model),
+		Personality:                settings.Personality,
+		Notifications:              settings.Notifications,
+		NotificationMethod:         settings.NotificationMethod,
+		NotificationCondition:      settings.NotificationCondition,
+		PermissionRequirements:     settings.PermissionRequirements,
+		HideRateLimitModelNudge:    settings.HideRateLimitModelNudge,
+		TUITheme:                   settings.TUITheme,
+		StartupConfigWarnings:      remoteTUIStartupConfigWarnings(settings.TUITheme),
+		TUIPet:                     settings.TUIPet,
+		CodexHome:                  auth.DefaultCodexHome(),
+		PetEnv:                     environmentMapFromEnviron(os.Environ()),
+		OnPostNotification:         interactiveNotificationPoster(stdout),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			if state.ThreadName == "" && len(state.Messages) == 0 {
 				if title := interactiveAutoThreadTitle(request.Prompt); title != "" {
@@ -1611,6 +1611,49 @@ func remoteTUISettingsFromResume(resumed *appserver.ThreadResumeResponse) *appse
 		}
 	}
 	return &settings
+}
+
+// remoteTUISettingsFromStartedThread maps a freshly started thread's settings
+// into the dashboard's switch response (Rust #45255 attaches the destination
+// settings for a session started from the command center).
+func remoteTUISettingsFromStartedThread(started *appserver.ThreadStartResponse) *appserver.Settings {
+	if started == nil {
+		return nil
+	}
+	settings := appserver.Settings{
+		CWD:                   strings.TrimSpace(started.CWD),
+		Model:                 strings.TrimSpace(started.Model),
+		ModelProvider:         strings.TrimSpace(started.ModelProvider),
+		ApprovalPolicy:        remoteSettingsString(started.ApprovalPolicy),
+		SandboxPolicy:         remoteSettingsString(started.Sandbox),
+		Effort:                started.ReasoningEffort,
+		ServiceTier:           started.ServiceTier,
+		DisabledPluginIDs:     append([]string(nil), started.DisabledPluginIDs...),
+		RuntimeWorkspaceRoots: append([]string(nil), started.RuntimeWorkspaceRoots...),
+	}
+	if started.ApprovalsReviewer != nil {
+		settings.ApprovalsReviewer = strings.TrimSpace(*started.ApprovalsReviewer)
+	}
+	if started.ActivePermissionProfile != nil {
+		if id := strings.TrimSpace(started.ActivePermissionProfile.ID); id != "" {
+			settings.ActivePermissionProfile = &id
+		}
+	}
+	return &settings
+}
+
+// remoteTUIAgentSwitchResponseForStartedSession builds the dashboard's switch
+// response from a thread started without a turn. An untouched thread has no
+// rollout, so thread/resume would fail; the start response carries everything
+// the attach needs (Rust #45255 blank_sessions).
+func remoteTUIAgentSwitchResponseForStartedSession(started *appserver.ThreadStartResponse) codextea.AgentThreadSwitchResponse {
+	var thread *appserver.Thread
+	if started != nil {
+		thread = started.Thread
+	}
+	response := remoteTUIAgentSwitchResponseFromThread(thread)
+	response.ThreadSettings = remoteTUISettingsFromStartedThread(started)
+	return response
 }
 
 // remoteSettingsString normalizes a settings value that may arrive as a plain

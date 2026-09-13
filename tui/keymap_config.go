@@ -217,17 +217,23 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 		if context == "chat" && action == "toggle_voice_mute" && config.ctrlXMainSurfaceBindingExists() {
 			return nil, "default", false
 		}
-		// Rust #44424/#44433: newly added agents-dashboard defaults yield to an
-		// existing custom binding for the same key on the agents, list, or
-		// global surface, so a new default never shadows existing shortcuts.
+		// Rust #44424/#44433/#45255: the agents-dashboard defaults yield to an
+		// explicit binding for the same key on the agents, list, or global
+		// surface, so a new default never shadows an existing shortcut. The
+		// aliases are the actions' current default keys.
 		if context == "agents" {
 			for _, candidate := range []struct {
 				action string
 				alias  string
 			}{
-				{action: "archive", alias: "ctrl-e"},
+				{action: "search", alias: "f"},
+				{action: "new_task", alias: "n"},
+				{action: "rename", alias: "r"},
+				{action: "stop", alias: "x"},
+				{action: "archive", alias: "a"},
 				{action: "delete", alias: "delete"},
-				{action: "hide", alias: "ctrl-w"},
+				{action: "hide", alias: "h"},
+				{action: "toggle_grouping", alias: "g"},
 			} {
 				if action == candidate.action && config.agentsAliasConfigured(candidate.alias) {
 					return nil, "default", false

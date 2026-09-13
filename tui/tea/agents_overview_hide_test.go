@@ -29,7 +29,7 @@ func TestModelAgentsHideShortcutLikeRust(t *testing.T) {
 		t.Fatalf("initial selection = %q, want root-1", got)
 	}
 
-	model.Update(key(bubbletea.KeyCtrlW))
+	model.Update(agentsKeyEvent('h'))
 	if got := len(model.agentsOverview.VisibleIndices()); got != 2 {
 		t.Fatalf("visible rows after hide = %d, want 2", got)
 	}

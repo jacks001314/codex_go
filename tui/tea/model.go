@@ -864,14 +864,14 @@ type Options struct {
 	OnAgentsOverviewRefresh AgentsOverviewRefreshFunc
 	// OnAgentsOverviewUsage reads the selected task's usage estimate for the
 	// dashboard details (Rust #44970). Nil disables the token/usage surface.
-	OnAgentsOverviewUsage    AgentsOverviewUsageReaderFunc
-	OnAgentsOverviewDispatch AgentsOverviewDispatchFunc
-	OnAgentsOverviewStop     AgentsOverviewStopFunc
-	OnAgentsOverviewRename   AgentsOverviewRenameFunc
-	OnAgentsOverviewArchive  AgentsOverviewArchiveFunc
-	OnAgentsOverviewDelete   AgentsOverviewDeleteFunc
-	OnStartAgentsDaemon      AgentsDaemonStartFunc
-	OnClipboardWrite         func(text string) error
+	OnAgentsOverviewUsage      AgentsOverviewUsageReaderFunc
+	OnAgentsOverviewNewSession AgentsOverviewNewSessionFunc
+	OnAgentsOverviewStop       AgentsOverviewStopFunc
+	OnAgentsOverviewRename     AgentsOverviewRenameFunc
+	OnAgentsOverviewArchive    AgentsOverviewArchiveFunc
+	OnAgentsOverviewDelete     AgentsOverviewDeleteFunc
+	OnStartAgentsDaemon        AgentsDaemonStartFunc
+	OnClipboardWrite           func(text string) error
 	// OnExportTranscript renders the active conversation as Markdown for
 	// /export (Rust transcript_export.rs). A nil hook leaves /export
 	// unavailable for this runtime.
@@ -1437,12 +1437,16 @@ type Model struct {
 	agentsOverviewEmbedded       bool
 	onAgentsOverviewRefresh      AgentsOverviewRefreshFunc
 	onAgentsOverviewUsage        AgentsOverviewUsageReaderFunc
-	onAgentsOverviewDispatch     AgentsOverviewDispatchFunc
+	onAgentsOverviewNewSession   AgentsOverviewNewSessionFunc
 	onAgentsOverviewStop         AgentsOverviewStopFunc
 	onAgentsOverviewRename       AgentsOverviewRenameFunc
 	onAgentsOverviewArchive      AgentsOverviewArchiveFunc
 	onAgentsOverviewDelete       AgentsOverviewDeleteFunc
 	agentsOverviewLifecycle      *agentsOverviewLifecycleRequest
+	// agentsOverviewBlankSessions retains the live snapshot of a session started
+	// from the command center until its first turn materializes a rollout
+	// (Rust #45255 agents_overview.blank_sessions).
+	agentsOverviewBlankSessions map[string]AgentThreadSwitchResponse
 	// agentsOverviewLifecycleProgress is non-empty while an archive/delete RPC
 	// runs; navigation and task switching are blocked during that window
 	// (Rust #44433).
@@ -1812,7 +1816,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onAgentsOverviewRefresh:         options.OnAgentsOverviewRefresh,
 		onAgentsOverviewUsage:           options.OnAgentsOverviewUsage,
 		agentsOverviewUsage:             map[string]*agentsOverviewUsageEntry{},
-		onAgentsOverviewDispatch:        options.OnAgentsOverviewDispatch,
+		onAgentsOverviewNewSession:      options.OnAgentsOverviewNewSession,
 		onAgentsOverviewStop:            options.OnAgentsOverviewStop,
 		onAgentsOverviewRename:          options.OnAgentsOverviewRename,
 		onAgentsOverviewArchive:         options.OnAgentsOverviewArchive,
@@ -2428,18 +2432,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyAgentsOverviewUsageLoaded(msg)
 	case agentsOverviewUsageRefreshMsg:
 		return m, m.refreshAgentsOverviewUsageCmd()
-	case agentsOverviewDispatchMsg:
-		if msg.err != nil {
-			m.agentsOverviewNotice = "Failed to start background task: " + strings.TrimSpace(msg.err.Error())
-			// Rust #44027: restore the unsent prompt and attachments (or report
-			// their paths when a newer draft is present).
-			m.restoreAgentsOverviewPrompt(msg.request)
-		} else if strings.TrimSpace(msg.threadID) != "" {
-			m.agentsOverviewNotice = "Dispatched task " + msg.threadID
-			m.setAgentsOverviewAttachments(nil)
-		}
-		m.agentsOverviewBusy = false
-		return m, m.refreshAgentsOverviewCmd()
+	case agentsOverviewNewSessionMsg:
+		return m, m.applyAgentsOverviewNewSession(msg)
 	case agentsOverviewStopMsg:
 		if msg.err != nil {
 			m.agentsOverviewNotice = "Failed to stop background task: " + strings.TrimSpace(msg.err.Error())
@@ -4246,6 +4240,11 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 			cmd = bubbletea.Batch(cmd, m.prepareGoalSet(objective))
 		}
 	case "turn.started":
+		// Rust #45255: the first turn materializes the thread's rollout, so it no
+		// longer needs the retained blank-session snapshot.
+		if m.State != nil {
+			m.clearAgentsOverviewBlankSession(m.State.ThreadID)
+		}
 		m.setStatus("running")
 		// Rust warning_display_state.startup_complete: after the first turn the
 		// startup window is over, so later diagnostics use the warning path.

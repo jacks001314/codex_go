@@ -1067,7 +1067,7 @@
             ],
             "phase": "P2",
             "status": "complete",
-            "verifier": "TestGroupForStatusLikeRust;TestActivateDispatchLikeRust;TestActivateOpenSelectedLikeRust;TestRenameFlowLikeRust;TestStopOnlyWhenActiveLikeRust;TestCancelExitSemantics;TestRenderLayout;TestRenderStatusGrouping;TestAgentsOverviewRowsFromThreadsLikeRust;TestAgentsOverviewRowsFromRecordsLikeRust;TestAgentsDashboardLoadsAndRenders;TestAgentsDashboardDispatchTask;TestAgentsDashboardOpenSelectedThread;TestAgentsDashboardExitOnEsc;TestAgentsDashboardStopSelected;TestAgentsDashboardRenameSelected;TestRenderStyledMatchesRenderWhenStripped;TestRenderStyledAppliesRustStyles;TestRenderStyledFooterStopHintDependsOnSelection;TestRenderStyledLineWidths"
+            "verifier": "TestGroupForStatusLikeRust;TestActivateOpensWithoutComposerLikeRust;TestActivateOpenSelectedLikeRust;TestRenameFlowLikeRust;TestStopOnlyWhenActiveLikeRust;TestCancelExitSemantics;TestTextInputOnlyEditsMetadataLikeRust;TestRenderLayout;TestRenderStatusGrouping;TestAgentsOverviewRowsFromThreadsLikeRust;TestAgentsOverviewRowsFromRecordsLikeRust;TestAgentsDashboardLoadsAndRenders;TestAgentsDashboardNewSession;TestAgentsDashboardOpenSelectedThread;TestAgentsDashboardExitOnEsc;TestAgentsDashboardStopSelected;TestAgentsDashboardRenameSelected;TestRenderStyledMatchesRenderWhenStripped;TestRenderStyledAppliesRustStyles;TestRenderStyledFooterStopHintDependsOnSelection;TestRenderStyledLineWidths"
         },
         {
             "id": "agents-overview-in-session",
@@ -1088,7 +1088,7 @@
             ],
             "phase": "P2",
             "status": "complete",
-            "verifier": "TestModelAgentsCommandOpensDashboardAndLoads;TestModelAgentsDashboardNavigationAndSearch;TestModelAgentsDashboardDispatchTask;TestModelAgentsDashboardStopSelected;TestModelAgentsDashboardRenameSelected;TestModelAgentsDashboardEscCloses;TestModelAgentsDashboardOpenAttachesViaSwitchAgent;TestModelAgentsDashboardOpenCurrentThreadIsNoop;TestModelAgentsEmbeddedShowsUnavailableSelection;TestModelAgentsDashboardRefreshesOnThreadEventsAndCoalesces;TestInteractiveStartAgentsDaemonPlatformGate;TestModelAgentsDashboardPreservesDraftAcrossSwitch;TestModelAgentsDashboardAttachClearsComposerWithoutSavedDraft;TestModelAgentsDashboardSwitchFailureDiscardsPendingDraft"
+            "verifier": "TestModelAgentsCommandOpensDashboardAndLoads;TestModelAgentsDashboardNavigationAndSearch;TestModelAgentsDashboardNewSessionOpensBlankSession;TestModelAgentsDashboardStopSelected;TestModelAgentsDashboardRenameSelected;TestModelAgentsDashboardEscCloses;TestModelAgentsDashboardOpenAttachesViaSwitchAgent;TestModelAgentsDashboardOpenCurrentThreadIsNoop;TestModelAgentsEmbeddedShowsUnavailableSelection;TestModelAgentsDashboardRefreshesOnThreadEventsAndCoalesces;TestInteractiveStartAgentsDaemonPlatformGate;TestModelAgentsDashboardPreservesDraftAcrossSwitch;TestModelAgentsDashboardAttachClearsComposerWithoutSavedDraft;TestModelAgentsDashboardSwitchFailureDiscardsPendingDraft"
         },
         {
             "id": "edu-plus-pro-account-plans",

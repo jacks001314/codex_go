@@ -56,7 +56,7 @@ func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *
 			defer source.Close()
 			// A remote workspace owns its sandbox and checkouts, so linked
 			// worktree grouping stays off (Rust #43279).
-			result, err := runAgentsDashboard(ctx, source, opts, stdin, stdout, false)
+			result, err := runAgentsDashboard(ctx, source, opts, stdin, stdout, interactiveKeymapConfig(remoteRoot), false)
 			if err != nil {
 				return err
 			}
@@ -70,7 +70,7 @@ func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *
 			return err
 		}
 		defer source.Close()
-		result, err := runAgentsDashboard(ctx, source, opts, stdin, stdout, localAgentsWorktreesEnabled())
+		result, err := runAgentsDashboard(ctx, source, opts, stdin, stdout, interactiveKeymapConfig(root), localAgentsWorktreesEnabled())
 		if err != nil {
 			return err
 		}

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"codex_go/appserverdaemon"
-	codextea "codex_go/tui/tea"
 )
 
 func TestInteractiveStartAgentsDaemonPlatformGate(t *testing.T) {
@@ -23,10 +22,10 @@ func TestInteractiveRemoteAgentsOverviewHandlersWireRemoteSource(t *testing.T) {
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws://127.0.0.1:1", nil)
 	ctx := context.Background()
 	refresh := interactiveRemoteAgentsOverviewRefresh(ctx, endpoint)
-	dispatch := interactiveRemoteAgentsOverviewDispatch(ctx, endpoint)
+	newSession := interactiveRemoteAgentsOverviewNewSession(ctx, endpoint)
 	stop := interactiveRemoteAgentsOverviewStop(ctx, endpoint)
 	rename := interactiveRemoteAgentsOverviewRename(ctx, endpoint)
-	if refresh == nil || dispatch == nil || stop == nil || rename == nil {
+	if refresh == nil || newSession == nil || stop == nil || rename == nil {
 		t.Fatal("a remote agents-overview handler is nil")
 	}
 	// Calling them against an unreachable endpoint must return a connection
@@ -34,8 +33,8 @@ func TestInteractiveRemoteAgentsOverviewHandlersWireRemoteSource(t *testing.T) {
 	if _, err := refresh(""); err == nil {
 		t.Fatal("refresh against unreachable endpoint succeeded, want error")
 	}
-	if _, err := dispatch(codextea.SubmitRequest{Prompt: "prompt"}, ""); err == nil {
-		t.Fatal("dispatch against unreachable endpoint succeeded, want error")
+	if _, err := newSession(""); err == nil {
+		t.Fatal("new session against unreachable endpoint succeeded, want error")
 	}
 	if err := stop("thread-1"); err == nil {
 		t.Fatal("stop against unreachable endpoint succeeded, want error")

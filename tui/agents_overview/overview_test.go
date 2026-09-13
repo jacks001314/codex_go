@@ -93,7 +93,7 @@ func TestModelGroupingLikeRust(t *testing.T) {
 	}
 
 	joined := strings.Join(view.Render(140, 30), "\n")
-	for _, wantText := range []string{"gpt-5.4  2", "gpt-5.5  1", "Unknown  1", "ctrl+s group: model"} {
+	for _, wantText := range []string{"gpt-5.4  2", "gpt-5.5  1", "Unknown  1", "g group: model"} {
 		if !strings.Contains(joined, wantText) {
 			t.Errorf("model grouping render missing %q:\n%s", wantText, joined)
 		}
@@ -104,7 +104,7 @@ func TestModelGroupingLikeRust(t *testing.T) {
 	if view.State.Grouping != GroupingProject {
 		t.Fatalf("third toggle = %v, want project", view.State.Grouping)
 	}
-	if !strings.Contains(strings.Join(view.Render(140, 30), "\n"), "ctrl+s group: project") {
+	if !strings.Contains(strings.Join(view.Render(140, 30), "\n"), "g group: project") {
 		t.Error("project grouping footer hint missing")
 	}
 
@@ -212,21 +212,27 @@ func TestProjectGroupingSortsByCWD(t *testing.T) {
 	}
 }
 
-func TestActivateDispatchLikeRust(t *testing.T) {
+// Rust #45255: the command center no longer composes tasks, so typing does not
+// fill an input and Enter opens the selected session instead of dispatching.
+func TestActivateOpensWithoutComposerLikeRust(t *testing.T) {
 	view := New(sampleRows(), "", false)
 	for _, ch := range "add tests" {
 		view.TypeChar(ch)
 	}
-	if action := view.Activate(); action != ActionDispatchTask {
-		t.Fatalf("Activate with input = %v, want ActionDispatchTask", action)
-	}
 	if view.State.Input != "" {
-		t.Fatalf("input not cleared after dispatch: %q", view.State.Input)
+		t.Fatalf("browsing accepted text input: %q", view.State.Input)
 	}
-	// All-whitespace input is ignored.
-	view.TypeChar(' ')
+	if action := view.Activate(); action != ActionOpenThread {
+		t.Fatalf("Activate = %v, want ActionOpenThread", action)
+	}
+	// An all-whitespace rename cannot be applied and leaves the editor open.
+	view.BeginRename()
+	view.State.Input = "   "
 	if action := view.Activate(); action != ActionNone {
-		t.Fatalf("Activate with whitespace input = %v, want none", action)
+		t.Fatalf("Activate with whitespace rename = %v, want none", action)
+	}
+	if !view.State.Renaming {
+		t.Fatal("a whitespace-only rename must leave the editor open")
 	}
 }
 
@@ -294,23 +300,41 @@ func TestCancelExitSemantics(t *testing.T) {
 	if action := embedded.Cancel(); action != ActionNone {
 		t.Fatalf("embedded Cancel = %v, want none", action)
 	}
-	// Cancel with input clears first.
+	// Cancel with an active rename clears the editor first.
 	view := New(sampleRows(), "", true)
-	view.TypeChar('x')
-	if action := view.Cancel(); action != ActionNone || view.State.Input != "" {
-		t.Fatalf("Cancel with input = %v input=%q", action, view.State.Input)
+	view.BeginRename()
+	if action := view.Cancel(); action != ActionNone || view.State.Input != "" || view.State.Renaming {
+		t.Fatalf("Cancel while renaming = %v state=%#v", action, view.State)
 	}
 }
 
-func TestClearNewResetsEverything(t *testing.T) {
+// Rust #45255 removed the new-task shortcut's state reset: only search and
+// rename own the editor, and browsing ignores text entirely.
+func TestTextInputOnlyEditsMetadataLikeRust(t *testing.T) {
 	view := New(sampleRows(), "", false)
+	view.TypeChar('x')
+	view.Backspace()
+	view.Paste("pasted text")
+	if view.State.Input != "" || view.State.Search != "" {
+		t.Fatalf("browsing accepted text input: %#v", view.State)
+	}
+
 	view.ToggleSearch()
-	view.State.Search = "abc"
-	view.State.Input = "hello"
-	view.State.Renaming = true
-	view.ClearNew()
-	if view.State.Search != "" || view.State.Searching || view.State.Renaming || view.State.Input != "" {
-		t.Fatalf("ClearNew left state: %#v", view.State)
+	view.TypeChar('x')
+	if view.State.Search != "x" {
+		t.Fatalf("search input = %q, want x", view.State.Search)
+	}
+	view.Cancel()
+
+	view.BeginRename()
+	view.State.Input = ""
+	view.TypeChar('y')
+	if view.State.Input != "y" || !view.State.Renaming {
+		t.Fatalf("rename input = %q renaming=%v, want y", view.State.Input, view.State.Renaming)
+	}
+	view.Backspace()
+	if view.State.Input != "" {
+		t.Fatalf("rename backspace = %q, want empty", view.State.Input)
 	}
 }
 
@@ -336,18 +360,18 @@ func TestApplyRefreshPreservesSelection(t *testing.T) {
 	}
 }
 
-// Mirrors Rust #44344: Right opens the selected task only from an empty
-// composer, and metadata editing keeps the accept binding.
-func TestCanOpenWithRightRequiresEmptyComposerLikeRust(t *testing.T) {
+// Mirrors Rust #44344/#45255: Right opens the selected task whenever the list
+// owns the keys; metadata editing keeps Right for the editor.
+func TestCanOpenWithRightRequiresListFocusLikeRust(t *testing.T) {
 	view := New(sampleRows(), "", true)
 	if !view.CanOpenWithRight() {
-		t.Fatal("empty composer with a selected row must allow Right to open")
+		t.Fatal("a selected row must allow Right to open")
 	}
-	view.TypeChar('x')
+	view.ToggleSearch()
 	if view.CanOpenWithRight() {
-		t.Fatal("a non-empty draft must keep Right for the editor")
+		t.Fatal("search must keep Right for the editor")
 	}
-	view.Backspace()
+	view.Cancel()
 	view.BeginRename()
 	if view.CanOpenWithRight() {
 		t.Fatal("metadata editing must keep Right for the editor")
@@ -364,10 +388,9 @@ func TestRenderLayout(t *testing.T) {
 	for _, want := range []string{
 		"Agent command center",
 		"1 need input   1 working   1 ready",
-		"New task › ",
-		"Describe a task and press enter to dispatch it",
-		"ctrl+w hide",
-		"ctrl+e archive",
+		"n new",
+		"h hide",
+		"a archive",
 		"/work/a  2",
 		"› ● alpha  Working",
 		"/work/b  1",
@@ -431,8 +454,16 @@ func TestRenderTooSmallReturnsNothing(t *testing.T) {
 
 func TestPasteSanitizesNewlines(t *testing.T) {
 	view := New(sampleRows(), "", false)
+	view.ToggleSearch()
 	view.Paste("line1\nline2\r\nline3")
-	if view.State.Input != "line1 line2 line3" {
-		t.Fatalf("Paste = %q, want sanitized", view.State.Input)
+	if view.State.Search != "line1 line2 line3" {
+		t.Fatalf("Paste = %q, want sanitized", view.State.Search)
+	}
+	// Rust #45255: without the task composer a paste outside the editor is a
+	// no-op.
+	browsing := New(sampleRows(), "", false)
+	browsing.Paste("ignored")
+	if browsing.State.Input != "" || browsing.State.Search != "" {
+		t.Fatalf("browsing accepted a paste: %#v", browsing.State)
 	}
 }

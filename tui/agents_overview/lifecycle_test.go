@@ -33,7 +33,7 @@ func TestArchiveAndDeleteWithoutRowsAreNoops(t *testing.T) {
 func TestFooterAdvertisesArchiveAndDeleteLikeRust(t *testing.T) {
 	view := New(sampleRows(), "", false)
 	output := strings.Join(view.Render(200, 24), "\n")
-	for _, want := range []string{"ctrl+e archive", "delete delete"} {
+	for _, want := range []string{"a archive", "delete delete"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("footer missing %q:\n%s", want, output)
 		}

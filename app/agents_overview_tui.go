@@ -27,14 +27,22 @@ func interactiveRemoteAgentsOverviewRefresh(ctx context.Context, endpoint *appse
 	}
 }
 
-func interactiveRemoteAgentsOverviewDispatch(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewDispatchFunc {
-	return func(request codextea.SubmitRequest, cwd string) (string, error) {
+// interactiveRemoteAgentsOverviewNewSession starts a blank session in the
+// selected checkout without sending a turn, and returns the snapshot the
+// dashboard attaches to (Rust #45255 new_agents_overview_session). The started
+// session has no rollout, so the TUI reuses this snapshot until its first turn.
+func interactiveRemoteAgentsOverviewNewSession(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewNewSessionFunc {
+	return func(cwd string) (codextea.AgentThreadSwitchResponse, error) {
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
-			return "", err
+			return codextea.AgentThreadSwitchResponse{}, err
 		}
 		defer client.close()
-		return newRemoteAgentsDashboardSource(client, "").Dispatch(ctx, request, cwd)
+		started, err := newRemoteAgentsDashboardSource(client, "").StartSession(ctx, cwd)
+		if err != nil {
+			return codextea.AgentThreadSwitchResponse{}, err
+		}
+		return remoteTUIAgentSwitchResponseForStartedSession(started), nil
 	}
 }
 

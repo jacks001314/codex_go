@@ -43,7 +43,6 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	}
 	lines = append(lines, renderLine(inset, []span{{text: strings.Repeat("─", dividerWidth), style: spanDim}}, maxWidth, styled))
 
-	attachmentLines := len(v.attachments)
 	// renderLine renders the footer inside the inset, so pack the hints to the
 	// same content width the rows are drawn into.
 	footerWidth := maxWidth - len(inset)
@@ -51,8 +50,8 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		footerWidth = 1
 	}
 	footerRows := v.footerHintRows(footerWidth)
-	// header + summary + divider + attachments + prompt + footer rows
-	bodyHeight := termHeight - 4 - attachmentLines - len(footerRows)
+	// header + summary + divider + editor + footer rows
+	bodyHeight := termHeight - 4 - len(footerRows)
 	if bodyHeight < 3 {
 		bodyHeight = 3
 	}
@@ -72,21 +71,20 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 		lines = append(lines, v.renderRows(bodyHeight, bodyWidth, styled)...)
 	}
 
-	// pending image attachments (Rust #44027)
-	for _, label := range v.attachments {
-		lines = append(lines, renderLine(inset, []span{{text: label, style: spanDim}}, maxWidth, styled))
-	}
-	// prompt
+	// metadata editor (search or rename); browsing renders no editor row
+	// (Rust agents_overview_render.rs after #45255)
 	label, input, placeholder := v.Prompt()
-	prompt := []span{{text: label, style: spanCyanBold}, {text: input, style: spanPlain}}
-	if placeholder != "" {
-		available := bodyWidth - runewidth.StringWidth(label) - 1
-		if available > 0 {
-			placeholder = truncateToWidth(placeholder, available)
+	if label != "" || input != "" || placeholder != "" {
+		prompt := []span{{text: label, style: spanCyanBold}, {text: input, style: spanPlain}}
+		if placeholder != "" {
+			available := bodyWidth - runewidth.StringWidth(label) - 1
+			if available > 0 {
+				placeholder = truncateToWidth(placeholder, available)
+			}
+			prompt = append(prompt, span{text: placeholder, style: spanDim})
 		}
-		prompt = append(prompt, span{text: placeholder, style: spanDim})
+		lines = append(lines, renderLine(inset, prompt, maxWidth, styled))
 	}
-	lines = append(lines, renderLine(inset, prompt, maxWidth, styled))
 	// footer
 	for _, row := range footerRows {
 		lines = append(lines, renderLine(inset, row, maxWidth, styled))
@@ -101,39 +99,44 @@ func (v *View) footerHints() [][]span {
 	if row := v.SelectedRow(); row != nil && row.StatusActive {
 		stopStyle = spanBold
 	}
-	// Rust #44344: Right opens the selected task unless metadata editing owns
-	// the editor; otherwise Enter accepts.
+	// Rust #45255: Enter opens the selected task; Right only opens when the
+	// list owns the keys, which the footer no longer advertises.
 	openHint := "enter"
-	if v != nil && !v.State.Renaming {
-		openHint = "\u2192"
-	}
 	hints := [][]span{
 		{{text: "\u2191\u2193", style: spanBold}, {text: " navigate", style: spanDim}},
 		{{text: openHint, style: spanBold}, {text: " open", style: spanDim}},
 	}
-	if binding, ok := v.shortcutHint(ShortcutHintSearch, "ctrl+f"); ok {
+	if binding, ok := v.shortcutHint(ShortcutHintNewTask, "n"); ok {
+		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " new", style: spanDim}})
+	}
+	if binding, ok := v.shortcutHint(ShortcutHintSearch, "f"); ok {
 		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " search", style: spanDim}})
 	}
-	if binding, ok := v.shortcutHint(ShortcutHintToggleGrouping, "ctrl+s"); ok {
+	if binding, ok := v.shortcutHint(ShortcutHintToggleGrouping, "g"); ok {
 		// Rust #44957: the footer reports the active grouping mode.
 		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " " + v.State.Grouping.Label(), style: spanDim}})
 	}
-	if binding, ok := v.shortcutHint(ShortcutHintRename, "ctrl+r"); ok {
+	if binding, ok := v.shortcutHint(ShortcutHintRename, "r"); ok {
 		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " rename", style: spanDim}})
 	}
-	if binding, ok := v.shortcutHint(ShortcutHintStop, "ctrl+x"); ok {
+	if binding, ok := v.shortcutHint(ShortcutHintStop, "x"); ok {
 		hints = append(hints, []span{{text: binding, style: stopStyle}, {text: " stop", style: spanDim}})
 	}
-	if binding, ok := v.shortcutHint(ShortcutHintHide, "ctrl+w"); ok {
+	if binding, ok := v.shortcutHint(ShortcutHintHide, "h"); ok {
 		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " hide", style: spanDim}})
 	}
-	if binding, ok := v.shortcutHint(ShortcutHintArchive, "ctrl+e"); ok {
+	if binding, ok := v.shortcutHint(ShortcutHintArchive, "a"); ok {
 		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " archive", style: spanDim}})
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintDelete, "delete"); ok {
 		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " delete", style: spanDim}})
 	}
-	hints = append(hints, []span{{text: "esc", style: spanBold}, {text: " back", style: spanDim}})
+	// Rust #45255: Esc only cancels metadata editing, so the list stays open and
+	// the hint appears only while editing; quitting is always advertised.
+	if v != nil && (v.State.Searching || v.State.Renaming) {
+		hints = append(hints, []span{{text: "esc", style: spanBold}, {text: " cancel", style: spanDim}})
+	}
+	hints = append(hints, []span{{text: "ctrl-c", style: spanBold}, {text: " quit", style: spanDim}})
 	return hints
 }
 

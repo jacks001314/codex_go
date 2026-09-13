@@ -104,11 +104,13 @@ func TestOpenAgentsDefaultShadowedByCustomAltA(t *testing.T) {
 func TestAgentsKeymapActionsResolveDefaults(t *testing.T) {
 	config := NewKeymapConfig()
 	for action, want := range map[string]string{
-		"search":          "ctrl-f",
-		"new_task":        "ctrl-n",
-		"rename":          "ctrl-r",
-		"stop":            "ctrl-x",
-		"toggle_grouping": "ctrl-s",
+		"search":          "f",
+		"new_task":        "n",
+		"rename":          "r",
+		"stop":            "x",
+		"archive":         "a",
+		"hide":            "h",
+		"toggle_grouping": "g",
 	} {
 		bindings, source, custom := ResolvedKeymapBindings(config, "agents", action)
 		if custom || source != "default" || strings.Join(bindings, ",") != want {

@@ -291,6 +291,12 @@ func (m *Model) keyMatches(context string, action string, keySpec string) bool {
 	return codextui.KeymapActionHasBinding(m.keymapConfig, context, action, keySpec)
 }
 
+// KeySpecFromKeyMsg normalizes a key event into the canonical binding spec
+// form (`ctrl-f`, `alt-enter`, `f`, ...) used by the keymap tables.
+func KeySpecFromKeyMsg(message bubbletea.KeyMsg) string {
+	return keySpecFromKeyMsg(message)
+}
+
 func keySpecFromKeyMsg(message bubbletea.KeyMsg) string {
 	key := bubbletea.Key(message)
 	// Ctrl+/ is commonly encoded as the C0 unit-separator byte (0x1f).

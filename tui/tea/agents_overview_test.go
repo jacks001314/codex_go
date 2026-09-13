@@ -53,11 +53,17 @@ func TestModelAgentsCommandOpensDashboardAndLoads(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	output := utils.StripANSI(model.View())
-	for _, want := range []string{"Agent command center", "alpha", "beta", "gamma", "1 need input", "ctrl+x stop"} {
+	for _, want := range []string{"Agent command center", "alpha", "beta", "gamma", "1 need input", "x stop"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("dashboard view missing %q:\n%s", want, output)
 		}
 	}
+}
+
+// agentsKeyEvent builds a plain-character key event, which is how the command
+// center's single-letter shortcuts arrive (Rust #45255).
+func agentsKeyEvent(r rune) bubbletea.KeyMsg {
+	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}}
 }
 
 func TestModelAgentsDashboardNavigationAndSearch(t *testing.T) {
@@ -76,9 +82,9 @@ func TestModelAgentsDashboardNavigationAndSearch(t *testing.T) {
 	if got := model.agentsOverview.SelectedThreadID(); got != "root-2" {
 		t.Fatalf("selection after down = %q, want root-2", got)
 	}
-	model.Update(key(bubbletea.KeyCtrlF))
+	model.Update(agentsKeyEvent('f'))
 	if !model.agentsOverview.State.Searching {
-		t.Fatal("ctrl+f did not enter search")
+		t.Fatal("f did not enter search")
 	}
 	typeText(t, model, "gamma")
 	if visible := model.agentsOverview.VisibleIndices(); len(visible) != 1 {
@@ -88,14 +94,14 @@ func TestModelAgentsDashboardNavigationAndSearch(t *testing.T) {
 	if model.agentsOverview.State.Searching || model.agentsOverview.State.Search != "" {
 		t.Fatalf("esc did not exit search: %#v", model.agentsOverview.State)
 	}
-	model.Update(key(bubbletea.KeyCtrlS))
+	model.Update(agentsKeyEvent('g'))
 	if model.agentsOverview.State.Grouping != agentsoverview.GroupingStatus {
-		t.Fatalf("ctrl+s grouping = %v, want status", model.agentsOverview.State.Grouping)
+		t.Fatalf("g grouping = %v, want status", model.agentsOverview.State.Grouping)
 	}
 	// Rust #44957: the toggle cycles on to model grouping.
-	model.Update(key(bubbletea.KeyCtrlS))
+	model.Update(agentsKeyEvent('g'))
 	if model.agentsOverview.State.Grouping != agentsoverview.GroupingModel {
-		t.Fatalf("second ctrl+s grouping = %v, want model", model.agentsOverview.State.Grouping)
+		t.Fatalf("second g grouping = %v, want model", model.agentsOverview.State.Grouping)
 	}
 }
 
@@ -120,66 +126,74 @@ func TestModelAgentsDashboardRightOpensSelectedTask(t *testing.T) {
 		t.Fatal("right from an empty composer did not open the selected task")
 	}
 
-	draftModel := NewModel(nil, Options{
+	// Rust #45255: metadata editing keeps Right for the editor.
+	editing := NewModel(nil, Options{
 		Width:  120,
 		Height: 24,
 		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
 			return agentsOverviewTestRows(), nil
 		},
 	})
-	openAgentsDashboard(t, draftModel)
-	typeText(t, draftModel, "draft")
-	updated, _ = draftModel.Update(key(bubbletea.KeyRight))
-	draftModel = updated.(*Model)
-	if draftModel.agentsOverview == nil {
-		t.Fatal("right with a non-empty draft must keep the editor, not open the task")
+	openAgentsDashboard(t, editing)
+	editing.Update(agentsKeyEvent('f'))
+	updated, _ = editing.Update(key(bubbletea.KeyRight))
+	editing = updated.(*Model)
+	if editing.agentsOverview == nil {
+		t.Fatal("right while searching must keep the editor, not open the task")
+	}
+	updated, _ = editing.Update(key(bubbletea.KeyEsc))
+	editing = updated.(*Model)
+	editing.Update(agentsKeyEvent('r'))
+	updated, _ = editing.Update(key(bubbletea.KeyRight))
+	editing = updated.(*Model)
+	if editing.agentsOverview == nil {
+		t.Fatal("right while renaming must keep the editor, not open the task")
 	}
 }
 
-func TestModelAgentsDashboardDispatchTask(t *testing.T) {
-	var dispatched []string
-	var dispatchedCwd string
-	refreshed := 0
+// Rust #45255: `n` opens a blank session in the selected checkout without
+// sending a turn, and the started session is retained until its first turn.
+func TestModelAgentsDashboardNewSessionOpensBlankSession(t *testing.T) {
+	var newSessionCwd string
 	model := NewModel(nil, Options{
 		Width:  120,
 		Height: 24,
-		OnAgentsOverviewRefresh: func(currentThreadID string) ([]agentsoverview.Row, error) {
-			refreshed++
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
 			return agentsOverviewTestRows(), nil
 		},
-		OnAgentsOverviewDispatch: func(request SubmitRequest, cwd string) (string, error) {
-			dispatched = append(dispatched, request.Prompt)
-			dispatchedCwd = cwd
-			return "new-1", nil
+		OnAgentsOverviewNewSession: func(cwd string) (AgentThreadSwitchResponse, error) {
+			newSessionCwd = cwd
+			return AgentThreadSwitchResponse{
+				Entry:  codextui.AgentThreadEntry{ThreadID: "new-1", AgentNickname: "New session"},
+				Status: "idle",
+			}, nil
 		},
 	})
 	openAgentsDashboard(t, model)
-	refreshed = 0
-	typeText(t, model, "add tests")
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(agentsKeyEvent('n'))
 	model = updated.(*Model)
 	if command == nil {
-		t.Fatal("enter with input returned no dispatch command")
+		t.Fatal("n returned no new-session command")
 	}
 	message := command()
-	updated, refreshCommand := model.Update(message)
+	updated, _ = model.Update(message)
 	model = updated.(*Model)
-	if !strings.Contains(utils.StripANSI(model.View()), "Dispatched task new-1") {
-		t.Fatalf("notice missing dispatch confirmation:\n%s", utils.StripANSI(model.View()))
+	if newSessionCwd != "/work/a" {
+		t.Fatalf("new session cwd = %q, want selected project cwd /work/a", newSessionCwd)
 	}
-	if len(dispatched) != 1 || dispatched[0] != "add tests" {
-		t.Fatalf("dispatched = %v", dispatched)
+	if model.agentsOverview != nil {
+		t.Fatal("starting a session must close the dashboard")
 	}
-	if dispatchedCwd != "/work/a" {
-		t.Fatalf("dispatch cwd = %q, want selected project cwd /work/a", dispatchedCwd)
+	if got := model.State.ThreadID; got != "new-1" {
+		t.Fatalf("attached thread = %q, want new-1", got)
 	}
-	if refreshCommand != nil {
-		refreshMessage := refreshCommand()
-		updated, _ = model.Update(refreshMessage)
-		model = updated.(*Model)
+	if _, ok := model.agentsOverviewBlankSessions["new-1"]; !ok {
+		t.Fatal("the started session must be retained until its first turn")
 	}
-	if refreshed == 0 {
-		t.Fatal("dispatch did not trigger a refresh")
+	// The first turn materializes the rollout, so the retained snapshot drops.
+	model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{Type: "turn.started", ThreadID: "new-1"}})
+	if _, ok := model.agentsOverviewBlankSessions["new-1"]; ok {
+		t.Fatal("the retained session must be cleared once its first turn starts")
 	}
 }
 
@@ -198,7 +212,7 @@ func TestModelAgentsDashboardStopSelected(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	model.agentsOverview.Selected = 2 // gamma is active
-	updated, command := model.Update(key(bubbletea.KeyCtrlX))
+	updated, command := model.Update(agentsKeyEvent('x'))
 	model = updated.(*Model)
 	if command == nil {
 		t.Fatal("ctrl+x returned no stop command")
@@ -226,9 +240,9 @@ func TestModelAgentsDashboardRenameSelected(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	model.agentsOverview.Selected = 1
-	model.Update(key(bubbletea.KeyCtrlR))
+	model.Update(agentsKeyEvent('r'))
 	if !model.agentsOverview.State.Renaming {
-		t.Fatal("ctrl+r did not start renaming")
+		t.Fatal("r did not start renaming")
 	}
 	typeText(t, model, " v2")
 	updated, command := model.Update(key(bubbletea.KeyEnter))

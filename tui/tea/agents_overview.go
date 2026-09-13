@@ -9,9 +9,7 @@ import (
 	"codex_go/features"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
-	bottompane "codex_go/tui/bottom_pane"
 	"codex_go/tui/markdown"
-	sysclipboard "github.com/atotto/clipboard"
 )
 
 // In-session `/agents` dashboard (Rust #39094/#39112). The dashboard is a
@@ -23,9 +21,11 @@ import (
 
 type AgentsOverviewRefreshFunc func(currentThreadID string) ([]agentsoverview.Row, error)
 
-// AgentsOverviewDispatchFunc starts a background task from the dashboard. The
-// request carries the prompt plus any image attachments (Rust #44027).
-type AgentsOverviewDispatchFunc func(request SubmitRequest, cwd string) (string, error)
+// AgentsOverviewNewSessionFunc starts a blank session in the selected checkout
+// without sending an initial turn and returns the attached thread snapshot the
+// dashboard switches to (Rust #45255 new_agents_overview_session). A started
+// session has no rollout yet, so the snapshot is retained until its first turn.
+type AgentsOverviewNewSessionFunc func(cwd string) (AgentThreadSwitchResponse, error)
 type AgentsOverviewStopFunc func(threadID string) error
 type AgentsOverviewRenameFunc func(threadID string, name string) error
 type AgentsOverviewArchiveFunc func(threadID string) error
@@ -60,10 +60,9 @@ type agentsOverviewListMsg struct {
 	requestID int
 }
 
-type agentsOverviewDispatchMsg struct {
-	threadID string
+type agentsOverviewNewSessionMsg struct {
+	response AgentThreadSwitchResponse
 	err      error
-	request  SubmitRequest
 }
 
 type agentsOverviewStopMsg struct {
@@ -102,7 +101,6 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	m.agentsOverviewLifecycle = nil
 	m.agentsOverviewLifecycleProgress = ""
 	m.applyAgentsOverviewKeymapHints()
-	m.syncAgentsOverviewAttachmentLabels()
 	return m.refreshAgentsOverviewCmd()
 }
 
@@ -297,119 +295,88 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	selectedBefore := m.agentsOverview.Selected
 	keySpec := keySpecFromKeyMsg(msg)
-	handled := false
 	switch msg.String() {
 	case "up", "k":
 		m.agentsOverview.MoveSelection(false)
-		handled = true
 	case "down", "j":
 		m.agentsOverview.MoveSelection(true)
-		handled = true
 	case "pgup":
 		m.agentsOverview.PageUp()
-		handled = true
 	case "pgdown":
 		m.agentsOverview.PageDown()
-		handled = true
 	case "home":
 		m.agentsOverview.JumpTop()
-		handled = true
 	case "end":
 		m.agentsOverview.JumpBottom()
-		handled = true
 	case "right":
-		// Rust #44344: Right opens the selected task from an empty, focused
-		// composer; a non-empty draft or a connection notice keeps Right for the
-		// editor/unavailable states.
+		// Rust #44344/#45255: Right opens the selected task unless metadata
+		// editing owns the editor; a connection notice keeps the list.
 		if m.agentsOverviewNotice == "" && m.agentsOverview.CanOpenWithRight() {
 			return m.openAgentsOverviewThread(m.agentsOverview.SelectedThreadID())
 		}
 	case "enter":
-		prompt := strings.TrimSpace(m.agentsOverview.State.Input)
+		name := strings.TrimSpace(m.agentsOverview.State.Input)
 		switch action := m.agentsOverview.Activate(); action {
-		case agentsoverview.ActionDispatchTask:
-			return m.dispatchAgentsOverviewCmd(prompt)
 		case agentsoverview.ActionRenameThread:
-			return m.renameAgentsOverviewCmd(prompt)
+			return m.renameAgentsOverviewCmd(name)
 		case agentsoverview.ActionOpenThread:
 			return m.openAgentsOverviewThread(m.agentsOverview.SelectedThreadID())
 		}
-		handled = true
 	case "esc":
 		m.agentsOverview.Cancel()
 		if m.agentsOverview.Completion != agentsoverview.CompletionNone {
 			m.closeAgentsOverview()
 			m.notice = ""
+			return nil
 		}
-		handled = true
 	case "backspace":
 		m.agentsOverview.Backspace()
-		handled = true
+	}
+	// Rust #45255: while the search or rename field owns the editor, plain
+	// characters edit it instead of triggering a dashboard shortcut.
+	if m.agentsOverview.State.Searching || m.agentsOverview.State.Renaming {
+		if msg.Type == bubbletea.KeyRunes && !msg.Alt {
+			for _, r := range msg.Runes {
+				m.agentsOverview.TypeChar(r)
+			}
+		}
+		return nil
 	}
 	if m.keyMatches("agents", "search", keySpec) {
 		m.agentsOverview.ToggleSearch()
-		handled = true
 	}
 	if m.keyMatches("agents", "toggle_grouping", keySpec) {
 		m.agentsOverview.ToggleGrouping()
-		handled = true
 	}
 	if m.keyMatches("agents", "new_task", keySpec) {
-		m.agentsOverview.ClearNew()
-		m.setAgentsOverviewAttachments(nil)
-		handled = true
+		return m.newAgentsOverviewSessionCmd()
 	}
 	if m.keyMatches("agents", "rename", keySpec) {
 		m.agentsOverview.BeginRename()
-		handled = true
 	}
 	if m.keyMatches("agents", "stop", keySpec) {
 		if action := m.agentsOverview.StopSelected(); action == agentsoverview.ActionStopThread {
 			return m.stopAgentsOverviewCmd(m.agentsOverview.SelectedThreadID())
 		}
-		handled = true
 	}
 	if m.keyMatches("agents", "archive", keySpec) {
 		if action := m.agentsOverview.ArchiveSelected(); action == agentsoverview.ActionArchiveThread {
 			m.openAgentsOverviewLifecycleConfirmation(agentsOverviewActionArchive)
 		}
-		handled = true
 	}
 	if m.keyMatches("agents", "delete", keySpec) {
 		if action := m.agentsOverview.DeleteSelected(); action == agentsoverview.ActionDeleteThread {
 			m.openAgentsOverviewLifecycleConfirmation(agentsOverviewActionDelete)
 		}
-		handled = true
 	}
 	if m.keyMatches("agents", "hide", keySpec) {
 		// Rust #44424: hide the selected task locally without stopping it.
 		if action := m.agentsOverview.HideSelected(); action == agentsoverview.ActionHideThread {
 			m.notice = ""
 		}
-		handled = true
 	}
 	if keySpec == "ctrl-c" {
 		return bubbletea.Quit
-	}
-	if !handled && msg.Type == bubbletea.KeyRunes {
-		for _, r := range msg.Runes {
-			m.agentsOverview.TypeChar(r)
-		}
-	}
-	if msg.Type == bubbletea.KeyCtrlV {
-		// Rust #44027: image pasting is enabled in the overview composer; fall
-		// back to clipboard text when no image is available.
-		if path, err := pasteImageFromClipboard(); err == nil {
-			m.setAgentsOverviewAttachments(append(cloneComposerAttachments(m.agentsOverviewAttachments),
-				bottompane.ComposerAttachment{Kind: bottompane.AttachmentImage, Path: path}))
-			m.notice = "Attached image " + path
-			return nil
-		}
-		if text, err := sysclipboard.ReadAll(); err == nil && text != "" {
-			for _, r := range text {
-				m.agentsOverview.TypeChar(r)
-			}
-		}
 	}
 	// Rust #44970: the selected task's usage estimate follows the selection.
 	if m.agentsOverview != nil && m.agentsOverview.Selected != selectedBefore {
@@ -418,8 +385,16 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	return nil
 }
 
-func (m *Model) dispatchAgentsOverviewCmd(prompt string) bubbletea.Cmd {
-	if m == nil || m.agentsOverview == nil || m.onAgentsOverviewDispatch == nil || prompt == "" || m.agentsOverviewBusy {
+// newAgentsOverviewSessionCmd starts a blank session in the selected checkout
+// without sending a turn, so running agents keep running (Rust #45255, the `n`
+// shortcut).
+func (m *Model) newAgentsOverviewSessionCmd() bubbletea.Cmd {
+	if m == nil || m.agentsOverview == nil || m.onAgentsOverviewNewSession == nil || m.agentsOverviewBusy {
+		return nil
+	}
+	// Rust #45255 returns early while offline or when the list is showing a
+	// connection notice: a new session needs the app server.
+	if m.agentsOverviewNotice != "" {
 		return nil
 	}
 	cwd := ""
@@ -428,83 +403,68 @@ func (m *Model) dispatchAgentsOverviewCmd(prompt string) bubbletea.Cmd {
 			cwd = strings.TrimSpace(row.CWD)
 		}
 	}
-	request := SubmitRequest{
-		Prompt:          prompt,
-		Attachments:     cloneComposerAttachments(m.agentsOverviewAttachments),
-		MentionBindings: m.activeComposerMentionBindings(prompt),
-		MentionCatalog:  m.submissionMentionCatalog(),
-	}
 	m.agentsOverviewBusy = true
 	return func() bubbletea.Msg {
-		threadID, err := m.onAgentsOverviewDispatch(request, cwd)
-		return agentsOverviewDispatchMsg{threadID: threadID, err: err, request: request}
+		response, err := m.onAgentsOverviewNewSession(cwd)
+		return agentsOverviewNewSessionMsg{response: response, err: err}
 	}
 }
 
-// setAgentsOverviewAttachments replaces the pending dashboard task attachments
-// and refreshes the rendered labels (Rust #44027).
-func (m *Model) setAgentsOverviewAttachments(attachments []bottompane.ComposerAttachment) {
+// applyAgentsOverviewNewSession attaches to the session the dashboard just
+// started. The started thread has no rollout, so its snapshot is retained and
+// reused when the dashboard re-opens it before the first turn (Rust
+// agents_overview.blank_sessions).
+func (m *Model) applyAgentsOverviewNewSession(message agentsOverviewNewSessionMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	m.agentsOverviewBusy = false
+	if message.err != nil {
+		text := strings.TrimSpace(message.err.Error())
+		if text == "" {
+			text = "unknown error"
+		}
+		m.agentsOverviewNotice = "Failed to start session: " + text
+		return nil
+	}
+	threadID := strings.TrimSpace(message.response.Entry.ThreadID)
+	if threadID == "" {
+		m.agentsOverviewNotice = "Failed to start session: the server returned no thread id"
+		return nil
+	}
+	m.setAgentsOverviewBlankSession(threadID, message.response)
+	// Rust attaches a new session with a fresh chat widget, so the composer
+	// starts empty.
+	empty := ""
+	m.agentsOverviewPendingDraft = &empty
+	m.closeAgentsOverview()
+	m.applyAgentSwitchResult(AgentSwitchResultMsg{ThreadID: threadID, Response: message.response})
+	return m.refreshStatusControlsCmd()
+}
+
+// SetAgentsOverviewBlankSession records a started session whose live snapshot
+// must be reused until its first turn materializes a rollout.
+func (m *Model) setAgentsOverviewBlankSession(threadID string, response AgentThreadSwitchResponse) {
 	if m == nil {
 		return
 	}
-	m.agentsOverviewAttachments = cloneComposerAttachments(attachments)
-	m.syncAgentsOverviewAttachmentLabels()
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	if m.agentsOverviewBlankSessions == nil {
+		m.agentsOverviewBlankSessions = map[string]AgentThreadSwitchResponse{}
+	}
+	m.agentsOverviewBlankSessions[threadID] = response
 }
 
-// syncAgentsOverviewAttachmentLabels mirrors the pending attachments into the
-// dashboard view.
-func (m *Model) syncAgentsOverviewAttachmentLabels() {
-	if m == nil || m.agentsOverview == nil {
+// clearAgentsOverviewBlankSession drops a started session once it can be
+// resumed normally: its first turn started, or it was closed/archived/deleted.
+func (m *Model) clearAgentsOverviewBlankSession(threadID string) {
+	if m == nil || len(m.agentsOverviewBlankSessions) == 0 {
 		return
 	}
-	if len(m.agentsOverviewAttachments) == 0 {
-		m.agentsOverview.SetAttachments(nil)
-		return
-	}
-	labels := make([]string, 0, len(m.agentsOverviewAttachments))
-	for _, attachment := range m.agentsOverviewAttachments {
-		labels = append(labels, "  "+attachmentKindLabel(attachment.Kind)+": "+attachment.Label())
-	}
-	m.agentsOverview.SetAttachments(labels)
-}
-
-// restoreAgentsOverviewPrompt restores an unsent task prompt and its
-// attachments after a dispatch failure (Rust #44027). A newer draft typed while
-// the task was starting is preserved; the failed request's images are then
-// reported by path so they can be re-attached.
-func (m *Model) restoreAgentsOverviewPrompt(request SubmitRequest) {
-	if m == nil || m.agentsOverview == nil {
-		return
-	}
-	if strings.TrimSpace(m.agentsOverview.State.Input) == "" {
-		m.agentsOverview.State.Input = request.Prompt
-		m.setAgentsOverviewAttachments(request.Attachments)
-		return
-	}
-	if paths := agentsOverviewAttachmentPaths(request.Attachments); len(paths) > 0 {
-		notice := strings.TrimSpace(m.agentsOverviewNotice)
-		if notice != "" {
-			notice += " "
-		}
-		m.agentsOverviewNotice = notice + "Reattach image(s): " + strings.Join(paths, ", ")
-	}
-}
-
-func agentsOverviewAttachmentPaths(attachments []bottompane.ComposerAttachment) []string {
-	paths := make([]string, 0, len(attachments))
-	for _, attachment := range attachments {
-		switch attachment.Kind {
-		case bottompane.AttachmentImage:
-			if path := strings.TrimSpace(attachment.Path); path != "" {
-				paths = append(paths, path)
-			}
-		case bottompane.AttachmentRemoteImage:
-			if url := strings.TrimSpace(attachment.URL); url != "" {
-				paths = append(paths, url)
-			}
-		}
-	}
-	return paths
+	delete(m.agentsOverviewBlankSessions, strings.TrimSpace(threadID))
 }
 
 func (m *Model) stopAgentsOverviewCmd(threadID string) bubbletea.Cmd {
@@ -629,6 +589,8 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 		return nil
 	}
 	m.agentsOverviewNotice = ""
+	// Rust #45255: a removed task drops its retained (unmaterialized) session.
+	m.clearAgentsOverviewBlankSession(msg.threadID)
 	// Removing the current task leaves the dashboard open but unattached.
 	if m.State != nil && strings.TrimSpace(m.State.ThreadID) == strings.TrimSpace(msg.threadID) {
 		m.State.SetThreadID("")
@@ -686,6 +648,14 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 		// carrying the previous thread's draft.
 		empty := ""
 		m.agentsOverviewPendingDraft = &empty
+	}
+	if blank, ok := m.agentsOverviewBlankSessions[threadID]; ok {
+		// A session started from the command center has no rollout yet, so
+		// thread/resume would fail; reuse its live snapshot instead (Rust #45255
+		// agents_overview.blank_sessions).
+		m.closeAgentsOverview()
+		m.applyAgentSwitchResult(AgentSwitchResultMsg{ThreadID: threadID, Response: blank})
+		return m.refreshStatusControlsCmd()
 	}
 	return m.applyAgentModalOption(threadID)
 }

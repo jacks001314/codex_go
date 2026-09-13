@@ -14,6 +14,7 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/session"
+	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 	"codex_go/tui/markdown"
 	codextea "codex_go/tui/tea"
@@ -23,10 +24,15 @@ import (
 // agentsDashboardResult is what the standalone dashboard hands back to the
 // host after it closes.
 type agentsDashboardResult struct {
-	// OpenedThreadID is set when the user pressed enter on a root session.
-	// v1 hands the thread off to the host (summary + resume hint); attaching
-	// the interactive session directly is the next increment.
+	// OpenedThreadID is set when the user opened a root session or started a
+	// new one. v1 hands the thread off to the host (summary + resume hint);
+	// attaching the interactive session directly is the next increment.
 	OpenedThreadID string
+	// NewSession marks OpenedThreadID as a session this dashboard just started
+	// in CWD, which has no rollout yet (Rust #45255).
+	NewSession bool
+	// CWD is the checkout a new session was started in.
+	CWD string
 }
 
 // agentsDashboardSource is the data-source seam for the interactive dashboard.
@@ -34,7 +40,9 @@ type agentsDashboardResult struct {
 // local fallback reads the session store directly.
 type agentsDashboardSource interface {
 	List(ctx context.Context) ([]agentsoverview.Row, error)
-	Dispatch(ctx context.Context, request codextea.SubmitRequest, cwd string) (string, error)
+	// NewSession starts a blank session in cwd without sending a turn (Rust
+	// #45255 opens a new session from the command center).
+	NewSession(ctx context.Context, cwd string) (string, error)
 	Stop(ctx context.Context, threadID string) error
 	Rename(ctx context.Context, threadID, name string) error
 	Archive(ctx context.Context, threadID string) error
@@ -260,13 +268,23 @@ func lastAgentMessagePreviewFromSessionItems(items []session.Item) string {
 	return ""
 }
 
-func (s *remoteAgentsDashboardSource) Dispatch(ctx context.Context, request codextea.SubmitRequest, cwd string) (string, error) {
-	if s == nil || s.client == nil {
-		return "", errors.New("app-server client is unavailable")
+// NewSession starts a thread in cwd with the destination's effective launch
+// defaults and the managed new-thread defaults, without sending a turn (Rust
+// #45255 new_agents_overview_session: `n` opens a blank session and leaves
+// running agents alone).
+func (s *remoteAgentsDashboardSource) NewSession(ctx context.Context, cwd string) (string, error) {
+	started, err := s.StartSession(ctx, cwd)
+	if err != nil {
+		return "", err
 	}
-	prompt := strings.TrimSpace(request.Prompt)
-	if prompt == "" {
-		return "", errors.New("task prompt must not be empty")
+	return strings.TrimSpace(started.Thread.ID), nil
+}
+
+// StartSession starts the thread and returns the full start response, which
+// carries the settings the in-session command center attaches with.
+func (s *remoteAgentsDashboardSource) StartSession(ctx context.Context, cwd string) (*appserver.ThreadStartResponse, error) {
+	if s == nil || s.client == nil {
+		return nil, errors.New("app-server client is unavailable")
 	}
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
@@ -277,42 +295,19 @@ func (s *remoteAgentsDashboardSource) Dispatch(ctx context.Context, request code
 		params.CWD = cwd
 	}
 	// Rust agents_overview.rs applies the destination's server defaults and the
-	// managed new-thread defaults when creating a background task thread
-	// (#43177/#43261/#44693).
+	// managed new-thread defaults when creating a session (#43177/#43261/#44693).
 	if defaults, layers, effective, ok := s.client.remoteNewThreadModelDefaults(ctx, params.CWD); ok {
 		applyServerEffectiveLaunchDefaults(&params, effective, layers, nil, false, s.client.serverCatalogDefaultModel(ctx))
 		applyManagedDefaultsToThreadStartParams(&params, s.client.state, defaults, layers, nil, false, false)
 	}
-	// Rust #44027: images are rejected before a thread starts when the resolved
-	// model is text-only.
-	if len(request.Attachments) > 0 {
-		if err := s.rejectTextOnlyModelForImages(ctx, params.Model); err != nil {
-			return "", err
-		}
-	}
-	inputs, err := agentsOverviewTaskInputs(request, !interactiveRemoteEndpointIsLocal(s.client.endpoint))
-	if err != nil {
-		return "", err
-	}
 	var started appserver.ThreadStartResponse
 	if err := remoteSessionRequest(ctx, s.client, appserver.MethodThreadStart, params, &started); err != nil {
-		return "", err
+		return nil, err
 	}
-	threadID := ""
-	if started.Thread != nil {
-		threadID = strings.TrimSpace(started.Thread.ID)
+	if started.Thread == nil || strings.TrimSpace(started.Thread.ID) == "" {
+		return nil, errors.New("thread start response did not include a thread id")
 	}
-	if threadID == "" {
-		return "", errors.New("thread start response did not include a thread id")
-	}
-	var turnStarted turn.TurnStartResponse
-	if err := remoteSessionRequest(ctx, s.client, appserver.MethodTurnStart, turn.TurnStartParams{
-		ThreadID: threadID,
-		Input:    inputs,
-	}, &turnStarted); err != nil {
-		return threadID, err
-	}
-	return threadID, nil
+	return &started, nil
 }
 
 func (s *remoteAgentsDashboardSource) Stop(ctx context.Context, threadID string) error {
@@ -414,8 +409,8 @@ func (s *localAgentsDashboardSource) List(ctx context.Context) ([]agentsoverview
 	return agentsOverviewRowsFromRecords(records, ""), nil
 }
 
-func (s *localAgentsDashboardSource) Dispatch(ctx context.Context, request codextea.SubmitRequest, cwd string) (string, error) {
-	return "", errors.New("dispatching background tasks requires the background app server; start it with `codex app-server daemon start` or connect with `codex agents --remote`")
+func (s *localAgentsDashboardSource) NewSession(ctx context.Context, cwd string) (string, error) {
+	return "", errors.New("starting a session requires the background app server; start it with `codex app-server daemon start` or connect with `codex agents --remote`")
 }
 
 func (s *localAgentsDashboardSource) Stop(ctx context.Context, threadID string) error {
@@ -472,8 +467,9 @@ type agentsDashboardListMsg struct {
 	err  error
 }
 
-type agentsDashboardDispatchMsg struct {
+type agentsDashboardNewSessionMsg struct {
 	threadID string
+	cwd      string
 	err      error
 }
 
@@ -508,13 +504,17 @@ type agentsDashboardModel struct {
 	// pendingLifecycleArmed marks that the explicit confirmation required for
 	// permanent deletion has been requested once (Rust #44744).
 	pendingLifecycleArmed bool
+	// keymap resolves the dashboard's shortcut bindings (Rust resolves the
+	// command center's keys from the user's keymap).
+	keymap *codextui.KeymapConfig
 }
 
-func newAgentsDashboardModel(ctx context.Context, source agentsDashboardSource, worktreesEnabled ...bool) *agentsDashboardModel {
+func newAgentsDashboardModel(ctx context.Context, source agentsDashboardSource, keymap *codextui.KeymapConfig, worktreesEnabled ...bool) *agentsDashboardModel {
 	model := &agentsDashboardModel{
 		ctx:    ctx,
 		view:   agentsoverview.New(nil, "", true),
 		source: source,
+		keymap: keymap,
 		width:  100,
 		height: 24,
 	}
@@ -564,14 +564,22 @@ func (m *agentsDashboardModel) Update(message bubbletea.Msg) (bubbletea.Model, b
 		}
 		m.busy = false
 		return m, nil
-	case agentsDashboardDispatchMsg:
+	case agentsDashboardNewSessionMsg:
 		if msg.err != nil {
-			m.notice = "Failed to start background task: " + strings.TrimSpace(msg.err.Error())
-		} else if strings.TrimSpace(msg.threadID) != "" {
-			m.notice = "Dispatched task " + msg.threadID
+			m.notice = "Failed to start session: " + strings.TrimSpace(msg.err.Error())
+			m.busy = false
+			return m, nil
 		}
 		m.busy = false
-		return m, m.refreshCmd()
+		if strings.TrimSpace(msg.threadID) == "" {
+			m.notice = "Failed to start session: the server returned no thread id"
+			return m, nil
+		}
+		// Rust #45255: the started session becomes the dashboard's result, and
+		// the host opens it (no turn is sent).
+		m.done = true
+		m.result = &agentsDashboardResult{OpenedThreadID: strings.TrimSpace(msg.threadID), NewSession: true, CWD: strings.TrimSpace(msg.cwd)}
+		return m, bubbletea.Quit
 	case agentsDashboardStopMsg:
 		if msg.err != nil {
 			m.notice = "Failed to stop background task: " + strings.TrimSpace(msg.err.Error())
@@ -648,12 +656,10 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	case "end":
 		m.view.JumpBottom()
 	case "enter":
-		prompt := strings.TrimSpace(m.view.State.Input)
+		name := strings.TrimSpace(m.view.State.Input)
 		switch action := m.view.Activate(); action {
-		case agentsoverview.ActionDispatchTask:
-			return m.dispatchCmd(prompt)
 		case agentsoverview.ActionRenameThread:
-			return m.renameCmd(prompt)
+			return m.renameCmd(name)
 		case agentsoverview.ActionOpenThread:
 			m.done = true
 			m.result = &agentsDashboardResult{OpenedThreadID: m.view.SelectedThreadID()}
@@ -667,45 +673,73 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 	case "backspace":
 		m.view.Backspace()
-	case "ctrl+f":
+	case "ctrl+c":
+		m.done = true
+		return bubbletea.Quit
+	}
+	// Rust #45255: while the search or rename field owns the editor, plain
+	// characters edit it instead of triggering a dashboard shortcut.
+	if m.view.State.Searching || m.view.State.Renaming {
+		if msg.Type == bubbletea.KeyRunes && !msg.Alt {
+			for _, r := range msg.Runes {
+				m.view.TypeChar(r)
+			}
+		}
+		return nil
+	}
+	// Rust #45255: the dashboard shortcuts are single-letter bindings resolved
+	// from the user's keymap.
+	if m.agentKey("search", msg) && !m.view.State.Renaming {
 		m.view.ToggleSearch()
-	case "ctrl+s":
-		m.view.ToggleGrouping()
-	case "ctrl+n":
-		m.view.ClearNew()
-	case "ctrl+r":
+	}
+	if m.agentKey("new_task", msg) {
+		return m.newSessionCmd()
+	}
+	if m.agentKey("rename", msg) {
 		m.view.BeginRename()
-	case "ctrl+x":
+	}
+	if m.agentKey("stop", msg) {
 		if action := m.view.StopSelected(); action == agentsoverview.ActionStopThread {
 			return m.stopCmd(m.view.SelectedThreadID())
 		}
-	case "ctrl+e":
+	}
+	if m.agentKey("archive", msg) {
 		if action := m.view.ArchiveSelected(); action == agentsoverview.ActionArchiveThread {
 			m.pendingLifecycle = "archive"
 			m.pendingThreadID = m.view.SelectedThreadID()
 			m.pendingLifecycleArmed = false
 		}
-	case "delete":
+	}
+	if m.agentKey("delete", msg) {
 		if action := m.view.DeleteSelected(); action == agentsoverview.ActionDeleteThread {
 			m.pendingLifecycle = "delete"
 			m.pendingThreadID = m.view.SelectedThreadID()
 			m.pendingLifecycleArmed = false
 		}
-	case "ctrl+c":
-		m.done = true
-		return bubbletea.Quit
-	default:
-		if msg.Type == bubbletea.KeyRunes {
-			for _, r := range msg.Runes {
-				m.view.TypeChar(r)
-			}
-		}
+	}
+	if m.agentKey("toggle_grouping", msg) {
+		m.view.ToggleGrouping()
 	}
 	return nil
 }
 
-func (m *agentsDashboardModel) dispatchCmd(prompt string) bubbletea.Cmd {
-	if m == nil || m.source == nil || prompt == "" || m.busy {
+// agentKey reports whether the key event matches the resolved binding for one
+// agents-dashboard action.
+func (m *agentsDashboardModel) agentKey(action string, msg bubbletea.KeyMsg) bool {
+	if m == nil {
+		return false
+	}
+	spec := codextea.KeySpecFromKeyMsg(msg)
+	if spec == "" {
+		return false
+	}
+	return codextui.KeymapActionHasBinding(m.keymap, "agents", action, spec)
+}
+
+// newSessionCmd opens a new session in the selected checkout without sending a
+// turn, so running agents keep running (Rust #45255 `n`).
+func (m *agentsDashboardModel) newSessionCmd() bubbletea.Cmd {
+	if m == nil || m.source == nil || m.busy {
 		return nil
 	}
 	cwd := ""
@@ -716,8 +750,8 @@ func (m *agentsDashboardModel) dispatchCmd(prompt string) bubbletea.Cmd {
 	}
 	m.busy = true
 	return func() bubbletea.Msg {
-		threadID, err := m.source.Dispatch(m.ctx, codextea.SubmitRequest{Prompt: prompt}, cwd)
-		return agentsDashboardDispatchMsg{threadID: threadID, err: err}
+		threadID, err := m.source.NewSession(m.ctx, cwd)
+		return agentsDashboardNewSessionMsg{threadID: threadID, cwd: cwd, err: err}
 	}
 }
 
@@ -798,11 +832,11 @@ func (m *agentsDashboardModel) View() string {
 
 // runAgentsDashboard runs the interactive agents-overview dashboard until the
 // user exits (esc) or opens a root session (enter on a row).
-func runAgentsDashboard(ctx context.Context, source agentsDashboardSource, opts *cli.AgentsOptions, stdin io.Reader, stdout io.Writer, worktreesEnabled bool) (*agentsDashboardResult, error) {
+func runAgentsDashboard(ctx context.Context, source agentsDashboardSource, opts *cli.AgentsOptions, stdin io.Reader, stdout io.Writer, keymap *codextui.KeymapConfig, worktreesEnabled bool) (*agentsDashboardResult, error) {
 	if source == nil {
 		return nil, errors.New("agents dashboard source is unavailable")
 	}
-	model := newAgentsDashboardModel(ctx, source, worktreesEnabled)
+	model := newAgentsDashboardModel(ctx, source, keymap, worktreesEnabled)
 	programOptions := []bubbletea.ProgramOption{bubbletea.WithInput(stdin), bubbletea.WithOutput(stdout)}
 	if opts == nil || !opts.NoAltScreen {
 		programOptions = append(programOptions, bubbletea.WithAltScreen())
@@ -825,6 +859,17 @@ func writeAgentsOpenedSession(ctx context.Context, result *agentsDashboardResult
 		return nil
 	}
 	threadID := strings.TrimSpace(result.OpenedThreadID)
+	// A session this dashboard just started has no rollout yet, so it is not
+	// resumable until its first prompt (Rust #45255).
+	if result.NewSession {
+		cwd := strings.TrimSpace(result.CWD)
+		if cwd == "" {
+			cwd = "the selected checkout"
+		}
+		fmt.Fprintf(stdout, "Started a new session %s in %s.\n", threadID, cwd)
+		fmt.Fprintln(stdout, "Send its first prompt to make it resumable.")
+		return nil
+	}
 	name := ""
 	if endpoint != nil {
 		client, err := openRemoteSessionClient(ctx, endpoint)
