@@ -3,24 +3,246 @@ package config
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+
+	"codex_go/protocol"
 )
 
 // Rust parity: codex-rs/core/src/config/otel.rs (resolve_config with
 // resolve_span_attributes / resolve_tracestate) and the validators it calls in
-// codex-otel (validate_span_attributes, validate_tracestate_member(s) with
-// encode_tracestate_member_fields, and opentelemetry's
-// TraceState::from_key_value).
+// codex-otel, plus the codex_config::types::OtelConfig shape it produces.
 //
-// Go has no OTEL provider yet, so the exporter kinds and the provider wiring are
-// not resolved here. The user-visible half of the resolution is the trace
-// metadata: malformed `otel.span_attributes` / `otel.tracestate` entries are
-// filtered out and reported through config.startup_warnings rather than failing
-// startup.
+// Go has no OTEL provider yet, so this resolves the effective `otel` settings
+// (exporter kinds, environment, log_user_prompt, and the tool-result log byte
+// limit) for a future provider. The user-visible half of the resolution is the
+// trace metadata: malformed `otel.span_attributes` / `otel.tracestate` entries
+// are filtered out and reported through config.startup_warnings rather than
+// failing startup.
 
-// otelDefaultEnvironment mirrors Rust's DEFAULT_OTEL_ENVIRONMENT. It is recorded
-// here so the later provider slice resolves the same default.
-const otelDefaultEnvironment = "dev"
+// DefaultOtelEnvironment mirrors Rust's DEFAULT_OTEL_ENVIRONMENT.
+const DefaultOtelEnvironment = "dev"
+
+// Otel exporter kind tags, mirroring codex_config::types::OtelExporterKind's
+// kebab-case serde representation.
+const (
+	OtelExporterKindNone     = "none"
+	OtelExporterKindStatsig  = "statsig"
+	OtelExporterKindOtlpHTTP = "otlp-http"
+	OtelExporterKindOtlpGRPC = "otlp-grpc"
+)
+
+// OTLP HTTP protocol tags, mirroring OtelHttpProtocol.
+const (
+	OtelHTTPProtocolBinary = "binary"
+	OtelHTTPProtocolJSON   = "json"
+)
+
+// OtelTLSConfig mirrors codex_config::types::OtelTlsConfig: the paths of the CA
+// certificate and the optional mTLS client identity.
+type OtelTLSConfig struct {
+	CACertificate     string
+	ClientCertificate string
+	ClientPrivateKey  string
+}
+
+// OtelExporterKind mirrors codex_config::types::OtelExporterKind. Kind selects
+// the variant; the remaining fields are populated for the OTLP variants.
+type OtelExporterKind struct {
+	Kind     string
+	Endpoint string
+	Headers  map[string]string
+	Protocol string
+	TLS      *OtelTLSConfig
+}
+
+// OtelConfig mirrors codex_config::types::OtelConfig: the effective settings
+// after defaults are applied.
+type OtelConfig struct {
+	ToolResult      protocol.ToolResultLogConfig
+	LogUserPrompt   bool
+	Environment     string
+	Exporter        OtelExporterKind
+	TraceExporter   OtelExporterKind
+	MetricsExporter OtelExporterKind
+	SpanAttributes  map[string]string
+	Tracestate      map[string]map[string]string
+}
+
+// DefaultOtelConfig mirrors OtelConfig::default: no log/trace exporter, the
+// Statsig metrics route, the dev environment, and the default tool-result byte
+// limit.
+func DefaultOtelConfig() OtelConfig {
+	return OtelConfig{
+		ToolResult:      protocol.DefaultToolResultLogConfig(),
+		Environment:     DefaultOtelEnvironment,
+		Exporter:        OtelExporterKind{Kind: OtelExporterKindNone},
+		TraceExporter:   OtelExporterKind{Kind: OtelExporterKindNone},
+		MetricsExporter: OtelExporterKind{Kind: OtelExporterKindStatsig},
+		SpanAttributes:  map[string]string{},
+		Tracestate:      map[string]map[string]string{},
+	}
+}
+
+// ResolveOtelConfig mirrors codex-rs/core/src/config/otel.rs::resolve_config:
+// apply the defaults, keep the raw exporter kinds, and sanitize the trace
+// metadata (the only part that can warn rather than fail startup).
+func ResolveOtelConfig(values map[string]any) (OtelConfig, []string) {
+	resolved := DefaultOtelConfig()
+	otel, _ := values["otel"].(map[string]any)
+	if otel == nil {
+		return resolved, nil
+	}
+	if raw, ok := otelConfigInt(otel["tool_result"]); ok {
+		resolved.ToolResult = protocol.ToolResultLogConfig{MaxBytes: raw}
+	}
+	if logUserPrompt, ok := otel["log_user_prompt"].(bool); ok {
+		resolved.LogUserPrompt = logUserPrompt
+	}
+	if environment, ok := otel["environment"].(string); ok && environment != "" {
+		resolved.Environment = environment
+	}
+	if exporter, ok := otelExporterKind(otel["exporter"]); ok {
+		resolved.Exporter = exporter
+	}
+	if exporter, ok := otelExporterKind(otel["trace_exporter"]); ok {
+		resolved.TraceExporter = exporter
+	}
+	if exporter, ok := otelExporterKind(otel["metrics_exporter"]); ok {
+		resolved.MetricsExporter = exporter
+	}
+	metadata, warnings := ResolveOtelTraceMetadata(values)
+	resolved.SpanAttributes = metadata.SpanAttributes
+	resolved.Tracestate = metadata.Tracestate
+	return resolved, warnings
+}
+
+// Otel returns the resolved OTEL settings for this config (Rust's
+// `Config::otel`), applying the `OtelConfig` defaults to the raw values.
+func (c *Config) Otel() OtelConfig {
+	if c == nil {
+		return DefaultOtelConfig()
+	}
+	resolved, _ := ResolveOtelConfig(c.Values)
+	return resolved
+}
+
+// otelExporterKind parses one exporter kind from the untyped config values. An
+// absent or malformed value keeps the caller's default, which mirrors the Go
+// loader's tolerant shape handling (Rust's typed deserialization would fail
+// startup instead).
+func otelExporterKind(value any) (OtelExporterKind, bool) {
+	switch typed := value.(type) {
+	case string:
+		switch typed {
+		case OtelExporterKindNone:
+			return OtelExporterKind{Kind: OtelExporterKindNone}, true
+		case OtelExporterKindStatsig:
+			return OtelExporterKind{Kind: OtelExporterKindStatsig}, true
+		}
+	case map[string]any:
+		if len(typed) != 1 {
+			return OtelExporterKind{}, false
+		}
+		for kind, raw := range typed {
+			switch kind {
+			case OtelExporterKindOtlpHTTP:
+				return otelOtlpHTTPExporter(raw)
+			case OtelExporterKindOtlpGRPC:
+				return otelOtlpGRPCExporter(raw)
+			}
+		}
+	}
+	return OtelExporterKind{}, false
+}
+
+func otelOtlpHTTPExporter(value any) (OtelExporterKind, bool) {
+	table, ok := value.(map[string]any)
+	if !ok {
+		return OtelExporterKind{}, false
+	}
+	endpoint, ok := table["endpoint"].(string)
+	if !ok || endpoint == "" {
+		return OtelExporterKind{}, false
+	}
+	// Rust's OtlpHttpKind has no serde default for protocol, so a missing or
+	// unknown protocol is not a valid exporter.
+	protocol, ok := table["protocol"].(string)
+	if !ok || (protocol != OtelHTTPProtocolBinary && protocol != OtelHTTPProtocolJSON) {
+		return OtelExporterKind{}, false
+	}
+	return OtelExporterKind{
+		Kind:     OtelExporterKindOtlpHTTP,
+		Endpoint: endpoint,
+		Headers:  otelStringMap(table["headers"]),
+		Protocol: protocol,
+		TLS:      otelTLSConfig(table["tls"]),
+	}, true
+}
+
+func otelOtlpGRPCExporter(value any) (OtelExporterKind, bool) {
+	table, ok := value.(map[string]any)
+	if !ok {
+		return OtelExporterKind{}, false
+	}
+	endpoint, ok := table["endpoint"].(string)
+	if !ok || endpoint == "" {
+		return OtelExporterKind{}, false
+	}
+	return OtelExporterKind{
+		Kind:     OtelExporterKindOtlpGRPC,
+		Endpoint: endpoint,
+		Headers:  otelStringMap(table["headers"]),
+		TLS:      otelTLSConfig(table["tls"]),
+	}, true
+}
+
+// otelTLSConfig reads `tls` as an OtelTlsConfig table; absent means "no
+// explicit TLS settings".
+func otelTLSConfig(value any) *OtelTLSConfig {
+	table, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	config := &OtelTLSConfig{}
+	if path, ok := table["ca_certificate"].(string); ok {
+		config.CACertificate = path
+	}
+	if path, ok := table["client_certificate"].(string); ok {
+		config.ClientCertificate = path
+	}
+	if path, ok := table["client_private_key"].(string); ok {
+		config.ClientPrivateKey = path
+	}
+	return config
+}
+
+// otelConfigInt reads `otel.tool_result.max_bytes` from its table.
+func otelConfigInt(value any) (int, bool) {
+	table, ok := value.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	switch typed := table["max_bytes"].(type) {
+	case int64:
+		if typed >= 0 {
+			return int(typed), true
+		}
+	case int:
+		if typed >= 0 {
+			return typed, true
+		}
+	case float64:
+		if typed >= 0 && typed == float64(int64(typed)) {
+			return int(typed), true
+		}
+	case string:
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64); err == nil && parsed >= 0 {
+			return int(parsed), true
+		}
+	}
+	return 0, false
+}
 
 // OtelTraceMetadata is the resolved trace metadata after Rust's filtering.
 type OtelTraceMetadata struct {

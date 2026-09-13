@@ -28,6 +28,27 @@ func TestResolveOtelTraceMetadataKeepsValidEntries(t *testing.T) {
 	}
 }
 
+// Config.Otel exposes the resolved settings like Rust's Config::otel.
+func TestConfigOtelResolvesSettings(t *testing.T) {
+	cfg := &Config{Values: map[string]any{
+		"otel": map[string]any{
+			"environment":      "prod",
+			"metrics_exporter": "none",
+			"tool_result":      map[string]any{"max_bytes": int64(1024)},
+		},
+	}}
+	resolved := cfg.Otel()
+	if resolved.Environment != "prod" || resolved.MetricsExporter.Kind != OtelExporterKindNone {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	if resolved.ToolResult.MaxBytes != 1024 {
+		t.Fatalf("tool result bytes = %d", resolved.ToolResult.MaxBytes)
+	}
+	if (&Config{}).Otel().MetricsExporter.Kind != OtelExporterKindStatsig {
+		t.Fatal("an empty config did not keep the Statsig metrics default")
+	}
+}
+
 // Mirrors Rust's load_config_drops_invalid_otel_trace_metadata_entries.
 func TestResolveOtelTraceMetadataDropsInvalidEntries(t *testing.T) {
 	values := map[string]any{
@@ -138,4 +159,131 @@ func containsWarning(warnings []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// Mirrors OtelConfig::default and Rust's metrics_exporter_defaults_to_statsig.
+func TestResolveOtelConfigDefaults(t *testing.T) {
+	resolved, warnings := ResolveOtelConfig(map[string]any{})
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+	if resolved.MetricsExporter.Kind != OtelExporterKindStatsig {
+		t.Fatalf("metrics exporter = %#v", resolved.MetricsExporter)
+	}
+	if resolved.Exporter.Kind != OtelExporterKindNone || resolved.TraceExporter.Kind != OtelExporterKindNone {
+		t.Fatalf("log/trace exporter = %#v / %#v", resolved.Exporter, resolved.TraceExporter)
+	}
+	if resolved.Environment != DefaultOtelEnvironment || resolved.LogUserPrompt {
+		t.Fatalf("environment = %q log_user_prompt = %v", resolved.Environment, resolved.LogUserPrompt)
+	}
+	if resolved.ToolResult.MaxBytes != 2*1024 {
+		t.Fatalf("tool result bytes = %d", resolved.ToolResult.MaxBytes)
+	}
+}
+
+// Mirrors Rust's trace_exporter_defaults_to_none_when_log_exporter_is_set: an
+// OTLP HTTP log exporter must not implicitly enable a trace exporter, and the
+// tool-result limit is read from its table.
+func TestResolveOtelConfigExporterKinds(t *testing.T) {
+	resolved, warnings := ResolveOtelConfig(map[string]any{
+		"otel": map[string]any{
+			"exporter": map[string]any{
+				"otlp-http": map[string]any{
+					"endpoint": "http://localhost:14318/v1/logs",
+					"protocol": OtelHTTPProtocolBinary,
+				},
+			},
+			"metrics_exporter": "none",
+			"tool_result":      map[string]any{"max_bytes": int64(8192)},
+		},
+	})
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+	if resolved.ToolResult.MaxBytes != 8192 {
+		t.Fatalf("tool result bytes = %d", resolved.ToolResult.MaxBytes)
+	}
+	if resolved.Exporter.Kind != OtelExporterKindOtlpHTTP ||
+		resolved.Exporter.Endpoint != "http://localhost:14318/v1/logs" ||
+		resolved.Exporter.Protocol != OtelHTTPProtocolBinary {
+		t.Fatalf("log exporter = %#v", resolved.Exporter)
+	}
+	if resolved.TraceExporter.Kind != OtelExporterKindNone {
+		t.Fatalf("trace exporter = %#v", resolved.TraceExporter)
+	}
+	if resolved.MetricsExporter.Kind != OtelExporterKindNone {
+		t.Fatalf("metrics exporter = %#v", resolved.MetricsExporter)
+	}
+}
+
+// OTLP HTTP and gRPC kinds carry their endpoint, headers, protocol, and TLS.
+func TestResolveOtelConfigOtlpVariants(t *testing.T) {
+	resolved, _ := ResolveOtelConfig(map[string]any{
+		"otel": map[string]any{
+			"metrics_exporter": map[string]any{
+				"otlp-http": map[string]any{
+					"endpoint": "https://metrics.example/v1/metrics",
+					"protocol": OtelHTTPProtocolJSON,
+					"headers":  map[string]any{"statsig-api-key": "token"},
+					"tls": map[string]any{
+						"ca_certificate":     "/etc/ca.pem",
+						"client_certificate": "/etc/client.pem",
+						"client_private_key": "/etc/client.key",
+					},
+				},
+			},
+			"trace_exporter": map[string]any{
+				"otlp-grpc": map[string]any{
+					"endpoint": "https://traces.example:4317",
+					"headers":  map[string]any{"authorization": "Bearer token"},
+				},
+			},
+		},
+	})
+	metrics := resolved.MetricsExporter
+	if metrics.Kind != OtelExporterKindOtlpHTTP || metrics.Protocol != OtelHTTPProtocolJSON ||
+		metrics.Headers["statsig-api-key"] != "token" {
+		t.Fatalf("metrics exporter = %#v", metrics)
+	}
+	if metrics.TLS == nil || metrics.TLS.CACertificate != "/etc/ca.pem" ||
+		metrics.TLS.ClientCertificate != "/etc/client.pem" || metrics.TLS.ClientPrivateKey != "/etc/client.key" {
+		t.Fatalf("metrics tls = %#v", metrics.TLS)
+	}
+	traces := resolved.TraceExporter
+	if traces.Kind != OtelExporterKindOtlpGRPC || traces.Endpoint != "https://traces.example:4317" ||
+		traces.Headers["authorization"] != "Bearer token" || traces.TLS != nil {
+		t.Fatalf("trace exporter = %#v", traces)
+	}
+}
+
+// environment and log_user_prompt are applied when present.
+func TestResolveOtelConfigScalars(t *testing.T) {
+	resolved, _ := ResolveOtelConfig(map[string]any{
+		"otel": map[string]any{
+			"environment":     "staging",
+			"log_user_prompt": true,
+		},
+	})
+	if resolved.Environment != "staging" || !resolved.LogUserPrompt {
+		t.Fatalf("environment = %q log_user_prompt = %v", resolved.Environment, resolved.LogUserPrompt)
+	}
+}
+
+// A malformed exporter kind is ignored (the Go loader keeps the default;
+// Rust's typed deserialization would reject the config instead).
+func TestResolveOtelConfigIgnoresMalformedExporters(t *testing.T) {
+	for name, raw := range map[string]any{
+		"unknown string":        "otlp",
+		"http without protocol": map[string]any{"otlp-http": map[string]any{"endpoint": "https://x"}},
+		"http without endpoint": map[string]any{"otlp-http": map[string]any{"protocol": OtelHTTPProtocolJSON}},
+		"two variants": map[string]any{
+			"otlp-http": map[string]any{"endpoint": "https://x", "protocol": OtelHTTPProtocolJSON},
+			"otlp-grpc": map[string]any{"endpoint": "https://y"},
+		},
+	} {
+		resolved, _ := ResolveOtelConfig(map[string]any{"otel": map[string]any{"exporter": raw}})
+		if resolved.Exporter.Kind != OtelExporterKindNone {
+			t.Fatalf("%s: exporter = %#v", name, resolved.Exporter)
+		}
+	}
 }
