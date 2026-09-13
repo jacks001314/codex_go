@@ -460,3 +460,63 @@ func TestAutoReviewApprovalsRouteThroughGuardianLikeRust(t *testing.T) {
 		t.Fatalf("guardian patch action = %#v", patchAction)
 	}
 }
+
+// Rust runs PermissionRequest hooks before the Guardian review for a
+// request_permissions call as well.
+func TestRequestPermissionsRunsPermissionRequestHooksLikeRust(t *testing.T) {
+	run := func(t *testing.T, hookCommand string) tool.RequestPermissionsDecision {
+		t.Helper()
+		home := t.TempDir()
+		cwd := t.TempDir()
+		projectTrust := strings.ReplaceAll(filepath.Clean(cwd), `\`, `\\`)
+		configBody := "model = \"gpt-5.4\"\nbypass_hook_trust = true\n[projects.\"" + projectTrust + "\"]\ntrust_level = \"trusted\"\n"
+		if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+			t.Fatalf("WriteFile config error = %v", err)
+		}
+		hooksDir := filepath.Join(cwd, ".gcode")
+		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		hooksJSON, err := json.Marshal(map[string]any{
+			"hooks": map[string]any{
+				"PermissionRequest": []any{map[string]any{
+					"matcher": "request_permissions",
+					"hooks":   []any{map[string]any{"type": "command", "command": hookCommand}},
+				}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Marshal hooks error = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), hooksJSON, 0o600); err != nil {
+			t.Fatalf("WriteFile hooks error = %v", err)
+		}
+		router := NewRuntimeRouter(RuntimeServices{
+			DefaultCWD:     cwd,
+			Config:         config.NewConfigService(home),
+			HooksDiscovery: NewHookDiscoveryService(home),
+			HookRunner:     NewHookRunner(),
+		})
+		params := &turn.TurnStartParams{ThreadID: "thread-1", CWD: cwd, Model: "gpt-5.4"}
+		if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, params); err != nil {
+			t.Fatalf("RegisterTurn() error = %v", err)
+		}
+		decision, err := router.requestPermissionsGuardianReviewer("thread-1")(
+			context.Background(), "", "turn-1", "call-1", "need repository write access",
+			map[string]any{"write": true},
+		)
+		if err != nil {
+			t.Fatalf("request_permissions review error = %v", err)
+		}
+		return decision
+	}
+
+	allowed := run(t, hookRunnerOutputCommand(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, ""))
+	if !allowed.Approved {
+		t.Fatalf("hook allow did not approve request_permissions: %#v", allowed)
+	}
+	denied := run(t, hookRunnerPermissionRequestDenyCommand("permissions are not granted here"))
+	if denied.Approved || denied.Reason != "permissions are not granted here" {
+		t.Fatalf("hook deny = %#v", denied)
+	}
+}

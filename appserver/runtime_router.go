@@ -13135,6 +13135,20 @@ func (r *RuntimeRouter) requestPermissionsGuardianReviewer(threadID string) tool
 		if strings.TrimSpace(reviewThreadID) != "" {
 			threadID = strings.TrimSpace(reviewThreadID)
 		}
+		// Rust Session::request_approval: PermissionRequest hooks decide before
+		// the Guardian review for a request_permissions call too.
+		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, callID, "request_permissions", nil, requestPermissionsHookToolInput(reason, permissions)); ok && verdict != nil {
+			switch verdict.Kind {
+			case HookPermissionRequestAllow:
+				return tool.RequestPermissionsDecision{Approved: true}, nil
+			case HookPermissionRequestDeny:
+				denyReason := ""
+				if verdict.Message != nil {
+					denyReason = strings.TrimSpace(*verdict.Message)
+				}
+				return tool.RequestPermissionsDecision{Reason: denyReason}, nil
+			}
+		}
 		reviewer := r.ensureGuardianReviewer(r.services.Agent)
 		action := state.Action{
 			Type:        "request_permissions",
@@ -14721,6 +14735,22 @@ func (r *RuntimeRouter) reviewApprovalWithGuardian(ctx context.Context, threadID
 		}
 		return guardianApprovalOutcome{DenyReason: reason}
 	}
+}
+
+// requestPermissionsHookToolInput mirrors Rust's RequestPermissions permission
+// payload: the hook input carries the reason and the requested permissions.
+func requestPermissionsHookToolInput(reason string, permissions map[string]any) map[string]any {
+	input := map[string]any{}
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		input["reason"] = trimmed
+	}
+	if len(permissions) > 0 {
+		input["permissions"] = permissions
+	}
+	if len(input) == 0 {
+		return nil
+	}
+	return input
 }
 
 // commandApprovalAction mirrors Rust's GuardianApprovalRequest::ExecCommand for
