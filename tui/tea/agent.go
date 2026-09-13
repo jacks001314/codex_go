@@ -330,35 +330,98 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 
 // replayBufferedReasoning restores a switched-to thread's active reasoning item
 // from its buffered events when the read snapshot did not identify one (Rust
-// #43921 ReasoningReplay). The first reasoning item with buffered deltas becomes
-// the active item and its streamed summary seeds the heading, so the live
-// heading survives events the bounded buffer already replayed.
+// #43921 ReasoningReplay). The buffer's own start/complete events carry the
+// store's active-reasoning marker, so a started item becomes the active one and
+// its completion or a turn boundary clears it; a buffer without an explicit
+// reasoning start falls back to the resumed turn's first streamed delta (Rust
+// recover_resumed_reasoning).
 func (m *Model) replayBufferedReasoning(events []protocol.ThreadEvent) {
 	if m == nil || m.reasoningItemID != "" {
 		return
 	}
-	itemID := ""
+	marker, markerSeen := bufferedReasoningMarker(events)
+	if markerSeen {
+		if marker == "" {
+			// The buffer showed the item completing (or its turn ending), so no
+			// item owns later deltas and the retained heading stays as-is.
+			return
+		}
+		m.accumulateBufferedReasoningDeltas(events, marker)
+		m.reasoningItemID = marker
+		m.reasoningResumeTurnID = ""
+		m.restoreReasoningStatusHeader()
+		return
+	}
+	// No explicit start was retained: adopt the resumed turn's first streamed
+	// reasoning delta so the live heading survives events the bounded buffer
+	// already replayed.
+	m.accumulateBufferedReasoningDeltas(events, bufferedReasoningDeltaItem(events))
+}
+
+// bufferedReasoningMarker mirrors Rust ThreadEventStore's active-reasoning
+// marker lifecycle over buffered events: an item/started reasoning item sets
+// the marker, and its item/completed (or a turn boundary) clears it. The boolean
+// reports whether the buffer tracked an explicit reasoning start at all.
+func bufferedReasoningMarker(events []protocol.ThreadEvent) (string, bool) {
+	marker := ""
+	seen := false
+	for _, event := range events {
+		switch event.Type {
+		case "item.started":
+			if itemID := bufferedReasoningItemID(event.Item); itemID != "" {
+				marker = itemID
+				seen = true
+			}
+		case "item.completed":
+			if itemID := bufferedReasoningItemID(event.Item); itemID != "" && itemID == marker {
+				marker = ""
+			}
+		case "turn.started", "turn.completed", "turn.failed":
+			marker = ""
+		}
+	}
+	return marker, seen
+}
+
+// bufferedReasoningItemID returns a reasoning item's id.
+func bufferedReasoningItemID(item *protocol.ThreadItem) string {
+	if item == nil || item.Type != "reasoning" {
+		return ""
+	}
+	return strings.TrimSpace(item.ID)
+}
+
+// bufferedReasoningDeltaItem returns the first reasoning item with buffered
+// deltas.
+func bufferedReasoningDeltaItem(events []protocol.ThreadEvent) string {
 	for _, event := range events {
 		if event.Type != "item.reasoning.delta" || event.Delta == nil {
 			continue
 		}
-		deltaItemID := strings.TrimSpace(event.Delta.ItemID)
-		if deltaItemID == "" {
+		if itemID := strings.TrimSpace(event.Delta.ItemID); itemID != "" {
+			return itemID
+		}
+	}
+	return ""
+}
+
+// accumulateBufferedReasoningDeltas appends the item's buffered summary deltas
+// and, when they carry a usable line, makes it the live reasoning item.
+func (m *Model) accumulateBufferedReasoningDeltas(events []protocol.ThreadEvent, itemID string) {
+	if m == nil || itemID == "" {
+		return
+	}
+	for _, event := range events {
+		if event.Type != "item.reasoning.delta" || event.Delta == nil {
 			continue
 		}
-		if itemID == "" {
-			itemID = deltaItemID
-		}
-		if deltaItemID != itemID {
+		if strings.TrimSpace(event.Delta.ItemID) != itemID {
 			continue
 		}
 		if m.reasoningSummaryBuffers == nil {
 			m.reasoningSummaryBuffers = map[string]string{}
 		}
 		m.reasoningSummaryBuffers[itemID] += event.Delta.Text
-	}
-	if itemID == "" {
-		return
 	}
 	if _, ok := chatwidget.LatestSummaryLine(m.reasoningSummaryBuffers[itemID]); !ok {
 		return
