@@ -3,6 +3,7 @@ package appserver
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"codex_go/model"
 	"codex_go/telemetry"
@@ -178,6 +179,19 @@ func (r *RuntimeRouter) emitToolCallMetrics(sink telemetry.TurnMetricSink, execu
 		duration = 0
 	}
 	sink.RecordDuration(telemetry.ToolCallDurationMetric, duration, tags)
+}
+
+// emitTurnE2EDurationMetric mirrors Rust's TURN_E2E_DURATION_METRIC timer: the
+// wall-clock duration of the turn task, recorded untagged when the task ends
+// (success, failure, or interruption).
+func (r *RuntimeRouter) emitTurnE2EDurationMetric(sink telemetry.TurnMetricSink, durationMS int64) {
+	if sink == nil {
+		return
+	}
+	if durationMS < 0 {
+		durationMS = 0
+	}
+	sink.RecordDuration(telemetry.TurnE2EDurationMetric, time.Duration(durationMS)*time.Millisecond, nil)
 }
 
 // emitTurnNetworkProxyMetric records the codex.turn.network_proxy counter with

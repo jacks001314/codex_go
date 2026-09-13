@@ -200,6 +200,39 @@ func TestRuntimeRouterTurnCompletionEmitsPerModelTokenUsage(t *testing.T) {
 			t.Fatalf("records for %s = %d, want 1 (all %#v)", name, counts[name], counts)
 		}
 	}
+	// Rust's turn task timer records the untagged end-to-end duration when the
+	// task ends.
+	if counts[telemetry.TurnE2EDurationMetric] != 1 {
+		t.Fatalf("codex.turn.e2e_duration_ms records = %d, want 1 (all %#v)", counts[telemetry.TurnE2EDurationMetric], counts)
+	}
+	for _, record := range metrics.Records() {
+		if record.Name != telemetry.TurnE2EDurationMetric {
+			continue
+		}
+		if record.Kind != "duration" || len(record.Tags) != 0 || record.DurationMS < 0 {
+			t.Fatalf("e2e duration record = %#v", record)
+		}
+	}
+}
+
+// The end-to-end duration helper clamps a negative duration and ignores a nil
+// sink.
+func TestEmitTurnE2EDurationMetric(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	router := NewRuntimeRouter(RuntimeServices{TurnMetrics: metrics})
+	router.emitTurnE2EDurationMetric(metrics, 250)
+	router.emitTurnE2EDurationMetric(metrics, -5)
+	router.emitTurnE2EDurationMetric(nil, 250)
+	records := metrics.Records()
+	if len(records) != 2 {
+		t.Fatalf("records = %#v", records)
+	}
+	if records[0].Name != telemetry.TurnE2EDurationMetric || records[0].DurationMS != 250 || len(records[0].Tags) != 0 {
+		t.Fatalf("first record = %#v", records[0])
+	}
+	if records[1].DurationMS != 0 {
+		t.Fatalf("clamped record = %#v", records[1])
+	}
 }
 
 // TestEmitTurnTokenUsageMetricsEmitsPerModelSamples proves the histogram is

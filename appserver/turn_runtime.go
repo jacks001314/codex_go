@@ -1610,6 +1610,8 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.finishStateThreadGoalTurn(threadID, turnID, completedAt, model.AgentUsageTotalTokens(result.Usage), nil)
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
+	// Rust's turn task timer records the end-to-end duration when the task ends.
+	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)
 	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
 	if summary := finalAgentMessageSummary(threadItems); len(summary) > 0 {
 		completedTurn.Items = summary
@@ -3499,6 +3501,7 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusFailed)
+	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)
 	r.notify(NotificationError, &ErrorNotification{
 		Error:     *appErr,
 		WillRetry: false,
@@ -3539,6 +3542,7 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID s
 	_ = r.appendRuntimeTurnAborted(threadID, turnID, "interrupted", now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusInterrupted)
+	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
 		Turn:     completedTurnNotificationTurn(turnID, TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
