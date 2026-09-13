@@ -2,10 +2,13 @@ package compact
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+
+	"codex_go/audioutil"
 )
 
 func TestEvaluatePolicy(t *testing.T) {
@@ -581,4 +584,52 @@ func TestEstimateToolItemTokensLikeRust(t *testing.T) {
 	if got := EstimateItemTokens(&custom); got != (wantCustom+3)/4 {
 		t.Fatalf("custom output estimate = %d, want %d", got, (wantCustom+3)/4)
 	}
+}
+
+// TestEstimateAudioOutputTokensLikeRust pins Rust #45094's audio arm: an audio
+// content block contributes approx_bytes_for_tokens over its duration-derived
+// token count (20 tokens for 2 s at 10 tokens/s => 80 bytes).
+func TestEstimateAudioOutputTokensLikeRust(t *testing.T) {
+	audioURL := compactWavDataURL(t)
+	if tokens := audioutil.EstimateAudioTokenCount(audioURL); tokens != 20 {
+		t.Fatalf("audio token estimate = %d, want 20", tokens)
+	}
+	item := Item{Type: "function_call_output", CallID: "call-audio", Content: []ContentPart{
+		{Type: "input_audio", AudioURL: audioURL},
+	}}
+	wantBytes := len("call-audio") + audioutil.EstimateAudioTokenCount(audioURL)*4
+	if got := EstimateItemTokens(&item); got != (wantBytes+3)/4 {
+		t.Fatalf("audio output estimate = %d, want %d", got, (wantBytes+3)/4)
+	}
+}
+
+// compactWavDataURL builds 2 s of 8 kHz mono 16-bit PCM as a data URL, matching
+// the audioutil duration estimate (10 tokens/s).
+func compactWavDataURL(t *testing.T) string {
+	t.Helper()
+	dataSize := uint32(32000)
+	buffer := make([]byte, 0, 44+int(dataSize))
+	buffer = append(buffer, "RIFF"...)
+	buffer = appendCompactUint32LE(buffer, 36+dataSize)
+	buffer = append(buffer, "WAVE"...)
+	buffer = append(buffer, "fmt "...)
+	buffer = appendCompactUint32LE(buffer, 16)
+	buffer = appendCompactUint16LE(buffer, 1)
+	buffer = appendCompactUint16LE(buffer, 1)
+	buffer = appendCompactUint32LE(buffer, 8000)
+	buffer = appendCompactUint32LE(buffer, 16000)
+	buffer = appendCompactUint16LE(buffer, 2)
+	buffer = appendCompactUint16LE(buffer, 16)
+	buffer = append(buffer, "data"...)
+	buffer = appendCompactUint32LE(buffer, dataSize)
+	buffer = append(buffer, make([]byte, dataSize)...)
+	return "data:audio/wav;base64," + base64.StdEncoding.EncodeToString(buffer)
+}
+
+func appendCompactUint32LE(buffer []byte, value uint32) []byte {
+	return append(buffer, byte(value), byte(value>>8), byte(value>>16), byte(value>>24))
+}
+
+func appendCompactUint16LE(buffer []byte, value uint16) []byte {
+	return append(buffer, byte(value), byte(value>>8))
 }

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"codex_go/audioutil"
 )
 
 const (
@@ -165,6 +167,7 @@ type ContentPart struct {
 	Type     string
 	Text     string
 	ImageURL string
+	AudioURL string
 	Detail   *string
 }
 
@@ -612,6 +615,10 @@ func compactItemContentBytes(item *Item) int {
 			bytes += len(part.Text)
 		case "input_image", "image":
 			bytes += compactResizedImageBytes
+		case "input_audio", "audio":
+			// Rust estimate_audio_bytes: approx_bytes_for_tokens over the
+			// duration-derived token count.
+			bytes += audioutil.EstimateAudioTokenCount(part.AudioURL) * 4
 		}
 	}
 	if bytes == 0 {

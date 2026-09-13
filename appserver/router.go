@@ -621,6 +621,7 @@ func compactItemsFromSessionItems(items []session.Item) []compact.Item {
 				Type:     item.Content[j].Type,
 				Text:     item.Content[j].Text,
 				ImageURL: item.Content[j].ImageURL,
+				AudioURL: item.Content[j].AudioURL,
 				Detail:   item.Content[j].Detail,
 			})
 		}
