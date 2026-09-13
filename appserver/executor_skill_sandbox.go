@@ -30,7 +30,7 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 			return nil, err
 		}
 	}
-	windowsLevel := sandbox.WindowsSandboxLevel(windowsSandboxLevelFromConfigValues(configValues(cfg)))
+	windowsLevel := windowsSandboxLevelForConfig(cfg)
 	privateDesktop := windowsSandboxPrivateDesktopForTurn(cfg)
 	useLegacyLandlock := cfg != nil && features.Enabled(cfg.FeatureSettings(), "use_legacy_landlock")
 

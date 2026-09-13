@@ -2446,6 +2446,26 @@ func TestWindowsSandboxLevelFromConfigValuesMatchesRust(t *testing.T) {
 	}
 }
 
+// TestWindowsSandboxLevelAppliesRequirementsLikeRust mirrors Rust's
+// windows_sandbox_mode_falls_back_when_disallowed_by_requirements: a configured
+// mode the managed requirements disallow is replaced by the constrained initial
+// mode (elevated here).
+func TestWindowsSandboxLevelAppliesRequirementsLikeRust(t *testing.T) {
+	values := map[string]any{"windows": map[string]any{"sandbox": "unelevated"}}
+	cfg := &config.Config{
+		Values: values,
+		Requirements: &config.ConfigRequirements{
+			AllowedWindowsSandboxImplementations: []config.WindowsSandboxSetupMode{config.WindowsSandboxSetupElevated},
+		},
+	}
+	if got := windowsSandboxLevelForConfig(cfg); got != sandbox.WindowsSandboxElevated {
+		t.Fatalf("windowsSandboxLevelForConfig() = %s, want elevated", got)
+	}
+	if got := windowsSandboxLevelForConfig(&config.Config{Values: values}); got != sandbox.WindowsSandboxUnelevated {
+		t.Fatalf("windowsSandboxLevelForConfig() without requirements = %s, want unelevated", got)
+	}
+}
+
 // TestWindowsSandboxPrivateDesktopFromConfigValuesMatchesRust mirrors Rust
 // resolve_windows_sandbox_private_desktop: the `[windows]` table defaults to
 // true, the legacy `permissions` shape still works, and a managed requirement

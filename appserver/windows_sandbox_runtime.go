@@ -103,7 +103,10 @@ func (r *RuntimeRouter) windowsSandboxReadiness() (*sandbox.WindowsReadinessResp
 	if err != nil {
 		return nil, err
 	}
-	level := windowsSandboxLevelFromConfigValues(read.Config)
+	level := windowsSandboxLevelForConfig(&config.Config{
+		Values:       read.Config,
+		Requirements: r.requireConfig().Requirements().Requirements,
+	})
 	setupComplete := false
 	if level == sandbox.WindowsSandboxElevated {
 		setupComplete, _ = windowssandbox.SandboxSetupIsComplete(r.requireConfig().CodexHome())
@@ -198,47 +201,37 @@ func windowsSandboxSetupModeConfigValue(mode sandbox.WindowsSetupMode) (string, 
 	}
 }
 
-func windowsSandboxLevelFromConfigValues(values map[string]any) sandbox.WindowsSandboxLevel {
-	if mode, ok := windowsSandboxModeFromConfigValues(values); ok {
-		switch mode {
-		case sandbox.WindowsSetupElevated:
-			return sandbox.WindowsSandboxElevated
-		case sandbox.WindowsSetupUnelevated:
-			return sandbox.WindowsSandboxUnelevated
-		}
+// windowsSandboxLevelForConfig resolves the effective level, applying the
+// managed `windows.allowed_sandbox_implementations` constraint (Rust
+// apply_requirement_constrained_value for "windows.sandbox").
+func windowsSandboxLevelForConfig(cfg *config.Config) sandbox.WindowsSandboxLevel {
+	if cfg == nil {
+		return sandbox.WindowsSandboxDisabled
 	}
-	featureSettings := (&config.Config{Values: values}).FeatureSettings()
-	if featureSettings["elevated_windows_sandbox"] {
+	mode, _, ok := config.ResolveWindowsSandboxMode(cfg.Values, cfg.Requirements)
+	if !ok {
+		return sandbox.WindowsSandboxDisabled
+	}
+	switch mode {
+	case config.WindowsSandboxSetupElevated:
 		return sandbox.WindowsSandboxElevated
-	}
-	if featureSettings["experimental_windows_sandbox"] {
+	case config.WindowsSandboxSetupUnelevated:
 		return sandbox.WindowsSandboxUnelevated
 	}
 	return sandbox.WindowsSandboxDisabled
 }
 
-func windowsSandboxModeFromConfigValues(values map[string]any) (sandbox.WindowsSetupMode, bool) {
-	if values == nil {
-		return "", false
-	}
-	if windows, ok := values["windows"].(map[string]any); ok {
-		if mode, ok := parseWindowsSandboxConfigMode(windows["sandbox"]); ok {
-			return mode, true
-		}
-	}
-	if mode, ok := parseWindowsSandboxConfigMode(values["windows_sandbox"]); ok {
-		return mode, true
-	}
-	return "", false
+func windowsSandboxLevelFromConfigValues(values map[string]any) sandbox.WindowsSandboxLevel {
+	return windowsSandboxLevelForConfig(&config.Config{Values: values})
 }
 
-func parseWindowsSandboxConfigMode(value any) (sandbox.WindowsSetupMode, bool) {
-	text := strings.ToLower(strings.TrimSpace(stringFromAny(value)))
-	switch text {
-	case "elevated":
-		return sandbox.WindowsSetupElevated, true
-	case "unelevated", "restricted-token", "default":
-		return sandbox.WindowsSetupUnelevated, true
+func windowsSandboxModeFromConfigValues(values map[string]any) (sandbox.WindowsSetupMode, bool) {
+	mode, ok := config.WindowsSandboxModeFromValues(values)
+	switch mode {
+	case config.WindowsSandboxSetupElevated:
+		return sandbox.WindowsSetupElevated, ok
+	case config.WindowsSandboxSetupUnelevated:
+		return sandbox.WindowsSetupUnelevated, ok
 	default:
 		return "", false
 	}
