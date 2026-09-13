@@ -50,6 +50,10 @@ func applyDenyReadACLPath(path string, sid string) (bool, error) {
 	return added, nil
 }
 
+// RevokeACE removes explicit ACEs for one SID and propagates the updated
+// inherited ACL, mirroring Rust acl.rs revoke_ace (#45224): a null DACL has no
+// ACE to revoke and replacing it with an empty ACL would deny access, and an
+// unchanged ACL (REVOKE_ACCESS removed nothing) must not propagate inheritance.
 func RevokeACE(req ACLRequest) error {
 	path, sidBytes, sid, err := validateACLRequest(req)
 	if err != nil {
@@ -58,6 +62,11 @@ func RevokeACE(req ACLRequest) error {
 	sd, dacl, err := fileDACL(path)
 	if err != nil {
 		return err
+	}
+	if dacl == nil {
+		runtime.KeepAlive(sidBytes)
+		runtime.KeepAlive(sd)
+		return nil
 	}
 	entry := windows.EXPLICIT_ACCESS{
 		AccessMode:  windows.REVOKE_ACCESS,
@@ -73,6 +82,13 @@ func RevokeACE(req ACLRequest) error {
 		runtime.KeepAlive(sidBytes)
 		runtime.KeepAlive(sd)
 		return err
+	}
+	if newACL.AceCount == dacl.AceCount {
+		runtime.KeepAlive(sidBytes)
+		runtime.KeepAlive(sd)
+		runtime.KeepAlive(newACL)
+		runtime.KeepAlive(entry)
+		return nil
 	}
 	err = windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, newACL, nil)
 	runtime.KeepAlive(sidBytes)
