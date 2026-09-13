@@ -13,6 +13,28 @@ import (
 	windowsunified "codex_go/sandbox/windowssandbox/unified_exec"
 )
 
+// Windows sandbox level wire values (Rust WindowsSandboxLevel, serde
+// rename_all = "kebab-case").
+const (
+	windowsSandboxLevelDisabled        = "disabled"
+	windowsSandboxLevelRestrictedToken = "restricted-token"
+	windowsSandboxLevelElevated        = "elevated"
+	windowsSandboxLevelMxc             = "mxc"
+)
+
+// parseWindowsSandboxLevelValue validates the level the way Rust's enum
+// deserialization does; an empty value keeps Go's legacy default.
+func parseWindowsSandboxLevelValue(value string) (string, error) {
+	level := strings.TrimSpace(value)
+	switch level {
+	case "", windowsSandboxLevelDisabled, windowsSandboxLevelRestrictedToken,
+		windowsSandboxLevelElevated, windowsSandboxLevelMxc:
+		return level, nil
+	default:
+		return "", fmt.Errorf("unknown variant `%s`, expected one of `disabled`, `restricted-token`, `elevated`, `mxc`", value)
+	}
+}
+
 func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandboxProcess, bool, error) {
 	if params == nil || !hasJSONValue(params.Sandbox) {
 		return nil, false, nil
@@ -24,10 +46,28 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	if err := json.Unmarshal(params.Sandbox, &sandboxContext); err != nil {
 		return nil, true, requestError(-32602, fmt.Sprintf("invalid sandbox context: %v", err))
 	}
+	// Rust deserializes windows_sandbox_level as a kebab-case enum, so an
+	// unrecognized level is an invalid-params error rather than a silent
+	// fallback; "mxc" then has its own launch restrictions (Rust #45176).
+	sandboxLevel, err := parseWindowsSandboxLevelValue(sandboxContext.WindowsSandboxLevel)
+	if err != nil {
+		return nil, true, requestError(-32602, "invalid sandbox context: "+err.Error())
+	}
+	if sandboxLevel == windowsSandboxLevelMxc {
+		if params.TTY || params.Arg0 != nil {
+			return nil, true, requestError(-32602, "MXC currently supports ordinary pipe launches only")
+		}
+		if params.EnforceManagedNetwork || params.ManagedNetwork != nil || params.NetworkProxy != nil {
+			return nil, true, requestError(-32602, "MXC managed networking is not supported yet")
+		}
+		// Go has no native MXC runner, so an MXC request is rejected exactly like
+		// Rust on an executor without a usable MXC environment.
+		return nil, true, requestError(-32602, "native MXC is unavailable on this executor")
+	}
 	if !hasJSONValue(sandboxContext.Permissions) {
 		return nil, true, requestError(-32602, "invalid sandbox context: permissions are required")
 	}
-	if params.EnforceManagedNetwork && sandboxContext.WindowsSandboxLevel != "elevated" {
+	if params.EnforceManagedNetwork && sandboxLevel != windowsSandboxLevelElevated {
 		return nil, true, fmt.Errorf("managed networking requires the elevated Windows sandbox backend")
 	}
 	if err := sandboxContext.WindowsSandboxProxySettingsMode.Validate(); err != nil {
@@ -63,7 +103,7 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 		workspaceRoots = []string{cwd}
 	}
 	level := windowsunified.WindowsSandboxLevelLegacy
-	if sandboxContext.WindowsSandboxLevel == "elevated" {
+	if sandboxLevel == windowsSandboxLevelElevated {
 		level = windowsunified.WindowsSandboxLevelElevated
 	}
 	session, err := windowsunified.SpawnWindowsSandboxLiveSessionForLevel(&windowsunified.WindowsSandboxSessionRequest{

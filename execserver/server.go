@@ -1947,6 +1947,11 @@ func prepareExecProcess(params *ExecParams) ([]string, string, sandbox.SandboxTy
 	if err := json.Unmarshal(params.Sandbox, &sandboxContext); err != nil {
 		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("invalid sandbox context: %v", err))
 	}
+	// Rust deserializes windows_sandbox_level as a kebab-case enum, so an
+	// unrecognized level is an invalid-params error rather than a fallback.
+	if _, err := parseWindowsSandboxLevelValue(sandboxContext.WindowsSandboxLevel); err != nil {
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "invalid sandbox context: "+err.Error())
+	}
 	if !hasJSONValue(sandboxContext.Permissions) {
 		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "invalid sandbox context: permissions are required")
 	}
