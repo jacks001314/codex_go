@@ -76,7 +76,10 @@ func NewWebSocketRouterFactoryWithOptions(codexHome string, storeRoot string, op
 		storeRoot = filepath.Join(codexHome, "sessions")
 	}
 	return func() *RuntimeRouter {
-		return NewDefaultRuntimeRouterWithOptions(session.NewStore(storeRoot), codexHome, options)
+		router := NewDefaultRuntimeRouterWithOptions(session.NewStore(storeRoot), codexHome, options)
+		// Rust stamps `rpc.transport = "websocket"` on the request span.
+		router.SetRequestTransport("websocket")
+		return router
 	}
 }
 

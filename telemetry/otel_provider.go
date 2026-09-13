@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -9,8 +10,8 @@ import (
 
 // Rust parity: codex-rs/otel/src/config.rs (OtelExporter / OtelSettings /
 // resolve_exporter) and provider.rs::OtelProvider::try_new. Go builds the
-// metrics and logging pipelines; the tracing pipeline is not implemented, so
-// the trace exporter settings are carried but never built.
+// metrics, logging, and tracing pipelines; span producers are the remaining
+// piece (Rust instruments its core with tracing spans).
 
 // Otel exporter kind tags, mirroring codex-otel's OtelExporter variants.
 const (
@@ -69,11 +70,12 @@ type OtelSettings struct {
 	Tracestate      map[string]map[string]string
 }
 
-// OtelProvider mirrors codex-otel's OtelProvider for the metrics and logging
-// pipelines.
+// OtelProvider mirrors codex-otel's OtelProvider for the metrics, logging, and
+// tracing pipelines.
 type OtelProvider struct {
 	metrics      *MetricsClient
 	logs         *LogsClient
+	traces       *TracesClient
 	shutdownOnce sync.Once
 }
 
@@ -81,8 +83,32 @@ type OtelProvider struct {
 // without error when no supported exporter is enabled, which is what Rust does
 // when every exporter is disabled.
 func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
+	// Rust resolves the settings, validates the trace metadata before any
+	// process-global OTEL state is installed, and only then builds the
+	// pipelines (provider.rs::try_new).
+	metricsExporter := ResolveOtelExporter(settings.MetricsExporter)
+	logsExporter := ResolveOtelExporter(settings.Exporter)
+	traceExporter := ResolveOtelExporter(settings.TraceExporter)
+	if metricsExporter.Kind == OtelExporterNone && logsExporter.Kind == OtelExporterNone &&
+		traceExporter.Kind == OtelExporterNone {
+		// Tracestate propagation is process-global; clear it when these settings
+		// do not install an active provider.
+		if err := SetTracestateEntries(nil); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if traceExporter.Kind != OtelExporterNone {
+		if err := ValidateSpanAttributes(settings.SpanAttributes); err != nil {
+			return nil, err
+		}
+	}
+	if err := ValidateTracestateEntries(settings.Tracestate); err != nil {
+		return nil, err
+	}
+
 	var metrics *MetricsClient
-	if metricsExporter := ResolveOtelExporter(settings.MetricsExporter); metricsExporter.Kind != OtelExporterNone {
+	if metricsExporter.Kind != OtelExporterNone {
 		if options, ok := metricsClientOptions(settings, metricsExporter); ok {
 			if client := NewMetricsClient(options); client.Enabled() {
 				metrics = client
@@ -92,17 +118,73 @@ func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
 	// Rust's log pipeline uses the general `exporter` setting
 	// (provider.rs::try_new -> build_logger(&settings.exporter)).
 	var logs *LogsClient
-	if logsExporter := ResolveOtelExporter(settings.Exporter); logsExporter.Kind != OtelExporterNone {
+	if logsExporter.Kind != OtelExporterNone {
 		if options, ok := logsClientOptions(settings, logsExporter); ok {
 			if client := NewLogsClient(options); client.Enabled() {
 				logs = client
 			}
 		}
 	}
-	if metrics == nil && logs == nil {
+	// Rust's trace pipeline uses the dedicated `trace_exporter` setting and
+	// applies the configured span attributes to every exported span.
+	var traces *TracesClient
+	if traceExporter.Kind != OtelExporterNone {
+		if options, ok := tracesClientOptions(settings, traceExporter); ok {
+			if client := NewTracesClient(options); client.Enabled() {
+				traces = client
+			}
+		}
+	}
+	if metrics == nil && logs == nil && traces == nil {
 		return nil, nil
 	}
-	return &OtelProvider{metrics: metrics, logs: logs}, nil
+	// The configured tracestate travels with every propagated trace context.
+	if err := SetTracestateEntries(settings.Tracestate); err != nil {
+		return nil, err
+	}
+	return &OtelProvider{metrics: metrics, logs: logs, traces: traces}, nil
+}
+
+// ValidateSpanAttributes mirrors codex-otel's validate_span_attributes: the
+// configured per-span attributes must carry a key.
+func ValidateSpanAttributes(attributes map[string]string) error {
+	for key := range attributes {
+		if key == "" {
+			return errors.New("configured span attribute key must not be empty")
+		}
+	}
+	return nil
+}
+
+// tracesClientOptions maps the resolved trace exporter onto the traces client,
+// the way metricsClientOptions does for metrics.
+func tracesClientOptions(settings OtelSettings, exporter OtelExporter) (TracesClientOptions, bool) {
+	common := TracesClientOptions{
+		Environment:    settings.Environment,
+		ServiceName:    settings.ServiceName,
+		ServiceVersion: settings.ServiceVersion,
+		Endpoint:       exporter.Endpoint,
+		Headers:        exporter.Headers,
+		TLS:            exporter.TLS,
+		SpanAttributes: settings.SpanAttributes,
+	}
+	switch exporter.Kind {
+	case OtelExporterOtlpHTTP:
+		switch exporter.Protocol {
+		case "", OtelHTTPProtocolJSON, OtelHTTPProtocolBinary:
+		default:
+			slog.Warn("OTLP HTTP traces protocol is not supported", "protocol", exporter.Protocol)
+			return TracesClientOptions{}, false
+		}
+		common.Protocol = exporter.Protocol
+		common.Transport = TracesTransportHTTP
+		return common, true
+	case OtelExporterOtlpGRPC:
+		common.Transport = TracesTransportGRPC
+		return common, true
+	default:
+		return TracesClientOptions{}, false
+	}
 }
 
 // logsClientOptions maps the resolved log exporter onto the log client, the way
@@ -173,6 +255,23 @@ func (p *OtelProvider) Metrics() *MetricsClient {
 	return p.metrics
 }
 
+// Tracer returns the provider's tracer, or nil when the tracing pipeline is
+// disabled.
+func (p *OtelProvider) Tracer() *Tracer {
+	if p == nil {
+		return nil
+	}
+	return p.traces.Tracer()
+}
+
+// Traces returns the provider's traces client, or nil when tracing is disabled.
+func (p *OtelProvider) Traces() *TracesClient {
+	if p == nil {
+		return nil
+	}
+	return p.traces
+}
+
 // Logs returns the provider's log client, or nil when the logging pipeline is
 // disabled.
 func (p *OtelProvider) Logs() *LogsClient {
@@ -199,11 +298,16 @@ func (p *OtelProvider) Shutdown(ctx context.Context) error {
 	}
 	var err error
 	p.shutdownOnce.Do(func() {
-		if logsErr := p.logs.Shutdown(ctx); logsErr != nil {
-			err = logsErr
+		// Rust shuts the tracer provider down first, then metrics, then the
+		// logger (provider.rs::shutdown).
+		if tracesErr := p.traces.Shutdown(ctx); tracesErr != nil {
+			err = tracesErr
 		}
 		if metricsErr := p.metrics.Shutdown(ctx); metricsErr != nil && err == nil {
 			err = metricsErr
+		}
+		if logsErr := p.logs.Shutdown(ctx); logsErr != nil && err == nil {
+			err = logsErr
 		}
 	})
 	return err

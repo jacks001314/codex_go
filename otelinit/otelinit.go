@@ -1,10 +1,9 @@
 // Package otelinit mirrors codex-rs/core/src/otel_init.rs: it maps the resolved
 // Codex config onto codex-otel settings and builds the OTEL provider.
 //
-// Go builds the metrics and logging pipelines; the trace exporter is carried
-// onto the settings but has no pipeline yet. The provider build never fails for
-// an unsupported transport; the telemetry package reports it and stays
-// disabled.
+// Go builds the metrics, logging, and tracing pipelines. The provider build
+// never fails for an unsupported transport; the telemetry package reports it
+// and stays disabled.
 package otelinit
 
 import (

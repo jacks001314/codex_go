@@ -27,6 +27,8 @@ type StdioOptions struct {
 }
 
 func NewStdioServer(router *RuntimeRouter) *StdioServer {
+	// Rust stamps `rpc.transport = "stdio"` on the request span.
+	router.SetRequestTransport("stdio")
 	return &StdioServer{router: router}
 }
 

@@ -250,9 +250,13 @@ type RuntimeRouter struct {
 	authChangeTracker *auth.AuthChangeTracker
 	authChanged       chan struct{}
 	// otelProvider is the process OTEL provider built from config at startup.
-	// Only its metrics client is active (Go has no tracing/logging pipeline);
-	// it forwards the task metrics and is shut down with the router.
-	otelProvider            *telemetry.OtelProvider
+	// It forwards the task metrics, the exported log records, and the request
+	// spans, and is shut down with the router.
+	otelProvider *telemetry.OtelProvider
+	// requestTransport is the transport name the request span reports; the
+	// stdio, unix-socket, and websocket servers install their own name and an
+	// in-process router keeps the "in-process" default.
+	requestTransport        string
 	mcpEventStreams         *mcpEventStreamManager
 	skillShadowMu           sync.Mutex
 	skillShadowState        map[string]*skillShadowThreadState
@@ -1346,6 +1350,33 @@ func (r *RuntimeRouter) configureOtelMetrics(codexHome string, options *RuntimeR
 	if logsHandler := provider.LogsHandler(state.SlogTerminalHandler()); logsHandler != nil {
 		slog.SetDefault(slog.New(logsHandler))
 	}
+	// Rust instruments every app-server request with an `app_server.request`
+	// span; the router owns the transport-level request entry point.
+	if tracer := provider.Tracer(); tracer != nil && r.services.ThreadRouter != nil {
+		r.services.ThreadRouter.SetTracer(tracer)
+	}
+}
+
+// SetRequestTransport stamps the transport name the request span reports
+// (Rust's `rpc.transport`). Transports call this when they serve a router; an
+// in-process router keeps the "in-process" default.
+func (r *RuntimeRouter) SetRequestTransport(transport string) {
+	if r == nil {
+		return
+	}
+	r.requestTransport = strings.TrimSpace(transport)
+	if r.services.ThreadRouter != nil {
+		r.services.ThreadRouter.SetRequestTransport(transport)
+	}
+}
+
+// requestTracer reports the tracer the app-server installed, or nil when the
+// tracing pipeline is disabled.
+func (r *RuntimeRouter) requestTracer() *telemetry.Tracer {
+	if r == nil || r.otelProvider == nil {
+		return nil
+	}
+	return r.otelProvider.Tracer()
 }
 
 func (r *RuntimeRouter) analyticsAuthorizeRequest(codexHome string) telemetry.AnalyticsAuthorizeRequestFunc {
@@ -1528,6 +1559,11 @@ func (r *RuntimeRouter) Handle(request *Request) *Response {
 			return ErrorResponse(RequestID{}, -32600, err.Error(), nil)
 		}
 		return ErrorResponse(request.ID, requestValidationErrorCode(err), err.Error(), nil)
+	}
+	// Rust records an `app_server.request` span per transport request
+	// (app_server_tracing.rs::request_span), wrapping the dispatch below.
+	if span := startRequestSpan(r.requestTracer(), request, r.requestTransport); span != nil {
+		defer span.End()
 	}
 	result, err := r.dispatch(request)
 	if err != nil {

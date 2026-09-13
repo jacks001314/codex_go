@@ -69,7 +69,10 @@ func NewUnixSocketRouterWithOptions(codexHome string, options *RuntimeRouterOpti
 		codexHome = ".gcode"
 	}
 	store := session.NewStore(filepath.Join(codexHome, "sessions"))
-	return NewDefaultRuntimeRouterWithOptions(store, codexHome, options)
+	router := NewDefaultRuntimeRouterWithOptions(store, codexHome, options)
+	// Rust stamps `rpc.transport = "unix_socket"` on the request span.
+	router.SetRequestTransport("unix_socket")
+	return router
 }
 
 func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
@@ -96,7 +99,9 @@ func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
 	}
 	return serveUnixSocket(ctx, socketPath, func() *RuntimeRouter {
 		if strings.TrimSpace(options.StoreRoot) != "" {
-			return NewDefaultRuntimeRouterWithOptions(session.NewStore(options.StoreRoot), codexHome, preparedRuntimeOptions)
+			router := NewDefaultRuntimeRouterWithOptions(session.NewStore(options.StoreRoot), codexHome, preparedRuntimeOptions)
+			router.SetRequestTransport("unix_socket")
+			return router
 		}
 		return NewUnixSocketRouterWithOptions(codexHome, preparedRuntimeOptions)
 	})

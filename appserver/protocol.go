@@ -427,16 +427,27 @@ func (id *RequestID) UnmarshalJSON(data []byte) error {
 }
 
 type Request struct {
-	JSONRPC      string          `json:"jsonrpc,omitempty"`
-	ID           RequestID       `json:"id"`
-	Method       Method          `json:"method"`
-	Params       json.RawMessage `json:"params,omitempty"`
-	ConnectionID string          `json:"-"`
-	Internal     bool            `json:"-"`
+	JSONRPC string          `json:"jsonrpc,omitempty"`
+	ID      RequestID       `json:"id"`
+	Method  Method          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	// Trace carries the optional W3C trace context the transport continues
+	// (Rust app-server-protocol rpc.rs::JSONRPCRequest::trace); the request
+	// span adopts it as its parent.
+	Trace        *W3CTraceContext `json:"trace,omitempty"`
+	ConnectionID string           `json:"-"`
+	Internal     bool             `json:"-"`
 	// InternalParams carries the in-process params object for internal
 	// requests whose JSON form cannot represent internal-only fields (for
 	// example TurnStartParams.ParentTurnID/RootTurnID/AdditionalInputItems).
 	InternalParams any `json:"-"`
+}
+
+// W3CTraceContext mirrors codex_protocol::protocol::W3cTraceContext: the W3C
+// trace-context carrier pair a client may attach to a request.
+type W3CTraceContext struct {
+	Traceparent string `json:"traceparent,omitempty"`
+	Tracestate  string `json:"tracestate,omitempty"`
 }
 
 const defaultRequestConnectionID = "default"

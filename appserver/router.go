@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
+	"codex_go/telemetry"
 
 	"github.com/google/uuid"
 )
@@ -37,6 +39,80 @@ type Router struct {
 	// lower-level Router is feature-agnostic, so the runtime installs this
 	// predicate.
 	retainClientDeveloperMessages func() bool
+	// tracer, when set by the runtime that built the OTEL provider, instruments
+	// every request with Rust's `app_server.request` span.
+	tracer *telemetry.Tracer
+	// requestTransport names the app-server transport serving this router. Rust
+	// stamps it as `rpc.transport` on the request span; the in-process path uses
+	// "in-process" (app_server_tracing.rs).
+	requestTransport string
+}
+
+// SetTracer installs the OTEL tracer used for request spans (Rust instruments
+// each app-server request with an `app_server.request` span carrying the RPC
+// method).
+func (r *Router) SetTracer(tracer *telemetry.Tracer) {
+	if r == nil {
+		return
+	}
+	r.tracer = tracer
+}
+
+// SetRequestTransport stamps the transport name the request span reports. The
+// stdio, unix-socket, and websocket servers install their own name; a router
+// used in process keeps Rust's "in-process" default.
+func (r *Router) SetRequestTransport(transport string) {
+	if r == nil {
+		return
+	}
+	r.requestTransport = strings.TrimSpace(transport)
+}
+
+// defaultRequestTransport mirrors app_server_tracing.rs::typed_request_span for
+// in-process callers, which stamp the transport as "in-process".
+const defaultRequestTransport = "in-process"
+
+// startRequestSpan starts Rust's `app_server.request` span, or returns nil when
+// tracing is off.
+func (r *Router) startRequestSpan(request *Request) *telemetry.Span {
+	if r == nil {
+		return nil
+	}
+	return startRequestSpan(r.tracer, request, r.requestTransport)
+}
+
+// startRequestSpan copies app_server_tracing.rs::app_server_request_span_template:
+// the RPC method becomes the span name (Rust's `otel.name` field), the kind is
+// `server`, and the RPC and connection identity are recorded as attributes.
+func startRequestSpan(tracer *telemetry.Tracer, request *Request, transport string) *telemetry.Span {
+	if tracer == nil || request == nil {
+		return nil
+	}
+	if strings.TrimSpace(transport) == "" {
+		transport = defaultRequestTransport
+	}
+	method := string(request.Method)
+	span := tracer.StartSpanWithKind(method, telemetry.SpanKindServer, map[string]string{
+		"rpc.system":               "jsonrpc",
+		"rpc.method":               method,
+		"rpc.transport":            transport,
+		"rpc.request_id":           request.ID.String(),
+		"app_server.connection_id": request.normalizedConnectionID(),
+		"app_server.api_version":   "v2",
+	})
+	// The request span continues an inbound trace when the client attached one,
+	// otherwise the process's TRACEPARENT trace
+	// (app_server_tracing.rs::attach_parent_context).
+	if request.Trace != nil && strings.TrimSpace(request.Trace.Traceparent) != "" {
+		context, ok := telemetry.ParseTraceContext(request.Trace.Traceparent, request.Trace.Tracestate)
+		if !ok || !span.SetParentContext(context) {
+			slog.Warn("ignoring invalid inbound request trace carrier",
+				"rpc_method", method, "rpc_request_id", request.ID.String())
+		}
+	} else if context, ok := telemetry.TraceContextFromEnv(); ok {
+		span.SetParentContext(context)
+	}
+	return span
 }
 
 func markClientAuthoredDeveloperItem(item *session.Item) {
@@ -868,6 +944,10 @@ func (r *Router) Handle(request *Request) *Response {
 	}
 	if r == nil || r.store == nil {
 		return ErrorResponse(request.ID, -32603, "thread store is not configured", nil)
+	}
+	// Rust records an `app_server.request` span per request (outgoing_message.rs).
+	if span := r.startRequestSpan(request); span != nil {
+		defer span.End()
 	}
 	result, err := r.dispatch(request)
 	if err != nil {
