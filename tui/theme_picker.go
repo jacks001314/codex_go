@@ -173,7 +173,13 @@ func DiscoverCustomThemePaths(themeDir string) []string {
 		if strings.ToLower(filepath.Ext(name)) != ".tmtheme" {
 			continue
 		}
-		paths = append(paths, filepath.Join(themeDir, name))
+		// Rust list_available_themes only lists custom themes a ThemeSet can
+		// parse, so a broken .tmTheme is not offered in the picker.
+		path := filepath.Join(themeDir, name)
+		if _, err := parseTMThemeFile(path); err != nil {
+			continue
+		}
+		paths = append(paths, path)
 	}
 	sort.SliceStable(paths, func(i, j int) bool {
 		left := strings.ToLower(filepath.Base(paths[i]))

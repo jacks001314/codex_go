@@ -44,6 +44,13 @@ func ChromaThemeForCodexTheme(themeID string) string {
 	if style, ok := codexThemeToChromaStyle[id]; ok {
 		return style
 	}
+	// A custom `.tmTheme` applies its own parsed colors instead of silently
+	// falling back to the default style (Rust load_custom_theme). Rust only
+	// treats the exact bundled names as built in, so a custom file wins over the
+	// approximate family prefixes below.
+	if style := customThemeChromaStyle(id, DefaultThemeDir()); style != "" {
+		return style
+	}
 	for prefix, style := range codexThemeToChromaPrefix {
 		if strings.HasPrefix(id, prefix) {
 			return style

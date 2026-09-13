@@ -9,10 +9,6 @@ import (
 // Rust parity: codex-rs/tui/src/render/highlight.rs validate_theme_name. The TUI
 // validates the configured `tui.theme` at startup and reports a warning when the
 // name is neither a bundled theme nor a custom theme file.
-//
-// Go highlights through Chroma and has no .tmTheme loader, so an existing custom
-// theme file is accepted without a warning even though Go falls back to the
-// default palette (recorded divergence).
 func ThemeStartupWarning(name string, codexHome string) string {
 	theme := strings.TrimSpace(name)
 	if theme == "" {
@@ -24,7 +20,13 @@ func ThemeStartupWarning(name string, codexHome string) string {
 	}
 	if path := customThemePath(theme, codexHome); path != "" {
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return ""
+			// A custom theme must parse: an unreadable or invalid `.tmTheme`
+			// surfaces a startup warning so users can diagnose it.
+			if _, err := LoadCustomTheme(theme, codexHome); err == nil {
+				return ""
+			}
+			return "Custom theme \"" + theme + "\" at " + display +
+				" could not be loaded (invalid .tmTheme format). Falling back to the default theme."
 		}
 	}
 	return "Theme \"" + theme + "\" not found. Using the default theme. " +

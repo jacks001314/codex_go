@@ -6,9 +6,10 @@ import (
 	"testing"
 )
 
-// Mirrors Rust's validate_theme_name: bundled themes and existing custom theme
-// files are accepted, an unknown name reports the not-found warning, and an
-// unset theme is silent.
+// Mirrors Rust's validate_theme_name: bundled themes and loadable custom theme
+// files are accepted, an existing but invalid `.tmTheme` reports the
+// could-not-be-loaded warning, an unknown name reports the not-found warning,
+// and an unset theme is silent.
 func TestThemeStartupWarningLikeRust(t *testing.T) {
 	home := t.TempDir()
 	if got := ThemeStartupWarning("", home); got != "" {
@@ -23,11 +24,19 @@ func TestThemeStartupWarningLikeRust(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(customPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(customPath, []byte("<plist/>"), 0o600); err != nil {
+	if err := os.WriteFile(customPath, []byte(minimalTMThemeContent), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got := ThemeStartupWarning("my-custom", home); got != "" {
 		t.Fatalf("ThemeStartupWarning(custom file) = %q, want none", got)
+	}
+	if err := os.WriteFile(customPath, []byte("not a plist"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantInvalid := "Custom theme \"my-custom\" at " + customPath +
+		" could not be loaded (invalid .tmTheme format). Falling back to the default theme."
+	if got := ThemeStartupWarning("my-custom", home); got != wantInvalid {
+		t.Fatalf("ThemeStartupWarning(invalid custom file) = %q, want %q", got, wantInvalid)
 	}
 
 	missingPath := filepath.Join(home, "themes", "bogus-theme.tmTheme")

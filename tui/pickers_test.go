@@ -451,7 +451,7 @@ func TestThemePickerDiscoversCustomThemeDirectoryAndSubtitle(t *testing.T) {
 	if err := os.MkdirAll(themesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(themesDir, "team-dark.tmTheme"), []byte("placeholder"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(themesDir, "team-dark.tmTheme"), []byte(minimalTMThemeContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(themesDir, "notes.txt"), []byte("ignored"), 0o644); err != nil {
