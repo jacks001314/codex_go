@@ -361,13 +361,20 @@ func TestModelGuardianReviewerMapsTimeout(t *testing.T) {
 	}
 }
 
+// Mirrors Rust's parse-failure completion (completion.rs GuardianReviewError::
+// Parse): the review fails closed with a denied decision carrying the failure
+// rationale, not an aborted review.
 func TestModelGuardianReviewerRejectsMalformedAssessment(t *testing.T) {
 	reviewer := &modelGuardianReviewer{agent: guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
 		return &model.AgentResponse{Message: `not-json`}, nil
 	})}
-	decision, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "calendar"})
-	if err == nil || decision != state.DecisionAborted {
+	decision, reason, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "calendar"})
+	if err != nil || decision != state.DecisionDenied {
 		t.Fatalf("decision=%s err=%v", decision, err)
+	}
+	if !strings.Contains(reason, "Automatic approval review failed:") ||
+		!strings.Contains(reason, "automatic approval review could not be completed") {
+		t.Fatalf("reason = %q", reason)
 	}
 }
 

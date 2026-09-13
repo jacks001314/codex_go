@@ -128,6 +128,27 @@ func (r *modelGuardianReviewer) markScored(threadID string) {
 	}
 }
 
+// recordNonDenial mirrors Rust's record_guardian_non_denial: only a completed
+// assessment with outcome deny counts as a policy denial, so an approved review
+// and every review failure reset the denial window instead.
+func (r *modelGuardianReviewer) recordNonDenial(turnID string) {
+	if r == nil || r.breaker == nil {
+		return
+	}
+	r.breaker.RecordNonDenial(turnID)
+}
+
+// guardianReviewFailureInstructions mirrors Rust's REVIEW_FAILURE_INSTRUCTIONS.
+const guardianReviewFailureInstructions = "The action was not executed because automatic approval review could not be completed. " +
+	"This is a review failure, not a determination that the action is unsafe. " +
+	"Do not bypass the approval check; resolve the error or ask the user for guidance."
+
+// guardianReviewFailureMessage mirrors Rust's failed-review rationale: the
+// assessment could not be completed, so the review fails closed.
+func guardianReviewFailureMessage(message string) string {
+	return "Automatic approval review failed: " + strings.TrimSpace(message) + "\n" + guardianReviewFailureInstructions
+}
+
 // SetMaxToolCallLag configures the per-thread stale-score bound (Rust
 // GuardianV2Config::max_tool_call_lag). Non-positive values restore the
 // default.
@@ -402,11 +423,12 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 	}
 	if err != nil {
-		attribution.Decision = state.DecisionAborted
-		attribution.TerminalStatus = "aborted"
+		message := guardianReviewFailureMessage(err.Error())
+		attribution.Decision = state.DecisionDenied
+		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "prompt_build_error"
 		emitReviewMetrics()
-		return state.DecisionAborted, "", err
+		return state.DecisionDenied, message, nil
 	}
 	store := r.store
 	if store == nil {
@@ -431,14 +453,15 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if r.environment != nil {
 		inputItems, err = r.environment(reviewCtx, threadID, turnID)
 		if err != nil {
-			completed, _ := store.Abort(event.ID, err.Error())
+			message := guardianReviewFailureMessage(err.Error())
+			completed, _ := store.FailClosed(event.ID, message)
 			r.emit(threadID, completed)
-			r.recordDecision(threadID, turnID, state.DecisionAborted)
-			attribution.Decision = state.DecisionAborted
-			attribution.TerminalStatus = "aborted"
+			r.recordNonDenial(turnID)
+			attribution.Decision = state.DecisionDenied
+			attribution.TerminalStatus = "failed_closed"
 			attribution.FailureReason = "session_error"
 			emitReviewMetrics()
-			return state.DecisionAborted, "", err
+			return state.DecisionDenied, message, nil
 		}
 	}
 	if nodeReplEvidence != nil && nodeReplEvidence.HasImages() {
@@ -475,7 +498,9 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			if finishErr == nil {
 				r.emit(threadID, completed)
 			}
-			r.recordDecision(threadID, turnID, state.DecisionTimedOut)
+			// Rust records a non-denial for a failed review: only a completed
+			// assessment with outcome deny counts as a policy denial.
+			r.recordNonDenial(turnID)
 			attribution.Decision = state.DecisionTimedOut
 			attribution.TerminalStatus = "timed_out"
 			attribution.FailureReason = "timeout"
@@ -487,32 +512,34 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			if finishErr == nil {
 				r.emit(threadID, completed)
 			}
-			r.recordDecision(threadID, turnID, state.DecisionAborted)
+			r.recordNonDenial(turnID)
 			attribution.Decision = state.DecisionAborted
 			attribution.TerminalStatus = "aborted"
 			attribution.FailureReason = "cancelled"
 			emitReviewMetrics()
 			return state.DecisionAborted, "", finishErr
 		}
-		completed, _ := store.Abort(event.ID, err.Error())
-		r.emit(threadID, completed)
-		r.recordDecision(threadID, turnID, state.DecisionAborted)
-		attribution.Decision = state.DecisionAborted
-		attribution.TerminalStatus = "aborted"
+		message := guardianReviewFailureMessage(err.Error())
+		failedClosed, _ := store.FailClosed(event.ID, message)
+		r.emit(threadID, failedClosed)
+		r.recordNonDenial(turnID)
+		attribution.Decision = state.DecisionDenied
+		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "session_error"
 		emitReviewMetrics()
-		return state.DecisionAborted, "", err
+		return state.DecisionDenied, message, nil
 	}
 	assessment, err := state.ParseAssessment([]byte(guardianAssessmentText(response)))
 	if err != nil {
-		completed, _ := store.Abort(event.ID, "Guardian returned an invalid assessment.")
-		r.emit(threadID, completed)
-		r.recordDecision(threadID, turnID, state.DecisionAborted)
-		attribution.Decision = state.DecisionAborted
-		attribution.TerminalStatus = "aborted"
+		message := guardianReviewFailureMessage(err.Error())
+		failedClosed, _ := store.FailClosed(event.ID, message)
+		r.emit(threadID, failedClosed)
+		r.recordNonDenial(turnID)
+		attribution.Decision = state.DecisionDenied
+		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "parse_error"
 		emitReviewMetrics()
-		return state.DecisionAborted, "", err
+		return state.DecisionDenied, message, nil
 	}
 	completed, err := store.Complete(event.ID, *assessment)
 	if err != nil {
@@ -622,7 +649,7 @@ func (r *modelGuardianReviewer) recordDecision(threadID, turnID string, decision
 		return
 	}
 	if decision == state.DecisionApproved {
-		r.breaker.RecordNonDenial(turnID)
+		r.recordNonDenial(turnID)
 		return
 	}
 	policy := state.CircuitBreakerPolicyStandard

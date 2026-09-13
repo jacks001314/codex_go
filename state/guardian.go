@@ -233,6 +233,21 @@ func (e *Event) Timeout(now time.Time) *Event {
 	return &completed
 }
 
+// FailClosed mirrors Rust's review-failure completion: automatic approval could
+// not be completed, so the event is denied with the failure rationale and no
+// risk/authorization/outcome attribution (fail closed, not aborted).
+func (e *Event) FailClosed(now time.Time, rationale string) *Event {
+	if e == nil {
+		return nil
+	}
+	completed := *e
+	completedMS := unixMillis(now)
+	completed.CompletedAtMS = &completedMS
+	completed.Status = StatusDenied
+	completed.Rationale = rationale
+	return &completed
+}
+
 func (e *Event) Aborted(now time.Time, reason string) *Event {
 	if e == nil {
 		return nil
@@ -432,6 +447,12 @@ func (s *ReviewStore) Timeout(id string) (*Event, error) {
 
 func (s *ReviewStore) Abort(id string, reason string) (*Event, error) {
 	return s.finish(id, func(event *Event, now time.Time) *Event { return event.Aborted(now, reason) })
+}
+
+// FailClosed denies the review with the failure rationale (Rust's failed_closed
+// completion).
+func (s *ReviewStore) FailClosed(id string, rationale string) (*Event, error) {
+	return s.finish(id, func(event *Event, now time.Time) *Event { return event.FailClosed(now, rationale) })
 }
 
 func (s *ReviewStore) finish(id string, transition func(*Event, time.Time) *Event) (*Event, error) {

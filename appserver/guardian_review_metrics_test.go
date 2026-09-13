@@ -190,17 +190,18 @@ func TestModelGuardianReviewerFailureMetricsLikeRust(t *testing.T) {
 		metrics:        metrics,
 		subagentThread: func(string) bool { return true },
 	}
-	if _, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{
+	decision, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{
 		Type: "apply_patch", CWD: t.TempDir(), Files: []string{"a.txt"},
-	}); err == nil {
-		t.Fatal("Review() error = nil")
+	})
+	if err != nil || decision != state.DecisionDenied {
+		t.Fatalf("decision = %s err = %v", decision, err)
 	}
 	counters := guardianMetricRecords(metrics, telemetry.GuardianReviewCountMetric)
 	if len(counters) != 1 {
 		t.Fatalf("counters = %#v", counters)
 	}
 	counter := counters[0]
-	if counter.Tags["decision"] != "aborted" || counter.Tags["terminal_status"] != "aborted" ||
+	if counter.Tags["decision"] != "denied" || counter.Tags["terminal_status"] != "failed_closed" ||
 		counter.Tags["failure_reason"] != "parse_error" ||
 		counter.Tags["approval_request_source"] != "delegated_subagent" ||
 		counter.Tags["action"] != "apply_patch" {
