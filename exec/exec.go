@@ -436,6 +436,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		webSearchOptions.Originator = originator
 		webSearchOptions.TurnMetadata = clientMetadata[codexapi.ClientCodexTurnMetadataHeader]
 	}
+	// Rust's turn task starts its end-to-end timer here and records the turn's
+	// session metrics when the task ends.
+	turnStartedAt := time.Now().UTC()
 	turnResult, err := r.runAgentTurn(ctx, req, agent, &agentRunConfig{
 		Config:                         cfg,
 		Prompt:                         runPrompt,
@@ -508,6 +511,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		if execIsContextWindowExceeded(err) && resumeContext != nil && resumeContext.Record != nil {
 			_ = r.persistExecContextWindowExceeded(resumeContext.Record)
 		}
+		r.emitTurnE2EDuration(turnStartedAt)
 		_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
 		_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
 		return nil, err
@@ -515,6 +519,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err := eventSink.Err(); err != nil {
 		return nil, err
 	}
+	r.emitTurnMetrics(turnResult, threadID, modelID, false)
+	r.emitTurnE2EDuration(turnStartedAt)
 	lastMessage, hasLastMessage := finalMessageForRequest(req, turnResult)
 	tokenUsage := execTokenUsageForResult(resumeContext, turnResult, modelID, cfg)
 	sessionPath, err := r.persistSession(req, threadID, turnID, prompt, requestInputs, turnResult, resumeContext, tokenUsage)

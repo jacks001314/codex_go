@@ -3,11 +3,14 @@ package exec
 import (
 	"context"
 	"log/slog"
+	"strings"
+	"time"
 
 	"codex_go/config"
 	"codex_go/doctor"
 	"codex_go/otelinit"
 	"codex_go/telemetry"
+	"codex_go/turn"
 )
 
 // configureOtelProvider mirrors the exec crate's startup wiring
@@ -62,4 +65,43 @@ func (r *Runner) shutdownOtelProvider(ctx context.Context) {
 		ctx = context.Background()
 	}
 	_ = provider.Shutdown(ctx)
+}
+
+// emitTurnMetrics mirrors the session metrics Rust records when a turn
+// completes (codex-otel's SessionTelemetry via the turn-completion path): the
+// per-model token-usage histogram, the per-turn tool-call count, the
+// per-tool-call counter/duration pair, and the unified-exec running-process
+// count. The end-to-end duration is emitted separately because it also covers
+// failed and interrupted turns.
+//
+// Go's exec has no memories or managed-network-proxy subsystem, so Rust's
+// codex.turn.memory and codex.turn.network_proxy counters are not emitted here.
+func (r *Runner) emitTurnMetrics(result *turn.AgentLoopResult, threadID string, modelID string, memoryToolEnabled bool) {
+	sink := r.otelMetricsSink()
+	if sink == nil || result == nil {
+		return
+	}
+	telemetry.EmitTurnTokenUsageMetrics(sink, result.ModelResponses(), modelID, memoryToolEnabled)
+	telemetry.EmitTurnToolCallMetric(sink, len(result.ToolExecutions), memoryToolEnabled)
+	for index := range result.ToolExecutions {
+		telemetry.EmitToolCallMetric(sink, &result.ToolExecutions[index])
+	}
+	telemetry.EmitTurnRunningProcessesMetric(sink, r.runningUnifiedExecProcesses(threadID))
+}
+
+// emitTurnE2EDuration records the turn task's wall-clock duration (recorded for
+// every terminal outcome, like Rust's turn timer).
+func (r *Runner) emitTurnE2EDuration(startedAt time.Time) {
+	sink := r.otelMetricsSink()
+	if sink == nil {
+		return
+	}
+	telemetry.EmitTurnE2EDurationMetric(sink, time.Since(startedAt).Milliseconds())
+}
+
+func (r *Runner) runningUnifiedExecProcesses(threadID string) int {
+	if r == nil || r.UnifiedExec == nil {
+		return 0
+	}
+	return len(r.UnifiedExec.ListProcesses(strings.TrimSpace(threadID)))
 }
