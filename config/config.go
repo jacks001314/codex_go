@@ -2398,10 +2398,15 @@ func canonicalProjectPath(path string) string {
 	return path
 }
 
-func sanitizeProjectConfigValues(values map[string]any) {
+// sanitizeProjectConfigValues mirrors Rust's sanitize_project_config: it strips
+// the project-local settings that repository contents may not control and
+// returns the ignored key paths, which the loader reports back to the user
+// (Rust project_ignored_config_keys_warning).
+func sanitizeProjectConfigValues(values map[string]any) []string {
 	if values == nil {
-		return
+		return nil
 	}
+	var ignored []string
 	for _, key := range []string{
 		"openai_base_url",
 		"chatgpt_base_url",
@@ -2421,10 +2426,16 @@ func sanitizeProjectConfigValues(values map[string]any) {
 		"realtime",
 		"otel",
 	} {
-		delete(values, key)
+		if _, ok := values[key]; ok {
+			delete(values, key)
+			ignored = append(ignored, key)
+		}
 	}
 	if features, ok := values["features"].(map[string]any); ok {
-		delete(features, "respect_system_proxy")
+		if _, ok := features["respect_system_proxy"]; ok {
+			delete(features, "respect_system_proxy")
+			ignored = append(ignored, "features.respect_system_proxy")
+		}
 		if len(features) == 0 {
 			delete(values, "features")
 		}
@@ -2435,11 +2446,16 @@ func sanitizeProjectConfigValues(values map[string]any) {
 	if tui, ok := values["tui"].(map[string]any); ok {
 		if keymap, ok := tui["keymap"].(map[string]any); ok {
 			if chat, ok := keymap["chat"].(map[string]any); ok {
-				delete(chat, "previous_permission_mode")
-				delete(chat, "next_permission_mode")
+				for _, key := range []string{"previous_permission_mode", "next_permission_mode"} {
+					if _, ok := chat[key]; ok {
+						delete(chat, key)
+						ignored = append(ignored, "tui.keymap.chat."+key)
+					}
+				}
 			}
 		}
 	}
+	return ignored
 }
 
 func resolveProjectRelativeConfigValues(values map[string]any, dotCodexDir string) {

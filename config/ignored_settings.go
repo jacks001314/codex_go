@@ -293,6 +293,48 @@ func (s *ConfigService) IgnoredSettingsWarning(cwd string) string {
 	return IgnoredConfigWarning(layers, s.rawRequirementsValues())
 }
 
+// ProjectIgnoredConfigKeysWarnings mirrors Rust's
+// project_ignored_config_keys_warning: every project `.codex/config.toml`
+// visible from cwd reports the unsupported keys the loader stripped, so a
+// repository cannot change them silently.
+func (s *ConfigService) ProjectIgnoredConfigKeysWarnings(cwd string) []string {
+	if s == nil {
+		return nil
+	}
+	layers, err := s.configLayersForWarning(cwd)
+	if err != nil {
+		return nil
+	}
+	return ProjectIgnoredConfigKeysWarningsForLayers(layers)
+}
+
+// ProjectIgnoredConfigKeysWarningsForLayers reports the stripped project-local
+// keys per project layer, in the layer order Rust discovers them.
+func ProjectIgnoredConfigKeysWarningsForLayers(layers []Layer) []string {
+	var warnings []string
+	for _, layer := range layers {
+		if layer.Name.Type != LayerSourceProject {
+			continue
+		}
+		file := strings.TrimSpace(layer.Name.File)
+		if file == "" {
+			continue
+		}
+		raw, exists, err := loadConfigFileIfExists(file)
+		if err != nil || !exists {
+			continue
+		}
+		ignored := sanitizeProjectConfigValues(cloneMap(raw))
+		if len(ignored) == 0 {
+			continue
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"Ignored unsupported project-local config keys in %s: %s. If you want these settings to apply, manually set them in your user-level config.toml.",
+			file, strings.Join(ignored, ", ")))
+	}
+	return warnings
+}
+
 func (s *ConfigService) configLayersForWarning(cwd string) ([]Layer, error) {
 	profile := s.currentProfile()
 	if strings.TrimSpace(cwd) != "" {

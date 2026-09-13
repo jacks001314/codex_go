@@ -48,6 +48,57 @@ func TestIgnoredConfigWarningEmptyWhenNoUnknownSettings(t *testing.T) {
 	}
 }
 
+// TestProjectIgnoredConfigKeysWarningsLikeRust mirrors Rust's
+// project_ignored_config_keys_warning: every stripped project-local key is
+// reported for its `.codex/config.toml`, while a project config without
+// unsupported keys stays quiet.
+func TestProjectIgnoredConfigKeysWarningsLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	dotCodex := filepath.Join(dir, ".gcode")
+	if err := os.MkdirAll(dotCodex, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dotCodex, "config.toml")
+	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
+		`model = "gpt-5"`,
+		`openai_base_url = "https://project.example.com"`,
+		`profile = "project"`,
+		`[features]`,
+		`respect_system_proxy = true`,
+		`[tui.keymap.chat]`,
+		`next_permission_mode = "y"`,
+	}, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layers := []Layer{{
+		Name: LayerSource{Type: LayerSourceProject, File: configPath, DotCodexFolder: dotCodex},
+	}}
+	warnings := ProjectIgnoredConfigKeysWarningsForLayers(layers)
+	if len(warnings) != 1 {
+		t.Fatalf("ProjectIgnoredConfigKeysWarningsForLayers() = %#v, want one warning", warnings)
+	}
+	got := warnings[0]
+	for _, want := range []string{
+		"Ignored unsupported project-local config keys in " + configPath + ": ",
+		"openai_base_url, profile, features.respect_system_proxy, tui.keymap.chat.next_permission_mode. ",
+		"If you want these settings to apply, manually set them in your user-level config.toml.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("warning missing %q:\n%s", want, got)
+		}
+	}
+
+	plainPath := filepath.Join(dir, "plain.toml")
+	if err := os.WriteFile(plainPath, []byte("model = \"gpt-5\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if warnings := ProjectIgnoredConfigKeysWarningsForLayers([]Layer{{
+		Name: LayerSource{Type: LayerSourceProject, File: plainPath},
+	}}); len(warnings) != 0 {
+		t.Fatalf("ProjectIgnoredConfigKeysWarningsForLayers() = %#v, want none", warnings)
+	}
+}
+
 func TestIgnoredConfigWarningBoundsEntriesAndAddsHints(t *testing.T) {
 	bounded := IgnoredConfigWarning([]Layer{{
 		Name: LayerSource{Type: LayerSourceUser, File: "config.toml"},

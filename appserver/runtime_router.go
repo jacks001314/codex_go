@@ -5664,21 +5664,34 @@ func (r *RuntimeRouter) emitThreadConfigWarnings(cwd string) {
 	if r == nil || r.services.Config == nil {
 		return
 	}
-	ignored := strings.TrimSpace(r.services.Config.IgnoredSettingsWarning(cwd))
-	if ignored == "" {
+	var summaries []string
+	if ignored := strings.TrimSpace(r.services.Config.IgnoredSettingsWarning(cwd)); ignored != "" {
+		summaries = append(summaries, ignored)
+	}
+	for _, warning := range r.services.Config.ProjectIgnoredConfigKeysWarnings(cwd) {
+		if summary := strings.TrimSpace(warning); summary != "" {
+			summaries = append(summaries, summary)
+		}
+	}
+	if len(summaries) == 0 {
 		return
 	}
 	r.configWarningsMu.Lock()
 	if r.emittedConfigWarnings == nil {
 		r.emittedConfigWarnings = map[string]bool{}
 	}
-	already := r.emittedConfigWarnings[ignored]
-	r.emittedConfigWarnings[ignored] = true
-	r.configWarningsMu.Unlock()
-	if already {
-		return
+	pending := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		if r.emittedConfigWarnings[summary] {
+			continue
+		}
+		r.emittedConfigWarnings[summary] = true
+		pending = append(pending, summary)
 	}
-	r.notify(NotificationConfigWarning, &config.ConfigWarningNotification{Summary: ignored})
+	r.configWarningsMu.Unlock()
+	for _, summary := range pending {
+		r.notify(NotificationConfigWarning, &config.ConfigWarningNotification{Summary: summary})
+	}
 }
 
 func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartResponse, error) {
