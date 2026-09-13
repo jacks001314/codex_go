@@ -10,8 +10,18 @@ type RateLimitResetCreditsSummary struct {
 }
 
 type RateLimitsWithResetCredits struct {
-	RateLimits            []RateLimitSnapshot
+	RateLimits []RateLimitSnapshot
+	// OrdinaryUsageAllowed is the backend decision for ordinary included usage
+	// (Rust RateLimitsWithResetCredits::ordinary_usage_allowed); absence is not
+	// permission to recover.
+	OrdinaryUsageAllowed  *bool
 	RateLimitResetCredits *RateLimitResetCreditsSummary
+	// AccountID/UserID identify the account this usage read belongs to.
+	AccountID *string
+	UserID    *string
+	// RateLimitUpsell preserves the backend-owned banner payload verbatim (Rust
+	// RateLimitsWithResetCredits::rate_limit_upsell).
+	RateLimitUpsell json.RawMessage
 }
 
 type TokenUsageProfile struct {

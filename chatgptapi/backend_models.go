@@ -1,6 +1,9 @@
 package chatgptapi
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 type GitPullRequest struct {
 	Number         int            `json:"number"`
@@ -117,6 +120,14 @@ type RateLimitStatusPayload struct {
 	AdditionalRateLimits  []AdditionalRateLimitDetails  `json:"additional_rate_limits,omitempty"`
 	RateLimitReachedType  *RateLimitReachedType         `json:"rate_limit_reached_type,omitempty"`
 	RateLimitResetCredits *RateLimitResetCreditsSummary `json:"rate_limit_reset_credits,omitempty"`
+	// AccountID/UserID identify the account this usage read belongs to; the
+	// app server only exposes account-bound CTA content when they match the
+	// active auth (Rust account_processor.rs).
+	AccountID *string `json:"account_id,omitempty"`
+	UserID    *string `json:"user_id,omitempty"`
+	// RateLimitUpsell is the backend-owned banner payload, preserved verbatim
+	// (Rust RateLimitStatusWithResetCredits::rate_limit_upsell).
+	RateLimitUpsell json.RawMessage `json:"rate_limit_upsell,omitempty"`
 }
 
 func NewRateLimitStatusPayload(planType PlanType) *RateLimitStatusPayload {

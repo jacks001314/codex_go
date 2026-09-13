@@ -27282,3 +27282,57 @@ func TestRuntimeRouterRejectsTransportMismatchedMCPOverridesLikeRust(t *testing.
 		t.Fatalf("valid thread/start config error = %v", err)
 	}
 }
+
+// TestAccountBoundRateLimitExtrasLikeRust mirrors Rust account_processor.rs:
+// ordinary_usage_allowed and rate_limit_upsell are exposed only when the usage
+// read belongs to the active non-FedRAMP account, while account_id is always
+// reported.
+func TestAccountBoundRateLimitExtrasLikeRust(t *testing.T) {
+	accountID := "acct-1"
+	userID := "user-1"
+	snapshot := &auth.AuthDotJSON{Tokens: map[string]any{
+		"account_id":      accountID,
+		"chatgpt_user_id": userID,
+	}}
+	if auth.AccountIDFromAuthForRestrictions(snapshot) != accountID || auth.ChatGPTUserIDFromAuth(snapshot) != userID {
+		t.Fatalf("test setup: auth ids = %q/%q", auth.AccountIDFromAuthForRestrictions(snapshot), auth.ChatGPTUserIDFromAuth(snapshot))
+	}
+	ordinary := true
+	upsell := json.RawMessage(`{"banner_type":"usage_limit"}`)
+	response := &chatgptapi.RateLimitsWithResetCredits{
+		OrdinaryUsageAllowed: &ordinary,
+		AccountID:            &accountID,
+		UserID:               &userID,
+		RateLimitUpsell:      upsell,
+	}
+	gotOrdinary, gotAccount, gotUpsell := accountBoundRateLimitExtras(response, snapshot)
+	if gotOrdinary == nil || !*gotOrdinary || string(gotUpsell) != string(upsell) || gotAccount == nil || *gotAccount != accountID {
+		t.Fatalf("matching account extras = %v/%v/%s", gotOrdinary, gotAccount, gotUpsell)
+	}
+
+	otherAccount := "acct-2"
+	mismatched := *response
+	mismatched.AccountID = &otherAccount
+	if ordinary, _, upsell := accountBoundRateLimitExtras(&mismatched, snapshot); ordinary != nil || upsell != nil {
+		t.Fatalf("mismatched account extras = %v/%s, want nil", ordinary, upsell)
+	}
+
+	fedramp := &auth.AuthDotJSON{Tokens: map[string]any{
+		"account_id":         accountID,
+		"chatgpt_user_id":    userID,
+		"is_fedramp_account": true,
+	}}
+	if ordinary, _, upsell := accountBoundRateLimitExtras(response, fedramp); ordinary != nil || upsell != nil {
+		t.Fatalf("fedramp extras = %v/%s, want nil", ordinary, upsell)
+	}
+
+	noUser := *response
+	noUser.UserID = nil
+	if ordinary, _, upsell := accountBoundRateLimitExtras(&noUser, snapshot); ordinary != nil || upsell != nil {
+		t.Fatalf("missing user id extras = %v/%s, want nil", ordinary, upsell)
+	}
+
+	if _, account, _ := accountBoundRateLimitExtras(&mismatched, snapshot); account == nil || *account != otherAccount {
+		t.Fatalf("account id = %v, want %q", account, otherAccount)
+	}
+}

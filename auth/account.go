@@ -483,25 +483,46 @@ type GetAccountRateLimitsResponse struct {
 	RateLimits            RateLimitSnapshot             `json:"rateLimits"`
 	RateLimitsByLimitID   map[string]RateLimitSnapshot  `json:"rateLimitsByLimitId"`
 	RateLimitResetCredits *RateLimitResetCreditsSummary `json:"rateLimitResetCredits"`
+	// OrdinaryUsageAllowed is the backend decision for ordinary included usage,
+	// null when unavailable (clients must not infer recovery).
+	OrdinaryUsageAllowed *bool `json:"ordinaryUsageAllowed"`
+	// AccountID is the account associated with this usage snapshot, when the
+	// backend supplied it.
+	AccountID *string `json:"accountId"`
+	// RateLimitUpsell is the backend-owned banner payload (snake_case nested
+	// keys); null leaves the client's existing UI unchanged.
+	RateLimitUpsell json.RawMessage `json:"rateLimitUpsell"`
 }
 
 func (r *GetAccountRateLimitsResponse) MarshalJSON() ([]byte, error) {
 	rateLimits := RateLimitSnapshot{}
 	var byLimitID map[string]RateLimitSnapshot
 	var resetCredits *RateLimitResetCreditsSummary
+	var ordinaryUsageAllowed *bool
+	var accountID *string
+	var rateLimitUpsell json.RawMessage
 	if r != nil {
 		rateLimits = cloneRateLimitSnapshot(r.RateLimits)
 		byLimitID = cloneRateLimitMap(r.RateLimitsByLimitID)
 		resetCredits = cloneRateLimitResetCredits(r.RateLimitResetCredits)
+		ordinaryUsageAllowed = cloneBoolValue(r.OrdinaryUsageAllowed)
+		accountID = cloneStringPtr(r.AccountID)
+		rateLimitUpsell = append(json.RawMessage(nil), r.RateLimitUpsell...)
 	}
 	return json.Marshal(struct {
 		RateLimits            RateLimitSnapshot             `json:"rateLimits"`
 		RateLimitsByLimitID   map[string]RateLimitSnapshot  `json:"rateLimitsByLimitId"`
 		RateLimitResetCredits *RateLimitResetCreditsSummary `json:"rateLimitResetCredits"`
+		OrdinaryUsageAllowed  *bool                         `json:"ordinaryUsageAllowed"`
+		AccountID             *string                       `json:"accountId"`
+		RateLimitUpsell       json.RawMessage               `json:"rateLimitUpsell"`
 	}{
 		RateLimits:            rateLimits,
 		RateLimitsByLimitID:   byLimitID,
 		RateLimitResetCredits: resetCredits,
+		OrdinaryUsageAllowed:  ordinaryUsageAllowed,
+		AccountID:             accountID,
+		RateLimitUpsell:       rateLimitUpsell,
 	})
 }
 
@@ -834,13 +855,19 @@ type AccountManager struct {
 	rateLimits          RateLimitSnapshot
 	rateLimitsByLimitID map[string]RateLimitSnapshot
 	resetCredits        *RateLimitResetCreditsSummary
-	redeemedResetKeys   map[string]bool
-	usage               GetAccountTokenUsageResponse
-	workspaceMessages   GetWorkspaceMessagesResponse
-	sessions            []Session
-	activeSessionID     *string
-	now                 func() time.Time
-	authSnapshot        *AuthDotJSON
+	// usageExtras carries the account-bound metadata from the same usage read
+	// (Rust GetAccountRateLimitsResponse::ordinary_usage_allowed/account_id/
+	// rate_limit_upsell).
+	ordinaryUsageAllowed *bool
+	rateLimitAccountID   *string
+	rateLimitUpsell      json.RawMessage
+	redeemedResetKeys    map[string]bool
+	usage                GetAccountTokenUsageResponse
+	workspaceMessages    GetWorkspaceMessagesResponse
+	sessions             []Session
+	activeSessionID      *string
+	now                  func() time.Time
+	authSnapshot         *AuthDotJSON
 }
 
 func NewAccountManager() *AccountManager {
@@ -1071,7 +1098,22 @@ func (m *AccountManager) RateLimits() *GetAccountRateLimitsResponse {
 		RateLimits:            cloneRateLimitSnapshot(m.rateLimits),
 		RateLimitsByLimitID:   cloneRateLimitMap(m.rateLimitsByLimitID),
 		RateLimitResetCredits: cloneRateLimitResetCredits(m.resetCredits),
+		OrdinaryUsageAllowed:  cloneBoolValue(m.ordinaryUsageAllowed),
+		AccountID:             cloneStringPtr(m.rateLimitAccountID),
+		RateLimitUpsell:       append(json.RawMessage(nil), m.rateLimitUpsell...),
 	}
+}
+
+// SetRateLimitExtras records the account-bound metadata from the usage read that
+// produced the cached rate limits (Rust filters ordinary_usage_allowed and
+// rate_limit_upsell on the active account before exposing them).
+func (m *AccountManager) SetRateLimitExtras(ordinaryUsageAllowed *bool, accountID *string, upsell json.RawMessage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureLocked()
+	m.ordinaryUsageAllowed = cloneBoolValue(ordinaryUsageAllowed)
+	m.rateLimitAccountID = cloneStringPtr(accountID)
+	m.rateLimitUpsell = append(json.RawMessage(nil), upsell...)
 }
 
 func (m *AccountManager) RateLimitsUpdated() *AccountRateLimitsUpdatedNotification {
@@ -1423,6 +1465,14 @@ func cloneStringPtr(value *string) *string {
 	return &clone
 }
 
+func cloneBoolValue(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
 func stringPtrIfNotEmpty(value string) *string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -1516,4 +1566,22 @@ func planFromString(value string) PlanType {
 	default:
 		return PlanUnknown
 	}
+}
+
+// IsFedrampAccount mirrors Rust CodexAuth::is_fedramp_account for the account
+// types that expose token data: the FedRAMP claim from the token map or the
+// JWT claims. Header auth never carries one.
+func IsFedrampAccount(snapshot *AuthDotJSON) bool {
+	if snapshot == nil {
+		return false
+	}
+	if boolFromAny(snapshot.Tokens, "is_fedramp_account") || boolFromAny(snapshot.Tokens, "chatgpt_account_is_fedramp") {
+		return true
+	}
+	for _, key := range []string{"id_token", "access_token"} {
+		if claims := ChatGPTClaimsFromJWT(stringFromAny(snapshot.Tokens, key)); claims.FedRAMP {
+			return true
+		}
+	}
+	return false
 }

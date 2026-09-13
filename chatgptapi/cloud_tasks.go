@@ -369,8 +369,23 @@ func (c *CloudClient) GetRateLimitsWithResetCredits(ctx context.Context) (*RateL
 	}
 	return &RateLimitsWithResetCredits{
 		RateLimits:            RateLimitSnapshotsFromPayload(&payload),
+		OrdinaryUsageAllowed:  ordinaryUsageAllowedFromPayload(&payload),
 		RateLimitResetCredits: payload.RateLimitResetCredits,
+		AccountID:             payload.AccountID,
+		UserID:                payload.UserID,
+		RateLimitUpsell:       payload.RateLimitUpsell,
 	}, nil
+}
+
+// ordinaryUsageAllowedFromPayload mirrors Rust's
+// `payload.rate_limits.rate_limit.allowed` extraction: the backend decision for
+// ordinary included usage, absent when the payload carries no rate limit.
+func ordinaryUsageAllowedFromPayload(payload *RateLimitStatusPayload) *bool {
+	if payload == nil || payload.RateLimit == nil {
+		return nil
+	}
+	allowed := payload.RateLimit.Allowed
+	return &allowed
 }
 
 func (c *CloudClient) ConsumeRateLimitResetCredit(ctx context.Context, idempotencyKey string) (*ConsumeRateLimitResetCreditResponse, error) {

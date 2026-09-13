@@ -10371,6 +10371,8 @@ func (r *RuntimeRouter) handleGetAccountRateLimits(request *Request) (*auth.GetA
 		resetCredits = &auth.RateLimitResetCreditsSummary{AvailableCount: response.RateLimitResetCredits.AvailableCount}
 	}
 	r.requireAccount().SetRateLimits(rateLimits, byLimitID, resetCredits)
+	ordinary, accountID, upsell := accountBoundRateLimitExtras(response, snapshot)
+	r.requireAccount().SetRateLimitExtras(ordinary, accountID, upsell)
 	return r.requireAccount().RateLimits(), nil
 }
 
@@ -14553,4 +14555,27 @@ func runtimeErrorCode(err error) int {
 	default:
 		return JSONRPCInternalErrorCode
 	}
+}
+
+// accountBoundRateLimitExtras ports the account-readiness check Rust applies in
+// account_processor.rs before exposing account-bound CTA content: the ordinary
+// usage decision and the backend banner are only reported when the usage read
+// belongs to the active non-FedRAMP account (the account id is reported
+// regardless).
+func accountBoundRateLimitExtras(response *chatgptapi.RateLimitsWithResetCredits, snapshot *auth.AuthDotJSON) (*bool, *string, json.RawMessage) {
+	if response == nil {
+		return nil, nil, nil
+	}
+	authAccountID := auth.AccountIDFromAuthForRestrictions(snapshot)
+	authUserID := auth.ChatGPTUserIDFromAuth(snapshot)
+	matchesActiveAccount := !auth.IsFedrampAccount(snapshot) &&
+		authAccountID != "" && response.AccountID != nil && *response.AccountID == authAccountID &&
+		authUserID != "" && response.UserID != nil && *response.UserID == authUserID
+	ordinary := response.OrdinaryUsageAllowed
+	upsell := response.RateLimitUpsell
+	if !matchesActiveAccount {
+		ordinary = nil
+		upsell = nil
+	}
+	return ordinary, response.AccountID, upsell
 }
