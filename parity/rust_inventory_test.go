@@ -234,6 +234,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"memories",
 		"model",
 		"network",
+		"otelinit",
 		"parity",
 		"plugin",
 		"processhardening",

@@ -242,10 +242,31 @@ type TaskMetrics struct {
 	mu      sync.Mutex
 	records []*TaskMetric
 	now     func() time.Time
+	// exporter forwards recorded metrics to an external sink (the OTEL metrics
+	// client), mirroring Rust's sqlite telemetry recorder that wraps the metrics
+	// client instead of only recording in-process.
+	exporter TaskMetricsExporter
+}
+
+// TaskMetricsExporter receives every metric recorded by TaskMetrics. The OTEL
+// metrics client implements it.
+type TaskMetricsExporter interface {
+	Counter(name string, inc int, tags map[string]string)
+	Histogram(name string, value int, tags map[string]string)
+	HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string)
+	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }
 
 func NewTaskMetrics() *TaskMetrics {
 	return &TaskMetrics{now: time.Now}
+}
+
+// SetExporter installs the sink that receives every recorded metric in addition
+// to the in-memory records. A nil exporter disables forwarding.
+func (m *TaskMetrics) SetExporter(exporter TaskMetricsExporter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.exporter = exporter
 }
 
 func (m *TaskMetrics) SetClock(clock func() time.Time) {
@@ -260,10 +281,10 @@ func (m *TaskMetrics) SetClock(clock func() time.Time) {
 
 func (m *TaskMetrics) Counter(name string, inc int, tags map[string]string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if inc == 0 {
 		inc = 1
 	}
+	exporter := m.exporter
 	m.records = append(m.records, &TaskMetric{
 		Name: name,
 		Kind: "counter",
@@ -271,12 +292,20 @@ func (m *TaskMetrics) Counter(name string, inc int, tags map[string]string) {
 		Tags: cloneStringMap(tags),
 		At:   m.now().UTC(),
 	})
+	m.mu.Unlock()
+	if exporter != nil {
+		exporter.Counter(name, inc, tags)
+	}
 }
 
 func (m *TaskMetrics) Histogram(name string, value int, tags map[string]string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	exporter := m.exporter
 	m.records = append(m.records, &TaskMetric{Name: name, Kind: "histogram", Value: value, Tags: cloneStringMap(tags), At: m.now().UTC()})
+	m.mu.Unlock()
+	if exporter != nil {
+		exporter.Histogram(name, value, tags)
+	}
 }
 
 // HistogramWithBounds records a histogram value together with its explicit
@@ -284,7 +313,7 @@ func (m *TaskMetrics) Histogram(name string, value int, tags map[string]string) 
 // SQLite log batch metrics).
 func (m *TaskMetrics) HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	exporter := m.exporter
 	m.records = append(m.records, &TaskMetric{
 		Name:       name,
 		Kind:       "histogram",
@@ -293,12 +322,20 @@ func (m *TaskMetrics) HistogramWithBounds(name string, value int, boundaries []f
 		Tags:       cloneStringMap(tags),
 		At:         m.now().UTC(),
 	})
+	m.mu.Unlock()
+	if exporter != nil {
+		exporter.HistogramWithBounds(name, value, boundaries, tags)
+	}
 }
 
 func (m *TaskMetrics) RecordDuration(name string, duration time.Duration, tags map[string]string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	exporter := m.exporter
 	m.records = append(m.records, &TaskMetric{Name: name, Kind: "duration", DurationMS: float64(duration) / float64(time.Millisecond), Tags: cloneStringMap(tags), At: m.now().UTC()})
+	m.mu.Unlock()
+	if exporter != nil {
+		exporter.RecordDuration(name, duration, tags)
+	}
 }
 
 func (m *TaskMetrics) Records() []*TaskMetric {

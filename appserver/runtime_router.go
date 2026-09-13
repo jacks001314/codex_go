@@ -35,6 +35,7 @@ import (
 	"codex_go/mcp"
 	"codex_go/model"
 	"codex_go/network"
+	"codex_go/otelinit"
 	"codex_go/plugin"
 	promptctx "codex_go/prompt"
 	"codex_go/realtime"
@@ -245,9 +246,13 @@ type RuntimeRouter struct {
 	// (#43428): it advances only when the credential owner (auth mode or the
 	// ChatGPT user/workspace pair) changes, unlike authRevision which advances
 	// on any refresh-relevant credential change.
-	authOwnerRevision       uint64
-	authChangeTracker       *auth.AuthChangeTracker
-	authChanged             chan struct{}
+	authOwnerRevision uint64
+	authChangeTracker *auth.AuthChangeTracker
+	authChanged       chan struct{}
+	// otelProvider is the process OTEL provider built from config at startup.
+	// Only its metrics client is active (Go has no tracing/logging pipeline);
+	// it forwards the task metrics and is shut down with the router.
+	otelProvider            *telemetry.OtelProvider
 	mcpEventStreams         *mcpEventStreamManager
 	skillShadowMu           sync.Mutex
 	skillShadowState        map[string]*skillShadowThreadState
@@ -1148,6 +1153,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	router.codexHomeScanCancel = func() { atomic.StoreInt32(&codexHomeScanCanceled, 1) }
 	router.configureEnvironmentHTTPPolicy()
 	router.configureAnalyticsFromConfig(codexHome, options)
+	router.configureOtelMetrics(codexHome, options, runtimeMetrics)
 	router.configureRemoteControlBackendForStartup(codexHome, options)
 	router.configureManagedNetworkFromConfig()
 	if resolved, err := router.resolveAuthWithLoginRestrictions(codexHome); err == nil && resolved != nil {
@@ -1274,6 +1280,48 @@ func (r *RuntimeRouter) configureAnalyticsFromConfig(codexHome string, options *
 		HTTPClient:       r.httpClientForConfig(cfg),
 		AuthorizeRequest: r.analyticsAuthorizeRequest(codexHome),
 	})
+}
+
+// otelAppServerServiceName mirrors app-server's OTEL_SERVICE_NAME.
+const otelAppServerServiceName = "codex-app-server"
+
+// configureOtelMetrics mirrors the app-server's otel_init wiring: build the
+// OTEL provider from the effective config, forward the task metrics to its
+// metrics client (Rust's sqlite telemetry recorder over the metrics client),
+// and record the process start once. Exports stay off unless an OTLP metrics
+// exporter is configured and analytics is enabled, so the default Statsig route
+// is inert in development builds.
+func (r *RuntimeRouter) configureOtelMetrics(codexHome string, options *RuntimeRouterOptions, metrics *state.TaskMetrics) {
+	if r == nil || r.services.Config == nil || metrics == nil {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return
+	}
+	defaultAnalyticsEnabled := false
+	if options != nil {
+		defaultAnalyticsEnabled = options.AnalyticsDefaultEnabled
+	}
+	provider, err := otelinit.BuildProvider(otelinit.Options{
+		Config:                  &config.Config{Values: read.Config},
+		ServiceName:             otelAppServerServiceName,
+		ServiceVersion:          appServerVersion(),
+		DefaultAnalyticsEnabled: defaultAnalyticsEnabled,
+	})
+	if err != nil {
+		// Rust fails app-server startup on an OTEL provider error; the Go
+		// constructor cannot, so the failure is reported and startup continues
+		// without export.
+		slog.Warn("failed to build the OTEL provider", "error", err)
+		return
+	}
+	if provider == nil || provider.Metrics() == nil {
+		return
+	}
+	r.otelProvider = provider
+	metrics.SetExporter(provider.Metrics())
+	telemetry.RecordProcessStartOnce(provider.Metrics(), otelAppServerServiceName)
 }
 
 func (r *RuntimeRouter) analyticsAuthorizeRequest(codexHome string) telemetry.AnalyticsAuthorizeRequestFunc {
@@ -1650,6 +1698,13 @@ func (r *RuntimeRouter) close() error {
 		if err := r.services.StateRuntime.Close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
+	}
+	if r.otelProvider != nil {
+		otelCtx, cancelOtel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := r.otelProvider.Shutdown(otelCtx); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		cancelOtel()
 	}
 	return closeErr
 }

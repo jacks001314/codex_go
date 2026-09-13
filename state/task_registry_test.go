@@ -136,6 +136,65 @@ func TestTaskCancelToken(t *testing.T) {
 	}
 }
 
+// recordingTaskMetricsExporter captures the metrics forwarded to an installed
+// exporter (the OTEL metrics client's role).
+type recordingTaskMetricsExporter struct {
+	counters   []string
+	histograms []string
+	bounds     []string
+	durations  []string
+}
+
+func (e *recordingTaskMetricsExporter) Counter(name string, _ int, _ map[string]string) {
+	e.counters = append(e.counters, name)
+}
+
+func (e *recordingTaskMetricsExporter) Histogram(name string, _ int, _ map[string]string) {
+	e.histograms = append(e.histograms, name)
+}
+
+func (e *recordingTaskMetricsExporter) HistogramWithBounds(name string, _ int, _ []float64, _ map[string]string) {
+	e.bounds = append(e.bounds, name)
+}
+
+func (e *recordingTaskMetricsExporter) RecordDuration(name string, _ time.Duration, _ map[string]string) {
+	e.durations = append(e.durations, name)
+}
+
+// An installed exporter receives every metric in addition to the in-memory
+// records, mirroring Rust's sqlite telemetry recorder over the metrics client.
+func TestTaskMetricsForwardsToInstalledExporter(t *testing.T) {
+	metrics := NewTaskMetrics()
+	exporter := &recordingTaskMetricsExporter{}
+	metrics.SetExporter(exporter)
+	metrics.Counter("counter", 0, nil)
+	metrics.Histogram("histogram", 1, nil)
+	metrics.HistogramWithBounds("bounded", 1, []float64{1, 2}, nil)
+	metrics.RecordDuration("duration", time.Millisecond, nil)
+
+	if len(exporter.counters) != 1 || exporter.counters[0] != "counter" {
+		t.Fatalf("forwarded counters = %#v", exporter.counters)
+	}
+	if len(exporter.histograms) != 1 || exporter.histograms[0] != "histogram" {
+		t.Fatalf("forwarded histograms = %#v", exporter.histograms)
+	}
+	if len(exporter.bounds) != 1 || exporter.bounds[0] != "bounded" {
+		t.Fatalf("forwarded bounded histograms = %#v", exporter.bounds)
+	}
+	if len(exporter.durations) != 1 || exporter.durations[0] != "duration" {
+		t.Fatalf("forwarded durations = %#v", exporter.durations)
+	}
+	if records := metrics.Records(); len(records) != 4 {
+		t.Fatalf("in-memory records = %#v", records)
+	}
+
+	metrics.SetExporter(nil)
+	metrics.Counter("counter", 1, nil)
+	if len(exporter.counters) != 1 {
+		t.Fatalf("a cleared exporter still received metrics: %#v", exporter.counters)
+	}
+}
+
 func fixedTaskTime() time.Time {
 	return time.Date(2026, 6, 29, 8, 0, 0, 0, time.UTC)
 }
