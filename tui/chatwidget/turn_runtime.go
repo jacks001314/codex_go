@@ -161,7 +161,11 @@ type TurnRuntimeState struct {
 	LastTokenUsage    StatusTokenUsage
 	ContextUsedTokens *int64
 
-	RuntimeMetrics             historycell.RuntimeMetricsSummary
+	RuntimeMetrics historycell.RuntimeMetricsSummary
+	// RuntimeMetricsSource drains the runtime-metrics delta recorded since the
+	// previous call (Rust SessionTelemetry::runtime_metrics_summary, which reads
+	// and resets the metrics manual reader). Nil means no snapshot is available.
+	RuntimeMetricsSource       func() historycell.RuntimeMetricsSummary
 	HadWorkActivity            bool
 	NeedsFinalMessageSeparator bool
 	FinalMessageSeparators     []historycell.FinalMessageSeparator
@@ -261,6 +265,11 @@ func (s *TurnRuntimeState) OnTaskStarted(turnID string) {
 		s.Streaming.AdaptiveChunking.Reset()
 	}
 	s.RuntimeMetrics = historycell.RuntimeMetricsSummary{}
+	if s.RuntimeMetricsSource != nil {
+		// Rust reset_runtime_metrics: drain the reader so this turn starts from
+		// zero and the previous turn's totals cannot leak into this one.
+		_ = s.RuntimeMetricsSource()
+	}
 	s.InterruptHintVisible = true
 	s.PendingStatusRestore = false
 	s.UpdateTaskRunningState()
@@ -312,6 +321,11 @@ func (s *TurnRuntimeState) OnTaskComplete(params TurnCompleteRuntimeParams) Turn
 	}
 
 	if !params.FromReplay {
+		if s.RuntimeMetricsSource != nil {
+			// Rust collect_runtime_metrics_delta(): the turn's reported totals
+			// are the deltas drained since the turn started.
+			s.ApplyRuntimeMetricsDelta(s.RuntimeMetricsSource())
+		}
 		runtimeMetrics := s.RuntimeMetrics
 		runtimeMetricsIncluded := !runtimeMetricsEmpty(runtimeMetrics)
 		showWorkSeparator := s.HadWorkActivity && (s.NeedsFinalMessageSeparator || runtimeMetricsIncluded)

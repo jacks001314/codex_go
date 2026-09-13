@@ -328,3 +328,48 @@ func TestTurnRuntimeInterruptedTurnMessageMatchesRust(t *testing.T) {
 		t.Fatalf("interrupt message = %q", got)
 	}
 }
+
+// Rust's chatwidget drains the runtime-metrics reader when a turn starts and
+// again when it completes, so the completion metadata reports this turn's
+// deltas only.
+func TestTurnRuntimeDrainsRuntimeMetricsSourceLikeRust(t *testing.T) {
+	drained := 0
+	next := historycell.RuntimeMetricsSummary{
+		ToolCalls: historycell.RuntimeMetricCountDuration{Count: 4, DurationMS: 900},
+	}
+	state := TurnRuntimeState{
+		HadWorkActivity: true,
+		RuntimeMetricsSource: func() historycell.RuntimeMetricsSummary {
+			drained++
+			summary := next
+			next = historycell.RuntimeMetricsSummary{}
+			return summary
+		},
+	}
+
+	// Turn start drains (and discards) whatever the previous turn left behind.
+	state.OnTaskStarted("turn-1")
+	if drained != 1 || !runtimeMetricsEmpty(state.RuntimeMetrics) {
+		t.Fatalf("turn start drain = %d metrics=%#v", drained, state.RuntimeMetrics)
+	}
+	state.HadWorkActivity = true
+
+	// The completion's deltas are what the separator reports.
+	next = historycell.RuntimeMetricsSummary{
+		ToolCalls: historycell.RuntimeMetricCountDuration{Count: 2, DurationMS: 150},
+	}
+	result := state.OnTaskComplete(TurnCompleteRuntimeParams{TurnID: "turn-1", LastAgentMessage: "answer"})
+	if drained != 2 {
+		t.Fatalf("drains = %d, want one per turn boundary", drained)
+	}
+	if !result.RuntimeMetricsIncluded || len(state.FinalMessageSeparators) != 1 {
+		t.Fatalf("completion result = %#v separators=%d", result, len(state.FinalMessageSeparators))
+	}
+	metrics := state.FinalMessageSeparators[0].RuntimeMetrics
+	if metrics == nil || metrics.ToolCalls.Count != 2 || metrics.ToolCalls.DurationMS != 150 {
+		t.Fatalf("separator metrics = %#v", metrics)
+	}
+	if !runtimeMetricsEmpty(state.RuntimeMetrics) {
+		t.Fatalf("completion left accumulated metrics: %#v", state.RuntimeMetrics)
+	}
+}
