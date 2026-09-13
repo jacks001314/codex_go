@@ -129,10 +129,12 @@ func registerSkillsTools(registry *tool.Registry, options *ToolRegistryOptions) 
 func newSkillsToolExecutor(options *ToolRegistryOptions, name string, description string, catalog *orchestratorSkillCatalogCache, executor *executorSkillCatalogCache) *skillsToolExecutor {
 	return &skillsToolExecutor{
 		spec: tool.Spec{
-			Name:                 tool.NamespacedName(skillsToolNamespace, name),
-			Description:          description,
-			InputSchema:          skillsToolInputSchema(name),
-			Parallel:             true,
+			Name:        tool.NamespacedName(skillsToolNamespace, name),
+			Description: description,
+			InputSchema: skillsToolInputSchema(name),
+			// Rust's ext/skills tools do not override
+			// `supports_parallel_tool_calls`, so they keep the serial default.
+			Parallel:             false,
 			NamespaceDescription: fmt.Sprintf("Tools in the %s namespace.", skillsToolNamespace),
 		},
 		mcpService: options.MCPService,

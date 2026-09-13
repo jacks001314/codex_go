@@ -189,7 +189,9 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 			required = append(required, "nickname")
 		}
 		spec.OutputSchema = multiAgentObjectSchema(outputProperties, required)
-		spec.Parallel = true
+		// Rust's multi-agent v2 handlers do not override
+		// `supports_parallel_tool_calls`, so spawning stays serial.
+		spec.Parallel = false
 	case multiAgentV2Send:
 		spec.Description = "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn."
 		spec.InputSchema = targetMessageSchema("Relative or canonical task name to message (from spawn_agent).", "Message text to queue on the target agent.")

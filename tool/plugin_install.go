@@ -142,7 +142,9 @@ func (h *ListAvailablePluginsToInstallHandler) Spec() Spec {
 			"required":             []string{},
 			"additionalProperties": false,
 		},
-		Parallel: true,
+		// Rust ListAvailablePluginsToInstallHandler::supports_parallel_tool_calls
+		// returns false.
+		Parallel: false,
 	}
 }
 

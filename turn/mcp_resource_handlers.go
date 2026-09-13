@@ -43,7 +43,9 @@ func (h *mcpResourceListExecutor) Spec() tool.Spec {
 		description = "Lists resource templates provided by MCP servers. Parameterized resource templates allow servers to share data that provides context to language models, such as files, database schemas, or application-specific information. Prefer resource templates over web search when possible."
 		cursor = "Opaque cursor from a previous list_mcp_resource_templates call; omit for the first page."
 	}
-	return tool.Spec{Name: tool.PlainName(name), Description: description, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"server": map[string]any{"type": "string", "description": "MCP server name. Omit to list resources from every configured server."}, "cursor": map[string]any{"type": "string", "description": cursor}}, "additionalProperties": false}}
+	// Rust's MCP resource list handlers override
+	// `supports_parallel_tool_calls` with true.
+	return tool.Spec{Name: tool.PlainName(name), Description: description, Parallel: true, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"server": map[string]any{"type": "string", "description": "MCP server name. Omit to list resources from every configured server."}, "cursor": map[string]any{"type": "string", "description": cursor}}, "additionalProperties": false}}
 }
 func (h *mcpResourceListExecutor) Execute(ctx context.Context, inv *tool.Invocation) (*tool.Output, error) {
 	_ = ctx
@@ -97,7 +99,7 @@ type mcpResourceReadExecutor struct {
 }
 
 func (h *mcpResourceReadExecutor) Spec() tool.Spec {
-	return tool.Spec{Name: tool.PlainName("read_mcp_resource"), Description: "Read a specific resource from an MCP server given the server name and resource URI.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"server": map[string]any{"type": "string", "description": "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."}, "uri": map[string]any{"type": "string", "description": "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."}}, "required": []string{"server", "uri"}, "additionalProperties": false}}
+	return tool.Spec{Name: tool.PlainName("read_mcp_resource"), Description: "Read a specific resource from an MCP server given the server name and resource URI.", Parallel: true, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"server": map[string]any{"type": "string", "description": "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."}, "uri": map[string]any{"type": "string", "description": "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."}}, "required": []string{"server", "uri"}, "additionalProperties": false}}
 }
 func (h *mcpResourceReadExecutor) Execute(ctx context.Context, inv *tool.Invocation) (*tool.Output, error) {
 	_ = ctx

@@ -452,7 +452,9 @@ func multiAgentToolSpec(kind MultiAgentToolKind) tool.Spec {
 			"model":            map[string]any{"type": "string", "description": "Optional model override."},
 			"reasoning_effort": map[string]any{"type": "string", "description": "Optional reasoning effort override."},
 			"fork_context":     map[string]any{"type": "boolean", "description": "Whether to include the parent context."},
-		}, nil), Parallel: true}
+			// Rust's multi-agent handlers do not override
+			// `supports_parallel_tool_calls`, so spawning stays serial.
+		}, nil), Parallel: false}
 	case MultiAgentToolSend:
 		return tool.Spec{Name: name, Description: "Sends input to an existing sub-agent.", InputSchema: multiAgentObjectSchema(map[string]any{
 			"target":    map[string]any{"type": "string", "description": "Agent id."},

@@ -102,11 +102,14 @@ func registerDynamicToolHandler(registry *tool.Registry, options *DynamicToolReg
 		exposure = tool.ExposureDiscoverable
 	}
 	spec := tool.Spec{
-		Name:                 name,
-		Description:          function.Description,
-		InputSchema:          inputSchema,
-		Exposure:             exposure,
-		Parallel:             true,
+		Name:        name,
+		Description: function.Description,
+		InputSchema: inputSchema,
+		Exposure:    exposure,
+		// Rust DynamicToolHandler does not override
+		// `supports_parallel_tool_calls`, so dynamic tools keep the trait's
+		// serial default.
+		Parallel:             false,
 		NamespaceDescription: dynamicToolNamespaceDescription(namespace),
 		Search: &tool.SearchInfo{
 			Source: &tool.SearchSourceInfo{
