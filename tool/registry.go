@@ -429,6 +429,15 @@ func (r *Router) RegisterIfAbsent(executor Executor) error {
 	return nil
 }
 
+// Registry returns the router's tool registry (the inventory collector walks it
+// to report every model-visible function).
+func (r *Router) Registry() *Registry {
+	if r == nil {
+		return nil
+	}
+	return r.registry
+}
+
 func (r *Router) ModelVisibleSpecs() []Spec {
 	if r == nil || r.registry == nil {
 		return nil

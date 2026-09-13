@@ -1116,12 +1116,13 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		}
 	}
 	return turn.NewRuntime(&turn.RuntimeOptions{
-		Agent:        agent,
-		Router:       router,
-		Hooks:        r.Hooks,
-		SteerMailbox: run.SteerMailbox,
-		Now:          r.now,
-		MaxTurns:     r.MaxToolTurns,
+		Agent:                        agent,
+		Router:                       router,
+		Hooks:                        r.Hooks,
+		SteerMailbox:                 run.SteerMailbox,
+		Now:                          r.now,
+		MaxTurns:                     r.MaxToolTurns,
+		TurnMetadataIncludesToolInfo: run.Config != nil && run.Config.ToolRegistryTurnMetadataIncludesToolInfo(),
 	}).Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       run.Prompt,
 		Instructions:                 run.Instructions,

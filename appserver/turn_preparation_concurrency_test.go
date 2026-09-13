@@ -145,6 +145,7 @@ startup_timeout_sec = 5
 	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+	enableToolInfoGate(t, home)
 	store := session.NewStore(home)
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")

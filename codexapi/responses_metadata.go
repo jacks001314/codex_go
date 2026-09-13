@@ -17,6 +17,7 @@ const (
 	RequestKindKey         = "request_kind"
 	CompactionKey          = "compaction"
 	CodeModeToolNamesKey   = "code_mode_tool_names"
+	ToolNamespacesInfoKey  = "tool_namespaces_info"
 	TurnStartedAtUnixMSKey = "turn_started_at_unix_ms"
 	// AnalyticsEnabledKey reports the selected session analytics client's
 	// collection state (Rust #44628).
@@ -70,6 +71,7 @@ var reservedMetadataKeys = map[string]bool{
 	RequestKindKey:                true,
 	CompactionKey:                 true,
 	CodeModeToolNamesKey:          true,
+	ToolNamespacesInfoKey:         true,
 	TurnStartedAtUnixMSKey:        true,
 	AnalyticsEnabledKey:           true,
 	ForkedFromThreadIDKey:         true,

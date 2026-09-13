@@ -14,25 +14,31 @@ import (
 )
 
 type RuntimeOptions struct {
-	Agent             model.AgentRunner
-	Router            *tool.Router
-	Hooks             tool.HookRunner
-	SteerMailbox      *SteerMailbox
-	HostedTools       []any
-	Now               func() time.Time
-	MaxTurns          int
-	ExecutedToolCalls *ExecutedToolCallRecorder
+	Agent  model.AgentRunner
+	Router *tool.Router
+	// TurnMetadataIncludesToolInfo mirrors the
+	// features.tool_registry.turn_metadata_includes_tool_info gate: when set,
+	// a Responses Lite request's turn metadata carries the model-visible tool
+	// inventory (Rust collect_tool_namespaces_info).
+	TurnMetadataIncludesToolInfo bool
+	Hooks                        tool.HookRunner
+	SteerMailbox                 *SteerMailbox
+	HostedTools                  []any
+	Now                          func() time.Time
+	MaxTurns                     int
+	ExecutedToolCalls            *ExecutedToolCallRecorder
 }
 
 type Runtime struct {
-	agent             model.AgentRunner
-	router            *tool.Router
-	hooks             tool.HookRunner
-	steerMailbox      *SteerMailbox
-	hostedTools       []any
-	now               func() time.Time
-	maxTurns          int
-	executedToolCalls *ExecutedToolCallRecorder
+	agent                        model.AgentRunner
+	router                       *tool.Router
+	turnMetadataIncludesToolInfo bool
+	hooks                        tool.HookRunner
+	steerMailbox                 *SteerMailbox
+	hostedTools                  []any
+	now                          func() time.Time
+	maxTurns                     int
+	executedToolCalls            *ExecutedToolCallRecorder
 }
 
 func NewRuntime(options *RuntimeOptions) *Runtime {
@@ -48,14 +54,15 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		executedToolCalls = NewExecutedToolCallRecorder()
 	}
 	return &Runtime{
-		agent:             options.Agent,
-		router:            options.Router,
-		hooks:             options.Hooks,
-		steerMailbox:      options.SteerMailbox,
-		hostedTools:       append([]any(nil), options.HostedTools...),
-		now:               now,
-		maxTurns:          options.MaxTurns,
-		executedToolCalls: executedToolCalls,
+		agent:                        options.Agent,
+		router:                       options.Router,
+		turnMetadataIncludesToolInfo: options.TurnMetadataIncludesToolInfo,
+		hooks:                        options.Hooks,
+		steerMailbox:                 options.SteerMailbox,
+		hostedTools:                  append([]any(nil), options.HostedTools...),
+		now:                          now,
+		maxTurns:                     options.MaxTurns,
+		executedToolCalls:            executedToolCalls,
 	}
 }
 
@@ -209,8 +216,9 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		loopRequest.OnWarning(warning)
 	}
 	loopRequest.ToolMode = effectiveToolMode
+	var visibleSpecs []tool.Spec
 	if len(loopRequest.Tools) == 0 {
-		visibleSpecs := r.router.ModelVisibleSpecs()
+		visibleSpecs = r.router.ModelVisibleSpecs()
 		if effectiveToolMode == model.ToolModeDirect {
 			visibleSpecs = directModeVisibleSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
 		} else if effectiveToolMode == model.ToolModeCodeModeOnly && codemode.HasExecTool(visibleSpecs) {
@@ -223,7 +231,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(visibleSpecs)
 	}
 	if effectiveToolMode == model.ToolModeCodeMode || effectiveToolMode == model.ToolModeCodeModeOnly {
-		loopRequest.ClientMetadataTransform = newCodeModeClientMetadataTransform(loopRequest.ClientMetadata, r.router)
+		loopRequest.ClientMetadataTransform = newCodeModeClientMetadataTransform(loopRequest.ClientMetadata, r.router, visibleSpecs, r.turnMetadataIncludesToolInfo)
 	}
 	if loopRequest.ClientMetadataTransform != nil {
 		loopRequest.ClientMetadata = loopRequest.ClientMetadataTransform(loopRequest.ClientMetadata)
@@ -343,19 +351,31 @@ func codeModeOnlyExecPromptSpecs(visibleSpecs []tool.Spec, nestedSpecs []tool.Sp
 }
 
 func codeModeClientMetadataForRequest(metadata map[string]string, router *tool.Router) map[string]string {
-	return newCodeModeClientMetadataTransform(metadata, router)(metadata)
+	return newCodeModeClientMetadataTransform(metadata, router, nil, false)(metadata)
 }
 
-func newCodeModeClientMetadataTransform(base map[string]string, router *tool.Router) ClientMetadataTransform {
+func newCodeModeClientMetadataTransform(base map[string]string, router *tool.Router, modelVisibleSpecs []tool.Spec, includeToolInfo bool) ClientMetadataTransform {
 	lite := strings.EqualFold(strings.TrimSpace(base["ws_request_header_x_openai_internal_codex_responses_lite"]), "true")
 	baseTurnMetadata := strings.TrimSpace(base[codexapi.ClientCodexTurnMetadataHeader])
-	toolNames := map[string]tool.CodeModeToolNameMetadata(nil)
-	if lite && router != nil {
-		toolNames = router.CodeModeToolNames()
+	toolInventory := tool.ToolNamespacesInfo(nil)
+	if lite && includeToolInfo {
+		registry := (*tool.Registry)(nil)
+		if router != nil {
+			registry = router.Registry()
+		}
+		specs := modelVisibleSpecs
+		if len(specs) == 0 && router != nil {
+			specs = router.ModelVisibleSpecs()
+		}
+		codeModeToolNames := map[string]tool.CodeModeToolNameMetadata(nil)
+		if router != nil {
+			codeModeToolNames = router.CodeModeToolNames()
+		}
+		toolInventory = tool.CollectToolNamespacesInfo(registry, codeModeToolNames, specs)
 	}
 	return func(metadata map[string]string) map[string]string {
 		out := cloneStringMap(metadata)
-		if !lite || len(toolNames) == 0 {
+		if !lite || toolInventory == nil {
 			return out
 		}
 		out["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
@@ -367,7 +387,7 @@ func newCodeModeClientMetadataTransform(base map[string]string, router *tool.Rou
 		if err := json.Unmarshal([]byte(turnMetadataJSON), &turnMetadata); err != nil || turnMetadata == nil {
 			return out
 		}
-		turnMetadata[codexapi.CodeModeToolNamesKey] = toolNames
+		turnMetadata[codexapi.ToolNamespacesInfoKey] = toolInventory
 		encoded, err := json.Marshal(turnMetadata)
 		if err == nil {
 			out[codexapi.ClientCodexTurnMetadataHeader] = string(encoded)

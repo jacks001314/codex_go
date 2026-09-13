@@ -12470,12 +12470,19 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 	}
 	hooks := r.turnHookAdapter(params, turnID)
 	agent := r.agentForAppTurn(params, turnID)
+	includeToolInfo := false
+	if cfg, err := r.effectiveConfigForTurn(params); err == nil && cfg != nil {
+		// Rust features.tool_registry.turn_metadata_includes_tool_info: only a
+		// gated turn reports the model-visible tool inventory.
+		includeToolInfo = cfg.ToolRegistryTurnMetadataIncludesToolInfo()
+	}
 	return turn.NewRuntime(&turn.RuntimeOptions{
-		Agent:             agent,
-		Router:            router,
-		Hooks:             hooks,
-		SteerMailbox:      r.requireSteerMailbox(),
-		ExecutedToolCalls: r.executedToolCallRecorder(params.ThreadID),
+		Agent:                        agent,
+		Router:                       router,
+		Hooks:                        hooks,
+		SteerMailbox:                 r.requireSteerMailbox(),
+		ExecutedToolCalls:            r.executedToolCallRecorder(params.ThreadID),
+		TurnMetadataIncludesToolInfo: includeToolInfo,
 	}), nil
 }
 

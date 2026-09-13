@@ -211,6 +211,15 @@ func (e *ToolExecutor) TelemetryTags(_ *tool.Invocation) map[string]string {
 	return tags
 }
 
+// MCPServerName reports the MCP server that owns this tool, or "" for a
+// non-MCP executor (Rust ToolRuntime::mcp_server_name).
+func (e *ToolExecutor) MCPServerName() string {
+	if e == nil {
+		return ""
+	}
+	return e.resolvedServerName()
+}
+
 func (e *ToolExecutor) Spec() tool.Spec {
 	name := e.resolvedToolName()
 	parameters := jsonschema.Normalize(cloneAnyMap(e.toolInfo.InputSchema))

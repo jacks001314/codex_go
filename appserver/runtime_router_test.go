@@ -13474,6 +13474,7 @@ func TestRuntimeRouterWaitForEnvironmentUsesFeatureGateSelectedEnvironmentAndHos
 			if err := environments.SetInfo("env-1", EnvironmentShellInfo{Name: "PowerShell", Path: "powershell.exe"}, environmentCWD); err != nil {
 				t.Fatal(err)
 			}
+			enableToolInfoGate(t, home)
 			router := NewRuntimeRouter(RuntimeServices{
 				ThreadRouter: NewRouter(store),
 				Turns:        turn.NewTurnService(),
@@ -14127,6 +14128,7 @@ func TestRuntimeRouterTurnStartInjectsEnabledPluginInstructions(t *testing.T) {
 		}},
 	})
 	router := NewRuntimeRouter(RuntimeServices{
+		Config:       toolInfoConfigService(t),
 		ThreadRouter: NewRouter(store),
 		Turns:        turn.NewTurnService(),
 		Agent:        agent,
@@ -14248,6 +14250,7 @@ tool_suggest = true
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	plugins := plugin.NewPluginService()
+	enableToolInfoGate(t, home)
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
 		Config:       config.NewConfigService(home),
@@ -16894,6 +16897,7 @@ func TestRuntimeRouterTurnStartRestoresThreadDynamicTools(t *testing.T) {
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	router := NewRuntimeRouter(RuntimeServices{
+		Config:       toolInfoConfigService(t),
 		ThreadRouter: NewRouter(store),
 		Turns:        turn.NewTurnService(),
 		Agent:        agent,
@@ -17365,6 +17369,7 @@ clock_source = "external"
 	store := session.NewStore(filepath.Join(home, "sessions"))
 	agent := newRecordingRuntimeAgent("ok")
 	sink := NewNotificationBuffer()
+	enableToolInfoGate(t, home)
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
 		Config:       config.NewConfigService(home),
@@ -25463,20 +25468,47 @@ func modelToolsContainNamespaceTool(tools []any, namespace string, name string) 
 }
 
 func agentRequestCodeModeHasTool(request model.AgentRequest, namespace string, name string) bool {
+	// The tool inventory reports the issuing step's model-visible functions
+	// (Rust tool_namespaces_info) when the tool-info gate is on.
 	var metadata struct {
-		ToolNames map[string]tool.CodeModeToolNameMetadata `json:"code_mode_tool_names"`
+		Namespaces map[string]struct {
+			Functions map[string]struct {
+				Name string `json:"name"`
+			} `json:"functions"`
+		} `json:"tool_namespaces_info"`
 	}
 	if err := json.Unmarshal([]byte(request.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader]), &metadata); err != nil {
 		return false
 	}
-	for _, candidate := range metadata.ToolNames {
-		if candidate.Name != name {
+	effectiveNamespace := namespace
+	if effectiveNamespace == "" {
+		effectiveNamespace = tool.DefaultFunctionNamespace
+	}
+	for candidateNamespace, entry := range metadata.Namespaces {
+		if candidateNamespace != effectiveNamespace {
 			continue
 		}
-		if namespace == "" && candidate.Namespace == nil {
-			return true
+		for _, function := range entry.Functions {
+			if function.Name == name {
+				return true
+			}
 		}
-		if candidate.Namespace != nil && *candidate.Namespace == namespace {
+	}
+	// Without the inventory (its gate is off by default, like Rust) fall back to
+	// the request's model-visible tool surface.
+	if modelToolsContainNamespaceTool(request.Tools, namespace, name) {
+		return true
+	}
+	for _, item := range request.Tools {
+		toolMap, ok := mapAnyFromValue(item)
+		if !ok {
+			continue
+		}
+		if toolMap["name"] != name {
+			continue
+		}
+		switch toolMap["type"] {
+		case "function", "custom", "tool_search":
 			return true
 		}
 	}

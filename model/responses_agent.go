@@ -2372,6 +2372,9 @@ func boundedCompatibilityTurnMetadata(value string) string {
 	if json.Unmarshal([]byte(value), &metadata) != nil || metadata == nil {
 		return value
 	}
+	// Rust keeps the unbounded tool inventory in the canonical client metadata
+	// only, so the bounded compatibility projection drops it.
+	delete(metadata, codexapi.ToolNamespacesInfoKey)
 	delete(metadata, codexapi.CodeModeToolNamesKey)
 	encoded, err := json.Marshal(metadata)
 	if err != nil {

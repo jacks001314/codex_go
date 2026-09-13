@@ -1950,7 +1950,7 @@ func TestResponsesAgentRunnerKeepsCodeModeNamesInClientMetadataButOmitsThemFromH
 		_, _ = w.Write([]byte(`{"id":"resp-next","model":"gpt-test","output_text":"ok"}`))
 	}))
 	defer server.Close()
-	turnMetadata := `{"thread_id":"thread-1","code_mode_tool_names":{"view_image":{"name":"view_image","namespace":null}}}`
+	turnMetadata := `{"thread_id":"thread-1","tool_namespaces_info":{"functions":{"name":"functions","functions":{"view_image":{"name":"view_image","direct":true,"deferred":false,"source":{"kind":"harness"}}}}}}`
 	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL + "/v1"}})
 	if _, err := runner.Run(context.Background(), &AgentRequest{
 		Prompt: "hello", Model: "gpt-test",
@@ -1962,7 +1962,7 @@ func TestResponsesAgentRunnerKeepsCodeModeNamesInClientMetadataButOmitsThemFromH
 	if clientMetadata[codexapi.ClientCodexTurnMetadataHeader] != turnMetadata {
 		t.Fatalf("canonical client metadata = %#v", clientMetadata)
 	}
-	if strings.Contains(recordedHeader, codexapi.CodeModeToolNamesKey) || !strings.Contains(recordedHeader, `"thread_id":"thread-1"`) {
+	if strings.Contains(recordedHeader, codexapi.ToolNamespacesInfoKey) || strings.Contains(recordedHeader, codexapi.CodeModeToolNamesKey) || !strings.Contains(recordedHeader, `"thread_id":"thread-1"`) {
 		t.Fatalf("compatibility header = %q", recordedHeader)
 	}
 }
