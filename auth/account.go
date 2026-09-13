@@ -725,7 +725,15 @@ type AccountLoginCompletedNotification struct {
 	LoginID *string `json:"loginId"`
 	Success bool    `json:"success"`
 	Error   *string `json:"error"`
+	// OnboardingEntrypoint echoes the desktop login callback's onboarding
+	// entrypoint (Rust DesktopOnboardingEntrypoint, "life_sciences"); null
+	// unless the login callback reported one.
+	OnboardingEntrypoint *string `json:"onboardingEntrypoint"`
 }
+
+// DesktopOnboardingEntrypointLifeSciences is Rust
+// DesktopOnboardingEntrypoint::LifeSciences.
+const DesktopOnboardingEntrypointLifeSciences = "life_sciences"
 
 type SessionWorkspaceKind string
 

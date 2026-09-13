@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -295,4 +296,64 @@ func externalSessionSourceState(sourcePath string) (string, string, *int64, erro
 		modifiedAt = &value
 	}
 	return filepath.Clean(canonical), hex.EncodeToString(hash[:]), modifiedAt, nil
+}
+
+// ExternalAgentImportedConnectorCandidate mirrors Rust
+// ExternalAgentImportedConnectorCandidate: one connector referenced by imported
+// sessions, with the number of sessions that referenced it.
+type ExternalAgentImportedConnectorCandidate struct {
+	Name         string `json:"name"`
+	SessionCount uint32 `json:"sessionCount"`
+	Source       string `json:"source"`
+}
+
+// ExternalAgentImportedConnectorSourceRemoteMCPServersConfig is Rust
+// ExternalAgentImportedConnectorSource::RemoteMcpServersConfig.
+const ExternalAgentImportedConnectorSourceRemoteMCPServersConfig = "remoteMcpServersConfig"
+
+// ImportedConnectorCandidates ports Rust read_imported_connector_candidates:
+// group the ledger's connector names by source path, keep one spelling per
+// source, count the sources referencing each connector, and sort by name.
+func ImportedConnectorCandidates(codexHome string) []ExternalAgentImportedConnectorCandidate {
+	ledger, err := loadExternalSessionImportLedger(codexHome)
+	if err != nil {
+		return nil
+	}
+	namesBySource := map[string][]string{}
+	for _, record := range ledger.Records {
+		if len(record.ConnectorNames) == 0 {
+			continue
+		}
+		namesBySource[record.SourcePath] = append(namesBySource[record.SourcePath], record.ConnectorNames...)
+	}
+	counts := map[string]uint32{}
+	display := map[string]string{}
+	for _, names := range namesBySource {
+		seen := map[string]bool{}
+		for _, raw := range names {
+			name := strings.TrimSpace(raw)
+			if name == "" {
+				continue
+			}
+			key := strings.ToLower(name)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			counts[key]++
+			if _, ok := display[key]; !ok {
+				display[key] = name
+			}
+		}
+	}
+	out := make([]ExternalAgentImportedConnectorCandidate, 0, len(counts))
+	for key, count := range counts {
+		out = append(out, ExternalAgentImportedConnectorCandidate{
+			Name:         display[key],
+			SessionCount: count,
+			Source:       ExternalAgentImportedConnectorSourceRemoteMCPServersConfig,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }

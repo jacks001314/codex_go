@@ -825,3 +825,25 @@ func fakeJWTAccount(claims map[string]any) string {
 	payload, _ := json.Marshal(claims)
 	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + "."
 }
+
+// TestAccountLoginCompletedNotificationIncludesOnboardingEntrypointLikeRust pins
+// the v2 wire shape: onboardingEntrypoint is always present, null unless the
+// desktop login callback reported one (Rust
+// AccountLoginCompletedNotification::onboarding_entrypoint).
+func TestAccountLoginCompletedNotificationIncludesOnboardingEntrypointLikeRust(t *testing.T) {
+	data, err := json.Marshal(AccountLoginCompletedNotification{Success: true})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"onboardingEntrypoint":null`) {
+		t.Fatalf("marshaled notification = %s, want a null onboardingEntrypoint", data)
+	}
+	entrypoint := DesktopOnboardingEntrypointLifeSciences
+	data, err = json.Marshal(AccountLoginCompletedNotification{Success: true, OnboardingEntrypoint: &entrypoint})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"onboardingEntrypoint":"life_sciences"`) {
+		t.Fatalf("marshaled notification = %s, want the life_sciences entrypoint", data)
+	}
+}

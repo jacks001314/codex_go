@@ -1386,14 +1386,28 @@ func (h *ExternalAgentConfigImportHistory) MarshalJSON() ([]byte, error) {
 
 type ExternalAgentConfigImportHistoriesReadResponse struct {
 	Data []ExternalAgentConfigImportHistory `json:"data"`
+	// Connectors lists the connectors referenced by imported sessions (Rust
+	// ExternalAgentConfigImportHistoriesReadResponse::connectors); always
+	// present, empty when nothing was detected.
+	Connectors []ExternalAgentImportedConnectorCandidate `json:"connectors"`
 }
 
 func (r *ExternalAgentConfigImportHistoriesReadResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Data []ExternalAgentConfigImportHistory `json:"data"`
+		Data       []ExternalAgentConfigImportHistory        `json:"data"`
+		Connectors []ExternalAgentImportedConnectorCandidate `json:"connectors"`
 	}{
-		Data: importHistoriesForJSON(r.Data),
+		Data:       importHistoriesForJSON(r.Data),
+		Connectors: importConnectorCandidatesForJSON(r.Connectors),
 	})
+}
+
+// importConnectorCandidatesForJSON keeps the required `connectors` array
+// present (an empty array, never null).
+func importConnectorCandidatesForJSON(in []ExternalAgentImportedConnectorCandidate) []ExternalAgentImportedConnectorCandidate {
+	out := make([]ExternalAgentImportedConnectorCandidate, len(in))
+	copy(out, in)
+	return out
 }
 
 type ExternalAgentConfigImportProgressNotification struct {
@@ -2743,7 +2757,10 @@ func (s *ConfigService) ImportHistories() *ExternalAgentConfigImportHistoriesRea
 	for i := range s.importHistory {
 		out[i] = cloneImportHistory(&s.importHistory[i])
 	}
-	return &ExternalAgentConfigImportHistoriesReadResponse{Data: out}
+	return &ExternalAgentConfigImportHistoriesReadResponse{
+		Data:       out,
+		Connectors: ImportedConnectorCandidates(s.codexHome),
+	}
 }
 
 func (s *ConfigService) RecordExternalAgentImportHistory(params *ExternalAgentConfigImportHistoryRecordParams) *ExternalAgentConfigImportHistoryRecordResponse {
