@@ -192,10 +192,31 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 func (s *networkApprovalService) requestApproval(ctx context.Context, active *networkApprovalTurn, key networkApprovalKey, request network.ProxyPolicyRequest, ownerCall *activeNetworkApprovalCall) (network.ProxyDecision, NetworkPolicyRuleAction) {
 	protocol := networkApprovalProtocol(request.Protocol)
 	target := networkApprovalTarget(request.Protocol, request.Host, request.Port)
+	approvalID := fmt.Sprintf("network#%s#%s#%s#%d", key.environmentID, networkApprovalProtocolKey(protocol), key.host, key.port)
+	// Rust Session::request_approval: PermissionRequest hooks decide before the
+	// Guardian review and the user approval request. The hook sees the
+	// network-access command as a Bash payload.
+	hookCommand := "network-access " + target
+	if verdict, ok := s.router.permissionRequestHookVerdict(ctx, active.threadID, active.turnID, approvalID, "Bash", nil,
+		map[string]any{"command": hookCommand, "description": hookCommand}); ok && verdict != nil {
+		switch verdict.Kind {
+		case HookPermissionRequestAllow:
+			return network.AllowProxyDecision(), ""
+		case HookPermissionRequestDeny:
+			reason := ""
+			if verdict.Message != nil {
+				reason = strings.TrimSpace(*verdict.Message)
+			}
+			if reason == "" {
+				reason = "Network access was denied by a permission-request hook."
+			}
+			s.recordGuardianOutcome(ownerCall, reason)
+			return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
+		}
+	}
 	if s.routesApprovalToGuardian(active) {
 		return s.requestGuardianApproval(ctx, active, request, protocol, target, ownerCall), ""
 	}
-	approvalID := fmt.Sprintf("network#%s#%s#%s#%d", key.environmentID, networkApprovalProtocolKey(protocol), key.host, key.port)
 	environmentID := key.environmentID
 	reason := fmt.Sprintf("%s is not in the allowed_domains", request.Host)
 	command := "network-access " + target

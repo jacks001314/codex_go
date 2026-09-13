@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"codex_go/config"
+	"codex_go/network"
 	"codex_go/state"
 	"codex_go/tool"
 	"codex_go/turn"
@@ -518,5 +519,65 @@ func TestRequestPermissionsRunsPermissionRequestHooksLikeRust(t *testing.T) {
 	denied := run(t, hookRunnerPermissionRequestDenyCommand("permissions are not granted here"))
 	if denied.Approved || denied.Reason != "permissions are not granted here" {
 		t.Fatalf("hook deny = %#v", denied)
+	}
+}
+
+// Rust runs PermissionRequest hooks before the Guardian review and the user
+// request for network-access approvals, with the network-access command as the
+// Bash hook input.
+func TestNetworkApprovalRunsPermissionRequestHooksFirstLikeRust(t *testing.T) {
+	run := func(t *testing.T, hookCommand string) network.ProxyDecision {
+		t.Helper()
+		home := t.TempDir()
+		cwd := t.TempDir()
+		projectTrust := strings.ReplaceAll(filepath.Clean(cwd), `\`, `\\`)
+		configBody := "model = \"gpt-5.4\"\nbypass_hook_trust = true\n[projects.\"" + projectTrust + "\"]\ntrust_level = \"trusted\"\n"
+		if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+			t.Fatalf("WriteFile config error = %v", err)
+		}
+		hooksDir := filepath.Join(cwd, ".gcode")
+		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		hooksJSON, err := json.Marshal(map[string]any{
+			"hooks": map[string]any{
+				"PermissionRequest": []any{map[string]any{
+					"matcher": "Bash",
+					"hooks":   []any{map[string]any{"type": "command", "command": hookCommand}},
+				}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Marshal hooks error = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), hooksJSON, 0o600); err != nil {
+			t.Fatalf("WriteFile hooks error = %v", err)
+		}
+		router := NewRuntimeRouter(RuntimeServices{
+			DefaultCWD:     cwd,
+			Config:         config.NewConfigService(home),
+			HooksDiscovery: NewHookDiscoveryService(home),
+			HookRunner:     NewHookRunner(),
+		})
+		params := &turn.TurnStartParams{ThreadID: "thread-1", CWD: cwd, Model: "gpt-5.4"}
+		if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, params); err != nil {
+			t.Fatalf("RegisterTurn() error = %v", err)
+		}
+		service := newNetworkApprovalService(router)
+		active := &networkApprovalTurn{threadID: "thread-1", turnID: "turn-1", params: params}
+		key := networkApprovalKey{threadID: "thread-1", environmentID: "local", protocol: network.ProxyProtocolHTTPSConnect, host: "example.com", port: 443}
+		decision, _ := service.requestApproval(context.Background(), active, key, network.ProxyPolicyRequest{
+			Protocol: network.ProxyProtocolHTTPSConnect,
+			Host:     "example.com",
+			Port:     443,
+		}, nil)
+		return decision
+	}
+
+	if decision := run(t, hookRunnerOutputCommand(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, "")); !decision.Allow {
+		t.Fatalf("hook allow did not approve network access: %#v", decision)
+	}
+	if decision := run(t, hookRunnerPermissionRequestDenyCommand("no network for you")); decision.Allow {
+		t.Fatalf("hook deny approved network access: %#v", decision)
 	}
 }
