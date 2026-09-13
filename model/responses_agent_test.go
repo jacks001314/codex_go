@@ -21,6 +21,7 @@ import (
 
 	"codex_go/auth"
 	"codex_go/codexapi"
+	"codex_go/protocol"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -436,6 +437,67 @@ func TestResponsesAgentRunnerPrewarmUsesWebSocketGenerateFalse(t *testing.T) {
 	}
 	if authorization != "Bearer secret" {
 		t.Fatalf("authorization = %q", authorization)
+	}
+}
+
+// The websocket payload carries the request's W3C trace context in its client
+// metadata, the way codex-api's response_create_client_metadata merges
+// request_trace (Rust's stream_responses_websocket).
+func TestResponsesAgentRunnerWebSocketCarriesRequestTraceLikeRust(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, data, err := conn.Read(request.Context())
+		if err != nil {
+			t.Errorf("Read() error = %v", err)
+			return
+		}
+		if err := json.Unmarshal(data, &received); err != nil {
+			t.Errorf("Unmarshal() error = %v", err)
+			return
+		}
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"warm-1"}}`))
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"warm-1"}}`))
+	}))
+	defer server.Close()
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true, WebsocketConnectTimeout: time.Second,
+	})
+	_, err := runner.Prewarm(context.Background(), &AgentRequest{
+		Model:          "gpt-test",
+		ClientMetadata: map[string]string{"x-openai-subagent": "guardian"},
+		Trace: &protocol.W3CTraceContext{
+			Traceparent: "00-00000000000000000000000000000001-0000000000000002-01",
+			Tracestate:  "example=alpha:one",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Prewarm() error = %v", err)
+	}
+	metadata, ok := received["client_metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("client_metadata = %#v", received["client_metadata"])
+	}
+	if metadata["ws_request_header_traceparent"] != "00-00000000000000000000000000000001-0000000000000002-01" ||
+		metadata["ws_request_header_tracestate"] != "example=alpha:one" ||
+		metadata["x-openai-subagent"] != "guardian" {
+		t.Fatalf("client_metadata = %#v", metadata)
+	}
+}
+
+// Without a trace the payload keeps the request's metadata and adds nothing.
+func TestWebsocketClientMetadataWithoutTraceLikeRust(t *testing.T) {
+	if got := websocketClientMetadata(nil, nil); got != nil {
+		t.Fatalf("metadata = %#v", got)
+	}
+	metadata := websocketClientMetadata(map[string]string{"thread_id": "thread-1"}, &protocol.W3CTraceContext{})
+	if len(metadata) != 1 || metadata["thread_id"] != "thread-1" {
+		t.Fatalf("metadata = %#v", metadata)
 	}
 }
 

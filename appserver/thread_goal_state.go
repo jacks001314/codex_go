@@ -1192,7 +1192,7 @@ func (r *RuntimeRouter) startGoalContinuationTurn(params *turn.TurnStartParams) 
 	if response != nil {
 		r.markGoalContinuation(params.ThreadID, response.Turn.ID)
 	}
-	r.startTurnRuntimeAsync(params, response, "")
+	r.startTurnRuntimeAsync(params, response, "", nil)
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"codex_go/codexapi"
+	"codex_go/protocol"
 	"codex_go/sandbox"
 )
 
@@ -48,6 +49,10 @@ type AgentRequest struct {
 	ServiceTier                  string
 	PromptCacheKey               string
 	ClientMetadata               map[string]string
+	// Trace is the W3C trace context of the request that started this turn
+	// (Rust's `request_trace`): the websocket payload carries it so the model
+	// call stays inside the caller's trace.
+	Trace                        *protocol.W3CTraceContext
 	AttestationProvider          codexapi.AttestationProvider
 	OutputSchema                 any
 	StreamHandler                ResponsesStreamHandler

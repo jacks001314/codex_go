@@ -1524,6 +1524,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		PromptCacheKey:               runConfig.PromptCacheKey,
 		ServiceTier:                  runConfig.ServiceTier,
 		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
+		Trace:                        params.Trace,
 		StepSettings:                 r.turnStepSettingsProvider(threadID, turnID),
 		AttestationProvider:          runConfig.AttestationProvider,
 		OutputSchema:                 params.OutputSchema,
@@ -1986,6 +1987,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		PromptCacheKey:               runConfig.PromptCacheKey,
 		ServiceTier:                  runConfig.ServiceTier,
 		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
+		Trace:                        params.Trace,
 		AttestationProvider:          runConfig.AttestationProvider,
 		PostToolInputItems:           runConfig.PostToolInputItems,
 		DisableHostedImageGeneration: true,
@@ -10459,6 +10461,10 @@ func cloneTurnStartParams(params *turn.TurnStartParams) *turn.TurnStartParams {
 	clone.AdditionalContext = cloneAdditionalContext(params.AdditionalContext)
 	clone.DynamicTools = append([]turn.DynamicToolSpec(nil), params.DynamicTools...)
 	clone.AdditionalInputItems = append([]any(nil), params.AdditionalInputItems...)
+	if params.Trace != nil {
+		trace := *params.Trace
+		clone.Trace = &trace
+	}
 	return &clone
 }
 

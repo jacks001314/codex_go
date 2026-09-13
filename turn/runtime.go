@@ -176,6 +176,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ServiceTier:                  request.ServiceTier,
 			PromptCacheKey:               request.PromptCacheKey,
 			ClientMetadata:               cloneStringMap(clientMetadata),
+			Trace:                        request.Trace,
 			AttestationProvider:          request.AttestationProvider,
 			OutputSchema:                 request.OutputSchema,
 			DisableHostedImageGeneration: request.DisableHostedImageGeneration,

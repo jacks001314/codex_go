@@ -9,6 +9,7 @@ import (
 
 	"codex_go/codexapi"
 	"codex_go/model"
+	"codex_go/protocol"
 )
 
 type AgentLoopOptions struct {
@@ -122,6 +123,9 @@ type AgentLoopRequest struct {
 	PromptCacheKey               string
 	ClientMetadata               map[string]string
 	ClientMetadataTransform      ClientMetadataTransform
+	// Trace is the W3C trace context of the request that started this turn
+	// (Rust's `request_trace`), forwarded to every model request the turn makes.
+	Trace *protocol.W3CTraceContext
 	// StepSettings, when set, refreshes the model, reasoning effort, and client
 	// metadata of every step after the first (Rust Session::update_step_settings
 	// reaching a later sampling step).
@@ -313,6 +317,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			ServiceTier:                  request.ServiceTier,
 			PromptCacheKey:               request.PromptCacheKey,
 			ClientMetadata:               cloneStringMap(clientMetadata),
+			Trace:                        request.Trace,
 			AttestationProvider:          request.AttestationProvider,
 			OutputSchema:                 request.OutputSchema,
 			DisableHostedImageGeneration: request.DisableHostedImageGeneration,

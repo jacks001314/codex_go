@@ -189,6 +189,17 @@ func (s *Span) TraceContext() (TraceContext, bool) {
 	}, true
 }
 
+// W3CTraceContext reports the span's W3C carrier pair (Rust's
+// span_w3c_trace_context): the traceparent built from its ids and sampling
+// decision, and its tracestate merged with the configured entries.
+func (s *Span) W3CTraceContext() (traceparent string, tracestate string, ok bool) {
+	trace, ok := s.TraceContext()
+	if !ok {
+		return "", "", false
+	}
+	return formatTraceparent(trace), trace.TraceState, true
+}
+
 // InjectTraceHeaders writes this span's W3C trace context into headers,
 // replacing any existing carrier so a reused request header map stays
 // consistent with the span.

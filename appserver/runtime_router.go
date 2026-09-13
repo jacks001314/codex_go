@@ -38,6 +38,7 @@ import (
 	"codex_go/otelinit"
 	"codex_go/plugin"
 	promptctx "codex_go/prompt"
+	"codex_go/protocol"
 	"codex_go/realtime"
 	"codex_go/remotecontrol"
 	"codex_go/review"
@@ -260,7 +261,13 @@ type RuntimeRouter struct {
 	// requestTransport is the transport name the request span reports; the
 	// stdio, unix-socket, and websocket servers install their own name and an
 	// in-process router keeps the "in-process" default.
-	requestTransport        string
+	requestTransport string
+	// requestSpans holds the open request span per (connection, request) while a
+	// request is being dispatched, the way Rust's OutgoingMessageSender keeps a
+	// RequestContext per request id. The turn start copies its W3C trace context
+	// into the turn so the model request continues the caller's trace.
+	requestSpansMu          sync.Mutex
+	requestSpans            map[requestSpanKey]*telemetry.Span
 	mcpEventStreams         *mcpEventStreamManager
 	skillShadowMu           sync.Mutex
 	skillShadowState        map[string]*skillShadowThreadState
@@ -1504,6 +1511,56 @@ func (r *RuntimeRouter) requestTracer() *telemetry.Tracer {
 	return provider.Tracer()
 }
 
+// requestSpanKey identifies one in-flight transport request.
+type requestSpanKey struct {
+	connectionID string
+	requestID    string
+}
+
+// registerRequestSpan keeps the open request span reachable while its request is
+// dispatched (Rust's OutgoingMessageSender::register_request_context).
+func (r *RuntimeRouter) registerRequestSpan(request *Request, span *telemetry.Span) {
+	if r == nil || request == nil || span == nil {
+		return
+	}
+	r.requestSpansMu.Lock()
+	defer r.requestSpansMu.Unlock()
+	if r.requestSpans == nil {
+		r.requestSpans = map[requestSpanKey]*telemetry.Span{}
+	}
+	r.requestSpans[requestSpanKey{connectionID: request.normalizedConnectionID(), requestID: request.ID.String()}] = span
+}
+
+// unregisterRequestSpan drops the request's span once it has been dispatched.
+func (r *RuntimeRouter) unregisterRequestSpan(request *Request) {
+	if r == nil || request == nil {
+		return
+	}
+	r.requestSpansMu.Lock()
+	defer r.requestSpansMu.Unlock()
+	delete(r.requestSpans, requestSpanKey{connectionID: request.normalizedConnectionID(), requestID: request.ID.String()})
+}
+
+// requestSpanTrace reports the W3C trace context of the request's span
+// (Rust's RequestContext::request_trace), or nil when the request was not
+// traced.
+func (r *RuntimeRouter) requestSpanTrace(request *Request) *protocol.W3CTraceContext {
+	if r == nil || request == nil {
+		return nil
+	}
+	r.requestSpansMu.Lock()
+	span := r.requestSpans[requestSpanKey{connectionID: request.normalizedConnectionID(), requestID: request.ID.String()}]
+	r.requestSpansMu.Unlock()
+	if span == nil {
+		return nil
+	}
+	traceparent, tracestate, ok := span.W3CTraceContext()
+	if !ok {
+		return nil
+	}
+	return &protocol.W3CTraceContext{Traceparent: traceparent, Tracestate: tracestate}
+}
+
 func (r *RuntimeRouter) analyticsAuthorizeRequest(codexHome string) telemetry.AnalyticsAuthorizeRequestFunc {
 	return func(ctx context.Context, request *http.Request, body []byte) (bool, error) {
 		if r == nil {
@@ -1686,9 +1743,14 @@ func (r *RuntimeRouter) Handle(request *Request) *Response {
 		return ErrorResponse(request.ID, requestValidationErrorCode(err), err.Error(), nil)
 	}
 	// Rust records an `app_server.request` span per transport request
-	// (app_server_tracing.rs::request_span), wrapping the dispatch below.
+	// (app_server_tracing.rs::request_span), wrapping the dispatch below, and
+	// keeps its context reachable for the turn it starts.
 	if span := startRequestSpan(r.requestTracer(), request, r.requestTransport); span != nil {
-		defer span.End()
+		r.registerRequestSpan(request, span)
+		defer func() {
+			r.unregisterRequestSpan(request)
+			span.End()
+		}()
 	}
 	result, err := r.dispatch(request)
 	if err != nil {
@@ -6039,7 +6101,7 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if hasSettingsUpdate {
 		r.applyTurnStartSettingsUpdate(settingsUpdate)
 	}
-	r.startTurnRuntimeAsync(params, response, request.normalizedConnectionID())
+	r.startTurnRuntimeAsync(params, response, request.normalizedConnectionID(), r.requestSpanTrace(request))
 	return response, nil
 }
 
@@ -15069,7 +15131,7 @@ func (r *RuntimeRouter) turnHookAdapter(params *turn.TurnStartParams, turnID str
 	return adapter
 }
 
-func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, response *turn.TurnStartResponse, connectionID string) {
+func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, response *turn.TurnStartResponse, connectionID string, trace *protocol.W3CTraceContext) {
 	if r == nil || params == nil || response == nil {
 		return
 	}
@@ -15077,6 +15139,9 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 		return
 	}
 	paramsCopy := cloneTurnStartParams(params)
+	if trace != nil {
+		paramsCopy.Trace = trace
+	}
 	turnCopy := response.Turn
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := r.registerTrackedActiveRuntimeTurn(params.ThreadID, response.Turn.ID, cancel, time.Now().UTC().UnixMilli(), paramsCopy); err != nil {

@@ -21,6 +21,7 @@ import (
 	"codex_go/auth"
 	"codex_go/codexapi"
 	"codex_go/eventmap"
+	"codex_go/protocol"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -587,8 +588,8 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	if apiRequest.Instructions != "" {
 		payload["instructions"] = apiRequest.Instructions
 	}
-	if len(apiRequest.ClientMetadata) > 0 {
-		payload["client_metadata"] = apiRequest.ClientMetadata
+	if clientMetadata := websocketClientMetadata(apiRequest.ClientMetadata, request.Trace); len(clientMetadata) > 0 {
+		payload["client_metadata"] = clientMetadata
 	}
 	if len(apiRequest.Tools) > 0 {
 		payload["tools"] = apiRequest.Tools
@@ -785,7 +786,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		}
 		session.conn = conn
 	}
-	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil)
+	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil, request.Trace)
 	requestStartedAt := time.Now()
 	writeErr := conn.Write(ctx, websocket.MessageText, mustJSONBytes(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
@@ -865,7 +866,37 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	}
 }
 
-func websocketResponseCreatePayload(apiRequest *responsesAgentRequest, previousResponseID string, generate *bool) map[string]any {
+// Websocket client-metadata keys that carry the request's W3C trace context
+// (Rust codex-api's WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY /
+// WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY).
+const (
+	websocketTraceparentMetadataKey = "ws_request_header_traceparent"
+	websocketTracestateMetadataKey  = "ws_request_header_tracestate"
+)
+
+// websocketClientMetadata mirrors codex-api's response_create_client_metadata:
+// the request's client metadata with the trace context added, or nil when the
+// merged map is empty.
+func websocketClientMetadata(clientMetadata map[string]string, trace *protocol.W3CTraceContext) map[string]string {
+	merged := map[string]string{}
+	for key, value := range clientMetadata {
+		merged[key] = value
+	}
+	if trace != nil {
+		if traceparent := strings.TrimSpace(trace.Traceparent); traceparent != "" {
+			merged[websocketTraceparentMetadataKey] = traceparent
+		}
+		if tracestate := strings.TrimSpace(trace.Tracestate); tracestate != "" {
+			merged[websocketTracestateMetadataKey] = tracestate
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
+func websocketResponseCreatePayload(apiRequest *responsesAgentRequest, previousResponseID string, generate *bool, trace *protocol.W3CTraceContext) map[string]any {
 	payload := map[string]any{
 		"type": "response.create", "model": apiRequest.Model, "input": apiRequest.Input, "tool_choice": apiRequest.ToolChoice,
 		"parallel_tool_calls": apiRequest.ParallelToolCalls, "store": apiRequest.Store, "stream": true, "include": apiRequest.Include,
@@ -879,8 +910,8 @@ func websocketResponseCreatePayload(apiRequest *responsesAgentRequest, previousR
 	if apiRequest.Instructions != "" {
 		payload["instructions"] = apiRequest.Instructions
 	}
-	if len(apiRequest.ClientMetadata) > 0 {
-		payload["client_metadata"] = apiRequest.ClientMetadata
+	if clientMetadata := websocketClientMetadata(apiRequest.ClientMetadata, trace); len(clientMetadata) > 0 {
+		payload["client_metadata"] = clientMetadata
 	}
 	if len(apiRequest.Tools) > 0 {
 		payload["tools"] = apiRequest.Tools

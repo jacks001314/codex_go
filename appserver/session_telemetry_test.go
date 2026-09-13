@@ -14,6 +14,7 @@ import (
 
 	"codex_go/config"
 	"codex_go/model"
+	"codex_go/session"
 	"codex_go/state"
 	"codex_go/telemetry"
 	"codex_go/tool"
@@ -187,6 +188,160 @@ func TestSessionTelemetryMetadataForThread(t *testing.T) {
 	}
 	if metadata.Slug != metadata.Model {
 		t.Fatalf("slug = %q model = %q", metadata.Slug, metadata.Model)
+	}
+}
+
+// The request span is reachable while its request is dispatched, and its W3C
+// trace context is what a started turn carries into the model request (Rust's
+// OutgoingMessageSender::register_request_context +
+// TurnInputRequest::with_trace).
+func TestRequestSpanTraceFollowsTheTurnLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+		Tracestate:    map[string]map[string]string{"example": {"alpha": "one"}},
+	})
+	if err != nil || provider == nil || provider.Tracer() == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.installOtelProvider(provider, state.NewTaskMetrics())
+	defer router.Close()
+
+	request := requestWithParams(t, IntID(7), MethodThreadList, ThreadListParams{})
+	request.ConnectionID = "conn-1"
+	span := startRequestSpan(router.requestTracer(), request, "stdio")
+	if span == nil {
+		t.Fatal("the request span was not started")
+	}
+	router.registerRequestSpan(request, span)
+	trace := router.requestSpanTrace(request)
+	router.unregisterRequestSpan(request)
+	span.End()
+	if trace == nil {
+		t.Fatal("the request span produced no trace context")
+	}
+	if !strings.HasPrefix(trace.Traceparent, "00-") || len(trace.Traceparent) != 55 {
+		t.Fatalf("traceparent = %q", trace.Traceparent)
+	}
+	if trace.Tracestate != "example=alpha:one" {
+		t.Fatalf("tracestate = %q", trace.Tracestate)
+	}
+	if got := router.requestSpanTrace(request); got != nil {
+		t.Fatalf("an unregistered request still reports a trace: %#v", got)
+	}
+
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	select {
+	case payload := <-traceBodies:
+		spans := payload["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+		if len(spans) != 1 {
+			t.Fatalf("spans = %#v", spans)
+		}
+		// The carrier the turn carries names the very span the exporter received.
+		if !strings.Contains(trace.Traceparent, spans[0].(map[string]any)["spanId"].(string)) {
+			t.Fatalf("traceparent = %q span = %#v", trace.Traceparent, spans[0])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the traces endpoint did not receive the request span")
+	}
+}
+
+// The `turn/start` request span's trace context follows the turn into the model
+// request, so the exported span and the model call share one trace (Rust's
+// OutgoingMessageSender::request_trace_context -> TurnInputRequest::with_trace).
+func TestTurnStartTraceReachesTheModelRequestLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+	})
+	if err != nil || provider == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	router.SetNotificationSink(sink)
+	router.installOtelProvider(provider, state.NewTaskMetrics())
+	defer router.Close()
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "inspect",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	agentRequest := waitForRuntimeAgentRequest(t, agent)
+	if agentRequest.Trace == nil {
+		t.Fatal("the model request did not carry the turn trace")
+	}
+	if !strings.HasPrefix(agentRequest.Trace.Traceparent, "00-") || len(agentRequest.Trace.Traceparent) != 55 {
+		t.Fatalf("traceparent = %q", agentRequest.Trace.Traceparent)
+	}
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	// The carrier must name the exported `turn/start` request span, so the model
+	// call continues the very trace the client started.
+	carrierSpanID := strings.Split(agentRequest.Trace.Traceparent, "-")[2]
+	found := false
+	for {
+		select {
+		case payload := <-traceBodies:
+			spans := payload["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+			for _, entry := range spans {
+				span := entry.(map[string]any)
+				if span["name"] == string(MethodTurnStart) && span["spanId"] == carrierSpanID {
+					found = true
+				}
+			}
+		case <-time.After(500 * time.Millisecond):
+			if !found {
+				t.Fatalf("the exported spans do not carry the turn trace %q", agentRequest.Trace.Traceparent)
+			}
+			return
+		}
 	}
 }
 

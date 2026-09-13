@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"codex_go/protocol"
 )
 
 var (
@@ -228,6 +230,10 @@ type TurnStartParams struct {
 	ParentTurnID          string                            `json:"-"`
 	RootTurnID            string                            `json:"-"`
 	AdditionalInputItems  []any                             `json:"-"`
+	// Trace carries the W3C trace context of the request that started this turn
+	// (Rust TurnInputRequest::with_trace), so the model request continues the
+	// caller's trace.
+	Trace *protocol.W3CTraceContext `json:"-"`
 }
 
 func (p *TurnStartParams) CloneDynamicTools() []DynamicToolSpec {

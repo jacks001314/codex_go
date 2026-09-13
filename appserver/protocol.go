@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"codex_go/mcp"
+	"codex_go/protocol"
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/session"
@@ -445,10 +446,7 @@ type Request struct {
 
 // W3CTraceContext mirrors codex_protocol::protocol::W3cTraceContext: the W3C
 // trace-context carrier pair a client may attach to a request.
-type W3CTraceContext struct {
-	Traceparent string `json:"traceparent,omitempty"`
-	Tracestate  string `json:"tracestate,omitempty"`
-}
+type W3CTraceContext = protocol.W3CTraceContext
 
 const defaultRequestConnectionID = "default"
 
