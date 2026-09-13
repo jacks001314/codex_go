@@ -3,14 +3,17 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
 	"codex_go/auth"
+	"codex_go/cli"
 	agentsoverview "codex_go/tui/agents_overview"
 	codextea "codex_go/tui/tea"
+	"codex_go/worktree"
 )
 
 // interactiveRemoteAgentsOverviewRefresh lists loaded root sessions from the
@@ -44,6 +47,75 @@ func interactiveRemoteAgentsOverviewNewSession(ctx context.Context, endpoint *ap
 		}
 		return remoteTUIAgentSwitchResponseForStartedSession(started), nil
 	}
+}
+
+// interactiveRemoteAgentsOverviewNewWorktree creates a managed worktree from
+// the selected project's default branch and starts a blank session inside it
+// (Rust #45276 new_agents_overview_worktree). A failed start removes the new
+// checkout when it is clean, otherwise the error names the retained path.
+func interactiveRemoteAgentsOverviewNewWorktree(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions) codextea.AgentsOverviewNewWorktreeFunc {
+	return func(cwd string) (codextea.AgentThreadSwitchResponse, error) {
+		cwd = strings.TrimSpace(cwd)
+		if cwd == "" {
+			return codextea.AgentThreadSwitchResponse{}, errors.New("a worktree session needs a source checkout")
+		}
+		if !interactiveRemoteEndpointIsLocal(endpoint) {
+			return codextea.AgentThreadSwitchResponse{}, errors.New("managed worktrees require a local workspace")
+		}
+		settings, ok := interactiveWorktreeSettings(root)
+		if !ok {
+			return codextea.AgentThreadSwitchResponse{}, errors.New("managed worktrees require local worktree support")
+		}
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return codextea.AgentThreadSwitchResponse{}, err
+		}
+		defer client.close()
+		// Rust requires a trusted source project before creating its worktree.
+		if status, statusErr := remoteProjectTrustStatus(ctx, client, cwd, cwd); statusErr == nil && status == TrustStatusUntrusted {
+			return codextea.AgentThreadSwitchResponse{}, errors.New("the source project is not trusted")
+		}
+		manager := worktree.NewWorktreeManager(settings)
+		base, err := worktree.DefaultWorktreeBase(cwd)
+		if err != nil {
+			return codextea.AgentThreadSwitchResponse{}, err
+		}
+		checkout, err := manager.Create(cwd, base)
+		if err != nil {
+			return codextea.AgentThreadSwitchResponse{}, err
+		}
+		started, err := newRemoteAgentsDashboardSource(client, "").StartSession(ctx, checkout.CWD)
+		if err != nil {
+			return codextea.AgentThreadSwitchResponse{}, retainedWorktreeSessionError(manager, checkout, err)
+		}
+		threadID := ""
+		if started != nil && started.Thread != nil {
+			threadID = strings.TrimSpace(started.Thread.ID)
+		}
+		if threadID == "" {
+			return codextea.AgentThreadSwitchResponse{}, retainedWorktreeSessionError(manager, checkout, errors.New("the server returned no thread id"))
+		}
+		if err := manager.BindThread(checkout.Root, threadID); err != nil {
+			return codextea.AgentThreadSwitchResponse{}, retainedWorktreeSessionError(manager, checkout, err)
+		}
+		return remoteTUIAgentSwitchResponseForStartedSession(started), nil
+	}
+}
+
+// retainedWorktreeSessionError abandons a worktree whose session never started:
+// a clean checkout is removed, and a checkout that cannot be removed is
+// reported by path (Rust #45276's retained-worktree error).
+func retainedWorktreeSessionError(manager *worktree.WorktreeManager, checkout worktree.ManagedWorktree, cause error) error {
+	reason := strings.TrimSpace(cause.Error())
+	if reason == "" {
+		reason = "the worktree session could not be started"
+	}
+	// Rust's PendingWorktree drop removes only a clean checkout, so a checkout
+	// with local changes is retained and reported by path.
+	if removeErr := manager.RemoveManaged(checkout.SourceCWD, checkout.Root); removeErr == nil {
+		return errors.New(reason)
+	}
+	return fmt.Errorf("%s A checkout was retained at %s; remove it with `git worktree remove <checkout-path>` from the source repository if it is no longer needed.", reason, checkout.Root)
 }
 
 func interactiveRemoteAgentsOverviewStop(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewStopFunc {

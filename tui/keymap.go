@@ -153,6 +153,7 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("list", "List", "cancel", "Cancel and close selection views.", []string{"esc"}),
 	keymapAction("agents", "Agents", "search", "Search the available agent tasks.", []string{"f"}),
 	keymapAction("agents", "Agents", "new_task", "Open a new session in the selected checkout.", []string{"n"}),
+	keymapAction("agents", "Agents", "new_worktree", "Open a new session in a worktree from the project default branch.", []string{"w"}),
 	keymapAction("agents", "Agents", "rename", "Rename the selected task.", []string{"r"}),
 	keymapAction("agents", "Agents", "stop", "Stop the selected running task.", []string{"x"}),
 	keymapAction("agents", "Agents", "hide", "Hide the selected task until explicitly resumed.", []string{"h"}),

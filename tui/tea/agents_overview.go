@@ -21,6 +21,12 @@ import (
 
 type AgentsOverviewRefreshFunc func(currentThreadID string) ([]agentsoverview.Row, error)
 
+// AgentsOverviewNewWorktreeFunc creates a managed worktree from the selected
+// project's default branch and starts a blank session in it (Rust #45276
+// new_agents_overview_worktree). The returned snapshot is the dashboard's
+// attach response for the new session.
+type AgentsOverviewNewWorktreeFunc func(cwd string) (AgentThreadSwitchResponse, error)
+
 // AgentsOverviewNewSessionFunc starts a blank session in the selected checkout
 // without sending an initial turn and returns the attached thread snapshot the
 // dashboard switches to (Rust #45255 new_agents_overview_session). A started
@@ -61,6 +67,11 @@ type agentsOverviewListMsg struct {
 }
 
 type agentsOverviewNewSessionMsg struct {
+	response AgentThreadSwitchResponse
+	err      error
+}
+
+type agentsOverviewNewWorktreeMsg struct {
 	response AgentThreadSwitchResponse
 	err      error
 }
@@ -129,6 +140,7 @@ func (m *Model) applyAgentsOverviewKeymapHints() {
 		{action: agentsoverview.ShortcutHintRename, key: "agents.rename"},
 		{action: agentsoverview.ShortcutHintStop, key: "agents.stop"},
 		{action: agentsoverview.ShortcutHintHide, key: "agents.hide"},
+		{action: agentsoverview.ShortcutHintNewWorktree, key: "agents.new_worktree"},
 	} {
 		context, action, _ := strings.Cut(hint.key, ".")
 		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, context, action)
@@ -293,6 +305,10 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m.agentsOverviewLifecycleProgress != "" {
 		return nil
 	}
+	// Rust #45276: creating a worktree pauses every action but cancel/quit.
+	if m.agentsOverview.State.CreatingWorktree && msg.String() != "esc" && msg.String() != "ctrl+c" {
+		return nil
+	}
 	selectedBefore := m.agentsOverview.Selected
 	keySpec := keySpecFromKeyMsg(msg)
 	switch msg.String() {
@@ -351,6 +367,12 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m.keyMatches("agents", "new_task", keySpec) {
 		return m.newAgentsOverviewSessionCmd()
 	}
+	if m.keyMatches("agents", "new_worktree", keySpec) {
+		if m.agentsOverview == nil || !m.agentsOverviewWorktreesEnabled() {
+			return nil
+		}
+		return m.newAgentsOverviewWorktreeCmd()
+	}
 	if m.keyMatches("agents", "rename", keySpec) {
 		m.agentsOverview.BeginRename()
 	}
@@ -383,6 +405,52 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.refreshAgentsOverviewUsageCmd()
 	}
 	return nil
+}
+
+// newAgentsOverviewWorktreeCmd creates a worktree from the selected project's
+// default branch and switches to the blank session started inside it (Rust
+// #45276). The dashboard shows progress and pauses its actions meanwhile.
+func (m *Model) newAgentsOverviewWorktreeCmd() bubbletea.Cmd {
+	if m == nil || m.agentsOverview == nil || m.onAgentsOverviewNewWorktree == nil || m.agentsOverviewBusy {
+		return nil
+	}
+	if m.agentsOverviewNotice != "" {
+		return nil
+	}
+	cwd := strings.TrimSpace(m.agentsOverview.State.Input)
+	if cwd == "" {
+		if row := m.agentsOverview.SelectedRow(); row != nil {
+			cwd = strings.TrimSpace(row.CWD)
+		}
+	}
+	m.agentsOverviewBusy = true
+	m.agentsOverview.SetCreatingWorktree(true)
+	return func() bubbletea.Msg {
+		response, err := m.onAgentsOverviewNewWorktree(cwd)
+		return agentsOverviewNewWorktreeMsg{response: response, err: err}
+	}
+}
+
+// applyAgentsOverviewNewWorktree attaches to the session started in a freshly
+// created worktree, or reports why the worktree session could not start.
+func (m *Model) applyAgentsOverviewNewWorktree(message agentsOverviewNewWorktreeMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	m.agentsOverviewBusy = false
+	if m.agentsOverview != nil {
+		m.agentsOverview.SetCreatingWorktree(false)
+	}
+	if message.err != nil || strings.TrimSpace(message.response.Entry.ThreadID) == "" {
+		text := strings.TrimSpace(message.err.Error())
+		if text == "" {
+			text = "the server returned no thread id"
+		}
+		m.agentsOverviewNotice = "Failed to create worktree session: " + text
+		m.refreshTranscript()
+		return nil
+	}
+	return m.applyAgentsOverviewNewSession(agentsOverviewNewSessionMsg{response: message.response})
 }
 
 // newAgentsOverviewSessionCmd starts a blank session in the selected checkout

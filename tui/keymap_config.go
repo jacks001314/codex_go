@@ -228,6 +228,7 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 			}{
 				{action: "search", alias: "f"},
 				{action: "new_task", alias: "n"},
+				{action: "new_worktree", alias: "w"},
 				{action: "rename", alias: "r"},
 				{action: "stop", alias: "x"},
 				{action: "archive", alias: "a"},

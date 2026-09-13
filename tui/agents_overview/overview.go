@@ -223,6 +223,10 @@ type State struct {
 	Searching bool
 	Grouping  Grouping
 	Renaming  bool
+	// CreatingWorktree reports that the dashboard is creating a managed
+	// worktree for a new session (Rust AgentsOverviewViewState::creating_worktree):
+	// the list shows progress and pauses every action but cancel/quit.
+	CreatingWorktree bool
 	// HiddenThreads is local visibility only; activity and metadata refreshes
 	// never reveal a hidden root (Rust #44424).
 	HiddenThreads map[string]struct{}
@@ -335,6 +339,15 @@ func (v *View) recomputeProjectGroups() {
 	}
 }
 
+// SetCreatingWorktree toggles the dashboard's "Creating worktree…" progress
+// state (Rust #45276).
+func (v *View) SetCreatingWorktree(creating bool) {
+	if v == nil {
+		return
+	}
+	v.State.CreatingWorktree = creating
+}
+
 // SetWorktreesEnabled toggles linked-checkout grouping (Rust #43279).
 func (v *View) SetWorktreesEnabled(enabled bool) {
 	if v == nil {
@@ -403,6 +416,7 @@ func (v *View) titleSpan(threadID string, title string, fallback spanStyle) span
 const (
 	ShortcutHintSearch         = "search"
 	ShortcutHintNewTask        = "new_task"
+	ShortcutHintNewWorktree    = "new_worktree"
 	ShortcutHintToggleGrouping = "toggle_grouping"
 	ShortcutHintRename         = "rename"
 	ShortcutHintStop           = "stop"

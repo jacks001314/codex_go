@@ -467,3 +467,36 @@ func TestPasteSanitizesNewlines(t *testing.T) {
 		t.Fatalf("browsing accepted a paste: %#v", browsing.State)
 	}
 }
+
+// Rust #45276: creating a worktree replaces the counts summary with progress,
+// pauses the footer actions, and only advertises the new-worktree shortcut when
+// worktree support is enabled.
+func TestCreatingWorktreeStateLikeRust(t *testing.T) {
+	view := New(sampleRows(), "", false)
+	view.SetWorktreesEnabled(true)
+	view.SetCreatingWorktree(true)
+	rendered := strings.Join(view.Render(120, 24), "\n")
+	if !strings.Contains(rendered, "Creating worktree\u2026") {
+		t.Fatalf("render missing the worktree progress:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "need input") {
+		t.Fatalf("progress did not replace the counts summary:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "ctrl-c quit") || strings.Contains(rendered, "w new worktree") {
+		t.Fatalf("worktree progress footer =\n%s", rendered)
+	}
+
+	view.SetCreatingWorktree(false)
+	rendered = strings.Join(view.Render(120, 24), "\n")
+	if !strings.Contains(rendered, "w new worktree") {
+		t.Fatalf("worktree shortcut hint missing with worktrees enabled:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Creating worktree") {
+		t.Fatalf("progress state leaked into the idle render:\n%s", rendered)
+	}
+
+	grouped := New(sampleRows(), "", false)
+	if strings.Contains(strings.Join(grouped.Render(120, 24), "\n"), "w new worktree") {
+		t.Fatal("the worktree hint must not appear without worktree support")
+	}
+}

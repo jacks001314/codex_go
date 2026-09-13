@@ -864,14 +864,15 @@ type Options struct {
 	OnAgentsOverviewRefresh AgentsOverviewRefreshFunc
 	// OnAgentsOverviewUsage reads the selected task's usage estimate for the
 	// dashboard details (Rust #44970). Nil disables the token/usage surface.
-	OnAgentsOverviewUsage      AgentsOverviewUsageReaderFunc
-	OnAgentsOverviewNewSession AgentsOverviewNewSessionFunc
-	OnAgentsOverviewStop       AgentsOverviewStopFunc
-	OnAgentsOverviewRename     AgentsOverviewRenameFunc
-	OnAgentsOverviewArchive    AgentsOverviewArchiveFunc
-	OnAgentsOverviewDelete     AgentsOverviewDeleteFunc
-	OnStartAgentsDaemon        AgentsDaemonStartFunc
-	OnClipboardWrite           func(text string) error
+	OnAgentsOverviewUsage       AgentsOverviewUsageReaderFunc
+	OnAgentsOverviewNewSession  AgentsOverviewNewSessionFunc
+	OnAgentsOverviewNewWorktree AgentsOverviewNewWorktreeFunc
+	OnAgentsOverviewStop        AgentsOverviewStopFunc
+	OnAgentsOverviewRename      AgentsOverviewRenameFunc
+	OnAgentsOverviewArchive     AgentsOverviewArchiveFunc
+	OnAgentsOverviewDelete      AgentsOverviewDeleteFunc
+	OnStartAgentsDaemon         AgentsDaemonStartFunc
+	OnClipboardWrite            func(text string) error
 	// OnExportTranscript renders the active conversation as Markdown for
 	// /export (Rust transcript_export.rs). A nil hook leaves /export
 	// unavailable for this runtime.
@@ -1438,6 +1439,7 @@ type Model struct {
 	onAgentsOverviewRefresh      AgentsOverviewRefreshFunc
 	onAgentsOverviewUsage        AgentsOverviewUsageReaderFunc
 	onAgentsOverviewNewSession   AgentsOverviewNewSessionFunc
+	onAgentsOverviewNewWorktree  AgentsOverviewNewWorktreeFunc
 	onAgentsOverviewStop         AgentsOverviewStopFunc
 	onAgentsOverviewRename       AgentsOverviewRenameFunc
 	onAgentsOverviewArchive      AgentsOverviewArchiveFunc
@@ -1817,6 +1819,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onAgentsOverviewUsage:           options.OnAgentsOverviewUsage,
 		agentsOverviewUsage:             map[string]*agentsOverviewUsageEntry{},
 		onAgentsOverviewNewSession:      options.OnAgentsOverviewNewSession,
+		onAgentsOverviewNewWorktree:     options.OnAgentsOverviewNewWorktree,
 		onAgentsOverviewStop:            options.OnAgentsOverviewStop,
 		onAgentsOverviewRename:          options.OnAgentsOverviewRename,
 		onAgentsOverviewArchive:         options.OnAgentsOverviewArchive,
@@ -2434,6 +2437,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.refreshAgentsOverviewUsageCmd()
 	case agentsOverviewNewSessionMsg:
 		return m, m.applyAgentsOverviewNewSession(msg)
+	case agentsOverviewNewWorktreeMsg:
+		return m, m.applyAgentsOverviewNewWorktree(msg)
 	case agentsOverviewStopMsg:
 		if msg.err != nil {
 			m.agentsOverviewNotice = "Failed to stop background task: " + strings.TrimSpace(msg.err.Error())

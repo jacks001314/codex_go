@@ -33,9 +33,14 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	lines := make([]string, 0, termHeight)
 	// header
 	lines = append(lines, renderLine(inset, []span{{text: "Agent command center", style: spanBold}}, maxWidth, styled))
-	// summary
-	needsYou, working, ready := v.Counts()
-	lines = append(lines, renderLine(inset, []span{{text: formatSummary(needsYou, working, ready), style: spanDim}}, maxWidth, styled))
+	// summary: worktree creation reports progress in place of the counts
+	// (Rust #45276).
+	if v.State.CreatingWorktree {
+		lines = append(lines, renderLine(inset, []span{{text: "Creating worktree…", style: spanCyanBold}}, maxWidth, styled))
+	} else {
+		needsYou, working, ready := v.Counts()
+		lines = append(lines, renderLine(inset, []span{{text: formatSummary(needsYou, working, ready), style: spanDim}}, maxWidth, styled))
+	}
 	// divider
 	dividerWidth := termWidth - 4
 	if dividerWidth < 0 {
@@ -95,6 +100,13 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 // footerHints returns each footer hint as its own span group, in Rust's order
 // (agents_overview_render.rs).
 func (v *View) footerHints() [][]span {
+	if v != nil && v.State.CreatingWorktree {
+		// Rust #45276: creating a worktree pauses the actions, so the footer
+		// only reports progress and the quit shortcut.
+		return [][]span{
+			{{text: "Creating worktree…", style: spanBold}, {text: "  ctrl-c quit", style: spanDim}},
+		}
+	}
 	stopStyle := spanDim
 	if row := v.SelectedRow(); row != nil && row.StatusActive {
 		stopStyle = spanBold
@@ -108,6 +120,11 @@ func (v *View) footerHints() [][]span {
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintNewTask, "n"); ok {
 		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " new", style: spanDim}})
+	}
+	if v.worktreesEnabled {
+		if binding, ok := v.shortcutHint(ShortcutHintNewWorktree, "w"); ok {
+			hints = append(hints, []span{{text: binding, style: spanBold}, {text: " new worktree", style: spanDim}})
+		}
 	}
 	if binding, ok := v.shortcutHint(ShortcutHintSearch, "f"); ok {
 		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " search", style: spanDim}})

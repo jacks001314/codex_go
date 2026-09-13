@@ -639,3 +639,58 @@ func TestModelAgentsDashboardSwitchFailureDiscardsPendingDraft(t *testing.T) {
 		t.Fatalf("composer after failed switch = %q, want empty", got)
 	}
 }
+
+// Rust #45276: `w` creates a worktree session through the host, shows progress,
+// pauses the dashboard actions meanwhile, and switches to the new session.
+func TestModelAgentsDashboardNewWorktree(t *testing.T) {
+	var worktreeCwd string
+	model := NewModel(nil, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+		OnAgentsOverviewNewWorktree: func(cwd string) (AgentThreadSwitchResponse, error) {
+			worktreeCwd = cwd
+			return AgentThreadSwitchResponse{
+				Entry:  codextui.AgentThreadEntry{ThreadID: "wt-1", AgentNickname: "Worktree session"},
+				Status: "idle",
+			}, nil
+		},
+	})
+	model.localSession = true
+	model.featureSettings = map[string]bool{"worktrees": true}
+	openAgentsDashboard(t, model)
+	if got := model.agentsOverview.SelectedThreadID(); got != "root-1" {
+		t.Fatalf("initial selection = %q, want root-1", got)
+	}
+	updated, command := model.Update(agentsKeyEvent('w'))
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("w returned no worktree command")
+	}
+	if !model.agentsOverview.State.CreatingWorktree {
+		t.Fatal("the dashboard did not report worktree creation progress")
+	}
+	// Rust pauses the actions while the worktree is being created.
+	before := model.agentsOverview.State.Renaming
+	model.Update(agentsKeyEvent('r'))
+	if model.agentsOverview.State.Renaming != before {
+		t.Fatal("rename started while a worktree was being created")
+	}
+	message := command()
+	updated, _ = model.Update(message)
+	model = updated.(*Model)
+	if worktreeCwd != "/work/a" {
+		t.Fatalf("worktree source cwd = %q, want the selected project cwd /work/a", worktreeCwd)
+	}
+	if model.agentsOverview != nil {
+		t.Fatal("the worktree session did not close the dashboard")
+	}
+	if got := model.State.ThreadID; got != "wt-1" {
+		t.Fatalf("attached thread = %q, want wt-1", got)
+	}
+	if _, ok := model.agentsOverviewBlankSessions["wt-1"]; !ok {
+		t.Fatal("the worktree session was not retained until its first turn")
+	}
+}
