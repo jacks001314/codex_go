@@ -12974,6 +12974,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.ContextStatus = r.contextStatusForThread(threadID)
 	options.NewContextWindow = r.newContextWindowRequesterForTurn(threadID, cfg)
 	options.UserInputResponder = r.userInputResponderForTurn(threadID, strings.TrimSpace(turnID))
+	// Rust build_mcp_tool_call_request_meta: MCP tool calls report the turn's
+	// metadata document in `_meta`.
+	options.MCPTurnMetadata = r.mcpTurnMetadataProvider(threadID, strings.TrimSpace(turnID))
 	options.RequestUserInputAvailableModes = requestUserInputModes
 	options.EnableCurrentTimeTool = enableCurrentTimeTool
 	options.EnableSleepTool = enableSleepTool
@@ -14396,6 +14399,9 @@ func (r *RuntimeRouter) userInputResponderForTurn(threadID string, turnID string
 		if err := args.Normalize(); err != nil {
 			return nil, err
 		}
+		// Rust TurnMetadataState::mark_user_input_requested_during_turn: the MCP
+		// metadata reports that the model asked the user for input this turn.
+		r.markTurnUserInputRequested(threadID, turnID)
 		guard, notification := r.requireThreadStatus().NoteUserInputRequestedWithNotification(threadID)
 		r.notifyThreadStatus(notification)
 		defer func() {

@@ -279,6 +279,37 @@ func (m *ClientMetadata) capturedMetadataKey(key string) bool {
 	}
 }
 
+// MCPTurnMetadataValue returns the turn-metadata document external MCP servers
+// receive in `_meta` under `x-codex-turn-metadata` (Rust
+// TurnMetadataState::current_meta_value_for_mcp_request): the turn metadata
+// without the request identity, minus the harness-owned agent and parent/root
+// turn fields, plus the per-turn user-input flag. It returns nil when the
+// metadata carries no turn identity at all.
+func (m *ClientMetadata) MCPTurnMetadataValue(userInputRequested bool) map[string]any {
+	if m == nil {
+		return nil
+	}
+	clone := *m
+	// Rust's MCP template is built without a request kind, so the request
+	// identity (installation id, window id/number, context window id) and the
+	// compaction metadata are omitted.
+	clone.RequestKind = ""
+	clone.Compaction = nil
+	value := clone.TurnMetadataValue()
+	if value == nil {
+		return nil
+	}
+	// Never serialize the harness-owned agent identity or the parent/root turn
+	// ids for an external MCP server.
+	for _, key := range []string{AgentNameKey, ParentTurnIDKey, RootTurnIDKey} {
+		delete(value, key)
+	}
+	if userInputRequested {
+		value[UserInputRequestedDuringTurnKey] = true
+	}
+	return value
+}
+
 func (m *ClientMetadata) TurnMetadataJSON() (string, bool) {
 	value := m.TurnMetadataValue()
 	if value == nil {

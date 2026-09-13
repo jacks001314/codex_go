@@ -1,6 +1,7 @@
 package turn
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -495,6 +496,40 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 		clientMetadata["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
 	}
 	return compactStringMap(clientMetadata)
+}
+
+// MCPTurnMetadataFromResponsesMetadata derives the turn-metadata document an
+// external MCP server receives in `_meta` from a built Responses turn-metadata
+// document (Rust TurnMetadataState::current_meta_value_for_mcp_request): the
+// request identity and the harness-owned agent/parent/root turn fields are
+// dropped, and the per-turn user-input flag is added when the model asked for
+// input. It returns nil when there is no document to report.
+func MCPTurnMetadataFromResponsesMetadata(raw string, userInputRequested bool) map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var document map[string]any
+	if err := json.Unmarshal([]byte(raw), &document); err != nil || len(document) == 0 {
+		return nil
+	}
+	for _, key := range []string{
+		codexapi.InstallationIDKey,
+		codexapi.WindowIDKey,
+		codexapi.ContextWindowIDKey,
+		codexapi.RequestKindKey,
+		codexapi.CompactionKey,
+		codexapi.AgentNameKey,
+		codexapi.ParentTurnIDKey,
+		codexapi.RootTurnIDKey,
+	} {
+		delete(document, key)
+	}
+	delete(document, "window_number")
+	if userInputRequested {
+		document[codexapi.UserInputRequestedDuringTurnKey] = true
+	}
+	return document
 }
 
 func MergeClientMetadata(base map[string]string, overlay map[string]string) map[string]string {

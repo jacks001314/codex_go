@@ -37,6 +37,10 @@ type ToolRegistryOptions struct {
 	MCPTools      []mcp.RuntimeToolInfo
 	MCPConnectors []mcp.RuntimeConnector
 	MCPExposure   tool.Exposure
+	// MCPTurnMetadata supplies the turn-metadata document every MCP tool call
+	// reports in `_meta` (Rust build_mcp_tool_call_request_meta). Nil omits the
+	// entry; the callback runs per call so live turn state is current.
+	MCPTurnMetadata func() map[string]any
 	// MCPToolApproval enables Rust's custom-MCP-server tool approval policy
 	// (mcp_tool_call.rs maybe_request_mcp_tool_approval). Nil leaves the gate
 	// off, which mirrors a runtime without a client to ask.
@@ -565,6 +569,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			ConnectorID:                       info.ConnectorID,
 			ConnectorName:                     info.ConnectorName,
 			Model:                             options.Model,
+			TurnMetadata:                      options.MCPTurnMetadata,
 			AuthElicitation:                   options.MCPAuthElicitation,
 			ToolApproval:                      options.MCPToolApproval,
 			ConfirmationPolicies:              mcpActorConfirmationPolicies(options.ModelConfirmationPolicies),

@@ -127,6 +127,42 @@ func TestMCPToolExecutorRequestMetaIncludesThreadIDLikeRust(t *testing.T) {
 	}
 }
 
+// Rust build_mcp_tool_call_request_meta reports the turn-metadata document with
+// every MCP call, evaluated per call so live state stays current.
+func TestMCPToolExecutorReportsTurnMetadataLikeRust(t *testing.T) {
+	documents := 0
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ThreadID: "thread-live",
+		TurnMetadata: func() map[string]any {
+			documents++
+			return map[string]any{"thread_id": "thread-live", "turn_id": "turn-1"}
+		},
+	})
+	meta := executor.requestMetaForCall("call-1").(map[string]any)
+	document, ok := meta[MCPToolTurnMetadataMetaKey].(map[string]any)
+	if !ok || document["turn_id"] != "turn-1" {
+		t.Fatalf("turn metadata = %#v (meta %#v)", meta[MCPToolTurnMetadataMetaKey], meta)
+	}
+	if documents != 1 {
+		t.Fatalf("turn metadata callbacks = %d, want 1", documents)
+	}
+	if _, ok := executor.requestMetaForCall("call-2").(map[string]any); !ok {
+		t.Fatal("the second call did not evaluate the turn-metadata provider")
+	}
+	if documents != 2 {
+		t.Fatalf("turn metadata callbacks = %d, want 2", documents)
+	}
+
+	// A provider with nothing to report leaves the entry out.
+	empty := NewToolExecutor(&ToolExecutorOptions{
+		ThreadID:     "thread-live",
+		TurnMetadata: func() map[string]any { return nil },
+	})
+	if meta := empty.requestMetaForCall().(map[string]any); meta[MCPToolTurnMetadataMetaKey] != nil {
+		t.Fatalf("empty turn metadata leaked into the call meta: %#v", meta)
+	}
+}
+
 func TestCodexAppsMCPToolRequestMetaIncludesCallIDLikeRust(t *testing.T) {
 	executor := NewToolExecutor(&ToolExecutorOptions{ServerName: RuntimeCodexAppsMCPServerName, ThreadID: "thread-live", RequestMeta: map[string]any{"_codex_apps": map[string]any{"connector_id": "calendar"}}})
 	meta := executor.requestMetaForCall("call-123").(map[string]any)

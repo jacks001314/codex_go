@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"codex_go/apps"
+	"codex_go/codexapi"
 	"codex_go/mcp"
 	"codex_go/sandbox"
 	"codex_go/tool"
@@ -248,5 +249,53 @@ func TestAppserverMCPToolApprovalRequiresRequestSink(t *testing.T) {
 	router := &RuntimeRouter{}
 	if options := router.newAppserverMCPToolApprovalOptions(nil, mcp.NewMCPService(nil), "thread-1", "turn-1", sandbox.ApprovalOnRequest); options != nil {
 		t.Fatalf("options = %#v, want nil without a request sink", options)
+	}
+}
+
+// Rust build_mcp_tool_call_request_meta reports the turn's metadata document to
+// MCP servers, without the Responses request identity, and flags a turn that
+// asked the user for input.
+func TestMCPTurnMetadataProviderLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, nil); err != nil {
+		t.Fatalf("RegisterTurn() error = %v", err)
+	}
+	document := `{"session_id":"session","thread_id":"thread-1","turn_id":"turn-1",` +
+		`"installation_id":"install","window_id":"window","request_kind":"turn",` +
+		`"agent_name":"/root","parent_turn_id":"parent-turn","root_turn_id":"root-turn",` +
+		`"model":"gpt-5.4","codex_version":"1.2.3"}`
+	if !router.threads.UpdateTurn("thread-1", "turn-1", func(active *activeRuntimeTurn) {
+		active.RunConfig = &appTurnRunConfig{ClientMetadata: map[string]string{
+			codexapi.ClientCodexTurnMetadataHeader: document,
+		}}
+	}) {
+		t.Fatal("UpdateTurn() did not find the registered turn")
+	}
+
+	provider := router.mcpTurnMetadataProvider("thread-1", "turn-1")
+	meta := provider()
+	if meta == nil {
+		t.Fatal("the MCP turn metadata provider returned no document")
+	}
+	for _, key := range []string{"installation_id", "window_id", "request_kind", "agent_name", "parent_turn_id", "root_turn_id"} {
+		if _, ok := meta[key]; ok {
+			t.Fatalf("MCP turn metadata carries %q: %#v", key, meta)
+		}
+	}
+	if meta["thread_id"] != "thread-1" || meta["turn_id"] != "turn-1" || meta["model"] != "gpt-5.4" {
+		t.Fatalf("MCP turn metadata = %#v", meta)
+	}
+	if _, ok := meta["user_input_requested_during_turn"]; ok {
+		t.Fatalf("MCP turn metadata flagged user input the turn never requested: %#v", meta)
+	}
+
+	router.markTurnUserInputRequested("thread-1", "turn-1")
+	if meta := provider(); meta["user_input_requested_during_turn"] != true {
+		t.Fatalf("MCP turn metadata missing the user-input flag: %#v", meta)
+	}
+
+	// A turn that has no metadata (or is gone) reports nothing.
+	if meta := router.mcpTurnMetadataProvider("thread-1", "turn-2")(); meta != nil {
+		t.Fatalf("unknown turn produced a document: %#v", meta)
 	}
 }

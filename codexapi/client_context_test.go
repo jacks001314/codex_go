@@ -211,6 +211,73 @@ func TestClientMetadataCarriesModelAndReasoningEffort(t *testing.T) {
 	}
 }
 
+// Rust's current_meta_value_for_mcp_request builds the document external MCP
+// servers receive: no request identity, no agent/parent/root turn fields, and
+// the per-turn user-input flag added only when the model asked for input.
+func TestClientMetadataMCPTurnMetadataValue(t *testing.T) {
+	metadata := NewClientMetadata("install", "session", "thread", "window")
+	metadata.RequestKind = ClientRequestTurn
+	metadata.TurnID = "turn-1"
+	metadata.ContextWindowID = "context-1"
+	windowNumber := uint64(3)
+	metadata.WindowNumber = &windowNumber
+	metadata.AgentName = "/root/worker"
+	metadata.ParentThreadID = "parent-thread"
+	metadata.ParentTurnID = "parent-turn"
+	metadata.RootTurnID = "root-turn"
+	metadata.CodexVersion = "1.2.3"
+	metadata.Model = "gpt-5.4"
+	metadata.ReasoningEffort = "high"
+	metadata.SandboxMode = "workspace-write"
+	analyticsEnabled := true
+	metadata.AnalyticsEnabled = &analyticsEnabled
+	metadata.TurnStartedAtUnixMS = 1700
+	metadata.Workspaces = map[string]ClientWorkspaceMetadata{"/work/a": {LatestGitCommitHash: "abc"}}
+	metadata.Extra = map[string]string{"workspace_kind": "git"}
+
+	value := metadata.MCPTurnMetadataValue(false)
+	for _, key := range []string{
+		InstallationIDKey, WindowIDKey, ContextWindowIDKey, "window_number",
+		RequestKindKey, CompactionKey,
+		AgentNameKey, ParentTurnIDKey, RootTurnIDKey,
+	} {
+		if _, ok := value[key]; ok {
+			t.Fatalf("MCP metadata carries %q: %#v", key, value)
+		}
+	}
+	for key, want := range map[string]any{
+		SessionIDKey:           "session",
+		ThreadIDKey:            "thread",
+		TurnIDKey:              "turn-1",
+		ParentThreadIDKey:      "parent-thread",
+		SandboxModeKey:         "workspace-write",
+		ModelKey:               "gpt-5.4",
+		ReasoningEffortKey:     "high",
+		"codex_version":        "1.2.3",
+		TurnStartedAtUnixMSKey: int64(1700),
+		AnalyticsEnabledKey:    true,
+		"workspace_kind":       "git",
+	} {
+		if value[key] != want {
+			t.Fatalf("MCP metadata[%q] = %#v, want %#v (%#v)", key, value[key], want, value)
+		}
+	}
+	if _, ok := value["workspaces"]; !ok {
+		t.Fatalf("MCP metadata dropped workspaces: %#v", value)
+	}
+	if _, ok := value[UserInputRequestedDuringTurnKey]; ok {
+		t.Fatalf("MCP metadata flagged user input the turn never requested: %#v", value)
+	}
+
+	requested := metadata.MCPTurnMetadataValue(true)
+	if requested[UserInputRequestedDuringTurnKey] != true {
+		t.Fatalf("MCP metadata missing the user-input flag: %#v", requested)
+	}
+	if _, ok := metadata.TurnMetadataValue()[UserInputRequestedDuringTurnKey]; ok {
+		t.Fatal("the responses metadata must not carry the MCP-only user-input flag")
+	}
+}
+
 func TestClientCompatibilityHeadersOmitUnboundedCodeModeToolNames(t *testing.T) {
 	value := map[string]any{
 		"thread_id": "thread",

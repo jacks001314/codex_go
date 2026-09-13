@@ -38,17 +38,21 @@ const (
 	// issued the request (Rust `ExecutionMetadata::apply_to`). They are not
 	// reserved keys, so a client may configure them, but the captured value wins
 	// like Rust's insert into the turn-metadata extra map.
-	ModelKey              = "model"
-	ReasoningEffortKey    = "reasoning_effort"
-	InstallationIDHeader  = "x-codex-installation-id"
-	WindowIDHeader        = "x-codex-window-id"
-	TurnMetadataHeader    = "x-codex-turn-metadata"
-	ParentThreadIDHeader  = "x-codex-parent-thread-id"
-	OpenAISubagentHeader  = "x-openai-subagent"
-	RequestKindTurn       = "turn"
-	RequestKindPrewarm    = "prewarm"
-	RequestKindCompaction = "compaction"
-	RequestKindMemory     = "memory"
+	ModelKey           = "model"
+	ReasoningEffortKey = "reasoning_effort"
+	// UserInputRequestedDuringTurnKey marks that the model asked the user for
+	// input during the turn. Rust only serializes it into the MCP turn-metadata
+	// document (TurnMetadataState::current_meta_value_for_mcp_request).
+	UserInputRequestedDuringTurnKey = "user_input_requested_during_turn"
+	InstallationIDHeader            = "x-codex-installation-id"
+	WindowIDHeader                  = "x-codex-window-id"
+	TurnMetadataHeader              = "x-codex-turn-metadata"
+	ParentThreadIDHeader            = "x-codex-parent-thread-id"
+	OpenAISubagentHeader            = "x-openai-subagent"
+	RequestKindTurn                 = "turn"
+	RequestKindPrewarm              = "prewarm"
+	RequestKindCompaction           = "compaction"
+	RequestKindMemory               = "memory"
 )
 
 var reservedMetadataKeys = map[string]bool{

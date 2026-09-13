@@ -53,18 +53,23 @@ func mustMarshalJSON(value any) []byte {
 }
 
 type ToolExecutorOptions struct {
-	Service                       *MCPService
-	ServerName                    string
-	ServerOrigin                  string
-	ToolInfo                      *MCPToolInfo
-	ToolName                      tool.ToolName
-	ConnectorID                   string
-	ConnectorName                 string
-	Model                         string
-	Parallel                      bool
-	ThreadID                      string
-	TurnID                        string
-	RequestMeta                   map[string]any
+	Service       *MCPService
+	ServerName    string
+	ServerOrigin  string
+	ToolInfo      *MCPToolInfo
+	ToolName      tool.ToolName
+	ConnectorID   string
+	ConnectorName string
+	Model         string
+	Parallel      bool
+	ThreadID      string
+	TurnID        string
+	RequestMeta   map[string]any
+	// TurnMetadata supplies the turn-metadata document this call reports to the
+	// MCP server (Rust build_mcp_tool_call_request_meta's
+	// x-codex-turn-metadata entry). Nil omits the entry; the callback is invoked
+	// per call so live turn state (the user-input flag) is current.
+	TurnMetadata                  func() map[string]any
 	Binding                       *Binding
 	OpenAIFileRewriter            *OpenAIFileRewriter
 	OpenAIFileInputOptionalFields map[string][]string
@@ -100,6 +105,11 @@ type AuthElicitationOptions struct {
 	InstallURL       func(connectorName string, connectorID string) string
 }
 
+// MCPToolTurnMetadataMetaKey carries the turn-metadata document an MCP call
+// reports (Rust build_mcp_tool_call_request_meta's X_CODEX_TURN_METADATA_HEADER
+// entry).
+const MCPToolTurnMetadataMetaKey = "x-codex-turn-metadata"
+
 type ToolExecutor struct {
 	service                       *MCPService
 	serverName                    string
@@ -114,6 +124,7 @@ type ToolExecutor struct {
 	threadID                      string
 	turnID                        string
 	requestMeta                   map[string]any
+	turnMetadata                  func() map[string]any
 	binding                       *Binding
 	openAIFileRewriter            *OpenAIFileRewriter
 	openAIFileInputOptionalFields map[string][]string
@@ -147,6 +158,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.threadID = strings.TrimSpace(options.ThreadID)
 	executor.turnID = strings.TrimSpace(options.TurnID)
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
+	executor.turnMetadata = options.TurnMetadata
 	executor.binding = options.Binding
 	executor.connectorID = strings.TrimSpace(options.ConnectorID)
 	executor.connectorName = strings.TrimSpace(options.ConnectorName)
@@ -455,6 +467,13 @@ func (e *ToolExecutor) requestMetaForCall(callID ...string) any {
 	}
 	if e.threadID != "" {
 		requestMeta["thread_id"] = e.threadID
+	}
+	// Rust build_mcp_tool_call_request_meta: every MCP tool call reports the
+	// turn metadata document so the server can attribute the call.
+	if e.turnMetadata != nil {
+		if document := e.turnMetadata(); len(document) > 0 {
+			requestMeta[MCPToolTurnMetadataMetaKey] = document
+		}
 	}
 	if IsCodexAppsMCPServerName(e.resolvedServerName()) {
 		appsMeta, _ := requestMeta["_codex_apps"].(map[string]any)

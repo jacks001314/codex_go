@@ -64,6 +64,57 @@ type activeRuntimeTurn struct {
 	ConnectionID string
 	RunConfig    *appTurnRunConfig
 	SteerCount   int
+	// UserInputRequested records that the model asked the user for input during
+	// this turn; the MCP request metadata reports it
+	// (Rust TurnMetadataState::mark_user_input_requested_during_turn). The
+	// thread manager's turn lock guards it.
+	UserInputRequested bool
+}
+
+// markTurnUserInputRequested records Rust's
+// mark_user_input_requested_during_turn for the turn a tool call belongs to.
+func (r *RuntimeRouter) markTurnUserInputRequested(threadID string, turnID string) {
+	if r == nil {
+		return
+	}
+	r.threads.UpdateTurn(strings.TrimSpace(threadID), strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
+		active.UserInputRequested = true
+	})
+}
+
+// turnUserInputRequested reads the turn's user-input flag under the turn lock.
+func (r *RuntimeRouter) turnUserInputRequested(threadID string, turnID string) bool {
+	if r == nil {
+		return false
+	}
+	requested := false
+	r.threads.UpdateTurn(strings.TrimSpace(threadID), strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
+		requested = active.UserInputRequested
+	})
+	return requested
+}
+
+// mcpTurnMetadataProvider returns the per-call turn-metadata document MCP tool
+// calls report in `_meta` (Rust build_mcp_tool_call_request_meta): the turn's
+// metadata without the request identity, minus the harness-owned agent and
+// parent/root turn fields, plus the per-turn user-input flag. The document is
+// built from the turn's own Responses metadata, so both describe the same turn.
+func (r *RuntimeRouter) mcpTurnMetadataProvider(threadID string, turnID string) func() map[string]any {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	return func() map[string]any {
+		if r == nil {
+			return nil
+		}
+		active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+		if active == nil || active.RunConfig == nil {
+			return nil
+		}
+		return turn.MCPTurnMetadataFromResponsesMetadata(
+			active.RunConfig.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader],
+			r.turnUserInputRequested(threadID, turnID),
+		)
+	}
 }
 
 func (r *RuntimeRouter) attributeCommandExecutionItem(item *ThreadItem) {

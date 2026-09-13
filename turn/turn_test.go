@@ -343,3 +343,52 @@ func TestBudgetStateMaybeReminder(t *testing.T) {
 		t.Fatalf("MaybeReminder(above threshold) ok = true")
 	}
 }
+
+// Rust's current_meta_value_for_mcp_request derives the external MCP metadata
+// document from the turn metadata: no request identity, no harness-owned
+// agent/parent/root turn fields, and the user-input flag only when requested.
+func TestMCPTurnMetadataFromResponsesMetadataLikeRust(t *testing.T) {
+	raw := `{"session_id":"session","thread_id":"thread","turn_id":"turn-1","installation_id":"install",` +
+		`"window_id":"window","window_number":2,"context_window_id":"context","request_kind":"turn",` +
+		`"agent_name":"/root/worker","parent_thread_id":"parent-thread","parent_turn_id":"parent-turn",` +
+		`"root_turn_id":"root-turn","model":"gpt-5.4","reasoning_effort":"high","codex_version":"1.2.3",` +
+		`"sandbox_mode":"workspace-write","turn_started_at_unix_ms":1700,"workspace_kind":"git"}`
+
+	document := MCPTurnMetadataFromResponsesMetadata(raw, false)
+	for _, key := range []string{
+		"installation_id", "window_id", "window_number", "context_window_id",
+		"request_kind", "compaction", "agent_name", "parent_turn_id", "root_turn_id",
+	} {
+		if _, ok := document[key]; ok {
+			t.Fatalf("MCP metadata carries %q: %#v", key, document)
+		}
+	}
+	for key, want := range map[string]any{
+		"session_id":              "session",
+		"thread_id":               "thread",
+		"turn_id":                 "turn-1",
+		"parent_thread_id":        "parent-thread",
+		"model":                   "gpt-5.4",
+		"reasoning_effort":        "high",
+		"codex_version":           "1.2.3",
+		"sandbox_mode":            "workspace-write",
+		"turn_started_at_unix_ms": float64(1700),
+		"workspace_kind":          "git",
+	} {
+		if document[key] != want {
+			t.Fatalf("MCP metadata[%q] = %#v, want %#v (%#v)", key, document[key], want, document)
+		}
+	}
+	if _, ok := document["user_input_requested_during_turn"]; ok {
+		t.Fatalf("MCP metadata flagged user input the turn never requested: %#v", document)
+	}
+	if requested := MCPTurnMetadataFromResponsesMetadata(raw, true); requested["user_input_requested_during_turn"] != true {
+		t.Fatalf("MCP metadata missing the user-input flag: %#v", requested)
+	}
+	if document := MCPTurnMetadataFromResponsesMetadata("   ", true); document != nil {
+		t.Fatalf("empty metadata produced a document: %#v", document)
+	}
+	if document := MCPTurnMetadataFromResponsesMetadata("{", true); document != nil {
+		t.Fatalf("malformed metadata produced a document: %#v", document)
+	}
+}

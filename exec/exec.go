@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	multiagent "codex_go/agent"
@@ -1191,7 +1192,16 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 			options.Shell.Validation.AdditionalPermissionsAllowed = run.ExecPermissionApprovals
 		}
 	}
-	options.UserInputResponder = r.UserInput
+	// Rust TurnMetadataState::mark_user_input_requested_during_turn: the MCP
+	// metadata reports that the model asked the user for input this turn.
+	userInputRequested := &atomic.Bool{}
+	if r.UserInput != nil {
+		responder := r.UserInput
+		options.UserInputResponder = func(ctx context.Context, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+			userInputRequested.Store(true)
+			return responder(ctx, args)
+		}
+	}
 	if options.Shell != nil && run != nil && run.PermissionProfile != nil {
 		options.Shell.Validation.PermissionProfileID = run.PermissionProfileID
 		options.Shell.Validation.PermissionProfile = run.PermissionProfile
@@ -1221,6 +1231,17 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.WebSearch = run.WebSearch
 		options.ImageGeneration = run.ImageGeneration
 		options.ViewImage = run.ViewImage
+		// Rust build_mcp_tool_call_request_meta: MCP tool calls report the
+		// turn's metadata document in `_meta`.
+		if run.ClientMetadata != nil {
+			clientMetadata := run.ClientMetadata
+			options.MCPTurnMetadata = func() map[string]any {
+				return turn.MCPTurnMetadataFromResponsesMetadata(
+					clientMetadata[codexapi.ClientCodexTurnMetadataHeader],
+					userInputRequested.Load(),
+				)
+			}
+		}
 	}
 	if run != nil && strings.TrimSpace(run.Model) != "" {
 		// Forward the issuing model's confirmation-policy documents to actor MCP
