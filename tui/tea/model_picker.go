@@ -272,3 +272,39 @@ func modelPickerShortcut(index int) string {
 	}
 	return ""
 }
+
+// ModelCatalogResultMsg carries the hidden-inclusive model catalog used to
+// resolve backend-authorized model switches (the Reserve model is picker-hidden).
+type ModelCatalogResultMsg struct {
+	RequestID uint64
+	Options   []codextui.ModelPickerOption
+	Err       error
+}
+
+// fetchModelCatalog asynchronously fetches the hidden-inclusive catalog. It
+// returns nil when no catalog callback is configured.
+func (m *Model) fetchModelCatalog() bubbletea.Cmd {
+	if m == nil || m.onListModels == nil {
+		return nil
+	}
+	m.nextModelCatalogRequestID++
+	requestID := m.nextModelCatalogRequestID
+	m.pendingModelCatalogRequestID = requestID
+	return func() bubbletea.Msg {
+		options, err := m.onListModels(true)
+		return ModelCatalogResultMsg{RequestID: requestID, Options: options, Err: err}
+	}
+}
+
+// applyModelCatalogResult stores the hidden-inclusive catalog. Stale, failed,
+// and empty responses are ignored.
+func (m *Model) applyModelCatalogResult(msg ModelCatalogResultMsg) {
+	if m == nil || msg.RequestID == 0 || msg.RequestID != m.pendingModelCatalogRequestID {
+		return
+	}
+	m.pendingModelCatalogRequestID = 0
+	if msg.Err != nil || len(msg.Options) == 0 {
+		return
+	}
+	m.modelCatalogOpts = append([]codextui.ModelPickerOption(nil), msg.Options...)
+}

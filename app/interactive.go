@@ -1238,6 +1238,9 @@ func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func
 	}
 	return func(includeHidden bool) ([]codextui.ModelPickerOption, error) {
 		presets := manager.ListModels(modelpkg.RefreshOnlineIfUncached)
+		if includeHidden {
+			return codextui.ModelPickerOptionsFromPresetsIncludingHidden(presets), nil
+		}
 		return codextui.ModelPickerOptionsFromPresets(presets), nil
 	}
 }

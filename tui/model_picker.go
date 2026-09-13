@@ -10,11 +10,15 @@ import (
 // codex-rs/tui/src/bottom_pane/list_selection_view.rs.
 
 type ModelPickerOption struct {
-	ID                        string
-	Label                     string
-	Description               string
-	IsCurrent                 bool
-	IsDefault                 bool
+	ID          string
+	Label       string
+	Description string
+	IsCurrent   bool
+	IsDefault   bool
+	// ShowInPicker records whether the model is picker-visible. It is only
+	// meaningful for hidden-inclusive catalogs (Rust ModelPreset::show_in_picker);
+	// picker-facing lists contain only visible models.
+	ShowInPicker              bool
 	DefaultReasoningEffort    string
 	SupportedReasoningEfforts []ReasoningEffortOption
 	ServiceTiers              []string
@@ -79,6 +83,36 @@ func ModelPickerOptionsFromPresets(presets []model.ModelPreset) []ModelPickerOpt
 			Label:                     label,
 			Description:               strings.TrimSpace(preset.Description),
 			IsDefault:                 preset.IsDefault,
+			ShowInPicker:              true,
+			DefaultReasoningEffort:    strings.TrimSpace(preset.DefaultReasoningLevel),
+			SupportedReasoningEfforts: reasoningOptionsForModelPreset(preset),
+			ServiceTiers:              append([]string(nil), preset.ServiceTiers...),
+		})
+	}
+	return options
+}
+
+// ModelPickerOptionsFromPresetsIncludingHidden keeps every preset and records
+// its picker visibility, for callers that resolve a model the picker hides
+// (Rust model_catalog::try_list_models). The picker-facing
+// ModelPickerOptionsFromPresets keeps filtering.
+func ModelPickerOptionsFromPresetsIncludingHidden(presets []model.ModelPreset) []ModelPickerOption {
+	options := make([]ModelPickerOption, 0, len(presets))
+	for _, preset := range presets {
+		id := strings.TrimSpace(preset.Model)
+		if id == "" {
+			continue
+		}
+		label := strings.TrimSpace(preset.Name)
+		if label == "" {
+			label = id
+		}
+		options = append(options, ModelPickerOption{
+			ID:                        id,
+			Label:                     label,
+			Description:               strings.TrimSpace(preset.Description),
+			IsDefault:                 preset.IsDefault,
+			ShowInPicker:              modelPresetShowsInPicker(preset.Visibility),
 			DefaultReasoningEffort:    strings.TrimSpace(preset.DefaultReasoningLevel),
 			SupportedReasoningEfforts: reasoningOptionsForModelPreset(preset),
 			ServiceTiers:              append([]string(nil), preset.ServiceTiers...),

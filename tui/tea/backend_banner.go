@@ -204,6 +204,102 @@ func (s *backendBannerState) dismiss() {
 	s.dismissed = true
 }
 
+// AutomaticModelSwitchReason mirrors Rust's AutomaticModelSwitchReason.
+type AutomaticModelSwitchReason string
+
+const (
+	AutomaticModelSwitchUsageLimit     AutomaticModelSwitchReason = "usage_limit"
+	AutomaticModelSwitchUsageRecovered AutomaticModelSwitchReason = "usage_recovered"
+)
+
+// ReserveReturn mirrors Rust's ReserveReturnModel: the task-local model to
+// restore once ordinary usage recovers.
+type ReserveReturn struct {
+	AccountID string
+	Model     string
+	Effort    string
+}
+
+// AutomaticModelSwitch is the target of a backend-authorized model transition.
+type AutomaticModelSwitch struct {
+	Model  string
+	Effort string
+	Reason AutomaticModelSwitchReason
+}
+
+// fallbackSwitch mirrors Rust ChatWidget::backend_banner_fallback: the banner
+// authorizes a Reserve entry or an ordered fallback, and a recovered ordinary
+// usage read authorizes returning from Reserve.
+func (s *backendBannerState) fallbackSwitch(models []codextui.ModelPickerOption, currentModel string, currentEffort string, reserveReturn *ReserveReturn) *AutomaticModelSwitch {
+	if s == nil {
+		return nil
+	}
+	if reserveReturn != nil && reserveReturn.AccountID != s.accountID {
+		// A saved target from another account is stale.
+		reserveReturn = nil
+	}
+	if currentModel == LunaReserveModel && s.ordinaryUsageRecovered {
+		if reserveReturn == nil || reserveReturn.AccountID != s.accountID || strings.TrimSpace(reserveReturn.Model) == "" {
+			return nil
+		}
+		if !catalogModelVisible(models, reserveReturn.Model) {
+			return nil
+		}
+		return &AutomaticModelSwitch{
+			Model:  reserveReturn.Model,
+			Effort: reserveReturn.Effort,
+			Reason: AutomaticModelSwitchUsageRecovered,
+		}
+	}
+	banner := s.banner
+	if banner == nil {
+		return nil
+	}
+	if banner.BannerType == BackendBannerLunaReserve {
+		for _, option := range models {
+			if option.ID == LunaReserveModel && option.ID != currentModel &&
+				(banner.BlockedModelSlug == nil || *banner.BlockedModelSlug == currentModel) {
+				return &AutomaticModelSwitch{Model: option.ID, Effort: currentEffort, Reason: AutomaticModelSwitchUsageLimit}
+			}
+		}
+		return nil
+	}
+	if banner.BlockedModelSlug == nil || *banner.BlockedModelSlug != currentModel {
+		return nil
+	}
+	for _, slug := range banner.FallbackModelSlugs {
+		for _, option := range models {
+			if option.ID == slug && option.ID != currentModel && catalogOptionVisible(models, option) {
+				return &AutomaticModelSwitch{Model: option.ID, Effort: currentEffort, Reason: AutomaticModelSwitchUsageLimit}
+			}
+		}
+	}
+	return nil
+}
+
+func catalogModelVisible(models []codextui.ModelPickerOption, model string) bool {
+	for _, option := range models {
+		if option.ID == model {
+			return catalogOptionVisible(models, option)
+		}
+	}
+	return false
+}
+
+// catalogOptionVisible applies Rust's show_in_picker filter. A catalog whose
+// entries carry no visibility flag (hand-built picker/tests) is treated as all
+// visible.
+func catalogOptionVisible(models []codextui.ModelPickerOption, option codextui.ModelPickerOption) bool {
+	anyFlagged := false
+	for _, candidate := range models {
+		if candidate.ShowInPicker {
+			anyFlagged = true
+			break
+		}
+	}
+	return !anyFlagged || option.ShowInPicker
+}
+
 func (m *Model) currentBannerModel() string {
 	if m == nil || m.State == nil {
 		return ""

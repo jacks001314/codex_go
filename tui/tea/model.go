@@ -1452,14 +1452,20 @@ type Model struct {
 	disableAutoRecap bool
 	// recapLoadingIndex is the transcript message index of the transient recap
 	// loading row, or -1 when none is shown.
-	recapLoadingIndex                 int
-	onReadTokenActivity               TokenActivityReaderFunc
-	onReadRateLimitResetCredits       RateLimitResetCreditsReaderFunc
-	onConsumeRateLimitResetCredit     RateLimitResetCreditConsumerFunc
-	onReadRateLimits                  RateLimitsReaderFunc
-	onReadBackendBanner               func() (BackendBannerRead, error)
-	onBackendBannerAction             func(action BackendBannerAction) bubbletea.Cmd
-	backendBanner                     backendBannerState
+	recapLoadingIndex             int
+	onReadTokenActivity           TokenActivityReaderFunc
+	onReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
+	onConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
+	onReadRateLimits              RateLimitsReaderFunc
+	onReadBackendBanner           func() (BackendBannerRead, error)
+	onBackendBannerAction         func(action BackendBannerAction) bubbletea.Cmd
+	backendBanner                 backendBannerState
+	// reserveReturn is the task-local model to restore when ordinary usage
+	// recovers from the reserve model (Rust ReserveReturnModel).
+	reserveReturn                     *ReserveReturn
+	modelCatalogOpts                  []codextui.ModelPickerOption
+	nextModelCatalogRequestID         uint64
+	pendingModelCatalogRequestID      uint64
 	nextStatusRateLimitRequestID      uint64
 	pendingStatusRateLimitRequests    map[uint64]pendingStatusRateLimitRequest
 	terminalTitleWriter               TerminalTitleWriterFunc
@@ -2076,7 +2082,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, bubbletea.Batch(m.petDrawCmd(), m.petTickCmd())
 	case BackendBannerResultMsg:
 		m.applyBackendBannerResult(msg)
-		return m, nil
+		return m, m.applyBackendBannerFallbackCmd()
+	case ModelCatalogResultMsg:
+		m.applyModelCatalogResult(msg)
+		return m, m.applyBackendBannerFallbackCmd()
 	case bubbletea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		return m, nil
