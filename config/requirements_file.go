@@ -62,7 +62,46 @@ func configRequirementsFromValidatedMap(values map[string]any) (*ConfigRequireme
 			return nil, err
 		}
 	}
-	return configRequirementsFromMap(values)
+	requirements, err := configRequirementsFromMap(values)
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePermissionProfileRequirements(requirements); err != nil {
+		return nil, err
+	}
+	return requirements, nil
+}
+
+// validatePermissionProfileRequirements mirrors Rust's
+// validate_required_permission_profile_catalog: a managed default_permissions
+// requires an allowed_permission_profiles allow-list, and the required default
+// (explicit or the implicit workspace profile) must exist in the allow-list.
+func validatePermissionProfileRequirements(requirements *ConfigRequirements) error {
+	if requirements == nil {
+		return nil
+	}
+	if requirements.AllowedPermissionProfiles == nil {
+		if requirements.DefaultPermissions != nil {
+			return fmt.Errorf("requirements.toml default_permissions requires allowed_permission_profiles")
+		}
+		return nil
+	}
+	allowed := requirements.AllowedPermissionProfiles
+	fallback := ""
+	if requirements.DefaultPermissions != nil {
+		fallback = strings.TrimSpace(*requirements.DefaultPermissions)
+	}
+	if fallback == "" {
+		implicit, ok := requirementDefaultPermissionProfile(allowed)
+		if !ok {
+			return fmt.Errorf("requirements.toml default_permissions must be set unless allowed_permission_profiles allows both `:workspace` and `:read-only`")
+		}
+		fallback = implicit
+	}
+	if !permissionProfileAllowedByRequirements(allowed, fallback) {
+		return fmt.Errorf("requirements.toml default_permissions `%s` must be allowed by allowed_permission_profiles", fallback)
+	}
+	return nil
 }
 
 func browserUseRequirementsFromMap(values map[string]any) *BrowserUseRequirements {

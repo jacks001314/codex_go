@@ -121,7 +121,13 @@ func TestLoadEffectiveCloudManagedPermissionProfileIsExplicitlyGated(t *testing.
 	if resolved == nil || resolved.ID != "managed-cloud" || resolved.Profile == nil || !resolved.Profile.AllowsNetwork() {
 		t.Fatalf("resolved = %#v", resolved)
 	}
-	if _, err := withManaged.ResolveSandboxPermissionProfile(":danger-full-access", home); err == nil {
-		t.Fatal("managed allowed_permission_profiles did not reject disallowed profile")
+	// Rust resolve_default_permissions falls back to the required default when
+	// the selected profile is disallowed.
+	fallback, err := withManaged.ResolveSandboxPermissionProfile(":danger-full-access", home)
+	if err != nil {
+		t.Fatalf("ResolveSandboxPermissionProfile(disallowed) error = %v", err)
+	}
+	if fallback == nil || fallback.ID != "managed-cloud" {
+		t.Fatalf("disallowed profile did not fall back to the required default: %#v", fallback)
 	}
 }

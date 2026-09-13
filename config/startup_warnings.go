@@ -63,6 +63,11 @@ func StartupWarnings(values map[string]any, requirements *ConfigRequirements) []
 			"Configured value for `windows.sandbox` is disallowed by requirements; falling back to required value %q.",
 			mode))
 	}
+	// A configured default_permissions the managed allow-list disallows falls
+	// back to the required default.
+	if warning := (&Config{Values: values, Requirements: requirements}).PermissionProfileRequirementWarning(); warning != "" {
+		warnings = append(warnings, warning)
+	}
 	return warnings
 }
 

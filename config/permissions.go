@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -48,42 +49,189 @@ func (c *Config) ResolvePermissionProfileSelection() (PermissionProfileSelection
 	if c.Requirements != nil {
 		requirements = c.Requirements
 	}
-	merged := cloneMap(configuredProfiles)
-	if requirements != nil {
-		for name, profile := range requirements.Permissions {
-			merged[name] = profile
-		}
+	merged, err := mergePermissionProfiles(configuredProfiles, requirements)
+	if err != nil {
+		return PermissionProfileSelection{}, err
 	}
-	profileID := ""
-	if requirements != nil && requirements.DefaultPermissions != nil {
-		profileID = strings.TrimSpace(*requirements.DefaultPermissions)
+	// Rust resolve_default_permissions: the managed default is the fallback, not
+	// the initial selection, and a disallowed configured default falls back with
+	// a startup warning.
+	profileID, _, err := c.resolveRequirementDefaultPermissionProfile(configuredDefault)
+	if err != nil {
+		return PermissionProfileSelection{}, err
 	}
-	if profileID == "" {
-		profileID = configuredDefault
-	}
-	if requirements != nil && requirements.AllowedPermissionProfiles != nil {
-		for allowed, enabled := range requirements.AllowedPermissionProfiles {
-			allowed = strings.TrimSpace(allowed)
-			if !enabled || allowed == "" {
-				continue
-			}
-			if !permissionProfileKnown(merged, allowed) {
-				return PermissionProfileSelection{}, fmt.Errorf("requirements.toml allowed_permission_profiles refers to undefined profile `%s`", allowed)
-			}
-		}
-		if profileID != "" && !requirements.AllowedPermissionProfiles[profileID] {
-			return PermissionProfileSelection{}, fmt.Errorf("permission profile %q is disallowed by managed requirements", profileID)
-		}
+	if err := validateAllowedPermissionProfiles(requirements, merged); err != nil {
+		return PermissionProfileSelection{}, err
 	}
 	return PermissionProfileSelection{ProfileID: profileID, Profiles: merged}, nil
+}
+
+// validateAllowedPermissionProfiles mirrors Rust's
+// validate_required_permission_profile_catalog allow-list check: every entry in
+// allowed_permission_profiles, enabled or not, must name a built-in or a
+// defined profile.
+func validateAllowedPermissionProfiles(requirements *ConfigRequirements, profiles map[string]any) error {
+	if requirements == nil || requirements.AllowedPermissionProfiles == nil {
+		return nil
+	}
+	for allowed := range requirements.AllowedPermissionProfiles {
+		allowed = strings.TrimSpace(allowed)
+		if allowed == "" {
+			continue
+		}
+		if !permissionProfileKnown(profiles, allowed) {
+			return fmt.Errorf("requirements.toml allowed_permission_profiles refers to undefined profile `%s`", allowed)
+		}
+	}
+	return nil
+}
+
+// mergePermissionProfiles mirrors Rust's merge_managed_permission_profiles: the
+// managed catalog is merged into the configured one, and a managed profile that
+// shadows a distinct config-defined name is rejected.
+//
+// Go's effective-config loader also copies the managed catalog into the
+// `[permissions]` values so the app-server can list the profiles, so an
+// identical entry in both layers is expected rather than a conflict.
+func mergePermissionProfiles(configured map[string]any, requirements *ConfigRequirements) (map[string]any, error) {
+	merged := cloneMap(configured)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	if requirements == nil {
+		return merged, nil
+	}
+	for name, profile := range requirements.Permissions {
+		if existing, exists := merged[name]; exists {
+			if reflect.DeepEqual(existing, profile) {
+				continue
+			}
+			return nil, fmt.Errorf("requirements.toml permissions profile `%s` conflicts with a config-defined profile of the same name", name)
+		}
+		merged[name] = profile
+	}
+	return merged, nil
+}
+
+// requirementDefaultPermissionProfile mirrors Rust's implicit_default_permissions:
+// the workspace profile is the implicit managed default only when the allow-list
+// permits both the workspace and read-only built-ins.
+func requirementDefaultPermissionProfile(allowed map[string]bool) (string, bool) {
+	if permissionProfileAllowedByRequirements(allowed, sandbox.BuiltInPermissionProfileWorkspace) &&
+		permissionProfileAllowedByRequirements(allowed, sandbox.BuiltInPermissionProfileReadOnly) {
+		return ":workspace", true
+	}
+	return "", false
+}
+
+// permissionProfileAllowedByRequirements mirrors Rust's is_permission_allowed:
+// the allow-list entry must be exactly true. Go additionally accepts the legacy
+// non-colon spelling of the built-in profiles.
+func permissionProfileAllowedByRequirements(allowed map[string]bool, profileID string) bool {
+	if allowed == nil {
+		return true
+	}
+	if allowed[profileID] {
+		return true
+	}
+	aliases := map[string]string{
+		sandbox.BuiltInPermissionProfileWorkspace:        ":workspace",
+		sandbox.BuiltInPermissionProfileReadOnly:         ":read-only",
+		sandbox.BuiltInPermissionProfileDangerFullAccess: ":danger-full-access",
+		":workspace":          sandbox.BuiltInPermissionProfileWorkspace,
+		":read-only":          sandbox.BuiltInPermissionProfileReadOnly,
+		":danger-full-access": sandbox.BuiltInPermissionProfileDangerFullAccess,
+	}
+	if alias, ok := aliases[profileID]; ok {
+		return allowed[alias]
+	}
+	return false
+}
+
+// resolveRequirementDefaultPermissionProfile mirrors Rust's
+// resolve_default_permissions: when a managed allow-list is present, the
+// selected profile falls back to the required default - the requirement's
+// `default_permissions` or the implicit workspace profile - and a disallowed
+// selection produces a startup warning instead of an error. The returned
+// warning is empty when no fallback happened.
+func (c *Config) resolveRequirementDefaultPermissionProfile(selected string) (string, string, error) {
+	if c == nil || c.Requirements == nil {
+		return strings.TrimSpace(selected), "", nil
+	}
+	requirements := c.Requirements
+	if requirements.AllowedPermissionProfiles == nil {
+		// Rust rejects this configuration at requirements load
+		// (default_permissions requires allowed_permission_profiles); direct
+		// in-memory requirements keep the managed default as the selection.
+		if strings.TrimSpace(selected) == "" && requirements.DefaultPermissions != nil {
+			return strings.TrimSpace(*requirements.DefaultPermissions), "", nil
+		}
+		return strings.TrimSpace(selected), "", nil
+	}
+	allowed := requirements.AllowedPermissionProfiles
+	fallback := ""
+	if requirements.DefaultPermissions != nil {
+		fallback = strings.TrimSpace(*requirements.DefaultPermissions)
+	}
+	if fallback == "" {
+		if implicit, ok := requirementDefaultPermissionProfile(allowed); ok {
+			fallback = implicit
+		}
+	}
+	if fallback == "" {
+		return "", "", fmt.Errorf("requirements.toml default_permissions must be set unless allowed_permission_profiles allows both `:workspace` and `:read-only`")
+	}
+	if !permissionProfileAllowedByRequirements(allowed, fallback) {
+		return "", "", fmt.Errorf("requirements.toml default_permissions `%s` must be allowed by allowed_permission_profiles", fallback)
+	}
+	selected = strings.TrimSpace(selected)
+	if selected == "" {
+		return fallback, "", nil
+	}
+	if permissionProfileAllowedByRequirements(allowed, selected) {
+		return selected, "", nil
+	}
+	warning := fmt.Sprintf(
+		"Configured value for `permission_profile` is disallowed by requirements; falling back from `%s` to required value `%s`.",
+		selected, fallback)
+	return fallback, warning, nil
+}
+
+// PermissionProfileRequirementWarning reports the startup warning for a
+// configured default that managed requirements disallow, if any.
+func (c *Config) PermissionProfileRequirementWarning() string {
+	if c == nil {
+		return ""
+	}
+	configured := stringFromConfigValue(c.Values["default_permissions"])
+	_, warning, err := c.resolveRequirementDefaultPermissionProfile(configured)
+	if err != nil {
+		return ""
+	}
+	return warning
 }
 
 func permissionProfileKnown(profiles map[string]any, profileID string) bool {
 	if strings.HasPrefix(profileID, ":") {
 		return isRuntimeBuiltinPermissionProfile(profileID)
 	}
+	// Go accepts the legacy non-colon spelling of the built-in profiles.
+	if isBuiltinPermissionProfileName(profileID) {
+		return true
+	}
 	_, ok := profiles[profileID]
 	return ok
+}
+
+func isBuiltinPermissionProfileName(profileID string) bool {
+	switch strings.TrimPrefix(profileID, ":") {
+	case sandbox.BuiltInPermissionProfileReadOnly,
+		sandbox.BuiltInPermissionProfileWorkspace,
+		sandbox.BuiltInPermissionProfileDangerFullAccess:
+		return true
+	default:
+		return false
+	}
 }
 
 type runtimePermissionProfileWire struct {
@@ -113,27 +261,37 @@ func (c *Config) ResolveSandboxPermissionProfile(profileID string, cwd string) (
 	if c == nil {
 		c = &Config{Values: map[string]any{}}
 	}
-	profiles := permissionProfilesFromConfig(c.Values["permissions"])
+	profiles, err := mergePermissionProfiles(permissionProfilesFromConfig(c.Values["permissions"]), c.Requirements)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateConfigPermissionProfileNames(profiles); err != nil {
 		return nil, err
 	}
-	profileID = strings.TrimSpace(profileID)
-	if profileID == "" {
-		if c.Requirements != nil && c.Requirements.DefaultPermissions != nil {
-			profileID = strings.TrimSpace(*c.Requirements.DefaultPermissions)
+	if c.Requirements != nil {
+		if err := validatePermissionProfileRequirements(c.Requirements); err != nil {
+			return nil, err
 		}
-		if profileID == "" {
-			profileID = stringFromConfigValue(c.Values["default_permissions"])
+		if err := validateAllowedPermissionProfiles(c.Requirements, profiles); err != nil {
+			return nil, err
 		}
 	}
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		profileID = stringFromConfigValue(c.Values["default_permissions"])
+	}
+	// A disallowed selection falls back to the required default rather than
+	// failing (Rust apply_requirement_constrained_value).
+	resolvedProfileID, _, err := c.resolveRequirementDefaultPermissionProfile(profileID)
+	if err != nil {
+		return nil, err
+	}
+	profileID = resolvedProfileID
 	if profileID == "" {
 		if len(profiles) > 0 {
 			return nil, fmt.Errorf("config defines `[permissions]` profiles but does not set `default_permissions`")
 		}
 		return c.resolveLegacySandboxPermissionProfile(cwd)
-	}
-	if c.Requirements != nil && c.Requirements.AllowedPermissionProfiles != nil && !c.Requirements.AllowedPermissionProfiles[profileID] {
-		return nil, fmt.Errorf("permission profile %q is disallowed by managed requirements", profileID)
 	}
 	if !strings.HasPrefix(profileID, ":") {
 		if _, ok := profiles[profileID]; ok {
