@@ -255,7 +255,9 @@ func TestModelsCatalogFromConfigValues(t *testing.T) {
 }
 
 func TestDefaultBaseInstructionsRequirePreambleBeforeTools(t *testing.T) {
-	for _, want := range []string{"Before making tool calls", "brief preamble", "immediately about to happen", "Progress updates"} {
+	// The fallback base instructions are Rust's models-manager/prompt.md, so the
+	// asserted guidance matches that document.
+	for _, want := range []string{"Before making tool calls, send a brief preamble", "### Preamble messages", "immediately about to be done next", "# Tool Guidelines", "# AGENTS.md spec"} {
 		if !strings.Contains(BaseInstructions, want) {
 			t.Fatalf("BaseInstructions missing %q", want)
 		}
