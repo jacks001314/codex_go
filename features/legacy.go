@@ -63,6 +63,22 @@ func CanonicalKey(key string) (string, bool) {
 	return canonical, ok
 }
 
+// RequirementKey mirrors Rust's canonical_feature_for_key / feature_for_key
+// lookup used when a managed `features` requirement table is parsed: it reports
+// the canonical key and whether the given key was a legacy alias. Unknown keys
+// report ok = false.
+func RequirementKey(key string) (canonical string, legacy bool, ok bool) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", false, false
+	}
+	if _, ok := byKey()[key]; ok {
+		return key, false, true
+	}
+	canonical, ok = legacyFeatureAliases[key]
+	return canonical, true, ok
+}
+
 func ResolveSettings(raw map[string]any) (map[string]bool, []LegacyFeatureUsage) {
 	settings := map[string]bool{}
 	if len(raw) == 0 {

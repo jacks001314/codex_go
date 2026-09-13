@@ -2,7 +2,12 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
+
+	featureflags "codex_go/features"
 )
 
 // Rust parity: codex-rs/core/src/config/requirements.rs (apply_exact_requirement
@@ -79,12 +84,46 @@ func StartupWarnings(values map[string]any, requirements *ConfigRequirements) []
 				*requirements.WindowsSandboxPrivateDesktop, managedRequirementSource))
 		}
 	}
+	// Rust managed_features::parse_feature_requirements: a legacy alias warns in
+	// favor of the canonical key, and an unknown key is ignored with a warning.
+	// `auto_review` is the canonicalized alias of `guardian_approval` and stays
+	// quiet.
+	for _, key := range sortedRequirementFeatureKeys(requirements.FeatureRequirements) {
+		if key == "auto_review" {
+			continue
+		}
+		canonical, legacy, known := featureflags.RequirementKey(key)
+		switch {
+		case !known:
+			warnings = append(warnings, fmt.Sprintf(
+				"Ignoring unknown `features` requirement `%s` from %s", key, managedRequirementSource))
+		case legacy:
+			warnings = append(warnings, fmt.Sprintf(
+				"Using legacy `features` requirement `%s` from %s; prefer canonical feature key `%s`",
+				key, managedRequirementSource, canonical))
+		}
+	}
 	// A disallowed (or absent) windows.sandbox falls back to the constrained
 	// initial mode.
 	if mode, fellBack, ok := ResolveWindowsSandboxMode(values, requirements); ok && fellBack {
 		warnings = append(warnings, fmt.Sprintf(
 			"Configured value for `windows.sandbox` is disallowed by requirements; falling back to required value %q.",
 			mode))
+	}
+	// Rust push_sqlite_home_env_override_warning: with no configured
+	// sqlite_home to take precedence, a `$CODEX_SQLITE_HOME` value that differs
+	// from the required path is overridden by the requirement.
+	if requirements.SQLiteHome != nil {
+		if _, configured := values["sqlite_home"]; !configured {
+			if env := strings.TrimSpace(os.Getenv("CODEX_SQLITE_HOME")); env != "" {
+				required := strings.TrimSpace(*requirements.SQLiteHome)
+				if filepath.Clean(env) != filepath.Clean(required) {
+					warnings = append(warnings, fmt.Sprintf(
+						"Environment value for `$CODEX_SQLITE_HOME` is overridden by the required `sqlite_home` value AbsolutePathBuf(%q) from %s.",
+						required, managedRequirementSource))
+				}
+			}
+		}
 	}
 	// Requirement-constrained enum values: an explicit disallowed approval
 	// policy or approvals reviewer falls back to the requirement default (the
@@ -175,6 +214,20 @@ func configuredFeedbackEnabled(values map[string]any) (bool, bool) {
 		return false, false
 	}
 	return boolAnyKey(feedback, "enabled")
+}
+
+// sortedRequirementFeatureKeys lists the managed feature requirement keys in
+// Rust's BTreeMap order.
+func sortedRequirementFeatureKeys(requirements map[string]bool) []string {
+	if len(requirements) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(requirements))
+	for key := range requirements {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // requiredEnumValue renders a required enum value as its wire string.

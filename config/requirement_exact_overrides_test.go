@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -122,6 +123,42 @@ func TestStartupWarningsForExactRequirementTailLikeRust(t *testing.T) {
 	}
 	if absent := StartupWarnings(map[string]any{}, requirements); len(absent) != 0 {
 		t.Fatalf("StartupWarnings() = %#v, want none for absent configured values", absent)
+	}
+}
+
+// TestStartupWarningsForSQLiteHomeEnvLikeRust mirrors Rust's
+// sqlite_home_env_conflict_reports_an_override: the environment value is only
+// overridden when no configured sqlite_home takes precedence and the paths
+// differ.
+func TestStartupWarningsForSQLiteHomeEnvLikeRust(t *testing.T) {
+	home := t.TempDir()
+	required := filepath.Join(home, "required-state")
+	environment := filepath.Join(home, "environment-state")
+	requirements := &ConfigRequirements{SQLiteHome: &required}
+
+	t.Setenv("CODEX_SQLITE_HOME", environment)
+	warnings := StartupWarnings(map[string]any{}, requirements)
+	want := "Environment value for `$CODEX_SQLITE_HOME` is overridden by the required `sqlite_home` value AbsolutePathBuf(" + strconv.Quote(required) + ") from managed requirements."
+	if len(warnings) != 1 || warnings[0] != want {
+		t.Fatalf("StartupWarnings() = %#v, want [%q]", warnings, want)
+	}
+
+	// The matching environment value is not a conflict.
+	t.Setenv("CODEX_SQLITE_HOME", required)
+	if warnings := StartupWarnings(map[string]any{}, requirements); len(warnings) != 0 {
+		t.Fatalf("StartupWarnings() = %#v, want none for the matching environment value", warnings)
+	}
+
+	// A configured sqlite_home takes precedence over the environment value.
+	t.Setenv("CODEX_SQLITE_HOME", environment)
+	configured := filepath.Join(home, "configured-state")
+	for _, warning := range StartupWarnings(map[string]any{"sqlite_home": configured}, requirements) {
+		if strings.Contains(warning, "CODEX_SQLITE_HOME") {
+			t.Fatalf("StartupWarnings() reported the environment conflict with a configured sqlite_home: %q", warning)
+		}
+	}
+	if warnings := StartupWarnings(map[string]any{"sqlite_home": required}, requirements); len(warnings) != 0 {
+		t.Fatalf("StartupWarnings() = %#v, want none when sqlite_home matches the requirement", warnings)
 	}
 }
 
