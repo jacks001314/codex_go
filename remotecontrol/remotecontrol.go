@@ -14,6 +14,10 @@ import (
 
 var ErrInvalidRequest = errors.New("invalid remote-control request")
 
+// remoteControlPersistenceWriteTimeout bounds an admitted preference write that
+// must survive caller cancellation (Rust #44341).
+const remoteControlPersistenceWriteTimeout = 5 * time.Second
+
 type EnableParams struct {
 	Ephemeral bool `json:"ephemeral,omitempty"`
 }
@@ -352,6 +356,21 @@ func (m *Manager) Disable(params *DisableParams) (*DisableResponse, *StatusChang
 	return response, notification
 }
 
+// authSessionActive reports whether the manager holds an authenticated session
+// (an enrollment carries the ChatGPT account it was created for). Rust's
+// controller retires a session on an authentication-owner change only when the
+// session was authenticated; a session started while signed out keeps its
+// desired state so the first login can recover it (controller.rs
+// RemoteControl::session).
+func (m *Manager) authSessionActive() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.enrollment != nil && strings.TrimSpace(m.enrollment.AccountID) != ""
+}
+
 // RetireForAuthChange tears down a live remote-control session whose
 // authentication owner went away (logout or account switch): the desired state
 // becomes disabled until the user enables it again, and the session's
@@ -383,14 +402,25 @@ func (m *Manager) RetireForAuthChange(ctx context.Context) error {
 		enrollment != nil && strings.TrimSpace(enrollment.AccountID) != "" {
 		if err := backend.ensureReady(); err != nil {
 			persistErr = err
-		} else if _, err := backend.Store.SetRemoteControlEnabled(
-			ctx,
-			backend.Target.WebSocketURL,
-			enrollment.AccountID,
-			backend.AppServerClientName,
-			false,
-		); err != nil {
-			persistErr = err
+		} else {
+			// Rust #44341 retains an admitted preference write through caller
+			// cancellation: logout cancels the requesting context, but the retired
+			// owner's disabled preference must still be recorded. The write is
+			// bounded so a stalled store cannot hang shutdown.
+			writeCtx, cancelWrite := context.WithTimeout(
+				context.WithoutCancel(ctx),
+				remoteControlPersistenceWriteTimeout,
+			)
+			defer cancelWrite()
+			if _, err := backend.Store.SetRemoteControlEnabled(
+				writeCtx,
+				backend.Target.WebSocketURL,
+				enrollment.AccountID,
+				backend.AppServerClientName,
+				false,
+			); err != nil {
+				persistErr = err
+			}
 		}
 	}
 

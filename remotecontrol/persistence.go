@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"codex_go/state"
@@ -29,6 +30,10 @@ type EnrollmentRecord struct {
 type EnrollmentStore struct {
 	DB  *sql.DB
 	Now func() time.Time
+	// writeMu serializes the connection lifetime against admitted writes. A
+	// mutating call holds the read side so Close (write side) drains admitted
+	// writes instead of closing the database underneath them (Rust #44341).
+	writeMu sync.RWMutex
 }
 
 func RemoteControlStateDBPath(codexHome string) string {
@@ -51,13 +56,27 @@ func (s *EnrollmentStore) Close() error {
 	if s == nil || s.DB == nil {
 		return nil
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.DB.Close()
+}
+
+// beginWrite admits a store mutation and returns the release func. Close waits
+// for admitted writes, so a mutation that started before shutdown completes
+// instead of failing against a closed database (Rust #44341).
+func (s *EnrollmentStore) beginWrite() func() {
+	if s == nil {
+		return func() {}
+	}
+	s.writeMu.RLock()
+	return s.writeMu.RUnlock
 }
 
 func (s *EnrollmentStore) EnsureSchema(ctx context.Context) error {
 	if err := s.ensureReady(); err != nil {
 		return err
 	}
+	defer s.beginWrite()()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -128,6 +147,7 @@ func (s *EnrollmentStore) UpsertRemoteControlEnrollment(ctx context.Context, rec
 	if err := s.ensureReady(); err != nil {
 		return err
 	}
+	defer s.beginWrite()()
 	if record == nil {
 		return fmt.Errorf("%w: enrollment record is nil", ErrInvalidRequest)
 	}
@@ -167,6 +187,7 @@ func (s *EnrollmentStore) SetRemoteControlEnabled(ctx context.Context, websocket
 	if err := s.ensureReady(); err != nil {
 		return 0, err
 	}
+	defer s.beginWrite()()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -185,6 +206,7 @@ func (s *EnrollmentStore) DeleteRemoteControlEnrollment(ctx context.Context, web
 	if err := s.ensureReady(); err != nil {
 		return 0, err
 	}
+	defer s.beginWrite()()
 	if ctx == nil {
 		ctx = context.Background()
 	}

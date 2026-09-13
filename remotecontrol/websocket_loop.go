@@ -140,6 +140,14 @@ func (l *RemoteControlWebsocketLoop) Run(ctx context.Context) error {
 			}
 			if reason == remoteControlReconnectWaitAuthChanged {
 				reconnectAttempt = 0
+				if l.manager.authSessionActive() {
+					// Rust #44341 retires an authenticated session on an owner
+					// change; a session started while signed out keeps waiting so
+					// the first login can recover it (controller.rs
+					// RemoteControl::session).
+					l.retireForAuthOwnerChange(ctx)
+					continue
+				}
 				l.manager.ResetAuthRecovery()
 			}
 			continue
@@ -157,13 +165,11 @@ func (l *RemoteControlWebsocketLoop) Run(ctx context.Context) error {
 			continue
 		}
 		if reason == remoteControlConnectionEndedAuthChanged {
-			// Rust #44341: an identity change retires the relay session, which
-			// stays disabled (clearing client, replay, and enrollment state) until
-			// the user enables remote control again.
-			_ = l.manager.RetireForAuthChange(ctx)
-			l.resetSessionState()
 			reconnectAttempt = 0
-			l.manager.ResetAuthRecovery()
+			// Rust #44341: an identity change retires a live (authenticated) relay
+			// session, which stays disabled (clearing client, replay, and
+			// enrollment state) until the user enables remote control again.
+			l.retireForAuthOwnerChange(ctx)
 			continue
 		}
 		if !l.remoteControlEnabled() {
@@ -178,6 +184,10 @@ func (l *RemoteControlWebsocketLoop) Run(ctx context.Context) error {
 		}
 		if waitReason == remoteControlReconnectWaitAuthChanged {
 			reconnectAttempt = 0
+			if l.manager.authSessionActive() {
+				l.retireForAuthOwnerChange(ctx)
+				continue
+			}
 			l.manager.ResetAuthRecovery()
 		}
 	}
@@ -297,6 +307,19 @@ func (l *RemoteControlWebsocketLoop) connectionPollReason(
 // session starts fresh instead of resuming the retired owner's stream (Rust
 // #44341: a replacement session gets fresh client, replay, and enrollment
 // state).
+// retireForAuthOwnerChange retires the session whose authentication owner went
+// away: the manager's session state is cleared, the relay's replay state reset,
+// and remote control stays disabled until the user enables it again (Rust
+// #44341).
+func (l *RemoteControlWebsocketLoop) retireForAuthOwnerChange(ctx context.Context) {
+	if l == nil {
+		return
+	}
+	_ = l.manager.RetireForAuthChange(ctx)
+	l.resetSessionState()
+	l.manager.ResetAuthRecovery()
+}
+
 func (l *RemoteControlWebsocketLoop) resetSessionState() {
 	if l == nil {
 		return

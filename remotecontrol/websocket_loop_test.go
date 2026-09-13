@@ -211,6 +211,72 @@ func waitForRemoteControlStatus(t *testing.T, manager *Manager, want ConnectionS
 	t.Fatalf("manager status = %q, want %q", manager.StatusChanged().Status, want)
 }
 
+// TestRemoteControlWebsocketLoopRetiresAuthenticatedSessionOnAuthChangeDuringBackoff
+// covers Rust #44341's controller rule: an owner change during reconnect backoff
+// retires an authenticated session (disabled until the user enables it again),
+// while a signed-out session keeps waiting for the first login (covered by
+// TestRemoteControlWebsocketLoopAuthChangeWakesReconnectBackoff).
+func TestRemoteControlWebsocketLoopRetiresAuthenticatedSessionOnAuthChangeDuringBackoff(t *testing.T) {
+	manager := NewManager("codex", "installation-id")
+	manager.Enable(&EnableParams{Ephemeral: true})
+	manager.mu.Lock()
+	manager.enrollment = &Enrollment{AccountID: "account-a", EnvironmentID: "env-1"}
+	manager.mu.Unlock()
+
+	var authRevision atomic.Uint64
+	var connectCount atomic.Int64
+	connectAttempts := make(chan int64, 4)
+	loop := NewRemoteControlWebsocketLoop(manager, &RemoteControlWebsocketLoopOptions{
+		StatusPollInterval:        time.Millisecond,
+		ConnectionShutdownTimeout: 100 * time.Millisecond,
+		AuthRevision:              func(context.Context) (uint64, error) { return authRevision.Load(), nil },
+		ReconnectDelay:            func(*uint64) (time.Duration, bool) { return time.Hour, false },
+		Connect: func(context.Context, *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
+			connectAttempts <- connectCount.Add(1)
+			return nil, nil, fmt.Errorf("connect failed")
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- loop.Run(ctx)
+	}()
+
+	select {
+	case <-connectAttempts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote control websocket loop did not attempt first connect")
+	}
+
+	// The authentication owner changes while the authenticated relay is backing
+	// off from a failed connect.
+	authRevision.Store(1)
+	waitForRemoteControlStatus(t, manager, StatusDisabled)
+	manager.mu.Lock()
+	enrollment := manager.enrollment
+	manager.mu.Unlock()
+	if enrollment != nil {
+		t.Fatalf("enrollment survived retirement: %#v", enrollment)
+	}
+	select {
+	case attempt := <-connectAttempts:
+		t.Fatalf("retired session reconnected as attempt %d", attempt)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("loop returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote control websocket loop did not stop")
+	}
+}
+
 func TestRemoteControlWebsocketLoopAuthChangeWakesReconnectBackoff(t *testing.T) {
 	manager := NewManager("codex", "installation-id")
 	manager.Enable(&EnableParams{Ephemeral: true})

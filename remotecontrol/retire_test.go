@@ -3,6 +3,7 @@ package remotecontrol
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // TestManagerRetireForAuthChangeClearsSession covers Rust #44341: a logout or
@@ -42,5 +43,73 @@ func TestManagerRetireForAuthChangeWithoutSessionIsNoOp(t *testing.T) {
 	}
 	if status := manager.Status(); status.Status != StatusDisabled {
 		t.Fatalf("status = %q, want disabled", status.Status)
+	}
+}
+
+// TestManagerRetireForAuthChangePersistsDespiteCallerCancellation covers Rust
+// #44341's write-permit rule: a preference write admitted by retirement keeps
+// its permit through caller cancellation, so logging out (which cancels the
+// requesting context) still records the retired owner's disabled preference.
+func TestManagerRetireForAuthChangePersistsDespiteCallerCancellation(t *testing.T) {
+	store := newTestEnrollmentStore(t)
+	target := mustTarget(t, "https://chatgpt.com/remote/control")
+	manager := NewManagerWithBackend("codex", "install-1", &ManagerBackendOptions{
+		Target:     target,
+		Store:      store,
+		AuthLoader: staticRemoteControlAuth("account-a"),
+	})
+	enabled := true
+	enrollment := &Enrollment{
+		RemoteControlTarget: target,
+		AccountID:           "account-a",
+		EnvironmentID:       "env-1",
+		ServerID:            "srv-1",
+		ServerName:          "server",
+	}
+	if err := UpdatePersistedRemoteControlEnrollment(context.Background(), store, target, "account-a", nil, enrollment, &enabled); err != nil {
+		t.Fatalf("persist enabled enrollment: %v", err)
+	}
+	manager.mu.Lock()
+	manager.status = StatusConnected
+	manager.enrollment = enrollment
+	manager.mu.Unlock()
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := manager.RetireForAuthChange(cancelled); err != nil {
+		t.Fatalf("RetireForAuthChange: %v", err)
+	}
+	record, err := store.GetRemoteControlEnrollment(context.Background(), target.WebSocketURL, "account-a", nil)
+	if err != nil {
+		t.Fatalf("load retirement record: %v", err)
+	}
+	if record.RemoteControlEnabled == nil || *record.RemoteControlEnabled {
+		t.Fatalf("retired owner's disabled preference was not persisted: %#v", record)
+	}
+}
+
+// TestEnrollmentStoreCloseDrainsAdmittedWrites covers the shutdown half of Rust
+// #44341: Close waits for an admitted write instead of closing the database
+// underneath it.
+func TestEnrollmentStoreCloseDrainsAdmittedWrites(t *testing.T) {
+	store := newTestEnrollmentStore(t)
+	release := store.beginWrite() // simulate an admitted write in flight
+	closed := make(chan error, 1)
+	go func() {
+		closed <- store.Close()
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a write was still admitted")
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not finish after the admitted write drained")
 	}
 }

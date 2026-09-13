@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"codex_go/mcp"
 	"codex_go/session"
@@ -118,24 +119,32 @@ func TestRuntimeRouterMCPEventStreamStartStopForwardsAndScopesLikeRust(t *testin
 		t.Fatalf("events/stream requests = %d, want 1", gotRequests)
 	}
 
+	// The event stream reader forwards SSE frames from its own goroutine, so the
+	// forwarded notification can lag the start response.
 	forwarded := false
-	for _, notification := range sink.List() {
-		if notification.Method != NotificationMCPServerEventStream {
-			continue
-		}
-		payload, ok := notification.Params.(*McpServerEventStreamNotification)
-		if !ok {
-			t.Fatalf("event stream notification params type = %T", notification.Params)
-		}
-		if payload.SubscriptionID != "sub-1" {
-			t.Fatalf("subscription id = %q", payload.SubscriptionID)
-		}
-		if payload.Notification.Method == "notifications/events/fileChanged" {
-			forwarded = true
-			var params map[string]any
-			if err := json.Unmarshal(payload.Notification.Params, &params); err != nil || params["name"] != "fileChanged" {
-				t.Fatalf("forwarded params = %s err=%v", payload.Notification.Params, err)
+	deadline := time.Now().Add(2 * time.Second)
+	for !forwarded && time.Now().Before(deadline) {
+		for _, notification := range sink.List() {
+			if notification.Method != NotificationMCPServerEventStream {
+				continue
 			}
+			payload, ok := notification.Params.(*McpServerEventStreamNotification)
+			if !ok {
+				t.Fatalf("event stream notification params type = %T", notification.Params)
+			}
+			if payload.SubscriptionID != "sub-1" {
+				t.Fatalf("subscription id = %q", payload.SubscriptionID)
+			}
+			if payload.Notification.Method == "notifications/events/fileChanged" {
+				forwarded = true
+				var params map[string]any
+				if err := json.Unmarshal(payload.Notification.Params, &params); err != nil || params["name"] != "fileChanged" {
+					t.Fatalf("forwarded params = %s err=%v", payload.Notification.Params, err)
+				}
+			}
+		}
+		if !forwarded {
+			time.Sleep(time.Millisecond)
 		}
 	}
 	if !forwarded {
