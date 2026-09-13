@@ -346,7 +346,7 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 	r.rememberTurnStateFromHeaders(request, httpResponse.Header)
 	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
 	emitResponsesHeaderEvents(handler, httpResponse.Header)
-	response, err := parseResponsesStream(ctx, newIdleTimeoutReader(httpResponse.Body, r.streamIdleTimeout()), request, r.ProviderID, handler)
+	response, err := parseResponsesStreamWithMetrics(ctx, newIdleTimeoutReader(httpResponse.Body, r.streamIdleTimeout()), request, r.ProviderID, handler, r.Metrics)
 	if err != nil {
 		return nil, err
 	}
@@ -395,6 +395,13 @@ func combinedResponsesStreamHandler(handlers ...ResponsesStreamHandler) Response
 }
 
 func parseResponsesStream(ctx context.Context, reader io.Reader, request *AgentRequest, providerID string, handler ResponsesStreamHandler) (*AgentResponse, error) {
+	return parseResponsesStreamWithMetrics(ctx, reader, request, providerID, handler, nil)
+}
+
+// parseResponsesStreamWithMetrics mirrors parseResponsesStream and also records
+// the per-event codex.sse_event metrics (Rust's SessionTelemetry::log_sse_event
+// with the watcher's per-event duration).
+func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, request *AgentRequest, providerID string, handler ResponsesStreamHandler, metrics MetricsSink) (*AgentResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -407,14 +414,19 @@ func parseResponsesStream(ctx context.Context, reader io.Reader, request *AgentR
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		eventStartedAt := time.Now()
 		sse, err := parser.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
+			// Rust's failed branch reports the unknown kind when the event never
+			// parsed (including the idle timeout).
+			recordSSEEvent(metrics, sseUnknownKind, false, time.Since(eventStartedAt))
 			return nil, err
 		}
 		done, err := accumulator.apply(sse, handler)
+		recordSSEEvent(metrics, sseEventKind(sse), err == nil, time.Since(eventStartedAt))
 		if err != nil {
 			return nil, err
 		}

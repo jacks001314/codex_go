@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -128,4 +129,102 @@ func TestResponsesAgentRunnerRecordsAPIRequestPerAttempt(t *testing.T) {
 	if sink.durations[0].tags["status"] != "500" || sink.durations[1].tags["status"] != "200" {
 		t.Fatalf("durations = %#v", sink.durations)
 	}
+}
+
+// Mirrors SessionTelemetry's sse_event metric half: one counter and one
+// duration sample per processed SSE event, tagged by the event kind.
+func TestParseResponsesStreamRecordsSSEEventsLikeRust(t *testing.T) {
+	sink := &recordingMetricsSink{}
+	_, err := parseResponsesStreamWithMetrics(
+		context.Background(),
+		strings.NewReader(responsesSSE(
+			`{"type":"response.created","response":{"id":"resp-1"}}`,
+			`{"type":"response.output_item.done","item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}`,
+			`{"type":"response.completed","response":{"id":"resp-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		)),
+		&AgentRequest{Prompt: "hello", Model: "gpt-test"},
+		"openai",
+		nil,
+		sink,
+	)
+	if err != nil {
+		t.Fatalf("parseResponsesStreamWithMetrics() error = %v", err)
+	}
+	want := []string{"response.created", "response.output_item.done", "response.completed"}
+	if len(sink.counters) != len(want) || len(sink.durations) != len(want) {
+		t.Fatalf("samples = %#v", sink.counters)
+	}
+	for index, kind := range want {
+		counter := sink.counters[index]
+		if counter.name != sseEventCountMetric || counter.inc != 1 ||
+			counter.tags["kind"] != kind || counter.tags["success"] != "true" {
+			t.Fatalf("counter[%d] = %#v", index, counter)
+		}
+		if duration := sink.durations[index]; duration.name != sseEventDurationMetric || duration.tags["kind"] != kind {
+			t.Fatalf("duration[%d] = %#v", index, duration)
+		}
+	}
+}
+
+// A read failure after a complete event records the failed sample with the
+// unknown kind (Rust's sse_event_failed with no parsed event, e.g. the idle
+// timeout).
+func TestParseResponsesStreamRecordsFailedSSEEventLikeRust(t *testing.T) {
+	sink := &recordingMetricsSink{}
+	reader := &errorAfterReader{
+		data: responsesSSE(`{"type":"response.created","response":{"id":"resp-1"}}`),
+		err:  errors.New("connection reset"),
+	}
+	_, err := parseResponsesStreamWithMetrics(
+		context.Background(), reader, &AgentRequest{Prompt: "hello", Model: "gpt-test"}, "openai", nil, sink)
+	if err == nil {
+		t.Fatal("parseResponsesStreamWithMetrics() error = nil")
+	}
+	if len(sink.counters) != 2 {
+		t.Fatalf("samples = %#v", sink.counters)
+	}
+	if sink.counters[0].tags["kind"] != "response.created" || sink.counters[0].tags["success"] != "true" {
+		t.Fatalf("first sample = %#v", sink.counters[0])
+	}
+	failure := sink.counters[1]
+	if failure.tags["kind"] != sseUnknownKind || failure.tags["success"] != "false" {
+		t.Fatalf("failure sample = %#v", failure)
+	}
+}
+
+// The kind tag falls back from the SSE event name to the JSON type and finally
+// to "unknown"; a nil sink records nothing.
+func TestSSEEventKindFallbackLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		event *responsesSSEEvent
+		want  string
+	}{
+		{"event name", &responsesSSEEvent{Event: "response.created"}, "response.created"},
+		{"json type fallback", &responsesSSEEvent{Data: []byte(`{"type":"response.completed"}`)}, "response.completed"},
+		{"unknown", &responsesSSEEvent{}, sseUnknownKind},
+		{"nil", nil, sseUnknownKind},
+	} {
+		if got := sseEventKind(testCase.event); got != testCase.want {
+			t.Fatalf("%s: kind = %q, want %q", testCase.name, got, testCase.want)
+		}
+	}
+	recordSSEEvent(nil, "response.created", true, time.Second)
+}
+
+// errorAfterReader serves its data and then fails, so the SSE parser surfaces a
+// read error after the complete events.
+type errorAfterReader struct {
+	data   string
+	err    error
+	offset int
+}
+
+func (r *errorAfterReader) Read(target []byte) (int, error) {
+	if r.offset < len(r.data) {
+		read := copy(target, r.data[r.offset:])
+		r.offset += read
+		return read, nil
+	}
+	return 0, r.err
 }
