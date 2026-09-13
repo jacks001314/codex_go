@@ -147,15 +147,18 @@ func Evaluate(policy Policy, activeContextTokens int) TokenStatus {
 }
 
 type Item struct {
-	ID      string
-	Type    string
-	Role    string
-	Text    string
-	Kind    string
-	Content []ContentPart
-	Data    map[string]any
-	Raw     json.RawMessage
-	Created time.Time
+	ID        string
+	Type      string
+	Role      string
+	Name      string
+	Namespace string
+	CallID    string
+	Text      string
+	Kind      string
+	Content   []ContentPart
+	Data      map[string]any
+	Raw       json.RawMessage
+	Created   time.Time
 }
 
 type ContentPart struct {
@@ -551,10 +554,70 @@ func EstimateItemTokens(item *Item) int {
 	if item == nil {
 		return 0
 	}
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "function_call", "custom_tool_call":
+		return compactTokensFromBytes(functionCallModelVisibleBytes(item))
+	case "function_call_output", "custom_tool_call_output", "tool_output":
+		return compactTokensFromBytes(functionCallOutputModelVisibleBytes(item))
+	}
 	if isStructuredAgentMessage(item) {
 		return (agentMessageModelVisibleBytes(item) + 3) / 4
 	}
 	return EstimateTextTokens(ItemText(item))
+}
+
+// functionNamespaceDefault mirrors Rust DEFAULT_FUNCTION_NAMESPACE.
+const functionNamespaceDefault = "functions"
+
+// compactResizedImageBytes mirrors Rust RESIZED_IMAGE_BYTES_ESTIMATE.
+const compactResizedImageBytes = 7373
+
+// compactTokensFromBytes mirrors Rust approx_tokens_from_byte_count_i64.
+func compactTokensFromBytes(bytes int) int {
+	if bytes <= 0 {
+		return 0
+	}
+	return (bytes + 3) / 4
+}
+
+func functionCallModelVisibleBytes(item *Item) int {
+	namespace := strings.TrimSpace(item.Namespace)
+	if namespace == "" {
+		namespace = functionNamespaceDefault
+	}
+	return len(item.Name) + len(namespace) + compactItemContentBytes(item)
+}
+
+func functionCallOutputModelVisibleBytes(item *Item) int {
+	return compactItemContentBytes(item) +
+		len(item.CallID) +
+		len(item.Name) +
+		len(strings.TrimSpace(item.Namespace))
+}
+
+// compactItemContentBytes estimates the model-visible payload bytes: the joined
+// text, or per-block content when structured blocks are present (Rust
+// estimate_function_output_bytes for the shapes Go models).
+func compactItemContentBytes(item *Item) int {
+	if item == nil {
+		return 0
+	}
+	if len(item.Content) == 0 {
+		return len(strings.TrimSpace(ItemText(item)))
+	}
+	bytes := 0
+	for _, part := range item.Content {
+		switch strings.ToLower(strings.TrimSpace(part.Type)) {
+		case "input_text", "output_text", "text":
+			bytes += len(part.Text)
+		case "input_image", "image":
+			bytes += compactResizedImageBytes
+		}
+	}
+	if bytes == 0 {
+		return len(strings.TrimSpace(ItemText(item)))
+	}
+	return bytes
 }
 
 // agentMessageModelVisibleBytes mirrors Rust's content-based estimate for an

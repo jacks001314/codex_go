@@ -604,14 +604,17 @@ func compactItemsFromSessionItems(items []session.Item) []compact.Item {
 	for i := range items {
 		item := items[i]
 		compactItem := compact.Item{
-			ID:      item.ID,
-			Type:    item.Type,
-			Role:    item.Role,
-			Text:    item.Text,
-			Kind:    compactKindFromSessionItem(&item),
-			Created: item.CreatedAt,
-			Data:    cloneAnyMapForRouter(item.Data),
-			Raw:     append(json.RawMessage(nil), item.Raw...),
+			ID:        item.ID,
+			Type:      item.Type,
+			Role:      item.Role,
+			Name:      item.Name,
+			Namespace: item.Namespace,
+			CallID:    item.CallID,
+			Text:      item.Text,
+			Kind:      compactKindFromSessionItem(&item),
+			Created:   item.CreatedAt,
+			Data:      cloneAnyMapForRouter(item.Data),
+			Raw:       append(json.RawMessage(nil), item.Raw...),
 		}
 		for j := range item.Content {
 			compactItem.Content = append(compactItem.Content, compact.ContentPart{

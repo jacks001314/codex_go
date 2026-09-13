@@ -4805,7 +4805,7 @@ func execCompactItemsFromSession(items []session.Item) []compact.Item {
 				kind = strings.TrimSpace(value)
 			}
 		}
-		compactItem := compact.Item{ID: item.ID, Type: item.Type, Role: item.Role, Text: item.Text, Kind: kind, Data: cloneExecAnyMap(item.Data), Raw: append(json.RawMessage(nil), item.Raw...), Created: item.CreatedAt}
+		compactItem := compact.Item{ID: item.ID, Type: item.Type, Role: item.Role, Name: item.Name, Namespace: item.Namespace, CallID: item.CallID, Text: item.Text, Kind: kind, Data: cloneExecAnyMap(item.Data), Raw: append(json.RawMessage(nil), item.Raw...), Created: item.CreatedAt}
 		for j := range item.Content {
 			compactItem.Content = append(compactItem.Content, compact.ContentPart{Type: item.Content[j].Type, Text: item.Content[j].Text, ImageURL: item.Content[j].ImageURL, Detail: item.Content[j].Detail})
 		}

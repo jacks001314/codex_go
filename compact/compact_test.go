@@ -541,3 +541,44 @@ type remoteRunnerFunc func(context.Context, *Request) (*Result, error)
 func (f remoteRunnerFunc) Compact(ctx context.Context, request *Request) (*Result, error) {
 	return f(ctx, request)
 }
+
+// TestEstimateToolItemTokensLikeRust pins Rust #45094's function-call/output
+// arms: the tool name, namespace (default "functions" for calls only), call id,
+// and the payload content (text or image blocks) are all model-visible.
+func TestEstimateToolItemTokensLikeRust(t *testing.T) {
+	call := Item{Type: "function_call", Name: "exec_command", Data: map[string]any{"arguments": `{"cmd":"ls"}`}}
+	wantCall := len("exec_command") + len("functions") + len(`{"cmd":"ls"}`)
+	if got := EstimateItemTokens(&call); got != (wantCall+3)/4 {
+		t.Fatalf("function call estimate = %d, want %d", got, (wantCall+3)/4)
+	}
+
+	namespaced := Item{Type: "custom_tool_call", Name: "search", Namespace: "drive", Data: map[string]any{"input": "hello"}}
+	wantNamespaced := len("search") + len("drive") + len("hello")
+	if got := EstimateItemTokens(&namespaced); got != (wantNamespaced+3)/4 {
+		t.Fatalf("namespaced call estimate = %d, want %d", got, (wantNamespaced+3)/4)
+	}
+
+	output := Item{Type: "function_call_output", CallID: "call-abc", Name: "read", Text: "Screenshot captured"}
+	wantOutput := len("call-abc") + len("read") + len("Screenshot captured")
+	if got := EstimateItemTokens(&output); got != (wantOutput+3)/4 {
+		t.Fatalf("function output estimate = %d, want %d", got, (wantOutput+3)/4)
+	}
+
+	imageOutput := Item{Type: "function_call_output", CallID: "call-abc", Content: []ContentPart{
+		{Type: "input_text", Text: "Screenshot captured"},
+		{Type: "input_image", ImageURL: "data:image/png;base64,AAAA"},
+	}}
+	wantImage := len("call-abc") + len("Screenshot captured") + compactResizedImageBytes
+	if got := EstimateItemTokens(&imageOutput); got != (wantImage+3)/4 {
+		t.Fatalf("image output estimate = %d, want %d", got, (wantImage+3)/4)
+	}
+
+	custom := Item{Type: "custom_tool_call_output", CallID: "call-js-repl", Name: "repl", Content: []ContentPart{
+		{Type: "input_text", Text: "Screenshot captured"},
+		{Type: "input_image", ImageURL: "data:image/png;base64,AAAA"},
+	}}
+	wantCustom := len("call-js-repl") + len("repl") + len("Screenshot captured") + compactResizedImageBytes
+	if got := EstimateItemTokens(&custom); got != (wantCustom+3)/4 {
+		t.Fatalf("custom output estimate = %d, want %d", got, (wantCustom+3)/4)
+	}
+}
