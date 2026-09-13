@@ -128,6 +128,9 @@ type ResponsesAgentOptions struct {
 	// AWS carries the Amazon Bedrock SDK credential configuration when the
 	// provider uses the AWS credential chain (Rust #39410).
 	AWS *ProviderAWSAuthInfo
+	// Metrics, when set, receives the per-attempt API request metrics (Rust's
+	// SessionTelemetry::record_api_request).
+	Metrics MetricsSink
 }
 
 type ResponsesAgentRunner struct {
@@ -178,6 +181,9 @@ type ResponsesAgentRunner struct {
 	// bedrockAuthRecoveryAttempted bounds provider-owned Bedrock auth recovery
 	// to one attempt per request (Rust #39274).
 	bedrockAuthRecoveryAttempted bool
+	// Metrics receives the per-attempt API request metrics when the app layer
+	// installs a sink (Rust's SessionTelemetry).
+	Metrics MetricsSink
 }
 
 type responsesTurnStateCache struct {
@@ -427,6 +433,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		WebsocketConnectTimeout:    options.WebsocketConnectTimeout,
 		UnboundedConnectionRetries: cloneBoolPtrModel(options.UnboundedConnectionRetries),
 		AWS:                        cloneProviderAWSAuthInfo(options.AWS),
+		Metrics:                    options.Metrics,
 		providerAuthFetchedAt:      providerAuthFetchedAt,
 		turnState:                  &responsesTurnStateCache{},
 		websocketSessions:          &responsesWebsocketSessionCache{sessions: map[string]*responsesWebsocketSession{}},
@@ -1608,7 +1615,9 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 			"http_max_retries": maxRetries,
 			"accept":           accept,
 		})
+		attemptStartedAt := time.Now()
 		httpResponse, err := r.doResponsesHTTPRequest(httpRequest)
+		attemptDuration := time.Since(attemptStartedAt)
 		shouldRetry := shouldRetryResponsesHTTPRequest(httpResponse, err, retryTooManyRequests)
 		status := 0
 		requestID := ""
@@ -1618,6 +1627,9 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 			requestID = responseHeaderValue(httpResponse.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader)
 			traceID = responseHeaderValue(httpResponse.Header, "x-trace-id")
 		}
+		// Rust's RequestTelemetry::on_request fires per HTTP attempt, before the
+		// retry decision, so retries each record an api_request sample.
+		r.recordAPIRequest(status, err, attemptDuration)
 		responsesDiagnostic("http.result", map[string]any{
 			"thread_id":       request.ThreadID,
 			"turn_id":         request.TurnID,

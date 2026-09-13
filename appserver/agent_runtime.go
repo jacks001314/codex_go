@@ -433,6 +433,9 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	agent.Residency = managedResidencyForConfig(cfg)
 	agent.FreeGuardianEnabled = cfg.FreeGuardianEnabled()
 	agent.AWS = provider.AWS
+	// Rust's SessionTelemetry records codex.api_request from the client's request
+	// telemetry; the turn metrics sink is the app-server's session metrics sink.
+	agent.Metrics = r.services.TurnMetrics
 	return agent, nil
 }
 
