@@ -162,6 +162,55 @@ func TestClientMetadataIncludesCodexVersionInTurnMetadata(t *testing.T) {
 	}
 }
 
+// Rust's ExecutionMetadata::apply_to inserts the issuing step's model and
+// reasoning effort into the request metadata extra; both keys survive into the
+// turn-metadata JSON and are omitted when the step has no value.
+func TestClientMetadataCarriesModelAndReasoningEffort(t *testing.T) {
+	metadata := NewClientMetadata("install", "session", "thread", "window")
+	metadata.RequestKind = ClientRequestTurn
+	metadata.Model = "gpt-5.4"
+	metadata.ReasoningEffort = "high"
+	value := metadata.TurnMetadataValue()
+	if value["model"] != "gpt-5.4" || value["reasoning_effort"] != "high" {
+		t.Fatalf("turn metadata = %#v", value)
+	}
+	encoded, ok := metadata.TurnMetadataJSON()
+	if !ok || !strings.Contains(encoded, `"model":"gpt-5.4"`) || !strings.Contains(encoded, `"reasoning_effort":"high"`) {
+		t.Fatalf("turn metadata json = %q", encoded)
+	}
+	if ClientReservedMetadataKeys()["model"] || ClientReservedMetadataKeys()["reasoning_effort"] {
+		t.Fatal("model/reasoning_effort must not be reserved metadata keys")
+	}
+
+	empty := NewClientMetadata("install", "session", "thread", "window")
+	empty.RequestKind = ClientRequestTurn
+	emptyValue := empty.TurnMetadataValue()
+	if _, ok := emptyValue["model"]; ok {
+		t.Fatalf("empty metadata emitted model: %#v", emptyValue)
+	}
+	if _, ok := emptyValue["reasoning_effort"]; ok {
+		t.Fatalf("empty metadata emitted reasoning_effort: %#v", emptyValue)
+	}
+
+	// Rust's ExecutionMetadata::apply_to inserts the captured values after the
+	// client-provided entries, so a configured model cannot override the step.
+	overridden := NewClientMetadata("install", "session", "thread", "window")
+	overridden.RequestKind = ClientRequestTurn
+	overridden.Model = "gpt-5.4"
+	overridden.Extra = map[string]string{"model": "client-model", "workspace_kind": "git"}
+	overridden.ResponsesAPIMetadata = map[string]string{"reasoning_effort": "minimal", "other": "kept"}
+	overriddenValue := overridden.TurnMetadataValue()
+	if overriddenValue["model"] != "gpt-5.4" {
+		t.Fatalf("client-provided model overrode the captured step: %#v", overriddenValue)
+	}
+	if _, ok := overriddenValue["reasoning_effort"]; ok {
+		t.Fatalf("unowned reasoning_effort leaked into captured metadata: %#v", overriddenValue)
+	}
+	if overriddenValue["workspace_kind"] != "git" || overriddenValue["other"] != "kept" {
+		t.Fatalf("unrelated extras were dropped: %#v", overriddenValue)
+	}
+}
+
 func TestClientCompatibilityHeadersOmitUnboundedCodeModeToolNames(t *testing.T) {
 	value := map[string]any{
 		"thread_id": "thread",

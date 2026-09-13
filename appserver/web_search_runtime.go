@@ -59,6 +59,8 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 		SessionID:                  threadID,
 		ThreadID:                   threadID,
 		RequestKind:                codexapi.ClientRequestTurn,
+		Model:                      modelProviderConfig.Model,
+		ReasoningEffort:            appReasoningEffortForTurn(cfg, params),
 		NodeReplAutoReviewRequired: &modelInfo.NodeReplAutoReviewRequired,
 		NodeReplDisabled:           &modelInfo.NodeReplDisabled,
 		AnalyticsEnabled:           r.analyticsEnabledOptionForThread(threadID),

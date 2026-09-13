@@ -6468,6 +6468,8 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			CodexVersion:               appServerVersion(),
 			SandboxMode:                permissionProfilePolicyTag(permissionProfile, cwd),
 			AgentName:                  r.agentNameForThread(threadID),
+			Model:                      modelProviderConfig.Model,
+			ReasoningEffort:            requestReasoningEffort,
 			AutoReviewEnabled:          autoReviewEnabledForTurn(cfg, params),
 			NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 			NodeReplDisabled:           &nodeReplDisabled,
@@ -7042,6 +7044,13 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 		rootTurnID = active.Params.RootTurnID
 	}
 	rootTurnID = effectiveRootTurnID(rootTurnID, params.ExpectedTurnID, parentTurnID, lineage.SubagentHeader)
+	reasoningEffort := ""
+	if active.RunConfig != nil {
+		reasoningEffort = strings.TrimSpace(active.RunConfig.ReasoningEffort)
+	}
+	if reasoningEffort == "" {
+		reasoningEffort = appReasoningEffortForTurn(cfg, active.Params)
+	}
 	return turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 		InstallationID:             installationID,
 		SessionID:                  firstNonEmpty(lineage.SessionID, params.ThreadID),
@@ -7056,6 +7065,8 @@ func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[st
 		SubagentHeader:             lineage.SubagentHeader,
 		SubagentKind:               lineage.SubagentKind,
 		ThreadSource:               lineage.ThreadSource,
+		Model:                      modelID,
+		ReasoningEffort:            reasoningEffort,
 		NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 		NodeReplDisabled:           &nodeReplDisabled,
 		AnalyticsEnabled:           r.analyticsEnabledOptionForThread(params.ThreadID),

@@ -108,18 +108,24 @@ type ClientMetadata struct {
 	// AgentName is the canonical agent path for sub-agent turns (Rust #38483).
 	// It is emitted in turn metadata only when set; callers fall back to
 	// "/root" like Rust.
-	AgentName                  string
-	ForkedFromThreadID         string
-	ParentThreadID             string
-	ParentTurnID               string
-	RootTurnID                 string
-	SubagentHeader             string
-	SubagentKind               string
-	ThreadSource               string
-	TurnTrigger                string
-	CodexVersion               string
-	Sandbox                    string
-	SandboxMode                string
+	AgentName          string
+	ForkedFromThreadID string
+	ParentThreadID     string
+	ParentTurnID       string
+	RootTurnID         string
+	SubagentHeader     string
+	SubagentKind       string
+	ThreadSource       string
+	TurnTrigger        string
+	CodexVersion       string
+	Sandbox            string
+	SandboxMode        string
+	// Model and ReasoningEffort describe the execution settings that issued the
+	// request (Rust `ExecutionMetadata::apply_to`), so request metadata reports
+	// the capturing step's settings instead of a turn's initial ones. Empty
+	// values omit the key.
+	Model                      string
+	ReasoningEffort            string
 	AutoReviewEnabled          *bool
 	NodeReplAutoReviewRequired *bool
 	NodeReplDisabled           *bool
@@ -217,6 +223,12 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	if m.SandboxMode != "" {
 		value["sandbox_mode"] = m.SandboxMode
 	}
+	if m.Model != "" {
+		value[ModelKey] = m.Model
+	}
+	if m.ReasoningEffort != "" {
+		value[ReasoningEffortKey] = m.ReasoningEffort
+	}
 	if m.AutoReviewEnabled != nil {
 		value[AutoReviewEnabledKey] = *m.AutoReviewEnabled
 	}
@@ -236,18 +248,35 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 		value["turn_started_at_unix_ms"] = m.TurnStartedAtUnixMS
 	}
 	for key, extra := range m.Extra {
-		if ClientReservedMetadataKeys()[key] {
+		if ClientReservedMetadataKeys()[key] || m.capturedMetadataKey(key) {
 			continue
 		}
 		value[key] = extra
 	}
 	for key, productValue := range m.ResponsesAPIMetadata {
-		if ClientReservedMetadataKeys()[key] {
+		if ClientReservedMetadataKeys()[key] || m.capturedMetadataKey(key) {
 			continue
 		}
 		value[key] = productValue
 	}
 	return value
+}
+
+// capturedMetadataKey reports whether the key is owned by the captured step
+// settings instead of a client-provided entry. Rust's ExecutionMetadata::apply_to
+// inserts the issuing step's model into the turn-metadata extra map and inserts
+// or removes the reasoning effort there, after the client entries, so the
+// captured settings win whenever a step applied them.
+func (m *ClientMetadata) capturedMetadataKey(key string) bool {
+	if m == nil || m.Model == "" {
+		return false
+	}
+	switch key {
+	case ModelKey, ReasoningEffortKey:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *ClientMetadata) TurnMetadataJSON() (string, bool) {

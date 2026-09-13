@@ -415,20 +415,24 @@ type ResponsesClientMetadataOptions struct {
 	ContextWindowID string
 	// WindowNumber is the zero-based current context window number included in
 	// Responses turn metadata (Rust #40987).
-	WindowNumber               *uint64
-	RequestKind                codexapi.ClientRequestKind
-	ForkedFromThreadID         string
-	ParentThreadID             string
-	ParentTurnID               string
-	RootTurnID                 string
-	SubagentHeader             string
-	SubagentKind               string
-	ThreadSource               string
-	TurnTrigger                string
-	CodexVersion               string
-	Sandbox                    string
-	SandboxMode                string
-	AgentName                  string
+	WindowNumber       *uint64
+	RequestKind        codexapi.ClientRequestKind
+	ForkedFromThreadID string
+	ParentThreadID     string
+	ParentTurnID       string
+	RootTurnID         string
+	SubagentHeader     string
+	SubagentKind       string
+	ThreadSource       string
+	TurnTrigger        string
+	CodexVersion       string
+	Sandbox            string
+	SandboxMode        string
+	AgentName          string
+	// Model and ReasoningEffort are the settings that issued the request (Rust
+	// `ExecutionMetadata::from_settings`); empty values omit the keys.
+	Model                      string
+	ReasoningEffort            string
 	AutoReviewEnabled          *bool
 	NodeReplAutoReviewRequired *bool
 	NodeReplDisabled           *bool
@@ -477,6 +481,8 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.Sandbox = strings.TrimSpace(options.Sandbox)
 	metadata.SandboxMode = strings.TrimSpace(options.SandboxMode)
 	metadata.AgentName = strings.TrimSpace(options.AgentName)
+	metadata.Model = strings.TrimSpace(options.Model)
+	metadata.ReasoningEffort = strings.TrimSpace(options.ReasoningEffort)
 	metadata.AutoReviewEnabled = cloneBoolPtr(options.AutoReviewEnabled)
 	metadata.NodeReplAutoReviewRequired = cloneBoolPtr(options.NodeReplAutoReviewRequired)
 	metadata.NodeReplDisabled = cloneBoolPtr(options.NodeReplDisabled)

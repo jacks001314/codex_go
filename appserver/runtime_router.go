@@ -2773,11 +2773,12 @@ func (r *RuntimeRouter) runInterruptHook(active *activeRuntimeTurn) {
 	cwd := ""
 	model := ""
 	permissionMode := ""
+	var params *turn.TurnStartParams
 	if active.Params != nil {
-		cwd = strings.TrimSpace(active.Params.CWD)
-		model = strings.TrimSpace(active.Params.Model)
-		permissionMode = strings.TrimSpace(fmt.Sprint(active.Params.ApprovalPolicy))
+		params = active.Params
+		cwd = strings.TrimSpace(params.CWD)
 	}
+	model, permissionMode = r.hookTurnAttribution(params)
 	hooks := r.interruptHooksForCWD(cwd, active.ThreadID)
 	if len(hooks) == 0 {
 		return
@@ -14599,7 +14600,12 @@ func (r *RuntimeRouter) turnHookAdapter(params *turn.TurnStartParams, turnID str
 		return nil
 	}
 	hooks := r.hooksForCWD(params.CWD, params.ThreadID)
-	return NewToolHookAdapter(r.requireHookRunner(), hooks, params.ThreadID, turnID, params.CWD)
+	adapter := NewToolHookAdapter(r.requireHookRunner(), hooks, params.ThreadID, turnID, params.CWD)
+	// Rust reports the issuing step's model and permission mode to the pre/post
+	// tool-use hooks (hook_runtime::run_pre_tool_use_hooks). Go captures the
+	// turn's effective settings until the step-settings lane exists.
+	adapter.Model, adapter.PermissionMode = r.hookTurnAttribution(params)
+	return adapter
 }
 
 func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, response *turn.TurnStartResponse, connectionID string) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -115,7 +116,7 @@ func (r *RuntimeRouter) runPendingSessionStartHook(ctx context.Context, params *
 		CWD:            cwd,
 		TranscriptPath: r.sessionStartTranscriptPath(record),
 		Model:          firstNonEmpty(params.Model, record.Metadata.Model),
-		PermissionMode: hookPermissionModeFromTurnStart(params),
+		PermissionMode: r.hookPermissionModeForTurn(params),
 		Source:         source,
 		Hooks:          hooks,
 	})
@@ -143,14 +144,39 @@ func (r *RuntimeRouter) sessionStartTranscriptPath(record *session.Record) *stri
 	return &path
 }
 
-func hookPermissionModeFromTurnStart(params *turn.TurnStartParams) string {
-	if params == nil {
-		return "default"
-	}
-	if value, ok := params.ApprovalPolicy.(string); ok && strings.EqualFold(strings.TrimSpace(value), "never") {
+// hookPermissionMode mirrors Rust's hook_runtime::hook_permission_mode: only a
+// never-approval policy maps to bypassPermissions; every other policy
+// (unless-trusted, on-request, granular) reports the default mode.
+func hookPermissionMode(policy sandbox.AskForApproval) string {
+	if policy == sandbox.ApprovalNever {
 		return "bypassPermissions"
 	}
 	return "default"
+}
+
+// hookPermissionModeForTurn resolves the turn's effective approval policy
+// (turn/start override first, then the loaded config) and maps it the way Rust
+// reports permission mode to hooks.
+func (r *RuntimeRouter) hookPermissionModeForTurn(params *turn.TurnStartParams) string {
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil {
+		cfg = nil
+	}
+	return hookPermissionMode(turnApprovalPolicyForTurn(cfg, params))
+}
+
+// hookTurnAttribution resolves the model and permission mode a hook reports for
+// a turn: the captured settings that issued the tool call (Rust
+// `step_context.settings` in run_pre_tool_use_hooks / run_post_tool_use_hooks).
+// Go has no per-step settings capture yet, so the turn's effective settings are
+// used and a mid-turn settings update lands on the next turn.
+func (r *RuntimeRouter) hookTurnAttribution(params *turn.TurnStartParams) (string, string) {
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil {
+		cfg = nil
+	}
+	model := firstNonEmpty(turnParamModel(params), stringConfigValue(cfg, "model"), defaultModelForAppTurn())
+	return model, hookPermissionMode(turnApprovalPolicyForTurn(cfg, params))
 }
 
 func mergeSessionStartAdditionalContext(params *turn.TurnStartParams, result *HookRunResult) {

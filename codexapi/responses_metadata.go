@@ -34,15 +34,21 @@ const (
 	NodeReplAutoReviewRequiredKey = "node_repl_auto_review_required"
 	NodeReplDisabledKey           = "node_repl_disabled"
 	WorkspacesKey                 = "workspaces"
-	InstallationIDHeader          = "x-codex-installation-id"
-	WindowIDHeader                = "x-codex-window-id"
-	TurnMetadataHeader            = "x-codex-turn-metadata"
-	ParentThreadIDHeader          = "x-codex-parent-thread-id"
-	OpenAISubagentHeader          = "x-openai-subagent"
-	RequestKindTurn               = "turn"
-	RequestKindPrewarm            = "prewarm"
-	RequestKindCompaction         = "compaction"
-	RequestKindMemory             = "memory"
+	// ModelKey and ReasoningEffortKey carry the captured step settings that
+	// issued the request (Rust `ExecutionMetadata::apply_to`). They are not
+	// reserved keys, so a client may configure them, but the captured value wins
+	// like Rust's insert into the turn-metadata extra map.
+	ModelKey              = "model"
+	ReasoningEffortKey    = "reasoning_effort"
+	InstallationIDHeader  = "x-codex-installation-id"
+	WindowIDHeader        = "x-codex-window-id"
+	TurnMetadataHeader    = "x-codex-turn-metadata"
+	ParentThreadIDHeader  = "x-codex-parent-thread-id"
+	OpenAISubagentHeader  = "x-openai-subagent"
+	RequestKindTurn       = "turn"
+	RequestKindPrewarm    = "prewarm"
+	RequestKindCompaction = "compaction"
+	RequestKindMemory     = "memory"
 )
 
 var reservedMetadataKeys = map[string]bool{
