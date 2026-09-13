@@ -15,8 +15,8 @@ func backendBannerFallbackModel(t *testing.T, currentModel string) *Model {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-1")
 	state.Model = currentModel
-	state.HasChatGPTAccount = true
 	model := NewModel(state, Options{Width: 80, Height: 24})
+	model.State.HasChatGPTAccount = true
 	return model
 }
 
@@ -226,5 +226,35 @@ func TestModelBackendBannerFallbackRewritesQueuedSubmissions(t *testing.T) {
 	}
 	if mode := model.queued[0].Request.CollaborationMode; mode == nil || mode.Settings.Model != LunaReserveModel {
 		t.Fatalf("queued collaboration mode = %#v", mode)
+	}
+}
+
+// TestModelBackendBannerFallbackRequiresOpenAIAuth pins Rust's
+// requires_openai_auth gate: a custom provider never receives an account-model
+// switch.
+func TestModelBackendBannerFallbackRequiresOpenAIAuth(t *testing.T) {
+	model := backendBannerFallbackModel(t, "gpt-5")
+	model.State.Provider = "custom-provider"
+	blocked := "gpt-5"
+	model.modelCatalogOpts = []codextui.ModelPickerOption{
+		{ID: "gpt-5", ShowInPicker: true},
+		{ID: "gpt-5.2", ShowInPicker: true},
+	}
+	model.applyBackendBannerResult(BackendBannerResultMsg{Read: BackendBannerRead{Banner: &BackendBannerView{
+		BlockedModelSlug:   &blocked,
+		FallbackModelSlugs: []string{"gpt-5.2"},
+	}}})
+	model.applyBackendBannerFallback()
+	if model.State.Model != "gpt-5" {
+		t.Fatalf("model = %q, want no switch for a non-OpenAI provider", model.State.Model)
+	}
+	if cmd := model.applyBackendBannerFallbackCmd(); cmd != nil {
+		t.Fatalf("catalog fetch scheduled for a non-OpenAI provider: %T", cmd)
+	}
+
+	model.State.Provider = "openai"
+	model.applyBackendBannerFallback()
+	if model.State.Model != "gpt-5.2" {
+		t.Fatalf("model = %q, want the fallback for the OpenAI provider", model.State.Model)
 	}
 }

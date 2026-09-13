@@ -913,7 +913,11 @@ type Options struct {
 	OnReadBackendBanner func() (BackendBannerRead, error)
 	// OnBackendBannerAction dispatches a selected CTA by backend order. The app
 	// resolves the action (open URL / credits nudge / reset credits).
-	OnBackendBannerAction     func(action BackendBannerAction) bubbletea.Cmd
+	OnBackendBannerAction func(action BackendBannerAction) bubbletea.Cmd
+	// RequiresOpenAIAuth is the session provider's requires_openai_auth
+	// capability (Rust ChatWidget::requires_openai_auth). Nil derives it from
+	// the session provider (implicit/OpenAI => true).
+	RequiresOpenAIAuth        *bool
 	OnWriteTerminalTitle      TerminalTitleWriterFunc
 	OnPostNotification        NotificationPostFunc
 	OnReadGitDiff             GitDiffReaderFunc
@@ -1459,6 +1463,7 @@ type Model struct {
 	onReadRateLimits              RateLimitsReaderFunc
 	onReadBackendBanner           func() (BackendBannerRead, error)
 	onBackendBannerAction         func(action BackendBannerAction) bubbletea.Cmd
+	requiresOpenAIAuthOverride    *bool
 	backendBanner                 backendBannerState
 	// reserveReturn is the task-local model to restore when ordinary usage
 	// recovers from the reserve model (Rust ReserveReturnModel).
@@ -1803,6 +1808,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadRateLimits:                options.OnReadRateLimits,
 		onReadBackendBanner:             options.OnReadBackendBanner,
 		onBackendBannerAction:           options.OnBackendBannerAction,
+		requiresOpenAIAuthOverride:      options.RequiresOpenAIAuth,
 		pendingStatusRateLimitRequests:  map[uint64]pendingStatusRateLimitRequest{},
 		terminalTitleWriter:             terminalTitleWriterOrDefault(options.OnWriteTerminalTitle),
 		notificationPost:                options.OnPostNotification,

@@ -20,6 +20,7 @@ func (m *Model) backendBannerCatalogNeeded() bool {
 	if m == nil || m.backendBanner.banner == nil {
 		return m != nil && m.currentBannerModel() == LunaReserveModel && m.backendBanner.ordinaryUsageRecovered
 	}
+
 	banner := m.backendBanner.banner
 	return banner.BannerType == BackendBannerLunaReserve ||
 		(banner.BlockedModelSlug != nil && len(banner.FallbackModelSlugs) > 0)
@@ -28,7 +29,7 @@ func (m *Model) backendBannerCatalogNeeded() bool {
 // applyBackendBannerFallbackCmd resolves and applies a backend-authorized model
 // switch, fetching the catalog first when needed.
 func (m *Model) applyBackendBannerFallbackCmd() bubbletea.Cmd {
-	if m == nil || m.State == nil || !m.State.HasChatGPTAccount {
+	if m == nil || m.State == nil || !m.State.HasChatGPTAccount || !m.requiresOpenAIAuth() {
 		return nil
 	}
 	if !m.backendBannerCatalogNeeded() {
@@ -41,10 +42,28 @@ func (m *Model) applyBackendBannerFallbackCmd() bubbletea.Cmd {
 	return nil
 }
 
+// requiresOpenAIAuth mirrors Rust's ChatWidget::requires_openai_auth gate: only a
+// provider that authenticates through OpenAI can move between the account's
+// billed models. Go resolves it from the session provider, defaulting to true
+// for the implicit/OpenAI provider.
+func (m *Model) requiresOpenAIAuth() bool {
+	if m == nil {
+		return false
+	}
+	if m.requiresOpenAIAuthOverride != nil {
+		return *m.requiresOpenAIAuthOverride
+	}
+	provider := ""
+	if m.State != nil {
+		provider = strings.ToLower(strings.TrimSpace(m.State.Provider))
+	}
+	return provider == "" || provider == "openai"
+}
+
 // applyBackendBannerFallback applies the switch (Rust's
 // apply_backend_banner_fallback + finish_backend_banner_fallback).
 func (m *Model) applyBackendBannerFallback() {
-	if m == nil || m.State == nil {
+	if m == nil || m.State == nil || !m.State.HasChatGPTAccount || !m.requiresOpenAIAuth() {
 		return
 	}
 	previousModel := m.currentBannerModel()
