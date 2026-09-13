@@ -3,6 +3,8 @@ package historycell
 import (
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"codex_go/tui"
 	"codex_go/utils"
@@ -19,6 +21,55 @@ const (
 )
 
 var userMessageMentionRE = regexp.MustCompile(`[$@][A-Za-z0-9][A-Za-z0-9_-]*`)
+
+// SanitizeUserText mirrors Rust `sanitize_user_text`: it removes CSI escape
+// sequences and control characters from user text while preserving tabs and
+// newlines. An unterminated CSI sequence drops the remainder of the text,
+// matching Rust's span split.
+func SanitizeUserText(text string) string {
+	var out strings.Builder
+	out.Grow(len(text))
+	for index := 0; index < len(text); {
+		r, size := utf8.DecodeRuneInString(text[index:])
+		if r == utf8.RuneError && size <= 1 {
+			// Not reachable for valid UTF-8 input; keep the byte so the loop advances.
+			out.WriteByte(text[index])
+			index++
+			continue
+		}
+		if r == 0x1b {
+			rest := text[index+size:]
+			if strings.HasPrefix(rest, "[") {
+				if end := csiSequenceEnd(rest); end >= 0 {
+					index += size + end
+					continue
+				}
+				return out.String()
+			}
+			index += size
+			continue
+		}
+		if r != '\n' && r != '\t' && unicode.IsControl(r) {
+			index += size
+			continue
+		}
+		out.WriteString(text[index : index+size])
+		index += size
+	}
+	return out.String()
+}
+
+// csiSequenceEnd returns the length of the CSI sequence in rest, counting the
+// leading "[", up to and including its final byte ('@'..'~'). It returns -1
+// when the sequence never terminates.
+func csiSequenceEnd(rest string) int {
+	for offset := 1; offset < len(rest); offset++ {
+		if final := rest[offset]; final >= '@' && final <= '~' {
+			return offset + 1
+		}
+	}
+	return -1
+}
 
 type TextElement struct {
 	Start int

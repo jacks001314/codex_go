@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	codextui "codex_go/tui"
+	historycell "codex_go/tui/history_cell"
 )
 
 // Rust parity subset: codex-rs/tui/src/bottom_pane/chat_composer/history_search.rs.
@@ -50,6 +51,24 @@ type HistorySearchSession struct {
 	entries []string
 	matches []string
 	index   int
+}
+
+// LargePasteCharThreshold mirrors Rust LARGE_PASTE_CHAR_THRESHOLD: a composer
+// paste above this size becomes a placeholder element. An active history search
+// takes precedence over that branch and keeps the full sanitized text.
+const LargePasteCharThreshold = 1000
+
+// historySearchDisplayReplacer maps the separators a pasted query can contain
+// onto the visible markers the footer and cursor use.
+var historySearchDisplayReplacer = strings.NewReplacer("\n", "\u21b5", "\t", "\u21e5")
+
+// DisplayQuery renders newlines and tabs as visible markers for the footer and
+// cursor placement. Matching keeps the original query text.
+func (s *HistorySearchSession) DisplayQuery() string {
+	if s == nil {
+		return ""
+	}
+	return historySearchDisplayReplacer.Replace(s.Query)
 }
 
 func NewHistorySearchSession(originalDraft DraftState, entries []string) *HistorySearchSession {
@@ -136,6 +155,39 @@ func (s *HistorySearchSession) AppendQueryRune(r rune) (DraftState, HistorySearc
 	return s.UpdateQuery(s.Query + string(r))
 }
 
+// AppendPastedQuery integrates pasted text into the active search query (Rust
+// ChatComposer::handle_paste's history-search branch). Pasted text is
+// newline-normalized and sanitized like any other user text, and an empty paste
+// is ignored so the selected match is preserved.
+func (s *HistorySearchSession) AppendPastedQuery(pasted string) (DraftState, HistorySearchResult) {
+	if s == nil {
+		return DraftState{}, HistorySearchResult{Kind: HistorySearchResultNotFound}
+	}
+	pasted = strings.ReplaceAll(pasted, "\r\n", "\n")
+	pasted = strings.ReplaceAll(pasted, "\r", "\n")
+	pasted = historycell.SanitizeUserText(pasted)
+	if pasted == "" {
+		return cloneDraftState(s.PreviewDraft), s.currentResult()
+	}
+	return s.UpdateQuery(s.Query + pasted)
+}
+
+// currentResult reports the traversal result implied by the session's status
+// without restarting the search.
+func (s *HistorySearchSession) currentResult() HistorySearchResult {
+	if s == nil {
+		return HistorySearchResult{Kind: HistorySearchResultNotFound}
+	}
+	switch s.Status {
+	case HistorySearchMatch:
+		return HistorySearchResult{Kind: HistorySearchResultFound, Entry: s.PreviewDraft.Text}
+	case HistorySearchSearching:
+		return HistorySearchResult{Kind: HistorySearchResultPending}
+	default:
+		return HistorySearchResult{Kind: HistorySearchResultNotFound}
+	}
+}
+
 func (s *HistorySearchSession) BackspaceQuery() (DraftState, HistorySearchResult) {
 	if s == nil || s.Query == "" {
 		return DraftState{}, HistorySearchResult{Kind: HistorySearchResultNotFound}
@@ -184,7 +236,7 @@ func (s *HistorySearchSession) FooterLine() (string, bool) {
 	if s == nil || !s.Active {
 		return "", false
 	}
-	line := "reverse-i-search: " + s.Query
+	line := "reverse-i-search: " + s.DisplayQuery()
 	switch s.Status {
 	case HistorySearchSearching:
 		line += "  searching"
@@ -200,7 +252,7 @@ func (s *HistorySearchSession) CursorColumn(indent int, width int) (int, bool) {
 	if s == nil || !s.Active {
 		return 0, false
 	}
-	column := indent + codextui.DisplayWidth("reverse-i-search: ") + codextui.DisplayWidth(s.Query)
+	column := indent + codextui.DisplayWidth("reverse-i-search: ") + codextui.DisplayWidth(s.DisplayQuery())
 	if width > 0 && column >= width {
 		column = width - 1
 	}
