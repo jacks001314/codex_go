@@ -38,12 +38,20 @@ type ApplyPatchExecutor struct {
 type ApplyPatchApprovalDecision struct {
 	Approved     bool
 	AllowSession bool
+	// DenyReason carries the rejection message when a policy layer denied the
+	// patch, e.g. Rust's PermissionRequest hook denial
+	// (ToolError::Rejected(message)).
+	DenyReason string
 }
 
 type ApplyPatchApprovalRequest struct {
-	Action     *applypatch.Action
-	Changes    []map[string]any
-	CWD        string
+	Action  *applypatch.Action
+	Changes []map[string]any
+	CWD     string
+	// Patch is the raw patch body the approval applies, reported to
+	// PermissionRequest hooks as `command` (Rust ApprovalAction::ApplyPatch's
+	// permission_request_payload).
+	Patch      string
 	Invocation *Invocation
 }
 
@@ -131,6 +139,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 			Action:     action,
 			Changes:    changes,
 			CWD:        e.cwd(),
+			Patch:      patch,
 			Invocation: invocation,
 		})
 		if approvalErr != nil {
@@ -145,6 +154,9 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		}
 		if !decision.Approved {
 			body := "Patch approval denied before applying changes."
+			if reason := strings.TrimSpace(decision.DenyReason); reason != "" {
+				body = reason
+			}
 			return &Output{
 				Success:    false,
 				Body:       body,

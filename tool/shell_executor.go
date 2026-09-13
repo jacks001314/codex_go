@@ -99,6 +99,10 @@ type ShellExecutor struct {
 type ShellApprovalDecision struct {
 	Approved     bool
 	AllowSession bool
+	// DenyReason carries the rejection message when the approval was denied by
+	// a policy layer rather than the user, e.g. Rust's PermissionRequest hook
+	// denial (Session::request_approval -> ToolError::Rejected(message)).
+	DenyReason string
 }
 
 type ShellApprovalRequest struct {
@@ -587,6 +591,9 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			}
 			if !decision.Approved {
 				body := "Approval denied before running command."
+				if reason := strings.TrimSpace(decision.DenyReason); reason != "" {
+					body = reason
+				}
 				return &Output{
 					Success:    false,
 					Body:       body,

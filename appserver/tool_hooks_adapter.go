@@ -68,6 +68,41 @@ func (a *ToolHookAdapter) RunPreToolUse(ctx context.Context, invocation *tool.In
 	}, nil
 }
 
+// RunPermissionRequest runs the turn's PermissionRequest hooks for one approval
+// action and returns the folded verdict (Rust
+// hook_runtime::run_permission_request_hooks). A nil verdict means no matching
+// hook decided, so the caller continues with its normal approval flow.
+func (a *ToolHookAdapter) RunPermissionRequest(ctx context.Context, runIDSuffix string, toolName string, matcherAliases []string, toolInput any) (*HookPermissionRequestDecision, error) {
+	if a == nil || a.Runner == nil {
+		return nil, nil
+	}
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return nil, nil
+	}
+	result, err := a.Runner.RunPermissionRequest(ctx, &HookPermissionRequestRequest{
+		ThreadID:       a.ThreadID,
+		TurnID:         a.TurnID,
+		Subagent:       a.Subagent,
+		CWD:            a.CWD,
+		TranscriptPath: a.TranscriptPath,
+		Model:          a.Model,
+		PermissionMode: firstHookString(a.PermissionMode, "default"),
+		ToolName:       toolName,
+		MatcherAliases: append([]string(nil), matcherAliases...),
+		RunIDSuffix:    strings.TrimSpace(runIDSuffix),
+		ToolInput:      toolInput,
+		Hooks:          a.Hooks,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	return result.PermissionRequestDecision, nil
+}
+
 func (a *ToolHookAdapter) RunPostToolUse(ctx context.Context, invocation *tool.Invocation, payload *tool.PostToolUsePayload) (*tool.PostToolUseHookOutcome, error) {
 	if a == nil || a.Runner == nil || payload == nil || payload.ToolName == nil {
 		return nil, nil

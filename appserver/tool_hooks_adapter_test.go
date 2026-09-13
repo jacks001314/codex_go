@@ -137,3 +137,227 @@ func captureHookStdinCommand(path string) string {
 	}
 	return "cat > " + shellQuote(path)
 }
+
+// Rust Session::request_approval runs PermissionRequest hooks before the user
+// approval request: an allow approves the command, a deny rejects it with the
+// hook's message, and a hook that declines to decide changes nothing.
+func TestShellApprovalRunsPermissionRequestHooksLikeRust(t *testing.T) {
+	run := func(t *testing.T, hookCommand string) tool.ShellApprovalDecision {
+		t.Helper()
+		home := t.TempDir()
+		cwd := t.TempDir()
+		projectTrust := strings.ReplaceAll(filepath.Clean(cwd), `\`, `\\`)
+		configBody := "model = \"gpt-5.4\"\nbypass_hook_trust = true\n[projects.\"" + projectTrust + "\"]\ntrust_level = \"trusted\"\n"
+		if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+			t.Fatalf("WriteFile config error = %v", err)
+		}
+		hooksDir := filepath.Join(cwd, ".gcode")
+		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		hooksJSON, err := json.Marshal(map[string]any{
+			"hooks": map[string]any{
+				"PermissionRequest": []any{map[string]any{
+					"matcher": "Bash",
+					"hooks":   []any{map[string]any{"type": "command", "command": hookCommand}},
+				}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Marshal hooks error = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), hooksJSON, 0o600); err != nil {
+			t.Fatalf("WriteFile hooks error = %v", err)
+		}
+		router := NewRuntimeRouter(RuntimeServices{
+			DefaultCWD:     cwd,
+			Config:         config.NewConfigService(home),
+			HooksDiscovery: NewHookDiscoveryService(home),
+			HookRunner:     NewHookRunner(),
+		})
+		params := &turn.TurnStartParams{ThreadID: "thread-1", CWD: cwd, Model: "gpt-5.4"}
+		if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, params); err != nil {
+			t.Fatalf("RegisterTurn() error = %v", err)
+		}
+		approval := router.shellApprovalForTurn("thread-1", "turn-1", false)
+		decision, err := approval(context.Background(), &tool.ShellApprovalRequest{
+			Request:    &tool.ShellRequest{HookCommand: "rm -rf build", CWD: cwd, Justification: "clean the build"},
+			Invocation: &tool.Invocation{CallID: "call-1"},
+		})
+		if err != nil {
+			t.Fatalf("shell approval error = %v", err)
+		}
+		return decision
+	}
+
+	allow := run(t, hookRunnerOutputCommand(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, ""))
+	if !allow.Approved {
+		t.Fatalf("hook allow did not approve the command: %#v", allow)
+	}
+
+	deny := run(t, hookRunnerPermissionRequestDenyCommand("blocked by policy"))
+	if deny.Approved {
+		t.Fatalf("hook deny approved the command: %#v", deny)
+	}
+	if deny.DenyReason != "blocked by policy" {
+		t.Fatalf("hook deny reason = %q, want %q", deny.DenyReason, "blocked by policy")
+	}
+}
+
+// A PermissionRequest hook that prints an explicit allow reaches the approval
+// path's payload: the hook stdin carries the command and justification under
+// Rust's Bash tool name.
+func TestShellApprovalPermissionRequestHookPayloadLikeRust(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	projectTrust := strings.ReplaceAll(filepath.Clean(cwd), `\`, `\\`)
+	configBody := "model = \"gpt-5.4\"\nbypass_hook_trust = true\n[projects.\"" + projectTrust + "\"]\ntrust_level = \"trusted\"\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config error = %v", err)
+	}
+	captured := filepath.Join(t.TempDir(), "permission-request.json")
+	hooksDir := filepath.Join(cwd, ".gcode")
+	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	hooksJSON, err := json.Marshal(map[string]any{
+		"hooks": map[string]any{
+			"PermissionRequest": []any{map[string]any{
+				"matcher": "Bash",
+				"hooks":   []any{map[string]any{"type": "command", "command": captureHookStdinCommand(captured)}},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal hooks error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), hooksJSON, 0o600); err != nil {
+		t.Fatalf("WriteFile hooks error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		DefaultCWD:     cwd,
+		Config:         config.NewConfigService(home),
+		HooksDiscovery: NewHookDiscoveryService(home),
+		HookRunner:     NewHookRunner(),
+	})
+	params := &turn.TurnStartParams{ThreadID: "thread-1", CWD: cwd, Model: "gpt-5.4"}
+	if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, params); err != nil {
+		t.Fatalf("RegisterTurn() error = %v", err)
+	}
+	// The capturing hook prints nothing, so the hooks decline to decide and the
+	// approval path proceeds to its next stage; only the payload is asserted.
+	_, _ = router.shellApprovalForTurn("thread-1", "turn-1", false)(context.Background(), &tool.ShellApprovalRequest{
+		Request:    &tool.ShellRequest{HookCommand: "rm -rf build", CWD: cwd, Justification: "clean the build"},
+		Invocation: &tool.Invocation{CallID: "call-1"},
+	})
+	payload, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("the hook did not receive its stdin payload: %v", err)
+	}
+	var input map[string]any
+	if err := json.Unmarshal(payload, &input); err != nil {
+		t.Fatalf("hook input json error = %v payload=%s", err, payload)
+	}
+	if input["tool_name"] != "Bash" {
+		t.Fatalf("permission request tool_name = %#v", input["tool_name"])
+	}
+	toolInput, _ := input["tool_input"].(map[string]any)
+	if toolInput["command"] != "rm -rf build" || toolInput["description"] != "clean the build" {
+		t.Fatalf("permission request tool_input = %#v", input["tool_input"])
+	}
+	if input["permission_mode"] != "default" || input["model"] != "gpt-5.4" {
+		t.Fatalf("permission request attribution = %#v", input)
+	}
+}
+
+// Rust's ApplyPatch permission-request payload reports the canonical
+// apply_patch tool name with the Write/Edit matcher aliases and the patch body
+// as `command`, and its verdict decides the patch approval.
+func TestApplyPatchApprovalRunsPermissionRequestHooksLikeRust(t *testing.T) {
+	buildRouter := func(t *testing.T, matcher string, hookCommand string) *RuntimeRouter {
+		t.Helper()
+		home := t.TempDir()
+		cwd := t.TempDir()
+		projectTrust := strings.ReplaceAll(filepath.Clean(cwd), `\`, `\\`)
+		configBody := "model = \"gpt-5.4\"\nbypass_hook_trust = true\n[projects.\"" + projectTrust + "\"]\ntrust_level = \"trusted\"\n"
+		if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+			t.Fatalf("WriteFile config error = %v", err)
+		}
+		hooksDir := filepath.Join(cwd, ".gcode")
+		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		hooksJSON, err := json.Marshal(map[string]any{
+			"hooks": map[string]any{
+				"PermissionRequest": []any{map[string]any{
+					"matcher": matcher,
+					"hooks":   []any{map[string]any{"type": "command", "command": hookCommand}},
+				}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Marshal hooks error = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), hooksJSON, 0o600); err != nil {
+			t.Fatalf("WriteFile hooks error = %v", err)
+		}
+		router := NewRuntimeRouter(RuntimeServices{
+			DefaultCWD:     cwd,
+			Config:         config.NewConfigService(home),
+			HooksDiscovery: NewHookDiscoveryService(home),
+			HookRunner:     NewHookRunner(),
+		})
+		params := &turn.TurnStartParams{ThreadID: "thread-1", CWD: cwd, Model: "gpt-5.4"}
+		if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, params); err != nil {
+			t.Fatalf("RegisterTurn() error = %v", err)
+		}
+		return router
+	}
+	approve := func(t *testing.T, router *RuntimeRouter) (tool.ApplyPatchApprovalDecision, error) {
+		t.Helper()
+		return router.applyPatchApprovalForTurn("thread-1", "turn-1")(context.Background(), &tool.ApplyPatchApprovalRequest{
+			Patch:      "*** Begin Patch\n*** End Patch\n",
+			CWD:        t.TempDir(),
+			Invocation: &tool.Invocation{CallID: "call-1"},
+		})
+	}
+
+	allowed, err := approve(t, buildRouter(t, "apply_patch", hookRunnerOutputCommand(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, "")))
+	if err != nil {
+		t.Fatalf("patch approval error = %v", err)
+	}
+	if !allowed.Approved {
+		t.Fatalf("hook allow did not approve the patch: %#v", allowed)
+	}
+	denied, err := approve(t, buildRouter(t, "apply_patch", hookRunnerPermissionRequestDenyCommand("no patch today")))
+	if err != nil {
+		t.Fatalf("patch approval error = %v", err)
+	}
+	if denied.Approved || denied.DenyReason != "no patch today" {
+		t.Fatalf("hook deny = %#v", denied)
+	}
+
+	// The Write matcher alias selects the handler, and the hook input keeps the
+	// canonical apply_patch tool name with the patch body as `command`.
+	captured := filepath.Join(t.TempDir(), "permission-request.json")
+	router := buildRouter(t, "Write", captureHookStdinCommand(captured))
+	// The capturing hook declines to decide, so the approval path continues to
+	// the user request, which this runtime has no sink for; only the payload the
+	// hook received is asserted.
+	_, _ = approve(t, router)
+	payload, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("the hook did not receive its stdin payload: %v", err)
+	}
+	var input map[string]any
+	if err := json.Unmarshal(payload, &input); err != nil {
+		t.Fatalf("hook input json error = %v payload=%s", err, payload)
+	}
+	if input["tool_name"] != "apply_patch" {
+		t.Fatalf("permission request tool_name = %#v", input["tool_name"])
+	}
+	toolInput, _ := input["tool_input"].(map[string]any)
+	if toolInput["command"] != "*** Begin Patch\n*** End Patch\n" {
+		t.Fatalf("permission request tool_input = %#v", input["tool_input"])
+	}
+}

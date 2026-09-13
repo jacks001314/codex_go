@@ -13626,6 +13626,21 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		if reason != "" {
 			params.Reason = &reason
 		}
+		// Rust Session::request_approval: hooks decide first, before Guardian and
+		// the user approval request. An allow approves the command; a deny
+		// rejects it with the hook's message.
+		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, itemID, "Bash", nil, shellPermissionRequestToolInput(request.Request)); ok && verdict != nil {
+			switch verdict.Kind {
+			case HookPermissionRequestAllow:
+				return tool.ShellApprovalDecision{Approved: true}, nil
+			case HookPermissionRequestDeny:
+				reason := ""
+				if verdict.Message != nil {
+					reason = strings.TrimSpace(*verdict.Message)
+				}
+				return tool.ShellApprovalDecision{DenyReason: reason}, nil
+			}
+		}
 		// Rust e734a1a5c1: cyber-specialized models and models listed in
 		// auto_review.ignore_rules get one-time decisions without proposing reusable
 		// exec-policy amendments.
@@ -13688,6 +13703,20 @@ func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string
 		}
 		if itemID == "" {
 			itemID = "patch-" + safeIdentifier(turnID)
+		}
+		// Rust Session::request_approval: hooks decide first, before Guardian and
+		// the user approval request.
+		if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, itemID, "apply_patch", []string{"Write", "Edit"}, applyPatchPermissionRequestToolInput(request.Patch)); ok && verdict != nil {
+			switch verdict.Kind {
+			case HookPermissionRequestAllow:
+				return tool.ApplyPatchApprovalDecision{Approved: true}, nil
+			case HookPermissionRequestDeny:
+				reason := ""
+				if verdict.Message != nil {
+					reason = strings.TrimSpace(*verdict.Message)
+				}
+				return tool.ApplyPatchApprovalDecision{DenyReason: reason}, nil
+			}
 		}
 		params := &FileChangeRequestApprovalParams{
 			ThreadID:    strings.TrimSpace(threadID),
@@ -14599,6 +14628,59 @@ func requireSingleCurrentTimeConnection(connectionIDs []string) (string, error) 
 		return connectionIDs[0], nil
 	}
 	return "", fmt.Errorf("expected exactly one client subscribed to the thread, found %d", len(connectionIDs))
+}
+
+// permissionRequestHookVerdict runs the turn's PermissionRequest hooks for one
+// approval action (Rust Session::request_approval -> run_permission_request_hooks).
+// It reports ok=false when no hook runner, active turn, or adapter is available,
+// so the caller falls through to its normal approval flow; a nil verdict means
+// the matching hooks declined to decide.
+func (r *RuntimeRouter) permissionRequestHookVerdict(ctx context.Context, threadID string, turnID string, runIDSuffix string, toolName string, matcherAliases []string, toolInput any) (*HookPermissionRequestDecision, bool) {
+	if r == nil || !r.hookRunnerConfigured() {
+		return nil, false
+	}
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return nil, false
+	}
+	adapter, _ := r.turnHookAdapter(active.Params, strings.TrimSpace(turnID)).(*ToolHookAdapter)
+	if adapter == nil {
+		return nil, false
+	}
+	decision, err := adapter.RunPermissionRequest(ctx, runIDSuffix, toolName, matcherAliases, toolInput)
+	if err != nil {
+		return nil, false
+	}
+	return decision, true
+}
+
+// applyPatchPermissionRequestToolInput mirrors Rust's ApplyPatch payload: the
+// hook input carries the patch body under `command`.
+func applyPatchPermissionRequestToolInput(patch string) map[string]any {
+	if strings.TrimSpace(patch) == "" {
+		return nil
+	}
+	return map[string]any{"command": patch}
+}
+
+// shellPermissionRequestToolInput mirrors Rust's PermissionRequestPayload::bash:
+// the hook input carries the command and, when the caller supplied one, the
+// justification as `description`.
+func shellPermissionRequestToolInput(request *tool.ShellRequest) map[string]any {
+	if request == nil {
+		return nil
+	}
+	input := map[string]any{}
+	if command := strings.TrimSpace(request.HookCommand); command != "" {
+		input["command"] = command
+	}
+	if description := strings.TrimSpace(request.Justification); description != "" {
+		input["description"] = description
+	}
+	if len(input) == 0 {
+		return nil
+	}
+	return input
 }
 
 func (r *RuntimeRouter) turnHookAdapter(params *turn.TurnStartParams, turnID string) tool.HookRunner {
