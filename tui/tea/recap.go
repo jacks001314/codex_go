@@ -123,12 +123,12 @@ func (m *Model) applyRecapGeneratedMsg(msg RecapGeneratedMsg) bubbletea.Cmd {
 	if msg.Err != nil {
 		return m.failRecap(msg.Trigger, msg.TurnRevision)
 	}
-	recap, ok := tuiapp.ParseRecap(msg.Response)
+	summary, nextAction, ok := tuiapp.ParseRecap(msg.Response)
 	if !ok {
 		return m.failRecap(msg.Trigger, msg.TurnRevision)
 	}
 	m.recap.MarkRecapped(msg.CompletedTurns)
-	m.applyHistoryCell(historycell.NewThreadRecapHistoryCell(recap))
+	m.applyHistoryCell(historycell.NewThreadRecapHistoryCell(summary).WithNextAction(nextAction))
 	return nil
 }
 

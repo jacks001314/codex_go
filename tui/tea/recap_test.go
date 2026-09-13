@@ -35,7 +35,7 @@ func TestModelRecapCommandShowsLoadingThenRecap(t *testing.T) {
 		}
 		gotPrompt = prompt
 		gotSchema = schema
-		return `{"recap":"Fixed the parser."}`, nil
+		return `{"summary":"Fixed the parser.","next_action":null}`, nil
 	})
 
 	typeText(t, model, "/recap")
@@ -58,7 +58,7 @@ func TestModelRecapCommandShowsLoadingThenRecap(t *testing.T) {
 	if strings.Contains(text, "Generating conversation recap") {
 		t.Fatalf("loading row was not cleared:\n%s", text)
 	}
-	if !strings.Contains(text, "Conversation recap") || !strings.Contains(text, "Fixed the parser.") {
+	if !strings.Contains(text, "\u21b3 Recap:") || !strings.Contains(text, "Fixed the parser.") {
 		t.Fatalf("recap cell missing:\n%s", text)
 	}
 	if model.recapInFlight {
@@ -131,7 +131,7 @@ func TestModelAutomaticRecapRunsWhenUnfocusedDeadlinePasses(t *testing.T) {
 	calls := 0
 	model := recapTestModel(t, func(string, RecapThreadOptions, string, map[string]any) (string, error) {
 		calls++
-		return `{"recap":"Auto recap."}`, nil
+		return `{"summary":"Auto recap.","next_action":null}`, nil
 	})
 	now := base
 	model.now = func() time.Time { return now }
