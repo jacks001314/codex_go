@@ -7,7 +7,10 @@ import (
 )
 
 const (
-	NudgeModelSlug                 = "gpt-5.4-mini"
+	NudgeModelSlug = "gpt-5.4-mini"
+	// ReserveModelSlug mirrors Rust's LUNA_RESERVE_MODEL: a session running on
+	// Reserve never shows the lower-cost switch prompt.
+	ReserveModelSlug               = "gpt-reserve"
 	RateLimitSwitchPromptViewID    = "rate-limit-switch-prompt"
 	RateLimitSwitchPromptThreshold = 90.0
 	primaryLimitFallbackLabel      = "usage"
@@ -103,7 +106,8 @@ func ShouldQueueRateLimitSwitchPrompt(snapshot RateLimitSnapshot, currentModel s
 	if hidden || state == RateLimitSwitchPromptShown || !isCodexLimit(snapshot.LimitID) || hasWorkspaceCredits(snapshot.Credits) {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(currentModel), NudgeModelSlug) {
+	if strings.EqualFold(strings.TrimSpace(currentModel), NudgeModelSlug) ||
+		strings.EqualFold(strings.TrimSpace(currentModel), ReserveModelSlug) {
 		return false
 	}
 	return rateLimitWindowHighUsage(snapshot.Primary) || rateLimitWindowHighUsage(snapshot.Secondary)

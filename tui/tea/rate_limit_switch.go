@@ -24,6 +24,16 @@ func (m *Model) maybeOpenRateLimitSwitchPrompt(snapshot chatwidget.RateLimitSnap
 		m.rateLimitSwitchPrompt = chatwidget.RateLimitSwitchPromptIdle
 		return nil
 	}
+	// Rust's maybe_show_pending_rate_limit_prompt resets to idle on the Reserve
+	// model, and leaves the prompt pending while an applicable backend banner
+	// owns the account-recovery surface.
+	if strings.EqualFold(strings.TrimSpace(currentModel), chatwidget.ReserveModelSlug) {
+		m.rateLimitSwitchPrompt = chatwidget.RateLimitSwitchPromptIdle
+		return nil
+	}
+	if m.backendBannerApplicable() {
+		return nil
+	}
 	if m.rateLimitSwitchPrompt != chatwidget.RateLimitSwitchPromptPending {
 		return nil
 	}

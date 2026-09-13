@@ -332,6 +332,13 @@ func (m *Model) backendBannerVisible() bool {
 	return m != nil && m.backendBanner.visibleBanner(m.currentBannerModel()) != nil
 }
 
+// backendBannerApplicable mirrors Rust's has_applicable_backend_banner: a
+// non-dismissed banner applies to the selected model, so it owns the
+// account-recovery surface and the lower-cost switch prompt defers to it.
+func (m *Model) backendBannerApplicable() bool {
+	return m.backendBannerVisible()
+}
+
 // dismissBackendBannerForNewTurn mirrors Rust's
 // dismiss_backend_banner_for_new_turn: once a dismissible banner has been
 // presented, starting a new turn hides it.
@@ -364,6 +371,24 @@ func (m *Model) applyBackendBannerResult(message BackendBannerResultMsg) {
 		return
 	}
 	m.backendBanner.update(message.Read)
+	m.dismissRateLimitSwitchPromptForBackendBanner()
+}
+
+// dismissRateLimitSwitchPromptForBackendBanner mirrors Rust's banner
+// presentation dismissing the lower-cost switch prompt view and re-arming it as
+// pending, so it can reappear once the banner clears.
+func (m *Model) dismissRateLimitSwitchPromptForBackendBanner() {
+	if m == nil || !m.backendBannerApplicable() {
+		return
+	}
+	if m.rateLimitSwitchPrompt != chatwidget.RateLimitSwitchPromptShown {
+		return
+	}
+	m.rateLimitSwitchPrompt = chatwidget.RateLimitSwitchPromptPending
+	if m.modal != nil && m.modal.kind == ModalKindRateLimitSwitch {
+		m.modal = nil
+		m.refreshTranscript()
+	}
 }
 
 // backendBannerAcceptsKeys mirrors Rust's InlineBanner key gate: draft input,

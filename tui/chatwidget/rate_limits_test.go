@@ -129,6 +129,9 @@ func TestRateLimitSwitchPromptQueueAndView(t *testing.T) {
 	if ShouldQueueRateLimitSwitchPrompt(RateLimitSnapshot{Primary: &RateLimitWindow{UsedPercent: 95}}, NudgeModelSlug, false, RateLimitSwitchPromptIdle) {
 		t.Fatal("current nudge model queued prompt, want false")
 	}
+	if ShouldQueueRateLimitSwitchPrompt(RateLimitSnapshot{Primary: &RateLimitWindow{UsedPercent: 95}}, ReserveModelSlug, false, RateLimitSwitchPromptIdle) {
+		t.Fatal("current reserve model queued prompt, want false")
+	}
 	if ShouldQueueRateLimitSwitchPrompt(RateLimitSnapshot{Primary: &RateLimitWindow{UsedPercent: 95}}, "gpt-5.4", true, RateLimitSwitchPromptIdle) {
 		t.Fatal("hidden prompt queued, want false")
 	}
