@@ -309,6 +309,12 @@ func (r *RuntimeRouter) responsesStreamHandler(threadID string, turnID string, p
 		return func(event *model.ResponsesStreamEvent) {}
 	}
 	state := newResponsesStreamNotificationState(turnStartPlanMode(params), turnID)
+	state.metrics = r.services.TurnMetrics
+	if turn := r.activeRuntimeTurnStateSnapshot(threadID, turnID); turn != nil && turn.StartedAtMS > 0 {
+		state.turnStartedAtMS = turn.StartedAtMS
+	} else {
+		state.turnStartedAtMS = time.Now().UTC().UnixMilli()
+	}
 	if params != nil {
 		state.experimentalRawEvents = params.ExperimentalRawEvents
 	}
@@ -317,6 +323,7 @@ func (r *RuntimeRouter) responsesStreamHandler(threadID string, turnID string, p
 		state.showRawAgentReasoning = cfg.ShowRawAgentReasoning()
 	}
 	return func(event *model.ResponsesStreamEvent) {
+		r.recordTurnTimingMetrics(state, event)
 		r.notifyResponsesStreamEvent(threadID, turnID, event, state)
 	}
 }
@@ -339,6 +346,12 @@ type responsesStreamNotificationState struct {
 	applyPatchStreamingEvents bool
 	showRawAgentReasoning     bool
 	retrying                  bool
+	// Turn timing (Rust core/src/turn_timing.rs): the turn start, the session
+	// metrics sink, and the once-per-turn latches.
+	turnStartedAtMS int64
+	metrics         telemetry.TurnMetricSink
+	ttftRecorded    bool
+	ttfmRecorded    bool
 }
 
 func newResponsesStreamNotificationState(planMode bool, turnID string) *responsesStreamNotificationState {
