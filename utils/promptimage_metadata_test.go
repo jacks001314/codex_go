@@ -60,6 +60,56 @@ func TestLoadForPromptBytesPreservesPNGMetadata(t *testing.T) {
 	}
 }
 
+func webpTestContainer(chunks ...[2][]byte) []byte {
+	body := []byte("WEBP")
+	for _, chunk := range chunks {
+		kind, data := chunk[0], chunk[1]
+		body = append(body, kind...)
+		var size [4]byte
+		binary.LittleEndian.PutUint32(size[:], uint32(len(data)))
+		body = append(body, size[:]...)
+		body = append(body, data...)
+		if len(data)%2 == 1 {
+			body = append(body, 0)
+		}
+	}
+	out := []byte("RIFF")
+	var size [4]byte
+	binary.LittleEndian.PutUint32(size[:], uint32(len(body)))
+	out = append(out, size[:]...)
+	return append(out, body...)
+}
+
+// TestExtractWebPMetadataReadsICCPAndEXIF covers Rust's WebP decoder accessors:
+// a WebP source keeps its RGB ICC profile and EXIF payload when the re-encode
+// falls back to PNG (Go has no WebP encoder).
+func TestExtractWebPMetadataReadsICCPAndEXIF(t *testing.T) {
+	source := webpTestContainer(
+		[2][]byte{[]byte("VP8L"), {0x2f, 0x01, 0x00, 0x00, 0x00}},
+		[2][]byte{[]byte("ICCP"), testRGBProfile()},
+		[2][]byte{[]byte("EXIF"), testExifPayload()},
+	)
+	metadata := ExtractPromptImageSourceMetadata(source)
+	if !bytes.Equal(metadata.ICCProfile, testRGBProfile()) {
+		t.Fatalf("webp icc profile = %d bytes", len(metadata.ICCProfile))
+	}
+	if !bytes.Equal(metadata.EXIF, testExifPayload()) {
+		t.Fatalf("webp exif = %x", metadata.EXIF)
+	}
+
+	// A non-RGB profile is dropped and non-WebP bytes report no metadata.
+	cmykProfile := make([]byte, 128)
+	copy(cmykProfile, "fake icc profile")
+	copy(cmykProfile[16:20], "CMYK")
+	cmyk := ExtractPromptImageSourceMetadata(webpTestContainer([2][]byte{[]byte("ICCP"), cmykProfile}))
+	if len(cmyk.ICCProfile) != 0 {
+		t.Fatalf("non-RGB webp profile survived: %d bytes", len(cmyk.ICCProfile))
+	}
+	if other := ExtractPromptImageSourceMetadata([]byte("RIFFxxxxNOPE")); !other.Empty() {
+		t.Fatalf("non-WebP container reported metadata: %#v", other)
+	}
+}
+
 // TestLoadForPromptBytesPreservesJPEGMetadata covers the JPEG path: a resized
 // JPEG keeps APP1 (Exif) and APP2 (ICC) segments and stays decodable.
 func TestLoadForPromptBytesPreservesJPEGMetadata(t *testing.T) {

@@ -72,6 +72,11 @@ func extractPromptImageMetadata(format promptImageFormat, payload []byte) prompt
 		return extractPNGPromptImageMetadata(payload)
 	case promptImageFormatJPEG:
 		return extractJPEGPromptImageMetadata(payload)
+	case promptImageFormatWebP:
+		// Rust's decoder exposes the WebP container's ICCP and EXIF chunks the
+		// same way it does for PNG/JPEG, so a WebP source keeps its metadata when
+		// the re-encode falls back to another container (#44027).
+		return extractWebPPromptImageMetadata(payload)
 	default:
 		return promptImageMetadata{}
 	}
@@ -206,6 +211,59 @@ func encodePNGChunk(kind string, data []byte) []byte {
 	binary.BigEndian.PutUint32(sum[:], crc.Sum32())
 	buf.Write(sum[:])
 	return buf.Bytes()
+}
+
+// webpChunk is one RIFF chunk of a WebP container.
+type webpChunk struct {
+	kind string
+	data []byte
+}
+
+// parseWebPChunks walks a RIFF/WEBP container's chunks, stopping at a truncated
+// chunk or the declared container end.
+func parseWebPChunks(payload []byte) ([]webpChunk, bool) {
+	if len(payload) < 12 || !bytes.Equal(payload[:4], []byte("RIFF")) || !bytes.Equal(payload[8:12], []byte("WEBP")) {
+		return nil, false
+	}
+	end := 8 + int(binary.LittleEndian.Uint32(payload[4:8]))
+	if end > len(payload) || end < 12 {
+		end = len(payload)
+	}
+	chunks := []webpChunk{}
+	offset := 12
+	for offset+8 <= end {
+		kind := string(payload[offset : offset+4])
+		length := int(binary.LittleEndian.Uint32(payload[offset+4 : offset+8]))
+		if length < 0 || offset+8+length > end {
+			return chunks, true
+		}
+		chunks = append(chunks, webpChunk{kind: kind, data: payload[offset+8 : offset+8+length]})
+		offset += 8 + length
+		// RIFF chunks are padded to an even size.
+		if length%2 == 1 {
+			offset++
+		}
+	}
+	return chunks, true
+}
+
+// extractWebPPromptImageMetadata reads the ICCP (ICC profile) and EXIF chunks,
+// mirroring Rust's WebP decoder accessors.
+func extractWebPPromptImageMetadata(payload []byte) promptImageMetadata {
+	chunks, ok := parseWebPChunks(payload)
+	if !ok {
+		return promptImageMetadata{}
+	}
+	metadata := promptImageMetadata{}
+	for _, chunk := range chunks {
+		switch chunk.kind {
+		case "ICCP":
+			metadata.iccProfile = rgbICCProfile(append([]byte(nil), chunk.data...))
+		case "EXIF":
+			metadata.exif = append([]byte(nil), chunk.data...)
+		}
+	}
+	return metadata
 }
 
 // jpegSegments walks the marker segments before the entropy-coded data.
