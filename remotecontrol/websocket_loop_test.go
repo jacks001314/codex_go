@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -79,6 +80,88 @@ func TestRemoteControlWebsocketLoopConnectsAndForwardsRemoteClient(t *testing.T)
 	case <-time.After(2 * time.Second):
 		t.Fatal("remote control websocket loop did not stop")
 	}
+}
+
+// TestRemoteControlWebsocketLoopRetiresOnAuthOwnerChangeWhileConnected covers
+// Rust #44341: a live relay connection ends when its authentication owner
+// changes, and the session is retired (disabled, with its state cleared) instead
+// of continuing to serve the previous user or account.
+func TestRemoteControlWebsocketLoopRetiresOnAuthOwnerChangeWhileConnected(t *testing.T) {
+	manager := NewManager("codex", "installation-id")
+	manager.Enable(&EnableParams{Ephemeral: true})
+	var authRevision atomic.Uint64
+	// Keep the client half of each pair alive: dropping it lets the runtime
+	// collect the dialed connection and the loop's websocket workers fail before
+	// the owner change is observed.
+	var clientConnsMu sync.Mutex
+	var clientConns []*websocket.Conn
+	connected := make(chan *websocket.Conn, 4)
+	loop := NewRemoteControlWebsocketLoop(manager, &RemoteControlWebsocketLoopOptions{
+		StatusPollInterval:        time.Millisecond,
+		ConnectionShutdownTimeout: 100 * time.Millisecond,
+		AuthRevision:              func(context.Context) (uint64, error) { return authRevision.Load(), nil },
+		ReconnectDelay:            func(*uint64) (time.Duration, bool) { return time.Millisecond, false },
+		Connect: func(context.Context, *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
+			clientConn, serverConn := connectedRemoteControlWebsocketPair(t)
+			clientConnsMu.Lock()
+			clientConns = append(clientConns, clientConn)
+			clientConnsMu.Unlock()
+			connected <- clientConn
+			return serverConn, nil, nil
+		},
+	})
+	defer func() {
+		clientConnsMu.Lock()
+		defer clientConnsMu.Unlock()
+		for _, conn := range clientConns {
+			_ = conn.CloseNow()
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- loop.Run(ctx)
+	}()
+
+	select {
+	case <-connected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote control websocket loop did not connect")
+	}
+	// Let the loop finish its post-connect auth snapshot and enter the live poll;
+	// a change recorded as that baseline would not be an owner change.
+	time.Sleep(50 * time.Millisecond)
+
+	// The authentication owner changes while the relay is live.
+	authRevision.Store(1)
+	waitForRemoteControlStatus(t, manager, StatusDisabled)
+	if manager.enrollment != nil {
+		t.Fatalf("enrollment survived the auth owner change: %#v", manager.enrollment)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("loop returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote control websocket loop did not stop")
+	}
+}
+
+func waitForRemoteControlStatus(t *testing.T, manager *Manager, want ConnectionStatus) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if manager.StatusChanged().Status == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("manager status = %q, want %q", manager.StatusChanged().Status, want)
 }
 
 func TestRemoteControlWebsocketLoopAuthChangeWakesReconnectBackoff(t *testing.T) {

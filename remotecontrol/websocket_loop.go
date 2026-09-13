@@ -49,6 +49,11 @@ const (
 	remoteControlConnectionEndedShutdown remoteControlConnectionEndReason = "shutdown"
 	remoteControlConnectionEndedDisabled remoteControlConnectionEndReason = "disabled"
 	remoteControlConnectionEndedWorker   remoteControlConnectionEndReason = "connection_worker_stopped"
+	// remoteControlConnectionEndedAuthChanged mirrors Rust's
+	// ConnectionEndReason::AuthOwnerChanged (#44341): a live relay connection
+	// ends when its authentication owner changes so it cannot keep serving the
+	// previous user or account.
+	remoteControlConnectionEndedAuthChanged remoteControlConnectionEndReason = "auth_owner_changed"
 )
 
 type remoteControlReconnectWaitReason string
@@ -144,11 +149,20 @@ func (l *RemoteControlWebsocketLoop) Run(ctx context.Context) error {
 		l.manager.ResetAuthRecovery()
 		l.observeAuthRevision(ctx, &authRevision, &authRevisionKnown)
 		l.manager.PublishConnectionStatus(StatusConnected)
-		reason := l.runConnection(ctx, conn)
+		reason := l.runConnection(ctx, conn, &authRevision, &authRevisionKnown)
 		if reason == remoteControlConnectionEndedShutdown {
 			return nil
 		}
 		if reason == remoteControlConnectionEndedDisabled {
+			continue
+		}
+		if reason == remoteControlConnectionEndedAuthChanged {
+			// Rust #44341: an identity change retires the relay session, which
+			// stays disabled (clearing client, replay, and enrollment state) until
+			// the user enables remote control again.
+			_ = l.manager.RetireForAuthChange(ctx)
+			reconnectAttempt = 0
+			l.manager.ResetAuthRecovery()
 			continue
 		}
 		if !l.remoteControlEnabled() {
@@ -185,7 +199,12 @@ func (l *RemoteControlWebsocketLoop) connect(ctx context.Context) (*websocket.Co
 	return conn, err
 }
 
-func (l *RemoteControlWebsocketLoop) runConnection(ctx context.Context, conn *websocket.Conn) remoteControlConnectionEndReason {
+func (l *RemoteControlWebsocketLoop) runConnection(
+	ctx context.Context,
+	conn *websocket.Conn,
+	authRevision *uint64,
+	authRevisionKnown *bool,
+) remoteControlConnectionEndReason {
 	if conn == nil {
 		return remoteControlConnectionEndedWorker
 	}
@@ -220,10 +239,11 @@ func (l *RemoteControlWebsocketLoop) runConnection(ctx context.Context, conn *we
 	case <-ctx.Done():
 		reason = remoteControlConnectionEndedShutdown
 	case <-statusTicker.C:
-		if !l.remoteControlEnabled() {
-			reason = remoteControlConnectionEndedDisabled
-		} else {
-			reason = l.waitConnectionEnd(ctx, errCh, statusTicker)
+		switch polled := l.connectionPollReason(ctx, authRevision, authRevisionKnown); polled {
+		case remoteControlConnectionEndedDisabled, remoteControlConnectionEndedAuthChanged:
+			reason = polled
+		default:
+			reason = l.waitConnectionEnd(ctx, errCh, statusTicker, authRevision, authRevisionKnown)
 		}
 	case <-errCh:
 		reason = remoteControlConnectionEndedWorker
@@ -234,19 +254,42 @@ func (l *RemoteControlWebsocketLoop) runConnection(ctx context.Context, conn *we
 	return reason
 }
 
-func (l *RemoteControlWebsocketLoop) waitConnectionEnd(ctx context.Context, errCh <-chan error, ticker *time.Ticker) remoteControlConnectionEndReason {
+func (l *RemoteControlWebsocketLoop) waitConnectionEnd(
+	ctx context.Context,
+	errCh <-chan error,
+	ticker *time.Ticker,
+	authRevision *uint64,
+	authRevisionKnown *bool,
+) remoteControlConnectionEndReason {
 	for {
 		select {
 		case <-ctx.Done():
 			return remoteControlConnectionEndedShutdown
 		case <-ticker.C:
-			if !l.remoteControlEnabled() {
-				return remoteControlConnectionEndedDisabled
+			if polled := l.connectionPollReason(ctx, authRevision, authRevisionKnown); polled != "" {
+				return polled
 			}
 		case <-errCh:
 			return remoteControlConnectionEndedWorker
 		}
 	}
+}
+
+// connectionPollReason reports whether a live connection must end because the
+// manager disabled remote control or the authentication owner changed; an empty
+// result keeps the connection.
+func (l *RemoteControlWebsocketLoop) connectionPollReason(
+	ctx context.Context,
+	authRevision *uint64,
+	authRevisionKnown *bool,
+) remoteControlConnectionEndReason {
+	if !l.remoteControlEnabled() {
+		return remoteControlConnectionEndedDisabled
+	}
+	if l.observeAuthRevision(ctx, authRevision, authRevisionKnown) {
+		return remoteControlConnectionEndedAuthChanged
+	}
+	return ""
 }
 
 func (l *RemoteControlWebsocketLoop) waitConnectionWorkers(errCh <-chan error) {
