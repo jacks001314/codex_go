@@ -258,6 +258,29 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	if value, ok := stringAnyKey(values, "default_permissions", "defaultPermissions"); ok {
 		out.DefaultPermissions = &value
 	}
+	// Rust ConfigRequirementsToml exact path/boolean requirements
+	// (sqlite_home, log_dir, model_catalog_json, check_for_update_on_startup,
+	// allow_login_shell) and the managed feedback switch.
+	if value, ok := stringAnyKey(values, "sqlite_home", "sqliteHome"); ok {
+		out.SQLiteHome = &value
+	}
+	if value, ok := stringAnyKey(values, "log_dir", "logDir"); ok {
+		out.LogDir = &value
+	}
+	if value, ok := stringAnyKey(values, "model_catalog_json", "modelCatalogJson"); ok {
+		out.ModelCatalogJSON = &value
+	}
+	if value, ok := boolAnyKey(values, "check_for_update_on_startup", "checkForUpdateOnStartup"); ok {
+		out.CheckForUpdateOnStartup = &value
+	}
+	if value, ok := boolAnyKey(values, "allow_login_shell", "allowLoginShell"); ok {
+		out.AllowLoginShell = &value
+	}
+	if nested, ok := mapAnyKey(values, "feedback"); ok {
+		if value, ok := boolAnyKey(nested, "enabled"); ok {
+			out.Feedback = &FeedbackRequirements{Enabled: &value}
+		}
+	}
 	if value, ok := stringAnyKey(values, "additional_developer_instructions", "additionalDeveloperInstructions"); ok {
 		out.AdditionalDeveloperInstructions = &value
 	}
@@ -1028,6 +1051,12 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.ChatgptBaseURL == nil &&
 			value.ModelProvider == nil &&
 			value.ModelProviders == nil &&
+			value.SQLiteHome == nil &&
+			value.LogDir == nil &&
+			value.ModelCatalogJSON == nil &&
+			value.CheckForUpdateOnStartup == nil &&
+			value.AllowLoginShell == nil &&
+			value.Feedback == nil &&
 			value.MCPServers == nil &&
 			value.Plugins == nil &&
 			len(value.Apps) == 0)

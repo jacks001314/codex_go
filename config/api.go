@@ -580,9 +580,20 @@ type ConfigRequirements struct {
 	ModelProvider *string `json:"modelProvider,omitempty"`
 	// ModelProviders are complete required provider definitions, using
 	// config.toml field names and values.
-	ModelProviders map[string]any                  `json:"modelProviders,omitempty"`
-	MCPServers     map[string]MCPServerRequirement `json:"-"`
-	Plugins        map[string]PluginRequirements   `json:"-"`
+	ModelProviders map[string]any `json:"modelProviders,omitempty"`
+	// SQLiteHome, LogDir, and ModelCatalogJSON are exact managed path
+	// requirements (Rust ConfigRequirementsToml sqlite_home/log_dir/
+	// model_catalog_json). They override the configured values.
+	SQLiteHome              *string `json:"sqliteHome,omitempty"`
+	LogDir                  *string `json:"logDir,omitempty"`
+	ModelCatalogJSON        *string `json:"modelCatalogJson,omitempty"`
+	CheckForUpdateOnStartup *bool   `json:"checkForUpdateOnStartup,omitempty"`
+	AllowLoginShell         *bool   `json:"allowLoginShell,omitempty"`
+	// Feedback is the managed feedback-collection requirement (Rust
+	// ConfigRequirementsToml.feedback).
+	Feedback   *FeedbackRequirements           `json:"feedback,omitempty"`
+	MCPServers map[string]MCPServerRequirement `json:"-"`
+	Plugins    map[string]PluginRequirements   `json:"-"`
 	// Apps carries the managed app requirements (Rust
 	// ConfigRequirementsToml.apps): app disablement and per-tool approval
 	// modes enforced by Cloud/MDM layers. Internal, like MCPServers/Plugins.
@@ -620,6 +631,12 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AdditionalDeveloperInstructions      *string                   `json:"additionalDeveloperInstructions"`
 		ModelProvider                        *string                   `json:"modelProvider"`
 		ModelProviders                       map[string]any            `json:"modelProviders"`
+		SQLiteHome                           *string                   `json:"sqliteHome"`
+		LogDir                               *string                   `json:"logDir"`
+		ModelCatalogJSON                     *string                   `json:"modelCatalogJson"`
+		CheckForUpdateOnStartup              *bool                     `json:"checkForUpdateOnStartup"`
+		AllowLoginShell                      *bool                     `json:"allowLoginShell"`
+		Feedback                             *FeedbackRequirements     `json:"feedback"`
 	}{
 		AllowedApprovalPolicies:              permissionPoliciesOrNil(r.AllowedApprovalPolicies),
 		AllowedApprovalsReviewers:            approvalsReviewersOrNil(r.AllowedApprovalsReviewers),
@@ -650,7 +667,20 @@ func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 		AdditionalDeveloperInstructions:      cloneStringPtr(r.AdditionalDeveloperInstructions),
 		ModelProvider:                        cloneStringPtr(r.ModelProvider),
 		ModelProviders:                       cloneAnyMapOrNil(r.ModelProviders),
+		SQLiteHome:                           cloneStringPtr(r.SQLiteHome),
+		LogDir:                               cloneStringPtr(r.LogDir),
+		ModelCatalogJSON:                     cloneStringPtr(r.ModelCatalogJSON),
+		CheckForUpdateOnStartup:              cloneBoolPtr(r.CheckForUpdateOnStartup),
+		AllowLoginShell:                      cloneBoolPtr(r.AllowLoginShell),
+		Feedback:                             cloneFeedbackRequirements(r.Feedback),
 	})
+}
+
+func cloneFeedbackRequirements(value *FeedbackRequirements) *FeedbackRequirements {
+	if value == nil {
+		return nil
+	}
+	return &FeedbackRequirements{Enabled: cloneBoolPtr(value.Enabled)}
 }
 
 // cloneAnyMapOrNil deep-clones a JSON object while preserving nil, so absent
@@ -795,6 +825,20 @@ func (r *AutoReviewRequirements) MarshalJSON() ([]byte, error) {
 	}{
 		RequiredOnModels: stringSliceOrNil(r.RequiredOnModels),
 		IgnoreRules:      stringSliceOrNil(r.IgnoreRules),
+	})
+}
+
+// FeedbackRequirements mirrors Rust's FeedbackRequirements /
+// FeedbackConfigToml: the managed feedback-collection switch.
+type FeedbackRequirements struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+func (r *FeedbackRequirements) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Enabled *bool `json:"enabled"`
+	}{
+		Enabled: cloneBoolPtr(r.Enabled),
 	})
 }
 
@@ -3642,6 +3686,12 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.ChatgptBaseURL = cloneStringPtr(requirements.ChatgptBaseURL)
 	clone.ModelProvider = cloneStringPtr(requirements.ModelProvider)
 	clone.ModelProviders = cloneAnyMapOrNil(requirements.ModelProviders)
+	clone.SQLiteHome = cloneStringPtr(requirements.SQLiteHome)
+	clone.LogDir = cloneStringPtr(requirements.LogDir)
+	clone.ModelCatalogJSON = cloneStringPtr(requirements.ModelCatalogJSON)
+	clone.CheckForUpdateOnStartup = cloneBoolPtr(requirements.CheckForUpdateOnStartup)
+	clone.AllowLoginShell = cloneBoolPtr(requirements.AllowLoginShell)
+	clone.Feedback = cloneFeedbackRequirements(requirements.Feedback)
 	return &clone
 }
 

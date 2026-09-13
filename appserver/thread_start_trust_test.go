@@ -11,12 +11,21 @@ func TestThreadStartEffectivePermissionsTrustProjectUsesEffectiveProfile(t *test
 	readOnly := "read-only"
 	workspace := "workspace"
 
-	readOnlyCfg := &config.Config{Requirements: &config.ConfigRequirements{DefaultPermissions: &readOnly}}
+	// Managed requirements name their required default through the allow-list
+	// (Rust validate_required_permission_profile_catalog), so the fixtures use
+	// the managed shape rather than a bare default_permissions override.
+	readOnlyCfg := &config.Config{Requirements: &config.ConfigRequirements{
+		DefaultPermissions:        &readOnly,
+		AllowedPermissionProfiles: map[string]bool{"read-only": true},
+	}}
 	if threadStartEffectivePermissionsTrustProject(readOnlyCfg, cwd, &ThreadStartParams{CWD: cwd}) {
 		t.Fatal("read-only effective profile should not trust the project")
 	}
 
-	workspaceCfg := &config.Config{Requirements: &config.ConfigRequirements{DefaultPermissions: &workspace}}
+	workspaceCfg := &config.Config{Requirements: &config.ConfigRequirements{
+		DefaultPermissions:        &workspace,
+		AllowedPermissionProfiles: map[string]bool{"workspace": true},
+	}}
 	if !threadStartEffectivePermissionsTrustProject(workspaceCfg, cwd, &ThreadStartParams{CWD: cwd}) {
 		t.Fatal("workspace effective profile should trust the project")
 	}

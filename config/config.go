@@ -317,7 +317,41 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	applyManagedApprovalsReviewerGuardianV2Override(values, requirements)
 	applyManagedAuthBackendOverride(values, requirements)
 	applyManagedModelProviderOverride(values, requirements)
+	applyManagedExactOverrides(values, requirements)
 	return &Config{Values: values, Requirements: requirements}, nil
+}
+
+// applyManagedExactOverrides mirrors Rust ConfigRequirementsToml::apply_to_config
+// / core apply_to_config for the remaining exact managed requirements: the
+// required sqlite_home, log_dir, model_catalog_json, check_for_update_on_startup,
+// allow_login_shell, and feedback.enabled values replace the configured ones.
+func applyManagedExactOverrides(values map[string]any, requirements *ConfigRequirements) {
+	if values == nil || requirements == nil {
+		return
+	}
+	if requirements.SQLiteHome != nil {
+		values["sqlite_home"] = *requirements.SQLiteHome
+	}
+	if requirements.LogDir != nil {
+		values["log_dir"] = *requirements.LogDir
+	}
+	if requirements.ModelCatalogJSON != nil {
+		values["model_catalog_json"] = *requirements.ModelCatalogJSON
+	}
+	if requirements.CheckForUpdateOnStartup != nil {
+		values["check_for_update_on_startup"] = *requirements.CheckForUpdateOnStartup
+	}
+	if requirements.AllowLoginShell != nil {
+		values["allow_login_shell"] = *requirements.AllowLoginShell
+	}
+	if requirements.Feedback != nil && requirements.Feedback.Enabled != nil {
+		feedback, _ := values["feedback"].(map[string]any)
+		if feedback == nil {
+			feedback = map[string]any{}
+		}
+		feedback["enabled"] = *requirements.Feedback.Enabled
+		values["feedback"] = feedback
+	}
 }
 
 // applyManagedAuthBackendOverride mirrors Rust 0f21cb3413 (#39043): exact
