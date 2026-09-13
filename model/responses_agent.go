@@ -613,6 +613,8 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	requestStartedAt := time.Now()
 	writeErr := conn.Write(connectCtx, websocket.MessageText, mustJSONBytes(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
+	// The prewarm dials a fresh connection (it returns early when one exists).
+	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), false)
 	if writeErr != nil {
 		closeResponsesWebsocketSession(session, "prewarm write failed")
 		return nil, writeErr
@@ -762,6 +764,9 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		timeout = 15 * time.Second
 	}
 	conn := session.conn
+	// A dial only happens when the session had no connection, so an existing
+	// connection means this request reused it (Rust's connection_reused).
+	connectionReused := conn != nil
 	if conn == nil {
 		connectCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
@@ -790,6 +795,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	requestStartedAt := time.Now()
 	writeErr := conn.Write(ctx, websocket.MessageText, mustJSONBytes(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
+	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), connectionReused)
 	if writeErr != nil {
 		closeResponsesWebsocketSession(session, "response write failed")
 		if !transportRetried {

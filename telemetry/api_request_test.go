@@ -8,6 +8,119 @@ import (
 	"codex_go/model"
 )
 
+// Rust's websocket request record: the outcome, the auth environment, the
+// reused connection, and the agent identity reach both records.
+func TestRecordWebsocketRequestRoutesLogAndTraceLikeRust(t *testing.T) {
+	t.Setenv(OpenAIAPIKeyEnvVar, "sk-test")
+
+	logBodies := make(chan map[string]any, 2)
+	logServer := newLogBatchServer(t, logBodies)
+	defer logServer.Close()
+	traceBodies := make(chan map[string]any, 2)
+	traceServer := newTraceBatchServer(t, traceBodies)
+	defer traceServer.Close()
+
+	logsClient := NewLogsClient(LogsClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       logServer.URL + "/v1/logs",
+		ExportInterval: -1,
+	})
+	tracesClient := NewTracesClient(TracesClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       traceServer.URL + "/v1/traces",
+		ExportInterval: -1,
+	})
+	session := NewSessionTelemetry(SessionTelemetryMetadata{
+		ConversationID: "thread-1",
+		AuthEnv:        CollectAuthEnvTelemetry("", false),
+	})
+	session.Logs = logsClient
+	span := tracesClient.Tracer().StartSpan("stream_request", nil)
+	session.RecordWebsocketRequest(WithSpan(context.Background(), span), model.WebsocketRequestRecord{
+		Duration:         17 * time.Millisecond,
+		ConnectionReused: true,
+		AgentID:          "agent-runtime-ws",
+		TaskID:           "task-run-ws",
+	})
+	session.RecordWebsocketRequest(WithSpan(context.Background(), span), model.WebsocketRequestRecord{
+		Duration:     5 * time.Millisecond,
+		ErrorMessage: "send failed",
+	})
+	span.End()
+	if err := logsClient.Flush(context.Background()); err != nil {
+		t.Fatalf("logs Flush() error = %v", err)
+	}
+	if err := tracesClient.Flush(context.Background()); err != nil {
+		t.Fatalf("traces Flush() error = %v", err)
+	}
+
+	select {
+	case body := <-logBodies:
+		records := logRecords(t, body)
+		if len(records) != 2 {
+			t.Fatalf("records = %#v", records)
+		}
+		success := logRecordAttributes(t, records[0])
+		for key, want := range map[string]string{
+			"event.name":                      "codex.websocket_request",
+			"duration_ms":                     "17",
+			"success":                         "true",
+			"auth.connection_reused":          "true",
+			"auth.agent_id":                   "agent-runtime-ws",
+			"auth.task_id":                    "task-run-ws",
+			"auth.env_openai_api_key_present": "true",
+		} {
+			if got := success[key]; got != want {
+				t.Fatalf("log attribute %s = %q, want %q", key, got, want)
+			}
+		}
+		if _, ok := success["error.message"]; ok {
+			t.Fatalf("a successful send recorded an error: %#v", success)
+		}
+		failure := logRecordAttributes(t, records[1])
+		if failure["success"] != "false" || failure["error.message"] != "send failed" {
+			t.Fatalf("failure record = %#v", failure)
+		}
+		if failure["auth.connection_reused"] != "false" {
+			t.Fatalf("failure record = %#v", failure)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the logs endpoint did not receive the websocket records")
+	}
+
+	select {
+	case body := <-traceBodies:
+		spans := body["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+		events := spans[0].(map[string]any)["events"].([]any)
+		if len(events) != 2 {
+			t.Fatalf("span events = %#v", events)
+		}
+		attributes := spanEventAttributes(t, events[0].(map[string]any))
+		if attributes["event.name"] != "codex.websocket_request" || attributes["auth.connection_reused"] != "true" {
+			t.Fatalf("span event attributes = %#v", attributes)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the traces endpoint did not receive the websocket events")
+	}
+}
+
+// logRecords flattens every log record of a captured batch.
+func logRecords(t *testing.T, batch map[string]any) []map[string]any {
+	t.Helper()
+	records := []map[string]any{}
+	for _, resourceEntry := range batch["resourceLogs"].([]any) {
+		for _, scopeEntry := range resourceEntry.(map[string]any)["scopeLogs"].([]any) {
+			for _, recordEntry := range scopeEntry.(map[string]any)["logRecords"].([]any) {
+				record, ok := recordEntry.(map[string]any)
+				if ok {
+					records = append(records, record)
+				}
+			}
+		}
+	}
+	return records
+}
+
 // Rust's otel_export_routing_policy test for API requests: the attempt, status,
 // endpoint, and auth observability reach both the log record and the trace
 // event, and the trace event never gained anything the log record lacks.

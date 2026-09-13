@@ -22,6 +22,17 @@ type MetricsSink interface {
 	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }
 
+// WebsocketRequestRecord carries the values of one websocket request send
+// (Rust's SessionTelemetry::record_websocket_request).
+type WebsocketRequestRecord struct {
+	Duration time.Duration
+	// ErrorMessage is absent when the send succeeded.
+	ErrorMessage     string
+	ConnectionReused bool
+	AgentID          string
+	TaskID           string
+}
+
 // APIRequestRecord carries the per-attempt values of one model HTTP request
 // (Rust's RequestTelemetry::on_request).
 type APIRequestRecord struct {
@@ -61,6 +72,8 @@ type SessionTelemetrySink interface {
 	StartSpan(ctx context.Context, parent TelemetrySpan, name string, attributes map[string]string) (context.Context, TelemetrySpan)
 	// RecordAPIRequest reports one model HTTP attempt.
 	RecordAPIRequest(ctx context.Context, record APIRequestRecord)
+	// RecordWebsocketRequest reports one websocket request send.
+	RecordWebsocketRequest(ctx context.Context, record WebsocketRequestRecord)
 }
 
 // Metric names mirror codex-rs/otel/src/metrics/names.rs.
@@ -254,6 +267,24 @@ func (r *ResponsesAgentRunner) recordWebsocketRequest(err error, duration time.D
 	tags := map[string]string{"success": strconv.FormatBool(err == nil)}
 	r.Metrics.Counter(websocketRequestCountMetric, 1, tags)
 	r.Metrics.RecordDuration(websocketRequestDurationMetric, duration, tags)
+}
+
+// recordWebsocketRequestRecord mirrors the record half of
+// SessionTelemetry::record_websocket_request (the metric half stays in
+// recordWebsocketRequest).
+func (r *ResponsesAgentRunner) recordWebsocketRequestRecord(ctx context.Context, err error, duration time.Duration, connectionReused bool) {
+	if r == nil || r.Telemetry == nil {
+		return
+	}
+	record := WebsocketRequestRecord{Duration: duration, ConnectionReused: connectionReused}
+	if err != nil {
+		record.ErrorMessage = err.Error()
+	}
+	if r.AgentIdentityTelemetry != nil {
+		record.AgentID = r.AgentIdentityTelemetry.AgentID
+		record.TaskID = r.AgentIdentityTelemetry.TaskID
+	}
+	r.Telemetry.RecordWebsocketRequest(ctx, record)
 }
 
 // recordResponsesTimingMetrics mirrors

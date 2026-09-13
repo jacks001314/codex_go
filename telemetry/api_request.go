@@ -11,6 +11,45 @@ import (
 // half is recorded by the model client (which cannot import this package); the
 // diagnostic record is emitted here from the client's per-attempt values.
 
+// RecordWebsocketRequest emits the diagnostic records for one websocket request
+// send (Rust's SessionTelemetry::record_websocket_request): the duration and
+// outcome, the auth environment, whether the connection was reused, and the
+// agent identity. The metric half lives in the model client.
+func (t *SessionTelemetry) RecordWebsocketRequest(ctx context.Context, record model.WebsocketRequestRecord) {
+	if t == nil || t.Logs == nil {
+		return
+	}
+	authEnv := t.Metadata.AuthEnv
+	fields := map[string]string{
+		"duration_ms":                                 strconv.FormatInt(record.Duration.Milliseconds(), 10),
+		"success":                                     strconv.FormatBool(record.ErrorMessage == ""),
+		"auth.connection_reused":                      strconv.FormatBool(record.ConnectionReused),
+		"auth.env_openai_api_key_present":             strconv.FormatBool(authEnv.OpenAIAPIKeyEnvPresent),
+		"auth.env_codex_api_key_present":              strconv.FormatBool(authEnv.CodexAPIKeyEnvPresent),
+		"auth.env_codex_api_key_enabled":              strconv.FormatBool(authEnv.CodexAPIKeyEnvEnabled),
+		"auth.env_refresh_token_url_override_present": strconv.FormatBool(authEnv.RefreshTokenURLOverridePresent),
+	}
+	if record.ErrorMessage != "" {
+		fields["error.message"] = record.ErrorMessage
+	}
+	for _, optional := range []struct {
+		key   string
+		value string
+	}{
+		{"auth.env_provider_key_name", authEnv.ProviderEnvKeyName},
+		{"auth.agent_id", record.AgentID},
+		{"auth.task_id", record.TaskID},
+	} {
+		if optional.value != "" {
+			fields[optional.key] = optional.value
+		}
+	}
+	if authEnv.ProviderEnvKeyPresent != nil {
+		fields["auth.env_provider_key_present"] = strconv.FormatBool(*authEnv.ProviderEnvKeyPresent)
+	}
+	t.LogAndTraceEvent(ctx, "codex.websocket_request", fields, nil, nil)
+}
+
 // RecordAPIRequest emits the diagnostic records for one model HTTP attempt: the
 // event fields plus the session identity and the auth environment on both the
 // log record and the span event, exactly as Rust's log_and_trace_event! does.

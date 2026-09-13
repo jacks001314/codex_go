@@ -2295,6 +2295,58 @@ func TestResponsesAgentRunnerRefreshesCommandAuthAfterUnauthorized(t *testing.T)
 	}
 }
 
+// Each websocket request send reports its record: the duration and outcome, and
+// whether the request reused an existing connection (Rust's
+// SessionTelemetry::record_websocket_request with the session's connection_reused).
+func TestResponsesAgentRunnerRecordsWebsocketRequestsLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		for index := 1; index <= 2; index++ {
+			if _, _, err := conn.Read(request.Context()); err != nil {
+				return
+			}
+			response := fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp-%d","output":[{"id":"msg-%d","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok-%d"}]}]}}`, index, index, index)
+			if err := conn.Write(request.Context(), websocket.MessageText, []byte(response)); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	sink := &recordingTelemetrySink{}
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+	runner.Telemetry = sink
+	runner.AgentIdentityTelemetry = &codexapi.AgentIdentityTelemetry{AgentID: "agent-1", TaskID: "task-1"}
+	for index := 1; index <= 2; index++ {
+		response, err := runner.RunWebSocket(context.Background(), &AgentRequest{
+			// The websocket session is keyed by thread and turn, so both requests
+			// share one connection.
+			Model: "gpt-test", Prompt: "hello", ThreadID: "thread-1", TurnID: "turn-1",
+		})
+		if err != nil || response == nil {
+			t.Fatalf("request %d response=%#v err=%v", index, response, err)
+		}
+	}
+	if len(sink.websocketRequests) != 2 {
+		t.Fatalf("records = %#v", sink.websocketRequests)
+	}
+	first := sink.websocketRequests[0]
+	if first.ErrorMessage != "" || first.ConnectionReused {
+		t.Fatalf("first record = %#v", first)
+	}
+	if first.AgentID != "agent-1" || first.TaskID != "task-1" {
+		t.Fatalf("first record = %#v", first)
+	}
+	second := sink.websocketRequests[1]
+	if !second.ConnectionReused || second.ErrorMessage != "" {
+		t.Fatalf("second record = %#v", second)
+	}
+}
+
 // Every HTTP attempt reports its api-request record: the attempt number, the
 // status, the provider-relative endpoint, the auth header the provider attached,
 // the response's request id / cf-ray / auth-error headers, and whether the
