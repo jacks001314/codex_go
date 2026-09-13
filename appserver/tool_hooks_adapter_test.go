@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"codex_go/config"
+	"codex_go/state"
 	"codex_go/tool"
 	"codex_go/turn"
 )
@@ -359,5 +360,103 @@ func TestApplyPatchApprovalRunsPermissionRequestHooksLikeRust(t *testing.T) {
 	toolInput, _ := input["tool_input"].(map[string]any)
 	if toolInput["command"] != "*** Begin Patch\n*** End Patch\n" {
 		t.Fatalf("permission request tool_input = %#v", input["tool_input"])
+	}
+}
+
+// fakeGuardianReviewer records the actions an approval path submits for review
+// and returns a canned verdict.
+type fakeGuardianReviewer struct {
+	decision state.ReviewDecision
+	reason   string
+	err      error
+	actions  []state.Action
+}
+
+func (f *fakeGuardianReviewer) Review(ctx context.Context, threadID string, turnID string, targetItemID string, action state.Action) (state.ReviewDecision, string, error) {
+	f.actions = append(f.actions, action)
+	return f.decision, f.reason, f.err
+}
+
+// Rust Session::request_approval: an auto-review turn routes command and patch
+// approvals through the Guardian review instead of the user approval request.
+func TestAutoReviewApprovalsRouteThroughGuardianLikeRust(t *testing.T) {
+	newRouter := func(t *testing.T, reviewer GuardianReviewer) *RuntimeRouter {
+		t.Helper()
+		home := t.TempDir()
+		cwd := t.TempDir()
+		configBody := "model = \"gpt-5.4\"\napprovals_reviewer = \"auto_review\"\n"
+		if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+			t.Fatalf("WriteFile config error = %v", err)
+		}
+		router := NewRuntimeRouter(RuntimeServices{
+			DefaultCWD:       cwd,
+			Config:           config.NewConfigService(home),
+			GuardianReviewer: reviewer,
+		})
+		params := &turn.TurnStartParams{ThreadID: "thread-1", CWD: cwd, Model: "gpt-5.4"}
+		if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, params); err != nil {
+			t.Fatalf("RegisterTurn() error = %v", err)
+		}
+		return router
+	}
+	shellRequest := func(t *testing.T) *tool.ShellApprovalRequest {
+		t.Helper()
+		return &tool.ShellApprovalRequest{
+			Request:    &tool.ShellRequest{HookCommand: "rm -rf build", CWD: t.TempDir(), Justification: "clean the build"},
+			Invocation: &tool.Invocation{CallID: "call-1"},
+		}
+	}
+
+	approved := &fakeGuardianReviewer{decision: state.DecisionApproved}
+	decision, err := newRouter(t, approved).shellApprovalForTurn("thread-1", "turn-1", false)(context.Background(), shellRequest(t))
+	if err != nil {
+		t.Fatalf("shell approval error = %v", err)
+	}
+	if !decision.Approved {
+		t.Fatalf("guardian approval = %#v", decision)
+	}
+	if len(approved.actions) != 1 {
+		t.Fatalf("guardian actions = %#v", approved.actions)
+	}
+	action := approved.actions[0]
+	if action.Type != "command" || action.Command != "rm -rf build" || action.Reason != "clean the build" || action.Source != state.CommandSourceShell {
+		t.Fatalf("guardian command action = %#v", action)
+	}
+
+	denied := &fakeGuardianReviewer{decision: state.DecisionDenied, reason: "too destructive"}
+	decision, err = newRouter(t, denied).shellApprovalForTurn("thread-1", "turn-1", false)(context.Background(), shellRequest(t))
+	if err != nil {
+		t.Fatalf("shell approval error = %v", err)
+	}
+	if decision.Approved || decision.DenyReason != "too destructive" {
+		t.Fatalf("guardian denial = %#v", decision)
+	}
+
+	aborted := &fakeGuardianReviewer{decision: state.DecisionAborted, reason: "turn aborted"}
+	if _, err := newRouter(t, aborted).shellApprovalForTurn("thread-1", "turn-1", false)(context.Background(), shellRequest(t)); err == nil ||
+		!strings.Contains(err.Error(), "turn aborted") {
+		t.Fatalf("guardian abort error = %v", err)
+	}
+
+	patchReviewer := &fakeGuardianReviewer{decision: state.DecisionApproved}
+	patchDecision, err := newRouter(t, patchReviewer).applyPatchApprovalForTurn("thread-1", "turn-1")(context.Background(), &tool.ApplyPatchApprovalRequest{
+		Patch:      "*** Begin Patch\n*** End Patch\n",
+		CWD:        t.TempDir(),
+		Changes:    []map[string]any{{"path": "src/main.go"}},
+		Invocation: &tool.Invocation{CallID: "call-2"},
+	})
+	if err != nil {
+		t.Fatalf("patch approval error = %v", err)
+	}
+	if !patchDecision.Approved {
+		t.Fatalf("guardian patch approval = %#v", patchDecision)
+	}
+	if len(patchReviewer.actions) != 1 {
+		t.Fatalf("guardian patch actions = %#v", patchReviewer.actions)
+	}
+	patchAction := patchReviewer.actions[0]
+	if patchAction.Type != "apply_patch" || patchAction.Patch != "*** Begin Patch\n*** End Patch\n" ||
+		len(patchAction.Files) != 1 || patchAction.Files[0] != "src/main.go" {
+		t.Fatalf("guardian patch action = %#v", patchAction)
 	}
 }

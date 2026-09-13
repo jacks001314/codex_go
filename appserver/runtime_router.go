@@ -13641,6 +13641,18 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 				return tool.ShellApprovalDecision{DenyReason: reason}, nil
 			}
 		}
+		// Rust Session::request_approval: an auto-review turn routes the command
+		// through the Guardian review, which replaces the user approval request.
+		if reviewer := r.approvalsReviewerForTurn(threadID, turnID); reviewer.RoutesToGuardian() {
+			outcome := r.reviewApprovalWithGuardian(ctx, threadID, turnID, itemID, commandApprovalAction(request.Request))
+			if outcome.Abort {
+				return tool.ShellApprovalDecision{}, fmt.Errorf("%s", outcome.DenyReason)
+			}
+			if outcome.Approved {
+				return tool.ShellApprovalDecision{Approved: true}, nil
+			}
+			return tool.ShellApprovalDecision{DenyReason: outcome.DenyReason}, nil
+		}
 		// Rust e734a1a5c1: cyber-specialized models and models listed in
 		// auto_review.ignore_rules get one-time decisions without proposing reusable
 		// exec-policy amendments.
@@ -13717,6 +13729,18 @@ func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string
 				}
 				return tool.ApplyPatchApprovalDecision{DenyReason: reason}, nil
 			}
+		}
+		// Rust Session::request_approval: an auto-review turn routes the patch
+		// through the Guardian review, which replaces the user approval request.
+		if reviewer := r.approvalsReviewerForTurn(threadID, turnID); reviewer.RoutesToGuardian() {
+			outcome := r.reviewApprovalWithGuardian(ctx, threadID, turnID, itemID, applyPatchApprovalAction(request))
+			if outcome.Abort {
+				return tool.ApplyPatchApprovalDecision{}, fmt.Errorf("%s", outcome.DenyReason)
+			}
+			if outcome.Approved {
+				return tool.ApplyPatchApprovalDecision{Approved: true}, nil
+			}
+			return tool.ApplyPatchApprovalDecision{DenyReason: outcome.DenyReason}, nil
 		}
 		params := &FileChangeRequestApprovalParams{
 			ThreadID:    strings.TrimSpace(threadID),
@@ -14628,6 +14652,118 @@ func requireSingleCurrentTimeConnection(connectionIDs []string) (string, error) 
 		return connectionIDs[0], nil
 	}
 	return "", fmt.Errorf("expected exactly one client subscribed to the thread, found %d", len(connectionIDs))
+}
+
+// approvalsReviewerForTurn resolves the turn's approvals reviewer, which routes
+// approvals either to the Guardian review or to the user
+// (Rust ApprovalsReviewer / routes_approval_policy_to_guardian).
+func (r *RuntimeRouter) approvalsReviewerForTurn(threadID string, turnID string) state.Reviewer {
+	if r == nil {
+		return state.ReviewerUser
+	}
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil {
+		return state.ReviewerUser
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil {
+		return state.ReviewerUser
+	}
+	return state.ReviewerFromString(turnApprovalsReviewerForTurn(cfg, active.Params))
+}
+
+// guardianApprovalOutcome is the Guardian review's verdict for one approval
+// (Rust request_reviewer_approval's ReviewDecision handling).
+type guardianApprovalOutcome struct {
+	Approved   bool
+	DenyReason string
+	Abort      bool
+}
+
+// reviewApprovalWithGuardian runs the turn's automatic approval review for one
+// approval action. An unavailable reviewer or a failed review denies the action
+// with its reason; an aborted review (a cancelled turn) is reported so the
+// caller can refuse the action without a user prompt.
+func (r *RuntimeRouter) reviewApprovalWithGuardian(ctx context.Context, threadID string, turnID string, itemID string, action state.Action) guardianApprovalOutcome {
+	if r == nil {
+		return guardianApprovalOutcome{DenyReason: "Auto-approval review is unavailable; the request was denied."}
+	}
+	reviewer := r.services.GuardianReviewer
+	if reviewer == nil && r.services.Agent != nil {
+		reviewer = r.ensureGuardianReviewer(r.services.Agent)
+	}
+	if reviewer == nil {
+		return guardianApprovalOutcome{DenyReason: "Auto-approval review is unavailable; the request was denied."}
+	}
+	decision, reason, err := reviewer.Review(ctx, strings.TrimSpace(threadID), strings.TrimSpace(turnID), strings.TrimSpace(itemID), action)
+	reason = strings.TrimSpace(reason)
+	if err != nil {
+		if reason == "" {
+			reason = strings.TrimSpace(err.Error())
+		}
+		if reason == "" {
+			reason = "Auto-approval review failed; the request was denied."
+		}
+		return guardianApprovalOutcome{DenyReason: reason}
+	}
+	switch decision {
+	case state.DecisionApproved:
+		return guardianApprovalOutcome{Approved: true}
+	case state.DecisionAborted:
+		abortReason := reason
+		if abortReason == "" {
+			abortReason = "automatic approval review was cancelled"
+		}
+		return guardianApprovalOutcome{Abort: true, DenyReason: abortReason}
+	default:
+		if reason == "" {
+			reason = "Auto-approval review denied the request."
+		}
+		return guardianApprovalOutcome{DenyReason: reason}
+	}
+}
+
+// commandApprovalAction mirrors Rust's GuardianApprovalRequest::ExecCommand for
+// the command-review prompt.
+func commandApprovalAction(request *tool.ShellRequest) state.Action {
+	action := state.Action{Type: "command", Source: state.CommandSourceShell}
+	if request != nil {
+		action.Command = strings.TrimSpace(request.HookCommand)
+		action.CWD = strings.TrimSpace(request.CWD)
+		action.Reason = strings.TrimSpace(request.Justification)
+		if strings.TrimSpace(action.Command) == "" && len(request.Command) > 0 {
+			action.Command = strings.Join(request.Command, " ")
+		}
+	}
+	if request != nil && (request.UnifiedExecEventSink != nil || strings.TrimSpace(request.UnifiedExecTurnID) != "") {
+		// The unified-exec runtime raises the same approval with its event sink
+		// attached, which is what the guardian metric tag maps to
+		// state.CommandSourceUnifiedExec.
+		action.Source = state.CommandSourceUnifiedExec
+	}
+	return action
+}
+
+// applyPatchApprovalAction mirrors Rust's GuardianApprovalRequest::ApplyPatch.
+func applyPatchApprovalAction(request *tool.ApplyPatchApprovalRequest) state.Action {
+	action := state.Action{Type: "apply_patch"}
+	if request == nil {
+		return action
+	}
+	action.CWD = strings.TrimSpace(request.CWD)
+	action.Patch = request.Patch
+	files := make([]string, 0, len(request.Changes))
+	for _, change := range request.Changes {
+		if path, ok := change["path"].(string); ok && strings.TrimSpace(path) != "" {
+			files = append(files, strings.TrimSpace(path))
+			continue
+		}
+		if path, ok := change["Path"].(string); ok && strings.TrimSpace(path) != "" {
+			files = append(files, strings.TrimSpace(path))
+		}
+	}
+	action.Files = files
+	return action
 }
 
 // permissionRequestHookVerdict runs the turn's PermissionRequest hooks for one

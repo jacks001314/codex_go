@@ -91,13 +91,16 @@ const (
 )
 
 type Action struct {
-	Type          string         `json:"type"`
-	Source        CommandSource  `json:"source,omitempty"`
-	Command       string         `json:"command,omitempty"`
-	Program       string         `json:"program,omitempty"`
-	Argv          []string       `json:"argv,omitempty"`
-	CWD           string         `json:"cwd,omitempty"`
-	Files         []string       `json:"files,omitempty"`
+	Type    string        `json:"type"`
+	Source  CommandSource `json:"source,omitempty"`
+	Command string        `json:"command,omitempty"`
+	Program string        `json:"program,omitempty"`
+	Argv    []string      `json:"argv,omitempty"`
+	CWD     string        `json:"cwd,omitempty"`
+	Files   []string      `json:"files,omitempty"`
+	// Patch is the raw apply_patch body an apply_patch action carries (Rust
+	// GuardianApprovalRequest::ApplyPatch).
+	Patch         string         `json:"patch,omitempty"`
 	Target        string         `json:"target,omitempty"`
 	Host          string         `json:"host,omitempty"`
 	Protocol      string         `json:"protocol,omitempty"`
