@@ -71,41 +71,29 @@ func NewSessionTelemetry(metadata SessionTelemetryMetadata) *SessionTelemetry {
 	return &SessionTelemetry{Metadata: metadata}
 }
 
-// TelemetryEvent mirrors the shape of Rust's log_and_trace_event! invocation:
-// the fields both records carry, plus the fields only one of them carries.
-type TelemetryEvent struct {
-	// Name is Rust's event.name.
-	Name string
-	// Fields are recorded on the log record and the span event.
-	Fields map[string]string
-	// LogOnly fields are recorded on the log record only.
-	LogOnly map[string]string
-	// TraceOnly fields are recorded on the span event only.
-	TraceOnly map[string]string
-}
-
 // LogAndTraceEvent emits Rust's log_and_trace_event!: the diagnostic record to
 // the logs pipeline and the trace-safe event to the span in ctx, when there is
 // one.
-func (t *SessionTelemetry) LogAndTraceEvent(ctx context.Context, event TelemetryEvent) {
-	t.LogEvent(ctx, event)
-	t.TraceEvent(ctx, event)
+func (t *SessionTelemetry) LogAndTraceEvent(ctx context.Context, eventName string, fields map[string]string, logOnly map[string]string, traceOnly map[string]string) {
+	t.LogEvent(ctx, eventName, fields, logOnly)
+	t.TraceEvent(ctx, eventName, fields, traceOnly)
 }
 
 // LogEvent emits Rust's log_event!: a `codex_otel.log_only` record carrying the
 // event fields plus the session identity. The record has no message body, as
 // Rust's events do not set a `message` field.
-func (t *SessionTelemetry) LogEvent(ctx context.Context, event TelemetryEvent) {
+func (t *SessionTelemetry) LogEvent(ctx context.Context, eventName string, fields map[string]string, logOnly map[string]string) {
 	if t == nil || t.Logs == nil {
 		return
 	}
-	fields := map[string]string{"event.name": event.Name}
-	t.addLogMetadata(fields)
-	for key, value := range event.Fields {
-		fields[key] = value
+	record := make(map[string]string, 12+len(fields)+len(logOnly))
+	record["event.name"] = eventName
+	t.addLogMetadata(record)
+	for key, value := range fields {
+		record[key] = value
 	}
-	for key, value := range event.LogOnly {
-		fields[key] = value
+	for key, value := range logOnly {
+		record[key] = value
 	}
 	t.Logs.Emit(OTLPLogRecord{
 		TimeUnixNano:   timeUnixNanoString(t.now()),
@@ -113,13 +101,13 @@ func (t *SessionTelemetry) LogEvent(ctx context.Context, event TelemetryEvent) {
 		SeverityText:   "INFO",
 		// Rust's events carry no `message` field, so the record has no body.
 		Target:     OtelLogOnlyTarget,
-		Attributes: sortedMetricTags(fields),
+		Attributes: sortedMetricTags(record),
 	})
 }
 
 // TraceEvent records the trace-safe half on the span carried in ctx. Without an
 // enclosing span the record is dropped, mirroring Rust's tracing layer.
-func (t *SessionTelemetry) TraceEvent(ctx context.Context, event TelemetryEvent) {
+func (t *SessionTelemetry) TraceEvent(ctx context.Context, eventName string, fields map[string]string, traceOnly map[string]string) {
 	if t == nil {
 		return
 	}
@@ -130,16 +118,16 @@ func (t *SessionTelemetry) TraceEvent(ctx context.Context, event TelemetryEvent)
 	attributes := map[string]string{
 		"level":      "INFO",
 		"target":     OtelTraceSafeTarget,
-		"event.name": event.Name,
+		"event.name": eventName,
 	}
 	t.addTraceMetadata(attributes)
-	for key, value := range event.Fields {
+	for key, value := range fields {
 		attributes[key] = value
 	}
-	for key, value := range event.TraceOnly {
+	for key, value := range traceOnly {
 		attributes[key] = value
 	}
-	span.AddEvent(event.Name, attributes, t.now())
+	span.AddEvent(eventName, attributes, t.now())
 }
 
 // addLogMetadata adds the common fields Rust's log_event! prepends.

@@ -444,7 +444,19 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	// Rust's SessionTelemetry records codex.api_request from the client's request
 	// telemetry; the turn metrics sink is the app-server's session metrics sink.
 	agent.Metrics = r.services.TurnMetrics
+	// The same session telemetry feeds the client's diagnostic records (Rust's
+	// log_event!/trace_event! macros) for the conversation this turn belongs to.
+	r.installSessionTelemetry(agent, params.ThreadID)
 	return agent, nil
+}
+
+// installSessionTelemetry binds the session telemetry the model runner reports
+// its diagnostic records to (the sink half of Rust's SessionTelemetry).
+func (r *RuntimeRouter) installSessionTelemetry(agent *model.ResponsesAgentRunner, threadID string) {
+	if r == nil || agent == nil {
+		return
+	}
+	agent.Telemetry = r.sessionTelemetryForThread(threadID)
 }
 
 func managedResidencyForConfig(cfg *config.Config) string {

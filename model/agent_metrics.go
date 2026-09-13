@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -18,6 +19,17 @@ import (
 type MetricsSink interface {
 	Counter(name string, inc int, tags map[string]string)
 	RecordDuration(name string, duration time.Duration, tags map[string]string)
+}
+
+// SessionTelemetrySink receives the diagnostic records for the model client's
+// events: Rust's log_event! / trace_event! macros, whose session metadata the
+// sink owns. The model package cannot import codex_go/telemetry (telemetry
+// reaches back here), so the sink is declared locally and telemetry's
+// SessionTelemetry satisfies it.
+type SessionTelemetrySink interface {
+	LogEvent(ctx context.Context, eventName string, fields map[string]string, logOnly map[string]string)
+	TraceEvent(ctx context.Context, eventName string, fields map[string]string, traceOnly map[string]string)
+	LogAndTraceEvent(ctx context.Context, eventName string, fields map[string]string, logOnly map[string]string, traceOnly map[string]string)
 }
 
 // Metric names mirror codex-rs/otel/src/metrics/names.rs.
@@ -65,19 +77,67 @@ func (r *ResponsesAgentRunner) recordAPIRequest(status int, err error, duration 
 	r.Metrics.RecordDuration(apiCallDurationMetric, duration, tags)
 }
 
-// recordSSEEvent mirrors SessionTelemetry's sse_event/sse_event_failed metric
-// half: one counter and one millisecond duration histogram per processed SSE
-// event, tagged by the event kind and success.
-func recordSSEEvent(metrics MetricsSink, kind string, success bool, duration time.Duration) {
-	if metrics == nil {
-		return
-	}
+// sseEventTelemetry describes one processed SSE event for the telemetry sinks.
+type sseEventTelemetry struct {
+	// Kind is the event kind; KindKnown reports whether the event name was
+	// available (Rust's `Option<&String>`).
+	Kind      string
+	KindKnown bool
+	Success   bool
+	Duration  time.Duration
+	Err       error
+}
+
+// recordSSEEvent mirrors SessionTelemetry's sse_event/sse_event_failed: one
+// counter and one millisecond duration histogram tagged by the event kind and
+// success, plus the diagnostic records - a successful event logs only, a failed
+// event logs and records a trace-safe event carrying the error message.
+func recordSSEEvent(metrics MetricsSink, sink SessionTelemetrySink, ctx context.Context, event sseEventTelemetry) {
+	kind := event.Kind
 	if kind == "" {
 		kind = sseUnknownKind
 	}
-	tags := map[string]string{"kind": kind, "success": strconv.FormatBool(success)}
-	metrics.Counter(sseEventCountMetric, 1, tags)
-	metrics.RecordDuration(sseEventDurationMetric, duration, tags)
+	if metrics != nil {
+		tags := map[string]string{"kind": kind, "success": strconv.FormatBool(event.Success)}
+		metrics.Counter(sseEventCountMetric, 1, tags)
+		metrics.RecordDuration(sseEventDurationMetric, event.Duration, tags)
+	}
+	if sink == nil {
+		return
+	}
+	fields := map[string]string{"duration_ms": strconv.FormatInt(event.Duration.Milliseconds(), 10)}
+	errorMessage := ""
+	if event.Err != nil {
+		errorMessage = event.Err.Error()
+		fields["error.message"] = errorMessage
+	}
+	if event.Success {
+		sink.LogEvent(ctx, sseEventName, sseEventKindField(kind, event.KindKnown, fields), nil)
+		return
+	}
+	sink.LogEvent(ctx, sseEventName, sseEventKindField(kind, event.KindKnown, fields), nil)
+	traceFields := map[string]string{"duration_ms": fields["duration_ms"]}
+	traceFields["event.kind"] = kind
+	if errorMessage != "" {
+		traceFields["error.message"] = errorMessage
+	}
+	sink.TraceEvent(ctx, sseEventName, traceFields, nil)
+}
+
+// sseEventName is the `event.name` of Rust's SSE diagnostic records.
+const sseEventName = "codex.sse_event"
+
+// sseEventKindField adds the event kind unless the event never carried a name
+// (Rust records nothing for an absent Option).
+func sseEventKindField(kind string, known bool, fields map[string]string) map[string]string {
+	merged := make(map[string]string, len(fields)+1)
+	for key, value := range fields {
+		merged[key] = value
+	}
+	if known {
+		merged["event.kind"] = kind
+	}
+	return merged
 }
 
 // sseEventKind resolves the kind tag: the SSE event name, else the JSON type,

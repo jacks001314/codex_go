@@ -346,7 +346,7 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 	r.rememberTurnStateFromHeaders(request, httpResponse.Header)
 	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
 	emitResponsesHeaderEvents(handler, httpResponse.Header)
-	response, err := parseResponsesStreamWithMetrics(ctx, newIdleTimeoutReader(httpResponse.Body, r.streamIdleTimeout()), request, r.ProviderID, handler, r.Metrics)
+	response, err := parseResponsesStreamWithMetrics(ctx, newIdleTimeoutReader(httpResponse.Body, r.streamIdleTimeout()), request, r.ProviderID, handler, r.Metrics, r.Telemetry)
 	if err != nil {
 		return nil, err
 	}
@@ -395,13 +395,13 @@ func combinedResponsesStreamHandler(handlers ...ResponsesStreamHandler) Response
 }
 
 func parseResponsesStream(ctx context.Context, reader io.Reader, request *AgentRequest, providerID string, handler ResponsesStreamHandler) (*AgentResponse, error) {
-	return parseResponsesStreamWithMetrics(ctx, reader, request, providerID, handler, nil)
+	return parseResponsesStreamWithMetrics(ctx, reader, request, providerID, handler, nil, nil)
 }
 
 // parseResponsesStreamWithMetrics mirrors parseResponsesStream and also records
-// the per-event codex.sse_event metrics (Rust's SessionTelemetry::log_sse_event
-// with the watcher's per-event duration).
-func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, request *AgentRequest, providerID string, handler ResponsesStreamHandler, metrics MetricsSink) (*AgentResponse, error) {
+// the per-event codex.sse_event metrics and diagnostic records (Rust's
+// SessionTelemetry::log_sse_event with the watcher's per-event duration).
+func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, request *AgentRequest, providerID string, handler ResponsesStreamHandler, metrics MetricsSink, telemetrySink SessionTelemetrySink) (*AgentResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -422,11 +422,21 @@ func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, requ
 			}
 			// Rust's failed branch reports the unknown kind when the event never
 			// parsed (including the idle timeout).
-			recordSSEEvent(metrics, sseUnknownKind, false, time.Since(eventStartedAt))
+			recordSSEEvent(metrics, telemetrySink, ctx, sseEventTelemetry{
+				Kind:     sseUnknownKind,
+				Duration: time.Since(eventStartedAt),
+				Err:      err,
+			})
 			return nil, err
 		}
 		done, err := accumulator.apply(sse, handler)
-		recordSSEEvent(metrics, sseEventKind(sse), err == nil, time.Since(eventStartedAt))
+		recordSSEEvent(metrics, telemetrySink, ctx, sseEventTelemetry{
+			Kind:      sseEventKind(sse),
+			KindKnown: strings.TrimSpace(sse.Event) != "",
+			Success:   err == nil,
+			Duration:  time.Since(eventStartedAt),
+			Err:       err,
+		})
 		if err != nil {
 			return nil, err
 		}

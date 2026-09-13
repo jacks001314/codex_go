@@ -184,6 +184,10 @@ type ResponsesAgentRunner struct {
 	// Metrics receives the per-attempt API request metrics when the app layer
 	// installs a sink (Rust's SessionTelemetry).
 	Metrics MetricsSink
+	// Telemetry receives the diagnostic records for the client's events (the
+	// log-only and trace-safe halves of Rust's SessionTelemetry) when the app
+	// layer installs a sink.
+	Telemetry SessionTelemetrySink
 }
 
 type responsesTurnStateCache struct {

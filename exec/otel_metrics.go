@@ -63,6 +63,23 @@ func (r *Runner) otelMetricsSink() *telemetry.MetricsClient {
 	return r.otelProvider.Metrics()
 }
 
+// sessionTelemetryForRun builds the run's session telemetry: the metadata the
+// run knows (conversation identity, model, originator) with the provider's log
+// client bound to the diagnostic records.
+func (r *Runner) sessionTelemetryForRun() *telemetry.SessionTelemetry {
+	if r == nil || r.otelProvider == nil {
+		return nil
+	}
+	session := telemetry.NewSessionTelemetry(telemetry.SessionTelemetryMetadata{
+		AppVersion: doctor.Version(),
+		Originator: strings.TrimSpace(r.otelOriginator),
+	})
+	if client := r.otelProvider.Logs(); client != nil {
+		session.Logs = client
+	}
+	return session
+}
+
 // shutdownOtelProvider flushes and stops the run's provider.
 func (r *Runner) shutdownOtelProvider(ctx context.Context) {
 	if r == nil {

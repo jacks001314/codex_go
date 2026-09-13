@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/state"
 	"codex_go/telemetry"
 	"codex_go/tool"
@@ -186,6 +187,36 @@ func TestSessionTelemetryMetadataForThread(t *testing.T) {
 	}
 	if metadata.Slug != metadata.Model {
 		t.Fatalf("slug = %q model = %q", metadata.Slug, metadata.Model)
+	}
+}
+
+// The app-server binds the session telemetry to the model runner it builds, and
+// the sink carries the provider's logs client so the client's records reach the
+// log pipeline.
+func TestInstallSessionTelemetryBindsTheLogsClient(t *testing.T) {
+	home := t.TempDir()
+	configToml := "[otel.exporter.otlp-http]\nendpoint = \"http://127.0.0.1:1/v1/logs\"\nprotocol = \"json\"\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configToml), 0o600); err != nil {
+		t.Fatalf("WriteFile config.toml error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	router.configureOtelMetrics(home, nil, state.NewTaskMetrics())
+	defer router.Close()
+
+	agent := &model.ResponsesAgentRunner{}
+	router.installSessionTelemetry(agent, "thread-1")
+	if agent.Telemetry == nil {
+		t.Fatal("the model runner has no session telemetry sink")
+	}
+	session, ok := agent.Telemetry.(*telemetry.SessionTelemetry)
+	if !ok {
+		t.Fatalf("sink = %T", agent.Telemetry)
+	}
+	if session.Logs == nil {
+		t.Fatal("the session telemetry has no logs client")
+	}
+	if session.Metadata.ConversationID != "thread-1" {
+		t.Fatalf("metadata = %#v", session.Metadata)
 	}
 }
 

@@ -149,6 +149,7 @@ func TestParseResponsesStreamRecordsSSEEventsLikeRust(t *testing.T) {
 		"openai",
 		nil,
 		sink,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("parseResponsesStreamWithMetrics() error = %v", err)
@@ -179,7 +180,7 @@ func TestParseResponsesStreamRecordsFailedSSEEventLikeRust(t *testing.T) {
 		err:  errors.New("connection reset"),
 	}
 	_, err := parseResponsesStreamWithMetrics(
-		context.Background(), reader, &AgentRequest{Prompt: "hello", Model: "gpt-test"}, "openai", nil, sink)
+		context.Background(), reader, &AgentRequest{Prompt: "hello", Model: "gpt-test"}, "openai", nil, sink, nil)
 	if err == nil {
 		t.Fatal("parseResponsesStreamWithMetrics() error = nil")
 	}
@@ -212,7 +213,7 @@ func TestSSEEventKindFallbackLikeRust(t *testing.T) {
 			t.Fatalf("%s: kind = %q, want %q", testCase.name, got, testCase.want)
 		}
 	}
-	recordSSEEvent(nil, "response.created", true, time.Second)
+	recordSSEEvent(nil, nil, context.Background(), sseEventTelemetry{Kind: "response.created", KindKnown: true, Success: true, Duration: time.Second})
 }
 
 // errorAfterReader serves its data and then fails, so the SSE parser surfaces a
@@ -366,4 +367,93 @@ func TestRecordResponsesTimingMetricsSkipsAbsentFields(t *testing.T) {
 	if milliseconds, ok := timingMetricMilliseconds(payload, "engine_service_total_ms"); !ok || milliseconds != 5 {
 		t.Fatalf("json.Number milliseconds = %v ok = %v", milliseconds, ok)
 	}
+}
+
+// The SSE loop emits Rust's diagnostic records beside the metrics: a successful
+// event logs `codex.sse_event` with its kind and duration, and a failure logs
+// the record and records a trace-safe event (with the unknown kind when the
+// event never parsed).
+func TestParseResponsesStreamRecordsSSEDiagnosticsLikeRust(t *testing.T) {
+	sink := &recordingTelemetrySink{}
+	_, err := parseResponsesStreamWithMetrics(
+		context.Background(),
+		strings.NewReader(responsesSSE(`{"type":"response.created","response":{"id":"resp-1"}}`)),
+		&AgentRequest{Prompt: "hello", Model: "gpt-test"},
+		"openai",
+		nil,
+		nil,
+		sink,
+	)
+	if err != nil && err.Error() != "stream closed before response.completed" {
+		t.Fatalf("parseResponsesStreamWithMetrics() error = %v", err)
+	}
+	if len(sink.logged) != 1 {
+		t.Fatalf("records = %#v", sink.logged)
+	}
+	record := sink.logged[0]
+	if record.name != "codex.sse_event" || record.fields["event.kind"] != "response.created" {
+		t.Fatalf("record = %#v", record)
+	}
+	if _, ok := record.fields["duration_ms"]; !ok {
+		t.Fatalf("record = %#v", record)
+	}
+	if len(sink.traced) != 0 {
+		t.Fatalf("a successful event must not record a trace event: %#v", sink.traced)
+	}
+
+	failed := &recordingTelemetrySink{}
+	_, err = parseResponsesStreamWithMetrics(
+		context.Background(),
+		&errorAfterReader{
+			data: responsesSSE(`{"type":"response.created","response":{"id":"resp-1"}}`),
+			err:  errors.New("connection reset"),
+		},
+		&AgentRequest{Prompt: "hello", Model: "gpt-test"},
+		"openai",
+		nil,
+		nil,
+		failed,
+	)
+	if err == nil {
+		t.Fatal("parseResponsesStreamWithMetrics() error = nil")
+	}
+	if len(failed.logged) != 2 || len(failed.traced) != 1 {
+		t.Fatalf("records = %#v traced = %#v", failed.logged, failed.traced)
+	}
+	failure := failed.logged[1]
+	if _, ok := failure.fields["event.kind"]; ok {
+		t.Fatalf("an unparsed event must not report a kind: %#v", failure)
+	}
+	if failure.fields["error.message"] != "connection reset" {
+		t.Fatalf("failure record = %#v", failure)
+	}
+	if failed.traced[0].fields["event.kind"] != sseUnknownKind ||
+		failed.traced[0].fields["error.message"] != "connection reset" {
+		t.Fatalf("trace record = %#v", failed.traced[0])
+	}
+}
+
+// recordingTelemetrySink captures the diagnostic records the client emits.
+type recordingTelemetrySink struct {
+	logged []telemetryRecord
+	traced []telemetryRecord
+}
+
+type telemetryRecord struct {
+	name   string
+	fields map[string]string
+	only   map[string]string
+}
+
+func (s *recordingTelemetrySink) LogEvent(_ context.Context, name string, fields map[string]string, logOnly map[string]string) {
+	s.logged = append(s.logged, telemetryRecord{name: name, fields: fields, only: logOnly})
+}
+
+func (s *recordingTelemetrySink) TraceEvent(_ context.Context, name string, fields map[string]string, traceOnly map[string]string) {
+	s.traced = append(s.traced, telemetryRecord{name: name, fields: fields, only: traceOnly})
+}
+
+func (s *recordingTelemetrySink) LogAndTraceEvent(ctx context.Context, name string, fields map[string]string, logOnly map[string]string, traceOnly map[string]string) {
+	s.LogEvent(ctx, name, fields, logOnly)
+	s.TraceEvent(ctx, name, fields, traceOnly)
 }

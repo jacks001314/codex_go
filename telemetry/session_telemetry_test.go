@@ -223,7 +223,7 @@ func TestTraceEventWithoutSpanIsDroppedLikeRust(t *testing.T) {
 		ExportInterval: -1,
 	})
 	telemetry := NewSessionTelemetry(SessionTelemetryMetadata{ConversationID: "thread-1"})
-	telemetry.TraceEvent(context.Background(), TelemetryEvent{Name: "codex.api_request"})
+	telemetry.TraceEvent(context.Background(), "codex.api_request", nil, nil)
 	if err := tracesClient.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
@@ -257,7 +257,7 @@ func TestSessionTelemetryOmitsAbsentIdentityFields(t *testing.T) {
 		TerminalType:   "tty",
 	})
 	telemetry.Logs = logsClient
-	telemetry.LogEvent(context.Background(), TelemetryEvent{Name: "codex.api_request"})
+	telemetry.LogEvent(context.Background(), "codex.api_request", nil, nil)
 	if err := logsClient.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}

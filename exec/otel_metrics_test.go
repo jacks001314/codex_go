@@ -61,6 +61,9 @@ func TestExecOtelProviderInstallsMetricsSinkLikeRust(t *testing.T) {
 	if responsesAgent.Metrics == nil {
 		t.Fatal("the model runner has no metrics sink")
 	}
+	if responsesAgent.Telemetry == nil {
+		t.Fatal("the model runner has no session telemetry sink")
+	}
 
 	responsesAgent.Metrics.Counter("codex.thread.started", 1, nil)
 	runner.shutdownOtelProvider(context.Background())

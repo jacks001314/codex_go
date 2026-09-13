@@ -1571,6 +1571,9 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
 		if sink := r.otelMetricsSink(); sink != nil {
 			agent.Metrics = sink
 		}
+		// The same provider feeds the model client's diagnostic records (Rust's
+		// SessionTelemetry), so its SSE events reach the log and trace pipelines.
+		agent.Telemetry = r.sessionTelemetryForRun()
 		return agent, nil
 	}
 	return model.NewLocalAgentRunner(), nil

@@ -113,9 +113,8 @@ func EmitToolResult(ctx context.Context, telemetry *SessionTelemetry, limits pro
 		namespace = protocol.DefaultFunctionNamespace
 	}
 	preview := TelemetryPreview(event.Output, limits)
-	telemetry.LogAndTraceEvent(ctx, TelemetryEvent{
-		Name: ToolResultEventName,
-		Fields: map[string]string{
+	telemetry.LogAndTraceEvent(ctx, ToolResultEventName,
+		map[string]string{
 			"tool_result_seq":  strconv.FormatUint(nextToolResultSequence(), 10),
 			"tool_name":        event.ToolName,
 			"tool_namespace":   namespace,
@@ -124,21 +123,20 @@ func EmitToolResult(ctx context.Context, telemetry *SessionTelemetry, limits pro
 			"success":          strconv.FormatBool(event.Success),
 			"output_truncated": strconv.FormatBool(preview.Truncated),
 		},
-		LogOnly: map[string]string{
+		map[string]string{
 			"agent_name":        telemetry.Metadata.AgentName,
 			"arguments":         event.Arguments,
 			"output":            preview.Text,
 			"mcp_server":        event.MCPServer,
 			"mcp_server_origin": event.MCPServerOrigin,
 		},
-		TraceOnly: map[string]string{
+		map[string]string{
 			"arguments_length":  strconv.Itoa(len(event.Arguments)),
 			"output_length":     strconv.Itoa(len(event.Output)),
 			"output_line_count": strconv.Itoa(lineCount(event.Output)),
 			"tool_origin":       toolOrigin(event.MCPServer),
 			"mcp_tool":          strconv.FormatBool(event.MCPServer != ""),
-		},
-	})
+		})
 }
 
 // toolOrigin mirrors codex-otel's tool_origin field.
