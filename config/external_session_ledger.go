@@ -423,7 +423,15 @@ func ImportedConnectorCandidates(codexHome string) []ExternalAgentImportedConnec
 	}
 	counts := map[string]uint32{}
 	display := map[string]string{}
-	for _, names := range namesBySource {
+	// Rust iterates a BTreeMap keyed by source path, so the source order - and
+	// with it the first-seen spelling of a connector - is deterministic.
+	sourcePaths := make([]string, 0, len(namesBySource))
+	for sourcePath := range namesBySource {
+		sourcePaths = append(sourcePaths, sourcePath)
+	}
+	sort.Strings(sourcePaths)
+	for _, sourcePath := range sourcePaths {
+		names := namesBySource[sourcePath]
 		seen := map[string]bool{}
 		for _, raw := range names {
 			name := strings.TrimSpace(raw)

@@ -86,9 +86,26 @@ func StartupWarnings(values map[string]any, requirements *ConfigRequirements) []
 			"Configured value for `windows.sandbox` is disallowed by requirements; falling back to required value %q.",
 			mode))
 	}
+	// Requirement-constrained enum values: an explicit disallowed approval
+	// policy or approvals reviewer falls back to the requirement default (the
+	// implicit default is corrected silently, as in Rust), and the resolved
+	// web-search mode is constrained whether or not it was configured.
+	if configured := configuredApprovalPolicyValue(values["approval_policy"]); configured != "" {
+		if _, warning, err := resolveRequirementConstrainedApprovalPolicy(configured, requirements.AllowedApprovalPolicies); err == nil && warning != "" {
+			warnings = append(warnings, warning)
+		}
+	}
+	if configured := configuredApprovalsReviewerValue(values["approvals_reviewer"]); configured != "" {
+		if _, warning, err := resolveRequirementConstrainedApprovalsReviewer(configured, requirements.AllowedApprovalsReviewers); err == nil && warning != "" {
+			warnings = append(warnings, warning)
+		}
+	}
 	// A configured default_permissions the managed allow-list disallows falls
 	// back to the required default.
 	if warning := (&Config{Values: values, Requirements: requirements}).PermissionProfileRequirementWarning(); warning != "" {
+		warnings = append(warnings, warning)
+	}
+	if _, warning, err := resolveRequirementConstrainedWebSearchMode(webSearchModeForConfigValues(values), requirements.AllowedWebSearchModes); err == nil && warning != "" {
 		warnings = append(warnings, warning)
 	}
 	return warnings
