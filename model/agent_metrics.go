@@ -23,13 +23,17 @@ type MetricsSink interface {
 
 // SessionTelemetrySink receives the diagnostic records for the model client's
 // events: Rust's log_event! / trace_event! macros, whose session metadata the
-// sink owns. The model package cannot import codex_go/telemetry (telemetry
-// reaches back here), so the sink is declared locally and telemetry's
-// SessionTelemetry satisfies it.
+// sink owns, plus the spans the client instrumentation opens. The model package
+// cannot import codex_go/telemetry (telemetry reaches back here), so the sink is
+// declared locally and telemetry's SessionTelemetry satisfies it.
 type SessionTelemetrySink interface {
 	LogEvent(ctx context.Context, eventName string, fields map[string]string, logOnly map[string]string)
 	TraceEvent(ctx context.Context, eventName string, fields map[string]string, traceOnly map[string]string)
 	LogAndTraceEvent(ctx context.Context, eventName string, fields map[string]string, logOnly map[string]string, traceOnly map[string]string)
+	// StartSpan opens one of the client's spans (stream_request,
+	// receiving_stream, handle_responses, receiving) and returns the context
+	// carrying it, so records emitted while it is open attach to it.
+	StartSpan(ctx context.Context, parent TelemetrySpan, name string, attributes map[string]string) (context.Context, TelemetrySpan)
 }
 
 // Metric names mirror codex-rs/otel/src/metrics/names.rs.

@@ -77,6 +77,7 @@ func (r *Runner) sessionTelemetryForRun() *telemetry.SessionTelemetry {
 	if client := r.otelProvider.Logs(); client != nil {
 		session.Logs = client
 	}
+	session.Tracer = r.otelProvider.Tracer()
 	return session
 }
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/model"
 	"codex_go/protocol"
 )
 
@@ -274,6 +275,87 @@ func TestSessionTelemetryOmitsAbsentIdentityFields(t *testing.T) {
 	if _, ok := record["body"]; ok {
 		t.Fatalf("record body = %#v", record["body"])
 	}
+}
+
+// The session telemetry opens the client's spans on the provider's tracer: the
+// per-event span is renamed through Rust's `otel.name`, records the event
+// fields, and parents under the stream span, while the trace-safe records
+// emitted while it is open attach to the open span.
+func TestSessionTelemetryOpensClientSpans(t *testing.T) {
+	bodies := make(chan map[string]any, 1)
+	server := newTraceBatchServer(t, bodies)
+	defer server.Close()
+	client := NewTracesClient(TracesClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       server.URL + "/v1/traces",
+		ExportInterval: -1,
+	})
+	session := NewSessionTelemetry(SessionTelemetryMetadata{ConversationID: "thread-1"})
+	session.Tracer = client.Tracer()
+
+	streamCtx, streamSpan := session.StartSpan(context.Background(), nil, model.StreamRequestSpanName, nil)
+	_, handleResponses := session.StartSpan(streamCtx, streamSpan, model.HandleResponsesSpanName,
+		map[string]string{"codex.request.reasoning_effort": "high"})
+	handleResponses.SetName("completed")
+	handleResponses.Record(map[string]string{
+		"from":                       "output_item_done",
+		"gen_ai.usage.input_tokens":  "7",
+		"codex.usage.total_tokens":   "10",
+		"gen_ai.usage.output_tokens": "3",
+	})
+	session.TraceEvent(streamCtx, "codex.sse_event", map[string]string{"duration_ms": "1"}, nil)
+	handleResponses.End()
+	streamSpan.End()
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	select {
+	case body := <-bodies:
+		spans := body["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+		if len(spans) != 2 {
+			t.Fatalf("spans = %#v", spans)
+		}
+		handleSpan := spanNamed(t, spans, "completed")
+		attributes := spanAttributeValues(t, handleSpan)
+		if attributes["codex.request.reasoning_effort"] != "high" ||
+			attributes["from"] != "output_item_done" ||
+			attributes["gen_ai.usage.input_tokens"] != "7" {
+			t.Fatalf("handle_responses attributes = %#v", attributes)
+		}
+		streamSpanPayload := spanNamed(t, spans, model.StreamRequestSpanName)
+		if handleSpan["parentSpanId"] != streamSpanPayload["spanId"] ||
+			handleSpan["traceId"] != streamSpanPayload["traceId"] {
+			t.Fatalf("handle_responses span = %#v stream = %#v", handleSpan, streamSpanPayload)
+		}
+		events, _ := streamSpanPayload["events"].([]any)
+		if len(events) != 1 {
+			t.Fatalf("stream span events = %#v", events)
+		}
+		eventAttributes := spanEventAttributes(t, events[0].(map[string]any))
+		if eventAttributes["event.name"] != "codex.sse_event" || eventAttributes["duration_ms"] != "1" {
+			t.Fatalf("span event attributes = %#v", eventAttributes)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the traces endpoint did not receive the spans")
+	}
+}
+
+// spanAttributeValues flattens one encoded span's attributes.
+func spanAttributeValues(t *testing.T, span map[string]any) map[string]string {
+	t.Helper()
+	attributes := map[string]string{}
+	entries, _ := span["attributes"].([]any)
+	for _, entry := range entries {
+		attribute, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		value, _ := attribute["value"].(map[string]any)
+		text, _ := value["stringValue"].(string)
+		attributes[attribute["key"].(string)] = text
+	}
+	return attributes
 }
 
 // newLogBatchServer captures the first OTLP/HTTP log export it receives.

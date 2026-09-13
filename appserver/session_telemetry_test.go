@@ -195,7 +195,8 @@ func TestSessionTelemetryMetadataForThread(t *testing.T) {
 // log pipeline.
 func TestInstallSessionTelemetryBindsTheLogsClient(t *testing.T) {
 	home := t.TempDir()
-	configToml := "[otel.exporter.otlp-http]\nendpoint = \"http://127.0.0.1:1/v1/logs\"\nprotocol = \"json\"\n"
+	configToml := "[otel.exporter.otlp-http]\nendpoint = \"http://127.0.0.1:1/v1/logs\"\nprotocol = \"json\"\n\n" +
+		"[otel.trace_exporter.otlp-http]\nendpoint = \"http://127.0.0.1:1/v1/traces\"\nprotocol = \"json\"\n"
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configToml), 0o600); err != nil {
 		t.Fatalf("WriteFile config.toml error = %v", err)
 	}
@@ -214,6 +215,9 @@ func TestInstallSessionTelemetryBindsTheLogsClient(t *testing.T) {
 	}
 	if session.Logs == nil {
 		t.Fatal("the session telemetry has no logs client")
+	}
+	if session.Tracer == nil {
+		t.Fatal("the session telemetry has no tracer for the client spans")
 	}
 	if session.Metadata.ConversationID != "thread-1" {
 		t.Fatalf("metadata = %#v", session.Metadata)

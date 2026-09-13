@@ -2,7 +2,10 @@ package telemetry
 
 import (
 	"context"
+	"strings"
 	"time"
+
+	"codex_go/model"
 )
 
 // Rust parity: codex-rs/otel/src/events/session_telemetry.rs (SessionTelemetry's
@@ -62,6 +65,10 @@ type SessionTelemetry struct {
 	// Logs receives the log-only half; nil drops it, like a process without an
 	// OTEL log layer.
 	Logs LogRecordSink
+	// Tracer opens the spans the instrumented subsystems report (Rust's tracing
+	// spans exported through the tracestate/tracer provider); nil keeps the
+	// span instrumentation inert.
+	Tracer *Tracer
 	// Clock overrides the record timestamp (tests).
 	Clock func() time.Time
 }
@@ -70,6 +77,10 @@ type SessionTelemetry struct {
 func NewSessionTelemetry(metadata SessionTelemetryMetadata) *SessionTelemetry {
 	return &SessionTelemetry{Metadata: metadata}
 }
+
+// The session telemetry is the sink the model client reports its records and
+// client spans to.
+var _ model.SessionTelemetrySink = (*SessionTelemetry)(nil)
 
 // LogAndTraceEvent emits Rust's log_and_trace_event!: the diagnostic record to
 // the logs pipeline and the trace-safe event to the span in ctx, when there is
@@ -180,6 +191,57 @@ func (t *SessionTelemetry) now() time.Time {
 // sessionTelemetrySpanKey carries the span whose events a trace-safe record
 // lands on.
 type sessionTelemetrySpanKey struct{}
+
+// SessionSpan is one open span a session telemetry opened on behalf of an
+// instrumented subsystem. A span from a disabled pipeline is inert.
+type SessionSpan struct {
+	span *Span
+}
+
+// StartSpan opens one of the client's spans and returns the context carrying
+// it, so trace-safe records emitted while it is open attach to it. The parent
+// is the span a caller already owns, or nil for a root span.
+func (t *SessionTelemetry) StartSpan(ctx context.Context, parent model.TelemetrySpan, name string, attributes map[string]string) (context.Context, model.TelemetrySpan) {
+	var parentSpan *Span
+	if concrete, ok := parent.(*SessionSpan); ok && concrete != nil {
+		parentSpan = concrete.span
+	}
+	var span *Span
+	if t != nil && t.Tracer != nil {
+		if parentSpan != nil {
+			span = t.Tracer.StartSpanWithParent(parentSpan, name, attributes)
+		} else {
+			span = t.Tracer.StartSpan(name, attributes)
+		}
+	}
+	return WithSpan(ctx, span), &SessionSpan{span: span}
+}
+
+// End closes the span.
+func (s *SessionSpan) End() {
+	if s == nil || s.span == nil {
+		return
+	}
+	s.span.End()
+}
+
+// Record sets attributes on the open span.
+func (s *SessionSpan) Record(attributes map[string]string) {
+	if s == nil || s.span == nil {
+		return
+	}
+	for key, value := range attributes {
+		s.span.SetAttribute(key, value)
+	}
+}
+
+// SetName applies Rust's `otel.name` override.
+func (s *SessionSpan) SetName(name string) {
+	if s == nil || s.span == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	s.span.Name = name
+}
 
 // WithSpan returns a context carrying the span, so later trace-safe records
 // attach to it (Rust's current-span lookup).

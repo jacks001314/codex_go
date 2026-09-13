@@ -437,12 +437,108 @@ func TestParseResponsesStreamRecordsSSEDiagnosticsLikeRust(t *testing.T) {
 type recordingTelemetrySink struct {
 	logged []telemetryRecord
 	traced []telemetryRecord
+	spans  []*recordingTelemetrySpan
+}
+
+// recordingTelemetrySpan captures one span's lifecycle, so the tests can assert
+// the client's span tree without an exporter.
+type recordingTelemetrySpan struct {
+	name       string
+	attributes map[string]string
+	recorded   map[string]string
+	parent     *recordingTelemetrySpan
+	ended      bool
+}
+
+func (s *recordingTelemetrySpan) End() { s.ended = true }
+
+func (s *recordingTelemetrySpan) Record(attributes map[string]string) {
+	if s.recorded == nil {
+		s.recorded = map[string]string{}
+	}
+	for key, value := range attributes {
+		s.recorded[key] = value
+	}
+}
+
+func (s *recordingTelemetrySpan) SetName(name string) { s.name = name }
+
+func (s *recordingTelemetrySink) StartSpan(_ context.Context, parent TelemetrySpan, name string, attributes map[string]string) (context.Context, TelemetrySpan) {
+	span := &recordingTelemetrySpan{name: name, attributes: attributes}
+	if concrete, ok := parent.(*recordingTelemetrySpan); ok {
+		span.parent = concrete
+	}
+	s.spans = append(s.spans, span)
+	return context.Background(), span
 }
 
 type telemetryRecord struct {
 	name   string
 	fields map[string]string
 	only   map[string]string
+}
+
+// The client's streaming loop opens Rust's span tree: one receiving_stream per
+// stream, one handle_responses per event (named after the event, carrying the
+// recorded from/tool_name/usage fields) with one receiving child each.
+func TestParseResponsesStreamOpensClientSpansLikeRust(t *testing.T) {
+	sink := &recordingTelemetrySink{}
+	_, err := parseResponsesStreamWithMetrics(
+		context.Background(),
+		strings.NewReader(responsesSSE(
+			`{"type":"response.created","response":{"id":"resp-1"}}`,
+			`{"type":"response.output_item.done","item":{"id":"call-1","type":"function_call","name":"shell","call_id":"call-1","arguments":"{}"}}`,
+			`{"type":"response.completed","response":{"id":"resp-1","usage":{"input_tokens":7,"input_tokens_details":{"cached_tokens":2},"output_tokens":3,"total_tokens":10}}}`,
+		)),
+		&AgentRequest{Prompt: "hello", Model: "gpt-test", ReasoningEffort: "high"},
+		"openai",
+		nil,
+		nil,
+		sink,
+	)
+	if err != nil {
+		t.Fatalf("parseResponsesStreamWithMetrics() error = %v", err)
+	}
+	// One stream span, then a handle_responses + receiving pair per event.
+	if len(sink.spans) != 1+2*3 {
+		t.Fatalf("spans = %#v", sink.spans)
+	}
+	stream := sink.spans[0]
+	if stream.name != ReceivingStreamSpanName || stream.parent != nil || !stream.ended {
+		t.Fatalf("stream span = %#v", stream)
+	}
+	for index, want := range []struct {
+		name     string
+		from     string
+		toolName string
+	}{
+		{name: "created"},
+		{name: "function_call", from: "output_item_done", toolName: "shell"},
+		{name: "completed"},
+	} {
+		handleResponses := sink.spans[1+index*2]
+		receiving := sink.spans[2+index*2]
+		if handleResponses.name != want.name || handleResponses.parent != stream {
+			t.Fatalf("handle_responses[%d] = %#v", index, handleResponses)
+		}
+		if handleResponses.attributes["codex.request.reasoning_effort"] != "high" {
+			t.Fatalf("handle_responses[%d] attributes = %#v", index, handleResponses.attributes)
+		}
+		if handleResponses.recorded["from"] != want.from || handleResponses.recorded["tool_name"] != want.toolName {
+			t.Fatalf("handle_responses[%d] recorded = %#v", index, handleResponses.recorded)
+		}
+		if receiving.name != ReceivingSpanName || receiving.parent != handleResponses || !receiving.ended {
+			t.Fatalf("receiving[%d] = %#v", index, receiving)
+		}
+	}
+	// The completed event records the usage fields Rust reports.
+	completed := sink.spans[5]
+	if completed.recorded["gen_ai.usage.input_tokens"] != "7" ||
+		completed.recorded["gen_ai.usage.cache_read.input_tokens"] != "2" ||
+		completed.recorded["gen_ai.usage.output_tokens"] != "3" ||
+		completed.recorded["codex.usage.total_tokens"] != "10" {
+		t.Fatalf("completed recorded = %#v", completed.recorded)
+	}
 }
 
 func (s *recordingTelemetrySink) LogEvent(_ context.Context, name string, fields map[string]string, logOnly map[string]string) {

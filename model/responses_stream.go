@@ -323,7 +323,12 @@ func responsesStreamErrorHTTPStatus(err error) *uint16 {
 }
 
 func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
-	httpResponse, err := r.doResponsesHTTPRequestWithRetry(ctx, request, apiRequest, "text/event-stream", r.requestMaxRetries())
+	// Rust instruments the client's stream call with `stream_request`
+	// (core/src/session/turn.rs); the span carries the request's diagnostics
+	// while the stream is opened.
+	streamCtx, streamSpan := r.telemetryTracerFor().StartSpan(ctx, nil, StreamRequestSpanName, nil)
+	defer streamSpan.End()
+	httpResponse, err := r.doResponsesHTTPRequestWithRetry(streamCtx, request, apiRequest, "text/event-stream", r.requestMaxRetries())
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +351,7 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 	r.rememberTurnStateFromHeaders(request, httpResponse.Header)
 	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
 	emitResponsesHeaderEvents(handler, httpResponse.Header)
-	response, err := parseResponsesStreamWithMetrics(ctx, newIdleTimeoutReader(httpResponse.Body, r.streamIdleTimeout()), request, r.ProviderID, handler, r.Metrics, r.Telemetry)
+	response, err := parseResponsesStreamWithMetrics(streamCtx, newIdleTimeoutReader(httpResponse.Body, r.streamIdleTimeout()), request, r.ProviderID, handler, r.Metrics, r.Telemetry)
 	if err != nil {
 		return nil, err
 	}
@@ -410,33 +415,53 @@ func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, requ
 	}
 	accumulator := newResponsesStreamAccumulator(request)
 	parser := newResponsesSSEParser(reader)
+	// Rust's turn loop wraps the streamed events in `receiving_stream`, with one
+	// `handle_responses` (the per-event span record_responses names) and one
+	// `receiving` span per event.
+	tracer := telemetryTracerFor(telemetrySink)
+	streamCtx, receivingStreamSpan := tracer.StartSpan(ctx, nil, ReceivingStreamSpanName, nil)
+	defer receivingStreamSpan.End()
 	for {
-		if err := ctx.Err(); err != nil {
+		if err := streamCtx.Err(); err != nil {
 			return nil, err
 		}
 		eventStartedAt := time.Now()
+		eventCtx, handleResponsesSpan := tracer.StartSpan(streamCtx, receivingStreamSpan, HandleResponsesSpanName, handleResponsesSpanAttributes(request))
+		receivingCtx, receivingSpan := tracer.StartSpan(eventCtx, handleResponsesSpan, ReceivingSpanName, nil)
 		sse, err := parser.Next()
 		if err != nil {
+			receivingSpan.End()
 			if errors.Is(err, io.EOF) {
+				handleResponsesSpan.End()
 				break
 			}
 			// Rust's failed branch reports the unknown kind when the event never
 			// parsed (including the idle timeout).
-			recordSSEEvent(metrics, telemetrySink, ctx, sseEventTelemetry{
+			recordSSEEvent(metrics, telemetrySink, receivingCtx, sseEventTelemetry{
 				Kind:     sseUnknownKind,
 				Duration: time.Since(eventStartedAt),
 				Err:      err,
 			})
+			handleResponsesSpan.End()
 			return nil, err
 		}
-		done, err := accumulator.apply(sse, handler)
-		recordSSEEvent(metrics, telemetrySink, ctx, sseEventTelemetry{
+		var streamedEvent *ResponsesStreamEvent
+		done, err := accumulator.apply(sse, func(event *ResponsesStreamEvent) {
+			streamedEvent = event
+			if handler != nil {
+				handler(event)
+			}
+		})
+		recordSSEEvent(metrics, telemetrySink, receivingCtx, sseEventTelemetry{
 			Kind:      sseEventKind(sse),
 			KindKnown: strings.TrimSpace(sse.Event) != "",
 			Success:   err == nil,
 			Duration:  time.Since(eventStartedAt),
 			Err:       err,
 		})
+		recordResponsesSpan(handleResponsesSpan, streamedEvent)
+		receivingSpan.End()
+		handleResponsesSpan.End()
 		if err != nil {
 			return nil, err
 		}
@@ -864,6 +889,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			Kind:       ResponsesStreamEventOutputAdded,
 			ResponseID: a.responseID,
 			Item:       item,
+			RawItem:    rawResponseItemFromStreamEventData(sse.Data),
 			ItemID:     agentItemID(item),
 			CallID:     agentItemCallID(item),
 			RawType:    rawType,

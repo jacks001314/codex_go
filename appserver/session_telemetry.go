@@ -29,6 +29,7 @@ func (r *RuntimeRouter) sessionTelemetryForThread(threadID string) *telemetry.Se
 		if client := provider.Logs(); client != nil {
 			session.Logs = client
 		}
+		session.Tracer = provider.Tracer()
 	}
 	return session
 }
