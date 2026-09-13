@@ -106,6 +106,10 @@ type ProxySettings struct {
 	MITMHooks                                    []ProxyMITMHookConfig
 	CredentialBroker                             bool
 	DangerouslyAllowPlaintextCredentialInjection bool
+	// CredentialBrokerOpenAIHost is the trusted OpenAI endpoint host derived
+	// from the top-level openai_base_url (Rust's credential_broker_openai_host).
+	// It is local-only: it is never serialized to remote executors.
+	CredentialBrokerOpenAIHost string
 	// CredentialProviders holds the validated
 	// features.network_proxy.credentials definitions (#44056).
 	CredentialProviders map[string]CredentialProviderConfig

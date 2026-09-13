@@ -154,6 +154,48 @@ func TestCredentialBrokerOpenAIBaseURLInvalidatesUntrustedBinding(t *testing.T) 
 	}
 }
 
+// The trusted configured openai_base_url host is bound alongside the default
+// host (Rust credential_broker_openai_host passed to openai_provider::host_binding).
+func TestCredentialBrokerConfiguredOpenAIHostBinding(t *testing.T) {
+	broker := NewProxyCredentialBrokerWithOpenAIHost(true, nil, "gateway.example")
+	child := map[string]string{"OPENAI_API_KEY": "sk-proj-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH"}
+	broker.VirtualizeChildEnv(child)
+	if child["OPENAI_API_KEY"] == "sk-proj-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH" {
+		t.Fatalf("credential was not virtualized: %#v", child)
+	}
+	for _, host := range []string{"api.openai.com", "gateway.example"} {
+		if !broker.HostRequiresMITM(host) {
+			t.Fatalf("configured binding did not cover %s", host)
+		}
+	}
+	if broker.HostRequiresMITM("other.example") {
+		t.Fatal("the configured binding covered an unrelated host")
+	}
+}
+
+// The configured host is normalized, deduplicated against the default host, and
+// still joined by a trusted OPENAI_BASE_URL host.
+func TestCredentialBrokerConfiguredOpenAIHostBindingOrderLikeRust(t *testing.T) {
+	provider := openAICredentialProvider("API.OpenAI.com")
+	binding, ok := provider.Sources[0].HostBinding(map[string]string{"OPENAI_BASE_URL": "https://tenant.openai.example/v1"})
+	if !ok {
+		t.Fatal("the binding was dropped")
+	}
+	want := []string{"api.openai.com", "tenant.openai.example"}
+	if len(binding.ExactHosts) != len(want) {
+		t.Fatalf("hosts = %#v, want %#v", binding.ExactHosts, want)
+	}
+	for index := range want {
+		if binding.ExactHosts[index] != want[index] {
+			t.Fatalf("hosts = %#v, want %#v", binding.ExactHosts, want)
+		}
+	}
+	// An untrusted OPENAI_BASE_URL still disables the whole binding.
+	if _, ok := provider.Sources[0].HostBinding(map[string]string{"OPENAI_BASE_URL": "http://tenant.openai.example/v1"}); ok {
+		t.Fatal("an untrusted base URL did not disable the configured binding")
+	}
+}
+
 func bearerHeaders(value string) map[string][]string {
 	return map[string][]string{"Authorization": {"Bearer " + value}}
 }

@@ -240,7 +240,7 @@ func buildProxyRuntimePolicy(settings ProxySettings) (*proxyRuntimePolicy, error
 		allowMatcher: allowMatcher,
 		denyMatcher:  denyMatcher,
 		mitmHooks:    hooks,
-		broker:       NewProxyCredentialBrokerWithProviders(settings.CredentialBroker, ConfiguredCredentialProviders(settings.CredentialProviders)),
+		broker:       NewProxyCredentialBrokerWithOpenAIHost(settings.CredentialBroker, ConfiguredCredentialProviders(settings.CredentialProviders), settings.CredentialBrokerOpenAIHost),
 	}, nil
 }
 

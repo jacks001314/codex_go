@@ -34,6 +34,13 @@ func (r *RuntimeRouter) buildManagedNetworkProxyConfigForCWD(values map[string]a
 	if !hasRequirements && (!proxyConfig.Network.Enabled || !profileAllowsProxy) {
 		return proxyConfig, false, nil
 	}
+	// Rust's PreparedNetworkConfig::from_inputs derives the trusted OpenAI host
+	// from the top-level openai_base_url (set_credential_broker_openai_base_url)
+	// whenever the proxy is enabled for the profile, and the credential broker
+	// binds it in addition to api.openai.com and OPENAI_BASE_URL.
+	if host, ok := network.TrustedCredentialBrokerHost(stringFromMap(values, "openai_base_url")); ok {
+		proxyConfig.Network.CredentialBrokerOpenAIHost = host
+	}
 
 	spec, err := network.NewProxySpec(*proxyConfig, proxyRequirementsFromConfig(r.services.ManagedNetworkRequirements), managedProfile)
 	if err != nil {

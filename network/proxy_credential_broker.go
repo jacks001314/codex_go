@@ -76,13 +76,20 @@ type ProxyCredentialHostBinding struct {
 }
 
 func NewProxyCredentialBroker(enabled bool) *ProxyCredentialBroker {
-	return &ProxyCredentialBroker{enabled: enabled, providers: credentialProviders()}
+	return NewProxyCredentialBrokerWithProviders(enabled, nil)
 }
 
 // NewProxyCredentialBrokerWithProviders builds a broker that also serves
 // declarative, config-backed credential families (#44056).
 func NewProxyCredentialBrokerWithProviders(enabled bool, configured []*ProxyCredentialProvider) *ProxyCredentialBroker {
-	providers := append([]*ProxyCredentialProvider(nil), credentialProviders()...)
+	return NewProxyCredentialBrokerWithOpenAIHost(enabled, configured, "")
+}
+
+// NewProxyCredentialBrokerWithOpenAIHost builds a broker whose built-in OpenAI
+// provider also binds the trusted configured host from the top-level
+// openai_base_url (Rust's credential_broker_openai_host).
+func NewProxyCredentialBrokerWithOpenAIHost(enabled bool, configured []*ProxyCredentialProvider, configuredOpenAIHost string) *ProxyCredentialBroker {
+	providers := append([]*ProxyCredentialProvider(nil), credentialProvidersWithOpenAIHost(configuredOpenAIHost)...)
 	for _, provider := range configured {
 		if provider != nil {
 			providers = append(providers, provider)
@@ -751,15 +758,27 @@ func selectCredential(headers map[string][]string, matching []*ProxyCredentialRe
 }
 
 func credentialProviders() []*ProxyCredentialProvider {
-	return []*ProxyCredentialProvider{githubCredentialProvider(), openAICredentialProvider()}
+	return credentialProvidersWithOpenAIHost("")
+}
+
+// credentialProvidersWithOpenAIHost builds the built-in providers, binding the
+// OpenAI credentials to the configured host as well (Rust's credential broker
+// passes state.openai_api_host to each host binding).
+func credentialProvidersWithOpenAIHost(configuredOpenAIHost string) []*ProxyCredentialProvider {
+	return []*ProxyCredentialProvider{githubCredentialProvider(), openAICredentialProvider(configuredOpenAIHost)}
 }
 
 func githubCredentialProvider() *ProxyCredentialProvider {
 	return &githubProvider
 }
 
-func openAICredentialProvider() *ProxyCredentialProvider {
-	return &openAIProvider
+func openAICredentialProvider(configuredOpenAIHost string) *ProxyCredentialProvider {
+	provider := openAIProvider
+	provider.Sources = []ProxyCredentialSource{{
+		EnvVars:     []string{"OPENAI_API_KEY"},
+		HostBinding: openAIHostBinding(configuredOpenAIHost),
+	}}
+	return &provider
 }
 
 var githubProvider = ProxyCredentialProvider{
@@ -807,9 +826,9 @@ func providerEnvValue(env map[string]string, key string) (string, bool) {
 	return "", false
 }
 
-// trustedCredentialBrokerHost mirrors Rust's trusted_credential_broker_host: an
+// TrustedCredentialBrokerHost mirrors Rust's trusted_credential_broker_host: an
 // HTTPS base URL without user information contributes its normalized host.
-func trustedCredentialBrokerHost(baseURL string) (string, bool) {
+func TrustedCredentialBrokerHost(baseURL string) (string, bool) {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
 		return "", false
@@ -825,37 +844,56 @@ func trustedCredentialBrokerHost(baseURL string) (string, bool) {
 	return normalized, true
 }
 
+// trustedCredentialBrokerHost keeps the package-local name used by the built-in
+// provider bindings.
+func trustedCredentialBrokerHost(baseURL string) (string, bool) {
+	return TrustedCredentialBrokerHost(baseURL)
+}
+
+// openAIProvider holds the built-in OpenAI provider's non-binding fields. The
+// host binding is built per broker so it can include the configured
+// openai_base_url host (Rust's credential_broker_openai_host).
 var openAIProvider = ProxyCredentialProvider{
 	// Rust's built-in OpenAI provider binds OPENAI_BASE_URL as a destination
 	// context key (network-proxy/src/credential_broker/providers/openai.rs), so
 	// the broker treats it as a provider env key and keeps it out of child
 	// environments.
-	ContextEnvVars: []string{"OPENAI_BASE_URL"},
-	Sources: []ProxyCredentialSource{
-		{
-			EnvVars: []string{"OPENAI_API_KEY"},
-			HostBinding: func(env map[string]string) (ProxyCredentialHostBinding, bool) {
-				hosts := []string{"api.openai.com"}
-				if baseURL, ok := providerEnvValue(env, "OPENAI_BASE_URL"); ok && strings.TrimSpace(baseURL) != "" {
-					host, trusted := trustedCredentialBrokerHost(baseURL)
-					if !trusted {
-						// Rust's invalidates_host_binding: an untrusted base URL
-						// disables the binding instead of brokering to the default
-						// host.
-						return ProxyCredentialHostBinding{}, false
-					}
-					if host != hosts[0] {
-						hosts = append(hosts, host)
-					}
-				}
-				return ProxyCredentialHostBinding{ExactHosts: hosts}, true
-			},
-		},
-	},
+	ContextEnvVars:     []string{"OPENAI_BASE_URL"},
 	DummyValue:         openAIDummyValue,
 	RequestHeader:      authorizationHeader,
 	RequestHeaderValue: bearerHeaderValue,
 	InsertHeader:       insertAuthorizationHeader,
+}
+
+// openAIHostBinding mirrors Rust's openai_provider::host_binding: the default
+// host, the trusted configured host, and the trusted OPENAI_BASE_URL host, in
+// that order without duplicates. An untrusted OPENAI_BASE_URL disables the
+// binding (Rust's invalidates_host_binding) instead of brokering to the default
+// host.
+func openAIHostBinding(configuredHost string) func(map[string]string) (ProxyCredentialHostBinding, bool) {
+	return func(env map[string]string) (ProxyCredentialHostBinding, bool) {
+		hosts := []string{"api.openai.com"}
+		appendHost := func(host string) {
+			if host == "" {
+				return
+			}
+			for _, existing := range hosts {
+				if existing == host {
+					return
+				}
+			}
+			hosts = append(hosts, host)
+		}
+		appendHost(NormalizeProxyHost(configuredHost))
+		if baseURL, ok := providerEnvValue(env, "OPENAI_BASE_URL"); ok && strings.TrimSpace(baseURL) != "" {
+			host, trusted := trustedCredentialBrokerHost(baseURL)
+			if !trusted {
+				return ProxyCredentialHostBinding{}, false
+			}
+			appendHost(host)
+		}
+		return ProxyCredentialHostBinding{ExactHosts: hosts}, true
+	}
 }
 
 func githubDummyValue(realValue string) string {
