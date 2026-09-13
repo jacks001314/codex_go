@@ -26,23 +26,23 @@ func TestTurnTokenUsageByModelAttributesUsageToProducingModel(t *testing.T) {
 		{Model: "gpt-5", Usage: model.AgentUsage{InputTokens: 2, CacheWriteInputTokens: 7, ReasoningOutputTokens: 9, TotalTokens: 11}},
 		{Usage: model.AgentUsage{InputTokens: 1, TotalTokens: 1}},
 	}
-	got := turnTokenUsageByModel(responses, "gpt-5")
+	got := telemetry.TurnTokenUsageByModel(responses, "gpt-5")
 	if len(got) != 2 {
 		t.Fatalf("models = %#v, want gpt-5 and gpt-5-mini", got)
 	}
-	if got[0].model != "gpt-5" || got[1].model != "gpt-5-mini" {
-		t.Fatalf("model order = %q/%q, want sorted gpt-5/gpt-5-mini", got[0].model, got[1].model)
+	if got[0].Model != "gpt-5" || got[1].Model != "gpt-5-mini" {
+		t.Fatalf("model order = %q/%q, want sorted gpt-5/gpt-5-mini", got[0].Model, got[1].Model)
 	}
 	want := model.AgentUsage{InputTokens: 13, CachedInputTokens: 3, CacheWriteInputTokens: 7, OutputTokens: 4, ReasoningOutputTokens: 9, TotalTokens: 26}
-	if got[0].usage != want {
-		t.Fatalf("gpt-5 usage = %#v, want %#v", got[0].usage, want)
+	if got[0].Usage != want {
+		t.Fatalf("gpt-5 usage = %#v, want %#v", got[0].Usage, want)
 	}
-	if got[1].usage.TotalTokens != 6 || got[1].usage.InputTokens != 5 {
-		t.Fatalf("gpt-5-mini usage = %#v", got[1].usage)
+	if got[1].Usage.TotalTokens != 6 || got[1].Usage.InputTokens != 5 {
+		t.Fatalf("gpt-5-mini usage = %#v", got[1].Usage)
 	}
 
-	if empty := turnTokenUsageByModel(nil, "gpt-5"); len(empty) != 0 {
-		t.Fatalf("turnTokenUsageByModel(nil) = %#v, want empty", empty)
+	if empty := telemetry.TurnTokenUsageByModel(nil, "gpt-5"); len(empty) != 0 {
+		t.Fatalf("TurnTokenUsageByModel(nil) = %#v, want empty", empty)
 	}
 }
 
