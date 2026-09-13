@@ -506,7 +506,11 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnConsumeRateLimitResetCredit: func(idempotencyKey string) (chatwidget.RateLimitResetConsumeOutcome, error) {
 			return interactiveRemoteConsumeRateLimitResetCredit(ctx, endpoint, idempotencyKey)
 		},
-		OnReadRateLimits: interactiveRemoteRateLimitsReader(ctx, endpoint),
+		OnReadRateLimits:    interactiveRemoteRateLimitsReader(ctx, endpoint),
+		OnReadBackendBanner: interactiveRemoteBackendBannerReader(ctx, endpoint),
+		OnBackendBannerAction: interactiveBackendBannerActionHandler(
+			interactiveRemoteAddCreditsNudgeSender(ctx, endpoint),
+		),
 		OnReadGoal: func(threadID string) (*appserver.Goal, error) {
 			return interactiveRemoteReadGoal(ctx, endpoint, threadID)
 		},

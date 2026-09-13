@@ -86,6 +86,11 @@ func (m *Model) applyRateLimitsResult(message RateLimitsResultMsg) bubbletea.Cmd
 		}
 		m.refreshTranscript()
 	}
+	// The same usage read owns the backend banner, so a successful /status
+	// refresh also refreshes the inline banner.
+	if message.Err == nil && m.onReadBackendBanner != nil {
+		return bubbletea.Batch(m.refreshStatusControlsCmd(), m.backendBannerCmd())
+	}
 	return m.refreshStatusControlsCmd()
 }
 

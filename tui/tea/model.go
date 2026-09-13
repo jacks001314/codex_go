@@ -907,11 +907,17 @@ type Options struct {
 	OnReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
 	OnConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
 	OnReadRateLimits              RateLimitsReaderFunc
-	OnWriteTerminalTitle          TerminalTitleWriterFunc
-	OnPostNotification            NotificationPostFunc
-	OnReadGitDiff                 GitDiffReaderFunc
-	OnStopBackgroundTerminals     StopBackgroundTerminalsFunc
-	LocalDaemonSession            bool
+	// OnReadBackendBanner reads and validates the backend-owned inline banner
+	// (Rust #44857 backend_banners). Nil leaves the banner surface unused.
+	OnReadBackendBanner func() (*BackendBannerView, error)
+	// OnBackendBannerAction dispatches a selected CTA by backend order. The app
+	// resolves the action (open URL / credits nudge / reset credits).
+	OnBackendBannerAction     func(action BackendBannerAction) bubbletea.Cmd
+	OnWriteTerminalTitle      TerminalTitleWriterFunc
+	OnPostNotification        NotificationPostFunc
+	OnReadGitDiff             GitDiffReaderFunc
+	OnStopBackgroundTerminals StopBackgroundTerminalsFunc
+	LocalDaemonSession        bool
 	// LocalSession reports that the session's workspace and executors are
 	// local, so agents-overview project grouping may expand across linked
 	// worktrees (Rust #43279).
@@ -1450,6 +1456,10 @@ type Model struct {
 	onReadRateLimitResetCredits       RateLimitResetCreditsReaderFunc
 	onConsumeRateLimitResetCredit     RateLimitResetCreditConsumerFunc
 	onReadRateLimits                  RateLimitsReaderFunc
+	onReadBackendBanner               func() (*BackendBannerView, error)
+	onBackendBannerAction             func(action BackendBannerAction) bubbletea.Cmd
+	backendBanner                     *BackendBannerView
+	backendBannerDismissed            bool
 	nextStatusRateLimitRequestID      uint64
 	pendingStatusRateLimitRequests    map[uint64]pendingStatusRateLimitRequest
 	terminalTitleWriter               TerminalTitleWriterFunc
@@ -1784,6 +1794,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,
 		onConsumeRateLimitResetCredit:   options.OnConsumeRateLimitResetCredit,
 		onReadRateLimits:                options.OnReadRateLimits,
+		onReadBackendBanner:             options.OnReadBackendBanner,
+		onBackendBannerAction:           options.OnBackendBannerAction,
 		pendingStatusRateLimitRequests:  map[uint64]pendingStatusRateLimitRequest{},
 		terminalTitleWriter:             terminalTitleWriterOrDefault(options.OnWriteTerminalTitle),
 		notificationPost:                options.OnPostNotification,
@@ -2029,6 +2041,9 @@ func (m *Model) Init() bubbletea.Cmd {
 		commands = append(commands, m.loadPetCmd(m.petLoadPending))
 		m.petLoadPending = ""
 	}
+	if m.onReadBackendBanner != nil {
+		commands = append(commands, m.backendBannerCmd())
+	}
 	if m.initialMessages != nil {
 		commands = append(commands, waitForStream(m.initialMessages))
 	}
@@ -2059,6 +2074,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyPetLoad(msg)
 	case petTickMsg:
 		return m, bubbletea.Batch(m.petDrawCmd(), m.petTickCmd())
+	case BackendBannerResultMsg:
+		m.applyBackendBannerResult(msg)
+		return m, nil
 	case bubbletea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		return m, nil
@@ -2508,6 +2526,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if m.windowsSandboxSetupActive {
 			return m, nil
 		}
+		if cmd, handled := m.handleBackendBannerKey(msg); handled {
+			return m, cmd
+		}
 		if cmd, handled := m.updateSkillPopupKey(msg); handled {
 			return m, cmd
 		}
@@ -2704,6 +2725,9 @@ func (m *Model) View() string {
 		// Rust #43253: the read-only notice replaces the composer.
 		sections = append(sections, m.bottomStyle.Render(m.renderReadOnlyThreadNotice()))
 	} else {
+		if banner := m.renderBackendBanner(); banner != "" {
+			sections = append(sections, m.bottomStyle.Render(banner))
+		}
 		if working := m.renderWorkingIndicator(); working != "" {
 			sections = append(sections, m.bottomStyle.Render(working))
 		}

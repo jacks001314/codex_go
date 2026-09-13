@@ -962,6 +962,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 			return interactiveHistoryMCPStatuses(response.Data), nil
 		},
 		OnReadRateLimits:          interactiveLocalRateLimitsReader(),
+		OnReadBackendBanner:       interactiveLocalBackendBannerReader(),
+		OnBackendBannerAction:     interactiveBackendBannerActionHandler(interactiveLocalAddCreditsNudgeSender()),
 		MCPStartupExpectedServers: mcpExpectedServers,
 		InitialMessages:           initialMessages,
 		InitialHistoryCells:       interactiveUpdateHistoryCells(root),

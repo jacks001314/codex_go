@@ -20,51 +20,71 @@ const interactiveStatusConnectionID = "local-tui-status"
 
 func interactiveLocalRateLimitsReader() func() ([]codextui.RateLimitStatus, error) {
 	return func() ([]codextui.RateLimitStatus, error) {
-		router := appserver.NewDefaultRuntimeRouter(newSessionStore(), auth.DefaultCodexHome())
-		defer router.Close()
-		if err := initializeLocalTUIConnection(router.Handle, interactiveStatusConnectionID); err != nil {
-			return nil, err
-		}
-		raw, err := json.Marshal(map[string]any{})
+		response, err := interactiveLocalUsageRead()
 		if err != nil {
 			return nil, err
 		}
-		response := router.Handle(&appserver.Request{
-			JSONRPC:      "2.0",
-			ID:           appserver.IntID(2),
-			Method:       appserver.MethodGetAccountRateLimits,
-			Params:       raw,
-			ConnectionID: interactiveStatusConnectionID,
-		})
-		if response == nil {
-			return nil, errors.New("account/rateLimits/read returned no response")
-		}
-		if response.Error != nil {
-			return nil, errors.New(strings.TrimSpace(response.Error.Message))
-		}
-		result, ok := response.Result.(*auth.GetAccountRateLimitsResponse)
-		if !ok || result == nil {
-			return nil, errors.New("account/rateLimits/read returned an invalid response")
-		}
-		return interactiveRateLimitStatuses(result), nil
+		return interactiveRateLimitStatuses(response), nil
 	}
 }
 
 func interactiveRemoteRateLimitsReader(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func() ([]codextui.RateLimitStatus, error) {
 	return func() ([]codextui.RateLimitStatus, error) {
-		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
-		defer cancel()
-		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		response, err := interactiveRemoteUsageRead(ctx, endpoint)
 		if err != nil {
 			return nil, err
 		}
-		defer client.close()
-		var response auth.GetAccountRateLimitsResponse
-		if err := remoteSessionRequest(reqCtx, client, appserver.MethodGetAccountRateLimits, map[string]any{}, &response); err != nil {
-			return nil, err
-		}
-		return interactiveRateLimitStatuses(&response), nil
+		return interactiveRateLimitStatuses(response), nil
 	}
+}
+
+// interactiveLocalUsageRead performs the account usage read through a fresh
+// local app-server router.
+func interactiveLocalUsageRead() (*auth.GetAccountRateLimitsResponse, error) {
+	router := appserver.NewDefaultRuntimeRouter(newSessionStore(), auth.DefaultCodexHome())
+	defer router.Close()
+	if err := initializeLocalTUIConnection(router.Handle, interactiveStatusConnectionID); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	response := router.Handle(&appserver.Request{
+		JSONRPC:      "2.0",
+		ID:           appserver.IntID(2),
+		Method:       appserver.MethodGetAccountRateLimits,
+		Params:       raw,
+		ConnectionID: interactiveStatusConnectionID,
+	})
+	if response == nil {
+		return nil, errors.New("account/rateLimits/read returned no response")
+	}
+	if response.Error != nil {
+		return nil, errors.New(strings.TrimSpace(response.Error.Message))
+	}
+	result, ok := response.Result.(*auth.GetAccountRateLimitsResponse)
+	if !ok || result == nil {
+		return nil, errors.New("account/rateLimits/read returned an invalid response")
+	}
+	return result, nil
+}
+
+// interactiveRemoteUsageRead performs the account usage read through the remote
+// app server.
+func interactiveRemoteUsageRead(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (*auth.GetAccountRateLimitsResponse, error) {
+	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+	defer cancel()
+	client, err := openRemoteSessionClient(reqCtx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer client.close()
+	var response auth.GetAccountRateLimitsResponse
+	if err := remoteSessionRequest(reqCtx, client, appserver.MethodGetAccountRateLimits, map[string]any{}, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 func interactiveRateLimitStatuses(response *auth.GetAccountRateLimitsResponse) []codextui.RateLimitStatus {
