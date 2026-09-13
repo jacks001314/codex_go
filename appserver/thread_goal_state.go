@@ -19,7 +19,11 @@ import (
 )
 
 type stateGoalTurnSnapshot struct {
-	GoalID             string
+	GoalID string
+	// GoalStatus is the goal's status when the turn was anchored; the goal
+	// metrics use it as the previous status of an accounting transition (Rust's
+	// in-memory active_goal snapshot).
+	GoalStatus         state.ThreadGoalStatus
 	StartedAtMS        int64
 	LastAccountedAtMS  int64
 	LastAccountedUsage model.AgentUsage
@@ -309,7 +313,7 @@ func apiGoalFromState(goal *state.ThreadGoal) *Goal {
 	}
 }
 
-func (r *RuntimeRouter) markStateThreadGoalTurnActiveNow(threadID, turnID, goalID string) {
+func (r *RuntimeRouter) markStateThreadGoalTurnActiveNow(threadID, turnID, goalID string, goalStatus state.ThreadGoalStatus) {
 	if r == nil || r.services.StateRuntime == nil {
 		return
 	}
@@ -336,6 +340,7 @@ func (r *RuntimeRouter) markStateThreadGoalTurnActiveNow(threadID, turnID, goalI
 	currentUsage := r.goalTurnUsage[stateGoalTurnKey(threadID, turnID)]
 	r.goalAccountingTurns[stateGoalTurnKey(threadID, turnID)] = stateGoalTurnSnapshot{
 		GoalID:             goalID,
+		GoalStatus:         goalStatus,
 		StartedAtMS:        nowMS,
 		LastAccountedAtMS:  nowMS,
 		LastAccountedUsage: currentUsage,
@@ -613,6 +618,13 @@ func (r *RuntimeRouter) accountIdleGoalProgress(threadID string) *state.GoalAcco
 	}
 	seconds := timeDelta / 1000
 	descendantDelta := r.descendantTokenDelta(threadID)
+	// The idle-accounting path has no per-turn snapshot, so the previous status
+	// comes from the persisted goal (Rust reads its in-memory active goal).
+	var previousStatus *state.ThreadGoalStatus
+	if current, getErr := r.services.StateRuntime.GetThreadGoal(context.Background(), threadID); getErr == nil &&
+		current != nil && current.GoalID == goalID {
+		previousStatus = goalStatusPointer(current.Status)
+	}
 	outcome, err := r.services.StateRuntime.AccountThreadGoalUsage(
 		context.Background(), threadID, seconds, descendantDelta, state.GoalAccountingActiveOnly, &goalID,
 	)
@@ -627,6 +639,7 @@ func (r *RuntimeRouter) accountIdleGoalProgress(threadID string) *state.GoalAcco
 		}
 		r.goalIdleMu.Unlock()
 		r.emitStateThreadGoalUpdate(outcome.Goal, "", "", telemetry.GoalEventKindUsageAccounted)
+		r.recordGoalStatusTransitionForStateGoal(previousStatus, outcome.Goal)
 		if outcome.Goal.Status != state.ThreadGoalActive {
 			r.clearGoalIdleActive()
 		}
@@ -701,6 +714,11 @@ func (r *RuntimeRouter) accountStateThreadGoalProgress(threadID, turnID string, 
 		}
 		r.goalAccountingMu.Unlock()
 		r.emitStateThreadGoalUpdate(outcome.Goal, turnID, connectionID, telemetry.GoalEventKindUsageAccounted)
+		previousStatus := goalStatusPointer(snapshot.GoalStatus)
+		if snapshot.GoalStatus == "" {
+			previousStatus = nil
+		}
+		r.recordGoalStatusTransitionForStateGoal(previousStatus, outcome.Goal)
 		if outcome.Goal.Status == state.ThreadGoalBudgetLimited {
 			r.enqueueGoalBudgetLimitSteering(threadID, turnID, outcome.Goal)
 		}
@@ -848,6 +866,7 @@ func (r *RuntimeRouter) beginStateThreadGoalTurn(threadID, turnID string, starte
 	currentUsage := r.goalTurnUsage[stateGoalTurnKey(threadID, turnID)]
 	r.goalAccountingTurns[stateGoalTurnKey(threadID, turnID)] = stateGoalTurnSnapshot{
 		GoalID:             goal.GoalID,
+		GoalStatus:         goal.Status,
 		StartedAtMS:        startedAtMS,
 		LastAccountedAtMS:  startedAtMS,
 		LastAccountedUsage: currentUsage,
@@ -906,6 +925,11 @@ func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, compl
 	}
 	if outcome != nil && outcome.Updated && outcome.Goal != nil {
 		r.emitStateThreadGoalUpdate(outcome.Goal, turnID, snapshot.ConnectionID, telemetry.GoalEventKindUsageAccounted)
+		previousStatus := goalStatusPointer(snapshot.GoalStatus)
+		if snapshot.GoalStatus == "" {
+			previousStatus = nil
+		}
+		r.recordGoalStatusTransitionForStateGoal(previousStatus, outcome.Goal)
 	}
 	if turnErr == nil && outcome != nil && outcome.Goal != nil && outcome.Goal.Status == state.ThreadGoalActive {
 		r.markGoalIdleActive(outcome.Goal.GoalID)
@@ -929,6 +953,7 @@ func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, compl
 				slog.Warn("failed to block thread goal after repeated execution failures", "thread_id", threadID, "turn_id", turnID, "error", updateErr)
 			} else if updated != nil && updated.Status != current.Status {
 				r.emitStateThreadGoalUpdate(updated, turnID, snapshot.ConnectionID, telemetry.GoalEventKindStatusChanged)
+				r.recordGoalStatusTransitionForStateGoal(goalStatusPointer(current.Status), updated)
 			}
 			// The goal was blocked, ending the active goal; skip the turn-error
 			// disposition below (there is no longer an active goal to stop).
@@ -951,6 +976,7 @@ func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, compl
 				slog.Warn("failed to block thread goal after empty continuations", "thread_id", threadID, "turn_id", turnID, "error", updateErr)
 			} else if updated != nil && updated.Status != current.Status {
 				r.emitStateThreadGoalUpdate(updated, turnID, snapshot.ConnectionID, telemetry.GoalEventKindStatusChanged)
+				r.recordGoalStatusTransitionForStateGoal(goalStatusPointer(current.Status), updated)
 			}
 			r.resetGoalEmptyResponses(threadID)
 			return
@@ -976,6 +1002,7 @@ func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, compl
 	}
 	if updated != nil && updated.Status != current.Status {
 		r.emitStateThreadGoalUpdate(updated, turnID, snapshot.ConnectionID, telemetry.GoalEventKindStatusChanged)
+		r.recordGoalStatusTransitionForStateGoal(goalStatusPointer(current.Status), updated)
 	}
 }
 

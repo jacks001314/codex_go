@@ -23,7 +23,7 @@ func TestDescendantTokenUsageRollsIntoRootGoalLikeRust(t *testing.T) {
 
 	// A descendant (subagent) records its own usage and rolls it to the root.
 	childUsage := model.AgentUsage{InputTokens: 20, CachedInputTokens: 5, OutputTokens: 8, TotalTokens: 28}
-	router.markStateThreadGoalTurnActiveNow(rootThreadID, "root-turn", goal.GoalID)
+	router.markStateThreadGoalTurnActiveNow(rootThreadID, "root-turn", goal.GoalID, goal.Status)
 	router.recordDescendantGoalTokenUsage(rootThreadID, childUsage)
 
 	outcome := router.accountStateThreadGoalProgress(rootThreadID, "root-turn", time.Now().UTC(), state.GoalAccountingActiveOnly)
@@ -47,7 +47,7 @@ func TestDescendantTokenUsageBaselineResetsOnGoalChangeLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	router.markStateThreadGoalTurnActiveNow(threadID, "turn-1", firstGoal.GoalID)
+	router.markStateThreadGoalTurnActiveNow(threadID, "turn-1", firstGoal.GoalID, firstGoal.Status)
 	router.recordDescendantGoalTokenUsage(threadID, model.AgentUsage{InputTokens: 20, CachedInputTokens: 5, OutputTokens: 8, TotalTokens: 28})
 	outcome := router.accountStateThreadGoalProgress(threadID, "turn-1", time.Now().UTC(), state.GoalAccountingActiveOnly)
 	if outcome == nil || outcome.Goal == nil || outcome.Goal.TokensUsed != 23 {
@@ -61,7 +61,7 @@ func TestDescendantTokenUsageBaselineResetsOnGoalChangeLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 	// re-anchor the second goal's turn (goal change resets the descendant baseline).
-	router.markStateThreadGoalTurnActiveNow(threadID, "turn-2", secondGoal.GoalID)
+	router.markStateThreadGoalTurnActiveNow(threadID, "turn-2", secondGoal.GoalID, secondGoal.Status)
 	router.recordDescendantGoalTokenUsage(threadID, model.AgentUsage{InputTokens: 6, CachedInputTokens: 1, OutputTokens: 3, TotalTokens: 9})
 	outcome = router.accountStateThreadGoalProgress(threadID, "turn-2", time.Now().UTC(), state.GoalAccountingActiveOnly)
 	if outcome == nil || outcome.Goal == nil {
@@ -84,7 +84,7 @@ func TestDescendantTokenUsageRoutedToRootThreadGoalLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router.markStateThreadGoalTurnActiveNow(rootThreadID, "root-turn", goal.GoalID)
+	router.markStateThreadGoalTurnActiveNow(rootThreadID, "root-turn", goal.GoalID, goal.Status)
 
 	// Create a subagent thread whose parent is the root thread, and record its
 	// usage through the descendant-aware helper.

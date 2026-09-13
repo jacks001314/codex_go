@@ -40,7 +40,7 @@ func TestGoalBlockedAfterRepeatedExecHostFailuresLikeRust(t *testing.T) {
 	// Three consecutive turns each run a handler-executed `exec` that fails.
 	for i := 0; i < 3; i++ {
 		turnID := "turn-" + string(rune('0'+i))
-		router.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID)
+		router.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID, goal.Status)
 		router.recordGoalToolOutcome(threadID, turnID, goalExecFailureExecution(tool.CodeModeExecToolName, false, true))
 		router.finishStateThreadGoalTurn(threadID, turnID, time.Now().UTC(), 0, nil)
 	}
@@ -67,7 +67,7 @@ func TestGoalExecutionFailuresDoNotBlockOnSuccessOrBlockedCall(t *testing.T) {
 	// reaches three consecutive failed exec turns.
 	for i := 0; i < 3; i++ {
 		turnID := "turn-" + string(rune('0'+i))
-		router.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID)
+		router.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID, goal.Status)
 		router.recordGoalToolOutcome(threadID, turnID, goalExecFailureExecution(tool.CodeModeExecToolName, false, true))
 		router.recordGoalToolOutcome(threadID, turnID, goalExecFailureExecution(tool.DefaultShellCommandToolName, true, true))
 		router.finishStateThreadGoalTurn(threadID, turnID, time.Now().UTC(), 0, nil)
@@ -76,7 +76,7 @@ func TestGoalExecutionFailuresDoNotBlockOnSuccessOrBlockedCall(t *testing.T) {
 	// A blocked (handler not executed) call never advances the streak.
 	for i := 0; i < 3; i++ {
 		turnID := "block-" + string(rune('0'+i))
-		router.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID)
+		router.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID, goal.Status)
 		router.recordGoalToolOutcome(threadID, turnID, goalExecFailureExecution(tool.CodeModeExecToolName, false, false))
 		router.finishStateThreadGoalTurn(threadID, turnID, time.Now().UTC(), 0, nil)
 	}
@@ -105,7 +105,7 @@ func TestGoalExecutionFailuresDoNotTransferToReplacementGoal(t *testing.T) {
 	// Two failed-exec turns for the first goal do not reach the block threshold.
 	for i := 0; i < 2; i++ {
 		turnID := "first-" + string(rune('0'+i))
-		router.markStateThreadGoalTurnActiveNow(threadID, turnID, first.GoalID)
+		router.markStateThreadGoalTurnActiveNow(threadID, turnID, first.GoalID, first.Status)
 		router.recordGoalToolOutcome(threadID, turnID, goalExecFailureExecution(tool.CodeModeExecToolName, false, true))
 		router.finishStateThreadGoalTurn(threadID, turnID, time.Now().UTC(), 0, nil)
 	}
@@ -114,7 +114,7 @@ func TestGoalExecutionFailuresDoNotTransferToReplacementGoal(t *testing.T) {
 	// also not reach the block threshold (streak anchored to the new goal).
 	for i := 0; i < 2; i++ {
 		turnID := "second-" + string(rune('0'+i))
-		router.markStateThreadGoalTurnActiveNow(threadID, turnID, second.GoalID)
+		router.markStateThreadGoalTurnActiveNow(threadID, turnID, second.GoalID, second.Status)
 		router.recordGoalToolOutcome(threadID, turnID, goalExecFailureExecution(tool.CodeModeExecToolName, false, true))
 		router.finishStateThreadGoalTurn(threadID, turnID, time.Now().UTC(), 0, nil)
 	}

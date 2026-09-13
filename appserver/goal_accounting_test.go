@@ -34,7 +34,7 @@ func TestGoalTokenUsageAccountingAtToolFinish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router.markStateThreadGoalTurnActiveNow(threadID, "turn-1", goal.GoalID)
+	router.markStateThreadGoalTurnActiveNow(threadID, "turn-1", goal.GoalID, goal.Status)
 	router.recordGoalTokenUsage(threadID, "turn-1", model.AgentUsage{
 		InputTokens:       100,
 		CachedInputTokens: 20,
@@ -53,7 +53,7 @@ func TestGoalBudgetLimitSteeringEnqueued(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router.markStateThreadGoalTurnActiveNow(threadID, "turn-1", goal.GoalID)
+	router.markStateThreadGoalTurnActiveNow(threadID, "turn-1", goal.GoalID, goal.Status)
 	router.recordGoalTokenUsage(threadID, "turn-1", model.AgentUsage{InputTokens: 20})
 	router.accountStateThreadGoalProgress(threadID, "turn-1", time.Now().Add(time.Second), state.GoalAccountingActiveOnly)
 
@@ -78,7 +78,7 @@ func TestGoalToolFinishAccountingSerializesConcurrentUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router.markStateThreadGoalTurnActiveNow(threadID, "turn-1", goal.GoalID)
+	router.markStateThreadGoalTurnActiveNow(threadID, "turn-1", goal.GoalID, goal.Status)
 	router.recordGoalTokenUsage(threadID, "turn-1", model.AgentUsage{InputTokens: 10})
 	now := time.Now().Add(time.Second)
 	var wg sync.WaitGroup

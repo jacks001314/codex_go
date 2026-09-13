@@ -116,8 +116,10 @@ func (r *RuntimeRouter) executeGoalToolCreate(ctx context.Context, invocation *t
 		slog.Warn("failed to set empty thread preview from goal objective", "thread_id", threadID, "error", err)
 	}
 	r.resetGoalEmptyResponses(threadID)
-	r.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID)
+	r.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID, goal.Status)
 	r.emitStateThreadGoalUpdate(goal, turnID, "", telemetry.GoalEventKindCreated)
+	r.recordGoalCreatedMetric()
+	r.recordGoalStatusTransitionForStateGoal(nil, goal)
 	return goalToolOutput(goalToolResponseForState(goal, false)), nil
 }
 
@@ -141,6 +143,10 @@ func (r *RuntimeRouter) executeGoalToolUpdate(ctx context.Context, invocation *t
 
 	r.accountStateThreadGoalProgress(threadID, turnID, time.Now().UTC(), mode)
 	expectedGoalID := r.stateThreadGoalTurnExpectedID(threadID, turnID)
+	var previousStatus *state.ThreadGoalStatus
+	if current, getErr := r.services.StateRuntime.GetThreadGoal(ctx, threadID); getErr == nil && current != nil {
+		previousStatus = goalStatusPointer(current.Status)
+	}
 	goal, err := r.services.StateRuntime.UpdateThreadGoal(ctx, threadID, state.GoalUpdate{
 		Status:         &status,
 		ExpectedGoalID: expectedGoalID,
@@ -158,6 +164,7 @@ func (r *RuntimeRouter) executeGoalToolUpdate(ctx context.Context, invocation *t
 	}
 	r.resetGoalEmptyResponses(threadID)
 	r.emitStateThreadGoalUpdate(goal, turnID, "", telemetry.GoalEventKindStatusChanged)
+	r.recordGoalStatusTransitionForStateGoal(previousStatus, goal)
 	return goalToolOutput(goalToolResponseForState(goal, status == state.ThreadGoalComplete)), nil
 }
 

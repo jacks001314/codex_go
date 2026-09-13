@@ -21,7 +21,7 @@ func goalFinalResult(text string) *turn.AgentLoopResult {
 }
 
 func startAutomaticGoalTurn(router *RuntimeRouter, threadID, turnID, goalID string) {
-	router.markStateThreadGoalTurnActiveNow(threadID, turnID, goalID)
+	router.markStateThreadGoalTurnActiveNow(threadID, turnID, goalID, state.ThreadGoalActive)
 	router.markGoalContinuation(threadID, turnID)
 }
 
@@ -62,7 +62,7 @@ func TestGoalEmptyStreakResetsOnActivityAndNonAutomaticTurns(t *testing.T) {
 	runEmpty := func(prefix string, automatic bool) {
 		t.Helper()
 		turnID := prefix + fmt.Sprintf("-%d", time.Now().UnixNano())
-		router.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID)
+		router.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID, goal.Status)
 		if automatic {
 			router.markGoalContinuation(threadID, turnID)
 		}
