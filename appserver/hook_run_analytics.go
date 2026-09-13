@@ -72,6 +72,8 @@ func hookRunAnalyticsEventName(eventName HookEventName) string {
 		return "PostCompact"
 	case HookEventSessionStart:
 		return "SessionStart"
+	case HookEventSessionEnd:
+		return "SessionEnd"
 	case HookEventUserPromptSubmit:
 		return "UserPromptSubmit"
 	case HookEventSubagentStart:
@@ -80,6 +82,8 @@ func hookRunAnalyticsEventName(eventName HookEventName) string {
 		return "SubagentStop"
 	case HookEventStop:
 		return "Stop"
+	case HookEventInterrupt:
+		return "Interrupt"
 	default:
 		return strings.TrimSpace(string(eventName))
 	}

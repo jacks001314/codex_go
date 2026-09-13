@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"codex_go/envutil"
+	"codex_go/telemetry"
 )
 
 type HookRunner struct {
@@ -29,6 +30,9 @@ type HookRunner struct {
 	// McpToolHookExecutor executes mcp_tool hooks (Rust #38705). When nil,
 	// mcp_tool handlers are skipped like Rust's engine without an executor.
 	McpToolHookExecutor McpToolHookExecutor
+	// Metrics, when set, receives the completed-hook-run metrics (Rust's
+	// emit_hook_completed_metrics).
+	Metrics telemetry.TurnMetricSink
 
 	mu            sync.Mutex
 	asyncRuntimes map[string]*asyncHookRuntime
@@ -85,6 +89,16 @@ func NewHookRunner() *HookRunner {
 	return &HookRunner{Now: time.Now, capturedEnv: os.Environ(), asyncRuntimes: map[string]*asyncHookRuntime{}}
 }
 
+// SetMetrics installs the sink that receives the completed-hook-run metrics.
+func (r *HookRunner) SetMetrics(sink telemetry.TurnMetricSink) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Metrics = sink
+}
+
 func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRunResult, error) {
 	if r == nil {
 		return nil, fmt.Errorf("%w: hook runner is nil", ErrInvalidHook)
@@ -126,6 +140,7 @@ func (r *HookRunner) Run(ctx context.Context, request *HookRunRequest) (*HookRun
 		completed := completedHookSummary(metadata, runResult, hookRunStatus(request.EventName, runResult), hookOutputEntries(request.EventName, runResult))
 		completed = hookSummaryWithRunIDSuffix(completed, request.RunIDSuffix)
 		mergeHookRunEffect(result, hookRunEffect(request.EventName, runResult))
+		emitHookRunMetrics(r.Metrics, &completed)
 		r.notify(NotificationHookCompleted, &HookRunCompletedNotification{
 			ThreadID: request.ThreadID,
 			TurnID:   cloneString(request.TurnID),

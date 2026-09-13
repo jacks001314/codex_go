@@ -93,6 +93,7 @@ func (r *HookRunner) DrainAsyncResults(threadID string) []asyncHookResult {
 	for {
 		select {
 		case result := <-rt.results:
+			emitHookRunMetrics(r.Metrics, &result.Run)
 			r.notify(NotificationHookCompleted, &HookRunCompletedNotification{
 				ThreadID: result.ThreadID,
 				TurnID:   cloneString(result.TurnID),

@@ -1149,6 +1149,9 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	if options != nil && options.Requirements != nil {
 		services.ManagedNetworkRequirements = cloneRuntimeNetworkRequirements(options.Requirements.Network)
 	}
+	// The hook runner reports completed-hook-run metrics through the session
+	// metrics sink (Rust's emit_hook_completed_metrics).
+	services.HookRunner.SetMetrics(runtimeMetrics)
 	router := NewRuntimeRouter(services)
 	router.codexHomeScanCancel = func() { atomic.StoreInt32(&codexHomeScanCanceled, 1) }
 	router.configureEnvironmentHTTPPolicy()
