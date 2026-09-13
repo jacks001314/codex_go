@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -117,6 +118,171 @@ func ResolveOtelConfig(values map[string]any) (OtelConfig, []string) {
 	return resolved, warnings
 }
 
+// ValidateOtelConfigValues mirrors the typed deserialization of Rust's
+// OtelConfigToml: every field has a required shape, so a wrong shape (a
+// non-table `otel`, a non-string span attribute, an unknown exporter variant, a
+// missing OTLP endpoint or protocol, and so on) fails the config load. Unknown
+// fields are still ignored, as serde does for this struct.
+func ValidateOtelConfigValues(values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	raw, ok := values["otel"]
+	if !ok || raw == nil {
+		return nil
+	}
+	otel, ok := raw.(map[string]any)
+	if !ok {
+		return errors.New("otel must be a table")
+	}
+	if value, ok := otel["log_user_prompt"]; ok && value != nil {
+		if _, isBool := value.(bool); !isBool {
+			return errors.New("otel.log_user_prompt must be a boolean")
+		}
+	}
+	if value, ok := otel["environment"]; ok && value != nil {
+		if _, isString := value.(string); !isString {
+			return errors.New("otel.environment must be a string")
+		}
+	}
+	if value, ok := otel["tool_result"]; ok && value != nil {
+		table, isTable := value.(map[string]any)
+		if !isTable {
+			return errors.New("otel.tool_result must be a table")
+		}
+		if maxBytes, ok := table["max_bytes"]; ok && maxBytes != nil {
+			if _, valid := otelConfigIntValue(maxBytes); !valid {
+				return errors.New("otel.tool_result.max_bytes must be a non-negative integer")
+			}
+		}
+	}
+	if value, ok := otel["span_attributes"]; ok && value != nil {
+		table, isTable := value.(map[string]any)
+		if !isTable {
+			return errors.New("otel.span_attributes must be a table")
+		}
+		for _, key := range sortedStringKeys(table) {
+			if _, isString := table[key].(string); !isString {
+				return fmt.Errorf("otel.span_attributes.%s must be a string", key)
+			}
+		}
+	}
+	if value, ok := otel["tracestate"]; ok && value != nil {
+		table, isTable := value.(map[string]any)
+		if !isTable {
+			return errors.New("otel.tracestate must be a table")
+		}
+		for _, member := range sortedStringKeys(table) {
+			fields, isTable := table[member].(map[string]any)
+			if !isTable {
+				return fmt.Errorf("otel.tracestate.%s must be a table", member)
+			}
+			for _, field := range sortedStringKeys(fields) {
+				if _, isString := fields[field].(string); !isString {
+					return fmt.Errorf("otel.tracestate.%s.%s must be a string", member, field)
+				}
+			}
+		}
+	}
+	for _, key := range []string{"exporter", "trace_exporter", "metrics_exporter"} {
+		value, ok := otel[key]
+		if !ok || value == nil {
+			continue
+		}
+		if err := validateOtelExporterKind(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateOtelExporterKind mirrors serde's externally tagged OtelExporterKind:
+// "none"/"statsig", or a single-key otlp-http/otlp-grpc table with the required
+// endpoint (and, for HTTP, the protocol).
+func validateOtelExporterKind(key string, value any) error {
+	switch typed := value.(type) {
+	case string:
+		if typed != OtelExporterKindNone && typed != OtelExporterKindStatsig {
+			return fmt.Errorf("otel.%s has an unknown exporter variant %q", key, typed)
+		}
+		return nil
+	case map[string]any:
+		if len(typed) != 1 {
+			return fmt.Errorf("otel.%s must name exactly one exporter variant", key)
+		}
+		for variant, raw := range typed {
+			table, ok := raw.(map[string]any)
+			if !ok {
+				return fmt.Errorf("otel.%s.%s must be a table", key, variant)
+			}
+			switch variant {
+			case OtelExporterKindOtlpHTTP:
+				if _, ok := table["endpoint"].(string); !ok {
+					return fmt.Errorf("otel.%s.%s.endpoint must be a string", key, variant)
+				}
+				protocol, ok := table["protocol"].(string)
+				if !ok {
+					return fmt.Errorf("otel.%s.%s.protocol must be a string", key, variant)
+				}
+				if protocol != OtelHTTPProtocolBinary && protocol != OtelHTTPProtocolJSON {
+					return fmt.Errorf("otel.%s.%s has an unknown protocol %q", key, variant, protocol)
+				}
+			case OtelExporterKindOtlpGRPC:
+				if _, ok := table["endpoint"].(string); !ok {
+					return fmt.Errorf("otel.%s.%s.endpoint must be a string", key, variant)
+				}
+			default:
+				return fmt.Errorf("otel.%s has an unknown exporter variant %q", key, variant)
+			}
+			if err := validateOtelHeaders(key, variant, table["headers"]); err != nil {
+				return err
+			}
+			if err := validateOtelExporterTLS(key, variant, table["tls"]); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("otel.%s must be an exporter name or table", key)
+	}
+}
+
+func validateOtelHeaders(key string, variant string, value any) error {
+	if value == nil {
+		return nil
+	}
+	headers, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("otel.%s.%s.headers must be a table", key, variant)
+	}
+	for _, header := range sortedStringKeys(headers) {
+		if _, isString := headers[header].(string); !isString {
+			return fmt.Errorf("otel.%s.%s.headers.%s must be a string", key, variant, header)
+		}
+	}
+	return nil
+}
+
+func validateOtelExporterTLS(key string, variant string, value any) error {
+	if value == nil {
+		return nil
+	}
+	table, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("otel.%s.%s.tls must be a table", key, variant)
+	}
+	for _, field := range []string{"ca_certificate", "client_certificate", "client_private_key"} {
+		raw, ok := table[field]
+		if !ok || raw == nil {
+			continue
+		}
+		if _, isString := raw.(string); !isString {
+			return fmt.Errorf("otel.%s.%s.tls.%s must be a string", key, variant, field)
+		}
+	}
+	return nil
+}
+
 // Otel returns the resolved OTEL settings for this config (Rust's
 // `Config::otel`), applying the `OtelConfig` defaults to the raw values.
 func (c *Config) Otel() OtelConfig {
@@ -223,7 +389,13 @@ func otelConfigInt(value any) (int, bool) {
 	if !ok {
 		return 0, false
 	}
-	switch typed := table["max_bytes"].(type) {
+	return otelConfigIntValue(table["max_bytes"])
+}
+
+// otelConfigIntValue reads a non-negative integer config value (int64, int, an
+// integral float64, or a numeric string).
+func otelConfigIntValue(value any) (int, bool) {
+	switch typed := value.(type) {
 	case int64:
 		if typed >= 0 {
 			return int(typed), true

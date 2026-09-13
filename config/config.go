@@ -518,6 +518,13 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	if err := ValidateMCPServerValues(cfg.Values); err != nil {
 		return nil, err
 	}
+	// Rust deserializes `otel` into the typed OtelConfigToml, so a malformed
+	// shape (a non-table otel, a non-string span attribute, an unknown exporter
+	// variant, a missing OTLP endpoint/protocol, ...) fails the config load
+	// instead of being ignored.
+	if err := ValidateOtelConfigValues(cfg.Values); err != nil {
+		return nil, err
+	}
 	// Rust #43797: memories.version is a closed enum; an unrecognized value must
 	// fail config load rather than silently falling back to v1.
 	if memories, ok := cfg.Values["memories"].(map[string]any); ok {
