@@ -21,6 +21,12 @@ func isUserVerificationMethod(method Method) bool {
 func (r *RuntimeRouter) handleUserVerificationRuntime(request *Request) (any, error) {
 	switch request.Method {
 	case MethodUserVerificationStatus:
+		// Decode the (empty) params like Rust so an unknown field is rejected
+		// instead of being ignored.
+		var params UserVerificationStatusParams
+		if err := request.DecodeParams(&params); err != nil {
+			return nil, err
+		}
 		return userVerificationUnavailableStatus(), nil
 	case MethodUserVerificationEnroll:
 		var params UserVerificationEnrollParams

@@ -1,7 +1,11 @@
 package appserver
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -64,6 +68,13 @@ type UserVerificationErrorDetails struct {
 
 type UserVerificationStatusParams struct{}
 
+// UnmarshalJSON mirrors Rust's `#[serde(deny_unknown_fields)]` on the empty
+// status params.
+func (p *UserVerificationStatusParams) UnmarshalJSON(data []byte) error {
+	_, err := emptyUserVerificationParams(data)
+	return err
+}
+
 type UserVerificationStatusResponse struct {
 	CredentialID       *string                            `json:"credentialId"`
 	UnavailableReason  *UserVerificationUnavailableReason `json:"unavailableReason"`
@@ -71,6 +82,13 @@ type UserVerificationStatusResponse struct {
 }
 
 type UserVerificationEnrollParams struct{}
+
+// UnmarshalJSON mirrors Rust's `#[serde(deny_unknown_fields)]` on the empty
+// enroll params.
+func (p *UserVerificationEnrollParams) UnmarshalJSON(data []byte) error {
+	_, err := emptyUserVerificationParams(data)
+	return err
+}
 
 // UserVerificationEnrollResponse carries the local credential identity plus,
 // since Rust #44877, its public metadata. Algorithm/PublicKey are optional so
@@ -87,6 +105,13 @@ type UserVerificationEnrollResponse struct {
 
 type UserVerificationDeleteParams struct{}
 
+// UnmarshalJSON mirrors Rust's `#[serde(deny_unknown_fields)]` on the empty
+// delete params.
+func (p *UserVerificationDeleteParams) UnmarshalJSON(data []byte) error {
+	_, err := emptyUserVerificationParams(data)
+	return err
+}
+
 type UserVerificationDeleteResponse struct{}
 
 type UserVerificationVerifyParams struct {
@@ -95,12 +120,56 @@ type UserVerificationVerifyParams struct {
 	Description string `json:"description"`
 }
 
+// UnmarshalJSON mirrors Rust's `#[serde(deny_unknown_fields)]` verify params:
+// all three fields are required (Rust has no serde defaults) and unknown fields
+// are rejected. The value validation stays in validateUserVerificationRequest.
+func (p *UserVerificationVerifyParams) UnmarshalJSON(data []byte) error {
+	fields, err := userVerificationParamFields(data)
+	if err != nil {
+		return err
+	}
+	if err := rejectUnknownUserVerificationParams(fields, "challenge", "title", "description"); err != nil {
+		return err
+	}
+	if p.Challenge, err = requiredUserVerificationString(fields, "challenge"); err != nil {
+		return err
+	}
+	if p.Title, err = requiredUserVerificationString(fields, "title"); err != nil {
+		return err
+	}
+	if p.Description, err = requiredUserVerificationString(fields, "description"); err != nil {
+		return err
+	}
+	return nil
+}
+
 type UserVerificationVerifyResponse struct {
 	Proof UserVerificationProof `json:"proof"`
 }
 
 type UserVerificationCancelParams struct {
 	RequestID RequestID `json:"requestId"`
+}
+
+// UnmarshalJSON mirrors Rust's `#[serde(deny_unknown_fields)]` cancel params: the
+// object must contain exactly a non-null `requestId` (Rust's RequestId is an
+// untagged integer-or-string, so null or an extra field is an invalid request).
+func (p *UserVerificationCancelParams) UnmarshalJSON(data []byte) error {
+	fields, err := userVerificationParamFields(data)
+	if err != nil {
+		return err
+	}
+	if err := rejectUnknownUserVerificationParams(fields, "requestId"); err != nil {
+		return err
+	}
+	raw, ok := fields["requestId"]
+	if !ok {
+		return fmt.Errorf("userVerification/cancel params are missing requestId")
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("userVerification/cancel requestId must be an integer or string")
+	}
+	return json.Unmarshal(raw, &p.RequestID)
 }
 
 type UserVerificationCancelResponse struct{}
@@ -112,6 +181,77 @@ type userVerificationError struct {
 	message string
 	data    UserVerificationErrorDetails
 	invalid bool
+}
+
+// userVerificationParamFields decodes a params object, mirroring Rust's
+// `deny_unknown_fields` shape check: an explicit null or a non-object params
+// value cannot deserialize into the params struct.
+func userVerificationParamFields(data []byte) (map[string]json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, fmt.Errorf("userVerification params must be a JSON object")
+	}
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return nil, err
+	}
+	return fields, nil
+}
+
+// emptyUserVerificationParams accepts only an empty params object.
+func emptyUserVerificationParams(data []byte) (map[string]json.RawMessage, error) {
+	fields, err := userVerificationParamFields(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(fields) != 0 {
+		return nil, fmt.Errorf("unknown userVerification params: %s", strings.Join(sortedUserVerificationKeys(fields), ", "))
+	}
+	return fields, nil
+}
+
+// rejectUnknownUserVerificationParams rejects any field outside allowed.
+func rejectUnknownUserVerificationParams(fields map[string]json.RawMessage, allowed ...string) error {
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = true
+	}
+	var unknown []string
+	for key := range fields {
+		if !allowedSet[key] {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) != 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf("unknown userVerification params: %s", strings.Join(unknown, ", "))
+	}
+	return nil
+}
+
+// requiredUserVerificationString reads a required string field.
+func requiredUserVerificationString(fields map[string]json.RawMessage, key string) (string, error) {
+	raw, ok := fields[key]
+	if !ok {
+		return "", fmt.Errorf("userVerification params are missing %s", key)
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", fmt.Errorf("userVerification %s must be a string", key)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func sortedUserVerificationKeys(fields map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (e *userVerificationError) Error() string {

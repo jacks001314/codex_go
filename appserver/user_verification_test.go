@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"testing"
 )
 
@@ -103,4 +104,75 @@ func assertUserVerificationUnavailable(t *testing.T, response *Response) {
 	if got := response.Error.Data["reason"]; got != "providerUnavailable" {
 		t.Fatalf("unavailable data reason = %v", got)
 	}
+}
+
+// Mirrors Rust's
+// user_verification_cancel_stdio_validates_and_acknowledges_unknown_requests:
+// the cancel params require exactly a non-null requestId, and an integer or a
+// string request id is acknowledged even when unknown.
+func TestRuntimeRouterUserVerificationCancelValidatesParams(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	for _, params := range []string{
+		`{}`,
+		`{"requestId":null}`,
+		`{"requestId":1.5}`,
+		`{"requestId":1,"connectionId":2}`,
+	} {
+		response := router.Handle(requestWithRawParams(t, IntID(1), MethodUserVerificationCancel, params))
+		if response.Error == nil {
+			t.Fatalf("cancel params %s were accepted: %#v", params, response.Result)
+		}
+	}
+	for _, params := range []string{`{"requestId":100}`, `{"requestId":"100"}`} {
+		response := router.Handle(requestWithRawParams(t, IntID(2), MethodUserVerificationCancel, params))
+		if response.Error != nil {
+			t.Fatalf("cancel params %s error = %+v", params, response.Error)
+		}
+		if _, ok := response.Result.(*UserVerificationCancelResponse); !ok {
+			t.Fatalf("cancel params %s result = %#v", params, response.Result)
+		}
+	}
+}
+
+// Every user-verification params struct denies unknown fields like Rust's
+// `#[serde(deny_unknown_fields)]`, verify requires all three fields, and an
+// explicit null params object is invalid.
+func TestRuntimeRouterUserVerificationParamsRejectUnknownFields(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	for _, testCase := range []struct {
+		method Method
+		params string
+	}{
+		{MethodUserVerificationStatus, `{"extra":1}`},
+		{MethodUserVerificationEnroll, `{"extra":1}`},
+		{MethodUserVerificationDelete, `{"extra":1}`},
+		{MethodUserVerificationVerify, `{"challenge":"AQ","title":"Approve","description":"","extra":1}`},
+		{MethodUserVerificationVerify, `{"challenge":"AQ","title":"Approve"}`},
+		{MethodUserVerificationStatus, `null`},
+	} {
+		response := router.Handle(requestWithRawParams(t, IntID(1), testCase.method, testCase.params))
+		if response.Error == nil {
+			t.Fatalf("%s params %s were accepted: %#v", testCase.method, testCase.params, response.Result)
+		}
+	}
+	// The empty params object still decodes: status answers locally, and the
+	// mutating methods reach the unavailable provider instead of failing on the
+	// params shape.
+	if response := router.Handle(requestWithRawParams(t, IntID(2), MethodUserVerificationStatus, `{}`)); response.Error != nil {
+		t.Fatalf("status empty params error = %+v", response.Error)
+	}
+	for _, method := range []Method{MethodUserVerificationEnroll, MethodUserVerificationDelete} {
+		response := router.Handle(requestWithRawParams(t, IntID(3), method, `{}`))
+		if response.Error == nil || response.Error.Code != JSONRPCInternalErrorCode {
+			t.Fatalf("%s empty params error = %+v", method, response.Error)
+		}
+	}
+}
+
+func requestWithRawParams(t *testing.T, id RequestID, method Method, params string) *Request {
+	t.Helper()
+	if !json.Valid([]byte(params)) {
+		t.Fatalf("invalid test params: %s", params)
+	}
+	return &Request{JSONRPC: "2.0", ID: id, Method: method, Params: json.RawMessage(params)}
 }
