@@ -51,7 +51,10 @@ func ServeRemoteControlOnly(ctx context.Context, options *RemoteControlOnlyOptio
 	if manager.StatusChanged().Status == remotecontrol.StatusDisabled {
 		manager.PublishConnectionStatus(remotecontrol.StatusConnecting)
 	}
-	loopOptions := remoteControlOnlyLoopOptions(options.LoopOptions, router.authRevisionSnapshot)
+	// Watch the login lifetime, not every credential refresh: a same-owner token
+	// refresh keeps the live relay connection (Rust #44341), while an identity
+	// change wakes the loop to reconnect with the new owner's credentials.
+	loopOptions := remoteControlOnlyLoopOptions(options.LoopOptions, router.remoteControlAuthRevision)
 	loop := remotecontrol.NewRemoteControlWebsocketLoop(manager, loopOptions)
 
 	runCtx, cancel := context.WithCancel(ctx)

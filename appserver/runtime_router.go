@@ -756,6 +756,15 @@ func (r *RuntimeRouter) authOwnerRevisionSnapshot() uint64 {
 	return r.authOwnerRevision
 }
 
+// remoteControlAuthRevision is the login-lifetime revision the remote-control
+// websocket loop watches (Rust #44341). Unlike authRevision it does not advance
+// on a same-owner token refresh, so a refresh preserves the live relay
+// connection (and its reconnect backoff) instead of churning it; logout, login,
+// and identity changes still advance it and wake the loop.
+func (r *RuntimeRouter) remoteControlAuthRevision(context.Context) (uint64, error) {
+	return r.authOwnerRevisionSnapshot(), nil
+}
+
 func (r *RuntimeRouter) authChangedChannel() <-chan struct{} {
 	if r == nil {
 		return nil

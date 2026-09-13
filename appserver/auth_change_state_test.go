@@ -1,10 +1,12 @@
 package appserver
 
 import (
+	"context"
 	"testing"
 
 	"codex_go/auth"
 	"codex_go/model"
+	"codex_go/remotecontrol"
 )
 
 // TestRuntimeRouterAuthOwnerRevisionTracksIdentityChanges covers the app-server
@@ -75,5 +77,80 @@ func TestRuntimeRouterAuthOwnerRevisionTracksIdentityChanges(t *testing.T) {
 	router.noteAuthChanged()
 	if router.services.Agent != custom {
 		t.Fatal("injected agent runner was discarded on an auth ownership change")
+	}
+}
+
+// TestRuntimeRouterRemoteControlWatchIsLoginScoped covers Rust #44341's relay
+// scoping: the remote-control loop watches the login lifetime, so a same-owner
+// token refresh preserves the live connection while an identity change wakes it.
+func TestRuntimeRouterRemoteControlWatchIsLoginScoped(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	snapshot := func(user string, token string) *auth.AuthDotJSON {
+		return &auth.AuthDotJSON{
+			AuthMode: "chatgpt",
+			Tokens: map[string]any{
+				"access_token":    token,
+				"chatgpt_user_id": user,
+				"account_id":      "workspace-" + user,
+			},
+		}
+	}
+	router.requireAccount().ApplyAuthSnapshot(snapshot("owner-e", "token-1"))
+	router.noteAuthChanged()
+	revision, err := router.remoteControlAuthRevision(context.Background())
+	if err != nil {
+		t.Fatalf("remoteControlAuthRevision error = %v", err)
+	}
+
+	// A same-owner token refresh must not wake the relay.
+	router.requireAccount().ApplyAuthSnapshot(snapshot("owner-e", "token-2"))
+	router.noteAuthChanged()
+	refreshed, err := router.remoteControlAuthRevision(context.Background())
+	if err != nil {
+		t.Fatalf("remoteControlAuthRevision error = %v", err)
+	}
+	if refreshed != revision {
+		t.Fatalf("same-owner refresh advanced the remote-control revision: %d -> %d", revision, refreshed)
+	}
+
+	// An account switch must wake the relay so it reconnects as the new owner.
+	router.requireAccount().ApplyAuthSnapshot(snapshot("owner-f", "token-3"))
+	router.noteAuthChanged()
+	switched, err := router.remoteControlAuthRevision(context.Background())
+	if err != nil {
+		t.Fatalf("remoteControlAuthRevision error = %v", err)
+	}
+	if switched == revision {
+		t.Fatal("account switch did not advance the remote-control revision")
+	}
+}
+
+// TestRemoteControlOnlyLoopOptionsInstallsLoginScopedRevision covers the
+// remote-control-only wiring: the loop picks up the login-scoped revision while
+// an explicit caller-supplied revision is preserved.
+func TestRemoteControlOnlyLoopOptionsInstallsLoginScopedRevision(t *testing.T) {
+	called := false
+	revision := func(context.Context) (uint64, error) { called = true; return 7, nil }
+
+	installed := remoteControlOnlyLoopOptions(nil, revision)
+	if installed == nil || installed.AuthRevision == nil {
+		t.Fatal("nil options did not receive the revision")
+	}
+	if got, _ := installed.AuthRevision(context.Background()); got != 7 || !called {
+		t.Fatalf("installed revision = %d, called = %v", got, called)
+	}
+
+	existing := remoteControlOnlyLoopOptions(&remotecontrol.RemoteControlWebsocketLoopOptions{}, revision)
+	if existing == nil || existing.AuthRevision == nil {
+		t.Fatal("existing options did not receive the revision")
+	}
+
+	custom := func(context.Context) (uint64, error) { return 11, nil }
+	preserved := remoteControlOnlyLoopOptions(&remotecontrol.RemoteControlWebsocketLoopOptions{AuthRevision: custom}, revision)
+	if preserved == nil || preserved.AuthRevision == nil {
+		t.Fatal("explicit revision was dropped")
+	}
+	if got, _ := preserved.AuthRevision(context.Background()); got != 11 {
+		t.Fatalf("explicit revision = %d, want 11", got)
 	}
 }
