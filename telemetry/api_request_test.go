@@ -8,6 +8,128 @@ import (
 	"codex_go/model"
 )
 
+// The handshake record: a successful dial reports no status, and a failed one
+// reports the status, the error, and the response's request id / cf-ray on both
+// records.
+func TestRecordWebsocketConnectRoutesLogAndTraceLikeRust(t *testing.T) {
+	t.Setenv(OpenAIAPIKeyEnvVar, "sk-test")
+
+	logBodies := make(chan map[string]any, 2)
+	logServer := newLogBatchServer(t, logBodies)
+	defer logServer.Close()
+	traceBodies := make(chan map[string]any, 2)
+	traceServer := newTraceBatchServer(t, traceBodies)
+	defer traceServer.Close()
+
+	logsClient := NewLogsClient(LogsClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       logServer.URL + "/v1/logs",
+		ExportInterval: -1,
+	})
+	tracesClient := NewTracesClient(TracesClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       traceServer.URL + "/v1/traces",
+		ExportInterval: -1,
+	})
+	session := NewSessionTelemetry(SessionTelemetryMetadata{
+		ConversationID: "thread-1",
+		AuthEnv:        CollectAuthEnvTelemetry("CUSTOM_PROVIDER_KEY", false),
+	})
+	session.Logs = logsClient
+	span := tracesClient.Tracer().StartSpan("stream_request", nil)
+	session.RecordWebsocketConnect(WithSpan(context.Background(), span), model.WebsocketConnectRecord{
+		Duration:           17 * time.Millisecond,
+		Endpoint:           "/responses",
+		AuthHeaderAttached: true,
+		AuthHeaderName:     "authorization",
+		AgentID:            "agent-runtime-ws",
+		TaskID:             "task-run-ws",
+	})
+	status := 401
+	session.RecordWebsocketConnect(WithSpan(context.Background(), span), model.WebsocketConnectRecord{
+		Duration:               12 * time.Millisecond,
+		Status:                 &status,
+		ErrorMessage:           "handshake failed: HTTP 401",
+		Endpoint:               "/responses",
+		AuthHeaderAttached:     true,
+		AuthHeaderName:         "authorization",
+		RetryAfterUnauthorized: true,
+		RequestID:              "req-ws-401",
+		CFRay:                  "ray-ws-401",
+		AuthError:              "missing_authorization_header",
+		AuthErrorCode:          "token_expired",
+	})
+	span.End()
+	if err := logsClient.Flush(context.Background()); err != nil {
+		t.Fatalf("logs Flush() error = %v", err)
+	}
+	if err := tracesClient.Flush(context.Background()); err != nil {
+		t.Fatalf("traces Flush() error = %v", err)
+	}
+
+	select {
+	case body := <-logBodies:
+		records := logRecords(t, body)
+		if len(records) != 2 {
+			t.Fatalf("records = %#v", records)
+		}
+		success := logRecordAttributes(t, records[0])
+		for key, want := range map[string]string{
+			"event.name":                      "codex.websocket_connect",
+			"duration_ms":                     "17",
+			"success":                         "true",
+			"endpoint":                        "/responses",
+			"auth.header_attached":            "true",
+			"auth.header_name":                "authorization",
+			"auth.connection_reused":          "false",
+			"auth.agent_id":                   "agent-runtime-ws",
+			"auth.task_id":                    "task-run-ws",
+			"auth.env_openai_api_key_present": "true",
+		} {
+			if got := success[key]; got != want {
+				t.Fatalf("log attribute %s = %q, want %q", key, got, want)
+			}
+		}
+		for _, absent := range []string{"http.response.status_code", "error.message", "auth.request_id"} {
+			if _, ok := success[absent]; ok {
+				t.Fatalf("successful handshake reported %s: %#v", absent, success)
+			}
+		}
+		failure := logRecordAttributes(t, records[1])
+		for key, want := range map[string]string{
+			"success":                       "false",
+			"http.response.status_code":     "401",
+			"error.message":                 "handshake failed: HTTP 401",
+			"auth.retry_after_unauthorized": "true",
+			"auth.request_id":               "req-ws-401",
+			"auth.cf_ray":                   "ray-ws-401",
+			"auth.error":                    "missing_authorization_header",
+			"auth.error_code":               "token_expired",
+		} {
+			if got := failure[key]; got != want {
+				t.Fatalf("failure attribute %s = %q, want %q", key, got, want)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the logs endpoint did not receive the connect records")
+	}
+
+	select {
+	case body := <-traceBodies:
+		spans := body["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+		events := spans[0].(map[string]any)["events"].([]any)
+		if len(events) != 2 {
+			t.Fatalf("span events = %#v", events)
+		}
+		attributes := spanEventAttributes(t, events[1].(map[string]any))
+		if attributes["event.name"] != "codex.websocket_connect" || attributes["http.response.status_code"] != "401" {
+			t.Fatalf("span event attributes = %#v", attributes)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the traces endpoint did not receive the connect events")
+	}
+}
+
 // The completed-response record carries the token counts, the time to first
 // token, and the inference settings on both records, and omits the counts a
 // response did not report.

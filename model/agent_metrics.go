@@ -22,6 +22,29 @@ type MetricsSink interface {
 	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }
 
+// WebsocketConnectRecord carries the values of one websocket handshake attempt
+// (Rust's SessionTelemetry::record_websocket_connect).
+type WebsocketConnectRecord struct {
+	Duration time.Duration
+	// Status is absent when the handshake failed without an HTTP response.
+	Status *int
+	// ErrorMessage is absent when the handshake succeeded.
+	ErrorMessage           string
+	Endpoint               string
+	AuthHeaderAttached     bool
+	AuthHeaderName         string
+	RetryAfterUnauthorized bool
+	RecoveryMode           string
+	RecoveryPhase          string
+	ConnectionReused       bool
+	RequestID              string
+	CFRay                  string
+	AuthError              string
+	AuthErrorCode          string
+	AgentID                string
+	TaskID                 string
+}
+
 // SSECompletedRecord carries the values of a completed model response for the
 // `codex.sse_event` record (Rust's SessionTelemetry::sse_event_completed).
 type SSECompletedRecord struct {
@@ -86,6 +109,8 @@ type SessionTelemetrySink interface {
 	RecordWebsocketRequest(ctx context.Context, record WebsocketRequestRecord)
 	// RecordSSEEventCompleted reports a completed model response's usage.
 	RecordSSEEventCompleted(ctx context.Context, record SSECompletedRecord)
+	// RecordWebsocketConnect reports one websocket handshake attempt.
+	RecordWebsocketConnect(ctx context.Context, record WebsocketConnectRecord)
 }
 
 // Metric names mirror codex-rs/otel/src/metrics/names.rs.
@@ -279,6 +304,50 @@ func (r *ResponsesAgentRunner) recordWebsocketRequest(err error, duration time.D
 	tags := map[string]string{"success": strconv.FormatBool(err == nil)}
 	r.Metrics.Counter(websocketRequestCountMetric, 1, tags)
 	r.Metrics.RecordDuration(websocketRequestDurationMetric, duration, tags)
+}
+
+// recordWebsocketConnectRecord mirrors the record half of
+// SessionTelemetry::record_websocket_connect, which Rust reports around the
+// handshake attempt (the connect telemetry always describes a fresh connection).
+func (r *ResponsesAgentRunner) recordWebsocketConnectRecord(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, httpRequest *http.Request, handshakeResponse *http.Response, dialErr error, duration time.Duration, retryAfterUnauthorized bool) {
+	if r == nil || r.Telemetry == nil {
+		return
+	}
+	record := WebsocketConnectRecord{
+		Duration:               duration,
+		Endpoint:               r.responsesEndpoint(apiRequestModel(apiRequest), request).Path(),
+		RetryAfterUnauthorized: retryAfterUnauthorized,
+	}
+	if httpRequest != nil && strings.TrimSpace(httpRequest.Header.Get("Authorization")) != "" {
+		record.AuthHeaderAttached = true
+		record.AuthHeaderName = "authorization"
+	}
+	if dialErr != nil {
+		record.ErrorMessage = dialErr.Error()
+	}
+	// Rust reports the handshake status and the response debug context only for a
+	// failed attempt (the error carries them); a successful dial has neither.
+	if dialErr != nil && handshakeResponse != nil {
+		status := handshakeResponse.StatusCode
+		record.Status = &status
+		record.RequestID = responseHeaderValue(handshakeResponse.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader)
+		record.CFRay = responseHeaderValue(handshakeResponse.Header, "cf-ray")
+		record.AuthError = responseHeaderValue(handshakeResponse.Header, "x-openai-authorization-error")
+		record.AuthErrorCode = responseAuthorizationErrorCode(handshakeResponse.Header)
+	}
+	if r.AgentIdentityTelemetry != nil {
+		record.AgentID = r.AgentIdentityTelemetry.AgentID
+		record.TaskID = r.AgentIdentityTelemetry.TaskID
+	}
+	r.Telemetry.RecordWebsocketConnect(ctx, record)
+}
+
+// apiRequestModel reports the model of a built request, or "" when absent.
+func apiRequestModel(apiRequest *responsesAgentRequest) string {
+	if apiRequest == nil {
+		return ""
+	}
+	return apiRequest.Model
 }
 
 // recordWebsocketRequestRecord mirrors the record half of

@@ -569,7 +569,11 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	dialStartedAt := time.Now()
 	conn, response, err := websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: httpRequest.Header})
+	// The prewarm handshake reports the same attempt telemetry, with a fresh
+	// connection and no retry.
+	r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), false)
 	if err != nil {
 		if response != nil && response.StatusCode == http.StatusUpgradeRequired {
 			r.disableWebsockets()
@@ -771,7 +775,11 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		connectCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		var response *http.Response
+		dialStartedAt := time.Now()
 		conn, response, err = websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: httpRequest.Header})
+		// Rust reports every handshake attempt with connection_reused false,
+		// because a dial always establishes a new connection.
+		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), authRetried)
 		if err != nil {
 			if response != nil && response.StatusCode == http.StatusUpgradeRequired {
 				r.disableWebsockets()

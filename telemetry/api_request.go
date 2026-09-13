@@ -11,6 +11,62 @@ import (
 // half is recorded by the model client (which cannot import this package); the
 // diagnostic record is emitted here from the client's per-attempt values.
 
+// RecordWebsocketConnect mirrors SessionTelemetry::record_websocket_connect: the
+// handshake's duration and outcome, the auth observability the attempt carried,
+// the endpoint, and the response's request id / cf-ray / auth error, on both
+// records.
+func (t *SessionTelemetry) RecordWebsocketConnect(ctx context.Context, record model.WebsocketConnectRecord) {
+	if t == nil || t.Logs == nil {
+		return
+	}
+	authEnv := t.Metadata.AuthEnv
+	success := record.ErrorMessage == ""
+	if record.Status != nil {
+		success = success && *record.Status >= 200 && *record.Status <= 299
+	}
+	fields := map[string]string{
+		"duration_ms":                                 strconv.FormatInt(record.Duration.Milliseconds(), 10),
+		"success":                                     strconv.FormatBool(success),
+		"endpoint":                                    record.Endpoint,
+		"auth.header_attached":                        strconv.FormatBool(record.AuthHeaderAttached),
+		"auth.retry_after_unauthorized":               strconv.FormatBool(record.RetryAfterUnauthorized),
+		"auth.connection_reused":                      strconv.FormatBool(record.ConnectionReused),
+		"auth.env_openai_api_key_present":             strconv.FormatBool(authEnv.OpenAIAPIKeyEnvPresent),
+		"auth.env_codex_api_key_present":              strconv.FormatBool(authEnv.CodexAPIKeyEnvPresent),
+		"auth.env_codex_api_key_enabled":              strconv.FormatBool(authEnv.CodexAPIKeyEnvEnabled),
+		"auth.env_refresh_token_url_override_present": strconv.FormatBool(authEnv.RefreshTokenURLOverridePresent),
+	}
+	if record.Status != nil {
+		fields["http.response.status_code"] = strconv.Itoa(*record.Status)
+	}
+	if record.ErrorMessage != "" {
+		fields["error.message"] = record.ErrorMessage
+	}
+	if authEnv.ProviderEnvKeyPresent != nil {
+		fields["auth.env_provider_key_present"] = strconv.FormatBool(*authEnv.ProviderEnvKeyPresent)
+	}
+	for _, optional := range []struct {
+		key   string
+		value string
+	}{
+		{"auth.env_provider_key_name", authEnv.ProviderEnvKeyName},
+		{"auth.header_name", record.AuthHeaderName},
+		{"auth.recovery_mode", record.RecoveryMode},
+		{"auth.recovery_phase", record.RecoveryPhase},
+		{"auth.request_id", record.RequestID},
+		{"auth.cf_ray", record.CFRay},
+		{"auth.error", record.AuthError},
+		{"auth.error_code", record.AuthErrorCode},
+		{"auth.agent_id", record.AgentID},
+		{"auth.task_id", record.TaskID},
+	} {
+		if optional.value != "" {
+			fields[optional.key] = optional.value
+		}
+	}
+	t.LogAndTraceEvent(ctx, "codex.websocket_connect", fields, nil, nil)
+}
+
 // RecordSSEEventCompleted mirrors SessionTelemetry::sse_event_completed: the
 // token counts and timing of a completed model response, on both the log record
 // and the span event.

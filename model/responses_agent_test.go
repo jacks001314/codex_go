@@ -2345,6 +2345,66 @@ func TestResponsesAgentRunnerRecordsWebsocketRequestsLikeRust(t *testing.T) {
 	if !second.ConnectionReused || second.ErrorMessage != "" {
 		t.Fatalf("second record = %#v", second)
 	}
+	// Only the request that dialed reports a handshake attempt.
+	if len(sink.websocketConnects) != 1 {
+		t.Fatalf("connect records = %#v", sink.websocketConnects)
+	}
+	connect := sink.websocketConnects[0]
+	if connect.ErrorMessage != "" || connect.Status != nil {
+		t.Fatalf("connect record = %#v", connect)
+	}
+	if connect.Endpoint != "/responses" || connect.ConnectionReused || connect.RetryAfterUnauthorized {
+		t.Fatalf("connect record = %#v", connect)
+	}
+	if connect.AgentID != "agent-1" || connect.TaskID != "task-1" {
+		t.Fatalf("connect record = %#v", connect)
+	}
+}
+
+// A failed handshake reports the HTTP status and the response's request id and
+// cf-ray headers (Rust's record_websocket_connect).
+func TestResponsesAgentRunnerRecordsWebsocketConnectFailureLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-request-id", "req-ws-401")
+		w.Header().Set("cf-ray", "ray-ws-401")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	sink := &recordingTelemetrySink{}
+	initialAuth := BearerAuthHeaders("token", "", false)
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{BaseURL: server.URL}, Auth: &initialAuth, SupportsWebsockets: true,
+	})
+	runner.Telemetry = sink
+	if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "hello", ThreadID: "thread-1", TurnID: "turn-1"}); err == nil {
+		t.Fatal("RunWebSocket() error = nil")
+	}
+	// The 401 handshake triggers one auth recovery, so the retry reports a second
+	// attempt flagged as retrying after an unauthorized response.
+	if len(sink.websocketConnects) != 2 {
+		t.Fatalf("connect records = %#v", sink.websocketConnects)
+	}
+	record := sink.websocketConnects[0]
+	if record.Status == nil || *record.Status != http.StatusUnauthorized {
+		t.Fatalf("connect record = %#v", record)
+	}
+	if record.ErrorMessage == "" {
+		t.Fatalf("connect record = %#v", record)
+	}
+	if record.RequestID != "req-ws-401" || record.CFRay != "ray-ws-401" {
+		t.Fatalf("connect record = %#v", record)
+	}
+	if record.Endpoint != "/responses" || !record.AuthHeaderAttached {
+		t.Fatalf("connect record = %#v", record)
+	}
+	if record.RetryAfterUnauthorized {
+		t.Fatalf("first connect record = %#v", record)
+	}
+	if retry := sink.websocketConnects[1]; !retry.RetryAfterUnauthorized ||
+		retry.Status == nil || *retry.Status != http.StatusUnauthorized {
+		t.Fatalf("retry connect record = %#v", retry)
+	}
 }
 
 // Every HTTP attempt reports its api-request record: the attempt number, the
