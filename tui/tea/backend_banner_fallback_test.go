@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/chatwidget"
 )
 
 func backendBannerFallbackModel(t *testing.T, currentModel string) *Model {
@@ -177,5 +178,53 @@ func TestModelBackendBannerFallbackPersistsReserveReturn(t *testing.T) {
 	}
 	if got := loadReserveReturn(home, "thread-1"); got != nil {
 		t.Fatalf("return target survived recovery: %#v", got)
+	}
+}
+
+// TestModelBackendBannerContinueReserveAction pins Rust's local "Continue with
+// Luna Reserve" choice: while the current model is Reserve, the surface offers
+// it and selecting it dismisses the notice without a backend CTA.
+func TestModelBackendBannerContinueReserveAction(t *testing.T) {
+	model := backendBannerStateModel(t, &BackendBannerView{
+		BannerType:  BackendBannerLunaReserve,
+		Title:       "Reserve",
+		Dismissible: true,
+	}, BackendBannerRecoveryInput{AccountID: "acct"})
+	model.State.Model = LunaReserveModel
+	if !strings.Contains(model.View(), "Continue with Luna Reserve") {
+		t.Fatalf("continue choice missing:\n%s", model.View())
+	}
+	model.Update(runes("1"))
+	if model.BackendBanner() != nil {
+		t.Fatal("continue choice did not dismiss the reserve notice")
+	}
+}
+
+// TestModelBackendBannerFallbackRewritesQueuedSubmissions pins Rust's
+// apply_reserve_fallback_to_pending_turn: a queued turn naming the replaced
+// model is retargeted at the accepted one.
+func TestModelBackendBannerFallbackRewritesQueuedSubmissions(t *testing.T) {
+	model := backendBannerFallbackModel(t, "gpt-5")
+	model.modelCatalogOpts = []codextui.ModelPickerOption{
+		{ID: "gpt-5", ShowInPicker: true},
+		{ID: LunaReserveModel, ShowInPicker: false},
+	}
+	oldEffort := "medium"
+	model.queued = []queuedSubmission{{Request: SubmitRequest{
+		Model: "gpt-5",
+		CollaborationMode: &chatwidget.CollaborationMode{
+			Settings: chatwidget.CollaborationModeSettings{Model: "gpt-5", ReasoningEffort: &oldEffort},
+		},
+	}}}
+	model.applyBackendBannerResult(BackendBannerResultMsg{Read: BackendBannerRead{
+		Banner:   &BackendBannerView{BannerType: BackendBannerLunaReserve},
+		Recovery: BackendBannerRecoveryInput{AccountID: "acct"},
+	}})
+	model.applyBackendBannerFallback()
+	if len(model.queued) != 1 || model.queued[0].Request.Model != LunaReserveModel {
+		t.Fatalf("queued request = %#v", model.queued)
+	}
+	if mode := model.queued[0].Request.CollaborationMode; mode == nil || mode.Settings.Model != LunaReserveModel {
+		t.Fatalf("queued collaboration mode = %#v", mode)
 	}
 }

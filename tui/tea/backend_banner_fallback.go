@@ -79,6 +79,10 @@ func (m *Model) applyBackendBannerFallback() {
 	if strings.TrimSpace(transition.Effort) != "" {
 		m.State.ReasoningEffort = transition.Effort
 	}
+	// A submission queued before the switch may still name the replaced model.
+	if previousModel == LunaReserveModel || transition.Model == LunaReserveModel {
+		m.rewriteQueuedSubmissionsForModelSwitch(previousModel, transition.Model, transition.Effort)
+	}
 	m.refreshServiceTierCommands()
 	// The post-switch notice is a new occurrence, not the blocked-state one.
 	m.backendBanner.shown = false
@@ -113,4 +117,37 @@ func (m *Model) backendBannerSwitchNotice(transition *AutomaticModelSwitch) stri
 		}
 	}
 	return message + " " + suffix
+}
+
+// rewriteQueuedSubmissionsForModelSwitch mirrors Rust's
+// apply_reserve_fallback_to_pending_turn: a queued turn composed before the
+// switch is retargeted at the accepted model.
+func (m *Model) rewriteQueuedSubmissionsForModelSwitch(replacedModel string, newModel string, newEffort string) {
+	if m == nil || strings.TrimSpace(replacedModel) == "" || strings.TrimSpace(newModel) == "" {
+		return
+	}
+	var effort *string
+	if strings.TrimSpace(newEffort) != "" {
+		value := newEffort
+		effort = &value
+	}
+	rewrite := func(request *SubmitRequest) {
+		if request == nil || strings.TrimSpace(request.Model) != replacedModel {
+			return
+		}
+		request.Model = newModel
+		if request.CollaborationMode != nil {
+			request.CollaborationMode.Settings.Model = newModel
+			request.CollaborationMode.Settings.ReasoningEffort = effort
+		}
+	}
+	for index := range m.queued {
+		rewrite(&m.queued[index].Request)
+	}
+	for index := range m.rejectedSteers {
+		rewrite(&m.rejectedSteers[index].Request)
+	}
+	for index := range m.pendingSteers {
+		rewrite(&m.pendingSteers[index].Request)
+	}
 }

@@ -30,6 +30,10 @@ const (
 	BannerActionOpenURL     BackendBannerActionKind = "open_url"
 	BannerActionNotifyOwner BackendBannerActionKind = "notify_owner"
 	BannerActionResetUsage  BackendBannerActionKind = "reset_usage"
+	// BannerActionContinueReserve is the model-local "Continue with Luna
+	// Reserve" choice Rust adds to the focused Reserve picker while the current
+	// model is Reserve; it dismisses the notice without a backend CTA.
+	BannerActionContinueReserve BackendBannerActionKind = "continue_reserve"
 )
 
 // BackendBannerAction is one resolved CTA: the app resolves the backend action
@@ -390,6 +394,7 @@ func (m *Model) handleBackendBannerKey(message bubbletea.KeyMsg) (bubbletea.Cmd,
 		return nil, false
 	}
 	banner := m.backendBanner.visibleBanner(m.currentBannerModel())
+	actions := m.backendBannerActions(banner)
 	switch message.Type {
 	case bubbletea.KeyEsc:
 		if !banner.Dismissible {
@@ -402,10 +407,15 @@ func (m *Model) handleBackendBannerKey(message bubbletea.KeyMsg) (bubbletea.Cmd,
 			return nil, false
 		}
 		index := int(message.Runes[0] - '1')
-		if index < 0 || index >= len(banner.Actions) {
+		if index < 0 || index >= len(actions) {
 			return nil, false
 		}
-		action := banner.Actions[index]
+		action := actions[index]
+		if action.Kind == BannerActionContinueReserve {
+			// Continuing is a local dismissal, separate from the backend's CTAs.
+			m.backendBanner.dismiss()
+			return nil, true
+		}
 		if action.Kind == BannerActionResetUsage {
 			return m.openRateLimitResetView(), true
 		}
@@ -417,6 +427,19 @@ func (m *Model) handleBackendBannerKey(message bubbletea.KeyMsg) (bubbletea.Cmd,
 	return nil, false
 }
 
+// backendBannerActions is the CTA list the surface renders. Rust appends the
+// local "Continue with Luna Reserve" choice while the current model is Reserve.
+func (m *Model) backendBannerActions(banner *BackendBannerView) []BackendBannerAction {
+	if banner == nil {
+		return nil
+	}
+	actions := append([]BackendBannerAction(nil), banner.Actions...)
+	if banner.BannerType == BackendBannerLunaReserve && m.currentBannerModel() == LunaReserveModel {
+		actions = append(actions, BackendBannerAction{Label: "Continue with Luna Reserve", Kind: BannerActionContinueReserve})
+	}
+	return actions
+}
+
 // renderBackendBanner renders the inline banner above the composer.
 func (m *Model) renderBackendBanner() string {
 	currentModel := m.currentBannerModel()
@@ -425,6 +448,7 @@ func (m *Model) renderBackendBanner() string {
 		return ""
 	}
 	m.backendBanner.present(banner, currentModel)
+	actions := m.backendBannerActions(banner)
 	title := banner.Title
 	description := banner.Description
 	// The backend emits the reserve banner only after ordinary usage is
@@ -448,13 +472,13 @@ func (m *Model) renderBackendBanner() string {
 			lines = append(lines, "  "+line)
 		}
 	}
-	if len(banner.Actions) > 0 {
+	if len(actions) > 0 {
 		lines = append(lines, "")
-		for index, action := range banner.Actions {
+		for index, action := range actions {
 			lines = append(lines, "  "+codextui.NumberedSelectionPrefix(index, false)+action.Label)
 		}
 	}
-	if hint := backendBannerHint(banner.Dismissible, len(banner.Actions) > 0); hint != "" {
+	if hint := backendBannerHint(banner.Dismissible, len(actions) > 0); hint != "" {
 		lines = append(lines, "", "  "+hint)
 	}
 	for index, line := range lines {
