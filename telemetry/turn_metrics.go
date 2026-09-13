@@ -1,15 +1,7 @@
 package telemetry
 
-// Turn-scoped OTel-style metric names, mirroring
-// codex-rs/otel/src/metrics/names.rs.
-const (
-	TurnTokenUsageMetric       = "codex.turn.token_usage"
-	TurnToolCallMetric         = "codex.turn.tool.call"
-	TurnMemoryMetric           = "codex.turn.memory"
-	TurnNetworkProxyMetric     = "codex.turn.network_proxy"
-	TurnE2EDurationMSMetric    = "codex.turn.e2e_duration_ms"
-	TurnRunningProcessesMetric = "codex.turn.unified_exec.running_processes"
-)
+// Turn-scoped OTel-style metric names live in metric_names.go
+// (codex-rs/otel/src/metrics/names.rs).
 
 // Turn metric tag keys.
 const (

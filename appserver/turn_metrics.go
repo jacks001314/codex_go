@@ -184,5 +184,5 @@ func (r *RuntimeRouter) emitTurnRunningProcessesMetric(sink telemetry.TurnMetric
 	if r != nil && r.services.UnifiedExec != nil {
 		count = len(r.services.UnifiedExec.ListProcesses(strings.TrimSpace(threadID)))
 	}
-	sink.Histogram(telemetry.TurnRunningProcessesMetric, count, nil)
+	sink.Histogram(telemetry.TurnUnifiedExecRunningProcessesMetric, count, nil)
 }

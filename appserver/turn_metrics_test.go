@@ -91,7 +91,7 @@ func TestEmitTurnToolCallNetworkAndProcessMetrics(t *testing.T) {
 	if network == nil || network.Inc != 1 || network.Tags["active"] != "false" || network.Tags[telemetry.TurnTmpMemoryTag] != "true" {
 		t.Fatalf("network proxy metric = %#v", network)
 	}
-	processes := byName[telemetry.TurnRunningProcessesMetric+"/histogram"]
+	processes := byName[telemetry.TurnUnifiedExecRunningProcessesMetric+"/histogram"]
 	if processes == nil || processes.Value != 0 {
 		t.Fatalf("running processes metric = %#v", processes)
 	}
@@ -193,7 +193,7 @@ func TestRuntimeRouterTurnCompletionEmitsPerModelTokenUsage(t *testing.T) {
 	for _, record := range metrics.Records() {
 		counts[record.Name]++
 	}
-	for _, name := range []string{telemetry.TurnMemoryMetric, telemetry.TurnToolCallMetric, telemetry.TurnNetworkProxyMetric, telemetry.TurnRunningProcessesMetric} {
+	for _, name := range []string{telemetry.TurnMemoryMetric, telemetry.TurnToolCallMetric, telemetry.TurnNetworkProxyMetric, telemetry.TurnUnifiedExecRunningProcessesMetric} {
 		if counts[name] != 1 {
 			t.Fatalf("records for %s = %d, want 1 (all %#v)", name, counts[name], counts)
 		}
