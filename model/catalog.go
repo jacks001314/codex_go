@@ -1297,15 +1297,19 @@ func modelHiddenFromPicker(visibility string) bool {
 
 func ModelInfoFromSlug(slug string) ModelInfo {
 	return ModelInfo{
-		Slug:                           slug,
-		DisplayName:                    slug,
+		Slug:        slug,
+		DisplayName: slug,
+		// Rust model_info_from_slug: unified exec, no skills usage
+		// instructions, reasoning summaries supported by default.
+		ShellType:                      "unified_exec",
 		Visibility:                     VisibilityNone,
 		SupportedInAPI:                 true,
 		Priority:                       99,
 		BaseInstructions:               BaseInstructions,
 		ModelMessages:                  localModelMessages(),
-		IncludeSkillsUsageInstructions: true,
+		IncludeSkillsUsageInstructions: false,
 		IncludeAppsUsageInstructions:   false,
+		SupportsReasoningSummaries:     true,
 		DefaultReasoningSummary:        "auto",
 		WebSearchToolType:              "text",
 		TruncationPolicy:               TruncationPolicy{Mode: TruncationModeBytes, Limit: 10000},

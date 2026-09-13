@@ -1448,3 +1448,46 @@ func TestModelInfoGuardianReviewPolicy(t *testing.T) {
 		t.Fatalf("parsed guardian computer_use = %#v, want adaptive", parsed.Guardian)
 	}
 }
+
+// TestModelInfoFromSlugMatchesRustFallback pins the fallback descriptor against
+// Rust models_manager::model_info_from_slug: unified exec, no skills/apps/plugin
+// usage instructions, reasoning summaries supported, text web search, a
+// 10k-byte truncation policy and the 272k context window, all flagged as
+// fallback metadata.
+func TestModelInfoFromSlugMatchesRustFallback(t *testing.T) {
+	info := ModelInfoFromSlug("gpt-future")
+	if info.Slug != "gpt-future" || info.DisplayName != "gpt-future" {
+		t.Fatalf("slug/display = %q/%q", info.Slug, info.DisplayName)
+	}
+	if info.ShellType != "unified_exec" {
+		t.Fatalf("shell type = %q, want unified_exec", info.ShellType)
+	}
+	if info.Visibility != VisibilityNone || !info.SupportedInAPI || info.Priority != 99 {
+		t.Fatalf("visibility/api/priority = %q/%v/%d", info.Visibility, info.SupportedInAPI, info.Priority)
+	}
+	if info.IncludeSkillsUsageInstructions || info.IncludeAppsUsageInstructions || info.IncludePluginUsageInstructions {
+		t.Fatalf("usage instructions = skills:%v apps:%v plugins:%v",
+			info.IncludeSkillsUsageInstructions, info.IncludeAppsUsageInstructions, info.IncludePluginUsageInstructions)
+	}
+	if !info.SupportsReasoningSummaries || info.DefaultReasoningSummary != "auto" {
+		t.Fatalf("reasoning summaries = %v/%q", info.SupportsReasoningSummaries, info.DefaultReasoningSummary)
+	}
+	if info.SupportVerbosity || info.SupportsImageDetailOriginal || info.SupportsSearchTool || info.SupportsExperimentalContext || info.UseResponsesLite {
+		t.Fatalf("capability flags = %+v", info)
+	}
+	if info.WebSearchToolType != "text" {
+		t.Fatalf("web search tool type = %q", info.WebSearchToolType)
+	}
+	if info.TruncationPolicy.Mode != TruncationModeBytes || info.TruncationPolicy.Limit != 10000 {
+		t.Fatalf("truncation policy = %+v", info.TruncationPolicy)
+	}
+	if info.ContextWindow != 272000 || info.MaxContextWindow != 272000 || info.EffectiveContextWindowPercent != 95 {
+		t.Fatalf("context window = %d/%d/%d", info.ContextWindow, info.MaxContextWindow, info.EffectiveContextWindowPercent)
+	}
+	if !info.UsedFallbackModelMetadata {
+		t.Fatal("fallback metadata flag is not set")
+	}
+	if info.ModelMessages == nil || info.ModelMessages.InstructionsTemplate == "" {
+		t.Fatalf("model messages = %#v", info.ModelMessages)
+	}
+}
