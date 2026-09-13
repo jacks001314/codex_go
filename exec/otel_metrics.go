@@ -9,7 +9,9 @@ import (
 	"codex_go/config"
 	"codex_go/doctor"
 	"codex_go/otelinit"
+	"codex_go/protocol"
 	"codex_go/telemetry"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -35,9 +37,18 @@ func (r *Runner) configureOtelProvider(cfg *config.Config, req *Request) {
 		return
 	}
 	if provider == nil || provider.Metrics() == nil {
+		// The provider may still carry the logging/tracing pipelines used by the
+		// session telemetry records.
+		if provider != nil {
+			r.otelProvider = provider
+		}
+		r.otelOriginator = execAgentOriginator(req)
+		r.otelToolResultLimits = cfg.Otel().ToolResult
 		return
 	}
 	r.otelProvider = provider
+	r.otelOriginator = execAgentOriginator(req)
+	r.otelToolResultLimits = cfg.Otel().ToolResult
 	// Rust's exec records the process-start counter with the "codex_exec"
 	// originator.
 	telemetry.RecordProcessStartOnce(provider.Metrics(), "codex_exec")
@@ -87,6 +98,83 @@ func (r *Runner) emitTurnMetrics(result *turn.AgentLoopResult, threadID string, 
 		telemetry.EmitToolCallMetric(sink, &result.ToolExecutions[index])
 	}
 	telemetry.EmitTurnRunningProcessesMetric(sink, r.runningUnifiedExecProcesses(threadID))
+	r.emitToolResultRecords(result, threadID, modelID)
+}
+
+// emitToolResultRecords mirrors the record half of Rust's
+// SessionTelemetry::tool_result_with_tags for the exec runtime: the diagnostic
+// log record and the trace-safe span event for every completed call, beside the
+// metrics emitTurnMetrics records.
+func (r *Runner) emitToolResultRecords(result *turn.AgentLoopResult, threadID string, modelID string) {
+	if r == nil || result == nil {
+		return
+	}
+	session := telemetry.NewSessionTelemetry(telemetry.SessionTelemetryMetadata{
+		ConversationID: strings.TrimSpace(threadID),
+		AppVersion:     doctor.Version(),
+		Model:          strings.TrimSpace(modelID),
+		Slug:           strings.TrimSpace(modelID),
+		Originator:     strings.TrimSpace(r.otelOriginator),
+	})
+	session.Logs = r.otelProvider.Logs()
+	if session.Logs == nil {
+		return
+	}
+	limits := r.otelToolResultLimits
+	if limits.MaxBytes <= 0 {
+		limits = protocol.DefaultToolResultLogConfig()
+	}
+	for index := range result.ToolExecutions {
+		telemetry.EmitToolResult(context.Background(), session, limits, toolResultEvent(&result.ToolExecutions[index]))
+	}
+}
+
+// toolResultEvent maps one completed call onto the tool-result event.
+func toolResultEvent(execution *turn.ToolExecutionResult) telemetry.ToolResultEvent {
+	if execution == nil || execution.Invocation == nil {
+		return telemetry.ToolResultEvent{}
+	}
+	invocation := execution.Invocation
+	event := telemetry.ToolResultEvent{
+		ToolName:      strings.TrimSpace(invocation.ToolName.Name),
+		ToolNamespace: strings.TrimSpace(invocation.ToolName.Namespace),
+		CallID:        invocation.CallID,
+		Arguments:     execToolLogPayload(invocation),
+		Duration:      execution.FinishedAt.Sub(execution.StartedAt),
+	}
+	if event.Duration < 0 {
+		event.Duration = 0
+	}
+	if execution.Output != nil {
+		event.Success = execution.Output.Success
+		event.Output = execution.Output.Body
+		if event.Output == "" {
+			event.Output = execution.Output.Error
+		}
+	}
+	event.MCPServer = strings.TrimSpace(execution.TelemetryTags["mcp_server"])
+	event.MCPServerOrigin = strings.TrimSpace(execution.TelemetryTags["mcp_server_origin"])
+	return event
+}
+
+// execToolLogPayload mirrors codex-tools' ToolPayload::log_payload plus core's
+// tool_log_payload: a direct plaintext collaboration call hides its arguments.
+func execToolLogPayload(invocation *tool.Invocation) string {
+	if invocation == nil {
+		return ""
+	}
+	if invocation.Source == "direct_plaintext_message" {
+		return "[plaintext arguments]"
+	}
+	switch invocation.Payload.Kind {
+	case tool.PayloadToolSearch:
+		query, _ := invocation.Payload.Search["query"].(string)
+		return query
+	case tool.PayloadCustom:
+		return invocation.Payload.Input
+	default:
+		return invocation.Payload.Arguments
+	}
 }
 
 // emitTurnE2EDuration records the turn task's wall-clock duration (recorded for

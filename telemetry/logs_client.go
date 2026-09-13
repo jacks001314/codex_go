@@ -203,13 +203,31 @@ func (c *LogsClient) snapshot() OTLPExportLogsRequest {
 	c.queue = nil
 	return OTLPExportLogsRequest{
 		ResourceLogs: []OTLPResourceLogs{{
-			Resource: OTLPResource{Attributes: c.resourceAttributes()},
-			ScopeLogs: []OTLPScopeLogs{{
-				Scope:      c.scope,
-				LogRecords: records,
-			}},
+			Resource:  OTLPResource{Attributes: c.resourceAttributes()},
+			ScopeLogs: c.scopeLogs(records),
 		}},
 	}
+}
+
+// scopeLogs groups the drained records the way OpenTelemetry's appender bridge
+// reports them: one scope per tracing target, in first-seen order.
+func (c *LogsClient) scopeLogs(records []OTLPLogRecord) []OTLPScopeLogs {
+	scopes := make([]OTLPScopeLogs, 0, 1)
+	index := map[string]int{}
+	for _, record := range records {
+		name := strings.TrimSpace(record.Target)
+		if name == "" {
+			name = c.scope.Name
+		}
+		position, ok := index[name]
+		if !ok {
+			scopes = append(scopes, OTLPScopeLogs{Scope: OTLPScope{Name: name}})
+			position = len(scopes) - 1
+			index[name] = position
+		}
+		scopes[position].LogRecords = append(scopes[position].LogRecords, record)
+	}
+	return scopes
 }
 
 func (c *LogsClient) startExportLoop(interval time.Duration) {
@@ -322,6 +340,7 @@ func (h *LogsSlogHandler) Handle(ctx context.Context, record slog.Record) error 
 				SeverityText:   text,
 				Body:           record.Message,
 				Attributes:     attributes,
+				Target:         target,
 			})
 		}
 	}

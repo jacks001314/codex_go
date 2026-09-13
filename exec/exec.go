@@ -112,6 +112,12 @@ type Runner struct {
 	// client on the model client). A subagent runner is a copy of its parent, so
 	// each copy builds and shuts down its own provider.
 	otelProvider *telemetry.OtelProvider
+	// otelOriginator is the originator the run's session telemetry records
+	// report (Rust's SessionTelemetryMetadata.originator).
+	otelOriginator string
+	// otelToolResultLimits is the `otel.tool_result` log byte budget resolved
+	// from the run's config.
+	otelToolResultLimits protocol.ToolResultLogConfig
 
 	// reasoningEffortMu guards the per-thread reasoning-effort request pin
 	// (Rust #43110/#43795); the map is created lazily.

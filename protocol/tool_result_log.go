@@ -4,6 +4,10 @@ package protocol
 // the tool output carried by a `codex.tool_result` log record; it does not
 // affect the model-visible output.
 
+// DefaultFunctionNamespace mirrors codex_protocol::DEFAULT_FUNCTION_NAMESPACE:
+// the namespace reported for top-level function and custom tools.
+const DefaultFunctionNamespace = "functions"
+
 // DefaultToolResultLogMaxBytes mirrors ToolResultLogConfig::default().max_bytes.
 const DefaultToolResultLogMaxBytes = 2 * 1024
 

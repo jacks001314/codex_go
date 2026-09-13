@@ -338,6 +338,7 @@ type Span struct {
 	startedAt     time.Time
 	endedAt       time.Time
 	attributes    []MetricTagValue
+	events        []OTLPSpanEvent
 	mu            sync.Mutex
 	ended         bool
 }
@@ -415,6 +416,28 @@ func (s *Span) EndAt(endedAt time.Time) {
 		StatusCode:        s.statusCode,
 		StatusMessage:     s.statusMessage,
 		TraceState:        s.TraceState,
+		Events:            append([]OTLPSpanEvent(nil), s.events...),
+	})
+}
+
+// AddEvent records one event on the span, the way a `tracing` event inside a
+// span becomes an OTLP span event. Events on a non-recording span are dropped.
+func (s *Span) AddEvent(name string, attributes map[string]string, at time.Time) {
+	if s == nil || s.client == nil || !s.client.Enabled() || !s.sampled {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ended {
+		return
+	}
+	if at.IsZero() {
+		at = s.client.now().UTC()
+	}
+	s.events = append(s.events, OTLPSpanEvent{
+		Name:         name,
+		TimeUnixNano: spanTimeString(at),
+		Attributes:   sortedMetricTags(attributes),
 	})
 }
 

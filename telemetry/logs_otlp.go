@@ -74,6 +74,9 @@ type OTLPLogRecord struct {
 	SeverityText   string
 	Body           string
 	Attributes     []MetricTagValue
+	// Target is the record's tracing target, which OpenTelemetry reports as the
+	// instrumentation scope name (the appender bridge groups records by target).
+	Target string
 }
 
 // otlpResourceLogs is the OTLP JSON shape (int64 fields are strings).
@@ -91,7 +94,7 @@ type otlpLogRecord struct {
 	TimeUnixNano   string          `json:"timeUnixNano,omitempty"`
 	SeverityNumber int             `json:"severityNumber,omitempty"`
 	SeverityText   string          `json:"severityText,omitempty"`
-	Body           otlpLogBody     `json:"body"`
+	Body           *otlpLogBody    `json:"body,omitempty"`
 	Attributes     []otlpAttribute `json:"attributes,omitempty"`
 }
 
@@ -108,13 +111,18 @@ func (r OTLPExportLogsRequest) MarshalJSON() ([]byte, error) {
 		for _, scoped := range resource.ScopeLogs {
 			records := make([]otlpLogRecord, 0, len(scoped.LogRecords))
 			for _, record := range scoped.LogRecords {
-				records = append(records, otlpLogRecord{
+				encoded := otlpLogRecord{
 					TimeUnixNano:   record.TimeUnixNano,
 					SeverityNumber: record.SeverityNumber,
 					SeverityText:   record.SeverityText,
-					Body:           otlpLogBody{StringValue: record.Body},
 					Attributes:     otlpAttributes(record.Attributes),
-				})
+				}
+				// Rust's event records carry no `message` field, so their body is
+				// absent rather than an empty string.
+				if record.Body != "" {
+					encoded.Body = &otlpLogBody{StringValue: record.Body}
+				}
+				records = append(records, encoded)
 			}
 			scopeLogs = append(scopeLogs, otlpScopeLogs{
 				Scope:      otlpScope{Name: scoped.Scope.Name, Version: scoped.Scope.Version},
@@ -144,13 +152,16 @@ func (r OTLPExportLogsRequest) protoRequest() (*collectorlogspb.ExportLogsServic
 				if err != nil {
 					return nil, err
 				}
-				records = append(records, &logspb.LogRecord{
+				encoded := &logspb.LogRecord{
 					TimeUnixNano:   timeNano,
 					SeverityNumber: logspb.SeverityNumber(record.SeverityNumber),
 					SeverityText:   record.SeverityText,
-					Body:           &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: record.Body}},
 					Attributes:     protoAttributes(record.Attributes),
-				})
+				}
+				if record.Body != "" {
+					encoded.Body = &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: record.Body}}
+				}
+				records = append(records, encoded)
 			}
 			scopeLogs = append(scopeLogs, &logspb.ScopeLogs{
 				Scope:      &commonpb.InstrumentationScope{Name: scoped.Scope.Name, Version: scoped.Scope.Version},

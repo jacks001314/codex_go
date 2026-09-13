@@ -105,12 +105,22 @@ func TestLogsSlogHandlerExportsTelemetryTargetsLikeRust(t *testing.T) {
 	}
 	scopeLogs := batch["scopeLogs"].([]any)[0].(map[string]any)
 	scope := scopeLogs["scope"].(map[string]any)
-	if scope["name"] != LogsScopeName {
+	// The appender bridge reports the tracing target as the instrumentation
+	// scope, so the first record's own target names the scope.
+	if scope["name"] != "codex_otel.log_only" {
 		t.Fatalf("scope = %#v", scope)
 	}
 	records := scopeLogs["logRecords"].([]any)
-	if len(records) != 2 {
-		t.Fatalf("exported records = %d, want the two codex_otel targets: %#v", len(records), records)
+	if len(records) != 1 {
+		t.Fatalf("exported records = %d, want one per scope: %#v", len(records), records)
+	}
+	// The second codex_otel target opens its own scope.
+	second := batch["scopeLogs"].([]any)[1].(map[string]any)
+	if second["scope"].(map[string]any)["name"] != "codex_otel.other" {
+		t.Fatalf("second scope = %#v", second["scope"])
+	}
+	if len(second["logRecords"].([]any)) != 1 {
+		t.Fatalf("second scope records = %#v", second["logRecords"])
 	}
 	first := records[0].(map[string]any)
 	if first["severityText"] != "INFO" || first["severityNumber"] != float64(otlpSeverityInfo) {

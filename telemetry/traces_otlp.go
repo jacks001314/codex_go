@@ -90,6 +90,16 @@ type OTLPSpan struct {
 	// TraceState is the W3C tracestate carried with the span, exported the way
 	// the OTLP span schema reports it.
 	TraceState string
+	// Events are the span events recorded while the span was open (Rust's
+	// trace-safe events become OTLP span events).
+	Events []OTLPSpanEvent
+}
+
+// OTLPSpanEvent is one event attached to an exported span.
+type OTLPSpanEvent struct {
+	Name         string
+	TimeUnixNano string
+	Attributes   []MetricTagValue
 }
 
 type otlpResourceSpans struct {
@@ -112,7 +122,14 @@ type otlpSpan struct {
 	StartTimeUnixNano string          `json:"startTimeUnixNano"`
 	EndTimeUnixNano   string          `json:"endTimeUnixNano"`
 	Attributes        []otlpAttribute `json:"attributes,omitempty"`
+	Events            []otlpSpanEvent `json:"events,omitempty"`
 	Status            *otlpStatus     `json:"status,omitempty"`
+}
+
+type otlpSpanEvent struct {
+	TimeUnixNano string          `json:"timeUnixNano"`
+	Name         string          `json:"name"`
+	Attributes   []otlpAttribute `json:"attributes,omitempty"`
 }
 
 type otlpStatus struct {
@@ -142,6 +159,16 @@ func (r OTLPExportTracesRequest) MarshalJSON() ([]byte, error) {
 				}
 				if span.StatusCode != SpanStatusUnset || span.StatusMessage != "" {
 					encoded.Status = &otlpStatus{Code: span.StatusCode, Message: span.StatusMessage}
+				}
+				if len(span.Events) > 0 {
+					encoded.Events = make([]otlpSpanEvent, 0, len(span.Events))
+					for _, event := range span.Events {
+						encoded.Events = append(encoded.Events, otlpSpanEvent{
+							TimeUnixNano: event.TimeUnixNano,
+							Name:         event.Name,
+							Attributes:   otlpAttributes(event.Attributes),
+						})
+					}
 				}
 				spans = append(spans, encoded)
 			}
@@ -202,6 +229,17 @@ func (r OTLPExportTracesRequest) protoRequest() (*collectortracepb.ExportTraceSe
 						return nil, fmt.Errorf("OTLP parent span id %q must be 8 bytes of hex", span.ParentSpanID)
 					}
 					encoded.ParentSpanId = parentSpanID
+				}
+				for _, event := range span.Events {
+					eventTime, err := parseUnixNano(event.TimeUnixNano)
+					if err != nil {
+						return nil, err
+					}
+					encoded.Events = append(encoded.Events, &tracepb.Span_Event{
+						TimeUnixNano: eventTime,
+						Name:         event.Name,
+						Attributes:   protoAttributes(event.Attributes),
+					})
 				}
 				spans = append(spans, encoded)
 			}

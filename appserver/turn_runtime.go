@@ -2393,7 +2393,7 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 }
 
 func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID string, cwd string, unifiedExecEnabled bool) turn.ToolCompletedCallback {
-	return func(_ context.Context, execution *turn.ToolExecutionResult) {
+	return func(ctx context.Context, execution *turn.ToolExecutionResult) {
 		if r == nil || execution == nil || execution.Invocation == nil {
 			return
 		}
@@ -2402,6 +2402,9 @@ func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID str
 		// runs for every completed dispatch, before its notification-only
 		// branches.
 		r.emitToolCallMetrics(r.services.TurnMetrics, execution)
+		// The same call emits the diagnostic log record and the trace-safe span
+		// event; the wrapper's context carries the span the turn runs inside.
+		r.emitToolResultRecords(ctx, threadID, execution)
 		r.recordNodeReplReviewEvidence(threadID, execution)
 		r.accountGoalToolProgressForCompletion(threadID, turnID, execution)
 		if item, ok := collaborationCompletedThreadItem(execution, threadID, turnID); ok {
