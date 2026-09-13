@@ -252,7 +252,11 @@ type RuntimeRouter struct {
 	// otelProvider is the process OTEL provider built from config at startup.
 	// It forwards the task metrics, the exported log records, and the request
 	// spans, and is shut down with the router.
-	otelProvider *telemetry.OtelProvider
+	otelProviderMu sync.RWMutex
+	otelProvider   *telemetry.OtelProvider
+	// otelReloadStop ends the account-change provider reloader at close.
+	otelReloadMu   sync.Mutex
+	otelReloadStop chan struct{}
 	// requestTransport is the transport name the request span reports; the
 	// stdio, unix-socket, and websocket servers install their own name and an
 	// in-process router keeps the "in-process" default.
@@ -1314,20 +1318,7 @@ func (r *RuntimeRouter) configureOtelMetrics(codexHome string, options *RuntimeR
 	if r == nil || r.services.Config == nil || metrics == nil {
 		return
 	}
-	read, err := r.services.Config.Read(&config.ConfigReadParams{})
-	if err != nil || read == nil {
-		return
-	}
-	defaultAnalyticsEnabled := false
-	if options != nil {
-		defaultAnalyticsEnabled = options.AnalyticsDefaultEnabled
-	}
-	provider, err := otelinit.BuildProvider(otelinit.Options{
-		Config:                  &config.Config{Values: read.Config},
-		ServiceName:             otelAppServerServiceName,
-		ServiceVersion:          appServerVersion(),
-		DefaultAnalyticsEnabled: defaultAnalyticsEnabled,
-	})
+	provider, err := r.buildOtelProvider(codexHome, options)
 	if err != nil {
 		// Rust fails app-server startup on an OTEL provider error; the Go
 		// constructor cannot, so the failure is reported and startup continues
@@ -1335,12 +1326,51 @@ func (r *RuntimeRouter) configureOtelMetrics(codexHome string, options *RuntimeR
 		slog.Warn("failed to build the OTEL provider", "error", err)
 		return
 	}
+	r.installOtelProvider(provider, metrics)
+	// Rust spawns the reloader next to the initial provider; it rebuilds the
+	// exporters after an account change even while no exporter is configured.
+	r.startOtelReloader(codexHome, options, metrics)
+}
+
+// buildOtelProvider resolves the latest config into an OTEL provider
+// (otel_init::build_provider).
+func (r *RuntimeRouter) buildOtelProvider(codexHome string, options *RuntimeRouterOptions) (*telemetry.OtelProvider, error) {
+	if r == nil || r.services.Config == nil {
+		return nil, nil
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return nil, err
+	}
+	defaultAnalyticsEnabled := false
+	if options != nil {
+		defaultAnalyticsEnabled = options.AnalyticsDefaultEnabled
+	}
+	return otelinit.BuildProvider(otelinit.Options{
+		Config:                  &config.Config{Values: read.Config},
+		ServiceName:             otelAppServerServiceName,
+		ServiceVersion:          appServerVersion(),
+		DefaultAnalyticsEnabled: defaultAnalyticsEnabled,
+	})
+}
+
+// installOtelProvider publishes a provider's pipelines: the task metrics
+// exporter, the exported log records, and the request tracer. A nil provider
+// only records that tracing is off.
+func (r *RuntimeRouter) installOtelProvider(provider *telemetry.OtelProvider, metrics *state.TaskMetrics) {
+	if r == nil {
+		return
+	}
+	r.otelProviderMu.Lock()
+	r.otelProvider = provider
+	r.otelProviderMu.Unlock()
 	if provider == nil {
 		return
 	}
-	r.otelProvider = provider
 	if provider.Metrics() != nil {
-		metrics.SetExporter(provider.Metrics())
+		if metrics != nil {
+			metrics.SetExporter(provider.Metrics())
+		}
 		telemetry.RecordProcessStartOnce(provider.Metrics(), otelAppServerServiceName)
 	}
 	// Rust installs the reloadable OTEL log layer on the app-server's tracing
@@ -1354,6 +1384,100 @@ func (r *RuntimeRouter) configureOtelMetrics(codexHome string, options *RuntimeR
 	// span; the router owns the transport-level request entry point.
 	if tracer := provider.Tracer(); tracer != nil && r.services.ThreadRouter != nil {
 		r.services.ThreadRouter.SetTracer(tracer)
+	}
+}
+
+// currentOtelProvider returns the installed provider, or nil when tracing,
+// logging, and metrics export are all off.
+func (r *RuntimeRouter) currentOtelProvider() *telemetry.OtelProvider {
+	if r == nil {
+		return nil
+	}
+	r.otelProviderMu.RLock()
+	defer r.otelProviderMu.RUnlock()
+	return r.otelProvider
+}
+
+// startOtelReloader mirrors app-server/src/otel_reloader.rs::spawn: after an
+// account change the exporters are rebuilt from the latest config and the
+// previous provider is shut down in the background. Rust waits out the account
+// handlers that install the new cloud loader before the config is re-read.
+func (r *RuntimeRouter) startOtelReloader(codexHome string, options *RuntimeRouterOptions, metrics *state.TaskMetrics) {
+	if r == nil {
+		return
+	}
+	r.otelReloadMu.Lock()
+	if r.otelReloadStop != nil {
+		r.otelReloadMu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	r.otelReloadStop = stop
+	r.otelReloadMu.Unlock()
+	go func() {
+		for {
+			changed := r.authChangeChannel()
+			select {
+			case <-stop:
+				return
+			case <-changed:
+			}
+			// Account handlers install the new cloud loader after publishing
+			// auth changes.
+			select {
+			case <-stop:
+				return
+			case <-time.After(otelReloadDelay):
+			}
+			r.reloadOtelProvider(codexHome, options, metrics)
+		}
+	}()
+}
+
+// otelReloadDelay mirrors otel_reloader's post-auth-change sleep.
+const otelReloadDelay = 50 * time.Millisecond
+
+// reloadOtelProvider rebuilds and installs the provider, then shuts the
+// previous one down in the background (Rust's spawn_blocking shutdown).
+func (r *RuntimeRouter) reloadOtelProvider(codexHome string, options *RuntimeRouterOptions, metrics *state.TaskMetrics) {
+	if r == nil {
+		return
+	}
+	next, err := r.buildOtelProvider(codexHome, options)
+	if err != nil {
+		slog.Warn("failed to rebuild telemetry exporters after account change", "error", err)
+		return
+	}
+	previous := r.currentOtelProvider()
+	r.installOtelProvider(next, metrics)
+	if previous != nil {
+		go func() {
+			if err := previous.Shutdown(context.Background()); err != nil {
+				slog.Warn("failed to shut down the previous telemetry exporters", "error", err)
+			}
+		}()
+	}
+	slog.Info("reloaded telemetry exporters after account change", "event.name", "codex.app_server.otel_reloaded")
+}
+
+// authChangeChannel returns the channel closed on the next auth change, or a
+// channel that never fires while the router is closing.
+func (r *RuntimeRouter) authChangeChannel() <-chan struct{} {
+	r.authRevisionMu.Lock()
+	defer r.authRevisionMu.Unlock()
+	return r.authChanged
+}
+
+// stopOtelReloader ends the reloader goroutine at router close.
+func (r *RuntimeRouter) stopOtelReloader() {
+	if r == nil {
+		return
+	}
+	r.otelReloadMu.Lock()
+	defer r.otelReloadMu.Unlock()
+	if r.otelReloadStop != nil {
+		close(r.otelReloadStop)
+		r.otelReloadStop = nil
 	}
 }
 
@@ -1373,10 +1497,11 @@ func (r *RuntimeRouter) SetRequestTransport(transport string) {
 // requestTracer reports the tracer the app-server installed, or nil when the
 // tracing pipeline is disabled.
 func (r *RuntimeRouter) requestTracer() *telemetry.Tracer {
-	if r == nil || r.otelProvider == nil {
+	provider := r.currentOtelProvider()
+	if provider == nil {
 		return nil
 	}
-	return r.otelProvider.Tracer()
+	return provider.Tracer()
 }
 
 func (r *RuntimeRouter) analyticsAuthorizeRequest(codexHome string) telemetry.AnalyticsAuthorizeRequestFunc {
@@ -1759,9 +1884,10 @@ func (r *RuntimeRouter) close() error {
 			closeErr = err
 		}
 	}
-	if r.otelProvider != nil {
+	r.stopOtelReloader()
+	if provider := r.currentOtelProvider(); provider != nil {
 		otelCtx, cancelOtel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := r.otelProvider.Shutdown(otelCtx); err != nil && closeErr == nil {
+		if err := provider.Shutdown(otelCtx); err != nil && closeErr == nil {
 			closeErr = err
 		}
 		cancelOtel()
