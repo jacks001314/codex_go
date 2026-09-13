@@ -49,6 +49,15 @@ func (m *Model) applyBackendBannerFallback() {
 	}
 	previousModel := m.currentBannerModel()
 	previousEffort := m.State.EffectiveReasoningEffort()
+	// A reattached Reserve task restores its saved return target; a target from
+	// another account is stale and is cleared (Rust clear_reserve_return).
+	if previousModel == LunaReserveModel && m.reserveReturn == nil {
+		m.reserveReturn = loadReserveReturn(m.codexHome, m.currentThreadID())
+	}
+	if m.reserveReturn != nil && m.reserveReturn.AccountID != m.backendBanner.accountID {
+		clearReserveReturn(m.codexHome, m.currentThreadID())
+		m.reserveReturn = nil
+	}
 	transition := m.backendBanner.fallbackSwitch(m.modelCatalogOpts, previousModel, previousEffort, m.reserveReturn)
 	if transition == nil {
 		return
@@ -61,7 +70,9 @@ func (m *Model) applyBackendBannerFallback() {
 			Model:     previousModel,
 			Effort:    previousEffort,
 		}
+		_ = saveReserveReturn(m.codexHome, m.currentThreadID(), m.reserveReturn)
 	} else {
+		clearReserveReturn(m.codexHome, m.currentThreadID())
 		m.reserveReturn = nil
 	}
 	m.State.Model = transition.Model

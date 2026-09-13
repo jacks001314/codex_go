@@ -1,6 +1,8 @@
 package tea
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,5 +106,76 @@ func TestModelBackendBannerFallbackRequiresCatalogVisibility(t *testing.T) {
 	model.applyBackendBannerFallback()
 	if model.State.Model != LunaReserveModel {
 		t.Fatalf("model = %q, want to stay on Reserve", model.State.Model)
+	}
+}
+
+// TestReserveReturnPersistenceRoundTrip pins the per-task cache format and the
+// corrupt/missing behavior.
+func TestReserveReturnPersistenceRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	if got := loadReserveReturn(home, "thread-1"); got != nil {
+		t.Fatalf("missing cache loaded %#v", got)
+	}
+	if err := saveReserveReturn(home, "thread-1", &ReserveReturn{AccountID: "acct", Model: "gpt-5", Effort: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	got := loadReserveReturn(home, "thread-1")
+	if got == nil || got.AccountID != "acct" || got.Model != "gpt-5" || got.Effort != "high" {
+		t.Fatalf("loaded cache = %#v", got)
+	}
+	clearReserveReturn(home, "thread-1")
+	if got := loadReserveReturn(home, "thread-1"); got != nil {
+		t.Fatalf("cleared cache loaded %#v", got)
+	}
+	// A corrupt cache must not be treated as a target.
+	if err := os.MkdirAll(filepath.Dir(reserveReturnPath(home, "thread-2")), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(reserveReturnPath(home, "thread-2"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadReserveReturn(home, "thread-2"); got != nil {
+		t.Fatalf("corrupt cache loaded %#v", got)
+	}
+}
+
+// TestModelBackendBannerFallbackPersistsReserveReturn pins the reconnect/resume
+// behavior: entering Reserve saves the return target, a fresh model restores it
+// for the recovery, and the recovery clears it.
+func TestModelBackendBannerFallbackPersistsReserveReturn(t *testing.T) {
+	home := t.TempDir()
+	model := backendBannerFallbackModel(t, "gpt-5")
+	model.codexHome = home
+	model.modelCatalogOpts = []codextui.ModelPickerOption{
+		{ID: "gpt-5", ShowInPicker: true},
+		{ID: LunaReserveModel, ShowInPicker: false},
+	}
+	model.applyBackendBannerResult(BackendBannerResultMsg{Read: BackendBannerRead{
+		Banner:   &BackendBannerView{BannerType: BackendBannerLunaReserve},
+		Recovery: BackendBannerRecoveryInput{AccountID: "acct"},
+	}})
+	model.applyBackendBannerFallback()
+	if model.State.Model != LunaReserveModel {
+		t.Fatalf("model = %q, want Reserve", model.State.Model)
+	}
+	if got := loadReserveReturn(home, "thread-1"); got == nil || got.Model != "gpt-5" || got.AccountID != "acct" {
+		t.Fatalf("persisted return = %#v", got)
+	}
+
+	// A fresh model (reconnect) restores the saved target and clears it after
+	// the recovery switch.
+	recovered := backendBannerFallbackModel(t, LunaReserveModel)
+	recovered.codexHome = home
+	recovered.modelCatalogOpts = []codextui.ModelPickerOption{{ID: "gpt-5", Label: "GPT-5", ShowInPicker: true}}
+	allowed := true
+	recovered.applyBackendBannerResult(BackendBannerResultMsg{Read: BackendBannerRead{
+		Recovery: BackendBannerRecoveryInput{AccountID: "acct", OrdinaryUsageAllowed: &allowed},
+	}})
+	recovered.applyBackendBannerFallback()
+	if recovered.State.Model != "gpt-5" {
+		t.Fatalf("recovered model = %q, want the persisted target", recovered.State.Model)
+	}
+	if got := loadReserveReturn(home, "thread-1"); got != nil {
+		t.Fatalf("return target survived recovery: %#v", got)
 	}
 }

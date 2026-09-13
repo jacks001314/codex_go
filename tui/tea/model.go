@@ -1463,6 +1463,7 @@ type Model struct {
 	// reserveReturn is the task-local model to restore when ordinary usage
 	// recovers from the reserve model (Rust ReserveReturnModel).
 	reserveReturn                     *ReserveReturn
+	codexHome                         string
 	modelCatalogOpts                  []codextui.ModelPickerOption
 	nextModelCatalogRequestID         uint64
 	pendingModelCatalogRequestID      uint64
@@ -1927,6 +1928,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	}
 	model.refreshTranscript()
 	model.petCodexHome = strings.TrimSpace(options.CodexHome)
+	model.codexHome = strings.TrimSpace(options.CodexHome)
 	model.petEnv = options.PetEnv
 	model.petFetch = options.PetFetch
 	if model.petFetch == nil {
