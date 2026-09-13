@@ -6939,6 +6939,9 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 		r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, &params, nil, telemetry.TurnSteerResultRejected, turnSteerAnalyticsRejectionReason(err), createdAt)
 		return nil, turnSteerRuntimeError(err)
 	}
+	// Rust reports the steered user input like a turn start
+	// (SessionTelemetry::user_prompt).
+	r.emitUserPromptRecords(context.Background(), params.ThreadID, params.Prompt, params.Input)
 	r.updateActiveTurnApprovalsReviewer(&params)
 	if r.hasRuntimeThreadStore() {
 		if item, ok := sessionItemFromTurnSteer(&params); ok {

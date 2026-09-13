@@ -1384,6 +1384,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if record.StartedAt == 0 {
 		startedAt = time.Now().UTC()
 	}
+	// Rust reports the accepted user input before the first sampling request
+	// (SessionTelemetry::user_prompt).
+	r.emitUserPromptRecords(ctx, threadID, params.Prompt, params.Input)
 	startedAtMS := startedAt.UnixMilli()
 	appTurn := appTurnFromTurnRecord(record, nil, TurnStatusInProgress, nil, nil)
 	appTurn.Items = []ThreadItem{}

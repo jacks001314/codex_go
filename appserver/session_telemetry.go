@@ -47,6 +47,11 @@ func (r *RuntimeRouter) sessionTelemetryMetadataForThread(threadID string) telem
 	if r == nil {
 		return metadata
 	}
+	if r.services.Config != nil {
+		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
+			metadata.LogUserPrompts = (&config.Config{Values: read.Config}).Otel().LogUserPrompt
+		}
+	}
 	if active := r.activeTurnForNetworkApprovalThread(threadID, ""); active != nil {
 		if active.runConfig != nil {
 			metadata.Model = strings.TrimSpace(active.runConfig.Model)
@@ -76,6 +81,38 @@ func (r *RuntimeRouter) sessionTelemetryMetadataForThread(threadID string) telem
 		}
 	}
 	return metadata
+}
+
+// emitUserPromptRecords mirrors SessionTelemetry::user_prompt at the point a
+// turn (or a steer) accepts user input: the session metadata decides whether the
+// prompt text reaches the record.
+func (r *RuntimeRouter) emitUserPromptRecords(ctx context.Context, threadID string, prompt string, inputs []turn.TurnUserInput) {
+	session := r.sessionTelemetryForThread(threadID)
+	if session == nil {
+		return
+	}
+	telemetry.EmitUserPrompt(ctx, session, userPromptInputs(prompt, inputs))
+}
+
+// userPromptInputs maps the request's prompt and structured inputs onto the
+// input kinds the prompt record counts. Rust concatenates the text items into
+// the logged prompt and counts the images by variant.
+func userPromptInputs(prompt string, inputs []turn.TurnUserInput) []telemetry.UserPromptInput {
+	items := make([]telemetry.UserPromptInput, 0, len(inputs)+1)
+	if prompt != "" {
+		items = append(items, telemetry.UserPromptInput{Kind: telemetry.UserPromptText, Text: prompt})
+	}
+	for _, input := range inputs {
+		switch {
+		case strings.TrimSpace(input.Text) != "":
+			items = append(items, telemetry.UserPromptInput{Kind: telemetry.UserPromptText, Text: input.Text})
+		case strings.TrimSpace(input.URL) != "":
+			items = append(items, telemetry.UserPromptInput{Kind: telemetry.UserPromptImage})
+		case strings.TrimSpace(input.Path) != "":
+			items = append(items, telemetry.UserPromptInput{Kind: telemetry.UserPromptLocalImage})
+		}
+	}
+	return items
 }
 
 // toolResultLogLimits resolves the `otel.tool_result` byte budget the log

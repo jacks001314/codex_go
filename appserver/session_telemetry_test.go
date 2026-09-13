@@ -261,6 +261,111 @@ func TestRequestSpanTraceFollowsTheTurnLikeRust(t *testing.T) {
 	}
 }
 
+// A turn start reports its user prompt through the logs pipeline, and the
+// `otel.log_user_prompt` setting decides whether the text or the redaction
+// marker reaches the record (Rust's SessionTelemetry::user_prompt).
+func TestTurnStartEmitsUserPromptRecordLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		configOtel string
+		wantPrompt string
+	}{
+		{name: "logs the prompt", configOtel: "[otel]\nlog_user_prompt = true\n", wantPrompt: "secret prompt"},
+		{name: "redacts the prompt", configOtel: "", wantPrompt: "[REDACTED]"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			received := make(chan map[string]any, 8)
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				payload := map[string]any{}
+				_ = json.NewDecoder(request.Body).Decode(&payload)
+				select {
+				case received <- payload:
+				default:
+				}
+				writer.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			home := t.TempDir()
+			configToml := fmt.Sprintf("%s[otel.exporter.otlp-http]\nendpoint = %q\nprotocol = \"json\"\n",
+				testCase.configOtel, server.URL+"/v1/logs")
+			if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configToml), 0o600); err != nil {
+				t.Fatalf("WriteFile config.toml error = %v", err)
+			}
+			store := session.NewStore(filepath.Join(home, "sessions"))
+			sink := NewNotificationBuffer()
+			agent := newRecordingRuntimeAgent("ok")
+			router := NewRuntimeRouter(RuntimeServices{
+				ThreadRouter: NewRouter(store),
+				Turns:        turn.NewTurnService(),
+				Agent:        agent,
+				ThreadStatus: NewThreadStatusManager(),
+				Config:       config.NewConfigService(home),
+			})
+			router.SetNotificationSink(sink)
+			router.configureOtelMetrics(home, nil, state.NewTaskMetrics())
+			defer router.Close()
+
+			start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home}))
+			if start.Error != nil {
+				t.Fatalf("thread start error: %+v", start.Error)
+			}
+			threadID := start.Result.(*ThreadStartResponse).Thread.ID
+			turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+				ThreadID: threadID,
+				Prompt:   "secret prompt",
+				Input:    []turn.TurnUserInput{{Type: "image", URL: "data:image/png;base64,iVBORw0KGgo="}},
+			}))
+			if turnStart.Error != nil {
+				t.Fatalf("turn start error: %+v", turnStart.Error)
+			}
+			turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+			waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+			if err := router.Close(); err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+
+			deadline := time.After(3 * time.Second)
+			for {
+				select {
+				case payload := <-received:
+					resourceLogs, _ := payload["resourceLogs"].([]any)
+					if len(resourceLogs) == 0 {
+						continue
+					}
+					for _, scopeEntry := range resourceLogs[0].(map[string]any)["scopeLogs"].([]any) {
+						for _, recordEntry := range scopeEntry.(map[string]any)["logRecords"].([]any) {
+							record := recordEntry.(map[string]any)
+							attributes := map[string]string{}
+							for _, entry := range record["attributes"].([]any) {
+								attribute := entry.(map[string]any)
+								attributes[attribute["key"].(string)] = attribute["value"].(map[string]any)["stringValue"].(string)
+							}
+							if attributes["event.name"] != "codex.user_prompt" {
+								continue
+							}
+							if attributes["prompt"] != testCase.wantPrompt {
+								t.Fatalf("prompt = %q, want %q", attributes["prompt"], testCase.wantPrompt)
+							}
+							// The prompt's rune length counts the text only, and the
+							// image input is still counted separately.
+							if attributes["prompt_length"] != "13" {
+								t.Fatalf("prompt_length = %q", attributes["prompt_length"])
+							}
+							if attributes["conversation.id"] != threadID {
+								t.Fatalf("conversation.id = %q", attributes["conversation.id"])
+							}
+							return
+						}
+					}
+				case <-deadline:
+					t.Fatal("the OTLP logs endpoint did not receive the prompt record")
+				}
+			}
+		})
+	}
+}
+
 // The `turn/start` request span's trace context follows the turn into the model
 // request, so the exported span and the model call share one trace (Rust's
 // OutgoingMessageSender::request_trace_context -> TurnInputRequest::with_trace).
