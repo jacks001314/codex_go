@@ -365,13 +365,61 @@ func (m *Model) backendBannerCmd() bubbletea.Cmd {
 	}
 }
 
-func (m *Model) applyBackendBannerResult(message BackendBannerResultMsg) {
+func (m *Model) applyBackendBannerResult(message BackendBannerResultMsg) bubbletea.Cmd {
 	if m == nil || message.Err != nil {
 		// A failed read leaves the previous banner in place.
-		return
+		return nil
 	}
 	m.backendBanner.update(message.Read)
+	m.syncRateLimitRecoveryHold()
 	m.dismissRateLimitSwitchPromptForBackendBanner()
+	return m.finishRateLimitRecovery()
+}
+
+// waitingForLunaReserve mirrors Rust's waiting_for_luna_reserve: the banner
+// authorizes Reserve but the session is still on the blocked model.
+func (m *Model) waitingForLunaReserve() bool {
+	if m == nil {
+		return false
+	}
+	banner := m.backendBanner.banner
+	return m.currentBannerModel() != LunaReserveModel &&
+		banner != nil &&
+		banner.BannerType == BackendBannerLunaReserve
+}
+
+// syncRateLimitRecoveryHold marks user turns to be held (Rust
+// hold_rate_limit_recovery).
+func (m *Model) syncRateLimitRecoveryHold() {
+	if m == nil {
+		return
+	}
+	if m.waitingForLunaReserve() {
+		m.rateLimitRecoveryPending = true
+	}
+}
+
+// finishRateLimitRecovery releases held turns once the session is no longer
+// waiting for Reserve (Rust finish_rate_limit_recovery).
+func (m *Model) finishRateLimitRecovery() bubbletea.Cmd {
+	if m == nil || !m.rateLimitRecoveryPending {
+		return nil
+	}
+	if m.waitingForLunaReserve() {
+		return nil
+	}
+	m.rateLimitRecoveryPending = false
+	return m.submitNextQueued()
+}
+
+// clearRateLimitRecoveryHold drops the hold after a model change that did not
+// come from the backend switch (Rust settings.rs clears the flag on a model
+// change).
+func (m *Model) clearRateLimitRecoveryHold() {
+	if m == nil {
+		return
+	}
+	m.rateLimitRecoveryPending = false
 }
 
 // dismissRateLimitSwitchPromptForBackendBanner mirrors Rust's banner

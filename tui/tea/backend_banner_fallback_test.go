@@ -210,8 +210,10 @@ func TestModelBackendBannerFallbackRewritesQueuedSubmissions(t *testing.T) {
 		{ID: LunaReserveModel, ShowInPicker: false},
 	}
 	oldEffort := "medium"
+	model.State.Status = "idle"
 	model.queued = []queuedSubmission{{Request: SubmitRequest{
-		Model: "gpt-5",
+		Prompt: "queued turn",
+		Model:  "gpt-5",
 		CollaborationMode: &chatwidget.CollaborationMode{
 			Settings: chatwidget.CollaborationModeSettings{Model: "gpt-5", ReasoningEffort: &oldEffort},
 		},
@@ -220,12 +222,19 @@ func TestModelBackendBannerFallbackRewritesQueuedSubmissions(t *testing.T) {
 		Banner:   &BackendBannerView{BannerType: BackendBannerLunaReserve},
 		Recovery: BackendBannerRecoveryInput{AccountID: "acct"},
 	}})
-	model.applyBackendBannerFallback()
-	if len(model.queued) != 1 || model.queued[0].Request.Model != LunaReserveModel {
-		t.Fatalf("queued request = %#v", model.queued)
+	runTeaCmd(t, model, model.applyBackendBannerFallback())
+	if model.State.Model != LunaReserveModel {
+		t.Fatalf("model = %q, want Reserve", model.State.Model)
 	}
-	if mode := model.queued[0].Request.CollaborationMode; mode == nil || mode.Settings.Model != LunaReserveModel {
-		t.Fatalf("queued collaboration mode = %#v", mode)
+	if len(model.submitRequests) == 0 {
+		t.Fatal("the released turn was not submitted")
+	}
+	released := model.submitRequests[len(model.submitRequests)-1]
+	if released.Model != LunaReserveModel {
+		t.Fatalf("released request model = %q, want the accepted model", released.Model)
+	}
+	if mode := released.CollaborationMode; mode == nil || mode.Settings.Model != LunaReserveModel {
+		t.Fatalf("released collaboration mode = %#v", mode)
 	}
 }
 

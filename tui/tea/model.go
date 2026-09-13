@@ -1467,7 +1467,11 @@ type Model struct {
 	backendBanner                 backendBannerState
 	// reserveReturn is the task-local model to restore when ordinary usage
 	// recovers from the reserve model (Rust ReserveReturnModel).
-	reserveReturn                     *ReserveReturn
+	reserveReturn *ReserveReturn
+	// rateLimitRecoveryPending holds user turns while the session waits for the
+	// backend-authorized Reserve switch, so a prompt is not sent on the blocked
+	// model (Rust input_queue.rate_limit_recovery_pending).
+	rateLimitRecoveryPending          bool
 	codexHome                         string
 	modelCatalogOpts                  []codextui.ModelPickerOption
 	nextModelCatalogRequestID         uint64
@@ -2089,8 +2093,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case petTickMsg:
 		return m, bubbletea.Batch(m.petDrawCmd(), m.petTickCmd())
 	case BackendBannerResultMsg:
-		m.applyBackendBannerResult(msg)
-		return m, m.applyBackendBannerFallbackCmd()
+		return m, bubbletea.Batch(m.applyBackendBannerResult(msg), m.applyBackendBannerFallbackCmd())
 	case ModelCatalogResultMsg:
 		m.applyModelCatalogResult(msg)
 		return m, m.applyBackendBannerFallbackCmd()
@@ -3455,6 +3458,14 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	}
 	request.Prompt = strings.TrimSpace(request.Prompt)
 	if request.Prompt == "" && len(request.Attachments) == 0 {
+		return nil
+	}
+	// Rust holds a user turn while the session waits for the Reserve switch, so
+	// the queued prompt is not sent on the blocked model.
+	if m.rateLimitRecoveryPending {
+		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand})
+		m.notice = "Waiting for the usage-limit model switch\u2026"
+		m.refreshTranscript()
 		return nil
 	}
 	if parseCommand && len(request.Attachments) == 0 {

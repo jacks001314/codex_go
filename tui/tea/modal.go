@@ -1061,6 +1061,8 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 	if reasoning != "" {
 		m.State.ReasoningEffort = reasoning
 	}
+	// A manual model change releases any Reserve-switch hold.
+	m.clearRateLimitRecoveryHold()
 	m.refreshServiceTierCommands()
 	return &PickerDecision{Kind: "model", Value: option.ID, ReasoningEffort: m.State.ReasoningEffort}, strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model)), true
 }

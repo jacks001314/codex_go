@@ -38,8 +38,7 @@ func (m *Model) applyBackendBannerFallbackCmd() bubbletea.Cmd {
 	if len(m.modelCatalogOpts) == 0 {
 		return m.fetchModelCatalog()
 	}
-	m.applyBackendBannerFallback()
-	return nil
+	return m.applyBackendBannerFallback()
 }
 
 // requiresOpenAIAuth mirrors Rust's ChatWidget::requires_openai_auth gate: only a
@@ -62,9 +61,9 @@ func (m *Model) requiresOpenAIAuth() bool {
 
 // applyBackendBannerFallback applies the switch (Rust's
 // apply_backend_banner_fallback + finish_backend_banner_fallback).
-func (m *Model) applyBackendBannerFallback() {
+func (m *Model) applyBackendBannerFallback() bubbletea.Cmd {
 	if m == nil || m.State == nil || !m.State.HasChatGPTAccount || !m.requiresOpenAIAuth() {
-		return
+		return nil
 	}
 	previousModel := m.currentBannerModel()
 	previousEffort := m.State.EffectiveReasoningEffort()
@@ -79,7 +78,7 @@ func (m *Model) applyBackendBannerFallback() {
 	}
 	transition := m.backendBanner.fallbackSwitch(m.modelCatalogOpts, previousModel, previousEffort, m.reserveReturn)
 	if transition == nil {
-		return
+		return nil
 	}
 	// The return target is saved before changing state when the switch enters
 	// Reserve; any other switch (including a recovery) clears it.
@@ -109,6 +108,7 @@ func (m *Model) applyBackendBannerFallback() {
 	m.backendBanner.presented = nil
 	m.addInfoHistoryMessage(m.backendBannerSwitchNotice(transition))
 	m.refreshTranscript()
+	return m.finishRateLimitRecovery()
 }
 
 // backendBannerSwitchNotice renders Rust's automatic-switch info message.

@@ -49,6 +49,7 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 	}
 	if model := strings.TrimSpace(settings.Model); model != "" {
 		m.State.Model = model
+		m.clearRateLimitRecoveryHold()
 	}
 	if provider := strings.TrimSpace(settings.ModelProvider); provider != "" {
 		m.State.Provider = provider
