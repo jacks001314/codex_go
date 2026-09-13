@@ -151,6 +151,34 @@ func TestModelBackendBannerResetUsageStaysInModel(t *testing.T) {
 	}
 }
 
+// TestModelBackendBannerDismissesOnNewTurn pins Rust's
+// dismiss_backend_banner_for_new_turn: a shown, dismissible banner hides when
+// the user starts a new turn, while a persistent banner stays.
+func TestModelBackendBannerDismissesOnNewTurn(t *testing.T) {
+	model, _ := backendBannerTestModel(t, &BackendBannerView{
+		Title:       "Usage limit reached",
+		Dismissible: true,
+	}, nil)
+	runTeaCmd(t, model, model.Init())
+	_ = model.View() // the banner must render once before a new turn dismisses it
+	model.composer.InsertString("keep going")
+	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+		t.Fatalf("submitting a prompt returned an unexpected command: %T", cmd)
+	}
+	if strings.Contains(model.View(), "Usage limit reached") {
+		t.Fatalf("dismissible banner survived a new turn:\n%s", model.View())
+	}
+
+	persistent, _ := backendBannerTestModel(t, &BackendBannerView{Title: "Persistent notice"}, nil)
+	runTeaCmd(t, persistent, persistent.Init())
+	_ = persistent.View()
+	persistent.composer.InsertString("keep going")
+	persistent.Update(key(bubbletea.KeyEnter))
+	if !strings.Contains(persistent.View(), "Persistent notice") {
+		t.Fatal("persistent banner was dismissed by a new turn")
+	}
+}
+
 // TestModelBackendBannerFailedReadKeepsPreviousBanner pins the transient-read
 // behavior.
 func TestModelBackendBannerFailedReadKeepsPreviousBanner(t *testing.T) {

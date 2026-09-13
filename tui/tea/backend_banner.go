@@ -57,10 +57,12 @@ func (m *Model) SetBackendBanner(banner *BackendBannerView) {
 	if banner == nil {
 		m.backendBanner = nil
 		m.backendBannerDismissed = false
+		m.backendBannerShown = false
 		return
 	}
 	m.backendBanner = banner
 	m.backendBannerDismissed = false
+	m.backendBannerShown = false
 }
 
 // BackendBanner returns the active banner, if any.
@@ -73,6 +75,19 @@ func (m *Model) BackendBanner() *BackendBannerView {
 
 func (m *Model) backendBannerVisible() bool {
 	return m != nil && m.backendBanner != nil && !m.backendBannerDismissed
+}
+
+// dismissBackendBannerForNewTurn mirrors Rust's
+// dismiss_backend_banner_for_new_turn: once a dismissible banner has been shown,
+// starting a new turn hides it.
+func (m *Model) dismissBackendBannerForNewTurn() {
+	if m == nil || !m.backendBannerVisible() || !m.backendBannerShown {
+		return
+	}
+	if !m.backendBanner.Dismissible {
+		return
+	}
+	m.backendBannerDismissed = true
 }
 
 // backendBannerCmd performs the startup/refresh banner read.
@@ -158,6 +173,7 @@ func (m *Model) renderBackendBanner() string {
 	if !m.backendBannerVisible() {
 		return ""
 	}
+	m.backendBannerShown = true
 	banner := m.backendBanner
 	width := m.width
 	if width <= 0 {

@@ -1460,6 +1460,7 @@ type Model struct {
 	onBackendBannerAction             func(action BackendBannerAction) bubbletea.Cmd
 	backendBanner                     *BackendBannerView
 	backendBannerDismissed            bool
+	backendBannerShown                bool
 	nextStatusRateLimitRequestID      uint64
 	pendingStatusRateLimitRequests    map[uint64]pendingStatusRateLimitRequest
 	terminalTitleWriter               TerminalTitleWriterFunc
@@ -3351,6 +3352,9 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	m.composerMentionBindings = nil
 	// Rust #44328: a new prompt clears the previous prompt's pending questions.
 	m.clearAsyncQuestionsForNewPrompt()
+	// Rust's dismiss_backend_banner_for_new_turn: a shown, dismissible banner
+	// hides once the user starts a new turn.
+	m.dismissBackendBannerForNewTurn()
 	return m.submitRequest(request, false)
 }
 
