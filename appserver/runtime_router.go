@@ -12964,6 +12964,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			config:   r.requireConfig(),
 			threadID: threadID,
 			turnID:   strings.TrimSpace(turnID),
+			metrics:  r.services.TurnMetrics,
 		}
 	}
 	options.WebSearch = webSearchOptions

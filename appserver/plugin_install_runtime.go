@@ -7,6 +7,7 @@ import (
 	"codex_go/apps"
 	"codex_go/config"
 	"codex_go/plugin"
+	"codex_go/telemetry"
 	"codex_go/tool"
 )
 
@@ -19,10 +20,21 @@ type pluginInstallRuntime struct {
 	config   *config.ConfigService
 	threadID string
 	turnID   string
+	// metrics receives the plugin install elicitation/suggestion counters
+	// (Rust's record_plugin_install_elicitation_sent/_suggestion).
+	metrics telemetry.TurnMetricSink
 }
 
 func (r *pluginInstallRuntime) RequestPluginInstall(ctx context.Context, request *tool.PluginInstallRequest) (*tool.PluginInstallRuntimeResult, error) {
 	result := &tool.PluginInstallRuntimeResult{}
+	toolType := pluginInstallRequestToolType(request)
+	// Rust records the suggestion outcome only when the elicitation was sent
+	// (request_plugin_install.rs); the deferred call observes the final result.
+	defer func() {
+		if r != nil && result.Sent {
+			r.recordPluginInstallSuggestion(toolType, result)
+		}
+	}()
 	if r == nil || request == nil || r.broker == nil {
 		result.ResponseAction = "unavailable"
 		return result, nil
@@ -69,7 +81,7 @@ func (r *pluginInstallRuntime) RequestPluginInstall(ctx context.Context, request
 	result.Sent = true
 	result.ResponseAction = string(response.Action)
 	result.PersistDisable = pluginInstallResponseRequestsPersistentDisable(&response)
-	toolType := pluginInstallRequestToolType(request)
+	r.recordPluginInstallElicitationSent(toolType)
 	if result.PersistDisable && strings.TrimSpace(request.Tool.ID) != "" {
 		_ = persistDisabledInstallSuggestion(r.config, toolType, request.Tool.ID)
 	}
@@ -90,6 +102,31 @@ func (r *pluginInstallRuntime) RequestPluginInstall(ctx context.Context, request
 	}
 	result.Completed = true
 	return result, nil
+}
+
+// recordPluginInstallElicitationSent mirrors
+// record_plugin_install_elicitation_sent: one counter tagged by the tool type.
+func (r *pluginInstallRuntime) recordPluginInstallElicitationSent(toolType string) {
+	if r == nil || r.metrics == nil {
+		return
+	}
+	r.metrics.Counter(telemetry.PluginInstallElicitationSentMetric, 1, map[string]string{
+		"tool_type": toolType,
+	})
+}
+
+// recordPluginInstallSuggestion mirrors record_plugin_install_suggestion: one
+// counter tagged by the tool type, the response action, and whether the install
+// completed.
+func (r *pluginInstallRuntime) recordPluginInstallSuggestion(toolType string, result *tool.PluginInstallRuntimeResult) {
+	if r == nil || r.metrics == nil || result == nil {
+		return
+	}
+	r.metrics.Counter(telemetry.PluginInstallSuggestionMetric, 1, map[string]string{
+		"tool_type":       toolType,
+		"response_action": result.ResponseAction,
+		"completed":       boolTagValue(result.Completed),
+	})
 }
 
 func connectorInstallCompleted(service *apps.AppService, connectorID string) bool {
