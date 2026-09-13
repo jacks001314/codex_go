@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"slices"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -9,10 +10,18 @@ import (
 	"codex_go/tui/chatwidget"
 )
 
-// Rust parity: codex-rs/tui/src/bottom_pane/actionable_banner.rs and
-// codex-rs/tui/src/backend_banners.rs. The app parses and validates the
-// backend-owned payload and resolves each CTA; the model renders the inline
-// banner above the composer and reports selection/dismissal.
+// Rust parity: codex-rs/tui/src/backend_banners.rs,
+// codex-rs/tui/src/bottom_pane/actionable_banner.rs, and
+// codex-rs/tui/src/chatwidget/backend_banners.rs. The app parses and validates
+// the backend-owned payload and resolves each CTA; the model owns the banner
+// occurrence state machine, visibility rules, and dismissal.
+
+const (
+	// BackendBannerLunaReserve mirrors Rust's LUNA_RESERVE_BANNER.
+	BackendBannerLunaReserve = "luna_reserve"
+	// LunaReserveModel mirrors Rust's model_catalog::LUNA_RESERVE_MODEL.
+	LunaReserveModel = "gpt-reserve"
+)
 
 // BackendBannerActionKind mirrors Rust's BannerAction.
 type BackendBannerActionKind string
@@ -33,61 +42,208 @@ type BackendBannerAction struct {
 	CreditType chatwidget.AddCreditsNudgeCreditType
 }
 
-// BackendBannerView is one validated inline banner: copy plus the CTA labels in
-// backend order.
+// BackendBannerView is one validated inline banner: copy plus the resolved CTAs
+// and the identity fields the visibility rules compare.
 type BackendBannerView struct {
-	Title       string
-	Description string
-	Actions     []BackendBannerAction
-	Dismissible bool
+	BannerType         string
+	Title              string
+	Description        string
+	Actions            []BackendBannerAction
+	Dismissible        bool
+	AccountID          string
+	ResetAt            *int64
+	ModelSlug          *string
+	BlockedModelSlug   *string
+	FallbackModelSlugs []string
+}
+
+// BackendBannerRecoveryInput carries the identity-validated usage facts that
+// authorize ordinary-usage recovery (Rust update_backend_banner).
+type BackendBannerRecoveryInput struct {
+	AccountID            string
+	OrdinaryUsageAllowed *bool
+	HasCreditsSnapshot   bool
+	CreditsUnlimited     bool
+	HasCredits           bool
+	SpendControlReached  *bool
+	RateLimitReachedType string
+	HasRateLimitUpsell   bool
+}
+
+// BackendBannerRead is one usage read: the parsed banner (nil when absent) plus
+// the recovery inputs.
+type BackendBannerRead struct {
+	Banner   *BackendBannerView
+	Recovery BackendBannerRecoveryInput
 }
 
 // BackendBannerResultMsg carries the startup/refresh banner read.
 type BackendBannerResultMsg struct {
-	Banner *BackendBannerView
-	Err    error
+	Read BackendBannerRead
+	Err  error
 }
 
-// SetBackendBanner installs (or clears) the inline banner. A fresh banner
-// resets the dismissal state, matching Rust's set_inline_banner.
+// backendBannerState mirrors Rust's BackendBannerState plus the
+// luna-reserve notice memory: only explicitly dismissible, previously shown
+// occurrences can be dismissed, and an authoritative replacement starts a new
+// occurrence.
+type backendBannerState struct {
+	accountID              string
+	ordinaryUsageRecovered bool
+	banner                 *BackendBannerView
+	// presented is the banner the surface last showed, used for the
+	// "occurrence unchanged" early-out and the dismiss-on-new-turn rule.
+	presented *BackendBannerView
+	// shown records that the banner was presented at least once.
+	shown     bool
+	dismissed bool
+	// reserveNoticeAccountID remembers a shown luna-reserve entry notice across
+	// chats until ordinary usage recovers (Rust luna_reserve_notice_account_id).
+	reserveNoticeAccountID *string
+}
+
+func (s *backendBannerState) clear() {
+	*s = backendBannerState{}
+}
+
+// update applies one usage read: refresh the account, the ordinary-usage
+// recovery decision, and the banner occurrence (Rust update_backend_banner).
+func (s *backendBannerState) update(read BackendBannerRead) {
+	s.accountID = strings.TrimSpace(read.Recovery.AccountID)
+	allowed := read.Recovery.OrdinaryUsageAllowed
+	hasUsableCredits := read.Recovery.HasCreditsSnapshot &&
+		(read.Recovery.CreditsUnlimited || read.Recovery.HasCredits)
+	spendControlReached := read.Recovery.SpendControlReached != nil && *read.Recovery.SpendControlReached
+	s.ordinaryUsageRecovered = allowed != nil &&
+		(*allowed || hasUsableCredits) &&
+		!read.Recovery.HasRateLimitUpsell &&
+		!spendControlReached &&
+		strings.TrimSpace(read.Recovery.RateLimitReachedType) == ""
+	if s.ordinaryUsageRecovered {
+		s.reserveNoticeAccountID = nil
+	}
+
+	sameOccurrence := s.sameBannerOccurrence(s.banner, read.Banner)
+	s.banner = read.Banner
+	if !sameOccurrence {
+		s.shown = false
+		s.dismissed = s.reserveNoticeAlreadyShown()
+		s.presented = nil
+	}
+}
+
+// sameBannerOccurrence mirrors Rust's same_occurrence comparison.
+func (s *backendBannerState) sameBannerOccurrence(oldBanner *BackendBannerView, newBanner *BackendBannerView) bool {
+	if oldBanner == nil || newBanner == nil {
+		return false
+	}
+	return oldBanner.AccountID == newBanner.AccountID &&
+		oldBanner.BannerType == newBanner.BannerType &&
+		int64PtrValue(oldBanner.ResetAt) == int64PtrValue(newBanner.ResetAt) &&
+		oldBanner.Dismissible == newBanner.Dismissible &&
+		firstNonEmptyStringPtr(oldBanner.BlockedModelSlug, oldBanner.ModelSlug) ==
+			firstNonEmptyStringPtr(newBanner.BlockedModelSlug, newBanner.ModelSlug) &&
+		slices.Equal(oldBanner.FallbackModelSlugs, newBanner.FallbackModelSlugs)
+}
+
+// reserveNoticeAlreadyShown reports whether this account already showed the
+// reserve entry notice (Rust reserve_notice_already_shown).
+func (s *backendBannerState) reserveNoticeAlreadyShown() bool {
+	return s.banner != nil &&
+		s.banner.BannerType == BackendBannerLunaReserve &&
+		s.reserveNoticeAccountID != nil &&
+		*s.reserveNoticeAccountID == s.banner.AccountID
+}
+
+// visibleBanner applies Rust's refresh_backend_banner_visibility filter.
+func (s *backendBannerState) visibleBanner(currentModel string) *BackendBannerView {
+	banner := s.banner
+	if banner == nil {
+		return nil
+	}
+	if banner.BannerType == BackendBannerLunaReserve {
+		// Keep recovery actions available while switching.
+		if s.dismissed {
+			return nil
+		}
+		return banner
+	}
+	if s.dismissed {
+		return nil
+	}
+	matchesSelectedModel := false
+	switch {
+	case banner.BlockedModelSlug != nil && len(banner.FallbackModelSlugs) > 0:
+		// Explicit fallback payloads describe the selected replacement.
+		matchesSelectedModel = *banner.BlockedModelSlug != currentModel &&
+			slices.Contains(banner.FallbackModelSlugs, currentModel)
+	default:
+		matchesSelectedModel = banner.ModelSlug == nil ||
+			strings.TrimSpace(*banner.ModelSlug) == "" ||
+			*banner.ModelSlug == currentModel
+	}
+	if !matchesSelectedModel {
+		return nil
+	}
+	return banner
+}
+
+// present records the banner the surface is about to show: the occurrence was
+// presented, and the luna-reserve entry notice is remembered per account.
+func (s *backendBannerState) present(banner *BackendBannerView, currentModel string) {
+	s.presented = banner
+	s.shown = true
+	if banner.BannerType == BackendBannerLunaReserve && currentModel == LunaReserveModel {
+		accountID := banner.AccountID
+		s.reserveNoticeAccountID = &accountID
+	}
+}
+
+// dismiss hides a dismissible banner (Rust dismiss_backend_banner_for_new_turn).
+func (s *backendBannerState) dismiss() {
+	s.dismissed = true
+}
+
+func (m *Model) currentBannerModel() string {
+	if m == nil || m.State == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.State.Model)
+}
+
+// SetBackendBanner installs (or clears) the banner without recovery inputs,
+// starting a new occurrence.
 func (m *Model) SetBackendBanner(banner *BackendBannerView) {
 	if m == nil {
 		return
 	}
-	if banner == nil {
-		m.backendBanner = nil
-		m.backendBannerDismissed = false
-		m.backendBannerShown = false
-		return
-	}
-	m.backendBanner = banner
-	m.backendBannerDismissed = false
-	m.backendBannerShown = false
+	m.backendBanner.update(BackendBannerRead{Banner: banner})
 }
 
-// BackendBanner returns the active banner, if any.
+// BackendBanner returns the banner the surface would show, if any.
 func (m *Model) BackendBanner() *BackendBannerView {
 	if m == nil {
 		return nil
 	}
-	return m.backendBanner
+	return m.backendBanner.visibleBanner(m.currentBannerModel())
 }
 
 func (m *Model) backendBannerVisible() bool {
-	return m != nil && m.backendBanner != nil && !m.backendBannerDismissed
+	return m != nil && m.backendBanner.visibleBanner(m.currentBannerModel()) != nil
 }
 
 // dismissBackendBannerForNewTurn mirrors Rust's
-// dismiss_backend_banner_for_new_turn: once a dismissible banner has been shown,
-// starting a new turn hides it.
+// dismiss_backend_banner_for_new_turn: once a dismissible banner has been
+// presented, starting a new turn hides it.
 func (m *Model) dismissBackendBannerForNewTurn() {
-	if m == nil || !m.backendBannerVisible() || !m.backendBannerShown {
+	if m == nil {
 		return
 	}
-	if !m.backendBanner.Dismissible {
+	state := &m.backendBanner
+	if !state.shown || state.presented == nil || !state.presented.Dismissible {
 		return
 	}
-	m.backendBannerDismissed = true
+	state.dismiss()
 }
 
 // backendBannerCmd performs the startup/refresh banner read.
@@ -97,21 +253,17 @@ func (m *Model) backendBannerCmd() bubbletea.Cmd {
 	}
 	reader := m.onReadBackendBanner
 	return func() bubbletea.Msg {
-		banner, err := reader()
-		return BackendBannerResultMsg{Banner: banner, Err: err}
+		read, err := reader()
+		return BackendBannerResultMsg{Read: read, Err: err}
 	}
 }
 
 func (m *Model) applyBackendBannerResult(message BackendBannerResultMsg) {
-	if m == nil {
+	if m == nil || message.Err != nil {
+		// A failed read leaves the previous banner in place.
 		return
 	}
-	// A failed read leaves the previous banner in place (Rust keeps the last
-	// successfully parsed banner across transient refreshes).
-	if message.Err != nil {
-		return
-	}
-	m.SetBackendBanner(message.Banner)
+	m.backendBanner.update(message.Read)
 }
 
 // backendBannerAcceptsKeys mirrors Rust's InlineBanner key gate: draft input,
@@ -141,22 +293,23 @@ func (m *Model) handleBackendBannerKey(message bubbletea.KeyMsg) (bubbletea.Cmd,
 	if !m.backendBannerAcceptsKeys() {
 		return nil, false
 	}
+	banner := m.backendBanner.visibleBanner(m.currentBannerModel())
 	switch message.Type {
 	case bubbletea.KeyEsc:
-		if !m.backendBanner.Dismissible {
+		if !banner.Dismissible {
 			return nil, false
 		}
-		m.backendBannerDismissed = true
+		m.backendBanner.dismiss()
 		return nil, true
 	case bubbletea.KeyRunes:
 		if message.Alt || len(message.Runes) != 1 {
 			return nil, false
 		}
 		index := int(message.Runes[0] - '1')
-		if index < 0 || index >= len(m.backendBanner.Actions) {
+		if index < 0 || index >= len(banner.Actions) {
 			return nil, false
 		}
-		action := m.backendBanner.Actions[index]
+		action := banner.Actions[index]
 		if action.Kind == BannerActionResetUsage {
 			return m.openRateLimitResetView(), true
 		}
@@ -170,22 +323,32 @@ func (m *Model) handleBackendBannerKey(message bubbletea.KeyMsg) (bubbletea.Cmd,
 
 // renderBackendBanner renders the inline banner above the composer.
 func (m *Model) renderBackendBanner() string {
-	if !m.backendBannerVisible() {
+	currentModel := m.currentBannerModel()
+	banner := m.backendBanner.visibleBanner(currentModel)
+	if banner == nil {
 		return ""
 	}
-	m.backendBannerShown = true
-	banner := m.backendBanner
+	m.backendBanner.present(banner, currentModel)
+	title := banner.Title
+	description := banner.Description
+	// The backend emits the reserve banner only after ordinary usage is
+	// exhausted; while the current model is not yet Reserve the copy describes
+	// the accepted replacement instead.
+	if banner.BannerType == BackendBannerLunaReserve && currentModel != LunaReserveModel {
+		title = "Usage limit reached"
+		description = "Your included usage is exhausted. Choose an option below to continue."
+	}
 	width := m.width
 	if width <= 0 {
 		width = 80
 	}
 	innerWidth := max(width-4, 8)
 	var lines []string
-	for _, line := range codextui.WrapLines(strings.Split(banner.Title, "\n"), codextui.WrapOptions{Width: innerWidth}) {
+	for _, line := range codextui.WrapLines(strings.Split(title, "\n"), codextui.WrapOptions{Width: innerWidth}) {
 		lines = append(lines, "  "+line)
 	}
-	if strings.TrimSpace(banner.Description) != "" {
-		for _, line := range codextui.WrapLines(strings.Split(banner.Description, "\n"), codextui.WrapOptions{Width: innerWidth}) {
+	if strings.TrimSpace(description) != "" {
+		for _, line := range codextui.WrapLines(strings.Split(description, "\n"), codextui.WrapOptions{Width: innerWidth}) {
 			lines = append(lines, "  "+line)
 		}
 	}
@@ -226,4 +389,21 @@ func (m *Model) slashPopupVisible() bool {
 // skillPopupVisible reports whether the skill popup is showing.
 func (m *Model) skillPopupVisible() bool {
 	return m != nil && strings.TrimSpace(m.renderSkillPopup()) != ""
+}
+
+func int64PtrValue(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func firstNonEmptyStringPtr(primary *string, fallback *string) string {
+	if primary != nil && strings.TrimSpace(*primary) != "" {
+		return *primary
+	}
+	if fallback != nil {
+		return *fallback
+	}
+	return ""
 }

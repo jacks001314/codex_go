@@ -908,8 +908,9 @@ type Options struct {
 	OnConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
 	OnReadRateLimits              RateLimitsReaderFunc
 	// OnReadBackendBanner reads and validates the backend-owned inline banner
-	// (Rust #44857 backend_banners). Nil leaves the banner surface unused.
-	OnReadBackendBanner func() (*BackendBannerView, error)
+	// plus the ordinary-usage recovery inputs (Rust backend_banners). Nil leaves
+	// the banner surface unused.
+	OnReadBackendBanner func() (BackendBannerRead, error)
 	// OnBackendBannerAction dispatches a selected CTA by backend order. The app
 	// resolves the action (open URL / credits nudge / reset credits).
 	OnBackendBannerAction     func(action BackendBannerAction) bubbletea.Cmd
@@ -1456,11 +1457,9 @@ type Model struct {
 	onReadRateLimitResetCredits       RateLimitResetCreditsReaderFunc
 	onConsumeRateLimitResetCredit     RateLimitResetCreditConsumerFunc
 	onReadRateLimits                  RateLimitsReaderFunc
-	onReadBackendBanner               func() (*BackendBannerView, error)
+	onReadBackendBanner               func() (BackendBannerRead, error)
 	onBackendBannerAction             func(action BackendBannerAction) bubbletea.Cmd
-	backendBanner                     *BackendBannerView
-	backendBannerDismissed            bool
-	backendBannerShown                bool
+	backendBanner                     backendBannerState
 	nextStatusRateLimitRequestID      uint64
 	pendingStatusRateLimitRequests    map[uint64]pendingStatusRateLimitRequest
 	terminalTitleWriter               TerminalTitleWriterFunc

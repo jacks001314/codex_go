@@ -36,33 +36,59 @@ func interactivePlanType() auth.PlanType {
 	return account.PlanType
 }
 
-// interactiveBackendBannerView converts an account usage read into the TUI's
-// inline banner view (Rust BackendBanner::actionable_banner). Unsupported or
-// unrenderable payloads yield nil so the previous surface is left alone.
-func interactiveBackendBannerView(response *auth.GetAccountRateLimitsResponse, planType auth.PlanType, now time.Time) *codextea.BackendBannerView {
-	if response == nil || len(response.RateLimitUpsell) == 0 {
-		return nil
+// interactiveBackendBannerRead converts an account usage read into the TUI's
+// inline banner view plus the ordinary-usage recovery inputs (Rust
+// BackendBanner::actionable_banner + update_backend_banner). Unsupported or
+// unrenderable payloads leave the banner nil so the previous surface is left
+// alone.
+func interactiveBackendBannerRead(response *auth.GetAccountRateLimitsResponse, planType auth.PlanType, now time.Time) codextea.BackendBannerRead {
+	read := codextea.BackendBannerRead{}
+	if response == nil {
+		return read
 	}
-	if trimmed := strings.TrimSpace(string(response.RateLimitUpsell)); trimmed == "" || trimmed == "null" {
-		return nil
+	hasUpsell := hasBackendBannerPayload(response.RateLimitUpsell)
+	read.Recovery = codextea.BackendBannerRecoveryInput{
+		AccountID:            strings.TrimSpace(stringPtrValue(response.AccountID)),
+		OrdinaryUsageAllowed: response.OrdinaryUsageAllowed,
+		SpendControlReached:  response.RateLimits.SpendControlReached,
+		HasRateLimitUpsell:   hasUpsell,
+	}
+	if credits := response.RateLimits.Credits; credits != nil {
+		read.Recovery.HasCreditsSnapshot = true
+		read.Recovery.CreditsUnlimited = credits.Unlimited
+		read.Recovery.HasCredits = credits.HasCredits
+	}
+	if response.RateLimits.RateLimitReachedType != nil {
+		read.Recovery.RateLimitReachedType = string(*response.RateLimits.RateLimitReachedType)
+	}
+	if !hasUpsell {
+		return read
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(response.RateLimitUpsell, &raw); err != nil {
-		return nil
+		return read
 	}
 	banner, ok := ParseBackendBanner(raw)
 	if !ok {
-		return nil
+		return read
 	}
 	// The account identity comes from the usage read, not the payload.
-	if response.AccountID != nil {
-		banner.AccountID = strings.TrimSpace(*response.AccountID)
+	banner.AccountID = read.Recovery.AccountID
+	if response.RateLimits.PlanType != nil {
+		banner.PlanType = *response.RateLimits.PlanType
+	} else {
+		banner.PlanType = planType
 	}
-	banner.PlanType = planType
 	view := &codextea.BackendBannerView{
-		Title:       banner.BannerCopy(banner.Title, now),
-		Description: banner.BannerCopy(banner.Description, now),
-		Dismissible: banner.Dismissible(),
+		BannerType:         banner.BannerType,
+		Title:              banner.BannerCopy(banner.Title, now),
+		Description:        banner.BannerCopy(banner.Description, now),
+		Dismissible:        banner.Dismissible(),
+		AccountID:          banner.AccountID,
+		ResetAt:            banner.ResetAt,
+		ModelSlug:          banner.ModelSlug,
+		BlockedModelSlug:   banner.BlockedModelSlug,
+		FallbackModelSlugs: append([]string(nil), banner.FallbackModelSlugs...),
 	}
 	for _, action := range banner.ActionableActions() {
 		view.Actions = append(view.Actions, codextea.BackendBannerAction{
@@ -72,7 +98,18 @@ func interactiveBackendBannerView(response *auth.GetAccountRateLimitsResponse, p
 			CreditType: action.Action.CreditType,
 		})
 	}
-	return view
+	read.Banner = view
+	return read
+}
+
+// hasBackendBannerPayload reports whether a usage read carried banner content
+// (an absent or explicit-null upsell leaves the client UI unchanged).
+func hasBackendBannerPayload(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null"
 }
 
 func backendBannerActionKind(kind BannerActionKind) codextea.BackendBannerActionKind {
@@ -88,23 +125,23 @@ func backendBannerActionKind(kind BannerActionKind) codextea.BackendBannerAction
 	}
 }
 
-func interactiveLocalBackendBannerReader() func() (*codextea.BackendBannerView, error) {
-	return func() (*codextea.BackendBannerView, error) {
+func interactiveLocalBackendBannerReader() func() (codextea.BackendBannerRead, error) {
+	return func() (codextea.BackendBannerRead, error) {
 		response, err := interactiveLocalUsageRead()
 		if err != nil {
-			return nil, err
+			return codextea.BackendBannerRead{}, err
 		}
-		return interactiveBackendBannerView(response, interactivePlanType(), time.Now()), nil
+		return interactiveBackendBannerRead(response, interactivePlanType(), time.Now()), nil
 	}
 }
 
-func interactiveRemoteBackendBannerReader(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func() (*codextea.BackendBannerView, error) {
-	return func() (*codextea.BackendBannerView, error) {
+func interactiveRemoteBackendBannerReader(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func() (codextea.BackendBannerRead, error) {
+	return func() (codextea.BackendBannerRead, error) {
 		response, err := interactiveRemoteUsageRead(ctx, endpoint)
 		if err != nil {
-			return nil, err
+			return codextea.BackendBannerRead{}, err
 		}
-		return interactiveBackendBannerView(response, interactivePlanType(), time.Now()), nil
+		return interactiveBackendBannerRead(response, interactivePlanType(), time.Now()), nil
 	}
 }
 

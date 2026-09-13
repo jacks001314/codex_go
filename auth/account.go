@@ -527,14 +527,20 @@ func (r *GetAccountRateLimitsResponse) MarshalJSON() ([]byte, error) {
 }
 
 type RateLimitSnapshot struct {
-	LimitID              *string                    `json:"limitId"`
-	LimitName            *string                    `json:"limitName"`
-	Primary              *RateLimitWindow           `json:"primary"`
-	Secondary            *RateLimitWindow           `json:"secondary"`
-	Credits              *CreditsSnapshot           `json:"credits"`
-	IndividualLimit      *SpendControlLimitSnapshot `json:"individualLimit"`
-	PlanType             *PlanType                  `json:"planType"`
-	RateLimitReachedType *RateLimitReachedType      `json:"rateLimitReachedType"`
+	LimitID   *string `json:"limitId"`
+	LimitName *string `json:"limitName"`
+	// NormalModelSlug is the normal model whose display name and reasoning
+	// options describe this quota alias (Rust v2 RateLimitSnapshot).
+	NormalModelSlug *string                    `json:"normalModelSlug"`
+	Primary         *RateLimitWindow           `json:"primary"`
+	Secondary       *RateLimitWindow           `json:"secondary"`
+	Credits         *CreditsSnapshot           `json:"credits"`
+	IndividualLimit *SpendControlLimitSnapshot `json:"individualLimit"`
+	// SpendControlReached is the backend-reported spend-control state; null means
+	// unavailable, not a sparse-update recovery.
+	SpendControlReached  *bool                 `json:"spendControlReached"`
+	PlanType             *PlanType             `json:"planType"`
+	RateLimitReachedType *RateLimitReachedType `json:"rateLimitReachedType"`
 }
 
 func EmptyRateLimitSnapshot() RateLimitSnapshot {
@@ -1283,10 +1289,12 @@ func cloneAccount(account *Account) *Account {
 func cloneRateLimitSnapshot(snapshot RateLimitSnapshot) RateLimitSnapshot {
 	snapshot.LimitID = cloneStringPtr(snapshot.LimitID)
 	snapshot.LimitName = cloneStringPtr(snapshot.LimitName)
+	snapshot.NormalModelSlug = cloneStringPtr(snapshot.NormalModelSlug)
 	snapshot.Primary = cloneRateLimitWindow(snapshot.Primary)
 	snapshot.Secondary = cloneRateLimitWindow(snapshot.Secondary)
 	snapshot.Credits = cloneCredits(snapshot.Credits)
 	snapshot.IndividualLimit = cloneSpend(snapshot.IndividualLimit)
+	snapshot.SpendControlReached = cloneBoolValue(snapshot.SpendControlReached)
 	if snapshot.PlanType != nil {
 		value := *snapshot.PlanType
 		snapshot.PlanType = &value

@@ -18,8 +18,8 @@ func backendBannerTestModel(t *testing.T, banner *BackendBannerView, readErr err
 	model := NewModel(state, Options{
 		Width:  80,
 		Height: 24,
-		OnReadBackendBanner: func() (*BackendBannerView, error) {
-			return banner, readErr
+		OnReadBackendBanner: func() (BackendBannerRead, error) {
+			return BackendBannerRead{Banner: banner}, readErr
 		},
 		OnBackendBannerAction: func(action BackendBannerAction) bubbletea.Cmd {
 			*dispatched = append(*dispatched, action)
@@ -188,7 +188,7 @@ func TestModelBackendBannerFailedReadKeepsPreviousBanner(t *testing.T) {
 	if banner := model.BackendBanner(); banner == nil || banner.Title != "First banner" {
 		t.Fatalf("banner = %#v, want the previous banner", banner)
 	}
-	model.applyBackendBannerResult(BackendBannerResultMsg{Banner: nil})
+	model.applyBackendBannerResult(BackendBannerResultMsg{})
 	if model.BackendBanner() != nil {
 		t.Fatal("a successful empty read should clear the banner")
 	}
