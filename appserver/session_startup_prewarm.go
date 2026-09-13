@@ -21,8 +21,13 @@ const startupPrewarmTimeout = 15 * time.Second
 // startupPrewarmState is the per-thread prewarm result.
 type startupPrewarmState struct {
 	responseID string
+	startedAt  time.Time
 	finished   bool
-	consumed   bool
+	finishedAt time.Time
+	// status mirrors Rust's prewarm task status ("ready" when the websocket
+	// prewarm returned without error, otherwise "failed").
+	status   string
+	consumed bool
 }
 
 // scheduleStartupPrewarm kicks off an asynchronous websocket prewarm for a
@@ -46,7 +51,8 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 	if r.startupPrewarms == nil {
 		r.startupPrewarms = map[string]*startupPrewarmState{}
 	}
-	r.startupPrewarms[threadID] = &startupPrewarmState{}
+	startedAt := time.Now().UTC()
+	r.startupPrewarms[threadID] = &startupPrewarmState{startedAt: startedAt}
 	r.startupPrewarmMu.Unlock()
 
 	modelID := strings.TrimSpace(response.Model)
@@ -54,18 +60,29 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 		ctx, cancel := context.WithTimeout(context.Background(), startupPrewarmTimeout)
 		defer cancel()
 		var responseID string
-		if resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
+		status := "failed"
+		resp, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
 			Model:      modelID,
 			Originator: "session_startup",
-		}); err == nil && resp != nil {
+		})
+		if err == nil {
+			status = "ready"
+		}
+		if err == nil && resp != nil {
 			responseID = strings.TrimSpace(resp.ResponseID)
 		}
+		finishedAt := time.Now().UTC()
 		r.startupPrewarmMu.Lock()
 		if state := r.startupPrewarms[threadID]; state != nil {
 			state.responseID = responseID
 			state.finished = true
+			state.finishedAt = finishedAt
+			state.status = status
 		}
 		r.startupPrewarmMu.Unlock()
+		// Rust's prewarm task records these when it completes.
+		r.recordStartupPhase("startup_prewarm_total", finishedAt.Sub(startedAt), status)
+		r.recordStartupPrewarmDuration(status, finishedAt.Sub(startedAt))
 	}()
 }
 
@@ -82,16 +99,26 @@ func (r *RuntimeRouter) takeStartupPrewarmResponseID(threadID string) string {
 		return ""
 	}
 	r.startupPrewarmMu.Lock()
-	defer r.startupPrewarmMu.Unlock()
 	state := r.startupPrewarms[threadID]
 	if state == nil || !state.finished || state.consumed {
+		r.startupPrewarmMu.Unlock()
 		return ""
 	}
 	responseID := strings.TrimSpace(state.responseID)
+	age := time.Since(state.startedAt)
+	if age < 0 {
+		age = 0
+	}
 	if responseID == "" {
+		// The prewarm finished without a usable response id; Rust reports the
+		// prewarm setup failure as unavailable with status "failed".
+		r.startupPrewarmMu.Unlock()
+		r.recordStartupPrewarmAgeAtFirstTurn("failed", age)
 		return ""
 	}
 	state.consumed = true
+	r.startupPrewarmMu.Unlock()
+	r.recordStartupPrewarmAgeAtFirstTurn("consumed", age)
 	return responseID
 }
 

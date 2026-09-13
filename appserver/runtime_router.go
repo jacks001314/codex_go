@@ -3521,6 +3521,10 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 	lifecycleRecords := r.lifecycleRecordSnapshots(lifecycleIDsWithFallback(request, lifecycleIDs))
 	var result any
 	var err error
+	// Rust app-server thread_processor: the thread/start startup phase
+	// breakdown ("thread_start_create_thread" and "thread_start_total").
+	threadStartStartedAt := time.Now().UTC()
+	createThreadStartedAt := threadStartStartedAt
 	if request.Method == MethodThreadStart {
 		var params ThreadStartParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -3556,6 +3560,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		}
 		if !handled {
 			result, err = r.services.ThreadRouter.dispatch(request)
+		}
+		if err == nil {
+			r.recordStartupPhase("thread_start_create_thread", time.Since(createThreadStartedAt), "ready")
 		}
 	} else if request.Method == MethodThreadFork {
 		var handled bool
@@ -3630,6 +3637,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 			if request.Method == MethodThreadStart {
 				r.startMemoriesStartupTask(response, request)
 				r.scheduleStartupPrewarm(response)
+				// Rust records the whole thread/start latency once the client has
+				// been notified and the post-start work has been scheduled.
+				r.recordStartupPhase("thread_start_total", time.Since(threadStartStartedAt), "ready")
 			}
 		} else if response, ok := result.(*ThreadForkResponse); ok && response.Thread != nil {
 			var forkParams ThreadForkParams
