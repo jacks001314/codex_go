@@ -15,6 +15,7 @@ import (
 
 	"codex_go/auth"
 	"codex_go/config"
+	"codex_go/mcp"
 	"codex_go/model"
 	"codex_go/plugin"
 	"codex_go/session"
@@ -28,6 +29,12 @@ func TestMain(m *testing.M) {
 		runAppserverMCPPreparationHelper()
 		os.Exit(0)
 	}
+	// Pin the MCP OAuth keyring backend to unavailable: this build has a durable
+	// keyring on Windows, and these tests exercise the OAuth flows end to end with
+	// temporary servers; writing real credentials during tests would leak entries
+	// into the developer's credential store. The keyring path is covered by the
+	// mcp package tests with an injected fake store.
+	mcp.MCPOAuthKeyringAvailable = false
 	os.Exit(m.Run())
 }
 

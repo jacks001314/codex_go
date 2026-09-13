@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/keyring"
 )
 
 var oauthFallbackMu sync.Mutex
@@ -20,6 +22,9 @@ const (
 	mcpOAuthFallbackFilename = ".credentials.json"
 	mcpOAuthServerType       = "http"
 	mcpOAuthRefreshSkew      = 30 * time.Second
+	// mcpOAuthKeyringService mirrors Rust's `KEYRING_SERVICE`; the account is the
+	// computed store key for the server.
+	mcpOAuthKeyringService = "Codex MCP Credentials"
 )
 
 type OAuthTokenSet struct {
@@ -42,6 +47,16 @@ type OAuthStore struct {
 	// Mode is the configured credential store mode (Rust
 	// OAuthCredentialsStoreMode); an empty value means auto.
 	Mode OAuthCredentialsStoreMode
+	// Keyring overrides the platform keyring backend (tests); nil uses the OS
+	// keyring.
+	Keyring keyring.Store
+}
+
+func (s *OAuthStore) keyringStore() keyring.Store {
+	if s != nil && s.Keyring != nil {
+		return s.Keyring
+	}
+	return keyring.New()
 }
 
 type oauthFallbackEntry struct {
@@ -79,15 +94,25 @@ func (s *OAuthStore) effectiveMode() OAuthCredentialsStoreMode {
 	if s == nil {
 		return OAuthCredentialsStoreAuto
 	}
-	mode, ok := ParseOAuthCredentialsStoreMode(string(s.Mode))
-	if !ok {
-		mode = OAuthCredentialsStoreAuto
-	}
+	mode := s.configuredMode()
 	if mode == OAuthCredentialsStoreAuto && MCPOAuthKeyringAvailable {
 		return OAuthCredentialsStoreKeyring
 	}
 	if mode == OAuthCredentialsStoreAuto {
 		return OAuthCredentialsStoreFile
+	}
+	return mode
+}
+
+// configuredMode is the normalized mode as configured, before auto resolves to
+// a concrete store. It decides whether a save may fall back to the file.
+func (s *OAuthStore) configuredMode() OAuthCredentialsStoreMode {
+	if s == nil {
+		return OAuthCredentialsStoreAuto
+	}
+	mode, ok := ParseOAuthCredentialsStoreMode(string(s.Mode))
+	if !ok {
+		return OAuthCredentialsStoreAuto
 	}
 	return mode
 }
@@ -117,6 +142,51 @@ func (s *OAuthStore) Load(serverName string, serverURL string) (*OAuthTokenSet, 
 	if err := s.keyringUnavailable(); err != nil {
 		return nil, err
 	}
+	mode := s.effectiveMode()
+	configured := s.configuredMode()
+	if mode == OAuthCredentialsStoreFile {
+		return s.loadFromFile(serverName, serverURL)
+	}
+	tokens, err := s.loadFromKeyring(serverName, serverURL)
+	if err != nil {
+		if configured == OAuthCredentialsStoreKeyring {
+			return nil, fmt.Errorf("failed to load OAuth tokens from keyring: %w", err)
+		}
+		// Auto falls back to the credentials file on a keyring error.
+		return s.loadFromFile(serverName, serverURL)
+	}
+	if tokens != nil {
+		return tokens, nil
+	}
+	// Keyring mode reads only the keyring; auto falls back to the file.
+	if configured == OAuthCredentialsStoreKeyring {
+		return nil, nil
+	}
+	return s.loadFromFile(serverName, serverURL)
+}
+
+// loadFromKeyring reads the direct-keyring entry for the server
+// (Rust load_oauth_tokens_from_direct_keyring).
+func (s *OAuthStore) loadFromKeyring(serverName string, serverURL string) (*OAuthTokenSet, error) {
+	key, err := computeMCPOAuthStoreKey(serverName, serverURL)
+	if err != nil {
+		return nil, err
+	}
+	serialized, err := s.keyringStore().Load(mcpOAuthKeyringService, key)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var entry oauthFallbackEntry
+	if err := json.Unmarshal([]byte(serialized), &entry); err != nil {
+		return nil, fmt.Errorf("failed to deserialize OAuth tokens from keyring: %w", err)
+	}
+	return oauthTokenSetFromFallbackEntry(&entry), nil
+}
+
+func (s *OAuthStore) loadFromFile(serverName string, serverURL string) (*OAuthTokenSet, error) {
 	oauthFallbackMu.Lock()
 	defer oauthFallbackMu.Unlock()
 	file, err := s.readFallbackFile()
@@ -171,7 +241,38 @@ func (s *OAuthStore) Save(tokens *OAuthTokenSet) error {
 		return err
 	}
 	defer lock.Release()
-	return s.saveWithLockHeld(tokens)
+	configured := s.configuredMode()
+	if s.effectiveMode() == OAuthCredentialsStoreFile {
+		return s.saveWithLockHeld(tokens)
+	}
+	if err := s.saveToKeyring(tokens); err != nil {
+		if configured == OAuthCredentialsStoreKeyring {
+			return err
+		}
+		// Auto falls back to the credentials file (Rust
+		// save_oauth_tokens_with_keyring_with_fallback_to_file).
+		return s.saveWithLockHeld(tokens)
+	}
+	// Best-effort legacy cleanup; a failure must not fail the save.
+	_, _ = s.deleteWithLockHeld(tokens.ServerName, tokens.ServerURL)
+	return nil
+}
+
+// saveToKeyring persists tokens in the direct keyring
+// (Rust save_oauth_tokens_to_direct_keyring).
+func (s *OAuthStore) saveToKeyring(tokens *OAuthTokenSet) error {
+	key, err := computeMCPOAuthStoreKey(tokens.ServerName, tokens.ServerURL)
+	if err != nil {
+		return err
+	}
+	serialized, err := json.Marshal(oauthFallbackEntryFromTokenSet(tokens))
+	if err != nil {
+		return fmt.Errorf("failed to serialize OAuth tokens: %w", err)
+	}
+	if err := s.keyringStore().Save(mcpOAuthKeyringService, key, string(serialized)); err != nil {
+		return fmt.Errorf("failed to write OAuth tokens to keyring: %w", err)
+	}
+	return nil
 }
 
 // saveWithLockHeld persists tokens while the caller retains the matching
@@ -211,11 +312,36 @@ func (s *OAuthStore) Delete(serverName string, serverURL string) (bool, error) {
 		return false, err
 	}
 	defer lock.Release()
-	return s.deleteWithLockHeld(serverName, serverURL)
+	mode := s.effectiveMode()
+	keyringRemoved := false
+	if removed, keyringErr := s.deleteKeyringEntry(serverName, serverURL); keyringErr != nil {
+		// Rust swallows a keyring delete failure in file mode but propagates it
+		// for auto/keyring.
+		if mode != OAuthCredentialsStoreFile {
+			return false, fmt.Errorf("failed to delete OAuth tokens from keyring: %w", keyringErr)
+		}
+	} else {
+		keyringRemoved = removed
+	}
+	fileRemoved, err := s.deleteWithLockHeld(serverName, serverURL)
+	if err != nil {
+		return false, err
+	}
+	return keyringRemoved || fileRemoved, nil
 }
 
-// deleteWithLockHeld removes tokens while the caller retains the matching
-// credential lock. Mirrors Rust delete_oauth_tokens_with_lock_held.
+// deleteKeyringEntry removes the direct-keyring entry for the server
+// (Rust delete_oauth_tokens_from_direct_keyring).
+func (s *OAuthStore) deleteKeyringEntry(serverName string, serverURL string) (bool, error) {
+	key, err := computeMCPOAuthStoreKey(serverName, serverURL)
+	if err != nil {
+		return false, err
+	}
+	return s.keyringStore().Delete(mcpOAuthKeyringService, key)
+}
+
+// deleteWithLockHeld removes the fallback-file tokens while the caller retains
+// the matching credential lock. Mirrors Rust delete_oauth_tokens_from_file.
 func (s *OAuthStore) deleteWithLockHeld(serverName string, serverURL string) (bool, error) {
 	oauthFallbackMu.Lock()
 	defer oauthFallbackMu.Unlock()

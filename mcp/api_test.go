@@ -1458,6 +1458,11 @@ func TestMain(m *testing.M) {
 		runMCPHelperServer()
 		os.Exit(0)
 	}
+	// Pin the keyring-unavailable backend for the package's tests: this build has
+	// a durable keyring on Windows, and the package's file-mode/mode-resolution
+	// tests assert Rust's file fallback. The keyring path is covered explicitly
+	// by tests that inject a fake store and enable availability.
+	MCPOAuthKeyringAvailable = false
 	os.Exit(m.Run())
 }
 

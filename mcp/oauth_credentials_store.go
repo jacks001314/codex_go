@@ -1,6 +1,10 @@
 package mcp
 
-import "strings"
+import (
+	"strings"
+
+	"codex_go/keyring"
+)
 
 // OAuthCredentialsStoreMode mirrors Rust
 // codex_config::types::OAuthCredentialsStoreMode for `mcp_oauth_credentials_store`.
@@ -34,14 +38,9 @@ func ParseOAuthCredentialsStoreMode(value string) (OAuthCredentialsStoreMode, bo
 }
 
 // MCPOAuthKeyringAvailable reports whether an OS keyring backend is available
-// for MCP OAuth credentials.
-//
-// Go does not link an OS keyring (the `auth` package's KeyringStore is an
-// in-process emulation), so the keyring is never a durable credential source
-// here. Rust's `auto` therefore resolves to the credentials file - Rust's own
-// documented fallback when keyring storage is unavailable - and `keyring`
-// fails like Rust does when the keyring cannot be used.
-const MCPOAuthKeyringAvailable = false
+// for MCP OAuth credentials. It is a var so tests can pin the unavailable
+// behavior deterministically.
+var MCPOAuthKeyringAvailable = keyring.Available()
 
 // MCPOAuthKeyringUnavailableError reports that keyring credential storage was
 // requested but no keyring backend is available.
