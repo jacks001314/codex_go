@@ -422,7 +422,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(ctx, root, endpoint, settings.PermissionRequirements),
 		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint),
 		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint),
-		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state),
+		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint),
 		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
 		OnDaybreakNotice: func(model string) codextui.DaybreakNotice {

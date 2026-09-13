@@ -7,6 +7,7 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
+	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/session"
 	codextui "codex_go/tui"
@@ -19,7 +20,11 @@ import (
 // thread's persisted turns so the selected transcript ordinal maps onto a turn,
 // fork before it (or start a fresh thread for the first prompt), then attach the
 // TUI to the branched conversation.
-func interactiveRemotePromptEditHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, state *codextui.State) codextea.PromptEditFunc {
+func interactiveRemotePromptEditHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, state *codextui.State, hosts ...*taskToolsMCPHost) codextea.PromptEditFunc {
+	var taskToolsHost *taskToolsMCPHost
+	if len(hosts) > 0 {
+		taskToolsHost = hosts[0]
+	}
 	return func(selection tuiapp.PromptEditSelection) (codextea.SessionResumeResponse, error) {
 		threadID := strings.TrimSpace(selection.ThreadID)
 		if threadID == "" {
@@ -30,6 +35,15 @@ func interactiveRemotePromptEditHandler(ctx context.Context, endpoint *appserver
 			return codextea.SessionResumeResponse{}, err
 		}
 		defer client.close()
+		// The branched thread must carry the session's task-tools namespace, so
+		// this client joins the hosted MCP server for the duration of the edit.
+		if taskToolsHost != nil {
+			if template, err := remoteThreadStartParams(root, state); err == nil {
+				client.taskTools = taskToolsHost
+				taskToolsHost.attach(client, template, client.registerDynamicToolThread)
+				defer taskToolsHost.suspend()
+			}
+		}
 
 		sourceThread, err := remoteTUIReadThread(ctx, client, threadID, true)
 		if err != nil {
@@ -63,6 +77,9 @@ type remotePromptEditClient struct {
 }
 
 func (c remotePromptEditClient) ForkThread(ctx context.Context, params appserver.ThreadForkParams) (*appserver.ThreadForkResponse, error) {
+	// A fork keeps the session's task-tools namespace (Rust
+	// ThreadToolTransport::configure_mcp on ThreadForkParams.config).
+	mergeTaskToolsMCPConfig(&params.Config, c.client.taskTools)
 	var response appserver.ThreadForkResponse
 	if err := remoteSessionRequest(ctx, c.client, appserver.MethodThreadFork, params, &response); err != nil {
 		return nil, err
@@ -75,9 +92,16 @@ func (c remotePromptEditClient) StartFreshThread(ctx context.Context, _ tuiapp.T
 	if err != nil {
 		return nil, err
 	}
+	c.client.applyTaskToolTransport(&params)
 	var response appserver.ThreadStartResponse
 	if err := remoteSessionRequest(ctx, c.client, appserver.MethodThreadStart, params, &response); err != nil {
 		return nil, err
+	}
+	// Only the hosted MCP server survives this request; the callback transport
+	// would register the namespace on a connection that closes with the edit, so
+	// the fresh thread is advertised as task-tools capable only for the former.
+	if response.Thread != nil && c.client.hasTaskToolsMCP() {
+		rememberRemoteTaskToolThread(auth.DefaultCodexHome(), strings.TrimSpace(response.Thread.ID))
 	}
 	return &response, nil
 }

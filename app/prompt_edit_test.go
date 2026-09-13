@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,7 +17,10 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
+	"codex_go/auth"
+	"codex_go/cli"
 	"codex_go/session"
+	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
 	"codex_go/tui/chatwidget"
 )
@@ -231,5 +236,111 @@ func TestPromptImageExtractionFromPersistedUserMessages(t *testing.T) {
 	}
 	if len(localMessage.UserPromptRemoteImages) != 1 || localMessage.UserPromptRemoteImages[0] != "https://example.test/d.png" {
 		t.Fatalf("local remote images = %#v", localMessage.UserPromptRemoteImages)
+	}
+}
+
+// TestRemotePromptEditCarriesTaskToolsNamespaceLikeRust covers the branched
+// thread's task-tools namespace: with the session's hosted MCP server the fresh
+// thread carries the `mcp_servers.codex_tui` override (not the callback
+// namespace), its capability marker is persisted, and a fork keeps the same
+// override through `ThreadForkParams.config` (Rust
+// ThreadToolTransport::configure_mcp).
+func TestRemotePromptEditCarriesTaskToolsNamespaceLikeRust(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	clientConn, serverConn := net.Pipe()
+	var mu sync.Mutex
+	startParams := map[string]any{}
+	forkParams := map[string]any{}
+	go func() {
+		defer serverConn.Close()
+		decoder := json.NewDecoder(serverConn)
+		encoder := json.NewEncoder(serverConn)
+		for {
+			var request struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			if err := decoder.Decode(&request); err != nil {
+				return
+			}
+			result := map[string]any{}
+			switch request.Method {
+			case string(appserver.MethodThreadStart):
+				var params map[string]any
+				_ = json.Unmarshal(request.Params, &params)
+				mu.Lock()
+				startParams = params
+				mu.Unlock()
+				result = map[string]any{"thread": map[string]any{"id": "thread-branched"}}
+			case string(appserver.MethodThreadFork):
+				var params map[string]any
+				_ = json.Unmarshal(request.Params, &params)
+				mu.Lock()
+				forkParams = params
+				mu.Unlock()
+				result = map[string]any{"thread": map[string]any{"id": "thread-forked"}}
+			}
+			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+		}
+	}()
+
+	state := codextui.NewState(nil)
+	host := &taskToolsMCPHost{}
+	defer host.close()
+	client := &remoteAppServerTUIClient{
+		endpoint:  appserverdaemon.NewUnixSocketEndpoint("/tmp/codex-prompt-edit.sock"),
+		root:      &cli.RootOptions{},
+		state:     state,
+		unixDial:  func(context.Context, string) (net.Conn, error) { return clientConn, nil },
+		taskTools: host,
+	}
+	if err := client.connect(ctx); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer client.close()
+	if err := client.initialize(ctx); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	template, err := remoteThreadStartParams(&cli.RootOptions{}, state)
+	if err != nil {
+		t.Fatalf("template: %v", err)
+	}
+	host.attach(client, template, client.registerDynamicToolThread)
+	edit := remotePromptEditClient{client: client, root: &cli.RootOptions{}, state: state}
+
+	started, err := edit.StartFreshThread(ctx, tuiapp.ThreadSessionState{})
+	if err != nil {
+		t.Fatalf("StartFreshThread: %v", err)
+	}
+	if started.Thread == nil || started.Thread.ID != "thread-branched" {
+		t.Fatalf("started thread = %#v", started.Thread)
+	}
+	mu.Lock()
+	startedParams := startParams
+	mu.Unlock()
+	if _, ok := startedParams["dynamicTools"]; ok {
+		t.Fatalf("fresh thread still carries dynamicTools: %#v", startedParams["dynamicTools"])
+	}
+	config, _ := startedParams["config"].(map[string]any)
+	server, _ := config["mcp_servers."+DynamicToolNamespace].(map[string]any)
+	if server == nil || strings.TrimSpace(server["url"].(string)) == "" {
+		t.Fatalf("fresh thread config is missing the codex_tui MCP server: %#v", startedParams["config"])
+	}
+	if !remoteTaskToolThreadAvailable(auth.DefaultCodexHome(), "thread-branched") {
+		t.Fatal("fresh thread capability marker was not persisted")
+	}
+
+	if _, err := edit.ForkThread(ctx, appserver.ThreadForkParams{ThreadID: "thread-parent"}); err != nil {
+		t.Fatalf("ForkThread: %v", err)
+	}
+	mu.Lock()
+	forked := forkParams
+	mu.Unlock()
+	forkConfig, _ := forked["config"].(map[string]any)
+	if forkConfig["mcp_servers."+DynamicToolNamespace] == nil {
+		t.Fatalf("fork did not carry the codex_tui MCP override: %#v", forked["config"])
 	}
 }
