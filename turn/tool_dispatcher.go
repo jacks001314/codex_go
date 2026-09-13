@@ -28,6 +28,55 @@ type ToolDispatcherOptions struct {
 	ToolMode                    string
 }
 
+// observeNonDispatchedItem records a call ID that bypassed local dispatch so a
+// reused ID cannot be presented as fresh Code Mode evidence (Rust #45185).
+func (d *ToolDispatcher) observeNonDispatchedItem(item *model.AgentItem) {
+	if d == nil || d.executedToolCalls == nil || item == nil {
+		return
+	}
+	d.executedToolCalls.ObserveNonDispatchedCall(item)
+}
+
+// completeDirectCall attaches the prepared direct record to the invocation's own
+// output and releases the pending slot. Fatal errors release the slot without an
+// output, matching Rust's permit drop.
+func (d *ToolDispatcher) completeDirectCall(invocation *tool.Invocation, response *ToolResponseItem) {
+	if d == nil || d.executedToolCalls == nil || invocation == nil {
+		return
+	}
+	d.directCallsMu.Lock()
+	call := d.preparedDirectCalls[invocation]
+	permit := d.permittedDirectCalls[invocation]
+	delete(d.preparedDirectCalls, invocation)
+	delete(d.permittedDirectCalls, invocation)
+	d.directCallsMu.Unlock()
+	if call != nil {
+		if response != nil {
+			d.executedToolCalls.AttachDirectCallToOutput(response, call, permit)
+		}
+	}
+	if permit != nil {
+		permit.Release()
+	}
+}
+
+// releasePreparedDirectCalls frees every pending direct-call slot still reserved
+// for this batch.
+func (d *ToolDispatcher) releasePreparedDirectCalls() {
+	if d == nil {
+		return
+	}
+	d.directCallsMu.Lock()
+	defer d.directCallsMu.Unlock()
+	for invocation, permit := range d.permittedDirectCalls {
+		if permit != nil {
+			permit.Release()
+		}
+		delete(d.permittedDirectCalls, invocation)
+		delete(d.preparedDirectCalls, invocation)
+	}
+}
+
 type ToolDispatcher struct {
 	router                      *tool.Router
 	hooks                       tool.HookRunner
@@ -42,6 +91,15 @@ type ToolDispatcher struct {
 	executedToolCalls           *ExecutedToolCallRecorder
 	toolMode                    string
 	clockMu                     sync.Mutex
+	// preparedDirectCalls/permittedDirectCalls carry the direct-call records
+	// reserved before dispatch so executeToolInvocation can attach each one to
+	// its own output (Rust #45185). They are written before execution starts and
+	// only read while the invocations run.
+	preparedDirectCalls  map[*tool.Invocation]*model.ExecutedToolCall
+	permittedDirectCalls map[*tool.Invocation]*ExecutedToolCallPermit
+	// directCallsMu guards the prepared-call maps, which the parallel execution
+	// path completes from multiple goroutines.
+	directCallsMu sync.Mutex
 }
 
 type ToolExecutionResult struct {
@@ -112,6 +170,30 @@ func (i *ToolResponseItem) CloneForExecutedToolCallPrompt() model.ExecutedToolCa
 func (i *ToolResponseItem) SetExecutedToolCallCell(cellID string) {
 	if i != nil {
 		i.cellID = strings.TrimSpace(cellID)
+	}
+}
+
+// ExecutedToolCallCellID reports the Code Mode cell owning the item's recorded
+// calls; empty means the record is a direct invocation's (Rust #45185).
+func (i *ToolResponseItem) ExecutedToolCallCellID() string {
+	if i == nil {
+		return ""
+	}
+	return strings.TrimSpace(i.cellID)
+}
+
+func (i *ToolResponseItem) ClearExecutedToolCalls() {
+	if i != nil {
+		i.executedToolCalls = nil
+	}
+}
+
+func (i *ToolResponseItem) ClearToolResultMetadata() {
+	if i == nil {
+		return
+	}
+	for index := range i.executedToolCalls {
+		i.executedToolCalls[index].ClearToolResultMetadata()
 	}
 }
 
@@ -232,6 +314,7 @@ func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.Age
 	for i := range items {
 		responseItem, ok := responseItemFromAgentItem(&items[i])
 		if !ok {
+			d.observeNonDispatchedItem(&items[i])
 			continue
 		}
 		invocation, ok, err := d.router.BuildToolCall(*responseItem)
@@ -239,11 +322,22 @@ func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.Age
 			return nil, err
 		}
 		if !ok {
+			// The call shape did not resolve to a dispatchable tool, so its ID
+			// cannot establish Code Mode completeness (Rust #45185).
+			d.observeNonDispatchedItem(&items[i])
 			continue
 		}
 		d.addInvocationContext(invocation)
 		if d.executedToolCalls != nil {
 			d.executedToolCalls.RecordToolCall(invocation, d.toolMode)
+			if call, permit := d.executedToolCalls.PrepareDirectCall(invocation, d.toolMode); call != nil {
+				if d.preparedDirectCalls == nil {
+					d.preparedDirectCalls = map[*tool.Invocation]*model.ExecutedToolCall{}
+					d.permittedDirectCalls = map[*tool.Invocation]*ExecutedToolCallPermit{}
+				}
+				d.preparedDirectCalls[invocation] = call
+				d.permittedDirectCalls[invocation] = permit
+			}
 		}
 		invocations = append(invocations, invocation)
 	}
@@ -252,15 +346,24 @@ func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.Age
 	}
 	if len(invocations) == 1 {
 		if err := d.router.WaitUntilReady(ctx, invocations[0]); err != nil {
+			d.releasePreparedDirectCalls()
 			return nil, err
 		}
 		result, err := d.executeToolInvocation(ctx, invocations[0])
 		if err != nil {
+			d.releasePreparedDirectCalls()
 			return nil, err
 		}
 		return []ToolExecutionResult{*result}, nil
 	}
-	return d.executeToolInvocations(ctx, invocations)
+	results, err := d.executeToolInvocations(ctx, invocations)
+	if err != nil {
+		// A failed batch leaves the prepared records for invocations that never
+		// ran; release their pending slots (Rust drops each permit on cancel).
+		d.releasePreparedDirectCalls()
+		return nil, err
+	}
+	return results, nil
 }
 
 func (d *ToolDispatcher) addInvocationContext(invocation *tool.Invocation) {
@@ -473,6 +576,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		}
 		callErr := toolCallErrorForModel(dispatchErr)
 		if callErr.IsFatal() {
+			d.completeDirectCall(invocation, nil)
 			return nil, dispatchErr
 		}
 		handlerExecuted = handlerReached
@@ -529,6 +633,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		FinishedAt:      finishedAt,
 		HandlerExecuted: handlerExecuted,
 	}
+	d.completeDirectCall(invocation, result.Response)
 	if d.onToolCompleted != nil {
 		d.onToolCompleted(toolCtx, result)
 	}

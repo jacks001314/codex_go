@@ -246,6 +246,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		var executedToolCallAttachment *ExecutedToolCallAttachment
 		if l.executedToolCalls != nil {
 			inputItems, executedToolCallAttachment = l.executedToolCalls.AttachPendingToPrompt(inputItems)
+		} else {
+			// Capture is disabled for this turn: direct records already in
+			// history must not reach inference (Rust #45185).
+			StripDirectCallMetadata(inputItems)
 		}
 		sampling := timing.BeginSampling(l.now())
 		instructions := request.Instructions
@@ -318,6 +322,12 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		for i := range response.Items {
 			if !isToolAgentItem(&response.Items[i]) {
 				item := response.Items[i]
+				// An item that did not resolve to a local tool dispatch cannot
+				// later establish Code Mode completeness by reusing its ID
+				// (Rust #45185 observe_non_dispatched_call).
+				if l.executedToolCalls != nil {
+					l.executedToolCalls.ObserveNonDispatchedCall(&item)
+				}
 				result.InputItems = append(result.InputItems, &item)
 			}
 		}

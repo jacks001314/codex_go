@@ -237,7 +237,7 @@ func TestRuntimeGatesExecutedToolCallMetadataLikeRust(t *testing.T) {
 	}
 }
 
-func TestRuntimeRetainsAttemptedToolMetadataAfterFailedSamplingLikeRust(t *testing.T) {
+func TestRuntimeAttachesDirectMetadataBeforeFailedSamplingLikeRust(t *testing.T) {
 	agent := &failAfterToolLoopAgent{}
 	registry := tool.NewRegistry()
 	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
@@ -251,24 +251,27 @@ func TestRuntimeRetainsAttemptedToolMetadataAfterFailedSamplingLikeRust(t *testi
 		t.Fatalf("first Run() error = %v", err)
 	}
 
-	agent.recover = true
-	_, err = runtime.Run(context.Background(), &AgentLoopRequest{
-		ExecutedToolCallMetadataEnabled: true,
-		InputItems: []any{
-			map[string]any{"type": "function_call", "call_id": "call-retry", "name": "echo", "arguments": `{}`},
-			map[string]any{"type": "function_call_output", "call_id": "call-retry", "output": "ok"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("second Run() error = %v", err)
-	}
-	if len(agent.requests) != 3 {
+	// Rust #45185 attaches the direct record to the invocation's output before
+	// it enters history, so the failed sampling request already carried it.
+	if len(agent.requests) != 2 {
 		t.Fatalf("requests = %d", len(agent.requests))
 	}
-	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(agent.requests[2].InputItems)[1])
+	var output any
+	for _, item := range model.BoundExecutedToolCallsForPrompt(agent.requests[1].InputItems) {
+		if _, _, _, _, isInput := executedToolCallInputInfo(item); isInput {
+			continue
+		}
+		if typeName, _, isOutput := executedToolCallOutputIdentity(item); isOutput && strings.TrimSpace(typeName) != "" {
+			output = item
+		}
+	}
+	if output == nil {
+		t.Fatalf("tool output missing from the failed sampling request: %#v", agent.requests[1].InputItems)
+	}
+	object := marshalExecutedToolCallItem(t, output)
 	calls := executedToolCallsFromObject(t, object)
 	if len(calls) != 1 || calls[0]["name"] != "echo" {
-		t.Fatalf("replayed metadata = %#v", calls)
+		t.Fatalf("direct metadata = %#v", calls)
 	}
 }
 

@@ -135,6 +135,10 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		var executedToolCallAttachment *ExecutedToolCallAttachment
 		if executedToolCalls != nil {
 			inputItems, executedToolCallAttachment = executedToolCalls.AttachPendingToPrompt(inputItems)
+		} else {
+			// Capture is disabled for this turn, so direct records already in
+			// history are stripped from the request (Rust #45185).
+			StripDirectCallMetadata(inputItems)
 		}
 		sampling := timing.BeginSampling(r.now())
 		instructions := request.Instructions

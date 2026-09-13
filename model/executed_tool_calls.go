@@ -245,12 +245,21 @@ func (i *AgentItem) ExecutedToolCallCellID() string {
 
 // ClearToolResultMetadata omits raw tool-result metadata without changing
 // existing calls, sources, or completion markers (Rust #44336).
+// ClearToolResultMetadata drops this recorded call's host result metadata while
+// keeping its identity, arguments, sources, and truncation marker (Rust #45185
+// clears result metadata before dropping the record under the retention budget).
+func (c *ExecutedToolCall) ClearToolResultMetadata() {
+	if c != nil {
+		c.toolResultMetadata = ToolResultMetadata{}
+	}
+}
+
 func (i *AgentItem) ClearToolResultMetadata() {
 	if i == nil {
 		return
 	}
 	for index := range i.executedToolCalls {
-		i.executedToolCalls[index].toolResultMetadata = ToolResultMetadata{}
+		i.executedToolCalls[index].ClearToolResultMetadata()
 	}
 }
 
@@ -577,6 +586,13 @@ func executedToolCallMetadataBytes(item ExecutedToolCallCarrier) int {
 		return 0
 	}
 	return jsonSize(item.ExecutedToolCalls()) + executedToolCallMetadataFieldBytes()
+}
+
+// ExecutedToolCallMetadataBytes reports the serialized size of an item's
+// host-owned executed-tool-call metadata (Rust executed_tool_call_metadata_bytes).
+// The request budget and the recorder's retention budget share it.
+func ExecutedToolCallMetadataBytes(item ExecutedToolCallCarrier) int {
+	return executedToolCallMetadataBytes(item)
 }
 
 func executedToolCallMetadataFieldBytes() int {

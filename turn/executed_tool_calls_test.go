@@ -11,54 +11,63 @@ import (
 
 func TestExecutedToolCallRecorderAttachesDirectAttemptToOutput(t *testing.T) {
 	recorder := NewExecutedToolCallRecorder()
-	recorder.RecordToolCall(&tool.Invocation{
+	invocation := &tool.Invocation{
 		CallID:   "call-1",
 		ToolName: tool.NamespacedName("mcp", "echo"),
 		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"value":1}`},
-	}, "")
-	call := &model.AgentItem{Type: "function_call", CallID: "call-1", Name: "mcp__echo", Arguments: `{"value":1}`}
+	}
+	recorder.RecordToolCall(invocation, "")
+	call, permit := recorder.PrepareDirectCall(invocation, "")
+	if call == nil || permit == nil {
+		t.Fatal("PrepareDirectCall() returned no record")
+	}
 	output := &ToolResponseItem{Type: "function_call_output", CallID: "call-1", Output: NewFunctionCallOutputPayload("ok", nil)}
+	recorder.AttachDirectCallToOutput(output, call, permit)
+	permit.Release()
 
-	attached, token := recorder.AttachPendingToPrompt([]any{call, output})
-	if token == nil {
-		t.Fatal("attachment token is nil")
-	}
-	if calls := attached[0].(*model.AgentItem).ExecutedToolCalls(); len(calls) != 0 {
-		t.Fatalf("call metadata = %#v", calls)
-	}
-	attachedOutput := attached[1].(*ToolResponseItem)
-	if calls := attachedOutput.ExecutedToolCalls(); len(calls) != 1 {
+	if calls := output.ExecutedToolCalls(); len(calls) != 1 {
 		t.Fatalf("output metadata = %#v", calls)
 	}
-	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(attached)[1])
+	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt([]any{output})[0])
+	metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata["tool_calls_complete"] != true {
+		t.Fatalf("direct output completeness = %#v", metadata)
+	}
 	calls := executedToolCallsFromObject(t, object)
 	if calls[0]["name"] != "mcp__echo" || calls[0]["arguments"].(map[string]any)["value"] != float64(1) {
 		t.Fatalf("serialized metadata = %#v", calls)
 	}
-	recorder.CommitAttachment(token)
-	second, secondToken := recorder.AttachPendingToPrompt([]any{output})
-	if secondToken != nil || len(second[0].(*ToolResponseItem).ExecutedToolCalls()) != 0 {
-		t.Fatalf("committed metadata replayed: %#v token=%#v", second, secondToken)
+	// The prompt path skips items that already carry a direct record, so the
+	// metadata is neither lost nor duplicated (Rust #45185).
+	attached, token := recorder.AttachPendingToPrompt([]any{output})
+	if token != nil {
+		t.Fatalf("prompt attachment token = %#v, want nil", token)
+	}
+	if calls := attached[0].(*ToolResponseItem).ExecutedToolCalls(); len(calls) != 1 || calls[0].Name != "mcp__echo" {
+		t.Fatalf("direct metadata changed by the prompt path: %#v", calls)
 	}
 }
 
-func TestExecutedToolCallRecorderRecordsResultSourcesForDirectAndCodeMode(t *testing.T) {
+func TestExecutedToolCallRecorderRecordsResultSourcesForCodeModeOnly(t *testing.T) {
 	recorder := NewExecutedToolCallRecorder()
 	direct := &tool.Invocation{CallID: "direct", ToolName: tool.PlainName("echo"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`}}
 	recorder.RecordToolCall(direct, "")
-	if !recorder.RecordToolResultSources(direct, model.NewToolResultSources([]model.ToolResultSource{{Type: "document", ID: "R1"}})) {
-		t.Fatal("direct result source was not recorded")
+	// Direct records carry their result metadata from the invocation, so the
+	// recorder only accepts nested Code Mode captures (Rust #45185).
+	if recorder.RecordToolResultSources(direct, model.NewToolResultSources([]model.ToolResultSource{{Type: "document", ID: "R1"}})) {
+		t.Fatal("direct result source must not be recorded through the Code Mode path")
 	}
-	items, attachment := recorder.AttachPendingToPrompt([]any{&ToolResponseItem{Type: "function_call_output", CallID: "direct", Output: NewFunctionCallOutputPayload("", boolPtr(true))}})
-	if attachment == nil || len(items) != 1 {
-		t.Fatalf("AttachPendingToPrompt() = %#v, %#v", items, attachment)
-	}
-	data, err := json.Marshal(items[0])
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
-	if !strings.Contains(string(data), `"tool_result_sources":[{"type":"document","id":"R1"}]`) {
-		t.Fatalf("direct attached JSON = %s", data)
+	if call, permit := recorder.PrepareDirectCall(direct, ""); call != nil {
+		output := &ToolResponseItem{Type: "function_call_output", CallID: "direct", Output: NewFunctionCallOutputPayload("", boolPtr(true))}
+		recorder.AttachDirectCallToOutput(output, call, permit)
+		permit.Release()
+		data, err := json.Marshal(output)
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		if strings.Contains(string(data), "tool_result_sources") {
+			t.Fatalf("direct output carried Code Mode sources: %s", data)
+		}
 	}
 
 	codeMode := &tool.Invocation{
@@ -73,11 +82,11 @@ func TestExecutedToolCallRecorderRecordsResultSourcesForDirectAndCodeMode(t *tes
 		t.Fatal("code mode result source was not recorded")
 	}
 	recorder.RegisterCell("cell-1", "outer")
-	items, attachment = recorder.AttachPendingToPrompt([]any{&ToolResponseItem{Type: "function_call_output", CallID: "outer", Output: NewFunctionCallOutputPayload("", boolPtr(true))}})
+	items, attachment := recorder.AttachPendingToPrompt([]any{&ToolResponseItem{Type: "function_call_output", CallID: "outer", Output: NewFunctionCallOutputPayload("", boolPtr(true))}})
 	if attachment == nil || len(items) != 1 {
 		t.Fatalf("code mode AttachPendingToPrompt() = %#v, %#v", items, attachment)
 	}
-	data, err = json.Marshal(items[0])
+	data, err := json.Marshal(items[0])
 	if err != nil {
 		t.Fatalf("code mode Marshal() error = %v", err)
 	}
@@ -86,26 +95,17 @@ func TestExecutedToolCallRecorderRecordsResultSourcesForDirectAndCodeMode(t *tes
 	}
 }
 
-func TestExecutedToolCallRecorderRecordsResultMetadataForDirectAndCodeMode(t *testing.T) {
+func TestExecutedToolCallRecorderRecordsResultMetadataForCodeModeOnly(t *testing.T) {
 	recorder := NewExecutedToolCallRecorder()
 	direct := &tool.Invocation{CallID: "direct-meta", ToolName: tool.PlainName("echo"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`}}
 	recorder.RecordToolCall(direct, "")
-	if !recorder.RecordToolResultMetadata(direct, map[string]any{"provider/custom": map[string]any{"items": []any{1}}}) {
-		t.Fatal("direct result metadata was not recorded")
+	// Direct records get their result metadata from the invocation, so only
+	// nested Code Mode captures are accepted here (Rust #45185).
+	if recorder.RecordToolResultMetadata(direct, map[string]any{"provider/custom": map[string]any{"items": []any{1}}}) {
+		t.Fatal("direct result metadata must not be recorded through the Code Mode path")
 	}
 	if recorder.RecordToolResultMetadata(&tool.Invocation{CallID: "missing"}, map[string]any{"k": "v"}) {
 		t.Fatal("metadata for an unknown call must be ignored")
-	}
-	items, attachment := recorder.AttachPendingToPrompt([]any{&ToolResponseItem{Type: "function_call_output", CallID: "direct-meta", Output: NewFunctionCallOutputPayload("", boolPtr(true))}})
-	if attachment == nil || len(items) != 1 {
-		t.Fatalf("AttachPendingToPrompt() = %#v, %#v", items, attachment)
-	}
-	data, err := json.Marshal(items[0])
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
-	if !strings.Contains(string(data), `"tool_result_metadata":{"provider/custom":{"items":[1]}}`) {
-		t.Fatalf("direct attached JSON = %s", data)
 	}
 
 	codeMode := &tool.Invocation{
@@ -120,11 +120,11 @@ func TestExecutedToolCallRecorderRecordsResultMetadataForDirectAndCodeMode(t *te
 		t.Fatal("code mode result metadata was not recorded")
 	}
 	recorder.RegisterCell("cell-meta", "outer-meta")
-	items, attachment = recorder.AttachPendingToPrompt([]any{&ToolResponseItem{Type: "function_call_output", CallID: "outer-meta", Output: NewFunctionCallOutputPayload("", boolPtr(true))}})
+	items, attachment := recorder.AttachPendingToPrompt([]any{&ToolResponseItem{Type: "function_call_output", CallID: "outer-meta", Output: NewFunctionCallOutputPayload("", boolPtr(true))}})
 	if attachment == nil || len(items) != 1 {
 		t.Fatalf("code mode AttachPendingToPrompt() = %#v, %#v", items, attachment)
 	}
-	data, err = json.Marshal(items[0])
+	data, err := json.Marshal(items[0])
 	if err != nil {
 		t.Fatalf("code mode Marshal() error = %v", err)
 	}
@@ -133,11 +133,12 @@ func TestExecutedToolCallRecorderRecordsResultMetadataForDirectAndCodeMode(t *te
 	}
 }
 
-func TestExecutedToolCallRecorderRetriesUntilSamplingSucceeds(t *testing.T) {
+func TestExecutedToolCallRecorderCodeModeAttachmentSurvivesRetryUntilCommit(t *testing.T) {
 	recorder := NewExecutedToolCallRecorder()
-	recorder.RecordToolCall(&tool.Invocation{CallID: "call-retry", ToolName: tool.PlainName("echo"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`}}, "")
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-retry", "cell-retry", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-retry", "call-retry")
 	output := map[string]any{
-		"type":    "function_call_output",
+		"type":    "custom_tool_call_output",
 		"call_id": "call-retry",
 		"output":  "ok",
 		"internal_chat_message_metadata_passthrough": map[string]any{
@@ -161,7 +162,7 @@ func TestExecutedToolCallRecorderRetriesUntilSamplingSucceeds(t *testing.T) {
 			t.Fatalf("turn metadata = %#v", metadata)
 		}
 		calls := executedToolCallsFromObject(t, object)
-		if len(calls) != 1 || calls[0]["name"] != "echo" {
+		if len(calls) != 1 || calls[0]["name"] != "mcp__echo" {
 			t.Fatalf("retry metadata = %#v", calls)
 		}
 	}
@@ -198,12 +199,28 @@ func TestExecutedToolCallRecorderCoalescesCodeModeCellAcrossExecAndWait(t *testi
 
 func TestExecutedToolCallRecorderBoundsPendingAndNestedArgumentBytes(t *testing.T) {
 	recorder := NewExecutedToolCallRecorder()
+	prepared := 0
+	var permits []*ExecutedToolCallPermit
 	for index := 0; index < 300; index++ {
 		callID := "direct-" + strings.Repeat("x", index%3) + string(rune(index+1))
-		recorder.RecordToolCall(&tool.Invocation{CallID: callID, ToolName: tool.PlainName("echo"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`}}, "")
+		invocation := &tool.Invocation{CallID: callID, ToolName: tool.PlainName("echo"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`}}
+		recorder.RecordToolCall(invocation, "")
+		call, permit := recorder.PrepareDirectCall(invocation, "")
+		if call == nil {
+			continue
+		}
+		prepared++
+		permits = append(permits, permit)
 	}
-	if got := len(recorder.direct); got != maxPendingExecutedToolCalls+1 {
-		t.Fatalf("direct pending calls = %d", got)
+	// The pending reservation bounds prepared direct calls (Rust #45185).
+	if prepared != maxPendingExecutedToolCalls {
+		t.Fatalf("prepared direct calls = %d, want %d", prepared, maxPendingExecutedToolCalls)
+	}
+	for _, permit := range permits {
+		permit.Release()
+	}
+	if got := recorder.pendingDirectCalls; got != 0 {
+		t.Fatalf("pending direct calls after release = %d", got)
 	}
 
 	for index := 0; index < 6; index++ {

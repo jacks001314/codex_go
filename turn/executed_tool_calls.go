@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"codex_go/model"
 	"codex_go/tool"
@@ -12,6 +13,10 @@ import (
 const (
 	maxPendingExecutedToolCalls                 = 256
 	maxExecutedToolCallFullArgumentBytesPerItem = 32 * 1024
+	// maxRetainedDirectMetadataBytes limits the Direct metadata retained in
+	// history across one recorder lifetime. A new process cannot recover the
+	// prior budget because raw result metadata is not deserialized (Rust #45185).
+	maxRetainedDirectMetadataBytes = 1024 * 1024
 )
 
 // ExecutedToolCallRecorder keeps best-effort attempted-tool metadata across
@@ -19,9 +24,18 @@ const (
 // succeeds, so transport retries and failed samples do not lose metadata.
 type ExecutedToolCallRecorder struct {
 	mu      sync.Mutex
-	direct  map[string]model.ExecutedToolCall
 	groups  map[string]*recordedToolCallGroup
 	outputs map[string]string
+	// lifetime identifies the current enabled recorder state; a prepared direct
+	// call is only attached while its lifetime is still current, so disabling
+	// capture invalidates records prepared before the change (Rust #45185).
+	lifetime *executedToolCallLifetime
+	// pendingDirectCalls counts prepared direct calls that have not been
+	// attached or released yet.
+	pendingDirectCalls int
+	// retainedDirectMetadataBytes counts the direct metadata kept in history for
+	// the retention budget above.
+	retainedDirectMetadataBytes int
 	// seenIDs tracks observed call and runtime cell IDs so reused or historical
 	// IDs cannot be presented as fresh evidence (Rust #44472).
 	seenIDs *seenIDs
@@ -46,6 +60,41 @@ type ExecutedToolCallRecorder struct {
 	startedCells map[string]struct{}
 }
 
+// executedToolCallLifetime is the identity token of one enabled recorder state.
+// The type must not be zero-sized: Go may give distinct zero-sized allocations
+// the same address, which would make separate generations compare equal.
+type executedToolCallLifetime struct {
+	generation uint64
+}
+
+var executedToolCallLifetimeGeneration atomic.Uint64
+
+func newExecutedToolCallLifetime() *executedToolCallLifetime {
+	return &executedToolCallLifetime{generation: executedToolCallLifetimeGeneration.Add(1)}
+}
+
+// ExecutedToolCallPermit reserves one pending direct-call recording slot for the
+// invocation that owns it. Release frees the slot when the invocation finishes or
+// is cancelled, mirroring Rust's DirectCallPermit drop.
+type ExecutedToolCallPermit struct {
+	lifetime *executedToolCallLifetime
+	recorder *ExecutedToolCallRecorder
+	released bool
+}
+
+// Release frees the reserved pending slot. It is safe to call once per permit.
+func (p *ExecutedToolCallPermit) Release() {
+	if p == nil || p.released || p.recorder == nil {
+		return
+	}
+	p.released = true
+	p.recorder.mu.Lock()
+	defer p.recorder.mu.Unlock()
+	if p.recorder.pendingDirectCalls > 0 {
+		p.recorder.pendingDirectCalls--
+	}
+}
+
 type recordedToolCallGroup struct {
 	pending   []recordedToolCall
 	fullBytes int
@@ -58,8 +107,69 @@ type recordedToolCall struct {
 }
 
 type ExecutedToolCallAttachment struct {
-	directCallIDs []string
-	groups        []executedToolCallGroupAttachment
+	groups []executedToolCallGroupAttachment
+}
+
+// executedToolCallCellCarrier reports the Code Mode cell associated with an
+// item's recorded calls; an item without one carries direct-call metadata.
+type executedToolCallCellCarrier interface {
+	ExecutedToolCallCellID() string
+}
+
+// executedToolCallCompletionSetter marks an item's recorded call inventory as
+// complete (Rust ResponseItem::mark_tool_calls_complete).
+type executedToolCallCompletionSetter interface {
+	SetExecutedToolCallsComplete(bool)
+}
+
+// hasDirectCallMetadata reports whether an item already carries a direct
+// (non-cell) executed-tool-call record (Rust has_direct_call_metadata).
+func hasDirectCallMetadata(item any) bool {
+	carrier, ok := item.(model.ExecutedToolCallCarrier)
+	if !ok || len(carrier.ExecutedToolCalls()) == 0 {
+		return false
+	}
+	if cell, ok := item.(executedToolCallCellCarrier); ok && strings.TrimSpace(cell.ExecutedToolCallCellID()) != "" {
+		return false
+	}
+	return true
+}
+
+func attachDirectCallToItem(item any, call model.ExecutedToolCall, complete bool) bool {
+	carrier, ok := item.(model.ExecutedToolCallCarrier)
+	if !ok {
+		return false
+	}
+	carrier.ReplaceExecutedToolCalls(append(carrier.ExecutedToolCalls(), call))
+	if complete {
+		if setter, ok := item.(executedToolCallCompletionSetter); ok {
+			setter.SetExecutedToolCallsComplete(true)
+		}
+	}
+	return true
+}
+
+func clearToolResultMetadataForItem(item any) {
+	if clearer, ok := item.(interface{ ClearToolResultMetadata() }); ok {
+		clearer.ClearToolResultMetadata()
+	}
+}
+
+func clearExecutedToolCallsForItem(item any) {
+	if clearer, ok := item.(interface{ ClearExecutedToolCalls() }); ok {
+		clearer.ClearExecutedToolCalls()
+		return
+	}
+	if carrier, ok := item.(model.ExecutedToolCallCarrier); ok {
+		carrier.ReplaceExecutedToolCalls(nil)
+	}
+}
+
+func executedToolCallMetadataBytesForItem(item any) int {
+	if carrier, ok := item.(model.ExecutedToolCallCarrier); ok {
+		return model.ExecutedToolCallMetadataBytes(carrier)
+	}
+	return 0
 }
 
 type executedToolCallGroupAttachment struct {
@@ -104,16 +214,111 @@ func (r *ExecutedToolCallRecorder) RecordToolCall(invocation *tool.Invocation, t
 	if !r.seenIDs.observeCallID(invocation.CallID) {
 		r.invalidateCall(invocation.CallID)
 	}
-	if len(r.direct) < maxPendingExecutedToolCalls {
-		if _, exists := r.direct[invocation.CallID]; !exists {
-			r.direct[invocation.CallID] = call
-		}
+	// Direct records are attached to their invocation's own output, so the
+	// dispatcher records them through PrepareDirectCall instead. Only the ID
+	// observation above (which revokes completeness on reuse) remains here.
+}
+
+// PrepareDirectCall mirrors Rust's ExecutedToolCalls::prepare_direct_call: it
+// reserves a pending slot and snapshots the invocation so the dispatcher can
+// attach the record to that invocation's output before it enters history. A nil
+// result means capture is disabled, the pending budget is exhausted, or the call
+// is a Code Mode exec/wait wrapper (whose cell carries its own metadata).
+func (r *ExecutedToolCallRecorder) PrepareDirectCall(invocation *tool.Invocation, toolMode string) (*model.ExecutedToolCall, *ExecutedToolCallPermit) {
+	if r == nil || invocation == nil || strings.TrimSpace(invocation.CallID) == "" {
+		return nil, nil
+	}
+	if codeModeToolMetadataSkipped(invocation, toolMode) {
+		return nil, nil
+	}
+	call, _ := executedToolCallFromInvocation(invocation)
+	if strings.TrimSpace(call.Name) == "" {
+		return nil, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureState()
+	if r.lifetime == nil || r.pendingDirectCalls >= maxPendingExecutedToolCalls {
+		return nil, nil
+	}
+	r.pendingDirectCalls++
+	return &call, &ExecutedToolCallPermit{lifetime: r.lifetime, recorder: r}
+}
+
+// AttachDirectCallToOutput mirrors Rust's attach_direct_call_to_output: the
+// prepared record joins the invocation's output item, the item is marked
+// complete when the arguments were fully recorded, and the retained-metadata
+// budget drops tool-result metadata first and the record second.
+func (r *ExecutedToolCallRecorder) AttachDirectCallToOutput(item any, call *model.ExecutedToolCall, permit *ExecutedToolCallPermit) {
+	if r == nil || item == nil || call == nil {
 		return
 	}
-	if len(r.direct) == maxPendingExecutedToolCalls {
-		if _, exists := r.direct[invocation.CallID]; !exists {
-			r.direct[invocation.CallID] = model.NewTruncatedExecutedToolCall(call.Name, originalBytes, 0)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lifetime == nil || permit == nil || permit.lifetime != r.lifetime {
+		return
+	}
+	complete := !call.Truncated()
+	if !attachDirectCallToItem(item, *call, complete) {
+		return
+	}
+	available := maxRetainedDirectMetadataBytes - r.retainedDirectMetadataBytes
+	bytes := executedToolCallMetadataBytesForItem(item)
+	if bytes > available {
+		clearToolResultMetadataForItem(item)
+		bytes = executedToolCallMetadataBytesForItem(item)
+	}
+	if bytes > available {
+		clearExecutedToolCallsForItem(item)
+		return
+	}
+	r.retainedDirectMetadataBytes += bytes
+}
+
+// ObserveNonDispatchedCall mirrors Rust's observe_non_dispatched_call: a call ID
+// from a response item that bypassed local tool dispatch is recorded so its
+// later reuse cannot establish Code Mode completeness.
+func (r *ExecutedToolCallRecorder) ObserveNonDispatchedCall(item any) {
+	if r == nil || item == nil {
+		return
+	}
+	_, callID, _, _, ok := executedToolCallInputInfo(item)
+	if !ok || strings.TrimSpace(callID) == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureState()
+	if !r.seenIDs.observeCallID(callID) {
+		r.invalidateCall(callID)
+	}
+}
+
+// StripDirectMetadataWhenDisabled mirrors Rust's strip_disabled_direct_metadata:
+// with capture disabled, direct records already present in history are removed
+// from the supplied items so inference (and compaction) cannot replay them.
+func (r *ExecutedToolCallRecorder) StripDirectMetadataWhenDisabled(items []any) {
+	if r == nil {
+		StripDirectCallMetadata(items)
+		return
+	}
+	r.mu.Lock()
+	enabled := r.lifetime != nil
+	r.mu.Unlock()
+	if !enabled {
+		StripDirectCallMetadata(items)
+	}
+}
+
+// StripDirectCallMetadata removes direct-call metadata (records without a Code
+// Mode cell) from the supplied prompt items (Rust #45185
+// clear_direct_call_metadata).
+func StripDirectCallMetadata(items []any) {
+	for _, item := range items {
+		if !hasDirectCallMetadata(item) {
+			continue
 		}
+		clearExecutedToolCallsForItem(item)
 	}
 }
 
@@ -167,48 +372,46 @@ func (r *ExecutedToolCallRecorder) recordNested(groupID string, callID string, c
 }
 
 // RecordToolResultSources attaches host-generated analytics evidence to the
-// matching direct or Code Mode executed-tool call (Rust #42164). Source data
-// only replaces an existing call and is ignored when the call was compacted
-// away or the result arrived for a different retry copy.
+// matching Code Mode executed-tool call (Rust #45185 restricts result metadata
+// to nested calls; direct records carry it from their own invocation instead).
+// Source data only replaces an existing call and is ignored when the call was
+// compacted away or the result arrived for a different retry copy.
 func (r *ExecutedToolCallRecorder) RecordToolResultSources(invocation *tool.Invocation, sources model.ToolResultSources) bool {
 	if r == nil || invocation == nil || strings.TrimSpace(invocation.CallID) == "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(invocation.Source), "code_mode") {
 		return false
 	}
 	callID := strings.TrimSpace(invocation.CallID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensureState()
-	if strings.EqualFold(strings.TrimSpace(invocation.Source), "code_mode") {
-		groupID := codeModeInvocationGroupID(invocation)
-		if groupID == "" {
-			return false
-		}
-		group := r.groups[groupID]
-		if group == nil {
-			return false
-		}
-		for index := range group.pending {
-			if group.pending[index].callID == callID {
-				return group.pending[index].call.SetToolResultSources(sources)
-			}
-		}
+	groupID := codeModeInvocationGroupID(invocation)
+	if groupID == "" {
 		return false
 	}
-	call, exists := r.direct[callID]
-	if !exists {
+	group := r.groups[groupID]
+	if group == nil {
 		return false
 	}
-	updated := call.SetToolResultSources(sources)
-	r.direct[callID] = call
-	return updated
+	for index := range group.pending {
+		if group.pending[index].callID == callID {
+			return group.pending[index].call.SetToolResultSources(sources)
+		}
+	}
+	return false
 }
 
 // RecordToolResultMetadata attaches a host-recorded MCP `_meta` snapshot to the
-// matching direct or Code Mode executed-tool call (Rust #44336). MCP capture is
+// matching Code Mode executed-tool call (Rust #44336/#45185). MCP capture is
 // disabled today, so this mirrors the Rust recorder for when it is enabled; the
 // snapshot is bounded and never trusted from serialized input.
 func (r *ExecutedToolCallRecorder) RecordToolResultMetadata(invocation *tool.Invocation, metadata any) bool {
 	if r == nil || invocation == nil || strings.TrimSpace(invocation.CallID) == "" || metadata == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(invocation.Source), "code_mode") {
 		return false
 	}
 	bounded := model.NewToolResultMetadata(metadata)
@@ -217,30 +420,21 @@ func (r *ExecutedToolCallRecorder) RecordToolResultMetadata(invocation *tool.Inv
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensureState()
-	if strings.EqualFold(strings.TrimSpace(invocation.Source), "code_mode") {
-		groupID := codeModeInvocationGroupID(invocation)
-		if groupID == "" {
-			return false
-		}
-		group := r.groups[groupID]
-		if group == nil {
-			return false
-		}
-		for index := range group.pending {
-			if group.pending[index].callID == callID {
-				group.pending[index].call.SetToolResultMetadata(bounded)
-				return hasMetadata
-			}
-		}
+	groupID := codeModeInvocationGroupID(invocation)
+	if groupID == "" {
 		return false
 	}
-	call, exists := r.direct[callID]
-	if !exists {
+	group := r.groups[groupID]
+	if group == nil {
 		return false
 	}
-	call.SetToolResultMetadata(bounded)
-	r.direct[callID] = call
-	return hasMetadata
+	for index := range group.pending {
+		if group.pending[index].callID == callID {
+			group.pending[index].call.SetToolResultMetadata(bounded)
+			return hasMetadata
+		}
+	}
+	return false
 }
 
 func (r *ExecutedToolCallRecorder) RegisterCell(cellID string, outputCallID string) {
@@ -295,11 +489,10 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 	defer r.mu.Unlock()
 	r.ensureState()
 	r.seedHistoryOnce(out)
-	if len(r.direct) == 0 && len(r.outputs) == 0 {
+	if len(r.outputs) == 0 {
 		return out, nil
 	}
 	attachment := &ExecutedToolCallAttachment{}
-	seenDirect := map[string]struct{}{}
 	seenGroups := map[string]struct{}{}
 	outputCounts := map[string]int{}
 	for _, item := range out {
@@ -323,6 +516,11 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 		inputIndices[inputCallID] = &position
 	}
 	for index := len(out) - 1; index >= 0; index-- {
+		// Direct records are attached to their own output before history, so
+		// items that already carry one are not re-attached (Rust #45185).
+		if hasDirectCallMetadata(out[index]) {
+			continue
+		}
 		_, callID, ok := executedToolCallOutputIdentity(out[index])
 		if !ok || callID == "" {
 			continue
@@ -332,19 +530,8 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 		// Completeness requires evidence that the supplied history was indexed
 		// and that no reused or ambiguous ID revoked it (Rust #44472).
 		complete := r.historyIndexed()
-		call, hasDirect := r.direct[callID]
 		groupID := r.outputs[callID]
-		if hasDirect {
-			if _, seen := seenDirect[callID]; !seen {
-				calls = append(calls, call)
-				seenDirect[callID] = struct{}{}
-				attachment.directCallIDs = append(attachment.directCallIDs, callID)
-			}
-			if groupID != "" {
-				// The same ID cannot be both a direct call and a cell output.
-				complete = false
-			}
-		} else if r.callInvalid(callID) {
+		if r.callInvalid(callID) {
 			complete = false
 		}
 		if groupID != "" {
@@ -389,7 +576,7 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 			out[index] = clonePromptOutputWithExecutedToolCalls(out[index], calls, cellID, completePtr)
 		}
 	}
-	if len(attachment.directCallIDs) == 0 && len(attachment.groups) == 0 {
+	if len(attachment.groups) == 0 {
 		return out, nil
 	}
 	return out, attachment
@@ -401,10 +588,6 @@ func (r *ExecutedToolCallRecorder) CommitAttachment(attachment *ExecutedToolCall
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, callID := range attachment.directCallIDs {
-		delete(r.direct, callID)
-		delete(r.invalidCalls, callID)
-	}
 	for _, attached := range attachment.groups {
 		group := r.groups[attached.groupID]
 		if group == nil {
@@ -435,11 +618,11 @@ func (r *ExecutedToolCallRecorder) CommitAttachment(attachment *ExecutedToolCall
 }
 
 func (r *ExecutedToolCallRecorder) ensureState() {
-	if r.direct == nil {
-		r.direct = map[string]model.ExecutedToolCall{}
-	}
 	if r.groups == nil {
 		r.groups = map[string]*recordedToolCallGroup{}
+	}
+	if r.lifetime == nil {
+		r.lifetime = newExecutedToolCallLifetime()
 	}
 	if r.outputs == nil {
 		r.outputs = map[string]string{}
@@ -815,6 +998,30 @@ func (i *trustedExecutedToolCallMapItem) ExecutedToolCalls() []model.ExecutedToo
 func (i *trustedExecutedToolCallMapItem) ReplaceExecutedToolCalls(calls []model.ExecutedToolCall) {
 	if i != nil {
 		i.calls = append([]model.ExecutedToolCall(nil), calls...)
+	}
+}
+
+// ExecutedToolCallCellID reports the Code Mode cell owning the item's recorded
+// calls; empty means the record is a direct invocation's (Rust #45185).
+func (i *trustedExecutedToolCallMapItem) ExecutedToolCallCellID() string {
+	if i == nil {
+		return ""
+	}
+	return strings.TrimSpace(i.cellID)
+}
+
+func (i *trustedExecutedToolCallMapItem) ClearExecutedToolCalls() {
+	if i != nil {
+		i.calls = nil
+	}
+}
+
+func (i *trustedExecutedToolCallMapItem) ClearToolResultMetadata() {
+	if i == nil {
+		return
+	}
+	for index := range i.calls {
+		i.calls[index].ClearToolResultMetadata()
 	}
 }
 
