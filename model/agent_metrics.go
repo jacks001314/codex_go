@@ -28,6 +28,8 @@ const (
 	sseEventDurationMetric                      = "codex.sse_event.duration_ms"
 	websocketEventCountMetric                   = "codex.websocket.event"
 	websocketEventDurationMetric                = "codex.websocket.event.duration_ms"
+	websocketRequestCountMetric                 = "codex.websocket.request"
+	websocketRequestDurationMetric              = "codex.websocket.request.duration_ms"
 	responsesAPIOverheadDurationMetric          = "codex.responses_api_overhead.duration_ms"
 	responsesAPIInferenceTimeDurationMetric     = "codex.responses_api_inference_time.duration_ms"
 	responsesAPIEngineIAPITTFTDurationMetric    = "codex.responses_api_engine_iapi_ttft.duration_ms"
@@ -107,6 +109,21 @@ func recordWebsocketEvent(metrics MetricsSink, kind string, success bool, durati
 	tags := map[string]string{"kind": kind, "success": strconv.FormatBool(success)}
 	metrics.Counter(websocketEventCountMetric, 1, tags)
 	metrics.RecordDuration(websocketEventDurationMetric, duration, tags)
+}
+
+// recordWebsocketRequest mirrors SessionTelemetry::record_websocket_request:
+// one counter and one duration sample per websocket request send, tagged by
+// success (Rust's on_ws_request reports the send latency and its error).
+func (r *ResponsesAgentRunner) recordWebsocketRequest(err error, duration time.Duration) {
+	if r == nil || r.Metrics == nil {
+		return
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	tags := map[string]string{"success": strconv.FormatBool(err == nil)}
+	r.Metrics.Counter(websocketRequestCountMetric, 1, tags)
+	r.Metrics.RecordDuration(websocketRequestDurationMetric, duration, tags)
 }
 
 // recordResponsesTimingMetrics mirrors

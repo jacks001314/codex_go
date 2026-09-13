@@ -270,11 +270,22 @@ func TestRunWebSocketRecordsEventsAndTimingMetricsLikeRust(t *testing.T) {
 	}
 
 	events := map[string]string{}
+	requests := 0
 	for _, counter := range sink.counters {
+		if counter.name == websocketRequestCountMetric {
+			requests++
+			if counter.tags["success"] != "true" {
+				t.Fatalf("websocket request counter = %#v", counter)
+			}
+			continue
+		}
 		if counter.name != websocketEventCountMetric {
 			t.Fatalf("unexpected counter %#v", counter)
 		}
 		events[counter.tags["kind"]] = counter.tags["success"]
+	}
+	if requests != 1 {
+		t.Fatalf("websocket request counters = %d (all %#v)", requests, sink.counters)
 	}
 	for _, kind := range []string{"responsesapi.websocket_timing", "response.completed"} {
 		if success, ok := events[kind]; !ok || success != "true" {
@@ -283,11 +294,22 @@ func TestRunWebSocketRecordsEventsAndTimingMetricsLikeRust(t *testing.T) {
 	}
 
 	durations := map[string]time.Duration{}
+	requestDurations := 0
 	for _, duration := range sink.durations {
 		if duration.name == websocketEventDurationMetric {
 			continue
 		}
+		if duration.name == websocketRequestDurationMetric {
+			requestDurations++
+			if duration.tags["success"] != "true" {
+				t.Fatalf("websocket request duration = %#v", duration)
+			}
+			continue
+		}
 		durations[duration.name] = duration.duration
+	}
+	if requestDurations != 1 {
+		t.Fatalf("websocket request durations = %d", requestDurations)
 	}
 	want := map[string]time.Duration{
 		responsesAPIOverheadDurationMetric:          120 * time.Millisecond,
@@ -306,6 +328,20 @@ func TestRunWebSocketRecordsEventsAndTimingMetricsLikeRust(t *testing.T) {
 
 // The timing helper skips absent fields and tolerates the JSON number shapes.
 func TestRecordResponsesTimingMetricsSkipsAbsentFields(t *testing.T) {
+	// A failed websocket request send reports success=false and clamps the
+	// measured duration; a runner without a sink records nothing.
+	failureSink := &recordingMetricsSink{}
+	(&ResponsesAgentRunner{Metrics: failureSink}).recordWebsocketRequest(errors.New("send failed"), -5*time.Second)
+	if len(failureSink.counters) != 1 || failureSink.counters[0].tags["success"] != "false" ||
+		failureSink.counters[0].name != websocketRequestCountMetric {
+		t.Fatalf("counters = %#v", failureSink.counters)
+	}
+	if len(failureSink.durations) != 1 || failureSink.durations[0].duration != 0 ||
+		failureSink.durations[0].name != websocketRequestDurationMetric {
+		t.Fatalf("durations = %#v", failureSink.durations)
+	}
+	(&ResponsesAgentRunner{}).recordWebsocketRequest(nil, time.Second)
+
 	sink := &recordingMetricsSink{}
 	recordResponsesTimingMetrics(sink, []byte(`{"type":"responsesapi.websocket_timing","timing_metrics":{"engine_service_total_ms":12}}`))
 	if len(sink.durations) != 1 || sink.durations[0].name != responsesAPIInferenceTimeDurationMetric ||

@@ -605,9 +605,12 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	if apiRequest.PromptCacheKey != "" {
 		payload["prompt_cache_key"] = apiRequest.PromptCacheKey
 	}
-	if err := conn.Write(connectCtx, websocket.MessageText, mustJSONBytes(payload)); err != nil {
+	requestStartedAt := time.Now()
+	writeErr := conn.Write(connectCtx, websocket.MessageText, mustJSONBytes(payload))
+	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
+	if writeErr != nil {
 		closeResponsesWebsocketSession(session, "prewarm write failed")
-		return nil, err
+		return nil, writeErr
 	}
 	for {
 		_, data, err := conn.Read(ctx)
@@ -779,7 +782,10 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		session.conn = conn
 	}
 	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil)
-	if err := conn.Write(ctx, websocket.MessageText, mustJSONBytes(payload)); err != nil {
+	requestStartedAt := time.Now()
+	writeErr := conn.Write(ctx, websocket.MessageText, mustJSONBytes(payload))
+	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
+	if writeErr != nil {
 		closeResponsesWebsocketSession(session, "response write failed")
 		if !transportRetried {
 			session.mu.Unlock()
