@@ -83,31 +83,43 @@ func (c *Config) AgentsConfig(configBaseDir string) (*AgentsConfig, error) {
 		if reserved[name] {
 			continue
 		}
-		role, err := parseAgentRoleConfig(name, value, configBaseDir)
+		roleName, role, err := parseAgentRoleConfig(name, value, configBaseDir)
 		if err != nil {
 			return nil, err
 		}
-		out.Roles[name] = role
+		// Rust's no-layer path validates the description as a hard error
+		// (validate_required_agent_role_description); the layer-stack path
+		// reports it as a warning after merging lower layers.
+		if strings.TrimSpace(role.Description) == "" {
+			return nil, fmt.Errorf("agent role `%s` must define a description", roleName)
+		}
+		if _, duplicate := out.Roles[roleName]; duplicate {
+			return nil, fmt.Errorf("duplicate agent role name `%s` declared in config", roleName)
+		}
+		out.Roles[roleName] = role
 	}
 	return out, nil
 }
 
-func parseAgentRoleConfig(name string, value any, configBaseDir string) (agent.RoleConfig, error) {
+// parseAgentRoleConfig mirrors Rust's read_declared_role: the declared name is a
+// hint that a referenced role file may override through its `name` field.
+func parseAgentRoleConfig(name string, value any, configBaseDir string) (string, agent.RoleConfig, error) {
 	table, ok := value.(map[string]any)
 	if !ok {
-		return agent.RoleConfig{}, fmt.Errorf("agents.%s must be a table", name)
+		return "", agent.RoleConfig{}, fmt.Errorf("agents.%s must be a table", name)
 	}
+	roleName := name
 	role := agent.RoleConfig{}
 	if description, ok := table["description"].(string); ok {
 		role.Description = strings.TrimSpace(description)
 		if role.Description == "" {
-			return agent.RoleConfig{}, fmt.Errorf("agents.%s.description cannot be blank", name)
+			return "", agent.RoleConfig{}, fmt.Errorf("agents.%s.description cannot be blank", name)
 		}
 	}
 	if nicknames, exists := table["nickname_candidates"]; exists {
 		normalized, err := normalizeAgentNicknames("agents."+name+".nickname_candidates", nicknames)
 		if err != nil {
-			return agent.RoleConfig{}, err
+			return "", agent.RoleConfig{}, err
 		}
 		role.NicknameCandidates = normalized
 	}
@@ -119,18 +131,19 @@ func parseAgentRoleConfig(name string, value any, configBaseDir string) (agent.R
 		path = filepath.Clean(path)
 		info, err := os.Lstat(path)
 		if err != nil {
-			return agent.RoleConfig{}, fmt.Errorf("agents.%s.config_file must point to an existing file at %s: %w", name, path, err)
+			return "", agent.RoleConfig{}, fmt.Errorf("agents.%s.config_file must point to an existing file at %s: %w", name, path, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return agent.RoleConfig{}, fmt.Errorf("agents.%s.config_file must not be a symlink: %s", name, path)
+			return "", agent.RoleConfig{}, fmt.Errorf("agents.%s.config_file must not be a symlink: %s", name, path)
 		}
 		if !info.Mode().IsRegular() {
-			return agent.RoleConfig{}, fmt.Errorf("agents.%s.config_file must point to a file: %s", name, path)
+			return "", agent.RoleConfig{}, fmt.Errorf("agents.%s.config_file must point to a file: %s", name, path)
 		}
-		fileRole, err := parseAgentRoleFile(path, name)
+		fileRole, resolvedName, err := parseAgentRoleFile(path, name)
 		if err != nil {
-			return agent.RoleConfig{}, err
+			return "", agent.RoleConfig{}, err
 		}
+		roleName = resolvedName
 		role.ConfigFile = path
 		if fileRole.Description != "" {
 			role.Description = fileRole.Description
@@ -140,32 +153,43 @@ func parseAgentRoleConfig(name string, value any, configBaseDir string) (agent.R
 		}
 		role.Settings = fileRole.Settings
 	}
-	if role.Description == "" {
-		return agent.RoleConfig{}, fmt.Errorf("agent role `%s` must define a description", name)
-	}
-	return role, nil
+	return roleName, role, nil
 }
 
-func parseAgentRoleFile(path string, roleName string) (agent.RoleConfig, error) {
+// parseAgentRoleFile mirrors Rust's parse_agent_role_file_contents: the file's
+// `name` wins over the declared-role hint, discovered files (no hint) must carry
+// both a name and developer_instructions, and the model settings become the
+// role's config layer.
+func parseAgentRoleFile(path string, roleNameHint string) (agent.RoleConfig, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return agent.RoleConfig{}, err
+		return agent.RoleConfig{}, "", err
 	}
 	var values map[string]any
 	if err := toml.Unmarshal(stripUTF8BOM(data), &values); err != nil {
-		return agent.RoleConfig{}, fmt.Errorf("failed to parse agent role file at %s: %w", path, err)
+		return agent.RoleConfig{}, "", fmt.Errorf("failed to parse agent role file at %s: %w", path, err)
+	}
+	roleName := ""
+	if name, ok := values["name"].(string); ok {
+		roleName = strings.TrimSpace(name)
+	}
+	if roleName == "" {
+		roleName = strings.TrimSpace(roleNameHint)
+	}
+	if roleName == "" {
+		return agent.RoleConfig{}, "", fmt.Errorf("agent role file at %s must define a non-empty `name`", path)
 	}
 	role := agent.RoleConfig{Settings: map[string]string{}}
 	if description, ok := values["description"].(string); ok {
 		role.Description = strings.TrimSpace(description)
 		if role.Description == "" {
-			return agent.RoleConfig{}, fmt.Errorf("agent role file %s.description cannot be blank", path)
+			return agent.RoleConfig{}, "", fmt.Errorf("agent role file %s.description cannot be blank", path)
 		}
 	}
 	if nicknames, exists := values["nickname_candidates"]; exists {
 		role.NicknameCandidates, err = normalizeAgentNicknames("agent role file "+path+".nickname_candidates", nicknames)
 		if err != nil {
-			return agent.RoleConfig{}, err
+			return agent.RoleConfig{}, "", err
 		}
 	}
 	for _, key := range []string{"model", "model_provider", "model_reasoning_effort", "service_tier", "developer_instructions"} {
@@ -174,13 +198,16 @@ func parseAgentRoleFile(path string, roleName string) (agent.RoleConfig, error) 
 		}
 	}
 	if value, ok := values["developer_instructions"].(string); ok && strings.TrimSpace(value) == "" {
-		return agent.RoleConfig{}, fmt.Errorf("agent role file at %s.developer_instructions cannot be blank", path)
+		return agent.RoleConfig{}, "", fmt.Errorf("agent role file at %s.developer_instructions cannot be blank", path)
+	} else if !ok && strings.TrimSpace(roleNameHint) == "" {
+		// Discovered role files have no declared role to inherit from, so they
+		// must carry their own instructions (Rust require_present).
+		return agent.RoleConfig{}, "", fmt.Errorf("agent role file at %s must define `developer_instructions`", path)
 	}
 	if len(role.Settings) == 0 {
 		role.Settings = nil
 	}
-	_ = roleName
-	return role, nil
+	return role, roleName, nil
 }
 
 func normalizeAgentNicknames(label string, value any) ([]string, error) {

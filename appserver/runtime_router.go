@@ -5673,6 +5673,15 @@ func (r *RuntimeRouter) emitThreadConfigWarnings(cwd string) {
 			summaries = append(summaries, summary)
 		}
 	}
+	// Rust load_agent_roles reports malformed role definitions as startup
+	// warnings for the thread's layers.
+	if _, roleWarnings := r.services.Config.AgentRolesForCWD(cwd); len(roleWarnings) > 0 {
+		for _, warning := range roleWarnings {
+			if summary := strings.TrimSpace(warning); summary != "" {
+				summaries = append(summaries, summary)
+			}
+		}
+	}
 	if len(summaries) == 0 {
 		return
 	}
@@ -12738,6 +12747,15 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents())
 		if agentsErr != nil {
 			return nil, agentsErr
+		}
+		// Rust load_agent_roles builds the catalog from the config layer stack
+		// (declared `[agents.<name>]` roles plus `<config_folder>/agents`
+		// discovery). Prefer that layered catalog when the layers define roles,
+		// keeping the merged-table catalog as the fallback.
+		if r.services.Config != nil {
+			if layeredRoles, _ := r.services.Config.AgentRolesForCWD(cwd); len(layeredRoles) > 0 {
+				agentsConfig.Roles = layeredRoles
+			}
 		}
 		maxDepth := config.DefaultAgentMaxDepth
 		if agentsConfig.MaxDepth != nil {
