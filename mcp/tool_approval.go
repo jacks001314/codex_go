@@ -101,6 +101,10 @@ type MCPToolApprovalRequest struct {
 	ThreadID        string
 	TurnID          string
 	CallID          string
+	// HookToolName is the canonical hook identity for this tool, used by the
+	// PermissionRequest payload (Rust ApprovalAction::McpToolCall's
+	// hook_tool_name).
+	HookToolName *tool.HookToolName
 	// SessionKey is Rust's session_mcp_tool_approval_key: present only in Auto
 	// mode, and the key both for session-remembered approvals and (when the
 	// elicitation feature is on) for the persistent policy amendment.
@@ -530,6 +534,7 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		ThreadID:                e.threadID,
 		TurnID:                  e.turnID,
 		CallID:                  callID,
+		HookToolName:            e.hookToolName(),
 		SessionKey:              sessionKeyPtr,
 		AllowSessionRemember:    allowSessionRemember,
 		AllowPersistentApproval: allowSessionRemember,

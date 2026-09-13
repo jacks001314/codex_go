@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"codex_go/features"
 	"codex_go/mcp"
 	"codex_go/sandbox"
+	"codex_go/state"
 	"codex_go/tool"
 )
 
@@ -104,6 +106,17 @@ func (h *appserverMCPToolApprovalHandler) ApproveMCPToolCall(ctx context.Context
 	if request.SessionKey != nil && h.router.mcpToolApprovalRemembered(h.threadID, *request.SessionKey) {
 		return mcp.MCPToolApprovalApprove, nil
 	}
+	// Rust Session::request_approval: PermissionRequest hooks decide first, then
+	// an auto-review turn routes the call through the Guardian review, and only
+	// then the user is asked.
+	if decision, hookErr, handled := h.runPermissionRequestHooks(ctx, request); handled {
+		return decision, hookErr
+	}
+	if h.router != nil {
+		if reviewer := h.router.approvalsReviewerForTurn(h.threadID, h.turnID); reviewer.RoutesToGuardian() {
+			return h.reviewViaGuardian(ctx, request)
+		}
+	}
 	if h.responder == nil {
 		return mcp.MCPToolApprovalDeny, nil
 	}
@@ -182,6 +195,85 @@ const (
 // the approval values the TUI maps back to accept/session/always/decline/cancel
 // (Rust sends an empty form plus `codex_approval_kind` meta; Go's TUI detects
 // the approval from `response_mode` or that select field, so both are sent).
+// runPermissionRequestHooks runs the turn's PermissionRequest hooks for an MCP
+// tool call with Rust's payload (the canonical hook tool name and the call
+// arguments) and reports whether the hooks decided. A hook denial fails the
+// call with the hook's message (Rust ToolError::Rejected).
+func (h *appserverMCPToolApprovalHandler) runPermissionRequestHooks(ctx context.Context, request *mcp.MCPToolApprovalRequest) (mcp.MCPToolApprovalDecision, error, bool) {
+	if h == nil || h.router == nil || request == nil {
+		return mcp.MCPToolApprovalDeny, nil, false
+	}
+	toolName := ""
+	aliases := []string(nil)
+	if request.HookToolName != nil {
+		toolName = request.HookToolName.Name
+		aliases = request.HookToolName.MatcherAliases
+	}
+	if strings.TrimSpace(toolName) == "" {
+		return mcp.MCPToolApprovalDeny, nil, false
+	}
+	verdict, ok := h.router.permissionRequestHookVerdict(ctx, h.threadID, h.turnID, strings.TrimSpace(request.CallID), toolName, aliases, mcpToolCallHookToolInput(request.Arguments))
+	if !ok || verdict == nil {
+		return mcp.MCPToolApprovalDeny, nil, false
+	}
+	switch verdict.Kind {
+	case HookPermissionRequestAllow:
+		return mcp.MCPToolApprovalApprove, nil, true
+	default:
+		reason := ""
+		if verdict.Message != nil {
+			reason = strings.TrimSpace(*verdict.Message)
+		}
+		if reason == "" {
+			reason = "A permission-request hook denied this MCP tool call."
+		}
+		// Rust rejects the call with the hook's message
+		// (ToolError::Rejected(message)).
+		return mcp.MCPToolApprovalDeny, fmt.Errorf("%s", reason), true
+	}
+}
+
+// mcpToolCallHookToolInput mirrors Rust's McpToolCall permission payload: the
+// hook input is the call's arguments object.
+func mcpToolCallHookToolInput(arguments any) map[string]any {
+	return mapFromAny(arguments)
+}
+
+// reviewViaGuardian routes an MCP tool call through the turn's automatic
+// approval review (Rust request_reviewer_approval -> ApprovalAction::McpToolCall).
+func (h *appserverMCPToolApprovalHandler) reviewViaGuardian(ctx context.Context, request *mcp.MCPToolApprovalRequest) (mcp.MCPToolApprovalDecision, error) {
+	if h == nil || h.router == nil || request == nil {
+		return mcp.MCPToolApprovalDeny, nil
+	}
+	action := state.Action{
+		Type:          "mcp_tool_call",
+		Server:        strings.TrimSpace(request.Server),
+		ToolName:      strings.TrimSpace(request.Tool),
+		ConnectorID:   strings.TrimSpace(request.ConnectorID),
+		ConnectorName: strings.TrimSpace(request.ConnectorName),
+		ToolTitle:     strings.TrimSpace(request.ToolTitle),
+		Extra:         map[string]any{},
+	}
+	if arguments := mcpToolCallHookToolInput(request.Arguments); len(arguments) > 0 {
+		action.Extra["arguments"] = arguments
+	}
+	if description := strings.TrimSpace(request.ToolDescription); description != "" {
+		action.Extra["tool_description"] = description
+	}
+	if len(action.Extra) == 0 {
+		action.Extra = nil
+	}
+	outcome := h.router.reviewApprovalWithGuardian(ctx, h.threadID, h.turnID, strings.TrimSpace(request.CallID), action)
+	switch {
+	case outcome.Abort:
+		return mcp.MCPToolApprovalDeny, fmt.Errorf("%s", outcome.DenyReason)
+	case outcome.Approved:
+		return mcp.MCPToolApprovalApprove, nil
+	default:
+		return mcp.MCPToolApprovalDeny, fmt.Errorf("%s", outcome.DenyReason)
+	}
+}
+
 func (h *appserverMCPToolApprovalHandler) approveViaElicitation(
 	ctx context.Context,
 	request *mcp.MCPToolApprovalRequest,

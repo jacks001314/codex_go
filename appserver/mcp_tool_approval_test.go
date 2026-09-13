@@ -2,14 +2,21 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"codex_go/apps"
 	"codex_go/codexapi"
+	"codex_go/config"
 	"codex_go/mcp"
 	"codex_go/sandbox"
+	"codex_go/state"
 	"codex_go/tool"
+	"codex_go/turn"
 )
 
 // TestAppserverMCPToolApprovalUsesElicitationLikeRust covers the elicitation
@@ -297,5 +304,98 @@ func TestMCPTurnMetadataProviderLikeRust(t *testing.T) {
 	// A turn that has no metadata (or is gone) reports nothing.
 	if meta := router.mcpTurnMetadataProvider("thread-1", "turn-2")(); meta != nil {
 		t.Fatalf("unknown turn produced a document: %#v", meta)
+	}
+}
+
+// Rust Session::request_approval: an MCP tool call runs PermissionRequest hooks
+// first (hook tool name + arguments) and then the Guardian review when the turn
+// auto-reviews, before any user prompt.
+func TestMCPToolApprovalRunsHooksAndGuardianLikeRust(t *testing.T) {
+	newRouter := func(t *testing.T, configExtra string, hookCommand string, reviewer GuardianReviewer) *RuntimeRouter {
+		t.Helper()
+		home := t.TempDir()
+		cwd := t.TempDir()
+		projectTrust := strings.ReplaceAll(filepath.Clean(cwd), `\`, `\\`)
+		configBody := "model = \"gpt-5.4\"\nbypass_hook_trust = true\n" + configExtra +
+			"[projects.\"" + projectTrust + "\"]\ntrust_level = \"trusted\"\n"
+		if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+			t.Fatalf("WriteFile config error = %v", err)
+		}
+		if hookCommand != "" {
+			hooksDir := filepath.Join(cwd, ".gcode")
+			if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			hooksJSON, err := json.Marshal(map[string]any{
+				"hooks": map[string]any{
+					"PermissionRequest": []any{map[string]any{
+						"matcher": "mcp_tool",
+						"hooks":   []any{map[string]any{"type": "command", "command": hookCommand}},
+					}},
+				},
+			})
+			if err != nil {
+				t.Fatalf("Marshal hooks error = %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), hooksJSON, 0o600); err != nil {
+				t.Fatalf("WriteFile hooks error = %v", err)
+			}
+		}
+		router := NewRuntimeRouter(RuntimeServices{
+			DefaultCWD:       cwd,
+			Config:           config.NewConfigService(home),
+			HooksDiscovery:   NewHookDiscoveryService(home),
+			HookRunner:       NewHookRunner(),
+			GuardianReviewer: reviewer,
+		})
+		params := &turn.TurnStartParams{ThreadID: "thread-1", CWD: cwd, Model: "gpt-5.4"}
+		if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, params); err != nil {
+			t.Fatalf("RegisterTurn() error = %v", err)
+		}
+		return router
+	}
+	approve := func(t *testing.T, router *RuntimeRouter) (mcp.MCPToolApprovalDecision, error) {
+		t.Helper()
+		handler := &appserverMCPToolApprovalHandler{router: router, threadID: "thread-1", turnID: "turn-1"}
+		return handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
+			Server:       "server",
+			Tool:         "tool",
+			Arguments:    map[string]any{"path": "src/main.go"},
+			HookToolName: &tool.HookToolName{Name: "mcp_tool"},
+			CallID:       "call-1",
+		})
+	}
+
+	decision, err := approve(t, newRouter(t, "", hookRunnerOutputCommand(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, ""), nil))
+	if err != nil || decision != mcp.MCPToolApprovalApprove {
+		t.Fatalf("hook allow = %v err=%v", decision, err)
+	}
+	decision, err = approve(t, newRouter(t, "", hookRunnerPermissionRequestDenyCommand("no tools for you"), nil))
+	if decision != mcp.MCPToolApprovalDeny || err == nil || !strings.Contains(err.Error(), "no tools for you") {
+		t.Fatalf("hook deny = %v err=%v", decision, err)
+	}
+
+	// An auto-review turn reviews the call instead of prompting the user.
+	allowedReviewer := &fakeGuardianReviewer{decision: state.DecisionApproved}
+	decision, err = approve(t, newRouter(t, "approvals_reviewer = \"auto_review\"\n", "", allowedReviewer))
+	if err != nil || decision != mcp.MCPToolApprovalApprove {
+		t.Fatalf("guardian approval = %v err=%v", decision, err)
+	}
+	if len(allowedReviewer.actions) != 1 {
+		t.Fatalf("guardian actions = %#v", allowedReviewer.actions)
+	}
+	action := allowedReviewer.actions[0]
+	if action.Type != "mcp_tool_call" || action.Server != "server" || action.ToolName != "tool" {
+		t.Fatalf("guardian MCP action = %#v", action)
+	}
+	arguments, _ := action.Extra["arguments"].(map[string]any)
+	if arguments["path"] != "src/main.go" {
+		t.Fatalf("guardian MCP arguments = %#v", action.Extra)
+	}
+
+	deniedReviewer := &fakeGuardianReviewer{decision: state.DecisionDenied, reason: "risky tool"}
+	decision, err = approve(t, newRouter(t, "approvals_reviewer = \"auto_review\"\n", "", deniedReviewer))
+	if decision != mcp.MCPToolApprovalDeny || err == nil || !strings.Contains(err.Error(), "risky tool") {
+		t.Fatalf("guardian denial = %v err=%v", decision, err)
 	}
 }
