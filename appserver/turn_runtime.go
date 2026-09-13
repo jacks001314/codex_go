@@ -7952,6 +7952,8 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 			IncludeUsageInstructions: includeUsageInstructions,
 		},
 	)
+	r.recordSkillCatalogRender(skillCatalogSurfaceTurnInput, skillRenderReportOf(hostAvailable))
+	r.recordSkillCatalogRender(skillCatalogSurfaceExecutorWorld, skillRenderReportOf(executorAvailable))
 	for _, available := range []*promptctx.AvailableSkills{hostAvailable, executorAvailable} {
 		if available != nil && available.WarningMessage != nil && strings.TrimSpace(*available.WarningMessage) != "" {
 			r.notify(NotificationWarning, &WarningNotification{
