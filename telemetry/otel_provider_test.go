@@ -44,19 +44,26 @@ func TestNewOtelProviderMetricsOnlyLikeRust(t *testing.T) {
 	}); err != nil || provider != nil {
 		t.Fatalf("empty-endpoint provider = %#v err = %v", provider, err)
 	}
-	// The gRPC transport Rust supports has no Go exporter, so the provider stays
-	// disabled instead of failing.
-	if provider, err := NewOtelProvider(OtelSettings{
+	// The OTLP gRPC transport builds a provider too.
+	grpcProvider, err := NewOtelProvider(OtelSettings{
 		MetricsExporter: OtelExporter{Kind: OtelExporterOtlpGRPC, Endpoint: "https://metrics.test:4317"},
-	}); err != nil || provider != nil {
-		t.Fatalf("unsupported provider = %#v err = %v", provider, err)
+	})
+	if err != nil || grpcProvider == nil || grpcProvider.Metrics() == nil {
+		t.Fatalf("gRPC provider = %#v err = %v", grpcProvider, err)
 	}
+	if _, ok := grpcProvider.Metrics().exporter.(*OTLPGRPCMetricsExporter); !ok {
+		t.Fatalf("gRPC exporter = %T", grpcProvider.Metrics().exporter)
+	}
+	_ = grpcProvider.Shutdown(context.Background())
 	// The OTLP/HTTP binary protocol is supported.
 	binary, err := NewOtelProvider(OtelSettings{
 		MetricsExporter: OtelExporter{Kind: OtelExporterOtlpHTTP, Endpoint: "https://metrics.test/v1/metrics", Protocol: OtelHTTPProtocolBinary},
 	})
-	if err != nil || binary == nil || binary.Metrics() == nil || binary.Metrics().exporter.protocol != OtelHTTPProtocolBinary {
+	if err != nil || binary == nil || binary.Metrics() == nil {
 		t.Fatalf("binary provider = %#v err = %v", binary, err)
+	}
+	if httpExporter, ok := binary.Metrics().exporter.(*OTLPMetricsExporter); !ok || httpExporter.protocol != OtelHTTPProtocolBinary {
+		t.Fatalf("binary exporter = %#v", binary.Metrics().exporter)
 	}
 	_ = binary.Shutdown(context.Background())
 
@@ -72,14 +79,18 @@ func TestNewOtelProviderMetricsOnlyLikeRust(t *testing.T) {
 	if !provider.Metrics().Enabled() {
 		t.Fatal("metrics client is disabled")
 	}
-	if got := provider.Metrics().exporter.endpoint; got != "https://metrics.test/v1/metrics" {
+	httpExporter, ok := provider.Metrics().exporter.(*OTLPMetricsExporter)
+	if !ok {
+		t.Fatalf("exporter = %T", provider.Metrics().exporter)
+	}
+	if got := httpExporter.endpoint; got != "https://metrics.test/v1/metrics" {
 		t.Fatalf("endpoint = %q", got)
 	}
 
 	// The metrics resource carries the service name/version and the environment,
 	// and the process-start metric is recorded once with the bounded originator.
 	doer := &recordingHTTPDoer{}
-	provider.Metrics().exporter.httpClient = doer
+	httpExporter.httpClient = doer
 	resetProcessStartLatch()
 	if !RecordProcessStartOnce(provider.Metrics(), "codex-app-server") {
 		t.Fatal("the first process start was not recorded")

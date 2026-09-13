@@ -71,6 +71,9 @@ type MetricsClientOptions struct {
 	// Protocol selects the OTLP HTTP payload encoding (json by default, or
 	// binary for the protobuf body).
 	Protocol string
+	// Transport selects the OTLP transport: MetricsTransportHTTP (the default)
+	// or MetricsTransportGRPC.
+	Transport string
 	// Statsig marks the built-in metrics route: it resolves the Statsig endpoint
 	// when that build enables it and applies the Statsig-disabled metric list.
 	Statsig bool
@@ -90,9 +93,9 @@ type MetricsClientOptions struct {
 	Now func() time.Time
 }
 
-// MetricsClient records metrics and exports them through an OTLP/HTTP exporter.
+// MetricsClient records metrics and exports them through an OTLP exporter.
 type MetricsClient struct {
-	exporter *OTLPMetricsExporter
+	exporter MetricsExporter
 	scope    OTLPScope
 
 	hostName       string
@@ -185,14 +188,25 @@ func NewMetricsClient(options MetricsClientOptions) *MetricsClient {
 	}
 	client.serviceVersion = options.ServiceVersion
 	client.environment = options.Environment
-	client.exporter = NewOTLPMetricsExporter(OTLPMetricsExporterOptions{
+	if options.Transport == MetricsTransportGRPC {
+		if exporter := NewOTLPGRPCMetricsExporter(OTLPGRPCMetricsExporterOptions{
+			Endpoint: endpoint,
+			Headers:  headers,
+			Timeout:  options.Timeout,
+			TLS:      options.TLS,
+		}); exporter != nil {
+			client.exporter = exporter
+		}
+	} else if exporter := NewOTLPMetricsExporter(OTLPMetricsExporterOptions{
 		Endpoint:   endpoint,
 		Headers:    headers,
 		HTTPClient: options.HTTPClient,
 		Timeout:    options.Timeout,
 		TLS:        options.TLS,
 		Protocol:   options.Protocol,
-	})
+	}); exporter != nil {
+		client.exporter = exporter
+	}
 	if client.exporter == nil {
 		return client
 	}
@@ -427,7 +441,13 @@ func (c *MetricsClient) Shutdown(ctx context.Context) error {
 		case <-time.After(5 * time.Second):
 		}
 	}
-	return c.Flush(ctx)
+	if err := c.Flush(ctx); err != nil {
+		return err
+	}
+	if c.exporter != nil {
+		return c.exporter.Close()
+	}
+	return nil
 }
 
 func (c *MetricsClient) startExportLoop(interval time.Duration) {

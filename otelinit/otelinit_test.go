@@ -93,17 +93,20 @@ func TestBuildProviderRequiresAnalytics(t *testing.T) {
 	}
 }
 
-// The gRPC transport Go cannot speak leaves the provider disabled instead of
-// failing startup.
-func TestBuildProviderUnsupportedTransportsStayDisabled(t *testing.T) {
+// The OTLP gRPC transport builds a working provider.
+func TestBuildProviderOTLPGRPC(t *testing.T) {
 	cfg := &config.Config{Values: map[string]any{
 		"analytics": map[string]any{"enabled": true},
 		"otel": map[string]any{"metrics_exporter": map[string]any{
 			"otlp-grpc": map[string]any{"endpoint": "https://metrics.test:4317"},
 		}},
 	}}
-	if provider, err := BuildProvider(Options{Config: cfg, ServiceName: "codex-app-server"}); err != nil || provider != nil {
+	provider, err := BuildProvider(Options{Config: cfg, ServiceName: "codex-app-server"})
+	if err != nil || provider == nil || provider.Metrics() == nil || !provider.Metrics().Enabled() {
 		t.Fatalf("gRPC provider = %#v err = %v", provider, err)
+	}
+	if err := provider.Shutdown(t.Context()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
 	}
 }
 

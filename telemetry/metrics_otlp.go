@@ -44,6 +44,10 @@ const (
 	// DefaultMetricsExportInterval mirrors the periodic reader's default.
 	DefaultMetricsExportInterval = 60 * time.Second
 
+	// MetricsTransportHTTP and MetricsTransportGRPC select the OTLP transport.
+	MetricsTransportHTTP = "http"
+	MetricsTransportGRPC = "grpc"
+
 	// StatsigMetricsEndpoint and StatsigMetricsAPIKeyHeader mirror
 	// codex-rs/otel/src/config.rs's built-in metrics route.
 	StatsigMetricsEndpoint     = "https://ab.chatgpt.com/otlp/v1/metrics"
@@ -150,6 +154,18 @@ type OTLPMetricsExporter struct {
 	timeout      time.Duration
 	requireHTTPS bool
 	protocol     string
+}
+
+// MetricsExporter posts one encoded batch to the configured OTLP endpoint. It
+// is implemented by the OTLP/HTTP and OTLP/gRPC transports.
+type MetricsExporter interface {
+	Export(ctx context.Context, request OTLPExportMetricsRequest) error
+	Close() error
+}
+
+// Close releases the HTTP transport; the shared client owns nothing to close.
+func (e *OTLPMetricsExporter) Close() error {
+	return nil
 }
 
 // OTLPMetricsExporterOptions configures the transport. An empty Endpoint

@@ -96,10 +96,16 @@ func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
 	return &OtelProvider{metrics: client}, nil
 }
 
-// metricsClientOptions maps the resolved metrics exporter onto the client. The
-// Go exporter speaks OTLP/HTTP (JSON or binary protobuf); the gRPC transport
-// Rust supports disables export here and is reported instead.
+// metricsClientOptions maps the resolved metrics exporter onto the client.
 func metricsClientOptions(settings OtelSettings, exporter OtelExporter) (MetricsClientOptions, bool) {
+	common := MetricsClientOptions{
+		Environment:    settings.Environment,
+		ServiceName:    settings.ServiceName,
+		ServiceVersion: settings.ServiceVersion,
+		Endpoint:       exporter.Endpoint,
+		Headers:        exporter.Headers,
+		TLS:            exporter.TLS,
+	}
 	switch exporter.Kind {
 	case OtelExporterOtlpHTTP:
 		switch exporter.Protocol {
@@ -108,18 +114,12 @@ func metricsClientOptions(settings OtelSettings, exporter OtelExporter) (Metrics
 			slog.Warn("OTLP HTTP metrics protocol is not supported", "protocol", exporter.Protocol)
 			return MetricsClientOptions{}, false
 		}
-		return MetricsClientOptions{
-			Environment:    settings.Environment,
-			ServiceName:    settings.ServiceName,
-			ServiceVersion: settings.ServiceVersion,
-			Endpoint:       exporter.Endpoint,
-			Headers:        exporter.Headers,
-			TLS:            exporter.TLS,
-			Protocol:       exporter.Protocol,
-		}, true
+		common.Protocol = exporter.Protocol
+		common.Transport = MetricsTransportHTTP
+		return common, true
 	case OtelExporterOtlpGRPC:
-		slog.Warn("OTLP gRPC metrics export is not supported", "endpoint", exporter.Endpoint)
-		return MetricsClientOptions{}, false
+		common.Transport = MetricsTransportGRPC
+		return common, true
 	default:
 		return MetricsClientOptions{}, false
 	}
