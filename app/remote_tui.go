@@ -496,7 +496,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			brokers.respond(response)
-			return nil
+			return interactiveRemoteModelSelectionCommand(ctx, endpoint, state, response.Picker)
 		},
 		OnReadTokenActivity: func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error) {
 			return interactiveRemoteReadTokenActivity(ctx, endpoint, view)

@@ -1068,7 +1068,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 			approvalBroker.respond(response)
 			elicitationBroker.respond(response)
 			userInputBroker.respond(response)
-			return nil
+			return interactiveLocalModelSelectionCommand(root, response.Picker)
 		},
 		HasChatGPTAccount: hasChatGPTAccount,
 	}

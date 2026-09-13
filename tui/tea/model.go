@@ -2356,6 +2356,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case SettingsWriteResultMsg:
 		m.applySettingsWriteResult(msg)
 		return m, m.refreshStatusControlsCmd()
+	case ModelSelectionSyncMsg:
+		m.applyModelSelectionSync(msg)
+		return m, m.refreshStatusControlsCmd()
 	case MemoryResetResultMsg:
 		m.applyMemoryResetResult(msg)
 		return m, nil
