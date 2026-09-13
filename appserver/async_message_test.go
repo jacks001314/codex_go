@@ -10,6 +10,40 @@ import (
 	"codex_go/turn"
 )
 
+// TestFreeformAsyncToolAvailableLikeRust pins Rust #45124: the free-form
+// send_message_to_user_async tool is offered only to root agents, and a root
+// agent opts in through either the model catalog or the
+// send_message_to_user_async feature flag. The retired send_async_message flag
+// and the legacy question tool names never enable it.
+func TestFreeformAsyncToolAvailableLikeRust(t *testing.T) {
+	catalog := []string{tool.DefaultSendMessageToUserAsyncToolName}
+	legacy := []string{tool.DefaultSendUserMessageAsyncToolName, tool.DefaultRequestUserInputAsyncToolName}
+	cases := []struct {
+		name     string
+		root     bool
+		catalog  []string
+		feature  bool
+		expected bool
+	}{
+		{"root_with_catalog_opt_in", true, catalog, false, true},
+		{"root_with_feature_opt_in", true, nil, true, true},
+		{"root_with_both_opt_ins", true, catalog, true, true},
+		{"root_without_opt_in", true, nil, false, false},
+		{"root_with_legacy_tools", true, legacy, false, false},
+		{"subagent_with_catalog_opt_in", false, catalog, false, false},
+		{"subagent_with_feature_opt_in", false, nil, true, false},
+		{"subagent_with_both_opt_ins", false, catalog, true, false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := freeformAsyncToolAvailable(testCase.root, testCase.catalog, testCase.feature); got != testCase.expected {
+				t.Fatalf("freeformAsyncToolAvailable(root=%v, catalog=%v, feature=%v) = %v, want %v",
+					testCase.root, testCase.catalog, testCase.feature, got, testCase.expected)
+			}
+		})
+	}
+}
+
 func TestSessionItemForAppAsyncMessageCarriesDelivery(t *testing.T) {
 	createdAt := time.Date(2026, 8, 21, 1, 0, 0, 0, time.UTC)
 	execution := &turn.ToolExecutionResult{

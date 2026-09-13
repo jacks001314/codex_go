@@ -3369,6 +3369,44 @@ func runtimeRecordIsSubagent(record *session.Record) bool {
 	return false
 }
 
+// turnThreadIsSubagent reports whether a turn's thread is a delegated subagent,
+// mirroring Rust's SessionSource::is_non_root_agent(). A missing store, unknown
+// thread, or lookup error fails open (treated as a root agent) so a transient
+// store issue never silently strips root-only tools.
+func (r *RuntimeRouter) turnThreadIsSubagent(threadID string) bool {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	if err != nil || record == nil {
+		return false
+	}
+	return runtimeRecordIsSubagent(record)
+}
+
+// freeformAsyncToolAvailable mirrors Rust #45124's condition for registering
+// the free-form send_message_to_user_async tool: the turn must belong to a root
+// agent, and either the model catalog must advertise the tool or the
+// send_message_to_user_async feature must be enabled.
+func freeformAsyncToolAvailable(rootAgent bool, catalogTools []string, featureEnabled bool) bool {
+	if !rootAgent {
+		return false
+	}
+	if featureEnabled {
+		return true
+	}
+	for _, name := range catalogTools {
+		if name == tool.DefaultSendMessageToUserAsyncToolName {
+			return true
+		}
+	}
+	return false
+}
+
 func runtimeThreadListShouldDefaultModelProvider(request *Request, params *ThreadListParams) bool {
 	if request == nil || params == nil {
 		return false
@@ -12505,30 +12543,35 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.EnvironmentWaiter = appServerEnvironmentWaiter{manager: r.services.Environment}
 	options.SelectedEnvironmentIDs = selectedEnvironmentIDs(params)
 	options.WaitForEnvironmentToolConfig = r.services.WaitForEnvironmentToolConfig
+	// Rust #45124: the free-form async user message tool is available to root
+	// agents when the model catalog advertises it or the
+	// send_message_to_user_async feature is enabled; subagents never get it.
+	freeformAsyncRootAgent := !r.turnThreadIsSubagent(threadID)
+	freeformAsyncFeature := cfg != nil && features.Enabled(cfg.FeatureSettings(), "send_message_to_user_async")
+	var catalogTools []string
 	if turnModelInfo != nil {
 		sendUserMessageAsyncAdded := false
-		sendMessageToUserAsyncAdded := false
 		requestUserInputAsyncAdded := false
 		for _, supported := range turnModelInfo.ExperimentalSupportedTools {
 			if supported == tool.DefaultSendUserMessageAsyncToolName && !sendUserMessageAsyncAdded {
 				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
 				sendUserMessageAsyncAdded = true
 			}
-			if supported == tool.DefaultSendMessageToUserAsyncToolName && !sendMessageToUserAsyncAdded {
-				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
-				sendMessageToUserAsyncAdded = true
-			}
 			if supported == tool.DefaultRequestUserInputAsyncToolName && !requestUserInputAsyncAdded {
 				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
 				requestUserInputAsyncAdded = true
 			}
 		}
+		catalogTools = turnModelInfo.ExperimentalSupportedTools
 		if turnModelInfo.ModelMessages != nil {
 			options.ModelConfirmationPolicies = turnModelInfo.ModelMessages.ConfirmationPolicies
 			if tools := turnModelInfo.ModelMessages.Tools; tools != nil && tools.SendUserMessageAsync != nil {
 				options.SendUserMessageAsyncDescription = tools.SendUserMessageAsync.Description
 			}
 		}
+	}
+	if freeformAsyncToolAvailable(freeformAsyncRootAgent, catalogTools, freeformAsyncFeature) {
+		options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, tool.DefaultSendMessageToUserAsyncToolName)
 	}
 	// Rust omits the confirmation-policies request metadata for Guardian review
 	// sessions (is_basic_session_source), so the actor tools are the main model's.

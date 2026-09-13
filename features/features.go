@@ -169,6 +169,9 @@ var Registry = []Spec{
 	// message feature gate was registered then retired; the tool itself is
 	// unconditionally available.
 	{Key: "send_async_message", Stage: StageRemoved},
+	// Rust (codex-rs/features/src/lib.rs #45124): let root agents use the
+	// free-form send_message_to_user_async tool without model catalog support.
+	{Key: "send_message_to_user_async", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_approval", Stage: StageStable, DefaultEnabled: true},
 	{Key: "guardian_enhanced_node_repl_transcripts", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_node_repl_transcript_images", Stage: StageUnderDevelopment, DefaultEnabled: false},
