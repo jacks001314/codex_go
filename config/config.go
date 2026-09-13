@@ -473,7 +473,7 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	// RawMcpServerConfig::try_into, which rejects transport-mismatched fields
 	// (e.g. `bearer_token` on an HTTP server, `url` on a stdio server) instead of
 	// silently choosing a transport.
-	if err := validateMCPServerTransportFields(cfg.Values["mcp_servers"]); err != nil {
+	if err := ValidateMCPServerValues(cfg.Values); err != nil {
 		return nil, err
 	}
 	// Rust #43797: memories.version is a closed enum; an unrecognized value must

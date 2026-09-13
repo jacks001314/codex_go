@@ -27257,3 +27257,28 @@ func TestMergePluginMarketplaceEntries(t *testing.T) {
 		t.Fatalf("merged extra = %#v", merged[1])
 	}
 }
+
+// TestRuntimeRouterRejectsTransportMismatchedMCPOverridesLikeRust covers the
+// request-override boundary: Rust converts `thread/start` / `turn/start`
+// `config` overrides through the typed config layer, so a transport-mismatched
+// `mcp_servers` entry fails while building the request config instead of
+// loading with the wrong transport.
+func TestRuntimeRouterRejectsTransportMismatchedMCPOverridesLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir())})
+	bad := map[string]any{"mcp_servers": map[string]any{
+		"docs": map[string]any{"command": "mcp-docs", "url": "https://example.com/mcp"},
+	}}
+	if _, err := router.effectiveConfigForThreadStart(&ThreadStartParams{Config: bad}); err == nil || !strings.Contains(err.Error(), "url is not supported for stdio") {
+		t.Fatalf("thread/start config error = %v, want the transport mismatch", err)
+	}
+	if _, err := router.effectiveConfigForTurn(&turn.TurnStartParams{Config: bad}); err == nil || !strings.Contains(err.Error(), "url is not supported for stdio") {
+		t.Fatalf("turn/start config error = %v, want the transport mismatch", err)
+	}
+
+	valid := map[string]any{"mcp_servers": map[string]any{
+		"docs": map[string]any{"command": "mcp-docs", "args": []any{"--stdio"}},
+	}}
+	if _, err := router.effectiveConfigForThreadStart(&ThreadStartParams{Config: valid}); err != nil {
+		t.Fatalf("valid thread/start config error = %v", err)
+	}
+}

@@ -7483,11 +7483,17 @@ func (r *RuntimeRouter) effectiveConfigForTurn(params *turn.TurnStartParams) (*c
 	cfg := &config.Config{Values: map[string]any{}}
 	if r == nil || r.services.Config == nil {
 		applyRuntimeConfigOverrides(cfg, turnConfigOverrides(params))
+		if err := config.ValidateMCPServerValues(cfg.Values); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	}
 	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 	if codexHome == "" {
 		applyRuntimeConfigOverrides(cfg, turnConfigOverrides(params))
+		if err := config.ValidateMCPServerValues(cfg.Values); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	}
 	loaded, err := config.LoadWithOptions(codexHome, &config.LoadOptions{CWD: turnCWD(params)})
@@ -7503,6 +7509,11 @@ func (r *RuntimeRouter) effectiveConfigForTurn(params *turn.TurnStartParams) (*c
 		}
 	}
 	applyRuntimeConfigOverrides(cfg, turnConfigOverrides(params))
+	// Rust converts the request's `config` overrides through the typed config
+	// layer, so a transport-mismatched `mcp_servers` entry fails turn/start.
+	if err := config.ValidateMCPServerValues(cfg.Values); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 

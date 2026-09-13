@@ -146,3 +146,21 @@ func TestLoadRejectsTransportMismatchedMCPServerLikeRust(t *testing.T) {
 		t.Fatalf("valid config load error = %v", err)
 	}
 }
+
+// TestValidateMCPServerValuesLikeRust covers the exported entry point the
+// app-server request-override paths use.
+func TestValidateMCPServerValuesLikeRust(t *testing.T) {
+	if err := ValidateMCPServerValues(nil); err != nil {
+		t.Fatalf("nil values error = %v", err)
+	}
+	if err := ValidateMCPServerValues(map[string]any{"mcp_servers": map[string]any{
+		"docs": map[string]any{"command": "mcp-docs"},
+	}}); err != nil {
+		t.Fatalf("valid values error = %v", err)
+	}
+	if err := ValidateMCPServerValues(map[string]any{"mcp_servers": map[string]any{
+		"docs": map[string]any{"enabled": true},
+	}}); err == nil || !strings.Contains(err.Error(), "invalid transport") {
+		t.Fatalf("error = %v, want invalid transport", err)
+	}
+}

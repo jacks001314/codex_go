@@ -7,6 +7,18 @@ import (
 	"strings"
 )
 
+// ValidateMCPServerValues enforces Rust's `mcp_servers` conversion rules
+// (`TryFrom<RawMcpServerConfig>`) against a config values map: the transport
+// matrix plus the nested `tools.<tool>` / `env_vars` shapes. The config loader
+// and the app-server thread-config override path both call it, so a
+// transport-mismatched server fails at the same boundary Rust fails it.
+func ValidateMCPServerValues(values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	return validateMCPServerTransportFields(values["mcp_servers"])
+}
+
 // validateMCPServerTransportFields enforces Rust's
 // `TryFrom<RawMcpServerConfig> for McpServerConfig` transport rules
 // (config/src/mcp_types.rs): a table that names a command is a stdio server and

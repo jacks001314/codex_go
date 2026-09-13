@@ -4108,11 +4108,17 @@ func (r *RuntimeRouter) effectiveConfigForThreadStart(params *ThreadStartParams)
 	cfg := &config.Config{Values: map[string]any{}}
 	if r == nil || r.services.Config == nil {
 		applyRuntimeConfigOverrides(cfg, threadStartConfigOverrides(params))
+		if err := config.ValidateMCPServerValues(cfg.Values); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	}
 	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 	if codexHome == "" {
 		applyRuntimeConfigOverrides(cfg, threadStartConfigOverrides(params))
+		if err := config.ValidateMCPServerValues(cfg.Values); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	}
 	cwd := r.effectiveThreadStartCWD(params)
@@ -4124,6 +4130,11 @@ func (r *RuntimeRouter) effectiveConfigForThreadStart(params *ThreadStartParams)
 		cfg = loaded
 	}
 	applyRuntimeConfigOverrides(cfg, threadStartConfigOverrides(params))
+	// Rust converts the request's `config` overrides through the typed config
+	// layer, so a transport-mismatched `mcp_servers` entry fails thread/start.
+	if err := config.ValidateMCPServerValues(cfg.Values); err != nil {
+		return nil, err
+	}
 	if threadStartEffectivePermissionsTrustProject(cfg, cwd, params) {
 		r.trustThreadStartProject(cwd)
 	}
