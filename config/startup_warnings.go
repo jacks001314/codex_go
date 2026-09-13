@@ -23,6 +23,25 @@ import (
 // managed requirements layer.
 const managedRequirementSource = "managed requirements"
 
+// StartupWarningsForCWD reports the requirement-driven startup warnings for the
+// configuration visible from cwd, mirroring Rust's thread config loading, which
+// surfaces project-scoped conflicts at thread start that were absent at
+// initialization.
+func (s *ConfigService) StartupWarningsForCWD(cwd string) []string {
+	if s == nil {
+		return nil
+	}
+	layers, err := s.configLayersForWarning(cwd)
+	if err != nil {
+		return nil
+	}
+	values, _ := mergeConfigLayers(layers)
+	s.mu.Lock()
+	requirements := cloneRequirements(s.requirements)
+	s.mu.Unlock()
+	return StartupWarnings(values, requirements)
+}
+
 // StartupWarnings reports the requirement-driven overrides and fallbacks that
 // apply to the given effective configuration, in a stable order.
 func StartupWarnings(values map[string]any, requirements *ConfigRequirements) []string {

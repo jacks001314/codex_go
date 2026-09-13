@@ -5701,6 +5701,13 @@ func (r *RuntimeRouter) emitThreadConfigWarnings(cwd string) {
 			}
 		}
 	}
+	// Rust thread_processor emits the thread config's startup_warnings, which
+	// can include project-scoped requirement conflicts absent at initialization.
+	for _, warning := range r.services.Config.StartupWarningsForCWD(cwd) {
+		if summary := strings.TrimSpace(warning); summary != "" {
+			summaries = append(summaries, summary)
+		}
+	}
 	if len(summaries) == 0 {
 		return
 	}
