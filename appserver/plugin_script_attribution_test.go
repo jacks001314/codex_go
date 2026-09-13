@@ -9,6 +9,7 @@ import (
 	"codex_go/config"
 	"codex_go/plugin"
 	"codex_go/session"
+	"codex_go/state"
 	"codex_go/telemetry"
 )
 
@@ -142,7 +143,8 @@ func TestAttributeSessionCommandItemsPreservesHistoryFields(t *testing.T) {
 
 func TestEmitArtifactOperationForCommandItemLikeRust(t *testing.T) {
 	analytics := newRecordingTurnEventSink()
-	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics}}
+	metrics := state.NewTaskMetrics()
+	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics, TurnMetrics: metrics}}
 	item := &ThreadItem{
 		ID: "item-artifact",
 		Data: map[string]any{
@@ -169,5 +171,40 @@ func TestEmitArtifactOperationForCommandItemLikeRust(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for artifact operation analytics")
+	}
+
+	// Rust's exec-command begin also records the artifact-operation counter and
+	// the expected-output histogram, tagged by the operation.
+	records := metrics.Records()
+	if len(records) != 2 {
+		t.Fatalf("metric records = %#v", records)
+	}
+	if counter := records[0]; counter.Name != telemetry.ArtifactOperationStartedMetric ||
+		counter.Kind != "counter" || counter.Inc != 1 {
+		t.Fatalf("artifact counter = %#v", counter)
+	}
+	for key, want := range map[string]string{
+		"skill":             "presentations",
+		"artifact_type":     "presentation",
+		"operation_kind":    "create",
+		"output_format":     "pptx",
+		"execution_backend": "unified_exec",
+	} {
+		if got := records[0].Tags[key]; got != want {
+			t.Fatalf("artifact counter tag %s = %q, want %q (%#v)", key, got, want, records[0].Tags)
+		}
+	}
+	if histogram := records[1]; histogram.Name != telemetry.ArtifactOperationExpectedOutputCountMetric ||
+		histogram.Kind != "histogram" || histogram.Value != 2 ||
+		histogram.Tags["skill"] != "presentations" {
+		t.Fatalf("artifact histogram = %#v", histogram)
+	}
+
+	// The metrics do not depend on the analytics sink.
+	metricsOnly := state.NewTaskMetrics()
+	(&RuntimeRouter{services: RuntimeServices{TurnMetrics: metricsOnly}}).
+		emitArtifactOperationForCommandItem("thread-art", "turn-art", item)
+	if records := metricsOnly.Records(); len(records) != 2 {
+		t.Fatalf("metrics-only records = %#v", records)
 	}
 }

@@ -110,11 +110,7 @@ func (r *RuntimeRouter) attributeSessionCommandItems(threadID string, turnID str
 // "started" event for a trusted primary-runtime artifact marker command
 // (Rust #38057).
 func (r *RuntimeRouter) emitArtifactOperationForCommandItem(threadID string, turnID string, item *ThreadItem) {
-	if r == nil || r.services.Analytics == nil || item == nil || r.threadAnalyticsDisabled(threadID) {
-		return
-	}
-	sink, ok := r.services.Analytics.(telemetry.ArtifactOperationEventSink)
-	if !ok {
+	if r == nil || item == nil {
 		return
 	}
 	pluginID := ""
@@ -135,6 +131,27 @@ func (r *RuntimeRouter) emitArtifactOperationForCommandItem(threadID string, tur
 	attribution := &plugin.PluginCommandAttribution{PluginID: pluginID, ScriptPath: scriptPath}
 	operation := plugin.RecognizeArtifactOperation(attribution, shell.SplitCommandLine(command))
 	if operation == nil {
+		return
+	}
+	// Rust's exec-command begin emission records the artifact-operation counter
+	// and expected-output histogram before (and independently of) the analytics
+	// event.
+	if sink := r.services.TurnMetrics; sink != nil {
+		tags := map[string]string{
+			"skill":             operation.PluginName,
+			"artifact_type":     operation.ArtifactType,
+			"operation_kind":    operation.OperationKind,
+			"output_format":     operation.OutputFormat,
+			"execution_backend": "unified_exec",
+		}
+		sink.Counter(telemetry.ArtifactOperationStartedMetric, 1, tags)
+		sink.Histogram(telemetry.ArtifactOperationExpectedOutputCountMetric, operation.ExpectedOutputCount, tags)
+	}
+	if r.services.Analytics == nil || r.threadAnalyticsDisabled(threadID) {
+		return
+	}
+	sink, ok := r.services.Analytics.(telemetry.ArtifactOperationEventSink)
+	if !ok {
 		return
 	}
 	occurredAtMS := uint64(threadItemInt64FromData(item.Data, "startedAtMs", "started_at_ms"))
