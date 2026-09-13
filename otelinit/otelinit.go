@@ -1,10 +1,10 @@
 // Package otelinit mirrors codex-rs/core/src/otel_init.rs: it maps the resolved
 // Codex config onto codex-otel settings and builds the OTEL provider.
 //
-// Go has no OTLP tracing or logging pipeline yet, so the log/trace exporter
-// settings are carried onto the settings but only the metrics exporter produces
-// a provider. The provider build never fails for the unsupported OTLP gRPC
-// transport; the telemetry package reports it and stays disabled.
+// Go builds the metrics and logging pipelines; the trace exporter is carried
+// onto the settings but has no pipeline yet. The provider build never fails for
+// an unsupported transport; the telemetry package reports it and stays
+// disabled.
 package otelinit
 
 import (
@@ -27,9 +27,10 @@ type Options struct {
 	DefaultAnalyticsEnabled bool
 }
 
-// BuildProvider mirrors otel_init::build_provider for the metrics pipeline:
-// resolve the effective `otel` settings, disable the metrics exporter unless
-// analytics is enabled, and build the provider from the mapped settings.
+// BuildProvider mirrors otel_init::build_provider: resolve the effective
+// `otel` settings, disable the metrics exporter unless analytics is enabled
+// (the log exporter is not gated), and build the provider from the mapped
+// settings.
 func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 	resolved := config.DefaultOtelConfig()
 	analyticsEnabled := options.DefaultAnalyticsEnabled

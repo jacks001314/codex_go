@@ -8,11 +8,9 @@ import (
 )
 
 // Rust parity: codex-rs/otel/src/config.rs (OtelExporter / OtelSettings /
-// resolve_exporter) and provider.rs::OtelProvider::try_new. Go supports the
-// metrics pipeline only: it has no OTLP tracing or logging provider, so the
-// log/trace exporter settings are carried but never built. A metrics-only
-// provider is returned when the resolved metrics exporter is enabled; traces or
-// logs alone would leave nothing to build (Rust returns a provider for them).
+// resolve_exporter) and provider.rs::OtelProvider::try_new. Go builds the
+// metrics and logging pipelines; the tracing pipeline is not implemented, so
+// the trace exporter settings are carried but never built.
 
 // Otel exporter kind tags, mirroring codex-otel's OtelExporter variants.
 const (
@@ -71,29 +69,70 @@ type OtelSettings struct {
 	Tracestate      map[string]map[string]string
 }
 
-// OtelProvider mirrors codex-otel's OtelProvider for the metrics pipeline.
+// OtelProvider mirrors codex-otel's OtelProvider for the metrics and logging
+// pipelines.
 type OtelProvider struct {
 	metrics      *MetricsClient
+	logs         *LogsClient
 	shutdownOnce sync.Once
 }
 
-// NewOtelProvider mirrors OtelProvider::try_new for the metrics pipeline. It
-// returns a nil provider without error when no supported exporter is enabled,
-// which is what Rust does when every exporter is disabled.
+// NewOtelProvider mirrors OtelProvider::try_new. It returns a nil provider
+// without error when no supported exporter is enabled, which is what Rust does
+// when every exporter is disabled.
 func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
-	metricsExporter := ResolveOtelExporter(settings.MetricsExporter)
-	if metricsExporter.Kind == OtelExporterNone {
+	var metrics *MetricsClient
+	if metricsExporter := ResolveOtelExporter(settings.MetricsExporter); metricsExporter.Kind != OtelExporterNone {
+		if options, ok := metricsClientOptions(settings, metricsExporter); ok {
+			if client := NewMetricsClient(options); client.Enabled() {
+				metrics = client
+			}
+		}
+	}
+	// Rust's log pipeline uses the general `exporter` setting
+	// (provider.rs::try_new -> build_logger(&settings.exporter)).
+	var logs *LogsClient
+	if logsExporter := ResolveOtelExporter(settings.Exporter); logsExporter.Kind != OtelExporterNone {
+		if options, ok := logsClientOptions(settings, logsExporter); ok {
+			if client := NewLogsClient(options); client.Enabled() {
+				logs = client
+			}
+		}
+	}
+	if metrics == nil && logs == nil {
 		return nil, nil
 	}
-	options, ok := metricsClientOptions(settings, metricsExporter)
-	if !ok {
-		return nil, nil
+	return &OtelProvider{metrics: metrics, logs: logs}, nil
+}
+
+// logsClientOptions maps the resolved log exporter onto the log client, the way
+// metricsClientOptions does for metrics.
+func logsClientOptions(settings OtelSettings, exporter OtelExporter) (LogsClientOptions, bool) {
+	common := LogsClientOptions{
+		Environment:    settings.Environment,
+		ServiceName:    settings.ServiceName,
+		ServiceVersion: settings.ServiceVersion,
+		Endpoint:       exporter.Endpoint,
+		Headers:        exporter.Headers,
+		TLS:            exporter.TLS,
 	}
-	client := NewMetricsClient(options)
-	if !client.Enabled() {
-		return nil, nil
+	switch exporter.Kind {
+	case OtelExporterOtlpHTTP:
+		switch exporter.Protocol {
+		case "", OtelHTTPProtocolJSON, OtelHTTPProtocolBinary:
+		default:
+			slog.Warn("OTLP HTTP logs protocol is not supported", "protocol", exporter.Protocol)
+			return LogsClientOptions{}, false
+		}
+		common.Protocol = exporter.Protocol
+		common.Transport = LogsTransportHTTP
+		return common, true
+	case OtelExporterOtlpGRPC:
+		common.Transport = LogsTransportGRPC
+		return common, true
+	default:
+		return LogsClientOptions{}, false
 	}
-	return &OtelProvider{metrics: client}, nil
 }
 
 // metricsClientOptions maps the resolved metrics exporter onto the client.
@@ -134,14 +173,38 @@ func (p *OtelProvider) Metrics() *MetricsClient {
 	return p.metrics
 }
 
-// Shutdown flushes and stops the metrics exporter at most once.
+// Logs returns the provider's log client, or nil when the logging pipeline is
+// disabled.
+func (p *OtelProvider) Logs() *LogsClient {
+	if p == nil {
+		return nil
+	}
+	return p.logs
+}
+
+// LogsHandler returns a slog handler that forwards exported records to the
+// provider's log client, wrapping next, or nil when the logging pipeline is
+// disabled (Rust installs its log layer only for an enabled provider).
+func (p *OtelProvider) LogsHandler(next slog.Handler) *LogsSlogHandler {
+	if p == nil || p.logs == nil || !p.logs.Enabled() {
+		return nil
+	}
+	return NewLogsSlogHandler(p.logs, next)
+}
+
+// Shutdown flushes and stops the exporters at most once.
 func (p *OtelProvider) Shutdown(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
 	var err error
 	p.shutdownOnce.Do(func() {
-		err = p.metrics.Shutdown(ctx)
+		if logsErr := p.logs.Shutdown(ctx); logsErr != nil {
+			err = logsErr
+		}
+		if metricsErr := p.metrics.Shutdown(ctx); metricsErr != nil && err == nil {
+			err = metricsErr
+		}
 	})
 	return err
 }

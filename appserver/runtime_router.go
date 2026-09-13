@@ -1331,12 +1331,21 @@ func (r *RuntimeRouter) configureOtelMetrics(codexHome string, options *RuntimeR
 		slog.Warn("failed to build the OTEL provider", "error", err)
 		return
 	}
-	if provider == nil || provider.Metrics() == nil {
+	if provider == nil {
 		return
 	}
 	r.otelProvider = provider
-	metrics.SetExporter(provider.Metrics())
-	telemetry.RecordProcessStartOnce(provider.Metrics(), otelAppServerServiceName)
+	if provider.Metrics() != nil {
+		metrics.SetExporter(provider.Metrics())
+		telemetry.RecordProcessStartOnce(provider.Metrics(), otelAppServerServiceName)
+	}
+	// Rust installs the reloadable OTEL log layer on the app-server's tracing
+	// subscriber; Go chains an slog handler around the current default handler
+	// so the process's log records reach the exporter without dropping the
+	// handlers installed before it (the sqlite log handler wraps the same way).
+	if logsHandler := provider.LogsHandler(state.SlogTerminalHandler()); logsHandler != nil {
+		slog.SetDefault(slog.New(logsHandler))
+	}
 }
 
 func (r *RuntimeRouter) analyticsAuthorizeRequest(codexHome string) telemetry.AnalyticsAuthorizeRequestFunc {

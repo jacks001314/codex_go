@@ -3,6 +3,7 @@ package appserver
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -125,4 +126,64 @@ func payloadHasMetric(payload map[string]any, name string) bool {
 		}
 	}
 	return false
+}
+
+// The app-server chains the OTEL log handler around the process logger, so a
+// Codex telemetry log record reaches a configured OTLP logs endpoint (Rust
+// installs the same layer on the app-server's tracing subscriber).
+func TestConfigureOtelLogsExportsTelemetryRecords(t *testing.T) {
+	received := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case received <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	configToml := fmt.Sprintf(
+		"[otel.exporter.otlp-http]\nendpoint = %q\nprotocol = \"json\"\n",
+		server.URL+"/v1/logs",
+	)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configToml), 0o600); err != nil {
+		t.Fatalf("WriteFile config.toml error = %v", err)
+	}
+
+	previous := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	router.configureOtelMetrics(home, nil, state.NewTaskMetrics())
+	if router.otelProvider == nil || router.otelProvider.Logs() == nil {
+		t.Fatal("the OTLP logs provider was not built")
+	}
+	slog.Info("telemetry audit", "target", "codex_otel.log_only", "thread_id", "thread-1")
+	if err := router.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		resourceLogs, ok := payload["resourceLogs"].([]any)
+		if !ok || len(resourceLogs) == 0 {
+			t.Fatalf("payload = %#v", payload)
+		}
+		resource := resourceLogs[0].(map[string]any)["resource"].(map[string]any)
+		if name := otelAttributeValue(resource["attributes"], "service.name"); name != otelAppServerServiceName {
+			t.Fatalf("service.name = %q", name)
+		}
+		records := resourceLogs[0].(map[string]any)["scopeLogs"].([]any)[0].(map[string]any)["logRecords"].([]any)
+		if len(records) != 1 {
+			t.Fatalf("records = %#v", records)
+		}
+		body := records[0].(map[string]any)["body"].(map[string]any)
+		if body["stringValue"] != "telemetry audit" {
+			t.Fatalf("record = %#v", records[0])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the OTLP logs endpoint did not receive an export")
+	}
 }

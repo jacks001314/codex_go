@@ -144,16 +144,10 @@ func (h *LogDBHandler) entry(record slog.Record) *LogEntry {
 		attrs = append(attrs, attr)
 		return true
 	})
-	flat := flattenSlogAttrs(h.groups, attrs)
-	target := flat["target"]
+	flat := FlattenSlogAttrs(h.groups, attrs)
 	threadID := stringPointerIfPresent(flat, "thread_id")
 	modulePath, file, line := slogSource(record.PC)
-	if target == "" && modulePath != nil {
-		target = slogTargetFromFunction(*modulePath)
-	}
-	if target == "" {
-		target = "log"
-	}
+	target := SlogTargetForRecord(record, flat)
 	if !persistSlogRecord(target, record.Level) {
 		return nil
 	}
@@ -194,7 +188,24 @@ func persistSlogRecord(target string, level slog.Level) bool {
 	}
 }
 
-func flattenSlogAttrs(groups []string, attrs []slog.Attr) map[string]string {
+// SlogTargetForRecord resolves a record's tracing-style target: an explicit
+// `target` attribute wins, otherwise it is derived from the caller's package
+// path, defaulting to Rust's "log" target.
+func SlogTargetForRecord(record slog.Record, flat map[string]string) string {
+	if target := strings.TrimSpace(flat["target"]); target != "" {
+		return target
+	}
+	if modulePath, _, _ := slogSource(record.PC); modulePath != nil {
+		if target := slogTargetFromFunction(*modulePath); target != "" {
+			return target
+		}
+	}
+	return "log"
+}
+
+// FlattenSlogAttrs flattens grouped attributes into their dotted keys, matching
+// Rust's tracing field names.
+func FlattenSlogAttrs(groups []string, attrs []slog.Attr) map[string]string {
 	result := make(map[string]string)
 	var visit func([]string, slog.Attr)
 	visit = func(prefix []string, attr slog.Attr) {
@@ -425,14 +436,20 @@ type LogDBInstallation struct {
 	closeErr  error
 }
 
+// SlogTerminalHandler returns the handler a new slog default should chain
+// under: slog.SetDefault redirects the standard log package through the
+// installed logger, so retaining slog's private defaultHandler would recurse.
+func SlogTerminalHandler() slog.Handler {
+	next := slog.Default().Handler()
+	if fmt.Sprintf("%T", next) == "*slog.defaultHandler" {
+		return slog.NewTextHandler(os.Stderr, nil)
+	}
+	return next
+}
+
 func InstallLogDBHandler(runtime *StateRuntime) *LogDBInstallation {
 	previous := slog.Default()
-	next := previous.Handler()
-	// slog.SetDefault redirects the standard log package through the installed
-	// logger. Retaining slog's private defaultHandler would therefore recurse.
-	if fmt.Sprintf("%T", next) == "*slog.defaultHandler" {
-		next = slog.NewTextHandler(os.Stderr, nil)
-	}
+	next := SlogTerminalHandler()
 	handler := NewLogDBHandler(runtime, next)
 	installed := slog.New(handler)
 	slog.SetDefault(installed)
