@@ -2,12 +2,15 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 // recordingMetricsSink captures the API request metrics.
@@ -227,4 +230,104 @@ func (r *errorAfterReader) Read(target []byte) (int, error) {
 		return read, nil
 	}
 	return 0, r.err
+}
+
+// The websocket path records one codex.websocket.event sample per received
+// message and the six responses_api_* durations carried by a
+// responsesapi.websocket_timing message (Rust's log_websocket_event +
+// record_responses_websocket_timing_metrics).
+func TestRunWebSocketRecordsEventsAndTimingMetricsLikeRust(t *testing.T) {
+	timing := `{"type":"responsesapi.websocket_timing","timing_metrics":{
+		"responses_duration_excl_engine_and_client_tool_time_ms":120,
+		"engine_service_total_ms":340,
+		"engine_iapi_ttft_total_ms":50,
+		"engine_service_ttft_total_ms":60,
+		"engine_iapi_tbt_across_engine_calls_ms":7.5,
+		"engine_service_tbt_across_engine_calls_ms":8.25
+	}}`
+	completed := `{"type":"response.completed","response":{"id":"timing-1","output":[{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, _, _ = conn.Read(request.Context())
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(timing))
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(completed))
+	}))
+	defer server.Close()
+
+	sink := &recordingMetricsSink{}
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:           &APIProvider{BaseURL: server.URL},
+		SupportsWebsockets: true,
+		Metrics:            sink,
+	})
+	if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "hi"}); err != nil {
+		t.Fatalf("RunWebSocket() error = %v", err)
+	}
+
+	events := map[string]string{}
+	for _, counter := range sink.counters {
+		if counter.name != websocketEventCountMetric {
+			t.Fatalf("unexpected counter %#v", counter)
+		}
+		events[counter.tags["kind"]] = counter.tags["success"]
+	}
+	for _, kind := range []string{"responsesapi.websocket_timing", "response.completed"} {
+		if success, ok := events[kind]; !ok || success != "true" {
+			t.Fatalf("websocket event %q missing: %#v", kind, events)
+		}
+	}
+
+	durations := map[string]time.Duration{}
+	for _, duration := range sink.durations {
+		if duration.name == websocketEventDurationMetric {
+			continue
+		}
+		durations[duration.name] = duration.duration
+	}
+	want := map[string]time.Duration{
+		responsesAPIOverheadDurationMetric:          120 * time.Millisecond,
+		responsesAPIInferenceTimeDurationMetric:     340 * time.Millisecond,
+		responsesAPIEngineIAPITTFTDurationMetric:    50 * time.Millisecond,
+		responsesAPIEngineServiceTTFTDurationMetric: 60 * time.Millisecond,
+		responsesAPIEngineIAPITBTDurationMetric:     time.Duration(7.5 * float64(time.Millisecond)),
+		responsesAPIEngineServiceTBTDurationMetric:  time.Duration(8.25 * float64(time.Millisecond)),
+	}
+	for name, wantDuration := range want {
+		if durations[name] != wantDuration {
+			t.Fatalf("%s = %v, want %v (all %#v)", name, durations[name], wantDuration, durations)
+		}
+	}
+}
+
+// The timing helper skips absent fields and tolerates the JSON number shapes.
+func TestRecordResponsesTimingMetricsSkipsAbsentFields(t *testing.T) {
+	sink := &recordingMetricsSink{}
+	recordResponsesTimingMetrics(sink, []byte(`{"type":"responsesapi.websocket_timing","timing_metrics":{"engine_service_total_ms":12}}`))
+	if len(sink.durations) != 1 || sink.durations[0].name != responsesAPIInferenceTimeDurationMetric ||
+		sink.durations[0].duration != 12*time.Millisecond {
+		t.Fatalf("durations = %#v", sink.durations)
+	}
+	recordResponsesTimingMetrics(nil, []byte(`{"type":"responsesapi.websocket_timing","timing_metrics":{"engine_service_total_ms":12}}`))
+	recordWebsocketEvent(nil, "response.completed", true, time.Second)
+
+	// A numeric string is not a Rust-set value; nothing is recorded. json.Number
+	// values are accepted.
+	recordResponsesTimingMetrics(sink, []byte(`{"type":"responsesapi.websocket_timing","timing_metrics":{"engine_iapi_ttft_total_ms":"nope"}}`))
+	if len(sink.durations) != 1 {
+		t.Fatalf("durations = %#v", sink.durations)
+	}
+	decoder := json.NewDecoder(strings.NewReader(`{"engine_service_total_ms":5}`))
+	decoder.UseNumber()
+	payload := map[string]any{}
+	if err := decoder.Decode(&payload); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if milliseconds, ok := timingMetricMilliseconds(payload, "engine_service_total_ms"); !ok || milliseconds != 5 {
+		t.Fatalf("json.Number milliseconds = %v ok = %v", milliseconds, ok)
+	}
 }

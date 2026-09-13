@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -21,14 +22,29 @@ type MetricsSink interface {
 
 // Metric names mirror codex-rs/otel/src/metrics/names.rs.
 const (
-	apiCallCountMetric     = "codex.api_request"
-	apiCallDurationMetric  = "codex.api_request.duration_ms"
-	sseEventCountMetric    = "codex.sse_event"
-	sseEventDurationMetric = "codex.sse_event.duration_ms"
+	apiCallCountMetric                          = "codex.api_request"
+	apiCallDurationMetric                       = "codex.api_request.duration_ms"
+	sseEventCountMetric                         = "codex.sse_event"
+	sseEventDurationMetric                      = "codex.sse_event.duration_ms"
+	websocketEventCountMetric                   = "codex.websocket.event"
+	websocketEventDurationMetric                = "codex.websocket.event.duration_ms"
+	responsesAPIOverheadDurationMetric          = "codex.responses_api_overhead.duration_ms"
+	responsesAPIInferenceTimeDurationMetric     = "codex.responses_api_inference_time.duration_ms"
+	responsesAPIEngineIAPITTFTDurationMetric    = "codex.responses_api_engine_iapi_ttft.duration_ms"
+	responsesAPIEngineServiceTTFTDurationMetric = "codex.responses_api_engine_service_ttft.duration_ms"
+	responsesAPIEngineIAPITBTDurationMetric     = "codex.responses_api_engine_iapi_tbt.duration_ms"
+	responsesAPIEngineServiceTBTDurationMetric  = "codex.responses_api_engine_service_tbt.duration_ms"
 )
 
-// sseUnknownKind mirrors SSE_UNKNOWN_KIND.
-const sseUnknownKind = "unknown"
+// sseUnknownKind / websocketUnknownKind mirror SSE_UNKNOWN_KIND /
+// WEBSOCKET_UNKNOWN_KIND.
+const (
+	sseUnknownKind       = "unknown"
+	websocketUnknownKind = "unknown"
+)
+
+// responsesWebsocketTimingKind mirrors RESPONSES_WEBSOCKET_TIMING_KIND.
+const responsesWebsocketTimingKind = "responsesapi.websocket_timing"
 
 // recordAPIRequest mirrors record_api_request's metric half: one counter and one
 // millisecond duration histogram per HTTP attempt, tagged by the response status
@@ -76,4 +92,73 @@ func sseEventKind(sse *responsesSSEEvent) string {
 		return kind
 	}
 	return sseUnknownKind
+}
+
+// recordWebsocketEvent mirrors SessionTelemetry's websocket event metric half
+// (log_websocket_event -> codex.websocket.event): one counter and one duration
+// sample per received websocket message, tagged by kind and success.
+func recordWebsocketEvent(metrics MetricsSink, kind string, success bool, duration time.Duration) {
+	if metrics == nil {
+		return
+	}
+	if kind == "" {
+		kind = websocketUnknownKind
+	}
+	tags := map[string]string{"kind": kind, "success": strconv.FormatBool(success)}
+	metrics.Counter(websocketEventCountMetric, 1, tags)
+	metrics.RecordDuration(websocketEventDurationMetric, duration, tags)
+}
+
+// recordResponsesTimingMetrics mirrors
+// SessionTelemetry::record_responses_websocket_timing_metrics: the six
+// responses_api_* durations carried by a responsesapi.websocket_timing message.
+func recordResponsesTimingMetrics(metrics MetricsSink, data []byte) {
+	if metrics == nil {
+		return
+	}
+	timing := responsesTimingMetricsFromEventData(data)
+	if len(timing) == 0 {
+		return
+	}
+	for _, field := range []struct {
+		metric     string
+		key        string
+		fractional bool
+	}{
+		{responsesAPIOverheadDurationMetric, "responses_duration_excl_engine_and_client_tool_time_ms", false},
+		{responsesAPIInferenceTimeDurationMetric, "engine_service_total_ms", false},
+		{responsesAPIEngineIAPITTFTDurationMetric, "engine_iapi_ttft_total_ms", false},
+		{responsesAPIEngineServiceTTFTDurationMetric, "engine_service_ttft_total_ms", false},
+		{responsesAPIEngineIAPITBTDurationMetric, "engine_iapi_tbt_across_engine_calls_ms", true},
+		{responsesAPIEngineServiceTBTDurationMetric, "engine_service_tbt_across_engine_calls_ms", true},
+	} {
+		milliseconds, ok := timingMetricMilliseconds(timing, field.key)
+		if !ok {
+			continue
+		}
+		if field.fractional {
+			metrics.RecordDuration(field.metric, time.Duration(milliseconds*float64(time.Millisecond)), nil)
+			continue
+		}
+		// Rust's duration_from_ms_value truncates to whole milliseconds.
+		metrics.RecordDuration(field.metric, time.Duration(int64(milliseconds))*time.Millisecond, nil)
+	}
+}
+
+// timingMetricMilliseconds reads one timing-metric value as milliseconds.
+func timingMetricMilliseconds(timing map[string]any, key string) (float64, bool) {
+	switch typed := timing[key].(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		value, err := typed.Float64()
+		return value, err == nil
+	}
+	return 0, false
 }

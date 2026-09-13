@@ -794,6 +794,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	var outputText strings.Builder
 	receivedEvent := false
 	for {
+		messageStartedAt := time.Now()
 		_, data, err := conn.Read(ctx)
 		if err != nil {
 			closeResponsesWebsocketSession(session, "response read failed")
@@ -811,9 +812,17 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		receivedEvent = true
 		var event map[string]any
 		if err := json.Unmarshal(data, &event); err != nil {
+			// Rust's websocket telemetry reports a parse_error kind.
+			recordWebsocketEvent(r.Metrics, "parse_error", false, time.Since(messageStartedAt))
 			return nil, fmt.Errorf("failed to decode responses websocket event: %w", err)
 		}
 		rawType := strings.TrimSpace(responseToolString(event["type"]))
+		// Rust's log_websocket_event records one sample per received message;
+		// success is false for a response.failed message.
+		recordWebsocketEvent(r.Metrics, rawType, rawType != "response.failed", time.Since(messageStartedAt))
+		if rawType == responsesWebsocketTimingKind {
+			recordResponsesTimingMetrics(r.Metrics, data)
+		}
 		switch rawType {
 		case "response.output_text.delta":
 			outputText.WriteString(responseToolString(event["delta"]))
