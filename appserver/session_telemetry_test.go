@@ -394,9 +394,11 @@ func TestThreadLifetimeSpansLikeRust(t *testing.T) {
 
 // stubMCPExecutor registers one MCP tool so the router reports its server tags.
 type stubMCPExecutor struct {
-	name       tool.ToolName
-	server     string
-	serverType string
+	name          tool.ToolName
+	server        string
+	serverType    string
+	connector     string
+	connectorName string
 }
 
 func (e stubMCPExecutor) Spec() tool.Spec { return tool.Spec{Name: e.name} }
@@ -407,6 +409,10 @@ func (e stubMCPExecutor) Execute(context.Context, *tool.Invocation) (*tool.Outpu
 
 func (e stubMCPExecutor) TelemetryTags(*tool.Invocation) map[string]string {
 	return map[string]string{"mcp_server": e.server, "mcp_server_origin": e.serverType}
+}
+
+func (e stubMCPExecutor) MCPConnectorInfo(*tool.Invocation) (string, string) {
+	return e.connector, e.connectorName
 }
 
 // An MCP tool call is bracketed by Rust's `mcp.tools.call` span (client kind,
@@ -445,7 +451,14 @@ func TestMCPToolCallSpanLikeRust(t *testing.T) {
 	router.runtimeToolStartedNotifier("thread-1", "turn-1", "", false)(context.Background(), invocation, started)
 	router.runtimeToolCompletedNotifier("thread-1", "turn-1", "", false)(context.Background(), &turn.ToolExecutionResult{
 		Invocation: invocation,
-		Output:     &tool.Output{Success: true, Body: "out"},
+		// A successful MCP result carries the tool-call marker and no isError flag
+		// (the executor's tool.Output shape), so the call reports status ok.
+		Output: &tool.Output{Success: true, Body: "out", Data: map[string]any{
+			"mcpToolCall": true,
+			"isError":     false,
+			"server":      "example",
+			"tool":        "shell",
+		}},
 		TelemetryTags: map[string]string{
 			"mcp_server":        "example",
 			"mcp_server_origin": "stdio",
@@ -593,6 +606,145 @@ func TestMCPToolCallSpanNestsUnderSamplingRequestLikeRust(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the traces endpoint did not receive the nested spans")
 	}
+}
+
+// An MCP call reports its outcome and result telemetry: the connector on the
+// span, the error classification from the result, the result's own span
+// telemetry, and the codex.mcp.call metric triple (Rust's
+// record_mcp_result_span_telemetry plus emit_mcp_call_metrics).
+func TestMCPToolCallOutcomeTelemetryLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+	})
+	if err != nil || provider == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+	registry := tool.NewRegistry()
+	toolName := tool.NamespacedName("mcp__example", "shell")
+	if err := registry.Register(stubMCPExecutor{
+		name:          toolName,
+		server:        "example",
+		serverType:    "stdio",
+		connector:     "connector-1",
+		connectorName: "Calendar",
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	metrics := state.NewTaskMetrics()
+	router := NewRuntimeRouter(RuntimeServices{ToolRouter: tool.NewRouter(registry), TurnMetrics: metrics})
+	router.installOtelProvider(provider, metrics)
+	defer router.Close()
+
+	invocation := &tool.Invocation{CallID: "call-1", ToolName: toolName}
+	started := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	router.runtimeToolStartedNotifier("thread-1", "turn-1", "", false)(context.Background(), invocation, started)
+	router.runtimeToolCompletedNotifier("thread-1", "turn-1", "", false)(context.Background(), &turn.ToolExecutionResult{
+		Invocation: invocation,
+		Output: &tool.Output{
+			Success: false,
+			Data: map[string]any{
+				"mcpToolCall":       true,
+				"isError":           true,
+				"structuredContent": map[string]any{"error_code": "rate_limited"},
+				"server":            "example",
+				"tool":              "shell",
+				"_meta": map[string]any{
+					"codex/telemetry": map[string]any{
+						"span": map[string]any{
+							"target_id":                    "target-1",
+							"did_trigger_server_user_flow": true,
+						},
+					},
+				},
+			},
+		},
+		TelemetryTags: map[string]string{"mcp_server": "example", "mcp_server_origin": "stdio"},
+		StartedAt:     started,
+		FinishedAt:    started.Add(25 * time.Millisecond),
+	})
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	select {
+	case payload := <-traceBodies:
+		spans := payload["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+		var call map[string]any
+		for _, entry := range spans {
+			span := entry.(map[string]any)
+			if span["name"] == "mcp.tools.call" {
+				call = span
+			}
+		}
+		if call == nil {
+			t.Fatalf("spans = %#v", spans)
+		}
+		attributes := encodedAttributes(call)
+		for key, want := range map[string]string{
+			"mcp.connector.id":                     "connector-1",
+			"mcp.connector.name":                   "Calendar",
+			"error.type":                           telemetry.MCPCallErrorTypeToolResult,
+			"codex.mcp.error.code":                 "rate_limited",
+			"codex.mcp.target.id":                  "target-1",
+			"codex.mcp.server_user_flow.triggered": "true",
+		} {
+			if got := attributes[key]; got != want {
+				t.Fatalf("span attribute %s = %q, want %q (%#v)", key, got, want, attributes)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the traces endpoint did not receive the MCP call span")
+	}
+
+	callCounts := mcpCallMetricRecords(metrics, telemetry.MCPCallCountMetric)
+	if len(callCounts) != 1 {
+		t.Fatalf("call counters = %#v", metrics.Records())
+	}
+	for key, want := range map[string]string{
+		"status":         "error",
+		"server":         "example",
+		"tool":           "shell",
+		"connector_id":   "connector-1",
+		"connector_name": "Calendar",
+	} {
+		if got := callCounts[0].Tags[key]; got != want {
+			t.Fatalf("call counter tag %s = %q, want %q (%#v)", key, got, want, callCounts[0].Tags)
+		}
+	}
+	if durations := mcpCallMetricRecords(metrics, telemetry.MCPCallDurationMetric); len(durations) != 1 {
+		t.Fatalf("duration records = %#v", metrics.Records())
+	}
+	failures := mcpCallMetricRecords(metrics, telemetry.MCPCallErrorCountMetric)
+	if len(failures) != 1 {
+		t.Fatalf("error counters = %#v", metrics.Records())
+	}
+	if failures[0].Tags["error_type"] != telemetry.MCPCallErrorTypeToolResult || failures[0].Tags["error_code"] != "rate_limited" {
+		t.Fatalf("error counter = %#v", failures[0])
+	}
+}
+
+// mcpCallMetricRecords selects one metric's records.
+func mcpCallMetricRecords(metrics *state.TaskMetrics, name string) []*state.TaskMetric {
+	var out []*state.TaskMetric
+	for _, record := range metrics.Records() {
+		if record.Name == name {
+			out = append(out, record)
+		}
+	}
+	return out
 }
 
 // An approval resolution reports who decided what: the Guardian-resolved

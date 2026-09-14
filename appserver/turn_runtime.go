@@ -2415,11 +2415,28 @@ func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID str
 		// branches.
 		// An MCP call's span closes with the call, and the records below attach to
 		// it (Rust instruments the call body with mcp.tools.call).
+		mcpOutcome, isMCPCall := r.mcpCallOutcome(execution)
 		if span := r.takeMCPToolCallSpan(threadID, turnID, execution.Invocation.CallID); span != nil {
+			// Rust records the call's outcome and result telemetry on the span
+			// before it closes (record_mcp_result_span_telemetry).
+			if isMCPCall {
+				var data map[string]any
+				if execution.Output != nil {
+					data = execution.Output.Data
+				}
+				if attributes := telemetry.MCPCallSpanAttributes(mcpOutcome, mcpResultMeta(data)); len(attributes) > 0 {
+					for key, value := range attributes {
+						span.SetAttribute(key, value)
+					}
+				}
+			}
 			ctx = telemetry.WithSpan(ctx, span)
 			defer span.End()
 		}
 		r.emitToolCallMetrics(r.services.TurnMetrics, execution)
+		if isMCPCall {
+			r.emitMCPCallMetrics(execution, mcpOutcome)
+		}
 		// The same call emits the diagnostic log record and the trace-safe span
 		// event; the wrapper's context carries the span the turn runs inside.
 		r.emitToolResultRecords(ctx, threadID, execution)

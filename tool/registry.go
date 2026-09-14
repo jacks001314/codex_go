@@ -483,6 +483,30 @@ func (r *Router) DeclaresOutputSchema(name ToolName) bool {
 	return ok && spec.OutputSchema != nil
 }
 
+// MCPConnectorInfoProvider reports the connector an MCP tool call targets
+// (Rust's approval metadata connector id/name, which mcp_tool_call.rs records on
+// the call's span and in its metric tags).
+type MCPConnectorInfoProvider interface {
+	MCPConnectorInfo(invocation *Invocation) (connectorID string, connectorName string)
+}
+
+// MCPConnectorInfo reports the connector of the MCP tool a call targets, or
+// empty strings for a tool without connector metadata.
+func (r *Router) MCPConnectorInfo(invocation *Invocation) (string, string) {
+	if r == nil || r.registry == nil || invocation == nil {
+		return "", ""
+	}
+	executor, ok := r.registry.Lookup(invocation.ToolName)
+	if !ok {
+		return "", ""
+	}
+	provider, ok := executor.(MCPConnectorInfoProvider)
+	if !ok {
+		return "", ""
+	}
+	return provider.MCPConnectorInfo(invocation)
+}
+
 func (r *Router) DeferredToolNamespaces() map[string]string {
 	if r == nil || r.registry == nil {
 		return nil

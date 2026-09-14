@@ -211,6 +211,16 @@ func (e *ToolExecutor) TelemetryTags(_ *tool.Invocation) map[string]string {
 	return tags
 }
 
+// MCPConnectorInfo reports the connector this call targets, when the tool carries
+// one (Rust's McpToolCallSpanFields connector_id/connector_name, which the call
+// span and the codex.mcp.call metrics report).
+func (e *ToolExecutor) MCPConnectorInfo(*tool.Invocation) (string, string) {
+	if e == nil {
+		return "", ""
+	}
+	return strings.TrimSpace(e.connectorID), strings.TrimSpace(e.connectorName)
+}
+
 // MCPServerName reports the MCP server that owns this tool, or "" for a
 // non-MCP executor (Rust ToolRuntime::mcp_server_name).
 func (e *ToolExecutor) MCPServerName() string {
