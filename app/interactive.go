@@ -200,7 +200,7 @@ func interactiveStartManagedWorktreeHandler(settings worktree.WorktreeSettings) 
 		}
 		return codextea.SessionResumeResponse{
 			Summary:  firstSessionSummary(store, record),
-			Messages: interactiveSessionMessagesFromRecord(record),
+			Messages: interactiveSessionMessagesFromRecord(record, reasoningProjectionChatWidget, false),
 			Status:   "idle",
 		}, nil
 	}
@@ -916,7 +916,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnPromptEdit:                interactivePromptEditHandler(root),
 		OnExportTranscript:          interactiveTranscriptExportHandler(interactiveShowRawAgentReasoning(root)),
 		OnLoadTranscriptPreview:     interactiveTranscriptPreviewHandler(),
-		OnReadSessionTranscript:     interactiveSessionTranscriptHandler(),
+		OnReadSessionTranscript:     interactiveSessionTranscriptHandler(interactiveShowRawAgentReasoning(root)),
 		OnRenameThread:              interactiveRenameThreadHandler(),
 		OnLogout:                    interactiveLogoutHandler(ctx, root),
 		OnOpenDesktopThread:         interactiveOpenDesktopThread,
@@ -2607,7 +2607,7 @@ func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResu
 		}
 		return codextea.SessionResumeResponse{
 			Summary:    firstSessionSummary(store, record),
-			Messages:   interactiveSessionMessagesFromRecord(record),
+			Messages:   interactiveSessionMessagesFromRecord(record, reasoningProjectionChatWidget, false),
 			Status:     "idle",
 			TokenUsage: tokenUsage,
 		}, nil
@@ -2625,7 +2625,7 @@ func firstSessionSummary(store *session.Store, record *session.Record) *codextui
 	return &summaries[0]
 }
 
-func interactiveSessionMessagesFromRecord(record *session.Record) []codextui.Message {
+func interactiveSessionMessagesFromRecord(record *session.Record, projection reasoningProjection, showRawReasoning bool) []codextui.Message {
 	if record == nil {
 		return nil
 	}
@@ -2659,7 +2659,7 @@ func interactiveSessionMessagesFromRecord(record *session.Record) []codextui.Mes
 		if interactiveSessionItemIsHiddenContextInstruction(item) || interactiveSessionItemIsReviewUserMessage(item) || (inReviewMode && normalizeInteractiveSessionItemRole(item.Role) == "user") {
 			continue
 		}
-		message, ok := interactiveSessionMessageFromItem(item)
+		message, ok := interactiveSessionMessageFromItem(item, projection, showRawReasoning)
 		if ok {
 			messages = append(messages, message)
 		}
@@ -2687,7 +2687,7 @@ func interactiveSessionItemIsHiddenContextInstruction(item session.Item) bool {
 	return false
 }
 
-func interactiveSessionMessageFromItem(item session.Item) (codextui.Message, bool) {
+func interactiveSessionMessageFromItem(item session.Item, projection reasoningProjection, showRawReasoning bool) (codextui.Message, bool) {
 	itemType := normalizeInteractiveSessionItemType(item.Type)
 	role := normalizeInteractiveSessionItemRole(item.Role)
 	switch {
@@ -2718,20 +2718,16 @@ func interactiveSessionMessageFromItem(item session.Item) (codextui.Message, boo
 		}
 		return codextui.Message{Role: codextui.RoleAssistant, Text: text, RawText: text}, true
 	case itemType == "reasoning":
-		summary, raw := reasoningBlockVariants(
-			remoteTUIAnyStrings(item.Data["summary"]),
-			interactiveSessionItemReasoningContentParts(item),
-			interactiveSessionItemReasoningText(item),
-		)
-		if summary == "" && raw == "" {
+		text, raw := reasoningProjectionText(sessionItemAsThreadItem(item), projection, showRawReasoning)
+		if text == "" && raw == "" {
 			return codextui.Message{}, false
 		}
 		// The reasoning block is retained in the expanded transcript only, and
 		// its item id lets the live completion replace it (Rust ReasoningReplay).
 		return codextui.Message{
 			Role:             codextui.RoleHistory,
-			Text:             summary,
-			RawText:          summary,
+			Text:             text,
+			RawText:          text,
 			ReasoningRawText: raw,
 			TranscriptOnly:   true,
 			ItemID:           strings.TrimSpace(item.ID),
@@ -2885,14 +2881,15 @@ func interactiveSessionItemReasoningText(item session.Item) string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
-// interactiveSessionItemReasoningContentParts returns a local reasoning item's
-// raw chain-of-thought parts (Rust ThreadItem::Reasoning { content }).
-func interactiveSessionItemReasoningContentParts(item session.Item) []string {
-	parts := []string{}
-	for _, key := range []string{"reasoningContent", "content", "raw_content"} {
-		parts = append(parts, remoteTUIAnyStrings(item.Data[key])...)
+// sessionItemAsThreadItem adapts a local session item to the app-server thread
+// item the shared reasoning projection reads (its id, type, text, and data).
+func sessionItemAsThreadItem(item session.Item) appserver.ThreadItem {
+	return appserver.ThreadItem{
+		ID:   strings.TrimSpace(item.ID),
+		Type: item.Type,
+		Text: strings.TrimSpace(item.Text),
+		Data: map[string]any(item.Data),
 	}
-	return parts
 }
 
 func interactiveSessionItemToolText(item session.Item) string {

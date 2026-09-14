@@ -431,7 +431,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			return daybreakNoticeForModel(daybreakProvider, daybreakCache, model)
 		},
 		OnLoadTranscriptPreview: interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
-		OnReadSessionTranscript: interactiveRemoteSessionTranscriptHandler(ctx, endpoint),
+		OnReadSessionTranscript: interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
 		OnRenameThread:          interactiveRemoteRenameThreadHandler(ctx, endpoint),
 		OnLogout:                interactiveRemoteLogoutHandler(ctx, endpoint),
 		KeymapConfig:            keymapConfig,
@@ -1554,7 +1554,7 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 func remoteTUIResumeResponseFromThread(thread *appserver.Thread) codextea.SessionResumeResponse {
 	return codextea.SessionResumeResponse{
 		Summary:                remoteTUISessionSummaryFromThread(thread, false),
-		Messages:               remoteTUIThreadMessagesFromThread(thread),
+		Messages:               remoteTUIThreadMessagesFromThread(thread, reasoningProjectionChatWidget, false),
 		Status:                 remoteTUIStatusFromThread(thread),
 		TokenUsage:             remoteThreadTokenUsageFromThread(thread),
 		WorkingStatusHeader:    remoteTUIThreadActiveReasoningHeading(thread),
@@ -1853,7 +1853,7 @@ func remoteTUIAgentSwitchResponseFromThread(thread *appserver.Thread) codextea.A
 	}
 	return codextea.AgentThreadSwitchResponse{
 		Entry:                  remoteTUIAgentEntryFromThread(thread, primaryThreadID),
-		Messages:               remoteTUIThreadMessagesFromThread(thread),
+		Messages:               remoteTUIThreadMessagesFromThread(thread, reasoningProjectionChatWidget, false),
 		Status:                 remoteTUIStatusFromThread(thread),
 		Model:                  remoteTUIThreadModel(thread),
 		Provider:               remoteTUIThreadProvider(thread),
@@ -2051,7 +2051,7 @@ func remoteTUIStatusFromThread(thread *appserver.Thread) string {
 	}
 }
 
-func remoteTUIThreadMessagesFromThread(thread *appserver.Thread) []codextui.Message {
+func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reasoningProjection, showRawReasoning bool) []codextui.Message {
 	if thread == nil {
 		return nil
 	}
@@ -2085,7 +2085,7 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread) []codextui.Mess
 			if remoteTUIThreadItemIsReviewUserMessage(item) || (inReviewMode && remoteTUINormalizedThreadItemRole(item.Role) == "user") {
 				continue
 			}
-			message, ok := remoteTUIMessageFromThreadItem(item)
+			message, ok := remoteTUIMessageFromThreadItem(item, projection, showRawReasoning)
 			if ok {
 				messages = append(messages, message)
 			}
@@ -2187,7 +2187,7 @@ func remoteTUIThreadItemIsReviewUserMessage(item appserver.ThreadItem) bool {
 	return strings.TrimSpace(remoteTUIAnyString(item.Data["kind"])) == "review_rollout_user"
 }
 
-func remoteTUIMessageFromThreadItem(item appserver.ThreadItem) (codextui.Message, bool) {
+func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reasoningProjection, showRawReasoning bool) (codextui.Message, bool) {
 	itemType := remoteTUINormalizedThreadItemType(item.Type)
 	role := remoteTUINormalizedThreadItemRole(item.Role)
 	switch {
@@ -2212,12 +2212,8 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem) (codextui.Message
 		}
 		return codextui.Message{Role: codextui.RoleAssistant, Text: text, RawText: text}, true
 	case itemType == "reasoning":
-		summary, raw := reasoningBlockVariants(
-			remoteTUIThreadItemReasoningSummaryParts(item),
-			remoteTUIThreadItemReasoningContentParts(item),
-			remoteTUIThreadItemReasoningText(item),
-		)
-		if summary == "" && raw == "" {
+		text, raw := reasoningProjectionText(item, projection, showRawReasoning)
+		if text == "" && raw == "" {
 			return codextui.Message{}, false
 		}
 		// A reasoning item is retained in the expanded transcript only (Rust
@@ -2226,8 +2222,8 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem) (codextui.Message
 		// it (Rust ReasoningReplay).
 		return codextui.Message{
 			Role:             codextui.RoleHistory,
-			Text:             summary,
-			RawText:          summary,
+			Text:             text,
+			RawText:          text,
 			ReasoningRawText: raw,
 			TranscriptOnly:   true,
 			ItemID:           strings.TrimSpace(item.ID),
@@ -2345,6 +2341,37 @@ func reasoningBlockVariants(summaryParts []string, contentParts []string, fallba
 		raw = strings.TrimSpace(historycell.NewReasoningSummaryBlock(combined).Content)
 	}
 	return summary, raw
+}
+
+// reasoningProjection names which Rust reasoning projection an item-to-message
+// conversion follows. The in-session chatwidget replays a reasoning item as a
+// transcript-only block built from the summary parts (plus the raw parts when
+// visible); the session-transcript pager projects the *cell* form, where the raw
+// content replaces the split summary outright (thread_transcript.rs).
+type reasoningProjection string
+
+const (
+	reasoningProjectionChatWidget       reasoningProjection = "chat_widget"
+	reasoningProjectionThreadTranscript reasoningProjection = "thread_transcript"
+)
+
+// reasoningProjectionText reports the reasoning entry's text and the raw
+// chain-of-thought variant the transcript-only renderer selects when raw
+// reasoning is visible.
+func reasoningProjectionText(item appserver.ThreadItem, projection reasoningProjection, showRawReasoning bool) (text string, raw string) {
+	summaryParts := remoteTUIThreadItemReasoningSummaryParts(item)
+	contentParts := remoteTUIThreadItemReasoningContentParts(item)
+	if projection == reasoningProjectionThreadTranscript {
+		// thread_transcript.rs: with raw reasoning visible and content present
+		// the cell shows only the raw content under a "Reasoning" heading;
+		// otherwise it shows the split summary.
+		if showRawReasoning && len(contentParts) > 0 {
+			return strings.TrimSpace(strings.Join(contentParts, "\n\n")), ""
+		}
+		summary, _ := reasoningBlockVariants(summaryParts, nil, remoteTUIThreadItemReasoningText(item))
+		return summary, ""
+	}
+	return reasoningBlockVariants(summaryParts, contentParts, remoteTUIThreadItemReasoningText(item))
 }
 
 func remoteTUIThreadItemToolText(item appserver.ThreadItem) string {

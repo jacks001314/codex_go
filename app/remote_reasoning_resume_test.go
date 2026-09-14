@@ -34,7 +34,7 @@ func TestRemoteTUIThreadActiveReasoning(t *testing.T) {
 	// completion replaces the restored snapshot instead of duplicating it.
 	assertTranscriptOnlyReasoning := func(status appserver.TurnStatus) {
 		t.Helper()
-		messages := remoteTUIThreadMessagesFromThread(activeReasoningThreadFixture(status))
+		messages := remoteTUIThreadMessagesFromThread(activeReasoningThreadFixture(status), reasoningProjectionChatWidget, false)
 		found := false
 		for _, message := range messages {
 			if !strings.Contains(message.Text, "Step one") {

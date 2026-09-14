@@ -101,7 +101,7 @@ func TestInteractiveSessionMessagesHideContextInstructionItems(t *testing.T) {
 		CreatedAt: time.Unix(1700000002, 0).UTC(),
 	}}}
 
-	messages := interactiveSessionMessagesFromRecord(record)
+	messages := interactiveSessionMessagesFromRecord(record, reasoningProjectionChatWidget, false)
 	if len(messages) != 1 || messages[0].Text != "visible" {
 		t.Fatalf("messages = %#v", messages)
 	}
@@ -116,7 +116,7 @@ func TestInteractiveSessionMessagesReplayReviewLifecycleLikeRust(t *testing.T) {
 		{ID: "review-assistant", Type: "agent_message", Role: "assistant", Text: "Found one issue", CreatedAt: now.Add(3 * time.Second)},
 	}}
 
-	messages := interactiveSessionMessagesFromRecord(record)
+	messages := interactiveSessionMessagesFromRecord(record, reasoningProjectionChatWidget, false)
 	if len(messages) != 3 {
 		t.Fatalf("messages = %#v", messages)
 	}
@@ -136,7 +136,7 @@ func TestRemoteThreadMessagesReplayReviewLifecycleLikeRust(t *testing.T) {
 		{ID: "review-assistant", Type: "agentMessage", Role: "assistant", Text: "Found one issue"},
 	}}}}
 
-	messages := remoteTUIThreadMessagesFromThread(thread)
+	messages := remoteTUIThreadMessagesFromThread(thread, reasoningProjectionChatWidget, false)
 	if len(messages) != 3 {
 		t.Fatalf("messages = %#v", messages)
 	}
@@ -149,11 +149,11 @@ func TestRemoteThreadMessagesReplayReviewLifecycleLikeRust(t *testing.T) {
 }
 
 func TestInteractiveAndRemoteSessionMessagesReplayContextCompactionLikeRust(t *testing.T) {
-	local := interactiveSessionMessagesFromRecord(&session.Record{Items: []session.Item{{ID: "compact-1", Type: "contextCompaction"}}})
+	local := interactiveSessionMessagesFromRecord(&session.Record{Items: []session.Item{{ID: "compact-1", Type: "contextCompaction"}}}, reasoningProjectionChatWidget, false)
 	if len(local) != 1 || local[0].Role != codextui.RoleHistory || local[0].Text != "Context compacted" {
 		t.Fatalf("local compaction replay = %#v", local)
 	}
-	remote := remoteTUIThreadMessagesFromThread(&appserver.Thread{Turns: []appserver.Turn{{Items: []appserver.ThreadItem{{ID: "compact-1", Type: "contextCompaction"}}}}})
+	remote := remoteTUIThreadMessagesFromThread(&appserver.Thread{Turns: []appserver.Turn{{Items: []appserver.ThreadItem{{ID: "compact-1", Type: "contextCompaction"}}}}}, reasoningProjectionChatWidget, false)
 	if len(remote) != 1 || remote[0].Role != codextui.RoleHistory || remote[0].Text != "Context compacted" {
 		t.Fatalf("remote compaction replay = %#v", remote)
 	}
@@ -194,7 +194,7 @@ func TestInteractiveRepairImageGenerationItemsSavesLegacyRawCall(t *testing.T) {
 	if string(bytes) != "foo" {
 		t.Fatalf("saved bytes = %q", string(bytes))
 	}
-	message, ok := interactiveSessionMessageFromItem(item)
+	message, ok := interactiveSessionMessageFromItem(item, reasoningProjectionChatWidget, false)
 	if !ok || strings.Contains(message.Text, "Zm9v") || !strings.Contains(message.Text, "Saved to: "+savedPath) {
 		t.Fatalf("message = %#v ok=%v", message, ok)
 	}

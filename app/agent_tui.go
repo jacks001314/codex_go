@@ -97,7 +97,7 @@ func interactiveLocalSwitchAgentThread(store *session.Store, threadID string) (c
 	}
 	return codextea.AgentThreadSwitchResponse{
 		Entry:    localAgentEntryFromRecord(record, primaryThreadID),
-		Messages: interactiveSessionMessagesFromRecord(record),
+		Messages: interactiveSessionMessagesFromRecord(record, reasoningProjectionChatWidget, false),
 		Status:   status,
 		// Rust #43360: carry the thread's app-server model metadata.
 		Model:    strings.TrimSpace(record.Metadata.Model),

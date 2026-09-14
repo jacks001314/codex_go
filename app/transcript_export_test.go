@@ -173,7 +173,7 @@ func TestReasoningRawVisibilityGatesRawContent(t *testing.T) {
 		},
 	}
 
-	message, ok := remoteTUIMessageFromThreadItem(item)
+	message, ok := remoteTUIMessageFromThreadItem(item, reasoningProjectionChatWidget, false)
 	if !ok || !message.TranscriptOnly || message.ItemID != "r1" {
 		t.Fatalf("reasoning message = %#v ok=%v", message, ok)
 	}
@@ -191,5 +191,16 @@ func TestReasoningRawVisibilityGatesRawContent(t *testing.T) {
 	}
 	if got := transcriptExportReasoningText(item, true); got != "Raw chain of thought." {
 		t.Fatalf("raw-on export text = %q", got)
+	}
+
+	// The pager transcript projects the same cell form: raw reasoning replaces
+	// the summary, and the entry carries no separate raw variant.
+	pagerRaw, ok := remoteTUIMessageFromThreadItem(item, reasoningProjectionThreadTranscript, true)
+	if !ok || pagerRaw.Text != "Raw chain of thought." || pagerRaw.ReasoningRawText != "" {
+		t.Fatalf("raw-on pager message = %#v ok=%v", pagerRaw, ok)
+	}
+	pagerSummary, ok := remoteTUIMessageFromThreadItem(item, reasoningProjectionThreadTranscript, false)
+	if !ok || pagerSummary.Text != "Summary body." {
+		t.Fatalf("raw-off pager message = %#v ok=%v", pagerSummary, ok)
 	}
 }

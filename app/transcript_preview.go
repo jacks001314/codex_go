@@ -191,7 +191,7 @@ func reverseTranscriptPreviewLines(lines []codextui.TranscriptPreviewLine) {
 
 // interactiveRemoteSessionTranscriptHandler loads a session's full transcript
 // for the resume picker's ctrl+t overlay (Rust PickerLoadRequest::Transcript).
-func interactiveRemoteSessionTranscriptHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.SessionTranscriptFunc {
+func interactiveRemoteSessionTranscriptHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, showRawReasoning bool) codextea.SessionTranscriptFunc {
 	return func(threadID string) ([]codextui.Message, error) {
 		threadID = strings.TrimSpace(threadID)
 		if threadID == "" {
@@ -206,13 +206,16 @@ func interactiveRemoteSessionTranscriptHandler(ctx context.Context, endpoint *ap
 		if err != nil {
 			return nil, err
 		}
-		return remoteTUIThreadMessagesFromThread(thread), nil
+		// The pager transcript projects the thread's cells (thread_transcript.rs),
+		// so its reasoning entries follow that projection rather than the
+		// in-session chatwidget block.
+		return remoteTUIThreadMessagesFromThread(thread, reasoningProjectionThreadTranscript, showRawReasoning), nil
 	}
 }
 
 // interactiveSessionTranscriptHandler loads the embedded session's transcript
 // from the local store.
-func interactiveSessionTranscriptHandler() codextea.SessionTranscriptFunc {
+func interactiveSessionTranscriptHandler(showRawReasoning bool) codextea.SessionTranscriptFunc {
 	return func(threadID string) ([]codextui.Message, error) {
 		threadID = strings.TrimSpace(threadID)
 		if threadID == "" {
@@ -222,6 +225,6 @@ func interactiveSessionTranscriptHandler() codextea.SessionTranscriptFunc {
 		if err != nil {
 			return nil, err
 		}
-		return interactiveSessionMessagesFromRecord(record), nil
+		return interactiveSessionMessagesFromRecord(record, reasoningProjectionThreadTranscript, showRawReasoning), nil
 	}
 }

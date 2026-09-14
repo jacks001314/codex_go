@@ -41,7 +41,7 @@ func TestRemoteTUIThreadMessagesRestoreCompletionMetadataLikeRust(t *testing.T) 
 		},
 	}}
 
-	messages := remoteTUIThreadMessagesFromThread(thread)
+	messages := remoteTUIThreadMessagesFromThread(thread, reasoningProjectionChatWidget, false)
 	footers := 0
 	for _, message := range messages {
 		if message.Role == codextui.RoleHistory && strings.Contains(message.Text, "done ") {
@@ -61,7 +61,7 @@ func TestRemoteTUIThreadMessagesRestoreCompletionMetadataLikeRust(t *testing.T) 
 		ID:     "turn-completed-bare",
 		Status: appserver.TurnStatusCompleted,
 		Items:  []appserver.ThreadItem{{ID: "m3", Type: "agentMessage", Text: "done"}},
-	}}})
+	}}}, reasoningProjectionChatWidget, false)
 	for _, message := range bare {
 		if strings.Contains(message.Text, "done ") {
 			t.Fatalf("bare completed turn restored a footer: %#v", bare)

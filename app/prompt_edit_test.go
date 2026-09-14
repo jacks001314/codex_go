@@ -203,7 +203,7 @@ func TestPromptImageExtractionFromPersistedUserMessages(t *testing.T) {
 			{Type: "input_audio", AudioURL: "data:audio/wav;base64,zzz"},
 		},
 	}
-	message, ok := remoteTUIMessageFromThreadItem(remoteItem)
+	message, ok := remoteTUIMessageFromThreadItem(remoteItem, reasoningProjectionChatWidget, false)
 	if !ok {
 		t.Fatal("remote user message should convert")
 	}
@@ -224,7 +224,7 @@ func TestPromptImageExtractionFromPersistedUserMessages(t *testing.T) {
 			{Type: "input_image", ImageURL: "https://example.test/d.png"},
 		},
 	}
-	localMessage, ok := interactiveSessionMessageFromItem(localItem)
+	localMessage, ok := interactiveSessionMessageFromItem(localItem, reasoningProjectionChatWidget, false)
 	if !ok {
 		t.Fatal("local user message should convert")
 	}
