@@ -319,9 +319,16 @@ func appserverMCPElicitationParams(request *mcp.MCPElicitationRequest) *MCPElici
 		turnID = &turnIDValue
 	}
 	mode := "form"
-	switch strings.TrimSpace(request.Method) {
+	switch method := strings.TrimSpace(request.Method); method {
 	case "openai/form", "openaiForm", "openai/userVerification":
-		mode = strings.TrimSpace(request.Method)
+		mode = method
+	case "openai/elicitation/create":
+		// The umbrella OpenAI method carries its kind in the payload: the form
+		// mode is Rust's OpenAiElicitationForm, whose client-facing mode is
+		// `openaiForm`.
+		if strings.TrimSpace(request.Mode) == "form" {
+			mode = "openaiForm"
+		}
 	}
 	if strings.TrimSpace(request.URL) != "" {
 		mode = "url"

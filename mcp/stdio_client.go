@@ -1054,9 +1054,28 @@ func mcpClientRequestResult(ctx context.Context, serverName string, elicitation 
 		return map[string]any{"roots": mcpRootsFromContext(ctx)}, nil
 	case "elicitation/create", "openai/form":
 		return mcpElicitationResult(ctx, serverName, elicitation, method, id, params), nil
+	case "openai/elicitation/create":
+		// Rust dispatches the OpenAI elicitation by its payload mode: the form
+		// mode elicits, while a mode this client cannot serve falls through to the
+		// default handler (rmcp-client's capability-gated arms).
+		if mcpElicitationRequestMode(params) != "form" {
+			return nil, &stdioRPCError{Code: -32601, Message: "method not found: " + method}
+		}
+		return mcpElicitationResult(ctx, serverName, elicitation, method, id, params), nil
 	default:
 		return nil, &stdioRPCError{Code: -32601, Message: "method not found: " + method}
 	}
+}
+
+// mcpElicitationRequestMode reads an elicitation payload's `mode`, or "".
+func mcpElicitationRequestMode(params json.RawMessage) string {
+	var payload struct {
+		Mode string `json:"mode"`
+	}
+	if len(params) == 0 || json.Unmarshal(params, &payload) != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Mode)
 }
 
 func readMCPFrame(reader *bufio.Reader) ([]byte, error) {

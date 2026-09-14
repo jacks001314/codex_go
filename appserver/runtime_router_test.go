@@ -7221,6 +7221,19 @@ func TestAppserverMCPElicitationParamsUserVerificationMode(t *testing.T) {
 	if openAIForm.Mode != "openaiForm" {
 		t.Fatalf("openaiForm mode = %q", openAIForm.Mode)
 	}
+	// The umbrella method carries the kind in the payload: its form mode is the
+	// OpenAI elicitation form, whose client-facing mode is openaiForm.
+	umbrella := appserverMCPElicitationParams(&mcp.MCPElicitationRequest{
+		ServerName:      "docs",
+		ThreadID:        "thread-1",
+		Method:          "openai/elicitation/create",
+		Mode:            "form",
+		Message:         "Approve?",
+		RequestedSchema: map[string]any{"type": "object"},
+	})
+	if umbrella.Mode != "openaiForm" {
+		t.Fatalf("umbrella mode = %q", umbrella.Mode)
+	}
 }
 
 func TestRuntimeRouterDispatchesExperienceAPIs(t *testing.T) {

@@ -22,6 +22,9 @@ type MCPElicitationRequest struct {
 	ID              json.RawMessage `json:"id,omitempty"`
 	Message         string          `json:"message,omitempty"`
 	RequestedSchema any             `json:"requestedSchema,omitempty"`
+	// Mode is the OpenAI elicitation's kind when the request arrived on the
+	// umbrella `openai/elicitation/create` method (Rust's payload mode).
+	Mode string `json:"-"`
 	// Title / Description / Challenge carry an `openai/userVerification`
 	// elicitation's fields (Rust's Elicitation::UserVerification).
 	Title         string          `json:"title,omitempty"`
@@ -90,6 +93,9 @@ func parseMCPElicitationRequest(serverName string, method string, id json.RawMes
 		return request
 	}
 	request.Message = stringFromAnyMap(raw, "message")
+	// The OpenAI elicitation arrives on the umbrella method
+	// `openai/elicitation/create` with its kind in the payload's mode.
+	request.Mode = stringFromAnyMap(raw, "mode")
 	request.URL = stringFromAnyMap(raw, "url")
 	request.ElicitationID = stringFromAnyMap(raw, "elicitationId")
 	if request.ElicitationID == "" {
