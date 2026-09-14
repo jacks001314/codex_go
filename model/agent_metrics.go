@@ -335,14 +335,16 @@ func (r *ResponsesAgentRunner) recordWebsocketRequest(err error, duration time.D
 // recordWebsocketConnectRecord mirrors the record half of
 // SessionTelemetry::record_websocket_connect, which Rust reports around the
 // handshake attempt (the connect telemetry always describes a fresh connection).
-func (r *ResponsesAgentRunner) recordWebsocketConnectRecord(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, httpRequest *http.Request, handshakeResponse *http.Response, dialErr error, duration time.Duration, retryAfterUnauthorized bool) {
+func (r *ResponsesAgentRunner) recordWebsocketConnectRecord(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, httpRequest *http.Request, handshakeResponse *http.Response, dialErr error, duration time.Duration, recoveryMode string, recoveryPhase string) {
 	if r == nil || r.Telemetry == nil {
 		return
 	}
 	record := WebsocketConnectRecord{
 		Duration:               duration,
 		Endpoint:               r.responsesEndpoint(apiRequestModel(apiRequest), request).Path(),
-		RetryAfterUnauthorized: retryAfterUnauthorized,
+		RetryAfterUnauthorized: strings.TrimSpace(recoveryMode) != "" || strings.TrimSpace(recoveryPhase) != "",
+		RecoveryMode:           recoveryMode,
+		RecoveryPhase:          recoveryPhase,
 	}
 	if httpRequest != nil && strings.TrimSpace(httpRequest.Header.Get("Authorization")) != "" {
 		record.AuthHeaderAttached = true

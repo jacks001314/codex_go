@@ -122,6 +122,8 @@ func TestRecordWebsocketConnectRoutesLogAndTraceLikeRust(t *testing.T) {
 		AuthHeaderAttached:     true,
 		AuthHeaderName:         "authorization",
 		RetryAfterUnauthorized: true,
+		RecoveryMode:           "managed",
+		RecoveryPhase:          "refresh_token",
 		RequestID:              "req-ws-401",
 		CFRay:                  "ray-ws-401",
 		AuthError:              "missing_authorization_header",
@@ -158,7 +160,7 @@ func TestRecordWebsocketConnectRoutesLogAndTraceLikeRust(t *testing.T) {
 				t.Fatalf("log attribute %s = %q, want %q", key, got, want)
 			}
 		}
-		for _, absent := range []string{"http.response.status_code", "error.message", "auth.request_id"} {
+		for _, absent := range []string{"http.response.status_code", "error.message", "auth.request_id", "auth.recovery_mode", "auth.recovery_phase"} {
 			if _, ok := success[absent]; ok {
 				t.Fatalf("successful handshake reported %s: %#v", absent, success)
 			}
@@ -169,6 +171,8 @@ func TestRecordWebsocketConnectRoutesLogAndTraceLikeRust(t *testing.T) {
 			"http.response.status_code":     "401",
 			"error.message":                 "handshake failed: HTTP 401",
 			"auth.retry_after_unauthorized": "true",
+			"auth.recovery_mode":            "managed",
+			"auth.recovery_phase":           "refresh_token",
 			"auth.request_id":               "req-ws-401",
 			"auth.cf_ray":                   "ray-ws-401",
 			"auth.error":                    "missing_authorization_header",

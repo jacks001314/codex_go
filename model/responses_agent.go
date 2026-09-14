@@ -573,7 +573,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	conn, response, err := websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: httpRequest.Header})
 	// The prewarm handshake reports the same attempt telemetry, with a fresh
 	// connection and no retry.
-	r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), false)
+	r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), "", "")
 	if err != nil {
 		if response != nil && response.StatusCode == http.StatusUpgradeRequired {
 			r.disableWebsockets()
@@ -712,10 +712,10 @@ func clearToolResultMetadataInPromptItem(value any) any {
 }
 
 func (r *ResponsesAgentRunner) RunWebSocket(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
-	return r.runWebSocket(ctx, request, false, false, &authRecoveryState{})
+	return r.runWebSocket(ctx, request, "", "", false, &authRecoveryState{})
 }
 
-func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentRequest, authRetried, transportRetried bool, recovery *authRecoveryState) (*AgentResponse, error) {
+func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentRequest, recoveryMode, recoveryPhase string, transportRetried bool, recovery *authRecoveryState) (*AgentResponse, error) {
 	if r == nil || !r.SupportsWebsockets || r.websocketsDisabled() {
 		return r.Run(ctx, request)
 	}
@@ -779,23 +779,26 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		conn, response, err = websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: httpRequest.Header})
 		// Rust reports every handshake attempt with connection_reused false,
 		// because a dial always establishes a new connection.
-		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), authRetried)
+		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), recoveryMode, recoveryPhase)
 		if err != nil {
 			if response != nil && response.StatusCode == http.StatusUpgradeRequired {
 				r.disableWebsockets()
 				return r.Run(ctx, request)
 			}
-			if response != nil && response.StatusCode == http.StatusUnauthorized && !authRetried {
+			// Rust's websocket loop recovers from each recoverable auth error and
+			// `continue`s: the plan cursor bounds the retries, so a no-change
+			// reload retries once and the following 401 runs the token refresh.
+			if response != nil && response.StatusCode == http.StatusUnauthorized {
 				debug := authRecoveryDebug{
 					RequestID:     responseHeaderValue(response.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader),
 					CFRay:         responseHeaderValue(response.Header, "cf-ray"),
 					AuthError:     responseHeaderValue(response.Header, "x-openai-authorization-error"),
 					AuthErrorCode: responseAuthorizationErrorCode(response.Header),
 				}
-				if _, _, refreshErr := r.recoverUnauthorizedAuth(ctx, recovery, debug); refreshErr == nil {
+				if mode, phase, refreshErr := r.recoverUnauthorizedAuth(ctx, recovery, debug); refreshErr == nil {
 					session.mu.Unlock()
 					locked = false
-					return r.runWebSocket(ctx, request, true, transportRetried, recovery)
+					return r.runWebSocket(ctx, request, string(mode), string(phase), transportRetried, recovery)
 				}
 			}
 			if response != nil {
@@ -815,7 +818,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		if !transportRetried {
 			session.mu.Unlock()
 			locked = false
-			return r.runWebSocket(ctx, request, authRetried, true, recovery)
+			return r.runWebSocket(ctx, request, recoveryMode, recoveryPhase, true, recovery)
 		}
 		r.disableWebsockets()
 		return r.Run(ctx, request)
@@ -832,7 +835,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			if !receivedEvent && !transportRetried {
 				session.mu.Unlock()
 				locked = false
-				return r.runWebSocket(ctx, request, authRetried, true, recovery)
+				return r.runWebSocket(ctx, request, recoveryMode, recoveryPhase, true, recovery)
 			}
 			if !receivedEvent {
 				r.disableWebsockets()
@@ -868,7 +871,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 				clone.PreviousResponseID = ""
 				session.mu.Unlock()
 				locked = false
-				return r.runWebSocket(ctx, &clone, authRetried, true, recovery)
+				return r.runWebSocket(ctx, &clone, recoveryMode, recoveryPhase, true, recovery)
 			}
 			return nil, fmt.Errorf("responses websocket request failed: %s", websocketEventError(event))
 		}
@@ -1668,7 +1671,6 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequest(httpRequest *http.Request)
 }
 
 func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, accept string, maxRetries uint64) (*http.Response, error) {
-	var lastErr error
 	retryTooManyRequests := apiRequest != nil && apiRequest.Stream
 	// recovery tracks this request's unauthorized handling (Rust's
 	// UnauthorizedRecovery plus the provider-owned recovery latch).
@@ -1679,7 +1681,11 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 	// recoveryMode/recoveryPhase name the recovery that produced the retry, which
 	// the following attempt's records report (Rust's PendingUnauthorizedRetry).
 	recoveryMode, recoveryPhase := "", ""
-	for attempt := uint64(0); attempt <= maxRetries; attempt++ {
+	// Rust's 401 handling loop is bounded by the recovery plan (the provider
+	// attempt latch plus the step cursor), not the transport retry budget, so an
+	// auth retry does not consume `maxRetries`.
+	transportRetries := uint64(0)
+	for attempt := uint64(0); ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -1720,29 +1726,40 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 			"transport_error": diagnosticErrorMessage(err),
 			"retryable":       shouldRetry,
 		})
-		if shouldRetry && attempt < maxRetries {
-			lastErr = err
-			if httpResponse != nil && httpResponse.StatusCode == http.StatusUnauthorized {
-				debug := authRecoveryDebug{
-					RequestID:     responseHeaderValue(httpResponse.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader),
-					CFRay:         responseHeaderValue(httpResponse.Header, "cf-ray"),
-					AuthError:     responseHeaderValue(httpResponse.Header, "x-openai-authorization-error"),
-					AuthErrorCode: responseAuthorizationErrorCode(httpResponse.Header),
+		if shouldRetry && httpResponse != nil && httpResponse.StatusCode == http.StatusUnauthorized {
+			debug := authRecoveryDebug{
+				RequestID:     responseHeaderValue(httpResponse.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader),
+				CFRay:         responseHeaderValue(httpResponse.Header, "cf-ray"),
+				AuthError:     responseHeaderValue(httpResponse.Header, "x-openai-authorization-error"),
+				AuthErrorCode: responseAuthorizationErrorCode(httpResponse.Header),
+			}
+			mode, phase, recoverErr := r.recoverUnauthorizedAuth(ctx, recovery, debug)
+			if recoverErr != nil {
+				if errors.Is(recoverErr, errNoAuthRecoveryStep) {
+					// The plan ran no step, so Rust surfaces the original 401
+					// (Go hands the response back for the caller's error).
+					if err != nil {
+						return nil, err
+					}
+					return httpResponse, nil
 				}
-				mode, phase, _ := r.recoverUnauthorizedAuth(ctx, recovery, debug)
-				// Rust's PendingUnauthorizedRetry reports the recovery that
-				// produced this retry on the next attempt's records.
-				recoveryMode, recoveryPhase = string(mode), string(phase)
-				retryAfterUnauthorized = true
-			} else {
-				retryAfterUnauthorized = false
-				recoveryMode, recoveryPhase = "", ""
+				drainResponsesResponseBody(httpResponse)
+				return nil, recoverErr
 			}
+			// Rust's PendingUnauthorizedRetry reports the recovery that produced
+			// this retry on the next attempt's records.
+			recoveryMode, recoveryPhase = string(mode), string(phase)
+			retryAfterUnauthorized = true
+			drainResponsesResponseBody(httpResponse)
+			recordResponsesRetry("request", attempt+1, 0, "http")
+			continue
+		}
+		if shouldRetry && transportRetries < maxRetries {
+			transportRetries++
+			retryAfterUnauthorized = false
+			recoveryMode, recoveryPhase = "", ""
 			delay := responsesRetryDelay(httpResponse, attempt+1)
-			if httpResponse != nil && httpResponse.Body != nil {
-				_, _ = io.Copy(io.Discard, io.LimitReader(httpResponse.Body, 4<<10))
-				_ = httpResponse.Body.Close()
-			}
+			drainResponsesResponseBody(httpResponse)
 			recordResponsesRetry("request", attempt+1, delay, "http")
 			if err := sleepWithContext(ctx, delay); err != nil {
 				return nil, err
@@ -1754,10 +1771,16 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 		}
 		return httpResponse, nil
 	}
-	if lastErr != nil {
-		return nil, lastErr
+}
+
+// drainResponsesResponseBody discards a bounded prefix of a response body the
+// retry loop does not read, so the connection can be reused.
+func drainResponsesResponseBody(httpResponse *http.Response) {
+	if httpResponse == nil || httpResponse.Body == nil {
+		return
 	}
-	return nil, errors.New("responses API retry limit reached")
+	_, _ = io.Copy(io.Discard, io.LimitReader(httpResponse.Body, 4<<10))
+	_ = httpResponse.Body.Close()
 }
 
 func responsesUserMessage(prompt string) responsesInputMessage {
@@ -2793,6 +2816,12 @@ type authRecoveryDebug struct {
 
 // recordAuthRecovery reports one recovery step (Rust's record_auth_recovery).
 func (r *ResponsesAgentRunner) recordAuthRecovery(ctx context.Context, mode auth.UnauthorizedRecoveryMode, step auth.UnauthorizedRecoveryStep, outcome string, debug authRecoveryDebug, authStateChanged *bool) {
+	r.recordAuthRecoveryWithReason(ctx, mode, step, outcome, "", debug, authStateChanged)
+}
+
+// recordAuthRecoveryWithReason reports one recovery step with Rust's
+// recovery_reason (only the not-run outcome carries one).
+func (r *ResponsesAgentRunner) recordAuthRecoveryWithReason(ctx context.Context, mode auth.UnauthorizedRecoveryMode, step auth.UnauthorizedRecoveryStep, outcome string, reason string, debug authRecoveryDebug, authStateChanged *bool) {
 	if r == nil || r.Telemetry == nil {
 		return
 	}
@@ -2800,6 +2829,7 @@ func (r *ResponsesAgentRunner) recordAuthRecovery(ctx context.Context, mode auth
 		Mode:             string(mode),
 		Step:             string(step),
 		Outcome:          outcome,
+		RecoveryReason:   reason,
 		RequestID:        debug.RequestID,
 		CFRay:            debug.CFRay,
 		AuthError:        debug.AuthError,

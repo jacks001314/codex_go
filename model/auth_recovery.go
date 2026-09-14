@@ -26,6 +26,11 @@ const (
 // provider-owned latch plus the plan position.
 type authRecoveryState struct {
 	providerAttempted bool
+	// planIndex is Rust's UnauthorizedRecovery step cursor: each 401 attempts
+	// the current step and advances the cursor when that step completes, so a
+	// no-change reload is reported on the first 401 and the token refresh on
+	// the next.
+	planIndex int
 }
 
 // authRecoveryStep is one step of the recovery plan: the mode/step names it
@@ -34,6 +39,10 @@ type authRecoveryStep struct {
 	mode    auth.UnauthorizedRecoveryMode
 	step    auth.UnauthorizedRecoveryStep
 	attempt func(context.Context) (bool, error)
+	// doneOnPermanent marks Rust's Reload step, whose Skipped outcome (the
+	// account mismatch) moves the plan to Done; a failed refresh leaves the
+	// cursor on the refresh step, matching Rust's `?`.
+	doneOnPermanent bool
 }
 
 // recoverUnauthorizedAuth runs Rust's unauthorized handling for one 401: the
@@ -56,37 +65,64 @@ func (r *ResponsesAgentRunner) recoverUnauthorizedAuth(ctx context.Context, stat
 	}
 
 	steps := r.authRecoverySteps()
-	if len(steps) == 0 {
-		r.recordAuthRecovery(ctx, "", "", auth.AuthRecoveryOutcomeNotRun, debug, nil)
-		return "", "", errors.New("no auth recovery step is available")
-	}
-	var lastErr error
-	for index, step := range steps {
+	if state.planIndex < len(steps) {
+		step := steps[state.planIndex]
 		changed, err := step.attempt(ctx)
 		if err == nil {
-			// Rust advances its cursor and retries with the reloaded auth; the
-			// remaining steps run on the next 401. A step that changed nothing
-			// leaves the auth as it was, so the plan continues.
-			if changed || index == len(steps)-1 {
-				r.recordAuthRecovery(ctx, step.mode, step.step, auth.AuthRecoveryOutcomeSucceeded, debug, &changed)
-				return step.mode, step.step, nil
-			}
+			// Rust advances the cursor and retries with the reloaded auth; the
+			// remaining steps run on the next 401.
+			state.planIndex++
 			r.recordAuthRecovery(ctx, step.mode, step.step, auth.AuthRecoveryOutcomeSucceeded, debug, &changed)
-			continue
+			return step.mode, step.step, nil
 		}
-		lastErr = err
 		outcome := auth.AuthRecoveryOutcomeFailedTransient
 		if auth.IsPermanentRefreshFailure(err) {
-			// Rust stops the plan on a permanent failure (an account mismatch, for
-			// example) instead of trying the later steps.
 			outcome = auth.AuthRecoveryOutcomeFailedPermanent
+			if step.doneOnPermanent {
+				state.planIndex = len(steps)
+			}
 		}
 		r.recordAuthRecovery(ctx, step.mode, step.step, outcome, debug, nil)
-		if outcome == auth.AuthRecoveryOutcomeFailedPermanent {
-			return "", "", err
-		}
+		return "", "", err
 	}
-	return "", "", lastErr
+	// The plan is exhausted (or was never available): Rust reports
+	// recovery_not_run at the cursor's step and reason, then surfaces the
+	// original 401.
+	mode, stepName, reason := r.authRecoveryNotRunPosition(steps)
+	r.recordAuthRecoveryWithReason(ctx, mode, stepName, auth.AuthRecoveryOutcomeNotRun, reason, debug, nil)
+	return "", "", errNoAuthRecoveryStep
+}
+
+// errNoAuthRecoveryStep reports a 401 that ran no recovery step (Rust's
+// recovery_not_run): the caller surfaces the original error instead of retrying.
+var errNoAuthRecoveryStep = errors.New("no auth recovery step is available")
+
+// authRecoveryNotRunPosition mirrors Rust UnauthorizedRecovery::mode_name /
+// step_name / unavailable_reason for a 401 that ran no step.
+func (r *ResponsesAgentRunner) authRecoveryNotRunPosition(steps []authRecoveryStep) (auth.UnauthorizedRecoveryMode, auth.UnauthorizedRecoveryStep, string) {
+	if len(steps) > 0 {
+		return steps[0].mode, auth.UnauthorizedRecoveryStepDone, "recovery_exhausted"
+	}
+	return auth.UnauthorizedRecoveryMode("none"), auth.UnauthorizedRecoveryStep("none"), r.authRecoveryUnavailableReason()
+}
+
+// authRecoveryUnavailableReason mirrors the parts of Rust's
+// UnauthorizedRecovery::unavailable_reason Go can distinguish when no plan is
+// available: an absent auth manager, a personal-access-token session, and a
+// session that is not ChatGPT auth.
+func (r *ResponsesAgentRunner) authRecoveryUnavailableReason() string {
+	if r == nil || r.AuthSnapshot == nil {
+		return "auth_manager_missing"
+	}
+	if r.AuthSnapshot.Mode() == "chatgptAuthTokens" {
+		return "not_refreshable_auth"
+	}
+	if !authHasChatGPTAccount(r.AuthSnapshot) {
+		return "not_chatgpt_auth"
+	}
+	// The remaining case is a managed session with no Codex home to reload the
+	// stored credentials from.
+	return "auth_manager_missing"
 }
 
 // recoverProviderAuth runs the provider-owned credential recovery (at most once
@@ -120,6 +156,7 @@ func (r *ResponsesAgentRunner) authRecoverySteps() []authRecoveryStep {
 				attempt: func(ctx context.Context) (bool, error) {
 					return r.reloadStoredChatGPTAuth(ctx)
 				},
+				doneOnPermanent: true,
 			},
 			{
 				mode: auth.UnauthorizedRecoveryModeManaged,

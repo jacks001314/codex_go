@@ -127,3 +127,34 @@ func TestRecordAuthRecoveryOmitsAbsentFieldsLikeRust(t *testing.T) {
 		t.Fatalf("record attributes = %#v", attributes)
 	}
 }
+
+// An exhausted plan reports the cursor's step and recovery_reason, mirroring
+// Rust UnauthorizedRecovery::unavailable_reason.
+func TestRecordAuthRecoveryReportsExhaustedReasonLikeRust(t *testing.T) {
+	logBodies := make(chan map[string]any, 1)
+	logServer := newLogBatchServer(t, logBodies)
+	defer logServer.Close()
+	logsClient := NewLogsClient(LogsClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       logServer.URL + "/v1/logs",
+		ExportInterval: -1,
+	})
+	session := NewSessionTelemetry(SessionTelemetryMetadata{ConversationID: "thread-1"})
+	session.Logs = logsClient
+	session.RecordAuthRecovery(context.Background(), model.AuthRecoveryRecord{
+		Mode:           "managed",
+		Step:           "done",
+		Outcome:        "recovery_not_run",
+		RecoveryReason: "recovery_exhausted",
+	})
+	if err := logsClient.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	body := <-logBodies
+	_, record := singleLogRecord(t, body)
+	attributes := logRecordAttributes(t, record)
+	if attributes["auth.mode"] != "managed" || attributes["auth.step"] != "done" ||
+		attributes["auth.recovery_reason"] != "recovery_exhausted" {
+		t.Fatalf("record attributes = %#v", attributes)
+	}
+}

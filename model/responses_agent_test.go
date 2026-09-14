@@ -2411,11 +2411,99 @@ func TestResponsesAgentRunnerRecordsWebsocketConnectFailureLikeRust(t *testing.T
 	}
 }
 
+// A websocket handshake keeps retrying while the recovery plan has steps, and
+// each handshake attempt reports the recovery that produced it (Rust's
+// handle_unauthorized loop plus PendingUnauthorizedRetry on the connect record).
+func TestResponsesAgentRunnerWebsocketHandshakeFollowsRecoveryPlan(t *testing.T) {
+	home := t.TempDir()
+	initialSnapshot := &auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"access_token":  "old-access-token",
+			"refresh_token": "refresh-token",
+			"account_id":    "account-1",
+		},
+	}
+	if err := auth.NewStore(home).Save(*initialSnapshot); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/responses":
+			w.Header().Set("x-request-id", "req-ws-401")
+			w.Header().Set("cf-ray", "ray-ws-401")
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/oauth/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"new-access-token","refresh_token":"new-refresh-token"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	sink := &recordingTelemetrySink{}
+	initialAuth := BearerAuthHeaders("old-access-token", "account-1", false)
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:           &APIProvider{BaseURL: server.URL},
+		Auth:               &initialAuth,
+		SupportsWebsockets: true,
+		CodexHome:          home,
+		AuthSnapshot:       initialSnapshot,
+		AuthIssuer:         server.URL,
+	})
+	runner.Telemetry = sink
+	if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "hello", ThreadID: "thread-1", TurnID: "turn-1"}); err == nil {
+		t.Fatal("RunWebSocket() error = nil")
+	}
+	if len(sink.websocketConnects) != 3 {
+		t.Fatalf("connect records = %#v", sink.websocketConnects)
+	}
+	if first := sink.websocketConnects[0]; first.RetryAfterUnauthorized || first.RecoveryMode != "" {
+		t.Fatalf("first connect record = %#v", first)
+	}
+	if second := sink.websocketConnects[1]; !second.RetryAfterUnauthorized ||
+		second.RecoveryMode != "managed" || second.RecoveryPhase != "reload" {
+		t.Fatalf("second connect record = %#v", second)
+	}
+	if third := sink.websocketConnects[2]; !third.RetryAfterUnauthorized ||
+		third.RecoveryMode != "managed" || third.RecoveryPhase != "refresh_token" {
+		t.Fatalf("third connect record = %#v", third)
+	}
+	if len(sink.authRecoveries) != 3 {
+		t.Fatalf("recovery records = %#v", sink.authRecoveries)
+	}
+	if reload := sink.authRecoveries[0]; reload.Step != "reload" || reload.Outcome != auth.AuthRecoveryOutcomeSucceeded {
+		t.Fatalf("reload record = %#v", reload)
+	}
+	if refresh := sink.authRecoveries[1]; refresh.Step != "refresh_token" || refresh.Outcome != auth.AuthRecoveryOutcomeSucceeded {
+		t.Fatalf("refresh record = %#v", refresh)
+	}
+	// The plan is exhausted on the next handshake, so the last record reports
+	// recovery_not_run at the cursor's step (Rust's has_next() == false path).
+	if exhausted := sink.authRecoveries[2]; exhausted.Step != "done" ||
+		exhausted.Outcome != auth.AuthRecoveryOutcomeNotRun || exhausted.RecoveryReason != "recovery_exhausted" {
+		t.Fatalf("exhausted record = %#v", exhausted)
+	}
+}
+
 // Every HTTP attempt reports its api-request record: the attempt number, the
 // status, the provider-relative endpoint, the auth header the provider attached,
 // the response's request id / cf-ray / auth-error headers, and whether the
 // attempt followed a 401 recovery (Rust's RequestTelemetry::on_request).
 func TestResponsesAgentRunnerRecordsAPIAttemptsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	managedAuth := &auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"access_token":  "token",
+			"refresh_token": "refresh-token",
+			"account_id":    "account-1",
+		},
+	}
+	if err := auth.NewStore(home).Save(*managedAuth); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
@@ -2432,10 +2520,12 @@ func TestResponsesAgentRunnerRecordsAPIAttemptsLikeRust(t *testing.T) {
 	defer server.Close()
 
 	sink := &recordingTelemetrySink{}
-	initialAuth := BearerAuthHeaders("token", "", false)
+	initialAuth := BearerAuthHeaders("token", "account-1", false)
 	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
-		Provider: &APIProvider{BaseURL: server.URL + "/v1", RequestMaxRetries: 1},
-		Auth:     &initialAuth,
+		Provider:     &APIProvider{BaseURL: server.URL + "/v1", RequestMaxRetries: 1},
+		Auth:         &initialAuth,
+		CodexHome:    home,
+		AuthSnapshot: managedAuth,
 	})
 	runner.Telemetry = sink
 	runner.AgentIdentityTelemetry = &codexapi.AgentIdentityTelemetry{AgentID: "agent-1", TaskID: "task-1"}
@@ -2493,7 +2583,9 @@ func TestResponsesAgentRunnerReportsManagedAuthRecoveryLikeRust(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/responses":
 			attempts++
-			if attempts == 1 {
+			// Rust reports the no-change reload on the first 401 and the token
+			// refresh on the next one, so the server rejects both.
+			if attempts <= 2 {
 				w.Header().Set("Retry-After", "0")
 				w.Header().Set("x-request-id", "req-401")
 				w.Header().Set("cf-ray", "ray-401")
@@ -2549,10 +2641,10 @@ func TestResponsesAgentRunnerReportsManagedAuthRecoveryLikeRust(t *testing.T) {
 	if recovery.AuthStateChanged == nil || !*recovery.AuthStateChanged {
 		t.Fatalf("recovery record = %#v", recovery)
 	}
-	if len(sink.apiRequests) != 2 {
+	if len(sink.apiRequests) != 3 {
 		t.Fatalf("api records = %#v", sink.apiRequests)
 	}
-	retry := sink.apiRequests[1]
+	retry := sink.apiRequests[2]
 	if !retry.RetryAfterUnauthorized || retry.RecoveryMode != "managed" || retry.RecoveryPhase != "refresh_token" {
 		t.Fatalf("retry record = %#v", retry)
 	}
@@ -2717,7 +2809,9 @@ func TestResponsesAgentRunnerRefreshesChatGPTAuthAfterUnauthorized(t *testing.T)
 		switch r.URL.Path {
 		case "/v1/responses":
 			attempts++
-			if attempts == 1 {
+			// The no-change reload retries with the stored token first; the
+			// token refresh runs on the 401 that follows (Rust's plan cursor).
+			if attempts <= 2 {
 				if got := r.Header.Get("Authorization"); got != "Bearer old-access-token" {
 					t.Fatalf("first auth = %q", got)
 				}
@@ -2761,7 +2855,7 @@ func TestResponsesAgentRunnerRefreshesChatGPTAuthAfterUnauthorized(t *testing.T)
 	if err != nil {
 		t.Fatalf("Run error = %v", err)
 	}
-	if attempts != 2 || response.Message != "ok" {
+	if attempts != 3 || response.Message != "ok" {
 		t.Fatalf("attempts = %d response = %#v", attempts, response)
 	}
 	loaded, err := auth.NewStore(home).Load()
