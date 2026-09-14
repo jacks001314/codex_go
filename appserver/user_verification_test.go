@@ -176,3 +176,111 @@ func requestWithRawParams(t *testing.T, id RequestID, method Method, params stri
 	}
 	return &Request{JSONRPC: "2.0", ID: id, Method: method, Params: json.RawMessage(params)}
 }
+
+// A network peer may only read the verification status: enroll, delete, and
+// verify report providerUnavailable on a websocket connection, and the gate runs
+// before validation, so a malformed challenge still reports it (Rust's
+// ConnectionOrigin::WebSocket arm). A local transport keeps the validation order.
+func TestRuntimeRouterUserVerificationPeerOriginLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.SetRequestTransport("websocket")
+
+	status := router.Handle(requestWithParams(t, IntID(1), MethodUserVerificationStatus, UserVerificationStatusParams{}))
+	if status.Error != nil {
+		t.Fatalf("websocket status error = %+v", status.Error)
+	}
+	if response, ok := status.Result.(*UserVerificationStatusResponse); !ok || response.UnavailableReason == nil ||
+		*response.UnavailableReason != UserVerificationUnavailableProviderUnavailable {
+		t.Fatalf("websocket status result = %#v", status.Result)
+	}
+	assertUserVerificationUnavailable(t, router.Handle(requestWithParams(t, IntID(2), MethodUserVerificationEnroll, UserVerificationEnrollParams{})))
+	assertUserVerificationUnavailable(t, router.Handle(requestWithParams(t, IntID(3), MethodUserVerificationDelete, UserVerificationDeleteParams{})))
+	assertUserVerificationUnavailable(t, router.Handle(requestWithParams(t, IntID(4), MethodUserVerificationVerify, UserVerificationVerifyParams{
+		Challenge:   "not-base64!!",
+		Title:       "Confirm",
+		Description: "Sign the challenge",
+	})))
+
+	local := NewRuntimeRouter(RuntimeServices{})
+	local.SetRequestTransport("stdio")
+	invalid := local.Handle(requestWithParams(t, IntID(5), MethodUserVerificationVerify, UserVerificationVerifyParams{
+		Challenge:   "not-base64!!",
+		Title:       "Confirm",
+		Description: "Sign the challenge",
+	}))
+	if invalid.Error == nil || invalid.Error.Code != JSONRPCInvalidParamsErrorCode {
+		t.Fatalf("stdio invalid verify error = %+v", invalid.Error)
+	}
+}
+
+// The provider seam carries a native backend's results to the wire responses;
+// the default provider keeps the unsupported behavior.
+func TestRuntimeRouterUserVerificationProviderSeamLikeRust(t *testing.T) {
+	credentialID := "credential-1"
+	provider := &stubUserVerificationProvider{status: &UserVerificationStatusResponse{CredentialID: &credentialID}}
+	router := NewRuntimeRouter(RuntimeServices{UserVerificationProvider: provider})
+	router.SetRequestTransport("stdio")
+
+	status := router.Handle(requestWithParams(t, IntID(1), MethodUserVerificationStatus, UserVerificationStatusParams{}))
+	if status.Error != nil {
+		t.Fatalf("status error = %+v", status.Error)
+	}
+	if response, ok := status.Result.(*UserVerificationStatusResponse); !ok || response.CredentialID == nil || *response.CredentialID != credentialID {
+		t.Fatalf("status result = %#v", status.Result)
+	}
+	enroll := router.Handle(requestWithParams(t, IntID(2), MethodUserVerificationEnroll, UserVerificationEnrollParams{}))
+	if enroll.Error != nil {
+		t.Fatalf("enroll error = %+v", enroll.Error)
+	}
+	if _, ok := enroll.Result.(*UserVerificationEnrollResponse); !ok {
+		t.Fatalf("enroll result = %#v", enroll.Result)
+	}
+	verify := router.Handle(requestWithParams(t, IntID(3), MethodUserVerificationVerify, UserVerificationVerifyParams{
+		Challenge:   base64.RawURLEncoding.EncodeToString([]byte("challenge-bytes")),
+		Title:       "Confirm",
+		Description: "Sign the challenge",
+	}))
+	if verify.Error != nil {
+		t.Fatalf("verify error = %+v", verify.Error)
+	}
+	if _, ok := verify.Result.(*UserVerificationVerifyResponse); !ok {
+		t.Fatalf("verify result = %#v", verify.Result)
+	}
+	if calls := provider.calls; len(calls) != 3 || calls[0] != "status" || calls[1] != "enroll" || calls[2] != "verify" {
+		t.Fatalf("provider calls = %#v", calls)
+	}
+	if provider.verifyParams.Title != "Confirm" || provider.verifyParams.Description != "Sign the challenge" {
+		t.Fatalf("verify params = %#v", provider.verifyParams)
+	}
+}
+
+// stubUserVerificationProvider records the operations the handler dispatches.
+type stubUserVerificationProvider struct {
+	status       *UserVerificationStatusResponse
+	calls        []string
+	verifyParams UserVerificationVerifyParams
+}
+
+func (p *stubUserVerificationProvider) Status() (*UserVerificationStatusResponse, error) {
+	p.calls = append(p.calls, "status")
+	if p.status != nil {
+		return p.status, nil
+	}
+	return userVerificationUnavailableStatus(), nil
+}
+
+func (p *stubUserVerificationProvider) EnsureKey() (*UserVerificationEnrollResponse, error) {
+	p.calls = append(p.calls, "enroll")
+	return &UserVerificationEnrollResponse{}, nil
+}
+
+func (p *stubUserVerificationProvider) Delete() (*UserVerificationDeleteResponse, error) {
+	p.calls = append(p.calls, "delete")
+	return &UserVerificationDeleteResponse{}, nil
+}
+
+func (p *stubUserVerificationProvider) Verify(params UserVerificationVerifyParams) (*UserVerificationVerifyResponse, error) {
+	p.calls = append(p.calls, "verify")
+	p.verifyParams = params
+	return &UserVerificationVerifyResponse{}, nil
+}

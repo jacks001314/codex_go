@@ -120,6 +120,12 @@ type RuntimeServices struct {
 	ExternalAgentSessionImporter func(*config.ExternalAgentConfigImportParams) []config.ExternalAgentConfigImportTypeResult
 
 	RemoteControlDisabledByRequirements bool
+
+	// UserVerificationProvider installs the platform backend for the
+	// experimental user-verification RPCs. Nil keeps the unsupported provider,
+	// which reports providerUnavailable like a Rust build without a native
+	// backend (Rust resolves the same seam through platform_provider).
+	UserVerificationProvider UserVerificationProvider
 }
 
 func accountThreadUsageFromBackend(usage *chatgptapi.ThreadUsage) *auth.ThreadUsage {
