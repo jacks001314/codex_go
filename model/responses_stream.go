@@ -464,6 +464,11 @@ func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, requ
 				Duration: time.Since(eventStartedAt),
 				Err:      err,
 			})
+			// Rust's streaming consumer reports the same failure once on the
+			// `response.completed` event kind (see_event_completed_failed).
+			if telemetrySink != nil {
+				telemetrySink.RecordSSEEventCompletedFailed(receivingCtx, err.Error())
+			}
 			handleResponsesSpan.End()
 			return nil, err
 		}

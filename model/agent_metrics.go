@@ -109,6 +109,8 @@ type SessionTelemetrySink interface {
 	RecordWebsocketRequest(ctx context.Context, record WebsocketRequestRecord)
 	// RecordSSEEventCompleted reports a completed model response's usage.
 	RecordSSEEventCompleted(ctx context.Context, record SSECompletedRecord)
+	// RecordSSEEventCompletedFailed reports the streaming consumer's error arm.
+	RecordSSEEventCompletedFailed(ctx context.Context, errorMessage string)
 	// RecordWebsocketConnect reports one websocket handshake attempt.
 	RecordWebsocketConnect(ctx context.Context, record WebsocketConnectRecord)
 }

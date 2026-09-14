@@ -8,6 +8,74 @@ import (
 	"codex_go/model"
 )
 
+// The streaming consumer's error arm reports the failure on the completed event
+// kind (Rust's see_event_completed_failed), on both records.
+func TestRecordSSEEventCompletedFailedLikeRust(t *testing.T) {
+	logBodies := make(chan map[string]any, 1)
+	logServer := newLogBatchServer(t, logBodies)
+	defer logServer.Close()
+	traceBodies := make(chan map[string]any, 1)
+	traceServer := newTraceBatchServer(t, traceBodies)
+	defer traceServer.Close()
+
+	logsClient := NewLogsClient(LogsClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       logServer.URL + "/v1/logs",
+		ExportInterval: -1,
+	})
+	tracesClient := NewTracesClient(TracesClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       traceServer.URL + "/v1/traces",
+		ExportInterval: -1,
+	})
+	session := NewSessionTelemetry(SessionTelemetryMetadata{ConversationID: "thread-1"})
+	session.Logs = logsClient
+	span := tracesClient.Tracer().StartSpan("handle_responses", nil)
+	session.RecordSSEEventCompletedFailed(WithSpan(context.Background(), span), "http 500")
+	span.End()
+	if err := logsClient.Flush(context.Background()); err != nil {
+		t.Fatalf("logs Flush() error = %v", err)
+	}
+	if err := tracesClient.Flush(context.Background()); err != nil {
+		t.Fatalf("traces Flush() error = %v", err)
+	}
+
+	want := map[string]string{
+		"event.name":    "codex.sse_event",
+		"event.kind":    "response.completed",
+		"error.message": "http 500",
+	}
+	select {
+	case body := <-logBodies:
+		_, record := singleLogRecord(t, body)
+		attributes := logRecordAttributes(t, record)
+		for key, value := range want {
+			if got := attributes[key]; got != value {
+				t.Fatalf("log attribute %s = %q, want %q", key, got, value)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the logs endpoint did not receive the completed-failed record")
+	}
+
+	select {
+	case body := <-traceBodies:
+		spans := body["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+		events := spans[0].(map[string]any)["events"].([]any)
+		if len(events) != 1 {
+			t.Fatalf("span events = %#v", events)
+		}
+		attributes := spanEventAttributes(t, events[0].(map[string]any))
+		for key, value := range want {
+			if got := attributes[key]; got != value {
+				t.Fatalf("span event attribute %s = %q, want %q", key, got, value)
+			}
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the traces endpoint did not receive the completed-failed event")
+	}
+}
+
 // The handshake record: a successful dial reports no status, and a failed one
 // reports the status, the error, and the response's request id / cf-ray on both
 // records.

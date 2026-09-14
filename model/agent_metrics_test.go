@@ -431,17 +431,23 @@ func TestParseResponsesStreamRecordsSSEDiagnosticsLikeRust(t *testing.T) {
 		failed.traced[0].fields["error.message"] != "connection reset" {
 		t.Fatalf("trace record = %#v", failed.traced[0])
 	}
+	// Rust's streaming consumer also reports the failure on the completed event
+	// kind, once per stream.
+	if len(failed.sseCompletedFailed) != 1 || failed.sseCompletedFailed[0] != "connection reset" {
+		t.Fatalf("completed-failed records = %#v", failed.sseCompletedFailed)
+	}
 }
 
 // recordingTelemetrySink captures the diagnostic records the client emits.
 type recordingTelemetrySink struct {
-	logged            []telemetryRecord
-	traced            []telemetryRecord
-	spans             []*recordingTelemetrySpan
-	apiRequests       []APIRequestRecord
-	websocketRequests []WebsocketRequestRecord
-	sseCompleted      []SSECompletedRecord
-	websocketConnects []WebsocketConnectRecord
+	logged             []telemetryRecord
+	traced             []telemetryRecord
+	spans              []*recordingTelemetrySpan
+	apiRequests        []APIRequestRecord
+	websocketRequests  []WebsocketRequestRecord
+	sseCompleted       []SSECompletedRecord
+	sseCompletedFailed []string
+	websocketConnects  []WebsocketConnectRecord
 }
 
 // recordingTelemetrySpan captures one span's lifecycle, so the tests can assert
@@ -486,6 +492,10 @@ func (s *recordingTelemetrySink) RecordWebsocketRequest(_ context.Context, recor
 
 func (s *recordingTelemetrySink) RecordSSEEventCompleted(_ context.Context, record SSECompletedRecord) {
 	s.sseCompleted = append(s.sseCompleted, record)
+}
+
+func (s *recordingTelemetrySink) RecordSSEEventCompletedFailed(_ context.Context, errorMessage string) {
+	s.sseCompletedFailed = append(s.sseCompletedFailed, errorMessage)
 }
 
 func (s *recordingTelemetrySink) RecordWebsocketConnect(_ context.Context, record WebsocketConnectRecord) {

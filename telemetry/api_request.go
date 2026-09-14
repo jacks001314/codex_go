@@ -11,6 +11,20 @@ import (
 // half is recorded by the model client (which cannot import this package); the
 // diagnostic record is emitted here from the client's per-attempt values.
 
+// RecordSSEEventCompletedFailed mirrors SessionTelemetry::see_event_completed_failed:
+// the streaming consumer's error arm reports the failure on the `response.completed`
+// event kind, once per stream.
+func (t *SessionTelemetry) RecordSSEEventCompletedFailed(ctx context.Context, errorMessage string) {
+	if t == nil || t.Logs == nil {
+		return
+	}
+	fields := map[string]string{"event.kind": "response.completed"}
+	if errorMessage != "" {
+		fields["error.message"] = errorMessage
+	}
+	t.LogAndTraceEvent(ctx, "codex.sse_event", fields, nil, nil)
+}
+
 // RecordWebsocketConnect mirrors SessionTelemetry::record_websocket_connect: the
 // handshake's duration and outcome, the auth observability the attempt carried,
 // the endpoint, and the response's request id / cf-ray / auth error, on both
