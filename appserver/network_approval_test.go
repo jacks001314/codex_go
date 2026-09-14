@@ -876,3 +876,44 @@ func TestNetworkApprovalDisconnectReportsElapsedTimeLikeRust(t *testing.T) {
 		t.Fatalf("disconnect outcome = %q, want elapsed-time explanation", call.outcome)
 	}
 }
+
+// The decision records Rust reports for a resolved network approval: the tool
+// identity of the owning call (else the plain network_access tool) and the opaque
+// decision of the user's answer, including the network-policy-amendment strings.
+func TestNetworkApprovalDecisionTelemetryLikeRust(t *testing.T) {
+	name := "shell"
+	ownerCall := &activeNetworkApprovalCall{
+		callID:  "call-1",
+		trigger: &guardianNetworkAccessTrigger{CallID: "trigger-1", ToolName: name},
+	}
+	toolName, callID := networkApprovalDecisionTelemetry("network#env#https#host#443", ownerCall)
+	if toolName.Name != name || callID != "call-1" {
+		t.Fatalf("identity = %q/%q", toolName.Name, callID)
+	}
+	toolName, callID = networkApprovalDecisionTelemetry("network#approval", nil)
+	if toolName.Name != "network_access" || callID != "network#approval" {
+		t.Fatalf("fallback identity = %q/%q", toolName.Name, callID)
+	}
+
+	cases := []struct {
+		decision         any
+		amendmentApplied bool
+		amendmentAllow   bool
+		want             string
+	}{
+		{decision: CommandExecutionApprovalAccept, want: "approved"},
+		{decision: CommandExecutionApprovalAcceptForSession, want: "approved_for_session"},
+		{decision: CommandExecutionApprovalAcceptWithExecpolicyAmendment, want: "approved_with_amendment"},
+		{decision: CommandExecutionApprovalApplyNetworkPolicyAmendment, amendmentApplied: true, amendmentAllow: true, want: "approved_with_network_policy_allow"},
+		{decision: CommandExecutionApprovalApplyNetworkPolicyAmendment, amendmentApplied: true, want: "denied_with_network_policy_deny"},
+		{decision: CommandExecutionApprovalApplyNetworkPolicyAmendment, want: "denied"},
+		{decision: CommandExecutionApprovalDecline, want: "denied"},
+		{decision: nil, want: "denied"},
+	}
+	for _, testCase := range cases {
+		got := networkApprovalUserDecision(testCase.decision, testCase.amendmentApplied, testCase.amendmentAllow)
+		if got != testCase.want {
+			t.Fatalf("decision(%v) = %q, want %q", testCase.decision, got, testCase.want)
+		}
+	}
+}

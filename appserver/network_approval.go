@@ -15,6 +15,7 @@ import (
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
+	"codex_go/telemetry"
 	"codex_go/tool"
 	"codex_go/turn"
 )
@@ -193,6 +194,9 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 	protocol := networkApprovalProtocol(request.Protocol)
 	target := networkApprovalTarget(request.Protocol, request.Host, request.Port)
 	approvalID := fmt.Sprintf("network#%s#%s#%s#%d", key.environmentID, networkApprovalProtocolKey(protocol), key.host, key.port)
+	// Rust reports every resolved network approval through tool_decision, with no
+	// source and the owning tool's identity (network_approval.rs).
+	decisionToolName, decisionCallID := networkApprovalDecisionTelemetry(approvalID, ownerCall)
 	// Rust Session::request_approval: PermissionRequest hooks decide before the
 	// Guardian review and the user approval request. The hook sees the
 	// network-access command as a Bash payload.
@@ -201,6 +205,8 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 		map[string]any{"command": hookCommand, "description": hookCommand}); ok && verdict != nil {
 		switch verdict.Kind {
 		case HookPermissionRequestAllow:
+			s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+				telemetry.ToolDecisionApproved, telemetry.ToolDecisionSourceConfig)
 			return network.AllowProxyDecision(), ""
 		case HookPermissionRequestDeny:
 			reason := ""
@@ -210,6 +216,8 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 			if reason == "" {
 				reason = "Network access was denied by a permission-request hook."
 			}
+			s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+				telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceConfig)
 			s.recordGuardianOutcome(ownerCall, reason)
 			return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
 		}
@@ -238,32 +246,49 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 	var response CommandExecutionRequestApprovalResponse
 	err := s.router.requireServerRequests().RequestToConnection(ctx, active.connectionID, ServerRequestCommandExecutionApproval, params, &response)
 	if err != nil {
+		// Rust: a failed approval request reports denied("network approval failed").
+		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+			telemetry.ToolDecisionDenied, "")
 		return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
 	}
 	switch approvalDecisionString(response.Decision) {
 	case string(CommandExecutionApprovalAccept):
+		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+			networkApprovalUserDecision(response.Decision, false, false), "")
 		return network.AllowProxyDecision(), ""
 	case string(CommandExecutionApprovalAcceptForSession):
+		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+			networkApprovalUserDecision(response.Decision, false, false), "")
 		return network.AllowProxyDecision(), NetworkPolicyRuleAllow
 	case string(CommandExecutionApprovalAcceptWithExecpolicyAmendment):
+		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+			networkApprovalUserDecision(response.Decision, false, false), "")
 		return network.AllowProxyDecision(), ""
 	case string(CommandExecutionApprovalApplyNetworkPolicyAmendment):
 		amendment, ok := networkPolicyAmendmentFromDecision(response.Decision)
 		if !ok || network.NormalizeProxyHost(amendment.Host) != key.host {
+			s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+				networkApprovalUserDecision(response.Decision, false, false), "")
 			return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
 		}
 		if err := s.router.persistNetworkPolicyAmendment(amendment, protocol); err != nil {
 			slog.Warn("Failed to apply network policy amendment", "error", err)
+			s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+				networkApprovalUserDecision(response.Decision, false, false), "")
 			s.recordPolicyDenialForThread(active.threadID, "Network access was blocked by policy because the approved network policy amendment could not be applied.")
 			return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
 		}
 		s.rememberNetworkRuleSaved(active.threadID, active.turnID, amendment)
+		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+			networkApprovalUserDecision(response.Decision, true, amendment.Action == NetworkPolicyRuleAllow), "")
 		if amendment.Action == NetworkPolicyRuleAllow {
 			return network.AllowProxyDecision(), NetworkPolicyRuleAllow
 		}
 		s.recordUserDenialForThread(active.threadID)
 		return network.DenyProxyDecision(network.ProxyReasonNotAllowed), NetworkPolicyRuleDeny
 	default:
+		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+			networkApprovalUserDecision(response.Decision, false, false), "")
 		s.recordUserDenialForThread(active.threadID)
 		return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
 	}
@@ -283,6 +308,9 @@ func (s *networkApprovalService) routesApprovalToGuardian(active *networkApprova
 
 func (s *networkApprovalService) requestGuardianApproval(ctx context.Context, active *networkApprovalTurn, request network.ProxyPolicyRequest, protocol NetworkApprovalProtocol, target string, ownerCall *activeNetworkApprovalCall) network.ProxyDecision {
 	reviewer := s.router.services.GuardianReviewer
+	// The guardian-resolved decision reports the same tool identity as the user
+	// approval path (network_approval.rs records it with no source).
+	decisionToolName, decisionCallID := networkApprovalDecisionTelemetry(active.turnID+":"+target, ownerCall)
 	if reviewer == nil && s.router.services.Agent != nil {
 		reviewer = s.router.ensureGuardianReviewer(s.router.services.Agent)
 	}
@@ -297,11 +325,15 @@ func (s *networkApprovalService) requestGuardianApproval(ctx context.Context, ac
 		action.Extra = map[string]any{"trigger": *ownerCall.trigger}
 	}
 	if reviewer == nil {
+		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+			telemetry.ToolDecisionDenied, "")
 		s.recordGuardianOutcome(ownerCall, "Auto-approval review is unavailable; the request was denied.")
 		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
 	}
 	decision, reason, err := reviewer.Review(ctx, active.threadID, active.turnID, "", action)
 	if err == nil && decision == state.DecisionApproved {
+		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+			telemetry.ToolDecisionApproved, "")
 		return network.AllowProxyDecision()
 	}
 	reason = strings.TrimSpace(reason)
@@ -311,12 +343,61 @@ func (s *networkApprovalService) requestGuardianApproval(ctx context.Context, ac
 	if reason == "" {
 		reason = "Auto-approval review denied the request."
 	}
+	s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
+		telemetry.ToolDecisionDenied, "")
 	s.recordGuardianOutcome(ownerCall, reason)
 	return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
 }
 
 func networkApprovalCallKey(threadID string, turnID string, callID string) string {
 	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID) + "\x00" + strings.TrimSpace(callID)
+}
+
+// networkApprovalDecisionTelemetry reports the tool identity Rust attributes a
+// network approval's decision record to: the owning tool call, or the plain
+// `network_access` tool with an opaque id when nothing owns the request
+// (network_approval.rs's telemetry_tool_name/telemetry_call_id).
+func networkApprovalDecisionTelemetry(approvalID string, ownerCall *activeNetworkApprovalCall) (tool.ToolName, string) {
+	if ownerCall != nil {
+		callID := strings.TrimSpace(ownerCall.callID)
+		toolName := ""
+		if ownerCall.trigger != nil {
+			if callID == "" {
+				callID = strings.TrimSpace(ownerCall.trigger.CallID)
+			}
+			toolName = strings.TrimSpace(ownerCall.trigger.ToolName)
+		}
+		if callID != "" {
+			return tool.PlainName(toolName), callID
+		}
+	}
+	return tool.PlainName("network_access"), strings.TrimSpace(approvalID)
+}
+
+// networkApprovalUserDecision mirrors the decision Rust reports after a network
+// approval resolves: the opaque review decision of the user's answer, with a
+// policy amendment reported as its own decision string.
+func networkApprovalUserDecision(decision any, amendmentApplied bool, amendmentAllow bool) string {
+	switch approvalDecisionString(decision) {
+	case string(CommandExecutionApprovalAccept):
+		return telemetry.ToolDecisionApproved
+	case string(CommandExecutionApprovalAcceptForSession):
+		return telemetry.ToolDecisionApprovedForSession
+	case string(CommandExecutionApprovalAcceptWithExecpolicyAmendment):
+		return telemetry.ToolDecisionApprovedWithAmendment
+	case string(CommandExecutionApprovalApplyNetworkPolicyAmendment):
+		if !amendmentApplied {
+			// Rust downgrades an amendment that was not applied to the resolved
+			// decision, which Go's path resolves as a denial.
+			return telemetry.ToolDecisionDenied
+		}
+		if amendmentAllow {
+			return telemetry.ToolDecisionApprovedWithNetworkPolicyAllow
+		}
+		return telemetry.ToolDecisionDeniedWithNetworkPolicyDeny
+	default:
+		return telemetry.ToolDecisionDenied
+	}
 }
 
 func (s *networkApprovalService) registerActiveCall(threadID string, turnID string, invocation *tool.Invocation) {
