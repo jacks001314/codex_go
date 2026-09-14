@@ -292,6 +292,106 @@ func TestTurnStartOpensSamplingRequestSpanLikeRust(t *testing.T) {
 	}
 }
 
+// Rust spawns every session inside a `thread_spawn` span (parented to the
+// spawning request's W3C carrier) and runs the thread's whole life inside a
+// `session_loop` span, so the turn's sampling request nests under it
+// (core/src/session/mod.rs).
+func TestThreadLifetimeSpansLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+	})
+	if err != nil || provider == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        newRecordingRuntimeAgent("ok"),
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	router.SetNotificationSink(sink)
+	router.installOtelProvider(provider, state.NewTaskMetrics())
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "inspect",
+		CWD:      home,
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	// The session loop closes with the router (Rust ends it when the session's
+	// submission loop terminates), so close before flushing the exporter.
+	if err := router.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	spans := map[string]map[string]any{}
+	deadline := time.After(3 * time.Second)
+	for len(spans) < 3 {
+		select {
+		case payload := <-traceBodies:
+			resourceSpans, _ := payload["resourceSpans"].([]any)
+			if len(resourceSpans) == 0 {
+				continue
+			}
+			scopeSpans, _ := resourceSpans[0].(map[string]any)["scopeSpans"].([]any)
+			if len(scopeSpans) == 0 {
+				continue
+			}
+			entries, _ := scopeSpans[0].(map[string]any)["spans"].([]any)
+			for _, entry := range entries {
+				span, _ := entry.(map[string]any)
+				switch span["name"] {
+				case ThreadSpawnSpanName, SessionLoopSpanName, "run_sampling_request":
+					spans[span["name"].(string)] = span
+				}
+			}
+		case <-deadline:
+			t.Fatalf("exported spans = %#v", spans)
+		}
+	}
+	spawn := spans[ThreadSpawnSpanName]
+	session := spans[SessionLoopSpanName]
+	sampling := spans["run_sampling_request"]
+	if attributes := encodedAttributes(session); attributes["thread_id"] != threadID {
+		t.Fatalf("session span attributes = %#v, want thread %q", attributes, threadID)
+	}
+	if session["parentSpanId"] != spawn["spanId"] || session["traceId"] != spawn["traceId"] {
+		t.Fatalf("session span = %#v, spawn span = %#v", session, spawn)
+	}
+	if sampling["parentSpanId"] != session["spanId"] || sampling["traceId"] != session["traceId"] {
+		t.Fatalf("sampling span = %#v, session span = %#v", sampling, session)
+	}
+}
+
 // stubMCPExecutor registers one MCP tool so the router reports its server tags.
 type stubMCPExecutor struct {
 	name       tool.ToolName

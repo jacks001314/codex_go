@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"codex_go/telemetry"
@@ -119,5 +120,138 @@ func mcpTransportForOrigin(origin string) string {
 		return ""
 	default:
 		return "streamable_http"
+	}
+}
+
+// Rust parity: codex-core's session/mod.rs spawns every session inside a
+// `thread_spawn` span parented to the spawning request's W3C carrier, and runs
+// the session's submission loop inside a `session_loop` span (thread_id) that
+// stays open for the thread's whole life, so every turn's spans nest under it.
+
+// ThreadSpawnSpanName is the span Rust opens around a session spawn.
+const ThreadSpawnSpanName = "thread_spawn"
+
+// SessionLoopSpanName is the span Rust opens around a session's submission loop.
+const SessionLoopSpanName = "session_loop"
+
+// threadSpawnTarget reports whether a lifecycle request spawns a session. Rust
+// reaches ThreadManager::spawn_thread (and so session/mod.rs::spawn) for a new or
+// forked thread, and for a resume that finds no live session.
+func (r *RuntimeRouter) threadSpawnTarget(request *Request) bool {
+	if r == nil || request == nil {
+		return false
+	}
+	switch request.Method {
+	case MethodThreadStart, MethodThreadFork:
+		return true
+	default:
+		return false
+	}
+}
+
+// startThreadSpawnSpan opens the `thread_spawn` span for a thread-creating
+// request, continuing the request's W3C carrier like Rust's
+// `set_parent_from_w3c_trace_context`.
+func (r *RuntimeRouter) startThreadSpawnSpan(request *Request) *telemetry.Span {
+	if r == nil {
+		return nil
+	}
+	tracer := r.requestTracer()
+	if tracer == nil {
+		return nil
+	}
+	span := tracer.StartSpan(ThreadSpawnSpanName, nil)
+	if span == nil {
+		return nil
+	}
+	if request != nil && request.Trace != nil && strings.TrimSpace(request.Trace.Traceparent) != "" {
+		if traceContext, ok := telemetry.ParseTraceContext(request.Trace.Traceparent, request.Trace.Tracestate); ok {
+			if !span.SetParentContext(traceContext) {
+				slog.Warn("ignoring invalid thread spawn trace carrier")
+			}
+		}
+	} else if traceContext, ok := telemetry.TraceContextFromEnv(); ok {
+		span.SetParentContext(traceContext)
+	}
+	return span
+}
+
+// startThreadSessionSpan opens and records the thread's `session_loop` span as a
+// child of the spawn span. An already live session keeps its span (a repeated
+// resume does not start a second loop).
+func (r *RuntimeRouter) startThreadSessionSpan(threadID string, parent *telemetry.Span) *telemetry.Span {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	r.threadSessionSpansMu.Lock()
+	if existing := r.threadSessionSpans[threadID]; existing != nil {
+		r.threadSessionSpansMu.Unlock()
+		return existing
+	}
+	r.threadSessionSpansMu.Unlock()
+	tracer := r.requestTracer()
+	if tracer == nil {
+		return nil
+	}
+	span := tracer.StartSpanWithParent(parent, SessionLoopSpanName, map[string]string{"thread_id": threadID})
+	if span == nil {
+		return nil
+	}
+	r.threadSessionSpansMu.Lock()
+	if r.threadSessionSpans == nil {
+		r.threadSessionSpans = map[string]*telemetry.Span{}
+	}
+	r.threadSessionSpans[threadID] = span
+	r.threadSessionSpansMu.Unlock()
+	return span
+}
+
+// threadSessionSpan returns the live session span of a thread, or nil.
+func (r *RuntimeRouter) threadSessionSpan(threadID string) *telemetry.Span {
+	if r == nil {
+		return nil
+	}
+	r.threadSessionSpansMu.Lock()
+	defer r.threadSessionSpansMu.Unlock()
+	return r.threadSessionSpans[strings.TrimSpace(threadID)]
+}
+
+// endThreadSessionSpan closes a thread's session loop span (Rust ends it when the
+// session's submission loop terminates).
+func (r *RuntimeRouter) endThreadSessionSpan(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	r.threadSessionSpansMu.Lock()
+	span := r.threadSessionSpans[threadID]
+	delete(r.threadSessionSpans, threadID)
+	r.threadSessionSpansMu.Unlock()
+	if span != nil {
+		span.End()
+	}
+}
+
+// endAllThreadSessionSpans closes every live session span when the router shuts
+// down.
+func (r *RuntimeRouter) endAllThreadSessionSpans() {
+	if r == nil {
+		return
+	}
+	r.threadSessionSpansMu.Lock()
+	spans := make([]*telemetry.Span, 0, len(r.threadSessionSpans))
+	for _, span := range r.threadSessionSpans {
+		if span != nil {
+			spans = append(spans, span)
+		}
+	}
+	r.threadSessionSpans = nil
+	r.threadSessionSpansMu.Unlock()
+	for _, span := range spans {
+		span.End()
 	}
 }

@@ -270,8 +270,13 @@ type RuntimeRouter struct {
 	requestSpans   map[requestSpanKey]*telemetry.Span
 	// mcpCallSpans holds the `mcp.tools.call` span of every in-flight MCP tool
 	// call, keyed by thread, turn, and call id.
-	mcpCallSpansMu          sync.Mutex
-	mcpCallSpans            map[mcpToolCallSpanKey]*telemetry.Span
+	mcpCallSpansMu sync.Mutex
+	mcpCallSpans   map[mcpToolCallSpanKey]*telemetry.Span
+	// threadSessionSpans holds the thread-lifetime `session_loop` span of every
+	// live session, keyed by thread id. Rust opens it around the session's
+	// submission loop (session/mod.rs), so every turn's spans nest under it.
+	threadSessionSpansMu    sync.Mutex
+	threadSessionSpans      map[string]*telemetry.Span
 	mcpEventStreams         *mcpEventStreamManager
 	skillShadowMu           sync.Mutex
 	skillShadowState        map[string]*skillShadowThreadState
@@ -1872,6 +1877,9 @@ func (r *RuntimeRouter) close() error {
 	}
 	r.threads.ClearSubscriptions()
 	r.threads.ClearEphemeralRecords()
+	// Every live session's `session_loop` span closes with the router (Rust ends
+	// them when the sessions' submission loops terminate).
+	r.endAllThreadSessionSpans()
 	if r.services.ThreadRouter != nil {
 		if err := r.services.ThreadRouter.Close(); err != nil && closeErr == nil {
 			closeErr = err
@@ -2610,6 +2618,16 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			r.markThreadResumeSessionStartSource(result, request)
 			r.markResponseThreadLoaded(result, request.normalizedConnectionID())
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
+				// A resume that loads a cold thread spawns a session in Rust
+				// (ThreadManager::spawn_thread), so it opens the same thread_spawn
+				// and session_loop spans; resuming a live thread attaches without a
+				// second spawn.
+				if r.threadSessionSpan(response.Thread.ID) == nil {
+					if spawnSpan := r.startThreadSpawnSpan(request); spawnSpan != nil {
+						r.startThreadSessionSpan(response.Thread.ID, spawnSpan)
+						spawnSpan.End()
+					}
+				}
 				r.captureThreadModelProviderRouteByID(response.Thread.ID)
 				r.emitThreadResumeAnalytics(context.Background(), request.normalizedConnectionID(), response, request)
 				r.emitThreadStartedMetric(context.Background(), response.Thread)
@@ -3771,6 +3789,18 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 	lifecycleRecords := r.lifecycleRecordSnapshots(lifecycleIDsWithFallback(request, lifecycleIDs))
 	var result any
 	var err error
+	// Rust spawns (or resumes) a session inside `thread_spawn`, parented to the
+	// spawning request's W3C carrier, and keeps the session's `session_loop` span
+	// open for the thread's life (session/mod.rs), so every turn's spans nest
+	// under it.
+	spawning := r.threadSpawnTarget(request)
+	var threadSpawnSpan *telemetry.Span
+	if spawning {
+		threadSpawnSpan = r.startThreadSpawnSpan(request)
+		if threadSpawnSpan != nil {
+			defer threadSpawnSpan.End()
+		}
+	}
 	// Rust app-server thread_processor: the thread/start startup phase
 	// breakdown ("thread_start_create_thread" and "thread_start_total").
 	threadStartStartedAt := time.Now().UTC()
@@ -3843,6 +3873,9 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 	switch request.Method {
 	case MethodThreadStart, MethodThreadFork:
 		if response, ok := result.(*ThreadStartResponse); ok && response.Thread != nil {
+			// The new thread's session loop starts with the spawn and outlives
+			// this request.
+			r.startThreadSessionSpan(response.Thread.ID, threadSpawnSpan)
 			if request.Method == MethodThreadStart {
 				cfg, configErr := r.effectiveMCPConfigForThreadStartRequest(request)
 				if configErr != nil {
@@ -3900,6 +3933,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 				r.recordStartupPhase("thread_start_total", time.Since(threadStartStartedAt), "ready")
 			}
 		} else if response, ok := result.(*ThreadForkResponse); ok && response.Thread != nil {
+			r.startThreadSessionSpan(response.Thread.ID, threadSpawnSpan)
 			var forkParams ThreadForkParams
 			if request.DecodeParams(&forkParams) == nil && r.networkApproval != nil {
 				r.networkApproval.syncApprovedHostsForFork(forkParams.ThreadID, response.Thread.ID)
@@ -5097,6 +5131,9 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	if threadID == "" {
 		return
 	}
+	// Rust ends a session's `session_loop` span when the submission loop
+	// terminates; Go's thread unload is the same lifecycle point.
+	r.endThreadSessionSpan(threadID)
 	r.requireThreadStatus().RemoveThread(threadID)
 	r.clearThreadSubscriptions(threadID)
 	r.skillWarningsMu.Lock()
@@ -15265,6 +15302,11 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 	}
 	turnCopy := response.Turn
 	ctx, cancel := context.WithCancel(context.Background())
+	// The turn runs inside its thread's session loop span, so the step's sampling
+	// request nests under it (Rust runs run_turn inside the session_loop span).
+	if span := r.threadSessionSpan(params.ThreadID); span != nil {
+		ctx = telemetry.WithSpan(ctx, span)
+	}
 	if err := r.registerTrackedActiveRuntimeTurn(params.ThreadID, response.Turn.ID, cancel, time.Now().UTC().UnixMilli(), paramsCopy); err != nil {
 		cancel()
 		r.emitTurnRuntimeError(params.ThreadID, response.Turn.ID, err)
