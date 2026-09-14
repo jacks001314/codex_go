@@ -162,3 +162,30 @@ func containsExactLine(text string, want string) bool {
 	}
 	return false
 }
+
+// A reasoning block renders italicized like Rust's ReasoningSummaryCell, while
+// the normal markdown render stays unstyled. (Rust also dims the block; glamour
+// v1.0.0 defines but never applies StylePrimitive.Faint, so only the italic half
+// is reachable through the renderer - recorded as a residual.)
+func TestRenderReasoningWithThemeItalicizesLikeRust(t *testing.T) {
+	body := "Checking the tests now."
+	reasoning, err := RenderReasoningWithThemeCwd(body, 40, "", "")
+	if err != nil {
+		t.Fatalf("RenderReasoningWithThemeCwd() error = %v", err)
+	}
+	plain, err := RenderWithThemeCwd(body, 40, "", "")
+	if err != nil {
+		t.Fatalf("RenderWithThemeCwd() error = %v", err)
+	}
+	// glamour styles each span separately, so compare the visible text.
+	if !strings.Contains(utils.StripANSI(reasoning), body) {
+		t.Fatalf("reasoning render = %q", reasoning)
+	}
+	italic := func(value string) bool { return strings.Contains(value, "\x1b[3m") }
+	if !italic(reasoning) {
+		t.Fatalf("reasoning render is not italic: %q", reasoning)
+	}
+	if italic(plain) {
+		t.Fatalf("normal render is italic: %q", plain)
+	}
+}

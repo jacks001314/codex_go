@@ -7806,7 +7806,9 @@ func reasoningBlockTranscriptLines(message codextui.Message, width int, themeID 
 		contentWidth = 1
 	}
 	var lines []string
-	if rendered, err := markdown.RenderWithThemeCwd(content, contentWidth, themeID, cwd); err == nil && strings.TrimSpace(rendered) != "" {
+	// Rust renders the block with the summary style patched over it (dim +
+	// italic), so the overlay's reasoning text matches ReasoningSummaryCell.
+	if rendered, err := markdown.RenderReasoningWithThemeCwd(content, contentWidth, themeID, cwd); err == nil && strings.TrimSpace(rendered) != "" {
 		lines = trimBlankDisplayEdges(rawLinesTrimmed(rendered))
 	}
 	if len(lines) == 0 {

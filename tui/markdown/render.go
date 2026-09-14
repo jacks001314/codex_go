@@ -41,6 +41,17 @@ func RenderWithTheme(text string, width int, themeID string) (string, error) {
 // label (Rust parity: markdown_render local file-link display). Passing an
 // empty cwd renders absolute paths unchanged.
 func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
+	return renderWithStyle(text, width, themeID, cwd, codexMarkdownStyle())
+}
+
+// RenderReasoningWithThemeCwd renders a completed reasoning block the way Rust's
+// ReasoningSummaryCell does: the summary's markdown with the block's text dimmed
+// and italicized (Rust patches the summary style over every rendered span).
+func RenderReasoningWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
+	return renderWithStyle(text, width, themeID, cwd, codexReasoningMarkdownStyle())
+}
+
+func renderWithStyle(text string, width int, themeID string, cwd string, style ansi.StyleConfig) (string, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "", nil
@@ -55,7 +66,6 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 	urlPlaceholders, text := protectLongBareURLs(text, width)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
-	style := codexMarkdownStyle()
 	colorLevel := codextui.DetectStdoutColorLevel()
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
@@ -466,4 +476,16 @@ func renderedContainsCodeBlockMarkers(rendered string, expected int) bool {
 		}
 	}
 	return starts == expected && ends == expected
+}
+
+// codexReasoningMarkdownStyle mirrors Rust's reasoning block styling: the
+// summary's markdown keeps its own inline markup, but the block's text is dimmed
+// and italicized (ReasoningSummaryCell::lines patches the summary style over
+// every rendered span, and glamour inherits these onto the inline children).
+func codexReasoningMarkdownStyle() ansi.StyleConfig {
+	style := codexMarkdownStyle()
+	dimItalic := ansi.StylePrimitive{Faint: styleBool(true), Italic: styleBool(true)}
+	style.Text = dimItalic
+	style.Paragraph = ansi.StyleBlock{StylePrimitive: dimItalic}
+	return style
 }

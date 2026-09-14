@@ -6,6 +6,7 @@ import (
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	"codex_go/utils"
 )
 
 // TestModelSwitchRestoresBufferedActiveReasoning covers Rust #43921's
@@ -185,11 +186,11 @@ func TestReasoningBlockIsTranscriptOnly(t *testing.T) {
 	}
 
 	main := renderTranscript(state, false, 80, model.activeTUITheme())
-	if strings.Contains(main, "The body.") {
+	if strings.Contains(utils.StripANSI(main), "The body.") {
 		t.Fatalf("reasoning block leaked into the live scrollback:\n%s", main)
 	}
 	expanded := renderTranscriptWithHistoryMode(state, false, 80, model.activeTUITheme(), true)
-	if !strings.Contains(expanded, "The body.") {
+	if !strings.Contains(utils.StripANSI(expanded), "The body.") {
 		t.Fatalf("expanded transcript missing the reasoning block:\n%s", expanded)
 	}
 }
@@ -217,7 +218,7 @@ func TestReasoningBlockCommittedWithoutRestoredEntry(t *testing.T) {
 		t.Fatalf("completed reasoning block missing: %#v", model.State.Messages)
 	}
 	expanded := renderTranscriptWithHistoryMode(state, false, 80, model.activeTUITheme(), true)
-	if !strings.Contains(expanded, "Second body.") {
+	if !strings.Contains(utils.StripANSI(expanded), "Second body.") {
 		t.Fatalf("expanded transcript missing the live reasoning block:\n%s", expanded)
 	}
 }
@@ -250,12 +251,13 @@ func TestReasoningRawVariantGatedByShowRawReasoning(t *testing.T) {
 	if hiddenEntry.Text != "Summary body." || hiddenEntry.ReasoningRawText == "" {
 		t.Fatalf("raw-off entry = %#v", hiddenEntry)
 	}
-	if !strings.Contains(hiddenExpanded, "Summary body.") || strings.Contains(hiddenExpanded, "Raw chain of thought.") {
+	hiddenText := utils.StripANSI(hiddenExpanded)
+	if !strings.Contains(hiddenText, "Summary body.") || strings.Contains(hiddenText, "Raw chain of thought.") {
 		t.Fatalf("raw-off expanded transcript:\n%s", hiddenExpanded)
 	}
 
 	visibleExpanded, visibleEntry := render(true)
-	if !strings.Contains(visibleExpanded, "Raw chain of thought.") {
+	if !strings.Contains(utils.StripANSI(visibleExpanded), "Raw chain of thought.") {
 		t.Fatalf("raw-on expanded transcript:\n%s", visibleExpanded)
 	}
 	if visibleEntry.ReasoningRawText == "" {
