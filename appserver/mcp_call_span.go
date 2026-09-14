@@ -267,68 +267,12 @@ func (r *RuntimeRouter) mcpConnectorInfo(invocation *tool.Invocation) (string, s
 	return r.services.ToolRouter.MCPConnectorInfo(invocation)
 }
 
-// mcpCallOutcome classifies one completed MCP call the way Rust's
-// mcp_call_metric_outcome does, reporting false when the call is not an MCP call
-// at all (no server tag).
-func (r *RuntimeRouter) mcpCallOutcome(execution *turn.ToolExecutionResult) (telemetry.MCPCallOutcome, bool) {
-	if r == nil || execution == nil || execution.Invocation == nil {
-		return telemetry.MCPCallOutcome{}, false
-	}
-	if strings.TrimSpace(execution.TelemetryTags["mcp_server"]) == "" {
-		return telemetry.MCPCallOutcome{}, false
-	}
-	var data map[string]any
-	if execution.Output != nil {
-		data = execution.Output.Data
-	}
-	hasResult := false
-	if data != nil {
-		hasResult, _ = data["mcpToolCall"].(bool)
-	}
-	isError := false
-	var structured map[string]any
-	if data != nil {
-		isError, _ = data["isError"].(bool)
-		structured, _ = data["structuredContent"].(map[string]any)
-	}
-	return telemetry.MCPCallOutcomeForResult(hasResult, isError, structured, mcpResultMeta(data)), true
-}
-
-// mcpResultMeta reads an MCP result's `_meta` object from a tool output's data.
-func mcpResultMeta(data map[string]any) map[string]any {
-	if data == nil {
-		return nil
-	}
-	meta, _ := data["_meta"].(map[string]any)
-	return meta
-}
-
-// mcpCallMetricTags reports the server and tool names Rust tags an MCP call's
-// metrics with: the server the call ran against and the MCP tool's own name.
-func mcpCallNames(execution *turn.ToolExecutionResult) (string, string) {
-	if execution == nil {
-		return "", ""
-	}
-	server := strings.TrimSpace(execution.TelemetryTags["mcp_server"])
-	toolName := ""
-	if execution.Output != nil && execution.Output.Data != nil {
-		toolName, _ = execution.Output.Data["tool"].(string)
-	}
-	toolName = strings.TrimSpace(toolName)
-	if toolName == "" && execution.Invocation != nil {
-		toolName = execution.Invocation.ToolName.Key()
-	}
-	return server, toolName
-}
-
 // emitMCPCallMetrics records Rust's MCP call metric triple for one completed MCP
 // call (mcp_tool_call.rs's emit_mcp_call_metrics).
-func (r *RuntimeRouter) emitMCPCallMetrics(execution *turn.ToolExecutionResult, outcome telemetry.MCPCallOutcome) {
+func (r *RuntimeRouter) emitMCPCallMetrics(execution *turn.ToolExecutionResult) {
 	if r == nil || execution == nil {
 		return
 	}
-	server, toolName := mcpCallNames(execution)
 	connectorID, connectorName := r.mcpConnectorInfo(execution.Invocation)
-	duration := execution.FinishedAt.Sub(execution.StartedAt)
-	telemetry.EmitMCPCallMetrics(r.services.TurnMetrics, outcome, server, toolName, connectorID, connectorName, duration)
+	telemetry.EmitMCPCallMetricsForExecution(r.services.TurnMetrics, execution, connectorID, connectorName)
 }

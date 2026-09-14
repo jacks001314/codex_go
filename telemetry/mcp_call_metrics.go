@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"codex_go/turn"
 )
 
 // Rust parity: codex-core's `mcp_tool_call/telemetry.rs` (the codex.mcp.call
@@ -224,4 +226,85 @@ func stringFromAnyMap(values map[string]any, key string) string {
 	}
 	text, _ := values[key].(string)
 	return strings.TrimSpace(text)
+}
+
+// MCPCallOutcomeForExecution classifies one completed tool execution as an MCP
+// call, or reports false when the call is not an MCP call at all (no MCP server
+// tag). The result shape is the MCP executor's `tool.Output.Data`
+// (`mcpToolCall`, `isError`, `structuredContent`, `_meta`); a call whose executor
+// failed before the server answered carries none of it and is Rust's
+// `mcp_request` failure.
+func MCPCallOutcomeForExecution(execution *turn.ToolExecutionResult) (MCPCallOutcome, bool) {
+	if execution == nil || execution.Invocation == nil {
+		return MCPCallOutcome{}, false
+	}
+	if strings.TrimSpace(execution.TelemetryTags["mcp_server"]) == "" {
+		return MCPCallOutcome{}, false
+	}
+	data := MCPExecutionOutputData(execution)
+	hasResult := false
+	isError := false
+	var structuredContent map[string]any
+	if data != nil {
+		hasResult, _ = data["mcpToolCall"].(bool)
+		isError, _ = data["isError"].(bool)
+		structuredContent, _ = data["structuredContent"].(map[string]any)
+	}
+	return MCPCallOutcomeForResult(hasResult, isError, structuredContent, MCPExecutionResultMeta(execution)), true
+}
+
+// MCPExecutionOutputData reports a tool execution's output data, or nil when the
+// call produced no output.
+func MCPExecutionOutputData(execution *turn.ToolExecutionResult) map[string]any {
+	if execution == nil || execution.Output == nil {
+		return nil
+	}
+	return execution.Output.Data
+}
+
+// MCPExecutionResultMeta reads an MCP result's `_meta` object from a tool
+// execution's output data.
+func MCPExecutionResultMeta(execution *turn.ToolExecutionResult) map[string]any {
+	data := MCPExecutionOutputData(execution)
+	if data == nil {
+		return nil
+	}
+	meta, _ := data["_meta"].(map[string]any)
+	return meta
+}
+
+// MCPCallNames reports the server and tool names an MCP call's metrics are tagged
+// with: the server the call ran against and the MCP tool's own name (Rust tags
+// the remote tool name, not the namespaced one).
+func MCPCallNames(execution *turn.ToolExecutionResult) (string, string) {
+	if execution == nil {
+		return "", ""
+	}
+	server := strings.TrimSpace(execution.TelemetryTags["mcp_server"])
+	toolName := ""
+	if data := MCPExecutionOutputData(execution); data != nil {
+		toolName, _ = data["tool"].(string)
+	}
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" && execution.Invocation != nil {
+		toolName = execution.Invocation.ToolName.Key()
+	}
+	return server, toolName
+}
+
+// EmitMCPCallMetricsForExecution records Rust's MCP call metric triple for one
+// completed execution, tagging the connector the call targets. It reports false
+// when the execution is not an MCP call.
+func EmitMCPCallMetricsForExecution(sink TurnMetricSink, execution *turn.ToolExecutionResult, connectorID string, connectorName string) bool {
+	outcome, ok := MCPCallOutcomeForExecution(execution)
+	if !ok {
+		return false
+	}
+	server, toolName := MCPCallNames(execution)
+	var duration time.Duration
+	if execution != nil {
+		duration = execution.FinishedAt.Sub(execution.StartedAt)
+	}
+	EmitMCPCallMetrics(sink, outcome, server, toolName, connectorID, connectorName, duration)
+	return true
 }

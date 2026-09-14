@@ -451,7 +451,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	// Rust's turn task starts its end-to-end timer here and records the turn's
 	// session metrics when the task ends.
 	turnStartedAt := time.Now().UTC()
-	turnResult, err := r.runAgentTurn(ctx, req, agent, &agentRunConfig{
+	runConfig := &agentRunConfig{
 		Config:                         cfg,
 		Prompt:                         runPrompt,
 		InputItems:                     inputItems,
@@ -513,7 +513,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		OnSteerCommitted:               req.OnSteerCommitted,
 		SamplingFollowUp:               r.execAutoCompactFallbackFollowUp(cfg, modelID),
 		SamplingCompaction:             r.execMidTurnSamplingCompaction(cfg, modelID, providerID, agent, req, threadID, turnID, prompt, requestInputs, resumeContext, eventSink, execStartupItems, req.AdditionalInputItems),
-	})
+	}
+	turnResult, err := r.runAgentTurn(ctx, req, agent, runConfig)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			_ = r.persistInterruptedSession(threadID, turnID, err)
@@ -531,7 +532,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err := eventSink.Err(); err != nil {
 		return nil, err
 	}
-	r.emitTurnMetrics(turnResult, threadID, modelID, false)
+	r.emitTurnMetrics(turnResult, threadID, modelID, false, runConfig.ToolRouter)
 	r.emitTurnE2EDuration(turnStartedAt)
 	lastMessage, hasLastMessage := finalMessageForRequest(req, turnResult)
 	tokenUsage := execTokenUsageForResult(resumeContext, turnResult, modelID, cfg)
@@ -633,6 +634,10 @@ type agentRunConfig struct {
 	Prompt       string
 	Instructions string
 	InputItems   []any
+	// ToolRouter is the per-run tool router the turn dispatches through. It is
+	// filled while the turn runs, so the turn's metrics can read each MCP call's
+	// connector metadata after the fact (Router.MCPConnectorInfo).
+	ToolRouter *tool.Router
 	// PostPromptInputItems are appended after the prompt's user message for the
 	// first sampling request (Rust #43110 trusted configuration updates).
 	PostPromptInputItems           []any
@@ -1119,6 +1124,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 	if err != nil {
 		return nil, err
 	}
+	run.ToolRouter = router
 	if run.StreamEvents != nil {
 		if responsesAgent, ok := agent.(*model.ResponsesAgentRunner); ok && responsesAgent != nil {
 			agent = responsesAgent.WithStreamHandler(run.StreamEvents.Handle)

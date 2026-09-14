@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/tool"
+	"codex_go/turn"
 )
 
 // MCPCallOutcomeForResult mirrors Rust's mcp_call_metric_outcome matrix.
@@ -180,5 +183,62 @@ func TestMCPCallSpanAttributesLikeRust(t *testing.T) {
 	})
 	if !ok || targetID != "" || userFlow != nil {
 		t.Fatalf("span telemetry = %q %v %v", targetID, userFlow, ok)
+	}
+}
+
+// A completed execution is classified from the MCP executor's output shape, so
+// every front-end (the app-server and the exec runtime) reports the same
+// outcome; a call without the MCP server tag is not classified at all.
+func TestMCPCallOutcomeForExecutionLikeRust(t *testing.T) {
+	mcpExecution := &turn.ToolExecutionResult{
+		Invocation:    &tool.Invocation{ToolName: tool.NamespacedName("mcp__example", "shell")},
+		Output:        &tool.Output{Data: map[string]any{"mcpToolCall": true, "isError": true, "structuredContent": map[string]any{"error_code": "rate_limited"}, "server": "example", "tool": "shell"}},
+		TelemetryTags: map[string]string{"mcp_server": "example", "mcp_server_origin": "stdio"},
+		StartedAt:     time.Unix(1700000000, 0),
+		FinishedAt:    time.Unix(1700000000, 0).Add(25 * time.Millisecond),
+	}
+	outcome, ok := MCPCallOutcomeForExecution(mcpExecution)
+	if !ok || outcome != (MCPCallOutcome{Status: "error", ErrorType: MCPCallErrorTypeToolResult, ErrorCode: "rate_limited"}) {
+		t.Fatalf("outcome = %#v ok=%v", outcome, ok)
+	}
+	if server, toolName := MCPCallNames(mcpExecution); server != "example" || toolName != "shell" {
+		t.Fatalf("names = %q/%q", server, toolName)
+	}
+	sink := &recordingTurnMetricSink{}
+	if !EmitMCPCallMetricsForExecution(sink, mcpExecution, "connector-1", "Calendar") {
+		t.Fatal("MCP execution was not classified")
+	}
+	if len(sink.counters) != 2 || len(sink.durations) != 1 {
+		t.Fatalf("counters = %#v durations = %#v", sink.counters, sink.durations)
+	}
+	if sink.counters[0].tags["server"] != "example" || sink.counters[0].tags["connector_id"] != "connector-1" ||
+		sink.counters[1].tags["error_code"] != "rate_limited" {
+		t.Fatalf("counters = %#v", sink.counters)
+	}
+
+	// A non-MCP call reports nothing.
+	plain := &turn.ToolExecutionResult{Invocation: &tool.Invocation{ToolName: tool.PlainName("shell")}, Output: &tool.Output{Success: true}}
+	if _, ok := MCPCallOutcomeForExecution(plain); ok {
+		t.Fatal("a non-MCP execution was classified")
+	}
+	if EmitMCPCallMetricsForExecution(sink, plain, "", "") {
+		t.Fatal("a non-MCP execution emitted MCP metrics")
+	}
+	if len(sink.counters) != 2 {
+		t.Fatalf("counters = %#v", sink.counters)
+	}
+
+	// A failed MCP call whose executor never received a result is Rust's
+	// mcp_request failure, and its tag names fall back to the invocation.
+	failed := &turn.ToolExecutionResult{
+		Invocation:    &tool.Invocation{ToolName: tool.NamespacedName("mcp__example", "shell")},
+		TelemetryTags: map[string]string{"mcp_server": "example"},
+	}
+	requestOutcome, ok := MCPCallOutcomeForExecution(failed)
+	if !ok || requestOutcome.ErrorType != MCPCallErrorTypeMCPRequest || requestOutcome.ErrorCode != MCPCallErrorCodeUnknown {
+		t.Fatalf("outcome = %#v ok=%v", requestOutcome, ok)
+	}
+	if _, toolName := MCPCallNames(failed); toolName != "mcp__example.shell" {
+		t.Fatalf("fallback tool name = %q", toolName)
 	}
 }

@@ -129,7 +129,7 @@ func (r *Runner) shutdownOtelProvider(ctx context.Context) {
 //
 // Go's exec has no memories or managed-network-proxy subsystem, so Rust's
 // codex.turn.memory and codex.turn.network_proxy counters are not emitted here.
-func (r *Runner) emitTurnMetrics(result *turn.AgentLoopResult, threadID string, modelID string, memoryToolEnabled bool) {
+func (r *Runner) emitTurnMetrics(result *turn.AgentLoopResult, threadID string, modelID string, memoryToolEnabled bool, toolRouter *tool.Router) {
 	sink := r.otelMetricsSink()
 	if sink == nil || result == nil {
 		return
@@ -137,7 +137,15 @@ func (r *Runner) emitTurnMetrics(result *turn.AgentLoopResult, threadID string, 
 	telemetry.EmitTurnTokenUsageMetrics(sink, result.ModelResponses(), modelID, memoryToolEnabled)
 	telemetry.EmitTurnToolCallMetric(sink, len(result.ToolExecutions), memoryToolEnabled)
 	for index := range result.ToolExecutions {
-		telemetry.EmitToolCallMetric(sink, &result.ToolExecutions[index])
+		execution := &result.ToolExecutions[index]
+		telemetry.EmitToolCallMetric(sink, execution)
+		// Rust's core reports the MCP call's outcome metrics beside the generic
+		// tool metrics (mcp_tool_call.rs's emit_mcp_call_metrics).
+		connectorID, connectorName := "", ""
+		if toolRouter != nil && execution.Invocation != nil {
+			connectorID, connectorName = toolRouter.MCPConnectorInfo(execution.Invocation)
+		}
+		telemetry.EmitMCPCallMetricsForExecution(sink, execution, connectorID, connectorName)
 	}
 	telemetry.EmitTurnRunningProcessesMetric(sink, r.runningUnifiedExecProcesses(threadID))
 	r.emitToolResultRecords(result, threadID, modelID)

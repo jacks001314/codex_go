@@ -128,8 +128,16 @@ func TestExecTurnMetricsLikeRust(t *testing.T) {
 			Output:     &tool.Output{Success: true},
 			StartedAt:  started,
 			FinishedAt: finished,
+		}, {
+			// An MCP call reports Rust's codex.mcp.call triple beside the generic
+			// tool metrics, with the outcome taken from its result.
+			Invocation:    &tool.Invocation{ToolName: tool.NamespacedName("mcp__example", "shell")},
+			Output:        &tool.Output{Success: false, Data: map[string]any{"mcpToolCall": true, "isError": true, "structuredContent": map[string]any{"error_code": "rate_limited"}, "server": "example", "tool": "shell"}},
+			TelemetryTags: map[string]string{"mcp_server": "example", "mcp_server_origin": "stdio"},
+			StartedAt:     started,
+			FinishedAt:    finished,
 		}},
-	}, "thread-1", "gpt-test", false)
+	}, "thread-1", "gpt-test", false, nil)
 	runner.emitTurnE2EDuration(started)
 	runner.shutdownOtelProvider(context.Background())
 
@@ -144,6 +152,9 @@ func TestExecTurnMetricsLikeRust(t *testing.T) {
 		"codex.turn.tool.call",
 		"codex.tool.call",
 		"codex.tool.call.duration_ms",
+		"codex.mcp.call",
+		"codex.mcp.call.duration_ms",
+		"codex.mcp.call.error",
 		"codex.turn.unified_exec.running_processes",
 		"codex.turn.e2e_duration_ms",
 	} {
