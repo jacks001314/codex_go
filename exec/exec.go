@@ -1199,6 +1199,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	}
 	if options.Shell != nil {
 		options.Shell.Approval = r.ShellApproval
+		options.Shell.DecisionSink = r.sessionTelemetryForRun()
 		if run != nil {
 			options.Shell.MaxOutputTokens = run.ToolOutputTokenLimit
 			options.Shell.Validation.AdditionalPermissionsAllowed = run.ExecPermissionApprovals

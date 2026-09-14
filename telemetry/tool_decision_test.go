@@ -4,7 +4,44 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"codex_go/tool"
 )
+
+// The tool package's decision sink reports a config-approved call as Rust's
+// tool_decision(Approved, Config).
+func TestSessionTelemetryAutoApprovedLikeRust(t *testing.T) {
+	logBodies := make(chan map[string]any, 1)
+	logServer := newLogBatchServer(t, logBodies)
+	defer logServer.Close()
+	logsClient := NewLogsClient(LogsClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       logServer.URL + "/v1/logs",
+		ExportInterval: -1,
+	})
+	session := NewSessionTelemetry(SessionTelemetryMetadata{ConversationID: "thread-1"})
+	session.Logs = logsClient
+	session.AutoApproved(tool.NamespacedName("mcp__example", "shell"), "call-9")
+	if err := logsClient.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	body := <-logBodies
+	_, record := singleLogRecord(t, body)
+	attributes := logRecordAttributes(t, record)
+	for key, want := range map[string]string{
+		"event.name":      "codex.tool_decision",
+		"tool_name":       "shell",
+		"tool_namespace":  "mcp__example",
+		"call_id":         "call-9",
+		"decision":        "approved",
+		"source":          "config",
+		"conversation.id": "thread-1",
+	} {
+		if got := attributes[key]; got != want {
+			t.Fatalf("log attribute %s = %q, want %q", key, got, want)
+		}
+	}
+}
 
 // The decision record is log-only: it names the tool, its namespace (defaulting
 // to `functions`), the call, and the opaque decision, and reports the source

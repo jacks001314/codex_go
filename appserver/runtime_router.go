@@ -13130,6 +13130,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				modelID = stringConfigValue(cfg, "model")
 			}
 			options.Shell.Approval = r.shellApprovalForTurn(threadID, strings.TrimSpace(turnID), r.modelIgnoresAllowPrefixRules(cfg, modelID))
+			// The shell executor reports the decisions it never had to ask for
+			// (Rust's tool_decision(Approved, Config) for a skipped requirement).
+			options.Shell.DecisionSink = r.sessionTelemetryForThread(threadID)
 		}
 	}
 	if options.ApplyPatch != nil && r.serverRequestSinkConfigured() && applyPatchApprovalRequiredForTurn(approvalPolicy) {

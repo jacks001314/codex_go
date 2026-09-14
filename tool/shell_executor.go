@@ -26,12 +26,23 @@ const (
 	DefaultExecCommandMaxOutputTokens = 10000
 )
 
+// ToolDecisionSink reports the approval decisions a tool call received without
+// asking anyone: Rust's orchestrator reports `tool_decision(Approved, Config)`
+// for a tool whose approval requirement is skipped.
+type ToolDecisionSink interface {
+	// AutoApproved reports a call the configured policy approved without a prompt.
+	AutoApproved(toolName ToolName, callID string)
+}
+
 type ShellExecutorOptions struct {
-	Runner              ShellRunner
-	Shell               *Shell
-	Validation          ShellValidationOptions
-	ToolName            ToolName
-	Approval            ShellApprovalFunc
+	Runner     ShellRunner
+	Shell      *Shell
+	Validation ShellValidationOptions
+	ToolName   ToolName
+	Approval   ShellApprovalFunc
+	// DecisionSink receives the config-approved decisions for commands that need
+	// no approval (Rust's skipped approval requirement).
+	DecisionSink        ToolDecisionSink
 	MaxOutputTokens     *int
 	UnifiedExec         *UnifiedExecManager
 	UnifiedExecEvents   UnifiedExecEventSink
@@ -79,6 +90,7 @@ type ShellExecutor struct {
 	validation               ShellValidationOptions
 	toolName                 ToolName
 	approval                 ShellApprovalFunc
+	decisionSink             ToolDecisionSink
 	maxOutputTokens          *int
 	unifiedExec              *UnifiedExecManager
 	unifiedExecEvents        UnifiedExecEventSink
@@ -147,6 +159,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 		executor.toolName = options.ToolName
 	}
 	executor.approval = options.Approval
+	executor.decisionSink = options.DecisionSink
 	executor.maxOutputTokens = cloneNonNegativeInt(options.MaxOutputTokens)
 	executor.unifiedExec = options.UnifiedExec
 	executor.unifiedExecEvents = options.UnifiedExecEvents
@@ -617,6 +630,18 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 				LogPreview: shellLogPreview(body),
 			}, nil
 		}
+	} else if e.decisionSink != nil {
+		// Rust's orchestrator reports the config-approved decision for a tool whose
+		// approval requirement is skipped (no approval was needed at all).
+		toolName := e.toolName
+		callID := ""
+		if invocation != nil {
+			if invocation.ToolName.Key() != "" {
+				toolName = invocation.ToolName
+			}
+			callID = strings.TrimSpace(invocation.CallID)
+		}
+		e.decisionSink.AutoApproved(toolName, callID)
 	}
 	var metricsSidecar *plugin.PluginMetricsSidecar
 	remoteEnvironment := environment != nil && (environment.ExecServerURL != "" || environment.NoiseProvider != nil)

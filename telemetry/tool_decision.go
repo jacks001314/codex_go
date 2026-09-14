@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"codex_go/protocol"
+	"codex_go/tool"
 )
 
 // Rust parity: codex-otel's SessionTelemetry::tool_decision, which core's
@@ -42,6 +43,22 @@ type ToolDecisionEvent struct {
 	Decision string
 	// Source is absent when the decision came from no tracked reviewer.
 	Source string
+}
+
+// AutoApproved implements the tool package's decision sink: a call the
+// configured policy approved without a prompt reports Rust's
+// `tool_decision(Approved, Config)`.
+func (t *SessionTelemetry) AutoApproved(toolName tool.ToolName, callID string) {
+	if t == nil {
+		return
+	}
+	EmitToolDecision(context.Background(), t, ToolDecisionEvent{
+		ToolName:      strings.TrimSpace(toolName.Name),
+		ToolNamespace: strings.TrimSpace(toolName.Namespace),
+		CallID:        strings.TrimSpace(callID),
+		Decision:      ToolDecisionApproved,
+		Source:        ToolDecisionSourceConfig,
+	})
 }
 
 // EmitToolDecision mirrors SessionTelemetry::tool_decision: a log-only record
