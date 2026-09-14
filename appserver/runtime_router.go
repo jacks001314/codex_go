@@ -13140,6 +13140,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.ApplyPatch.Approval = r.applyPatchApprovalForTurn(threadID, strings.TrimSpace(turnID))
 		}
 	}
+	if options.ApplyPatch != nil {
+		// Patches the policy approves without a prompt report the same
+		// config-approved decision the shell executor reports.
+		options.ApplyPatch.DecisionSink = r.sessionTelemetryForThread(threadID)
+	}
 	options.EnableMCP = len(mcpTools) > 0
 	options.MCPService = mcpService
 	orchestratorSkillsEnabled := cfg == nil || cfg.OrchestratorSkillsEnabled()

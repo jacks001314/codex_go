@@ -22,6 +22,51 @@ func (s *recordingDecisionSink) AutoApproved(toolName ToolName, callID string) {
 	s.autoApproved = append(s.autoApproved, approvedDecision{toolName: toolName, callID: callID})
 }
 
+// A patch that needs no approval reports the same config-approved decision the
+// shell executor reports; an approval-gated patch reports nothing (the approval
+// path decides).
+func TestApplyPatchExecutorReportsAutoApprovedDecisionsLikeRust(t *testing.T) {
+	patch := "*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch"
+
+	sink := &recordingDecisionSink{}
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: t.TempDir(), DecisionSink: sink})
+	if _, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-3",
+		ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload:  Payload{Kind: PayloadCustom, Input: patch},
+	}); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(sink.autoApproved) != 1 {
+		t.Fatalf("decisions = %#v", sink.autoApproved)
+	}
+	if decision := sink.autoApproved[0]; decision.callID != "call-3" || decision.toolName.Key() != DefaultApplyPatchToolName {
+		t.Fatalf("decision = %#v", decision)
+	}
+
+	// An approval-gated patch routes through the approval callback instead.
+	gated := &recordingDecisionSink{}
+	approvals := 0
+	gatedExecutor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{
+		CWD:          t.TempDir(),
+		DecisionSink: gated,
+		Approval: func(context.Context, *ApplyPatchApprovalRequest) (ApplyPatchApprovalDecision, error) {
+			approvals++
+			return ApplyPatchApprovalDecision{Approved: true}, nil
+		},
+	})
+	if _, err := gatedExecutor.Execute(context.Background(), &Invocation{
+		CallID:   "call-4",
+		ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload:  Payload{Kind: PayloadCustom, Input: patch},
+	}); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if approvals != 1 || len(gated.autoApproved) != 0 {
+		t.Fatalf("approvals = %d decisions = %#v", approvals, gated.autoApproved)
+	}
+}
+
 // A command that needs no approval reports the config-approved decision Rust's
 // orchestrator records for a skipped approval requirement.
 func TestShellExecutorReportsAutoApprovedDecisionsLikeRust(t *testing.T) {

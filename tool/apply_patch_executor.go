@@ -18,8 +18,11 @@ type ApplyPatchExecutorOptions struct {
 	IncludeEnvironmentID bool
 	ToolName             ToolName
 	Approval             ApplyPatchApprovalFunc
-	PermissionProfile    *sandbox.PermissionProfile
-	SandboxPolicy        *sandbox.SandboxPolicy
+	// DecisionSink receives the config-approved decisions for patches that need
+	// no approval (Rust's skipped approval requirement).
+	DecisionSink      ToolDecisionSink
+	PermissionProfile *sandbox.PermissionProfile
+	SandboxPolicy     *sandbox.SandboxPolicy
 	// PreserveLineEndings mirrors Rust Feature::ApplyPatchPreserveLineEndings
 	// (c9c6c0daa9): retain CRLF/CR/mixed line endings when updating files.
 	PreserveLineEndings bool
@@ -30,6 +33,7 @@ type ApplyPatchExecutor struct {
 	includeEnvironmentID bool
 	toolName             ToolName
 	approval             ApplyPatchApprovalFunc
+	decisionSink         ToolDecisionSink
 	permissionProfile    *sandbox.PermissionProfile
 	sandboxPolicy        *sandbox.SandboxPolicy
 	preserveLineEndings  bool
@@ -65,6 +69,7 @@ func NewApplyPatchExecutor(options *ApplyPatchExecutorOptions) *ApplyPatchExecut
 	executor.cwdPath = options.CWD
 	executor.includeEnvironmentID = options.IncludeEnvironmentID
 	executor.approval = options.Approval
+	executor.decisionSink = options.DecisionSink
 	executor.permissionProfile = options.PermissionProfile
 	executor.sandboxPolicy = options.SandboxPolicy
 	executor.preserveLineEndings = options.PreserveLineEndings
@@ -165,6 +170,18 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 				LogPreview: shellLogPreview(body),
 			}, nil
 		}
+	} else if e.decisionSink != nil {
+		// Rust's orchestrator reports the config-approved decision for a tool whose
+		// approval requirement is skipped (no approval was needed at all).
+		toolName := e.toolName
+		callID := ""
+		if invocation != nil {
+			if invocation.ToolName.Key() != "" {
+				toolName = invocation.ToolName
+			}
+			callID = strings.TrimSpace(invocation.CallID)
+		}
+		e.decisionSink.AutoApproved(toolName, callID)
 	}
 	result, err := action.ApplyVerified(applyOptions)
 	if err != nil {

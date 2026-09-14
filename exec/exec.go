@@ -1205,6 +1205,9 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 			options.Shell.Validation.AdditionalPermissionsAllowed = run.ExecPermissionApprovals
 		}
 	}
+	if options.ApplyPatch != nil {
+		options.ApplyPatch.DecisionSink = r.sessionTelemetryForRun()
+	}
 	// Rust TurnMetadataState::mark_user_input_requested_during_turn: the MCP
 	// metadata reports that the model asked the user for input this turn.
 	userInputRequested := &atomic.Bool{}
