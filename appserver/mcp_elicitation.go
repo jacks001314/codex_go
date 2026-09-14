@@ -243,6 +243,13 @@ func mapFromAny(value any) map[string]any {
 }
 
 func guardianMCPApprovalRequested(request *mcp.MCPElicitationRequest) bool {
+	// Rust's guardian_elicitation_review_request only inspects the MCP
+	// elicitation variants: the OpenAI form modes and user verification answer
+	// NotRequested before any metadata is read (session/mcp.rs), so such an
+	// elicitation is never reviewed and never declined here.
+	if request == nil || strings.TrimSpace(request.Method) != "elicitation/create" {
+		return false
+	}
 	meta, ok := requestMetaMap(request)
 	return ok && strings.TrimSpace(stringFromMap(meta, "codex_request_type")) == "approval_request"
 }
@@ -312,8 +319,9 @@ func appserverMCPElicitationParams(request *mcp.MCPElicitationRequest) *MCPElici
 		turnID = &turnIDValue
 	}
 	mode := "form"
-	if strings.TrimSpace(request.Method) == "openai/form" {
-		mode = "openai/form"
+	switch strings.TrimSpace(request.Method) {
+	case "openai/form", "openaiForm", "openai/userVerification":
+		mode = strings.TrimSpace(request.Method)
 	}
 	if strings.TrimSpace(request.URL) != "" {
 		mode = "url"
@@ -328,6 +336,9 @@ func appserverMCPElicitationParams(request *mcp.MCPElicitationRequest) *MCPElici
 		Message:         request.Message,
 		RequestedSchema: request.RequestedSchema,
 		Schema:          request.RequestedSchema,
+		Title:           request.Title,
+		Description:     request.Description,
+		Challenge:       request.Challenge,
 		URL:             request.URL,
 		ElicitationID:   appserverMCPElicitationID(request),
 	}

@@ -312,6 +312,11 @@ type MCPElicitationRequestParams struct {
 	ElicitationID   string  `json:"elicitationId,omitempty"`
 	Server          string  `json:"server,omitempty"`
 	Schema          any     `json:"schema,omitempty"`
+	// Title / Description / Challenge carry the `openai/userVerification`
+	// elicitation's fields (Rust's McpServerElicitationRequest::UserVerification).
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Challenge   string `json:"challenge,omitempty"`
 }
 
 func (p *MCPElicitationRequestParams) MarshalJSON() ([]byte, error) {
@@ -329,6 +334,24 @@ func (p *MCPElicitationRequestParams) MarshalJSON() ([]byte, error) {
 	}
 	if requestedSchema == nil && mode != "url" {
 		requestedSchema = map[string]any{}
+	}
+	// The user-verification elicitation carries only its three fields beside the
+	// identity: Rust's variant has no message or requested schema, and the client
+	// answers it with the verification proof.
+	if mode == "openai/userVerification" {
+		var turnID any
+		if p.TurnID != nil {
+			turnID = *p.TurnID
+		}
+		return json.Marshal(map[string]any{
+			"threadId":    p.ThreadID,
+			"turnId":      turnID,
+			"serverName":  serverName,
+			"mode":        mode,
+			"title":       p.Title,
+			"description": p.Description,
+			"challenge":   p.Challenge,
+		})
 	}
 	return json.Marshal(struct {
 		ThreadID        string  `json:"threadId"`

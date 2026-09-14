@@ -7051,6 +7051,16 @@ func TestGuardianMCPElicitationValidationMatchesRust(t *testing.T) {
 	if guardianMCPApprovalRequested(withoutOptIn) {
 		t.Fatal("request without codex_request_type should not opt in")
 	}
+	// Rust's guardian_elicitation_review_request answers NotRequested for the
+	// OpenAI elicitation kinds before reading their metadata, so an OpenAI form
+	// carrying an approval request is neither reviewed nor declined.
+	for _, kind := range []string{"openai/form", "openaiForm", "openai/userVerification"} {
+		openAIKind := base()
+		openAIKind.Method = kind
+		if guardianMCPApprovalRequested(openAIKind) {
+			t.Fatalf("%s should not opt into the guardian review", kind)
+		}
+	}
 }
 
 func TestGuardianMCPElicitationInvalidShapeAutoDeclines(t *testing.T) {
@@ -7163,6 +7173,53 @@ func TestAppserverMCPElicitationParamsOpenAIFormMode(t *testing.T) {
 	}
 	if _, ok := payload["requestedSchema"].(map[string]any); !ok {
 		t.Fatalf("requestedSchema missing: %#v", payload)
+	}
+}
+
+// The user-verification elicitation keeps Rust's variant shape: the mode plus
+// its three fields, and no message or requested schema, so the client answers
+// with the verification proof.
+func TestAppserverMCPElicitationParamsUserVerificationMode(t *testing.T) {
+	params := appserverMCPElicitationParams(&mcp.MCPElicitationRequest{
+		ServerName:  "docs",
+		ThreadID:    "thread-1",
+		Method:      "openai/userVerification",
+		Title:       "Confirm",
+		Description: "Sign the challenge",
+		Challenge:   "Y2hhbGxlbmdl",
+	})
+	if params.Mode != "openai/userVerification" || params.Title != "Confirm" ||
+		params.Description != "Sign the challenge" || params.Challenge != "Y2hhbGxlbmdl" {
+		t.Fatalf("params = %#v", params)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("Marshal params returned error: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("Unmarshal params returned error: %v", err)
+	}
+	if payload["mode"] != "openai/userVerification" || payload["title"] != "Confirm" ||
+		payload["description"] != "Sign the challenge" || payload["challenge"] != "Y2hhbGxlbmdl" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	for _, absent := range []string{"message", "requestedSchema", "url"} {
+		if _, ok := payload[absent]; ok {
+			t.Fatalf("payload reported %s: %#v", absent, payload)
+		}
+	}
+
+	// The openaiForm mode maps through unchanged as well.
+	openAIForm := appserverMCPElicitationParams(&mcp.MCPElicitationRequest{
+		ServerName:      "docs",
+		ThreadID:        "thread-1",
+		Method:          "openaiForm",
+		Message:         "Approve?",
+		RequestedSchema: map[string]any{"type": "object"},
+	})
+	if openAIForm.Mode != "openaiForm" {
+		t.Fatalf("openaiForm mode = %q", openAIForm.Mode)
 	}
 }
 

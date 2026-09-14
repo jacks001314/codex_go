@@ -22,10 +22,15 @@ type MCPElicitationRequest struct {
 	ID              json.RawMessage `json:"id,omitempty"`
 	Message         string          `json:"message,omitempty"`
 	RequestedSchema any             `json:"requestedSchema,omitempty"`
-	URL             string          `json:"url,omitempty"`
-	ElicitationID   string          `json:"elicitationId,omitempty"`
-	Meta            any             `json:"_meta,omitempty"`
-	Params          json.RawMessage `json:"params,omitempty"`
+	// Title / Description / Challenge carry an `openai/userVerification`
+	// elicitation's fields (Rust's Elicitation::UserVerification).
+	Title         string          `json:"title,omitempty"`
+	Description   string          `json:"description,omitempty"`
+	Challenge     string          `json:"challenge,omitempty"`
+	URL           string          `json:"url,omitempty"`
+	ElicitationID string          `json:"elicitationId,omitempty"`
+	Meta          any             `json:"_meta,omitempty"`
+	Params        json.RawMessage `json:"params,omitempty"`
 }
 
 type MCPElicitationResponse struct {
