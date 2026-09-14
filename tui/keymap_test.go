@@ -11,6 +11,7 @@ func TestKeymapActionCatalogIncludesRustActions(t *testing.T) {
 	actions := KeymapActions(KeymapActionFilter{})
 	want := []string{
 		"global/open_agents",
+		"agents/resume",
 		"agents/search",
 		"agents/new_task",
 		"agents/rename",
@@ -104,6 +105,7 @@ func TestOpenAgentsDefaultShadowedByCustomAltA(t *testing.T) {
 func TestAgentsKeymapActionsResolveDefaults(t *testing.T) {
 	config := NewKeymapConfig()
 	for action, want := range map[string]string{
+		"resume":          "o",
 		"search":          "f",
 		"new_task":        "n",
 		"new_worktree":    "w",

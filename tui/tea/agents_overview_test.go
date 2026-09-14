@@ -225,6 +225,32 @@ func TestModelAgentsDashboardStopSelected(t *testing.T) {
 	}
 }
 
+// The command center's resume shortcut opens the same session resume picker the
+// chat uses, mirroring Rust's agents overview `OpenResumePicker` event.
+func TestModelAgentsDashboardResumeOpensSessionPicker(t *testing.T) {
+	model := NewModel(nil, Options{
+		Width:            120,
+		Height:           24,
+		SessionPickerCWD: `D:\repo`,
+		SessionPickerItems: []codextui.SessionSummary{
+			{ThreadID: "thread-new", Title: "Newer Session", CWD: `D:\repo`, Provider: "openai"},
+		},
+		OnAgentsOverviewRefresh: func(currentThreadID string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+	})
+	openAgentsDashboard(t, model)
+
+	updated, command := model.Update(agentsKeyEvent('o'))
+	model = updated.(*Model)
+	if command != nil {
+		_ = command()
+	}
+	if model.modal == nil || model.modal.sessionPicker == nil {
+		t.Fatalf("the resume shortcut did not open the session picker: %#v", model.modal)
+	}
+}
+
 func TestModelAgentsDashboardRenameSelected(t *testing.T) {
 	renamed := map[string]string{}
 	model := NewModel(nil, Options{

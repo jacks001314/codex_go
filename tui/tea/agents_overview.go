@@ -361,6 +361,11 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m.keyMatches("agents", "search", keySpec) {
 		m.agentsOverview.ToggleSearch()
 	}
+	if m.keyMatches("agents", "resume", keySpec) {
+		// Rust's agents overview sends `OpenResumePicker` for the resume action, so
+		// the command center opens the same session resume picker as the chat.
+		return m.openSessionPicker(codextui.SessionPickerResume)
+	}
 	if m.keyMatches("agents", "toggle_grouping", keySpec) {
 		m.agentsOverview.ToggleGrouping()
 	}

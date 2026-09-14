@@ -226,6 +226,7 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 				action string
 				alias  string
 			}{
+				{action: "resume", alias: "o"},
 				{action: "search", alias: "f"},
 				{action: "new_task", alias: "n"},
 				{action: "new_worktree", alias: "w"},

@@ -151,6 +151,7 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("list", "List", "jump_bottom", "Jump to the last list item.", []string{"end"}),
 	keymapAction("list", "List", "accept", "Accept the current list selection.", []string{"enter"}),
 	keymapAction("list", "List", "cancel", "Cancel and close selection views.", []string{"esc"}),
+	keymapAction("agents", "Agents", "resume", "Open the session resume picker.", []string{"o"}),
 	keymapAction("agents", "Agents", "search", "Search the available agent tasks.", []string{"f"}),
 	keymapAction("agents", "Agents", "new_task", "Open a new session in the selected checkout.", []string{"n"}),
 	keymapAction("agents", "Agents", "new_worktree", "Open a new session in a worktree from the project default branch.", []string{"w"}),
