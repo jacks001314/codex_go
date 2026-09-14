@@ -13,28 +13,6 @@ import (
 	windowsunified "codex_go/sandbox/windowssandbox/unified_exec"
 )
 
-// Windows sandbox level wire values (Rust WindowsSandboxLevel, serde
-// rename_all = "kebab-case").
-const (
-	windowsSandboxLevelDisabled        = "disabled"
-	windowsSandboxLevelRestrictedToken = "restricted-token"
-	windowsSandboxLevelElevated        = "elevated"
-	windowsSandboxLevelMxc             = "mxc"
-)
-
-// parseWindowsSandboxLevelValue validates the level the way Rust's enum
-// deserialization does; an empty value keeps Go's legacy default.
-func parseWindowsSandboxLevelValue(value string) (string, error) {
-	level := strings.TrimSpace(value)
-	switch level {
-	case "", windowsSandboxLevelDisabled, windowsSandboxLevelRestrictedToken,
-		windowsSandboxLevelElevated, windowsSandboxLevelMxc:
-		return level, nil
-	default:
-		return "", fmt.Errorf("unknown variant `%s`, expected one of `disabled`, `restricted-token`, `elevated`, `mxc`", value)
-	}
-}
-
 func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandboxProcess, bool, error) {
 	if params == nil || !hasJSONValue(params.Sandbox) {
 		return nil, false, nil
