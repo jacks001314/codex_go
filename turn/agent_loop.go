@@ -126,6 +126,12 @@ type AgentLoopRequest struct {
 	// Trace is the W3C trace context of the request that started this turn
 	// (Rust's `request_trace`), forwarded to every model request the turn makes.
 	Trace *protocol.W3CTraceContext
+	// CWD is the turn's working directory, reported on the sampling-request span
+	// like Rust's `run_sampling_request` instrumentation.
+	CWD string
+	// Tracer, when set, opens the turn loop's spans (Rust's per-turn
+	// instrumentation).
+	Tracer SpanTracer
 	// StepSettings, when set, refreshes the model, reasoning effort, and client
 	// metadata of every step after the first (Rust Session::update_step_settings
 	// reaching a later sampling step).
@@ -292,7 +298,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		if request.InstructionsProvider != nil {
 			instructions = request.InstructionsProvider()
 		}
-		response, err := l.agent.Run(ctx, &model.AgentRequest{
+		// Rust instruments the sampling request with `run_sampling_request`, so the
+		// client's spans and records land inside the turn's span tree.
+		stepCtx, samplingSpan := startSamplingRequestSpan(ctx, request, stepModel)
+		response, err := l.agent.Run(stepCtx, &model.AgentRequest{
 			Prompt:                       prompt,
 			Instructions:                 instructions,
 			InputItems:                   inputItems,
@@ -323,6 +332,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			DisableHostedImageGeneration: request.DisableHostedImageGeneration,
 			StreamHandler:                combineResponsesStreamHandlers(request.StreamHandler, timingStreamHandler(timing, l.now)),
 		})
+		if samplingSpan != nil {
+			samplingSpan.End()
+		}
 		sampling.CloseAt(l.now())
 		if err != nil {
 			return nil, err

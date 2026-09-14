@@ -209,6 +209,11 @@ func (t *SessionTelemetry) StartSpan(ctx context.Context, parent model.Telemetry
 	if concrete, ok := parent.(*SessionSpan); ok && concrete != nil {
 		parentSpan = concrete.span
 	}
+	// Rust's tracing macros parent a span to the ambient one when no explicit
+	// parent is given, so a span opened inside another one nests.
+	if parentSpan == nil {
+		parentSpan = SpanFromContext(ctx)
+	}
 	var span *Span
 	if t != nil && t.Tracer != nil {
 		if parentSpan != nil {

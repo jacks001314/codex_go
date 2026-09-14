@@ -208,6 +208,90 @@ func encodedAttributes(container map[string]any) map[string]string {
 	return attributes
 }
 
+// A turn's model request runs inside Rust's `run_sampling_request` span, which
+// carries the turn id, the model, and the working directory.
+func TestTurnStartOpensSamplingRequestSpanLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+	})
+	if err != nil || provider == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	router.SetNotificationSink(sink)
+	router.installOtelProvider(provider, state.NewTaskMetrics())
+	defer router.Close()
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "inspect",
+		CWD:      home,
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	found := false
+	for {
+		select {
+		case payload := <-traceBodies:
+			spans := payload["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+			for _, entry := range spans {
+				span := entry.(map[string]any)
+				if span["name"] != "run_sampling_request" {
+					continue
+				}
+				attributes := encodedAttributes(span)
+				if attributes["turn_id"] != turnID {
+					t.Fatalf("span attributes = %#v, want turn %q", attributes, turnID)
+				}
+				if attributes["model"] == "" || attributes["cwd"] == "" {
+					t.Fatalf("span attributes = %#v", attributes)
+				}
+				found = true
+			}
+		case <-time.After(500 * time.Millisecond):
+			if !found {
+				t.Fatal("the exported spans do not include the sampling-request span")
+			}
+			return
+		}
+	}
+}
+
 // stubMCPExecutor registers one MCP tool so the router reports its server tags.
 type stubMCPExecutor struct {
 	name       tool.ToolName

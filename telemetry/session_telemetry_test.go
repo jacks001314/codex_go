@@ -277,6 +277,51 @@ func TestSessionTelemetryOmitsAbsentIdentityFields(t *testing.T) {
 	}
 }
 
+// A span opened without an explicit parent nests inside the span the context
+// carries, mirroring Rust's implicit current-span parenting; without one it is a
+// root span.
+func TestSessionTelemetryParentsSpansFromContextLikeRust(t *testing.T) {
+	bodies := make(chan map[string]any, 1)
+	server := newTraceBatchServer(t, bodies)
+	defer server.Close()
+	client := NewTracesClient(TracesClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       server.URL + "/v1/traces",
+		ExportInterval: -1,
+	})
+	session := NewSessionTelemetry(SessionTelemetryMetadata{ConversationID: "thread-1"})
+	session.Tracer = client.Tracer()
+
+	outerCtx, outerSpan := session.StartSpan(context.Background(), nil, "run_sampling_request",
+		map[string]string{"turn_id": "turn-1"})
+	_, innerSpan := session.StartSpan(outerCtx, nil, "stream_request", nil)
+	innerSpan.End()
+	_, rootSpan := session.StartSpan(context.Background(), nil, "root_span", nil)
+	rootSpan.End()
+	outerSpan.End()
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	select {
+	case body := <-bodies:
+		spans := body["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+		outer := spanNamed(t, spans, "run_sampling_request")
+		inner := spanNamed(t, spans, "stream_request")
+		if inner["parentSpanId"] != outer["spanId"] || inner["traceId"] != outer["traceId"] {
+			t.Fatalf("inner span = %#v outer = %#v", inner, outer)
+		}
+		if attributes := spanAttributeValues(t, outer); attributes["turn_id"] != "turn-1" {
+			t.Fatalf("outer attributes = %#v", attributes)
+		}
+		if root := spanNamed(t, spans, "root_span"); root["parentSpanId"] != nil {
+			t.Fatalf("root span = %#v", root)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the traces endpoint did not receive the spans")
+	}
+}
+
 // The session telemetry opens the client's spans on the provider's tracer: the
 // per-event span is renamed through Rust's `otel.name`, records the event
 // fields, and parents under the stream span, while the trace-safe records

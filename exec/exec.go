@@ -1158,6 +1158,8 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		PromptCacheKey:               run.PromptCacheKey,
 		ServiceTier:                  run.ServiceTier,
 		ClientMetadata:               cloneStringMap(run.ClientMetadata),
+		CWD:                          requestCWD(req),
+		Tracer:                       r.sessionTelemetryForRun(),
 		OutputSchema:                 run.OutputSchema,
 		DisableHostedImageGeneration: run.DisableHostedImageGeneration,
 		OnToolStarted:                run.StreamEvents.ToolStarted,
