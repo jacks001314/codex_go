@@ -448,6 +448,7 @@ type recordingTelemetrySink struct {
 	sseCompleted       []SSECompletedRecord
 	sseCompletedFailed []string
 	websocketConnects  []WebsocketConnectRecord
+	authRecoveries     []AuthRecoveryRecord
 }
 
 // recordingTelemetrySpan captures one span's lifecycle, so the tests can assert
@@ -500,6 +501,10 @@ func (s *recordingTelemetrySink) RecordSSEEventCompletedFailed(_ context.Context
 
 func (s *recordingTelemetrySink) RecordWebsocketConnect(_ context.Context, record WebsocketConnectRecord) {
 	s.websocketConnects = append(s.websocketConnects, record)
+}
+
+func (s *recordingTelemetrySink) RecordAuthRecovery(_ context.Context, record AuthRecoveryRecord) {
+	s.authRecoveries = append(s.authRecoveries, record)
 }
 
 type telemetryRecord struct {

@@ -2380,9 +2380,10 @@ func TestResponsesAgentRunnerRecordsWebsocketConnectFailureLikeRust(t *testing.T
 	if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "hello", ThreadID: "thread-1", TurnID: "turn-1"}); err == nil {
 		t.Fatal("RunWebSocket() error = nil")
 	}
-	// The 401 handshake triggers one auth recovery, so the retry reports a second
-	// attempt flagged as retrying after an unauthorized response.
-	if len(sink.websocketConnects) != 2 {
+	// No recovery step is available for a plain bearer runner, so the handshake
+	// fails once and the recovery reports that it never ran (Rust's
+	// has_next() == false path).
+	if len(sink.websocketConnects) != 1 {
 		t.Fatalf("connect records = %#v", sink.websocketConnects)
 	}
 	record := sink.websocketConnects[0]
@@ -2401,9 +2402,12 @@ func TestResponsesAgentRunnerRecordsWebsocketConnectFailureLikeRust(t *testing.T
 	if record.RetryAfterUnauthorized {
 		t.Fatalf("first connect record = %#v", record)
 	}
-	if retry := sink.websocketConnects[1]; !retry.RetryAfterUnauthorized ||
-		retry.Status == nil || *retry.Status != http.StatusUnauthorized {
-		t.Fatalf("retry connect record = %#v", retry)
+	if len(sink.authRecoveries) != 1 {
+		t.Fatalf("recovery records = %#v", sink.authRecoveries)
+	}
+	if recovery := sink.authRecoveries[0]; recovery.Outcome != auth.AuthRecoveryOutcomeNotRun ||
+		recovery.RequestID != "req-ws-401" || recovery.CFRay != "ray-ws-401" {
+		t.Fatalf("recovery record = %#v", recovery)
 	}
 }
 
@@ -2465,6 +2469,135 @@ func TestResponsesAgentRunnerRecordsAPIAttemptsLikeRust(t *testing.T) {
 	}
 	if second.Status == nil || *second.Status != http.StatusOK || second.Endpoint != "/responses" {
 		t.Fatalf("second record = %#v", second)
+	}
+}
+
+// A managed ChatGPT recovery reports its plan position and outcome, and the
+// retrying attempt reports the recovery that produced it (Rust's
+// record_auth_recovery plus PendingUnauthorizedRetry on the next api_request).
+func TestResponsesAgentRunnerReportsManagedAuthRecoveryLikeRust(t *testing.T) {
+	home := t.TempDir()
+	initialSnapshot := &auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"access_token":  "old-access-token",
+			"refresh_token": "refresh-token",
+			"account_id":    "account-1",
+		},
+	}
+	if err := auth.NewStore(home).Save(*initialSnapshot); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/responses":
+			attempts++
+			if attempts == 1 {
+				w.Header().Set("Retry-After", "0")
+				w.Header().Set("x-request-id", "req-401")
+				w.Header().Set("cf-ray", "ray-401")
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":"resp-auth","model":"gpt-test","output_text":"ok"}`))
+		case "/oauth/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"new-access-token","refresh_token":"new-refresh-token"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	sink := &recordingTelemetrySink{}
+	initialAuth := BearerAuthHeaders("old-access-token", "account-1", false)
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:     &APIProvider{BaseURL: server.URL + "/v1", RequestMaxRetries: 1},
+		Auth:         &initialAuth,
+		HTTPClient:   server.Client(),
+		CodexHome:    home,
+		AuthSnapshot: initialSnapshot,
+		AuthIssuer:   server.URL,
+	})
+	runner.Telemetry = sink
+	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"}); err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	if len(sink.authRecoveries) != 1 {
+		t.Fatalf("recovery records = %#v", sink.authRecoveries)
+	}
+	recovery := sink.authRecoveries[0]
+	if recovery.Mode != "managed" || recovery.Step != "refresh_token" ||
+		recovery.Outcome != auth.AuthRecoveryOutcomeSucceeded {
+		t.Fatalf("recovery record = %#v", recovery)
+	}
+	if recovery.RequestID != "req-401" || recovery.CFRay != "ray-401" {
+		t.Fatalf("recovery record = %#v", recovery)
+	}
+	if recovery.AuthStateChanged == nil || !*recovery.AuthStateChanged {
+		t.Fatalf("recovery record = %#v", recovery)
+	}
+	if len(sink.apiRequests) != 2 {
+		t.Fatalf("api records = %#v", sink.apiRequests)
+	}
+	retry := sink.apiRequests[1]
+	if !retry.RetryAfterUnauthorized || retry.RecoveryMode != "managed" || retry.RecoveryPhase != "refresh_token" {
+		t.Fatalf("retry record = %#v", retry)
+	}
+}
+
+// A permanent refresh failure reports the permanent outcome.
+func TestResponsesAgentRunnerReportsPermanentAuthRecoveryFailureLikeRust(t *testing.T) {
+	home := t.TempDir()
+	initialSnapshot := &auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"access_token":  "old-access-token",
+			"refresh_token": "refresh-token",
+			"account_id":    "account-1",
+		},
+	}
+	if err := auth.NewStore(home).Save(*initialSnapshot); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/responses":
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/oauth/token":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"token expired"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	sink := &recordingTelemetrySink{}
+	initialAuth := BearerAuthHeaders("old-access-token", "account-1", false)
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:     &APIProvider{BaseURL: server.URL + "/v1", RequestMaxRetries: 1},
+		Auth:         &initialAuth,
+		HTTPClient:   server.Client(),
+		CodexHome:    home,
+		AuthSnapshot: initialSnapshot,
+		AuthIssuer:   server.URL,
+	})
+	runner.Telemetry = sink
+	_, _ = runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+	if len(sink.authRecoveries) != 1 {
+		t.Fatalf("recovery records = %#v", sink.authRecoveries)
+	}
+	recovery := sink.authRecoveries[0]
+	if recovery.Mode != "managed" || recovery.Step != "refresh_token" ||
+		recovery.Outcome != auth.AuthRecoveryOutcomeFailedPermanent {
+		t.Fatalf("recovery record = %#v", recovery)
+	}
+	if recovery.AuthStateChanged != nil {
+		t.Fatalf("recovery record = %#v", recovery)
 	}
 }
 

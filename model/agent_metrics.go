@@ -22,6 +22,26 @@ type MetricsSink interface {
 	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }
 
+// AuthRecoveryRecord carries the values of one unauthorized-recovery attempt
+// (Rust's SessionTelemetry::record_auth_recovery).
+type AuthRecoveryRecord struct {
+	// Mode and Step name the recovery plan position (codex-login's vocabulary).
+	Mode string
+	Step string
+	// Outcome is one of auth.AuthRecoveryOutcome*.
+	Outcome string
+	// RequestID, CFRay, AuthError, and AuthErrorCode come from the failed
+	// response's debug context.
+	RequestID     string
+	CFRay         string
+	AuthError     string
+	AuthErrorCode string
+	// RecoveryReason explains why no step ran.
+	RecoveryReason string
+	// AuthStateChanged reports whether the step changed the cached credentials.
+	AuthStateChanged *bool
+}
+
 // WebsocketConnectRecord carries the values of one websocket handshake attempt
 // (Rust's SessionTelemetry::record_websocket_connect).
 type WebsocketConnectRecord struct {
@@ -113,6 +133,8 @@ type SessionTelemetrySink interface {
 	RecordSSEEventCompletedFailed(ctx context.Context, errorMessage string)
 	// RecordWebsocketConnect reports one websocket handshake attempt.
 	RecordWebsocketConnect(ctx context.Context, record WebsocketConnectRecord)
+	// RecordAuthRecovery reports one unauthorized-recovery attempt.
+	RecordAuthRecovery(ctx context.Context, record AuthRecoveryRecord)
 }
 
 // Metric names mirror codex-rs/otel/src/metrics/names.rs.
@@ -174,7 +196,7 @@ type sseEventTelemetry struct {
 // recordAPIRequestRecord mirrors the record half of
 // SessionTelemetry::record_api_request, which Rust's RequestTelemetry::on_request
 // reports for every HTTP attempt (the metric half stays in recordAPIRequest).
-func (r *ResponsesAgentRunner) recordAPIRequestRecord(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, httpRequest *http.Request, httpResponse *http.Response, attempt uint64, transportErr error, duration time.Duration, retryAfterUnauthorized bool) {
+func (r *ResponsesAgentRunner) recordAPIRequestRecord(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, httpRequest *http.Request, httpResponse *http.Response, attempt uint64, transportErr error, duration time.Duration, retryAfterUnauthorized bool, recoveryMode string, recoveryPhase string) {
 	if r == nil || r.Telemetry == nil || apiRequest == nil {
 		return
 	}
@@ -183,6 +205,8 @@ func (r *ResponsesAgentRunner) recordAPIRequestRecord(ctx context.Context, reque
 		Duration:               duration,
 		Endpoint:               r.responsesEndpoint(apiRequest.Model, request).Path(),
 		RetryAfterUnauthorized: retryAfterUnauthorized,
+		RecoveryMode:           recoveryMode,
+		RecoveryPhase:          recoveryPhase,
 	}
 	if httpRequest != nil {
 		// Rust reports the auth header the provider attached

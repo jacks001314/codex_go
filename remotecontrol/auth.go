@@ -73,20 +73,22 @@ func NewRemoteControlAuthRecoveryForCodexHomeWithOptions(codexHome string, optio
 	return NewUnauthorizedRecoveryControllerForCodexHome(codexHome, options).Recover
 }
 
-type UnauthorizedRecoveryMode string
+// The recovery plan's vocabulary is shared with the model client's 401 handling
+// (codex-login's manager.rs owns both in Rust).
+type UnauthorizedRecoveryMode = auth.UnauthorizedRecoveryMode
+
+type UnauthorizedRecoveryStep = auth.UnauthorizedRecoveryStep
 
 const (
-	UnauthorizedRecoveryModeManaged  UnauthorizedRecoveryMode = "managed"
-	UnauthorizedRecoveryModeExternal UnauthorizedRecoveryMode = "external"
+	UnauthorizedRecoveryModeManaged  = auth.UnauthorizedRecoveryModeManaged
+	UnauthorizedRecoveryModeExternal = auth.UnauthorizedRecoveryModeExternal
 )
 
-type UnauthorizedRecoveryStep string
-
 const (
-	UnauthorizedRecoveryStepReload          UnauthorizedRecoveryStep = "reload"
-	UnauthorizedRecoveryStepRefreshToken    UnauthorizedRecoveryStep = "refresh_token"
-	UnauthorizedRecoveryStepExternalRefresh UnauthorizedRecoveryStep = "external_refresh"
-	UnauthorizedRecoveryStepDone            UnauthorizedRecoveryStep = "done"
+	UnauthorizedRecoveryStepReload          = auth.UnauthorizedRecoveryStepReload
+	UnauthorizedRecoveryStepRefreshToken    = auth.UnauthorizedRecoveryStepRefreshToken
+	UnauthorizedRecoveryStepExternalRefresh = auth.UnauthorizedRecoveryStepExternalRefresh
+	UnauthorizedRecoveryStepDone            = auth.UnauthorizedRecoveryStepDone
 )
 
 type UnauthorizedRecoveryOptions struct {

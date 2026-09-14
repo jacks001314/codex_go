@@ -786,7 +786,13 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 				return r.Run(ctx, request)
 			}
 			if response != nil && response.StatusCode == http.StatusUnauthorized && !authRetried {
-				if refreshErr := r.refreshAuthAfterUnauthorized(ctx); refreshErr == nil {
+				debug := authRecoveryDebug{
+					RequestID:     responseHeaderValue(response.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader),
+					CFRay:         responseHeaderValue(response.Header, "cf-ray"),
+					AuthError:     responseHeaderValue(response.Header, "x-openai-authorization-error"),
+					AuthErrorCode: responseAuthorizationErrorCode(response.Header),
+				}
+				if _, _, refreshErr := r.refreshAuthAfterUnauthorized(ctx, debug); refreshErr == nil {
 					session.mu.Unlock()
 					locked = false
 					return r.runWebSocket(ctx, request, true, transportRetried)
@@ -1667,6 +1673,9 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 	// retryAfterUnauthorized mirrors Rust's PendingUnauthorizedRetry: the attempt
 	// that follows a 401 recovery reports that it retried.
 	retryAfterUnauthorized := false
+	// recoveryMode/recoveryPhase name the recovery that produced the retry, which
+	// the following attempt's records report (Rust's PendingUnauthorizedRetry).
+	recoveryMode, recoveryPhase := "", ""
 	for attempt := uint64(0); attempt <= maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1697,7 +1706,7 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 		// Rust's RequestTelemetry::on_request fires per HTTP attempt, before the
 		// retry decision, so retries each record an api_request sample.
 		r.recordAPIRequest(status, err, attemptDuration)
-		r.recordAPIRequestRecord(ctx, request, apiRequest, httpRequest, httpResponse, attempt, err, attemptDuration, retryAfterUnauthorized)
+		r.recordAPIRequestRecord(ctx, request, apiRequest, httpRequest, httpResponse, attempt, err, attemptDuration, retryAfterUnauthorized, recoveryMode, recoveryPhase)
 		responsesDiagnostic("http.result", map[string]any{
 			"thread_id":       request.ThreadID,
 			"turn_id":         request.TurnID,
@@ -1711,10 +1720,20 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 		if shouldRetry && attempt < maxRetries {
 			lastErr = err
 			if httpResponse != nil && httpResponse.StatusCode == http.StatusUnauthorized {
-				_ = r.refreshAuthAfterUnauthorized(ctx)
+				debug := authRecoveryDebug{
+					RequestID:     responseHeaderValue(httpResponse.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader),
+					CFRay:         responseHeaderValue(httpResponse.Header, "cf-ray"),
+					AuthError:     responseHeaderValue(httpResponse.Header, "x-openai-authorization-error"),
+					AuthErrorCode: responseAuthorizationErrorCode(httpResponse.Header),
+				}
+				mode, phase, _ := r.refreshAuthAfterUnauthorized(ctx, debug)
+				// Rust's PendingUnauthorizedRetry reports the recovery that
+				// produced this retry on the next attempt's records.
+				recoveryMode, recoveryPhase = string(mode), string(phase)
 				retryAfterUnauthorized = true
 			} else {
 				retryAfterUnauthorized = false
+				recoveryMode, recoveryPhase = "", ""
 			}
 			delay := responsesRetryDelay(httpResponse, attempt+1)
 			if httpResponse != nil && httpResponse.Body != nil {
@@ -2760,20 +2779,133 @@ func providerAuthRefreshInterval(info *ProviderAuthInfo) time.Duration {
 	return time.Duration(info.RefreshIntervalMS) * time.Millisecond
 }
 
-func (r *ResponsesAgentRunner) refreshAuthAfterUnauthorized(ctx context.Context) error {
+// authRecoveryDebug carries the failed response's debug context, which Rust
+// reports on the recovery record and the retrying attempt.
+type authRecoveryDebug struct {
+	RequestID     string
+	CFRay         string
+	AuthError     string
+	AuthErrorCode string
+}
+
+// authRecoveryStep is one step of the recovery plan Go shares with Rust's
+// (codex-login's UnauthorizedRecovery): the mode and step names it reports, plus
+// the precondition and the action.
+type authRecoveryStep struct {
+	mode      auth.UnauthorizedRecoveryMode
+	step      auth.UnauthorizedRecoveryStep
+	available func() bool
+	attempt   func(context.Context) error
+}
+
+// refreshAuthAfterUnauthorized runs the recovery plan for a 401 and reports every
+// step it attempts (Rust's SessionTelemetry::record_auth_recovery). It returns the
+// mode and step that succeeded, which the retrying attempt reports as its pending
+// retry context (Rust's UnauthorizedRecoveryExecution).
+func (r *ResponsesAgentRunner) refreshAuthAfterUnauthorized(ctx context.Context, debug authRecoveryDebug) (auth.UnauthorizedRecoveryMode, auth.UnauthorizedRecoveryStep, error) {
+	// Provider-owned credential recovery that Rust's plan does not report: a
+	// Bedrock credential refresh and a workload-identity refresh carry no plan
+	// position.
 	if err := r.refreshBedrockAWSCredentials(ctx); err == nil {
-		return nil
+		return "", "", nil
 	}
 	if err := r.refreshWorkloadIdentityAuth(ctx); err == nil {
-		return nil
+		return "", "", nil
 	}
-	if err := r.refreshExternalChatGPTAuth(ctx); err == nil {
-		return nil
+
+	steps := r.authRecoverySteps()
+	if len(steps) == 0 {
+		r.recordAuthRecovery(ctx, "", "", auth.AuthRecoveryOutcomeNotRun, debug, nil)
+		return "", "", errors.New("no auth recovery step is available")
 	}
-	if err := r.refreshManagedChatGPTAuth(ctx); err == nil {
-		return nil
+	var lastErr error
+	for _, step := range steps {
+		previous := authCredentialFingerprint(r.AuthSnapshot)
+		err := step.attempt(ctx)
+		if err == nil {
+			changed := authCredentialFingerprint(r.AuthSnapshot) != previous
+			r.recordAuthRecovery(ctx, step.mode, step.step, auth.AuthRecoveryOutcomeSucceeded, debug, &changed)
+			return step.mode, step.step, nil
+		}
+		lastErr = err
+		outcome := auth.AuthRecoveryOutcomeFailedTransient
+		if auth.IsPermanentRefreshFailure(err) {
+			outcome = auth.AuthRecoveryOutcomeFailedPermanent
+		}
+		r.recordAuthRecovery(ctx, step.mode, step.step, outcome, debug, nil)
 	}
-	return r.refreshProviderCommandAuth(ctx)
+	return "", "", lastErr
+}
+
+// authRecoverySteps reports the recovery plan steps this runner can take, in the
+// order it tries them: the credential owner decides the mode (Rust's plan picks
+// External for an external auth source and Managed for ChatGPT auth).
+func (r *ResponsesAgentRunner) authRecoverySteps() []authRecoveryStep {
+	steps := []authRecoveryStep{
+		{
+			mode: auth.UnauthorizedRecoveryModeExternal,
+			step: auth.UnauthorizedRecoveryStepExternalRefresh,
+			available: func() bool {
+				return r.AuthSnapshot != nil && r.AuthSnapshot.Mode() == "chatgptAuthTokens" && r.ExternalAuthRefresh != nil
+			},
+			attempt: r.refreshExternalChatGPTAuth,
+		},
+		{
+			mode: auth.UnauthorizedRecoveryModeManaged,
+			step: auth.UnauthorizedRecoveryStepRefreshToken,
+			available: func() bool {
+				return r.AuthSnapshot != nil && authHasChatGPTAccount(r.AuthSnapshot) &&
+					r.AuthSnapshot.Mode() != "chatgptAuthTokens" && strings.TrimSpace(r.CodexHome) != ""
+			},
+			attempt: r.refreshManagedChatGPTAuth,
+		},
+		{
+			mode: auth.UnauthorizedRecoveryModeExternal,
+			step: auth.UnauthorizedRecoveryStepExternalRefresh,
+			available: func() bool {
+				return r.Provider != nil && r.Provider.Auth != nil
+			},
+			attempt: r.refreshProviderCommandAuth,
+		},
+	}
+	available := make([]authRecoveryStep, 0, len(steps))
+	for _, step := range steps {
+		if step.available == nil || step.available() {
+			available = append(available, step)
+		}
+	}
+	return available
+}
+
+// recordAuthRecovery reports one recovery step (Rust's record_auth_recovery).
+func (r *ResponsesAgentRunner) recordAuthRecovery(ctx context.Context, mode auth.UnauthorizedRecoveryMode, step auth.UnauthorizedRecoveryStep, outcome string, debug authRecoveryDebug, authStateChanged *bool) {
+	if r == nil || r.Telemetry == nil {
+		return
+	}
+	r.Telemetry.RecordAuthRecovery(ctx, AuthRecoveryRecord{
+		Mode:             string(mode),
+		Step:             string(step),
+		Outcome:          outcome,
+		RequestID:        debug.RequestID,
+		CFRay:            debug.CFRay,
+		AuthError:        debug.AuthError,
+		AuthErrorCode:    debug.AuthErrorCode,
+		AuthStateChanged: authStateChanged,
+	})
+}
+
+// authCredentialFingerprint identifies the credential a snapshot carries, so a
+// recovery step can report whether it changed the cached auth.
+func authCredentialFingerprint(snapshot *auth.AuthDotJSON) string {
+	if snapshot == nil {
+		return ""
+	}
+	return strings.Join([]string{
+		snapshot.Mode(),
+		accountIDFromMap(snapshot.Tokens),
+		stringFromAny(snapshot.Tokens, "access_token"),
+		stringFromAny(snapshot.Tokens, "id_token"),
+	}, "|")
 }
 
 // refreshBedrockAWSCredentials mirrors Rust #39410: when a Bedrock session
