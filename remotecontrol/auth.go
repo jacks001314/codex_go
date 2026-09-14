@@ -130,7 +130,9 @@ type UnauthorizedRecoveryStepResult struct {
 	authStateChanged *bool
 }
 
-const refreshTokenAccountMismatchMessage = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again."
+// refreshTokenAccountMismatchMessage mirrors codex-login's
+// REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE, owned by the auth package.
+const refreshTokenAccountMismatchMessage = auth.RefreshTokenAccountMismatchMessage
 
 func NewUnauthorizedRecoveryControllerForCodexHome(codexHome string, options *UnauthorizedRecoveryOptions) *UnauthorizedRecoveryController {
 	return &UnauthorizedRecoveryController{

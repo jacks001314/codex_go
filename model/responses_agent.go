@@ -712,10 +712,10 @@ func clearToolResultMetadataInPromptItem(value any) any {
 }
 
 func (r *ResponsesAgentRunner) RunWebSocket(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
-	return r.runWebSocket(ctx, request, false, false)
+	return r.runWebSocket(ctx, request, false, false, &authRecoveryState{})
 }
 
-func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentRequest, authRetried, transportRetried bool) (*AgentResponse, error) {
+func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentRequest, authRetried, transportRetried bool, recovery *authRecoveryState) (*AgentResponse, error) {
 	if r == nil || !r.SupportsWebsockets || r.websocketsDisabled() {
 		return r.Run(ctx, request)
 	}
@@ -792,10 +792,10 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 					AuthError:     responseHeaderValue(response.Header, "x-openai-authorization-error"),
 					AuthErrorCode: responseAuthorizationErrorCode(response.Header),
 				}
-				if _, _, refreshErr := r.refreshAuthAfterUnauthorized(ctx, debug); refreshErr == nil {
+				if _, _, refreshErr := r.recoverUnauthorizedAuth(ctx, recovery, debug); refreshErr == nil {
 					session.mu.Unlock()
 					locked = false
-					return r.runWebSocket(ctx, request, true, transportRetried)
+					return r.runWebSocket(ctx, request, true, transportRetried, recovery)
 				}
 			}
 			if response != nil {
@@ -815,7 +815,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		if !transportRetried {
 			session.mu.Unlock()
 			locked = false
-			return r.runWebSocket(ctx, request, authRetried, true)
+			return r.runWebSocket(ctx, request, authRetried, true, recovery)
 		}
 		r.disableWebsockets()
 		return r.Run(ctx, request)
@@ -832,7 +832,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			if !receivedEvent && !transportRetried {
 				session.mu.Unlock()
 				locked = false
-				return r.runWebSocket(ctx, request, authRetried, true)
+				return r.runWebSocket(ctx, request, authRetried, true, recovery)
 			}
 			if !receivedEvent {
 				r.disableWebsockets()
@@ -868,7 +868,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 				clone.PreviousResponseID = ""
 				session.mu.Unlock()
 				locked = false
-				return r.runWebSocket(ctx, &clone, authRetried, true)
+				return r.runWebSocket(ctx, &clone, authRetried, true, recovery)
 			}
 			return nil, fmt.Errorf("responses websocket request failed: %s", websocketEventError(event))
 		}
@@ -1670,6 +1670,9 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequest(httpRequest *http.Request)
 func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, accept string, maxRetries uint64) (*http.Response, error) {
 	var lastErr error
 	retryTooManyRequests := apiRequest != nil && apiRequest.Stream
+	// recovery tracks this request's unauthorized handling (Rust's
+	// UnauthorizedRecovery plus the provider-owned recovery latch).
+	recovery := &authRecoveryState{}
 	// retryAfterUnauthorized mirrors Rust's PendingUnauthorizedRetry: the attempt
 	// that follows a 401 recovery reports that it retried.
 	retryAfterUnauthorized := false
@@ -1726,7 +1729,7 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 					AuthError:     responseHeaderValue(httpResponse.Header, "x-openai-authorization-error"),
 					AuthErrorCode: responseAuthorizationErrorCode(httpResponse.Header),
 				}
-				mode, phase, _ := r.refreshAuthAfterUnauthorized(ctx, debug)
+				mode, phase, _ := r.recoverUnauthorizedAuth(ctx, recovery, debug)
 				// Rust's PendingUnauthorizedRetry reports the recovery that
 				// produced this retry on the next attempt's records.
 				recoveryMode, recoveryPhase = string(mode), string(phase)
@@ -2786,95 +2789,6 @@ type authRecoveryDebug struct {
 	CFRay         string
 	AuthError     string
 	AuthErrorCode string
-}
-
-// authRecoveryStep is one step of the recovery plan Go shares with Rust's
-// (codex-login's UnauthorizedRecovery): the mode and step names it reports, plus
-// the precondition and the action.
-type authRecoveryStep struct {
-	mode      auth.UnauthorizedRecoveryMode
-	step      auth.UnauthorizedRecoveryStep
-	available func() bool
-	attempt   func(context.Context) error
-}
-
-// refreshAuthAfterUnauthorized runs the recovery plan for a 401 and reports every
-// step it attempts (Rust's SessionTelemetry::record_auth_recovery). It returns the
-// mode and step that succeeded, which the retrying attempt reports as its pending
-// retry context (Rust's UnauthorizedRecoveryExecution).
-func (r *ResponsesAgentRunner) refreshAuthAfterUnauthorized(ctx context.Context, debug authRecoveryDebug) (auth.UnauthorizedRecoveryMode, auth.UnauthorizedRecoveryStep, error) {
-	// Provider-owned credential recovery that Rust's plan does not report: a
-	// Bedrock credential refresh and a workload-identity refresh carry no plan
-	// position.
-	if err := r.refreshBedrockAWSCredentials(ctx); err == nil {
-		return "", "", nil
-	}
-	if err := r.refreshWorkloadIdentityAuth(ctx); err == nil {
-		return "", "", nil
-	}
-
-	steps := r.authRecoverySteps()
-	if len(steps) == 0 {
-		r.recordAuthRecovery(ctx, "", "", auth.AuthRecoveryOutcomeNotRun, debug, nil)
-		return "", "", errors.New("no auth recovery step is available")
-	}
-	var lastErr error
-	for _, step := range steps {
-		previous := authCredentialFingerprint(r.AuthSnapshot)
-		err := step.attempt(ctx)
-		if err == nil {
-			changed := authCredentialFingerprint(r.AuthSnapshot) != previous
-			r.recordAuthRecovery(ctx, step.mode, step.step, auth.AuthRecoveryOutcomeSucceeded, debug, &changed)
-			return step.mode, step.step, nil
-		}
-		lastErr = err
-		outcome := auth.AuthRecoveryOutcomeFailedTransient
-		if auth.IsPermanentRefreshFailure(err) {
-			outcome = auth.AuthRecoveryOutcomeFailedPermanent
-		}
-		r.recordAuthRecovery(ctx, step.mode, step.step, outcome, debug, nil)
-	}
-	return "", "", lastErr
-}
-
-// authRecoverySteps reports the recovery plan steps this runner can take, in the
-// order it tries them: the credential owner decides the mode (Rust's plan picks
-// External for an external auth source and Managed for ChatGPT auth).
-func (r *ResponsesAgentRunner) authRecoverySteps() []authRecoveryStep {
-	steps := []authRecoveryStep{
-		{
-			mode: auth.UnauthorizedRecoveryModeExternal,
-			step: auth.UnauthorizedRecoveryStepExternalRefresh,
-			available: func() bool {
-				return r.AuthSnapshot != nil && r.AuthSnapshot.Mode() == "chatgptAuthTokens" && r.ExternalAuthRefresh != nil
-			},
-			attempt: r.refreshExternalChatGPTAuth,
-		},
-		{
-			mode: auth.UnauthorizedRecoveryModeManaged,
-			step: auth.UnauthorizedRecoveryStepRefreshToken,
-			available: func() bool {
-				return r.AuthSnapshot != nil && authHasChatGPTAccount(r.AuthSnapshot) &&
-					r.AuthSnapshot.Mode() != "chatgptAuthTokens" && strings.TrimSpace(r.CodexHome) != ""
-			},
-			attempt: r.refreshManagedChatGPTAuth,
-		},
-		{
-			mode: auth.UnauthorizedRecoveryModeExternal,
-			step: auth.UnauthorizedRecoveryStepExternalRefresh,
-			available: func() bool {
-				return r.Provider != nil && r.Provider.Auth != nil
-			},
-			attempt: r.refreshProviderCommandAuth,
-		},
-	}
-	available := make([]authRecoveryStep, 0, len(steps))
-	for _, step := range steps {
-		if step.available == nil || step.available() {
-			available = append(available, step)
-		}
-	}
-	return available
 }
 
 // recordAuthRecovery reports one recovery step (Rust's record_auth_recovery).

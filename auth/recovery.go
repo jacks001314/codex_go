@@ -4,6 +4,11 @@ package auth
 // (login/src/manager.rs) and the outcomes core's client passes to
 // SessionTelemetry::record_auth_recovery when a request recovers from a 401.
 
+// RefreshTokenAccountMismatchMessage mirrors codex-login's
+// REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: the permanent failure a reload reports
+// when the stored credentials belong to another account.
+const RefreshTokenAccountMismatchMessage = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again."
+
 // UnauthorizedRecoveryMode names the credential owner a recovery runs for.
 type UnauthorizedRecoveryMode string
 

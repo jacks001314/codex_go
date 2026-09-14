@@ -2524,10 +2524,21 @@ func TestResponsesAgentRunnerReportsManagedAuthRecoveryLikeRust(t *testing.T) {
 	if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"}); err != nil {
 		t.Fatalf("Run error = %v", err)
 	}
-	if len(sink.authRecoveries) != 1 {
+	// The managed plan reloads the stored auth first; nothing changed on disk, so
+	// the plan continues to the token refresh (Rust reports the reload on the
+	// first 401 and the refresh on the next one).
+	if len(sink.authRecoveries) != 2 {
 		t.Fatalf("recovery records = %#v", sink.authRecoveries)
 	}
-	recovery := sink.authRecoveries[0]
+	reload := sink.authRecoveries[0]
+	if reload.Mode != "managed" || reload.Step != "reload" ||
+		reload.Outcome != auth.AuthRecoveryOutcomeSucceeded {
+		t.Fatalf("reload record = %#v", reload)
+	}
+	if reload.AuthStateChanged == nil || *reload.AuthStateChanged {
+		t.Fatalf("reload record = %#v", reload)
+	}
+	recovery := sink.authRecoveries[1]
 	if recovery.Mode != "managed" || recovery.Step != "refresh_token" ||
 		recovery.Outcome != auth.AuthRecoveryOutcomeSucceeded {
 		t.Fatalf("recovery record = %#v", recovery)
@@ -2543,6 +2554,89 @@ func TestResponsesAgentRunnerReportsManagedAuthRecoveryLikeRust(t *testing.T) {
 	}
 	retry := sink.apiRequests[1]
 	if !retry.RetryAfterUnauthorized || retry.RecoveryMode != "managed" || retry.RecoveryPhase != "refresh_token" {
+		t.Fatalf("retry record = %#v", retry)
+	}
+}
+
+// A managed recovery adopts the stored auth when another process refreshed it:
+// the reload step reports the change, the retry uses the reloaded token, and the
+// pending retry names the reload (Rust's first-401 behavior).
+func TestResponsesAgentRunnerReloadsChangedStoredAuthLikeRust(t *testing.T) {
+	home := t.TempDir()
+	cached := &auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"access_token":  "cached-token",
+			"refresh_token": "refresh-token",
+			"account_id":    "account-1",
+		},
+	}
+	if err := auth.NewStore(home).Save(auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"access_token":  "stored-token",
+			"refresh_token": "refresh-token",
+			"account_id":    "account-1",
+		},
+	}); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		switch attempts {
+		case 1:
+			if got := r.Header.Get("Authorization"); got != "Bearer cached-token" {
+				t.Fatalf("first auth = %q", got)
+			}
+			w.Header().Set("Retry-After", "0")
+			w.Header().Set("x-request-id", "req-401")
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			if got := r.Header.Get("Authorization"); got != "Bearer stored-token" {
+				t.Fatalf("retry auth = %q", got)
+			}
+			_, _ = w.Write([]byte(`{"id":"resp-reload","model":"gpt-test","output_text":"ok"}`))
+		}
+	}))
+	defer server.Close()
+
+	sink := &recordingTelemetrySink{}
+	initialAuth := BearerAuthHeaders("cached-token", "account-1", false)
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:     &APIProvider{BaseURL: server.URL + "/v1", RequestMaxRetries: 1},
+		Auth:         &initialAuth,
+		HTTPClient:   server.Client(),
+		CodexHome:    home,
+		AuthSnapshot: cached,
+		AuthIssuer:   server.URL,
+	})
+	runner.Telemetry = sink
+	response, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
+	if err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	if response == nil || response.Message != "ok" {
+		t.Fatalf("response = %#v", response)
+	}
+	// The reload changed the auth, so the plan stops there; Rust reports the same
+	// single record on the first 401.
+	if len(sink.authRecoveries) != 1 {
+		t.Fatalf("recovery records = %#v", sink.authRecoveries)
+	}
+	reload := sink.authRecoveries[0]
+	if reload.Mode != "managed" || reload.Step != "reload" ||
+		reload.Outcome != auth.AuthRecoveryOutcomeSucceeded {
+		t.Fatalf("reload record = %#v", reload)
+	}
+	if reload.AuthStateChanged == nil || !*reload.AuthStateChanged {
+		t.Fatalf("reload record = %#v", reload)
+	}
+	if reload.RequestID != "req-401" {
+		t.Fatalf("reload record = %#v", reload)
+	}
+	retry := sink.apiRequests[len(sink.apiRequests)-1]
+	if !retry.RetryAfterUnauthorized || retry.RecoveryMode != "managed" || retry.RecoveryPhase != "reload" {
 		t.Fatalf("retry record = %#v", retry)
 	}
 }
@@ -2588,10 +2682,14 @@ func TestResponsesAgentRunnerReportsPermanentAuthRecoveryFailureLikeRust(t *test
 	})
 	runner.Telemetry = sink
 	_, _ = runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
-	if len(sink.authRecoveries) != 1 {
+	if len(sink.authRecoveries) != 2 {
 		t.Fatalf("recovery records = %#v", sink.authRecoveries)
 	}
-	recovery := sink.authRecoveries[0]
+	if reload := sink.authRecoveries[0]; reload.Step != "reload" ||
+		reload.AuthStateChanged == nil || *reload.AuthStateChanged {
+		t.Fatalf("reload record = %#v", reload)
+	}
+	recovery := sink.authRecoveries[1]
 	if recovery.Mode != "managed" || recovery.Step != "refresh_token" ||
 		recovery.Outcome != auth.AuthRecoveryOutcomeFailedPermanent {
 		t.Fatalf("recovery record = %#v", recovery)
