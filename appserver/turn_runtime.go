@@ -2310,6 +2310,9 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 		if r.networkApproval != nil {
 			r.networkApproval.registerActiveCall(threadID, turnID, invocation)
 		}
+		// Rust brackets every MCP tool call with the `mcp.tools.call` span, so the
+		// trace-safe records the call emits attach to it.
+		r.startMCPToolCallSpan(invocation, threadID, turnID)
 		if item, ok := collaborationStartedThreadItem(invocation, threadID, turnID, startedAt); ok {
 			r.notify(NotificationItemStarted, &ItemStartedNotification{
 				Item: threadItemPayload(item), ThreadID: threadID, TurnID: turnID, StartedAtMS: startedAt.UTC().UnixMilli(),
@@ -2406,6 +2409,12 @@ func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID str
 		// call completes (SessionTelemetry::tool_result_with_tags); the notifier
 		// runs for every completed dispatch, before its notification-only
 		// branches.
+		// An MCP call's span closes with the call, and the records below attach to
+		// it (Rust instruments the call body with mcp.tools.call).
+		if span := r.takeMCPToolCallSpan(threadID, turnID, execution.Invocation.CallID); span != nil {
+			ctx = telemetry.WithSpan(ctx, span)
+			defer span.End()
+		}
 		r.emitToolCallMetrics(r.services.TurnMetrics, execution)
 		// The same call emits the diagnostic log record and the trace-safe span
 		// event; the wrapper's context carries the span the turn runs inside.
@@ -3302,6 +3311,7 @@ func (r *RuntimeRouter) clearActiveDiffTracker(threadID string, turnID string) {
 	}
 	r.threads.ClearDiff(threadID, turnID)
 	r.clearToolItemReviewSummaries(threadID, turnID)
+	r.endMCPToolCallSpansForTurn(threadID, turnID)
 }
 
 func (r *RuntimeRouter) hasRuntimeThreadStore() bool {

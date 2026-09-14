@@ -191,6 +191,141 @@ func TestSessionTelemetryMetadataForThread(t *testing.T) {
 	}
 }
 
+// encodedAttributes flattens the string attributes of one encoded span or span
+// event.
+func encodedAttributes(container map[string]any) map[string]string {
+	attributes := map[string]string{}
+	entries, _ := container["attributes"].([]any)
+	for _, entry := range entries {
+		attribute, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		value, _ := attribute["value"].(map[string]any)
+		text, _ := value["stringValue"].(string)
+		attributes[attribute["key"].(string)] = text
+	}
+	return attributes
+}
+
+// stubMCPExecutor registers one MCP tool so the router reports its server tags.
+type stubMCPExecutor struct {
+	name       tool.ToolName
+	server     string
+	serverType string
+}
+
+func (e stubMCPExecutor) Spec() tool.Spec { return tool.Spec{Name: e.name} }
+
+func (e stubMCPExecutor) Execute(context.Context, *tool.Invocation) (*tool.Output, error) {
+	return &tool.Output{Success: true}, nil
+}
+
+func (e stubMCPExecutor) TelemetryTags(*tool.Invocation) map[string]string {
+	return map[string]string{"mcp_server": e.server, "mcp_server_origin": e.serverType}
+}
+
+// An MCP tool call is bracketed by Rust's `mcp.tools.call` span (client kind,
+// rpc/tool/server attributes), and the call's trace-safe records attach to it.
+func TestMCPToolCallSpanLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+	})
+	if err != nil || provider == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+	registry := tool.NewRegistry()
+	toolName := tool.NamespacedName("mcp__example", "shell")
+	if err := registry.Register(stubMCPExecutor{name: toolName, server: "example", serverType: "stdio"}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ToolRouter: tool.NewRouter(registry)})
+	router.installOtelProvider(provider, state.NewTaskMetrics())
+	defer router.Close()
+
+	invocation := &tool.Invocation{CallID: "call-1", ToolName: toolName}
+	started := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	router.runtimeToolStartedNotifier("thread-1", "turn-1", "", false)(context.Background(), invocation, started)
+	router.runtimeToolCompletedNotifier("thread-1", "turn-1", "", false)(context.Background(), &turn.ToolExecutionResult{
+		Invocation: invocation,
+		Output:     &tool.Output{Success: true, Body: "out"},
+		TelemetryTags: map[string]string{
+			"mcp_server":        "example",
+			"mcp_server_origin": "stdio",
+		},
+		StartedAt:  started,
+		FinishedAt: started.Add(25 * time.Millisecond),
+	})
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	select {
+	case payload := <-traceBodies:
+		spans := payload["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+		var call map[string]any
+		for _, entry := range spans {
+			span := entry.(map[string]any)
+			if span["name"] == "mcp.tools.call" {
+				call = span
+			}
+		}
+		if call == nil {
+			t.Fatalf("spans = %#v", spans)
+		}
+		if call["kind"] != float64(telemetry.SpanKindClient) {
+			t.Fatalf("span kind = %#v", call["kind"])
+		}
+		attributes := encodedAttributes(call)
+		for key, want := range map[string]string{
+			"rpc.system":        "jsonrpc",
+			"rpc.method":        "tools/call",
+			"mcp.server.name":   "example",
+			"mcp.server.origin": "stdio",
+			"mcp.transport":     "stdio",
+			"tool.name":         "shell",
+			"tool.call_id":      "call-1",
+			"conversation.id":   "thread-1",
+			"session.id":        "thread-1",
+			"turn.id":           "turn-1",
+		} {
+			if got := attributes[key]; got != want {
+				t.Fatalf("span attribute %s = %q, want %q", key, got, want)
+			}
+		}
+		for _, connectorKey := range []string{"mcp.connector.id", "mcp.connector.name"} {
+			if _, ok := attributes[connectorKey]; !ok {
+				t.Fatalf("span attributes = %#v", attributes)
+			}
+		}
+		// The call's tool-result record lands on this span (Rust instruments the
+		// call body, so the record's trace half attaches to it).
+		events, _ := call["events"].([]any)
+		if len(events) != 1 {
+			t.Fatalf("span events = %#v", events)
+		}
+		eventAttributes := encodedAttributes(events[0].(map[string]any))
+		if eventAttributes["event.name"] != "codex.tool_result" || eventAttributes["tool_name"] != "shell" {
+			t.Fatalf("span event attributes = %#v", eventAttributes)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the traces endpoint did not receive the MCP call span")
+	}
+}
+
 // An approval resolution reports who decided what: the Guardian-resolved
 // approvals carry the automated-reviewer source and the opaque decision
 // (Rust's SessionTelemetry::tool_decision via approvals::record_resolution).

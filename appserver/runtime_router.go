@@ -266,8 +266,12 @@ type RuntimeRouter struct {
 	// request is being dispatched, the way Rust's OutgoingMessageSender keeps a
 	// RequestContext per request id. The turn start copies its W3C trace context
 	// into the turn so the model request continues the caller's trace.
-	requestSpansMu          sync.Mutex
-	requestSpans            map[requestSpanKey]*telemetry.Span
+	requestSpansMu sync.Mutex
+	requestSpans   map[requestSpanKey]*telemetry.Span
+	// mcpCallSpans holds the `mcp.tools.call` span of every in-flight MCP tool
+	// call, keyed by thread, turn, and call id.
+	mcpCallSpansMu          sync.Mutex
+	mcpCallSpans            map[mcpToolCallSpanKey]*telemetry.Span
 	mcpEventStreams         *mcpEventStreamManager
 	skillShadowMu           sync.Mutex
 	skillShadowState        map[string]*skillShadowThreadState
