@@ -297,3 +297,23 @@ func TestParseDelegatedToolOutputLikeRust(t *testing.T) {
 		t.Fatalf("non-delegation prompt accepted")
 	}
 }
+
+// The user-verification notice is the bounded developer fragment Rust's
+// realtime_text_for_event renders for a verification elicitation, and it never
+// carries the challenge or display text.
+func TestUserVerificationNoticeLikeRust(t *testing.T) {
+	var frag Fragment = &UserVerificationNotice{}
+	if frag.Role() != RoleDeveloper {
+		t.Fatalf("role = %q, want developer", frag.Role())
+	}
+	open, close := frag.Markers()
+	if open != "<user_verification_notice>" || close != "</user_verification_notice>" {
+		t.Fatalf("markers = %q %q", open, close)
+	}
+	if frag.ContentKind() != "user_verification.notice" {
+		t.Fatalf("content kind = %q", frag.ContentKind())
+	}
+	if frag.Body() != "User verification is required. Please respond in the app." {
+		t.Fatalf("body = %q", frag.Body())
+	}
+}

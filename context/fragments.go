@@ -618,6 +618,28 @@ type TokenBudgetContext struct {
 	Remaining int
 }
 
+// UserVerificationNotice mirrors Rust's context::UserVerificationNotice: a
+// bounded realtime notice emitted in place of a user-verification elicitation
+// request, so the verification challenge and display text never reach the
+// realtime conversation.
+type UserVerificationNotice struct{}
+
+func (n *UserVerificationNotice) Role() string {
+	return RoleDeveloper
+}
+
+func (n *UserVerificationNotice) Markers() (string, string) {
+	return "<user_verification_notice>", "</user_verification_notice>"
+}
+
+func (n *UserVerificationNotice) Body() string {
+	return "User verification is required. Please respond in the app."
+}
+
+func (n *UserVerificationNotice) ContentKind() string {
+	return "user_verification.notice"
+}
+
 type ContextWindowGuidance struct {
 	Message string
 }
