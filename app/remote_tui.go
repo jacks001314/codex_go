@@ -326,6 +326,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	accountDisplay, hasChatGPTAccount := interactiveRemoteStatusAccount(ctx, endpoint)
 	state.AccountDisplay = accountDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
+	showRawReasoning := interactiveShowRawAgentReasoning(root)
 	// Rust #39082: query remote project config layers before starting a thread
 	// and persist accepted trust through config/batchWrite on the remote server.
 	interactiveRemoteTrustCheck(ctx, endpoint, root, shouldRunInteractiveTUI(stdin, stdout))
@@ -407,6 +408,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		AnimationsEnabled:  settings.AnimationsEnabled,
 		QuestionEscBack:    settings.QuestionEscBack,
 		AutoRecap:          settings.AutoRecap,
+		ShowRawReasoning:   showRawReasoning,
 		// Remote sessions only see the worktrees feature flag; managed worktree
 		// operations stay local (Rust #43120/#43286).
 		WorktreesEnabled: interactiveRemoteWorktreesEnabled(root),
@@ -423,7 +425,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint),
 		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
-		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint),
+		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint, showRawReasoning),
 		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
 		OnDaybreakNotice: func(model string) codextui.DaybreakNotice {
 			return daybreakNoticeForModel(daybreakProvider, daybreakCache, model)
@@ -2115,7 +2117,16 @@ func remoteTUIThreadActiveReasoning(thread *appserver.Thread) (turnID string, it
 	if remoteTUINormalizedThreadItemType(item.Type) != "reasoning" {
 		return "", "", "", false
 	}
-	if line, found := chatwidget.LatestSummaryLine(remoteTUIThreadItemReasoningText(item)); found {
+	// The heading follows the summary projection; a session that enables raw
+	// reasoning re-derives it from the matching transcript entry, so raw
+	// chain-of-thought never leaks into the status row by default
+	// (Rust RawReasoningVisibility::Hidden).
+	summary, _ := reasoningBlockVariants(
+		remoteTUIThreadItemReasoningSummaryParts(item),
+		nil,
+		remoteTUIThreadItemReasoningText(item),
+	)
+	if line, found := chatwidget.LatestSummaryLine(summary); found {
 		heading = line
 	}
 	return turn.ID, item.ID, heading, true
@@ -2201,8 +2212,12 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem) (codextui.Message
 		}
 		return codextui.Message{Role: codextui.RoleAssistant, Text: text, RawText: text}, true
 	case itemType == "reasoning":
-		text := remoteTUIThreadItemReasoningText(item)
-		if text == "" {
+		summary, raw := reasoningBlockVariants(
+			remoteTUIThreadItemReasoningSummaryParts(item),
+			remoteTUIThreadItemReasoningContentParts(item),
+			remoteTUIThreadItemReasoningText(item),
+		)
+		if summary == "" && raw == "" {
 			return codextui.Message{}, false
 		}
 		// A reasoning item is retained in the expanded transcript only (Rust
@@ -2210,11 +2225,12 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem) (codextui.Message
 		// live completion replace the restored snapshot instead of duplicating
 		// it (Rust ReasoningReplay).
 		return codextui.Message{
-			Role:           codextui.RoleHistory,
-			Text:           text,
-			RawText:        text,
-			TranscriptOnly: true,
-			ItemID:         strings.TrimSpace(item.ID),
+			Role:             codextui.RoleHistory,
+			Text:             summary,
+			RawText:          summary,
+			ReasoningRawText: raw,
+			TranscriptOnly:   true,
+			ItemID:           strings.TrimSpace(item.ID),
 		}, true
 	case itemType == "commandexecution" || itemType == "mcptoolcall" || itemType == "dynamictoolcall" || itemType == "collabagenttoolcall" || itemType == "subagentactivity":
 		text := remoteTUIThreadItemToolText(item)
@@ -2292,6 +2308,43 @@ func remoteTUIThreadItemReasoningText(item appserver.ThreadItem) string {
 		parts = append(parts, strings.TrimSpace(item.Text))
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// remoteTUIThreadItemReasoningSummaryParts returns a reasoning item's summary
+// parts (Rust ThreadItem::Reasoning { summary }).
+func remoteTUIThreadItemReasoningSummaryParts(item appserver.ThreadItem) []string {
+	parts := []string{}
+	for _, key := range []string{"summary", "summary_text"} {
+		parts = append(parts, remoteTUIAnyStrings(item.Data[key])...)
+	}
+	return parts
+}
+
+// remoteTUIThreadItemReasoningContentParts returns a reasoning item's raw
+// chain-of-thought parts (Rust ThreadItem::Reasoning { content }).
+func remoteTUIThreadItemReasoningContentParts(item appserver.ThreadItem) []string {
+	parts := []string{}
+	for _, key := range []string{"reasoningContent", "content", "raw_content"} {
+		parts = append(parts, remoteTUIAnyStrings(item.Data[key])...)
+	}
+	return parts
+}
+
+// reasoningBlockVariants mirrors Rust's reasoning-item projection: the summary
+// parts split into the transcript-only block, and a second variant chains the
+// raw content on for RawReasoningVisibility::Visible
+// (show_raw_agent_reasoning). fallback is the item's joined text, used only
+// when the item carries no structured reasoning parts at all.
+func reasoningBlockVariants(summaryParts []string, contentParts []string, fallback string) (summary string, raw string) {
+	if len(summaryParts) == 0 && len(contentParts) == 0 {
+		return strings.TrimSpace(fallback), ""
+	}
+	summary = strings.TrimSpace(historycell.NewReasoningSummaryBlock(summaryParts).Content)
+	if len(contentParts) > 0 {
+		combined := append(append([]string(nil), summaryParts...), contentParts...)
+		raw = strings.TrimSpace(historycell.NewReasoningSummaryBlock(combined).Content)
+	}
+	return summary, raw
 }
 
 func remoteTUIThreadItemToolText(item appserver.ThreadItem) string {
@@ -4424,6 +4477,18 @@ func interactiveRemoteWorktreesEnabled(root *cli.RootOptions) bool {
 		return false
 	}
 	return features.Enabled(loaded.FeatureSettings(), "worktrees")
+}
+
+// interactiveShowRawAgentReasoning reports the configured
+// `show_raw_agent_reasoning` value (Rust config default false), which gates the
+// raw chain-of-thought variant of TUI reasoning blocks and transcripts
+// (RawReasoningVisibility).
+func interactiveShowRawAgentReasoning(root *cli.RootOptions) bool {
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return false
+	}
+	return loaded.ShowRawAgentReasoning()
 }
 
 func remoteSharedOptions(root *cli.RootOptions, state *codextui.State) cli.SharedOptions {

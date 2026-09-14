@@ -898,6 +898,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		AnimationsEnabled:           settings.AnimationsEnabled,
 		QuestionEscBack:             settings.QuestionEscBack,
 		AutoRecap:                   settings.AutoRecap,
+		ShowRawReasoning:            interactiveShowRawAgentReasoning(root),
 		LocalWorktreeOperations:     true,
 		WorktreesEnabled:            worktreeEnabled,
 		WorktreeSettings:            worktreeSettings,
@@ -913,7 +914,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnWorkingDirectoryChange:    interactiveWorkingDirectoryChangeHandler(root),
 		OnResumeSession:             interactiveResumeSessionHandler(root),
 		OnPromptEdit:                interactivePromptEditHandler(root),
-		OnExportTranscript:          interactiveTranscriptExportHandler(),
+		OnExportTranscript:          interactiveTranscriptExportHandler(interactiveShowRawAgentReasoning(root)),
 		OnLoadTranscriptPreview:     interactiveTranscriptPreviewHandler(),
 		OnReadSessionTranscript:     interactiveSessionTranscriptHandler(),
 		OnRenameThread:              interactiveRenameThreadHandler(),
@@ -2717,11 +2718,24 @@ func interactiveSessionMessageFromItem(item session.Item) (codextui.Message, boo
 		}
 		return codextui.Message{Role: codextui.RoleAssistant, Text: text, RawText: text}, true
 	case itemType == "reasoning":
-		text := interactiveSessionItemReasoningText(item)
-		if text == "" {
+		summary, raw := reasoningBlockVariants(
+			remoteTUIAnyStrings(item.Data["summary"]),
+			interactiveSessionItemReasoningContentParts(item),
+			interactiveSessionItemReasoningText(item),
+		)
+		if summary == "" && raw == "" {
 			return codextui.Message{}, false
 		}
-		return codextui.Message{Role: codextui.RoleHistory, Text: "Reasoning\n" + text, RawText: text}, true
+		// The reasoning block is retained in the expanded transcript only, and
+		// its item id lets the live completion replace it (Rust ReasoningReplay).
+		return codextui.Message{
+			Role:             codextui.RoleHistory,
+			Text:             summary,
+			RawText:          summary,
+			ReasoningRawText: raw,
+			TranscriptOnly:   true,
+			ItemID:           strings.TrimSpace(item.ID),
+		}, true
 	case itemType == "commandexecution" || itemType == "mcptoolcall" || itemType == "dynamictoolcall" || itemType == "collabagenttoolcall" || itemType == "subagentactivity" || strings.Contains(itemType, "tool"):
 		text := interactiveSessionItemToolText(item)
 		if text == "" {
@@ -2869,6 +2883,16 @@ func interactiveSessionItemReasoningText(item session.Item) string {
 		parts = append(parts, strings.TrimSpace(item.Text))
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// interactiveSessionItemReasoningContentParts returns a local reasoning item's
+// raw chain-of-thought parts (Rust ThreadItem::Reasoning { content }).
+func interactiveSessionItemReasoningContentParts(item session.Item) []string {
+	parts := []string{}
+	for _, key := range []string{"reasoningContent", "content", "raw_content"} {
+		parts = append(parts, remoteTUIAnyStrings(item.Data[key])...)
+	}
+	return parts
 }
 
 func interactiveSessionItemToolText(item session.Item) string {

@@ -221,3 +221,79 @@ func TestReasoningBlockCommittedWithoutRestoredEntry(t *testing.T) {
 		t.Fatalf("expanded transcript missing the live reasoning block:\n%s", expanded)
 	}
 }
+
+// TestReasoningRawVariantGatedByShowRawReasoning pins Rust
+// RawReasoningVisibility for the reasoning block: the raw chain-of-thought
+// variant replaces the summary in the expanded transcript only when
+// show_raw_agent_reasoning is enabled (default false).
+func TestReasoningRawVariantGatedByShowRawReasoning(t *testing.T) {
+	render := func(showRaw bool) (string, codextui.Message) {
+		state := codextui.NewState(nil)
+		state.SetThreadID("thread-1")
+		model := NewModel(state, Options{Width: 80, Height: 24, ShowRawReasoning: showRaw})
+		model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.ThreadItem{
+			ID:      "reasoning-1",
+			Type:    "reasoning",
+			Summary: []string{"**Step one**\n\nSummary body."},
+			Content: []string{"Raw chain of thought."},
+		})})
+		var entry codextui.Message
+		for _, message := range model.State.Messages {
+			if message.TranscriptOnly {
+				entry = message
+			}
+		}
+		return model.renderTranscriptOverlayCached(), entry
+	}
+
+	hiddenExpanded, hiddenEntry := render(false)
+	if hiddenEntry.Text != "Summary body." || hiddenEntry.ReasoningRawText == "" {
+		t.Fatalf("raw-off entry = %#v", hiddenEntry)
+	}
+	if !strings.Contains(hiddenExpanded, "Summary body.") || strings.Contains(hiddenExpanded, "Raw chain of thought.") {
+		t.Fatalf("raw-off expanded transcript:\n%s", hiddenExpanded)
+	}
+
+	visibleExpanded, visibleEntry := render(true)
+	if !strings.Contains(visibleExpanded, "Raw chain of thought.") {
+		t.Fatalf("raw-on expanded transcript:\n%s", visibleExpanded)
+	}
+	if visibleEntry.ReasoningRawText == "" {
+		t.Fatalf("raw-on entry lost the raw variant: %#v", visibleEntry)
+	}
+}
+
+// TestRestoredReasoningHeadingFollowsRawVisibility pins Rust
+// restore_active_reasoning_item: a restored reasoning item's status heading
+// follows the same raw-reasoning variant the transcript renders.
+func TestRestoredReasoningHeadingFollowsRawVisibility(t *testing.T) {
+	switchTo := func(showRaw bool) *Model {
+		state := codextui.NewState(nil)
+		state.SetThreadID("thread-1")
+		model := NewModel(state, Options{Width: 80, Height: 24, ShowRawReasoning: showRaw})
+		model.Update(AgentSwitchResultMsg{
+			ThreadID: "thread-2",
+			Response: AgentThreadSwitchResponse{
+				Entry:                  codextui.AgentThreadEntry{ThreadID: "thread-2", AgentNickname: "agent"},
+				Status:                 "running",
+				WorkingReasoningItemID: "reasoning-1",
+				Messages: []codextui.Message{{
+					Role:             codextui.RoleHistory,
+					Text:             "Summary heading",
+					RawText:          "Summary heading",
+					ReasoningRawText: "Raw heading",
+					TranscriptOnly:   true,
+					ItemID:           "reasoning-1",
+				}},
+			},
+		})
+		return model
+	}
+
+	if got := switchTo(false).workingStatusHeader; got != "Summary heading" {
+		t.Fatalf("raw-off heading = %q", got)
+	}
+	if got := switchTo(true).workingStatusHeader; got != "Raw heading" {
+		t.Fatalf("raw-on heading = %q", got)
+	}
+}

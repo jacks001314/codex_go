@@ -302,6 +302,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		m.setWorkingStatusHeader(message.Response.WorkingStatusHeader)
 		m.reasoningResumeTurnID = strings.TrimSpace(message.Response.WorkingReasoningTurnID)
 		m.reasoningItemID = strings.TrimSpace(message.Response.WorkingReasoningItemID)
+		m.applyRestoredReasoningHeading()
 		// A restored active item may have missed earlier deltas; the completed
 		// item reconciles the stream (Rust #43921 restore_active_reasoning_item).
 		m.reasoningRecoveredAfterRefresh = strings.TrimSpace(message.Response.WorkingReasoningItemID) != "" ||

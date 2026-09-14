@@ -883,6 +883,10 @@ type Options struct {
 	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
 	// Nil keeps scheduled recaps enabled, matching Rust's config default.
 	AutoRecap *bool
+	// ShowRawReasoning is the configured `show_raw_agent_reasoning` value
+	// (Rust config default false). It selects the raw chain-of-thought variant
+	// of a reasoning block, mirroring RawReasoningVisibility::Visible.
+	ShowRawReasoning bool
 	// OnDaybreakNotice resolves the account's Daybreak access state for the
 	// refusal copy (Rust daybreak::Notice). A nil hook uses the neutral Limited
 	// copy, which is also Rust's pending/failed default.
@@ -1495,6 +1499,9 @@ type Model struct {
 	// RecapState).
 	recap            tuiapp.RecapState
 	disableAutoRecap bool
+	// showRawReasoning selects the raw chain-of-thought variant of a reasoning
+	// block (Rust config show_raw_agent_reasoning, RawReasoningVisibility).
+	showRawReasoning bool
 	// recapLoadingIndex is the transcript message index of the transient recap
 	// loading row, or -1 when none is shown.
 	recapLoadingIndex             int
@@ -1683,6 +1690,7 @@ type transcriptMessageKey struct {
 	raw            bool
 	expanded       bool
 	transcriptOnly bool
+	rawReasoning   bool
 }
 
 type transcriptMessageCacheEntry struct {
@@ -1850,6 +1858,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onLoadTranscriptPreview:         options.OnLoadTranscriptPreview,
 		onReadSessionTranscript:         options.OnReadSessionTranscript,
 		disableAutoRecap:                options.AutoRecap != nil && !*options.AutoRecap,
+		showRawReasoning:                options.ShowRawReasoning,
 		recapLoadingIndex:               -1,
 		onReadTokenActivity:             options.OnReadTokenActivity,
 		onReadRateLimitResetCredits:     options.OnReadRateLimitResetCredits,
@@ -3143,15 +3152,23 @@ func (m *Model) commitReasoningSummaryBlock(itemID string, item *protocol.Thread
 	}
 	block := historycell.NewReasoningSummaryBlock(parts)
 	content := strings.TrimSpace(block.Content)
-	if content == "" {
+	// Rust chains the item's raw content into the block's parts when
+	// show_raw_agent_reasoning is enabled; both variants travel with the entry
+	// and the renderer picks one, like the app-server's reasoning projection.
+	rawContent := ""
+	if rawParts := append(append([]string(nil), parts...), reasoningContentParts(item)...); len(rawParts) > len(parts) {
+		rawContent = strings.TrimSpace(historycell.NewReasoningSummaryBlock(rawParts).Content)
+	}
+	if content == "" && rawContent == "" {
 		return
 	}
 	message := codextui.Message{
-		Role:           codextui.RoleHistory,
-		Text:           content,
-		RawText:        content,
-		TranscriptOnly: true,
-		ItemID:         itemID,
+		Role:             codextui.RoleHistory,
+		Text:             content,
+		RawText:          content,
+		ReasoningRawText: rawContent,
+		TranscriptOnly:   true,
+		ItemID:           itemID,
 	}
 	if index := m.reasoningTranscriptIndex(itemID); index >= 0 {
 		m.State.Messages[index] = message
@@ -3160,6 +3177,21 @@ func (m *Model) commitReasoningSummaryBlock(itemID string, item *protocol.Thread
 	}
 	m.State.Messages = append(m.State.Messages, message)
 	m.State.BumpMessagesRevision()
+}
+
+// reasoningContentParts returns an item's raw reasoning content parts, the half
+// Rust appends to a reasoning block when raw reasoning is visible.
+func reasoningContentParts(item *protocol.ThreadItem) []string {
+	if item == nil || len(item.Content) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(item.Content))
+	for _, part := range item.Content {
+		if strings.TrimSpace(part) != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
 }
 
 // reasoningTranscriptIndex returns the position of a transcript-only reasoning
@@ -3175,6 +3207,35 @@ func (m *Model) reasoningTranscriptIndex(itemID string) int {
 		}
 	}
 	return -1
+}
+
+// applyRestoredReasoningHeading re-derives the live heading from the restored
+// reasoning block's matching variant, so the status row shows what the
+// transcript does. Rust restore_active_reasoning_item chains the item's raw
+// content into the delta buffer only when show_raw_agent_reasoning is enabled,
+// so the snapshot heading must follow the same variant
+// (RawReasoningVisibility).
+func (m *Model) applyRestoredReasoningHeading() {
+	if m == nil || m.State == nil {
+		return
+	}
+	itemID := strings.TrimSpace(m.reasoningItemID)
+	if itemID == "" {
+		return
+	}
+	for _, message := range m.State.Messages {
+		if !message.TranscriptOnly || strings.TrimSpace(message.ItemID) != itemID {
+			continue
+		}
+		text := message.Text
+		if m.showRawReasoning && strings.TrimSpace(message.ReasoningRawText) != "" {
+			text = message.ReasoningRawText
+		}
+		if line, ok := chatwidget.LatestSummaryLine(text); ok {
+			m.setWorkingStatusHeader(line)
+		}
+		return
+	}
 }
 
 // itemText reads an item's text, tolerating a nil item.
@@ -6993,7 +7054,7 @@ func (m *Model) transcriptRenderCached(state *codextui.State, width int) string 
 	if state == nil {
 		return "No messages yet."
 	}
-	return renderTranscriptWithCache(&m.transcriptMessages, state, m.rawOutput, width, m.activeTUITheme(), false, m.sessionCWD)
+	return renderTranscriptWithCache(&m.transcriptMessages, state, m.rawOutput, width, m.activeTUITheme(), false, m.sessionCWD, m.showRawReasoning)
 }
 
 func (m *Model) refreshTranscript() {
@@ -7130,7 +7191,7 @@ func (m *Model) renderTranscriptOverlayCached() string {
 	if m == nil {
 		return ""
 	}
-	return renderTranscriptWithCache(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), true, m.sessionCWD)
+	return renderTranscriptWithCache(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), true, m.sessionCWD, m.showRawReasoning)
 }
 
 func (m *Model) activeTUITheme() string {
@@ -7623,14 +7684,14 @@ func renderTranscript(state *codextui.State, raw bool, width int, themeID string
 }
 
 func renderTranscriptWithHistoryMode(state *codextui.State, raw bool, width int, themeID string, expandedHistory bool) string {
-	return renderTranscriptWithCache(nil, state, raw, width, themeID, expandedHistory, "")
+	return renderTranscriptWithCache(nil, state, raw, width, themeID, expandedHistory, "", false)
 }
 
 // renderTranscriptWithCache renders the transcript into display lines, reusing
 // the per-message cache when a message's render inputs are unchanged. Passing a
 // nil cache disables caching and renders the whole history from scratch.
-func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, cwd string) string {
-	content, _ := renderTranscriptMessagesWithRanges(cache, state, raw, width, themeID, expandedHistory, cwd)
+func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, cwd string, showRawReasoning bool) string {
+	content, _ := renderTranscriptMessagesWithRanges(cache, state, raw, width, themeID, expandedHistory, cwd, showRawReasoning)
 	return content
 }
 
@@ -7639,7 +7700,7 @@ func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.St
 // line range. The ranges index the rendered content the transcript overlay
 // shows, so a caller can highlight a message in place (Rust pager overlay
 // cells).
-func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, cwd string) (string, [][2]int) {
+func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, cwd string, showRawReasoning bool) (string, [][2]int) {
 	if state == nil || len(state.Messages) == 0 {
 		return "No messages yet.", nil
 	}
@@ -7663,12 +7724,13 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 			raw:            raw,
 			expanded:       expandedHistory,
 			transcriptOnly: message.TranscriptOnly,
+			rawReasoning:   showRawReasoning,
 		}
 		var lines []string
 		if cache != nil && i < len(cache.messages) && cache.messages[i].key == key {
 			lines = cache.messages[i].lines
 		} else {
-			lines = transcriptMessageDisplayLines(message, width, themeID, expandedHistory, cwd)
+			lines = transcriptMessageDisplayLines(message, width, themeID, expandedHistory, cwd, showRawReasoning)
 			if cache != nil {
 				entry := transcriptMessageCacheEntry{key: key, lines: lines}
 				if i < len(cache.messages) {
@@ -7699,7 +7761,7 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 	return builder.String(), ranges
 }
 
-func transcriptMessageDisplayLines(message codextui.Message, width int, themeID string, expandedHistory bool, cwd string) []string {
+func transcriptMessageDisplayLines(message codextui.Message, width int, themeID string, expandedHistory bool, cwd string, showRawReasoning bool) []string {
 	// A transcript-only entry (a completed reasoning block) belongs to the
 	// expanded transcript overlay; the live scrollback never renders it
 	// (Rust ReasoningSummaryCell::display_lines returns nothing when
@@ -7708,7 +7770,7 @@ func transcriptMessageDisplayLines(message codextui.Message, width int, themeID 
 		if !expandedHistory {
 			return nil
 		}
-		return reasoningBlockTranscriptLines(message.RawText, message.Text, width, themeID, cwd)
+		return reasoningBlockTranscriptLines(message, width, themeID, cwd, showRawReasoning)
 	}
 	if expandedHistory && message.Role == codextui.RoleHistory {
 		text := strings.TrimRight(message.RawText, "\r\n")
@@ -7724,10 +7786,17 @@ func transcriptMessageDisplayLines(message codextui.Message, width int, themeID 
 // the expanded transcript (Rust ReasoningSummaryCell::transcript_lines): the
 // summary content is markdown-rendered relative to the session cwd active when
 // the block was recorded and indented under the summary bullet.
-func reasoningBlockTranscriptLines(rawText string, text string, width int, themeID string, cwd string) []string {
-	content := strings.TrimSpace(rawText)
+// The raw chain-of-thought variant replaces the summary when the session
+// enables raw reasoning (Rust RawReasoningVisibility::Visible).
+func reasoningBlockTranscriptLines(message codextui.Message, width int, themeID string, cwd string, showRawReasoning bool) []string {
+	content := strings.TrimSpace(message.Text)
+	if showRawReasoning {
+		if raw := strings.TrimSpace(message.ReasoningRawText); raw != "" {
+			content = raw
+		}
+	}
 	if content == "" {
-		content = strings.TrimSpace(text)
+		content = strings.TrimSpace(message.RawText)
 	}
 	if content == "" {
 		return nil

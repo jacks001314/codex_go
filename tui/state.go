@@ -44,6 +44,11 @@ type Message struct {
 	// live reasoning lifecycle can replace the restored snapshot in place
 	// (Rust ReasoningReplay restores the active item instead of committing it).
 	ItemID string
+	// ReasoningRawText is the raw-chain-of-thought variant of a transcript-only
+	// reasoning block. Rust gates that variant on `show_raw_agent_reasoning`
+	// (RawReasoningVisibility::Visible) when projecting thread items, so both
+	// variants travel with the entry and the renderer picks one.
+	ReasoningRawText string
 }
 
 // MessageTextElement is a structured byte range inside a user prompt (a mention

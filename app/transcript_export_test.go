@@ -35,7 +35,7 @@ func TestTranscriptExportMarkdownMatchesRustSections(t *testing.T) {
 		}},
 	}
 
-	markdown := transcriptExportMarkdown(turns)
+	markdown := transcriptExportMarkdown(turns, false)
 	if !strings.HasPrefix(markdown, "# Codex conversation\n") {
 		t.Fatalf("missing header:\n%s", markdown)
 	}
@@ -63,21 +63,21 @@ func TestTranscriptExportMarkdownMatchesRustSections(t *testing.T) {
 }
 
 func TestTranscriptExportMarkdownEmptyWithoutContent(t *testing.T) {
-	if markdown := transcriptExportMarkdown(nil); markdown != "" {
+	if markdown := transcriptExportMarkdown(nil, false); markdown != "" {
 		t.Fatalf("empty turns = %q, want no export", markdown)
 	}
 	onlyMarkers := []appserver.Turn{{ID: "turn-1", Items: []appserver.ThreadItem{
 		{ID: "rev1", Type: "enteredReviewMode", Text: "changes"},
 		{ID: "rev2", Type: "exitedReviewMode", Text: "done"},
 	}}}
-	if markdown := transcriptExportMarkdown(onlyMarkers); markdown != "" {
+	if markdown := transcriptExportMarkdown(onlyMarkers, false); markdown != "" {
 		t.Fatalf("marker-only turns = %q, want no export", markdown)
 	}
 }
 
 func TestTranscriptExportSectionFallsBackToToolText(t *testing.T) {
 	item := appserver.ThreadItem{ID: "c1", Type: "commandExecution", Name: "shell", Status: "completed"}
-	heading, text, indent, ok := transcriptExportSection(item)
+	heading, text, indent, ok := transcriptExportSection(item, false)
 	if !ok || heading != "Activity" || !indent || !strings.Contains(text, "shell") {
 		t.Fatalf("section = %q %q indent=%v ok=%v", heading, text, indent, ok)
 	}
@@ -136,7 +136,7 @@ func TestInteractiveRemoteTranscriptExportHandlerReadsThread(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	markdown, err := interactiveRemoteTranscriptExportHandler(ctx, endpoint)("thread-source")
+	markdown, err := interactiveRemoteTranscriptExportHandler(ctx, endpoint, false)("thread-source")
 	if err != nil {
 		t.Fatalf("export error = %v", err)
 	}
@@ -158,4 +158,38 @@ func errThreadReadParams(params appserver.ThreadReadParams) error {
 
 func errUnexpectedMethod(method string) error {
 	return errors.New("unexpected method " + method)
+}
+
+// TestReasoningRawVisibilityGatesRawContent pins Rust RawReasoningVisibility:
+// the reasoning projections carry the raw chain-of-thought variant, and it is
+// selected only when show_raw_agent_reasoning is enabled.
+func TestReasoningRawVisibilityGatesRawContent(t *testing.T) {
+	item := appserver.ThreadItem{
+		ID:   "r1",
+		Type: "reasoning",
+		Data: map[string]any{
+			"summary": []any{"**Step one**\n\nSummary body."},
+			"content": []any{"Raw chain of thought."},
+		},
+	}
+
+	message, ok := remoteTUIMessageFromThreadItem(item)
+	if !ok || !message.TranscriptOnly || message.ItemID != "r1" {
+		t.Fatalf("reasoning message = %#v ok=%v", message, ok)
+	}
+	if message.Text != "Summary body." {
+		t.Fatalf("summary variant = %q", message.Text)
+	}
+	if message.ReasoningRawText != "Summary body.\n\nRaw chain of thought." {
+		t.Fatalf("raw variant = %q", message.ReasoningRawText)
+	}
+
+	// Export follows thread_transcript.rs: the raw content replaces the
+	// summary projection when raw reasoning is visible.
+	if got := transcriptExportReasoningText(item, false); got != "Summary body." {
+		t.Fatalf("raw-off export text = %q", got)
+	}
+	if got := transcriptExportReasoningText(item, true); got != "Raw chain of thought." {
+		t.Fatalf("raw-on export text = %q", got)
+	}
 }

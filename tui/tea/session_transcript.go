@@ -63,5 +63,5 @@ func (m *Model) applySessionTranscript(msg SessionTranscriptMsg) {
 		return
 	}
 	state := &codextui.State{Messages: append([]codextui.Message(nil), msg.Messages...)}
-	m.overlay.SetContent(renderTranscriptWithCache(nil, state, m.rawOutput, m.width, m.activeTUITheme(), true, m.sessionCWD))
+	m.overlay.SetContent(renderTranscriptWithCache(nil, state, m.rawOutput, m.width, m.activeTUITheme(), true, m.sessionCWD, m.showRawReasoning))
 }

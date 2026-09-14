@@ -418,6 +418,7 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	m.setWorkingStatusHeader(response.WorkingStatusHeader)
 	m.reasoningResumeTurnID = strings.TrimSpace(response.WorkingReasoningTurnID)
 	m.reasoningItemID = strings.TrimSpace(response.WorkingReasoningItemID)
+	m.applyRestoredReasoningHeading()
 	// A restored active item may have missed earlier deltas; the completed item
 	// reconciles the stream (Rust #43921 restore_active_reasoning_item).
 	m.reasoningRecoveredAfterRefresh = strings.TrimSpace(response.WorkingReasoningItemID) != "" ||
