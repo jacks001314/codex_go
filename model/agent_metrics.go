@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -191,6 +192,10 @@ type sseEventTelemetry struct {
 	Success   bool
 	Duration  time.Duration
 	Err       error
+	// Message overrides the error text the failure record reports (Rust's
+	// log_sse_event passes the parsed payload for a response.failed event and a
+	// fixed message for an unparsable response.output_item.done item).
+	Message string
 }
 
 // recordAPIRequestRecord mirrors the record half of
@@ -253,8 +258,12 @@ func recordSSEEvent(metrics MetricsSink, sink SessionTelemetrySink, ctx context.
 	}
 	fields := map[string]string{"duration_ms": strconv.FormatInt(event.Duration.Milliseconds(), 10)}
 	errorMessage := ""
-	if event.Err != nil {
+	if event.Message != "" {
+		errorMessage = event.Message
+	} else if event.Err != nil {
 		errorMessage = event.Err.Error()
+	}
+	if errorMessage != "" {
 		fields["error.message"] = errorMessage
 	}
 	if event.Success {
@@ -284,6 +293,59 @@ func sseEventKindField(kind string, known bool, fields map[string]string) map[st
 		merged["event.kind"] = kind
 	}
 	return merged
+}
+
+// sseEventRecordKind mirrors Rust's parsed SSE frame: the event name, or the
+// SSE spec's "message" default when the frame carries no event field
+// (eventsource_stream applies the same default). A frame that never parsed
+// reports Rust's unknown kind without an event.kind field.
+func sseEventRecordKind(sse *responsesSSEEvent) (string, bool) {
+	if sse == nil {
+		return sseUnknownKind, false
+	}
+	if kind := strings.TrimSpace(sse.Event); kind != "" {
+		return kind, true
+	}
+	return "message", true
+}
+
+// rustSSEEventFailureMessage applies log_sse_event's content routing to a parsed
+// frame: a response.failed payload is reported as the failure message (Rust
+// passes the parsed payload), and a response.output_item.done frame whose item
+// does not parse reports Rust's fixed message. It returns "" when Rust would
+// report the handler's own error instead.
+func rustSSEEventFailureMessage(sse *responsesSSEEvent, err error) string {
+	if sse == nil {
+		return ""
+	}
+	switch strings.TrimSpace(sse.Event) {
+	case "response.failed":
+		if payload, ok := compactSSEPayload(sse.Data); ok {
+			return payload
+		}
+	case "response.output_item.done":
+		if err != nil && json.Valid(sse.Data) {
+			return "failed to parse response.output_item.done"
+		}
+	}
+	return ""
+}
+
+// compactSSEPayload re-serializes a parsed payload the way Rust's
+// serde_json::Value Display does (compact JSON, sorted object keys).
+func compactSSEPayload(data []byte) (string, bool) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return "", false
+	}
+	var value any
+	if json.Unmarshal(data, &value) != nil {
+		return "", false
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", false
+	}
+	return string(encoded), true
 }
 
 // sseEventKind resolves the kind tag: the SSE event name, else the JSON type,

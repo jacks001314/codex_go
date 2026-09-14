@@ -649,3 +649,33 @@ func (s *recordingTelemetrySink) LogAndTraceEvent(ctx context.Context, name stri
 	s.LogEvent(ctx, name, fields, logOnly)
 	s.TraceEvent(ctx, name, fields, traceOnly)
 }
+
+// Rust's log_sse_event routes by event content: the SSE spec's "message" default
+// names an unnamed frame, a response.failed payload is the failure message, and
+// an unparsable response.output_item.done item reports Rust's fixed message.
+func TestSSEEventRecordRoutingLikeRust(t *testing.T) {
+	if kind, known := sseEventRecordKind(&responsesSSEEvent{Event: "response.created"}); kind != "response.created" || !known {
+		t.Fatalf("named kind = %q/%v", kind, known)
+	}
+	if kind, known := sseEventRecordKind(&responsesSSEEvent{Data: []byte(`{"type":"response.created"}`)}); kind != "message" || !known {
+		t.Fatalf("unnamed kind = %q/%v", kind, known)
+	}
+	if kind, known := sseEventRecordKind(nil); kind != sseUnknownKind || known {
+		t.Fatalf("unparsed kind = %q/%v", kind, known)
+	}
+
+	failed := &responsesSSEEvent{Event: "response.failed", Data: []byte(`{"type":"response.failed","response":{"id":"r1"}}`)}
+	if got := rustSSEEventFailureMessage(failed, errors.New("derived message")); got != `{"response":{"id":"r1"},"type":"response.failed"}` {
+		t.Fatalf("failure message = %q", got)
+	}
+	if got := rustSSEEventFailureMessage(&responsesSSEEvent{Event: "response.failed", Data: []byte("not json")}, errors.New("parse error")); got != "" {
+		t.Fatalf("unparsable payload message = %q", got)
+	}
+	done := &responsesSSEEvent{Event: "response.output_item.done", Data: []byte(`{"type":"response.output_item.done"}`)}
+	if got := rustSSEEventFailureMessage(done, errors.New("shape error")); got != "failed to parse response.output_item.done" {
+		t.Fatalf("item message = %q", got)
+	}
+	if got := rustSSEEventFailureMessage(done, nil); got != "" {
+		t.Fatalf("parsed item message = %q", got)
+	}
+}

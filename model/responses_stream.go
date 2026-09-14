@@ -479,13 +479,22 @@ func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, requ
 				handler(event)
 			}
 		})
-		recordSSEEvent(metrics, telemetrySink, receivingCtx, sseEventTelemetry{
-			Kind:      sseEventKind(sse),
-			KindKnown: strings.TrimSpace(sse.Event) != "",
+		// Rust's log_sse_event routes by event content, so the failure record
+		// carries the parsed payload (response.failed) or a fixed parse message
+		// (an unparsable response.output_item.done) instead of Go's error text.
+		recordKind, recordKindKnown := sseEventRecordKind(sse)
+		record := sseEventTelemetry{
+			Kind:      recordKind,
+			KindKnown: recordKindKnown,
 			Success:   err == nil,
 			Duration:  time.Since(eventStartedAt),
 			Err:       err,
-		})
+		}
+		if message := rustSSEEventFailureMessage(sse, err); message != "" {
+			record.Success = false
+			record.Message = message
+		}
+		recordSSEEvent(metrics, telemetrySink, receivingCtx, record)
 		recordResponsesSpan(handleResponsesSpan, streamedEvent)
 		if streamedEvent != nil && streamedEvent.Kind == ResponsesStreamEventOutputAdded && ttftMillis == nil {
 			elapsed := time.Since(streamStartedAt).Milliseconds()
