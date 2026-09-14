@@ -451,7 +451,10 @@ func (m *Model) applyAgentsOverviewNewWorktree(message agentsOverviewNewWorktree
 		if text == "" {
 			text = "the server returned no thread id"
 		}
-		m.agentsOverviewNotice = "Failed to create worktree session: " + text
+		// Rust reports the worktree session failure verbatim (the app layer already
+		// prefixes the start failure with "Failed to start session: "), so the
+		// notice must not add a second prefix.
+		m.agentsOverviewNotice = text
 		m.refreshTranscript()
 		return nil
 	}
