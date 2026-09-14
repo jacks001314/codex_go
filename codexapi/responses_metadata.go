@@ -21,8 +21,14 @@ const (
 	TurnStartedAtUnixMSKey = "turn_started_at_unix_ms"
 	// AnalyticsEnabledKey reports the selected session analytics client's
 	// collection state (Rust #44628).
-	AnalyticsEnabledKey           = "analytics_enabled"
+	AnalyticsEnabledKey = "analytics_enabled"
+	// HistoryIngestRequestedKey mirrors Rust's HISTORY_INGEST_REQUESTED_KEY:
+	// the session's token-budget history-notes extension asks the backend to
+	// ingest the request.
+	HistoryIngestRequestedKey     = "history_ingest_requested"
+	WindowNumberKey               = "window_number"
 	ForkedFromThreadIDKey         = "forked_from_thread_id"
+	ForkedFromOrdinalExclusiveKey = "forked_from_ordinal_exclusive"
 	ParentThreadIDKey             = "parent_thread_id"
 	ParentTurnIDKey               = "parent_turn_id"
 	RootTurnIDKey                 = "root_turn_id"
@@ -45,24 +51,29 @@ const (
 	// input during the turn. Rust only serializes it into the MCP turn-metadata
 	// document (TurnMetadataState::current_meta_value_for_mcp_request).
 	UserInputRequestedDuringTurnKey = "user_input_requested_during_turn"
-	InstallationIDHeader            = "x-codex-installation-id"
-	WindowIDHeader                  = "x-codex-window-id"
-	TurnMetadataHeader              = "x-codex-turn-metadata"
-	ParentThreadIDHeader            = "x-codex-parent-thread-id"
-	OpenAISubagentHeader            = "x-openai-subagent"
-	RequestKindTurn                 = "turn"
-	RequestKindPrewarm              = "prewarm"
-	RequestKindCompaction           = "compaction"
-	RequestKindMemory               = "memory"
+	// GuardianCreditsRequestedKey is a reserved product-owned key (Rust
+	// RESERVED_METADATA_KEYS): clients may not configure it.
+	GuardianCreditsRequestedKey = "guardian_credits_requested"
+	InstallationIDHeader        = "x-codex-installation-id"
+	WindowIDHeader              = "x-codex-window-id"
+	TurnMetadataHeader          = "x-codex-turn-metadata"
+	ParentThreadIDHeader        = "x-codex-parent-thread-id"
+	OpenAISubagentHeader        = "x-openai-subagent"
+	RequestKindTurn             = "turn"
+	RequestKindPrewarm          = "prewarm"
+	RequestKindCompaction       = "compaction"
+	RequestKindMemory           = "memory"
 )
 
 var reservedMetadataKeys = map[string]bool{
+	GuardianCreditsRequestedKey:   true,
 	InstallationIDKey:             true,
 	InstallationIDHeader:          true,
 	SessionIDKey:                  true,
 	ThreadIDKey:                   true,
 	TurnIDKey:                     true,
 	WindowIDKey:                   true,
+	WindowNumberKey:               true,
 	WindowIDHeader:                true,
 	ContextWindowIDKey:            true,
 	TurnMetadataHeader:            true,
@@ -73,8 +84,10 @@ var reservedMetadataKeys = map[string]bool{
 	CodeModeToolNamesKey:          true,
 	ToolNamespacesInfoKey:         true,
 	TurnStartedAtUnixMSKey:        true,
+	HistoryIngestRequestedKey:     true,
 	AnalyticsEnabledKey:           true,
 	ForkedFromThreadIDKey:         true,
+	ForkedFromOrdinalExclusiveKey: true,
 	ParentThreadIDKey:             true,
 	ParentTurnIDKey:               true,
 	RootTurnIDKey:                 true,

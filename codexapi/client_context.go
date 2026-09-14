@@ -135,7 +135,11 @@ type ClientMetadata struct {
 	AnalyticsEnabled    *bool
 	Workspaces          map[string]ClientWorkspaceMetadata
 	TurnStartedAtUnixMS int64
-	Extra               map[string]string
+	// HistoryIngestRequested reports that the session's token-budget config
+	// enables the history-notes extension (Rust
+	// `with_window_and_fork_metadata`); only the true value is serialized.
+	HistoryIngestRequested bool
+	Extra                  map[string]string
 	// ResponsesAPIMetadata carries bounded, product-owned metadata from the
 	// `responses_api_metadata` config (Rust 9e301c8c9a). Product metadata takes
 	// precedence over client-provided Extra values and is kept out of metadata
@@ -247,6 +251,9 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	if m.TurnStartedAtUnixMS != 0 {
 		value["turn_started_at_unix_ms"] = m.TurnStartedAtUnixMS
 	}
+	if m.HistoryIngestRequested {
+		value[HistoryIngestRequestedKey] = true
+	}
 	for key, extra := range m.Extra {
 		if ClientReservedMetadataKeys()[key] || m.capturedMetadataKey(key) {
 			continue
@@ -292,9 +299,11 @@ func (m *ClientMetadata) MCPTurnMetadataValue(userInputRequested bool) map[strin
 	clone := *m
 	// Rust's MCP template is built without a request kind, so the request
 	// identity (installation id, window id/number, context window id) and the
-	// compaction metadata are omitted.
+	// compaction metadata are omitted, and the window/fork extras the Responses
+	// path adds (history ingest) are absent as well.
 	clone.RequestKind = ""
 	clone.Compaction = nil
+	clone.HistoryIngestRequested = false
 	value := clone.TurnMetadataValue()
 	if value == nil {
 		return nil
@@ -394,15 +403,17 @@ func ClientFilterExtraMetadata(values map[string]string) map[string]string {
 
 func ClientReservedMetadataKeys() map[string]bool {
 	keys := []string{
+		GuardianCreditsRequestedKey,
 		"installation_id", strings.ToLower(ClientCodexInstallationIDHeader),
-		"session_id", "thread_id", "turn_id", AgentNameKey, "window_id", strings.ToLower(ClientCodexWindowIDHeader),
+		"session_id", "thread_id", "turn_id", AgentNameKey, "window_id", "window_number", "context_window_id", strings.ToLower(ClientCodexWindowIDHeader),
 		strings.ToLower(ClientCodexTurnMetadataHeader), strings.ToLower(ClientCodexParentThreadIDHeader),
 		strings.ToLower(ClientOpenAISubagentHeader), "request_kind", "compaction",
-		"turn_started_at_unix_ms", "forked_from_thread_id", "parent_thread_id", "parent_turn_id", RootTurnIDKey,
+		"turn_started_at_unix_ms", HistoryIngestRequestedKey, "forked_from_thread_id", ForkedFromOrdinalExclusiveKey,
+		"parent_thread_id", "parent_turn_id", RootTurnIDKey,
 		AnalyticsEnabledKey,
 		"subagent_kind", "thread_source", "sandbox", "sandbox_mode", "workspaces",
 		"turn_trigger", "codex_version",
-		AutoReviewEnabledKey, NodeReplAutoReviewRequiredKey, NodeReplDisabledKey, CodeModeToolNamesKey,
+		AutoReviewEnabledKey, NodeReplAutoReviewRequiredKey, NodeReplDisabledKey, CodeModeToolNamesKey, ToolNamespacesInfoKey,
 	}
 	out := make(map[string]bool, len(keys))
 	for _, key := range keys {

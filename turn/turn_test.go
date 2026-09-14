@@ -151,6 +151,81 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 	}
 }
 
+// TestBuildResponsesClientMetadataSerializesTheCompactionOperation mirrors
+// Rust's turn-metadata serialization for a compaction request: the request kind
+// is "compaction" and the operation's dispatch fields travel in the
+// `compaction` object, with the strategy defaulted to memento.
+func TestBuildResponsesClientMetadataSerializesTheCompactionOperation(t *testing.T) {
+	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		InstallationID: "install",
+		SessionID:      "session",
+		ThreadID:       "thread",
+		TurnID:         "turn",
+		WindowID:       "thread:1",
+		RequestKind:    codexapi.ClientRequestCompaction,
+		Compaction: &codexapi.ClientCompactionMetadata{
+			Trigger:        "auto",
+			Reason:         "contextWindowExceeded",
+			Implementation: "responses",
+			Phase:          "preTurn",
+		},
+	})
+	var turnMetadata map[string]any
+	if err := json.Unmarshal([]byte(client[codexapi.ClientCodexTurnMetadataHeader]), &turnMetadata); err != nil {
+		t.Fatalf("turn metadata json error = %v", err)
+	}
+	if turnMetadata["request_kind"] != "compaction" {
+		t.Fatalf("request_kind = %#v, want compaction", turnMetadata["request_kind"])
+	}
+	compaction, _ := turnMetadata["compaction"].(map[string]any)
+	if compaction == nil {
+		t.Fatalf("compaction metadata = %#v", turnMetadata)
+	}
+	for key, want := range map[string]any{
+		"trigger":        "auto",
+		"reason":         "contextWindowExceeded",
+		"implementation": "responses",
+		"phase":          "preTurn",
+		"strategy":       "memento",
+	} {
+		if compaction[key] != want {
+			t.Fatalf("compaction.%s = %#v, want %#v", key, compaction[key], want)
+		}
+	}
+}
+
+// TestBuildResponsesClientMetadataForwardsHistoryIngest mirrors Rust's
+// with_window_and_fork_metadata history_ingest_requested flag.
+func TestBuildResponsesClientMetadataForwardsHistoryIngest(t *testing.T) {
+	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		SessionID:              "session",
+		ThreadID:               "thread",
+		TurnID:                 "turn",
+		RequestKind:            codexapi.ClientRequestTurn,
+		HistoryIngestRequested: true,
+	})
+	var turnMetadata map[string]any
+	if err := json.Unmarshal([]byte(client[codexapi.ClientCodexTurnMetadataHeader]), &turnMetadata); err != nil {
+		t.Fatalf("turn metadata json error = %v", err)
+	}
+	if turnMetadata[codexapi.HistoryIngestRequestedKey] != true {
+		t.Fatalf("turn metadata = %#v, want history_ingest_requested", turnMetadata)
+	}
+	plain := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		SessionID:   "session",
+		ThreadID:    "thread",
+		TurnID:      "turn",
+		RequestKind: codexapi.ClientRequestTurn,
+	})
+	var plainMetadata map[string]any
+	if err := json.Unmarshal([]byte(plain[codexapi.ClientCodexTurnMetadataHeader]), &plainMetadata); err != nil {
+		t.Fatalf("turn metadata json error = %v", err)
+	}
+	if _, ok := plainMetadata[codexapi.HistoryIngestRequestedKey]; ok {
+		t.Fatalf("turn metadata = %#v, want no history_ingest_requested", plainMetadata)
+	}
+}
+
 func TestBuildResponsesClientMetadataIncludesAnalyticsEnabled(t *testing.T) {
 	enabled := true
 	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{

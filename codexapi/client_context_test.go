@@ -278,6 +278,46 @@ func TestClientMetadataMCPTurnMetadataValue(t *testing.T) {
 	}
 }
 
+// TestClientMetadataHistoryIngestRequested mirrors Rust's
+// with_window_and_fork_metadata: only the true value is serialized in the
+// Responses document, and the MCP template (which never sets it) is unaffected.
+func TestClientMetadataHistoryIngestRequested(t *testing.T) {
+	metadata := NewClientMetadata("install", "session", "thread", "window")
+	metadata.RequestKind = ClientRequestTurn
+	metadata.HistoryIngestRequested = true
+	if metadata.TurnMetadataValue()[HistoryIngestRequestedKey] != true {
+		t.Fatalf("turn metadata dropped history_ingest_requested: %#v", metadata.TurnMetadataValue())
+	}
+	if _, ok := metadata.MCPTurnMetadataValue(false)[HistoryIngestRequestedKey]; ok {
+		t.Fatalf("MCP metadata carries history_ingest_requested: %#v", metadata.MCPTurnMetadataValue(false))
+	}
+	metadata.HistoryIngestRequested = false
+	if _, ok := metadata.TurnMetadataValue()[HistoryIngestRequestedKey]; ok {
+		t.Fatalf("false history_ingest_requested was serialized: %#v", metadata.TurnMetadataValue())
+	}
+}
+
+// TestResponsesMetadataReservesTheWindowForkKeys mirrors Rust's
+// RESERVED_METADATA_KEYS: product-owned window/fork/ingest keys cannot be
+// configured through responses_api_metadata.
+func TestResponsesMetadataReservesTheWindowForkKeys(t *testing.T) {
+	for _, key := range []string{
+		WindowNumberKey,
+		ContextWindowIDKey,
+		ToolNamespacesInfoKey,
+		HistoryIngestRequestedKey,
+		ForkedFromOrdinalExclusiveKey,
+		GuardianCreditsRequestedKey,
+	} {
+		if !ClientReservedMetadataKeys()[key] || !reservedMetadataKeys[key] {
+			t.Fatalf("%q is not reserved: client=%v responses=%v", key, ClientReservedMetadataKeys()[key], reservedMetadataKeys[key])
+		}
+		if err := ValidateResponsesAPIMetadata(map[string]string{key: "1"}); err == nil {
+			t.Fatalf("responses_api_metadata accepted the reserved key %q", key)
+		}
+	}
+}
+
 func TestClientCompatibilityHeadersOmitUnboundedCodeModeToolNames(t *testing.T) {
 	value := map[string]any{
 		"thread_id": "thread",

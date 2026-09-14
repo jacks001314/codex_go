@@ -5160,7 +5160,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	}
 	r.notifyContextCompactionItemStarted(request.ThreadID, request.TurnID, compactionItem)
 	compacted, err := compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
-		Runner:               r.compactRunnerForRecord(record),
+		Runner:               r.compactRunnerForRecord(record, request),
 		MaxSummaryChars:      4000,
 		InitialContext:       initialContext,
 		InjectBeforeLastUser: true,
@@ -5396,7 +5396,7 @@ func compactUsageMetadataMap(usage *compact.Usage) map[string]any {
 	}
 }
 
-func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record) compact.RemoteRunner {
+func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request) compact.RemoteRunner {
 	if r == nil {
 		return nil
 	}
@@ -5449,12 +5449,13 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record) compact.R
 		)
 	}
 	return &agentCompactRunner{
-		agent:       agent,
-		model:       compactModel,
-		providerID:  firstNonEmpty(providerID, model.OpenAIProviderID),
-		serviceTier: r.remoteCompactServiceTierForRecord(record),
-		modelHash:   modelHash,
-		effort:      compactionEffort,
+		agent:          agent,
+		model:          compactModel,
+		providerID:     firstNonEmpty(providerID, model.OpenAIProviderID),
+		serviceTier:    r.remoteCompactServiceTierForRecord(record),
+		modelHash:      modelHash,
+		effort:         compactionEffort,
+		clientMetadata: r.compactResponsesClientMetadata(record, request, compactModel),
 	}
 }
 
@@ -6543,27 +6544,30 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		ExecutedToolCallMetadataEnabled: features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"),
 		ImageResizeNoticeEnabled:        features.Enabled(cfg.FeatureSettings(), "image_resize_notice"),
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-			InstallationID:             installationID,
-			SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
-			ThreadID:                   threadID,
-			TurnID:                     turnID,
-			WindowID:                   threadID + ":1",
-			ContextWindowID:            r.contextWindowIDForThread(threadID),
-			WindowNumber:               uint64PtrAppserver(r.windowNumberForThread(threadID)),
-			RequestKind:                codexapi.ClientRequestTurn,
-			ForkedFromThreadID:         lineage.ForkedFromThreadID,
-			ParentThreadID:             lineage.ParentThreadID,
-			ParentTurnID:               params.ParentTurnID,
-			RootTurnID:                 effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, lineage.SubagentHeader),
-			SubagentHeader:             lineage.SubagentHeader,
-			SubagentKind:               lineage.SubagentKind,
-			ThreadSource:               lineage.ThreadSource,
-			TurnTrigger:                params.TurnTrigger,
-			CodexVersion:               appServerVersion(),
-			SandboxMode:                permissionProfilePolicyTag(permissionProfile, cwd),
-			AgentName:                  r.agentNameForThread(threadID),
-			Model:                      modelProviderConfig.Model,
-			ReasoningEffort:            requestReasoningEffort,
+			InstallationID:     installationID,
+			SessionID:          firstNonEmpty(lineage.SessionID, threadID),
+			ThreadID:           threadID,
+			TurnID:             turnID,
+			WindowID:           threadID + ":1",
+			ContextWindowID:    r.contextWindowIDForThread(threadID),
+			WindowNumber:       uint64PtrAppserver(r.windowNumberForThread(threadID)),
+			RequestKind:        codexapi.ClientRequestTurn,
+			ForkedFromThreadID: lineage.ForkedFromThreadID,
+			ParentThreadID:     lineage.ParentThreadID,
+			ParentTurnID:       params.ParentTurnID,
+			RootTurnID:         effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, lineage.SubagentHeader),
+			SubagentHeader:     lineage.SubagentHeader,
+			SubagentKind:       lineage.SubagentKind,
+			ThreadSource:       lineage.ThreadSource,
+			TurnTrigger:        params.TurnTrigger,
+			CodexVersion:       appServerVersion(),
+			SandboxMode:        permissionProfilePolicyTag(permissionProfile, cwd),
+			AgentName:          r.agentNameForThread(threadID),
+			Model:              modelProviderConfig.Model,
+			ReasoningEffort:    requestReasoningEffort,
+			// Rust with_window_and_fork_metadata: the history-notes extension
+			// asks the backend to ingest the request.
+			HistoryIngestRequested:     tokenBudget != nil && tokenBudget.UseHistoryNotesExtension,
 			AutoReviewEnabled:          autoReviewEnabledForTurn(cfg, params),
 			NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 			NodeReplDisabled:           &nodeReplDisabled,
@@ -7174,6 +7178,7 @@ func (r *RuntimeRouter) activeTurnClientMetadata(threadID string, turnID string,
 		ThreadSource:               lineage.ThreadSource,
 		Model:                      modelID,
 		ReasoningEffort:            reasoningEffort,
+		HistoryIngestRequested:     r.historyIngestRequestedForTurn(cfg, active.Params),
 		NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 		NodeReplDisabled:           &nodeReplDisabled,
 		AnalyticsEnabled:           r.analyticsEnabledOptionForThread(threadID),
@@ -9898,6 +9903,20 @@ func (r *RuntimeRouter) modelInfoForRuntimeWithPersonality(modelID string, cfg *
 	modelConfig := modelConfigForAppTurn(cfg)
 	modelConfig.Personality = strings.TrimSpace(personality)
 	return r.modelInfoForRuntimeWithModelsConfig(modelID, cfg, modelConfig)
+}
+
+// historyIngestRequestedForTurn mirrors Rust's with_window_and_fork_metadata:
+// the turn's effective token-budget config asks the backend to ingest the
+// request when the history-notes extension is enabled, including the
+// experimental-context activation.
+func (r *RuntimeRouter) historyIngestRequestedForTurn(cfg *config.Config, params *turn.TurnStartParams) bool {
+	if cfg == nil {
+		return false
+	}
+	if tokenBudget, err := cfg.TokenBudgetConfig(); err == nil && tokenBudget != nil && tokenBudget.UseHistoryNotesExtension {
+		return true
+	}
+	return r != nil && r.experimentalContextManagementEligible(cfg, params)
 }
 
 func (r *RuntimeRouter) modelUsesResponsesLite(modelID string) bool {

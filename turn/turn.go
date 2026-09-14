@@ -432,8 +432,17 @@ type ResponsesClientMetadataOptions struct {
 	AgentName          string
 	// Model and ReasoningEffort are the settings that issued the request (Rust
 	// `ExecutionMetadata::from_settings`); empty values omit the keys.
-	Model                      string
-	ReasoningEffort            string
+	Model           string
+	ReasoningEffort string
+	// Compaction describes a remote compaction request's dispatch operation
+	// (Rust `CompactionTurnMetadata`); it is serialized as the
+	// `request_kind: "compaction"` payload's `compaction` object and is only
+	// set when the request kind is compaction.
+	Compaction *codexapi.ClientCompactionMetadata
+	// HistoryIngestRequested mirrors Rust's with_window_and_fork_metadata: the
+	// session's token-budget history-notes extension asks the backend to ingest
+	// the request. Only the true value is serialized.
+	HistoryIngestRequested     bool
 	AutoReviewEnabled          *bool
 	NodeReplAutoReviewRequired *bool
 	NodeReplDisabled           *bool
@@ -484,6 +493,13 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	metadata.AgentName = strings.TrimSpace(options.AgentName)
 	metadata.Model = strings.TrimSpace(options.Model)
 	metadata.ReasoningEffort = strings.TrimSpace(options.ReasoningEffort)
+	if options.Compaction != nil {
+		compaction := *options.Compaction
+		// Rust's CompactionTurnMetadata always serializes the strategy.
+		compaction.EnsureDefaults()
+		metadata.Compaction = &compaction
+	}
+	metadata.HistoryIngestRequested = options.HistoryIngestRequested
 	metadata.AutoReviewEnabled = cloneBoolPtr(options.AutoReviewEnabled)
 	metadata.NodeReplAutoReviewRequired = cloneBoolPtr(options.NodeReplAutoReviewRequired)
 	metadata.NodeReplDisabled = cloneBoolPtr(options.NodeReplDisabled)
