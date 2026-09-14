@@ -2053,16 +2053,10 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread) []codextui.Mess
 	if thread == nil {
 		return nil
 	}
-	activeTurnID, activeItemID, _, hasActiveReasoning := remoteTUIThreadActiveReasoning(thread)
 	messages := []codextui.Message{}
 	inReviewMode := false
 	for _, turn := range thread.Turns {
 		for _, item := range turn.Items {
-			// Rust #43921: the trailing reasoning item of an in-progress turn is
-			// the live status heading, not a committed transcript entry.
-			if hasActiveReasoning && turn.ID == activeTurnID && item.ID == activeItemID {
-				continue
-			}
 			itemType := remoteTUINormalizedThreadItemType(item.Type)
 			switch itemType {
 			case "enteredreviewmode":
@@ -2211,7 +2205,17 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem) (codextui.Message
 		if text == "" {
 			return codextui.Message{}, false
 		}
-		return codextui.Message{Role: codextui.RoleHistory, Text: "Reasoning\n" + text, RawText: text}, true
+		// A reasoning item is retained in the expanded transcript only (Rust
+		// new_reasoning_summary_block is transcript-only), and its id lets the
+		// live completion replace the restored snapshot instead of duplicating
+		// it (Rust ReasoningReplay).
+		return codextui.Message{
+			Role:           codextui.RoleHistory,
+			Text:           text,
+			RawText:        text,
+			TranscriptOnly: true,
+			ItemID:         strings.TrimSpace(item.ID),
+		}, true
 	case itemType == "commandexecution" || itemType == "mcptoolcall" || itemType == "dynamictoolcall" || itemType == "collabagenttoolcall" || itemType == "subagentactivity":
 		text := remoteTUIThreadItemToolText(item)
 		if text == "" {

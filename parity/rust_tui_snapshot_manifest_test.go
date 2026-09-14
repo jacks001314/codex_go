@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 994 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 994", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 999 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 999", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -65,23 +65,25 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 	return []rustTUISnapshotDir{
 		{
 			Path:     "tui/src/app/snapshots",
-			Files:    31,
+			Files:    32,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
 			Required: []string{
 				"tui/src/app/snapshots/codex_tui__app__history_ui__tests__desktop_thread_opened_history.snap",
 				"tui/src/app/snapshots/codex_tui__app__tests__required_stream_reflow_during_capped_initial_replay.snap",
+				"tui/src/app/snapshots/codex_tui__app__agents_overview__tests__overview_worktree_creation_busy_state.snap",
 			},
 		},
 		{
 			Path:     "tui/src/app/tests/snapshots",
-			Files:    51,
+			Files:    52,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
 			Required: []string{
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__model_catalog__model_migration_prompt_shows_for_hidden_model.snap",
+				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_task_defaults_tests__command_center_retained_worktree_error.snap",
 			},
 		},
 		{
@@ -299,6 +301,16 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			Priority: []string{"markdown", "history-cell"},
 			Required: []string{
 				"tui/src/streaming/snapshots/codex_tui__streaming__render__tests__incremental_render_representative_stream.snap",
+			},
+		},
+		{
+			Path:     "tui/src/tui/snapshots",
+			Files:    3,
+			Owner:    "tui",
+			Focus:    "terminal scrollback viewport growth strategies (standard insertion without CSI S)",
+			Priority: []string{"render"},
+			Required: []string{
+				"tui/src/tui/snapshots/codex_tui__tui__scrollback__tests__standard_viewport_growth_1.snap",
 			},
 		},
 	}

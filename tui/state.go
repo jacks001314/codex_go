@@ -36,6 +36,14 @@ type Message struct {
 	// UserPromptTextElements are the composer's structured byte-range elements
 	// relative to UserPrompt.
 	UserPromptTextElements []MessageTextElement
+	// TranscriptOnly marks a history entry that only the expanded transcript
+	// overlay renders, mirroring Rust's transcript-only history cells (a
+	// completed reasoning block belongs to Ctrl+T, not to the live scrollback).
+	TranscriptOnly bool
+	// ItemID carries the thread item a transcript-only entry belongs to, so the
+	// live reasoning lifecycle can replace the restored snapshot in place
+	// (Rust ReasoningReplay restores the active item instead of committing it).
+	ItemID string
 }
 
 // MessageTextElement is a structured byte range inside a user prompt (a mention

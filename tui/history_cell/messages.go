@@ -293,6 +293,79 @@ func NewReasoningSummaryCell(content string, transcriptOnly bool) ReasoningSumma
 	return ReasoningSummaryCell{Content: strings.TrimSpace(content), TranscriptOnly: transcriptOnly}
 }
 
+// SplitReasoningSummaryParts mirrors Rust split_reasoning_summary_parts: it
+// separates a reasoning item's structured summary parts into the status header
+// and the renderable content. A part whose body is only an empty HTML comment
+// placeholder is dropped, keeping a leading placeholder's header as the
+// fallback header; the joined content then drops its own leading
+// `**header**` line when the remainder starts on a new line.
+func SplitReasoningSummaryParts(reasoningParts []string) (header string, content string) {
+	leadingEmptyPartHeader := ""
+	hasLeadingEmptyPartHeader := false
+	contentParts := make([]string, 0, len(reasoningParts))
+
+	for _, part := range reasoningParts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		headerEnd, hasHeaderEnd := reasoningHeaderEnd(part)
+		body := part
+		if hasHeaderEnd {
+			body = part[headerEnd:]
+		}
+		if strings.TrimSpace(body) == "<!-- -->" {
+			if len(contentParts) == 0 && !hasLeadingEmptyPartHeader && hasHeaderEnd {
+				leadingEmptyPartHeader = part[:headerEnd]
+				hasLeadingEmptyPartHeader = true
+			}
+			continue
+		}
+
+		contentParts = append(contentParts, part)
+	}
+
+	content = strings.Join(contentParts, "\n\n")
+	if content == "" {
+		return leadingEmptyPartHeader, content
+	}
+
+	if afterOpen, ok := strings.CutPrefix(content, "**"); ok {
+		if close := strings.Index(afterOpen, "**"); close >= 0 {
+			afterCloseIdx := 2 + close + 2
+			afterClose := content[afterCloseIdx:]
+			if strings.HasPrefix(afterClose, "\n") || strings.HasPrefix(afterClose, "\r") {
+				return content[:afterCloseIdx], afterClose
+			}
+		}
+	}
+
+	return leadingEmptyPartHeader, content
+}
+
+// reasoningHeaderEnd reports the byte offset just past a part's leading
+// `**header**` markup, mirroring Rust's strip_prefix("**") + find("**") pair
+// (the closing marker must not be the opening one).
+func reasoningHeaderEnd(part string) (int, bool) {
+	afterOpen, ok := strings.CutPrefix(part, "**")
+	if !ok {
+		return 0, false
+	}
+	close := strings.Index(afterOpen, "**")
+	if close <= 0 {
+		return 0, false
+	}
+	return close + 4, true
+}
+
+// NewReasoningSummaryBlock mirrors Rust new_reasoning_summary_block: a
+// completed reasoning block is retained in the expanded transcript only.
+func NewReasoningSummaryBlock(reasoningParts []string) ReasoningSummaryCell {
+	_, content := SplitReasoningSummaryParts(reasoningParts)
+	return NewReasoningSummaryCell(content, true)
+}
+
 func (c ReasoningSummaryCell) DisplayLines(width int) []string {
 	if c.TranscriptOnly || c.Content == "" {
 		return nil

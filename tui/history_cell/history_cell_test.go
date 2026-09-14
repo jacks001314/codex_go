@@ -706,3 +706,92 @@ func TestCyberPolicyCopyFollowsDaybreakNotice(t *testing.T) {
 		t.Fatalf("limited raw:\n%s", got)
 	}
 }
+
+// TestSplitReasoningSummaryParts mirrors Rust's split_reasoning_summary_parts
+// matrix: a leading `**header**` is lifted out when a newline follows it, an
+// empty HTML-comment placeholder is dropped (keeping a leading placeholder's
+// header), and a title-only summary stays as the content.
+func TestSplitReasoningSummaryParts(t *testing.T) {
+	cases := []struct {
+		name        string
+		parts       []string
+		wantHeader  string
+		wantContent string
+	}{
+		{
+			name:        "header and body",
+			parts:       []string{"**High level reasoning**\n\nDetailed reasoning goes here."},
+			wantHeader:  "**High level reasoning**",
+			wantContent: "\n\nDetailed reasoning goes here.",
+		},
+		{
+			name:        "no header",
+			parts:       []string{"Detailed reasoning goes here."},
+			wantContent: "Detailed reasoning goes here.",
+		},
+		{
+			name:        "unterminated header",
+			parts:       []string{"**High level reasoning without closing"},
+			wantContent: "**High level reasoning without closing",
+		},
+		{
+			name:        "title only",
+			parts:       []string{"**Confirming backend JSONL source**"},
+			wantContent: "**Confirming backend JSONL source**",
+		},
+		{
+			name:        "title only with trailing blank body",
+			parts:       []string{"**High level reasoning without closing**\n\n  "},
+			wantContent: "**High level reasoning without closing**",
+		},
+		{
+			name:        "header and summary",
+			parts:       []string{"**High level plan**\n\nWe should fix the bug next."},
+			wantHeader:  "**High level plan**",
+			wantContent: "\n\nWe should fix the bug next.",
+		},
+		{
+			name: "empty html comment placeholders",
+			parts: []string{
+				"**Checking the first thing**\n\n<!-- -->",
+				"**Checking the second thing**\n\n<!-- -->",
+			},
+			wantHeader:  "**Checking the first thing**",
+			wantContent: "",
+		},
+		{
+			name:        "blank parts skipped",
+			parts:       []string{"  ", "**Plan**\n\nDo the work."},
+			wantHeader:  "**Plan**",
+			wantContent: "\n\nDo the work.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			header, content := SplitReasoningSummaryParts(tc.parts)
+			if header != tc.wantHeader || content != tc.wantContent {
+				t.Fatalf("SplitReasoningSummaryParts(%#v) = %q, %q; want %q, %q",
+					tc.parts, header, content, tc.wantHeader, tc.wantContent)
+			}
+		})
+	}
+}
+
+// TestNewReasoningSummaryBlockIsTranscriptOnly pins Rust
+// new_reasoning_summary_block: the block keeps the renderable content and is
+// retained in the expanded transcript only.
+func TestNewReasoningSummaryBlockIsTranscriptOnly(t *testing.T) {
+	block := NewReasoningSummaryBlock([]string{"**High level reasoning**\n\nDetailed reasoning goes here."})
+	if !block.TranscriptOnly {
+		t.Fatal("reasoning block is not transcript-only")
+	}
+	if block.Content != "Detailed reasoning goes here." {
+		t.Fatalf("block content = %q", block.Content)
+	}
+	if lines := block.DisplayLines(80); len(lines) != 0 {
+		t.Fatalf("transcript-only block leaked display lines: %#v", lines)
+	}
+	if lines := block.RawLines(); len(lines) != 0 {
+		t.Fatalf("transcript-only block leaked raw lines: %#v", lines)
+	}
+}

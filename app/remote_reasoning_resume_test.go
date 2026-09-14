@@ -29,24 +29,28 @@ func TestRemoteTUIThreadActiveReasoning(t *testing.T) {
 		t.Fatalf("active reasoning = %q/%q/%q/%v", turnID, itemID, heading, ok)
 	}
 
-	messages := remoteTUIThreadMessagesFromThread(activeReasoningThreadFixture(appserver.TurnStatusInProgress))
-	for _, message := range messages {
-		if strings.Contains(message.Text, "Step one") {
-			t.Fatalf("provisional reasoning leaked into the transcript: %#v", messages)
-		}
-	}
-
-	// A completed turn keeps its reasoning in the transcript.
-	completed := remoteTUIThreadMessagesFromThread(activeReasoningThreadFixture(appserver.TurnStatusCompleted))
-	found := false
-	for _, message := range completed {
-		if strings.Contains(message.Text, "Step one") {
+	// The reasoning item is restored as the transcript-only block Rust's
+	// new_reasoning_summary_block records, carrying its item id so the live
+	// completion replaces the restored snapshot instead of duplicating it.
+	assertTranscriptOnlyReasoning := func(status appserver.TurnStatus) {
+		t.Helper()
+		messages := remoteTUIThreadMessagesFromThread(activeReasoningThreadFixture(status))
+		found := false
+		for _, message := range messages {
+			if !strings.Contains(message.Text, "Step one") {
+				continue
+			}
+			if !message.TranscriptOnly || message.ItemID != "reasoning-1" {
+				t.Fatalf("reasoning entry is not transcript-only: %#v", message)
+			}
 			found = true
 		}
+		if !found {
+			t.Fatalf("reasoning block missing from the transcript: %#v", messages)
+		}
 	}
-	if !found {
-		t.Fatalf("completed reasoning missing from the transcript: %#v", completed)
-	}
+	assertTranscriptOnlyReasoning(appserver.TurnStatusInProgress)
+	assertTranscriptOnlyReasoning(appserver.TurnStatusCompleted)
 	if _, _, _, ok := remoteTUIThreadActiveReasoning(activeReasoningThreadFixture(appserver.TurnStatusCompleted)); ok {
 		t.Fatal("completed turn reported an active reasoning item")
 	}

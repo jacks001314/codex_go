@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"strings"
 	"testing"
 
 	"codex_go/protocol"
@@ -139,5 +140,84 @@ func TestModelSwitchClearsBufferedReasoningOnTurnBoundary(t *testing.T) {
 	})
 	if model.reasoningItemID != "" {
 		t.Fatalf("active reasoning item = %q, want none after the turn ended", model.reasoningItemID)
+	}
+}
+
+// TestReasoningBlockIsTranscriptOnly pins Rust on_agent_reasoning_final ->
+// new_reasoning_summary_block: a completed reasoning item becomes a
+// transcript-only block. The live scrollback never renders it, the expanded
+// transcript does, and a restored entry for the same item (Rust ReasoningReplay
+// restores a switched-to thread's active item) is replaced rather than
+// duplicated when the item completes.
+func TestReasoningBlockIsTranscriptOnly(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-1")
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	// A switched-to thread restored the active item's snapshot as a
+	// transcript-only entry carrying its item id.
+	state.Messages = append(state.Messages, codextui.Message{
+		Role:           codextui.RoleHistory,
+		Text:           "partial",
+		RawText:        "partial",
+		TranscriptOnly: true,
+		ItemID:         "reasoning-1",
+	})
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.ThreadItem{
+		ID:      "reasoning-1",
+		Type:    "reasoning",
+		Summary: []string{"**Step one**\n\nThe body."},
+	})})
+
+	blocks := 0
+	for _, message := range model.State.Messages {
+		if !message.TranscriptOnly {
+			continue
+		}
+		blocks++
+		if message.ItemID != "reasoning-1" || message.Text != "The body." {
+			t.Fatalf("reasoning block = %#v", message)
+		}
+	}
+	if blocks != 1 {
+		t.Fatalf("reasoning blocks = %d, want 1 (the restored entry is replaced)", blocks)
+	}
+
+	main := renderTranscript(state, false, 80, model.activeTUITheme())
+	if strings.Contains(main, "The body.") {
+		t.Fatalf("reasoning block leaked into the live scrollback:\n%s", main)
+	}
+	expanded := renderTranscriptWithHistoryMode(state, false, 80, model.activeTUITheme(), true)
+	if !strings.Contains(expanded, "The body.") {
+		t.Fatalf("expanded transcript missing the reasoning block:\n%s", expanded)
+	}
+}
+
+// TestReasoningBlockCommittedWithoutRestoredEntry pins the live path: an item
+// with no restored snapshot still commits its transcript-only block.
+func TestReasoningBlockCommittedWithoutRestoredEntry(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-1")
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.ThreadItem{
+		ID:      "reasoning-2",
+		Type:    "reasoning",
+		Summary: []string{"**Step two**\n\nSecond body."},
+	})})
+
+	found := false
+	for _, message := range model.State.Messages {
+		if message.TranscriptOnly && message.ItemID == "reasoning-2" && message.Text == "Second body." {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("completed reasoning block missing: %#v", model.State.Messages)
+	}
+	expanded := renderTranscriptWithHistoryMode(state, false, 80, model.activeTUITheme(), true)
+	if !strings.Contains(expanded, "Second body.") {
+		t.Fatalf("expanded transcript missing the live reasoning block:\n%s", expanded)
 	}
 }
