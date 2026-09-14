@@ -47,8 +47,30 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 // RenderReasoningWithThemeCwd renders a completed reasoning block the way Rust's
 // ReasoningSummaryCell does: the summary's markdown with the block's text dimmed
 // and italicized (Rust patches the summary style over every rendered span).
+// glamour renders the italic through the style variant but never emits faint, so
+// the dim is re-asserted around the rendered spans.
 func RenderReasoningWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
-	return renderWithStyle(text, width, themeID, cwd, codexReasoningMarkdownStyle())
+	rendered, err := renderWithStyle(text, width, themeID, cwd, codexReasoningMarkdownStyle())
+	if err != nil || strings.TrimSpace(rendered) == "" {
+		return rendered, err
+	}
+	return dimRenderedLines(rendered), nil
+}
+
+// dimRenderedLines applies faint to every rendered line, re-asserting it after
+// each span's reset so the whole block reads dimmed (Rust's style patch covers
+// every span of the cell).
+func dimRenderedLines(rendered string) string {
+	const faintOn = "\x1b[2m"
+	const reset = "\x1b[0m"
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	for index, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		lines[index] = faintOn + strings.ReplaceAll(line, reset, reset+faintOn) + reset
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderWithStyle(text string, width int, themeID string, cwd string, style ansi.StyleConfig) (string, error) {

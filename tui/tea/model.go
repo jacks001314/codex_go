@@ -7814,7 +7814,30 @@ func reasoningBlockTranscriptLines(message codextui.Message, width int, themeID 
 	if len(lines) == 0 {
 		lines = rawLinesTrimmed(content)
 	}
-	return prefixPrewrappedAgentLines(lines, true)
+	// Rust indents the block under a dimmed summary bullet
+	// (ReasoningSummaryCell's initial ".dim()" indent).
+	return prefixReasoningBlockLines(lines)
+}
+
+// prefixReasoningBlockLines wraps a reasoning block's rendered lines in Rust's
+// summary bullet indent, dimmed like the cell's initial indent token.
+func prefixReasoningBlockLines(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	const (
+		dimOn  = "\x1b[2m"
+		dimOff = "\x1b[0m"
+	)
+	out := make([]string, 0, len(lines))
+	for index, line := range lines {
+		if index == 0 {
+			out = append(out, dimOn+"\u2022 "+dimOff+line)
+			continue
+		}
+		out = append(out, dimOn+"  "+dimOff+line)
+	}
+	return out
 }
 
 func richMessageDisplayLines(message codextui.Message, width int, themeID string, cwd string) []string {

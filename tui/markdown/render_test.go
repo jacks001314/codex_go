@@ -163,11 +163,12 @@ func containsExactLine(text string, want string) bool {
 	return false
 }
 
-// A reasoning block renders italicized like Rust's ReasoningSummaryCell, while
-// the normal markdown render stays unstyled. (Rust also dims the block; glamour
-// v1.0.0 defines but never applies StylePrimitive.Faint, so only the italic half
-// is reachable through the renderer - recorded as a residual.)
-func TestRenderReasoningWithThemeItalicizesLikeRust(t *testing.T) {
+// A reasoning block renders dimmed and italicized like Rust's
+// ReasoningSummaryCell, while the normal markdown render stays unstyled. The
+// italic comes from the style variant and the dim from re-asserting faint around
+// the rendered spans (glamour v1.0.0 defines but never applies
+// StylePrimitive.Faint).
+func TestRenderReasoningWithThemeDimsAndItalicizesLikeRust(t *testing.T) {
 	body := "Checking the tests now."
 	reasoning, err := RenderReasoningWithThemeCwd(body, 40, "", "")
 	if err != nil {
@@ -182,10 +183,17 @@ func TestRenderReasoningWithThemeItalicizesLikeRust(t *testing.T) {
 		t.Fatalf("reasoning render = %q", reasoning)
 	}
 	italic := func(value string) bool { return strings.Contains(value, "\x1b[3m") }
+	faint := func(value string) bool { return strings.Contains(value, "\x1b[2m") }
 	if !italic(reasoning) {
 		t.Fatalf("reasoning render is not italic: %q", reasoning)
 	}
+	if !faint(reasoning) {
+		t.Fatalf("reasoning render is not dimmed: %q", reasoning)
+	}
 	if italic(plain) {
 		t.Fatalf("normal render is italic: %q", plain)
+	}
+	if faint(plain) {
+		t.Fatalf("normal render is dimmed: %q", plain)
 	}
 }
