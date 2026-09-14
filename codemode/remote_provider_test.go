@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"codex_go/execserver"
+	"codex_go/protocol"
 	"codex_go/tool"
 
 	"github.com/coder/websocket"
@@ -676,17 +677,27 @@ func writeHostFrame(t *testing.T, ctx context.Context, conn *websocket.Conn, mes
 }
 
 func TestCodeModeTraceContextFromContextLikeRust(t *testing.T) {
+	// The exec-server's own trace context is not a W3C carrier, so it never
+	// reaches the code-mode metadata on its own.
+	ctx := execserver.WithTraceContext(context.Background(), execserver.TraceContext{TraceID: "trace-1", SpanID: "span-1"})
+	if got := codeModeTraceContextFromContext(ctx); got != nil {
+		t.Fatalf("exec-server trace = %#v, want nil", got)
+	}
 	// No trace context -> nil.
 	if got := codeModeTraceContextFromContext(context.Background()); got != nil {
 		t.Fatalf("no-context trace = %#v, want nil", got)
 	}
-	// A carried exec-server trace context converts to a W3C traceparent.
-	ctx := execserver.WithTraceContext(context.Background(), execserver.TraceContext{TraceID: "trace-1", SpanID: "span-1"})
+	// The span context the turn stored propagates as Rust's W3C carrier.
+	ctx = protocol.WithTraceContext(context.Background(), &protocol.W3CTraceContext{
+		Traceparent: "00-00000000000000000000000000000001-0000000000000002-01",
+		Tracestate:  "example=alpha:one",
+	})
 	got := codeModeTraceContextFromContext(ctx)
 	if got == nil {
 		t.Fatal("trace context = nil, want W3C traceparent")
 	}
-	if got.Traceparent != "00-trace-1-span-1-01" {
-		t.Fatalf("traceparent = %q", got.Traceparent)
+	if got.Traceparent != "00-00000000000000000000000000000001-0000000000000002-01" ||
+		got.Tracestate != "example=alpha:one" {
+		t.Fatalf("trace context = %#v", got)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"codex_go/model"
+	"codex_go/protocol"
 )
 
 // Rust parity: the per-turn spans codex-core's turn loop opens (core/src/session/turn.rs
@@ -36,4 +37,18 @@ func startSamplingRequestSpan(ctx context.Context, request *AgentLoopRequest, mo
 		attributes["cwd"] = strings.TrimSpace(request.CWD)
 	}
 	return request.Tracer.StartSpan(ctx, nil, SamplingRequestSpanName, attributes)
+}
+
+// withSpanTraceContext stores the span's W3C carrier in the context, so anything
+// that crosses a process boundary (the code-mode gRPC session) propagates the
+// span context Rust reads from the current span.
+func withSpanTraceContext(ctx context.Context, span model.TelemetrySpan) context.Context {
+	if span == nil {
+		return ctx
+	}
+	traceparent, tracestate, ok := span.TraceContext()
+	if !ok {
+		return ctx
+	}
+	return protocol.WithTraceContext(ctx, &protocol.W3CTraceContext{Traceparent: traceparent, Tracestate: tracestate})
 }

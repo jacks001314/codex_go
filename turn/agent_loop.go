@@ -301,6 +301,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		// Rust instruments the sampling request with `run_sampling_request`, so the
 		// client's spans and records land inside the turn's span tree.
 		stepCtx, samplingSpan := startSamplingRequestSpan(ctx, request, stepModel)
+		// The turn's tool dispatches and code-mode calls propagate this span's W3C
+		// carrier (Rust reads it from the current span).
+		ctx = withSpanTraceContext(ctx, samplingSpan)
 		response, err := l.agent.Run(stepCtx, &model.AgentRequest{
 			Prompt:                       prompt,
 			Instructions:                 instructions,

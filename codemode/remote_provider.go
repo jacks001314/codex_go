@@ -13,21 +13,23 @@ import (
 	"sync/atomic"
 	"time"
 
-	"codex_go/execserver"
+	"codex_go/protocol"
 	"codex_go/tool"
 )
 
 // codeModeTraceContextFromContext carries the active trace context across the
-// code-mode gRPC boundary (Rust #41017). It converts the exec-server
-// TraceID/SpanID pair into a W3C-style traceparent so nested tool callback
-// spans stay connected.
+// code-mode gRPC boundary (Rust #41017). Rust injects the current span's W3C
+// context into the gRPC metadata
+// (code-mode/src/grpc_session/mod.rs::inject_span_traceparent), so a context with
+// no span context sends no carrier.
 func codeModeTraceContextFromContext(ctx context.Context) *CodeModeTraceContext {
-	trace := execserver.TraceContextFromContext(ctx)
-	if trace.IsZero() {
+	trace, ok := protocol.TraceContextFromContext(ctx)
+	if !ok {
 		return nil
 	}
 	return &CodeModeTraceContext{
-		Traceparent: "00-" + strings.TrimSpace(trace.TraceID) + "-" + strings.TrimSpace(trace.SpanID) + "-01",
+		Traceparent: strings.TrimSpace(trace.Traceparent),
+		Tracestate:  strings.TrimSpace(trace.Tracestate),
 	}
 }
 

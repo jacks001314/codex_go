@@ -24,6 +24,10 @@ type TelemetrySpan interface {
 	Record(attributes map[string]string)
 	// SetName applies Rust's `otel.name` override.
 	SetName(name string)
+	// TraceContext reports the span's W3C carrier, so callers crossing a process
+	// boundary (code mode) can propagate the span context Rust reads from the
+	// current span.
+	TraceContext() (traceparent string, tracestate string, ok bool)
 }
 
 // Span names mirror Rust's client instrumentation.
@@ -68,6 +72,8 @@ func (noopTelemetryTracer) StartSpan(ctx context.Context, _ TelemetrySpan, _ str
 func (noopTelemetrySpan) End()                     {}
 func (noopTelemetrySpan) Record(map[string]string) {}
 func (noopTelemetrySpan) SetName(string)           {}
+
+func (noopTelemetrySpan) TraceContext() (string, string, bool) { return "", "", false }
 
 // handleResponsesSpanAttributes mirrors the fields Rust creates the
 // `handle_responses` span with: the effective reasoning effort plus the fields

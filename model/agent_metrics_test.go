@@ -454,11 +454,13 @@ type recordingTelemetrySink struct {
 // recordingTelemetrySpan captures one span's lifecycle, so the tests can assert
 // the client's span tree without an exporter.
 type recordingTelemetrySpan struct {
-	name       string
-	attributes map[string]string
-	recorded   map[string]string
-	parent     *recordingTelemetrySpan
-	ended      bool
+	name        string
+	attributes  map[string]string
+	recorded    map[string]string
+	parent      *recordingTelemetrySpan
+	ended       bool
+	traceparent string
+	tracestate  string
 }
 
 func (s *recordingTelemetrySpan) End() { s.ended = true }
@@ -473,6 +475,10 @@ func (s *recordingTelemetrySpan) Record(attributes map[string]string) {
 }
 
 func (s *recordingTelemetrySpan) SetName(name string) { s.name = name }
+
+func (s *recordingTelemetrySpan) TraceContext() (string, string, bool) {
+	return s.traceparent, s.tracestate, s.traceparent != ""
+}
 
 func (s *recordingTelemetrySink) StartSpan(_ context.Context, parent TelemetrySpan, name string, attributes map[string]string) (context.Context, TelemetrySpan) {
 	span := &recordingTelemetrySpan{name: name, attributes: attributes}

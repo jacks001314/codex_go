@@ -5,23 +5,28 @@ import (
 	"testing"
 
 	"codex_go/model"
+	"codex_go/protocol"
 	"codex_go/tool"
 )
 
 // recordingSpanTracer captures the spans the turn loop opens.
 type recordingSpanTracer struct {
-	spans []recordingSpan
+	spans       []recordingSpan
+	traceparent string
 }
 
 type recordingSpan struct {
-	name       string
-	attributes map[string]string
-	parent     *recordingSpan
-	context    context.Context
+	name        string
+	attributes  map[string]string
+	parent      *recordingSpan
+	context     context.Context
+	traceparent string
+	tracestate  string
 }
 
 func (t *recordingSpanTracer) StartSpan(ctx context.Context, parent model.TelemetrySpan, name string, attributes map[string]string) (context.Context, model.TelemetrySpan) {
 	span := &recordingSpan{name: name, attributes: attributes, context: ctx}
+	span.traceparent = t.traceparent
 	if concrete, ok := parent.(*recordingSpan); ok {
 		span.parent = concrete
 	}
@@ -32,6 +37,44 @@ func (t *recordingSpanTracer) StartSpan(ctx context.Context, parent model.Teleme
 func (s *recordingSpan) End()                     {}
 func (s *recordingSpan) Record(map[string]string) {}
 func (s *recordingSpan) SetName(string)           {}
+
+func (s *recordingSpan) TraceContext() (string, string, bool) {
+	return s.traceparent, s.tracestate, s.traceparent != ""
+}
+
+// The sampling span's W3C carrier follows the turn into tool dispatch, so
+// anything that crosses a process boundary (the code-mode gRPC session)
+// propagates the span context Rust reads from the current span.
+func TestAgentLoopPropagatesSpanTraceContextLikeRust(t *testing.T) {
+	tracer := &recordingSpanTracer{traceparent: "00-00000000000000000000000000000001-0000000000000002-01"}
+	var seen *protocol.W3CTraceContext
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, _ *tool.Invocation) (*tool.Output, error) {
+		seen, _ = protocol.TraceContextFromContext(ctx)
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	executedToolCalls := NewExecutedToolCallRecorder()
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:             &fakeLoopAgent{},
+		Dispatcher:        NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry), ExecutedToolCalls: executedToolCalls}),
+		ExecutedToolCalls: executedToolCalls,
+		MaxTurns:          3,
+	})
+	if _, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt:   "run echo",
+		Model:    "gpt-test",
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Tracer:   tracer,
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if seen == nil || seen.Traceparent != tracer.traceparent {
+		t.Fatalf("tool dispatch trace = %#v", seen)
+	}
+}
 
 // One `run_sampling_request` span is opened per sampling request with the turn's
 // identity, mirroring Rust's instrumentation of the sampling request.

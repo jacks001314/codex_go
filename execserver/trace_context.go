@@ -9,9 +9,10 @@ import (
 )
 
 // TraceContext carries a request trace identifier from receipt through
-// completion (Rust exec-server trace_context.rs, #39098). codex_go has no OTLP
-// span tree, so TraceID/SpanID propagate through the existing JSON-RPC
-// request/response chain and are exposed on server-side request handling.
+// completion (Rust exec-server trace_context.rs, #39098). The identifiers travel
+// through the exec-server's own JSON-RPC request/response chain; the W3C carrier
+// that crosses the code-mode gRPC boundary comes from the active span instead
+// (protocol.W3CTraceContext).
 type TraceContext struct {
 	TraceID string `json:"traceId,omitempty"`
 	SpanID  string `json:"spanId,omitempty"`
@@ -75,15 +76,15 @@ func logEnvironmentTrace(ctx context.Context, method string) {
 }
 
 // TraceContextFromContext returns the trace context carried in ctx, if any
-// (Rust exec-server trace_context.rs, #39098). It is the exported accessor used
-// across the code-mode gRPC boundary (Rust #41017).
+// (Rust exec-server trace_context.rs, #39098): the exported accessor for the
+// exec-server's own request tracing.
 func TraceContextFromContext(ctx context.Context) TraceContext {
 	return traceContextFromContext(ctx)
 }
 
 // WithTraceContext carries a trace context in ctx (Rust exec-server
-// trace_context.rs, #39098). It is the exported setter used to seed a trace
-// context before crossing the code-mode boundary.
+// trace_context.rs, #39098): the exported setter for the exec-server's own
+// request tracing.
 func WithTraceContext(ctx context.Context, trace TraceContext) context.Context {
 	return withTraceContext(ctx, trace)
 }

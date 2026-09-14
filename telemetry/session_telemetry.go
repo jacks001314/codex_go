@@ -251,6 +251,14 @@ func (s *SessionSpan) SetName(name string) {
 	s.span.Name = name
 }
 
+// TraceContext reports the span's W3C carrier, or false for an inert span.
+func (s *SessionSpan) TraceContext() (traceparent string, tracestate string, ok bool) {
+	if s == nil || s.span == nil {
+		return "", "", false
+	}
+	return s.span.W3CTraceContext()
+}
+
 // WithSpan returns a context carrying the span, so later trace-safe records
 // attach to it (Rust's current-span lookup).
 func WithSpan(ctx context.Context, span *Span) context.Context {
