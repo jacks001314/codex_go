@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/compact"
 	"codex_go/model"
 	"codex_go/session"
@@ -66,9 +67,11 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		TurnID:       request.TurnID,
 		Store:        false,
 		ClientMetadata: map[string]string{
-			"request_kind": "compact",
-			"thread_id":    request.ThreadID,
-			"turn_id":      request.TurnID,
+			// Rust's compaction request kind serializes as "compaction"
+			// (CodexResponsesRequestKind::Compaction), not "compact".
+			codexapi.RequestKindKey: string(codexapi.ClientRequestCompaction),
+			codexapi.ThreadIDKey:    request.ThreadID,
+			codexapi.TurnIDKey:      request.TurnID,
 		},
 		ServiceTier:     r.serviceTier,
 		ReasoningEffort: strings.TrimSpace(r.effort),

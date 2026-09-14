@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"codex_go/codexapi"
 	"codex_go/compact"
 	"codex_go/model"
 )
@@ -40,5 +41,14 @@ func TestAgentCompactRunnerSendsPinnedReasoningEffort(t *testing.T) {
 	}
 	if agent.requests[0].ReasoningEffort != "high" {
 		t.Fatalf("compaction reasoning effort = %q, want pinned high", agent.requests[0].ReasoningEffort)
+	}
+	// Rust's compaction request kind serializes as "compaction" and the request
+	// carries the compacted thread and turn.
+	metadata := agent.requests[0].ClientMetadata
+	if metadata[codexapi.RequestKindKey] != string(codexapi.ClientRequestCompaction) {
+		t.Fatalf("compaction request kind = %q", metadata[codexapi.RequestKindKey])
+	}
+	if metadata[codexapi.ThreadIDKey] != "thread-1" || metadata[codexapi.TurnIDKey] != "turn-1" {
+		t.Fatalf("compaction metadata = %#v", metadata)
 	}
 }
