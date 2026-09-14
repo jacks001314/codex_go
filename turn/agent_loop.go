@@ -301,9 +301,28 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		// Rust instruments the sampling request with `run_sampling_request`, so the
 		// client's spans and records land inside the turn's span tree.
 		stepCtx, samplingSpan := startSamplingRequestSpan(ctx, request, stepModel)
-		// The turn's tool dispatches and code-mode calls propagate this span's W3C
-		// carrier (Rust reads it from the current span).
-		ctx = withSpanTraceContext(ctx, samplingSpan)
+		// Rust keeps `run_sampling_request` open until the step's in-flight tool
+		// futures have been drained, so the step's tool spans (mcp.tools.call and
+		// the tool records) nest under it. endSamplingRequestSpan closes the span
+		// exactly once on every path that leaves the step.
+		samplingSpanEnded := false
+		endSamplingRequestSpan := func() {
+			if samplingSpanEnded {
+				return
+			}
+			samplingSpanEnded = true
+			if samplingSpan != nil {
+				samplingSpan.End()
+			}
+		}
+		if samplingSpan != nil {
+			// The turn's tool dispatches and code-mode calls propagate this span's
+			// W3C carrier (Rust reads it from the current span), and the dispatch
+			// context keeps the span itself so spans opened during it parent to the
+			// sampling request implicitly.
+			ctx = withSpanTraceContext(ctx, samplingSpan)
+			stepCtx = withSpanTraceContext(stepCtx, samplingSpan)
+		}
 		response, err := l.agent.Run(stepCtx, &model.AgentRequest{
 			Prompt:                       prompt,
 			Instructions:                 instructions,
@@ -335,11 +354,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			DisableHostedImageGeneration: request.DisableHostedImageGeneration,
 			StreamHandler:                combineResponsesStreamHandlers(request.StreamHandler, timingStreamHandler(timing, l.now)),
 		})
-		if samplingSpan != nil {
-			samplingSpan.End()
-		}
 		sampling.CloseAt(l.now())
 		if err != nil {
+			endSamplingRequestSpan()
 			return nil, err
 		}
 		if l.executedToolCalls != nil {
@@ -397,6 +414,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				Result:       result,
 			})
 			if err != nil {
+				endSamplingRequestSpan()
 				return nil, err
 			}
 			if compacted != nil && compacted.Compacted {
@@ -413,6 +431,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 					previousResponseID = compacted.PreviousResponseID
 				}
 				result.Compactions++
+				endSamplingRequestSpan()
 				continue
 			}
 		}
@@ -421,6 +440,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			if len(followUp) > 0 {
 				result.InputItems = append(result.InputItems, followUp...)
 				result.SamplingFollowUps++
+				endSamplingRequestSpan()
 				continue
 			}
 		}
@@ -434,15 +454,18 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				if count := userMessageInputItemCount(steer.InputItems); count > 0 && request.OnSteerCommitted != nil {
 					request.OnSteerCommitted(count)
 				}
+				endSamplingRequestSpan()
 				continue
 			}
 		}
 		if len(toolItems) == 0 {
 			profile := timing.CompleteProfile(l.now())
 			result.TimingProfile = &profile
+			endSamplingRequestSpan()
 			return result, nil
 		}
 		if l.dispatcher == nil {
+			endSamplingRequestSpan()
 			return nil, errors.New("agent requested tool calls but tool dispatcher is nil")
 		}
 		for i := range toolItems {
@@ -450,8 +473,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			result.InputItems = append(result.InputItems, &item)
 		}
 		toolBlocking := timing.BeginToolBlocking(l.now())
-		executions, err := l.dispatcher.ExecuteToolItems(ctx, toolItems)
+		executions, err := l.dispatcher.ExecuteToolItems(stepCtx, toolItems)
 		toolBlocking.CloseAt(l.now())
+		endSamplingRequestSpan()
 		if err != nil {
 			return nil, err
 		}

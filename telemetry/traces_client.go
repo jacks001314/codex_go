@@ -286,6 +286,13 @@ func (t *Tracer) StartSpanWithParent(parent *Span, name string, attributes map[s
 	return t.startSpan(parent, name, attributes, SpanKindInternal)
 }
 
+// StartSpanWithParentAndKind starts a span nested under the parent span with an
+// explicit kind (Rust's tracing macros capture the ambient span as the parent
+// and still record `otel.kind`).
+func (t *Tracer) StartSpanWithParentAndKind(parent *Span, name string, kind int, attributes map[string]string) *Span {
+	return t.startSpan(parent, name, attributes, kind)
+}
+
 // tracerScopeName reports the instrumentation scope Rust would use for this
 // client: the configured service name, falling back to the Codex scope tag when
 // a caller leaves it unset.

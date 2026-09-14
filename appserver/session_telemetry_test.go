@@ -410,6 +410,91 @@ func TestMCPToolCallSpanLikeRust(t *testing.T) {
 	}
 }
 
+// The MCP tool call's span nests under the step's sampling request span, which
+// the turn loop keeps open while it dispatches the step's tools (Rust drains the
+// step's in-flight tool futures inside run_sampling_request).
+func TestMCPToolCallSpanNestsUnderSamplingRequestLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+	})
+	if err != nil || provider == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+	registry := tool.NewRegistry()
+	toolName := tool.NamespacedName("mcp__example", "shell")
+	if err := registry.Register(stubMCPExecutor{name: toolName, server: "example", serverType: "stdio"}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ToolRouter: tool.NewRouter(registry)})
+	router.installOtelProvider(provider, state.NewTaskMetrics())
+	defer router.Close()
+
+	tracer := router.requestTracer()
+	if tracer == nil {
+		t.Fatal("request tracer is nil")
+	}
+	parent := tracer.StartSpan("run_sampling_request", map[string]string{"turn_id": "turn-1", "model": "gpt-test"})
+	if parent == nil {
+		t.Fatal("sampling request span is nil")
+	}
+	// The loop hands the dispatch the span-carrying context, so the call's span
+	// parents to the sampling request implicitly.
+	ctx := telemetry.WithSpan(context.Background(), parent)
+	invocation := &tool.Invocation{CallID: "call-1", ToolName: toolName}
+	started := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	router.runtimeToolStartedNotifier("thread-1", "turn-1", "", false)(ctx, invocation, started)
+	router.runtimeToolCompletedNotifier("thread-1", "turn-1", "", false)(ctx, &turn.ToolExecutionResult{
+		Invocation:    invocation,
+		Output:        &tool.Output{Success: true, Body: "out"},
+		TelemetryTags: map[string]string{"mcp_server": "example", "mcp_server_origin": "stdio"},
+		StartedAt:     started,
+		FinishedAt:    started.Add(25 * time.Millisecond),
+	})
+	parent.End()
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	select {
+	case payload := <-traceBodies:
+		spans := payload["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+		var call, sampling map[string]any
+		for _, entry := range spans {
+			span := entry.(map[string]any)
+			switch span["name"] {
+			case "mcp.tools.call":
+				call = span
+			case "run_sampling_request":
+				sampling = span
+			}
+		}
+		if call == nil || sampling == nil {
+			t.Fatalf("spans = %#v", spans)
+		}
+		if call["parentSpanId"] != sampling["spanId"] {
+			t.Fatalf("call parentSpanId = %#v, sampling spanId = %#v", call["parentSpanId"], sampling["spanId"])
+		}
+		if call["traceId"] != sampling["traceId"] {
+			t.Fatalf("call traceId = %#v, sampling traceId = %#v", call["traceId"], sampling["traceId"])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the traces endpoint did not receive the nested spans")
+	}
+}
+
 // An approval resolution reports who decided what: the Guardian-resolved
 // approvals carry the automated-reviewer source and the opaque decision
 // (Rust's SessionTelemetry::tool_decision via approvals::record_resolution).

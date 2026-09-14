@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"context"
 	"strings"
 
 	"codex_go/telemetry"
@@ -19,8 +20,10 @@ type mcpToolCallSpanKey struct {
 }
 
 // startMCPToolCallSpan starts the `mcp.tools.call` span for an MCP invocation, or
-// returns nil when the call is not an MCP call or tracing is off.
-func (r *RuntimeRouter) startMCPToolCallSpan(invocation *tool.Invocation, threadID string, turnID string) *telemetry.Span {
+// returns nil when the call is not an MCP call or tracing is off. The span
+// parents to the span ctx carries - the step's sampling request, which Rust keeps
+// open while it drains the step's in-flight tool futures.
+func (r *RuntimeRouter) startMCPToolCallSpan(ctx context.Context, invocation *tool.Invocation, threadID string, turnID string) *telemetry.Span {
 	if r == nil || invocation == nil || r.services.ToolRouter == nil {
 		return nil
 	}
@@ -35,7 +38,7 @@ func (r *RuntimeRouter) startMCPToolCallSpan(invocation *tool.Invocation, thread
 		return nil
 	}
 	origin := strings.TrimSpace(tags["mcp_server_origin"])
-	span := tracer.StartSpanWithKind("mcp.tools.call", telemetry.SpanKindClient, map[string]string{
+	attributes := map[string]string{
 		"rpc.system":        "jsonrpc",
 		"rpc.method":        "tools/call",
 		"mcp.server.name":   serverName,
@@ -50,7 +53,13 @@ func (r *RuntimeRouter) startMCPToolCallSpan(invocation *tool.Invocation, thread
 		"conversation.id":    strings.TrimSpace(threadID),
 		"session.id":         strings.TrimSpace(threadID),
 		"turn.id":            strings.TrimSpace(turnID),
-	})
+	}
+	var span *telemetry.Span
+	if parent := telemetry.SpanFromContext(ctx); parent != nil {
+		span = tracer.StartSpanWithParentAndKind(parent, "mcp.tools.call", telemetry.SpanKindClient, attributes)
+	} else {
+		span = tracer.StartSpanWithKind("mcp.tools.call", telemetry.SpanKindClient, attributes)
+	}
 	if span == nil {
 		return nil
 	}

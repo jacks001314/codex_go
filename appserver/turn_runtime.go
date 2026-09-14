@@ -2316,7 +2316,7 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 		}
 		// Rust brackets every MCP tool call with the `mcp.tools.call` span, so the
 		// trace-safe records the call emits attach to it.
-		r.startMCPToolCallSpan(invocation, threadID, turnID)
+		r.startMCPToolCallSpan(ctx, invocation, threadID, turnID)
 		if item, ok := collaborationStartedThreadItem(invocation, threadID, turnID, startedAt); ok {
 			r.notify(NotificationItemStarted, &ItemStartedNotification{
 				Item: threadItemPayload(item), ThreadID: threadID, TurnID: turnID, StartedAtMS: startedAt.UTC().UnixMilli(),
