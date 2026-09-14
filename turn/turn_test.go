@@ -352,12 +352,15 @@ func TestMCPTurnMetadataFromResponsesMetadataLikeRust(t *testing.T) {
 		`"window_id":"window","window_number":2,"context_window_id":"context","request_kind":"turn",` +
 		`"agent_name":"/root/worker","parent_thread_id":"parent-thread","parent_turn_id":"parent-turn",` +
 		`"root_turn_id":"root-turn","model":"gpt-5.4","reasoning_effort":"high","codex_version":"1.2.3",` +
-		`"sandbox_mode":"workspace-write","turn_started_at_unix_ms":1700,"workspace_kind":"git"}`
+		`"sandbox_mode":"workspace-write","turn_started_at_unix_ms":1700,"workspace_kind":"git",` +
+		`"tool_namespaces_info":{"functions":{"name":"functions"}}}`
 
 	document := MCPTurnMetadataFromResponsesMetadata(raw, false)
 	for _, key := range []string{
 		"installation_id", "window_id", "window_number", "context_window_id",
 		"request_kind", "compaction", "agent_name", "parent_turn_id", "root_turn_id",
+		// The harness-owned tool inventory never reaches an external MCP server.
+		"tool_namespaces_info",
 	} {
 		if _, ok := document[key]; ok {
 			t.Fatalf("MCP metadata carries %q: %#v", key, document)

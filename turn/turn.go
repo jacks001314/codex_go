@@ -522,6 +522,9 @@ func MCPTurnMetadataFromResponsesMetadata(raw string, userInputRequested bool) m
 		codexapi.AgentNameKey,
 		codexapi.ParentTurnIDKey,
 		codexapi.RootTurnIDKey,
+		// Rust never serializes the harness-owned tool inventory for external
+		// MCP servers (turn_metadata.rs's `tool_namespaces_info = None`).
+		codexapi.ToolNamespacesInfoKey,
 	} {
 		delete(document, key)
 	}
