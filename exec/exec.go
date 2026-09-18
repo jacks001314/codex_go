@@ -2550,7 +2550,29 @@ func protocolWebSearchItemFromAgentItem(item *model.AgentItem) protocol.ThreadIt
 		return protocol.ThreadItem{}
 	}
 	query, action := webSearchActionFromAgentItem(item)
-	return protocol.WebSearchItem(firstNonEmpty(item.ID, item.CallID, "web-search"), query, action)
+	return protocol.WebSearchItemWithResults(
+		firstNonEmpty(item.ID, item.CallID, "web-search"),
+		query,
+		action,
+		webSearchResultsFromAgentItem(item),
+	)
+}
+
+// webSearchResultsFromAgentItem forwards the structured results a search item
+// carries, keeping Rust's absent-vs-empty distinction.
+func webSearchResultsFromAgentItem(item *model.AgentItem) *[]any {
+	if item == nil {
+		return nil
+	}
+	if values, ok := item.Search["results"].([]any); ok {
+		if values == nil {
+			return nil
+		}
+		cloned := make([]any, len(values))
+		copy(cloned, values)
+		return &cloned
+	}
+	return nil
 }
 
 func webSearchActionFromAgentItem(item *model.AgentItem) (string, map[string]any) {
@@ -2563,7 +2585,8 @@ func webSearchActionFromAgentItem(item *model.AgentItem) (string, map[string]any
 	}
 	if nested, ok := search["action"].(map[string]any); ok {
 		action := cloneMap(nested)
-		return firstNonEmpty(execStringFromAny(search["query"]), execStringFromAny(action["query"])), webSearchActionWithDefault(action)
+		action = webSearchActionWithDefault(action)
+		return firstNonEmpty(webSearchActionDetail(action), execStringFromAny(search["query"])), action
 	}
 	query := execStringFromAny(search["query"])
 	queries := stringListFromAny(search["queries"])
@@ -2574,21 +2597,59 @@ func webSearchActionFromAgentItem(item *model.AgentItem) (string, map[string]any
 		}
 		if len(queries) > 0 {
 			action["queries"] = queries
-			if query == "" {
-				query = queries[0]
-			}
 		}
-		return query, action
+		return webSearchActionDetail(action), action
 	}
 	url := execStringFromAny(search["url"])
 	pattern := execStringFromAny(search["pattern"])
 	if url != "" && pattern != "" {
-		return "", map[string]any{"type": "find_in_page", "url": url, "pattern": pattern}
+		action := map[string]any{"type": "find_in_page", "url": url, "pattern": pattern}
+		return webSearchActionDetail(action), action
 	}
 	if url != "" {
-		return "", map[string]any{"type": "open_page", "url": url}
+		action := map[string]any{"type": "open_page", "url": url}
+		return webSearchActionDetail(action), action
 	}
 	return "", map[string]any{"type": "other"}
+}
+
+// webSearchActionDetail mirrors Rust's `codex_core::web_search::
+// web_search_action_detail`: the human-readable detail a web search item
+// reports as its `query`, which is the URL for a page action and the pattern
+// and URL pair for a find-in-page action.
+func webSearchActionDetail(action map[string]any) string {
+	switch execStringFromAny(action["type"]) {
+	case "search":
+		if query := execStringFromAny(action["query"]); query != "" {
+			return query
+		}
+		queries := stringListFromAny(action["queries"])
+		if len(queries) == 0 {
+			return ""
+		}
+		first := queries[0]
+		if len(queries) > 1 && first != "" {
+			return first + " ..."
+		}
+		return first
+	case "open_page":
+		return execStringFromAny(action["url"])
+	case "find_in_page":
+		pattern := execStringFromAny(action["pattern"])
+		url := execStringFromAny(action["url"])
+		switch {
+		case pattern != "" && url != "":
+			return "'" + pattern + "' in " + url
+		case pattern != "":
+			return "'" + pattern + "'"
+		case url != "":
+			return url
+		default:
+			return ""
+		}
+	default:
+		return ""
+	}
 }
 
 func responseArgumentsMapForExecEvents(arguments string) map[string]any {
@@ -2776,11 +2837,12 @@ func eventsFromToolExecution(execution *turn.ToolExecutionResult) []protocol.Thr
 		return nil
 	}
 	if isExecWebSearchExecution(execution) {
-		query, action := webSearchActionFromToolExecution(execution)
-		return []protocol.ThreadEvent{protocol.ItemCompleted(protocol.WebSearchItem(
+		query, action, results := webSearchActionFromToolExecution(execution)
+		return []protocol.ThreadEvent{protocol.ItemCompleted(protocol.WebSearchItemWithResults(
 			firstNonEmpty(execution.Invocation.CallID, "web-search"),
 			query,
 			action,
+			results,
 		))}
 	}
 	if execution != nil && execution.Invocation != nil && execution.Output != nil && execution.Invocation.ToolName.Name == tool.CodeModeExecToolName {
@@ -2808,9 +2870,9 @@ func isExecWebSearchExecution(execution *turn.ToolExecutionResult) bool {
 	return execution != nil && isExecWebSearchInvocation(execution.Invocation)
 }
 
-func webSearchActionFromToolExecution(execution *turn.ToolExecutionResult) (string, map[string]any) {
+func webSearchActionFromToolExecution(execution *turn.ToolExecutionResult) (string, map[string]any, *[]any) {
 	if execution == nil || execution.Output == nil {
-		return "", map[string]any{"type": "other"}
+		return "", map[string]any{"type": "other"}, nil
 	}
 	action, _ := execution.Output.Data["web_search_action"].(map[string]any)
 	action = cloneMap(action)
@@ -2826,7 +2888,24 @@ func webSearchActionFromToolExecution(execution *turn.ToolExecutionResult) (stri
 			query = queries[0]
 		}
 	}
-	return query, webSearchActionWithDefault(action)
+	action = webSearchActionWithDefault(action)
+	return firstNonEmpty(webSearchActionDetail(action), query), action, webSearchResultsFromToolExecution(execution)
+}
+
+// webSearchResultsFromToolExecution mirrors Rust's `results: item.results`
+// forwarding (#46319): the structured results attached by the search backend
+// reach the exec JSON event, while a search without results omits the field.
+func webSearchResultsFromToolExecution(execution *turn.ToolExecutionResult) *[]any {
+	if execution == nil || execution.Output == nil {
+		return nil
+	}
+	values, ok := execution.Output.Data["web_search_results"].([]any)
+	if !ok || values == nil {
+		return nil
+	}
+	cloned := make([]any, len(values))
+	copy(cloned, values)
+	return &cloned
 }
 
 func eventsFromToolCallExecution(execution *turn.ToolExecutionResult) []protocol.ThreadEvent {
@@ -2906,11 +2985,12 @@ func eventFromToolOutputExecution(execution *turn.ToolExecutionResult) (protocol
 		return protocol.ThreadEvent{}, false
 	}
 	if isExecWebSearchExecution(execution) {
-		query, action := webSearchActionFromToolExecution(execution)
-		return protocol.ItemCompleted(protocol.WebSearchItem(
+		query, action, results := webSearchActionFromToolExecution(execution)
+		return protocol.ItemCompleted(protocol.WebSearchItemWithResults(
 			firstNonEmpty(execution.Invocation.CallID, "web-search"),
 			query,
 			action,
+			results,
 		)), true
 	}
 	if isPlanUpdateExecution(execution) {

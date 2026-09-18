@@ -88,7 +88,11 @@ func (h *WebSearchHandler) Execute(ctx context.Context, invocation *tool.Invocat
 		"web_search_action":         webSearchCommandAction(&commands),
 	}
 	if response.Results != nil {
-		data["web_search_results"] = append([]any(nil), response.Results...)
+		// Preserve the empty-but-present array Rust's `Some(vec![])` produces;
+		// `append([]any(nil), ...)` would collapse it to a JSON null.
+		results := make([]any, len(response.Results))
+		copy(results, response.Results)
+		data["web_search_results"] = results
 	}
 	return &tool.Output{
 		CallID:      invocation.CallID,

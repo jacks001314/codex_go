@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -5619,6 +5620,93 @@ func TestExecStreamEventCollectorEmitsCanonicalStandaloneWebSearchLifecycle(t *t
 	})
 	if !ok || flattenedCompleted.Item == nil || flattenedCompleted.Item.Type != "web_search" {
 		t.Fatalf("flattened web.run completion mapping = %#v, ok=%v", flattenedCompleted, ok)
+	}
+}
+
+// TestExecWebSearchPageActionsAndResultsSurviveJSONOutput mirrors Rust's
+// `web_search_page_actions_and_results_survive_json_output` (#46319): open_page
+// and find_in_page actions keep their URLs and patterns in the exec JSON item,
+// and the structured results are forwarded with Rust's absent-vs-empty
+// distinction.
+func TestExecWebSearchPageActionsAndResultsSurviveJSONOutput(t *testing.T) {
+	const url = "https://example.com/docs"
+	actions := []struct {
+		name      string
+		action    map[string]any
+		want      map[string]any
+		wantQuery string
+	}{
+		{
+			name:      "open_page",
+			action:    map[string]any{"type": "openPage", "url": url},
+			want:      map[string]any{"type": "open_page", "url": url},
+			wantQuery: url,
+		},
+		{
+			name:      "find_in_page",
+			action:    map[string]any{"type": "findInPage", "url": url, "pattern": "configuration"},
+			want:      map[string]any{"type": "find_in_page", "url": url, "pattern": "configuration"},
+			wantQuery: "'configuration' in " + url,
+		},
+	}
+	resultCases := []struct {
+		name    string
+		results []any
+		absent  bool
+	}{
+		{name: "absent", absent: true},
+		{name: "empty", results: []any{}},
+		{name: "success", results: []any{map[string]any{"url": url, "content": "configuration"}}},
+		{name: "error", results: []any{map[string]any{"url": url, "error": map[string]any{"status": float64(404)}}}},
+	}
+
+	for _, action := range actions {
+		for _, resultCase := range resultCases {
+			t.Run(action.name+"/"+resultCase.name, func(t *testing.T) {
+				data := map[string]any{"web_search_action": action.action}
+				if !resultCase.absent {
+					data["web_search_results"] = resultCase.results
+				}
+				invocation := &tool.Invocation{
+					CallID:   "search-1",
+					ToolName: tool.NamespacedName(turn.WebSearchNamespace, turn.WebSearchRunTool),
+					Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"search_query":[{"q":"https://example.com/docs"}]}`},
+				}
+				events := eventsFromToolExecution(&turn.ToolExecutionResult{
+					Invocation: invocation,
+					Output: &tool.Output{
+						CallID:   invocation.CallID,
+						ToolName: invocation.ToolName,
+						Success:  true,
+						Data:     data,
+					},
+				})
+				if len(events) != 1 {
+					t.Fatalf("web search events = %#v", events)
+				}
+				encoded, err := json.Marshal(events[0])
+				if err != nil {
+					t.Fatalf("marshal web search event: %v", err)
+				}
+				var got map[string]any
+				if err := json.Unmarshal(encoded, &got); err != nil {
+					t.Fatalf("decode web search event: %v", err)
+				}
+				wantItem := map[string]any{
+					"id":     "search-1",
+					"type":   "web_search",
+					"query":  action.wantQuery,
+					"action": action.want,
+				}
+				if !resultCase.absent {
+					wantItem["results"] = resultCase.results
+				}
+				want := map[string]any{"type": "item.completed", "item": wantItem}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("web search event = %#v, want %#v", got, want)
+				}
+			})
+		}
 	}
 }
 

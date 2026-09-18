@@ -94,16 +94,20 @@ type ThreadItem struct {
 	Summary []string `json:"summary,omitempty"`
 	Content []string `json:"content,omitempty"`
 
-	Message               string                       `json:"message,omitempty"`
-	Text                  string                       `json:"text,omitempty"`
-	Phase                 string                       `json:"phase,omitempty"`
-	Delivery              string                       `json:"delivery,omitempty"`
-	ToolName              string                       `json:"tool_name,omitempty"`
-	CallID                string                       `json:"call_id,omitempty"`
-	Input                 string                       `json:"input,omitempty"`
-	Output                string                       `json:"output,omitempty"`
-	Query                 string                       `json:"query,omitempty"`
-	Action                map[string]any               `json:"action,omitempty"`
+	Message  string         `json:"message,omitempty"`
+	Text     string         `json:"text,omitempty"`
+	Phase    string         `json:"phase,omitempty"`
+	Delivery string         `json:"delivery,omitempty"`
+	ToolName string         `json:"tool_name,omitempty"`
+	CallID   string         `json:"call_id,omitempty"`
+	Input    string         `json:"input,omitempty"`
+	Output   string         `json:"output,omitempty"`
+	Query    string         `json:"query,omitempty"`
+	Action   map[string]any `json:"action,omitempty"`
+	// Results carries the structured results a web search returned, mirroring
+	// Rust's `WebSearchItem { results }`. The pointer keeps Rust's distinction
+	// between an absent field and a present-but-empty array.
+	Results               *[]any                       `json:"results,omitempty"`
 	Changes               []FileChange                 `json:"changes,omitempty"`
 	Server                string                       `json:"server,omitempty"`
 	Tool                  string                       `json:"tool,omitempty"`
@@ -383,14 +387,22 @@ func FileChangeItemWithOutput(id string, changes []FileChange, status string, st
 }
 
 func WebSearchItem(id string, query string, action map[string]any) ThreadItem {
+	return WebSearchItemWithResults(id, query, action, nil)
+}
+
+// WebSearchItemWithResults mirrors Rust's `WebSearchItem { id, query, action,
+// results }` constructor (exec/src/exec_events.rs): `results` is omitted when
+// the search produced none, while an empty array is preserved on the wire.
+func WebSearchItemWithResults(id string, query string, action map[string]any, results *[]any) ThreadItem {
 	if action == nil {
 		action = map[string]any{"type": "other"}
 	}
 	return ThreadItem{
-		ID:     id,
-		Type:   "web_search",
-		Query:  query,
-		Action: cloneAnyMap(action),
+		ID:      id,
+		Type:    "web_search",
+		Query:   query,
+		Action:  cloneAnyMap(action),
+		Results: results,
 	}
 }
 
