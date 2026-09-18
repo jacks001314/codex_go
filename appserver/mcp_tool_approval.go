@@ -275,6 +275,9 @@ func (h *appserverMCPToolApprovalHandler) reviewViaGuardian(ctx context.Context,
 	if request.Arguments != nil {
 		action.Arguments = request.Arguments
 	}
+	if description := strings.TrimSpace(request.ToolDescription); description != "" {
+		action.ToolDescription = description
+	}
 	if request.Annotations != nil {
 		action.Annotations = &state.ActionAnnotations{
 			DestructiveHint: request.Annotations.DestructiveHint,

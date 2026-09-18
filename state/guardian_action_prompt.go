@@ -3,7 +3,24 @@ package state
 import (
 	"encoding/json"
 	"strings"
+
+	"codex_go/context"
 )
+
+// renderGuardianToolDescriptions mirrors Rust's planned-action composition: the
+// bounded tool/connector descriptions follow the action items as their own
+// untrusted fragment.
+func renderGuardianToolDescriptions(action Action) string {
+	fragment := context.NewGuardianToolDescriptions(action.ToolDescription, action.ConnectorDescription)
+	if fragment == nil {
+		return ""
+	}
+	rendered := context.Render(fragment)
+	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
+		return ""
+	}
+	return rendered.Content
+}
 
 // marshalGuardianPromptAction renders the exact action JSON the reviewer sees.
 func marshalGuardianPromptAction(action Action) (string, error) {

@@ -136,6 +136,11 @@ type Action struct {
 	Chars         string `json:"-"`
 	// TurnID mirrors Rust RequestPermissionsApprovalAction.turn_id.
 	TurnID string `json:"-"`
+	// ToolDescription / ConnectorDescription are the invoked MCP tool's own
+	// descriptions, rendered as Rust's separate bounded
+	// `<guardian_tool_descriptions>` block instead of the action JSON.
+	ToolDescription      string `json:"-"`
+	ConnectorDescription string `json:"-"`
 }
 
 // ActionAnnotations mirrors Rust GuardianMcpAnnotations: the privileged hints
@@ -604,36 +609,61 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 	if err != nil {
 		return "", err
 	}
-	builder.WriteString(actionPrompt)
+	writeGuardianPromptSection(&builder, actionPrompt)
+	if descriptions := renderGuardianToolDescriptions(action); descriptions != "" {
+		writeGuardianPromptSection(&builder, descriptions)
+	}
 	if options.NodeReplEvidence != nil {
 		if rendered := context.Render(options.NodeReplEvidence); rendered != nil && strings.TrimSpace(rendered.Content) != "" {
-			builder.WriteString("\n\n")
-			builder.WriteString(rendered.Content)
+			writeGuardianPromptSection(&builder, rendered.Content)
 		}
 	}
 	if len(options.RootUserAuthorization) > 0 {
-		builder.WriteString("\n\nRoot user authorization evidence (root conversation):\n")
+		var section strings.Builder
+		section.WriteString("Root user authorization evidence (root conversation):\n")
 		for _, line := range options.RootUserAuthorization {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			builder.WriteString("- ")
-			builder.WriteString(strings.TrimSpace(line))
-			builder.WriteByte('\n')
+			section.WriteString("- ")
+			section.WriteString(strings.TrimSpace(line))
+			section.WriteByte('\n')
 		}
+		writeGuardianPromptSection(&builder, section.String())
 	}
 	if len(transcript) > 0 {
-		builder.WriteString("\n\nRecent transcript:\n")
+		var section strings.Builder
+		section.WriteString("Recent transcript:\n")
 		for _, line := range transcript {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			builder.WriteString("- ")
-			builder.WriteString(strings.TrimSpace(line))
-			builder.WriteByte('\n')
+			section.WriteString("- ")
+			section.WriteString(strings.TrimSpace(line))
+			section.WriteByte('\n')
 		}
+		writeGuardianPromptSection(&builder, section.String())
 	}
 	return builder.String(), nil
+}
+
+// writeGuardianPromptSection appends one prompt block, separated from the
+// previous block by exactly one blank line. Rust delivers these blocks as
+// separate content items; Go concatenates them into one prompt string, so the
+// separator is normalized here rather than inherited from each block's own
+// trailing newline.
+func writeGuardianPromptSection(builder *strings.Builder, section string) {
+	if builder == nil {
+		return
+	}
+	section = strings.TrimRight(section, "\n")
+	if strings.TrimSpace(section) == "" {
+		return
+	}
+	if builder.Len() > 0 {
+		builder.WriteString("\n\n")
+	}
+	builder.WriteString(section)
 }
 
 func guardianPromptAction(action Action) any {

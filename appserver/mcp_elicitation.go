@@ -277,13 +277,14 @@ func guardianMCPAction(request *mcp.MCPElicitationRequest) state.Action {
 	connectorName := strings.TrimSpace(stringFromMap(meta, "connector_name"))
 	toolTitle := strings.TrimSpace(stringFromMap(meta, "tool_title"))
 	return state.Action{
-		Type:          "mcp_tool_call",
-		Server:        strings.TrimSpace(request.ServerName),
-		ToolName:      strings.TrimSpace(stringFromMap(meta, "tool_name")),
-		ConnectorID:   connectorID,
-		ConnectorName: connectorName,
-		ToolTitle:     toolTitle,
-		Arguments:     cloneAnyMapAppserver(mapFromAny(meta["tool_params"])),
+		Type:            "mcp_tool_call",
+		Server:          strings.TrimSpace(request.ServerName),
+		ToolName:        strings.TrimSpace(stringFromMap(meta, "tool_name")),
+		ConnectorID:     connectorID,
+		ConnectorName:   connectorName,
+		ToolTitle:       toolTitle,
+		Arguments:       cloneAnyMapAppserver(mapFromAny(meta["tool_params"])),
+		ToolDescription: strings.TrimSpace(stringFromMap(meta, "tool_description")),
 		Extra: map[string]any{
 			"arguments": cloneAnyMapAppserver(mapFromAny(meta["tool_params"])),
 		},

@@ -414,11 +414,13 @@ func TestMCPToolApprovalRunsHooksAndGuardianLikeRust(t *testing.T) {
 		t.Helper()
 		handler := &appserverMCPToolApprovalHandler{router: router, threadID: "thread-1", turnID: "turn-1"}
 		outcome, err := handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
-			Server:       "server",
-			Tool:         "tool",
-			Arguments:    map[string]any{"path": "src/main.go"},
-			HookToolName: &tool.HookToolName{Name: "mcp_tool"},
-			CallID:       "call-1",
+			Server:          "server",
+			Tool:            "tool",
+			Arguments:       map[string]any{"path": "src/main.go"},
+			ToolDescription: "Read a file from the workspace.",
+			Annotations:     &mcp.RuntimeToolAnnotations{ReadOnlyHint: boolPtr(true)},
+			HookToolName:    &tool.HookToolName{Name: "mcp_tool"},
+			CallID:          "call-1",
 		})
 		return outcome.Decision, err
 	}
@@ -448,6 +450,12 @@ func TestMCPToolApprovalRunsHooksAndGuardianLikeRust(t *testing.T) {
 	arguments, _ := action.Extra["arguments"].(map[string]any)
 	if arguments["path"] != "src/main.go" {
 		t.Fatalf("guardian MCP arguments = %#v", action.Extra)
+	}
+	// The reviewer prompt projection reads these typed fields rather than the
+	// hook payload's Extra copies.
+	if action.Arguments == nil || action.ToolDescription != "Read a file from the workspace." ||
+		action.Annotations == nil || action.Annotations.ReadOnlyHint == nil || !*action.Annotations.ReadOnlyHint {
+		t.Fatalf("guardian MCP action projection = %#v", action)
 	}
 
 	deniedReviewer := &fakeGuardianReviewer{decision: state.DecisionDenied, reason: "risky tool"}

@@ -244,7 +244,7 @@ func TestBuildPromptSerializesNetworkActionLikeRust(t *testing.T) {
 	if !strings.HasPrefix(prompt, prefix) {
 		t.Fatalf("prompt = %q", prompt)
 	}
-	const suffix = "\n>>> APPROVAL REQUEST END\n"
+	const suffix = "\n>>> APPROVAL REQUEST END"
 	if !strings.HasSuffix(prompt, suffix) {
 		t.Fatalf("prompt = %q", prompt)
 	}
@@ -292,7 +292,7 @@ func TestBuildPromptFramingMatchesRust(t *testing.T) {
 		if !strings.HasPrefix(prompt, commandFraming) {
 			t.Fatalf("prompt = %q", prompt)
 		}
-		if !strings.HasSuffix(prompt, "\n>>> APPROVAL REQUEST END\n") {
+		if !strings.HasSuffix(prompt, ">>> APPROVAL REQUEST END") {
 			t.Fatalf("prompt = %q", prompt)
 		}
 		if strings.Contains(prompt, "Node REPL action JSON:") || strings.Contains(prompt, "Distinguish preparation") {
@@ -307,6 +307,44 @@ func TestBuildPromptFramingMatchesRust(t *testing.T) {
 	}
 	if !strings.Contains(reasoned, ">>> APPROVAL REQUEST START\nRetry reason:\nretry after scope change\n\nAssess the exact planned action below.") {
 		t.Fatalf("reasoned prompt = %q", reasoned)
+	}
+}
+
+// TestBuildPromptAppendsGuardianToolDescriptionsLikeRust mirrors Rust's
+// planned-action composition: the invoked MCP tool's own descriptions follow
+// the action items as their own bounded untrusted fragment, while the action
+// JSON itself keeps only the projected fields.
+func TestBuildPromptAppendsGuardianToolDescriptionsLikeRust(t *testing.T) {
+	action := Action{
+		Type:            "mcp_tool_call",
+		Server:          "apps",
+		ToolName:        "calendar.create",
+		Arguments:       map[string]any{"title": "Lunch"},
+		ToolDescription: "Create a calendar event.",
+	}
+	prompt, err := BuildPromptWithOptions(action, nil, BuildPromptOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionEnd := strings.Index(prompt, ">>> APPROVAL REQUEST END\n")
+	descriptions := strings.Index(prompt, "<guardian_tool_descriptions>")
+	if actionEnd < 0 || descriptions != actionEnd+len(">>> APPROVAL REQUEST END\n\n") {
+		t.Fatalf("descriptions block placement = %q", prompt)
+	}
+	if !strings.Contains(prompt, "Tool description:\nCreate a calendar event.\nConnector description:\n") {
+		t.Fatalf("descriptions block = %q", prompt)
+	}
+	if strings.Contains(prompt, "Create a calendar event."+`"`) || strings.Contains(prompt, `"tool_description"`) {
+		t.Fatalf("action JSON leaked the description: %q", prompt)
+	}
+
+	// Without descriptions nothing is appended.
+	plain, err := BuildPromptWithOptions(Action{Type: "mcp_tool_call", Server: "apps", ToolName: "calendar.create"}, nil, BuildPromptOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain, "guardian_tool_descriptions") {
+		t.Fatalf("prompt without descriptions = %q", plain)
 	}
 }
 
