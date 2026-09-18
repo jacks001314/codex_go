@@ -35,6 +35,7 @@ func TestMCPAppUIMetadataReachesTheToolCallItemAndWire(t *testing.T) {
 				"connector_name": "Calendar",
 				"link_id":        "link_calendar",
 				"action_name":    "create_event",
+				"plugin_id":      "sample@openai-curated",
 				"mcp_app_ui":     mcp.McpAppUI{ResourceURI: "ui://widgets/calendar", PreferredModelDisplayMode: mcp.McpAppDisplayModeFullscreen},
 			},
 			CompletedAt: now,
@@ -62,6 +63,9 @@ func TestMCPAppUIMetadataReachesTheToolCallItemAndWire(t *testing.T) {
 		context["resourceUri"] != "ui://widgets/calendar" {
 		t.Fatalf("appContext = %#v", context)
 	}
+	if item.Data["pluginId"] != "sample@openai-curated" {
+		t.Fatalf("item pluginId = %#v", item.Data["pluginId"])
+	}
 
 	threadItem := BuildThreadItem(item)
 	if threadItem.Type == "" {
@@ -84,6 +88,9 @@ func TestMCPAppUIMetadataReachesTheToolCallItemAndWire(t *testing.T) {
 	}
 	if decoded["mcpAppResourceUri"] != "ui://widgets/calendar" {
 		t.Fatalf("wire mcpAppResourceUri = %#v", decoded["mcpAppResourceUri"])
+	}
+	if decoded["pluginId"] != "sample@openai-curated" {
+		t.Fatalf("wire pluginId = %#v", decoded["pluginId"])
 	}
 }
 

@@ -88,29 +88,34 @@ func TestApplyMCPAppOutputMetadataMirrorsTrustedCapture(t *testing.T) {
 		},
 	}
 	data := map[string]any{}
-	ApplyMCPAppOutputMetadata(data, RuntimeCodexAppsMCPServerName, appsMeta, "calendar", "Calendar")
+	ApplyMCPAppOutputMetadata(data, RuntimeCodexAppsMCPServerName, appsMeta, "calendar", "Calendar", "sample@openai-curated")
 	appUI, ok := data["mcp_app_ui"].(McpAppUI)
 	if !ok || appUI.ResourceURI != "ui://widgets/calendar" || appUI.PreferredModelDisplayMode != McpAppDisplayModeFullscreen {
 		t.Fatalf("mcp_app_ui = %#v", data["mcp_app_ui"])
 	}
 	if data["connector_id"] != "calendar" || data["connector_name"] != "Calendar" ||
-		data["link_id"] != "link_calendar" || data["action_name"] != "create_event" {
+		data["link_id"] != "link_calendar" || data["action_name"] != "create_event" ||
+		data["plugin_id"] != "sample@openai-curated" {
 		t.Fatalf("app identity = %#v", data)
 	}
 
 	// A non-Codex-Apps server keeps the widget but never the trusted identity.
 	plain := map[string]any{}
-	ApplyMCPAppOutputMetadata(plain, "plain_server", map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/x"}}, "calendar", "Calendar")
+	ApplyMCPAppOutputMetadata(plain, "plain_server", map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/x"}}, "calendar", "Calendar", "sample@openai-curated")
 	if _, ok := plain["mcp_app_ui"].(McpAppUI); !ok {
 		t.Fatalf("mcp_app_ui = %#v", plain["mcp_app_ui"])
 	}
 	if _, present := plain["connector_id"]; present {
 		t.Fatalf("untrusted server contributed connector identity: %#v", plain)
 	}
+	// The owning plugin id is reported for every server.
+	if plain["plugin_id"] != "sample@openai-curated" {
+		t.Fatalf("plugin_id = %#v", plain["plugin_id"])
+	}
 
 	// No descriptor widget means no presentation at all.
 	empty := map[string]any{}
-	ApplyMCPAppOutputMetadata(empty, RuntimeCodexAppsMCPServerName, map[string]any{}, "calendar", "Calendar")
+	ApplyMCPAppOutputMetadata(empty, RuntimeCodexAppsMCPServerName, map[string]any{}, "calendar", "Calendar", "")
 	if _, present := empty["mcp_app_ui"]; present {
 		t.Fatalf("unexpected mcp_app_ui: %#v", empty)
 	}

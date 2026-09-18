@@ -135,12 +135,17 @@ func MCPAppUIFromMetadataMap(value map[string]any) *McpAppUI {
 // (Rust #45805 plus `McpToolCallItemMetadata::from_tool_metadata`): the widget
 // presentation comes from the invoked descriptor, while the connector, link,
 // app, and action identity may only be contributed by the codex_apps server.
-func ApplyMCPAppOutputMetadata(data map[string]any, server string, toolMeta any, connectorID string, connectorName string) {
+func ApplyMCPAppOutputMetadata(data map[string]any, server string, toolMeta any, connectorID string, connectorName string, pluginID string) {
 	if data == nil {
 		return
 	}
 	if appUI := MCPAppUIFromToolMeta(toolMeta); appUI != nil {
 		data["mcp_app_ui"] = *appUI
+	}
+	// Rust carries the owning plugin id for every server, not only the trusted
+	// apps server.
+	if value := strings.TrimSpace(pluginID); value != "" {
+		data["plugin_id"] = value
 	}
 	if !IsCodexAppsMCPServerName(strings.TrimSpace(server)) {
 		return

@@ -41,13 +41,17 @@ type RuntimeTool struct {
 }
 
 type RuntimeToolInfo struct {
-	ServerName                    string              `json:"serverName"`
-	CallableName                  string              `json:"toolName,omitempty"`
-	CallableNamespace             string              `json:"toolNamespace,omitempty"`
-	NamespaceDescription          string              `json:"namespaceDescription,omitempty"`
-	ConnectorID                   string              `json:"connectorId,omitempty"`
-	ConnectorName                 string              `json:"connectorName,omitempty"`
-	PluginDisplayNames            []string            `json:"pluginDisplayNames,omitempty"`
+	ServerName           string   `json:"serverName"`
+	CallableName         string   `json:"toolName,omitempty"`
+	CallableNamespace    string   `json:"toolNamespace,omitempty"`
+	NamespaceDescription string   `json:"namespaceDescription,omitempty"`
+	ConnectorID          string   `json:"connectorId,omitempty"`
+	ConnectorName        string   `json:"connectorName,omitempty"`
+	PluginDisplayNames   []string `json:"pluginDisplayNames,omitempty"`
+	// PluginID is the plugin that contributed the owning server, when any
+	// (Rust McpToolApprovalMetadata::plugin_id). Internal-only: the model-facing
+	// tool set uses PluginDisplayNames.
+	PluginID                      string              `json:"-"`
 	ServerOrigin                  string              `json:"serverOrigin,omitempty"`
 	OpenAIFileInputOptionalFields map[string][]string `json:"openaiFileInputOptionalFields,omitempty"`
 	OmitLegacyPrefix              bool                `json:"-"`
@@ -129,6 +133,9 @@ func RuntimeToolsFromStatuses(statuses []MCPServerStatus) []RuntimeToolInfo {
 					Annotations:  RuntimeToolAnnotationsFromMCP(toolInfo.Annotations),
 					ModelVisible: ToolModelVisible(&toolInfo),
 				},
+			}
+			if status.PluginID != nil {
+				runtimeTool.PluginID = strings.TrimSpace(*status.PluginID)
 			}
 			if IsCodexAppsMCPServerName(serverName) {
 				runtimeTool.OpenAIFileInputOptionalFields = prepareOpenAIFileParamsForModel(&runtimeTool.Tool, toolInfo.Meta)

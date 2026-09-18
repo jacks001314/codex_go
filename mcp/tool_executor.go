@@ -60,11 +60,14 @@ type ToolExecutorOptions struct {
 	ToolName      tool.ToolName
 	ConnectorID   string
 	ConnectorName string
-	Model         string
-	Parallel      bool
-	ThreadID      string
-	TurnID        string
-	RequestMeta   map[string]any
+	// PluginID is the plugin that contributed the owning server, when any; it is
+	// reported on the tool-call item metadata (Rust #45805's plugin_id).
+	PluginID    string
+	Model       string
+	Parallel    bool
+	ThreadID    string
+	TurnID      string
+	RequestMeta map[string]any
 	// TurnMetadata supplies the turn-metadata document this call reports to the
 	// MCP server (Rust build_mcp_tool_call_request_meta's
 	// x-codex-turn-metadata entry). Nil omits the entry; the callback is invoked
@@ -118,6 +121,7 @@ type ToolExecutor struct {
 	toolName                      tool.ToolName
 	connectorID                   string
 	connectorName                 string
+	pluginID                      string
 	model                         string
 	parallel                      bool
 	readOnlyHint                  *bool
@@ -162,6 +166,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.binding = options.Binding
 	executor.connectorID = strings.TrimSpace(options.ConnectorID)
 	executor.connectorName = strings.TrimSpace(options.ConnectorName)
+	executor.pluginID = strings.TrimSpace(options.PluginID)
 	executor.model = strings.TrimSpace(options.Model)
 	executor.openAIFileRewriter = options.OpenAIFileRewriter
 	executor.openAIFileInputOptionalFields = cloneOpenAIFileOptionalFields(options.OpenAIFileInputOptionalFields)
@@ -330,7 +335,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	// can render MCP apps without waiting for the catalog, and the trusted Codex
 	// Apps connector/link/action identity that only the codex_apps server may
 	// contribute.
-	ApplyMCPAppOutputMetadata(data, e.resolvedServerName(), e.toolInfo.Meta, e.connectorID, e.connectorName)
+	ApplyMCPAppOutputMetadata(data, e.resolvedServerName(), e.toolInfo.Meta, e.connectorID, e.connectorName, e.pluginID)
 	if rewrittenArguments != nil {
 		data[openAIFileHookInputKey] = rewrittenArguments
 	}

@@ -10748,6 +10748,9 @@ func applyMCPAppMetadata(data map[string]any, output map[string]any) {
 			data["mcpAppResourceUri"] = strings.TrimSpace(appUI.ResourceURI)
 		}
 	}
+	if pluginID := strings.TrimSpace(stringFromMap(output, "plugin_id")); pluginID != "" {
+		data["pluginId"] = pluginID
+	}
 	connectorID := strings.TrimSpace(stringFromMap(output, "connector_id"))
 	connectorName := strings.TrimSpace(stringFromMap(output, "connector_name"))
 	linkID := strings.TrimSpace(stringFromMap(output, "link_id"))

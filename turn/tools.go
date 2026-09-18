@@ -568,6 +568,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			AgentPlugin:                       info.AgentPlugin,
 			ConnectorID:                       info.ConnectorID,
 			ConnectorName:                     info.ConnectorName,
+			PluginID:                          info.PluginID,
 			Model:                             options.Model,
 			TurnMetadata:                      options.MCPTurnMetadata,
 			AuthElicitation:                   options.MCPAuthElicitation,
