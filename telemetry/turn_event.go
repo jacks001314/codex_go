@@ -58,9 +58,13 @@ type CodexTurnEventRequest struct {
 }
 
 type CodexTurnEventParams struct {
-	ThreadID                             string                       `json:"thread_id"`
-	SessionID                            string                       `json:"session_id"`
-	TurnID                               string                       `json:"turn_id"`
+	ThreadID  string `json:"thread_id"`
+	SessionID string `json:"session_id"`
+	TurnID    string `json:"turn_id"`
+	// ActivePluginIDsAtTurnStart is the first observed active plugin inventory:
+	// nil is unknown (JSON null) and an empty slice is an observed empty
+	// inventory (JSON []), matching Rust #46323.
+	ActivePluginIDsAtTurnStart           *[]string                    `json:"active_plugin_ids_at_turn_start"`
 	TurnTrigger                          *string                      `json:"turn_trigger"`
 	CodexTurnSource                      *string                      `json:"codex_turn_source"`
 	SubmissionType                       *string                      `json:"submission_type"`
@@ -123,6 +127,7 @@ type CodexTurnEventInput struct {
 	ThreadID                             string
 	SessionID                            string
 	TurnID                               string
+	ActivePluginIDsAtTurnStart           *[]string
 	TurnTrigger                          string
 	CodexTurnSource                      string
 	SubmissionType                       *string
@@ -213,6 +218,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			ThreadID:                             input.ThreadID,
 			SessionID:                            input.SessionID,
 			TurnID:                               input.TurnID,
+			ActivePluginIDsAtTurnStart:           input.ActivePluginIDsAtTurnStart,
 			TurnTrigger:                          boundedTelemetryString(input.TurnTrigger),
 			CodexTurnSource:                      boundedTelemetryString(input.CodexTurnSource),
 			SubmissionType:                       input.SubmissionType,

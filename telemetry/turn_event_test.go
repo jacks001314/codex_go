@@ -12,6 +12,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 		ThreadID:                      "thread-2",
 		SessionID:                     "session-thread-2",
 		TurnID:                        "turn-2",
+		ActivePluginIDsAtTurnStart:    &[]string{"plugins~Plugin_example", "test@marketplace"},
 		AppServerClient:               sampleAppServerClientMetadata(),
 		Runtime:                       sampleRuntimeMetadata(),
 		ThreadSource:                  stringPtrTelemetry("user"),
@@ -58,6 +59,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			"thread_id": "thread-2",
 			"session_id": "session-thread-2",
 			"turn_id": "turn-2",
+			"active_plugin_ids_at_turn_start": ["plugins~Plugin_example", "test@marketplace"],
 			"turn_trigger": null,
 			"codex_turn_source": null,
 			"submission_type": null,
@@ -131,6 +133,36 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("event JSON mismatch\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+// TestCodexTurnEventPluginInventoryNullabilityMatchesRust mirrors Rust #46323:
+// an unobserved inventory serializes as null while an observed empty inventory
+// stays an empty array.
+func TestCodexTurnEventPluginInventoryNullabilityMatchesRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		ids  *[]string
+		want string
+	}{
+		{name: "unknown", ids: nil, want: `"active_plugin_ids_at_turn_start":null`},
+		{name: "observed empty", ids: &[]string{}, want: `"active_plugin_ids_at_turn_start":[]`},
+		{name: "observed", ids: &[]string{"plugin_000@local"}, want: `"active_plugin_ids_at_turn_start":["plugin_000@local"]`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			event := NewCodexTurnEvent(CodexTurnEventInput{
+				ThreadID:                   "thread-1",
+				TurnID:                     "turn-1",
+				ActivePluginIDsAtTurnStart: testCase.ids,
+			})
+			encoded, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal event error = %v", err)
+			}
+			if !strings.Contains(string(encoded), testCase.want) {
+				t.Fatalf("event JSON = %s, want containing %s", encoded, testCase.want)
+			}
+		})
 	}
 }
 

@@ -26,8 +26,9 @@ type PluginId struct {
 	MarketplaceName string
 }
 
-// NewPluginId creates a validated PluginId. Both segments must be non-empty and contain only
-// ASCII alphanumeric characters, '_', and '-'.
+// NewPluginId creates a validated PluginId. Both segments must be non-empty and
+// contain only ASCII alphanumeric characters, '_', and '-'; the plugin name may
+// additionally use '.' to separate non-empty name segments.
 func NewPluginId(pluginName string, marketplaceName string) (*PluginId, error) {
 	if err := validatePluginSegment(pluginName, "plugin name"); err != nil {
 		return nil, err
@@ -42,18 +43,15 @@ func NewPluginId(pluginName string, marketplaceName string) (*PluginId, error) {
 }
 
 // ParsePluginId parses a plugin key string in the format "<plugin>@<marketplace>".
-// Uses the last '@' as the delimiter, matching Rust's rsplit_once behavior.
+// Uses the last '@' as the delimiter, matching Rust's rsplit_once behavior. The
+// input is not trimmed, matching Rust's PluginId::parse.
 func ParsePluginId(pluginKey string) (*PluginId, error) {
-	trimmed := strings.TrimSpace(pluginKey)
-	if trimmed == "" {
-		return nil, newPluginIdError(fmt.Sprintf("invalid plugin key %q: must not be empty", pluginKey))
-	}
-	idx := strings.LastIndex(trimmed, "@")
+	idx := strings.LastIndex(pluginKey, "@")
 	if idx < 0 {
 		return nil, newPluginIdError(fmt.Sprintf("invalid plugin key %q; expected <plugin>@<marketplace>", pluginKey))
 	}
-	pluginName := trimmed[:idx]
-	marketplaceName := trimmed[idx+1:]
+	pluginName := pluginKey[:idx]
+	marketplaceName := pluginKey[idx+1:]
 	if pluginName == "" || marketplaceName == "" {
 		return nil, newPluginIdError(fmt.Sprintf("invalid plugin key %q; expected <plugin>@<marketplace>", pluginKey))
 	}
@@ -89,8 +87,10 @@ func (id *PluginId) Clone() *PluginId {
 	}
 }
 
-// ValidatePluginSegment validates a single segment used in plugin IDs and cache layout.
-// Segments must be non-empty and contain only ASCII alphanumeric, '_', and '-' characters.
+// ValidatePluginSegment validates a single segment used in plugin IDs and cache
+// layout. Segments must be non-empty and contain only ASCII alphanumeric, '_',
+// and '-' characters; a "plugin name" may additionally use '.' as a separator
+// between non-empty name segments (Rust validate_plugin_segment).
 func ValidatePluginSegment(segment string, kind string) error {
 	return validatePluginSegment(segment, kind)
 }
@@ -99,15 +99,51 @@ func validatePluginSegment(segment string, kind string) error {
 	if segment == "" {
 		return newPluginIdError(fmt.Sprintf("invalid %s: must not be empty", kind))
 	}
+	allowDots := kind == "plugin name"
+	if allowDots {
+		if segment == "." || segment == ".." {
+			return newPluginIdError(fmt.Sprintf("invalid %s: path traversal is not allowed", kind))
+		}
+		if strings.HasPrefix(segment, ".") || strings.HasSuffix(segment, ".") || strings.Contains(segment, "..") {
+			return newPluginIdError(fmt.Sprintf("invalid %s: dots must separate non-empty name segments", kind))
+		}
+	}
+	allowedCharacters := pluginSegmentAllowedCharacters(allowDots)
 	for _, ch := range segment {
 		if ch > unicode.MaxASCII {
-			return newPluginIdError(fmt.Sprintf("invalid %s: only ASCII letters, digits, '_', and '-' are allowed", kind))
+			return newPluginIdError(fmt.Sprintf("invalid %s: only %s are allowed", kind, allowedCharacters))
 		}
-		if !isPluginSegmentChar(byte(ch)) {
-			return newPluginIdError(fmt.Sprintf("invalid %s: only ASCII letters, digits, '_', and '-' are allowed", kind))
+		if !isPluginSegmentChar(byte(ch)) && !(allowDots && ch == '.') {
+			return newPluginIdError(fmt.Sprintf("invalid %s: only %s are allowed", kind, allowedCharacters))
 		}
 	}
 	return nil
+}
+
+func pluginSegmentAllowedCharacters(allowDots bool) string {
+	if allowDots {
+		return "ASCII letters, digits, '.', '_', and '-'"
+	}
+	return "ASCII letters, digits, '_', and '-'"
+}
+
+// IsValidRemotePluginID mirrors
+// codex_core_plugins::remote::is_valid_remote_plugin_id: a remote plugin id is
+// non-empty and contains only ASCII letters, digits, '_', '-', and '~'. The
+// value is not trimmed, matching Rust.
+func IsValidRemotePluginID(pluginID string) bool {
+	if pluginID == "" {
+		return false
+	}
+	for _, ch := range pluginID {
+		if ch > unicode.MaxASCII {
+			return false
+		}
+		if !isPluginSegmentChar(byte(ch)) && ch != '~' {
+			return false
+		}
+	}
+	return true
 }
 
 func isPluginSegmentChar(b byte) bool {

@@ -16,6 +16,8 @@ func TestNewPluginIdValidates(t *testing.T) {
 		{"with-dashes", "google-calendar", "openai-curated"},
 		{"with-underscores", "openai_developers", "openai_curated"},
 		{"mixed_alphanumeric", "linear", "my-marketplace"},
+		{"dotted plugin name", "my.tool", "123"},
+		{"multi-segment plugin name", "com.example.tool", "marketplace"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,7 +43,11 @@ func TestNewPluginIdValidates(t *testing.T) {
 		{"space in name", "plugin name", "marketplace", "only ASCII"},
 		{"non-ASCII name", "pluginé", "marketplace", "only ASCII"},
 		{"slash in name", "plugin/name", "marketplace", "only ASCII"},
-		{"dot in name", "plugin.name", "marketplace", "only ASCII"},
+		{"dot in marketplace", "plugin", "market.place", "only ASCII"},
+		{"path traversal name", "..", "marketplace", "path traversal"},
+		{"leading dot name", ".hidden", "marketplace", "dots must separate"},
+		{"trailing dot name", "plugin.", "marketplace", "dots must separate"},
+		{"double dot name", "plugin..name", "marketplace", "dots must separate"},
 	}
 	for _, tc := range invalidTests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,13 +73,15 @@ func TestParsePluginId(t *testing.T) {
 	}{
 		{"simple", "github@openai-curated", "github", "openai-curated", false, ""},
 		{"multiple at signs", "github@openai-curated@extra", "", "", true, "only ASCII"},
-		{"empty", "", "", "", true, "must not be empty"},
+		{"empty", "", "", "", true, "expected <plugin>@<marketplace>"},
 		{"no at", "github", "", "", true, "expected <plugin>@<marketplace>"},
 		{"empty name", "@openai-curated", "", "", true, "expected <plugin>@<marketplace>"},
 		{"empty marketplace", "github@", "", "", true, "expected <plugin>@<marketplace>"},
-		{"invalid name chars", "github.extra@marketplace", "", "", true, "only ASCII"},
+		{"dotted name", "github.extra@marketplace", "github.extra", "marketplace", false, ""},
+		{"traversal name", "..@marketplace", "", "", true, "path traversal"},
+		{"untrimmed key", " github@marketplace", "", "", true, "only ASCII"},
 		{"just at sign", "@", "", "", true, "expected <plugin>@<marketplace>"},
-		{"spaces only", "  ", "", "", true, "must not be empty"},
+		{"spaces only", "  ", "", "", true, "expected <plugin>@<marketplace>"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,9 +145,9 @@ func TestPluginIdClone(t *testing.T) {
 
 func TestValidatePluginSegment(t *testing.T) {
 	tests := []struct {
-		segment  string
-		kind     string
-		wantErr  bool
+		segment string
+		kind    string
+		wantErr bool
 	}{
 		{"valid-name", "test", false},
 		{"Valid_Name_123", "test", false},
@@ -150,6 +158,14 @@ func TestValidatePluginSegment(t *testing.T) {
 		{"invalid.dot", "test", true},
 		{"invalid@at", "test", true},
 		{"non-ASCII-é", "test", true},
+		{"plugin.dotted", "plugin name", false},
+		{"com.example.tool", "plugin name", false},
+		{"..", "plugin name", true},
+		{".", "plugin name", true},
+		{".leading", "plugin name", true},
+		{"trailing.", "plugin name", true},
+		{"double..dot", "plugin name", true},
+		{"market.place", "marketplace name", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.segment, func(t *testing.T) {
@@ -161,6 +177,30 @@ func TestValidatePluginSegment(t *testing.T) {
 				t.Fatalf("ValidatePluginSegment(%q, %q) error = %v", tc.segment, tc.kind, err)
 			}
 		})
+	}
+}
+
+// TestIsValidRemotePluginIDMatchesRust mirrors
+// codex_core_plugins::remote::is_valid_remote_plugin_id: only ASCII letters,
+// digits, '_', '-', and '~' are allowed, and the value is not trimmed.
+func TestIsValidRemotePluginIDMatchesRust(t *testing.T) {
+	for _, testCase := range []struct {
+		id   string
+		want bool
+	}{
+		{id: "plugins~Plugin_box", want: true},
+		{id: "plugin_box-1", want: true},
+		{id: "abc123", want: true},
+		{id: "", want: false},
+		{id: " ", want: false},
+		{id: " plugin_box ", want: false},
+		{id: "box@local", want: false},
+		{id: "plugin.box", want: false},
+		{id: "pluginé", want: false},
+	} {
+		if got := IsValidRemotePluginID(testCase.id); got != testCase.want {
+			t.Fatalf("IsValidRemotePluginID(%q) = %v, want %v", testCase.id, got, testCase.want)
+		}
 	}
 }
 

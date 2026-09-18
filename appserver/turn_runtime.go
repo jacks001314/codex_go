@@ -69,6 +69,11 @@ type activeRuntimeTurn struct {
 	// (Rust TurnMetadataState::mark_user_input_requested_during_turn). The
 	// thread manager's turn lock guards it.
 	UserInputRequested bool
+	// PluginInventoryCaptured records that the turn's active-plugin inventory was
+	// observed when the turn was admitted, and PluginInventory holds it (Rust
+	// #46323 keeps the first received inventory).
+	PluginInventoryCaptured bool
+	PluginInventory         *[]string
 }
 
 // markTurnUserInputRequested records Rust's
@@ -6239,17 +6244,20 @@ type appTurnRunConfig struct {
 	GuardianV2Enabled       bool
 	SandboxPolicy           string
 	SandboxNetworkAccess    bool
-	CollaborationMode       string
-	Personality             string
-	InputItems              []any
-	HostedTools             []any
-	SessionItems            []session.Item
-	ExtraSessionItems       func() []session.Item
-	PostToolInputItems      turn.ToolPostExecutionInputItems
-	PreviousResponseID      string
-	ParallelToolCalls       bool
-	ReasoningEffort         string
-	ReasoningSummary        string
+	// ActivePluginIDsAtTurnStart is the turn-start plugin inventory captured for
+	// turn analytics (Rust #46323). nil means the inventory was not observed.
+	ActivePluginIDsAtTurnStart *[]string
+	CollaborationMode          string
+	Personality                string
+	InputItems                 []any
+	HostedTools                []any
+	SessionItems               []session.Item
+	ExtraSessionItems          func() []session.Item
+	PostToolInputItems         turn.ToolPostExecutionInputItems
+	PreviousResponseID         string
+	ParallelToolCalls          bool
+	ReasoningEffort            string
+	ReasoningSummary           string
 	// OverrideInputItems holds trusted reasoning-effort configuration_update
 	// items this turn should record after accepted input (Rust #43110).
 	OverrideInputItems              []any
@@ -6511,28 +6519,31 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	overrideInputItems := r.reasoningEffortOverrideInputItems(threadID, reasoningEffortModel, overrideEffort, overrideAvailable, historyItems)
 	requestReasoningEffort := r.reasoningEffortForRequest(threadID, reasoningEffortModel, appReasoningEffortForTurn(cfg, params), reasoningEffortFeature, overrideEffort, overrideAvailable, requestEffortSampling)
 	return &appTurnRunConfig{
-		Model:                           modelProviderConfig.Model,
-		AutoReviewModelOverride:         autoReviewModelOverride,
-		ToolMode:                        toolMode,
-		DisableCodeModeFallback:         cfg.DisableCodeModeInProcessFallback(),
-		ProviderID:                      modelProviderConfig.ProviderID,
-		Instructions:                    instructions,
-		Originator:                      strings.TrimSpace(params.Originator),
-		SessionID:                       firstNonEmpty(lineage.SessionID, threadSnapshot.SessionID, threadID),
-		ThreadSource:                    lineage.ThreadSource,
-		SubagentSource:                  lineage.SubagentKind,
-		ParentThreadID:                  lineage.ParentThreadID,
-		ParentTurnID:                    strings.TrimSpace(params.ParentTurnID),
-		RootTurnID:                      effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, lineage.SubagentHeader),
-		Ephemeral:                       threadSnapshot.Ephemeral,
-		WorkspaceKind:                   strings.TrimSpace(extraMetadata["workspace_kind"]),
-		NumInputImages:                  countTurnStartInputImages(params),
-		IsFirstTurn:                     threadSnapshot.IsFirstTurn,
-		ApprovalPolicy:                  string(approvalPolicy),
-		ApprovalsReviewer:               approvalsReviewer,
-		GuardianV2Enabled:               features.Enabled(cfg.FeatureSettings(), "guardianv2"),
-		SandboxPolicy:                   analyticsSandboxPolicy(permissionProfile, cwd),
-		SandboxNetworkAccess:            analyticsSandboxNetworkAccess(permissionProfile),
+		Model:                   modelProviderConfig.Model,
+		AutoReviewModelOverride: autoReviewModelOverride,
+		ToolMode:                toolMode,
+		DisableCodeModeFallback: cfg.DisableCodeModeInProcessFallback(),
+		ProviderID:              modelProviderConfig.ProviderID,
+		Instructions:            instructions,
+		Originator:              strings.TrimSpace(params.Originator),
+		SessionID:               firstNonEmpty(lineage.SessionID, threadSnapshot.SessionID, threadID),
+		ThreadSource:            lineage.ThreadSource,
+		SubagentSource:          lineage.SubagentKind,
+		ParentThreadID:          lineage.ParentThreadID,
+		ParentTurnID:            strings.TrimSpace(params.ParentTurnID),
+		RootTurnID:              effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, lineage.SubagentHeader),
+		Ephemeral:               threadSnapshot.Ephemeral,
+		WorkspaceKind:           strings.TrimSpace(extraMetadata["workspace_kind"]),
+		NumInputImages:          countTurnStartInputImages(params),
+		IsFirstTurn:             threadSnapshot.IsFirstTurn,
+		ApprovalPolicy:          string(approvalPolicy),
+		ApprovalsReviewer:       approvalsReviewer,
+		GuardianV2Enabled:       features.Enabled(cfg.FeatureSettings(), "guardianv2"),
+		SandboxPolicy:           analyticsSandboxPolicy(permissionProfile, cwd),
+		SandboxNetworkAccess:    analyticsSandboxNetworkAccess(permissionProfile),
+		// The inventory is captured when the turn is admitted so a later plugin
+		// reconciliation cannot change what the turn started with (Rust #46323).
+		ActivePluginIDsAtTurnStart:      r.turnAnalyticsPluginInventory(threadID, turnID),
 		CollaborationMode:               analyticsCollaborationMode(params),
 		Personality:                     analyticsOptionalModeString(personality),
 		InputItems:                      inputItems,
@@ -6981,6 +6992,7 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		ApprovalsReviewer:                    firstNonEmpty(runConfig.ApprovalsReviewer, "user"),
 		GuardianV2Enabled:                    runConfig.GuardianV2Enabled,
 		SandboxNetworkAccess:                 runConfig.SandboxNetworkAccess,
+		ActivePluginIDsAtTurnStart:           runConfig.ActivePluginIDsAtTurnStart,
 		CollaborationMode:                    stringPtrIfNotEmpty(firstNonEmpty(runConfig.CollaborationMode, "default")),
 		Personality:                          stringPtrIfNotEmpty(runConfig.Personality),
 		WorkspaceKind:                        stringPtrIfNotEmpty(runConfig.WorkspaceKind),
