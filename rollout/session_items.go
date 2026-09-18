@@ -1630,6 +1630,7 @@ func markRolloutMCPItem(out *session.Item, raw map[string]any) {
 	copyFirstRolloutValue(out.Data, raw, "arguments", "arguments")
 	copyFirstRolloutValue(out.Data, raw, "appContext", "appContext", "app_context")
 	copyFirstRolloutValue(out.Data, raw, "mcpAppResourceUri", "mcpAppResourceUri", "mcp_app_resource_uri")
+	copyFirstRolloutValue(out.Data, raw, "mcpAppUi", "mcpAppUi", "mcp_app_ui")
 	copyFirstRolloutValue(out.Data, raw, "pluginId", "pluginId", "plugin_id")
 	copyFirstRolloutValue(out.Data, raw, "result", "result")
 	copyFirstRolloutValue(out.Data, raw, "error", "error")

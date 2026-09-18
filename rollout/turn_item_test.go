@@ -253,3 +253,62 @@ func TestPublicThreadItemJSONFromCoreConvertsUserInputAndMemoryCitation(t *testi
 		t.Fatalf("user public wire = %s", raw)
 	}
 }
+
+// TestMCPAppUISurvivesTheRolloutRoundTrip mirrors Rust #45805: the widget
+// presentation captured from the invoked descriptor is written to the rollout
+// and restored on resume, including the legacy resource-URI and app-context
+// fields clients still read.
+func TestMCPAppUISurvivesTheRolloutRoundTrip(t *testing.T) {
+	now := time.Date(2026, 8, 16, 1, 2, 3, 0, time.UTC)
+	item := session.Item{
+		ID: "call-calendar", Type: "function_call", Name: "create_event", CallID: "call-calendar",
+		Text: `{"title":"standup"}`, CreatedAt: now,
+		Data: map[string]any{
+			"mcpToolCall":       true,
+			"server":            "codex_apps",
+			"tool":              "create_event",
+			"arguments":         `{"title":"standup"}`,
+			"mcpAppResourceUri": "ui://widgets/calendar",
+			"mcpAppUi":          map[string]any{"resourceUri": "ui://widgets/calendar", "preferredModelDisplayMode": "fullscreen"},
+			"connectorId":       "calendar",
+			"linkId":            "link_calendar",
+			"appName":           "Calendar",
+			"actionName":        "create_event",
+		},
+		Metadata: map[string]any{"turnId": "turn-1"},
+	}
+	raw, itemType, err := CoreTurnItemJSONFromSessionItem(&item)
+	if err != nil {
+		t.Fatalf("CoreTurnItemJSONFromSessionItem() error = %v", err)
+	}
+	if itemType == "" {
+		t.Fatalf("CoreTurnItemJSONFromSessionItem() item type = %q", itemType)
+	}
+	var core map[string]any
+	if err := json.Unmarshal(raw, &core); err != nil {
+		t.Fatalf("Unmarshal(core item) error = %v", err)
+	}
+	appUI, ok := core["mcpAppUi"].(map[string]any)
+	if !ok || appUI["resourceUri"] != "ui://widgets/calendar" || appUI["preferredModelDisplayMode"] != "fullscreen" {
+		t.Fatalf("core mcpAppUi = %#v", core["mcpAppUi"])
+	}
+	if core["mcpAppResourceUri"] != "ui://widgets/calendar" || core["linkId"] != "link_calendar" {
+		t.Fatalf("core = %#v", core)
+	}
+	public, _, _, err := PublicThreadItemJSONFromCore(raw)
+	if err != nil {
+		t.Fatalf("PublicThreadItemJSONFromCore() error = %v", err)
+	}
+	var publicItem map[string]any
+	if err := json.Unmarshal(public, &publicItem); err != nil {
+		t.Fatalf("Unmarshal(public item) error = %v", err)
+	}
+	publicUI, ok := publicItem["mcpAppUi"].(map[string]any)
+	if !ok || publicUI["preferredModelDisplayMode"] != "fullscreen" {
+		t.Fatalf("public mcpAppUi = %#v (item = %s)", publicItem["mcpAppUi"], public)
+	}
+	publicContext, ok := publicItem["appContext"].(map[string]any)
+	if !ok || publicContext["connectorId"] != "calendar" || publicContext["actionName"] != "create_event" {
+		t.Fatalf("public appContext = %#v", publicItem["appContext"])
+	}
+}

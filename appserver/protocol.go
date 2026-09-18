@@ -1105,6 +1105,7 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			Arguments         any     `json:"arguments"`
 			AppContext        any     `json:"appContext"`
 			MCPAppResourceURI *string `json:"mcpAppResourceUri,omitempty"`
+			MCPAppUI          any     `json:"mcpAppUi"`
 			PluginID          *string `json:"pluginId"`
 			ReadOnlyHint      *bool   `json:"readOnlyHint"`
 			Result            any     `json:"result"`
@@ -1119,6 +1120,7 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			Arguments:         threadItemJSONValueFromData(i.Data, "arguments", "input", "rawArguments", "raw_arguments"),
 			AppContext:        threadItemMCPAppContext(i),
 			MCPAppResourceURI: threadItemStringPtrFromData(i.Data, "mcpAppResourceUri", "mcp_app_resource_uri"),
+			MCPAppUI:          threadItemMCPAppUI(i),
 			PluginID:          threadItemStringPtrFromData(i.Data, "pluginId", "plugin_id"),
 			ReadOnlyHint:      threadItemBoolPtrFromData(i.Data, "readOnlyHint", "read_only_hint"),
 			Result:            threadItemMCPResult(i),
@@ -4765,6 +4767,39 @@ func threadItemMCPAppContext(item *ThreadItem) any {
 			return value
 		}
 		return threadItemMCPAppContext(&ThreadItem{Data: map[string]any{"appContext": decoded}})
+	}
+}
+
+// threadItemMCPAppUI renders the widget presentation captured from the invoked
+// descriptor (Rust #45805). Older history and tools that declare widgets only in
+// result metadata report null, so clients keep using catalog discovery.
+func threadItemMCPAppUI(item *ThreadItem) any {
+	if item == nil {
+		return nil
+	}
+	value := threadItemAnyFromData(item.Data, "mcpAppUi", "mcp_app_ui")
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case mcp.McpAppUI:
+		return typed
+	case *mcp.McpAppUI:
+		if typed == nil {
+			return nil
+		}
+		return typed
+	case map[string]any:
+		return mcp.MCPAppUIFromMetadataMap(typed)
+	default:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return nil
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return nil
+		}
+		return mcp.MCPAppUIFromMetadataMap(decoded)
 	}
 }
 

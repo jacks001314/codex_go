@@ -326,6 +326,11 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	if e.readOnlyHint != nil {
 		data["read_only_hint"] = *e.readOnlyHint
 	}
+	// Rust #45805: carry the invoked descriptor's widget presentation so clients
+	// can render MCP apps without waiting for the catalog, and the trusted Codex
+	// Apps connector/link/action identity that only the codex_apps server may
+	// contribute.
+	ApplyMCPAppOutputMetadata(data, e.resolvedServerName(), e.toolInfo.Meta, e.connectorID, e.connectorName)
 	if rewrittenArguments != nil {
 		data[openAIFileHookInputKey] = rewrittenArguments
 	}

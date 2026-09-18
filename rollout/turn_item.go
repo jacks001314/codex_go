@@ -566,6 +566,7 @@ func populateCoreMCP(core map[string]any, item *session.Item, values map[string]
 	appContext := mapFromAny(firstAny(values, "appContext", "app_context"))
 	copyOptional(core, "connectorId", firstNonNil(firstAny(values, "connectorId", "connector_id"), firstAny(appContext, "connectorId", "connector_id")))
 	copyOptional(core, "mcpAppResourceUri", firstNonNil(firstAny(values, "mcpAppResourceUri", "mcp_app_resource_uri"), firstAny(appContext, "resourceUri", "resource_uri")))
+	copyOptional(core, "mcpAppUi", firstNonNil(firstAny(values, "mcpAppUi", "mcp_app_ui"), firstAny(appContext, "mcpAppUi", "mcp_app_ui")))
 	copyOptional(core, "linkId", firstNonNil(firstAny(values, "linkId", "link_id"), firstAny(appContext, "linkId", "link_id")))
 	copyOptional(core, "appName", firstNonNil(firstAny(values, "appName", "app_name"), firstAny(appContext, "appName", "app_name")))
 	copyOptional(core, "actionName", firstNonNil(firstAny(values, "actionName", "action_name"), firstAny(appContext, "actionName", "action_name")))
@@ -593,6 +594,7 @@ func populatePublicMCP(out, core map[string]any) {
 		out["appContext"] = map[string]any{"connectorId": connector, "linkId": nullableAny(core, "linkId", "link_id"), "resourceUri": nullableAny(core, "mcpAppResourceUri", "mcp_app_resource_uri"), "appName": nullableAny(core, "appName", "app_name"), "actionName": nullableAny(core, "actionName", "action_name")}
 	}
 	out["mcpAppResourceUri"] = nullableAny(core, "mcpAppResourceUri", "mcp_app_resource_uri")
+	out["mcpAppUi"] = nullableAny(core, "mcpAppUi", "mcp_app_ui")
 	out["pluginId"] = nullableAny(core, "pluginId", "plugin_id")
 	out["readOnlyHint"] = nullableAny(core, "readOnlyHint", "read_only_hint")
 	out["result"] = publicMCPResult(firstAny(core, "result"))

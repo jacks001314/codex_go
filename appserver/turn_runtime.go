@@ -6011,6 +6011,7 @@ func sessionItemForAppToolCall(turnID string, execution *turn.ToolExecutionResul
 			callData["tool"] = toolName
 		}
 		markMCPToolData(callData, execution.Invocation.ToolName)
+		applyMCPAppMetadata(callData, execution.Output.Data)
 	}
 	if appToolOutputIsDynamic(execution.Output) {
 		markDynamicToolData(callData, execution.Invocation.ToolName)
@@ -10731,6 +10732,68 @@ func markMCPToolData(data map[string]any, name tool.ToolName) {
 		data["tool"] = name.Name
 	}
 	data["mcpToolCall"] = true
+}
+
+// applyMCPAppMetadata copies the executed call's captured MCP app metadata into
+// the thread item (Rust #45805): the widget presentation (`mcpAppUi` plus the
+// legacy `mcpAppResourceUri`) and the trusted Codex Apps connector context. The
+// executor only writes those keys for the servers allowed to contribute them.
+func applyMCPAppMetadata(data map[string]any, output map[string]any) {
+	if data == nil || output == nil {
+		return
+	}
+	if appUI := mcpAppUIFromOutput(output); appUI != nil {
+		data["mcpAppUi"] = *appUI
+		if strings.TrimSpace(appUI.ResourceURI) != "" {
+			data["mcpAppResourceUri"] = strings.TrimSpace(appUI.ResourceURI)
+		}
+	}
+	connectorID := strings.TrimSpace(stringFromMap(output, "connector_id"))
+	connectorName := strings.TrimSpace(stringFromMap(output, "connector_name"))
+	linkID := strings.TrimSpace(stringFromMap(output, "link_id"))
+	actionName := strings.TrimSpace(stringFromMap(output, "action_name"))
+	if connectorID == "" && connectorName == "" && linkID == "" && actionName == "" {
+		return
+	}
+	context := map[string]any{"connectorId": connectorID}
+	if linkID != "" {
+		context["linkId"] = linkID
+	}
+	if connectorName != "" {
+		context["appName"] = connectorName
+	}
+	if actionName != "" {
+		context["actionName"] = actionName
+	}
+	if current := strings.TrimSpace(stringFromMap(data, "mcpAppResourceUri")); current != "" {
+		context["resourceUri"] = current
+	}
+	data["appContext"] = context
+}
+
+// mcpAppUIFromOutput reads the executor's captured widget presentation, which it
+// attaches either as the typed value or as a decoded metadata map.
+func mcpAppUIFromOutput(output map[string]any) *mcp.McpAppUI {
+	switch typed := output["mcp_app_ui"].(type) {
+	case nil:
+		return nil
+	case *mcp.McpAppUI:
+		return typed
+	case mcp.McpAppUI:
+		return &typed
+	case map[string]any:
+		return mcp.MCPAppUIFromMetadataMap(typed)
+	default:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return nil
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return nil
+		}
+		return mcp.MCPAppUIFromMetadataMap(decoded)
+	}
 }
 
 func markDynamicToolData(data map[string]any, name tool.ToolName) {
