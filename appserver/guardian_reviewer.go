@@ -41,10 +41,10 @@ type modelGuardianReviewer struct {
 	interrupt         func(threadID, turnID string)
 	transcript        func(threadID string) []string
 	// reviewModel resolves the catalog-backed reviewer selection for the
-	// reviewed turn: the model and its request-level reasoning effort (Rust's
-	// resolve_review_model / select_review_model, #46292).
-	reviewModel                func(threadID, turnID string) model.ApprovalReviewModel
-	autoReviewMessages         func(threadID, turnID string) *model.AutoReviewMessages
+	// reviewed turn: the model, its request-level reasoning effort, and the
+	// reviewer's policy instructions (Rust's resolve_review_model /
+	// select_review_model plus build_guardian_review_session_config).
+	reviewPlan                 func(threadID, turnID string) guardianReviewPlan
 	specialty                  func(threadID, turnID string) string
 	nodeReplAutoReviewRequired func(threadID, turnID string) bool
 	fullAccess                 func(threadID, turnID string) bool
@@ -477,12 +477,13 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			inputItems = append(inputItems, item)
 		}
 	}
-	selection := r.selectionForTurn(threadID, turnID)
+	plan := r.planForTurn(threadID, turnID)
 	reviewRequest := &model.AgentRequest{
 		Prompt:          prompt,
+		Instructions:    plan.Instructions,
 		InputItems:      inputItems,
-		Model:           selection.Model,
-		ReasoningEffort: selection.ReasoningEffort,
+		Model:           plan.Selection.Model,
+		ReasoningEffort: plan.Selection.ReasoningEffort,
 		TaskKind:        model.AgentTaskReview,
 		ThreadID:        threadID,
 		TurnID:          turnID,
@@ -515,7 +516,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			attribution.TerminalStatus = "timed_out"
 			attribution.FailureReason = "timeout"
 			emitReviewMetrics()
-			timeoutMessage := guardianTimeoutMessage(r.autoReviewMessagesForTurn(threadID, turnID))
+			timeoutMessage := guardianTimeoutMessage(plan.AutoReview)
 			r.emitWarning(threadID, timeoutMessage)
 			return state.DecisionTimedOut, timeoutMessage, finishErr
 		}
@@ -587,16 +588,9 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	emitReviewMetrics()
 	rationale := assessment.Rationale
 	if decision == state.DecisionDenied {
-		rationale = guardianRejectionMessage(r.autoReviewMessagesForTurn(threadID, turnID), rationale)
+		rationale = guardianRejectionMessage(plan.AutoReview, rationale)
 	}
 	return decision, rationale, nil
-}
-
-func (r *modelGuardianReviewer) autoReviewMessagesForTurn(threadID, turnID string) *model.AutoReviewMessages {
-	if r == nil || r.autoReviewMessages == nil {
-		return nil
-	}
-	return r.autoReviewMessages(threadID, turnID)
 }
 
 // reviewClientMetadata builds the guardian review request's client metadata.
@@ -645,19 +639,19 @@ func guardianTimeoutMessage(messages *model.AutoReviewMessages) string {
 	return state.GuardianTimeoutMessage()
 }
 
-// selectionForTurn resolves the reviewer selection the review request uses. A
-// reviewer without a resolver keeps the pre-selection shape: no explicit model
-// or effort, so the agent's own default applies.
-func (r *modelGuardianReviewer) selectionForTurn(threadID, turnID string) model.ApprovalReviewModel {
-	if r == nil || r.reviewModel == nil {
-		return model.ApprovalReviewModel{}
+// planForTurn resolves the reviewer plan the review request uses. A reviewer
+// without a resolver keeps the pre-selection shape: no explicit model, effort,
+// or instructions, so the agent's own defaults apply.
+func (r *modelGuardianReviewer) planForTurn(threadID, turnID string) guardianReviewPlan {
+	if r == nil || r.reviewPlan == nil {
+		return guardianReviewPlan{}
 	}
-	return r.reviewModel(threadID, turnID)
+	return r.reviewPlan(threadID, turnID)
 }
 
 // modelForTurn keeps the model-only view used by review metrics and telemetry.
 func (r *modelGuardianReviewer) modelForTurn(threadID, turnID string) string {
-	return strings.TrimSpace(r.selectionForTurn(threadID, turnID).Model)
+	return strings.TrimSpace(r.planForTurn(threadID, turnID).Selection.Model)
 }
 
 func (r *modelGuardianReviewer) emit(threadID string, event *state.Event) {

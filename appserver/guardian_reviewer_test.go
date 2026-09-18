@@ -440,6 +440,134 @@ func TestGuardianReviewRequestUsesSelectedModelAndEffortLikeRust(t *testing.T) {
 	}
 }
 
+// TestGuardianReviewRequestCarriesThePolicyInstructionsLikeRust mirrors Rust
+// build_guardian_review_session_config: a review's base instructions are the
+// resolved policy substituted into the resolved template and terminated by the
+// output contract, read from the reviewer's catalog entry - the review model's
+// when the catalog lists the preferred review model, and the parent's otherwise.
+func TestGuardianReviewRequestCarriesThePolicyInstructionsLikeRust(t *testing.T) {
+	const (
+		threadID    = "thread-review-instructions"
+		turnID      = "turn-review-instructions"
+		parentModel = "gpt-parent"
+	)
+	preferred := model.DefaultApprovalReviewPreferredModel
+	reviewPolicy := "Review model policy."
+	reviewTemplate := "Judge the action against:\n{{ tenant_policy_config }}"
+	parentPolicy := "Parent model policy."
+	parentTemplate := "Parent template:\n{{ tenant_policy_config }}"
+	parentInfo := model.ModelInfo{
+		Slug: parentModel, Visibility: "list", SupportedInAPI: true,
+		ModelMessages: &model.ModelMessages{AutoReview: &model.AutoReviewMessages{
+			Policy:         &parentPolicy,
+			PolicyTemplate: &parentTemplate,
+		}},
+	}
+	reviewInfo := model.ModelInfo{
+		Slug: preferred, Visibility: "list", SupportedInAPI: true,
+		ModelMessages: &model.ModelMessages{AutoReview: &model.AutoReviewMessages{
+			Policy:         &reviewPolicy,
+			PolicyTemplate: &reviewTemplate,
+		}},
+	}
+	tests := []struct {
+		name         string
+		models       []model.ModelInfo
+		wantPolicy   string
+		wantTemplate string
+	}{
+		{
+			name:         "review model entry wins",
+			models:       []model.ModelInfo{parentInfo, reviewInfo},
+			wantPolicy:   reviewPolicy,
+			wantTemplate: reviewTemplate,
+		},
+		{
+			name:         "catalog without the review model falls back to the parent",
+			models:       []model.ModelInfo{parentInfo},
+			wantPolicy:   parentPolicy,
+			wantTemplate: parentTemplate,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var captured *model.AgentRequest
+			agent := guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+				copyRequest := *request
+				captured = &copyRequest
+				return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"instructions"}`}, nil
+			})
+			router := NewRuntimeRouter(RuntimeServices{
+				Agent:        agent,
+				Models:       model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: testCase.models})),
+				ThreadStatus: NewThreadStatusManager(),
+			})
+			if err := router.registerActiveRuntimeTurn(threadID, turnID, func() {}, time.Now().UnixMilli(), &turn.TurnStartParams{
+				ThreadID: threadID,
+				Model:    parentModel,
+			}); err != nil {
+				t.Fatalf("register active turn: %v", err)
+			}
+			router.updateActiveRuntimeTurnAnalytics(threadID, turnID, "", &appTurnRunConfig{Model: parentModel})
+			reviewer := router.ensureGuardianReviewer(agent)
+			if _, _, err := reviewer.Review(context.Background(), threadID, turnID, "call-instructions", state.Action{
+				Type: "mcp_tool_call", Server: "apps", ToolName: "calendar",
+			}); err != nil {
+				t.Fatalf("Guardian review error = %v", err)
+			}
+			want := state.RenderGuardianPolicyInstructions(testCase.wantPolicy, testCase.wantTemplate, state.GuardianOutputContractPrompt())
+			if captured == nil || captured.Instructions != want {
+				t.Fatalf("Guardian instructions = %q, want %q", instructionsOrEmpty(captured), want)
+			}
+		})
+	}
+}
+
+func instructionsOrEmpty(request *model.AgentRequest) string {
+	if request == nil {
+		return ""
+	}
+	return request.Instructions
+}
+
+// TestGuardianReviewInstructionsPrecedenceLikeRust pins the effective-text
+// precedence Rust applies in build_guardian_review_session_config: the managed
+// or configured policy wins over the catalog's, the catalog's wins over the
+// bundled templates, and the output contract always terminates the result.
+func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
+	contract := state.GuardianOutputContractPrompt()
+	// No catalog and no config keeps the bundled documents.
+	bundled := guardianReviewInstructions(nil, nil)
+	wantBundled := state.RenderGuardianPolicyInstructions(state.GuardianPolicy(), state.GuardianPolicyTemplate(), contract)
+	if bundled != wantBundled {
+		t.Fatalf("bundled instructions drifted:\n%q\nwant\n%q", bundled, wantBundled)
+	}
+	if !strings.Contains(bundled, contract) || !strings.Contains(bundled, "## Environment Profile") {
+		t.Fatalf("bundled instructions = %q", bundled)
+	}
+
+	// The catalog's policy and template win over the bundled ones.
+	policy := "Catalog policy."
+	template := "Catalog template:\n{{ tenant_policy_config }}"
+	catalog := guardianReviewInstructions(nil, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template})
+	if want := state.RenderGuardianPolicyInstructions(policy, template, contract); catalog != want {
+		t.Fatalf("catalog instructions = %q, want %q", catalog, want)
+	}
+
+	// The managed policy wins over the catalog's, and the configured template
+	// is used as-is.
+	managed := "Managed policy."
+	configuredTemplate := "Configured template:\n{{ tenant_policy_config }}"
+	cfg := &config.Config{
+		Values:       map[string]any{"auto_review": map[string]any{"experimental_policy_template": configuredTemplate}},
+		Requirements: &config.ConfigRequirements{GuardianPolicyConfig: &managed},
+	}
+	overridden := guardianReviewInstructions(cfg, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template})
+	if want := state.RenderGuardianPolicyInstructions(managed, configuredTemplate, contract); overridden != want {
+		t.Fatalf("configured instructions = %q, want %q", overridden, want)
+	}
+}
+
 func TestModelGuardianReviewerMapsTimeout(t *testing.T) {
 	reviewer := &modelGuardianReviewer{
 		timeout: time.Millisecond,
@@ -516,8 +644,8 @@ func TestModelGuardianReviewerUsesModelSpecificAutoReviewInstructionsLikeRust(t 
 	messages := &model.AutoReviewMessages{RejectionInstructions: &rejection, TimeoutInstructions: &timeout}
 	reviewer := &modelGuardianReviewer{
 		store: state.NewReviewStore(), breaker: state.NewCircuitBreaker(),
-		autoReviewMessages: func(threadID, turnID string) *model.AutoReviewMessages {
-			return messages
+		reviewPlan: func(threadID, turnID string) guardianReviewPlan {
+			return guardianReviewPlan{AutoReview: messages}
 		},
 		agent: guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
 			return &model.AgentResponse{Message: `{"riskLevel":"high","userAuthorization":"low","outcome":"deny","rationale":"risky"}`}, nil
@@ -533,8 +661,8 @@ func TestModelGuardianReviewerUsesModelSpecificAutoReviewInstructionsLikeRust(t 
 
 	timeoutReviewer := &modelGuardianReviewer{
 		timeout: time.Millisecond,
-		autoReviewMessages: func(threadID, turnID string) *model.AutoReviewMessages {
-			return messages
+		reviewPlan: func(threadID, turnID string) guardianReviewPlan {
+			return guardianReviewPlan{AutoReview: messages}
 		},
 		agent: guardianAgentFunc(func(ctx context.Context, _ *model.AgentRequest) (*model.AgentResponse, error) {
 			<-ctx.Done()

@@ -1189,6 +1189,47 @@ func (c *Config) GuardianV2MaxParentCompactionTokens() int {
 	return int(value)
 }
 
+// GuardianPolicyConfig mirrors Rust Config::guardian_policy_config: the managed
+// `guardian_policy_config` requirement wins over the `[auto_review] policy`
+// config value, and a value that normalizes to empty is treated as unset so the
+// lower-priority layer can still apply.
+func (c *Config) GuardianPolicyConfig() (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	if c.Requirements != nil && c.Requirements.GuardianPolicyConfig != nil {
+		if value := strings.TrimSpace(*c.Requirements.GuardianPolicyConfig); value != "" {
+			return value, true
+		}
+	}
+	return autoReviewConfigValue(c.Values, "policy")
+}
+
+// GuardianPolicyTemplate mirrors Rust Config::guardian_policy_template
+// (`[auto_review] experimental_policy_template`): the full reviewer prompt
+// template whose `{{ tenant_policy_config }}` placeholder receives the resolved
+// policy.
+func (c *Config) GuardianPolicyTemplate() (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	return autoReviewConfigValue(c.Values, "experimental_policy_template")
+}
+
+// autoReviewConfigValue reads a normalized `[auto_review]` string value.
+func autoReviewConfigValue(values map[string]any, key string) (string, bool) {
+	autoReview, ok := values["auto_review"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	value, ok := autoReview[key].(string)
+	if !ok {
+		return "", false
+	}
+	value = strings.TrimSpace(value)
+	return value, value != ""
+}
+
 // GuardianV2MaxToolCallLag returns the configured
 // [features.guardianv2].max_tool_call_lag bound and whether it was set,
 // mirroring Rust GuardianV2Config::max_tool_call_lag (#39001, a `usize`

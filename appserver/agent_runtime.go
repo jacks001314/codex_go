@@ -13,6 +13,7 @@ import (
 	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/session"
+	"codex_go/state"
 	"codex_go/turn"
 )
 
@@ -114,8 +115,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.notify = r.notifyGuardianReviewEvent
 		modelReviewer.interrupt = r.interruptTurnForGuardianCircuitBreaker
 		modelReviewer.transcript = r.guardianReviewTranscript
-		modelReviewer.reviewModel = r.guardianReviewSelectionForTurn
-		modelReviewer.autoReviewMessages = r.guardianReviewAutoReviewMessagesForTurn
+		modelReviewer.reviewPlan = r.guardianReviewPlanForTurn
 		modelReviewer.specialty = r.guardianReviewModelSpecialtyForTurn
 		modelReviewer.maxToolCallLagFor = r.guardianMaxToolCallLagForTurn
 		modelReviewer.nodeReplAutoReviewRequired = r.guardianReviewNodeReplAutoReviewRequiredForTurn
@@ -294,14 +294,25 @@ func sessionItemIsUserMessage(item *session.Item) bool {
 	}
 }
 
-// guardianReviewSelectionForTurn mirrors Rust resolve_review_model: every review
+// guardianReviewPlan is what one review attempt needs from the reviewed turn:
+// Rust resolve_review_model's selection, the catalog messages the reviewer
+// reads (guardian_model_info), and the base instructions
+// build_guardian_review_session_config renders from them.
+type guardianReviewPlan struct {
+	Selection    model.ApprovalReviewModel
+	AutoReview   *model.AutoReviewMessages
+	Instructions string
+}
+
+// guardianReviewPlanForTurn mirrors Rust resolve_review_model: every review
 // attempt resolves the reviewer from the parent turn's model and effort plus the
-// current catalog, so a review samples with the selected review model and its
-// request-level reasoning effort (Rust #46292).
-func (r *RuntimeRouter) guardianReviewSelectionForTurn(threadID, turnID string) model.ApprovalReviewModel {
+// current catalog, so a review samples with the selected review model, its
+// request-level reasoning effort (#46292), and the reviewer's policy
+// instructions.
+func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guardianReviewPlan {
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 	if active == nil || active.RunConfig == nil {
-		return model.ApprovalReviewModel{}
+		return guardianReviewPlan{}
 	}
 	cfg, _ := r.effectiveConfigForTurn(active.Params)
 	parentModel := strings.TrimSpace(firstNonEmpty(active.RunConfig.Model, turnParamModel(active.Params)))
@@ -312,18 +323,63 @@ func (r *RuntimeRouter) guardianReviewSelectionForTurn(threadID, turnID string) 
 			AutoReviewModelOverride: strings.TrimSpace(active.RunConfig.AutoReviewModelOverride),
 		}
 	}
-	return model.SelectApprovalReviewModel(
+	selection := model.SelectApprovalReviewModel(
 		parentInfo,
 		appReasoningEffortForTurn(cfg, active.Params),
 		r.guardianReviewPreferredModel(cfg, active.Params),
 		r.requireModels().Presets(model.RefreshOffline),
 	)
+	// Rust resolve_review_model returns the reviewer's catalog entry as a second
+	// value: the review model's entry when the catalog lists the preferred
+	// review model or the parent model overrode it, and the parent's otherwise.
+	catalogInfo := parentInfo
+	if selection.Model != "" && (selection.CatalogContainsAutoReview || selection.ModelOverridden) {
+		if info := r.modelInfoForRuntimeWithConfig(selection.Model, cfg); info != nil {
+			catalogInfo = info
+		}
+	}
+	var autoReview *model.AutoReviewMessages
+	if catalogInfo != nil && catalogInfo.ModelMessages != nil && catalogInfo.ModelMessages.AutoReview != nil {
+		cloned := *catalogInfo.ModelMessages.AutoReview
+		autoReview = &cloned
+	}
+	return guardianReviewPlan{
+		Selection:    selection,
+		AutoReview:   autoReview,
+		Instructions: guardianReviewInstructions(cfg, autoReview),
+	}
+}
+
+// guardianReviewInstructions mirrors the reviewer base instructions Rust builds
+// in build_guardian_review_session_config: the resolved policy substituted into
+// the resolved policy template and terminated by the output contract. The
+// catalog wins over the bundled templates and the managed/config policy wins
+// over both.
+func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReviewMessages) string {
+	policy, policyTemplate := state.GuardianPolicy(), state.GuardianPolicyTemplate()
+	if autoReview != nil {
+		if autoReview.Policy != nil {
+			policy = *autoReview.Policy
+		}
+		if autoReview.PolicyTemplate != nil {
+			policyTemplate = *autoReview.PolicyTemplate
+		}
+	}
+	if cfg != nil {
+		if value, ok := cfg.GuardianPolicyConfig(); ok {
+			policy = value
+		}
+		if value, ok := cfg.GuardianPolicyTemplate(); ok {
+			policyTemplate = value
+		}
+	}
+	return state.RenderGuardianPolicyInstructions(policy, policyTemplate, state.GuardianOutputContractPrompt())
 }
 
 // guardianReviewModelForTurn keeps the model-only view used by the review
 // catalog-hash and specialty helpers.
 func (r *RuntimeRouter) guardianReviewModelForTurn(threadID, turnID string) string {
-	return strings.TrimSpace(r.guardianReviewSelectionForTurn(threadID, turnID).Model)
+	return strings.TrimSpace(r.guardianReviewPlanForTurn(threadID, turnID).Selection.Model)
 }
 
 // guardianReviewPreferredModel mirrors Rust

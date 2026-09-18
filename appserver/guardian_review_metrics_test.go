@@ -123,8 +123,8 @@ func TestModelGuardianReviewerEmitsMetricsLikeRust(t *testing.T) {
 				Usage:   model.AgentUsage{InputTokens: 10, CachedInputTokens: 4, OutputTokens: 3, ReasoningOutputTokens: 2, TotalTokens: 13},
 			}, nil
 		})},
-		reviewModel: func(string, string) model.ApprovalReviewModel {
-			return model.ApprovalReviewModel{Model: "gpt-5-guardian"}
+		reviewPlan: func(string, string) guardianReviewPlan {
+			return guardianReviewPlan{Selection: model.ApprovalReviewModel{Model: "gpt-5-guardian"}}
 		},
 		metrics: metrics,
 	}

@@ -578,6 +578,11 @@ type ConfigRequirements struct {
 	CliAuthCredentialsStore         *AuthCredentialsStoreMode `json:"cliAuthCredentialsStore,omitempty"`
 	ChatgptBaseURL                  *string                   `json:"chatgptBaseUrl,omitempty"`
 	AdditionalDeveloperInstructions *string                   `json:"additionalDeveloperInstructions,omitempty"`
+	// GuardianPolicyConfig is the managed `guardian_policy_config` requirement
+	// (Rust ConfigRequirementsToml.guardian_policy_config): it replaces the
+	// `# Policy Configuration` section of the Guardian reviewer prompt. Like
+	// Permissions it is internal and not part of the app-server wire schema.
+	GuardianPolicyConfig *string `json:"-"`
 	// ModelProvider is the exact provider selection required by managed
 	// policy (Rust #44650).
 	ModelProvider *string `json:"modelProvider,omitempty"`
@@ -3688,6 +3693,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.FeatureRequirements = cloneBoolMap(requirements.FeatureRequirements)
 	clone.DefaultPermissions = cloneStringPtr(requirements.DefaultPermissions)
 	clone.AdditionalDeveloperInstructions = cloneStringPtr(requirements.AdditionalDeveloperInstructions)
+	clone.GuardianPolicyConfig = cloneStringPtr(requirements.GuardianPolicyConfig)
 	clone.AllowManagedHooksOnly = cloneBoolPtr(requirements.AllowManagedHooksOnly)
 	clone.AllowBrowserAndComputerUse = cloneBoolPtr(requirements.AllowBrowserAndComputerUse)
 	clone.AllowAppshots = cloneBoolPtr(requirements.AllowAppshots)
