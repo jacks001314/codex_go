@@ -1,6 +1,7 @@
 package bottompane
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -45,7 +46,11 @@ const (
 // and its draft answer. SelectedOption indexes the suggested options, with
 // len(Options) selecting the appended Other choice.
 type PendingAsyncQuestion struct {
-	MessageID      string
+	MessageID string
+	// QuestionID is the desktop's stable per-question identity, the JSON
+	// encoding of ["request_user_input_async", message id, question index]
+	// (Rust #46486).
+	QuestionID     string
 	Question       AsyncUserInputQuestion
 	SelectedOption int
 	Draft          string
@@ -56,15 +61,28 @@ type PendingAsyncQuestion struct {
 
 // AsyncQuestions is the locally retained async-question editor state.
 type AsyncQuestions struct {
-	pending  []PendingAsyncQuestion
-	current  int
-	seen     map[string]struct{}
+	pending []PendingAsyncQuestion
+	current int
+	seen    map[string]struct{}
+	// answered retains question identities answered on another client so
+	// replay (or a late live event) cannot reopen them (Rust #46486).
+	answered map[string]struct{}
 	expanded bool
 }
 
 // NewAsyncQuestions returns empty async-question state.
 func NewAsyncQuestions() *AsyncQuestions {
-	return &AsyncQuestions{seen: map[string]struct{}{}}
+	return &AsyncQuestions{seen: map[string]struct{}{}, answered: map[string]struct{}{}}
+}
+
+// asyncQuestionIdentity mirrors the desktop's JSON.stringify([tool name, item
+// id, question index]) identity (Rust #46486).
+func asyncQuestionIdentity(messageID string, index int) string {
+	encoded, err := json.Marshal([]any{"request_user_input_async", messageID, index})
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 // ParseAsyncUserInputQuestions decodes the structured question payload carried
@@ -162,17 +180,101 @@ func (q *AsyncQuestions) AppendAt(messageID string, questions []AsyncUserInputQu
 	if !q.expanded {
 		expiresAt = now.Add(asyncQuestionAutoResolveWindow)
 	}
-	for _, question := range questions {
+	grew := false
+	for index, question := range questions {
+		// A question already answered on another client (by identity, or by an
+		// older reply naming only its source message) must not reopen.
+		questionID := asyncQuestionIdentity(messageID, index)
+		if _, ok := q.answered[questionID]; ok {
+			continue
+		}
+		if messageID != "" {
+			if _, ok := q.answered[messageID]; ok {
+				continue
+			}
+		}
 		q.pending = append(q.pending, PendingAsyncQuestion{
-			MessageID: messageID,
-			Question:  filterAsyncUserInputQuestionOptions(question),
-			ExpiresAt: expiresAt,
+			MessageID:  messageID,
+			QuestionID: questionID,
+			Question:   filterAsyncUserInputQuestionOptions(question),
+			ExpiresAt:  expiresAt,
 		})
+		grew = true
 	}
 	if wasEmpty {
 		q.current = 0
 	}
-	return true
+	return grew
+}
+
+// ResolveAsyncQuestionAnswers mirrors Rust's AsyncQuestions::resolve_answers
+// (#46486): committed desktop replies resolve the questions they name, an older
+// reply that names only its source message resolves that whole message, and the
+// answered identities stay recorded so replay cannot reopen them. It reports
+// whether any pending question was resolved, and whether the focused question
+// was among them (the caller then re-syncs the composer).
+func (q *AsyncQuestions) ResolveAsyncQuestionAnswers(questionIDs []string) (bool, bool) {
+	if q == nil || len(questionIDs) == 0 {
+		return false, false
+	}
+	if q.answered == nil {
+		q.answered = map[string]struct{}{}
+	}
+	resolved := make(map[string]struct{}, len(questionIDs))
+	for _, id := range questionIDs {
+		if id = strings.TrimSpace(id); id == "" {
+			continue
+		}
+		q.answered[id] = struct{}{}
+		resolved[id] = struct{}{}
+	}
+	if len(resolved) == 0 {
+		return false, false
+	}
+	isAnswered := func(question PendingAsyncQuestion) bool {
+		if _, ok := resolved[question.QuestionID]; ok {
+			return true
+		}
+		if question.MessageID == "" {
+			return false
+		}
+		_, ok := resolved[question.MessageID]
+		return ok
+	}
+	hadPending := false
+	for _, question := range q.pending {
+		if isAnswered(question) {
+			hadPending = true
+			break
+		}
+	}
+	if !hadPending {
+		return false, false
+	}
+	currentAnswered := q.current >= 0 && q.current < len(q.pending) && isAnswered(q.pending[q.current])
+	// Keep the cursor on the nearest preceding unanswered question.
+	current := 0
+	for index := 0; index < q.current && index < len(q.pending); index++ {
+		if !isAnswered(q.pending[index]) {
+			current++
+		}
+	}
+	kept := make([]PendingAsyncQuestion, 0, len(q.pending))
+	for _, question := range q.pending {
+		if !isAnswered(question) {
+			kept = append(kept, question)
+		}
+	}
+	q.pending = kept
+	if current < len(q.pending) {
+		q.current = current
+	} else {
+		q.current = 0
+	}
+	if len(q.pending) == 0 {
+		q.expanded = false
+	}
+	return true, currentAnswered
 }
 
 // HasSeen reports whether a message ID was already consumed by Append.
@@ -206,6 +308,16 @@ func (q *AsyncQuestions) CurrentQuestion() (AsyncUserInputQuestion, bool) {
 		return AsyncUserInputQuestion{}, false
 	}
 	return q.pending[q.current].Question, true
+}
+
+// CurrentQuestionID returns the focused question's stable desktop identity, or
+// an empty string when no question is focused or the identity cannot be
+// encoded.
+func (q *AsyncQuestions) CurrentQuestionID() string {
+	if q == nil || q.current < 0 || q.current >= len(q.pending) {
+		return ""
+	}
+	return q.pending[q.current].QuestionID
 }
 
 // filterAsyncUserInputQuestionOptions bounds model-authored suggestions before
@@ -558,21 +670,19 @@ func (q *AsyncQuestions) currentDraft() string {
 	return q.pending[q.current].Draft
 }
 
-// BuildAsyncQuestionAnswer mirrors Rust's
-// AsyncQuestions::go_next_or_submit: trim the draft, prepend the bounded
-// AnsweredQuestion framing, and enforce the user-input character limit on the
-// whole message. It returns ready=false when the answer is empty, and
-// tooLong=true (with the remaining limit for the footer flash) when it does not
-// fit.
-func BuildAsyncQuestionAnswer(question AsyncUserInputQuestion, draft string) (answer string, limit int, ready bool, tooLong bool) {
-	framing := context.NewAnsweredQuestion(question.Title).Body()
-	limit = turn.MaxUserInputTextChars - utf8.RuneCountInString(framing)
+// BuildAsyncQuestionAnswer mirrors Rust's AsyncQuestions::go_next_or_submit
+// (#46486): trim the draft, render the answer through the desktop reply
+// envelope with the question's stable identity, and reject the whole reply when
+// it exceeds the user-input character limit (JSON escaping included). It
+// returns ready=false when the answer is empty.
+func BuildAsyncQuestionAnswer(questionID string, question AsyncUserInputQuestion, draft string) (reply string, ready bool, tooLong bool) {
 	text := strings.TrimSpace(draft)
-	if utf8.RuneCountInString(text) > limit {
-		return "", limit, false, true
-	}
 	if text == "" {
-		return "", limit, false, false
+		return "", false, false
 	}
-	return framing + text, limit, true, false
+	reply = context.Render(context.NewAnsweredQuestion(questionID, question.Title, text)).Content
+	if utf8.RuneCountInString(reply) > turn.MaxUserInputTextChars {
+		return "", false, true
+	}
+	return reply, true, false
 }

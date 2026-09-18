@@ -383,6 +383,11 @@ func applyBufferedThreadItemToMessages(messages []codextui.Message, item *protoc
 		if text == "" {
 			return messages
 		}
+		// Rust #46486: a desktop async-question reply renders as readable
+		// question-and-answer text instead of the raw reply envelope.
+		if display, ok := codextui.AsyncQuestionReplyDisplayText(text); ok {
+			text = display
+		}
 		return append(messages, codextui.Message{Role: codextui.RoleUser, Text: text, RawText: text})
 	case "agent_message":
 		return mergeAssistantFinalToMessages(messages, item.Text)

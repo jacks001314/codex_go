@@ -534,38 +534,71 @@ type ModelSwitchInstructions struct {
 	Instructions string
 }
 
-// AnsweredQuestion mirrors Rust's context-fragments AnsweredQuestion: bounded
-// framing that accompanies an explicitly submitted user answer without
-// repeating an unbounded model-authored prompt (#6ae8dcf6e1).
+// AnsweredQuestion mirrors Rust's context-fragments AnsweredQuestion: an
+// explicitly submitted answer uses the desktop's existing reply envelope and a
+// stable question identity (#46486), while an oversized identity falls back to
+// the previous plain-text framing so the model-authored prompt stays bounded.
 type AnsweredQuestion struct {
-	Question string
+	// QuestionID is nil for the plain-text fallback (an identity longer than
+	// answeredQuestionMaxBytes).
+	QuestionID *string
+	Question   string
+	Answer     string
 }
 
-// answeredQuestionMaxBytes bounds the question framing to 512 UTF-8 bytes.
+// answeredQuestionMaxBytes bounds both the question framing and the accepted
+// question identity to 512 UTF-8 bytes.
 const answeredQuestionMaxBytes = 512
 
-func NewAnsweredQuestion(question string) *AnsweredQuestion {
+// answeredQuestionMarkers wrap the desktop reply envelope.
+const (
+	answeredQuestionOpenMarker  = "<send_user_message_question_reply>"
+	answeredQuestionCloseMarker = "</send_user_message_question_reply>"
+)
+
+// NewAnsweredQuestion builds the answer fragment for one question identity.
+func NewAnsweredQuestion(questionID string, question string, answer string) *AnsweredQuestion {
 	end := floorCharBoundary(question, minInt(len(question), answeredQuestionMaxBytes))
-	return &AnsweredQuestion{Question: question[:end]}
+	trimmed := strings.NewReplacer("\n", " ", "\r", " ").Replace(question[:end])
+	fragment := &AnsweredQuestion{Question: trimmed, Answer: answer}
+	if len(questionID) <= answeredQuestionMaxBytes {
+		id := questionID
+		fragment.QuestionID = &id
+	}
+	return fragment
 }
 
 func (a *AnsweredQuestion) Role() string {
 	return RoleUser
 }
 
-// Markers are empty: the answered-question framing is unmarked, so it never
-// matches arbitrary text (Rust ContextualUserFragment::type_markers).
+// Markers carry the desktop reply envelope when the question identity is known;
+// the fallback framing stays unmarked so it never matches arbitrary text.
 func (a *AnsweredQuestion) Markers() (string, string) {
+	if a != nil && a.QuestionID != nil {
+		return answeredQuestionOpenMarker, answeredQuestionCloseMarker
+	}
 	return "", ""
 }
 
 func (a *AnsweredQuestion) Body() string {
-	question := ""
-	if a != nil {
-		question = a.Question
+	if a == nil {
+		return ""
 	}
-	question = strings.NewReplacer("\n", " ", "\r", " ").Replace(question)
-	return "> " + question + "\n\n"
+	if a.QuestionID == nil {
+		return "> " + a.Question + "\n\n" + a.Answer
+	}
+	// The payload is the desktop's reply envelope; the keys are emitted in the
+	// same order Rust's serde_json map produces.
+	payload, err := json.Marshal([]map[string]string{{
+		"answer":         a.Answer,
+		"question":       a.Question,
+		"questionItemId": *a.QuestionID,
+	}})
+	if err != nil {
+		return "> " + a.Question + "\n\n" + a.Answer
+	}
+	return "\n" + string(payload) + "\n"
 }
 
 func (a *AnsweredQuestion) ContentKind() string {

@@ -944,7 +944,12 @@ func (b *rolloutReplayBuilder) handleTurnStarted(payload rolloutEventPayload, li
 
 func (b *rolloutReplayBuilder) handleTurnComplete(payload rolloutEventPayload) {
 	turnID := firstNonEmptyString(payload.TurnID, payload.TurnIDCamel)
-	errorMessage, codexErrorInfo, hasTerminalError := rolloutEventError(payload.Error)
+	errorMessage, codexErrorInfo, hasTerminalError, readable := rolloutEventError(payload.Error)
+	if !readable {
+		// Rust #46482: a known classification with an invalid payload makes the
+		// saved record unreadable, so the completion is not applied.
+		return
+	}
 	if b.current != nil && turnID != "" && b.current.snapshot.ID != turnID && strings.HasPrefix(b.current.snapshot.ID, "rollout-") {
 		b.current.snapshot.ID = turnID
 	}
@@ -1015,7 +1020,10 @@ func (b *rolloutReplayBuilder) handleTurnAborted(payload rolloutEventPayload, li
 }
 
 func (b *rolloutReplayBuilder) handleTurnError(payload rolloutEventPayload, lineIndex int) {
-	errorMessage, codexErrorInfo, _ := rolloutEventError(payload.Error)
+	errorMessage, codexErrorInfo, _, readable := rolloutEventError(payload.Error)
+	if !readable {
+		return
+	}
 	message := firstNonEmptyString(payload.Message, errorMessage)
 	turn := b.ensureTurn(lineIndex)
 	turn.snapshot.Status = "failed"
@@ -1024,15 +1032,15 @@ func (b *rolloutReplayBuilder) handleTurnError(payload rolloutEventPayload, line
 	turn.openedExplicitly = true
 }
 
-func rolloutEventError(raw json.RawMessage) (message string, codexErrorInfo any, present bool) {
+func rolloutEventError(raw json.RawMessage) (message string, codexErrorInfo any, present bool, readable bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return "", nil, false
+		return "", nil, false, true
 	}
 	present = true
 	var text string
 	if err := json.Unmarshal(trimmed, &text); err == nil {
-		return text, nil, true
+		return text, nil, true, true
 	}
 	var value struct {
 		Message             string `json:"message"`
@@ -1040,12 +1048,14 @@ func rolloutEventError(raw json.RawMessage) (message string, codexErrorInfo any,
 		CodexErrorInfoCamel any    `json:"codexErrorInfo"`
 	}
 	if err := json.Unmarshal(trimmed, &value); err != nil {
-		return "", nil, true
+		return "", nil, true, true
 	}
-	if value.CodexErrorInfo != nil {
-		return value.Message, value.CodexErrorInfo, true
+	classification := value.CodexErrorInfo
+	if classification == nil {
+		classification = value.CodexErrorInfoCamel
 	}
-	return value.Message, value.CodexErrorInfoCamel, true
+	normalized, readable := normalizeCodexErrorInfoClassification(classification)
+	return value.Message, normalized, true, readable
 }
 
 func (b *rolloutReplayBuilder) handleItemCompleted(payload rolloutEventPayload, line *Line, lineIndex int) {

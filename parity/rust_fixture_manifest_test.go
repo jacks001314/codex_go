@@ -118,8 +118,10 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			},
 		},
 		{
-			Path:  "tui/src/chatwidget/tests",
-			Files: 86,
+			Path: "tui/src/chatwidget/tests",
+			// Upstream grew the chatwidget suite with the async question reply
+			// coverage (#46486).
+			Files: 89,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -130,7 +132,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tui/src/chatwidget/tests/snapshots",
-			Files: 46,
+			Files: 49,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{

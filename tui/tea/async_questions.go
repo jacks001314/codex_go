@@ -208,6 +208,38 @@ func (m *Model) navigateAsyncQuestions(forward bool) {
 	}
 }
 
+// resolveAsyncQuestionsFromReplyText drops the pending questions a committed
+// desktop reply answers, mirroring Rust's AsyncQuestions::resolve_answers
+// (#46486). It reports whether any question was resolved.
+func (m *Model) resolveAsyncQuestionsFromReplyText(text string) bool {
+	if m == nil {
+		return false
+	}
+	replies := codextui.ParseAsyncQuestionReplies(text)
+	if len(replies) == 0 {
+		return false
+	}
+	ids := make([]string, 0, len(replies))
+	for _, reply := range replies {
+		if id := strings.TrimSpace(reply.QuestionItemID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return false
+	}
+	resolved, currentAnswered := m.asyncQuestions.ResolveAsyncQuestionAnswers(ids)
+	if !resolved {
+		return false
+	}
+	// Only an answered focused question re-syncs the composer (Rust flushes the
+	// pending input there), so an unstored draft for another question survives.
+	if currentAnswered && m.asyncQuestions.UnansweredCount() > 0 {
+		m.composer.SetValue(m.asyncQuestions.CurrentDraft())
+	}
+	return true
+}
+
 // advanceAsyncQuestionsOrRestoreQueued mirrors Rust #42903: forward navigation
 // from the last question collapses the editor and hands the key to the
 // queued-message edit so the latest queued message becomes the main draft. It
@@ -288,6 +320,7 @@ func (m *Model) submitAsyncQuestionAnswer(queue bool) bubbletea.Cmd {
 	if !ok {
 		return nil
 	}
+	questionID := m.asyncQuestions.CurrentQuestionID()
 	text, ready := m.asyncQuestions.AnswerText(m.composer.Value())
 	if !ready {
 		return nil
@@ -296,9 +329,9 @@ func (m *Model) submitAsyncQuestionAnswer(queue bool) bubbletea.Cmd {
 		m.notice = "Expand terminal to read the entire option"
 		return nil
 	}
-	answer, limit, ready, tooLong := bottompane.BuildAsyncQuestionAnswer(question, text)
+	answer, ready, tooLong := bottompane.BuildAsyncQuestionAnswer(questionID, question, text)
 	if tooLong {
-		m.notice = "Answer too long; limit " + strconv.Itoa(limit) + " characters"
+		m.notice = "Answer too long; shorten it before sending"
 		return nil
 	}
 	if !ready {
@@ -354,6 +387,13 @@ func (m *Model) appendBufferedAsyncQuestions(events []protocol.ThreadEvent) {
 			continue
 		}
 		item := event.Item
+		// Rust #46486: a committed reply envelope from another client resolves
+		// the questions it names before any late question event arrives.
+		if strings.EqualFold(strings.TrimSpace(item.Type), "user_message") ||
+			strings.EqualFold(strings.TrimSpace(item.Type), "userMessage") {
+			m.resolveAsyncQuestionsFromReplyText(firstNonEmpty(item.Text, item.Message))
+			continue
+		}
 		if !strings.EqualFold(strings.TrimSpace(item.Type), "agent_message") {
 			continue
 		}

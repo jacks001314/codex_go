@@ -253,11 +253,23 @@ func UserMessageForRestore(message UserMessage, record UserMessageHistoryRecord)
 	if record.Kind == UserMessageHistoryOverride && record.Text != "" {
 		message.Text = record.Text
 		message.TextElements = cloneTextElements(record.TextElements)
+		return message
+	}
+	// Rust #46486: a stored desktop reply envelope restores as readable
+	// question-and-answer text, and its element spans no longer apply.
+	if display, ok := codextui.AsyncQuestionReplyDisplayText(message.Text); ok {
+		message.Text = display
+		message.TextElements = nil
 	}
 	return message
 }
 
 func UserMessageDisplayForHistory(message UserMessage, record UserMessageHistoryRecord) UserMessageDisplay {
+	// Rust #46486: an authentic user message renders as committed, while an
+	// override restores the recorded text first.
+	if record.Kind == UserMessageHistoryText {
+		return UserMessageDisplayFromParts(message)
+	}
 	return UserMessageDisplayFromParts(UserMessageForRestore(message, record))
 }
 
@@ -288,6 +300,10 @@ func UserMessageDisplayFromParts(message UserMessage) UserMessageDisplay {
 func UserMessagePreviewText(message UserMessage, record *UserMessageHistoryRecord) string {
 	if record != nil && record.Kind == UserMessageHistoryOverride && record.Text != "" {
 		return record.Text
+	}
+	// Rust #46486: queue and steer previews show the readable reply text.
+	if display, ok := codextui.AsyncQuestionReplyDisplayText(message.Text); ok {
+		return display
 	}
 	return message.Text
 }

@@ -9,6 +9,51 @@ import (
 	"codex_go/turn"
 )
 
+// TestUserMessageReplyEnvelopeRendersAsTextLikeRust mirrors Rust #46486: a
+// stored desktop reply envelope renders as readable question-and-answer text in
+// the transcript, previews, and restored history, while an explicit override
+// still wins.
+func TestUserMessageReplyEnvelopeRendersAsTextLikeRust(t *testing.T) {
+	envelope := "<send_user_message_question_reply>\n" +
+		`[{"answer":"Postgres","question":"Which database?","questionItemId":"[\"request_user_input_async\",\"message\",0]"}]` +
+		"\n</send_user_message_question_reply>"
+	message := UserMessage{Text: envelope, TextElements: []turn.TextElement{{ByteRange: turn.ByteRange{Start: 0, End: 4}}}}
+
+	// An authentic committed message is rendered as stored (Rust's
+	// user_message_display_for_history keeps UserMessageText unchanged); the
+	// readable text comes from the restore and preview paths below.
+	if display := UserMessageDisplayForHistory(message, UserMessageTextHistoryRecord()); display.Message != envelope {
+		t.Fatalf("committed display text = %q", display.Message)
+	}
+	restored := UserMessageForRestore(message, UserMessageTextHistoryRecord())
+	if restored.Text != "> Which database?\n\nPostgres" || len(restored.TextElements) != 0 {
+		t.Fatalf("restored message = %#v", restored)
+	}
+	restoredOverride := UserMessageForRestore(message, UserMessageOverrideHistoryRecord(""))
+	if restoredOverride.Text != "> Which database?\n\nPostgres" || len(restoredOverride.TextElements) != 0 {
+		t.Fatalf("empty-override restore = %#v", restoredOverride)
+	}
+	if got := UserMessagePreviewText(message, nil); got != "> Which database?\n\nPostgres" {
+		t.Fatalf("preview text = %q", got)
+	}
+	// An override with text still wins over the envelope rendering.
+	override := UserMessageOverrideHistoryRecord("edited prompt")
+	if got := UserMessagePreviewText(message, &override); got != "edited prompt" {
+		t.Fatalf("override preview = %q", got)
+	}
+	if restored := UserMessageForRestore(message, override); restored.Text != "edited prompt" {
+		t.Fatalf("override restore = %#v", restored)
+	}
+	// An ordinary message is untouched.
+	plain := UserMessage{Text: "hello"}
+	if got := UserMessagePreviewText(plain, nil); got != "hello" {
+		t.Fatalf("plain preview = %q", got)
+	}
+	if display := UserMessageDisplayForHistory(plain, UserMessageTextHistoryRecord()); display.Message != "hello" {
+		t.Fatalf("plain display = %q", display.Message)
+	}
+}
+
 func TestUserMessagePreviewText(t *testing.T) {
 	message := UserMessage{
 		Text:            "core text",

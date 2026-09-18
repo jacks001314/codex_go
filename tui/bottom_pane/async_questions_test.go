@@ -190,34 +190,106 @@ func TestAsyncQuestionsSetExpandedRefusesEmptyState(t *testing.T) {
 
 func TestBuildAsyncQuestionAnswerFramesAndBoundsTheAnswer(t *testing.T) {
 	question := AsyncUserInputQuestion{Title: "Which database?"}
-	answer, limit, ready, tooLong := BuildAsyncQuestionAnswer(question, "  Postgres  ")
+	reply, ready, tooLong := BuildAsyncQuestionAnswer("question-id", question, "  Postgres  ")
 	if !ready || tooLong {
 		t.Fatalf("ready=%v tooLong=%v", ready, tooLong)
 	}
-	if answer != "> Which database?\n\nPostgres" {
-		t.Fatalf("answer = %q", answer)
+	if !strings.HasPrefix(reply, "<send_user_message_question_reply>\n") ||
+		!strings.HasSuffix(reply, "\n</send_user_message_question_reply>") {
+		t.Fatalf("reply = %q", reply)
 	}
-	framing := "> Which database?\n\n"
-	if limit != turn.MaxUserInputTextChars-len([]rune(framing)) {
-		t.Fatalf("limit = %d", limit)
+	if !strings.Contains(reply, `"answer":"Postgres"`) ||
+		!strings.Contains(reply, `"question":"Which database?"`) ||
+		!strings.Contains(reply, `"questionItemId":"question-id"`) {
+		t.Fatalf("reply envelope = %q", reply)
 	}
 
-	if _, _, ready, tooLong := BuildAsyncQuestionAnswer(question, "   "); ready || tooLong {
+	if _, ready, tooLong := BuildAsyncQuestionAnswer("question-id", question, "   "); ready || tooLong {
 		t.Fatalf("blank drafts must not submit: ready=%v tooLong=%v", ready, tooLong)
 	}
 
-	overflow := strings.Repeat("x", limit+1)
-	_, gotLimit, ready, tooLong := BuildAsyncQuestionAnswer(question, overflow)
-	if ready || !tooLong || gotLimit != limit {
-		t.Fatalf("oversized answer = (ready=%v, tooLong=%v, limit=%d)", ready, tooLong, gotLimit)
+	// The limit is enforced on the rendered reply, so JSON escaping counts.
+	overflow := strings.Repeat("x", turn.MaxUserInputTextChars)
+	if _, ready, tooLong := BuildAsyncQuestionAnswer("question-id", question, overflow); ready || !tooLong {
+		t.Fatalf("oversized answer = (ready=%v, tooLong=%v)", ready, tooLong)
 	}
 
-	// The framing flattens line breaks and bounds the question title at a UTF-8
-	// boundary so the rendered markdown cannot be broken by the model's prompt.
+	// The question is flattened and bounded so the envelope cannot be broken by
+	// the model's prompt.
 	multiline := AsyncUserInputQuestion{Title: "Line one\nLine two\r\nLine three"}
-	framed, _, _, _ := BuildAsyncQuestionAnswer(multiline, "answer")
-	if !strings.HasPrefix(framed, "> Line one Line two  Line three\n\n") {
+	framed, _, _ := BuildAsyncQuestionAnswer("id", multiline, "answer")
+	if !strings.Contains(framed, `"question":"Line one Line two  Line three"`) {
 		t.Fatalf("framed multiline answer = %q", framed)
+	}
+
+	// An oversized identity keeps the plain-text framing instead of an envelope.
+	plain, _, _ := BuildAsyncQuestionAnswer(strings.Repeat("i", 513), question, "answer")
+	if plain != "> Which database?\n\nanswer" {
+		t.Fatalf("oversized identity reply = %q", plain)
+	}
+}
+
+// TestAsyncQuestionsResolveAnswersLikeRust mirrors Rust #46486's
+// answered_questions_do_not_reopen_when_history_precedes_local_drafts: a
+// committed reply resolves its question by identity, an older reply naming only
+// the source message resolves that whole message, and an unknown id changes
+// nothing.
+func TestAsyncQuestionsResolveAnswersLikeRust(t *testing.T) {
+	untouched := NewAsyncQuestions()
+	untouched.AppendAt("message", []AsyncUserInputQuestion{{Title: "First"}, {Title: "Second"}}, time.Now())
+	if resolved, _ := untouched.ResolveAsyncQuestionAnswers([]string{"unknown"}); resolved {
+		t.Fatal("an unknown identity resolved a question")
+	}
+	if untouched.UnansweredCount() != 2 {
+		t.Fatalf("pending = %d, want 2", untouched.UnansweredCount())
+	}
+
+	// History can precede the live questions: the identity is remembered, so a
+	// later arrival of the same question does not reopen it.
+	state := NewAsyncQuestions()
+	state.ResolveAsyncQuestionAnswers([]string{asyncQuestionIdentity("message", 0)})
+	state.AppendAt("message", []AsyncUserInputQuestion{{Title: "First"}, {Title: "Second"}}, time.Now())
+	if state.UnansweredCount() != 1 {
+		t.Fatalf("pending = %d, want only the unanswered question", state.UnansweredCount())
+	}
+	if question, ok := state.CurrentQuestion(); !ok || question.Title != "Second" {
+		t.Fatalf("focused question = %#v, %v", question, ok)
+	}
+	// An unrelated identity leaves the surviving question and its focus intact.
+	if resolved, _ := state.ResolveAsyncQuestionAnswers([]string{asyncQuestionIdentity("other", 0)}); resolved {
+		t.Fatal("an unrelated identity resolved the surviving question")
+	}
+	if state.UnansweredCount() != 1 || state.CurrentIndex() != 0 {
+		t.Fatalf("unrelated resolution changed the state: %+v", state)
+	}
+	// The legacy reply names only the source message, which resolves the rest.
+	if resolved, currentAnswered := state.ResolveAsyncQuestionAnswers([]string{"message"}); !resolved || !currentAnswered {
+		t.Fatal("the legacy message-scoped reply did not resolve")
+	}
+	if state.UnansweredCount() != 0 || state.Expanded() {
+		t.Fatalf("state after resolving = %+v", state)
+	}
+}
+
+// TestOversizedQuestionIDsKeepQuestionsAnswerableLikeRust mirrors Rust's
+// oversized_question_ids_keep_questions_answerable_without_echoing_the_id: an
+// over-long identity still submits the plain-text framing.
+func TestOversizedQuestionIDsKeepQuestionsAnswerableLikeRust(t *testing.T) {
+	state := NewAsyncQuestions()
+	state.AppendAt(strings.Repeat("x", 1024), []AsyncUserInputQuestion{{Title: "Question"}}, time.Now())
+	if state.UnansweredCount() != 1 {
+		t.Fatalf("pending = %d, want 1", state.UnansweredCount())
+	}
+	question, ok := state.CurrentQuestion()
+	if !ok {
+		t.Fatal("question was not retained")
+	}
+	reply, ready, tooLong := BuildAsyncQuestionAnswer(state.CurrentQuestionID(), question, "Answer")
+	if !ready || tooLong {
+		t.Fatalf("ready=%v tooLong=%v", ready, tooLong)
+	}
+	if reply != "> Question\n\nAnswer" {
+		t.Fatalf("reply = %q, want the plain-text framing without the id", reply)
 	}
 }
 

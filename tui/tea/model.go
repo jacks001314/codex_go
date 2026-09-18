@@ -4534,6 +4534,10 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	}
 	switch item.Type {
 	case "user_message", "userMessage":
+		// Rust #46486: a reply envelope committed by another client resolves the
+		// questions it answers, even when questions of identical titles are
+		// still pending locally.
+		m.resolveAsyncQuestionsFromReplyText(firstNonEmpty(item.Text, item.Message))
 		// A realtime delegation prompt marks the active turn as speakable, so
 		// its final answer is voiced into the conversation instead of only
 		// rendered.
@@ -7849,6 +7853,11 @@ func richMessageDisplayLines(message codextui.Message, width int, themeID string
 	case codextui.RoleHistory:
 		return rawLinesTrimmed(text)
 	case codextui.RoleUser:
+		// Rust #46486: a committed desktop reply renders as readable
+		// question-and-answer text rather than the raw reply envelope.
+		if display, ok := codextui.AsyncQuestionReplyDisplayText(text); ok {
+			text = display
+		}
 		cell := historycell.NewUserPrompt(text, nil, nil, nil)
 		return trimBlankDisplayEdges(cell.DisplayLines(width))
 	case codextui.RoleAssistant:

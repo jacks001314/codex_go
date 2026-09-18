@@ -99,9 +99,11 @@ func TestRustEventMsgWireNamesCoverRecordedSurface(t *testing.T) {
 // `threadRollbackFailed` only for legacy rollout/error deserialization after the
 // deprecated thread/rollback API was removed (#44915); Go's app-server no
 // longer has an emitting path for it.
-var rustErrorCodeEmissionGaps = map[string]string{
-	"threadRollbackFailed": "legacy-only error code retained by Rust for historical rollout deserialization after thread/rollback removal (#44915)",
-}
+// rustErrorCodeEmissionGaps is empty: Go now recognizes every documented error
+// code, including the legacy-only `threadRollbackFailed` value that Rust retains
+// for historical rollout deserialization after the thread/rollback removal
+// (#44915), which the rollout reader accepts as a known classification (#46482).
+var rustErrorCodeEmissionGaps = map[string]string{}
 
 // TestRustErrorCodeSurfaceAgainstGo is the L0 enum-inventory check for error
 // codes: every wire value of the app-server v2 CodexErrorInfo and

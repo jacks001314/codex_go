@@ -3,7 +3,9 @@ package model
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -132,13 +134,209 @@ type ProviderAuthRefreshInfo struct {
 	TimeoutMS uint64   `json:"timeout_ms,omitempty"`
 }
 
+// GatewayOAuthConfig mirrors Rust model-provider-info's GatewayOAuthConfig
+// (#46482): secondary OAuth credentials delivered alongside the provider's
+// primary authentication.
+type GatewayOAuthConfig struct {
+	AuthorizationURL string               `json:"authorization_url,omitempty"`
+	TokenURL         string               `json:"token_url,omitempty"`
+	ClientID         string               `json:"client_id,omitempty"`
+	Resource         *string              `json:"resource,omitempty"`
+	Scopes           []string             `json:"scopes,omitempty"`
+	RedirectPort     *uint16              `json:"redirect_port,omitempty"`
+	Delivery         GatewayOAuthDelivery `json:"delivery"`
+}
+
+// GatewayOAuthDelivery is Rust's tagged delivery enum: `{kind: "header", name,
+// scheme}` or `{kind: "cookie", name}`. Scheme defaults to "Bearer" for the
+// header kind.
+type GatewayOAuthDelivery struct {
+	Kind   string `json:"kind"`
+	Name   string `json:"name"`
+	Scheme string `json:"scheme,omitempty"`
+}
+
+// EffectiveHeaderName returns the request header the delivery writes, and an
+// empty string for an unknown kind. It mirrors Rust's `header` computation in
+// GatewayOAuthConfig::validate.
+func (d GatewayOAuthDelivery) EffectiveHeaderName() string {
+	switch d.Kind {
+	case "header":
+		return d.Name
+	case "cookie":
+		return "cookie"
+	}
+	return ""
+}
+
+// HeaderScheme returns the delivery scheme, applying Rust's "Bearer" default.
+func (d GatewayOAuthDelivery) HeaderScheme() string {
+	if d.Kind == "header" && d.Scheme == "" {
+		return "Bearer"
+	}
+	return d.Scheme
+}
+
+// reservedGatewayOAuthHeaders are the authentication, routing/framing and
+// internal protocol headers the delivery must not overwrite.
+var reservedGatewayOAuthHeaders = map[string]bool{
+	"authorization":       true,
+	"proxy-authorization": true,
+	"cookie":              true,
+	"host":                true,
+	"content-length":      true,
+	"transfer-encoding":   true,
+	"connection":          true,
+	"upgrade":             true,
+	"chatgpt-account-id":  true,
+}
+
+var reservedGatewayOAuthHeaderPrefixes = []string{"x-codex-", "x-openai-", "sec-websocket-"}
+
+// Validate mirrors Rust's GatewayOAuthConfig::validate (#46482): the config is
+// rejected when combined with AWS authentication, when an endpoint is not HTTPS
+// (loopback HTTP aside) or carries userinfo or a fragment, when the delivery
+// header/scheme is invalid or reserved, or when the delivery collides with a
+// configured provider header. Error text never echoes the offending URL.
+func (c *GatewayOAuthConfig) Validate(provider *ProviderInfo) error {
+	if c == nil {
+		return nil
+	}
+	if provider == nil {
+		return errors.New("gateway_oauth requires a provider")
+	}
+	if provider.AWS != nil || provider.IsAmazonBedrock() {
+		return errors.New("provider gateway_oauth cannot be combined with AWS authentication")
+	}
+	if err := validateGatewayOAuthURL(c.AuthorizationURL, "gateway_oauth.authorization_url"); err != nil {
+		return err
+	}
+	if err := validateGatewayOAuthURL(c.TokenURL, "gateway_oauth.token_url"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(provider.BaseURL) == "" {
+		return errors.New("gateway_oauth requires base_url")
+	}
+	if err := validateGatewayOAuthURL(provider.BaseURL, "base_url"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(c.ClientID) == "" || (c.RedirectPort != nil && *c.RedirectPort == 0) {
+		return errors.New("gateway_oauth requires a nonempty client_id and a nonzero redirect_port")
+	}
+	header := ""
+	switch c.Delivery.Kind {
+	case "header":
+		if !isGatewayOAuthHeaderName(c.Delivery.Name) {
+			return errors.New("invalid gateway_oauth header name")
+		}
+		scheme := c.Delivery.HeaderScheme()
+		lowered := strings.ToLower(c.Delivery.Name)
+		if !isGatewayOAuthToken(scheme) || reservedGatewayOAuthHeaders[lowered] ||
+			hasGatewayOAuthReservedPrefix(lowered) {
+			return errors.New("invalid or reserved gateway_oauth delivery header or scheme")
+		}
+		header = lowered
+	case "cookie":
+		if !isGatewayOAuthToken(c.Delivery.Name) {
+			return errors.New("invalid gateway_oauth cookie name")
+		}
+		header = "cookie"
+	default:
+		return errors.New("invalid gateway_oauth delivery kind")
+	}
+	for name := range provider.HTTPHeaders {
+		if strings.EqualFold(name, header) {
+			return errors.New("gateway_oauth delivery conflicts with a configured provider header")
+		}
+	}
+	for name := range provider.EnvHTTPHeaders {
+		if strings.EqualFold(name, header) {
+			return errors.New("gateway_oauth delivery conflicts with a configured provider header")
+		}
+	}
+	return nil
+}
+
+func hasGatewayOAuthReservedPrefix(name string) bool {
+	for _, prefix := range reservedGatewayOAuthHeaderPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isGatewayOAuthHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index := 0; index < len(name); index++ {
+		ch := name[index]
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9':
+		case strings.ContainsRune("!#$%&'*+-.^_`|~", rune(ch)):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isGatewayOAuthToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		ch := value[index]
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9':
+		case strings.ContainsRune("!#$%&'*+-.^_`|~", rune(ch)):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validateGatewayOAuthURL mirrors Rust's validate_url: HTTPS, or HTTP for a
+// loopback host, without userinfo or a fragment.
+func validateGatewayOAuthURL(value string, field string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Host == "" {
+		return fmt.Errorf("invalid %s URL", field)
+	}
+	if parsed.User != nil || parsed.Fragment != "" {
+		return fmt.Errorf("%s must use HTTPS (or loopback HTTP), without userinfo or a fragment", field)
+	}
+	switch parsed.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if gatewayOAuthHostIsLoopback(parsed.Hostname()) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s must use HTTPS (or loopback HTTP), without userinfo or a fragment", field)
+}
+
+func gatewayOAuthHostIsLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
 type ProviderInfo struct {
-	Name                        string               `json:"name,omitempty"`
-	BaseURL                     string               `json:"base_url,omitempty"`
-	EnvKey                      string               `json:"env_key,omitempty"`
-	EnvKeyInstructions          string               `json:"env_key_instructions,omitempty"`
-	ExperimentalBearerToken     string               `json:"experimental_bearer_token,omitempty"`
-	Auth                        *ProviderAuthInfo    `json:"auth,omitempty"`
+	Name                    string            `json:"name,omitempty"`
+	BaseURL                 string            `json:"base_url,omitempty"`
+	EnvKey                  string            `json:"env_key,omitempty"`
+	EnvKeyInstructions      string            `json:"env_key_instructions,omitempty"`
+	ExperimentalBearerToken string            `json:"experimental_bearer_token,omitempty"`
+	Auth                    *ProviderAuthInfo `json:"auth,omitempty"`
+	// GatewayOAuth carries secondary OAuth credentials required by the
+	// provider's gateway (Rust #46482).
+	GatewayOAuth                *GatewayOAuthConfig  `json:"gateway_oauth,omitempty"`
 	AWS                         *ProviderAWSAuthInfo `json:"aws,omitempty"`
 	WireAPI                     WireAPI              `json:"wire_api,omitempty"`
 	QueryParams                 map[string]string    `json:"query_params,omitempty"`
@@ -165,6 +363,11 @@ type APIProvider struct {
 }
 
 func (p *ProviderInfo) Validate() error {
+	if p.GatewayOAuth != nil {
+		if err := p.GatewayOAuth.Validate(p); err != nil {
+			return err
+		}
+	}
 	if p.AWS != nil {
 		if p.SupportsWebsockets {
 			return errors.New("provider aws cannot be combined with supports_websockets")

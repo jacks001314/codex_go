@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +61,109 @@ func TestAsyncQuestionsArriveCollapsedWithSummary(t *testing.T) {
 	}
 }
 
+// asyncQuestionReplyPrompt renders the desktop reply envelope a submitted
+// answer carries (Rust #46486), including the stable per-question identity the
+// desktop uses: JSON.stringify(["request_user_input_async", message id, index]).
+func asyncQuestionReplyPrompt(messageID string, index int, question string, answer string) string {
+	identity, _ := json.Marshal([]any{"request_user_input_async", messageID, index})
+	payload, _ := json.Marshal([]map[string]string{{
+		"answer":         answer,
+		"question":       question,
+		"questionItemId": string(identity),
+	}})
+	return "<send_user_message_question_reply>\n" + string(payload) + "\n</send_user_message_question_reply>"
+}
+
+// TestAsyncQuestionsAnsweredOnAnotherClientDismissesLikeRust mirrors Rust
+// #46486: a reply envelope committed by another client dismisses the question it
+// names even when another pending question has an identical title, and the
+// draft of the surviving question is preserved.
+func TestAsyncQuestionsAnsweredOnAnotherClientDismissesLikeRust(t *testing.T) {
+	model := newAsyncQuestionModel()
+	model = feedAsyncQuestions(t, model, "question-1", []any{
+		map[string]any{"title": "Which database?"},
+		map[string]any{"title": "Which database?"},
+	})
+	// Another client answers the first question by its stable identity, so the
+	// identical title of the second question must not match it.
+	updated, _ := model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{
+		Type: "item.completed",
+		Item: &protocol.ThreadItem{
+			ID:   "message-2",
+			Type: "user_message",
+			Text: asyncQuestionReplyPrompt("question-1", 0, "Which database?", "Postgres"),
+		},
+	}})
+	model = updated.(*Model)
+
+	if model.asyncQuestions.UnansweredCount() != 1 {
+		t.Fatalf("pending = %d, want only the unanswered identical-title question", model.asyncQuestions.UnansweredCount())
+	}
+	if question, ok := model.asyncQuestions.CurrentQuestion(); !ok || question.Title != "Which database?" {
+		t.Fatalf("current question = %#v, %v", question, ok)
+	}
+	// The envelope must not leak into the rendered transcript.
+	if view := model.View(); strings.Contains(view, "<send_user_message_question_reply>") {
+		t.Fatalf("the reply envelope leaked into the transcript:\n%s", view)
+	}
+}
+
+// TestBufferedUserMessageRendersReplyEnvelopeAsTextLikeRust mirrors Rust
+// #46486's replay rendering: a buffered reply envelope becomes readable
+// question-and-answer text in the replayed transcript.
+func TestBufferedUserMessageRendersReplyEnvelopeAsTextLikeRust(t *testing.T) {
+	item := &protocol.ThreadItem{
+		ID:   "message-2",
+		Type: "user_message",
+		Text: asyncQuestionReplyPrompt("question-1", 0, "Which database?", "Postgres"),
+	}
+	messages := applyBufferedThreadItemToMessages(nil, item)
+	if len(messages) != 1 || messages[0].Role != codextui.RoleUser {
+		t.Fatalf("buffered messages = %#v", messages)
+	}
+	if messages[0].Text != "> Which database?\n\nPostgres" {
+		t.Fatalf("buffered reply text = %q", messages[0].Text)
+	}
+	// Ordinary user messages are unchanged.
+	plain := applyBufferedThreadItemToMessages(nil, &protocol.ThreadItem{ID: "m", Type: "user_message", Text: "hello"})
+	if len(plain) != 1 || plain[0].Text != "hello" {
+		t.Fatalf("plain buffered messages = %#v", plain)
+	}
+}
+
+// TestAsyncQuestionsAnsweredOnAnotherClientKeepsOtherDraftsLikeRust covers the
+// cross-client dismissal preserving drafts for the remaining questions.
+func TestAsyncQuestionsAnsweredOnAnotherClientKeepsOtherDraftsLikeRust(t *testing.T) {
+	model := newAsyncQuestionModel()
+	model = feedAsyncQuestions(t, model, "question-1", []any{
+		map[string]any{"title": "First question?"},
+		map[string]any{"title": "Second question?"},
+	})
+	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	model = updated.(*Model)
+	// Alt+Up again moves to the second question; draft it, then answer the first
+	// question from another client.
+	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	model = updated.(*Model)
+	if index := model.asyncQuestions.CurrentIndex(); index != 1 {
+		t.Fatalf("focused question = %d, want the second question", index)
+	}
+	for _, r := range "kept draft" {
+		updated, _ = model.Update(keyRunes(r))
+		model = updated.(*Model)
+	}
+	model.resolveAsyncQuestionsFromReplyText(asyncQuestionReplyPrompt("question-1", 0, "First question?", "Answered"))
+	if model.asyncQuestions.UnansweredCount() != 1 {
+		t.Fatalf("pending = %d, want the second question", model.asyncQuestions.UnansweredCount())
+	}
+	if question, ok := model.asyncQuestions.CurrentQuestion(); !ok || question.Title != "Second question?" {
+		t.Fatalf("current question = %#v, %v", question, ok)
+	}
+	if got := model.composer.Value(); got != "kept draft" {
+		t.Fatalf("composer = %q, want the preserved draft", got)
+	}
+}
+
 // TestAsyncQuestionsExpandAnswerAndAdvance covers the full answer flow: Alt+Up
 // focuses the first question, Enter submits the bounded AnsweredQuestion
 // framing, and the next question becomes current.
@@ -91,7 +195,7 @@ func TestAsyncQuestionsExpandAnswerAndAdvance(t *testing.T) {
 	model = updated.(*Model)
 
 	requests := model.SubmittedRequests()
-	if len(requests) != 1 || requests[0].Prompt != "> Which database?\n\nPostgres" {
+	if len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database?", "Postgres") {
 		t.Fatalf("submitted requests = %#v", requests)
 	}
 	if model.asyncQuestions.UnansweredCount() != 1 || !model.asyncQuestions.Expanded() {
@@ -291,7 +395,7 @@ func TestAsyncQuestionsRenderAndSubmitSelectedChoice(t *testing.T) {
 	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
 	model = updated.(*Model)
 	requests := model.SubmittedRequests()
-	if len(requests) != 1 || requests[0].Prompt != "> Which database?\n\nPostgres" {
+	if len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database?", "Postgres") {
 		t.Fatalf("submitted requests = %#v", requests)
 	}
 	if model.asyncQuestions.UnansweredCount() != 0 {
@@ -313,7 +417,7 @@ func TestAsyncQuestionsArrowNavigationSelectsNextChoice(t *testing.T) {
 	}
 	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
 	model = updated.(*Model)
-	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != "> Which database?\n\nSQLite" {
+	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database?", "SQLite") {
 		t.Fatalf("submitted requests = %#v", requests)
 	}
 }
@@ -324,7 +428,7 @@ func TestAsyncQuestionsDigitShortcutSubmitsNamedChoice(t *testing.T) {
 	model := withChoiceQuestion(t)
 	updated, _ := model.Update(keyRunes('2'))
 	model = updated.(*Model)
-	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != "> Which database?\n\nSQLite" {
+	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database?", "SQLite") {
 		t.Fatalf("submitted requests = %#v", requests)
 	}
 	if model.asyncQuestions.UnansweredCount() != 0 {
@@ -347,7 +451,7 @@ func TestAsyncQuestionsTypingOpensOther(t *testing.T) {
 	}
 	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
 	model = updated.(*Model)
-	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != "> Which database?\n\nk" {
+	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database?", "k") {
 		t.Fatalf("submitted requests = %#v", requests)
 	}
 }
@@ -403,7 +507,7 @@ func TestAsyncQuestionsBlockClippedChoice(t *testing.T) {
 	roomy := feed(60)
 	updated, _ = roomy.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
 	roomy = updated.(*Model)
-	if requests := roomy.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != "> Which database should we deploy to production?\n\nPostgres" {
+	if requests := roomy.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database should we deploy to production?", "Postgres") {
 		t.Fatalf("roomy submitted requests = %#v", requests)
 	}
 }

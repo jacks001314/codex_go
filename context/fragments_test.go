@@ -9,27 +9,58 @@ import (
 
 func TestAnsweredQuestionFramingIsBoundedAndKeepsUnicodeBoundaries(t *testing.T) {
 	text := strings.Repeat("é\n", 1000)
-	fragment := NewAnsweredQuestion(text)
+	fragment := NewAnsweredQuestion("[\"request_user_input_async\",\"item\",0]", text, "Staging")
 	rendered := RenderStandalone(fragment)
 	if rendered == nil || rendered.Role != RoleUser || rendered.ContentKind != "user.answered_question" {
 		t.Fatalf("AnsweredQuestion rendered = %#v", rendered)
 	}
-	if len(rendered.Content) > 516 {
-		t.Fatalf("AnsweredQuestion content length = %d, want <= 516", len(rendered.Content))
+	// The model-authored question stays bounded to 512 bytes (line breaks
+	// flattened), and the reply envelope wraps it.
+	if len(fragment.Question) > 512 {
+		t.Fatalf("bounded question length = %d, want <= 512", len(fragment.Question))
 	}
-	want := "> " + strings.ReplaceAll(text[:floorCharBoundary(text, 512)], "\n", " ") + "\n\n"
-	if rendered.Content != want {
-		t.Fatalf("AnsweredQuestion content = %q, want %q", rendered.Content, want)
+	if strings.ContainsAny(fragment.Question, "\n\r") {
+		t.Fatalf("bounded question kept line breaks: %q", fragment.Question)
 	}
-	if open, close := fragment.Markers(); open != "" || close != "" {
-		t.Fatalf("AnsweredQuestion markers = %q/%q, want empty", open, close)
+	open, close := fragment.Markers()
+	if open != answeredQuestionOpenMarker || close != answeredQuestionCloseMarker {
+		t.Fatalf("AnsweredQuestion markers = %q/%q, want the reply envelope", open, close)
+	}
+	if !strings.HasPrefix(rendered.Content, open+"\n") || !strings.HasSuffix(rendered.Content, "\n"+close) {
+		t.Fatalf("AnsweredQuestion content = %q, want the wrapped envelope", rendered.Content)
+	}
+	if !strings.Contains(rendered.Content, `"answer":"Staging"`) ||
+		!strings.Contains(rendered.Content, `"questionItemId":"[\"request_user_input_async\",\"item\",0]"`) {
+		t.Fatalf("AnsweredQuestion envelope = %q", rendered.Content)
 	}
 }
 
 func TestAnsweredQuestionFlattensLineBreaks(t *testing.T) {
-	rendered := RenderStandalone(NewAnsweredQuestion("first\r\nsecond\nthird"))
-	if rendered.Content != "> first  second third\n\n" {
+	rendered := RenderStandalone(NewAnsweredQuestion("id", "first\r\nsecond\nthird", "answer"))
+	if !strings.Contains(rendered.Content, `"question":"first  second third"`) {
 		t.Fatalf("AnsweredQuestion content = %q", rendered.Content)
+	}
+}
+
+// TestAnsweredQuestionFallsBackToPlainTextForOversizedIdentity mirrors Rust
+// #46486: an identity longer than 512 bytes keeps the previous unmarked
+// plain-text framing.
+func TestAnsweredQuestionFallsBackToPlainTextForOversizedIdentity(t *testing.T) {
+	identity := strings.Repeat("i", answeredQuestionMaxBytes+1)
+	fragment := NewAnsweredQuestion(identity, "Which environment?", "Staging")
+	if fragment.QuestionID != nil {
+		t.Fatalf("oversized identity was kept: %q", *fragment.QuestionID)
+	}
+	if open, close := fragment.Markers(); open != "" || close != "" {
+		t.Fatalf("fallback markers = %q/%q, want unmarked", open, close)
+	}
+	if got := RenderStandalone(fragment).Content; got != "> Which environment?\n\nStaging" {
+		t.Fatalf("fallback content = %q", got)
+	}
+	// An identity exactly at the bound is still used.
+	exact := NewAnsweredQuestion(strings.Repeat("i", answeredQuestionMaxBytes), "q", "a")
+	if exact.QuestionID == nil {
+		t.Fatal("an identity at the bound was dropped")
 	}
 }
 

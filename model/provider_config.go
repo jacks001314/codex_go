@@ -234,12 +234,62 @@ func providerInfoFromConfig(values map[string]any, validate bool) (*ProviderInfo
 			}
 		}
 	}
+	if gatewayConfig, ok := configValue(values, "gateway_oauth").(map[string]any); ok {
+		gateway, err := gatewayOAuthConfigFromConfig(gatewayConfig)
+		if err != nil {
+			return nil, err
+		}
+		provider.GatewayOAuth = gateway
+	}
 	if validate {
 		if err := provider.Validate(); err != nil {
 			return nil, err
 		}
 	}
 	return provider, nil
+}
+
+// gatewayOAuthConfigFromConfig parses Rust's GatewayOAuthConfig (#46482) from a
+// model provider configuration table.
+func gatewayOAuthConfigFromConfig(values map[string]any) (*GatewayOAuthConfig, error) {
+	gateway := &GatewayOAuthConfig{
+		AuthorizationURL: stringConfig(values, "authorization_url"),
+		TokenURL:         stringConfig(values, "token_url"),
+		ClientID:         stringConfig(values, "client_id"),
+		Scopes:           stringSliceConfig(values, "scopes"),
+	}
+	if resource, ok := configValue(values, "resource").(string); ok {
+		gateway.Resource = &resource
+	}
+	if rawPort := configValue(values, "redirect_port"); rawPort != nil {
+		port, ok := uint64FromAny(rawPort)
+		if !ok {
+			return nil, fmt.Errorf("gateway_oauth.redirect_port must be a positive integer")
+		}
+		if port == 0 {
+			return nil, fmt.Errorf("gateway_oauth requires a nonempty client_id and a nonzero redirect_port")
+		}
+		value := uint16(port)
+		gateway.RedirectPort = &value
+	}
+	delivery, ok := configValue(values, "delivery").(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("gateway_oauth.delivery must be a table")
+	}
+	kind := strings.TrimSpace(stringConfig(delivery, "kind"))
+	switch kind {
+	case "header":
+		gateway.Delivery = GatewayOAuthDelivery{
+			Kind:   kind,
+			Name:   stringConfig(delivery, "name"),
+			Scheme: stringConfig(delivery, "scheme"),
+		}
+	case "cookie":
+		gateway.Delivery = GatewayOAuthDelivery{Kind: kind, Name: stringConfig(delivery, "name")}
+	default:
+		return nil, fmt.Errorf("invalid gateway_oauth delivery kind")
+	}
+	return gateway, nil
 }
 
 func providerAuthRefreshTimeoutMSConfig(values map[string]any) (uint64, error) {
