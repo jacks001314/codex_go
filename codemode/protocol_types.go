@@ -166,6 +166,12 @@ type RuntimeResponse struct {
 	CellID       CellID        `json:"cell_id"`
 	ContentItems []ContentItem `json:"content_items"`
 	ErrorText    *string       `json:"error_text,omitempty"`
+	// CodeModeHostDurationNS is the host's own measurement of the request
+	// (Rust #46288's `code_mode_host_duration_ns`): elapsed monotonic time from
+	// receipt of the Execute/Wait/Terminate request until its outcome is ready,
+	// before serialization. It always carries a measurement, and zero is a valid
+	// value.
+	CodeModeHostDurationNS uint64 `json:"code_mode_host_duration_ns"`
 }
 
 func Yielded(cellID CellID, items []ContentItem) RuntimeResponse {
@@ -186,8 +192,9 @@ func (r RuntimeResponse) MarshalJSON() ([]byte, error) {
 		variant = "Result"
 	}
 	body := map[string]any{
-		"cell_id":       r.CellID,
-		"content_items": r.ContentItems,
+		"cell_id":                    r.CellID,
+		"content_items":              r.ContentItems,
+		"code_mode_host_duration_ns": r.CodeModeHostDurationNS,
 	}
 	if variant == "Result" {
 		body["error_text"] = r.ErrorText
@@ -208,16 +215,23 @@ func (r *RuntimeResponse) UnmarshalJSON(data []byte) error {
 			CellID       CellID        `json:"cell_id"`
 			ContentItems []ContentItem `json:"content_items"`
 			ErrorText    *string       `json:"error_text"`
+			// Rust's host payload requires the measurement; zero is valid but
+			// absent is not (MissingCodeModeHostDuration).
+			CodeModeHostDurationNS *uint64 `json:"code_mode_host_duration_ns"`
 		}
 		if err := json.Unmarshal(body, &decoded); err != nil {
 			return err
 		}
 		switch variant {
 		case "Yielded", "Terminated", "Result":
+			if decoded.CodeModeHostDurationNS == nil {
+				return fmt.Errorf("runtime response is missing code_mode_host_duration_ns")
+			}
 			r.Variant = variant
 			r.CellID = decoded.CellID
 			r.ContentItems = decoded.ContentItems
 			r.ErrorText = decoded.ErrorText
+			r.CodeModeHostDurationNS = *decoded.CodeModeHostDurationNS
 			return nil
 		default:
 			return fmt.Errorf("unknown runtime response variant %q", variant)

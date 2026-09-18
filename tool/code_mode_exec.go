@@ -126,6 +126,10 @@ type CodeModeRemoteResponse struct {
 	State        string
 	ContentItems []map[string]any
 	ErrorText    string
+	// HostDurationNS is the code-mode host's own measurement of the request
+	// (Rust #46288's `code_mode_host_duration_ns`), used for the overhead
+	// breakdown in the response header.
+	HostDurationNS uint64
 }
 
 type codeModeCell struct {
@@ -809,6 +813,13 @@ func (d *codeModeRemoteDelegate) CellClosed(cellID string) {
 }
 
 func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTokens int, wallTime time.Duration, showOverhead bool) (*Output, error) {
+	// The host's own measurement feeds the overhead breakdown (Rust's
+	// `code_mode_host_duration`).
+	var hostDuration *time.Duration
+	if response.HostDurationNS > 0 {
+		value := time.Duration(response.HostDurationNS)
+		hostDuration = &value
+	}
 	texts := make([]string, 0)
 	for _, item := range response.ContentItems {
 		if item["type"] == "input_text" {
@@ -820,7 +831,7 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 		// block, with the header reporting "Script failed".
 		output := codeModeScriptFailureOutput(callID, response.ErrorText, response.ContentItems, nil, nil, nil)
 		output = truncateCodeModeOutput(output, maxTokens)
-		return applyCodeModeHeader(output, "Script failed", wallTime, nil, showOverhead), nil
+		return applyCodeModeHeader(output, "Script failed", wallTime, hostDuration, showOverhead), nil
 	}
 	body := strings.Join(texts, "\n")
 	output := &Output{CallID: callID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: body, Data: map[string]any{"content_items": response.ContentItems}}
@@ -834,7 +845,7 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 		output.Data["running"] = true
 	}
 	output = truncateCodeModeOutput(output, maxTokens)
-	return applyCodeModeHeader(output, status, wallTime, nil, showOverhead), nil
+	return applyCodeModeHeader(output, status, wallTime, hostDuration, showOverhead), nil
 }
 
 func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *Invocation, yield chan<- struct{}, cell *codeModeCell) (*Output, error) {

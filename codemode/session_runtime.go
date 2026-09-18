@@ -39,6 +39,7 @@ func (r *SessionRuntime) Cells() *CellStore {
 }
 
 func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest) (*StartedCell, error) {
+	startedAt := time.Now()
 	if r == nil {
 		return nil, fmt.Errorf("code mode session runtime is nil")
 	}
@@ -93,7 +94,7 @@ func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest) (
 		go r.completeLater(ctx, cellID, "", execErr, wakeup)
 		return &StartedCell{
 			CellID:          cellID,
-			InitialResponse: Yielded(cellID, cloneContentItems(items)),
+			InitialResponse: withHostDuration(Yielded(cellID, cloneContentItems(items)), startedAt),
 		}, nil
 	}
 	if _, err := r.cells.Complete(cellID.String(), "", execErr); err != nil {
@@ -102,11 +103,12 @@ func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest) (
 	r.signal(cellID.String())
 	return &StartedCell{
 		CellID:          cellID,
-		InitialResponse: Result(cellID, cloneContentItems(items), errorText(execErr)),
+		InitialResponse: withHostDuration(Result(cellID, cloneContentItems(items), errorText(execErr)), startedAt),
 	}, nil
 }
 
 func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest) (*WaitOutcome, error) {
+	startedAt := time.Now()
 	if r == nil {
 		return nil, fmt.Errorf("code mode session runtime is nil")
 	}
@@ -122,7 +124,7 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest) (*WaitO
 		deadline = time.Duration(ProtocolDefaultWaitYieldTimeMS) * time.Millisecond
 	}
 	if cell, ok := r.cells.Get(cellID); ok && cell.Status != CellRunning {
-		outcome := LiveCell(runtimeResponseFromCell(cell))
+		outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell), startedAt))
 		return &outcome, nil
 	}
 	wakeup := r.wakeup(cellID)
@@ -136,27 +138,37 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest) (*WaitO
 	}
 	cell, ok := r.cells.Get(cellID)
 	if !ok {
-		response := Result(request.CellID, nil, stringPtrLocal(fmt.Sprintf("exec cell %s not found", cellID)))
+		response := withHostDuration(Result(request.CellID, nil, stringPtrLocal(fmt.Sprintf("exec cell %s not found", cellID))), startedAt)
 		outcome := MissingCell(response)
 		return &outcome, nil
 	}
-	outcome := LiveCell(runtimeResponseFromCell(cell))
+	outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell), startedAt))
 	return &outcome, nil
 }
 
 func (r *SessionRuntime) Terminate(cellID CellID) (*WaitOutcome, error) {
+	startedAt := time.Now()
 	if r == nil {
 		return nil, fmt.Errorf("code mode session runtime is nil")
 	}
 	cell, err := r.cells.Terminate(cellID.String())
 	if err != nil {
-		response := Result(cellID, nil, stringPtrLocal(fmt.Sprintf("exec cell %s not found", cellID.String())))
+		response := withHostDuration(Result(cellID, nil, stringPtrLocal(fmt.Sprintf("exec cell %s not found", cellID.String()))), startedAt)
 		outcome := MissingCell(response)
 		return &outcome, nil
 	}
 	r.signal(cellID.String())
-	outcome := LiveCell(runtimeResponseFromCell(cell))
+	outcome := LiveCell(withHostDuration(runtimeResponseFromCell(cell), startedAt))
 	return &outcome, nil
+}
+
+// withHostDuration stamps Rust's `code_mode_host_duration_ns` (#46288): the
+// host's measured time from receiving the request to having its outcome ready.
+func withHostDuration(response RuntimeResponse, startedAt time.Time) RuntimeResponse {
+	if !startedAt.IsZero() {
+		response.CodeModeHostDurationNS = uint64(time.Since(startedAt).Nanoseconds())
+	}
+	return response
 }
 
 func (r *SessionRuntime) Shutdown() {

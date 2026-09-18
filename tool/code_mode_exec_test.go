@@ -737,6 +737,57 @@ func TestCodeModeRemoteFailureNeverFallsBackInProcess(t *testing.T) {
 	}
 }
 
+// TestCodeModeRemoteHostDurationFeedsTheOverheadHeader mirrors Rust #46288: the
+// code-mode host's own measurement drives the overhead breakdown, and the
+// default header is kept when overhead reporting is off.
+func TestCodeModeRemoteHostDurationFeedsTheOverheadHeader(t *testing.T) {
+	newExecutor := func(t *testing.T, hostDurationNS uint64) Executor {
+		t.Helper()
+		registry := NewRegistry()
+		remote := &recordingCodeModeRemoteSession{response: CodeModeRemoteResponse{
+			CellID:         "remote-timing-cell",
+			State:          "completed",
+			ContentItems:   []map[string]any{{"type": "input_text", "text": "REMOTE"}},
+			HostDurationNS: hostDurationNS,
+		}}
+		exec, _ := NewCodeModeExecutorsWithProvider(registry, &recordingCodeModeRemoteProvider{session: remote}, false)
+		return exec
+	}
+	run := func(t *testing.T, executor Executor, showOverhead bool) string {
+		t.Helper()
+		if exec, ok := executor.(*codeModeExecExecutor); ok {
+			exec.bindingMu.Lock()
+			exec.showCellOverhead = showOverhead
+			exec.bindingMu.Unlock()
+		}
+		output, err := executor.Execute(context.Background(), &Invocation{
+			CallID: "remote-timing", Payload: Payload{Kind: PayloadCustom, Input: `text("REMOTE")`},
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		return output.Body
+	}
+
+	// Overhead on with a host measurement of 2s: the breakdown appears.
+	overheadBody := run(t, newExecutor(t, uint64(2*time.Second)), true)
+	if !strings.Contains(overheadBody, "(code-mode 2.000 seconds; overhead ") {
+		t.Fatalf("overhead body = %q", overheadBody)
+	}
+	if !strings.Contains(overheadBody, "Output:\nREMOTE") {
+		t.Fatalf("overhead body lost the script output: %q", overheadBody)
+	}
+
+	// Overhead on without a host measurement keeps the default header.
+	plainBody := run(t, newExecutor(t, 0), true)
+	if strings.Contains(plainBody, "code-mode ") {
+		t.Fatalf("unexpected overhead breakdown: %q", plainBody)
+	}
+	if !strings.HasPrefix(plainBody, "Script completed\nWall time ") || !strings.HasSuffix(plainBody, " seconds\nOutput:\nREMOTE") {
+		t.Fatalf("default body = %q", plainBody)
+	}
+}
+
 func TestCodeModeRemoteRuntimeErrorRespondsToModel(t *testing.T) {
 	registry := NewRegistry()
 	remote := &recordingCodeModeRemoteSession{response: CodeModeRemoteResponse{

@@ -210,6 +210,36 @@ func TestSessionRuntimeExecuteWaitTerminateAndHost(t *testing.T) {
 	if response.Type != "execution/started" || initial == nil || initial.Variant != "Result" {
 		t.Fatalf("response=%#v initial=%#v", response, initial)
 	}
+	// Rust #46288: the host always reports its own measurement field, and zero
+	// is a valid value, so the wire shape is what the contract pins.
+	encoded, err := json.Marshal(*initial)
+	if err != nil {
+		t.Fatalf("Marshal(initial) error = %v", err)
+	}
+	if !strings.Contains(string(encoded), `"code_mode_host_duration_ns":`) {
+		t.Fatalf("host response omits the measurement: %s", encoded)
+	}
+}
+
+// TestRuntimeResponseHostDurationRoundTrips mirrors Rust #46288: the host's
+// measurement travels in `code_mode_host_duration_ns` and survives the wire.
+func TestRuntimeResponseHostDurationRoundTrips(t *testing.T) {
+	response := Yielded(NewCellID("cell-9"), nil)
+	response.CodeModeHostDurationNS = 1_234_567
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(encoded), `"code_mode_host_duration_ns":1234567`) {
+		t.Fatalf("encoded response = %s", encoded)
+	}
+	var decoded RuntimeResponse
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if decoded.CodeModeHostDurationNS != 1_234_567 || decoded.Variant != "Yielded" {
+		t.Fatalf("decoded response = %#v", decoded)
+	}
 }
 
 func TestCellExecutionLimitsClampAndWireLikeRust(t *testing.T) {

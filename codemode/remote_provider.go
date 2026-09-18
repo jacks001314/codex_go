@@ -429,7 +429,13 @@ func publicRemoteResponseForGeneration(response RuntimeResponse, generation uint
 	if generation > 1 {
 		cellID = "g" + strconv.FormatUint(generation, 10) + ":" + cellID
 	}
-	return tool.CodeModeRemoteResponse{CellID: cellID, State: state, ContentItems: items, ErrorText: errorText}
+	return tool.CodeModeRemoteResponse{
+		CellID:         cellID,
+		State:          state,
+		ContentItems:   items,
+		ErrorText:      errorText,
+		HostDurationNS: response.CodeModeHostDurationNS,
+	}
 }
 
 type codeModeGenerationDelegate struct {
