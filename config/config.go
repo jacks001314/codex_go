@@ -25,6 +25,11 @@ var embeddedDefaultsTOML string
 type Config struct {
 	Values       map[string]any
 	Requirements *ConfigRequirements
+	// isProjectless records that configuration discovery found no project-root
+	// marker, no Git checkout root and no project-local config directory
+	// (Rust #46328 ConfigLayerStack::is_projectless). Discovery that was
+	// skipped leaves it false.
+	isProjectless bool
 }
 
 type ForcedLoginMethod string
@@ -281,6 +286,14 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			}
 		}
 	}
+	// Rust #46328: record whether discovery completed without any project input.
+	// The classification is independent of trust (a saved trust decision for an
+	// unmarked directory still leaves it projectless) and is false whenever
+	// project discovery was skipped.
+	isProjectless := false
+	if cwd != "" && !ignoreProjectConfig {
+		isProjectless = projectDiscoveryIsProjectless(cwd, codexHome, projectRootMarkersFromValues(discoveryValues))
+	}
 	if profile != "" {
 		if err := applyProfileLayer(codexHome, values, profile); err != nil {
 			return nil, err
@@ -326,7 +339,15 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err := applyManagedConstrainedOverrides(values, requirements); err != nil {
 		return nil, err
 	}
-	return &Config{Values: values, Requirements: requirements}, nil
+	return &Config{Values: values, Requirements: requirements, isProjectless: isProjectless}, nil
+}
+
+// IsProjectless reports whether configuration discovery found no project-root
+// marker, no Git checkout root, and no project-local config directory (Rust
+// #46328 ConfigLayerStack::is_projectless). It is false when discovery was
+// skipped, so callers can rely on it only for a discovery that actually ran.
+func (c *Config) IsProjectless() bool {
+	return c != nil && c.isProjectless
 }
 
 // applyManagedExactOverrides mirrors Rust ConfigRequirementsToml::apply_to_config
@@ -2238,6 +2259,45 @@ func activeProjectRootWithMarkers(cwd string, markers []string) string {
 		return dirs[0]
 	}
 	return strings.TrimSpace(cwd)
+}
+
+// projectDiscoveryIsProjectless mirrors Rust #46328's loader classification:
+// a completed discovery is projectless when no ancestor carries a project-root
+// marker, no Git checkout root exists above cwd, and no project-local config
+// directory is present between the discovered project root and cwd. CODEX_HOME
+// itself never counts as a project layer (Rust's
+// user_codex_home_is_not_a_project_layer).
+func projectDiscoveryIsProjectless(cwd string, codexHome string, markers []string) bool {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return false
+	}
+	if projectRootMarkerFound(cwd, markers) {
+		return false
+	}
+	if nearestGitRoot(cwd) != "" {
+		return false
+	}
+	home := canonicalProjectPath(codexHome)
+	for _, folder := range projectDotCodexFoldersWithMarkers(cwd, markers) {
+		if home != "" && canonicalProjectPath(folder) == home {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// projectRootMarkerFound reports whether any ancestor of cwd (including cwd)
+// carries one of the project root markers. It is the marker half of
+// activeProjectRootWithMarkers, which falls back to cwd when none is found.
+func projectRootMarkerFound(cwd string, markers []string) bool {
+	for _, dir := range projectAncestorDirs(cwd) {
+		if projectRootMarkerExistsWithMarkers(dir, markers) {
+			return true
+		}
+	}
+	return false
 }
 
 func nearestGitRoot(cwd string) string {

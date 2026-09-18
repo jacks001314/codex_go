@@ -12561,6 +12561,61 @@ func TestRuntimeRouterThreadStartElevatedSandboxPersistsProjectTrust(t *testing.
 	}
 }
 
+// TestRuntimeRouterThreadStartProjectlessDoesNotPersistProjectTrustLikeRust
+// mirrors Rust #46328: thread/start must not preapprove a directory where
+// configuration discovery found no project-root marker, Git checkout or
+// project-local config directory, so project configuration added later is
+// neither loaded nor trusted.
+func TestRuntimeRouterThreadStartProjectlessDoesNotPersistProjectTrustLikeRust(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-user\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	before, err := os.ReadFile(config.ConfigPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile config returned error: %v", err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+
+	first := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:     workspace,
+		Sandbox: "danger-full-access",
+	}))
+	if first.Error != nil {
+		t.Fatalf("first start error: %+v", first.Error)
+	}
+	if body, err := os.ReadFile(config.ConfigPath(home)); err != nil || string(body) != string(before) {
+		t.Fatalf("projectless thread/start persisted project trust: %s (err=%v)", string(body), err)
+	}
+
+	// Project configuration added afterwards must stay untrusted and unloaded.
+	if err := os.MkdirAll(filepath.Join(workspace, ".gcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll project config dir returned error: %v", err)
+	}
+	if err := os.WriteFile(config.ProjectConfigPath(workspace), []byte("model_reasoning_effort = \"high\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile project config returned error: %v", err)
+	}
+	second := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
+		CWD:     workspace,
+		Sandbox: "read-only",
+	}))
+	if second.Error != nil {
+		t.Fatalf("second start error: %+v", second.Error)
+	}
+	if result := second.Result.(*ThreadStartResponse); result.ReasoningEffort != nil {
+		t.Fatalf("late project config was loaded: reasoningEffort = %+v", result.ReasoningEffort)
+	}
+	if body, err := os.ReadFile(config.ConfigPath(home)); err != nil || string(body) != string(before) {
+		t.Fatalf("projectless thread/start persisted project trust after project config appeared: %s (err=%v)", string(body), err)
+	}
+}
+
 func TestRuntimeRouterTurnStartElevatedSandboxDoesNotPersistProjectTrustLikeRust(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -12663,6 +12718,13 @@ func TestRuntimeRouterThreadStartProjectTrustWriteGuards(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
 		t.Fatalf("Mkdir .git returned error: %v", err)
+	}
+	// Rust #46328: an empty `.git` directory is not repository metadata
+	// (gitMetadataPathExists, Rust #39629), so the fixture writes HEAD like the
+	// Rust thread_start_with_nested_git_cwd_respects_effective_permissions_for_
+	// project_trust case to keep exercising the checkout-root path.
+	if err := os.WriteFile(filepath.Join(repoRoot, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile .git/HEAD returned error: %v", err)
 	}
 	nested := filepath.Join(repoRoot, "nested", "project")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
