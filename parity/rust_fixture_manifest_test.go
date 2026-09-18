@@ -46,9 +46,10 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 	return []rustFixtureRoot{
 		{
 			Path: "cli/tests",
-			// Upstream grew the CLI suite with the daemon package replacement
-			// and background-server fixtures (#45558/#45580/#46117).
-			Files: 28,
+			// Upstream grew the CLI suite with the daemon package replacement,
+			// background-server fixtures (#45558/#45580/#46117), and the remote
+			// workspace-root rejection snapshot (#46494).
+			Files: 29,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -107,7 +108,8 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// subagent-elicitation, multi-agent tool-description,
 			// pending-input-persistence, guardian sender/cached-score/
 			// checkpoint-migration and canonical-plugin-connector fixtures.
-			Files: 208,
+			// #46490 then added core/tests/suite/gateway_auth.rs.
+			Files: 209,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -120,8 +122,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		{
 			Path: "tui/src/chatwidget/tests",
 			// Upstream grew the chatwidget suite with the async question reply
-			// coverage (#46486).
-			Files: 89,
+			// coverage (#46486) and the MCP-startup review plus exploration
+			// grouping coverage (#46493/#46487/#46492).
+			Files: 91,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -132,7 +135,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tui/src/chatwidget/tests/snapshots",
-			Files: 49,
+			Files: 51,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{

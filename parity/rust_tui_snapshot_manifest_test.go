@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1153 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1153", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1159 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1159", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -187,7 +187,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/chatwidget/snapshots",
-			Files:    295,
+			Files:    296,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -199,7 +199,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/chatwidget/tests/snapshots",
-			Files:    49,
+			Files:    51,
 			Owner:    "tui/chatwidget",
 			Focus:    "chatwidget approval request modal, async question reply, and history snapshots",
 			Priority: []string{"approval", "history"},
@@ -252,7 +252,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/history_cell/snapshots",
-			Files:    76,
+			Files:    77,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
@@ -296,7 +296,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/snapshots",
-			Files:    183,
+			Files:    185,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},

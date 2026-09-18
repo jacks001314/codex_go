@@ -14137,23 +14137,16 @@ func (r *RuntimeRouter) terminalWriteReviewRequirement(request *tool.WriteStdinA
 }
 
 // terminalWriteDriftError mirrors Rust TerminalPermissions::review_requirement's
-// two fail-closed cases: approval cannot retrofit an environment-owned network
-// policy or denied-read restrictions onto a terminal whose launch policy no
-// longer matches, so the caller must start a new terminal.
+// remaining fail-closed case (#46499): approval cannot retrofit denied-read
+// restrictions onto a terminal whose launch policy no longer matches, so the
+// caller must start a new terminal. An environment-owned network policy no
+// longer fails closed here: the write is offered for escalation review, because
+// the reviewer can weigh the bypass against the current restrictions.
 func (r *RuntimeRouter) terminalWriteDriftError(request *tool.WriteStdinApprovalRequest, current *sandbox.PermissionProfile) error {
 	if request == nil {
 		return nil
 	}
 	bypassed := request.SandboxPermissions == sandbox.SandboxPermissionsRequireEscalated
-	cfg := r.effectiveWriteStdinConfig(strings.TrimSpace(request.ThreadID))
-	if cfg != nil {
-		cwd := strings.TrimSpace(request.CWD)
-		if _, currentManagedNetwork, err := r.buildManagedNetworkProxyConfigForCWD(cfg.Values, cwd); err == nil {
-			if currentManagedNetwork && (bypassed || request.ManagedNetwork != currentManagedNetwork) {
-				return errors.New("this terminal cannot enforce the current environment-owned network restrictions; start a new terminal")
-			}
-		}
-	}
 	if current != nil && current.HasDenyReadEntries() && (bypassed || !equalSandboxPermissionProfiles(request.PermissionProfile, current)) {
 		return errors.New("this terminal cannot enforce the current denied-read restrictions; start a new terminal")
 	}

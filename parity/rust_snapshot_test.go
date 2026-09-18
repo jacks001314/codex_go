@@ -294,7 +294,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// `rollout/compress` client request.
 		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "553532a9865cc1b881b7b6237436799417fa207a9db44b7e032af918562d29cf"},
 		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "05218c5c59380c8b5ff5543216e23df941256b9ce68f9270783ee10b4e9208a7"},
-		{Path: "core/tests/suite/mod.rs", SHA256: "a04c3832a81eede70c7454745d13c300149df2f4524624c3d9ca303d06822132"},
+		// Re-pinned to upstream f5b941c9 (#46490): the gateway-auth core suite
+		// joined the module list.
+		{Path: "core/tests/suite/mod.rs", SHA256: "7f2ed07dcf1cfbc252a166cabe54c85d60399c2a662016d9412f2db31bf71d5b"},
 	}
 }
 

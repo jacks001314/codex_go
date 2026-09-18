@@ -27497,23 +27497,37 @@ func TestWriteStdinApprovalFailsClosedOnPolicyDriftLikeRust(t *testing.T) {
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
 	t.Cleanup(func() { _ = router.Close() })
-	router.SetServerRequestSink(ServerRequestSinkFunc(func(*ServerRequest) {
-		t.Fatal("a drifted terminal must be rejected before any prompt")
+	// Rust #46499: an environment-owned network policy no longer fails closed for
+	// a terminal whose launch bypassed it; the write is offered for escalation
+	// review so the reviewer can weigh the bypass.
+	var params *CommandExecutionRequestApprovalParams
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		captured, _ := request.Params.(*CommandExecutionRequestApprovalParams)
+		params = captured
+		router.requireServerRequests().Resolve(OK(request.ID, &CommandExecutionRequestApprovalResponse{
+			Decision: CommandExecutionApprovalAccept,
+		}))
 	}))
-
-	// The current environment enforces a managed network while the terminal did
-	// not launch with one.
+	// A terminal whose launch bypassed the sandbox while the environment owns a
+	// network policy is reviewed, not rejected (Rust #46499).
 	err := router.writeStdinApproval(context.Background(), &tool.WriteStdinApprovalRequest{
-		ProcessID:     11,
-		ThreadID:      threadID,
-		TurnID:        "turn-1",
-		EnvironmentID: "local",
-		Chars:         "hello\n",
-		CWD:           t.TempDir(),
-		TTY:           true,
+		ProcessID:          11,
+		ThreadID:           threadID,
+		TurnID:             "turn-1",
+		EnvironmentID:      "local",
+		Chars:              "hello\n",
+		CWD:                t.TempDir(),
+		TTY:                true,
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
 	})
-	if err == nil || !strings.Contains(err.Error(), "environment-owned network restrictions") {
-		t.Fatalf("managed-network drift error = %v", err)
+	if err != nil {
+		t.Fatalf("environment-owned network policy must not fail closed: %v", err)
+	}
+	if params == nil {
+		t.Fatal("a terminal whose launch bypassed the environment network policy must be reviewed")
+	}
+	if params.Reason == nil || !strings.Contains(*params.Reason, "bypassing any managed network proxy") {
+		t.Fatalf("approval reason = %#v", params.Reason)
 	}
 
 	// A current profile that denies reads cannot be applied to a terminal whose
