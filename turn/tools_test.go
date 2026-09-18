@@ -1458,6 +1458,48 @@ func TestDynamicToolRemoteImageOutputBecomesModelVisibleError(t *testing.T) {
 	}
 }
 
+// TestDynamicToolFileImageOutputKeepsTheFileReference mirrors Rust #45794: a
+// dynamic tool may return an uploaded-file image reference, which skips the
+// inline/remote URL rules and reaches the model as `file_id` (and the v2
+// content shape as `fileId`).
+func TestDynamicToolFileImageOutputKeepsTheFileReference(t *testing.T) {
+	items, valid := normalizeDynamicToolContentItems([]DynamicToolCallOutputContentItem{
+		{Type: "inputImage", FileID: "file_dynamic"},
+		{Type: "inputText", Text: "done"},
+	})
+	if !valid {
+		t.Fatalf("normalizeDynamicToolContentItems() = %#v, valid = %v", items, valid)
+	}
+	if items[0].Type != "inputImage" || items[0].FileID != "file_dynamic" {
+		t.Fatalf("normalized item = %#v", items[0])
+	}
+	wire := dynamicToolContentItemsAny(items)
+	image, ok := wire[0].(map[string]any)
+	if !ok || image["type"] != "inputImage" || image["fileId"] != "file_dynamic" {
+		t.Fatalf("v2 content item = %#v", wire[0])
+	}
+	model := dynamicToolModelContentItemsAny(items)
+	modelImage, ok := model[0].(map[string]any)
+	if !ok || modelImage["type"] != "input_image" || modelImage["file_id"] != "file_dynamic" {
+		t.Fatalf("model content item = %#v", model[0])
+	}
+
+	// An inline data URL still travels as `image_url`, and a remote URL is
+	// still rejected (the file reference is what skips those rules).
+	inline, valid := normalizeDynamicToolContentItems([]DynamicToolCallOutputContentItem{
+		{Type: "inputImage", ImageURL: "data:image/png;base64,AAA"},
+	})
+	if !valid || inline[0].ImageURL == "" {
+		t.Fatalf("inline image = %#v, valid = %v", inline, valid)
+	}
+	rejected, valid := normalizeDynamicToolContentItems([]DynamicToolCallOutputContentItem{
+		{Type: "inputImage", ImageURL: "https://example.com/tool.png"},
+	})
+	if valid || len(rejected) != 1 || rejected[0].Text != remoteImageURLError {
+		t.Fatalf("remote image = %#v, valid = %v", rejected, valid)
+	}
+}
+
 func TestDynamicToolClientErrorUsesRustFallbackResponse(t *testing.T) {
 	caller := &fakeDynamicToolCaller{err: errors.New("client disconnected")}
 	options := DefaultToolRegistryOptions(t.TempDir())

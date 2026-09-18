@@ -777,10 +777,13 @@ func (p *FunctionCallOutputPayload) Text() string {
 }
 
 type FunctionCallOutputContentItem struct {
-	Type     string  `json:"type"`
-	Text     string  `json:"text,omitempty"`
-	ImageURL string  `json:"image_url,omitempty"`
-	Detail   *string `json:"detail,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	// FileID is the uploaded-file form of an image content item (Rust #45794):
+	// file references are preserved through tool output and never inlined.
+	FileID string  `json:"file_id,omitempty"`
+	Detail *string `json:"detail,omitempty"`
 }
 
 func FunctionCallOutputContentItemsText(items []FunctionCallOutputContentItem) string {

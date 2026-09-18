@@ -219,10 +219,11 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 		if count < 1 || count > imageGenerationMaxEditImages {
 			return nil, fmt.Errorf("`num_last_images_to_include` must be between 1 and %d", imageGenerationMaxEditImages)
 		}
-		images = recentImageURLs(h.options.InputItems, count)
-		if len(images) != count {
-			return nil, fmt.Errorf("requested the last %d conversation images, but only %d were available", count, len(images))
+		recent, err := recentImageURLs(h.options.InputItems, count)
+		if err != nil {
+			return nil, err
 		}
+		images = recent
 	}
 	_ = ctx
 	background := codexapi.ImageBackgroundAuto
@@ -432,68 +433,91 @@ func imageURLForLocalPath(path string) (string, error) {
 	return utils.DataURLFromBytes(mimeType, bytes), nil
 }
 
-func recentImageURLs(items []any, count int) []codexapi.ImageURL {
+// recentImageEntry is one image in a recent-images window: an inline URL, or a
+// file reference the harness cannot inline (Rust #45794).
+type recentImageEntry struct {
+	imageURL string
+	fileID   string
+}
+
+func (e recentImageEntry) inline() bool { return strings.TrimSpace(e.imageURL) != "" }
+
+// recentImageURLs mirrors Rust's `recent_images`: it walks the history
+// newest-first, counts the last `count` images including file references (so
+// numbering matches Rust), then rejects a window that is incomplete or that
+// contains a file-backed image instead of silently editing an older inline one.
+func recentImageURLs(items []any, count int) ([]codexapi.ImageURL, error) {
 	if count <= 0 {
-		return nil
+		return nil, nil
 	}
-	out := make([]codexapi.ImageURL, 0, count)
-	for i := len(items) - 1; i >= 0 && len(out) < count; i-- {
-		for _, imageURL := range imageURLsFromInputItem(items[i]) {
-			if strings.TrimSpace(imageURL) == "" {
+	entries := make([]recentImageEntry, 0, count)
+	for i := len(items) - 1; i >= 0 && len(entries) < count; i-- {
+		for _, entry := range imageEntriesFromInputItem(items[i]) {
+			if !entry.inline() && strings.TrimSpace(entry.fileID) == "" {
 				continue
 			}
-			out = append(out, codexapi.ImageURL{ImageURL: imageURL})
-			if len(out) == count {
+			entries = append(entries, entry)
+			if len(entries) == count {
 				break
 			}
 		}
 	}
+	if len(entries) != count {
+		return nil, fmt.Errorf("requested the last %d conversation images, but only %d were available", count, len(entries))
+	}
+	out := make([]codexapi.ImageURL, 0, count)
+	for _, entry := range entries {
+		if !entry.inline() {
+			return nil, fmt.Errorf("requested the last %d conversation images, but that window includes a file-backed image that cannot be used for editing", count)
+		}
+		out = append(out, codexapi.ImageURL{ImageURL: strings.TrimSpace(entry.imageURL)})
+	}
 	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
 		out[left], out[right] = out[right], out[left]
 	}
-	return out
+	return out, nil
 }
 
-func imageURLsFromInputItem(item any) []string {
+func imageEntriesFromInputItem(item any) []recentImageEntry {
 	normalized, ok := mapAnyTurn(item)
 	if !ok {
 		if agentItem, ok := item.(*model.AgentItem); ok && agentItem != nil && agentItem.Type == "image_generation_call" {
 			if result := strings.TrimSpace(firstNonEmptyTurnString(stringValueFromMap(agentItem.Data, "result"), agentItem.Text)); result != "" {
-				return []string{imageGenerationOutputPrefix + result}
+				return []recentImageEntry{{imageURL: imageGenerationOutputPrefix + result}}
 			}
 		}
 		if response, ok := item.(*ToolResponseItem); ok && response != nil && response.Output != nil {
-			return outputImageURLs(response.Output.Body)
+			return outputImageEntries(response.Output.Body)
 		}
 		return nil
 	}
 	itemType, _ := normalized["type"].(string)
 	switch itemType {
 	case "message":
-		return imageURLsFromContent(normalized["content"])
+		return imageEntriesFromContent(normalized["content"])
 	case "image_generation_call", "imageGeneration", "image_generation":
 		if result := stringFromMapTurn(normalized, "result"); result != "" {
-			return []string{imageGenerationOutputPrefix + result}
+			return []recentImageEntry{{imageURL: imageGenerationOutputPrefix + result}}
 		}
 		if data, ok := normalized["data"].(map[string]any); ok {
 			if result := stringFromMapTurn(data, "result"); result != "" {
-				return []string{imageGenerationOutputPrefix + result}
+				return []recentImageEntry{{imageURL: imageGenerationOutputPrefix + result}}
 			}
 		}
 	case "function_call_output", "custom_tool_call_output":
 		if output, ok := normalized["output"]; ok {
-			return outputImageURLs(output)
+			return outputImageEntries(output)
 		}
 	}
 	return nil
 }
 
-func imageURLsFromContent(value any) []string {
+func imageEntriesFromContent(value any) []recentImageEntry {
 	items, ok := sliceAnyTurn(value)
 	if !ok {
 		return nil
 	}
-	out := make([]string, 0, len(items))
+	out := make([]recentImageEntry, 0, len(items))
 	for i := len(items) - 1; i >= 0; i-- {
 		content, ok := mapAnyTurn(items[i])
 		if !ok {
@@ -502,41 +526,50 @@ func imageURLsFromContent(value any) []string {
 		itemType, _ := content["type"].(string)
 		switch itemType {
 		case "input_image", "image":
-			if imageURL := stringFromMapTurn(content, "image_url", "imageURL", "url"); imageURL != "" {
-				out = append(out, imageURL)
-			}
+			out = append(out, imageEntryFromMap(content))
 		}
 	}
 	return out
 }
 
-func outputImageURLs(value any) []string {
+// imageEntryFromMap reads an image content entry, keeping a file reference
+// distinct from an inline URL (Rust #45794).
+func imageEntryFromMap(content map[string]any) recentImageEntry {
+	return recentImageEntry{
+		imageURL: stringFromMapTurn(content, "image_url", "imageURL", "url"),
+		fileID:   stringFromMapTurn(content, "file_id", "fileId"),
+	}
+}
+
+func outputImageEntries(value any) []recentImageEntry {
 	switch typed := value.(type) {
 	case []FunctionCallOutputContentItem:
-		out := make([]string, 0, len(typed))
+		out := make([]recentImageEntry, 0, len(typed))
 		for i := len(typed) - 1; i >= 0; i-- {
-			if typed[i].Type == "input_image" && strings.TrimSpace(typed[i].ImageURL) != "" {
-				out = append(out, strings.TrimSpace(typed[i].ImageURL))
+			if typed[i].Type != "input_image" {
+				continue
+			}
+			entry := recentImageEntry{imageURL: strings.TrimSpace(typed[i].ImageURL), fileID: strings.TrimSpace(typed[i].FileID)}
+			if entry.inline() || entry.fileID != "" {
+				out = append(out, entry)
 			}
 		}
 		return out
 	case []any:
-		out := make([]string, 0, len(typed))
+		out := make([]recentImageEntry, 0, len(typed))
 		for i := len(typed) - 1; i >= 0; i-- {
 			item, ok := mapAnyTurn(typed[i])
 			if !ok {
 				continue
 			}
 			if itemType, _ := item["type"].(string); itemType == "input_image" {
-				if imageURL := stringFromMapTurn(item, "image_url", "imageURL"); imageURL != "" {
-					out = append(out, imageURL)
-				}
+				out = append(out, imageEntryFromMap(item))
 			}
 		}
 		return out
 	case map[string]any:
 		if content, ok := typed["content"]; ok {
-			return outputImageURLs(content)
+			return outputImageEntries(content)
 		}
 	}
 	normalized, ok := normalizeAnyMap(value)
@@ -544,7 +577,7 @@ func outputImageURLs(value any) []string {
 		return nil
 	}
 	if content, ok := normalized["content"]; ok {
-		return outputImageURLs(content)
+		return outputImageEntries(content)
 	}
 	return nil
 }

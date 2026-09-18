@@ -280,6 +280,72 @@ func ptrTo[T any](value T) *T {
 	return &value
 }
 
+// TestRecentImageURLsRejectsFileBackedWindowsLikeRust mirrors Rust #45794's
+// `recent_images`: the window still counts file-backed images (so numbering
+// matches), a short window reports how many were available, and a window that
+// contains a file reference is rejected instead of silently editing an older
+// inline image.
+func TestRecentImageURLsRejectsFileBackedWindowsLikeRust(t *testing.T) {
+	inline := func(url string) map[string]any {
+		return map[string]any{"type": "message", "content": []any{map[string]any{"type": "input_image", "image_url": url}}}
+	}
+	fileBacked := map[string]any{"type": "message", "content": []any{map[string]any{"type": "input_image", "file_id": "file_1"}}}
+
+	// All-inline windows come back in chronological order.
+	images, err := recentImageURLs([]any{inline("a"), inline("b")}, 2)
+	if err != nil {
+		t.Fatalf("recentImageURLs() error = %v", err)
+	}
+	if len(images) != 2 || images[0].ImageURL != "a" || images[1].ImageURL != "b" {
+		t.Fatalf("recentImageURLs() = %#v", images)
+	}
+
+	// A file-backed image inside the window is rejected.
+	_, err = recentImageURLs([]any{inline("a"), fileBacked}, 2)
+	if err == nil || err.Error() != "requested the last 2 conversation images, but that window includes a file-backed image that cannot be used for editing" {
+		t.Fatalf("recentImageURLs(file-backed) error = %v", err)
+	}
+
+	// A window shorter than requested reports the available count.
+	_, err = recentImageURLs([]any{inline("a")}, 3)
+	if err == nil || err.Error() != "requested the last 3 conversation images, but only 1 were available" {
+		t.Fatalf("recentImageURLs(short) error = %v", err)
+	}
+
+	// The camelCase spelling of the file reference is recognized too, and tool
+	// output content items count the same way.
+	_, err = recentImageURLs([]any{inline("a"), map[string]any{"type": "message", "content": []any{map[string]any{"type": "input_image", "fileId": "file_2"}}}}, 2)
+	if err == nil || !strings.Contains(err.Error(), "file-backed image") {
+		t.Fatalf("recentImageURLs(camelCase file reference) error = %v", err)
+	}
+	_, err = recentImageURLs([]any{
+		inline("a"),
+		map[string]any{"type": "function_call_output", "output": []any{map[string]any{"type": "input_image", "file_id": "file_3"}}},
+	}, 2)
+	if err == nil || !strings.Contains(err.Error(), "file-backed image") {
+		t.Fatalf("recentImageURLs(file tool output) error = %v", err)
+	}
+}
+
+// TestImageGenerationEditRejectsFileBackedRecentWindow drives the same rule
+// through the tool arguments.
+func TestImageGenerationEditRejectsFileBackedRecentWindow(t *testing.T) {
+	handler := NewImageGenerationHandler(&ImageGenerationOptions{
+		InputItems: []any{
+			map[string]any{"type": "message", "content": []any{map[string]any{"type": "input_image", "image_url": "data:image/png;base64,AAA"}}},
+			map[string]any{"type": "message", "content": []any{map[string]any{"type": "input_image", "file_id": "file_recent"}}},
+		},
+	})
+	count := 2
+	_, err := handler.requestForArgs(context.Background(), &imageGenerationArgs{
+		Prompt:                 "add a frame",
+		NumLastImagesToInclude: &count,
+	})
+	if err == nil || !strings.Contains(err.Error(), "file-backed image that cannot be used for editing") {
+		t.Fatalf("requestForArgs() error = %v", err)
+	}
+}
+
 func TestImageGenerationDescriptionMatchesRustBlob(t *testing.T) {
 	// Mirrors Rust ext/image-generation/imagegen_description.md (include_str!
 	// in ext/image-generation/src/tool.rs): the model-visible description must

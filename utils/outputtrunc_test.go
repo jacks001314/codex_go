@@ -71,6 +71,27 @@ func TestTruncateFunctionOutputItemsReportsOmittedText(t *testing.T) {
 	}
 }
 
+// TestTruncateFunctionOutputItemsRetainsFileImages mirrors Rust #45794:
+// truncation keeps image items verbatim, including uploaded-file references
+// that the harness must not resolve.
+func TestTruncateFunctionOutputItemsRetainsFileImages(t *testing.T) {
+	chunk := "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau\n"
+	items := []FunctionCallOutputContentItem{
+		{Kind: ContentInputText, Text: strings.Repeat(chunk, 4)},
+		{Kind: ContentInputImage, FileID: "file_kept"},
+	}
+	output := TruncateFunctionOutputItemsWithPolicy(items, TokensPolicy(ApproxTokenCount(chunk)))
+	var kept *FunctionCallOutputContentItem
+	for i := range output {
+		if output[i].Kind == ContentInputImage {
+			kept = &output[i]
+		}
+	}
+	if kept == nil || kept.FileID != "file_kept" || kept.ImageURL != "" {
+		t.Fatalf("file image not retained: %#v", output)
+	}
+}
+
 func TestApproxTokenConversions(t *testing.T) {
 	if ApproxTokensFromByteCountInt64(-1) != 0 || ApproxTokensFromByteCountInt64(0) != 0 || ApproxTokensFromByteCountInt64(5) != 2 {
 		t.Fatalf("unexpected int64 token conversion")

@@ -578,19 +578,27 @@ type DynamicToolCallOutputContent struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"imageUrl,omitempty"`
+	// FileID is the uploaded-file form of an image output (Rust #45794).
+	FileID   string `json:"fileId,omitempty"`
 	AudioURL string `json:"audioUrl,omitempty"`
 }
 
 func (c *DynamicToolCallOutputContent) MarshalJSON() ([]byte, error) {
 	contentType := c.Type
 	if contentType == "" {
-		if c.ImageURL != "" {
+		if c.ImageURL != "" || c.FileID != "" {
 			contentType = "inputImage"
 		} else {
 			contentType = "inputText"
 		}
 	}
 	if contentType == "inputImage" {
+		if fileID := strings.TrimSpace(c.FileID); fileID != "" {
+			return json.Marshal(struct {
+				Type   string `json:"type"`
+				FileID string `json:"fileId"`
+			}{Type: contentType, FileID: fileID})
+		}
 		return json.Marshal(struct {
 			Type     string `json:"type"`
 			ImageURL string `json:"imageUrl"`

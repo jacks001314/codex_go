@@ -29,9 +29,12 @@ const (
 )
 
 type FunctionCallOutputContentItem struct {
-	Kind             ContentItemKind
-	Text             string
-	ImageURL         string
+	Kind     ContentItemKind
+	Text     string
+	ImageURL string
+	// FileID is the uploaded-file form of an image content item (Rust #45794):
+	// truncation keeps these items intact instead of resolving them.
+	FileID           string
 	Detail           *string
 	EncryptedContent string
 }

@@ -45,6 +45,9 @@ type DynamicToolCallOutputContentItem struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"imageUrl,omitempty"`
+	// FileID is the uploaded-file form of an image output (Rust #45794): a
+	// dynamic tool may reference a file instead of inlining a data URL.
+	FileID   string `json:"fileId,omitempty"`
 	AudioURL string `json:"audioUrl,omitempty"`
 }
 
@@ -285,7 +288,9 @@ func normalizeDynamicToolContentItems(items []DynamicToolCallOutputContentItem) 
 		switch item.Type {
 		case "inputImage", "input_image":
 			item.Type = "inputImage"
-			if isRemoteImageURL(item.ImageURL) {
+			// Rust #45794: a file reference carries no URL, so it skips the
+			// inline/remote URL checks.
+			if strings.TrimSpace(item.FileID) == "" && isRemoteImageURL(item.ImageURL) {
 				return []DynamicToolCallOutputContentItem{{Type: "inputText", Text: remoteImageURLError}}, false
 			}
 		case "inputAudio", "input_audio":
@@ -321,6 +326,10 @@ func dynamicToolContentItemsAny(items []DynamicToolCallOutputContentItem) []any 
 	out := make([]any, 0, len(items))
 	for i := range items {
 		if items[i].Type == "inputImage" {
+			if fileID := strings.TrimSpace(items[i].FileID); fileID != "" {
+				out = append(out, map[string]any{"type": "inputImage", "fileId": fileID})
+				continue
+			}
 			out = append(out, map[string]any{"type": "inputImage", "imageUrl": items[i].ImageURL})
 			continue
 		}
@@ -337,6 +346,10 @@ func dynamicToolModelContentItemsAny(items []DynamicToolCallOutputContentItem) [
 	out := make([]any, 0, len(items))
 	for i := range items {
 		if items[i].Type == "inputImage" {
+			if fileID := strings.TrimSpace(items[i].FileID); fileID != "" {
+				out = append(out, map[string]any{"type": "input_image", "file_id": fileID, "detail": "auto"})
+				continue
+			}
 			out = append(out, map[string]any{"type": "input_image", "image_url": items[i].ImageURL, "detail": "auto"})
 			continue
 		}
