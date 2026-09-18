@@ -27411,6 +27411,67 @@ func TestWriteStdinApprovalRejectsNULByteLikeRust(t *testing.T) {
 	}
 }
 
+// TestWriteStdinApprovalFailsClosedOnPolicyDriftLikeRust mirrors Rust
+// TerminalPermissions::review_requirement's two fail-closed cases: approval
+// cannot retrofit an environment-owned network policy or denied-read
+// restrictions onto a terminal whose launch policy no longer matches, so the
+// write is rejected before any review.
+func TestWriteStdinApprovalFailsClosedOnPolicyDriftLikeRust(t *testing.T) {
+	home := t.TempDir()
+	configBody := "model = \"gpt-5.4\"\n" +
+		"[features]\nwrite_stdin_approval = true\n" +
+		"[features.network_proxy]\nenabled = true\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	t.Cleanup(func() { _ = router.Close() })
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(*ServerRequest) {
+		t.Fatal("a drifted terminal must be rejected before any prompt")
+	}))
+
+	// The current environment enforces a managed network while the terminal did
+	// not launch with one.
+	err := router.writeStdinApproval(context.Background(), &tool.WriteStdinApprovalRequest{
+		ProcessID:     11,
+		ThreadID:      threadID,
+		TurnID:        "turn-1",
+		EnvironmentID: "local",
+		Chars:         "hello\n",
+		CWD:           t.TempDir(),
+		TTY:           true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "environment-owned network restrictions") {
+		t.Fatalf("managed-network drift error = %v", err)
+	}
+
+	// A current profile that denies reads cannot be applied to a terminal whose
+	// launch profile differs.
+	denied := sandbox.WorkspaceWritePermissionProfile()
+	denied.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "glob_pattern", Pattern: "**/*.env"},
+		Access: sandbox.FileSystemAccessDeny,
+	}}
+	launch := sandbox.WorkspaceWritePermissionProfile()
+	// A router without an environment-owned network policy isolates the
+	// denied-read rule.
+	bareRouter := NewRuntimeRouter(RuntimeServices{})
+	t.Cleanup(func() { _ = bareRouter.Close() })
+	err = bareRouter.terminalWriteDriftError(&tool.WriteStdinApprovalRequest{PermissionProfile: &launch}, &denied)
+	if err == nil || !strings.Contains(err.Error(), "denied-read restrictions") {
+		t.Fatalf("denied-read drift error = %v", err)
+	}
+}
+
 // TestWriteStdinApprovalRunsHooksAndGuardianLikeRust mirrors Rust
 // Session::request_approval for terminal input: PermissionRequest hooks decide
 // first (the write_stdin payload), an auto-review turn routes the write through

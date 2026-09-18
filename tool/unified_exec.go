@@ -106,6 +106,9 @@ type WriteStdinApprovalRequest struct {
 	PermissionProfile     *sandbox.PermissionProfile
 	// Escalated reports that the launch bypassed the sandbox.
 	Escalated bool
+	// ManagedNetwork reports that the launch enforced an environment-owned
+	// network policy (Rust TerminalPolicy::environment_network).
+	ManagedNetwork bool
 }
 
 // WriteStdinApprovalFunc reviews terminal input before it is written.
@@ -970,6 +973,7 @@ func (m *UnifiedExecManager) WriteStdin(ctx context.Context, args *WriteStdinArg
 					AdditionalPermissions: process.additionalPermissions,
 					PermissionProfile:     process.permissionProfile,
 					Escalated:             process.escalated,
+					ManagedNetwork:        process.managedNetwork,
 				}
 				if err := approval(ctx, request); err != nil {
 					return nil, &UnifiedExecStdinApprovalError{Message: err.Error()}

@@ -14032,10 +14032,16 @@ func (r *RuntimeRouter) terminalWriteReviewRequirement(request *tool.WriteStdinA
 	}
 	launch := request.PermissionProfile
 	if request.SandboxPermissions == sandbox.SandboxPermissionsRequireEscalated {
+		if err := r.terminalWriteDriftError(request, nil); err != nil {
+			return sandbox.SandboxPermissionsUseDefault, err
+		}
 		return sandbox.SandboxPermissionsRequireEscalated, nil
 	}
 	current, err := r.currentWriteStdinPermissionProfile(request, cfg)
 	if err != nil {
+		return sandbox.SandboxPermissionsUseDefault, err
+	}
+	if err := r.terminalWriteDriftError(request, current); err != nil {
 		return sandbox.SandboxPermissionsUseDefault, err
 	}
 	// A profile that cannot be compared (no configuration service, or a launch
@@ -14048,6 +14054,30 @@ func (r *RuntimeRouter) terminalWriteReviewRequirement(request *tool.WriteStdinA
 		return sandbox.SandboxPermissionsWithAdditionalPermissions, nil
 	}
 	return sandbox.SandboxPermissionsUseDefault, nil
+}
+
+// terminalWriteDriftError mirrors Rust TerminalPermissions::review_requirement's
+// two fail-closed cases: approval cannot retrofit an environment-owned network
+// policy or denied-read restrictions onto a terminal whose launch policy no
+// longer matches, so the caller must start a new terminal.
+func (r *RuntimeRouter) terminalWriteDriftError(request *tool.WriteStdinApprovalRequest, current *sandbox.PermissionProfile) error {
+	if request == nil {
+		return nil
+	}
+	bypassed := request.SandboxPermissions == sandbox.SandboxPermissionsRequireEscalated
+	cfg := r.effectiveWriteStdinConfig(strings.TrimSpace(request.ThreadID))
+	if cfg != nil {
+		cwd := strings.TrimSpace(request.CWD)
+		if _, currentManagedNetwork, err := r.buildManagedNetworkProxyConfigForCWD(cfg.Values, cwd); err == nil {
+			if currentManagedNetwork && (bypassed || request.ManagedNetwork != currentManagedNetwork) {
+				return errors.New("this terminal cannot enforce the current environment-owned network restrictions; start a new terminal")
+			}
+		}
+	}
+	if current != nil && current.HasDenyReadEntries() && (bypassed || !equalSandboxPermissionProfiles(request.PermissionProfile, current)) {
+		return errors.New("this terminal cannot enforce the current denied-read restrictions; start a new terminal")
+	}
+	return nil
 }
 
 // currentWriteStdinPermissionProfile resolves the permission profile the
