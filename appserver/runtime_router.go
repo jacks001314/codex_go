@@ -13296,6 +13296,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.SkillProviders = executorSkillProviders
 	options.MCPTools = mcpTools
 	options.MCPConnectors = mcpConnectors
+	// Rust #46035: the tool exposure policy combines a Codex Apps connector's
+	// omit_tools_from with its server's, using the effective [apps] config.
+	if cfg != nil {
+		options.AppsConfigValues = cfg.Values
+	}
 	// Rust mcp_tool_call.rs maybe_request_mcp_tool_approval: gate custom MCP
 	// tool calls on their configured approval mode.
 	options.MCPToolApproval = r.newAppserverMCPToolApprovalOptions(cfg, mcpService, threadID, turnID, approvalPolicy)

@@ -18,8 +18,13 @@ type AppConfig struct {
 	OpenWorldEnabled         *bool
 	DefaultToolsApprovalMode *AppToolApproval
 	DefaultToolsEnabled      *bool
-	Tools                    AppToolsConfig
-	Links                    *AppLinksConfig
+	// OmitToolsFrom lists the model-facing surfaces this connector's tools must
+	// be omitted from, in addition to any server-level omissions (Rust #46035).
+	// Nil leaves lower-priority configuration unchanged; an empty list clears
+	// connector-level omissions.
+	OmitToolsFrom *[]string
+	Tools         AppToolsConfig
+	Links         *AppLinksConfig
 }
 
 func MergeConnectors(connectors []AppEntry, accessibleConnectors []AppEntry) []AppEntry {
@@ -300,6 +305,13 @@ func appConfigFromMap(table map[string]any) AppConfig {
 		value := AppToolApproval(strings.TrimSpace(mode))
 		app.DefaultToolsApprovalMode = &value
 	}
+	// Rust #46035: `apps.<connector_id>.omit_tools_from`, restricted to the known
+	// ToolExposureSurface values (code_mode/deferred/direct) like Rust's enum.
+	if raw, ok := firstKey(table, "omit_tools_from", "omitToolsFrom"); ok {
+		if surfaces, ok := omitToolsFromSurfaces(raw); ok {
+			app.OmitToolsFrom = &surfaces
+		}
+	}
 	if tools, ok := table["tools"].(map[string]any); ok {
 		parsed := AppToolsConfig{}
 		for name, raw := range tools {
@@ -349,8 +361,44 @@ func appConfigIsSet(app AppConfig) bool {
 		app.OpenWorldEnabled != nil ||
 		app.DefaultToolsApprovalMode != nil ||
 		app.DefaultToolsEnabled != nil ||
+		app.OmitToolsFrom != nil ||
 		len(app.Tools) > 0 ||
 		app.Links != nil
+}
+
+// omitToolsFromSurfaces normalizes a connector's omit_tools_from list to the
+// known surfaces. Unknown entries are dropped, matching the lenient enum
+// handling Go uses for the other config enums (the list itself is preserved, so
+// an explicit empty list still clears lower-priority omissions).
+func omitToolsFromSurfaces(value any) ([]string, bool) {
+	items, ok := value.([]any)
+	if !ok {
+		if strings.TrimSpace(stringFromAnyApps(value)) != "" {
+			// A bare string is accepted as a single surface, like Rust's
+			// one-element list.
+			items = []any{value}
+		} else {
+			return nil, false
+		}
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		surface := strings.ToLower(strings.TrimSpace(stringFromAnyApps(item)))
+		switch surface {
+		case "code_mode", "deferred", "direct":
+			out = append(out, surface)
+		}
+	}
+	return out, true
+}
+
+func firstKey(values map[string]any, keys ...string) (any, bool) {
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			return value, true
+		}
+	}
+	return nil, false
 }
 
 func mergeDirectorySnapshots(directory []AppEntry, local []AppEntry) []AppEntry {

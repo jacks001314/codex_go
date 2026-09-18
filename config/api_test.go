@@ -287,6 +287,7 @@ enabled = false
 approvals_reviewer = "user"
 destructive_enabled = false
 default_tools_approval_mode = "prompt"
+omit_tools_from = ["deferred"]
 `)
 	service := NewConfigService(home)
 
@@ -311,6 +312,14 @@ default_tools_approval_mode = "prompt"
 	app1 := apps["app1"].(map[string]any)
 	if app1["enabled"] != false || app1["approvals_reviewer"] != "user" || app1["destructive_enabled"] != false || app1["default_tools_approval_mode"] != "prompt" {
 		t.Fatalf("apps.app1 = %#v", app1)
+	}
+	// Rust #46035: the connector's tool-exposure omissions are part of the
+	// config read surface, and the protocol shape reports null when unset.
+	if surfaces, ok := app1["omit_tools_from"].([]any); !ok || len(surfaces) != 1 || surfaces[0] != "deferred" {
+		t.Fatalf("apps.app1.omit_tools_from = %#v", app1["omit_tools_from"])
+	}
+	if defaultApp["omit_tools_from"] != nil {
+		t.Fatalf("apps._default.omit_tools_from = %#v, want null", defaultApp["omit_tools_from"])
 	}
 	for _, key := range []string{
 		"tools.web_search.context_size",

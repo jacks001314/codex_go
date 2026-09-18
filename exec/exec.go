@@ -487,6 +487,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		MCPService:                     mcpService,
 		MCPTools:                       mcpTools,
 		MCPConnectors:                  mcpConnectors,
+		AppsConfigValues:               cfg.Values,
 		WebSearch:                      webSearchOptions,
 		ImageGeneration:                imageGenerationOptions,
 		ViewImage:                      execViewImageOptions(requestCWD(req), &modelInfo),
@@ -673,6 +674,7 @@ type agentRunConfig struct {
 	MCPService                     *mcp.MCPService
 	MCPTools                       []mcp.RuntimeToolInfo
 	MCPConnectors                  []mcp.RuntimeConnector
+	AppsConfigValues               map[string]any
 	WebSearch                      *turn.WebSearchOptions
 	ImageGeneration                *turn.ImageGenerationOptions
 	ViewImage                      *tool.ViewImageOptions
@@ -1248,6 +1250,11 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		}
 		options.MCPTools = mcpTools
 		options.MCPConnectors = mcpConnectors
+		if run != nil {
+			// Rust #46035: the connector-level exposure omissions come from the
+			// effective [apps] config.
+			options.AppsConfigValues = run.AppsConfigValues
+		}
 	}
 	if run != nil {
 		options.WebSearch = run.WebSearch

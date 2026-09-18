@@ -372,6 +372,9 @@ func normalizeAppsConfig(values map[string]any) {
 		setDefaultJSONField(app, "open_world_enabled", nil)
 		setDefaultJSONField(app, "default_tools_approval_mode", nil)
 		setDefaultJSONField(app, "default_tools_enabled", nil)
+		// Rust #46035: the protocol AppConfig serializes omit_tools_from as null
+		// when unset.
+		setDefaultJSONField(app, "omit_tools_from", nil)
 		if tools, ok := app["tools"].(map[string]any); ok {
 			tools = cloneMap(tools)
 			for toolName, toolValue := range tools {

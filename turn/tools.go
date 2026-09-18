@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"codex_go/agent"
+	"codex_go/apps"
 	"codex_go/compact"
 	featureflags "codex_go/features"
 	"codex_go/mcp"
@@ -37,6 +38,10 @@ type ToolRegistryOptions struct {
 	MCPTools      []mcp.RuntimeToolInfo
 	MCPConnectors []mcp.RuntimeConnector
 	MCPExposure   tool.Exposure
+	// AppsConfigValues is the effective `[apps]` config section, used for the
+	// per-connector tool-exposure omissions Rust reads from the config layer
+	// stack in its tool spec plan (#46035). Nil disables connector omissions.
+	AppsConfigValues map[string]any
 	// MCPTurnMetadata supplies the turn-metadata document every MCP tool call
 	// reports in `_meta` (Rust build_mcp_tool_call_request_meta). Nil omits the
 	// entry; the callback runs per call so live turn state is current.
@@ -449,10 +454,12 @@ func registerMCPTools(registry *tool.Registry, options *ToolRegistryOptions) err
 	// tools everywhere.
 	allTools := append([]mcp.RuntimeToolInfo(nil), exposure.DirectTools...)
 	allTools = append(allTools, exposure.DeferredTools...)
-	omitByServer := mcpOmitToolsFromByServer(options.MCPService, allTools)
 	for i := range allTools {
 		info := allTools[i]
-		exposure := mcpToolExposureForSurfaces(omitByServer[info.ServerName], options.EnableToolSearch)
+		// Rust #46035: a Codex Apps connector's own omissions are combined with
+		// the server's so app settings never drop a server restriction.
+		omit := mcpOmitToolsFromForTool(options.MCPService, options.AppsConfigValues, info)
+		exposure := mcpToolExposureForSurfaces(omit, options.EnableToolSearch)
 		if err := registerMCPToolSet(registry, options, []mcp.RuntimeToolInfo{info}, exposure); err != nil {
 			return err
 		}
@@ -492,6 +499,43 @@ func mcpToolExposureForSurfaces(omit []string, searchToolEnabled bool) tool.Expo
 	default:
 		return tool.ExposureDiscoverable
 	}
+}
+
+// mcpOmitToolsFromForTool mirrors Rust's apply_mcp_tool_exposure_policy (#46035):
+// a tool's omitted surfaces are its server's omissions plus, for Codex Apps
+// tools, the omissions configured for the invoking connector.
+func mcpOmitToolsFromForTool(service *mcp.MCPService, appsConfigValues map[string]any, info mcp.RuntimeToolInfo) []string {
+	serverName := strings.TrimSpace(info.ServerName)
+	omitted := []string{}
+	if service != nil && serverName != "" {
+		if config, ok := service.ServerConfigForServer(serverName); ok {
+			omitted = append(omitted, config.OmitToolsFrom...)
+		}
+	}
+	omitted = append(omitted, mcpConnectorOmitToolsFrom(appsConfigValues, info)...)
+	return omitted
+}
+
+// mcpConnectorOmitToolsFrom returns the connector-level omissions configured for
+// a Codex Apps tool (`apps.<connector_id>.omit_tools_from`). Non-apps tools and
+// tools without a connector id have no connector-level omissions.
+func mcpConnectorOmitToolsFrom(appsConfigValues map[string]any, info mcp.RuntimeToolInfo) []string {
+	if len(appsConfigValues) == 0 || !mcp.IsCodexAppsMCPServerName(strings.TrimSpace(info.ServerName)) {
+		return nil
+	}
+	connectorID := strings.TrimSpace(info.ConnectorID)
+	if connectorID == "" {
+		return nil
+	}
+	config := apps.AppsConfigFromValues(appsConfigValues)
+	if config == nil {
+		return nil
+	}
+	app, ok := config.Apps[connectorID]
+	if !ok || app.OmitToolsFrom == nil {
+		return nil
+	}
+	return append([]string(nil), (*app.OmitToolsFrom)...)
 }
 
 func mcpOmitToolsFromByServer(service *mcp.MCPService, tools []mcp.RuntimeToolInfo) map[string][]string {
