@@ -50,6 +50,24 @@ func MaybeMigrateRolloutsOnStartup(codexHome string, runtime *state.StateRuntime
 	}()
 }
 
+// MaybeSpawnRolloutCompressionOnStartup mirrors Rust thread_manager.rs: when
+// local thread store compression is enabled, start the background pass that
+// compresses cold rollouts. The RPC trigger (`rollout/compress`) is available
+// even when this feature is disabled.
+func MaybeSpawnRolloutCompressionOnStartup(codexHome string, cfg *config.ConfigService) {
+	if strings.TrimSpace(codexHome) == "" || cfg == nil {
+		return
+	}
+	read, err := cfg.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil || read.Config == nil {
+		return
+	}
+	if !features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "local_thread_store_compression") {
+		return
+	}
+	rollout.SpawnRolloutCompressionWorker(codexHome, rollout.RolloutCompressionTriggerStartup)
+}
+
 // migrateRolloutsOnStartup mirrors Rust startup.rs migrate_rollouts_on_startup.
 func migrateRolloutsOnStartup(ctx context.Context, codexHome string, runtime *state.StateRuntime) error {
 	paths, err := findAllRolloutPaths(codexHome)

@@ -984,6 +984,8 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadMemoryModeSet(request)
 	case MethodMemoryReset:
 		return r.handleMemoryReset(request)
+	case MethodRolloutCompress:
+		return r.handleRolloutCompress(request)
 	case MethodThreadCompactStart:
 		return r.handleThreadCompactStart(request)
 	case MethodThreadApproveGuardianDeniedAction:
@@ -2590,6 +2592,21 @@ func (r *Router) handleMemoryReset(request *Request) (*MemoryResetResponse, erro
 		return nil, fmt.Errorf("failed to clear memory directories under %s: %w", codexHome, err)
 	}
 	return &MemoryResetResponse{}, nil
+}
+
+// handleRolloutCompress mirrors Rust's `rollout/compress` request processor
+// (#46020): it schedules a best-effort background compression pass for cold
+// local rollouts and immediately acknowledges the trigger.
+func (r *Router) handleRolloutCompress(request *Request) (*RolloutCompressResponse, error) {
+	if r == nil || r.store == nil {
+		return nil, fmt.Errorf("%w: router is not configured", ErrInvalidRequest)
+	}
+	codexHome := codexHomeFromSessionStore(r.store)
+	if strings.TrimSpace(codexHome) == "" {
+		return nil, fmt.Errorf("%w: rollout/compress requires a local codex home", ErrInvalidRequest)
+	}
+	rollout.SpawnRolloutCompressionWorker(codexHome, rollout.RolloutCompressionTriggerRPC)
+	return &RolloutCompressResponse{}, nil
 }
 
 func (r *Router) handleThreadCompactStart(request *Request) (*ThreadCompactStartResponse, error) {

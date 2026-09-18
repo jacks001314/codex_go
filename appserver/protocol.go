@@ -39,6 +39,7 @@ const (
 	MethodThreadUnsubscribe                  Method = "thread/unsubscribe"
 	MethodThreadMemoryModeSet                Method = "thread/memoryMode/set"
 	MethodMemoryReset                        Method = "memory/reset"
+	MethodRolloutCompress                    Method = "rollout/compress"
 	MethodMemoryStatus                       Method = "memory/status"
 	MethodUserVerificationStatus             Method = "userVerification/status"
 	MethodUserVerificationEnroll             Method = "userVerification/enroll"
@@ -2132,6 +2133,11 @@ func (p *ThreadMemoryModeSetParams) Validate() error {
 type ThreadMemoryModeSetResponse struct{}
 
 type MemoryResetResponse struct{}
+
+// RolloutCompressResponse acknowledges the compression trigger, not completion
+// (Rust `RolloutCompressResponse`): existing maintenance locks and cooldowns can
+// make the background pass skip without doing work.
+type RolloutCompressResponse struct{}
 
 type ThreadCompactStartParams struct {
 	ThreadID string `json:"threadId"`

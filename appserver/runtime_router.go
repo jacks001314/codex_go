@@ -1211,6 +1211,9 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		// ones in the background.
 		MaybeMigrateRolloutsOnStartup(codexHome, stateRuntime, configService)
 	}
+	// Mirrors Rust thread_manager.rs: local thread store compression starts its
+	// background pass on startup when the feature is enabled.
+	MaybeSpawnRolloutCompressionOnStartup(codexHome, configService)
 	return router
 }
 
@@ -2384,6 +2387,7 @@ func experimentalAPIMethod(method Method) bool {
 		MethodFuzzyFileSearchStop,
 		MethodFuzzyFileSearchUpdate,
 		MethodMemoryReset,
+		MethodRolloutCompress,
 		MethodMCPServerEventStreamStart,
 		MethodMCPServerEventStreamStop,
 		MethodMockExperimentalMethod,
@@ -2864,6 +2868,13 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handleCommandExecTerminate(request)
 	case MethodCommandExecResize:
 		return r.handleCommandExecResize(request)
+	case MethodRolloutCompress:
+		// Rust's `rollout/compress` request processor is not thread scoped
+		// (#46020); it schedules the local background pass and acknowledges.
+		if r.services.ThreadRouter == nil {
+			return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
+		}
+		return r.services.ThreadRouter.handleRolloutCompress(request)
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownMethod, request.Method)
 	}
