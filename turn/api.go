@@ -63,9 +63,13 @@ type TurnUserInput struct {
 	TextElements []TextElement `json:"text_elements,omitempty"`
 	Path         string        `json:"path,omitempty"`
 	URL          string        `json:"url,omitempty"`
-	Name         string        `json:"name,omitempty"`
-	Detail       *string       `json:"detail,omitempty"`
-	MimeType     string        `json:"mimeType,omitempty"`
+	// FileID references an uploaded file instead of an inline URL (Rust
+	// #45794): the app-server accepts `fileId` alongside `url` for image
+	// inputs and the reference is forwarded to the Responses API as `file_id`.
+	FileID   string  `json:"fileId,omitempty"`
+	Name     string  `json:"name,omitempty"`
+	Detail   *string `json:"detail,omitempty"`
+	MimeType string  `json:"mimeType,omitempty"`
 }
 
 // TurnToolOutput carries a standalone named function-call output used to start

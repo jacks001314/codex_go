@@ -4655,6 +4655,16 @@ func threadUserInputContent(prompt string, inputs []turn.TurnUserInput) []map[st
 			content = append(content, entry)
 			continue
 		}
+		if fileID := strings.TrimSpace(input.FileID); fileID != "" && (inputType == "" || strings.EqualFold(inputType, "image")) {
+			// Rust #45794: a file reference is the `fileId` form of an image
+			// input and carries no URL.
+			entry := map[string]any{"type": "image", "fileId": fileID}
+			if input.Detail != nil {
+				entry["detail"] = *input.Detail
+			}
+			content = append(content, entry)
+			continue
+		}
 		if path := strings.TrimSpace(input.Path); path != "" && (inputType == "" || strings.EqualFold(inputType, "localImage")) {
 			entry := map[string]any{"type": "localImage", "path": path}
 			if input.Detail != nil {
@@ -6929,7 +6939,9 @@ func countTurnUserInputImages(inputs []turn.TurnUserInput) int {
 	count := 0
 	for i := range inputs {
 		input := inputs[i]
-		if strings.TrimSpace(input.URL) != "" || strings.TrimSpace(input.Path) != "" {
+		// Rust #45794: a file reference still counts toward the image budget and
+		// resize-notice numbering even though it is never resolved locally.
+		if strings.TrimSpace(input.URL) != "" || strings.TrimSpace(input.Path) != "" || strings.TrimSpace(input.FileID) != "" {
 			count++
 		}
 	}
@@ -10237,6 +10249,13 @@ func inputContentFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) 
 			content = append(content, inputImageContentBlock(imageURL, inputDetail(input)))
 			continue
 		}
+		if fileID := strings.TrimSpace(input.FileID); fileID != "" && (inputType == "" || strings.EqualFold(inputType, "image")) {
+			// Rust #45794: file references pass through to the Responses API as
+			// `file_id` without being resolved locally.
+			imageIndex++
+			content = append(content, inputFileContentBlock(fileID, inputDetail(input)))
+			continue
+		}
 		if path := strings.TrimSpace(input.Path); path != "" && (inputType == "" || strings.EqualFold(inputType, "localImage")) {
 			imageIndex++
 			content = append(content, localImageInputContentBlocks(path, inputDetail(input), imageIndex)...)
@@ -10258,6 +10277,15 @@ func inputImageContentBlock(imageURL string, detail string) map[string]any {
 		detail = "high"
 	}
 	return map[string]any{"type": "input_image", "image_url": imageURL, "detail": detail}
+}
+
+// inputFileContentBlock is the uploaded-file form of an image input (Rust
+// #45794: `ImageReference::File { file_id }` flattened into the input image).
+func inputFileContentBlock(fileID string, detail string) map[string]any {
+	if strings.TrimSpace(detail) == "" {
+		detail = "high"
+	}
+	return map[string]any{"type": "input_image", "file_id": fileID, "detail": detail}
 }
 
 func inputDetail(input turn.TurnUserInput) string {
@@ -10336,6 +10364,9 @@ func sessionContentFromTurnUserInputs(inputs []turn.TurnUserInput) []session.Con
 				inputType = "image"
 			}
 			content = append(content, session.ContentPart{Type: inputType, ImageURL: strings.TrimSpace(input.URL), Detail: cloneString(input.Detail)})
+		case strings.TrimSpace(input.FileID) != "" && (inputType == "" || strings.EqualFold(inputType, "image")):
+			// Rust #45794: durable file identity is preserved in thread history.
+			content = append(content, session.ContentPart{Type: "input_image", FileID: strings.TrimSpace(input.FileID), Detail: cloneString(input.Detail)})
 		case strings.TrimSpace(input.Path) != "" && (inputType == "" || strings.EqualFold(inputType, "localImage")):
 			if inputType == "" {
 				inputType = "localImage"

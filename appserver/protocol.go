@@ -1300,9 +1300,11 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 type threadItemEnvelope ThreadItem
 
 type ThreadItemContent struct {
-	Type     string  `json:"type"`
-	Text     string  `json:"text,omitempty"`
-	ImageURL string  `json:"imageUrl,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"imageUrl,omitempty"`
+	// FileID is the uploaded-file form of an image content entry (Rust #45794).
+	FileID   string  `json:"fileId,omitempty"`
 	AudioURL string  `json:"audioUrl,omitempty"`
 	Detail   *string `json:"detail,omitempty"`
 }
@@ -3809,6 +3811,7 @@ func threadItemContentFromSession(content []session.ContentPart) []ThreadItemCon
 			Type:     content[i].Type,
 			Text:     content[i].Text,
 			ImageURL: content[i].ImageURL,
+			FileID:   content[i].FileID,
 			AudioURL: content[i].AudioURL,
 			Detail:   cloneString(content[i].Detail),
 		}
@@ -3931,7 +3934,13 @@ func threadItemUserInputContent(item *ThreadItem) []map[string]any {
 	for _, part := range item.Content {
 		switch part.Type {
 		case "input_image", "image":
-			entry := map[string]any{"type": "image", "url": part.ImageURL}
+			entry := map[string]any{"type": "image"}
+			if fileID := strings.TrimSpace(part.FileID); fileID != "" {
+				// Rust #45794: the v2 client sees the `fileId` form.
+				entry["fileId"] = fileID
+			} else {
+				entry["url"] = part.ImageURL
+			}
 			if part.Detail != nil {
 				entry["detail"] = *part.Detail
 			}
@@ -5980,7 +5989,13 @@ func sessionContentPartsFromResponseContent(value any, role string) []session.Co
 		switch partType {
 		case "input_image", "image":
 			detail := stringPtrIfNotEmpty(stringFromMap(part, "detail"))
-			parts = append(parts, session.ContentPart{Type: "input_image", ImageURL: firstNonEmpty(stringFromMap(part, "image_url"), stringFromMap(part, "url")), Detail: detail})
+			fileID := firstNonEmpty(stringFromMap(part, "file_id"), stringFromMap(part, "fileId"))
+			parts = append(parts, session.ContentPart{
+				Type:     "input_image",
+				ImageURL: firstNonEmpty(stringFromMap(part, "image_url"), stringFromMap(part, "url")),
+				FileID:   fileID,
+				Detail:   detail,
+			})
 		case "localImage", "local_image":
 			detail := stringPtrIfNotEmpty(stringFromMap(part, "detail"))
 			parts = append(parts, session.ContentPart{Type: "local_image", ImageURL: stringFromMap(part, "path"), Detail: detail})

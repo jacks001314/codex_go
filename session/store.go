@@ -207,9 +207,12 @@ type ItemPage struct {
 }
 
 type ContentPart struct {
-	Type     string  `json:"type"`
-	Text     string  `json:"text,omitempty"`
-	ImageURL string  `json:"image_url,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	// FileID is the durable uploaded-file reference for an image part, stored
+	// instead of an inline URL (Rust #45794/#45543).
+	FileID   string  `json:"file_id,omitempty"`
 	AudioURL string  `json:"audio_url,omitempty"`
 	Detail   *string `json:"detail,omitempty"`
 }
