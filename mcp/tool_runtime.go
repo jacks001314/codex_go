@@ -41,12 +41,18 @@ type RuntimeTool struct {
 }
 
 type RuntimeToolInfo struct {
-	ServerName           string   `json:"serverName"`
-	CallableName         string   `json:"toolName,omitempty"`
-	CallableNamespace    string   `json:"toolNamespace,omitempty"`
-	NamespaceDescription string   `json:"namespaceDescription,omitempty"`
-	ConnectorID          string   `json:"connectorId,omitempty"`
-	ConnectorName        string   `json:"connectorName,omitempty"`
+	ServerName           string `json:"serverName"`
+	CallableName         string `json:"toolName,omitempty"`
+	CallableNamespace    string `json:"toolNamespace,omitempty"`
+	NamespaceDescription string `json:"namespaceDescription,omitempty"`
+	ConnectorID          string `json:"connectorId,omitempty"`
+	ConnectorName        string `json:"connectorName,omitempty"`
+	// ConnectorDescription is the connector's own description, kept separate
+	// from the namespace description so the Guardian review can render it as
+	// Rust's bounded `<guardian_tool_descriptions>` block (Rust
+	// McpToolApprovalMetadata::connector_description). Internal-only: the
+	// model-facing tool list uses NamespaceDescription.
+	ConnectorDescription string   `json:"-"`
 	PluginDisplayNames   []string `json:"pluginDisplayNames,omitempty"`
 	// PluginID is the plugin that contributed the owning server, when any
 	// (Rust McpToolApprovalMetadata::plugin_id). Internal-only: the model-facing
@@ -143,6 +149,7 @@ func RuntimeToolsFromStatuses(statuses []MCPServerStatus) []RuntimeToolInfo {
 			if connector := ConnectorToolInfoFromMCPTool(serverName, &toolInfo); connector != nil {
 				runtimeTool.ConnectorID = strings.TrimSpace(connector.ConnectorID)
 				runtimeTool.ConnectorName = strings.TrimSpace(connector.ConnectorName)
+				runtimeTool.ConnectorDescription = strings.TrimSpace(connector.ConnectorDescription)
 				runtimeTool.NamespaceDescription = firstNonEmpty(
 					strings.TrimSpace(connector.NamespaceDescription),
 					strings.TrimSpace(connector.ConnectorDescription),

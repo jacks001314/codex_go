@@ -60,6 +60,9 @@ type ToolExecutorOptions struct {
 	ToolName      tool.ToolName
 	ConnectorID   string
 	ConnectorName string
+	// ConnectorDescription is the connector's own description, forwarded to the
+	// Guardian review (Rust McpToolApprovalMetadata::connector_description).
+	ConnectorDescription string
 	// PluginID is the plugin that contributed the owning server, when any; it is
 	// reported on the tool-call item metadata (Rust #45805's plugin_id).
 	PluginID    string
@@ -121,6 +124,7 @@ type ToolExecutor struct {
 	toolName                      tool.ToolName
 	connectorID                   string
 	connectorName                 string
+	connectorDescription          string
 	pluginID                      string
 	model                         string
 	parallel                      bool
@@ -166,6 +170,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.binding = options.Binding
 	executor.connectorID = strings.TrimSpace(options.ConnectorID)
 	executor.connectorName = strings.TrimSpace(options.ConnectorName)
+	executor.connectorDescription = strings.TrimSpace(options.ConnectorDescription)
 	executor.pluginID = strings.TrimSpace(options.PluginID)
 	executor.model = strings.TrimSpace(options.Model)
 	executor.openAIFileRewriter = options.OpenAIFileRewriter
@@ -196,6 +201,8 @@ func RegisterToolExecutors(registry *tool.Registry, service *MCPService, tools [
 			ToolInfo:                      info,
 			ToolName:                      tool.NamespacedName(tools[i].CallableNamespace, tools[i].CallableName),
 			ConnectorID:                   tools[i].ConnectorID,
+			ConnectorName:                 tools[i].ConnectorName,
+			ConnectorDescription:          tools[i].ConnectorDescription,
 			OpenAIFileInputOptionalFields: tools[i].OpenAIFileInputOptionalFields,
 			AgentPlugin:                   tools[i].AgentPlugin,
 		}); err != nil {

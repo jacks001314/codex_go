@@ -105,18 +105,21 @@ type MCPToolApprovalPromptOptions struct {
 // MCPToolApprovalRequest is the turn-scoped context an approval handler needs to
 // surface and record a decision.
 type MCPToolApprovalRequest struct {
-	Server          string
-	Tool            string
-	Arguments       any
-	Annotations     *RuntimeToolAnnotations
-	ConnectorID     string
-	ConnectorName   string
-	ToolTitle       string
-	ToolDescription string
-	ApprovalMode    apps.AppToolApproval
-	ThreadID        string
-	TurnID          string
-	CallID          string
+	Server        string
+	Tool          string
+	Arguments     any
+	Annotations   *RuntimeToolAnnotations
+	ConnectorID   string
+	ConnectorName string
+	// ConnectorDescription is the connector's own description from the tool
+	// metadata (Rust McpToolApprovalMetadata::connector_description).
+	ConnectorDescription string
+	ToolTitle            string
+	ToolDescription      string
+	ApprovalMode         apps.AppToolApproval
+	ThreadID             string
+	TurnID               string
+	CallID               string
 	// HookToolName is the canonical hook identity for this tool, used by the
 	// PermissionRequest payload (Rust ApprovalAction::McpToolCall's
 	// hook_tool_name).
@@ -544,6 +547,7 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		Annotations:             annotations,
 		ConnectorID:             e.connectorID,
 		ConnectorName:           e.connectorName,
+		ConnectorDescription:    e.connectorDescription,
 		ToolTitle:               e.toolInfo.Title,
 		ToolDescription:         e.toolInfo.Description,
 		ApprovalMode:            mode,

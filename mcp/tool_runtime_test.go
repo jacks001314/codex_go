@@ -234,6 +234,11 @@ func TestRuntimeToolsFromStatusesMatchesRustMCPInventory(t *testing.T) {
 	if drive.Tool.Description != "Drive files" {
 		t.Fatalf("drive description = %q", drive.Tool.Description)
 	}
+	// The connector description stays available for the Guardian review's
+	// bounded descriptions block as well as the model-facing description.
+	if drive.ConnectorDescription != "Drive files" {
+		t.Fatalf("connector description = %q", drive.ConnectorDescription)
+	}
 	if len(drive.PluginDisplayNames) != 1 || drive.PluginDisplayNames[0] != "Drive Plugin" {
 		t.Fatalf("plugin display names = %#v", drive.PluginDisplayNames)
 	}
