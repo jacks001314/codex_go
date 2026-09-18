@@ -46,6 +46,7 @@ const (
 	CommandMigrateRollouts   Command = "migrate-rollouts"
 	CommandAgents            Command = "agents"
 	CommandQueue             Command = "queue"
+	CommandTcpTunnel         Command = "tcp-tunnel"
 )
 
 var knownCommands = map[string]Command{
@@ -82,6 +83,7 @@ var knownCommands = map[string]Command{
 	"migrateRollouts":     CommandMigrateRollouts,
 	"agents":              CommandAgents,
 	"queue":               CommandQueue,
+	"tcp-tunnel":          CommandTcpTunnel,
 }
 
 type SharedOptions struct {
@@ -435,6 +437,7 @@ type Parsed struct {
 	Queue             QueueOptions
 	Agents            AgentsOptions
 	Debug             DebugOptions
+	TcpTunnel         TcpTunnelOptions
 	RawSubcommand     []string
 }
 
@@ -551,6 +554,8 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 		return p, parseQueue(args, &p.Queue)
 	case CommandAgents:
 		return p, parseAgents(args, &p.Agents)
+	case CommandTcpTunnel:
+		return p, parseTcpTunnel(args, &p.TcpTunnel)
 	case CommandDebug:
 		return p, parseDebug(args, &p.Debug)
 	default:

@@ -21,9 +21,11 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
+	github.com/ebitengine/purego v0.11.0
 	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/elazarl/goproxy v1.8.4
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/gen2brain/malgo v0.11.26
 	github.com/go-ole/go-ole v1.3.0
 	github.com/gobwas/glob v0.2.3
 	github.com/goccy/go-json v0.10.5
@@ -36,6 +38,10 @@ require (
 	github.com/mattn/go-runewidth v0.0.19
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/muesli/termenv v0.16.0
+	github.com/pion/ice/v4 v4.4.2
+	github.com/pion/sdp/v3 v3.0.19
+	github.com/pion/webrtc/v4 v4.2.20
+	github.com/quic-go/quic-go v0.59.1
 	github.com/rivo/uniseg v0.4.7
 	github.com/sethvargo/go-password v0.3.1
 	github.com/shurlinet/go-clatter v0.6.0
@@ -43,6 +49,7 @@ require (
 	github.com/things-go/go-socks5 v0.1.1
 	github.com/valyala/fasthttp v1.72.0
 	github.com/yuin/goldmark v1.7.13
+	go.opentelemetry.io/proto/otlp v1.7.1
 	golang.org/x/crypto v0.53.0
 	golang.org/x/image v0.35.0
 	golang.org/x/mod v0.36.0
@@ -81,15 +88,12 @@ require (
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/ebitengine/purego v0.11.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
-	github.com/gen2brain/malgo v0.11.26 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1 // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
@@ -100,7 +104,6 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.8 // indirect
-	github.com/pion/ice/v4 v4.4.2 // indirect
 	github.com/pion/interceptor v0.1.48 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.2.0 // indirect
@@ -108,12 +111,11 @@ require (
 	github.com/pion/rtcp v1.2.17 // indirect
 	github.com/pion/rtp v1.10.5 // indirect
 	github.com/pion/sctp v1.11.1 // indirect
-	github.com/pion/sdp/v3 v3.0.19 // indirect
 	github.com/pion/srtp/v3 v3.0.13 // indirect
 	github.com/pion/stun/v4 v4.0.0 // indirect
 	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/pion/turn/v5 v5.1.0 // indirect
-	github.com/pion/webrtc/v4 v4.2.20 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/shurlinet/go-hqc v0.1.1 // indirect
@@ -122,7 +124,6 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
-	go.opentelemetry.io/proto/otlp v1.7.1 // indirect
 	golang.org/x/term v0.44.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
