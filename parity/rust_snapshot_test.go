@@ -200,6 +200,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"codex-mcp",
 		"memories/read",
 		"memories/write",
+		"mermaid",
 		"model-provider-info",
 		"mxc-sandbox",
 		"models-manager",
@@ -219,6 +220,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"stdio-to-uds",
 		"otel",
 		"otel-trace-websocket",
+		"tcp-tunnel",
 		"tui",
 		"user-verification",
 		"tools",
@@ -275,18 +277,24 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
-		{Path: "Cargo.toml", SHA256: "908d9abba41b361720225bf5939033f67696086ea362f06fc365492626834631"},
+		// Re-pinned to upstream 7498521d (#45900/#45982/#46020): the tcp-tunnel
+		// and mermaid workspace members plus the new async-utils dependency.
+		{Path: "Cargo.toml", SHA256: "00aa06d5118440a17c654c1f60d565b1d9a5d7610de8c8a7ae7b46bedc4bde39"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
 		{Path: "exec/src/lib.rs", SHA256: "28d9f23332f183e94371aa1c7bc6b2e4b1a6ad77b6f20e148a6fbde8c4683e16"},
-		{Path: "exec/src/exec_events.rs", SHA256: "fc914a7d8f7e990b19a95c41abf758e95e5b7ea028caa8b34b1c82306382c004"},
+		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
+		// now carry the structured results array.
+		{Path: "exec/src/exec_events.rs", SHA256: "2e9eb984f0de88bc3fbe7ea0d1017e39e93df108a7a3f9ffd9c66aa54e94a316"},
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
-		// Re-pinned to upstream bc5957eac9 (#44862, parent cache affinity for
-		// ephemeral forks). The drift is confined to this file and does not
-		// touch the voice surface; porting the behaviour is a separate item.
-		{Path: "core/src/client.rs", SHA256: "5bdbf9d92c1e0945db78e610c2851de34a7d6ce0d5247e61b4079bcd4b514dd6"},
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "65cce34c9d63b6ef59747926df59a2774bbbfb84309be5e3477759aaa32afa98"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "ae50f42033d4a558f7f87d1ed7687b5f0da7626570998242004f33fe9f8ad4f1"},
-		{Path: "core/tests/suite/mod.rs", SHA256: "dc6a3c3334a5e26ee0707c9a0763dbe75bb194a510b98a1209d5dfd239956180"},
+		// Re-pinned to upstream 7498521d (#46020/#46026/#46302/#46310): the
+		// request-kind and stream-retry refactors plus the rollout-compression
+		// endpoint moved large parts of the Responses client.
+		{Path: "core/src/client.rs", SHA256: "894076f9726f3ffa01c341746023add10ae6d76183b66d7dbbdb242f6f265e04"},
+		// Re-pinned to upstream 7498521d (#46020): the new experimental
+		// `rollout/compress` client request.
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "553532a9865cc1b881b7b6237436799417fa207a9db44b7e032af918562d29cf"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "05218c5c59380c8b5ff5543216e23df941256b9ce68f9270783ee10b4e9208a7"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "a04c3832a81eede70c7454745d13c300149df2f4524624c3d9ca303d06822132"},
 	}
 }
 

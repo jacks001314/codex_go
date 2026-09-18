@@ -164,6 +164,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt",
 				"restricted_sandbox_requires_exec_approval_on_request",
 				"windows_sandbox_env_preserves_denied_reads_or_rejects_unsupported_backend",
+				"windows_sandbox_selection_distinguishes_configured_and_executor_defaults",
 			},
 		},
 		{

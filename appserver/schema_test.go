@@ -136,10 +136,11 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		data []byte
 		want string
 	}{
-		// Re-vendored from upstream 3052bbcf8c (#44915): the deprecated
-		// thread/rollback request/response types were removed.
-		{"stable", stablePrecomputedExports, "1cf697bb71c007d9529216032b59a1f1115d394a19ce4a0147818a39234860b7"},
-		{"experimental", experimentalPrecomputedExports, "b9325378a401615fa109d537c4c38ee4f31d3b9ae7264f15dec12422228cea2b"},
+		// Re-vendored from upstream 7498521d (#45900/#46020/#46319): the hidden
+		// tcp-tunnel release surface, the experimental rollout/compress request,
+		// the image file-id references, and the workspace-routing account read.
+		{"stable", stablePrecomputedExports, "6444c05891c0601d17009d72e8d8b688993c0a5ca223b170d67ff31b04710a5a"},
+		{"experimental", experimentalPrecomputedExports, "2fa92cf952550130d551aec6221086234d2320f278056080c5c64fc3f55d08c1"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

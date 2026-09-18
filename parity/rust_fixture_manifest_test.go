@@ -45,8 +45,10 @@ func TestRustGoldenFixtureRootsSnapshot(t *testing.T) {
 func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 	return []rustFixtureRoot{
 		{
-			Path:  "cli/tests",
-			Files: 26,
+			Path: "cli/tests",
+			// Upstream grew the CLI suite with the daemon package replacement
+			// and background-server fixtures (#45558/#45580/#46117).
+			Files: 28,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -79,8 +81,10 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			},
 		},
 		{
-			Path:  "app-server/tests/suite/v2",
-			Files: 143,
+			Path: "app-server/tests/suite/v2",
+			// #45495/#45812/#46020 added the login-requirement, workspace
+			// routing and rollout-compression fixtures.
+			Files: 148,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -99,7 +103,11 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #44948 added two more scenarios snapshots (async questions,
 			// plugin refresh).
 			// #45185 added core/tests/suite/direct_tool_metadata.rs.
-			Files: 191,
+			// #45982-#46335 added the app-tool-exposure, managed-thread,
+			// subagent-elicitation, multi-agent tool-description,
+			// pending-input-persistence, guardian sender/cached-score/
+			// checkpoint-migration and canonical-plugin-connector fixtures.
+			Files: 208,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -111,7 +119,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tui/src/chatwidget/tests",
-			Files: 82,
+			Files: 86,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -122,7 +130,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tui/src/chatwidget/tests/snapshots",
-			Files: 45,
+			Files: 46,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{
@@ -131,7 +139,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "tools/src",
-			Files: 36,
+			Files: 39,
 			Owner: "tool, turn",
 			Focus: "tool schemas, dynamic tools, MCP tools, tool search",
 			Required: []string{

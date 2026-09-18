@@ -389,7 +389,7 @@ func TestModelMessagesMultiAgentParsingAndOverridePreservationLikeRust(t *testin
 		Slug:          "gpt-test",
 		ModelMessages: &ModelMessages{MultiAgent: messages.MultiAgent},
 	}
-	overridden := WithConfigOverrides(model, &ModelsManagerConfig{BaseInstructions: "override"})
+	overridden := WithConfigOverrides(model, &ModelsManagerConfig{BaseInstructions: modelsManagerStringPtr("override")})
 	if overridden.ModelMessages == nil || overridden.ModelMessages.MultiAgent != nil {
 		t.Fatalf("base-instructions override retained multi-agent messages: %#v", overridden.ModelMessages)
 	}
@@ -471,7 +471,7 @@ func TestModelMessagesConfirmationPoliciesRoundTrip(t *testing.T) {
 	// A base-instructions override replaces the message set, dropping the
 	// catalog-provided confirmation-policy documents (Rust #41072).
 	model := ModelInfo{Slug: "gpt-test", ModelMessages: &messages}
-	overridden := WithConfigOverrides(model, &ModelsManagerConfig{BaseInstructions: "override"})
+	overridden := WithConfigOverrides(model, &ModelsManagerConfig{BaseInstructions: modelsManagerStringPtr("override")})
 	if overridden.ModelMessages == nil || overridden.ModelMessages.ConfirmationPolicies != nil {
 		t.Fatalf("base-instructions override retained confirmation_policies: %#v", overridden.ModelMessages)
 	}
@@ -970,8 +970,7 @@ func TestWithConfigOverrides(t *testing.T) {
 		ModelContextWindow:              500000,
 		ModelAutoCompactTokenLimit:      12345,
 		ToolOutputTokenLimit:            456,
-		BaseInstructions:                "custom instructions",
-		PersonalityEnabled:              true,
+		BaseInstructions:                modelsManagerStringPtr("custom instructions"),
 		ModelSupportsReasoningSummaries: &supportsReasoningSummaries,
 	})
 
@@ -1003,7 +1002,7 @@ func TestPersonalityDisabledFallsBackToBaseInstructionsForLocalPersonalityModels
 	if model.ModelMessages == nil {
 		t.Fatal("ModelMessages is nil before override")
 	}
-	updated := WithConfigOverrides(model, &ModelsManagerConfig{PersonalityEnabled: false})
+	updated := WithConfigOverrides(model, &ModelsManagerConfig{})
 	if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != BaseInstructions {
 		t.Fatalf("ModelMessages = %#v, want instructions_template = BaseInstructions", updated.ModelMessages)
 	}
@@ -1022,7 +1021,7 @@ func TestRetiredPersonalityLeavesLegacyTemplateLiteral(t *testing.T) {
 			PersonalityPragmatic: "pragmatic",
 		},
 	}
-	updated := WithConfigOverrides(model, &ModelsManagerConfig{PersonalityEnabled: false})
+	updated := WithConfigOverrides(model, &ModelsManagerConfig{})
 	if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != "Hello {{ personality }}" {
 		t.Fatalf("ModelMessages = %#v, want the literal legacy template", updated.ModelMessages)
 	}
@@ -1036,9 +1035,9 @@ func TestInstructionOverridesPreserveCollaborationModeMessages(t *testing.T) {
 		config               *ModelsManagerConfig
 		wantInstructionsTmpl string
 	}{
-		{name: "base instructions", config: &ModelsManagerConfig{BaseInstructions: "override", PersonalityEnabled: true}, wantInstructionsTmpl: "override"},
-		{name: "personality none", config: &ModelsManagerConfig{PersonalityEnabled: true, Personality: "none"}, wantInstructionsTmpl: "Hello {{ personality }}"},
-		{name: "personality disabled", config: &ModelsManagerConfig{PersonalityEnabled: false}, wantInstructionsTmpl: "Hello {{ personality }}"},
+		{name: "base instructions", config: &ModelsManagerConfig{BaseInstructions: modelsManagerStringPtr("override")}, wantInstructionsTmpl: "override"},
+		{name: "personality none", config: &ModelsManagerConfig{Personality: "none"}, wantInstructionsTmpl: "Hello {{ personality }}"},
+		{name: "no personality selection", config: &ModelsManagerConfig{}, wantInstructionsTmpl: "Hello {{ personality }}"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			info := ModelInfo{
@@ -1098,16 +1097,16 @@ func TestPersonalityNoneStripsBakedPersonalitySection(t *testing.T) {
 		}
 	}
 
-	stripped := WithConfigOverrides(newModel(), &ModelsManagerConfig{PersonalityEnabled: true, Personality: "none"})
+	stripped := WithConfigOverrides(newModel(), &ModelsManagerConfig{Personality: "none"})
 	if stripped.ModelMessages == nil || stripped.ModelMessages.InstructionsTemplate != "# Intro\nhello\n\n# Tools\nuse tools\n" {
 		t.Fatalf("personality-none template = %#v", stripped.ModelMessages)
 	}
 
 	// Any other selection (or no selection) keeps the literal template.
 	for _, config := range []*ModelsManagerConfig{
-		{PersonalityEnabled: true, Personality: "friendly"},
-		{PersonalityEnabled: true},
-		{PersonalityEnabled: false, Personality: "none"},
+		{Personality: "friendly"},
+		{Personality: "pragmatic"},
+		{},
 	} {
 		kept := WithConfigOverrides(newModel(), config)
 		if kept.ModelMessages == nil || kept.ModelMessages.InstructionsTemplate != template {
@@ -1120,11 +1119,53 @@ func TestPersonalityNoneStripsBakedPersonalitySection(t *testing.T) {
 		BaseInstructions: "base",
 		ModelMessages:    &ModelMessages{InstructionsTemplate: "# Intro\nhi\n\n# Personality\nbe nice\n"},
 	}
-	strippedTrailing := WithConfigOverrides(trailing, &ModelsManagerConfig{PersonalityEnabled: true, Personality: "none"})
+	strippedTrailing := WithConfigOverrides(trailing, &ModelsManagerConfig{Personality: "none"})
 	if strippedTrailing.ModelMessages.InstructionsTemplate != "# Intro\nhi\n\n" {
 		t.Fatalf("trailing personality template = %q", strippedTrailing.ModelMessages.InstructionsTemplate)
 	}
 }
+
+// TestExplicitEmptyBaseInstructionsStayEmptyWithPersonalityNone mirrors Rust's
+// `explicit_empty_base_instructions_stay_empty_with_personality_none` (#45809):
+// an explicit empty base-instructions override is honored literally and does not
+// fall back to the personality-stripped template.
+func TestExplicitEmptyBaseInstructionsStayEmptyWithPersonalityNone(t *testing.T) {
+	model := ModelInfo{
+		BaseInstructions: "base",
+		ModelMessages: &ModelMessages{
+			InstructionsTemplate: "Intro\n# Personality\nRemove me",
+		},
+	}
+	updated := WithConfigOverrides(model, &ModelsManagerConfig{
+		BaseInstructions: modelsManagerStringPtr(""),
+		Personality:      "none",
+	})
+	if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != "" {
+		t.Fatalf("instructions template = %#v, want empty", updated.ModelMessages)
+	}
+	if got := updated.ModelInstructions("none"); got != "" {
+		t.Fatalf("ModelInstructions(none) = %q, want empty", got)
+	}
+}
+
+// TestBakedPersonalitySectionIsPreservedWithoutExplicitNone mirrors Rust's
+// `baked_personality_section_is_preserved_without_explicit_none` (#45809).
+func TestBakedPersonalitySectionIsPreservedWithoutExplicitNone(t *testing.T) {
+	template := "Intro\n# Personality\nKeep me\n# General\nKeep me too"
+	for _, config := range []*ModelsManagerConfig{
+		{},
+		{Personality: "friendly"},
+		{Personality: "pragmatic"},
+	} {
+		model := ModelInfo{BaseInstructions: "base", ModelMessages: &ModelMessages{InstructionsTemplate: template}}
+		updated := WithConfigOverrides(model, config)
+		if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != template {
+			t.Fatalf("config %#v template = %#v", config, updated.ModelMessages)
+		}
+	}
+}
+
+func modelsManagerStringPtr(value string) *string { return &value }
 
 func TestModelInstructionsFixedTemplateIgnoresPersonality(t *testing.T) {
 	// Rust #44930: bundled GPT-5.4 and GPT-5.5 replaced their selectable

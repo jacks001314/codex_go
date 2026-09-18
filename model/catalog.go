@@ -729,8 +729,10 @@ type ModelsManagerConfig struct {
 	ModelContextWindow         int64
 	ModelAutoCompactTokenLimit int64
 	ToolOutputTokenLimit       int64
-	BaseInstructions           string
-	PersonalityEnabled         bool
+	// BaseInstructions mirrors Rust's `Option<String>`: a present-but-empty
+	// override is distinct from an absent one (Rust's
+	// `explicit_empty_base_instructions_stay_empty_with_personality_none`).
+	BaseInstructions *string
 	// Personality is the resolved personality selection (if any). Rust #44946
 	// only uses it to honor an explicit `personality = "none"` opt-out by
 	// stripping the baked personality section.
@@ -1381,13 +1383,15 @@ func WithConfigOverrides(model ModelInfo, config *ModelsManagerConfig) ModelInfo
 			model.TruncationPolicy.Limit = approxBytesForTokens(config.ToolOutputTokenLimit)
 		}
 	}
-	if config.BaseInstructions != "" {
-		model.BaseInstructions = config.BaseInstructions
-		setInstructionsTemplate(&model, config.BaseInstructions)
-	} else if config.PersonalityEnabled && strings.TrimSpace(config.Personality) == "none" &&
+	if config.BaseInstructions != nil {
+		model.BaseInstructions = *config.BaseInstructions
+		setInstructionsTemplate(&model, *config.BaseInstructions)
+	} else if strings.TrimSpace(config.Personality) == "none" &&
 		model.ModelMessages != nil && strings.TrimSpace(model.ModelMessages.InstructionsTemplate) != "" {
-		// Rust #44946: an explicit `personality = "none"` opt-out strips the
-		// baked personality section from the model's literal template.
+		// Rust #44946/#45809: an explicit `personality = "none"` opt-out strips
+		// the baked personality section from the model's literal template, and
+		// the behavior is no longer gated by the retired personality feature
+		// flag.
 		model.ModelMessages.InstructionsTemplate = stripPersonalitySection(model.ModelMessages.InstructionsTemplate)
 	}
 	return model

@@ -36,6 +36,23 @@ type Spec struct {
 }
 
 var Registry = []Spec{
+	// Rust (codex-rs/features/src/lib.rs #45766): preview five-hour and weekly
+	// allowance history for consumer accounts in /analytics.
+	{
+		Key:                         "analytics_plan_history",
+		Stage:                       StageExperimental,
+		ExperimentalName:            "Analytics plan history",
+		ExperimentalMenuDescription: "Preview five-hour and weekly allowance history for consumer accounts in /analytics.",
+	},
+	// Rust (codex-rs/features/src/lib.rs #46117): automatically start the
+	// shared local daemon for eligible interactive launches.
+	{
+		Key:                         "daemon_auto_start",
+		Stage:                       StageExperimental,
+		ExperimentalName:            "Automatically start the background server",
+		ExperimentalMenuDescription: "Use the shared local server for new, resumed, and forked sessions. Takes effect next launch.",
+		ExperimentalAnnouncement:    "Automatic background server startup can now be enabled from /experimental.",
+	},
 	{Key: "undo", Stage: StageRemoved},
 	{Key: "shell_tool", Stage: StageStable, DefaultEnabled: true},
 	{Key: "secret_auth_storage", Stage: StageStable, DefaultEnabled: runtime.GOOS == "windows"},
@@ -182,7 +199,10 @@ var Registry = []Spec{
 	// context for Guardian reviews; renamed from guardian_thread_context into
 	// the guardianv2 configuration namespace.
 	{Key: "guardianv2.thread_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
-	{Key: "guardian_ext", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #45679): the extension-owned
+	// synchronous Guardian reviewer prototype was retired; the flag is kept as
+	// a removed compatibility no-op.
+	{Key: "guardian_ext", Stage: StageRemoved, DefaultEnabled: false},
 	{Key: "guardianv2", Stage: StageUnderDevelopment},
 	{Key: "goals", Stage: StageStable, DefaultEnabled: true},
 	{Key: "token_budget", Stage: StageUnderDevelopment},
@@ -191,10 +211,16 @@ var Registry = []Spec{
 	// configuration overrides are active.
 	{Key: "reasoning_effort_override", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "current_time_reminder", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #45825): report failed clock reads to
+	// the model without failing the turn.
+	{Key: "nonfatal_clock_read_errors", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "collaboration_modes", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "tool_call_mcp_elicitation", Stage: StageStable, DefaultEnabled: true},
 	{Key: "auth_elicitation", Stage: StageStable, DefaultEnabled: true},
-	{Key: "personality", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #45809): the personality feature flag
+	// was retired; friendly/pragmatic no longer select a style and the flag is
+	// kept as a removed compatibility no-op.
+	{Key: "personality", Stage: StageRemoved, DefaultEnabled: false},
 	{Key: "artifact", Stage: StageUnderDevelopment},
 	{Key: "fast_mode", Stage: StageStable, DefaultEnabled: true},
 	{Key: "realtime_conversation", Stage: StageStable, DefaultEnabled: true},

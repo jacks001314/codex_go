@@ -9724,13 +9724,7 @@ func appBaseInstructionsForConfig(cfg *config.Config) (string, error) {
 }
 
 func modelConfigForAppTurn(cfg *config.Config) *model.ModelsManagerConfig {
-	settings := map[string]bool{}
-	if cfg != nil {
-		settings = cfg.FeatureSettings()
-	}
-	out := &model.ModelsManagerConfig{
-		PersonalityEnabled: features.Enabled(settings, "personality"),
-	}
+	out := &model.ModelsManagerConfig{}
 	if cfg != nil {
 		out.Personality = stringConfigValue(cfg, "personality")
 		out.ModelContextWindow = int64(intFromAny(cfg.Values["model_context_window"]))

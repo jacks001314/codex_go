@@ -35,6 +35,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "config_requirements_browser_use", Owner: "config, appserver", Focus: "browser-use config requirements"},
 		{Module: "config_requirements_exec", Owner: "config, appserver, exec", Focus: "managed exec requirements with managed unified exec disabled"},
 		{Module: "config_requirements_in_app_browser", Owner: "config, appserver", Focus: "config requirements and in-app browser import gating"},
+		{Module: "config_requirements_login", Owner: "config, auth, appserver", Focus: "effective allowed login methods in config requirements"},
 		{Module: "config_model_provider_requirements", Owner: "config, model, appserver", Focus: "managed model provider selection and definition enforcement"},
 		{Module: "config_rpc", Owner: "config, appserver", Focus: "config read/write/requirements RPCs incl. auto-review requirements"},
 		{Module: "connection_handling_stdio", Owner: "appserver", Focus: "bounded stdio connection shutdown and graceful SIGTERM handling"},
@@ -99,6 +100,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "projects", Owner: "state, appserver", Focus: "experimental project/list/read/create/import/update/move/delete RPCs, thread assignment and notifications"},
 		{Module: "rate_limit_reset_credits", Owner: "auth, appserver", Focus: "rate-limit reset credit RPCs"},
 		{Module: "rate_limits", Owner: "auth, model", Focus: "account rate-limit notifications"},
+		{Module: "rate_limits_identity", Owner: "auth, appserver", Focus: "account-bound rate-limit identity checks"},
 		{Module: "realtime_conversation", Owner: "realtime", Focus: "thread realtime RPCs and notifications"},
 		{Module: "recommended_plugins", Owner: "plugin", Focus: "recommended plugin metadata"},
 		{Module: "remote_control", Owner: "remotecontrol", Focus: "remote-control pairing and status RPCs"},
@@ -109,6 +111,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "residency", Owner: "config, model", Focus: "managed residency enforcement for model providers"},
 		{Module: "review", Owner: "review, appserver", Focus: "review/start RPC"},
 		{Module: "rollout_migration", Owner: "rollout, state, appserver", Focus: "legacy rollout to paginated history migration (dry-run/apply, canonicalization, journaling, subagent replay bounds)"},
+		{Module: "rollout_compress", Owner: "rollout, appserver", Focus: "experimental rollout/compress background compression trigger"},
 		{Module: "safety_check_downgrade", Owner: "safety, appserver", Focus: "safety downgrade warnings"},
 		{Module: "selected_capability_stack", Owner: "appserver, turn", Focus: "selected capability stack"},
 		{Module: "selected_environment", Owner: "appserver, execserver", Focus: "selected environment propagation"},
@@ -152,6 +155,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "view_image", Owner: "tool, appserver", Focus: "view_image feature gate and model image capability"},
 		{Module: "web_search", Owner: "tool, codexapi", Focus: "web search tool round trip"},
 		{Module: "windows_sandbox_setup", Owner: "sandbox, appserver", Focus: "windows sandbox setup RPC"},
+		{Module: "workspace_routing", Owner: "auth, appserver", Focus: "workspace routing discovery and account/read exposure"},
 	}
 }
 
