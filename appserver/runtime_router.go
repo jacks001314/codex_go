@@ -2605,12 +2605,17 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 				// selection from the resumed settings until the next task.
 				r.clearActiveDisabledPluginIDs(response.Thread.ID)
 			}
+			// resumeConfig is the resumed session's effective configuration; the
+			// restored collaboration mode takes its model and reasoning effort from
+			// it (Rust #45519).
+			var resumeConfig *config.Config
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil && !r.threadIsLoaded(response.Thread.ID) {
 				cfg, configErr := r.effectiveMCPConfigForThreadResume(response, request)
 				if configErr != nil {
 					r.rollbackThreadResumeInitialization(response.Thread.ID, request)
 					return nil, configErr
 				}
+				resumeConfig = cfg
 				if validateErr := r.validateRequiredMCPServers(response.Thread.ID, cfg); validateErr != nil {
 					r.rollbackThreadResumeInitialization(response.Thread.ID, request)
 					return nil, validateErr
@@ -2622,7 +2627,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			}
 			r.applyThreadResumeRuntimeWorkspaceRoots(result, request)
 			r.applyThreadResumeSettingsUpdate(result, request)
-			r.applyThreadResumeCollaborationMode(result)
+			r.applyThreadResumeCollaborationMode(result, resumeConfig)
 			if err := r.applyRunningThreadResumeSnapshot(result, request); err != nil {
 				return nil, err
 			}
@@ -7617,10 +7622,15 @@ func (r *RuntimeRouter) threadCollaborationModeSnapshot(threadID string) json.Ra
 }
 
 // applyThreadResumeCollaborationMode mirrors Rust #45519: a resume reports the
-// effective collaboration mode (the live snapshot when the process still holds
-// one, otherwise the mode restored from the rollout) and restores the saved mode
-// for the resumed session so its first turn keeps using it.
-func (r *RuntimeRouter) applyThreadResumeCollaborationMode(result any) {
+// effective collaboration mode - the live snapshot when the process still holds
+// one, otherwise the mode restored from the rollout overlaid with the resumed
+// session's effective model and reasoning effort - and restores it for the
+// resumed session so its first turn keeps using it. The overlaying keeps the
+// saved mode and its developer instructions (Rust's
+// `with_updates(Some(model), Some(config.model_reasoning_effort), None)`), and
+// the updated mode is written back to the thread-owned settings snapshot that
+// the next resume restores from.
+func (r *RuntimeRouter) applyThreadResumeCollaborationMode(result any, resumeConfig *config.Config) {
 	response, ok := result.(*ThreadResumeResponse)
 	if !ok || response == nil || response.Thread == nil {
 		return
@@ -7629,24 +7639,68 @@ func (r *RuntimeRouter) applyThreadResumeCollaborationMode(result any) {
 	if threadID == "" {
 		return
 	}
-	if response.CollaborationMode == nil {
-		if settings := r.threadSettingsForTurn(threadID); settings != nil {
-			response.CollaborationMode = collaborationModeFromAnyMap(settings.CollaborationMode)
+	var live *CollaborationMode
+	if settings := r.threadSettingsForTurn(threadID); settings != nil {
+		live = collaborationModeFromAnyMap(settings.CollaborationMode)
+	}
+	// A live thread reports its own effective mode; nothing is restored.
+	if r.threadIsLoaded(threadID) {
+		if live != nil {
+			response.CollaborationMode = live
 		}
 		return
 	}
-	settings := r.threadSettingsForTurn(threadID)
-	if settings == nil || settings.CollaborationMode != nil {
+	persisted := cloneCollaborationMode(response.CollaborationMode)
+	if persisted == nil {
+		if live != nil {
+			response.CollaborationMode = live
+		}
 		return
 	}
-	restored := collaborationModeToAnyMap(response.CollaborationMode)
+	effective := cloneCollaborationMode(persisted)
+	if resumeConfig != nil {
+		model, effort := resumeEffectiveModelAndEffort(resumeConfig, response.Model)
+		effective = collaborationModeWithUpdates(persisted, model, effort)
+		if response.ReasoningEffort == nil && effort != nil {
+			response.ReasoningEffort = stringPtrIfNotEmpty(string(*effort))
+		}
+	}
+	if effective == nil {
+		return
+	}
+	response.CollaborationMode = cloneCollaborationMode(effective)
+	restored := collaborationModeToAnyMap(effective)
 	if restored == nil {
 		return
 	}
-	_, _ = r.requireThreadExtras().UpdateSettings(&SettingsUpdateParams{
+	if _, err := r.requireThreadExtras().UpdateSettings(&SettingsUpdateParams{
+		ThreadID:          threadID,
+		CollaborationMode: restored,
+	}); err != nil {
+		return
+	}
+	// Rust persists the resumed settings snapshot, so the next resume restores
+	// the mode with the effective model and effort.
+	_ = r.persistThreadSettingsUpdate(&SettingsUpdateParams{
 		ThreadID:          threadID,
 		CollaborationMode: restored,
 	})
+}
+
+// resumeEffectiveModelAndEffort resolves the model and reasoning effort the
+// resumed session will use, mirroring the values Rust applies to the restored
+// collaboration mode and reports as `reasoning_effort`.
+func resumeEffectiveModelAndEffort(cfg *config.Config, fallbackModel string) (string, *ReasoningEffort) {
+	model := firstNonEmpty(stringConfigValue(cfg, "model"), strings.TrimSpace(fallbackModel))
+	effortText := firstNonEmpty(
+		stringConfigValue(cfg, "model_reasoning_effort"),
+		stringConfigValue(cfg, "modelReasoningEffort"),
+	)
+	if effortText == "" {
+		return model, nil
+	}
+	effort := ReasoningEffort(effortText)
+	return model, &effort
 }
 
 // collaborationModeFromAnyMap converts a saved collaboration-mode document into

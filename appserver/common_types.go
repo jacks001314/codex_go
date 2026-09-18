@@ -1,6 +1,9 @@
 package appserver
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 type AutoReviewDecisionSource string
 
@@ -161,6 +164,23 @@ func cloneReasoningEffort(effort *ReasoningEffort) *ReasoningEffort {
 	}
 	cloned := *effort
 	return &cloned
+}
+
+// collaborationModeWithUpdates mirrors Rust's
+// CollaborationMode::with_updates(Some(model), Some(effort), None): the mode
+// and its developer instructions are retained while the model and reasoning
+// effort take the caller's effective values (an empty model keeps the saved
+// one, and a nil effort clears it).
+func collaborationModeWithUpdates(mode *CollaborationMode, model string, effort *ReasoningEffort) *CollaborationMode {
+	if mode == nil {
+		return nil
+	}
+	updated := cloneCollaborationMode(mode)
+	if trimmed := strings.TrimSpace(model); trimmed != "" {
+		updated.Settings.Model = trimmed
+	}
+	updated.Settings.ReasoningEffort = cloneReasoningEffort(effort)
+	return updated
 }
 
 type MultiAgentMode string
