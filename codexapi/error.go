@@ -18,6 +18,7 @@ const (
 	ErrorRateLimit                   APIErrorKind = "rateLimit"
 	ErrorInvalidRequest              APIErrorKind = "invalidRequest"
 	ErrorCyberPolicy                 APIErrorKind = "cyberPolicy"
+	ErrorBioPolicy                   APIErrorKind = "bioPolicy"
 	ErrorMisalignmentPolicyViolation APIErrorKind = "misalignmentPolicyViolation"
 	ErrorServerOverloaded            APIErrorKind = "serverOverloaded"
 	ErrorRateLimitExceeded           APIErrorKind = "rateLimitExceeded"
@@ -83,6 +84,8 @@ func (e *APIError) Error() string {
 		return "invalid request: " + e.Message
 	case ErrorCyberPolicy:
 		return "cyber policy: " + e.Message
+	case ErrorBioPolicy:
+		return "bio policy: " + e.Message
 	case ErrorMisalignmentPolicyViolation:
 		return "misalignment policy violation: " + e.Message
 	case ErrorRateLimitExceeded:

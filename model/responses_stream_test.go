@@ -41,6 +41,70 @@ func TestParseResponsesStreamRecoversDeclaredCustomToolFromFunctionCallEnvelope(
 	}
 }
 
+// TestResponseFailedErrorClassifiesPolicyCodesLikeRust mirrors Rust #46306:
+// a streaming `bio_policy` failure keeps its own non-retryable classification
+// while `invalid_prompt` stays a generic invalid request.
+func TestResponseFailedErrorClassifiesPolicyCodesLikeRust(t *testing.T) {
+	cases := []struct {
+		name        string
+		code        string
+		message     string
+		wantKind    codexapi.APIErrorKind
+		wantMessage string
+		wantRetry   bool
+	}{
+		{
+			name:        "bio policy preserves message",
+			code:        "bio_policy",
+			message:     "This request was blocked by bio policy.",
+			wantKind:    codexapi.ErrorBioPolicy,
+			wantMessage: "This request was blocked by bio policy.",
+		},
+		{
+			name:        "bio policy missing message falls back",
+			code:        "bio_policy",
+			wantKind:    codexapi.ErrorBioPolicy,
+			wantMessage: BioPolicyFallbackMessage,
+		},
+		{
+			name:        "bio policy blank message falls back",
+			code:        "bio_policy",
+			message:     "   ",
+			wantKind:    codexapi.ErrorBioPolicy,
+			wantMessage: BioPolicyFallbackMessage,
+		},
+		{
+			name:        "invalid prompt stays an invalid request",
+			code:        "invalid_prompt",
+			message:     "bad prompt",
+			wantKind:    codexapi.ErrorInvalidRequest,
+			wantMessage: "bad prompt",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `{"type":"response.failed","response":{"id":"resp-1","error":{"code":"` + tc.code + `","message":"` + tc.message + `"}}}`
+			err := responseFailedError([]byte(raw))
+			if err == nil {
+				t.Fatal("responseFailedError() = nil, want error")
+			}
+			var apiErr *codexapi.APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("error = %#v, want *codexapi.APIError", err)
+			}
+			if apiErr.Kind != tc.wantKind {
+				t.Fatalf("kind = %q, want %q", apiErr.Kind, tc.wantKind)
+			}
+			if apiErr.Message != tc.wantMessage {
+				t.Fatalf("message = %q, want %q", apiErr.Message, tc.wantMessage)
+			}
+			if got := isRetryableResponsesStreamError(err); got != tc.wantRetry {
+				t.Fatalf("isRetryableResponsesStreamError() = %v, want %v", got, tc.wantRetry)
+			}
+		})
+	}
+}
+
 func TestResponseFailedErrorParsesMisalignmentDetailsLikeRust(t *testing.T) {
 	raw := `{"type":"response.failed","response":{"error":{"code":"misalignment_policy_violation","message":"This request violated the misalignment policy.","misalignment":{"error_type":"unauthorized_data_transfer","detailed_explanation":"Sensitive customer explanation","steer":{"message":"Sensitive customer steering"}}}}}`
 	err := responseFailedError([]byte(raw))

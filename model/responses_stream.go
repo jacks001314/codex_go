@@ -387,7 +387,8 @@ func isRetryableResponsesStreamError(err error) bool {
 		case codexapi.ErrorRetryable, codexapi.ErrorServerOverloaded:
 			return true
 		case codexapi.ErrorContextWindowExceeded, codexapi.ErrorQuotaExceeded,
-			codexapi.ErrorUsageNotIncluded, codexapi.ErrorInvalidRequest, codexapi.ErrorCyberPolicy:
+			codexapi.ErrorUsageNotIncluded, codexapi.ErrorInvalidRequest,
+			codexapi.ErrorCyberPolicy, codexapi.ErrorBioPolicy:
 			return false
 		default:
 			return details.Status >= http.StatusInternalServerError
@@ -2015,12 +2016,20 @@ func responseFailedError(data []byte) error {
 		return &codexapi.APIError{Kind: codexapi.ErrorUsageNotIncluded, Message: message}
 	case "cyber_policy":
 		return &codexapi.APIError{Kind: codexapi.ErrorCyberPolicy, Message: message}
+	case "bio_policy":
+		// Rust #46306: streaming bio-policy failures keep their own
+		// classification, with the server message preserved and a
+		// biological-risk fallback when it is missing or blank.
+		if strings.TrimSpace(message) == "" {
+			message = BioPolicyFallbackMessage
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorBioPolicy, Status: http.StatusBadRequest, Message: message}
 	case "misalignment_policy_violation":
 		if strings.TrimSpace(message) == "" {
 			message = "This request was blocked due to a misalignment policy violation."
 		}
 		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: http.StatusBadRequest, Message: message, Misalignment: parseMisalignmentDetails(errBody)}
-	case "invalid_prompt", "bio_policy":
+	case "invalid_prompt":
 		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Message: message}
 	case "server_is_overloaded", "slow_down":
 		return &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}

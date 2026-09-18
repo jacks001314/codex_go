@@ -2592,6 +2592,25 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 		}
 		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: statusCode, Message: message}
 	}
+	// Rust #46306: HTTP 400 policy refusals keep their classification, keeping
+	// the server message and using a policy-specific fallback when it is blank.
+	if statusCode == http.StatusBadRequest && payload.Error != nil {
+		policyMessage := strings.TrimSpace(payload.Error.Message)
+		switch responseErrorCode(payload.Error) {
+		case "cyber_policy":
+			return &codexapi.APIError{
+				Kind:    codexapi.ErrorCyberPolicy,
+				Status:  statusCode,
+				Message: fallbackPolicyMessage(policyMessage, CyberPolicyFallbackMessage),
+			}
+		case "bio_policy":
+			return &codexapi.APIError{
+				Kind:    codexapi.ErrorBioPolicy,
+				Status:  statusCode,
+				Message: fallbackPolicyMessage(policyMessage, BioPolicyFallbackMessage),
+			}
+		}
+	}
 	// Rust #44492: HTTP 429 quota errors are usage-limit failures, not
 	// retry-limit failures. Recognize the quota error code set and the
 	// `insufficient_quota` type before falling back to the generic
@@ -2623,6 +2642,19 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 }
 
 const bedrockExpiredSignatureMessage = "Amazon Bedrock rejected the request because its AWS signature has expired. Refresh your AWS credentials and retry. If `AWS_BEARER_TOKEN_BEDROCK` is set, update or unset it, then restart Codex"
+
+// Policy-refusal messages mirror Rust's codex-api constants (#46306).
+const (
+	CyberPolicyFallbackMessage = "This request has been flagged for possible cybersecurity risk."
+	BioPolicyFallbackMessage   = "This content was flagged for possible biological risk."
+)
+
+func fallbackPolicyMessage(message string, fallback string) string {
+	if strings.TrimSpace(message) == "" {
+		return fallback
+	}
+	return message
+}
 
 // responsesQuotaErrorCodes mirrors Rust #44492's HTTP 429 quota classification.
 var responsesQuotaErrorCodes = map[string]bool{

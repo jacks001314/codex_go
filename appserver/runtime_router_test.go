@@ -20347,6 +20347,14 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			wantKind:  "misalignment_policy_violation",
 			wantHTTP:  http.StatusBadRequest,
 		},
+		{
+			// Rust #46306 maps BioPolicy to the app-server's `other` variant.
+			name:      "bio policy",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorBioPolicy, Status: http.StatusBadRequest, Message: "blocked"},
+			wantError: `"other"`,
+			wantKind:  "bio_policy",
+			wantHTTP:  http.StatusBadRequest,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

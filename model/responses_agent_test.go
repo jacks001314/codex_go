@@ -3359,6 +3359,58 @@ func TestMisalignmentPolicyViolationErrorsAreTypedAndNonRetryableLikeRust(t *tes
 	}
 }
 
+// TestBioPolicyErrorsAreTypedAcrossStreamAndHTTPLikeRust mirrors Rust #46306:
+// bio-policy failures are typed on both the streaming and HTTP 400 paths, keep
+// the server message, and fall back to the biological-risk text when it is
+// missing or blank. The wrapped-WebSocket shape (`type`/`status` alongside
+// `error`) is classified the same way.
+func TestBioPolicyErrorsAreTypedAcrossStreamAndHTTPLikeRust(t *testing.T) {
+	strPtr := func(value string) *string { return &value }
+	cases := []struct {
+		name        string
+		message     *string
+		wantMessage string
+	}{
+		{name: "message", message: strPtr("This request was blocked by bio policy."), wantMessage: "This request was blocked by bio policy."},
+		{name: "missing", wantMessage: BioPolicyFallbackMessage},
+		{name: "empty", message: strPtr(""), wantMessage: BioPolicyFallbackMessage},
+		{name: "blank", message: strPtr("  "), wantMessage: BioPolicyFallbackMessage},
+	}
+	for _, wrapped := range []bool{false, true} {
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				body := map[string]any{"error": map[string]any{"code": "bio_policy"}}
+				if tc.message != nil {
+					body["error"].(map[string]any)["message"] = *tc.message
+				}
+				if wrapped {
+					body["type"] = "error"
+					body["status"] = http.StatusBadRequest
+				}
+				raw, err := json.Marshal(body)
+				if err != nil {
+					t.Fatalf("Marshal: %v", err)
+				}
+				httpErr := responsesHTTPError("openai", http.StatusBadRequest, http.Header{}, raw)
+				var apiErr *codexapi.APIError
+				if !errors.As(httpErr, &apiErr) || apiErr.Kind != codexapi.ErrorBioPolicy {
+					t.Fatalf("http error = %#v", httpErr)
+				}
+				if apiErr.Message != tc.wantMessage {
+					t.Fatalf("http message = %q, want %q", apiErr.Message, tc.wantMessage)
+				}
+			})
+		}
+	}
+
+	// The same classification applies to cyber-policy refusals on HTTP 400.
+	httpErr := responsesHTTPError("openai", http.StatusBadRequest, http.Header{}, []byte(`{"error":{"code":"cyber_policy","message":""}}`))
+	var apiErr *codexapi.APIError
+	if !errors.As(httpErr, &apiErr) || apiErr.Kind != codexapi.ErrorCyberPolicy || apiErr.Message != CyberPolicyFallbackMessage {
+		t.Fatalf("cyber policy http error = %#v", httpErr)
+	}
+}
+
 func TestResponseFailedRateLimitRetryDelayLikeRust(t *testing.T) {
 	err := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"Please try again in 11.054s."}}}`))
 	if delay, ok := codexapi.RetryDelayInfo(err); !ok || delay != 11054*time.Millisecond {
