@@ -579,10 +579,19 @@ func (r *Recorder) AppendThreadSettingsApplied(approvalPolicy string, now time.T
 // (Rust #41567). Snapshots without an owner remain readable but do not override
 // the startup cwd.
 func (r *Recorder) AppendThreadSettingsAppliedWithOwner(threadID, approvalPolicy, cwd string, now time.Time) error {
+	return r.AppendThreadSettingsAppliedWithSnapshot(threadID, approvalPolicy, cwd, nil, now)
+}
+
+// AppendThreadSettingsAppliedWithSnapshot persists the thread-owned settings
+// snapshot, including the collaboration mode when one is set (Rust #45519: a
+// resumed thread restores the saved Plan mode from the latest matching
+// ThreadSettingsApplied event).
+func (r *Recorder) AppendThreadSettingsAppliedWithSnapshot(threadID, approvalPolicy, cwd string, collaborationMode json.RawMessage, now time.Time) error {
 	approvalPolicy = strings.TrimSpace(approvalPolicy)
 	threadID = strings.TrimSpace(threadID)
 	cwd = strings.TrimSpace(cwd)
-	if approvalPolicy == "" && cwd == "" {
+	collaborationMode = append(json.RawMessage(nil), collaborationMode...)
+	if approvalPolicy == "" && cwd == "" && len(collaborationMode) == 0 {
 		return errors.New("thread settings require an approval policy or cwd")
 	}
 	if now.IsZero() {
@@ -592,16 +601,18 @@ func (r *Recorder) AppendThreadSettingsAppliedWithOwner(threadID, approvalPolicy
 		Type           string `json:"type"`
 		ThreadID       string `json:"thread_id,omitempty"`
 		ThreadSettings struct {
-			ApprovalPolicy string `json:"approval_policy"`
-			CWD            string `json:"cwd,omitempty"`
+			ApprovalPolicy    string          `json:"approval_policy"`
+			CWD               string          `json:"cwd,omitempty"`
+			CollaborationMode json.RawMessage `json:"collaboration_mode,omitempty"`
 		} `json:"thread_settings"`
 	}{
 		Type:     "thread_settings_applied",
 		ThreadID: threadID,
 		ThreadSettings: struct {
-			ApprovalPolicy string `json:"approval_policy"`
-			CWD            string `json:"cwd,omitempty"`
-		}{ApprovalPolicy: approvalPolicy, CWD: cwd},
+			ApprovalPolicy    string          `json:"approval_policy"`
+			CWD               string          `json:"cwd,omitempty"`
+			CollaborationMode json.RawMessage `json:"collaboration_mode,omitempty"`
+		}{ApprovalPolicy: approvalPolicy, CWD: cwd, CollaborationMode: collaborationMode},
 	})
 	if err != nil {
 		return err

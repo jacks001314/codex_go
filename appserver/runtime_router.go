@@ -2622,6 +2622,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			}
 			r.applyThreadResumeRuntimeWorkspaceRoots(result, request)
 			r.applyThreadResumeSettingsUpdate(result, request)
+			r.applyThreadResumeCollaborationMode(result)
 			if err := r.applyRunningThreadResumeSnapshot(result, request); err != nil {
 				return nil, err
 			}
@@ -4060,6 +4061,11 @@ func (r *RuntimeRouter) handleEphemeralThreadStartRuntime(request *Request) (*Th
 	}
 	if err := threadStartHistoryModeError(&params); err != nil {
 		return nil, true, err
+	}
+	if params.DaybreakEnabled != nil {
+		// Rust #45513: an ephemeral thread cannot save the initial Daybreak
+		// preference.
+		return nil, true, jsonRPCInvalidRequest("daybreakEnabled is not supported for ephemeral threads")
 	}
 	threadID := newThreadID()
 	if _, ok := r.ephemeralThreadRecord(threadID, false); ok {
@@ -7541,7 +7547,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 }
 
 func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams) error {
-	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil) {
+	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.CollaborationMode == nil) {
 		return nil
 	}
 	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
@@ -7583,7 +7589,91 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 		return err
 	}
 	appliedPolicy := strings.TrimSpace(record.Metadata.ApprovalPolicy)
-	return r.services.ThreadRouter.appendThreadSettingsAppliedWithOwner(threadID, appliedPolicy, settingsCWD, runtimeRouterNow(r).UTC())
+	return r.services.ThreadRouter.appendThreadSettingsAppliedWithSnapshot(
+		threadID,
+		appliedPolicy,
+		settingsCWD,
+		r.threadCollaborationModeSnapshot(params.ThreadID),
+		runtimeRouterNow(r).UTC(),
+	)
+}
+
+// threadCollaborationModeSnapshot serializes the thread's saved collaboration
+// mode for the settings snapshot (Rust #45519: resume restores the saved mode
+// from the latest matching ThreadSettingsApplied event).
+func (r *RuntimeRouter) threadCollaborationModeSnapshot(threadID string) json.RawMessage {
+	settings := r.threadSettingsForTurn(threadID)
+	if settings == nil || settings.CollaborationMode == nil {
+		return nil
+	}
+	data, err := json.Marshal(settings.CollaborationMode)
+	if err != nil || len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	return data
+}
+
+// applyThreadResumeCollaborationMode mirrors Rust #45519: a resume reports the
+// effective collaboration mode (the live snapshot when the process still holds
+// one, otherwise the mode restored from the rollout) and restores the saved mode
+// for the resumed session so its first turn keeps using it.
+func (r *RuntimeRouter) applyThreadResumeCollaborationMode(result any) {
+	response, ok := result.(*ThreadResumeResponse)
+	if !ok || response == nil || response.Thread == nil {
+		return
+	}
+	threadID := strings.TrimSpace(response.Thread.ID)
+	if threadID == "" {
+		return
+	}
+	if response.CollaborationMode == nil {
+		if settings := r.threadSettingsForTurn(threadID); settings != nil {
+			response.CollaborationMode = collaborationModeFromAnyMap(settings.CollaborationMode)
+		}
+		return
+	}
+	settings := r.threadSettingsForTurn(threadID)
+	if settings == nil || settings.CollaborationMode != nil {
+		return
+	}
+	restored := collaborationModeToAnyMap(response.CollaborationMode)
+	if restored == nil {
+		return
+	}
+	_, _ = r.requireThreadExtras().UpdateSettings(&SettingsUpdateParams{
+		ThreadID:          threadID,
+		CollaborationMode: restored,
+	})
+}
+
+// collaborationModeFromAnyMap converts a saved collaboration-mode document into
+// the protocol type.
+func collaborationModeFromAnyMap(mode map[string]any) *CollaborationMode {
+	if mode == nil {
+		return nil
+	}
+	data, err := json.Marshal(mode)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	return collaborationModeFromRaw(data)
+}
+
+// collaborationModeToAnyMap converts the protocol type back into the saved
+// settings shape.
+func collaborationModeToAnyMap(mode *CollaborationMode) map[string]any {
+	if mode == nil {
+		return nil
+	}
+	data, err := json.Marshal(mode)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return nil
+	}
+	return decoded
 }
 
 func (r *RuntimeRouter) cleanBackgroundTerminals(params *BackgroundTerminalsCleanParams) (*BackgroundTerminalsCleanResponse, error) {

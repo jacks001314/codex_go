@@ -568,6 +568,72 @@ func threadSettingsOwnerAndCWD(raw json.RawMessage) (string, string, bool) {
 	return strings.TrimSpace(event.ThreadID), strings.TrimSpace(event.ThreadSettings.CWD), true
 }
 
+// LatestPersistedCollaborationMode returns the collaboration mode to restore
+// when resuming a thread (Rust #45519): the mode recorded on the latest
+// thread-owned ThreadSettingsApplied snapshot, falling back to the last legacy
+// TurnContext's collaboration mode. Snapshots owned by another thread (a
+// fork-copied snapshot) are skipped. The result is nil when no mode was saved.
+func LatestPersistedCollaborationMode(threadID string, lines []Line) json.RawMessage {
+	threadID = strings.TrimSpace(threadID)
+	for index := len(lines) - 1; index >= 0; index-- {
+		owner, mode, ok := threadSettingsOwnerAndCollaborationMode(lines[index].Payload)
+		if !ok || len(mode) == 0 {
+			continue
+		}
+		if owner == "" || owner == threadID {
+			return mode
+		}
+	}
+	for index := len(lines) - 1; index >= 0; index-- {
+		if mode := turnContextCollaborationMode(lines[index].TurnContext); len(mode) > 0 {
+			return mode
+		}
+	}
+	return nil
+}
+
+func threadSettingsOwnerAndCollaborationMode(raw json.RawMessage) (string, json.RawMessage, bool) {
+	if len(raw) == 0 {
+		return "", nil, false
+	}
+	var event struct {
+		Type           string `json:"type"`
+		ThreadID       string `json:"thread_id"`
+		ThreadSettings struct {
+			CollaborationMode json.RawMessage `json:"collaboration_mode"`
+		} `json:"thread_settings"`
+	}
+	if err := json.Unmarshal(raw, &event); err != nil || strings.TrimSpace(event.Type) != "thread_settings_applied" {
+		return "", nil, false
+	}
+	mode := event.ThreadSettings.CollaborationMode
+	if len(mode) == 0 || string(mode) == "null" {
+		return "", nil, false
+	}
+	return strings.TrimSpace(event.ThreadID), append(json.RawMessage(nil), mode...), true
+}
+
+// turnContextCollaborationMode reads the legacy TurnContext field written by
+// older rollouts.
+func turnContextCollaborationMode(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var values map[string]any
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil
+	}
+	mode, ok := values["collaboration_mode"]
+	if !ok || mode == nil {
+		return nil
+	}
+	data, err := json.Marshal(mode)
+	if err != nil || len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	return data
+}
+
 func approvalPolicyFromTurnContext(raw json.RawMessage) (string, bool) {
 	var values map[string]any
 	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {

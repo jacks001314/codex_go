@@ -145,6 +145,24 @@ type CollaborationMode struct {
 	Settings CollaborationSettings `json:"settings"`
 }
 
+func cloneCollaborationMode(mode *CollaborationMode) *CollaborationMode {
+	if mode == nil {
+		return nil
+	}
+	cloned := *mode
+	cloned.Settings.ReasoningEffort = cloneReasoningEffort(mode.Settings.ReasoningEffort)
+	cloned.Settings.DeveloperInstructions = cloneString(mode.Settings.DeveloperInstructions)
+	return &cloned
+}
+
+func cloneReasoningEffort(effort *ReasoningEffort) *ReasoningEffort {
+	if effort == nil {
+		return nil
+	}
+	cloned := *effort
+	return &cloned
+}
+
 type MultiAgentMode string
 
 const (

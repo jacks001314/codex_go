@@ -1347,10 +1347,14 @@ type ThreadStartParams struct {
 	ExperimentalRawEvents      bool           `json:"experimentalRawEvents,omitempty"`
 	AllowProviderModelFallback bool           `json:"allowProviderModelFallback,omitempty"`
 	// Deprecated: accepted for old app-server clients, but ignored by runtime.
-	MultiAgentMode          MultiAgentMode           `json:"multiAgentMode,omitempty"`
-	HistoryMode             ThreadHistoryMode        `json:"historyMode,omitempty"`
-	ThreadSource            *ThreadSource            `json:"threadSource,omitempty"`
-	ProjectID               *string                  `json:"projectId,omitempty"`
+	MultiAgentMode MultiAgentMode    `json:"multiAgentMode,omitempty"`
+	HistoryMode    ThreadHistoryMode `json:"historyMode,omitempty"`
+	ThreadSource   *ThreadSource     `json:"threadSource,omitempty"`
+	ProjectID      *string           `json:"projectId,omitempty"`
+	// DaybreakEnabled is the initial Daybreak choice for a persistent thread
+	// (Rust #45513). Omitted or null leaves it unset; ephemeral threads reject
+	// an explicit value. It does not select a turn's cyber access program.
+	DaybreakEnabled         *bool                    `json:"daybreakEnabled,omitempty"`
 	RuntimeWorkspaceRoots   []string                 `json:"runtimeWorkspaceRoots,omitempty"`
 	SelectedCapabilityRoots []SelectedCapabilityRoot `json:"selectedCapabilityRoots,omitempty"`
 	Environments            []map[string]any         `json:"environments,omitempty"`
@@ -1704,18 +1708,21 @@ func (p *ThreadInitialPageParams) Validate() error {
 }
 
 type ThreadResumeResponse struct {
-	Thread                  *Thread                          `json:"thread"`
-	InitialTurnsPage        *TurnsPage                       `json:"initialTurnsPage,omitempty"`
-	TurnsBackwardsCursor    *string                          `json:"turnsBackwardsCursor,omitempty"`
-	ItemsBackwardsCursor    *string                          `json:"itemsBackwardsCursor,omitempty"`
-	ApprovalPolicy          any                              `json:"approvalPolicy,omitempty"`
-	ApprovalsReviewer       *string                          `json:"approvalsReviewer,omitempty"`
-	CWD                     string                           `json:"cwd,omitempty"`
-	RuntimeWorkspaceRoots   []string                         `json:"runtimeWorkspaceRoots,omitempty"`
-	InstructionSources      []string                         `json:"instructionSources,omitempty"`
-	Model                   string                           `json:"model,omitempty"`
-	ModelProvider           string                           `json:"modelProvider,omitempty"`
-	ReasoningEffort         *string                          `json:"reasoningEffort,omitempty"`
+	Thread                *Thread    `json:"thread"`
+	InitialTurnsPage      *TurnsPage `json:"initialTurnsPage,omitempty"`
+	TurnsBackwardsCursor  *string    `json:"turnsBackwardsCursor,omitempty"`
+	ItemsBackwardsCursor  *string    `json:"itemsBackwardsCursor,omitempty"`
+	ApprovalPolicy        any        `json:"approvalPolicy,omitempty"`
+	ApprovalsReviewer     *string    `json:"approvalsReviewer,omitempty"`
+	CWD                   string     `json:"cwd,omitempty"`
+	RuntimeWorkspaceRoots []string   `json:"runtimeWorkspaceRoots,omitempty"`
+	InstructionSources    []string   `json:"instructionSources,omitempty"`
+	Model                 string     `json:"model,omitempty"`
+	ModelProvider         string     `json:"modelProvider,omitempty"`
+	ReasoningEffort       *string    `json:"reasoningEffort,omitempty"`
+	// CollaborationMode is the effective collaboration mode restored on resume
+	// (Rust #45519); absent when resuming from an older server.
+	CollaborationMode       *CollaborationMode               `json:"collaborationMode,omitempty"`
 	Sandbox                 any                              `json:"sandbox,omitempty"`
 	ActivePermissionProfile *sandbox.ActivePermissionProfile `json:"activePermissionProfile,omitempty"`
 	MultiAgentMode          MultiAgentMode                   `json:"multiAgentMode,omitempty"`
@@ -1738,6 +1745,7 @@ func (r *ThreadResumeResponse) MarshalJSON() ([]byte, error) {
 		Model                   string                           `json:"model"`
 		ModelProvider           string                           `json:"modelProvider"`
 		ReasoningEffort         *string                          `json:"reasoningEffort"`
+		CollaborationMode       *CollaborationMode               `json:"collaborationMode"`
 		Sandbox                 any                              `json:"sandbox"`
 		ActivePermissionProfile *sandbox.ActivePermissionProfile `json:"activePermissionProfile"`
 		MultiAgentMode          MultiAgentMode                   `json:"multiAgentMode"`
@@ -1756,6 +1764,7 @@ func (r *ThreadResumeResponse) MarshalJSON() ([]byte, error) {
 		Model:                   r.Model,
 		ModelProvider:           r.ModelProvider,
 		ReasoningEffort:         cloneString(r.ReasoningEffort),
+		CollaborationMode:       cloneCollaborationMode(r.CollaborationMode),
 		Sandbox:                 threadResponseSandbox(r.Sandbox),
 		ActivePermissionProfile: cloneActivePermissionProfile(r.ActivePermissionProfile),
 		MultiAgentMode:          threadResponseMultiAgentMode(r.MultiAgentMode),

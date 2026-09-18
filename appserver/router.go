@@ -539,7 +539,11 @@ func (r *Router) appendThreadSettingsApplied(threadID session.ThreadID, approval
 }
 
 func (r *Router) appendThreadSettingsAppliedWithOwner(threadID session.ThreadID, approvalPolicy, cwd string, now time.Time) error {
-	if r == nil || r.store == nil || (strings.TrimSpace(approvalPolicy) == "" && strings.TrimSpace(cwd) == "") {
+	return r.appendThreadSettingsAppliedWithSnapshot(threadID, approvalPolicy, cwd, nil, now)
+}
+
+func (r *Router) appendThreadSettingsAppliedWithSnapshot(threadID session.ThreadID, approvalPolicy, cwd string, collaborationMode json.RawMessage, now time.Time) error {
+	if r == nil || r.store == nil || (strings.TrimSpace(approvalPolicy) == "" && strings.TrimSpace(cwd) == "" && len(collaborationMode) == 0) {
 		return nil
 	}
 	path, err := r.findThreadRolloutPath(threadID, false)
@@ -552,7 +556,7 @@ func (r *Router) appendThreadSettingsAppliedWithOwner(threadID session.ThreadID,
 	}
 	r.configureThreadHistoryRecorder(recorder, threadID)
 	defer recorder.Close()
-	return recorder.AppendThreadSettingsAppliedWithOwner(string(threadID), approvalPolicy, cwd, now)
+	return recorder.AppendThreadSettingsAppliedWithSnapshot(string(threadID), approvalPolicy, cwd, collaborationMode, now)
 }
 
 func (r *Router) latestPersistedApprovalPolicy(record *session.Record) (string, bool) {
@@ -587,6 +591,47 @@ func (r *Router) latestPersistedOwnedThreadCWD(threadID string, record *session.
 		return ""
 	}
 	return rollout.LastPersistedOwnedThreadCWD(threadID, lines)
+}
+
+// latestPersistedCollaborationMode returns the collaboration mode to report on
+// resume (Rust #45519): the mode saved on the thread's latest owned settings
+// snapshot, then the last legacy TurnContext, then the compact world-state
+// section Go records when a thread setting changes.
+func (r *Router) latestPersistedCollaborationMode(threadID string, record *session.Record) *CollaborationMode {
+	if r == nil || record == nil {
+		return nil
+	}
+	if path := r.threadRolloutPath(record); strings.TrimSpace(path) != "" {
+		if lines, _, err := rollout.Load(path); err == nil {
+			if mode := collaborationModeFromRaw(rollout.LatestPersistedCollaborationMode(threadID, lines)); mode != nil {
+				return mode
+			}
+		}
+	}
+	if len(record.Metadata.WorldState) > 0 {
+		if state, err := session.DecodeWorldState(record.Metadata.WorldState); err == nil && state != nil {
+			if mode := collaborationModeFromRaw(state.CollaborationMode); mode != nil {
+				return mode
+			}
+		}
+	}
+	return nil
+}
+
+// collaborationModeFromRaw decodes a persisted collaboration-mode document into
+// the protocol type, reporting nil when the payload is absent or malformed.
+func collaborationModeFromRaw(raw json.RawMessage) *CollaborationMode {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var mode CollaborationMode
+	if err := json.Unmarshal(raw, &mode); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(string(mode.Mode)) == "" {
+		return nil
+	}
+	return &mode
 }
 
 func (r *Router) appendThreadCompacted(threadID session.ThreadID, message string, replacement []session.Item, now time.Time) error {
@@ -1053,6 +1098,11 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 	if err := threadLifecycleSandboxPermissionsError(params.Permissions, params.Sandbox); err != nil {
 		return nil, err
 	}
+	if params.Ephemeral && params.DaybreakEnabled != nil {
+		// Rust #45513: an ephemeral thread cannot save the initial Daybreak
+		// preference.
+		return nil, jsonRPCInvalidRequest("daybreakEnabled is not supported for ephemeral threads")
+	}
 	threadID := newThreadID()
 	now := r.now().UTC()
 	if now.IsZero() {
@@ -1096,6 +1146,7 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 			// client-agnostic default so thread/list and session metadata agree.
 			Source:                  string(SessionSourceVsCode),
 			ThreadSource:            threadSource,
+			DaybreakEnabled:         cloneOptionalBool(params.DaybreakEnabled),
 			HistoryMode:             historyMode,
 			SessionPrefix:           session.PrefixForSessionID(string(threadID)),
 			DynamicTools:            cloneRawMessages(params.DynamicTools),
@@ -1276,6 +1327,7 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		ServiceTier:             resumeServiceTier(&params, record),
 		ApprovalPolicy:          approvalPolicy,
 		ApprovalsReviewer:       cloneString(params.ApprovalsReviewer),
+		CollaborationMode:       r.latestPersistedCollaborationMode(string(sourceID), record),
 		Sandbox:                 params.Sandbox,
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		InstructionSources:      threadRecordInstructionSources(record),
