@@ -36,6 +36,30 @@ func (p *ManagedAuthPolicy) AllowsLoginMethod(method ForcedLoginMethod, forcedLo
 	return true
 }
 
+// EffectiveAllowedLoginMethods returns the login methods the effective policy
+// permits, in Rust's order (API, then ChatGPT) - the list Rust's
+// ManagedAuthPolicy::allowed_login_methods produces. A method is omitted when
+// the forced login method excludes it, the locally managed AllowedLoginMethods
+// allowlist excludes it, or ChatGPT is restricted to an empty workspace set.
+func (p *ManagedAuthPolicy) EffectiveAllowedLoginMethods(forcedLoginMethod ForcedLoginMethod, forcedWorkspaces []string) []ForcedLoginMethod {
+	out := make([]ForcedLoginMethod, 0, 2)
+	for _, method := range []ForcedLoginMethod{ForcedLoginMethodAPI, ForcedLoginMethodChatGPT} {
+		if p.AllowsLoginMethod(method, forcedLoginMethod, forcedWorkspaces) {
+			out = append(out, method)
+		}
+	}
+	return out
+}
+
+// AllowedLoginMethods returns the login methods permitted by this config's
+// effective authentication policy (Rust AuthManager::allowed_login_methods).
+func (c *Config) AllowedLoginMethods() []ForcedLoginMethod {
+	if c == nil {
+		return []ForcedLoginMethod{ForcedLoginMethodAPI, ForcedLoginMethodChatGPT}
+	}
+	return c.ManagedAuthPolicy().EffectiveAllowedLoginMethods(c.ForcedLoginMethod(), c.ForcedChatGPTWorkspaceIDs())
+}
+
 // EffectiveChatGPTWorkspaces returns the intersection of the forced workspaces
 // with the locally allowed workspaces. The bool result reports whether any
 // workspace restriction applies at all (false means unrestricted).

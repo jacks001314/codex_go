@@ -4115,6 +4115,35 @@ func forcedLoginMethodsOrNil(values []ForcedLoginMethod) []ForcedLoginMethod {
 	return out
 }
 
+// ProjectRequirementsWithAllowedLoginMethods mirrors Rust's
+// map_requirements_to_api: the effective login methods are always reported on
+// the requirements the app server returns, and a host with no managed
+// requirements still returns a requirements object when the running policy
+// restricts login methods (an empty list permits no login method). The
+// unrestricted default keeps `requirements: null`.
+func ProjectRequirementsWithAllowedLoginMethods(requirements *ConfigRequirements, allowed []ForcedLoginMethod) *ConfigRequirements {
+	if requirements == nil {
+		if forcedLoginMethodsUnrestricted(allowed) {
+			return nil
+		}
+		requirements = &ConfigRequirements{}
+	}
+	projected := cloneRequirements(requirements)
+	if projected == nil {
+		projected = &ConfigRequirements{}
+	}
+	// A non-nil slice distinguishes "no method is permitted" ([]) from an
+	// absent field (null).
+	effective := make([]ForcedLoginMethod, len(allowed))
+	copy(effective, allowed)
+	projected.AllowedLoginMethods = effective
+	return projected
+}
+
+func forcedLoginMethodsUnrestricted(methods []ForcedLoginMethod) bool {
+	return len(methods) == 2 && methods[0] == ForcedLoginMethodAPI && methods[1] == ForcedLoginMethodChatGPT
+}
+
 func cloneNetworkMap(values map[string]NetworkPermission) map[string]NetworkPermission {
 	if values == nil {
 		return nil

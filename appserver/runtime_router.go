@@ -2821,7 +2821,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 	case MethodConfigBatchWrite:
 		return r.handleConfigBatchWrite(request)
 	case MethodConfigRequirementsRead:
-		return r.requireConfig().Requirements(), nil
+		return r.configRequirementsRead(), nil
 	case MethodServerDiagnostics:
 		return r.handleServerDiagnostics(request)
 	case MethodExternalAgentConfigDetect:
@@ -7701,6 +7701,29 @@ func resumeEffectiveModelAndEffort(cfg *config.Config, fallbackModel string) (st
 	}
 	effort := ReasoningEffort(effortText)
 	return model, &effort
+}
+
+// configRequirementsRead mirrors Rust's configRequirements/read (#45495): the
+// response reports the effective login methods the running policy permits after
+// managed requirements, the forced login method, and workspace restrictions. A
+// host with no managed requirements still returns a requirements object when
+// that policy restricts login methods, while the unrestricted default keeps
+// `requirements: null`.
+func (r *RuntimeRouter) configRequirementsRead() *config.ConfigRequirementsReadResponse {
+	read := r.requireConfig().Requirements()
+	if read == nil {
+		read = &config.ConfigRequirementsReadResponse{}
+	}
+	var values map[string]any
+	if r != nil && r.services.Config != nil {
+		if cfgRead, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && cfgRead != nil {
+			values = cfgRead.Config
+		}
+	}
+	cfg := &config.Config{Values: values, Requirements: read.Requirements}
+	return &config.ConfigRequirementsReadResponse{
+		Requirements: config.ProjectRequirementsWithAllowedLoginMethods(read.Requirements, cfg.AllowedLoginMethods()),
+	}
 }
 
 // collaborationModeFromAnyMap converts a saved collaboration-mode document into
