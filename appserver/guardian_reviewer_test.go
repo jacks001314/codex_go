@@ -347,6 +347,99 @@ func TestGuardianUsesCatalogAutoReviewModelOverrideLikeRust(t *testing.T) {
 	}
 }
 
+// TestGuardianReviewRequestUsesSelectedModelAndEffortLikeRust mirrors Rust
+// #46292: a review samples with the catalog-selected review model and its
+// request-level effort - `low` when that model supports it, its default effort
+// otherwise, and the parent model plus the parent's selected effort when the
+// catalog does not list the preferred review model.
+func TestGuardianReviewRequestUsesSelectedModelAndEffortLikeRust(t *testing.T) {
+	const (
+		threadID     = "thread-review-selection"
+		turnID       = "turn-review-selection"
+		parentModel  = "gpt-parent"
+		preferredCal = model.DefaultApprovalReviewPreferredModel
+	)
+	parentInfo := model.ModelInfo{
+		Slug:                     parentModel,
+		Visibility:               "list",
+		SupportedInAPI:           true,
+		DefaultReasoningLevel:    "medium",
+		SupportedReasoningLevels: []string{"low", "medium", "high"},
+	}
+	reviewInfo := func(modelID string, defaultLevel string, levels []string) model.ModelInfo {
+		return model.ModelInfo{
+			Slug:                     modelID,
+			Visibility:               "list",
+			SupportedInAPI:           true,
+			DefaultReasoningLevel:    defaultLevel,
+			SupportedReasoningLevels: levels,
+		}
+	}
+	tests := []struct {
+		name         string
+		models       []model.ModelInfo
+		parentEffort string
+		wantModel    string
+		wantEffort   string
+	}{
+		{
+			name:         "review model supports low",
+			models:       []model.ModelInfo{parentInfo, reviewInfo(preferredCal, "medium", []string{"low", "medium"})},
+			parentEffort: "high",
+			wantModel:    preferredCal,
+			wantEffort:   "low",
+		},
+		{
+			name:         "review model without low keeps its default",
+			models:       []model.ModelInfo{parentInfo, reviewInfo(preferredCal, "high", []string{"medium", "high"})},
+			parentEffort: "medium",
+			wantModel:    preferredCal,
+			wantEffort:   "high",
+		},
+		{
+			name:         "missing review model falls back to the parent",
+			models:       []model.ModelInfo{parentInfo},
+			parentEffort: "high",
+			wantModel:    parentModel,
+			wantEffort:   "low",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var captured *model.AgentRequest
+			agent := guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+				copyRequest := *request
+				captured = &copyRequest
+				return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"selection"}`}, nil
+			})
+			router := NewRuntimeRouter(RuntimeServices{
+				Agent:        agent,
+				Models:       model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: testCase.models})),
+				ThreadStatus: NewThreadStatusManager(),
+			})
+			effort := testCase.parentEffort
+			if err := router.registerActiveRuntimeTurn(threadID, turnID, func() {}, time.Now().UnixMilli(), &turn.TurnStartParams{
+				ThreadID: threadID,
+				Model:    parentModel,
+				Effort:   &effort,
+			}); err != nil {
+				t.Fatalf("register active turn: %v", err)
+			}
+			router.updateActiveRuntimeTurnAnalytics(threadID, turnID, "", &appTurnRunConfig{Model: parentModel})
+			reviewer := router.ensureGuardianReviewer(agent)
+			decision, _, err := reviewer.Review(context.Background(), threadID, turnID, "call-selection", state.Action{
+				Type: "mcp_tool_call", Server: "apps", ToolName: "calendar",
+			})
+			if err != nil || decision != state.DecisionApproved {
+				t.Fatalf("Guardian review decision=%s err=%v", decision, err)
+			}
+			if captured == nil || captured.Model != testCase.wantModel || captured.ReasoningEffort != testCase.wantEffort {
+				t.Fatalf("Guardian request = %#v, want model %q effort %q", captured, testCase.wantModel, testCase.wantEffort)
+			}
+		})
+	}
+}
+
 func TestModelGuardianReviewerMapsTimeout(t *testing.T) {
 	reviewer := &modelGuardianReviewer{
 		timeout: time.Millisecond,

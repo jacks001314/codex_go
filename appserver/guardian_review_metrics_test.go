@@ -123,7 +123,9 @@ func TestModelGuardianReviewerEmitsMetricsLikeRust(t *testing.T) {
 				Usage:   model.AgentUsage{InputTokens: 10, CachedInputTokens: 4, OutputTokens: 3, ReasoningOutputTokens: 2, TotalTokens: 13},
 			}, nil
 		})},
-		model:   func(string, string) string { return "gpt-5-guardian" },
+		reviewModel: func(string, string) model.ApprovalReviewModel {
+			return model.ApprovalReviewModel{Model: "gpt-5-guardian"}
+		},
 		metrics: metrics,
 	}
 	decision, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{

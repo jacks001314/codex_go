@@ -36,11 +36,14 @@ type modelGuardianReviewer struct {
 	maxToolCallLag int
 	// maxToolCallLagFor, when set, resolves the bound for the review's turn
 	// (configured value -> model catalog default -> Rust's default).
-	maxToolCallLagFor          func(threadID, turnID string) int
-	notify                     func(threadID string, event *state.Event)
-	interrupt                  func(threadID, turnID string)
-	transcript                 func(threadID string) []string
-	model                      func(threadID, turnID string) string
+	maxToolCallLagFor func(threadID, turnID string) int
+	notify            func(threadID string, event *state.Event)
+	interrupt         func(threadID, turnID string)
+	transcript        func(threadID string) []string
+	// reviewModel resolves the catalog-backed reviewer selection for the
+	// reviewed turn: the model and its request-level reasoning effort (Rust's
+	// resolve_review_model / select_review_model, #46292).
+	reviewModel                func(threadID, turnID string) model.ApprovalReviewModel
 	autoReviewMessages         func(threadID, turnID string) *model.AutoReviewMessages
 	specialty                  func(threadID, turnID string) string
 	nodeReplAutoReviewRequired func(threadID, turnID string) bool
@@ -474,16 +477,18 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			inputItems = append(inputItems, item)
 		}
 	}
+	selection := r.selectionForTurn(threadID, turnID)
 	reviewRequest := &model.AgentRequest{
-		Prompt:         prompt,
-		InputItems:     inputItems,
-		Model:          r.modelForTurn(threadID, turnID),
-		TaskKind:       model.AgentTaskReview,
-		ThreadID:       threadID,
-		TurnID:         turnID,
-		Originator:     "guardian",
-		OutputSchema:   guardianAssessmentOutputSchema(),
-		ClientMetadata: r.reviewClientMetadata(threadID, turnID, targetItemID),
+		Prompt:          prompt,
+		InputItems:      inputItems,
+		Model:           selection.Model,
+		ReasoningEffort: selection.ReasoningEffort,
+		TaskKind:        model.AgentTaskReview,
+		ThreadID:        threadID,
+		TurnID:          turnID,
+		Originator:      "guardian",
+		OutputSchema:    guardianAssessmentOutputSchema(),
+		ClientMetadata:  r.reviewClientMetadata(threadID, turnID, targetItemID),
 	}
 	if r.permissionProfile != nil {
 		reviewRequest.PermissionProfile = r.permissionProfile(threadID, turnID)
@@ -640,11 +645,19 @@ func guardianTimeoutMessage(messages *model.AutoReviewMessages) string {
 	return state.GuardianTimeoutMessage()
 }
 
-func (r *modelGuardianReviewer) modelForTurn(threadID, turnID string) string {
-	if r == nil || r.model == nil {
-		return ""
+// selectionForTurn resolves the reviewer selection the review request uses. A
+// reviewer without a resolver keeps the pre-selection shape: no explicit model
+// or effort, so the agent's own default applies.
+func (r *modelGuardianReviewer) selectionForTurn(threadID, turnID string) model.ApprovalReviewModel {
+	if r == nil || r.reviewModel == nil {
+		return model.ApprovalReviewModel{}
 	}
-	return strings.TrimSpace(r.model(threadID, turnID))
+	return r.reviewModel(threadID, turnID)
+}
+
+// modelForTurn keeps the model-only view used by review metrics and telemetry.
+func (r *modelGuardianReviewer) modelForTurn(threadID, turnID string) string {
+	return strings.TrimSpace(r.selectionForTurn(threadID, turnID).Model)
 }
 
 func (r *modelGuardianReviewer) emit(threadID string, event *state.Event) {

@@ -230,6 +230,17 @@ func NewModelService(manager ModelsManager) *ModelService {
 	return &ModelService{manager: manager}
 }
 
+// Presets exposes the available-model presets of the underlying manager
+// (Rust ModelsManager::list_models) for consumers that need the preset metadata
+// rather than the client-facing summary, such as the Guardian review-model
+// selection.
+func (s *ModelService) Presets(strategy RefreshStrategy) []ModelPreset {
+	if s == nil || s.manager == nil {
+		return nil
+	}
+	return s.manager.ListModels(strategy)
+}
+
 // SetAPIKeyModelDiscoveryEnabled applies the API-key model discovery policy to
 // the underlying model manager when it supports it (Rust #44392).
 func (s *ModelService) SetAPIKeyModelDiscoveryEnabled(enabled bool) {
