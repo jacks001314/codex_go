@@ -150,10 +150,17 @@ const guardianReviewFailureInstructions = "The action was not executed because a
 	"This is a review failure, not a determination that the action is unsafe. " +
 	"Do not bypass the approval check; resolve the error or ask the user for guidance."
 
-// guardianReviewFailureMessage mirrors Rust's failed-review rationale: the
-// assessment could not be completed, so the review fails closed.
+// guardianReviewFailureRationale mirrors Rust's failed-review event rationale
+// (guardian-reviewer::complete_review): the assessment could not be completed,
+// so the review fails closed. It is also the GuardianWarning text.
+func guardianReviewFailureRationale(message string) string {
+	return "Automatic approval review failed: " + strings.TrimSpace(message)
+}
+
+// guardianReviewFailureMessage mirrors Rust's failed-review rejection: the
+// rationale, then the review-failure instructions.
 func guardianReviewFailureMessage(message string) string {
-	return "Automatic approval review failed: " + strings.TrimSpace(message) + "\n" + guardianReviewFailureInstructions
+	return guardianReviewFailureRationale(message) + "\n" + guardianReviewFailureInstructions
 }
 
 // SetMaxToolCallLag configures the per-thread stale-score bound (Rust
@@ -428,12 +435,13 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 	}
 	if err != nil {
+		rationale := guardianReviewFailureRationale(err.Error())
 		message := guardianReviewFailureMessage(err.Error())
 		attribution.Decision = state.DecisionDenied
 		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "prompt_build_error"
 		emitReviewMetrics()
-		r.emitWarning(threadID, message)
+		r.emitWarning(threadID, rationale)
 		return state.DecisionDenied, message, nil
 	}
 	store := r.store
@@ -459,15 +467,16 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if r.environment != nil {
 		inputItems, err = r.environment(reviewCtx, threadID, turnID)
 		if err != nil {
+			rationale := guardianReviewFailureRationale(err.Error())
 			message := guardianReviewFailureMessage(err.Error())
-			completed, _ := store.FailClosed(event.ID, message)
+			completed, _ := store.FailClosed(event.ID, rationale)
 			r.emit(threadID, completed)
 			r.recordNonDenial(turnID)
 			attribution.Decision = state.DecisionDenied
 			attribution.TerminalStatus = "failed_closed"
 			attribution.FailureReason = "session_error"
 			emitReviewMetrics()
-			r.emitWarning(threadID, message)
+			r.emitWarning(threadID, rationale)
 			return state.DecisionDenied, message, nil
 		}
 	}
@@ -527,7 +536,10 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			attribution.FailureReason = "timeout"
 			emitReviewMetrics()
 			timeoutMessage := guardianTimeoutMessage(plan.AutoReview)
-			r.emitWarning(threadID, timeoutMessage)
+			// Rust's timed-out completion records the review rationale on the
+			// assessment event and publishes it as the GuardianWarning, while
+			// the tool rejection carries the resolved timeout instructions.
+			r.emitWarning(threadID, state.GuardianTimeoutRationale())
 			return state.DecisionTimedOut, timeoutMessage, finishErr
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(reviewCtx.Err(), context.Canceled) {
@@ -542,28 +554,30 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			emitReviewMetrics()
 			return state.DecisionAborted, "", finishErr
 		}
+		rationale := guardianReviewFailureRationale(err.Error())
 		message := guardianReviewFailureMessage(err.Error())
-		failedClosed, _ := store.FailClosed(event.ID, message)
+		failedClosed, _ := store.FailClosed(event.ID, rationale)
 		r.emit(threadID, failedClosed)
 		r.recordNonDenial(turnID)
 		attribution.Decision = state.DecisionDenied
 		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "session_error"
 		emitReviewMetrics()
-		r.emitWarning(threadID, message)
+		r.emitWarning(threadID, rationale)
 		return state.DecisionDenied, message, nil
 	}
 	assessment, err := state.ParseAssessment([]byte(guardianAssessmentText(response)))
 	if err != nil {
+		rationale := guardianReviewFailureRationale(err.Error())
 		message := guardianReviewFailureMessage(err.Error())
-		failedClosed, _ := store.FailClosed(event.ID, message)
+		failedClosed, _ := store.FailClosed(event.ID, rationale)
 		r.emit(threadID, failedClosed)
 		r.recordNonDenial(turnID)
 		attribution.Decision = state.DecisionDenied
 		attribution.TerminalStatus = "failed_closed"
 		attribution.FailureReason = "parse_error"
 		emitReviewMetrics()
-		r.emitWarning(threadID, message)
+		r.emitWarning(threadID, rationale)
 		return state.DecisionDenied, message, nil
 	}
 	completed, err := store.Complete(event.ID, *assessment)
@@ -631,22 +645,27 @@ func (r *modelGuardianReviewer) reviewClientMetadata(threadID, turnID, targetIte
 	return client
 }
 
-// guardianRejectionMessage mirrors Rust run_guardian_review (#39741): the
-// acting model's rejection_instructions replace the default when present.
+// guardianRejectionMessage mirrors Rust's denied completion
+// (guardian-reviewer::complete_review -> codex_prompts::render_guardian_rejection):
+// the acting model's rejection_instructions replace the bundled default only
+// when the field is present, and the rationale is always rendered through the
+// rejection feedback wrapper.
 func guardianRejectionMessage(messages *model.AutoReviewMessages, rationale string) string {
+	instructions := state.GuardianRejectionInstructions()
 	if messages != nil && messages.RejectionInstructions != nil {
-		return "This action was rejected due to unacceptable risk.\nReason: " + rationale + "\n" + *messages.RejectionInstructions
+		instructions = *messages.RejectionInstructions
 	}
-	return rationale
+	return state.RenderGuardianRejection(rationale, instructions)
 }
 
-// guardianTimeoutMessage mirrors Rust guardian_timeout_message (#39741): the
-// acting model's timeout_instructions replace the default when present.
+// guardianTimeoutMessage mirrors Rust's ReviewDecision::TimedOut handling: the
+// tool rejection carries the acting model's timeout_instructions, or the
+// bundled default when the catalog omits the field.
 func guardianTimeoutMessage(messages *model.AutoReviewMessages) string {
 	if messages != nil && messages.TimeoutInstructions != nil {
 		return *messages.TimeoutInstructions
 	}
-	return state.GuardianTimeoutMessage()
+	return state.GuardianTimeoutInstructions()
 }
 
 // isNodeReplJSApprovalAction mirrors Rust's node-REPL policy eligibility: a `js`

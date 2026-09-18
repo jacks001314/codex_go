@@ -251,7 +251,7 @@ func TestModelGuardianReviewerTimeoutMetricsLikeRust(t *testing.T) {
 		counters[0].Tags["failure_reason"] != "timeout" {
 		t.Fatalf("counter tags = %#v", counters[0].Tags)
 	}
-	if len(warnings) != 1 || warnings[0] != state.GuardianTimeoutMessage() {
+	if len(warnings) != 1 || warnings[0] != state.GuardianTimeoutRationale() {
 		t.Fatalf("warnings = %#v", warnings)
 	}
 }

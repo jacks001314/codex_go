@@ -268,7 +268,7 @@ func (e *Event) Timeout(now time.Time) *Event {
 	completedMS := unixMillis(now)
 	completed.CompletedAtMS = &completedMS
 	completed.Status = StatusTimedOut
-	completed.Rationale = GuardianTimeoutMessage()
+	completed.Rationale = GuardianTimeoutRationale()
 	return &completed
 }
 
@@ -301,10 +301,6 @@ func (e *Event) Aborted(now time.Time, reason string) *Event {
 
 func (e *Event) Terminal() bool {
 	return e != nil && e.Status != StatusInProgress
-}
-
-func GuardianTimeoutMessage() string {
-	return "Auto-approval review timed out; the request was denied."
 }
 
 func GuardianRejectionMessage(event *Event) string {

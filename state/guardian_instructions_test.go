@@ -53,3 +53,47 @@ func TestBundledGuardianTextIsVendored(t *testing.T) {
 		t.Fatalf("Guardian output contract = %q", contract)
 	}
 }
+
+// TestRenderGuardianRejectionMatchesRust mirrors Rust
+// prompts::guardian_instructions_tests::rejection_feedback_trims_rationale_and
+// _preserves_instruction_overrides: the rationale is trimmed (an empty one
+// becomes Rust's default text) and the instructions are preserved verbatim.
+func TestRenderGuardianRejectionMatchesRust(t *testing.T) {
+	for _, testCase := range []struct {
+		rationale    string
+		instructions string
+		want         string
+	}{
+		{
+			rationale:    " \nSensitive data would leave the workspace.\t ",
+			instructions: " Ask for approval.\n",
+			want:         "This action was rejected due to unacceptable risk.\nReason: Sensitive data would leave the workspace.\n Ask for approval.\n",
+		},
+		{
+			rationale:    " \n\t",
+			instructions: "",
+			want:         "This action was rejected due to unacceptable risk.\nReason: Auto-reviewer denied the action without a specific rationale.\n",
+		},
+	} {
+		if got := RenderGuardianRejection(testCase.rationale, testCase.instructions); got != testCase.want {
+			t.Fatalf("RenderGuardianRejection(%q, %q) = %q, want %q", testCase.rationale, testCase.instructions, got, testCase.want)
+		}
+	}
+}
+
+// TestBundledAutoReviewInstructionsAreVendored pins the bundled fallback text
+// Rust's ResolvedAutoReviewMessages supplies when the model catalog omits the
+// field.
+func TestBundledAutoReviewInstructionsAreVendored(t *testing.T) {
+	if got := GuardianRejectionInstructions(); !strings.HasPrefix(got, "The agent must not attempt to achieve the same outcome via workaround,") ||
+		!strings.HasSuffix(got, "Otherwise, stop and request user input.") {
+		t.Fatalf("GuardianRejectionInstructions() = %q", got)
+	}
+	if got := GuardianTimeoutInstructions(); !strings.HasPrefix(got, "The automatic permission approval review did not finish before its deadline.") ||
+		!strings.HasSuffix(got, "ask the user for guidance or explicit approval.") {
+		t.Fatalf("GuardianTimeoutInstructions() = %q", got)
+	}
+	if got := GuardianTimeoutRationale(); got != "Automatic approval review timed out while evaluating the requested approval." {
+		t.Fatalf("GuardianTimeoutRationale() = %q", got)
+	}
+}

@@ -274,7 +274,13 @@ func TestModelGuardianReviewerMapsAssessmentDecision(t *testing.T) {
 				return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"` + tc.outcome + `","rationale":"reviewed"}`}, nil
 			})}
 			decision, reason, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "calendar"})
-			if err != nil || decision != tc.decision || reason != "reviewed" {
+			// Rust's denied completion always renders the rejection feedback
+			// wrapper, using the bundled instructions when the catalog omits them.
+			wantReason := "reviewed"
+			if tc.outcome == "deny" {
+				wantReason = state.RenderGuardianRejection("reviewed", state.GuardianRejectionInstructions())
+			}
+			if err != nil || decision != tc.decision || reason != wantReason {
 				t.Fatalf("decision=%s reason=%q err=%v", decision, reason, err)
 			}
 		})
@@ -662,7 +668,7 @@ func TestModelGuardianReviewerMapsTimeout(t *testing.T) {
 		}),
 	}
 	decision, reason, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "calendar"})
-	if err != nil || decision != state.DecisionTimedOut || reason != state.GuardianTimeoutMessage() {
+	if err != nil || decision != state.DecisionTimedOut || reason != state.GuardianTimeoutInstructions() {
 		t.Fatalf("decision=%s reason=%q err=%v", decision, reason, err)
 	}
 }
@@ -681,6 +687,36 @@ func TestModelGuardianReviewerRejectsMalformedAssessment(t *testing.T) {
 	if !strings.Contains(reason, "Automatic approval review failed:") ||
 		!strings.Contains(reason, "automatic approval review could not be completed") {
 		t.Fatalf("reason = %q", reason)
+	}
+}
+
+// TestGuardianReviewFailureTextSplitLikeRust mirrors Rust's failed-review
+// completion: the assessment event and the GuardianWarning carry the failure
+// rationale, while the tool rejection appends the review-failure instructions.
+func TestGuardianReviewFailureTextSplitLikeRust(t *testing.T) {
+	var events []*state.Event
+	var warnings []string
+	reviewer := &modelGuardianReviewer{
+		store: state.NewReviewStore(), breaker: state.NewCircuitBreaker(),
+		notify: func(_ string, event *state.Event) { events = append(events, event) },
+		warn:   func(_ string, message string) { warnings = append(warnings, message) },
+		agent: guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+			return &model.AgentResponse{Message: "not-json"}, nil
+		}),
+	}
+	decision, reason, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "calendar"})
+	if err != nil || decision != state.DecisionDenied {
+		t.Fatalf("decision=%s err=%v", decision, err)
+	}
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0], "Automatic approval review failed: ") ||
+		strings.Contains(warnings[0], "Do not bypass the approval check") {
+		t.Fatalf("warnings = %#v, want the bare failure rationale", warnings)
+	}
+	if reason != warnings[0]+"\n"+guardianReviewFailureInstructions {
+		t.Fatalf("reason = %q, warning = %q", reason, warnings[0])
+	}
+	if len(events) != 2 || events[1].Status != state.StatusDenied || events[1].Rationale != warnings[0] {
+		t.Fatalf("events = %#v, warning = %q", events, warnings[0])
 	}
 }
 
@@ -757,6 +793,79 @@ func TestModelGuardianReviewerUsesModelSpecificAutoReviewInstructionsLikeRust(t 
 	decision, reason, err = timeoutReviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "write"})
 	if err != nil || decision != state.DecisionTimedOut || reason != timeout {
 		t.Fatalf("timeout decision=%s reason=%q err=%v", decision, reason, err)
+	}
+}
+
+// TestGuardianAutoReviewInstructionFallbacksMatchRust mirrors Rust's
+// guardian_review_rejects_tool_call_with_acting_model_instructions and
+// guardian_timeout_rejects_tool_call_with_acting_model_instructions cases:
+// legacy_fallback resolves the bundled text when the catalog omits the field,
+// catalog_override wins when present, and empty_override keeps the explicit
+// empty value. The timed-out warning always carries Rust's review rationale.
+func TestGuardianAutoReviewInstructionFallbacksMatchRust(t *testing.T) {
+	empty := ""
+	rejectionOverride := "Reviewer-only rejection instructions."
+	timeoutOverride := "Acting model timeout instructions."
+	for _, testCase := range []struct {
+		name          string
+		messages      *model.AutoReviewMessages
+		wantRejection string
+		wantTimeout   string
+	}{
+		{
+			name:          "legacy_fallback",
+			messages:      nil,
+			wantRejection: "This action was rejected due to unacceptable risk.\nReason: risky\n" + state.GuardianRejectionInstructions(),
+			wantTimeout:   state.GuardianTimeoutInstructions(),
+		},
+		{
+			name:          "catalog_override",
+			messages:      &model.AutoReviewMessages{RejectionInstructions: &rejectionOverride, TimeoutInstructions: &timeoutOverride},
+			wantRejection: "This action was rejected due to unacceptable risk.\nReason: risky\n" + rejectionOverride,
+			wantTimeout:   timeoutOverride,
+		},
+		{
+			name:          "empty_override",
+			messages:      &model.AutoReviewMessages{RejectionInstructions: &empty, TimeoutInstructions: &empty},
+			wantRejection: "This action was rejected due to unacceptable risk.\nReason: risky\n",
+			wantTimeout:   "",
+		},
+	} {
+		t.Run(testCase.name+"/deny", func(t *testing.T) {
+			reviewer := &modelGuardianReviewer{
+				reviewPlan: func(threadID, turnID string) guardianReviewPlan {
+					return guardianReviewPlan{AutoReview: testCase.messages}
+				},
+				agent: guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+					return &model.AgentResponse{Message: `{"riskLevel":"high","userAuthorization":"low","outcome":"deny","rationale":"risky"}`}, nil
+				}),
+			}
+			decision, reason, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "write"})
+			if err != nil || decision != state.DecisionDenied || reason != testCase.wantRejection {
+				t.Fatalf("decision=%s reason=%q err=%v, want %q", decision, reason, err, testCase.wantRejection)
+			}
+		})
+		t.Run(testCase.name+"/timeout", func(t *testing.T) {
+			var warnings []string
+			reviewer := &modelGuardianReviewer{
+				timeout: time.Millisecond,
+				reviewPlan: func(threadID, turnID string) guardianReviewPlan {
+					return guardianReviewPlan{AutoReview: testCase.messages}
+				},
+				warn: func(_ string, message string) { warnings = append(warnings, message) },
+				agent: guardianAgentFunc(func(ctx context.Context, _ *model.AgentRequest) (*model.AgentResponse, error) {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}),
+			}
+			decision, reason, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "write"})
+			if err != nil || decision != state.DecisionTimedOut || reason != testCase.wantTimeout {
+				t.Fatalf("decision=%s reason=%q err=%v, want %q", decision, reason, err, testCase.wantTimeout)
+			}
+			if len(warnings) != 1 || warnings[0] != state.GuardianTimeoutRationale() {
+				t.Fatalf("warnings = %#v, want the review rationale", warnings)
+			}
+		})
 	}
 }
 

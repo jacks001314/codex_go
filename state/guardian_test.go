@@ -166,7 +166,7 @@ func TestReviewStoreTimeoutAndAbort(t *testing.T) {
 		t.Fatal(err)
 	}
 	timed, err = store.Timeout(timed.ID)
-	if err != nil || timed.Status != StatusTimedOut || timed.Rationale != GuardianTimeoutMessage() {
+	if err != nil || timed.Status != StatusTimedOut || timed.Rationale != GuardianTimeoutRationale() {
 		t.Fatalf("timed=%#v err=%v", timed, err)
 	}
 	aborted, err := store.Start("turn-a", "item-b", Action{Type: "mcp_tool_call", Server: "mcp", ToolName: "write"})
