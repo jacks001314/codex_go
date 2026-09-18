@@ -13614,6 +13614,7 @@ func (r *RuntimeRouter) requestPermissionsGuardianReviewer(threadID string) tool
 		reviewer := r.ensureGuardianReviewer(r.services.Agent)
 		action := state.Action{
 			Type:        "request_permissions",
+			TurnID:      strings.TrimSpace(turnID),
 			Reason:      strings.TrimSpace(reason),
 			Permissions: permissions,
 		}
@@ -15306,8 +15307,19 @@ func commandApprovalAction(request *tool.ShellRequest) state.Action {
 	action := state.Action{Type: "command", Source: state.CommandSourceShell}
 	if request != nil {
 		action.Command = strings.TrimSpace(request.HookCommand)
+		action.CommandArgv = append([]string(nil), request.Command...)
 		action.CWD = strings.TrimSpace(request.CWD)
-		action.Reason = strings.TrimSpace(request.Justification)
+		// Rust's framing reason is the approval request's reason; the command's
+		// own justification travels in the action JSON.
+		action.Reason = strings.TrimSpace(request.ApprovalReason)
+		action.Justification = strings.TrimSpace(request.Justification)
+		action.SandboxPermissions = string(sandbox.SandboxPermissionsUseDefault)
+		if permissions := strings.TrimSpace(string(request.SandboxPermissions)); permissions != "" {
+			action.SandboxPermissions = permissions
+		}
+		action.AdditionalPermissions = additionalPermissionsJSON(request.AdditionalPermissions)
+		tty := request.TTY
+		action.TTY = &tty
 		if strings.TrimSpace(action.Command) == "" && len(request.Command) > 0 {
 			action.Command = strings.Join(request.Command, " ")
 		}
@@ -15319,6 +15331,26 @@ func commandApprovalAction(request *tool.ShellRequest) state.Action {
 		action.Source = state.CommandSourceUnifiedExec
 	}
 	return action
+}
+
+// additionalPermissionsJSON mirrors Rust's AdditionalPermissionProfile
+// serialization for the subset Go models: an optional network switch and the
+// legacy read/write roots form the canonical entry list degrades to.
+func additionalPermissionsJSON(profile *sandbox.AdditionalPermissionProfile) map[string]any {
+	if profile == nil {
+		return nil
+	}
+	value := map[string]any{}
+	if profile.Network != nil {
+		value["network"] = map[string]any{"enabled": *profile.Network}
+	}
+	if len(profile.FileSystem) > 0 {
+		value["file_system"] = map[string]any{"write": append([]string(nil), profile.FileSystem...)}
+	}
+	if len(value) == 0 {
+		return nil
+	}
+	return value
 }
 
 // applyPatchApprovalAction mirrors Rust's GuardianApprovalRequest::ApplyPatch.

@@ -310,6 +310,95 @@ func TestBuildPromptFramingMatchesRust(t *testing.T) {
 	}
 }
 
+// TestGuardianActionJSONMatchesRust pins Rust's per-variant
+// guardian_approval_request_to_json projection: snake_case keys, `tool` naming
+// the variant, absent optional fields omitted, and alphabetical key order (Rust
+// sorts every object before pretty printing).
+func TestGuardianActionJSONMatchesRust(t *testing.T) {
+	tty := true
+	readOnly := true
+	sessionID := 7
+	tests := []struct {
+		name   string
+		action Action
+		want   string
+	}{
+		{
+			name: "exec_command",
+			action: Action{
+				Type:               "command",
+				Source:             CommandSourceUnifiedExec,
+				CommandArgv:        []string{"ls", "-la"},
+				CWD:                "/repo",
+				SandboxPermissions: "require_escalated",
+				Justification:      "list the workspace",
+				TTY:                &tty,
+				Reason:             "retry after scope change",
+			},
+			want: "{\n  \"command\": [\n    \"ls\",\n    \"-la\"\n  ],\n  \"cwd\": \"/repo\",\n  \"justification\": \"list the workspace\",\n  \"sandbox_permissions\": \"require_escalated\",\n  \"tool\": \"exec_command\",\n  \"tty\": true\n}",
+		},
+		{
+			name:   "exec_command without argv",
+			action: Action{Type: "command", Command: "ls -la", CWD: "/repo"},
+			want:   "{\n  \"command\": [\n    \"ls -la\"\n  ],\n  \"cwd\": \"/repo\",\n  \"tool\": \"exec_command\"\n}",
+		},
+		{
+			name: "mcp_tool_call",
+			action: Action{
+				Type:          "mcp_tool_call",
+				Server:        "apps",
+				ToolName:      "calendar.create",
+				Arguments:     map[string]any{"title": "Lunch"},
+				ConnectorID:   "connector_calendar",
+				ConnectorName: "Calendar",
+				ToolTitle:     "Create event",
+				Annotations:   &ActionAnnotations{ReadOnlyHint: &readOnly},
+			},
+			want: "{\n  \"annotations\": {\n    \"read_only_hint\": true\n  },\n  \"arguments\": {\n    \"title\": \"Lunch\"\n  },\n  \"connector_id\": \"connector_calendar\",\n  \"connector_name\": \"Calendar\",\n  \"server\": \"apps\",\n  \"tool\": \"mcp_tool_call\",\n  \"tool_name\": \"calendar.create\",\n  \"tool_title\": \"Create event\"\n}",
+		},
+		{
+			name:   "apply_patch",
+			action: Action{Type: "apply_patch", CWD: "/repo", Files: []string{"a.txt"}, Patch: "*** Begin Patch"},
+			want:   "{\n  \"cwd\": \"/repo\",\n  \"files\": [\n    \"a.txt\"\n  ],\n  \"patch\": \"*** Begin Patch\",\n  \"tool\": \"apply_patch\"\n}",
+		},
+		{
+			name: "request_permissions",
+			action: Action{
+				Type: "request_permissions", TurnID: "turn-1", Reason: "needs network",
+				Permissions: map[string]any{
+					"network":    map[string]any{"enabled": true},
+					"fileSystem": map[string]any{"write": []string{"/repo/out"}},
+				},
+			},
+			want: "{\n  \"permissions\": {\n    \"file_system\": {\n      \"write\": [\n        \"/repo/out\"\n      ]\n    },\n    \"network\": {\n      \"enabled\": true\n    }\n  },\n  \"reason\": \"needs network\",\n  \"tool\": \"request_permissions\",\n  \"turn_id\": \"turn-1\"\n}",
+		},
+		{
+			name:   "execve",
+			action: Action{Type: "execve", Source: CommandSourceShell, Program: "/bin/rm", Argv: []string{"-rf", "build"}, CWD: "/repo"},
+			want:   "{\n  \"argv\": [\n    \"-rf\",\n    \"build\"\n  ],\n  \"cwd\": \"/repo\",\n  \"program\": \"/bin/rm\",\n  \"tool\": \"shell\"\n}",
+		},
+		{
+			name: "write_stdin",
+			action: Action{
+				Type: "write_stdin", EnvironmentID: "local", SessionID: &sessionID, Chars: "ls\n",
+				CWD: "/repo", SandboxPermissions: "use_default",
+			},
+			want: "{\n  \"chars\": \"ls\\n\",\n  \"cwd\": \"/repo\",\n  \"environment_id\": \"local\",\n  \"sandbox_permissions\": \"use_default\",\n  \"session_id\": 7,\n  \"tool\": \"write_stdin\",\n  \"tty\": false\n}",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := marshalGuardianPromptAction(testCase.action)
+			if err != nil {
+				t.Fatalf("marshalGuardianPromptAction() error = %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("action JSON = %s\nwant %s", got, testCase.want)
+			}
+		})
+	}
+}
+
 // TestRenderPlannedActionFramingsMatchRust pins the remaining Rust
 // PlannedAction::render branches: the delta presentation, the terminal-input
 // scope, and the network scope without a trigger.

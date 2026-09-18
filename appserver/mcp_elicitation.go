@@ -283,6 +283,7 @@ func guardianMCPAction(request *mcp.MCPElicitationRequest) state.Action {
 		ConnectorID:   connectorID,
 		ConnectorName: connectorName,
 		ToolTitle:     toolTitle,
+		Arguments:     cloneAnyMapAppserver(mapFromAny(meta["tool_params"])),
 		Extra: map[string]any{
 			"arguments": cloneAnyMapAppserver(mapFromAny(meta["tool_params"])),
 		},

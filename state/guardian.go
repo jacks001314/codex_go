@@ -113,6 +113,37 @@ type Action struct {
 	Reason        string         `json:"reason,omitempty"`
 	Permissions   map[string]any `json:"permissions,omitempty"`
 	Extra         map[string]any `json:"extra,omitempty"`
+
+	// The fields below exist only for the reviewer prompt projection
+	// (Rust's guardian_approval_request_to_json). They are never part of the
+	// app-server review notification, so they stay off the wire.
+	//
+	// CommandArgv is Rust ExecCommand.command: the exact argv the command runs
+	// with. SandboxPermissions / AdditionalPermissions / Justification / TTY
+	// carry the same request's per-command overrides.
+	CommandArgv           []string       `json:"-"`
+	SandboxPermissions    string         `json:"-"`
+	AdditionalPermissions map[string]any `json:"-"`
+	Justification         string         `json:"-"`
+	TTY                   *bool          `json:"-"`
+	// Arguments and Annotations mirror Rust McpToolCallApprovalAction's
+	// `arguments` and `annotations`.
+	Arguments   any                `json:"-"`
+	Annotations *ActionAnnotations `json:"-"`
+	// EnvironmentID / SessionID / Chars mirror Rust WriteStdinApprovalAction.
+	EnvironmentID string `json:"-"`
+	SessionID     *int   `json:"-"`
+	Chars         string `json:"-"`
+	// TurnID mirrors Rust RequestPermissionsApprovalAction.turn_id.
+	TurnID string `json:"-"`
+}
+
+// ActionAnnotations mirrors Rust GuardianMcpAnnotations: the privileged hints
+// the invoked MCP tool declared, rendered with the reviewed action.
+type ActionAnnotations struct {
+	DestructiveHint *bool `json:"-"`
+	OpenWorldHint   *bool `json:"-"`
+	ReadOnlyHint    *bool `json:"-"`
 }
 
 func (a *Action) Validate() error {

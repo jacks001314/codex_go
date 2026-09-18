@@ -420,7 +420,10 @@ func TestAutoReviewApprovalsRouteThroughGuardianLikeRust(t *testing.T) {
 		t.Fatalf("guardian actions = %#v", approved.actions)
 	}
 	action := approved.actions[0]
-	if action.Type != "command" || action.Command != "rm -rf build" || action.Reason != "clean the build" || action.Source != state.CommandSourceShell {
+	// Rust's ExecCommand carries the approval request's reason for the framing
+	// and the command's own justification in the action JSON.
+	if action.Type != "command" || action.Command != "rm -rf build" || action.Reason != "" ||
+		action.Justification != "clean the build" || action.Source != state.CommandSourceShell {
 		t.Fatalf("guardian command action = %#v", action)
 	}
 

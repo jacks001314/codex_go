@@ -272,6 +272,16 @@ func (h *appserverMCPToolApprovalHandler) reviewViaGuardian(ctx context.Context,
 		ToolTitle:     strings.TrimSpace(request.ToolTitle),
 		Extra:         map[string]any{},
 	}
+	if request.Arguments != nil {
+		action.Arguments = request.Arguments
+	}
+	if request.Annotations != nil {
+		action.Annotations = &state.ActionAnnotations{
+			DestructiveHint: request.Annotations.DestructiveHint,
+			OpenWorldHint:   request.Annotations.OpenWorldHint,
+			ReadOnlyHint:    request.Annotations.ReadOnlyHint,
+		}
+	}
 	if arguments := mcpToolCallHookToolInput(request.Arguments); len(arguments) > 0 {
 		action.Extra["arguments"] = arguments
 	}

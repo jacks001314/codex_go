@@ -7,11 +7,169 @@ import (
 
 // marshalGuardianPromptAction renders the exact action JSON the reviewer sees.
 func marshalGuardianPromptAction(action Action) (string, error) {
-	data, err := json.MarshalIndent(guardianPromptAction(action), "", "  ")
+	data, err := json.MarshalIndent(guardianActionJSONValue(action), "", "  ")
 	if err != nil {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// normalizeRequestPermissions mirrors Rust's typed RequestPermissionProfile
+// round trip: the reviewed profile renders with the canonical `file_system`
+// key even when the caller supplied the legacy camelCase alias.
+func normalizeRequestPermissions(permissions map[string]any) map[string]any {
+	if len(permissions) == 0 {
+		return permissions
+	}
+	out := make(map[string]any, len(permissions))
+	for key, value := range permissions {
+		if strings.TrimSpace(key) == "fileSystem" {
+			out["file_system"] = value
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+// guardianActionJSONValue mirrors Rust's guardian_approval_request_to_json plus
+// format_guardian_action_pretty: one JSON document per GuardianApprovalRequest
+// variant, with snake_case keys and `tool` naming the variant. Go marshals maps
+// with sorted keys, matching Rust's `sort_all_objects`, and absent optional
+// fields are omitted like Rust's `skip_serializing_if`.
+func guardianActionJSONValue(action Action) map[string]any {
+	switch strings.TrimSpace(action.Type) {
+	case "network_access":
+		value := map[string]any{
+			"tool":     "network_access",
+			"target":   action.Target,
+			"host":     action.Host,
+			"protocol": action.Protocol,
+			"port":     action.Port,
+		}
+		if trigger, ok := action.Extra["trigger"]; ok && trigger != nil {
+			value["trigger"] = trigger
+		}
+		return value
+	case "mcp_tool_call":
+		value := map[string]any{
+			"tool":      "mcp_tool_call",
+			"server":    strings.TrimSpace(action.Server),
+			"tool_name": strings.TrimSpace(action.ToolName),
+		}
+		if action.Arguments != nil {
+			value["arguments"] = action.Arguments
+		}
+		if connectorID := strings.TrimSpace(action.ConnectorID); connectorID != "" {
+			value["connector_id"] = connectorID
+		}
+		if connectorName := strings.TrimSpace(action.ConnectorName); connectorName != "" {
+			value["connector_name"] = connectorName
+		}
+		if toolTitle := strings.TrimSpace(action.ToolTitle); toolTitle != "" {
+			value["tool_title"] = toolTitle
+		}
+		if annotations := actionAnnotationsJSONValue(action.Annotations); annotations != nil {
+			value["annotations"] = annotations
+		}
+		return value
+	case "apply_patch":
+		return map[string]any{
+			"tool":  "apply_patch",
+			"cwd":   action.CWD,
+			"files": append([]string{}, action.Files...),
+			"patch": action.Patch,
+		}
+	case "request_permissions":
+		value := map[string]any{
+			"tool":        "request_permissions",
+			"turn_id":     action.TurnID,
+			"permissions": normalizeRequestPermissions(action.Permissions),
+		}
+		if reason := strings.TrimSpace(action.Reason); reason != "" {
+			value["reason"] = reason
+		}
+		return value
+	case "execve":
+		value := map[string]any{
+			"tool":    execveToolName(action.Source),
+			"program": action.Program,
+			"argv":    append([]string{}, action.Argv...),
+			"cwd":     action.CWD,
+		}
+		if permissions := action.AdditionalPermissions; len(permissions) > 0 {
+			value["additional_permissions"] = permissions
+		}
+		return value
+	case "write_stdin":
+		value := map[string]any{
+			"tool":                "write_stdin",
+			"environment_id":      action.EnvironmentID,
+			"session_id":          action.SessionID,
+			"chars":               action.Chars,
+			"cwd":                 action.CWD,
+			"sandbox_permissions": action.SandboxPermissions,
+			"tty":                 action.TTY != nil && *action.TTY,
+		}
+		if permissions := action.AdditionalPermissions; len(permissions) > 0 {
+			value["additional_permissions"] = permissions
+		}
+		return value
+	default:
+		value := map[string]any{"tool": "exec_command", "cwd": action.CWD}
+		switch {
+		case len(action.CommandArgv) > 0:
+			value["command"] = append([]string{}, action.CommandArgv...)
+		case strings.TrimSpace(action.Command) != "":
+			// A command line without its argv still renders as the array Rust's
+			// ExecCommand always serializes.
+			value["command"] = []string{strings.TrimSpace(action.Command)}
+		}
+		if permissions := strings.TrimSpace(action.SandboxPermissions); permissions != "" {
+			value["sandbox_permissions"] = permissions
+		}
+		if permissions := action.AdditionalPermissions; len(permissions) > 0 {
+			value["additional_permissions"] = permissions
+		}
+		if justification := strings.TrimSpace(action.Justification); justification != "" {
+			value["justification"] = justification
+		}
+		if action.TTY != nil {
+			value["tty"] = *action.TTY
+		}
+		return value
+	}
+}
+
+// execveToolName mirrors Rust guardian_command_source_tool_name: an execve
+// review is attributed to the launching source.
+func execveToolName(source CommandSource) string {
+	if source == CommandSourceUnifiedExec {
+		return "exec_command"
+	}
+	return "shell"
+}
+
+// actionAnnotationsJSONValue mirrors Rust GuardianMcpAnnotations: only the
+// declared hints are rendered, and no hints means no annotations object.
+func actionAnnotationsJSONValue(annotations *ActionAnnotations) map[string]any {
+	if annotations == nil {
+		return nil
+	}
+	value := map[string]any{}
+	if annotations.DestructiveHint != nil {
+		value["destructive_hint"] = *annotations.DestructiveHint
+	}
+	if annotations.OpenWorldHint != nil {
+		value["open_world_hint"] = *annotations.OpenWorldHint
+	}
+	if annotations.ReadOnlyHint != nil {
+		value["read_only_hint"] = *annotations.ReadOnlyHint
+	}
+	if len(value) == 0 {
+		return nil
+	}
+	return value
 }
 
 // ActionPresentation mirrors Rust guardian_context::ActionPresentation: the
