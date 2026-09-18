@@ -42,6 +42,39 @@ func TestCodeModeResponseHeaderMatchesRustFormat(t *testing.T) {
 	}
 }
 
+// TestCodeModeScriptFailureShapeMatchesRust mirrors Rust's failed code-mode
+// response (#46288): the script's partial output stays first, the `Script
+// error:` block is appended after it, the header reports "Script failed", and
+// the response is unsuccessful without being a tool error.
+func TestCodeModeScriptFailureShapeMatchesRust(t *testing.T) {
+	executor := NewCodeModeExecExecutor(NewRegistry())
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:  "script-failure",
+		Payload: Payload{Kind: PayloadCustom, Input: `text("partial output"); throw new Error("boom")`},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || output.Success {
+		t.Fatalf("output = %#v, want an unsuccessful response", output)
+	}
+	body := codeModeBodyAfterHeader(t, output.Body, "Script failed")
+	if body != "partial output\nScript error:\nError: boom" {
+		t.Fatalf("failure body = %q", body)
+	}
+	items, ok := output.Data["content_items"].([]map[string]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("content items = %#v", output.Data["content_items"])
+	}
+	if items[0]["text"] != "partial output" {
+		t.Fatalf("content items[0] = %#v", items[0])
+	}
+	errText, _ := items[1]["text"].(string)
+	if !strings.HasPrefix(errText, "Script error:\n") || !strings.Contains(errText, "boom") {
+		t.Fatalf("content items[1] = %#v", items[1])
+	}
+}
+
 // codeModeBodyAfterHeader strips Rust's code-mode response header (status line,
 // wall time, `Output:` separator) and returns the script output, asserting the
 // header shape on the way (#46288).
@@ -221,15 +254,20 @@ func TestCodeModeExecRejectsFailedShellOutputLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := NewCodeModeExecExecutor(registry).Execute(context.Background(), &Invocation{
+	output, err := NewCodeModeExecExecutor(registry).Execute(context.Background(), &Invocation{
 		CallID: "uncaught-shell-failure",
 		Payload: Payload{Kind: PayloadCustom, Input: `
 			await tools.shell_command({command: "fail"});
 			await tools.shell_command({command: "must-not-run"});
 		`},
 	})
-	if err == nil || !strings.Contains(err.Error(), "controlled failure") {
-		t.Fatalf("error = %v", err)
+	// Rust surfaces an uncaught nested failure as a "Script failed" response
+	// whose `Script error:` block carries the nested tool's message.
+	if err != nil || output == nil || output.Success {
+		t.Fatalf("output = %#v, error = %v", output, err)
+	}
+	if body := codeModeBodyAfterHeader(t, output.Body, "Script failed"); !strings.Contains(body, "controlled failure") {
+		t.Fatalf("failure body = %q", body)
 	}
 	if calls != 1 {
 		t.Fatalf("nested calls = %d, want 1", calls)
@@ -343,8 +381,19 @@ func TestCodeModeExecExceptionMatrixAndRecovery(t *testing.T) {
 		"timer_throw":    `await new Promise(resolve => setTimeout(() => { throw new Error("timer boom") }, 1))`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := executor.Execute(context.Background(), &Invocation{CallID: name, Payload: Payload{Kind: PayloadCustom, Input: source}}); err == nil {
-				t.Fatal("expected JavaScript error")
+			// Rust reports a script failure as an unsuccessful response whose
+			// header says "Script failed" and whose content carries a
+			// `Script error:` block, not as a tool error (#46288).
+			output, err := executor.Execute(context.Background(), &Invocation{CallID: name, Payload: Payload{Kind: PayloadCustom, Input: source}})
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if output == nil || output.Success {
+				t.Fatalf("output = %#v, want an unsuccessful response", output)
+			}
+			body := codeModeBodyAfterHeader(t, output.Body, "Script failed")
+			if !strings.Contains(body, "Script error:") {
+				t.Fatalf("failure body = %q", body)
 			}
 		})
 	}
@@ -624,9 +673,12 @@ func TestCodeModeRejectsTooManyPendingDelegateCalls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	source := `const calls = []; for (let i = 0; i < 1025; i++) calls.push(tools.blocked({})); await Promise.all(calls);`
-	_, err := NewCodeModeExecExecutor(registry).Execute(ctx, &Invocation{CallID: "pending-limit", Payload: Payload{Kind: PayloadCustom, Input: source}})
-	if err == nil || !strings.Contains(err.Error(), "1024 pending delegate calls") {
-		t.Fatalf("error = %v", err)
+	output, err := NewCodeModeExecExecutor(registry).Execute(ctx, &Invocation{CallID: "pending-limit", Payload: Payload{Kind: PayloadCustom, Input: source}})
+	if err != nil || output == nil || output.Success {
+		t.Fatalf("output = %#v, error = %v", output, err)
+	}
+	if body := codeModeBodyAfterHeader(t, output.Body, "Script failed"); !strings.Contains(body, "1024 pending delegate calls") {
+		t.Fatalf("failure body = %q", body)
 	}
 }
 
@@ -696,9 +748,13 @@ func TestCodeModeRemoteRuntimeErrorRespondsToModel(t *testing.T) {
 	output, err := exec.Execute(context.Background(), &Invocation{
 		CallID: "remote-runtime-error", Payload: Payload{Kind: PayloadCustom, Input: `await tools.apply_patch("broken")`},
 	})
-	var callErr *FunctionCallError
-	if output != nil || !AsFunctionCallError(err, &callErr) || callErr.IsFatal() || !strings.Contains(callErr.ModelMessage(), "apply_patch verification failed") {
-		t.Fatalf("output = %#v error = %v call error = %#v", output, err, callErr)
+	// Rust reports the host's runtime error as a "Script failed" response
+	// carrying the message in its `Script error:` block.
+	if err != nil || output == nil || output.Success {
+		t.Fatalf("output = %#v error = %v", output, err)
+	}
+	if body := codeModeBodyAfterHeader(t, output.Body, "Script failed"); !strings.Contains(body, "apply_patch verification failed") {
+		t.Fatalf("failure body = %q", body)
 	}
 }
 
@@ -713,9 +769,11 @@ func TestCodeModeRemoteWaitRuntimeErrorRespondsToModel(t *testing.T) {
 	output, err := wait.Execute(context.Background(), &Invocation{
 		CallID: "remote-wait-runtime-error", Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"remote-wait-error-cell"}`},
 	})
-	var callErr *FunctionCallError
-	if output != nil || !AsFunctionCallError(err, &callErr) || callErr.IsFatal() || !strings.Contains(callErr.ModelMessage(), "asynchronous execution failed") {
-		t.Fatalf("output = %#v error = %v call error = %#v", output, err, callErr)
+	if err != nil || output == nil || output.Success {
+		t.Fatalf("output = %#v error = %v", output, err)
+	}
+	if body := codeModeBodyAfterHeader(t, output.Body, "Script failed"); !strings.Contains(body, "asynchronous execution failed") {
+		t.Fatalf("failure body = %q", body)
 	}
 }
 

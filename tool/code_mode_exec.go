@@ -444,7 +444,7 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 		output = truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens))
 		// Rust's exec handler wraps every response in the code-mode header,
 		// after truncating the script content.
-		return applyCodeModeHeader(output, "Script completed", time.Since(started), nil, e.cellOverheadEnabled()), runErr
+		return applyCodeModeHeader(output, codeModeStatusForOutput(output), time.Since(started), nil, e.cellOverheadEnabled()), runErr
 	}
 	cellID := ""
 	if invocation.Context != nil {
@@ -816,7 +816,11 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 		}
 	}
 	if strings.TrimSpace(response.ErrorText) != "" {
-		return nil, RespondToModel("JavaScript execution failed: " + response.ErrorText)
+		// Rust's failed response: partial content, then the `Script error:`
+		// block, with the header reporting "Script failed".
+		output := codeModeScriptFailureOutput(callID, response.ErrorText, response.ContentItems, nil, nil, nil)
+		output = truncateCodeModeOutput(output, maxTokens)
+		return applyCodeModeHeader(output, "Script failed", wallTime, nil, showOverhead), nil
 	}
 	body := strings.Join(texts, "\n")
 	output := &Output{CallID: callID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: body, Data: map[string]any{"content_items": response.ContentItems}}
@@ -1046,10 +1050,10 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 			} else if ctx.Err() != nil {
 				return nil, ctx.Err()
 			} else {
-				return nil, RespondToModel(fmt.Sprintf("JavaScript execution failed: %v", err))
+				return codeModeScriptFailureOutput(invocation.CallID, err.Error(), nil, nil, nil, nil), nil
 			}
 		} else {
-			return nil, RespondToModel(fmt.Sprintf("JavaScript execution failed: %v", err))
+			return codeModeScriptFailureOutput(invocation.CallID, err.Error(), nil, nil, nil, nil), nil
 		}
 	}
 	if err == nil && value == nil {
@@ -1069,7 +1073,7 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 			if completed.callback != nil {
 				delete(timers, completed.timerID)
 				if _, err := completed.callback(sobek.Undefined()); err != nil {
-					return nil, RespondToModel(fmt.Sprintf("JavaScript timer failed: %v", err))
+					return codeModeScriptFailureOutput(invocation.CallID, err.Error(), contentItems, commands, nestedOutputs, exitCodes), nil
 				}
 				continue
 			}
@@ -1101,7 +1105,9 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 		}
 	}
 	if hasPromise && promise.State() == sobek.PromiseStateRejected {
-		return nil, RespondToModel(fmt.Sprintf("JavaScript execution failed: %s", promise.Result().String()))
+		// Rust appends the `Script error:` block after the script's partial
+		// output and marks the response unsuccessful.
+		return codeModeScriptFailureOutput(invocation.CallID, promise.Result().String(), contentItems, commands, nestedOutputs, exitCodes), nil
 	}
 	body := strings.Join(texts, "\n")
 	return &Output{CallID: invocation.CallID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: body, Data: map[string]any{"content_items": contentItems, "nested_commands": commands, "nested_outputs": nestedOutputs, "nested_exit_codes": exitCodes}}, nil
@@ -1230,10 +1236,57 @@ func applyCodeModeHeader(output *Output, status string, wallTime time.Duration, 
 
 // codeModeCellStatus mirrors Rust's format_script_status for a settled cell.
 func codeModeCellStatus(cell *codeModeCell) string {
+	if cell != nil && cell.output != nil && !cell.output.Success {
+		// Rust's RuntimeResponse::Result with an error reports "Script failed".
+		return "Script failed"
+	}
 	if cell != nil && cell.terminated {
 		return "Script terminated"
 	}
 	return "Script completed"
+}
+
+// codeModeScriptFailureOutput mirrors Rust's failed code-mode response: the
+// script's partial output content followed by a `Script error:` block, marked
+// unsuccessful, so clients render the same failure text instead of a generic
+// execution error.
+func codeModeScriptFailureOutput(callID string, errorText string, contentItems []map[string]any, commands []string, nestedOutputs []string, exitCodes []int) *Output {
+	items := append([]map[string]any(nil), contentItems...)
+	items = append(items, map[string]any{"type": "input_text", "text": "Script error:\n" + errorText})
+	texts := make([]string, 0, len(items))
+	for _, item := range items {
+		if item["type"] != "input_text" {
+			continue
+		}
+		if text := fmt.Sprint(item["text"]); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	data := map[string]any{"content_items": items}
+	if commands != nil {
+		data["nested_commands"] = commands
+	}
+	if nestedOutputs != nil {
+		data["nested_outputs"] = nestedOutputs
+	}
+	if exitCodes != nil {
+		data["nested_exit_codes"] = exitCodes
+	}
+	return &Output{
+		CallID:   callID,
+		ToolName: PlainName(CodeModeExecToolName),
+		Success:  false,
+		Body:     strings.Join(texts, "\n"),
+		Data:     data,
+	}
+}
+
+// codeModeStatusForOutput reports Rust's status line for a settled response.
+func codeModeStatusForOutput(output *Output) string {
+	if output == nil || output.Success {
+		return "Script completed"
+	}
+	return "Script failed"
 }
 
 func (e *codeModeExecExecutor) cellDelta(cell *codeModeCell) string {
