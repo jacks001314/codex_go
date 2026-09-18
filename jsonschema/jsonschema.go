@@ -10,6 +10,7 @@
 package jsonschema
 
 import (
+	"encoding/json"
 	"net/url"
 	"sort"
 	"strconv"
@@ -34,6 +35,7 @@ var jsonSchemaSubsetKeys = map[string]bool{
 	"encrypted":            true,
 	"enum":                 true,
 	"items":                true,
+	"minItems":             true,
 	"properties":           true,
 	"required":             true,
 	"additionalProperties": true,
@@ -48,6 +50,138 @@ const (
 	maxCompactToolSchemaBytes = 5_000
 	maxCompactToolSchemaDepth = 3
 )
+
+// SubsetSchema validates a caller-supplied JSON Schema document against the
+// supported subset by mirroring serde deserializing it into Rust's `JsonSchema`:
+// keys outside the subset are dropped, known keys must carry the shapes the
+// typed subset declares, and a malformed known key reports ok=false (Rust's
+// "schema uses unsupported JSON Schema structures"). The input is not mutated.
+func SubsetSchema(value any) (map[string]any, bool) {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string]any, len(object))
+	for key, raw := range object {
+		if !jsonSchemaSubsetKeys[key] {
+			// serde ignores unknown fields, so the typed round trip drops them.
+			continue
+		}
+		normalized, ok := subsetSchemaField(key, raw)
+		if !ok {
+			return nil, false
+		}
+		out[key] = normalized
+	}
+	return out, true
+}
+
+func subsetSchemaField(key string, raw any) (any, bool) {
+	switch key {
+	case "$ref":
+		_, ok := raw.(string)
+		return raw, ok
+	case "type":
+		switch typed := raw.(type) {
+		case string:
+			return typed, validPrimitiveType(typed)
+		case []any:
+			out := make([]any, 0, len(typed))
+			for _, entry := range typed {
+				name, ok := entry.(string)
+				if !ok || !validPrimitiveType(name) {
+					return nil, false
+				}
+				out = append(out, name)
+			}
+			return out, true
+		default:
+			return nil, false
+		}
+	case "description":
+		_, ok := raw.(string)
+		return raw, ok
+	case "encrypted":
+		_, ok := raw.(bool)
+		return raw, ok
+	case "enum":
+		_, ok := raw.([]any)
+		return raw, ok
+	case "items":
+		return SubsetSchema(raw)
+	case "minItems":
+		value, ok := numericSchemaValue(raw)
+		if !ok || value < 0 || value != float64(int64(value)) {
+			return nil, false
+		}
+		return value, true
+	case "properties", "$defs", "definitions":
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		out := make(map[string]any, len(table))
+		for name, child := range table {
+			normalized, ok := SubsetSchema(child)
+			if !ok {
+				return nil, false
+			}
+			out[name] = normalized
+		}
+		return out, true
+	case "required":
+		entries, ok := raw.([]any)
+		if !ok {
+			return nil, false
+		}
+		out := make([]any, 0, len(entries))
+		for _, entry := range entries {
+			name, ok := entry.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, name)
+		}
+		return out, true
+	case "additionalProperties":
+		if _, ok := raw.(bool); ok {
+			return raw, true
+		}
+		return SubsetSchema(raw)
+	case "anyOf", "oneOf", "allOf":
+		entries, ok := raw.([]any)
+		if !ok {
+			return nil, false
+		}
+		out := make([]any, 0, len(entries))
+		for _, entry := range entries {
+			normalized, ok := SubsetSchema(entry)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, normalized)
+		}
+		return out, true
+	}
+	return raw, true
+}
+
+func numericSchemaValue(raw any) (float64, bool) {
+	switch typed := raw.(type) {
+	case float64:
+		return typed, true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case uint64:
+		return float64(typed), true
+	case json.Number:
+		value, err := typed.Float64()
+		return value, err == nil
+	}
+	return 0, false
+}
 
 // Normalize mirrors Rust parse_tool_input_schema: sanitize, prune unreachable
 // definitions, compact oversized schemas, then drop non-subset fields. The

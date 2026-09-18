@@ -508,6 +508,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		AgentWaitConfigured:            multiAgentTools != nil,
 		AgentHideSpawnMetadata:         agentHideSpawnMetadata,
 		AgentExposeSpawnModelOverrides: agentExposeSpawnOverrides,
+		AgentToolOverrides:             execAgentToolOverridesFromTools(multiAgentTools),
 		AgentRoles:                     execAgentRolesFromTools(multiAgentTools),
 		AgentDefaults:                  execAgentDefaultsFromTools(multiAgentTools),
 		DisableWaitAgent:               execAgentWaitDisabledFromTools(multiAgentTools),
@@ -696,13 +697,16 @@ type agentRunConfig struct {
 	AgentWaitConfigured            bool
 	AgentHideSpawnMetadata         bool
 	AgentExposeSpawnModelOverrides bool
-	AgentRoles                     map[string]multiagent.RoleConfig
-	AgentDefaults                  multiagent.SpawnDefaults
-	DisableWaitAgent               bool
-	SteerMailbox                   *turn.SteerMailbox
-	OnSteerCommitted               func(count int)
-	SamplingFollowUp               turn.SamplingFollowUp
-	SamplingCompaction             turn.SamplingCompaction
+	// AgentToolOverrides carries the model catalog's per-tool Multi-Agent V2
+	// overrides (Rust #46505).
+	AgentToolOverrides map[string]multiagent.MultiAgentToolOverride
+	AgentRoles         map[string]multiagent.RoleConfig
+	AgentDefaults      multiagent.SpawnDefaults
+	DisableWaitAgent   bool
+	SteerMailbox       *turn.SteerMailbox
+	OnSteerCommitted   func(count int)
+	SamplingFollowUp   turn.SamplingFollowUp
+	SamplingCompaction turn.SamplingCompaction
 }
 
 func firstSteerMailbox(values ...*turn.SteerMailbox) *turn.SteerMailbox {
@@ -1298,6 +1302,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.AgentWaitConfigured = run.AgentWaitConfigured
 		options.AgentHideSpawnMetadata = run.AgentHideSpawnMetadata
 		options.AgentExposeSpawnModelOverrides = run.AgentExposeSpawnModelOverrides
+		options.AgentToolOverrides = run.AgentToolOverrides
 		options.AgentRoles = run.AgentRoles
 		options.AgentDefaults = run.AgentDefaults
 		options.DisableWaitAgent = run.DisableWaitAgent

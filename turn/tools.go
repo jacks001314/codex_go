@@ -78,8 +78,11 @@ type ToolRegistryOptions struct {
 	AgentWaitConfigured            bool
 	AgentHideSpawnMetadata         bool
 	AgentExposeSpawnModelOverrides bool
-	AgentRoles                     map[string]agent.RoleConfig
-	AgentDefaults                  agent.SpawnDefaults
+	// AgentToolOverrides carries the model catalog's per-tool Multi-Agent V2
+	// overrides (Rust ModelMessages::multi_agent_tool_*, #46505).
+	AgentToolOverrides map[string]agent.MultiAgentToolOverride
+	AgentRoles         map[string]agent.RoleConfig
+	AgentDefaults      agent.SpawnDefaults
 
 	PluginInstallCandidates            []plugin.DiscoverableInfo
 	PluginInstallRecommendationContext bool
@@ -134,6 +137,29 @@ type ToolRegistryOptions struct {
 	// tools the selected model declares as supported are registered
 	// conditionally (e.g. test_sync_tool for testing models).
 	ExperimentalSupportedTools []string
+}
+
+// MultiAgentToolOverridesFromCatalog mirrors Rust's per-tool catalog override
+// resolution (ModelMessages::multi_agent_tool_description_override and
+// multi_agent_tool_parameters_override, #46505): only the tools whose catalog
+// entry declares a description or parameters appear in the result.
+func MultiAgentToolOverridesFromCatalog(messages *model.ModelMessages) map[string]agent.MultiAgentToolOverride {
+	if messages == nil {
+		return nil
+	}
+	out := map[string]agent.MultiAgentToolOverride{}
+	for _, name := range agent.MultiAgentV2ToolNames {
+		description := messages.MultiAgentToolDescriptionOverride(name)
+		parameters := messages.MultiAgentToolParametersOverride(name)
+		if description == nil && parameters == nil {
+			continue
+		}
+		out[name] = agent.MultiAgentToolOverride{Description: description, Parameters: parameters}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
@@ -306,6 +332,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			Roles:                     options.AgentRoles,
 			Defaults:                  options.AgentDefaults,
 			DisableWaitAgent:          options.DisableWaitAgent,
+			ToolOverrides:             options.AgentToolOverrides,
 		}); err != nil {
 			return nil, err
 		}

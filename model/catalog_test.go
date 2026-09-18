@@ -481,6 +481,61 @@ func TestModelMessagesConfirmationPoliciesRoundTrip(t *testing.T) {
 	}
 }
 
+// TestModelMessagesMultiAgentToolOverridesLikeRust mirrors Rust #46505's catalog
+// resolution: the model messages carry per-tool Multi-Agent V2 descriptions and
+// JSON-encoded parameter schemas, selected by tool name independently of the
+// runtime namespace; absent entries resolve to nil.
+func TestModelMessagesMultiAgentToolOverridesLikeRust(t *testing.T) {
+	var messages ModelMessages
+	document := `{
+		"tools": {
+			"multi_agent": {
+				"spawn_agent": {"description": "Catalog spawn text.", "parameters": "{\"type\":\"object\"}"},
+				"list_agents": {"description": ""},
+				"wait_agent": {"parameters": "{\"type\":\"object\",\"properties\":{}}"}
+			}
+		}
+	}`
+	if err := json.Unmarshal([]byte(document), &messages); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got := messages.MultiAgentToolDescriptionOverride("spawn_agent"); got == nil || *got != "Catalog spawn text." {
+		t.Fatalf("spawn_agent description = %#v", got)
+	}
+	if got := messages.MultiAgentToolParametersOverride("spawn_agent"); got == nil || *got != `{"type":"object"}` {
+		t.Fatalf("spawn_agent parameters = %#v", got)
+	}
+	// An explicit empty description is preserved (the tool suppresses its text).
+	if got := messages.MultiAgentToolDescriptionOverride("list_agents"); got == nil || *got != "" {
+		t.Fatalf("list_agents description = %#v", got)
+	}
+	if got := messages.MultiAgentToolDescriptionOverride("wait_agent"); got != nil {
+		t.Fatalf("wait_agent description = %#v, want nil", got)
+	}
+	if got := messages.MultiAgentToolParametersOverride("wait_agent"); got == nil {
+		t.Fatal("wait_agent parameters = nil")
+	}
+	// Tools without a catalog entry resolve to nil, and unknown names never match.
+	if messages.MultiAgentToolMessage("send_message") != nil || messages.MultiAgentToolMessage("unknown_tool") != nil ||
+		messages.MultiAgentToolDescriptionOverride("followup_task") != nil {
+		t.Fatalf("unexpected catalog entries: %#v", messages.Tools)
+	}
+	// The catalog copy must not share the override pointers with the original.
+	cloned := cloneModelInfo(ModelInfo{ModelMessages: &messages})
+	if cloned.ModelMessages == nil || cloned.ModelMessages.Tools == nil || cloned.ModelMessages.Tools.MultiAgent == nil {
+		t.Fatalf("cloned messages = %#v", cloned.ModelMessages)
+	}
+	original := messages.MultiAgentToolDescriptionOverride("spawn_agent")
+	clonedDescription := cloned.ModelMessages.MultiAgentToolDescriptionOverride("spawn_agent")
+	if clonedDescription == original {
+		t.Fatal("the clone shares the catalog description pointer")
+	}
+	*clonedDescription = "rewritten"
+	if *messages.MultiAgentToolDescriptionOverride("spawn_agent") != "Catalog spawn text." {
+		t.Fatalf("mutating the clone changed the original: %#v", messages.Tools.MultiAgent.SpawnAgent)
+	}
+}
+
 func TestModelMessagesToolMessagesRoundTrip(t *testing.T) {
 	desc := "Ask the user a clarifying question."
 	messages := ModelMessages{

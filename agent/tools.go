@@ -291,6 +291,29 @@ type MultiAgentHandlerOptions struct {
 	WaitConfigured            bool
 	HideSpawnMetadata         bool
 	ExposeSpawnModelOverrides bool
+	// ToolOverrides carries the catalog's per-tool Multi-Agent V2 overrides
+	// (Rust ModelMessages::multi_agent_tool_*, #46505), keyed by the tool's
+	// stable name (`spawn_agent`, `send_message`, `followup_task`, `wait_agent`,
+	// `interrupt_agent`, `list_agents`).
+	ToolOverrides map[string]MultiAgentToolOverride
+}
+
+// MultiAgentToolOverride carries one Multi-Agent V2 tool's catalog overrides:
+// a replacement description and a JSON-encoded replacement parameter schema.
+type MultiAgentToolOverride struct {
+	Description *string
+	Parameters  *string
+}
+
+// MultiAgentV2ToolNames lists the Multi-Agent V2 tools whose catalog overrides
+// apply, in Rust's spec_plan registration order.
+var MultiAgentV2ToolNames = []string{
+	"spawn_agent",
+	"send_message",
+	"followup_task",
+	"wait_agent",
+	"interrupt_agent",
+	"list_agents",
 }
 
 type SpawnDefaults struct {

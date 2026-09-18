@@ -6331,9 +6331,20 @@ func (r *RuntimeRouter) applyRunningThreadResumeSnapshot(result any, request *Re
 	if threadID == "" {
 		return nil
 	}
-	activeTurn := r.activeRuntimeTurnSnapshot(threadID)
-	if activeTurn == nil {
+	// Rust #46510: only a resume that includes turns or requests an initial page
+	// with items needs the active turn's items; everything else observes turn
+	// metadata alone, so the items are never cloned.
+	activeTurnMetadata := r.activeRuntimeTurnSnapshotMetadata(threadID)
+	if activeTurnMetadata == nil {
 		return nil
+	}
+	needsTurnItems := !params.ExcludeTurns ||
+		(params.InitialTurnsPage != nil && params.InitialTurnsPage.ItemsView != TurnItemsNotLoaded)
+	activeTurn := activeTurnMetadata
+	if needsTurnItems {
+		if full := r.activeRuntimeTurnSnapshot(threadID); full != nil {
+			activeTurn = full
+		}
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, params.InitialTurnsPage != nil)
 	if err != nil || record == nil {
@@ -12799,6 +12810,19 @@ func (r *RuntimeRouter) activeTurnParams(threadID string) *turn.TurnStartParams 
 }
 
 func (r *RuntimeRouter) activeRuntimeTurnSnapshot(threadID string) *Turn {
+	return r.activeRuntimeTurnSnapshotWithItems(threadID, true)
+}
+
+// activeRuntimeTurnSnapshotMetadata returns the running turn without
+// materializing or cloning its items (Rust #46510
+// ThreadHistoryBuilder::active_turn_metadata_snapshot): the turn reports
+// TurnItemsNotLoaded, which is what a metadata-only resume needs for its status
+// check and its NotLoaded initial page.
+func (r *RuntimeRouter) activeRuntimeTurnSnapshotMetadata(threadID string) *Turn {
+	return r.activeRuntimeTurnSnapshotWithItems(threadID, false)
+}
+
+func (r *RuntimeRouter) activeRuntimeTurnSnapshotWithItems(threadID string, includeItems bool) *Turn {
 	if r == nil {
 		return nil
 	}
@@ -12821,6 +12845,15 @@ func (r *RuntimeRouter) activeRuntimeTurnSnapshot(threadID string) *Turn {
 		startedAt = now.Unix()
 		createdAt = now
 	}
+	turn := &Turn{
+		ID:        turnID,
+		ItemsView: TurnItemsNotLoaded,
+		Status:    TurnStatusInProgress,
+		StartedAt: &startedAt,
+	}
+	if !includeItems {
+		return turn
+	}
 	items := []ThreadItem{}
 	for _, item := range r.sessionItemsForTurn(turnID, params, nil, createdAt) {
 		if sessionItemIsHiddenThreadItem(&item) {
@@ -12828,13 +12861,9 @@ func (r *RuntimeRouter) activeRuntimeTurnSnapshot(threadID string) *Turn {
 		}
 		items = append(items, BuildThreadItem(item))
 	}
-	return &Turn{
-		ID:        turnID,
-		Items:     items,
-		ItemsView: TurnItemsFull,
-		Status:    TurnStatusInProgress,
-		StartedAt: &startedAt,
-	}
+	turn.Items = items
+	turn.ItemsView = TurnItemsFull
+	return turn
 }
 
 func normalizedMCPRootPaths(r *RuntimeRouter, values []string) []string {
@@ -13486,6 +13515,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				options.AgentWaitConfigured = true
 				options.AgentHideSpawnMetadata = v2Config.HideSpawnAgentMetadata
 				options.AgentExposeSpawnModelOverrides = v2Config.ExposeSpawnAgentModelOverrides
+				// Rust #46505: the active model's catalog supplies per-tool
+				// Multi-Agent V2 description and parameter overrides.
+				if turnModelInfo != nil {
+					options.AgentToolOverrides = turn.MultiAgentToolOverridesFromCatalog(turnModelInfo.ModelMessages)
+				}
 				if v2Config.NonCodeModeOnly {
 					options.AgentExposure = tool.ExposureDirectModelOnly
 				} else {

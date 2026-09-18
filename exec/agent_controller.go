@@ -55,6 +55,18 @@ type execMultiAgentTools struct {
 	rootHint                  *string
 	subagentHint              *string
 	usageHintText             *string
+	// toolOverrides carries the model catalog's per-tool Multi-Agent V2
+	// overrides (Rust #46505).
+	toolOverrides map[string]agent.MultiAgentToolOverride
+}
+
+// execAgentToolOverridesFromTools returns the Multi-Agent V2 catalog overrides
+// resolved for the run (Rust #46505).
+func execAgentToolOverridesFromTools(tools *execMultiAgentTools) map[string]agent.MultiAgentToolOverride {
+	if tools == nil {
+		return nil
+	}
+	return tools.toolOverrides
 }
 
 func execAgentSteerMailboxFromTools(req *Request, options *execMultiAgentTools) *turn.SteerMailbox {
@@ -285,6 +297,14 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		if v2Config.NonCodeModeOnly {
 			options.exposure = tool.ExposureDirectModelOnly
 		}
+		// Rust #46505: the active model's catalog supplies per-tool Multi-Agent
+		// V2 description and parameter overrides.
+		modelID := execMultiAgentModelForRun(req, cfg, modelsManager)
+		catalogManager := modelsManager
+		if catalogManager == nil {
+			catalogManager = model.NewStaticModelsManager(model.BundledModelsResponse())
+		}
+		options.toolOverrides = turn.MultiAgentToolOverridesFromCatalog(catalogManager.GetModelInfo(modelID, nil).ModelMessages)
 	}
 
 	controller := agent.ToolController(nil)

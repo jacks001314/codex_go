@@ -216,6 +216,9 @@ type ConfirmationPolicies struct {
 // model-owned descriptions for built-in tools.
 type ToolMessages struct {
 	SendUserMessageAsync *ToolMessage `json:"send_user_message_async,omitempty"`
+	// MultiAgent carries the Multi-Agent V2 tools' catalog overrides (Rust
+	// #46505).
+	MultiAgent *MultiAgentToolMessages `json:"multi_agent,omitempty"`
 }
 
 // ToolMessage mirrors Rust protocol::openai_models::ToolMessage (#41461):
@@ -223,6 +226,69 @@ type ToolMessages struct {
 // built-in description; an explicit empty string leaves the description empty.
 type ToolMessage struct {
 	Description *string `json:"description,omitempty"`
+	// Parameters is a complete JSON Schema encoded as a string, consumed by the
+	// Multi-Agent V2 tools only (Rust #46505). Missing, null, invalid or
+	// unsupported structures, or a root without `type: "object"` retain the
+	// harness parameters; overrides must declare harness-encrypted properties so
+	// their annotations can be retained.
+	Parameters *string `json:"parameters,omitempty"`
+}
+
+// MultiAgentToolMessages mirrors Rust protocol::openai_models::
+// MultiAgentToolMessages: model-owned descriptions and parameters for the
+// Multi-Agent V2 tools, independent of their namespace.
+type MultiAgentToolMessages struct {
+	SpawnAgent     *ToolMessage `json:"spawn_agent,omitempty"`
+	SendMessage    *ToolMessage `json:"send_message,omitempty"`
+	FollowupTask   *ToolMessage `json:"followup_task,omitempty"`
+	WaitAgent      *ToolMessage `json:"wait_agent,omitempty"`
+	InterruptAgent *ToolMessage `json:"interrupt_agent,omitempty"`
+	ListAgents     *ToolMessage `json:"list_agents,omitempty"`
+}
+
+// MultiAgentToolMessage selects a V2 tool's catalog messages by tool name,
+// independently of its runtime namespace (Rust ModelMessages::multi_agent_tool).
+func (m *ModelMessages) MultiAgentToolMessage(toolName string) *ToolMessage {
+	if m == nil || m.Tools == nil || m.Tools.MultiAgent == nil {
+		return nil
+	}
+	tools := m.Tools.MultiAgent
+	switch strings.TrimSpace(toolName) {
+	case "spawn_agent":
+		return tools.SpawnAgent
+	case "send_message":
+		return tools.SendMessage
+	case "followup_task":
+		return tools.FollowupTask
+	case "wait_agent":
+		return tools.WaitAgent
+	case "interrupt_agent":
+		return tools.InterruptAgent
+	case "list_agents":
+		return tools.ListAgents
+	}
+	return nil
+}
+
+// MultiAgentToolDescriptionOverride returns a V2 tool's catalog description
+// override, or nil to keep the bundled description.
+func (m *ModelMessages) MultiAgentToolDescriptionOverride(toolName string) *string {
+	tool := m.MultiAgentToolMessage(toolName)
+	if tool == nil {
+		return nil
+	}
+	return tool.Description
+}
+
+// MultiAgentToolParametersOverride returns a V2 tool's complete parameter schema
+// (JSON encoded), or nil to keep the harness parameters. Parsing belongs to the
+// tool consumer.
+func (m *ModelMessages) MultiAgentToolParametersOverride(toolName string) *string {
+	tool := m.MultiAgentToolMessage(toolName)
+	if tool == nil {
+		return nil
+	}
+	return tool.Parameters
 }
 
 func (m *ModelMessages) UnmarshalJSON(data []byte) error {
@@ -1552,10 +1618,40 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 			autoReview.TimeoutInstructions = cloneStringPointer(autoReview.TimeoutInstructions)
 			messages.AutoReview = &autoReview
 		}
+		if messages.Tools != nil {
+			tools := *messages.Tools
+			tools.SendUserMessageAsync = cloneToolMessage(tools.SendUserMessageAsync)
+			tools.MultiAgent = cloneMultiAgentToolMessages(tools.MultiAgent)
+			messages.Tools = &tools
+		}
 		out.ModelMessages = &messages
 	}
 	out.Upgrade = cloneModelInfoUpgrade(out.Upgrade)
 	return out
+}
+
+func cloneToolMessage(in *ToolMessage) *ToolMessage {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Description = cloneStringPointer(in.Description)
+	out.Parameters = cloneStringPointer(in.Parameters)
+	return &out
+}
+
+func cloneMultiAgentToolMessages(in *MultiAgentToolMessages) *MultiAgentToolMessages {
+	if in == nil {
+		return nil
+	}
+	return &MultiAgentToolMessages{
+		SpawnAgent:     cloneToolMessage(in.SpawnAgent),
+		SendMessage:    cloneToolMessage(in.SendMessage),
+		FollowupTask:   cloneToolMessage(in.FollowupTask),
+		WaitAgent:      cloneToolMessage(in.WaitAgent),
+		InterruptAgent: cloneToolMessage(in.InterruptAgent),
+		ListAgents:     cloneToolMessage(in.ListAgents),
+	}
 }
 
 func cloneModelInfoUpgrade(in *ModelInfoUpgrade) *ModelInfoUpgrade {

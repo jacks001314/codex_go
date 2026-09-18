@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/jsonschema"
 	"codex_go/tool"
 )
 
@@ -101,6 +102,8 @@ type multiAgentV2ToolExecutor struct {
 	waitDefault               time.Duration
 	hideSpawnMetadata         bool
 	exposeSpawnModelOverrides bool
+	// toolOverrides carries the catalog's per-tool overrides (Rust #46505).
+	toolOverrides map[string]MultiAgentToolOverride
 }
 
 func registerMultiAgentV2Handlers(registry *tool.Registry, options *MultiAgentHandlerOptions) error {
@@ -137,6 +140,7 @@ func registerMultiAgentV2Handlers(registry *tool.Registry, options *MultiAgentHa
 			usageHintText: options.UsageHintText,
 			waitMin:       waitMin, waitMax: waitMax, waitDefault: waitDefault, hideSpawnMetadata: options.HideSpawnMetadata,
 			exposeSpawnModelOverrides: options.ExposeSpawnModelOverrides,
+			toolOverrides:             options.ToolOverrides,
 		}); err != nil {
 			return err
 		}
@@ -226,7 +230,83 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 			}, []string{"agent_name", "agent_status"}),
 		}}, []string{"agents"})
 	}
+	if override, ok := e.toolOverrides[string(e.kind)]; ok {
+		applyMultiAgentToolOverride(&spec, e.kind, override)
+	}
 	return spec
+}
+
+// applyMultiAgentToolOverride mirrors Rust's multi_agent_v2_handler override
+// application (#46505): the catalog description replaces the bundled text for
+// every V2 tool except `spawn_agent` (whose description also composes runtime
+// guidance), and the parameter override is used only when it validates.
+func applyMultiAgentToolOverride(spec *tool.Spec, kind multiAgentV2ToolKind, override MultiAgentToolOverride) {
+	if spec == nil {
+		return
+	}
+	if kind != multiAgentV2Spawn && override.Description != nil {
+		spec.Description = *override.Description
+	}
+	if parameters, ok := resolveMultiAgentParametersOverride(spec.InputSchema, override.Parameters); ok {
+		spec.InputSchema = parameters
+	}
+}
+
+// resolveMultiAgentParametersOverride mirrors Rust's parameter-override
+// validation: the override must decode as JSON, declare an object root, and use
+// only the supported schema subset; it must also still declare every bundled
+// encrypted property, whose encryption marker the harness restores. Anything
+// else retains the bundled parameters.
+func resolveMultiAgentParametersOverride(bundled map[string]any, raw *string) (map[string]any, bool) {
+	if raw == nil {
+		return nil, false
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(*raw), &decoded); err != nil {
+		return nil, false
+	}
+	object, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	if kind, _ := object["type"].(string); kind != "object" {
+		return nil, false
+	}
+	parameters, ok := jsonschema.SubsetSchema(object)
+	if !ok {
+		return nil, false
+	}
+	if !multiAgentParametersKeepEncryptedProperties(bundled, parameters) {
+		return nil, false
+	}
+	return parameters, true
+}
+
+// multiAgentParametersKeepEncryptedProperties mirrors Rust's encrypted-property
+// rule: argument transport requires the harness's encryption markers even
+// without server encryption configuration, so an override that omits a bundled
+// encrypted property is rejected and the marker is restored on the ones it keeps.
+func multiAgentParametersKeepEncryptedProperties(bundled map[string]any, override map[string]any) bool {
+	properties, _ := bundled["properties"].(map[string]any)
+	if len(properties) == 0 {
+		return true
+	}
+	overrideProperties, _ := override["properties"].(map[string]any)
+	for name, raw := range properties {
+		schema, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if encrypted, _ := schema["encrypted"].(bool); !encrypted {
+			continue
+		}
+		entry, ok := overrideProperties[name].(map[string]any)
+		if !ok {
+			return false
+		}
+		entry["encrypted"] = true
+	}
+	return true
 }
 
 func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {

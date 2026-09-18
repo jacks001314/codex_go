@@ -75,6 +75,41 @@ func TestSkillsReadAliasResolutionAndExecutorSkillRoot(t *testing.T) {
 	}
 }
 
+// TestMultiAgentToolOverridesFromCatalogMatchesRust mirrors Rust #46505's
+// resolution: only the tools whose catalog entry declares a description or
+// parameters appear, keyed by the tool's stable name.
+func TestMultiAgentToolOverridesFromCatalogMatchesRust(t *testing.T) {
+	if overrides := MultiAgentToolOverridesFromCatalog(nil); overrides != nil {
+		t.Fatalf("nil messages produced %#v", overrides)
+	}
+	empty := &model.ModelMessages{}
+	if overrides := MultiAgentToolOverridesFromCatalog(empty); overrides != nil {
+		t.Fatalf("empty messages produced %#v", overrides)
+	}
+	parameters := `{"type":"object"}`
+	description := "Catalog text."
+	messages := &model.ModelMessages{Tools: &model.ToolMessages{MultiAgent: &model.MultiAgentToolMessages{
+		SpawnAgent: &model.ToolMessage{Description: &description, Parameters: &parameters},
+		ListAgents: &model.ToolMessage{},
+		WaitAgent:  &model.ToolMessage{Parameters: &parameters},
+	}}}
+	overrides := MultiAgentToolOverridesFromCatalog(messages)
+	if len(overrides) != 2 {
+		t.Fatalf("overrides = %#v", overrides)
+	}
+	spawn, ok := overrides["spawn_agent"]
+	if !ok || spawn.Description == nil || *spawn.Description != description || spawn.Parameters == nil || *spawn.Parameters != parameters {
+		t.Fatalf("spawn_agent override = %#v", spawn)
+	}
+	wait, ok := overrides["wait_agent"]
+	if !ok || wait.Description != nil || wait.Parameters == nil {
+		t.Fatalf("wait_agent override = %#v", wait)
+	}
+	if _, ok := overrides["list_agents"]; ok {
+		t.Fatalf("a tool without overrides appeared: %#v", overrides)
+	}
+}
+
 func TestBuildToolRegistryHonorsToolDisableOptions(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.DisableUpdatePlan = true

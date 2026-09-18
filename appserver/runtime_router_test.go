@@ -1980,6 +1980,103 @@ func TestRuntimeRouterThreadResumeRejectsStalePathWhileRunning(t *testing.T) {
 	}
 }
 
+// TestRuntimeRouterRunningResumeTurnItemsViewLikeRust mirrors Rust #46510: a
+// resume of a running thread only snapshots the active turn's items when the
+// response needs them. A metadata-only page reports the active turn with
+// TurnItemsNotLoaded and no items, while Summary and Full pages carry the
+// requested view and the turn's items.
+func TestRuntimeRouterRunningResumeTurnItemsViewLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	routerStore := NewRouter(store)
+	routerStore.SetClock(func() time.Time { return fixedTime() })
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: routerStore,
+		ThreadExtras: NewThreadExtraService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	cwd := t.TempDir()
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    cwd,
+		Model:  "gpt-running",
+		Prompt: "seed",
+	}))
+	if start.Error != nil {
+		t.Fatalf("thread/start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+	materializeThreadRolloutForTest(t, router.services.ThreadRouter, store, threadID)
+	if err := router.registerActiveRuntimeTurn(threadID, "turn-running", func() {}, fixedTime().Add(time.Minute).UnixMilli(), &turn.TurnStartParams{
+		ThreadID: threadID,
+		CWD:      cwd,
+		Model:    "gpt-running",
+		Prompt:   "still running",
+	}); err != nil {
+		t.Fatalf("registerActiveRuntimeTurn() error = %v", err)
+	}
+	// A running thread reports the active status, like Rust's
+	// ThreadStatus::Active { active_flags: [] } in the resume assertions.
+	router.requireThreadStatus().NoteTurnStarted(threadID)
+
+	limit := 1
+	resumePage := func(t *testing.T, id int64, view TurnItemsView) TurnsPage {
+		t.Helper()
+		resume := router.Handle(requestWithParams(t, IntID(id), MethodThreadResume, ThreadResumeParams{
+			ThreadID:     threadID,
+			ExcludeTurns: true,
+			InitialTurnsPage: &ThreadInitialPageParams{
+				Limit:     &limit,
+				ItemsView: view,
+			},
+		}))
+		if resume.Error != nil {
+			t.Fatalf("thread/resume error: %+v", resume.Error)
+		}
+		result := resume.Result.(*ThreadResumeResponse)
+		if result.Thread == nil || result.Thread.Status.Type != "active" {
+			t.Fatalf("resume thread = %#v", result.Thread)
+		}
+		if len(result.Thread.Turns) != 0 {
+			t.Fatalf("excludeTurns resume carried turns: %#v", result.Thread.Turns)
+		}
+		if result.InitialTurnsPage == nil || len(result.InitialTurnsPage.Data) != 1 {
+			t.Fatalf("initial turns page = %#v", result.InitialTurnsPage)
+		}
+		return *result.InitialTurnsPage
+	}
+
+	metadataPage := resumePage(t, 2, TurnItemsNotLoaded)
+	metadataTurn := metadataPage.Data[0]
+	if metadataTurn.ID != "turn-running" || metadataTurn.Status != TurnStatusInProgress {
+		t.Fatalf("metadata-only page turn = %#v", metadataTurn)
+	}
+	if metadataTurn.ItemsView != TurnItemsNotLoaded || len(metadataTurn.Items) != 0 {
+		t.Fatalf("metadata-only page items = %#v (view %q)", metadataTurn.Items, metadataTurn.ItemsView)
+	}
+	// The metadata snapshot never materializes items; the full snapshot does.
+	metadataSnapshot := router.activeRuntimeTurnSnapshotMetadata(threadID)
+	if metadataSnapshot == nil || metadataSnapshot.ItemsView != TurnItemsNotLoaded || len(metadataSnapshot.Items) != 0 {
+		t.Fatalf("activeRuntimeTurnSnapshotMetadata() = %#v", metadataSnapshot)
+	}
+	fullSnapshot := router.activeRuntimeTurnSnapshot(threadID)
+	if fullSnapshot == nil || fullSnapshot.ItemsView != TurnItemsFull || len(fullSnapshot.Items) == 0 {
+		t.Fatalf("activeRuntimeTurnSnapshot() = %#v", fullSnapshot)
+	}
+
+	for index, view := range []TurnItemsView{TurnItemsSummary, TurnItemsFull} {
+		page := resumePage(t, int64(3+index), view)
+		turn := page.Data[0]
+		if turn.ID != "turn-running" || turn.Status != TurnStatusInProgress {
+			t.Fatalf("page turn for view %q = %#v", view, turn)
+		}
+		if turn.ItemsView != view {
+			t.Fatalf("page turn items view = %q, want %q", turn.ItemsView, view)
+		}
+		if len(turn.Items) == 0 {
+			t.Fatalf("page turn for view %q carried no items", view)
+		}
+	}
+}
+
 func TestRuntimeRouterThreadResumeRunningIgnoresOverrideMismatch(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	routerStore := NewRouter(store)
