@@ -12,6 +12,55 @@ import (
 	"time"
 )
 
+// TestCodeModeResponseHeaderMatchesRustFormat mirrors Rust's CodeModeToolOutput
+// header (#46288): the default format rounds the wall time to one decimal, the
+// overhead format uses three decimals with the host measurement and the
+// difference, and absent host timing (or the option off) keeps the default
+// format.
+func TestCodeModeResponseHeaderMatchesRustFormat(t *testing.T) {
+	wall := 1*time.Second + 456*time.Millisecond
+	if got := codeModeResponseHeader("Script completed", wall, nil, false); got != "Script completed\nWall time 1.5 seconds\nOutput:\n" {
+		t.Fatalf("default header = %q", got)
+	}
+	// The option on without host timing keeps the default format.
+	if got := codeModeResponseHeader("Script completed", wall, nil, true); got != "Script completed\nWall time 1.5 seconds\nOutput:\n" {
+		t.Fatalf("overhead-without-host header = %q", got)
+	}
+	host := 1*time.Second + 456*time.Millisecond
+	// 2.5s total against 1.456s host: 1.044s of harness overhead.
+	total := 2*time.Second + 500*time.Millisecond
+	want := "Script completed\nWall time 2.500 seconds (code-mode 1.456 seconds; overhead 1.044 seconds)\nOutput:\n"
+	if got := codeModeResponseHeader("Script completed", total, &host, true); got != want {
+		t.Fatalf("overhead header = %q, want %q", got, want)
+	}
+	// Millisecond quantization can produce a small negative difference.
+	hostLater := 2*time.Second + 500*time.Millisecond
+	shorterTotal := 2*time.Second + 456*time.Millisecond
+	negative := codeModeResponseHeader("Script failed", shorterTotal, &hostLater, true)
+	if !strings.Contains(negative, "overhead -0.044 seconds") {
+		t.Fatalf("negative overhead header = %q", negative)
+	}
+}
+
+// codeModeBodyAfterHeader strips Rust's code-mode response header (status line,
+// wall time, `Output:` separator) and returns the script output, asserting the
+// header shape on the way (#46288).
+func codeModeBodyAfterHeader(t *testing.T, body string, wantStatus string) string {
+	t.Helper()
+	status, rest, ok := strings.Cut(body, "\n")
+	if !ok {
+		t.Fatalf("code-mode body has no header: %q", body)
+	}
+	if status != wantStatus {
+		t.Fatalf("code-mode status = %q, want %q (body %q)", status, wantStatus, body)
+	}
+	wallLine, rest, ok := strings.Cut(rest, "\n")
+	if !ok || !strings.HasPrefix(wallLine, "Wall time ") || !strings.HasSuffix(wallLine, " seconds") {
+		t.Fatalf("code-mode wall time line = %q (body %q)", wallLine, body)
+	}
+	return strings.TrimPrefix(rest, "Output:\n")
+}
+
 func TestCodeModeExecUsesCustomPayloadAndNormalizesNestedOutput(t *testing.T) {
 	shell := NewShellExecutor(&ShellExecutorOptions{Runner: &recordingShellRunner{output: "ALPHA\n"}, Validation: ShellValidationOptions{CWD: t.TempDir()}})
 	registry := NewRegistry()
@@ -26,7 +75,7 @@ func TestCodeModeExecUsesCustomPayloadAndNormalizesNestedOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.Body != "ALPHA" || !output.Success {
+	if codeModeBodyAfterHeader(t, output.Body, "Script completed") != "ALPHA" || !output.Success {
 		t.Fatalf("output = %#v", output)
 	}
 	commands, ok := output.Data["nested_commands"].([]string)
@@ -72,7 +121,7 @@ func TestCodeModeExecRunsLegacyShellCommandLikeRustWhenUnifiedExecDisabled(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.Body != "WEATHER_LEGACY_OK" || runner.request == nil || runner.request.HookCommand != "Write-Output WEATHER_LEGACY_OK" {
+	if codeModeBodyAfterHeader(t, output.Body, "Script completed") != "WEATHER_LEGACY_OK" || runner.request == nil || runner.request.HookCommand != "Write-Output WEATHER_LEGACY_OK" {
 		t.Fatalf("output = %#v, request = %#v", output, runner.request)
 	}
 	commands, ok := output.Data["nested_commands"].([]string)
@@ -124,7 +173,7 @@ func TestCodeModeExecTryCatchAndMultipleTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.Body != "recovered\n[\"one\",\"two\"]" {
+	if codeModeBodyAfterHeader(t, output.Body, "Script completed") != "recovered\n[\"one\",\"two\"]" {
 		t.Fatalf("body = %q", output.Body)
 	}
 }
@@ -202,7 +251,7 @@ func TestCodeModeExecPreservesNonShellBusinessFailureResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.Body != "false\nbusiness rule rejected" {
+	if codeModeBodyAfterHeader(t, output.Body, "Script completed") != "false\nbusiness rule rejected" {
 		t.Fatalf("body = %q", output.Body)
 	}
 }
@@ -267,7 +316,7 @@ func TestCodeModeExecCatchesFailedShellOutputAndClosesNestedLifecycle(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.Body != "CAUGHT_FAILURE\nRECOVERY_OK" {
+	if codeModeBodyAfterHeader(t, output.Body, "Script completed") != "CAUGHT_FAILURE\nRECOVERY_OK" {
 		t.Fatalf("body = %q", output.Body)
 	}
 	mu.Lock()
@@ -300,7 +349,7 @@ func TestCodeModeExecExceptionMatrixAndRecovery(t *testing.T) {
 		})
 	}
 	output, err := executor.Execute(context.Background(), &Invocation{CallID: "recovery", Payload: Payload{Kind: PayloadCustom, Input: `text("RECOVERED")`}})
-	if err != nil || output.Body != "RECOVERED" {
+	if err != nil || codeModeBodyAfterHeader(t, output.Body, "Script completed") != "RECOVERED" {
 		t.Fatalf("recovery = %#v, %v", output, err)
 	}
 }
@@ -331,7 +380,7 @@ func TestCodeModeExecRoutesFreeformApplyPatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.Body != "true" {
+	if codeModeBodyAfterHeader(t, output.Body, "Script completed") != "true" {
 		t.Fatalf("body = %q", output.Body)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "nested.txt"))
@@ -365,7 +414,7 @@ func TestCodeModeExecHelpersAndSessionStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Body != "3" {
+	if codeModeBodyAfterHeader(t, second.Body, "Script completed") != "3" {
 		t.Fatalf("stored body = %q", second.Body)
 	}
 }
@@ -387,7 +436,7 @@ func TestCodeModeExecStoringUndefinedPreservesPreviousValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "Unable to store \"key\". Only plain serializable objects can be stored.\nnull"
-	if output.Body != want {
+	if codeModeBodyAfterHeader(t, output.Body, "Script completed") != want {
 		t.Fatalf("body = %q, want %q", output.Body, want)
 	}
 }
@@ -443,7 +492,7 @@ func TestCodeModeExecTimers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.Body != "timer-complete" {
+	if codeModeBodyAfterHeader(t, output.Body, "Script completed") != "timer-complete" {
 		t.Fatalf("body = %q", output.Body)
 	}
 }
@@ -470,7 +519,7 @@ func TestCodeModeExecYieldWaitAndTerminate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if finished.Body != "done" {
+	if codeModeBodyAfterHeader(t, finished.Body, "Script completed") != "done" {
 		t.Fatalf("finished = %#v", finished)
 	}
 
@@ -531,7 +580,7 @@ func TestCodeModeWaitReturnsOnlyNewOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if finished.Body != "third" {
+	if codeModeBodyAfterHeader(t, finished.Body, "Script completed") != "third" {
 		t.Fatalf("final delta = %q", finished.Body)
 	}
 }
@@ -543,7 +592,8 @@ func TestCodeModeOutputBudgetsAndPragmaValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(output.Body, "Warning: truncated output (original token count: 10)") || !strings.Contains(output.Body, "tokens truncated") {
+	truncatedBody := codeModeBodyAfterHeader(t, output.Body, "Script completed")
+	if !strings.HasPrefix(truncatedBody, "Warning: truncated output (original token count: 10)") || !strings.Contains(truncatedBody, "tokens truncated") {
 		t.Fatalf("truncated body = %q", output.Body)
 	}
 	for _, source := range []string{"", "  \n", `// @exec: {"unknown":1}
@@ -591,7 +641,7 @@ func TestCodeModeNotifyInjectsSeparateOutputWithoutDuplicatingFinalBody(t *testi
 	if gotCallID != "notify-call" || gotText != "ping" {
 		t.Fatalf("notify = %q/%q", gotCallID, gotText)
 	}
-	if output.Body != "final" || strings.Contains(output.Body, "ping") {
+	if codeModeBodyAfterHeader(t, output.Body, "Script completed") != "final" || strings.Contains(output.Body, "ping") {
 		t.Fatalf("body = %q", output.Body)
 	}
 }
@@ -614,7 +664,7 @@ func TestCodeModeRemoteSuccessDoesNotRunInProcessFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output.Body != "REMOTE_OK" || remote.executeCalls != 1 {
+	if codeModeBodyAfterHeader(t, output.Body, "Script completed") != "REMOTE_OK" || remote.executeCalls != 1 {
 		t.Fatalf("output = %#v execute calls = %d", output, remote.executeCalls)
 	}
 	if remote.request.YieldTimeMS == nil || *remote.request.YieldTimeMS != uint64(CodeModeDefaultExecYieldTime/time.Millisecond) {

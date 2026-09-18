@@ -26,6 +26,17 @@ func init() {
 	os.Exit(0)
 }
 
+// codeModeBodyAfterHeader strips Rust's code-mode response header (status line,
+// wall time, `Output:` separator) and returns the script output (#46288).
+func codeModeBodyAfterHeader(t *testing.T, body string) string {
+	t.Helper()
+	lines := strings.SplitN(body, "\n", 3)
+	if len(lines) != 3 || !strings.HasPrefix(lines[1], "Wall time ") || !strings.HasPrefix(lines[2], "Output:\n") {
+		t.Fatalf("code-mode body has no header: %q", body)
+	}
+	return strings.TrimPrefix(lines[2], "Output:\n")
+}
+
 func TestProcessProviderExecutesNestedToolsOutsideClientProcess(t *testing.T) {
 	hostProgram := copyProcessHostTestBinary(t)
 	t.Setenv(processHostHelperEnv, "1")
@@ -61,7 +72,7 @@ func TestProcessProviderExecutesNestedToolsOutsideClientProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if output == nil || output.Body != "CROSS_PROCESS_OK" {
+	if output == nil || codeModeBodyAfterHeader(t, output.Body) != "CROSS_PROCESS_OK" {
 		t.Fatalf("output = %#v", output)
 	}
 	if notified != "HOST_NOTIFY" {
@@ -82,7 +93,7 @@ func TestProcessProviderRuntimePersistsStateAndCellsAcrossRegistryRebinds(t *tes
 	stored, err := firstExec.Execute(context.Background(), &tool.Invocation{
 		CallID: "store-first", Payload: tool.Payload{Kind: tool.PayloadCustom, Input: `store("nb", {title: "Notebook", count: 2}); text("stored")`},
 	})
-	if err != nil || stored == nil || stored.Body != "stored" {
+	if err != nil || stored == nil || codeModeBodyAfterHeader(t, stored.Body) != "stored" {
 		t.Fatalf("store output = %#v, error = %v", stored, err)
 	}
 
@@ -91,7 +102,7 @@ func TestProcessProviderRuntimePersistsStateAndCellsAcrossRegistryRebinds(t *tes
 	loaded, err := secondExec.Execute(context.Background(), &tool.Invocation{
 		CallID: "load-second", Payload: tool.Payload{Kind: tool.PayloadCustom, Input: `text(JSON.stringify(load("nb")))`},
 	})
-	if err != nil || loaded == nil || loaded.Body != `{"count":2,"title":"Notebook"}` {
+	if err != nil || loaded == nil || codeModeBodyAfterHeader(t, loaded.Body) != `{"count":2,"title":"Notebook"}` {
 		t.Fatalf("load output = %#v, error = %v", loaded, err)
 	}
 
@@ -112,7 +123,7 @@ func TestProcessProviderRuntimePersistsStateAndCellsAcrossRegistryRebinds(t *tes
 	completed, err := thirdWait.Execute(context.Background(), &tool.Invocation{
 		CallID: "wait-third", ToolName: tool.PlainName("wait"), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: fmt.Sprintf(`{"cell_id":%q,"yield_time_ms":1000}`, cellID)},
 	})
-	if err != nil || completed == nil || completed.Body != "done" {
+	if err != nil || completed == nil || codeModeBodyAfterHeader(t, completed.Body) != "done" {
 		t.Fatalf("wait output = %#v, error = %v", completed, err)
 	}
 }

@@ -621,6 +621,38 @@ func TestStrictConfigAcceptsRustMCPServerFields(t *testing.T) {
 	}
 }
 
+// TestCodeModeExperimentalShowCellOverheadLikeRust mirrors Rust #46288: the
+// option is accepted in features.code_mode (strict config does not reject it),
+// defaults to false, and reports the configured value.
+func TestCodeModeExperimentalShowCellOverheadLikeRust(t *testing.T) {
+	enabled := &Config{Values: map[string]any{
+		"features": map[string]any{
+			"code_mode": map[string]any{"experimental_show_cell_overhead": true},
+		},
+	}}
+	if !enabled.CodeModeExperimentalShowCellOverhead() {
+		t.Fatal("CodeModeExperimentalShowCellOverhead() = false, want true")
+	}
+	if err := validateKnownTopLevelConfigFields(enabled.Values); err != nil {
+		t.Fatalf("strict config rejected the option: %v", err)
+	}
+	disabled := &Config{Values: map[string]any{
+		"features": map[string]any{
+			"code_mode": map[string]any{"experimental_show_cell_overhead": false},
+		},
+	}}
+	if disabled.CodeModeExperimentalShowCellOverhead() {
+		t.Fatal("explicit false should stay disabled")
+	}
+	absent := &Config{Values: map[string]any{"features": map[string]any{"code_mode": map[string]any{}}}}
+	if absent.CodeModeExperimentalShowCellOverhead() {
+		t.Fatal("absent option should default to false")
+	}
+	if nilConfig := (*Config)(nil); nilConfig.CodeModeExperimentalShowCellOverhead() {
+		t.Fatal("nil config should default to false")
+	}
+}
+
 func TestAllowLoginShellDefaultsTrueLikeRust(t *testing.T) {
 	cfg := &Config{Values: map[string]any{}}
 	if !cfg.AllowLoginShell() {

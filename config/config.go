@@ -902,7 +902,12 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 		}
 	}
 	if codeMode, ok := features["code_mode"].(map[string]any); ok {
-		known := map[string]bool{"enabled": true, "default_exec_yield_time_ms": true, "excluded_tool_namespaces": true, "direct_only_tool_namespaces": true}
+		// Rust #46288 added experimental_show_cell_overhead to CodeModeConfigToml.
+		known := map[string]bool{
+			"enabled": true, "default_exec_yield_time_ms": true,
+			"experimental_show_cell_overhead": true,
+			"excluded_tool_namespaces":        true, "direct_only_tool_namespaces": true,
+		}
 		for key := range codeMode {
 			if !known[key] {
 				return fmt.Errorf("unknown configuration field `%s.code_mode.%s`", prefix, key)
@@ -1457,6 +1462,26 @@ func (c *Config) CodeModeDefaultExecYieldTime() time.Duration {
 		return DefaultCodeModeExecYieldTime
 	}
 	return time.Duration(value) * time.Millisecond
+}
+
+// CodeModeExperimentalShowCellOverhead mirrors Rust's
+// `features.code_mode.experimental_show_cell_overhead` (#46288): when enabled,
+// code-mode cell responses report the handler duration, the code-mode host
+// duration, and their difference in the response header. Disabled by default.
+func (c *Config) CodeModeExperimentalShowCellOverhead() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	codeMode, ok := features["code_mode"].(map[string]any)
+	if !ok {
+		return false
+	}
+	value, ok := codeMode["experimental_show_cell_overhead"].(bool)
+	return ok && value
 }
 
 // DefaultMCPOptionalStartupGrace mirrors Rust

@@ -75,7 +75,11 @@ func TestRuntimeRouterRemoteCodeModeExecutesAndClosesSharedConnection(t *testing
 	if err != nil {
 		t.Fatalf("remote exec error = %v", err)
 	}
-	if output == nil || output.Body != "REMOTE_APP_SERVER_OK" {
+	// Rust's code-mode header carries the status and wall time before the
+	// script output (#46288).
+	if output == nil ||
+		!strings.HasPrefix(output.Body, "Script completed\nWall time ") ||
+		!strings.HasSuffix(output.Body, "Output:\nREMOTE_APP_SERVER_OK") {
 		t.Fatalf("remote exec output = %#v", output)
 	}
 	if err := router.Close(); err != nil {

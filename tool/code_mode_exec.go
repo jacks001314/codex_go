@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,6 +55,10 @@ type codeModeExecExecutor struct {
 	// execution until the cell is cleaned up (Rust #44865).
 	remoteCellReleases map[string]func()
 	defaultYieldMS     int
+	// showCellOverhead mirrors Rust's features.code_mode.experimental_show_cell_overhead
+	// (#46288): report the code-mode host duration and harness overhead in the
+	// cell response header.
+	showCellOverhead bool
 }
 
 type CodeModeRemoteProvider interface {
@@ -124,11 +129,14 @@ type CodeModeRemoteResponse struct {
 }
 
 type codeModeCell struct {
-	done       chan struct{}
-	cancel     context.CancelFunc
-	output     *Output
-	err        error
-	completed  bool
+	done      chan struct{}
+	cancel    context.CancelFunc
+	output    *Output
+	err       error
+	completed bool
+	// startedAt anchors the response header's wall time (Rust's
+	// `CodeModeToolOutput::new` takes the elapsed time from the handler).
+	startedAt  time.Time
 	mu         sync.Mutex
 	items      []map[string]any
 	texts      []string
@@ -202,6 +210,28 @@ func (r *CodeModeRuntime) SetDefaultExecYieldTime(value time.Duration) {
 	r.exec.bindingMu.Lock()
 	r.exec.defaultYieldMS = int(value / time.Millisecond)
 	r.exec.bindingMu.Unlock()
+}
+
+// SetShowCellOverhead mirrors Rust's
+// `features.code_mode.experimental_show_cell_overhead` (#46288): when enabled,
+// cell responses report the code-mode host duration and the harness overhead in
+// the response header.
+func (r *CodeModeRuntime) SetShowCellOverhead(enabled bool) {
+	if r == nil || r.exec == nil {
+		return
+	}
+	r.exec.bindingMu.Lock()
+	r.exec.showCellOverhead = enabled
+	r.exec.bindingMu.Unlock()
+}
+
+func (e *codeModeExecExecutor) cellOverheadEnabled() bool {
+	if e == nil {
+		return false
+	}
+	e.bindingMu.Lock()
+	defer e.bindingMu.Unlock()
+	return e.showCellOverhead
 }
 
 func (r *CodeModeRuntime) Executors(registry *Registry, nestedCommandTool ...ToolName) (Executor, Executor) {
@@ -409,8 +439,12 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 	if options.YieldTimeMS == nil && !strings.Contains(source, "yield_control") {
 		invocationCopy := *invocation
 		invocationCopy.Payload.Input = source
+		started := time.Now()
 		output, runErr := e.executeScript(ctx, &invocationCopy, nil, nil)
-		return truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens)), runErr
+		output = truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens))
+		// Rust's exec handler wraps every response in the code-mode header,
+		// after truncating the script content.
+		return applyCodeModeHeader(output, "Script completed", time.Since(started), nil, e.cellOverheadEnabled()), runErr
 	}
 	cellID := ""
 	if invocation.Context != nil {
@@ -421,7 +455,7 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 		cellID = fmt.Sprintf("cell-%d", e.nextID.Add(1))
 	}
 	cellCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	cell := &codeModeCell{done: make(chan struct{}), cancel: cancel}
+	cell := &codeModeCell{done: make(chan struct{}), cancel: cancel, startedAt: time.Now()}
 	e.cellsMu.Lock()
 	e.cells[cellID] = cell
 	e.cellsMu.Unlock()
@@ -451,14 +485,17 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 	select {
 	case <-cell.done:
 		output, runErr := e.consumeCell(cellID, cell)
-		return truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens)), runErr
+		output = truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens))
+		return applyCodeModeHeader(output, codeModeCellStatus(cell), time.Since(cell.startedAt), nil, e.cellOverheadEnabled()), runErr
 	case <-yield:
 	case <-timer.C:
 	case <-ctx.Done():
 		cancel()
 		return nil, ctx.Err()
 	}
-	return &Output{CallID: invocation.CallID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: "Script running with cell ID " + cellID + "\n" + e.cellDelta(cell), Data: map[string]any{"cell_id": cellID, "running": true}}, nil
+	status := "Script running with cell ID " + cellID
+	output := &Output{CallID: invocation.CallID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: e.cellDelta(cell), Data: map[string]any{"cell_id": cellID, "running": true}}
+	return applyCodeModeHeader(output, status, time.Since(cell.startedAt), nil, e.cellOverheadEnabled()), nil
 }
 
 func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *Invocation, source string, options codeModeExecOptions) (*Output, error) {
@@ -493,6 +530,7 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 	}
 	yieldValue := uint64(yieldTimeMS)
 	yield := &yieldValue
+	startedAt := time.Now()
 	response, err := e.remote.Execute(ctx, CodeModeRemoteExecuteRequest{ToolCallID: invocation.CallID, Source: source, EnabledTools: definitions, YieldTimeMS: yield, MaxOutputTokens: options.MaxOutputTokens})
 	if err != nil {
 		return nil, err
@@ -505,7 +543,7 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 		e.remoteCellsMu.Unlock()
 		releaseOnReturn = false
 	}
-	return remoteResponseOutput(invocation.CallID, response, codeModeTokenLimit(options.MaxOutputTokens))
+	return remoteResponseOutput(invocation.CallID, response, codeModeTokenLimit(options.MaxOutputTokens), time.Since(startedAt), e.cellOverheadEnabled())
 }
 
 func (e *codeModeExecExecutor) CodeModeToolNames() map[string]CodeModeToolNameMetadata {
@@ -770,7 +808,7 @@ func (d *codeModeRemoteDelegate) CellClosed(cellID string) {
 	d.exec.forgetRemoteCell(cellID)
 }
 
-func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTokens int) (*Output, error) {
+func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTokens int, wallTime time.Duration, showOverhead bool) (*Output, error) {
 	texts := make([]string, 0)
 	for _, item := range response.ContentItems {
 		if item["type"] == "input_text" {
@@ -785,12 +823,14 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 	if strings.TrimSpace(response.CellID) != "" {
 		output.Data["cell_id"] = response.CellID
 	}
+	status := "Script completed"
 	if response.State == "yielded" {
-		output.Body = "Script running with cell ID " + response.CellID + "\n" + body
+		status = "Script running with cell ID " + response.CellID
 		output.Data["cell_id"] = response.CellID
 		output.Data["running"] = true
 	}
-	return truncateCodeModeOutput(output, maxTokens), nil
+	output = truncateCodeModeOutput(output, maxTokens)
+	return applyCodeModeHeader(output, status, wallTime, nil, showOverhead), nil
 }
 
 func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *Invocation, yield chan<- struct{}, cell *codeModeCell) (*Output, error) {
@@ -1153,6 +1193,49 @@ func (e *codeModeExecExecutor) consumeCell(cellID string, cell *codeModeCell) (*
 	return output, err
 }
 
+// codeModeResponseHeader mirrors Rust's `CodeModeToolOutput` header (#46288):
+// the script status, the wall time, and - when overhead reporting is enabled and
+// the code-mode host reported its own duration - the host measurement and the
+// harness overhead before the script output.
+//
+// The wall time keeps Rust's formats: one decimal by default, three decimals
+// with the overhead breakdown (whose difference can legitimately be negative
+// because millisecond quantization of the outer measurement rounds).
+func codeModeResponseHeader(status string, wallTime time.Duration, hostDuration *time.Duration, showOverhead bool) string {
+	if showOverhead && hostDuration != nil {
+		totalSeconds := wallTime.Seconds()
+		hostSeconds := hostDuration.Seconds()
+		return fmt.Sprintf(
+			"%s\nWall time %.3f seconds (code-mode %.3f seconds; overhead %.3f seconds)\nOutput:\n",
+			status,
+			totalSeconds,
+			hostSeconds,
+			totalSeconds-hostSeconds,
+		)
+	}
+	rounded := math.Round(wallTime.Seconds()*10) / 10
+	return fmt.Sprintf("%s\nWall time %.1f seconds\nOutput:\n", status, rounded)
+}
+
+// applyCodeModeHeader prepends Rust's code-mode response header. Rust truncates
+// the script content first and then inserts the header, so the truncation
+// warning and token accounting never count the header itself (#46288).
+func applyCodeModeHeader(output *Output, status string, wallTime time.Duration, hostDuration *time.Duration, showOverhead bool) *Output {
+	if output == nil {
+		return nil
+	}
+	output.Body = codeModeResponseHeader(status, wallTime, hostDuration, showOverhead) + output.Body
+	return output
+}
+
+// codeModeCellStatus mirrors Rust's format_script_status for a settled cell.
+func codeModeCellStatus(cell *codeModeCell) string {
+	if cell != nil && cell.terminated {
+		return "Script terminated"
+	}
+	return "Script completed"
+}
+
 func (e *codeModeExecExecutor) cellDelta(cell *codeModeCell) string {
 	if cell == nil {
 		return ""
@@ -1198,6 +1281,7 @@ func (e *codeModeWaitExecutor) Execute(ctx context.Context, invocation *Invocati
 	if e.exec.remote != nil {
 		var response CodeModeRemoteResponse
 		var remoteErr error
+		startedAt := time.Now()
 		if params.Terminate {
 			response, remoteErr = e.exec.remote.Terminate(ctx, params.CellID)
 		} else {
@@ -1211,7 +1295,7 @@ func (e *codeModeWaitExecutor) Execute(ctx context.Context, invocation *Invocati
 			if response.State != "yielded" {
 				e.exec.forgetRemoteCell(params.CellID)
 			}
-			return remoteResponseOutput(invocation.CallID, response, codeModeWaitTokenLimit(params.MaxTokens))
+			return remoteResponseOutput(invocation.CallID, response, codeModeWaitTokenLimit(params.MaxTokens), time.Since(startedAt), e.exec.cellOverheadEnabled())
 		}
 		var callErr *FunctionCallError
 		if AsFunctionCallError(remoteErr, &callErr) {
@@ -1253,10 +1337,13 @@ func (e *codeModeWaitExecutor) Execute(ctx context.Context, invocation *Invocati
 			}
 			output.Data["terminated"] = true
 		}
-		return truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens)), runErr
+		output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
+		return applyCodeModeHeader(output, codeModeCellStatus(cell), time.Since(cell.startedAt), nil, e.exec.cellOverheadEnabled()), runErr
 	case <-timer.C:
-		output := &Output{CallID: invocation.CallID, ToolName: PlainName("wait"), Success: true, Body: "Script running with cell ID " + params.CellID + "\n" + e.exec.cellDelta(cell), Data: map[string]any{"cell_id": params.CellID, "running": true}}
-		return truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens)), nil
+		status := "Script running with cell ID " + params.CellID
+		output := &Output{CallID: invocation.CallID, ToolName: PlainName("wait"), Success: true, Body: e.exec.cellDelta(cell), Data: map[string]any{"cell_id": params.CellID, "running": true}}
+		output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
+		return applyCodeModeHeader(output, status, time.Since(cell.startedAt), nil, e.exec.cellOverheadEnabled()), nil
 	}
 }
 

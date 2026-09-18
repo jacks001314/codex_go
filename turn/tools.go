@@ -96,19 +96,22 @@ type ToolRegistryOptions struct {
 	CodeModeProvider             tool.CodeModeRemoteProvider
 	CodeModeRuntime              *tool.CodeModeRuntime
 	CodeModeDefaultExecYieldTime time.Duration
-	DisableCodeModeFallback      bool
-	EnableApplyPatch             bool
-	EnableMCP                    bool
-	EnableRequestPermissions     bool
-	RequestPermissionsReviewer   tool.RequestPermissionsReviewer
-	EnableAgents                 bool
-	EnableToolSearch             bool
-	OmitToolSearchSources        bool
-	EnableCurrentTimeTool        bool
-	EnableSleepTool              bool
-	EnableWaitForEnvironment     bool
-	DisableUpdatePlan            bool
-	NewContextWindow             func()
+	// CodeModeShowCellOverhead mirrors features.code_mode.experimental_show_cell_overhead
+	// (#46288): code-mode cell responses report the host duration and overhead.
+	CodeModeShowCellOverhead   bool
+	DisableCodeModeFallback    bool
+	EnableApplyPatch           bool
+	EnableMCP                  bool
+	EnableRequestPermissions   bool
+	RequestPermissionsReviewer tool.RequestPermissionsReviewer
+	EnableAgents               bool
+	EnableToolSearch           bool
+	OmitToolSearchSources      bool
+	EnableCurrentTimeTool      bool
+	EnableSleepTool            bool
+	EnableWaitForEnvironment   bool
+	DisableUpdatePlan          bool
+	NewContextWindow           func()
 	// SendUserMessageAsync, when set, emits an asynchronous user-visible
 	// agent message for the send_user_message_async tool (#39319).
 	SendUserMessageAsync func(message string)
@@ -394,10 +397,12 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		var execExecutor, waitExecutor tool.Executor
 		if options.CodeModeRuntime != nil {
 			options.CodeModeRuntime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
+			options.CodeModeRuntime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
 			execExecutor, waitExecutor = options.CodeModeRuntime.Executors(registry, codeModeCommandTool)
 		} else {
 			runtime := tool.NewCodeModeRuntime(options.CodeModeProvider, options.DisableCodeModeFallback)
 			runtime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
+			runtime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
 			execExecutor, waitExecutor = runtime.Executors(registry, codeModeCommandTool)
 		}
 		if err := registry.Prepend(waitExecutor); err != nil {

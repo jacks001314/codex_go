@@ -13141,6 +13141,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	}
 	if cfg != nil {
 		options.CodeModeDefaultExecYieldTime = cfg.CodeModeDefaultExecYieldTime()
+		options.CodeModeShowCellOverhead = cfg.CodeModeExperimentalShowCellOverhead()
 	}
 	options.DisableCodeModeFallback = r.services.DisableCodeModeFallback
 	options.EnableUnifiedExec = cfg != nil && features.Enabled(cfg.FeatureSettings(), "unified_exec")
