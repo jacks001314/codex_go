@@ -710,6 +710,9 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 			info := MCPServerInfo{Name: name, Command: firstNonEmptyMCP(registration.Config.Command, registration.Config.URL), Args: append([]string(nil), registration.Config.Args...)}
 			config := cloneServerConfig(&registration.Config)
 			config.ProtocolMode = effectiveMCPProtocolMode(runtime, name, registration)
+			// Rust applies the runtime's read-only policy to every enabled
+			// server (McpConnectionSet::with_read_only_mcp_tools).
+			config.RequiresReadOnlyTools = runtime.RequiresReadOnlyMCPTools
 			if strings.TrimSpace(config.OAuthServerName) == "" {
 				config.OAuthServerName = name
 			}
@@ -1643,6 +1646,11 @@ func mcpToolCatalogGraceKey(name string, config *ServerConfig, openAIForm bool, 
 	if config == nil {
 		return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKey(config, openAIForm), true
 	}
+	// Rust #46042: a read-only server must not read or populate an unrestricted
+	// shared catalog.
+	if config.RequiresReadOnlyTools {
+		return "", false
+	}
 	if strings.TrimSpace(config.Command) != "" {
 		return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKey(config, openAIForm), true
 	}
@@ -2247,9 +2255,9 @@ func mcpConnectionCacheKey(config *ServerConfig, openAIForm bool) string {
 	cloned.ApplyHTTPRequest = nil
 	data, err := json.Marshal(cloned)
 	if err != nil {
-		return fmt.Sprintf("%#v|openaiForm=%t|requestAuth=%t|protocolMode=%d", cloned, openAIForm, applyHTTPRequest, config.ProtocolMode)
+		return fmt.Sprintf("%#v|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t", cloned, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools)
 	}
-	return fmt.Sprintf("%s|openaiForm=%t|requestAuth=%t|protocolMode=%d", data, openAIForm, applyHTTPRequest, config.ProtocolMode)
+	return fmt.Sprintf("%s|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t", data, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools)
 }
 
 func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *stdioClient {

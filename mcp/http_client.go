@@ -268,7 +268,7 @@ func listMCPHTTPTools(client *httpClient, options *httpClientCallOptions) ([]MCP
 			Tools      []MCPToolInfo `json:"tools"`
 			NextCursor *string       `json:"nextCursor,omitempty"`
 		}
-		if err := client.CallWithOptionsContext(ctx, options, "tools/list", mcpListParamsForCursor(cursor), &response); err != nil {
+		if err := client.CallWithOptionsContext(ctx, options, "tools/list", mcpListParamsForCursorWithConfig(client.config, cursor), &response); err != nil {
 			return nil, nil, err
 		}
 		return response.Tools, response.NextCursor, nil
@@ -307,13 +307,7 @@ func callMCPHTTPTool(config *ServerConfig, serverName string, threadID string, e
 }
 
 func callMCPHTTPToolWithClient(client *httpClient, serverName string, threadID string, turnID string, itemID string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, tool string, arguments any, meta any) (*MCPToolCallResponse, error) {
-	params := map[string]any{
-		"name":      tool,
-		"arguments": arguments,
-	}
-	if meta != nil {
-		params["_meta"] = meta
-	}
+	params := mcpToolCallParams(client.config, tool, arguments, meta)
 	var response MCPToolCallResponse
 	if err := client.CallWithOptions(&httpClientCallOptions{
 		ServerName:  serverName,

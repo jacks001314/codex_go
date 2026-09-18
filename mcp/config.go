@@ -105,6 +105,12 @@ type ServerConfig struct {
 	// refreshes use the configured credential store (Rust
 	// OAuthCredentialsStoreMode).
 	OAuthCredentialsStoreMode OAuthCredentialsStoreMode `json:"-"`
+	// RequiresReadOnlyTools mirrors Rust's `EffectiveMcpServer::
+	// with_read_only_mcp_tools`: the runtime's read-only policy is applied to
+	// each server, so its tool discovery and invocation request
+	// `openai/readOnly` and never share an unrestricted connection or catalog
+	// (Rust #46042).
+	RequiresReadOnlyTools bool `json:"-"`
 }
 
 func (c *ServerConfig) EffectiveEnvironmentID() string {
@@ -269,6 +275,12 @@ type RuntimeConfig struct {
 	// OAuthCredentialsStoreMode is Rust's `mcp_oauth_credentials_store`
 	// (auto by default) applied to MCP OAuth credential storage.
 	OAuthCredentialsStoreMode OAuthCredentialsStoreMode
+	// RequiresReadOnlyMCPTools mirrors Rust McpConfig: when set, every server's
+	// tool discovery and invocation requests server-side read-only filtering and
+	// invocation checks, and read-only connections never share a connection or
+	// tool catalog with unrestricted ones (Rust #46042). It is disabled by
+	// default, exactly like Rust's core configuration.
+	RequiresReadOnlyMCPTools bool
 }
 
 type HTTPDoer interface {
