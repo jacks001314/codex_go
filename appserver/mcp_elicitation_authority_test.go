@@ -19,6 +19,7 @@ func TestAppserverMCPElicitationDeclinesWithoutServerAuthorityLikeRust(t *testin
 				ApprovalsReviewer:        "user",
 				ServerAuthorityPublished: true,
 				AllowsMCPElicitations:    true,
+				AllowUserInteraction:     true,
 			}
 		},
 	}
@@ -47,6 +48,7 @@ func TestAppserverMCPElicitationUsesServerAuthorityLikeRust(t *testing.T) {
 				PermissionProfile:        &readOnly,
 				ServerAuthorityPublished: true,
 				AllowsMCPElicitations:    true,
+				AllowUserInteraction:     true,
 			}
 		},
 	}

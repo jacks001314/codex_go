@@ -35,6 +35,11 @@ type appserverMCPToolApprovalHandler struct {
 	// enablement as the persistent-approval option, since Rust gates both on the
 	// same feature).
 	elicitationEnabled bool
+	// allowUserInteraction mirrors Rust #46066's
+	// ElicitationAuthority::allow_user_interaction: only the root thread may
+	// present interactive MCP requests, so a subagent's prompt is denied with the
+	// handoff guidance while automatic approvals and review decisions still run.
+	allowUserInteraction bool
 }
 
 // appsRequirementsForConfig returns the managed app requirements, if any.
@@ -93,32 +98,45 @@ func (r *RuntimeRouter) newAppserverMCPToolApprovalOptions(
 			approvalPolicy:            approvalPolicy,
 			persistentApprovalAllowed: persistent,
 			elicitationEnabled:        persistent,
+			allowUserInteraction:      !r.turnThreadIsSubagent(threadID),
 		},
 	}
 }
 
 // ApproveMCPToolCall returns the decision for a custom MCP tool call that the
 // executor determined requires approval.
-func (h *appserverMCPToolApprovalHandler) ApproveMCPToolCall(ctx context.Context, request *mcp.MCPToolApprovalRequest) (mcp.MCPToolApprovalDecision, error) {
+func (h *appserverMCPToolApprovalHandler) ApproveMCPToolCall(ctx context.Context, request *mcp.MCPToolApprovalRequest) (mcp.MCPToolApprovalOutcome, error) {
 	if h == nil || request == nil {
-		return mcp.MCPToolApprovalDeny, nil
+		return mcp.MCPToolApprovalOutcome{Decision: mcp.MCPToolApprovalDeny}, nil
 	}
 	if request.SessionKey != nil && h.router.mcpToolApprovalRemembered(h.threadID, *request.SessionKey) {
-		return mcp.MCPToolApprovalApprove, nil
+		return mcp.MCPToolApprovalOutcome{Decision: mcp.MCPToolApprovalApprove}, nil
 	}
 	// Rust Session::request_approval: PermissionRequest hooks decide first, then
 	// an auto-review turn routes the call through the Guardian review, and only
 	// then the user is asked.
 	if decision, hookErr, handled := h.runPermissionRequestHooks(ctx, request); handled {
-		return decision, hookErr
+		return mcp.MCPToolApprovalOutcome{Decision: decision}, hookErr
 	}
 	if h.router != nil {
 		if reviewer := h.router.approvalsReviewerForTurn(h.threadID, h.turnID); reviewer.RoutesToGuardian() {
-			return h.reviewViaGuardian(ctx, request)
+			decision, err := h.reviewViaGuardian(ctx, request)
+			return mcp.MCPToolApprovalOutcome{Decision: decision}, err
 		}
 	}
 	if h.responder == nil {
-		return mcp.MCPToolApprovalDeny, nil
+		return mcp.MCPToolApprovalOutcome{Decision: mcp.MCPToolApprovalDeny}, nil
+	}
+	// Rust #46066: only the root thread may present an interactive MCP request;
+	// a subagent's prompt is denied with the handoff guidance so it asks its
+	// parent instead. Automatic approvals, remembered choices, permission hooks
+	// and Guardian review decisions are unaffected, so this guard sits after
+	// them.
+	if !h.allowUserInteraction {
+		return mcp.MCPToolApprovalOutcome{
+			Decision: mcp.MCPToolApprovalDeny,
+			Message:  mcp.MCPElicitationHandoffMessage,
+		}, nil
 	}
 	promptOptions := mcp.MCPToolApprovalPromptOptionsFor(
 		request.AllowSessionRemember,
@@ -142,20 +160,20 @@ func (h *appserverMCPToolApprovalHandler) ApproveMCPToolCall(ctx context.Context
 		elicitationDecision, err := h.approveViaElicitation(ctx, request, questionID, question)
 		if err != nil {
 			// A failed elicitation aborts the call, matching Rust.
-			return mcp.MCPToolApprovalDeny, nil
+			return mcp.MCPToolApprovalOutcome{Decision: mcp.MCPToolApprovalDeny}, nil
 		}
 		decision = elicitationDecision
 	} else {
 		response, err := h.responder(ctx, &tool.RequestUserInputArgs{Questions: []tool.UserInputQuestion{question}})
 		if err != nil {
 			// Rust's request_user_input failure aborts the call.
-			return mcp.MCPToolApprovalDeny, nil
+			return mcp.MCPToolApprovalOutcome{Decision: mcp.MCPToolApprovalDeny}, nil
 		}
 		decision = mcp.ParseMCPToolApprovalResponse(response, questionID)
 	}
 	decision = mcp.NormalizeMCPToolApprovalDecision(decision, request.ApprovalMode)
 	if request.SessionKey == nil {
-		return decision, nil
+		return mcp.MCPToolApprovalOutcome{Decision: decision}, nil
 	}
 	switch decision {
 	case mcp.MCPToolApprovalApproveForSession:
@@ -168,7 +186,7 @@ func (h *appserverMCPToolApprovalHandler) ApproveMCPToolCall(ctx context.Context
 			h.router.rememberMCPToolApproval(h.threadID, *request.SessionKey)
 		}
 	}
-	return decision, nil
+	return mcp.MCPToolApprovalOutcome{Decision: decision}, nil
 }
 
 // MCP tool approval elicitation values and labels (Rust codex_protocol's

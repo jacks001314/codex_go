@@ -42,6 +42,12 @@ type mcpElicitationAuthority struct {
 	ApprovalsReviewer     string
 	PermissionProfile     *sandbox.PermissionProfile
 	AllowsMCPElicitations bool
+	// AllowUserInteraction mirrors Rust #46066's
+	// ElicitationAuthority::allow_user_interaction: only the root thread may
+	// present an interactive MCP elicitation, so a subagent's request that needs
+	// user input is rejected with the handoff guidance while automatic
+	// approvals and review decisions still run.
+	AllowUserInteraction bool
 	// ServerAuthorityPublished reports that the thread's MCP runtime published
 	// per-server authority. When set and PermissionProfile is nil, the server
 	// has no owner permissions and the elicitation must be declined (Rust #40728).
@@ -49,12 +55,7 @@ type mcpElicitationAuthority struct {
 }
 
 func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Context, request *mcp.MCPElicitationRequest) (*mcp.MCPElicitationResponse, error) {
-	// Rust 4b0e2a0bff: tool-suggestion elicitations are never surfaced as
-	// form input; they stay on their existing decline path.
-	if mcpElicitationApprovalKind(request) == "tool_suggestion" {
-		return mcpElicitationAutoDecline(), nil
-	}
-	authority := mcpElicitationAuthority{ApprovalPolicy: sandbox.ApprovalOnRequest, ApprovalsReviewer: "user", AllowsMCPElicitations: true}
+	authority := mcpElicitationAuthority{ApprovalPolicy: sandbox.ApprovalOnRequest, ApprovalsReviewer: "user", AllowsMCPElicitations: true, AllowUserInteraction: true}
 	legacyAuthority := h == nil || h.authority == nil
 	if h != nil && h.authority != nil {
 		threadID := ""
@@ -62,6 +63,18 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 			threadID = strings.TrimSpace(request.ThreadID)
 		}
 		authority = h.authority(threadID, mcpElicitationServerName(request), mcpElicitationConnectorID(request))
+	}
+	// Rust #46066: a non-root agent may use automatic decisions but may not
+	// present an interactive request, so an elicitation that needs user input is
+	// rejected with the handoff guidance before any approval-policy handling,
+	// automatic approval, or review runs.
+	if !authority.AllowUserInteraction && mcpElicitationRequiresUserInput(request) {
+		return nil, errors.New(mcp.MCPElicitationHandoffMessage)
+	}
+	// Rust 4b0e2a0bff: tool-suggestion elicitations are never surfaced as
+	// form input; they stay on their existing decline path.
+	if mcpElicitationApprovalKind(request) == "tool_suggestion" {
+		return mcpElicitationAutoDecline(), nil
 	}
 	// Rust #40728: a server whose published authority is unavailable must not
 	// surface an elicitation at all.
@@ -190,6 +203,45 @@ func mcpElicitationHasEmptyForm(request *mcp.MCPElicitationRequest) bool {
 	}
 	properties, ok := schema["properties"].(map[string]any)
 	return !ok || len(properties) == 0
+}
+
+// mcpElicitationRequiresUserInput mirrors Rust #46066's subagent guard
+// predicate: an explicit user-input marker or the browser-auth approval kind
+// marks a request as interactive even when its form schema is empty, a URL
+// elicitation and a user-verification challenge always need the user, and a
+// form elicitation needs the user as soon as it declares any property.
+func mcpElicitationRequiresUserInput(request *mcp.MCPElicitationRequest) bool {
+	if request == nil {
+		return false
+	}
+	meta, _ := requestMetaMap(request)
+	if requires, ok := meta["codex_requires_user_input"].(bool); ok && requires {
+		return true
+	}
+	if strings.TrimSpace(stringFromMap(meta, "codex_approval_kind")) == "browser_auth" {
+		return true
+	}
+	// Rust's Elicitation::UserVerification and its non-form MCP (URL)
+	// elicitation always need the user.
+	if strings.TrimSpace(request.Method) == "openai/userVerification" || strings.TrimSpace(request.URL) != "" {
+		return true
+	}
+	return len(mcpElicitationFormProperties(request)) > 0
+}
+
+// mcpElicitationFormProperties returns a form elicitation's declared schema
+// properties, the shape Rust's MCP and OpenAI form variants share
+// (`requested_schema.properties`).
+func mcpElicitationFormProperties(request *mcp.MCPElicitationRequest) map[string]any {
+	if request == nil {
+		return nil
+	}
+	schema, ok := request.RequestedSchema.(map[string]any)
+	if !ok {
+		return nil
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	return properties
 }
 
 // mcpElicitationSurfacedForm reports whether a standard MCP form requires

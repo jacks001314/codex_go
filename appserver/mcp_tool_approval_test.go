@@ -48,6 +48,7 @@ func TestAppserverMCPToolApprovalUsesElicitationLikeRust(t *testing.T) {
 			approvalPolicy:            sandbox.ApprovalOnRequest,
 			persistentApprovalAllowed: true,
 			elicitationEnabled:        true,
+			allowUserInteraction:      true,
 		}
 		sessionKey := mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"}
 		decision, err := handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
@@ -63,7 +64,7 @@ func TestAppserverMCPToolApprovalUsesElicitationLikeRust(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ApproveMCPToolCall() error = %v", err)
 		}
-		return decision, params, handler
+		return decision.Decision, params, handler
 	}
 
 	decision, params, handler := run(t, MCPElicitationActionAccept, map[string]any{"persist": "session"})
@@ -121,6 +122,53 @@ func TestAppserverMCPToolApprovalUsesElicitationLikeRust(t *testing.T) {
 	}
 }
 
+// TestAppserverMCPToolApprovalHandsSubagentRequestsToTheParentLikeRust mirrors
+// Rust #46066's request_mcp_tool_user_approval: a delegated subagent never
+// prompts the user, so the call is denied with the handoff guidance that tells
+// the agent to ask its parent and to wait before retrying.
+func TestAppserverMCPToolApprovalHandsSubagentRequestsToTheParentLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	t.Cleanup(func() { _ = router.Close() })
+	prompted := false
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(*ServerRequest) { prompted = true }))
+	handler := &appserverMCPToolApprovalHandler{
+		router: router,
+		responder: func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+			prompted = true
+			return nil, nil
+		},
+		threadID:             "thread-1",
+		turnID:               "turn-1",
+		approvalPolicy:       sandbox.ApprovalOnRequest,
+		elicitationEnabled:   true,
+		allowUserInteraction: false,
+	}
+	sessionKey := mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"}
+	outcome, err := handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
+		Server:               "docs",
+		Tool:                 "search",
+		ApprovalMode:         apps.AppToolApprovalAuto,
+		CallID:               "call-1",
+		SessionKey:           &sessionKey,
+		AllowSessionRemember: true,
+	})
+	if err != nil {
+		t.Fatalf("ApproveMCPToolCall() error = %v", err)
+	}
+	if outcome.Decision != mcp.MCPToolApprovalDeny {
+		t.Fatalf("decision = %v, want deny", outcome.Decision)
+	}
+	if outcome.Message != mcp.MCPElicitationHandoffMessage {
+		t.Fatalf("message = %q, want the handoff guidance", outcome.Message)
+	}
+	if prompted {
+		t.Fatal("a subagent must not prompt the user")
+	}
+	if router.mcpToolApprovalRemembered("thread-1", sessionKey) {
+		t.Fatal("a handed-off request must not be remembered")
+	}
+}
+
 func newMCPToolApprovalTestHandler(
 	responder tool.UserInputResponder,
 	persistent bool,
@@ -132,6 +180,8 @@ func newMCPToolApprovalTestHandler(
 		turnID:                    "turn-1",
 		approvalPolicy:            sandbox.ApprovalOnRequest,
 		persistentApprovalAllowed: persistent,
+		// The root thread may present interactive MCP prompts (Rust #46066).
+		allowUserInteraction: true,
 	}
 }
 
@@ -168,7 +218,8 @@ func TestAppserverMCPToolApprovalAnswersLikeRust(t *testing.T) {
 			}
 			return &tool.UserInputResponse{Answers: map[string]string{question.ID: mcp.MCPToolApprovalAccept}}, nil
 		}, true)
-		decision, err := handler.ApproveMCPToolCall(context.Background(), request())
+		outcome, err := handler.ApproveMCPToolCall(context.Background(), request())
+		decision := outcome.Decision
 		if err != nil || decision != mcp.MCPToolApprovalApprove {
 			t.Fatalf("decision = %v, err = %v", decision, err)
 		}
@@ -183,14 +234,16 @@ func TestAppserverMCPToolApprovalAnswersLikeRust(t *testing.T) {
 			calls++
 			return &tool.UserInputResponse{Answers: map[string]string{args.Questions[0].ID: mcp.MCPToolApprovalAcceptForSession}}, nil
 		}, true)
-		decision, err := handler.ApproveMCPToolCall(context.Background(), request())
+		outcome, err := handler.ApproveMCPToolCall(context.Background(), request())
+		decision := outcome.Decision
 		if err != nil || decision != mcp.MCPToolApprovalApproveForSession {
 			t.Fatalf("decision = %v, err = %v", decision, err)
 		}
 		if !handler.router.mcpToolApprovalRemembered("thread-1", sessionKey) {
 			t.Fatal("session approval was not remembered")
 		}
-		decision, err = handler.ApproveMCPToolCall(context.Background(), request())
+		outcome, err = handler.ApproveMCPToolCall(context.Background(), request())
+		decision = outcome.Decision
 		if err != nil || decision != mcp.MCPToolApprovalApprove {
 			t.Fatalf("remembered decision = %v, err = %v", decision, err)
 		}
@@ -203,7 +256,8 @@ func TestAppserverMCPToolApprovalAnswersLikeRust(t *testing.T) {
 		handler := newMCPToolApprovalTestHandler(func(_ context.Context, args *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 			return &tool.UserInputResponse{Answers: map[string]string{args.Questions[0].ID: mcp.MCPToolApprovalCancel}}, nil
 		}, true)
-		decision, err := handler.ApproveMCPToolCall(context.Background(), request())
+		outcome, err := handler.ApproveMCPToolCall(context.Background(), request())
+		decision := outcome.Decision
 		if err != nil || decision != mcp.MCPToolApprovalDeny {
 			t.Fatalf("decision = %v, err = %v", decision, err)
 		}
@@ -213,7 +267,8 @@ func TestAppserverMCPToolApprovalAnswersLikeRust(t *testing.T) {
 		handler := newMCPToolApprovalTestHandler(func(context.Context, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
 			return nil, errors.New("client disconnected")
 		}, true)
-		decision, err := handler.ApproveMCPToolCall(context.Background(), request())
+		outcome, err := handler.ApproveMCPToolCall(context.Background(), request())
+		decision := outcome.Decision
 		if err != nil || decision != mcp.MCPToolApprovalDeny {
 			t.Fatalf("decision = %v, err = %v", decision, err)
 		}
@@ -229,7 +284,8 @@ func TestAppserverMCPToolApprovalAnswersLikeRust(t *testing.T) {
 		promptRequest.SessionKey = nil
 		promptRequest.AllowSessionRemember = false
 		promptRequest.AllowPersistentApproval = false
-		decision, err := handler.ApproveMCPToolCall(context.Background(), promptRequest)
+		outcome, err := handler.ApproveMCPToolCall(context.Background(), promptRequest)
+		decision := outcome.Decision
 		if err != nil || decision != mcp.MCPToolApprovalApprove {
 			t.Fatalf("decision = %v, err = %v", decision, err)
 		}
@@ -357,13 +413,14 @@ func TestMCPToolApprovalRunsHooksAndGuardianLikeRust(t *testing.T) {
 	approve := func(t *testing.T, router *RuntimeRouter) (mcp.MCPToolApprovalDecision, error) {
 		t.Helper()
 		handler := &appserverMCPToolApprovalHandler{router: router, threadID: "thread-1", turnID: "turn-1"}
-		return handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
+		outcome, err := handler.ApproveMCPToolCall(context.Background(), &mcp.MCPToolApprovalRequest{
 			Server:       "server",
 			Tool:         "tool",
 			Arguments:    map[string]any{"path": "src/main.go"},
 			HookToolName: &tool.HookToolName{Name: "mcp_tool"},
 			CallID:       "call-1",
 		})
+		return outcome.Decision, err
 	}
 
 	decision, err := approve(t, newRouter(t, "", hookRunnerOutputCommand(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, ""), nil))

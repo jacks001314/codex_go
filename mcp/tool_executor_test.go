@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -699,6 +700,63 @@ func TestToolExecutorLeavesResultWhenAuthElicitationIsDeclined(t *testing.T) {
 	}
 	if refreshed {
 		t.Fatal("declined elicitation must not refresh the catalog")
+	}
+}
+
+// TestToolExecutorPreservesAuthDiagnosticsOnHandoffLikeRust mirrors Rust
+// #46066: when the Codex Apps auth elicitation cannot be requested - a subagent
+// is handed the blocker instead of prompting the user - the connector's own
+// diagnostic is preserved as text alongside the recovery guidance, and the
+// preferred structured content is flattened into that text rather than dropped.
+func TestToolExecutorPreservesAuthDiagnosticsOnHandoffLikeRust(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:    RuntimeCodexAppsMCPServerName,
+		ConnectorID:   "connector_calendar",
+		ConnectorName: "Google Calendar",
+	})
+	executor.authElicitation = &AuthElicitationOptions{
+		Request: func(context.Context, *MCPElicitationRequest) (*MCPElicitationResponse, error) {
+			return nil, errors.New(MCPElicitationHandoffMessage)
+		},
+		InstallURL: func(string, string) string { return "https://example.com/install" },
+	}
+	structured := map[string]any{"error": "reauthentication_required", "status": float64(401)}
+	result := authFailureResult()
+	result.StructuredContent = structured
+	result.Content[0].Text = "diagnostic detail"
+
+	got := executor.maybeRequestCodexAppsAuthElicitation(context.Background(), "call-1", result)
+	if got == result {
+		t.Fatal("the failed elicitation must rewrite the result")
+	}
+	if got.IsError == nil || !*got.IsError {
+		t.Fatalf("isError = %#v, want true", got.IsError)
+	}
+	if got.StructuredContent != nil {
+		t.Fatalf("structured content must be flattened: %#v", got.StructuredContent)
+	}
+	if len(got.Content) != 3 {
+		t.Fatalf("content = %#v, want the guidance, the diagnostic, and the structured content", got.Content)
+	}
+	guidance := got.Content[0].Text
+	if !strings.Contains(guidance, "Authentication for Google Calendar could not be completed.") {
+		t.Fatalf("guidance = %q", guidance)
+	}
+	if !strings.Contains(guidance, MCPElicitationHandoffMessage) {
+		t.Fatalf("guidance must carry the handoff message: %q", guidance)
+	}
+	if got.Content[1].Text != "diagnostic detail" {
+		t.Fatalf("diagnostic = %q", got.Content[1].Text)
+	}
+	if got.Content[2].Text != `{"error":"reauthentication_required","status":401}` {
+		t.Fatalf("structured content text = %q", got.Content[2].Text)
+	}
+	if got.Meta == nil {
+		t.Fatal("the failed elicitation dropped the original meta")
+	}
+	// The original result is left untouched so the caller's copy stays intact.
+	if result.StructuredContent == nil || result.Content[0].Text != "diagnostic detail" {
+		t.Fatalf("original result was mutated: %#v", result)
 	}
 }
 

@@ -12179,6 +12179,10 @@ func (r *RuntimeRouter) currentMCPElicitationAuthority(threadID, serverName, con
 		ApprovalPolicy:        turnApprovalPolicyForTurn(cfg, nil),
 		ApprovalsReviewer:     turnApprovalsReviewerForTurn(cfg, nil),
 		AllowsMCPElicitations: granularMCPElicitationsAllowed(cfg, nil),
+		// Rust #46066: only the root thread may present an interactive MCP
+		// elicitation, so a subagent's request that needs user input is rejected
+		// with the handoff guidance.
+		AllowUserInteraction: !r.turnThreadIsSubagent(threadID),
 	}
 	settings := r.threadSettingsForTurn(threadID)
 	cwd := ""

@@ -71,6 +71,22 @@ const MCPToolApprovalRejectedMessage = "user rejected MCP tool call"
 // (notify_mcp_tool_call_skip "MCP tool call blocked by app configuration").
 const MCPToolCallBlockedByAppConfigurationMessage = "MCP tool call blocked by app configuration"
 
+// MCPElicitationHandoffMessage is Rust's recovery guidance for a request a
+// non-root agent cannot present to the user (#46066): automatic decisions still
+// apply, but interactive MCP elicitations and approval prompts are denied so the
+// subagent hands the blocker to its parent instead.
+const MCPElicitationHandoffMessage = "MCP server elicitations can only be requested by the root thread. " +
+	"Ask the parent agent to handle this request. " +
+	"Do not retry the blocked action until the parent confirms the blocker is resolved."
+
+// MCPToolApprovalOutcome is a handler's decision plus the optional model-visible
+// message Rust's `ReviewDecision::denied(message)` carries. An empty message
+// keeps the decision's default text.
+type MCPToolApprovalOutcome struct {
+	Decision MCPToolApprovalDecision
+	Message  string
+}
+
 // MCPToolApprovalKey identifies a remembered approval. Rust keys on the server,
 // the tool, and the connector/plugin identity; Go's MCP service configuration is
 // already resolved per server, so the server/tool pair is exact within a thread.
@@ -119,16 +135,16 @@ type MCPToolApprovalRequest struct {
 // MCPToolApprovalHandler surfaces an MCP tool approval to the user. The app
 // server implements it; the executor only decides whether one is needed.
 type MCPToolApprovalHandler interface {
-	ApproveMCPToolCall(ctx context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalDecision, error)
+	ApproveMCPToolCall(ctx context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error)
 }
 
 // MCPToolApprovalHandlerFunc adapts a function to MCPToolApprovalHandler.
-type MCPToolApprovalHandlerFunc func(ctx context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalDecision, error)
+type MCPToolApprovalHandlerFunc func(ctx context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error)
 
 // ApproveMCPToolCall implements MCPToolApprovalHandler.
-func (f MCPToolApprovalHandlerFunc) ApproveMCPToolCall(ctx context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
+func (f MCPToolApprovalHandlerFunc) ApproveMCPToolCall(ctx context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
 	if f == nil {
-		return MCPToolApprovalDeny, nil
+		return MCPToolApprovalOutcome{Decision: MCPToolApprovalDeny}, nil
 	}
 	return f(ctx, request)
 }
@@ -521,7 +537,7 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		key := sessionKey
 		sessionKeyPtr = &key
 	}
-	decision, err := options.Handler.ApproveMCPToolCall(ctx, &MCPToolApprovalRequest{
+	outcome, err := options.Handler.ApproveMCPToolCall(ctx, &MCPToolApprovalRequest{
 		Server:                  server,
 		Tool:                    toolName,
 		Arguments:               arguments,
@@ -542,6 +558,7 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 	if err != nil {
 		return nil, err
 	}
+	decision := outcome.Decision
 	switch decision {
 	case MCPToolApprovalApprove, MCPToolApprovalApproveForSession, MCPToolApprovalApproveAndRemember:
 		// The handler records the session/persistent choice; the call proceeds.
@@ -550,6 +567,11 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		body := MCPToolApprovalDeniedMessage
 		if decision == MCPToolApprovalReject {
 			body = MCPToolApprovalRejectedMessage
+		}
+		// Rust's ReviewDecision::denied carries the handler's own message, which
+		// a non-root agent's handoff guidance relies on (#46066).
+		if strings.TrimSpace(outcome.Message) != "" {
+			body = strings.TrimSpace(outcome.Message)
 		}
 		return &tool.Output{
 			Success:    false,

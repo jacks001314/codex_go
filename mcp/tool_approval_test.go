@@ -63,12 +63,12 @@ func TestToolExecutorHonorsCodexAppsPolicyLikeRust(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			prompted := false
-			handler := MCPToolApprovalHandlerFunc(func(_ context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
+			handler := MCPToolApprovalHandlerFunc(func(_ context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
 				prompted = true
 				if testCase.wantMode != "" && request.ApprovalMode != testCase.wantMode {
 					t.Errorf("approval mode = %q, want %q", request.ApprovalMode, testCase.wantMode)
 				}
-				return MCPToolApprovalApprove, nil
+				return MCPToolApprovalOutcome{Decision: MCPToolApprovalApprove}, nil
 			})
 			executor := NewToolExecutor(&ToolExecutorOptions{
 				Service:     NewMCPService(nil),
@@ -416,8 +416,8 @@ func TestToolExecutorUsesTheRejectionMessageLikeRust(t *testing.T) {
 		ThreadID:   "thread-1",
 		TurnID:     "turn-1",
 		ToolApproval: &ToolApprovalOptions{
-			Handler: MCPToolApprovalHandlerFunc(func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
-				return MCPToolApprovalReject, nil
+			Handler: MCPToolApprovalHandlerFunc(func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
+				return MCPToolApprovalOutcome{Decision: MCPToolApprovalReject}, nil
 			}),
 			ApprovalPolicy: sandbox.ApprovalOnRequest,
 		},
@@ -428,6 +428,34 @@ func TestToolExecutorUsesTheRejectionMessageLikeRust(t *testing.T) {
 	}
 	if denied == nil || denied.Success || denied.Body != MCPToolApprovalRejectedMessage {
 		t.Fatalf("rejection output = %#v", denied)
+	}
+}
+
+// TestToolExecutorSurfacesHandlerMessagesLikeRust mirrors Rust #46066: a denied
+// decision may carry the handler's own message (the subagent handoff guidance),
+// which replaces the default rejection text the model sees.
+func TestToolExecutorSurfacesHandlerMessagesLikeRust(t *testing.T) {
+	service := newToolApprovalTestService(map[string]any{"command": "docs-server"})
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		Service:    service,
+		ServerName: "docs",
+		ToolName:   tool.NamespacedName("docs", "search"),
+		ToolInfo:   &MCPToolInfo{Name: "search"},
+		ThreadID:   "thread-1",
+		TurnID:     "turn-1",
+		ToolApproval: &ToolApprovalOptions{
+			Handler: MCPToolApprovalHandlerFunc(func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
+				return MCPToolApprovalOutcome{Decision: MCPToolApprovalDeny, Message: MCPElicitationHandoffMessage}, nil
+			}),
+			ApprovalPolicy: sandbox.ApprovalOnRequest,
+		},
+	})
+	denied, err := executor.approveToolCallIfNeeded(context.Background(), "call-1", nil)
+	if err != nil {
+		t.Fatalf("approveToolCallIfNeeded() error = %v", err)
+	}
+	if denied == nil || denied.Success || denied.Body != MCPElicitationHandoffMessage {
+		t.Fatalf("handoff output = %#v", denied)
 	}
 }
 
@@ -489,8 +517,8 @@ func TestToolExecutorGatesCustomMCPToolCallsLikeRust(t *testing.T) {
 		{
 			name:   "auto unannotated prompts",
 			values: map[string]any{"command": "docs-server"},
-			handler: func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
-				return MCPToolApprovalDeny, nil
+			handler: func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
+				return MCPToolApprovalOutcome{Decision: MCPToolApprovalDeny}, nil
 			},
 			policy:       sandbox.ApprovalOnRequest,
 			wantPrompted: true,
@@ -500,9 +528,9 @@ func TestToolExecutorGatesCustomMCPToolCallsLikeRust(t *testing.T) {
 			name:        "auto read-only does not prompt",
 			values:      map[string]any{"command": "docs-server"},
 			annotations: readOnlyAnnotations,
-			handler: func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
+			handler: func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
 				t.Error("handler must not be called for a read-only tool")
-				return MCPToolApprovalDeny, nil
+				return MCPToolApprovalOutcome{Decision: MCPToolApprovalDeny}, nil
 			},
 			policy: sandbox.ApprovalOnRequest,
 		},
@@ -510,9 +538,9 @@ func TestToolExecutorGatesCustomMCPToolCallsLikeRust(t *testing.T) {
 			name:        "approve mode does not prompt",
 			values:      map[string]any{"command": "docs-server", "default_tools_approval_mode": "approve"},
 			annotations: nil,
-			handler: func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
+			handler: func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
 				t.Error("handler must not be called in approve mode")
-				return MCPToolApprovalDeny, nil
+				return MCPToolApprovalOutcome{Decision: MCPToolApprovalDeny}, nil
 			},
 			policy: sandbox.ApprovalOnRequest,
 		},
@@ -520,9 +548,9 @@ func TestToolExecutorGatesCustomMCPToolCallsLikeRust(t *testing.T) {
 			name:        "never policy full access does not prompt",
 			values:      map[string]any{"command": "docs-server"},
 			annotations: nil,
-			handler: func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
+			handler: func(context.Context, *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
 				t.Error("handler must not be called under never + full access")
-				return MCPToolApprovalDeny, nil
+				return MCPToolApprovalOutcome{Decision: MCPToolApprovalDeny}, nil
 			},
 			policy:  sandbox.ApprovalNever,
 			profile: &fullAccess,
@@ -531,14 +559,14 @@ func TestToolExecutorGatesCustomMCPToolCallsLikeRust(t *testing.T) {
 			name:        "prompt mode accepts",
 			values:      map[string]any{"command": "docs-server", "default_tools_approval_mode": "prompt"},
 			annotations: readOnlyAnnotations,
-			handler: func(_ context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
+			handler: func(_ context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
 				if request.ApprovalMode != apps.AppToolApprovalPrompt || request.Server != "docs" || request.Tool != "search" {
 					t.Errorf("approval request = %#v", request)
 				}
 				if request.SessionKey != nil || request.AllowSessionRemember {
 					t.Errorf("prompt mode must not offer a remembered approval: %#v", request)
 				}
-				return MCPToolApprovalApprove, nil
+				return MCPToolApprovalOutcome{Decision: MCPToolApprovalApprove}, nil
 			},
 			policy:       sandbox.ApprovalOnRequest,
 			wantPrompted: true,
@@ -547,7 +575,7 @@ func TestToolExecutorGatesCustomMCPToolCallsLikeRust(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			prompted := false
-			handler := MCPToolApprovalHandlerFunc(func(ctx context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalDecision, error) {
+			handler := MCPToolApprovalHandlerFunc(func(ctx context.Context, request *MCPToolApprovalRequest) (MCPToolApprovalOutcome, error) {
 				prompted = true
 				return testCase.handler(ctx, request)
 			})

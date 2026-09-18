@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"strings"
 )
 
@@ -164,6 +165,48 @@ func AuthElicitationCompletedResult(authFailure *CodexAppsConnectorAuthFailure, 
 		IsError: &isError,
 		Meta:    meta,
 	}
+}
+
+// AuthElicitationFailureResult mirrors Rust #46066's error path in
+// maybe_request_codex_apps_auth_elicitation: when the elicitation cannot be
+// requested (a non-root agent's handoff, or a delivery failure), the connector's
+// own diagnostic is preserved as text - the preferred structured content is
+// flattened into a text item instead of being dropped - and the recovery
+// guidance naming the connector is prepended, so both output paths report the
+// diagnostic alongside it before the normal tool-output limit applies.
+func AuthElicitationFailureResult(authFailure *CodexAppsConnectorAuthFailure, result *MCPToolCallResponse, cause error) *MCPToolCallResponse {
+	if result == nil {
+		return result
+	}
+	message := "Authentication for " + connectorNameForAuthFailure(authFailure) + " could not be completed."
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		message += " " + strings.TrimSpace(cause.Error())
+	}
+	out := *result
+	out.Content = append([]MCPToolCallContent(nil), result.Content...)
+	if result.StructuredContent != nil {
+		out.Content = append(out.Content, MCPToolCallContent{Type: "text", Text: structuredContentText(result.StructuredContent)})
+		out.StructuredContent = nil
+	}
+	out.Content = append([]MCPToolCallContent{{Type: "text", Text: message}}, out.Content...)
+	return &out
+}
+
+func connectorNameForAuthFailure(authFailure *CodexAppsConnectorAuthFailure) string {
+	if authFailure == nil {
+		return ""
+	}
+	return authFailure.ConnectorName
+}
+
+// structuredContentText renders structured content the way Rust's
+// `serde_json::Value::to_string` does: compact JSON for every value kind.
+func structuredContentText(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func extractConnectorAuthFailure(meta any) map[string]any {

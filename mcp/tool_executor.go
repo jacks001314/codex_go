@@ -389,7 +389,13 @@ func (e *ToolExecutor) maybeRequestCodexAppsAuthElicitation(ctx context.Context,
 		Meta:          plan.Elicitation.Meta,
 	}
 	response, err := e.authElicitation.Request(ctx, elicitationRequest)
-	if err != nil || response == nil || response.Action != MCPElicitationActionAccept {
+	if err != nil {
+		// Rust #46066: a failed request (for example a subagent's handoff) keeps
+		// the connector's diagnostic and adds the recovery guidance instead of
+		// dropping the original result.
+		return AuthElicitationFailureResult(plan.AuthFailure, result, err)
+	}
+	if response == nil || response.Action != MCPElicitationActionAccept {
 		return result
 	}
 	if e.authElicitation.RefreshCodexApps != nil {
