@@ -1514,10 +1514,15 @@ func TestUnifiedExecWriteStdinApprovalGateEscalatedLikeRust(t *testing.T) {
 	}
 
 	var approved int
-	manager.SetWriteStdinApproval(func(processID int, threadID string, turnID string, chars string) error {
+	manager.SetWriteStdinApproval(func(_ context.Context, request *WriteStdinApprovalRequest) error {
 		approved++
-		if processID != *opened.ProcessID {
-			t.Fatalf("approval processID = %d, want %d", processID, *opened.ProcessID)
+		if request == nil || request.ProcessID != *opened.ProcessID {
+			t.Fatalf("approval request = %#v, want process %d", request, *opened.ProcessID)
+		}
+		if request.Chars != "hello\n" || request.LaunchCallID != "exec-call" || request.CallID != "write-call-approve" ||
+			request.CWD != request.CWD || !request.TTY || !request.Escalated ||
+			request.SandboxPermissions != sandbox.SandboxPermissionsRequireEscalated || request.EnvironmentID == "" {
+			t.Fatalf("approval request = %#v", request)
 		}
 		return nil
 	})
@@ -1540,7 +1545,7 @@ func TestUnifiedExecWriteStdinApprovalGateEscalatedLikeRust(t *testing.T) {
 		t.Fatalf("continued = %#v", continued)
 	}
 
-	manager.SetWriteStdinApproval(func(processID int, threadID string, turnID string, chars string) error {
+	manager.SetWriteStdinApproval(func(context.Context, *WriteStdinApprovalRequest) error {
 		return errors.New("denied by policy")
 	})
 	_, err = write.Execute(context.Background(), &Invocation{

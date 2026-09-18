@@ -27260,7 +27260,10 @@ func TestStandaloneToolOutputInputItemLikeRust(t *testing.T) {
 	}
 }
 
-func TestWriteStdinApprovalForTurnRequiresFreshApprovalLikeRust(t *testing.T) {
+// newWriteStdinApprovalRouter returns a router whose thread runs with the
+// write_stdin_approval feature enabled.
+func newWriteStdinApprovalRouter(t *testing.T) (*RuntimeRouter, string, string) {
+	t.Helper()
 	home := t.TempDir()
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nwrite_stdin_approval = true\n"), 0o600); err != nil {
 		t.Fatalf("write config error = %v", err)
@@ -27275,19 +27278,99 @@ func TestWriteStdinApprovalForTurnRequiresFreshApprovalLikeRust(t *testing.T) {
 		t.Fatalf("thread start error: %+v", threadStart.Error)
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	return router, threadID, home
+}
 
-	// Feature enabled, no session approval yet -> the write is rejected.
-	if err := router.writeStdinApprovalForTurn(42, threadID, "turn-1", "hello\n"); err == nil {
-		t.Fatal("writeStdinApprovalForTurn() = nil, want rejection without a fresh approval")
+// TestWriteStdinApprovalReviewsEscalatedInputLikeRust mirrors Rust #40978/#41328:
+// writing to a terminal that was launched outside the sandbox needs review, and
+// the review is the user's command-approval request whose command line names the
+// terminal session.
+func TestWriteStdinApprovalReviewsEscalatedInputLikeRust(t *testing.T) {
+	router, threadID, _ := newWriteStdinApprovalRouter(t)
+	t.Cleanup(func() { _ = router.Close() })
+	var params *CommandExecutionRequestApprovalParams
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		captured, _ := request.Params.(*CommandExecutionRequestApprovalParams)
+		params = captured
+		router.requireServerRequests().Resolve(OK(request.ID, &CommandExecutionRequestApprovalResponse{
+			Decision: CommandExecutionApprovalAccept,
+		}))
+	}))
+	request := &tool.WriteStdinApprovalRequest{
+		ProcessID:          42,
+		CallID:             "write-call",
+		LaunchCallID:       "exec-call",
+		ThreadID:           threadID,
+		TurnID:             "turn-1",
+		EnvironmentID:      "local",
+		Chars:              "hello\n",
+		CWD:                "/repo",
+		TTY:                true,
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+		Escalated:          true,
 	}
-	// Granting a command session approval allows the write.
-	router.rememberCommandApprovalForSession(threadID)
-	if err := router.writeStdinApprovalForTurn(42, threadID, "turn-1", "hello\n"); err != nil {
-		t.Fatalf("writeStdinApprovalForTurn() after session approval error = %v", err)
+	if err := router.writeStdinApproval(context.Background(), request); err != nil {
+		t.Fatalf("writeStdinApproval() error = %v", err)
+	}
+	if params == nil {
+		t.Fatal("no approval request was sent")
+	}
+	if params.ItemID != "write-call" || params.ThreadID != threadID || params.TurnID != "turn-1" {
+		t.Fatalf("approval params = %#v", params)
+	}
+	if params.Command == nil || *params.Command != "write_stdin --session-id 42" {
+		t.Fatalf("approval command = %#v", params.Command)
+	}
+	if params.Reason == nil || !strings.Contains(*params.Reason, "Send input to an existing terminal.") ||
+		!strings.Contains(*params.Reason, "launched outside the sandbox") {
+		t.Fatalf("approval reason = %#v", params.Reason)
+	}
+
+	// A declined approval rejects the write.
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		router.requireServerRequests().Resolve(OK(request.ID, &CommandExecutionRequestApprovalResponse{
+			Decision: CommandExecutionApprovalDecline,
+		}))
+	}))
+	if err := router.writeStdinApproval(context.Background(), request); err == nil {
+		t.Fatal("writeStdinApproval() = nil, want a rejection after a declined approval")
 	}
 }
 
-func TestWriteStdinApprovalForTurnDisabledFeatureDoesNotGateLikeRust(t *testing.T) {
+// TestWriteStdinApprovalSkipsMatchingTerminalsLikeRust pins the permission
+// comparison: a non-escalated terminal whose launch permissions still match the
+// current ones writes without review, and a hook decision short-circuits the
+// user request in both directions.
+func TestWriteStdinApprovalSkipsMatchingTerminalsLikeRust(t *testing.T) {
+	router, threadID, _ := newWriteStdinApprovalRouter(t)
+	t.Cleanup(func() { _ = router.Close() })
+	requested := false
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requested = true
+		router.requireServerRequests().Resolve(OK(request.ID, &CommandExecutionRequestApprovalResponse{
+			Decision: CommandExecutionApprovalAccept,
+		}))
+	}))
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	request := &tool.WriteStdinApprovalRequest{
+		ProcessID:          7,
+		CallID:             "write-call",
+		ThreadID:           threadID,
+		TurnID:             "turn-1",
+		Chars:              "ls\n",
+		TTY:                true,
+		SandboxPermissions: sandbox.SandboxPermissionsUseDefault,
+		PermissionProfile:  &profile,
+	}
+	if err := router.writeStdinApproval(context.Background(), request); err != nil {
+		t.Fatalf("matching terminal write error = %v", err)
+	}
+	if requested {
+		t.Fatal("a matching terminal must not prompt")
+	}
+}
+
+func TestWriteStdinApprovalDisabledFeatureDoesNotGateLikeRust(t *testing.T) {
 	home := t.TempDir()
 	store := session.NewStore(t.TempDir())
 	router := NewRuntimeRouter(RuntimeServices{
@@ -27299,28 +27382,128 @@ func TestWriteStdinApprovalForTurnDisabledFeatureDoesNotGateLikeRust(t *testing.
 		t.Fatalf("thread start error: %+v", threadStart.Error)
 	}
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
-	if err := router.writeStdinApprovalForTurn(42, threadID, "turn-1", "hello\n"); err != nil {
-		t.Fatalf("writeStdinApprovalForTurn() with feature off error = %v, want no gate", err)
+	t.Cleanup(func() { _ = router.Close() })
+	if err := router.writeStdinApproval(context.Background(), &tool.WriteStdinApprovalRequest{
+		ProcessID:          42,
+		ThreadID:           threadID,
+		TurnID:             "turn-1",
+		Chars:              "hello\n",
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+	}); err != nil {
+		t.Fatalf("writeStdinApproval() with feature off error = %v, want no gate", err)
 	}
 }
 
-func TestWriteStdinApprovalForTurnRejectsNULByteLikeRust(t *testing.T) {
-	home := t.TempDir()
-	store := session.NewStore(t.TempDir())
-	router := NewRuntimeRouter(RuntimeServices{
-		ThreadRouter: NewRouter(store),
-		Config:       config.NewConfigService(home),
-	})
-	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
-	if threadStart.Error != nil {
-		t.Fatalf("thread start error: %+v", threadStart.Error)
-	}
-	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+func TestWriteStdinApprovalRejectsNULByteLikeRust(t *testing.T) {
+	router, threadID, _ := newWriteStdinApprovalRouter(t)
+	t.Cleanup(func() { _ = router.Close() })
 	// Rust #41354: a NUL byte cannot be shell-quoted for an accurate review, so
 	// it is rejected before an approval request or write.
-	err := router.writeStdinApprovalForTurn(42, threadID, "turn-1", "\x00REJECTED=1\n")
+	err := router.writeStdinApproval(context.Background(), &tool.WriteStdinApprovalRequest{
+		ProcessID:          42,
+		ThreadID:           threadID,
+		TurnID:             "turn-1",
+		Chars:              "\x00REJECTED=1\n",
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+	})
 	if err == nil || !strings.Contains(err.Error(), "NUL byte") {
-		t.Fatalf("writeStdinApprovalForTurn(NUL) error = %v, want NUL-byte rejection", err)
+		t.Fatalf("writeStdinApproval(NUL) error = %v, want NUL-byte rejection", err)
+	}
+}
+
+// TestWriteStdinApprovalRunsHooksAndGuardianLikeRust mirrors Rust
+// Session::request_approval for terminal input: PermissionRequest hooks decide
+// first (the write_stdin payload), an auto-review turn routes the write through
+// the Guardian review instead of the user, and a hook or review denial rejects
+// the write with its own message.
+func TestWriteStdinApprovalRunsHooksAndGuardianLikeRust(t *testing.T) {
+	newRouter := func(t *testing.T, configExtra string, hookCommand string, reviewer GuardianReviewer) (*RuntimeRouter, string) {
+		t.Helper()
+		home := t.TempDir()
+		cwd := t.TempDir()
+		projectTrust := strings.ReplaceAll(filepath.Clean(cwd), `\`, `\\`)
+		configBody := "model = \"gpt-5.4\"\nbypass_hook_trust = true\n" + configExtra +
+			"[features]\nwrite_stdin_approval = true\n" +
+			"[projects.\"" + projectTrust + "\"]\ntrust_level = \"trusted\"\n"
+		if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+			t.Fatalf("WriteFile config error = %v", err)
+		}
+		if hookCommand != "" {
+			hooksDir := filepath.Join(cwd, ".gcode")
+			if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			hooksJSON, err := json.Marshal(map[string]any{
+				"hooks": map[string]any{
+					"PermissionRequest": []any{map[string]any{
+						"matcher": "write_stdin",
+						"hooks":   []any{map[string]any{"type": "command", "command": hookCommand}},
+					}},
+				},
+			})
+			if err != nil {
+				t.Fatalf("Marshal hooks error = %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), hooksJSON, 0o600); err != nil {
+				t.Fatalf("WriteFile hooks error = %v", err)
+			}
+		}
+		router := NewRuntimeRouter(RuntimeServices{
+			DefaultCWD:       cwd,
+			Config:           config.NewConfigService(home),
+			HooksDiscovery:   NewHookDiscoveryService(home),
+			HookRunner:       NewHookRunner(),
+			GuardianReviewer: reviewer,
+		})
+		t.Cleanup(func() { _ = router.Close() })
+		params := &turn.TurnStartParams{ThreadID: "thread-1", CWD: cwd, Model: "gpt-5.4"}
+		if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, params); err != nil {
+			t.Fatalf("RegisterTurn() error = %v", err)
+		}
+		return router, cwd
+	}
+	write := func(router *RuntimeRouter, cwd string) error {
+		return router.writeStdinApproval(context.Background(), &tool.WriteStdinApprovalRequest{
+			ProcessID:          9,
+			CallID:             "write-call",
+			LaunchCallID:       "exec-call",
+			ThreadID:           "thread-1",
+			TurnID:             "turn-1",
+			EnvironmentID:      "local",
+			Chars:              "hello\n",
+			CWD:                cwd,
+			TTY:                true,
+			SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+			Escalated:          true,
+		})
+	}
+
+	// A hook allow approves without a user request.
+	allowRouter, cwd := newRouter(t, "",
+		hookRunnerOutputCommand(`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, ""), nil)
+	allowRequested := false
+	allowRouter.SetServerRequestSink(ServerRequestSinkFunc(func(*ServerRequest) { allowRequested = true }))
+	if err := write(allowRouter, cwd); err != nil {
+		t.Fatalf("hook allow error = %v", err)
+	}
+	if allowRequested {
+		t.Fatal("a hook allow must not prompt the user")
+	}
+
+	// A hook deny rejects with the hook's message.
+	denyRouter, denyCWD := newRouter(t, "", hookRunnerPermissionRequestDenyCommand("no terminal input"), nil)
+	if err := write(denyRouter, denyCWD); err == nil || !strings.Contains(err.Error(), "no terminal input") {
+		t.Fatalf("hook deny error = %v, want the hook message", err)
+	}
+
+	// An auto-review turn routes the write through the Guardian review.
+	approvedRouter, approvedCWD := newRouter(t, "approvals_reviewer = \"auto_review\"\n", "", &fakeGuardianReviewer{decision: state.DecisionApproved})
+	if err := write(approvedRouter, approvedCWD); err != nil {
+		t.Fatalf("guardian approval error = %v", err)
+	}
+	deniedRouter, deniedCWD := newRouter(t, "approvals_reviewer = \"auto_review\"\n", "", &fakeGuardianReviewer{decision: state.DecisionDenied, reason: "risky terminal input"})
+	if err := write(deniedRouter, deniedCWD); err == nil || !strings.Contains(err.Error(), "risky terminal input") {
+		t.Fatalf("guardian denial error = %v, want the review reason", err)
 	}
 }
 

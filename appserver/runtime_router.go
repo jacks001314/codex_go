@@ -581,7 +581,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	if router.services.UnifiedExec == nil {
 		router.services.UnifiedExec = tool.NewUnifiedExecManager()
 	}
-	router.services.UnifiedExec.SetWriteStdinApproval(router.writeStdinApprovalForTurn)
+	router.services.UnifiedExec.SetWriteStdinApproval(router.writeStdinApproval)
 	router.services.ServerRequests.SetRequestedCallback(router.noteServerRequestPending)
 	router.services.ServerRequests.SetResolvedCallback(router.notifyServerRequestResolved)
 	router.services.ServerRequests.SetResolvedResponseCallback(router.handleServerRequestResolvedResponse)
@@ -13902,44 +13902,297 @@ func (r *RuntimeRouter) commandApprovalForSession(threadID string) bool {
 	return r.approvalForSession(r.commandApprovals, threadID)
 }
 
-// writeStdinApprovalForTurn gates writing non-empty input to an escalated
-// unified-exec terminal when the write_stdin_approval feature is enabled
-// (Rust #40978). The callback carries the process thread/turn so the feature
-// flag can be resolved per-turn; a fresh command/session approval is required
-// before allowing the write, otherwise the write is rejected.
-func (r *RuntimeRouter) writeStdinApprovalForTurn(processID int, threadID string, turnID string, chars string) error {
-	if r == nil {
+// writeStdinApproval mirrors Rust's terminal-input review (Rust #40978/#41328,
+// unified_exec/stdin_approval.rs): when the write_stdin_approval feature is on,
+// the terminal's retained launch permissions decide whether the write needs
+// review, and a required review runs the PermissionRequest hooks, then the
+// Guardian review, then the user approval request.
+func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.WriteStdinApprovalRequest) error {
+	if r == nil || request == nil {
 		return nil
 	}
 	// Rust #41354: manual approvals shell-quote the proposed input, which cannot
 	// preserve NUL bytes for an accurate review, so reject before any approval
 	// request or write reaches the terminal.
-	if strings.ContainsRune(chars, '\x00') {
+	if strings.ContainsRune(request.Chars, '\x00') {
 		return fmt.Errorf("terminal input contains a NUL byte and cannot be reviewed safely")
 	}
-	cwd := ""
-	if record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), false, false); err == nil && record != nil {
-		cwd = strings.TrimSpace(record.Metadata.CWD)
-	}
-	var read *config.ConfigReadResponse
-	if r.services.Config != nil {
-		params := &config.ConfigReadParams{}
-		if cwd != "" {
-			params.CWD = stringPtrIfNotEmpty(cwd)
-		}
-		read, _ = r.services.Config.Read(params)
-	}
+	threadID := strings.TrimSpace(request.ThreadID)
+	turnID := strings.TrimSpace(request.TurnID)
+	cfg := r.effectiveWriteStdinConfig(threadID)
 	settings := (&config.Config{Values: map[string]any{}}).FeatureSettings()
-	if read != nil {
-		settings = (&config.Config{Values: read.Config}).FeatureSettings()
+	if cfg != nil {
+		settings = cfg.FeatureSettings()
 	}
 	if !features.Enabled(settings, "write_stdin_approval") {
 		return nil
 	}
-	if r.commandApprovalForSession(strings.TrimSpace(threadID)) {
+	reviewer := r.approvalsReviewerForTurn(threadID, turnID)
+	permissions, err := r.terminalWriteReviewRequirement(request, cfg)
+	if err != nil {
+		return err
+	}
+	// Ordinary input that still matches the retained permissions needs no
+	// review unless the turn requires automatic review.
+	if permissions == sandbox.SandboxPermissionsUseDefault && !reviewer.RoutesToGuardian() {
 		return nil
 	}
-	return fmt.Errorf("writing input to this escalated terminal requires a fresh approval")
+	action := terminalWriteApprovalAction(request, permissions)
+	reason := terminalWriteApprovalReason(request, permissions)
+	// Rust Session::request_approval: hooks decide first, before Guardian and
+	// the user approval request.
+	if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, strings.TrimSpace(request.CallID), "write_stdin", nil, terminalWriteHookToolInput(request)); ok && verdict != nil {
+		switch verdict.Kind {
+		case HookPermissionRequestAllow:
+			return nil
+		default:
+			message := ""
+			if verdict.Message != nil {
+				message = strings.TrimSpace(*verdict.Message)
+			}
+			if message == "" {
+				message = "A permission-request hook denied this terminal input."
+			}
+			return fmt.Errorf("%s", message)
+		}
+	}
+	if reviewer.RoutesToGuardian() {
+		outcome := r.reviewApprovalWithGuardian(ctx, threadID, turnID, strings.TrimSpace(request.CallID), action)
+		if outcome.Approved {
+			return nil
+		}
+		if reason := strings.TrimSpace(outcome.DenyReason); reason != "" {
+			return fmt.Errorf("%s", reason)
+		}
+		return errors.New("writing input to this terminal was denied by automatic review")
+	}
+	params := &CommandExecutionRequestApprovalParams{
+		ThreadID:      threadID,
+		TurnID:        turnID,
+		ItemID:        strings.TrimSpace(request.CallID),
+		StartedAtMS:   uint64(time.Now().UTC().UnixMilli()),
+		EnvironmentID: stringPtrIfNotEmpty(strings.TrimSpace(request.EnvironmentID)),
+		Reason:        stringPtrIfNotEmpty(reason),
+	}
+	if params.ItemID == "" {
+		params.ItemID = fmt.Sprintf("write-stdin-%d", request.ProcessID)
+	}
+	// Rust sends the user a command approval request whose command line names
+	// the terminal session it writes to.
+	command := fmt.Sprintf("write_stdin --session-id %d", request.ProcessID)
+	params.Command = &command
+	params.CommandActions = []map[string]any{{"type": "unknown", "command": command}}
+	if request.AdditionalPermissions != nil {
+		params.AdditionalPermissions = cloneAdditionalPermissionProfile(request.AdditionalPermissions)
+	}
+	var response CommandExecutionRequestApprovalResponse
+	if err := r.requireServerRequests().Request(ctx, ServerRequestCommandExecutionApproval, params, &response); err != nil {
+		return err
+	}
+	switch approvalDecisionString(response.Decision) {
+	case string(CommandExecutionApprovalAccept), string(CommandExecutionApprovalAcceptForSession),
+		string(CommandExecutionApprovalAcceptWithExecpolicyAmendment), string(CommandExecutionApprovalApplyNetworkPolicyAmendment):
+		return nil
+	default:
+		return errors.New("Approval denied before writing terminal input.")
+	}
+}
+
+// effectiveWriteStdinConfig resolves the config the terminal's thread runs
+// under, so the approval feature flag and permission comparison use the same
+// settings the terminal was started with.
+func (r *RuntimeRouter) effectiveWriteStdinConfig(threadID string) *config.Config {
+	if r == nil {
+		return nil
+	}
+	params := &turn.TurnStartParams{ThreadID: threadID}
+	if active := r.activeTurnParams(threadID); active != nil {
+		cloned := *active
+		params = &cloned
+		params.ThreadID = threadID
+	}
+	if record, err := r.threadRecord(session.ThreadID(threadID), false, false); err == nil && record != nil {
+		params.CWD = firstNonEmpty(strings.TrimSpace(params.CWD), strings.TrimSpace(record.Metadata.CWD))
+	}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil {
+		return nil
+	}
+	return cfg
+}
+
+// terminalWriteReviewRequirement mirrors Rust
+// TerminalPermissions::review_requirement for the subset Go models: a terminal
+// whose launch policy still matches the current one needs no review, a bypassed
+// or drifted terminal reports escalated permissions, and a terminal that
+// retains extra grants reports the additional-permissions kind.
+func (r *RuntimeRouter) terminalWriteReviewRequirement(request *tool.WriteStdinApprovalRequest, cfg *config.Config) (sandbox.SandboxPermissions, error) {
+	if request == nil {
+		return sandbox.SandboxPermissionsUseDefault, nil
+	}
+	launch := request.PermissionProfile
+	if request.SandboxPermissions == sandbox.SandboxPermissionsRequireEscalated {
+		return sandbox.SandboxPermissionsRequireEscalated, nil
+	}
+	current, err := r.currentWriteStdinPermissionProfile(request, cfg)
+	if err != nil {
+		return sandbox.SandboxPermissionsUseDefault, err
+	}
+	// A profile that cannot be compared (no configuration service, or a launch
+	// that did not record one) cannot prove drift, so only an explicit
+	// escalation asks for review.
+	if launch != nil && current != nil && !equalSandboxPermissionProfiles(launch, current) {
+		return sandbox.SandboxPermissionsRequireEscalated, nil
+	}
+	if request.AdditionalPermissions != nil && (request.AdditionalPermissions.Network != nil || len(request.AdditionalPermissions.FileSystem) > 0) {
+		return sandbox.SandboxPermissionsWithAdditionalPermissions, nil
+	}
+	return sandbox.SandboxPermissionsUseDefault, nil
+}
+
+// currentWriteStdinPermissionProfile resolves the permission profile the
+// terminal's environment currently enforces.
+func (r *RuntimeRouter) currentWriteStdinPermissionProfile(request *tool.WriteStdinApprovalRequest, cfg *config.Config) (*sandbox.PermissionProfile, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	cwd := ""
+	if request != nil {
+		cwd = strings.TrimSpace(request.CWD)
+	}
+	params := &turn.TurnStartParams{ThreadID: strings.TrimSpace(request.ThreadID), CWD: cwd}
+	if active := r.activeTurnParams(strings.TrimSpace(request.ThreadID)); active != nil {
+		// The comparison uses the terminal's own launch directory so the
+		// resolved writable roots stay the same source as the launch policy;
+		// only the selected profile may differ.
+		params.Permissions = cloneString(active.Permissions)
+		params.SandboxPolicy = active.SandboxPolicy
+	}
+	resolution, err := turnSandboxPermissionProfile(cfg, cwd, params)
+	if err != nil || resolution == nil {
+		return nil, nil
+	}
+	return resolution.Profile, nil
+}
+
+// terminalWriteApprovalAction builds Rust's ApprovalAction::WriteStdin for the
+// review.
+func terminalWriteApprovalAction(request *tool.WriteStdinApprovalRequest, permissions sandbox.SandboxPermissions) state.Action {
+	if request == nil {
+		return state.Action{Type: "write_stdin"}
+	}
+	processID := request.ProcessID
+	action := state.Action{
+		Type:               "write_stdin",
+		EnvironmentID:      strings.TrimSpace(request.EnvironmentID),
+		SessionID:          &processID,
+		Chars:              request.Chars,
+		CWD:                strings.TrimSpace(request.CWD),
+		TurnID:             strings.TrimSpace(request.TurnID),
+		SandboxPermissions: string(permissions),
+	}
+	tty := request.TTY
+	action.TTY = &tty
+	if request.AdditionalPermissions != nil {
+		action.AdditionalPermissions = additionalPermissionsJSON(request.AdditionalPermissions)
+	}
+	return action
+}
+
+// terminalWriteApprovalReason mirrors Rust TerminalPermissions::approval_reason.
+func terminalWriteApprovalReason(request *tool.WriteStdinApprovalRequest, permissions sandbox.SandboxPermissions) string {
+	authority := "This terminal uses the current permissions."
+	if request != nil {
+		switch {
+		case request.SandboxPermissions == sandbox.SandboxPermissionsRequireEscalated:
+			authority = "This terminal was launched outside the sandbox, bypassing any managed network proxy."
+		case request.PermissionProfile != nil && request.PermissionProfile.Disabled:
+			authority = "This terminal runs without a filesystem sandbox."
+		case permissions == sandbox.SandboxPermissionsWithAdditionalPermissions:
+			authority = "This terminal retains additional permissions."
+		case permissions == sandbox.SandboxPermissionsRequireEscalated:
+			authority = "This terminal retains sandbox or network settings that differ from the current permissions."
+		}
+	}
+	reason := "Send input to an existing terminal. " + authority +
+		" The cwd is its launch directory; the terminal's current directory and state may have changed."
+	if request != nil && request.AdditionalPermissions != nil {
+		if grants := additionalPermissionsJSON(request.AdditionalPermissions); len(grants) > 0 {
+			if encoded, err := json.Marshal(grants); err == nil {
+				reason += " Retained grants: " + string(encoded) + "."
+			}
+		}
+	}
+	return reason
+}
+
+// terminalWriteHookToolInput mirrors Rust's WriteStdin PermissionRequest
+// payload.
+func terminalWriteHookToolInput(request *tool.WriteStdinApprovalRequest) map[string]any {
+	if request == nil {
+		return map[string]any{}
+	}
+	input := map[string]any{
+		"session_id":     request.ProcessID,
+		"chars":          request.Chars,
+		"cwd":            strings.TrimSpace(request.CWD),
+		"tty":            request.TTY,
+		"environment_id": strings.TrimSpace(request.EnvironmentID),
+	}
+	if callID := strings.TrimSpace(request.CallID); callID != "" {
+		input["approval_id"] = callID
+	}
+	if launchCallID := strings.TrimSpace(request.LaunchCallID); launchCallID != "" {
+		input["parent_call_id"] = launchCallID
+	}
+	if permissions := strings.TrimSpace(string(request.SandboxPermissions)); permissions != "" {
+		input["sandbox_permissions"] = permissions
+	}
+	return input
+}
+
+// equalSandboxPermissionProfiles compares the permission facts a terminal's
+// policy is compared by (Rust FileSystemSandboxContext equality).
+func equalSandboxPermissionProfiles(left *sandbox.PermissionProfile, right *sandbox.PermissionProfile) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.Disabled != right.Disabled || left.NetworkEnabled != right.NetworkEnabled {
+		return false
+	}
+	if !equalSandboxPolicies(left.SandboxPolicy, right.SandboxPolicy) {
+		return false
+	}
+	return equalSandboxDeniedReadEntries(left.DeniedReadEntries, right.DeniedReadEntries)
+}
+
+func equalSandboxPolicies(left *sandbox.SandboxPolicy, right *sandbox.SandboxPolicy) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.Kind != right.Kind || left.ExternalNetwork != right.ExternalNetwork ||
+		left.NetworkAccess != right.NetworkAccess || left.ExcludeTmpdirEnvVar != right.ExcludeTmpdirEnvVar ||
+		left.ExcludeSlashTmp != right.ExcludeSlashTmp || len(left.WritableRoots) != len(right.WritableRoots) {
+		return false
+	}
+	for index := range left.WritableRoots {
+		if left.WritableRoots[index] != right.WritableRoots[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalSandboxDeniedReadEntries(left []sandbox.FileSystemSandboxEntry, right []sandbox.FileSystemSandboxEntry) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *RuntimeRouter) fileChangeApprovalForSession(threadID string) bool {

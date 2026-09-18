@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 const DefaultWriteStdinToolName = "write_stdin"
@@ -61,6 +62,7 @@ func (e *WriteStdinExecutor) Execute(ctx context.Context, invocation *Invocation
 	if args.YieldTimeMS == 0 {
 		args.YieldTimeMS = DefaultWriteYieldTimeMS
 	}
+	args.CallID = strings.TrimSpace(invocation.CallID)
 	result, err := e.manager.WriteStdin(ctx, &args, e.maxOutputTokens)
 	if err != nil {
 		var approvalErr *UnifiedExecStdinApprovalError

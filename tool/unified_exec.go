@@ -77,11 +77,65 @@ type UnifiedExecManager struct {
 	processes               map[int]*unifiedExecProcess
 	pausedThreads           map[string]chan struct{}
 	// writeStdinApproval, when set, is invoked before non-empty stdin is
-	// written to an escalated terminal (Rust #40978). The callback receives the
-	// process, thread, turn, and the input characters so the app-server layer
-	// can resolve the per-turn write_stdin_approval feature flag and route a
-	// fresh approval. Returning an error rejects the write.
-	writeStdinApproval func(processID int, threadID string, turnID string, chars string) error
+	// written to an escalated terminal (Rust #40978/#41328). The callback
+	// receives the terminal's launch facts so the app-server layer can resolve
+	// the per-turn write_stdin_approval feature flag, compare the launch policy
+	// with the current one, and route a fresh approval. Returning an error
+	// rejects the write.
+	writeStdinApproval WriteStdinApprovalFunc
+}
+
+// WriteStdinApprovalRequest carries a terminal input review's inputs, mirroring
+// Rust's ApprovalAction::WriteStdin (Rust #40978/#41328).
+type WriteStdinApprovalRequest struct {
+	ProcessID int
+	// CallID is the write_stdin call being reviewed; LaunchCallID is the call
+	// that opened the terminal (Rust's approval_id and id).
+	CallID        string
+	LaunchCallID  string
+	ThreadID      string
+	TurnID        string
+	EnvironmentID string
+	Chars         string
+	CWD           string
+	TTY           bool
+	// SandboxPermissions / AdditionalPermissions / PermissionProfile are the
+	// terminal's retained launch facts (Rust TerminalPermissions).
+	SandboxPermissions    sandbox.SandboxPermissions
+	AdditionalPermissions *sandbox.AdditionalPermissionProfile
+	PermissionProfile     *sandbox.PermissionProfile
+	// Escalated reports that the launch bypassed the sandbox.
+	Escalated bool
+}
+
+// WriteStdinApprovalFunc reviews terminal input before it is written.
+type WriteStdinApprovalFunc func(ctx context.Context, request *WriteStdinApprovalRequest) error
+
+// unifiedExecLaunchFacts captures the launch-time permission facts Rust's
+// TerminalPermissions keeps for later write_stdin reviews.
+type unifiedExecLaunchFacts struct {
+	launchSandboxPermissions sandbox.SandboxPermissions
+	additionalPermissions    *sandbox.AdditionalPermissionProfile
+	permissionProfile        *sandbox.PermissionProfile
+	environmentID            string
+	managedNetwork           bool
+}
+
+func unifiedExecLaunchFactsFromRequest(req *ShellRequest) unifiedExecLaunchFacts {
+	if req == nil {
+		return unifiedExecLaunchFacts{}
+	}
+	environmentID := strings.TrimSpace(req.UnifiedExecEnvironmentID)
+	if environmentID == "" {
+		environmentID = "local"
+	}
+	return unifiedExecLaunchFacts{
+		launchSandboxPermissions: req.SandboxPermissions,
+		additionalPermissions:    req.AdditionalPermissions,
+		permissionProfile:        req.PermissionProfile,
+		environmentID:            environmentID,
+		managedNetwork:           req.EnforceManagedNetwork,
+	}
 }
 
 // shellRequestEscalated reports whether a unified exec command escalated
@@ -95,7 +149,7 @@ func shellRequestEscalated(req *ShellRequest) bool {
 
 // SetWriteStdinApproval installs the callback that the app-server layer wires
 // to route a fresh `writeStdin` approval for escalated terminals (Rust #40978).
-func (m *UnifiedExecManager) SetWriteStdinApproval(fn func(processID int, threadID string, turnID string, chars string) error) {
+func (m *UnifiedExecManager) SetWriteStdinApproval(fn WriteStdinApprovalFunc) {
 	if m == nil {
 		return
 	}
@@ -232,7 +286,8 @@ func unifiedExecOutputSchema() map[string]any {
 }
 
 type unifiedExecProcess struct {
-	id                   int
+	id int
+	unifiedExecLaunchFacts
 	callID               string
 	hookCommand          string
 	tty                  bool
@@ -295,6 +350,9 @@ type WriteStdinArgs struct {
 	Chars           string `json:"chars,omitempty"`
 	YieldTimeMS     uint64 `json:"yield_time_ms,omitempty"`
 	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
+	// CallID is the invoking write_stdin call, carried to the approval review
+	// (Rust ApprovalAction::WriteStdin's approval_id). Internal-only.
+	CallID string `json:"-"`
 }
 
 func NewUnifiedExecManager() *UnifiedExecManager {
@@ -371,25 +429,26 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 		return nil, err
 	}
 	process := &unifiedExecProcess{
-		id:            processID,
-		callID:        callID,
-		hookCommand:   req.HookCommand,
-		tty:           req.TTY,
-		cmd:           cmd,
-		stdin:         started.stdin,
-		done:          make(chan struct{}),
-		eventDone:     make(chan struct{}),
-		output:        newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
-		transcript:    newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
-		eventSink:     req.UnifiedExecEventSink,
-		command:       append([]string(nil), req.Command...),
-		cwd:           req.CWD,
-		startedAt:     time.Now(),
-		threadID:      req.UnifiedExecThreadID,
-		turnID:        req.UnifiedExecTurnID,
-		eventsStarted: true,
-		sandboxType:   req.ProcessSandboxType,
-		escalated:     shellRequestEscalated(req),
+		id:                     processID,
+		callID:                 callID,
+		hookCommand:            req.HookCommand,
+		tty:                    req.TTY,
+		cmd:                    cmd,
+		stdin:                  started.stdin,
+		done:                   make(chan struct{}),
+		eventDone:              make(chan struct{}),
+		output:                 newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		transcript:             newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		eventSink:              req.UnifiedExecEventSink,
+		command:                append([]string(nil), req.Command...),
+		cwd:                    req.CWD,
+		startedAt:              time.Now(),
+		threadID:               req.UnifiedExecThreadID,
+		turnID:                 req.UnifiedExecTurnID,
+		unifiedExecLaunchFacts: unifiedExecLaunchFactsFromRequest(req),
+		eventsStarted:          true,
+		sandboxType:            req.ProcessSandboxType,
+		escalated:              shellRequestEscalated(req),
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -459,25 +518,26 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 		return nil, err
 	}
 	process := &unifiedExecProcess{
-		id:            processID,
-		callID:        callID,
-		hookCommand:   req.HookCommand,
-		tty:           req.TTY,
-		stdin:         started.stdin,
-		sandbox:       started.process,
-		done:          make(chan struct{}),
-		eventDone:     make(chan struct{}),
-		output:        newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
-		transcript:    newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
-		eventSink:     req.UnifiedExecEventSink,
-		command:       append([]string(nil), req.Command...),
-		cwd:           req.CWD,
-		startedAt:     time.Now(),
-		threadID:      req.UnifiedExecThreadID,
-		turnID:        req.UnifiedExecTurnID,
-		eventsStarted: true,
-		sandboxType:   req.ProcessSandboxType,
-		escalated:     shellRequestEscalated(req),
+		id:                     processID,
+		callID:                 callID,
+		hookCommand:            req.HookCommand,
+		tty:                    req.TTY,
+		stdin:                  started.stdin,
+		sandbox:                started.process,
+		done:                   make(chan struct{}),
+		eventDone:              make(chan struct{}),
+		output:                 newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		transcript:             newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		eventSink:              req.UnifiedExecEventSink,
+		command:                append([]string(nil), req.Command...),
+		cwd:                    req.CWD,
+		startedAt:              time.Now(),
+		threadID:               req.UnifiedExecThreadID,
+		turnID:                 req.UnifiedExecTurnID,
+		unifiedExecLaunchFacts: unifiedExecLaunchFactsFromRequest(req),
+		eventsStarted:          true,
+		sandboxType:            req.ProcessSandboxType,
+		escalated:              shellRequestEscalated(req),
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -626,30 +686,31 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		return nil, err
 	}
 	process := &unifiedExecProcess{
-		id:                   processID,
-		callID:               callID,
-		hookCommand:          req.HookCommand,
-		tty:                  req.TTY,
-		remote:               client,
-		remoteURL:            req.UnifiedExecRemoteURL,
-		remoteProvider:       req.UnifiedExecNoiseProvider,
-		remoteSessionID:      client.SessionID(),
-		remoteID:             remoteID,
-		remoteEvents:         events,
-		networkPolicyDecider: req.NetworkPolicyDecider,
-		networkPolicyTimeout: req.NetworkPolicyDecisionTimeout,
-		done:                 make(chan struct{}),
-		eventDone:            make(chan struct{}),
-		output:               newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
-		transcript:           newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
-		eventSink:            req.UnifiedExecEventSink,
-		command:              append([]string(nil), req.Command...),
-		cwd:                  req.CWD,
-		startedAt:            time.Now(),
-		threadID:             req.UnifiedExecThreadID,
-		turnID:               req.UnifiedExecTurnID,
-		sandboxType:          execserver.SandboxTypeFromProtocol(startResponse.SandboxType),
-		escalated:            shellRequestEscalated(req),
+		id:                     processID,
+		callID:                 callID,
+		hookCommand:            req.HookCommand,
+		tty:                    req.TTY,
+		remote:                 client,
+		remoteURL:              req.UnifiedExecRemoteURL,
+		remoteProvider:         req.UnifiedExecNoiseProvider,
+		remoteSessionID:        client.SessionID(),
+		remoteID:               remoteID,
+		remoteEvents:           events,
+		networkPolicyDecider:   req.NetworkPolicyDecider,
+		networkPolicyTimeout:   req.NetworkPolicyDecisionTimeout,
+		done:                   make(chan struct{}),
+		eventDone:              make(chan struct{}),
+		output:                 newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		transcript:             newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		eventSink:              req.UnifiedExecEventSink,
+		command:                append([]string(nil), req.Command...),
+		cwd:                    req.CWD,
+		startedAt:              time.Now(),
+		threadID:               req.UnifiedExecThreadID,
+		turnID:                 req.UnifiedExecTurnID,
+		unifiedExecLaunchFacts: unifiedExecLaunchFactsFromRequest(req),
+		sandboxType:            execserver.SandboxTypeFromProtocol(startResponse.SandboxType),
+		escalated:              shellRequestEscalated(req),
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -887,12 +948,30 @@ func (m *UnifiedExecManager) WriteStdin(ctx context.Context, args *WriteStdinArg
 	process.interactionMu.Lock()
 	defer process.interactionMu.Unlock()
 	if args.Chars != "" {
-		if process.escalated {
+		// Rust ProcessEntry::stdin_approval: every non-empty write is reviewed
+		// except a TTY-less interrupt, and the caller's permission comparison
+		// decides whether a review is actually required.
+		if process.tty || args.Chars != unifiedExecInterrupt {
 			m.mu.Lock()
 			approval := m.writeStdinApproval
 			m.mu.Unlock()
 			if approval != nil {
-				if err := approval(args.SessionID, process.threadID, process.turnID, args.Chars); err != nil {
+				request := &WriteStdinApprovalRequest{
+					ProcessID:             args.SessionID,
+					CallID:                strings.TrimSpace(args.CallID),
+					LaunchCallID:          strings.TrimSpace(process.callID),
+					ThreadID:              process.threadID,
+					TurnID:                process.turnID,
+					EnvironmentID:         process.environmentID,
+					Chars:                 args.Chars,
+					CWD:                   process.cwd,
+					TTY:                   process.tty,
+					SandboxPermissions:    process.launchSandboxPermissions,
+					AdditionalPermissions: process.additionalPermissions,
+					PermissionProfile:     process.permissionProfile,
+					Escalated:             process.escalated,
+				}
+				if err := approval(ctx, request); err != nil {
 					return nil, &UnifiedExecStdinApprovalError{Message: err.Error()}
 				}
 			}
