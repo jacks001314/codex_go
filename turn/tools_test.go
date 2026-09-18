@@ -1338,6 +1338,26 @@ func TestBuildToolRegistryRegistersPluginInstallSuggestionTools(t *testing.T) {
 	if !modelVisible[tool.RequestPluginInstallToolName] || modelVisible[tool.ListAvailablePluginsToInstallToolName] {
 		t.Fatalf("recommendation plugin tools = %#v, want only request_plugin_install", modelVisible)
 	}
+
+	// Rust #45806: the option marks a delegated subagent's turn, and the
+	// registered handler rejects the call with the root-only guidance.
+	options.NonRootAgent = true
+	subagentRegistry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(subagent) error = %v", err)
+	}
+	executor, ok := subagentRegistry.Lookup(tool.PlainName(tool.RequestPluginInstallToolName))
+	if !ok {
+		t.Fatal("request_plugin_install missing for subagent registry")
+	}
+	_, execErr := executor.Execute(context.Background(), &tool.Invocation{
+		CallID:  "subagent-install",
+		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"plugin_id":"docs@market","suggest_reason":"Use docs"}`},
+	})
+	var callErr *tool.FunctionCallError
+	if !tool.AsFunctionCallError(execErr, &callErr) || callErr.ModelMessage() != "request_plugin_install can only be used by the root thread" {
+		t.Fatalf("subagent install error = %v", execErr)
+	}
 }
 
 func TestBuildToolRegistryRegistersDynamicTools(t *testing.T) {

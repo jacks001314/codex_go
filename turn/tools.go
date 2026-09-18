@@ -85,9 +85,12 @@ type ToolRegistryOptions struct {
 	PluginInstallRecommendationContext bool
 	PluginInstallRuntime               tool.PluginInstallRuntime
 	PluginInstallAppServerClientName   string
-	WebSearch                          *WebSearchOptions
-	ImageGeneration                    *ImageGenerationOptions
-	ViewImage                          *tool.ViewImageOptions
+	// NonRootAgent marks a delegated subagent's turn, so root-only tools (plugin
+	// install requests) reject the call like Rust #45806.
+	NonRootAgent    bool
+	WebSearch       *WebSearchOptions
+	ImageGeneration *ImageGenerationOptions
+	ViewImage       *tool.ViewImageOptions
 
 	EnableCore                   bool
 	EnableShell                  bool
@@ -313,6 +316,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			RecommendationContext: options.PluginInstallRecommendationContext,
 			Runtime:               options.PluginInstallRuntime,
 			AppServerClientName:   options.PluginInstallAppServerClientName,
+			NonRootAgent:          options.NonRootAgent,
 		}); err != nil {
 			return nil, err
 		}

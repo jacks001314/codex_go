@@ -30,6 +30,10 @@ type PluginInstallSuggestionOptions struct {
 	RecommendationContext bool
 	Runtime               PluginInstallRuntime
 	AppServerClientName   string
+	// NonRootAgent mirrors Rust #45806: `request_plugin_install` is a root-thread
+	// tool, so a delegated subagent's call is rejected before its arguments are
+	// parsed and before any installation prompt is emitted.
+	NonRootAgent bool
 }
 
 type PluginInstallRuntime interface {
@@ -119,6 +123,7 @@ func RegisterPluginInstallSuggestionHandlers(registry *Registry, options *Plugin
 		RecommendationContext: options.RecommendationContext,
 		Runtime:               options.Runtime,
 		AppServerClientName:   options.AppServerClientName,
+		NonRootAgent:          options.NonRootAgent,
 	}))
 }
 
@@ -169,6 +174,7 @@ type RequestPluginInstallHandler struct {
 	recommendationContext bool
 	runtime               PluginInstallRuntime
 	appServerClientName   string
+	nonRootAgent          bool
 }
 
 type RequestPluginInstallHandlerOptions struct {
@@ -176,6 +182,8 @@ type RequestPluginInstallHandlerOptions struct {
 	RecommendationContext bool
 	Runtime               PluginInstallRuntime
 	AppServerClientName   string
+	// NonRootAgent rejects the call with Rust's root-only guidance (#45806).
+	NonRootAgent bool
 }
 
 func NewRequestPluginInstallHandler(options *RequestPluginInstallHandlerOptions) *RequestPluginInstallHandler {
@@ -189,6 +197,7 @@ func NewRequestPluginInstallHandler(options *RequestPluginInstallHandlerOptions)
 		recommendationContext: options.RecommendationContext,
 		runtime:               options.Runtime,
 		appServerClientName:   strings.TrimSpace(options.AppServerClientName),
+		nonRootAgent:          options.NonRootAgent,
 	}
 }
 
@@ -229,6 +238,11 @@ func (h *RequestPluginInstallHandler) Execute(ctx context.Context, invocation *I
 	}
 	if invocation.Payload.Kind != PayloadFunction {
 		return nil, Fatal(RequestPluginInstallToolName + " handler received unsupported payload")
+	}
+	// Rust #45806: the tool is root-only, and the rejection happens before the
+	// arguments are parsed so a subagent cannot trigger an installation prompt.
+	if h != nil && h.nonRootAgent {
+		return nil, RespondToModel("request_plugin_install can only be used by the root thread")
 	}
 	var args RequestPluginInstallArgs
 	if err := invocation.DecodeArguments(&args); err != nil {

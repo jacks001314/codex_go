@@ -69,6 +69,54 @@ func TestRequestPluginInstallHandlerRecommendationContext(t *testing.T) {
 	}
 }
 
+// TestRequestPluginInstallHandlerRejectsNonRootAgentLikeRust mirrors Rust
+// #45806: a subagent's install request is rejected with the root-only guidance
+// before the arguments are parsed, and no installation elicitation is emitted.
+func TestRequestPluginInstallHandlerRejectsNonRootAgentLikeRust(t *testing.T) {
+	candidates := []plugin.DiscoverableInfo{{
+		ID:              "docs@market",
+		RemotePluginID:  "plugins~Docs",
+		Name:            "Docs",
+		AppConnectorIDs: []string{"connector_docs"},
+	}}
+	for _, recommendation := range []bool{false, true} {
+		name := "legacy install request"
+		arguments := `{"tool_type":"plugin","action_type":"install","tool_id":"docs@market","suggest_reason":"Use docs"}`
+		if recommendation {
+			name = "recommended plugin request"
+			arguments = `{"plugin_id":"docs@market","suggest_reason":"Use docs"}`
+		}
+		t.Run(name, func(t *testing.T) {
+			runtime := &fakePluginInstallRuntime{result: &PluginInstallRuntimeResult{Sent: true, UserConfirmed: true, Completed: true}}
+			handler := NewRequestPluginInstallHandler(&RequestPluginInstallHandlerOptions{
+				Candidates:            candidates,
+				RecommendationContext: recommendation,
+				Runtime:               runtime,
+				NonRootAgent:          true,
+			})
+			_, err := handler.Execute(context.Background(), &Invocation{
+				CallID:  "install-subagent",
+				Payload: Payload{Kind: PayloadFunction, Arguments: arguments},
+			})
+			var callErr *FunctionCallError
+			if !AsFunctionCallError(err, &callErr) || callErr.ModelMessage() != "request_plugin_install can only be used by the root thread" {
+				t.Fatalf("error = %#v", err)
+			}
+			if runtime.request != nil {
+				t.Fatalf("subagent call emitted an installation request: %#v", runtime.request)
+			}
+			// Malformed arguments are not parsed either: the guard runs first.
+			_, err = handler.Execute(context.Background(), &Invocation{
+				CallID:  "install-subagent-bad-args",
+				Payload: Payload{Kind: PayloadFunction, Arguments: `{"not":"valid"}`},
+			})
+			if !AsFunctionCallError(err, &callErr) || callErr.ModelMessage() != "request_plugin_install can only be used by the root thread" {
+				t.Fatalf("malformed-argument error = %#v", err)
+			}
+		})
+	}
+}
+
 func TestRequestPluginInstallHandlerUsesRuntimeResult(t *testing.T) {
 	runtime := &fakePluginInstallRuntime{result: &PluginInstallRuntimeResult{Sent: true, UserConfirmed: true, Completed: true, ResponseAction: "accept"}}
 	handler := NewRequestPluginInstallHandler(&RequestPluginInstallHandlerOptions{

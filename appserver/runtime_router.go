@@ -13445,6 +13445,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if len(candidates) > 0 && cfg != nil && features.Enabled(cfg.FeatureSettings(), "tool_suggest") {
 		options.PluginInstallCandidates = candidates
 		options.PluginInstallRecommendationContext = true
+		// Rust #45806: install requests are root-only, so a delegated subagent's
+		// call is rejected before it can prompt the user.
+		options.NonRootAgent = r.turnThreadIsSubagent(threadID)
 		options.PluginInstallRuntime = &pluginInstallRuntime{
 			broker:   r.requireServerRequests(),
 			plugins:  r.services.Plugins,
