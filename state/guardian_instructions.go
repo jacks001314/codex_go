@@ -16,6 +16,9 @@ var bundledGuardianPolicy string
 //go:embed templates/guardian/policy_template.md
 var bundledGuardianPolicyTemplate string
 
+//go:embed templates/guardian/node_repl_policy.md
+var bundledGuardianNodeReplPolicy string
+
 // guardianPolicyPlaceholder is Rust's TENANT_POLICY_CONFIG_PLACEHOLDER.
 const guardianPolicyPlaceholder = "{{ tenant_policy_config }}"
 
@@ -28,6 +31,12 @@ func GuardianPolicy() string {
 // whose `{{ tenant_policy_config }}` placeholder receives the resolved policy.
 func GuardianPolicyTemplate() string {
 	return bundledGuardianPolicyTemplate
+}
+
+// GuardianNodeReplPolicy returns the bundled node-REPL review rules
+// (Rust prompts::ResolvedAutoReviewMessages::node_repl_policy).
+func GuardianNodeReplPolicy() string {
+	return bundledGuardianNodeReplPolicy
 }
 
 // GuardianOutputContractPrompt mirrors Rust

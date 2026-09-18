@@ -696,6 +696,43 @@ func valueOr(value string, fallback string) string {
 // "<feature>.<name>" classification mirroring the Rust `content_kind()`
 // helpers introduced in the 2026-08-23 sync25 batch (#40174/#40177/#40180).
 
+// GuardianNodeReplPolicy mirrors Rust core::context::GuardianNodeReplPolicy:
+// the node-REPL review rules are their own unmarked developer fragment, so the
+// guardian prompt never carries them inline with the action JSON
+// (`guardian.node_repl_policy`).
+type GuardianNodeReplPolicy struct {
+	Policy string
+}
+
+// NewGuardianNodeReplPolicy returns the fragment, or nil when the resolved
+// policy is empty (Rust skips injection for an empty body).
+func NewGuardianNodeReplPolicy(policy string) *GuardianNodeReplPolicy {
+	if strings.TrimSpace(policy) == "" {
+		return nil
+	}
+	return &GuardianNodeReplPolicy{Policy: policy}
+}
+
+func (p *GuardianNodeReplPolicy) Role() string {
+	return RoleDeveloper
+}
+
+// Markers are empty: the policy is unmarked in the reviewer prompt.
+func (p *GuardianNodeReplPolicy) Markers() (string, string) {
+	return "", ""
+}
+
+func (p *GuardianNodeReplPolicy) Body() string {
+	if p == nil {
+		return ""
+	}
+	return p.Policy
+}
+
+func (p *GuardianNodeReplPolicy) ContentKind() string {
+	return "guardian.node_repl_policy"
+}
+
 func (p *AvailablePluginsInstructions) ContentKind() string {
 	return "plugins.usage_instructions"
 }

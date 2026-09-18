@@ -568,6 +568,91 @@ func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 	}
 }
 
+// TestGuardianReviewInjectsNodeReplPolicyLikeRust mirrors Rust
+// ensure_guardian_node_repl_policy: a `js` call on a node-repl-backed server
+// gets the resolved node-REPL policy as its own unmarked developer fragment when
+// the parent model requires computer-use review, and no fragment otherwise.
+func TestGuardianReviewInjectsNodeReplPolicyLikeRust(t *testing.T) {
+	const policy = "Node REPL and computer-use rules."
+	tests := []struct {
+		name                string
+		action              state.Action
+		autoReviewRequired  bool
+		wantPolicyInRequest bool
+	}{
+		{
+			name:                "node_repl js with computer-use review",
+			action:              state.Action{Type: "mcp_tool_call", Server: "node_repl", ToolName: "js"},
+			autoReviewRequired:  true,
+			wantPolicyInRequest: true,
+		},
+		{
+			name:                "cua_repl js with computer-use review",
+			action:              state.Action{Type: "mcp_tool_call", Server: "cua_repl", ToolName: "js"},
+			autoReviewRequired:  true,
+			wantPolicyInRequest: true,
+		},
+		{
+			name:               "node_repl js without computer-use review",
+			action:             state.Action{Type: "mcp_tool_call", Server: "node_repl", ToolName: "js"},
+			autoReviewRequired: false,
+		},
+		{
+			name:               "node_repl non-js tool",
+			action:             state.Action{Type: "mcp_tool_call", Server: "node_repl", ToolName: "inspect"},
+			autoReviewRequired: true,
+		},
+		{
+			name:               "other server",
+			action:             state.Action{Type: "mcp_tool_call", Server: "apps", ToolName: "js"},
+			autoReviewRequired: true,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var captured *model.AgentRequest
+			reviewer := &modelGuardianReviewer{
+				store:   state.NewReviewStore(),
+				breaker: state.NewCircuitBreaker(),
+				reviewPlan: func(string, string) guardianReviewPlan {
+					return guardianReviewPlan{NodeReplPolicy: policy}
+				},
+				nodeReplAutoReviewRequired: func(string, string) bool { return testCase.autoReviewRequired },
+				permissionProfile: func(string, string) *sandbox.PermissionProfile {
+					return &sandbox.PermissionProfile{SandboxPolicy: sandbox.NewReadOnlyPolicy()}
+				},
+				agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+					copyRequest := *request
+					captured = &copyRequest
+					return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"policy"}`}, nil
+				}),
+			}
+			if _, _, err := reviewer.Review(context.Background(), "thread-policy", "turn-policy", "call-policy", testCase.action); err != nil {
+				t.Fatalf("Review() error = %v", err)
+			}
+			if captured == nil {
+				t.Fatal("no agent request captured")
+			}
+			injected := false
+			for _, item := range captured.InputItems {
+				message, ok := item.(map[string]any)
+				if !ok || message["role"] != "developer" {
+					continue
+				}
+				content, _ := message["content"].([]map[string]any)
+				for _, part := range content {
+					if part["text"] == policy {
+						injected = true
+					}
+				}
+			}
+			if injected != testCase.wantPolicyInRequest {
+				t.Fatalf("node-REPL policy injected = %v, want %v (input items %#v)", injected, testCase.wantPolicyInRequest, captured.InputItems)
+			}
+		})
+	}
+}
+
 func TestModelGuardianReviewerMapsTimeout(t *testing.T) {
 	reviewer := &modelGuardianReviewer{
 		timeout: time.Millisecond,

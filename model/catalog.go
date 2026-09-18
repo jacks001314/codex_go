@@ -194,8 +194,11 @@ type ModelTokenBudgetConfig struct {
 // auto-review policy and outcome instructions. Pointer fields preserve explicit
 // empty-string overrides.
 type AutoReviewMessages struct {
-	Policy                *string `json:"policy,omitempty"`
-	PolicyTemplate        *string `json:"policy_template,omitempty"`
+	Policy         *string `json:"policy,omitempty"`
+	PolicyTemplate *string `json:"policy_template,omitempty"`
+	// NodeReplPolicy is the extra developer policy for `node_repl` and
+	// `cua_repl` reviews (Rust AutoReviewMessages::node_repl_policy).
+	NodeReplPolicy        *string `json:"node_repl_policy,omitempty"`
 	RejectionInstructions *string `json:"rejection_instructions,omitempty"`
 	TimeoutInstructions   *string `json:"timeout_instructions,omitempty"`
 }
@@ -1544,6 +1547,7 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 			autoReview := *messages.AutoReview
 			autoReview.Policy = cloneStringPointer(autoReview.Policy)
 			autoReview.PolicyTemplate = cloneStringPointer(autoReview.PolicyTemplate)
+			autoReview.NodeReplPolicy = cloneStringPointer(autoReview.NodeReplPolicy)
 			autoReview.RejectionInstructions = cloneStringPointer(autoReview.RejectionInstructions)
 			autoReview.TimeoutInstructions = cloneStringPointer(autoReview.TimeoutInstructions)
 			messages.AutoReview = &autoReview

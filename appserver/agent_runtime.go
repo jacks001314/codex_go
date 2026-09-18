@@ -302,6 +302,11 @@ type guardianReviewPlan struct {
 	Selection    model.ApprovalReviewModel
 	AutoReview   *model.AutoReviewMessages
 	Instructions string
+	// NodeReplPolicy is the resolved extra policy for `node_repl`/`cua_repl`
+	// reviews (Rust ResolvedAutoReviewMessages::node_repl_policy). The reviewer
+	// injects it as its own developer fragment only when the reviewed action
+	// qualifies.
+	NodeReplPolicy string
 }
 
 // guardianReviewPlanForTurn mirrors Rust resolve_review_model: every review
@@ -344,10 +349,21 @@ func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guard
 		autoReview = &cloned
 	}
 	return guardianReviewPlan{
-		Selection:    selection,
-		AutoReview:   autoReview,
-		Instructions: guardianReviewInstructions(cfg, autoReview),
+		Selection:      selection,
+		AutoReview:     autoReview,
+		Instructions:   guardianReviewInstructions(cfg, autoReview),
+		NodeReplPolicy: guardianNodeReplPolicy(autoReview),
 	}
+}
+
+// guardianNodeReplPolicy mirrors Rust
+// ResolvedAutoReviewMessages::node_repl_policy: the catalog's text wins over the
+// bundled document.
+func guardianNodeReplPolicy(autoReview *model.AutoReviewMessages) string {
+	if autoReview != nil && autoReview.NodeReplPolicy != nil {
+		return *autoReview.NodeReplPolicy
+	}
+	return state.GuardianNodeReplPolicy()
 }
 
 // guardianReviewInstructions mirrors the reviewer base instructions Rust builds

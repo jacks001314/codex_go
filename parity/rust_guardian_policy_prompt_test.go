@@ -35,6 +35,11 @@ func TestRustGuardianPolicyPromptMatchesGo(t *testing.T) {
 			goPath: filepath.Join("..", "state", "templates", "guardian", "policy_template.md"),
 			marker: "{{ tenant_policy_config }}",
 		},
+		{
+			rust:   "HEAD:codex-rs/prompts/templates/guardian/node_repl_policy.md",
+			goPath: filepath.Join("..", "state", "templates", "guardian", "node_repl_policy.md"),
+			marker: "# Computer and Browser Use",
+		},
 	} {
 		want := string(gitOutput(t, rustRepo, "show", asset.rust))
 		if !strings.Contains(want, asset.marker) {

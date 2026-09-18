@@ -404,6 +404,7 @@ func TestModelMessagesAutoReviewParsingPreservesEmptyOverridesLikeRust(t *testin
 		"auto_review": {
 			"policy": "policy",
 			"policy_template": "",
+			"node_repl_policy": "node repl rules",
 			"rejection_instructions": "reject instructions",
 			"timeout_instructions": "timeout instructions"
 		}
@@ -419,6 +420,9 @@ func TestModelMessagesAutoReviewParsingPreservesEmptyOverridesLikeRust(t *testin
 	}
 	if autoReview.PolicyTemplate == nil || *autoReview.PolicyTemplate != "" {
 		t.Fatalf("empty policy_template override lost: %#v", autoReview.PolicyTemplate)
+	}
+	if autoReview.NodeReplPolicy == nil || *autoReview.NodeReplPolicy != "node repl rules" {
+		t.Fatalf("node_repl_policy = %#v", autoReview.NodeReplPolicy)
 	}
 	if autoReview.RejectionInstructions == nil || *autoReview.RejectionInstructions != "reject instructions" {
 		t.Fatalf("rejection_instructions = %#v", autoReview.RejectionInstructions)

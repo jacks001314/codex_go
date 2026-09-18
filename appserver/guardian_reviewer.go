@@ -15,6 +15,7 @@ import (
 	"codex_go/config"
 	codexctx "codex_go/context"
 	"codex_go/features"
+	"codex_go/mcp"
 	"codex_go/model"
 	"codex_go/sandbox"
 	"codex_go/session"
@@ -414,17 +415,15 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		promptNodeReplEvidence = nil
 	}
 	prompt, err := state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
-		NodeReplAutoReviewRequired: nodeReplAutoReviewRequired,
-		NodeReplEvidence:           promptNodeReplEvidence,
+		NodeReplEvidence: promptNodeReplEvidence,
 	})
 	if err == nil && r.rootUserAuthorization != nil {
 		var root []string
 		root = r.rootUserAuthorization(threadID, turnID)
 		if len(root) > 0 {
 			prompt, err = state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
-				NodeReplAutoReviewRequired: nodeReplAutoReviewRequired,
-				NodeReplEvidence:           promptNodeReplEvidence,
-				RootUserAuthorization:      root,
+				NodeReplEvidence:      promptNodeReplEvidence,
+				RootUserAuthorization: root,
 			})
 		}
 	}
@@ -478,6 +477,17 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 	}
 	plan := r.planForTurn(threadID, turnID)
+	// Rust ensure_guardian_node_repl_policy: the node-REPL rules are their own
+	// unmarked developer fragment, injected only when the reviewed action is a
+	// `js` call on a node-repl-backed server and the parent model requires
+	// computer-use review.
+	if nodeReplAutoReviewRequired && isNodeReplJSApprovalAction(action) {
+		if fragment := codexctx.NewGuardianNodeReplPolicy(plan.NodeReplPolicy); fragment != nil {
+			if item := renderedFragmentInputItem(codexctx.Render(fragment)); item != nil {
+				inputItems = append(inputItems, item)
+			}
+		}
+	}
 	reviewRequest := &model.AgentRequest{
 		Prompt:          prompt,
 		Instructions:    plan.Instructions,
@@ -637,6 +647,14 @@ func guardianTimeoutMessage(messages *model.AutoReviewMessages) string {
 		return *messages.TimeoutInstructions
 	}
 	return state.GuardianTimeoutMessage()
+}
+
+// isNodeReplJSApprovalAction mirrors Rust's node-REPL policy eligibility: a `js`
+// tool call on a node-repl-backed server (node_repl or cua_repl).
+func isNodeReplJSApprovalAction(action state.Action) bool {
+	return action.Type == "mcp_tool_call" &&
+		mcp.IsNodeReplBackedServer(strings.TrimSpace(action.Server)) &&
+		strings.TrimSpace(action.ToolName) == "js"
 }
 
 // planForTurn resolves the reviewer plan the review request uses. A reviewer

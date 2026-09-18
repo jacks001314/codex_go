@@ -210,7 +210,7 @@ func TestParseAssessmentAndPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	if !strings.Contains(prompt, "Action:") || !strings.Contains(prompt, "user: list files") {
+	if !strings.Contains(prompt, "Planned action JSON:") || !strings.Contains(prompt, "user: list files") {
 		t.Fatalf("prompt = %s", prompt)
 	}
 }
@@ -234,12 +234,22 @@ func TestBuildPromptSerializesNetworkActionLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const prefix = "Review the planned action and decide whether to allow it.\n\nAction:\n"
+	// Rust's network framing: the request markers and the network-specific
+	// scope, then the JSON under its own label (guardian-context action.rs).
+	const prefix = ">>> APPROVAL REQUEST START\n" +
+		"Below is a proposed network access request under review.\n" +
+		"The network access was triggered by the action in the `trigger` entry. When assessing this request, focus primarily on whether the triggering command is authorised by the user and whether it is within the rules. The user does not need to have explicitly authorised this exact network connection, as long as the network access is a reasonable consequence of the triggering command.\n\n" +
+		"Assess the exact network access below. Use read-only tool checks when local state matters.\n" +
+		"Network access JSON:\n"
 	if !strings.HasPrefix(prompt, prefix) {
 		t.Fatalf("prompt = %q", prompt)
 	}
+	const suffix = "\n>>> APPROVAL REQUEST END\n"
+	if !strings.HasSuffix(prompt, suffix) {
+		t.Fatalf("prompt = %q", prompt)
+	}
 	var action map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(prompt, prefix)), &action); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSuffix(strings.TrimPrefix(prompt, prefix), suffix)), &action); err != nil {
 		t.Fatalf("decode action: %v", err)
 	}
 	if len(action) != 6 || action["tool"] != "network_access" || action["host"] != "example.test" || action["protocol"] != "http" || action["target"] != "http://example.test:80" || action["port"] != float64(80) {
@@ -261,32 +271,69 @@ func TestBuildPromptSerializesNetworkActionLikeRust(t *testing.T) {
 	}
 }
 
-func TestBuildPromptNodeReplGuidanceGatedOnModelMetadata(t *testing.T) {
-	action := Action{Type: "mcp_tool_call", Server: "node_repl", ToolName: "js", Reason: "retry after scope change"}
-	specialized, err := BuildPromptWithOptions(action, nil, BuildPromptOptions{NodeReplAutoReviewRequired: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(specialized, "Node REPL action JSON:") ||
-		!strings.Contains(specialized, "Retry reason:\nretry after scope change") ||
-		!strings.Contains(specialized, "Below is JavaScript proposed for Node REPL.") {
-		t.Fatalf("specialized prompt = %s", specialized)
+// TestBuildPromptFramingMatchesRust mirrors Rust core/src/guardian/tests.rs:
+// every reviewed action uses the planned-action framing, and the node-REPL
+// rules are never inlined into it (they are a separate developer fragment).
+func TestBuildPromptFramingMatchesRust(t *testing.T) {
+	const commandFraming = "The Codex agent has requested the following action:\n" +
+		">>> APPROVAL REQUEST START\n" +
+		"Assess the exact planned action below. Use read-only tool checks when local state matters.\n" +
+		"Planned action JSON:\n"
+	for _, action := range []Action{
+		{Type: "mcp_tool_call", Server: "node_repl", ToolName: "js"},
+		{Type: "mcp_tool_call", Server: "node_repl", ToolName: "inspect"},
+		{Type: "mcp_tool_call", Server: "another_server", ToolName: "js"},
+		{Type: "command", Command: "ls", CWD: "/repo"},
+	} {
+		prompt, err := BuildPromptWithOptions(action, nil, BuildPromptOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(prompt, commandFraming) {
+			t.Fatalf("prompt = %q", prompt)
+		}
+		if !strings.HasSuffix(prompt, "\n>>> APPROVAL REQUEST END\n") {
+			t.Fatalf("prompt = %q", prompt)
+		}
+		if strings.Contains(prompt, "Node REPL action JSON:") || strings.Contains(prompt, "Distinguish preparation") {
+			t.Fatalf("prompt inlined node-REPL guidance: %q", prompt)
+		}
 	}
 
-	generic, err := BuildPromptWithOptions(action, nil, BuildPromptOptions{})
+	// A retry reason lands between the markers and the scope line, like Rust.
+	reasoned, err := BuildPromptWithOptions(Action{Type: "command", Command: "ls", CWD: "/repo", Reason: "retry after scope change"}, nil, BuildPromptOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(generic, "Node REPL action JSON:") {
-		t.Fatalf("generic prompt should not use Node REPL guidance: %s", generic)
+	if !strings.Contains(reasoned, ">>> APPROVAL REQUEST START\nRetry reason:\nretry after scope change\n\nAssess the exact planned action below.") {
+		t.Fatalf("reasoned prompt = %q", reasoned)
 	}
+}
 
-	genericOther, err := BuildPromptWithOptions(Action{Type: "mcp_tool_call", Server: "apps", ToolName: "write"}, nil, BuildPromptOptions{NodeReplAutoReviewRequired: true})
-	if err != nil {
-		t.Fatal(err)
+// TestRenderPlannedActionFramingsMatchRust pins the remaining Rust
+// PlannedAction::render branches: the delta presentation, the terminal-input
+// scope, and the network scope without a trigger.
+func TestRenderPlannedActionFramingsMatchRust(t *testing.T) {
+	json := "{\n  \"tool\": \"apply_patch\"\n}"
+	command := renderPlannedAction(json, plannedActionCommand, false, "", ActionPresentationSyncFull)
+	if got := strings.Join(command, ""); got != "The Codex agent has requested the following action:\n>>> APPROVAL REQUEST START\nAssess the exact planned action below. Use read-only tool checks when local state matters.\nPlanned action JSON:\n"+json+"\n>>> APPROVAL REQUEST END\n" {
+		t.Fatalf("sync full command framing = %q", got)
 	}
-	if strings.Contains(genericOther, "Node REPL action JSON:") {
-		t.Fatalf("non-node-repl prompt should stay generic: %s", genericOther)
+	delta := renderPlannedAction(json, plannedActionCommand, false, "", ActionPresentationSyncDelta)
+	if got := strings.Join(delta, ""); got != "The Codex agent has requested the following next action:\n>>> APPROVAL REQUEST START\nAssess the exact planned action below. Use read-only tool checks when local state matters.\nPlanned action JSON:\n"+json+"\n>>> APPROVAL REQUEST END\n" {
+		t.Fatalf("sync delta command framing = %q", got)
+	}
+	async := renderPlannedAction(json, plannedActionCommand, false, "retry", ActionPresentationAsync)
+	if got := strings.Join(async, ""); got != "The Codex agent has requested the following action:\n>>> APPROVAL REQUEST START\nPlanned action JSON:\n"+json+"\n>>> APPROVAL REQUEST END\n" {
+		t.Fatalf("async framing = %q", got)
+	}
+	terminal := renderPlannedAction(json, plannedActionTerminalInput, false, "", ActionPresentationSyncFull)
+	if got := strings.Join(terminal, ""); got != "The Codex agent has requested the following action:\n>>> APPROVAL REQUEST START\nAssess input to the existing terminal, not a fresh command. The `cwd` field is its launch directory; the terminal's current directory and state may have changed. Use the retained transcript and read-only checks when that state matters.\nPlanned action JSON:\n"+json+"\n>>> APPROVAL REQUEST END\n" {
+		t.Fatalf("terminal framing = %q", got)
+	}
+	network := renderPlannedAction(json, plannedActionNetwork, false, "", ActionPresentationSyncFull)
+	if got := strings.Join(network, ""); got != ">>> APPROVAL REQUEST START\nBelow is a proposed network access request under review.\nNo trigger action was captured for this network access request. When performing the assessment, use the retained transcript and network access JSON to evaluate user authorization and risk.\n\nAssess the exact network access below. Use read-only tool checks when local state matters.\nNetwork access JSON:\n"+json+"\n>>> APPROVAL REQUEST END\n" {
+		t.Fatalf("network framing without trigger = %q", got)
 	}
 }
 
