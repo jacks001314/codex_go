@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -118,10 +119,61 @@ func initializeAcceptedClientConnection(
 ) (clientConnection, *InitializeResponse, error) {
 	conn.SetReadLimit(16 * 1024 * 1024)
 	wire := newWebSocketClientConnection(conn)
-	initialized, err := initializeClientConnection(ctx, wire, clientName, resumeSessionID, handleNotification)
+	initialized, err := attachAcceptedReplacement(ctx, wire, clientName, resumeSessionID, handleNotification)
 	if err != nil {
 		_ = wire.CloseNow()
 		return nil, nil, err
 	}
 	return wire, initialized, nil
+}
+
+// attachAcceptedReplacement runs the replacement initialize/resume handshake.
+func attachAcceptedReplacement(
+	ctx context.Context,
+	wire clientConnection,
+	clientName string,
+	resumeSessionID string,
+	handleNotification func(string, json.RawMessage) error,
+) (*InitializeResponse, error) {
+	// A replacement resumes a session whose previous transport was just closed.
+	// The server only detaches that transport once it observes the close, so the
+	// first attach can be rejected as still attached. Rust's recovery treats that
+	// code as retryable; Go retries the handshake on the same host-supplied
+	// socket, which no server state is attached to yet.
+	resumesSession := strings.TrimSpace(resumeSessionID) != ""
+	deadline := time.Now().Add(acceptedReplacementAttachTimeout)
+	for {
+		initialized, err := initializeClientConnectionAttempt(ctx, wire, clientName, resumeSessionID, handleNotification, resumesSession)
+		if err == nil {
+			return initialized, nil
+		}
+		if !resumesSession || !isSessionAlreadyAttachedError(err) || time.Now().After(deadline) || !sleepWithContext(ctx, acceptedReplacementAttachRetryDelay) {
+			return nil, err
+		}
+	}
+}
+
+// acceptedReplacementAttachRetryDelay / acceptedReplacementAttachTimeout bound
+// the retry window for a replacement attach that races the old transport's
+// server-side detach.
+const (
+	acceptedReplacementAttachRetryDelay = 10 * time.Millisecond
+	acceptedReplacementAttachTimeout    = 2 * time.Second
+)
+
+// sleepWithContext waits for the retry delay and reports whether the context is
+// still live.
+func sleepWithContext(ctx context.Context, delay time.Duration) bool {
+	if ctx == nil {
+		time.Sleep(delay)
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

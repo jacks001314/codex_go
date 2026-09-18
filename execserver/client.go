@@ -319,12 +319,54 @@ func dialInitializedClientConnection(
 	return wire, initialized, nil
 }
 
+// sessionAlreadyAttachedErrorCode mirrors Rust rpc::SESSION_ALREADY_ATTACHED_ERROR_CODE:
+// the server refuses to resume a session another connection still holds.
+// Retiring a transport is asynchronous on the server, so a resume that follows
+// a close can still observe this code; Rust's recovery classifies it as
+// retryable (client_recovery::is_retryable_recovery_error).
+const sessionAlreadyAttachedErrorCode = -32010
+
+// rpcServerError is a JSON-RPC error response from the exec server. Its message
+// keeps the previous formatting, and the code lets callers apply Rust's
+// retryable-error classification.
+type rpcServerError struct {
+	Method  string
+	Code    int
+	Message string
+}
+
+func (e *rpcServerError) Error() string {
+	return fmt.Sprintf("exec-server %s failed (%d): %s", e.Method, e.Code, e.Message)
+}
+
+// isSessionAlreadyAttachedError reports the server's "session ... is already
+// attached to another connection" rejection.
+func isSessionAlreadyAttachedError(err error) bool {
+	var serverError *rpcServerError
+	return errors.As(err, &serverError) && serverError.Code == sessionAlreadyAttachedErrorCode
+}
+
 func initializeClientConnection(
 	ctx context.Context,
 	conn clientConnection,
 	clientName string,
 	resumeSessionID string,
 	handleNotification func(string, json.RawMessage) error,
+) (*InitializeResponse, error) {
+	return initializeClientConnectionAttempt(ctx, conn, clientName, resumeSessionID, handleNotification, false)
+}
+
+// initializeClientConnectionAttempt runs the initialize/resume handshake. When
+// keepOpenOnAlreadyAttached is set, a resume the server rejects because the
+// session is still attached leaves the connection open, so the caller can retry
+// the handshake on the same host-supplied socket instead of losing it.
+func initializeClientConnectionAttempt(
+	ctx context.Context,
+	conn clientConnection,
+	clientName string,
+	resumeSessionID string,
+	handleNotification func(string, json.RawMessage) error,
+	keepOpenOnAlreadyAttached bool,
 ) (*InitializeResponse, error) {
 	closeOnError := true
 	defer func() {
@@ -379,7 +421,15 @@ func initializeClientConnection(
 			return nil, err
 		}
 		if response.Error != nil {
-			return nil, fmt.Errorf("exec-server %s failed (%d): %s", MethodInitialize, response.Error.Code, response.Error.Message)
+			serverError := &rpcServerError{
+				Method:  MethodInitialize,
+				Code:    response.Error.Code,
+				Message: response.Error.Message,
+			}
+			if keepOpenOnAlreadyAttached && serverError.Code == sessionAlreadyAttachedErrorCode {
+				closeOnError = false
+			}
+			return nil, serverError
 		}
 		if err := json.Unmarshal(response.Result, &initialized); err != nil {
 			return nil, err

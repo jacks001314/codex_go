@@ -459,7 +459,8 @@ type ModelInfo struct {
 	ExperimentalSupportedTools []string `json:"experimental_supported_tools"`
 	// Guardian carries the model-owned Guardian coverage policy, mirroring
 	// Rust openai_models::ModelInfo.guardian. A nil policy preserves legacy
-	// behavior; omitted scopes are disabled.
+	// behavior; omitted scopes are disabled. The keys are computer_use, shell,
+	// file_changes, mcp, network, and permissions.
 	Guardian *GuardianModelPolicy `json:"guardian,omitempty"`
 }
 
@@ -476,10 +477,11 @@ const (
 
 // GuardianModelPolicy carries the model-owned Guardian coverage policy by
 // scope. Omitted scopes are disabled; unknown modes retain synchronous review.
+// Code Mode wrappers have no approval scope; their nested tools follow this
+// policy (Rust #45915).
 type GuardianModelPolicy struct {
 	ComputerUse *GuardianReviewMode `json:"computer_use,omitempty"`
 	Shell       *GuardianReviewMode `json:"shell,omitempty"`
-	CodeMode    *GuardianReviewMode `json:"code_mode,omitempty"`
 	FileChanges *GuardianReviewMode `json:"file_changes,omitempty"`
 	MCP         *GuardianReviewMode `json:"mcp,omitempty"`
 	Network     *GuardianReviewMode `json:"network,omitempty"`
@@ -493,7 +495,6 @@ type GuardianScope string
 const (
 	GuardianScopeComputerUse GuardianScope = "computer_use"
 	GuardianScopeShell       GuardianScope = "shell"
-	GuardianScopeCodeMode    GuardianScope = "code_mode"
 	GuardianScopeFileChanges GuardianScope = "file_changes"
 	GuardianScopeMCP         GuardianScope = "mcp"
 	GuardianScopeNetwork     GuardianScope = "network"
@@ -512,8 +513,6 @@ func (p *GuardianModelPolicy) ReviewMode(scope GuardianScope) GuardianReviewMode
 		mode = p.ComputerUse
 	case GuardianScopeShell:
 		mode = p.Shell
-	case GuardianScopeCodeMode:
-		mode = p.CodeMode
 	case GuardianScopeFileChanges:
 		mode = p.FileChanges
 	case GuardianScopeMCP:

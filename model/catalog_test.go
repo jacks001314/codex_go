@@ -1446,8 +1446,8 @@ func TestModelInfoGuardianReviewPolicy(t *testing.T) {
 	if got := policy.ReviewMode(GuardianScopeShell); got != synchronous {
 		t.Fatalf("shell review mode = %q, want %q", got, synchronous)
 	}
-	if got := policy.ReviewMode(GuardianScopeCodeMode); got != disabled {
-		t.Fatalf("omitted code_mode review mode = %q, want %q", got, disabled)
+	if got := policy.ReviewMode(GuardianScopeFileChanges); got != disabled {
+		t.Fatalf("omitted file_changes review mode = %q, want %q", got, disabled)
 	}
 	if got := (*GuardianModelPolicy)(nil).ReviewMode(GuardianScopeShell); got != disabled {
 		t.Fatalf("nil policy review mode = %q, want %q", got, disabled)
@@ -1477,16 +1477,21 @@ func TestModelInfoGuardianReviewPolicy(t *testing.T) {
 	if got := legacyOff.GuardianReviewMode(GuardianScopeComputerUse); got != nil {
 		t.Fatalf("GuardianReviewMode without policy = %v, want nil", got)
 	}
-	if got := withPolicy.GuardianReviewMode(GuardianScopeCodeMode); got == nil || *got != disabled {
-		t.Fatalf("GuardianReviewMode omitted code_mode = %v, want disabled", got)
+	if got := withPolicy.GuardianReviewMode(GuardianScopePermissions); got == nil || *got != disabled {
+		t.Fatalf("GuardianReviewMode omitted permissions = %v, want disabled", got)
 	}
 
 	var parsed ModelInfo
-	if err := json.Unmarshal([]byte(`{"guardian":{"computer_use":"adaptive","shell":"disabled","code_mode":"future_mode"}}`), &parsed); err != nil {
+	// Rust #45915 removed the code_mode scope, so an old `code_mode` key is
+	// ignored like any other unknown scope while the remaining scopes parse.
+	if err := json.Unmarshal([]byte(`{"guardian":{"computer_use":"adaptive","shell":"disabled","code_mode":"future_mode","permissions":"adaptive"}}`), &parsed); err != nil {
 		t.Fatalf("unmarshal guardian policy: %v", err)
 	}
 	if parsed.Guardian == nil || parsed.Guardian.ComputerUse == nil || *parsed.Guardian.ComputerUse != adaptive {
 		t.Fatalf("parsed guardian computer_use = %#v, want adaptive", parsed.Guardian)
+	}
+	if parsed.Guardian.Permissions == nil || *parsed.Guardian.Permissions != adaptive {
+		t.Fatalf("parsed guardian permissions = %#v, want adaptive", parsed.Guardian)
 	}
 }
 
