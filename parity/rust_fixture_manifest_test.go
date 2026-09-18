@@ -109,7 +109,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// pending-input-persistence, guardian sender/cached-score/
 			// checkpoint-migration and canonical-plugin-connector fixtures.
 			// #46490 then added core/tests/suite/gateway_auth.rs.
-			Files: 209,
+			// #46509/#46508 then added the guardian-persistence and
+			// models-cache-auth suites.
+			Files: 211,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -124,7 +126,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// Upstream grew the chatwidget suite with the async question reply
 			// coverage (#46486) and the MCP-startup review plus exploration
 			// grouping coverage (#46493/#46487/#46492).
-			Files: 91,
+			// #46503/#46504 then added the theme-picker and model-display-name
+			// coverage.
+			Files: 92,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
