@@ -43,7 +43,8 @@ func TestRemoteNetworkProxyConfigRoundTripsSupportedRustFields(t *testing.T) {
 	settings.EnableSocks5 = false
 	settings.EnableSocks5UDP = false
 	settings.AllowUpstreamProxy = false
-	settings.DangerouslyAllowAllUnixSockets = true
+	allowAllUnixSockets := true
+	settings.DangerouslyAllowAllUnixSockets = &allowAllUnixSockets
 	settings.Mode = network.ProxyModeLimited
 	settings.AllowLocalBinding = true
 	settings.Domains = &network.ProxyDomainPermissions{Entries: []network.ProxyDomainPermissionEntry{
@@ -63,7 +64,7 @@ func TestRemoteNetworkProxyConfigRoundTripsSupportedRustFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := roundTrip.Network
-	if !got.Enabled || got.EnableSocks5 || got.EnableSocks5UDP || got.AllowUpstreamProxy || !got.DangerouslyAllowAllUnixSockets || got.Mode != network.ProxyModeLimited || !got.AllowLocalBinding {
+	if !got.Enabled || got.EnableSocks5 || got.EnableSocks5UDP || got.AllowUpstreamProxy || got.DangerouslyAllowAllUnixSockets == nil || !*got.DangerouslyAllowAllUnixSockets || got.Mode != network.ProxyModeLimited || !got.AllowLocalBinding {
 		t.Fatalf("round-trip settings = %#v", got)
 	}
 	if got.Domains == nil || len(got.Domains.Entries) != 2 || got.UnixSockets == nil || len(got.UnixSockets.Entries) != 2 {

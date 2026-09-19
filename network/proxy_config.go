@@ -92,14 +92,17 @@ type ProxyConfig struct {
 }
 
 type ProxySettings struct {
-	Enabled                                      bool
-	ProxyURL                                     string
-	EnableSocks5                                 bool
-	SocksURL                                     string
-	EnableSocks5UDP                              bool
-	AllowUpstreamProxy                           bool
-	DangerouslyAllowNonLoopbackProxy             bool
-	DangerouslyAllowAllUnixSockets               bool
+	Enabled                          bool
+	ProxyURL                         string
+	EnableSocks5                     bool
+	SocksURL                         string
+	EnableSocks5UDP                  bool
+	AllowUpstreamProxy               bool
+	DangerouslyAllowNonLoopbackProxy bool
+	// DangerouslyAllowAllUnixSockets mirrors Rust's Option<bool> (#46004):
+	// nil means omitted, which defers socket permissions to an attachment
+	// policy, while a non-nil false is an explicit denial.
+	DangerouslyAllowAllUnixSockets               *bool
 	Mode                                         ProxyMode
 	Domains                                      *ProxyDomainPermissions
 	UnixSockets                                  *ProxyUnixSocketPermissions
@@ -193,10 +196,8 @@ func (s *ProxySettings) SetAllowUnixSockets(paths []string) {
 	for _, path := range paths {
 		entries[path] = ProxyUnixSocketAllow
 	}
-	if len(entries) == 0 {
-		s.UnixSockets = nil
-		return
-	}
+	// Rust #46004: an explicitly empty list is retained as an empty permission
+	// map, which is a restrictive ceiling rather than an omitted policy.
 	s.UnixSockets = &ProxyUnixSocketPermissions{Entries: entries}
 }
 
@@ -308,12 +309,19 @@ func ClampProxyBindAddrs(httpAddr net.TCPAddr, socksAddr net.TCPAddr, settings P
 	if runtime.GOOS == "windows" {
 		return httpAddr, socksAddr
 	}
-	if len(settings.AllowUnixSockets()) == 0 && !settings.DangerouslyAllowAllUnixSockets {
+	// Rust #46004: an omitted flag resolves to false for ordinary execution.
+	if len(settings.AllowUnixSockets()) == 0 && !boolPointerValue(settings.DangerouslyAllowAllUnixSockets) {
 		return httpAddr, socksAddr
 	}
 	httpAddr.IP = net.ParseIP("127.0.0.1")
 	socksAddr.IP = net.ParseIP("127.0.0.1")
 	return httpAddr, socksAddr
+}
+
+// boolPointerValue resolves an optional flag the way Rust's
+// `Option<bool>::unwrap_or(false)` does for ordinary execution (#46004).
+func boolPointerValue(value *bool) bool {
+	return value != nil && *value
 }
 
 type ProxySocketAddressParts struct {

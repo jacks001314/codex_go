@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"sort"
@@ -31,12 +32,15 @@ type Config struct {
 	EnableSocks5                     bool
 	AllowUpstreamProxy               bool
 	DangerouslyAllowNonLoopbackProxy bool
-	DangerouslyAllowAllUnixSockets   bool
-	AllowLocalBinding                bool
-	Domains                          map[string]DomainPermission
-	UnixSockets                      map[string]UnixSocketPermission
-	MITM                             bool
-	MITMHooks                        []MITMHook
+	// DangerouslyAllowAllUnixSockets mirrors Rust's Option<bool> (#46004): nil
+	// means the policy did not set it, which leaves socket permissions to an
+	// attachment policy when no socket map is supplied either.
+	DangerouslyAllowAllUnixSockets *bool
+	AllowLocalBinding              bool
+	Domains                        map[string]DomainPermission
+	UnixSockets                    map[string]UnixSocketPermission
+	MITM                           bool
+	MITMHooks                      []MITMHook
 }
 
 type UnixSocketPermission string
@@ -154,7 +158,7 @@ func EnvironmentNetworkPolicyFromConfig(config *Config, managedAllowedDomainsOnl
 		Domains:                        copyDomainMapArray(config.Domains),
 		UnixSockets:                    copyUnixSocketMap(config.UnixSockets),
 		AllowUpstreamProxy:             config.AllowUpstreamProxy,
-		DangerouslyAllowAllUnixSockets: config.DangerouslyAllowAllUnixSockets,
+		DangerouslyAllowAllUnixSockets: boolPointerValue(config.DangerouslyAllowAllUnixSockets),
 		AllowLocalBinding:              config.AllowLocalBinding,
 		ManagedAllowedDomainsOnly:      managedAllowedDomainsOnly,
 	}
@@ -172,8 +176,15 @@ func (p *EnvironmentNetworkPolicy) ApplyTo(config *Config) {
 		config.Domains[NormalizeHost(host)] = DomainDeny
 	}
 	inheritedSockets := config.UnixSockets
+	// Rust #46004: an omitted controller flag defers to the attachment when the
+	// controller also supplied no socket map; an explicitly empty socket map
+	// still counts as a restrictive ceiling.
+	inheritedAllowAll := boolPointerValue(config.DangerouslyAllowAllUnixSockets)
+	if config.DangerouslyAllowAllUnixSockets == nil {
+		inheritedAllowAll = inheritedSockets == nil
+	}
 	config.UnixSockets = copyUnixSocketMap(p.UnixSockets)
-	inheritedPermitsAll := config.DangerouslyAllowAllUnixSockets && !hasUnixSocketDeny(inheritedSockets)
+	inheritedPermitsAll := inheritedAllowAll && !hasUnixSocketDeny(inheritedSockets)
 	ownerPermitsAll := p.DangerouslyAllowAllUnixSockets && !hasUnixSocketDeny(p.UnixSockets)
 	effective := copyUnixSocketMap(p.UnixSockets)
 	for path, permission := range inheritedSockets {
@@ -197,13 +208,11 @@ func (p *EnvironmentNetworkPolicy) ApplyTo(config *Config) {
 		}
 	}
 	config.UnixSockets = effective
-	config.DangerouslyAllowAllUnixSockets = inheritedPermitsAll && ownerPermitsAll
-	if p.AllowUpstreamProxy {
-		config.AllowUpstreamProxy = true
-	}
-	if p.AllowLocalBinding {
-		config.AllowLocalBinding = true
-	}
+	effectiveAllowAll := inheritedPermitsAll && ownerPermitsAll
+	config.DangerouslyAllowAllUnixSockets = &effectiveAllowAll
+	// The attachment policy can only narrow the inherited traffic permissions.
+	config.AllowUpstreamProxy = config.AllowUpstreamProxy && p.AllowUpstreamProxy
+	config.AllowLocalBinding = config.AllowLocalBinding && p.AllowLocalBinding
 }
 
 // NewSpecForEnvironment resolves a remote environment's network policy for a
@@ -219,8 +228,17 @@ func NewSpecForEnvironment(config Config, requirements *Requirements, permission
 	if policy != nil {
 		next := *spec
 		next.config = cloneConfig(&spec.config)
+		controllerAllowAll := next.config.DangerouslyAllowAllUnixSockets
 		policy.ApplyTo(&next.config)
 		next.hardDenyAllowlistMisses = spec.hardDenyAllowlistMisses || policy.ManagedAllowedDomainsOnly || !managedSandboxActive(permissionKind)
+		// Rust #46004: record how the controller and attachment policies
+		// composed, so an unexpected socket grant is diagnosable.
+		slog.Debug("resolved environment network policy",
+			"controller_allow_all_unix_sockets", controllerAllowAll,
+			"attachment_allow_all_unix_sockets", policy.DangerouslyAllowAllUnixSockets,
+			"effective_allow_all_unix_sockets", boolPointerValue(next.config.DangerouslyAllowAllUnixSockets),
+			"effective_unix_socket_entries", len(next.config.UnixSockets),
+		)
 		spec = &next
 	}
 	if len(execRules) > 0 {
@@ -357,7 +375,7 @@ func ValidateAgainstConstraints(config *Config, constraints *Constraints) error 
 	if constraints.DangerouslyAllowNonLoopbackProxy != nil && config.DangerouslyAllowNonLoopbackProxy != *constraints.DangerouslyAllowNonLoopbackProxy {
 		return fmt.Errorf("dangerously_allow_non_loopback_proxy violates constraints")
 	}
-	if constraints.DangerouslyAllowAllUnixSockets != nil && config.DangerouslyAllowAllUnixSockets != *constraints.DangerouslyAllowAllUnixSockets {
+	if constraints.DangerouslyAllowAllUnixSockets != nil && boolPointerValue(config.DangerouslyAllowAllUnixSockets) != *constraints.DangerouslyAllowAllUnixSockets {
 		return fmt.Errorf("dangerously_allow_all_unix_sockets violates constraints")
 	}
 	if constraints.AllowLocalBinding != nil && config.AllowLocalBinding != *constraints.AllowLocalBinding {
@@ -450,7 +468,7 @@ func applyRequirements(config Config, requirements *Requirements, permissionKind
 		constraints.DangerouslyAllowNonLoopbackProxy = requirements.DangerouslyAllowNonLoopbackProxy
 	}
 	if requirements.DangerouslyAllowAllUnixSockets != nil {
-		config.DangerouslyAllowAllUnixSockets = *requirements.DangerouslyAllowAllUnixSockets
+		config.DangerouslyAllowAllUnixSockets = cloneBool(requirements.DangerouslyAllowAllUnixSockets)
 		constraints.DangerouslyAllowAllUnixSockets = requirements.DangerouslyAllowAllUnixSockets
 	}
 	if requirements.AllowLocalBinding != nil {
@@ -555,6 +573,7 @@ func cloneConfig(config *Config) Config {
 		return Config{}
 	}
 	cloned := *config
+	cloned.DangerouslyAllowAllUnixSockets = cloneBool(config.DangerouslyAllowAllUnixSockets)
 	if config.Domains != nil {
 		cloned.Domains = make(map[string]DomainPermission, len(config.Domains))
 		for host, permission := range config.Domains {

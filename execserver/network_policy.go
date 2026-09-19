@@ -206,12 +206,15 @@ func RemoteNetworkProxyConfigFromProxyConfig(config network.ProxyConfig) (Remote
 			unixSockets[path] = string(permission)
 		}
 	}
+	// Rust #46004: the remote wire keeps a plain bool, so an omitted
+	// controller flag resolves to false for remote configuration.
+	allowAllUnixSockets := settings.DangerouslyAllowAllUnixSockets != nil && *settings.DangerouslyAllowAllUnixSockets
 	return RemoteNetworkProxyConfig{
 		Enabled:                        settings.Enabled,
 		EnableSOCKS5:                   settings.EnableSocks5,
 		EnableSOCKS5UDP:                settings.EnableSocks5UDP,
 		AllowUpstreamProxy:             settings.AllowUpstreamProxy,
-		DangerouslyAllowAllUnixSockets: settings.DangerouslyAllowAllUnixSockets,
+		DangerouslyAllowAllUnixSockets: allowAllUnixSockets,
 		Mode:                           string(settings.Mode),
 		Domains:                        domains,
 		UnixSockets:                    unixSockets,
@@ -225,7 +228,10 @@ func (c RemoteNetworkProxyConfig) ProxyConfig() (network.ProxyConfig, error) {
 	settings.EnableSocks5 = c.EnableSOCKS5
 	settings.EnableSocks5UDP = c.EnableSOCKS5UDP
 	settings.AllowUpstreamProxy = c.AllowUpstreamProxy
-	settings.DangerouslyAllowAllUnixSockets = c.DangerouslyAllowAllUnixSockets
+	// Rust #46004: a remote config always supplies an explicit bool, so it
+	// becomes Some(value) on the receiving side.
+	allowAllUnixSockets := c.DangerouslyAllowAllUnixSockets
+	settings.DangerouslyAllowAllUnixSockets = &allowAllUnixSockets
 	settings.AllowLocalBinding = c.AllowLocalBinding
 	settings.Mode = network.ProxyMode(c.Mode)
 	if settings.Mode != network.ProxyModeFull && settings.Mode != network.ProxyModeLimited {

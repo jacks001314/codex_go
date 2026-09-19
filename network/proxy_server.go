@@ -414,7 +414,7 @@ func (s *ProxyServer) serveHTTPUnixSocket(w http.ResponseWriter, request *http.R
 		http.Error(w, "unix sockets unsupported", http.StatusNotImplemented)
 		return
 	}
-	allowed := policy.settings.DangerouslyAllowAllUnixSockets
+	allowed := boolPointerValue(policy.settings.DangerouslyAllowAllUnixSockets)
 	if !allowed {
 		for _, path := range policy.settings.AllowUnixSockets() {
 			if path == socketPath {

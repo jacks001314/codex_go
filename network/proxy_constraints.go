@@ -190,7 +190,7 @@ func applyProxyRequirements(config ProxyConfig, requirements *ProxyRequirements,
 		constraints.DangerouslyAllowNonLoopbackProxy = cloneBool(requirements.DangerouslyAllowNonLoopbackProxy)
 	}
 	if requirements.DangerouslyAllowAllUnixSockets != nil {
-		settings.DangerouslyAllowAllUnixSockets = *requirements.DangerouslyAllowAllUnixSockets
+		settings.DangerouslyAllowAllUnixSockets = cloneBool(requirements.DangerouslyAllowAllUnixSockets)
 		constraints.DangerouslyAllowAllUnixSockets = cloneBool(requirements.DangerouslyAllowAllUnixSockets)
 	}
 
@@ -277,7 +277,7 @@ func ValidateProxyPolicyAgainstConstraints(config ProxyConfig, constraints Proxy
 	if constraints.DangerouslyAllowAllUnixSockets != nil {
 		allowAllUnixSockets = *constraints.DangerouslyAllowAllUnixSockets
 	}
-	if settings.DangerouslyAllowAllUnixSockets && !allowAllUnixSockets {
+	if boolPointerValue(settings.DangerouslyAllowAllUnixSockets) && !allowAllUnixSockets {
 		return invalidProxyConstraint("network.dangerously_allow_all_unix_sockets", "true", "false (disabled by managed config)")
 	}
 	if constraints.AllowLocalBinding != nil && settings.AllowLocalBinding && !*constraints.AllowLocalBinding {

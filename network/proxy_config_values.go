@@ -76,7 +76,8 @@ func applyProxySettingsTable(settings *ProxySettings, table map[string]any, path
 		settings.DangerouslyAllowNonLoopbackProxy = value
 	}
 	if value, ok := boolConfigValue(table, "dangerously_allow_all_unix_sockets"); ok {
-		settings.DangerouslyAllowAllUnixSockets = value
+		// Rust #46004: keep omission distinct from an explicit false.
+		settings.DangerouslyAllowAllUnixSockets = &value
 	}
 	if value, ok := proxyModeConfigValue(table, "mode"); ok {
 		settings.Mode = value
@@ -617,9 +618,8 @@ func unixSocketPermissionsConfigValue(values map[string]any, key string) (*Proxy
 			entries[strings.TrimSpace(path)] = permission
 		}
 	}
-	if len(entries) == 0 {
-		return nil, true
-	}
+	// Rust #46004: an explicitly empty table is a restrictive ceiling, not an
+	// omitted policy, so it must survive as a present-but-empty map.
 	return &ProxyUnixSocketPermissions{Entries: entries}, true
 }
 
