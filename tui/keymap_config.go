@@ -217,6 +217,12 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 		if context == "chat" && action == "toggle_voice_mute" && config.ctrlXMainSurfaceBindingExists() {
 			return nil, "default", false
 		}
+		// Rust #46071: the default F8 binding for the voice-conversation toggle is
+		// disabled when the main surface already uses F8, so the new default never
+		// shadows an existing shortcut.
+		if context == "chat" && action == "toggle_voice" && config.mainSurfaceBindingExists("f8") {
+			return nil, "default", false
+		}
 		// Rust #44424/#44433/#45255: the agents-dashboard defaults yield to an
 		// explicit binding for the same key on the agents, list, or global
 		// surface, so a new default never shadows an existing shortcut. The
@@ -272,13 +278,20 @@ func (c *KeymapConfig) altACustomBindingExists() bool {
 // contexts that can consume main-surface input are considered, matching the
 // Rust resolver.
 func (c *KeymapConfig) ctrlXMainSurfaceBindingExists() bool {
+	return c.mainSurfaceBindingExists("ctrl-x")
+}
+
+// mainSurfaceBindingExists reports whether any configured main-surface action
+// already binds the key. New defaults yield to an existing binding so they never
+// shadow a shortcut the user already relies on (Rust #46071).
+func (c *KeymapConfig) mainSurfaceBindingExists(key string) bool {
 	if c == nil || c.bindings == nil {
 		return false
 	}
 	for _, context := range []string{"global", "chat", "composer", "editor", "vim_normal", "vim_operator", "vim_text_object"} {
 		for _, bindings := range c.bindings[context] {
 			for _, binding := range bindings {
-				if normalized, err := NormalizeKeybindingSpec(binding); err == nil && normalized == "ctrl-x" {
+				if normalized, err := NormalizeKeybindingSpec(binding); err == nil && normalized == key {
 					return true
 				}
 			}

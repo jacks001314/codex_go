@@ -2724,6 +2724,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			m.toggleVoiceMicrophoneFromKey()
 			return m, m.refreshStatusControlsCmd()
 		}
+		if m.keyMatches("chat", "toggle_voice", keySpec) {
+			m.clearComposerPasteWindow()
+			return m, m.toggleVoiceConversationFromKey()
+		}
 		if m.keyMatches("global", "open_external_editor", keySpec) {
 			m.clearComposerPasteWindow()
 			return m, m.openExternalEditor()
@@ -6881,6 +6885,16 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	}
 	m.refreshTranscript()
 	return nil
+}
+
+// toggleVoiceConversationFromKey runs the voice-conversation toggle through the
+// same handler as /voice, so the shortcut keeps the handler's start guards and
+// leaves the composer draft untouched (Rust #46071).
+func (m *Model) toggleVoiceConversationFromKey() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	return bubbletea.Batch(m.applyVoiceCommand(""), m.refreshStatusControlsCmd())
 }
 
 // applyVoiceCommand handles /voice for the model's local voice session. A

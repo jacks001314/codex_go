@@ -490,3 +490,81 @@ func TestModelVoiceStopRestoresUndeliveredSpeech(t *testing.T) {
 		t.Fatalf("pending speech = %#v", model.VoiceConversation.PendingSpeech)
 	}
 }
+
+// Mirrors Rust #46071's shortcut dispatch: the voice-conversation shortcut runs
+// the same handler as /voice (so its start guards and messages apply unchanged)
+// and leaves the composer draft untouched.
+func TestModelVoiceToggleKeyRunsTheVoiceHandlerLikeRust(t *testing.T) {
+	const draft = "keep this draft"
+	newModel := func(config *codextui.KeymapConfig) *Model {
+		state := codextui.NewState(nil)
+		state.SetThreadID("thread-voice-key")
+		model := NewModel(state, Options{Width: 100, Height: 30, KeymapConfig: config})
+		model.composer.InsertString(draft)
+		return model
+	}
+
+	fromKey := newModel(nil)
+	fromKey.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF8})
+	fromCommand := newModel(nil)
+	fromCommand.applyVoiceCommand("")
+
+	if fromKey.notice == "" || fromKey.notice != fromCommand.notice {
+		t.Fatalf("F8 notice = %q, /voice notice = %q", fromKey.notice, fromCommand.notice)
+	}
+	if fromKey.VoiceConversation.Phase != fromCommand.VoiceConversation.Phase {
+		t.Fatalf("F8 phase = %q, /voice phase = %q", fromKey.VoiceConversation.Phase, fromCommand.VoiceConversation.Phase)
+	}
+	if got := fromKey.composer.Value(); got != draft {
+		t.Fatalf("F8 changed the composer draft: %q", got)
+	}
+}
+
+// The shortcut follows the resolved keymap bindings: a remapped action ignores
+// F8, an unbound action never triggers, and a main-surface F8 binding shadows
+// the default so the shortcut stays inert.
+func TestModelVoiceToggleKeyFollowsKeymapLikeRust(t *testing.T) {
+	newModel := func(config *codextui.KeymapConfig) *Model {
+		state := codextui.NewState(nil)
+		state.SetThreadID("thread-voice-key-remap")
+		return NewModel(state, Options{Width: 100, Height: 30, KeymapConfig: config})
+	}
+	fromCommand := newModel(nil)
+	fromCommand.applyVoiceCommand("")
+
+	remapped := codextui.NewKeymapConfig()
+	if err := remapped.Set("chat", "toggle_voice", []string{"f9"}); err != nil {
+		t.Fatal(err)
+	}
+	model := newModel(remapped)
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF8})
+	if model.notice != "" || !model.VoiceConversation.Inactive() {
+		t.Fatalf("remapped action still ran on F8: notice=%q phase=%q", model.notice, model.VoiceConversation.Phase)
+	}
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF9})
+	if model.notice != fromCommand.notice {
+		t.Fatalf("f9 notice = %q, want %q", model.notice, fromCommand.notice)
+	}
+
+	unbound := codextui.NewKeymapConfig()
+	if err := unbound.Set("chat", "toggle_voice", nil); err != nil {
+		t.Fatal(err)
+	}
+	disabled := newModel(unbound)
+	disabled.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF8})
+	if disabled.notice != "" || !disabled.VoiceConversation.Inactive() {
+		t.Fatalf("unbound action still ran on F8: notice=%q phase=%q", disabled.notice, disabled.VoiceConversation.Phase)
+	}
+
+	shadowed := codextui.NewKeymapConfig()
+	if err := shadowed.Set("global", "copy", []string{"f8"}); err != nil {
+		t.Fatal(err)
+	}
+	shadowModel := newModel(shadowed)
+	shadowModel.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF8})
+	// The user's F8 binding wins: the voice handler must not run, so the notice
+	// is whatever the shadowing action reported.
+	if !shadowModel.VoiceConversation.Inactive() || shadowModel.notice == fromCommand.notice {
+		t.Fatalf("shadowed default still ran on F8: notice=%q phase=%q", shadowModel.notice, shadowModel.VoiceConversation.Phase)
+	}
+}
