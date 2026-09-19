@@ -172,6 +172,18 @@ func execThreadSource(req *Request) string {
 	return "user"
 }
 
+// execTurnTrigger mirrors Rust's explicit `turn_trigger` on exec turn/start
+// requests (#46569): a standalone `codex exec` run is an "exec" turn, while the
+// embedded TUI and goal runtime override the trigger (Request.TurnTrigger).
+func execTurnTrigger(req *Request) string {
+	if req != nil {
+		if trigger := strings.TrimSpace(req.TurnTrigger); trigger != "" {
+			return trigger
+		}
+	}
+	return "exec"
+}
+
 func execSessionSource(req *Request) string {
 	if req != nil && req.subagent != nil {
 		return "subagent:thread_spawn"

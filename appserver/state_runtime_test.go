@@ -425,6 +425,15 @@ func TestRuntimeRouterActiveGoalContinuationStartsTurnWhenIdle(t *testing.T) {
 		if !strings.Contains(request.Instructions, objective) {
 			t.Fatalf("continuation instructions = %q, want objective %q", request.Instructions, objective)
 		}
+		// Rust's goal runtime attributes automatic continuations with the
+		// "goal" turn trigger (ext/goal/src/runtime.rs).
+		var turnMetadata map[string]any
+		if err := json.Unmarshal([]byte(request.ClientMetadata["x-codex-turn-metadata"]), &turnMetadata); err != nil {
+			t.Fatalf("continuation turn metadata json error = %v metadata=%#v", err, request.ClientMetadata)
+		}
+		if turnMetadata["turn_trigger"] != "goal" {
+			t.Fatalf("continuation turn_trigger = %#v, want goal", turnMetadata["turn_trigger"])
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for goal continuation turn")
 	}

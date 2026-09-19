@@ -83,6 +83,10 @@ type SubmitRequest struct {
 	// an active objective without a visible prompt (mirrors Rust's internal
 	// goal steering input).
 	InternalInputItems []any
+	// TurnTrigger overrides the turn metadata trigger (Rust
+	// `TurnStartParams::turn_trigger`). The interactive TUI defaults to "user";
+	// goal continuations request "goal" (#46569).
+	TurnTrigger string
 	// LiteralInput marks queued input whose leading `!` was revealed only by
 	// paste expansion. It must be submitted as literal model input with shell
 	// escapes disabled (Rust #39604 QueuedInputAction::Literal).
@@ -4570,9 +4574,24 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 			// Rust #42891: structured async questions become pending local
 			// questions the composer can answer inline.
 			if questions := bottompane.ParseAsyncUserInputQuestions(item.Metadata["questions"]); len(questions) > 0 {
+				previousCount := m.asyncQuestions.UnansweredCount()
 				if m.asyncQuestions.AppendAt(item.ID, questions, m.currentTime()) {
 					// Rust #42903: start the collapsed countdown refresh.
 					countdownCmd = m.asyncQuestionCountdownCmd()
+				}
+				// Rust #46574: notify on newly unanswered questions; replayed
+				// history and duplicate deliveries add nothing and stay silent.
+				if addedCount := m.asyncQuestions.UnansweredCount() - previousCount; addedCount > 0 {
+					notificationCmd := m.queueNotification(chatwidget.AsyncQuestionNotification(
+						asyncQuestionNotificationTitle(questions, addedCount),
+					))
+					switch {
+					case notificationCmd == nil:
+					case countdownCmd == nil:
+						countdownCmd = notificationCmd
+					default:
+						countdownCmd = bubbletea.Batch(countdownCmd, notificationCmd)
+					}
 				}
 			}
 		} else if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {

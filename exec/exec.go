@@ -63,11 +63,16 @@ type Request struct {
 	// retain non-wire details such as file-change diffs while the SDK JSON shape
 	// remains Rust-compatible.
 	InternalEventHandler func(protocol.ThreadEvent)
-	SteerMailbox         *turn.SteerMailbox
-	OnTurnStarted        func(threadID string, turnID string)
-	OnSteerCommitted     func(count int)
-	subagent             *execSubagentContext
-	multiAgentVersion    multiagent.MultiAgentVersion
+	// TurnTrigger attributes the turn in the Responses turn metadata (Rust
+	// `TurnStartParams::turn_trigger`). A standalone `codex exec` turn uses
+	// "exec"; the embedded TUI overrides it with "user" and the goal runtime
+	// with "goal". Empty keeps the exec default.
+	TurnTrigger       string
+	SteerMailbox      *turn.SteerMailbox
+	OnTurnStarted     func(threadID string, turnID string)
+	OnSteerCommitted  func(count int)
+	subagent          *execSubagentContext
+	multiAgentVersion multiagent.MultiAgentVersion
 }
 
 // execCompactionWarningMessage mirrors the Rust core compaction warning event
@@ -435,6 +440,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		SubagentKind:               subagentKind,
 		ParentThreadID:             execParentThreadID(req),
 		ThreadSource:               execThreadSource(req),
+		TurnTrigger:                execTurnTrigger(req),
 		CodexVersion:               execHumanVersion(),
 		Model:                      modelID,
 		ReasoningEffort:            reasoningEffort,
@@ -644,7 +650,7 @@ type agentRunConfig struct {
 	ToolRouter *tool.Router
 	// PostPromptInputItems are appended after the prompt's user message for the
 	// first sampling request (Rust #43110 trusted configuration updates).
-	PostPromptInputItems           []any
+	PostPromptInputItems []any
 	// DropReasoningEffortUpdates removes saved configuration_update items from
 	// the request copy when overrides are unsupported (Rust #46530).
 	DropReasoningEffortUpdates     bool

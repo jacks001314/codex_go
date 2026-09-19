@@ -39,6 +39,19 @@ func TestBuildSeatbeltPolicyDeniedReadAndCommand(t *testing.T) {
 	}
 }
 
+// TestBuildSeatbeltPolicyDeniesXPCLookupsLikeRust covers #46583: restricted
+// profiles deny Mach XPC service lookups.
+func TestBuildSeatbeltPolicyDeniesXPCLookupsLikeRust(t *testing.T) {
+	profile := WorkspaceWritePermissionProfile()
+	policy, _, err := buildSeatbeltPolicy("/workspace", &profile, nil)
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	if !strings.Contains(policy, `(deny mach-lookup (xpc-service-name-prefix ""))`) {
+		t.Fatalf("policy missing XPC deny rule:\n%s", policy)
+	}
+}
+
 func seatbeltParametersContain(parameters []seatbeltParameter, value string) bool {
 	value = cleanSeatbeltPath(value)
 	for _, parameter := range parameters {

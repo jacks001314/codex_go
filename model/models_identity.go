@@ -99,6 +99,13 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 	identityField(digest, modelsCatalogIdentityTag)
 	identityField(digest, []byte(apiProvider.Name))
 	identityField(digest, []byte(apiProvider.BaseURL))
+	// Preserve existing cache identities when no explicit catalog is configured;
+	// an explicit catalog scopes the cache so different catalogs never share
+	// cached metadata (Rust #46561).
+	if catalogURL := strings.TrimSpace(provider.ModelCatalogURL); catalogURL != "" {
+		identityField(digest, []byte("model_catalog_url"))
+		identityField(digest, []byte(catalogURL))
+	}
 
 	queryPairs := make([][2]string, 0, len(apiProvider.QueryParams))
 	for name, value := range apiProvider.QueryParams {

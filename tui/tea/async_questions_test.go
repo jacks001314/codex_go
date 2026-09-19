@@ -39,6 +39,69 @@ func feedAsyncQuestions(t *testing.T, model *Model, id string, questions []any) 
 	return updated.(*Model)
 }
 
+// TestAsyncQuestionsNotifyLikeRust mirrors Rust #46574: newly unanswered
+// questions post an async-question notification, using a shortened single-question
+// title or a batch count, while duplicates and replayed history stay silent.
+func TestAsyncQuestionsNotifyLikeRust(t *testing.T) {
+	var posted []string
+	model := NewModel(codextui.NewState(nil), Options{
+		Width: 120, Height: 40,
+		// Notifications default to unfocused-only; the focused test terminal
+		// needs the always condition to observe the post.
+		NotificationCondition: codextui.NotificationConditionAlways,
+		OnPostNotification: func(message string, _ codextui.NotificationMethod) bubbletea.Cmd {
+			posted = append(posted, message)
+			return nil
+		},
+	})
+	model.State.SetThreadID("thread-questions")
+
+	model = feedAsyncQuestions(t, model, "question-single", []any{
+		map[string]any{"title": "Which database?"},
+	})
+	if len(posted) != 1 || posted[0] != "Question: Which database?" {
+		t.Fatalf("single question notifications = %#v", posted)
+	}
+
+	// A duplicate delivery (same message id) adds no question and stays silent.
+	model = feedAsyncQuestions(t, model, "question-single", []any{
+		map[string]any{"title": "Which database?"},
+	})
+	if len(posted) != 1 {
+		t.Fatalf("duplicate delivery notified again: %#v", posted)
+	}
+
+	// A batch reports its added count.
+	model = feedAsyncQuestions(t, model, "question-batch", []any{
+		map[string]any{"title": "First?"},
+		map[string]any{"title": "Second?"},
+	})
+	if len(posted) != 2 || posted[1] != "Question: 2 questions requested" {
+		t.Fatalf("batch notifications = %#v", posted)
+	}
+
+	// A long title is truncated to 30 graphemes with an ellipsis.
+	long := strings.Repeat("x", 40)
+	model = feedAsyncQuestions(t, model, "question-long", []any{
+		map[string]any{"title": long},
+	})
+	if len(posted) != 3 || posted[2] != "Question: "+strings.Repeat("x", 27)+"..." {
+		t.Fatalf("long-title notifications = %#v", posted)
+	}
+}
+
+// TestAsyncQuestionNotificationTitleFallbacksLikeRust covers the title rule's
+// fallbacks that the parsed-question flow cannot reach (empty titles are
+// dropped when parsing).
+func TestAsyncQuestionNotificationTitleFallbacksLikeRust(t *testing.T) {
+	if got := asyncQuestionNotificationTitle(nil, 1); got != "Question requested" {
+		t.Fatalf("single-added fallback = %q", got)
+	}
+	if got := asyncQuestionNotificationTitle(nil, 3); got != "3 questions requested" {
+		t.Fatalf("batch fallback = %q", got)
+	}
+}
+
 // TestAsyncQuestionsArriveCollapsedWithSummary mirrors Rust's collapsed entry
 // point: arriving questions never steal focus, and the bottom pane advertises
 // the edit binding that focuses them.

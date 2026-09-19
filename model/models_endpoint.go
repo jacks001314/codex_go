@@ -20,6 +20,10 @@ const modelsEndpointRefreshTimeout = 5 * time.Second
 const defaultModelsCacheTTL = 5 * time.Minute
 const modelsCacheFilename = "models_cache.json"
 
+// modelsCatalogMaxBytes bounds an explicitly configured provider catalog before
+// decoding or caching it (Rust MAX_MODEL_CATALOG_BYTES).
+const modelsCatalogMaxBytes = 1024 * 1024
+
 type ModelsEndpoint interface {
 	ListModels(ctx context.Context, etag string) (*ModelsEndpointResponse, error)
 }
@@ -34,6 +38,10 @@ type HTTPModelsEndpoint struct {
 	Provider   *APIProvider
 	Auth       *AuthHeaders
 	HTTPClient HTTPDoer
+	// CatalogURL, when set, is the provider's explicit Codex-native model
+	// catalog (Rust `model_catalog_url`). It replaces the derived
+	// `<base_url>/models` URL and switches on the bounded, no-redirect fetch.
+	CatalogURL string
 }
 
 func NewHTTPModelsEndpoint(provider *APIProvider, authHeaders *AuthHeaders, httpClient HTTPDoer) *HTTPModelsEndpoint {
@@ -92,9 +100,20 @@ func (e *HTTPModelsEndpoint) ListModels(ctx context.Context, etag string) (*Mode
 	if err != nil {
 		return nil, err
 	}
+	catalogURL := strings.TrimSpace(e.CatalogURL)
 	client := e.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		if catalogURL != "" {
+			// Provider diagnostics may echo URL credentials, so an explicit
+			// catalog never follows redirects (Rust ClientRedirectPolicy::Reject).
+			client = &http.Client{
+				CheckRedirect: func(*http.Request, []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
+			}
+		} else {
+			client = http.DefaultClient
+		}
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -107,11 +126,23 @@ func (e *HTTPModelsEndpoint) ListModels(ctx context.Context, etag string) (*Mode
 			NotModified: true,
 		}, nil
 	}
-	body, err := io.ReadAll(response.Body)
+	reader := io.Reader(response.Body)
+	if catalogURL != "" {
+		reader = io.LimitReader(response.Body, int64(modelsCatalogMaxBytes)+1)
+	}
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}
+	if catalogURL != "" && len(body) > modelsCatalogMaxBytes {
+		return nil, fmt.Errorf("model catalog response exceeds %d bytes", modelsCatalogMaxBytes)
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if catalogURL != "" {
+			// Suppress response diagnostics that could expose credentials
+			// (Rust #46561).
+			return nil, fmt.Errorf("models API request failed with status %d", response.StatusCode)
+		}
 		return nil, fmt.Errorf("models API request failed with status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
 	models, err := decodeModelsEndpointResponse(body)
@@ -129,7 +160,17 @@ func (e *HTTPModelsEndpoint) newModelsHTTPRequest(ctx context.Context, etag stri
 	if provider == nil {
 		provider = &APIProvider{BaseURL: defaultResponsesEndpoint}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL(provider), nil)
+	requestURL := ""
+	if catalogURL := strings.TrimSpace(e.CatalogURL); catalogURL != "" {
+		catalogRequestURL, err := modelsCatalogURL(provider, catalogURL)
+		if err != nil {
+			return nil, err
+		}
+		requestURL = catalogRequestURL
+	} else {
+		requestURL = modelsURL(provider)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +206,9 @@ type RemoteModelsManager struct {
 	fetchedIdentity string
 	// supportsAPIKeyModels, apiKeyAuth, and commandAuth describe whether the
 	// current provider/auth combination can discover models with an OpenAI API
-	// key (Rust #44392). Discovery stays disabled until the feature opts in.
+	// key (Rust #44392). apiKeyAuth reports that API-key auth is in use, either
+	// from an explicit provider key or an OpenAI API-key login (Rust
+	// `uses_api_key_auth`). Discovery stays disabled until the feature opts in.
 	supportsAPIKeyModels        bool
 	apiKeyAuth                  bool
 	commandAuth                 bool
@@ -382,9 +425,12 @@ func (m *RemoteModelsManager) refreshAvailableModels(strategy RefreshStrategy) {
 	if m == nil || m.endpoint == nil {
 		return
 	}
-	// Gate cache loading as well as requests: a session whose API-key discovery
-	// is disabled keeps the bundled models (Rust #44392).
-	if m.SupportsAPIKeyDiscovery() && !m.apiKeyModelDiscoveryEnabledValue() {
+	// Gate cache loading as well as requests (Rust #44392/#46561): API-key auth
+	// must have an enabled, supported catalog before a remote catalog is reused,
+	// so a custom base URL without `model_catalog_url` keeps the bundled models
+	// even when an earlier run cached one. Command-auth providers retain their
+	// existing discovery behavior.
+	if m.apiKeyAuth && !m.commandAuth && (!m.supportsAPIKeyModels || !m.apiKeyModelDiscoveryEnabledValue()) {
 		return
 	}
 	switch strategy {
@@ -587,6 +633,25 @@ func modelsURL(provider *APIProvider) string {
 	}
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
+}
+
+// modelsCatalogURL builds an explicit provider catalog URL, preserving the
+// provider's routing query parameters and appending the client version
+// (Rust ModelsClient::catalog_request_url, #46561). Relative URLs are rejected.
+func modelsCatalogURL(provider *APIProvider, catalogURL string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(catalogURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("model_catalog_url must be an absolute URL")
+	}
+	query := parsed.Query()
+	if provider != nil {
+		for key, value := range provider.QueryParams {
+			query.Add(key, value)
+		}
+	}
+	query.Add("client_version", modelsEndpointClientVersion)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
 }
 
 func modelsETagFromHeaders(headers http.Header) string {

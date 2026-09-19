@@ -23,6 +23,7 @@ const (
 	NotificationEditApprovalRequested NotificationKind = "edit-approval-requested"
 	NotificationElicitationRequested  NotificationKind = "elicitation-requested"
 	NotificationPlanModePrompt        NotificationKind = "plan-mode-prompt"
+	NotificationAsyncQuestion         NotificationKind = "async-question"
 )
 
 type Notification struct {
@@ -55,6 +56,10 @@ func PlanModePromptNotification(title string) Notification {
 	return Notification{Kind: NotificationPlanModePrompt, Title: title}
 }
 
+func AsyncQuestionNotification(title string) Notification {
+	return Notification{Kind: NotificationAsyncQuestion, Title: title}
+}
+
 func (n Notification) Display() string {
 	switch n.Kind {
 	case NotificationAgentTurnComplete:
@@ -73,6 +78,8 @@ func (n Notification) Display() string {
 		return "Approval requested by " + n.ServerName
 	case NotificationPlanModePrompt:
 		return "Plan mode prompt: " + n.Title
+	case NotificationAsyncQuestion:
+		return "Question: " + n.Title
 	default:
 		return ""
 	}
@@ -82,7 +89,7 @@ func (n Notification) Priority() int {
 	switch n.Kind {
 	case NotificationAgentTurnComplete:
 		return 0
-	case NotificationExecApprovalRequested, NotificationEditApprovalRequested, NotificationElicitationRequested, NotificationPlanModePrompt:
+	case NotificationExecApprovalRequested, NotificationEditApprovalRequested, NotificationElicitationRequested, NotificationPlanModePrompt, NotificationAsyncQuestion:
 		return 1
 	default:
 		return 0

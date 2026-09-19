@@ -174,6 +174,7 @@ func providerInfoFromConfig(values map[string]any, validate bool) (*ProviderInfo
 	provider := &ProviderInfo{
 		Name:                    stringConfig(values, "name"),
 		BaseURL:                 stringConfig(values, "base_url"),
+		ModelCatalogURL:         stringConfig(values, "model_catalog_url"),
 		EnvKey:                  stringConfig(values, "env_key"),
 		EnvKeyInstructions:      stringConfig(values, "env_key_instructions"),
 		ExperimentalBearerToken: stringConfig(values, "experimental_bearer_token"),

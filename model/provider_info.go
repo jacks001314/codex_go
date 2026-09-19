@@ -328,8 +328,12 @@ func gatewayOAuthHostIsLoopback(host string) bool {
 }
 
 type ProviderInfo struct {
-	Name                    string            `json:"name,omitempty"`
-	BaseURL                 string            `json:"base_url,omitempty"`
+	Name    string `json:"name,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+	// ModelCatalogURL is an optional full URL for a Codex-native model catalog
+	// (Rust `model_catalog_url`). When unset, OpenAI discovery uses the Codex
+	// backend unless BaseURL overrides the inference endpoint.
+	ModelCatalogURL         string            `json:"model_catalog_url,omitempty"`
 	EnvKey                  string            `json:"env_key,omitempty"`
 	EnvKeyInstructions      string            `json:"env_key_instructions,omitempty"`
 	ExperimentalBearerToken string            `json:"experimental_bearer_token,omitempty"`
@@ -600,6 +604,31 @@ func (p *ProviderInfo) HasCommandAuth() bool {
 	return p.Auth != nil
 }
 
+// HasProviderAPIKey reports whether explicit provider configuration supplies
+// API-key authentication (Rust `has_provider_api_key`). This takes precedence
+// over any unrelated first-party login used by the model picker.
+func (p *ProviderInfo) HasProviderAPIKey() bool {
+	if p == nil {
+		return false
+	}
+	return strings.TrimSpace(p.EnvKey) != "" || strings.TrimSpace(p.ExperimentalBearerToken) != ""
+}
+
+// SupportsAPIKeyModels reports whether the provider serves an authoritative
+// model catalog for OpenAI API keys (Rust
+// `ModelsEndpointClient::supports_api_key_models`). An explicit model catalog
+// URL always qualifies; the default OpenAI provider qualifies only while no
+// custom base URL overrides the inference endpoint.
+func (p *ProviderInfo) SupportsAPIKeyModels() bool {
+	if p == nil {
+		return false
+	}
+	if strings.TrimSpace(p.ModelCatalogURL) != "" {
+		return true
+	}
+	return p.IsOpenAI() && strings.TrimSpace(p.BaseURL) == ""
+}
+
 func cloneProviderAuthInfo(info *ProviderAuthInfo) *ProviderAuthInfo {
 	if info == nil {
 		return nil
@@ -807,6 +836,7 @@ func cloneMap(in map[string]string) map[string]string {
 func (p *ProviderInfo) isZero() bool {
 	return p.Name == "" &&
 		p.BaseURL == "" &&
+		p.ModelCatalogURL == "" &&
 		p.EnvKey == "" &&
 		p.EnvKeyInstructions == "" &&
 		p.ExperimentalBearerToken == "" &&

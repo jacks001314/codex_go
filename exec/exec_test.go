@@ -1757,6 +1757,45 @@ too_long = "` + strings.Repeat("x", 513) + `"
 	}
 }
 
+func TestRunAttributesTurnTriggerLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		trigger string
+		want    string
+	}{
+		{name: "standalone exec defaults to exec", want: "exec"},
+		{name: "embedded TUI user turn", trigger: "user", want: "user"},
+		{name: "goal continuation", trigger: "goal", want: "goal"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+				t.Fatalf("Save auth returned error: %v", err)
+			}
+			agent := &recordingAgent{message: "ok"}
+			runner := NewRunner(home)
+			runner.Agent = agent
+			var stdout, stderr bytes.Buffer
+			if _, err := runner.Run(Request{
+				Exec:        cli.ExecOptions{Prompt: "hello"},
+				TurnTrigger: testCase.trigger,
+			}, strings.NewReader(""), &stdout, &stderr); err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			if agent.request == nil {
+				t.Fatalf("ClientMetadata = %#v", agent.request)
+			}
+			var turnMetadata map[string]any
+			if err := json.Unmarshal([]byte(agent.request.ClientMetadata["x-codex-turn-metadata"]), &turnMetadata); err != nil {
+				t.Fatalf("turn metadata json error = %v metadata=%#v", err, agent.request.ClientMetadata)
+			}
+			if turnMetadata["turn_trigger"] != testCase.want {
+				t.Fatalf("turn_trigger = %#v, want %q", turnMetadata["turn_trigger"], testCase.want)
+			}
+		})
+	}
+}
+
 func TestFreshRunsWithSamePromptUseDistinctThreadAndPromptCacheKeys(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {

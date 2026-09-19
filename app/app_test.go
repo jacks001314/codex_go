@@ -1423,6 +1423,36 @@ func TestRemoteTurnStartParamsRequestModelOverridesStateModel(t *testing.T) {
 	}
 }
 
+func TestRemoteTurnStartParamsCarriesUserTurnTriggerLikeRust(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	state := codextui.NewState(nil)
+	params, err := remoteTurnStartParams(&cli.RootOptions{}, state, "thread-trigger", codextea.SubmitRequest{Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("remoteTurnStartParams() error = %v", err)
+	}
+	if params.TurnTrigger != "user" {
+		t.Fatalf("params.TurnTrigger = %q, want user", params.TurnTrigger)
+	}
+	data, err := json.Marshal(&params)
+	if err != nil {
+		t.Fatalf("Marshal(params) error = %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"turnTrigger":"user"`)) {
+		t.Fatalf("wire params dropped turn trigger: %s", data)
+	}
+}
+
+// TestInteractiveTurnTriggerLikeRust covers Rust #46569: the embedded TUI marks
+// user-submitted turns with "user" while goal continuations request "goal".
+func TestInteractiveTurnTriggerLikeRust(t *testing.T) {
+	if got := interactiveTurnTrigger(codextea.SubmitRequest{Prompt: "hello"}); got != "user" {
+		t.Fatalf("interactiveTurnTrigger(user) = %q, want user", got)
+	}
+	if got := interactiveTurnTrigger(codextea.SubmitRequest{TurnTrigger: "goal"}); got != "goal" {
+		t.Fatalf("interactiveTurnTrigger(goal) = %q, want goal", got)
+	}
+}
+
 func TestRemoteTurnSteerParamsCarriesActiveIDsAndClientMessage(t *testing.T) {
 	params, err := remoteTurnSteerParams("thread-steer", "turn-steer", "client-steer", codextea.SubmitRequest{Prompt: "change direction"})
 	if err != nil {

@@ -62,6 +62,10 @@ func buildSeatbeltPolicy(cwd string, profile *PermissionProfile, allowUnixSocket
 		}
 	}
 
+	// Rust #46583: deny XPC service lookups so sandboxed commands cannot reach
+	// privileged macOS services.
+	lines = append(lines, `(deny mach-lookup (xpc-service-name-prefix ""))`)
+
 	for _, denied := range seatbeltDeniedReadPaths(profile.DeniedReadEntries) {
 		name := fmt.Sprintf("DENIED_READ_%d", len(parameters))
 		parameters = append(parameters, seatbeltParameter{Name: name, Value: denied})

@@ -1016,21 +1016,24 @@ func buildAccountScopedModelsManager(codexHome string, read *config.ConfigReadRe
 	}
 	account := auth.AccountFromAuth(authSnapshot)
 	hasChatGPTAccount := account != nil && account.Type == auth.AccountChatGPT
-	supportsAPIKeyModels := providerInfo.IsOpenAI()
-	apiKeyAuth := authSnapshot.Mode() == "api-key"
-	if supportsAPIKeyModels && apiKeyAuth && strings.TrimSpace(providerInfo.BaseURL) == "" {
+	supportsAPIKeyModels := providerInfo.SupportsAPIKeyModels()
+	// Rust `uses_api_key_auth` (#46561): an explicit provider key joins API-key
+	// logins as a discovery opt-in.
+	usesAPIKeyAuth := providerInfo.HasProviderAPIKey() || authSnapshot.Mode() == "api-key"
+	if supportsAPIKeyModels && usesAPIKeyAuth && strings.TrimSpace(providerInfo.ModelCatalogURL) == "" && strings.TrimSpace(providerInfo.BaseURL) == "" {
 		// Codex model metadata is served by the Codex backend, not the
 		// public /v1/models API (Rust #44392). Inference is unaffected.
 		apiProvider.BaseURL = model.ChatGPTCodexBaseURL
 	}
 	endpoint := model.NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
+	endpoint.CatalogURL = strings.TrimSpace(providerInfo.ModelCatalogURL)
 	manager := model.NewRemoteModelsManagerWithOptions(&model.RemoteModelsManagerOptions{
 		ModelCatalog:                    base,
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
 		Identity:                        model.ModelsCatalogIdentity(providerInfo, authSnapshot, &authHeaders, inputs.residency),
 		SupportsAPIKeyModels:            supportsAPIKeyModels,
-		APIKeyAuth:                      apiKeyAuth,
+		APIKeyAuth:                      usesAPIKeyAuth,
 		CommandAuth:                     providerInfo.HasCommandAuth(),
 	})
 	model.SetAPIKeyModelDiscoveryEnabled(manager, features.Enabled(cfg.FeatureSettings(), "api_key_model_discovery"))
@@ -13478,7 +13481,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.Shell.AllowTTY = &allowTTY
 			options.Shell.Validation.WindowsSandboxLevel = windowsSandboxLevelForConfig(cfg)
 			// Rust #46554: legacy Windows sandboxes always use a private desktop.
-		options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopForTurn()
+			options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopForTurn()
 		}
 		if guardianTurnStart(params) {
 			options.Shell.Validation.WindowsSandboxProxySettingsMode = execserver.WindowsSandboxProxySettingsPreserve

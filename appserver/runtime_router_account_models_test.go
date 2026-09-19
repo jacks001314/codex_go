@@ -39,8 +39,18 @@ func TestAccountScopedModelsManagerAppliesManagedResidencyLikeRust(t *testing.T)
 	defer server.Close()
 
 	read := &config.ConfigReadResponse{Config: map[string]any{
-		"openai_base_url": server.URL + "/v1",
-		"features":        map[string]any{"api_key_model_discovery": true},
+		// A custom inference base URL alone no longer opts API-key sessions into
+		// remote catalog discovery (Rust #46561); the explicit catalog URL does.
+		"model_provider": "catalog-test",
+		"features":       map[string]any{"api_key_model_discovery": true},
+		"model_providers": map[string]any{
+			"catalog-test": map[string]any{
+				"name":                 "OpenAI",
+				"base_url":             server.URL + "/v1",
+				"model_catalog_url":    server.URL + "/v1/models",
+				"requires_openai_auth": true,
+			},
+		},
 	}}
 	residency := config.ResidencyUS
 	requirements := &config.ConfigRequirementsReadResponse{

@@ -37,6 +37,26 @@ func TestNotificationDisplay(t *testing.T) {
 	if got := PlanModePromptNotification(" Review plan ").Display(); got != "Plan mode prompt:  Review plan " {
 		t.Fatalf("plan mode display should preserve title spacing, got %q", got)
 	}
+	// Rust #46574: an asynchronous question notifies with a "Question:" prefix.
+	if got := AsyncQuestionNotification("Which database?").Display(); got != "Question: Which database?" {
+		t.Fatalf("async question display = %q", got)
+	}
+	asyncQuestion := AsyncQuestionNotification("Which database?")
+	if asyncQuestion.TypeName() != "async-question" {
+		t.Fatalf("async question type = %q", asyncQuestion.TypeName())
+	}
+	if asyncQuestion.Priority() != 1 {
+		t.Fatalf("async question priority = %d, want 1", asyncQuestion.Priority())
+	}
+	if !asyncQuestion.AllowedFor(NotificationsSetting{Enabled: true}) {
+		t.Fatal("enabled notifications should allow async questions")
+	}
+	if asyncQuestion.AllowedFor(NotificationsSetting{Custom: []string{"approval-requested"}}) {
+		t.Fatal("custom approval notifications should reject async questions")
+	}
+	if !asyncQuestion.AllowedFor(NotificationsSetting{Custom: []string{"async-question"}}) {
+		t.Fatal("custom async-question notifications should allow async questions")
+	}
 }
 
 func TestNotificationAllowedFor(t *testing.T) {

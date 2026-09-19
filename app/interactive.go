@@ -1252,6 +1252,7 @@ func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func
 		base = catalog
 	}
 	endpoint := modelpkg.NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
+	endpoint.CatalogURL = strings.TrimSpace(providerInfo.ModelCatalogURL)
 	manager := modelpkg.NewRemoteModelsManagerWithOptions(&modelpkg.RemoteModelsManagerOptions{
 		ModelCatalog:                    base,
 		Endpoint:                        endpoint,
@@ -3002,6 +3003,7 @@ func interactiveLocalGoalContinuationCommand(ctx context.Context, root *cli.Root
 			return nil
 		}
 		request := codextea.SubmitRequest{InternalInputItems: []any{item}}
+		request.TurnTrigger = "goal"
 		return interactiveTurnCommandWithRequest(ctx, root, runner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
 	}
 }
@@ -3262,6 +3264,7 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		AdditionalInstructions: additionalInstructions,
 		AdditionalInputItems:   additionalInputItems,
 		InternalEventHandler:   internalEventHandler,
+		TurnTrigger:            interactiveTurnTrigger(request),
 	}
 	if len(interrupts) > 0 && interrupts[0] != nil {
 		controller := interrupts[0]
@@ -3302,6 +3305,16 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		}
 	}
 	send(msg)
+}
+
+// interactiveTurnTrigger attributes the turn in the Responses turn metadata.
+// Rust's embedded TUI marks user-submitted turns with "user" (#46569); a goal
+// continuation requests "goal" through SubmitRequest.TurnTrigger.
+func interactiveTurnTrigger(request codextea.SubmitRequest) string {
+	if trigger := strings.TrimSpace(request.TurnTrigger); trigger != "" {
+		return trigger
+	}
+	return "user"
 }
 
 func interactiveSubmitInputs(request codextea.SubmitRequest) []turn.TurnUserInput {

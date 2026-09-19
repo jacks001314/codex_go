@@ -4446,6 +4446,8 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 		SandboxPolicy:         remoteStringAny(shared.Sandbox),
 		Config:                configValues,
 		ExperimentalRawEvents: true,
+		// Rust's TUI marks user-submitted turns with the "user" trigger (#46569).
+		TurnTrigger: "user",
 	}
 	params.CollaborationMode = interactiveCollaborationModePayload(request.CollaborationMode)
 	if state != nil && strings.TrimSpace(state.Personality) != "" {

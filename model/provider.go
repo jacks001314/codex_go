@@ -273,20 +273,23 @@ func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) Models
 	if err != nil {
 		return NewStaticModelsManager(BundledModelsResponse())
 	}
-	supportsAPIKeyModels := p.info.IsOpenAI()
-	apiKeyAuth := authUsesAPIKey(p.auth)
-	if supportsAPIKeyModels && apiKeyAuth && strings.TrimSpace(p.info.BaseURL) == "" {
+	supportsAPIKeyModels := p.info.SupportsAPIKeyModels()
+	// Rust `uses_api_key_auth`: an explicit provider key also opts the session
+	// into API-key discovery, even when the picker itself uses ChatGPT (#46561).
+	usesAPIKeyAuth := p.info.HasProviderAPIKey() || authUsesAPIKey(p.auth)
+	if supportsAPIKeyModels && usesAPIKeyAuth && strings.TrimSpace(p.info.ModelCatalogURL) == "" && strings.TrimSpace(p.info.BaseURL) == "" {
 		// Codex model metadata is served by the Codex backend, not the public
 		// /v1/models API (Rust #44392). Inference keeps its own base URL.
 		apiProvider.BaseURL = ChatGPTCodexBaseURL
 	}
 	endpoint := NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
+	endpoint.CatalogURL = strings.TrimSpace(p.info.ModelCatalogURL)
 	return NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: authHasChatGPTAccount(p.auth),
 		Identity:                        ModelsCatalogIdentity(&p.info, p.auth, &authHeaders, p.residency),
 		SupportsAPIKeyModels:            supportsAPIKeyModels,
-		APIKeyAuth:                      apiKeyAuth,
+		APIKeyAuth:                      usesAPIKeyAuth,
 		CommandAuth:                     p.info.HasCommandAuth(),
 	})
 }

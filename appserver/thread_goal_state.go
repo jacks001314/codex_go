@@ -1096,6 +1096,9 @@ func (r *RuntimeRouter) continueThreadGoalIfIdle(threadID string) {
 
 	params := &turn.TurnStartParams{
 		ThreadID: threadID,
+		// Rust's goal runtime attributes its automatic continuation with the
+		// "goal" turn trigger (ext/goal/src/runtime.rs).
+		TurnTrigger: "goal",
 		AdditionalContext: map[string]turn.AdditionalContextEntry{
 			"goal": {
 				Kind:  turn.AdditionalContextApplication,

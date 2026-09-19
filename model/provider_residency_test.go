@@ -24,9 +24,14 @@ func TestManagedResidencyReachesProviderAndCatalogRequest(t *testing.T) {
 		}))
 		t.Cleanup(server.Close)
 		snapshot := auth.FromAPIKey("api-key")
+		// A custom inference base URL alone no longer opts API-key sessions into
+		// remote catalog discovery (Rust #46561); the residency header reaches
+		// the catalog through an explicit catalog URL.
+		info := CreateOpenAIProvider(server.URL + "/v1")
+		info.ModelCatalogURL = server.URL + "/v1/models"
 		provider := &ConfiguredProvider{
 			providerID: "openai",
-			info:       CreateOpenAIProvider(server.URL + "/v1"),
+			info:       info,
 			auth:       &snapshot,
 		}
 		if residency != "" {

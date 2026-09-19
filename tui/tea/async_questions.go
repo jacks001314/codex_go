@@ -12,6 +12,7 @@ import (
 	"codex_go/protocol"
 	codextui "codex_go/tui"
 	"codex_go/tui/bottom_pane"
+	"codex_go/tui/chatwidget"
 	"codex_go/tui/styles"
 )
 
@@ -40,6 +41,21 @@ func (m *Model) asyncQuestionCountdownCmd() bubbletea.Cmd {
 	return bubbletea.Tick(time.Second, func(time.Time) bubbletea.Msg {
 		return asyncQuestionCountdownMsg{}
 	})
+}
+
+// asyncQuestionNotificationTitle mirrors Rust's #46574 title rule: a single
+// titled question shows the truncated title, a single untitled arrival reads
+// "Question requested", and a batch reports how many questions arrived.
+func asyncQuestionNotificationTitle(questions []bottompane.AsyncUserInputQuestion, addedCount int) string {
+	if len(questions) == 1 {
+		if title := strings.TrimSpace(questions[0].Title); title != "" {
+			return chatwidget.TruncateRunes(title, 30)
+		}
+	}
+	if addedCount == 1 {
+		return "Question requested"
+	}
+	return strconv.Itoa(addedCount) + " questions requested"
 }
 
 // applyAsyncQuestionKey routes question navigation, skip, escape, and choice
