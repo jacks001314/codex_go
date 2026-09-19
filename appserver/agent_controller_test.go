@@ -3,15 +3,162 @@ package appserver
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"codex_go/agent"
+	"codex_go/config"
 	"codex_go/model"
 	"codex_go/session"
 	"codex_go/turn"
 )
+
+// Mirrors Rust's `apply_requested_spawn_agent_model_overrides`: a requested spawn
+// model is resolved against the catalog for the active multi-agent backend, its
+// effort is validated against that model, and a model-only request adopts the
+// model's default reasoning level.
+func TestRuntimeAgentControllerResolvesSpawnModelOverridesLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", SessionID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), Model: "parent-model", ModelProvider: "openai"}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "", parent.Metadata.CWD, 4, agent.VersionV2, nil).(*runtimeAgentController)
+
+	target, ok := firstSpawnAgentCatalogPreset(controller)
+	if !ok {
+		t.Skip("the catalog has no picker-visible V2 spawn model")
+	}
+
+	// An unknown model reports Rust's error with the picker-visible candidates.
+	err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{Model: stringPtr("missing-model")})
+	if err == nil || !strings.HasPrefix(err.Error(), "Unknown model `missing-model` for spawn_agent. Available models: ") {
+		t.Fatalf("unknown model error = %v", err)
+	}
+
+	// A model-only request adopts the catalog model and its default level.
+	args := &agent.SpawnAgentArgs{Model: stringPtr(target.Model)}
+	if err := controller.resolveSpawnModelOverrides(args); err != nil {
+		t.Fatal(err)
+	}
+	if args.Model == nil || *args.Model != target.Model {
+		t.Fatalf("resolved model = %#v, want %q", args.Model, target.Model)
+	}
+	if level := strings.TrimSpace(target.DefaultReasoningLevel); level != "" {
+		if args.ReasoningEffort == nil || *args.ReasoningEffort != level {
+			t.Fatalf("default reasoning effort = %#v, want %q", args.ReasoningEffort, level)
+		}
+	}
+
+	// An unsupported effort is rejected with Rust's message.
+	if unsupported := firstEffortNotSupported(target.SupportedReasoningLevels); unsupported != "" {
+		err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{
+			Model:           stringPtr(target.Model),
+			ReasoningEffort: stringPtr(unsupported),
+		})
+		want := "Reasoning effort `" + unsupported + "` is not supported for model `" + target.Model +
+			"`. Supported reasoning efforts: " + strings.Join(target.SupportedReasoningLevels, ", ")
+		if err == nil || err.Error() != want {
+			t.Fatalf("unsupported effort error = %v, want %q", err, want)
+		}
+	}
+	// A supported effort is applied as requested.
+	if len(target.SupportedReasoningLevels) > 0 {
+		supported := strings.TrimSpace(target.SupportedReasoningLevels[0])
+		args := &agent.SpawnAgentArgs{Model: stringPtr(target.Model), ReasoningEffort: stringPtr(supported)}
+		if err := controller.resolveSpawnModelOverrides(args); err != nil {
+			t.Fatalf("supported effort rejected: %v", err)
+		}
+		if args.ReasoningEffort == nil || *args.ReasoningEffort != supported {
+			t.Fatalf("resolved effort = %#v, want %q", args.ReasoningEffort, supported)
+		}
+	}
+}
+
+// Mirrors Rust's configured subagent defaults: `agents.default_subagent_model`
+// and `agents.default_subagent_reasoning_effort` supply the requested model and
+// effort when the spawn tool omits them, and the configured effort is validated
+// like a requested one.
+func TestRuntimeAgentControllerSpawnUsesConfiguredSubagentDefaultsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", SessionID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), Model: "parent-model", ModelProvider: "openai"}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "", parent.Metadata.CWD, 4, agent.VersionV2, nil).(*runtimeAgentController)
+	target, ok := firstSpawnAgentCatalogPreset(controller)
+	if !ok || len(target.SupportedReasoningLevels) == 0 {
+		t.Skip("the catalog has no picker-visible V2 spawn model with reasoning levels")
+	}
+	level := strings.TrimSpace(target.SupportedReasoningLevels[0])
+	configTOML := "[agents]\ndefault_subagent_model = \"" + target.Model + "\"\ndefault_subagent_reasoning_effort = \"" + level + "\"\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configTOML), 0o600); err != nil {
+		t.Fatalf("WriteFile config error = %v", err)
+	}
+	// The defaults come from the invoking turn's effective configuration.
+	if err := router.threads.RegisterTurn("parent", "parent-turn", func() {}, now.UnixMilli(), &turn.TurnStartParams{ThreadID: "parent"}); err != nil {
+		t.Fatal(err)
+	}
+	args := &agent.SpawnAgentArgs{}
+	if err := controller.resolveSpawnModelOverrides(args); err != nil {
+		t.Fatal(err)
+	}
+	if args.Model == nil || *args.Model != target.Model {
+		t.Fatalf("configured default model = %#v, want %q", args.Model, target.Model)
+	}
+	if args.ReasoningEffort == nil || *args.ReasoningEffort != level {
+		t.Fatalf("configured default effort = %#v, want %q", args.ReasoningEffort, level)
+	}
+	// An explicit tool argument still wins over the configured default.
+	override := "missing-model"
+	err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{Model: &override})
+	if err == nil || !strings.Contains(err.Error(), "Unknown model `missing-model`") {
+		t.Fatalf("explicit override error = %v", err)
+	}
+}
+
+// firstSpawnAgentCatalogPreset returns the first picker-visible preset that the
+// V2 backend accepts (Rust's spawn-agent model filter).
+func firstSpawnAgentCatalogPreset(controller *runtimeAgentController) (model.ModelPreset, bool) {
+	manager := controller.modelsManagerForSpawn()
+	if manager == nil {
+		return model.ModelPreset{}, false
+	}
+	for _, preset := range manager.ListModels(model.RefreshOffline) {
+		if model.ModelPresetShowInPicker(preset) && model.ModelPresetSupportsMultiAgentBackend(preset, string(agent.VersionV2)) {
+			return preset, true
+		}
+	}
+	return model.ModelPreset{}, false
+}
+
+func firstEffortNotSupported(supported []string) string {
+	for _, candidate := range []string{"ultra", "max", "xhigh", "high", "medium", "low", "minimal", "none"} {
+		found := false
+		for _, level := range supported {
+			if strings.TrimSpace(level) == candidate {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return candidate
+		}
+	}
+	return ""
+}
 
 // Mirrors Rust #46075: a spawn builds the child from the invoking step's captured
 // settings (model, effective reasoning effort, reasoning summary) rather than the
@@ -91,7 +238,13 @@ func TestRuntimeAgentControllerPersistsSpawnMetadataAndGraph(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), SpawnGraph: graph})
 	runtimeController := newRuntimeAgentController(router, "parent", parent.Metadata.CWD, 1).(*runtimeAgentController)
 	controller := agent.ToolController(runtimeController)
-	modelID := "gpt-review"
+	// A requested spawn model must exist in the catalog (Rust's
+	// find_spawn_agent_model_name), so use a real preset rather than a fake slug.
+	preset, ok := firstSpawnAgentCatalogPreset(runtimeController)
+	if !ok {
+		t.Skip("the catalog has no picker-visible V2 spawn model")
+	}
+	modelID := preset.Model
 	result, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{Model: &modelID, ResolvedRole: "reviewer", NicknameCandidates: []string{"Sage"}})
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +256,7 @@ func TestRuntimeAgentControllerPersistsSpawnMetadataAndGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.ParentThreadID != "parent" || record.Metadata.AgentRole != "reviewer" || record.Metadata.AgentNickname != "Sage" || record.Metadata.Model != "gpt-review" || record.Metadata.ModelProvider != "openai" || record.Metadata.ThreadSource != "subAgentThreadSpawn" {
+	if record.ParentThreadID != "parent" || record.Metadata.AgentRole != "reviewer" || record.Metadata.AgentNickname != "Sage" || record.Metadata.Model != modelID || record.Metadata.ModelProvider != "openai" || record.Metadata.ThreadSource != "subAgentThreadSpawn" {
 		t.Fatalf("record = %+v", record)
 	}
 	children, err := graph.ListThreadSpawnChildren("parent", nil)

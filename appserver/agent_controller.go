@@ -12,6 +12,7 @@ import (
 
 	"codex_go/agent"
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -89,6 +90,11 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	}
 	if c.version == agent.VersionV1 && c.maxDepth >= 0 && c.depth+1 > c.maxDepth {
 		return nil, agent.ErrAgentDepthLimitReached
+	}
+	// Rust `prepare_agent_spawn_config`: resolve the requested model/effort (or
+	// the configured subagent defaults) before the child thread is created.
+	if err := c.resolveSpawnModelOverrides(args); err != nil {
+		return nil, err
 	}
 	registry := c.registry
 	if registry == nil {
@@ -245,6 +251,108 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		}
 	}
 	return &agent.SpawnAgentResult{AgentID: string(threadID), TaskName: agentPath, Nickname: stringPtrIfNotEmpty(nickname)}, nil
+}
+
+// modelsManagerForSpawn mirrors the exec lane's accessor: the running agent's
+// catalog when it exposes one, otherwise the bundled static catalog.
+func (c *runtimeAgentController) modelsManagerForSpawn() model.ModelsManager {
+	if c == nil || c.router == nil {
+		return nil
+	}
+	if runner, ok := c.router.services.Agent.(*model.ResponsesAgentRunner); ok && runner != nil && runner.ModelsManager != nil {
+		return runner.ModelsManager
+	}
+	return model.NewStaticModelsManager(model.BundledModelsResponse())
+}
+
+// spawnAgentDefaults returns the invoking turn's configured subagent defaults
+// (Rust `config.agent_default_subagent_model` and
+// `agent_default_subagent_reasoning_effort`, parsed from the `[agents]` table).
+func (c *runtimeAgentController) spawnAgentDefaults() (string, string) {
+	if c == nil || c.router == nil {
+		return "", ""
+	}
+	params := c.router.activeTurnParams(c.parentID)
+	if params == nil {
+		return "", ""
+	}
+	cfg, err := c.router.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil {
+		return "", ""
+	}
+	agentsConfig, err := cfg.AgentsConfig(c.router.configBaseDirForAgents())
+	if err != nil || agentsConfig == nil {
+		return "", ""
+	}
+	return strings.TrimSpace(agentsConfig.DefaultSubagentModel), strings.TrimSpace(agentsConfig.DefaultSubagentReasoningEffort)
+}
+
+// resolveSpawnModelOverrides mirrors Rust's
+// `apply_requested_spawn_agent_model_overrides`: a requested model - or the
+// configured `agents.default_subagent_model` - must exist for the active
+// multi-agent backend, and a requested effort - or
+// `agents.default_subagent_reasoning_effort` - must be supported by the resolved
+// model. When only a model is requested its default reasoning level applies.
+// Explicit tool arguments win over the configured defaults, and both win over
+// the invoking step's captured settings.
+func (c *runtimeAgentController) resolveSpawnModelOverrides(args *agent.SpawnAgentArgs) error {
+	if c == nil || args == nil {
+		return nil
+	}
+	manager := c.modelsManagerForSpawn()
+	if manager == nil {
+		return nil
+	}
+	requestedModel := ""
+	if args.Model != nil {
+		requestedModel = strings.TrimSpace(*args.Model)
+	}
+	requestedEffort := ""
+	if args.ReasoningEffort != nil {
+		requestedEffort = strings.TrimSpace(*args.ReasoningEffort)
+	}
+	defaultModel, defaultEffort := c.spawnAgentDefaults()
+	if requestedModel == "" {
+		requestedModel = defaultModel
+	}
+	if requestedEffort == "" {
+		requestedEffort = defaultEffort
+	}
+	if requestedModel == "" && requestedEffort == "" {
+		return nil
+	}
+
+	capturedModel, _, _ := c.capturedSpawnSettings()
+	selectedModel := capturedModel
+	var selectedPreset *model.ModelPreset
+	if requestedModel != "" {
+		presets := manager.ListModels(model.RefreshOffline)
+		name, err := model.SpawnAgentModelName(presets, requestedModel, string(c.version))
+		if err != nil {
+			return err
+		}
+		selectedModel = name
+		for i := range presets {
+			if presets[i].Model == name {
+				selectedPreset = &presets[i]
+				break
+			}
+		}
+		value := selectedModel
+		args.Model = &value
+	}
+	if requestedEffort != "" {
+		info := manager.GetModelInfo(selectedModel, nil)
+		if err := model.ValidateSpawnAgentReasoningEffort(selectedModel, info.SupportedReasoningLevels, requestedEffort); err != nil {
+			return err
+		}
+		value := requestedEffort
+		args.ReasoningEffort = &value
+	} else if selectedPreset != nil && strings.TrimSpace(selectedPreset.DefaultReasoningLevel) != "" {
+		value := strings.TrimSpace(selectedPreset.DefaultReasoningLevel)
+		args.ReasoningEffort = &value
+	}
+	return nil
 }
 
 // capturedSpawnSettings returns the invoking turn's captured model, effective

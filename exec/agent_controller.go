@@ -335,6 +335,8 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		if agentsConfig.MaxDepth != nil {
 			rootController.maxDepth = *agentsConfig.MaxDepth
 		}
+		rootController.defaultSubagentModel = strings.TrimSpace(agentsConfig.DefaultSubagentModel)
+		rootController.defaultSubagentReasoningEffort = strings.TrimSpace(agentsConfig.DefaultSubagentReasoningEffort)
 		rootController.waitDefault = options.waitDefault
 		rootController.waitMin = options.waitMin
 		rootController.waitMax = options.waitMax
@@ -467,6 +469,13 @@ type execAgentController struct {
 	parentModel       string
 	multiAgentVersion agent.MultiAgentVersion
 	modelsManager     model.ModelsManager
+	// defaultSubagentModel / defaultSubagentReasoningEffort carry
+	// `agents.default_subagent_model` and
+	// `agents.default_subagent_reasoning_effort` (Rust
+	// `config.agent_default_subagent_model` / `agent_default_subagent_reasoning_effort`)
+	// as the spawn-request defaults applied beneath explicit tool arguments.
+	defaultSubagentModel           string
+	defaultSubagentReasoningEffort string
 
 	mu           sync.Mutex
 	wg           sync.WaitGroup
@@ -644,61 +653,55 @@ func (c *execAgentController) resolveSpawnModelOverrides(args *agent.SpawnAgentA
 	if args.Model != nil {
 		requestedModel = strings.TrimSpace(*args.Model)
 	}
+	if requestedModel == "" {
+		requestedModel = strings.TrimSpace(s.defaultSubagentModel)
+	}
+	requestedEffort := ""
+	if args.ReasoningEffort != nil {
+		requestedEffort = strings.TrimSpace(*args.ReasoningEffort)
+	}
+	if requestedEffort == "" {
+		requestedEffort = strings.TrimSpace(s.defaultSubagentReasoningEffort)
+	}
 	selectedModel := requestedModel
 	var selectedPreset *model.ModelPreset
+	availableModels := s.modelsManager.ListModels(model.RefreshOffline)
 	if requestedModel != "" {
-		targetVersion := knownExecMultiAgentVersion(s.multiAgentVersion)
+		targetVersion := string(knownExecMultiAgentVersion(s.multiAgentVersion))
 		if targetVersion == "" {
-			targetVersion = agent.VersionV2
+			targetVersion = string(agent.VersionV2)
 		}
-		availableModels := s.modelsManager.ListModels(model.RefreshOffline)
+		name, err := model.SpawnAgentModelName(availableModels, requestedModel, targetVersion)
+		if err != nil {
+			return err
+		}
+		selectedModel = name
 		for i := range availableModels {
 			candidate := &availableModels[i]
-			if candidate.Model == requestedModel && candidate.MultiAgentVersion == string(targetVersion) {
+			if candidate.Model == name {
 				selectedPreset = candidate
 				break
 			}
 		}
-		if selectedPreset == nil {
-			available := make([]string, 0, 5)
-			for _, candidate := range availableModels {
-				if candidate.MultiAgentVersion == string(targetVersion) {
-					available = append(available, candidate.Model)
-					if len(available) == 5 {
-						break
-					}
-				}
-			}
-			return fmt.Errorf("Unknown model `%s` for spawn_agent. Available models: %s", requestedModel, strings.Join(available, ", "))
-		}
 	} else {
 		selectedModel = strings.TrimSpace(s.parentModel)
 	}
-	if args.ReasoningEffort != nil && strings.TrimSpace(*args.ReasoningEffort) != "" {
-		requestedEffort := strings.TrimSpace(*args.ReasoningEffort)
+	if requestedEffort != "" {
 		info := s.modelsManager.GetModelInfo(selectedModel, nil)
-		if !execContainsString(info.SupportedReasoningLevels, requestedEffort) {
-			return fmt.Errorf(
-				"Reasoning effort `%s` is not supported for model `%s`. Supported reasoning efforts: %s",
-				requestedEffort,
-				selectedModel,
-				strings.Join(info.SupportedReasoningLevels, ", "),
-			)
+		if err := model.ValidateSpawnAgentReasoningEffort(selectedModel, info.SupportedReasoningLevels, requestedEffort); err != nil {
+			return err
 		}
+		value := requestedEffort
+		args.ReasoningEffort = &value
 	} else if selectedPreset != nil && strings.TrimSpace(selectedPreset.DefaultReasoningLevel) != "" {
 		value := strings.TrimSpace(selectedPreset.DefaultReasoningLevel)
 		args.ReasoningEffort = &value
 	}
-	return nil
-}
-
-func execContainsString(values []string, target string) bool {
-	for _, value := range values {
-		if strings.TrimSpace(value) == strings.TrimSpace(target) {
-			return true
-		}
+	if requestedModel != "" {
+		value := selectedModel
+		args.Model = &value
 	}
-	return false
+	return nil
 }
 
 func (c *execAgentController) SendInput(ctx context.Context, args *agent.SendInputArgs) (*agent.SendInputResult, error) {

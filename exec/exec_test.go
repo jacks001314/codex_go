@@ -2957,8 +2957,8 @@ func TestToolRouterRegistersRealMultiAgentV2Tools(t *testing.T) {
 
 func TestExecMultiAgentVersionForRunMatchesCatalogAndConfigPrecedence(t *testing.T) {
 	modelsManager := model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{
-		{Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v2"},
-		{Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v1"},
+		{Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityList, SupportedInAPI: true, MultiAgentVersion: "v2"},
+		{Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityList, SupportedInAPI: true, MultiAgentVersion: "v1"},
 		{Slug: "catalog-disabled", DisplayName: "catalog-disabled", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "disabled"},
 		{Slug: "catalog-unspecified", DisplayName: "catalog-unspecified", Visibility: model.VisibilityVisible, SupportedInAPI: true},
 	}})
@@ -3006,7 +3006,7 @@ func TestToolRouterUsesCatalogSelectedV2WithoutFeatureFlag(t *testing.T) {
 	home := t.TempDir()
 	runner := NewLocalRunner(home)
 	modelsManager := model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
-		Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v2",
+		Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityList, SupportedInAPI: true, MultiAgentVersion: "v2",
 	}}})
 	req := &Request{Exec: cli.ExecOptions{Prompt: "delegate", Shared: cli.SharedOptions{CWD: t.TempDir(), Model: "catalog-v2"}}}
 	cfg := &config.Config{Values: map[string]any{}}
@@ -3047,7 +3047,7 @@ func TestToolRouterUsesCatalogSelectedV2WithoutFeatureFlag(t *testing.T) {
 func TestToolRouterUsesCatalogSelectedV1WithoutFeatureFlag(t *testing.T) {
 	runner := NewLocalRunner(t.TempDir())
 	modelsManager := model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{{
-		Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityVisible, SupportedInAPI: true, MultiAgentVersion: "v1",
+		Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityList, SupportedInAPI: true, MultiAgentVersion: "v1",
 	}}})
 	req := &Request{Exec: cli.ExecOptions{Prompt: "delegate", Shared: cli.SharedOptions{CWD: t.TempDir(), Model: "catalog-v1"}}}
 	tools, err := runner.multiAgentToolsForRun(
@@ -3127,16 +3127,22 @@ func TestExecAgentControllerValidatesV2SpawnModelOverrides(t *testing.T) {
 	controller.parentModel = "catalog-v2"
 	controller.modelsManager = model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{
 		{
-			Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityVisible, SupportedInAPI: true,
+			Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityList, SupportedInAPI: true,
 			MultiAgentVersion: "v2", DefaultReasoningLevel: "medium", SupportedReasoningLevels: []string{"low", "medium", "high"}, ServiceTiers: []string{"priority"},
 		},
 		{
-			Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityVisible, SupportedInAPI: true,
+			Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityList, SupportedInAPI: true,
 			MultiAgentVersion: "v1", DefaultReasoningLevel: "medium", SupportedReasoningLevels: []string{"medium"},
 		},
 	}})
-	unsupportedModel := "catalog-v1"
-	if err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{Model: &unsupportedModel}); err == nil || !strings.Contains(err.Error(), "Unknown model `catalog-v1`") || !strings.Contains(err.Error(), "Available models: catalog-v2") {
+	// Rust `model_supports_multi_agent_backend`: the V2 backend accepts a preset
+	// whose version is v1 (only an explicitly disabled preset is excluded).
+	v1Model := "catalog-v1"
+	if err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{Model: &v1Model}); err != nil {
+		t.Fatalf("v1 preset rejected for a V2 spawn: %v", err)
+	}
+	unsupportedModel := "missing-model"
+	if err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{Model: &unsupportedModel}); err == nil || !strings.Contains(err.Error(), "Unknown model `missing-model`") || !strings.Contains(err.Error(), "Available models: catalog-v2, catalog-v1") {
 		t.Fatalf("unsupported model error = %v", err)
 	}
 	unsupportedEffort := "ultra"
@@ -3150,6 +3156,42 @@ func TestExecAgentControllerValidatesV2SpawnModelOverrides(t *testing.T) {
 	}
 	if args.ReasoningEffort == nil || *args.ReasoningEffort != "medium" {
 		t.Fatalf("default reasoning effort = %#v, want medium", args.ReasoningEffort)
+	}
+}
+
+// Mirrors Rust's `apply_requested_spawn_agent_model_overrides` defaults: when the
+// tool arguments omit a model or effort, the configured
+// `agents.default_subagent_model` / `agents.default_subagent_reasoning_effort`
+// supply them, and the configured effort is validated like a requested one.
+func TestExecAgentControllerAppliesConfiguredSubagentDefaultsLikeRust(t *testing.T) {
+	controller := newExecAgentController(NewLocalRunner(t.TempDir()), context.Background(), &Request{}, "thread-root", 3).(*execAgentController)
+	controller.parentModel = "catalog-v2"
+	controller.defaultSubagentModel = "catalog-v1"
+	controller.defaultSubagentReasoningEffort = "medium"
+	controller.modelsManager = model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{
+		{
+			Slug: "catalog-v2", DisplayName: "catalog-v2", Visibility: model.VisibilityList, SupportedInAPI: true,
+			MultiAgentVersion: "v2", DefaultReasoningLevel: "medium", SupportedReasoningLevels: []string{"low", "medium", "high"},
+		},
+		{
+			Slug: "catalog-v1", DisplayName: "catalog-v1", Visibility: model.VisibilityList, SupportedInAPI: true,
+			MultiAgentVersion: "v1", DefaultReasoningLevel: "medium", SupportedReasoningLevels: []string{"medium"},
+		},
+	}})
+
+	args := &agent.SpawnAgentArgs{}
+	if err := controller.resolveSpawnModelOverrides(args); err != nil {
+		t.Fatal(err)
+	}
+	if args.Model == nil || *args.Model != "catalog-v1" || args.ReasoningEffort == nil || *args.ReasoningEffort != "medium" {
+		t.Fatalf("configured defaults = model %#v effort %#v", args.Model, args.ReasoningEffort)
+	}
+
+	// A configured effort the resolved model does not support is rejected like a
+	// requested one.
+	controller.defaultSubagentReasoningEffort = "high"
+	if err := controller.resolveSpawnModelOverrides(&agent.SpawnAgentArgs{}); err == nil || !strings.Contains(err.Error(), "Reasoning effort `high` is not supported for model `catalog-v1`") {
+		t.Fatalf("configured unsupported effort error = %v", err)
 	}
 }
 
