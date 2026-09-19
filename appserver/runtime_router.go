@@ -4648,7 +4648,10 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 		sessionDefaults["sandbox_policy"] = params.Sandbox
 	}
 	if params.Permissions != nil {
-		sessionDefaults["permissions"] = *params.Permissions
+		// The selected profile is Rust's `ConfigOverrides::default_permissions`;
+		// `permissions` is the named-profile table and must not be clobbered by
+		// the selection (#45981).
+		sessionDefaults["default_permissions"] = *params.Permissions
 	}
 	if len(sessionDefaults) > 0 {
 		record.Metadata.Extra["config"] = sessionDefaults
@@ -4855,7 +4858,9 @@ func applyThreadLifecycleMCPConfig(
 		overrides["sandbox_policy"] = sandboxPolicy
 	}
 	if permissions != nil {
-		overrides["permissions"] = *permissions
+		// Rust's `ConfigOverrides::default_permissions`, not the `[permissions]`
+		// profile table (#45981).
+		overrides["default_permissions"] = *permissions
 	}
 	if serviceTierSet || serviceTier != nil {
 		overrides["service_tier"] = stringPtrValue(serviceTier)
@@ -4908,7 +4913,9 @@ func (r *RuntimeRouter) persistThreadResumeConfigSnapshot(threadID string, reque
 		overrides["sandbox_policy"] = params.Sandbox
 	}
 	if params.Permissions != nil {
-		overrides["permissions"] = *params.Permissions
+		// Rust's `ConfigOverrides::default_permissions`, not the `[permissions]`
+		// profile table (#45981).
+		overrides["default_permissions"] = *params.Permissions
 	}
 	if params.ServiceTierSet || params.ServiceTier != nil {
 		overrides["service_tier"] = stringPtrValue(params.ServiceTier)
