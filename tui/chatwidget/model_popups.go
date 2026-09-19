@@ -28,6 +28,9 @@ type ReasoningEffortPopupOption struct {
 
 type ModelPopupPreset struct {
 	Model                     string
+	// DisplayName is the catalog display name (Rust ModelPreset::display_name).
+	// Selection and persistence keep using Model; only labels use this.
+	DisplayName               string
 	Description               string
 	ShowInPicker              bool
 	IsDefault                 bool
@@ -74,7 +77,7 @@ func NewModelPopupView(config ModelPopupConfig, presets []ModelPopupPreset) Mode
 		modelID := strings.TrimSpace(preset.Model)
 		items = append(items, SelectionItem{
 			ID:              modelID,
-			Name:            modelID,
+			Name:            preset.displayName(),
 			Description:     strings.TrimSpace(preset.Description),
 			Action:          ModelMenuActionSelectModel,
 			IsCurrent:       modelID == currentModel,
@@ -117,7 +120,7 @@ func NewAllModelsPopupView(config ModelPopupConfig, presets []ModelPopupPreset) 
 		singleEffort := len(effectiveReasoningPopupOptions(preset)) <= 1
 		items = append(items, SelectionItem{
 			ID:                         modelID,
-			Name:                       modelID,
+			Name:                       preset.displayName(),
 			Description:                strings.TrimSpace(preset.Description),
 			Action:                     ModelMenuActionOpenReasoning,
 			IsCurrent:                  modelID == currentModel,
@@ -129,7 +132,8 @@ func NewAllModelsPopupView(config ModelPopupConfig, presets []ModelPopupPreset) 
 	return ModelPopupResult{View: SelectionView{
 		ViewID:      AllModelsSelectionViewID,
 		Title:       "Select Model and Effort",
-		Subtitle:    "Access legacy models by running codex -m <model_name> or in your config.toml",
+		// Rust #46503 removed the legacy-model instruction from the full picker.
+		Subtitle:    "",
 		HeaderLines: modelPopupWarningLines(config),
 		FooterHint:  standardPopupHintLine,
 		AllowCancel: true,
@@ -194,7 +198,7 @@ func NewReasoningPopupView(config ModelPopupConfig, preset ModelPopupPreset) Mod
 	}
 	return ModelPopupResult{View: SelectionView{
 		ViewID:               ReasoningSelectionViewID,
-		Title:                "Select Reasoning Level for " + modelID,
+		Title:                "Select Reasoning Level for " + preset.displayName(),
 		FooterHint:           standardPopupHintLine,
 		AllowCancel:          true,
 		InitialSelectedIndex: initial,
@@ -311,7 +315,7 @@ func currentModelLabel(config ModelPopupConfig, presets []ModelPopupPreset) stri
 	current := strings.TrimSpace(config.CurrentModel)
 	for _, preset := range presets {
 		if strings.TrimSpace(preset.Model) == current {
-			return strings.TrimSpace(preset.Model)
+			return preset.displayName()
 		}
 	}
 	if strings.TrimSpace(config.CurrentLabel) != "" {
@@ -321,6 +325,15 @@ func currentModelLabel(config ModelPopupConfig, presets []ModelPopupPreset) stri
 		return current
 	}
 	return "unknown"
+}
+
+// displayName prefers the catalog display name and falls back to the model id
+// for models the catalog does not list (Rust #46503).
+func (p ModelPopupPreset) displayName() string {
+	if name := strings.TrimSpace(p.DisplayName); name != "" {
+		return name
+	}
+	return strings.TrimSpace(p.Model)
 }
 
 func modelPopupWarningLines(config ModelPopupConfig) []string {

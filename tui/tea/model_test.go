@@ -8700,3 +8700,39 @@ func TestModelStartupConfigWarningsLikeRust(t *testing.T) {
 		t.Fatalf("late config warning should use the warning path:\n%s", view)
 	}
 }
+
+// Mirrors Rust #46503: the TUI's display surfaces use the catalog display name
+// for the current model, while the model id keeps driving selection and
+// persistence. Models the catalog does not list fall back to their id.
+func TestModelDisplayNameSurfacesLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.Model = "gpt-5.6-terra"
+	// The header is added on demand so the catalog above is already known.
+	model := NewModel(state, Options{Width: 80, Height: 24})
+	model.modelCatalogOpts = []codextui.ModelPickerOption{
+		{ID: "gpt-5.6-terra", Label: "GPT-5.6-Terra", ShowInPicker: true},
+		{ID: "gpt-5.6-luna", Label: "GPT-5.6-Luna", ShowInPicker: true},
+	}
+
+	if got := model.modelDisplayName("gpt-5.6-terra"); got != "GPT-5.6-Terra" {
+		t.Fatalf("modelDisplayName = %q, want the catalog display name", got)
+	}
+	if got := model.modelDisplayName("unlisted-model"); got != "unlisted-model" {
+		t.Fatalf("unlisted modelDisplayName = %q, want the id fallback", got)
+	}
+	if got := model.statusControlsRuntime().ModelName; got != "GPT-5.6-Terra" {
+		t.Fatalf("status runtime model name = %q, want the catalog display name", got)
+	}
+
+	model.addStartupSessionHeader("0.1.0")
+	raw := ""
+	for _, message := range model.State.Messages {
+		raw += message.RawText
+	}
+	if !strings.Contains(raw, "GPT-5.6-Terra") {
+		t.Fatalf("startup session header missing the display name: %q", raw)
+	}
+	if strings.Contains(raw, "gpt-5.6-terra") {
+		t.Fatalf("startup session header leaked the raw model id: %q", raw)
+	}
+}

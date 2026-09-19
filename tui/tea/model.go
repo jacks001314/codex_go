@@ -6047,7 +6047,7 @@ func (m *Model) addStartupSessionHeader(version string) {
 		cwd = strings.TrimSpace(m.statusControlsRuntime().CWD)
 	}
 	header := historycell.NewSessionHeader(
-		strings.TrimSpace(m.State.Model),
+		m.modelDisplayName(m.State.Model),
 		m.State.EffectiveReasoningEffort(),
 		false,
 		cwd,

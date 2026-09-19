@@ -409,7 +409,7 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 		CWD:                   cwd,
 		ProjectName:           projectName,
 		ProjectRoot:           cwd,
-		ModelName:             strings.TrimSpace(m.State.Model),
+		ModelName:             m.modelDisplayName(m.State.Model),
 		ReasoningEffort:       m.State.EffectiveReasoningEffort(),
 		StatusText:            strings.TrimSpace(m.State.Status),
 		Permissions:           strings.TrimSpace(m.State.Sandbox),
@@ -422,6 +422,31 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 		CodexVersion:          "codex_go",
 		RateLimitSnapshots:    cloneRateLimitSnapshots(m.rateLimitSnapshots),
 	}
+}
+
+// modelDisplayName resolves the catalog display name for a model id and falls
+// back to the id itself when the catalog does not list the model (Rust #46503).
+// Selection and persistence keep using the id; only display surfaces use the
+// resolved label.
+func (m *Model) modelDisplayName(modelID string) string {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return ""
+	}
+	if m == nil {
+		return modelID
+	}
+	for _, options := range [][]codextui.ModelPickerOption{m.modelPickerOpts, m.modelCatalogOpts} {
+		for _, option := range options {
+			if strings.TrimSpace(option.ID) != modelID {
+				continue
+			}
+			if label := strings.TrimSpace(option.Label); label != "" {
+				return label
+			}
+		}
+	}
+	return modelID
 }
 
 func (m *Model) renderStatusHeader() string {
