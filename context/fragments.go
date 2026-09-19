@@ -476,6 +476,28 @@ func (c *CurrentTimeReminder) Body() string {
 	return fmt.Sprintf("It is %s.", now.UTC().Format("2006-01-02 15:04:05 UTC"))
 }
 
+// CurrentTimeUnavailableMessage mirrors Rust
+// context::CurrentTimeUnavailable::MESSAGE: the model-visible text used both by
+// the clock tools and by the nonfatal clock-read-error notice.
+const CurrentTimeUnavailableMessage = "failed to read current time"
+
+// CurrentTimeUnavailable is the developer fragment recorded when the clock
+// provider fails while the `nonfatal_clock_read_errors` feature is enabled
+// (Rust context::CurrentTimeUnavailable).
+type CurrentTimeUnavailable struct{}
+
+func (c *CurrentTimeUnavailable) Role() string {
+	return RoleDeveloper
+}
+
+func (c *CurrentTimeUnavailable) Markers() (string, string) {
+	return "<current_time_unavailable>", "</current_time_unavailable>"
+}
+
+func (c *CurrentTimeUnavailable) Body() string {
+	return CurrentTimeUnavailableMessage
+}
+
 type AdditionalContextFragment struct {
 	Key   string
 	Value string
@@ -796,6 +818,10 @@ func (p *PermissionsInstructions) ContentKind() string {
 
 func (c *CurrentTimeReminder) ContentKind() string {
 	return "current_time.reminder"
+}
+
+func (c *CurrentTimeUnavailable) ContentKind() string {
+	return "current_time.unavailable"
 }
 
 func (a *AdditionalContextFragment) ContentKind() string {

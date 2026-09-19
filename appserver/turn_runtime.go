@@ -5487,14 +5487,37 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
 	if !cfg.IncludeEnvironmentContext() {
 		return nil, nil
 	}
-	current, err := r.environmentCurrentTime(ctx, request.ThreadID, cfg)
+	current, emitNotice, err := r.environmentClockForTurn(ctx, request.ThreadID, request.TurnID, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read current time: %w", err)
+		return nil, err
 	}
-	text := r.turnEnvironmentContextTextAt(r.environmentContextParams(request.ThreadID, params), current.In(time.Local), localTimezoneName(), "")
-	return []compact.Item{{
-		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: current.UTC(),
-	}}, nil
+	created := time.Now().UTC()
+	if current != nil {
+		created = current.UTC()
+	}
+	items := []compact.Item{}
+	if emitNotice {
+		// Rust records the CurrentTimeUnavailable fragment before the world
+		// state section (#46006).
+		if rendered := contextfrag.Render(&contextfrag.CurrentTimeUnavailable{}); rendered != nil && strings.TrimSpace(rendered.Content) != "" {
+			role := contextfrag.RoleDeveloper
+			if strings.TrimSpace(rendered.Role) != "" {
+				role = strings.TrimSpace(rendered.Role)
+			}
+			items = append(items, compact.Item{
+				ID:      "current-time-unavailable-" + safeIdentifier(request.TurnID),
+				Type:    "message",
+				Role:    role,
+				Kind:    "current_time_unavailable",
+				Text:    strings.TrimSpace(rendered.Content),
+				Created: created,
+			})
+		}
+	}
+	text := r.turnEnvironmentContextTextAtDate(r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "")
+	return append(items, compact.Item{
+		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: created,
+	}), nil
 }
 
 func (r *RuntimeRouter) notifyContextCompactionItemStarted(threadID string, turnID string, item session.Item) {
@@ -6515,10 +6538,12 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		}
 	}
 	instructions, additionalInputItems := instructionsAndInputItemsWithAdditionalContext(instructions, params.AdditionalContext)
-	if item, err := r.turnEnvironmentContextInputItemForTurn(ctx, threadID, params, cfg); err != nil {
+	clockNoticeSessionItems := []session.Item{}
+	if items, sessions, err := r.turnEnvironmentContextInputItemForTurn(ctx, threadID, turnID, params, cfg); err != nil {
 		return nil, err
-	} else if item != nil {
-		inputItems = append(inputItems, item)
+	} else {
+		inputItems = append(inputItems, items...)
+		clockNoticeSessionItems = append(clockNoticeSessionItems, sessions...)
 	}
 	inputItems = append(inputItems, additionalInputItems...)
 	permissionsSessionItems := []session.Item{}
@@ -6580,6 +6605,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	sessionItems := append([]session.Item(nil), currentTimeSessionItems...)
 	sessionItems = append(sessionItems, realtimeStateSessionItems...)
 	sessionItems = append(sessionItems, permissionsSessionItems...)
+	sessionItems = append(sessionItems, clockNoticeSessionItems...)
 	sessionItems = append(sessionItems, collaborationModeSessionItems...)
 	sessionItems = append(sessionItems, skillInstructionSessionItemsForTurn(turnID, skillInputItems, time.UnixMilli(startedAtMS).UTC())...)
 	var extraSessionItemsMu sync.Mutex
@@ -6783,18 +6809,44 @@ func autoReviewEnabledForTurn(cfg *config.Config, params *turn.TurnStartParams) 
 // In particular, the shell reported here must be the same primary environment
 // shell that exec_command will use, otherwise models can emit syntax for the
 // host shell (for example a POSIX heredoc) and hand it to remote PowerShell.
-func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Context, threadID string, params *turn.TurnStartParams, cfg *config.Config) (any, error) {
+//
+// A stalled external clock is nonfatal once `nonfatal_clock_read_errors` is
+// enabled (#46006): the environment context renders without a date and the
+// CurrentTimeUnavailable notice is returned alongside it.
+func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Context, threadID string, turnID string, params *turn.TurnStartParams, cfg *config.Config) ([]any, []session.Item, error) {
 	if cfg != nil && !cfg.IncludeEnvironmentContext() {
-		return nil, nil
+		return nil, nil, nil
 	}
-	current, err := r.environmentCurrentTime(ctx, threadID, cfg)
+	turnID = strings.TrimSpace(turnID)
+	current, emitNotice, err := r.environmentClockForTurn(ctx, threadID, turnID, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read current time: %w", err)
+		return nil, nil, err
 	}
 	params = r.environmentContextParams(threadID, params)
 	shellVersion := r.powershellShellVersionForTurn(ctx, cfg, params)
-	text := r.turnEnvironmentContextTextAt(params, current.In(time.Local), localTimezoneName(), shellVersion)
-	return model.UserMessageInputItem(text), nil
+	text := r.turnEnvironmentContextTextAtDate(params, current, localTimezoneName(), shellVersion)
+	items := []any{}
+	sessionItems := []session.Item{}
+	if emitNotice {
+		noticeInput, noticeSessionItems := currentTimeUnavailableNotice(turnID, time.Now().UTC())
+		items = append(items, noticeInput...)
+		sessionItems = append(sessionItems, noticeSessionItems...)
+	}
+	return append(items, model.UserMessageInputItem(text)), sessionItems, nil
+}
+
+// environmentClockForTurn mirrors Rust's environment-date clock read: an
+// external clock source goes through the shared read_clock_for_context path,
+// while other sources use the router's own clock. A nil time means the caller
+// renders without a date.
+func (r *RuntimeRouter) environmentClockForTurn(ctx context.Context, threadID string, turnID string, cfg *config.Config) (*time.Time, bool, error) {
+	if cfg != nil {
+		if reminder := cfg.CurrentTimeReminder(); reminder != nil && reminder.Enabled && reminder.ClockSource == config.CurrentTimeSourceExternal {
+			return r.readClockForContext(ctx, threadID, turnID, cfg)
+		}
+	}
+	now := runtimeRouterClockTime(r)
+	return &now, false, nil
 }
 
 func (r *RuntimeRouter) turnEnvironmentContextInputItem(params *turn.TurnStartParams) any {
@@ -6815,15 +6867,6 @@ func (r *RuntimeRouter) powershellShellVersionForTurn(ctx context.Context, cfg *
 		return ""
 	}
 	return queryPowerShellVersion(ctx, environments[0].Shell.Path)
-}
-
-func (r *RuntimeRouter) environmentCurrentTime(ctx context.Context, threadID string, cfg *config.Config) (time.Time, error) {
-	if cfg != nil {
-		if reminder := cfg.CurrentTimeReminder(); reminder != nil && reminder.Enabled && reminder.ClockSource == config.CurrentTimeSourceExternal {
-			return r.requestCurrentTime(ctx, threadID)
-		}
-	}
-	return runtimeRouterClockTime(r), nil
 }
 
 func runtimeRouterClockTime(r *RuntimeRouter) time.Time {
@@ -6851,6 +6894,14 @@ func (r *RuntimeRouter) environmentContextParams(threadID string, params *turn.T
 }
 
 func (r *RuntimeRouter) turnEnvironmentContextTextAt(params *turn.TurnStartParams, now time.Time, timezone string, shellVersion string) string {
+	local := now.In(time.Local)
+	return r.turnEnvironmentContextTextAtDate(params, &local, timezone, shellVersion)
+}
+
+// turnEnvironmentContextTextAtDate renders the environment context with an
+// optional date. A nil date omits the element, which is how a nonfatal clock
+// failure renders (#46006).
+func (r *RuntimeRouter) turnEnvironmentContextTextAtDate(params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string) string {
 	environments := r.unifiedExecEnvironmentsForTurn(params)
 	defaultShellName := r.defaultEnvironmentShellName()
 	var b strings.Builder
@@ -6881,7 +6932,9 @@ func (r *RuntimeRouter) turnEnvironmentContextTextAt(params *turn.TurnStartParam
 	if strings.TrimSpace(shellVersion) != "" {
 		fmt.Fprintf(&b, "  <shell_version>%s</shell_version>\n", escapeEnvironmentXML(shellVersion))
 	}
-	fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", escapeEnvironmentXML(now.Format("2006-01-02")))
+	if date != nil {
+		fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", escapeEnvironmentXML(date.In(time.Local).Format("2006-01-02")))
+	}
 	fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))
 	if lines := r.environmentContextSubagentLines(strings.TrimSpace(params.ThreadID)); len(lines) > 0 {
 		b.WriteString("  <subagents>\n")
@@ -8001,11 +8054,20 @@ func (r *RuntimeRouter) currentTimeReminderInputItems(ctx context.Context, threa
 	now := runtimeRouterClockTime(r).UTC()
 	location := "UTC"
 	if reminder.ClockSource == config.CurrentTimeSourceExternal {
-		current, err := r.requestCurrentTime(ctx, threadID)
+		current, emitNotice, err := r.readClockForContext(ctx, threadID, turnID, cfg)
 		if err != nil {
 			return nil, nil, err
 		}
-		now = current
+		if current == nil {
+			// A handled nonfatal failure: record the notice once, then skip the
+			// reminder for this read (Rust continues without a clock value).
+			if !emitNotice {
+				return nil, nil, nil
+			}
+			input, sessionItems := currentTimeUnavailableNotice(turnID, createdAt)
+			return input, sessionItems, nil
+		}
+		now = *current
 		location = "external"
 	}
 	if !state.due(now, reminder.ReminderIntervalSeconds) {
@@ -8018,6 +8080,78 @@ func (r *RuntimeRouter) currentTimeReminderInputItems(ctx context.Context, threa
 	state.noteDelivered(now)
 	sessionItem := currentTimeReminderSessionItem(turnID, rendered, now, location, createdAt)
 	return []any{modelInputTextMessage(rendered.Role, rendered.Content)}, []session.Item{sessionItem}, nil
+}
+
+// clockFailureKey identifies one reported clock failure: Rust deduplicates
+// within a turn and context window, because a compacted window may no longer
+// contain the earlier notice (#46006).
+type clockFailureKey struct {
+	turnID   string
+	windowID string
+}
+
+// readClockForContext mirrors Rust Session::read_clock_for_context (#46006).
+//
+// On success the recorded failure is cleared so a later outage reports again. On
+// failure with `nonfatal_clock_read_errors` disabled the returned error is fatal;
+// with it enabled the failure is deduplicated per turn and context window, and
+// `emitNotice` reports whether the caller should record the
+// CurrentTimeUnavailable fragment. A nil time with no error means the caller
+// continues without a clock value.
+func (r *RuntimeRouter) readClockForContext(ctx context.Context, threadID string, turnID string, cfg *config.Config) (current *time.Time, emitNotice bool, err error) {
+	value, readErr := r.requestCurrentTime(ctx, threadID)
+	if readErr == nil {
+		r.clearClockFailure(threadID)
+		return &value, false, nil
+	}
+	if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "nonfatal_clock_read_errors") {
+		return nil, false, fmt.Errorf("failed to read current time: %w", readErr)
+	}
+	slog.Error("failed to read current time; the clock provider may be stalled",
+		"thread_id", strings.TrimSpace(threadID), "turn_id", strings.TrimSpace(turnID), "error", readErr)
+	return nil, r.noteClockFailure(threadID, turnID), nil
+}
+
+// noteClockFailure records a nonfatal clock failure and reports whether it is
+// new for the current turn and context window (Rust's `last_clock_failure`).
+func (r *RuntimeRouter) noteClockFailure(threadID string, turnID string) bool {
+	if r == nil {
+		return true
+	}
+	windowID := r.contextWindowIDForThread(threadID)
+	key := clockFailureKey{turnID: strings.TrimSpace(turnID), windowID: windowID}
+	r.clockFailuresMu.Lock()
+	defer r.clockFailuresMu.Unlock()
+	if r.clockFailures == nil {
+		r.clockFailures = map[string]clockFailureKey{}
+	}
+	if previous, ok := r.clockFailures[threadID]; ok && previous == key && key.turnID != "" {
+		return false
+	}
+	r.clockFailures[threadID] = key
+	return true
+}
+
+// clearClockFailure mirrors Rust #46006: a successful clock read clears the
+// recorded failure so a subsequent outage produces a fresh notice.
+func (r *RuntimeRouter) clearClockFailure(threadID string) {
+	if r == nil {
+		return
+	}
+	r.clockFailuresMu.Lock()
+	defer r.clockFailuresMu.Unlock()
+	delete(r.clockFailures, threadID)
+}
+
+// currentTimeUnavailableNotice renders the nonfatal clock failure fragment as a
+// model input item plus the conversation item that records it.
+func currentTimeUnavailableNotice(turnID string, createdAt time.Time) ([]any, []session.Item) {
+	rendered := contextfrag.Render(&contextfrag.CurrentTimeUnavailable{})
+	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
+		return nil, nil
+	}
+	sessionItem := currentTimeUnavailableSessionItem(turnID, rendered, createdAt)
+	return []any{modelInputTextMessage(rendered.Role, rendered.Content)}, []session.Item{sessionItem}
 }
 
 func (r *RuntimeRouter) currentTimePostToolInputItems(threadID string, turnID string, cfg *config.Config, state *currentTimeReminderTurnState, base turn.ToolPostExecutionInputItems, appendSessionItems func([]session.Item)) turn.ToolPostExecutionInputItems {
@@ -8121,6 +8255,36 @@ func currentTimeReminderSessionItem(turnID string, rendered *contextfrag.Rendere
 		},
 		Metadata: appTurnMetadata(turnID, map[string]any{
 			"kind": "current_time_reminder",
+		}),
+	}
+}
+
+// currentTimeUnavailableSessionItem records the nonfatal clock failure notice
+// as conversation history (Rust records the CurrentTimeUnavailable fragment).
+func currentTimeUnavailableSessionItem(turnID string, rendered *contextfrag.RenderedFragment, createdAt time.Time) session.Item {
+	text := ""
+	role := contextfrag.RoleDeveloper
+	if rendered != nil {
+		text = strings.TrimSpace(rendered.Content)
+		if strings.TrimSpace(rendered.Role) != "" {
+			role = strings.TrimSpace(rendered.Role)
+		}
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	return session.Item{
+		ID:        "current-time-unavailable-" + safeIdentifier(turnID),
+		Type:      "message",
+		Role:      role,
+		Text:      text,
+		CreatedAt: createdAt,
+		Data: map[string]any{
+			"kind":   "current_time_unavailable",
+			"source": "external",
+		},
+		Metadata: appTurnMetadata(turnID, map[string]any{
+			"kind": "current_time_unavailable",
 		}),
 	}
 }

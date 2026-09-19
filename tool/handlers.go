@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"codex_go/compact"
+	contextfrag "codex_go/context"
 )
 
 type PlanStatus string
@@ -417,12 +418,24 @@ func (systemClockProvider) Sleep(ctx context.Context, threadID string, duration 
 }
 
 type CurrentTimeHandler struct {
-	provider ClockProvider
-	threadID string
+	provider                ClockProvider
+	threadID                string
+	nonfatalClockReadErrors bool
 }
 
 func NewCurrentTimeHandler(provider ClockProvider, threadID string) *CurrentTimeHandler {
-	return &CurrentTimeHandler{provider: provider, threadID: strings.TrimSpace(threadID)}
+	return NewCurrentTimeHandlerWithOptions(provider, threadID, false)
+}
+
+// NewCurrentTimeHandlerWithOptions mirrors Rust's NonfatalClockReadErrors gate
+// for the clock tool (#46006): a stalled clock provider becomes a model-visible
+// notice instead of a fatal tool error.
+func NewCurrentTimeHandlerWithOptions(provider ClockProvider, threadID string, nonfatalClockReadErrors bool) *CurrentTimeHandler {
+	return &CurrentTimeHandler{
+		provider:                provider,
+		threadID:                strings.TrimSpace(threadID),
+		nonfatalClockReadErrors: nonfatalClockReadErrors,
+	}
 }
 
 func (h *CurrentTimeHandler) Spec() Spec {
@@ -442,7 +455,10 @@ func (h *CurrentTimeHandler) Execute(ctx context.Context, invocation *Invocation
 	_ = invocation
 	current, err := h.clockProvider().CurrentTime(ctx, h.threadID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read current time: %w", err)
+		if h != nil && h.nonfatalClockReadErrors {
+			return nil, RespondToModel(contextfrag.CurrentTimeUnavailableMessage)
+		}
+		return nil, Fatal("failed to read current time: " + err.Error())
 	}
 	formatted := current.UTC().Format(formattedCurrentTimeSpec)
 	return &Output{
@@ -460,12 +476,23 @@ func (h *CurrentTimeHandler) clockProvider() ClockProvider {
 }
 
 type ClockSleepHandler struct {
-	provider ClockProvider
-	threadID string
+	provider                ClockProvider
+	threadID                string
+	nonfatalClockReadErrors bool
 }
 
 func NewClockSleepHandler(provider ClockProvider, threadID string) *ClockSleepHandler {
-	return &ClockSleepHandler{provider: provider, threadID: strings.TrimSpace(threadID)}
+	return NewClockSleepHandlerWithOptions(provider, threadID, false)
+}
+
+// NewClockSleepHandlerWithOptions mirrors Rust's NonfatalClockReadErrors gate
+// for the sleep tool (#46006).
+func NewClockSleepHandlerWithOptions(provider ClockProvider, threadID string, nonfatalClockReadErrors bool) *ClockSleepHandler {
+	return &ClockSleepHandler{
+		provider:                provider,
+		threadID:                strings.TrimSpace(threadID),
+		nonfatalClockReadErrors: nonfatalClockReadErrors,
+	}
 }
 
 func (h *ClockSleepHandler) Spec() Spec {
@@ -499,7 +526,10 @@ func (h *ClockSleepHandler) Execute(ctx context.Context, invocation *Invocation)
 	}
 	started := time.Now()
 	if err := h.clockProvider().Sleep(ctx, h.threadID, time.Duration(args.DurationMS)*time.Millisecond); err != nil {
-		return nil, fmt.Errorf("failed to sleep: %w", err)
+		if h != nil && h.nonfatalClockReadErrors {
+			return nil, RespondToModel(contextfrag.CurrentTimeUnavailableMessage)
+		}
+		return nil, Fatal("failed to sleep: " + err.Error())
 	}
 	return &Output{
 		Success: true,
@@ -525,7 +555,11 @@ type CoreHandlerOptions struct {
 	EnableClockSleep               bool
 	EnableLegacySleep              bool
 	DisableUpdatePlan              bool
-	NewContextWindow               func()
+	// NonfatalClockReadErrors mirrors the feature of the same name (#46006):
+	// clock and sleep failures become model-visible notices instead of fatal
+	// tool errors.
+	NonfatalClockReadErrors bool
+	NewContextWindow        func()
 }
 
 func RegisterCoreHandlers(registry *Registry, planStore *PlanStore, status func() compact.TokenStatus, responder UserInputResponder) error {
@@ -552,10 +586,10 @@ func RegisterCoreHandlersWithOptions(registry *Registry, options *CoreHandlerOpt
 		handlers = append(handlers, &SleepHandler{})
 	}
 	if options.EnableCurrentTime {
-		handlers = append(handlers, NewCurrentTimeHandler(options.ClockProvider, options.ThreadID))
+		handlers = append(handlers, NewCurrentTimeHandlerWithOptions(options.ClockProvider, options.ThreadID, options.NonfatalClockReadErrors))
 	}
 	if options.EnableClockSleep {
-		handlers = append(handlers, NewClockSleepHandler(options.ClockProvider, options.ThreadID))
+		handlers = append(handlers, NewClockSleepHandlerWithOptions(options.ClockProvider, options.ThreadID, options.NonfatalClockReadErrors))
 	}
 	if options.NewContextWindow != nil {
 		handlers = append(handlers, NewContextWindowHandler(options.NewContextWindow))

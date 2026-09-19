@@ -115,9 +115,11 @@ type ToolRegistryOptions struct {
 	OmitToolSearchSources      bool
 	EnableCurrentTimeTool      bool
 	EnableSleepTool            bool
-	EnableWaitForEnvironment   bool
-	DisableUpdatePlan          bool
-	NewContextWindow           func()
+	// NonfatalClockReadErrors mirrors the feature of the same name (#46006).
+	NonfatalClockReadErrors  bool
+	EnableWaitForEnvironment bool
+	DisableUpdatePlan        bool
+	NewContextWindow         func()
 	// SendUserMessageAsync, when set, emits an asynchronous user-visible
 	// agent message for the send_user_message_async tool (#39319).
 	SendUserMessageAsync func(message string)
@@ -215,6 +217,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			EnableCurrentTime:              options.EnableCurrentTimeTool,
 			EnableClockSleep:               options.EnableSleepTool,
 			DisableUpdatePlan:              options.DisableUpdatePlan,
+			NonfatalClockReadErrors:        options.NonfatalClockReadErrors,
 			NewContextWindow:               options.NewContextWindow,
 		}); err != nil {
 			return nil, err

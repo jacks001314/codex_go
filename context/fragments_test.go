@@ -205,6 +205,25 @@ func TestCurrentTimeReminder(t *testing.T) {
 	}
 }
 
+// Mirrors Rust context::CurrentTimeUnavailable (#46006).
+func TestCurrentTimeUnavailable(t *testing.T) {
+	fragment := &CurrentTimeUnavailable{}
+	if fragment.Role() != RoleDeveloper || fragment.ContentKind() != "current_time.unavailable" {
+		t.Fatalf("CurrentTimeUnavailable role/kind = %q/%q", fragment.Role(), fragment.ContentKind())
+	}
+	open, close := fragment.Markers()
+	if open != "<current_time_unavailable>" || close != "</current_time_unavailable>" {
+		t.Fatalf("CurrentTimeUnavailable markers = %q/%q", open, close)
+	}
+	if fragment.Body() != CurrentTimeUnavailableMessage || CurrentTimeUnavailableMessage != "failed to read current time" {
+		t.Fatalf("CurrentTimeUnavailable body = %q", fragment.Body())
+	}
+	rendered := Render(fragment)
+	if rendered == nil || rendered.Content != "<current_time_unavailable>\nfailed to read current time\n</current_time_unavailable>" {
+		t.Fatalf("CurrentTimeUnavailable rendered = %#v", rendered)
+	}
+}
+
 func TestModelSwitchAndTokenBudget(t *testing.T) {
 	if got := (&ModelSwitchInstructions{From: "gpt-4", To: "gpt-5"}).Body(); !strings.Contains(got, "gpt-4") || !strings.Contains(got, "gpt-5") {
 		t.Fatalf("ModelSwitchInstructions = %q", got)

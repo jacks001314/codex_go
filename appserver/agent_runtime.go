@@ -213,11 +213,11 @@ func (r *RuntimeRouter) guardianEnvironmentInputItems(ctx context.Context, threa
 	if err != nil {
 		return nil, err
 	}
-	item, err := r.turnEnvironmentContextInputItemForTurn(ctx, threadID, active.Params, cfg)
-	if err != nil || item == nil {
+	items, _, err := r.turnEnvironmentContextInputItemForTurn(ctx, threadID, turnID, active.Params, cfg)
+	if err != nil || len(items) == 0 {
 		return nil, err
 	}
-	return []any{item}, nil
+	return items, nil
 }
 
 // guardianRootUserAuthorizationForTurn returns bounded root-conversation user

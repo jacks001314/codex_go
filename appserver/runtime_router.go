@@ -285,29 +285,33 @@ type RuntimeRouter struct {
 	// threadSessionSpans holds the thread-lifetime `session_loop` span of every
 	// live session, keyed by thread id. Rust opens it around the session's
 	// submission loop (session/mod.rs), so every turn's spans nest under it.
-	threadSessionSpansMu    sync.Mutex
-	threadSessionSpans      map[string]*telemetry.Span
-	mcpEventStreams         *mcpEventStreamManager
-	skillShadowMu           sync.Mutex
-	skillShadowState        map[string]*skillShadowThreadState
-	startupPrewarmMu        sync.Mutex
-	startupPrewarms         map[string]*startupPrewarmState
-	mcpRuntimes             *mcpRuntimeCoordinator
-	mcpConfigManaged        atomic.Bool
-	loginRuntimeMu          sync.Mutex
-	loginRuntimeCancels     map[string]context.CancelFunc
-	approvalSessionsMu      sync.RWMutex
-	commandApprovals        map[string]struct{}
-	fileApprovals           map[string]struct{}
-	serverRequestGuardsMu   sync.Mutex
-	serverRequestGuards     map[string]*ThreadStatusActiveGuard
-	executedToolCallsMu     sync.Mutex
-	executedToolCalls       map[string]*turn.ExecutedToolCallRecorder
-	newContextWindowMu      sync.Mutex
-	newContextWindowReq     map[string]bool
-	contextWindowMu         sync.Mutex
-	contextWindowIDs        map[string]string
-	windowNumbers           map[string]uint64
+	threadSessionSpansMu  sync.Mutex
+	threadSessionSpans    map[string]*telemetry.Span
+	mcpEventStreams       *mcpEventStreamManager
+	skillShadowMu         sync.Mutex
+	skillShadowState      map[string]*skillShadowThreadState
+	startupPrewarmMu      sync.Mutex
+	startupPrewarms       map[string]*startupPrewarmState
+	mcpRuntimes           *mcpRuntimeCoordinator
+	mcpConfigManaged      atomic.Bool
+	loginRuntimeMu        sync.Mutex
+	loginRuntimeCancels   map[string]context.CancelFunc
+	approvalSessionsMu    sync.RWMutex
+	commandApprovals      map[string]struct{}
+	fileApprovals         map[string]struct{}
+	serverRequestGuardsMu sync.Mutex
+	serverRequestGuards   map[string]*ThreadStatusActiveGuard
+	executedToolCallsMu   sync.Mutex
+	executedToolCalls     map[string]*turn.ExecutedToolCallRecorder
+	newContextWindowMu    sync.Mutex
+	newContextWindowReq   map[string]bool
+	contextWindowMu       sync.Mutex
+	contextWindowIDs      map[string]string
+	windowNumbers         map[string]uint64
+	// clockFailures records the last reported nonfatal clock failure per thread
+	// (Rust's session-level `last_clock_failure`, #46006).
+	clockFailuresMu         sync.Mutex
+	clockFailures           map[string]clockFailureKey
 	codeModeRuntimesMu      sync.Mutex
 	codeModeRuntimes        map[string]*tool.CodeModeRuntime
 	pendingGoalMu           sync.Mutex
@@ -13675,6 +13679,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.RequestUserInputAvailableModes = requestUserInputModes
 	options.EnableCurrentTimeTool = enableCurrentTimeTool
 	options.EnableSleepTool = enableSleepTool
+	// Rust #46006: nonfatal clock read errors turn a stalled clock provider into
+	// a model-visible notice for the clock and sleep tools.
+	options.NonfatalClockReadErrors = features.Enabled(cfg.FeatureSettings(), "nonfatal_clock_read_errors")
 	options.DisableUpdatePlan = disableUpdatePlan
 	options.DisableWaitAgent = disableWaitAgent
 	options.ClockProvider = clockProvider

@@ -67,6 +67,98 @@ func TestRuntimeMCPConfigUsesSharedHTTPClient(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #46006: with nonfatal clock read errors enabled a stalled clock
+// provider records one model-visible notice per turn/window and the turn
+// continues without a date instead of failing.
+func TestRuntimeRouterNonfatalClockFailureRecordsNoticeLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`
+[features]
+nonfatal_clock_read_errors = true
+
+[features.current_time_reminder]
+enabled = true
+clock_source = "external"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := newRecordingRuntimeAgent("ok")
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(filepath.Join(home, "sessions"))),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+		DefaultCWD:   t.TempDir(),
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		go func() {
+			_, _ = router.requireServerRequests().Resolve(ErrorResponse(request.ID, -32603, "test clock unavailable", nil))
+		}()
+	}))
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Prompt: "continue without a clock"}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	request := waitForRuntimeAgentRequest(t, agent)
+
+	noticeText := "<current_time_unavailable>\nfailed to read current time\n</current_time_unavailable>"
+	notices := 0
+	for _, text := range messageInputTextsForRole(request.InputItems, "developer") {
+		if strings.Contains(text, "<current_time_unavailable>") {
+			notices++
+			if text != noticeText {
+				t.Fatalf("notice text = %q, want %q", text, noticeText)
+			}
+		}
+		if strings.Contains(text, "<current_time_reminder>") {
+			t.Fatalf("a reminder was injected despite the clock failure: %q", text)
+		}
+	}
+	if notices != 1 {
+		t.Fatalf("unavailable notices = %d, want exactly one (Rust dedupes per turn/window)", notices)
+	}
+	for _, text := range messageInputTextsForRole(request.InputItems, "user") {
+		if strings.Contains(text, "<environment_context>") && strings.Contains(text, "<current_date>") {
+			t.Fatalf("environment context kept a date after the clock failure: %q", text)
+		}
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+}
+
+// Mirrors Rust #46006's dedupe rule: consecutive failures in the same turn and
+// context window share one notice, a new window reports again, and a successful
+// read clears the record so a later outage reports again.
+func TestCurrentTimeReminderClockFailureDedupeLikeRust(t *testing.T) {
+	router := &RuntimeRouter{}
+	threadID := "thread-clock"
+	if !router.noteClockFailure(threadID, "turn-1") {
+		t.Fatal("first failure must report")
+	}
+	if router.noteClockFailure(threadID, "turn-1") {
+		t.Fatal("consecutive failure in the same turn/window must be deduplicated")
+	}
+	if !router.noteClockFailure(threadID, "turn-2") {
+		t.Fatal("a new turn must report again")
+	}
+	router.advanceContextWindowID(threadID)
+	if !router.noteClockFailure(threadID, "turn-2") {
+		t.Fatal("a new context window must report again")
+	}
+	router.clearClockFailure(threadID)
+	if !router.noteClockFailure(threadID, "turn-2") {
+		t.Fatal("a failure after recovery must report again")
+	}
+}
+
 func TestRuntimeMCPConfigPinsCoordinatedOAuthRefreshMode(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{})
 	runtimeConfig := router.runtimeMCPConfig(map[string]any{
@@ -9981,17 +10073,17 @@ func TestTurnEnvironmentContextRefreshesConfiguredClockEachTurnLikeRust(t *testi
 	params := &turn.TurnStartParams{ThreadID: "thread-clock", CWD: t.TempDir()}
 	cfg := &config.Config{Values: map[string]any{}}
 
-	first, err := router.turnEnvironmentContextInputItemForTurn(context.Background(), params.ThreadID, params, cfg)
+	first, _, err := router.turnEnvironmentContextInputItemForTurn(context.Background(), params.ThreadID, "turn-1", params, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	current = current.Add(24 * time.Hour)
-	second, err := router.turnEnvironmentContextInputItemForTurn(context.Background(), params.ThreadID, params, cfg)
+	second, _, err := router.turnEnvironmentContextInputItemForTurn(context.Background(), params.ThreadID, "turn-2", params, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstText := messageInputTextsForRole([]any{first}, "user")
-	secondText := messageInputTextsForRole([]any{second}, "user")
+	firstText := messageInputTextsForRole(first, "user")
+	secondText := messageInputTextsForRole(second, "user")
 	firstDate := current.Add(-24 * time.Hour).In(time.Local).Format("2006-01-02")
 	secondDate := current.In(time.Local).Format("2006-01-02")
 	if len(firstText) != 1 || !strings.Contains(firstText[0], "<current_date>"+firstDate+"</current_date>") {
@@ -10003,8 +10095,8 @@ func TestTurnEnvironmentContextRefreshesConfiguredClockEachTurnLikeRust(t *testi
 	if firstText[0] == secondText[0] {
 		t.Fatal("environment context retained a stale date")
 	}
-	disabled, err := router.turnEnvironmentContextInputItemForTurn(context.Background(), params.ThreadID, params, &config.Config{Values: map[string]any{"include_environment_context": false}})
-	if err != nil || disabled != nil {
+	disabled, _, err := router.turnEnvironmentContextInputItemForTurn(context.Background(), params.ThreadID, "turn-3", params, &config.Config{Values: map[string]any{"include_environment_context": false}})
+	if err != nil || len(disabled) != 0 {
 		t.Fatalf("disabled environment context = %#v, %v", disabled, err)
 	}
 }
