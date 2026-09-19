@@ -648,6 +648,10 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	if router.services.UnifiedExec == nil {
 		router.services.UnifiedExec = tool.NewUnifiedExecManager()
 	}
+	// Rust #45505 traces the unified-exec lifecycle; the sink resolves the
+	// session tracer per span, so a provider installed (or reloaded) later is
+	// still used.
+	router.services.UnifiedExec.SetSpanSink(router.runtimeUnifiedExecSpanSink())
 	router.services.UnifiedExec.SetWriteStdinApproval(router.writeStdinApproval)
 	router.services.ServerRequests.SetRequestedCallback(router.noteServerRequestPending)
 	router.services.ServerRequests.SetResolvedCallback(router.notifyServerRequestResolved)
@@ -13694,6 +13698,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.Shell.Validation.WindowsSandboxProxySettingsMode = execserver.WindowsSandboxProxySettingsPreserve
 		}
 		options.Shell.UnifiedExecEvents = r.runtimeUnifiedExecEventSink(threadID, strings.TrimSpace(turnID))
+		// Rust #45505 traces each exec_command call; the executor opens the
+		// `unified_exec.exec_command` span itself so a call that runs outside the
+		// manager is traced too.
+		options.Shell.UnifiedExecSpans = r.runtimeUnifiedExecSpanSink()
 		// Rust #45445: a command's analytics attribution is the resolved model and
 		// reasoning effort of the step that invoked it, read when the command
 		// starts.

@@ -136,6 +136,23 @@ const ThreadSpawnSpanName = "thread_spawn"
 // SessionLoopSpanName is the span Rust opens around a session's submission loop.
 const SessionLoopSpanName = "session_loop"
 
+// runtimeUnifiedExecSpanSink opens the unified-exec lifecycle spans on the
+// session's tracer (#45505). The tracer is resolved per span, so an OTEL
+// provider installed or reloaded after the manager was built still receives
+// them; telemetry.Span already carries the tool layer's span surface.
+func (r *RuntimeRouter) runtimeUnifiedExecSpanSink() tool.UnifiedExecSpanSink {
+	return func(name string, attributes map[string]string) tool.UnifiedExecSpan {
+		if r == nil {
+			return nil
+		}
+		tracer := r.requestTracer()
+		if tracer == nil {
+			return nil
+		}
+		return tracer.StartSpan(name, attributes)
+	}
+}
+
 // threadSpawnTarget reports whether a lifecycle request spawns a session. Rust
 // reaches ThreadManager::spawn_thread (and so session/mod.rs::spawn) for a new or
 // forked thread, and for a resume that finds no live session.

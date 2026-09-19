@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -42,10 +43,14 @@ type ShellExecutorOptions struct {
 	Approval   ShellApprovalFunc
 	// DecisionSink receives the config-approved decisions for commands that need
 	// no approval (Rust's skipped approval requirement).
-	DecisionSink        ToolDecisionSink
-	MaxOutputTokens     *int
-	UnifiedExec         *UnifiedExecManager
-	UnifiedExecEvents   UnifiedExecEventSink
+	DecisionSink      ToolDecisionSink
+	MaxOutputTokens   *int
+	UnifiedExec       *UnifiedExecManager
+	UnifiedExecEvents UnifiedExecEventSink
+	// UnifiedExecSpans opens this executor's unified-exec spans (Rust #45505).
+	// It takes precedence over the manager's sink, so a command that runs outside
+	// the manager is traced too.
+	UnifiedExecSpans    UnifiedExecSpanSink
 	UnifiedExecThreadID string
 	UnifiedExecTurnID   string
 	// ShellEnvironmentPolicy is the thread-level shell_environment_policy
@@ -99,6 +104,7 @@ type ShellExecutor struct {
 	maxOutputTokens          *int
 	unifiedExec              *UnifiedExecManager
 	unifiedExecEvents        UnifiedExecEventSink
+	unifiedExecSpans         UnifiedExecSpanSink
 	unifiedExecThreadID      string
 	unifiedExecTurnID        string
 	shellEnvironmentPolicy   map[string]any
@@ -169,6 +175,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.maxOutputTokens = cloneNonNegativeInt(options.MaxOutputTokens)
 	executor.unifiedExec = options.UnifiedExec
 	executor.unifiedExecEvents = options.UnifiedExecEvents
+	executor.unifiedExecSpans = options.UnifiedExecSpans
 	executor.unifiedExecThreadID = options.UnifiedExecThreadID
 	executor.unifiedExecTurnID = options.UnifiedExecTurnID
 	executor.shellEnvironmentPolicy = cloneShellEnvironmentPolicy(options.ShellEnvironmentPolicy)
@@ -708,8 +715,33 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		req.EnvPolicy = execpolicy.EnvPolicyFromShellEnvironmentPolicy(policyTable, req.CWD)
 		req.ThreadID = e.unifiedExecThreadID
 	}
+	// Rust #45505 brackets every exec_command call with a
+	// `unified_exec.exec_command` span and records how the call ended. Rust
+	// distinguishes the handler's lifetime instead: the resumable handler (the
+	// unified-exec path, which can yield a process id for write_stdin) and the
+	// completion-only one-shot handler (which cannot). Go has one interactive
+	// handler and picks the path per environment, so the mode reports which path
+	// this call actually took.
+	useUnifiedExec := e.shouldUseUnifiedExec(req)
+	execMode := UnifiedExecModeOneshot
+	if useUnifiedExec {
+		execMode = UnifiedExecModeResumable
+	}
 	var result *ShellResult
-	if e.shouldUseUnifiedExec(req) {
+	execAttributes := unifiedExecSpanAttributes(e.unifiedExecThreadID, e.unifiedExecTurnID, unifiedExecCallID(invocation))
+	execAttributes[UnifiedExecSpanMode] = execMode
+	execSpan := startUnifiedExecSpan(e.unifiedExecSpanSink(), UnifiedExecExecCommandSpanName,
+		execAttributes)
+	defer func() {
+		// Rust records the reserved process id when the span opens; Go's manager
+		// allocates it inside the call, so the span learns it from the result.
+		if result != nil && result.ProcessID != nil {
+			execSpan.SetAttribute(UnifiedExecSpanProcessID, strconv.Itoa(*result.ProcessID))
+		}
+		execSpan.SetAttribute(UnifiedExecSpanOutcome, unifiedExecCommandOutcome(execMode, result, err, ctx))
+		execSpan.End()
+	}()
+	if useUnifiedExec {
 		req, err = prepareUnifiedExecShellRequest(req)
 		if err != nil {
 			return nil, err
@@ -872,6 +904,22 @@ func resolveRemoteUnifiedExecCWD(base string, workdir string) (string, error) {
 		return "", err
 	}
 	return rendered.Value, nil
+}
+
+// unifiedExecSpanSink reports the manager's span sink, so a call that runs
+// outside the manager (the completion-only path) still reports under the same
+// trace. A session without a unified-exec manager is untraced.
+func (e *ShellExecutor) unifiedExecSpanSink() UnifiedExecSpanSink {
+	if e == nil {
+		return nil
+	}
+	if e.unifiedExecSpans != nil {
+		return e.unifiedExecSpans
+	}
+	if e.unifiedExec == nil {
+		return nil
+	}
+	return e.unifiedExec.SpanSink()
 }
 
 func (e *ShellExecutor) shouldUseUnifiedExec(req *ShellRequest) bool {

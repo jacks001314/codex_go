@@ -134,13 +134,18 @@ type Runner struct {
 }
 
 func NewRunner(codexHome string) *Runner {
-	return &Runner{
+	runner := &Runner{
 		CodexHome:       codexHome,
 		UseResponsesAPI: true,
 		Now:             time.Now,
 		UnifiedExec:     tool.NewUnifiedExecManager(),
 		goalMu:          &sync.Mutex{},
 	}
+	// Rust #45505 traces the unified-exec lifecycle. The sink resolves the run's
+	// tracer per span, so the provider this runner builds when the run starts is
+	// still used.
+	runner.UnifiedExec.SetSpanSink(runner.unifiedExecSpanSink())
+	return runner
 }
 
 func NewLocalRunner(codexHome string) *Runner {

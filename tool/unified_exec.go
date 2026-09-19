@@ -83,6 +83,9 @@ type UnifiedExecManager struct {
 	// with the current one, and route a fresh approval. Returning an error
 	// rejects the write.
 	writeStdinApproval WriteStdinApprovalFunc
+	// spanSink opens the pipeline's lifecycle spans (Rust #45505); nil leaves
+	// the pipeline untraced.
+	spanSink UnifiedExecSpanSink
 }
 
 // WriteStdinApprovalRequest carries a terminal input review's inputs, mirroring
@@ -426,7 +429,9 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 	cmd := osexec.Command(req.Command[0], req.Command[1:]...)
 	cmd.Dir = req.CWD
 	cmd.Env = envSlice(shellRequestEnv(req))
+	finishOpenSession := unifiedExecSessionSpan(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID, ctx)
 	started, err := startUnifiedExecCommand(cmd, req.TTY)
+	finishOpenSession(err)
 	if err != nil {
 		m.releaseProcessID(processID)
 		return nil, err
@@ -515,7 +520,9 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 			req = &copied
 		}
 	}
+	finishOpenSession := unifiedExecSessionSpan(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID, ctx)
 	started, err := startUnifiedExecWindowsSandbox(req)
+	finishOpenSession(err)
 	if err != nil {
 		m.releaseProcessID(processID)
 		return nil, err
@@ -668,6 +675,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	if req.EnvPolicy != nil {
 		envPolicy = execEnvPolicyFromShellPolicy(req.EnvPolicy)
 	}
+	finishOpenSession := unifiedExecSessionSpan(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID, ctx)
 	startResponse, err := client.Start(startCtx, &execserver.ExecParams{
 		ProcessID:             remoteID,
 		Argv:                  append([]string(nil), req.Command...),
@@ -682,6 +690,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		NetworkProxy:          req.RemoteNetworkProxy,
 	})
 	startCancel()
+	finishOpenSession(err)
 	if err != nil {
 		events.Close()
 		_ = client.Close()
@@ -936,17 +945,39 @@ func unifiedExecJoinPath(base string, relative string) string {
 	return resolved
 }
 
-func (m *UnifiedExecManager) WriteStdin(ctx context.Context, args *WriteStdinArgs, policyMaxOutputTokens *int) (*ShellResult, error) {
+func (m *UnifiedExecManager) WriteStdin(ctx context.Context, args *WriteStdinArgs, policyMaxOutputTokens *int) (result *ShellResult, err error) {
 	if m == nil {
 		return nil, errors.New("unified exec manager is nil")
 	}
 	if args == nil {
 		return nil, errors.New("write_stdin arguments are required")
 	}
+	// Rust #45505 brackets each interaction with `unified_exec.write_stdin`,
+	// carrying the call being served, the original exec call and the process.
+	interaction := UnifiedExecInteractionPoll
+	if args.Chars != "" {
+		interaction = UnifiedExecInteractionWrite
+	}
+	writeAttributes := map[string]string{UnifiedExecSpanInteraction: interaction}
+	writeSpan := startUnifiedExecSpan(m.spanSinkSnapshot(), UnifiedExecWriteStdinSpanName, writeAttributes)
+	defer func() {
+		writeSpan.SetAttribute(UnifiedExecSpanOutcome, unifiedExecStdinOutcome(result, err, ctx))
+		writeSpan.End()
+	}()
 	process, err := m.processForInteraction(args.SessionID)
 	if err != nil {
 		return nil, err
 	}
+	// The interaction's span carries the call ids once the process is known:
+	// Rust records the original exec call as soon as it captures the entry, even
+	// when the interaction is cancelled while queued.
+	for key, value := range unifiedExecSpanAttributes(process.threadID, process.turnID, args.CallID) {
+		writeSpan.SetAttribute(key, value)
+	}
+	if originalCallID, ok := UnifiedExecTraceID(process.callID); ok {
+		writeSpan.SetAttribute(UnifiedExecSpanOriginalExecCallID, originalCallID)
+	}
+	writeSpan.SetAttribute(UnifiedExecSpanProcessID, strconv.Itoa(process.id))
 	defer process.interactions.Add(-1)
 	process.interactionMu.Lock()
 	defer process.interactionMu.Unlock()
@@ -1000,7 +1031,7 @@ func (m *UnifiedExecManager) WriteStdin(ctx context.Context, args *WriteStdinArg
 	}
 	yield := m.clampWriteYield(args.YieldTimeMS, args.Chars == "")
 	maxOutputTokens := clampShellMaxOutputTokens(args.MaxOutputTokens, policyMaxOutputTokens)
-	result, err := m.collect(ctx, process, yield, maxOutputTokens)
+	result, err = m.collect(ctx, process, yield, maxOutputTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -1130,15 +1161,38 @@ func (m *UnifiedExecManager) collect(ctx context.Context, process *unifiedExecPr
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Rust #45505 reports how one output collection ended: the reason the loop
+	// stopped and whether the process had signaled its exit by then. Go's
+	// collection is a single wait rather than Rust's incremental loop, so the
+	// reason is the case that ended the wait, re-labelled to `output_closed` when
+	// the process exited before the snapshot (an exited process in Go has already
+	// drained its readers, which is Rust's `exit_signaled && output_closed`).
+	stopReason := ""
+	collectSpan := startUnifiedExecSpan(m.spanSinkSnapshot(), UnifiedExecCollectOutputSpanName,
+		unifiedExecSpanAttributes(process.threadID, process.turnID, process.callID))
+	defer func() {
+		if stopReason != "" {
+			collectSpan.SetAttribute(UnifiedExecSpanStopReason, stopReason)
+		}
+		collectSpan.SetAttribute(UnifiedExecSpanExitSignaled, strconv.FormatBool(process.hasExited() || ctx.Err() != nil))
+		collectSpan.SetAttribute(UnifiedExecSpanOutputClosed, strconv.FormatBool(process.hasExited()))
+		collectSpan.SetAttribute(UnifiedExecSpanOutcome, UnifiedExecOutcomeCompleted)
+		collectSpan.End()
+	}()
 	select {
 	case <-process.done:
+		stopReason = UnifiedExecStopReasonOutputClosed
 	case <-timer.C:
+		stopReason = UnifiedExecStopReasonDeadline
 	case <-ctx.Done():
 	}
 	if err := m.waitForThreadElicitation(ctx, process.threadID); err != nil {
 		return nil, err
 	}
 	output, exited, exitCode, waitErr, timedOut := process.snapshotAndDrain()
+	if exited {
+		stopReason = UnifiedExecStopReasonOutputClosed
+	}
 	result := &ShellResult{
 		Stdout:              output,
 		Duration:            time.Since(started),

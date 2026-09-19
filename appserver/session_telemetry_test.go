@@ -1383,3 +1383,86 @@ func TestInstructionsLoadSpanLikeRust(t *testing.T) {
 		t.Fatalf("instructions.load attributes = %#v", attributes)
 	}
 }
+
+// The unified-exec pipeline reports through the session tracer: the router
+// installs a span sink on its manager and hands the same sink to the turn's
+// command executor (Rust #45505).
+func TestUnifiedExecSpansExportThroughTheRouterLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+	})
+	if err != nil || provider == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+	home := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(filepath.Join(home, "sessions"))),
+		Turns:        turn.NewTurnService(),
+		Agent:        newRecordingRuntimeAgent("ok"),
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	router.SetNotificationSink(NewNotificationBuffer())
+	router.installOtelProvider(provider, state.NewTaskMetrics())
+
+	sink := router.services.UnifiedExec.SpanSink()
+	if sink == nil {
+		t.Fatal("the router did not install a span sink on the unified-exec manager")
+	}
+	span := sink(tool.UnifiedExecExecCommandSpanName, map[string]string{
+		tool.UnifiedExecSpanMode:   tool.UnifiedExecModeResumable,
+		tool.UnifiedExecSpanCallID: "call-spans",
+	})
+	if span == nil {
+		t.Fatal("the sink did not open a span")
+	}
+	span.SetAttribute(tool.UnifiedExecSpanOutcome, tool.UnifiedExecOutcomeYielded)
+	span.End()
+
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case payload := <-traceBodies:
+			resourceSpans, _ := payload["resourceSpans"].([]any)
+			if len(resourceSpans) == 0 {
+				continue
+			}
+			scopeSpans, _ := resourceSpans[0].(map[string]any)["scopeSpans"].([]any)
+			if len(scopeSpans) == 0 {
+				continue
+			}
+			entries, _ := scopeSpans[0].(map[string]any)["spans"].([]any)
+			for _, entry := range entries {
+				exported, _ := entry.(map[string]any)
+				if exported["name"] != tool.UnifiedExecExecCommandSpanName {
+					continue
+				}
+				attributes := encodedAttributes(exported)
+				if attributes[tool.UnifiedExecSpanMode] != tool.UnifiedExecModeResumable ||
+					attributes[tool.UnifiedExecSpanCallID] != "call-spans" ||
+					attributes[tool.UnifiedExecSpanOutcome] != tool.UnifiedExecOutcomeYielded {
+					t.Fatalf("exported attributes = %#v", attributes)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("no unified_exec.exec_command span was exported")
+		}
+	}
+}

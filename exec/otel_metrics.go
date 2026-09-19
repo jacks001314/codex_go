@@ -86,6 +86,21 @@ func (r *Runner) otelMetricsSink() *telemetry.MetricsClient {
 	return r.otelProvider.Metrics()
 }
 
+// unifiedExecSpanSink opens the unified-exec lifecycle spans on the run's tracer
+// (Rust #45505); telemetry.Span already carries the tool layer's span surface.
+func (r *Runner) unifiedExecSpanSink() tool.UnifiedExecSpanSink {
+	return func(name string, attributes map[string]string) tool.UnifiedExecSpan {
+		if r == nil || r.otelProvider == nil {
+			return nil
+		}
+		tracer := r.otelProvider.Tracer()
+		if tracer == nil {
+			return nil
+		}
+		return tracer.StartSpan(name, attributes)
+	}
+}
+
 // sessionTelemetryForRun builds the run's session telemetry: the metadata the
 // run knows (conversation identity, model, originator) with the provider's log
 // client bound to the diagnostic records.
