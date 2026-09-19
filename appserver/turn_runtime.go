@@ -1506,9 +1506,31 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
 	r.bindRealtimeTurn(threadID, turnID)
 	_ = r.appendRuntimeTurnStarted(threadID, turnID, rootTurnIDForTurn(params, turnID), startedAt)
-	// Rust records a full context window and compacts before the next user turn.
+	// Rust first runs the previous-model inline compaction, then records a full
+	// context window and compacts before the next user turn.
 	// Do this before persisting/sending the new prompt so the prompt is retained
 	// and the sampling request sees the compacted history.
+	if record, recErr := r.threadRecord(session.ThreadID(threadID), true, false); recErr == nil && record != nil {
+		ran, previousErr := r.runPreviousModelInlineCompact(ctx, threadID, turnID, connectionID, params, runConfig, record)
+		if previousErr != nil {
+			r.clearActiveRuntimeTurn(threadID, turnID)
+			// Rust #44487: pre-turn compaction runs before the incoming prompt is
+			// recorded, so preserve the accepted prompt on every failure.
+			r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
+			r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, previousErr, &turnCompletionAnalyticsContext{ConnectionID: connectionID, Params: params, RunConfig: runConfig})
+			return
+		}
+		if ran {
+			// appTurnConfig contains the session history; reload it after
+			// compaction.
+			if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime); err != nil {
+				r.clearActiveRuntimeTurn(threadID, turnID)
+				r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
+				r.finishTurnWithError(threadID, turnID, startedAtMS, err)
+				return
+			}
+		}
+	}
 	if status := r.compactTokenStatusForTurn(threadID, runConfig.Model, params); status.ShouldCompact {
 		_, compactErr := r.compactThread(ctx, &runtimeCompactRequest{
 			ThreadID: threadID, TurnID: turnID, ConnectionID: connectionID,
@@ -1533,6 +1555,12 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			r.finishTurnWithError(threadID, turnID, startedAtMS, err)
 			return
 		}
+	}
+	// Persist this turn's context record after the pre-turn compaction decision,
+	// so the next turn compares against this turn's model and compaction hash
+	// (Rust PreviousTurnSettings, #46324).
+	if record, recErr := r.threadRecord(session.ThreadID(threadID), true, false); recErr == nil && record != nil {
+		r.recordRuntimeTurnContext(threadID, turnID, runConfig, record)
 	}
 	r.updateActiveRuntimeTurnAnalytics(threadID, turnID, connectionID, runConfig)
 	// Rust #43110: record the trusted reasoning-effort update with this turn so
@@ -5316,13 +5344,21 @@ func (r *RuntimeRouter) persistCompactionFailure(threadID string, compactErr err
 }
 
 type runtimeCompactRequest struct {
-	ThreadID                  string
-	TurnID                    string
-	ConnectionID              string
-	Trigger                   compact.Trigger
-	Reason                    compact.Reason
-	Phase                     compact.Phase
-	Prompt                    string
+	ThreadID     string
+	TurnID       string
+	ConnectionID string
+	Trigger      compact.Trigger
+	Reason       compact.Reason
+	Phase        compact.Phase
+	Prompt       string
+	// Model overrides the compaction model. Rust runs the pre-turn
+	// previous-model compaction against the previous model's step context, so the
+	// attempt must not use the thread's newly selected model (#46324).
+	Model string
+	// RemoteOnly surfaces a failed remote attempt instead of summarizing locally,
+	// which is what lets the previous-model compaction retry with the selected
+	// model (Rust's V2 auto-compaction path has no local fallback, #46324).
+	RemoteOnly                bool
 	ActiveContextTokensBefore int64
 	// History overrides the persisted thread history for mid-turn
 	// compaction, which must include the items accumulated by the current
@@ -5405,11 +5441,11 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	}
 	r.notifyContextCompactionItemStarted(request.ThreadID, request.TurnID, compactionItem)
 	compacted, err := compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
-		Runner:               r.compactRunnerForRecord(record, request),
+		Runner:               r.compactRunnerForRecord(record, request, params.Model),
 		MaxSummaryChars:      4000,
 		InitialContext:       initialContext,
 		InjectBeforeLastUser: true,
-		FallbackToLocal:      true,
+		FallbackToLocal:      !params.RemoteOnly,
 	})
 	if err != nil {
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
@@ -5664,7 +5700,7 @@ func compactUsageMetadataMap(usage *compact.Usage) map[string]any {
 	}
 }
 
-func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request) compact.RemoteRunner {
+func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request, modelOverride string) compact.RemoteRunner {
 	if r == nil {
 		return nil
 	}
@@ -5689,7 +5725,7 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 	if !r.providerSupportsRemoteCompact(providerID) {
 		return nil
 	}
-	compactModel := firstNonEmpty(record.Metadata.Model, defaultRemoteCompactModel)
+	compactModel := firstNonEmpty(strings.TrimSpace(modelOverride), record.Metadata.Model, defaultRemoteCompactModel)
 	compactInfo := r.modelInfoForRuntime(compactModel)
 	modelHash := ""
 	if compactInfo != nil {

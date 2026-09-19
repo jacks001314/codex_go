@@ -37,13 +37,17 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
 	ReasonContextWindowExceeded Reason = "contextWindowExceeded"
 	ReasonTokenLimit            Reason = "tokenLimit"
 	ReasonModelSwitch           Reason = "modelSwitch"
-	ReasonUserRequested         Reason = "userRequested"
+	// ReasonCompHashChanged is the pre-turn compaction triggered when the
+	// model's compaction compatibility hash changed (Rust
+	// CompactionReason::CompHashChanged, #46324).
+	ReasonCompHashChanged Reason = "compHashChanged"
+	ReasonUserRequested   Reason = "userRequested"
 
-	PhasePreTurn        Phase = "preTurn"
-	PhaseMidTurn        Phase = "midTurn"
+	PhasePreTurn Phase = "preTurn"
+	PhaseMidTurn Phase = "midTurn"
 	// PhasePostTurn is the opt-in compaction that runs after a turn's final
 	// response (#46541).
-	PhasePostTurn Phase = "postTurn"
+	PhasePostTurn       Phase = "postTurn"
 	PhaseStandaloneTurn Phase = "standaloneTurn"
 
 	StatusSkipped     Status = "skipped"

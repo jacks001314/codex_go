@@ -265,6 +265,12 @@ type RuntimeRouter struct {
 	// (Rust AccountRequestProcessor::workspace_routing).
 	workspaceRoutingOnce sync.Once
 	workspaceRouting     *workspaceRoutingState
+	// turnContexts holds each thread's most recent turn-context payload. Rust
+	// keeps the same value in session state (`PreviousTurnSettings`) and seeds it
+	// from rollout reconstruction on resume, so a previous-model compaction can
+	// compare the thread's last turn against the current one (#46324).
+	turnContextMu sync.Mutex
+	turnContexts  map[string]json.RawMessage
 	// otelProvider is the process OTEL provider built from config at startup.
 	// It forwards the task metrics, the exported log records, and the request
 	// spans, and is shut down with the router.

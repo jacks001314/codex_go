@@ -725,6 +725,57 @@ func (r *Recorder) AppendTurnStartedWithRoot(rootTurnID string, turnID string, s
 	})
 }
 
+// TurnContextRecord is the per-turn context snapshot persisted as a
+// `turn_context` rollout line. Rust writes one `TurnContextItem` per real user
+// turn "so resume/lazy replay can recover the latest durable baseline", and its
+// rollout reconstruction reads the model and compaction compatibility hash back
+// from the last record.
+type TurnContextRecord struct {
+	TurnID         string `json:"turn_id,omitempty"`
+	CWD            string `json:"cwd,omitempty"`
+	ApprovalPolicy string `json:"approval_policy,omitempty"`
+	SandboxPolicy  any    `json:"sandbox_policy,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	Personality    string `json:"personality,omitempty"`
+	Model          string `json:"model,omitempty"`
+	CompHash       string `json:"comp_hash,omitempty"`
+}
+
+// AppendTurnContext persists one turn-context record for the turn.
+func (r *Recorder) AppendTurnContext(record TurnContextRecord, now time.Time) error {
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return r.AppendLine(Line{
+		Type:        "turn_context",
+		Timestamp:   now.UTC().Format(time.RFC3339Nano),
+		TurnContext: payload,
+	})
+}
+
+// TurnContextSettings returns the model and compaction compatibility hash from a
+// turn-context payload (Rust's `PreviousTurnSettings` fields). ok is false when
+// the payload carries no model, so callers never treat an unidentifiable record
+// as a previous turn.
+func TurnContextSettings(raw json.RawMessage) (model string, compHash string, ok bool) {
+	if len(raw) == 0 {
+		return "", "", false
+	}
+	var values map[string]any
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return "", "", false
+	}
+	model = strings.TrimSpace(stringFromAny(values["model"]))
+	if model == "" {
+		return "", "", false
+	}
+	return model, strings.TrimSpace(stringFromAny(values["comp_hash"])), true
+}
+
 func (r *Recorder) AppendTurnComplete(turnID string, completedAt time.Time, durationMS int64) error {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {

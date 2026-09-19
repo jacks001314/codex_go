@@ -109,6 +109,8 @@ func compactionAnalyticsReason(reason compact.Reason) string {
 		return telemetry.CompactionReasonContextLimit
 	case compact.ReasonModelSwitch:
 		return telemetry.CompactionReasonModelDownshift
+	case compact.ReasonCompHashChanged:
+		return telemetry.CompactionReasonCompHashChanged
 	default:
 		return telemetry.CompactionReasonUserRequested
 	}

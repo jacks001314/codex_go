@@ -41,7 +41,7 @@ type CoreNotification struct {
 
 // PersistedLine is one normalized line of the persisted paginated rollout.
 type PersistedLine struct {
-	Type     string `json:"type"`              // session_meta | task_started | item_started | item_completed | task_complete
+	Type     string `json:"type"`              // session_meta | turn_context | task_started | item_started | item_completed | task_complete
 	TurnID   string `json:"turn_id,omitempty"` // turn id carried by the line
 	ItemType string `json:"item_type,omitempty"`
 	Ordinal  uint64 `json:"ordinal"`
@@ -332,6 +332,21 @@ func persistedCoreLines(path string) ([]PersistedLine, error) {
 				}
 			}
 			out = append(out, entry)
+		case "turn_context":
+			// Rust persists one `TurnContextItem` per real user turn, and a
+			// paginated rollout gives every record an ordinal, so the record is
+			// part of the persisted page the cross-check walks (#46324).
+			var payload struct {
+				TurnID string `json:"turn_id"`
+			}
+			entry := PersistedLine{Type: "turn_context"}
+			if json.Unmarshal(line.TurnContext, &payload) == nil {
+				entry.TurnID = payload.TurnID
+			}
+			if line.Ordinal != nil {
+				entry.Ordinal = *line.Ordinal
+			}
+			out = append(out, entry)
 		}
 	}
 	return out, nil
@@ -429,6 +444,10 @@ func validatePersistedCoreLifecycle(persisted []PersistedLine, taskCount int) er
 			current = []string{"task_started"}
 		case "item_started", "item_completed":
 			current = append(current, line.Type)
+		case "turn_context":
+			// The turn's context record is persisted after its task_started and
+			// before the turn's model-visible items (Rust's ordering).
+			current = append(current, line.Type)
 		case "task_complete":
 			current = append(current, "task_complete")
 			perTurn = append(perTurn, current)
@@ -452,7 +471,7 @@ func validatePersistedCoreLifecycle(persisted []PersistedLine, taskCount int) er
 			return fmt.Errorf("persisted turn %d ends with %q, want task_complete", i, turnLines[len(turnLines)-1])
 		}
 		for _, lineType := range turnLines[1 : len(turnLines)-1] {
-			if lineType != "item_started" && lineType != "item_completed" {
+			if lineType != "item_started" && lineType != "item_completed" && lineType != "turn_context" {
 				return fmt.Errorf("persisted turn %d unexpected line %q in body", i, lineType)
 			}
 		}
