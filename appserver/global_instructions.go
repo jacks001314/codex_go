@@ -6,6 +6,7 @@ import (
 	"codex_go/config"
 	promptctx "codex_go/prompt"
 	"codex_go/session"
+	"codex_go/telemetry"
 	"codex_go/turn"
 )
 
@@ -13,10 +14,40 @@ import (
 // snapshot and one-warning-per-episode state across refreshes (Rust #44675).
 var globalInstructionsRefreshManager = config.NewGlobalInstructionsManager()
 
+// InstructionsLoadSpanName is the span Rust opens around loading the global
+// user instructions from the Codex home: codex-home's
+// `#[tracing::instrument(name = "instructions.load", skip_all, fields(provider = "global"))]`
+// on `load_from_codex_home` (#45496). The instrumented function records no
+// arguments, so the span carries only the provider field.
+const InstructionsLoadSpanName = "instructions.load"
+
+// InstructionsLoadProviderAttribute is Rust's `provider` span field.
+const InstructionsLoadProviderAttribute = "provider"
+
 // refreshGlobalInstructions reloads the global instructions for a Codex home,
 // retaining the last successful snapshot on read failures.
 func (r *RuntimeRouter) refreshGlobalInstructions(codexHome string) *config.LoadedUserInstructions {
+	span := r.startInstructionsLoadSpan()
+	defer span.End()
 	return globalInstructionsRefreshManager.Load(codexHome)
+}
+
+// startInstructionsLoadSpan opens the global-instructions load span. Rust's
+// instrumented loader nests under whatever span its caller has active; the Go
+// loader is reached from thread-start and turn paths that do not carry the
+// request span, so the span is opened from the router's tracer the way the
+// thread-spawn span is. A router without an installed provider has no span.
+func (r *RuntimeRouter) startInstructionsLoadSpan() *telemetry.Span {
+	if r == nil {
+		return nil
+	}
+	tracer := r.requestTracer()
+	if tracer == nil {
+		return nil
+	}
+	return tracer.StartSpan(InstructionsLoadSpanName, map[string]string{
+		InstructionsLoadProviderAttribute: "global",
+	})
 }
 
 // instructionsText returns the trimmed instruction text carried by a load.

@@ -1310,3 +1310,76 @@ func TestToolResultEventForExecutionDefaults(t *testing.T) {
 		t.Fatalf("arguments = %q", plaintext.Arguments)
 	}
 }
+
+// Loading the global user instructions opens Rust's `instructions.load` span with
+// the `provider` field (#45496). The thread-start path is the one that loads them.
+func TestInstructionsLoadSpanLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+	})
+	if err != nil || provider == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+	home := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(filepath.Join(home, "sessions"))),
+		Turns:        turn.NewTurnService(),
+		Agent:        newRecordingRuntimeAgent("ok"),
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	router.SetNotificationSink(NewNotificationBuffer())
+	router.installOtelProvider(provider, state.NewTaskMetrics())
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	if err := router.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	var loadSpan map[string]any
+	deadline := time.After(3 * time.Second)
+	for loadSpan == nil {
+		select {
+		case payload := <-traceBodies:
+			resourceSpans, _ := payload["resourceSpans"].([]any)
+			if len(resourceSpans) == 0 {
+				continue
+			}
+			scopeSpans, _ := resourceSpans[0].(map[string]any)["scopeSpans"].([]any)
+			if len(scopeSpans) == 0 {
+				continue
+			}
+			entries, _ := scopeSpans[0].(map[string]any)["spans"].([]any)
+			for _, entry := range entries {
+				span, _ := entry.(map[string]any)
+				if span["name"] == InstructionsLoadSpanName {
+					loadSpan = span
+				}
+			}
+		case <-deadline:
+			t.Fatalf("no %s span was exported", InstructionsLoadSpanName)
+		}
+	}
+	if attributes := encodedAttributes(loadSpan); attributes[InstructionsLoadProviderAttribute] != "global" {
+		t.Fatalf("instructions.load attributes = %#v", attributes)
+	}
+}
