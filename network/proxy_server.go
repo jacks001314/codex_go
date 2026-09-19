@@ -54,6 +54,10 @@ type ProxyServer struct {
 	wait          sync.WaitGroup
 	closeOnce     sync.Once
 	tracker       proxyConnTracker
+	// serveErr records the first listener failure so Wait can fail fast
+	// (Rust NetworkProxyHandle::wait).
+	serveErrMu sync.Mutex
+	serveErr   error
 }
 
 type proxyRuntimePolicy struct {
@@ -171,13 +175,17 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 	server.wait.Add(1)
 	go func() {
 		defer server.wait.Done()
-		_ = server.httpServer.Serve(proxyHTTPValidationListener{Listener: server.httpListener, tracker: &server.tracker})
+		if err := server.httpServer.Serve(proxyHTTPValidationListener{Listener: server.httpListener, tracker: &server.tracker}); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			server.reportServeError(errors.New("http proxy listener failed"))
+		}
 	}()
 	if server.socksListener != nil {
 		server.wait.Add(1)
 		go func() {
 			defer server.wait.Done()
-			server.serveSOCKS5()
+			if err := server.serveSOCKS5(); err != nil && !errors.Is(err, net.ErrClosed) {
+				server.reportServeError(errors.New("socks proxy listener failed"))
+			}
 		}()
 	}
 	go func() {
@@ -185,6 +193,48 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 		_ = server.Close()
 	}()
 	return server, nil
+}
+
+// StartStandaloneProxy runs the network policy proxy without a Codex
+// permissions profile, binding the configured addresses directly (Rust
+// codex-network-proxy #46573).
+func StartStandaloneProxy(ctx context.Context, config ProxyConfig, baseEnv map[string]string) (*ProxyServer, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runtimeConfig, err := ResolveProxyRuntime(config)
+	if err != nil {
+		return nil, err
+	}
+	return startProxyServer(ctx, config, runtimeConfig, baseEnv)
+}
+
+// reportServeError records the first terminal listener failure and cancels the
+// server so the other listener stops and Wait can return.
+func (s *ProxyServer) reportServeError(err error) {
+	if s == nil || err == nil {
+		return
+	}
+	s.serveErrMu.Lock()
+	if s.serveErr == nil {
+		s.serveErr = err
+	}
+	s.serveErrMu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+	}
+}
+
+// Wait blocks until every proxy listener stops and reports the first listener
+// failure (Rust NetworkProxyHandle::wait).
+func (s *ProxyServer) Wait() error {
+	if s == nil {
+		return nil
+	}
+	s.wait.Wait()
+	s.serveErrMu.Lock()
+	defer s.serveErrMu.Unlock()
+	return s.serveErr
 }
 
 func (s *ProxyServer) runtimePolicy() *proxyRuntimePolicy {
@@ -1124,7 +1174,7 @@ func hasURLScheme(value string) bool {
 	return err == nil && parsed.Scheme != ""
 }
 
-func (s *ProxyServer) serveSOCKS5() {
+func (s *ProxyServer) serveSOCKS5() error {
 	policy := s.runtimePolicy()
 	options := []socks5.Option{
 		socks5.WithRule(proxySOCKS5Rule{server: s}),
@@ -1137,7 +1187,7 @@ func (s *ProxyServer) serveSOCKS5() {
 			return socks5.SendReply(writer, statute.RepCommandNotSupported, nil)
 		}))
 	}
-	_ = socks5.NewServer(options...).Serve(s.socksListener)
+	return socks5.NewServer(options...).Serve(s.socksListener)
 }
 
 type proxySOCKS5Resolver struct{}
