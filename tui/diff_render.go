@@ -268,15 +268,19 @@ func renderWrappedDiffLine(lineNumber int, lineType DiffLineType, text string, w
 	for i, seg := range contentSegments {
 		prefix := indent
 		if i == 0 {
-			prefix = buildDiffPrefix(lineType, num, sign, light, level)
+			prefix = buildDiffPrefix(lineType, num, sign, light, level, theme)
 		}
 		out = append(out, prefix+styleDiffContent(seg, lang, theme, lineType, light, level)+ansiReset)
 	}
 	return out
 }
 
-func buildDiffPrefix(lineType DiffLineType, num string, sign string, light bool, level StdoutColorLevel) string {
+func buildDiffPrefix(lineType DiffLineType, num string, sign string, light bool, level StdoutColorLevel, theme string) string {
 	var sb strings.Builder
+	// Rust clears the gutter's own fills when the line has no background, so a
+	// theme that disables the scope's fill (or an ANSI-16 terminal) shows the
+	// gutter on the terminal default as well.
+	fillCleared := diffBgSGR(lineType, light, level, theme) == ""
 	if light {
 		// Light theme: the line-number cell gets its own tinted background for
 		// rich color levels; ANSI-16 keeps the number plain black on the
@@ -291,18 +295,22 @@ func buildDiffPrefix(lineType DiffLineType, num string, sign string, light bool,
 		}
 		switch lineType {
 		case DiffLineInsert:
-			switch level {
-			case ColorTrue:
-				sb.WriteString(ansiBgAddNumLight)
-			case ColorANSI256:
-				sb.WriteString("\x1b[48;5;157m")
+			if !fillCleared {
+				switch level {
+				case ColorTrue:
+					sb.WriteString(ansiBgAddNumLight)
+				case ColorANSI256:
+					sb.WriteString("\x1b[48;5;157m")
+				}
 			}
 		case DiffLineDelete:
-			switch level {
-			case ColorTrue:
-				sb.WriteString(ansiBgDelNumLight)
-			case ColorANSI256:
-				sb.WriteString("\x1b[48;5;217m")
+			if !fillCleared {
+				switch level {
+				case ColorTrue:
+					sb.WriteString(ansiBgDelNumLight)
+				case ColorANSI256:
+					sb.WriteString("\x1b[48;5;217m")
+				}
 			}
 		}
 		sb.WriteString(num)
@@ -331,7 +339,7 @@ func buildDiffPrefix(lineType DiffLineType, num string, sign string, light bool,
 	if lineType == DiffLineContext {
 		sb.WriteString(" ")
 	} else {
-		sb.WriteString(diffSignSGR(lineType, light, level))
+		sb.WriteString(diffSignSGR(lineType, light, level, theme))
 		sb.WriteString(sign)
 		sb.WriteString(ansiReset)
 	}
@@ -344,7 +352,7 @@ func buildDiffPrefix(lineType DiffLineType, num string, sign string, light bool,
 // syntax highlighting whose token foregrounds are re-anchored onto the line
 // background (Rust parity: push_wrapped_diff_line_with_syntax_and_style_context).
 func styleDiffContent(content string, lang string, theme string, lineType DiffLineType, light bool, level StdoutColorLevel) string {
-	bg := diffBgSGR(lineType, light, level)
+	bg := diffBgSGR(lineType, light, level, theme)
 	if lang == "" {
 		return bg + diffFgSGR(lineType, light) + content
 	}
@@ -362,10 +370,17 @@ func styleDiffContent(content string, lang string, theme string, lineType DiffLi
 }
 
 // diffBgSGR returns the SGR background for a diff line at the detected color
-// depth. ANSI-16 terminals get no tinted background (Rust: fallback returns
-// empty backgrounds for ANSI-16) because saturated palette backgrounds
-// overpower syntax tokens; the sign and foreground still carry add/delete color.
-func diffBgSGR(lineType DiffLineType, light bool, level StdoutColorLevel) string {
+// depth, preferring a theme scope background and falling back to the hardcoded
+// palette (Rust #46504 resolve_diff_backgrounds_for).
+func diffBgSGR(lineType DiffLineType, light bool, level StdoutColorLevel, theme string) string {
+	return resolveDiffLineBackground(theme, lineType, light, level)
+}
+
+// diffFallbackBgSGR is the hardcoded palette baseline. ANSI-16 terminals get no
+// tinted background (Rust: fallback returns empty backgrounds for ANSI-16)
+// because saturated palette backgrounds overpower syntax tokens; the sign and
+// foreground still carry add/delete color.
+func diffFallbackBgSGR(lineType DiffLineType, light bool, level StdoutColorLevel) string {
 	if level == ColorANSI16 {
 		return ""
 	}
@@ -403,7 +418,7 @@ func diffBgSGR(lineType DiffLineType, light bool, level StdoutColorLevel) string
 // and ANSI-16 terminals use a foreground-only sign so the line background (or
 // the terminal default) shows through, while dark rich-color levels combine the
 // sign color with the tinted line background.
-func diffSignSGR(lineType DiffLineType, light bool, level StdoutColorLevel) string {
+func diffSignSGR(lineType DiffLineType, light bool, level StdoutColorLevel, theme string) string {
 	fg := ansiGreen
 	if lineType == DiffLineDelete {
 		fg = ansiRed
@@ -411,7 +426,7 @@ func diffSignSGR(lineType DiffLineType, light bool, level StdoutColorLevel) stri
 	if light || level == ColorANSI16 {
 		return fg
 	}
-	return fg + diffBgSGR(lineType, light, level)
+	return fg + diffBgSGR(lineType, light, level, theme)
 }
 
 func diffFgSGR(lineType DiffLineType, light bool) string {

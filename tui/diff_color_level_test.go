@@ -1,4 +1,4 @@
-package tui
+﻿package tui
 
 import (
 	"runtime"
@@ -39,20 +39,20 @@ func TestTermenvProfileForLevelMatchesTerminalDepth(t *testing.T) {
 
 func TestDiffBgSGRAdaptsToColorDepth(t *testing.T) {
 	// ANSI-16 terminals must never receive a tinted line background.
-	if got := diffBgSGR(DiffLineInsert, false, ColorANSI16); got != "" {
+	if got := diffBgSGR(DiffLineInsert, false, ColorANSI16, ""); got != "" {
 		t.Fatalf("ANSI-16 insert bg = %q, want empty", got)
 	}
-	if got := diffBgSGR(DiffLineDelete, false, ColorANSI16); got != "" {
+	if got := diffBgSGR(DiffLineDelete, false, ColorANSI16, ""); got != "" {
 		t.Fatalf("ANSI-16 delete bg = %q, want empty", got)
 	}
 	// Truecolor keeps the RGB palette; 256-color quantizes to indices.
-	if got := diffBgSGR(DiffLineInsert, false, ColorTrue); got != ansiBgAddDark {
+	if got := diffBgSGR(DiffLineInsert, false, ColorTrue, ""); got != ansiBgAddDark {
 		t.Fatalf("truecolor insert bg = %q, want %q", got, ansiBgAddDark)
 	}
-	if got := diffBgSGR(DiffLineInsert, false, ColorANSI256); got != "\x1b[48;5;22m" {
+	if got := diffBgSGR(DiffLineInsert, false, ColorANSI256, ""); got != "\x1b[48;5;22m" {
 		t.Fatalf("256 insert bg = %q, want \\x1b[48;5;22m", got)
 	}
-	if got := diffBgSGR(DiffLineDelete, false, ColorANSI256); got != "\x1b[48;5;52m" {
+	if got := diffBgSGR(DiffLineDelete, false, ColorANSI256, ""); got != "\x1b[48;5;52m" {
 		t.Fatalf("256 delete bg = %q, want \\x1b[48;5;52m", got)
 	}
 }
@@ -61,14 +61,14 @@ func TestDiffSignSGRUsesForegroundOnlyForAnsi16(t *testing.T) {
 	// On ANSI-16 the sign must not carry a tinted background.
 	for _, light := range []bool{true, false} {
 		for _, lineType := range []DiffLineType{DiffLineInsert, DiffLineDelete} {
-			got := diffSignSGR(lineType, light, ColorANSI16)
+			got := diffSignSGR(lineType, light, ColorANSI16, "")
 			if strings.Contains(got, "48;") {
 				t.Fatalf("sign SGR for ANSI-16 = %q, must not contain a background", got)
 			}
 		}
 	}
 	// Dark truecolor combines sign fg with the line background, like Rust.
-	got := diffSignSGR(DiffLineInsert, false, ColorTrue)
+	got := diffSignSGR(DiffLineInsert, false, ColorTrue, "")
 	if !strings.Contains(got, "32") || !strings.Contains(got, "48;2;33;58;43") {
 		t.Fatalf("dark truecolor insert sign = %q, want green fg + add bg", got)
 	}
