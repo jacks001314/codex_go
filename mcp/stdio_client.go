@@ -39,6 +39,7 @@ type stdioClient struct {
 	closed                             bool
 	config                             *ServerConfig
 	cmd                                *exec.Cmd
+	process                            *mcpStdioProcess
 	stdin                              io.WriteCloser
 	reader                             *bufio.Reader
 	stderr                             *stdioOutputBuffer
@@ -443,11 +444,13 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 	stderr := &stdioOutputBuffer{}
 	cmd.Stderr = stderr
 	c.mu.Lock()
-	if err := cmd.Start(); err != nil {
+	process, err := startMCPStdioProcess(cmd)
+	if err != nil {
 		c.mu.Unlock()
 		return err
 	}
 	c.cmd = cmd
+	c.process = process
 	c.stdin = stdin
 	c.reader = bufio.NewReader(stdout)
 	c.stderr = stderr
@@ -747,13 +750,21 @@ func (c *stdioClient) closeLocked() error {
 		_ = c.stdin.Close()
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
+		if c.process != nil {
+			c.process.terminate(c.cmd)
+		} else {
+			_ = c.cmd.Process.Kill()
+		}
 		waitErr = waitMCPStdioCommand(c.cmd)
+	}
+	if c.process != nil {
+		c.process.release()
 	}
 	if message := strings.TrimSpace(stderr.String()); waitErr != nil && message != "" {
 		waitErr = fmt.Errorf("%w: %s", waitErr, message)
 	}
 	c.cmd = nil
+	c.process = nil
 	c.stdin = nil
 	c.reader = nil
 	c.stderr = nil
@@ -857,8 +868,10 @@ func (c *stdioClient) failTransportFor(owner *exec.Cmd, err error) {
 	c.pending = map[int64]*stdioPendingCall{}
 	c.pendingOrder = nil
 	cmd := c.cmd
+	process := c.process
 	stdin := c.stdin
 	c.cmd = nil
+	c.process = nil
 	c.stdin = nil
 	c.reader = nil
 	c.started = false
@@ -874,8 +887,15 @@ func (c *stdioClient) failTransportFor(owner *exec.Cmd, err error) {
 		_ = stdin.Close()
 	}
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		if process != nil {
+			process.terminate(cmd)
+		} else {
+			_ = cmd.Process.Kill()
+		}
 		_ = waitMCPStdioCommand(cmd)
+	}
+	if process != nil {
+		process.release()
 	}
 	for _, call := range pending {
 		call.Result <- stdioCallResult{Error: err}
