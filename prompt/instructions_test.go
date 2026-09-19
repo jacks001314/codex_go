@@ -4,15 +4,68 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+
+	"codex_go/utils"
 )
 
 func TestInstructionsCandidateFilenames(t *testing.T) {
-	got := InstructionsCandidateFilenames([]string{"README.md", "AGENTS.md", ""})
+	got := InstructionsCandidateFilenames([]string{"README.md", "AGENTS.md", ""}, utils.ConventionPosix)
 	want := []string{InstructionsLocalAgentsMDFilename, InstructionsDefaultAgentsMDFilename, "README.md"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("InstructionsCandidateFilenames() = %v, want %v", got, want)
+	}
+}
+
+// TestInstructionsCandidateFilenamesRejectPathSyntaxLikeRust mirrors Rust
+// #45865's fallback_paths_are_rejected_before_filesystem_probes: entries
+// containing path syntax never reach a filesystem probe, and backslashes/colons
+// are rejected only under the Windows executor convention.
+func TestInstructionsCandidateFilenamesRejectPathSyntaxLikeRust(t *testing.T) {
+	alwaysInvalid := []string{"", ".", "..", "/AGENTS.md", "../AGENTS.md", "nested/AGENTS.md", "//server/share/AGENTS.md", "AGENTS\x00.md"}
+	windowsOnly := []string{`..\AGENTS.md`, `nested\AGENTS.md`, `\AGENTS.md`, `C:\AGENTS.md`, "C:AGENTS.md", `\\server\share\AGENTS.md`, `\\?\UNC\server\share\AGENTS.md`, `\\.\pipe\instructions`, "AGENTS.md:stream"}
+	base := []string{InstructionsLocalAgentsMDFilename, InstructionsDefaultAgentsMDFilename}
+
+	posix := InstructionsCandidateFilenames(append(append([]string{}, alwaysInvalid...), append(windowsOnly, "WORKFLOW.md", "WORKFLOW.md", ".instructions.md")...), utils.ConventionPosix)
+	wantPosix := append(append([]string{}, base...), append(windowsOnly, "WORKFLOW.md", ".instructions.md")...)
+	if !reflect.DeepEqual(posix, wantPosix) {
+		t.Fatalf("POSIX candidates = %v, want %v", posix, wantPosix)
+	}
+
+	windows := InstructionsCandidateFilenames(append(append([]string{}, alwaysInvalid...), append(windowsOnly, "WORKFLOW.md", "WORKFLOW.md", ".instructions.md")...), utils.ConventionWindows)
+	wantWindows := append(append([]string{}, base...), "WORKFLOW.md", ".instructions.md")
+	if !reflect.DeepEqual(windows, wantWindows) {
+		t.Fatalf("Windows candidates = %v, want %v", windows, wantWindows)
+	}
+	if !reflect.DeepEqual(wantWindows, []string{InstructionsLocalAgentsMDFilename, InstructionsDefaultAgentsMDFilename, "WORKFLOW.md", ".instructions.md"}) {
+		t.Fatalf("unexpected Windows expectations: %v", wantWindows)
+	}
+}
+
+// TestInstructionsPathConventionInfersExecutorConventionLikeRust mirrors Rust's
+// PathUri::infer_path_convention usage: a Windows cwd (a Windows path URI or a
+// Windows-native path) uses the Windows convention on any host.
+func TestInstructionsPathConventionInfersExecutorConventionLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		cwd  string
+		want utils.PathConvention
+	}{
+		{"file:///repo", utils.ConventionPosix},
+		{"file:///C:/repo", utils.ConventionWindows},
+		{`C:\repo`, utils.ConventionWindows},
+		{`\\server\share\repo`, utils.ConventionWindows},
+	} {
+		if got := instructionsPathConvention(testCase.cwd); got != testCase.want {
+			t.Fatalf("instructionsPathConvention(%q) = %q, want %q", testCase.cwd, got, testCase.want)
+		}
+	}
+	// A host-native POSIX path uses the host convention.
+	if runtime.GOOS != "windows" {
+		if got := instructionsPathConvention("/repo"); got != utils.ConventionPosix {
+			t.Fatalf("instructionsPathConvention(%q) = %q, want posix", "/repo", got)
+		}
 	}
 }
 

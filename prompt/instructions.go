@@ -2,12 +2,15 @@ package prompt
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
 	codexshell "codex_go/shell"
+	"codex_go/utils"
 )
 
 const (
@@ -220,7 +223,7 @@ func InstructionsAgentsMDPaths(cwd string, rootMarkers []string, fallbackNames [
 	}
 	root := FindInstructionsProjectRoot(cwd, rootMarkers)
 	dirs := instructionsPathFromRoot(root, cwd)
-	names := InstructionsCandidateFilenames(fallbackNames)
+	names := InstructionsCandidateFilenames(fallbackNames, instructionsPathConvention(cwd))
 	var paths []string
 	for _, dir := range dirs {
 		for _, name := range names {
@@ -260,17 +263,69 @@ func FindInstructionsProjectRoot(cwd string, markers []string) string {
 	}
 }
 
-func InstructionsCandidateFilenames(fallbackNames []string) []string {
+// InstructionsCandidateFilenames builds the ordered candidate filenames:
+// AGENTS.override.md, AGENTS.md, then each configured fallback. Rust #45865:
+// entries containing path syntax for the executor's convention are ignored
+// before any filesystem probe, because probing a Windows network path can send
+// ambient credentials even during a metadata check. `.` and `..`, slashes, and
+// NUL characters are rejected for every convention; backslashes and colons are
+// ordinary filename characters on POSIX executors and only rejected on Windows.
+func InstructionsCandidateFilenames(fallbackNames []string, convention utils.PathConvention) []string {
 	names := []string{InstructionsLocalAgentsMDFilename, InstructionsDefaultAgentsMDFilename}
 	seen := map[string]bool{InstructionsLocalAgentsMDFilename: true, InstructionsDefaultAgentsMDFilename: true}
 	for _, name := range fallbackNames {
-		if name == "" || seen[name] {
+		if name == "" {
+			continue
+		}
+		if name == "." || name == ".." || strings.ContainsAny(name, "/\x00") ||
+			(convention == utils.ConventionWindows && strings.ContainsAny(name, "\\:")) {
+			slog.Warn("ignoring project_doc_fallback_filenames entry that is not a filename")
+			continue
+		}
+		if seen[name] {
 			continue
 		}
 		names = append(names, name)
 		seen[name] = true
 	}
 	return names
+}
+
+// instructionsPathConvention infers the executor's path convention from a cwd,
+// mirroring Rust's `cwd.infer_path_convention()`. A path URI carries its own
+// convention (a remote Windows executor reports a Windows URI even from a POSIX
+// host); a Windows-native path is recognized by shape; anything else uses the
+// host convention.
+func instructionsPathConvention(cwd string) utils.PathConvention {
+	trimmed := strings.TrimSpace(cwd)
+	if uri, err := utils.Parse(trimmed); err == nil && uri != nil {
+		if convention, ok := uri.InferConvention(); ok {
+			return convention
+		}
+	}
+	if looksLikeWindowsNativePath(trimmed) {
+		return utils.ConventionWindows
+	}
+	if runtime.GOOS == "windows" {
+		return utils.ConventionWindows
+	}
+	return utils.ConventionPosix
+}
+
+// looksLikeWindowsNativePath reports whether value is a Windows absolute path
+// (a drive-letter path or a UNC share).
+func looksLikeWindowsNativePath(value string) bool {
+	if strings.HasPrefix(value, `\\`) {
+		return true
+	}
+	if len(value) < 3 || value[1] != ':' {
+		return false
+	}
+	drive := value[0]
+	if !((drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z')) {
+		return false
+	}
+	return value[2] == '\\' || value[2] == '/'
 }
 
 type InstructionsManager struct {
