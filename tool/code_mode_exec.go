@@ -18,6 +18,10 @@ import (
 
 const CodeModeExecToolName = "exec"
 
+// CodeModeWaitToolName names the wait tool Rust's code-mode analytics report for a
+// resumed cell.
+const CodeModeWaitToolName = "wait"
+
 const CodeModeDefaultExecYieldTime = 30 * time.Second
 
 const (
@@ -83,6 +87,19 @@ const (
 	CodeModeCallChildStarted CodeModeCallObservationKind = "child_started"
 	// CodeModeCallCellClosed reports that a cell finished.
 	CodeModeCallCellClosed CodeModeCallObservationKind = "cell_closed"
+	// CodeModeCallCompleted reports one finished code-mode call (Rust's
+	// CodeModeToolCallFact::Completed), which the analytics layer publishes as a
+	// dynamic tool-call event.
+	CodeModeCallCompleted CodeModeCallObservationKind = "completed"
+)
+
+// CodeModeCallStatus mirrors Rust's CodeModeToolCallStatus.
+type CodeModeCallStatus string
+
+const (
+	CodeModeCallStatusCompleted   CodeModeCallStatus = "completed"
+	CodeModeCallStatusFailed      CodeModeCallStatus = "failed"
+	CodeModeCallStatusInterrupted CodeModeCallStatus = "interrupted"
 )
 
 // CodeModeCallObservation is one code-mode cell or child-call fact.
@@ -91,6 +108,11 @@ type CodeModeCallObservation struct {
 	CellID       string
 	ParentCallID string
 	CallID       string
+	// The Completed fact's fields.
+	ToolName      string
+	StartedAtMS   uint64
+	CompletedAtMS uint64
+	Status        CodeModeCallStatus
 }
 
 // codeModeCallOrigin is one cell's retained origin (Rust ToolCallOrigin).
@@ -290,6 +312,44 @@ func (e *codeModeExecExecutor) observeCall(observation CodeModeCallObservation) 
 	if observer != nil {
 		observer(observation)
 	}
+}
+
+// observeCodeModeCallCompletion publishes Rust's `Completed` fact for one
+// finished exec/wait call: the call id, the cell it ran in (once known), the tool
+// name, the observed window and the terminal status.
+func (e *codeModeExecExecutor) observeCodeModeCallCompletion(callID string, toolName string, cellID *string, startedAt time.Time, status CodeModeCallStatus) {
+	if e == nil {
+		return
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return
+	}
+	observation := CodeModeCallObservation{
+		Kind:          CodeModeCallCompleted,
+		CallID:        callID,
+		ToolName:      strings.TrimSpace(toolName),
+		StartedAtMS:   uint64(startedAt.UTC().UnixMilli()),
+		CompletedAtMS: uint64(time.Now().UTC().UnixMilli()),
+		Status:        status,
+	}
+	if cellID != nil {
+		observation.CellID = strings.TrimSpace(*cellID)
+	}
+	e.observeCall(observation)
+}
+
+// codeModeCallStatusFor classifies one finished code-mode call the way Rust's
+// CodeModeToolCallGuard does: a cancelled call is interrupted, a failed handler
+// (error or unsuccessful output) is failed, and everything else completed.
+func codeModeCallStatusFor(ctx context.Context, output *Output, err error) CodeModeCallStatus {
+	if ctx != nil && ctx.Err() != nil {
+		return CodeModeCallStatusInterrupted
+	}
+	if err != nil || output == nil || !output.Success {
+		return CodeModeCallStatusFailed
+	}
+	return CodeModeCallStatusCompleted
 }
 
 // SetShowCellOverhead mirrors Rust's
@@ -528,6 +588,16 @@ Global helpers:
 }
 
 func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
+	startedAt := time.Now().UTC()
+	var callCellID string
+	output, err := e.execute(ctx, invocation, &callCellID)
+	// Rust's CodeModeToolCallGuard publishes the call's Completed fact when the
+	// handler returns, with the cell it ran in and its terminal status.
+	e.observeCodeModeCallCompletion(invocation.CallID, CodeModeExecToolName, &callCellID, startedAt, codeModeCallStatusFor(ctx, output, err))
+	return output, err
+}
+
+func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocation, callCellID *string) (*Output, error) {
 	if invocation == nil || invocation.Payload.Kind != PayloadCustom {
 		return nil, RespondToModel("exec expects raw JavaScript source text")
 	}
@@ -546,7 +616,7 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 		return nil, Fatal("code-mode host is disabled and in-process fallback is disabled")
 	}
 	if e.remote != nil {
-		output, remoteErr := e.executeRemote(ctx, invocation, source, options)
+		output, remoteErr := e.executeRemote(ctx, invocation, source, options, callCellID)
 		if remoteErr == nil {
 			return output, nil
 		}
@@ -580,6 +650,9 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 	}
 	if cellID == "" {
 		cellID = fmt.Sprintf("cell-%d", e.nextID.Add(1))
+	}
+	if callCellID != nil {
+		*callCellID = cellID
 	}
 	cellCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	cell := &codeModeCell{done: make(chan struct{}), cancel: cancel, startedAt: time.Now()}
@@ -631,7 +704,7 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 	return applyCodeModeHeader(output, status, time.Since(cell.startedAt), nil, e.cellOverheadEnabled()), nil
 }
 
-func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *Invocation, source string, options codeModeExecOptions) (*Output, error) {
+func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *Invocation, source string, options codeModeExecOptions, callCellID *string) (*Output, error) {
 	delegate, _ := e.remoteDelegate()
 	done := delegate.begin(invocation)
 	// A yielded cell outlives this call, so its delegate callbacks are released
@@ -667,6 +740,9 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 	response, err := e.remote.Execute(ctx, CodeModeRemoteExecuteRequest{ToolCallID: invocation.CallID, Source: source, EnabledTools: definitions, YieldTimeMS: yield, MaxOutputTokens: options.MaxOutputTokens})
 	if err != nil {
 		return nil, err
+	}
+	if callCellID != nil && strings.TrimSpace(response.CellID) != "" {
+		*callCellID = strings.TrimSpace(response.CellID)
 	}
 	if response.State == "yielded" && strings.TrimSpace(response.CellID) != "" {
 		registry, _ := e.binding()
@@ -1508,6 +1584,24 @@ func (e *codeModeWaitExecutor) Spec() Spec {
 }
 
 func (e *codeModeWaitExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
+	startedAt := time.Now().UTC()
+	output, err := e.execute(ctx, invocation)
+	// Rust's CodeModeToolCallGuard publishes the wait call's Completed fact with
+	// the cell it resumed.
+	var cellID *string
+	if invocation != nil {
+		var params codeModeWaitParams
+		if decodeErr := invocation.DecodeArguments(&params); decodeErr == nil {
+			if trimmed := strings.TrimSpace(params.CellID); trimmed != "" {
+				cellID = &trimmed
+			}
+		}
+	}
+	e.exec.observeCodeModeCallCompletion(invocation.CallID, CodeModeWaitToolName, cellID, startedAt, codeModeCallStatusFor(ctx, output, err))
+	return output, err
+}
+
+func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocation) (*Output, error) {
 	var params codeModeWaitParams
 	if err := invocation.DecodeArguments(&params); err != nil {
 		return nil, RespondToModel(err.Error())

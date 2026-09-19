@@ -1311,6 +1311,7 @@ func TestCodeModeCallObservationsFollowRustFacts(t *testing.T) {
 
 	want := []CodeModeCallObservation{
 		{Kind: CodeModeCallCellStarted, CellID: "observed-cell", ParentCallID: "exec-observed"},
+		{Kind: CodeModeCallCompleted, CellID: "observed-cell", CallID: "exec-observed", ToolName: CodeModeExecToolName, Status: CodeModeCallStatusCompleted},
 		{Kind: CodeModeCallChildStarted, CellID: "observed-cell", CallID: "nested-observed"},
 		{Kind: CodeModeCallCellClosed, CellID: "observed-cell"},
 	}
@@ -1318,8 +1319,106 @@ func TestCodeModeCallObservationsFollowRustFacts(t *testing.T) {
 		t.Fatalf("observations = %#v, want %#v", observed, want)
 	}
 	for index := range want {
-		if observed[index] != want[index] {
+		got := observed[index]
+		if got.Kind == CodeModeCallCompleted {
+			// The completion fact carries the call's observed window.
+			if got.StartedAtMS == 0 || got.CompletedAtMS < got.StartedAtMS {
+				t.Fatalf("observation %d timing = %#v", index, got)
+			}
+			got.StartedAtMS, got.CompletedAtMS = 0, 0
+		}
+		if got != want[index] {
 			t.Fatalf("observation %d = %#v, want %#v", index, observed[index], want[index])
 		}
+	}
+}
+
+// Mirrors Rust's CodeModeToolCallGuard: every exec and wait call publishes a
+// Completed fact when it returns, with the tool name, the cell it ran in and the
+// terminal status.
+func TestCodeModeCallsPublishCompletionFactsLikeRust(t *testing.T) {
+	session := &yieldedCodeModeSession{
+		executeResponse: CodeModeRemoteResponse{CellID: "cell-fact", State: "yielded"},
+		settleResponse: CodeModeRemoteResponse{
+			CellID: "cell-fact", State: "completed",
+			ContentItems: []map[string]any{{"type": "input_text", "text": "done"}},
+		},
+	}
+	provider := &recordingCodeModeRemoteProvider{session: session}
+	runtime := NewCodeModeRuntime(provider, false)
+	defer func() { _ = runtime.Close() }()
+	exec, wait := runtime.Executors(NewRegistry())
+	var observed []CodeModeCallObservation
+	runtime.SetCallObserver(func(observation CodeModeCallObservation) {
+		observed = append(observed, observation)
+	})
+
+	if _, err := exec.Execute(context.Background(), &Invocation{
+		CallID:  "call-exec",
+		Payload: Payload{Kind: PayloadCustom, Input: `text("RUN")`},
+	}); err != nil {
+		t.Fatalf("exec error = %v", err)
+	}
+	if _, err := wait.Execute(context.Background(), &Invocation{
+		CallID:  "call-wait",
+		Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"cell-fact"}`},
+	}); err != nil {
+		t.Fatalf("wait error = %v", err)
+	}
+
+	facts := map[string]CodeModeCallObservation{}
+	for _, observation := range observed {
+		if observation.Kind == CodeModeCallCompleted {
+			facts[observation.ToolName] = observation
+		}
+	}
+	execFact, ok := facts[CodeModeExecToolName]
+	if !ok || execFact.CallID != "call-exec" || execFact.CellID != "cell-fact" || execFact.Status != CodeModeCallStatusCompleted {
+		t.Fatalf("exec completion fact = %#v", execFact)
+	}
+	waitFact, ok := facts[CodeModeWaitToolName]
+	if !ok || waitFact.CallID != "call-wait" || waitFact.CellID != "cell-fact" || waitFact.Status != CodeModeCallStatusCompleted {
+		t.Fatalf("wait completion fact = %#v", waitFact)
+	}
+	if execFact.CompletedAtMS < execFact.StartedAtMS || waitFact.CompletedAtMS < waitFact.StartedAtMS {
+		t.Fatalf("completion windows = %#v / %#v", execFact, waitFact)
+	}
+}
+
+// Mirrors Rust's in-process code mode: a yielding exec reports its cell and, when
+// the call returns, its completion fact with that cell.
+func TestInProcessCodeModeExecPublishesCompletionFactLikeRust(t *testing.T) {
+	runtime := NewCodeModeRuntime(nil, false)
+	defer func() { _ = runtime.Close() }()
+	exec, _ := runtime.Executors(NewRegistry())
+	var observed []CodeModeCallObservation
+	runtime.SetCallObserver(func(observation CodeModeCallObservation) {
+		observed = append(observed, observation)
+	})
+
+	if _, err := exec.Execute(context.Background(), &Invocation{
+		CallID:  "call-inprocess",
+		Payload: Payload{Kind: PayloadCustom, Input: `yield_control(); text("later")`},
+	}); err != nil {
+		t.Fatalf("exec error = %v", err)
+	}
+
+	var started, completed *CodeModeCallObservation
+	for index := range observed {
+		switch observed[index].Kind {
+		case CodeModeCallCellStarted:
+			started = &observed[index]
+		case CodeModeCallCompleted:
+			completed = &observed[index]
+		}
+	}
+	if started == nil || started.ParentCallID != "call-inprocess" {
+		t.Fatalf("cell start fact = %#v", started)
+	}
+	if completed == nil || completed.CallID != "call-inprocess" || completed.ToolName != CodeModeExecToolName {
+		t.Fatalf("completion fact = %#v", completed)
+	}
+	if completed.CellID != started.CellID || completed.Status != CodeModeCallStatusCompleted {
+		t.Fatalf("completion cell/status = %#v", completed)
 	}
 }

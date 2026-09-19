@@ -366,6 +366,8 @@ func (r *RuntimeRouter) observeCodeModeCall(threadID string, observation tool.Co
 		r.rememberCodeModeChildCall(threadID, turnID, observation.CellID, observation.CallID)
 	case tool.CodeModeCallCellClosed:
 		r.closeCodeModeCell(threadID, turnID, observation.CellID)
+	case tool.CodeModeCallCompleted:
+		r.emitCodeModeToolCallEvent(threadID, turnID, observation)
 	}
 }
 
@@ -444,12 +446,20 @@ func (r *RuntimeRouter) enrichToolEventBaseLocked(base *telemetry.CodexToolItemE
 		return
 	}
 	key := sampledToolCallsKey(threadID, turnID)
-	childCellID := strings.TrimSpace(r.codeModeChildCalls[key][itemID])
-	cell, cellKnown := r.codeModeCells[threadID][childCellID]
+	// Rust takes the event's own cell id when it has one (a code-mode fact sets
+	// it explicitly) and otherwise derives it from the child-call evidence.
+	cellID := ""
+	if base.CellID != nil {
+		cellID = strings.TrimSpace(*base.CellID)
+	}
+	if cellID == "" {
+		cellID = strings.TrimSpace(r.codeModeChildCalls[key][itemID])
+	}
+	cell, cellKnown := r.codeModeCells[threadID][cellID]
 	sampledResponseID := strings.TrimSpace(r.sampledToolCalls[key][itemID])
 
-	if base.CellID == nil && childCellID != "" {
-		base.CellID = &childCellID
+	if base.CellID == nil && cellID != "" {
+		base.CellID = &cellID
 	}
 	if !cellKnown {
 		base.CellID = nil

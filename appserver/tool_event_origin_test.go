@@ -6,6 +6,7 @@ import (
 
 	"codex_go/model"
 	"codex_go/telemetry"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -350,5 +351,88 @@ func TestClosingThreadFlushesAndDropsToolEvidenceLikeRust(t *testing.T) {
 	router.enrichToolEventBase(&closed, threadID, turnID)
 	if closed.CellID != nil || closed.ParentCallID != nil {
 		t.Fatalf("cell evidence survived the close: %#v", closed)
+	}
+}
+
+// Mirrors Rust #36729's code-mode dynamic tool-call event: a finished exec/wait
+// call reports one event with the cell it ran in, the observed window, its
+// terminal status and the model-call classification, held back like every other
+// correlated tool event.
+func TestCodeModeToolCallEventFollowsRustFacts(t *testing.T) {
+	router, sink := newModelAttributionRouter(t)
+	const threadID = "thread-code-mode-analytics"
+	const turnID = "turn-code-mode-analytics"
+	if err := router.threads.RegisterTurn(threadID, turnID, nil, 1, &turn.TurnStartParams{ThreadID: threadID}); err != nil {
+		t.Fatalf("RegisterTurn() error = %v", err)
+	}
+	router.updateActiveRuntimeTurnAnalytics(threadID, turnID, "conn-model-attribution", nil)
+
+	// The model sampled the exec call and the cell it created.
+	router.rememberSampledToolCalls(threadID, turnID, "response-1", []string{"call-exec"})
+	router.rememberCodeModeCell(threadID, turnID, "cell-1", "call-exec")
+	router.observeCodeModeCall(threadID, tool.CodeModeCallObservation{
+		Kind:          tool.CodeModeCallCompleted,
+		CallID:        "call-exec",
+		ToolName:      tool.CodeModeExecToolName,
+		CellID:        "cell-1",
+		StartedAtMS:   1000,
+		CompletedAtMS: 1200,
+		Status:        tool.CodeModeCallStatusCompleted,
+	})
+	// Correlated events wait for the next response; the turn close releases them.
+	router.flushPendingToolEvents(threadID, turnID)
+
+	event := waitForDynamicToolCallAnalyticsEvent(t, sink, turnID)
+	params := event.EventParams
+	if params.ItemID != "call-exec" || params.DynamicToolName != tool.CodeModeExecToolName || params.Success == nil || !*params.Success {
+		t.Fatalf("code-mode dynamic event = %#v", params)
+	}
+	if params.CellID == nil || *params.CellID != "cell-1" {
+		t.Fatalf("code-mode cell = %#v", params.CellID)
+	}
+	if params.ParentCallID != nil {
+		t.Fatalf("the cell's own call must not name a parent: %#v", params.ParentCallID)
+	}
+	if params.OriginatingResponseID == nil || *params.OriginatingResponseID != "response-1" {
+		t.Fatalf("code-mode originating response = %#v", params.OriginatingResponseID)
+	}
+	if params.ToolEventType == nil || *params.ToolEventType != telemetry.ToolEventTypeModelToolCall {
+		t.Fatalf("code-mode tool_event_type = %#v", params.ToolEventType)
+	}
+	if params.TerminalStatus != telemetry.ToolItemTerminalStatusCompleted || params.FailureKind != nil {
+		t.Fatalf("code-mode outcome = %q/%#v", params.TerminalStatus, params.FailureKind)
+	}
+	if params.StartedAtMS != 1000 || params.CompletedAtMS != 1200 || params.DurationMS == nil || *params.DurationMS != 200 {
+		t.Fatalf("code-mode timing = %#v", params)
+	}
+	if params.ExecutionDurationMS == nil || *params.ExecutionDurationMS != 200 {
+		t.Fatalf("code-mode execution duration = %#v", params.ExecutionDurationMS)
+	}
+	if params.SessionID != threadID {
+		t.Fatalf("code-mode session = %q", params.SessionID)
+	}
+
+	// A failed wait call reports the failure and the cell it resumed.
+	router.observeCodeModeCall(threadID, tool.CodeModeCallObservation{
+		Kind:          tool.CodeModeCallCompleted,
+		CallID:        "call-wait",
+		ToolName:      tool.CodeModeWaitToolName,
+		CellID:        "cell-1",
+		StartedAtMS:   1300,
+		CompletedAtMS: 1400,
+		Status:        tool.CodeModeCallStatusFailed,
+	})
+	router.flushPendingToolEvents(threadID, turnID)
+	failed := waitForDynamicToolCallAnalyticsEvent(t, sink, turnID)
+	if failed.EventParams.DynamicToolName != tool.CodeModeWaitToolName ||
+		failed.EventParams.TerminalStatus != telemetry.ToolItemTerminalStatusFailed ||
+		failed.EventParams.Success == nil || *failed.EventParams.Success {
+		t.Fatalf("failed wait event = %#v", failed.EventParams)
+	}
+	if failed.EventParams.FailureKind == nil || *failed.EventParams.FailureKind != telemetry.ToolItemFailureKindToolError {
+		t.Fatalf("failed wait failure kind = %#v", failed.EventParams.FailureKind)
+	}
+	if failed.EventParams.ParentCallID == nil || *failed.EventParams.ParentCallID != "call-exec" {
+		t.Fatalf("wait parent call = %#v", failed.EventParams.ParentCallID)
 	}
 }
