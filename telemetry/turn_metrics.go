@@ -24,10 +24,15 @@ const (
 
 // TurnMetricSink receives turn-scoped metrics. state.TaskMetrics implements it
 // for the local process; it mirrors the subset of codex-otel's SessionTelemetry
-// the turn completion path uses (#44656).
+// the turn completion path uses (#44656), including the explicit-boundary
+// histogram the memory consolidation pipeline reports through the same session
+// telemetry (#45956).
 type TurnMetricSink interface {
 	Counter(name string, inc int, tags map[string]string)
 	Histogram(name string, value int, tags map[string]string)
+	// HistogramWithBounds records a histogram value with explicit bucket
+	// boundaries (codex-otel's histogram_with_boundaries).
+	HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string)
 	// RecordDuration records Rust's millisecond duration histogram (codex-otel's
 	// `record_duration`, with the millisecond unit and bucket boundaries).
 	RecordDuration(name string, duration time.Duration, tags map[string]string)

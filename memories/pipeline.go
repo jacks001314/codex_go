@@ -112,6 +112,10 @@ type StartupPipeline struct {
 	PhaseTwoModel     string
 	Guard             StartupGuard
 	HeartbeatInterval time.Duration
+	// Metrics receives the consolidation metrics this pipeline reports
+	// (Rust MemoryStartupContext's session telemetry). A nil sink records
+	// nothing.
+	Metrics MemoryMetricSink
 }
 
 type StartupReport struct {
@@ -297,6 +301,7 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	}
 	if !diff.HasChanges() && ValidateConsolidationArtifactsForVersion(root, p.Version) == nil {
 		if updated, _ := p.State.MarkGlobalPhase2JobSucceeded(ctx, claim.OwnershipToken, watermark, selected); updated {
+			p.RecordMemoryStorageSize(root)
 			return "succeeded_no_workspace_changes"
 		}
 		return "failed_mark_succeeded"
@@ -349,6 +354,10 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	if !updated {
 		return "failed_mark_succeeded"
 	}
+	// The storage sample is taken after the job is recorded as succeeded and
+	// after the baseline reset, so it covers the artifacts the run left behind
+	// (Rust drops the phase-two timer before measuring for the same reason).
+	p.RecordMemoryStorageSize(root)
 	return "succeeded"
 }
 

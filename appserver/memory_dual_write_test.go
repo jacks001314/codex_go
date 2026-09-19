@@ -24,7 +24,10 @@ func TestMemoryStartupPipelinesHonorDualWrite(t *testing.T) {
 	}
 	defer func() { _ = runtime.Close() }()
 
-	primary := &memories.StartupPipeline{State: runtime, CodexHome: home, Version: config.MemoryVersionV1}
+	metrics := state.NewTaskMetrics()
+	primary := &memories.StartupPipeline{
+		State: runtime, CodexHome: home, Version: config.MemoryVersionV1, Metrics: metrics,
+	}
 
 	off := memoryStartupPipelines(primary, config.MemoriesConfig{}, config.MemoryVersionV1, runtime, ctx)
 	if len(off) != 1 || off[0] != primary {
@@ -46,6 +49,10 @@ func TestMemoryStartupPipelinesHonorDualWrite(t *testing.T) {
 	}
 	if dual[1].State.StateDB() != runtime.StateDB() {
 		t.Fatal("dual pipeline must share the thread catalog")
+	}
+	// The dual pipeline reports its own root version on the same sink (#45956).
+	if dual[1].Metrics != memories.MemoryMetricSink(metrics) {
+		t.Fatalf("dual pipeline metrics = %#v", dual[1].Metrics)
 	}
 	if !runtime.HasMemoriesV2Database() {
 		t.Fatal("dual-write must create the v2 store")

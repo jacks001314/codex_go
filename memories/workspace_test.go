@@ -4,8 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"codex_go/config"
 )
 
 func TestWorkspaceBaselineReportsAddedModifiedDeletedAndResets(t *testing.T) {
@@ -170,5 +173,62 @@ func TestValidateConsolidationArtifacts(t *testing.T) {
 	}
 	if err := ValidateConsolidationArtifacts(root); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// MemoryStorageBytes sums regular files from metadata, so a run that leaves git
+// metadata or a symlink behind reports only the memory artifacts themselves
+// (Rust #45956).
+func TestMemoryStorageBytesCountsRegularFilesOnly(t *testing.T) {
+	home := t.TempDir()
+	for _, version := range []config.MemoryVersion{config.MemoryVersionV1, config.MemoryVersionV2} {
+		root := RootForVersion(home, version)
+		for _, dir := range []string{
+			filepath.Join(root, "rollout_summaries"),
+			filepath.Join(root, "extensions", "notes"),
+			filepath.Join(root, ".git", "objects"),
+		} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "objects", "baseline"), []byte("git metadata is not memory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		files := []struct {
+			path    string
+			content string
+		}{
+			{MemorySummaryFilename, "summary"},
+			{filepath.Join("rollout_summaries", "thread.md"), "rollout"},
+			{filepath.Join("extensions", "notes", "note.md"), "café"},
+		}
+		var want int64
+		for _, file := range files {
+			if err := os.WriteFile(filepath.Join(root, file.path), []byte(file.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			want += int64(len(file.content))
+		}
+		if runtime.GOOS != "windows" {
+			// Symlinks contribute nothing and are never followed, so a link back
+			// to the root cannot loop and a broken link cannot fail the walk.
+			for link, target := range map[string]string{
+				"file-link":      filepath.Join(root, MemorySummaryFilename),
+				"directory-loop": root,
+				"broken-link":    filepath.Join(root, "missing"),
+			} {
+				if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		got, err := MemoryStorageBytes(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("%s storage bytes = %d, want %d", version.DirectoryName(), got, want)
+		}
 	}
 }

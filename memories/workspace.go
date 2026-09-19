@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -130,6 +131,44 @@ func ResetWorkspaceBaseline(ctx context.Context, root string) error {
 		return err
 	}
 	return resetGitBaseline(ctx, root)
+}
+
+// MemoryStorageBytes sums the regular files under root from filesystem metadata,
+// without reading their contents, and excludes git metadata and symbolic links
+// (Rust `workspace::memory_storage_bytes`, #45956). Lstat is used rather than
+// Stat, so a link contributes nothing and a link back to an ancestor cannot
+// make the walk loop; the total saturates instead of wrapping.
+func MemoryStorageBytes(root string) (int64, error) {
+	var total int64
+	pending := []string{root}
+	for len(pending) > 0 {
+		path := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		info, err := os.Lstat(path)
+		if err != nil {
+			return 0, err
+		}
+		switch {
+		case info.Mode().IsRegular():
+			size := info.Size()
+			if size > 0 && total > math.MaxInt64-size {
+				total = math.MaxInt64
+				continue
+			}
+			total += size
+		case info.IsDir():
+			entries, err := os.ReadDir(path)
+			if err != nil {
+				return 0, err
+			}
+			for _, entry := range entries {
+				if entry.Name() != ".git" {
+					pending = append(pending, filepath.Join(path, entry.Name()))
+				}
+			}
+		}
+	}
+	return total, nil
 }
 
 func ValidateConsolidationArtifacts(root string) error {

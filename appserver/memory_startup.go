@@ -372,6 +372,10 @@ func (r *RuntimeRouter) startMemoriesStartupTask(response *ThreadStartResponse, 
 			parentProfile: parentProfile, serviceTier: stringPtrIfNotEmpty(serviceTier),
 			serviceTierSet: serviceTier != "",
 		},
+		// The consolidation metrics land on the runtime's task metrics, the same
+		// sink the per-turn counters use (Rust's MemoryStartupContext holds the
+		// session telemetry).
+		Metrics: r.services.TurnMetrics,
 	}
 	ctx := r.memoryStartupCtx
 	if ctx == nil {

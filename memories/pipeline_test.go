@@ -70,6 +70,7 @@ WHERE id = 'memory-source-thread'`, updated.Unix(), updated.UnixMilli()); err !=
 		RawMemory: "raw memory from rollout", RolloutSummary: "pipeline summary", RolloutSlug: &slug,
 	}}
 	consolidator := &artifactConsolidator{}
+	metrics := state.NewTaskMetrics()
 	pipeline := &StartupPipeline{
 		State: runtime, CodexHome: home, CurrentThreadID: "current-thread",
 		Config: config.MemoriesConfig{
@@ -81,6 +82,7 @@ WHERE id = 'memory-source-thread'`, updated.Unix(), updated.UnixMilli()); err !=
 		StageOne: extractor, StageOneModel: "extract-model",
 		StageOneModelInfo: model.ModelInfo{ContextWindow: 10_000, EffectiveContextWindowPercent: 95},
 		PhaseTwo:          consolidator, PhaseTwoModel: "consolidate-model",
+		Metrics: metrics,
 	}
 	report, err := pipeline.Run(ctx)
 	if err != nil {
@@ -127,6 +129,85 @@ WHERE id = 'memory-source-thread'`, updated.Unix(), updated.UnixMilli()); err !=
 	diff, err := WorkspaceDiff(ctx, root)
 	if err != nil || diff.HasChanges() {
 		t.Fatalf("workspace after consolidation = %+v, %v", diff, err)
+	}
+	// Mirrors Rust #45956: the successful run reports the memory root's byte
+	// size, excluding the git baseline the reset left behind.
+	storage := storageBytesRecords(metrics)
+	if len(storage) != 1 {
+		t.Fatalf("storage byte records = %#v", metrics.Records())
+	}
+	wantBytes, err := MemoryStorageBytes(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storage[0].Value != int(wantBytes) || storage[0].Tags[MemoryVersionTag] != "v1" {
+		t.Fatalf("storage record = %#v, want %d bytes at v1", storage[0], wantBytes)
+	}
+	if storage[0].Tags[MemoryVersionTag] != MemoryVersionTagValue(config.MemoryVersionV1) {
+		t.Fatalf("storage version tag = %q", storage[0].Tags[MemoryVersionTag])
+	}
+	if len(storage[0].Boundaries) != len(MemoryStorageBytesBoundaries()) {
+		t.Fatalf("storage boundaries = %#v", storage[0].Boundaries)
+	}
+}
+
+// storageBytesRecords selects the codex.memory.storage_bytes records.
+func storageBytesRecords(metrics *state.TaskMetrics) []*state.TaskMetric {
+	var out []*state.TaskMetric
+	for _, record := range metrics.Records() {
+		if record.Name == MemoryStorageBytesMetric {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
+// Mirrors Rust #45956: a phase-two run that leaves the workspace unchanged is
+// still a successful consolidation, and it reports the storage size too.
+func TestStartupPipelineReportsStorageBytesWithoutWorkspaceChanges(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	runtime := newMemoryPipelineRuntime(t, home)
+	root := Root(home)
+	if err := EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	// Seed exactly what the run would produce, so the sync steps rewrite
+	// identical bytes and the workspace diff stays empty.
+	if err := os.WriteFile(filepath.Join(root, MemoryFilename), []byte("registry\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, MemorySummaryFilename), []byte("v1\nsummary\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := RebuildRawMemoriesFile(root, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	metrics := state.NewTaskMetrics()
+	pipeline := &StartupPipeline{
+		State: runtime, CodexHome: home, CurrentThreadID: "current-thread",
+		Config:   config.MemoriesConfig{GenerateMemories: true, UseMemories: true, MaxUnusedDays: 30},
+		PhaseTwo: &artifactConsolidator{}, PhaseTwoModel: "consolidate-model",
+		Metrics: metrics,
+	}
+	report, err := pipeline.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.PhaseTwoStatus != "succeeded_no_workspace_changes" {
+		t.Fatalf("phase two status = %q", report.PhaseTwoStatus)
+	}
+	storage := storageBytesRecords(metrics)
+	if len(storage) != 1 {
+		t.Fatalf("storage byte records = %#v", metrics.Records())
+	}
+	wantBytes, err := MemoryStorageBytes(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storage[0].Value != int(wantBytes) || storage[0].Tags[MemoryVersionTag] != "v1" {
+		t.Fatalf("storage record = %#v, want %d bytes at v1", storage[0], wantBytes)
 	}
 }
 

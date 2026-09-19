@@ -16,10 +16,11 @@ type recordingTurnMetricSink struct {
 }
 
 type recordedTurnMetric struct {
-	name     string
-	value    int
-	duration time.Duration
-	tags     map[string]string
+	name       string
+	value      int
+	duration   time.Duration
+	boundaries []float64
+	tags       map[string]string
 }
 
 func (s *recordingTurnMetricSink) Counter(name string, inc int, tags map[string]string) {
@@ -28,6 +29,12 @@ func (s *recordingTurnMetricSink) Counter(name string, inc int, tags map[string]
 
 func (s *recordingTurnMetricSink) Histogram(name string, value int, tags map[string]string) {
 	s.histograms = append(s.histograms, recordedTurnMetric{name: name, value: value, tags: cloneTurnMetricTags(tags)})
+}
+
+func (s *recordingTurnMetricSink) HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string) {
+	s.histograms = append(s.histograms, recordedTurnMetric{
+		name: name, value: value, boundaries: append([]float64(nil), boundaries...), tags: cloneTurnMetricTags(tags),
+	})
 }
 
 func (s *recordingTurnMetricSink) RecordDuration(name string, duration time.Duration, tags map[string]string) {
