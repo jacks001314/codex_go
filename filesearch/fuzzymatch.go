@@ -18,6 +18,12 @@ func FuzzyMatch(haystack string, needle string) (Match, bool) {
 	loweredChars, loweredToOriginal := lowerExpanded(haystack)
 	loweredNeedle, _ := lowerExpanded(needle)
 	result := make([]int, 0, len(loweredNeedle))
+	// Rust #45475: track the first matched position in the lowercased text
+	// directly. Reconstructing it from the original index would land on the
+	// expansion's first character (for example the 'i' of 'İ' -> "i\u0307"),
+	// awarding a wrong prefix bonus or gap penalty for matches that begin
+	// inside the expansion.
+	firstLowerPos := -1
 	lastLowerPos := -1
 	cursor := 0
 	for _, needleCh := range loweredNeedle {
@@ -34,17 +40,15 @@ func FuzzyMatch(haystack string, needle string) (Match, bool) {
 			return Match{}, false
 		}
 		result = append(result, loweredToOriginal[found])
+		if firstLowerPos < 0 {
+			firstLowerPos = found
+		}
 		lastLowerPos = found
 	}
-	firstLowerPos := 0
-	if len(result) > 0 {
-		targetOriginal := result[0]
-		for index, originalIndex := range loweredToOriginal {
-			if originalIndex == targetOriginal {
-				firstLowerPos = index
-				break
-			}
-		}
+	// Score using the actual lowered positions, even within a character
+	// expansion.
+	if firstLowerPos < 0 {
+		return Match{}, false
 	}
 	if lastLowerPos < 0 {
 		lastLowerPos = firstLowerPos

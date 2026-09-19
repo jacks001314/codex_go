@@ -2676,6 +2676,16 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 	// retry-limit failures. Recognize the quota error code set and the
 	// `insufficient_quota` type before falling back to the generic
 	// rate-limit handling.
+	// Rust #45602: a 503 body distinguishes model capacity from a retryable
+	// rate limit instead of treating both as one blanket overload.
+	if statusCode == http.StatusServiceUnavailable && payload.Error != nil {
+		switch responseErrorCode(payload.Error) {
+		case "server_is_overloaded":
+			return &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
+		case "slow_down":
+			return &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: strings.TrimSpace(payload.Error.Message)}
+		}
+	}
 	if statusCode == http.StatusTooManyRequests && responsesIsQuotaError(payload.Error) {
 		if strings.TrimSpace(message) == "" {
 			message = http.StatusText(statusCode)

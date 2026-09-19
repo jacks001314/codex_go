@@ -386,6 +386,10 @@ func isRetryableResponsesStreamError(err error) bool {
 		switch details.Kind {
 		case codexapi.ErrorRetryable, codexapi.ErrorServerOverloaded:
 			return true
+		case codexapi.ErrorRateLimitExceeded:
+			// Rust #45602: `slow_down` (and `rate_limit_exceeded`) are retryable
+			// rate limits, so the stream retries them even without a 5xx status.
+			return true
 		case codexapi.ErrorContextWindowExceeded, codexapi.ErrorQuotaExceeded,
 			codexapi.ErrorUsageNotIncluded, codexapi.ErrorInvalidRequest,
 			codexapi.ErrorCyberPolicy, codexapi.ErrorBioPolicy:
@@ -2010,7 +2014,9 @@ func responseFailedError(data []byte) error {
 			Status:  http.StatusBadRequest,
 			Message: message,
 		}
-	case "insufficient_quota":
+	case "insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded":
+		// Rust #45602: exhausted credit balances and spend limits are quota
+		// exhaustion, so they terminate without retries like insufficient_quota.
 		return &codexapi.APIError{Kind: codexapi.ErrorQuotaExceeded, Message: message}
 	case "usage_not_included":
 		return &codexapi.APIError{Kind: codexapi.ErrorUsageNotIncluded, Message: message}
@@ -2031,11 +2037,13 @@ func responseFailedError(data []byte) error {
 		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: http.StatusBadRequest, Message: message, Misalignment: parseMisalignmentDetails(errBody)}
 	case "invalid_prompt":
 		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Message: message}
-	case "server_is_overloaded", "slow_down":
+	case "server_is_overloaded":
 		return &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
 	}
 	if errBody != nil {
-		if code == "rate_limit_exceeded" {
+		// Rust #45602: `slow_down` is a retryable rate limit, not a terminal
+		// server overload.
+		if code == "rate_limit_exceeded" || code == "slow_down" {
 			retryable := &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: message}
 			if delay, ok := responseFailedRetryDelay(code, message); ok {
 				return retryable.WithRetryDelay(delay)
@@ -2075,7 +2083,8 @@ func parseMisalignmentDetails(errBody *responsesAgentAPIErrorBody) *codexapi.Mis
 var responseFailedRetryDelayPattern = regexp.MustCompile(`(?i)try again in\s*(\d+(?:\.\d+)?)\s*(s|ms|seconds?)`)
 
 func responseFailedRetryDelay(code, message string) (time.Duration, bool) {
-	if code != "rate_limit_exceeded" {
+	// Rust #45602: `slow_down` carries retry timing like a rate limit.
+	if code != "rate_limit_exceeded" && code != "slow_down" {
 		return 0, false
 	}
 	matches := responseFailedRetryDelayPattern.FindStringSubmatch(message)

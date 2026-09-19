@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/codexapi"
 )
@@ -341,6 +342,61 @@ func TestResponseFailedErrorClassifiesRateLimitExceededLikeRust(t *testing.T) {
 	}
 	if delay.Milliseconds() != 11054 {
 		t.Fatalf("retry delay = %v, want 11054ms", delay)
+	}
+}
+
+// TestResponseFailedErrorDistinguishesCapacityFromSlowDownLikeRust mirrors Rust
+// #45602: `slow_down` is a retryable rate limit with message-provided timing,
+// `server_is_overloaded` keeps the terminal overload classification, and the
+// credit/spend-limit codes terminate as quota exhaustion.
+func TestResponseFailedErrorDistinguishesCapacityFromSlowDownLikeRust(t *testing.T) {
+	t.Run("slow down is a retryable rate limit", func(t *testing.T) {
+		raw := `{"type":"response.failed","response":{"error":{"code":"slow_down","message":"Rate limit reached. Please try again in 3s."}}}`
+		err := responseFailedError([]byte(raw))
+		var apiErr *codexapi.APIError
+		if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorRateLimitExceeded {
+			t.Fatalf("error = %#v, want rateLimitExceeded", err)
+		}
+		if apiErr.Message != "Rate limit reached. Please try again in 3s." {
+			t.Fatalf("message = %q", apiErr.Message)
+		}
+		if !isRetryableResponsesStreamError(err) {
+			t.Fatal("slow_down should be retryable")
+		}
+		delay, ok := codexapi.RetryDelayInfo(err)
+		if !ok || delay != 3*time.Second {
+			t.Fatalf("retry delay = %v (ok=%v), want 3s", delay, ok)
+		}
+	})
+
+	t.Run("server overloaded preserves its message", func(t *testing.T) {
+		raw := `{"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"Selected model is at capacity."}}}`
+		err := responseFailedError([]byte(raw))
+		var apiErr *codexapi.APIError
+		if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorServerOverloaded {
+			t.Fatalf("error = %#v, want serverOverloaded", err)
+		}
+		if apiErr.Message != "Selected model is at capacity." {
+			t.Fatalf("message = %q", apiErr.Message)
+		}
+	})
+
+	for _, code := range []string{
+		"credit_balance_exhausted",
+		"organization_spend_limit_exceeded",
+		"project_spend_limit_exceeded",
+	} {
+		t.Run(code+" terminates as quota", func(t *testing.T) {
+			raw := `{"type":"response.failed","response":{"error":{"code":"` + code + `","message":"quota exhausted"}}}`
+			err := responseFailedError([]byte(raw))
+			var apiErr *codexapi.APIError
+			if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorQuotaExceeded {
+				t.Fatalf("error = %#v, want quotaExceeded", err)
+			}
+			if isRetryableResponsesStreamError(err) {
+				t.Fatal("quota exhaustion must not be retryable")
+			}
+		})
 	}
 }
 

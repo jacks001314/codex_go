@@ -74,6 +74,41 @@ func TestFuzzyMatchUnicodeLowercaseExpansionDedupe(t *testing.T) {
 	}
 }
 
+// Mirrors Rust fuzzy-match #45475: a match that begins inside a lowercase
+// expansion must be scored from its actual lowercased position, so strings that
+// lowercase identically do not receive a wrong prefix bonus or gap penalty.
+func TestFuzzyMatchScoresWithinLowercaseExpansionLikeRust(t *testing.T) {
+	query := "\u0307x"
+	for _, tc := range []struct {
+		haystack string
+		indices  []int
+	}{
+		{"İx", []int{0, 1}},
+		{"i\u0307x", []int{1, 2}},
+		{"aİx", []int{1, 2}},
+		{"ai\u0307x", []int{2, 3}},
+	} {
+		got, ok := FuzzyMatch(tc.haystack, query)
+		if !ok {
+			t.Fatalf("FuzzyMatch(%q, %q) did not match", tc.haystack, query)
+		}
+		if !reflect.DeepEqual(got.Indices, tc.indices) {
+			t.Fatalf("FuzzyMatch(%q, %q) indices = %#v, want %#v", tc.haystack, query, got.Indices, tc.indices)
+		}
+		// The dot begins a contiguous match, but not a prefix, even when it
+		// came from the expansion of 'İ'.
+		if got.Score != 0 {
+			t.Fatalf("FuzzyMatch(%q, %q) score = %d, want 0", tc.haystack, query, got.Score)
+		}
+	}
+	// Each pair lowercases identically, so both members must rank the same.
+	expanded, _ := FuzzyMatch("İx", query)
+	alreadyLower, _ := FuzzyMatch("i\u0307x", query)
+	if expanded.Score != alreadyLower.Score {
+		t.Fatalf("identical lowercase forms ranked differently: %d vs %d", expanded.Score, alreadyLower.Score)
+	}
+}
+
 func TestFuzzyMatchNoMatch(t *testing.T) {
 	if _, ok := FuzzyMatch("straße", "strasse"); ok {
 		t.Fatal("expected no match for sharp-s expansion")
