@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -195,9 +196,41 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 		next := strings.TrimSpace(*response.NextCursor)
 		cursor = &next
 	}
-	threads := make([]*appserver.Thread, 0, len(threadIDs))
+	// Rust agents_overview_threads seeds the command center with up to
+	// RECENT_SESSION_LIMIT recent sessions in addition to loaded sessions. A
+	// failed seed only logs: the dashboard still shows the loaded threads.
+	recent, err := s.listRecentThreads(ctx)
+	if err != nil {
+		recent = nil
+	}
+	byID := make(map[string]*appserver.Thread, len(recent)+len(threadIDs))
+	order := make([]string, 0, len(recent)+len(threadIDs))
+	for _, thread := range recent {
+		id := appserverThreadID(thread)
+		if id == "" {
+			continue
+		}
+		if _, exists := byID[id]; !exists {
+			order = append(order, id)
+		}
+		byID[id] = thread
+	}
 	for _, threadID := range threadIDs {
-		thread, err := remoteThreadRead(ctx, s.client, threadID, false)
+		id := strings.TrimSpace(threadID)
+		if id == "" {
+			continue
+		}
+		if _, exists := byID[id]; !exists {
+			order = append(order, id)
+		}
+	}
+	threads := make([]*appserver.Thread, 0, len(order))
+	for _, id := range order {
+		if thread, ok := byID[id]; ok && thread != nil {
+			threads = append(threads, thread)
+			continue
+		}
+		thread, err := remoteThreadRead(ctx, s.client, id, false)
 		if err == nil && thread != nil {
 			threads = append(threads, thread)
 		}
@@ -205,6 +238,123 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 	rows := agentsOverviewRowsFromThreads(threads, "")
 	s.attachLastMessages(ctx, rows)
 	return rows, nil
+}
+
+// recentSessionLimit seeds the agent command center with this many recent
+// sessions, in addition to loaded sessions (Rust RECENT_SESSION_LIMIT, #46579).
+const recentSessionLimit = 10
+
+func appserverThreadID(thread *appserver.Thread) string {
+	if thread == nil {
+		return ""
+	}
+	return strings.TrimSpace(thread.ID)
+}
+
+// listRecentThreads mirrors Rust's recent seed: query interactive sessions and
+// then exec/app-server sessions sorted by recency, merge, sort by recency, and
+// truncate to recentSessionLimit.
+func (s *remoteAgentsDashboardSource) listRecentThreads(ctx context.Context) ([]*appserver.Thread, error) {
+	if s == nil || s.client == nil {
+		return nil, nil
+	}
+	interactive, err := s.listRecentThreadsForSourceKinds(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Default interactive sources include Atlas/ChatGPT, which have no explicit
+	// source kind; exec/app-server sessions need their own query.
+	nonInteractive, err := s.listRecentThreadsForSourceKinds(ctx, []appserver.ThreadSourceKind{
+		appserver.ThreadSourceKindExec,
+		appserver.ThreadSourceKindAppServer,
+	})
+	if err != nil {
+		return nil, err
+	}
+	recent := append(interactive, nonInteractive...)
+	sort.SliceStable(recent, func(i, j int) bool {
+		left, right := threadRecencyKey(recent[i]), threadRecencyKey(recent[j])
+		if left != right {
+			return left > right
+		}
+		return appserverThreadID(recent[i]) > appserverThreadID(recent[j])
+	})
+	if len(recent) > recentSessionLimit {
+		recent = recent[:recentSessionLimit]
+	}
+	return recent, nil
+}
+
+func threadRecencyKey(thread *appserver.Thread) int64 {
+	if thread == nil {
+		return 0
+	}
+	if thread.RecencyAt != nil {
+		return *thread.RecencyAt
+	}
+	return thread.UpdatedAt
+}
+
+// listRecentThreadsForSourceKinds pages thread/list by recency. An older server
+// that rejects `recency_at` falls back to its activity-sorted history.
+func (s *remoteAgentsDashboardSource) listRecentThreadsForSourceKinds(ctx context.Context, kinds []appserver.ThreadSourceKind) ([]*appserver.Thread, error) {
+	limit := recentSessionLimit
+	archived := false
+	sortKey := appserver.SortRecencyAt
+	recent := make([]*appserver.Thread, 0, limit)
+	var cursor *string
+	for len(recent) < limit {
+		params := appserver.ThreadListParams{
+			Limit:          &limit,
+			SortKey:        sortKey,
+			Archived:       &archived,
+			SourceKinds:    kinds,
+			ModelProviders: []string{},
+			UseStateDBOnly: true,
+		}
+		if cursor != nil {
+			params.Cursor = cursor
+		}
+		response, err := remoteThreadListWithCwdFallback(ctx, s.client, params)
+		if err != nil {
+			if sortKey == appserver.SortRecencyAt && recencySortUnsupportedError(err) {
+				sortKey = appserver.SortUpdatedAt
+				cursor = nil
+				recent = recent[:0]
+				continue
+			}
+			return nil, err
+		}
+		for index := range response.Data {
+			thread := &response.Data[index]
+			if thread.Ephemeral || (thread.ParentThreadID != nil && strings.TrimSpace(*thread.ParentThreadID) != "") {
+				continue
+			}
+			if len(recent) >= limit {
+				break
+			}
+			recent = append(recent, thread)
+		}
+		if response.NextCursor == nil || strings.TrimSpace(*response.NextCursor) == "" {
+			break
+		}
+		next := strings.TrimSpace(*response.NextCursor)
+		cursor = &next
+	}
+	return recent, nil
+}
+
+// recencySortUnsupportedError matches an older server that does not understand
+// the `recency_at` sort key (Rust's -32600/-32602 fallback).
+func recencySortUnsupportedError(err error) bool {
+	var rpc *remoteRPCError
+	if !errors.As(err, &rpc) {
+		return false
+	}
+	if rpc.Code != appserver.JSONRPCInvalidRequestErrorCode && rpc.Code != appserver.JSONRPCInvalidParamsErrorCode {
+		return false
+	}
+	return strings.Contains(rpc.Message, "recency_at")
 }
 
 // attachLastMessages fills each task's details-pane "Last message" from the
