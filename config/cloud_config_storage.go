@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,9 +37,17 @@ type CloudConfigFetchOptions struct {
 	ChatGPTUserID string
 	AccountID     string
 	HTTPClient    CloudConfigHTTPDoer
-	Headers       http.Header
-	Authorize     func(context.Context, *http.Request) error
+	// FallbackHTTPClient, when set, retries the GET through the system proxy
+	// after the primary client fails to connect or times out (Rust #46562).
+	FallbackHTTPClient CloudConfigHTTPDoer
+	Headers            http.Header
+	Authorize          func(context.Context, *http.Request) error
 }
+
+// cloudConfigFallbackAttemptTimeout bounds the primary bootstrap GET, including
+// its body read, so the system-proxy retry still fits the loader's budget
+// (Rust's five-second bootstrap attempt).
+const cloudConfigFallbackAttemptTimeout = 5 * time.Second
 
 type cloudConfigBundleCacheFile struct {
 	SignedPayload cloudConfigBundleCacheSignedPayload `json:"signed_payload"`
@@ -60,16 +70,36 @@ func LoadCloudConfigBundle(ctx context.Context, opts CloudConfigFetchOptions) (*
 	if cached := loadCloudConfigBundleCache(opts); cached != nil {
 		return cached, nil
 	}
-	if opts.HTTPClient == nil {
-		opts.HTTPClient = http.DefaultClient
+	if opts.FallbackHTTPClient != nil {
+		// Bound the primary attempt, then retry through the system proxy when it
+		// failed to connect or timed out. A caller-cancelled context stops here.
+		attemptCtx, cancel := context.WithTimeout(ctx, cloudConfigFallbackAttemptTimeout)
+		bundle, retryable, err := loadCloudConfigBundleAttempt(attemptCtx, opts, opts.HTTPClient)
+		cancel()
+		if err == nil || !retryable || ctx.Err() != nil {
+			return bundle, err
+		}
+		bundle, _, err = loadCloudConfigBundleAttempt(ctx, opts, opts.FallbackHTTPClient)
+		return bundle, err
+	}
+	bundle, _, err := loadCloudConfigBundleAttempt(ctx, opts, opts.HTTPClient)
+	return bundle, err
+}
+
+// loadCloudConfigBundleAttempt performs one bootstrap GET. The retryable result
+// reports a connection failure or timeout, the only failures the system-proxy
+// fallback retries; an HTTP status or decode error is final.
+func loadCloudConfigBundleAttempt(ctx context.Context, opts CloudConfigFetchOptions, httpClient CloudConfigHTTPDoer) (*CloudConfigBundle, bool, error) {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
 	}
 	endpoint, err := cloudConfigBundleEndpoint(opts.BaseURL)
 	if err != nil {
-		return nil, NewCloudConfigLoadError(CloudConfigLoadInternal, nil, err.Error())
+		return nil, false, NewCloudConfigLoadError(CloudConfigLoadInternal, nil, err.Error())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, NewCloudConfigLoadError(CloudConfigLoadInternal, nil, err.Error())
+		return nil, false, NewCloudConfigLoadError(CloudConfigLoadInternal, nil, err.Error())
 	}
 	for name, values := range opts.Headers {
 		for _, value := range values {
@@ -78,39 +108,53 @@ func LoadCloudConfigBundle(ctx context.Context, opts CloudConfigFetchOptions) (*
 	}
 	if opts.Authorize != nil {
 		if err := opts.Authorize(ctx, req); err != nil {
-			return nil, NewCloudConfigLoadError(CloudConfigLoadAuth, nil, err.Error())
+			return nil, false, NewCloudConfigLoadError(CloudConfigLoadAuth, nil, err.Error())
 		}
 	}
-	resp, err := opts.HTTPClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		code := CloudConfigLoadRequestFailed
 		if ctx.Err() != nil {
 			code = CloudConfigLoadTimeout
 		}
-		return nil, NewCloudConfigLoadError(code, nil, fmt.Sprintf("failed to load cloud config bundle: %v", err))
+		return nil, cloudConfigRetryableTransportError(err, ctx), NewCloudConfigLoadError(code, nil, fmt.Sprintf("failed to load cloud config bundle: %v", err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		status := resp.StatusCode
-		return nil, NewCloudConfigLoadError(CloudConfigLoadRequestFailed, &status, fmt.Sprintf("failed to load cloud config bundle: HTTP %d", status))
+		return nil, false, NewCloudConfigLoadError(CloudConfigLoadRequestFailed, &status, fmt.Sprintf("failed to load cloud config bundle: HTTP %d", status))
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, cloudConfigBundleMaxBytes+1))
 	if err != nil {
-		return nil, NewCloudConfigLoadError(CloudConfigLoadRequestFailed, nil, fmt.Sprintf("failed to read cloud config bundle: %v", err))
+		return nil, cloudConfigRetryableTransportError(err, ctx), NewCloudConfigLoadError(CloudConfigLoadRequestFailed, nil, fmt.Sprintf("failed to read cloud config bundle: %v", err))
 	}
 	if len(data) > cloudConfigBundleMaxBytes {
-		return nil, NewCloudConfigLoadError(CloudConfigLoadInvalidBundle, nil, "cloud config bundle exceeds size limit")
+		return nil, false, NewCloudConfigLoadError(CloudConfigLoadInvalidBundle, nil, "cloud config bundle exceeds size limit")
 	}
 	var bundle CloudConfigBundle
 	if err := json.Unmarshal(data, &bundle); err != nil {
-		return nil, NewCloudConfigLoadError(CloudConfigLoadInvalidBundle, nil, fmt.Sprintf("invalid cloud config bundle: %v", err))
+		return nil, false, NewCloudConfigLoadError(CloudConfigLoadInvalidBundle, nil, fmt.Sprintf("invalid cloud config bundle: %v", err))
 	}
 	normalizeCloudConfigBundle(&bundle)
 	if err := validateCloudConfigBundle(bundle, opts.CodexHome); err != nil {
-		return nil, NewCloudConfigLoadError(CloudConfigLoadInvalidBundle, nil, err.Error())
+		return nil, false, NewCloudConfigLoadError(CloudConfigLoadInvalidBundle, nil, err.Error())
 	}
 	_ = saveCloudConfigBundleCache(opts, bundle)
-	return &bundle, nil
+	return &bundle, false, nil
+}
+
+// cloudConfigRetryableTransportError reports a connection failure, timeout, or
+// the attempt's own deadline. A timeout while reading a stalled body is
+// retryable for a GET (Rust #46562).
+func cloudConfigRetryableTransportError(err error, ctx context.Context) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded) || (ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded))
 }
 
 func cloudConfigBundleEndpoint(baseURL string) (string, error) {

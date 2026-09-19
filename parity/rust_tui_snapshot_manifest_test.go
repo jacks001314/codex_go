@@ -22,8 +22,10 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1171 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1171", got)
+	// Re-pinned to upstream 78245b47 (#46579/#46574/#46565): the agents-overview
+	// recent-session, unavailable-command, and activity-group ordering snapshots.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1175 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1175", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -76,8 +78,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/src/app/snapshots",
-			Files:    42,
+			Path: "tui/src/app/snapshots",
+			// #46579 added the agents-overview recent-session snapshot.
+			Files:    43,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -88,8 +91,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/src/app/tests/snapshots",
-			Files:    61,
+			Path: "tui/src/app/tests/snapshots",
+			// #46566 added the unavailable-thread local-command snapshot.
+			Files:    62,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -198,8 +202,10 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/src/chatwidget/tests/snapshots",
-			Files:    51,
+			Path: "tui/src/chatwidget/tests/snapshots",
+			// #46574/#46565 added the question-notification and activity-group
+			// ordering snapshots.
+			Files:    53,
 			Owner:    "tui/chatwidget",
 			Focus:    "chatwidget approval request modal, async question reply, and history snapshots",
 			Priority: []string{"approval", "history"},

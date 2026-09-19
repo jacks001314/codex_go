@@ -895,11 +895,12 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 		loadCtx, cancel := context.WithTimeout(contextOrBackground(ctx), 15*time.Second)
 		defer cancel()
 		return config.LoadCloudConfigBundle(loadCtx, config.CloudConfigFetchOptions{
-			CodexHome:     s.codexHome,
-			BaseURL:       bootstrap.ChatGPTBaseURL(),
-			ChatGPTUserID: auth.ChatGPTUserIDFromAuth(snapshot),
-			AccountID:     auth.AccountIDFromAuthForRestrictions(snapshot),
-			HTTPClient:    s.httpClient,
+			CodexHome:          s.codexHome,
+			BaseURL:            bootstrap.ChatGPTBaseURL(),
+			ChatGPTUserID:      auth.ChatGPTUserIDFromAuth(snapshot),
+			AccountID:          auth.AccountIDFromAuthForRestrictions(snapshot),
+			HTTPClient:         s.httpClient,
+			FallbackHTTPClient: bootstrapFallbackHTTPClient(bootstrap, 0),
 			Authorize: func(requestCtx context.Context, request *http.Request) error {
 				return authHeaders.Apply(requestCtx, request, nil)
 			},

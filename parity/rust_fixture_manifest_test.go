@@ -85,8 +85,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		{
 			Path: "app-server/tests/suite/v2",
 			// #45495/#45812/#46020 added the login-requirement, workspace
-			// routing and rollout-compression fixtures.
-			Files: 148,
+			// routing and rollout-compression fixtures; #46562 added the
+			// system-proxy bootstrap suite.
+			Files: 149,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -113,7 +114,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #46509/#46508 then added the guardian-persistence and
 			// models-cache-auth suites.
 			// #46539 then added core/tests/suite/command_lifecycle_tests.rs.
-			Files: 212,
+			// #46555/#46556/#46562 added the executor-registration, step-settings
+			// and network-approval core suites.
+			Files: 215,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -129,8 +132,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// coverage (#46486) and the MCP-startup review plus exploration
 			// grouping coverage (#46493/#46487/#46492).
 			// #46503/#46504 then added the theme-picker and model-display-name
-			// coverage.
-			Files: 92,
+			// coverage; #46574/#46565 added the question-notification and
+			// activity-group ordering coverage.
+			Files: 95,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -140,8 +144,10 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			},
 		},
 		{
-			Path:  "tui/src/chatwidget/tests/snapshots",
-			Files: 51,
+			Path: "tui/src/chatwidget/tests/snapshots",
+			// #46574/#46565 added the question-notification and activity-group
+			// ordering snapshots.
+			Files: 53,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{

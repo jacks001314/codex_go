@@ -1741,6 +1741,16 @@ func (c *Config) RespectSystemProxyEnabled() bool {
 	return ok && enabled
 }
 
+// SystemProxyFallbackEnabled reports whether eligible bootstrap requests may be
+// retried through the system proxy (Rust Feature::SystemProxyFallback, #46562).
+// The feature is default-enabled and honors managed feature requirements.
+func (c *Config) SystemProxyFallbackEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return featureflags.Enabled(c.FeatureSettings(), "system_proxy_fallback")
+}
+
 func (c *Config) CurrentTimeReminder() *CurrentTimeReminderConfig {
 	if c == nil {
 		return nil
@@ -2598,9 +2608,13 @@ func sanitizeProjectConfigValues(values map[string]any, broker CredentialBrokerP
 				ignored = append(ignored, "features.shell_snapshot")
 			}
 		}
-		if _, ok := features["respect_system_proxy"]; ok {
-			delete(features, "respect_system_proxy")
-			ignored = append(ignored, "features.respect_system_proxy")
+		// Rust sanitize_project_config: project configuration cannot change the
+		// system-proxy switches.
+		for _, key := range []string{"respect_system_proxy", "system_proxy_fallback"} {
+			if _, ok := features[key]; ok {
+				delete(features, key)
+				ignored = append(ignored, "features."+key)
+			}
 		}
 		if broker != CredentialBrokerProjectUnconfigured {
 			if _, ok := features["network_proxy"].(bool); ok {

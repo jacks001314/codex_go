@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +16,142 @@ import (
 	"testing"
 	"time"
 )
+
+// oauthRoundTripFunc adapts a function to http.RoundTripper so tests can fail
+// the connection or serve canned responses without a listener.
+type oauthRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f oauthRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func oauthTokenResponse(t *testing.T) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(oauthTestTokens())
+	if err != nil {
+		t.Fatalf("marshal tokens: %v", err)
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(string(body)))}
+}
+
+// oauthTestTokens returns a token payload with both required tokens so the
+// exchange accepts it.
+func oauthTestTokens() ExchangedTokens {
+	return ExchangedTokens{IDToken: "id-token", AccessToken: "access-token", RefreshToken: "refresh-token"}
+}
+
+// Mirrors Rust #46562: the authorization-code exchange retries through the
+// system proxy only after a connection failure before any redirect.
+func TestExchangeCodeForTokensFallsBackLikeRust(t *testing.T) {
+	pkce := &PKCECodes{CodeVerifier: "verifier", CodeChallenge: "challenge"}
+	connectionFailure := &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+
+	t.Run("connect failure retries through the fallback", func(t *testing.T) {
+		primaryCalls := 0
+		fallbackCalls := 0
+		tokens, err := ExchangeCodeForTokens(context.Background(), &OAuthOptions{
+			Issuer:   "https://auth.example.test",
+			ClientID: "client-test",
+			HTTPClient: &http.Client{Transport: oauthRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				primaryCalls++
+				if got := request.Header.Get("Content-Type"); got != "application/x-www-form-urlencoded" {
+					t.Fatalf("Content-Type = %q", got)
+				}
+				return nil, connectionFailure
+			})},
+			FallbackHTTPClient: &http.Client{Transport: oauthRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				fallbackCalls++
+				return oauthTokenResponse(t), nil
+			})},
+		}, "http://localhost:1455/auth/callback", pkce, "code")
+		if err != nil {
+			t.Fatalf("ExchangeCodeForTokens error = %v", err)
+		}
+		if tokens == nil || tokens.RefreshToken != "refresh-token" || primaryCalls != 1 || fallbackCalls != 1 {
+			t.Fatalf("tokens=%#v primary=%d fallback=%d", tokens, primaryCalls, fallbackCalls)
+		}
+	})
+
+	t.Run("http error is final", func(t *testing.T) {
+		fallbackCalls := 0
+		_, err := ExchangeCodeForTokens(context.Background(), &OAuthOptions{
+			Issuer:   "https://auth.example.test",
+			ClientID: "client-test",
+			HTTPClient: &http.Client{Transport: oauthRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("bad"))}, nil
+			})},
+			FallbackHTTPClient: &http.Client{Transport: oauthRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				fallbackCalls++
+				return oauthTokenResponse(t), nil
+			})},
+		}, "http://localhost:1455/auth/callback", pkce, "code")
+		if err == nil {
+			t.Fatal("an HTTP error must fail the exchange")
+		}
+		if fallbackCalls != 0 {
+			t.Fatalf("fallback ran %d times after an HTTP error", fallbackCalls)
+		}
+	})
+
+	t.Run("redirect followed by a connect failure is final", func(t *testing.T) {
+		requests := 0
+		fallbackCalls := 0
+		_, err := ExchangeCodeForTokens(context.Background(), &OAuthOptions{
+			Issuer:   "https://auth.example.test",
+			ClientID: "client-test",
+			HTTPClient: &http.Client{Transport: oauthRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				requests++
+				if requests == 1 {
+					return &http.Response{
+						StatusCode: http.StatusTemporaryRedirect,
+						Header:     http.Header{"Location": []string{"https://auth.example.test/redirected"}},
+						Body:       io.NopCloser(strings.NewReader("")),
+						Request:    request,
+					}, nil
+				}
+				return nil, connectionFailure
+			})},
+			FallbackHTTPClient: &http.Client{Transport: oauthRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				fallbackCalls++
+				return oauthTokenResponse(t), nil
+			})},
+		}, "http://localhost:1455/auth/callback", pkce, "code")
+		if err == nil {
+			t.Fatal("a failure after a redirect must fail the exchange")
+		}
+		if fallbackCalls != 0 {
+			t.Fatalf("fallback ran %d times after a redirect", fallbackCalls)
+		}
+	})
+
+	t.Run("successful redirect is supported", func(t *testing.T) {
+		requests := 0
+		fallbackCalls := 0
+		tokens, err := ExchangeCodeForTokens(context.Background(), &OAuthOptions{
+			Issuer:   "https://auth.example.test",
+			ClientID: "client-test",
+			HTTPClient: &http.Client{Transport: oauthRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				requests++
+				if requests == 1 {
+					return &http.Response{
+						StatusCode: http.StatusTemporaryRedirect,
+						Header:     http.Header{"Location": []string{"https://auth.example.test/redirected"}},
+						Body:       io.NopCloser(strings.NewReader("")),
+						Request:    request,
+					}, nil
+				}
+				return oauthTokenResponse(t), nil
+			})},
+			FallbackHTTPClient: &http.Client{Transport: oauthRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				fallbackCalls++
+				return oauthTokenResponse(t), nil
+			})},
+		}, "http://localhost:1455/auth/callback", pkce, "code")
+		if err != nil || tokens == nil || fallbackCalls != 0 {
+			t.Fatalf("tokens=%#v err=%v fallback=%d", tokens, err, fallbackCalls)
+		}
+	})
+}
 
 func TestBuildAuthorizeURL(t *testing.T) {
 	url, err := BuildAuthorizeURL(&OAuthOptions{

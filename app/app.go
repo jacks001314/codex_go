@@ -605,16 +605,28 @@ func sandboxCloudConfigBundleForRun(ctx context.Context, codexHome string, opts 
 		loadCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		return config.LoadCloudConfigBundle(loadCtx, config.CloudConfigFetchOptions{
-			CodexHome:     codexHome,
-			BaseURL:       bootstrap.ChatGPTBaseURL(),
-			ChatGPTUserID: auth.ChatGPTUserIDFromAuth(snapshot),
-			AccountID:     auth.AccountIDFromAuthForRestrictions(snapshot),
-			HTTPClient:    codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0),
+			CodexHome:          codexHome,
+			BaseURL:            bootstrap.ChatGPTBaseURL(),
+			ChatGPTUserID:      auth.ChatGPTUserIDFromAuth(snapshot),
+			AccountID:          auth.AccountIDFromAuthForRestrictions(snapshot),
+			HTTPClient:         codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0),
+			FallbackHTTPClient: bootstrapFallbackHTTPClient(bootstrap, 0),
 			Authorize: func(requestCtx context.Context, request *http.Request) error {
 				return authHeaders.Apply(requestCtx, request, nil)
 			},
 		})
 	}), nil
+}
+
+// bootstrapFallbackHTTPClient returns the system-proxy client used to retry a
+// bootstrap GET after the primary route fails to connect. It is nil when the
+// primary already respects the system proxy or the fallback feature is off
+// (Rust Feature::SystemProxyFallback, #46562).
+func bootstrapFallbackHTTPClient(cfg *config.Config, timeout time.Duration) *http.Client {
+	if cfg == nil || cfg.RespectSystemProxyEnabled() || !cfg.SystemProxyFallbackEnabled() {
+		return nil
+	}
+	return codexnetwork.NewSystemProxyHTTPClient(timeout)
 }
 
 func sandboxCloudConfigEligibleAuth(snapshot *auth.AuthDotJSON) bool {
@@ -1623,12 +1635,13 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		}
 		clearExistingAuthBeforeLogin(ctx, codexHome, authStoreOptions)
 		if err := auth.RunDeviceCodeLogin(ctx, &auth.OAuthOptions{
-			CodexHome:        codexHome,
-			Issuer:           opts.IssuerBaseURL,
-			ClientID:         opts.ClientID,
-			DevicePrompt:     stdout,
-			ForcedWorkspaces: loadedConfig.EffectiveChatGPTWorkspaces(),
-			StoreOptions:     authStoreOptions,
+			CodexHome:          codexHome,
+			Issuer:             opts.IssuerBaseURL,
+			ClientID:           opts.ClientID,
+			DevicePrompt:       stdout,
+			ForcedWorkspaces:   loadedConfig.EffectiveChatGPTWorkspaces(),
+			StoreOptions:       authStoreOptions,
+			FallbackHTTPClient: bootstrapFallbackHTTPClient(loadedConfig, 0),
 		}); err != nil {
 			return exitMessagef("Error logging in with device code: %v", err)
 		}
@@ -1640,12 +1653,13 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		}
 		clearExistingAuthBeforeLogin(ctx, codexHome, authStoreOptions)
 		server, err := auth.StartBrowserLogin(ctx, &auth.OAuthOptions{
-			CodexHome:        codexHome,
-			Issuer:           opts.IssuerBaseURL,
-			ClientID:         opts.ClientID,
-			OpenBrowser:      true,
-			ForcedWorkspaces: loadedConfig.EffectiveChatGPTWorkspaces(),
-			StoreOptions:     authStoreOptions,
+			CodexHome:          codexHome,
+			Issuer:             opts.IssuerBaseURL,
+			ClientID:           opts.ClientID,
+			OpenBrowser:        true,
+			ForcedWorkspaces:   loadedConfig.EffectiveChatGPTWorkspaces(),
+			StoreOptions:       authStoreOptions,
+			FallbackHTTPClient: bootstrapFallbackHTTPClient(loadedConfig, 0),
 		})
 		if err != nil {
 			return exitMessagef("Error logging in: %v", err)

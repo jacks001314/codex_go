@@ -281,7 +281,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// and mermaid workspace members plus the new async-utils dependency.
 		{Path: "Cargo.toml", SHA256: "00aa06d5118440a17c654c1f60d565b1d9a5d7610de8c8a7ae7b46bedc4bde39"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
-		{Path: "exec/src/lib.rs", SHA256: "28d9f23332f183e94371aa1c7bc6b2e4b1a6ad77b6f20e148a6fbde8c4683e16"},
+		// Re-pinned to upstream 78245b47 (#46569): exec turns set an explicit
+		// `turn_trigger`.
+		{Path: "exec/src/lib.rs", SHA256: "e1b7c44c6d8445391dadfecff1346addda2b4fc82940b5c9a082b67847d552b9"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "2e9eb984f0de88bc3fbe7ea0d1017e39e93df108a7a3f9ffd9c66aa54e94a316"},
@@ -292,7 +294,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// Re-pinned to upstream 7498521d (#46020): the new experimental
 		// `rollout/compress` client request.
 		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "553532a9865cc1b881b7b6237436799417fa207a9db44b7e032af918562d29cf"},
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "05218c5c59380c8b5ff5543216e23df941256b9ce68f9270783ee10b4e9208a7"},
+		// Re-pinned to upstream 78245b47 (#46562): the system-proxy bootstrap
+		// suite joined the module list.
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "eea7c7cec039ce569bfefecbaedcff6fc0b4e9286a245cca2b9cee90038473ed"},
 		// Re-pinned to upstream 36430b36 (#46490/#46509/#46508): the
 		// gateway-auth, guardian-persistence and models-cache-auth core suites
 		// joined the module list.

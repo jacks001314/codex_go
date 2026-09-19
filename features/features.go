@@ -125,6 +125,9 @@ var Registry = []Spec{
 		ExperimentalAnnouncement:    "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it.",
 	},
 	{Key: "respect_system_proxy", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #46562): retry eligible bootstrap
+	// requests through the system proxy after normal routing fails.
+	{Key: "system_proxy_fallback", Stage: StageStable, DefaultEnabled: true},
 	{Key: "multi_agent", Stage: StageStable, DefaultEnabled: true},
 	{Key: "multi_agent_v2", Stage: StageStable},
 	{Key: "multi_agent_mode", Stage: StageRemoved},

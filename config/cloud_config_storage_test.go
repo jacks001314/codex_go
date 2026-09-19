@@ -1,12 +1,17 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -83,6 +88,75 @@ func TestLoadCloudConfigBundleFetchesAndUsesIdentityScopedCache(t *testing.T) {
 	if cache.SignedPayload.ChatGPTUserID == nil || *cache.SignedPayload.ChatGPTUserID != "user-123" ||
 		cache.SignedPayload.AccountID == nil || *cache.SignedPayload.AccountID != "workspace-123" || cache.Signature == "" {
 		t.Fatalf("cache identity/signature = %#v", cache)
+	}
+}
+
+// cloudConfigStubDoer records the bootstrap GET attempts and returns either a
+// transport failure or a canned response.
+type cloudConfigStubDoer struct {
+	calls    int
+	err      error
+	response func() *http.Response
+}
+
+func (d *cloudConfigStubDoer) Do(*http.Request) (*http.Response, error) {
+	d.calls++
+	if d.err != nil {
+		return nil, d.err
+	}
+	return d.response(), nil
+}
+
+func cloudConfigBundleResponse(t *testing.T) *http.Response {
+	t.Helper()
+	encoded, err := json.Marshal(CloudConfigBundle{
+		RequirementsTOML: CloudConfigRequirementsTOMLBundle{EnterpriseManaged: []CloudConfigFragment{{
+			ID: "req-managed-cloud", Name: "Managed permissions", Contents: cloudManagedPermissionProfileRequirements,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("marshal bundle: %v", err)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(bytes.NewReader(encoded)),
+	}
+}
+
+// Mirrors Rust #46562: a bootstrap GET that fails to connect is retried through
+// the system-proxy client, while an HTTP error is final.
+func TestLoadCloudConfigBundleRetriesThroughSystemProxyLikeRust(t *testing.T) {
+	connectionFailure := &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	primary := &cloudConfigStubDoer{err: connectionFailure}
+	fallback := &cloudConfigStubDoer{response: func() *http.Response { return cloudConfigBundleResponse(t) }}
+	bundle, err := LoadCloudConfigBundle(context.Background(), CloudConfigFetchOptions{
+		CodexHome:          t.TempDir(),
+		BaseURL:            "https://example.test/backend-api",
+		HTTPClient:         primary,
+		FallbackHTTPClient: fallback,
+	})
+	if err != nil {
+		t.Fatalf("LoadCloudConfigBundle error = %v", err)
+	}
+	if bundle == nil || primary.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("bundle=%#v primary=%d fallback=%d", bundle, primary.calls, fallback.calls)
+	}
+
+	httpError := &cloudConfigStubDoer{response: func() *http.Response {
+		return &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("nope"))}
+	}}
+	unusedFallback := &cloudConfigStubDoer{response: func() *http.Response { return cloudConfigBundleResponse(t) }}
+	if _, err := LoadCloudConfigBundle(context.Background(), CloudConfigFetchOptions{
+		CodexHome:          t.TempDir(),
+		BaseURL:            "https://example.test/backend-api",
+		HTTPClient:         httpError,
+		FallbackHTTPClient: unusedFallback,
+	}); err == nil {
+		t.Fatal("an HTTP error must fail the load")
+	}
+	if unusedFallback.calls != 0 {
+		t.Fatalf("fallback ran %d times after an HTTP error", unusedFallback.calls)
 	}
 }
 

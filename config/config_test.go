@@ -2059,6 +2059,63 @@ func TestRespectSystemProxyFeatureConfig(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #46562: features.system_proxy_fallback is default-enabled and a
+// user-level config can disable it.
+func TestSystemProxyFallbackFeatureConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.SystemProxyFallbackEnabled() {
+		t.Fatal("SystemProxyFallbackEnabled default = false, want true")
+	}
+	body := "[features]\nsystem_proxy_fallback = false\n"
+	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	cfg, err = Load(dir)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.SystemProxyFallbackEnabled() {
+		t.Fatal("SystemProxyFallbackEnabled = true, want false")
+	}
+}
+
+// Mirrors Rust's sanitize_project_config: a project config cannot change the
+// system-proxy fallback switch.
+func TestProjectConfigCannotChangeSystemProxyFallbackLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	dotCodex := filepath.Join(dir, ".gcode")
+	if err := os.MkdirAll(dotCodex, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dotCodex, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[features]\nsystem_proxy_fallback = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	warnings := ProjectIgnoredConfigKeysWarningsForLayers([]Layer{{
+		Name: LayerSource{Type: LayerSourceProject, File: configPath, DotCodexFolder: dotCodex},
+	}})
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "features.system_proxy_fallback") {
+		t.Fatalf("warnings = %#v, want features.system_proxy_fallback", warnings)
+	}
+}
+
+// Mirrors Rust's system_proxy_fallback_honors_feature_requirements.
+func TestSystemProxyFallbackHonorsFeatureRequirements(t *testing.T) {
+	cfg := &Config{
+		Values: map[string]any{"features": map[string]any{"system_proxy_fallback": false}},
+		Requirements: &ConfigRequirements{
+			FeatureRequirements: map[string]bool{"system_proxy_fallback": true},
+		},
+	}
+	if !cfg.SystemProxyFallbackEnabled() {
+		t.Fatal("a managed requirement must override a configured disable")
+	}
+}
+
 func TestAnalyticsEnabledUsesRustOptionalDefault(t *testing.T) {
 	cfg := &Config{Values: map[string]any{}}
 	if !cfg.AnalyticsEnabled(true) {

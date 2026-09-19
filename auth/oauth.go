@@ -34,18 +34,22 @@ const (
 )
 
 type OAuthOptions struct {
-	CodexHome        string
-	Issuer           string
-	ClientID         string
-	HTTPClient       *http.Client
-	PollInterval     time.Duration
-	PollTimeout      time.Duration
-	DevicePrompt     io.Writer
-	OpenBrowser      bool
-	CallbackPort     uint16
-	ForceState       string
-	ForcedWorkspaces []string
-	StoreOptions     *StoreOptions
+	CodexHome  string
+	Issuer     string
+	ClientID   string
+	HTTPClient *http.Client
+	// FallbackHTTPClient, when set, retries the authorization-code exchange
+	// through the system proxy after a connection failure before any redirect
+	// (Rust #46562).
+	FallbackHTTPClient *http.Client
+	PollInterval       time.Duration
+	PollTimeout        time.Duration
+	DevicePrompt       io.Writer
+	OpenBrowser        bool
+	CallbackPort       uint16
+	ForceState         string
+	ForcedWorkspaces   []string
+	StoreOptions       *StoreOptions
 }
 
 type PKCECodes struct {
@@ -384,12 +388,7 @@ func ExchangeCodeForTokens(ctx context.Context, opts *OAuthOptions, redirectURI 
 	form.Set("redirect_uri", redirectURI)
 	form.Set("client_id", opts.ClientID)
 	form.Set("code_verifier", pkce.CodeVerifier)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, opts.Issuer+"/oauth/token", strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := opts.HTTPClient.Do(request)
+	response, err := exchangeOAuthCode(ctx, opts, form)
 	if err != nil {
 		return nil, err
 	}
@@ -406,6 +405,89 @@ func ExchangeCodeForTokens(ctx context.Context, opts *OAuthOptions, redirectURI 
 		return nil, errors.New("token response omitted access_token or refresh_token")
 	}
 	return &tokens, nil
+}
+
+// oauthCodeConnectTimeout bounds the authorization-code exchange attempt so the
+// system-proxy retry still fits the login flow's budget (Rust #46562).
+const oauthCodeConnectTimeout = 10 * time.Second
+
+// exchangeOAuthCode posts the authorization-code exchange. With a fallback
+// client it retries through the system proxy only after a connection failure
+// that happened before any redirect; HTTP errors, POST failures after the
+// request was sent, and successful redirect chains are final.
+func exchangeOAuthCode(ctx context.Context, opts *OAuthOptions, form url.Values) (*http.Response, error) {
+	newRequest := func(requestCtx context.Context) (*http.Request, error) {
+		request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, opts.Issuer+"/oauth/token", strings.NewReader(form.Encode()))
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		return request, nil
+	}
+	if opts.FallbackHTTPClient == nil {
+		request, err := newRequest(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return opts.HTTPClient.Do(request)
+	}
+	attemptCtx, cancel := context.WithTimeout(ctx, oauthCodeConnectTimeout)
+	request, err := newRequest(attemptCtx)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	redirected := false
+	response, err := oauthRedirectTrackingClient(opts.HTTPClient, &redirected).Do(request)
+	cancel()
+	if err == nil || redirected || ctx.Err() != nil || !isOAuthConnectFailure(err) {
+		return response, err
+	}
+	retryRequest, err := newRequest(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return opts.FallbackHTTPClient.Do(retryRequest)
+}
+
+// oauthRedirectTrackingClient records whether the client followed a redirect
+// while preserving the original redirect policy.
+func oauthRedirectTrackingClient(client *http.Client, observed *bool) *http.Client {
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	cloned := *client
+	original := client.CheckRedirect
+	cloned.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if observed != nil {
+			*observed = true
+		}
+		if original != nil {
+			return original(request, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &cloned
+}
+
+// isOAuthConnectFailure reports a connection-phase failure (dial or DNS), the
+// only condition that retries the code exchange through the system proxy.
+func isOAuthConnectFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if opErr.Op == "dial" {
+			return true
+		}
+		return false
+	}
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr)
 }
 
 func PersistChatGPTTokens(codexHome string, tokens *ExchangedTokens) error {
