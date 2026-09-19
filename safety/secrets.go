@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"codex_go/keyring"
 )
 
 var ErrInvalidSecret = errors.New("invalid secret")
@@ -134,21 +136,29 @@ func (m *SecretManager) List(scopeFilter *SecretScope) ([]SecretListEntry, error
 type LocalNamespace string
 
 const (
-	LocalNamespaceManaged   LocalNamespace = "local.json"
-	LocalNamespaceCodexAuth LocalNamespace = "codex_auth.json"
-	LocalNamespaceMCPOAuth  LocalNamespace = "mcp_oauth.json"
+	LocalNamespaceManaged      LocalNamespace = "local.age"
+	LocalNamespaceCodexAuth    LocalNamespace = "codex_auth.age"
+	LocalNamespaceMCPOAuth     LocalNamespace = "mcp_oauth.age"
+	LocalNamespaceGatewayOAuth LocalNamespace = "gateway_oauth.age"
 )
 
 type LocalBackend struct {
 	codexHome string
 	namespace LocalNamespace
+	keyring   keyring.Store
 }
 
 func NewLocalSecretBackend(codexHome string, namespace LocalNamespace) *LocalBackend {
+	return NewLocalSecretBackendWithKeyring(codexHome, namespace, nil)
+}
+
+// NewLocalSecretBackendWithKeyring builds a backend whose passphrase comes from
+// the given keyring store; nil uses the platform store.
+func NewLocalSecretBackendWithKeyring(codexHome string, namespace LocalNamespace, store keyring.Store) *LocalBackend {
 	if namespace == "" {
 		namespace = LocalNamespaceManaged
 	}
-	return &LocalBackend{codexHome: codexHome, namespace: namespace}
+	return &LocalBackend{codexHome: codexHome, namespace: namespace, keyring: store}
 }
 
 func (b *LocalBackend) Set(scope *SecretScope, name *SecretName, value string) error {
@@ -221,19 +231,30 @@ func (b *LocalBackend) path() string {
 
 func (b *LocalBackend) load() (*localFile, error) {
 	path := b.path()
-	data, err := os.ReadFile(path)
+	ciphertext, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return &localFile{Version: 1, Secrets: map[string]string{}}, nil
 	}
 	if err != nil {
+		return nil, fmt.Errorf("failed to read secrets file at %s: %w", path, err)
+	}
+	passphrase, err := b.loadOrCreatePassphrase()
+	if err != nil {
 		return nil, err
 	}
+	plaintext, err := decryptWithPassphrase(ciphertext, passphrase)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt secrets file at %s: %w", path, err)
+	}
 	var file localFile
-	if err := json.Unmarshal(data, &file); err != nil {
-		return nil, err
+	if err := json.Unmarshal(plaintext, &file); err != nil {
+		return nil, fmt.Errorf("failed to deserialize decrypted secrets file at %s: %w", path, err)
 	}
 	if file.Version == 0 {
 		file.Version = 1
+	}
+	if file.Version > SecretsVersion {
+		return nil, fmt.Errorf("secrets file version %d is newer than supported version %d", file.Version, SecretsVersion)
 	}
 	if file.Secrets == nil {
 		file.Secrets = map[string]string{}
@@ -243,15 +264,25 @@ func (b *LocalBackend) load() (*localFile, error) {
 
 func (b *LocalBackend) save(file *localFile) error {
 	path := b.path()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create secrets dir %s: %w", dir, err)
 	}
-	data, err := json.MarshalIndent(file, "", "  ")
+	passphrase, err := b.loadOrCreatePassphrase()
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
+	// Rust serializes SecretsFile with serde (compact, version then secrets);
+	// Go's map marshaling also sorts the canonical keys.
+	plaintext, err := json.Marshal(file)
+	if err != nil {
+		return fmt.Errorf("failed to serialize secrets file: %w", err)
+	}
+	ciphertext, err := encryptWithPassphrase(plaintext, passphrase)
+	if err != nil {
+		return err
+	}
+	return writeSecretsFileAtomically(path, ciphertext)
 }
 
 func EnvironmentIDFromCWD(cwd string) string {
@@ -270,15 +301,7 @@ func EnvironmentIDFromCWD(cwd string) string {
 }
 
 func ComputeKeyringAccount(codexHome string) string {
-	abs := codexHome
-	if resolved, err := filepath.Abs(codexHome); err == nil {
-		abs = resolved
-	}
-	if evaluated, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = evaluated
-	}
-	sum := sha256.Sum256([]byte(abs))
-	return "secrets|" + hex.EncodeToString(sum[:])[:16]
+	return SecretKeyringAccount(codexHome, LocalNamespaceManaged)
 }
 
 func KeyringService() string {

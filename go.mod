@@ -7,6 +7,7 @@ require github.com/pelletier/go-toml/v2 v2.4.2
 require github.com/grafana/sobek v0.0.0-20260722203707-64fef69693b6
 
 require (
+	filippo.io/age v1.3.2
 	github.com/alecthomas/chroma/v2 v2.20.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/aws/aws-sdk-go-v2 v1.42.0
@@ -50,12 +51,12 @@ require (
 	github.com/valyala/fasthttp v1.72.0
 	github.com/yuin/goldmark v1.7.13
 	go.opentelemetry.io/proto/otlp v1.7.1
-	golang.org/x/crypto v0.53.0
+	golang.org/x/crypto v0.55.0
 	golang.org/x/image v0.35.0
-	golang.org/x/mod v0.36.0
-	golang.org/x/net v0.56.0
+	golang.org/x/mod v0.38.0
+	golang.org/x/net v0.57.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/sys v0.46.0
+	golang.org/x/sys v0.47.0
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -64,6 +65,7 @@ require (
 )
 
 require (
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.29 // indirect
@@ -117,15 +119,14 @@ require (
 	github.com/pion/turn/v5 v5.1.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/shurlinet/go-hqc v0.1.1 // indirect
 	github.com/u-root/u-root v0.16.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
-	golang.org/x/term v0.44.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/term v0.45.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013 // indirect
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
