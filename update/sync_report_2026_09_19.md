@@ -282,3 +282,41 @@ sync53 continuation (workspace routing for the `exec` provider path):
   differential-parity workflow.
 - No upstream commits remain untriaged at the current pin; the open items are
   documented architecture gaps rather than missing analysis.
+
+## 9. Addendum (same day, later session): second pull and sync95-sync97
+
+The report above was generated at 15:46 for the session through `sync53`. Work
+continued afterwards, so this addendum records the deltas rather than rewriting
+the point-in-time tables.
+
+### Upstream
+
+- A tenth `git pull origin main` fast-forwarded `78245b47af..595cc91e8c`
+  (3 commits, 17 files, +798/-227), all local-child-process work:
+  `d086e2752d` #46659 (move spawning into `codex-utils-pty`),
+  `3801fc8dea` #46660 (explicit launch settings), `595cc91e8c` #46661 (fork-free
+  macOS filesystem helpers). The new pin is `595cc91e8c`.
+- All three are triaged in `plan_2026_09_19.md` (`sync96`): #46659 and #46661 are
+  N/A for Go (crate move; macOS-only spawn internals), and #46660 exposed the
+  Go-visible gap landed there.
+
+### Go side (after `sync53`)
+
+- `sync95` (`b32f9999`): the rollout recorder honors the thread record's stored
+  `rollout_path`, so the record and the created file cannot disagree.
+- `sync96` (`379fb3fc`): local stdio MCP servers are contained as process trees
+  (Unix process group, Windows Job Object) instead of killing only the direct
+  child.
+- `sync97` (`d9b343e9`): the permission selection is written as
+  `default_permissions` instead of overwriting the `[permissions]` profile table
+  (#45981), a latent Go-only bug found while reproducing Rust's
+  `thread_settings_update_preserves_session_profiles`.
+- Verification for each: `gofmt`/`go vet` clean, the touched packages green, and
+  `go test ./... -count=1` green (97 packages, no `FAIL`) on the final run.
+
+### Still open (unchanged in kind)
+
+The `sync39` queued lanes that remain are the TUI lane (skills say TUI last),
+the Windows-sandbox-service/registered-package family, the managed daemon lane,
+and platform-bound Linux/macOS sandbox internals. No untriaged in-range commit
+remains at `595cc91e8c`.
