@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/auth"
 	"codex_go/chatgptapi"
@@ -139,6 +140,52 @@ func TestRuntimeRouterGetAccountWorkspaceRoutingErrorsLikeRust(t *testing.T) {
 }
 
 func TestResolveWorkspaceRoutingLikeRust(t *testing.T) {
+	// A connection that initializes with a ChatGPT credential learns the
+	// discovered routing through account/updated (Rust
+	// notify_workspace_routing_to_connection).
+	t.Run("connection initialize notifies account updated", func(t *testing.T) {
+		router := workspaceRoutingRouter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/codex/accounts/check" {
+				t.Fatalf("accounts check path = %q", r.URL.Path)
+			}
+			writeJSON(t, w, map[string]any{"accounts": []any{map[string]any{
+				"id":                       "workspace",
+				"workspace_backend_origin": "https://gov.chatgpt.com",
+				"account_routing_override": "us",
+			}}})
+		})
+		sink := NewNotificationBuffer()
+		router.SetNotificationSink(sink)
+
+		router.notifyWorkspaceRoutingToConnection("conn-1")
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if sinkHasMethod(sink, NotificationAccountUpdated) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("workspace routing did not notify account/updated: %+v", sink.List())
+	})
+
+	// A connection without a ChatGPT credential never discovers routing.
+	t.Run("no chatgpt credential stays silent", func(t *testing.T) {
+		clearAuthEnvAppserver(t)
+		home := t.TempDir()
+		if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+			t.Fatalf("auth save error: %v", err)
+		}
+		router := NewRuntimeRouter(RuntimeServices{Account: auth.NewAccountManager(), Config: config.NewConfigService(home)})
+		sink := NewNotificationBuffer()
+		router.SetNotificationSink(sink)
+
+		router.notifyWorkspaceRoutingToConnection("conn-1")
+		time.Sleep(100 * time.Millisecond)
+		if sinkHasMethod(sink, NotificationAccountUpdated) {
+			t.Fatalf("api-key connection received account/updated: %+v", sink.List())
+		}
+	})
+
 	// The turn's Responses provider is rewritten to the discovered workspace
 	// backend (Rust RuntimeProvider::responses_api_provider).
 	t.Run("responses agent applies routing", func(t *testing.T) {

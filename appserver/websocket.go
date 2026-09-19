@@ -341,6 +341,7 @@ func serveWebSocketConnection(ctx context.Context, conn *websocket.Conn, router 
 					if notification := router.initializeRemoteControlStatusNotification(); notification != nil {
 						setWriteErr(writeJSON(notification))
 					}
+					router.notifyWorkspaceRoutingToConnection(connectionID)
 				}
 			}
 			continue

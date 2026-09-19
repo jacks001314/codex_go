@@ -239,6 +239,7 @@ readLoop:
 						if notification := router.initializeRemoteControlStatusNotification(); notification != nil {
 							setWriteErr(writeJSONLine(notification))
 						}
+						router.notifyWorkspaceRoutingToConnection(connectionID)
 					}
 					// Rust writes the thread/goal/* response before the
 					// thread/goal/updated|cleared notification; flush any

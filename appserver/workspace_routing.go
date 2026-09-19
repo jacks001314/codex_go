@@ -155,3 +155,36 @@ func (r *RuntimeRouter) applyWorkspaceRoutingToAgent(ctx context.Context, provid
 	agent.RejectRedirects = true
 	return nil
 }
+
+// notifyWorkspaceRoutingToConnection mirrors Rust
+// AccountRequestProcessor::notify_workspace_routing_to_connection: once a
+// connection has initialized, discover the workspace routing (best effort) and,
+// when it resolved and the credential owner is unchanged, tell that connection
+// the account was updated. Discovery runs off the request path, like Rust's
+// spawned task.
+func (r *RuntimeRouter) notifyWorkspaceRoutingToConnection(connectionID string) {
+	if r == nil || r.authChangeTracker == nil {
+		return
+	}
+	ownerGeneration := r.authChangeTracker.Snapshot().OwnerGeneration
+	go func() {
+		if r.authChangeTracker.Snapshot().OwnerGeneration != ownerGeneration {
+			return
+		}
+		var snapshot *auth.AuthDotJSON
+		if resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout()); err == nil && resolved != nil {
+			snapshot = &resolved.Auth
+		}
+		if snapshot == nil {
+			return
+		}
+		routing, err := r.workspaceRoutingForAccountRead(context.Background(), r.requiredChatGPTBaseURL(), snapshot)
+		if err != nil || routing == nil {
+			return
+		}
+		if r.authChangeTracker.Snapshot().OwnerGeneration != ownerGeneration {
+			return
+		}
+		r.notifyToConnection(connectionID, NotificationAccountUpdated, r.requireAccount().AccountUpdated())
+	}()
+}
