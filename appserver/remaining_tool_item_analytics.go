@@ -135,6 +135,7 @@ func (r *RuntimeRouter) toolItemAnalyticsBase(connectionID string, threadID stri
 		ParentThreadID:                 stringPtrIfNotEmpty(lineage.ParentThreadID),
 		RootTurnID:                     stringPtrIfNotEmpty(rootTurnID),
 		ToolName:                       toolName,
+		ToolEventType:                  r.toolEventTypeForCall(threadID, turnID, item.ID),
 		StartedAtMS:                    startedAtMS,
 		CompletedAtMS:                  completedAtMS,
 		DurationMS:                     uint64PtrFromNonNegativeInt64(int64(completedAtMS) - int64(startedAtMS)),

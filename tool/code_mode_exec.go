@@ -67,6 +67,10 @@ type codeModeExecExecutor struct {
 	// windowID is the turn's conversation window identity (`{thread}:{n}`); it
 	// stamps a cell's retained origin when the cell starts.
 	windowID string
+	// nestedCallObserver is told about every child call the code mode dispatches
+	// (Rust #45535's child-call facts). The app-server classifies tool events with
+	// it; nil leaves the observation off.
+	nestedCallObserver func(cellID string, callID string)
 }
 
 // codeModeCallOrigin is one cell's retained origin (Rust ToolCallOrigin).
@@ -243,6 +247,30 @@ func (r *CodeModeRuntime) SetTurnWindowID(windowID string) {
 	r.exec.bindingMu.Lock()
 	r.exec.windowID = strings.TrimSpace(windowID)
 	r.exec.bindingMu.Unlock()
+}
+
+// SetNestedCallObserver installs the observer told about every child call the
+// code mode dispatches, with the cell it belongs to (Rust #45535's child-call
+// facts).
+func (r *CodeModeRuntime) SetNestedCallObserver(observer func(cellID string, callID string)) {
+	if r == nil || r.exec == nil {
+		return
+	}
+	r.exec.bindingMu.Lock()
+	r.exec.nestedCallObserver = observer
+	r.exec.bindingMu.Unlock()
+}
+
+func (e *codeModeExecExecutor) observeNestedCall(cellID string, callID string) {
+	if e == nil {
+		return
+	}
+	e.bindingMu.RLock()
+	observer := e.nestedCallObserver
+	e.bindingMu.RUnlock()
+	if observer != nil {
+		observer(strings.TrimSpace(cellID), strings.TrimSpace(callID))
+	}
 }
 
 // SetShowCellOverhead mirrors Rust's
@@ -857,6 +885,9 @@ func (d *codeModeRemoteDelegate) Invoke(ctx context.Context, call CodeModeRemote
 	if strings.TrimSpace(call.CellID) != "" {
 		invocation.Context[CodeModeCellIDContextKey] = call.CellID
 	}
+	// Rust #45535: every dispatched child call is evidence that this call id
+	// belongs to the cell rather than to a sampled model response.
+	d.exec.observeNestedCall(call.CellID, call.RuntimeToolCallID)
 	applySpecInvocationContext(invocation, executor.Spec())
 	startedAt := time.Now().UTC()
 	if parent != nil {
@@ -1100,6 +1131,10 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 			pending++
 			go func() {
 				nestedInvocation := &Invocation{CallID: callID, ToolName: toolName, Payload: payload, Context: cloneInvocationContext(invocation.Context), Source: "code_mode"}
+				// Rust #45535: the in-process dispatcher reports the child call
+				// with the cell it belongs to, when the invocation knows one.
+				cellID, _ := invocation.Context[CodeModeCellIDContextKey].(string)
+				e.observeNestedCall(cellID, callID)
 				applySpecInvocationContext(nestedInvocation, toolSpec)
 				startedAt := time.Now().UTC()
 				if started, ok := invocation.Context["code_mode_nested_tool_started"].(CodeModeNestedToolStartedFunc); ok {

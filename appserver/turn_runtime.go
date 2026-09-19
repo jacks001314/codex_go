@@ -498,6 +498,10 @@ type responsesStreamNotificationState struct {
 	metrics         telemetry.TurnMetricSink
 	ttftRecorded    bool
 	ttfmRecorded    bool
+	// analyticsToolCallIDs collects the tool calls of the response currently
+	// being sampled (Rust #45535's per-response `analytics_tool_call_ids`), which
+	// are published with the response id when the response completes.
+	analyticsToolCallIDs []string
 }
 
 func newResponsesStreamNotificationState(planMode bool, turnID string) *responsesStreamNotificationState {
@@ -540,6 +544,28 @@ func (s *responsesStreamNotificationState) rememberResponse(event *model.Respons
 	if responseID := strings.TrimSpace(event.ResponseID); responseID != "" {
 		s.activeResponseID = responseID
 	}
+}
+
+// rememberAnalyticsToolCallID collects the call id of one sampled output item
+// (Rust #45535's per-response `analytics_tool_call_ids`), bounded per response.
+func (s *responsesStreamNotificationState) rememberAnalyticsToolCallID(item *model.AgentItem) {
+	if s == nil || len(s.analyticsToolCallIDs) >= maxSampledToolCallsPerResponse {
+		return
+	}
+	if callID := sampledOutputToolCallID(item); callID != "" {
+		s.analyticsToolCallIDs = append(s.analyticsToolCallIDs, callID)
+	}
+}
+
+// takeAnalyticsToolCallIDs returns the call ids collected for the response that
+// just completed and starts a fresh collection, the way Rust takes the vector.
+func (s *responsesStreamNotificationState) takeAnalyticsToolCallIDs() []string {
+	if s == nil || len(s.analyticsToolCallIDs) == 0 {
+		return nil
+	}
+	callIDs := s.analyticsToolCallIDs
+	s.analyticsToolCallIDs = nil
+	return callIDs
 }
 
 func (s *responsesStreamNotificationState) reasoningItemID(values ...string) string {
@@ -884,6 +910,7 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		})
 	case model.ResponsesStreamEventOutputDone:
 		state.rememberOutputItem(event)
+		state.rememberAnalyticsToolCallID(event.Item)
 		if event.Item != nil && (event.Item.Type == "message" || event.Item.Type == "agent_message") {
 			itemID := firstNonEmpty(event.ItemID, event.Item.ID, "agent-message-"+safeIdentifier(turnID))
 			phase := state.agentItemPhases[itemID]
@@ -1040,6 +1067,9 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		if state.retrying {
 			state.retrying = false
 		}
+		// Rust #45535: the response's tool call ids become the exact call-ID
+		// evidence every later tool event for this turn is classified with.
+		r.rememberSampledToolCalls(threadID, turnID, event.ResponseID, state.takeAnalyticsToolCallIDs())
 		if !state.experimentalRawEvents {
 			return
 		}
@@ -1731,6 +1761,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.emitTurnNetworkProxyMetric(r.services.TurnMetrics, r.managedNetworkProxyActive(), memoryFeatureEnabled)
 	r.emitTurnRunningProcessesMetric(r.services.TurnMetrics, threadID)
 	r.unifiedExecPersistMu.Unlock()
+	// Rust #45535: a sampled response publishes the tool calls it emitted, which
+	// is the exact call-ID evidence the tool events below are classified with.
+	r.rememberSampledToolCallsFromTurnResult(threadID, turnID, result)
 	threadItems := make([]ThreadItem, 0, len(items))
 	for _, item := range items {
 		if sessionItemIsHiddenThreadItem(&item) {
@@ -1768,6 +1801,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			r.emitImageGenerationAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
 		}
 	}
+	// Rust flushes a turn's tool-response state once the turn closes, so its
+	// sampled call-id evidence cannot classify a later turn's events.
+	r.forgetSampledToolCalls(threadID, turnID)
 	if usage := tokenUsageFromAgentLoopResult(result); usage != nil {
 		usage.ModelContextWindow = positiveInt64Ptr(r.effectiveModelContextWindowForModel(runConfig.Model, params))
 		lastUsage := lastAgentResponseUsage(result)

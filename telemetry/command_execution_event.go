@@ -17,6 +17,13 @@ const (
 	ToolItemTerminalStatusInterrupted = "interrupted"
 )
 
+// Tool event origin classes (Rust #45535): the immediate initiator of the tool
+// request the event describes, classified from exact call-ID evidence.
+const (
+	ToolEventTypeModelToolCall = "model_tool_call"
+	ToolEventTypeInnerToolCall = "inner_tool_call"
+)
+
 const (
 	ToolItemFailureKindToolError       = "tool_error"
 	ToolItemFailureKindApprovalDenied  = "approval_denied"
@@ -68,28 +75,34 @@ type ImageGenerationEventSink interface {
 }
 
 type CodexToolItemEventBase struct {
-	ThreadID                       string                       `json:"thread_id"`
-	TurnID                         string                       `json:"turn_id"`
-	ItemID                         string                       `json:"item_id"`
-	AppServerClient                CodexAppServerClientMetadata `json:"app_server_client"`
-	Runtime                        CodexRuntimeMetadata         `json:"runtime"`
-	ThreadSource                   *string                      `json:"thread_source"`
-	SubagentSource                 *string                      `json:"subagent_source"`
-	ParentThreadID                 *string                      `json:"parent_thread_id"`
-	RootTurnID                     *string                      `json:"root_turn_id,omitempty"`
-	ToolName                       string                       `json:"tool_name"`
-	StartedAtMS                    uint64                       `json:"started_at_ms"`
-	CompletedAtMS                  uint64                       `json:"completed_at_ms"`
-	DurationMS                     *uint64                      `json:"duration_ms"`
-	ExecutionDurationMS            *uint64                      `json:"execution_duration_ms"`
-	ReviewCount                    uint64                       `json:"review_count"`
-	GuardianReviewCount            uint64                       `json:"guardian_review_count"`
-	UserReviewCount                uint64                       `json:"user_review_count"`
-	FinalApprovalOutcome           string                       `json:"final_approval_outcome"`
-	TerminalStatus                 string                       `json:"terminal_status"`
-	FailureKind                    *string                      `json:"failure_kind"`
-	RequestedAdditionalPermissions bool                         `json:"requested_additional_permissions"`
-	RequestedNetworkAccess         bool                         `json:"requested_network_access"`
+	ThreadID        string                       `json:"thread_id"`
+	TurnID          string                       `json:"turn_id"`
+	ItemID          string                       `json:"item_id"`
+	AppServerClient CodexAppServerClientMetadata `json:"app_server_client"`
+	Runtime         CodexRuntimeMetadata         `json:"runtime"`
+	ThreadSource    *string                      `json:"thread_source"`
+	SubagentSource  *string                      `json:"subagent_source"`
+	ParentThreadID  *string                      `json:"parent_thread_id"`
+	RootTurnID      *string                      `json:"root_turn_id,omitempty"`
+	ToolName        string                       `json:"tool_name"`
+	// ToolEventType names the immediate initiator of the tool request (Rust
+	// #45535): `model_tool_call` when the item id matches a tool call the model
+	// emitted in a sampled response, `inner_tool_call` when it matches a child
+	// call an executing tool dispatched, and null when the evidence is absent or
+	// conflicting.
+	ToolEventType                  *string `json:"tool_event_type"`
+	StartedAtMS                    uint64  `json:"started_at_ms"`
+	CompletedAtMS                  uint64  `json:"completed_at_ms"`
+	DurationMS                     *uint64 `json:"duration_ms"`
+	ExecutionDurationMS            *uint64 `json:"execution_duration_ms"`
+	ReviewCount                    uint64  `json:"review_count"`
+	GuardianReviewCount            uint64  `json:"guardian_review_count"`
+	UserReviewCount                uint64  `json:"user_review_count"`
+	FinalApprovalOutcome           string  `json:"final_approval_outcome"`
+	TerminalStatus                 string  `json:"terminal_status"`
+	FailureKind                    *string `json:"failure_kind"`
+	RequestedAdditionalPermissions bool    `json:"requested_additional_permissions"`
+	RequestedNetworkAccess         bool    `json:"requested_network_access"`
 }
 
 type CodexCommandExecutionEventRequest struct {

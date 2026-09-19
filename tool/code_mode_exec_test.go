@@ -1230,3 +1230,34 @@ func TestCodeModeForgottenCellDropsItsOrigin(t *testing.T) {
 		t.Fatalf("origin after forget = %#v", dropped)
 	}
 }
+
+// Mirrors Rust #45535's child-call facts: every nested call the code mode
+// dispatches is reported with the cell it belongs to, which is the evidence the
+// app-server classifies inner tool calls with.
+func TestCodeModeNestedCallsAreObservedLikeRust(t *testing.T) {
+	runtime := NewCodeModeRuntime(nil, false)
+	defer func() { _ = runtime.Close() }()
+	registry := NewRegistry()
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("nested-echo")}, func(context.Context, *Invocation) (*Output, error) {
+		return &Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register nested-echo: %v", err)
+	}
+	_, _ = runtime.Executors(registry)
+	var observed [][2]string
+	runtime.SetNestedCallObserver(func(cellID string, callID string) {
+		observed = append(observed, [2]string{cellID, callID})
+	})
+	delegate := &codeModeRemoteDelegate{exec: runtime.exec}
+	release := delegate.begin(&Invocation{CallID: "call-exec"})
+	defer release()
+	if _, err := delegate.Invoke(context.Background(), CodeModeRemoteNestedCall{
+		CellID: "cell-observed", RuntimeToolCallID: "nested-observed", ToolName: PlainName("nested-echo"),
+		Kind: PayloadFunction, Input: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("nested call error = %v", err)
+	}
+	if len(observed) != 1 || observed[0][0] != "cell-observed" || observed[0][1] != "nested-observed" {
+		t.Fatalf("observed nested calls = %#v", observed)
+	}
+}

@@ -158,6 +158,28 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 	if params["model_slug"] != "invoking-model" || params["reasoning_effort"] != "max" {
 		t.Fatalf("labelled event = %#v", params)
 	}
+
+	// Rust #45535: the event names the tool request's immediate initiator.
+	classified := NewCodexCommandExecutionEvent(CodexCommandExecutionEventParams{
+		CodexToolItemEventBase: CodexToolItemEventBase{
+			ThreadID:             "thread-1",
+			TurnID:               "turn-1",
+			ItemID:               "item-1",
+			AppServerClient:      sampleAppServerClientMetadata(),
+			Runtime:              sampleRuntimeMetadata(),
+			ToolName:             "shell",
+			ToolEventType:        stringPtrTelemetry(ToolEventTypeModelToolCall),
+			FinalApprovalOutcome: FinalApprovalOutcomeNotNeeded,
+			TerminalStatus:       ToolItemTerminalStatusCompleted,
+		},
+	})
+	var classifiedPayload map[string]any
+	if err := marshalUnmarshalTelemetry(classified, &classifiedPayload); err != nil {
+		t.Fatalf("marshal classified event error = %v", err)
+	}
+	if got := classifiedPayload["event_params"].(map[string]any)["tool_event_type"]; got != ToolEventTypeModelToolCall {
+		t.Fatalf("tool_event_type = %#v", got)
+	}
 }
 
 // TestCodexTurnEventPluginInventoryNullabilityMatchesRust mirrors Rust #46323:
@@ -421,6 +443,7 @@ func TestCodexCommandExecutionEventSerializesExpectedRustShape(t *testing.T) {
 			"subagent_source": null,
 			"parent_thread_id": null,
 			"tool_name": "shell",
+			"tool_event_type": null,
 			"started_at_ms": 123000,
 			"completed_at_ms": 125000,
 			"duration_ms": 2000,
@@ -507,6 +530,7 @@ func TestCodexFileChangeEventSerializesExpectedRustShape(t *testing.T) {
 			"subagent_source": null,
 			"parent_thread_id": null,
 			"tool_name": "apply_patch",
+			"tool_event_type": null,
 			"started_at_ms": 123000,
 			"completed_at_ms": 125000,
 			"duration_ms": 2000,

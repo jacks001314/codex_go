@@ -19493,6 +19493,11 @@ func TestRuntimeRouterCommandExecutionEmitsAnalyticsLikeRust(t *testing.T) {
 	if params.ModelSlug == nil || *params.ModelSlug != "gpt-5" {
 		t.Fatalf("model_slug = %#v, want the invoking model", params.ModelSlug)
 	}
+	// Rust #45535: the model sampled this command call, so the event names a
+	// model tool call.
+	if params.ToolEventType == nil || *params.ToolEventType != telemetry.ToolEventTypeModelToolCall {
+		t.Fatalf("tool_event_type = %#v, want %q", params.ToolEventType, telemetry.ToolEventTypeModelToolCall)
+	}
 }
 
 func TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust(t *testing.T) {
@@ -20505,6 +20510,11 @@ func TestRuntimeRouterMCPToolCallEmitsAnalyticsLikeRust(t *testing.T) {
 		eventParams.MCPErrorPresent ||
 		eventParams.PluginID != nil {
 		t.Fatalf("MCP analytics fields = %#v", eventParams)
+	}
+	// Rust #45535: the model sampled this MCP tool call, so the event names a
+	// model tool call; the call id is the exact evidence.
+	if eventParams.ToolEventType == nil || *eventParams.ToolEventType != telemetry.ToolEventTypeModelToolCall {
+		t.Fatalf("MCP tool_event_type = %#v", eventParams.ToolEventType)
 	}
 	if eventParams.TerminalStatus != telemetry.ToolItemTerminalStatusCompleted ||
 		eventParams.FailureKind != nil ||

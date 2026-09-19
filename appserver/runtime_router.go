@@ -353,6 +353,16 @@ type RuntimeRouter struct {
 	// first context when a repeated start notification arrives).
 	toolItemModelContextsMu sync.Mutex
 	toolItemModelContexts   map[string]modelInvocationContext
+	// sampledToolCalls records, per (thread, turn), the tool calls the model
+	// emitted in a sampled response (Rust #45535's `response_ids_by_call_id`,
+	// bounded like MAX_TOOL_RESPONSE_ENTRIES). The map is the exact call-ID
+	// evidence a tool event is classified with.
+	sampledToolCallsMu sync.Mutex
+	sampledToolCalls   map[string]map[string]string
+	// codeModeChildCalls records, per (thread, turn), the child calls a Code Mode
+	// cell dispatched with the cell they belong to (Rust #45535's
+	// `cell_ids_by_child_call_id`).
+	codeModeChildCalls      map[string]map[string]string
 	networkApproval         *networkApprovalService
 	execPolicySaved         *execPolicySavedState
 	managedNetworkReloadMu  sync.Mutex
@@ -584,6 +594,8 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		unifiedExecPending:      map[string][]session.Item{},
 		unifiedExecAnalytics:    map[string]unifiedExecAnalyticsContext{},
 		toolItemModelContexts:   map[string]modelInvocationContext{},
+		sampledToolCalls:        map[string]map[string]string{},
+		codeModeChildCalls:      map[string]map[string]string{},
 		managedNetworks:         map[string]*network.PreparedProxyManagedNetwork{},
 		managedNetworkInputs:    map[string]managedNetworkReloadInput{},
 		goalAccountingTurns:     map[string]stateGoalTurnSnapshot{},
@@ -13330,6 +13342,11 @@ func (r *RuntimeRouter) codeModeRuntimeForThread(threadID string) *tool.CodeMode
 	runtime := r.codeModeRuntimes[threadID]
 	if runtime == nil {
 		runtime = tool.NewCodeModeRuntime(r.services.CodeModeProvider, r.services.DisableCodeModeFallback)
+		// Rust #45535: the code-mode child calls are the other half of the exact
+		// call-ID evidence tool events are classified with.
+		runtime.SetNestedCallObserver(func(cellID string, callID string) {
+			r.rememberCodeModeChildCall(threadID, cellID, callID)
+		})
 		r.codeModeRuntimes[threadID] = runtime
 	}
 	return runtime
