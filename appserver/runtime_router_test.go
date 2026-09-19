@@ -18978,6 +18978,68 @@ func TestCompactThreadAdvancesTheConversationWindowLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust's persisted window identity: a compaction stamps the new window
+// number and context-window id on the thread, and a router that resumes the
+// thread restores them instead of starting a fresh window.
+func TestCompactThreadPersistsAndRestoresTheConversationWindowLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	const threadID = "thread-window-persist"
+	if err := store.Create(&session.Record{
+		ID: session.ThreadID(threadID), SessionID: threadID,
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{Model: "gpt-5.4"},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "first", CreatedAt: now},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "answer", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	if _, err := router.compactThread(context.Background(), &runtimeCompactRequest{
+		ThreadID: threadID,
+		TurnID:   "turn-window-persist",
+		Trigger:  compact.TriggerAuto,
+		Reason:   compact.ReasonTokenLimit,
+		Phase:    compact.PhaseMidTurn,
+		Prompt:   "Summarize the conversation so far.",
+	}); err != nil {
+		t.Fatalf("compactThread() error = %v", err)
+	}
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		t.Fatalf("Read record error = %v", err)
+	}
+	if got := intFromAny(record.Metadata.Extra["auto_compact_window_number"]); got != 1 {
+		t.Fatalf("persisted window number = %d, want 1", got)
+	}
+	persistedContextWindowID, _ := record.Metadata.Extra["auto_compact_context_window_id"].(string)
+	if persistedContextWindowID == "" {
+		t.Fatalf("compaction did not persist the context window id: %#v", record.Metadata.Extra)
+	}
+
+	// A fresh router over the same store resumes the thread in the compacted
+	// window instead of starting from window 0.
+	resumed := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	if got := resumed.windowIDForThread(threadID); got != threadID+":0" {
+		t.Fatalf("window before restore = %q", got)
+	}
+	resumed.restoreConversationWindow(threadID)
+	if got := resumed.windowIDForThread(threadID); got != threadID+":1" {
+		t.Fatalf("restored window id = %q, want %q", got, threadID+":1")
+	}
+	if got := resumed.contextWindowIDForThread(threadID); got != persistedContextWindowID {
+		t.Fatalf("restored context window id = %q, want %q", got, persistedContextWindowID)
+	}
+	// The window of a live process is never overwritten by a stale restore.
+	resumed.advanceWindowNumber(threadID)
+	resumed.restoreConversationWindow(threadID)
+	if got := resumed.windowIDForThread(threadID); got != threadID+":2" {
+		t.Fatalf("live window overwritten by restore: %q", got)
+	}
+}
+
 func TestAutoCompactFallbackFollowUpReminderAndFallback(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := fixedTime()

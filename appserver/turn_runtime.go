@@ -5525,6 +5525,14 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	if request.TurnID != "" {
 		extra["compacted_turn_id"] = request.TurnID
 	}
+	// Rust stamps the new window on the compacted item (CompactedHistoryMetadata
+	// window_number/window_ids) so a resumed thread restores it instead of
+	// starting a fresh window; Go keeps the same pair on the record so a later
+	// turn (or process) can restore it.
+	extra["auto_compact_window_number"] = r.windowNumberForThread(request.ThreadID)
+	if windowID := r.contextWindowIDForThread(request.ThreadID); windowID != "" {
+		extra["auto_compact_context_window_id"] = windowID
+	}
 	record.Metadata.Extra = extra
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, nil, err

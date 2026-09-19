@@ -319,6 +319,10 @@ type RuntimeRouter struct {
 	contextWindowMu       sync.Mutex
 	contextWindowIDs      map[string]string
 	windowNumbers         map[string]uint64
+	// restoredWindows records the threads whose persisted window state was
+	// already loaded from their record (Rust restores the compacted item's
+	// window_number/window_ids when a thread resumes).
+	restoredWindows map[string]bool
 	// clockFailures records the last reported nonfatal clock failure per thread
 	// (Rust's session-level `last_clock_failure`, #46006).
 	clockFailuresMu         sync.Mutex
@@ -13392,6 +13396,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
 	}
+	// Rust restores a resumed thread's conversation window from its compacted
+	// rollout item before the turn reports any window metadata
+	// (`restore_auto_compact_window`).
+	r.restoreConversationWindow(threadID)
 	enableCurrentTimeTool := false
 	enableSleepTool := false
 	var clockProvider tool.ClockProvider
@@ -15752,6 +15760,59 @@ func newContextWindowID() string {
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// restoreConversationWindow loads a thread's persisted conversation window once.
+// Rust stamps the new window number and ids on the compacted item and restores
+// them when the thread resumes (`restore_auto_compact_window`), so a reopened
+// thread keeps reporting the window its last compaction started; Go persisted the
+// same pair on the record (see compactThreadWithHistory). A window already known
+// to this process is never overwritten.
+func (r *RuntimeRouter) restoreConversationWindow(threadID string) {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || threadID == "" {
+		return
+	}
+	r.contextWindowMu.Lock()
+	if r.restoredWindows == nil {
+		r.restoredWindows = map[string]bool{}
+	}
+	if r.restoredWindows[threadID] {
+		r.contextWindowMu.Unlock()
+		return
+	}
+	r.restoredWindows[threadID] = true
+	r.contextWindowMu.Unlock()
+
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil || len(record.Metadata.Extra) == 0 {
+		return
+	}
+	extra := record.Metadata.Extra
+	number, hasNumber := extra["auto_compact_window_number"]
+	windowID, _ := extra["auto_compact_context_window_id"].(string)
+	windowID = strings.TrimSpace(windowID)
+	if !hasNumber && windowID == "" {
+		return
+	}
+	r.contextWindowMu.Lock()
+	defer r.contextWindowMu.Unlock()
+	if r.windowNumbers == nil {
+		r.windowNumbers = map[string]uint64{}
+	}
+	if restored, err := strconv.ParseUint(strings.TrimSpace(fmt.Sprint(number)), 10, 64); err == nil {
+		if _, known := r.windowNumbers[threadID]; !known {
+			r.windowNumbers[threadID] = restored
+		}
+	}
+	if windowID != "" {
+		if r.contextWindowIDs == nil {
+			r.contextWindowIDs = map[string]string{}
+		}
+		if r.contextWindowIDs[threadID] == "" {
+			r.contextWindowIDs[threadID] = windowID
+		}
+	}
 }
 
 func (r *RuntimeRouter) userInputResponderForTurn(threadID string, turnID string) tool.UserInputResponder {
