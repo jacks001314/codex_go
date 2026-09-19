@@ -1163,6 +1163,11 @@ type Model struct {
 	// compact history cell (Rust #43576).
 	computerActivityGroup        *historycell.ComputerActivityCell
 	computerActivityMessageIndex int
+	// activeExecCell accumulates adjacent exploring commands (read/list/search)
+	// into one cell, keeping intervening reasoning in transcript order
+	// (Rust #46565: ExecCell::add_call and activity-group reasoning).
+	activeExecCell             *execcell.ExecCell
+	activeExecCellMessageIndex int
 	// readOnlyThread marks a conversation opened read-only because another app
 	// owns it (Rust #43253).
 	readOnlyThread bool
@@ -3204,6 +3209,12 @@ func (m *Model) appendReasoningToActiveActivityGroup(itemID string, content stri
 			return true
 		}
 	}
+	if cell := m.activeExecCell; cell != nil && m.activeExecCellMessageIndex >= 0 {
+		if cell.AppendReasoning(itemID, content, rawContent) {
+			m.rerenderActiveExecCell()
+			return true
+		}
+	}
 	return false
 }
 
@@ -4314,6 +4325,7 @@ func (m *Model) shouldSubmitOnTab() bool {
 
 func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	m.flushComputerActivityGroup()
+	m.flushActiveExecCell()
 	m.deferPendingSteers()
 	if message.Err != nil {
 		m.setStatus("error")
@@ -4374,6 +4386,7 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 		return
 	}
 	m.flushComputerActivityGroup()
+	m.flushActiveExecCell()
 	m.deferPendingSteers()
 	m.setStatus("idle")
 	text := "Interrupted current turn."
@@ -4537,6 +4550,11 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 	if !isComputerActivityItem(item) && !isTranscriptOnlyReasoningItem(item) {
 		m.flushComputerActivityGroup()
 	}
+	// Any non-command item ends the exploring group; command executions manage
+	// it themselves, and transcript-only reasoning attaches to it (Rust #46565).
+	if !isCommandExecutionItem(item) && !isTranscriptOnlyReasoningItem(item) {
+		m.flushActiveExecCell()
+	}
 	switch item.Type {
 	case "command_execution":
 		m.Transcript.finishAssistantPreambleBeforeTool()
@@ -4584,6 +4602,9 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	// group. Intervening transcript-only reasoning shares the cell (Rust #46565).
 	if !isComputerActivityItem(item) && !isTranscriptOnlyReasoningItem(item) {
 		m.flushComputerActivityGroup()
+	}
+	if !isCommandExecutionItem(item) && !isTranscriptOnlyReasoningItem(item) {
+		m.flushActiveExecCell()
 	}
 	switch item.Type {
 	case "user_message", "userMessage":
@@ -4968,10 +4989,7 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 	}
 	m.registerToolCallState(state, toolCallAliasesFromItem(item)...)
 
-	width := m.width
-	if width < 20 {
-		width = 20
-	}
+	width := m.transcriptWidth()
 	call := execcell.ExecCall{
 		CallID:  firstNonEmpty(state.CallID, state.ID),
 		Command: shellScriptCommandForDisplay(item.Command),
@@ -5002,11 +5020,130 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 		state.Completed = true
 	}
 
+	// Rust command_lifecycle.rs: a completed call the active exploring cell
+	// already tracks finishes in place; a started call either joins the open
+	// exploring group or opens a new cell. Exploring cells stay open so adjacent
+	// read/list/search commands render as one cell (Rust #46565).
+	if !inProgress && m.completeActiveExecCall(call) {
+		return
+	}
+	if inProgress && m.addCallToActiveExecCell(call) {
+		state.MessageIndex = m.activeExecCellMessageIndex
+		return
+	}
+
 	cell := execcell.NewExecCell(call, m.animationsEnabled)
+	if m.activeExecCell != nil && m.activeExecCellMessageIndex >= 0 && cell.IsExploringCell() {
+		if !m.activeExecCell.IsActive() && m.activeExecCell.IsExploringCell() {
+			// A completion with no matching start (a replayed command) folds
+			// into the open exploring group, keeping the group alive.
+			merged := *m.activeExecCell
+			merged.Calls = append(append([]execcell.ExecCall(nil), merged.Calls...), cell.Calls...)
+			m.activeExecCell = &merged
+			m.rerenderActiveExecCell()
+			state.MessageIndex = m.activeExecCellMessageIndex
+			if state.Completed {
+				m.Transcript.needsFinalMessageSeparator = true
+			}
+			return
+		}
+		// The active group still has running calls: render this orphan as its
+		// own history cell without disturbing the group (Rust
+		// OrphanHistoryWhileActiveExec).
+		state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
+		if state.Completed {
+			m.Transcript.needsFinalMessageSeparator = true
+		}
+		return
+	}
+	if cell.IsExploringCell() {
+		m.activeExecCell = &cell
+		m.activeExecCellMessageIndex = -1
+		m.rerenderActiveExecCell()
+		state.MessageIndex = m.activeExecCellMessageIndex
+		if state.Completed {
+			m.Transcript.needsFinalMessageSeparator = true
+		}
+		return
+	}
+	m.flushActiveExecCell()
 	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
 	if state.Completed {
 		m.Transcript.needsFinalMessageSeparator = true
 	}
+}
+
+// addCallToActiveExecCell folds one started call into the open exploring group
+// and re-renders its message (Rust ExecCell::add_call).
+func (m *Model) addCallToActiveExecCell(call execcell.ExecCall) bool {
+	if m == nil || m.activeExecCell == nil || m.activeExecCellMessageIndex < 0 {
+		return false
+	}
+	next, ok := m.activeExecCell.WithAddedCall(call.CallID, call.Command, call.Parsed, call.Source, call.InteractionInput)
+	if !ok {
+		return false
+	}
+	m.activeExecCell = &next
+	m.rerenderActiveExecCell()
+	return true
+}
+
+// completeActiveExecCall completes a call the active exploring group tracks and
+// re-renders the group (Rust handle_command_execution_completed_now).
+func (m *Model) completeActiveExecCall(call execcell.ExecCall) bool {
+	if m == nil || m.activeExecCell == nil || m.activeExecCellMessageIndex < 0 {
+		return false
+	}
+	if call.Output == nil || call.Duration == nil || !execCellTracksCall(m.activeExecCell, call.CallID) {
+		return false
+	}
+	if !m.activeExecCell.CompleteCall(call.CallID, *call.Output, *call.Duration) {
+		return false
+	}
+	if m.activeExecCell.ShouldFlush() {
+		m.flushActiveExecCell()
+		return true
+	}
+	m.rerenderActiveExecCell()
+	return true
+}
+
+func execCellTracksCall(cell *execcell.ExecCell, callID string) bool {
+	if cell == nil || callID == "" {
+		return false
+	}
+	for i := range cell.Calls {
+		if cell.Calls[i].CallID == callID {
+			return true
+		}
+	}
+	return false
+}
+
+// rerenderActiveExecCell writes the active exploring group into its history
+// message, creating it on the first render.
+func (m *Model) rerenderActiveExecCell() {
+	if m == nil || m.activeExecCell == nil {
+		return
+	}
+	width := m.transcriptWidth()
+	cell := *m.activeExecCell
+	m.activeExecCellMessageIndex = m.upsertHistoryMessageWithTranscript(
+		m.activeExecCellMessageIndex,
+		cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
+		cell.RawLines(),
+		cell.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
+	)
+}
+
+// flushActiveExecCell closes the exploring group so a later command opens a new
+// cell. The rendered message stays in place.
+func (m *Model) flushActiveExecCell() {
+	if m == nil {
+		return
+	}
+	m.activeExecCell = nil
+	m.activeExecCellMessageIndex = -1
 }
 
 // flushComputerActivityGroup ends a computer-activity group (Rust #43576): the
@@ -5042,6 +5179,15 @@ func isComputerActivityItem(item *protocol.ThreadItem) bool {
 		return false
 	}
 	return historycell.IsComputerActivityServer(item.Server)
+}
+
+// isCommandExecutionItem reports whether an item is a command execution, the
+// only items that participate in the active exploring group.
+func isCommandExecutionItem(item *protocol.ThreadItem) bool {
+	if item == nil {
+		return false
+	}
+	return normalizeThreadItemProtocolType(item.Type) == "command_execution"
 }
 
 // appendComputerActivityCall folds one CUA call into the active group cell and
@@ -5466,6 +5612,13 @@ func (m *Model) markActiveToolCallsFailed(message string) {
 			)
 		}
 		m.flushComputerActivityGroup()
+	}
+	// Rust finalize_active_cell_as_failed: running exploring calls fail with the
+	// turn and their group closes.
+	if m.activeExecCell != nil && m.activeExecCell.IsActive() {
+		m.activeExecCell.MarkFailed()
+		m.rerenderActiveExecCell()
+		m.flushActiveExecCell()
 	}
 	if len(m.toolCalls) == 0 {
 		return
