@@ -95,6 +95,7 @@ func TestSubAgentActivityRendersCanonicalPath(t *testing.T) {
 		"started":     "• Started `/root/worker`",
 		"interacted":  "• Interacted with `/root/worker`",
 		"interrupted": "• Interrupted `/root/worker`",
+		"completed":   "• Completed `/root/worker`",
 	}
 	for kind, want := range tests {
 		cell, ok := NewSubAgentActivity(kind, "/root/worker")

@@ -419,6 +419,8 @@ func applyBufferedThreadItemToMessages(messages []codextui.Message, item *protoc
 			action = "Contacted"
 		case "interrupted":
 			action = "Interrupted"
+		case "completed":
+			action = "Completed"
 		}
 		if action == "" {
 			return messages

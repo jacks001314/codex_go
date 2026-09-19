@@ -110,6 +110,8 @@ func NewSubAgentActivity(kind string, agentPath string) (PlainHistoryCell, bool)
 		line = "• Interacted with `" + agentPath + "`"
 	case "interrupted":
 		line = "• Interrupted `" + agentPath + "`"
+	case "completed":
+		line = "• Completed `" + agentPath + "`"
 	default:
 		return PlainHistoryCell{}, false
 	}

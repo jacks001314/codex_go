@@ -1798,6 +1798,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.finishStateThreadGoalTurn(threadID, turnID, completedAt, model.AgentUsageTotalTokens(result.Usage), nil)
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
+	// Rust #40437/#46552: a Multi-Agent V2 child can finish after the parent
+	// turn that spawned it, so its successful completion is recorded as an item
+	// on that parent turn.
+	r.emitRuntimeSubAgentCompletedActivity(threadID, turnID, params.ParentTurnID)
 	// Rust's turn task timer records the end-to-end duration when the task ends.
 	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)
 	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
@@ -2356,6 +2360,70 @@ func lastAgentMessageFromThreadItems(items []ThreadItem) string {
 		}
 	}
 	return ""
+}
+
+// emitRuntimeSubAgentCompletedActivity mirrors Rust's controller-side
+// `SubAgentActivityKind::Completed` emission (`agent/control/completion.rs`,
+// #40437 / #46552): a successful Multi-Agent V2 thread-spawn child records a
+// completed activity item on the parent turn that spawned it, even when that
+// turn has already finished.
+func (r *RuntimeRouter) emitRuntimeSubAgentCompletedActivity(childThreadID string, childTurnID string, parentTurnID string) {
+	if r == nil || !r.hasRuntimeThreadStore() {
+		return
+	}
+	childThreadID = strings.TrimSpace(childThreadID)
+	childTurnID = strings.TrimSpace(childTurnID)
+	parentTurnID = strings.TrimSpace(parentTurnID)
+	if childThreadID == "" || childTurnID == "" || parentTurnID == "" {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(childThreadID), true, false)
+	if err != nil || record == nil || !runtimeRecordIsThreadSpawn(record) {
+		return
+	}
+	agentPath := strings.TrimSpace(record.Metadata.AgentPath)
+	parentThreadID := strings.TrimSpace(string(record.ParentThreadID))
+	if agentPath == "" || parentThreadID == "" {
+		return
+	}
+	item := session.Item{
+		ID:        "subagent-completed-" + childTurnID,
+		Type:      "subAgentActivity",
+		CreatedAt: time.Now().UTC(),
+		Metadata:  map[string]any{"turnId": parentTurnID},
+		Data: map[string]any{
+			"kind":          "completed",
+			"agentThreadId": childThreadID,
+			"agentPath":     agentPath,
+		},
+	}
+	if _, err := r.runtimeAppendItem(session.ThreadID(parentThreadID), item); err != nil {
+		return
+	}
+	_ = r.appendRuntimeRollout(parentThreadID, []session.Item{item}, item.CreatedAt)
+	r.notifyRuntimeTurnItem(parentThreadID, parentTurnID, item)
+}
+
+// notifyRuntimeTurnItem publishes an already-persisted turn item as Rust's
+// `ItemStarted` + `ItemCompleted` pair (`emit_sub_agent_activity`).
+func (r *RuntimeRouter) notifyRuntimeTurnItem(threadID string, turnID string, item session.Item) {
+	if r == nil {
+		return
+	}
+	threadItem := BuildThreadItem(item)
+	atMS := item.CreatedAt.UTC().UnixMilli()
+	r.notify(NotificationItemStarted, &ItemStartedNotification{
+		ThreadID:    strings.TrimSpace(threadID),
+		TurnID:      strings.TrimSpace(turnID),
+		Item:        threadItemPayload(threadItem),
+		StartedAtMS: atMS,
+	})
+	r.notify(NotificationItemCompleted, &ItemCompletedNotification{
+		ThreadID:      strings.TrimSpace(threadID),
+		TurnID:        strings.TrimSpace(turnID),
+		Item:          threadItemPayload(threadItem),
+		CompletedAtMS: atMS,
+	})
 }
 
 func (r *RuntimeRouter) deliverRuntimeAgentCompletion(threadID string, status agent.AgentMessageStatus) {

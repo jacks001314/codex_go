@@ -78,6 +78,7 @@ const (
 	SubAgentActivityStarted     = "started"
 	SubAgentActivityInteracted  = "interacted"
 	SubAgentActivityInterrupted = "interrupted"
+	SubAgentActivityCompleted   = "completed"
 )
 
 func NewAgentStatusThreadPreview(agentPath string, events []AgentActivityEvent) AgentStatusThreadPreview {
@@ -163,6 +164,8 @@ func AgentActivitySummary(item AgentActivityItem) (string, bool) {
 			action = "Contacted"
 		case SubAgentActivityInterrupted:
 			action = "Interrupted"
+		case SubAgentActivityCompleted:
+			action = "Completed"
 		default:
 			return "", false
 		}

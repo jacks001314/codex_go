@@ -44,6 +44,7 @@ func TestAgentActivitySummaryMatchesRustCases(t *testing.T) {
 		{name: "dynamic", item: AgentActivityItem{Kind: AgentActivityDynamicToolCall, Namespace: "web", Tool: "open"}, want: "Tool web/open", ok: true},
 		{name: "collab", item: AgentActivityItem{Kind: AgentActivityCollabToolCall, CollabTool: CollabToolSpawnAgent}, want: "Spawned an agent", ok: true},
 		{name: "subagent", item: AgentActivityItem{Kind: AgentActivitySubAgentActivity, SubAgentActivity: SubAgentActivityInteracted, AgentPath: "agents/reviewer.md"}, want: "Contacted agents/reviewer.md", ok: true},
+		{name: "subagent completed", item: AgentActivityItem{Kind: AgentActivitySubAgentActivity, SubAgentActivity: SubAgentActivityCompleted, AgentPath: "agents/reviewer.md"}, want: "Completed agents/reviewer.md", ok: true},
 		{name: "web", item: AgentActivityItem{Kind: AgentActivityWebSearch, Query: "rust tui"}, want: "Web search: rust tui", ok: true},
 		{name: "image", item: AgentActivityItem{Kind: AgentActivityImageView, Path: "diagram.png"}, want: "Viewed diagram.png", ok: true},
 		{name: "generated", item: AgentActivityItem{Kind: AgentActivityImageGeneration}, want: "Generated an image", ok: true},

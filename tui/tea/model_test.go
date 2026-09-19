@@ -4938,6 +4938,17 @@ func TestModelRendersCanonicalMultiAgentLifecycleWithoutCiphertext(t *testing.T)
 	}
 }
 
+// Mirrors Rust #40437: a completed sub-agent activity item renders in the
+// buffered transcript instead of being dropped.
+func TestBufferedTranscriptRendersCompletedSubAgentActivityLikeRust(t *testing.T) {
+	messages := applyBufferedThreadItemToMessages(nil, &protocol.ThreadItem{
+		ID: "subagent-completed-turn-1", Type: "sub_agent_activity", ActivityKind: "completed", AgentPath: "/root/worker",
+	})
+	if len(messages) != 1 || messages[0].Text != "Completed /root/worker" {
+		t.Fatalf("completed activity transcript = %#v", messages)
+	}
+}
+
 func TestModelIDECommandEnablesReportsStatusInjectsAndDisables(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{CWD: `D:\repo`})
 	var requests []SubmitRequest
