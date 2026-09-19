@@ -94,17 +94,7 @@ func BundledThemeAccent(name string) string {
 	}
 	accent := ""
 	if theme := loadBundledTheme(id); theme != nil {
-		for _, scoped := range theme.Scopes {
-			for _, selector := range strings.Split(scoped.Scope, ",") {
-				if strings.EqualFold(strings.TrimSpace(selector), "codex.accent") {
-					accent = strings.TrimSpace(scoped.Settings.Foreground)
-					break
-				}
-			}
-			if accent != "" {
-				break
-			}
-		}
+		accent = theme.accentForeground()
 	}
 	bundledThemeAccents.Store(id, accent)
 	return accent

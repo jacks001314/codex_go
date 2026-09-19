@@ -1769,7 +1769,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 
 	model := &Model{
 		State:                           state,
-		Styles:                          resolveStyles(options.TUIThemeStyles),
+		Styles:                          applyThemeAccent(resolveStyles(options.TUIThemeStyles), options.TUITheme),
 		Transcript:                      newTranscriptComponent(),
 		Composer:                        newComposerComponent(options.Placeholder),
 		StatusBar:                       newStatusBarComponent(),
@@ -2102,6 +2102,17 @@ func resolveStyles(custom *styles.Styles) styles.Styles {
 		return *custom
 	}
 	return styles.DefaultDark()
+}
+
+// applyThemeAccent resolves the shared accent for active and selected controls
+// from the current theme (Rust #46504 style::accent_style): on truecolor and
+// 256-colour terminals the theme's `codex.accent` replaces the fixed accent,
+// while lower colour depths keep the existing fallback.
+func applyThemeAccent(base styles.Styles, themeID string) styles.Styles {
+	if accent := codextui.ThemeAccentSGR(themeID, codextui.DetectStdoutColorLevel()); accent != "" {
+		base.Dialog.Highlight = accent
+	}
+	return base
 }
 func (m *Model) Init() bubbletea.Cmd {
 	commands := []bubbletea.Cmd{m.composer.Focus()}

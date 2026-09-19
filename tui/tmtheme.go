@@ -325,6 +325,51 @@ func customThemeChromaStyle(name string, themeDir string) string {
 	return styleName
 }
 
+var customThemeAccents sync.Map
+
+// customThemeAccent returns a custom theme's `codex.accent` colour, or "" when
+// the theme is absent, invalid, or declares no accent.
+func customThemeAccent(name string, themeDir string) string {
+	id := strings.ToLower(strings.TrimSpace(name))
+	if id == "" {
+		return ""
+	}
+	if cached, ok := customThemeAccents.Load(id); ok {
+		return cached.(string)
+	}
+	accent := ""
+	data, err := os.ReadFile(filepath.Join(themeDir, id+".tmTheme"))
+	if err != nil {
+		customThemeAccents.Store(id, "")
+		return ""
+	}
+	theme, err := parseTMTheme(data)
+	if err != nil {
+		customThemeAccents.Store(id, "")
+		return ""
+	}
+	if theme != nil {
+		accent = theme.accentForeground()
+	}
+	customThemeAccents.Store(id, accent)
+	return accent
+}
+
+// accentForeground returns the theme's `codex.accent` foreground.
+func (t *tmTheme) accentForeground() string {
+	if t == nil {
+		return ""
+	}
+	for _, scoped := range t.Scopes {
+		for _, selector := range strings.Split(scoped.Scope, ",") {
+			if strings.EqualFold(strings.TrimSpace(selector), "codex.accent") {
+				return strings.TrimSpace(scoped.Settings.Foreground)
+			}
+		}
+	}
+	return ""
+}
+
 // chromaStyleEntries maps the theme's settings onto Chroma style entries: the
 // unscoped block styles the default text, and each scoped entry styles the token
 // type its selector maps to (later entries win, following the tmTheme cascade).
