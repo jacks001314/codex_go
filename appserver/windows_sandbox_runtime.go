@@ -213,10 +213,15 @@ func windowsSandboxLevelForConfig(cfg *config.Config) sandbox.WindowsSandboxLeve
 		return sandbox.WindowsSandboxDisabled
 	}
 	switch mode {
-	case config.WindowsSandboxSetupElevated:
+	case config.WindowsSandboxModeElevated:
 		return sandbox.WindowsSandboxElevated
-	case config.WindowsSandboxSetupUnelevated:
+	case config.WindowsSandboxModeUnelevated:
 		return sandbox.WindowsSandboxUnelevated
+	case config.WindowsSandboxModeMxc:
+		// Rust #46271: the native MXC backend keeps the legacy level disabled and
+		// carries the backend separately; Go's level enum already has the MXC
+		// identity, so the selection is reported through it (windows_mxc).
+		return sandbox.WindowsSandboxMxc
 	}
 	return sandbox.WindowsSandboxDisabled
 }
@@ -228,11 +233,13 @@ func windowsSandboxLevelFromConfigValues(values map[string]any) sandbox.WindowsS
 func windowsSandboxModeFromConfigValues(values map[string]any) (sandbox.WindowsSetupMode, bool) {
 	mode, ok := config.WindowsSandboxModeFromValues(values)
 	switch mode {
-	case config.WindowsSandboxSetupElevated:
+	case config.WindowsSandboxModeElevated:
 		return sandbox.WindowsSetupElevated, ok
-	case config.WindowsSandboxSetupUnelevated:
+	case config.WindowsSandboxModeUnelevated:
 		return sandbox.WindowsSetupUnelevated, ok
 	default:
+		// MXC is not a legacy setup mode: Rust skips the legacy setup and
+		// readiness APIs when it is selected.
 		return "", false
 	}
 }

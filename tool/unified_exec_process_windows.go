@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,6 +23,11 @@ type startedUnifiedExecCommand struct {
 func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedExecSandboxCommand, error) {
 	if req == nil || req.PermissionProfile == nil {
 		return nil, windowssandbox.ErrInvalidRequest
+	}
+	// Rust #46271: a selected native MXC backend fails preparation when it is
+	// unavailable instead of falling back to the legacy restricted-token path.
+	if req.WindowsSandboxLevel == sandbox.WindowsSandboxMxc {
+		return nil, errors.New("native MXC is unavailable on this executor")
 	}
 	codexHome := strings.TrimSpace(defaultLocalShellRunnerCodexHome())
 	if codexHome == "" {

@@ -25,6 +25,10 @@ const (
 	WindowsSandboxLevelDisabled   WindowsSandboxLevel = "disabled"
 	WindowsSandboxLevelElevated   WindowsSandboxLevel = "elevated"
 	WindowsSandboxLevelUnelevated WindowsSandboxLevel = "unelevated"
+	// WindowsSandboxLevelMxc is the native MXC backend. Rust #46271 treats a
+	// selected MXC as enabled while its legacy setup level stays disabled, so it
+	// never triggers the legacy setup prompt.
+	WindowsSandboxLevelMxc WindowsSandboxLevel = "mxc"
 )
 
 type WindowsSandboxSetupStatus struct {

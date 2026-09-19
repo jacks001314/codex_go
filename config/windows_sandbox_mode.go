@@ -6,11 +6,24 @@ import "strings"
 // and codex-rs/core/src/config/mod.rs's requirement-constrained application of
 // "windows.sandbox" (apply_requirement_constrained_value).
 
+// WindowsSandboxMode is the configured `windows.sandbox` mode, mirroring Rust's
+// WindowsSandboxModeToml (#46271): the legacy elevated/unelevated backends plus
+// the native mxc backend. It is distinct from WindowsSandboxSetupMode, which
+// only describes the legacy setup RPC's elevated/unelevated choice and cannot
+// represent mxc.
+type WindowsSandboxMode string
+
+const (
+	WindowsSandboxModeElevated   WindowsSandboxMode = "elevated"
+	WindowsSandboxModeUnelevated WindowsSandboxMode = "unelevated"
+	WindowsSandboxModeMxc        WindowsSandboxMode = "mxc"
+)
+
 // WindowsSandboxModeFromValues resolves the configured Windows sandbox mode:
 // `[windows] sandbox` first, then the legacy `windows_sandbox` key, then the
 // legacy `elevated_windows_sandbox` / `experimental_windows_sandbox` feature
 // flags. It reports false when no mode is configured.
-func WindowsSandboxModeFromValues(values map[string]any) (WindowsSandboxSetupMode, bool) {
+func WindowsSandboxModeFromValues(values map[string]any) (WindowsSandboxMode, bool) {
 	if values == nil {
 		return "", false
 	}
@@ -24,10 +37,10 @@ func WindowsSandboxModeFromValues(values map[string]any) (WindowsSandboxSetupMod
 	}
 	featureSettings := (&Config{Values: values}).FeatureSettings()
 	if featureSettings["elevated_windows_sandbox"] {
-		return WindowsSandboxSetupElevated, true
+		return WindowsSandboxModeElevated, true
 	}
 	if featureSettings["experimental_windows_sandbox"] {
-		return WindowsSandboxSetupUnelevated, true
+		return WindowsSandboxModeUnelevated, true
 	}
 	return "", false
 }
@@ -39,19 +52,25 @@ func WindowsSandboxModeFromValues(values map[string]any) (WindowsSandboxSetupMod
 // present - the constrained value's initial mode is used (elevated when the list
 // allows it, otherwise unelevated). It reports whether the configured value was
 // replaced and whether a mode is in effect at all.
-func ResolveWindowsSandboxMode(values map[string]any, requirements *ConfigRequirements) (mode WindowsSandboxSetupMode, fellBack bool, ok bool) {
+//
+// The allow-list only covers the legacy elevated/unelevated backends: Rust
+// accepts mxc unconditionally (#46271), so a configured mxc is never replaced.
+func ResolveWindowsSandboxMode(values map[string]any, requirements *ConfigRequirements) (mode WindowsSandboxMode, fellBack bool, ok bool) {
 	configured, configuredOK := WindowsSandboxModeFromValues(values)
+	if configuredOK && configured == WindowsSandboxModeMxc {
+		return configured, false, true
+	}
 	if requirements == nil || len(requirements.AllowedWindowsSandboxImplementations) == 0 {
 		return configured, false, configuredOK
 	}
-	allowed := make(map[WindowsSandboxSetupMode]bool, len(requirements.AllowedWindowsSandboxImplementations))
-	fallback := WindowsSandboxSetupUnelevated
+	allowed := make(map[WindowsSandboxMode]bool, len(requirements.AllowedWindowsSandboxImplementations))
+	fallback := WindowsSandboxModeUnelevated
 	for _, entry := range requirements.AllowedWindowsSandboxImplementations {
-		normalized := WindowsSandboxSetupMode(entry)
+		normalized := WindowsSandboxMode(entry)
 		allowed[normalized] = true
-		if normalized == WindowsSandboxSetupElevated {
+		if normalized == WindowsSandboxModeElevated {
 			// Prefer elevated when both implementations are allowed.
-			fallback = WindowsSandboxSetupElevated
+			fallback = WindowsSandboxModeElevated
 		}
 	}
 	if configuredOK && allowed[configured] {
@@ -60,13 +79,15 @@ func ResolveWindowsSandboxMode(values map[string]any, requirements *ConfigRequir
 	return fallback, true, true
 }
 
-func parseWindowsSandboxModeValue(value any) (WindowsSandboxSetupMode, bool) {
+func parseWindowsSandboxModeValue(value any) (WindowsSandboxMode, bool) {
 	text := strings.ToLower(strings.TrimSpace(stringValueFromAny(value)))
 	switch text {
 	case "elevated":
-		return WindowsSandboxSetupElevated, true
+		return WindowsSandboxModeElevated, true
 	case "unelevated", "restricted-token", "default":
-		return WindowsSandboxSetupUnelevated, true
+		return WindowsSandboxModeUnelevated, true
+	case "mxc":
+		return WindowsSandboxModeMxc, true
 	default:
 		return "", false
 	}

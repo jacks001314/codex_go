@@ -9,6 +9,7 @@ import "testing"
 func TestResolveWindowsSandboxModeAppliesRequirementsLikeRust(t *testing.T) {
 	unelevatedConfig := map[string]any{"windows": map[string]any{"sandbox": "unelevated"}}
 	elevatedConfig := map[string]any{"windows": map[string]any{"sandbox": "elevated"}}
+	mxcConfig := map[string]any{"windows": map[string]any{"sandbox": "mxc"}}
 	elevatedOnly := &ConfigRequirements{AllowedWindowsSandboxImplementations: []WindowsSandboxImplementation{WindowsSandboxImplementationElevated}}
 	bothAllowed := &ConfigRequirements{AllowedWindowsSandboxImplementations: []WindowsSandboxImplementation{WindowsSandboxImplementationElevated, WindowsSandboxImplementationUnelevated}}
 	unelevatedOnly := &ConfigRequirements{AllowedWindowsSandboxImplementations: []WindowsSandboxImplementation{WindowsSandboxImplementationUnelevated}}
@@ -17,16 +18,21 @@ func TestResolveWindowsSandboxModeAppliesRequirementsLikeRust(t *testing.T) {
 		name         string
 		values       map[string]any
 		requirements *ConfigRequirements
-		wantMode     WindowsSandboxSetupMode
+		wantMode     WindowsSandboxMode
 		wantFallback bool
 		wantOK       bool
 	}{
-		{"disallowed config falls back to elevated", unelevatedConfig, elevatedOnly, WindowsSandboxSetupElevated, true, true},
-		{"allowed config wins", elevatedConfig, bothAllowed, WindowsSandboxSetupElevated, false, true},
-		{"absent config with requirements uses the initial mode", nil, elevatedOnly, WindowsSandboxSetupElevated, true, true},
-		{"absent config with unelevated-only requirements", nil, unelevatedOnly, WindowsSandboxSetupUnelevated, true, true},
-		{"no requirements keeps the configured mode", unelevatedConfig, nil, WindowsSandboxSetupUnelevated, false, true},
+		{"disallowed config falls back to elevated", unelevatedConfig, elevatedOnly, WindowsSandboxModeElevated, true, true},
+		{"allowed config wins", elevatedConfig, bothAllowed, WindowsSandboxModeElevated, false, true},
+		{"absent config with requirements uses the initial mode", nil, elevatedOnly, WindowsSandboxModeElevated, true, true},
+		{"absent config with unelevated-only requirements", nil, unelevatedOnly, WindowsSandboxModeUnelevated, true, true},
+		{"no requirements keeps the configured mode", unelevatedConfig, nil, WindowsSandboxModeUnelevated, false, true},
 		{"unset without requirements stays unset", nil, nil, "", false, false},
+		// Rust #46271: the allowed-implementation list only governs the legacy
+		// elevated/unelevated backends, so a configured mxc is never replaced.
+		{"mxc ignores an elevated-only allowlist", mxcConfig, elevatedOnly, WindowsSandboxModeMxc, false, true},
+		{"mxc ignores an unelevated-only allowlist", mxcConfig, unelevatedOnly, WindowsSandboxModeMxc, false, true},
+		{"mxc without requirements", mxcConfig, nil, WindowsSandboxModeMxc, false, true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -45,13 +51,14 @@ func TestWindowsSandboxModeFromValuesLegacyShapes(t *testing.T) {
 	cases := []struct {
 		name   string
 		values map[string]any
-		want   WindowsSandboxSetupMode
+		want   WindowsSandboxMode
 		ok     bool
 	}{
-		{"windows.sandbox", map[string]any{"windows": map[string]any{"sandbox": "elevated"}}, WindowsSandboxSetupElevated, true},
-		{"legacy windows_sandbox", map[string]any{"windows_sandbox": "restricted-token"}, WindowsSandboxSetupUnelevated, true},
-		{"legacy elevated feature", map[string]any{"features": map[string]any{"elevated_windows_sandbox": true}}, WindowsSandboxSetupElevated, true},
-		{"legacy experimental feature", map[string]any{"features": map[string]any{"experimental_windows_sandbox": true}}, WindowsSandboxSetupUnelevated, true},
+		{"windows.sandbox", map[string]any{"windows": map[string]any{"sandbox": "elevated"}}, WindowsSandboxModeElevated, true},
+		{"windows.sandbox mxc", map[string]any{"windows": map[string]any{"sandbox": "mxc"}}, WindowsSandboxModeMxc, true},
+		{"legacy windows_sandbox", map[string]any{"windows_sandbox": "restricted-token"}, WindowsSandboxModeUnelevated, true},
+		{"legacy elevated feature", map[string]any{"features": map[string]any{"elevated_windows_sandbox": true}}, WindowsSandboxModeElevated, true},
+		{"legacy experimental feature", map[string]any{"features": map[string]any{"experimental_windows_sandbox": true}}, WindowsSandboxModeUnelevated, true},
 		{"nothing configured", map[string]any{}, "", false},
 	}
 	for _, testCase := range cases {

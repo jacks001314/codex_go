@@ -118,6 +118,12 @@ func interactiveRemoteWindowsSandboxReady(ctx context.Context, endpoint *appserv
 }
 
 func interactiveWindowsSandboxLevel(values map[string]any) chatwidget.WindowsSandboxLevel {
+	// Rust tui/src/windows_sandbox.rs: a configured `windows.sandbox = "mxc"`
+	// selects the native backend, which counts as enabled and never falls back to
+	// the legacy setup modes.
+	if mode, ok := config.WindowsSandboxModeFromValues(values); ok && mode == config.WindowsSandboxModeMxc {
+		return chatwidget.WindowsSandboxLevelMxc
+	}
 	var mode *codextui.WindowsSandboxModeConfig
 	if windows, ok := values["windows"].(map[string]any); ok {
 		if parsed, valid := codextui.ParseWindowsSandboxModeConfig(stringValue(windows["sandbox"])); valid {

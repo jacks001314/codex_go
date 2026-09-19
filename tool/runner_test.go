@@ -7,9 +7,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
-	"codex_go/execserver"
 	"codex_go/execpolicy"
+	"codex_go/execserver"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 )
@@ -311,5 +312,27 @@ func TestWindowsSandboxProxySettingsMode(t *testing.T) {
 	}
 	if got := windowsSandboxProxySettingsMode(execserver.WindowsSandboxProxySettingsReconcile); got != windowssandbox.ProxySettingsReconcile {
 		t.Fatalf("reconcile proxy settings mode = %q", got)
+	}
+}
+
+// TestRunWindowsSandboxRejectsMxcLikeRust mirrors Rust #46271: selecting the
+// native MXC backend must not silently fall back to the legacy restricted-token
+// sandbox. Rust's sandbox transform fails with the native-unavailable error, so
+// Go fails the same way before any legacy sandbox work.
+func TestRunWindowsSandboxRejectsMxcLikeRust(t *testing.T) {
+	runner := NewLocalShellRunner()
+	_, err := runner.runWindowsSandbox(
+		context.Background(),
+		&ShellRequest{
+			Command:             []string{"cmd", "/c", "echo"},
+			CWD:                 t.TempDir(),
+			WindowsSandboxLevel: sandbox.WindowsSandboxMxc,
+		},
+		&sandbox.CommandRunPlan{CWD: t.TempDir(), Command: []string{"cmd", "/c", "echo"}},
+		map[string]string{},
+		time.Now(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "native MXC is unavailable on this executor") {
+		t.Fatalf("runWindowsSandbox(mxc) error = %v, want the native MXC unavailability error", err)
 	}
 }

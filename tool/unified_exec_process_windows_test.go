@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"strings"
 	"testing"
 
 	"codex_go/sandbox"
@@ -25,5 +26,21 @@ func TestWindowsUnifiedExecSandboxLevelUsesElevatedForDenyReadLikeRust(t *testin
 	}
 	if got := windowsUnifiedExecSandboxLevel(&profile, sandbox.WindowsSandboxElevated); got != windowsunified.WindowsSandboxLevelElevated {
 		t.Fatalf("deny-read profile with elevated level = %q", got)
+	}
+}
+
+// TestUnifiedExecWindowsSandboxRejectsMxcLikeRust mirrors Rust #46271: the
+// native MXC backend must not silently degrade to the legacy unified-exec
+// sandbox when it is unavailable.
+func TestUnifiedExecWindowsSandboxRejectsMxcLikeRust(t *testing.T) {
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	_, err := startUnifiedExecWindowsSandboxCommand(&ShellRequest{
+		Command:             []string{"cmd", "/c", "echo"},
+		CWD:                 t.TempDir(),
+		PermissionProfile:   &profile,
+		WindowsSandboxLevel: sandbox.WindowsSandboxMxc,
+	})
+	if err == nil || !strings.Contains(err.Error(), "native MXC is unavailable on this executor") {
+		t.Fatalf("startUnifiedExecWindowsSandboxCommand(mxc) error = %v, want the native MXC error", err)
 	}
 }

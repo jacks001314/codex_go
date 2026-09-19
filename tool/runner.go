@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"codex_go/execserver"
 	"codex_go/execpolicy"
+	"codex_go/execserver"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 )
@@ -101,6 +101,12 @@ func (r *LocalShellRunner) runWithPermissionProfile(ctx context.Context, req *Sh
 func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequest, plan *sandbox.CommandRunPlan, env map[string]string, started time.Time) (*ShellResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	// Rust SandboxManager: the native MXC backend fails preparation when it is
+	// unavailable ("native MXC is unavailable on this executor") instead of
+	// silently falling back to the legacy restricted-token sandbox (#46271).
+	if req.WindowsSandboxLevel == sandbox.WindowsSandboxMxc {
+		return nil, errors.New("native MXC is unavailable on this executor")
 	}
 	if req.EnforceManagedNetwork && req.WindowsSandboxLevel != sandbox.WindowsSandboxElevated {
 		return nil, errors.New("managed networking requires the elevated Windows sandbox backend")

@@ -190,6 +190,10 @@ func DetermineWindowsReadinessFromState(level WindowsSandboxLevel, setupComplete
 		} else {
 			status = WindowsReadinessUpdateRequired
 		}
+	case WindowsSandboxMxc:
+		// Rust #46271: the native MXC backend skips the legacy setup and
+		// readiness APIs, so it always reports ready.
+		status = WindowsReadinessReady
 	default:
 		status = WindowsReadinessNotConfigured
 	}
