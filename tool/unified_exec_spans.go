@@ -3,7 +3,9 @@ package tool
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Rust parity: codex-rs/core/src/unified_exec/mod.rs's `trace_id` and the
@@ -39,6 +41,13 @@ const (
 	UnifiedExecSpanStopReason         = "stop_reason"
 	UnifiedExecSpanExitSignaled       = "exit_signaled"
 	UnifiedExecSpanOutputClosed       = "output_closed"
+	// UnifiedExecSpanExecutorProcessKey is Rust's `process.id`: the executor's
+	// own process id, which can differ from the public unified-exec id when a
+	// sandbox retry reuses it.
+	UnifiedExecSpanExecutorProcessKey = "process.id"
+	// UnifiedExecProcessStartRequestedEvent is the trace-safe event Rust emits
+	// before an exec-server process start (#45505).
+	UnifiedExecProcessStartRequestedEvent = "codex.unified_exec.process_start_requested"
 )
 
 // Unified-exec span field values (Rust's literals).
@@ -68,6 +77,9 @@ const (
 // sink records nothing.
 type UnifiedExecSpan interface {
 	SetAttribute(key string, value string)
+	// AddEvent records a trace-safe event on the span, the way Rust's
+	// `tracing::event!` with a trace-only target does.
+	AddEvent(name string, attributes map[string]string)
 	End()
 }
 
@@ -76,12 +88,46 @@ type UnifiedExecSpan interface {
 // seam that keeps the tracer out of the tool layer.
 type UnifiedExecSpanSink func(name string, attributes map[string]string) UnifiedExecSpan
 
+// TracerUnifiedExecSpan is the span surface a tracing client provides
+// (telemetry.Span): attribute writes, timestamped events, and End.
+type TracerUnifiedExecSpan interface {
+	SetAttribute(key string, value string)
+	AddEvent(name string, attributes map[string]string, at time.Time)
+	End()
+}
+
+// AdaptUnifiedExecSpan binds a tracer span to the pipeline's span surface,
+// stamping an event with the time it is recorded.
+func AdaptUnifiedExecSpan(span TracerUnifiedExecSpan) UnifiedExecSpan {
+	if span == nil {
+		return noopUnifiedExecSpan{}
+	}
+	return tracerUnifiedExecSpan{span: span}
+}
+
+type tracerUnifiedExecSpan struct {
+	span TracerUnifiedExecSpan
+}
+
+func (s tracerUnifiedExecSpan) SetAttribute(key string, value string) {
+	s.span.SetAttribute(key, value)
+}
+
+func (s tracerUnifiedExecSpan) AddEvent(name string, attributes map[string]string) {
+	s.span.AddEvent(name, attributes, time.Now())
+}
+
+func (s tracerUnifiedExecSpan) End() {
+	s.span.End()
+}
+
 // noopUnifiedExecSpan records nothing, the way a pipeline without a tracing
 // subscriber reports nothing.
 type noopUnifiedExecSpan struct{}
 
-func (noopUnifiedExecSpan) SetAttribute(string, string) {}
-func (noopUnifiedExecSpan) End()                        {}
+func (noopUnifiedExecSpan) SetAttribute(string, string)        {}
+func (noopUnifiedExecSpan) AddEvent(string, map[string]string) {}
+func (noopUnifiedExecSpan) End()                               {}
 
 // UnifiedExecTraceID mirrors Rust's `trace_id`: an id is reported only when it
 // carries an identity and fits the byte budget.
@@ -216,14 +262,31 @@ func unifiedExecSessionOutcome(err error, ctx context.Context) string {
 	return UnifiedExecOutcomeFailed
 }
 
-// unifiedExecSessionSpan brackets one session creation (Rust's
-// `unified_exec.open_session`, which wraps the sandboxed spawn) and reports an
-// outcome when the caller closes it.
-func unifiedExecSessionSpan(m *UnifiedExecManager, threadID string, turnID string, callID string, ctx context.Context) func(error) {
-	span := startUnifiedExecSpan(m.spanSinkSnapshot(), UnifiedExecOpenSessionSpanName,
-		unifiedExecSpanAttributes(threadID, turnID, callID))
-	return func(err error) {
-		span.SetAttribute(UnifiedExecSpanOutcome, unifiedExecSessionOutcome(err, ctx))
-		span.End()
-	}
+// unifiedExecSessionTrace is one session-creation span: Rust's
+// `unified_exec.open_session`, which wraps the sandboxed spawn and carries the
+// executor process-start event.
+type unifiedExecSessionTrace struct {
+	span UnifiedExecSpan
+}
+
+// startUnifiedExecSessionTrace opens the session-creation span.
+func startUnifiedExecSessionTrace(m *UnifiedExecManager, threadID string, turnID string, callID string) unifiedExecSessionTrace {
+	return unifiedExecSessionTrace{span: startUnifiedExecSpan(m.spanSinkSnapshot(), UnifiedExecOpenSessionSpanName,
+		unifiedExecSpanAttributes(threadID, turnID, callID))}
+}
+
+// processStartRequested records Rust's trace-safe process-start event, which a
+// sandbox retry reusing the public id for a new executor process makes worth
+// reporting.
+func (t unifiedExecSessionTrace) processStartRequested(processID int, executorProcessID string) {
+	t.span.AddEvent(UnifiedExecProcessStartRequestedEvent, map[string]string{
+		UnifiedExecSpanProcessID:          strconv.Itoa(processID),
+		UnifiedExecSpanExecutorProcessKey: executorProcessID,
+	})
+}
+
+// finish closes the span with the outcome of the session creation.
+func (t unifiedExecSessionTrace) finish(err error, ctx context.Context) {
+	t.span.SetAttribute(UnifiedExecSpanOutcome, unifiedExecSessionOutcome(err, ctx))
+	t.span.End()
 }

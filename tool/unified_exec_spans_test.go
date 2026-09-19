@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/execserver"
 	"codex_go/sandbox"
 )
 
@@ -224,5 +225,58 @@ func TestUnifiedExecTraceIDMatchesRustBudget(t *testing.T) {
 	}
 	if attributes := unifiedExecSpanAttributes("thread-1", "", strings.Repeat("a", MaxUnifiedExecTraceIDBytes+1)); len(attributes) != 1 {
 		t.Fatalf("attributes = %#v", attributes)
+	}
+}
+
+// Rust emits a trace-safe process-start event before an exec-server process
+// start, on the session-creation span, because a sandbox retry can reuse the
+// public id for a new executor process (#45505).
+func TestUnifiedExecRemoteProcessStartEventMatchesRust(t *testing.T) {
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	defer cancelServer()
+	var listenOutput lockedUnifiedExecBuffer
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- execserver.NewServer().ServeTransport(serverCtx, "ws://127.0.0.1:0", nil, &listenOutput)
+	}()
+	remoteURL := waitUnifiedExecServerURL(t, &listenOutput)
+
+	manager := NewUnifiedExecManagerWithOptions(2, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	recorder := &recordingUnifiedExecSpanSink{}
+	manager.SetSpanSink(recorder.sink())
+
+	_, err := manager.Exec(context.Background(), &ShellRequest{
+		Command:                  unifiedExecHelperCommand("immediate"),
+		HookCommand:              "remote immediate helper",
+		CWD:                      t.TempDir(),
+		TTY:                      false,
+		YieldTimeMS:              1_000,
+		TimeoutMS:                15_000,
+		UnifiedExecRemoteURL:     remoteURL,
+		UnifiedExecEnvironmentID: "remote",
+		UnifiedExecThreadID:      "thread-remote-event",
+		UnifiedExecTurnID:        "turn-remote-event",
+	}, "call-remote-event")
+	if err != nil {
+		t.Fatalf("remote Exec() error = %v", err)
+	}
+
+	openSession := recorder.spanWithName(UnifiedExecOpenSessionSpanName)
+	if openSession == nil {
+		t.Fatal("no open_session span was recorded for the remote start")
+	}
+	event := openSession.eventWithName(UnifiedExecProcessStartRequestedEvent)
+	if event == nil {
+		t.Fatalf("no process-start event was recorded: %#v", openSession.events)
+	}
+	// The public id and the executor's id agree for a remote start, because the
+	// executor is addressed with the stringified public id.
+	publicID, parseErr := strconv.Atoi(event[UnifiedExecSpanProcessID])
+	if parseErr != nil || publicID <= 0 {
+		t.Fatalf("process-start event id = %#v", event)
+	}
+	if event[UnifiedExecSpanExecutorProcessKey] != event[UnifiedExecSpanProcessID] {
+		t.Fatalf("process-start event = %#v", event)
 	}
 }

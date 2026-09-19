@@ -429,9 +429,9 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 	cmd := osexec.Command(req.Command[0], req.Command[1:]...)
 	cmd.Dir = req.CWD
 	cmd.Env = envSlice(shellRequestEnv(req))
-	finishOpenSession := unifiedExecSessionSpan(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID, ctx)
+	openSession := startUnifiedExecSessionTrace(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID)
 	started, err := startUnifiedExecCommand(cmd, req.TTY)
-	finishOpenSession(err)
+	openSession.finish(err, ctx)
 	if err != nil {
 		m.releaseProcessID(processID)
 		return nil, err
@@ -520,9 +520,9 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 			req = &copied
 		}
 	}
-	finishOpenSession := unifiedExecSessionSpan(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID, ctx)
+	openSession := startUnifiedExecSessionTrace(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID)
 	started, err := startUnifiedExecWindowsSandbox(req)
-	finishOpenSession(err)
+	openSession.finish(err, ctx)
 	if err != nil {
 		m.releaseProcessID(processID)
 		return nil, err
@@ -675,7 +675,10 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	if req.EnvPolicy != nil {
 		envPolicy = execEnvPolicyFromShellPolicy(req.EnvPolicy)
 	}
-	finishOpenSession := unifiedExecSessionSpan(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID, ctx)
+	openSession := startUnifiedExecSessionTrace(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID)
+	// Rust reports the executor's process start as a trace-safe event, because a
+	// sandbox retry can reuse the public id for a new executor process.
+	openSession.processStartRequested(processID, remoteID)
 	startResponse, err := client.Start(startCtx, &execserver.ExecParams{
 		ProcessID:             remoteID,
 		Argv:                  append([]string(nil), req.Command...),
@@ -690,7 +693,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		NetworkProxy:          req.RemoteNetworkProxy,
 	})
 	startCancel()
-	finishOpenSession(err)
+	openSession.finish(err, ctx)
 	if err != nil {
 		events.Close()
 		_ = client.Close()

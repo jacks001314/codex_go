@@ -12,7 +12,36 @@ type recordedUnifiedExecSpan struct {
 	open    map[string]string
 	updates map[string]string
 	order   []string
+	events  []recordedUnifiedExecEvent
 	ended   bool
+}
+
+type recordedUnifiedExecEvent struct {
+	name       string
+	attributes map[string]string
+}
+
+func (s *recordedUnifiedExecSpan) AddEvent(name string, attributes map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cloned := make(map[string]string, len(attributes))
+	for key, value := range attributes {
+		cloned[key] = value
+	}
+	s.events = append(s.events, recordedUnifiedExecEvent{name: name, attributes: cloned})
+}
+
+// eventWithName reports the last event recorded on the span under the name.
+func (s *recordedUnifiedExecSpan) eventWithName(name string) map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var found map[string]string
+	for _, event := range s.events {
+		if event.name == name {
+			found = event.attributes
+		}
+	}
+	return found
 }
 
 func (s *recordedUnifiedExecSpan) SetAttribute(key string, value string) {

@@ -149,7 +149,7 @@ func (r *RuntimeRouter) runtimeUnifiedExecSpanSink() tool.UnifiedExecSpanSink {
 		if tracer == nil {
 			return nil
 		}
-		return tracer.StartSpan(name, attributes)
+		return tool.AdaptUnifiedExecSpan(tracer.StartSpan(name, attributes))
 	}
 }
 
