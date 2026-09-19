@@ -15,6 +15,52 @@ import (
 	"codex_go/turn"
 )
 
+// Mirrors the stored-path contract: the rollout recorder writes a thread's
+// rollout at the path the thread recorded at start, even when the creating
+// caller's timestamp differs (which previously produced a file the record did
+// not point at, so the thread looked unmaterialized).
+func TestRuntimeRouterThreadRolloutRecorderHonorsStoredPathLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadRouter := NewRouter(store)
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: threadRouter,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	started := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{}))
+	if started.Error != nil {
+		t.Fatalf("thread start error: %+v", started.Error)
+	}
+	threadID := started.Result.(*ThreadStartResponse).Thread.ID
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil {
+		t.Fatalf("read started thread error: %v", err)
+	}
+	storedPath, _ := record.Metadata.Extra["rollout_path"].(string)
+	if strings.TrimSpace(storedPath) == "" {
+		t.Fatal("thread start did not record a rollout path")
+	}
+	// A caller-provided timestamp in a later second must not relocate the file.
+	if err := threadRouter.createThreadRollout(record, time.Now().UTC().Add(5*time.Second)); err != nil {
+		t.Fatalf("create started rollout error: %v", err)
+	}
+	if _, err := os.Stat(storedPath); err != nil {
+		t.Fatalf("rollout was not written at the recorded path: %v", err)
+	}
+
+	// A cold router resumes the thread: it is materialized, so the resume must
+	// not report "no rollout found".
+	cold := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	resumed := cold.Handle(requestWithParams(t, IntID(2), MethodThreadResume, ThreadResumeParams{
+		ThreadID: threadID, ExcludeTurns: true,
+	}))
+	if resumed.Error != nil {
+		t.Fatalf("cold resume error: %+v", resumed.Error)
+	}
+}
+
 // Mirrors Rust's `apply_requested_spawn_agent_model_overrides`: a requested spawn
 // model is resolved against the catalog for the active multi-agent backend, its
 // effort is validated against that model, and a model-only request adopts the

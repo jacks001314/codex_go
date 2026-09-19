@@ -285,6 +285,11 @@ type CreateParams struct {
 	Git                         map[string]string
 	Extra                       map[string]any
 	Now                         time.Time
+	// Path pins the created rollout file. The app server records a thread's
+	// rollout path when the thread starts, so the recorder must write there even
+	// when its own timestamp differs (Rust pins the filename through
+	// `RolloutRecorderParams::Create::rollout_id_override`).
+	Path string
 }
 
 func NewRecorder(params *CreateParams) (*Recorder, error) {
@@ -302,7 +307,10 @@ func NewRecorder(params *CreateParams) (*Recorder, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	path := PathForThread(params.CodexHome, params.ThreadID, now)
+	path := strings.TrimSpace(params.Path)
+	if path == "" {
+		path = PathForThread(params.CodexHome, params.ThreadID, now)
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err

@@ -355,8 +355,21 @@ func (r *Router) newThreadRolloutRecorder(record *session.Record, now time.Time)
 	if codexHome == "" {
 		return nil, nil
 	}
+	// The thread recorded its rollout path at start; write the rollout there so
+	// the record's path and the created file always agree.
+	recordedPath := ""
+	if value, ok := record.Metadata.Extra["rollout_path"].(string); ok {
+		candidate := strings.TrimSpace(value)
+		// A forked or copied record can inherit the source's path; only pin the
+		// path that embeds this thread's own id (Rust's rollout filename always
+		// carries the conversation id).
+		if id, ok := rollout.ThreadIDFromFilename(filepath.Base(candidate)); ok && id == string(record.ID) {
+			recordedPath = candidate
+		}
+	}
 	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
 		CodexHome:                  codexHome,
+		Path:                       recordedPath,
 		SessionID:                  record.SessionID,
 		SessionPrefix:              record.Metadata.SessionPrefix,
 		ThreadID:                   string(record.ID),
