@@ -254,3 +254,36 @@ func TestInteractiveDaemonAutoStartLikeRust(t *testing.T) {
 		t.Fatalf("unopted launch = %#v, err = %v; want embedded", endpoint, err)
 	}
 }
+
+// TestDaemonAutoStartExclusionWarningLikeRust mirrors Rust #46117's launch
+// warning: a launch that opted into auto-start but was excluded reports why the
+// shared server is not used, `--no-daemon` is never reported as an exclusion,
+// and an opted-out launch says nothing.
+func TestDaemonAutoStartExclusionWarningLikeRust(t *testing.T) {
+	originalFeature := daemonAutoStartFeature
+	t.Cleanup(func() { daemonAutoStartFeature = originalFeature })
+	t.Setenv(appserver.CodexExecServerURLEnvVar, "")
+
+	daemonAutoStartFeature = func() bool { return false }
+	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{Shared: cli.SharedOptions{OSS: true}}); got != "" {
+		t.Fatalf("unopted warning = %q, want none", got)
+	}
+	daemonAutoStartFeature = func() bool { return true }
+	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{}); got != "" {
+		t.Fatalf("eligible launch warning = %q, want none", got)
+	}
+	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true}}); got != "" {
+		t.Fatalf("--no-daemon warning = %q, want none", got)
+	}
+	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{Remote: "unix:///tmp/codex.sock"}); got != "" {
+		t.Fatalf("explicit remote warning = %q, want none", got)
+	}
+	want := "Running without the shared background server: --oss requires embedded mode."
+	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{Shared: cli.SharedOptions{OSS: true}}); got != want {
+		t.Fatalf("--oss warning = %q, want %q", got, want)
+	}
+	want = "Running without the shared background server: --profile requires embedded mode."
+	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{Shared: cli.SharedOptions{Profile: "work"}}); got != want {
+		t.Fatalf("--profile warning = %q, want %q", got, want)
+	}
+}

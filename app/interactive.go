@@ -1092,6 +1092,11 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		},
 		HasChatGPTAccount: hasChatGPTAccount,
 	}
+	// Rust #46117: a launch that opted into daemon auto-start but was excluded
+	// reports the exclusion as a startup warning.
+	if warning := daemonAutoStartExclusionWarning(root); warning != "" {
+		options.InitialHistoryCells = append(options.InitialHistoryCells, historycell.NewStartupWarnings([]string{warning}))
+	}
 	_, err = codextea.Run(ctx, state, options, stdin, stdout)
 	return err
 }

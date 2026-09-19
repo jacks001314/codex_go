@@ -294,6 +294,25 @@ func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAp
 	return appserverdaemon.NewUnixSocketEndpoint(socketPath), nil
 }
 
+// daemonAutoStartExclusionWarning mirrors Rust startup_orchestration.rs: when
+// the opt-in auto-start would apply but the launch is excluded, the TUI reports
+// the exclusion so the user knows why the shared server is not in use.
+// `--no-daemon` disables auto-start itself and is never reported as an
+// exclusion, and an explicit `--remote` app server owns the workspace.
+func daemonAutoStartExclusionWarning(root *cli.RootOptions) string {
+	if root == nil || strings.TrimSpace(root.Remote) != "" {
+		return ""
+	}
+	if !daemonAutoStartFeature() {
+		return ""
+	}
+	reason := daemonStartupExclusion(root, false)
+	if reason == "" || reason == "--no-daemon" {
+		return ""
+	}
+	return fmt.Sprintf("Running without the shared background server: %s requires embedded mode.", reason)
+}
+
 // interactiveRootNoDaemon reports whether either the root flags or the
 // subcommand flags requested --no-daemon (Rust merges the subcommand CLI into
 // the interactive CLI).

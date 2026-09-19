@@ -14,7 +14,8 @@ import (
 
 const (
 	interactiveExternalAgentImportRemoteUnavailable = "Import from other apps is unavailable in remote sessions. Start Codex locally and run /import."
-	interactiveExternalAgentImportDaemonUnavailable = "Import from other apps is unavailable while Codex is connected to the local app-server daemon. Stop the daemon, restart Codex, and run /import."
+	// Rust #46117: recommend restarting with the explicit embedded-server flag.
+	interactiveExternalAgentImportDaemonUnavailable = "Import from other apps is unavailable while Codex is connected to the local app-server daemon. Restart with `codex --no-daemon` and run /import."
 )
 
 func interactiveExternalAgentDetectHandler(root *cli.RootOptions) codextea.ExternalAgentDetectFunc {
