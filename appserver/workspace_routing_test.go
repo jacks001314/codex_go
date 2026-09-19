@@ -10,6 +10,8 @@ import (
 	"codex_go/auth"
 	"codex_go/chatgptapi"
 	"codex_go/config"
+	"codex_go/model"
+	"codex_go/turn"
 )
 
 func workspaceRoutingRouter(t *testing.T, handler http.HandlerFunc) *RuntimeRouter {
@@ -137,6 +139,39 @@ func TestRuntimeRouterGetAccountWorkspaceRoutingErrorsLikeRust(t *testing.T) {
 }
 
 func TestResolveWorkspaceRoutingLikeRust(t *testing.T) {
+	// The turn's Responses provider is rewritten to the discovered workspace
+	// backend (Rust RuntimeProvider::responses_api_provider).
+	t.Run("responses agent applies routing", func(t *testing.T) {
+		router := workspaceRoutingRouter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/codex/accounts/check" {
+				t.Fatalf("accounts check path = %q", r.URL.Path)
+			}
+			writeJSON(t, w, map[string]any{"accounts": []any{map[string]any{
+				"id":                       "workspace",
+				"workspace_backend_origin": "https://gov.chatgpt.com",
+				"account_routing_override": "us",
+			}}})
+		})
+		agent, err := router.responsesAgentForTurn(&turn.TurnStartParams{ThreadID: "workspace-routing-turn", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatalf("responsesAgentForTurn error = %v", err)
+		}
+		if agent == nil || agent.Provider == nil {
+			t.Fatalf("agent = %+v", agent)
+		}
+		if got := agent.Provider.BaseURL; got != "https://gov.chatgpt.com/backend-api/codex" {
+			t.Fatalf("routed BaseURL = %q", got)
+		}
+		if got := agent.Provider.Headers.Get(model.AccountRoutingHeader); got != "us" {
+			t.Fatalf("routing header = %q", got)
+		}
+		if !agent.RejectRedirects {
+			t.Fatal("routed provider must reject redirects")
+		}
+	})
+}
+
+func TestResolveWorkspaceRoutingMatchesRust(t *testing.T) {
 	origin := func(value string) *string { return &value }
 	override := func(value string) *string { return &value }
 	for _, testCase := range []struct {

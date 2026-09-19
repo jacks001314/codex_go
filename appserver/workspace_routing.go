@@ -11,6 +11,7 @@ import (
 
 	"codex_go/auth"
 	"codex_go/chatgptapi"
+	"codex_go/model"
 )
 
 // Rust parity: codex-rs/app-server/src/request_processors/account_processor/
@@ -247,4 +248,30 @@ func cloneWorkspaceRouting(routing *auth.WorkspaceRouting) *auth.WorkspaceRoutin
 	}
 	cloned := *routing
 	return &cloned
+}
+
+// applyWorkspaceRoutingToAgent mirrors Rust RuntimeProvider::responses_api_provider:
+// a first-party ChatGPT provider that may use the dedicated Codex backend
+// routes has its Responses provider rewritten to the discovered workspace
+// backend (and rejects redirects from then on). Providers that cannot use the
+// Codex backend routes keep their configured origin.
+func (r *RuntimeRouter) applyWorkspaceRoutingToAgent(ctx context.Context, provider *model.ProviderInfo, snapshot *auth.AuthDotJSON, agent *model.ResponsesAgentRunner) error {
+	if r == nil || provider == nil || agent == nil || !provider.SupportsCodexBackendRoutes() {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(provider.Name), model.OpenAIProviderName) {
+		return nil
+	}
+	routing, err := r.workspaceRoutingForAccountRead(ctx, r.requiredChatGPTBaseURL(), snapshot)
+	if err != nil {
+		return err
+	}
+	if routing == nil {
+		return nil
+	}
+	if err := model.ApplyWorkspaceRouting(agent.Provider, routing); err != nil {
+		return err
+	}
+	agent.RejectRedirects = true
+	return nil
 }

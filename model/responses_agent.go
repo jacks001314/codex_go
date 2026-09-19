@@ -124,6 +124,10 @@ type ResponsesAgentOptions struct {
 	AttestationProvider     codexapi.AttestationProvider
 	SupportsWebsockets      bool
 	WebsocketConnectTimeout time.Duration
+	// RejectRedirects mirrors Rust ClientRedirectPolicy::Reject: set when the
+	// provider was rewritten to a discovered workspace backend so a redirect
+	// can never forward the credential to another origin.
+	RejectRedirects bool
 	// UnboundedConnectionRetries keeps active sampling turns alive until a
 	// failed network connection recovers (Rust Feature::UnboundedConnectionRetries,
 	// default enabled). nil means the feature default (enabled).
@@ -161,6 +165,7 @@ type ResponsesAgentRunner struct {
 	AttestationProvider        codexapi.AttestationProvider
 	SupportsWebsockets         bool
 	WebsocketConnectTimeout    time.Duration
+	RejectRedirects            bool
 	UnboundedConnectionRetries *bool
 	// AWS carries the Amazon Bedrock SDK credential configuration (Rust
 	// #39410) so expired SDK credentials can be refreshed on 401 failures.
@@ -438,6 +443,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		AttestationProvider:        options.AttestationProvider,
 		SupportsWebsockets:         options.SupportsWebsockets,
 		WebsocketConnectTimeout:    options.WebsocketConnectTimeout,
+		RejectRedirects:            options.RejectRedirects,
 		UnboundedConnectionRetries: cloneBoolPtrModel(options.UnboundedConnectionRetries),
 		AWS:                        cloneProviderAWSAuthInfo(options.AWS),
 		Metrics:                    options.Metrics,
@@ -1683,6 +1689,18 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequest(httpRequest *http.Request)
 	client := r.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
+	}
+	if r != nil && r.RejectRedirects {
+		// A routed provider must never follow a redirect: the request carries the
+		// account-routing credential scoped to the discovered origin (Rust
+		// ClientRedirectPolicy::Reject).
+		if standard, ok := client.(*http.Client); ok {
+			clone := *standard
+			clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+			client = &clone
+		}
 	}
 	return client.Do(httpRequest)
 }

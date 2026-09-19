@@ -550,6 +550,9 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	if err != nil {
 		return nil, err
 	}
+	if err := r.applyWorkspaceRoutingToAgent(context.Background(), provider, snapshot, agent); err != nil {
+		return nil, err
+	}
 	agent.StoreOptions = r.authStoreOptions()
 	agent.AgentIdentity = agentIdentityOptionsForAppTurn(cfg)
 	agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
