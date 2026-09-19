@@ -202,26 +202,26 @@ func TestResolveWorkspaceRoutingMatchesRust(t *testing.T) {
 			entry:           chatgptapi.AccountsCheckEntry{ID: "workspace", WorkspaceBackendOrigin: origin("https://gov.chatgpt.com"), AccountRoutingOverride: override("us")},
 			requiredBaseURL: "https://chatgpt.com/backend-api/",
 			effective:       "https://chatgpt.com/backend-api",
-			wantErr:         errWorkspaceRoutingBackendConflict,
+			wantErr:         model.ErrWorkspaceRoutingBackendConflict,
 		},
 		{
 			name:    "missing backend origin",
 			entry:   chatgptapi.AccountsCheckEntry{ID: "workspace", AccountRoutingOverride: override("us")},
-			wantErr: errWorkspaceRoutingMissingBackendOrigin,
+			wantErr: model.ErrWorkspaceRoutingMissingBackendOrigin,
 		},
 		{
 			name:    "missing override",
 			entry:   chatgptapi.AccountsCheckEntry{ID: "workspace", WorkspaceBackendOrigin: origin("https://chatgpt.com")},
-			wantErr: errWorkspaceRoutingInvalidOverride,
+			wantErr: model.ErrWorkspaceRoutingInvalidOverride,
 		},
 		{
 			name:    "insecure backend origin",
 			entry:   chatgptapi.AccountsCheckEntry{ID: "workspace", WorkspaceBackendOrigin: origin("http://chatgpt.com"), AccountRoutingOverride: override("us")},
-			wantErr: errWorkspaceRoutingInvalidBackendOrigin,
+			wantErr: model.ErrWorkspaceRoutingInvalidBackendOrigin,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			got, err := resolveWorkspaceRouting(testCase.entry, testCase.requiredBaseURL, testCase.effective)
+			got, err := model.ResolveWorkspaceRouting(testCase.entry, testCase.requiredBaseURL, testCase.effective)
 			if testCase.wantErr != nil {
 				if err == nil || !strings.Contains(err.Error(), testCase.wantErr.Error()) {
 					t.Fatalf("resolveWorkspaceRouting error = %v, want %v", err, testCase.wantErr)

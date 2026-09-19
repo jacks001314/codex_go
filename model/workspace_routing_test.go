@@ -1,11 +1,14 @@
 package model
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"codex_go/auth"
+	"codex_go/chatgptapi"
 )
 
 // TestApplyWorkspaceRoutingMatchesRust mirrors Rust apply_workspace_routing:
@@ -141,5 +144,63 @@ func TestResponsesAgentRunnerRejectsRedirectsWhenRouted(t *testing.T) {
 	}
 	if targetHit {
 		t.Fatal("routed provider followed a redirect")
+	}
+}
+
+// TestDiscoverWorkspaceRoutingMatchesRust covers the accounts/check selection
+// and error mapping Rust read_account performs before resolve_routing.
+func TestDiscoverWorkspaceRoutingMatchesRust(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		body    string
+		want    string
+		wantErr error
+	}{
+		{
+			name: "selects the requested workspace",
+			body: `{"accounts":[{"id":"other","workspace_backend_origin":"https://other.example","account_routing_override":"us"},{"id":"selected","workspace_backend_origin":"https://gov.chatgpt.com","account_routing_override":"NO_CONSTRAINT"}]}`,
+			want: "https://gov.chatgpt.com",
+		},
+		{
+			name:    "missing workspace",
+			body:    `{"accounts":[{"id":"other"}]}`,
+			wantErr: ErrWorkspaceRoutingMissingWorkspace,
+		},
+		{
+			name:    "duplicate workspace",
+			body:    `{"accounts":[{"id":"selected"},{"id":"selected"}]}`,
+			wantErr: ErrWorkspaceRoutingDuplicateWorkspace,
+		},
+		{
+			name:    "unauthorized",
+			status:  http.StatusUnauthorized,
+			wantErr: ErrWorkspaceRoutingUnauthorized,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.status != 0 {
+					w.WriteHeader(tc.status)
+					return
+				}
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			client := chatgptapi.NewCloudClient(&chatgptapi.CloudClientOptions{BaseURL: server.URL})
+			got, err := DiscoverWorkspaceRouting(context.Background(), client, "selected", "", "https://chatgpt.com/backend-api/codex")
+			if tc.wantErr != nil {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr.Error()) {
+					t.Fatalf("error = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DiscoverWorkspaceRouting error = %v", err)
+			}
+			if got.BackendOrigin != tc.want || got.ChatGPTAccountID != "selected" {
+				t.Fatalf("routing = %+v, want origin %q", got, tc.want)
+			}
+		})
 	}
 }
