@@ -798,6 +798,14 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 	for handlerIndex := range group.Hooks {
 		handler := group.Hooks[handlerIndex]
 		handlerType := handler.hookHandlerType()
+		// Rust bundled_hooks.rs: a known cleanup handler from an unsigned
+		// bundled plugin is treated as builtin (trusted and enabled without a
+		// recorded hash). The local discovery path has no enabled-tool catalog,
+		// so an Apps target cannot match here.
+		builtin := false
+		if source.PluginID != nil && strings.TrimSpace(*source.PluginID) != "" {
+			builtin = isAllowlistedBundledCleanupHook(strings.TrimSpace(*source.PluginID), event, matcher, handler, nil)
+		}
 		switch handlerType {
 		case HookHandlerCommand:
 			command := handler.commandForPlatform()
@@ -825,10 +833,11 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				Source:                 source.Source,
 				PluginID:               cloneString(source.PluginID),
 				DisplayOrder:           displayOrder,
-				Enabled:                hookEnabled(false, state),
+				Builtin:                builtin,
+				Enabled:                hookEnabled(false, builtin, state),
 				IsManaged:              false,
 				CurrentHash:            currentHash,
-				TrustStatus:            hookTrustStatus(false, currentHash, hookTrustedHash(false, state)),
+				TrustStatus:            hookTrustStatus(false, builtin, currentHash, hookTrustedHash(false, state)),
 				BypassTrust:            source.BypassTrust,
 				Env:                    cloneHookEnv(source.Env),
 			}
@@ -873,10 +882,11 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				Source:        source.Source,
 				PluginID:      cloneString(source.PluginID),
 				DisplayOrder:  displayOrder,
-				Enabled:       hookEnabled(false, state),
+				Builtin:       builtin,
+				Enabled:       hookEnabled(false, builtin, state),
 				IsManaged:     false,
 				CurrentHash:   currentHash,
-				TrustStatus:   hookTrustStatus(false, currentHash, hookTrustedHash(false, state)),
+				TrustStatus:   hookTrustStatus(false, builtin, currentHash, hookTrustedHash(false, state)),
 				BypassTrust:   source.BypassTrust,
 				Env:           cloneHookEnv(source.Env),
 			}
@@ -1174,8 +1184,10 @@ func cloneHookInputValue(value any) any {
 	}
 }
 
-func hookEnabled(isManaged bool, state *HookState) bool {
-	if isManaged {
+// hookEnabled mirrors Rust discovery.rs: builtin and managed hooks are always
+// enabled; otherwise the recorded state decides (absent means enabled).
+func hookEnabled(isManaged bool, isBuiltin bool, state *HookState) bool {
+	if isBuiltin || isManaged {
 		return true
 	}
 	return state == nil || state.Enabled == nil || *state.Enabled
@@ -1188,7 +1200,13 @@ func hookTrustedHash(isManaged bool, state *HookState) *string {
 	return cloneString(state.TrustedHash)
 }
 
-func hookTrustStatus(isManaged bool, currentHash string, trustedHash *string) HookTrustStatus {
+// hookTrustStatus mirrors Rust discovery.rs: builtin hooks are trusted without
+// a recorded hash, managed hooks report managed, and everything else compares
+// the current hash to the trusted one.
+func hookTrustStatus(isManaged bool, isBuiltin bool, currentHash string, trustedHash *string) HookTrustStatus {
+	if isBuiltin {
+		return HookTrustTrusted
+	}
 	if isManaged {
 		return HookTrustManaged
 	}

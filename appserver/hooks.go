@@ -191,17 +191,21 @@ type HookMetadata struct {
 	// AdditionalContextLimit mirrors Rust HookMetadata.additional_context_limit
 	// (app-server hooks_list contract): nil means the default 2,500-token
 	// spilling threshold; 0 disables spilling.
-	AdditionalContextLimit *int64            `json:"additionalContextLimit,omitempty"`
-	SourcePath             string            `json:"sourcePath"`
-	Source                 HookSource        `json:"source"`
-	PluginID               *string           `json:"pluginId"`
-	DisplayOrder           int64             `json:"displayOrder"`
-	Enabled                bool              `json:"enabled"`
-	IsManaged              bool              `json:"isManaged"`
-	CurrentHash            string            `json:"currentHash"`
-	TrustStatus            HookTrustStatus   `json:"trustStatus"`
-	BypassTrust            bool              `json:"-"`
-	Env                    map[string]string `json:"-"`
+	AdditionalContextLimit *int64     `json:"additionalContextLimit,omitempty"`
+	SourcePath             string     `json:"sourcePath"`
+	Source                 HookSource `json:"source"`
+	PluginID               *string    `json:"pluginId"`
+	DisplayOrder           int64      `json:"displayOrder"`
+	// Builtin marks a bundled plugin's allowlisted cleanup hook. Rust keeps
+	// these available to the engine but omits them from the public hooks list
+	// (app-server catalog_processor.rs), so the field is not serialized.
+	Builtin     bool              `json:"-"`
+	Enabled     bool              `json:"enabled"`
+	IsManaged   bool              `json:"isManaged"`
+	CurrentHash string            `json:"currentHash"`
+	TrustStatus HookTrustStatus   `json:"trustStatus"`
+	BypassTrust bool              `json:"-"`
+	Env         map[string]string `json:"-"`
 }
 
 func (m *HookMetadata) Validate() error {

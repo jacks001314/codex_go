@@ -9282,7 +9282,9 @@ func (r *RuntimeRouter) handleHooksList(request *Request) (*HookListResponse, er
 	registry := r.requireHooks().List(&params)
 	discovery := r.configureHookDiscovery()
 	discovered := discovery.Discover(&params, r.services.DefaultCWD)
-	return MergeHookListResponses(registry, discovered), nil
+	// Rust catalog_processor.rs hooks_to_info: builtin bundled cleanup hooks
+	// stay available to the engine but are omitted from the public hooks list.
+	return hideBuiltinHooks(MergeHookListResponses(registry, discovered)), nil
 }
 
 func (r *RuntimeRouter) handleSkillsList(request *Request) (*SkillsListResponse, error) {
