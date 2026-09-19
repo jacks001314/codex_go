@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,11 @@ type workspaceRoutingCacheKey struct {
 	baseURL         string
 	requiredBaseURL string
 }
+
+// workspaceRoutingRecoveryAttempts bounds the 401 recovery loop to the steps of
+// Rust's unauthorized-recovery plan (reload, refresh_token, external_refresh),
+// so a backend that keeps rejecting never spins.
+const workspaceRoutingRecoveryAttempts = 3
 
 // workspaceRoutingFetch coordinates one discovery per key: waiters share the
 // first result, and a generation change starts a fresh key (Rust
@@ -72,6 +78,10 @@ func (r *RuntimeRouter) workspaceRoutingForAccountRead(ctx context.Context, snap
 	}
 	state := auth.AuthChangeState{}
 	if r.authChangeTracker != nil {
+		// Rust's auth manager records its initial credential before any change
+		// is observed; seeding here keeps a same-owner refresh from looking like
+		// an ownership change.
+		r.authChangeTracker.SeedLastAuth(snapshot)
 		state = r.authChangeTracker.Snapshot()
 	}
 	identity, ok := r.workspaceRoutingConfigIdentity()
@@ -161,12 +171,29 @@ func chatGPTWorkspaceAccountID(snapshot *auth.AuthDotJSON) (string, bool) {
 	return accountID, true
 }
 
+// discoverWorkspaceRouting mirrors Rust read_account's discovery: a 401 may be
+// recovered by refreshing the credential owner, in which case discovery retries
+// with the refreshed credential. The loop is bounded by the recovery plan.
 func (r *RuntimeRouter) discoverWorkspaceRouting(ctx context.Context, snapshot *auth.AuthDotJSON, accountID string, baseURL string, requiredBaseURL string) (*auth.WorkspaceRouting, error) {
-	client, err := r.accountBackendClient(snapshot)
-	if err != nil {
-		return nil, model.ErrWorkspaceRoutingDiscoveryFailed
+	discoveryAuth := snapshot
+	for attempt := 0; ; attempt++ {
+		client, err := r.accountBackendClient(discoveryAuth)
+		if err != nil {
+			return nil, model.ErrWorkspaceRoutingDiscoveryFailed
+		}
+		routing, err := model.DiscoverWorkspaceRouting(ctx, client, accountID, requiredBaseURL, baseURL)
+		if err == nil {
+			return routing, nil
+		}
+		if !errors.Is(err, model.ErrWorkspaceRoutingUnauthorized) || attempt >= workspaceRoutingRecoveryAttempts {
+			return nil, err
+		}
+		refreshed, refreshErr := r.refreshManagedAuthForStatus(ctx, discoveryAuth)
+		if refreshErr != nil || refreshed == nil {
+			return nil, model.ErrWorkspaceRoutingUnauthorized
+		}
+		discoveryAuth = refreshed
 	}
-	return model.DiscoverWorkspaceRouting(ctx, client, accountID, requiredBaseURL, baseURL)
 }
 
 func cloneWorkspaceRouting(routing *auth.WorkspaceRouting) *auth.WorkspaceRouting {

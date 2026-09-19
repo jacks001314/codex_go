@@ -317,6 +317,68 @@ func TestRuntimeRouterWorkspaceRoutingRejectsCredentialChangeLikeRust(t *testing
 }
 
 // TestRuntimeRouterWorkspaceRoutingRejectsConfigChangeLikeRust mirrors Rust
+// TestRuntimeRouterWorkspaceRoutingRecoversFromUnauthorizedLikeRust mirrors Rust
+// read_account's recovery loop: a 401 on accounts/check refreshes the credential
+// owner and retries discovery with the refreshed credential.
+func TestRuntimeRouterWorkspaceRoutingRecoversFromUnauthorizedLikeRust(t *testing.T) {
+	clearAuthEnvAppserver(t)
+	home := t.TempDir()
+	oldToken := fakeJWTAppserver(map[string]any{"chatgpt_account_id": "workspace", "chatgpt_user_id": "user-1", "plan_type": "pro", "jti": "old"})
+	newToken := fakeJWTAppserver(map[string]any{"chatgpt_account_id": "workspace", "chatgpt_user_id": "user-1", "plan_type": "pro", "jti": "new"})
+	if err := auth.NewStore(home).Save(auth.AuthDotJSON{
+		AuthMode: "chatgpt",
+		Tokens: map[string]any{
+			"access_token":    oldToken,
+			"refresh_token":   "refresh-1",
+			"account_id":      "workspace",
+			"chatgpt_user_id": "user-1",
+		},
+	}); err != nil {
+		t.Fatalf("auth save error: %v", err)
+	}
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"` + newToken + `","refresh_token":"refresh-2"}`))
+	}))
+	defer tokenServer.Close()
+	t.Setenv(auth.RefreshTokenURLEnvOverride, tokenServer.URL)
+
+	unauthorizedAttempts := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/codex/accounts/check" {
+			t.Fatalf("accounts check path = %q", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") == "Bearer "+oldToken {
+			unauthorizedAttempts++
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		writeJSON(t, w, map[string]any{"accounts": []any{map[string]any{
+			"id":                       "workspace",
+			"workspace_backend_origin": "https://gov.chatgpt.com",
+			"account_routing_override": "us",
+		}}})
+	}))
+	defer backend.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+backend.URL+`"`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Account: auth.NewAccountManager(), Config: config.NewConfigService(home)})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAccount, auth.GetAccountParams{}))
+	if response.Error != nil {
+		t.Fatalf("get account = %+v", response.Error)
+	}
+	account := response.Result.(*auth.GetAccountResponse)
+	if account.WorkspaceRouting == nil || account.WorkspaceRouting.BackendOrigin != "https://gov.chatgpt.com" {
+		t.Fatalf("workspace routing = %+v", account.WorkspaceRouting)
+	}
+	if unauthorizedAttempts != 1 {
+		t.Fatalf("unauthorized discovery attempts = %d, want 1", unauthorizedAttempts)
+	}
+}
+
+// TestRuntimeRouterWorkspaceRoutingRejectsConfigChangeLikeRust mirrors Rust
 // read_account's post-discovery reload: a configuration change during discovery
 // (here the model provider) refuses the discovered routing.
 func TestRuntimeRouterWorkspaceRoutingRejectsConfigChangeLikeRust(t *testing.T) {
