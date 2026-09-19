@@ -2,10 +2,14 @@ package appserver
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"codex_go/apps"
 	"codex_go/config"
+	"codex_go/session"
 	"codex_go/telemetry"
 	"codex_go/turn"
 )
@@ -130,5 +134,152 @@ func TestCodexAppUsedEventFollowsRustDedupAndSelection(t *testing.T) {
 	explicit := waitForAppUsedEvent(t, sink).EventParams
 	if explicit.InvokeType == nil || *explicit.InvokeType != telemetry.InvocationTypeExplicit {
 		t.Fatalf("explicit invoke type = %#v", explicit.InvokeType)
+	}
+}
+
+// Mirrors the end-to-end turn-input path: an app mention in the turn's prompt
+// populates the thread's connector selection and reports a mention event.
+func TestRuntimeRouterAppMentionEmitsMentionAndSelectsConnectorLikeRust(t *testing.T) {
+	appService := apps.NewAppService([]apps.AppEntry{{
+		ID:           "drive",
+		Name:         "Google Drive",
+		IsAccessible: true,
+		IsEnabled:    true,
+	}})
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 agent,
+		Apps:                  appService,
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+		DefaultCWD:            t.TempDir(),
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-app-mention"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{CWD: filepath.Join(t.TempDir())})
+	threadStart.ConnectionID = "conn-app-mention"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "Use [$drive](app://drive)",
+	})
+	turnStart.ConnectionID = "conn-app-mention"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForAppMentionedEvent(t, analyticsSink).EventParams
+	if event.ConnectorID == nil || *event.ConnectorID != "drive" {
+		t.Fatalf("mentioned connector = %#v", event.ConnectorID)
+	}
+	if event.AppName == nil || *event.AppName != "Google Drive" {
+		t.Fatalf("mentioned app name = %#v", event.AppName)
+	}
+	if event.ThreadID == nil || *event.ThreadID != threadID || event.TurnID == nil || *event.TurnID != turnID {
+		t.Fatalf("mention identity = %#v", event)
+	}
+	if event.InvokeType == nil || *event.InvokeType != telemetry.InvocationTypeExplicit {
+		t.Fatalf("mention invoke type = %#v", event.InvokeType)
+	}
+	selection := router.sessionStateForThread(threadID).MergeConnectorSelection()
+	if len(selection) != 1 || selection[0] != "drive" {
+		t.Fatalf("connector selection = %#v", selection)
+	}
+}
+
+// Mirrors Rust #45716's skill-item half: a connector a selected skill's
+// instructions link joins the thread's connector selection and is reported as a
+// mention, so a later call for it counts as explicit.
+func TestSkillInstructionsSelectAppsTheyMentionLikeRust(t *testing.T) {
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "drive-helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill) error = %v", err)
+	}
+	skill := "---\nname: drive-helper\ndescription: Drive helper\n---\nRead [$drive](app://drive) before answering.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte(skill), 0o600); err != nil {
+		t.Fatalf("WriteFile(skill) error = %v", err)
+	}
+	appService := apps.NewAppService([]apps.AppEntry{{
+		ID:           "drive",
+		Name:         "Google Drive",
+		IsAccessible: true,
+		IsEnabled:    true,
+	}})
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	analyticsSink := newRecordingTurnEventSink()
+	agent := newRecordingRuntimeAgent("ok")
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:          NewRouter(store),
+		Turns:                 turn.NewTurnService(),
+		Agent:                 agent,
+		Apps:                  appService,
+		Skills:                NewSkillsService([]string{skillsRoot}),
+		ThreadStatus:          NewThreadStatusManager(),
+		Analytics:             analyticsSink,
+		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
+		DefaultCWD:            t.TempDir(),
+	})
+	router.SetNotificationSink(sink)
+
+	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
+		ClientInfo:   ClientInfo{Name: "codex-tui", Version: "1.2.3"},
+		Capabilities: &InitializeCapabilities{ExperimentalAPI: true},
+	})
+	initialize.ConnectionID = "conn-skill-mention"
+	if response := router.Handle(initialize); response.Error != nil {
+		t.Fatalf("initialize error: %+v", response.Error)
+	}
+	threadStart := requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()})
+	threadStart.ConnectionID = "conn-skill-mention"
+	response := router.Handle(threadStart)
+	if response.Error != nil {
+		t.Fatalf("thread/start error: %+v", response.Error)
+	}
+	threadID := response.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "$drive-helper",
+	})
+	turnStart.ConnectionID = "conn-skill-mention"
+	response = router.Handle(turnStart)
+	if response.Error != nil {
+		t.Fatalf("turn/start error: %+v", response.Error)
+	}
+	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+
+	event := waitForAppMentionedEvent(t, analyticsSink).EventParams
+	if event.ConnectorID == nil || *event.ConnectorID != "drive" {
+		t.Fatalf("skill-derived mention = %#v", event.ConnectorID)
+	}
+	if event.InvokeType == nil || *event.InvokeType != telemetry.InvocationTypeExplicit {
+		t.Fatalf("skill-derived invoke type = %#v", event.InvokeType)
+	}
+	selection := router.sessionStateForThread(threadID).MergeConnectorSelection()
+	if len(selection) != 1 || selection[0] != "drive" {
+		t.Fatalf("connector selection = %#v", selection)
 	}
 }

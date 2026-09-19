@@ -209,3 +209,53 @@ func TestCollectExplicitPluginIDsIgnoresDisplayNamesAndQueryParameters(t *testin
 		}
 	}
 }
+
+// Mirrors Rust's collect_explicit_app_ids_from_skill_items: an app link inside a
+// skill's instructions counts, a plain mention resolves only when exactly one
+// connector carries the slug and no skill shares the name.
+func TestCollectExplicitAppIDsFromSkillItemsLikeRust(t *testing.T) {
+	connectors := []SkillAppConnector{
+		{ID: "connector_calendar", Name: "Google Calendar"},
+		{ID: "connector_drive", Name: "Google Drive"},
+	}
+	if ids := CollectExplicitAppIDsFromSkillItems(nil, func() []SkillAppConnector { return connectors }, nil); len(ids) != 0 {
+		t.Fatalf("no messages = %#v", ids)
+	}
+	if ids := CollectExplicitAppIDsFromSkillItems([]string{"use $google-calendar"}, nil, nil); len(ids) != 0 {
+		t.Fatalf("no connectors = %#v", ids)
+	}
+
+	linked := CollectExplicitAppIDsFromSkillItems([]string{"see [$calendar](app://connector_calendar)"}, func() []SkillAppConnector { return connectors }, []string{"review"})
+	if !linked["connector_calendar"] || len(linked) != 1 {
+		t.Fatalf("linked mention = %#v", linked)
+	}
+
+	plain := CollectExplicitAppIDsFromSkillItems([]string{"open $google-calendar first"}, func() []SkillAppConnector { return connectors }, []string{"review"})
+	if !plain["connector_calendar"] || len(plain) != 1 {
+		t.Fatalf("plain mention = %#v", plain)
+	}
+
+	// Rust compares the connector slug with the ASCII-lowercased skill *name*, so
+	// only a skill named exactly like the slug conflicts.
+	conflicted := CollectExplicitAppIDsFromSkillItems([]string{"open $google-calendar first"}, func() []SkillAppConnector { return connectors }, []string{"google-calendar"})
+	if len(conflicted) != 0 {
+		t.Fatalf("skill-name conflict = %#v", conflicted)
+	}
+
+	ambiguous := CollectExplicitAppIDsFromSkillItems(
+		[]string{"open $google-calendar first"},
+		func() []SkillAppConnector {
+			return []SkillAppConnector{{ID: "a", Name: "Google Calendar"}, {ID: "b", Name: "Google Calendar"}}
+		},
+		nil,
+	)
+	if len(ambiguous) != 0 {
+		t.Fatalf("ambiguous slug = %#v", ambiguous)
+	}
+
+	// A plugin path is not an app mention.
+	pluginLink := CollectExplicitAppIDsFromSkillItems([]string{"see [$p](plugin://sample)"}, func() []SkillAppConnector { return connectors }, nil)
+	if len(pluginLink) != 0 {
+		t.Fatalf("plugin mention = %#v", pluginLink)
+	}
+}

@@ -8735,7 +8735,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	modelID := firstNonEmpty(turnParamModel(params), stringConfigValue(cfg, "model"), defaultModelForAppTurn())
 	postToolInputItems := r.implicitSkillInvocationEventProvider(threadID, turnID, modelID, params, skillMetadata)
 	if cfg != nil && !cfg.IncludeSkillInstructions() {
-		skillInputItems := r.explicitSkillInputItemsForTurnWithProvider(threadID, turnID, modelID, params, skillMetadata, executorSkillProviders)
+		skillInputItems := r.explicitSkillInputItemsForTurnWithProvider(ctx, threadID, turnID, modelID, cfg, params, skillMetadata, executorSkillProviders)
 		return strings.TrimSpace(instructions), skillInputItems, postToolInputItems, nil
 	}
 	includeUsageInstructions := r.includeSkillsUsageInstructionsForTurn(cfg, params)
@@ -8758,7 +8758,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 			})
 		}
 	}
-	skillInputItems := r.explicitSkillInputItemsForTurnWithProvider(threadID, turnID, modelID, params, skillMetadata, executorSkillProviders)
+	skillInputItems := r.explicitSkillInputItemsForTurnWithProvider(ctx, threadID, turnID, modelID, cfg, params, skillMetadata, executorSkillProviders)
 	rendered := make([]string, 0, 3)
 	if hostAvailable != nil {
 		rendered = append(rendered, hostAvailable.Body)
@@ -10053,10 +10053,10 @@ func (r *RuntimeRouter) explicitSkillInputItems(threadID string, params *turn.Tu
 }
 
 func (r *RuntimeRouter) explicitSkillInputItemsForTurn(threadID string, turnID string, modelID string, params *turn.TurnStartParams, skills []promptctx.InstructionsSkillMetadata) []any {
-	return r.explicitSkillInputItemsForTurnWithProvider(threadID, turnID, modelID, params, skills, nil)
+	return r.explicitSkillInputItemsForTurnWithProvider(context.Background(), threadID, turnID, modelID, nil, params, skills, nil)
 }
 
-func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(threadID string, turnID string, modelID string, params *turn.TurnStartParams, skills []promptctx.InstructionsSkillMetadata, executorProviders *skillprovider.Registry) []any {
+func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(ctx context.Context, threadID string, turnID string, modelID string, cfg *config.Config, params *turn.TurnStartParams, skills []promptctx.InstructionsSkillMetadata, executorProviders *skillprovider.Registry) []any {
 	selected := promptctx.CollectExplicitSkillMentions(&promptctx.ExplicitSkillMentionOptions{
 		Inputs: skillMentionInputsFromTurn(params),
 		Skills: skills,
@@ -10099,6 +10099,9 @@ func (r *RuntimeRouter) explicitSkillInputItemsForTurnWithProvider(threadID stri
 			}
 		}
 	}
+	// Rust #45716: a connector named inside a skill's instructions joins the
+	// thread's connector selection and is reported as a mention.
+	r.rememberSkillDerivedAppMentions(ctx, threadID, turnID, modelID, cfg, params, items, skills)
 	return items
 }
 

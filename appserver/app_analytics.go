@@ -4,8 +4,10 @@ import (
 	"context"
 	"strings"
 
+	"codex_go/apps"
 	"codex_go/config"
 	"codex_go/plugin"
+	promptctx "codex_go/prompt"
 	"codex_go/state"
 	"codex_go/telemetry"
 	"codex_go/turn"
@@ -172,4 +174,100 @@ func (r *RuntimeRouter) forgetThreadSessionState(threadID string) {
 	r.connectorSelectionMu.Lock()
 	delete(r.connectorSelections, threadID)
 	r.connectorSelectionMu.Unlock()
+}
+
+// rememberSkillDerivedAppMentions mirrors Rust's
+// `collect_explicit_app_ids_from_skill_items`: a connector named inside the
+// selected skills' instructions joins the thread's connector selection and is
+// reported as a mention, so a later call for it counts as explicit.
+func (r *RuntimeRouter) rememberSkillDerivedAppMentions(ctx context.Context, threadID string, turnID string, modelID string, cfg *config.Config, params *turn.TurnStartParams, skillItems []any, skills []promptctx.InstructionsSkillMetadata) {
+	if r == nil || len(skillItems) == 0 || len(skills) == 0 {
+		return
+	}
+	messages := make([]string, 0, len(skillItems))
+	for _, item := range skillItems {
+		if text := renderedItemInputText(item); text != "" {
+			messages = append(messages, text)
+		}
+	}
+	if len(messages) == 0 {
+		return
+	}
+	appsByID := map[string]apps.AppEntry{}
+	connectors := func() []plugin.SkillAppConnector {
+		if len(appsByID) > 0 {
+			out := make([]plugin.SkillAppConnector, 0, len(appsByID))
+			for id, app := range appsByID {
+				out = append(out, plugin.SkillAppConnector{ID: id, Name: strings.TrimSpace(app.Name)})
+			}
+			return out
+		}
+		// The catalog is fetched only when the skill text actually names
+		// something a connector could answer to.
+		appsByID = r.appsForExplicitMentions(threadID, cfg)
+		out := make([]plugin.SkillAppConnector, 0, len(appsByID))
+		for id, app := range appsByID {
+			out = append(out, plugin.SkillAppConnector{ID: id, Name: strings.TrimSpace(app.Name)})
+		}
+		return out
+	}
+	skillNames := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		skillNames = append(skillNames, skill.Name)
+	}
+	connectorIDs := plugin.CollectExplicitAppIDsFromSkillItems(messages, connectors, skillNames)
+	if len(connectorIDs) == 0 {
+		return
+	}
+	if sessionState := r.sessionStateForThread(threadID); sessionState != nil {
+		sessionState.MergeConnectorSelection(sortedBoolKeys(connectorIDs)...)
+	}
+	if turnID == "" || r.services.Analytics == nil || r.threadAnalyticsDisabled(threadID) {
+		return
+	}
+	sink, ok := r.services.Analytics.(telemetry.AppEventSink)
+	if !ok {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	productClientID := ""
+	if params != nil {
+		productClientID = strings.TrimSpace(params.Originator)
+	}
+	for _, connectorID := range sortedBoolKeys(connectorIDs) {
+		sink.TrackCodexAppMentionedEvent(ctx, telemetry.NewCodexAppMentionedEvent(telemetry.CodexAppMetadata{
+			ConnectorID:     stringPtrIfNotEmpty(connectorID),
+			ThreadID:        stringPtrIfNotEmpty(threadID),
+			TurnID:          stringPtrIfNotEmpty(turnID),
+			AppName:         stringPtrIfNotEmpty(strings.TrimSpace(appsByID[connectorID].Name)),
+			ProductClientID: stringPtrIfNotEmpty(productClientID),
+			InvokeType:      stringPtrIfNotEmpty(telemetry.InvocationTypeExplicit),
+			ModelSlug:       stringPtrIfNotEmpty(strings.TrimSpace(modelID)),
+		}))
+	}
+}
+
+// renderedItemInputText returns the input text of a rendered fragment item, which
+// is the shape the skill instructions are injected as.
+func renderedItemInputText(item any) string {
+	value, ok := item.(map[string]any)
+	if !ok {
+		return ""
+	}
+	content, ok := value["content"].([]map[string]any)
+	if !ok {
+		return ""
+	}
+	var builder strings.Builder
+	for _, part := range content {
+		if text, _ := part["text"].(string); strings.TrimSpace(text) != "" {
+			if builder.Len() > 0 {
+				builder.WriteString("\n")
+			}
+			builder.WriteString(text)
+		}
+	}
+	return builder.String()
 }
