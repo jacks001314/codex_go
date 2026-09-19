@@ -1392,6 +1392,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// Rust reports the accepted user input before the first sampling request
 	// (SessionTelemetry::user_prompt).
 	r.emitUserPromptRecords(ctx, threadID, params.Prompt, params.Input)
+	// Rust #46508: a user turn refreshes a catalog that belongs to other
+	// credentials before it samples.
+	r.refreshModelCatalogAfterAuthChange()
 	startedAtMS := startedAt.UnixMilli()
 	appTurn := appTurnFromTurnRecord(record, nil, TurnStatusInProgress, nil, nil)
 	appTurn.Items = []ThreadItem{}

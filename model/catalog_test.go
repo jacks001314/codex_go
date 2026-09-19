@@ -693,6 +693,75 @@ func TestRemoteModelsManagerRefreshesOnlineAndETag(t *testing.T) {
 	}
 }
 
+// TestRemoteModelsManagerRefreshAfterAuthChangeMatchesRust mirrors Rust #46508:
+// a catalog that no credential has claimed yet is refreshed before a turn,
+// while a catalog that already belongs to the current identity is left alone,
+// and hosts whose catalogs credentials cannot change never refresh.
+func TestRemoteModelsManagerRefreshAfterAuthChangeMatchesRust(t *testing.T) {
+	newManager := func(t *testing.T, options *RemoteModelsManagerOptions) (*RemoteModelsManager, *recordingModelsEndpoint) {
+		t.Helper()
+		endpoint := &recordingModelsEndpoint{responses: []*ModelsEndpointResponse{{
+			Models: []ModelInfo{{
+				Slug:           "remote",
+				DisplayName:    "Remote",
+				Visibility:     VisibilityVisible,
+				SupportedInAPI: true,
+			}},
+			ETag: "etag-1",
+		}}}
+		opts := *options
+		opts.Endpoint = endpoint
+		return NewRemoteModelsManagerWithOptions(&opts), endpoint
+	}
+	base := &ModelsResponse{Models: []ModelInfo{{
+		Slug:           "bundled",
+		DisplayName:    "Bundled",
+		Visibility:     VisibilityVisible,
+		SupportedInAPI: true,
+		Priority:       10,
+	}}}
+
+	// An unscoped catalog is claimed by the current credentials before the turn.
+	manager, endpoint := newManager(t, &RemoteModelsManagerOptions{
+		ModelCatalog: base,
+		Identity:     "identity-a",
+		CommandAuth:  true,
+	})
+	manager.RefreshAfterAuthChange()
+	if endpoint.calls != 1 {
+		t.Fatalf("calls after refreshing an unclaimed catalog = %d, want 1", endpoint.calls)
+	}
+	if info := manager.GetModelInfo("remote", nil); info.Slug != "remote" {
+		t.Fatalf("catalog was not refreshed: %#v", info)
+	}
+	// The catalog now belongs to the current identity, so a second refresh is a
+	// no-op.
+	manager.RefreshAfterAuthChange()
+	if endpoint.calls != 1 {
+		t.Fatalf("calls after refreshing a matching catalog = %d, want 1", endpoint.calls)
+	}
+
+	// Hosts whose catalog does not follow credentials never refresh.
+	staticManager, staticEndpoint := newManager(t, &RemoteModelsManagerOptions{ModelCatalog: base})
+	staticManager.RefreshAfterAuthChange()
+	if staticEndpoint.calls != 0 {
+		t.Fatalf("calls for an uncredentialed catalog = %d, want 0", staticEndpoint.calls)
+	}
+
+	// A discovery failure leaves the existing catalog in place.
+	failing := &recordingModelsEndpoint{}
+	failingManager := NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
+		ModelCatalog: base,
+		Endpoint:     failing,
+		Identity:     "identity-a",
+		CommandAuth:  true,
+	})
+	failingManager.RefreshAfterAuthChange()
+	if info := failingManager.GetModelInfo("bundled", nil); info.Slug != "bundled" {
+		t.Fatalf("fallback catalog = %#v", info)
+	}
+}
+
 func TestRemoteModelsManagerThrottlesMatchingETagCacheRenewal(t *testing.T) {
 	home := t.TempDir()
 	now := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)

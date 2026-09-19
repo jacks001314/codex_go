@@ -2077,6 +2077,74 @@ func TestRuntimeRouterRunningResumeTurnItemsViewLikeRust(t *testing.T) {
 	}
 }
 
+// TestRuntimeRouterRefreshesCatalogForCurrentCredentialsLikeRust mirrors Rust
+// #46508: a catalog that belongs to other credentials is refreshed before a turn
+// or a mailbox wakeup starts sampling, while a catalog that already belongs to
+// the current credentials is left alone.
+func TestRuntimeRouterRefreshesCatalogForCurrentCredentialsLikeRust(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[]}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	configBody := "model = \"gpt-5\"\nopenai_base_url = \"" + server.URL + "/v1\"\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("token-a", "account-a", nil)); err != nil {
+		t.Fatalf("Save auth error = %v", err)
+	}
+	configService := config.NewConfigService(home)
+	router := NewRuntimeRouter(RuntimeServices{
+		Config:       configService,
+		Models:       model.NewModelService(accountScopedModelsManager(home, configService)),
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	t.Cleanup(func() { _ = router.Close() })
+
+	service := router.services.Models
+	identityA := service.CatalogIdentity()
+	if identityA == "" {
+		t.Fatal("the running catalog has no provider/auth identity")
+	}
+	// The catalog already belongs to these credentials, so nothing changes.
+	router.refreshModelCatalogAfterAuthChange()
+	if router.services.Models != service || router.services.Models.CatalogIdentity() != identityA {
+		t.Fatal("an unchanged identity replaced the catalog")
+	}
+
+	// A credential change makes the next refresh rebuild the catalog under the
+	// new identity and fetch it before the turn samples.
+	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("token-b", "account-b", nil)); err != nil {
+		t.Fatalf("Save rotated auth error = %v", err)
+	}
+	before := requests
+	router.refreshModelCatalogAfterAuthChange()
+	if router.services.Models == service {
+		t.Fatal("a credential change did not refresh the catalog")
+	}
+	identityB := router.services.Models.CatalogIdentity()
+	if identityB == "" || identityB == identityA {
+		t.Fatalf("identity after the credential change = %q (was %q)", identityB, identityA)
+	}
+	if requests == before {
+		t.Fatal("the refreshed catalog was not fetched under the new credentials")
+	}
+	// The refreshed catalog now matches the credentials, so another refresh is a
+	// no-op.
+	refreshed := router.services.Models
+	router.refreshModelCatalogAfterAuthChange()
+	if router.services.Models != refreshed {
+		t.Fatal("a matching identity replaced the refreshed catalog")
+	}
+}
+
 func TestRuntimeRouterThreadResumeRunningIgnoresOverrideMismatch(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	routerStore := NewRouter(store)

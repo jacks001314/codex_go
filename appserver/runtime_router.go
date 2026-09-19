@@ -929,9 +929,22 @@ func accountScopedModelsManager(codexHome string, configService *config.ConfigSe
 	return model.NewLazyModelsManager(build)
 }
 
-// buildAccountScopedModelsManager resolves the account-scoped catalog manager
-// from an already-read effective config plus the managed requirements.
-func buildAccountScopedModelsManager(codexHome string, read *config.ConfigReadResponse, requirements *config.ConfigRequirementsReadResponse) (model.ModelsManager, error) {
+// accountScopedCatalogProvider is the provider/auth state both the catalog
+// manager and its identity are derived from.
+type accountScopedCatalogProvider struct {
+	providerID   string
+	providerInfo *model.ProviderInfo
+	apiProvider  *model.APIProvider
+	authHeaders  *model.AuthHeaders
+	authSnapshot *auth.AuthDotJSON
+	residency    string
+}
+
+// resolveAccountScopedCatalogProvider reads the effective provider and
+// credentials the account-scoped catalog uses, resolving lazy command
+// credentials the same way Rust does before comparing catalog identities
+// (#46508).
+func resolveAccountScopedCatalogProvider(codexHome string, read *config.ConfigReadResponse, requirements *config.ConfigRequirementsReadResponse) (*accountScopedCatalogProvider, error) {
 	if read == nil {
 		return nil, errors.New("config read is required")
 	}
@@ -964,14 +977,47 @@ func buildAccountScopedModelsManager(codexHome string, read *config.ConfigReadRe
 	if err != nil {
 		return nil, err
 	}
+	return &accountScopedCatalogProvider{
+		providerID:   providerID,
+		providerInfo: providerInfo,
+		apiProvider:  &apiProvider,
+		authHeaders:  &authHeaders,
+		authSnapshot: &resolved.Auth,
+		residency:    residency,
+	}, nil
+}
+
+// accountScopedCatalogIdentity resolves the identity the account-scoped catalog
+// belongs to (Rust #46508 resolves the effective credentials before comparing
+// identities).
+func accountScopedCatalogIdentity(codexHome string, read *config.ConfigReadResponse, requirements *config.ConfigRequirementsReadResponse) (string, error) {
+	inputs, err := resolveAccountScopedCatalogProvider(codexHome, read, requirements)
+	if err != nil || inputs == nil {
+		return "", err
+	}
+	return model.ModelsCatalogIdentity(inputs.providerInfo, inputs.authSnapshot, inputs.authHeaders, inputs.residency), nil
+}
+
+// buildAccountScopedModelsManager resolves the account-scoped catalog manager
+// from an already-read effective config plus the managed requirements.
+func buildAccountScopedModelsManager(codexHome string, read *config.ConfigReadResponse, requirements *config.ConfigRequirementsReadResponse) (model.ModelsManager, error) {
+	inputs, err := resolveAccountScopedCatalogProvider(codexHome, read, requirements)
+	if err != nil || inputs == nil {
+		return nil, err
+	}
+	providerInfo := inputs.providerInfo
+	apiProvider := *inputs.apiProvider
+	authHeaders := *inputs.authHeaders
+	authSnapshot := inputs.authSnapshot
+	cfg := &config.Config{Values: read.Config}
 	var base *model.ModelsResponse
 	if catalog := model.ModelsCatalogFromConfigValues(read.Config); catalog != nil {
 		base = catalog
 	}
-	account := auth.AccountFromAuth(&resolved.Auth)
+	account := auth.AccountFromAuth(authSnapshot)
 	hasChatGPTAccount := account != nil && account.Type == auth.AccountChatGPT
 	supportsAPIKeyModels := providerInfo.IsOpenAI()
-	apiKeyAuth := resolved.Auth.Mode() == "api-key"
+	apiKeyAuth := authSnapshot.Mode() == "api-key"
 	if supportsAPIKeyModels && apiKeyAuth && strings.TrimSpace(providerInfo.BaseURL) == "" {
 		// Codex model metadata is served by the Codex backend, not the
 		// public /v1/models API (Rust #44392). Inference is unaffected.
@@ -982,7 +1028,7 @@ func buildAccountScopedModelsManager(codexHome string, read *config.ConfigReadRe
 		ModelCatalog:                    base,
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
-		Identity:                        model.ModelsCatalogIdentity(providerInfo, &resolved.Auth, &authHeaders, residency),
+		Identity:                        model.ModelsCatalogIdentity(providerInfo, authSnapshot, &authHeaders, inputs.residency),
 		SupportsAPIKeyModels:            supportsAPIKeyModels,
 		APIKeyAuth:                      apiKeyAuth,
 		CommandAuth:                     providerInfo.HasCommandAuth(),
@@ -3306,6 +3352,53 @@ func (r *RuntimeRouter) maybeDispatchNextQueuedSubmission(threadID string) {
 // PRAGMA data_version polling are structural N/A for Go, whose durable queue
 // lives in the thread record and is re-read from the store on every check, so
 // cross-process writes are observed on load/resume.
+// refreshModelCatalogAfterAuthChange mirrors Rust #46508's pre-turn best-effort
+// catalog refresh (ModelsManager::refresh_after_auth_change): a credential
+// change must not leave the in-memory catalog associated with the previous
+// identity, or a turn would sample with the wrong model metadata.
+//
+// Go's account-scoped manager captures its identity and endpoint auth when it is
+// built, while Rust's endpoint client reads the live auth manager, so Go's
+// equivalent of Rust's in-place refresh is rebuilding the manager under the
+// current credentials. A matching identity, an unresolvable identity, or a
+// failed rebuild all keep the running catalog.
+func (r *RuntimeRouter) refreshModelCatalogAfterAuthChange() {
+	if r == nil || r.services.Models == nil || r.services.Config == nil {
+		return
+	}
+	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
+	if codexHome == "" {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return
+	}
+	requirements := r.services.Config.Requirements()
+	current, err := accountScopedCatalogIdentity(codexHome, read, requirements)
+	running := r.services.Models.CatalogIdentity()
+	// An empty identity on either side cannot be compared: Go skips the
+	// credential check and leaves the manager's own claim check to
+	// RefreshAfterAuthChange below.
+	if err != nil || current == "" || running == "" || current == running {
+		r.services.Models.RefreshAfterAuthChange()
+		return
+	}
+	manager, err := buildAccountScopedModelsManager(codexHome, read, requirements)
+	if err != nil || manager == nil {
+		// Rust keeps the existing cache or bundled fallback when discovery fails.
+		r.services.Models.RefreshAfterAuthChange()
+		return
+	}
+	// Claim the rebuilt catalog under the current credentials before the turn
+	// samples, mirroring Rust's refresh-before-use.
+	service := model.NewModelService(manager)
+	service.RefreshAfterAuthChange()
+	r.servicesMu.Lock()
+	r.services.Models = service
+	r.servicesMu.Unlock()
+}
+
 func (r *RuntimeRouter) maybeDispatchQueuedSubmissionIfIdle(threadID string) {
 	if r == nil || r.threads == nil || r.threads.IsClosing() {
 		return
@@ -3318,6 +3411,12 @@ func (r *RuntimeRouter) maybeDispatchQueuedSubmissionIfIdle(threadID string) {
 		return
 	}
 	if status := r.requireThreadStatus().LoadedStatusForThread(threadID); status.Type != IdleStatus().Type {
+		return
+	}
+	// Rust #46508: refresh before the wakeup starts a queued turn, then make
+	// sure the wakeup is still the one that will start it.
+	r.refreshModelCatalogAfterAuthChange()
+	if r.threads.ActiveTurn(threadID) != nil {
 		return
 	}
 	pending, _, err := r.services.ThreadRouter.store.ListQueueSubmissions(session.ThreadID(threadID), "", 1)

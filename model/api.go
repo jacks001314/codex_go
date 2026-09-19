@@ -230,6 +230,24 @@ func NewModelService(manager ModelsManager) *ModelService {
 	return &ModelService{manager: manager}
 }
 
+// RefreshAfterAuthChange forwards Rust #46508's best-effort catalog refresh
+// (Rust ModelsManager::refresh_after_auth_change) to the underlying manager.
+func (s *ModelService) RefreshAfterAuthChange() {
+	if s == nil || s.manager == nil {
+		return
+	}
+	s.manager.RefreshAfterAuthChange()
+}
+
+// CatalogIdentity reports the provider/auth identity the running catalog
+// belongs to (Rust #46508).
+func (s *ModelService) CatalogIdentity() string {
+	if s == nil || s.manager == nil {
+		return ""
+	}
+	return s.manager.CatalogIdentity()
+}
+
 // Presets exposes the available-model presets of the underlying manager
 // (Rust ModelsManager::list_models) for consumers that need the preset metadata
 // rather than the client-facing summary, such as the Guardian review-model

@@ -89,3 +89,20 @@ func (m *LazyModelsManager) GetModelInfo(model string, config *ModelsManagerConf
 func (m *LazyModelsManager) RefreshIfNewETag(etag string) {
 	m.resolve().RefreshIfNewETag(etag)
 }
+
+// RefreshAfterAuthChange forwards Rust #46508's best-effort catalog refresh to
+// the resolved manager.
+func (m *LazyModelsManager) RefreshAfterAuthChange() {
+	if m == nil {
+		return
+	}
+	m.resolve().RefreshAfterAuthChange()
+}
+
+// CatalogIdentity forwards the running catalog's identity (Rust #46508).
+func (m *LazyModelsManager) CatalogIdentity() string {
+	if m == nil {
+		return ""
+	}
+	return m.resolve().CatalogIdentity()
+}

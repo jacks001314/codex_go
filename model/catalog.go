@@ -824,6 +824,14 @@ type ModelsManager interface {
 	GetDefaultModel(model string, allowProviderModelFallback bool, strategy RefreshStrategy) string
 	GetModelInfo(model string, config *ModelsManagerConfig) ModelInfo
 	RefreshIfNewETag(etag string)
+	// RefreshAfterAuthChange is Rust ModelsManager::refresh_after_auth_change
+	// (#46508): a best-effort catalog refresh when the in-memory catalog belongs
+	// to different credentials. Static catalogs need no refresh.
+	RefreshAfterAuthChange()
+	// CatalogIdentity is the opaque provider/auth identity the running catalog
+	// belongs to (Rust's endpoint client identity, #46508); an empty identity
+	// cannot be compared to credentials.
+	CatalogIdentity() string
 }
 
 type StaticModelsManager struct {
@@ -865,6 +873,12 @@ func (m *StaticModelsManager) GetModelInfo(model string, config *ModelsManagerCo
 }
 
 func (m *StaticModelsManager) RefreshIfNewETag(_ string) {}
+
+// RefreshAfterAuthChange is a no-op: a static catalog belongs to no credentials.
+func (m *StaticModelsManager) RefreshAfterAuthChange() {}
+
+// CatalogIdentity is empty: a static catalog belongs to no credentials.
+func (m *StaticModelsManager) CatalogIdentity() string { return "" }
 
 func BundledModelsResponse() ModelsResponse {
 	if catalog, err := loadBundledModelsResponse(); err == nil && len(catalog.Models) > 0 {

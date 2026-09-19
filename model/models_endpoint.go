@@ -159,6 +159,10 @@ type RemoteModelsManager struct {
 	// identity scopes the disk cache to the current provider and credentials
 	// (Rust #43906); an empty identity disables cached catalog reuse.
 	identity string
+	// fetchedIdentity records the identity the in-memory catalog belongs to
+	// (Rust ModelsCacheEntry::identity), so a credential change can be detected
+	// before a turn samples with the previous identity's metadata (#46508).
+	fetchedIdentity string
 	// supportsAPIKeyModels, apiKeyAuth, and commandAuth describe whether the
 	// current provider/auth combination can discover models with an OpenAI API
 	// key (Rust #44392). Discovery stays disabled until the feature opts in.
@@ -310,6 +314,70 @@ func (m *RemoteModelsManager) RefreshIfNewETag(etag string) {
 	m.refreshAvailableModels(RefreshOnline)
 }
 
+// CatalogIdentity returns the provider/auth identity the in-memory catalog
+// belongs to (Rust #46508): the identity recorded when the catalog was fetched,
+// or the configured identity before any fetch.
+func (m *RemoteModelsManager) CatalogIdentity() string {
+	if m == nil {
+		return ""
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.fetched && m.fetchedIdentity != "" {
+		return m.fetchedIdentity
+	}
+	return m.identity
+}
+
+// RefreshAfterAuthChange mirrors Rust ModelsManager::refresh_after_auth_change
+// (#46508): a best-effort catalog refresh when the in-memory catalog belongs to
+// different credentials, so a turn after a credential change does not sample
+// with the previous identity's model metadata. The refresh runs under the same
+// five-second deadline that bounds a catalog fetch, and any failure leaves the
+// existing cache or the bundled fallback in place.
+func (m *RemoteModelsManager) RefreshAfterAuthChange() {
+	if m == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if !m.shouldRefreshModels() {
+			return
+		}
+		m.mu.RLock()
+		identity := m.identity
+		fetchedIdentity := m.fetchedIdentity
+		fetched := m.fetched
+		m.mu.RUnlock()
+		// An unscoped catalog cannot be compared to credentials, and a catalog
+		// that already belongs to the current identity needs no refresh.
+		if identity != "" && fetched && fetchedIdentity == identity {
+			return
+		}
+		m.refreshAvailableModels(RefreshOnlineIfUncached)
+	}()
+	select {
+	case <-done:
+	case <-time.After(modelsEndpointRefreshTimeout):
+	}
+}
+
+// shouldRefreshModels mirrors Rust's gate: a Codex-backend catalog, command
+// auth, or API-key discovery all keep a catalog whose owning credentials can
+// change. Go reports the Codex-backend case through the authoritative ChatGPT
+// catalog flag it already tracks.
+func (m *RemoteModelsManager) shouldRefreshModels() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	codexBackend := m.useRemoteCatalogAsSourceOfTruth
+	commandAuth := m.commandAuth
+	m.mu.RUnlock()
+	return codexBackend || commandAuth || m.SupportsAPIKeyDiscovery()
+}
+
 func (m *RemoteModelsManager) refreshAvailableModels(strategy RefreshStrategy) {
 	if m == nil || m.endpoint == nil {
 		return
@@ -345,6 +413,7 @@ func (m *RemoteModelsManager) fetchAndUpdateModels() {
 		if response != nil && response.NotModified {
 			m.mu.Lock()
 			m.fetched = true
+			m.fetchedIdentity = m.identity
 			if strings.TrimSpace(response.ETag) != "" {
 				m.etag = strings.TrimSpace(response.ETag)
 			}
@@ -355,6 +424,7 @@ func (m *RemoteModelsManager) fetchAndUpdateModels() {
 	}
 	m.mu.Lock()
 	m.fetched = true
+	m.fetchedIdentity = m.identity
 	if len(response.Models) > 0 {
 		if m.remoteCatalogAuthoritative() && hasRemoteSourceOfTruthModel(response.Models) {
 			m.remoteModels = cloneModelInfos(response.Models)
@@ -409,6 +479,7 @@ func (m *RemoteModelsManager) tryLoadFreshCache() bool {
 	}
 	m.fetched = true
 	m.etag = strings.TrimSpace(cache.ETag)
+	m.fetchedIdentity = m.identity
 	if len(cache.Models) > 0 {
 		if m.remoteCatalogAuthoritative() && hasRemoteSourceOfTruthModel(cache.Models) {
 			m.remoteModels = cloneModelInfos(cache.Models)
