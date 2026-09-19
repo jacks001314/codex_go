@@ -69,14 +69,16 @@ func (r *RuntimeRouter) emitMCPToolCallAnalyticsEvent(ctx context.Context, conne
 		RequestedNetworkAccess:         reviewSummary.RequestedNetworkAccess,
 	}
 	r.enrichToolEventBase(&base, threadID, turnID)
-	event := telemetry.NewCodexMCPToolCallEvent(telemetry.CodexMCPToolCallEventParams{
+	params := telemetry.CodexMCPToolCallEventParams{
 		CodexToolItemEventBase: base,
 		MCPServerName:          threadItemMCPServer(item),
 		MCPToolName:            threadItemMCPTool(item),
 		MCPErrorPresent:        threadItemMCPError(item) != nil,
 		PluginID:               threadItemStringPtrFromData(item.Data, "pluginId", "plugin_id"),
+	}
+	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
+		sink.TrackCodexMCPToolCallEvent(ctx, telemetry.NewCodexMCPToolCallEvent(params))
 	})
-	sink.TrackCodexMCPToolCallEvent(ctx, event)
 }
 
 func (r *RuntimeRouter) emitDynamicToolCallAnalyticsEvent(ctx context.Context, connectionID string, threadID string, turnID string, item *ThreadItem, runConfig *appTurnRunConfig) {
@@ -141,15 +143,17 @@ func (r *RuntimeRouter) emitDynamicToolCallAnalyticsEvent(ctx context.Context, c
 		RequestedNetworkAccess:         reviewSummary.RequestedNetworkAccess,
 	}
 	r.enrichToolEventBase(&base, threadID, turnID)
-	event := telemetry.NewCodexDynamicToolCallEvent(telemetry.CodexDynamicToolCallEventParams{
+	params := telemetry.CodexDynamicToolCallEventParams{
 		CodexToolItemEventBase: base,
 		DynamicToolName:        threadItemDynamicTool(item),
 		Success:                threadItemBoolPtrFromData(item.Data, "success"),
 		OutputContentItemCount: contentCounts.Total,
 		OutputTextItemCount:    contentCounts.Text,
 		OutputImageItemCount:   contentCounts.Image,
+	}
+	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
+		sink.TrackCodexDynamicToolCallEvent(ctx, telemetry.NewCodexDynamicToolCallEvent(params))
 	})
-	sink.TrackCodexDynamicToolCallEvent(ctx, event)
 }
 
 func terminalToolOutcome(status string) (string, *string, bool) {

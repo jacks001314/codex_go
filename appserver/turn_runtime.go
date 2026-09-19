@@ -1803,6 +1803,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	// Rust flushes a turn's tool-response state once the turn closes, so its
 	// sampled call-id evidence cannot classify a later turn's events.
+	r.flushPendingToolEvents(threadID, turnID)
 	r.forgetSampledToolCalls(threadID, turnID)
 	if usage := tokenUsageFromAgentLoopResult(result); usage != nil {
 		usage.ModelContextWindow = positiveInt64Ptr(r.effectiveModelContextWindowForModel(runConfig.Model, params))

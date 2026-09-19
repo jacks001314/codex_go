@@ -86,7 +86,7 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 		RequestedNetworkAccess:         reviewSummary.RequestedNetworkAccess,
 	}
 	r.enrichToolEventBase(&base, threadID, turnID)
-	event := telemetry.NewCodexCommandExecutionEvent(telemetry.CodexCommandExecutionEventParams{
+	params := telemetry.CodexCommandExecutionEventParams{
 		CodexToolItemEventBase:      base,
 		ModelSlug:                   optionalModelLabel(modelContext.ModelSlug),
 		ReasoningEffort:             optionalModelLabel(modelContext.ReasoningEffort),
@@ -99,8 +99,10 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 		CommandListFilesActionCount: counts.ListFiles,
 		CommandSearchActionCount:    counts.Search,
 		CommandUnknownActionCount:   counts.Unknown,
+	}
+	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
+		sink.TrackCodexCommandExecutionEvent(ctx, telemetry.NewCodexCommandExecutionEvent(params))
 	})
-	sink.TrackCodexCommandExecutionEvent(ctx, event)
 }
 
 // optionalModelLabel reports a non-empty label and leaves the field absent (JSON

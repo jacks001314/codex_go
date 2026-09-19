@@ -70,15 +70,17 @@ func (r *RuntimeRouter) emitFileChangeAnalyticsEvent(ctx context.Context, connec
 		RequestedNetworkAccess:         reviewSummary.RequestedNetworkAccess,
 	}
 	r.enrichToolEventBase(&base, threadID, turnID)
-	event := telemetry.NewCodexFileChangeEvent(telemetry.CodexFileChangeEventParams{
+	params := telemetry.CodexFileChangeEventParams{
 		CodexToolItemEventBase: base,
 		FileChangeCount:        counts.Total,
 		FileAddCount:           counts.Add,
 		FileUpdateCount:        counts.Update,
 		FileDeleteCount:        counts.Delete,
 		FileMoveCount:          counts.Move,
+	}
+	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
+		sink.TrackCodexFileChangeEvent(ctx, telemetry.NewCodexFileChangeEvent(params))
 	})
-	sink.TrackCodexFileChangeEvent(ctx, event)
 }
 
 func fileChangeAnalyticsOutcome(status PatchApplyStatus) (string, *string, bool) {

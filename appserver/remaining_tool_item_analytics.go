@@ -32,7 +32,7 @@ func (r *RuntimeRouter) emitCollabAgentToolCallAnalyticsEvent(ctx context.Contex
 	if !ok {
 		return
 	}
-	event := telemetry.NewCodexCollabAgentToolCallEvent(telemetry.CodexCollabAgentToolCallEventParams{
+	params := telemetry.CodexCollabAgentToolCallEventParams{
 		CodexToolItemEventBase:   base,
 		SenderThreadID:           threadItemStringFromData(item.Data, "senderThreadId", "sender_thread_id"),
 		ReceiverThreadCount:      uint64(len(receiverThreadIDs)),
@@ -42,8 +42,10 @@ func (r *RuntimeRouter) emitCollabAgentToolCallAnalyticsEvent(ctx context.Contex
 		AgentStateCount:          uint64PtrFromUint(len(states)),
 		CompletedAgentCount:      uint64PtrFromUint(completedCount),
 		FailedAgentCount:         uint64PtrFromUint(failedCount),
+	}
+	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
+		sink.TrackCodexCollabAgentToolCallEvent(ctx, telemetry.NewCodexCollabAgentToolCallEvent(params))
 	})
-	sink.TrackCodexCollabAgentToolCallEvent(ctx, event)
 }
 
 func (r *RuntimeRouter) emitWebSearchAnalyticsEvent(ctx context.Context, connectionID string, threadID string, turnID string, item *ThreadItem, runConfig *appTurnRunConfig) {
@@ -65,13 +67,15 @@ func (r *RuntimeRouter) emitWebSearchAnalyticsEvent(ctx context.Context, connect
 		return
 	}
 	query := threadItemWebSearchQuery(item)
-	event := telemetry.NewCodexWebSearchEvent(telemetry.CodexWebSearchEventParams{
+	params := telemetry.CodexWebSearchEventParams{
 		CodexToolItemEventBase: base,
 		WebSearchAction:        webSearchAnalyticsActionKind(item),
 		QueryPresent:           strings.TrimSpace(query) != "",
 		QueryCount:             webSearchAnalyticsQueryCount(query, item),
+	}
+	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
+		sink.TrackCodexWebSearchEvent(ctx, telemetry.NewCodexWebSearchEvent(params))
 	})
-	sink.TrackCodexWebSearchEvent(ctx, event)
 }
 
 func (r *RuntimeRouter) emitImageGenerationAnalyticsEvent(ctx context.Context, connectionID string, threadID string, turnID string, item *ThreadItem, runConfig *appTurnRunConfig) {
@@ -94,13 +98,15 @@ func (r *RuntimeRouter) emitImageGenerationAnalyticsEvent(ctx context.Context, c
 	if !ok {
 		return
 	}
-	event := telemetry.NewCodexImageGenerationEvent(telemetry.CodexImageGenerationEventParams{
+	params := telemetry.CodexImageGenerationEventParams{
 		CodexToolItemEventBase: base,
 		RevisedPromptPresent:   threadItemStringPtrFromData(item.Data, "revisedPrompt", "revised_prompt") != nil,
 		SavedPathPresent:       threadItemStringPtrFromData(item.Data, "savedPath", "saved_path") != nil,
 		TransparentBackground:  threadItemBoolPtrFromData(item.Data, "transparentBackground", "transparent_background"),
+	}
+	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
+		sink.TrackCodexImageGenerationEvent(ctx, telemetry.NewCodexImageGenerationEvent(params))
 	})
-	sink.TrackCodexImageGenerationEvent(ctx, event)
 }
 
 func (r *RuntimeRouter) toolItemAnalyticsBase(connectionID string, threadID string, turnID string, item *ThreadItem, toolName string, terminalStatus string, failureKind *string, executionDurationMS *uint64) (telemetry.CodexToolItemEventBase, bool) {

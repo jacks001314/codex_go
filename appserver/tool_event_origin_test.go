@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"fmt"
 	"testing"
 
 	"codex_go/model"
@@ -178,5 +179,176 @@ func TestEnrichToolEventBaseCorrelatesCodeModeCallsLikeRust(t *testing.T) {
 	router.enrichToolEventBase(&closed, threadID, turnID)
 	if closed.CellID != nil || closed.ParentCallID != nil || closed.OriginatingResponseID != nil {
 		t.Fatalf("correlation after turn close = %#v", closed)
+	}
+}
+
+// Mirrors Rust #36729's deferred emission: a correlated tool event waits until a
+// later sampled response completes and then names that response as its
+// subsequent one, while an uncorrelated event is published immediately.
+func TestCorrelatedToolEventsWaitForTheNextResponseLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	const threadID = "thread-1"
+	const turnID = "turn-1"
+	emitted := 0
+
+	correlated := telemetry.CodexToolItemEventBase{
+		ThreadID:              threadID,
+		TurnID:                turnID,
+		ItemID:                "exec-1",
+		CellID:                stringPtr("cell-1"),
+		OriginatingResponseID: stringPtr("response-1"),
+	}
+	router.emitToolEvent(threadID, turnID, &correlated, func() { emitted++ })
+	if emitted != 0 {
+		t.Fatalf("a correlated event must wait, emitted = %d", emitted)
+	}
+
+	// The next sampled response releases it with the subsequent response id.
+	router.rememberSampledToolCalls(threadID, turnID, "response-2", []string{"wait-1"})
+	if emitted != 1 {
+		t.Fatalf("emitted after the next response = %d, want 1", emitted)
+	}
+	if correlated.SubsequentResponseID == nil || *correlated.SubsequentResponseID != "response-2" {
+		t.Fatalf("subsequent response = %#v", correlated.SubsequentResponseID)
+	}
+
+	// An event whose response is the one that just completed keeps waiting.
+	sameResponse := telemetry.CodexToolItemEventBase{
+		ItemID:                "exec-2",
+		OriginatingResponseID: stringPtr("response-2"),
+	}
+	router.emitToolEvent(threadID, turnID, &sameResponse, func() { emitted++ })
+	router.rememberSampledToolCalls(threadID, turnID, "response-2", []string{"exec-2"})
+	if emitted != 1 {
+		t.Fatalf("same-response event released early: emitted = %d", emitted)
+	}
+	// A later response releases it.
+	router.rememberSampledToolCalls(threadID, turnID, "response-3", nil)
+	if emitted != 2 || sameResponse.SubsequentResponseID == nil || *sameResponse.SubsequentResponseID != "response-3" {
+		t.Fatalf("release on a later response = %d/%#v", emitted, sameResponse.SubsequentResponseID)
+	}
+
+	// An event with no correlation evidence is published immediately.
+	plain := telemetry.CodexToolItemEventBase{ItemID: "user-shell-1"}
+	router.emitToolEvent(threadID, turnID, &plain, func() { emitted++ })
+	if emitted != 3 {
+		t.Fatalf("uncorrelated event = %d, want an immediate publish", emitted)
+	}
+
+	// A turn close publishes whatever is still waiting.
+	router.emitToolEvent(threadID, turnID, &correlated, func() { emitted++ })
+	router.flushPendingToolEvents(threadID, turnID)
+	if emitted != 4 {
+		t.Fatalf("turn close flush = %d, want 4", emitted)
+	}
+	// The buffered event kept the subsequent response it was released with.
+	if correlated.SubsequentResponseID == nil || *correlated.SubsequentResponseID != "response-2" {
+		t.Fatalf("flushed event subsequent response = %#v", correlated.SubsequentResponseID)
+	}
+}
+
+// Mirrors Rust's bounded pending queue: the oldest correlated event is published
+// first when the queue overflows.
+func TestPendingToolEventQueueIsBoundedLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	const threadID = "thread-1"
+	const turnID = "turn-1"
+	emitted := make([]string, 0, maxPendingToolEventsPerTurn+1)
+	base := telemetry.CodexToolItemEventBase{OriginatingResponseID: stringPtr("response-1")}
+	for index := 0; index < maxPendingToolEventsPerTurn+1; index++ {
+		itemID := fmt.Sprintf("exec-%d", index)
+		router.emitToolEvent(threadID, turnID, &base, func() { emitted = append(emitted, itemID) })
+	}
+
+	if len(emitted) != 1 || emitted[0] != "exec-0" {
+		t.Fatalf("overflow emitted %#v, want the oldest event", emitted)
+	}
+}
+
+// Mirrors the streaming half of Rust's correlation: the stream handler publishes
+// a sampled response's tool call ids when the response completes, which both
+// classifies the call and releases the correlated events waiting for a later
+// response.
+func TestStreamHandlerPublishesSampledResponsesAndReleasesEventsLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	const threadID = "thread-1"
+	const turnID = "turn-1"
+	state := newResponsesStreamNotificationState(false, turnID)
+
+	// A tool event for the call response-1 is about to emit waits for the next
+	// response.
+	pending := telemetry.CodexToolItemEventBase{
+		ItemID:                "exec-1",
+		OriginatingResponseID: stringPtr("response-1"),
+	}
+	released := 0
+	router.emitToolEvent(threadID, turnID, &pending, func() { released++ })
+	if released != 0 {
+		t.Fatalf("correlated event published immediately: %d", released)
+	}
+
+	// response-1 streams the call, then completes.
+	router.notifyResponsesStreamEvent(threadID, turnID, &model.ResponsesStreamEvent{
+		Kind:       model.ResponsesStreamEventOutputDone,
+		ResponseID: "response-1",
+		Item:       &model.AgentItem{Type: "function_call", CallID: "exec-1"},
+	}, state)
+	router.notifyResponsesStreamEvent(threadID, turnID, &model.ResponsesStreamEvent{
+		Kind:       model.ResponsesStreamEventCompleted,
+		ResponseID: "response-1",
+	}, state)
+	if released != 0 {
+		t.Fatalf("the event's own response must not release it: %d", released)
+	}
+	if got := router.toolEventTypeForCall(threadID, turnID, "exec-1"); got == nil || *got != telemetry.ToolEventTypeModelToolCall {
+		t.Fatalf("streamed call classification = %#v", got)
+	}
+
+	// response-2 completes: the waiting event is released with it.
+	router.notifyResponsesStreamEvent(threadID, turnID, &model.ResponsesStreamEvent{
+		Kind:       model.ResponsesStreamEventCompleted,
+		ResponseID: "response-2",
+	}, state)
+	if released != 1 {
+		t.Fatalf("released after response-2 = %d, want 1", released)
+	}
+	if pending.SubsequentResponseID == nil || *pending.SubsequentResponseID != "response-2" {
+		t.Fatalf("subsequent response = %#v", pending.SubsequentResponseID)
+	}
+
+	// The per-response collection starts fresh for the next response.
+	if got := router.toolEventTypeForCall(threadID, turnID, "exec-2"); got != nil {
+		t.Fatalf("unstreamed call classification = %#v", got)
+	}
+}
+
+// Mirrors Rust's ThreadClosed handling: a closing thread publishes its waiting
+// correlated events and drops its code-mode and per-turn evidence.
+func TestClosingThreadFlushesAndDropsToolEvidenceLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	const threadID = "thread-1"
+	const turnID = "turn-1"
+	router.rememberSampledToolCalls(threadID, turnID, "response-1", []string{"exec-1"})
+	router.rememberCodeModeCell(threadID, turnID, "cell-1", "exec-1")
+
+	released := 0
+	pending := telemetry.CodexToolItemEventBase{ItemID: "child-1", CellID: stringPtr("cell-1")}
+	router.emitToolEvent(threadID, turnID, &pending, func() { released++ })
+	if released != 0 {
+		t.Fatalf("correlated event published immediately: %d", released)
+	}
+
+	router.flushThreadPendingToolEvents(threadID)
+	if released != 1 {
+		t.Fatalf("close flush = %d, want 1", released)
+	}
+	router.forgetThreadToolEvidence(threadID)
+	if got := router.toolEventTypeForCall(threadID, turnID, "exec-1"); got != nil {
+		t.Fatalf("sampled evidence survived the close: %#v", got)
+	}
+	closed := telemetry.CodexToolItemEventBase{ItemID: "child-1"}
+	router.enrichToolEventBase(&closed, threadID, turnID)
+	if closed.CellID != nil || closed.ParentCallID != nil {
+		t.Fatalf("cell evidence survived the close: %#v", closed)
 	}
 }

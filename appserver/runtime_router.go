@@ -366,7 +366,11 @@ type RuntimeRouter struct {
 	// codeModeCells records, per thread, the cells the code mode started with the
 	// call that created them and the response it came from (Rust #36729's
 	// `code_mode_cells`).
-	codeModeCells           map[string]map[string]codeModeCellState
+	codeModeCells map[string]map[string]codeModeCellState
+	// pendingToolEvents holds correlated tool events per (thread, turn) until a
+	// later sampled response is known, so they can name the subsequent response
+	// (Rust #36729's `pending_tool_events`).
+	pendingToolEvents       map[string][]pendingToolEvent
 	networkApproval         *networkApprovalService
 	execPolicySaved         *execPolicySavedState
 	managedNetworkReloadMu  sync.Mutex
@@ -601,6 +605,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		sampledToolCalls:        map[string]map[string]string{},
 		codeModeChildCalls:      map[string]map[string]string{},
 		codeModeCells:           map[string]map[string]codeModeCellState{},
+		pendingToolEvents:       map[string][]pendingToolEvent{},
 		managedNetworks:         map[string]*network.PreparedProxyManagedNetwork{},
 		managedNetworkInputs:    map[string]managedNetworkReloadInput{},
 		goalAccountingTurns:     map[string]stateGoalTurnSnapshot{},
@@ -5398,6 +5403,10 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	delete(r.skillWarnings, threadID)
 	r.skillWarningsMu.Unlock()
 	r.forgetMCPToolApprovals(threadID)
+	// Rust flushes a closing thread's correlated tool events and drops its
+	// code-mode cell evidence (ThreadClosed).
+	r.flushThreadPendingToolEvents(threadID)
+	r.forgetThreadToolEvidence(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
 		slog.Warn("failed to close thread code-mode runtime", "thread_id", threadID, "error", err)
 	}

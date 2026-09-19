@@ -17,6 +17,9 @@ const (
 	// sampled response, mirroring
 	// MAX_ANALYTICS_TOOL_CALL_IDS_PER_RESPONSE.
 	maxSampledToolCallsPerResponse = 256
+	// maxPendingToolEventsPerTurn bounds the correlated tool events waiting for a
+	// later sampled response, mirroring Rust's MAX_TOOL_RESPONSE_ENTRIES.
+	maxPendingToolEventsPerTurn = 256
 )
 
 func sampledToolCallsKey(threadID string, turnID string) string {
@@ -55,6 +58,7 @@ func (r *RuntimeRouter) rememberSampledToolCallsFromTurnResult(threadID string, 
 // the response-correlation lane; the classification only needs the call ids.
 func (r *RuntimeRouter) rememberSampledToolCalls(threadID string, turnID string, responseID string, callIDs []string) {
 	if r == nil || len(callIDs) == 0 {
+		r.releasePendingToolEvents(threadID, turnID, responseID)
 		return
 	}
 	key := sampledToolCallsKey(threadID, turnID)
@@ -62,7 +66,6 @@ func (r *RuntimeRouter) rememberSampledToolCalls(threadID string, turnID string,
 		return
 	}
 	r.sampledToolCallsMu.Lock()
-	defer r.sampledToolCallsMu.Unlock()
 	if r.sampledToolCalls == nil {
 		r.sampledToolCalls = map[string]map[string]string{}
 	}
@@ -93,6 +96,128 @@ func (r *RuntimeRouter) rememberSampledToolCalls(threadID string, turnID string,
 				r.codeModeCells[threadID][cellID] = cell
 			}
 		}
+	}
+	r.sampledToolCallsMu.Unlock()
+	// Rust releases the events waiting on a later response as soon as one is
+	// known.
+	r.releasePendingToolEvents(threadID, turnID, responseID)
+}
+
+// pendingToolEvent is one correlated tool event held until a later sampled
+// response is known; releasing it fills the event's subsequent response id
+// (Rust #36729's `pending_tool_events`).
+type pendingToolEvent struct {
+	base *telemetry.CodexToolItemEventBase
+	emit func()
+}
+
+// emitToolEvent publishes one tool event the way Rust's `record_tool_event`
+// does: an event with neither a cell nor an originating response is published
+// immediately, while a correlated one waits until a later sampled response
+// completes. The queue is bounded like Rust's MAX_TOOL_RESPONSE_ENTRIES, and the
+// oldest event is published first when it overflows.
+func (r *RuntimeRouter) emitToolEvent(threadID string, turnID string, base *telemetry.CodexToolItemEventBase, emit func()) {
+	if r == nil || emit == nil {
+		return
+	}
+	if base == nil || (base.CellID == nil && base.OriginatingResponseID == nil) {
+		emit()
+		return
+	}
+	key := sampledToolCallsKey(threadID, turnID)
+	r.sampledToolCallsMu.Lock()
+	if r.pendingToolEvents == nil {
+		r.pendingToolEvents = map[string][]pendingToolEvent{}
+	}
+	pending := append(r.pendingToolEvents[key], pendingToolEvent{base: base, emit: emit})
+	var overflow *pendingToolEvent
+	if len(pending) > maxPendingToolEventsPerTurn {
+		oldest := pending[0]
+		pending = pending[1:]
+		overflow = &oldest
+	}
+	r.pendingToolEvents[key] = pending
+	r.sampledToolCallsMu.Unlock()
+	if overflow != nil {
+		overflow.emit()
+	}
+}
+
+// releasePendingToolEvents publishes the queued events whose originating response
+// is a different, already known response, stamping that response as their
+// subsequent one (Rust's `ingest_sampling_response_completed` release loop).
+func (r *RuntimeRouter) releasePendingToolEvents(threadID string, turnID string, responseID string) {
+	if r == nil {
+		return
+	}
+	responseID = strings.TrimSpace(responseID)
+	key := sampledToolCallsKey(threadID, turnID)
+	r.sampledToolCallsMu.Lock()
+	pending := r.pendingToolEvents[key]
+	if len(pending) == 0 {
+		r.sampledToolCallsMu.Unlock()
+		return
+	}
+	released := make([]pendingToolEvent, 0, len(pending))
+	remaining := pending[:0]
+	for _, event := range pending {
+		if event.base != nil {
+			r.enrichToolEventBaseLocked(event.base, threadID, turnID)
+		}
+		originating := ""
+		if event.base != nil && event.base.OriginatingResponseID != nil {
+			originating = strings.TrimSpace(*event.base.OriginatingResponseID)
+		}
+		if responseID == "" || originating == "" || originating == responseID {
+			remaining = append(remaining, event)
+			continue
+		}
+		if event.base != nil {
+			subsequent := responseID
+			event.base.SubsequentResponseID = &subsequent
+		}
+		released = append(released, event)
+	}
+	r.pendingToolEvents[key] = remaining
+	r.sampledToolCallsMu.Unlock()
+	for _, event := range released {
+		event.emit()
+	}
+}
+
+// flushPendingToolEvents publishes every queued event for a thread and turn,
+// which is what Rust does when a turn completes or a thread closes.
+func (r *RuntimeRouter) flushPendingToolEvents(threadID string, turnID string) {
+	if r == nil {
+		return
+	}
+	key := sampledToolCallsKey(threadID, turnID)
+	r.sampledToolCallsMu.Lock()
+	pending := r.pendingToolEvents[key]
+	delete(r.pendingToolEvents, key)
+	r.sampledToolCallsMu.Unlock()
+	for _, event := range pending {
+		event.emit()
+	}
+}
+
+// flushThreadPendingToolEvents publishes every queued event for a closing thread.
+func (r *RuntimeRouter) flushThreadPendingToolEvents(threadID string) {
+	if r == nil {
+		return
+	}
+	prefix := strings.TrimSpace(threadID) + "\x00"
+	r.sampledToolCallsMu.Lock()
+	flushed := []pendingToolEvent{}
+	for key, pending := range r.pendingToolEvents {
+		if strings.HasPrefix(key, prefix) {
+			flushed = append(flushed, pending...)
+			delete(r.pendingToolEvents, key)
+		}
+	}
+	r.sampledToolCallsMu.Unlock()
+	for _, event := range flushed {
+		event.emit()
 	}
 }
 
@@ -303,16 +428,25 @@ func (r *RuntimeRouter) enrichToolEventBase(base *telemetry.CodexToolItemEventBa
 		return
 	}
 	base.SessionID = firstNonEmpty(base.SessionID, r.responsesMetadataLineage(threadID).SessionID)
+	r.sampledToolCallsMu.Lock()
+	defer r.sampledToolCallsMu.Unlock()
+	r.enrichToolEventBaseLocked(base, threadID, turnID)
+}
+
+// enrichToolEventBaseLocked fills the correlation fields; the caller holds
+// sampledToolCallsMu.
+func (r *RuntimeRouter) enrichToolEventBaseLocked(base *telemetry.CodexToolItemEventBase, threadID string, turnID string) {
+	if r == nil || base == nil {
+		return
+	}
 	itemID := strings.TrimSpace(base.ItemID)
 	if itemID == "" {
 		return
 	}
 	key := sampledToolCallsKey(threadID, turnID)
-	r.sampledToolCallsMu.Lock()
 	childCellID := strings.TrimSpace(r.codeModeChildCalls[key][itemID])
 	cell, cellKnown := r.codeModeCells[threadID][childCellID]
 	sampledResponseID := strings.TrimSpace(r.sampledToolCalls[key][itemID])
-	r.sampledToolCallsMu.Unlock()
 
 	if base.CellID == nil && childCellID != "" {
 		base.CellID = &childCellID
@@ -329,5 +463,36 @@ func (r *RuntimeRouter) enrichToolEventBase(base *telemetry.CodexToolItemEventBa
 	responseID := firstNonEmpty(sampledResponseID, cell.OriginatingResponseID)
 	if responseID != "" {
 		base.OriginatingResponseID = &responseID
+	}
+}
+
+// forgetThreadToolEvidence drops a closing thread's Code Mode cells and per-turn
+// evidence, mirroring Rust's ThreadClosed handling.
+func (r *RuntimeRouter) forgetThreadToolEvidence(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	prefix := threadID + "\x00"
+	r.sampledToolCallsMu.Lock()
+	defer r.sampledToolCallsMu.Unlock()
+	delete(r.codeModeCells, threadID)
+	for key := range r.sampledToolCalls {
+		if strings.HasPrefix(key, prefix) {
+			delete(r.sampledToolCalls, key)
+		}
+	}
+	for key := range r.codeModeChildCalls {
+		if strings.HasPrefix(key, prefix) {
+			delete(r.codeModeChildCalls, key)
+		}
+	}
+	for key := range r.pendingToolEvents {
+		if strings.HasPrefix(key, prefix) {
+			delete(r.pendingToolEvents, key)
+		}
 	}
 }
