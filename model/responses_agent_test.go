@@ -1935,12 +1935,26 @@ func TestResponsesAgentRunnerGuardianEndpointRouting(t *testing.T) {
 	// Disabling free_guardian keeps /responses even for a Guardian review
 	// request.
 	runner = makeRunner(false)
-	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{TaskKind: AgentTaskReview}, &responsesAgentRequest{Model: DefaultApprovalReviewPreferredModel}, "")
+	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{TaskKind: AgentTaskReview}, &responsesAgentRequest{Model: "gpt-test"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(request.URL.Path, "/responses") {
 		t.Fatalf("disabled path = %q, want /responses", request.URL.Path)
+	}
+	// A Guardian reviewer request never carries a routing hint, even when it
+	// falls back to the standard /responses route (Rust's `!guardian_reviewer`
+	// guard).
+	if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "" {
+		t.Fatalf("standard-route guardian routing hint = %q, want empty", got)
+	}
+	// An ordinary request on the same runner still carries one.
+	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{}, &responsesAgentRequest{Model: "gpt-test"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "model=gpt-test" {
+		t.Fatalf("ordinary routing hint = %q, want %q", got, "model=gpt-test")
 	}
 }
 

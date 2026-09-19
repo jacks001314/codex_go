@@ -1449,8 +1449,10 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	addBetaFeaturesHeader(httpRequest.Header, apiRequest.BetaFeaturesHeader)
 	addOriginatorHeader(httpRequest.Header, requestOriginator(request))
 	// Routing hints are only sent on the standard /responses route; the
-	// dedicated Guardian endpoints omit them (Rust #40892).
-	if endpoint == ResponsesEndpointResponses {
+	// dedicated Guardian endpoints omit them (Rust #40892), and a Guardian
+	// reviewer request never carries one even on the standard route (Rust's
+	// `!guardian_reviewer` guard around build_routing_hint_header).
+	if endpoint == ResponsesEndpointResponses && !isGuardianReviewRequest(request) {
 		if routingHint := r.responsesRoutingHint(apiRequest.Model, apiRequest.ServiceTier); routingHint != "" {
 			httpRequest.Header.Set(codexapi.ClientCodexRoutingHintHeader, routingHint)
 		}
