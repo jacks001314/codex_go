@@ -51,6 +51,10 @@ func ChromaThemeForCodexTheme(themeID string) string {
 	if style := customThemeChromaStyle(id, DefaultThemeDir()); style != "" {
 		return style
 	}
+	// Bundled assets the highlighter crate does not ship (Rust #46504).
+	if style := bundledThemeChromaStyle(id); style != "" {
+		return style
+	}
 	for prefix, style := range codexThemeToChromaPrefix {
 		if strings.HasPrefix(id, prefix) {
 			return style

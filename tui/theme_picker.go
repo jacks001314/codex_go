@@ -17,7 +17,11 @@ const (
 
 var builtinThemeIDs = []string{
 	"1337",
+	// Rust #46504 bundles these six TextMate themes under
+	// codex-rs/tui/assets/themes and ships them in the theme picker.
+	"ada",
 	"ansi",
+	"babbage",
 	"base16",
 	"base16-256",
 	"base16-eighties-dark",
@@ -30,7 +34,11 @@ var builtinThemeIDs = []string{
 	"catppuccin-mocha",
 	"coldark-cold",
 	"coldark-dark",
+	"curie",
+	"cushman",
+	"dali",
 	"dark-neon",
+	"davinci",
 	"dracula",
 	"github",
 	"gruvbox-dark",
