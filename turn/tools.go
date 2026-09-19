@@ -64,11 +64,15 @@ type ToolRegistryOptions struct {
 	// `_meta.sessionId` and `_meta.windowId` (Rust with_mcp_tool_call_ids_meta,
 	// #45409). WindowID is the same `{thread_id}:{window_number}` string the
 	// turn's Responses client metadata reports as `x-codex-window-id`.
-	WindowID                  string
-	OrchestratorSkillsEnabled *bool
-	SkillProviders            *skillprovider.Registry
-	OpenAIFileRewriter        *mcp.OpenAIFileRewriter
-	Model                     string
+	WindowID string
+	// MCPConnectorAuthFailureObserver reports a host-owned apps call whose raw
+	// result is a trusted connector authentication failure, so the caller can
+	// classify the call for analytics (Rust #45716). Nil leaves the report off.
+	MCPConnectorAuthFailureObserver func(callID string)
+	OrchestratorSkillsEnabled       *bool
+	SkillProviders                  *skillprovider.Registry
+	OpenAIFileRewriter              *mcp.OpenAIFileRewriter
+	Model                           string
 	// ModelConfirmationPolicies carries the issuing model's Browser Use /
 	// Computer Use confirmation-policy Markdown (#41072), forwarded to actor MCP
 	// calls. Nil results in an empty openai/confirmation_policies object for
@@ -691,6 +695,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			CaptureResultMetadata:             captureResultMetadata,
 			SessionID:                         options.SessionID,
 			WindowID:                          options.WindowID,
+			ConnectorAuthFailureObserver:      options.MCPConnectorAuthFailureObserver,
 		})
 		spec := executor.Spec()
 		spec.NamespaceDescription = mcp.BoundedMCPNamespaceDescription(info.NamespaceDescription)

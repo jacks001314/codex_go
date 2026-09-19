@@ -12,6 +12,7 @@ import (
 	"codex_go/mcp"
 	"codex_go/sandbox"
 	"codex_go/state"
+	"codex_go/telemetry"
 	"codex_go/tool"
 )
 
@@ -106,6 +107,23 @@ func (r *RuntimeRouter) newAppserverMCPToolApprovalOptions(
 // ApproveMCPToolCall returns the decision for a custom MCP tool call that the
 // executor determined requires approval.
 func (h *appserverMCPToolApprovalHandler) ApproveMCPToolCall(ctx context.Context, request *mcp.MCPToolApprovalRequest) (mcp.MCPToolApprovalOutcome, error) {
+	outcome, err := h.approveMCPToolCall(ctx, request)
+	// Rust #45716: a denied, aborted or timed-out approval is classified for
+	// analytics; an approval is not, so the call's classification stays null.
+	if h.router != nil && request != nil && (err != nil || mcpToolApprovalIsDenied(outcome.Decision)) {
+		h.router.rememberMCPToolCallElicitation(h.threadID, h.turnID, strings.TrimSpace(request.CallID), telemetry.ElicitationTypeApproval)
+	}
+	return outcome, err
+}
+
+// mcpToolApprovalIsDenied reports whether an approval outcome denies or aborts
+// the call (Rust ReviewDecision::Denied/Abort), which is the case that carries
+// the approval classification.
+func mcpToolApprovalIsDenied(decision mcp.MCPToolApprovalDecision) bool {
+	return decision == mcp.MCPToolApprovalDeny || decision == mcp.MCPToolApprovalReject
+}
+
+func (h *appserverMCPToolApprovalHandler) approveMCPToolCall(ctx context.Context, request *mcp.MCPToolApprovalRequest) (mcp.MCPToolApprovalOutcome, error) {
 	if h == nil || request == nil {
 		return mcp.MCPToolApprovalOutcome{Decision: mcp.MCPToolApprovalDeny}, nil
 	}

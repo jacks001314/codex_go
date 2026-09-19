@@ -75,6 +75,10 @@ func (r *RuntimeRouter) emitMCPToolCallAnalyticsEvent(ctx context.Context, conne
 		MCPToolName:            threadItemMCPTool(item),
 		MCPErrorPresent:        threadItemMCPError(item) != nil,
 		PluginID:               threadItemStringPtrFromData(item.Data, "pluginId", "plugin_id"),
+		ConnectorID:            threadItemStringPtrFromData(item.Data, "connectorId", "connector_id"),
+		// Rust #45649/#45716: the classification the call's producer queued before
+		// this item completed, if any.
+		ElicitationType: r.takeMCPToolCallElicitation(threadID, turnID, itemID),
 	}
 	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
 		sink.TrackCodexMCPToolCallEvent(ctx, telemetry.NewCodexMCPToolCallEvent(params))

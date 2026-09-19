@@ -24,6 +24,13 @@ const (
 	ToolEventTypeInnerToolCall = "inner_tool_call"
 )
 
+// MCP elicitation classifications (Rust #45649's ElicitationType): why a call
+// needed authentication or approval rather than ordinary execution.
+const (
+	ElicitationTypeAuthOrLink = "auth_or_link"
+	ElicitationTypeApproval   = "approval"
+)
+
 const (
 	ToolItemFailureKindToolError       = "tool_error"
 	ToolItemFailureKindApprovalDenied  = "approval_denied"
@@ -168,6 +175,13 @@ type CodexMCPToolCallEventParams struct {
 	MCPToolName     string  `json:"mcp_tool_name"`
 	MCPErrorPresent bool    `json:"mcp_error_present"`
 	PluginID        *string `json:"plugin_id"`
+	// ConnectorID is the trusted Codex Apps connector the call resolved to (Rust
+	// #32867).
+	ConnectorID *string `json:"connector_id"`
+	// ElicitationType classifies the call when it ended in an authentication or
+	// account-linking block (`auth_or_link`) or in a denied, aborted or timed-out
+	// approval (`approval`); ordinary calls report null (Rust #45649/#45716).
+	ElicitationType *string `json:"elicitation_type"`
 }
 
 type CodexDynamicToolCallEventRequest struct {

@@ -370,7 +370,11 @@ type RuntimeRouter struct {
 	// pendingToolEvents holds correlated tool events per (thread, turn) until a
 	// later sampled response is known, so they can name the subsequent response
 	// (Rust #36729's `pending_tool_events`).
-	pendingToolEvents       map[string][]pendingToolEvent
+	pendingToolEvents map[string][]pendingToolEvent
+	// pendingMCPElicitations queues MCP call classifications (auth_or_link,
+	// approval) before the items they belong to complete (Rust #45649).
+	mcpElicitationsMu       sync.Mutex
+	pendingMCPElicitations  []pendingMCPElicitation
 	networkApproval         *networkApprovalService
 	execPolicySaved         *execPolicySavedState
 	managedNetworkReloadMu  sync.Mutex
@@ -5407,6 +5411,7 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	// code-mode cell evidence (ThreadClosed).
 	r.flushThreadPendingToolEvents(threadID)
 	r.forgetThreadToolEvidence(threadID)
+	r.forgetThreadMCPToolCallElicitations(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
 		slog.Warn("failed to close thread code-mode runtime", "thread_id", threadID, "error", err)
 	}
@@ -13911,6 +13916,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// conversation window, which is the same window id the turn's Responses
 	// client metadata carries as `x-codex-window-id`.
 	options.WindowID = r.windowIDForThread(threadID)
+	// Rust #45716: a host-owned apps call whose raw result is a connector auth
+	// failure is classified for analytics, before the elicitation rewrites it.
+	options.MCPConnectorAuthFailureObserver = func(callID string) {
+		r.rememberMCPToolCallElicitation(threadID, strings.TrimSpace(turnID), callID, telemetry.ElicitationTypeAuthOrLink)
+	}
 	return turn.BuildToolRouter(options)
 }
 

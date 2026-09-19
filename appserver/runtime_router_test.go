@@ -20523,6 +20523,11 @@ func TestRuntimeRouterMCPToolCallEmitsAnalyticsLikeRust(t *testing.T) {
 	if eventParams.ToolEventType == nil || *eventParams.ToolEventType != telemetry.ToolEventTypeModelToolCall {
 		t.Fatalf("MCP tool_event_type = %#v", eventParams.ToolEventType)
 	}
+	// Rust #45649: an ordinary call carries no connector or elicitation
+	// classification.
+	if eventParams.ConnectorID != nil || eventParams.ElicitationType != nil {
+		t.Fatalf("ordinary MCP call classification = %#v/%#v", eventParams.ConnectorID, eventParams.ElicitationType)
+	}
 	if eventParams.TerminalStatus != telemetry.ToolItemTerminalStatusCompleted ||
 		eventParams.FailureKind != nil ||
 		eventParams.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {

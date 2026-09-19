@@ -111,6 +111,11 @@ type ToolExecutorOptions struct {
 	// to an omitted key, which mirrors a call outside a session window.
 	SessionID string
 	WindowID  string
+	// ConnectorAuthFailureObserver reports a Codex Apps call whose raw result is a
+	// trusted connector authentication failure, before any callback or
+	// model-facing rewrite can change it (Rust #45716's classification). Nil
+	// leaves the report off.
+	ConnectorAuthFailureObserver func(callID string)
 }
 
 // AuthElicitationOptions carries the turn-scoped hooks the Codex Apps auth
@@ -156,6 +161,7 @@ type ToolExecutor struct {
 	authElicitation               *AuthElicitationOptions
 	toolApproval                  *ToolApprovalOptions
 	captureResultMetadata         bool
+	connectorAuthFailureObserver  func(callID string)
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -198,6 +204,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.authElicitation = options.AuthElicitation
 	executor.toolApproval = options.ToolApproval
 	executor.captureResultMetadata = options.CaptureResultMetadata
+	executor.connectorAuthFailureObserver = options.ConnectorAuthFailureObserver
 	return executor
 }
 
@@ -342,6 +349,12 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	// Rust maybe_request_codex_apps_auth_elicitation: a Codex Apps tool call that
 	// failed because the connector needs authentication can prompt the client to
 	// authorize it; on acceptance the model receives a completed result to retry.
+	// Rust #45716: the trusted connector auth-failure classification is captured
+	// from the raw result first, before the elicitation can rewrite it.
+	if e.connectorAuthFailureObserver != nil && e.resolvedServerName() == RuntimeCodexAppsMCPServerName &&
+		IsConnectorAuthFailureFromToolResult(response, strings.TrimSpace(e.connectorID)) {
+		e.connectorAuthFailureObserver(invocation.CallID)
+	}
 	response = e.maybeRequestCodexAppsAuthElicitation(ctx, invocation.CallID, response)
 	// Rust #41421: carry the effective per-tool output budget so tool output,
 	// post-tool hook responses, and resumed sessions share the same truncation

@@ -605,6 +605,40 @@ func TestCodexMCPToolCallEventSerializesExpectedRustShape(t *testing.T) {
 		params["final_approval_outcome"] != "unknown" {
 		t.Fatalf("MCP event JSON = %#v", got)
 	}
+	// Rust #32867/#45649: the connector and the elicitation classification are
+	// reported when the call has them and stay null otherwise.
+	if connector, present := params["connector_id"]; !present || connector != nil {
+		t.Fatalf("connector_id = %#v", connector)
+	}
+	if elicitation, present := params["elicitation_type"]; !present || elicitation != nil {
+		t.Fatalf("elicitation_type = %#v", elicitation)
+	}
+
+	classified := NewCodexMCPToolCallEvent(CodexMCPToolCallEventParams{
+		CodexToolItemEventBase: CodexToolItemEventBase{
+			ThreadID:             "thread-1",
+			TurnID:               "turn-1",
+			ItemID:               "mcp-1",
+			AppServerClient:      sampleAppServerClientMetadata(),
+			Runtime:              sampleRuntimeMetadata(),
+			ToolName:             "search",
+			FinalApprovalOutcome: FinalApprovalOutcomeUnknown,
+			TerminalStatus:       ToolItemTerminalStatusCompleted,
+		},
+		MCPServerName:   "server",
+		MCPToolName:     "search",
+		ConnectorID:     stringPtrTelemetry("connector_calendar"),
+		ElicitationType: stringPtrTelemetry(ElicitationTypeAuthOrLink),
+	})
+	var classifiedPayload map[string]any
+	if err := marshalUnmarshalTelemetry(classified, &classifiedPayload); err != nil {
+		t.Fatalf("marshal classified event error = %v", err)
+	}
+	classifiedParams := classifiedPayload["event_params"].(map[string]any)
+	if classifiedParams["connector_id"] != "connector_calendar" ||
+		classifiedParams["elicitation_type"] != ElicitationTypeAuthOrLink {
+		t.Fatalf("classified MCP event = %#v", classifiedParams)
+	}
 }
 
 func TestCodexDynamicToolCallEventSerializesExpectedRustShape(t *testing.T) {
