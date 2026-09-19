@@ -39,10 +39,13 @@ func TestModelExperimentalWritesClearDefaultOverridesLikeRust(t *testing.T) {
 	for _, edit := range writes[0] {
 		values[edit.KeyPath] = edit.Value
 	}
-	if value, ok := values["features.enable_request_compression"]; !ok || value != nil {
+	// Rust ExperimentalFeaturesView::write: a default-enabled feature keeps an
+	// explicit false so the default cannot re-enable it, while a default-off
+	// feature drops the override.
+	if value, ok := values["features.enable_request_compression"]; !ok || value != false {
 		t.Fatalf("default-enabled disable write = %#v", values)
 	}
-	if value, ok := values["features.network_proxy"]; !ok || value != false {
+	if value, ok := values["features.network_proxy"]; !ok || value != nil {
 		t.Fatalf("default-off disable write = %#v", values)
 	}
 
@@ -166,10 +169,13 @@ func TestModelExperimentalReadbackWarningLikeRust(t *testing.T) {
 	}
 }
 
-// TestExperimentalFeatureEditMatchesRust covers the two edit rules: the generic
-// popup path clears the override when disabling a default-enabled feature, and
-// the unmigrated controls clear it when disabling a default-off feature
-// (build_feature_enabled_edit).
+// TestExperimentalFeatureEditMatchesRust covers the edit rules: the generic
+// popup path persists an explicit false when disabling a default-enabled
+// feature and clears the override when disabling a default-off one (Rust
+// ExperimentalFeaturesView::write, as pinned by
+// experimental_features_tests::experimental_feature_writes_use_server_defaults...),
+// the daemon opt-out always stays explicit (#46117), and the unmigrated controls
+// clear it when disabling a default-off feature (build_feature_enabled_edit).
 func TestExperimentalFeatureEditMatchesRust(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -179,8 +185,9 @@ func TestExperimentalFeatureEditMatchesRust(t *testing.T) {
 		wantValue    any
 	}{
 		{name: "enable generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: true}, wantKeyPath: "features.beta", wantValue: true},
-		{name: "disable default-on generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: false, DefaultEnabled: true}, wantKeyPath: "features.beta", wantValueNil: true},
-		{name: "disable default-off generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: false}, wantKeyPath: "features.beta", wantValue: false},
+		{name: "disable default-on generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: false, DefaultEnabled: true}, wantKeyPath: "features.beta", wantValue: false},
+		{name: "disable default-off generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: false}, wantKeyPath: "features.beta", wantValueNil: true},
+		{name: "disable daemon_auto_start stays explicit", item: chatwidget.ExperimentalFeatureOption{Key: "daemon_auto_start", Enabled: false}, wantKeyPath: "features.daemon_auto_start", wantValue: false},
 		{name: "enable idle sleep", item: chatwidget.ExperimentalFeatureOption{Key: "prevent_idle_sleep", Enabled: true}, wantKeyPath: "features.prevent_idle_sleep", wantValue: true},
 		{name: "disable idle sleep", item: chatwidget.ExperimentalFeatureOption{Key: "prevent_idle_sleep", Enabled: false}, wantKeyPath: "features.prevent_idle_sleep", wantValueNil: true},
 		{name: "disable guardian default-on", item: chatwidget.ExperimentalFeatureOption{Key: "guardian_approval", Enabled: false, DefaultEnabled: true}, wantKeyPath: "features.guardian_approval", wantValue: false},
@@ -335,7 +342,9 @@ func TestModelExperimentalPopupRetainsUnconfirmedOnFailureLikeRust(t *testing.T)
 		t.Fatal("retry did not start")
 	}
 	runTeaCmd(t, model, retryCmd)
-	if len(writes) != 2 || len(writes[1]) != 1 || writes[1][0].KeyPath != "features.beta_feature" || writes[1][0].Value != false {
+	// The corrective write reverts a default-off feature to the server default
+	// by removing the key.
+	if len(writes) != 2 || len(writes[1]) != 1 || writes[1][0].KeyPath != "features.beta_feature" || writes[1][0].Value != nil {
 		t.Fatalf("retry writes = %#v", writes)
 	}
 	if model.modal != nil {

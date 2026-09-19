@@ -263,7 +263,11 @@ func experimentalFeatureEdit(item chatwidget.ExperimentalFeatureOption) Settings
 		}
 		return SettingsEdit{KeyPath: "features." + key, Value: value}
 	}
-	if !item.Enabled && item.DefaultEnabled {
+	// Rust ExperimentalFeaturesView::write: a server default is restored by
+	// removing the key, so an explicit `false` is only persisted when the
+	// default would otherwise enable the feature. The daemon opt-out stays
+	// explicit even before rollout defaults enable it (#46117).
+	if !item.Enabled && !item.DefaultEnabled && key != "daemon_auto_start" {
 		value = nil
 	}
 	return SettingsEdit{KeyPath: "features." + key, Value: value}

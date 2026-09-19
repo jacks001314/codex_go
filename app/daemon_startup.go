@@ -1,6 +1,8 @@
 package app
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -9,6 +11,7 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
+	"codex_go/features"
 )
 
 // Local daemon launch policy (Rust tui/src/daemon_startup.rs and
@@ -236,6 +239,59 @@ func localDaemonEndpointForLaunchWithProbe(root *cli.RootOptions, agentsOverview
 // background server for this codex home.
 func defaultLocalDaemonSocketPath() string {
 	return appserver.AppServerControlSocketPath(auth.DefaultCodexHome())
+}
+
+// daemonAutoStartFeature reports whether the effective configuration opts into
+// automatic background-server startup (Rust Feature::DaemonAutoStart, #46117;
+// disabled by default).
+var daemonAutoStartFeature = func() bool {
+	cfg, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), nil)
+	if err != nil || cfg == nil {
+		return false
+	}
+	return features.Enabled(cfg.FeatureSettings(), "daemon_auto_start")
+}
+
+// daemonAutoStartStart starts (or attaches to) the shared background server and
+// returns its control socket path.
+var daemonAutoStartStart = func() (string, error) {
+	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
+	output, err := runner.Run(appserverdaemon.LifecycleStart)
+	if err != nil {
+		return "", err
+	}
+	if output == nil {
+		return "", errors.New("the shared background server did not report a control socket")
+	}
+	return strings.TrimSpace(output.SocketPath), nil
+}
+
+// interactiveDaemonEndpoint selects the interactive launch's app-server target
+// (Rust startup_orchestration.rs, #46088 for reuse and #46117 for the opt-in
+// auto-start):
+//
+//   - an ineligible launch (--no-daemon, --oss, workload identity, executor
+//     selection, --profile, non-replayable overrides, strict config, bypass hook
+//     trust) stays embedded and never probes or starts the shared server;
+//   - with `features.daemon_auto_start` enabled, the shared server is started
+//     and its connection is required: a failure surfaces the `--no-daemon`
+//     guidance instead of silently falling back to embedded mode;
+//   - otherwise a reachable shared server is reused, with embedded fallback.
+func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAppServerEndpoint, error) {
+	if daemonStartupExclusion(root, false) != "" {
+		return nil, nil
+	}
+	if !daemonAutoStartFeature() {
+		return localDaemonEndpointForLaunch(root, false, defaultLocalDaemonSocketPath()), nil
+	}
+	socketPath, err := daemonAutoStartStart()
+	if err != nil {
+		return nil, fmt.Errorf("%w\n%s", err, daemonFailureHint)
+	}
+	if socketPath == "" {
+		return nil, errors.New("the shared background server did not report a control socket\n" + daemonFailureHint)
+	}
+	return appserverdaemon.NewUnixSocketEndpoint(socketPath), nil
 }
 
 // interactiveRootNoDaemon reports whether either the root flags or the

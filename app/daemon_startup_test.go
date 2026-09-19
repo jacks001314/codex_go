@@ -191,3 +191,66 @@ func TestNoDaemonRejectionsLikeRust(t *testing.T) {
 		t.Fatalf("session --remote error = %v", err)
 	}
 }
+
+// TestInteractiveDaemonAutoStartLikeRust mirrors Rust #46117: with
+// `features.daemon_auto_start` enabled the launch starts the shared server and
+// requires a successful connection, surfacing the --no-daemon guidance instead
+// of silently falling back to embedded mode. Without the opt-in the launch only
+// reuses a daemon that already answers.
+func TestInteractiveDaemonAutoStartLikeRust(t *testing.T) {
+	originalFeature := daemonAutoStartFeature
+	originalStart := daemonAutoStartStart
+	t.Cleanup(func() {
+		daemonAutoStartFeature = originalFeature
+		daemonAutoStartStart = originalStart
+	})
+
+	started := 0
+	daemonAutoStartFeature = func() bool { return true }
+	daemonAutoStartStart = func() (string, error) {
+		started++
+		return "/tmp/auto-started.sock", nil
+	}
+	endpoint, err := interactiveDaemonEndpoint(&cli.RootOptions{})
+	if err != nil {
+		t.Fatalf("auto-start endpoint error = %v", err)
+	}
+	if endpoint == nil || endpoint.Kind != appserverdaemon.RemoteEndpointUnixSocket || endpoint.SocketPath != "/tmp/auto-started.sock" {
+		t.Fatalf("auto-start endpoint = %#v", endpoint)
+	}
+	if started != 1 {
+		t.Fatalf("daemon starts = %d, want 1", started)
+	}
+
+	// An ineligible launch never starts the server.
+	endpoint, err = interactiveDaemonEndpoint(&cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true}})
+	if err != nil || endpoint != nil {
+		t.Fatalf("--no-daemon auto-start endpoint = %#v, err = %v", endpoint, err)
+	}
+	if started != 1 {
+		t.Fatalf("--no-daemon started the daemon: %d starts", started)
+	}
+
+	// A failed start is fatal with the guidance, without an embedded fallback.
+	daemonAutoStartStart = func() (string, error) {
+		started++
+		return "", errors.New("managed standalone Codex install not found")
+	}
+	endpoint, err = interactiveDaemonEndpoint(&cli.RootOptions{})
+	if err == nil || endpoint != nil {
+		t.Fatalf("failed auto-start returned endpoint=%#v err=%v, want a fatal error", endpoint, err)
+	}
+	if !strings.Contains(err.Error(), daemonFailureHint) {
+		t.Fatalf("failed auto-start error = %v, want the --no-daemon guidance", err)
+	}
+
+	// Without the opt-in the launch only reuses an already-running daemon.
+	daemonAutoStartFeature = func() bool { return false }
+	daemonAutoStartStart = func() (string, error) {
+		t.Fatal("an unopted launch must not start the daemon")
+		return "", nil
+	}
+	if endpoint, err := interactiveDaemonEndpoint(&cli.RootOptions{}); err != nil || endpoint != nil {
+		t.Fatalf("unopted launch = %#v, err = %v; want embedded", endpoint, err)
+	}
+}

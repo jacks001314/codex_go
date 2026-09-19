@@ -806,10 +806,15 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 		return interactiveFatalExit(stderr, err.Error())
 	}
 	if remoteEndpoint == nil {
-		// Rust app_server_target_for_launch: an eligible interactive launch
-		// targets the shared local daemon when one answers, and keeps embedded
-		// mode when none does or the launch is ineligible.
-		remoteEndpoint = localDaemonEndpointForLaunch(root, false, defaultLocalDaemonSocketPath())
+		// Rust app_server_target_for_launch + startup_orchestration: an eligible
+		// interactive launch reuses a running shared daemon (or, with
+		// daemon_auto_start, starts one and requires the connection), and keeps
+		// embedded mode when the launch is ineligible.
+		endpoint, endpointErr := interactiveDaemonEndpoint(root)
+		if endpointErr != nil {
+			return interactiveFatalExit(stderr, endpointErr.Error())
+		}
+		remoteEndpoint = endpoint
 	}
 	if message := interactiveRemoteWorkloadIdentityError(remoteEndpoint, auth.IsWorkloadIdentitySelected()); message != "" {
 		return interactiveFatalExit(stderr, message)
