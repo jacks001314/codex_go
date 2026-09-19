@@ -325,28 +325,34 @@ type RuntimeRouter struct {
 	restoredWindows map[string]bool
 	// clockFailures records the last reported nonfatal clock failure per thread
 	// (Rust's session-level `last_clock_failure`, #46006).
-	clockFailuresMu         sync.Mutex
-	clockFailures           map[string]clockFailureKey
-	codeModeRuntimesMu      sync.Mutex
-	codeModeRuntimes        map[string]*tool.CodeModeRuntime
-	pendingGoalMu           sync.Mutex
-	pendingGoalByConn       map[string][]*Notification
-	deferredGoalMode        atomic.Bool
-	toolItemReviews         map[string]toolItemReviewSummary
-	skillMCPPromptMu        sync.Mutex
-	skillMCPPrompted        map[string]struct{}
-	orchestratorSkillMu     sync.Mutex
-	orchestratorSkills      map[string]*runtimeOrchestratorSkillCatalog
-	orchestratorWarned      map[string]bool
-	skillWarningsMu         sync.Mutex
-	skillWarnings           map[string]map[string]struct{}
-	selectedSkillMu         sync.Mutex
-	selectedSkills          map[string]map[string]*runtimeSelectedSkillCatalog
-	unifiedExecPersistMu    sync.Mutex
-	unifiedExecPendingMu    sync.Mutex
-	unifiedExecPending      map[string][]session.Item
-	unifiedExecAnalyticsMu  sync.Mutex
-	unifiedExecAnalytics    map[string]unifiedExecAnalyticsContext
+	clockFailuresMu        sync.Mutex
+	clockFailures          map[string]clockFailureKey
+	codeModeRuntimesMu     sync.Mutex
+	codeModeRuntimes       map[string]*tool.CodeModeRuntime
+	pendingGoalMu          sync.Mutex
+	pendingGoalByConn      map[string][]*Notification
+	deferredGoalMode       atomic.Bool
+	toolItemReviews        map[string]toolItemReviewSummary
+	skillMCPPromptMu       sync.Mutex
+	skillMCPPrompted       map[string]struct{}
+	orchestratorSkillMu    sync.Mutex
+	orchestratorSkills     map[string]*runtimeOrchestratorSkillCatalog
+	orchestratorWarned     map[string]bool
+	skillWarningsMu        sync.Mutex
+	skillWarnings          map[string]map[string]struct{}
+	selectedSkillMu        sync.Mutex
+	selectedSkills         map[string]map[string]*runtimeSelectedSkillCatalog
+	unifiedExecPersistMu   sync.Mutex
+	unifiedExecPendingMu   sync.Mutex
+	unifiedExecPending     map[string][]session.Item
+	unifiedExecAnalyticsMu sync.Mutex
+	unifiedExecAnalytics   map[string]unifiedExecAnalyticsContext
+	// toolItemModelContexts carries the invoking model context of a tool item
+	// from its start notification to its completion event (Rust #45445: the
+	// analytics reducer stores it with the item's start timestamp and keeps the
+	// first context when a repeated start notification arrives).
+	toolItemModelContextsMu sync.Mutex
+	toolItemModelContexts   map[string]modelInvocationContext
 	networkApproval         *networkApprovalService
 	execPolicySaved         *execPolicySavedState
 	managedNetworkReloadMu  sync.Mutex
@@ -577,6 +583,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		selectedSkills:          map[string]map[string]*runtimeSelectedSkillCatalog{},
 		unifiedExecPending:      map[string][]session.Item{},
 		unifiedExecAnalytics:    map[string]unifiedExecAnalyticsContext{},
+		toolItemModelContexts:   map[string]modelInvocationContext{},
 		managedNetworks:         map[string]*network.PreparedProxyManagedNetwork{},
 		managedNetworkInputs:    map[string]managedNetworkReloadInput{},
 		goalAccountingTurns:     map[string]stateGoalTurnSnapshot{},
@@ -13510,31 +13517,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			return trustedPluginRoots.ResolveMetricsOperation(command, commandCWD)
 		}
 		options.PluginMeasurementTracker = func(ctx context.Context, batch plugin.PluginMeasurementBatch) {
-			client, ok := r.services.Analytics.(*telemetry.AnalyticsEventsClient)
-			if !ok {
-				return
-			}
-			rows := make([]telemetry.PluginMeasurementRow, 0, len(batch.Rows))
-			for _, row := range batch.Rows {
-				rows = append(rows, telemetry.PluginMeasurementRow{
-					MeasurementName: row.MeasurementName,
-					NumberValue:     row.NumberValue,
-					Dimensions:      row.Dimensions,
-				})
-			}
-			originator := ""
-			if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
-				originator = strings.TrimSpace(record.Metadata.Originator)
-			}
-			client.TrackCodexPluginMeasurementsEvent(ctx, telemetry.CodexPluginMeasurementsInput{
-				ThreadID:    threadID,
-				TurnID:      strings.TrimSpace(turnID),
-				PluginID:    batch.PluginID,
-				ExecutionID: batch.ExecutionID,
-				Operation:   batch.Operation,
-				Originator:  originator,
-				Rows:        rows,
-			})
+			r.emitPluginMeasurements(ctx, threadID, strings.TrimSpace(turnID), batch)
 		}
 	}
 	if cfg != nil {
@@ -13663,6 +13646,13 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.Shell.Validation.WindowsSandboxProxySettingsMode = execserver.WindowsSandboxProxySettingsPreserve
 		}
 		options.Shell.UnifiedExecEvents = r.runtimeUnifiedExecEventSink(threadID, strings.TrimSpace(turnID))
+		// Rust #45445: a command's analytics attribution is the resolved model and
+		// reasoning effort of the step that invoked it, read when the command
+		// starts.
+		options.Shell.ModelContext = func() (string, string) {
+			context := r.modelInvocationContextForTurn(threadID, strings.TrimSpace(turnID))
+			return context.ModelSlug, context.ReasoningEffort
+		}
 		options.Shell.UnifiedExecEnvironments = r.unifiedExecEnvironmentsForTurn(params)
 		options.Shell.Validation.ApprovalPolicy = approvalPolicy
 		if r.commandApprovalForSession(threadID) {

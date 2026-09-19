@@ -72,6 +72,11 @@ type ShellExecutorOptions struct {
 	PluginMetricsResolver func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	// PluginMeasurementTracker publishes a validated plugin measurement batch.
 	PluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
+	// ModelContext reports the resolved model and reasoning effort that invoked a
+	// command (Rust #45445). It is read once per command, before execution, so a
+	// model switch while a background process runs cannot retarget the command's
+	// analytics attribution. Nil leaves the attribution absent.
+	ModelContext func() (modelSlug string, reasoningEffort string)
 	// OneShot marks an executor as completion-only (Rust #41393): used when
 	// resumable unified execution is disabled, it runs an `exec_command` to
 	// completion (no PTY/session, no write_stdin), exposes a `timeout_ms`
@@ -104,6 +109,7 @@ type ShellExecutor struct {
 	preserveLineEndings      bool
 	pluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	pluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
+	modelContext             func() (modelSlug string, reasoningEffort string)
 	oneShot                  bool
 	allowTTY                 bool
 }
@@ -173,6 +179,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.preserveLineEndings = options.PreserveLineEndings
 	executor.pluginMetricsResolver = options.PluginMetricsResolver
 	executor.pluginMeasurementTracker = options.PluginMeasurementTracker
+	executor.modelContext = options.ModelContext
 	executor.oneShot = options.OneShot
 	if options.AllowTTY != nil {
 		executor.allowTTY = *options.AllowTTY
@@ -510,6 +517,13 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	if err != nil {
 		return nil, err
 	}
+	// Rust #45445: the command's analytics attribution is the model that invoked
+	// it, captured before execution so a model switch during a background process
+	// cannot retarget it.
+	modelSlug, reasoningEffort := "", ""
+	if e.modelContext != nil {
+		modelSlug, reasoningEffort = e.modelContext()
+	}
 	args.MaxOutputTokens = clampShellMaxOutputTokens(args.MaxOutputTokens, e.maxOutputTokens)
 	if args.TTY && !e.allowTTY {
 		return nil, RespondToModel("TTY execution is disabled by config; omit `tty` or set it to false.")
@@ -726,6 +740,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 				exitCode = result.ExitCode
 			}
 			if batch := metricsSidecar.Finish(exitCode); batch != nil && e.pluginMeasurementTracker != nil {
+				batch.ModelSlug, batch.ReasoningEffort = modelSlug, reasoningEffort
 				e.pluginMeasurementTracker(ctx, *batch)
 			}
 		}

@@ -134,6 +134,30 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("event JSON mismatch\ngot:  %#v\nwant: %#v", got, want)
 	}
+
+	// Rust #45445: the model that invoked the command labels the event.
+	labelled := NewCodexCommandExecutionEvent(CodexCommandExecutionEventParams{
+		CodexToolItemEventBase: CodexToolItemEventBase{
+			ThreadID:             "thread-1",
+			TurnID:               "turn-1",
+			ItemID:               "item-1",
+			AppServerClient:      sampleAppServerClientMetadata(),
+			Runtime:              sampleRuntimeMetadata(),
+			ToolName:             "shell",
+			FinalApprovalOutcome: FinalApprovalOutcomeNotNeeded,
+			TerminalStatus:       ToolItemTerminalStatusCompleted,
+		},
+		ModelSlug:       stringPtrTelemetry("invoking-model"),
+		ReasoningEffort: stringPtrTelemetry("max"),
+	})
+	var labelledPayload map[string]any
+	if err := marshalUnmarshalTelemetry(labelled, &labelledPayload); err != nil {
+		t.Fatalf("marshal labelled event error = %v", err)
+	}
+	params := labelledPayload["event_params"].(map[string]any)
+	if params["model_slug"] != "invoking-model" || params["reasoning_effort"] != "max" {
+		t.Fatalf("labelled event = %#v", params)
+	}
 }
 
 // TestCodexTurnEventPluginInventoryNullabilityMatchesRust mirrors Rust #46323:
@@ -375,6 +399,8 @@ func TestCodexCommandExecutionEventSerializesExpectedRustShape(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{
 		"event_type": "codex_command_execution_event",
 		"event_params": {
+			"model_slug": null,
+			"reasoning_effort": null,
 			"thread_id": "thread-1",
 			"turn_id": "turn-1",
 			"item_id": "item-1",

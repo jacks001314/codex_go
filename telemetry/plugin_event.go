@@ -32,14 +32,19 @@ type PluginMeasurementRow struct {
 }
 
 type CodexPluginMeasurementsInput struct {
-	ThreadID    string                 `json:"thread_id"`
-	TurnID      string                 `json:"turn_id"`
-	ItemID      string                 `json:"item_id"`
-	PluginID    string                 `json:"plugin_id"`
-	ExecutionID string                 `json:"execution_id"`
-	Operation   string                 `json:"operation"`
-	Originator  string                 `json:"originator,omitempty"`
-	Rows        []PluginMeasurementRow `json:"rows"`
+	ThreadID    string `json:"thread_id"`
+	TurnID      string `json:"turn_id"`
+	ItemID      string `json:"item_id"`
+	PluginID    string `json:"plugin_id"`
+	ExecutionID string `json:"execution_id"`
+	Operation   string `json:"operation"`
+	Originator  string `json:"originator,omitempty"`
+	// ModelSlug and ReasoningEffort attribute the measurement to the model that
+	// invoked the measured command (Rust #45445); absent when the execution
+	// carried no context.
+	ModelSlug       *string                `json:"model_slug"`
+	ReasoningEffort *string                `json:"reasoning_effort"`
+	Rows            []PluginMeasurementRow `json:"rows"`
 }
 
 type CodexPluginMeasurementEventParams struct {
@@ -50,6 +55,8 @@ type CodexPluginMeasurementEventParams struct {
 	ExecutionID     string            `json:"execution_id"`
 	Operation       string            `json:"operation"`
 	Originator      string            `json:"originator,omitempty"`
+	ModelSlug       *string           `json:"model_slug"`
+	ReasoningEffort *string           `json:"reasoning_effort"`
 	MeasurementName string            `json:"measurement_name"`
 	NumberValue     float64           `json:"number_value"`
 	Dimensions      map[string]string `json:"dimensions,omitempty"`
@@ -114,6 +121,8 @@ func PluginMeasurementEvents(input CodexPluginMeasurementsInput) []CodexPluginMe
 				ExecutionID:     input.ExecutionID,
 				Operation:       input.Operation,
 				Originator:      strings.TrimSpace(input.Originator),
+				ModelSlug:       cloneStringPtrTelemetry(input.ModelSlug),
+				ReasoningEffort: cloneStringPtrTelemetry(input.ReasoningEffort),
 				MeasurementName: row.MeasurementName,
 				NumberValue:     row.NumberValue,
 				Dimensions:      dimensions,
@@ -139,6 +148,16 @@ func cloneStringMapTelemetry(values map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+// cloneStringPtrTelemetry copies an optional label so a caller's later mutation
+// cannot change an event already handed to the sink.
+func cloneStringPtrTelemetry(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 type CodexPluginMetadata struct {

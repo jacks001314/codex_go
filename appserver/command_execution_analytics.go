@@ -49,6 +49,17 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 	reviewSummary := r.toolItemReviewSummary(threadID, turnID, threadItemExternalID(item))
 	pluginID := threadItemStringPtrFromData(item.Data, "pluginId", "plugin_id")
 	scriptPath := safeCommandPluginScriptPath(pluginID, threadItemStringPtrFromData(item.Data, "scriptPath", "script_path"))
+	// Rust #45445: the event is attributed to the model that invoked the command.
+	// The start-time context wins; only when no start was observed does the
+	// completion-time run config stand in (the carry the unified-exec path hands
+	// the emitter is already the start-time config).
+	modelContext, _ := r.takeToolItemModelContext(threadID, turnID, threadItemExternalID(item))
+	if modelContext.ModelSlug == "" && modelContext.ReasoningEffort == "" && runConfig != nil {
+		modelContext = modelInvocationContext{
+			ModelSlug:       strings.TrimSpace(runConfig.Model),
+			ReasoningEffort: strings.TrimSpace(runConfig.ReasoningEffort),
+		}
+	}
 	event := telemetry.NewCodexCommandExecutionEvent(telemetry.CodexCommandExecutionEventParams{
 		CodexToolItemEventBase: telemetry.CodexToolItemEventBase{
 			ThreadID:                       threadID,
@@ -73,6 +84,8 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 			RequestedAdditionalPermissions: reviewSummary.RequestedAdditionalPermissions,
 			RequestedNetworkAccess:         reviewSummary.RequestedNetworkAccess,
 		},
+		ModelSlug:                   optionalModelLabel(modelContext.ModelSlug),
+		ReasoningEffort:             optionalModelLabel(modelContext.ReasoningEffort),
 		PluginID:                    pluginID,
 		ScriptPath:                  scriptPath,
 		CommandExecutionSource:      commandExecutionSourceAnalyticsValue(threadItemCommandSource(item)),
@@ -84,6 +97,16 @@ func (r *RuntimeRouter) emitCommandExecutionAnalyticsEvent(ctx context.Context, 
 		CommandUnknownActionCount:   counts.Unknown,
 	})
 	sink.TrackCodexCommandExecutionEvent(ctx, event)
+}
+
+// optionalModelLabel reports a non-empty label and leaves the field absent (JSON
+// null) when the execution carried no context, mirroring Rust's Option fields.
+func optionalModelLabel(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func safeCommandPluginScriptPath(pluginID *string, scriptPath *string) *string {

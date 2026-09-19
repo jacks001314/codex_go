@@ -25,6 +25,11 @@ type PluginMeasurementBatch struct {
 	ExecutionID string
 	Operation   string
 	Rows        []PluginMeasurementRow
+	// ModelSlug and ReasoningEffort carry the invoking model's attribution from
+	// the command that produced the batch (Rust #45445). They are filled by the
+	// executing tool, not by the sidecar, and are never serialized here.
+	ModelSlug       string
+	ReasoningEffort string
 }
 
 func (s *PluginMetricsSidecar) Cleanup() {

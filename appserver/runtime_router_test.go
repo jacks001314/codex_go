@@ -19488,6 +19488,11 @@ func TestRuntimeRouterCommandExecutionEmitsAnalyticsLikeRust(t *testing.T) {
 	if params.StartedAtMS == 0 || params.CompletedAtMS == 0 || params.DurationMS == nil || params.ExecutionDurationMS == nil {
 		t.Fatalf("timing = started:%d completed:%d duration:%#v execution:%#v", params.StartedAtMS, params.CompletedAtMS, params.DurationMS, params.ExecutionDurationMS)
 	}
+	// Rust #45445: the command execution is attributed to the model that invoked
+	// it, captured when the command started.
+	if params.ModelSlug == nil || *params.ModelSlug != "gpt-5" {
+		t.Fatalf("model_slug = %#v, want the invoking model", params.ModelSlug)
+	}
 }
 
 func TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust(t *testing.T) {
@@ -25718,30 +25723,31 @@ func newBlockingReviewRuntimeAgent() *blockingReviewRuntimeAgent {
 
 func newRecordingTurnEventSink() *recordingTurnEventSink {
 	return &recordingTurnEventSink{
-		events:            make(chan telemetry.CodexTurnEventRequest, 8),
-		threadInitialized: make(chan telemetry.CodexThreadInitializedEventRequest, 8),
-		turnSteer:         make(chan telemetry.CodexTurnSteerEventRequest, 8),
-		compaction:        make(chan telemetry.CodexCompactionEventRequest, 8),
-		goal:              make(chan telemetry.CodexGoalEventRequest, 8),
-		pluginInstalled:   make(chan telemetry.CodexPluginEventRequest, 8),
-		pluginUninstalled: make(chan telemetry.CodexPluginEventRequest, 8),
-		pluginEnabled:     make(chan telemetry.CodexPluginEventRequest, 8),
-		pluginDisabled:    make(chan telemetry.CodexPluginEventRequest, 8),
-		pluginFailed:      make(chan telemetry.CodexPluginInstallFailedEventRequest, 8),
-		importComplete:    make(chan telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest, 8),
-		importFailure:     make(chan telemetry.CodexOnboardingExternalAgentImportFailureEventRequest, 8),
-		hookRun:           make(chan telemetry.CodexHookRunEventRequest, 8),
-		acceptedLines:     make(chan telemetry.CodexAcceptedLineFingerprintsEventRequest, 8),
-		commandExecution:  make(chan telemetry.CodexCommandExecutionEventRequest, 8),
-		fileChange:        make(chan telemetry.CodexFileChangeEventRequest, 8),
-		review:            make(chan telemetry.CodexReviewEventRequest, 8),
-		mcpToolCall:       make(chan telemetry.CodexMCPToolCallEventRequest, 8),
-		dynamicToolCall:   make(chan telemetry.CodexDynamicToolCallEventRequest, 8),
-		collabToolCall:    make(chan telemetry.CodexCollabAgentToolCallEventRequest, 8),
-		webSearch:         make(chan telemetry.CodexWebSearchEventRequest, 8),
-		imageGeneration:   make(chan telemetry.CodexImageGenerationEventRequest, 8),
-		skillInvocation:   make(chan telemetry.SkillInvocationEventRequest, 8),
-		artifactOperation: make(chan telemetry.ArtifactOperationEventRequest, 8),
+		events:             make(chan telemetry.CodexTurnEventRequest, 8),
+		threadInitialized:  make(chan telemetry.CodexThreadInitializedEventRequest, 8),
+		turnSteer:          make(chan telemetry.CodexTurnSteerEventRequest, 8),
+		compaction:         make(chan telemetry.CodexCompactionEventRequest, 8),
+		goal:               make(chan telemetry.CodexGoalEventRequest, 8),
+		pluginInstalled:    make(chan telemetry.CodexPluginEventRequest, 8),
+		pluginUninstalled:  make(chan telemetry.CodexPluginEventRequest, 8),
+		pluginEnabled:      make(chan telemetry.CodexPluginEventRequest, 8),
+		pluginDisabled:     make(chan telemetry.CodexPluginEventRequest, 8),
+		pluginFailed:       make(chan telemetry.CodexPluginInstallFailedEventRequest, 8),
+		pluginMeasurements: make(chan telemetry.CodexPluginMeasurementsInput, 8),
+		importComplete:     make(chan telemetry.CodexOnboardingExternalAgentImportCompleteEventRequest, 8),
+		importFailure:      make(chan telemetry.CodexOnboardingExternalAgentImportFailureEventRequest, 8),
+		hookRun:            make(chan telemetry.CodexHookRunEventRequest, 8),
+		acceptedLines:      make(chan telemetry.CodexAcceptedLineFingerprintsEventRequest, 8),
+		commandExecution:   make(chan telemetry.CodexCommandExecutionEventRequest, 8),
+		fileChange:         make(chan telemetry.CodexFileChangeEventRequest, 8),
+		review:             make(chan telemetry.CodexReviewEventRequest, 8),
+		mcpToolCall:        make(chan telemetry.CodexMCPToolCallEventRequest, 8),
+		dynamicToolCall:    make(chan telemetry.CodexDynamicToolCallEventRequest, 8),
+		collabToolCall:     make(chan telemetry.CodexCollabAgentToolCallEventRequest, 8),
+		webSearch:          make(chan telemetry.CodexWebSearchEventRequest, 8),
+		imageGeneration:    make(chan telemetry.CodexImageGenerationEventRequest, 8),
+		skillInvocation:    make(chan telemetry.SkillInvocationEventRequest, 8),
+		artifactOperation:  make(chan telemetry.ArtifactOperationEventRequest, 8),
 	}
 }
 

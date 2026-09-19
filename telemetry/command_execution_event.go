@@ -99,6 +99,13 @@ type CodexCommandExecutionEventRequest struct {
 
 type CodexCommandExecutionEventParams struct {
 	CodexToolItemEventBase
+	// ModelSlug and ReasoningEffort attribute the command to the model that
+	// invoked it (Rust #45445): they are captured from the resolved step settings
+	// when the command starts and carried to completion, so a model switch during
+	// a background process does not retarget the event. An absent context is
+	// serialized as null, like Rust's Option fields.
+	ModelSlug                   *string `json:"model_slug"`
+	ReasoningEffort             *string `json:"reasoning_effort"`
 	PluginID                    *string `json:"plugin_id"`
 	ScriptPath                  *string `json:"script_path"`
 	CommandExecutionSource      string  `json:"command_execution_source"`

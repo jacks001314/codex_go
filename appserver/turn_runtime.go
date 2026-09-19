@@ -2545,6 +2545,10 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 				return
 			}
 			r.attributeCommandExecutionItem(&item)
+			// Rust #45445: the analytics event is attributed to the step that
+			// invoked the command, captured here and kept even if the model
+			// changes before the command finishes.
+			r.rememberToolItemModelContext(threadID, turnID, threadItemExternalID(&item), r.modelInvocationContextForTurn(threadID, turnID))
 			r.notify(NotificationItemStarted, &ItemStartedNotification{
 				Item:        threadItemPayload(item),
 				ThreadID:    threadID,
@@ -2940,6 +2944,9 @@ func (r *RuntimeRouter) runtimeUnifiedExecEventSink(threadID string, turnID stri
 			}
 			item := unifiedExecThreadItem(event, CommandExecutionInProgress)
 			r.attributeCommandExecutionItem(&item)
+			// Rust #45445: unified exec captures the invoking model when the
+			// command starts, next to the connection it reports the event on.
+			r.rememberToolItemModelContext(threadID, turnID, threadItemExternalID(&item), r.modelInvocationContextForTurn(threadID, turnID))
 			r.notify(NotificationItemStarted, &ItemStartedNotification{
 				ThreadID:    threadID,
 				TurnID:      turnID,
@@ -3026,6 +3033,77 @@ func (r *RuntimeRouter) takeUnifiedExecAnalytics(threadID string, turnID string,
 	analytics, ok := r.unifiedExecAnalytics[key]
 	delete(r.unifiedExecAnalytics, key)
 	return analytics, ok
+}
+
+// modelInvocationContext is the model attribution carried from a tool item's
+// start to its analytics event (Rust #45445's ModelInvocationContext).
+type modelInvocationContext struct {
+	ModelSlug       string
+	ReasoningEffort string
+}
+
+func (m modelInvocationContext) isZero() bool {
+	return m.ModelSlug == "" && m.ReasoningEffort == ""
+}
+
+func toolItemModelContextKey(threadID string, turnID string, itemID string) string {
+	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID) + "\x00" + strings.TrimSpace(itemID)
+}
+
+// rememberToolItemModelContext records the resolved step settings that invoked a
+// tool item. The first context wins: Rust keeps the original context when a
+// repeated start notification arrives, so a model switch mid-execution cannot
+// retarget the event.
+func (r *RuntimeRouter) rememberToolItemModelContext(threadID string, turnID string, itemID string, context modelInvocationContext) {
+	if r == nil || context.isZero() {
+		return
+	}
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return
+	}
+	r.toolItemModelContextsMu.Lock()
+	defer r.toolItemModelContextsMu.Unlock()
+	if r.toolItemModelContexts == nil {
+		r.toolItemModelContexts = map[string]modelInvocationContext{}
+	}
+	key := toolItemModelContextKey(threadID, turnID, itemID)
+	if existing, present := r.toolItemModelContexts[key]; present && !existing.isZero() {
+		return
+	}
+	r.toolItemModelContexts[key] = context
+}
+
+func (r *RuntimeRouter) takeToolItemModelContext(threadID string, turnID string, itemID string) (modelInvocationContext, bool) {
+	if r == nil {
+		return modelInvocationContext{}, false
+	}
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return modelInvocationContext{}, false
+	}
+	r.toolItemModelContextsMu.Lock()
+	defer r.toolItemModelContextsMu.Unlock()
+	key := toolItemModelContextKey(threadID, turnID, itemID)
+	context, ok := r.toolItemModelContexts[key]
+	delete(r.toolItemModelContexts, key)
+	return context, ok
+}
+
+// modelInvocationContextForTurn reports the resolved step settings of the turn
+// the tool call belongs to, which is what Rust captures as the invoking model.
+func (r *RuntimeRouter) modelInvocationContextForTurn(threadID string, turnID string) modelInvocationContext {
+	if r == nil {
+		return modelInvocationContext{}
+	}
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.RunConfig == nil {
+		return modelInvocationContext{}
+	}
+	return modelInvocationContext{
+		ModelSlug:       strings.TrimSpace(active.RunConfig.Model),
+		ReasoningEffort: strings.TrimSpace(active.RunConfig.ReasoningEffort),
+	}
 }
 
 func unifiedExecSessionItem(turnID string, item ThreadItem, event tool.UnifiedExecEvent) session.Item {
