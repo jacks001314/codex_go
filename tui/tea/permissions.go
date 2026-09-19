@@ -322,6 +322,19 @@ func (m *Model) applyPermissionSelection(item chatwidget.PermissionMenuItem) bub
 	}
 	m.notice = ""
 	m.applyHistoryCell(historycell.NewInfoEvent("Permissions updated to "+strings.TrimSpace(item.Name), ""))
+	// Rust #46036: the chosen reviewer is persisted through the app server's
+	// config/batchWrite so it survives the session, and a failed save keeps the
+	// backend's cause.
+	var reviewerCmd bubbletea.Cmd
+	if item.Reviewer != nil && m.onWriteSettings != nil {
+		reviewerCmd = m.writeSettings(settingsWriteKindApprovalsReviewer, []SettingsEdit{{
+			KeyPath: "approvals_reviewer",
+			Value:   string(*item.Reviewer),
+		}})
+	}
+	if reviewerCmd != nil {
+		return bubbletea.Batch(reviewerCmd, m.refreshStatusControlsCmd())
+	}
 	return m.refreshStatusControlsCmd()
 }
 

@@ -17,6 +17,7 @@ const (
 	settingsWriteKindTheme               = "theme"
 	settingsWriteKindPet                 = "pet"
 	settingsWriteKindServiceTier         = "service_tier"
+	settingsWriteKindApprovalsReviewer   = "approvals_reviewer"
 )
 
 // initialPersonality carries the configured personality into the model's
@@ -339,6 +340,15 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 			m.experimentalFeaturesStatus = msg.Err.Error()
 			m.refreshExperimentalModal()
 			m.notice = "Failed to save settings: " + msg.Err.Error()
+			m.refreshTranscript()
+			return
+		}
+		if msg.Kind == settingsWriteKindApprovalsReviewer {
+			// Rust #46036: report the persistence failure as an error message,
+			// keeping the backend's actionable cause (config file location and
+			// parse error) instead of a bare save failure.
+			m.notice = ""
+			m.applyHistoryCell(historycell.NewErrorEvent("Failed to save approvals reviewer: " + msg.Err.Error()))
 			m.refreshTranscript()
 			return
 		}
