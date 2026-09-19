@@ -52,6 +52,53 @@ func TestBuildSeatbeltPolicyDeniesXPCLookupsLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #46571: the implicit scratch grants respect the profile's
+// unreadable paths, and the exclusion lands after the grant so Seatbelt's
+// last-match-wins semantics deny it.
+func TestBuildSeatbeltPolicyConstrainsScratchWithExclusionsLikeRust(t *testing.T) {
+	profile := WorkspaceWritePermissionProfile()
+	profile.DeniedReadEntries = []FileSystemSandboxEntry{{
+		Path:   FileSystemPath{Type: "path", Path: "/tmp/secret"},
+		Access: FileSystemAccessDeny,
+	}}
+	policy, parameters, err := buildSeatbeltPolicy("/workspace", &profile, nil)
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	if !seatbeltParametersContain(parameters, "/tmp/secret") {
+		t.Fatalf("scratch exclusion parameter missing: %#v", parameters)
+	}
+	grant := strings.Index(policy, `(allow file-read* file-test-existence file-write* (subpath (param "SCRATCH_0"))`)
+	excluded := strings.Index(policy, `(deny file-write* (subpath (param "SCRATCH_EXCLUDED_`)
+	if grant < 0 {
+		t.Fatalf("scratch grant missing:\n%s", policy)
+	}
+	if excluded < 0 || excluded < grant {
+		t.Fatalf("scratch exclusion order = grant %d excluded %d:\n%s", grant, excluded, policy)
+	}
+}
+
+// Mirrors Rust #46571: an ancestor of a protected path is never unlinkable, so
+// renaming it cannot relocate the protected descendants past their carveouts.
+// The deny stays last so no broader allowance reopens the rename operation.
+func TestBuildSeatbeltPolicyProtectsWritableRootAncestorsLikeRust(t *testing.T) {
+	profile := WorkspaceWritePermissionProfile()
+	policy, parameters, err := buildSeatbeltPolicy("/workspace", &profile, nil)
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	if !seatbeltHasParameterPrefix(parameters, "PROTECTED_ANCESTOR_") {
+		t.Fatalf("protected ancestor parameters missing: %#v", parameters)
+	}
+	unlink := strings.Index(policy, `(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "PROTECTED_ANCESTOR_0"))))`)
+	if unlink < 0 {
+		t.Fatalf("protected ancestor deny missing:\n%s", policy)
+	}
+	if last := strings.LastIndex(policy, "(allow "); last > unlink {
+		t.Fatalf("unlink denies must follow every allowance:\n%s", policy)
+	}
+}
+
 func seatbeltParametersContain(parameters []seatbeltParameter, value string) bool {
 	value = cleanSeatbeltPath(value)
 	for _, parameter := range parameters {
