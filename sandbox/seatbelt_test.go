@@ -1,6 +1,8 @@
 package sandbox
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -96,6 +98,84 @@ func TestBuildSeatbeltPolicyProtectsWritableRootAncestorsLikeRust(t *testing.T) 
 	}
 	if last := strings.LastIndex(policy, "(allow "); last > unlink {
 		t.Fatalf("unlink denies must follow every allowance:\n%s", policy)
+	}
+}
+
+// Mirrors Rust #46571: a protected path that is a symlink protects the resolved
+// target's parents as well, so moving either the logical entry or the target
+// cannot relocate the protected path past its carveout.
+func TestBuildSeatbeltPolicyProtectsResolvedSymlinkAncestorsLikeRust(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "real", "nested")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logical := filepath.Join(root, ".git")
+	if err := os.Symlink(target, logical); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	profile := WorkspaceWritePermissionProfile()
+	policy := profile.LegacySandboxPolicy()
+	policy.WritableRoots = []string{root}
+	profile.SandboxPolicy = policy
+
+	ancestors := seatbeltProtectedAncestors(policy, root)
+	contains := func(want string) bool {
+		want = cleanSeatbeltPath(want)
+		for _, ancestor := range ancestors {
+			if ancestor == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !contains(root) {
+		t.Fatalf("logical path ancestors = %#v, want %q", ancestors, root)
+	}
+	// Only the symlink resolution contributes this intermediate directory.
+	if !contains(filepath.Join(root, "real")) {
+		t.Fatalf("resolved target ancestors = %#v, want %q", ancestors, filepath.Join(root, "real"))
+	}
+	resolved, err := filepath.EvalSymlinks(logical)
+	if err != nil || cleanSeatbeltPath(resolved) != cleanSeatbeltPath(target) {
+		t.Fatalf("symlink resolution = %q, %v", resolved, err)
+	}
+	if _, _, err := buildSeatbeltPolicy(root, &profile, nil); err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+}
+
+// The resolver indirection covers hosts where symlink creation is unavailable:
+// a resolved target one level deeper than the logical entry contributes its own
+// ancestors (Rust #46571).
+func TestSeatbeltProtectedAncestorsFollowResolvedTargetsLikeRust(t *testing.T) {
+	root := t.TempDir()
+	logical := filepath.Join(root, ".git")
+	resolved := filepath.Join(root, "real", "nested", ".git")
+	previous := seatbeltSymlinkResolver
+	seatbeltSymlinkResolver = func(path string) string {
+		if cleanSeatbeltPath(path) == cleanSeatbeltPath(logical) {
+			return cleanSeatbeltPath(resolved)
+		}
+		return ""
+	}
+	t.Cleanup(func() { seatbeltSymlinkResolver = previous })
+
+	profile := WorkspaceWritePermissionProfile()
+	policy := profile.LegacySandboxPolicy()
+	policy.WritableRoots = []string{root}
+	profile.SandboxPolicy = policy
+
+	ancestors := seatbeltProtectedAncestors(policy, root)
+	want := cleanSeatbeltPath(filepath.Join(root, "real", "nested"))
+	found := false
+	for _, ancestor := range ancestors {
+		if ancestor == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("resolved ancestors = %#v, want %q", ancestors, want)
 	}
 }
 

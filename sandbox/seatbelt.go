@@ -136,25 +136,56 @@ func seatbeltProtectedPaths(policy *SandboxPolicy, cwd string) []string {
 
 // seatbeltProtectedAncestors returns the writable-root directories that contain
 // a protected path. Unlinking one of them would relocate the protected
-// descendants past their pathname carveouts (Rust #46571).
+// descendants past their pathname carveouts (Rust #46571). A protected path that
+// is a symlink protects both its logical entry and its resolved target.
 func seatbeltProtectedAncestors(policy *SandboxPolicy, cwd string) []string {
 	seen := map[string]bool{}
 	ancestors := []string{}
 	for _, root := range policy.GetWritableRootsWithCWD(cwd) {
 		rootPath := cleanSeatbeltPath(root.Root)
 		for _, protected := range root.ReadOnlySubpaths {
-			ancestor := parentSeatbeltPath(cleanSeatbeltPath(protected))
-			for ancestor != "" && seatbeltSubpathWithin(ancestor, rootPath) {
-				if !seen[ancestor] {
-					seen[ancestor] = true
-					ancestors = append(ancestors, ancestor)
+			logical := cleanSeatbeltPath(protected)
+			paths := []string{logical}
+			if resolved := seatbeltSymlinkResolver(logical); resolved != "" {
+				paths = append(paths, resolved)
+			}
+			for _, protectedPath := range paths {
+				ancestor := parentSeatbeltPath(protectedPath)
+				for ancestor != "" && seatbeltSubpathWithin(ancestor, rootPath) {
+					if !seen[ancestor] {
+						seen[ancestor] = true
+						ancestors = append(ancestors, ancestor)
+					}
+					ancestor = parentSeatbeltPath(ancestor)
 				}
-				ancestor = parentSeatbeltPath(ancestor)
 			}
 		}
 	}
 	sort.Strings(ancestors)
 	return ancestors
+}
+
+// seatbeltResolvedSymlinkPath returns the resolved target of a symlinked path
+// when it differs from the logical path, mirroring Rust's
+// `normalize_path_for_sandbox` resolution of top-level aliases (#46571).
+// seatbeltSymlinkResolver indirection lets tests exercise the resolved-ancestor
+// protection on hosts without symlink privileges.
+var seatbeltSymlinkResolver = seatbeltResolvedSymlinkPath
+
+func seatbeltResolvedSymlinkPath(path string) string {
+	cleaned := cleanSeatbeltPath(path)
+	if cleaned == "" {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return ""
+	}
+	resolved = cleanSeatbeltPath(resolved)
+	if resolved == "" || resolved == cleaned {
+		return ""
+	}
+	return resolved
 }
 
 // parentSeatbeltPath returns the parent directory of an absolute seatbelt path.
@@ -187,7 +218,10 @@ func seatbeltSubpathWithin(path string, root string) bool {
 	if path == root {
 		return true
 	}
-	return strings.HasPrefix(path, strings.TrimRight(root, "/")+"/")
+	if strings.HasPrefix(root, "/") {
+		return strings.HasPrefix(path, strings.TrimRight(root, "/")+"/")
+	}
+	return strings.HasPrefix(path, strings.TrimRight(root, `\/`)+string(filepath.Separator))
 }
 
 // appendUniqueSeatbeltPath appends a cleaned path once.
