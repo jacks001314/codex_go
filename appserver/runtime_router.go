@@ -373,8 +373,17 @@ type RuntimeRouter struct {
 	pendingToolEvents map[string][]pendingToolEvent
 	// pendingMCPElicitations queues MCP call classifications (auth_or_link,
 	// approval) before the items they belong to complete (Rust #45649).
-	mcpElicitationsMu       sync.Mutex
-	pendingMCPElicitations  []pendingMCPElicitation
+	mcpElicitationsMu      sync.Mutex
+	pendingMCPElicitations []pendingMCPElicitation
+	// connectorSelections holds each thread's session state, whose connector
+	// selection records the connectors its input named explicitly (Rust
+	// `SessionState::merge_connector_selection`).
+	connectorSelectionMu sync.Mutex
+	connectorSelections  map[string]*state.SessionState
+	// appUsedEmittedKeys deduplicates app-use events per turn and connector
+	// (Rust's `app_used_emitted_keys`).
+	appUsedMu               sync.Mutex
+	appUsedEmittedKeys      map[string]bool
 	networkApproval         *networkApprovalService
 	execPolicySaved         *execPolicySavedState
 	managedNetworkReloadMu  sync.Mutex
@@ -610,6 +619,8 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		codeModeChildCalls:      map[string]map[string]string{},
 		codeModeCells:           map[string]map[string]codeModeCellState{},
 		pendingToolEvents:       map[string][]pendingToolEvent{},
+		connectorSelections:     map[string]*state.SessionState{},
+		appUsedEmittedKeys:      map[string]bool{},
 		managedNetworks:         map[string]*network.PreparedProxyManagedNetwork{},
 		managedNetworkInputs:    map[string]managedNetworkReloadInput{},
 		goalAccountingTurns:     map[string]stateGoalTurnSnapshot{},
@@ -5412,6 +5423,7 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	r.flushThreadPendingToolEvents(threadID)
 	r.forgetThreadToolEvidence(threadID)
 	r.forgetThreadMCPToolCallElicitations(threadID)
+	r.forgetThreadSessionState(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
 		slog.Warn("failed to close thread code-mode runtime", "thread_id", threadID, "error", err)
 	}

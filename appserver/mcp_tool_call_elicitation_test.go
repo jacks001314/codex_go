@@ -83,16 +83,17 @@ func TestMCPToolCallAnalyticsReportsElicitationClassificationLikeRust(t *testing
 			CallID:    callID,
 			CreatedAt: 125000,
 			Data: map[string]any{
-				"status":        string(CommandExecutionCompleted),
-				"startedAtMs":   int64(123000),
-				"completedAtMs": int64(125000),
-				"durationMs":    int64(1900),
-				"server":        "codex_apps",
-				"tool":          "calendar_list_events",
-				"connector_id":  "connector_calendar",
-				"pluginId":      "sample@openai-curated",
-				"mcpToolCall":   true,
-				"callId":        callID,
+				"status":         string(CommandExecutionCompleted),
+				"startedAtMs":    int64(123000),
+				"completedAtMs":  int64(125000),
+				"durationMs":     int64(1900),
+				"server":         "codex_apps",
+				"tool":           "calendar_list_events",
+				"connector_id":   "connector_calendar",
+				"connector_name": "Calendar",
+				"pluginId":       "sample@openai-curated",
+				"mcpToolCall":    true,
+				"callId":         callID,
 			},
 		}
 	}
@@ -106,6 +107,15 @@ func TestMCPToolCallAnalyticsReportsElicitationClassificationLikeRust(t *testing
 	}
 	if classified.ElicitationType == nil || *classified.ElicitationType != telemetry.ElicitationTypeAuthOrLink {
 		t.Fatalf("elicitation type = %#v", classified.ElicitationType)
+	}
+	// Rust #45716: the same classification reaches the app-usage event.
+	appUsed := waitForAppUsedEvent(t, sink).EventParams
+	if appUsed.ConnectorID == nil || *appUsed.ConnectorID != "connector_calendar" ||
+		appUsed.AppName == nil || *appUsed.AppName != "Calendar" {
+		t.Fatalf("app-used identity = %#v", appUsed)
+	}
+	if appUsed.ElicitationType == nil || *appUsed.ElicitationType != telemetry.ElicitationTypeAuthOrLink {
+		t.Fatalf("app-used classification = %#v", appUsed.ElicitationType)
 	}
 
 	// An ordinary call reports null for both, and the classification cannot be

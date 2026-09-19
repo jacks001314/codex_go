@@ -62,7 +62,7 @@ func TestAppTurnConfigFiltersSavedConfigurationUpdatesWhenDisabledLikeRust(t *te
 					"features": map[string]any{"reasoning_effort_override": tc.featureEnabled},
 				},
 			}
-			runConfig, err := router.appTurnConfig(context.Background(), "thread-cfg-history", "turn-2", params, now.UnixMilli(), nil)
+			runConfig, err := router.appTurnConfig(context.Background(), "thread-cfg-history", "turn-2", "", params, now.UnixMilli(), nil)
 			if err != nil {
 				t.Fatalf("appTurnConfig() error = %v", err)
 			}

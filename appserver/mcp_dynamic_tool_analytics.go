@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"codex_go/mcp"
 	"codex_go/telemetry"
 )
 
@@ -83,6 +84,18 @@ func (r *RuntimeRouter) emitMCPToolCallAnalyticsEvent(ctx context.Context, conne
 	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
 		sink.TrackCodexMCPToolCallEvent(ctx, telemetry.NewCodexMCPToolCallEvent(params))
 	})
+	// Rust #45716: a host-owned apps call also reports app usage, carrying the
+	// same classification.
+	if mcp.IsCodexAppsMCPServerName(threadItemMCPServer(item)) {
+		modelSlug := ""
+		if runConfig != nil {
+			modelSlug = strings.TrimSpace(runConfig.Model)
+		}
+		r.emitCodexAppUsedEvent(ctx, threadID, turnID, connectionID,
+			threadItemStringFromData(item.Data, "connectorId", "connector_id"),
+			threadItemStringFromData(item.Data, "connectorName", "connector_name"),
+			modelSlug, params.ElicitationType)
+	}
 }
 
 func (r *RuntimeRouter) emitDynamicToolCallAnalyticsEvent(ctx context.Context, connectionID string, threadID string, turnID string, item *ThreadItem, runConfig *appTurnRunConfig) {

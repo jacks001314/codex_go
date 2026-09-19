@@ -25602,6 +25602,8 @@ type blockingReviewRuntimeAgent struct {
 }
 
 type recordingTurnEventSink struct {
+	appMentioned       chan telemetry.CodexAppMentionedEventRequest
+	appUsed            chan telemetry.CodexAppUsedEventRequest
 	events             chan telemetry.CodexTurnEventRequest
 	threadInitialized  chan telemetry.CodexThreadInitializedEventRequest
 	turnSteer          chan telemetry.CodexTurnSteerEventRequest
@@ -25745,6 +25747,8 @@ func newBlockingReviewRuntimeAgent() *blockingReviewRuntimeAgent {
 
 func newRecordingTurnEventSink() *recordingTurnEventSink {
 	return &recordingTurnEventSink{
+		appMentioned:       make(chan telemetry.CodexAppMentionedEventRequest, 8),
+		appUsed:            make(chan telemetry.CodexAppUsedEventRequest, 8),
 		events:             make(chan telemetry.CodexTurnEventRequest, 8),
 		threadInitialized:  make(chan telemetry.CodexThreadInitializedEventRequest, 8),
 		turnSteer:          make(chan telemetry.CodexTurnSteerEventRequest, 8),
@@ -25778,6 +25782,20 @@ func (s *recordingTurnEventSink) TrackCodexTurnEvent(ctx context.Context, event 
 		return
 	}
 	s.events <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexAppMentionedEvent(ctx context.Context, event telemetry.CodexAppMentionedEventRequest) {
+	if s == nil || s.appMentioned == nil {
+		return
+	}
+	s.appMentioned <- event
+}
+
+func (s *recordingTurnEventSink) TrackCodexAppUsedEvent(ctx context.Context, event telemetry.CodexAppUsedEventRequest) {
+	if s == nil || s.appUsed == nil {
+		return
+	}
+	s.appUsed <- event
 }
 
 func (s *recordingTurnEventSink) TrackSkillInvocationEvent(ctx context.Context, event telemetry.SkillInvocationEventRequest) {

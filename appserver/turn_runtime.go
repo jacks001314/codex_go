@@ -1518,7 +1518,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.beginStateThreadGoalTurn(threadID, turnID, startedAtMS, turnStartPlanMode(params), connectionID)
 	promptPersisted := false
 
-	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime)
+	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, connectionID, params, startedAtMS, runtime)
 	if err != nil {
 		if ctx.Err() != nil {
 			r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
@@ -1553,7 +1553,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		if ran {
 			// appTurnConfig contains the session history; reload it after
 			// compaction.
-			if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime); err != nil {
+			if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, connectionID, params, startedAtMS, runtime); err != nil {
 				r.clearActiveRuntimeTurn(threadID, turnID)
 				r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
 				r.finishTurnWithError(threadID, turnID, startedAtMS, err)
@@ -1577,7 +1577,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			return
 		}
 		// appTurnConfig contains the session history; reload it after compaction.
-		if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime); err != nil {
+		if runConfig, err = r.appTurnConfig(ctx, threadID, turnID, connectionID, params, startedAtMS, runtime); err != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
 			// Rust #44487: a failed pre-sampling rebuild is still a pre-turn
 			// failure, so the accepted prompt is preserved before the error.
@@ -2142,7 +2142,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	}
 	startedAtMS := startedAt.UnixMilli()
 	r.beginStateThreadGoalTurn(threadID, turnID, startedAtMS, turnStartPlanMode(params), connectionID)
-	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, params, startedAtMS, runtime)
+	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, connectionID, params, startedAtMS, runtime)
 	if err != nil {
 		r.clearActiveRuntimeTurn(threadID, turnID)
 		r.finishTurnWithError(threadID, turnID, startedAtMS, err)
@@ -6713,7 +6713,7 @@ type responsesMetadataLineage struct {
 	ThreadSource       string
 }
 
-func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turnID string, params *turn.TurnStartParams, startedAtMS int64, turnRuntime *turn.Runtime) (*appTurnRunConfig, error) {
+func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turnID string, connectionID string, params *turn.TurnStartParams, startedAtMS int64, turnRuntime *turn.Runtime) (*appTurnRunConfig, error) {
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil {
 		return nil, err
@@ -6850,6 +6850,10 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	}
 	inputItems = append(inputItems, r.recommendedPluginInputItems(threadID, cfg)...)
 	inputItems = append(inputItems, r.explicitAppInputItems(threadID, params, cfg)...)
+	// Rust #45716: the explicitly named connectors join the thread's selection
+	// (which decides whether a later app call is explicit or implicit) and each
+	// mention is reported.
+	r.rememberExplicitAppMentions(ctx, threadID, turnID, connectionID, params, cfg, modelProviderConfig.Model)
 	currentTimeState := r.newCurrentTimeReminderTurnState(threadID)
 	currentTimeInputItems, currentTimeSessionItems, err := r.currentTimeReminderInputItems(ctx, threadID, turnID, cfg, time.UnixMilli(startedAtMS).UTC(), currentTimeState)
 	if err != nil {
