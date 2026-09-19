@@ -12,14 +12,11 @@ const (
 	SkillMetadataContextWindowPercent    = 2
 	MaxDefaultContextSkillDescriptionLen = 1024
 	SkillDescriptionTruncatedSuffix      = "..."
-	SkillDescriptionWarningThreshold     = 100
 
-	SkillDescriptionTruncatedWarning            = "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-	SkillDescriptionTruncatedWarningWithPercent = "Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-	SkillsInstructionsOpenTag                   = "<skills_instructions>"
-	SkillsInstructionsCloseTag                  = "</skills_instructions>"
-	SkillsIntroWithAbsolutePaths                = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `executor package` locators are owned by their execution environment, `orchestrator package` locators are opaque package identifiers, and `custom resource` locators use their provider's access mechanism."
-	SkillsIntroWithAliases                      = "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table."
+	SkillsInstructionsOpenTag    = "<skills_instructions>"
+	SkillsInstructionsCloseTag   = "</skills_instructions>"
+	SkillsIntroWithAbsolutePaths = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `executor package` locators are owned by their execution environment, `orchestrator package` locators are opaque package identifiers, and `custom resource` locators use their provider's access mechanism."
+	SkillsIntroWithAliases       = "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table."
 )
 
 var SkillsHowToUseWithAbsolutePaths = strings.Join([]string{
@@ -971,13 +968,8 @@ func skillRenderWarning(report *SkillRenderReport, budget SkillMetadataBudget) *
 		message := fmt.Sprintf("%s All skill descriptions were removed and %d additional %s %s not included in the model-visible skills list.", prefix, report.OmittedCount, word, verb)
 		return &message
 	}
-	if report.TotalCount > 0 && (report.TruncatedDescriptionChars+report.TotalCount-1)/report.TotalCount > SkillDescriptionWarningThreshold {
-		message := SkillDescriptionTruncatedWarning
-		if budget.Kind == SkillMetadataBudgetTokens && !budget.Configured {
-			message = SkillDescriptionTruncatedWarningWithPercent
-		}
-		return &message
-	}
+	// Rust #46070: shortening descriptions to fit the budget is expected and no
+	// longer warns; only omitted skills do.
 	return nil
 }
 

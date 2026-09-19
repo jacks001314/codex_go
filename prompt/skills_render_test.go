@@ -108,7 +108,9 @@ func TestRenderAvailableSkillsTokenBudgetWarningMentionsPercentLikeRust(t *testi
 	}
 }
 
-func TestRenderAvailableSkillsTokenTruncationWarningMentionsPercentLikeRust(t *testing.T) {
+// Mirrors Rust #46070: shortening descriptions to fit the skills context budget
+// is silent; only omitted skills warn.
+func TestRenderAvailableSkillsShortenedDescriptionsDoNotWarnLikeRust(t *testing.T) {
 	skills := []InstructionsSkillMetadata{
 		{Name: "long-skill", Scope: "repo", Description: strings.Repeat("a", 1000), Path: "/tmp/long/SKILL.md"},
 	}
@@ -119,11 +121,14 @@ func TestRenderAvailableSkillsTokenTruncationWarningMentionsPercentLikeRust(t *t
 	}
 	budget.Limit = minimum + 1
 	available := RenderAvailableSkills(skills, budget)
-	if available == nil || available.WarningMessage == nil {
-		t.Fatalf("RenderAvailableSkills() = %#v, want warning", available)
+	if available == nil {
+		t.Fatal("RenderAvailableSkills() = nil")
 	}
-	if *available.WarningMessage != SkillDescriptionTruncatedWarningWithPercent {
-		t.Fatalf("warning = %q, want %q", *available.WarningMessage, SkillDescriptionTruncatedWarningWithPercent)
+	if available.WarningMessage != nil {
+		t.Fatalf("warning = %q, want none for shortened descriptions", *available.WarningMessage)
+	}
+	if available.Report.TruncatedDescriptionChars == 0 {
+		t.Fatalf("descriptions should have been shortened: %#v", available.Report)
 	}
 }
 
@@ -496,7 +501,8 @@ func TestRenderExtensionAvailableSkillsPreservesEntriesBeforeOmittingLikeRust(t 
 	if available == nil || available.Report == nil || available.Report.OmittedCount != 0 || available.Report.IncludedCount != len(skills) {
 		t.Fatalf("extension pressure report = %#v", available)
 	}
-	if available.WarningMessage == nil || strings.Contains(available.Body, "additional skills omitted") || available.Report.TruncatedDescriptionSkillCount != len(skills) {
+	// Rust #46070: shortened descriptions stay silent; only omissions warn.
+	if available.WarningMessage != nil || strings.Contains(available.Body, "additional skills omitted") || available.Report.TruncatedDescriptionSkillCount != len(skills) {
 		t.Fatalf("extension bounded catalog body = %q warning=%v", available.Body, available.WarningMessage)
 	}
 	if strings.Contains(strings.Join(available.SkillLines, "\n"), "/SKILL.md") {
