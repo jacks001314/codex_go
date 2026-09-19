@@ -22,10 +22,12 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	// Re-pinned to upstream 78245b47 (#46579/#46574/#46565): the agents-overview
-	// recent-session, unavailable-command, and activity-group ordering snapshots.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1175 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1175", got)
+	// Re-pinned to upstream a5290028 (#46673): the two history-cell snapshots for
+	// a local daemon alpha/source version mismatch, on top of the agents-overview
+	// recent-session, unavailable-command, and activity-group ordering snapshots
+	// pinned at 78245b47 (#46579/#46574/#46565).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1177 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1177", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -258,7 +260,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/history_cell/snapshots",
-			Files:    77,
+			Files:    79,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
@@ -266,6 +268,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__single_line_command_compact_when_fits.snap",
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__plan_update_with_note_and_wrapping_snapshot.snap",
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__web_search_history_cell_snapshot.snap",
+				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__local_daemon_alpha_mismatch.snap",
+				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__local_daemon_source_mismatch.snap",
 			},
 		},
 		{

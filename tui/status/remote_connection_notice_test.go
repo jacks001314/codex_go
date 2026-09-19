@@ -1,28 +1,52 @@
 package status
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-// Mirrors Rust remote_connection_tests::server_version_notice_only_for_older_official_server
-// (#43622).
-func TestServerVersionNoticeOnlyForOlderOfficialServer(t *testing.T) {
-	server := "0.152.1"
-	message, ok := ServerVersionNoticeMessage("0.153.0", &server)
-	if !ok || message != "A background Codex service is running v0.152.1, older than your Codex CLI v0.153.0." {
-		t.Fatalf("notice = %q ok=%v", message, ok)
+// Mirrors Rust remote_connection_tests::server_version_notice_uses_client_release_policy
+// (#43622, #46673): an older released service reads "older than", while a local
+// client and another release line read "different from".
+func TestServerVersionNoticeUsesClientReleasePolicyLikeRust(t *testing.T) {
+	older := "0.152.1"
+	if message, ok := ServerVersionNoticeMessage("0.153.0", &older); !ok ||
+		message != "A background Codex service is running v0.152.1, older than your Codex CLI v0.153.0." {
+		t.Fatalf("older notice = %q ok=%v", message, ok)
 	}
 	same := "0.153.0"
 	if _, ok := ServerVersionNoticeMessage("0.153.0", &same); ok {
 		t.Fatal("equal versions must not warn")
 	}
-	source := "0.0.0"
-	if _, ok := ServerVersionNoticeMessage("0.0.0", &server); ok {
-		t.Fatal("source builds must not warn")
+	// A source build client reports a mismatch instead of staying silent.
+	if message, ok := ServerVersionNoticeMessage("0.0.0", &older); !ok ||
+		message != "A background Codex service is running v0.152.1, different from your Codex CLI v0.0.0." {
+		t.Fatalf("local client notice = %q ok=%v", message, ok)
 	}
 	if _, ok := ServerVersionNoticeMessage("0.153.0", nil); ok {
 		t.Fatal("missing server version must not warn")
 	}
+	source := "0.0.0"
 	if _, ok := ServerVersionNoticeMessage("0.153.0", &source); ok {
-		t.Fatal("source server build must not warn")
+		t.Fatal("a source server build must not warn a released client")
+	}
+
+	// Prerelease clients order within their release line and report another line
+	// as different.
+	previousAlpha := "0.153.0-alpha.9"
+	if message, ok := ServerVersionNoticeMessage("0.153.0-alpha.10", &previousAlpha); !ok ||
+		message != "A background Codex service is running v0.153.0-alpha.9, older than your Codex CLI v0.153.0-alpha.10." {
+		t.Fatalf("prerelease older notice = %q ok=%v", message, ok)
+	}
+	for _, server := range []string{"0.153.0-alpha.10", "0.153.0-alpha.11", "0.153.0"} {
+		if message, ok := ServerVersionNoticeMessage("0.153.0-alpha.10", &server); ok {
+			t.Fatalf("server %q must not warn the prerelease client: %q", server, message)
+		}
+	}
+	otherLine := "0.156.0"
+	if message, ok := ServerVersionNoticeMessage("0.155.0-alpha.12", &otherLine); !ok ||
+		message != "A background Codex service is running v0.156.0, different from your Codex CLI v0.155.0-alpha.12." {
+		t.Fatalf("other release line notice = %q ok=%v", message, ok)
 	}
 }
 
@@ -58,5 +82,16 @@ func TestPendingServerVersionNoticeDedupAndServiceIdentity(t *testing.T) {
 	_, otherHome, ok := PendingServerVersionNotice(RemoteConnectionUnixSocket, "/tmp/codex.sock", "/home/a", client, server, true, "")
 	if !ok || otherHome == key {
 		t.Fatalf("distinct server home key = %q equal to %q", otherHome, key)
+	}
+
+	// A local (source build) client now produces a mismatch notice, and it dedups
+	// through the same key rules while keeping the update guidance.
+	localNotice, localKey, ok := PendingServerVersionNotice(RemoteConnectionUnixSocket, "/tmp/codex.sock", "", "0.0.0", client, true, "")
+	if !ok || localNotice == nil || !localNotice.OfferUpdate ||
+		!strings.Contains(localNotice.Message, "different from") {
+		t.Fatalf("local mismatch notice = %#v ok=%v", localNotice, ok)
+	}
+	if _, _, ok := PendingServerVersionNotice(RemoteConnectionUnixSocket, "/tmp/codex.sock", "", "0.0.0", client, true, localKey); ok {
+		t.Fatal("the local mismatch notice must dedup by its key")
 	}
 }

@@ -74,7 +74,7 @@ func remoteServerVersionDisplay(serverVersion *string) string {
 
 // Rust parity: codex-rs/tui/src/status/remote_connection.rs (#43622).
 
-// ServerVersionNotice is an older-connected-service warning shown to the user.
+// ServerVersionNotice is a connected-service version warning shown to the user.
 type ServerVersionNotice struct {
 	Message string
 	// OfferUpdate suggests `codex app-server daemon update`; only the implicit
@@ -82,16 +82,23 @@ type ServerVersionNotice struct {
 	OfferUpdate bool
 }
 
-// ServerVersionNoticeMessage returns the warning text when the connected server
-// is an older official stable release (Rust #43622).
+// ServerVersionNoticeMessage returns the warning text when the connected
+// server's version policy differs from the client's: an older released service
+// reads "older than", while a local build or another release line reads
+// "different from" (Rust #43622, #46673).
 func ServerVersionNoticeMessage(client string, server *string) (string, bool) {
 	if server == nil {
 		return "", false
 	}
-	if !codextui.IsOfficialServerOlder(client, *server) {
+	kind, ok := codextui.ServerVersionNoticeKindFor(client, *server)
+	if !ok {
 		return "", false
 	}
-	return fmt.Sprintf("A background Codex service is running v%s, older than your Codex CLI v%s.", *server, client), true
+	comparison := "older than"
+	if kind == codextui.ServerVersionNoticeDifferent {
+		comparison = "different from"
+	}
+	return fmt.Sprintf("A background Codex service is running v%s, %s your Codex CLI v%s.", *server, comparison, client), true
 }
 
 // routingQueryParams are the query parameters that identify a remote routing
@@ -107,7 +114,7 @@ var routingQueryParams = map[string]bool{
 // version pair so repeated connect/reconnect cycles suppress an identical
 // notice (Rust #43622). The key exists only when a notice exists.
 func ServerVersionNoticeKey(kind RemoteConnectionKind, endpoint string, serverHome string, client string, server string) (string, bool) {
-	if !codextui.IsOfficialServerOlder(client, server) {
+	if _, ok := codextui.ServerVersionNoticeKindFor(client, server); !ok {
 		return "", false
 	}
 	hasher := sha256.New()
