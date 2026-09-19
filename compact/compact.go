@@ -174,6 +174,9 @@ type ContentPart struct {
 	Type     string
 	Text     string
 	ImageURL string
+	// FileID marks an uploaded-file image reference instead of an inline URL
+	// (Rust ImageReference::File, #46072).
+	FileID   string
 	AudioURL string
 	Detail   *string
 }
@@ -573,6 +576,12 @@ func EstimateItemTokens(item *Item) int {
 	if isStructuredAgentMessage(item) {
 		return (agentMessageModelVisibleBytes(item) + 3) / 4
 	}
+	if strings.EqualFold(strings.TrimSpace(item.Type), "message") {
+		// Rust estimate_response_item_model_visible_bytes counts a message's
+		// content blocks, so an image (inline or file-backed) is charged instead
+		// of contributing zero (#46072).
+		return compactTokensFromBytes(compactItemContentBytes(item))
+	}
 	return EstimateTextTokens(ItemText(item))
 }
 
@@ -581,6 +590,26 @@ const functionNamespaceDefault = "functions"
 
 // compactResizedImageBytes mirrors Rust RESIZED_IMAGE_BYTES_ESTIMATE.
 const compactResizedImageBytes = 7373
+
+// compactOriginalImageMaxPatches mirrors Rust ORIGINAL_IMAGE_MAX_PATCHES: a
+// file-backed image reference does not expose dimensions, so an `original`
+// detail reference is charged the maximum patch count (#46072).
+const compactOriginalImageMaxPatches = 10_000
+
+// compactImageReferenceBytes mirrors Rust estimate_image_reference_bytes
+// (#46072): an inline image keeps the resized-image estimate, while a file
+// reference is charged the fixed resized cost or the maximum patch count when
+// the request asks for `original` detail.
+func compactImageReferenceBytes(part ContentPart) int {
+	if strings.TrimSpace(part.FileID) == "" {
+		return compactResizedImageBytes
+	}
+	if part.Detail != nil && strings.EqualFold(strings.TrimSpace(*part.Detail), "original") {
+		// Rust approx_bytes_for_tokens(ORIGINAL_IMAGE_MAX_PATCHES): 4 bytes/token.
+		return compactOriginalImageMaxPatches * 4
+	}
+	return compactResizedImageBytes
+}
 
 // compactTokensFromBytes mirrors Rust approx_tokens_from_byte_count_i64.
 func compactTokensFromBytes(bytes int) int {
@@ -621,7 +650,7 @@ func compactItemContentBytes(item *Item) int {
 		case "input_text", "output_text", "text":
 			bytes += len(part.Text)
 		case "input_image", "image":
-			bytes += compactResizedImageBytes
+			bytes += compactImageReferenceBytes(part)
 		case "input_audio", "audio":
 			// Rust estimate_audio_bytes: approx_bytes_for_tokens over the
 			// duration-derived token count.

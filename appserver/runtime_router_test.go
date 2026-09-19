@@ -28118,3 +28118,31 @@ func TestAccountBoundRateLimitExtrasLikeRust(t *testing.T) {
 		t.Fatalf("account id = %v, want %q", account, otherAccount)
 	}
 }
+
+// Mirrors Rust #46072's compaction retention: an uploaded-file image reference
+// survives the session <-> compaction conversion and is charged in the token
+// estimate (the maximum patch count for `original` detail).
+func TestCompactItemsPreserveFileImageReferencesLikeRust(t *testing.T) {
+	original := "original"
+	items := []session.Item{{
+		ID: "u1", Type: "message", Role: "user",
+		Content: []session.ContentPart{{Type: "input_image", FileID: "file-1", Detail: &original}},
+	}}
+	converted := compactItemsFromSessionItems(items)
+	if len(converted) != 1 || len(converted[0].Content) != 1 {
+		t.Fatalf("converted = %#v", converted)
+	}
+	if got := converted[0].Content[0].FileID; got != "file-1" {
+		t.Fatalf("compact part file id = %q, want file-1", got)
+	}
+	if got := compact.EstimateItemTokens(&converted[0]); got != 10000 {
+		t.Fatalf("file image estimate = %d, want 10000", got)
+	}
+	roundTrip := sessionItemsFromCompactItems(converted, fixedTime())
+	if len(roundTrip) != 1 || len(roundTrip[0].Content) != 1 {
+		t.Fatalf("round trip = %#v", roundTrip)
+	}
+	if got := roundTrip[0].Content[0].FileID; got != "file-1" {
+		t.Fatalf("round-trip file id = %q, want file-1", got)
+	}
+}

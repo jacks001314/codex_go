@@ -633,3 +633,53 @@ func appendCompactUint32LE(buffer []byte, value uint32) []byte {
 func appendCompactUint16LE(buffer []byte, value uint16) []byte {
 	return append(buffer, byte(value), byte(value>>8))
 }
+
+// Mirrors Rust #46072's estimate_image_reference_bytes and the message-content
+// estimate: an image in a message is charged instead of contributing zero, and a
+// file-backed reference with `original` detail costs the maximum patch count
+// because the reference exposes no dimensions.
+func TestEstimateItemTokensChargesMessageImagesLikeRust(t *testing.T) {
+	original := "original"
+	auto := "auto"
+	cases := []struct {
+		name string
+		part ContentPart
+		want int
+	}{
+		{name: "inline image", part: ContentPart{Type: "input_image", ImageURL: "data:image/png;base64,AAAA"}, want: (compactResizedImageBytes + 3) / 4},
+		{name: "file image", part: ContentPart{Type: "input_image", FileID: "file-1"}, want: (compactResizedImageBytes + 3) / 4},
+		{name: "file image auto detail", part: ContentPart{Type: "input_image", FileID: "file-1", Detail: &auto}, want: (compactResizedImageBytes + 3) / 4},
+		{name: "file image original detail", part: ContentPart{Type: "input_image", FileID: "file-1", Detail: &original}, want: compactOriginalImageMaxPatches},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			item := Item{Type: "message", Role: "user", Content: []ContentPart{tc.part}}
+			if got := EstimateItemTokens(&item); got != tc.want {
+				t.Fatalf("EstimateItemTokens() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+
+	// Text and image bytes add up inside one message.
+	mixed := Item{Type: "message", Role: "user", Content: []ContentPart{
+		{Type: "input_text", Text: strings.Repeat("x", 40)},
+		{Type: "input_image", FileID: "file-1", Detail: &original},
+	}}
+	if got, want := EstimateItemTokens(&mixed), (40+compactOriginalImageMaxPatches*4+3)/4; got != want {
+		t.Fatalf("mixed message tokens = %d, want %d", got, want)
+	}
+
+	// A text-only message keeps the plain text estimate.
+	textOnly := Item{Type: "message", Role: "user", Text: strings.Repeat("y", 40)}
+	if got, want := EstimateItemTokens(&textOnly), EstimateTextTokens(textOnly.Text); got != want {
+		t.Fatalf("text-only message tokens = %d, want %d", got, want)
+	}
+
+	// Tool outputs charge file images through the same reference rule.
+	output := Item{Type: "function_call_output", CallID: "call-1", Name: "tool", Content: []ContentPart{
+		{Type: "input_image", FileID: "file-1", Detail: &original},
+	}}
+	if got := EstimateItemTokens(&output); got < compactOriginalImageMaxPatches {
+		t.Fatalf("tool output tokens = %d, want at least the maximum patch count", got)
+	}
+}

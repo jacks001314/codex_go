@@ -771,6 +771,7 @@ func compactItemsFromSessionItems(items []session.Item) []compact.Item {
 				Type:     item.Content[j].Type,
 				Text:     item.Content[j].Text,
 				ImageURL: item.Content[j].ImageURL,
+				FileID:   item.Content[j].FileID,
 				AudioURL: item.Content[j].AudioURL,
 				Detail:   item.Content[j].Detail,
 			})
@@ -818,6 +819,7 @@ func sessionItemsFromCompactItems(items []compact.Item, now time.Time) []session
 				Type:     item.Content[j].Type,
 				Text:     item.Content[j].Text,
 				ImageURL: item.Content[j].ImageURL,
+				FileID:   item.Content[j].FileID,
 				Detail:   item.Content[j].Detail,
 			})
 		}
