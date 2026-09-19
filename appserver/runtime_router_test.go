@@ -598,6 +598,15 @@ func TestRuntimeRouterThreadListAndSearchReportSubagentDirectInputCapability(t *
 		{"queue update", MethodThreadQueueUpdate, ThreadQueueUpdateParams{ThreadID: "spawn-v2", QueuedSubmissionID: "q-1"}},
 		{"queue start", MethodThreadQueueStart, ThreadQueueStartParams{ThreadID: "spawn-v2"}},
 		{"compact", MethodThreadCompactStart, ThreadCompactStartParams{ThreadID: "spawn-v2"}},
+		{"revert", MethodThreadRevert, ThreadRevertParams{ThreadID: "spawn-v2", BeforeTurnID: "turn-1"}},
+		{"shell command", MethodThreadShellCommand, ShellCommandParams{ThreadID: "spawn-v2", Command: "echo hi"}},
+		{"approve guardian denial", MethodThreadApproveGuardianDeniedAction, ThreadApproveGuardianDeniedActionParams{
+			ThreadID: "spawn-v2",
+			Event:    json.RawMessage(`{"status":"denied"}`),
+		}},
+		{"goal set", MethodThreadGoalSet, GoalSetParams{ThreadID: "spawn-v2"}},
+		{"goal clear", MethodThreadGoalClear, GoalClearParams{ThreadID: "spawn-v2"}},
+		{"mcp tool call", MethodMCPServerToolCall, mcp.MCPToolCallParams{ThreadID: "spawn-v2", Server: "s", Tool: "t"}},
 	}
 	for _, item := range directInputRequests {
 		rejected := router.Handle(requestWithParams(t, IntID(3), item.method, item.params))

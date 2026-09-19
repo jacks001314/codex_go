@@ -878,6 +878,11 @@ func (r *RuntimeRouter) handleThreadApproveGuardianDeniedActionRuntime(request *
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
+	// Rust `thread_approve_guardian_denied_action_inner` loads the thread and
+	// then enforces the direct-input policy before it submits the op.
+	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
+		return nil, err
+	}
 	var event state.Event
 	if err := json.Unmarshal(params.Event, &event); err != nil {
 		return nil, jsonRPCInvalidRequest("invalid Guardian denial event: " + err.Error())

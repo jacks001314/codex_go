@@ -3217,6 +3217,11 @@ func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadReve
 	if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
 		return nil, err
 	}
+	// Rust `thread_revert_inner` enforces the direct-input policy right after
+	// loading the thread.
+	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
+		return nil, err
+	}
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false)
 	if err != nil {
 		return nil, threadReadError(params.ThreadID, err)
@@ -7673,7 +7678,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
 		}
-		return r.setThreadGoal(&params, request.normalizedConnectionID())
+		return r.setThreadGoal(request, &params)
 	case MethodThreadGoalGet:
 		var params GoalGetParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -7685,7 +7690,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
 		}
-		return r.clearThreadGoal(&params, request.normalizedConnectionID())
+		return r.clearThreadGoal(request, &params)
 	case MethodThreadSettingsUpdate:
 		var params SettingsUpdateParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -7742,7 +7747,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
 		}
-		return r.handleThreadShellCommand(&params)
+		return r.handleThreadShellCommand(request, &params)
 	case MethodThreadBackgroundTerminalsClean:
 		var params BackgroundTerminalsCleanParams
 		if err := request.DecodeParams(&params); err != nil {
@@ -8034,7 +8039,7 @@ func (r *RuntimeRouter) terminateBackgroundTerminal(params *BackgroundTerminalsT
 	return response, nil
 }
 
-func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string) (*GoalSetResponse, error) {
+func (r *RuntimeRouter) setThreadGoal(request *Request, params *GoalSetParams) (*GoalSetResponse, error) {
 	if !r.goalsFeatureEnabled() {
 		return nil, jsonRPCInvalidRequest("goals feature is disabled")
 	}
@@ -8045,6 +8050,13 @@ func (r *RuntimeRouter) setThreadGoal(params *GoalSetParams, connectionID string
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
+	// Rust's `state_db_for_materialized_thread(GoalAccess::Mutate)` rejects
+	// direct input to parent-owned multi-agent V2 subagent threads before any
+	// goal state is touched.
+	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
+		return nil, err
+	}
+	connectionID := request.normalizedConnectionID()
 	// Rust #44944: an active goal can immediately inject an objective or start
 	// an idle turn, so it is gated on the retained provider route. Pausing,
 	// completing, or clearing a goal must stay possible after policy changes.
@@ -8159,13 +8171,19 @@ func (r *RuntimeRouter) getThreadGoal(params *GoalGetParams) (*GoalGetResponse, 
 	return &GoalGetResponse{Goal: &cloned}, nil
 }
 
-func (r *RuntimeRouter) clearThreadGoal(params *GoalClearParams, connectionID string) (*GoalClearResponse, error) {
+func (r *RuntimeRouter) clearThreadGoal(request *Request, params *GoalClearParams) (*GoalClearResponse, error) {
 	if !r.goalsFeatureEnabled() {
 		return nil, jsonRPCInvalidRequest("goals feature is disabled")
 	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
+	// Rust's `state_db_for_materialized_thread(GoalAccess::Mutate)` rejects
+	// direct input to parent-owned multi-agent V2 subagent threads.
+	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
+		return nil, err
+	}
+	connectionID := request.normalizedConnectionID()
 	if r != nil && r.services.StateRuntime != nil && r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil {
 		response, deleted, record, err := r.clearStateThreadGoal(params)
 		if err != nil {
@@ -10306,6 +10324,11 @@ func (r *RuntimeRouter) handleMCPServerToolCall(request *Request) (*mcp.MCPToolC
 		return nil, err
 	}
 	if err := r.ensureMCPThread(params.ThreadID); err != nil {
+		return nil, err
+	}
+	// Rust `call_mcp_server_tool` loads the thread and then enforces the
+	// direct-input policy before it calls the server.
+	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
 		return nil, err
 	}
 	return r.mcpServiceForThread(params.ThreadID, nil).CallTool(&params)

@@ -28,7 +28,7 @@ type threadShellCommandRun struct {
 	TimeoutMs  *int64
 }
 
-func (r *RuntimeRouter) handleThreadShellCommand(params *ShellCommandParams) (*ShellCommandResponse, error) {
+func (r *RuntimeRouter) handleThreadShellCommand(request *Request, params *ShellCommandParams) (*ShellCommandResponse, error) {
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -37,6 +37,11 @@ func (r *RuntimeRouter) handleThreadShellCommand(params *ShellCommandParams) (*S
 	}
 	threadID := strings.TrimSpace(params.ThreadID)
 	if err := r.requireLoadedThreadForRuntimeOp(threadID); err != nil {
+		return nil, err
+	}
+	// Rust `thread_shell_command_inner` loads the thread and then enforces the
+	// direct-input policy before running the shell command.
+	if err := r.ensureDirectInputAllowed(request, threadID); err != nil {
 		return nil, err
 	}
 	command := strings.TrimSpace(params.Command)
