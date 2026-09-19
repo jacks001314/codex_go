@@ -1,4 +1,4 @@
-﻿package appserver
+package appserver
 
 import (
 	"archive/tar"
@@ -2631,7 +2631,6 @@ func TestWindowsSandboxLevelAppliesRequirementsLikeRust(t *testing.T) {
 	}
 }
 
-
 func TestRuntimeRouterRemoteControlStatusChangedNotifications(t *testing.T) {
 	sink := NewNotificationBuffer()
 	router := NewRuntimeRouter(RuntimeServices{Remote: remotecontrol.NewManager("codex", "install-1")})
@@ -4687,6 +4686,20 @@ func TestRuntimeRouterWorkspaceMessagesNotFoundDisablesFeature(t *testing.T) {
 func TestRuntimeRouterExternalChatGPTTokensPersistAndNotify(t *testing.T) {
 	home := t.TempDir()
 	sink := NewNotificationBuffer()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/codex/accounts/check" {
+			t.Fatalf("accounts check path = %q", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{"accounts": []any{map[string]any{
+			"id":                       "account-1",
+			"workspace_backend_origin": "https://chatgpt.com",
+			"account_routing_override": "NO_CONSTRAINT",
+		}}})
+	}))
+	defer backend.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+backend.URL+`"`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	router := NewRuntimeRouter(RuntimeServices{
 		Account: auth.NewAccountManager(),
 		Config:  config.NewConfigService(home),
@@ -5085,6 +5098,20 @@ func TestRuntimeRouterPersonalAccessTokenAuthStatusAndAccountRead(t *testing.T) 
 		}
 	}))
 	defer server.Close()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/codex/accounts/check" {
+			t.Fatalf("accounts check path = %q", r.URL.Path)
+		}
+		writeJSON(t, w, map[string]any{"accounts": []any{map[string]any{
+			"id":                       "account-123",
+			"workspace_backend_origin": "https://chatgpt.com",
+			"account_routing_override": "NO_CONSTRAINT",
+		}}})
+	}))
+	defer backend.Close()
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`chatgpt_base_url = "`+backend.URL+`"`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	t.Setenv(auth.CodexAccessTokenEnv, "at-test-token")
 	t.Setenv(auth.AuthAPIBaseURLEnv, server.URL)
 	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), Account: auth.NewAccountManager()})

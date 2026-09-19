@@ -472,6 +472,10 @@ type GetAccountParams struct {
 type GetAccountResponse struct {
 	Account            *Account `json:"account"`
 	RequiresOpenAIAuth bool     `json:"requiresOpenaiAuth"`
+	// WorkspaceRouting is the discovered routing for the selected ChatGPT
+	// workspace (Rust GetAccountResponse.workspaceRouting); null when the
+	// account has no ChatGPT workspace or no routing was discovered.
+	WorkspaceRouting *WorkspaceRouting `json:"workspaceRouting"`
 }
 
 type AccountUpdatedNotification struct {

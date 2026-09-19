@@ -256,6 +256,10 @@ type RuntimeRouter struct {
 	authOwnerRevision uint64
 	authChangeTracker *auth.AuthChangeTracker
 	authChanged       chan struct{}
+	// workspaceRouting caches workspace routing discovery for account/read
+	// (Rust AccountRequestProcessor::workspace_routing).
+	workspaceRoutingOnce sync.Once
+	workspaceRouting     *workspaceRoutingState
 	// otelProvider is the process OTEL provider built from config at startup.
 	// It forwards the task metrics, the exported log records, and the request
 	// spans, and is shut down with the router.
@@ -11101,7 +11105,27 @@ func (r *RuntimeRouter) handleGetAccount(request *Request) (*auth.GetAccountResp
 	}
 	response := r.requireAccount().GetAccount(&params)
 	response.RequiresOpenAIAuth = true
+	// Rust get_account: routing discovery failures surface as internal errors,
+	// so a ChatGPT account read is never reported with unresolved routing.
+	routing, err := r.workspaceRoutingForAccountRead(context.Background(), r.requiredChatGPTBaseURL(), snapshot)
+	if err != nil {
+		return nil, err
+	}
+	response.WorkspaceRouting = routing
 	return response, nil
+}
+
+// requiredChatGPTBaseURL returns the managed `chatgpt_base_url` requirement the
+// workspace routing resolver reconciles against the discovered backend.
+func (r *RuntimeRouter) requiredChatGPTBaseURL() string {
+	if r == nil || r.services.Config == nil {
+		return ""
+	}
+	requirements := r.requireConfig().Requirements()
+	if requirements == nil || requirements.Requirements == nil || requirements.Requirements.ChatgptBaseURL == nil {
+		return ""
+	}
+	return strings.TrimSpace(*requirements.Requirements.ChatgptBaseURL)
 }
 
 func (r *RuntimeRouter) providerAccountResponse(snapshot *auth.AuthDotJSON) (*auth.GetAccountResponse, bool) {
