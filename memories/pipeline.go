@@ -146,6 +146,9 @@ func (p *StartupPipeline) Run(ctx context.Context) (StartupReport, error) {
 	}
 	if p.Guard != nil && !p.Guard.AllowMemoryStartup(ctx, p.Config.MinRateLimitRemainingPercent) {
 		report.PhaseTwoStatus = "skipped_rate_limit"
+		// Rust reports the skipped startup before phase one runs (#45956's
+		// neighbours in memories/write/src/start.rs).
+		p.recordMemoryJobStatus(MemoryStartupMetric, "skipped_rate_limit")
 		return report, nil
 	}
 	if p.StageOne != nil {
@@ -160,6 +163,10 @@ func (p *StartupPipeline) Run(ctx context.Context) (StartupReport, error) {
 }
 
 func (p *StartupPipeline) runStageOne(ctx context.Context, report *StartupReport) {
+	// Rust starts the phase-one timer before claiming, so a run with no
+	// candidates (or an unavailable store) is timed too.
+	timer := p.startMemoryTimer(MemoryPhaseOneE2EMetric)
+	defer timer.Stop()
 	claims, err := p.State.ClaimStage1JobsForStartup(ctx, p.CurrentThreadID, state.Stage1StartupClaimParams{
 		ScanLimit:           StageOneThreadScanLimit,
 		MaxClaimed:          p.Config.MaxRolloutsPerStartup,
@@ -170,6 +177,10 @@ func (p *StartupPipeline) runStageOne(ctx context.Context, report *StartupReport
 		MaxRunningJobs:      p.Config.MaxRolloutsPerStartup,
 	})
 	if err != nil {
+		return
+	}
+	if len(claims) == 0 {
+		p.recordMemoryJobStatus(MemoryPhaseOneJobsMetric, "skipped_no_candidates")
 		return
 	}
 	report.StageOneClaimed = len(claims)
@@ -197,6 +208,15 @@ func (p *StartupPipeline) runStageOne(ctx context.Context, report *StartupReport
 		}()
 	}
 	workers.Wait()
+	// Rust emits the job/output counters after the parallel jobs finish, and
+	// only for the statuses that occurred.
+	p.recordMemoryCounter(MemoryPhaseOneJobsMetric, report.StageOneClaimed, map[string]string{MemoryStatusTag: "claimed"})
+	if report.StageOneSucceeded > 0 {
+		p.recordMemoryCounter(MemoryPhaseOneJobsMetric, report.StageOneSucceeded, map[string]string{MemoryStatusTag: "succeeded"})
+		p.recordMemoryCounter(MemoryPhaseOneOutputMetric, report.StageOneSucceeded, nil)
+	}
+	p.recordMemoryCounter(MemoryPhaseOneJobsMetric, report.StageOneSucceededEmpty, map[string]string{MemoryStatusTag: "succeeded_no_output"})
+	p.recordMemoryCounter(MemoryPhaseOneJobsMetric, report.StageOneFailed, map[string]string{MemoryStatusTag: "failed"})
 }
 
 func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1StartupClaim) string {
@@ -256,14 +276,24 @@ func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1
 }
 
 func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
+	// Rust starts the phase-two timer before it touches the store; every early
+	// return records the elapsed duration, and the two successful endings stop
+	// it before measuring storage so the measurement is not part of the run.
+	timer := p.startMemoryTimer(MemoryPhaseTwoE2EMetric)
+	defer timer.Stop()
 	claim, err := p.State.TryClaimGlobalPhase2Job(ctx, p.CurrentThreadID, PhaseTwoJobLeaseSeconds)
 	if err != nil {
+		p.recordMemoryJobStatus(MemoryPhaseTwoJobsMetric, "failed_claim")
 		return "failed_claim"
 	}
 	if claim.Outcome != state.Phase2JobClaimed {
+		p.recordMemoryJobStatus(MemoryPhaseTwoJobsMetric, string(claim.Outcome))
 		return string(claim.Outcome)
 	}
+	p.recordMemoryJobStatus(MemoryPhaseTwoJobsMetric, "claimed")
 	fail := func(reason string) string {
+		// Rust's job::failed counters the reason before it records the failure.
+		p.recordMemoryJobStatus(MemoryPhaseTwoJobsMetric, reason)
 		updated, _ := p.State.MarkGlobalPhase2JobFailed(ctx, claim.OwnershipToken, reason, PhaseTwoRetryDelaySeconds)
 		if !updated {
 			_, _ = p.State.MarkGlobalPhase2JobFailedIfUnowned(ctx, claim.OwnershipToken, reason, PhaseTwoRetryDelaySeconds)
@@ -300,7 +330,11 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 		return fail("failed_workspace_status")
 	}
 	if !diff.HasChanges() && ValidateConsolidationArtifactsForVersion(root, p.Version) == nil {
+		// Rust counts the reason inside job::succeed, before the DB write, so a
+		// failed write still reports the outcome that was attempted.
+		p.recordMemoryJobStatus(MemoryPhaseTwoJobsMetric, "succeeded_no_workspace_changes")
 		if updated, _ := p.State.MarkGlobalPhase2JobSucceeded(ctx, claim.OwnershipToken, watermark, selected); updated {
+			timer.Stop()
 			p.RecordMemoryStorageSize(root)
 			return "succeeded_no_workspace_changes"
 		}
@@ -321,12 +355,18 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	})
 	cancel()
 	lostOwnership := <-heartbeatDone
+	var spawnErr *ConsolidationSpawnError
+	if !errors.As(agentErr, &spawnErr) {
+		// Rust emits the dispatch metrics right after a successful spawn, before
+		// the agent's own completion handling runs.
+		p.recordMemoryJobStatus(MemoryPhaseTwoJobsMetric, "agent_spawned")
+		p.recordMemoryCounter(MemoryPhaseTwoInputMetric, len(selected), nil)
+	}
 	if agentErr != nil {
 		// Rust #39205: remove worker-created symlinks even when the worker
 		// fails so they cannot affect files outside the workspace.
 		_ = removeMemorySymlinks(root)
-		var spawnErr *ConsolidationSpawnError
-		if errors.As(agentErr, &spawnErr) {
+		if spawnErr != nil {
 			return fail("failed_spawn_agent")
 		}
 		return fail("failed_agent")
@@ -350,6 +390,8 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	if err := ResetWorkspaceBaseline(ctx, root); err != nil {
 		return fail("failed_workspace_commit")
 	}
+	// Rust counts the success reason inside job::succeed, before the DB write.
+	p.recordMemoryJobStatus(MemoryPhaseTwoJobsMetric, "succeeded")
 	updated, _ := p.State.MarkGlobalPhase2JobSucceeded(ctx, claim.OwnershipToken, watermark, selected)
 	if !updated {
 		return "failed_mark_succeeded"
@@ -357,6 +399,7 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 	// The storage sample is taken after the job is recorded as succeeded and
 	// after the baseline reset, so it covers the artifacts the run left behind
 	// (Rust drops the phase-two timer before measuring for the same reason).
+	timer.Stop()
 	p.RecordMemoryStorageSize(root)
 	return "succeeded"
 }

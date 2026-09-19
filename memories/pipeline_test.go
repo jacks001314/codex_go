@@ -149,6 +149,20 @@ WHERE id = 'memory-source-thread'`, updated.Unix(), updated.UnixMilli()); err !=
 	if len(storage[0].Boundaries) != len(MemoryStorageBytesBoundaries()) {
 		t.Fatalf("storage boundaries = %#v", storage[0].Boundaries)
 	}
+	// The phase counters mirror Rust's phase1/phase2 emit_metrics for a run that
+	// claimed one job, extracted output, spawned the agent and succeeded.
+	assertMemoryStatusCounts(t, metrics, MemoryPhaseOneJobsMetric, map[string]int{"claimed": 1, "succeeded": 1})
+	assertMemoryTimerRecorded(t, metrics, MemoryPhaseOneE2EMetric, config.MemoryVersionV1)
+	if output := memoryMetricRecords(metrics, MemoryPhaseOneOutputMetric); len(output) != 1 || output[0].Inc != 1 {
+		t.Fatalf("output records = %#v", output)
+	}
+	assertMemoryStatusCounts(t, metrics, MemoryPhaseTwoJobsMetric, map[string]int{
+		"claimed": 1, "agent_spawned": 1, "succeeded": 1,
+	})
+	assertMemoryTimerRecorded(t, metrics, MemoryPhaseTwoE2EMetric, config.MemoryVersionV1)
+	if input := memoryMetricRecords(metrics, MemoryPhaseTwoInputMetric); len(input) != 1 || input[0].Inc != 1 {
+		t.Fatalf("input records = %#v", input)
+	}
 }
 
 // storageBytesRecords selects the codex.memory.storage_bytes records.
@@ -208,6 +222,16 @@ func TestStartupPipelineReportsStorageBytesWithoutWorkspaceChanges(t *testing.T)
 	}
 	if storage[0].Value != int(wantBytes) || storage[0].Tags[MemoryVersionTag] != "v1" {
 		t.Fatalf("storage record = %#v, want %d bytes at v1", storage[0], wantBytes)
+	}
+	// A run that changed nothing returns before the agent is dispatched, so it
+	// reports neither the spawn counter nor the input count (Rust's early return).
+	assertMemoryStatusCounts(t, metrics, MemoryPhaseTwoJobsMetric, map[string]int{
+		"claimed": 1, "succeeded_no_workspace_changes": 1,
+	})
+	for _, name := range []string{MemoryPhaseTwoInputMetric, MemoryPhaseOneJobsMetric} {
+		if records := memoryMetricRecords(metrics, name); len(records) != 0 {
+			t.Fatalf("%s records = %#v", name, records)
+		}
 	}
 }
 
