@@ -1684,7 +1684,12 @@ type Model struct {
 	taskStartedAt                    time.Time
 
 	composerPasteEnterUntil *time.Time
-	now                     func() time.Time
+	// composerLastCharAt is when the composer last received a character event,
+	// mirroring Rust PasteBurst's plain-char timestamp (Rust #45454): a Tab that
+	// follows a short prefix - including a single Unicode rune inserted without a
+	// held first character - still belongs to the paste burst.
+	composerLastCharAt *time.Time
+	now                func() time.Time
 }
 
 // transcriptMessageKey identifies the render inputs for a single transcript
@@ -2626,6 +2631,17 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if cmd, handled := m.handleBackendBannerKey(msg); handled {
 			return m, cmd
 		}
+		// Rust #45454: an unmodified Tab inside a paste burst is captured before
+		// any popup or shortcut dispatch, so pasted indentation is never mistaken
+		// for a completion, submit, or queue action.
+		if msg.Type == bubbletea.KeyTab {
+			now := m.currentTime()
+			if m.shouldPasteBurstTabInsertInsteadOfShortcut(now) {
+				m.insertComposerPasteTab()
+				m.extendComposerPasteWindow(now)
+				return m, nil
+			}
+		}
 		if cmd, handled := m.updateSkillPopupKey(msg); handled {
 			return m, cmd
 		}
@@ -3529,6 +3545,16 @@ func (m *Model) insertComposerNewline() bubbletea.Cmd {
 	return nil
 }
 
+// insertComposerPasteTab appends one level of pasted indentation. Rust's
+// textarea keeps the literal tab; Go's composer (bubbles/textarea) sanitizes
+// input text, so the tab is stored as the textarea's tab expansion.
+func (m *Model) insertComposerPasteTab() {
+	if m == nil {
+		return
+	}
+	m.composer.InsertString("\t")
+}
+
 func (m *Model) currentTime() time.Time {
 	if m != nil && m.now != nil {
 		return m.now()
@@ -3537,7 +3563,13 @@ func (m *Model) currentTime() time.Time {
 }
 
 func (m *Model) noteComposerRunes(runes []rune, now time.Time) {
-	if m == nil || len(runes) <= 1 || m.disablePasteBurst {
+	if m == nil || len(runes) == 0 || m.disablePasteBurst {
+		return
+	}
+	// Rust PasteBurst::note_plain_char records every text-producing event, so a
+	// Tab arriving right after a short prefix is still part of the burst.
+	m.composerLastCharAt = &now
+	if len(runes) <= 1 {
 		return
 	}
 	m.extendComposerPasteWindow(now)
@@ -3563,6 +3595,24 @@ func (m *Model) shouldPasteBurstEnterInsertNewline(now time.Time) bool {
 		return false
 	}
 	return !now.After(*m.composerPasteEnterUntil)
+}
+
+// shouldPasteBurstTabInsertInsteadOfShortcut mirrors Rust #45454's
+// handle_paste_tab: an unmodified Tab that arrives inside a paste burst keeps
+// its indentation instead of dispatching completion, submission, or queueing.
+// An expired burst does not capture the Tab, so manual Tab shortcuts keep
+// working. Like Rust, the capture is independent of a slash context, so a Tab
+// that belongs to a burst is inserted instead of accepting a completion.
+func (m *Model) shouldPasteBurstTabInsertInsteadOfShortcut(now time.Time) bool {
+	if m == nil || m.disablePasteBurst {
+		return false
+	}
+	if m.composerPasteEnterUntil != nil && !now.After(*m.composerPasteEnterUntil) {
+		return true
+	}
+	// Short non-ASCII prefixes are inserted directly, without a held first
+	// character, so a character arriving within the burst interval still counts.
+	return m.composerLastCharAt != nil && now.Sub(*m.composerLastCharAt) <= bottompane.PasteBurstCharInterval
 }
 
 func (m *Model) composerStartsSlashContext() bool {

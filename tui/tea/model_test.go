@@ -704,6 +704,7 @@ func TestModelQueuesPromptWhileRunningAndSubmitsAfterCompletion(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetStatus("running")
 	var requests []SubmitRequest
+	now := time.Unix(0, 0)
 	model := NewModel(state, Options{
 		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
 			requests = append(requests, request)
@@ -714,8 +715,12 @@ func TestModelQueuesPromptWhileRunningAndSubmitsAfterCompletion(t *testing.T) {
 			return nil
 		},
 	})
+	model.now = func() time.Time { return now }
 
 	typeText(t, model, "queued while busy")
+	// A real Tab press lands well after the last typed character, so the paste
+	// burst does not capture it (Rust #45454).
+	now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
 	model.Update(key(bubbletea.KeyTab))
 	if len(requests) != 0 {
 		t.Fatalf("requests before completion = %#v", requests)
@@ -1533,14 +1538,19 @@ func TestModelPsAndStopCommands(t *testing.T) {
 
 func TestModelTabSubmitsWhenIdleAndQueuesWhenRunning(t *testing.T) {
 	var requests []SubmitRequest
+	now := time.Unix(0, 0)
 	model := NewModel(nil, Options{
 		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
 			requests = append(requests, request)
 			return nil
 		},
 	})
+	model.now = func() time.Time { return now }
 
 	typeText(t, model, "tab submit")
+	// The burst window only captures a Tab pressed within the burst interval
+	// (Rust #45454); a human Tab press is later than that.
+	now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
 	model.Update(key(bubbletea.KeyTab))
 	if len(requests) != 1 || requests[0].Prompt != "tab submit" {
 		t.Fatalf("idle tab requests = %#v", requests)
@@ -1548,12 +1558,83 @@ func TestModelTabSubmitsWhenIdleAndQueuesWhenRunning(t *testing.T) {
 
 	model.State.SetStatus("running")
 	typeText(t, model, "tab queue")
+	now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
 	model.Update(key(bubbletea.KeyTab))
 	if len(requests) != 1 {
 		t.Fatalf("running tab should not submit immediately: %#v", requests)
 	}
 	if got := model.QueuedRequests(); len(got) != 1 || got[0].Prompt != "tab queue" {
 		t.Fatalf("running tab queued = %#v", got)
+	}
+}
+
+// TestModelTabInsidePasteBurstKeepsIndentationLikeRust mirrors Rust #45454: a Tab
+// pressed inside a paste burst keeps its indentation instead of dispatching a
+// completion, submit, or queue shortcut, including after a single Unicode prefix
+// that was inserted directly.
+func TestModelTabInsidePasteBurstKeepsIndentationLikeRust(t *testing.T) {
+	for _, first := range []string{"陌", "x"} {
+		t.Run(first, func(t *testing.T) {
+			now := time.Unix(0, 0)
+			var requests []SubmitRequest
+			model := NewModel(nil, Options{
+				OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+					requests = append(requests, request)
+					return nil
+				},
+			})
+			model.now = func() time.Time { return now }
+
+			// A character immediately followed by Tab belongs to the burst.
+			model.Update(runes(first))
+			model.Update(key(bubbletea.KeyTab))
+			if len(requests) != 0 {
+				t.Fatalf("burst Tab submitted: %#v", requests)
+			}
+			// Go's bubbles/textarea sanitizes pasted text, so the tab is stored as
+			// its expanded indentation instead of Rust's literal '\t'.
+			const tab = "    "
+			if got := model.ComposerValue(); got != first+tab {
+				t.Fatalf("composer after burst Tab = %q, want %q", got, first+tab)
+			}
+
+			// Each appended tab refreshes the burst window, so a further Tab a
+			// half-window later is still captured.
+			now = now.Add(bottompane.PasteEnterSuppressWindow / 2)
+			model.Update(key(bubbletea.KeyTab))
+			if got := model.ComposerValue(); got != first+tab+tab {
+				t.Fatalf("composer after refreshed burst Tab = %q", got)
+			}
+			typeText(t, model, "end")
+			if got := model.ComposerValue(); got != first+tab+tab+"end" {
+				t.Fatalf("composer after draft tail = %q", got)
+			}
+
+			// An expired burst lets the Tab shortcut dispatch again.
+			now = now.Add(bottompane.PasteEnterSuppressWindow + time.Millisecond)
+			model.Update(key(bubbletea.KeyTab))
+			if len(requests) != 1 || requests[0].Prompt != first+tab+tab+"end" {
+				t.Fatalf("expired burst Tab requests = %#v", requests)
+			}
+		})
+	}
+}
+
+// TestModelTabInSlashContextInsidePasteBurstLikeRust mirrors Rust's
+// paste_burst_tab_does_not_accept_a_completion: a burst Tab is draft text even
+// while the slash popup is open, so pasted indentation is preserved.
+func TestModelTabInSlashContextInsidePasteBurstLikeRust(t *testing.T) {
+	now := time.Unix(0, 0)
+	model := NewModel(nil, Options{})
+	model.now = func() time.Time { return now }
+
+	model.Update(runes("/"))
+	model.Update(runes("rev"))
+	model.Update(key(bubbletea.KeyTab))
+	// The burst Tab is draft text instead of a completion, so the draft keeps its
+	// indentation and the command is not completed.
+	if got := model.ComposerValue(); got != "/rev    " {
+		t.Fatalf("slash-context burst Tab composer = %q, want indentation", got)
 	}
 }
 
@@ -4506,6 +4587,10 @@ func TestModelVisibleSlashCommandsProduceUserVisibleResult(t *testing.T) {
 
 func TestModelSlashCommandPopupFiltersCompletesAndDispatches(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 24})
+	// A Tab press lands after the paste-burst window, so the popup keeps its
+	// completion shortcut (Rust #45454).
+	now := time.Unix(0, 0)
+	model.now = func() time.Time { return now }
 
 	typeText(t, model, "/")
 	if !model.slashPopup.Active {
@@ -4534,6 +4619,7 @@ func TestModelSlashCommandPopupFiltersCompletesAndDispatches(t *testing.T) {
 	if len(model.slashPopup.Items) != 1 || model.slashPopup.Items[0].Name != "model" {
 		t.Fatalf("filtered slash popup items = %#v, want only model", model.slashPopup.Items)
 	}
+	now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
 	model.Update(key(bubbletea.KeyTab))
 	if got := model.ComposerValue(); got != "/model " {
 		t.Fatalf("composer after Tab completion = %q, want /model space", got)
