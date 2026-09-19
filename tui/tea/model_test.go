@@ -1877,6 +1877,36 @@ func TestModelRendersCommandExecutionLifecycle(t *testing.T) {
 	}
 }
 
+// TestModelRendersExploringCommandActionsLikeRust pins that a command whose
+// parsed actions are only reads/listings/searches renders as an exploring cell
+// with the parsed action labels (Rust ExecCell::is_exploring_cell), instead of
+// the generic command cell.
+func TestModelRendersExploringCommandActionsLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-read", "cat README.md", "", nil, "in_progress"))})
+	view := model.View()
+	if !strings.Contains(view, "Exploring") || !strings.Contains(view, "Read README.md") {
+		t.Fatalf("read command should render as an exploring cell with the parsed action:\n%s", view)
+	}
+	if strings.Contains(view, "Running cat README.md") {
+		t.Fatalf("exploring command leaked the generic running label:\n%s", view)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-search", "rg TODO src", "", nil, "in_progress"))})
+	view = model.View()
+	if !strings.Contains(view, "Search TODO in src") {
+		t.Fatalf("search command should render the parsed search action:\n%s", view)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-run", "go test ./...", "", nil, "in_progress"))})
+	view = model.View()
+	if !strings.Contains(view, "Running go test ./...") {
+		t.Fatalf("non-exploring command should keep the generic cell:\n%s", view)
+	}
+}
+
 func commandExecutionItemWithSource(id string, command string, output string, exitCode *int, status string, source string) protocol.ThreadItem {
 	item := protocol.CommandExecutionItem(id, command, output, exitCode, status)
 	item.Metadata = map[string]any{"source": source}

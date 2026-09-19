@@ -3096,24 +3096,59 @@ func commandExecutionStartedThreadItem(invocation *tool.Invocation, turnID strin
 }
 
 func commandExecutionActions(commandArgs []string, command string, cwd string) []map[string]any {
-	paths := shell.ReadPaths(commandArgs)
-	if len(paths) == 0 {
+	// Rust parity: CommandExecutionPresentation::from_raw projects the
+	// display-only parse_command actions (read/listFiles/search/unknown) onto
+	// the client shape, resolving read paths against the executor cwd
+	// (command_actions_for_path_uri).
+	parsed := shell.ParseDisplayCommands(commandArgs)
+	actions := make([]map[string]any, 0, len(parsed))
+	for _, action := range parsed {
+		switch action.Kind {
+		case shell.DisplayCommandRead:
+			resolved, err := utils.ResolveExecutorPath(cwd, action.Path)
+			if err != nil {
+				continue
+			}
+			actions = append(actions, map[string]any{
+				"type":    "read",
+				"command": action.Cmd,
+				"name":    action.Name,
+				"path":    resolved.Value,
+			})
+		case shell.DisplayCommandListFiles:
+			actions = append(actions, map[string]any{
+				"type":    "listFiles",
+				"command": action.Cmd,
+				"path":    optionalDisplayActionString(action.Path),
+			})
+		case shell.DisplayCommandSearch:
+			actions = append(actions, map[string]any{
+				"type":    "search",
+				"command": action.Cmd,
+				"query":   optionalDisplayActionString(action.Query),
+				"path":    optionalDisplayActionString(action.Path),
+			})
+		default:
+			actions = append(actions, map[string]any{
+				"type":    "unknown",
+				"command": action.Cmd,
+			})
+		}
+	}
+	if len(actions) == 0 {
 		return []map[string]any{{"type": "unknown", "command": command}}
 	}
-	actions := make([]map[string]any, 0, len(paths))
-	for _, path := range paths {
-		resolved, err := utils.ResolveExecutorPath(cwd, path)
-		if err != nil {
-			continue
-		}
-		actions = append(actions, map[string]any{
-			"type":    "read",
-			"command": command,
-			"name":    utils.CrossPlatformBase(path),
-			"path":    resolved.Value,
-		})
-	}
 	return actions
+}
+
+// optionalDisplayActionString keeps Rust's Option<String> distinction for the
+// listFiles/search path and search query fields: an absent value is nil (which
+// serializes as null), never an empty string.
+func optionalDisplayActionString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func fileChangeStartedThreadItem(invocation *tool.Invocation, turnID string, cwd string, startedAt time.Time) (ThreadItem, bool) {
@@ -6639,27 +6674,27 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		SandboxNetworkAccess:    analyticsSandboxNetworkAccess(permissionProfile),
 		// The inventory is captured when the turn is admitted so a later plugin
 		// reconciliation cannot change what the turn started with (Rust #46323).
-		ActivePluginIDsAtTurnStart:   r.turnAnalyticsPluginInventory(threadID, turnID),
-		CollaborationMode:            analyticsCollaborationMode(params),
-		Personality:                  analyticsOptionalModeString(personality),
-		InputItems:                   inputItems,
-		HostedTools:                  hostedTools,
-		SessionItems:                 sessionItems,
-		ExtraSessionItems:            extraSessionItemsSnapshot,
-		PostToolInputItems:           postToolInputItems,
-		PreviousResponseID:           previousResponseID,
-		ParallelToolCalls:            r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
-		ReasoningEffort:              requestReasoningEffort,
-		ReasoningSummary:             turnReasoningSummary(cfg, params),
+		ActivePluginIDsAtTurnStart:     r.turnAnalyticsPluginInventory(threadID, turnID),
+		CollaborationMode:              analyticsCollaborationMode(params),
+		Personality:                    analyticsOptionalModeString(personality),
+		InputItems:                     inputItems,
+		HostedTools:                    hostedTools,
+		SessionItems:                   sessionItems,
+		ExtraSessionItems:              extraSessionItemsSnapshot,
+		PostToolInputItems:             postToolInputItems,
+		PreviousResponseID:             previousResponseID,
+		ParallelToolCalls:              r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
+		ReasoningEffort:                requestReasoningEffort,
+		ReasoningSummary:               turnReasoningSummary(cfg, params),
 		ReasoningEffortOverrideEnabled: reasoningEffortOverride,
-		OverrideInputItems:           overrideInputItems,
-		ConcurrentReasoningSummaries: features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
-		ModelVerbosity:               firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),
-		IncludeTimingMetrics:         appIncludeTimingMetrics(cfg),
-		BetaFeaturesHeader:           features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings()),
-		ItemIDsEnabled:               cfg.FeatureSettings()["item_ids"],
-		PromptCacheKey:               r.responsesPromptCacheKey(threadID, lineage, threadSnapshot.Ephemeral),
-		ServiceTier:                  serviceTier,
+		OverrideInputItems:             overrideInputItems,
+		ConcurrentReasoningSummaries:   features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
+		ModelVerbosity:                 firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),
+		IncludeTimingMetrics:           appIncludeTimingMetrics(cfg),
+		BetaFeaturesHeader:             features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings()),
+		ItemIDsEnabled:                 cfg.FeatureSettings()["item_ids"],
+		PromptCacheKey:                 r.responsesPromptCacheKey(threadID, lineage, threadSnapshot.Ephemeral),
+		ServiceTier:                    serviceTier,
 		// Rust #46501: the span carries the usage-tag document alongside the
 		// turn's resolved settings.
 		UsageTags:                       UsageTagsForTurn(cfg, cfg.FeatureSettings(), modelInfo, serviceTier),

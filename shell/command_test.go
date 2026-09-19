@@ -183,7 +183,7 @@ func TestReadPathsRecognizesPowerShellGetContentForms(t *testing.T) {
 
 func TestShlexJoin(t *testing.T) {
 	got := ShlexJoin([]string{"echo", "hello world", "it's"})
-	if got != `echo 'hello world' 'it'\''s'` {
+	if got != `echo 'hello world' "it's"` {
 		t.Fatalf("ShlexJoin() = %q", got)
 	}
 }

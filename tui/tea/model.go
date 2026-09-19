@@ -28,6 +28,7 @@ import (
 	"codex_go/plugin"
 	"codex_go/protocol"
 	"codex_go/review"
+	"codex_go/shell"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 	"codex_go/tui/anim"
@@ -4974,6 +4975,7 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 	call := execcell.ExecCall{
 		CallID:  firstNonEmpty(state.CallID, state.ID),
 		Command: shellScriptCommandForDisplay(item.Command),
+		Parsed:  parsedCommandsForExecCell(item.Command),
 		Source:  execCommandSourceForItem(item),
 	}
 	inProgress := commandExecutionInProgress(item.Status)
@@ -5838,6 +5840,39 @@ func shellScriptCommandForDisplay(command string) []string {
 		return nil
 	}
 	return []string{"bash", "-lc", command}
+}
+
+// parsedCommandsForExecCell mirrors Rust core's parse_command feeding the TUI
+// ExecCell: the display-only actions (read/listFiles/search/unknown) derived
+// from the command's argv. Rust computes these once in core and forwards them
+// on the exec event; Go derives them at the display site from the same argv.
+func parsedCommandsForExecCell(command string) []execcell.ParsedCommand {
+	actions := shell.ParseDisplayCommands(shell.SplitCommandLine(command))
+	if len(actions) == 0 {
+		return nil
+	}
+	parsed := make([]execcell.ParsedCommand, 0, len(actions))
+	for _, action := range actions {
+		var kind execcell.ParsedCommandKind
+		switch action.Kind {
+		case shell.DisplayCommandRead:
+			kind = execcell.ParsedRead
+		case shell.DisplayCommandListFiles:
+			kind = execcell.ParsedListFiles
+		case shell.DisplayCommandSearch:
+			kind = execcell.ParsedSearch
+		default:
+			kind = execcell.ParsedUnknown
+		}
+		parsed = append(parsed, execcell.ParsedCommand{
+			Kind:  kind,
+			Name:  action.Name,
+			Cmd:   action.Cmd,
+			Path:  action.Path,
+			Query: action.Query,
+		})
+	}
+	return parsed
 }
 
 func execCommandInputCommand(input string) string {

@@ -156,7 +156,7 @@ func TestCommandLifecycleCommandDisplayParsingMatchesRustCore(t *testing.T) {
 		t.Fatalf("quoted fallback display = %q", got)
 	}
 	windowsCommand := `C:\Program Files\Git\bin\bash.exe -lc "echo hi"`
-	if got := UnifiedExecCommandDisplay(windowsCommand); got != `'C:\Program Files\Git\bin\bash.exe -lc "echo hi"'` {
+	if got := UnifiedExecCommandDisplay(windowsCommand); got != `"C:\\Program Files\\Git\\bin\\bash.exe -lc \"echo hi\""` {
 		t.Fatalf("non-roundtrippable windows command display = %q", got)
 	}
 	if got := UnifiedExecCommandDisplay(`git status --short`); got != "git status --short" {

@@ -62,6 +62,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	inet.af/tcpproxy v0.0.0-20231102063150-2862066fc2a9
 	modernc.org/sqlite v1.46.2
+	mvdan.cc/sh/v3 v3.14.1
 )
 
 require (

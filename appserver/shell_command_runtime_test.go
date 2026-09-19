@@ -46,18 +46,18 @@ func TestCommandExecutionStartedThreadItemSupportsRustLegacyShellCommand(t *test
 
 func TestCommandExecutionActionsPreserveExecutorPathsLikeRust(t *testing.T) {
 	for _, test := range []struct {
-		cwd  string
-		path string
-		want string
+		cwd     string
+		path    string
+		command string
+		want    string
 	}{
-		{cwd: "file:///home/alice/repo", path: "src/main.rs", want: "/home/alice/repo/src/main.rs"},
-		{cwd: "file:///C:/Users/Alice%20Smith/repo", path: `src\main.rs`, want: `C:\Users\Alice Smith\repo\src\main.rs`},
-		{cwd: "file:///C:/Users/Alice%20Smith/repo", path: `C:src\main.rs`, want: `C:\Users\Alice Smith\repo\src\main.rs`},
-		{cwd: "file://server/share/repo", path: `src\main.rs`, want: `\\server\share\repo\src\main.rs`},
+		{cwd: "file:///home/alice/repo", path: "src/main.rs", command: "cat src/main.rs", want: "/home/alice/repo/src/main.rs"},
+		{cwd: "file:///C:/Users/Alice%20Smith/repo", path: `src\main.rs`, command: `cat "src\\main.rs"`, want: `C:\Users\Alice Smith\repo\src\main.rs`},
+		{cwd: "file:///C:/Users/Alice%20Smith/repo", path: `C:src\main.rs`, command: `cat "C:src\\main.rs"`, want: `C:\Users\Alice Smith\repo\src\main.rs`},
+		{cwd: "file://server/share/repo", path: `src\main.rs`, command: `cat "src\\main.rs"`, want: `\\server\share\repo\src\main.rs`},
 	} {
-		command := "cat " + test.path
-		got := commandExecutionActions([]string{"cat", test.path}, command, test.cwd)
-		want := []map[string]any{{"type": "read", "command": command, "name": "main.rs", "path": test.want}}
+		got := commandExecutionActions([]string{"cat", test.path}, "cat "+test.path, test.cwd)
+		want := []map[string]any{{"type": "read", "command": test.command, "name": "main.rs", "path": test.want}}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("commandExecutionActions(%q, %q) = %#v, want %#v", test.cwd, test.path, got, want)
 		}

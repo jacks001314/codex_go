@@ -418,7 +418,6 @@ func splitCommandLine(command string) ([]string, bool) {
 	var tokens []string
 	var current strings.Builder
 	var quote rune
-	escaped := false
 	started := false
 	flush := func() {
 		if !started {
@@ -428,24 +427,42 @@ func splitCommandLine(command string) ([]string, bool) {
 		current.Reset()
 		started = false
 	}
-	for _, r := range command {
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		switch {
-		case escaped:
-			current.WriteRune(r)
-			started = true
-			escaped = false
-		case quote == '\'' && r == '\'':
-			quote = 0
 		case quote == '\'':
-			current.WriteRune(r)
-			started = true
+			if r == '\'' {
+				quote = 0
+			} else {
+				current.WriteRune(r)
+				started = true
+			}
+		case quote == '"':
+			// Inside double quotes a backslash only escapes `$`, `` ` ``,
+			// `"`, `\`, or a newline; other backslashes are literal (POSIX
+			// shlex, which Rust's SplitCommandLine mirrors).
+			if r == '"' {
+				quote = 0
+			} else if r == '\\' && i+1 < len(runes) && isDoubleQuoteEscape(runes[i+1]) {
+				i++
+				if runes[i] != '\n' {
+					current.WriteRune(runes[i])
+				}
+				started = true
+			} else {
+				current.WriteRune(r)
+				started = true
+			}
 		case r == '\\':
-			escaped = true
-			started = true
-		case quote != 0 && r == quote:
-			quote = 0
-		case quote != 0:
-			current.WriteRune(r)
+			if i+1 >= len(runes) {
+				return nil, false
+			}
+			i++
+			if runes[i] != '\n' {
+				// A backslash-newline is a line continuation.
+				current.WriteRune(runes[i])
+			}
 			started = true
 		case r == '\'' || r == '"':
 			quote = r
@@ -457,14 +474,19 @@ func splitCommandLine(command string) ([]string, bool) {
 			started = true
 		}
 	}
-	if escaped {
-		current.WriteRune('\\')
-	}
 	if quote != 0 {
 		return nil, false
 	}
 	flush()
 	return tokens, true
+}
+
+func isDoubleQuoteEscape(r rune) bool {
+	switch r {
+	case '$', '`', '"', '\\', '\n':
+		return true
+	}
+	return false
 }
 
 func splitCommandParts(command []string) [][]string {
@@ -811,12 +833,110 @@ func stringSet(values ...string) map[string]bool {
 	return set
 }
 
+// shellQuote mirrors shlex::try_quote (shlex 1.3.0), the quoting Rust's
+// shell-command crate applies through shlex_join. Matching it exactly keeps the
+// display `command` strings byte-aligned with Rust.
 func shellQuote(token string) string {
 	if token == "" {
 		return "''"
 	}
-	if !strings.ContainsAny(token, " \t\r\n'\"\\$`!&|;<>*?()[]{}") {
-		return token
+	var out strings.Builder
+	rest := token
+	for len(rest) > 0 {
+		length, strategy := shlexQuotingStrategy(rest)
+		if length <= 0 {
+			length = 1
+		}
+		chunk := rest[:length]
+		rest = rest[length:]
+		switch strategy {
+		case shlexSingleQuoted:
+			out.WriteByte('\'')
+			out.WriteString(chunk)
+			out.WriteByte('\'')
+		case shlexDoubleQuoted:
+			out.WriteByte('"')
+			for i := 0; i < len(chunk); i++ {
+				c := chunk[i]
+				if c == '$' || c == '`' || c == '"' || c == '\\' {
+					out.WriteByte('\\')
+				}
+				out.WriteByte(c)
+			}
+			out.WriteByte('"')
+		default:
+			out.WriteString(chunk)
+		}
 	}
-	return "'" + strings.ReplaceAll(token, "'", "'\\''") + "'"
+	return out.String()
+}
+
+const (
+	shlexUnquoted = iota
+	shlexSingleQuoted
+	shlexDoubleQuoted
+)
+
+// shlexQuotingStrategy returns the length and quoting strategy of the longest
+// prefix of in that can share one style, mirroring shlex::quoting_strategy.
+func shlexQuotingStrategy(in string) (int, int) {
+	const (
+		unquotedOK = 1
+		singleOK   = 2
+		doubleOK   = 4
+	)
+	prevOK := unquotedOK | singleOK | doubleOK
+	i := 0
+	if in[0] == '^' {
+		// Bash treats a leading ^ specially; shlex only allows it in single
+		// quotes right after the opening quote.
+		prevOK = singleOK
+		i = 1
+	}
+	for i < len(in) {
+		c := in[i]
+		curOK := prevOK
+		if c >= 0x80 {
+			curOK &^= unquotedOK
+		} else {
+			if !shlexUnquotedByteOK(c) {
+				curOK &^= unquotedOK
+			}
+			if !shlexSingleQuotedByteOK(c) {
+				curOK &^= singleOK
+			}
+			if !shlexDoubleQuotedByteOK(c) {
+				curOK &^= doubleOK
+			}
+		}
+		if curOK == 0 {
+			break
+		}
+		prevOK = curOK
+		i++
+	}
+	switch {
+	case prevOK&unquotedOK != 0:
+		return i, shlexUnquoted
+	case prevOK&singleOK != 0:
+		return i, shlexSingleQuoted
+	default:
+		return i, shlexDoubleQuoted
+	}
+}
+
+func shlexUnquotedByteOK(c byte) bool {
+	switch c {
+	case '+', '-', '.', '/', ':', '@', ']', '_':
+		return true
+	}
+	return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
+func shlexSingleQuotedByteOK(c byte) bool {
+	return c != '\'' && c != '^' && c != '\\'
+}
+
+func shlexDoubleQuotedByteOK(c byte) bool {
+	return c != '`' && c != '$' && c != '!' && c != '^'
 }
