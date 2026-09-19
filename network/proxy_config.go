@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"codex_go/utils"
 )
 
 const (
@@ -248,6 +250,13 @@ type ProxyRuntimeConfig struct {
 }
 
 func ResolveProxyRuntime(config ProxyConfig) (ProxyRuntimeConfig, error) {
+	return ResolveProxyRuntimeForPlatform(config, utils.NativePlatform())
+}
+
+// ResolveProxyRuntimeForPlatform mirrors Rust network-proxy
+// `resolve_runtime(cfg, executor_os)` (#46302/#46334): socket allowlist entries
+// are validated against the executor's platform rather than the controller's.
+func ResolveProxyRuntimeForPlatform(config ProxyConfig, platform utils.Platform) (ProxyRuntimeConfig, error) {
 	if _, err := CompileProxyDomainMatcher(config.Network.AllowedDomains(), false); err != nil {
 		return ProxyRuntimeConfig{}, fmt.Errorf("compile network.allowed_domains: %w", err)
 	}
@@ -260,7 +269,7 @@ func ResolveProxyRuntime(config ProxyConfig) (ProxyRuntimeConfig, error) {
 	if err := ValidateProxyMITMHookConfig(config); err != nil {
 		return ProxyRuntimeConfig{}, err
 	}
-	if err := ValidateProxyUnixSocketAllowlistPaths(config); err != nil {
+	if err := ValidateProxyUnixSocketAllowlistPathsForPlatform(config, platform); err != nil {
 		return ProxyRuntimeConfig{}, err
 	}
 	httpAddr, err := ResolveProxyAddr(config.Network.ProxyURL, 3128)
@@ -349,14 +358,22 @@ func ProxyHostAndPortFromNetworkAddr(value string, defaultPort uint16) string {
 }
 
 func ValidateProxyUnixSocketAllowlistPaths(config ProxyConfig) error {
-	if runtime.GOOS == "windows" {
-		// Rust 9742cc8ed5: Unix socket permissions are macOS-only and excluded
-		// from Windows runtime settings.
-		return nil
-	}
+	return ValidateProxyUnixSocketAllowlistPathsForPlatform(config, utils.NativePlatform())
+}
+
+// ValidateProxyUnixSocketAllowlistPathsForPlatform mirrors Rust
+// `validate_unix_socket_allowlist_paths` (#46302/#46334): every allowed socket
+// path must be a NUL-free absolute path for the executor OS, while deny entries
+// are preserved unchanged (they are not part of AllowUnixSockets).
+//
+// Rust 9742cc8ed5 (unix socket permissions are macOS-only runtime settings)
+// still applies where the proxy builds its runtime settings; that exclusion must
+// not skip validation, because a controller and its executor can run different
+// operating systems.
+func ValidateProxyUnixSocketAllowlistPathsForPlatform(config ProxyConfig, platform utils.Platform) error {
 	for index, socketPath := range config.Network.AllowUnixSockets() {
-		if !strings.HasPrefix(socketPath, "/") {
-			return fmt.Errorf("invalid network.allow_unix_sockets[%d]: expected an absolute path, got %q", index, socketPath)
+		if !SocketPathIsAbsolute(platform, socketPath) || strings.IndexByte(socketPath, 0) >= 0 {
+			return fmt.Errorf("invalid network.allow_unix_sockets[%d]: expected a NUL-free absolute path for %s, got %q", index, platform, socketPath)
 		}
 	}
 	return nil

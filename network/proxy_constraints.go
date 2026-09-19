@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"codex_go/utils"
 )
 
 // ProxyRequirements is the transport-neutral form of managed network constraints.
@@ -112,11 +114,21 @@ func (s *ProxySpec) HeaderInjections() []ProxyHeaderInjection {
 }
 
 func NewProxySpec(config ProxyConfig, requirements *ProxyRequirements, managedSandboxActive bool) (*ProxySpec, error) {
+	return NewProxySpecForPlatform(config, requirements, managedSandboxActive, utils.NativePlatform())
+}
+
+// NewProxySpecForPlatform mirrors Rust `build_config_state(config, constraints,
+// executor_os)` (#46302/#46334): the composed config's socket allowlist is
+// validated against the executor's platform, not the controller's.
+func NewProxySpecForPlatform(config ProxyConfig, requirements *ProxyRequirements, managedSandboxActive bool, platform utils.Platform) (*ProxySpec, error) {
 	config = cloneProxyConfig(config)
 	constraints := ProxyConstraints{}
 	hardDeny := requirements != nil && requirements.ManagedAllowedDomainsOnly
 	if requirements != nil {
 		config, constraints = applyProxyRequirements(config, requirements, managedSandboxActive, hardDeny)
+	}
+	if err := ValidateProxyUnixSocketAllowlistPathsForPlatform(config, platform); err != nil {
+		return nil, err
 	}
 	if err := ValidateProxyPolicyAgainstConstraints(config, constraints); err != nil {
 		return nil, fmt.Errorf("network proxy constraints are invalid: %w", err)
