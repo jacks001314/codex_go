@@ -593,27 +593,19 @@ type BuildPromptOptions struct {
 	RootUserAuthorization []string
 }
 
-// BuildPromptWithOptions renders the Guardian review prompt: the planned-action
-// framing Rust's PlannedAction::render produces, followed by the bounded
-// evidence the reviewer was given.
+// BuildPromptWithOptions renders the Guardian review prompt in the order Rust's
+// composed context uses: the stable evidence first and the planned action last,
+// so the evidence stays a reusable history prefix across approval requests
+// (#46279). Rust's section positions are root conversation (1), transcript (4),
+// node-repl evidence (10), then the planned action with its tool descriptions
+// (11); the sections Go does not model (retained instructions, trusted answers,
+// permissions, previous reviews, trusted tool/skills) come from the review's
+// inherited context instead.
 func BuildPromptWithOptions(action Action, transcript []string, options BuildPromptOptions) (string, error) {
 	if err := action.Validate(); err != nil {
 		return "", err
 	}
 	var builder strings.Builder
-	actionPrompt, err := joinPlannedAction(action, options.Presentation)
-	if err != nil {
-		return "", err
-	}
-	writeGuardianPromptSection(&builder, actionPrompt)
-	if descriptions := renderGuardianToolDescriptions(action); descriptions != "" {
-		writeGuardianPromptSection(&builder, descriptions)
-	}
-	if options.NodeReplEvidence != nil {
-		if rendered := context.Render(options.NodeReplEvidence); rendered != nil && strings.TrimSpace(rendered.Content) != "" {
-			writeGuardianPromptSection(&builder, rendered.Content)
-		}
-	}
 	if len(options.RootUserAuthorization) > 0 {
 		var section strings.Builder
 		section.WriteString("Root user authorization evidence (root conversation):\n")
@@ -639,6 +631,19 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 			section.WriteByte('\n')
 		}
 		writeGuardianPromptSection(&builder, section.String())
+	}
+	if options.NodeReplEvidence != nil {
+		if rendered := context.Render(options.NodeReplEvidence); rendered != nil && strings.TrimSpace(rendered.Content) != "" {
+			writeGuardianPromptSection(&builder, rendered.Content)
+		}
+	}
+	actionPrompt, err := joinPlannedAction(action, options.Presentation)
+	if err != nil {
+		return "", err
+	}
+	writeGuardianPromptSection(&builder, actionPrompt)
+	if descriptions := renderGuardianToolDescriptions(action); descriptions != "" {
+		writeGuardianPromptSection(&builder, descriptions)
 	}
 	return builder.String(), nil
 }

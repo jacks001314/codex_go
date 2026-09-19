@@ -289,6 +289,8 @@ func TestBuildPromptFramingMatchesRust(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// With no evidence sections the prompt is the action alone, so the
+		// framing is still the prefix.
 		if !strings.HasPrefix(prompt, commandFraming) {
 			t.Fatalf("prompt = %q", prompt)
 		}
@@ -345,6 +347,43 @@ func TestBuildPromptAppendsGuardianToolDescriptionsLikeRust(t *testing.T) {
 	}
 	if strings.Contains(plain, "guardian_tool_descriptions") {
 		t.Fatalf("prompt without descriptions = %q", plain)
+	}
+}
+
+// Mirrors Rust #46279's cache-prefix contract: the stable evidence sections come
+// first and the planned action (with its tool descriptions) is last, so changing
+// the reviewed action never invalidates the evidence prefix.
+func TestBuildPromptKeepsEvidenceBeforeTheActionLikeRust(t *testing.T) {
+	options := BuildPromptOptions{RootUserAuthorization: []string{"Summarize the release notes."}}
+	transcript := []string{"shell ls", "agent read the changelog"}
+	first, err := BuildPromptWithOptions(Action{Type: "command", Command: "rm -rf build", CWD: "/repo"}, transcript, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := BuildPromptWithOptions(Action{Type: "command", Command: "rm -rf dist", CWD: "/repo"}, transcript, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rootIndex := strings.Index(first, "Root user authorization evidence (root conversation):")
+	transcriptIndex := strings.Index(first, "Recent transcript:")
+	actionIndex := strings.Index(first, "The Codex agent has requested the following action:")
+	if rootIndex < 0 || transcriptIndex < 0 || actionIndex < 0 {
+		t.Fatalf("prompt is missing a section: %q", first)
+	}
+	if !(rootIndex < transcriptIndex && transcriptIndex < actionIndex) {
+		t.Fatalf("section order: root=%d transcript=%d action=%d\n%s", rootIndex, transcriptIndex, actionIndex, first)
+	}
+	if !strings.HasPrefix(second, first[:actionIndex]) {
+		t.Fatal("a changed action invalidated the evidence prefix")
+	}
+
+	// The node-repl evidence belongs to the stable prefix as well: Rust places it
+	// at position 10, just before the action.
+	// (BuildPromptOptions carries it as an untrusted fragment; an empty render is
+	// skipped, so this only pins the position when it renders.)
+	if index := strings.Index(first, ">>> APPROVAL REQUEST END"); index < actionIndex {
+		t.Fatalf("action end precedes the action framing: %q", first)
 	}
 }
 
