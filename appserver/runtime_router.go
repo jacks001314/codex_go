@@ -4641,6 +4641,13 @@ func (r *RuntimeRouter) threadStartDefaultCWD() string {
 	return processCWD()
 }
 
+// windowsSandboxPrivateDesktopForTurn mirrors Rust #46554: legacy Windows
+// sandboxes always launch on a private desktop, and the removed
+// `windows.sandbox_private_desktop` setting cannot opt out.
+func windowsSandboxPrivateDesktopForTurn() bool {
+	return true
+}
+
 func (r *RuntimeRouter) effectiveConfigForThreadStart(params *ThreadStartParams) (*config.Config, error) {
 	cfg := &config.Config{Values: map[string]any{}}
 	if r == nil || r.services.Config == nil {
@@ -13470,7 +13477,8 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			allowTTY := features.Enabled(cfg.FeatureSettings(), "unified_exec_tty")
 			options.Shell.AllowTTY = &allowTTY
 			options.Shell.Validation.WindowsSandboxLevel = windowsSandboxLevelForConfig(cfg)
-			options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopForTurn(cfg)
+			// Rust #46554: legacy Windows sandboxes always use a private desktop.
+		options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopForTurn()
 		}
 		if guardianTurnStart(params) {
 			options.Shell.Validation.WindowsSandboxProxySettingsMode = execserver.WindowsSandboxProxySettingsPreserve
@@ -13947,20 +13955,6 @@ func (r *RuntimeRouter) configBaseDirForAgents() string {
 		}
 	}
 	return processCWD()
-}
-
-func windowsSandboxPrivateDesktopFromConfigValues(values map[string]any) bool {
-	return config.ResolveWindowsSandboxPrivateDesktop(values, nil)
-}
-
-// windowsSandboxPrivateDesktopForTurn resolves the knob against the turn's
-// managed requirements (Rust core/src/config/requirements.rs): a managed
-// `windows.sandbox_private_desktop` overrides the user config.
-func windowsSandboxPrivateDesktopForTurn(cfg *config.Config) bool {
-	if cfg == nil {
-		return config.ResolveWindowsSandboxPrivateDesktop(nil, nil)
-	}
-	return config.ResolveWindowsSandboxPrivateDesktop(cfg.Values, cfg.Requirements)
 }
 
 func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartParams) []tool.UnifiedExecEnvironment {

@@ -1,10 +1,14 @@
+﻿
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-// TestParseRequirementsTOMLWindowsLikeRust mirrors Rust's
-// deserialize_allowed_windows_sandbox_implementations: the managed Windows
-// sandbox settings live in the `[windows]` table.
+// Mirrors Rust #46554: the managed Windows sandbox settings live in the
+// `[windows]` table, and the removed sandbox_private_desktop setting is ignored
+// (legacy Windows sandboxes always use a private desktop).
 func TestParseRequirementsTOMLWindowsLikeRust(t *testing.T) {
 	requirements, err := ParseRequirementsTOML([]byte(`
 [windows]
@@ -20,9 +24,6 @@ sandbox_private_desktop = false
 	if len(requirements.AllowedWindowsSandboxImplementations) != 1 ||
 		requirements.AllowedWindowsSandboxImplementations[0] != WindowsSandboxSetupElevated {
 		t.Fatalf("allowed implementations = %#v", requirements.AllowedWindowsSandboxImplementations)
-	}
-	if requirements.WindowsSandboxPrivateDesktop == nil || *requirements.WindowsSandboxPrivateDesktop {
-		t.Fatalf("windows desktop = %#v", requirements.WindowsSandboxPrivateDesktop)
 	}
 }
 
@@ -64,80 +65,37 @@ allowed_sandbox_implementations = ["elevated"]
 	}
 }
 
-// TestResolveWindowsSandboxPrivateDesktopLikeRust covers the config chain and
-// the managed override (Rust resolve_windows_sandbox_private_desktop plus
-// core/src/config/requirements.rs).
-func TestResolveWindowsSandboxPrivateDesktopLikeRust(t *testing.T) {
-	enabled := true
-	disabled := false
-	tests := []struct {
-		name         string
-		values       map[string]any
-		requirements *ConfigRequirements
-		want         bool
-	}{
-		{name: "default", values: nil, want: true},
-		{
-			name:   "windows table disables",
-			values: map[string]any{"windows": map[string]any{"sandbox_private_desktop": false}},
-			want:   false,
-		},
-		{
-			name:   "windows table enables",
-			values: map[string]any{"windows": map[string]any{"sandbox_private_desktop": true}},
-			want:   true,
-		},
-		{
-			name:   "legacy permissions shape",
-			values: map[string]any{"permissions": map[string]any{"windows_sandbox_private_desktop": false}},
-			want:   false,
-		},
-		{
-			name: "windows table beats the legacy shape",
-			values: map[string]any{
-				"permissions": map[string]any{"windows_sandbox_private_desktop": false},
-				"windows":     map[string]any{"sandbox_private_desktop": true},
-			},
-			want: true,
-		},
-		{
-			name:         "requirement enables over a disabled config",
-			values:       map[string]any{"windows": map[string]any{"sandbox_private_desktop": false}},
-			requirements: &ConfigRequirements{WindowsSandboxPrivateDesktop: &enabled},
-			want:         true,
-		},
-		{
-			name:         "requirement disables over an enabled config",
-			values:       map[string]any{"windows": map[string]any{"sandbox_private_desktop": true}},
-			requirements: &ConfigRequirements{WindowsSandboxPrivateDesktop: &disabled},
-			want:         false,
-		},
+// TestWindowsSandboxPrivateDesktopSettingIsObsoleteLikeRust mirrors Rust #46554:
+// the removed `[windows] sandbox_private_desktop` setting no longer reaches the
+// requirements, and both the canonical and the legacy spelling are reported as
+// ignored keys with the migration hint.
+func TestWindowsSandboxPrivateDesktopSettingIsObsoleteLikeRust(t *testing.T) {
+	requirements, err := ParseRequirementsTOML([]byte(`
+[windows]
+sandbox_private_desktop = false
+`))
+	if err != nil {
+		t.Fatalf("ParseRequirementsTOML() error = %v", err)
 	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			if got := ResolveWindowsSandboxPrivateDesktop(testCase.values, testCase.requirements); got != testCase.want {
-				t.Fatalf("ResolveWindowsSandboxPrivateDesktop() = %v, want %v", got, testCase.want)
+	if requirements != nil && requirements.AllowedWindowsSandboxImplementations != nil {
+		t.Fatalf("requirements = %#v, want only the obsolete key ignored", requirements)
+	}
+
+	for name, values := range map[string]map[string]any{
+		"windows table": {"windows": map[string]any{"sandbox_private_desktop": false}},
+		"legacy shape":  {"permissions": map[string]any{"windows_sandbox_private_desktop": false}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			layers := []Layer{{
+				Name:   LayerSource{Type: LayerSourceUser, File: "config.toml"},
+				Config: values,
+			}}
+			warning := IgnoredConfigWarning(layers, nil)
+			want := " Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
+			if !strings.Contains(warning, "is ignored."+want) {
+				t.Fatalf("warning = %q, want the migration hint %q", warning, want)
 			}
 		})
 	}
 }
 
-// TestMergeConfigRequirementsWindowsLikeRust covers the layer merge and clone.
-func TestMergeConfigRequirementsWindowsLikeRust(t *testing.T) {
-	disabled := false
-	merged := mergeConfigRequirements(
-		&ConfigRequirements{},
-		&ConfigRequirements{WindowsSandboxPrivateDesktop: &disabled},
-	)
-	if merged.WindowsSandboxPrivateDesktop == nil || *merged.WindowsSandboxPrivateDesktop {
-		t.Fatalf("merged = %#v", merged.WindowsSandboxPrivateDesktop)
-	}
-	if merged.WindowsSandboxPrivateDesktop == &disabled {
-		t.Fatal("merge must clone the overlay pointer")
-	}
-	cloned := cloneRequirements(merged)
-	*cloned.WindowsSandboxPrivateDesktop = true
-	if *merged.WindowsSandboxPrivateDesktop {
-		t.Fatal("clone aliased the original requirement")
-	}
-}

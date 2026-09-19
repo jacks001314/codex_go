@@ -85,7 +85,7 @@ func IgnoredConfigWarning(layers []Layer, rawRequirements map[string]any) string
 	// Validate the merged config so incomplete layer fragments (e.g. a provider
 	// override) do not hide diagnostics.
 	merged := mergedConfigValues(layers)
-	for _, path := range unknownConfigFieldPaths(merged) {
+	for _, path := range append(unknownConfigFieldPaths(merged), obsoleteConfigFieldPaths(merged)...) {
 		key := strings.Join(path, ".")
 		for _, layer := range layersHighToLow(layers) {
 			if configPathExists(layerConfigMap(layer), path) {
@@ -168,6 +168,26 @@ func unknownConfigFieldPaths(values map[string]any) [][]string {
 	return out
 }
 
+// obsoleteConfigFieldPaths lists configuration keys that Go still accepts for
+// historical compatibility but that no longer have any effect. They are
+// reported like unrecognized keys so users receive the migration hint (Rust
+// #46554 removed `windows.sandbox_private_desktop` and warns about it).
+func obsoleteConfigFieldPaths(values map[string]any) [][]string {
+	if values == nil {
+		return nil
+	}
+	out := [][]string{}
+	for _, path := range [][]string{
+		{"windows", "sandbox_private_desktop"},
+		{"permissions", "windows_sandbox_private_desktop"},
+	} {
+		if configPathExists(values, path) {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
 func unknownFeatureFieldPaths(value any, prefix []string) [][]string {
 	features, ok := value.(map[string]any)
 	if !ok {
@@ -224,6 +244,8 @@ func ignoredSettingHint(key string) string {
 		return " Use [allowed_permission_profiles] and default_permissions; the old allowlist is ignored even when both forms are present."
 	case "include_view_image_tool", "features.include_view_image_tool":
 		return " Use [features].view_image to configure the image tool."
+	case "windows.sandbox_private_desktop", "permissions.windows_sandbox_private_desktop":
+		return " Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
 	}
 	segments := strings.Split(key, ".")
 	if len(segments) >= 2 && segments[0] == "profiles" && segments[len(segments)-1] == "include_view_image_tool" {

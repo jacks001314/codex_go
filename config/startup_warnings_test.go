@@ -8,18 +8,17 @@ import (
 )
 
 // TestStartupWarningsForRequirementsLikeRust pins the requirement-driven startup
-// warnings: exact overrides for the fields Go applies, the explicit
-// sandbox_private_desktop conflict, and the disallowed windows.sandbox fallback.
+// warnings: exact overrides for the fields Go applies and the disallowed
+// windows.sandbox fallback. Rust #46554 removed windows.sandbox_private_desktop,
+// so it can no longer produce an override warning.
 func TestStartupWarningsForRequirementsLikeRust(t *testing.T) {
 	credentialMode := AuthCredentialsStoreKeyring
 	baseURL := "https://managed.example.com"
 	provider := "managed-provider"
-	privateDesktop := false
 	requirements := &ConfigRequirements{
-		CliAuthCredentialsStore:      &credentialMode,
-		ChatgptBaseURL:               &baseURL,
-		ModelProvider:                &provider,
-		WindowsSandboxPrivateDesktop: &privateDesktop,
+		CliAuthCredentialsStore: &credentialMode,
+		ChatgptBaseURL:          &baseURL,
+		ModelProvider:           &provider,
 		AllowedWindowsSandboxImplementations: []WindowsSandboxSetupMode{
 			WindowsSandboxSetupElevated,
 		},
@@ -38,7 +37,6 @@ func TestStartupWarningsForRequirementsLikeRust(t *testing.T) {
 		"Configured value for `cli_auth_credentials_store` is overridden by the required value \"keyring\" from managed requirements.",
 		"Configured value for `chatgpt_base_url` is overridden by the required value \"https://managed.example.com\" from managed requirements.",
 		"Configured value for `model_provider` is overridden by the required value \"managed-provider\" from managed requirements.",
-		"Configured value for `windows.sandbox_private_desktop` is overridden by the required value false from managed requirements.",
 		"Configured value for `windows.sandbox` is disallowed by requirements; falling back to required value \"elevated\".",
 	}
 	if len(warnings) != len(want) {

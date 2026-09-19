@@ -136,15 +136,6 @@ func requirementStartupWarnings(values map[string]any, requirements *ConfigRequi
 				managedRequirementSource))
 		}
 	}
-	// windows.sandbox_private_desktop is an exact requirement too, but the
-	// configured value defaults to true, so only an explicit conflict warns.
-	if requirements.WindowsSandboxPrivateDesktop != nil {
-		if configured, ok := configuredWindowsSandboxPrivateDesktop(values); ok && configured != *requirements.WindowsSandboxPrivateDesktop {
-			warnings = append(warnings, fmt.Sprintf(
-				"Configured value for `windows.sandbox_private_desktop` is overridden by the required value %t from %s.",
-				*requirements.WindowsSandboxPrivateDesktop, managedRequirementSource))
-		}
-	}
 	// Rust managed_features::parse_feature_requirements: a legacy alias warns in
 	// favor of the canonical key, and an unknown key is ignored with a warning.
 	// `auto_review` is the canonicalized alias of `guardian_approval` and stays
@@ -299,19 +290,3 @@ func requiredEnumValue[T ~string](value *T) string {
 	return string(*value)
 }
 
-// configuredWindowsSandboxPrivateDesktop reports the explicitly configured
-// `[windows] sandbox_private_desktop` value (the legacy `permissions` shape is
-// honored as Go does elsewhere). The implicit default is not a conflict.
-func configuredWindowsSandboxPrivateDesktop(values map[string]any) (bool, bool) {
-	if permissions, ok := values["permissions"].(map[string]any); ok {
-		if value, ok := boolAnyKey(permissions, "windows_sandbox_private_desktop", "windowsSandboxPrivateDesktop"); ok {
-			return value, true
-		}
-	}
-	if windows, ok := values["windows"].(map[string]any); ok {
-		if value, ok := boolAnyKey(windows, "sandbox_private_desktop", "sandboxPrivateDesktop"); ok {
-			return value, true
-		}
-	}
-	return false, false
-}

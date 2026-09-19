@@ -336,9 +336,6 @@ func mergeConfigRequirements(base, overlay *ConfigRequirements) *ConfigRequireme
 	if overlay.AllowedWindowsSandboxImplementations != nil {
 		out.AllowedWindowsSandboxImplementations = cloneSlice(overlay.AllowedWindowsSandboxImplementations)
 	}
-	if overlay.WindowsSandboxPrivateDesktop != nil {
-		out.WindowsSandboxPrivateDesktop = cloneBoolPtr(overlay.WindowsSandboxPrivateDesktop)
-	}
 	if overlay.AllowedPermissionProfiles != nil {
 		out.AllowedPermissionProfiles = cloneBoolMap(overlay.AllowedPermissionProfiles)
 	}

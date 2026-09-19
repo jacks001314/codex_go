@@ -1,4 +1,4 @@
-package appserver
+﻿package appserver
 
 import (
 	"archive/tar"
@@ -2631,37 +2631,6 @@ func TestWindowsSandboxLevelAppliesRequirementsLikeRust(t *testing.T) {
 	}
 }
 
-// TestWindowsSandboxPrivateDesktopFromConfigValuesMatchesRust mirrors Rust
-// resolve_windows_sandbox_private_desktop: the `[windows]` table defaults to
-// true, the legacy `permissions` shape still works, and a managed requirement
-// overrides both.
-func TestWindowsSandboxPrivateDesktopFromConfigValuesMatchesRust(t *testing.T) {
-	if !windowsSandboxPrivateDesktopFromConfigValues(nil) {
-		t.Fatal("nil config must default to a private desktop like Rust")
-	}
-	if windowsSandboxPrivateDesktopFromConfigValues(map[string]any{
-		"windows": map[string]any{"sandbox_private_desktop": false},
-	}) {
-		t.Fatal("[windows] sandbox_private_desktop was ignored")
-	}
-	if !windowsSandboxPrivateDesktopFromConfigValues(map[string]any{
-		"windows": map[string]any{"sandbox_private_desktop": true},
-	}) {
-		t.Fatal("[windows] sandbox_private_desktop was not enabled")
-	}
-	if windowsSandboxPrivateDesktopFromConfigValues(map[string]any{
-		"permissions": map[string]any{"windows_sandbox_private_desktop": false},
-	}) {
-		t.Fatal("legacy permissions private desktop config was ignored")
-	}
-	disabled := false
-	if windowsSandboxPrivateDesktopForTurn(&config.Config{
-		Values:       map[string]any{"windows": map[string]any{"sandbox_private_desktop": true}},
-		Requirements: &config.ConfigRequirements{WindowsSandboxPrivateDesktop: &disabled},
-	}) {
-		t.Fatal("a managed requirement must override the user config")
-	}
-}
 
 func TestRuntimeRouterRemoteControlStatusChangedNotifications(t *testing.T) {
 	sink := NewNotificationBuffer()
