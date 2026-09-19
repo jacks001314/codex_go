@@ -12,6 +12,8 @@ type recordingRecorder struct {
 	duration  time.Duration
 	tags      map[string]string
 	callCount int
+	counters  []string
+	histogram []string
 }
 
 func (r *recordingRecorder) RecordDuration(name string, duration time.Duration, tags map[string]string) {
@@ -21,6 +23,40 @@ func (r *recordingRecorder) RecordDuration(name string, duration time.Duration, 
 	r.name = name
 	r.duration = duration
 	r.tags = tags
+}
+
+func (r *recordingRecorder) Counter(name string, inc int, tags map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.counters = append(r.counters, name+"|"+tags["status"]+"|"+tags["outcome"])
+}
+
+func (r *recordingRecorder) Histogram(name string, value int, tags map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.histogram = append(r.histogram, name)
+}
+
+// Mirrors Rust's `codex_otel::global()` counter/histogram helpers: they record
+// through the installed recorder and are no-ops without one.
+func TestGlobalCounterAndHistogramLikeRust(t *testing.T) {
+	InstallGlobal(nil)
+	t.Cleanup(func() { InstallGlobal(nil) })
+
+	// No recorder installed: both helpers are no-ops.
+	Counter("codex.rollout_compression.run", 1, map[string]string{"status": "started"})
+	Histogram("codex.rollout_compression.run.duration_ms", 5, nil)
+
+	recorder := &recordingRecorder{}
+	InstallGlobal(recorder)
+	Counter("codex.rollout_compression.run", 1, map[string]string{"status": "started"})
+	Histogram("codex.rollout_compression.run.duration_ms", 5, map[string]string{"status": "completed"})
+	if len(recorder.counters) != 1 || recorder.counters[0] != "codex.rollout_compression.run|started|" {
+		t.Fatalf("counters = %#v", recorder.counters)
+	}
+	if len(recorder.histogram) != 1 || recorder.histogram[0] != "codex.rollout_compression.run.duration_ms" {
+		t.Fatalf("histograms = %#v", recorder.histogram)
+	}
 }
 
 // Mirrors Rust's global metrics install: a timer records through the installed

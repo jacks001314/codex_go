@@ -9,9 +9,12 @@ import (
 	"time"
 )
 
-// Recorder records a duration metric. telemetry.MetricsClient satisfies it.
+// Recorder records metrics on the process-global recorder.
+// telemetry.MetricsClient satisfies it.
 type Recorder interface {
 	RecordDuration(name string, duration time.Duration, tags map[string]string)
+	Counter(name string, inc int, tags map[string]string)
+	Histogram(name string, value int, tags map[string]string)
 }
 
 var global atomic.Value // stores Recorder
@@ -33,6 +36,41 @@ func Global() Recorder {
 		return nil
 	}
 	return box.recorder
+}
+
+// Counter records a counter increment on the process-global recorder
+// (Rust `codex_otel::global()` counters). It is nil-safe.
+func Counter(name string, inc int, tags map[string]string) {
+	if recorder := Global(); recorder != nil {
+		recorder.Counter(name, inc, cloneTags(tags))
+	}
+}
+
+// Histogram records a histogram observation on the process-global recorder. It
+// is nil-safe.
+func Histogram(name string, value int, tags map[string]string) {
+	if recorder := Global(); recorder != nil {
+		recorder.Histogram(name, value, cloneTags(tags))
+	}
+}
+
+// RecordDuration records a duration on the process-global recorder. It is
+// nil-safe.
+func RecordDuration(name string, duration time.Duration, tags map[string]string) {
+	if recorder := Global(); recorder != nil {
+		recorder.RecordDuration(name, duration, cloneTags(tags))
+	}
+}
+
+func cloneTags(tags map[string]string) map[string]string {
+	if len(tags) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(tags))
+	for key, value := range tags {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 type recorderBox struct {

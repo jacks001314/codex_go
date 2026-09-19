@@ -1211,27 +1211,49 @@ func MaterializeRolloutForReference(path string) (string, error) {
 	if plain == "" {
 		return "", errors.New("rollout path is required")
 	}
-	if info, err := os.Stat(plain); err == nil && info.Mode().IsRegular() {
-		return plain, nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	startedAt := time.Now()
+	stage := "read_metadata"
+	outcome, result, err := materializeRolloutForReferenceLocked(plain, &stage)
+	if err != nil {
+		rolloutCompressionFailure(rolloutCompressionMaterializeCounter, "outcome", nil, stage, err)
+		rolloutCompressionMaterializeDuration("failed", time.Since(startedAt))
 		return "", err
+	}
+	rolloutCompressionMaterialize(outcome)
+	if outcome == "decompressed" {
+		rolloutCompressionMaterializeDuration(outcome, time.Since(startedAt))
+	}
+	return result, nil
+}
+
+// materializeRolloutForReferenceLocked ports Rust's
+// `materialize_rollout_for_append_blocking`: a compressed rollout is decoded to a
+// sibling temp file, verified, and published with a no-clobber rename. `stage`
+// carries the failing step for the failure metric labels.
+func materializeRolloutForReferenceLocked(plain string, stage *string) (string, string, error) {
+	if info, err := os.Stat(plain); err == nil && info.Mode().IsRegular() {
+		return "plain_exists", plain, nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", "", err
 	}
 	compressed := plain + ".zst"
 	metadata, err := os.Stat(compressed)
 	if errors.Is(err, os.ErrNotExist) {
-		return plain, nil
+		return "missing", plain, nil
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
+	*stage = "prepare_directory"
 	if parent := filepath.Dir(plain); parent != "" && parent != "." {
 		if err := os.MkdirAll(parent, 0o755); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
+	*stage = "create_temp"
 	temporary, err := os.CreateTemp(filepath.Dir(plain), "."+filepath.Base(plain)+".decompress-*")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	temporaryPath := temporary.Name()
 	published := false
@@ -1240,35 +1262,41 @@ func MaterializeRolloutForReference(path string) (string, error) {
 		_ = os.Remove(temporaryPath)
 	}()
 	if err := temporary.Chmod(metadata.Mode().Perm()); err != nil {
-		return "", err
+		return "", "", err
 	}
+	*stage = "open_source"
 	input, err := os.Open(compressed)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
+	*stage = "decode_and_write"
 	decoder, err := zstd.NewReader(input)
 	if err != nil {
 		_ = input.Close()
-		return "", err
+		return "", "", err
 	}
 	_, copyErr := io.Copy(temporary, decoder)
 	decoder.Close()
 	closeInputErr := input.Close()
 	if copyErr != nil {
-		return "", copyErr
+		return "", "", copyErr
 	}
 	if closeInputErr != nil {
-		return "", closeInputErr
+		return "", "", closeInputErr
 	}
+	*stage = "sync"
 	if err := temporary.Sync(); err != nil {
-		return "", err
+		return "", "", err
 	}
+	*stage = "flush"
 	if err := temporary.Close(); err != nil {
-		return "", err
+		return "", "", err
 	}
+	*stage = "set_metadata"
 	if err := os.Chtimes(temporaryPath, metadata.ModTime(), metadata.ModTime()); err != nil {
-		return "", err
+		return "", "", err
 	}
+	*stage = "publish"
 	if err := os.Link(temporaryPath, plain); err == nil {
 		published = true
 	} else if _, statErr := os.Stat(plain); statErr == nil {
@@ -1276,12 +1304,12 @@ func MaterializeRolloutForReference(path string) (string, error) {
 	} else {
 		destination, createErr := os.OpenFile(plain, os.O_CREATE|os.O_EXCL|os.O_WRONLY, metadata.Mode().Perm())
 		if createErr != nil {
-			return "", createErr
+			return "", "", createErr
 		}
 		source, openErr := os.Open(temporaryPath)
 		if openErr != nil {
 			_ = destination.Close()
-			return "", openErr
+			return "", "", openErr
 		}
 		_, copyErr = io.Copy(destination, source)
 		_ = source.Close()
@@ -1293,19 +1321,20 @@ func MaterializeRolloutForReference(path string) (string, error) {
 		}
 		if copyErr != nil {
 			_ = os.Remove(plain)
-			return "", copyErr
+			return "", "", copyErr
 		}
 		published = true
 	}
 	if published {
+		*stage = "remove_source"
 		if err := os.Chtimes(plain, metadata.ModTime(), metadata.ModTime()); err != nil {
-			return "", err
+			return "", "", err
 		}
 		if err := os.Remove(compressed); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", err
+			return "", "", err
 		}
 	}
-	return plain, nil
+	return "decompressed", plain, nil
 }
 
 // RolloutByteLength reports the uncompressed JSONL length used by persisted

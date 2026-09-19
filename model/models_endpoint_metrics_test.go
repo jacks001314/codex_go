@@ -24,6 +24,18 @@ func (r *modelMetricsRecorder) RecordDuration(name string, _ time.Duration, tags
 	r.calls = append(r.calls, recordedModelMetric{name: name, tags: tags})
 }
 
+func (r *modelMetricsRecorder) Counter(name string, _ int, tags map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, recordedModelMetric{name: name, tags: tags})
+}
+
+func (r *modelMetricsRecorder) Histogram(name string, _ int, tags map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, recordedModelMetric{name: name, tags: tags})
+}
+
 // Mirrors Rust #46570: the remote-model fetch duration is tagged with the
 // authentication mode used for the fetch.
 func TestRemoteModelsFetchRecordsAuthModeMetricLikeRust(t *testing.T) {
