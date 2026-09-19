@@ -120,7 +120,15 @@ func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request mem
 	if strings.TrimSpace(text) == "" {
 		return memories.StageOneExtractionResponse{}, errors.New("memory extraction returned no output")
 	}
-	return memories.DecodeStageOneOutputForVersion(text, request.Version)
+	decoded, err := memories.DecodeStageOneOutputForVersion(text, request.Version)
+	if err != nil {
+		return memories.StageOneExtractionResponse{}, err
+	}
+	// Rust keeps the extraction request's TokenUsage on the job result so phase
+	// one can report the tokens a startup consumed.
+	usage := response.Usage
+	decoded.Usage = &usage
+	return decoded, nil
 }
 
 func (e *appServerMemoryStageOne) detachedClientMetadata(ctx context.Context) map[string]string {

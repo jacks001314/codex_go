@@ -26,6 +26,7 @@ import (
 
 type memoryTestAgent struct {
 	response string
+	usage    model.AgentUsage
 	requests chan model.AgentRequest
 }
 
@@ -57,6 +58,7 @@ func (a *memoryTestAgent) Run(ctx context.Context, request *model.AgentRequest) 
 	return &model.AgentResponse{
 		ResponseID: "memory-response",
 		Message:    a.response,
+		Usage:      a.usage,
 		Items:      []model.AgentItem{{ID: "memory-message", Type: "agent_message", Text: a.response}},
 		Model:      request.Model,
 		ProviderID: request.ProviderID,
@@ -69,6 +71,10 @@ func TestMemoryStageOneUsesDetachedResponsesRequestLikeRust(t *testing.T) {
 	initMemoryTestGitRepo(t, cwd)
 	agent := &memoryTestAgent{
 		response: `{"raw_memory":"raw","rollout_summary":"summary","rollout_slug":"slug"}`,
+		usage: model.AgentUsage{
+			InputTokens: 120, CachedInputTokens: 40, CacheWriteInputTokens: 8,
+			OutputTokens: 16, ReasoningOutputTokens: 4, TotalTokens: 136,
+		},
 		requests: make(chan model.AgentRequest, 1),
 	}
 	router := NewRuntimeRouter(RuntimeServices{
@@ -90,6 +96,11 @@ func TestMemoryStageOneUsesDetachedResponsesRequestLikeRust(t *testing.T) {
 	}
 	if result.RawMemory != "raw" || result.RolloutSummary != "summary" || result.RolloutSlug == nil || *result.RolloutSlug != "slug" {
 		t.Fatalf("ExtractMemory() = %+v", result)
+	}
+	// The extraction keeps the request's usage so phase one can report the
+	// tokens a startup consumed (Rust's JobResult.token_usage).
+	if result.Usage == nil || result.Usage.TotalTokens != 136 || result.Usage.CachedInputTokens != 40 {
+		t.Fatalf("ExtractMemory() usage = %+v", result.Usage)
 	}
 	request := <-agent.requests
 	if request.Model != "gpt-memory" || request.ProviderID != "openai" || request.ReasoningEffort != "low" || request.ReasoningSummary != "auto" || request.ServiceTier != "default" {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/model"
 )
 
 // Rust parity: codex-rs/memories/write/src/metrics.rs plus the metric methods of
@@ -21,6 +22,9 @@ const (
 	MemoryPhaseOneE2EMetric = "codex.memory.phase1.e2e_ms"
 	// MemoryPhaseOneOutputMetric counts stage-one jobs that produced output.
 	MemoryPhaseOneOutputMetric = "codex.memory.phase1.output"
+	// MemoryPhaseOneTokenUsageMetric reports the tokens the stage-one jobs
+	// consumed, one sample per token type.
+	MemoryPhaseOneTokenUsageMetric = "codex.memory.phase1.token_usage"
 	// MemoryPhaseTwoJobsMetric counts phase-two (consolidation) jobs by status.
 	MemoryPhaseTwoJobsMetric = "codex.memory.phase2"
 	// MemoryPhaseTwoE2EMetric times a whole phase-two run.
@@ -36,6 +40,18 @@ const (
 	MemoryVersionTag = "memory_version"
 	// MemoryStatusTag names the outcome a job counter reports (Rust's `status`).
 	MemoryStatusTag = "status"
+	// MemoryTokenTypeTag names the token-usage series a sample belongs to.
+	MemoryTokenTypeTag = "token_type"
+)
+
+// Token type tag values, in the order Rust emits them.
+const (
+	MemoryTokenTypeTotal           = "total"
+	MemoryTokenTypeInput           = "input"
+	MemoryTokenTypeCachedInput     = "cached_input"
+	MemoryTokenTypeCacheWriteInput = "cache_write_input"
+	MemoryTokenTypeOutput          = "output"
+	MemoryTokenTypeReasoningOutput = "reasoning_output"
 )
 
 // MemoryStorageBytesBoundaries are Rust's log-spaced byte buckets: they cover
@@ -130,6 +146,45 @@ func (p *StartupPipeline) recordMemoryJobStatus(metric string, status string) {
 		return
 	}
 	p.recordMemoryCounter(metric, 1, map[string]string{MemoryStatusTag: status})
+}
+
+// addMemoryUsage mirrors Rust's `TokenUsage::add_assign`: every token field is
+// summed, so the aggregate of a phase's requests is reported.
+func addMemoryUsage(total *model.AgentUsage, usage model.AgentUsage) {
+	if total == nil {
+		return
+	}
+	total.InputTokens += usage.InputTokens
+	total.CachedInputTokens += usage.CachedInputTokens
+	total.CacheWriteInputTokens += usage.CacheWriteInputTokens
+	total.OutputTokens += usage.OutputTokens
+	total.ReasoningOutputTokens += usage.ReasoningOutputTokens
+	total.TotalTokens += usage.TotalTokens
+}
+
+// recordMemoryTokenUsage reports Rust's six token-usage samples for one phase,
+// in Rust's order and with its token_type values. Negative counts saturate at
+// zero, the way Rust's `.max(0)` does.
+func (p *StartupPipeline) recordMemoryTokenUsage(metric string, usage model.AgentUsage) {
+	if p == nil || p.Metrics == nil {
+		return
+	}
+	for _, sample := range []struct {
+		tokenType string
+		value     int64
+	}{
+		{MemoryTokenTypeTotal, usage.TotalTokens},
+		{MemoryTokenTypeInput, usage.InputTokens},
+		{MemoryTokenTypeCachedInput, usage.CachedInputTokens},
+		{MemoryTokenTypeCacheWriteInput, usage.CacheWriteInputTokens},
+		{MemoryTokenTypeOutput, usage.OutputTokens},
+		{MemoryTokenTypeReasoningOutput, usage.ReasoningOutputTokens},
+	} {
+		if sample.value < 0 {
+			sample.value = 0
+		}
+		p.recordMemoryHistogram(metric, int(sample.value), map[string]string{MemoryTokenTypeTag: sample.tokenType})
+	}
 }
 
 // MemoryVersionTagValue reports the tag value Rust's `memory_metric_tags` writes

@@ -68,6 +68,10 @@ WHERE id = 'memory-source-thread'`, updated.Unix(), updated.UnixMilli()); err !=
 	slug := "memory pipeline"
 	extractor := &recordingStageOneExtractor{response: StageOneExtractionResponse{
 		RawMemory: "raw memory from rollout", RolloutSummary: "pipeline summary", RolloutSlug: &slug,
+		Usage: &model.AgentUsage{
+			InputTokens: 900, CachedInputTokens: 300, CacheWriteInputTokens: 20,
+			OutputTokens: 40, ReasoningOutputTokens: 10, TotalTokens: 940,
+		},
 	}}
 	consolidator := &artifactConsolidator{}
 	metrics := state.NewTaskMetrics()
@@ -162,6 +166,23 @@ WHERE id = 'memory-source-thread'`, updated.Unix(), updated.UnixMilli()); err !=
 	assertMemoryTimerRecorded(t, metrics, MemoryPhaseTwoE2EMetric, config.MemoryVersionV1)
 	if input := memoryMetricRecords(metrics, MemoryPhaseTwoInputMetric); len(input) != 1 || input[0].Inc != 1 {
 		t.Fatalf("input records = %#v", input)
+	}
+	// Rust reports the tokens the phase consumed as one sample per token type,
+	// in its own order.
+	tokenUsage := memoryMetricRecords(metrics, MemoryPhaseOneTokenUsageMetric)
+	wantTokenTypes := []string{"total", "input", "cached_input", "cache_write_input", "output", "reasoning_output"}
+	wantTokenValues := []int{940, 900, 300, 20, 40, 10}
+	if len(tokenUsage) != len(wantTokenTypes) {
+		t.Fatalf("token usage records = %#v", tokenUsage)
+	}
+	for index, tokenType := range wantTokenTypes {
+		record := tokenUsage[index]
+		if record.Tags[MemoryTokenTypeTag] != tokenType || record.Value != wantTokenValues[index] {
+			t.Fatalf("token usage record %d = %#v", index, record)
+		}
+		if record.Tags[MemoryVersionTag] != "v1" || record.Kind != "histogram" {
+			t.Fatalf("token usage record %d tags = %#v", index, record.Tags)
+		}
 	}
 }
 
@@ -357,6 +378,7 @@ WHERE id = 'memory-v2-thread'`, updated.Unix(), updated.UnixMilli()); err != nil
 	extractor := &recordingStageOneExtractor{response: StageOneExtractionResponse{
 		RolloutSummary: "v2 summary", RolloutSlug: &slug,
 	}}
+	metrics := state.NewTaskMetrics()
 	pipeline := &StartupPipeline{
 		State: runtime, CodexHome: home, CurrentThreadID: "current-thread",
 		Version: config.MemoryVersionV2,
@@ -369,6 +391,7 @@ WHERE id = 'memory-v2-thread'`, updated.Unix(), updated.UnixMilli()); err != nil
 		StageOne: extractor, StageOneModel: "extract-model",
 		StageOneModelInfo: model.ModelInfo{ContextWindow: 10_000, EffectiveContextWindowPercent: 95},
 		PhaseTwo:          &v2ArtifactConsolidator{}, PhaseTwoModel: "consolidate-model",
+		Metrics: metrics,
 	}
 	report, err := pipeline.Run(ctx)
 	if err != nil {
@@ -376,6 +399,11 @@ WHERE id = 'memory-v2-thread'`, updated.Unix(), updated.UnixMilli()); err != nil
 	}
 	if report.StageOneSucceeded != 1 || report.StageOneFailed != 0 || report.PhaseTwoStatus != "succeeded" {
 		t.Fatalf("startup report = %+v", report)
+	}
+	// An extractor that reports no usage leaves the token-usage series empty
+	// (Rust's `has_token_usage` gate).
+	if records := memoryMetricRecords(metrics, MemoryPhaseOneTokenUsageMetric); len(records) != 0 {
+		t.Fatalf("token usage records = %#v without reported usage", records)
 	}
 	if len(extractor.requests) != 1 {
 		t.Fatalf("stage-one requests = %d", len(extractor.requests))

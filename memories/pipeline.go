@@ -56,6 +56,9 @@ type StageOneExtractionResponse struct {
 	RawMemory      string
 	RolloutSummary string
 	RolloutSlug    *string
+	// Usage is the extraction request's token usage; nil when the extractor
+	// reported none (Rust's `JobResult.token_usage`).
+	Usage *model.AgentUsage
 }
 
 type StageOneExtractor interface {
@@ -187,6 +190,8 @@ func (p *StartupPipeline) runStageOne(ctx context.Context, report *StartupReport
 	var mutex sync.Mutex
 	semaphore := make(chan struct{}, StageOneConcurrencyLimit)
 	var workers sync.WaitGroup
+	var totalUsage model.AgentUsage
+	hasUsage := false
 	for _, claim := range claims {
 		claim := claim
 		workers.Add(1)
@@ -194,15 +199,21 @@ func (p *StartupPipeline) runStageOne(ctx context.Context, report *StartupReport
 			defer workers.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
-			outcome := p.runStageOneJob(ctx, claim)
+			result := p.runStageOneJob(ctx, claim)
 			mutex.Lock()
-			switch outcome {
+			switch result.outcome {
 			case "succeeded":
 				report.StageOneSucceeded++
 			case "succeeded_no_output":
 				report.StageOneSucceededEmpty++
 			default:
 				report.StageOneFailed++
+			}
+			// Rust sums the usage of every job that reported one, whatever its
+			// outcome.
+			if result.usage != nil {
+				addMemoryUsage(&totalUsage, *result.usage)
+				hasUsage = true
 			}
 			mutex.Unlock()
 		}()
@@ -217,9 +228,19 @@ func (p *StartupPipeline) runStageOne(ctx context.Context, report *StartupReport
 	}
 	p.recordMemoryCounter(MemoryPhaseOneJobsMetric, report.StageOneSucceededEmpty, map[string]string{MemoryStatusTag: "succeeded_no_output"})
 	p.recordMemoryCounter(MemoryPhaseOneJobsMetric, report.StageOneFailed, map[string]string{MemoryStatusTag: "failed"})
+	if hasUsage {
+		p.recordMemoryTokenUsage(MemoryPhaseOneTokenUsageMetric, totalUsage)
+	}
 }
 
-func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1StartupClaim) string {
+// stageOneJobResult is Rust's `JobResult`: one job's outcome and the token usage
+// its request reported.
+type stageOneJobResult struct {
+	outcome string
+	usage   *model.AgentUsage
+}
+
+func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1StartupClaim) stageOneJobResult {
 	// v2 selects provenance-tiered evidence with its own token budget; v1 keeps
 	// the filtered serialization (Rust #43800).
 	var contents string
@@ -231,7 +252,7 @@ func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1
 	}
 	if err != nil {
 		_, _ = p.State.MarkStage1JobFailed(ctx, claim.Thread.ID, claim.OwnershipToken, err.Error(), StageOneRetryDelaySeconds)
-		return "failed"
+		return stageOneJobResult{outcome: "failed"}
 	}
 	input := BuildStageOneInputForVersion(p.Version, p.StageOneModelInfo, claim.Thread.RolloutPath, claim.Thread.CWD, claim.Thread.GitBranch, contents)
 	request := StageOneExtractionRequest{
@@ -252,8 +273,9 @@ func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1
 	response, err := p.StageOne.ExtractMemory(ctx, request)
 	if err != nil {
 		_, _ = p.State.MarkStage1JobFailed(ctx, claim.Thread.ID, claim.OwnershipToken, err.Error(), StageOneRetryDelaySeconds)
-		return "failed"
+		return stageOneJobResult{outcome: "failed"}
 	}
+	result := stageOneJobResult{outcome: "failed", usage: response.Usage}
 	// v2 stores an empty raw memory by design; only the summary is required
 	// (Rust #43800).
 	emptyOutput := response.RolloutSummary == ""
@@ -263,16 +285,18 @@ func (p *StartupPipeline) runStageOneJob(ctx context.Context, claim state.Stage1
 	if emptyOutput {
 		updated, _ := p.State.MarkStage1JobSucceededNoOutput(ctx, claim.Thread.ID, claim.OwnershipToken)
 		if updated {
-			return "succeeded_no_output"
+			result.outcome = "succeeded_no_output"
+			return result
 		}
-		return "failed"
+		return result
 	}
 	updated, _ := p.State.MarkStage1JobSucceeded(ctx, claim.Thread.ID, claim.OwnershipToken,
 		claim.Thread.UpdatedAt.Unix(), response.RawMemory, response.RolloutSummary, response.RolloutSlug)
 	if updated {
-		return "succeeded"
+		result.outcome = "succeeded"
+		return result
 	}
-	return "failed"
+	return result
 }
 
 func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
