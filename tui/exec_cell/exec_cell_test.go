@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/tui"
 	"codex_go/utils"
 )
 
@@ -155,6 +156,46 @@ func TestExecCellDisplayMatchesRustContinuationAndOutputLayout(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(clean, "\n"), transcriptHint) {
 		t.Fatalf("truncated output should advertise transcript: %#v", clean)
+	}
+}
+
+// Mirrors Rust #46492: agent command output uses the shared three-row preview,
+// so the visible rows are bounded and the hidden logical lines are counted, while
+// the transcript keeps the full output.
+func TestExecCellDisplayUsesSharedThreeRowPreviewLikeRust(t *testing.T) {
+	cell := NewExecCell(ExecCall{
+		CallID:  "call-1",
+		Command: []string{"bash", "-lc", "run"},
+		Output: &CommandOutput{
+			ExitCode:         0,
+			AggregatedOutput: "one\ntwo\nthree\nfour\nfive\nsix\n",
+			FormattedOutput:  "one\ntwo\nthree\nfour\nfive\nsix\n",
+		},
+		Source: ExecSourceAgent,
+	}, false)
+
+	clean := utils.StripANSI(strings.Join(cell.DisplayLines(80), "\n"))
+	if !strings.Contains(clean, "+3 lines ("+transcriptHint+")") {
+		t.Fatalf("preview should report three hidden lines: %q", clean)
+	}
+	outputRows := 0
+	for _, line := range strings.Split(clean, "\n")[1:] {
+		if strings.HasPrefix(line, "  \u2514 ") || strings.HasPrefix(line, "    ") {
+			outputRows++
+		}
+	}
+	if want := tui.PreviewLines + 1; outputRows != want {
+		t.Fatalf("output rows = %d, want %d (three preview rows plus the marker): %q", outputRows, want, clean)
+	}
+
+	transcript := strings.Join(cell.TranscriptLines(80), "\n")
+	for _, line := range []string{"one", "two", "three", "four", "five", "six"} {
+		if !strings.Contains(transcript, line) {
+			t.Fatalf("transcript dropped %q: %q", line, transcript)
+		}
+	}
+	if strings.Contains(transcript, transcriptHint) {
+		t.Fatalf("transcript should not advertise a truncated preview: %q", transcript)
 	}
 }
 

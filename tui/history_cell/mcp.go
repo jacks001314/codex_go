@@ -126,7 +126,11 @@ func (c McpToolCallCell) detailLines(width int, nodeREPL bool, compact bool) []s
 		return nil
 	}
 	if strings.TrimSpace(c.Result.Error) != "" {
-		return []string{"Error: " + strings.TrimSpace(c.Result.Error)}
+		errorLines := []string{"Error: " + strings.TrimSpace(c.Result.Error)}
+		if compact {
+			return tui.ToolOutputPreviewLines(errorLines, detailPreviewWidth(width), len(errorLines))
+		}
+		return errorLines
 	}
 	out := []string{}
 	for _, block := range c.Result.Content {
@@ -146,13 +150,25 @@ func (c McpToolCallCell) detailLines(width int, nodeREPL bool, compact bool) []s
 				if meaningful == "" {
 					continue
 				}
-				out = append(out, truncateToolResultLines(meaningful, width)...)
+				out = append(out, rawLinesFromSource(meaningful)...)
 				continue
 			}
 		}
-		out = append(out, truncateToolResultLines(block, width)...)
+		out = append(out, rawLinesFromSource(block)...)
+	}
+	if compact {
+		// Rust #46492: the compact preview shares one rendered-row budget across
+		// every result block and reports the hidden logical lines; the transcript
+		// and raw output keep the complete text.
+		return tui.ToolOutputPreviewLines(out, detailPreviewWidth(width), len(out))
 	}
 	return out
+}
+
+// detailPreviewWidth reserves four columns for the tree prefix, mirroring Rust's
+// detail_wrap_width, so the caller's prefix never re-wraps a preview row.
+func detailPreviewWidth(width int) int {
+	return max(width-4, 1)
 }
 
 // mcpNodeREPLTitle extracts the short title for a compact node_repl.js history
@@ -380,19 +396,6 @@ func wrapMcpInventoryLine(line string, width int) []string {
 		})
 	}
 	return []string{line}
-}
-
-func truncateToolResultLines(text string, width int) []string {
-	const maxLines = 50
-	lines := rawLinesFromSource(text)
-	if len(lines) > maxLines {
-		lines = append(lines[:maxLines], "... truncated")
-	}
-	out := []string{}
-	for _, line := range lines {
-		out = append(out, tui.AdaptiveWrapLine(line, tui.WrapOptions{Width: max(width, 1), BreakWords: true})...)
-	}
-	return out
 }
 
 func cloneMcpToolResult(result *McpToolResult) *McpToolResult {

@@ -227,6 +227,27 @@ func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, sty
 	}
 	lines := commandHeaderLines(headerPrefix, cmdDisplay, width, themeID, styled)
 	if call.Output != nil {
+		if !call.IsUserShellCommand() {
+			// Rust #46492: agent command output uses the shared three-row preview
+			// with a hidden-line count, so a long result cannot flood the cell.
+			sourceLines := splitCommandOutputLines(call.Output.AggregatedOutput)
+			preview := tui.ToolOutputPreviewLines(sourceLines, max(width-4, 1), len(sourceLines))
+			if len(preview) == 0 && !call.IsUnifiedExecInteraction() {
+				preview = []string{"(no output)"}
+			}
+			for index, line := range preview {
+				prefix := "    "
+				if index == 0 {
+					prefix = "  └ "
+				}
+				line = prefix + line
+				if styled {
+					line = ansiWrap(ansiDim, line)
+				}
+				lines = append(lines, line)
+			}
+			return lines
+		}
 		limit := ToolCallMaxLines
 		displayLimit := ToolCallMaxLines
 		if call.IsUserShellCommand() {
