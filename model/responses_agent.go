@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -3136,12 +3137,16 @@ func responsesRetryDelay(response *http.Response, attempt uint64) time.Duration 
 	if attempt == 0 {
 		attempt = 1
 	}
+	// Rust #46540 codex_async_utils::backoff: 200 ms doubling per attempt with
+	// up to 10% jitter and no cap. Callers enforce their own retry budget, so a
+	// fixed ceiling here would retry sooner than Rust.
 	delay := defaultResponsesRetryBaseDelay
 	for i := uint64(1); i < attempt; i++ {
-		delay *= 2
-		if delay > 5*time.Second {
-			return 5 * time.Second
+		if delay > time.Duration(math.MaxInt64/2) {
+			delay = time.Duration(math.MaxInt64)
+			break
 		}
+		delay *= 2
 	}
 	// Match Rust's backoff jitter range so reconnecting clients do not retry in lockstep.
 	jitter := 0.9 + rand.Float64()*0.2
