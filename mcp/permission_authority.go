@@ -26,7 +26,7 @@ func (r *RuntimeConfig) SetServerPermissionProfiles(environmentProfiles map[stri
 		}
 		// Attachment-scoped servers stay out of the effective set while their
 		// environment is unselected or unavailable (Rust #39335).
-		if !mcpServerEnvironmentAvailable(&registration.Config, r.AvailableEnvironment) {
+		if !mcpRegistrationEnvironmentAvailable(name, registration, r) {
 			continue
 		}
 		profile, ok := resolveMCPServerPermissionProfile(name, registration, r.PermissionProfile, environmentProfiles)
@@ -95,7 +95,7 @@ func (r *RuntimeConfig) ForThreadlessOperations() *RuntimeConfig {
 		if name == "" || !registration.Config.Enabled {
 			continue
 		}
-		if !mcpServerEnvironmentAvailable(&registration.Config, r.AvailableEnvironment) {
+		if !mcpRegistrationEnvironmentAvailable(name, registration, r) {
 			continue
 		}
 		clone.ServerPermissionProfiles[name] = cloneMCPPermissionProfile(threadlessMCPPermissionProfile())

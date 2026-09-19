@@ -725,7 +725,7 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 			if !registration.Config.Enabled {
 				continue
 			}
-			if !mcpServerEnvironmentAvailable(&registration.Config, runtime.AvailableEnvironment) {
+			if !mcpRegistrationEnvironmentAvailable(name, registration, runtime) {
 				continue
 			}
 			service.configs[name] = config

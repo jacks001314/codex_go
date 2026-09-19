@@ -256,6 +256,10 @@ type RuntimeConfig struct {
 	AppsMCPProductSKU    string
 	ConnectorIDs         []string
 	AvailableEnvironment []string
+	// EnvironmentAuthority is the captured turn-environment authority for MCP
+	// availability (Rust McpEnvironmentScope::Selected, #39335/#46335). It takes
+	// precedence over AvailableEnvironment when set.
+	EnvironmentAuthority *EnvironmentAuthority
 	CodexHome            string
 	Auth                 *RuntimeAuth
 	Requirements         *managedconfig.ConfigRequirements

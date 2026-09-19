@@ -3151,6 +3151,48 @@ func (r *RuntimeRouter) interruptHooksForCWD(cwd string, threadID string) []Hook
 	return out
 }
 
+// mcpEnvironmentAuthorityForTurn mirrors Rust's McpEnvironmentScope::Selected
+// (#39335/#46335): the captured turn selections decide MCP authority, including
+// selections whose owner configuration is still pending or has failed, and any
+// owner-supplied mcp_policy. A nil result means no selections were captured, so
+// attachment-scoped filtering does not apply.
+func mcpEnvironmentAuthorityForTurn(params *turn.TurnStartParams) *mcp.EnvironmentAuthority {
+	if params == nil || len(params.Environments) == 0 {
+		return nil
+	}
+	authority := &mcp.EnvironmentAuthority{
+		Scoped:      true,
+		Unlimited:   map[string]bool{},
+		Restricted:  map[string]*config.EnvironmentMCPPolicy{},
+		Unavailable: map[string]bool{},
+	}
+	for _, selection := range params.Environments {
+		environmentID := selectionEnvironmentID(selection)
+		if environmentID == "" {
+			continue
+		}
+		state, err := environmentConfigStateFromAnyMap(selection)
+		if err != nil {
+			// An unparseable owner selection cannot claim owner authority.
+			authority.Unavailable[environmentID] = true
+			continue
+		}
+		switch state.Kind {
+		case EnvironmentConfigPending, EnvironmentConfigFailed:
+			authority.Unavailable[environmentID] = true
+		case EnvironmentConfigReady:
+			if state.Config != nil && state.Config.McpPolicy != nil {
+				authority.Restricted[environmentID] = state.Config.McpPolicy
+				continue
+			}
+			authority.Unlimited[environmentID] = true
+		default:
+			authority.Unlimited[environmentID] = true
+		}
+	}
+	return authority
+}
+
 func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadRevertResponse, error) {
 	if r == nil || r.services.ThreadRouter == nil {
 		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
@@ -12310,8 +12352,10 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 	// availability, and a change to that snapshot (a selection saved for the
 	// next turn) must refresh the published runtime. Capture it once so the
 	// refresh decision and the applied runtime config agree.
-	availableEnvironment := selectedEnvironmentIDs(r.activeTurnParams(threadID))
-	environmentFingerprint := mcpEnvironmentRuntimeFingerprint(availableEnvironment)
+	turnParams := r.activeTurnParams(threadID)
+	availableEnvironment := selectedEnvironmentIDs(turnParams)
+	environmentFingerprint := mcpEnvironmentRuntimeFingerprint(turnParams)
+	environmentAuthority := mcpEnvironmentAuthorityForTurn(turnParams)
 	runtimeConfig := func(cfg *config.Config) *mcp.RuntimeConfig {
 		values := map[string]any{}
 		if cfg != nil && cfg.Values != nil {
@@ -12323,6 +12367,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		// Rust #39335: attachment-scoped MCP servers are only enabled when
 		// their environment is selected and available for the thread.
 		config.AvailableEnvironment = append([]string(nil), availableEnvironment...)
+		config.EnvironmentAuthority = environmentAuthority.Clone()
 		r.applyMCPPermissionAuthority(config, threadID, r.currentMCPElicitationAuthority(threadID, "", "").PermissionProfile)
 		return config
 	}

@@ -9,6 +9,7 @@ import (
 
 	"codex_go/config"
 	"codex_go/mcp"
+	"codex_go/turn"
 )
 
 // mcpRuntimeCoordinator owns the MCP service associated with each loaded
@@ -351,11 +352,19 @@ func mcpRuntimeConfigFingerprint(cfg *config.Config) string {
 // mcpEnvironmentRuntimeFingerprint renders a thread's captured turn-environment
 // selections so a selection change refreshes the published MCP runtime
 // (Rust #46335: compare both captured selections and ready environment handles
-// before reusing a runtime). Order stays significant, matching Rust's slice
-// comparison of the captured selections.
-func mcpEnvironmentRuntimeFingerprint(environmentIDs []string) string {
-	if len(environmentIDs) == 0 {
+// before reusing a runtime). The whole selection is rendered, so a change to a
+// selection's cwd, workspace roots, or configuration state also refreshes; order
+// stays significant, matching Rust's slice comparison of the captured
+// selections.
+func mcpEnvironmentRuntimeFingerprint(params *turn.TurnStartParams) string {
+	if params == nil || len(params.Environments) == 0 {
 		return ""
 	}
-	return strings.Join(environmentIDs, "\x00")
+	data, err := json.Marshal(params.Environments)
+	if err != nil {
+		// The selections came from decoded JSON, so this is unreachable in
+		// practice; fall back to the environment ids so a change still differs.
+		return strings.Join(selectedEnvironmentIDs(params), "\x00")
+	}
+	return string(data)
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	codexconfig "codex_go/config"
 	"codex_go/execpolicy"
 	"codex_go/sandbox"
 )
@@ -45,6 +46,11 @@ type EnvironmentConfig struct {
 	// exec_policy (#38942). Environment policies can only tighten command
 	// access: allow rules are rejected at validation.
 	ExecPolicy *execpolicy.RequirementsPolicy
+	// McpPolicy is the optional owner-supplied MCP restriction for this
+	// environment attachment, mirroring Rust protocol::EnvironmentConfig
+	// mcp_policy (#39335): additional allowlists over the configured and
+	// plugin-provided MCP servers.
+	McpPolicy *codexconfig.EnvironmentMCPPolicy
 	// PermissionProfile is the resolved profile (nil only for legacy thread
 	// configs that could not resolve a profile).
 	PermissionProfile *sandbox.PermissionProfile
@@ -228,6 +234,22 @@ func environmentConfigFromAny(value any) (*EnvironmentConfig, error) {
 	if config.ExecPolicy != nil && config.ExecPolicy.HasAllowRules() {
 		return nil, fmt.Errorf("environment command policy cannot contain allow rules")
 	}
+	for _, key := range []string{"mcp_policy", "mcpPolicy"} {
+		raw, present := object[key]
+		if !present || raw == nil {
+			continue
+		}
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("environment mcp policy must be an object")
+		}
+		policy, err := codexconfig.EnvironmentMCPPolicyFromMap(table)
+		if err != nil {
+			return nil, err
+		}
+		config.McpPolicy = policy
+		break
+	}
 	profileJSON := strings.TrimSpace(firstNonEmpty(
 		stringFromAny(object["permission_profile"]),
 		stringFromAny(object["permissionProfile"]),
@@ -353,6 +375,9 @@ func environmentConfigToAny(config *EnvironmentConfig) map[string]any {
 	if config.ExecPolicy != nil && strings.TrimSpace(config.ExecPolicy.Text()) != "" {
 		out["exec_policy"] = config.ExecPolicy.Text()
 	}
+	if policy := config.McpPolicy.ToMap(); policy != nil {
+		out["mcp_policy"] = policy
+	}
 	if config.ActivePermissionProfile != "" {
 		out["permission_profile_id"] = config.ActivePermissionProfile
 	}
@@ -438,6 +463,7 @@ func cloneEnvironmentConfig(config *EnvironmentConfig) *EnvironmentConfig {
 		clone.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(config.ShellEnvironmentPolicy)
 	}
 	clone.ExecPolicy = config.ExecPolicy.Clone()
+	clone.McpPolicy = config.McpPolicy.Clone()
 	if config.PermissionProfile != nil {
 		profile := *config.PermissionProfile
 		clone.PermissionProfile = &profile
