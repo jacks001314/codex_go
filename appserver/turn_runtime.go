@@ -5492,6 +5492,13 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	// the reminder and fallback prompt again.
 	extra["auto_compact_fallback_delivered"] = false
 	extra["token_budget_reminder_delivered"] = false
+	// Rust Session::advance_auto_compact_window: installing the compacted
+	// history starts a new conversation window, so the window number advances and
+	// the context-window identity is regenerated. Every later Responses request
+	// reports the new `{thread_id}:{window_number}` window (turn, compaction and
+	// MCP request metadata), which is what the thread record below also records.
+	r.advanceWindowNumber(request.ThreadID)
+	r.advanceContextWindowID(request.ThreadID)
 	// A successful pre-turn compaction satisfies the full-context requirement.
 	if request.Phase == compact.PhasePreTurn {
 		status := compactTokenStatusFromMetadata(extra)

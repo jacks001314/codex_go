@@ -18914,6 +18914,70 @@ func TestCompactThreadRetainsServerObservedPrefillAndReplacesEstimated(t *testin
 	}
 }
 
+// Mirrors Rust Session::advance_auto_compact_window: installing a compacted
+// history starts a new conversation window, so the window number advances and
+// the context-window identity is regenerated. Every Responses request after the
+// compaction reports the new `{thread_id}:{window_number}` identity.
+func TestCompactThreadAdvancesTheConversationWindowLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	const threadID = "thread-window-advance"
+	if err := store.Create(&session.Record{
+		ID: session.ThreadID(threadID), SessionID: threadID,
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{Model: "gpt-5.4"},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "first", CreatedAt: now},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "answer", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	firstWindowID := router.windowIDForThread(threadID)
+	firstContextWindowID := router.contextWindowIDForThread(threadID)
+	if firstWindowID != threadID+":0" {
+		t.Fatalf("first window id = %q, want %q", firstWindowID, threadID+":0")
+	}
+
+	if _, err := router.compactThread(context.Background(), &runtimeCompactRequest{
+		ThreadID: threadID,
+		TurnID:   "turn-window-advance",
+		Trigger:  compact.TriggerAuto,
+		Reason:   compact.ReasonTokenLimit,
+		Phase:    compact.PhaseMidTurn,
+		Prompt:   "Summarize the conversation so far.",
+	}); err != nil {
+		t.Fatalf("compactThread() error = %v", err)
+	}
+
+	if got := router.windowIDForThread(threadID); got != threadID+":1" {
+		t.Fatalf("window id after compaction = %q, want %q", got, threadID+":1")
+	}
+	if got := router.contextWindowIDForThread(threadID); got == firstContextWindowID || got == "" {
+		t.Fatalf("context window id after compaction = %q, want a new identity (was %q)", got, firstContextWindowID)
+	}
+	// The client metadata that follows the compaction reports the new window.
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		t.Fatalf("Read record error = %v", err)
+	}
+	metadata := router.compactResponsesClientMetadata(record, &compact.Request{
+		ThreadID: threadID,
+		TurnID:   "turn-window-advance-2",
+		Trigger:  compact.TriggerAuto,
+		Reason:   compact.ReasonTokenLimit,
+		Phase:    compact.PhaseMidTurn,
+	}, "gpt-5.4")
+	if metadata["x-codex-window-id"] != threadID+":1" {
+		t.Fatalf("client metadata window id = %q", metadata["x-codex-window-id"])
+	}
+	document := decodeCompactionTurnMetadata(t, metadata[codexapi.ClientCodexTurnMetadataHeader])
+	if document["window_id"] != threadID+":1" || intFromAny(document["window_number"]) != 1 {
+		t.Fatalf("turn metadata window = %#v / %#v", document["window_id"], document["window_number"])
+	}
+}
+
 func TestAutoCompactFallbackFollowUpReminderAndFallback(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := fixedTime()
