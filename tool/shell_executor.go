@@ -567,12 +567,21 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			return nil, RespondToModel(fmt.Sprintf("failed to prepare network proxy for environment `%s`: %v", environmentID, resolveErr))
 		}
 		if resolvedNetwork != nil {
-			validation.Env = resolvedNetwork.Env
-			validation.EnforceManagedNetwork = resolvedNetwork.ManagedNetwork != nil || resolvedNetwork.RemoteNetworkProxy != nil
-			validation.ManagedNetwork = resolvedNetwork.ManagedNetwork
-			validation.RemoteNetworkProxy = resolvedNetwork.RemoteNetworkProxy
-			validation.NetworkPolicyDecider = resolvedNetwork.NetworkPolicyDecider
-			validation.NetworkPolicyDecisionTimeout = resolvedNetwork.NetworkPolicyDecisionTimeout
+			// Rust #46499 (tools/runtimes/unified_exec.rs): an explicit full
+			// escalation bypasses controller- and attachment-owned network
+			// proxies, so no network spec (and therefore no proxy env) is
+			// attached for the attempt. Denied-read restrictions still preserve
+			// the sandbox (`SandboxPermissionsPreservingDeniedReads`), and those
+			// launches keep the proxy so denied reads stay enforced.
+			attemptPermissions := sandbox.SandboxPermissionsPreservingDeniedReads(args.SandboxPermissions, validation.PermissionProfile)
+			if attemptPermissions != sandbox.SandboxPermissionsRequireEscalated {
+				validation.Env = resolvedNetwork.Env
+				validation.EnforceManagedNetwork = resolvedNetwork.ManagedNetwork != nil || resolvedNetwork.RemoteNetworkProxy != nil
+				validation.ManagedNetwork = resolvedNetwork.ManagedNetwork
+				validation.RemoteNetworkProxy = resolvedNetwork.RemoteNetworkProxy
+				validation.NetworkPolicyDecider = resolvedNetwork.NetworkPolicyDecider
+				validation.NetworkPolicyDecisionTimeout = resolvedNetwork.NetworkPolicyDecisionTimeout
+			}
 		}
 	}
 	if invocationPermissionPreapproved(invocation) {

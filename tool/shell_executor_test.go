@@ -352,6 +352,66 @@ func TestShellExecutorResolvesManagedNetworkForSelectedEnvironmentLikeRust(t *te
 	}
 }
 
+// TestShellExecutorEscalationBypassesManagedNetworkLikeRust covers Rust #46499
+// (tools/runtimes/unified_exec.rs): an explicit full escalation attaches no
+// controller- or attachment-owned network proxy, while denied-read restrictions
+// preserve the sandbox and keep the proxy attached.
+func TestShellExecutorEscalationBypassesManagedNetworkLikeRust(t *testing.T) {
+	managedNetwork := func() *ManagedNetworkResolution {
+		return &ManagedNetworkResolution{
+			Env:            map[string]string{"HTTP_PROXY": "http://127.0.0.1:41234"},
+			ManagedNetwork: &network.ProxyManagedNetworkSandboxContext{LoopbackPorts: []uint16{41234}},
+		}
+	}
+	run := func(t *testing.T, profile *sandbox.PermissionProfile, arguments string) *ShellRequest {
+		t.Helper()
+		runner := &fakeShellRunner{result: &ShellResult{ExitCode: 0}}
+		executor := NewShellExecutor(&ShellExecutorOptions{
+			Runner: runner,
+			Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+			Validation: ShellValidationOptions{
+				ApprovalPolicy:         sandbox.ApprovalOnRequest,
+				CWD:                    t.TempDir(),
+				PermissionsPreapproved: true,
+				PermissionProfile:      profile,
+			},
+			ManagedNetworkResolver: func(environmentID string, remote bool) (*ManagedNetworkResolution, error) {
+				return managedNetwork(), nil
+			},
+		})
+		if _, err := executor.Execute(context.Background(), &Invocation{CallID: "call-escalation", ToolName: PlainName(DefaultExecCommandToolName), Payload: Payload{Kind: PayloadFunction, Arguments: arguments}}); err != nil {
+			t.Fatalf("Execute(%s) error = %v", arguments, err)
+		}
+		if runner.request == nil {
+			t.Fatalf("Execute(%s) produced no request", arguments)
+		}
+		return runner.request
+	}
+
+	escalated := run(t, nil, `{"cmd":"echo escalated","sandbox_permissions":"require_escalated","justification":"needs full access"}`)
+	if escalated.SandboxPermissions != sandbox.SandboxPermissionsRequireEscalated {
+		t.Fatalf("escalated sandbox permissions = %q", escalated.SandboxPermissions)
+	}
+	if escalated.ManagedNetwork != nil || escalated.RemoteNetworkProxy != nil || escalated.Env["HTTP_PROXY"] != "" || escalated.EnforceManagedNetwork {
+		t.Fatalf("escalated launch kept the managed network: %#v", escalated)
+	}
+
+	// A downgraded escalation keeps the sandbox so denied reads stay enforced,
+	// and therefore keeps the proxy (Rust's ESCALATED_DENY_READ regression guard).
+	restricted := sandbox.WorkspaceWritePermissionProfile()
+	restricted.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "path", Path: t.TempDir()},
+		Access: sandbox.FileSystemAccessDeny,
+	}}
+	deniedRead := run(t, &restricted, `{"cmd":"echo escalated","sandbox_permissions":"require_escalated","justification":"needs full access"}`)
+	if deniedRead.SandboxPermissions != sandbox.SandboxPermissionsUseDefault {
+		t.Fatalf("denied-read sandbox permissions = %q, want use_default", deniedRead.SandboxPermissions)
+	}
+	if !deniedRead.EnforceManagedNetwork || deniedRead.ManagedNetwork == nil || deniedRead.Env["HTTP_PROXY"] == "" {
+		t.Fatalf("denied-read launch dropped the managed network: %#v", deniedRead)
+	}
+}
+
 func TestShellExecutorUsesUnifiedExecForExplicitlyDisabledSandboxLikeRust(t *testing.T) {
 	executor := NewShellExecutor(&ShellExecutorOptions{UnifiedExec: NewUnifiedExecManager()})
 	defer executor.unifiedExec.Close()
