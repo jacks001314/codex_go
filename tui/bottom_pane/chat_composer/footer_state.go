@@ -3,6 +3,8 @@ package chatcomposer
 import (
 	"strings"
 	"time"
+
+	"codex_go/tui"
 )
 
 // Rust parity subset: codex-rs/tui/src/bottom_pane/chat_composer/footer_state.rs.
@@ -61,15 +63,15 @@ type FooterFlash struct {
 func NewFooterState() FooterState {
 	return FooterState{
 		Mode:               ComposerFooterModeComposerEmpty,
-		QuitShortcutKey:    "Ctrl+C",
-		ExternalEditorKey:  "Ctrl+G",
-		ShowTranscriptKey:  "Ctrl+T",
-		InsertNewlineKey:   "Ctrl+J",
-		QueueKey:           "Tab",
+		QuitShortcutKey:    "ctrl+c",
+		ExternalEditorKey:  "ctrl+g",
+		ShowTranscriptKey:  "ctrl+t",
+		InsertNewlineKey:   "shift+enter",
+		QueueKey:           "tab",
 		ToggleShortcutsKey: "?",
-		HistorySearchKey:   "Ctrl+R",
-		ReasoningDownKey:   "Alt+,",
-		ReasoningUpKey:     "Alt+.",
+		HistorySearchKey:   "ctrl+r",
+		ReasoningDownKey:   tui.AltKeyLabel() + "+,",
+		ReasoningUpKey:     tui.AltKeyLabel() + "+.",
 	}
 }
 

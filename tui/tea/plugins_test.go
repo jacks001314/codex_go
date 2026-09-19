@@ -326,7 +326,7 @@ func TestPluginBrowserOnlyOffersRustMarketplaceActionsForUserConfig(t *testing.T
 		},
 	})
 	model.openPluginBrowser("", response, chatwidget.MarketplaceTabID(response.Marketplaces[0]))
-	if strings.Contains(model.View(), "ctrl + u upgrade") {
+	if strings.Contains(model.View(), "ctrl+u upgrade") {
 		t.Fatalf("local marketplace displayed upgrade action:\n%s", model.View())
 	}
 	_, cmd := model.Update(key(bubbletea.KeyCtrlU))

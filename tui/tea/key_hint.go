@@ -5,6 +5,8 @@ import (
 	"unicode"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
+
+	"codex_go/tui"
 )
 
 // Rust parity: codex-rs/tui/src/key_hint.rs.
@@ -46,13 +48,20 @@ func (b KeyBinding) IsPress(message bubbletea.KeyMsg) bool {
 	return unicode.ToLower(r) == b.Rune && !unicode.IsUpper(r)
 }
 
+// Label renders the binding the way Rust's `KeyBinding::display_label` does: a
+// compact shortcut whose modifiers (control, shift, alt) precede the key, each
+// joined with a bare `+` (#46680).
 func (b KeyBinding) Label() string {
-	parts := []string{}
-	if b.Alt {
-		parts = append(parts, "alt")
+	var label strings.Builder
+	if IsCtrlKeyType(b.Type) {
+		label.WriteString("ctrl+")
 	}
 	if b.Shift {
-		parts = append(parts, "shift")
+		label.WriteString("shift+")
+	}
+	if b.Alt {
+		label.WriteString(AltKeyLabel())
+		label.WriteString("+")
 	}
 	key := keyTypeLabel(b.Type)
 	if b.Type == bubbletea.KeyRunes {
@@ -61,8 +70,26 @@ func (b KeyBinding) Label() string {
 			key = "space"
 		}
 	}
-	parts = append(parts, key)
-	return strings.Join(parts, " + ")
+	label.WriteString(key)
+	return label.String()
+}
+
+// AltKeyLabel is the name Rust gives the alt modifier: the option glyph on
+// macOS, otherwise `alt`.
+func AltKeyLabel() string {
+	return tui.AltKeyLabel()
+}
+
+// IsCtrlKeyType reports whether a key type is a control chord, the way Rust's
+// KeyModifiers::CONTROL is carried.
+func IsCtrlKeyType(keyType bubbletea.KeyType) bool {
+	if _, named := namedKeyLabel(keyType); named {
+		// bubbletea aliases several control chords onto named keys (ctrl+i is
+		// tab, ctrl+m is enter); Rust names those keys instead of their chord.
+		return false
+	}
+	_, ok := ctrlKeyNames[keyType]
+	return ok
 }
 
 func IsPlainTextKey(message bubbletea.KeyMsg) bool {
@@ -81,29 +108,60 @@ func AnyKeyPressed(bindings []KeyBinding, message bubbletea.KeyMsg) bool {
 	return false
 }
 
+// ctrlKeyNames maps a control chord's key type to the key it names, so the
+// control modifier can be rendered once in Rust's modifier order.
+var ctrlKeyNames = map[bubbletea.KeyType]string{
+	bubbletea.KeyCtrlA: "a", bubbletea.KeyCtrlB: "b", bubbletea.KeyCtrlC: "c",
+	bubbletea.KeyCtrlD: "d", bubbletea.KeyCtrlE: "e", bubbletea.KeyCtrlF: "f",
+	bubbletea.KeyCtrlG: "g", bubbletea.KeyCtrlH: "h", bubbletea.KeyCtrlI: "i",
+	bubbletea.KeyCtrlJ: "j", bubbletea.KeyCtrlK: "k", bubbletea.KeyCtrlL: "l",
+	bubbletea.KeyCtrlM: "m", bubbletea.KeyCtrlN: "n", bubbletea.KeyCtrlO: "o",
+	bubbletea.KeyCtrlP: "p", bubbletea.KeyCtrlQ: "q", bubbletea.KeyCtrlR: "r",
+	bubbletea.KeyCtrlS: "s", bubbletea.KeyCtrlT: "t", bubbletea.KeyCtrlU: "u",
+	bubbletea.KeyCtrlV: "v", bubbletea.KeyCtrlW: "w", bubbletea.KeyCtrlX: "x",
+	bubbletea.KeyCtrlY: "y", bubbletea.KeyCtrlZ: "z",
+}
+
+// keyTypeLabel renders the key itself, without its modifiers: Rust's
+// `display_label` tail (arrow glyphs, `enter`, `space`, `pgup`, ...).
 func keyTypeLabel(keyType bubbletea.KeyType) string {
+	if label, named := namedKeyLabel(keyType); named {
+		return label
+	}
+	if name, ok := ctrlKeyNames[keyType]; ok {
+		return name
+	}
+	return strings.ToLower(keyType.String())
+}
+
+// namedKeyLabel reports the label of a key Rust names instead of spelling out
+// its key code.
+func namedKeyLabel(keyType bubbletea.KeyType) (string, bool) {
 	switch keyType {
 	case bubbletea.KeyEnter:
-		return "enter"
+		return "enter", true
 	case bubbletea.KeyEsc:
-		return "esc"
+		return "esc", true
+	case bubbletea.KeyTab:
+		return "tab", true
 	case bubbletea.KeyUp:
-		return "up"
+		return "↑", true
 	case bubbletea.KeyDown:
-		return "down"
+		return "↓", true
 	case bubbletea.KeyLeft:
-		return "left"
+		return "←", true
 	case bubbletea.KeyRight:
-		return "right"
+		return "→", true
 	case bubbletea.KeyPgUp:
-		return "pgup"
+		return "pgup", true
 	case bubbletea.KeyPgDown:
-		return "pgdn"
-	case bubbletea.KeyCtrlC:
-		return "ctrl + c"
-	case bubbletea.KeyCtrlD:
-		return "ctrl + d"
-	default:
-		return strings.ToLower(keyType.String())
+		return "pgdn", true
+	case bubbletea.KeySpace:
+		return "space", true
+	case bubbletea.KeyDelete:
+		// Rust renders `del` in its instrumented builds; production crossterm
+		// spellings are not part of the label surface Go reproduces.
+		return "del", true
 	}
+	return "", false
 }

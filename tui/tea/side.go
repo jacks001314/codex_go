@@ -445,13 +445,13 @@ func (m *Model) sideContextLabel() string {
 		return ""
 	}
 	if !m.activeSide.ShowingSide {
-		return "ctrl + / for side"
+		return "ctrl+/ for side"
 	}
 	parts := []string{"from main thread"}
 	if statusLabel := m.activeSide.ParentSideStatus.label(true); statusLabel != "" {
 		parts = append(parts, statusLabel)
 	}
-	parts = append(parts, "ctrl + / to switch", "ctrl + c to close")
+	parts = append(parts, "ctrl+/ to switch", "ctrl+c to close")
 	return "Side " + strings.Join(parts, " - ")
 }
 

@@ -1242,7 +1242,7 @@ func TestModelTranscriptOverlayExpandsHistoryRawText(t *testing.T) {
 		[]string{
 			"Ran command",
 			"  first line",
-			"  +2 lines (ctrl + t to view transcript)",
+			"  +2 lines (ctrl+t to view transcript)",
 			"  last line",
 		},
 		[]string{
@@ -1256,7 +1256,7 @@ func TestModelTranscriptOverlayExpandsHistoryRawText(t *testing.T) {
 	model := NewModel(state, Options{Width: 60, Height: 10})
 
 	regular := renderTranscript(state, false, 60, model.activeTUITheme())
-	if !strings.Contains(regular, "ctrl + t to view transcript") || strings.Contains(regular, "hidden detail one") {
+	if !strings.Contains(regular, "ctrl+t to view transcript") || strings.Contains(regular, "hidden detail one") {
 		t.Fatalf("regular transcript did not stay collapsed:\n%s", regular)
 	}
 
@@ -1268,7 +1268,7 @@ func TestModelTranscriptOverlayExpandsHistoryRawText(t *testing.T) {
 			t.Fatalf("expanded transcript missing %q:\n%s", want, content)
 		}
 	}
-	if strings.Contains(content, "ctrl + t to view transcript") {
+	if strings.Contains(content, "ctrl+t to view transcript") {
 		t.Fatalf("expanded transcript retained collapsed-output hint:\n%s", content)
 	}
 
@@ -3134,7 +3134,7 @@ func TestModelSideCommandStartsRuntimeSideConversation(t *testing.T) {
 	if len(state.Messages) != 0 {
 		t.Fatalf("side transcript should start empty, got %#v", state.Messages)
 	}
-	if view := model.View(); !strings.Contains(view, "Side from main thread") || !strings.Contains(view, "ctrl + / to switch") {
+	if view := model.View(); !strings.Contains(view, "Side from main thread") || !strings.Contains(view, "ctrl+/ to switch") {
 		t.Fatalf("side context missing:\n%s", view)
 	}
 

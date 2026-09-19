@@ -54,15 +54,15 @@ func TestFooterLinesStatusAgentAndShortcutOverlayMatchRustCore(t *testing.T) {
 	for _, want := range []string{
 		"/ for commands",
 		"! for shell commands",
-		"Shift+Enter for newline",
-		"Tab to submit message",
+		"shift+enter for newline",
+		"tab to submit message",
 		"@ for file paths",
-		"Ctrl+V to paste images",
-		"Ctrl+R search history",
-		"Ctrl+T to view transcript",
-		"Ctrl+G to edit in external editor",
-		"Shift+Tab to change mode",
-		"Ctrl+C to exit",
+		"ctrl+v to paste images",
+		"ctrl+r search history",
+		"ctrl+t to view transcript",
+		"ctrl+g to edit in external editor",
+		"shift+tab to change mode",
+		"ctrl+c to exit",
 		"customize shortcuts with /keymap",
 	} {
 		if !footerContainsLine(lines, want) {
@@ -73,7 +73,7 @@ func TestFooterLinesStatusAgentAndShortcutOverlayMatchRustCore(t *testing.T) {
 
 func TestFooterDraftQueueEscQuitAndHeight(t *testing.T) {
 	queue := FooterProps{Mode: FooterModeComposerHasDraft, IsTaskRunning: true}
-	if lines := FooterLines(queue); len(lines) != 1 || lines[0] != "Tab to queue message" {
+	if lines := FooterLines(queue); len(lines) != 1 || lines[0] != "tab to queue message" {
 		t.Fatalf("queue lines = %#v", lines)
 	}
 	draft := FooterProps{Mode: FooterModeComposerHasDraft, UseShiftEnterHint: true}
@@ -81,11 +81,11 @@ func TestFooterDraftQueueEscQuitAndHeight(t *testing.T) {
 		t.Fatalf("draft lines = %#v", lines)
 	}
 	esc := FooterProps{Mode: FooterModeEscHint, EscBacktrackHint: true}
-	if lines := FooterLines(esc); lines[0] != "Esc again to edit previous message" {
+	if lines := FooterLines(esc); lines[0] != "esc again to edit previous message" {
 		t.Fatalf("esc lines = %#v", lines)
 	}
 	quit := FooterProps{Mode: FooterModeQuitShortcutReminder, IsTaskRunning: true}
-	if lines := FooterLines(quit); lines[0] != "Ctrl+C again to quit" {
+	if lines := FooterLines(quit); lines[0] != "ctrl+c again to quit" {
 		t.Fatalf("quit lines = %#v", lines)
 	}
 	history := FooterProps{Mode: FooterModeHistorySearch}
@@ -125,7 +125,7 @@ func TestSingleLineFooterLayoutCollapseAndRender(t *testing.T) {
 
 	queue := FooterProps{Mode: FooterModeComposerHasDraft, IsTaskRunning: true, StatusLineEnabled: true, StatusLineValue: "ctx"}
 	queueLayout := ComputeSingleLineFooterLayout(16, len("ctx"), queue, false, true)
-	if queueLayout.Left != "Tab to queue" || queueLayout.ShowContext {
+	if queueLayout.Left != "tab to queue" || queueLayout.ShowContext {
 		t.Fatalf("queue fallback = %#v", queueLayout)
 	}
 }

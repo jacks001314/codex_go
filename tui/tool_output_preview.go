@@ -19,7 +19,7 @@ const (
 	MaxPreviewLineBytes = 16 * 1024
 	// TranscriptHint tells the user where the hidden output lives
 	// (Rust TRANSCRIPT_HINT).
-	TranscriptHint = "ctrl + t to view transcript"
+	TranscriptHint = "ctrl+t to view transcript"
 )
 
 // ToolOutputPreview collects the leading preview rows of a tool result.

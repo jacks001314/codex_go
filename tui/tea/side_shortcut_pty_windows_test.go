@@ -127,7 +127,7 @@ func runSideShortcutTUIParityPTY(t *testing.T, binary string, cwd string, verify
 		// exposes this as KeyCtrlUnderscore on Windows.
 		parentStart := len(output.String())
 		writeSideShortcutInput(t, terminal, string([]byte{0x1f}))
-		waitForSideShortcutOutput(t, &output, exited, parentStart, "ctrl + / for side", 10*time.Second)
+		waitForSideShortcutOutput(t, &output, exited, parentStart, "ctrl+/ for side", 10*time.Second)
 
 		sideReturnStart := len(output.String())
 		writeSideShortcutInput(t, terminal, string([]byte{0x1f}))

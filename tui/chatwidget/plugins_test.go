@@ -169,7 +169,7 @@ func TestPluginCatalogPopupModelMatchesRustTabsAndSelection(t *testing.T) {
 		t.Fatalf("curated tab = %#v", curated)
 	}
 	localOne := pluginCatalogModelTab(model, MarketplaceTabIDFromPath(localPathOne))
-	if localOne == nil || !strings.Contains(localOne.FooterHint, "ctrl + u upgrade") || !strings.Contains(localOne.FooterHint, "ctrl + r remove") {
+	if localOne == nil || !strings.Contains(localOne.FooterHint, "ctrl+u upgrade") || !strings.Contains(localOne.FooterHint, "ctrl+r remove") {
 		t.Fatalf("local one footer = %#v", localOne)
 	}
 	if len(localOne.Items) != 1 || localOne.Items[0].Toggle == nil || !localOne.Items[0].Toggle.IsOn || !strings.Contains(localOne.Items[0].SelectedDescription, "Space to disable; Enter view details.") {

@@ -24,9 +24,9 @@ func TestStartupWarningsSummaryLikeRust(t *testing.T) {
 		),
 	)
 	mixed = mixed.Merge(NewMCPStartupWarnings(nil, []string{"alpha", "beta"}, MCPStartupFailureReauthenticationRequired))
-	mixed.TranscriptHint = "ctrl + t"
+	mixed.TranscriptHint = "ctrl+t"
 	display := mixed.DisplayLines(100)
-	if len(display) != 1 || display[0] != "\u26a0 4 startup issues (3 MCP; 2 need sign-in) \u00b7 ctrl + t for details" {
+	if len(display) != 1 || display[0] != "\u26a0 4 startup issues (3 MCP; 2 need sign-in) \u00b7 ctrl+t for details" {
 		t.Fatalf("DisplayLines() = %#v", display)
 	}
 

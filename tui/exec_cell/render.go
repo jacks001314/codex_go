@@ -16,7 +16,7 @@ const (
 	UserShellToolCallMaxLines = 50
 	maxInteractionPreview     = 80
 	commandContinuationLines  = 2
-	transcriptHint            = "ctrl + t to view transcript"
+	transcriptHint            = "ctrl+t to view transcript"
 	ansiReset                 = "\x1b[0m"
 	ansiBold                  = "\x1b[1m"
 	ansiDim                   = "\x1b[2m"

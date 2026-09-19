@@ -20,8 +20,22 @@ func TestKeyBindingLabelsAndPlainTextBoundary(t *testing.T) {
 	if got := PlainKey(bubbletea.KeyEnter).Label(); got != "enter" {
 		t.Fatalf("enter label = %q", got)
 	}
-	if got := AltKey('x').Label(); got != "alt + x" {
+	// Rust #46680 renders a compact shortcut: modifiers in control/shift/alt
+	// order, joined with a bare `+`.
+	if got := AltKey('x').Label(); got != "alt+x" {
 		t.Fatalf("alt label = %q", got)
+	}
+	if got := PlainKey(bubbletea.KeyCtrlT).Label(); got != "ctrl+t" {
+		t.Fatalf("ctrl label = %q", got)
+	}
+	if got := (KeyBinding{Type: bubbletea.KeyCtrlT, Shift: true, Alt: true}).Label(); got != "ctrl+shift+"+AltKeyLabel()+"+t" {
+		t.Fatalf("chord label = %q", got)
+	}
+	if got := PlainKey(bubbletea.KeyUp).Label(); got != "\u2191" {
+		t.Fatalf("arrow label = %q", got)
+	}
+	if got := PlainKey(bubbletea.KeySpace).Label(); got != "space" {
+		t.Fatalf("space label = %q", got)
 	}
 	if !IsPlainTextKey(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'j'}}) {
 		t.Fatal("plain j should be text")

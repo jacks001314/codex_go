@@ -58,7 +58,7 @@ func patchApplyFailureLines(stderr string, lineLimit int) []string {
 	if len(lines) > lineLimit*2 {
 		omitted := len(lines) - lineLimit*2
 		selected = append([]string(nil), lines[:lineLimit]...)
-		selected = append(selected, "… +"+strconv.Itoa(omitted)+" lines (ctrl + t to view transcript)")
+		selected = append(selected, "… +"+strconv.Itoa(omitted)+" lines (ctrl+t to view transcript)")
 		selected = append(selected, lines[len(lines)-lineLimit:]...)
 	}
 	out := []string{"\u2718 Failed to apply patch"}

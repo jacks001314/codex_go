@@ -1080,13 +1080,13 @@ func PluginSelectionItemsForEntries(entries []PluginCatalogEntry, preferredLocal
 func PluginsPopupHintLine(canRemoveMarketplace bool, canUpgradeMarketplace bool) string {
 	switch {
 	case canRemoveMarketplace && canUpgradeMarketplace:
-		return "ctrl + u upgrade" + pluginSummarySeparator + "ctrl + r remove" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "left/right tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
+		return "ctrl+u upgrade" + pluginSummarySeparator + "ctrl+r remove" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
 	case canRemoveMarketplace:
-		return "ctrl + r remove" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "left/right tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
+		return "ctrl+r remove" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
 	case canUpgradeMarketplace:
-		return "ctrl + u upgrade" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "left/right tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
+		return "ctrl+u upgrade" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
 	default:
-		return "space enable/disable" + pluginSummarySeparator + "left/right select marketplace" + pluginSummarySeparator + "enter view details" + pluginSummarySeparator + "esc close"
+		return "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "esc close"
 	}
 }
 

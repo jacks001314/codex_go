@@ -72,7 +72,7 @@ func TestOutputLinesTruncatesWithTranscriptHint(t *testing.T) {
 		t.Fatalf("omitted = %#v", lines.Omitted)
 	}
 	joined := strings.Join(lines.Lines, "\n")
-	if !strings.Contains(joined, "… +3 lines (ctrl + t to view transcript)") {
+	if !strings.Contains(joined, "… +3 lines (ctrl+t to view transcript)") {
 		t.Fatalf("output lines:\n%s", joined)
 	}
 	if got := OutputLinesFor(&CommandOutput{ExitCode: 0, AggregatedOutput: "ok"}, OutputLinesParams{OnlyErr: true}); len(got.Lines) != 0 {

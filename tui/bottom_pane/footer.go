@@ -13,8 +13,8 @@ const (
 	FooterModeCycleHint   = "shift+tab to cycle"
 	FooterContextGapCols  = 1
 	FooterContextJoiner   = " \u00b7 "
-	DefaultQuitShortcut   = "Ctrl+C"
-	DefaultQueueShortcut  = "Tab"
+	DefaultQuitShortcut   = "ctrl+c"
+	DefaultQueueShortcut  = "tab"
 	DefaultToggleShortcut = "?"
 )
 
@@ -79,13 +79,13 @@ func DefaultFooterKeyHints() FooterKeyHints {
 	return FooterKeyHints{
 		ToggleShortcuts: DefaultToggleShortcut,
 		Queue:           DefaultQueueShortcut,
-		InsertNewline:   "Ctrl+J",
-		ExternalEditor:  "Ctrl+G",
-		EditPrevious:    "Esc",
-		ShowTranscript:  "Ctrl+T",
-		HistorySearch:   "Ctrl+R",
-		ReasoningDown:   "Alt+,",
-		ReasoningUp:     "Alt+.",
+		InsertNewline:   "shift+enter",
+		ExternalEditor:  "ctrl+g",
+		EditPrevious:    "esc",
+		ShowTranscript:  "ctrl+t",
+		HistorySearch:   "ctrl+r",
+		ReasoningDown:   tui.AltKeyLabel() + "+,",
+		ReasoningUp:     tui.AltKeyLabel() + "+.",
 	}
 }
 
@@ -198,16 +198,18 @@ func FooterShortcutOverlayLines(props FooterProps) []string {
 	props = props.normalized()
 	newlineKey := props.KeyHints.InsertNewline
 	if props.UseShiftEnterHint {
-		newlineKey = "Shift+Enter"
+		newlineKey = "shift+enter"
 	}
-	pasteImageKey := "Ctrl+V"
+	pasteImageKey := "ctrl+v"
 	if props.IsWSL {
-		pasteImageKey = "Ctrl+Alt+V"
+		pasteImageKey = "ctrl+alt+v"
 	}
 	queueAction := "to submit message"
 	if props.IsTaskRunning || props.QueueSubmissions {
 		queueAction = "to queue message"
 	}
+	// Rust's EditPrevious reference key is the two-key chord, so the overlay
+	// repeats the key ("esc esc to edit previous message").
 	editPrevious := props.KeyHints.EditPrevious + " " + props.KeyHints.EditPrevious + " to edit previous message"
 	if props.EscBacktrackHint {
 		editPrevious = props.KeyHints.EditPrevious + " again to edit previous message"
@@ -231,7 +233,7 @@ func FooterShortcutOverlayLines(props FooterProps) []string {
 		props.KeyHints.ReasoningUp + " reasoning up",
 	}
 	if props.CollaborationModesEnabled {
-		lines = append(lines, "Shift+Tab to change mode")
+		lines = append(lines, "shift+tab to change mode")
 	}
 	lines = append(lines, props.KeyHints.ShowTranscript+" to view transcript")
 	lines = append(lines, "")
@@ -274,9 +276,9 @@ func UsesPassiveFooterStatusLayout(props FooterProps) bool {
 
 func EscHintLine(escBacktrackHint bool) string {
 	if escBacktrackHint {
-		return "Esc again to edit previous message"
+		return "esc again to edit previous message"
 	}
-	return "Esc Esc to edit previous message"
+	return "esc esc to edit previous message"
 }
 
 func GoalStatusIndicatorLine(indicator *FooterGoalStatusIndicator) (string, bool) {

@@ -43,7 +43,8 @@ func TestModelBacktrackEscPrimesThenOpensHighlightedPreview(t *testing.T) {
 	if model.overlay != nil {
 		t.Fatal("the first Esc must not open the overlay")
 	}
-	if view := model.View(); !strings.Contains(view, "Esc again to edit previous message") {
+	// Rust's esc hint renders the compact `esc` label (#46680).
+	if view := model.View(); !strings.Contains(view, "esc again to edit previous message") {
 		t.Fatalf("primed footer missing the edit hint:\n%s", view)
 	}
 

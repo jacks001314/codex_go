@@ -590,7 +590,7 @@ func TestPatchSearchAndSessionHistoryCells(t *testing.T) {
 		t.Fatalf("long patch failure line count = %d, want heading + 5 head + hint + 5 tail: %#v", len(longDisplay), longDisplay)
 	}
 	joinedLongDisplay := strings.Join(longDisplay, "\n")
-	for _, want := range []string{"failure line 01", "… +10 lines (ctrl + t to view transcript)", "failure line 20"} {
+	for _, want := range []string{"failure line 01", "… +10 lines (ctrl+t to view transcript)", "failure line 20"} {
 		if !strings.Contains(joinedLongDisplay, want) {
 			t.Fatalf("long patch failure missing %q:\n%s", want, joinedLongDisplay)
 		}
