@@ -482,15 +482,15 @@ func (s PluginSummary) MarshalJSON() ([]byte, error) {
 }
 
 type PluginDetail struct {
-	MarketplaceName string               `json:"marketplaceName"`
-	MarketplacePath *string              `json:"marketplacePath"`
-	Summary         PluginSummary        `json:"summary"`
-	ShareURL        *string              `json:"shareUrl"`
-	Description     *string              `json:"description"`
-	Skills          []PluginSkill        `json:"skills"`
+	MarketplaceName string        `json:"marketplaceName"`
+	MarketplacePath *string       `json:"marketplacePath"`
+	Summary         PluginSummary `json:"summary"`
+	ShareURL        *string       `json:"shareUrl"`
+	Description     *string       `json:"description"`
+	Skills          []PluginSkill `json:"skills"`
 	// OnboardingSkill is the plugin's declared onboarding skill, present only
 	// when the plugin and that skill are enabled (Rust #46544).
-	OnboardingSkill *PluginSkill `json:"onboardingSkill"`
+	OnboardingSkill *PluginSkill         `json:"onboardingSkill"`
 	Hooks           []PluginHookSummary  `json:"hooks"`
 	Apps            []AppSummary         `json:"apps"`
 	AppTemplates    []AppTemplateSummary `json:"appTemplates"`
@@ -1804,6 +1804,13 @@ func marketplaceNameForLoadError(marketplaces []Marketplace, marketplacePath str
 func (s *PluginService) AddPlugin(detail PluginDetail) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.addPluginLocked(detail)
+}
+
+// addPluginLocked stores one plugin and returns its normalized form. Callers
+// holding s.mu use the returned detail so a comparison always sees the same
+// normalization the store applied.
+func (s *PluginService) addPluginLocked(detail PluginDetail) PluginDetail {
 	summary := detail.Summary
 	summary.ID = strings.TrimSpace(summary.ID)
 	summary.Name = strings.TrimSpace(summary.Name)
@@ -1841,23 +1848,53 @@ func (s *PluginService) AddPlugin(detail PluginDetail) {
 		detail.Description = &value
 	}
 	s.plugins[summary.ID] = cloneDetail(detail)
+	return detail
 }
 
-func (s *PluginService) ReplaceInstalledRemotePlugins(marketplaceName string, details []PluginDetail) {
+// ReplaceInstalledRemotePlugins replaces a marketplace's installed remote plugin
+// metadata and reports whether the behavior-determining metadata changed
+// (Rust #46309). A display-only refresh must not invalidate loaded plugins, so
+// callers clear their caches only when this returns true.
+func (s *PluginService) ReplaceInstalledRemotePlugins(marketplaceName string, details []PluginDetail) bool {
 	if s == nil {
-		return
+		return false
 	}
 	marketplaceName = strings.TrimSpace(marketplaceName)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := make([]PluginDetail, 0, len(details))
 	for id, detail := range s.plugins {
 		if detail.Summary.MarketplaceName == marketplaceName && strings.TrimSpace(detail.Summary.RemotePluginID) != "" {
+			previous = append(previous, cloneDetail(detail))
 			delete(s.plugins, id)
 		}
 	}
-	s.mu.Unlock()
-	for _, detail := range details {
-		s.AddPlugin(detail)
+	if len(previous) > 0 {
+		sortInstalledPluginDetailsForCompare(previous)
 	}
+	installed := make([]PluginDetail, 0, len(details))
+	for _, detail := range details {
+		stored := s.addPluginLocked(detail)
+		if strings.TrimSpace(stored.Summary.RemotePluginID) != "" {
+			// Compare the stored form, not the raw input, so the store's own
+			// normalization (policy defaults, trimming, empty slices) cannot
+			// look like a behavioral change.
+			installed = append(installed, cloneDetail(stored))
+		}
+	}
+	if len(installed) > 0 {
+		sortInstalledPluginDetailsForCompare(installed)
+	}
+	return !InstalledPluginMetadataEqual(previous, installed)
+}
+
+// sortInstalledPluginDetailsForCompare gives the comparison a stable order by
+// remote plugin id. The stored Go map is unordered, while Rust compares the
+// published list positionally and publishes it in remote-plugin-id order.
+func sortInstalledPluginDetailsForCompare(details []PluginDetail) {
+	sort.SliceStable(details, func(i, j int) bool {
+		return details[i].Summary.RemotePluginID < details[j].Summary.RemotePluginID
+	})
 }
 
 func (s *PluginService) List(params *PluginListParams) *PluginListResponse {

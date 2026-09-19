@@ -115,15 +115,23 @@ func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) (bo
 	if err != nil {
 		return false, err
 	}
+	changed := false
 	for _, marketplaceName := range []string{
 		remoteInstalledGlobalMarketplace,
 		remoteInstalledUserMarketplace,
 		remoteInstalledWorkspaceMarketplace,
 		remoteInstalledWorkspaceSharedMarketplace,
 	} {
-		r.services.Plugins.ReplaceInstalledRemotePlugins(marketplaceName, detailsByMarketplace[marketplaceName])
+		if r.services.Plugins.ReplaceInstalledRemotePlugins(marketplaceName, detailsByMarketplace[marketplaceName]) {
+			changed = true
+		}
 	}
-	r.effectivePluginsChanged()
+	// Rust #46309: a display-only metadata refresh publishes the new payload for
+	// display consumers but keeps live MCP sessions and cached skill resources,
+	// so the derived caches are cleared only when behavior changed.
+	if changed {
+		r.effectivePluginsChanged()
+	}
 	return true, nil
 }
 
