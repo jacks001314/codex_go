@@ -13863,6 +13863,68 @@ func primaryTurnEnvironmentCWD(params *turn.TurnStartParams, fallback string) st
 	return strings.TrimSpace(fallback)
 }
 
+// turnEnvironmentWorkspaceRoots returns the captured primary selection's
+// declared workspace roots, even when the attachment is still starting or has
+// failed (Rust TurnEnvironmentSnapshot::primary_workspace_root_uris, #46568).
+// The selection's cwd is the fallback when the client declared no roots, and the
+// supplied cwd when the turn has no selections at all.
+func turnEnvironmentWorkspaceRoots(params *turn.TurnStartParams, fallback string) []string {
+	if params == nil || len(params.Environments) == 0 {
+		return nil
+	}
+	selection := params.Environments[0]
+	roots := stringSliceFromAny(firstNonNil(selection["workspaceRoots"], selection["workspace_roots"]))
+	trimmed := make([]string, 0, len(roots)+1)
+	for _, root := range roots {
+		if root = strings.TrimSpace(root); root != "" {
+			trimmed = append(trimmed, root)
+		}
+	}
+	if len(trimmed) > 0 {
+		return trimmed
+	}
+	if cwd := strings.TrimSpace(firstNonEmpty(
+		threadItemStringFromAnyMap(selection, "cwd"),
+		threadItemStringFromAnyMap(selection, "CWD"),
+	)); cwd != "" {
+		return []string{cwd}
+	}
+	if fallback = strings.TrimSpace(fallback); fallback != "" {
+		return []string{fallback}
+	}
+	return nil
+}
+
+// turnEnvironmentSelectionPermissionProfileResolution returns the primary
+// selected environment's own resolved profile (Rust
+// TurnEnvironment::permission_profile_with_workspace_roots, #46568). The
+// attachment supplies a fully materialized profile, so it is used as-is; a
+// primary attachment without one falls through to the thread defaults.
+func turnEnvironmentSelectionPermissionProfileResolution(params *turn.TurnStartParams) *config.SandboxPermissionProfileResolution {
+	if params == nil || len(params.Environments) == 0 {
+		return nil
+	}
+	state, err := environmentConfigStateFromAnyMap(params.Environments[0])
+	if err != nil || state.Kind != EnvironmentConfigReady || state.Config == nil || state.Config.PermissionProfile == nil {
+		return nil
+	}
+	profile := *state.Config.PermissionProfile
+	raw := strings.TrimSpace(state.Config.PermissionProfileJSON)
+	if raw == "" {
+		encoded, err := sandbox.RuntimePermissionProfileJSON(profile)
+		if err != nil {
+			return nil
+		}
+		raw = encoded
+	}
+	return &config.SandboxPermissionProfileResolution{
+		ID:             strings.TrimSpace(state.Config.ActivePermissionProfile),
+		Profile:        &profile,
+		ProfileJSON:    raw,
+		WorkspaceRoots: append([]string(nil), state.Config.WorkspaceRoots...),
+	}
+}
+
 // primaryTurnEnvironmentSelection returns the first environment selection that
 // is usable for the turn. Pending and failed attachments stay out of turn
 // environments and the primary environment fallback (#38684).
@@ -14938,6 +15000,21 @@ func requestUserInputDefaultModeEnabled(cfg *config.Config) bool {
 }
 
 func turnSandboxPermissionProfile(cfg *config.Config, cwd string, params *turn.TurnStartParams) (*config.SandboxPermissionProfileResolution, error) {
+	// Rust TurnContext::permission_profile (#46568): the primary selected
+	// environment's own profile wins over the thread defaults (including an
+	// explicit turn sandbox policy, which lands in the thread config).
+	if resolution := turnEnvironmentSelectionPermissionProfileResolution(params); resolution != nil {
+		return resolution, nil
+	}
+	return threadDefaultSandboxPermissionProfile(cfg, cwd, params)
+}
+
+// threadDefaultSandboxPermissionProfile resolves the thread-level profile for a
+// turn: an explicit turn sandbox policy wins, otherwise the configured profile.
+// The profile is materialized with the captured primary selection's workspace
+// roots, so a starting or failed attachment still anchors project-root
+// restrictions at its workspace (Rust #46568).
+func threadDefaultSandboxPermissionProfile(cfg *config.Config, cwd string, params *turn.TurnStartParams) (*config.SandboxPermissionProfileResolution, error) {
 	if params != nil && turnStartSandboxPolicyPresent(params.SandboxPolicy) {
 		profileID, profile, err := turnSandboxPolicyPermissionProfile(params.SandboxPolicy)
 		if err != nil {
@@ -14956,7 +15033,10 @@ func turnSandboxPermissionProfile(cfg *config.Config, cwd string, params *turn.T
 	if cfg == nil {
 		return nil, nil
 	}
-	return cfg.ResolveSandboxPermissionProfile(profileID, cwd)
+	// Rust TurnContext::permission_profile_for_environments (#46568): the thread
+	// defaults are materialized with the captured primary selection's workspace
+	// roots, including while the attachment is starting or after it failed.
+	return cfg.ResolveSandboxPermissionProfileWithWorkspaceRoots(profileID, cwd, turnEnvironmentWorkspaceRoots(params, cwd))
 }
 
 func turnSandboxPolicyPermissionProfile(raw any) (string, *sandbox.PermissionProfile, error) {

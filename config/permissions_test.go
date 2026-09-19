@@ -51,6 +51,52 @@ func TestResolveSandboxPermissionProfileCompilesCustomRuntimeJSON(t *testing.T) 
 	assertRuntimeEntry(t, wire, "glob_pattern", "", filepath.Join(extra, "**", "*.env"), string(sandbox.FileSystemAccessDeny))
 }
 
+// Mirrors Rust's PermissionProfile::materialize_project_roots_with_path_uris
+// (#46568): supplied workspace roots anchor the profile's project roots instead
+// of the thread cwd.
+func TestResolveSandboxPermissionProfileWithWorkspaceRootsAnchorsProjectRootsLikeRust(t *testing.T) {
+	cwd := filepath.Join(t.TempDir(), "repo")
+	environmentRoot := filepath.Join(t.TempDir(), "remote")
+	cfg := &Config{Values: map[string]any{
+		"default_permissions": "dev",
+		"permissions": map[string]any{
+			"dev": map[string]any{
+				"filesystem": map[string]any{
+					":minimal": "read",
+					":workspace_roots": map[string]any{
+						".":    "write",
+						"docs": "read",
+					},
+				},
+			},
+		},
+	}}
+	byCWD, err := cfg.ResolveSandboxPermissionProfile("", cwd)
+	if err != nil {
+		t.Fatalf("ResolveSandboxPermissionProfile() error = %v", err)
+	}
+	if byCWD == nil || len(byCWD.WorkspaceRoots) == 0 || !strings.EqualFold(filepath.Clean(byCWD.WorkspaceRoots[0]), filepath.Clean(cwd)) {
+		t.Fatalf("cwd-anchored roots = %#v, want %q", byCWD, cwd)
+	}
+	assertRuntimeEntry(t, decodeRuntimeProfile(t, byCWD.ProfileJSON), "path", filepath.Clean(cwd), "", string(sandbox.FileSystemAccessWrite))
+
+	byEnvironment, err := cfg.ResolveSandboxPermissionProfileWithWorkspaceRoots("", cwd, []string{environmentRoot})
+	if err != nil {
+		t.Fatalf("ResolveSandboxPermissionProfileWithWorkspaceRoots() error = %v", err)
+	}
+	if byEnvironment == nil || len(byEnvironment.WorkspaceRoots) == 0 || !strings.EqualFold(filepath.Clean(byEnvironment.WorkspaceRoots[0]), filepath.Clean(environmentRoot)) {
+		t.Fatalf("environment-anchored roots = %#v, want %q", byEnvironment, environmentRoot)
+	}
+	environmentWire := decodeRuntimeProfile(t, byEnvironment.ProfileJSON)
+	assertRuntimeEntry(t, environmentWire, "path", filepath.Clean(environmentRoot), "", string(sandbox.FileSystemAccessWrite))
+	assertRuntimeEntry(t, environmentWire, "path", filepath.Join(environmentRoot, "docs"), "", string(sandbox.FileSystemAccessRead))
+	for _, entry := range environmentWire.FileSystem.Entries {
+		if entry.Path.Type == "path" && strings.EqualFold(filepath.Clean(entry.Path.Path), filepath.Clean(cwd)) {
+			t.Fatalf("environment-anchored profile still carried the thread cwd: %s", byEnvironment.ProfileJSON)
+		}
+	}
+}
+
 func TestResolveSandboxPermissionProfileCustomWorkspaceWinsOverAlias(t *testing.T) {
 	cfg := &Config{Values: map[string]any{
 		"default_permissions": "workspace",
@@ -166,9 +212,9 @@ type runtimeProfileForTest struct {
 		GlobScanMaxDepth *int   `json:"glob_scan_max_depth"`
 		Entries          []struct {
 			Path struct {
-				Type    string  `json:"type"`
-				Path    string  `json:"path"`
-				Pattern string  `json:"pattern"`
+				Type    string `json:"type"`
+				Path    string `json:"path"`
+				Pattern string `json:"pattern"`
 				Value   *struct {
 					Kind    string  `json:"kind"`
 					Subpath *string `json:"subpath,omitempty"`

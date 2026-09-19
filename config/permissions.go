@@ -269,6 +269,15 @@ type permissionProfileBuilder struct {
 }
 
 func (c *Config) ResolveSandboxPermissionProfile(profileID string, cwd string) (*SandboxPermissionProfileResolution, error) {
+	return c.ResolveSandboxPermissionProfileWithWorkspaceRoots(profileID, cwd, nil)
+}
+
+// ResolveSandboxPermissionProfileWithWorkspaceRoots mirrors Rust's
+// `PermissionProfile::materialize_project_roots_with_path_uris` (#46568): the
+// profile's project roots are anchored at the supplied workspace roots (a
+// selected environment's workspace) instead of the thread cwd. An empty list
+// keeps the cwd behavior.
+func (c *Config) ResolveSandboxPermissionProfileWithWorkspaceRoots(profileID string, cwd string, workspaceRoots []string) (*SandboxPermissionProfileResolution, error) {
 	if c == nil {
 		c = &Config{Values: map[string]any{}}
 	}
@@ -302,7 +311,7 @@ func (c *Config) ResolveSandboxPermissionProfile(profileID string, cwd string) (
 		if len(profiles) > 0 {
 			return nil, fmt.Errorf("config defines `[permissions]` profiles but does not set `default_permissions`")
 		}
-		return c.resolveLegacySandboxPermissionProfile(cwd)
+		return c.resolveLegacySandboxPermissionProfileWithWorkspaceRoots(cwd, workspaceRoots)
 	}
 	if !strings.HasPrefix(profileID, ":") {
 		if _, ok := profiles[profileID]; ok {
@@ -310,7 +319,7 @@ func (c *Config) ResolveSandboxPermissionProfile(profileID string, cwd string) (
 			if err != nil {
 				return nil, err
 			}
-			return runtimeResolutionFromBuilder(profileID, builder, cwd)
+			return runtimeResolutionFromBuilderWithWorkspaceRoots(profileID, builder, cwd, workspaceRoots)
 		}
 	}
 	if strings.HasPrefix(profileID, ":") {
@@ -367,6 +376,13 @@ func PermissionProfileSummariesFromValues(values map[string]any) ([]sandbox.Perm
 }
 
 func (c *Config) resolveLegacySandboxPermissionProfile(cwd string) (*SandboxPermissionProfileResolution, error) {
+	return c.resolveLegacySandboxPermissionProfileWithWorkspaceRoots(cwd, nil)
+}
+
+// resolveLegacySandboxPermissionProfileWithWorkspaceRoots keeps the legacy
+// sandbox_mode resolution; the captured workspace roots only affect the
+// workspace-write profile set the same way the profile's anchored root does.
+func (c *Config) resolveLegacySandboxPermissionProfileWithWorkspaceRoots(cwd string, workspaceRoots []string) (*SandboxPermissionProfileResolution, error) {
 	modeText := stringFromConfigValue(c.Values["sandbox_mode"])
 	if modeText == "" {
 		return nil, nil
@@ -383,7 +399,7 @@ func (c *Config) resolveLegacySandboxPermissionProfile(cwd string) (*SandboxPerm
 		profile = sandbox.FullAccessPermissionProfile()
 	case sandbox.SandboxWorkspaceWrite:
 		profile = sandbox.WorkspaceWritePermissionProfile()
-		applyLegacyWorkspaceWriteConfig(&profile, c.Values["sandbox_workspace_write"], cwd)
+		applyLegacyWorkspaceWriteConfig(&profile, c.Values["sandbox_workspace_write"], turnWorkspaceRootOrCWD(workspaceRoots, cwd))
 	default:
 		return nil, fmt.Errorf("unknown sandbox mode %q", modeText)
 	}
@@ -606,8 +622,14 @@ func (b *permissionProfileBuilder) addEntry(entry sandbox.FileSystemSandboxEntry
 }
 
 func runtimeResolutionFromBuilder(profileID string, builder *permissionProfileBuilder, cwd string) (*SandboxPermissionProfileResolution, error) {
+	return runtimeResolutionFromBuilderWithWorkspaceRoots(profileID, builder, cwd, nil)
+}
+
+// runtimeResolutionFromBuilderWithWorkspaceRoots materializes a managed profile
+// with the supplied project-root anchor (Rust #46568).
+func runtimeResolutionFromBuilderWithWorkspaceRoots(profileID string, builder *permissionProfileBuilder, cwd string, workspaceRoots []string) (*SandboxPermissionProfileResolution, error) {
 	wire := runtimePermissionProfileWire{Type: "managed", Network: builder.network}
-	workspaceRoots, err := builder.effectiveWorkspaceRoots(cwd)
+	materializedRoots, err := builder.effectiveWorkspaceRootsFor(workspaceRoots, cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -616,7 +638,7 @@ func runtimeResolutionFromBuilder(profileID string, builder *permissionProfileBu
 	} else if builder.unrestrictedFilesystem {
 		wire.FileSystem = &runtimeFilesystemWire{Type: "unrestricted"}
 	} else {
-		entries, err := builder.materializedEntriesForWorkspaceRoots(workspaceRoots)
+		entries, err := builder.materializedEntriesForWorkspaceRoots(materializedRoots)
 		if err != nil {
 			return nil, err
 		}
@@ -639,7 +661,7 @@ func runtimeResolutionFromBuilder(profileID string, builder *permissionProfileBu
 		ID:               profileID,
 		Profile:          profile,
 		ProfileJSON:      raw,
-		WorkspaceRoots:   workspaceRoots,
+		WorkspaceRoots:   materializedRoots,
 		GlobScanMaxDepth: cloneIntPtrConfig(builder.globScanMaxDepth),
 	}, nil
 }
@@ -678,27 +700,55 @@ func (b *permissionProfileBuilder) materializedEntriesForWorkspaceRoots(roots []
 }
 
 func (b *permissionProfileBuilder) effectiveWorkspaceRoots(cwd string) ([]string, error) {
-	root := resolveConfigPath(".", cwd)
-	if root == "" {
-		workingDir, err := os.Getwd()
-		if err != nil {
-			return nil, err
+	return b.effectiveWorkspaceRootsFor(nil, cwd)
+}
+
+// effectiveWorkspaceRootsFor anchors the materialized project roots at the
+// supplied workspace roots (Rust's
+// `materialize_project_roots_with_path_uris`), falling back to the cwd when none
+// are given. Configured `[permissions.<profile>.workspace_roots]` keys are
+// appended in both cases.
+func (b *permissionProfileBuilder) effectiveWorkspaceRootsFor(workspaceRoots []string, cwd string) ([]string, error) {
+	seen := map[string]bool{}
+	roots := []string{}
+	add := func(path string) {
+		if path == "" || seen[path] {
+			return
 		}
-		root = filepath.Clean(workingDir)
+		seen[path] = true
+		roots = append(roots, path)
 	}
-	seen := map[string]bool{root: true}
-	roots := []string{root}
+	for _, rawRoot := range workspaceRoots {
+		add(resolveConfigPath(strings.TrimSpace(rawRoot), cwd))
+	}
+	if len(roots) == 0 {
+		root := resolveConfigPath(".", cwd)
+		if root == "" {
+			workingDir, err := os.Getwd()
+			if err != nil {
+				return nil, err
+			}
+			root = filepath.Clean(workingDir)
+		}
+		add(root)
+	}
 	for _, rawRoot := range b.workspaceRoots {
 		if !b.workspaceRootEnabled[rawRoot] {
 			continue
 		}
-		root := resolveConfigPath(rawRoot, cwd)
-		if root != "" && !seen[root] {
-			seen[root] = true
-			roots = append(roots, root)
-		}
+		add(resolveConfigPath(rawRoot, cwd))
 	}
 	return roots, nil
+}
+
+// turnWorkspaceRootOrCWD returns the first captured workspace root, or the cwd.
+func turnWorkspaceRootOrCWD(workspaceRoots []string, cwd string) string {
+	for _, root := range workspaceRoots {
+		if root = strings.TrimSpace(root); root != "" {
+			return root
+		}
+	}
+	return cwd
 }
 
 func compileFilesystemAccess(pathKey string, access sandbox.FileSystemAccessMode) ([]sandbox.FileSystemSandboxEntry, error) {

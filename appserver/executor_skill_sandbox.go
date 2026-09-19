@@ -16,18 +16,36 @@ import (
 )
 
 func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, cwd string, params *turn.TurnStartParams) (map[string]*execserverclient.FileSystemSandboxContext, error) {
-	resolution, err := turnSandboxPermissionProfile(cfg, cwd, params)
+	// The local and registered environments resolve from the thread config (Rust
+	// TurnEnvironment::permission_profile_with_workspace_roots): a selected
+	// environment's own profile must not leak into the local sandbox context.
+	resolution, err := threadDefaultSandboxPermissionProfile(cfg, cwd, params)
 	if err != nil {
 		return nil, err
 	}
-	if resolution == nil || resolution.Profile == nil || !executorPermissionProfileRequiresSandboxedReads(resolution.ProfileJSON, resolution.Profile) {
+	requiresContexts := resolution != nil && resolution.Profile != nil &&
+		executorPermissionProfileRequiresSandboxedReads(resolution.ProfileJSON, resolution.Profile)
+	if !requiresContexts {
+		// A selected environment's own restricted profile still needs a context.
+		for _, selection := range params.Environments {
+			profile, raw := environmentSelectionOwnPermissionProfile(selection)
+			if profile != nil && executorPermissionProfileRequiresSandboxedReads(raw, profile) {
+				requiresContexts = true
+				break
+			}
+		}
+	}
+	if !requiresContexts {
 		return nil, nil
 	}
-	profileJSON := strings.TrimSpace(resolution.ProfileJSON)
-	if profileJSON == "" {
-		profileJSON, err = sandbox.RuntimePermissionProfileJSON(*resolution.Profile)
-		if err != nil {
-			return nil, err
+	profileJSON := ""
+	if resolution != nil && resolution.Profile != nil {
+		profileJSON = strings.TrimSpace(resolution.ProfileJSON)
+		if profileJSON == "" {
+			profileJSON, err = sandbox.RuntimePermissionProfileJSON(*resolution.Profile)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	windowsLevel := windowsSandboxLevelForConfig(cfg)
@@ -36,7 +54,16 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 	useLegacyLandlock := cfg != nil && features.Enabled(cfg.FeatureSettings(), "use_legacy_landlock")
 
 	contexts := map[string]*execserverclient.FileSystemSandboxContext{}
-	add := func(environmentID string, environmentCWD string, workspaceRoots []string) error {
+	// profileForSelection mirrors Rust TurnEnvironment::permission_profile_with_workspace_roots
+	// (#46568): an attachment that resolves its own permission profile governs its
+	// sandbox context; everything else uses the thread resolution.
+	profileForSelection := func(selection map[string]any) (*sandbox.PermissionProfile, string) {
+		if profile, raw := environmentSelectionOwnPermissionProfile(selection); profile != nil {
+			return profile, raw
+		}
+		return resolution.Profile, profileJSON
+	}
+	add := func(environmentID string, environmentCWD string, workspaceRoots []string, profile *sandbox.PermissionProfile, profileJSON string) error {
 		environmentID = strings.TrimSpace(environmentID)
 		environmentCWD = executorEnvironmentNativePath(environmentCWD)
 		if environmentID == "" || environmentCWD == "" {
@@ -49,7 +76,7 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 			workspaceRoots[i] = executorEnvironmentNativePath(workspaceRoots[i])
 		}
 		context, contextErr := tool.NewFileSystemSandboxContext(tool.FileSystemSandboxContextOptions{
-			PermissionProfile:            resolution.Profile,
+			PermissionProfile:            profile,
 			PermissionProfileJSON:        profileJSON,
 			CWD:                          environmentCWD,
 			WorkspaceRoots:               workspaceRoots,
@@ -69,7 +96,7 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 	if params != nil {
 		localRoots = append(localRoots, params.RuntimeWorkspaceRoots...)
 	}
-	if err := add("local", localCWD, localRoots); err != nil {
+	if err := add("local", localCWD, localRoots, resolution.Profile, profileJSON); err != nil {
 		return nil, err
 	}
 	if r != nil && r.services.Environment != nil {
@@ -78,7 +105,7 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 			if record.CWD != nil {
 				recordCWD = *record.CWD
 			}
-			if err := add(record.EnvironmentID, recordCWD, nil); err != nil {
+			if err := add(record.EnvironmentID, recordCWD, nil, resolution.Profile, profileJSON); err != nil {
 				return nil, err
 			}
 		}
@@ -98,12 +125,36 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 				threadItemStringFromAnyMap(environment, "CWD"),
 			)
 			workspaceRoots := stringSliceFromAny(firstNonNil(environment["workspaceRoots"], environment["workspace_roots"]))
-			if err := add(environmentID, environmentCWD, workspaceRoots); err != nil {
+			profile, environmentProfileJSON := profileForSelection(environment)
+			if err := add(environmentID, environmentCWD, workspaceRoots, profile, environmentProfileJSON); err != nil {
 				return nil, err
 			}
 		}
 	}
 	return contexts, nil
+}
+
+// environmentSelectionOwnPermissionProfile returns a ready attachment's own
+// resolved permission profile and its runtime JSON (Rust
+// TurnEnvironment::permission_profile, #46568), or nil when the attachment
+// inherits the thread configuration.
+func environmentSelectionOwnPermissionProfile(selection map[string]any) (*sandbox.PermissionProfile, string) {
+	if selection == nil {
+		return nil, ""
+	}
+	state, err := environmentConfigStateFromAnyMap(selection)
+	if err != nil || state.Kind != EnvironmentConfigReady || state.Config == nil || state.Config.PermissionProfile == nil {
+		return nil, ""
+	}
+	raw := strings.TrimSpace(state.Config.PermissionProfileJSON)
+	if raw == "" {
+		encoded, encodeErr := sandbox.RuntimePermissionProfileJSON(*state.Config.PermissionProfile)
+		if encodeErr != nil {
+			return nil, ""
+		}
+		raw = encoded
+	}
+	return state.Config.PermissionProfile, raw
 }
 
 func executorPermissionProfileRequiresSandboxedReads(raw string, profile *sandbox.PermissionProfile) bool {
