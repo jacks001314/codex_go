@@ -22,12 +22,14 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	// Re-pinned to upstream a5290028 (#46673): the two history-cell snapshots for
-	// a local daemon alpha/source version mismatch, on top of the agents-overview
-	// recent-session, unavailable-command, and activity-group ordering snapshots
-	// pinned at 78245b47 (#46579/#46574/#46565).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1177 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1177", got)
+	// Re-pinned to upstream 132c2be2 (#46680): the contrast-aware theme and picker
+	// work added seven snapshots (two picker-browser layouts, two filled tab
+	// windows, the light status-line contrast correction, the user-image prompt
+	// labels, and the diff syntax colors over a painted background), on top of the
+	// local daemon alpha/source version mismatch snapshots pinned at a5290028
+	// (#46673).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1184 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1184", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -137,8 +139,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/src/bottom_pane/snapshots",
-			Files:    239,
+			Path: "tui/src/bottom_pane/snapshots",
+			// #46680 added the picker browser layouts and the filled-tab windows.
+			Files:    244,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -148,6 +151,11 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__approval_overlay__tests__approval_overlay_permissions_prompt.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__approval_overlay__tests__network_exec_prompt.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__tests__status_and_queued_messages_snapshot.snap",
+				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__list_selection_view__picker_tests__short_browser_keeps_header_tabs_search_and_footer.snap",
+				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__list_selection_view__picker_tests__browser_page_navigation_uses_rows_that_fit.snap",
+				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__selection_tabs__tests__filled_tabs_window_around_active_tab.snap",
+				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__selection_tabs__tests__filled_tabs_truncate_unicode_without_hiding_active_tab.snap",
+				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__status_line_style__tests__light_status_line_corrects_pale_custom_theme_colors.snap",
 			},
 		},
 		{
@@ -259,8 +267,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/src/history_cell/snapshots",
-			Files:    79,
+			Path: "tui/src/history_cell/snapshots",
+			// #46680 added the user-image prompt label contrast snapshot.
+			Files:    80,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
@@ -270,6 +279,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__web_search_history_cell_snapshot.snap",
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__local_daemon_alpha_mismatch.snap",
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__local_daemon_source_mismatch.snap",
+				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__user_image_labels_follow_the_painted_prompt_surface.snap",
 			},
 		},
 		{
@@ -305,8 +315,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/src/snapshots",
-			Files:    186,
+			Path: "tui/src/snapshots",
+			// #46680 added the diff syntax colors over a painted background.
+			Files:    187,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
@@ -314,6 +325,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/snapshots/codex_tui__diff_render__tests__diff_gallery_80x24.snap",
 				"tui/src/snapshots/codex_tui__markdown_render__markdown_render_tests__markdown_render_complex_snapshot.snap",
 				"tui/src/snapshots/codex_tui__resume_picker__tests__resume_picker_screen.snap",
+				"tui/src/snapshots/codex_tui__diff_render__tests__syntax_colors_follow_the_actual_diff_background.snap",
 			},
 		},
 		{
