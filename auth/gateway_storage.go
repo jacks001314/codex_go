@@ -1,4 +1,4 @@
-package auth
+﻿package auth
 
 // Gateway credential storage and the cross-process exchange lock.
 //
@@ -30,15 +30,15 @@ const (
 
 // gatewayCredentialID mirrors Rust `GatewayAuthManager::credential_id`: one
 // entry per codex home, issuer, client, resource, and scope set.
-func gatewayCredentialID(codexHome string, config gatewayAuthConfig) string {
+func gatewayCredentialID(codexHome string, config GatewayAuthConfig) string {
 	digest := sha256.New()
 	digest.Write([]byte(codexHome))
 	digest.Write([]byte{0})
-	for _, value := range []string{config.authorizationURL, config.tokenURL, config.clientID, config.resource} {
+	for _, value := range []string{config.AuthorizationURL, config.TokenURL, config.ClientID, config.Resource} {
 		digest.Write([]byte(value))
 		digest.Write([]byte{0})
 	}
-	for _, scope := range config.scopes {
+	for _, scope := range config.Scopes {
 		digest.Write([]byte(scope))
 		digest.Write([]byte{0})
 	}

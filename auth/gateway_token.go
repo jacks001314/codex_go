@@ -1,4 +1,4 @@
-package auth
+﻿package auth
 
 // Gateway token lifetimes, endpoint diagnostics, and configuration validation.
 //
@@ -17,16 +17,15 @@ import (
 
 const gatewayRefreshSkewSeconds int64 = 30
 
-// gatewayAuthConfig is the public-client OAuth configuration of a model
+// GatewayAuthConfig is the public-client OAuth configuration of a model
 // provider gateway (Rust GatewayAuthConfig).
-type gatewayAuthConfig struct {
-	authorizationURL string
-	tokenURL         string
-	clientID         string
-	resource         string
-	scopes           []string
-	redirectPort     uint16
-	redirectPortSet  bool
+type GatewayAuthConfig struct {
+	AuthorizationURL string
+	TokenURL         string
+	ClientID         string
+	Resource         string
+	Scopes           []string
+	RedirectPort     *uint16
 }
 
 // gatewayStoredToken is the persisted credential shape. A missing expiry means
@@ -91,8 +90,8 @@ func gatewayTokenIsUsable(token gatewayStoredToken) bool {
 // credentials. Query-bearing issuer URLs omit the response detail entirely
 // because issuers can echo custom URL credentials the shared redaction does not
 // know.
-func gatewayEndpointError(oauthErr *oauthError, config gatewayAuthConfig, grantType string, redirectURI string) error {
-	endpoint := diagnosticURL(config.tokenURL)
+func gatewayEndpointError(oauthErr *oauthError, config GatewayAuthConfig, grantType string, redirectURI string) error {
+	endpoint := diagnosticURL(config.TokenURL)
 	if oauthErr == nil {
 		return fmt.Errorf("provider OAuth token exchange failed for %s", endpoint)
 	}
@@ -103,7 +102,7 @@ func gatewayEndpointError(oauthErr *oauthError, config gatewayAuthConfig, grantT
 		}
 		return errors.New("provider OAuth token response is invalid")
 	}
-	hasQuery := strings.Contains(config.tokenURL, "?") || strings.Contains(config.resource, "?")
+	hasQuery := strings.Contains(config.TokenURL, "?") || strings.Contains(config.Resource, "?")
 	detail := "provider response details omitted"
 	requestID := ""
 	if !hasQuery {
@@ -113,15 +112,15 @@ func gatewayEndpointError(oauthErr *oauthError, config gatewayAuthConfig, grantT
 		}
 	}
 	resource := "<not sent>"
-	if strings.TrimSpace(config.resource) != "" {
-		resource = diagnosticURL(config.resource)
+	if strings.TrimSpace(config.Resource) != "" {
+		resource = diagnosticURL(config.Resource)
 	}
 	if strings.TrimSpace(redirectURI) == "" {
 		redirectURI = "<not sent>"
 	}
 	scopes := "<not sent>"
-	if len(config.scopes) > 0 {
-		scopes = strings.Join(config.scopes, " ")
+	if len(config.Scopes) > 0 {
+		scopes = strings.Join(config.Scopes, " ")
 	}
 	pkce := "not applicable"
 	if grantType == "authorization_code" {
@@ -129,7 +128,7 @@ func gatewayEndpointError(oauthErr *oauthError, config gatewayAuthConfig, grantT
 	}
 	return fmt.Errorf(
 		"provider OAuth token endpoint %s returned HTTP %d - %s%s. Request: grant_type=%s, client_id=%s, client_auth=none (public client), pkce=%s, redirect_uri=%s, resource=%s, authorization_scopes=%s",
-		endpoint, rejection.statusCode, detail, requestID, grantType, config.clientID, pkce, redirectURI, resource, scopes,
+		endpoint, rejection.statusCode, detail, requestID, grantType, config.ClientID, pkce, redirectURI, resource, scopes,
 	)
 }
 
@@ -150,8 +149,8 @@ func diagnosticURL(value string) string {
 // be HTTPS (or loopback HTTP) without embedded credentials or fragments, the
 // authorization endpoint must not carry OAuth request parameters, and the
 // client id and redirect port must be usable.
-func validateGatewayAuthConfig(config gatewayAuthConfig) error {
-	authorization, err := validateOAuthEndpoint(config.authorizationURL, "provider OAuth authorization endpoint")
+func validateGatewayAuthConfig(config GatewayAuthConfig) error {
+	authorization, err := validateOAuthEndpoint(config.AuthorizationURL, "provider OAuth authorization endpoint")
 	if err != nil {
 		return err
 	}
@@ -161,13 +160,13 @@ func validateGatewayAuthConfig(config gatewayAuthConfig) error {
 			return errors.New("provider OAuth authorization endpoint cannot include OAuth request parameters")
 		}
 	}
-	if _, err := validateOAuthEndpoint(config.tokenURL, "provider OAuth token endpoint"); err != nil {
+	if _, err := validateOAuthEndpoint(config.TokenURL, "provider OAuth token endpoint"); err != nil {
 		return err
 	}
-	if strings.TrimSpace(config.clientID) == "" {
+	if strings.TrimSpace(config.ClientID) == "" {
 		return errors.New("provider OAuth client ID must not be empty")
 	}
-	if config.redirectPortSet && config.redirectPort == 0 {
+	if config.RedirectPort != nil && *config.RedirectPort == 0 {
 		return errors.New("provider OAuth redirect port must not be zero")
 	}
 	return nil

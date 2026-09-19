@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"hash"
 	"sort"
 	"strings"
@@ -118,6 +119,17 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 	identityBool(digest, provider.RequiresOpenAIAuth)
 	identityBool(digest, provider.HasCommandAuth())
 	identityField(digest, []byte(authMode))
+	// Gateway OAuth configuration participates in the identity so a catalog
+	// fetched through one gateway configuration is never reused for another
+	// (Rust #46490). Providers without gateway OAuth keep their existing
+	// identities.
+	if provider.GatewayOAuth != nil {
+		encoded, err := json.Marshal(provider.GatewayOAuth)
+		if err != nil {
+			return ""
+		}
+		identityField(digest, encoded)
+	}
 	if authSnapshot != nil {
 		identityOptionalString(digest, accountID)
 		identityOptionalString(digest, userID)

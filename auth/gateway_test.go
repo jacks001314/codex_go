@@ -54,18 +54,18 @@ func (s *authFakeKeyring) Delete(service string, account string) (bool, error) {
 // Mirrors Rust gateway_auth_storage: the account id is a provider-oauth digest and
 // the secret name is PROVIDER_OAUTH_<UPPER DIGEST>; anything else is rejected.
 func TestGatewayCredentialIdentityLikeRust(t *testing.T) {
-	config := gatewayAuthConfig{
-		authorizationURL: "https://issuer.example.com/authorize",
-		tokenURL:         "https://issuer.example.com/token",
-		clientID:         "client-1",
-		resource:         "https://api.example.com",
-		scopes:           []string{"openid", "profile"},
+	config := GatewayAuthConfig{
+		AuthorizationURL: "https://issuer.example.com/authorize",
+		TokenURL:         "https://issuer.example.com/token",
+		ClientID:         "client-1",
+		Resource:         "https://api.example.com",
+		Scopes:           []string{"openid", "profile"},
 	}
 	id := gatewayCredentialID("/home/user/.codex", config)
 	if !strings.HasPrefix(id, "provider-oauth|") || len(id) != len("provider-oauth|")+64 {
 		t.Fatalf("credential id = %q", id)
 	}
-	if other := gatewayCredentialID("/home/user/.codex", gatewayAuthConfig{authorizationURL: "https://other.example.com"}); other == id {
+	if other := gatewayCredentialID("/home/user/.codex", GatewayAuthConfig{AuthorizationURL: "https://other.example.com"}); other == id {
 		t.Fatal("different configurations must have different credential ids")
 	}
 	name, err := gatewayCredentialSecretName(id)
@@ -88,7 +88,7 @@ func TestGatewayCredentialIdentityLikeRust(t *testing.T) {
 func TestGatewayStorageAndLockLikeRust(t *testing.T) {
 	home := t.TempDir()
 	storage := newGatewayAuthStorage(home, newGatewayTestStore())
-	id := gatewayCredentialID(home, gatewayAuthConfig{tokenURL: "https://issuer.example.com/token"})
+	id := gatewayCredentialID(home, GatewayAuthConfig{TokenURL: "https://issuer.example.com/token"})
 	if value, ok, err := storage.load(id); err != nil || ok || value != "" {
 		t.Fatalf("initial load = %q, %v, %v", value, ok, err)
 	}
@@ -166,27 +166,27 @@ func TestGatewayTokenResponseLikeRust(t *testing.T) {
 
 // Mirrors Rust validate_config.
 func TestValidateGatewayAuthConfigLikeRust(t *testing.T) {
-	valid := gatewayAuthConfig{
-		authorizationURL: "https://issuer.example.com/authorize",
-		tokenURL:         "https://issuer.example.com/token",
-		clientID:         "client-1",
+	valid := GatewayAuthConfig{
+		AuthorizationURL: "https://issuer.example.com/authorize",
+		TokenURL:         "https://issuer.example.com/token",
+		ClientID:         "client-1",
 	}
 	if err := validateGatewayAuthConfig(valid); err != nil {
 		t.Fatalf("valid config error = %v", err)
 	}
 	loopback := valid
-	loopback.authorizationURL = "http://127.0.0.1:1455/authorize"
-	loopback.tokenURL = "http://localhost:1455/token"
+	loopback.AuthorizationURL = "http://127.0.0.1:1455/authorize"
+	loopback.TokenURL = "http://localhost:1455/token"
 	if err := validateGatewayAuthConfig(loopback); err != nil {
 		t.Fatalf("loopback config error = %v", err)
 	}
-	for name, config := range map[string]gatewayAuthConfig{
-		"non-loopback http":  {authorizationURL: "http://issuer.example.com/a", tokenURL: "https://issuer.example.com/t", clientID: "c"},
-		"embedded creds":     {authorizationURL: "https://user:pass@issuer.example.com/a", tokenURL: "https://issuer.example.com/t", clientID: "c"},
-		"fragment":           {authorizationURL: "https://issuer.example.com/a#frag", tokenURL: "https://issuer.example.com/t", clientID: "c"},
-		"oauth params":       {authorizationURL: "https://issuer.example.com/a?client_id=x", tokenURL: "https://issuer.example.com/t", clientID: "c"},
-		"empty client":       {authorizationURL: "https://issuer.example.com/a", tokenURL: "https://issuer.example.com/t"},
-		"zero redirect port": {authorizationURL: "https://issuer.example.com/a", tokenURL: "https://issuer.example.com/t", clientID: "c", redirectPortSet: true},
+	for name, config := range map[string]GatewayAuthConfig{
+		"non-loopback http":  {AuthorizationURL: "http://issuer.example.com/a", TokenURL: "https://issuer.example.com/t", ClientID: "c"},
+		"embedded creds":     {AuthorizationURL: "https://user:pass@issuer.example.com/a", TokenURL: "https://issuer.example.com/t", ClientID: "c"},
+		"fragment":           {AuthorizationURL: "https://issuer.example.com/a#frag", TokenURL: "https://issuer.example.com/t", ClientID: "c"},
+		"oauth params":       {AuthorizationURL: "https://issuer.example.com/a?client_id=x", TokenURL: "https://issuer.example.com/t", ClientID: "c"},
+		"empty client":       {AuthorizationURL: "https://issuer.example.com/a", TokenURL: "https://issuer.example.com/t"},
+		"zero redirect port": {AuthorizationURL: "https://issuer.example.com/a", TokenURL: "https://issuer.example.com/t", ClientID: "c", RedirectPort: ptrUint16(0)},
 	} {
 		if err := validateGatewayAuthConfig(config); err == nil {
 			t.Fatalf("%s must be rejected", name)
@@ -227,12 +227,12 @@ func TestGatewayAuthManagerRefreshAndAuthorizeLikeRust(t *testing.T) {
 
 	home := t.TempDir()
 	store := newGatewayTestStore()
-	config := gatewayAuthConfig{
-		authorizationURL: issuer.URL + "/authorize",
-		tokenURL:         issuer.URL + "/token",
-		clientID:         "client-1",
+	config := GatewayAuthConfig{
+		AuthorizationURL: issuer.URL + "/authorize",
+		TokenURL:         issuer.URL + "/token",
+		ClientID:         "client-1",
 	}
-	manager := newGatewayAuthManager(config, home, issuer.Client(), store)
+	manager := NewGatewayAuthManager(config, home, issuer.Client(), store)
 
 	// Authorize: the injected browser opener answers the loopback callback.
 	manager.openBrowser = func(authorizationURL string) error {
@@ -249,7 +249,7 @@ func TestGatewayAuthManagerRefreshAndAuthorizeLikeRust(t *testing.T) {
 		}()
 		return nil
 	}
-	token, err := manager.resolveAccessToken(context.Background())
+	token, err := manager.ResolveAccessToken(context.Background())
 	if err != nil || token != "authorized-token" {
 		t.Fatalf("authorize = %q, %v", token, err)
 	}
@@ -260,7 +260,7 @@ func TestGatewayAuthManagerRefreshAndAuthorizeLikeRust(t *testing.T) {
 	}
 
 	// Cache reuse: a second resolve returns the same token without new grants.
-	if token, err := manager.resolveAccessToken(context.Background()); err != nil || token != "authorized-token" {
+	if token, err := manager.ResolveAccessToken(context.Background()); err != nil || token != "authorized-token" {
 		t.Fatalf("cached resolve = %q, %v", token, err)
 	}
 	if refreshCalls != 0 {
@@ -269,7 +269,7 @@ func TestGatewayAuthManagerRefreshAndAuthorizeLikeRust(t *testing.T) {
 
 	// An explicitly rejected token must refresh, and the rotated refresh token
 	// is persisted.
-	rejected, err := manager.refreshAccessToken(context.Background(), "authorized-token")
+	rejected, err := manager.RefreshAccessToken(context.Background(), "authorized-token")
 	if err != nil || rejected != "refreshed-token" {
 		t.Fatalf("refresh after rejection = %q, %v", rejected, err)
 	}
@@ -300,12 +300,12 @@ func TestGatewayAuthManagerReauthorizesAfterRefreshRejectionLikeRust(t *testing.
 
 	home := t.TempDir()
 	store := newGatewayTestStore()
-	config := gatewayAuthConfig{
-		authorizationURL: issuer.URL + "/authorize",
-		tokenURL:         issuer.URL + "/token",
-		clientID:         "client-1",
+	config := GatewayAuthConfig{
+		AuthorizationURL: issuer.URL + "/authorize",
+		TokenURL:         issuer.URL + "/token",
+		ClientID:         "client-1",
 	}
-	manager := newGatewayAuthManager(config, home, issuer.Client(), store)
+	manager := NewGatewayAuthManager(config, home, issuer.Client(), store)
 	// A stored token with an unusable refresh token.
 	expired := time.Now().Unix() - 60
 	payload, _ := json.Marshal(gatewayStoredToken{AccessToken: "stale", RefreshToken: "rejected-refresh", ExpiresAt: &expired})
@@ -323,11 +323,13 @@ func TestGatewayAuthManagerReauthorizesAfterRefreshRejectionLikeRust(t *testing.
 		}()
 		return nil
 	}
-	token, err := manager.resolveAccessToken(context.Background())
+	token, err := manager.ResolveAccessToken(context.Background())
 	if err != nil || token != "authorized-token" {
 		t.Fatalf("resolve after refresh rejection = %q, %v", token, err)
 	}
 }
+
+func ptrUint16(value uint16) *uint16 { return &value }
 
 func ptrInt64(value int64) *int64    { return &value }
 func ptrUint64(value uint64) *uint64 { return &value }

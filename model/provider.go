@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -65,6 +66,10 @@ type RuntimeProvider interface {
 	APIProvider() (APIProvider, error)
 	RuntimeBaseURL() (string, error)
 	APIAuth() (AuthHeaders, error)
+	// GatewayAuthManager returns the provider's gateway credential manager, or
+	// nil when the provider has no gateway OAuth configuration. Hosts use it to
+	// run an explicit login; configured setup failures stay errors (Rust #46490).
+	GatewayAuthManager() (*auth.GatewayAuthManager, error)
 	ModelsManager(configCatalog *ModelsResponse) ModelsManager
 }
 
@@ -76,7 +81,20 @@ func CreateRuntimeProviderForID(providerID string, info ProviderInfo, snapshot *
 	if (&info).IsAmazonBedrock() {
 		return &AmazonBedrockProvider{info: info, auth: snapshot}
 	}
-	return &ConfiguredProvider{providerID: providerID, info: info, auth: snapshot}
+	configured := &ConfiguredProvider{providerID: providerID, info: info, auth: snapshot}
+	if info.GatewayOAuth != nil {
+		// Rust constructs the gateway credential manager eagerly and reports
+		// setup failures when auth is requested, because the factory is
+		// infallible.
+		if err := info.Validate(); err != nil {
+			configured.gatewayAuthErr = err
+		} else if manager, err := sharedGatewayAuthManager(info.GatewayOAuth, auth.DefaultCodexHome()); err != nil {
+			configured.gatewayAuthErr = errors.New("failed to create provider OAuth HTTP client")
+		} else {
+			configured.gatewayAuthManager = manager
+		}
+	}
+	return configured
 }
 
 // CreateRuntimeProviderWithResidency builds a provider with the managed
@@ -97,6 +115,12 @@ type ConfiguredProvider struct {
 	// residency is the managed `enforce_residency` requirement applied to this
 	// provider's requests and catalog identity (Rust Config::enforce_residency).
 	residency string
+	// gatewayAuthManager is the shared gateway credential manager, eagerly
+	// constructed when the provider configures `gateway_oauth` (Rust #46490).
+	gatewayAuthManager *auth.GatewayAuthManager
+	// gatewayAuthErr reports why the gateway manager could not be built; it is
+	// surfaced when authentication is requested.
+	gatewayAuthErr error
 }
 
 // SetManagedResidency records the managed residency requirement for this
@@ -206,7 +230,32 @@ func (p *ConfiguredProvider) RuntimeBaseURL() (string, error) {
 }
 
 func (p *ConfiguredProvider) APIAuth() (AuthHeaders, error) {
-	return ResolveProviderAuth(p.auth, p.info)
+	primary, err := ResolveProviderAuth(p.auth, p.info)
+	if err != nil {
+		return AuthHeaders{}, err
+	}
+	if p.info.GatewayOAuth == nil {
+		return primary, nil
+	}
+	if err := p.info.Validate(); err != nil {
+		return AuthHeaders{}, err
+	}
+	if p.gatewayAuthErr != nil {
+		return AuthHeaders{}, p.gatewayAuthErr
+	}
+	// Model discovery uses this same composed auth, so gateway tokens refresh
+	// once for inference and discovery alike.
+	return composeGatewayAuth(context.Background(), p.info.GatewayOAuth, p.gatewayAuthManager, primary)
+}
+
+func (p *ConfiguredProvider) GatewayAuthManager() (*auth.GatewayAuthManager, error) {
+	if p == nil || p.info.GatewayOAuth == nil {
+		return nil, nil
+	}
+	if p.gatewayAuthErr != nil {
+		return nil, p.gatewayAuthErr
+	}
+	return p.gatewayAuthManager, nil
 }
 
 func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) ModelsManager {
@@ -290,6 +339,12 @@ func (p *AmazonBedrockProvider) MemoryConsolidationPreferredModel() string {
 
 func (p *AmazonBedrockProvider) SupportsAttestation() bool {
 	return false
+}
+
+// GatewayAuthManager: gateway OAuth cannot be combined with AWS authentication,
+// so the Bedrock provider never exposes one.
+func (p *AmazonBedrockProvider) GatewayAuthManager() (*auth.GatewayAuthManager, error) {
+	return nil, nil
 }
 
 func (p *AmazonBedrockProvider) AccountState() (ProviderAccountState, error) {

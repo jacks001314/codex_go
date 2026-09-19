@@ -1,4 +1,4 @@
-package auth
+﻿package auth
 
 // Gateway credential manager.
 //
@@ -48,10 +48,10 @@ type gatewayAuthCache struct {
 	pending *gatewayStoredToken
 }
 
-// gatewayAuthManager resolves and persists an OAuth access token for a model
+// GatewayAuthManager resolves and persists an OAuth access token for a model
 // provider. Callers hold one manager per provider configuration.
-type gatewayAuthManager struct {
-	config    gatewayAuthConfig
+type GatewayAuthManager struct {
+	config    GatewayAuthConfig
 	codexHome string
 	storage   *gatewayAuthStorage
 	client    *http.Client
@@ -62,15 +62,15 @@ type gatewayAuthManager struct {
 	cache       gatewayAuthCache
 }
 
-// newGatewayAuthManager builds a manager with a redirect-free HTTP client: token
+// NewGatewayAuthManager builds a manager with a redirect-free HTTP client: token
 // grants never follow redirects and never carry request logs.
-func newGatewayAuthManager(config gatewayAuthConfig, codexHome string, client *http.Client, store keyring.Store) *gatewayAuthManager {
+func NewGatewayAuthManager(config GatewayAuthConfig, codexHome string, client *http.Client, store keyring.Store) *GatewayAuthManager {
 	if client == nil {
 		client = &http.Client{
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
 	}
-	return &gatewayAuthManager{
+	return &GatewayAuthManager{
 		config:    config,
 		codexHome: codexHome,
 		storage:   newGatewayAuthStorage(codexHome, store),
@@ -78,19 +78,19 @@ func newGatewayAuthManager(config gatewayAuthConfig, codexHome string, client *h
 	}
 }
 
-// resolveAccessToken returns a cached access token or refreshes/authorizes when
+// ResolveAccessToken returns a cached access token or refreshes/authorizes when
 // it is no longer usable.
-func (m *gatewayAuthManager) resolveAccessToken(ctx context.Context) (string, error) {
+func (m *GatewayAuthManager) ResolveAccessToken(ctx context.Context) (string, error) {
 	return m.resolve(ctx, gatewayRefreshPolicy{})
 }
 
-// refreshAccessToken recovers after a request rejected rejectedAccessToken,
+// RefreshAccessToken recovers after a request rejected rejectedAccessToken,
 // reusing a usable replacement from storage or refreshing/authorizing.
-func (m *gatewayAuthManager) refreshAccessToken(ctx context.Context, rejectedAccessToken string) (string, error) {
+func (m *GatewayAuthManager) RefreshAccessToken(ctx context.Context, rejectedAccessToken string) (string, error) {
 	return m.resolve(ctx, gatewayRefreshPolicy{afterRejection: true, rejectedAccessToken: rejectedAccessToken})
 }
 
-func (m *gatewayAuthManager) resolve(ctx context.Context, policy gatewayRefreshPolicy) (string, error) {
+func (m *GatewayAuthManager) resolve(ctx context.Context, policy gatewayRefreshPolicy) (string, error) {
 	if m == nil {
 		return "", errors.New("provider OAuth manager is unavailable")
 	}
@@ -119,7 +119,7 @@ func (m *gatewayAuthManager) resolve(ctx context.Context, policy gatewayRefreshP
 	return m.authorize(ctx)
 }
 
-func (m *gatewayAuthManager) persistPending() (string, error) {
+func (m *GatewayAuthManager) persistPending() (string, error) {
 	token := m.cache.pending
 	if token == nil {
 		return "", errors.New("provider OAuth credentials are missing")
@@ -135,7 +135,7 @@ func (m *gatewayAuthManager) persistPending() (string, error) {
 
 // refresh returns either a usable access token or the instruction to authorize.
 // It runs under the credential lock so concurrent configurations serialize.
-func (m *gatewayAuthManager) refresh(ctx context.Context, policy gatewayRefreshPolicy) (string, bool, error) {
+func (m *GatewayAuthManager) refresh(ctx context.Context, policy gatewayRefreshPolicy) (string, bool, error) {
 	lock, err := lockGatewayCredentials(m.codexHome)
 	if err != nil {
 		return "", false, err
@@ -173,7 +173,7 @@ func (m *gatewayAuthManager) refresh(ctx context.Context, policy gatewayRefreshP
 		var response gatewayTokenResponse
 		oauthErr := m.oauth().refresh(ctx, refreshTokenGrant{
 			refreshToken: refreshToken,
-			resource:     m.config.resource,
+			resource:     m.config.Resource,
 		}, &response)
 		if oauthErr == nil {
 			stored, err := response.intoStored(refreshToken)
@@ -245,7 +245,7 @@ func gatewayTokensEqual(left *gatewayStoredToken, right *gatewayStoredToken) boo
 	}
 }
 
-func (m *gatewayAuthManager) loadToken() (*gatewayStoredToken, error) {
+func (m *GatewayAuthManager) loadToken() (*gatewayStoredToken, error) {
 	value, ok, err := m.storage.load(gatewayCredentialID(m.codexHome, m.config))
 	if err != nil {
 		return nil, err
@@ -260,7 +260,7 @@ func (m *gatewayAuthManager) loadToken() (*gatewayStoredToken, error) {
 	return &token, nil
 }
 
-func (m *gatewayAuthManager) saveToken(token *gatewayStoredToken) error {
+func (m *GatewayAuthManager) saveToken(token *gatewayStoredToken) error {
 	encoded, err := json.Marshal(token)
 	if err != nil {
 		return errors.New("failed to encode provider OAuth credentials")
@@ -268,10 +268,10 @@ func (m *gatewayAuthManager) saveToken(token *gatewayStoredToken) error {
 	return m.storage.save(gatewayCredentialID(m.codexHome, m.config), string(encoded))
 }
 
-func (m *gatewayAuthManager) oauth() *oauthClient {
+func (m *GatewayAuthManager) oauth() *oauthClient {
 	return newOAuthClient(m.client, tokenEndpoint{
-		url:            m.config.tokenURL,
-		clientID:       m.config.clientID,
+		url:            m.config.TokenURL,
+		clientID:       m.config.ClientID,
 		encoding:       tokenEncodingForm,
 		timeout:        gatewayHTTPTimeout,
 		errorBodyLimit: errorBodyLimit{bytes: gatewayErrorBodyLimitByte},
@@ -280,7 +280,7 @@ func (m *gatewayAuthManager) oauth() *oauthClient {
 
 // authorize runs the authorization-code grant with PKCE and the loopback
 // callback listener.
-func (m *gatewayAuthManager) authorize(ctx context.Context) (string, error) {
+func (m *GatewayAuthManager) authorize(ctx context.Context) (string, error) {
 	pkce, err := generatePKCE()
 	if err != nil {
 		return "", err
@@ -290,8 +290,8 @@ func (m *gatewayAuthManager) authorize(ctx context.Context) (string, error) {
 		return "", err
 	}
 	redirectPort := uint16(0)
-	if m.config.redirectPortSet {
-		redirectPort = m.config.redirectPort
+	if m.config.RedirectPort != nil {
+		redirectPort = *m.config.RedirectPort
 	}
 	listener, err := newGatewayCallbackListener(redirectPort, state)
 	if err != nil {
@@ -299,11 +299,11 @@ func (m *gatewayAuthManager) authorize(ctx context.Context) (string, error) {
 	}
 	redirectURI := listener.redirectURL()
 	authorizationURL, err := buildAuthorizationURL(authorizationRequest{
-		endpoint:    m.config.authorizationURL,
-		clientID:    m.config.clientID,
+		endpoint:    m.config.AuthorizationURL,
+		clientID:    m.config.ClientID,
 		redirectURI: redirectURI,
-		scope:       strings.Join(m.config.scopes, " "),
-		resource:    m.config.resource,
+		scope:       strings.Join(m.config.Scopes, " "),
+		resource:    m.config.Resource,
 		pkce:        pkce,
 		state:       state,
 	})
@@ -341,7 +341,7 @@ func (m *gatewayAuthManager) authorize(ctx context.Context) (string, error) {
 		code:        code,
 		redirectURI: redirectURI,
 		pkce:        pkce,
-		resource:    m.config.resource,
+		resource:    m.config.Resource,
 	}, &response); oauthErr != nil {
 		var typed *oauthError
 		_ = errors.As(oauthErr, &typed)
