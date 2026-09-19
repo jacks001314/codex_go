@@ -120,3 +120,50 @@ func TestValidPluginMetricIdentifier(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveMetricsOperationBindsToMatchedTrustedRootVersion covers Rust
+// #46528: a measurement declaration must come from the plugin version whose
+// root matched the script, not from another version of the same plugin.
+func TestResolveMetricsOperationBindsToMatchedTrustedRootVersion(t *testing.T) {
+	home := t.TempDir()
+	older := filepath.Join(home, "plugins", "cache", trustedRemoteMarketplaceName, "sample", "1.0.0")
+	newer := filepath.Join(home, "plugins", "cache", trustedRemoteMarketplaceName, "sample", "2.0.0")
+	olderScript := filepath.Join(older, "scripts", "measure.py")
+	newerScript := filepath.Join(newer, "scripts", "measure.py")
+	for _, script := range []string{olderScript, newerScript} {
+		if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(script, []byte("ok"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, err := ParsePluginId("sample@" + trustedRemoteMarketplaceName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := TrustedPluginRoots{roots: []trustedPluginRoot{
+		{
+			pluginID: id.Key(), version: "1.0.0", root: older,
+			metricsOperationsByPath: map[string]PluginMetricsOperation{
+				"scripts/measure.py": {OperationName: "run_measure", Measurements: map[string]PluginMeasurementDefinition{}},
+			},
+		},
+		{
+			pluginID: id.Key(), version: "2.0.0", root: newer,
+			metricsOperationsByPath: map[string]PluginMetricsOperation{},
+		},
+	}}
+
+	matched := roots.ResolveMetricsOperation([]string{"python3", olderScript}, older)
+	if matched == nil || matched.Operation.OperationName != "run_measure" {
+		t.Fatalf("older version declaration = %#v, want run_measure", matched)
+	}
+	if got := roots.ResolveMetricsOperation([]string{"python3", newerScript}, newer); got != nil {
+		t.Fatalf("newer version inherited another version's declaration: %#v", got)
+	}
+	// Attribution still spans versions with matching contents.
+	if attribution := roots.Resolve([]string{"python3", newerScript}, newer); attribution == nil || attribution.PluginID != id.Key() {
+		t.Fatalf("attribution = %#v, want the plugin identity", attribution)
+	}
+}

@@ -17,6 +17,10 @@ type PluginCommandAttribution struct {
 
 type trustedPluginRoot struct {
 	pluginID                string
+	// version is the plugin version this root belongs to (Rust #46528). Trusted
+	// roots keep the version so measurement declarations stay bound to the
+	// root that actually matched the script.
+	version                 string
 	root                    string
 	metricsOperationsByPath map[string]PluginMetricsOperation
 }
@@ -66,12 +70,30 @@ func NewTrustedPluginRoots(codexHome string, pluginIDs []string) TrustedPluginRo
 		}
 		seen[key] = true
 		metrics := loadPluginMetricsOperations(root)
-		roots = append(roots, trustedPluginRoot{pluginID: id.Key(), root: filepath.Clean(root), metricsOperationsByPath: metrics})
+		roots = append(roots, trustedPluginRoot{pluginID: id.Key(), version: version, root: filepath.Clean(root), metricsOperationsByPath: metrics})
 	}
 	return TrustedPluginRoots{roots: roots}
 }
 
-func (r TrustedPluginRoots) Resolve(command []string, cwd string) *PluginCommandAttribution {
+// matchedPluginScript is one trusted root plus the normalized script that
+// matched inside it (Rust #46528's MatchedPluginScript).
+type matchedPluginScript struct {
+	attribution PluginCommandAttribution
+	metrics     *PluginMetricsOperation
+}
+
+func (m matchedPluginScript) metricsOperation(pluginID string) *ResolvedPluginMetricsOperation {
+	if m.metrics == nil {
+		return nil
+	}
+	return &ResolvedPluginMetricsOperation{PluginID: pluginID, Operation: *m.metrics}
+}
+
+// matchedScript resolves one exact command to the single trusted root that owns
+// the canonical script. Reusing this for attribution and for measurement
+// lookup binds a manifest declaration to the version that matched instead of
+// looking the declaration up across every version of the plugin (#46528).
+func (r TrustedPluginRoots) matchedScript(command []string, cwd string) *matchedPluginScript {
 	plain, ok := singlePlainPluginCommand(command)
 	if !ok {
 		return nil
@@ -96,7 +118,7 @@ func (r TrustedPluginRoots) Resolve(command []string, cwd string) *PluginCommand
 		return nil
 	}
 
-	var match *PluginCommandAttribution
+	var match *matchedPluginScript
 	for _, root := range r.roots {
 		relative, err := filepath.Rel(root.root, script)
 		if err != nil || relative == "." || pathEscapesRoot(relative) {
@@ -109,9 +131,26 @@ func (r TrustedPluginRoots) Resolve(command []string, cwd string) *PluginCommand
 		if match != nil {
 			return nil
 		}
-		match = &PluginCommandAttribution{PluginID: root.pluginID, ScriptPath: normalized}
+		var metrics *PluginMetricsOperation
+		if operation, ok := root.metricsOperationsByPath[normalized]; ok {
+			operationCopy := operation
+			metrics = &operationCopy
+		}
+		match = &matchedPluginScript{
+			attribution: PluginCommandAttribution{PluginID: root.pluginID, ScriptPath: normalized},
+			metrics:     metrics,
+		}
 	}
 	return match
+}
+
+func (r TrustedPluginRoots) Resolve(command []string, cwd string) *PluginCommandAttribution {
+	matched := r.matchedScript(command, cwd)
+	if matched == nil {
+		return nil
+	}
+	attribution := matched.attribution
+	return &attribution
 }
 
 func IsSafePluginRelativePath(path string) bool {

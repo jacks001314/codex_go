@@ -153,27 +153,15 @@ func validPluginMetricIdentifier(value string) bool {
 }
 
 // ResolveMetricsOperation resolves one exact command to one trusted
-// manifest-declared metrics operation.
+// manifest-declared metrics operation. The declaration is read from the root
+// that matched the script, so an identical relative path in a different plugin
+// version cannot supply the declaration (#46528).
 func (r TrustedPluginRoots) ResolveMetricsOperation(command []string, cwd string) *ResolvedPluginMetricsOperation {
-	attribution := r.Resolve(command, cwd)
-	if attribution == nil {
+	matched := r.matchedScript(command, cwd)
+	if matched == nil {
 		return nil
 	}
-	var match *ResolvedPluginMetricsOperation
-	for _, root := range r.roots {
-		if root.pluginID != attribution.PluginID {
-			continue
-		}
-		operation, ok := root.metricsOperationsByPath[attribution.ScriptPath]
-		if !ok {
-			continue
-		}
-		if match != nil {
-			return nil
-		}
-		match = &ResolvedPluginMetricsOperation{PluginID: attribution.PluginID, Operation: operation}
-	}
-	return match
+	return matched.metricsOperation(matched.attribution.PluginID)
 }
 
 func (o ResolvedPluginMetricsOperation) String() string {
