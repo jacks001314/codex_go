@@ -12306,6 +12306,12 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		return nil, false
 	}
 	authRevision, _ := r.authRevisionSnapshot(context.Background())
+	// Rust #46335: the captured turn-environment snapshot decides MCP tool
+	// availability, and a change to that snapshot (a selection saved for the
+	// next turn) must refresh the published runtime. Capture it once so the
+	// refresh decision and the applied runtime config agree.
+	availableEnvironment := selectedEnvironmentIDs(r.activeTurnParams(threadID))
+	environmentFingerprint := mcpEnvironmentRuntimeFingerprint(availableEnvironment)
 	runtimeConfig := func(cfg *config.Config) *mcp.RuntimeConfig {
 		values := map[string]any{}
 		if cfg != nil && cfg.Values != nil {
@@ -12316,11 +12322,11 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		config := r.runtimeMCPConfigForThread(threadID, values, codexHome, runtimeAuth, cfg.Requirements)
 		// Rust #39335: attachment-scoped MCP servers are only enabled when
 		// their environment is selected and available for the thread.
-		config.AvailableEnvironment = append([]string(nil), selectedEnvironmentIDs(r.activeTurnParams(threadID))...)
+		config.AvailableEnvironment = append([]string(nil), availableEnvironment...)
 		r.applyMCPPermissionAuthority(config, threadID, r.currentMCPElicitationAuthority(threadID, "", "").PermissionProfile)
 		return config
 	}
-	service := r.mcpRuntimes.serviceForThread(threadID, cfg, authRevision, func(cfg *config.Config) *mcp.MCPService {
+	service := r.mcpRuntimes.serviceForThread(threadID, cfg, authRevision, environmentFingerprint, func(cfg *config.Config) *mcp.MCPService {
 		service := mcp.NewMCPService(runtimeConfig(cfg))
 		r.configureMCPService(service)
 		return service

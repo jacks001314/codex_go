@@ -423,15 +423,15 @@ func TestMCPRuntimeAuthRevisionReplacesServiceLikeRust(t *testing.T) {
 		updates.Add(1)
 	}
 
-	first := coordinator.serviceForThread("thread-a", cfg, 1, newService, updateService)
-	second := coordinator.serviceForThread("thread-a", cfg, 2, newService, updateService)
+	first := coordinator.serviceForThread("thread-a", cfg, 1, "", newService, updateService)
+	second := coordinator.serviceForThread("thread-a", cfg, 2, "", newService, updateService)
 	if first == nil || second == nil || first == second {
 		t.Fatalf("auth revision services = %p/%p, want replacement", first, second)
 	}
 	if creates.Load() != 2 || updates.Load() != 0 {
 		t.Fatalf("creates=%d updates=%d, want 2/0", creates.Load(), updates.Load())
 	}
-	if got := coordinator.serviceForThread("thread-a", cfg, 2, newService, updateService); got != second {
+	if got := coordinator.serviceForThread("thread-a", cfg, 2, "", newService, updateService); got != second {
 		t.Fatalf("unchanged auth revision replaced service: current=%p got=%p", second, got)
 	}
 }
@@ -482,11 +482,11 @@ func TestMCPRuntimeAuthRevisionClosesPreviousHTTPRuntime(t *testing.T) {
 			"remote": {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
 		}})
 	}
-	first := coordinator.serviceForThread("thread-a", cfg, 1, newService, nil)
+	first := coordinator.serviceForThread("thread-a", cfg, 1, "", newService, nil)
 	if _, err := first.ListStatusChecked(&mcp.MCPListServerStatusParams{}); err != nil {
 		t.Fatalf("ListStatusChecked() error = %v", err)
 	}
-	second := coordinator.serviceForThread("thread-a", cfg, 2, newService, nil)
+	second := coordinator.serviceForThread("thread-a", cfg, 2, "", newService, nil)
 	if first == second {
 		t.Fatal("auth revision reused previous HTTP runtime")
 	}
@@ -560,7 +560,7 @@ func TestMCPRuntimeInvalidationDuringStartupIsNotLost(t *testing.T) {
 	firstDone := make(chan *mcp.MCPService, 1)
 	var creates atomic.Int32
 	go func() {
-		firstDone <- coordinator.serviceForThread("thread-a", cfg, 1, func(*config.Config) *mcp.MCPService {
+		firstDone <- coordinator.serviceForThread("thread-a", cfg, 1, "", func(*config.Config) *mcp.MCPService {
 			creates.Add(1)
 			close(entered)
 			<-release
@@ -576,7 +576,7 @@ func TestMCPRuntimeInvalidationDuringStartupIsNotLost(t *testing.T) {
 	close(release)
 	first := <-firstDone
 	<-invalidated
-	second := coordinator.serviceForThread("thread-a", cfg, 1, func(*config.Config) *mcp.MCPService {
+	second := coordinator.serviceForThread("thread-a", cfg, 1, "", func(*config.Config) *mcp.MCPService {
 		creates.Add(1)
 		return mcp.NewMCPService(nil)
 	}, func(*mcp.MCPService, *config.Config) {
@@ -618,7 +618,7 @@ func TestMCPRuntimeConcurrentSameThreadBuildIsCoalesced(t *testing.T) {
 	results := make(chan *mcp.MCPService, callers)
 	for range callers {
 		go func() {
-			results <- coordinator.serviceForThread("thread-a", cfg, 1, func(*config.Config) *mcp.MCPService {
+			results <- coordinator.serviceForThread("thread-a", cfg, 1, "", func(*config.Config) *mcp.MCPService {
 				if creates.Add(1) == 1 {
 					close(entered)
 				}
@@ -651,7 +651,7 @@ func TestMCPRuntimeDifferentThreadsBuildInParallel(t *testing.T) {
 	for _, threadID := range []string{"thread-a", "thread-b"} {
 		threadID := threadID
 		go func() {
-			_ = coordinator.serviceForThread(threadID, mcpRuntimeConfigForTest(threadID, threadID+"-mcp"), 1, func(*config.Config) *mcp.MCPService {
+			_ = coordinator.serviceForThread(threadID, mcpRuntimeConfigForTest(threadID, threadID+"-mcp"), 1, "", func(*config.Config) *mcp.MCPService {
 				entered <- threadID
 				<-release
 				return mcp.NewMCPService(nil)
@@ -719,7 +719,7 @@ func TestMCPRuntimeAuthChangeDuringPrewarmPublishesLatestRuntime(t *testing.T) {
 	var latest *mcp.MCPService
 	run := func() {
 		revision := desired.Load()
-		service := coordinator.serviceForThread("thread-a", cfg, revision, func(*config.Config) *mcp.MCPService {
+		service := coordinator.serviceForThread("thread-a", cfg, revision, "", func(*config.Config) *mcp.MCPService {
 			mu.Lock()
 			createdRevisions = append(createdRevisions, revision)
 			mu.Unlock()
@@ -756,7 +756,7 @@ func TestMCPRuntimeAuthChangeDuringPrewarmPublishesLatestRuntime(t *testing.T) {
 		t.Fatalf("created auth revisions = %v, want [1 3]", gotRevisions)
 	}
 	var unexpectedCreates atomic.Int32
-	if got := coordinator.serviceForThread("thread-a", cfg, 3, func(*config.Config) *mcp.MCPService {
+	if got := coordinator.serviceForThread("thread-a", cfg, 3, "", func(*config.Config) *mcp.MCPService {
 		unexpectedCreates.Add(1)
 		return mcp.NewMCPService(nil)
 	}, nil); got != latest || unexpectedCreates.Load() != 0 {
@@ -770,7 +770,7 @@ func TestMCPRuntimeCloseThreadDuringStartupDoesNotRepublish(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan *mcp.MCPService, 1)
 	go func() {
-		done <- coordinator.serviceForThread("thread-a", mcpRuntimeConfigForTest("alpha", "alpha-mcp"), 1, func(*config.Config) *mcp.MCPService {
+		done <- coordinator.serviceForThread("thread-a", mcpRuntimeConfigForTest("alpha", "alpha-mcp"), 1, "", func(*config.Config) *mcp.MCPService {
 			close(entered)
 			<-release
 			return mcp.NewMCPService(nil)
@@ -792,7 +792,7 @@ func TestMCPRuntimeCloseThreadDuringStartupDoesNotRepublish(t *testing.T) {
 func TestMCPRuntimeCoordinatorCloseIsConcurrentAndIdempotent(t *testing.T) {
 	coordinator := newMCPRuntimeCoordinator()
 	for _, threadID := range []string{"thread-a", "thread-b"} {
-		_ = coordinator.serviceForThread(threadID, mcpRuntimeConfigForTest(threadID, threadID+"-mcp"), 1, func(*config.Config) *mcp.MCPService {
+		_ = coordinator.serviceForThread(threadID, mcpRuntimeConfigForTest(threadID, threadID+"-mcp"), 1, "", func(*config.Config) *mcp.MCPService {
 			return mcp.NewMCPService(nil)
 		}, nil)
 	}

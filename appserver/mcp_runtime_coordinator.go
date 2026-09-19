@@ -55,6 +55,7 @@ func (c *mcpRuntimeCoordinator) serviceForThread(
 	threadID string,
 	cfg *config.Config,
 	authRevision uint64,
+	environmentFingerprint string,
 	newService func(*config.Config) *mcp.MCPService,
 	updateService func(*mcp.MCPService, *config.Config),
 ) *mcp.MCPService {
@@ -62,7 +63,10 @@ func (c *mcpRuntimeCoordinator) serviceForThread(
 	if c == nil || threadID == "" || newService == nil {
 		return nil
 	}
-	fingerprint := mcpRuntimeConfigFingerprint(cfg)
+	// Rust #46335 compares both the captured environment selections and the
+	// ready environment handles when deciding whether to refresh: the raw config
+	// values alone do not capture a thread's turn-environment selections.
+	fingerprint := mcpRuntimeConfigFingerprint(cfg) + "|environments=" + environmentFingerprint
 	for {
 		c.mu.Lock()
 		if c.closed {
@@ -342,4 +346,16 @@ func mcpRuntimeConfigFingerprint(cfg *config.Config) string {
 	}
 	sort.Strings(keys)
 	return fmt.Sprintf("%v|requirements=%s", keys, config.MCPRequirementsFingerprint(cfg.Requirements))
+}
+
+// mcpEnvironmentRuntimeFingerprint renders a thread's captured turn-environment
+// selections so a selection change refreshes the published MCP runtime
+// (Rust #46335: compare both captured selections and ready environment handles
+// before reusing a runtime). Order stays significant, matching Rust's slice
+// comparison of the captured selections.
+func mcpEnvironmentRuntimeFingerprint(environmentIDs []string) string {
+	if len(environmentIDs) == 0 {
+		return ""
+	}
+	return strings.Join(environmentIDs, "\x00")
 }
