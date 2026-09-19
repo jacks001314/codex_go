@@ -2295,6 +2295,50 @@ func TestResponsesAgentRunnerRefreshesCommandAuthAfterUnauthorized(t *testing.T)
 	}
 }
 
+// TestResponsesAgentRunnerWebsocketKeepsExplicitCookieHeaderLikeRust mirrors
+// Rust #46506: the shared ChatGPT cookie header is only added when the handshake
+// does not already carry an explicit Cookie header.
+func TestResponsesAgentRunnerWebsocketKeepsExplicitCookieHeaderLikeRust(t *testing.T) {
+	recorded := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		select {
+		case recorded <- request.Header.Get("Cookie"):
+		default:
+		}
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		if _, _, err := conn.Read(request.Context()); err != nil {
+			return
+		}
+		response := `{"type":"response.completed","response":{"id":"resp-cookie","output":[{"id":"msg-cookie","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(response))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:           &APIProvider{BaseURL: server.URL, Headers: http.Header{"Cookie": {"explicit=1"}}},
+		SupportsWebsockets: true,
+	})
+	response, err := runner.RunWebSocket(context.Background(), &AgentRequest{
+		Model: "gpt-test", Prompt: "hello", ThreadID: "thread-cookie", TurnID: "turn-cookie",
+	})
+	if err != nil || response == nil {
+		t.Fatalf("RunWebSocket response=%#v err=%v", response, err)
+	}
+	select {
+	case got := <-recorded:
+		if got != "explicit=1" {
+			t.Fatalf("handshake Cookie = %q, want the explicit header", got)
+		}
+	default:
+		t.Fatal("the websocket handshake was not recorded")
+	}
+}
+
 // Each websocket request send reports its record: the duration and outcome, and
 // whether the request reused an existing connection (Rust's
 // SessionTelemetry::record_websocket_request with the session's connection_reused).

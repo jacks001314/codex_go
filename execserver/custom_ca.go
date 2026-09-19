@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"codex_go/network"
 )
 
 const customCAHint = "If you set CODEX_CA_CERTIFICATE or SSL_CERT_FILE, ensure it points to a PEM file containing one or more CERTIFICATE blocks, or unset it to use system roots."
@@ -17,7 +19,7 @@ func newExecServerHTTPClient(configured ...*http.Client) (*http.Client, error) {
 	if len(configured) > 0 && configured[0] != nil {
 		*client = *configured[0]
 	}
-	client.Jar = sharedChatGPTCloudflareCookieJar
+	client.Jar = network.SharedChatGPTCookieJar()
 	sourceEnv, path := configuredCustomCA()
 	if path == "" {
 		return client, nil

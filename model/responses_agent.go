@@ -21,6 +21,7 @@ import (
 	"codex_go/auth"
 	"codex_go/codexapi"
 	"codex_go/eventmap"
+	"codex_go/network"
 	"codex_go/protocol"
 
 	"github.com/coder/websocket"
@@ -570,7 +571,22 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	dialStartedAt := time.Now()
-	conn, response, err := websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: httpRequest.Header})
+	// Rust #46506: a secure WebSocket handshake reuses the HTTP factory's
+	// ChatGPT cookie store, while an explicit Cookie header still wins.
+	headers := httpRequest.Header
+	if headers.Get("Cookie") == "" {
+		if cookie := network.ChatGPTCookieHeader(endpoint); cookie != "" {
+			cloned := headers.Clone()
+			cloned.Set("Cookie", cookie)
+			headers = cloned
+		}
+	}
+	conn, response, err := websocket.Dial(connectCtx, endpoint, &websocket.DialOptions{HTTPHeader: headers})
+	if response != nil {
+		// A rejected upgrade can refresh infrastructure cookies exactly like an
+		// HTTP response.
+		network.StoreChatGPTResponseCookies(endpoint, response.Header)
+	}
 	// The prewarm handshake reports the same attempt telemetry, with a fresh
 	// connection and no retry.
 	r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), "", "")

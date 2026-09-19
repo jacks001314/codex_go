@@ -1,4 +1,4 @@
-package execserver
+package network
 
 import (
 	"net/http"
