@@ -75,33 +75,38 @@ type RuntimeServices struct {
 	HooksDiscovery         *HookDiscoveryService
 	HookRunner             *HookRunner
 	Skills                 *SkillsService
-	Plugins                *plugin.PluginService
-	Models                 *model.ModelService
-	Permissions            *sandbox.PermissionProfileService
-	Collaboration          *CollaborationModeService
-	MCP                    *mcp.MCPService
-	Features               *features.FeatureService
-	Apps                   *apps.AppService
-	Turns                  *turn.TurnService
-	SteerMailbox           *turn.SteerMailbox
-	ThreadStatus           *ThreadStatusManager
-	Agent                  model.AgentRunner
-	GuardianReviewer       GuardianReviewer
-	CompactRunner          compact.RemoteRunner
-	ToolRouter             *tool.Router
-	TurnRuntime            *turn.Runtime
-	Reviews                *review.Service
-	Misc                   *MiscService
-	CommandExec            *CommandExecService
-	Processes              *ProcessService
-	ServerRequests         *ServerRequestBroker
-	AccountHTTP            chatgptapi.HTTPDoer
-	HTTPClient             model.HTTPDoer
-	SpawnGraph             agent.Store
-	Analytics              telemetry.TurnEventSink
-	SkillShadowMetrics     SkillShadowMetricSink
-	SkillInjectionMetrics  telemetry.MemoryUsageMetricSink
-	TurnMetrics            telemetry.TurnMetricSink
+	// DisabledExecutorSkillPaths is caller-owned per-environment disablement for
+	// executor skill catalogs (Rust ExecutorSkillProvider::with_disabled_skill_paths,
+	// #46015). Paths identify SKILL.md documents in their executor's filesystem;
+	// other executors are unaffected. Every discovered skill stays enabled by default.
+	DisabledExecutorSkillPaths map[string][]string
+	Plugins                    *plugin.PluginService
+	Models                     *model.ModelService
+	Permissions                *sandbox.PermissionProfileService
+	Collaboration              *CollaborationModeService
+	MCP                        *mcp.MCPService
+	Features                   *features.FeatureService
+	Apps                       *apps.AppService
+	Turns                      *turn.TurnService
+	SteerMailbox               *turn.SteerMailbox
+	ThreadStatus               *ThreadStatusManager
+	Agent                      model.AgentRunner
+	GuardianReviewer           GuardianReviewer
+	CompactRunner              compact.RemoteRunner
+	ToolRouter                 *tool.Router
+	TurnRuntime                *turn.Runtime
+	Reviews                    *review.Service
+	Misc                       *MiscService
+	CommandExec                *CommandExecService
+	Processes                  *ProcessService
+	ServerRequests             *ServerRequestBroker
+	AccountHTTP                chatgptapi.HTTPDoer
+	HTTPClient                 model.HTTPDoer
+	SpawnGraph                 agent.Store
+	Analytics                  telemetry.TurnEventSink
+	SkillShadowMetrics         SkillShadowMetricSink
+	SkillInjectionMetrics      telemetry.MemoryUsageMetricSink
+	TurnMetrics                telemetry.TurnMetricSink
 	// VoiceMetrics receives the voice session lifecycle counters. The Go port
 	// reports product counters from the app-server, which owns the session.
 	VoiceMetrics                 telemetry.MemoryUsageMetricSink

@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"codex_go/session"
 	"codex_go/skillprovider"
 	"codex_go/turn"
+	"codex_go/utils"
 )
 
 const maxExecutorSkillResourceBytes = 1024 * 1024
@@ -71,8 +73,15 @@ func (r *RuntimeRouter) executorSkillProviderCatalog(ctx context.Context, thread
 		return skillprovider.Catalog{}, err
 	}
 	catalog := skillprovider.Catalog{Warnings: append([]string(nil), warnings...)}
+	disabled := r.disabledExecutorSkillPaths()
+	rootEnvironments := r.executorSkillRootEnvironments(threadID)
 	for _, entry := range entries {
 		if !entry.Enabled || entry.AuthorityKind != string(skillprovider.SourceExecutor) || entry.AuthorityID == "" || entry.PackageID == "" || entry.ResourceID == "" {
+			continue
+		}
+		// Rust #46015: a caller may disable specific executor skills per
+		// environment; the entry stays out of the model-visible catalog.
+		if executorSkillDisabledForEnvironment(&entry, disabled, rootEnvironments) {
 			continue
 		}
 		catalog.Entries = append(catalog.Entries, skillprovider.CatalogEntry{
@@ -89,6 +98,113 @@ func (r *RuntimeRouter) executorSkillProviderCatalog(ctx context.Context, thread
 		})
 	}
 	return catalog, nil
+}
+
+// disabledExecutorSkillPaths returns the caller-owned disablement map, if any.
+func (r *RuntimeRouter) disabledExecutorSkillPaths() map[string][]string {
+	if r == nil || r.services.DisabledExecutorSkillPaths == nil {
+		return nil
+	}
+	return r.services.DisabledExecutorSkillPaths
+}
+
+// executorSkillRootEnvironments maps selected capability root ids to the
+// environment they were selected from, so caller-owned disablement (keyed by
+// environment, Rust #46015) can be applied to an executor catalog entry whose
+// authority is the root id.
+func (r *RuntimeRouter) executorSkillRootEnvironments(threadID string) map[string]string {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, raw := range record.Metadata.SelectedCapabilityRoots {
+		var selected SelectedCapabilityRoot
+		if err := json.Unmarshal(raw, &selected); err != nil || strings.TrimSpace(selected.ID) == "" {
+			continue
+		}
+		if selected.Location.Type != CapabilityRootLocationEnvironment {
+			continue
+		}
+		environmentID := strings.TrimSpace(selected.Location.EnvironmentID)
+		if environmentID == "" {
+			environmentID = "local"
+		}
+		out[strings.TrimSpace(selected.ID)] = environmentID
+	}
+	return out
+}
+
+// executorSkillDisabledForEnvironment mirrors Rust #46015: a skill is disabled
+// when its environment lists its SKILL.md document. The configured path may be
+// the executor's own path or the skill locator the app-server exposes; both are
+// compared as path URIs so alias differences (for example macOS /var ->
+// /private/var) still match, falling back to an exact string comparison.
+func executorSkillDisabledForEnvironment(entry *SkillsListEntry, disabled map[string][]string, rootEnvironments map[string]string) bool {
+	if entry == nil || len(disabled) == 0 {
+		return false
+	}
+	environmentID := strings.TrimSpace(entry.AuthorityID)
+	if mapped := strings.TrimSpace(rootEnvironments[environmentID]); mapped != "" {
+		environmentID = mapped
+	} else if entryEnvironment := strings.TrimSpace(entry.EnvironmentID); entryEnvironment != "" {
+		environmentID = entryEnvironment
+	}
+	if environmentID == "" {
+		return false
+	}
+	configured := disabled[environmentID]
+	if len(configured) == 0 {
+		return false
+	}
+	candidates := []string{entry.SourcePath, entry.Path}
+	for _, disabledPath := range configured {
+		for _, candidate := range candidates {
+			if executorSkillPathEquals(disabledPath, candidate) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func executorSkillPathEquals(left string, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	if left == right {
+		return true
+	}
+	leftURI := executorSkillPathURI(left)
+	rightURI := executorSkillPathURI(right)
+	if leftURI == nil || rightURI == nil {
+		return false
+	}
+	return leftURI.Equal(rightURI)
+}
+
+// executorSkillPathURI resolves a configured or discovered SKILL.md path to the
+// same path-URI form. A value carrying a URI scheme is parsed as a locator; a
+// host-native path is converted from the host, so equivalent spellings compare
+// equal.
+func executorSkillPathURI(value string) *utils.PathURI {
+	if strings.Contains(value, "://") {
+		if uri, err := utils.Parse(value); err == nil && uri != nil {
+			return uri
+		}
+	}
+	if uri, err := utils.FromHostNativePath(value); err == nil && uri != nil {
+		return uri
+	}
+	if uri, err := utils.Parse(value); err == nil && uri != nil {
+		return uri
+	}
+	return nil
 }
 
 func (r *RuntimeRouter) readExecutorSkillProviderResource(ctx context.Context, threadID string, request skillprovider.ReadRequest, sandboxContexts map[string]*execserverclient.FileSystemSandboxContext) (skillprovider.ReadResult, error) {
