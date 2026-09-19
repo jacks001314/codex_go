@@ -127,6 +127,8 @@ func compactionAnalyticsPhase(phase compact.Phase) string {
 		return telemetry.CompactionPhasePreTurn
 	case compact.PhaseMidTurn:
 		return telemetry.CompactionPhaseMidTurn
+	case compact.PhasePostTurn:
+		return telemetry.CompactionPhasePostTurn
 	default:
 		return telemetry.CompactionPhaseStandaloneTurn
 	}

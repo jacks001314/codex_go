@@ -29,6 +29,9 @@ const (
 	CompactionPhaseStandaloneTurn = "standalone_turn"
 	CompactionPhasePreTurn        = "pre_turn"
 	CompactionPhaseMidTurn        = "mid_turn"
+	// CompactionPhasePostTurn is the opt-in post-final-response compaction
+	// phase (#46541).
+	CompactionPhasePostTurn = "post_turn"
 )
 
 const (

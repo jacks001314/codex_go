@@ -67,6 +67,22 @@ func (m *SteerMailbox) Drain(params *SteerDrainParams) []any {
 	return m.DrainWithMetadata(params).InputItems
 }
 
+// HasPending reports whether queued input is waiting for the turn. Rust's
+// post-turn compaction skips while the turn's input queue is non-empty
+// (#46541); the steer mailbox is Go's queue for input that arrives mid-turn.
+func (m *SteerMailbox) HasPending(threadID string, turnID string) bool {
+	if m == nil {
+		return false
+	}
+	key := steerMailboxKey(threadID, turnID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.items[key]) > 0 {
+		return true
+	}
+	return len(m.metadata[key]) > 0
+}
+
 func (m *SteerMailbox) DrainWithMetadata(params *SteerDrainParams) *SteerDrainResult {
 	if m == nil || params == nil || strings.TrimSpace(params.ThreadID) == "" || strings.TrimSpace(params.TurnID) == "" {
 		return &SteerDrainResult{}

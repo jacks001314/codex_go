@@ -254,6 +254,7 @@ var configRequiredNullableKeys = []string{
 	"model_auto_compact_token_limit",
 	"model_auto_compact_token_limit_scope",
 	"model_catalog_json",
+	"model_post_turn_compact_threshold_percent",
 	"model_provider",
 	"approval_policy",
 	"approvals_reviewer",

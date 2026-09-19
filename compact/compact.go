@@ -41,6 +41,9 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
 
 	PhasePreTurn        Phase = "preTurn"
 	PhaseMidTurn        Phase = "midTurn"
+	// PhasePostTurn is the opt-in compaction that runs after a turn's final
+	// response (#46541).
+	PhasePostTurn Phase = "postTurn"
 	PhaseStandaloneTurn Phase = "standaloneTurn"
 
 	StatusSkipped     Status = "skipped"

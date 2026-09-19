@@ -286,10 +286,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "2e9eb984f0de88bc3fbe7ea0d1017e39e93df108a7a3f9ffd9c66aa54e94a316"},
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
-		// Re-pinned to upstream 22dea110 (#46530/#46531): the reasoning-effort
-		// override gate now also requires explicit model support and exempts
-		// memory/title workers.
-		{Path: "core/src/client.rs", SHA256: "e3faeaad48f7c665f2444d83e6af04d4c23ce280b33d65b12222eaefd2c5ae43"},
+		// Re-pinned to upstream a633ebc1 (#46540): retry decisions and delays
+		// moved into CodexErr.
+		{Path: "core/src/client.rs", SHA256: "3c2183670bb93703cda433a2a93f262c0c4b53d5a1df28a16ba614e8700435fc"},
 		// Re-pinned to upstream 7498521d (#46020): the new experimental
 		// `rollout/compress` client request.
 		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "553532a9865cc1b881b7b6237436799417fa207a9db44b7e032af918562d29cf"},

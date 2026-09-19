@@ -555,6 +555,11 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 			}
 		}
 	}
+	// Rust #46541: the post-turn compaction threshold is a percentage of the
+	// usable context window; values above 100 are rejected at load time.
+	if percent, ok := configInt(cfg.Values["model_post_turn_compact_threshold_percent"]); ok && percent > 100 {
+		return nil, fmt.Errorf("model_post_turn_compact_threshold_percent must be between 0 and 100")
+	}
 	if opts != nil && opts.StrictConfig {
 		if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {
 			return nil, err
@@ -653,6 +658,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"model_catalog_json":                         {},
 	"model_context_window":                       {},
 	"model_instructions_file":                    {},
+	"model_post_turn_compact_threshold_percent":  {},
 	"model_provider":                             {},
 	"model_providers":                            {},
 	"model_reasoning_effort":                     {},
@@ -1160,6 +1166,21 @@ func (c *Config) SkillMaxContextTokens() (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// ModelPostTurnCompactThresholdPercent mirrors Rust
+// Config::model_post_turn_compact_threshold_percent (#46541): the percentage of
+// the usable context window that triggers compaction after a final response.
+// Omitted or zero disables turn-end compaction.
+func (c *Config) ModelPostTurnCompactThresholdPercent() int {
+	if c == nil {
+		return 0
+	}
+	percent, ok := configInt(c.Values["model_post_turn_compact_threshold_percent"])
+	if !ok || percent < 0 || percent > 100 {
+		return 0
+	}
+	return percent
 }
 
 // GuardianV2MaxParentCompactionTokens returns the configured

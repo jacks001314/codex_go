@@ -136,11 +136,11 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		data []byte
 		want string
 	}{
-		// Re-vendored from upstream 7498521d (#45900/#46020/#46319): the hidden
-		// tcp-tunnel release surface, the experimental rollout/compress request,
-		// the image file-id references, and the workspace-routing account read.
-		{"stable", stablePrecomputedExports, "6444c05891c0601d17009d72e8d8b688993c0a5ca223b170d67ff31b04710a5a"},
-		{"experimental", experimentalPrecomputedExports, "2fa92cf952550130d551aec6221086234d2320f278056080c5c64fc3f55d08c1"},
+		// Re-vendored from upstream a633ebc1 (#46547/#46553): the
+		// backend-independent agent control contract and the LiveAgent listing
+		// records.
+		{"stable", stablePrecomputedExports, "0041bfe5b4a5dd41253f73f3432482bc6d4d914ea66a13892dffc8579f79f9dd"},
+		{"experimental", experimentalPrecomputedExports, "b7a9f836d476c795e00fafb887525037e34d89122f001450668d9b804d226d4a"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

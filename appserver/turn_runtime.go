@@ -76,6 +76,68 @@ type activeRuntimeTurn struct {
 	PluginInventory         *[]string
 }
 
+// postTurnCompact mirrors Rust's opt-in compaction after a final response
+// (#46541). The first result reports whether the attempt ran; the error is
+// non-nil only when it ran and failed, and the caller decides whether that
+// failure ends the turn (interruptions and aborts) or is recorded against an
+// otherwise completed turn.
+func (r *RuntimeRouter) postTurnCompact(ctx context.Context, threadID string, turnID string, connectionID string, params *turn.TurnStartParams, runConfig *appTurnRunConfig, status *compact.TokenStatus) (bool, error) {
+	if r == nil || status == nil || runConfig == nil {
+		return false, nil
+	}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil {
+		return false, nil
+	}
+	// Token-budget resets do not summarize, so preserve their existing rollover
+	// policy (Rust skips post-turn compaction while the feature is enabled).
+	if features.Enabled(cfg.FeatureSettings(), "token_budget") {
+		return false, nil
+	}
+	if !turnEndCompactionThresholdReached(cfg, status, r.effectiveModelContextWindowForModel(runConfig.Model, params)) {
+		return false, nil
+	}
+	// Pending input keeps the existing rollover path: the queued submission
+	// re-runs compaction before its own turn.
+	if mailbox := r.requireSteerMailbox(); mailbox != nil && mailbox.HasPending(threadID, turnID) {
+		return false, nil
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false, nil
+	}
+	_, compactErr := r.compactThread(ctx, &runtimeCompactRequest{
+		ThreadID:                  strings.TrimSpace(threadID),
+		TurnID:                    strings.TrimSpace(turnID),
+		ConnectionID:              connectionID,
+		Trigger:                   compact.TriggerAuto,
+		Reason:                    compact.ReasonTokenLimit,
+		Phase:                     compact.PhasePostTurn,
+		ActiveContextTokensBefore: int64(status.ActiveContextTokens),
+	})
+	return true, compactErr
+}
+
+// turnEndCompactionThresholdReached mirrors Rust
+// `ContextWindowTokenStatus::turn_end_compaction_threshold_reached` (#46541):
+// the configured percentage of the usable context window, or an existing
+// auto-compaction limit, triggers compaction after the final response.
+func turnEndCompactionThresholdReached(cfg *config.Config, status *compact.TokenStatus, window int64) bool {
+	if cfg == nil || status == nil {
+		return false
+	}
+	percent := cfg.ModelPostTurnCompactThresholdPercent()
+	if percent <= 0 {
+		return false
+	}
+	if status.ShouldCompact {
+		return true
+	}
+	if window <= 0 {
+		return false
+	}
+	return int64(status.ActiveContextTokens)*100 >= window*int64(percent)
+}
+
 // markTurnUserInputRequested records Rust's
 // mark_user_input_requested_during_turn for the turn a tool call belongs to.
 func (r *RuntimeRouter) markTurnUserInputRequested(threadID string, turnID string) {
@@ -1670,16 +1732,37 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		if statusErr == nil && status != nil {
 			_ = r.persistAutoCompactFallbackOutcome(threadID, turnID, result, status, tokenBudgetDelivery)
 			fallbackRecorded, fallbackErr := r.recordAutoCompactFallbackPrompt(threadID, turnID, status)
-			if !fallbackRecorded && fallbackErr == nil && status.ShouldCompact {
-				if _, compactErr := r.autoCompactThreadAfterTurn(threadID, turnID, connectionID, status); compactErr != nil {
-					// Surface compaction failures instead of silently leaving
-					// the thread over the limit (Rust reports the error and
-					// the next turn re-attempts compaction).
+			if !fallbackRecorded && fallbackErr == nil {
+				// Rust #46541: opt-in compaction after the turn's final response
+				// takes precedence over the ordinary turn-end compaction, so the
+				// attempt is recorded with the PostTurn phase and the history is
+				// summarized only once. It runs before the turn completes so an
+				// interrupted or aborted compaction still fails the turn, while
+				// other failures leave the completed turn intact.
+				postTurnRan, compactErr := r.postTurnCompact(ctx, threadID, turnID, connectionID, params, runConfig, status)
+				if compactErr != nil {
 					r.persistCompactionFailure(threadID, compactErr)
+					if errors.Is(compactErr, context.Canceled) || errors.Is(compactErr, context.DeadlineExceeded) {
+						r.clearActiveRuntimeTurn(threadID, turnID)
+						r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, compactErr, nil)
+						return
+					}
 					r.notify(NotificationWarning, &WarningNotification{
 						ThreadID: stringPtrIfNotEmpty(threadID),
-						Message:  "Automatic context compaction failed: " + compactErr.Error(),
+						Message:  "Post-turn context compaction failed: " + compactErr.Error(),
 					})
+				}
+				if !postTurnRan && status.ShouldCompact {
+					if _, compactErr := r.autoCompactThreadAfterTurn(threadID, turnID, connectionID, status); compactErr != nil {
+						// Surface compaction failures instead of silently leaving
+						// the thread over the limit (Rust reports the error and
+						// the next turn re-attempts compaction).
+						r.persistCompactionFailure(threadID, compactErr)
+						r.notify(NotificationWarning, &WarningNotification{
+							ThreadID: stringPtrIfNotEmpty(threadID),
+							Message:  "Automatic context compaction failed: " + compactErr.Error(),
+						})
+					}
 				}
 			}
 		}

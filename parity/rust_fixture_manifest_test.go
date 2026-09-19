@@ -48,8 +48,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			Path: "cli/tests",
 			// Upstream grew the CLI suite with the daemon package replacement,
 			// background-server fixtures (#45558/#45580/#46117), and the remote
-			// workspace-root rejection snapshot (#46494).
-			Files: 29,
+			// workspace-root rejection snapshot (#46494), plus the doctor
+			// filesystem-path diagnostics snapshots (#46543).
+			Files: 31,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -111,7 +112,8 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #46490 then added core/tests/suite/gateway_auth.rs.
 			// #46509/#46508 then added the guardian-persistence and
 			// models-cache-auth suites.
-			Files: 211,
+			// #46539 then added core/tests/suite/command_lifecycle_tests.rs.
+			Files: 212,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
