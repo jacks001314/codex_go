@@ -1534,6 +1534,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		ItemIDsEnabled:               runConfig.ItemIDsEnabled,
 		PromptCacheKey:               runConfig.PromptCacheKey,
 		ServiceTier:                  runConfig.ServiceTier,
+		UsageTags:                    runConfig.UsageTags,
 		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
 		Trace:                        params.Trace,
 		CWD:                          firstNonEmpty(params.CWD, r.services.DefaultCWD),
@@ -1999,6 +2000,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		ItemIDsEnabled:               runConfig.ItemIDsEnabled,
 		PromptCacheKey:               runConfig.PromptCacheKey,
 		ServiceTier:                  runConfig.ServiceTier,
+		UsageTags:                    runConfig.UsageTags,
 		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
 		Trace:                        params.Trace,
 		CWD:                          firstNonEmpty(params.CWD, r.services.DefaultCWD),
@@ -6263,14 +6265,17 @@ type appTurnRunConfig struct {
 	ReasoningSummary           string
 	// OverrideInputItems holds trusted reasoning-effort configuration_update
 	// items this turn should record after accepted input (Rust #43110).
-	OverrideInputItems              []any
-	ConcurrentReasoningSummaries    bool
-	ModelVerbosity                  string
-	IncludeTimingMetrics            bool
-	BetaFeaturesHeader              string
-	ItemIDsEnabled                  bool
-	PromptCacheKey                  string
-	ServiceTier                     string
+	OverrideInputItems           []any
+	ConcurrentReasoningSummaries bool
+	ModelVerbosity               string
+	IncludeTimingMetrics         bool
+	BetaFeaturesHeader           string
+	ItemIDsEnabled               bool
+	PromptCacheKey               string
+	ServiceTier                  string
+	// UsageTags is the turn's usage-tag diagnostics document (Rust #46501),
+	// carried on the sampling-request span as `tags_json`.
+	UsageTags                       map[string]string
 	Store                           bool
 	AttestationProvider             codexapi.AttestationProvider
 	UnifiedExecEnabled              bool
@@ -6546,26 +6551,29 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		SandboxNetworkAccess:    analyticsSandboxNetworkAccess(permissionProfile),
 		// The inventory is captured when the turn is admitted so a later plugin
 		// reconciliation cannot change what the turn started with (Rust #46323).
-		ActivePluginIDsAtTurnStart:      r.turnAnalyticsPluginInventory(threadID, turnID),
-		CollaborationMode:               analyticsCollaborationMode(params),
-		Personality:                     analyticsOptionalModeString(personality),
-		InputItems:                      inputItems,
-		HostedTools:                     hostedTools,
-		SessionItems:                    sessionItems,
-		ExtraSessionItems:               extraSessionItemsSnapshot,
-		PostToolInputItems:              postToolInputItems,
-		PreviousResponseID:              previousResponseID,
-		ParallelToolCalls:               r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
-		ReasoningEffort:                 requestReasoningEffort,
-		ReasoningSummary:                turnReasoningSummary(cfg, params),
-		OverrideInputItems:              overrideInputItems,
-		ConcurrentReasoningSummaries:    features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
-		ModelVerbosity:                  firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),
-		IncludeTimingMetrics:            appIncludeTimingMetrics(cfg),
-		BetaFeaturesHeader:              features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings()),
-		ItemIDsEnabled:                  cfg.FeatureSettings()["item_ids"],
-		PromptCacheKey:                  r.responsesPromptCacheKey(threadID, lineage, threadSnapshot.Ephemeral),
-		ServiceTier:                     serviceTier,
+		ActivePluginIDsAtTurnStart:   r.turnAnalyticsPluginInventory(threadID, turnID),
+		CollaborationMode:            analyticsCollaborationMode(params),
+		Personality:                  analyticsOptionalModeString(personality),
+		InputItems:                   inputItems,
+		HostedTools:                  hostedTools,
+		SessionItems:                 sessionItems,
+		ExtraSessionItems:            extraSessionItemsSnapshot,
+		PostToolInputItems:           postToolInputItems,
+		PreviousResponseID:           previousResponseID,
+		ParallelToolCalls:            r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
+		ReasoningEffort:              requestReasoningEffort,
+		ReasoningSummary:             turnReasoningSummary(cfg, params),
+		OverrideInputItems:           overrideInputItems,
+		ConcurrentReasoningSummaries: features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
+		ModelVerbosity:               firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),
+		IncludeTimingMetrics:         appIncludeTimingMetrics(cfg),
+		BetaFeaturesHeader:           features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings()),
+		ItemIDsEnabled:               cfg.FeatureSettings()["item_ids"],
+		PromptCacheKey:               r.responsesPromptCacheKey(threadID, lineage, threadSnapshot.Ephemeral),
+		ServiceTier:                  serviceTier,
+		// Rust #46501: the span carries the usage-tag document alongside the
+		// turn's resolved settings.
+		UsageTags:                       UsageTagsForTurn(cfg, cfg.FeatureSettings(), modelInfo, serviceTier),
 		Store:                           modelProviderConfig.Store,
 		AttestationProvider:             r.appServerAttestationProvider(),
 		UnifiedExecEnabled:              unifiedExecEnabled,

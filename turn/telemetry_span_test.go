@@ -135,6 +135,37 @@ func TestAgentLoopOpensSamplingRequestSpanLikeRust(t *testing.T) {
 	}
 }
 
+// TestAgentLoopSamplingSpanCarriesUsageTagsLikeRust mirrors Rust #46501: the
+// sampling-request span records the turn's usage-tag document as `tags_json`
+// (sorted keys), and omits the field when the turn has no tags.
+func TestAgentLoopSamplingSpanCarriesUsageTagsLikeRust(t *testing.T) {
+	tracer := &recordingSpanTracer{traceparent: "00-00000000000000000000000000000004-0000000000000005-01"}
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:             &fakeLoopAgent{},
+		Dispatcher:        NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(tool.NewRegistry())}),
+		ExecutedToolCalls: NewExecutedToolCallRecorder(),
+		MaxTurns:          2,
+	})
+	if _, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt:    "hello",
+		Model:     "gpt-test",
+		ThreadID:  "thread-tags",
+		TurnID:    "turn-tags",
+		CWD:       "/repo",
+		Tracer:    tracer,
+		UsageTags: map[string]string{"service_tier": "priority", "model_context_window": "unset"},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(tracer.spans) == 0 {
+		t.Fatal("no sampling span was recorded")
+	}
+	want := `{"model_context_window":"unset","service_tier":"priority"}`
+	if got := tracer.spans[0].attributes["tags_json"]; got != want {
+		t.Fatalf("tags_json = %q, want %q", got, want)
+	}
+}
+
 // Rust drains the step's in-flight tool futures inside `run_sampling_request`,
 // so the step's tool dispatch runs while the sampling span is still open, and
 // the dispatch context carries that span (which is how the app-server's

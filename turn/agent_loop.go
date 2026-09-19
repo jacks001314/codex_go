@@ -120,9 +120,13 @@ type AgentLoopRequest struct {
 	BetaFeaturesHeader           string
 	ItemIDsEnabled               bool
 	ServiceTier                  string
-	PromptCacheKey               string
-	ClientMetadata               map[string]string
-	ClientMetadataTransform      ClientMetadataTransform
+	// UsageTags carries the turn's scalar-only usage diagnostics document (Rust
+	// core::feedback_config::usage_tags, #46501); the sampling-request span
+	// records it as the `tags_json` field.
+	UsageTags               map[string]string
+	PromptCacheKey          string
+	ClientMetadata          map[string]string
+	ClientMetadataTransform ClientMetadataTransform
 	// Trace is the W3C trace context of the request that started this turn
 	// (Rust's `request_trace`), forwarded to every model request the turn makes.
 	Trace *protocol.W3CTraceContext

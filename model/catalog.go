@@ -416,6 +416,13 @@ func (m *ModelInfo) usableContextWindow() (int64, bool) {
 	return window * int64(percent) / 100, true
 }
 
+// UsableContextWindow is the exported form of usableContextWindow for callers
+// outside the catalog (Rust ModelInfo::usable_context_window consumers such as
+// the usage-tag diagnostics).
+func (m *ModelInfo) UsableContextWindow() (int64, bool) {
+	return m.usableContextWindow()
+}
+
 type TruncationPolicy struct {
 	Mode  string `json:"mode"`
 	Limit int64  `json:"limit"`
