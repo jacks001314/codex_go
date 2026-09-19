@@ -98,6 +98,9 @@ func (p *ExecutedToolCallPermit) Release() {
 type recordedToolCallGroup struct {
 	pending   []recordedToolCall
 	fullBytes int
+	// finished mirrors Rust's CellCompletion::Complete (#46081): the cell's
+	// dispatch gate closed, so its inventory is final even when it is empty.
+	finished bool
 }
 
 type recordedToolCall struct {
@@ -463,6 +466,26 @@ func (r *ExecutedToolCallRecorder) RegisterCell(cellID string, outputCallID stri
 	r.registerGroup("cell:"+strings.TrimSpace(cellID), outputCallID)
 }
 
+// FinishCell mirrors Rust `finish_cell_recording` (#46081): once the cell's
+// dispatch gate closes, a losslessly recorded inventory is final - even when it
+// contains no tool calls - so the next request can mark it complete with an
+// explicit (possibly empty) executed_tool_calls list.
+func (r *ExecutedToolCallRecorder) FinishCell(cellID string) {
+	if r == nil {
+		return
+	}
+	cellID = strings.TrimSpace(cellID)
+	if cellID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureState()
+	if group := r.groups["cell:"+cellID]; group != nil {
+		group.finished = true
+	}
+}
+
 func (r *ExecutedToolCallRecorder) RegisterOutputCall(outputCallID string) {
 	r.registerGroup("call:"+strings.TrimSpace(outputCallID), outputCallID)
 }
@@ -549,6 +572,7 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 		}
 		calls := make([]model.ExecutedToolCall, 0, 4)
 		cellID := ""
+		groupFinished := false
 		// Completeness requires evidence that the supplied history was indexed
 		// and that no reused or ambiguous ID revoked it (Rust #44472).
 		complete := r.historyIndexed()
@@ -577,8 +601,14 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 					complete = false
 				}
 			}
+			if group := r.groups[groupID]; group != nil {
+				groupFinished = group.finished
+			}
+			// Rust #46081: only a finished cell is complete; a still-running
+			// cell attaches its partial inventory without the marker.
+			complete = complete && groupFinished
 			if _, seen := seenGroups[groupID]; !seen {
-				if group := r.groups[groupID]; group != nil && len(group.pending) > 0 {
+				if group := r.groups[groupID]; group != nil && (len(group.pending) > 0 || groupFinished) {
 					for _, pending := range group.pending {
 						if pending.call.Truncated() {
 							complete = false
@@ -590,7 +620,9 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 				}
 			}
 		}
-		if len(calls) > 0 {
+		// Rust #46081: a complete inventory is attached even when it is empty, so
+		// an explicit `[]` reaches the model instead of omitting the marker.
+		if len(calls) > 0 || groupFinished {
 			var completePtr *bool
 			if strings.TrimSpace(cellID) != "" {
 				completePtr = &complete
@@ -1035,6 +1067,8 @@ func (i *trustedExecutedToolCallMapItem) ExecutedToolCallCellID() string {
 func (i *trustedExecutedToolCallMapItem) ClearExecutedToolCalls() {
 	if i != nil {
 		i.calls = nil
+		i.cellID = ""
+		i.complete = nil
 	}
 }
 

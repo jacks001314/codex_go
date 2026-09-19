@@ -28,24 +28,24 @@ type AgentRequest struct {
 	// user message (and after InputItems when there is no prompt). Rust #43110
 	// records trusted reasoning-effort configuration updates after accepted
 	// input so they follow the user message in the request.
-	PostPromptInputItems         []any
-	Tools                        []any
-	Model                        string
-	ProviderID                   string
-	TaskKind                     AgentTaskKind
-	ThreadID                     string
-	TurnID                       string
-	Originator                   string
-	Store                        bool
-	PreviousResponseID           string
-	ParallelToolCalls            bool
-	ReasoningEffort              string
-	ReasoningSummary             string
+	PostPromptInputItems []any
+	Tools                []any
+	Model                string
+	ProviderID           string
+	TaskKind             AgentTaskKind
+	ThreadID             string
+	TurnID               string
+	Originator           string
+	Store                bool
+	PreviousResponseID   string
+	ParallelToolCalls    bool
+	ReasoningEffort      string
+	ReasoningSummary     string
 	// DropReasoningEffortUpdates mirrors Rust ModelClient's request-time filter
 	// (#46530): when reasoning-effort updates are unsupported for the effective
 	// model or provider, saved configuration_update items are removed from the
 	// request copy only (persisted history is unchanged).
-	DropReasoningEffortUpdates bool
+	DropReasoningEffortUpdates   bool
 	ConcurrentReasoningSummaries bool
 	ModelVerbosity               string
 	IncludeTimingMetrics         bool
@@ -242,22 +242,30 @@ func cloneAgentStringSlicePtr(value *[]string) *[]string {
 
 func marshalAgentItemWithExecutedToolCalls(item *AgentItem, value any) ([]byte, error) {
 	encoded, err := json.Marshal(value)
-	if err != nil || item == nil || len(item.executedToolCalls) == 0 {
+	if err != nil || item == nil {
+		return encoded, err
+	}
+	// Rust #46081: a completeness marker always carries an explicit call list,
+	// using [] for an empty inventory.
+	if len(item.executedToolCalls) == 0 && item.cellID == "" && item.toolCallsComplete == nil {
 		return encoded, err
 	}
 	var object map[string]any
 	if err := json.Unmarshal(encoded, &object); err != nil {
 		return nil, err
 	}
-	object[internalChatMessageMetadataPassthroughField] = map[string]any{
-		executedToolCallsField: item.executedToolCalls,
+	calls := item.executedToolCalls
+	if calls == nil {
+		calls = []ExecutedToolCall{}
 	}
+	metadata := map[string]any{executedToolCallsField: calls}
 	if item.cellID != "" {
-		object[internalChatMessageMetadataPassthroughField].(map[string]any)["cell_id"] = item.cellID
+		metadata["cell_id"] = item.cellID
 	}
 	if item.toolCallsComplete != nil {
-		object[internalChatMessageMetadataPassthroughField].(map[string]any)["tool_calls_complete"] = *item.toolCallsComplete
+		metadata["tool_calls_complete"] = *item.toolCallsComplete
 	}
+	object[internalChatMessageMetadataPassthroughField] = metadata
 	return json.Marshal(object)
 }
 

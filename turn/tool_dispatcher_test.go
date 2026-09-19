@@ -931,3 +931,64 @@ func TestToolExecutionResultHandlerExecutedBlockedPreHookIsFalse(t *testing.T) {
 		t.Fatalf("blocked result.HandlerExecuted = true, want false")
 	}
 }
+
+// Mirrors Rust #46081: a Code Mode exec call whose output leaves the cell
+// running keeps the inventory open, while a finished output closes the cell so
+// the next request can mark an (even empty) inventory complete.
+func TestToolDispatcherClosesFinishedCodeModeCellsLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		running      bool
+		wantToken    bool
+		wantComplete any
+	}{
+		{name: "finished cell reports an empty complete inventory", running: false, wantToken: true, wantComplete: true},
+		{name: "running cell reports nothing yet", running: true, wantToken: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := NewExecutedToolCallRecorder()
+			registry := tool.NewRegistry()
+			if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName(tool.CodeModeExecToolName)}, func(_ context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+				return &tool.Output{
+					CallID:   invocation.CallID,
+					ToolName: invocation.ToolName,
+					Success:  true,
+					Data:     map[string]any{"cell_id": "cell-empty", "running": tc.running},
+				}, nil
+			})); err != nil {
+				t.Fatal(err)
+			}
+			dispatcher := NewToolDispatcher(&ToolDispatcherOptions{
+				Router:            tool.NewRouter(registry),
+				ExecutedToolCalls: recorder,
+				ToolMode:          model.ToolModeCodeMode,
+			})
+			results, err := dispatcher.ExecuteToolItems(context.Background(), []model.AgentItem{
+				{Type: "custom_tool_call", Name: tool.CodeModeExecToolName, CallID: "exec-call", Arguments: `text("ok")`},
+			})
+			if err != nil {
+				t.Fatalf("ExecuteToolItems() error = %v", err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("results = %#v", results)
+			}
+			execInput := codeModeExecInputItem("exec-call")
+			execOutput := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "exec-call", Output: NewFunctionCallOutputPayload(`text("ok")`, nil)}
+			attached, token := recorder.AttachPendingToPrompt([]any{execInput, execOutput})
+			if (token != nil) != tc.wantToken {
+				t.Fatalf("attachment = %v, want present=%v", token, tc.wantToken)
+			}
+			if !tc.wantToken {
+				return
+			}
+			object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(attached)[1])
+			metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+			if metadata["cell_id"] != "cell-empty" || metadata["tool_calls_complete"] != tc.wantComplete {
+				t.Fatalf("metadata = %#v", metadata)
+			}
+			if calls := metadata["executed_tool_calls"].([]any); len(calls) != 0 {
+				t.Fatalf("executed calls = %#v, want an explicit empty list", calls)
+			}
+		})
+	}
+}

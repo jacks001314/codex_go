@@ -230,6 +230,10 @@ func (i *AgentItem) AppendExecutedToolCalls(calls ...ExecutedToolCall) {
 func (i *AgentItem) ClearExecutedToolCalls() {
 	if i != nil {
 		i.executedToolCalls = nil
+		// The completeness marker belongs to the call inventory, so stripping
+		// the calls strips the marker with it.
+		i.cellID = ""
+		i.toolCallsComplete = nil
 	}
 }
 

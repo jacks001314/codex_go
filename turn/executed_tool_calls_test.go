@@ -291,6 +291,8 @@ func TestExecutedToolCallRecorderAttachesCellCompletenessLikeRust(t *testing.T) 
 	recorder := NewExecutedToolCallRecorder()
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "exec-call")
+	// #46081: completeness requires the closed dispatch gate.
+	recorder.FinishCell("cell-1")
 	execInput := codeModeExecInputItem("exec-call")
 	execOutput := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "exec-call", Output: NewFunctionCallOutputPayload("running", nil)}
 	first, token := recorder.AttachPendingToPrompt([]any{execInput, execOutput})
@@ -330,6 +332,66 @@ func executedToolCallCompleteness(t *testing.T, recorder *ExecutedToolCallRecord
 	return metadata["tool_calls_complete"]
 }
 
+// Mirrors Rust #46081: a Code Mode cell that finishes without invoking any
+// tools attaches an explicit empty inventory marked complete, so a verified
+// empty inventory is distinguishable from an unverified one.
+func TestExecutedToolCallRecorderAttachesEmptyCompleteInventoryLikeRust(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	recorder.RegisterCell("cell-empty", "exec-call")
+	recorder.FinishCell("cell-empty")
+	execInput := codeModeExecInputItem("exec-call")
+	execOutput := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "exec-call", Output: NewFunctionCallOutputPayload(`text("ok")`, nil)}
+	attached, token := recorder.AttachPendingToPrompt([]any{execInput, execOutput})
+	if token == nil {
+		t.Fatal("empty finished cell must produce an attachment")
+	}
+	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(attached)[1])
+	metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata["cell_id"] != "cell-empty" {
+		t.Fatalf("cell_id = %#v, want cell-empty", metadata["cell_id"])
+	}
+	if metadata["tool_calls_complete"] != true {
+		t.Fatalf("tool_calls_complete = %#v, want true", metadata["tool_calls_complete"])
+	}
+	if calls := executedToolCallsFromObject(t, object); len(calls) != 0 {
+		t.Fatalf("executed calls = %#v, want an explicit empty list", calls)
+	}
+	recorder.CommitAttachment(token)
+}
+
+// Mirrors Rust #46081's "unfinished" scenario: a still-running cell attaches its
+// partial inventory without the completeness marker, and an empty running cell
+// attaches nothing at all.
+func TestExecutedToolCallRecorderOmitsCompletenessWhileCellRunsLikeRust(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-running", "first"), model.ToolModeCodeMode)
+	recorder.RegisterCell("cell-running", "exec-call")
+	execInput := codeModeExecInputItem("exec-call")
+	execOutput := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "exec-call", Output: NewFunctionCallOutputPayload("running", nil)}
+	attached, token := recorder.AttachPendingToPrompt([]any{execInput, execOutput})
+	if token == nil {
+		t.Fatal("a running cell with recorded calls must still attach its inventory")
+	}
+	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(attached)[1])
+	metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata["tool_calls_complete"] != false {
+		t.Fatalf("running cell completeness = %#v, want false", metadata["tool_calls_complete"])
+	}
+	if calls := executedToolCallsFromObject(t, object); len(calls) != 1 {
+		t.Fatalf("running cell calls = %#v, want the recorded attempt", calls)
+	}
+	recorder.CommitAttachment(token)
+
+	// A running cell with no recorded calls has nothing to report yet.
+	empty := NewExecutedToolCallRecorder()
+	empty.RegisterCell("cell-yielded", "yield-call")
+	yieldInput := codeModeExecInputItem("yield-call")
+	yieldOutput := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "yield-call", Output: NewFunctionCallOutputPayload("running", nil)}
+	if attached, token := empty.AttachPendingToPrompt([]any{yieldInput, yieldOutput}); token != nil {
+		t.Fatalf("running empty cell attached metadata: %#v", attached)
+	}
+}
+
 func TestExecutedToolCallRecorderWithholdsCompletenessForReusedOrigin(t *testing.T) {
 	recorder := NewExecutedToolCallRecorder()
 	recorder.RecordToolCall(&tool.Invocation{
@@ -338,6 +400,7 @@ func TestExecutedToolCallRecorderWithholdsCompletenessForReusedOrigin(t *testing
 	}, model.ToolModeCodeMode)
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "exec-call")
+	recorder.FinishCell("cell-1")
 	reused := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "exec-call", Output: NewFunctionCallOutputPayload("running", nil)}
 	execInput := codeModeExecInputItem("exec-call")
 	if got := executedToolCallCompleteness(t, recorder, execInput, reused); got != true {
@@ -391,6 +454,7 @@ func TestExecutedToolCallRecorderWithholdsWaitCompletionAfterHistory(t *testing.
 	}
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "wait-out")
+	recorder.FinishCell("cell-1")
 	waitOutput := &ToolResponseItem{Type: "function_call_output", CallID: "wait-out", Output: NewFunctionCallOutputPayload("done", nil)}
 	if got := executedToolCallCompleteness(t, recorder, codeModeWaitInputItem("wait-out", "cell-1"), waitOutput); got != false {
 		t.Fatalf("wait completeness after history = %#v, want false", got)
@@ -408,6 +472,7 @@ func TestExecutedToolCallRecorderAllowsFreshWaitCompletionOnNewThread(t *testing
 	}
 	recorder.RecordToolCall(codeModeNestedInvocation("nested-1", "cell-1", "first"), model.ToolModeCodeMode)
 	recorder.RegisterCell("cell-1", "wait-out")
+	recorder.FinishCell("cell-1")
 	waitOutput := &ToolResponseItem{Type: "function_call_output", CallID: "wait-out", Output: NewFunctionCallOutputPayload("done", nil)}
 	if got := executedToolCallCompleteness(t, recorder, codeModeWaitInputItem("wait-out", "cell-1"), waitOutput); got != true {
 		t.Fatalf("fresh wait completeness = %#v, want true", got)

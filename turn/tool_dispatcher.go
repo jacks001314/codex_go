@@ -185,6 +185,10 @@ func (i *ToolResponseItem) ExecutedToolCallCellID() string {
 func (i *ToolResponseItem) ClearExecutedToolCalls() {
 	if i != nil {
 		i.executedToolCalls = nil
+		// The completeness marker belongs to the call inventory, so stripping
+		// the calls strips the marker with it.
+		i.cellID = ""
+		i.toolCallsComplete = nil
 	}
 }
 
@@ -254,23 +258,31 @@ func (i *ToolResponseItem) MarshalJSON() ([]byte, error) {
 
 func marshalToolResponseItem(item *ToolResponseItem, value any) ([]byte, error) {
 	encoded, err := json.Marshal(value)
-	if err != nil || item == nil || len(item.executedToolCalls) == 0 {
+	if err != nil || item == nil {
+		return encoded, err
+	}
+	// Rust #46081: a completeness marker always carries an explicit call list,
+	// using [] for an empty inventory, so a verified empty inventory is not
+	// mistaken for an unverified one.
+	if len(item.executedToolCalls) == 0 && item.cellID == "" && item.toolCallsComplete == nil {
 		return encoded, err
 	}
 	var object map[string]any
 	if err := json.Unmarshal(encoded, &object); err != nil {
 		return nil, err
 	}
-	object["internal_chat_message_metadata_passthrough"] = map[string]any{
-		"executed_tool_calls": item.executedToolCalls,
+	calls := item.executedToolCalls
+	if calls == nil {
+		calls = []model.ExecutedToolCall{}
 	}
-	metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+	metadata := map[string]any{"executed_tool_calls": calls}
 	if item.cellID != "" {
 		metadata["cell_id"] = item.cellID
 	}
 	if item.toolCallsComplete != nil {
 		metadata["tool_calls_complete"] = *item.toolCallsComplete
 	}
+	object["internal_chat_message_metadata_passthrough"] = metadata
 	return json.Marshal(object)
 }
 
@@ -610,6 +622,12 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 			}
 			if strings.TrimSpace(cellID) != "" {
 				d.executedToolCalls.RegisterCell(cellID, invocation.CallID)
+				// Rust #46081: a non-yielded exec/wait output closes the cell's
+				// dispatch gate, so its recorded inventory is final (possibly
+				// empty). A yielded output keeps the cell running.
+				if !codeModeOutputIsRunning(output) {
+					d.executedToolCalls.FinishCell(cellID)
+				}
 			} else if invocation.ToolName.Name == tool.CodeModeExecToolName {
 				d.executedToolCalls.RegisterOutputCall(invocation.CallID)
 			}
@@ -920,6 +938,18 @@ func functionCallOutputAnyItemsText(items []any) string {
 
 func boolPtr(value bool) *bool {
 	return &value
+}
+
+// codeModeOutputIsRunning reports whether a Code Mode exec/wait output left the
+// cell running (Rust's `RuntimeResponse::Yielded`). A finished output closes the
+// cell's dispatch gate, which finalizes its recorded tool-call inventory
+// (#46081).
+func codeModeOutputIsRunning(output *tool.Output) bool {
+	if output == nil || output.Data == nil {
+		return false
+	}
+	running, _ := output.Data["running"].(bool)
+	return running
 }
 
 func firstNonEmptyTurnString(values ...string) string {
