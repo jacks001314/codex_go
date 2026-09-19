@@ -358,13 +358,25 @@ func startupInfoWithExplicitStdio(stdio *ProcessStdio, desktop *LaunchDesktop) (
 			return nil, nil, fmt.Errorf("SetHandleInformation failed for stdio handle: %w", err)
 		}
 	}
-	attrs, err := NewProcThreadAttributeListWithCount(1)
+	// Rust #46575: a caller with OS package identity passes desktop app context
+	// through to the sandboxed child so packaged processes keep working.
+	preserveAppContext, err := CurrentProcessHasPackageIdentity()
+	if err != nil {
+		return nil, nil, err
+	}
+	attrs, err := NewProcThreadAttributeListWithCount(ProcThreadAttributeCountForLaunch(preserveAppContext))
 	if err != nil {
 		return nil, nil, err
 	}
 	if err := attrs.SetHandleList(handles); err != nil {
 		attrs.Close()
 		return nil, nil, err
+	}
+	if preserveAppContext {
+		if err := attrs.PreserveDesktopAppContext(); err != nil {
+			attrs.Close()
+			return nil, nil, err
+		}
 	}
 	startupInfo.ProcThreadAttributeList = attrs.WindowsList()
 	runtime.KeepAlive(handles)

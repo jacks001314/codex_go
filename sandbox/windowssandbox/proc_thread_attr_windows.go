@@ -9,6 +9,15 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// Desktop app context attributes (winbase.h). The policy keeps the initial
+// child and its descendants inside the caller's package environment so they can
+// launch executables from its protected directory.
+const (
+	procThreadAttributeDesktopAppPolicy                  = 0x00020012
+	processCreationDesktopAppBreakawayDisableProcessTree = 2
+	processCreationDesktopAppBreakawayOverride           = 4
+)
+
 func NewProcThreadAttributeList() (*ProcThreadAttributeList, error) {
 	return NewProcThreadAttributeListWithCount(1)
 }
@@ -50,6 +59,25 @@ func (l *ProcThreadAttributeList) SetPseudoconsole(handle uintptr) error {
 		unsafe.Sizeof(value),
 	)
 	runtime.KeepAlive(value)
+	return err
+}
+
+// PreserveDesktopAppContext ports Rust's
+// `ProcThreadAttributeList::preserve_desktop_app_context` (#46575): sandboxed
+// descendants keep the caller's desktop app context so packaged processes can
+// still launch children from their protected package directory.
+func (l *ProcThreadAttributeList) PreserveDesktopAppContext() error {
+	if l == nil || l.impl == nil {
+		return ErrInvalidRequest
+	}
+	l.desktopAppPolicy = processCreationDesktopAppBreakawayDisableProcessTree |
+		processCreationDesktopAppBreakawayOverride
+	err := l.container().Update(
+		procThreadAttributeDesktopAppPolicy,
+		unsafe.Pointer(&l.desktopAppPolicy),
+		unsafe.Sizeof(l.desktopAppPolicy),
+	)
+	runtime.KeepAlive(l)
 	return err
 }
 

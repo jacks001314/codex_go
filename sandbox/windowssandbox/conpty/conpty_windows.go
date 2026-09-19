@@ -97,7 +97,15 @@ func SpawnProcessAsUserWithToken(req SpawnRequest) (*windowssandbox.CreatedProce
 		_ = desktop.Close()
 		return nil, nil, err
 	}
-	attrs, err := windowssandbox.NewProcThreadAttributeListWithCount(1)
+	// Rust #46575: a caller with OS package identity passes desktop app context
+	// through to the sandboxed child so packaged processes keep working.
+	preserveAppContext, err := windowssandbox.CurrentProcessHasPackageIdentity()
+	if err != nil {
+		_ = instance.Close()
+		_ = desktop.Close()
+		return nil, nil, err
+	}
+	attrs, err := windowssandbox.NewProcThreadAttributeListWithCount(windowssandbox.ProcThreadAttributeCountForLaunch(preserveAppContext))
 	if err != nil {
 		_ = instance.Close()
 		_ = desktop.Close()
@@ -108,6 +116,13 @@ func SpawnProcessAsUserWithToken(req SpawnRequest) (*windowssandbox.CreatedProce
 		_ = instance.Close()
 		_ = desktop.Close()
 		return nil, nil, err
+	}
+	if preserveAppContext {
+		if err := attrs.PreserveDesktopAppContext(); err != nil {
+			_ = instance.Close()
+			_ = desktop.Close()
+			return nil, nil, err
+		}
 	}
 	startupInfo := windows.StartupInfoEx{}
 	startupInfo.StartupInfo.Cb = uint32(unsafe.Sizeof(windows.StartupInfoEx{}))

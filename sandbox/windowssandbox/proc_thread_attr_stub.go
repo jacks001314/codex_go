@@ -18,5 +18,9 @@ func (l *ProcThreadAttributeList) SetPseudoconsole(handle uintptr) error {
 	return unsupported("proc_thread_attr.set_pseudoconsole")
 }
 
+func (l *ProcThreadAttributeList) PreserveDesktopAppContext() error {
+	return unsupported("proc_thread_attr.preserve_desktop_app_context")
+}
+
 func (l *ProcThreadAttributeList) Close() {
 }
