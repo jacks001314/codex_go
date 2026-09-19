@@ -6629,10 +6629,10 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), params.ResponsesAPIMetadata)
 	serviceTier := r.appServiceTierForTurn(cfg, params, modelProviderConfig.Model)
 	// Rust #41308: every subagent turn follows the root thread's service tier,
-	// not just the spawn turn. Preserve fast_mode gating; an unsupported tier is
-	// dropped by ServiceTierForRequest.
-	if rootTier := r.subagentRootServiceTier(threadID); rootTier != "" && features.Enabled(cfg.FeatureSettings(), "fast_mode") {
-		serviceTier = model.ServiceTierForRequest(modelInfo, rootTier)
+	// not just the spawn turn. Fast mode still gates ordinary tiers, and #46230
+	// keeps a flex tier either way.
+	if rootTier := r.subagentRootServiceTier(threadID); rootTier != "" {
+		serviceTier = model.ServiceTierForConfiguredRequest(modelInfo, rootTier, features.Enabled(cfg.FeatureSettings(), "fast_mode"))
 	}
 	hostedTools, err := r.hostedToolsForTurn(params, turnRuntime)
 	if err != nil {
@@ -10130,9 +10130,7 @@ func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.T
 	if cfg != nil {
 		settings = cfg.FeatureSettings()
 	}
-	if !features.Enabled(settings, "fast_mode") {
-		return ""
-	}
+	fastModeEnabled := features.Enabled(settings, "fast_mode")
 	requested := ""
 	if params != nil {
 		if params.ServiceTierSet && params.ServiceTier == nil {
@@ -10153,7 +10151,8 @@ func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.T
 		return ""
 	}
 	info := r.modelInfoForRuntime(modelID)
-	return model.ServiceTierForRequest(info, value)
+	// Rust #46230: a configured flex tier survives a disabled fast mode.
+	return model.ServiceTierForConfiguredRequest(info, value, fastModeEnabled)
 }
 
 func boolConfigValue(cfg *config.Config, key string) bool {

@@ -31,6 +31,8 @@ const (
 	ModelSpecialtyCyber = "cyber"
 
 	ServiceTierDefaultRequestValue = "default"
+	// ServiceTierFlexRequestValue mirrors Rust ServiceTier::Flex (#46230).
+	ServiceTierFlexRequestValue = "flex"
 
 	ToolModeDirect       = "direct"
 	ToolModeCodeMode     = "code_mode"
@@ -517,17 +519,17 @@ type ModelInfo struct {
 	// SupportsExperimentalContext mirrors Rust ModelInfo.supports_experimental_context
 	// (serde default false): whether experimental context management may be
 	// activated at session startup for this model.
-	SupportsExperimentalContext bool              `json:"supports_experimental_context"`
-	UseResponsesLite            bool              `json:"use_responses_lite"`
+	SupportsExperimentalContext bool `json:"supports_experimental_context"`
+	UseResponsesLite            bool `json:"use_responses_lite"`
 	// SupportsReasoningEffortUpdates mirrors Rust
 	// ModelInfo.supports_reasoning_effort_updates (serde default false): whether
 	// the model accepts reasoning-effort `configuration_update` items. Missing
 	// metadata keeps effort changes on the ordinary request parameter.
-	SupportsReasoningEffortUpdates bool           `json:"supports_reasoning_effort_updates"`
-	NodeReplAutoReviewRequired  bool              `json:"node_repl_auto_review_required"`
-	NodeReplDisabled            bool              `json:"node_repl_disabled"`
-	AutoReviewModelOverride     string            `json:"auto_review_model_override"`
-	Upgrade                     *ModelInfoUpgrade `json:"upgrade"`
+	SupportsReasoningEffortUpdates bool              `json:"supports_reasoning_effort_updates"`
+	NodeReplAutoReviewRequired     bool              `json:"node_repl_auto_review_required"`
+	NodeReplDisabled               bool              `json:"node_repl_disabled"`
+	AutoReviewModelOverride        string            `json:"auto_review_model_override"`
+	Upgrade                        *ModelInfoUpgrade `json:"upgrade"`
 	// AvailabilityNux mirrors Rust ModelInfo.availability_nux (the NUX shown
 	// when the model preset becomes accessible to the user).
 	AvailabilityNux *ModelAvailabilityNux `json:"availability_nux"`
@@ -1444,6 +1446,30 @@ func ServiceTierForRequest(info *ModelInfo, serviceTier string) string {
 		return ""
 	}
 	return serviceTier
+}
+
+// ServiceTierForConfiguredRequest mirrors Rust `get_service_tier` (#46230): a
+// configured `flex` tier is preserved even when fast mode is disabled or the
+// model catalog does not list it, while every other tier still requires fast
+// mode and catalog support.
+func ServiceTierForConfiguredRequest(info *ModelInfo, serviceTier string, fastModeEnabled bool) string {
+	value := normalizeServiceTierRequestValue(serviceTier)
+	if value == "" {
+		return ""
+	}
+	if value == ServiceTierFlexRequestValue {
+		return value
+	}
+	if !fastModeEnabled {
+		return ""
+	}
+	return ServiceTierForRequest(info, value)
+}
+
+// IsFlexServiceTier reports whether a configured tier resolves to flex, which
+// Rust #46230 preserves without fast mode or catalog support.
+func IsFlexServiceTier(serviceTier string) bool {
+	return normalizeServiceTierRequestValue(serviceTier) == ServiceTierFlexRequestValue
 }
 
 func normalizeServiceTierRequestValue(serviceTier string) string {

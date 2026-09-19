@@ -770,7 +770,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	apiRequest := &responsesAgentRequest{
 		Model: modelID, Instructions: responsesInstructions(request), Input: r.filterToolResultMetadataForDestination(r.gateContentItemKinds(inputItems)), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
-		ServiceTier: ServiceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
+		ServiceTier: r.serviceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
 		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
@@ -1138,7 +1138,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		Stream:               r.Stream,
 		Store:                request.Store,
 		ParallelToolCalls:    parallelToolCalls,
-		ServiceTier:          ServiceTierForRequest(&modelInfo, request.ServiceTier),
+		ServiceTier:          r.serviceTierForRequest(&modelInfo, request.ServiceTier),
 		PromptCacheKey:       strings.TrimSpace(request.PromptCacheKey),
 		ClientMetadata:       cloneStringMap(request.ClientMetadata),
 		Text:                 responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
@@ -2625,6 +2625,16 @@ func (r *ResponsesAgentRunner) providerName() string {
 		return ""
 	}
 	return r.Provider.Name
+}
+
+// serviceTierForRequest mirrors Rust ModelClient (#46230): Bedrock only
+// supports the implicit default tier, even when a custom catalog advertises
+// another one.
+func (r *ResponsesAgentRunner) serviceTierForRequest(modelInfo *ModelInfo, serviceTier string) string {
+	if r.providerIsAmazonBedrock() {
+		return ""
+	}
+	return ServiceTierForRequest(modelInfo, serviceTier)
 }
 
 func (r *ResponsesAgentRunner) authHeaders() http.Header {

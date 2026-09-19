@@ -5005,9 +5005,6 @@ func (r *RuntimeRouter) threadStartServiceTier(cfg *config.Config, params *Threa
 	if cfg != nil {
 		settings = cfg.FeatureSettings()
 	}
-	if !features.Enabled(settings, "fast_mode") {
-		return ""
-	}
 	if params != nil && (params.ServiceTierSet || params.ServiceTier != nil) {
 		return threadLifecycleServiceTierForModel(r.requireModels(), params.ServiceTierSet, params.ServiceTier, modelID)
 	}
@@ -5015,6 +5012,13 @@ func (r *RuntimeRouter) threadStartServiceTier(cfg *config.Config, params *Threa
 		stringConfigValue(cfg, "service_tier"),
 		stringConfigValue(cfg, "serviceTier"),
 	)
+	// Rust #46230: a configured flex tier survives a disabled fast mode.
+	if model.IsFlexServiceTier(requested) {
+		return model.ServiceTierFlexRequestValue
+	}
+	if !features.Enabled(settings, "fast_mode") {
+		return ""
+	}
 	return threadLifecycleServiceTierForRequest(r.requireModels(), requested, modelID)
 }
 
