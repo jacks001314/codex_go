@@ -1034,6 +1034,7 @@ func buildAccountScopedModelsManager(codexHome string, read *config.ConfigReadRe
 		Identity:                        model.ModelsCatalogIdentity(providerInfo, authSnapshot, &authHeaders, inputs.residency),
 		SupportsAPIKeyModels:            supportsAPIKeyModels,
 		APIKeyAuth:                      usesAPIKeyAuth,
+		HasAuth:                         authSnapshot != nil,
 		CommandAuth:                     providerInfo.HasCommandAuth(),
 	})
 	model.SetAPIKeyModelDiscoveryEnabled(manager, features.Enabled(cfg.FeatureSettings(), "api_key_model_discovery"))

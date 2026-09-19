@@ -1444,6 +1444,22 @@ func TestRemoteTurnStartParamsCarriesUserTurnTriggerLikeRust(t *testing.T) {
 
 // TestInteractiveTurnTriggerLikeRust covers Rust #46569: the embedded TUI marks
 // user-submitted turns with "user" while goal continuations request "goal".
+// TestPickerMetricsAuthModeLikeRust covers Rust #46570 for the TUI picker's
+// catalog manager, which resolves its own credential.
+func TestPickerMetricsAuthModeLikeRust(t *testing.T) {
+	if got := pickerMetricsAuthMode(nil); got != "none" {
+		t.Fatalf("pickerMetricsAuthMode(nil) = %q, want none", got)
+	}
+	apiKey := auth.FromAPIKey("sk-test")
+	if got := pickerMetricsAuthMode(&auth.ResolvedAuth{Auth: apiKey}); got != "api_key" {
+		t.Fatalf("pickerMetricsAuthMode(api key) = %q, want api_key", got)
+	}
+	chatgpt := auth.AuthDotJSON{AuthMode: "chatgpt"}
+	if got := pickerMetricsAuthMode(&auth.ResolvedAuth{Auth: chatgpt}); got != "chatgpt" {
+		t.Fatalf("pickerMetricsAuthMode(chatgpt) = %q, want chatgpt", got)
+	}
+}
+
 func TestInteractiveTurnTriggerLikeRust(t *testing.T) {
 	if got := interactiveTurnTrigger(codextea.SubmitRequest{Prompt: "hello"}); got != "user" {
 		t.Fatalf("interactiveTurnTrigger(user) = %q, want user", got)

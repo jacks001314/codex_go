@@ -1223,6 +1223,19 @@ func interactiveAccountDisplay(account *auth.Account) (string, bool) {
 // account uses the fetched account catalog as the source of truth. It returns
 // nil when auth/config cannot be resolved, so the picker keeps its static
 // options (the tea Model ignores a nil/errored/empty refresh).
+// pickerMetricsAuthMode classifies the picker's resolved credential for the
+// remote-model fetch metric (Rust #46570). The picker resolves auth itself, so
+// the manager cannot derive the tag from its own fields.
+func pickerMetricsAuthMode(resolved *auth.ResolvedAuth) string {
+	if resolved == nil {
+		return "none"
+	}
+	if modelpkg.AuthUsesAPIKey(&resolved.Auth) {
+		return "api_key"
+	}
+	return "chatgpt"
+}
+
 func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func(bool) ([]codextui.ModelPickerOption, error) {
 	codexHome := auth.DefaultCodexHome()
 	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
@@ -1257,6 +1270,8 @@ func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func
 		ModelCatalog:                    base,
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: hasChatGPTAccount,
+		HasAuth:                         resolved != nil,
+		MetricsAuthMode:                 pickerMetricsAuthMode(resolved),
 	})
 	if manager == nil {
 		return nil

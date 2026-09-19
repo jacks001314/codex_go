@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/metrics"
 )
 
 const modelsEndpointETagHeader = "X-Models-ETag"
@@ -19,6 +21,10 @@ const modelsEndpointClientVersion = "0.0.0"
 const modelsEndpointRefreshTimeout = 5 * time.Second
 const defaultModelsCacheTTL = 5 * time.Minute
 const modelsCacheFilename = "models_cache.json"
+
+// remoteModelsFetchUpdateDurationMetric is the remote-model fetch timer (Rust
+// #46570), tagged by the authentication mode used for the fetch.
+const remoteModelsFetchUpdateDurationMetric = "codex.remote_models.fetch_update.duration_ms"
 
 // modelsCatalogMaxBytes bounds an explicitly configured provider catalog before
 // decoding or caching it (Rust MAX_MODEL_CATALOG_BYTES).
@@ -80,6 +86,25 @@ func (m *RemoteModelsManager) SupportsAPIKeyDiscovery() bool {
 		return false
 	}
 	return m.supportsAPIKeyModels && !m.commandAuth && m.apiKeyAuth
+}
+
+// metricsAuthMode mirrors Rust's `metric_auth_mode` for the remote-model fetch
+// timer (#46570): a provider API key or API-key login is "api_key", any other
+// credential is "chatgpt", and an unauthenticated fetch is "none".
+func (m *RemoteModelsManager) metricsAuthMode() string {
+	if m == nil {
+		return "none"
+	}
+	if m.metricsAuthModeOverride != "" {
+		return m.metricsAuthModeOverride
+	}
+	if m.apiKeyAuth {
+		return "api_key"
+	}
+	if m.hasAuth {
+		return "chatgpt"
+	}
+	return "none"
 }
 
 // remoteCatalogAuthoritative reports whether a visible remote catalog should
@@ -211,6 +236,8 @@ type RemoteModelsManager struct {
 	// `uses_api_key_auth`). Discovery stays disabled until the feature opts in.
 	supportsAPIKeyModels        bool
 	apiKeyAuth                  bool
+	hasAuth                     bool
+	metricsAuthModeOverride     string
 	commandAuth                 bool
 	apiKeyModelDiscoveryEnabled bool
 	now                         func() time.Time
@@ -238,6 +265,13 @@ type RemoteModelsManagerOptions struct {
 	SupportsAPIKeyModels bool
 	// APIKeyAuth reports whether the active auth is an OpenAI API key.
 	APIKeyAuth bool
+	// HasAuth reports whether any credential is available, which distinguishes
+	// the "chatgpt" and "none" remote-model fetch metric modes (Rust #46570).
+	HasAuth bool
+	// MetricsAuthMode overrides the remote-model fetch metric's `auth_mode` tag
+	// when the caller resolves the credential out of band (the TUI picker).
+	// Empty derives it from APIKeyAuth and HasAuth.
+	MetricsAuthMode string
 	// CommandAuth reports whether the provider resolves credentials through a
 	// command, which keeps the bundled API-key catalog.
 	CommandAuth bool
@@ -265,6 +299,8 @@ func NewRemoteModelsManagerWithOptions(options *RemoteModelsManagerOptions) *Rem
 		identity:                        strings.TrimSpace(options.Identity),
 		supportsAPIKeyModels:            options.SupportsAPIKeyModels,
 		apiKeyAuth:                      options.APIKeyAuth,
+		hasAuth:                         options.HasAuth,
+		metricsAuthModeOverride:         strings.TrimSpace(options.MetricsAuthMode),
 		commandAuth:                     options.CommandAuth,
 		now:                             time.Now,
 	}
@@ -449,6 +485,12 @@ func (m *RemoteModelsManager) refreshAvailableModels(strategy RefreshStrategy) {
 }
 
 func (m *RemoteModelsManager) fetchAndUpdateModels() {
+	// Rust #46570: the remote-model fetch duration carries the authentication
+	// mode used for this fetch.
+	timer := metrics.StartTimer(remoteModelsFetchUpdateDurationMetric, map[string]string{
+		"auth_mode": m.metricsAuthMode(),
+	})
+	defer timer.Stop()
 	m.mu.RLock()
 	etag := m.etag
 	m.mu.RUnlock()

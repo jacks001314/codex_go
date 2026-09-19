@@ -43,6 +43,13 @@ func authUsesAPIKey(snapshot *auth.AuthDotJSON) bool {
 	return snapshot.Mode() == "api-key"
 }
 
+// AuthUsesAPIKey reports whether a resolved auth authenticates with an OpenAI
+// API key (Rust CodexAuth::is_api_key_auth), so callers outside this package can
+// classify the credential for the remote-model fetch metric (#46570).
+func AuthUsesAPIKey(snapshot *auth.AuthDotJSON) bool {
+	return authUsesAPIKey(snapshot)
+}
+
 type ProviderAccount struct {
 	Type             string
 	Email            string
@@ -290,6 +297,7 @@ func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) Models
 		Identity:                        ModelsCatalogIdentity(&p.info, p.auth, &authHeaders, p.residency),
 		SupportsAPIKeyModels:            supportsAPIKeyModels,
 		APIKeyAuth:                      usesAPIKeyAuth,
+		HasAuth:                         p.auth != nil,
 		CommandAuth:                     p.info.HasCommandAuth(),
 	})
 }

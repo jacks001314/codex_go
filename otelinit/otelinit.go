@@ -45,7 +45,7 @@ func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 	if options.Config != nil {
 		runtimeMetrics = options.Config.FeatureSettings()["runtime_metrics"]
 	}
-	return telemetry.NewOtelProvider(telemetry.OtelSettings{
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
 		Environment:     resolved.Environment,
 		ServiceName:     options.ServiceName,
 		ServiceVersion:  options.ServiceVersion,
@@ -56,6 +56,16 @@ func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 		SpanAttributes:  resolved.SpanAttributes,
 		Tracestate:      resolved.Tracestate,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Rust OtelProvider::try_new installs the built metrics client as the
+	// process-global client, which library code such as the model catalog
+	// manager uses for its global timers.
+	if provider != nil && provider.Metrics() != nil {
+		telemetry.InstallGlobalMetrics(provider.Metrics())
+	}
+	return provider, nil
 }
 
 // otelExporter maps a resolved config exporter kind onto codex-otel's
