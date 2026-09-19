@@ -234,6 +234,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"keyring",
 		"mcp",
 		"memories",
+		"metrics",
 		"model",
 		"network",
 		"otelinit",
