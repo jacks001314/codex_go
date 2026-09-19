@@ -4,6 +4,7 @@ package conpty
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
@@ -18,6 +19,16 @@ const (
 	defaultRows              int16  = 24
 	pseudoConsoleResizeQuirk uint32 = 0x2
 )
+
+// releasePseudoConsole exists on Windows 11 24H2 and newer; older Windows keeps
+// the ClosePseudoConsole-on-close path (Rust #45504).
+var releasePseudoConsole = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReleasePseudoConsole")
+
+// ReleasePseudoConsoleAvailable reports whether the OS exposes
+// ReleasePseudoConsole.
+func ReleasePseudoConsoleAvailable() bool {
+	return releasePseudoConsole.Find() == nil
+}
 
 func Create(columns int16, rows int16) (*Instance, error) {
 	columns, rows = normalizeSize(columns, rows)
@@ -156,6 +167,10 @@ func SpawnProcessAsUserWithToken(req SpawnRequest) (*windowssandbox.CreatedProce
 	}
 	runtime.KeepAlive(instance)
 	runtime.KeepAlive(startupInfo)
+	// Rust #45504: the creation handles only need to survive until a client has
+	// attached. Keeping the output write handle would prevent output readers from
+	// seeing EOF while the session stays alive.
+	instance.FinishSpawn()
 	created := &windowssandbox.CreatedProcess{
 		ProcessHandle: uintptr(processInfo.Process),
 		ThreadHandle:  uintptr(processInfo.Thread),
@@ -181,6 +196,46 @@ func (i *Instance) CloseInputWrite() error {
 		return nil
 	}
 	return windows.CloseHandle(windows.Handle(handle))
+}
+
+// FinishSpawn releases the pseudoconsole's creation handles and, when the OS
+// supports it, the creator's ownership. Call it once the pseudoconsole has been
+// attached to a spawned client: keeping the output write handle afterwards would
+// prevent output readers from seeing EOF while the session stays alive, and
+// releasing ownership lets the console close its output once the last attached
+// client exits without terminating surviving descendants (Rust #45504).
+func (i *Instance) FinishSpawn() {
+	i.dropCreationHandles()
+	i.releasePseudoConsoleOwnership()
+}
+
+// dropCreationHandles closes the pipe handles CreatePseudoConsole borrowed. They
+// are retained until a client has attached.
+func (i *Instance) dropCreationHandles() {
+	if i == nil {
+		return
+	}
+	for _, handle := range []*uintptr{&i.inputRead, &i.outputWrite} {
+		if *handle == 0 || windows.Handle(*handle) == windows.InvalidHandle {
+			*handle = 0
+			continue
+		}
+		_ = windows.CloseHandle(windows.Handle(*handle))
+		*handle = 0
+	}
+}
+
+// releasePseudoConsoleOwnership releases the creator's ownership of the
+// pseudoconsole when the OS supports it, so surviving console descendants keep
+// their I/O while the console itself may close.
+func (i *Instance) releasePseudoConsoleOwnership() {
+	if i == nil || i.pseudoConsole == 0 || !ReleasePseudoConsoleAvailable() {
+		return
+	}
+	result, _, _ := releasePseudoConsole.Call(i.pseudoConsole)
+	if int32(result) != 0 /* S_OK */ {
+		slog.Warn("failed to release pseudoconsole ownership", "hresult", int32(result))
+	}
 }
 
 func (i *Instance) Close() error {

@@ -24,6 +24,15 @@ func (i *Instance) CloseInputWrite() error {
 	return nil
 }
 
+// ReleasePseudoConsoleAvailable mirrors the Windows probe: the API only exists
+// on Windows 11 24H2 and newer.
+func ReleasePseudoConsoleAvailable() bool {
+	return false
+}
+
+// FinishSpawn mirrors the Windows post-spawn step.
+func (i *Instance) FinishSpawn() {}
+
 func (i *Instance) Close() error {
 	return nil
 }

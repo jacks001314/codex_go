@@ -104,6 +104,10 @@ func startExecServerTTY(cmd *exec.Cmd) (*startedExecServerTTY, bool, error) {
 		_ = instance.Close()
 		return nil, true, err
 	}
+	// Rust #45504: once the console has a client, drop the creation handles and
+	// release the creator's ownership so the output reader reaches EOF when the
+	// last attached client exits instead of blocking while the session lives.
+	instance.FinishSpawn()
 	process := &windowssandbox.CreatedProcess{
 		ProcessHandle: uintptr(processInfo.Process),
 		ThreadHandle:  uintptr(processInfo.Thread),
