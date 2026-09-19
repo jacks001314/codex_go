@@ -22,14 +22,13 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	// Re-pinned to upstream 132c2be2 (#46680): the contrast-aware theme and picker
-	// work added seven snapshots (two picker-browser layouts, two filled tab
-	// windows, the light status-line contrast correction, the user-image prompt
-	// labels, and the diff syntax colors over a painted background), on top of the
-	// local daemon alpha/source version mismatch snapshots pinned at a5290028
-	// (#46673).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1184 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1184", got)
+	// Re-pinned to upstream 4abcb8d1 (the #46680 contrast/keyboard-hint/picker
+	// lane and its #46691/#46692/#46694/#46695/#46697/#46708/#46709/#46710
+	// follow-ons): the picker/transcript work added 62 snapshots and retired
+	// three, on top of the local daemon alpha/source version mismatch snapshots
+	// pinned at a5290028 (#46673).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1239 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1239", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -96,24 +95,28 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path: "tui/src/app/tests/snapshots",
-			// #46566 added the unavailable-thread local-command snapshot.
-			Files:    62,
+			// #46566 added the unavailable-thread local-command snapshot;
+			// #46691 added the two running-task exit pickers.
+			Files:    64,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
 			Required: []string{
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__model_catalog__model_migration_prompt_shows_for_hidden_model.snap",
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_task_defaults_tests__command_center_retained_worktree_error.snap",
+				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_exit_tests__running_task_exit_picker_40.snap",
 			},
 		},
 		{
-			Path:     "tui/src/bottom_pane/async_questions/snapshots",
-			Files:    12,
+			Path: "tui/src/bottom_pane/async_questions/snapshots",
+			// #46691 added the capped option and clipped-Other boundary snapshots.
+			Files:    14,
 			Owner:    "tui/bottom_pane",
 			Focus:    "asynchronous question prompts with inline Other answers, capped and wrapped option layouts",
 			Priority: []string{"approval", "request-user-input"},
 			Required: []string{
 				"tui/src/bottom_pane/async_questions/snapshots/codex_tui__bottom_pane__async_questions__tests__question_named_other.snap",
+				"tui/src/bottom_pane/async_questions/snapshots/codex_tui__bottom_pane__async_questions__tests__question_options_width_boundary.snap",
 			},
 		},
 		{
@@ -140,8 +143,12 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path: "tui/src/bottom_pane/snapshots",
-			// #46680 added the picker browser layouts and the filled-tab windows.
-			Files:    244,
+			// #46680 added the picker browser layouts and the filled-tab windows;
+			// #46691-#46710 added the shared picker presentation, description
+			// column visibility, skill-popup category tags, file-search long
+			// path, custom-prompt picker, hooks-browser compact and
+			// wrap-boundary snapshots, and retired the fixed-scroll one.
+			Files:    256,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -153,19 +160,48 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__tests__status_and_queued_messages_snapshot.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__list_selection_view__picker_tests__short_browser_keeps_header_tabs_search_and_footer.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__list_selection_view__picker_tests__browser_page_navigation_uses_rows_that_fit.snap",
+				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__list_selection_view__picker_tests__shared_menu_presentation_at_wide_and_narrow_sizes.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__selection_tabs__tests__filled_tabs_window_around_active_tab.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__selection_tabs__tests__filled_tabs_truncate_unicode_without_hiding_active_tab.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__status_line_style__tests__light_status_line_corrects_pale_custom_theme_colors.snap",
+				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__multi_select_picker__tests__picker_appearance_renders_checkboxes_preview_and_overflow.snap",
 			},
 		},
 		{
-			Path:     "tui/src/bottom_pane/tests/snapshots",
-			Files:    2,
+			Path: "tui/src/bottom_pane/tests/snapshots",
+			// #46692 added the promoted action banner plus the three picker
+			// hint presentations.
+			Files:    6,
 			Owner:    "tui/bottom_pane",
 			Focus:    "actionable information banner dismiss and persistence",
 			Priority: []string{"status"},
 			Required: []string{
 				"tui/src/bottom_pane/tests/snapshots/codex_tui__bottom_pane__tests__actionable_banner_tests__information_banner_dismissible.snap",
+				"tui/src/bottom_pane/tests/snapshots/codex_tui__bottom_pane__tests__picker_hint_tests__popup_hint_picker.snap",
+			},
+		},
+		{
+			Path: "tui/src/bottom_pane/approval_overlay/snapshots",
+			// #46692 moved the clipped-exec approval snapshot into its own
+			// directory next to the new clipping tests.
+			Files:    1,
+			Owner:    "tui/bottom_pane/approval_overlay",
+			Focus:    "clipped exec approval shows the complete command",
+			Priority: []string{"approval"},
+			Required: []string{
+				"tui/src/bottom_pane/approval_overlay/snapshots/codex_tui__bottom_pane__approval_overlay__clipping_tests__clipped_exec_approval_opens_the_complete_command.snap",
+			},
+		},
+		{
+			Path: "tui/src/bottom_pane/mentions_v2/snapshots",
+			// #46694 added the unified mention popup render tables.
+			Files:    7,
+			Owner:    "tui/bottom_pane/mentions_v2",
+			Focus:    "unified mention popup layout, bounded filesystem columns, and scrolled/narrow tables",
+			Priority: []string{"composer"},
+			Required: []string{
+				"tui/src/bottom_pane/mentions_v2/snapshots/codex_tui__bottom_pane__mentions_v2__render__tests__wide.snap",
+				"tui/src/bottom_pane/mentions_v2/snapshots/codex_tui__bottom_pane__mentions_v2__render__tests__bounded_filesystem_columns_narrow.snap",
 			},
 		},
 		{
@@ -200,8 +236,10 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/src/chatwidget/snapshots",
-			Files:    304,
+			Path: "tui/src/chatwidget/snapshots",
+			// #46695/#46697 added the clipped full-access confirmation and the
+			// two Windows sandbox picker fallbacks.
+			Files:    307,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -214,14 +252,15 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		{
 			Path: "tui/src/chatwidget/tests/snapshots",
 			// #46574/#46565 added the question-notification and activity-group
-			// ordering snapshots.
-			Files:    53,
+			// ordering snapshots; #46709 added the compact-exploration one.
+			Files:    54,
 			Owner:    "tui/chatwidget",
 			Focus:    "chatwidget approval request modal, async question reply, and history snapshots",
 			Priority: []string{"approval", "history"},
 			Required: []string{
 				"tui/src/chatwidget/tests/snapshots/codex_tui__chatwidget__tests__approval_requests__exec_approval_modal_exec.snap",
 				"tui/src/chatwidget/tests/snapshots/codex_tui__chatwidget__tests__approval_requests__exec_approval_history_decision_approved_short.snap",
+				"tui/src/chatwidget/tests/snapshots/codex_tui__chatwidget__tests__exec_flow__compact_exploration_with_failures.snap",
 			},
 		},
 		{
@@ -268,8 +307,11 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path: "tui/src/history_cell/snapshots",
-			// #46680 added the user-image prompt label contrast snapshot.
-			Files:    80,
+			// #46680 added the user-image prompt label contrast snapshot;
+			// #46708-#46710 added the dynamic history-cell previews, compact
+			// computer activity, image-label merge, compact patch, and
+			// request-user-input completed/interrupted results.
+			Files:    87,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
@@ -280,6 +322,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__local_daemon_alpha_mismatch.snap",
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__local_daemon_source_mismatch.snap",
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__user_image_labels_follow_the_painted_prompt_surface.snap",
+				"tui/src/history_cell/snapshots/codex_tui__history_cell__dynamic__tests__dynamic_preview_reports_hidden_lines_and_retains_full_output.snap",
+				"tui/src/history_cell/snapshots/codex_tui__history_cell__patches__tests__compact_patches_retain_full_changes_and_failure_details.snap",
 			},
 		},
 		{
@@ -295,13 +339,15 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/src/onboarding/snapshots",
-			Files:    6,
+			Path: "tui/src/onboarding/snapshots",
+			// #46695 added the four restricted/long-path trust-directory pickers.
+			Files:    10,
 			Owner:    "tui/onboarding",
 			Focus:    "trust-directory onboarding states",
 			Priority: []string{"onboarding"},
 			Required: []string{
 				"tui/src/onboarding/snapshots/codex_tui__onboarding__trust_directory__tests__renders_snapshot_for_git_repo.snap",
+				"tui/src/onboarding/snapshots/codex_tui__onboarding__trust_directory__tests__folder_picker_restricted_40x24.snap",
 			},
 		},
 		{
@@ -316,8 +362,12 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path: "tui/src/snapshots",
-			// #46680 added the diff syntax colors over a painted background.
-			Files:    187,
+			// #46680 added the diff syntax colors over a painted background;
+			// #46691-#46697 added the cwd/model/oss/update pickers, the
+			// startup-hooks picker progress, the compact resume-picker color
+			// snapshots and the tool-output preview snapshots, and retired the
+			// syntax-highlighted insert wrap and the thread-color picker one.
+			Files:    195,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
@@ -326,6 +376,20 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/snapshots/codex_tui__markdown_render__markdown_render_tests__markdown_render_complex_snapshot.snap",
 				"tui/src/snapshots/codex_tui__resume_picker__tests__resume_picker_screen.snap",
 				"tui/src/snapshots/codex_tui__diff_render__tests__syntax_colors_follow_the_actual_diff_background.snap",
+				"tui/src/snapshots/codex_tui__resume_picker__color_tests__compact_picker_keeps_metadata_and_labeled_primary_actions.snap",
+				"tui/src/snapshots/codex_tui__tool_output__tests__preview_caps_wrapped_output_and_counts_hidden_logical_lines.snap",
+			},
+		},
+		{
+			Path: "tui/src/thread_transcript/snapshots",
+			// #46710 added the persisted-transcript tool presentations.
+			Files:    4,
+			Owner:    "tui/thread_transcript",
+			Focus:    "persisted transcript tool presentations, historical command fallbacks, and agent-tool status",
+			Priority: []string{"history-cell", "unified-exec"},
+			Required: []string{
+				"tui/src/thread_transcript/snapshots/codex_tui__thread_transcript__tools__tests__completed_tool_presentations.snap",
+				"tui/src/thread_transcript/snapshots/codex_tui__thread_transcript__tools__tests__agent_tool_fallbacks_preserve_status_without_duplicating_v2_activity.snap",
 			},
 		},
 		{

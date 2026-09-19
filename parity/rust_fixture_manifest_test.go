@@ -133,8 +133,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// grouping coverage (#46493/#46487/#46492).
 			// #46503/#46504 then added the theme-picker and model-display-name
 			// coverage; #46574/#46565 added the question-notification and
-			// activity-group ordering coverage.
-			Files: 95,
+			// activity-group ordering coverage; #46709/#46710 then added the
+			// exec-flow compact-exploration helpers plus the replay tests.
+			Files: 100,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -146,8 +147,8 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		{
 			Path: "tui/src/chatwidget/tests/snapshots",
 			// #46574/#46565 added the question-notification and activity-group
-			// ordering snapshots.
-			Files: 53,
+			// ordering snapshots; #46709 added the compact-exploration one.
+			Files: 54,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{
