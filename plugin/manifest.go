@@ -214,6 +214,7 @@ func parseAgentPluginManifest(pluginRoot string, data []byte) (pluginManifestFil
 		}
 		manifest.Apps = cloneAppSummaries(extension.Apps)
 		manifest.AppTemplates = cloneAppTemplateSummaries(firstPluginManifestAppTemplates(extension))
+		manifest.OnboardingSkill = firstNonEmpty(extension.OnboardingSkill, manifest.OnboardingSkill)
 	}
 	return manifest, nil
 }

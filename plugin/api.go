@@ -279,6 +279,41 @@ func trimPluginInterfaceStrings(values []string) []string {
 	return out
 }
 
+// clonePluginSkillPtr clones one skill summary so callers cannot mutate shared
+// state through the onboarding reference.
+func clonePluginSkillPtr(skill *PluginSkill) *PluginSkill {
+	if skill == nil {
+		return nil
+	}
+	cloned := pluginSkillsForJSON([]PluginSkill{*skill})[0]
+	return &cloned
+}
+
+// onboardingSkillForDetail mirrors Rust #46544: the declared onboarding skill is
+// returned only while the plugin and that skill are enabled. Local declarations
+// match the resolved manifest path. Rust's remote variant matches the release
+// metadata's onboarding skill name; Go's remote catalog carries no release skill
+// list, so the installed bundle's own manifest declaration is what applies.
+func onboardingSkillForDetail(detail PluginDetail) *PluginSkill {
+	if !detail.Summary.Enabled {
+		return nil
+	}
+	path := strings.TrimSpace(detail.onboardingSkillPath)
+	if path == "" {
+		return nil
+	}
+	for i := range detail.Skills {
+		skill := detail.Skills[i]
+		if !skill.Enabled || skill.Path == nil {
+			continue
+		}
+		if filepath.Clean(*skill.Path) == filepath.Clean(path) {
+			return clonePluginSkillPtr(&skill)
+		}
+	}
+	return nil
+}
+
 func pluginInterfacePromptValues(raw json.RawMessage) ([]string, bool) {
 	text := strings.TrimSpace(string(raw))
 	if text == "" {
@@ -453,12 +488,18 @@ type PluginDetail struct {
 	ShareURL        *string              `json:"shareUrl"`
 	Description     *string              `json:"description"`
 	Skills          []PluginSkill        `json:"skills"`
+	// OnboardingSkill is the plugin's declared onboarding skill, present only
+	// when the plugin and that skill are enabled (Rust #46544).
+	OnboardingSkill *PluginSkill `json:"onboardingSkill"`
 	Hooks           []PluginHookSummary  `json:"hooks"`
 	Apps            []AppSummary         `json:"apps"`
 	AppTemplates    []AppTemplateSummary `json:"appTemplates"`
 	MCPServers      []string             `json:"mcpServers"`
 	ManifestPath    string               `json:"manifestPath,omitempty"`
 	MarketplaceRoot string               `json:"marketplaceRoot,omitempty"`
+	// onboardingSkillPath is the resolved declaration from the plugin manifest;
+	// it is internal and never serialized.
+	onboardingSkillPath string
 }
 
 func (d *PluginDetail) MarshalJSON() ([]byte, error) {
@@ -469,6 +510,7 @@ func (d *PluginDetail) MarshalJSON() ([]byte, error) {
 		ShareURL        *string              `json:"shareUrl"`
 		Description     *string              `json:"description"`
 		Skills          []PluginSkill        `json:"skills"`
+		OnboardingSkill *PluginSkill         `json:"onboardingSkill"`
 		Hooks           []PluginHookSummary  `json:"hooks"`
 		Apps            []AppSummary         `json:"apps"`
 		AppTemplates    []AppTemplateSummary `json:"appTemplates"`
@@ -480,6 +522,7 @@ func (d *PluginDetail) MarshalJSON() ([]byte, error) {
 		ShareURL:        d.ShareURL,
 		Description:     d.Description,
 		Skills:          pluginSkillsForJSON(d.Skills),
+		OnboardingSkill: clonePluginSkillPtr(d.OnboardingSkill),
 		Hooks:           pluginHooksForJSON(d.Hooks),
 		Apps:            appSummariesForJSON(d.Apps),
 		AppTemplates:    appTemplateSummariesForJSON(d.AppTemplates),
@@ -3061,6 +3104,11 @@ func mergeConfiguredPluginDetail(catalog PluginDetail, configured PluginDetail) 
 	if configured.Summary.Source.Path != "" || configured.ManifestPath != "" {
 		merged = cloneDetail(configured)
 	}
+	// The onboarding declaration comes from the manifest side of the merge; keep
+	// it even when the installed detail wins.
+	if merged.onboardingSkillPath == "" {
+		merged.onboardingSkillPath = catalog.onboardingSkillPath
+	}
 	return merged
 }
 
@@ -3084,6 +3132,7 @@ func readPluginDetailResponse(detail PluginDetail, params *PluginReadParams) *Pl
 		return nil
 	}
 	cloned := cloneDetail(detail)
+	cloned.OnboardingSkill = onboardingSkillForDetail(cloned)
 	if cloned.MarketplaceName == "" {
 		cloned.MarketplaceName = cloned.Summary.MarketplaceName
 	}
@@ -3250,6 +3299,7 @@ func pluginRootFromManifestPath(path string) string {
 func cloneDetail(detail PluginDetail) PluginDetail {
 	detail.Summary = cloneSummary(detail.Summary)
 	detail.Skills = pluginSkillsForJSON(detail.Skills)
+	detail.OnboardingSkill = clonePluginSkillPtr(detail.OnboardingSkill)
 	detail.Hooks = append([]PluginHookSummary(nil), detail.Hooks...)
 	detail.Apps = cloneAppSummaries(detail.Apps)
 	detail.AppTemplates = cloneAppTemplateSummaries(detail.AppTemplates)

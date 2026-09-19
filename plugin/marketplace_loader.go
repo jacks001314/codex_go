@@ -50,6 +50,9 @@ type pluginManifestFile struct {
 	Apps              []AppSummary         `json:"apps"`
 	AppTemplates      []AppTemplateSummary `json:"appTemplates"`
 	AppTemplatesSnake []AppTemplateSummary `json:"app_templates"`
+	// OnboardingSkill is the declared relative skill path
+	// (`extensions["com.openai"].onboardingSkill`, Rust #46544).
+	OnboardingSkill string `json:"onboardingSkill"`
 	ManifestPath      string               `json:"-"`
 	SkillsPath        string               `json:"-"`
 	MCPServersPath    string               `json:"-"`
@@ -229,7 +232,28 @@ func marketplacePluginDetailFromManifest(pluginName string, marketplaceName stri
 		Apps:            apps,
 		AppTemplates:    appTemplates,
 		MCPServers:      mcpServers,
+		onboardingSkillPath: resolveOnboardingSkillPath(pluginRoot, manifest),
 	}
+}
+
+// resolveOnboardingSkillPath resolves the manifest's declared onboarding skill
+// against the plugin root, mirroring Rust's resolve_openai_onboarding_skill
+// (#46544): the declaration accepts a relative path with or without the legacy
+// `./` prefix and must stay inside the plugin root.
+func resolveOnboardingSkillPath(pluginRoot string, manifest *pluginManifestFile) string {
+	if manifest == nil {
+		return ""
+	}
+	declared := strings.TrimSpace(manifest.OnboardingSkill)
+	if declared == "" || filepath.IsAbs(declared) {
+		return ""
+	}
+	declared = "./" + strings.TrimPrefix(declared, "./")
+	resolved := filepath.Join(pluginRoot, filepath.FromSlash(declared))
+	if !pathWithinRoot(pluginRoot, resolved) {
+		return ""
+	}
+	return filepath.Clean(resolved)
 }
 
 func marketplaceManifestPluginSourceKind(source *marketplacePluginSource) string {
