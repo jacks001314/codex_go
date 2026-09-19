@@ -864,7 +864,7 @@ func (r *RuntimeRouter) interruptTurnForGuardianCircuitBreaker(threadID, turnID 
 		return
 	}
 	if active, ok := r.cancelActiveRuntimeTurn(threadID, turnID); ok {
-		r.finishTurnInterruptedAnalytics(threadID, turnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active))
+		r.finishTurnInterruptedAnalytics(threadID, turnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active), turnAbortReasonInterrupted)
 		return
 	}
 	_, _ = r.requireTurns().Interrupt(&turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID})

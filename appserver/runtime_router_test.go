@@ -597,6 +597,7 @@ func TestRuntimeRouterThreadListAndSearchReportSubagentDirectInputCapability(t *
 		{"queue add", MethodThreadQueueAdd, ThreadQueueAddParams{ThreadID: "spawn-v2", Input: []any{"hello"}}},
 		{"queue update", MethodThreadQueueUpdate, ThreadQueueUpdateParams{ThreadID: "spawn-v2", QueuedSubmissionID: "q-1"}},
 		{"queue start", MethodThreadQueueStart, ThreadQueueStartParams{ThreadID: "spawn-v2"}},
+		{"compact", MethodThreadCompactStart, ThreadCompactStartParams{ThreadID: "spawn-v2"}},
 	}
 	for _, item := range directInputRequests {
 		rejected := router.Handle(requestWithParams(t, IntID(3), item.method, item.params))
@@ -21824,6 +21825,70 @@ func TestRuntimeRouterThreadCompactStartRejectsNotLoadedThread(t *testing.T) {
 	}
 	if notifications := sink.List(); len(notifications) != 0 {
 		t.Fatalf("notifications = %+v", notifications)
+	}
+}
+
+// Rust #46310: `handlers::compact` awaits
+// `abort_all_tasks(TurnAbortReason::Replaced)` before it builds the compact
+// turn, so a manual compaction requested while a turn is running replaces that
+// turn (reported interrupted, `replaced` abort marker) instead of leaving it
+// running beside the compaction.
+func TestRuntimeRouterThreadCompactStartReplacesRunningTurnLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	agent := newBlockingAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.SetNotificationSink(sink)
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    t.TempDir(),
+		Prompt: "compact replaces the running turn",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "running turn",
+	}))
+	if turnStart.Error != nil {
+		t.Fatalf("turn start error: %+v", turnStart.Error)
+	}
+	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForBlockingAgentStart(t, agent)
+
+	compact := router.Handle(requestWithParams(t, IntID(3), MethodThreadCompactStart, ThreadCompactStartParams{ThreadID: threadID}))
+	if compact.Error != nil {
+		t.Fatalf("compact error: %+v", compact.Error)
+	}
+	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+
+	path, err := rollout.FindThreadPath(store.Root(), threadID, false)
+	if err != nil {
+		t.Fatalf("rollout path error: %v", err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read rollout: %v", err)
+	}
+	sawAbort := false
+	for _, line := range strings.Split(string(contents), "\n") {
+		if !strings.Contains(line, `"type":"turn_aborted"`) {
+			continue
+		}
+		if !strings.Contains(line, `"reason":"replaced"`) {
+			t.Fatalf("turn_aborted marker is not Rust's replaced reason: %s", line)
+		}
+		sawAbort = true
+	}
+	if !sawAbort {
+		t.Fatalf("manual compaction did not record a turn_aborted marker: %s", contents)
 	}
 }
 

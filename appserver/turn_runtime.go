@@ -3772,11 +3772,22 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 	r.clearActiveDiffTracker(threadID, turnID)
 }
 
+// Turn abort reasons mirror codex_protocol::protocol::TurnAbortReason. The
+// reason is persisted on the rollout's `turn_aborted` marker; the app-server
+// reports every reason as an interrupted turn completion, exactly like Rust's
+// `handle_turn_interrupted`.
+const (
+	turnAbortReasonInterrupted = "interrupted"
+	// Rust `TurnAbortReason::Replaced`: a new task (manual compaction) takes
+	// over the thread and the previous turn is superseded.
+	turnAbortReasonReplaced = "replaced"
+)
+
 func (r *RuntimeRouter) finishTurnInterrupted(threadID string, turnID string, startedAtMS int64) {
-	r.finishTurnInterruptedAnalytics(threadID, turnID, startedAtMS, nil)
+	r.finishTurnInterruptedAnalytics(threadID, turnID, startedAtMS, nil, turnAbortReasonInterrupted)
 }
 
-func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID string, startedAtMS int64, analytics *turnCompletionAnalyticsContext) {
+func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID string, startedAtMS int64, analytics *turnCompletionAnalyticsContext, reason string) {
 	if r == nil {
 		return
 	}
@@ -3792,7 +3803,7 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID s
 	durationMS := now.UnixMilli() - startedAtMS
 	r.persistInterruptedTurnMarker(threadID, turnID, now)
 	r.finishStateThreadGoalTurn(threadID, turnID, now, 0, nil)
-	_ = r.appendRuntimeTurnAborted(threadID, turnID, "interrupted", now, durationMS)
+	_ = r.appendRuntimeTurnAborted(threadID, turnID, firstNonEmpty(strings.TrimSpace(reason), turnAbortReasonInterrupted), now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusInterrupted)
 	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)

@@ -1924,7 +1924,7 @@ func (r *RuntimeRouter) close() error {
 		if active.Params != nil && turnStartReviewRuntime(active.Params) {
 			r.finishReviewRuntimeInterrupted(active.ThreadID, active.TurnID, active.StartedAtMS, analytics)
 		} else {
-			r.finishTurnInterruptedAnalytics(active.ThreadID, active.TurnID, active.StartedAtMS, analytics)
+			r.finishTurnInterruptedAnalytics(active.ThreadID, active.TurnID, active.StartedAtMS, analytics, turnAbortReasonInterrupted)
 		}
 	}
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2991,10 +2991,20 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 	if err := r.requireLoadedThreadForRuntimeOp(params.ThreadID); err != nil {
 		return nil, err
 	}
+	// Rust `thread_compact_start_inner` enforces the direct-input policy before
+	// it submits the compaction op.
+	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
+		return nil, err
+	}
 	// Rust #44944: manual compaction is gated on the retained provider route.
 	if err := r.checkThreadModelProviderForID(params.ThreadID); err != nil {
 		return nil, err
 	}
+	// Rust #46310: `handlers::compact` stops the old turn
+	// (`abort_all_tasks(TurnAbortReason::Replaced)`) before the compact task
+	// picks up the next turn's environments, so a running turn is replaced
+	// rather than left running beside the compaction.
+	r.abortRuntimeTurnForManualCompaction(params.ThreadID)
 	started, err := r.requireTurns().Start(&turn.TurnStartParams{ThreadID: params.ThreadID, Originator: "compact"})
 	if err != nil {
 		return nil, err
@@ -7397,34 +7407,69 @@ func (r *RuntimeRouter) handleTurnInterrupt(request *Request) (*turn.TurnInterru
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	if r.hasRuntimeThreadStore() && r.activeRuntimeTurnIsReview(params.ThreadID, params.TurnID) {
-		if active, ok := r.cancelActiveRuntimeTurn(params.ThreadID, params.TurnID); ok {
+	return r.interruptRuntimeTurn(params.ThreadID, params.TurnID, &requestedAtMS, turnAbortReasonInterrupted)
+}
+
+// abortRuntimeTurnForManualCompaction replaces a running turn before a manual
+// compaction starts. Rust's `session::handlers::compact` awaits
+// `abort_all_tasks(TurnAbortReason::Replaced)` for this, so the superseded turn
+// is reported as interrupted with a `replaced` abort marker instead of being
+// left running beside the compact turn.
+func (r *RuntimeRouter) abortRuntimeTurnForManualCompaction(threadID string) {
+	if r == nil || !r.hasRuntimeThreadStore() {
+		return
+	}
+	active := r.threads.ActiveTurn(threadID)
+	if active == nil || strings.TrimSpace(active.TurnID) == "" {
+		return
+	}
+	// Rust's abort is infallible; a compaction must still run when the turn has
+	// already reached a terminal state.
+	if _, err := r.interruptRuntimeTurn(threadID, active.TurnID, nil, turnAbortReasonReplaced); err != nil {
+		slog.Warn(
+			"failed to replace the running turn for manual compaction",
+			"thread_id", threadID,
+			"turn_id", active.TurnID,
+			"error", err,
+		)
+	}
+}
+
+// interruptRuntimeTurn stops the active turn for `threadID` and publishes its
+// interrupted lifecycle. `reason` is the persisted `turn_aborted` cause: the
+// explicit `turn/interrupt` RPC uses `interrupted`, while Rust's manual
+// compaction abort (`handlers::compact` -> `abort_all_tasks(Replaced)`) uses
+// `replaced`.
+func (r *RuntimeRouter) interruptRuntimeTurn(threadID string, turnID string, requestedAtMS *uint64, reason string) (*turn.TurnInterruptResponse, error) {
+	if r.hasRuntimeThreadStore() && r.activeRuntimeTurnIsReview(threadID, turnID) {
+		if active, ok := r.cancelActiveRuntimeTurn(threadID, turnID); ok {
 			analytics := analyticsContextFromActiveRuntimeTurn(active)
-			if analytics != nil {
-				analytics.ExplicitClientInterruptRequestedAtMS = &requestedAtMS
+			if analytics != nil && requestedAtMS != nil {
+				analytics.ExplicitClientInterruptRequestedAtMS = requestedAtMS
 			}
-			r.finishReviewRuntimeInterrupted(params.ThreadID, params.TurnID, active.StartedAtMS, analytics)
+			r.finishReviewRuntimeInterrupted(threadID, turnID, active.StartedAtMS, analytics)
 			return &turn.TurnInterruptResponse{}, nil
 		}
 	}
-	response, err := r.requireTurns().Interrupt(&params)
+	response, err := r.requireTurns().Interrupt(&turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID})
 	if err != nil {
 		return nil, turnInterruptRuntimeError(err)
 	}
 	if r.hasRuntimeThreadStore() {
-		if active, ok := r.cancelActiveRuntimeTurnTracked(params.ThreadID, params.TurnID); ok {
+		if active, ok := r.cancelActiveRuntimeTurnTracked(threadID, turnID); ok {
 			analytics := analyticsContextFromActiveRuntimeTurn(active)
-			if analytics != nil {
-				analytics.ExplicitClientInterruptRequestedAtMS = &requestedAtMS
+			if analytics != nil && requestedAtMS != nil {
+				analytics.ExplicitClientInterruptRequestedAtMS = requestedAtMS
 			}
 			// Rust #40511: run the Interrupt hook for an active top-level turn
 			// before its interrupted abort event is emitted.
 			r.runInterruptHook(active)
 			// Match Rust app-server ordering: acknowledge turn/interrupt before
 			// publishing the interrupted terminal lifecycle notifications.
+			abortReason := firstNonEmpty(strings.TrimSpace(reason), turnAbortReasonInterrupted)
 			go func() {
 				defer r.threads.TurnWorkerDone()
-				r.finishTurnInterruptedAnalytics(params.ThreadID, params.TurnID, active.StartedAtMS, analytics)
+				r.finishTurnInterruptedAnalytics(threadID, turnID, active.StartedAtMS, analytics, abortReason)
 			}()
 		}
 	}
