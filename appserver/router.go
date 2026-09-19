@@ -567,6 +567,11 @@ func (r *Router) latestPersistedApprovalPolicy(record *session.Record) (string, 
 	if strings.TrimSpace(path) == "" {
 		return "", false
 	}
+	// Rust probes for the rollout before opening a reader, so a missing rollout
+	// never pays the reader's representation-transition retry budget.
+	if _, ok := rollout.ExistingRolloutPath(path); !ok {
+		return "", false
+	}
 	lines, _, err := rollout.Load(path)
 	if err != nil {
 		return "", false
@@ -586,6 +591,9 @@ func (r *Router) latestPersistedOwnedThreadCWD(threadID string, record *session.
 	if strings.TrimSpace(path) == "" {
 		return ""
 	}
+	if _, ok := rollout.ExistingRolloutPath(path); !ok {
+		return ""
+	}
 	lines, _, err := rollout.Load(path)
 	if err != nil {
 		return ""
@@ -602,9 +610,11 @@ func (r *Router) latestPersistedCollaborationMode(threadID string, record *sessi
 		return nil
 	}
 	if path := r.threadRolloutPath(record); strings.TrimSpace(path) != "" {
-		if lines, _, err := rollout.Load(path); err == nil {
-			if mode := collaborationModeFromRaw(rollout.LatestPersistedCollaborationMode(threadID, lines)); mode != nil {
-				return mode
+		if _, ok := rollout.ExistingRolloutPath(path); ok {
+			if lines, _, err := rollout.Load(path); err == nil {
+				if mode := collaborationModeFromRaw(rollout.LatestPersistedCollaborationMode(threadID, lines)); mode != nil {
+					return mode
+				}
 			}
 		}
 	}
@@ -683,6 +693,12 @@ func (r *Router) attachRolloutTurnSnapshots(record *session.Record) {
 	}
 	path := r.threadRolloutPath(record)
 	if strings.TrimSpace(path) == "" {
+		return
+	}
+	// Rust probes for the rollout before reading it; a thread whose rollout has
+	// not been materialized yet is a normal outcome and must not pay the
+	// reader's representation-transition retry budget.
+	if _, ok := rollout.ExistingRolloutPath(path); !ok {
 		return
 	}
 	rolloutRecord, err := rollout.RecordFromPath(path, record.Archived)

@@ -252,6 +252,11 @@ type feedbackTurnMetadata struct {
 }
 
 func feedbackTurnMetadataFromRollout(path string, turnID *string) (feedbackTurnMetadata, bool) {
+	// A thread without a rollout is a normal outcome for feedback upload, so
+	// probe for the file rather than paying the reader's retry budget.
+	if _, ok := rollout.ExistingRolloutPath(path); !ok {
+		return feedbackTurnMetadata{}, false
+	}
 	lines, _, err := rollout.Load(path)
 	if err != nil {
 		return feedbackTurnMetadata{}, false

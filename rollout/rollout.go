@@ -1020,26 +1020,18 @@ func cloneUint64Ptr(value *uint64) *uint64 {
 }
 
 func Load(path string) ([]Line, int, error) {
-	file, err := os.Open(path)
+	// Rust's `open_rollout_line_reader` resolves the current representation and
+	// retries a not-found transition, recording one read metric per reader.
+	lineReader, err := OpenRolloutLineReader(path)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer file.Close()
-	var reader io.Reader = file
-	if strings.HasSuffix(strings.ToLower(path), ".zst") {
-		decoder, decodeErr := zstd.NewReader(file)
-		if decodeErr != nil {
-			return nil, 0, decodeErr
-		}
-		defer decoder.Close()
-		reader = decoder
-	}
+	defer func() { _ = lineReader.Close() }()
 	var lines []Line
 	parseErrors := 0
-	lineReader := bufio.NewReader(reader)
 	for {
-		raw, readErr := lineReader.ReadBytes('\n')
-		if readErr != nil && len(raw) == 0 {
+		raw, readErr := lineReader.ReadLine()
+		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
 				break
 			}
@@ -1051,12 +1043,6 @@ func Load(path string) ([]Line, int, error) {
 			parseErrors++
 		} else {
 			lines = append(lines, line)
-		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			return lines, parseErrors, readErr
 		}
 	}
 	return lines, parseErrors, nil
