@@ -52,8 +52,11 @@ type modelGuardianReviewer struct {
 	approvalsReviewer          func(threadID, turnID string) string
 	environment                func(context.Context, string, string) ([]any, error)
 	permissionProfile          func(threadID, turnID string) *sandbox.PermissionProfile
-	nodeReplEvidence           func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
-	rootUserAuthorization      func(threadID, turnID string) []string
+	// latestResponseID resolves the reviewed turn's newest response id for the
+	// review request's `parent_response_id` client metadata (Rust #45441).
+	latestResponseID      func(threadID, turnID string) string
+	nodeReplEvidence      func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
+	rootUserAuthorization func(threadID, turnID string) []string
 	// Rust #42807 gives extension contributors a request-scoped `decide` hook
 	// (Allow / Reviewed / AskUser) plus structured reasons for a fresh review.
 	// The Go port has no ApprovalReviewContributor extension registry; the
@@ -641,6 +644,13 @@ func (r *modelGuardianReviewer) reviewClientMetadata(threadID, turnID, targetIte
 	if targetItemID != "" {
 		// Preserve the historical top-level key alongside the turn metadata.
 		client["target_item_id"] = targetItemID
+	}
+	// Rust #45441: a review request reports the reviewed turn's latest response
+	// id as `parent_response_id`, and omits the key when the turn has none yet.
+	if r != nil && r.latestResponseID != nil {
+		if parent := strings.TrimSpace(r.latestResponseID(threadID, turnID)); parent != "" {
+			client["parent_response_id"] = parent
+		}
 	}
 	return client
 }

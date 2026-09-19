@@ -74,6 +74,27 @@ type activeRuntimeTurn struct {
 	// #46323 keeps the first received inventory).
 	PluginInventoryCaptured bool
 	PluginInventory         *[]string
+	// LatestResponseID is the newest response id received in this turn. Rust
+	// #45441 keeps it until a later `response.created` replaces it - including
+	// across sampling retries - so a Guardian review still has a parent response
+	// id while the next response is in flight.
+	LatestResponseID string
+}
+
+// recordRuntimeTurnResponseID stores the turn's newest response id (Rust #45441).
+// It is turn-scoped, so a fresh turn starts without a parent response id and a
+// retry that never reaches `response.created` keeps the last known one.
+func (r *RuntimeRouter) recordRuntimeTurnResponseID(threadID string, turnID string, responseID string) {
+	if r == nil || r.threads == nil {
+		return
+	}
+	responseID = strings.TrimSpace(responseID)
+	if responseID == "" {
+		return
+	}
+	r.threads.UpdateTurn(strings.TrimSpace(threadID), strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
+		active.LatestResponseID = responseID
+	})
 }
 
 // postTurnCompact mirrors Rust's opt-in compaction after a final response
@@ -811,6 +832,9 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		return
 	}
 	state.rememberResponse(event)
+	if event.Kind == model.ResponsesStreamEventCreated {
+		r.recordRuntimeTurnResponseID(threadID, turnID, event.ResponseID)
+	}
 	switch event.Kind {
 	case model.ResponsesStreamEventRetrying:
 		state.retrying = true

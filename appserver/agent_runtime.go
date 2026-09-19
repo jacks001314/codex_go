@@ -122,6 +122,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.fullAccess = r.guardianFullAccessForTurn
 		modelReviewer.approvalsReviewer = r.guardianApprovalsReviewerForTurn
 		modelReviewer.permissionProfile = r.guardianReviewPermissionProfileForTurn
+		modelReviewer.latestResponseID = r.guardianLatestResponseIDForTurn
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
 		modelReviewer.installationID = r.guardianInstallationID
 		modelReviewer.environment = r.guardianEnvironmentInputItems
@@ -145,6 +146,16 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		}
 	}
 	return reviewer
+}
+
+// guardianLatestResponseIDForTurn resolves the reviewed turn's newest response id
+// for the review request's `parent_response_id` client metadata (Rust #45441).
+func (r *RuntimeRouter) guardianLatestResponseIDForTurn(threadID, turnID string) string {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil {
+		return ""
+	}
+	return strings.TrimSpace(active.LatestResponseID)
 }
 
 // guardianMaxToolCallLagForTurn resolves the stale-score bound for the review's
