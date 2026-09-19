@@ -1,10 +1,12 @@
 package appserver
 
 import (
+	"sync"
 	"testing"
 
 	"codex_go/config"
 	"codex_go/model"
+	"codex_go/session"
 	"codex_go/turn"
 )
 
@@ -133,25 +135,78 @@ func TestReasoningEffortForRequestLikeRust(t *testing.T) {
 func TestEffortForConfigurationUpdateGatingLikeRust(t *testing.T) {
 	router := &RuntimeRouter{}
 	params := &turn.TurnStartParams{}
-	lite := &model.ModelInfo{Slug: "gpt-5", UseResponsesLite: true, DefaultReasoningLevel: "medium"}
-	notLite := &model.ModelInfo{Slug: "gpt-5", UseResponsesLite: false, DefaultReasoningLevel: "medium"}
+	supported := &model.ModelInfo{Slug: "gpt-5", UseResponsesLite: true, SupportsReasoningEffortUpdates: true, DefaultReasoningLevel: "medium"}
+	// Responses Lite does not establish reasoning-effort update support (#46530).
+	unsupported := &model.ModelInfo{Slug: "gpt-5", UseResponsesLite: true, DefaultReasoningLevel: "medium"}
+	// Support is independent of Responses Lite.
+	nonLiteSupported := &model.ModelInfo{Slug: "gpt-5", SupportsReasoningEffortUpdates: true, DefaultReasoningLevel: "medium"}
 
-	if _, ok := router.effortForConfigurationUpdate(reasoningEffortTestConfig("high", false), params, lite, "openai"); ok {
+	if _, ok := router.effortForConfigurationUpdate("thread-1", reasoningEffortTestConfig("high", false), params, supported, "openai"); ok {
 		t.Fatal("feature disabled must not offer an override")
 	}
-	if _, ok := router.effortForConfigurationUpdate(reasoningEffortTestConfig("high", true), params, notLite, "openai"); ok {
-		t.Fatal("responses lite disabled must not offer an override")
+	if _, ok := router.effortForConfigurationUpdate("thread-1", reasoningEffortTestConfig("high", true), params, unsupported, "openai"); ok {
+		t.Fatal("missing explicit model support must not offer an override")
 	}
-	if _, ok := router.effortForConfigurationUpdate(reasoningEffortTestConfig("high", true), params, lite, "azure"); ok {
+	if _, ok := router.effortForConfigurationUpdate("thread-1", reasoningEffortTestConfig("high", true), params, supported, "azure"); ok {
 		t.Fatal("non-openai provider must not offer an override")
 	}
-	effort, ok := router.effortForConfigurationUpdate(reasoningEffortTestConfig("persistent", true), params, lite, "openai")
+	if _, ok := router.effortForConfigurationUpdate("thread-1", reasoningEffortTestConfig("high", true), params, nonLiteSupported, "openai"); !ok {
+		t.Fatal("explicit model support must offer an override independently of responses lite")
+	}
+	effort, ok := router.effortForConfigurationUpdate("thread-1", reasoningEffortTestConfig("persistent", true), params, supported, "openai")
 	if !ok || effort != "disabled" {
 		t.Fatalf("persistent effort = %q,%v want disabled,true", effort, ok)
 	}
 	// Unknown custom efforts are excluded from durable updates.
-	custom := &model.ModelInfo{Slug: "gpt-5", UseResponsesLite: true, DefaultReasoningLevel: "turbo"}
-	if _, ok := router.effortForConfigurationUpdate(reasoningEffortTestConfig("", true), params, custom, "openai"); ok {
+	custom := &model.ModelInfo{Slug: "gpt-5", SupportsReasoningEffortUpdates: true, DefaultReasoningLevel: "turbo"}
+	if _, ok := router.effortForConfigurationUpdate("thread-1", reasoningEffortTestConfig("", true), params, custom, "openai"); ok {
 		t.Fatal("custom effort must not be recorded")
+	}
+}
+
+// TestReasoningEffortOverrideExemptsFixedEffortWorkersLikeRust covers Rust
+// #46531: memory consolidation and ephemeral thread-title workers use their
+// selected request-level effort even when the override feature is enabled.
+func TestReasoningEffortOverrideExemptsFixedEffortWorkersLikeRust(t *testing.T) {
+	ephemeralExtra := func() map[string]any { return map[string]any{"ephemeral": true} }
+	router := &RuntimeRouter{threads: &ThreadManager{
+		ephemeralMu: sync.RWMutex{},
+		ephemeral: map[string]*session.Record{
+			"memory": {ID: "memory", Metadata: session.Metadata{
+				Source:       internalMemorySessionSource,
+				ThreadSource: string(ThreadSourceMemoryConsolidation),
+				Extra:        ephemeralExtra(),
+			}},
+			"title": {ID: "title", Metadata: session.Metadata{
+				ThreadSource: "thread_title",
+				Extra:        ephemeralExtra(),
+			}},
+			"persisted-title": {ID: "persisted-title", Metadata: session.Metadata{
+				ThreadSource: "thread_title",
+			}},
+			"ordinary": {ID: "ordinary", Metadata: session.Metadata{Extra: ephemeralExtra()}},
+		},
+	}}
+	supported := &model.ModelInfo{Slug: "gpt-5", SupportsReasoningEffortUpdates: true, DefaultReasoningLevel: "medium"}
+	cfg := reasoningEffortTestConfig("high", true)
+
+	for _, threadID := range []string{"memory", "title"} {
+		if !router.reasoningEffortOverrideExempt(threadID) {
+			t.Fatalf("thread %q must be exempt from reasoning-effort overrides", threadID)
+		}
+		if router.reasoningEffortOverrideEnabled(threadID, cfg, supported, "openai") {
+			t.Fatalf("thread %q must not enable reasoning-effort overrides", threadID)
+		}
+		if _, ok := router.effortForConfigurationUpdate(threadID, cfg, &turn.TurnStartParams{}, supported, "openai"); ok {
+			t.Fatalf("exempt thread %q must not record a trusted update", threadID)
+		}
+	}
+	for _, threadID := range []string{"persisted-title", "ordinary"} {
+		if router.reasoningEffortOverrideExempt(threadID) {
+			t.Fatalf("thread %q must keep reasoning-effort overrides", threadID)
+		}
+		if !router.reasoningEffortOverrideEnabled(threadID, cfg, supported, "openai") {
+			t.Fatalf("thread %q must enable reasoning-effort overrides", threadID)
+		}
 	}
 }

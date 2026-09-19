@@ -348,7 +348,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	// Rust #43110/#43795: decide the trusted configuration update before pinning
 	// the request baseline so the sampling request keeps its pinned effort.
-	overrideItems, requestReasoningEffort := r.execReasoningEffortOverride(
+	overrideItems, requestReasoningEffort, reasoningEffortOverride := r.execReasoningEffortOverride(
 		threadID, cfg, modelID, &modelInfo, providerID, reasoningEffort,
 		append(append([]any(nil), execStartupItems...), historyInputItems...),
 	)
@@ -471,6 +471,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		ParallelToolCalls:              parallelToolCalls,
 		ReasoningEffort:                requestReasoningEffort,
 		ReasoningSummary:               effectiveReasoningSummary(cfg),
+		DropReasoningEffortUpdates:     !reasoningEffortOverride,
 		ConcurrentReasoningSummaries:   concurrentReasoningSummaries,
 		ModelVerbosity:                 modelVerbosity,
 		IncludeTimingMetrics:           includeTimingMetrics,
@@ -644,6 +645,9 @@ type agentRunConfig struct {
 	// PostPromptInputItems are appended after the prompt's user message for the
 	// first sampling request (Rust #43110 trusted configuration updates).
 	PostPromptInputItems           []any
+	// DropReasoningEffortUpdates removes saved configuration_update items from
+	// the request copy when overrides are unsupported (Rust #46530).
+	DropReasoningEffortUpdates     bool
 	Model                          string
 	ToolMode                       string
 	CodeModeHostEnabled            bool
@@ -1164,6 +1168,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		ParallelToolCalls:            run.ParallelToolCalls,
 		ReasoningEffort:              run.ReasoningEffort,
 		ReasoningSummary:             run.ReasoningSummary,
+		DropReasoningEffortUpdates:   run.DropReasoningEffortUpdates,
 		ConcurrentReasoningSummaries: run.ConcurrentReasoningSummaries,
 		ModelVerbosity:               run.ModelVerbosity,
 		IncludeTimingMetrics:         run.IncludeTimingMetrics,
@@ -6461,22 +6466,23 @@ func (r *Runner) setReasoningEffortPinState(threadID string, pin reasoningoverri
 // execReasoningEffortOverride mirrors the app-server/Session reasoning-effort
 // override for the exec entry point (Rust #43110/#43795): it returns the trusted
 // configuration_update items to record and the pinned request effort.
-func (r *Runner) execReasoningEffortOverride(threadID string, cfg *config.Config, modelID string, modelInfo *model.ModelInfo, providerID string, selectedEffort string, historyItems []any) ([]any, string) {
+func (r *Runner) execReasoningEffortOverride(threadID string, cfg *config.Config, modelID string, modelInfo *model.ModelInfo, providerID string, selectedEffort string, historyItems []any) ([]any, string, bool) {
 	if r == nil || cfg == nil || modelInfo == nil {
-		return nil, selectedEffort
+		return nil, selectedEffort, false
 	}
 	featureEnabled := features.Enabled(cfg.FeatureSettings(), "reasoning_effort_override")
 	providerOpenAI := false
 	if info, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url")); err == nil && info != nil && info.IsOpenAI() {
 		providerOpenAI = true
 	}
-	overrideEffort, available := reasoningoverride.EffortForConfigurationUpdate(featureEnabled, providerOpenAI, modelInfo, selectedEffort)
+	overrideEnabled := reasoningoverride.OverrideEnabled(featureEnabled, providerOpenAI, modelInfo)
+	overrideEffort, available := reasoningoverride.EffortForConfigurationUpdate(overrideEnabled, modelInfo, selectedEffort)
 	slug := reasoningoverride.ModelSlug(modelInfo, modelID)
 	pin := r.reasoningEffortPinState(threadID)
 	items, pin := reasoningoverride.OverrideInputItems(pin, slug, overrideEffort, available, historyItems)
-	requestEffort, pin := reasoningoverride.RequestEffort(pin, slug, selectedEffort, featureEnabled, overrideEffort, available, reasoningoverride.UsageSampling)
+	requestEffort, pin := reasoningoverride.RequestEffort(pin, slug, selectedEffort, overrideEnabled, overrideEffort, available, reasoningoverride.UsageSampling)
 	r.setReasoningEffortPinState(threadID, pin)
-	return items, requestEffort
+	return items, requestEffort, overrideEnabled
 }
 
 func isExecConfigurationUpdateItem(item any) bool {

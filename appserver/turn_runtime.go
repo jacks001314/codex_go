@@ -1527,6 +1527,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		ParallelToolCalls:            runConfig.ParallelToolCalls,
 		ReasoningEffort:              runConfig.ReasoningEffort,
 		ReasoningSummary:             runConfig.ReasoningSummary,
+		DropReasoningEffortUpdates:   !runConfig.ReasoningEffortOverrideEnabled,
 		ConcurrentReasoningSummaries: runConfig.ConcurrentReasoningSummaries,
 		ModelVerbosity:               runConfig.ModelVerbosity,
 		IncludeTimingMetrics:         runConfig.IncludeTimingMetrics,
@@ -5460,12 +5461,12 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 		Model:    compactModel,
 	}
 	if cfg, cfgErr := r.effectiveConfigForTurn(compactionParams); cfgErr == nil && cfg != nil {
-		overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(cfg, compactionParams, compactInfo, providerID)
+		overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(string(record.ID), cfg, compactionParams, compactInfo, providerID)
 		compactionEffort = r.reasoningEffortForRequest(
 			string(record.ID),
 			reasoningEffortModelSlug(compactInfo, compactModel),
 			appReasoningEffortForTurn(cfg, compactionParams),
-			reasoningEffortFeatureEnabled(cfg),
+			r.reasoningEffortOverrideEnabled(string(record.ID), cfg, compactInfo, providerID),
 			overrideEffort,
 			overrideAvailable,
 			requestEffortCompaction,
@@ -6263,6 +6264,10 @@ type appTurnRunConfig struct {
 	ParallelToolCalls          bool
 	ReasoningEffort            string
 	ReasoningSummary           string
+	// ReasoningEffortOverrideEnabled is the combined client-level gate (Rust
+	// `ModelClient::reasoning_effort_override_enabled`): when false, saved
+	// configuration_update items are dropped from the request copy (#46530).
+	ReasoningEffortOverrideEnabled bool
 	// OverrideInputItems holds trusted reasoning-effort configuration_update
 	// items this turn should record after accepted input (Rust #43110).
 	OverrideInputItems           []any
@@ -6521,11 +6526,11 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	toolMode = model.ResolveToolMode(toolMode, cfg.FeatureSettings())
 	// Reasoning-effort overrides (Rust #43110/#43795): decide the trusted update
 	// before pinning the request baseline for this context window.
-	reasoningEffortFeature := reasoningEffortFeatureEnabled(cfg)
+	reasoningEffortOverride := r.reasoningEffortOverrideEnabled(threadID, cfg, modelInfo, modelProviderConfig.ProviderID)
 	reasoningEffortModel := reasoningEffortModelSlug(modelInfo, modelProviderConfig.Model)
-	overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(cfg, params, modelInfo, modelProviderConfig.ProviderID)
+	overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(threadID, cfg, params, modelInfo, modelProviderConfig.ProviderID)
 	overrideInputItems := r.reasoningEffortOverrideInputItems(threadID, reasoningEffortModel, overrideEffort, overrideAvailable, historyItems)
-	requestReasoningEffort := r.reasoningEffortForRequest(threadID, reasoningEffortModel, appReasoningEffortForTurn(cfg, params), reasoningEffortFeature, overrideEffort, overrideAvailable, requestEffortSampling)
+	requestReasoningEffort := r.reasoningEffortForRequest(threadID, reasoningEffortModel, appReasoningEffortForTurn(cfg, params), reasoningEffortOverride, overrideEffort, overrideAvailable, requestEffortSampling)
 	return &appTurnRunConfig{
 		Model:                   modelProviderConfig.Model,
 		AutoReviewModelOverride: autoReviewModelOverride,
@@ -6563,6 +6568,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		ParallelToolCalls:            r.modelSupportsParallelToolCalls(modelProviderConfig.Model),
 		ReasoningEffort:              requestReasoningEffort,
 		ReasoningSummary:             turnReasoningSummary(cfg, params),
+		ReasoningEffortOverrideEnabled: reasoningEffortOverride,
 		OverrideInputItems:           overrideInputItems,
 		ConcurrentReasoningSummaries: features.Enabled(cfg.FeatureSettings(), "concurrent_reasoning_summaries"),
 		ModelVerbosity:               firstNonEmpty(stringConfigValue(cfg, "model_verbosity"), stringConfigValue(cfg, "modelVerbosity")),

@@ -114,6 +114,10 @@ type AgentLoopRequest struct {
 	ParallelToolCalls            bool
 	ReasoningEffort              string
 	ReasoningSummary             string
+	// DropReasoningEffortUpdates removes saved configuration_update items from
+	// the request copy when the effective model/provider does not support them
+	// (Rust #46530).
+	DropReasoningEffortUpdates   bool
 	ConcurrentReasoningSummaries bool
 	ModelVerbosity               string
 	IncludeTimingMetrics         bool
@@ -344,6 +348,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			ParallelToolCalls:            request.ParallelToolCalls,
 			ReasoningEffort:              stepReasoningEffort,
 			ReasoningSummary:             request.ReasoningSummary,
+			DropReasoningEffortUpdates:   request.DropReasoningEffortUpdates,
 			ConcurrentReasoningSummaries: request.ConcurrentReasoningSummaries,
 			ModelVerbosity:               request.ModelVerbosity,
 			IncludeTimingMetrics:         request.IncludeTimingMetrics,

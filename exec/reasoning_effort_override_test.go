@@ -2,6 +2,7 @@ package exec
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,7 @@ func execReasoningOverrideConfig(featureEnabled bool) *config.Config {
 }
 
 func liteOpenAIModel() model.ModelInfo {
-	return model.ModelInfo{Slug: "gpt-5", UseResponsesLite: true, DefaultReasoningLevel: "medium"}
+	return model.ModelInfo{Slug: "gpt-5", UseResponsesLite: true, SupportsReasoningEffortUpdates: true, DefaultReasoningLevel: "medium"}
 }
 
 // TestExecReasoningEffortOverridePinsAndRecordsLikeRust covers the exec entry
@@ -37,22 +38,25 @@ func TestExecReasoningEffortOverridePinsAndRecordsLikeRust(t *testing.T) {
 	cfg := execReasoningOverrideConfig(true)
 	info := liteOpenAIModel()
 
-	items, effort := runner.execReasoningEffortOverride("thread-1", cfg, "gpt-5", &info, "openai", "high", nil)
+	items, effort, enabled := runner.execReasoningEffortOverride("thread-1", cfg, "gpt-5", &info, "openai", "high", nil)
 	if len(items) != 1 {
 		t.Fatalf("first turn override items = %#v, want one update", items)
 	}
 	if effort != "high" {
 		t.Fatalf("first turn request effort = %q, want high", effort)
 	}
+	if !enabled {
+		t.Fatal("first turn override must be enabled")
+	}
 
 	// Same selection: the pin already matches, so no duplicate update.
-	items, effort = runner.execReasoningEffortOverride("thread-1", cfg, "gpt-5", &info, "openai", "high", nil)
+	items, effort, _ = runner.execReasoningEffortOverride("thread-1", cfg, "gpt-5", &info, "openai", "high", nil)
 	if len(items) != 0 || effort != "high" {
 		t.Fatalf("repeat selection items=%#v effort=%q, want none/high", items, effort)
 	}
 
 	// Changed selection: record the new effort, keep the pinned request baseline.
-	items, effort = runner.execReasoningEffortOverride("thread-1", cfg, "gpt-5", &info, "openai", "low", nil)
+	items, effort, _ = runner.execReasoningEffortOverride("thread-1", cfg, "gpt-5", &info, "openai", "low", nil)
 	if len(items) != 1 || effort != "high" {
 		t.Fatalf("changed selection items=%#v effort=%q, want one update/pinned high", items, effort)
 	}
@@ -63,19 +67,28 @@ func TestExecReasoningEffortOverrideGatingLikeRust(t *testing.T) {
 	info := liteOpenAIModel()
 
 	// Feature disabled: no update and the selected effort is used directly.
-	items, effort := runner.execReasoningEffortOverride("thread-1", execReasoningOverrideConfig(false), "gpt-5", &info, "openai", "high", nil)
+	items, effort, enabled := runner.execReasoningEffortOverride("thread-1", execReasoningOverrideConfig(false), "gpt-5", &info, "openai", "high", nil)
 	if len(items) != 0 || effort != "high" {
 		t.Fatalf("feature disabled items=%#v effort=%q, want none/high", items, effort)
 	}
+	if enabled {
+		t.Fatal("feature disabled must not enable the override gate")
+	}
 
-	// Responses Lite disabled: no override.
-	notLite := model.ModelInfo{Slug: "gpt-5", UseResponsesLite: false, DefaultReasoningLevel: "medium"}
-	if items, _ := runner.execReasoningEffortOverride("thread-2", execReasoningOverrideConfig(true), "gpt-5", &notLite, "openai", "high", nil); len(items) != 0 {
-		t.Fatalf("responses-lite disabled items = %#v, want none", items)
+	// Responses Lite alone does not establish revision support (#46530).
+	unsupported := model.ModelInfo{Slug: "gpt-5", UseResponsesLite: true, DefaultReasoningLevel: "medium"}
+	if items, _, enabled := runner.execReasoningEffortOverride("thread-2", execReasoningOverrideConfig(true), "gpt-5", &unsupported, "openai", "high", nil); len(items) != 0 || enabled {
+		t.Fatalf("missing model support items = %#v, want none", items)
+	}
+
+	// Explicit model support is independent of Responses Lite.
+	nonLiteSupported := model.ModelInfo{Slug: "gpt-5", SupportsReasoningEffortUpdates: true, DefaultReasoningLevel: "medium"}
+	if items, effort, _ := runner.execReasoningEffortOverride("thread-2b", execReasoningOverrideConfig(true), "gpt-5", &nonLiteSupported, "openai", "high", nil); len(items) != 1 || effort != "high" {
+		t.Fatalf("supported non-lite model items=%#v effort=%q, want one update/pinned high", items, effort)
 	}
 
 	// Non-OpenAI provider: no override.
-	if items, _ := runner.execReasoningEffortOverride("thread-3", execReasoningOverrideConfig(true), "gpt-5", &info, "azure", "high", nil); len(items) != 0 {
+	if items, _, enabled := runner.execReasoningEffortOverride("thread-3", execReasoningOverrideConfig(true), "gpt-5", &info, "azure", "high", nil); len(items) != 0 || enabled {
 		t.Fatalf("non-openai items = %#v, want none", items)
 	}
 }
@@ -110,13 +123,34 @@ func TestExecConfigurationUpdateSessionItemIsTrustedLikeRust(t *testing.T) {
 // persists it as harness-authored history.
 func TestExecTurnRecordsTrustedReasoningEffortUpdateLikeRust(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(`
+	// Rust enables reasoning-effort updates only for models whose metadata sets
+	// `supports_reasoning_effort_updates` (#46530); the bundled catalog omits it.
+	catalogPath := filepath.Join(home, "models.json")
+	if err := os.WriteFile(catalogPath, []byte(`{"models":[{
+		"slug": "gpt-5.6-terra",
+		"display_name": "GPT-5.6-Terra",
+		"visibility": "list",
+		"supported_in_api": true,
+		"default_reasoning_level": "medium",
+		"supported_reasoning_levels": ["low", "medium", "high"],
+		"use_responses_lite": true,
+		"supports_reasoning_effort_updates": true,
+		"context_window": 272000,
+		"max_context_window": 272000,
+		"effective_context_window_percent": 95,
+		"input_modalities": ["text", "image"]
+	}]}`), 0o600); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+	configText := fmt.Sprintf(`
 model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
+model_catalog_json = %q
 
 [features]
 reasoning_effort_override = true
-`), 0o600); err != nil {
+`, filepath.ToSlash(catalogPath))
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configText), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {

@@ -519,6 +519,11 @@ type ModelInfo struct {
 	// activated at session startup for this model.
 	SupportsExperimentalContext bool              `json:"supports_experimental_context"`
 	UseResponsesLite            bool              `json:"use_responses_lite"`
+	// SupportsReasoningEffortUpdates mirrors Rust
+	// ModelInfo.supports_reasoning_effort_updates (serde default false): whether
+	// the model accepts reasoning-effort `configuration_update` items. Missing
+	// metadata keeps effort changes on the ordinary request parameter.
+	SupportsReasoningEffortUpdates bool           `json:"supports_reasoning_effort_updates"`
 	NodeReplAutoReviewRequired  bool              `json:"node_repl_auto_review_required"`
 	NodeReplDisabled            bool              `json:"node_repl_disabled"`
 	AutoReviewModelOverride     string            `json:"auto_review_model_override"`
@@ -709,6 +714,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		SupportsSearchTool                bool                  `json:"supports_search_tool"`
 		SupportsExperimentalContext       bool                  `json:"supports_experimental_context"`
 		UseResponsesLite                  bool                  `json:"use_responses_lite"`
+		SupportsReasoningEffortUpdates    bool                  `json:"supports_reasoning_effort_updates"`
 		NodeReplAutoReviewRequired        bool                  `json:"node_repl_auto_review_required"`
 		NodeReplDisabled                  bool                  `json:"node_repl_disabled"`
 		AutoReviewModelOverride           any                   `json:"auto_review_model_override"`
@@ -760,6 +766,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		SupportsSearchTool:             raw.SupportsSearchTool,
 		SupportsExperimentalContext:    raw.SupportsExperimentalContext,
 		UseResponsesLite:               raw.UseResponsesLite,
+		SupportsReasoningEffortUpdates: raw.SupportsReasoningEffortUpdates,
 		NodeReplAutoReviewRequired:     raw.NodeReplAutoReviewRequired,
 		NodeReplDisabled:               raw.NodeReplDisabled,
 		AutoReviewModelOverride:        stringFromJSONValue(raw.AutoReviewModelOverride),

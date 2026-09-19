@@ -192,9 +192,10 @@ var Registry = []Spec{
 	{Key: "guardian_approval", Stage: StageStable, DefaultEnabled: true},
 	{Key: "guardian_enhanced_node_repl_transcripts", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_node_repl_transcript_images", Stage: StageUnderDevelopment, DefaultEnabled: false},
-	// Rust (codex-rs/features/src/lib.rs c2bcb9a26b): reuse encrypted parent
-	// compaction when restarting Guardian review sessions.
-	{Key: "guardian_reuse_parent_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #46522): reuse encrypted parent
+	// compaction when restarting Guardian review sessions. Promoted to stable
+	// and enabled by default.
+	{Key: "guardian_reuse_parent_compaction", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs e4ce83419b #43104): retain thread
 	// context for Guardian reviews; renamed from guardian_thread_context into
 	// the guardianv2 configuration namespace.

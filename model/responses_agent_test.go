@@ -3922,3 +3922,39 @@ func TestResponsesAgentRunnerResetAuthOwnedCaches(t *testing.T) {
 		t.Fatalf("turn state = %q/%q, want cleared after auth ownership change", runner.turnState.turnID, runner.turnState.value)
 	}
 }
+
+// TestResponsesInputItemsDropUnsupportedConfigurationUpdatesLikeRust covers
+// Rust #46530: when the effective model does not accept reasoning-effort
+// update items, saved configuration_update items are removed from the request
+// copy while other input items are preserved.
+func TestResponsesInputItemsDropUnsupportedConfigurationUpdatesLikeRust(t *testing.T) {
+	update := map[string]any{"type": "configuration_update", "reasoning": map[string]any{"effort": "high"}}
+	message := map[string]any{"type": "message", "role": "user", "content": []any{}}
+	request := &AgentRequest{
+		Prompt:                     "hello",
+		InputItems:                 []any{message, update},
+		PostPromptInputItems:       []any{update},
+		DropReasoningEffortUpdates: true,
+	}
+	items := responsesInputItems(request)
+	for _, item := range items {
+		if payload, ok := item.(map[string]any); ok {
+			if itemType, _ := payload["type"].(string); itemType == "configuration_update" {
+				t.Fatalf("configuration_update survived the unsupported-model filter: %#v", items)
+			}
+		}
+	}
+	if len(items) != 2 {
+		t.Fatalf("filtered input item count = %d, want 2 (history message + prompt)", len(items))
+	}
+
+	// The same input is left intact when the model supports updates.
+	unfiltered := responsesInputItems(&AgentRequest{
+		Prompt:               "hello",
+		InputItems:           []any{message, update},
+		PostPromptInputItems: []any{update},
+	})
+	if len(unfiltered) != 4 {
+		t.Fatalf("unfiltered input item count = %d, want 4", len(unfiltered))
+	}
+}

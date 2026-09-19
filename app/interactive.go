@@ -1694,10 +1694,11 @@ func interactiveAutoRecap(values map[string]any) *bool {
 }
 
 // interactiveEmbeddedReasoningOverrides mirrors Rust new_thread_reasoning_overrides
-// (#43921) for the embedded TUI: new threads default to detailed reasoning
+// (#43921, #46533) for the embedded TUI: new threads default to no reasoning
 // summaries, and concurrent reasoning summaries stay opt-in and are disabled
 // when summaries are off. The effective `model_reasoning_summary` config value
-// wins when set.
+// wins when set, and enabling `concurrent_reasoning_summaries` alone no longer
+// turns summaries on.
 func interactiveEmbeddedReasoningOverrides(root *cli.RootOptions) []string {
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
 	if err != nil || loaded == nil {
@@ -1708,7 +1709,7 @@ func interactiveEmbeddedReasoningOverrides(root *cli.RootOptions) []string {
 		summary = strings.TrimSpace(value)
 	}
 	if summary == "" {
-		summary = "detailed"
+		summary = "none"
 	}
 	explicitConcurrent := false
 	if features, ok := loaded.Values["features"].(map[string]any); ok {

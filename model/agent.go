@@ -41,6 +41,11 @@ type AgentRequest struct {
 	ParallelToolCalls            bool
 	ReasoningEffort              string
 	ReasoningSummary             string
+	// DropReasoningEffortUpdates mirrors Rust ModelClient's request-time filter
+	// (#46530): when reasoning-effort updates are unsupported for the effective
+	// model or provider, saved configuration_update items are removed from the
+	// request copy only (persisted history is unchanged).
+	DropReasoningEffortUpdates bool
 	ConcurrentReasoningSummaries bool
 	ModelVerbosity               string
 	IncludeTimingMetrics         bool

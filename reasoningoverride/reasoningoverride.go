@@ -62,12 +62,21 @@ func (p *Pin) Pin(modelSlug string, effort string) string {
 	return effort
 }
 
+// OverrideEnabled mirrors Rust
+// `ModelClient::reasoning_effort_override_enabled`: reasoning-effort
+// configuration updates require the feature, an OpenAI provider, and explicit
+// model support (`supports_reasoning_effort_updates`). Responses Lite alone
+// does not establish that a model accepts update items (#46530).
+func OverrideEnabled(featureEnabled bool, providerIsOpenAI bool, info *model.ModelInfo) bool {
+	return featureEnabled && providerIsOpenAI && info != nil && info.SupportsReasoningEffortUpdates
+}
+
 // EffortForConfigurationUpdate mirrors Rust
 // `Session::effort_for_configuration_update`: the resolved effort a trusted
-// update may carry, gated on the feature, Responses Lite, an OpenAI provider,
-// and a known (non-custom) effort.
-func EffortForConfigurationUpdate(featureEnabled bool, providerIsOpenAI bool, info *model.ModelInfo, effectiveEffort string) (string, bool) {
-	if !featureEnabled || info == nil || !providerIsOpenAI || !info.UseResponsesLite {
+// update may carry, gated on the combined override gate (`OverrideEnabled`) and
+// a known (non-custom) effort.
+func EffortForConfigurationUpdate(overrideEnabled bool, info *model.ModelInfo, effectiveEffort string) (string, bool) {
+	if !overrideEnabled || info == nil {
 		return "", false
 	}
 	effective := strings.TrimSpace(effectiveEffort)
@@ -137,9 +146,14 @@ func OverrideInputItems(pin Pin, modelSlug, effort string, overrideAvailable boo
 
 // RequestEffort mirrors Rust `Session::reasoning_effort_for_request`. Sampling
 // pins the selected effort for the current model; compaction reuses the pin
-// when it matches and never mutates it.
-func RequestEffort(pin Pin, modelSlug, selectedEffort string, featureEnabled bool, overrideEffort string, overrideAvailable bool, usage Usage) (string, Pin) {
-	if !featureEnabled {
+// when it matches and never mutates it. `overrideEnabled` is the combined
+// client-level gate (`OverrideEnabled`), so sampling with an unsupported model
+// clears a stale baseline (#46530) just like a disabled feature does.
+func RequestEffort(pin Pin, modelSlug, selectedEffort string, overrideEnabled bool, overrideEffort string, overrideAvailable bool, usage Usage) (string, Pin) {
+	if !overrideEnabled {
+		if usage == UsageSampling {
+			pin = Pin{}
+		}
 		return selectedEffort, pin
 	}
 	if usage == UsageCompaction {

@@ -22,8 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1168 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1168", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1171 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1171", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -340,12 +340,15 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/tests/suite/snapshots",
-			Files:    1,
+			Files:    4,
 			Owner:    "tui",
-			Focus:    "integration suite snapshot for automatic background server startup failures",
+			Focus:    "integration suite snapshots for automatic background server startup failures and shared-daemon feature/host-policy/override mismatches",
 			Priority: []string{"status"},
 			Required: []string{
 				"tui/tests/suite/snapshots/all__suite__focus_palette__daemon_auto_start_failure.snap",
+				"tui/tests/suite/snapshots/all__suite__daemon_compatibility__daemon_feature_mismatch.snap",
+				"tui/tests/suite/snapshots/all__suite__daemon_compatibility__daemon_host_policy_mismatch.snap",
+				"tui/tests/suite/snapshots/all__suite__daemon_compatibility__daemon_override_mismatch.snap",
 			},
 		},
 	}

@@ -1829,11 +1829,37 @@ func responsesInputItems(request *AgentRequest) []any {
 		}
 	}
 	items = BoundExecutedToolCallsForPrompt(items)
+	if request.DropReasoningEffortUpdates {
+		items = dropConfigurationUpdateItems(items)
+	}
 	if !request.Store && !request.ItemIDsEnabled {
 		items = stripResponseInputItemIDs(items)
 	}
 	items = prepareResponseInputImages(items)
 	return items
+}
+
+// dropConfigurationUpdateItems mirrors Rust ModelClient's
+// `input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }))`
+// for models that do not accept reasoning-effort update items (#46530).
+func dropConfigurationUpdateItems(items []any) []any {
+	filtered := items[:0:0]
+	for _, item := range items {
+		if isConfigurationUpdateResponseItem(item) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func isConfigurationUpdateResponseItem(item any) bool {
+	payload, ok := item.(map[string]any)
+	if !ok {
+		return false
+	}
+	itemType, _ := payload["type"].(string)
+	return strings.TrimSpace(itemType) == "configuration_update"
 }
 
 // prepareResponseInputImages runs the image-preparation pipeline over every
