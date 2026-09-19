@@ -59,7 +59,14 @@ func TestToolEventTypeClassifiesCodeModeChildCallsLikeRust(t *testing.T) {
 	if err := router.threads.RegisterTurn(threadID, turnID, nil, 1, &turn.TurnStartParams{ThreadID: threadID}); err != nil {
 		t.Fatalf("RegisterTurn() error = %v", err)
 	}
-	router.rememberCodeModeChildCall(threadID, "cell-1", "child-1")
+	// A child call is only evidence while its cell is known (Rust records a
+	// child call only for a cell it has seen start).
+	router.rememberCodeModeChildCall(threadID, turnID, "cell-1", "child-1")
+	if got := router.toolEventTypeForCall(threadID, turnID, "child-1"); got != nil {
+		t.Fatalf("child call without a known cell = %#v", got)
+	}
+	router.rememberCodeModeCell(threadID, turnID, "cell-1", "exec-1")
+	router.rememberCodeModeChildCall(threadID, turnID, "cell-1", "child-1")
 	got := router.toolEventTypeForCall(threadID, turnID, "child-1")
 	if got == nil || *got != telemetry.ToolEventTypeInnerToolCall {
 		t.Fatalf("child call classification = %#v", got)
@@ -69,8 +76,9 @@ func TestToolEventTypeClassifiesCodeModeChildCallsLikeRust(t *testing.T) {
 	if got := router.toolEventTypeForCall(threadID, turnID, "child-1"); got != nil {
 		t.Fatalf("ambiguous call classification = %#v", got)
 	}
-	// A child call without an active turn is not attributed to a turn.
-	router.rememberCodeModeChildCall("thread-2", "cell-2", "child-2")
+	// A child call without a turn id is not attributed to any turn.
+	router.rememberCodeModeCell("thread-2", turnID, "cell-2", "exec-2")
+	router.rememberCodeModeChildCall("thread-2", "", "cell-2", "child-2")
 	if got := router.toolEventTypeForCall("thread-2", turnID, "child-2"); got != nil {
 		t.Fatalf("child call without a turn = %#v", got)
 	}
@@ -97,5 +105,78 @@ func TestSampledOutputToolCallIDLikeRust(t *testing.T) {
 		if got := sampledOutputToolCallID(testCase.item); got != testCase.want {
 			t.Fatalf("sampledOutputToolCallID(%#v) = %q, want %q", testCase.item, got, testCase.want)
 		}
+	}
+}
+
+// Mirrors Rust #36729's `enrich_tool_response_event`: a child call takes its cell
+// and parent call from the cell evidence, its originating response is its own
+// sampled response or the cell's, and a child call whose cell is unknown loses
+// both correlation fields.
+func TestEnrichToolEventBaseCorrelatesCodeModeCallsLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	const threadID = "thread-1"
+	const turnID = "turn-1"
+
+	// The exec call was sampled in response-1 and started cell-1.
+	router.rememberSampledToolCalls(threadID, turnID, "response-1", []string{"exec-1"})
+	router.rememberCodeModeCell(threadID, turnID, "cell-1", "exec-1")
+	// The child call was dispatched inside the cell and answered by response-2.
+	router.rememberCodeModeChildCall(threadID, turnID, "cell-1", "child-1")
+	router.rememberSampledToolCalls(threadID, turnID, "response-2", []string{"child-1"})
+
+	child := telemetry.CodexToolItemEventBase{ItemID: "child-1"}
+	router.enrichToolEventBase(&child, threadID, turnID)
+	if child.CellID == nil || *child.CellID != "cell-1" {
+		t.Fatalf("child cell = %#v", child.CellID)
+	}
+	if child.ParentCallID == nil || *child.ParentCallID != "exec-1" {
+		t.Fatalf("child parent call = %#v", child.ParentCallID)
+	}
+	if child.OriginatingResponseID == nil || *child.OriginatingResponseID != "response-2" {
+		t.Fatalf("child originating response = %#v", child.OriginatingResponseID)
+	}
+	if child.SubsequentResponseID != nil {
+		t.Fatalf("subsequent response must stay absent: %#v", child.SubsequentResponseID)
+	}
+	if child.SessionID != threadID {
+		t.Fatalf("session id = %q", child.SessionID)
+	}
+
+	// A child call without its own sampled response falls back to the cell's.
+	router.rememberCodeModeChildCall(threadID, turnID, "cell-1", "child-2")
+	withoutOwnResponse := telemetry.CodexToolItemEventBase{ItemID: "child-2"}
+	router.enrichToolEventBase(&withoutOwnResponse, threadID, turnID)
+	if withoutOwnResponse.OriginatingResponseID == nil || *withoutOwnResponse.OriginatingResponseID != "response-1" {
+		t.Fatalf("cell originating response = %#v", withoutOwnResponse.OriginatingResponseID)
+	}
+	if withoutOwnResponse.ParentCallID == nil || *withoutOwnResponse.ParentCallID != "exec-1" {
+		t.Fatalf("cell fallback parent call = %#v", withoutOwnResponse.ParentCallID)
+	}
+
+	// The cell's own call is not a child call, so it correlates only by response.
+	execCall := telemetry.CodexToolItemEventBase{ItemID: "exec-1"}
+	router.enrichToolEventBase(&execCall, threadID, turnID)
+	if execCall.CellID != nil || execCall.ParentCallID != nil {
+		t.Fatalf("exec call correlation = %#v/%#v", execCall.CellID, execCall.ParentCallID)
+	}
+	if execCall.OriginatingResponseID == nil || *execCall.OriginatingResponseID != "response-1" {
+		t.Fatalf("exec originating response = %#v", execCall.OriginatingResponseID)
+	}
+
+	// A child call whose cell is unknown keeps neither field.
+	router.rememberCodeModeChildCall(threadID, turnID, "cell-unknown", "child-3")
+	orphan := telemetry.CodexToolItemEventBase{ItemID: "child-3"}
+	router.enrichToolEventBase(&orphan, threadID, turnID)
+	if orphan.CellID != nil || orphan.ParentCallID != nil {
+		t.Fatalf("orphan child correlation = %#v/%#v", orphan.CellID, orphan.ParentCallID)
+	}
+
+	// Closing the turn drops the closed cell and the turn's child evidence.
+	router.closeCodeModeCell(threadID, turnID, "cell-1")
+	router.forgetSampledToolCalls(threadID, turnID)
+	closed := telemetry.CodexToolItemEventBase{ItemID: "child-1"}
+	router.enrichToolEventBase(&closed, threadID, turnID)
+	if closed.CellID != nil || closed.ParentCallID != nil || closed.OriginatingResponseID != nil {
+		t.Fatalf("correlation after turn close = %#v", closed)
 	}
 }

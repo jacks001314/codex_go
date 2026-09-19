@@ -5,6 +5,7 @@ import (
 
 	"codex_go/model"
 	"codex_go/telemetry"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -80,6 +81,19 @@ func (r *RuntimeRouter) rememberSampledToolCalls(threadID string, turnID string,
 		}
 		calls[callID] = strings.TrimSpace(responseID)
 	}
+	// Rust fills a cell's missing originating response as soon as the response of
+	// its parent call is known.
+	if responseID = strings.TrimSpace(responseID); responseID != "" {
+		for cellID, cell := range r.codeModeCells[threadID] {
+			if cell.OriginatingResponseID != "" {
+				continue
+			}
+			if known, ok := calls[cell.ParentCallID]; ok && strings.TrimSpace(known) != "" {
+				cell.OriginatingResponseID = strings.TrimSpace(known)
+				r.codeModeCells[threadID][cellID] = cell
+			}
+		}
+	}
 }
 
 // toolEventTypeForCall classifies a tool event from exact call-ID evidence
@@ -116,7 +130,7 @@ func (r *RuntimeRouter) toolEventTypeForCall(threadID string, turnID string, ite
 // with the cell it belongs to (Rust #45535's `cell_ids_by_child_call_id`). The
 // evidence belongs to the turn whose cell dispatched the call, which is the
 // thread's active turn at dispatch time.
-func (r *RuntimeRouter) rememberCodeModeChildCall(threadID string, cellID string, callID string) {
+func (r *RuntimeRouter) rememberCodeModeChildCall(threadID string, turnID string, cellID string, callID string) {
 	if r == nil {
 		return
 	}
@@ -124,16 +138,22 @@ func (r *RuntimeRouter) rememberCodeModeChildCall(threadID string, cellID string
 	if callID == "" {
 		return
 	}
-	turnID := ""
-	if active := r.threads.ActiveTurn(strings.TrimSpace(threadID)); active != nil {
-		turnID = strings.TrimSpace(active.TurnID)
-	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	cellID = strings.TrimSpace(cellID)
 	if turnID == "" {
 		return
 	}
 	key := sampledToolCallsKey(threadID, turnID)
 	r.sampledToolCallsMu.Lock()
 	defer r.sampledToolCallsMu.Unlock()
+	// Rust records a child call only while its cell is known.
+	if cellID == "" {
+		return
+	}
+	if _, known := r.codeModeCells[threadID][cellID]; !known {
+		return
+	}
 	if r.codeModeChildCalls == nil {
 		r.codeModeChildCalls = map[string]map[string]string{}
 	}
@@ -145,7 +165,7 @@ func (r *RuntimeRouter) rememberCodeModeChildCall(threadID string, cellID string
 	if _, known := calls[callID]; !known && len(calls) >= maxSampledToolCallsPerTurn {
 		return
 	}
-	calls[callID] = strings.TrimSpace(cellID)
+	calls[callID] = cellID
 }
 
 // forgetSampledToolCalls drops a finished turn's evidence, mirroring Rust's
@@ -157,6 +177,18 @@ func (r *RuntimeRouter) forgetSampledToolCalls(threadID string, turnID string) {
 	r.sampledToolCallsMu.Lock()
 	delete(r.sampledToolCalls, sampledToolCallsKey(threadID, turnID))
 	delete(r.codeModeChildCalls, sampledToolCallsKey(threadID, turnID))
+	// Rust drops the cells closed in this turn and keeps the rest for later
+	// turns of the same thread.
+	if cells := r.codeModeCells[threadID]; len(cells) > 0 {
+		for cellID, cell := range cells {
+			if cell.ClosedInTurnID == strings.TrimSpace(turnID) {
+				delete(cells, cellID)
+			}
+		}
+		if len(cells) == 0 {
+			delete(r.codeModeCells, threadID)
+		}
+	}
 	r.sampledToolCallsMu.Unlock()
 }
 
@@ -177,5 +209,125 @@ func sampledOutputToolCallID(item *model.AgentItem) string {
 		return strings.TrimSpace(firstNonEmpty(item.ID, item.CallID))
 	default:
 		return ""
+	}
+}
+
+// codeModeCellState mirrors Rust's CodeModeCellState: the call that created the
+// cell, the response that call came from, and the turn that closed the cell.
+type codeModeCellState struct {
+	ParentCallID          string
+	OriginatingResponseID string
+	ClosedInTurnID        string
+}
+
+// observeCodeModeCall records one code-mode cell or child-call fact (Rust's
+// CodeModeToolCallFact) against the thread's active turn.
+func (r *RuntimeRouter) observeCodeModeCall(threadID string, observation tool.CodeModeCallObservation) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	turnID := ""
+	if active := r.threads.ActiveTurn(threadID); active != nil {
+		turnID = strings.TrimSpace(active.TurnID)
+	}
+	switch observation.Kind {
+	case tool.CodeModeCallCellStarted:
+		r.rememberCodeModeCell(threadID, turnID, observation.CellID, observation.ParentCallID)
+	case tool.CodeModeCallChildStarted:
+		r.rememberCodeModeChildCall(threadID, turnID, observation.CellID, observation.CallID)
+	case tool.CodeModeCallCellClosed:
+		r.closeCodeModeCell(threadID, turnID, observation.CellID)
+	}
+}
+
+// rememberCodeModeCell records the call that started a cell and, when the call's
+// response is already known, the response the cell originated in (Rust's
+// CodeModeToolCallFact::CellStarted).
+func (r *RuntimeRouter) rememberCodeModeCell(threadID string, turnID string, cellID string, parentCallID string) {
+	cellID = strings.TrimSpace(cellID)
+	parentCallID = strings.TrimSpace(parentCallID)
+	if cellID == "" || parentCallID == "" {
+		return
+	}
+	r.sampledToolCallsMu.Lock()
+	defer r.sampledToolCallsMu.Unlock()
+	if r.codeModeCells == nil {
+		r.codeModeCells = map[string]map[string]codeModeCellState{}
+	}
+	cells := r.codeModeCells[threadID]
+	if cells == nil {
+		cells = map[string]codeModeCellState{}
+		r.codeModeCells[threadID] = cells
+	}
+	if _, known := cells[cellID]; !known && len(cells) >= maxSampledToolCallsPerTurn {
+		return
+	}
+	cells[cellID] = codeModeCellState{
+		ParentCallID:          parentCallID,
+		OriginatingResponseID: r.sampledToolCalls[sampledToolCallsKey(threadID, turnID)][parentCallID],
+	}
+}
+
+// closeCodeModeCell marks a cell finished in one turn, mirroring Rust's
+// CodeModeToolCallFact::CellClosed; the cell is dropped when that turn ends.
+func (r *RuntimeRouter) closeCodeModeCell(threadID string, turnID string, cellID string) {
+	cellID = strings.TrimSpace(cellID)
+	if cellID == "" || turnID == "" {
+		return
+	}
+	r.sampledToolCallsMu.Lock()
+	defer r.sampledToolCallsMu.Unlock()
+	cells := r.codeModeCells[threadID]
+	if cells == nil {
+		return
+	}
+	cell, known := cells[cellID]
+	if !known {
+		return
+	}
+	cell.ClosedInTurnID = turnID
+	cells[cellID] = cell
+}
+
+// enrichToolEventBase fills the code-mode correlation fields of one tool event,
+// mirroring Rust's `enrich_tool_response_event`: a child call takes its cell from
+// the child evidence, the cell supplies the parent call, and the originating
+// response is the call's own sampled response or the cell's. A child call whose
+// cell is unknown loses both fields.
+func (r *RuntimeRouter) enrichToolEventBase(base *telemetry.CodexToolItemEventBase, threadID string, turnID string) {
+	if r == nil || base == nil {
+		return
+	}
+	base.SessionID = firstNonEmpty(base.SessionID, r.responsesMetadataLineage(threadID).SessionID)
+	itemID := strings.TrimSpace(base.ItemID)
+	if itemID == "" {
+		return
+	}
+	key := sampledToolCallsKey(threadID, turnID)
+	r.sampledToolCallsMu.Lock()
+	childCellID := strings.TrimSpace(r.codeModeChildCalls[key][itemID])
+	cell, cellKnown := r.codeModeCells[threadID][childCellID]
+	sampledResponseID := strings.TrimSpace(r.sampledToolCalls[key][itemID])
+	r.sampledToolCallsMu.Unlock()
+
+	if base.CellID == nil && childCellID != "" {
+		base.CellID = &childCellID
+	}
+	if !cellKnown {
+		base.CellID = nil
+		base.ParentCallID = nil
+	} else if cell.ParentCallID != "" && cell.ParentCallID != itemID {
+		parentCallID := cell.ParentCallID
+		base.ParentCallID = &parentCallID
+	} else {
+		base.ParentCallID = nil
+	}
+	responseID := firstNonEmpty(sampledResponseID, cell.OriginatingResponseID)
+	if responseID != "" {
+		base.OriginatingResponseID = &responseID
 	}
 }

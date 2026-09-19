@@ -362,7 +362,11 @@ type RuntimeRouter struct {
 	// codeModeChildCalls records, per (thread, turn), the child calls a Code Mode
 	// cell dispatched with the cell they belong to (Rust #45535's
 	// `cell_ids_by_child_call_id`).
-	codeModeChildCalls      map[string]map[string]string
+	codeModeChildCalls map[string]map[string]string
+	// codeModeCells records, per thread, the cells the code mode started with the
+	// call that created them and the response it came from (Rust #36729's
+	// `code_mode_cells`).
+	codeModeCells           map[string]map[string]codeModeCellState
 	networkApproval         *networkApprovalService
 	execPolicySaved         *execPolicySavedState
 	managedNetworkReloadMu  sync.Mutex
@@ -596,6 +600,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		toolItemModelContexts:   map[string]modelInvocationContext{},
 		sampledToolCalls:        map[string]map[string]string{},
 		codeModeChildCalls:      map[string]map[string]string{},
+		codeModeCells:           map[string]map[string]codeModeCellState{},
 		managedNetworks:         map[string]*network.PreparedProxyManagedNetwork{},
 		managedNetworkInputs:    map[string]managedNetworkReloadInput{},
 		goalAccountingTurns:     map[string]stateGoalTurnSnapshot{},
@@ -13344,8 +13349,8 @@ func (r *RuntimeRouter) codeModeRuntimeForThread(threadID string) *tool.CodeMode
 		runtime = tool.NewCodeModeRuntime(r.services.CodeModeProvider, r.services.DisableCodeModeFallback)
 		// Rust #45535: the code-mode child calls are the other half of the exact
 		// call-ID evidence tool events are classified with.
-		runtime.SetNestedCallObserver(func(cellID string, callID string) {
-			r.rememberCodeModeChildCall(threadID, cellID, callID)
+		runtime.SetCallObserver(func(observation tool.CodeModeCallObservation) {
+			r.observeCodeModeCall(threadID, observation)
 		})
 		r.codeModeRuntimes[threadID] = runtime
 	}

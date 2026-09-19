@@ -386,6 +386,7 @@ func TestCodexCommandExecutionEventSerializesExpectedRustShape(t *testing.T) {
 	event := NewCodexCommandExecutionEvent(CodexCommandExecutionEventParams{
 		CodexToolItemEventBase: CodexToolItemEventBase{
 			ThreadID:                       "thread-1",
+			SessionID:                      "session-thread-1",
 			TurnID:                         "turn-1",
 			ItemID:                         "item-1",
 			AppServerClient:                sampleAppServerClientMetadata(),
@@ -424,8 +425,13 @@ func TestCodexCommandExecutionEventSerializesExpectedRustShape(t *testing.T) {
 			"model_slug": null,
 			"reasoning_effort": null,
 			"thread_id": "thread-1",
+			"session_id": "session-thread-1",
 			"turn_id": "turn-1",
 			"item_id": "item-1",
+			"cell_id": null,
+			"parent_call_id": null,
+			"originating_response_id": null,
+			"subsequent_response_id": null,
 			"app_server_client": {
 				"product_client_id": "codex_cli_rs",
 				"client_name": "codex-tui",
@@ -478,6 +484,7 @@ func TestCodexFileChangeEventSerializesExpectedRustShape(t *testing.T) {
 	event := NewCodexFileChangeEvent(CodexFileChangeEventParams{
 		CodexToolItemEventBase: CodexToolItemEventBase{
 			ThreadID:                       "thread-1",
+			SessionID:                      "session-thread-1",
 			TurnID:                         "turn-1",
 			ItemID:                         "item-1",
 			AppServerClient:                sampleAppServerClientMetadata(),
@@ -511,8 +518,13 @@ func TestCodexFileChangeEventSerializesExpectedRustShape(t *testing.T) {
 		"event_type": "codex_file_change_event",
 		"event_params": {
 			"thread_id": "thread-1",
+			"session_id": "session-thread-1",
 			"turn_id": "turn-1",
 			"item_id": "item-1",
+			"cell_id": null,
+			"parent_call_id": null,
+			"originating_response_id": null,
+			"subsequent_response_id": null,
 			"app_server_client": {
 				"product_client_id": "codex_cli_rs",
 				"client_name": "codex-tui",

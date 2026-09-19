@@ -75,16 +75,29 @@ type ImageGenerationEventSink interface {
 }
 
 type CodexToolItemEventBase struct {
-	ThreadID        string                       `json:"thread_id"`
-	TurnID          string                       `json:"turn_id"`
-	ItemID          string                       `json:"item_id"`
-	AppServerClient CodexAppServerClientMetadata `json:"app_server_client"`
-	Runtime         CodexRuntimeMetadata         `json:"runtime"`
-	ThreadSource    *string                      `json:"thread_source"`
-	SubagentSource  *string                      `json:"subagent_source"`
-	ParentThreadID  *string                      `json:"parent_thread_id"`
-	RootTurnID      *string                      `json:"root_turn_id,omitempty"`
-	ToolName        string                       `json:"tool_name"`
+	ThreadID string `json:"thread_id"`
+	// SessionID is the identity shared by the root thread and its descendants
+	// (Rust CodexToolItemEventBase::session_id).
+	SessionID string `json:"session_id"`
+	TurnID    string `json:"turn_id"`
+	ItemID    string `json:"item_id"`
+	// CellID, ParentCallID and OriginatingResponseID correlate a tool event with
+	// the Code Mode cell and model response it belongs to (Rust #36729): the cell
+	// a child call ran in, that cell's own call, and the sampled response the call
+	// (or, for a child call, the cell) came from.
+	CellID                *string `json:"cell_id"`
+	ParentCallID          *string `json:"parent_call_id"`
+	OriginatingResponseID *string `json:"originating_response_id"`
+	// SubsequentResponseID is the first sampled response observed after the tool
+	// result; Rust fills it when a buffered correlated event is released.
+	SubsequentResponseID *string                      `json:"subsequent_response_id"`
+	AppServerClient      CodexAppServerClientMetadata `json:"app_server_client"`
+	Runtime              CodexRuntimeMetadata         `json:"runtime"`
+	ThreadSource         *string                      `json:"thread_source"`
+	SubagentSource       *string                      `json:"subagent_source"`
+	ParentThreadID       *string                      `json:"parent_thread_id"`
+	RootTurnID           *string                      `json:"root_turn_id,omitempty"`
+	ToolName             string                       `json:"tool_name"`
 	// ToolEventType names the immediate initiator of the tool request (Rust
 	// #45535): `model_tool_call` when the item id matches a tool call the model
 	// emitted in a sampled response, `inner_tool_call` when it matches a child

@@ -19466,6 +19466,10 @@ func TestRuntimeRouterCommandExecutionEmitsAnalyticsLikeRust(t *testing.T) {
 	if params.ThreadID != threadID || params.TurnID != turnID || params.ItemID != "cmd-analytics" {
 		t.Fatalf("command analytics ids = %#v", params)
 	}
+	// Rust #36729: every tool event reports the session identity too.
+	if params.SessionID != threadID {
+		t.Fatalf("session_id = %q, want %q", params.SessionID, threadID)
+	}
 	if params.AppServerClient.ProductClientID != "codex-tui" ||
 		params.AppServerClient.ClientName == nil || *params.AppServerClient.ClientName != "codex-tui" ||
 		params.AppServerClient.ClientVersion == nil || *params.AppServerClient.ClientVersion != "1.2.3" ||
@@ -20503,6 +20507,9 @@ func TestRuntimeRouterMCPToolCallEmitsAnalyticsLikeRust(t *testing.T) {
 		eventParams.TurnID != turnID ||
 		eventParams.ItemID != mcpItemID {
 		t.Fatalf("MCP analytics ids = %#v", event)
+	}
+	if eventParams.SessionID != threadID {
+		t.Fatalf("MCP session_id = %q, want %q", eventParams.SessionID, threadID)
 	}
 	if eventParams.ToolName != "echo" ||
 		eventParams.MCPServerName != "sdk" ||

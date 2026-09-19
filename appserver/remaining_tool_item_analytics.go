@@ -124,8 +124,10 @@ func (r *RuntimeRouter) toolItemAnalyticsBase(connectionID string, threadID stri
 		completedAtMS = uint64(item.CreatedAt)
 	}
 	reviewSummary := r.toolItemReviewSummary(threadID, turnID, item.ID)
-	return telemetry.CodexToolItemEventBase{
-		ThreadID:                       threadID,
+	base := telemetry.CodexToolItemEventBase{
+		ThreadID: threadID,
+		// Rust reports the session identity on every tool event.
+		SessionID:                      strings.TrimSpace(lineage.SessionID),
 		TurnID:                         turnID,
 		ItemID:                         item.ID,
 		AppServerClient:                client,
@@ -148,7 +150,9 @@ func (r *RuntimeRouter) toolItemAnalyticsBase(connectionID string, threadID stri
 		FailureKind:                    failureKind,
 		RequestedAdditionalPermissions: reviewSummary.RequestedAdditionalPermissions,
 		RequestedNetworkAccess:         reviewSummary.RequestedNetworkAccess,
-	}, true
+	}
+	r.enrichToolEventBase(&base, threadID, turnID)
+	return base, true
 }
 
 func collabToolCallAnalyticsOutcome(status CollabAgentToolCallStatus) (string, *string, bool) {

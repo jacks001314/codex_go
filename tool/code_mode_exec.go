@@ -67,10 +67,30 @@ type codeModeExecExecutor struct {
 	// windowID is the turn's conversation window identity (`{thread}:{n}`); it
 	// stamps a cell's retained origin when the cell starts.
 	windowID string
-	// nestedCallObserver is told about every child call the code mode dispatches
-	// (Rust #45535's child-call facts). The app-server classifies tool events with
-	// it; nil leaves the observation off.
-	nestedCallObserver func(cellID string, callID string)
+	// callObserver is told about every code-mode cell and child call (Rust's
+	// CodeModeToolCallFact). The app-server correlates tool events with it; nil
+	// leaves the observation off.
+	callObserver func(observation CodeModeCallObservation)
+}
+
+// CodeModeCallObservationKind mirrors Rust's CodeModeToolCallFact variants.
+type CodeModeCallObservationKind string
+
+const (
+	// CodeModeCallCellStarted reports the call that started a cell.
+	CodeModeCallCellStarted CodeModeCallObservationKind = "cell_started"
+	// CodeModeCallChildStarted reports a child call a cell dispatched.
+	CodeModeCallChildStarted CodeModeCallObservationKind = "child_started"
+	// CodeModeCallCellClosed reports that a cell finished.
+	CodeModeCallCellClosed CodeModeCallObservationKind = "cell_closed"
+)
+
+// CodeModeCallObservation is one code-mode cell or child-call fact.
+type CodeModeCallObservation struct {
+	Kind         CodeModeCallObservationKind
+	CellID       string
+	ParentCallID string
+	CallID       string
 }
 
 // codeModeCallOrigin is one cell's retained origin (Rust ToolCallOrigin).
@@ -249,27 +269,26 @@ func (r *CodeModeRuntime) SetTurnWindowID(windowID string) {
 	r.exec.bindingMu.Unlock()
 }
 
-// SetNestedCallObserver installs the observer told about every child call the
-// code mode dispatches, with the cell it belongs to (Rust #45535's child-call
-// facts).
-func (r *CodeModeRuntime) SetNestedCallObserver(observer func(cellID string, callID string)) {
+// SetCallObserver installs the observer told about every code-mode cell and
+// child call (Rust's CodeModeToolCallFact).
+func (r *CodeModeRuntime) SetCallObserver(observer func(observation CodeModeCallObservation)) {
 	if r == nil || r.exec == nil {
 		return
 	}
 	r.exec.bindingMu.Lock()
-	r.exec.nestedCallObserver = observer
+	r.exec.callObserver = observer
 	r.exec.bindingMu.Unlock()
 }
 
-func (e *codeModeExecExecutor) observeNestedCall(cellID string, callID string) {
+func (e *codeModeExecExecutor) observeCall(observation CodeModeCallObservation) {
 	if e == nil {
 		return
 	}
 	e.bindingMu.RLock()
-	observer := e.nestedCallObserver
+	observer := e.callObserver
 	e.bindingMu.RUnlock()
 	if observer != nil {
-		observer(strings.TrimSpace(cellID), strings.TrimSpace(callID))
+		observer(observation)
 	}
 }
 
@@ -567,6 +586,12 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 	e.cellsMu.Lock()
 	e.cells[cellID] = cell
 	e.cellsMu.Unlock()
+	// Rust's CellStarted fact: the exec call that created the cell is its parent.
+	e.observeCall(CodeModeCallObservation{
+		Kind:         CodeModeCallCellStarted,
+		CellID:       cellID,
+		ParentCallID: strings.TrimSpace(invocation.CallID),
+	})
 	invocationCopy := *invocation
 	invocationCopy.Payload.Input = source
 	invocationCopy.Context = cloneInvocationContext(invocation.Context)
@@ -649,6 +674,13 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 		e.remoteCells[response.CellID] = registry
 		e.remoteCellReleases[response.CellID] = done
 		e.remoteCellsMu.Unlock()
+		// Rust's CellStarted fact: the exec call that created the cell is its
+		// parent.
+		e.observeCall(CodeModeCallObservation{
+			Kind:         CodeModeCallCellStarted,
+			CellID:       strings.TrimSpace(response.CellID),
+			ParentCallID: strings.TrimSpace(invocation.CallID),
+		})
 		releaseOnReturn = false
 	}
 	return remoteResponseOutput(invocation.CallID, response, codeModeTokenLimit(options.MaxOutputTokens), time.Since(startedAt), e.cellOverheadEnabled())
@@ -786,6 +818,12 @@ func (e *codeModeExecExecutor) forgetRemoteCell(cellID string) {
 	if release != nil {
 		release()
 	}
+	// Rust's CellClosed fact: the cell is finished, so its correlation state can
+	// be dropped once the turn that closed it ends.
+	e.observeCall(CodeModeCallObservation{
+		Kind:   CodeModeCallCellClosed,
+		CellID: strings.TrimSpace(cellID),
+	})
 }
 
 func (e *codeModeExecExecutor) remoteDelegate() (*codeModeRemoteDelegate, bool) {
@@ -887,7 +925,11 @@ func (d *codeModeRemoteDelegate) Invoke(ctx context.Context, call CodeModeRemote
 	}
 	// Rust #45535: every dispatched child call is evidence that this call id
 	// belongs to the cell rather than to a sampled model response.
-	d.exec.observeNestedCall(call.CellID, call.RuntimeToolCallID)
+	d.exec.observeCall(CodeModeCallObservation{
+		Kind:   CodeModeCallChildStarted,
+		CellID: strings.TrimSpace(call.CellID),
+		CallID: strings.TrimSpace(call.RuntimeToolCallID),
+	})
 	applySpecInvocationContext(invocation, executor.Spec())
 	startedAt := time.Now().UTC()
 	if parent != nil {
@@ -1134,7 +1176,11 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 				// Rust #45535: the in-process dispatcher reports the child call
 				// with the cell it belongs to, when the invocation knows one.
 				cellID, _ := invocation.Context[CodeModeCellIDContextKey].(string)
-				e.observeNestedCall(cellID, callID)
+				e.observeCall(CodeModeCallObservation{
+					Kind:   CodeModeCallChildStarted,
+					CellID: strings.TrimSpace(cellID),
+					CallID: strings.TrimSpace(callID),
+				})
 				applySpecInvocationContext(nestedInvocation, toolSpec)
 				startedAt := time.Now().UTC()
 				if started, ok := invocation.Context["code_mode_nested_tool_started"].(CodeModeNestedToolStartedFunc); ok {
@@ -1324,6 +1370,11 @@ func (e *codeModeExecExecutor) consumeCell(cellID string, cell *codeModeCell) (*
 	delete(e.cells, cellID)
 	output, err := cell.output, cell.err
 	e.cellsMu.Unlock()
+	// Rust's CellClosed fact for an in-process cell.
+	e.observeCall(CodeModeCallObservation{
+		Kind:   CodeModeCallCellClosed,
+		CellID: strings.TrimSpace(cellID),
+	})
 	if output != nil {
 		output.Data["cell_id"] = cellID
 		output.Body = e.cellDelta(cell)

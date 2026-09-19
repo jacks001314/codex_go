@@ -1244,9 +1244,9 @@ func TestCodeModeNestedCallsAreObservedLikeRust(t *testing.T) {
 		t.Fatalf("register nested-echo: %v", err)
 	}
 	_, _ = runtime.Executors(registry)
-	var observed [][2]string
-	runtime.SetNestedCallObserver(func(cellID string, callID string) {
-		observed = append(observed, [2]string{cellID, callID})
+	var observed []CodeModeCallObservation
+	runtime.SetCallObserver(func(observation CodeModeCallObservation) {
+		observed = append(observed, observation)
 	})
 	delegate := &codeModeRemoteDelegate{exec: runtime.exec}
 	release := delegate.begin(&Invocation{CallID: "call-exec"})
@@ -1257,7 +1257,69 @@ func TestCodeModeNestedCallsAreObservedLikeRust(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("nested call error = %v", err)
 	}
-	if len(observed) != 1 || observed[0][0] != "cell-observed" || observed[0][1] != "nested-observed" {
+	want := CodeModeCallObservation{Kind: CodeModeCallChildStarted, CellID: "cell-observed", CallID: "nested-observed"}
+	if len(observed) != 1 || observed[0] != want {
 		t.Fatalf("observed nested calls = %#v", observed)
+	}
+}
+
+// Mirrors Rust's CodeModeToolCallFact stream: the exec call that created a cell is
+// reported as the cell's parent, a dispatched nested call is reported with its
+// cell, and the cell's completion is reported so its correlation state can be
+// dropped.
+func TestCodeModeCallObservationsFollowRustFacts(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("nested-echo")}, func(context.Context, *Invocation) (*Output, error) {
+		return &Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register nested-echo: %v", err)
+	}
+	remote := &yieldedCodeModeSession{
+		executeResponse: CodeModeRemoteResponse{CellID: "observed-cell", State: "yielded"},
+		settleResponse:  CodeModeRemoteResponse{CellID: "observed-cell", State: "completed"},
+	}
+	provider := &recordingCodeModeRemoteProvider{session: remote}
+	runtime := NewCodeModeRuntime(provider, false)
+	defer func() { _ = runtime.Close() }()
+	exec, _ := runtime.Executors(registry)
+	inner, ok := exec.(*codeModeExecExecutor)
+	if !ok {
+		t.Fatalf("executor type = %T", exec)
+	}
+	var observed []CodeModeCallObservation
+	runtime.SetCallObserver(func(observation CodeModeCallObservation) {
+		observed = append(observed, observation)
+	})
+
+	if _, err := exec.Execute(context.Background(), &Invocation{
+		CallID:  "exec-observed",
+		Payload: Payload{Kind: PayloadCustom, Input: `text("RUN")`},
+	}); err != nil {
+		t.Fatalf("exec error = %v", err)
+	}
+	delegate, _ := inner.remoteDelegate()
+	if delegate == nil {
+		t.Fatal("remote delegate is unavailable")
+	}
+	if _, err := delegate.Invoke(context.Background(), CodeModeRemoteNestedCall{
+		CellID: "observed-cell", RuntimeToolCallID: "nested-observed", ToolName: PlainName("nested-echo"),
+		Kind: PayloadFunction, Input: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("nested call error = %v", err)
+	}
+	inner.forgetRemoteCell("observed-cell")
+
+	want := []CodeModeCallObservation{
+		{Kind: CodeModeCallCellStarted, CellID: "observed-cell", ParentCallID: "exec-observed"},
+		{Kind: CodeModeCallChildStarted, CellID: "observed-cell", CallID: "nested-observed"},
+		{Kind: CodeModeCallCellClosed, CellID: "observed-cell"},
+	}
+	if len(observed) != len(want) {
+		t.Fatalf("observations = %#v, want %#v", observed, want)
+	}
+	for index := range want {
+		if observed[index] != want[index] {
+			t.Fatalf("observation %d = %#v, want %#v", index, observed[index], want[index])
+		}
 	}
 }
