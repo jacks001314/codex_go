@@ -2817,6 +2817,13 @@ func TestInteractiveRemoteStartSideForksAndInjectsBoundary(t *testing.T) {
 					remoteTUITestSendErr(serverErrs, fmt.Errorf("side fork config map = %#v", params.Config))
 					return
 				}
+				// Rust #46494 ForkConfigSource::Session: the active session's
+				// server-resolved runtime workspace roots are forwarded even
+				// though the fork sets a CWD override.
+				if len(params.RuntimeWorkspaceRoots) != 2 || params.RuntimeWorkspaceRoots[0] != `D:/repo` || params.RuntimeWorkspaceRoots[1] != `D:/repo/lib` {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("side fork workspace roots = %#v", params.RuntimeWorkspaceRoots))
+					return
+				}
 				remoteTUITestWrite(ctx, conn, map[string]any{
 					"jsonrpc": "2.0",
 					"id":      req.ID,
@@ -2861,7 +2868,10 @@ func TestInteractiveRemoteStartSideForksAndInjectsBoundary(t *testing.T) {
 			CWD:   `D:\repo`,
 			Model: "gpt-root",
 		},
-	}, endpoint, state, codextea.SideStartParams{ParentThreadID: "thread-parent"})
+	}, endpoint, state, codextea.SideStartParams{
+		ParentThreadID:        "thread-parent",
+		RuntimeWorkspaceRoots: []string{`D:/repo`, `D:/repo/lib`},
+	})
 	if err != nil {
 		t.Fatalf("interactiveRemoteStartSide error = %v", err)
 	}

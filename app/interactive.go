@@ -793,6 +793,9 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 	if err := guardInteractiveDumbTerminal(stdin, stderr, os.Getenv("TERM")); err != nil {
 		return interactiveFatalExit(stderr, err.Error())
 	}
+	if err := interactiveRemoteWorkspaceRootError(root); err != nil {
+		return interactiveFatalExit(stderr, err.Error())
+	}
 	remoteEndpoint, err := resolveInteractiveRemoteEndpoint(root)
 	if err != nil {
 		return interactiveFatalExit(stderr, err.Error())
@@ -3898,6 +3901,40 @@ func interactiveRemoteWorkloadIdentityError(endpoint *appserverdaemon.RemoteAppS
 		return "workload identity must be configured on the remote app-server host"
 	}
 	return ""
+}
+
+// interactiveRemoteWorkspaceRootError mirrors Rust startup_orchestration.rs
+// (#46494): workspace paths from the client configuration belong to the client
+// host, so `--add-dir` and `sandbox_workspace_write.writable_roots` overrides
+// are rejected with `--remote` before connecting. Users must configure
+// additional roots on the server instead. Other sandbox overrides (for example
+// `network_access`) remain valid.
+func interactiveRemoteWorkspaceRootError(root *cli.RootOptions) error {
+	if root == nil || strings.TrimSpace(root.Remote) == "" {
+		return nil
+	}
+	if len(root.Shared.AddDirs) > 0 {
+		return errors.New("--add-dir is not supported with --remote. Configure additional workspace roots on the server.")
+	}
+	overrides, err := config.ParseOverrides(root.ConfigOverrides)
+	if err != nil {
+		// Malformed overrides are reported by the normal config load; this
+		// check only recognizes the writable-roots key.
+		return nil
+	}
+	for _, override := range overrides {
+		if override.Path == "sandbox_workspace_write.writable_roots" {
+			return errors.New("sandbox_workspace_write.writable_roots overrides are not supported with --remote. Configure additional workspace roots on the server.")
+		}
+		if override.Path == "sandbox_workspace_write" {
+			if table, ok := override.Value.(map[string]any); ok {
+				if _, present := table["writable_roots"]; present {
+					return errors.New("sandbox_workspace_write.writable_roots overrides are not supported with --remote. Configure additional workspace roots on the server.")
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func resolveInteractiveRemoteEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAppServerEndpoint, error) {

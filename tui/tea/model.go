@@ -1295,15 +1295,20 @@ type Model struct {
 	// taskSearchGeneration mirrors mentionTaskSearchGeneration for the search
 	// command, which checks it after the debounce to drop superseded requests
 	// (Rust task_mentions::spawn_search generation).
-	taskSearchGeneration            *atomic.Uint64
-	mentionPluginInventory          []plugin.PluginSummary
-	mentionPluginInventoryReady     bool
-	mentionPluginInventoryLoading   bool
-	mentionPluginInventoryErr       string
-	modelPickerOpts                 []codextui.ModelPickerOption
-	serviceTierCommands             []bottompane.ServiceTierCommand
-	sessionItems                    []codextui.SessionSummary
-	sessionCWD                      string
+	taskSearchGeneration          *atomic.Uint64
+	mentionPluginInventory        []plugin.PluginSummary
+	mentionPluginInventoryReady   bool
+	mentionPluginInventoryLoading bool
+	mentionPluginInventoryErr     string
+	modelPickerOpts               []codextui.ModelPickerOption
+	serviceTierCommands           []bottompane.ServiceTierCommand
+	sessionItems                  []codextui.SessionSummary
+	sessionCWD                    string
+	// sessionWorkspaceRoots mirrors the active thread's server-authoritative
+	// runtime workspace roots (Rust #46494). Client config paths belong to the
+	// client host, so a Session-sourced fork must forward the roots the server
+	// already resolved for the active session instead of the local config.
+	sessionWorkspaceRoots           []string
 	sessionPickerDensity            codextui.SessionListDensity
 	skillsInventory                 *appserver.SkillsListResponse
 	skillsInventoryCWD              string

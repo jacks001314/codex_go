@@ -51,8 +51,10 @@ func (c *interactiveLocalSideCoordinator) Start(params codextea.SideStartParams)
 	}
 
 	existingInstructions := ""
+	var parentWorkspaceRoots []string
 	if parent, err := c.store.Read(session.ThreadID(parentThreadID), true, true); err == nil && parent != nil {
 		existingInstructions = parent.Metadata.Instructions
+		parentWorkspaceRoots = stringSliceFromAny(parent.Metadata.Extra["runtime_workspace_roots"])
 	}
 	developerInstructions := codextea.SideDeveloperInstructions(existingInstructions)
 	configValues := map[string]any{}
@@ -82,6 +84,18 @@ func (c *interactiveLocalSideCoordinator) Start(params codextea.SideStartParams)
 	if serviceTier := strings.TrimSpace(params.ServiceTier); serviceTier != "" {
 		forkParams.ServiceTier = &serviceTier
 		forkParams.ServiceTierSet = true
+	}
+	// Rust #46494 ForkConfigSource::Session: the side conversation forks the
+	// active session, so forward its server-resolved runtime workspace roots
+	// rather than letting the CWD override drop them. The TUI supplies the roots
+	// it adopted from the server; otherwise the parent record's saved roots are
+	// the authoritative selection.
+	runtimeWorkspaceRoots := params.RuntimeWorkspaceRoots
+	if len(runtimeWorkspaceRoots) == 0 {
+		runtimeWorkspaceRoots = parentWorkspaceRoots
+	}
+	if len(runtimeWorkspaceRoots) > 0 {
+		forkParams.RuntimeWorkspaceRoots = append([]string(nil), runtimeWorkspaceRoots...)
 	}
 	source := appserver.ThreadSourceUser
 	forkParams.ThreadSource = &source

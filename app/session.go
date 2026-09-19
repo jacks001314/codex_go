@@ -379,7 +379,38 @@ func resolveSessionRemoteEndpoint(opts *cli.SessionOptions, root *cli.RootOption
 	if strings.TrimSpace(remoteRoot.Remote) == "" && strings.TrimSpace(remoteRoot.RemoteAuthEnv) == "" {
 		return nil, nil
 	}
+	// Rust #46494: an explicit remote target rejects client workspace-root
+	// overrides for the session commands too (the TUI resume/fork/archive paths
+	// share the interactive CLI validation).
+	if err := sessionRemoteWorkspaceRootError(opts, root); err != nil {
+		return nil, err
+	}
 	return resolveInteractiveRemoteEndpoint(remoteRoot)
+}
+
+// sessionRemoteWorkspaceRootError mirrors the interactive check for the
+// `codex resume|fork|archive|unarchive|delete|queue --remote` surface.
+func sessionRemoteWorkspaceRootError(opts *cli.SessionOptions, root *cli.RootOptions) error {
+	var addDirs []string
+	var overrides []string
+	remote := ""
+	if root != nil {
+		addDirs = append(addDirs, root.Shared.AddDirs...)
+		overrides = append(overrides, root.ConfigOverrides...)
+		remote = root.Remote
+	}
+	if opts != nil {
+		addDirs = append(addDirs, opts.Shared.AddDirs...)
+		overrides = append(overrides, opts.ConfigOverrides...)
+		if strings.TrimSpace(opts.Remote) != "" {
+			remote = opts.Remote
+		}
+	}
+	return interactiveRemoteWorkspaceRootError(&cli.RootOptions{
+		Remote:          remote,
+		Shared:          cli.SharedOptions{AddDirs: addDirs},
+		ConfigOverrides: overrides,
+	})
 }
 
 func mergedSessionRemoteOptions(opts *cli.SessionOptions, root *cli.RootOptions) *cli.RootOptions {

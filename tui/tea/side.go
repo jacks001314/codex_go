@@ -63,6 +63,9 @@ type SideStartParams struct {
 	Sandbox         string
 	Personality     string
 	ServiceTier     string
+	// RuntimeWorkspaceRoots carries the active session's server-resolved
+	// runtime workspace roots into a Session-sourced fork (Rust #46494).
+	RuntimeWorkspaceRoots []string
 }
 
 func (m *Model) toggleSideConversation() bubbletea.Cmd {
@@ -261,6 +264,10 @@ func (m *Model) startSideConversation(commandName string, userMessage string) bu
 		Sandbox:         strings.TrimSpace(m.State.Sandbox),
 		Personality:     strings.TrimSpace(m.State.Personality),
 		ServiceTier:     strings.TrimSpace(m.State.ServiceTier),
+		// Rust #46494: a side conversation is a Session-sourced fork, so it
+		// forwards the active session's server-resolved runtime workspace roots
+		// (a fork with a CWD override would otherwise drop them).
+		RuntimeWorkspaceRoots: append([]string(nil), m.sessionWorkspaceRoots...),
 	}
 	replacedSide := m.activeSide
 	if replacedSide != nil {

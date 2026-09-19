@@ -47,6 +47,10 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 		m.sessionCWD = cwd
 		cwdChanged = true
 	}
+	// Rust #46494: the server's settings carry the thread's runtime workspace
+	// roots. Track them so a Session-sourced fork (a side conversation) can
+	// forward the server-resolved roots rather than the client's config paths.
+	m.sessionWorkspaceRoots = append([]string(nil), settings.RuntimeWorkspaceRoots...)
 	if model := strings.TrimSpace(settings.Model); model != "" {
 		m.State.Model = model
 		m.clearRateLimitRecoveryHold()

@@ -28,6 +28,9 @@ func TestInteractiveLocalSideCoordinatorForksInjectsAndDeletes(t *testing.T) {
 			Model:        "gpt-parent",
 			HistoryMode:  string(session.ForkAll),
 			Instructions: "Keep the parent convention.",
+			// Rust #46494: the active session's server-resolved roots are the
+			// authoritative selection a side-conversation fork must preserve.
+			Extra: map[string]any{"runtime_workspace_roots": []any{"D:/repo", "D:/repo/lib"}},
 		},
 		Items: []session.Item{
 			{ID: "item-user", Type: "message", Role: "user", Text: "parent question", CreatedAt: now, Metadata: map[string]any{"turnId": "turn-parent"}},
@@ -74,6 +77,11 @@ func TestInteractiveLocalSideCoordinatorForksInjectsAndDeletes(t *testing.T) {
 	}
 	if len(side.Items) != 3 || side.Items[2].Role != "user" || side.Items[2].Text != codextea.SideBoundaryPrompt {
 		t.Fatalf("side items = %#v", side.Items)
+	}
+	// The CWD override must not drop the parent's runtime workspace roots
+	// (Rust #46494 ForkConfigSource::Session).
+	if roots := stringSliceFromAny(side.Metadata.Extra["runtime_workspace_roots"]); len(roots) != 2 {
+		t.Fatalf("side runtime workspace roots = %#v, want the parent's two roots", roots)
 	}
 	if instructions, ok := coordinator.Instructions(response.SideThreadID); !ok || instructions != side.Metadata.Instructions {
 		t.Fatalf("Instructions() = %q, %v", instructions, ok)

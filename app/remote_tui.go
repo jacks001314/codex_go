@@ -1169,7 +1169,7 @@ func interactiveRemoteStartSide(ctx context.Context, root *cli.RootOptions, endp
 	if parentThreadID == "" {
 		return codextea.SideStartResponse{}, errors.New("remote thread/fork requires a parent thread id")
 	}
-	forkParams, err := remoteSideThreadForkParams(root, state, parentThreadID)
+	forkParams, err := remoteSideThreadForkParams(root, state, parentThreadID, params.RuntimeWorkspaceRoots)
 	if err != nil {
 		return codextea.SideStartResponse{}, err
 	}
@@ -4372,7 +4372,7 @@ func remoteThreadStartParams(root *cli.RootOptions, state *codextui.State) (apps
 	return params, nil
 }
 
-func remoteSideThreadForkParams(root *cli.RootOptions, state *codextui.State, parentThreadID string) (appserver.ThreadForkParams, error) {
+func remoteSideThreadForkParams(root *cli.RootOptions, state *codextui.State, parentThreadID string, runtimeWorkspaceRoots []string) (appserver.ThreadForkParams, error) {
 	parentThreadID = strings.TrimSpace(parentThreadID)
 	if parentThreadID == "" {
 		return appserver.ThreadForkParams{}, errors.New("remote thread/fork requires a parent thread id")
@@ -4397,6 +4397,12 @@ func remoteSideThreadForkParams(root *cli.RootOptions, state *codextui.State, pa
 	}
 	if model := strings.TrimSpace(shared.Model); model != "" {
 		params.Model = &model
+	}
+	// Rust #46494 ForkConfigSource::Session: an active-session fork does not
+	// restore saved roots when omitted, and the CWD override above would
+	// otherwise drop the server-resolved roots, so forward them explicitly.
+	if len(runtimeWorkspaceRoots) > 0 {
+		params.RuntimeWorkspaceRoots = append([]string(nil), runtimeWorkspaceRoots...)
 	}
 	source := appserver.ThreadSourceUser
 	params.ThreadSource = &source
