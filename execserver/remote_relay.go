@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -32,6 +33,27 @@ const (
 	maxNoiseRelayReorderDistance    uint32 = 64
 	maxNoiseRelayPendingBytes              = 1024 * 1024
 )
+
+// noiseHandshakeFailureCooldown mirrors Rust's
+// NOISE_HANDSHAKE_FAILURE_COOLDOWN (#46031): once the handshake failure budget is
+// exhausted the relay pauses new handshake admission for this window instead of
+// closing, so authenticated streams stay connected. It is a variable so tests
+// can shorten the window instead of waiting it out.
+var noiseHandshakeFailureCooldown = 10 * time.Second
+
+// recordFailedHandshake mirrors Rust's `record_failed_handshake`: exhausting the
+// failure budget starts the cooldown, and failures recorded during the cooldown
+// do not extend it.
+func recordFailedHandshake(failedHandshakes *int, cooldownUntil *time.Time) {
+	if failedHandshakes == nil || cooldownUntil == nil || !cooldownUntil.IsZero() {
+		return
+	}
+	*failedHandshakes++
+	if *failedHandshakes >= maxFailedNoiseHandshakes {
+		*cooldownUntil = time.Now().Add(noiseHandshakeFailureCooldown)
+		slog.Warn("pausing Noise relay handshakes after repeated failures")
+	}
+}
 
 type remoteHarnessValidationRequest struct {
 	ExecutorRegistrationID  string          `json:"executor_registration_id"`
@@ -100,6 +122,7 @@ func (s *Server) serveNoiseRelayConnection(
 	}()
 
 	failedHandshakes := 0
+	var handshakeCooldownUntil time.Time
 	var nextValidationID uint64
 	for {
 		select {
@@ -124,10 +147,7 @@ func (s *Server) serveNoiseRelayConnection(
 			if result.err != nil {
 				item.handshake.Destroy()
 				queueRelayReset(outgoing, result.streamID)
-				failedHandshakes++
-				if failedHandshakes >= maxFailedNoiseHandshakes {
-					return errors.New("closing Noise relay after repeated handshake failures")
-				}
+				recordFailedHandshake(&failedHandshakes, &handshakeCooldownUntil)
 				continue
 			}
 			if len(streams) >= maxActiveNoiseRelayStreams {
@@ -138,10 +158,7 @@ func (s *Server) serveNoiseRelayConnection(
 			transport, response, err := item.handshake.Complete()
 			if err != nil {
 				queueRelayReset(outgoing, result.streamID)
-				failedHandshakes++
-				if failedHandshakes >= maxFailedNoiseHandshakes {
-					return errors.New("closing Noise relay after repeated handshake failures")
-				}
+				recordFailedHandshake(&failedHandshakes, &handshakeCooldownUntil)
 				continue
 			}
 			if err := queueRelayFrame(outgoing, newRelayHandshakeFrame(result.streamID, response)); err != nil {
@@ -167,6 +184,17 @@ func (s *Server) serveNoiseRelayConnection(
 			frame := event.frame
 			switch frame.Kind {
 			case relayFrameHandshake:
+				// Rust #46031: stop admitting work before parsing another hybrid
+				// handshake. Existing streams and already-admitted validations keep
+				// running, and the failure budget resets once admission resumes.
+				if !handshakeCooldownUntil.IsZero() {
+					if time.Now().Before(handshakeCooldownUntil) {
+						queueRelayReset(outgoing, frame.StreamID)
+						continue
+					}
+					failedHandshakes = 0
+					handshakeCooldownUntil = time.Time{}
+				}
 				if _, exists := streams[frame.StreamID]; exists {
 					queueRelayReset(outgoing, frame.StreamID)
 					continue
@@ -175,10 +203,7 @@ func (s *Server) serveNoiseRelayConnection(
 					delete(pending, frame.StreamID)
 					previous.handshake.Destroy()
 					queueRelayReset(outgoing, frame.StreamID)
-					failedHandshakes++
-					if failedHandshakes >= maxFailedNoiseHandshakes {
-						return errors.New("closing Noise relay after repeated handshake failures")
-					}
+					recordFailedHandshake(&failedHandshakes, &handshakeCooldownUntil)
 					continue
 				}
 				if len(streams) >= maxActiveNoiseRelayStreams || len(pending) >= maxPendingHandshakeValidations {
@@ -192,10 +217,7 @@ func (s *Server) serveNoiseRelayConnection(
 						handshake.Destroy()
 					}
 					queueRelayReset(outgoing, frame.StreamID)
-					failedHandshakes++
-					if failedHandshakes >= maxFailedNoiseHandshakes {
-						return errors.New("closing Noise relay after repeated handshake failures")
-					}
+					recordFailedHandshake(&failedHandshakes, &handshakeCooldownUntil)
 					continue
 				}
 				validationID := nextValidationID
@@ -216,12 +238,9 @@ func (s *Server) serveNoiseRelayConnection(
 					if item, exists := pending[frame.StreamID]; exists {
 						delete(pending, frame.StreamID)
 						item.handshake.Destroy()
-						failedHandshakes++
+						recordFailedHandshake(&failedHandshakes, &handshakeCooldownUntil)
 					}
 					queueRelayReset(outgoing, frame.StreamID)
-					if failedHandshakes >= maxFailedNoiseHandshakes {
-						return errors.New("closing Noise relay after repeated handshake failures")
-					}
 					continue
 				}
 				if err := stream.Receive(frame.Data); err != nil {

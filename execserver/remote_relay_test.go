@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -163,15 +165,14 @@ func readRemoteRelayTestReset(t *testing.T, conn *websocket.Conn, streamID strin
 	}
 }
 
-func waitRemoteRelayFailure(t *testing.T, done <-chan error) {
+// assertRemoteRelayConnected asserts the physical relay has not terminated
+// (Rust #46031 keeps it open when the handshake failure budget is exhausted).
+func assertRemoteRelayConnected(t *testing.T, done <-chan error) {
 	t.Helper()
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "repeated handshake failures") {
-			t.Fatalf("relay error = %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("relay did not close after exhausting the handshake failure budget")
+		t.Fatalf("relay terminated: %v", err)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -385,56 +386,85 @@ func TestOversizedHarnessAuthorizationRejectedBeforeValidationLikeRust(t *testin
 	}
 }
 
-func TestDuplicateHandshakesExhaustFailureBudgetLikeRust(t *testing.T) {
-	calls := make(chan struct{}, maxFailedNoiseHandshakes)
-	release := make(chan struct{})
-	rig := newRemoteRelayTestRig(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		calls <- struct{}{}
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
+// Mirrors Rust #46031: exhausting the handshake failure budget pauses new
+// handshake admission for a cooldown instead of closing the physical relay, so
+// authenticated streams stay connected. Failures during the cooldown do not
+// extend it, and the failure budget resets when admission resumes.
+func TestRepeatedHandshakeFailuresPauseAdmissionWithoutDisconnectingLikeRust(t *testing.T) {
+	restoreCooldown := noiseHandshakeFailureCooldown
+	noiseHandshakeFailureCooldown = 200 * time.Millisecond
+	defer func() { noiseHandshakeFailureCooldown = restoreCooldown }()
+
+	var validations int32
+	rig := newRemoteRelayTestRig(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&validations, 1)
+		_ = json.NewEncoder(w).Encode(remoteHarnessValidationResponse{Valid: false})
 	}))
-	defer close(release)
-	streamID := "stream-duplicate"
-	request := rig.handshakeRequest(t, streamID, []byte("authorization"))
-	sendHandshake := func() {
+
+	// Each registry rejection consumes one failure; the eighth starts the cooldown.
+	for attempt := 0; attempt < maxFailedNoiseHandshakes; attempt++ {
+		streamID := "rejected-" + strconv.Itoa(attempt)
+		request := rig.handshakeRequest(t, streamID, []byte("authorization"))
 		writeRemoteRelayTestFrame(t, rig.conn, newRelayHandshakeFrame(streamID, request))
+		readRemoteRelayTestReset(t, rig.conn, streamID)
 	}
-	waitValidation := func() {
-		select {
-		case <-calls:
-		case <-time.After(5 * time.Second):
-			t.Fatal("registry validation did not start")
-		}
+	if got := atomic.LoadInt32(&validations); got != maxFailedNoiseHandshakes {
+		t.Fatalf("registry validations = %d, want %d", got, maxFailedNoiseHandshakes)
 	}
 
-	sendHandshake()
-	waitValidation()
-	for failure := 1; failure <= maxFailedNoiseHandshakes; failure++ {
-		sendHandshake()
-		if failure == maxFailedNoiseHandshakes {
-			break
-		}
-		readRemoteRelayTestReset(t, rig.conn, streamID)
-		sendHandshake()
-		waitValidation()
+	// During the cooldown a handshake is reset before it is parsed, so it never
+	// reaches the registry and the relay stays connected.
+	cooldownID := "during-cooldown"
+	cooldownRequest := rig.handshakeRequest(t, cooldownID, []byte("authorization"))
+	writeRemoteRelayTestFrame(t, rig.conn, newRelayHandshakeFrame(cooldownID, cooldownRequest))
+	readRemoteRelayTestReset(t, rig.conn, cooldownID)
+	if got := atomic.LoadInt32(&validations); got != maxFailedNoiseHandshakes {
+		t.Fatalf("cooldown admitted a handshake: validations = %d", got)
 	}
-	waitRemoteRelayFailure(t, rig.done)
+
+	// Once the cooldown expires the failure budget resets and admission resumes.
+	time.Sleep(2 * noiseHandshakeFailureCooldown)
+	afterID := "after-cooldown"
+	afterRequest := rig.handshakeRequest(t, afterID, []byte("authorization"))
+	writeRemoteRelayTestFrame(t, rig.conn, newRelayHandshakeFrame(afterID, afterRequest))
+	readRemoteRelayTestReset(t, rig.conn, afterID)
+	if got := atomic.LoadInt32(&validations); got != maxFailedNoiseHandshakes+1 {
+		t.Fatalf("admission did not resume: validations = %d", got)
+	}
+	assertRemoteRelayConnected(t, rig.done)
 }
 
-func TestRepeatedMalformedHandshakesClosePhysicalRelayLikeRust(t *testing.T) {
+// Mirrors Rust #46031: repeated malformed handshakes pause admission but keep the
+// physical relay (and therefore every established stream) alive.
+func TestMalformedHandshakesPreservePhysicalRelayLikeRust(t *testing.T) {
+	restoreCooldown := noiseHandshakeFailureCooldown
+	// Long enough that the during-cooldown probe below cannot race the expiry.
+	noiseHandshakeFailureCooldown = 2 * time.Second
+	defer func() { noiseHandshakeFailureCooldown = restoreCooldown }()
+
 	rig := newRemoteRelayTestRig(t, nil)
 	for attempt := 0; attempt < maxFailedNoiseHandshakes; attempt++ {
-		streamID := "malformed-" + string(rune('0'+attempt))
+		streamID := "malformed-" + strconv.Itoa(attempt)
 		request := rig.handshakeRequest(t, streamID, []byte("authorization"))
 		request[len(request)-1] ^= 1
 		writeRemoteRelayTestFrame(t, rig.conn, newRelayHandshakeFrame(streamID, request))
 	}
-	waitRemoteRelayFailure(t, rig.done)
+	assertRemoteRelayConnected(t, rig.done)
+
+	// Admission is paused, so a fresh handshake is reset without being parsed.
+	streamID := "during-cooldown"
+	request := rig.handshakeRequest(t, streamID, []byte("authorization"))
+	writeRemoteRelayTestFrame(t, rig.conn, newRelayHandshakeFrame(streamID, request))
+	readRemoteRelayTestReset(t, rig.conn, streamID)
+	assertRemoteRelayConnected(t, rig.done)
 }
 
-func TestRepeatedEarlyDataDuringValidationClosesPhysicalRelayLikeRust(t *testing.T) {
+// Mirrors Rust #46031 for early data during a pending validation.
+func TestRepeatedEarlyDataDuringValidationPausesAdmissionLikeRust(t *testing.T) {
+	restoreCooldown := noiseHandshakeFailureCooldown
+	noiseHandshakeFailureCooldown = 200 * time.Millisecond
+	defer func() { noiseHandshakeFailureCooldown = restoreCooldown }()
+
 	calls := make(chan struct{}, maxFailedNoiseHandshakes)
 	release := make(chan struct{})
 	rig := newRemoteRelayTestRig(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -446,7 +476,7 @@ func TestRepeatedEarlyDataDuringValidationClosesPhysicalRelayLikeRust(t *testing
 	}))
 	defer close(release)
 	for attempt := 0; attempt < maxFailedNoiseHandshakes; attempt++ {
-		streamID := "early-data-" + string(rune('0'+attempt))
+		streamID := "early-data-" + strconv.Itoa(attempt)
 		request := rig.handshakeRequest(t, streamID, []byte("authorization"))
 		writeRemoteRelayTestFrame(t, rig.conn, newRelayHandshakeFrame(streamID, request))
 		select {
@@ -456,7 +486,7 @@ func TestRepeatedEarlyDataDuringValidationClosesPhysicalRelayLikeRust(t *testing
 		}
 		writeRemoteRelayTestFrame(t, rig.conn, newRelayDataFrame(streamID, 0, []byte{0}))
 	}
-	waitRemoteRelayFailure(t, rig.done)
+	assertRemoteRelayConnected(t, rig.done)
 }
 
 func TestRemoteNoiseHandshakeRejectsMismatchedPrologueAndTamperingLikeRust(t *testing.T) {
