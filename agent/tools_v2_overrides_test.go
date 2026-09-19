@@ -58,10 +58,42 @@ func TestMultiAgentV2CatalogOverridesApplyLikeRust(t *testing.T) {
 	}
 }
 
-// TestMultiAgentV2SpawnKeepsComposedDescriptionLikeRust covers Rust's
-// spec_plan: spawn_agent passes no description override because its text
-// composes runtime usage guidance, and its parameter override still applies.
-func TestMultiAgentV2SpawnKeepsComposedDescriptionLikeRust(t *testing.T) {
+// TestMultiAgentV2SpawnEmptyDescriptionSuppressesStaticTextLikeRust covers Rust
+// #46297's empty-string rule: an explicit empty description suppresses the
+// bundled static text without disabling the tool, and the usage hint survives.
+func TestMultiAgentV2SpawnEmptyDescriptionSuppressesStaticTextLikeRust(t *testing.T) {
+	empty := ""
+	hint := "Configured usage hint."
+	registry := tool.NewRegistry()
+	if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+		Controller:    &limitV2Controller{MemoryToolController: NewMemoryToolController()},
+		Version:       VersionV2,
+		Exposure:      tool.ExposureModelVisible,
+		UsageHintText: &hint,
+		ToolOverrides: map[string]MultiAgentToolOverride{
+			"spawn_agent": {Description: &empty},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterMultiAgentHandlersWithOptions() error = %v", err)
+	}
+	spawn, ok := registry.Lookup(tool.NamespacedName(MultiAgentV2Namespace, "spawn_agent"))
+	if !ok {
+		t.Fatal("spawn_agent was not registered")
+	}
+	got := spawn.Spec().Description
+	if strings.Contains(got, "Spawns an agent to work on the specified task.") {
+		t.Fatalf("spawn_agent description = %q, want the bundled text suppressed", got)
+	}
+	if !strings.HasSuffix(got, hint) {
+		t.Fatalf("spawn_agent description = %q, want the usage hint retained", got)
+	}
+}
+
+// TestMultiAgentV2SpawnReplacesStaticDescriptionLikeRust covers Rust #46297's
+// spawn_agent half: the catalog description replaces the bundled static text,
+// the configured usage hint is still appended, and the parameter override still
+// applies.
+func TestMultiAgentV2SpawnReplacesStaticDescriptionLikeRust(t *testing.T) {
 	description := "Catalog spawn description."
 	hint := "Configured usage hint."
 	parameters := `{"type":"object","properties":{"task_name":{"type":"string"},"message":{"type":"string","encrypted":true}},"required":["task_name","message"]}`
@@ -82,8 +114,14 @@ func TestMultiAgentV2SpawnKeepsComposedDescriptionLikeRust(t *testing.T) {
 		t.Fatal("spawn_agent was not registered")
 	}
 	spec := spawn.Spec()
-	if strings.Contains(spec.Description, description) || !strings.Contains(spec.Description, hint) {
-		t.Fatalf("spawn_agent description = %q, want the bundled text with the usage hint", spec.Description)
+	if !strings.Contains(spec.Description, description) {
+		t.Fatalf("spawn_agent description = %q, want the catalog override", spec.Description)
+	}
+	if strings.Contains(spec.Description, "Spawns an agent to work on the specified task.") {
+		t.Fatalf("spawn_agent description = %q, want the bundled text replaced", spec.Description)
+	}
+	if !strings.HasSuffix(spec.Description, hint) {
+		t.Fatalf("spawn_agent description = %q, want the usage hint appended", spec.Description)
 	}
 	properties, _ := spec.InputSchema["properties"].(map[string]any)
 	if _, ok := properties["message"]; !ok || len(properties) != 2 {

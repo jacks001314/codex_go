@@ -110,6 +110,41 @@ func TestMultiAgentToolOverridesFromCatalogMatchesRust(t *testing.T) {
 	}
 }
 
+// TestBuildToolRegistryAppliesSpawnCatalogDescriptionLikeRust mirrors Rust
+// #46297 end to end: the resolved catalog description override reaches the
+// registered spawn_agent tool spec, replacing its bundled static text while
+// keeping the configured usage hint.
+func TestBuildToolRegistryAppliesSpawnCatalogDescriptionLikeRust(t *testing.T) {
+	description := "Catalog spawn description."
+	hint := "Configured usage hint."
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableAgents = true
+	options.AgentVersion = agent.VersionV2
+	options.AgentExposure = tool.ExposureModelVisible
+	options.AgentUsageHintText = &hint
+	options.AgentToolOverrides = map[string]agent.MultiAgentToolOverride{
+		"spawn_agent": {Description: &description},
+	}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	spawn, ok := registry.Lookup(tool.NamespacedName(agent.MultiAgentV2Namespace, "spawn_agent"))
+	if !ok {
+		t.Fatal("spawn_agent was not registered")
+	}
+	got := spawn.Spec().Description
+	if !strings.Contains(got, description) {
+		t.Fatalf("spawn_agent description = %q, want the catalog override", got)
+	}
+	if strings.Contains(got, "Spawns an agent to work on the specified task.") {
+		t.Fatalf("spawn_agent description = %q, want the bundled text replaced", got)
+	}
+	if !strings.HasSuffix(got, hint) {
+		t.Fatalf("spawn_agent description = %q, want the usage hint appended", got)
+	}
+}
+
 func TestBuildToolRegistryHonorsToolDisableOptions(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.DisableUpdatePlan = true

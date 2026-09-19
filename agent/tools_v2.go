@@ -164,6 +164,13 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 	switch e.kind {
 	case multiAgentV2Spawn:
 		spec.Description = "Spawns an agent to work on the specified task. The new agent's canonical task name will be provided to it along with the message."
+		// Rust's spawn_agent handler replaces the bundled static text with the
+		// catalog description while keeping runtime guidance (Rust #46297):
+		// missing/null keeps the bundled text, an empty string suppresses the
+		// static text, and the usage hint is appended either way.
+		if override, ok := e.toolOverrides[string(e.kind)]; ok && override.Description != nil {
+			spec.Description = *override.Description
+		}
 		if e.usageHintText != nil && strings.TrimSpace(*e.usageHintText) != "" {
 			// Rust appends the configured multi_agent_v2.usage_hint_text to the
 			// spawn_agent tool description.
@@ -238,8 +245,9 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 
 // applyMultiAgentToolOverride mirrors Rust's multi_agent_v2_handler override
 // application (#46505): the catalog description replaces the bundled text for
-// every V2 tool except `spawn_agent` (whose description also composes runtime
-// guidance), and the parameter override is used only when it validates.
+// every V2 tool except `spawn_agent` (whose Spec applies the description before
+// appending runtime guidance, mirroring Rust's `description_override: None` on
+// the wrapper), and the parameter override is used only when it validates.
 func applyMultiAgentToolOverride(spec *tool.Spec, kind multiAgentV2ToolKind, override MultiAgentToolOverride) {
 	if spec == nil {
 		return
