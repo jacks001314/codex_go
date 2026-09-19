@@ -105,11 +105,11 @@ type RuntimeServices struct {
 	SpawnGraph                 agent.Store
 	Analytics                  telemetry.TurnEventSink
 	SkillShadowMetrics         SkillShadowMetricSink
-	SkillInjectionMetrics      telemetry.MemoryUsageMetricSink
+	SkillInjectionMetrics      telemetry.CounterDurationSink
 	TurnMetrics                telemetry.TurnMetricSink
 	// VoiceMetrics receives the voice session lifecycle counters. The Go port
 	// reports product counters from the app-server, which owns the session.
-	VoiceMetrics                 telemetry.MemoryUsageMetricSink
+	VoiceMetrics                 telemetry.CounterDurationSink
 	AnalyticsRPCTransport        telemetry.AppServerRPCTransport
 	BrowserOpen                  func(string) error
 	CustomSkills                 *skillprovider.Registry

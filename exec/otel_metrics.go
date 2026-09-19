@@ -139,6 +139,10 @@ func (r *Runner) emitTurnMetrics(result *turn.AgentLoopResult, threadID string, 
 	for index := range result.ToolExecutions {
 		execution := &result.ToolExecutions[index]
 		telemetry.EmitToolCallMetric(sink, execution)
+		// Beside the generic tool metrics, Rust's registry reports the memory
+		// artifacts the call's shell script read (core's
+		// memory_usage::emit_metric_for_tool_read).
+		telemetry.EmitMemoryUsageMetricsForExecution(sink, execution)
 		// Rust's core reports the MCP call's outcome metrics beside the generic
 		// tool metrics (mcp_tool_call.rs's emit_mcp_call_metrics).
 		connectorID, connectorName := "", ""

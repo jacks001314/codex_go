@@ -32,3 +32,13 @@ type TurnMetricSink interface {
 	// `record_duration`, with the millisecond unit and bucket boundaries).
 	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }
+
+// CounterDurationSink receives counters and duration observations without the
+// histogram the full TurnMetricSink takes. It is the shape the session-scoped
+// emitters need (the skill-injection counters, the voice session lifecycle, and
+// the memory-usage reader), so a caller that only has one of those can still
+// emit through state.TaskMetrics.
+type CounterDurationSink interface {
+	Counter(name string, inc int, tags map[string]string)
+	RecordDuration(name string, duration time.Duration, tags map[string]string)
+}

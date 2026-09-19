@@ -1,9 +1,14 @@
 package memories
 
 import (
-	"path/filepath"
 	"strings"
+
+	"codex_go/config"
+	"codex_go/shell"
 )
+
+// Rust parity: codex-rs/memories/read/src/usage.rs - best-effort classification
+// of shell reads by memory artifact and root version.
 
 type UsageKind string
 
@@ -15,86 +20,97 @@ const (
 	UsageKindSkills           UsageKind = "skills"
 )
 
-func UsageKindsFromCommand(command string) []UsageKind {
-	for _, part := range splitShellFragments(command) {
-		fields := strings.Fields(part)
-		if len(fields) == 0 {
-			continue
-		}
-		kinds := usageKindsFromFields(fields)
-		if len(kinds) > 0 {
-			return kinds
-		}
-	}
-	return nil
+// MemoryUsage pairs one classified memory artifact with the memory root version
+// it was read from (Rust `memories_usage_from_command`'s tuple).
+type MemoryUsage struct {
+	Kind    UsageKind
+	Version config.MemoryVersion
 }
 
-func UsageKindFromPath(path string) (UsageKind, bool) {
+// UsageFromCommand mirrors Rust's `memories_usage_from_command`: classify every
+// file read or search a model-supplied shell script performs, in script order,
+// reporting the artifact and the memory root that holds it.
+//
+// Like Rust, a script with any action the parser cannot classify yields nothing
+// at all: an unrecognized segment means the whole command is not a plain read
+// chain, so attributing part of it would over-report.
+func UsageFromCommand(command string) []MemoryUsage {
+	commands := shell.ParseDisplayShellScript(command)
+	for _, parsed := range commands {
+		if parsed.Kind == shell.DisplayCommandUnknown {
+			return nil
+		}
+	}
+	out := []MemoryUsage{}
+	for _, parsed := range commands {
+		var path string
+		switch parsed.Kind {
+		case shell.DisplayCommandRead:
+			path = parsed.Path
+		case shell.DisplayCommandSearch:
+			path = parsed.Path
+		default:
+			// A directory listing names no artifact of its own.
+			continue
+		}
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		usage, ok := UsageFromPath(path)
+		if !ok {
+			continue
+		}
+		out = append(out, usage)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// UsageFromPath classifies one path as a memory artifact and reports the memory
+// root version it belongs to (Rust `get_memory_usage`). Windows separators are
+// normalized first, so a PowerShell read of `...\memories_v2\...` is attributed
+// to v2 rather than to an unversioned path.
+func UsageFromPath(path string) (MemoryUsage, bool) {
+	v2Root := config.MemoryVersionV2.DirectoryName() + "/"
 	normalized := strings.ReplaceAll(path, `\`, "/")
-	normalized = filepath.ToSlash(normalized)
-	// Both memory version roots are recognized (Rust #43797): v1 `memories` and
-	// v2 `memories_v2`.
-	for _, root := range []string{"memories/", "memories_v2/"} {
-		switch {
-		case strings.Contains(normalized, root+"MEMORY.md"):
-			return UsageKindMemoryMD, true
-		case strings.Contains(normalized, root+"memory_summary.md"):
-			return UsageKindMemorySummary, true
-		case strings.Contains(normalized, root+"raw_memories.md"):
-			return UsageKindRawMemories, true
-		case strings.Contains(normalized, root+"rollout_summaries/"):
-			return UsageKindRolloutSummaries, true
-		case strings.Contains(normalized, root+"skills/"):
-			return UsageKindSkills, true
-		}
+	version := config.MemoryVersionV1
+	if strings.Contains(normalized, v2Root) {
+		version = config.MemoryVersionV2
 	}
-	return "", false
+	// Both roots are recognized (#43797): v1 `memories` and v2 `memories_v2`.
+	normalized = strings.ReplaceAll(normalized, v2Root, "memories/")
+	kind, ok := usageKindFromNormalizedPath(normalized)
+	if !ok {
+		return MemoryUsage{}, false
+	}
+	return MemoryUsage{Kind: kind, Version: version}, true
 }
 
-func usageKindsFromFields(fields []string) []UsageKind {
-	command := strings.ToLower(fields[0])
-	switch command {
-	case "cat", "type", "less", "more", "head", "tail", "sed", "bat":
-		return usageKindsFromPaths(fields[1:])
-	case "rg", "grep", "find", "fd", "ls", "dir":
-		return usageKindsFromPaths(fields[1:])
+// UsageKindFromPath reports only the artifact kind a path names, for callers
+// that do not need the root version.
+func UsageKindFromPath(path string) (UsageKind, bool) {
+	usage, ok := UsageFromPath(path)
+	if !ok {
+		return "", false
+	}
+	return usage.Kind, true
+}
+
+func usageKindFromNormalizedPath(path string) (UsageKind, bool) {
+	switch {
+	case strings.Contains(path, "memories/MEMORY.md"):
+		return UsageKindMemoryMD, true
+	case strings.Contains(path, "memories/memory_summary.md"):
+		return UsageKindMemorySummary, true
+	case strings.Contains(path, "memories/raw_memories.md"):
+		return UsageKindRawMemories, true
+	case strings.Contains(path, "memories/rollout_summaries/"):
+		return UsageKindRolloutSummaries, true
+	case strings.Contains(path, "memories/skills/"):
+		return UsageKindSkills, true
 	default:
-		return nil
+		return "", false
 	}
-}
-
-func usageKindsFromPaths(values []string) []UsageKind {
-	seen := map[UsageKind]bool{}
-	out := []UsageKind{}
-	for _, value := range values {
-		value = strings.Trim(value, `"'`)
-		if strings.HasPrefix(value, "-") {
-			continue
-		}
-		kind, ok := UsageKindFromPath(value)
-		if !ok || seen[kind] {
-			continue
-		}
-		seen[kind] = true
-		out = append(out, kind)
-	}
-	return out
-}
-
-func splitShellFragments(command string) []string {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return nil
-	}
-	parts := strings.FieldsFunc(command, func(r rune) bool {
-		return r == '\n' || r == ';' || r == '|'
-	})
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }

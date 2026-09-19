@@ -45,6 +45,17 @@ func (r *RuntimeRouter) emitToolCallMetrics(sink telemetry.TurnMetricSink, execu
 	telemetry.EmitToolCallMetric(sink, execution)
 }
 
+// emitMemoryUsageMetrics records the codex.memories.usage counter for a
+// completed call whose shell script read memory artifacts (Rust core's
+// memory_usage::emit_metric_for_tool_read, called from the tool registry right
+// after the call's result is known).
+func (r *RuntimeRouter) emitMemoryUsageMetrics(execution *turn.ToolExecutionResult) {
+	if r == nil {
+		return
+	}
+	telemetry.EmitMemoryUsageMetricsForExecution(r.services.TurnMetrics, execution)
+}
+
 // emitTurnE2EDurationMetric mirrors Rust's TURN_E2E_DURATION_METRIC timer: the
 // wall-clock duration of the turn task, recorded untagged when the task ends
 // (success, failure, or interruption).

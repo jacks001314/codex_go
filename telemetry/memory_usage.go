@@ -3,142 +3,79 @@ package telemetry
 import (
 	"encoding/json"
 	"strings"
-	"time"
 
 	"codex_go/memories"
-	"codex_go/state"
 	"codex_go/tool"
+	"codex_go/turn"
 )
 
-const MemoryUsageMetricName = "codex.memories.usage"
-
-type MemoryUsageKind string
+// Rust parity: codex-rs/memories/read/src/metrics.rs's MEMORIES_USAGE_METRIC and
+// codex-rs/core/src/memory_usage.rs's emit_metric_for_tool_read, which turns a
+// completed shell call into one counter per memory artifact it read.
 
 const (
-	MemoryUsageKindList      MemoryUsageKind = "list"
-	MemoryUsageKindRead      MemoryUsageKind = "read"
-	MemoryUsageKindSearch    MemoryUsageKind = "search"
-	MemoryUsageKindWrite     MemoryUsageKind = "write"
-	MemoryUsageKindAdHocNote MemoryUsageKind = "ad_hoc_note"
+	// MemoryUsageMetricName is Rust's MEMORIES_USAGE_METRIC.
+	MemoryUsageMetricName = "codex.memories.usage"
+	// MemoryUsageVersionTag names the memory root the artifact lives in
+	// (`v1` or `v2`).
+	MemoryUsageVersionTag = "memory_version"
 )
 
-type MemoryUsageMetricSink interface {
-	Counter(name string, inc int, tags map[string]string)
-	// RecordDuration records one duration observation. The voice session
-	// lifecycle uses it for codex.voice.session.duration, which the Rust client
-	// reports as a duration rather than a counter.
-	RecordDuration(name string, duration time.Duration, tags map[string]string)
-}
-
-type MemoryUsageShellCommandParams struct {
-	Command string `json:"command"`
-}
-
+// MemoryUsageExecCommandParams is Rust's ExecCommandArgs: the unified-exec
+// command the read classification walks.
 type MemoryUsageExecCommandParams struct {
 	Cmd string `json:"cmd"`
 }
 
-func MemoryUsageKindsFromCommand(command string) []MemoryUsageKind {
-	original := command
-	command = strings.ToLower(command)
-	if strings.TrimSpace(command) == "" {
-		return nil
-	}
-	seen := map[MemoryUsageKind]bool{}
-	add := func(kind MemoryUsageKind) {
-		seen[kind] = true
-	}
-	for _, kind := range memories.UsageKindsFromCommand(original) {
-		switch kind {
-		case memories.UsageKindMemoryMD, memories.UsageKindMemorySummary, memories.UsageKindRawMemories, memories.UsageKindRolloutSummaries, memories.UsageKindSkills:
-			add(MemoryUsageKindRead)
-		}
-	}
-	switch {
-	case containsAny(command, "memory search", "memories search", "memory-search", "memories-search"):
-		add(MemoryUsageKindSearch)
-	case containsAny(command, "memory read", "memories read", "memory-read", "memories-read"):
-		add(MemoryUsageKindRead)
-	case containsAny(command, "memory list", "memories list", "memory-list", "memories-list"):
-		add(MemoryUsageKindList)
-	case containsAny(command, "memory add", "memories add", "memory write", "memories write", "ad-hoc note", "ad_hoc_note"):
-		add(MemoryUsageKindAdHocNote)
-		add(MemoryUsageKindWrite)
-	}
-	if containsAny(command, "codex memories", "codex memory") {
-		if containsAny(command, " search ", " --search", " find ") {
-			add(MemoryUsageKindSearch)
-		}
-		if containsAny(command, " read ", " show ", " cat ") {
-			add(MemoryUsageKindRead)
-		}
-		if containsAny(command, " list ", " ls ") {
-			add(MemoryUsageKindList)
-		}
-		if containsAny(command, " add ", " note ", " write ") {
-			add(MemoryUsageKindAdHocNote)
-			add(MemoryUsageKindWrite)
-		}
-	}
-	if len(seen) == 0 {
-		return nil
-	}
-	out := make([]MemoryUsageKind, 0, len(seen))
-	for _, kind := range []MemoryUsageKind{MemoryUsageKindList, MemoryUsageKindRead, MemoryUsageKindSearch, MemoryUsageKindWrite, MemoryUsageKindAdHocNote} {
-		if seen[kind] {
-			out = append(out, kind)
-		}
-	}
-	return out
-}
-
+// MemoryUsageShellScriptForInvocation mirrors Rust's shell_script_for_invocation:
+// only a default-namespace `exec_command` call carries a shell script. A
+// namespaced call (an MCP server, a connector) never reports memory usage.
 func MemoryUsageShellScriptForInvocation(invocation *tool.Invocation) (string, bool) {
 	if invocation == nil || invocation.Payload.Kind != tool.PayloadFunction {
 		return "", false
 	}
-	switch {
-	case invocation.ToolName.Namespace == "" && invocation.ToolName.Name == "shell_command":
-		var params MemoryUsageShellCommandParams
-		if err := json.Unmarshal([]byte(defaultJSON(invocation.Payload.Arguments)), &params); err != nil || params.Command == "" {
-			return "", false
-		}
-		return params.Command, true
-	case invocation.ToolName.Namespace == "" && invocation.ToolName.Name == "exec_command":
-		var params MemoryUsageExecCommandParams
-		if err := json.Unmarshal([]byte(defaultJSON(invocation.Payload.Arguments)), &params); err != nil || params.Cmd == "" {
-			return "", false
-		}
-		return params.Cmd, true
-	default:
+	if invocation.ToolName.Namespace != "" || invocation.ToolName.Name != "exec_command" {
 		return "", false
 	}
+	var params MemoryUsageExecCommandParams
+	if err := json.Unmarshal([]byte(defaultJSON(invocation.Payload.Arguments)), &params); err != nil || params.Cmd == "" {
+		return "", false
+	}
+	return params.Cmd, true
 }
 
-func EmitMemoryUsageMetricForToolRead(invocation *tool.Invocation, success bool, sink MemoryUsageMetricSink) {
-	if sink == nil {
-		return
-	}
-	command, ok := MemoryUsageShellScriptForInvocation(invocation)
-	if !ok {
-		return
+// MemoryUsageTagSets builds Rust's tag list for one completed call: the artifact
+// kind, the memory root version, the flat tool name, and whether the call
+// succeeded. Rust emits one counter per artifact the script read, in script
+// order and without deduplication.
+func MemoryUsageTagSets(command string, invocation *tool.Invocation, success bool) []map[string]string {
+	usages := memories.UsageFromCommand(command)
+	if len(usages) == 0 {
+		return nil
 	}
 	successTag := "false"
 	if success {
 		successTag = "true"
 	}
-	for _, kind := range MemoryUsageKindsFromCommand(command) {
-		sink.Counter(MemoryUsageMetricName, 1, map[string]string{
-			"kind":    string(kind),
-			"tool":    MemoryUsageFlatToolName(invocation.ToolName),
-			"success": successTag,
+	toolName := ""
+	if invocation != nil {
+		toolName = MemoryUsageFlatToolName(invocation.ToolName)
+	}
+	tags := make([]map[string]string, 0, len(usages))
+	for _, usage := range usages {
+		tags = append(tags, map[string]string{
+			"kind":                string(usage.Kind),
+			MemoryUsageVersionTag: string(usage.Version),
+			"tool":                toolName,
+			"success":             successTag,
 		})
 	}
+	return tags
 }
 
-func EmitTaskMemoryUsageMetricForToolRead(invocation *tool.Invocation, success bool, metrics *state.TaskMetrics) {
-	EmitMemoryUsageMetricForToolRead(invocation, success, metrics)
-}
-
+// MemoryUsageFlatToolName reports the tool name Rust tags the counter with
+// (codex-tools' flat_tool_name: the namespaced key, unqualified for a default
+// namespace tool).
 func MemoryUsageFlatToolName(name tool.ToolName) string {
 	if name.Namespace == "" {
 		return name.Name
@@ -146,14 +83,23 @@ func MemoryUsageFlatToolName(name tool.ToolName) string {
 	return name.Namespace + "." + name.Name
 }
 
-func containsAny(value string, needles ...string) bool {
-	padded := " " + value + " "
-	for _, needle := range needles {
-		if strings.Contains(padded, needle) || strings.Contains(value, needle) {
-			return true
-		}
+// EmitMemoryUsageMetricsForExecution records Rust's `codex.memories.usage`
+// counters for one completed call. It reports false when the call read no memory
+// artifact, so a caller can skip the extra work.
+func EmitMemoryUsageMetricsForExecution(sink TurnMetricSink, execution *turn.ToolExecutionResult) bool {
+	if sink == nil || execution == nil || execution.Invocation == nil {
+		return false
 	}
-	return false
+	command, ok := MemoryUsageShellScriptForInvocation(execution.Invocation)
+	if !ok {
+		return false
+	}
+	success := execution.Output != nil && execution.Output.Success
+	tagSets := MemoryUsageTagSets(command, execution.Invocation, success)
+	for _, tags := range tagSets {
+		sink.Counter(MemoryUsageMetricName, 1, tags)
+	}
+	return len(tagSets) > 0
 }
 
 func defaultJSON(value string) string {

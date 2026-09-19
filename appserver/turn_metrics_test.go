@@ -366,6 +366,43 @@ func TestRuntimeToolCompletedNotifierEmitsToolCallMetrics(t *testing.T) {
 	}
 }
 
+// A completed shell call reports the memory artifacts its script read, with the
+// root version each one lives in (Rust core's emit_metric_for_tool_read). The
+// notifier path is the one that reaches the metric in production.
+func TestRuntimeToolCompletedNotifierEmitsMemoryUsageLikeRust(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	router := NewRuntimeRouter(RuntimeServices{TurnMetrics: metrics})
+	notifier := router.runtimeToolCompletedNotifier("thread-a", "turn-a", t.TempDir(), false)
+	notifier(context.Background(), &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{
+			ToolName: tool.PlainName("exec_command"),
+			Payload: tool.Payload{
+				Kind:      tool.PayloadFunction,
+				Arguments: `{"cmd":"cat /tmp/.codex/memories_v2/rollout_summaries/a.md && cat /tmp/.codex/memories/MEMORY.md"}`,
+			},
+		},
+		Output: &tool.Output{Success: true},
+	})
+	var usage []*state.TaskMetric
+	for _, record := range metrics.Records() {
+		if record.Name == telemetry.MemoryUsageMetricName {
+			usage = append(usage, record)
+		}
+	}
+	if len(usage) != 2 {
+		t.Fatalf("memory usage records = %#v", metrics.Records())
+	}
+	if usage[0].Tags["kind"] != "rollout_summaries" || usage[0].Tags[telemetry.MemoryUsageVersionTag] != "v2" {
+		t.Fatalf("first record = %#v", usage[0])
+	}
+	if usage[1].Tags["kind"] != "memory_md" || usage[1].Tags[telemetry.MemoryUsageVersionTag] != "v1" {
+		t.Fatalf("second record = %#v", usage[1])
+	}
+	if usage[0].Tags["tool"] != "exec_command" || usage[0].Tags["success"] != "true" {
+		t.Fatalf("first record tags = %#v", usage[0].Tags)
+	}
+}
+
 // Mirrors Rust's emit_unified_exec_tty_metric: one codex.tool.unified_exec
 // counter per unified-exec begin event, tagged by tty; other event kinds do not
 // record it.

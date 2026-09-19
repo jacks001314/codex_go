@@ -2685,6 +2685,9 @@ func (r *RuntimeRouter) runtimeToolCompletedNotifier(threadID string, turnID str
 			defer span.End()
 		}
 		r.emitToolCallMetrics(r.services.TurnMetrics, execution)
+		// Rust's registry classifies the call's shell script for memory reads
+		// once the result is known (core's memory_usage::emit_metric_for_tool_read).
+		r.emitMemoryUsageMetrics(execution)
 		if isMCPCall {
 			r.emitMCPCallMetrics(execution)
 		}
