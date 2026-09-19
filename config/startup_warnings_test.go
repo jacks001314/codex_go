@@ -19,8 +19,8 @@ func TestStartupWarningsForRequirementsLikeRust(t *testing.T) {
 		CliAuthCredentialsStore: &credentialMode,
 		ChatgptBaseURL:          &baseURL,
 		ModelProvider:           &provider,
-		AllowedWindowsSandboxImplementations: []WindowsSandboxSetupMode{
-			WindowsSandboxSetupElevated,
+		AllowedWindowsSandboxImplementations: []WindowsSandboxImplementation{
+			WindowsSandboxImplementationElevated,
 		},
 	}
 	values := map[string]any{

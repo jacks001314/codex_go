@@ -9,9 +9,9 @@ import "testing"
 func TestResolveWindowsSandboxModeAppliesRequirementsLikeRust(t *testing.T) {
 	unelevatedConfig := map[string]any{"windows": map[string]any{"sandbox": "unelevated"}}
 	elevatedConfig := map[string]any{"windows": map[string]any{"sandbox": "elevated"}}
-	elevatedOnly := &ConfigRequirements{AllowedWindowsSandboxImplementations: []WindowsSandboxSetupMode{WindowsSandboxSetupElevated}}
-	bothAllowed := &ConfigRequirements{AllowedWindowsSandboxImplementations: []WindowsSandboxSetupMode{WindowsSandboxSetupElevated, WindowsSandboxSetupUnelevated}}
-	unelevatedOnly := &ConfigRequirements{AllowedWindowsSandboxImplementations: []WindowsSandboxSetupMode{WindowsSandboxSetupUnelevated}}
+	elevatedOnly := &ConfigRequirements{AllowedWindowsSandboxImplementations: []WindowsSandboxImplementation{WindowsSandboxImplementationElevated}}
+	bothAllowed := &ConfigRequirements{AllowedWindowsSandboxImplementations: []WindowsSandboxImplementation{WindowsSandboxImplementationElevated, WindowsSandboxImplementationUnelevated}}
+	unelevatedOnly := &ConfigRequirements{AllowedWindowsSandboxImplementations: []WindowsSandboxImplementation{WindowsSandboxImplementationUnelevated}}
 
 	cases := []struct {
 		name         string

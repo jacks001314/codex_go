@@ -1,4 +1,3 @@
-﻿
 package config
 
 import (
@@ -22,7 +21,7 @@ sandbox_private_desktop = false
 		t.Fatal("requirements = nil")
 	}
 	if len(requirements.AllowedWindowsSandboxImplementations) != 1 ||
-		requirements.AllowedWindowsSandboxImplementations[0] != WindowsSandboxSetupElevated {
+		requirements.AllowedWindowsSandboxImplementations[0] != WindowsSandboxImplementationElevated {
 		t.Fatalf("allowed implementations = %#v", requirements.AllowedWindowsSandboxImplementations)
 	}
 }
@@ -46,7 +45,7 @@ func TestParseRequirementsTOMLWindowsLegacyTopLevelLikeRust(t *testing.T) {
 		t.Fatalf("ParseRequirementsTOML() error = %v", err)
 	}
 	if requirements == nil || len(requirements.AllowedWindowsSandboxImplementations) != 1 ||
-		requirements.AllowedWindowsSandboxImplementations[0] != WindowsSandboxSetupUnelevated {
+		requirements.AllowedWindowsSandboxImplementations[0] != WindowsSandboxImplementationUnelevated {
 		t.Fatalf("legacy requirements = %#v", requirements)
 	}
 
@@ -60,7 +59,7 @@ allowed_sandbox_implementations = ["elevated"]
 		t.Fatalf("ParseRequirementsTOML() error = %v", err)
 	}
 	if len(nestedWins.AllowedWindowsSandboxImplementations) != 1 ||
-		nestedWins.AllowedWindowsSandboxImplementations[0] != WindowsSandboxSetupElevated {
+		nestedWins.AllowedWindowsSandboxImplementations[0] != WindowsSandboxImplementationElevated {
 		t.Fatalf("nested [windows] must win: %#v", nestedWins.AllowedWindowsSandboxImplementations)
 	}
 }
@@ -98,4 +97,3 @@ sandbox_private_desktop = false
 		})
 	}
 }
-

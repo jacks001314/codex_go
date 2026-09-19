@@ -545,12 +545,12 @@ var supportedExperimentalFeatureEnablement = []string{
 }
 
 type ConfigRequirements struct {
-	AllowedApprovalPolicies              []sandbox.AskForApproval  `json:"allowedApprovalPolicies,omitempty"`
-	AllowedApprovalsReviewers            []ApprovalsReviewer       `json:"allowedApprovalsReviewers,omitempty"`
-	AllowedSandboxModes                  []sandbox.SandboxMode     `json:"allowedSandboxModes,omitempty"`
-	AllowedWindowsSandboxImplementations []WindowsSandboxSetupMode `json:"allowedWindowsSandboxImplementations,omitempty"`
-	AllowedPermissionProfiles    map[string]bool `json:"allowedPermissionProfiles,omitempty"`
-	DefaultPermissions           *string         `json:"defaultPermissions,omitempty"`
+	AllowedApprovalPolicies              []sandbox.AskForApproval       `json:"allowedApprovalPolicies,omitempty"`
+	AllowedApprovalsReviewers            []ApprovalsReviewer            `json:"allowedApprovalsReviewers,omitempty"`
+	AllowedSandboxModes                  []sandbox.SandboxMode          `json:"allowedSandboxModes,omitempty"`
+	AllowedWindowsSandboxImplementations []WindowsSandboxImplementation `json:"allowedWindowsSandboxImplementations,omitempty"`
+	AllowedPermissionProfiles            map[string]bool                `json:"allowedPermissionProfiles,omitempty"`
+	DefaultPermissions                   *string                        `json:"defaultPermissions,omitempty"`
 	// Permissions carries the managed [permissions] profile catalog from
 	// requirements (Rust ConfigRequirementsToml.permissions, #39752). It is
 	// internal and not part of the app-server wire ConfigRequirements schema.
@@ -607,45 +607,45 @@ type ConfigRequirements struct {
 
 func (r *ConfigRequirements) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		AllowedApprovalPolicies              []sandbox.AskForApproval  `json:"allowedApprovalPolicies"`
-		AllowedApprovalsReviewers            []ApprovalsReviewer       `json:"allowedApprovalsReviewers"`
-		AllowedSandboxModes                  []sandbox.SandboxMode     `json:"allowedSandboxModes"`
-		AllowedWindowsSandboxImplementations []WindowsSandboxSetupMode `json:"allowedWindowsSandboxImplementations"`
-		AllowedPermissionProfiles            map[string]bool           `json:"allowedPermissionProfiles"`
-		DefaultPermissions                   *string                   `json:"defaultPermissions"`
-		AllowedWebSearchModes                []WebSearchMode           `json:"allowedWebSearchModes"`
-		AllowManagedHooksOnly                *bool                     `json:"allowManagedHooksOnly"`
-		AllowBrowserAndComputerUse           *bool                     `json:"allowBrowserAndComputerUse"`
-		AllowAppshots                        *bool                     `json:"allowAppshots"`
-		AllowRemoteControl                   *bool                     `json:"allowRemoteControl"`
-		ComputerUse                          *ComputerUseRequirements  `json:"computerUse"`
-		BrowserUse                           *BrowserUseRequirements   `json:"browserUse"`
-		InAppBrowser                         *InAppBrowserRequirements `json:"inAppBrowser"`
-		AutoReview                           *AutoReviewRequirements   `json:"autoReview"`
-		FeatureRequirements                  map[string]bool           `json:"featureRequirements"`
-		Hooks                                *ManagedHooksRequirements `json:"hooks"`
-		EnforceResidency                     *ResidencyRequirement     `json:"enforceResidency"`
-		Application                          *ApplicationRequirements  `json:"application"`
-		Network                              *NetworkRequirements      `json:"network"`
-		Models                               *ModelsRequirements       `json:"models"`
-		AllowedLoginMethods                  []ForcedLoginMethod       `json:"allowedLoginMethods"`
-		AllowedChatGPTWorkspaces             []string                  `json:"allowedChatGPTWorkspaces"`
-		CliAuthCredentialsStore              *AuthCredentialsStoreMode `json:"cliAuthCredentialsStore"`
-		ChatgptBaseURL                       *string                   `json:"chatgptBaseUrl"`
-		AdditionalDeveloperInstructions      *string                   `json:"additionalDeveloperInstructions"`
-		ModelProvider                        *string                   `json:"modelProvider"`
-		ModelProviders                       map[string]any            `json:"modelProviders"`
-		SQLiteHome                           *string                   `json:"sqliteHome"`
-		LogDir                               *string                   `json:"logDir"`
-		ModelCatalogJSON                     *string                   `json:"modelCatalogJson"`
-		CheckForUpdateOnStartup              *bool                     `json:"checkForUpdateOnStartup"`
-		AllowLoginShell                      *bool                     `json:"allowLoginShell"`
-		Feedback                             *FeedbackRequirements     `json:"feedback"`
+		AllowedApprovalPolicies              []sandbox.AskForApproval       `json:"allowedApprovalPolicies"`
+		AllowedApprovalsReviewers            []ApprovalsReviewer            `json:"allowedApprovalsReviewers"`
+		AllowedSandboxModes                  []sandbox.SandboxMode          `json:"allowedSandboxModes"`
+		AllowedWindowsSandboxImplementations []WindowsSandboxImplementation `json:"allowedWindowsSandboxImplementations"`
+		AllowedPermissionProfiles            map[string]bool                `json:"allowedPermissionProfiles"`
+		DefaultPermissions                   *string                        `json:"defaultPermissions"`
+		AllowedWebSearchModes                []WebSearchMode                `json:"allowedWebSearchModes"`
+		AllowManagedHooksOnly                *bool                          `json:"allowManagedHooksOnly"`
+		AllowBrowserAndComputerUse           *bool                          `json:"allowBrowserAndComputerUse"`
+		AllowAppshots                        *bool                          `json:"allowAppshots"`
+		AllowRemoteControl                   *bool                          `json:"allowRemoteControl"`
+		ComputerUse                          *ComputerUseRequirements       `json:"computerUse"`
+		BrowserUse                           *BrowserUseRequirements        `json:"browserUse"`
+		InAppBrowser                         *InAppBrowserRequirements      `json:"inAppBrowser"`
+		AutoReview                           *AutoReviewRequirements        `json:"autoReview"`
+		FeatureRequirements                  map[string]bool                `json:"featureRequirements"`
+		Hooks                                *ManagedHooksRequirements      `json:"hooks"`
+		EnforceResidency                     *ResidencyRequirement          `json:"enforceResidency"`
+		Application                          *ApplicationRequirements       `json:"application"`
+		Network                              *NetworkRequirements           `json:"network"`
+		Models                               *ModelsRequirements            `json:"models"`
+		AllowedLoginMethods                  []ForcedLoginMethod            `json:"allowedLoginMethods"`
+		AllowedChatGPTWorkspaces             []string                       `json:"allowedChatGPTWorkspaces"`
+		CliAuthCredentialsStore              *AuthCredentialsStoreMode      `json:"cliAuthCredentialsStore"`
+		ChatgptBaseURL                       *string                        `json:"chatgptBaseUrl"`
+		AdditionalDeveloperInstructions      *string                        `json:"additionalDeveloperInstructions"`
+		ModelProvider                        *string                        `json:"modelProvider"`
+		ModelProviders                       map[string]any                 `json:"modelProviders"`
+		SQLiteHome                           *string                        `json:"sqliteHome"`
+		LogDir                               *string                        `json:"logDir"`
+		ModelCatalogJSON                     *string                        `json:"modelCatalogJson"`
+		CheckForUpdateOnStartup              *bool                          `json:"checkForUpdateOnStartup"`
+		AllowLoginShell                      *bool                          `json:"allowLoginShell"`
+		Feedback                             *FeedbackRequirements          `json:"feedback"`
 	}{
 		AllowedApprovalPolicies:              permissionPoliciesOrNil(r.AllowedApprovalPolicies),
 		AllowedApprovalsReviewers:            approvalsReviewersOrNil(r.AllowedApprovalsReviewers),
 		AllowedSandboxModes:                  sandboxModesOrNil(r.AllowedSandboxModes),
-		AllowedWindowsSandboxImplementations: windowsSandboxModesOrNil(r.AllowedWindowsSandboxImplementations),
+		AllowedWindowsSandboxImplementations: windowsSandboxImplementationsOrNil(r.AllowedWindowsSandboxImplementations),
 		AllowedPermissionProfiles:            cloneBoolMap(r.AllowedPermissionProfiles),
 		DefaultPermissions:                   cloneStringPtr(r.DefaultPermissions),
 		AllowedWebSearchModes:                webSearchModesOrNil(r.AllowedWebSearchModes),
@@ -862,6 +862,33 @@ const (
 	WindowsSandboxSetupUnelevated WindowsSandboxSetupMode = "unelevated"
 )
 
+// WindowsSandboxImplementation mirrors Rust's app-server
+// WindowsSandboxImplementation (#45737): the Windows sandbox backends a managed
+// policy may allow. It is deliberately distinct from WindowsSandboxSetupMode,
+// which only describes the legacy elevated/unelevated setup choice and cannot
+// represent the native (MXC) backend.
+type WindowsSandboxImplementation string
+
+const (
+	WindowsSandboxImplementationElevated   WindowsSandboxImplementation = "elevated"
+	WindowsSandboxImplementationUnelevated WindowsSandboxImplementation = "unelevated"
+	WindowsSandboxImplementationMxc        WindowsSandboxImplementation = "mxc"
+)
+
+// ParseWindowsSandboxImplementation validates one allowed-implementation entry.
+// Rust's requirements TOML enum only carries the legacy elevated/unelevated
+// backends, while the app-server wire type also defines mxc, so all three are
+// accepted here and anything else is rejected rather than silently stored.
+func ParseWindowsSandboxImplementation(value string) (WindowsSandboxImplementation, error) {
+	normalized := WindowsSandboxImplementation(strings.ToLower(strings.TrimSpace(value)))
+	switch normalized {
+	case WindowsSandboxImplementationElevated, WindowsSandboxImplementationUnelevated, WindowsSandboxImplementationMxc:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("%w: invalid allowed Windows sandbox implementation %q", ErrInvalidConfigRequest, value)
+	}
+}
+
 func ResolveAllowedWindowsSandboxSetupMode(requirements *ConfigRequirements, requested WindowsSandboxSetupMode) (WindowsSandboxSetupMode, error) {
 	resolved := requested
 	if resolved == WindowsSandboxSetupDefault {
@@ -876,10 +903,10 @@ func ResolveAllowedWindowsSandboxSetupMode(requirements *ConfigRequirements, req
 		return resolved, nil
 	}
 	for _, allowed := range requirements.AllowedWindowsSandboxImplementations {
-		if allowed == WindowsSandboxSetupDefault {
-			allowed = WindowsSandboxSetupUnelevated
-		}
-		if allowed == resolved {
+		// The legacy setup RPC can only request the elevated/unelevated
+		// backends; a policy that allows mxc additionally leaves those two
+		// subject to the same allow-list.
+		if WindowsSandboxSetupMode(allowed) == resolved {
 			return resolved, nil
 		}
 	}
@@ -4078,6 +4105,15 @@ func windowsSandboxModesOrNil(values []WindowsSandboxSetupMode) []WindowsSandbox
 		return nil
 	}
 	out := make([]WindowsSandboxSetupMode, len(values))
+	copy(out, values)
+	return out
+}
+
+func windowsSandboxImplementationsOrNil(values []WindowsSandboxImplementation) []WindowsSandboxImplementation {
+	if values == nil {
+		return nil
+	}
+	out := make([]WindowsSandboxImplementation, len(values))
 	copy(out, values)
 	return out
 }

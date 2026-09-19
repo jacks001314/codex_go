@@ -47,10 +47,7 @@ func ResolveWindowsSandboxMode(values map[string]any, requirements *ConfigRequir
 	allowed := make(map[WindowsSandboxSetupMode]bool, len(requirements.AllowedWindowsSandboxImplementations))
 	fallback := WindowsSandboxSetupUnelevated
 	for _, entry := range requirements.AllowedWindowsSandboxImplementations {
-		normalized := entry
-		if normalized == WindowsSandboxSetupDefault {
-			normalized = WindowsSandboxSetupUnelevated
-		}
+		normalized := WindowsSandboxSetupMode(entry)
 		allowed[normalized] = true
 		if normalized == WindowsSandboxSetupElevated {
 			// Prefer elevated when both implementations are allowed.

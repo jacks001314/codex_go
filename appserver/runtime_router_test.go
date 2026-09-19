@@ -2712,7 +2712,7 @@ func TestWindowsSandboxLevelAppliesRequirementsLikeRust(t *testing.T) {
 	cfg := &config.Config{
 		Values: values,
 		Requirements: &config.ConfigRequirements{
-			AllowedWindowsSandboxImplementations: []config.WindowsSandboxSetupMode{config.WindowsSandboxSetupElevated},
+			AllowedWindowsSandboxImplementations: []config.WindowsSandboxImplementation{config.WindowsSandboxImplementationElevated},
 		},
 	}
 	if got := windowsSandboxLevelForConfig(cfg); got != sandbox.WindowsSandboxElevated {

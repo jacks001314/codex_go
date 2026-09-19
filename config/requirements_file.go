@@ -233,10 +233,11 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	}
 	applyRemoteSandboxConfig(&out, remoteConfigs, resolver)
 	if values, ok := stringListAnyKey(values, "allowed_windows_sandbox_implementations", "allowedWindowsSandboxImplementations"); ok {
-		out.AllowedWindowsSandboxImplementations = make([]WindowsSandboxSetupMode, 0, len(values))
-		for _, value := range values {
-			out.AllowedWindowsSandboxImplementations = append(out.AllowedWindowsSandboxImplementations, WindowsSandboxSetupMode(value))
+		implementations, err := windowsSandboxImplementationsFromStrings(values)
+		if err != nil {
+			return nil, err
 		}
+		out.AllowedWindowsSandboxImplementations = implementations
 	}
 	// Rust ConfigRequirementsToml.windows (WindowsRequirementsToml): the managed
 	// Windows sandbox implementation restriction. Rust #46554 removed the
@@ -1066,8 +1067,10 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 
 // windowsSandboxImplementationsFromMap parses
 // `[windows] allowed_sandbox_implementations` (Rust WindowsRequirementsToml).
-// An empty list is rejected, mirroring Rust's ConstraintError::empty_field.
-func windowsSandboxImplementationsFromMap(values map[string]any) ([]WindowsSandboxSetupMode, bool, error) {
+// An empty list is rejected, mirroring Rust's ConstraintError::empty_field, and
+// entries are validated against Rust's implementation enum instead of being
+// stored verbatim.
+func windowsSandboxImplementationsFromMap(values map[string]any) ([]WindowsSandboxImplementation, bool, error) {
 	raw, ok := anyKey(values, "allowed_sandbox_implementations", "allowedSandboxImplementations")
 	if !ok {
 		return nil, false, nil
@@ -1079,15 +1082,33 @@ func windowsSandboxImplementationsFromMap(values map[string]any) ([]WindowsSandb
 	if len(list) == 0 {
 		return nil, false, fmt.Errorf("windows.allowed_sandbox_implementations must not be empty")
 	}
-	out := make([]WindowsSandboxSetupMode, 0, len(list))
+	out := make([]WindowsSandboxImplementation, 0, len(list))
 	for _, item := range list {
 		value, ok := item.(string)
 		if !ok {
 			return nil, false, fmt.Errorf("windows.allowed_sandbox_implementations entries must be strings")
 		}
-		out = append(out, WindowsSandboxSetupMode(value))
+		implementation, err := ParseWindowsSandboxImplementation(value)
+		if err != nil {
+			return nil, false, err
+		}
+		out = append(out, implementation)
 	}
 	return out, true, nil
+}
+
+// windowsSandboxImplementationsFromStrings validates the app-server wire
+// spelling of the allowed-implementation list.
+func windowsSandboxImplementationsFromStrings(values []string) ([]WindowsSandboxImplementation, error) {
+	out := make([]WindowsSandboxImplementation, 0, len(values))
+	for _, value := range values {
+		implementation, err := ParseWindowsSandboxImplementation(value)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, implementation)
+	}
+	return out, nil
 }
 
 func mapAnyKey(values map[string]any, keys ...string) (map[string]any, bool) {
