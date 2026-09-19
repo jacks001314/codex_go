@@ -36,6 +36,31 @@ func TestInvocationOriginItemIDLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #45409's retained cell window: a nested Code Mode call reports the
+// window its cell started in, while every other call reports the turn's window.
+func TestOriginWindowIDPrefersTheRetainedWindowLikeRust(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{WindowID: "thread-1:1"})
+	turnCall := &tool.Invocation{CallID: "call-turn"}
+	if got := executor.originWindowID(turnCall); got != "thread-1:1" {
+		t.Fatalf("turn window = %q", got)
+	}
+	retained := &tool.Invocation{
+		CallID:  "call-nested",
+		Source:  "code_mode",
+		Context: map[string]any{tool.OriginWindowIDContextKey: "thread-1:0"},
+	}
+	if got := executor.originWindowID(retained); got != "thread-1:0" {
+		t.Fatalf("retained window = %q, want thread-1:0", got)
+	}
+	blank := &tool.Invocation{CallID: "call-blank", Context: map[string]any{tool.OriginWindowIDContextKey: "  "}}
+	if got := executor.originWindowID(blank); got != "thread-1:1" {
+		t.Fatalf("blank override must fall back to the turn window: %q", got)
+	}
+	if got := NewToolExecutor(&ToolExecutorOptions{}).originWindowID(nil); got != "" {
+		t.Fatalf("executor without a window = %q", got)
+	}
+}
+
 // Mirrors Rust #46010's `McpToolOutput::tool_result_metadata`: the raw MCP
 // result `_meta` is exposed for the internal executed-tool-call record only when
 // the caller allowed the capture.

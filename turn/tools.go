@@ -443,6 +443,9 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if options.CodeModeRuntime != nil {
 			options.CodeModeRuntime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
 			options.CodeModeRuntime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
+			// Rust #45409: a Code Mode cell retains the window it started in, so
+			// the nested MCP calls it issues keep reporting that window.
+			options.CodeModeRuntime.SetTurnWindowID(options.WindowID)
 			execExecutor, waitExecutor = options.CodeModeRuntime.Executors(registry, codeModeCommandTool)
 		} else {
 			runtime := tool.NewCodeModeRuntime(options.CodeModeProvider, options.DisableCodeModeFallback)

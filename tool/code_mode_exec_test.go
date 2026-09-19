@@ -1139,3 +1139,94 @@ func TestCodeModeHostCellCloseReleasesRetainedCallbacks(t *testing.T) {
 		t.Fatalf("cell after host close tracking = %v release = %v", tracked, retained)
 	}
 }
+
+// Mirrors Rust #45409: a Code Mode cell retains the Responses item and the
+// conversation window it started in (cell_originating_call), so a nested tool
+// call issued after a wait - or after a compaction moved the thread to another
+// window - still reports the cell's origin.
+func TestCodeModeCellRetainsItsOriginLikeRust(t *testing.T) {
+	runtime := NewCodeModeRuntime(nil, false)
+	defer func() { _ = runtime.Close() }()
+	registry := NewRegistry()
+	var mu sync.Mutex
+	var nested []map[string]any
+	if err := registry.Register(NewExecutorFunc(Spec{Name: PlainName("nested-tool")}, func(_ context.Context, invocation *Invocation) (*Output, error) {
+		mu.Lock()
+		nested = append(nested, cloneInvocationContext(invocation.Context))
+		mu.Unlock()
+		return &Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register nested tool: %v", err)
+	}
+	_, _ = runtime.Executors(registry)
+	runtime.SetTurnWindowID("thread-1:0")
+	delegate := &codeModeRemoteDelegate{exec: runtime.exec}
+
+	// The cell starts in window 0, requested by item fc-before.
+	release := delegate.begin(&Invocation{CallID: "call-exec", Context: map[string]any{OriginItemIDContextKey: "fc-before"}})
+	if _, err := delegate.Invoke(context.Background(), CodeModeRemoteNestedCall{
+		CellID: "origin-cell", RuntimeToolCallID: "call-exec-nested", ToolName: PlainName("nested-tool"),
+		Kind: PayloadFunction, Input: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("first nested call error = %v", err)
+	}
+	release()
+
+	// A compaction moves the thread to window 1 and a wait resumes the cell.
+	runtime.SetTurnWindowID("thread-1:1")
+	resumed := &Invocation{CallID: "call-wait", Context: map[string]any{OriginItemIDContextKey: "fc-after"}}
+	release = delegate.begin(resumed)
+	if _, err := delegate.Invoke(context.Background(), CodeModeRemoteNestedCall{
+		CellID: "origin-cell", RuntimeToolCallID: "call-wait-nested", ToolName: PlainName("nested-tool"),
+		Kind: PayloadFunction, Input: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("resumed nested call error = %v", err)
+	}
+	release()
+
+	mu.Lock()
+	captured := append([]map[string]any(nil), nested...)
+	mu.Unlock()
+	if len(captured) != 2 {
+		t.Fatalf("nested invocations = %d, want 2", len(captured))
+	}
+	for index, context := range captured {
+		if context[OriginItemIDContextKey] != "fc-before" || context[OriginWindowIDContextKey] != "thread-1:0" {
+			t.Fatalf("nested call %d origin = %#v/%#v, want fc-before/thread-1:0", index, context[OriginItemIDContextKey], context[OriginWindowIDContextKey])
+		}
+	}
+
+	// A different cell starts its own origin from the invocation that started it.
+	release = delegate.begin(&Invocation{CallID: "call-other", Context: map[string]any{OriginItemIDContextKey: "fc-other"}})
+	if _, err := delegate.Invoke(context.Background(), CodeModeRemoteNestedCall{
+		CellID: "other-cell", RuntimeToolCallID: "call-other-nested", ToolName: PlainName("nested-tool"),
+		Kind: PayloadFunction, Input: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("other cell nested call error = %v", err)
+	}
+	release()
+	mu.Lock()
+	other := append([]map[string]any(nil), nested...)[len(captured)]
+	mu.Unlock()
+	if other[OriginItemIDContextKey] != "fc-other" || other[OriginWindowIDContextKey] != "thread-1:1" {
+		t.Fatalf("second cell origin = %#v/%#v", other[OriginItemIDContextKey], other[OriginWindowIDContextKey])
+	}
+}
+
+// The retained origin is released with its cell.
+func TestCodeModeForgottenCellDropsItsOrigin(t *testing.T) {
+	runtime := NewCodeModeRuntime(nil, false)
+	defer func() { _ = runtime.Close() }()
+	runtime.SetTurnWindowID("thread-1:0")
+	delegate := &codeModeRemoteDelegate{exec: runtime.exec}
+	release := delegate.begin(&Invocation{CallID: "call-exec", Context: map[string]any{OriginItemIDContextKey: "fc-before"}})
+	defer release()
+	origin := runtime.exec.cellOrigin("cell-1", &Invocation{CallID: "call-exec", Context: map[string]any{OriginItemIDContextKey: "fc-before"}})
+	if origin.itemID != "fc-before" || origin.windowID != "thread-1:0" {
+		t.Fatalf("recorded origin = %#v", origin)
+	}
+	runtime.exec.forgetRemoteCell("cell-1")
+	if dropped := runtime.exec.cellOrigin("cell-1", &Invocation{CallID: "call-exec", Context: map[string]any{OriginItemIDContextKey: "fc-new"}}); dropped.itemID != "fc-new" {
+		t.Fatalf("origin after forget = %#v", dropped)
+	}
+}

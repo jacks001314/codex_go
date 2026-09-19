@@ -50,6 +50,11 @@ type codeModeExecExecutor struct {
 	warningEmitted    atomic.Bool
 	remoteCellsMu     sync.RWMutex
 	remoteCells       map[string]*Registry
+	// remoteCellOrigins retains the Responses item and conversation window that
+	// started each Code Mode cell (Rust `cell_originating_call`, #45409), so a
+	// nested call after a wait or a compaction still reports the cell's origin
+	// rather than the resuming invocation's.
+	remoteCellOrigins map[string]codeModeCallOrigin
 	// remoteCellReleases retains the delegate callback registration for a yielded
 	// cell so notifications and nested calls keep routing to their originating
 	// execution until the cell is cleaned up (Rust #44865).
@@ -59,6 +64,19 @@ type codeModeExecExecutor struct {
 	// (#46288): report the code-mode host duration and harness overhead in the
 	// cell response header.
 	showCellOverhead bool
+	// windowID is the turn's conversation window identity (`{thread}:{n}`); it
+	// stamps a cell's retained origin when the cell starts.
+	windowID string
+}
+
+// codeModeCallOrigin is one cell's retained origin (Rust ToolCallOrigin).
+type codeModeCallOrigin struct {
+	itemID   string
+	windowID string
+}
+
+func (o codeModeCallOrigin) isZero() bool {
+	return o.itemID == "" && o.windowID == ""
 }
 
 type CodeModeRemoteProvider interface {
@@ -198,8 +216,8 @@ type CodeModeRuntime struct {
 func NewCodeModeRuntime(provider CodeModeRemoteProvider, disableFallback bool) *CodeModeRuntime {
 	exec := &codeModeExecExecutor{
 		store: map[string]json.RawMessage{}, cells: map[string]*codeModeCell{}, remoteCells: map[string]*Registry{},
-		remoteCellReleases: map[string]func(){},
-		provider:           provider, disableFallback: disableFallback, defaultYieldMS: int(CodeModeDefaultExecYieldTime / time.Millisecond),
+		remoteCellOrigins: map[string]codeModeCallOrigin{}, remoteCellReleases: map[string]func(){},
+		provider: provider, disableFallback: disableFallback, defaultYieldMS: int(CodeModeDefaultExecYieldTime / time.Millisecond),
 	}
 	if provider != nil {
 		exec.remote = provider.NewSession(&codeModeRemoteDelegate{exec: exec})
@@ -213,6 +231,17 @@ func (r *CodeModeRuntime) SetDefaultExecYieldTime(value time.Duration) {
 	}
 	r.exec.bindingMu.Lock()
 	r.exec.defaultYieldMS = int(value / time.Millisecond)
+	r.exec.bindingMu.Unlock()
+}
+
+// SetTurnWindowID binds the current turn's conversation window identity, which
+// a Code Mode cell retains as part of its origin (Rust #45409).
+func (r *CodeModeRuntime) SetTurnWindowID(windowID string) {
+	if r == nil || r.exec == nil {
+		return
+	}
+	r.exec.bindingMu.Lock()
+	r.exec.windowID = strings.TrimSpace(windowID)
 	r.exec.bindingMu.Unlock()
 }
 
@@ -335,6 +364,53 @@ func (e *codeModeExecExecutor) defaultExecYieldTimeMS() int {
 	e.bindingMu.RLock()
 	defer e.bindingMu.RUnlock()
 	return e.defaultYieldMS
+}
+
+func (e *codeModeExecExecutor) turnWindowID() string {
+	if e == nil {
+		return ""
+	}
+	e.bindingMu.RLock()
+	defer e.bindingMu.RUnlock()
+	return e.windowID
+}
+
+// cellOrigin returns the origin retained for a cell, recording the invoking
+// invocation's origin the first time the cell is observed. A cell that starts
+// with an unknown origin keeps the window it started in, which is what makes a
+// later wait or compaction unable to retarget it (Rust #45409).
+func (e *codeModeExecExecutor) cellOrigin(cellID string, parent *Invocation) codeModeCallOrigin {
+	if e == nil {
+		return codeModeCallOrigin{}
+	}
+	cellID = strings.TrimSpace(cellID)
+	if cellID == "" {
+		return codeModeCallOrigin{itemID: invocationContextString(parent, OriginItemIDContextKey), windowID: e.turnWindowID()}
+	}
+	e.remoteCellsMu.RLock()
+	retained, ok := e.remoteCellOrigins[cellID]
+	e.remoteCellsMu.RUnlock()
+	if ok && !retained.isZero() {
+		return retained
+	}
+	origin := codeModeCallOrigin{
+		itemID:   invocationContextString(parent, OriginItemIDContextKey),
+		windowID: firstNonEmptyString(invocationContextString(parent, OriginWindowIDContextKey), e.turnWindowID()),
+	}
+	if origin.isZero() {
+		return origin
+	}
+	e.remoteCellsMu.Lock()
+	if e.remoteCellOrigins == nil {
+		e.remoteCellOrigins = map[string]codeModeCallOrigin{}
+	}
+	if existing, present := e.remoteCellOrigins[cellID]; !present || existing.isZero() {
+		e.remoteCellOrigins[cellID] = origin
+	} else {
+		origin = existing
+	}
+	e.remoteCellsMu.Unlock()
+	return origin
 }
 
 func (e *codeModeExecExecutor) Spec() Spec {
@@ -675,6 +751,7 @@ func (e *codeModeExecExecutor) forgetRemoteCell(cellID string) {
 	}
 	e.remoteCellsMu.Lock()
 	delete(e.remoteCells, cellID)
+	delete(e.remoteCellOrigins, cellID)
 	release := e.remoteCellReleases[cellID]
 	delete(e.remoteCellReleases, cellID)
 	e.remoteCellsMu.Unlock()
@@ -766,6 +843,16 @@ func (d *codeModeRemoteDelegate) Invoke(ctx context.Context, call CodeModeRemote
 	invocation := &Invocation{CallID: call.RuntimeToolCallID, ToolName: call.ToolName, Payload: payload, Source: "code_mode", Context: invocationContext}
 	if invocation.Context == nil {
 		invocation.Context = map[string]any{}
+	}
+	// Rust #45409: a nested call reports its cell's retained origin (the item and
+	// the window the cell started in), not the invocation that resumed the cell.
+	if origin := d.exec.cellOrigin(call.CellID, parent); !origin.isZero() {
+		if origin.itemID != "" {
+			invocation.Context[OriginItemIDContextKey] = origin.itemID
+		}
+		if origin.windowID != "" {
+			invocation.Context[OriginWindowIDContextKey] = origin.windowID
+		}
 	}
 	if strings.TrimSpace(call.CellID) != "" {
 		invocation.Context[CodeModeCellIDContextKey] = call.CellID

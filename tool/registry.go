@@ -151,6 +151,11 @@ const (
 	// report it as `_meta.itemId`; a nested Code Mode call inherits its cell's
 	// value because the delegate clones the parent invocation's context.
 	OriginItemIDContextKey = "origin_item_id"
+	// OriginWindowIDContextKey carries the conversation window the call's origin
+	// belongs to (Rust `ToolCallOrigin::window_id`, #45409). It is set for a
+	// nested Code Mode call so a cell keeps reporting the window it started in
+	// even after a wait or a compaction moved the thread to a new window.
+	OriginWindowIDContextKey = "origin_window_id"
 )
 
 func (i *Invocation) DecodeArguments(target any) error {

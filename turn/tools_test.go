@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -1706,5 +1707,96 @@ func TestBuildToolRegistryRegistersTestSyncWhenModelDeclaresItLikeRust(t *testin
 	spec := executor.Spec()
 	if spec.Name.Key() != "test_sync_tool" {
 		t.Fatalf("spec name = %q", spec.Name.Key())
+	}
+}
+
+// originCodeModeProvider is a code-mode host double that issues one nested tool
+// call while the exec invocation that started the cell is still active.
+type originCodeModeProvider struct {
+	mu       sync.Mutex
+	delegate tool.CodeModeRemoteDelegate
+	origins  []map[string]any
+}
+
+func (p *originCodeModeProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.CodeModeRemoteSession {
+	p.mu.Lock()
+	p.delegate = delegate
+	p.mu.Unlock()
+	return &originCodeModeSession{provider: p}
+}
+
+type originCodeModeSession struct{ provider *originCodeModeProvider }
+
+func (s *originCodeModeSession) Execute(ctx context.Context, _ tool.CodeModeRemoteExecuteRequest) (tool.CodeModeRemoteResponse, error) {
+	if _, err := s.provider.delegate.Invoke(ctx, tool.CodeModeRemoteNestedCall{
+		CellID: "turn-origin-cell", RuntimeToolCallID: "exec-origin-call-nested",
+		ToolName: tool.PlainName("nested-echo"), Kind: tool.PayloadFunction, Input: json.RawMessage(`{}`),
+	}); err != nil {
+		return tool.CodeModeRemoteResponse{}, err
+	}
+	return tool.CodeModeRemoteResponse{
+		CellID: "turn-origin-cell", State: "completed",
+		ContentItems: []map[string]any{{"type": "input_text", "text": "done"}},
+	}, nil
+}
+
+func (s *originCodeModeSession) Wait(context.Context, string, uint64) (tool.CodeModeRemoteResponse, error) {
+	return tool.CodeModeRemoteResponse{CellID: "turn-origin-cell", State: "completed"}, nil
+}
+
+func (s *originCodeModeSession) Terminate(context.Context, string) (tool.CodeModeRemoteResponse, error) {
+	return tool.CodeModeRemoteResponse{}, nil
+}
+
+func (s *originCodeModeSession) Close() error { return nil }
+
+// Mirrors Rust #45409 through the router: the turn's window identity is bound to
+// the Code Mode runtime, so the nested call a cell issues reports the cell's
+// originating Responses item and the window the cell started in.
+func TestBuildToolRegistryBindsTheTurnWindowToCodeModeCellsLikeRust(t *testing.T) {
+	provider := &originCodeModeProvider{}
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableMCP = false
+	options.EnableAgents = false
+	options.WindowID = "thread-origin:0"
+	codeModeRuntime := tool.NewCodeModeRuntime(provider, false)
+	defer func() { _ = codeModeRuntime.Close() }()
+	options.CodeModeRuntime = codeModeRuntime
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("nested-echo")}, func(_ context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		provider.mu.Lock()
+		context := map[string]any{}
+		for key, value := range invocation.Context {
+			context[key] = value
+		}
+		provider.origins = append(provider.origins, context)
+		provider.mu.Unlock()
+		return &tool.Output{Success: true, Body: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register nested-echo: %v", err)
+	}
+
+	router := tool.NewRouter(registry)
+	invocation, ok, err := router.BuildToolCall(tool.ResponseItem{
+		Type: "custom_tool_call", ID: "fc-turn", Name: tool.CodeModeExecToolName,
+		CallID: "exec-origin-call", Input: `text("x")`,
+	})
+	if err != nil || !ok {
+		t.Fatalf("BuildToolCall() ok=%v err=%v", ok, err)
+	}
+	if _, err := router.Dispatch(context.Background(), invocation); err != nil {
+		t.Fatalf("Dispatch(exec) error = %v", err)
+	}
+	provider.mu.Lock()
+	origins := append([]map[string]any(nil), provider.origins...)
+	provider.mu.Unlock()
+	if len(origins) != 1 {
+		t.Fatalf("nested invocations = %d, want 1", len(origins))
+	}
+	if origins[0][tool.OriginItemIDContextKey] != "fc-turn" || origins[0][tool.OriginWindowIDContextKey] != "thread-origin:0" {
+		t.Fatalf("nested origin = %#v/%#v", origins[0][tool.OriginItemIDContextKey], origins[0][tool.OriginWindowIDContextKey])
 	}
 }

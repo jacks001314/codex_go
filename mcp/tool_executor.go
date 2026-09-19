@@ -319,9 +319,11 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		CallID:     invocation.CallID,
 		Meta:       meta,
 		// Rust #45409: the request reports the session and the originating
-		// window, plus the Responses item that requested the call.
+		// window, plus the Responses item that requested the call. A nested Code
+		// Mode call carries its cell's retained window, which outlives a later
+		// wait or compaction.
 		SessionID:    e.sessionID,
-		WindowID:     e.windowID,
+		WindowID:     e.originWindowID(invocation),
 		OriginItemID: invocationOriginItemID(invocation),
 	}
 	var response *MCPToolCallResponse
@@ -398,6 +400,23 @@ func invocationOriginItemID(invocation *tool.Invocation) string {
 	}
 	itemID, _ := invocation.Context[tool.OriginItemIDContextKey].(string)
 	return strings.TrimSpace(itemID)
+}
+
+// originWindowID reports the window the call's origin belongs to: a nested Code
+// Mode call carries its cell's retained window, otherwise the turn's window
+// applies (Rust #45409 keeps the retained cell window across waits).
+func (e *ToolExecutor) originWindowID(invocation *tool.Invocation) string {
+	if invocation != nil && invocation.Context != nil {
+		if windowID, ok := invocation.Context[tool.OriginWindowIDContextKey].(string); ok {
+			if trimmed := strings.TrimSpace(windowID); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	if e == nil {
+		return ""
+	}
+	return e.windowID
 }
 
 // maybeRequestCodexAppsAuthElicitation mirrors Rust's
