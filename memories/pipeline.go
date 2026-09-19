@@ -73,7 +73,11 @@ type ConsolidationRequest struct {
 }
 
 type PhaseTwoConsolidator interface {
-	ConsolidateMemory(context.Context, ConsolidationRequest) error
+	// ConsolidateMemory runs one consolidation and reports the token usage the
+	// consolidation agent accumulated, or nil when the agent reported none
+	// (Rust reads `thread.token_usage_info().total_token_usage` after the agent
+	// completes).
+	ConsolidateMemory(context.Context, ConsolidationRequest) (*model.AgentUsage, error)
 }
 
 type ConsolidationSpawnError struct {
@@ -374,7 +378,7 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 		interval = PhaseTwoHeartbeatSeconds * time.Second
 	}
 	go p.heartbeatPhaseTwo(agentCtx, claim.OwnershipToken, interval, cancel, heartbeatDone)
-	agentErr := p.PhaseTwo.ConsolidateMemory(agentCtx, ConsolidationRequest{
+	usage, agentErr := p.PhaseTwo.ConsolidateMemory(agentCtx, ConsolidationRequest{
 		Root: root, Prompt: BuildConsolidationPromptForVersion(root, p.Version), Model: p.PhaseTwoModel, ReasoningEffort: "medium",
 	})
 	cancel()
@@ -385,6 +389,11 @@ func (p *StartupPipeline) runPhaseTwo(ctx context.Context) string {
 		// the agent's own completion handling runs.
 		p.recordMemoryJobStatus(MemoryPhaseTwoJobsMetric, "agent_spawned")
 		p.recordMemoryCounter(MemoryPhaseTwoInputMetric, len(selected), nil)
+	}
+	if agentErr == nil && usage != nil {
+		// Rust reports the agent's accumulated usage once it completed, beside
+		// the dispatch metrics.
+		p.recordMemoryTokenUsage(MemoryPhaseTwoTokenUsageMetric, *usage)
 	}
 	if agentErr != nil {
 		// Rust #39205: remove worker-created symlinks even when the worker

@@ -31,6 +31,9 @@ const (
 	MemoryPhaseTwoE2EMetric = "codex.memory.phase2.e2e_ms"
 	// MemoryPhaseTwoInputMetric counts the raw memories a consolidation ran on.
 	MemoryPhaseTwoInputMetric = "codex.memory.phase2.input"
+	// MemoryPhaseTwoTokenUsageMetric reports the tokens the consolidation agent
+	// consumed, one sample per token type.
+	MemoryPhaseTwoTokenUsageMetric = "codex.memory.phase2.token_usage"
 	// MemoryStorageBytesMetric reports the memory root's on-disk size after a
 	// successful consolidation, including a run that changed nothing
 	// (Rust MEMORY_STORAGE_BYTES, #45956).

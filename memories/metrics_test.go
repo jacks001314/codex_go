@@ -2,11 +2,13 @@ package memories
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/state"
 )
 
@@ -198,3 +200,38 @@ func TestStartupPipelineReportsSkippedRateLimitLikeRust(t *testing.T) {
 type deniedStartupGuard struct{}
 
 func (deniedStartupGuard) AllowMemoryStartup(context.Context, int64) bool { return false }
+
+// A consolidation whose agent ran but failed reports the dispatch and the failure
+// status, and no token-usage sample (Rust emits usage only when the agent
+// completed).
+func TestStartupPipelineReportsFailedConsolidationLikeRust(t *testing.T) {
+	home := t.TempDir()
+	runtime := newMemoryPipelineRuntime(t, home)
+	root := Root(home)
+	if err := EnsureLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	metrics := state.NewTaskMetrics()
+	pipeline := &StartupPipeline{
+		State: runtime, CodexHome: home, CurrentThreadID: "current-thread",
+		Config: config.MemoriesConfig{MaxUnusedDays: 30}, Metrics: metrics,
+		PhaseTwo: &artifactConsolidator{
+			err:   errors.New("consolidation failed"),
+			usage: &model.AgentUsage{TotalTokens: 999},
+		},
+		PhaseTwoModel: "consolidate-model",
+	}
+	if status := pipeline.runPhaseTwo(context.Background()); status != "failed_agent" {
+		t.Fatalf("phase two status = %q", status)
+	}
+	assertMemoryStatusCounts(t, metrics, MemoryPhaseTwoJobsMetric, map[string]int{
+		"claimed": 1, "agent_spawned": 1, "failed_agent": 1,
+	})
+	if records := memoryMetricRecords(metrics, MemoryPhaseTwoTokenUsageMetric); len(records) != 0 {
+		t.Fatalf("phase two token usage = %#v after a failed agent", records)
+	}
+	if records := memoryMetricRecords(metrics, MemoryStorageBytesMetric); len(records) != 0 {
+		t.Fatalf("storage bytes = %#v after a failed agent", records)
+	}
+	assertMemoryTimerRecorded(t, metrics, MemoryPhaseTwoE2EMetric, config.MemoryVersionV1)
+}

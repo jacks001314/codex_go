@@ -181,9 +181,9 @@ type appServerMemoryConsolidator struct {
 	serviceTierSet bool
 }
 
-func (c *appServerMemoryConsolidator) ConsolidateMemory(ctx context.Context, request memories.ConsolidationRequest) error {
+func (c *appServerMemoryConsolidator) ConsolidateMemory(ctx context.Context, request memories.ConsolidationRequest) (*model.AgentUsage, error) {
 	if c == nil || c.router == nil {
-		return memories.NewConsolidationSpawnError(errors.New("memory consolidation runtime is unavailable"))
+		return nil, memories.NewConsolidationSpawnError(errors.New("memory consolidation runtime is unavailable"))
 	}
 	spawnError := func(err error) error { return memories.NewConsolidationSpawnError(err) }
 	if ctx == nil {
@@ -207,14 +207,14 @@ func (c *appServerMemoryConsolidator) ConsolidateMemory(ctx context.Context, req
 	}
 	startRequest, err := internalRequest(MethodThreadStart, "memory-consolidation-thread", &startParams)
 	if err != nil {
-		return spawnError(err)
+		return nil, spawnError(err)
 	}
 	response, handled, err := c.router.handleEphemeralThreadStartRuntime(startRequest)
 	if err != nil {
-		return spawnError(err)
+		return nil, spawnError(err)
 	}
 	if !handled || response == nil || response.Thread == nil {
-		return spawnError(errors.New("failed to create memory consolidation thread"))
+		return nil, spawnError(errors.New("failed to create memory consolidation thread"))
 	}
 	threadID := strings.TrimSpace(response.Thread.ID)
 	c.router.internalMemoryThreads.Store(threadID, struct{}{})
@@ -227,14 +227,14 @@ func (c *appServerMemoryConsolidator) ConsolidateMemory(ctx context.Context, req
 	record, err := c.router.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil || record == nil {
 		_ = cleanup()
-		return spawnError(firstError(err, errors.New("memory consolidation thread record is unavailable")))
+		return nil, spawnError(firstError(err, errors.New("memory consolidation thread record is unavailable")))
 	}
 	record.Metadata.Source = internalMemorySessionSource
 	record.Metadata.ThreadSource = string(ThreadSourceMemoryConsolidation)
 	record.Metadata.Originator = strings.TrimSpace(c.originator)
 	if !c.router.saveEphemeralThreadRecord(record) {
 		_ = cleanup()
-		return spawnError(errors.New("failed to save memory consolidation thread"))
+		return nil, spawnError(errors.New("failed to save memory consolidation thread"))
 	}
 	c.router.applyThreadStartConfigSnapshot(response, startRequest)
 	c.router.applyThreadStartInstructionSources(response, startRequest)
@@ -259,23 +259,57 @@ func (c *appServerMemoryConsolidator) ConsolidateMemory(ctx context.Context, req
 	turnRequest, err := internalRequest(MethodTurnStart, "memory-consolidation-turn", turnParams)
 	if err != nil {
 		_ = cleanup()
-		return spawnError(err)
+		return nil, spawnError(err)
 	}
 	turnResponse, err := c.router.handleTurnStart(turnRequest)
 	if err != nil {
 		_ = cleanup()
-		return spawnError(err)
+		return nil, spawnError(err)
 	}
 	if turnResponse == nil || strings.TrimSpace(turnResponse.Turn.ID) == "" {
 		_ = cleanup()
-		return spawnError(errors.New("failed to start memory consolidation turn"))
+		return nil, spawnError(errors.New("failed to start memory consolidation turn"))
 	}
 	turnID = strings.TrimSpace(turnResponse.Turn.ID)
 	if err := c.router.waitForInternalMemoryTurn(ctx, threadID); err != nil {
 		_ = cleanup()
-		return err
+		return nil, err
 	}
-	return cleanup()
+	// The consolidation thread accumulates every turn's usage in its record
+	// metadata; phase two reports it once the agent completed (Rust's
+	// thread.token_usage_info). The record is read before the thread shuts down.
+	usage := c.router.memoryThreadUsage(threadID)
+	return usage, cleanup()
+}
+
+// memoryThreadUsage reads the token usage an internal memory thread accumulated,
+// or nil when the thread reported none. Unlike a resumed thread's restored
+// usage, nothing is estimated: an absent or empty `token_usage_info` means the
+// consolidation reported no usage, which Rust also treats as no sample.
+func (r *RuntimeRouter) memoryThreadUsage(threadID string) *model.AgentUsage {
+	if r == nil {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, true)
+	if err != nil || record == nil {
+		return nil
+	}
+	info, _ := record.Metadata.Extra["token_usage_info"].(map[string]any)
+	if info == nil {
+		return nil
+	}
+	total := tokenUsageBreakdownFromMetadata(firstMapValue(info, "total_token_usage", "totalTokenUsage", "total"))
+	if total == nil {
+		return nil
+	}
+	return &model.AgentUsage{
+		InputTokens:           total.InputTokens,
+		CachedInputTokens:     total.CachedInputTokens,
+		CacheWriteInputTokens: total.CacheWriteInputTokens,
+		OutputTokens:          total.OutputTokens,
+		ReasoningOutputTokens: total.ReasoningOutputTokens,
+		TotalTokens:           total.TotalTokens,
+	}
 }
 
 type appServerMemoryRateGuard struct{ router *RuntimeRouter }

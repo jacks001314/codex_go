@@ -35,19 +35,20 @@ type artifactConsolidator struct {
 	mu       sync.Mutex
 	requests []ConsolidationRequest
 	err      error
+	usage    *model.AgentUsage
 }
 
-func (c *artifactConsolidator) ConsolidateMemory(_ context.Context, request ConsolidationRequest) error {
+func (c *artifactConsolidator) ConsolidateMemory(_ context.Context, request ConsolidationRequest) (*model.AgentUsage, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, request)
 	c.mu.Unlock()
 	if c.err != nil {
-		return c.err
+		return c.usage, c.err
 	}
 	if err := os.WriteFile(filepath.Join(request.Root, MemoryFilename), []byte("# Memory\n"), 0o600); err != nil {
-		return err
+		return c.usage, err
 	}
-	return os.WriteFile(filepath.Join(request.Root, MemorySummaryFilename), []byte("v1\n# Summary\n"), 0o600)
+	return c.usage, os.WriteFile(filepath.Join(request.Root, MemorySummaryFilename), []byte("v1\n# Summary\n"), 0o600)
 }
 
 func TestStartupPipelineRunsStageOneAndPhaseTwoEndToEnd(t *testing.T) {
@@ -73,7 +74,10 @@ WHERE id = 'memory-source-thread'`, updated.Unix(), updated.UnixMilli()); err !=
 			OutputTokens: 40, ReasoningOutputTokens: 10, TotalTokens: 940,
 		},
 	}}
-	consolidator := &artifactConsolidator{}
+	consolidator := &artifactConsolidator{usage: &model.AgentUsage{
+		InputTokens: 2000, CachedInputTokens: 800, CacheWriteInputTokens: 60,
+		OutputTokens: 120, ReasoningOutputTokens: 30, TotalTokens: 2120,
+	}}
 	metrics := state.NewTaskMetrics()
 	pipeline := &StartupPipeline{
 		State: runtime, CodexHome: home, CurrentThreadID: "current-thread",
@@ -184,6 +188,19 @@ WHERE id = 'memory-source-thread'`, updated.Unix(), updated.UnixMilli()); err !=
 			t.Fatalf("token usage record %d tags = %#v", index, record.Tags)
 		}
 	}
+	// The consolidation agent's accumulated usage is reported the same way (Rust
+	// reads the thread's total usage once the agent completed).
+	phaseTwoUsage := memoryMetricRecords(metrics, MemoryPhaseTwoTokenUsageMetric)
+	wantPhaseTwoValues := []int{2120, 2000, 800, 60, 120, 30}
+	if len(phaseTwoUsage) != len(wantTokenTypes) {
+		t.Fatalf("phase-two token usage records = %#v", phaseTwoUsage)
+	}
+	for index, tokenType := range wantTokenTypes {
+		record := phaseTwoUsage[index]
+		if record.Tags[MemoryTokenTypeTag] != tokenType || record.Value != wantPhaseTwoValues[index] {
+			t.Fatalf("phase-two token usage record %d = %#v", index, record)
+		}
+	}
 }
 
 // storageBytesRecords selects the codex.memory.storage_bytes records.
@@ -249,7 +266,7 @@ func TestStartupPipelineReportsStorageBytesWithoutWorkspaceChanges(t *testing.T)
 	assertMemoryStatusCounts(t, metrics, MemoryPhaseTwoJobsMetric, map[string]int{
 		"claimed": 1, "succeeded_no_workspace_changes": 1,
 	})
-	for _, name := range []string{MemoryPhaseTwoInputMetric, MemoryPhaseOneJobsMetric} {
+	for _, name := range []string{MemoryPhaseTwoInputMetric, MemoryPhaseOneJobsMetric, MemoryPhaseTwoTokenUsageMetric} {
 		if records := memoryMetricRecords(metrics, name); len(records) != 0 {
 			t.Fatalf("%s records = %#v", name, records)
 		}
@@ -351,9 +368,9 @@ func writeMemoryPipelineRollout(t *testing.T, home, threadID string, now time.Ti
 // v2ArtifactConsolidator writes the summary-only v2 artifact contract.
 type v2ArtifactConsolidator struct{}
 
-func (c *v2ArtifactConsolidator) ConsolidateMemory(_ context.Context, request ConsolidationRequest) error {
+func (c *v2ArtifactConsolidator) ConsolidateMemory(_ context.Context, request ConsolidationRequest) (*model.AgentUsage, error) {
 	summary := "v1\n## User Profile\nprofile\n## User preferences\nprefs\n## General Tips\ntips\n## What's in Memory\nmemory\n"
-	return os.WriteFile(filepath.Join(request.Root, MemorySummaryFilename), []byte(summary), 0o600)
+	return nil, os.WriteFile(filepath.Join(request.Root, MemorySummaryFilename), []byte(summary), 0o600)
 }
 
 // Mirrors Rust #43808/#43800: a v2 startup run stores an empty raw memory, sends
@@ -404,6 +421,9 @@ WHERE id = 'memory-v2-thread'`, updated.Unix(), updated.UnixMilli()); err != nil
 	// (Rust's `has_token_usage` gate).
 	if records := memoryMetricRecords(metrics, MemoryPhaseOneTokenUsageMetric); len(records) != 0 {
 		t.Fatalf("token usage records = %#v without reported usage", records)
+	}
+	if records := memoryMetricRecords(metrics, MemoryPhaseTwoTokenUsageMetric); len(records) != 0 {
+		t.Fatalf("phase-two token usage records = %#v without reported usage", records)
 	}
 	if len(extractor.requests) != 1 {
 		t.Fatalf("stage-one requests = %d", len(extractor.requests))

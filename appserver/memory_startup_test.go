@@ -152,7 +152,14 @@ func TestMemoryConsolidatorRunsInternalEphemeralTurnAndCleansItUp(t *testing.T) 
 	if err := memories.PrepareWorkspace(context.Background(), root); err != nil {
 		t.Fatalf("PrepareWorkspace() error = %v", err)
 	}
-	agent := &memoryTestAgent{response: "done", requests: make(chan model.AgentRequest, 2)}
+	agent := &memoryTestAgent{
+		response: "done",
+		usage: model.AgentUsage{
+			InputTokens: 500, CachedInputTokens: 200, CacheWriteInputTokens: 10,
+			OutputTokens: 30, ReasoningOutputTokens: 5, TotalTokens: 530,
+		},
+		requests: make(chan model.AgentRequest, 2),
+	}
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(session.NewStore(filepath.Join(home, "sessions"))),
 		Config:       config.NewConfigService(home),
@@ -171,10 +178,16 @@ func TestMemoryConsolidatorRunsInternalEphemeralTurnAndCleansItUp(t *testing.T) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := consolidator.ConsolidateMemory(ctx, memories.ConsolidationRequest{
+	usage, err := consolidator.ConsolidateMemory(ctx, memories.ConsolidationRequest{
 		Root: root, Prompt: "consolidate", Model: "gpt-consolidate", ReasoningEffort: "medium",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("ConsolidateMemory() error = %v", err)
+	}
+	// The consolidation reports the agent's accumulated usage so phase two can
+	// record it (Rust's thread.token_usage_info).
+	if usage == nil || usage.TotalTokens != 530 || usage.CachedInputTokens != 200 {
+		t.Fatalf("ConsolidateMemory() usage = %+v", usage)
 	}
 	request := <-agent.requests
 	if request.Model != "gpt-consolidate" || request.ReasoningEffort != "medium" || request.Prompt != "consolidate" {
