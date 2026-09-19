@@ -87,16 +87,19 @@ var knownCommands = map[string]Command{
 }
 
 type SharedOptions struct {
-	Images                               []string
-	Model                                string
-	ModelReasoningEffort                 string
-	OSS                                  bool
-	OSSProvider                          string
-	Profile                              string
-	Sandbox                              string
-	ApprovalPolicy                       string
-	Search                               bool
-	NoAltScreen                          bool
+	Images               []string
+	Model                string
+	ModelReasoningEffort string
+	OSS                  bool
+	OSSProvider          string
+	Profile              string
+	Sandbox              string
+	ApprovalPolicy       string
+	Search               bool
+	NoAltScreen          bool
+	// NoDaemon mirrors Rust TuiCli.no_daemon (#46088): run without the shared
+	// background server, even if it is already running.
+	NoDaemon                             bool
 	DangerouslyBypassApprovalsAndSandbox bool
 	DangerouslyBypassHookTrust           bool
 	CWD                                  string
@@ -392,7 +395,11 @@ type AgentsOptions struct {
 	ConfigOverrides []string
 	Cwd             string
 	NoAltScreen     bool
-	Shared          SharedOptions
+	// NoDaemon is the hidden agents-only spelling Rust declares on
+	// AgentsCommand (#46088); it merges into the interactive launch and is then
+	// rejected because the overview requires a shared server.
+	NoDaemon bool
+	Shared   SharedOptions
 }
 
 type DebugOptions struct {
@@ -2595,6 +2602,10 @@ func parseQueue(args []string, queue *QueueOptions) error {
 			continue
 		}
 		switch {
+		case arg == "--no-daemon":
+			// Rust's queue command CLI is TuiCli-based, so the flag parses and
+			// is then rejected unless an explicit --remote is supplied (#46088).
+			queue.Shared.NoDaemon = true
 		case arg == "--thread":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -2680,6 +2691,9 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 		case arg == "--no-alt-screen":
 			agents.NoAltScreen = true
 			continue
+		case arg == "--no-daemon":
+			agents.NoDaemon = true
+			continue
 		}
 		if matched, err := parseSharedOption(args, &i, &agents.Shared); err != nil {
 			return err
@@ -2744,6 +2758,9 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 	}
 	if agents.Shared.NoAltScreen {
 		agents.NoAltScreen = true
+	}
+	if agents.Shared.NoDaemon {
+		agents.NoDaemon = true
 	}
 	return nil
 }
@@ -3403,6 +3420,9 @@ func parseTUIOnlyOption(args []string, i *int, shared *SharedOptions) (bool, err
 		return true, nil
 	case arg == "--no-alt-screen":
 		shared.NoAltScreen = true
+		return true, nil
+	case arg == "--no-daemon":
+		shared.NoDaemon = true
 		return true, nil
 	default:
 		return false, nil

@@ -796,9 +796,20 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 	if err := interactiveRemoteWorkspaceRootError(root); err != nil {
 		return interactiveFatalExit(stderr, err.Error())
 	}
+	// Rust #46088: --no-daemon excludes the shared background server, so the
+	// combination with an explicit remote is rejected up front.
+	if root.Shared.NoDaemon && strings.TrimSpace(root.Remote) != "" {
+		return interactiveFatalExit(stderr, daemonNoDaemonWithRemote)
+	}
 	remoteEndpoint, err := resolveInteractiveRemoteEndpoint(root)
 	if err != nil {
 		return interactiveFatalExit(stderr, err.Error())
+	}
+	if remoteEndpoint == nil {
+		// Rust app_server_target_for_launch: an eligible interactive launch
+		// targets the shared local daemon when one answers, and keeps embedded
+		// mode when none does or the launch is ineligible.
+		remoteEndpoint = localDaemonEndpointForLaunch(root, false, defaultLocalDaemonSocketPath())
 	}
 	if message := interactiveRemoteWorkloadIdentityError(remoteEndpoint, auth.IsWorkloadIdentitySelected()); message != "" {
 		return interactiveFatalExit(stderr, message)

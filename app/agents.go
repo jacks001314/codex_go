@@ -28,6 +28,11 @@ func runAgentsCommand(ctx context.Context, opts *cli.AgentsOptions, root *cli.Ro
 }
 
 func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *cli.RootOptions, stdin io.Reader, stdout io.Writer) error {
+	// Rust #46088: the agents overview requires a shared server, so
+	// --no-daemon is rejected (the hidden agents-only spelling included).
+	if interactiveRootNoDaemon(root, agentsSharedOptions(opts)) {
+		return errors.New(daemonNoDaemonWithAgents)
+	}
 	remoteRoot := &cli.RootOptions{}
 	if root != nil {
 		*remoteRoot = *root

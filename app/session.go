@@ -376,7 +376,19 @@ func loadSessionRuntimeConfig(opts *cli.SessionOptions, root *cli.RootOptions) e
 
 func resolveSessionRemoteEndpoint(opts *cli.SessionOptions, root *cli.RootOptions) (*appserverdaemon.RemoteAppServerEndpoint, error) {
 	remoteRoot := mergedSessionRemoteOptions(opts, root)
-	if strings.TrimSpace(remoteRoot.Remote) == "" && strings.TrimSpace(remoteRoot.RemoteAuthEnv) == "" {
+	explicitRemote := strings.TrimSpace(remoteRoot.Remote) != "" || strings.TrimSpace(remoteRoot.RemoteAuthEnv) != ""
+	// Rust #46088: --no-daemon cannot be combined with an explicit remote (the
+	// session commands share the interactive CLI validation).
+	if explicitRemote {
+		var shared *cli.SharedOptions
+		if opts != nil {
+			shared = &opts.Shared
+		}
+		if interactiveRootNoDaemon(root, shared) {
+			return nil, errors.New(daemonNoDaemonWithRemote)
+		}
+	}
+	if !explicitRemote {
 		return nil, nil
 	}
 	// Rust #46494: an explicit remote target rejects client workspace-root
@@ -1352,6 +1364,11 @@ type sessionPickerEntry struct {
 func runSessionQueue(opts *cli.QueueOptions, root *cli.RootOptions, stdout io.Writer) error {
 	if opts == nil {
 		return errors.New("queue options are required")
+	}
+	// Rust #46088: queuing must discover the shared server, so --no-daemon is
+	// rejected unless the caller supplied an explicit remote endpoint.
+	if interactiveRootNoDaemon(root, &opts.Shared) && strings.TrimSpace(opts.Remote) == "" {
+		return errors.New(daemonNoDaemonWithQueue)
 	}
 	if len(opts.Shared.Images) > 0 || (root != nil && len(root.Shared.Images) > 0) {
 		return errors.New("`codex queue` does not support image attachments")

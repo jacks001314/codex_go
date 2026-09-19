@@ -255,5 +255,10 @@ func saturatingAddInt64(a int64, b int64) int64 {
 func interactiveStartAgentsDaemon() error {
 	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
 	_, err := runner.Run(appserverdaemon.LifecycleStart)
+	if err != nil {
+		// Rust #46088: point users at `codex --no-daemon` when the agents
+		// overview cannot start its shared server.
+		return fmt.Errorf("%w\n%s", err, daemonOverviewHint)
+	}
 	return err
 }
