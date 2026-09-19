@@ -5573,12 +5573,14 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 	// the model, otherwise resolves the compaction model's effort without
 	// mutating the live pin.
 	compactionEffort := ""
+	compactionMetadataEnabled := false
 	compactionParams := &turn.TurnStartParams{
 		ThreadID: string(record.ID),
 		CWD:      strings.TrimSpace(record.Metadata.CWD),
 		Model:    compactModel,
 	}
 	if cfg, cfgErr := r.effectiveConfigForTurn(compactionParams); cfgErr == nil && cfg != nil {
+		compactionMetadataEnabled = features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata")
 		overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(string(record.ID), cfg, compactionParams, compactInfo, providerID)
 		compactionEffort = r.reasoningEffortForRequest(
 			string(record.ID),
@@ -5598,6 +5600,10 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 		modelHash:      modelHash,
 		effort:         compactionEffort,
 		clientMetadata: r.compactResponsesClientMetadata(record, request, compactModel),
+		// Rust #46044: compaction prompts carry the recorded Code Mode tool
+		// inventory from the thread's recorder.
+		executedToolCalls:               r.executedToolCallRecorder(string(record.ID)),
+		executedToolCallMetadataEnabled: compactionMetadataEnabled,
 	}
 }
 

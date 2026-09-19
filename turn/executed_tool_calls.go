@@ -310,6 +310,28 @@ func (r *ExecutedToolCallRecorder) StripDirectMetadataWhenDisabled(items []any) 
 	}
 }
 
+// AttachToCompactionPrompt mirrors Rust's attach_to_compaction_prompt (#46044):
+// compaction prompts carry the recorded Code Mode tool inventory. With capture
+// disabled, direct records already present in history are removed so compaction
+// cannot replay them; otherwise the pending Code Mode observations are attached
+// without consuming them, because a compaction request is not the normal
+// sampling window that commits an attachment.
+//
+// Go's recorder state exists per thread and is created on the first recorded
+// call, so the caller passes the session's metadata enablement explicitly
+// (Rust reads the recorder's own state existence).
+func (r *ExecutedToolCallRecorder) AttachToCompactionPrompt(items []any, enabled bool) []any {
+	if !enabled {
+		StripDirectCallMetadata(items)
+		return items
+	}
+	if r == nil {
+		return items
+	}
+	attached, _ := r.AttachPendingToPrompt(items)
+	return attached
+}
+
 // StripDirectCallMetadata removes direct-call metadata (records without a Code
 // Mode cell) from the supplied prompt items (Rust #45185
 // clear_direct_call_metadata).

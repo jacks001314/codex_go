@@ -177,6 +177,13 @@ type agentCompactRunner struct {
 	// (Rust `Session::compaction_responses_metadata`): the turn-metadata
 	// document reports the compaction request kind and the turn's identity.
 	clientMetadata map[string]string
+	// executedToolCalls is the thread's executed-tool-call recorder; Rust
+	// #46044 attaches the recorded Code Mode inventory to compaction prompts.
+	executedToolCalls *turn.ExecutedToolCallRecorder
+	// executedToolCallMetadataEnabled mirrors the session's
+	// `executed_tool_call_metadata` feature: disabled capture strips direct
+	// records from the compaction prompt instead of attaching.
+	executedToolCallMetadataEnabled bool
 }
 
 func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
@@ -199,10 +206,14 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		clientMetadata[codexapi.TurnIDKey] = strings.TrimSpace(request.TurnID)
 	}
 	history := compactItemsForRemoteRequest(request)
+	inputItems := inputItemsFromCompactItems(history)
+	if r.executedToolCalls != nil {
+		inputItems = r.executedToolCalls.AttachToCompactionPrompt(inputItems, r.executedToolCallMetadataEnabled)
+	}
 	response, err := r.agent.Run(ctx, &model.AgentRequest{
 		Prompt:          strings.TrimSpace(request.Prompt),
 		Instructions:    remoteCompactInstructions(),
-		InputItems:      inputItemsFromCompactItems(history),
+		InputItems:      inputItems,
 		Model:           firstNonEmpty(r.model, defaultRemoteCompactModel),
 		ProviderID:      strings.TrimSpace(r.providerID),
 		TaskKind:        model.AgentTaskRegular,
