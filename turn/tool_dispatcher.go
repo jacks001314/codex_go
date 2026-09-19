@@ -838,6 +838,7 @@ func responseItemFromAgentItem(item *model.AgentItem) (*tool.ResponseItem, bool)
 	case "function_call":
 		return &tool.ResponseItem{
 			Type:                  item.Type,
+			ID:                    item.ID,
 			Namespace:             item.Namespace,
 			Name:                  item.Name,
 			CallID:                firstNonEmptyTurnString(item.CallID, item.ID),
@@ -847,6 +848,7 @@ func responseItemFromAgentItem(item *model.AgentItem) (*tool.ResponseItem, bool)
 	case "custom_tool_call":
 		return &tool.ResponseItem{
 			Type:      item.Type,
+			ID:        item.ID,
 			Namespace: item.Namespace,
 			Name:      item.Name,
 			CallID:    firstNonEmptyTurnString(item.CallID, item.ID),

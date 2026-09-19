@@ -58,6 +58,7 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 	metadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 		SessionID:                  threadID,
 		ThreadID:                   threadID,
+		WindowID:                   r.windowIDForThread(threadID),
 		RequestKind:                codexapi.ClientRequestTurn,
 		Model:                      modelProviderConfig.Model,
 		ReasoningEffort:            appReasoningEffortForTurn(cfg, params),

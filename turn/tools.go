@@ -59,7 +59,12 @@ type ToolRegistryOptions struct {
 	// (Rust #46010 `result_metadata_capture_allowed`) needs it and treats an
 	// absent state (nil) as a disabled client. Whether the exposed snapshot is
 	// recorded is decided by the dispatch sites' own recorder state.
-	AnalyticsEnabled          *bool
+	AnalyticsEnabled *bool
+	// SessionID and WindowID are the turn identity the MCP executors report as
+	// `_meta.sessionId` and `_meta.windowId` (Rust with_mcp_tool_call_ids_meta,
+	// #45409). WindowID is the same `{thread_id}:{window_number}` string the
+	// turn's Responses client metadata reports as `x-codex-window-id`.
+	WindowID                  string
 	OrchestratorSkillsEnabled *bool
 	SkillProviders            *skillprovider.Registry
 	OpenAIFileRewriter        *mcp.OpenAIFileRewriter
@@ -681,6 +686,8 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			ConfirmationPolicies:              mcpActorConfirmationPolicies(options.ModelConfirmationPolicies),
 			SuppressActorConfirmationPolicies: options.SuppressActorConfirmationPolicies,
 			CaptureResultMetadata:             captureResultMetadata,
+			SessionID:                         options.SessionID,
+			WindowID:                          options.WindowID,
 		})
 		spec := executor.Spec()
 		spec.NamespaceDescription = mcp.BoundedMCPNamespaceDescription(info.NamespaceDescription)

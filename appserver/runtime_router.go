@@ -13878,6 +13878,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil && strings.TrimSpace(record.SessionID) != "" {
 		options.SessionID = record.SessionID
 	}
+	// Rust #45409: MCP requests report the session identity and the originating
+	// conversation window, which is the same window id the turn's Responses
+	// client metadata carries as `x-codex-window-id`.
+	options.WindowID = r.windowIDForThread(threadID)
 	return turn.BuildToolRouter(options)
 }
 
@@ -15694,6 +15698,18 @@ func (r *RuntimeRouter) windowNumberForThread(threadID string) uint64 {
 		r.windowNumbers = map[string]uint64{}
 	}
 	return r.windowNumbers[threadID]
+}
+
+// windowIDForThread reports the thread's current conversation window identity
+// (`{thread_id}:{window_number}`), the value every Responses request reports as
+// `x-codex-window-id` and the MCP request metadata repeats as `windowId` (Rust
+// Session::current_window_id).
+func (r *RuntimeRouter) windowIDForThread(threadID string) string {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return ""
+	}
+	return turn.ConversationWindowID(threadID, r.windowNumberForThread(threadID))
 }
 
 func uint64PtrAppserver(value uint64) *uint64 {

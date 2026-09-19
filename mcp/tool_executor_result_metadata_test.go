@@ -2,7 +2,39 @@ package mcp
 
 import (
 	"testing"
+
+	"codex_go/tool"
 )
+
+// Mirrors Rust ToolInvocation::originating_call's item id (#40866): a direct
+// call reports the Responses item it was dispatched from, and a nested Code Mode
+// call inherits its cell's origin because the delegate clones the parent
+// invocation's context.
+func TestInvocationOriginItemIDLikeRust(t *testing.T) {
+	parent := &tool.Invocation{
+		CallID:  "call-exec",
+		Context: map[string]any{tool.OriginItemIDContextKey: "ctc_before_compaction"},
+	}
+	if got := invocationOriginItemID(parent); got != "ctc_before_compaction" {
+		t.Fatalf("direct origin item = %q", got)
+	}
+
+	nestedContext := map[string]any{}
+	for key, value := range parent.Context {
+		nestedContext[key] = value
+	}
+	nested := &tool.Invocation{CallID: "call-nested", Source: "code_mode", Context: nestedContext}
+	if got := invocationOriginItemID(nested); got != "ctc_before_compaction" {
+		t.Fatalf("nested origin item = %q", got)
+	}
+
+	if got := invocationOriginItemID(&tool.Invocation{CallID: "call-plain"}); got != "" {
+		t.Fatalf("invocation without an origin = %q", got)
+	}
+	if got := invocationOriginItemID(nil); got != "" {
+		t.Fatalf("nil invocation = %q", got)
+	}
+}
 
 // Mirrors Rust #46010's `McpToolOutput::tool_result_metadata`: the raw MCP
 // result `_meta` is exposed for the internal executed-tool-call record only when

@@ -1068,20 +1068,52 @@ func TestMCPServiceOauthLoginForcedDCRRequiresRegistrationEndpoint(t *testing.T)
 	}
 }
 
-func TestMCPToolCallMetaWithThreadID(t *testing.T) {
-	merged := mcpToolCallMetaWithThreadID(map[string]any{"source": "client", "threadId": "stale"}, "thread-live")
+// Mirrors Rust's with_mcp_tool_call_ids_meta (#40866/#45409): the request meta
+// reports the thread, the session, the originating window and the originating
+// item, replacing stale values and passing a non-object meta through untouched.
+func TestMCPToolCallMetaCallIDsLikeRust(t *testing.T) {
+	merged := withMCPToolCallIDsMeta(
+		map[string]any{
+			"source":    "client",
+			"threadId":  "stale-thread",
+			"sessionId": "stale-session",
+			"windowId":  "stale-window",
+			"itemId":    "stale-item",
+		},
+		&MCPToolCallParams{ThreadID: "thread-live", SessionID: "session-live", WindowID: "thread-live:0", OriginItemID: "fc-live"},
+	)
 	mergedMap, ok := merged.(map[string]any)
-	if !ok || mergedMap["source"] != "client" || mergedMap["threadId"] != "thread-live" {
+	if !ok ||
+		mergedMap["source"] != "client" ||
+		mergedMap["threadId"] != "thread-live" ||
+		mergedMap["sessionId"] != "session-live" ||
+		mergedMap["windowId"] != "thread-live:0" ||
+		mergedMap["itemId"] != "fc-live" {
 		t.Fatalf("merged meta = %#v", merged)
 	}
 
-	added := mcpToolCallMetaWithThreadID(nil, "thread-live")
-	addedMap, ok := added.(map[string]any)
-	if !ok || addedMap["threadId"] != "thread-live" {
-		t.Fatalf("added meta = %#v", added)
+	// An invocation without an origin still reports the session and window but
+	// omits itemId (Rust keeps the window when the item lookup found nothing).
+	withoutItem := withMCPToolCallIDsMeta(nil, &MCPToolCallParams{ThreadID: "thread-live", SessionID: "session-live", WindowID: "thread-live:0"})
+	withoutItemMap, ok := withoutItem.(map[string]any)
+	if !ok || withoutItemMap["threadId"] != "thread-live" || withoutItemMap["sessionId"] != "session-live" || withoutItemMap["windowId"] != "thread-live:0" {
+		t.Fatalf("meta without origin item = %#v", withoutItem)
+	}
+	if _, present := withoutItemMap["itemId"]; present {
+		t.Fatalf("meta without origin item must omit itemId: %#v", withoutItem)
 	}
 
-	passthrough := mcpToolCallMetaWithThreadID("invalid-meta", "thread-live")
+	// A call outside any session window keeps only the ids it has.
+	threadOnly := withMCPToolCallIDsMeta(nil, &MCPToolCallParams{ThreadID: "thread-live"})
+	threadOnlyMap, ok := threadOnly.(map[string]any)
+	if !ok || threadOnlyMap["threadId"] != "thread-live" {
+		t.Fatalf("added meta = %#v", threadOnly)
+	}
+	if _, present := threadOnlyMap["sessionId"]; present {
+		t.Fatalf("meta without a session must omit sessionId: %#v", threadOnly)
+	}
+
+	passthrough := withMCPToolCallIDsMeta("invalid-meta", &MCPToolCallParams{ThreadID: "thread-live"})
 	if passthrough != "invalid-meta" {
 		t.Fatalf("passthrough meta = %#v", passthrough)
 	}

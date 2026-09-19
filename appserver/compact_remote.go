@@ -113,7 +113,7 @@ func (r *RuntimeRouter) compactResponsesClientMetadata(record *session.Record, r
 		SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
 		ThreadID:                   threadID,
 		TurnID:                     turnID,
-		WindowID:                   threadID + ":1",
+		WindowID:                   r.windowIDForThread(threadID),
 		ContextWindowID:            r.contextWindowIDForThread(threadID),
 		WindowNumber:               uint64PtrAppserver(r.windowNumberForThread(threadID)),
 		RequestKind:                codexapi.ClientRequestCompaction,

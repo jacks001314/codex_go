@@ -419,6 +419,40 @@ func TestBudgetStateMaybeReminder(t *testing.T) {
 	}
 }
 
+// Mirrors Rust Session::current_window_id: the conversation window identity is
+// `{thread_id}:{window_number}` with a zero-based number, and the Responses
+// client metadata reports it as `x-codex-window-id`.
+func TestConversationWindowIDIsZeroBasedLikeRust(t *testing.T) {
+	if got := ConversationWindowID("thread-1", 0); got != "thread-1:0" {
+		t.Fatalf("first window = %q, want thread-1:0", got)
+	}
+	if got := ConversationWindowID("thread-1", 3); got != "thread-1:3" {
+		t.Fatalf("advanced window = %q", got)
+	}
+	if got := ConversationWindowID("  ", 0); got != "" {
+		t.Fatalf("thread without an id = %q", got)
+	}
+
+	first := uint64(0)
+	metadata := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{ThreadID: "thread-1", WindowNumber: &first})
+	if metadata[codexapi.ClientCodexWindowIDHeader] != "thread-1:0" {
+		t.Fatalf("client metadata window id = %q", metadata[codexapi.ClientCodexWindowIDHeader])
+	}
+	var document map[string]any
+	if err := json.Unmarshal([]byte(metadata[codexapi.ClientCodexTurnMetadataHeader]), &document); err != nil {
+		t.Fatalf("turn metadata document = %q (%v)", metadata[codexapi.ClientCodexTurnMetadataHeader], err)
+	}
+	if document["window_id"] != "thread-1:0" {
+		t.Fatalf("turn metadata window_id = %#v", document["window_id"])
+	}
+
+	// An explicit window id still wins over the derived default.
+	explicit := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{ThreadID: "thread-1", WindowID: "thread-1:7"})
+	if explicit[codexapi.ClientCodexWindowIDHeader] != "thread-1:7" {
+		t.Fatalf("explicit window id = %q", explicit[codexapi.ClientCodexWindowIDHeader])
+	}
+}
+
 // Rust's current_meta_value_for_mcp_request derives the external MCP metadata
 // document from the turn metadata: no request identity, no harness-owned
 // agent/parent/root turn fields, and the user-input flag only when requested.

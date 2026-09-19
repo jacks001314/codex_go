@@ -430,11 +430,13 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	agentWaitDefault, agentWaitMin, agentWaitMax, agentHideSpawnMetadata, agentExposeSpawnOverrides := execAgentWaitConfigFromTools(multiAgentTools)
 	clientMetadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-		InstallationID:             installationID,
-		SessionID:                  execSessionID(req, threadID),
-		ThreadID:                   threadID,
-		TurnID:                     turnID,
-		WindowID:                   threadID + ":1",
+		InstallationID: installationID,
+		SessionID:      execSessionID(req, threadID),
+		ThreadID:       threadID,
+		TurnID:         turnID,
+		// Rust's conversation window identity is `{thread_id}:{window_number}`,
+		// zero-based, so an exec thread starts in window 0.
+		WindowID:                   turn.ConversationWindowID(threadID, 0),
 		RequestKind:                codexapi.ClientRequestTurn,
 		SubagentHeader:             subagentHeader,
 		SubagentKind:               subagentKind,

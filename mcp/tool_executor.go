@@ -105,6 +105,12 @@ type ToolExecutorOptions struct {
 	// a host-owned apps server; the record itself is written by the tool
 	// dispatcher.
 	CaptureResultMetadata bool
+	// SessionID and WindowID are the turn's session identity and conversation
+	// window identity (`{thread_id}:{window_number}`); every MCP request reports
+	// them as `sessionId` and `windowId` in `_meta` (Rust #45409). They default
+	// to an omitted key, which mirrors a call outside a session window.
+	SessionID string
+	WindowID  string
 }
 
 // AuthElicitationOptions carries the turn-scoped hooks the Codex Apps auth
@@ -137,6 +143,8 @@ type ToolExecutor struct {
 	readOnlyHint                  *bool
 	threadID                      string
 	turnID                        string
+	sessionID                     string
+	windowID                      string
 	requestMeta                   map[string]any
 	turnMetadata                  func() map[string]any
 	binding                       *Binding
@@ -172,6 +180,8 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.parallel = options.Parallel || (executor.readOnlyHint != nil && *executor.readOnlyHint)
 	executor.threadID = strings.TrimSpace(options.ThreadID)
 	executor.turnID = strings.TrimSpace(options.TurnID)
+	executor.sessionID = strings.TrimSpace(options.SessionID)
+	executor.windowID = strings.TrimSpace(options.WindowID)
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
 	executor.turnMetadata = options.TurnMetadata
 	executor.binding = options.Binding
@@ -308,6 +318,11 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		ItemID:     invocation.CallID,
 		CallID:     invocation.CallID,
 		Meta:       meta,
+		// Rust #45409: the request reports the session and the originating
+		// window, plus the Responses item that requested the call.
+		SessionID:    e.sessionID,
+		WindowID:     e.windowID,
+		OriginItemID: invocationOriginItemID(invocation),
 	}
 	var response *MCPToolCallResponse
 	var err error
@@ -371,6 +386,18 @@ func (e *ToolExecutor) capturedResultMetadata(response *MCPToolCallResponse) any
 		return nil
 	}
 	return response.Meta
+}
+
+// invocationOriginItemID reports the Responses item that requested the call, the
+// value Rust reports as `_meta.itemId` (with_mcp_tool_call_ids_meta). A nested
+// Code Mode call inherits its cell's origin because the delegate clones the
+// parent invocation's context.
+func invocationOriginItemID(invocation *tool.Invocation) string {
+	if invocation == nil || invocation.Context == nil {
+		return ""
+	}
+	itemID, _ := invocation.Context[tool.OriginItemIDContextKey].(string)
+	return strings.TrimSpace(itemID)
 }
 
 // maybeRequestCodexAppsAuthElicitation mirrors Rust's

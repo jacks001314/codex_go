@@ -978,6 +978,34 @@ func TestBuildToolRegistryMCPToolSearchDispatchesUniqueBareName(t *testing.T) {
 	}
 }
 
+// Mirrors Rust ToolInvocation::originating_call (#40866/#45409): a dispatched
+// call item records its Responses item id as the invocation's origin, which MCP
+// requests report as `_meta.itemId`.
+func TestBuildToolCallCarriesOriginItemIDLikeRust(t *testing.T) {
+	router := tool.NewRouter(tool.NewRegistry())
+	invocation, ok, err := router.BuildToolCall(tool.ResponseItem{
+		Type:   "function_call",
+		ID:     "ctc_before_compaction",
+		Name:   "echo",
+		CallID: "call-echo",
+	})
+	if err != nil || !ok {
+		t.Fatalf("BuildToolCall() ok=%v err=%v", ok, err)
+	}
+	if got, _ := invocation.Context[tool.OriginItemIDContextKey].(string); got != "ctc_before_compaction" {
+		t.Fatalf("origin item id = %#v (context %#v)", invocation.Context[tool.OriginItemIDContextKey], invocation.Context)
+	}
+
+	withoutItem := tool.ResponseItem{Type: "function_call", Name: "echo", CallID: "call-echo-2"}
+	plain, ok, err := router.BuildToolCall(withoutItem)
+	if err != nil || !ok {
+		t.Fatalf("BuildToolCall() ok=%v err=%v", ok, err)
+	}
+	if _, present := plain.Context[tool.OriginItemIDContextKey]; present {
+		t.Fatalf("an item without an id must not record an origin: %#v", plain.Context)
+	}
+}
+
 func TestBuildToolRegistryMCPToolsDirectWhenToolSearchDisabled(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.EnableCore = false

@@ -146,6 +146,11 @@ const (
 	CodeModeCellIDContextKey       = "code_mode_cell_id"
 	CodeModeOutputCallIDContextKey = "code_mode_output_call_id"
 	CodeModeEnabledToolsContextKey = "code_mode_enabled_tools"
+	// OriginItemIDContextKey carries the Responses item that requested this call
+	// (Rust `ToolInvocation::originating_call`'s item id, #40866). MCP requests
+	// report it as `_meta.itemId`; a nested Code Mode call inherits its cell's
+	// value because the delegate clones the parent invocation's context.
+	OriginItemIDContextKey = "origin_item_id"
 )
 
 func (i *Invocation) DecodeArguments(target any) error {
@@ -610,6 +615,11 @@ func (r *Router) BuildToolCall(item ResponseItem) (*Invocation, bool, error) {
 		source = "direct_plaintext_message"
 	}
 	invocation := &Invocation{CallID: item.CallID, ToolName: name, Payload: payload, Source: source, StartedAt: r.now().UTC()}
+	if origin := strings.TrimSpace(item.ID); origin != "" {
+		// Rust ToolInvocation::originating_call: a non-code-mode call reports the
+		// item that requested it, which is the dispatched call item itself.
+		invocation.Context = map[string]any{OriginItemIDContextKey: origin}
+	}
 	if r != nil && r.registry != nil {
 		if spec, ok := r.registry.Spec(name); ok {
 			applySpecInvocationContext(invocation, spec)
@@ -813,7 +823,10 @@ func (r *Router) DispatchParallel(ctx context.Context, invocations []Invocation)
 }
 
 type ResponseItem struct {
-	Type                  string
+	Type string
+	// ID is the Responses item id of the call item (Rust `ResponseItem::id`),
+	// the originating item an MCP request reports as `_meta.itemId` (#40866).
+	ID                    string
 	Namespace             string
 	Name                  string
 	CallID                string

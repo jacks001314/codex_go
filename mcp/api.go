@@ -527,6 +527,16 @@ type MCPToolCallParams struct {
 	Meta       any    `json:"_meta,omitempty"`
 	CallID     string `json:"-"`
 
+	// SessionID, WindowID and OriginItemID feed the request `_meta` only (Rust
+	// with_mcp_tool_call_ids_meta, #40866/#45409); the tools/call wire params
+	// carry name, arguments and `_meta`, so they are never serialized on their
+	// own. SessionID is the identity shared by the root thread and its
+	// descendants, WindowID the caller's `{thread_id}:{window_number}` window,
+	// and OriginItemID the Responses item that requested the call.
+	SessionID    string `json:"-"`
+	WindowID     string `json:"-"`
+	OriginItemID string `json:"-"`
+
 	PermissionProfile        string `json:"-"`
 	SandboxCWD               string `json:"-"`
 	CodexLinuxSandboxExe     string `json:"-"`
@@ -2025,7 +2035,7 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 }
 
 func (s *MCPService) augmentToolCallMeta(params *MCPToolCallParams) any {
-	meta := mcpToolCallMetaWithThreadID(params.Meta, params.ThreadID)
+	meta := withMCPToolCallIDsMeta(params.Meta, params)
 	if callID := strings.TrimSpace(params.CallID); callID != "" {
 		// Rust 248d8c0e22: include the tool call ID in _meta.callId for every
 		// MCP tool request.
@@ -2128,23 +2138,48 @@ func trustedAccessEligible(params *MCPToolCallParams) bool {
 	return true
 }
 
-func mcpToolCallMetaWithThreadID(meta any, threadID string) any {
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
+const (
+	mcpToolSessionIDMetaKey = "sessionId"
+	mcpToolWindowIDMetaKey  = "windowId"
+	mcpToolItemIDMetaKey    = "itemId"
+)
+
+// withMCPToolCallIDsMeta mirrors Rust's with_mcp_tool_call_ids_meta
+// (#40866/#45409): every MCP request reports `threadId` and `sessionId`, the
+// call's originating `windowId`, and `itemId` when the origin resolved to a
+// Responses item. Stale values in the incoming meta are replaced, and a meta
+// document that is not an object is passed through untouched, as Rust does.
+func withMCPToolCallIDsMeta(meta any, params *MCPToolCallParams) any {
+	threadID := strings.TrimSpace(params.ThreadID)
+	sessionID := strings.TrimSpace(params.SessionID)
+	windowID := strings.TrimSpace(params.WindowID)
+	itemID := strings.TrimSpace(params.OriginItemID)
+	if threadID == "" && sessionID == "" && windowID == "" && itemID == "" {
 		return cloneJSONValue(meta)
 	}
-	if meta == nil {
-		return map[string]any{mcpToolThreadIDMetaKey: threadID}
+	out := map[string]any{}
+	if meta != nil {
+		values, ok := meta.(map[string]any)
+		if !ok {
+			return cloneJSONValue(meta)
+		}
+		out = cloneAnyMap(values)
+		if out == nil {
+			out = map[string]any{}
+		}
 	}
-	values, ok := meta.(map[string]any)
-	if !ok {
-		return cloneJSONValue(meta)
+	if threadID != "" {
+		out[mcpToolThreadIDMetaKey] = threadID
 	}
-	out := cloneAnyMap(values)
-	if out == nil {
-		out = map[string]any{}
+	if sessionID != "" {
+		out[mcpToolSessionIDMetaKey] = sessionID
 	}
-	out[mcpToolThreadIDMetaKey] = threadID
+	if windowID != "" {
+		out[mcpToolWindowIDMetaKey] = windowID
+	}
+	if itemID != "" {
+		out[mcpToolItemIDMetaKey] = itemID
+	}
 	return out
 }
 

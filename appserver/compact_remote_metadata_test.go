@@ -50,7 +50,10 @@ func TestCompactResponsesClientMetadataCarriesTheTurnDocument(t *testing.T) {
 	if document["session_id"] != "thread-1" || document["thread_id"] != "thread-1" || document["turn_id"] != "turn-1" {
 		t.Fatalf("turn identity = %#v", document)
 	}
-	if document["window_id"] != "thread-1:1" {
+	// Rust's conversation window identity is `{thread_id}:{window_number}` with a
+	// zero-based number (Session::current_window_id), so a thread's first
+	// compaction request reports window 0.
+	if document["window_id"] != "thread-1:0" {
 		t.Fatalf("window_id = %#v", document["window_id"])
 	}
 	if _, ok := document["window_number"]; !ok {

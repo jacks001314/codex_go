@@ -453,6 +453,18 @@ type ResponsesClientMetadataOptions struct {
 	UseResponsesLite           bool
 }
 
+// ConversationWindowID builds Rust's conversation window identity
+// `{thread_id}:{window_number}` (Session::current_window_id). The window number
+// is zero-based and advances once per compaction window, so a thread's first
+// window is `{thread_id}:0`.
+func ConversationWindowID(threadID string, windowNumber uint64) string {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", threadID, windowNumber)
+}
+
 func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[string]string {
 	if options == nil {
 		return nil
@@ -464,7 +476,11 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 	}
 	windowID := strings.TrimSpace(options.WindowID)
 	if windowID == "" {
-		windowID = threadID + ":1"
+		var windowNumber uint64
+		if options.WindowNumber != nil {
+			windowNumber = *options.WindowNumber
+		}
+		windowID = ConversationWindowID(threadID, windowNumber)
 	}
 	metadata := codexapi.NewClientMetadata(
 		strings.TrimSpace(options.InstallationID),
