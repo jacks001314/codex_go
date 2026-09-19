@@ -1924,6 +1924,10 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		record.Metadata.ThreadSource = value
 	}
 	applyThreadForkOverrides(record, &params)
+	// Rust #45579: a non-ephemeral fork owns a copy of the source thread's
+	// current attachments (fresh ids and timestamps, same identities and
+	// payloads) and publishes it with the fork; an ephemeral fork carries none.
+	applyThreadForkAttachments(sourceRecord, record, params.Ephemeral, r.now().UTC())
 	// Rust #44349: a forked thread reports `fork`, not `startup`, so startup
 	// hooks do not re-run for inherited context.
 	setThreadRecordPendingSessionStartSource(record, SessionStartSourceFork)

@@ -4405,6 +4405,8 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 		record.Metadata.ThreadSource = value
 	}
 	applyThreadForkOverrides(record, &params)
+	// Rust #45579: an ephemeral fork carries no attachments.
+	applyThreadForkAttachments(sourceRecord, record, true, runtimeRouterNow(r))
 	// Rust #44349: forked threads report `fork`, not `startup`.
 	setThreadRecordPendingSessionStartSource(record, SessionStartSourceFork)
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
@@ -5845,6 +5847,9 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 		record.Metadata.ThreadSource = value
 	}
 	applyThreadForkOverrides(record, &params)
+	// Rust #45579: fork attachments are copied before the fork is published, and
+	// an ephemeral fork inherits none.
+	applyThreadForkAttachments(sourceRecord, record, params.Ephemeral, now)
 	// Rust #44349: forked threads report `fork`, not `startup`.
 	setThreadRecordPendingSessionStartSource(record, SessionStartSourceFork)
 	if !params.Ephemeral {

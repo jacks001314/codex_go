@@ -1,11 +1,14 @@
 package appserver
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -197,6 +200,62 @@ func (r *Router) persistThreadAttachments(record *session.Record, attachments []
 	}
 	_, err := r.updateThreadMetadata(record.ID, &session.MetadataPatch{Extra: extra}, true)
 	return err
+}
+
+// setThreadAttachmentsOnRecord replaces a record's attachment list in its
+// metadata map without persisting it, so a fork can publish the list atomically
+// with the rest of the record.
+func setThreadAttachmentsOnRecord(record *session.Record, attachments []ThreadAttachment) {
+	if record == nil {
+		return
+	}
+	extra := cloneExtraMap(record.Metadata.Extra)
+	if len(attachments) == 0 {
+		delete(extra, threadAttachmentsExtraKey)
+	} else {
+		extra[threadAttachmentsExtraKey] = attachments
+	}
+	record.Metadata.Extra = extra
+}
+
+// applyThreadForkAttachments mirrors Rust #45579: a non-ephemeral fork owns a
+// copy of the source thread's current attachments - fresh attachment ids and
+// creation timestamps, identical resource identities and payloads - so the two
+// threads' membership can change independently. An ephemeral fork inherits
+// nothing. Referenced resources are never copied, and a copy failure is logged
+// and leaves the fork without attachments rather than failing the fork.
+//
+// The caller applies this before publishing the fork, so the attachment list is
+// persisted atomically with the new thread record.
+func applyThreadForkAttachments(source, fork *session.Record, ephemeral bool, now time.Time) {
+	if fork == nil {
+		return
+	}
+	if ephemeral {
+		setThreadAttachmentsOnRecord(fork, nil)
+		return
+	}
+	var sourceAttachments []ThreadAttachment
+	if source != nil {
+		sourceAttachments = threadAttachmentsFromExtra(source.Metadata.Extra)
+	}
+	copied := make([]ThreadAttachment, 0, len(sourceAttachments))
+	for _, attachment := range sourceAttachments {
+		id, err := uuid.NewV7()
+		if err != nil {
+			slog.Warn("failed to copy thread attachments into fork; continuing without attachments", "error", err)
+			copied = nil
+			break
+		}
+		copied = append(copied, ThreadAttachment{
+			ID:             id.String(),
+			AttachmentType: attachment.AttachmentType,
+			IdentityKey:    attachment.IdentityKey,
+			Payload:        append(json.RawMessage(nil), attachment.Payload...),
+			CreatedAt:      now.UTC().Unix(),
+		})
+	}
+	setThreadAttachmentsOnRecord(fork, copied)
 }
 
 func normalizeThreadAttachmentPayload(raw []byte) ([]byte, error) {
