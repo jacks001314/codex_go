@@ -40,29 +40,18 @@ const ResidencyHeaderName = "x-openai-internal-codex-residency"
 const responsesIncludeTimingMetricsHeader = codexapi.ClientResponsesAPIIncludeTimingMetricsHeader
 
 // ResponsesEndpoint selects the Responses-compatible backend route used for an
-// inference request (Rust codex_api::endpoint::ResponsesEndpoint, #40892).
+// inference request. Rust #45736 removed the dedicated Guardian endpoints, so
+// every request - including a Guardian review - uses the standard route and
+// identifies itself with the `x-codex-guardian` header instead.
 type ResponsesEndpoint int
 
 const (
 	// ResponsesEndpointResponses is the standard user-owned model inference route.
 	ResponsesEndpointResponses ResponsesEndpoint = iota
-	// ResponsesEndpointGuardian routes a full Guardian approval-review agent.
-	ResponsesEndpointGuardian
-	// ResponsesEndpointGuardianClassifier routes lightweight asynchronous Guardian risk classification.
-	ResponsesEndpointGuardianClassifier
 )
 
 // Path returns the provider-relative path for this inference surface.
-func (e ResponsesEndpoint) Path() string {
-	switch e {
-	case ResponsesEndpointGuardian:
-		return "/guardian"
-	case ResponsesEndpointGuardianClassifier:
-		return "/guardian-classifier"
-	default:
-		return "/responses"
-	}
-}
+func (e ResponsesEndpoint) Path() string { return "/responses" }
 
 type HTTPDoer interface {
 	Do(request *http.Request) (*http.Response, error)
@@ -172,11 +161,7 @@ type ResponsesAgentRunner struct {
 	AWS *ProviderAWSAuthInfo
 	// Residency, when set, is the managed residency requirement enforced as an
 	// authoritative header on model requests (Rust #39645).
-	Residency string
-	// FreeGuardianEnabled, when set, allows eligible Guardian review inference
-	// to route through the dedicated unmetered Codex endpoints (Rust
-	// Config::free_guardian_enabled, #40892).
-	FreeGuardianEnabled   bool
+	Residency             string
 	providerAuthFetchedAt time.Time
 	turnState             *responsesTurnStateCache
 	websocketSessions     *responsesWebsocketSessionCache
@@ -455,6 +440,17 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 
 func (r *ResponsesAgentRunner) websocketSession(request *AgentRequest) *responsesWebsocketSession {
 	key := responsesWebsocketSessionKey(request)
+	// Rust #45736 reconnects the cached socket when the applicable responses
+	// headers change (they are scoped to the reviewer model), so a Guardian
+	// review never reuses the reviewed thread's ordinary connection or the
+	// connection of a review with a different model.
+	guardianModel := ""
+	if request != nil {
+		guardianModel = strings.TrimSpace(request.Model)
+	}
+	if r.isGuardianReviewerInference(guardianModel, request) {
+		key += ":guardian-reviewer"
+	}
 	r.websocketSessions.mu.Lock()
 	defer r.websocketSessions.mu.Unlock()
 	session := r.websocketSessions.sessions[key]
@@ -1416,6 +1412,17 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	if err := r.ensureFreshProviderCommandAuth(ctx); err != nil {
 		return nil, err
 	}
+	// Rust #45736: a Guardian reviewer request carries `x-codex-guardian:
+	// reviewer` and drops its service tier (the backend controls Guardian
+	// billing), so both are decided before the body is serialized.
+	guardianReviewer := r.isGuardianReviewerInference(apiRequest.Model, request)
+	if guardianReviewer {
+		apiRequest.ServiceTier = ""
+	} else if r.usesCodexBackend() && r.supportsCodexBackendRoutes() {
+		// Rust #45736: ordinary Codex-backend traffic asks the backend to bill
+		// Guardian credits; reviewer traffic identifies itself by header instead.
+		apiRequest.ClientMetadata = withGuardianCreditsRequested(apiRequest.ClientMetadata)
+	}
 	body, err := json.Marshal(apiRequest)
 	if err != nil {
 		return nil, err
@@ -1429,12 +1436,7 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 		}
 		contentEncoding = "zstd"
 	}
-	endpoint := r.responsesEndpoint(apiRequest.Model, request)
-	if endpoint == ResponsesEndpointGuardian {
-		// The dedicated Guardian endpoint is unmetered and rejects inference
-		// hints / service tier (Rust #40892).
-		apiRequest.ServiceTier = ""
-	}
+	endpoint := ResponsesEndpointResponses
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, r.responsesURL(endpoint), bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, err
@@ -1448,11 +1450,12 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	addTurnStateHeader(httpRequest.Header, r.turnStateForRequest(request))
 	addBetaFeaturesHeader(httpRequest.Header, apiRequest.BetaFeaturesHeader)
 	addOriginatorHeader(httpRequest.Header, requestOriginator(request))
-	// Routing hints are only sent on the standard /responses route; the
-	// dedicated Guardian endpoints omit them (Rust #40892), and a Guardian
-	// reviewer request never carries one even on the standard route (Rust's
+	if guardianReviewer {
+		httpRequest.Header.Set(GuardianHeaderName, GuardianHeaderReviewer)
+	}
+	// A Guardian reviewer request never carries a routing hint (Rust's
 	// `!guardian_reviewer` guard around build_routing_hint_header).
-	if endpoint == ResponsesEndpointResponses && !isGuardianReviewRequest(request) {
+	if !guardianReviewer {
 		if routingHint := r.responsesRoutingHint(apiRequest.Model, apiRequest.ServiceTier); routingHint != "" {
 			httpRequest.Header.Set(codexapi.ClientCodexRoutingHintHeader, routingHint)
 		}
@@ -1530,10 +1533,32 @@ func (r *ResponsesAgentRunner) approvalReviewPreferredModel() string {
 	return DefaultApprovalReviewPreferredModel
 }
 
+// withGuardianCreditsRequested mirrors Rust's set_guardian_metadata arm: the
+// reserved `guardian_credits_requested` key is added to a copy of the request's
+// client metadata so the backend bills ordinary Codex-backend traffic for
+// Guardian (Rust #45736).
+func withGuardianCreditsRequested(metadata map[string]string) map[string]string {
+	out := cloneStringMap(metadata)
+	if out == nil {
+		out = map[string]string{}
+	}
+	out[codexapi.GuardianCreditsRequestedKey] = "true"
+	return out
+}
+
 // isGuardianReviewRequest reports whether the agent request is a Guardian
 // approval-review inference (Rust guardian session source, #40892). The Go
 // reviewer reuses the main ResponsesAgentRunner, so eligibility is derived from
 // the request's review task kind / guardian originator.
+const (
+	// GuardianHeaderName identifies a Guardian request to the Codex backend
+	// (Rust #45736). Go only produces the reviewer value: it has no asynchronous
+	// Guardian classifier.
+	GuardianHeaderName = "x-codex-guardian"
+	// GuardianHeaderReviewer marks a full synchronous approval review.
+	GuardianHeaderReviewer = "reviewer"
+)
+
 func isGuardianReviewRequest(request *AgentRequest) bool {
 	if request == nil {
 		return false
@@ -1544,19 +1569,24 @@ func isGuardianReviewRequest(request *AgentRequest) bool {
 	return strings.EqualFold(strings.TrimSpace(request.Originator), "guardian")
 }
 
-// responsesEndpoint selects the Responses-compatible backend route for a
-// request (Rust ModelClient::responses_endpoint, #40892). Guardian review
-// inference is routed to /guardian only when every eligibility requirement is
-// met; all other requests keep the standard /responses route.
-func (r *ResponsesAgentRunner) responsesEndpoint(model string, request *AgentRequest) ResponsesEndpoint {
-	if r.FreeGuardianEnabled &&
-		isGuardianReviewRequest(request) &&
-		r.usesCodexBackend() &&
-		r.supportsCodexBackendRoutes() &&
-		model == r.approvalReviewPreferredModel() {
-		return ResponsesEndpointGuardian
+// isGuardianReviewerInference reports whether the request is a Guardian review
+// inference that must identify itself to the Codex backend with
+// `x-codex-guardian: reviewer` (Rust #45736).
+//
+// Rust seeds the header on the reviewer session for the provider's preferred
+// review model and applies it only while the request still targets that model,
+// uses Codex backend auth, and the provider supports the backend routes.
+// `features.guardianv2.free_guardian` is retained for config compatibility but
+// no longer gates this decision - the backend controls Guardian billing.
+func (r *ResponsesAgentRunner) isGuardianReviewerInference(model string, request *AgentRequest) bool {
+	if r == nil || !isGuardianReviewRequest(request) {
+		return false
 	}
-	return ResponsesEndpointResponses
+	model = strings.TrimSpace(model)
+	return model != "" &&
+		model == r.approvalReviewPreferredModel() &&
+		r.usesCodexBackend() &&
+		r.supportsCodexBackendRoutes()
 }
 
 func (r *ResponsesAgentRunner) addAttestationHeader(ctx context.Context, headers http.Header, request *AgentRequest) error {

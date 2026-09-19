@@ -570,7 +570,6 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	contentItemKindsEnabled := features.Enabled(cfg.FeatureSettings(), "content_item_kinds")
 	agent.ContentItemKindsEnabled = &contentItemKindsEnabled
 	agent.Residency = managedResidencyForConfig(cfg)
-	agent.FreeGuardianEnabled = cfg.FreeGuardianEnabled()
 	agent.AWS = provider.AWS
 	// Rust's SessionTelemetry records codex.api_request from the client's request
 	// telemetry; the turn metrics sink is the app-server's session metrics sink.

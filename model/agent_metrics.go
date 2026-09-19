@@ -208,7 +208,7 @@ func (r *ResponsesAgentRunner) recordAPIRequestRecord(ctx context.Context, reque
 	record := APIRequestRecord{
 		Attempt:                attempt,
 		Duration:               duration,
-		Endpoint:               r.responsesEndpoint(apiRequest.Model, request).Path(),
+		Endpoint:               ResponsesEndpointResponses.Path(),
 		RetryAfterUnauthorized: retryAfterUnauthorized,
 		RecoveryMode:           recoveryMode,
 		RecoveryPhase:          recoveryPhase,
@@ -403,7 +403,7 @@ func (r *ResponsesAgentRunner) recordWebsocketConnectRecord(ctx context.Context,
 	}
 	record := WebsocketConnectRecord{
 		Duration:               duration,
-		Endpoint:               r.responsesEndpoint(apiRequestModel(apiRequest), request).Path(),
+		Endpoint:               ResponsesEndpointResponses.Path(),
 		RetryAfterUnauthorized: strings.TrimSpace(recoveryMode) != "" || strings.TrimSpace(recoveryPhase) != "",
 		RecoveryMode:           recoveryMode,
 		RecoveryPhase:          recoveryPhase,

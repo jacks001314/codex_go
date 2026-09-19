@@ -1899,62 +1899,111 @@ func TestResponsesAgentRunnerRoutingHintUsesCodexBackendAuth(t *testing.T) {
 	}
 }
 
-func TestResponsesAgentRunnerGuardianEndpointRouting(t *testing.T) {
-	makeRunner := func(freeGuardian bool) *ResponsesAgentRunner {
-		runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
-			Provider:     &APIProvider{Name: OpenAIProviderName, BaseURL: "https://example.test/backend-api/codex"},
-			AuthSnapshot: &auth.AuthDotJSON{AuthMode: "chatgpt"},
+// Mirrors Rust #45736: Guardian review inference uses the standard /responses
+// route and identifies itself with `x-codex-guardian: reviewer` when the request
+// model is the provider's preferred review model, the auth uses the Codex
+// backend, and the provider supports the backend routes. `free_guardian` no
+// longer gates the decision.
+func TestResponsesAgentRunnerGuardianRoutingLikeRust(t *testing.T) {
+	makeRunner := func(authMode string, baseURL string) *ResponsesAgentRunner {
+		return NewResponsesAgentRunner(&ResponsesAgentOptions{
+			Provider:     &APIProvider{Name: OpenAIProviderName, BaseURL: baseURL},
+			AuthSnapshot: &auth.AuthDotJSON{AuthMode: authMode},
 		})
-		runner.FreeGuardianEnabled = freeGuardian
-		return runner
 	}
+	const backendBaseURL = "https://example.test/backend-api/codex"
 
-	// A Guardian review request routes to /guardian and omits the routing hint
-	// when free_guardian is enabled and all provider/model conditions hold.
-	runner := makeRunner(true)
-	request, err := runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{TaskKind: AgentTaskReview, Originator: "guardian"}, &responsesAgentRequest{Model: DefaultApprovalReviewPreferredModel}, "")
+	// A preferred-model review over Codex backend auth carries the reviewer
+	// header, drops the routing hint and the service tier, and stays on
+	// /responses.
+	runner := makeRunner("chatgpt", backendBaseURL)
+	request, err := runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{
+		TaskKind:   AgentTaskReview,
+		Originator: "guardian",
+		Model:      DefaultApprovalReviewPreferredModel,
+	}, &responsesAgentRequest{Model: DefaultApprovalReviewPreferredModel, ServiceTier: "priority"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(request.URL.Path, "/guardian") {
-		t.Fatalf("guardian path = %q, want /guardian", request.URL.Path)
+	if !strings.HasSuffix(request.URL.Path, "/responses") {
+		t.Fatalf("review path = %q, want /responses", request.URL.Path)
+	}
+	if got := request.Header.Get(GuardianHeaderName); got != GuardianHeaderReviewer {
+		t.Fatalf("guardian header = %q, want %q", got, GuardianHeaderReviewer)
 	}
 	if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "" {
 		t.Fatalf("guardian routing hint = %q, want empty", got)
 	}
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "service_tier") {
+		t.Fatalf("guardian review body kept a service tier: %s", body)
+	}
+	if strings.Contains(string(body), codexapi.GuardianCreditsRequestedKey) {
+		t.Fatalf("guardian review body requested Guardian credits: %s", body)
+	}
 
-	// A normal (non-review) request keeps the standard /responses route.
+	// A review with a different (overridden) model is unmarked: the header,
+	// hint suppression and tier clearing are all scoped to the preferred model.
+	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{
+		TaskKind: AgentTaskReview,
+		Model:    "gpt-review-override",
+	}, &responsesAgentRequest{Model: "gpt-review-override"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get(GuardianHeaderName); got != "" {
+		t.Fatalf("overridden review guardian header = %q, want empty", got)
+	}
+	if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "model=gpt-review-override" {
+		t.Fatalf("overridden review routing hint = %q", got)
+	}
+
+	// An ordinary request has no guardian header and keeps its routing hint.
 	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{}, &responsesAgentRequest{Model: "gpt-test"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(request.URL.Path, "/responses") {
-		t.Fatalf("normal path = %q, want /responses", request.URL.Path)
-	}
-
-	// Disabling free_guardian keeps /responses even for a Guardian review
-	// request.
-	runner = makeRunner(false)
-	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{TaskKind: AgentTaskReview}, &responsesAgentRequest{Model: "gpt-test"}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasSuffix(request.URL.Path, "/responses") {
-		t.Fatalf("disabled path = %q, want /responses", request.URL.Path)
-	}
-	// A Guardian reviewer request never carries a routing hint, even when it
-	// falls back to the standard /responses route (Rust's `!guardian_reviewer`
-	// guard).
-	if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "" {
-		t.Fatalf("standard-route guardian routing hint = %q, want empty", got)
-	}
-	// An ordinary request on the same runner still carries one.
-	request, err = runner.newResponsesHTTPRequest(context.Background(), &AgentRequest{}, &responsesAgentRequest{Model: "gpt-test"}, "")
-	if err != nil {
-		t.Fatal(err)
+	if got := request.Header.Get(GuardianHeaderName); got != "" {
+		t.Fatalf("ordinary guardian header = %q, want empty", got)
 	}
 	if got := request.Header.Get(codexapi.ClientCodexRoutingHintHeader); got != "model=gpt-test" {
 		t.Fatalf("ordinary routing hint = %q, want %q", got, "model=gpt-test")
+	}
+	ordinaryBody, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ordinaryBody), `"`+codexapi.GuardianCreditsRequestedKey+`":"true"`) {
+		t.Fatalf("ordinary request did not request Guardian credits: %s", ordinaryBody)
+	}
+
+	// API-key auth does not use the Codex backend, so the review is unmarked.
+	apiKeyRunner := makeRunner("api-key", backendBaseURL)
+	request, err = apiKeyRunner.newResponsesHTTPRequest(context.Background(), &AgentRequest{
+		TaskKind: AgentTaskReview,
+		Model:    DefaultApprovalReviewPreferredModel,
+	}, &responsesAgentRequest{Model: DefaultApprovalReviewPreferredModel}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get(GuardianHeaderName); got != "" {
+		t.Fatalf("api-key guardian header = %q, want empty", got)
+	}
+
+	// A provider without the backend routes is unmarked as well.
+	plainRunner := makeRunner("chatgpt", "https://example.test/v1")
+	request, err = plainRunner.newResponsesHTTPRequest(context.Background(), &AgentRequest{
+		TaskKind: AgentTaskReview,
+		Model:    DefaultApprovalReviewPreferredModel,
+	}, &responsesAgentRequest{Model: DefaultApprovalReviewPreferredModel}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get(GuardianHeaderName); got != "" {
+		t.Fatalf("plain-provider guardian header = %q, want empty", got)
 	}
 }
 

@@ -558,10 +558,11 @@ func (p *ProviderInfo) IsOpenAI() bool {
 }
 
 // SupportsCodexBackendRoutes reports whether this OpenAI provider may route
-// inference through the dedicated Codex backend endpoints (/guardian,
-// /guardian-classifier). Mirrors Rust ModelProviderInfo::supports_codex_backend_routes
-// (#40892): true when no base_url is set (the default OpenAI backend) or when
-// the base URL ends with "/backend-api/codex".
+// inference through the Codex backend. Mirrors Rust
+// ModelProviderInfo::supports_codex_backend_routes (#40892): true when no
+// base_url is set (the default OpenAI backend) or when the base URL ends with
+// "/backend-api/codex". The route now serves every inference, with Guardian
+// reviews identified by the `x-codex-guardian` header (Rust #45736).
 func (p *ProviderInfo) SupportsCodexBackendRoutes() bool {
 	if p == nil || !p.IsOpenAI() {
 		return false
