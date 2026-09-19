@@ -113,6 +113,11 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandDebug:
 		return runDebug(parsed.Debug, &parsed.Root, stdout)
 	case cli.CommandDoctor:
+		if path := strings.TrimSpace(parsed.Doctor.ProbeFilesystemPath); path != "" {
+			// Hidden isolated probe (Rust #46543): exit with the probe's status
+			// before loading configuration or rendering a report.
+			return &ExitError{Code: doctor.ProbeFilesystemPathExitCode(path), Silent: true}
+		}
 		report, err := doctor.Run(&doctor.Options{
 			JSON:     parsed.Doctor.JSON,
 			Summary:  parsed.Doctor.Summary,

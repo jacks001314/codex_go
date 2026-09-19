@@ -1699,3 +1699,28 @@ func TestParseDoctorFeedbackFlag(t *testing.T) {
 		t.Fatalf("parseDoctor flags = %#v, want JSON+Feedback", opts)
 	}
 }
+
+// Mirrors Rust #46543's hidden doctor probe flag: the helper path is parsed in
+// both the separated and `=` forms, and an unknown doctor option still fails.
+func TestParseDoctorProbeFilesystemPathFlag(t *testing.T) {
+	opts := &DoctorOptions{}
+	if err := parseDoctor([]string{"--probe-filesystem-path", "/tmp/probe"}, opts); err != nil {
+		t.Fatalf("parseDoctor error = %v", err)
+	}
+	if opts.ProbeFilesystemPath != "/tmp/probe" {
+		t.Fatalf("probe path = %q, want /tmp/probe", opts.ProbeFilesystemPath)
+	}
+	opts = &DoctorOptions{}
+	if err := parseDoctor([]string{"--probe-filesystem-path=/tmp/other"}, opts); err != nil {
+		t.Fatalf("parseDoctor error = %v", err)
+	}
+	if opts.ProbeFilesystemPath != "/tmp/other" {
+		t.Fatalf("probe path = %q, want /tmp/other", opts.ProbeFilesystemPath)
+	}
+	if err := parseDoctor([]string{"--probe-filesystem-path"}, &DoctorOptions{}); err == nil {
+		t.Fatal("a missing probe path value must fail")
+	}
+	if err := parseDoctor([]string{"--unknown"}, &DoctorOptions{}); err == nil {
+		t.Fatal("an unknown doctor option must fail")
+	}
+}

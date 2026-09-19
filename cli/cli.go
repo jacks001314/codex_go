@@ -332,6 +332,10 @@ type DoctorOptions struct {
 	NoColor  bool
 	ASCII    bool
 	Feedback bool
+	// ProbeFilesystemPath is the hidden, internal isolated filesystem probe
+	// (Rust #46543): doctor exits with the probe's status before loading
+	// configuration.
+	ProbeFilesystemPath string
 }
 
 type MigrateRolloutsOptions struct {
@@ -2858,24 +2862,33 @@ func parseCompletion(args []string, completion *CompletionOptions) error {
 }
 
 func parseDoctor(args []string, doctor *DoctorOptions) error {
-	for _, arg := range args {
-		switch arg {
-		case "--json":
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--json":
 			doctor.JSON = true
-		case "--summary":
+		case arg == "--summary":
 			doctor.Summary = true
-		case "--all":
+		case arg == "--all":
 			doctor.All = true
-		case "--no-color":
+		case arg == "--no-color":
 			doctor.NoColor = true
-		case "--ascii":
+		case arg == "--ascii":
 			doctor.ASCII = true
-		case "--feedback":
+		case arg == "--feedback":
 			doctor.Feedback = true
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("unknown doctor option %s", arg)
+		case arg == "--probe-filesystem-path":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
 			}
+			doctor.ProbeFilesystemPath = value
+			i = next
+		case strings.HasPrefix(arg, "--probe-filesystem-path="):
+			doctor.ProbeFilesystemPath = strings.TrimPrefix(arg, "--probe-filesystem-path=")
+		case strings.HasPrefix(arg, "-"):
+			return fmt.Errorf("unknown doctor option %s", arg)
+		default:
 			return fmt.Errorf("doctor does not accept argument %s", arg)
 		}
 	}

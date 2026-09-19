@@ -13,7 +13,9 @@ import (
 )
 
 const (
-	FeedbackDoctorReportTimeout  = 25 * time.Second
+	// Rust #46543 raised the doctor report budget so the bounded filesystem-path
+	// probes (2 s per path, 8 s total) fit inside it.
+	FeedbackDoctorReportTimeout  = 35 * time.Second
 	FeedbackMaxDoctorTagValueLen = 256
 )
 

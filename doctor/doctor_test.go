@@ -76,6 +76,7 @@ func TestReportBuildsLocalChecks(t *testing.T) {
 		{"network.websocket_reachability", "websocket"},
 		{"mcp.config", "mcp"},
 		{"sandbox.helpers", "sandbox"},
+		{"sandbox.filesystem_paths", "sandbox"},
 		{"terminal.env", "terminal"},
 		{"git.environment", "git"},
 		{"terminal.title", "title"},

@@ -211,6 +211,7 @@ func (b *Builder) Build(opts *Options) *Report {
 		b.timed(func() *DoctorCheck { return websocketReachabilityCheck(codexHome, opts) }),
 		b.timed(func() *DoctorCheck { return mcpCheck(codexHome, opts) }),
 		b.timed(func() *DoctorCheck { return sandboxCheck(codexHome, opts) }),
+		b.timed(func() *DoctorCheck { return filesystemPathsCheck(codexHome, opts) }),
 		b.timed(func() *DoctorCheck { return terminalCheck(currentEnvMap(), opts) }),
 		b.timed(func() *DoctorCheck { return gitCheck(cwd) }),
 		b.timed(func() *DoctorCheck { return terminalTitleCheck(codexHome, opts) }),
