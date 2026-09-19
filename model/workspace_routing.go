@@ -31,6 +31,11 @@ var (
 	ErrWorkspaceRoutingBackendConflict      = errors.New("required ChatGPT backend conflicts with workspace routing")
 	ErrWorkspaceRoutingInvalidBackendURL    = errors.New("invalid workspace backend URL")
 	ErrWorkspaceRoutingInvalidBackendOrigin = errors.New("workspace backend must use an HTTPS origin without credentials")
+	ErrWorkspaceRoutingAccountChanged       = errors.New("account changed during workspace routing discovery")
+	ErrWorkspaceRoutingRequirementsReload   = errors.New("failed to reload workspace requirements")
+	// ErrWorkspaceRoutingConfigurationChanged mirrors Rust
+	// WorkspaceRoutingError::ConfigurationChanged.
+	ErrWorkspaceRoutingConfigurationChanged = errors.New("configuration changed during workspace routing discovery; retry account/read")
 )
 
 // DiscoverWorkspaceRouting fetches accounts/check and resolves the selected

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"codex_go/auth"
+	"codex_go/config"
 	"codex_go/model"
 )
 
@@ -61,7 +62,7 @@ func (r *RuntimeRouter) workspaceRoutingFetch(key workspaceRoutingCacheKey) *wor
 // workspaceRoutingForAccountRead resolves the workspace routing for an
 // account/read call, mirroring Rust read_account with no request scope. It
 // returns nil when the credential is not a ChatGPT workspace credential.
-func (r *RuntimeRouter) workspaceRoutingForAccountRead(ctx context.Context, requiredBaseURL string, snapshot *auth.AuthDotJSON) (*auth.WorkspaceRouting, error) {
+func (r *RuntimeRouter) workspaceRoutingForAccountRead(ctx context.Context, snapshot *auth.AuthDotJSON) (*auth.WorkspaceRouting, error) {
 	accountID, ok := chatGPTWorkspaceAccountID(snapshot)
 	if !ok {
 		return nil, nil
@@ -73,13 +74,16 @@ func (r *RuntimeRouter) workspaceRoutingForAccountRead(ctx context.Context, requ
 	if r.authChangeTracker != nil {
 		state = r.authChangeTracker.Snapshot()
 	}
-	baseURL := r.chatGPTBaseURL()
+	identity, ok := r.workspaceRoutingConfigIdentity()
+	if !ok {
+		return nil, model.ErrWorkspaceRoutingRequirementsReload
+	}
 	key := workspaceRoutingCacheKey{
 		authGeneration:  state.Generation,
 		ownerGeneration: state.OwnerGeneration,
 		accountID:       accountID,
-		baseURL:         baseURL,
-		requiredBaseURL: strings.TrimSpace(requiredBaseURL),
+		baseURL:         identity.baseURL,
+		requiredBaseURL: identity.requiredBaseURL,
 	}
 	fetch := r.workspaceRoutingFetch(key)
 	fetch.mu.Lock()
@@ -89,13 +93,56 @@ func (r *RuntimeRouter) workspaceRoutingForAccountRead(ctx context.Context, requ
 	}
 	discoveryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	routing, err := r.discoverWorkspaceRouting(discoveryCtx, snapshot, accountID, baseURL, requiredBaseURL)
+	routing, err := r.discoverWorkspaceRouting(discoveryCtx, snapshot, accountID, identity.baseURL, identity.requiredBaseURL)
 	if err != nil {
 		return nil, err
+	}
+	// Rust AuthManager::workspace_routing plus read_account: discovery must not
+	// survive a credential-owner change, a different account, or a
+	// configuration reload that moved the routing scope.
+	if r.authChangeTracker != nil && r.authChangeTracker.Snapshot().OwnerGeneration != state.OwnerGeneration {
+		return nil, model.ErrWorkspaceRoutingAccountChanged
+	}
+	if routing != nil && routing.ChatGPTAccountID != accountID {
+		return nil, model.ErrWorkspaceRoutingAccountChanged
+	}
+	latest, latestOK := r.workspaceRoutingConfigIdentity()
+	if !latestOK {
+		return nil, model.ErrWorkspaceRoutingRequirementsReload
+	}
+	if latest != identity {
+		return nil, model.ErrWorkspaceRoutingConfigurationChanged
 	}
 	fetch.routing = routing
 	fetch.done = true
 	return cloneWorkspaceRouting(routing), nil
+}
+
+// workspaceRoutingConfigIdentity captures the configuration inputs a routing
+// discovery is scoped to, so a reload that moved them can be detected.
+type workspaceRoutingConfigIdentity struct {
+	baseURL         string
+	modelProvider   string
+	requiredBaseURL string
+}
+
+// workspaceRoutingConfigIdentity reads the effective routing scope from the
+// current configuration (Rust read_account's config capture).
+func (r *RuntimeRouter) workspaceRoutingConfigIdentity() (workspaceRoutingConfigIdentity, bool) {
+	identity := workspaceRoutingConfigIdentity{}
+	if r == nil || r.services.Config == nil {
+		return identity, false
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return identity, false
+	}
+	identity.baseURL = r.chatGPTBaseURL()
+	identity.modelProvider = strings.TrimSpace(stringFromMap(read.Config, "model_provider"))
+	if requirements := r.requireConfig().Requirements(); requirements != nil && requirements.Requirements != nil && requirements.Requirements.ChatgptBaseURL != nil {
+		identity.requiredBaseURL = strings.TrimSpace(*requirements.Requirements.ChatgptBaseURL)
+	}
+	return identity, true
 }
 
 // chatGPTWorkspaceAccountID mirrors Rust is_chatgpt_auth plus get_account_id:
@@ -142,7 +189,7 @@ func (r *RuntimeRouter) applyWorkspaceRoutingToAgent(ctx context.Context, provid
 	if !strings.EqualFold(strings.TrimSpace(provider.Name), model.OpenAIProviderName) {
 		return nil
 	}
-	routing, err := r.workspaceRoutingForAccountRead(ctx, r.requiredChatGPTBaseURL(), snapshot)
+	routing, err := r.workspaceRoutingForAccountRead(ctx, snapshot)
 	if err != nil {
 		return err
 	}
@@ -178,7 +225,7 @@ func (r *RuntimeRouter) notifyWorkspaceRoutingToConnection(connectionID string) 
 		if snapshot == nil {
 			return
 		}
-		routing, err := r.workspaceRoutingForAccountRead(context.Background(), r.requiredChatGPTBaseURL(), snapshot)
+		routing, err := r.workspaceRoutingForAccountRead(context.Background(), snapshot)
 		if err != nil || routing == nil {
 			return
 		}

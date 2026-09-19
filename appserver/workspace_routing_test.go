@@ -17,8 +17,12 @@ import (
 
 func workspaceRoutingRouter(t *testing.T, handler http.HandlerFunc) *RuntimeRouter {
 	t.Helper()
+	return workspaceRoutingRouterWithHome(t, t.TempDir(), handler)
+}
+
+func workspaceRoutingRouterWithHome(t *testing.T, home string, handler http.HandlerFunc) *RuntimeRouter {
+	t.Helper()
 	clearAuthEnvAppserver(t)
-	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "workspace", nil)); err != nil {
 		t.Fatalf("auth save error: %v", err)
 	}
@@ -286,5 +290,57 @@ func TestResolveWorkspaceRoutingMatchesRust(t *testing.T) {
 				t.Fatalf("routing = %+v, want origin %q override %q", got, testCase.wantOrigin, wantOverride)
 			}
 		})
+	}
+}
+
+// TestRuntimeRouterWorkspaceRoutingRejectsCredentialChangeLikeRust mirrors Rust
+// AuthManager::workspace_routing: a discovery that survives an owner change must
+// not be used, because the credential may now belong to another workspace.
+func TestRuntimeRouterWorkspaceRoutingRejectsCredentialChangeLikeRust(t *testing.T) {
+	var router *RuntimeRouter
+	router = workspaceRoutingRouter(t, func(w http.ResponseWriter, r *http.Request) {
+		// Switch the credential owner while the discovery request is in flight.
+		changed := auth.FromChatGPTAuthTokens("chatgpt-token", "other-workspace", nil)
+		router.requireAccount().ApplyAuthSnapshot(&changed)
+		router.noteAuthChanged()
+		writeJSON(t, w, map[string]any{"accounts": []any{map[string]any{
+			"id":                       "workspace",
+			"workspace_backend_origin": "https://gov.chatgpt.com",
+			"account_routing_override": "us",
+		}}})
+	})
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAccount, auth.GetAccountParams{}))
+	if response.Error == nil || response.Error.Message != model.ErrWorkspaceRoutingAccountChanged.Error() {
+		t.Fatalf("response = %+v, want %q", response.Error, model.ErrWorkspaceRoutingAccountChanged)
+	}
+}
+
+// TestRuntimeRouterWorkspaceRoutingRejectsConfigChangeLikeRust mirrors Rust
+// read_account's post-discovery reload: a configuration change during discovery
+// (here the model provider) refuses the discovered routing.
+func TestRuntimeRouterWorkspaceRoutingRejectsConfigChangeLikeRust(t *testing.T) {
+	home := t.TempDir()
+	var configPath string
+	router := workspaceRoutingRouterWithHome(t, home, func(w http.ResponseWriter, r *http.Request) {
+		// Move the configuration scope while the discovery request is in flight.
+		existing, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("read config: %v", err)
+		}
+		if err := os.WriteFile(configPath, append(existing, []byte("\nmodel_provider = \"other-provider\"\n")...), 0o600); err != nil {
+			t.Fatalf("rewrite config: %v", err)
+		}
+		writeJSON(t, w, map[string]any{"accounts": []any{map[string]any{
+			"id":                       "workspace",
+			"workspace_backend_origin": "https://gov.chatgpt.com",
+			"account_routing_override": "us",
+		}}})
+	})
+	configPath = config.ConfigPath(home)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodGetAccount, auth.GetAccountParams{}))
+	if response.Error == nil || response.Error.Message != model.ErrWorkspaceRoutingConfigurationChanged.Error() {
+		t.Fatalf("response = %+v, want %q", response.Error, model.ErrWorkspaceRoutingConfigurationChanged)
 	}
 }

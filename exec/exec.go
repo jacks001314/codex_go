@@ -24,7 +24,6 @@ import (
 
 	multiagent "codex_go/agent"
 	"codex_go/auth"
-	"codex_go/chatgptapi"
 	"codex_go/cli"
 	"codex_go/codemode"
 	"codex_go/codexapi"
@@ -1616,62 +1615,9 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
 		// The same provider feeds the model client's diagnostic records (Rust's
 		// SessionTelemetry), so its SSE events reach the log and trace pipelines.
 		agent.Telemetry = r.sessionTelemetryForRun()
-		if err := r.applyExecWorkspaceRouting(cfg, provider, snapshot, agent); err != nil {
-			return nil, err
-		}
 		return agent, nil
 	}
 	return model.NewLocalAgentRunner(), nil
-}
-
-// applyExecWorkspaceRouting mirrors Rust RuntimeProvider::responses_api_provider
-// for the exec path: a first-party ChatGPT provider that may use the dedicated
-// Codex backend routes is rewritten to the discovered workspace backend and
-// rejects redirects from then on.
-func (r *Runner) applyExecWorkspaceRouting(cfg *config.Config, provider *model.ProviderInfo, snapshot *auth.AuthDotJSON, agent *model.ResponsesAgentRunner) error {
-	if r == nil || cfg == nil || provider == nil || snapshot == nil || agent == nil || !provider.SupportsCodexBackendRoutes() {
-		return nil
-	}
-	if !strings.EqualFold(strings.TrimSpace(provider.Name), model.OpenAIProviderName) {
-		return nil
-	}
-	switch snapshot.Mode() {
-	case "chatgpt", "chatgptAuthTokens", "personal-access-token":
-	default:
-		return nil
-	}
-	accountID := strings.TrimSpace(auth.AccountIDFromAuthForRestrictions(snapshot))
-	if accountID == "" {
-		return model.ErrWorkspaceRoutingMissingAccountID
-	}
-	authHeaders, err := model.AuthHeadersFromAuth(*snapshot)
-	if err != nil {
-		return model.ErrWorkspaceRoutingDiscoveryFailed
-	}
-	baseURL := cfg.ChatGPTBaseURL()
-	client := chatgptapi.NewCloudClient(&chatgptapi.CloudClientOptions{
-		BaseURL:    baseURL,
-		Headers:    authHeaders.Headers,
-		HTTPClient: r.httpClientForConfig(cfg),
-	})
-	requiredBaseURL := ""
-	if cfg.Requirements != nil && cfg.Requirements.ChatgptBaseURL != nil {
-		requiredBaseURL = strings.TrimSpace(*cfg.Requirements.ChatgptBaseURL)
-	}
-	discoveryCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	routing, err := model.DiscoverWorkspaceRouting(discoveryCtx, client, accountID, requiredBaseURL, baseURL)
-	if err != nil {
-		return err
-	}
-	if routing == nil {
-		return nil
-	}
-	if err := model.ApplyWorkspaceRouting(agent.Provider, routing); err != nil {
-		return err
-	}
-	agent.RejectRedirects = true
-	return nil
 }
 
 func providerHasStandaloneAuth(provider model.ProviderInfo) bool {
