@@ -6447,6 +6447,12 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		instructions = modelInfo.ModelInstructions(personality)
 	}
 	historyItems, previousResponseID := r.historyInputItemsForTurn(threadID)
+	// Rust #46291: disabling the override feature must also recover threads
+	// whose persisted history still carries configuration_update items. Only
+	// the request copy is filtered; the stored history is untouched.
+	if !reasoningEffortFeatureEnabled(cfg) {
+		historyItems = rejectConfigurationUpdateInputItems(historyItems)
+	}
 	if previousResponseID == "" {
 		// Rust core/src/tasks/regular.rs: the first regular turn consumes the
 		// session-startup websocket prewarm (its response id chains the first

@@ -185,3 +185,21 @@ func isConfigurationUpdateInputItem(item any) bool {
 	payload, ok := configurationUpdatePayload(item)
 	return ok && stringFromMap(payload, "type") == "configuration_update"
 }
+
+// rejectConfigurationUpdateInputItems mirrors Rust #46291: with the
+// `reasoning_effort_override` feature disabled, configuration_update items
+// saved in history must be dropped from the request input while the persisted
+// history keeps them (other items are preserved untouched).
+func rejectConfigurationUpdateInputItems(items []any) []any {
+	if len(items) == 0 {
+		return items
+	}
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		if isConfigurationUpdateInputItem(item) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
