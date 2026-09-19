@@ -13,6 +13,73 @@ import (
 	"codex_go/turn"
 )
 
+// Mirrors Rust #46075: a spawn builds the child from the invoking step's captured
+// settings (model, effective reasoning effort, reasoning summary) rather than the
+// parent thread record's older values, so a mid-turn settings update reaches
+// subagents. Explicit spawn overrides still win.
+func TestRuntimeAgentControllerSpawnUsesCapturedStepSettingsLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", SessionID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), Model: "gpt-5.4-old", ModelProvider: "openai"}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+
+	// The invoking turn's captured settings, as a mid-turn settings update leaves them.
+	effort, summary := "high", "concise"
+	captured := &turn.TurnStartParams{ThreadID: "parent", Model: "gpt-5.4", Effort: &effort, Summary: &summary}
+	if err := router.threads.RegisterTurn("parent", "parent-turn", func() {}, now.UnixMilli(), captured); err != nil {
+		t.Fatal(err)
+	}
+	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "delegated", parent.Metadata.CWD, 4, agent.VersionV2, nil).(*runtimeAgentController)
+	message := "do the work"
+	child, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "worker", Message: &message})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childRecord, err := store.Read(session.ThreadID(child.AgentID), true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childRecord.Metadata.Model != "gpt-5.4" {
+		t.Fatalf("child model = %q, want the captured step model", childRecord.Metadata.Model)
+	}
+	active := router.threads.ActiveTurn(child.AgentID)
+	if active == nil || active.Params == nil {
+		t.Fatalf("child turn was not started: %#v", active)
+	}
+	if stringPtrValue(active.Params.Effort) != "high" || stringPtrValue(active.Params.Summary) != "concise" {
+		t.Fatalf("child settings = effort %q summary %q, want the captured step settings",
+			stringPtrValue(active.Params.Effort), stringPtrValue(active.Params.Summary))
+	}
+
+	// An explicit spawn override still wins over the captured settings.
+	override := "low"
+	overrideModel := "gpt-5.4-mini"
+	second, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{
+		ResolvedRole:    "worker",
+		Message:         &message,
+		ReasoningEffort: &override,
+		Model:           &overrideModel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRecord, err := store.Read(session.ThreadID(second.AgentID), true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRecord.Metadata.Model != overrideModel {
+		t.Fatalf("override model = %q, want %q", secondRecord.Metadata.Model, overrideModel)
+	}
+	secondActive := router.threads.ActiveTurn(second.AgentID)
+	if secondActive == nil || stringPtrValue(secondActive.Params.Effort) != "low" {
+		t.Fatalf("override effort = %#v, want low", secondActive)
+	}
+}
+
 func TestRuntimeAgentControllerPersistsSpawnMetadataAndGraph(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := time.Now().UTC()

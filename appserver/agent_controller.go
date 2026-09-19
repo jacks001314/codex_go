@@ -121,7 +121,15 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	}
 	threadID := newThreadID()
 	now := time.Now().UTC()
+	// Rust #46075: build the child from the invoking step's captured settings.
+	// A settings update during the active turn changes the turn's live model,
+	// effort and summary, and spawned agents must inherit those rather than the
+	// thread record's older values.
+	capturedModel, capturedEffort, capturedSummary := c.capturedSpawnSettings()
 	modelID := agentStringValue(args.Model)
+	if modelID == "" {
+		modelID = capturedModel
+	}
 	providerID := ""
 	developerInstructions := ""
 	if parent, readErr := c.router.threadRecord(session.ThreadID(c.parentID), false, false); readErr == nil && parent != nil {
@@ -215,6 +223,13 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		if args.ReasoningEffort != nil {
 			effort := strings.TrimSpace(*args.ReasoningEffort)
 			params.Effort = &effort
+		} else if capturedEffort != "" {
+			effort := capturedEffort
+			params.Effort = &effort
+		}
+		if capturedSummary != "" {
+			summary := capturedSummary
+			params.Summary = &summary
 		}
 		// Rust #41308: subagents follow the root thread's service tier, not a
 		// per-spawn override. appServiceTierForTurn drops the tier if the child
@@ -230,6 +245,31 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		}
 	}
 	return &agent.SpawnAgentResult{AgentID: string(threadID), TaskName: agentPath, Nickname: stringPtrIfNotEmpty(nickname)}, nil
+}
+
+// capturedSpawnSettings returns the invoking turn's captured model, effective
+// reasoning effort and reasoning summary (Rust #46075's `step_context.settings`).
+// A settings update during the active turn rewrites those live values, so a
+// spawn must read them instead of the thread record's older snapshot. Empty
+// strings mean the invoking turn is not live and callers should fall back.
+func (c *runtimeAgentController) capturedSpawnSettings() (string, string, string) {
+	if c == nil || c.router == nil || strings.TrimSpace(c.parentID) == "" {
+		return "", "", ""
+	}
+	active := c.router.threads.ActiveTurn(c.parentID)
+	if active == nil || active.Params == nil {
+		return "", "", ""
+	}
+	// Only the turn that owns this controller carries its captured settings.
+	if expected := strings.TrimSpace(c.parentTurnID); expected != "" && strings.TrimSpace(active.TurnID) != expected {
+		return "", "", ""
+	}
+	params := active.Params
+	effort := ""
+	if cfg, err := c.router.effectiveConfigForTurn(params); err == nil {
+		effort = appReasoningEffortForTurn(cfg, params)
+	}
+	return strings.TrimSpace(params.Model), effort, stringPtrValue(params.Summary)
 }
 
 func (c *runtimeAgentController) SendInput(ctx context.Context, args *agent.SendInputArgs) (*agent.SendInputResult, error) {
