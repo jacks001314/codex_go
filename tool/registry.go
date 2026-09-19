@@ -170,6 +170,12 @@ type Output struct {
 	Error       string         `json:"error,omitempty"`
 	LogPreview  string         `json:"logPreview,omitempty"`
 	CompletedAt time.Time      `json:"completedAt"`
+	// ToolResultMetadata is the raw tool-result `_meta` a tool exposes for the
+	// internal executed-tool-call record (Rust `ToolOutput::tool_result_metadata`,
+	// #46010). It is never serialized: the model-visible data carries the
+	// destination-filtered `_meta` on its own, and harness metadata is stripped
+	// per destination (#44336).
+	ToolResultMetadata any `json:"-"`
 }
 
 type Executor interface {

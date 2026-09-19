@@ -99,6 +99,12 @@ type ToolExecutorOptions struct {
 	// turn (Rust mcp_tool_call.rs maybe_request_mcp_tool_approval). Nil disables
 	// the gate.
 	ToolApproval *ToolApprovalOptions
+	// CaptureResultMetadata exposes the raw MCP result `_meta` for the internal
+	// executed-tool-call record (Rust #46010's `result_metadata_capture_allowed`).
+	// The caller gates it on session analytics being enabled and the server being
+	// a host-owned apps server; the record itself is written by the tool
+	// dispatcher.
+	CaptureResultMetadata bool
 }
 
 // AuthElicitationOptions carries the turn-scoped hooks the Codex Apps auth
@@ -141,6 +147,7 @@ type ToolExecutor struct {
 	suppressActorPolicies         bool
 	authElicitation               *AuthElicitationOptions
 	toolApproval                  *ToolApprovalOptions
+	captureResultMetadata         bool
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -180,6 +187,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.suppressActorPolicies = options.SuppressActorConfirmationPolicies
 	executor.authElicitation = options.AuthElicitation
 	executor.toolApproval = options.ToolApproval
+	executor.captureResultMetadata = options.CaptureResultMetadata
 	return executor
 }
 
@@ -347,11 +355,22 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		data[openAIFileHookInputKey] = rewrittenArguments
 	}
 	return &tool.Output{
-		Success:    !mcpToolCallIsError(response),
-		Body:       body,
-		Data:       data,
-		LogPreview: mcpLogPreview(body),
+		Success:            !mcpToolCallIsError(response),
+		Body:               body,
+		Data:               data,
+		LogPreview:         mcpLogPreview(body),
+		ToolResultMetadata: e.capturedResultMetadata(response),
 	}, nil
+}
+
+// capturedResultMetadata mirrors Rust #46010: the raw MCP result `_meta` is
+// exposed for the internal executed-tool-call record only when the caller
+// allowed the capture (session analytics enabled and a host-owned apps call).
+func (e *ToolExecutor) capturedResultMetadata(response *MCPToolCallResponse) any {
+	if e == nil || !e.captureResultMetadata || response == nil {
+		return nil
+	}
+	return response.Meta
 }
 
 // maybeRequestCodexAppsAuthElicitation mirrors Rust's

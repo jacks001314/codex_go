@@ -40,7 +40,7 @@ func (d *ToolDispatcher) observeNonDispatchedItem(item *model.AgentItem) {
 // completeDirectCall attaches the prepared direct record to the invocation's own
 // output and releases the pending slot. Fatal errors release the slot without an
 // output, matching Rust's permit drop.
-func (d *ToolDispatcher) completeDirectCall(invocation *tool.Invocation, response *ToolResponseItem) {
+func (d *ToolDispatcher) completeDirectCall(invocation *tool.Invocation, response *ToolResponseItem, resultMetadata any) {
 	if d == nil || d.executedToolCalls == nil || invocation == nil {
 		return
 	}
@@ -51,6 +51,11 @@ func (d *ToolDispatcher) completeDirectCall(invocation *tool.Invocation, respons
 	delete(d.permittedDirectCalls, invocation)
 	d.directCallsMu.Unlock()
 	if call != nil {
+		// Rust #46010 (parallel.rs): a late result's raw `_meta` is attached to
+		// the recorded call before the record reaches the invocation's output.
+		if resultMetadata != nil {
+			call.SetToolResultMetadata(model.NewToolResultMetadata(resultMetadata))
+		}
 		if response != nil {
 			d.executedToolCalls.AttachDirectCallToOutput(response, call, permit)
 		}
@@ -548,6 +553,14 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 				}
 			})
 			invocation.Context["code_mode_nested_tool_completed"] = tool.CodeModeNestedToolCompletedFunc(func(nestedCtx context.Context, nested *tool.Invocation, nestedOutput *tool.Output, nestedErr error, nestedStartedAt, nestedFinishedAt time.Time) {
+				// Rust #46010 (record_accepted_result): a nested code-mode result
+				// records the raw `_meta` the handler exposed, before any lifecycle
+				// reporting or the early return below.
+				if d.executedToolCalls != nil && nested != nil && nestedOutput != nil && nestedErr == nil {
+					if metadata := nestedOutput.ToolResultMetadata; metadata != nil {
+						d.executedToolCalls.RecordToolResultMetadata(nested, metadata)
+					}
+				}
 				if !d.emitCodeModeNestedLifecycle || d.onToolCompleted == nil {
 					return
 				}
@@ -588,7 +601,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		}
 		callErr := toolCallErrorForModel(dispatchErr)
 		if callErr.IsFatal() {
-			d.completeDirectCall(invocation, nil)
+			d.completeDirectCall(invocation, nil, nil)
 			return nil, dispatchErr
 		}
 		handlerExecuted = handlerReached
@@ -651,7 +664,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		FinishedAt:      finishedAt,
 		HandlerExecuted: handlerExecuted,
 	}
-	d.completeDirectCall(invocation, result.Response)
+	d.completeDirectCall(invocation, result.Response, output.ToolResultMetadata)
 	if d.onToolCompleted != nil {
 		d.onToolCompleted(toolCtx, result)
 	}

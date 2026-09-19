@@ -53,7 +53,13 @@ type ToolRegistryOptions struct {
 	// MCPAuthElicitation enables the Codex Apps connector URL elicitation flow
 	// for this turn (Rust maybe_request_codex_apps_auth_elicitation); the caller
 	// gates it on the auth_elicitation feature and the approval policy.
-	MCPAuthElicitation        *mcp.AuthElicitationOptions
+	MCPAuthElicitation *mcp.AuthElicitationOptions
+	// AnalyticsEnabled is the thread's effective analytics collection state
+	// (Rust `analytics_events_client.is_enabled()`); the result-metadata capture
+	// (Rust #46010 `result_metadata_capture_allowed`) needs it and treats an
+	// absent state (nil) as a disabled client. Whether the exposed snapshot is
+	// recorded is decided by the dispatch sites' own recorder state.
+	AnalyticsEnabled          *bool
 	OrchestratorSkillsEnabled *bool
 	SkillProviders            *skillprovider.Registry
 	OpenAIFileRewriter        *mcp.OpenAIFileRewriter
@@ -622,6 +628,19 @@ func mcpServerParallelToolCalls(service *mcp.MCPService, tools []mcp.RuntimeTool
 	return parallelByServer
 }
 
+// mcpResultMetadataCaptureAllowed mirrors Rust #46010's
+// `result_metadata_capture_allowed`: the raw MCP result `_meta` is exposed for
+// the internal executed-tool-call record only when the session's analytics
+// client is enabled and the call belongs to the host-owned apps server. An
+// absent analytics state (nil) is Rust's disabled client and does not enable
+// the capture. Whether the exposed snapshot is actually recorded is a separate
+// check at the dispatch sites, exactly like Rust's recorder-state check.
+func mcpResultMetadataCaptureAllowed(options *ToolRegistryOptions, serverName string) bool {
+	return options != nil &&
+		options.AnalyticsEnabled != nil && *options.AnalyticsEnabled &&
+		mcp.IsCodexAppsMCPServerName(serverName)
+}
+
 func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, tools []mcp.RuntimeToolInfo, exposure tool.Exposure) error {
 	tools = mcp.NormalizeRuntimeToolsForModel(tools)
 	// Rust's per-server opt-in marks every tool from the server as safe for
@@ -630,6 +649,9 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 	parallelByServer := mcpServerParallelToolCalls(options.MCPService, tools)
 	for i := range tools {
 		info := tools[i]
+		// Rust #46010: the raw result metadata is captured only when analytics is
+		// enabled and the call belongs to the host-owned apps server.
+		captureResultMetadata := mcpResultMetadataCaptureAllowed(options, info.ServerName)
 		executor := mcp.NewToolExecutor(&mcp.ToolExecutorOptions{
 			Service:    options.MCPService,
 			ServerName: info.ServerName,
@@ -658,6 +680,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			ToolApproval:                      options.MCPToolApproval,
 			ConfirmationPolicies:              mcpActorConfirmationPolicies(options.ModelConfirmationPolicies),
 			SuppressActorConfirmationPolicies: options.SuppressActorConfirmationPolicies,
+			CaptureResultMetadata:             captureResultMetadata,
 		})
 		spec := executor.Spec()
 		spec.NamespaceDescription = mcp.BoundedMCPNamespaceDescription(info.NamespaceDescription)

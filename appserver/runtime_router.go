@@ -13480,6 +13480,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
 	options.CodexVersion = appServerVersion()
+	// Rust #46010: the host-owned apps result metadata is exposed only when the
+	// session analytics client is enabled; that state gates the MCP executor's
+	// capture, and the dispatcher's recorder decides whether it is kept.
+	options.AnalyticsEnabled = r.analyticsEnabledOptionForThread(threadID)
 	if table, ok := cfg.Values["shell_environment_policy"].(map[string]any); ok {
 		options.Shell.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(table)
 	}
