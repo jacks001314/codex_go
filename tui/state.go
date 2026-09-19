@@ -49,6 +49,12 @@ type Message struct {
 	// (RawReasoningVisibility::Visible) when projecting thread items, so both
 	// variants travel with the entry and the renderer picks one.
 	ReasoningRawText string
+	// TranscriptText is the expanded-transcript variant of a history entry when
+	// it differs from RawText. Raw output (Ctrl+T) renders RawText, which stays
+	// free of transcript-only reasoning; an activity group's expanded transcript
+	// interleaves its reasoning blocks in place (Rust #46565). Empty means the
+	// entry renders RawText, which is the case for every non-group cell.
+	TranscriptText string
 }
 
 // MessageTextElement is a structured byte range inside a user prompt (a mention

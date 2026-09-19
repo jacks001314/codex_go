@@ -1883,114 +1883,6 @@ func commandExecutionItemWithSource(id string, command string, output string, ex
 	return item
 }
 
-func TestModelCompactCommandActivityGroupsSuccessesAndPreservesTranscript(t *testing.T) {
-	state := codextui.NewState(nil)
-	model := NewModel(state, Options{Width: 80, Height: 24})
-	exit0 := 0
-
-	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-1", "printf first", "", nil, "in_progress", "agent"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-1", "printf first", "first\n", &exit0, "completed", "agent"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-2", "printf second", "", nil, "in_progress", "agent"))})
-
-	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "• Ran 1 command · ctrl + t to view transcript") || !strings.Contains(view, "Running printf second") {
-		t.Fatalf("active compact group missing:\n%s", view)
-	}
-	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-2", "printf second", "second\n", &exit0, "completed", "agent"))})
-	view = utils.StripANSI(model.View())
-	if !strings.Contains(view, "• Ran 2 commands · ctrl + t to view transcript") {
-		t.Fatalf("completed compact group missing:\n%s", view)
-	}
-	if strings.Contains(view, "printf second") {
-		t.Fatalf("completed compact group should hide individual commands:\n%s", view)
-	}
-
-	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("message-1", "Done")})
-	model.Update(TurnCompletedMsg{ThreadID: "thread-1"})
-	view = model.View()
-	if !strings.Contains(view, "done ") {
-		t.Fatalf("assistant output after compact group should use the final-message separator:\n%s", view)
-	}
-	if got := countRole(state.Messages, codextui.RoleHistory); got != 2 {
-		t.Fatalf("history count = %d, want compact cell plus separator", got)
-	}
-	if raw := state.Messages[0].RawText; !strings.Contains(raw, "$ printf first") || !strings.Contains(raw, "$ printf second") {
-		t.Fatalf("compact group must preserve the full transcript: %q", raw)
-	}
-}
-
-func TestModelCompactCommandActivityGroupsUnifiedExecStartup(t *testing.T) {
-	state := codextui.NewState(nil)
-	model := NewModel(state, Options{Width: 80, Height: 24})
-	exit0 := 0
-
-	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-agent", "echo agent", "", nil, "in_progress", "agent"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-agent", "echo agent", "agent\n", &exit0, "completed", "agent"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-startup", "echo startup", "", nil, "in_progress", "unifiedExecStartup"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-startup", "echo startup", "startup\n", &exit0, "completed", "unifiedExecStartup"))})
-
-	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "• Ran 2 commands · ctrl + t to view transcript") {
-		t.Fatalf("unified exec startup command not grouped:\n%s", view)
-	}
-	if got := countRole(state.Messages, codextui.RoleHistory); got != 1 {
-		t.Fatalf("history count = %d, want one compact cell", got)
-	}
-}
-
-func TestModelCompactCommandActivityKeepsFailuresVisible(t *testing.T) {
-	state := codextui.NewState(nil)
-	model := NewModel(state, Options{Width: 80, Height: 24})
-	exit0 := 0
-	exit1 := 1
-
-	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-1", "printf first", "", nil, "in_progress", "agent"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-1", "printf first", "first\n", &exit0, "completed", "agent"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-broken", "printf broken", "", nil, "in_progress", "agent"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-broken", "printf broken", "broken\n", &exit1, "failed", "agent"))})
-
-	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "• Ran 1 command · ctrl + t to view transcript") || !strings.Contains(view, "Ran printf broken") {
-		t.Fatalf("failed command should stay visible after the compact group:\n%s", view)
-	}
-	if strings.Contains(view, "Running printf broken") {
-		t.Fatalf("failed command left a stale running cell:\n%s", view)
-	}
-}
-
-func TestModelCompactCommandActivityFlushesForManualShellAndBoundaries(t *testing.T) {
-	state := codextui.NewState(nil)
-	model := NewModel(state, Options{Width: 80, Height: 24})
-	exit0 := 0
-
-	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-1", "printf first", "", nil, "in_progress", "agent"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-1", "printf first", "first\n", &exit0, "completed", "agent"))})
-	if model.compactCommandGroup == nil {
-		t.Fatal("completed groupable command should seed a compact group")
-	}
-	// A manual shell command never joins an inactive compact group.
-	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-manual", "printf manual", "", nil, "in_progress", "userShell"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-manual", "printf manual", "manual\n", &exit0, "completed", "userShell"))})
-	if model.compactCommandGroup != nil {
-		t.Fatal("manual shell command must flush the compact group")
-	}
-	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "You ran printf manual") {
-		t.Fatalf("manual shell command must stay visible:\n%s", view)
-	}
-
-	// A turn boundary flushes a completed compact group.
-	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-2", "printf second", "", nil, "in_progress", "agent"))})
-	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-2", "printf second", "second\n", &exit0, "completed", "agent"))})
-	if model.compactCommandGroup == nil {
-		t.Fatal("completed groupable command should seed a new compact group")
-	}
-	model.applyTurnCompleted(TurnCompletedMsg{ThreadID: "thread-1"})
-	if model.compactCommandGroup != nil {
-		t.Fatal("turn completion must flush the compact group")
-	}
-}
-
 func TestModelRendersMCPToolLifecycleLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})
@@ -8734,5 +8626,88 @@ func TestModelDisplayNameSurfacesLikeRust(t *testing.T) {
 	}
 	if strings.Contains(raw, "gpt-5.6-terra") {
 		t.Fatalf("startup session header leaked the raw model id: %q", raw)
+	}
+}
+
+// Rust #41893/#46487: successful commands render individually instead of a
+// `Ran N commands` summary, and a completed command flushes its cell.
+func TestModelCompletedCommandsRenderIndividuallyLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+	exit0 := 0
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-1", "printf first", "", nil, "in_progress", "agent"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-1", "printf first", "first\n", &exit0, "completed", "agent"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-2", "printf second", "", nil, "in_progress", "agent"))})
+
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "Ran printf first") || !strings.Contains(view, "Running printf second") {
+		t.Fatalf("individual command cells missing:\n%s", view)
+	}
+	if strings.Contains(view, "Ran 1 command") || strings.Contains(view, "Ran 2 commands") {
+		t.Fatalf("commands must not collapse into a compact summary:\n%s", view)
+	}
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-2", "printf second", "second\n", &exit0, "completed", "agent"))})
+	view = utils.StripANSI(model.View())
+	if !strings.Contains(view, "Ran printf second") {
+		t.Fatalf("completed command must stay visible:\n%s", view)
+	}
+	for _, message := range state.Messages {
+		raw := message.RawText
+		if strings.Contains(raw, "$ printf first") && strings.Contains(raw, "$ printf second") {
+			t.Fatalf("commands must not share one history cell: %q", raw)
+		}
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("message-1", "Done")})
+	model.Update(TurnCompletedMsg{ThreadID: "thread-1"})
+	view = model.View()
+	if !strings.Contains(view, "done ") {
+		t.Fatalf("assistant output after the commands should use the final-message separator:\n%s", view)
+	}
+}
+
+// Rust #46487: a failed command keeps its own cell with its failure status.
+func TestModelCommandActivityKeepsFailuresVisible(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+	exit0 := 0
+	exit1 := 1
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-1", "printf first", "", nil, "in_progress", "agent"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-1", "printf first", "first\n", &exit0, "completed", "agent"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-broken", "printf broken", "", nil, "in_progress", "agent"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-broken", "printf broken", "broken\n", &exit1, "failed", "agent"))})
+
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "Ran printf broken") {
+		t.Fatalf("failed command must stay visible:\n%s", view)
+	}
+	if strings.Contains(view, "Running printf broken") {
+		t.Fatalf("failed command left a stale running cell:\n%s", view)
+	}
+}
+
+// A manual shell command renders with the "You ran" title, and a turn boundary
+// keeps whatever was already rendered.
+func TestModelCommandActivityRendersManualShellAndTurnBoundaryLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 80, Height: 24})
+	exit0 := 0
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-1", "printf first", "", nil, "in_progress", "agent"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-1", "printf first", "first\n", &exit0, "completed", "agent"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-manual", "printf manual", "", nil, "in_progress", "userShell"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-manual", "printf manual", "manual\n", &exit0, "completed", "userShell"))})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "You ran printf manual") || !strings.Contains(view, "Ran printf first") {
+		t.Fatalf("manual shell command must stay visible:\n%s", view)
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-2", "printf second", "", nil, "in_progress", "agent"))})
+	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-2", "printf second", "second\n", &exit0, "completed", "agent"))})
+	model.applyTurnCompleted(TurnCompletedMsg{ThreadID: "thread-1"})
+	if view = utils.StripANSI(model.View()); !strings.Contains(view, "Ran printf second") {
+		t.Fatalf("turn completion must keep the rendered command:\n%s", view)
 	}
 }

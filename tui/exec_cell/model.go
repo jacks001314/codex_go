@@ -1,13 +1,12 @@
 package execcell
 
-import "time"
+import (
+	"time"
+
+	"codex_go/tui"
+)
 
 const MaxLiveOutputBytes = 1024 * 1024
-
-// MaxGroupedCommands mirrors Rust's MAX_GROUPED_COMMANDS
-// (codex-rs/tui/src/exec_cell/model.rs): a compact command group flushes once
-// this many completed commands accumulate while inactive.
-const MaxGroupedCommands = 32
 
 // Rust parity: codex-rs/tui/src/exec_cell/model.rs.
 
@@ -58,6 +57,10 @@ type ExecCall struct {
 type ExecCell struct {
 	Calls             []ExecCall
 	AnimationsEnabled bool
+	// Reasoning holds transcript-only reasoning blocks attached while this
+	// exploring group was the active cell (Rust #46565). They render only in
+	// the expanded transcript, never in the compact preview or raw output.
+	Reasoning []tui.ActivityReasoning
 }
 
 func NewExecCell(call ExecCall, animationsEnabled bool) ExecCell {
@@ -74,23 +77,9 @@ func (c ExecCell) WithAddedCall(callID string, command []string, parsed []Parsed
 		StartTime:        &now,
 		InteractionInput: interactionInput,
 	}
-	hasFailedCall := false
-	for _, existing := range c.Calls {
-		if existing.Output != nil && existing.Output.ExitCode != 0 {
-			hasFailedCall = true
-			break
-		}
-	}
-	if (len(c.Calls) >= MaxGroupedCommands && !c.IsActive()) ||
-		(!IsGroupableSource(source) && !c.IsActive()) ||
-		(hasFailedCall && !c.IsActive()) {
-		return ExecCell{}, false
-	}
-	continuesExploration := isExploringCall(call) &&
-		(c.IsExploringCell() || (len(c.Calls) > 0 && c.Calls[len(c.Calls)-1].Duration == nil && isExploringCall(c.Calls[len(c.Calls)-1]))) &&
-		(c.IsActive() || allCallsGroupable(c.Calls))
-	continuesCompactGroup := allCallsCompleteGroupableSuccess(c.Calls)
-	if continuesExploration || continuesCompactGroup {
+	// Rust #41893: only related exploration (adjacent read/list/search commands)
+	// groups into one cell; every other command renders individually.
+	if c.IsExploringCell() && isExploringCall(call) {
 		next := c
 		next.Calls = append(append([]ExecCall(nil), c.Calls...), call)
 		return next, true
@@ -111,18 +100,10 @@ func (c *ExecCell) CompleteCall(callID string, output CommandOutput, duration ti
 	return false
 }
 
+// ShouldFlush reports whether the cell is complete and must not accept more
+// calls. Exploration stays open for adjacent calls, including after a failed
+// read/list/search (Rust #46487).
 func (c ExecCell) ShouldFlush() bool {
-	for _, call := range c.Calls {
-		if !IsGroupableSource(call.Source) || (call.Output != nil && call.Output.ExitCode != 0) {
-			return !c.IsActive()
-		}
-	}
-	if len(c.Calls) >= MaxGroupedCommands {
-		return !c.IsActive()
-	}
-	if allCallsCompleteGroupableSuccess(c.Calls) {
-		return false
-	}
 	return !c.IsExploringCell() && allCallsHaveDuration(c.Calls)
 }
 
@@ -141,30 +122,30 @@ func (c *ExecCell) MarkFailed() {
 	}
 }
 
+// AppendReasoning attaches a transcript-only reasoning block after the calls
+// already grouped, mirroring Rust ExecCell::append_reasoning. Only an exploring
+// cell accepts reasoning; other cells report false so the caller renders the
+// block on its own.
+func (c *ExecCell) AppendReasoning(itemID string, content string, rawContent string) bool {
+	if c == nil || !c.IsExploringCell() {
+		return false
+	}
+	group := tui.ActivityGroup[ExecCall]{Calls: c.Calls, Reasoning: c.Reasoning}
+	if !group.PushReasoning(itemID, content, rawContent) {
+		// The same item is already attached; treat it as accepted so the caller
+		// does not render a duplicate entry.
+		return true
+	}
+	c.Reasoning = group.Reasoning
+	return true
+}
+
 func (c ExecCell) IsExploringCell() bool {
 	if len(c.Calls) == 0 {
 		return false
 	}
 	for _, call := range c.Calls {
 		if !isExploringCall(call) {
-			return false
-		}
-	}
-	return true
-}
-
-func allCallsCompleteGroupableSuccess(calls []ExecCall) bool {
-	for _, call := range calls {
-		if !IsGroupableSource(call.Source) || call.Duration == nil || call.Output == nil || call.Output.ExitCode != 0 {
-			return false
-		}
-	}
-	return true
-}
-
-func allCallsGroupable(calls []ExecCall) bool {
-	for _, call := range calls {
-		if !IsGroupableSource(call.Source) {
 			return false
 		}
 	}
@@ -228,13 +209,8 @@ func (c ExecCall) IsUnifiedExecInteraction() bool {
 	return c.Source == ExecSourceUnifiedExecInteraction
 }
 
-// IsGroupableSource mirrors Rust ExecCell::is_groupable_source: only agent and
-// unified-exec startup commands may accumulate into a compact "Ran N commands"
-// group. Manual shell commands and unified-exec interactions stay visible.
-func IsGroupableSource(source ExecCommandSource) bool {
-	return source == ExecSourceAgent || source == ExecSourceUnifiedExecStartup
-}
-
+// isExploringCall mirrors Rust ExecCell::is_exploring_call: an agent command
+// whose parsed actions are only file reads, listings, or searches.
 func isExploringCall(call ExecCall) bool {
 	if call.Source == ExecSourceUserShell || len(call.Parsed) == 0 {
 		return false

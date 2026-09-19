@@ -593,20 +593,24 @@
             "verifier": "TestRejectObsoletePermissionProfileLikeRust"
         },
         {
-            "id": "tui-compact-command-activity",
+            "id": "tui-command-activity-cells",
             "kind": "shared-fixtures",
             "rustPaths": [
                 "tui/src/exec_cell/model.rs",
                 "tui/src/exec_cell/render.rs",
-                "tui/src/chatwidget/command_lifecycle.rs"
+                "tui/src/chatwidget/tool_lifecycle.rs",
+                "tui/src/history_cell/computer_activity.rs",
+                "tui/src/chatwidget/streaming.rs"
             ],
             "goPaths": [
+                "tui",
                 "tui/exec_cell",
+                "tui/history_cell",
                 "tui/tea"
             ],
             "phase": "P2",
             "status": "complete",
-            "verifier": "TestExecCellCompactGroupGroupsSuccessesAndPreservesTranscript;TestExecCellCompactGroupIncludesUnifiedExecStartup;TestExecCellCompactGroupKeepsFailuresAndManualCommandsVisible;TestExecCellCompactGroupFlushesAtGroupLimit;TestModelCompactCommandActivityGroupsSuccessesAndPreservesTranscript;TestModelCompactCommandActivityGroupsUnifiedExecStartup;TestModelCompactCommandActivityKeepsFailuresVisible;TestModelCompactCommandActivityFlushesForManualShellAndBoundaries"
+            "verifier": "TestExecCellNonExploringCommandsRenderIndividuallyLikeRust;TestExecCellExploringGroupStaysOpenLikeRust;TestModelCompletedCommandsRenderIndividuallyLikeRust;TestModelCommandActivityKeepsFailuresVisible;TestModelCommandActivityRendersManualShellAndTurnBoundaryLikeRust;TestComputerActivityKeepsReasoningInOrderLikeRust"
         },
         {
             "id": "env-noise-auth-token-scrub",

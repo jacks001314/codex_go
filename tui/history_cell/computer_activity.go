@@ -29,6 +29,9 @@ func IsComputerActivityServer(server string) bool {
 // ComputerActivityCell groups adjacent computer calls into one history cell.
 type ComputerActivityCell struct {
 	Calls []McpToolCallCell
+	// Reasoning holds transcript-only reasoning blocks attached while this group
+	// was active (Rust #46565). Only the expanded transcript renders them.
+	Reasoning []tui.ActivityReasoning
 }
 
 // Start appends a call once, keeping replay deduplication.
@@ -269,6 +272,34 @@ func (c ComputerActivityCell) TranscriptLines(width int) []string {
 		lines = append(lines, c.Calls[index].TranscriptLines(width)...)
 	}
 	return lines
+}
+
+// AppendReasoning attaches a transcript-only reasoning block after the calls
+// already grouped (Rust ComputerActivityCell::append_reasoning, #46565). A cell
+// without calls reports false so the caller renders the block on its own.
+func (c *ComputerActivityCell) AppendReasoning(itemID string, content string, rawContent string) bool {
+	if c == nil || len(c.Calls) == 0 {
+		return false
+	}
+	group := tui.ActivityGroup[McpToolCallCell]{Calls: c.Calls, Reasoning: c.Reasoning}
+	if !group.PushReasoning(itemID, content, rawContent) {
+		return true
+	}
+	c.Reasoning = group.Reasoning
+	return true
+}
+
+// TranscriptLinesWithReasoning renders the expanded transcript, interleaving the
+// group's reasoning blocks in transcript order (Rust ComputerActivityCell's
+// transcript_lines in Rich mode, #46565). RawLines stays reasoning-free.
+func (c ComputerActivityCell) TranscriptLinesWithReasoning(width int, renderReasoning func(tui.ActivityReasoning, int) []string) []string {
+	if len(c.Reasoning) == 0 || renderReasoning == nil {
+		return c.TranscriptLines(width)
+	}
+	group := tui.ActivityGroup[McpToolCallCell]{Calls: c.Calls, Reasoning: c.Reasoning}
+	return group.TranscriptLines(width, true, func(_ int, call McpToolCallCell) []string {
+		return call.TranscriptLines(width)
+	}, renderReasoning)
 }
 
 // RawLines renders the untruncated transcript used by raw scrollback mode.

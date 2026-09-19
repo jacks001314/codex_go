@@ -171,7 +171,6 @@ func DefaultApprovalOptions() []ModalOption {
 }
 
 func (m *Model) openApprovalModal(message ApprovalRequestMsg) bubbletea.Cmd {
-	m.flushCompactCommandGroup()
 	body := strings.TrimSpace(message.Body)
 	if strings.TrimSpace(message.Command) != "" {
 		if body != "" {

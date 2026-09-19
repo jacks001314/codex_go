@@ -6,6 +6,7 @@ import (
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	"codex_go/utils"
 )
 
 func cuaItem(id string, title string, status string) *protocol.ThreadItem {
@@ -111,5 +112,80 @@ func TestComputerActivityGroupEndsOnTurnBoundary(t *testing.T) {
 	model.applyItemCompleted(completedCuaItem("cua-2", "Type", map[string]any{"type": "text", "text": "ok"}))
 	if groups := computerActivityMessages(model); len(groups) != 2 {
 		t.Fatalf("computer activity messages = %d, want 2", len(groups))
+	}
+}
+
+// reasoningItem builds the completed reasoning summary item the app server
+// emits for a reasoning summary (Rust #43921/#46565).
+func completedReasoningItem(id string, summary string) *protocol.ThreadItem {
+	return &protocol.ThreadItem{ID: id, Type: "reasoning", Summary: []string{summary}}
+}
+
+func computerActivityMessage(model *Model) *codextui.Message {
+	for index := range model.State.Messages {
+		if strings.Contains(model.State.Messages[index].Text, "Used computer") {
+			return &model.State.Messages[index]
+		}
+	}
+	return nil
+}
+
+// Mirrors Rust #46565's computer-activity snapshot: CUA calls and intervening
+// reasoning share one cell, the reasoning keeps its chronological position in the
+// expanded transcript, and compact/raw output stay reasoning-free.
+func TestComputerActivityKeepsReasoningInOrderLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 120, Height: 40})
+
+	model.applyItemStarted(cuaItem("cua-1", "Inspect page 1", "in_progress"), 0)
+	model.applyItemCompleted(completedReasoningItem("reasoning-1", "Inspecting action 1"))
+	model.applyItemCompleted(completedCuaItem("cua-1", "Inspect page 1", map[string]any{"type": "text", "text": "Full output for 1"}))
+	model.applyItemCompleted(completedReasoningItem("reasoning-2", "Checking action 1"))
+	model.applyItemStarted(cuaItem("cua-2", "Inspect page 2", "in_progress"), 0)
+	model.applyItemCompleted(completedReasoningItem("reasoning-3", "Inspecting action 2"))
+	model.applyItemCompleted(completedCuaItem("cua-2", "Inspect page 2", map[string]any{"type": "text", "text": "Full output for 2"}))
+	model.applyItemCompleted(completedReasoningItem("reasoning-4", "Checking action 2"))
+
+	groups := computerActivityMessages(model)
+	if len(groups) != 1 {
+		t.Fatalf("computer activity messages = %d, want one shared cell:\n%#v", len(groups), groups)
+	}
+	message := computerActivityMessage(model)
+	if message == nil {
+		t.Fatalf("grouped cell missing: %#v", groups)
+	}
+	if !strings.Contains(message.Text, "2 actions") {
+		t.Fatalf("compact summary = %q, want both calls grouped", message.Text)
+	}
+	for _, reasoning := range []string{"Inspecting action 1", "Checking action 1", "Inspecting action 2", "Checking action 2"} {
+		if strings.Contains(message.Text, reasoning) {
+			t.Fatalf("compact preview leaked reasoning %q:\n%s", reasoning, message.Text)
+		}
+		if strings.Contains(message.RawText, reasoning) {
+			t.Fatalf("raw output leaked reasoning %q:\n%s", reasoning, message.RawText)
+		}
+	}
+	if !strings.Contains(message.RawText, "Inspect page 1") || !strings.Contains(message.RawText, "Inspect page 2") {
+		t.Fatalf("raw output must keep both calls:\n%s", message.RawText)
+	}
+	transcript := utils.StripANSI(message.TranscriptText)
+	last := -1
+	for _, want := range []string{"Inspect page 1", "Inspecting action 1", "Checking action 1", "Inspect page 2", "Inspecting action 2", "Checking action 2"} {
+		index := strings.Index(transcript, want)
+		if index < 0 {
+			t.Fatalf("expanded transcript missing %q:\n%s", want, transcript)
+		}
+		if index < last {
+			t.Fatalf("expanded transcript out of order at %q:\n%s", want, transcript)
+		}
+		last = index
+	}
+	if !strings.HasPrefix(strings.TrimSpace(transcript), "\u2022 Called cua_repl.exec") {
+		t.Fatalf("expanded transcript must start with the first call:\n%s", transcript)
+	}
+	for _, message := range state.Messages {
+		if message.TranscriptOnly {
+			t.Fatalf("reasoning must stay inside the activity group, not a standalone entry: %q", message.Text)
+		}
 	}
 }

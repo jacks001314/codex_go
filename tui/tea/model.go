@@ -1216,13 +1216,8 @@ type Model struct {
 	lastTurnError              string
 	needsFinalMessageSeparator bool
 	activeAssistantDeltaItemID string
-	// compactCommandGroup tracks consecutive successful Agent / unified-exec
-	// startup command executions so they render as one compact "Ran N commands"
-	// history cell (Rust #38921). It is reset at interaction boundaries and
-	// whenever a non-groupable or failed command breaks the run.
-	compactCommandGroup *compactCommandGroupState
-	mcpStartup          chatwidget.McpStartupRoundState
-	mcpStartupHeader    string
+	mcpStartup                 chatwidget.McpStartupRoundState
+	mcpStartupHeader           string
 	// workingStatusHeader is the live reasoning summary line shown as the
 	// working indicator's header (Rust #43921).
 	workingStatusHeader string
@@ -1689,6 +1684,7 @@ type transcriptMessageKey struct {
 	role           codextui.MessageRole
 	text           string
 	rawText        string
+	transcriptText string
 	width          int
 	themeID        string
 	raw            bool
@@ -1721,14 +1717,6 @@ type toolCallDisplayState struct {
 	StartedAt    time.Time
 	Completed    bool
 	PlanUpdate   bool
-}
-
-// compactCommandGroupState is the live accumulation state for a compact
-// "Ran N commands" history cell. The cell is re-rendered at MessageIndex as
-// commands start and complete (Rust #38921 chatwidget command lifecycle).
-type compactCommandGroupState struct {
-	MessageIndex int
-	Cell         execcell.ExecCell
 }
 
 type mcpToolCallDisplayState struct {
@@ -3177,6 +3165,12 @@ func (m *Model) commitReasoningSummaryBlock(itemID string, item *protocol.Thread
 	if content == "" && rawContent == "" {
 		return
 	}
+	// Rust streaming.rs: while an activity group is the active cell it keeps the
+	// reasoning in transcript order; otherwise the block becomes its own
+	// transcript-only history cell.
+	if m.appendReasoningToActiveActivityGroup(itemID, content, rawContent) {
+		return
+	}
 	message := codextui.Message{
 		Role:             codextui.RoleHistory,
 		Text:             content,
@@ -3192,6 +3186,61 @@ func (m *Model) commitReasoningSummaryBlock(itemID string, item *protocol.Thread
 	}
 	m.State.Messages = append(m.State.Messages, message)
 	m.State.BumpMessagesRevision()
+}
+
+// appendReasoningToActiveActivityGroup attaches a completed reasoning block to
+// the active activity group, mirroring Rust's
+// `transcript.active_cell.append_reasoning(cell)` (#46565). It reports whether a
+// group accepted the block; otherwise the caller commits it as its own
+// transcript-only entry.
+func (m *Model) appendReasoningToActiveActivityGroup(itemID string, content string, rawContent string) bool {
+	if m == nil {
+		return false
+	}
+	if group := m.computerActivityGroup; group != nil && m.computerActivityMessageIndex >= 0 {
+		if group.AppendReasoning(itemID, content, rawContent) {
+			m.rerenderComputerActivityGroup()
+			return true
+		}
+	}
+	return false
+}
+
+// renderActivityReasoning renders one reasoning block attached to an activity
+// group, matching the transcript rendering of a standalone reasoning entry.
+func (m *Model) renderActivityReasoning(reasoning codextui.ActivityReasoning, width int) []string {
+	if m == nil {
+		return reasoningBlockLines(reasoning.Content, reasoning.RawContent, width, "", "", false)
+	}
+	return reasoningBlockLines(reasoning.Content, reasoning.RawContent, width, m.activeTUITheme(), m.sessionCWD, m.showRawReasoning)
+}
+
+// transcriptWidth returns the render width shared by the group re-renders.
+func (m *Model) transcriptWidth() int {
+	width := 0
+	if m != nil {
+		width = m.width
+	}
+	if width < 20 {
+		width = 20
+	}
+	return width
+}
+
+// rerenderComputerActivityGroup re-renders the active computer-activity group's
+// message, including any attached reasoning in the expanded transcript.
+func (m *Model) rerenderComputerActivityGroup() {
+	if m == nil || m.computerActivityGroup == nil || m.computerActivityMessageIndex < 0 {
+		return
+	}
+	width := m.transcriptWidth()
+	cell := *m.computerActivityGroup
+	m.computerActivityMessageIndex = m.upsertHistoryMessageWithTranscript(
+		m.computerActivityMessageIndex,
+		cell.DisplayLines(width),
+		cell.RawLines(),
+		cell.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
+	)
 }
 
 // reasoningContentParts returns an item's raw reasoning content parts, the half
@@ -3537,7 +3586,6 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
 	m.skillPopup = skillPopupState{}
-	m.flushCompactCommandGroup()
 	if input == "" && len(m.attachments) == 0 {
 		m.composerMentionBindings = nil
 		return nil
@@ -3572,7 +3620,6 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 	if m == nil {
 		return nil, false
 	}
-	m.flushCompactCommandGroup()
 	input := strings.TrimSpace(m.composer.Value())
 	if input == "" {
 		return nil, false
@@ -4265,7 +4312,6 @@ func (m *Model) shouldSubmitOnTab() bool {
 }
 
 func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
-	m.flushCompactCommandGroup()
 	m.flushComputerActivityGroup()
 	m.deferPendingSteers()
 	if message.Err != nil {
@@ -4326,7 +4372,6 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 	if m == nil || !m.isTaskRunning() {
 		return
 	}
-	m.flushCompactCommandGroup()
 	m.flushComputerActivityGroup()
 	m.deferPendingSteers()
 	m.setStatus("idle")
@@ -4487,14 +4532,9 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 		return
 	}
 	// Rust #43576: any item other than a CUA call ends the computer-activity
-	// group.
-	if !isComputerActivityItem(item) {
+	// group. Intervening transcript-only reasoning shares the cell (Rust #46565).
+	if !isComputerActivityItem(item) && !isTranscriptOnlyReasoningItem(item) {
 		m.flushComputerActivityGroup()
-	}
-	if item.Type != "command_execution" {
-		// A new non-command item is an interaction boundary for compact command
-		// groups (Rust #38921 chatwidget add_to_history / tool_requests).
-		m.flushCompactCommandGroup()
 	}
 	switch item.Type {
 	case "command_execution":
@@ -4540,12 +4580,9 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	}
 	var countdownCmd bubbletea.Cmd
 	// Rust #43576: any item other than a CUA call ends the computer-activity
-	// group.
-	if !isComputerActivityItem(item) {
+	// group. Intervening transcript-only reasoning shares the cell (Rust #46565).
+	if !isComputerActivityItem(item) && !isTranscriptOnlyReasoningItem(item) {
 		m.flushComputerActivityGroup()
-	}
-	if item.Type != "command_execution" {
-		m.flushCompactCommandGroup()
 	}
 	switch item.Type {
 	case "user_message", "userMessage":
@@ -4963,64 +5000,11 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 		state.Completed = true
 	}
 
-	// Compact command grouping (Rust #38921): consecutive successful Agent and
-	// unified-exec startup commands accumulate into one "Ran N commands" cell.
-	// A running command joins the active group; a completion completes its call
-	// in the group; anything else breaks the group and renders on its own.
-	if m.compactCommandGroup != nil {
-		group := *m.compactCommandGroup
-		handled := false
-		if inProgress {
-			next, ok := group.Cell.WithAddedCall(call.CallID, call.Command, call.Parsed, call.Source, call.InteractionInput)
-			if ok {
-				handled = true
-				m.compactCommandGroup.Cell = next
-				m.compactCommandGroup.MessageIndex = m.upsertHistoryMessage(group.MessageIndex, next.DisplayLinesWithTheme(width, m.activeTUITheme()), next.RawLines())
-			}
-		} else if call.Output != nil {
-			duration := time.Duration(0)
-			if call.Duration != nil {
-				duration = *call.Duration
-			}
-			if group.Cell.CompleteCall(call.CallID, *call.Output, duration) {
-				handled = true
-				m.compactCommandGroup.MessageIndex = m.upsertHistoryMessage(group.MessageIndex, group.Cell.DisplayLinesWithTheme(width, m.activeTUITheme()), group.Cell.RawLines())
-				if group.Cell.ShouldFlush() {
-					m.flushCompactCommandGroup()
-				} else {
-					m.compactCommandGroup.Cell = group.Cell
-				}
-			}
-		}
-		if handled {
-			state.Completed = true
-			return
-		}
-		m.flushCompactCommandGroup()
-	}
-
 	cell := execcell.NewExecCell(call, m.animationsEnabled)
 	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
-	if !inProgress && execcell.IsGroupableSource(call.Source) && call.Output != nil && call.Output.ExitCode == 0 {
-		// Seed a compact group with the completed command so the next groupable
-		// command joins it (Rust keeps the completed compact cell un-flushed).
-		m.compactCommandGroup = &compactCommandGroupState{MessageIndex: state.MessageIndex, Cell: cell}
-	}
 	if state.Completed {
 		m.Transcript.needsFinalMessageSeparator = true
 	}
-}
-
-// flushCompactCommandGroup ends a compact command group. The rendered history
-// cell stays in place; only the live accumulation state is reset so subsequent
-// commands start their own cell. Groups with running commands are preserved
-// (Rust flush_completed_command_activity only flushes inactive exec cells).
-func (m *Model) flushCompactCommandGroup() {
-	if m == nil || m.compactCommandGroup == nil || m.compactCommandGroup.Cell.IsActive() {
-		return
-	}
-	m.compactCommandGroup = nil
-	m.Transcript.needsFinalMessageSeparator = true
 }
 
 // flushComputerActivityGroup ends a computer-activity group (Rust #43576): the
@@ -5037,6 +5021,17 @@ func (m *Model) flushComputerActivityGroup() {
 
 // isComputerActivityItem reports whether an item is a CUA MCP call, the only
 // items that join a computer-activity group (Rust #43576).
+// isTranscriptOnlyReasoningItem reports whether an item is a completed reasoning
+// summary. It never renders as a visible history item on its own, so it does not
+// end an activity group (Rust #46565: CUA calls and intervening reasoning share
+// one computer-activity cell).
+func isTranscriptOnlyReasoningItem(item *protocol.ThreadItem) bool {
+	if item == nil {
+		return false
+	}
+	return normalizeThreadItemProtocolType(item.Type) == "reasoning"
+}
+
 func isComputerActivityItem(item *protocol.ThreadItem) bool {
 	if item == nil {
 		return false
@@ -5078,10 +5073,11 @@ func (m *Model) appendComputerActivityCall(item *protocol.ThreadItem) {
 	if width < 20 {
 		width = 20
 	}
-	m.computerActivityMessageIndex = m.upsertHistoryMessage(
+	m.computerActivityMessageIndex = m.upsertHistoryMessageWithTranscript(
 		m.computerActivityMessageIndex,
 		m.computerActivityGroup.DisplayLines(width),
 		m.computerActivityGroup.RawLines(),
+		m.computerActivityGroup.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
 	)
 }
 
@@ -5460,10 +5456,11 @@ func (m *Model) markActiveToolCallsFailed(message string) {
 			if width < 20 {
 				width = 20
 			}
-			m.computerActivityMessageIndex = m.upsertHistoryMessage(
+			m.computerActivityMessageIndex = m.upsertHistoryMessageWithTranscript(
 				m.computerActivityMessageIndex,
 				m.computerActivityGroup.DisplayLines(width),
 				m.computerActivityGroup.RawLines(),
+				m.computerActivityGroup.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
 			)
 		}
 		m.flushComputerActivityGroup()
@@ -5525,6 +5522,13 @@ func (m *Model) renderToolCallFailure(state *toolCallDisplayState, message strin
 }
 
 func (m *Model) upsertHistoryMessage(index int, displayLines []string, rawLines []string) int {
+	return m.upsertHistoryMessageWithTranscript(index, displayLines, rawLines, nil)
+}
+
+// upsertHistoryMessageWithTranscript records a history entry whose expanded
+// transcript differs from its raw output (an activity group with interleaved
+// reasoning, Rust #46565). An empty transcript falls back to the raw text.
+func (m *Model) upsertHistoryMessageWithTranscript(index int, displayLines []string, rawLines []string, transcriptLines []string) int {
 	if m == nil || m.State == nil {
 		return -1
 	}
@@ -5533,7 +5537,11 @@ func (m *Model) upsertHistoryMessage(index int, displayLines []string, rawLines 
 		return index
 	}
 	raw := strings.TrimRight(strings.Join(rawLines, "\n"), "\r\n")
-	message := codextui.Message{Role: codextui.RoleHistory, Text: display, RawText: raw}
+	transcript := strings.TrimRight(strings.Join(transcriptLines, "\n"), "\r\n")
+	if strings.TrimSpace(transcript) == "" || transcript == raw {
+		transcript = ""
+	}
+	message := codextui.Message{Role: codextui.RoleHistory, Text: display, RawText: raw, TranscriptText: transcript}
 	if index >= 0 && index < len(m.State.Messages) && m.State.Messages[index].Role == codextui.RoleHistory {
 		m.State.Messages[index] = message
 		m.State.BumpMessagesRevision()
@@ -6432,7 +6440,6 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	if invocation == nil {
 		return nil
 	}
-	m.flushCompactCommandGroup()
 	// Rust #43055: any command other than /copy returns /copy to the latest
 	// assistant response.
 	if invocation.Command != codextui.CommandCopy {
@@ -7753,6 +7760,7 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 			role:           message.Role,
 			text:           message.Text,
 			rawText:        message.RawText,
+			transcriptText: message.TranscriptText,
 			width:          width,
 			themeID:        themeID,
 			raw:            raw,
@@ -7807,7 +7815,13 @@ func transcriptMessageDisplayLines(message codextui.Message, width int, themeID 
 		return reasoningBlockTranscriptLines(message, width, themeID, cwd, showRawReasoning)
 	}
 	if expandedHistory && message.Role == codextui.RoleHistory {
-		text := strings.TrimRight(message.RawText, "\r\n")
+		// A group entry carries an expanded-transcript variant with its reasoning
+		// interleaved; RawText stays reasoning-free for the raw-output view.
+		text := message.TranscriptText
+		if strings.TrimSpace(text) == "" {
+			text = message.RawText
+		}
+		text = strings.TrimRight(text, "\r\n")
 		if strings.TrimSpace(text) == "" {
 			text = strings.TrimRight(message.Text, "\r\n")
 		}
@@ -7823,14 +7837,19 @@ func transcriptMessageDisplayLines(message codextui.Message, width int, themeID 
 // The raw chain-of-thought variant replaces the summary when the session
 // enables raw reasoning (Rust RawReasoningVisibility::Visible).
 func reasoningBlockTranscriptLines(message codextui.Message, width int, themeID string, cwd string, showRawReasoning bool) []string {
-	content := strings.TrimSpace(message.Text)
+	return reasoningBlockLines(message.Text, message.ReasoningRawText, width, themeID, cwd, showRawReasoning)
+}
+
+// reasoningBlockLines renders a reasoning block's expanded-transcript lines from
+// its summary and raw chain-of-thought variants. The same rendering serves a
+// reasoning block attached to an activity group (Rust #46565), where the cell
+// renders the block through its own `transcript_lines`.
+func reasoningBlockLines(content string, rawContent string, width int, themeID string, cwd string, showRawReasoning bool) []string {
+	content = strings.TrimSpace(content)
 	if showRawReasoning {
-		if raw := strings.TrimSpace(message.ReasoningRawText); raw != "" {
+		if raw := strings.TrimSpace(rawContent); raw != "" {
 			content = raw
 		}
-	}
-	if content == "" {
-		content = strings.TrimSpace(message.RawText)
 	}
 	if content == "" {
 		return nil
