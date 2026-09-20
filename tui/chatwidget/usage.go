@@ -8,9 +8,11 @@ import (
 )
 
 const (
-	UsageMenuViewID       = "usage-menu"
-	RateLimitResetViewID  = "rate-limit-reset"
-	standardPopupHintLine = "Enter select | Esc close"
+	UsageMenuViewID      = "usage-menu"
+	RateLimitResetViewID = "rate-limit-reset"
+	// standardPopupHintLine is the shared popup hint (Rust's
+	// popup_consts::standard_popup_hint_line, with the compact key labels).
+	standardPopupHintLine = "Press enter to confirm or esc to go back"
 )
 
 type UsageMenuAction string

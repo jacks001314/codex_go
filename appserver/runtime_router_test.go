@@ -17016,6 +17016,9 @@ func TestRuntimeRouterPreTurnCompactFailurePreservesPromptLikeRust(t *testing.T)
 		DefaultCWD:   cwd,
 	})
 	router.SetNotificationSink(sink)
+	// The router keeps background workers alive; close it before the test's TempDir
+	// cleanup so a late write cannot race the removal.
+	defer router.Close()
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD:    cwd,

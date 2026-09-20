@@ -237,7 +237,8 @@ func TestMentionRenderFileNameSplitMatchesRust(t *testing.T) {
 
 func TestMentionFooterMatchesRustTextAndWidth(t *testing.T) {
 	line := RenderFooter(80, SearchModeResults)
-	if !strings.Contains(line, "Enter insert") || !strings.Contains(line, "\u00b7") || !strings.Contains(line, "[All Results]") {
+	// Rust's mentions footer renders the compact key labels (#46680).
+	if !strings.Contains(line, "enter/tab insert") || !strings.Contains(line, "\u00b7") || !strings.Contains(line, "[All Results]") {
 		t.Fatalf("footer line = %q", line)
 	}
 	if width := codextui.DisplayWidth(line); width > 80 {

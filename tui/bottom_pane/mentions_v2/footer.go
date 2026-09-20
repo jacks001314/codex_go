@@ -14,7 +14,9 @@ type Footer struct {
 }
 
 func FooterHintLine() string {
-	return "Enter insert \u00b7 Esc close \u00b7 Left/Right switch search modes"
+	// Rust's mentions_v2 footer joins each key group with `/` and renders the
+	// compact labels: "enter/tab insert · esc close · ↑/↓ select · ←/→ filter".
+	return "enter/tab insert \u00b7 esc close \u00b7 \u2191/\u2193 select \u00b7 \u2190/\u2192 filter"
 }
 
 func SearchModeIndicatorLine(active SearchMode) string {

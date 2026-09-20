@@ -1388,7 +1388,9 @@ func MarketplaceRemoveConfirmationView(marketplaceName string, marketplaceDispla
 		ViewID:      PluginsSelectionViewID,
 		Title:       "Plugins",
 		HeaderLines: []string{"Remove " + strings.TrimSpace(marketplaceDisplayName) + " marketplace?", "This removes the configured marketplace from Codex."},
-		FooterHint:  "Enter select" + pluginSummarySeparator + "esc close",
+		// Rust's marketplace_remove_confirmation_popup_params builds the hint from
+		// the Enter/Esc labels (#46680 renders them compact).
+		FooterHint:  "enter select" + pluginSummarySeparator + "esc close",
 		AllowCancel: true,
 		Items: []SelectionItem{
 			{
@@ -1466,7 +1468,8 @@ func PluginDetailErrorPopupView(message string, canBack bool) SelectionView {
 }
 
 func PluginDetailHintLine() string {
-	return "Press esc to close."
+	// Rust's plugin_detail_hint_line: the compact esc label only.
+	return "esc close"
 }
 
 func InstalledPluginCountLine(plugins []pluginapi.PluginSummary) string {
