@@ -22,13 +22,18 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	// Re-pinned to upstream 4abcb8d1 (the #46680 contrast/keyboard-hint/picker
-	// lane and its #46691/#46692/#46694/#46695/#46697/#46708/#46709/#46710
-	// follow-ons): the picker/transcript work added 62 snapshots and retired
-	// three, on top of the local daemon alpha/source version mismatch snapshots
-	// pinned at a5290028 (#46673).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1239 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1239", got)
+	// Re-pinned to upstream 5c5308fc (the interactive-transcript lane:
+	// #46711/#46719/#46720/#46721/#46722/#46731/#46732/#46733/#46734/#46739/
+	// #46749/#46750/#46751/#46752): the transcript-viewer, warnings-viewer and
+	// empty-state-animation work added 46 snapshots net - the owned-transcript
+	// browsing/search/selection set, the warnings page, the startup-draft
+	// layout, the fresh-thread animation, and the animated welcome logo, less
+	// the seven transcript-overlay snapshots that moved into
+	// tui/src/pager_overlay/snapshots and the two startup-warning summaries
+	// that the warnings viewer replaced - on top of the #46680 picker lane
+	// pinned at 4abcb8d1.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1285 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1285", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -82,8 +87,11 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path: "tui/src/app/snapshots",
-			// #46579 added the agents-overview recent-session snapshot.
-			Files:    43,
+			// #46733/#46739/#46751/#46752 added the owned-transcript browsing,
+			// prompt-navigation, slash-picker, composer-gap and warnings-page
+			// snapshots plus the fresh-thread animation and retained revert
+			// history.
+			Files:    54,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -91,20 +99,26 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/app/snapshots/codex_tui__app__history_ui__tests__desktop_thread_opened_history.snap",
 				"tui/src/app/snapshots/codex_tui__app__tests__required_stream_reflow_during_capped_initial_replay.snap",
 				"tui/src/app/snapshots/codex_tui__app__agents_overview__tests__overview_worktree_creation_busy_state.snap",
+				"tui/src/app/snapshots/codex_tui__app__owned_transcript__tests__browsing__browsing_footer.snap",
+				"tui/src/app/snapshots/codex_tui__app__owned_transcript__tests__prompt_navigation.snap",
+				"tui/src/app/snapshots/codex_tui__app__warnings_tests__warnings_page.snap",
+				"tui/src/app/snapshots/codex_tui__app__owned_transcript__empty_state_animation_tests__fresh_thread_with_draft.snap",
 			},
 		},
 		{
 			Path: "tui/src/app/tests/snapshots",
 			// #46566 added the unavailable-thread local-command snapshot;
-			// #46691 added the two running-task exit pickers.
-			Files:    64,
+			// #46691 added the two running-task exit pickers; #46751 moved the
+			// two startup-warning summaries into the warnings-viewer snapshots.
+			Files:    60,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
 			Required: []string{
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__model_catalog__model_migration_prompt_shows_for_hidden_model.snap",
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_task_defaults_tests__command_center_retained_worktree_error.snap",
-				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_exit_tests__running_task_exit_picker_40.snap",
+				"tui/src/app/tests/snapshots/codex_tui__app__tests__transcript_composer__transcript_close_restores_inline_draft.snap",
+				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_exit_tests__remote_disconnect_exit.snap",
 			},
 		},
 		{
@@ -120,14 +134,19 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/src/bottom_pane/chat_composer/snapshots",
-			Files:    17,
+			Path: "tui/src/bottom_pane/chat_composer/snapshots",
+			// #46734/#46749/#46751 added the transcript find/copy footers, the
+			// mention menu above history, the status-surface layouts and the
+			// warning-notice styles.
+			Files:    26,
 			Owner:    "tui/bottom_pane/chat_composer",
 			Focus:    "draft and voice composer layout snapshots",
 			Priority: []string{"composer"},
 			Required: []string{
 				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__snapshot_tests__draft_composer.snap",
 				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__snapshot_tests__voice_composer.snap",
+				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__footer_state__tests__transcript_find_copy_footer.snap",
+				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__warning_notice__tests__warning_notice_styles.snap",
 			},
 		},
 		{
@@ -143,12 +162,10 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path: "tui/src/bottom_pane/snapshots",
-			// #46680 added the picker browser layouts and the filled-tab windows;
-			// #46691-#46710 added the shared picker presentation, description
-			// column visibility, skill-popup category tags, file-search long
-			// path, custom-prompt picker, hooks-browser compact and
-			// wrap-boundary snapshots, and retired the fixed-scroll one.
-			Files:    256,
+			// #46680-#46710 added the shared picker presentation and filled-tab
+			// snapshots; #46734/#46749/#46751 added the clipped mention popup,
+			// the customized shortcut overlays and the narrow warnings view.
+			Files:    260,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -165,6 +182,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__selection_tabs__tests__filled_tabs_truncate_unicode_without_hiding_active_tab.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__status_line_style__tests__light_status_line_corrects_pale_custom_theme_colors.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__multi_select_picker__tests__picker_appearance_renders_checkboxes_preview_and_overflow.snap",
+				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__warnings_view__tests__warnings_narrow.snap",
+				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__shortcut_overlay__tests__shortcut_overlay_customized_wsl.snap",
 			},
 		},
 		{
@@ -238,8 +257,10 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		{
 			Path: "tui/src/chatwidget/snapshots",
 			// #46695/#46697 added the clipped full-access confirmation and the
-			// two Windows sandbox picker fallbacks.
-			Files:    307,
+			// two Windows sandbox picker fallbacks; #46751 replaced the
+			// warnings-summary presentation and #46752 added the tmux
+			// pets-unavailable notice.
+			Files:    306,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -252,8 +273,10 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		{
 			Path: "tui/src/chatwidget/tests/snapshots",
 			// #46574/#46565 added the question-notification and activity-group
-			// ordering snapshots; #46709 added the compact-exploration one.
-			Files:    54,
+			// ordering snapshots; #46711/#46731 added the history-projection and
+			// dynamic-activity ones; #46732/#46734 added the transcript-copy
+			// outcomes and the completion-only replay exploration group.
+			Files:    63,
 			Owner:    "tui/chatwidget",
 			Focus:    "chatwidget approval request modal, async question reply, and history snapshots",
 			Priority: []string{"approval", "history"},
@@ -261,6 +284,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/chatwidget/tests/snapshots/codex_tui__chatwidget__tests__approval_requests__exec_approval_modal_exec.snap",
 				"tui/src/chatwidget/tests/snapshots/codex_tui__chatwidget__tests__approval_requests__exec_approval_history_decision_approved_short.snap",
 				"tui/src/chatwidget/tests/snapshots/codex_tui__chatwidget__tests__exec_flow__compact_exploration_with_failures.snap",
+				"tui/src/chatwidget/tests/snapshots/codex_tui__chatwidget__tests__history_projection__snapshot_formatter_reasoning_matches_compact_and_detailed_replay.snap",
+				"tui/src/chatwidget/tests/snapshots/codex_tui__chatwidget__tests__dynamic_activity_tests__interrupted_dynamic_activity.snap",
 			},
 		},
 		{
@@ -285,13 +310,15 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/src/exec_cell/snapshots",
-			Files:    1,
+			Path: "tui/src/exec_cell/snapshots",
+			// #46711 added the grouped-history transcript presentation.
+			Files:    2,
 			Owner:    "tui/exec_cell",
 			Focus:    "bounded live command output preview and final transcript rendering",
 			Priority: []string{"history-cell", "unified-exec"},
 			Required: []string{
 				"tui/src/exec_cell/snapshots/codex_tui__exec_cell__render__tests__truncated_live_output_preview_and_transcript.snap",
+				"tui/src/exec_cell/snapshots/codex_tui__exec_cell__transcript__tests__raw_grouped_history_retains_terminal_input_and_omits_reasoning.snap",
 			},
 		},
 		{
@@ -340,14 +367,30 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path: "tui/src/onboarding/snapshots",
-			// #46695 added the four restricted/long-path trust-directory pickers.
-			Files:    10,
+			// #46695 added the four restricted/long-path trust-directory pickers;
+			// #46752 added the animated welcome logo at 160x48.
+			Files:    11,
 			Owner:    "tui/onboarding",
 			Focus:    "trust-directory onboarding states",
 			Priority: []string{"onboarding"},
 			Required: []string{
 				"tui/src/onboarding/snapshots/codex_tui__onboarding__trust_directory__tests__renders_snapshot_for_git_repo.snap",
 				"tui/src/onboarding/snapshots/codex_tui__onboarding__trust_directory__tests__folder_picker_restricted_40x24.snap",
+				"tui/src/onboarding/snapshots/codex_tui__onboarding__welcome__tests__welcome_logo_160x48.snap",
+			},
+		},
+		{
+			Path: "tui/src/pager_overlay/snapshots",
+			// #46719 moved the transcript-overlay snapshots next to the module
+			// it extracted them from; #46721 added the non-macOS variant.
+			Files:    3,
+			Owner:    "tui/pager_overlay",
+			Focus:    "paginated transcript overlay presentation and its non-macOS variant",
+			Priority: []string{"history", "app"},
+			Required: []string{
+				"tui/src/pager_overlay/snapshots/codex_tui__pager_overlay__transcript_tests__transcript_overlay_paginated_history_states.snap",
+				"tui/src/pager_overlay/snapshots/codex_tui__pager_overlay__transcript_tests__transcript_overlay_completed_stream.snap",
+				"tui/src/pager_overlay/snapshots/codex_tui__pager_overlay__transcript_tests__transcript_overlay_paginated_history_states_non_macos.snap",
 			},
 		},
 		{
@@ -362,12 +405,12 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path: "tui/src/snapshots",
-			// #46680 added the diff syntax colors over a painted background;
-			// #46691-#46697 added the cwd/model/oss/update pickers, the
-			// startup-hooks picker progress, the compact resume-picker color
-			// snapshots and the tool-output preview snapshots, and retired the
-			// syntax-highlighted insert wrap and the thread-color picker one.
-			Files:    195,
+			// #46680-#46710 added the picker and pager-overlay snapshots;
+			// #46719/#46721 moved the seven transcript-overlay ones into
+			// tui/src/pager_overlay/snapshots, and #46733/#46750 added the
+			// owned startup draft layout and the wheel/selection autoscroll
+			// guard.
+			Files:    190,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
@@ -378,6 +421,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/snapshots/codex_tui__diff_render__tests__syntax_colors_follow_the_actual_diff_background.snap",
 				"tui/src/snapshots/codex_tui__resume_picker__color_tests__compact_picker_keeps_metadata_and_labeled_primary_actions.snap",
 				"tui/src/snapshots/codex_tui__tool_output__tests__preview_caps_wrapped_output_and_counts_hidden_logical_lines.snap",
+				"tui/src/snapshots/codex_tui__startup_draft__layout__tests__owned_startup_layout.snap",
+				"tui/src/snapshots/codex_tui__transcript_view__tests__wheel_stops_selection_autoscroll.snap",
 			},
 		},
 		{
@@ -390,6 +435,22 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			Required: []string{
 				"tui/src/thread_transcript/snapshots/codex_tui__thread_transcript__tools__tests__completed_tool_presentations.snap",
 				"tui/src/thread_transcript/snapshots/codex_tui__thread_transcript__tools__tests__agent_tool_fallbacks_preserve_status_without_duplicating_v2_activity.snap",
+			},
+		},
+		{
+			Path: "tui/src/transcript_view/snapshots",
+			// #46720-#46739 added the interactive transcript view: layout and
+			// text helpers, follow control, prompt header, search,
+			// selection hints, composer gap, and the compact/detailed copy
+			// presentations.
+			Files:    18,
+			Owner:    "tui/transcript_view",
+			Focus:    "interactive transcript viewport: layout cache, text/tab rendering, prompt header, search, selection hints, and copy feedback",
+			Priority: []string{"history", "app", "composer"},
+			Required: []string{
+				"tui/src/transcript_view/snapshots/codex_tui__transcript_view__footer__tests__compact_navigation_hints.snap",
+				"tui/src/transcript_view/snapshots/codex_tui__transcript_view__text__tests__compact_command_copy.snap",
+				"tui/src/transcript_view/snapshots/codex_tui__transcript_view__search__tests__selection_owns_find_highlight.snap",
 			},
 		},
 		{
