@@ -83,38 +83,50 @@ func TestMeasureGenericRowsHeightEmptyPlaceholderMatchesRust(t *testing.T) {
 	}
 }
 
-func TestGenericRowsStackDescriptionsWhenNarrowMatchesRust(t *testing.T) {
-	layout := NewStackBelowWhenNarrowDescriptionLayout(24)
+// Mirrors Rust's narrow_description_columns_hide_without_stacking (#46691): a
+// picker with HideWhenNarrow drops the description column instead of stacking it
+// below the name, so every row still occupies one line.
+func TestGenericRowsHideNarrowDescriptionColumnsWithoutStacking(t *testing.T) {
+	layout := NewHideWhenNarrowDescriptionLayout(24)
 	rows := []GenericDisplayRow{
 		{NamePrefix: "› 1. ", Name: "Replace binding", Description: "Capture one key and replace `ctrl-t`."},
 		{NamePrefix: "  –  ", Name: "Remove custom binding", DisabledReason: "No custom root override to remove.", IsDisabled: true},
 	}
+	config := NewColumnWidthConfig(ColumnWidthAutoAllRows, nil).WithDescriptionLayout(layout)
 
-	narrow := RenderGenericRowsWithDescriptionLayout(rows, ScrollState{}, 8, "", 48, NewColumnWidthConfig(ColumnWidthAutoAllRows, nil), layout)
-	wantNarrow := []string{
-		"› 1. Replace binding",
-		"     Capture one key and replace `ctrl-t`.",
-		"  –  Remove custom binding (disabled)",
-		"     No custom root override to remove.",
-	}
-	if !reflect.DeepEqual(narrow, wantNarrow) {
-		t.Fatalf("narrow responsive rows = %#v, want %#v", narrow, wantNarrow)
+	for _, width := range []int{48, 49} {
+		if got := MeasureGenericRowsHeight(rows, ScrollState{}, 2, width, config); got != 2 {
+			t.Fatalf("measured height at %d = %d, want 2", width, got)
+		}
+		rendered := RenderGenericRowsWithDescriptionLayout(rows, ScrollState{}, 2, "", width, config, layout)
+		if len(rendered) != 2 {
+			t.Fatalf("narrow rows at %d = %#v", width, rendered)
+		}
+		for _, line := range rendered {
+			if strings.Contains(line, "Capture one key") || strings.Contains(line, "No custom root override") {
+				t.Fatalf("description column not hidden at width %d: %#v", width, rendered)
+			}
+		}
+		if !strings.Contains(rendered[0], "Replace binding") || !strings.Contains(rendered[1], "Remove custom binding") {
+			t.Fatalf("names missing at width %d: %#v", width, rendered)
+		}
 	}
 
-	wide := RenderGenericRowsWithDescriptionLayout(rows, ScrollState{}, 8, "", 96, NewColumnWidthConfig(ColumnWidthAutoAllRows, nil), layout)
+	// The description column reappears once the remaining width clears the
+	// minimum, with the disabled reason rendered alone (Rust's combined_description).
+	wide := RenderGenericRowsWithDescriptionLayout(rows, ScrollState{}, 2, "", 80, config, layout)
 	if len(wide) != 2 || !strings.Contains(wide[0], "Replace binding") || !strings.Contains(wide[0], "Capture one key") {
 		t.Fatalf("wide responsive rows = %#v", wide)
 	}
 	if strings.HasPrefix(wide[1], "  2.") || !strings.HasPrefix(wide[1], "  –  ") {
 		t.Fatalf("disabled gutter marker missing from wide rows = %#v", wide)
 	}
-	for _, line := range append(narrow, wide...) {
-		limit := 96
-		if containsStringSelectionTest(narrow, line) {
-			limit = 48
-		}
-		if got := tui.DisplayWidth(line); got > limit {
-			t.Fatalf("responsive line %q width=%d exceeds %d", line, got, limit)
+	if !strings.Contains(wide[1], "No custom root override to remove.") || strings.Contains(wide[1], "disabled: ") {
+		t.Fatalf("wide disabled reason = %#v", wide[1])
+	}
+	for _, line := range wide {
+		if got := tui.DisplayWidth(line); got > 80 {
+			t.Fatalf("responsive line %q width=%d exceeds 80", line, got)
 		}
 	}
 }

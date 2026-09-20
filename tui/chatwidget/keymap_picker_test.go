@@ -47,7 +47,8 @@ func TestKeymapActionMenuResponsiveConfigMatchesRust(t *testing.T) {
 	if view.ColumnWidth.Mode != bottompane.ColumnWidthAutoAllRows {
 		t.Fatalf("column width mode = %v, want AutoAllRows", view.ColumnWidth.Mode)
 	}
-	if view.DescriptionLayout.Mode != bottompane.SelectionDescriptionStackBelowWhenNarrow || view.DescriptionLayout.MinDescriptionWidth != 24 {
+	// Rust #46691's picker preset hides narrow descriptions instead of stacking them.
+	if view.DescriptionLayout.Mode != bottompane.SelectionDescriptionHideWhenNarrow || view.DescriptionLayout.MinDescriptionWidth != 24 {
 		t.Fatalf("description layout = %#v", view.DescriptionLayout)
 	}
 	if len(view.Items) != 4 || view.Items[2].Name != "Remove custom binding" || !view.Items[2].Disabled || view.Items[2].DisabledGutterMarker != "–" {

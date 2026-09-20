@@ -4280,43 +4280,6 @@ func TestModelModalBlocksComposerInput(t *testing.T) {
 	}
 }
 
-func TestModelKeymapActionMenuResponsiveWidthsMatchRust(t *testing.T) {
-	custom := false
-	view := chatwidget.NewKeymapActionMenuView(chatwidget.KeymapActionItem{
-		Action:           "open_transcript",
-		Bindings:         []string{"ctrl-t"},
-		HasCustomBinding: &custom,
-	})
-	for _, width := range []int{48, 64, 96} {
-		model := NewModel(nil, Options{Width: width, Height: 24})
-		model.openSelectionViewModal(ModalKindGeneric, view)
-		rendered := ansiSequenceRE.ReplaceAllString(model.renderModal(), "")
-		for _, line := range strings.Split(rendered, "\n") {
-			if got := codextui.DisplayWidth(line); got > width {
-				t.Fatalf("width %d line %q is %d columns", width, line, got)
-			}
-		}
-		if !strings.Contains(rendered, "–  Remove custom binding (disabled)") || strings.Contains(rendered, "3. Remove custom binding") {
-			t.Fatalf("width %d disabled gutter mismatch:\n%s", width, rendered)
-		}
-		if width < 96 {
-			if !strings.Contains(rendered, "Replace binding\n     Capture a replacement key for `ctrl-t`.") {
-				t.Fatalf("width %d should stack the binding-aware description:\n%s", width, rendered)
-			}
-			continue
-		}
-		var twoColumn bool
-		for _, line := range strings.Split(rendered, "\n") {
-			if strings.Contains(line, "Replace binding") && strings.Contains(line, "Capture a replacement key for `ctrl-t`.") {
-				twoColumn = true
-			}
-		}
-		if !twoColumn {
-			t.Fatalf("width 96 should keep description in columns:\n%s", rendered)
-		}
-	}
-}
-
 func TestModelSlashCommands(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-before-clear")

@@ -133,14 +133,16 @@ func NewKeymapActionMenuView(item KeymapActionItem) SelectionView {
 		SelectionItem{ID: "back", Name: "Back to shortcuts", Description: "Return to the shortcut list.", DismissOnSelect: true},
 	)
 	return SelectionView{
-		ViewID:            KeymapActionMenuViewID,
-		Title:             "Edit " + name,
-		Subtitle:          strings.Join(item.Bindings, ", "),
-		FooterNote:        "Changes write the root `tui.keymap.*` override.",
-		FooterHint:        standardPopupHintLine,
-		AllowCancel:       true,
-		ColumnWidth:       bottompane.NewColumnWidthConfig(bottompane.ColumnWidthAutoAllRows, nil),
-		DescriptionLayout: bottompane.NewStackBelowWhenNarrowDescriptionLayout(keymapActionMenuMinDescriptionWidth),
+		ViewID:      KeymapActionMenuViewID,
+		Title:       "Edit " + name,
+		Subtitle:    strings.Join(item.Bindings, ", "),
+		FooterNote:  "Changes write the root `tui.keymap.*` override.",
+		FooterHint:  standardPopupHintLine,
+		AllowCancel: true,
+		ColumnWidth: bottompane.NewColumnWidthConfig(bottompane.ColumnWidthAutoAllRows, nil),
+		// Rust's picker preset hides the description column below this width
+		// (#46691 replaced stacking with hiding).
+		DescriptionLayout: bottompane.NewHideWhenNarrowDescriptionLayout(keymapActionMenuMinDescriptionWidth),
 		Items:             items,
 	}
 }

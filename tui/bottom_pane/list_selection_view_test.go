@@ -27,9 +27,9 @@ func TestGenericDisplayRowsColumnModesSelectedAndDisabled(t *testing.T) {
 		t.Fatalf("disabled row missing reason: %#v", rendered[1])
 	}
 
-	fixed := RenderGenericRowsSingleLine(rows, state, 8, "no matches", 20, NewColumnWidthConfig(ColumnWidthFixed, nil))
-	if len(fixed) != 2 || tui.DisplayWidth(stripANSIForSelectionTest(fixed[0])) > 20 {
-		t.Fatalf("fixed single-line rows = %#v", fixed)
+	stable := RenderGenericRowsSingleLine(rows, state, 8, "no matches", 20, NewColumnWidthConfig(ColumnWidthAutoAllRows, nil))
+	if len(stable) != 2 || tui.DisplayWidth(stripANSIForSelectionTest(stable[0])) > 20 {
+		t.Fatalf("stable single-line rows = %#v", stable)
 	}
 }
 

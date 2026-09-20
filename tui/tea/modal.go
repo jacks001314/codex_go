@@ -1251,7 +1251,9 @@ func (m *Model) renderModal() string {
 		builder.WriteString(indentLines(m.modal.body, "  "))
 		builder.WriteString("\n")
 	}
-	if m.modal.descriptionLayout.Mode == bottompane.SelectionDescriptionStackBelowWhenNarrow {
+	// A modal whose picker hides narrow descriptions renders through the
+	// responsive option renderer (Rust #46691 replaced stacking with hiding).
+	if m.modal.descriptionLayout.Mode == bottompane.SelectionDescriptionHideWhenNarrow {
 		builder.WriteString(m.renderResponsiveModalOptions())
 		builder.WriteString("\n")
 		if m.modal.footerNote != "" {

@@ -11,8 +11,6 @@ import (
 const (
 	menuSurfaceInsetV              = 1
 	menuSurfaceInsetH              = 2
-	fixedLeftColumnNumerator       = 3
-	fixedLeftColumnDenominator     = 10
 	selectionPopupAutoDescColRatio = 7
 )
 
@@ -41,16 +39,25 @@ type ColumnWidthMode int
 const (
 	ColumnWidthAutoVisible ColumnWidthMode = iota
 	ColumnWidthAutoAllRows
-	ColumnWidthFixed
 )
 
 type ColumnWidthConfig struct {
 	Mode            ColumnWidthMode
 	NameColumnWidth *int
+	// DescriptionLayout controls whether a narrow description column is hidden;
+	// measurement and rendering must share it or the popup reserves the wrong
+	// number of lines (Rust #46691 keeps it on the config for that reason).
+	DescriptionLayout SelectionDescriptionLayout
 }
 
 func NewColumnWidthConfig(mode ColumnWidthMode, nameColumnWidth *int) ColumnWidthConfig {
 	return ColumnWidthConfig{Mode: mode, NameColumnWidth: nameColumnWidth}
+}
+
+// WithDescriptionLayout attaches a description layout to the config.
+func (c ColumnWidthConfig) WithDescriptionLayout(layout SelectionDescriptionLayout) ColumnWidthConfig {
+	c.DescriptionLayout = layout
+	return c
 }
 
 type SelectionRowDisplay int
@@ -64,7 +71,10 @@ type SelectionDescriptionLayoutMode int
 
 const (
 	SelectionDescriptionColumns SelectionDescriptionLayoutMode = iota
-	SelectionDescriptionStackBelowWhenNarrow
+	// SelectionDescriptionHideWhenNarrow drops the description column when the
+	// space left of it falls below the minimum (Rust #46691 replaces the old
+	// stack-below-when-narrow behaviour with hiding).
+	SelectionDescriptionHideWhenNarrow
 )
 
 type SelectionDescriptionLayout struct {
@@ -72,9 +82,9 @@ type SelectionDescriptionLayout struct {
 	MinDescriptionWidth int
 }
 
-func NewStackBelowWhenNarrowDescriptionLayout(minDescriptionWidth int) SelectionDescriptionLayout {
+func NewHideWhenNarrowDescriptionLayout(minDescriptionWidth int) SelectionDescriptionLayout {
 	return SelectionDescriptionLayout{
-		Mode:                SelectionDescriptionStackBelowWhenNarrow,
+		Mode:                SelectionDescriptionHideWhenNarrow,
 		MinDescriptionWidth: max(minDescriptionWidth, 0),
 	}
 }
@@ -108,15 +118,15 @@ func MenuSurfacePaddingHeight() int {
 }
 
 func RenderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults int, emptyMessage string, width int, config ColumnWidthConfig) []string {
-	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config, SelectionRowDisplayWrapped, SelectionDescriptionLayout{})
+	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config, SelectionRowDisplayWrapped)
 }
 
 func RenderGenericRowsWithDescriptionLayout(rows []GenericDisplayRow, state ScrollState, maxResults int, emptyMessage string, width int, config ColumnWidthConfig, descriptionLayout SelectionDescriptionLayout) []string {
-	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config, SelectionRowDisplayWrapped, descriptionLayout)
+	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config.WithDescriptionLayout(descriptionLayout), SelectionRowDisplayWrapped)
 }
 
 func RenderGenericRowsSingleLine(rows []GenericDisplayRow, state ScrollState, maxResults int, emptyMessage string, width int, config ColumnWidthConfig) []string {
-	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config, SelectionRowDisplaySingleLine, SelectionDescriptionLayout{})
+	return renderGenericRows(rows, state, maxResults, emptyMessage, width, config, SelectionRowDisplaySingleLine)
 }
 
 func MeasureGenericRowsHeight(rows []GenericDisplayRow, state ScrollState, maxResults int, width int, config ColumnWidthConfig) int {
@@ -128,7 +138,12 @@ func BuildGenericDisplayLine(row GenericDisplayRow, descCol int) string {
 }
 
 func buildGenericDisplayLine(row GenericDisplayRow, descCol int, descriptionLayout SelectionDescriptionLayout) string {
-	description := combinedSelectionDescription(row, descriptionLayout)
+	// Rust renders a description only when the description column exists, so a
+	// hidden column drops the text entirely instead of appending it to the name.
+	description := ""
+	if descCol > 0 {
+		description = combinedSelectionDescription(row, descriptionLayout)
+	}
 	nameLimit := -1
 	if description != "" {
 		nameLimit = max(descCol-lenColumnsSelection(row.NamePrefix)-2, 0)
@@ -156,7 +171,8 @@ func buildGenericDisplayLine(row GenericDisplayRow, descCol int, descriptionLayo
 	return line
 }
 
-func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults int, emptyMessage string, width int, config ColumnWidthConfig, display SelectionRowDisplay, descriptionLayout SelectionDescriptionLayout) []string {
+func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults int, emptyMessage string, width int, config ColumnWidthConfig, display SelectionRowDisplay) []string {
+	descriptionLayout := config.DescriptionLayout
 	if width <= 0 {
 		width = 1
 	}
@@ -172,12 +188,16 @@ func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults i
 	start := computeItemWindowStart(len(rows), state, maxResults)
 	visible := rows[start:min(start+maxResults, len(rows))]
 	descCol := computeGenericDescCol(rows, start, len(visible), width, config)
-	stackDescriptions := descriptionLayout.shouldStack(width, descCol)
+	// Rust computes the description column and then collapses it to zero when the
+	// layout hides narrow descriptions, so the row renders without one.
+	if descriptionLayout.shouldHide(width, descCol) {
+		descCol = 0
+	}
 	out := []string{}
 	for offset, row := range visible {
 		actualIdx := start + offset
 		if display == SelectionRowDisplayWrapped {
-			lines := wrapSelectionRowLinesWithDescriptionLayout(row, descCol, width, descriptionLayout, stackDescriptions)
+			lines := wrapSelectionRowLinesWithDescriptionLayout(row, descCol, width, descriptionLayout)
 			for lineIdx, line := range lines {
 				if lineIdx > 0 && row.IsDisabled {
 					line = strings.TrimRight(line, " ")
@@ -202,7 +222,8 @@ func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults i
 }
 
 func wrapGenericDisplayLine(row GenericDisplayRow, line string, descCol int, width int) []string {
-	if shouldWrapNameInColumn(row) {
+	// Rust #46691 wraps a name inside its own column only when that column exists.
+	if descCol > 0 && shouldWrapNameInColumn(row) {
 		if lines := wrapTwoColumnSelectionRow(row, descCol, width); len(lines) > 0 {
 			return lines
 		}
@@ -210,6 +231,8 @@ func wrapGenericDisplayLine(row GenericDisplayRow, line string, descCol int, wid
 	indent := 0
 	if row.WrapIndent != nil {
 		indent = *row.WrapIndent
+	} else if descCol <= 0 {
+		indent = lenColumnsSelection(row.NamePrefix)
 	} else if row.Description != "" || row.DisabledReason != "" {
 		indent = descCol
 	}
@@ -230,51 +253,15 @@ func wrapGenericDisplayLine(row GenericDisplayRow, line string, descCol int, wid
 }
 
 func wrapSelectionRowLines(row GenericDisplayRow, descCol int, width int) []string {
-	return wrapSelectionRowLinesWithDescriptionLayout(row, descCol, width, SelectionDescriptionLayout{}, false)
+	return wrapSelectionRowLinesWithDescriptionLayout(row, descCol, width, SelectionDescriptionLayout{})
 }
 
-func wrapSelectionRowLinesWithDescriptionLayout(row GenericDisplayRow, descCol int, width int, descriptionLayout SelectionDescriptionLayout, stackDescription bool) []string {
+func wrapSelectionRowLinesWithDescriptionLayout(row GenericDisplayRow, descCol int, width int, descriptionLayout SelectionDescriptionLayout) []string {
 	if width <= 0 {
 		width = 1
-	}
-	if stackDescription {
-		return wrapStackedSelectionRow(row, width)
 	}
 	line := buildGenericDisplayLine(row, descCol, descriptionLayout)
 	return wrapGenericDisplayLine(row, line, descCol, width)
-}
-
-func wrapStackedSelectionRow(row GenericDisplayRow, width int) []string {
-	if width <= 0 {
-		width = 1
-	}
-	prefixWidth := min(lenColumnsSelection(row.NamePrefix), max(width-1, 0))
-	indent := strings.Repeat(" ", prefixWidth)
-	label := row.Name
-	if row.DisabledReason != "" {
-		label += " (disabled)"
-	}
-	if row.DisplayShortcut != "" {
-		label += " (" + row.DisplayShortcut + ")"
-	}
-	if row.CategoryTag != "" {
-		label += "  " + row.CategoryTag
-	}
-	lines := tui.AdaptiveWrapLine(label, tui.WrapOptions{
-		Width:            width,
-		InitialIndent:    row.NamePrefix,
-		SubsequentIndent: indent,
-		BreakWords:       true,
-	})
-	if description := stackedSelectionDescription(row); description != "" {
-		lines = append(lines, tui.AdaptiveWrapLine(description, tui.WrapOptions{
-			Width:            width,
-			InitialIndent:    indent,
-			SubsequentIndent: indent,
-			BreakWords:       true,
-		})...)
-	}
-	return lines
 }
 
 func shouldWrapNameInColumn(row GenericDisplayRow) bool {
@@ -344,8 +331,6 @@ func computeGenericDescCol(rows []GenericDisplayRow, startIdx int, visibleItems 
 	}
 	maxDescCol := width - 1
 	switch config.Mode {
-	case ColumnWidthFixed:
-		return clampSelectionInt((width*fixedLeftColumnNumerator)/fixedLeftColumnDenominator, 1, maxDescCol)
 	case ColumnWidthAutoAllRows, ColumnWidthAutoVisible:
 		source := rows
 		if config.Mode == ColumnWidthAutoVisible {
@@ -409,7 +394,9 @@ func combinedSelectionDescription(row GenericDisplayRow, descriptionLayout Selec
 	case row.Description != "":
 		return row.Description
 	case row.DisabledReason != "":
-		if descriptionLayout.Mode == SelectionDescriptionStackBelowWhenNarrow {
+		// Rust renders the reason alone only under HideWhenNarrow; the column
+		// layout prefixes it with "disabled: ".
+		if descriptionLayout.Mode == SelectionDescriptionHideWhenNarrow {
 			return row.DisabledReason
 		}
 		return "disabled: " + row.DisabledReason
@@ -438,22 +425,29 @@ func measureGenericRowsHeight(rows []GenericDisplayRow, state ScrollState, maxRe
 	if width <= 0 {
 		width = 1
 	}
-	contentWidth := max(width-1, 1)
+	// Rust #46691 measures at the renderer's full row width, so an exact-fit
+	// description does not reserve an extra line.
+	contentWidth := max(width, 1)
 	visibleItems := maxResults
 	if visibleItems <= 0 || visibleItems > len(rows) {
 		visibleItems = len(rows)
 	}
 	start := computeItemWindowStart(len(rows), state, visibleItems)
 	descCol := computeGenericDescCol(rows, start, visibleItems, contentWidth, config)
+	if config.DescriptionLayout.shouldHide(contentWidth, descCol) {
+		descCol = 0
+	}
 	total := 0
 	for _, row := range rows[start:min(start+visibleItems, len(rows))] {
-		total += max(len(wrapSelectionRowLines(row, descCol, contentWidth)), 1)
+		total += max(len(wrapSelectionRowLinesWithDescriptionLayout(row, descCol, contentWidth, config.DescriptionLayout)), 1)
 	}
 	return max(total, 1)
 }
 
-func (layout SelectionDescriptionLayout) shouldStack(width int, descCol int) bool {
-	if layout.Mode != SelectionDescriptionStackBelowWhenNarrow {
+// shouldHide mirrors Rust's `SelectionDescriptionLayout::should_hide`: hide the
+// description column when the space left of it falls below the minimum.
+func (layout SelectionDescriptionLayout) shouldHide(width int, descCol int) bool {
+	if layout.Mode != SelectionDescriptionHideWhenNarrow {
 		return false
 	}
 	descCol = min(max(descCol, 0), max(width, 0))
