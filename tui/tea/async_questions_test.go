@@ -116,7 +116,7 @@ func TestAsyncQuestionsArriveCollapsedWithSummary(t *testing.T) {
 		t.Fatalf("questions = %d expanded=%v", model.asyncQuestions.UnansweredCount(), model.asyncQuestions.Expanded())
 	}
 	view := model.View()
-	if !strings.Contains(view, "2 questions") || !strings.Contains(view, "Alt+Up to answer") {
+	if !strings.Contains(view, "2 questions") || !strings.Contains(view, "alt+↑ to answer") {
 		t.Fatalf("collapsed summary missing:\n%s", view)
 	}
 	if strings.Contains(view, "1 of 2") {
@@ -449,7 +449,7 @@ func withChoiceQuestion(t *testing.T) *Model {
 func TestAsyncQuestionsRenderAndSubmitSelectedChoice(t *testing.T) {
 	model := withChoiceQuestion(t)
 	view := model.View()
-	for _, want := range []string{"› 1. Postgres", "  2. SQLite", "  3. Other", "Enter submit"} {
+	for _, want := range []string{"› 1. Postgres", "  2. SQLite", "  3. Other", "enter submit"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("choice view missing %q:\n%s", want, view)
 		}

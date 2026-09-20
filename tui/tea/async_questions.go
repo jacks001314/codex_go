@@ -470,7 +470,7 @@ func (m *Model) renderAsyncQuestions() []string {
 		lines := []string{line}
 		// Rust #42903 keeps the edit binding on its own line so the countdown
 		// never crowds it out.
-		if binding := m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "Alt+Up"); binding != "" {
+		if binding := m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "alt+↑"); binding != "" {
 			lines = append(lines, m.dimAsyncQuestionText("    "+binding+" to answer"))
 		}
 		return lines
@@ -530,13 +530,13 @@ func (m *Model) renderAsyncQuestionChoices(question bottompane.AsyncUserInputQue
 // shown under the expanded question (Rust #42894).
 func (m *Model) asyncQuestionHintLine() string {
 	tips := []string{}
-	if binding := m.resolveAsyncQuestionBinding("composer", "submit", "Enter"); binding != "" {
+	if binding := m.resolveAsyncQuestionBinding("composer", "submit", "enter"); binding != "" {
 		tips = append(tips, m.accentAsyncQuestionText(binding+" submit"))
 	}
-	if binding := m.resolveAsyncQuestionBinding("chat", "skip_question", "Ctrl+]"); binding != "" {
+	if binding := m.resolveAsyncQuestionBinding("chat", "skip_question", "ctrl+]"); binding != "" {
 		tips = append(tips, m.dimAsyncQuestionText(binding+" skip"))
 	}
-	if binding := m.resolveAsyncQuestionBinding("chat", "prompt_stack_back", "Alt+Down"); binding != "" {
+	if binding := m.resolveAsyncQuestionBinding("chat", "prompt_stack_back", "alt+↓"); binding != "" {
 		label := "prev question"
 		if m.asyncQuestions.CurrentIndex() == 0 {
 			label = "main prompt"
@@ -544,7 +544,7 @@ func (m *Model) asyncQuestionHintLine() string {
 		tips = append(tips, m.dimAsyncQuestionText(binding+" "+label))
 	}
 	if m.asyncQuestions.CurrentIndex()+1 < m.asyncQuestions.UnansweredCount() {
-		if binding := m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "Alt+Up"); binding != "" {
+		if binding := m.resolveAsyncQuestionBinding("chat", "edit_queued_message", "alt+↑"); binding != "" {
 			tips = append(tips, m.dimAsyncQuestionText(binding+" next question"))
 		}
 	}
@@ -606,49 +606,63 @@ func displayKeyBinding(binding string) string {
 	if len(parts) == 0 {
 		return binding
 	}
-	out := make([]string, 0, len(parts))
+	// Rust #46680 renders one compact shortcut per binding: the control, shift
+	// and alt modifiers in that order, joined with a bare `+`, then the key.
+	var hasCtrl, hasShift, hasAlt bool
+	key := ""
 	for _, part := range parts {
 		switch strings.ToLower(part) {
 		case "":
 			continue
 		case "ctrl", "control":
-			out = append(out, "Ctrl")
+			hasCtrl = true
 		case "alt", "option":
-			out = append(out, "Alt")
+			hasAlt = true
 		case "shift":
-			out = append(out, "Shift")
+			hasShift = true
 		default:
-			out = append(out, keyDisplayName(part))
+			key = keyDisplayName(part)
 		}
 	}
-	return strings.Join(out, "+")
+	var label strings.Builder
+	if hasCtrl {
+		label.WriteString("ctrl+")
+	}
+	if hasShift {
+		label.WriteString("shift+")
+	}
+	if hasAlt {
+		label.WriteString(codextui.AltKeyLabel())
+		label.WriteString("+")
+	}
+	label.WriteString(key)
+	return label.String()
 }
 
+// keyDisplayName renders the key itself with Rust's names: the arrow glyphs,
+// the named keys, and lower-case letters.
 func keyDisplayName(key string) string {
 	switch strings.ToLower(key) {
 	case "up":
-		return "Up"
+		return "↑"
 	case "down":
-		return "Down"
+		return "↓"
 	case "left":
-		return "Left"
+		return "←"
 	case "right":
-		return "Right"
+		return "→"
 	case "esc":
-		return "Esc"
+		return "esc"
 	case "enter":
-		return "Enter"
+		return "enter"
 	case "tab":
-		return "Tab"
+		return "tab"
 	case "space":
-		return "Space"
+		return "space"
 	case "backspace":
-		return "Backspace"
+		return "backspace"
 	}
-	if len(key) == 1 {
-		return strings.ToUpper(key)
-	}
-	return key
+	return strings.ToLower(key)
 }
 
 func (m *Model) dimAsyncQuestionText(text string) string {

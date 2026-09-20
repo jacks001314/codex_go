@@ -2184,7 +2184,8 @@ func TestModelStartupWarningsSignInSubsetAndHintLikeRust(t *testing.T) {
 	// A repeated diagnostic must not change the summary.
 	model.mergeStartupWarnings(historycell.NewStartupWarnings([]string{"Skill manifest is invalid."}))
 	view := utils.StripANSI(model.View())
-	want := "\u26a0 4 startup issues (3 MCP; 2 need sign-in) \u00b7 Ctrl+T for details"
+	// Rust renders the configured binding with its compact label (#46680).
+	want := "\u26a0 4 startup issues (3 MCP; 2 need sign-in) \u00b7 ctrl+t for details"
 	if !strings.Contains(view, want) {
 		t.Fatalf("startup summary missing %q:\n%s", want, view)
 	}
