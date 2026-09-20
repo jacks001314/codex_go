@@ -3493,14 +3493,10 @@ func fitTerminalLine(line string, width int) string {
 	if width <= 0 {
 		return line
 	}
-	runes := []rune(line)
-	if len(runes) <= width {
-		return line
-	}
-	if width <= 3 {
-		return string(runes[:width])
-	}
-	return string(runes[:width-3]) + "..."
+	// Rust truncates by display width with a single-cell ellipsis
+	// (line_truncation::truncate_line_with_ellipsis_if_overflow), so a line of
+	// wide characters keeps its columns and the marker costs one cell.
+	return codextui.TruncateWithEllipsis(line, width)
 }
 
 func (m *Model) SubmittedPrompts() []string {

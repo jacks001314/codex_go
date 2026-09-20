@@ -57,7 +57,7 @@ func TestModelTerminalSnapshots(t *testing.T) {
 		model := NewModel(state, Options{Width: 82, Height: 18})
 
 		assertTerminalSnapshot(t, model.View(), `
-Thread: thread-snap | Status: idle | Model: gpt-5 | Approval: on-request | Sand...
+Thread: thread-snap | Status: idle | Model: gpt-5 | Approval: on-request | Sandbo…
 
 › summarize the repo
 
@@ -86,7 +86,7 @@ Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
 		})
 
 		assertTerminalSnapshot(t, model.View(), `
-Thread: new | Status: idle | Model: gpt-5 | Approval: default | Sandbox: ...
+Thread: new | Status: idle | Model: gpt-5 | Approval: default | Sandbox: de…
 No messages yet.
 
 
@@ -168,7 +168,7 @@ Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
 		})
 
 		assertTerminalSnapshot(t, model.View(), `
-Thread: new | Status: idle | Model: default | Approval: default | Sandbox: ...
+Thread: new | Status: idle | Model: default | Approval: default | Sandbox: de…
 No messages yet.
 
 

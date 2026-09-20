@@ -37,7 +37,7 @@ func TestModelVT100TerminalSnapshotMainView(t *testing.T) {
 	model := NewModel(state, Options{Width: 82, Height: 18})
 
 	assertVT100Snapshot(t, model.View(), 82, 24, `
-Thread: thread-vt100 | Status: idle | Model: gpt-5 | Approval: on-request | San...
+Thread: thread-vt100 | Status: idle | Model: gpt-5 | Approval: on-request | Sandb…
 
 › summarize the repo
 
@@ -66,7 +66,7 @@ func TestModelVT100TerminalSnapshotApprovalModal(t *testing.T) {
 	})
 
 	assertVT100Snapshot(t, model.View(), 76, 24, `
-Thread: new | Status: idle | Model: gpt-5 | Approval: default | Sandbox: ...
+Thread: new | Status: idle | Model: gpt-5 | Approval: default | Sandbox: de…
 No messages yet.
 
 
