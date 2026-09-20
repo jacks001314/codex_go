@@ -2197,10 +2197,10 @@ func TestModelStartupWarningsSignInSubsetAndHintLikeRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust's warning_display_state.startup_complete: once a turn starts,
-// later MCP diagnostics use the normal warning path instead of the coalesced
-// startup entry.
-func TestModelStartupWarningsCompleteAfterTurnStartLikeRust(t *testing.T) {
+// Mirrors Rust #46751: the startup window closes with the first turn, but MCP
+// diagnostics keep joining the retained startup-warnings entry instead of adding
+// warning rows to the live conversation.
+func TestModelLateMCPDiagnosticsRetainStartupWarningsLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 18, ShowSessionHeader: true})
 	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
 	if !model.startupWarningsComplete {
@@ -2208,11 +2208,17 @@ func TestModelStartupWarningsCompleteAfterTurnStartLikeRust(t *testing.T) {
 	}
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: "alpha handshake failed"}})
 	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "alpha handshake failed") {
-		t.Fatalf("late MCP diagnostic should use the warning path:\n%s", view)
+	if !strings.Contains(view, "\u26a0 1 MCP startup issue") {
+		t.Fatalf("late MCP diagnostic should join the retained startup summary:\n%s", view)
 	}
-	if strings.Contains(view, "startup issue") {
-		t.Fatalf("late MCP diagnostic should not create a startup summary:\n%s", view)
+	if strings.Contains(view, "alpha handshake failed") {
+		t.Fatalf("late MCP diagnostic should not add a warning row:\n%s", view)
+	}
+	if model.startupWarningsIndex < 0 || model.startupWarningsIndex >= len(model.State.Messages) {
+		t.Fatalf("late MCP diagnostic has no retained transcript entry: %#v", model.State.Messages)
+	}
+	if raw := model.State.Messages[model.startupWarningsIndex].RawText; !strings.Contains(raw, "alpha handshake failed") {
+		t.Fatalf("late MCP diagnostic details = %q", raw)
 	}
 }
 

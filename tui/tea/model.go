@@ -4135,18 +4135,14 @@ func (m *Model) applyStartupConfigWarning(message string) {
 	m.mergeStartupWarnings(historycell.NewStartupWarnings([]string{message}))
 }
 
-// applyMCPStartupWarnings mirrors Rust's ChatWidget::add_mcp_startup_warning:
-// during startup the diagnostics coalesce into the StartupWarningsCell (with the
-// failed servers and their sign-in subset); once the startup window is over they
-// take the normal warning path.
+// applyMCPStartupWarnings mirrors Rust's ChatWidget::add_mcp_startup_warning
+// (#46751): MCP diagnostics always join the retained startup-warnings entry (with
+// the failed servers and their sign-in subset) instead of adding warning rows to
+// the live conversation, including the ones that arrive after the startup window
+// closed. The startup window still governs the ordinary warning and
+// config-warning paths.
 func (m *Model) applyMCPStartupWarnings(name string, status chatwidget.McpStartupStatus, result chatwidget.McpStartupUpdateResult) {
 	if m == nil || len(result.Warnings) == 0 {
-		return
-	}
-	if m.startupWarningsComplete {
-		for _, warning := range result.Warnings {
-			m.applyWarningMessage(warning)
-		}
 		return
 	}
 	if result.Finished {
