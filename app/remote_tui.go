@@ -2346,8 +2346,8 @@ func reasoningBlockVariants(summaryParts []string, contentParts []string, fallba
 // reasoningProjection names which Rust reasoning projection an item-to-message
 // conversion follows. The in-session chatwidget replays a reasoning item as a
 // transcript-only block built from the summary parts (plus the raw parts when
-// visible); the session-transcript pager projects the *cell* form, where the raw
-// content replaces the split summary outright (thread_transcript.rs).
+// visible); the session-transcript pager projects the *cell* form, where the
+// raw content is appended to the split summary (thread_transcript.rs, #46711).
 type reasoningProjection string
 
 const (
@@ -2362,13 +2362,17 @@ func reasoningProjectionText(item appserver.ThreadItem, projection reasoningProj
 	summaryParts := remoteTUIThreadItemReasoningSummaryParts(item)
 	contentParts := remoteTUIThreadItemReasoningContentParts(item)
 	if projection == reasoningProjectionThreadTranscript {
-		// thread_transcript.rs: with raw reasoning visible and content present
-		// the cell shows only the raw content under a "Reasoning" heading;
-		// otherwise it shows the split summary.
-		if showRawReasoning && len(contentParts) > 0 {
-			return strings.TrimSpace(strings.Join(contentParts, "\n\n")), ""
-		}
+		// thread_transcript.rs (#46711): the persisted cell retains the split
+		// summary and appends the enabled raw reasoning after a blank line; with
+		// raw reasoning hidden, or with no raw content, it shows the summary.
 		summary, _ := reasoningBlockVariants(summaryParts, nil, remoteTUIThreadItemReasoningText(item))
+		if showRawReasoning && len(contentParts) > 0 {
+			rawContent := strings.Join(contentParts, "\n\n")
+			if summary != "" {
+				return summary + "\n\n" + rawContent, ""
+			}
+			return rawContent, ""
+		}
 		return summary, ""
 	}
 	return reasoningBlockVariants(summaryParts, contentParts, remoteTUIThreadItemReasoningText(item))

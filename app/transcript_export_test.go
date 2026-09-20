@@ -184,23 +184,30 @@ func TestReasoningRawVisibilityGatesRawContent(t *testing.T) {
 		t.Fatalf("raw variant = %q", message.ReasoningRawText)
 	}
 
-	// Export follows thread_transcript.rs: the raw content replaces the
-	// summary projection when raw reasoning is visible.
+	// Export follows thread_transcript.rs (#46711): the raw content is appended
+	// to the retained summary projection when raw reasoning is visible.
 	if got := transcriptExportReasoningText(item, false); got != "Summary body." {
 		t.Fatalf("raw-off export text = %q", got)
 	}
-	if got := transcriptExportReasoningText(item, true); got != "Raw chain of thought." {
+	if got := transcriptExportReasoningText(item, true); got != "Summary body.\n\nRaw chain of thought." {
 		t.Fatalf("raw-on export text = %q", got)
 	}
 
-	// The pager transcript projects the same cell form: raw reasoning replaces
-	// the summary, and the entry carries no separate raw variant.
+	// The pager transcript projects the same cell form: raw reasoning is
+	// appended to the summary, and the entry carries no separate raw variant
+	// because the projection already selected it.
 	pagerRaw, ok := remoteTUIMessageFromThreadItem(item, reasoningProjectionThreadTranscript, true)
-	if !ok || pagerRaw.Text != "Raw chain of thought." || pagerRaw.ReasoningRawText != "" {
+	if !ok || pagerRaw.Text != "Summary body.\n\nRaw chain of thought." || pagerRaw.ReasoningRawText != "" {
 		t.Fatalf("raw-on pager message = %#v ok=%v", pagerRaw, ok)
 	}
 	pagerSummary, ok := remoteTUIMessageFromThreadItem(item, reasoningProjectionThreadTranscript, false)
 	if !ok || pagerSummary.Text != "Summary body." {
 		t.Fatalf("raw-off pager message = %#v ok=%v", pagerSummary, ok)
+	}
+	// Rust's snapshot_formatter_reasoning_matches_compact_and_detailed_replay
+	// pins that the persisted cell and the live replay agree, so the pager's
+	// raw-on text is exactly the chatwidget's raw variant (#46711).
+	if pagerRaw.Text != message.ReasoningRawText {
+		t.Fatalf("pager raw text = %q, live raw variant = %q", pagerRaw.Text, message.ReasoningRawText)
 	}
 }

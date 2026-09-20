@@ -106,8 +106,9 @@ func transcriptExportMarkdown(turns []appserver.Turn, showRawReasoning bool) str
 
 // transcriptExportSection maps one persisted item to its Markdown heading and
 // body, mirroring Rust's per-cell heading choice. A reasoning item follows
-// thread_transcript.rs: raw reasoning replaces the summary projection when
-// show_raw_agent_reasoning is visible and the item carries raw content.
+// thread_transcript.rs: the summary projection is retained and the enabled raw
+// reasoning is appended when show_raw_agent_reasoning is visible and the item
+// carries raw content (#46711).
 func transcriptExportSection(item appserver.ThreadItem, showRawReasoning bool) (heading string, text string, indent bool, ok bool) {
 	switch remoteTUINormalizedThreadItemType(item.Type) {
 	case "usermessage":
@@ -128,17 +129,23 @@ func transcriptExportSection(item appserver.ThreadItem, showRawReasoning bool) (
 }
 
 // transcriptExportReasoningText mirrors thread_transcript.rs's reasoning item
-// arm: the raw content replaces the split summary when raw reasoning is visible
-// and the item has content, otherwise the summary's renderable body is used.
+// arm: the enabled raw content is appended to the split summary (separated by a
+// blank line) when raw reasoning is visible and the item has content, otherwise
+// the summary's renderable body is used. Rust's export renders the same cell
+// markdown source (ReasoningSummaryCell::markdown_source, #46711).
 func transcriptExportReasoningText(item appserver.ThreadItem, showRawReasoning bool) string {
-	contentParts := remoteTUIThreadItemReasoningContentParts(item)
-	if showRawReasoning && len(contentParts) > 0 {
-		return strings.TrimSpace(strings.Join(contentParts, "\n\n"))
-	}
 	summary, _ := reasoningBlockVariants(
 		remoteTUIThreadItemReasoningSummaryParts(item),
 		nil,
 		remoteTUIThreadItemReasoningText(item),
 	)
+	contentParts := remoteTUIThreadItemReasoningContentParts(item)
+	if showRawReasoning && len(contentParts) > 0 {
+		rawContent := strings.Join(contentParts, "\n\n")
+		if summary != "" {
+			return summary + "\n\n" + rawContent
+		}
+		return rawContent
+	}
 	return summary
 }
