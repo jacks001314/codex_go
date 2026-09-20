@@ -2,6 +2,8 @@ package bottompane
 
 import (
 	"strings"
+
+	"codex_go/utils"
 	"testing"
 
 	"codex_go/tui"
@@ -153,12 +155,7 @@ func TestListSelectionRowsWrapAndNoMatches(t *testing.T) {
 }
 
 func stripANSIForSelectionTest(value string) string {
-	replacer := strings.NewReplacer(
-		"\x1b[1;94m", "",
-		"\x1b[94;1m", "",
-		"\x1b[0m", "",
-		"\x1b[1m", "",
-		"\x1b[94m", "",
-	)
-	return replacer.Replace(value)
+	// The selection style now renders Rust's contrast-aware fill, so strip every
+	// escape sequence rather than a fixed set.
+	return utils.StripANSI(value)
 }

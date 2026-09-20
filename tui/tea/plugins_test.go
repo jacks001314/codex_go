@@ -10,6 +10,7 @@ import (
 	"codex_go/plugin"
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/utils"
 )
 
 func TestPluginBrowserSearchToggleAndDetailFlow(t *testing.T) {
@@ -410,4 +411,51 @@ func mustPluginCmd(t *testing.T, cmd bubbletea.Cmd, name string) bubbletea.Cmd {
 		t.Fatalf("%s returned no command", name)
 	}
 	return cmd
+}
+
+// The plugin catalog renders Rust's filled tab bar: the active tab keeps its
+// fill, other tabs and the overflow markers are dim, and a narrow browser hides
+// the tabs that do not fit (#46691).
+func TestPluginBrowserTabStripMatchesRustFilledTabs(t *testing.T) {
+	marketplacePath := `D:\plugins\team`
+	response := pluginBrowserTestResponse(marketplacePath, "Docs", "Search docs.", true, true)
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:            100,
+		Height:           28,
+		SessionPickerCWD: `D:\repo`,
+		OnReadPlugins: func(string, bool) (plugin.PluginListResponse, error) {
+			return response, nil
+		},
+	})
+	runTeaCmd(t, model, model.applyPluginsCommand())
+	state := model.pluginBrowserState()
+	if state == nil || len(state.catalog.Tabs) < 3 {
+		t.Fatalf("plugin catalog did not open: %#v", state)
+	}
+	// Select a middle tab so both markers can appear on a narrow strip.
+	state.activeTab = 1
+	activeLabel := state.catalog.Tabs[1].Label
+
+	wide := utils.StripANSI(model.renderPluginTabBar(80))
+	if !strings.Contains(wide, " "+activeLabel+" ") {
+		t.Fatalf("wide tab bar missing the active cell: %q", wide)
+	}
+	if strings.Contains(wide, "\u2039") {
+		t.Fatalf("wide tab bar should fit every tab: %q", wide)
+	}
+
+	narrow := model.renderPluginTabBar(30)
+	if !strings.Contains(narrow, "\u2039") || !strings.Contains(narrow, "\u203a") {
+		t.Fatalf("narrow tab bar should mark the hidden neighbours: %q", narrow)
+	}
+	activeSGR := codextui.ActiveTabSGR(codextui.DetectStdoutColorLevel())
+	if !strings.Contains(narrow, activeSGR+" "+activeLabel+" ") {
+		t.Fatalf("active tab missing its fill: %q", narrow)
+	}
+	if dimSGR := model.styles().Chat.DimText; dimSGR != "" && !strings.Contains(narrow, dimSGR) {
+		t.Fatalf("overflow marker should be dim: %q", narrow)
+	}
+	if width := codextui.DisplayWidth(utils.StripANSI(narrow)); width > 30 {
+		t.Fatalf("narrow tab bar exceeds its width: %q width=%d", narrow, width)
+	}
 }

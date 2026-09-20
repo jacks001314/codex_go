@@ -7,6 +7,8 @@ import (
 
 	"codex_go/features"
 	"codex_go/plugin"
+	codextui "codex_go/tui"
+	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 )
@@ -1061,15 +1063,9 @@ func (m *Model) renderPluginCatalog(state *pluginBrowserModalState) string {
 		width = 80
 	}
 	lines := []string{"Plugins"}
-	tabs := make([]string, 0, len(state.catalog.Tabs))
-	for i, tab := range state.catalog.Tabs {
-		label := tab.Label
-		if i == state.activeTab {
-			label = "[" + label + "]"
-		}
-		tabs = append(tabs, label)
-	}
-	lines = append(lines, fitTerminalLine(strings.Join(tabs, "  "), width))
+	// Rust renders the plugin tabs as filled tabs: the active tab keeps its
+	// fill, the other cells and the overflow markers are dim.
+	lines = append(lines, m.renderPluginTabBar(width))
 	tab := state.catalog.Tabs[state.activeTab]
 	for _, header := range tab.HeaderLines {
 		if strings.TrimSpace(header) != "" {
@@ -1116,6 +1112,31 @@ func (m *Model) renderPluginCatalog(state *pluginBrowserModalState) string {
 	}
 	lines = append(lines, fitTerminalLine(footer, width))
 	return strings.Join(lines, "\n")
+}
+
+// renderPluginTabBar renders the plugin catalog's tab strip as Rust's filled tab
+// bar: the active tab carries the resolved fill, every other cell and the
+// overflow markers are dim.
+func (m *Model) renderPluginTabBar(width int) string {
+	state := m.pluginBrowserState()
+	if state == nil || len(state.catalog.Tabs) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(state.catalog.Tabs))
+	for _, tab := range state.catalog.Tabs {
+		labels = append(labels, tab.Label)
+	}
+	activeSGR := codextui.ActiveTabSGR(codextui.DetectStdoutColorLevel())
+	dimSGR := m.styles().Chat.DimText
+	styleActive := func(text string) string {
+		return m.styleAsyncQuestionText(text, activeSGR)
+	}
+	styleInactive := func(text string) string {
+		return m.styleAsyncQuestionText(text, dimSGR)
+	}
+	// The bar lays its own cells out to the width, so it is returned as-is: the
+	// styling escapes would otherwise count as content.
+	return bottompane.FilledTabBarStyledText(labels, state.activeTab, width, styleActive, styleInactive)
 }
 
 func (m *Model) renderPluginSelectionView(state *pluginBrowserModalState) string {

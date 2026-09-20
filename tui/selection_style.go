@@ -7,8 +7,6 @@ import (
 	"github.com/muesli/termenv"
 )
 
-var selectedRowStyle = forcedColorRenderer().NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
-
 const SelectedRowMarker = "\u203a"
 
 func forcedColorRenderer() *lipgloss.Renderer {
@@ -18,7 +16,13 @@ func forcedColorRenderer() *lipgloss.Renderer {
 }
 
 func RenderSelectedRow(line string) string {
-	return selectedRowStyle.Render(line)
+	// Rust renders the selected row with the contrast-aware selection style
+	// (style::selection_style): the shared ChatGPT-blue fill with a readable
+	// foreground, or the bold reversed terminal defaults on an unknown palette.
+	if sgr := SelectionSGR(DetectStdoutColorLevel()); sgr != "" {
+		return sgr + line + "\x1b[0m"
+	}
+	return line
 }
 
 func ForcedColorStyle() lipgloss.Style {

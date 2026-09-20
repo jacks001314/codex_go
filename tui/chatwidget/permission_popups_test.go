@@ -2,6 +2,8 @@ package chatwidget
 
 import (
 	"strings"
+
+	"codex_go/utils"
 	"testing"
 
 	codextui "codex_go/tui"
@@ -137,11 +139,7 @@ func containsChatwidgetRow(rows []string, want string) bool {
 }
 
 func stripChatwidgetANSI(value string) string {
-	return strings.NewReplacer(
-		"\x1b[1;94m", "",
-		"\x1b[94;1m", "",
-		"\x1b[0m", "",
-		"\x1b[1m", "",
-		"\x1b[94m", "",
-	).Replace(value)
+	// The selection style now renders Rust's contrast-aware fill, so strip every
+	// escape sequence rather than a fixed set.
+	return utils.StripANSI(value)
 }
