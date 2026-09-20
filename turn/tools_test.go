@@ -150,12 +150,14 @@ func TestBuildToolRegistryHonorsToolDisableOptions(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.DisableUpdatePlan = true
 	options.DisableWaitAgent = true
+	options.DisableGetContextRemaining = true
 	registry, err := BuildToolRegistry(options)
 	if err != nil {
 		t.Fatalf("BuildToolRegistry() error = %v", err)
 	}
 	for _, name := range []tool.ToolName{
 		tool.PlainName("update_plan"),
+		tool.PlainName("get_context_remaining"),
 		tool.NamespacedName(agent.MultiAgentV1Namespace, string(agent.MultiAgentToolWait)),
 	} {
 		if _, ok := registry.Lookup(name); ok {

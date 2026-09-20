@@ -10,6 +10,12 @@ import (
 	"codex_go/doctor"
 )
 
+// tuiClientName is the app-server client identity of the interactive TUI. Rust
+// registers the in-process TUI connection as "codex-tui"
+// (codex-rs/tui/src/lib.rs and app_server_connection.rs), and the app-server
+// derives the session originator from that name.
+const tuiClientName = "codex-tui"
+
 // initializeLocalTUIConnection performs the app-server initialize handshake for
 // an in-process TUI connection before any other RPC. In-process flows still
 // route through the runtime router, which enforces the same "Not initialized"
@@ -18,7 +24,14 @@ import (
 func initializeLocalTUIConnection(handle func(request *appserver.Request) *appserver.Response, connectionID string) error {
 	raw, err := json.Marshal(appserver.InitializeParams{
 		ClientInfo: appserver.ClientInfo{
-			Name:    "codex_go_tui",
+			// Rust's in-process TUI connects as "codex-tui"
+			// (codex-rs/tui/src/lib.rs: client_name: "codex-tui"). The
+			// app-server derives the request originator from clientInfo.name,
+			// so the TUI's model traffic must carry "codex-tui" exactly as
+			// upstream does - "codex_go_tui" made every TUI request identify
+			// itself as a foreign client (and never matched the first-party
+			// originator checks).
+			Name:    "codex-tui",
 			Version: doctor.Version(),
 		},
 		Capabilities: &appserver.InitializeCapabilities{

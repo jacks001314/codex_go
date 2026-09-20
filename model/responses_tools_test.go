@@ -196,6 +196,45 @@ func TestNormalizeResponseToolParametersPreservesWaitPropertiesShape(t *testing.
 	}
 }
 
+// TestResponsesMultiAgentV1ToolsUseNamespaceLikeRust pins the V1 multi-agent
+// surface: Rust registers the family as one `ToolSpec::Namespace`
+// (core/src/tools/handlers/multi_agents_spec.rs), so the request carries a
+// single "multi_agent_v1" namespace with the five functions rather than the
+// flattened `multi_agent_v1__*` function tools Go used to send.
+func TestResponsesMultiAgentV1ToolsUseNamespaceLikeRust(t *testing.T) {
+	names := []string{"close_agent", "resume_agent", "send_input", "spawn_agent", "wait_agent"}
+	specs := make([]tool.Spec, 0, len(names))
+	for _, name := range names {
+		specs = append(specs, tool.Spec{
+			Name:                 tool.NamespacedName("multi_agent_v1", name),
+			Exposure:             tool.ExposureModelVisible,
+			Description:          name + " description",
+			NamespaceDescription: "Tools for spawning and managing sub-agents.",
+			InputSchema:          map[string]any{"type": "object", "properties": map[string]any{}},
+		})
+	}
+	got := ResponsesToolsFromSpecs(specs)
+	if len(got) != 1 {
+		t.Fatalf("tools = %#v", got)
+	}
+	namespace, ok := got[0].(map[string]any)
+	if !ok || namespace["type"] != "namespace" || namespace["name"] != "multi_agent_v1" {
+		t.Fatalf("namespace = %#v", got[0])
+	}
+	if namespace["description"] != "Tools for spawning and managing sub-agents." {
+		t.Fatalf("namespace description = %#v", namespace["description"])
+	}
+	children, ok := namespace["tools"].([]map[string]any)
+	if !ok || len(children) != len(names) {
+		t.Fatalf("namespace children = %#v", namespace["tools"])
+	}
+	for i, name := range names {
+		if children[i]["name"] != name || children[i]["type"] != "function" {
+			t.Fatalf("child %d = %#v, want function %s", i, children[i], name)
+		}
+	}
+}
+
 func TestResponsesMCPToolsUseNamespaceLikeRust(t *testing.T) {
 	got := ResponsesToolsFromSpecs([]tool.Spec{{
 		Name: tool.NamespacedName("mcp__memory", "create_entities"),

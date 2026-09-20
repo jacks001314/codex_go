@@ -136,6 +136,33 @@ func TestMultiAgentV2WaitClampsTimeoutBelowConfiguredMinimum(t *testing.T) {
 	}
 }
 
+// TestMultiAgentV1ToolContractMatchesRust pins the V1 family specs: Rust
+// publishes them as one namespace tool (multi_agents_spec.rs
+// MULTI_AGENT_V1_NAMESPACE_DESCRIPTION), so every member spec must carry the
+// namespace description for the merged namespace.
+func TestMultiAgentV1ToolContractMatchesRust(t *testing.T) {
+	registry := tool.NewRegistry()
+	controller := NewMemoryToolController()
+	if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+		Controller: controller, Exposure: tool.ExposureModelVisible, Version: VersionV1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"spawn_agent", "send_input", "wait_agent", "resume_agent", "close_agent"} {
+		executor, ok := registry.Lookup(tool.NamespacedName(MultiAgentV1Namespace, name))
+		if !ok {
+			t.Fatalf("missing %s.%s", MultiAgentV1Namespace, name)
+		}
+		spec := executor.Spec()
+		if spec.NamespaceDescription != MultiAgentV1NamespaceDescription {
+			t.Fatalf("spec %s namespace description = %q, want %q", name, spec.NamespaceDescription, MultiAgentV1NamespaceDescription)
+		}
+		if spec.Exposure != tool.ExposureModelVisible {
+			t.Fatalf("spec %s exposure = %q", name, spec.Exposure)
+		}
+	}
+}
+
 func TestMultiAgentV1ControllerErrorsRespondToModel(t *testing.T) {
 	registry := tool.NewRegistry()
 	controller := &limitV1Controller{MemoryToolController: NewMemoryToolController()}

@@ -2711,7 +2711,10 @@ func remoteDialUnixSocket(ctx context.Context, socketPath string) (net.Conn, err
 func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {
 	params := appserver.InitializeParams{
 		ClientInfo: appserver.ClientInfo{
-			Name:    "codex_go_tui",
+			// Same client identity the local TUI uses (Rust
+			// codex-rs/tui/src/app_server_connection.rs connects as
+			// "codex-tui").
+			Name:    "codex-tui",
 			Version: doctor.Version(),
 		},
 		Capabilities: &appserver.InitializeCapabilities{

@@ -15,7 +15,11 @@ const (
 	// MultiAgentV1Namespace matches Rust's MULTI_AGENT_V1_NAMESPACE
 	// (codex-rs/core/src/tools/handlers/multi_agents_spec.rs).
 	MultiAgentV1Namespace = "multi_agent_v1"
-	MultiAgentV2Namespace = "collaboration"
+	// MultiAgentV1NamespaceDescription matches Rust's
+	// MULTI_AGENT_V1_NAMESPACE_DESCRIPTION: the V1 family is published to the
+	// model as one namespace tool carrying this description.
+	MultiAgentV1NamespaceDescription = "Tools for spawning and managing sub-agents."
+	MultiAgentV2Namespace            = "collaboration"
 
 	// MultiAgentV1 wait timeouts mirror Rust's WaitAgentTimeoutOptions: the V1
 	// surface reuses the V2 default/min/max values
@@ -466,9 +470,14 @@ func (e *MultiAgentToolExecutor) WithUpdatedHookInput(invocation *tool.Invocatio
 
 func multiAgentToolSpec(kind MultiAgentToolKind) tool.Spec {
 	name := tool.NamespacedName(MultiAgentV1Namespace, string(kind))
+	// Rust publishes the V1 family as a single namespace tool
+	// (multi_agents_spec.rs `ToolSpec::Namespace`), so every member spec
+	// carries the namespace description that decorates the merged namespace.
+	spec := tool.Spec{Name: name, NamespaceDescription: MultiAgentV1NamespaceDescription}
 	switch kind {
 	case MultiAgentToolSpawn:
-		return tool.Spec{Name: name, Description: "Spawns a sub-agent to work on a task.", InputSchema: multiAgentObjectSchema(map[string]any{
+		spec.Description = "Spawns a sub-agent to work on a task."
+		spec.InputSchema = multiAgentObjectSchema(map[string]any{
 			"message":          map[string]any{"type": "string", "description": "Initial task message."},
 			"items":            map[string]any{"type": "array", "description": "Optional structured input items.", "items": map[string]any{}},
 			"agent_type":       map[string]any{"type": "string", "description": "Optional configured agent role."},
@@ -477,30 +486,36 @@ func multiAgentToolSpec(kind MultiAgentToolKind) tool.Spec {
 			"fork_context":     map[string]any{"type": "boolean", "description": "Whether to include the parent context."},
 			// Rust's multi-agent handlers do not override
 			// `supports_parallel_tool_calls`, so spawning stays serial.
-		}, nil), Parallel: false}
+		}, nil)
+		spec.Parallel = false
 	case MultiAgentToolSend:
-		return tool.Spec{Name: name, Description: "Sends input to an existing sub-agent.", InputSchema: multiAgentObjectSchema(map[string]any{
+		spec.Description = "Sends input to an existing sub-agent."
+		spec.InputSchema = multiAgentObjectSchema(map[string]any{
 			"target":    map[string]any{"type": "string", "description": "Agent id."},
 			"message":   map[string]any{"type": "string", "description": "Message to send."},
 			"items":     map[string]any{"type": "array", "description": "Optional structured input items.", "items": map[string]any{}},
 			"interrupt": map[string]any{"type": "boolean", "description": "Interrupt the target first."},
-		}, []string{"target"})}
+		}, []string{"target"})
 	case MultiAgentToolWait:
-		return tool.Spec{Name: name, Description: "Waits for one or more sub-agents and reports status.", InputSchema: multiAgentObjectSchema(map[string]any{
+		spec.Description = "Waits for one or more sub-agents and reports status."
+		spec.InputSchema = multiAgentObjectSchema(map[string]any{
 			"targets":    map[string]any{"type": "array", "description": "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first.", "items": map[string]any{"type": "string"}},
 			"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "description": fmt.Sprintf("Timeout in milliseconds. Defaults to %d, min %d, max %d. Prefer longer waits (minutes) to avoid busy polling.", MultiAgentV1DefaultWait.Milliseconds(), MultiAgentV1MinWait.Milliseconds(), MultiAgentV1MaxWait.Milliseconds())},
-		}, []string{"targets"})}
+		}, []string{"targets"})
 	case MultiAgentToolResume:
-		return tool.Spec{Name: name, Description: "Resumes a closed sub-agent.", InputSchema: multiAgentObjectSchema(map[string]any{
+		spec.Description = "Resumes a closed sub-agent."
+		spec.InputSchema = multiAgentObjectSchema(map[string]any{
 			"id": map[string]any{"type": "string", "description": "Agent id."},
-		}, []string{"id"})}
+		}, []string{"id"})
 	case MultiAgentToolClose:
-		return tool.Spec{Name: name, Description: "Closes a sub-agent.", InputSchema: multiAgentObjectSchema(map[string]any{
+		spec.Description = "Closes a sub-agent."
+		spec.InputSchema = multiAgentObjectSchema(map[string]any{
 			"target": map[string]any{"type": "string", "description": "Agent id."},
-		}, []string{"target"})}
+		}, []string{"target"})
 	default:
-		return tool.Spec{Name: name}
+		return spec
 	}
+	return spec
 }
 
 func multiAgentObjectSchema(properties map[string]any, required []string) map[string]any {

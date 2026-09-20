@@ -13479,6 +13479,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	requestUserInputDefaultMode := requestUserInputDefaultModeEnabled(cfg)
 	waitForEnvironmentEnabled := cfg != nil && features.Enabled(cfg.FeatureSettings(), "deferred_executor")
 	disableUpdatePlan := cfg != nil && !cfg.UpdatePlanEnabled()
+	disableGetContextRemaining := cfg != nil && !features.Enabled(cfg.FeatureSettings(), "token_budget")
 	disableWaitAgent := cfg != nil && !cfg.WaitAgentEnabled()
 	mcpService := r.mcpServiceForThread(threadID, cfg)
 	requiredMCPServers := r.requiredMCPServersForTurn(threadID, cfg, params)
@@ -13889,6 +13890,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// a model-visible notice for the clock and sleep tools.
 	options.NonfatalClockReadErrors = features.Enabled(cfg.FeatureSettings(), "nonfatal_clock_read_errors")
 	options.DisableUpdatePlan = disableUpdatePlan
+	options.DisableGetContextRemaining = disableGetContextRemaining
 	options.DisableWaitAgent = disableWaitAgent
 	options.ClockProvider = clockProvider
 	if features.Enabled(cfg.FeatureSettings(), "request_permissions_tool") {

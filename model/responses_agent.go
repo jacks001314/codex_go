@@ -1450,6 +1450,7 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	addTurnStateHeader(httpRequest.Header, r.turnStateForRequest(request))
 	addBetaFeaturesHeader(httpRequest.Header, apiRequest.BetaFeaturesHeader)
 	addOriginatorHeader(httpRequest.Header, requestOriginator(request))
+	addSessionIdentityHeaders(httpRequest.Header, request)
 	if guardianReviewer {
 		httpRequest.Header.Set(GuardianHeaderName, GuardianHeaderReviewer)
 	}
@@ -2526,6 +2527,39 @@ func addOriginatorHeader(headers http.Header, originator string) {
 		return
 	}
 	headers.Set("originator", originator)
+}
+
+// addSessionIdentityHeaders mirrors Rust's ResponsesClient::stream_request,
+// which stamps every Responses call with the correlation headers built by
+// codex_api::requests::headers::build_session_headers:
+//
+//	session-id         <- ResponsesOptions::session_id
+//	thread-id          <- ResponsesOptions::thread_id
+//	x-client-request-id <- thread_id (Rust sets the request id from the thread)
+//
+// Go models a session per thread, so the turn's thread id is both the session
+// and the thread identity (upstream sends the same value for the main thread).
+func addSessionIdentityHeaders(headers http.Header, request *AgentRequest) {
+	if headers == nil || request == nil {
+		return
+	}
+	threadID := strings.TrimSpace(request.ThreadID)
+	if threadID == "" || strings.ContainsAny(threadID, "\r\n") {
+		return
+	}
+	sessionID := strings.TrimSpace(request.SessionID)
+	if sessionID == "" || strings.ContainsAny(sessionID, "\r\n") {
+		sessionID = threadID
+	}
+	if headers.Get("session-id") == "" {
+		headers.Set("session-id", sessionID)
+	}
+	if headers.Get("thread-id") == "" {
+		headers.Set("thread-id", threadID)
+	}
+	if headers.Get("x-client-request-id") == "" {
+		headers.Set("x-client-request-id", threadID)
+	}
 }
 
 func addCompatibilityMetadataHeaders(headers http.Header, metadata map[string]string) {

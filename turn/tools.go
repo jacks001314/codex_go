@@ -134,7 +134,11 @@ type ToolRegistryOptions struct {
 	NonfatalClockReadErrors  bool
 	EnableWaitForEnvironment bool
 	DisableUpdatePlan        bool
-	NewContextWindow         func()
+	// DisableGetContextRemaining keeps the token-budget status tool off the
+	// model-visible surface unless the `token_budget` feature is enabled
+	// (Rust core/src/tools/spec_plan.rs).
+	DisableGetContextRemaining bool
+	NewContextWindow           func()
 	// SendUserMessageAsync, when set, emits an asynchronous user-visible
 	// agent message for the send_user_message_async tool (#39319).
 	SendUserMessageAsync func(message string)
@@ -232,6 +236,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			EnableCurrentTime:              options.EnableCurrentTimeTool,
 			EnableClockSleep:               options.EnableSleepTool,
 			DisableUpdatePlan:              options.DisableUpdatePlan,
+			DisableGetContextRemaining:     options.DisableGetContextRemaining,
 			NonfatalClockReadErrors:        options.NonfatalClockReadErrors,
 			NewContextWindow:               options.NewContextWindow,
 		}); err != nil {

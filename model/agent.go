@@ -34,13 +34,17 @@ type AgentRequest struct {
 	ProviderID           string
 	TaskKind             AgentTaskKind
 	ThreadID             string
-	TurnID               string
-	Originator           string
-	Store                bool
-	PreviousResponseID   string
-	ParallelToolCalls    bool
-	ReasoningEffort      string
-	ReasoningSummary     string
+	// SessionID is the session (rollout) identity that Rust passes to
+	// ResponsesOptions::session_id. Go keeps one rollout per thread, so an
+	// empty value falls back to ThreadID (see addSessionIdentityHeaders).
+	SessionID          string
+	TurnID             string
+	Originator         string
+	Store              bool
+	PreviousResponseID string
+	ParallelToolCalls  bool
+	ReasoningEffort    string
+	ReasoningSummary   string
 	// DropReasoningEffortUpdates mirrors Rust ModelClient's request-time filter
 	// (#46530): when reasoning-effort updates are unsupported for the effective
 	// model or provider, saved configuration_update items are removed from the

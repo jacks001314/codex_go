@@ -1825,6 +1825,50 @@ func TestFreshRunsWithSamePromptUseDistinctThreadAndPromptCacheKeys(t *testing.T
 	}
 }
 
+// TestToolRouterGatesUtilityToolsFromConfigLikeRust pins the model-visible
+// utility surface the standalone exec lane and the embedded TUI share: Rust
+// registers update_plan only when [tools.update_plan].enabled is set
+// (config/mod.rs resolve_update_plan_enabled, default false) and
+// get_context_remaining only with the token_budget feature
+// (core/src/tools/spec_plan.rs), so a default config must advertise neither.
+func TestToolRouterGatesUtilityToolsFromConfigLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		values map[string]any
+		want   bool
+	}{
+		{name: "default config keeps both tools off", values: map[string]any{}},
+		{
+			name: "explicit config enables both tools",
+			values: map[string]any{
+				"tools":    map[string]any{"update_plan": map[string]any{"enabled": true}},
+				"features": map[string]any{"token_budget": map[string]any{"enabled": true}},
+			},
+			want: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			runner := NewLocalRunner(t.TempDir())
+			req := &Request{Exec: cli.ExecOptions{Prompt: "hello", Shared: cli.SharedOptions{CWD: t.TempDir()}}}
+			router, err := runner.toolRouterForRequest(req, &agentRunConfig{
+				Config: &config.Config{Values: testCase.values},
+			})
+			if err != nil {
+				t.Fatalf("toolRouterForRequest() error = %v", err)
+			}
+			visible := map[string]bool{}
+			for _, spec := range router.ModelVisibleSpecs() {
+				visible[spec.Name.Key()] = true
+			}
+			for _, name := range []string{"update_plan", "get_context_remaining"} {
+				if visible[name] != testCase.want {
+					t.Fatalf("visible[%s] = %v, want %v (visible = %#v)", name, visible[name], testCase.want, visible)
+				}
+			}
+		})
+	}
+}
+
 func TestRunExecReview(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
@@ -6907,6 +6951,60 @@ func TestExecAgentOriginatorDefaultsToRustCLI(t *testing.T) {
 	t.Setenv("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "")
 	if got := execAgentOriginator(&Request{}); got != "codex_cli_rs" {
 		t.Fatalf("execAgentOriginator() = %q, want codex_cli_rs", got)
+	}
+}
+
+// TestExecAgentOriginatorPrefersRequestIdentity covers the embedded TUI lane:
+// Rust registers the in-process app-server connection as "codex-tui", which
+// becomes the process originator, so the TUI's model traffic is attributed to
+// "codex-tui" rather than to the standalone CLI. The SDK override still wins,
+// matching Rust's set_default_originator AlreadyInitialized behavior.
+func TestExecAgentOriginatorPrefersRequestIdentity(t *testing.T) {
+	t.Setenv("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "")
+	if got := execAgentOriginator(&Request{Originator: "codex-tui"}); got != "codex-tui" {
+		t.Fatalf("execAgentOriginator(codex-tui) = %q, want codex-tui", got)
+	}
+	t.Setenv("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "codex_sdk_ts")
+	if got := execAgentOriginator(&Request{Originator: "codex-tui"}); got != "codex_sdk_ts" {
+		t.Fatalf("execAgentOriginator with SDK override = %q, want codex_sdk_ts", got)
+	}
+}
+
+// TestRunAttributesEmbeddedTUIOriginatorLikeRust pins the originator the exec
+// runner hands to the model client, which becomes the `originator` request
+// header (Rust tui/src/lib.rs connects as "codex-tui").
+func TestRunAttributesEmbeddedTUIOriginatorLikeRust(t *testing.T) {
+	t.Setenv("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "")
+	for _, testCase := range []struct {
+		name       string
+		originator string
+		want       string
+	}{
+		{name: "embedded TUI", originator: "codex-tui", want: "codex-tui"},
+		{name: "standalone exec", want: "codex_cli_rs"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+				t.Fatalf("Save auth returned error: %v", err)
+			}
+			agent := &recordingAgent{message: "ok"}
+			runner := NewRunner(home)
+			runner.Agent = agent
+			var stdout, stderr bytes.Buffer
+			if _, err := runner.Run(Request{
+				Exec:       cli.ExecOptions{Prompt: "hello"},
+				Originator: testCase.originator,
+			}, strings.NewReader(""), &stdout, &stderr); err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			if agent.request == nil {
+				t.Fatal("agent.request is nil")
+			}
+			if agent.request.Originator != testCase.want {
+				t.Fatalf("Originator = %q, want %q", agent.request.Originator, testCase.want)
+			}
+		})
 	}
 }
 

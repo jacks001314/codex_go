@@ -219,6 +219,14 @@ func isResponsesNamespaceTool(spec *tool.Spec) bool {
 	if spec.Name.Namespace == "collaboration" {
 		return true
 	}
+	// Rust registers the multi-agent V1 family as one namespace spec
+	// (core/src/tools/handlers/multi_agents_spec.rs: `ToolSpec::Namespace`
+	// with MULTI_AGENT_V1_NAMESPACE), so the model sees a single
+	// "multi_agent_v1" namespace holding spawn/send/wait/resume/close rather
+	// than five flattened `multi_agent_v1__*` functions.
+	if spec.Name.Namespace == "multi_agent_v1" {
+		return true
+	}
 	if strings.HasPrefix(spec.Name.Namespace, "mcp__") {
 		return true
 	}

@@ -144,7 +144,9 @@ func initializeLocalGoalConnection(router interactiveGoalRouter) (string, error)
 	}
 	raw, err := json.Marshal(appserver.InitializeParams{
 		ClientInfo: appserver.ClientInfo{
-			Name:    "codex_go_tui",
+			// Same client identity the interactive TUI uses (Rust
+			// codex-rs/tui/src/lib.rs connects as "codex-tui").
+			Name:    "codex-tui",
 			Version: doctor.Version(),
 		},
 		Capabilities: &appserver.InitializeCapabilities{

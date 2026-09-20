@@ -555,6 +555,10 @@ type CoreHandlerOptions struct {
 	EnableClockSleep               bool
 	EnableLegacySleep              bool
 	DisableUpdatePlan              bool
+	// DisableGetContextRemaining mirrors Rust's token-budget gate: the handler
+	// is registered only when the `token_budget` feature is enabled
+	// (codex-rs/core/src/tools/spec_plan.rs), which is off by default.
+	DisableGetContextRemaining bool
 	// NonfatalClockReadErrors mirrors the feature of the same name (#46006):
 	// clock and sleep failures become model-visible notices instead of fatal
 	// tool errors.
@@ -577,7 +581,9 @@ func RegisterCoreHandlersWithOptions(registry *Registry, options *CoreHandlerOpt
 	}
 	handlers := []Executor{
 		NewRequestUserInputHandlerWithModes(options.UserInputResponder, options.RequestUserInputAvailableModes),
-		NewGetContextRemainingHandler(options.ContextStatus),
+	}
+	if !options.DisableGetContextRemaining {
+		handlers = append(handlers, NewGetContextRemainingHandler(options.ContextStatus))
 	}
 	if !options.DisableUpdatePlan {
 		handlers = append(handlers, NewPlanHandler(options.PlanStore))

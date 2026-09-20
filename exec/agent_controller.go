@@ -199,6 +199,11 @@ func execAgentOriginator(req *Request) string {
 	if originator := strings.TrimSpace(os.Getenv("CODEX_INTERNAL_ORIGINATOR_OVERRIDE")); originator != "" {
 		return originator
 	}
+	if req != nil {
+		if originator := strings.TrimSpace(req.Originator); originator != "" {
+			return originator
+		}
+	}
 	return "codex_cli_rs"
 }
 

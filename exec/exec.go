@@ -67,7 +67,17 @@ type Request struct {
 	// `TurnStartParams::turn_trigger`). A standalone `codex exec` turn uses
 	// "exec"; the embedded TUI overrides it with "user" and the goal runtime
 	// with "goal". Empty keeps the exec default.
-	TurnTrigger       string
+	TurnTrigger string
+	// Originator overrides the process originator for this run. Rust resolves
+	// the originator process-wide (codex_login::default_client::originator):
+	// the embedded TUI's app-server initialize handshake registers
+	// clientInfo.name ("codex-tui", tui/src/lib.rs) before any turn starts, so
+	// every model request the TUI issues carries "codex-tui". Go's interactive
+	// TUI drives its turns through this runner rather than through the
+	// app-server, so the embedded TUI stamps the same identity per request.
+	// Empty falls back to CODEX_INTERNAL_ORIGINATOR_OVERRIDE and then the
+	// standalone CLI originator.
+	Originator        string
 	SteerMailbox      *turn.SteerMailbox
 	OnTurnStarted     func(threadID string, turnID string)
 	OnSteerCommitted  func(count int)
@@ -1222,6 +1232,24 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	options := turn.DefaultToolRegistryOptions(requestCWD(req))
 	options.CodexVersion = execHumanVersion()
 	options.UnifiedExec = r.UnifiedExec
+	if run != nil && run.Config != nil {
+		// Rust resolves the model-visible utility surface from the effective
+		// config before the registry is built: update_plan only exists when
+		// [tools.update_plan].enabled is set (config/mod.rs
+		// resolve_update_plan_enabled, default false) and get_context_remaining
+		// only with the token_budget feature (core/src/tools/spec_plan.rs).
+		// The standalone exec lane and the embedded TUI share this path, so the
+		// gates have to be applied here as well as in the app-server router.
+		options.DisableUpdatePlan = !run.Config.UpdatePlanEnabled()
+		options.DisableGetContextRemaining = !features.Enabled(run.Config.FeatureSettings(), "token_budget")
+	}
+	if run != nil && strings.TrimSpace(run.Model) != "" {
+		// Rust registers apply_patch only for models whose catalog metadata
+		// declares an apply-patch tool type (core/src/tools/spec_plan.rs:
+		// `model_info.apply_patch_tool_type.is_some()`); models without the
+		// metadata fall back to shell-driven patches.
+		options.EnableApplyPatch = strings.TrimSpace(execModelInfo(strings.TrimSpace(run.Model), run.Config).ApplyPatchToolType) != ""
+	}
 	if run != nil {
 		options.EnableUnifiedExec = run.UnifiedExecEnabled
 		options.CodeModeProvider = run.CodeModeProvider

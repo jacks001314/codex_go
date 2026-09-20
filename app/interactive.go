@@ -1164,6 +1164,16 @@ func interactiveStartLocalTUIThread(root *cli.RootOptions, state *codextui.State
 	if _, err := store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{Source: &source}, false); err != nil {
 		return "", fmt.Errorf("mark TUI bootstrap thread as CLI: %w", err)
 	}
+	// Rust's interactive TUI connects to the app-server as "codex-tui" and the
+	// session originator is taken from that client identity
+	// (codex-rs/tui/src/lib.rs, app-server initialize_processor.rs:
+	// `let originator = name.clone()`). Go boots the thread through a raw
+	// app-server router, so the identity has to be stamped explicitly -
+	// otherwise every TUI session is attributed to the CLI originator.
+	originator := tuiClientName
+	if _, err := store.UpdateMetadata(session.ThreadID(threadID), &session.MetadataPatch{Originator: &originator}, false); err != nil {
+		return "", fmt.Errorf("mark TUI bootstrap thread originator: %w", err)
+	}
 	return threadID, nil
 }
 
@@ -3304,6 +3314,13 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		AdditionalInputItems:   additionalInputItems,
 		InternalEventHandler:   internalEventHandler,
 		TurnTrigger:            interactiveTurnTrigger(request),
+		// Rust's embedded TUI registers its app-server connection as
+		// "codex-tui", which becomes the process originator, so TUI model
+		// traffic is attributed to the TUI and not to the standalone CLI
+		// (tui/src/lib.rs client_name + app-server initialize_processor.rs
+		// `set_default_originator`). Go's TUI runs its turns through the exec
+		// runner, so the identity is stamped per turn.
+		Originator: tuiClientName,
 	}
 	if len(interrupts) > 0 && interrupts[0] != nil {
 		controller := interrupts[0]
