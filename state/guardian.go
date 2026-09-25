@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"codex_go/context"
+	"codex_go/retainedctx"
 )
 
 const (
@@ -591,16 +592,22 @@ type BuildPromptOptions struct {
 	// messages are treated as authorization evidence; agent claims and
 	// assistant commentary are excluded.
 	RootUserAuthorization []string
+	// RetainedContext carries the host-owned retained snapshot so the review
+	// prompt includes the retained user-instruction section: bounded original
+	// instructions in acceptance order, with assistant text as untrusted
+	// context (Rust's RetainedUserInstructionsSection). A nil context renders no
+	// section.
+	RetainedContext *retainedctx.RetainedContext
 }
 
 // BuildPromptWithOptions renders the Guardian review prompt in the order Rust's
 // composed context uses: the stable evidence first and the planned action last,
 // so the evidence stays a reusable history prefix across approval requests
-// (#46279). Rust's section positions are root conversation (1), transcript (4),
-// node-repl evidence (10), then the planned action with its tool descriptions
-// (11); the sections Go does not model (retained instructions, trusted answers,
-// permissions, previous reviews, trusted tool/skills) come from the review's
-// inherited context instead.
+// (#46279). Rust's registry order places the root conversation, then the
+// retained user instructions, then the transcript and node-repl evidence, and
+// finally the planned action with its tool descriptions; the sections Go does
+// not model (trusted answers, permissions, previous reviews, trusted
+// tool/skills) come from the review's inherited context instead.
 func BuildPromptWithOptions(action Action, transcript []string, options BuildPromptOptions) (string, error) {
 	if err := action.Validate(); err != nil {
 		return "", err
@@ -619,6 +626,12 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 		if items := RootConversationSectionItems(messages); len(items) > 0 {
 			writeGuardianPromptSection(&builder, strings.Join(items, ""))
 		}
+	}
+	if items := SenderUserMessagesSectionItems(options.RetainedContext); len(items) > 0 {
+		writeGuardianPromptSection(&builder, strings.Join(items, ""))
+	}
+	if items := RetainedUserInstructionsSectionItems(options.RetainedContext); len(items) > 0 {
+		writeGuardianPromptSection(&builder, strings.Join(items, ""))
 	}
 	if len(transcript) > 0 {
 		var section strings.Builder
