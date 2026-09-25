@@ -375,6 +375,53 @@ func TestDiscoverStreamableHTTPOAuthReturnsNormalizedScopes(t *testing.T) {
 	}
 }
 
+// TestOAuthDiscoveryRejectsNonWebAuthorizationEndpointsLikeRust mirrors Rust
+// #47326: an authorization endpoint whose scheme is not http or https is
+// rejected during discovery, before client registration or the authorization
+// URL handoff.
+func TestOAuthDiscoveryRejectsNonWebAuthorizationEndpointsLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		endpoint string
+		ok       bool
+	}{
+		{name: "https", endpoint: "https://example.com/authorize", ok: true},
+		{name: "http", endpoint: "http://example.com/authorize", ok: true},
+		{name: "file", endpoint: "file:///etc/authorize"},
+		{name: "custom scheme", endpoint: "custom://example.com/authorize"},
+		{name: "malformed", endpoint: "://not a url"},
+		{name: "scheme relative", endpoint: "/authorize"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/.well-known/oauth-authorization-server/mcp" {
+					http.NotFound(w, r)
+					return
+				}
+				writeJSON(t, w, map[string]any{
+					"authorization_endpoint": testCase.endpoint,
+					"token_endpoint":         "https://example.com/token",
+				})
+			}))
+			defer server.Close()
+
+			discovery, err := DiscoverStreamableHTTPOAuth(context.Background(), server.URL+"/mcp", server.Client())
+			if err != nil {
+				t.Fatalf("DiscoverStreamableHTTPOAuth() error = %v", err)
+			}
+			if testCase.ok {
+				if discovery == nil || discovery.AuthorizationEndpoint != testCase.endpoint {
+					t.Fatalf("discovery = %#v, want %q", discovery, testCase.endpoint)
+				}
+				return
+			}
+			if discovery != nil {
+				t.Fatalf("discovery = %#v, want the non-web endpoint rejected", discovery)
+			}
+		})
+	}
+}
+
 func TestDiscoverStreamableHTTPOAuthFollowsProtectedResourceMetadata(t *testing.T) {
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/.well-known/oauth-authorization-server/mcp" {

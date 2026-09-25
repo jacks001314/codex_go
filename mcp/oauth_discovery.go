@@ -469,7 +469,29 @@ func fetchMCPOAuthAuthorizationServerMetadata(ctx context.Context, client *http.
 	if strings.TrimSpace(metadata.AuthorizationEndpoint) == "" || strings.TrimSpace(metadata.TokenEndpoint) == "" {
 		return nil, false, nil
 	}
+	// Rust #47326 (rmcp-client oauth/issuer_binding.rs): reject non-web
+	// authorization endpoints before client registration or the authorization
+	// URL is returned, so a `file://`, `custom://` or malformed endpoint never
+	// reaches the browser handoff.
+	if !mcpOAuthWebEndpoint(metadata.AuthorizationEndpoint) {
+		return nil, false, nil
+	}
 	return &metadata, true, nil
+}
+
+// mcpOAuthWebEndpoint reports whether raw is a parseable URL whose scheme is
+// http or https (Rust's `matches!(scheme, "http" | "https")`).
+func mcpOAuthWebEndpoint(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
+	}
 }
 
 func fetchMCPOAuthProtectedResourceMetadata(ctx context.Context, client *http.Client, metadataURL string) (*oauthProtectedResourceMetadata, bool, error) {
