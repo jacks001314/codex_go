@@ -78,6 +78,15 @@ func (r *RuntimeRouter) invalidateApplicationNetworkPolicy() {
 	r.networkPolicy.Policy().Invalidate()
 }
 
+// applicationNetworkPolicyHandle returns the published policy handle the host's
+// non-router transports (OTLP exports, for example) bind to.
+func (r *RuntimeRouter) applicationNetworkPolicyHandle() network.NetworkPolicy {
+	if r == nil || r.networkPolicy == nil {
+		return network.UnmanagedNetworkPolicy()
+	}
+	return r.networkPolicy.Policy()
+}
+
 // remoteControlRestrictedPolicy returns the router's published policy when it
 // restricts application destinations. Rust #47410 routes the remote-control
 // server API and WebSocket dial through that policy.

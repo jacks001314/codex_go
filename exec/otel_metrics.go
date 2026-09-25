@@ -32,6 +32,7 @@ func (r *Runner) configureOtelProvider(cfg *config.Config, req *Request) {
 		ServiceName:             execAgentOriginator(req),
 		ServiceVersion:          doctor.Version(),
 		DefaultAnalyticsEnabled: true,
+		NetworkPolicy:           cfg.NetworkPolicy(),
 	})
 	if err != nil {
 		slog.Warn("failed to build the OTEL provider", "error", err)

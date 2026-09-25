@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -19,6 +20,8 @@ import (
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/proto"
+
+	"codex_go/network"
 )
 
 // Rust parity: codex-rs/otel/src/metrics (client.rs + config.rs) and
@@ -226,12 +229,35 @@ func NewOTLPMetricsExporter(options OTLPMetricsExporterOptions) *OTLPMetricsExpo
 	}
 }
 
+// otlpExportPolicy is the application policy every OTLP HTTP export client
+// enforces. Rust #47408 makes managed OTLP HTTP exports cancellable: the export
+// transport carries the application policy, so a revocation aborts them.
+var otlpExportPolicy struct {
+	mu     sync.RWMutex
+	policy network.NetworkPolicy
+}
+
+func setOTLPExportPolicy(policy network.NetworkPolicy) {
+	otlpExportPolicy.mu.Lock()
+	defer otlpExportPolicy.mu.Unlock()
+	otlpExportPolicy.policy = policy
+}
+
+func currentOTLPExportPolicy() network.NetworkPolicy {
+	otlpExportPolicy.mu.RLock()
+	defer otlpExportPolicy.mu.RUnlock()
+	return otlpExportPolicy.policy
+}
+
 // buildOTLPHTTPClient mirrors codex-otel's build_http_client_inner for the OTLP
 // HTTP exporter: the CA certificate disables the built-in roots, and a client
 // certificate/private key pair is required together and forces HTTPS.
 func buildOTLPHTTPClient(tlsOptions *OTLPHTTPTLSConfig, timeout time.Duration) (HTTPDoer, bool, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	client := &http.Client{Transport: transport, Timeout: timeout}
+	if policy := currentOTLPExportPolicy(); policy.IsScoped() {
+		client.Transport = &network.PolicyRoundTripper{Policy: policy, Next: client.Transport}
+	}
 	if tlsOptions == nil {
 		return client, false, nil
 	}

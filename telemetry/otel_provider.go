@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+
+	"codex_go/network"
 )
 
 // Rust parity: codex-rs/otel/src/config.rs (OtelExporter / OtelSettings /
@@ -68,6 +70,9 @@ type OtelSettings struct {
 	RuntimeMetrics  bool
 	SpanAttributes  map[string]string
 	Tracestate      map[string]map[string]string
+	// NetworkPolicy is the application policy the OTLP HTTP export clients
+	// enforce (Rust #47408 makes managed HTTP exports cancellable).
+	NetworkPolicy network.NetworkPolicy
 }
 
 // OtelProvider mirrors codex-otel's OtelProvider for the metrics, logging, and
@@ -83,6 +88,8 @@ type OtelProvider struct {
 // without error when no supported exporter is enabled, which is what Rust does
 // when every exporter is disabled.
 func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
+	// Every OTLP HTTP export client built below enforces this generation.
+	setOTLPExportPolicy(settings.NetworkPolicy)
 	// Rust resolves the settings, validates the trace metadata before any
 	// process-global OTEL state is installed, and only then builds the
 	// pipelines (provider.rs::try_new).

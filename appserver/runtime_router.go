@@ -1519,11 +1519,15 @@ func (r *RuntimeRouter) buildOtelProvider(codexHome string, options *RuntimeRout
 	if options != nil {
 		defaultAnalyticsEnabled = options.AnalyticsDefaultEnabled
 	}
+	// Publish the application policy before the export clients are built: an
+	// unpublished handle would fail every export closed.
+	networkPolicy, _ := r.refreshApplicationNetworkPolicy()
 	return otelinit.BuildProvider(otelinit.Options{
 		Config:                  &config.Config{Values: read.Config},
 		ServiceName:             otelAppServerServiceName,
 		ServiceVersion:          appServerVersion(),
 		DefaultAnalyticsEnabled: defaultAnalyticsEnabled,
+		NetworkPolicy:           networkPolicy,
 	})
 }
 

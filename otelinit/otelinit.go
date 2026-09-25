@@ -8,6 +8,7 @@ package otelinit
 
 import (
 	"codex_go/config"
+	"codex_go/network"
 	"codex_go/telemetry"
 )
 
@@ -24,6 +25,10 @@ type Options struct {
 	// DefaultAnalyticsEnabled is the analytics default used when the config does
 	// not set `analytics.enabled`; metrics export requires analytics.
 	DefaultAnalyticsEnabled bool
+	// NetworkPolicy is the host's published application policy. The OTLP HTTP
+	// export clients enforce it, so a managed policy makes the exports
+	// cancellable and a restricting one disables them (Rust #47408).
+	NetworkPolicy network.NetworkPolicy
 }
 
 // BuildProvider mirrors otel_init::build_provider: resolve the effective
@@ -64,6 +69,7 @@ func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 		RuntimeMetrics:  runtimeMetrics,
 		SpanAttributes:  resolved.SpanAttributes,
 		Tracestate:      resolved.Tracestate,
+		NetworkPolicy:   options.NetworkPolicy,
 	})
 	if err != nil {
 		return nil, err
