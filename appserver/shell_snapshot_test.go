@@ -34,6 +34,12 @@ func snapshotTestCaptureStream() []byte {
 // server's snapshot lifecycle can be tested without a POSIX shell.
 func stubShellSnapshotRunner(t *testing.T) {
 	t.Helper()
+	stubShellSnapshotRunnerWithStream(t, snapshotTestCaptureStream())
+}
+
+// stubShellSnapshotRunnerWithStream answers captures with the given stream.
+func stubShellSnapshotRunnerWithStream(t *testing.T, stream []byte) {
+	t.Helper()
 	previous := shellSnapshotCaptureRunner
 	shellSnapshotCaptureRunner = func(
 		_ context.Context,
@@ -46,7 +52,7 @@ func stubShellSnapshotRunner(t *testing.T) {
 		if len(command) >= 3 && strings.HasPrefix(command[2], "set -e; . ") {
 			return nil, nil
 		}
-		return snapshotTestCaptureStream(), nil
+		return stream, nil
 	}
 	t.Cleanup(func() { shellSnapshotCaptureRunner = previous })
 }
@@ -172,6 +178,45 @@ func TestShellSnapshotProviderFollowsTheFeatureAndLaunchShapeLikeRust(t *testing
 				t.Fatalf("snapshot = %q, want none for the %s gap", got, testCase.wantGap)
 			}
 		})
+	}
+}
+
+// Rust #48099: the session snapshot is captured under the thread's
+// shell_environment_policy, so exports the policy filters never reach the file.
+func TestShellSnapshotPrewarmHonorsTheEnvironmentPolicyLikeRust(t *testing.T) {
+	stubShellSnapshotRunnerWithStream(t, []byte(strings.Join([]string{
+		"# Snapshot file\nalias probe='echo probe'\n",
+		"",
+		"FOO", "declare -x FOO=\"foo-sentinel\"",
+		"BAR", "declare -x BAR=\"bar-sentinel\"",
+		"", "", "",
+	}, "\x00")))
+	configBody := "sandbox_mode = \"workspace-write\"\n[shell_environment_policy]\ninclude_only = [\"FOO\"]\n"
+	router, threadID, cwd := newShellSnapshotRouter(t, configBody)
+	t.Cleanup(func() { _ = router.Close() })
+	router.services.Environment = NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, cwd)
+	cfg := router.effectiveWriteStdinConfig(threadID)
+	if provider := router.shellSnapshotProviderForTurn(threadID, cfg); provider == nil {
+		t.Fatal("no snapshot provider")
+	}
+	snapshotDir := filepath.Join(router.codexHomeForRollout(), "shell_snapshots")
+	deadline := time.Now().Add(2 * time.Second)
+	var content []byte
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir(snapshotDir)
+		if err == nil && len(entries) == 1 {
+			content, err = os.ReadFile(filepath.Join(snapshotDir, entries[0].Name()))
+			if err == nil && strings.Contains(string(content), "foo-sentinel") {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(string(content), "foo-sentinel") {
+		t.Fatalf("the prewarmed snapshot misses the admitted export:\n%s", content)
+	}
+	if strings.Contains(string(content), "bar-sentinel") {
+		t.Fatalf("the prewarmed snapshot ignored the environment policy:\n%s", content)
 	}
 }
 

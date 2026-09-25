@@ -13,6 +13,8 @@ import (
 	"bytes"
 	"strings"
 	"unicode/utf8"
+
+	"codex_go/execpolicy"
 )
 
 // SnapshotStartup selects whether a capture seeds the user's interactive
@@ -301,19 +303,44 @@ func (s *CapturedSnapshot) RenderState() string {
 	return s.State + s.Aliases
 }
 
-// RenderScript renders the complete replay script: shell state, then the
-// export declarations (Rust's CapturedSnapshot::render_script).
-func (s *CapturedSnapshot) RenderScript() string {
+// RenderScript renders the complete replay script: shell state, then the export
+// declarations the shell environment policy admits (Rust's
+// CapturedSnapshot::render_script, #48099).
+//
+// Only exports the policy keeps are persisted, and an export the policy sets
+// explicitly is never persisted: the command environment supplies that value, so
+// a captured original can neither override the configured one nor leak into the
+// snapshot.
+func (s *CapturedSnapshot) RenderScript(policy *execpolicy.EnvPolicy) string {
 	if s == nil {
 		return ""
 	}
 	var builder strings.Builder
 	builder.WriteString(s.RenderState())
 	builder.WriteString("# exports (native declarations)\n")
+	allowed := execpolicy.CreateEnv(policy, nil, capturedExportNames(s.Exports))
 	for _, export := range s.Exports {
+		if _, ok := allowed[export.Key]; !ok {
+			continue
+		}
+		if policy != nil {
+			if _, overridden := policy.Set[export.Key]; overridden {
+				continue
+			}
+		}
 		builder.WriteString(export.Source)
 	}
 	return builder.String()
+}
+
+// capturedExportNames maps every captured export name to an empty value, the
+// shape the policy filter is applied to.
+func capturedExportNames(exports []CapturedExport) map[string]string {
+	names := make(map[string]string, len(exports))
+	for _, export := range exports {
+		names[export.Key] = ""
+	}
+	return names
 }
 
 // snapshotRecordReader walks the NUL-delimited records of a capture stream.

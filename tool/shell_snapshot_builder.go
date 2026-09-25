@@ -10,6 +10,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"codex_go/envutil"
+	"codex_go/execpolicy"
 	"codex_go/sandbox"
 	"codex_go/shell"
 )
@@ -69,10 +71,15 @@ const (
 
 // SnapshotCaptureRequest describes the launch whose shell state is needed.
 type SnapshotCaptureRequest struct {
-	ShellType           ShellType
-	ShellPath           string
-	CWD                 string
-	AllowLoginShell     bool
+	ShellType       ShellType
+	ShellPath       string
+	CWD             string
+	AllowLoginShell bool
+	// EnvironmentPolicy is the resolved `shell_environment_policy` table of the
+	// environment the snapshot belongs to. It decides which captured exports the
+	// snapshot may persist (Rust #48099), and it is part of the cache key so a
+	// snapshot captured under another policy is never replayed.
+	EnvironmentPolicy   map[string]any
 	PermissionProfile   *sandbox.PermissionProfile
 	PermissionProfileID string
 }
@@ -82,10 +89,13 @@ type SnapshotCaptureRequest struct {
 // for (feature enabled, the session's own shell and directory, a local
 // environment, Direct shell mode), and returns "" when it is not.
 type SnapshotProviderRequest struct {
-	ShellType           ShellType
-	ShellPath           string
-	CWD                 string
-	AllowLoginShell     bool
+	ShellType       ShellType
+	ShellPath       string
+	CWD             string
+	AllowLoginShell bool
+	// EnvironmentPolicy is the resolved shell environment policy of the
+	// environment this launch runs in.
+	EnvironmentPolicy   map[string]any
 	PermissionProfile   *sandbox.PermissionProfile
 	PermissionProfileID string
 	EnvironmentID       string
@@ -250,7 +260,8 @@ func (b *SnapshotBuilder) writeSnapshot(
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, SnapshotReasonWriteFailed
 	}
-	if err := os.WriteFile(tempPath, []byte(decoded.RenderScript()), 0o600); err != nil {
+	policy := shellSnapshotEnvironmentPolicy(request)
+	if err := os.WriteFile(tempPath, []byte(decoded.RenderScript(policy)), 0o600); err != nil {
 		return nil, SnapshotReasonWriteFailed
 	}
 	validation := "set -e; . \"" + tempPath + "\""
@@ -293,6 +304,27 @@ func snapshotExecArgs(request SnapshotCaptureRequest, script string) []string {
 // snapshotCaptureKey identifies a captured snapshot, mirroring Rust's
 // ShellSnapshotCacheKey: the shell, its startup mode, the launch directory and
 // the policy the capture ran under.
+// shellSnapshotEnvironmentPolicy builds the shell environment policy the
+// snapshot render uses: the environment's resolved table, applied to the
+// launch's directory (Rust's resolved environment policy, #48099).
+func shellSnapshotEnvironmentPolicy(request SnapshotCaptureRequest) *execpolicy.EnvPolicy {
+	return execpolicy.EnvPolicyFromShellEnvironmentPolicy(request.EnvironmentPolicy, request.CWD)
+}
+
+// snapshotEnvironmentPolicyKey is the canonical identity of an environment
+// policy table, so a snapshot captured under one policy is never reused under
+// another (Rust's `ShellSnapshotFile::shell_environment_policy` filter).
+func snapshotEnvironmentPolicyKey(table map[string]any) string {
+	if len(table) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(table)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
 func snapshotCaptureKey(request SnapshotCaptureRequest) string {
 	policy := request.PermissionProfileID
 	if request.PermissionProfile != nil {
@@ -305,6 +337,7 @@ func snapshotCaptureKey(request SnapshotCaptureRequest) string {
 		request.ShellPath,
 		request.CWD,
 		boolKey(request.AllowLoginShell),
+		snapshotEnvironmentPolicyKey(request.EnvironmentPolicy),
 		policy,
 	}, "\x01")
 }

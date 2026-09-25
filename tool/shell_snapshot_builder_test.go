@@ -285,6 +285,77 @@ func TestSnapshotBuilderCapturesWithTheHostShellLikeRust(t *testing.T) {
 	}
 }
 
+// snapshotCaptureStreamWith builds a bash capture stream from (key, declaration)
+// pairs.
+func snapshotCaptureStreamWith(exports ...[2]string) []byte {
+	records := []string{"# Snapshot file\nalias probe='echo probe'\n", ""}
+	for _, export := range exports {
+		records = append(records, export[0], export[1])
+	}
+	// The empty key record ends the declarations; the record after it starts the
+	// environment, which this fixture leaves empty.
+	records = append(records, "", "")
+	return []byte(strings.Join(records, "\x00"))
+}
+
+// Rust #48099: a snapshot is rendered under its environment's shell environment
+// policy, so filtered exports and the captured original of a policy-set variable
+// never reach the file; a launch under another policy captures its own snapshot.
+func TestSnapshotBuilderRendersUnderTheEnvironmentPolicyLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	runner := &snapshotBuilderRunner{capture: snapshotCaptureStreamWith(
+		[2]string{"FOO", `declare -x FOO="foo-sentinel"`},
+		[2]string{"BAR", `declare -x BAR="bar-sentinel"`},
+		[2]string{"SECRET_TOKEN", `declare -x SECRET_TOKEN="token-sentinel"`},
+		[2]string{"PROFILE_SET", `declare -x PROFILE_SET="original-set-sentinel"`},
+	)}
+	builder := NewSnapshotBuilder(SnapshotBuilderOptions{CodexHome: codexHome, SessionID: "session-1", Runner: runner.run})
+	t.Cleanup(builder.Close)
+	policy := map[string]any{
+		"ignore_default_excludes": false,
+		"include_only":            []any{"FOO", "SECRET_TOKEN", "PROFILE_SET"},
+		"set":                     map[string]any{"PROFILE_SET": "dummy"},
+	}
+	snapshot, reason := builder.Snapshot(context.Background(), SnapshotCaptureRequest{
+		ShellType: ShellBash, ShellPath: "/bin/bash", CWD: "/repo", AllowLoginShell: true,
+		EnvironmentPolicy: policy,
+	})
+	if reason != "" || snapshot == nil {
+		t.Fatalf("Snapshot() = %v/%q", snapshot, reason)
+	}
+	content, err := os.ReadFile(snapshot.Path())
+	if err != nil {
+		t.Fatalf("read snapshot error = %v", err)
+	}
+	if !strings.Contains(string(content), `declare -x FOO="foo-sentinel"`) {
+		t.Fatalf("an admitted export was dropped:\n%s", content)
+	}
+	for _, dropped := range []string{"bar-sentinel", "token-sentinel", "original-set-sentinel"} {
+		if strings.Contains(string(content), dropped) {
+			t.Fatalf("the snapshot retains %s:\n%s", dropped, content)
+		}
+	}
+
+	// Another policy captures its own snapshot instead of replaying this one.
+	other, reason := builder.Snapshot(context.Background(), SnapshotCaptureRequest{
+		ShellType: ShellBash, ShellPath: "/bin/bash", CWD: "/repo", AllowLoginShell: true,
+		EnvironmentPolicy: map[string]any{"include_only": []any{"BAR"}},
+	})
+	if reason != "" || other == nil {
+		t.Fatalf("Snapshot() with another policy = %v/%q", other, reason)
+	}
+	if other.Path() == snapshot.Path() {
+		t.Fatal("a snapshot captured under another policy was reused")
+	}
+	otherContent, err := os.ReadFile(other.Path())
+	if err != nil {
+		t.Fatalf("read snapshot error = %v", err)
+	}
+	if !strings.Contains(string(otherContent), "bar-sentinel") || strings.Contains(string(otherContent), "foo-sentinel") {
+		t.Fatalf("the second policy did not filter its own snapshot:\n%s", otherContent)
+	}
+}
+
 // TestSnapshotBuilderPrunesWithTheRolloutLookupLikeRust covers Rust's
 // cleanup_stale_snapshots wiring: the first capture prunes snapshots whose
 // session has no rollout, and keeps a live session's.

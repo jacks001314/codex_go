@@ -71,7 +71,7 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 	// resolve, so the first command does not wait for it. Protected captures (an
 	// active credential broker) stay lazy and sandboxed.
 	if !shellSnapshotProtected(cfg) {
-		r.prewarmShellSnapshot(builder, threadID, threadCWD)
+		r.prewarmShellSnapshot(builder, threadID, threadCWD, cfg)
 	}
 	return func(ctx context.Context, request tool.SnapshotProviderRequest) string {
 		if !shellSnapshotLaunchEligible(request) {
@@ -88,10 +88,11 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 		// start_shell_snapshot_task plus the non-broker branch of
 		// TurnEnvironment::shell_snapshot, which ignores the launch's sandbox).
 		snapshot, reason := builder.Snapshot(ctx, tool.SnapshotCaptureRequest{
-			ShellType:       request.ShellType,
-			ShellPath:       request.ShellPath,
-			CWD:             request.CWD,
-			AllowLoginShell: true,
+			ShellType:         request.ShellType,
+			ShellPath:         request.ShellPath,
+			CWD:               request.CWD,
+			AllowLoginShell:   true,
+			EnvironmentPolicy: request.EnvironmentPolicy,
 		})
 		r.recordShellSnapshot(time.Since(started), reason)
 		return snapshot.Path()
@@ -116,10 +117,11 @@ func shellSnapshotProtected(cfg *config.Config) bool {
 // Rust spawns `start_shell_snapshot_task` when an environment resolves. It is
 // best effort: a shell that cannot be snapshotted, a remote environment or a
 // failed capture simply leaves the launch without a snapshot.
-func (r *RuntimeRouter) prewarmShellSnapshot(builder *tool.SnapshotBuilder, threadID string, cwd string) {
+func (r *RuntimeRouter) prewarmShellSnapshot(builder *tool.SnapshotBuilder, threadID string, cwd string, cfg *config.Config) {
 	if r == nil || builder == nil {
 		return
 	}
+	policyTable := r.shellSnapshotEnvironmentPolicyTable(cfg)
 	shellType, shellPath, remote := r.sessionShellForThread(threadID)
 	if remote || shellPath == "" || !shellSnapshotShellSupported(shellType) {
 		return
@@ -132,13 +134,30 @@ func (r *RuntimeRouter) prewarmShellSnapshot(builder *tool.SnapshotBuilder, thre
 		defer cancel()
 		started := time.Now()
 		_, reason := builder.Snapshot(ctx, tool.SnapshotCaptureRequest{
-			ShellType:       shellType,
-			ShellPath:       shellPath,
-			CWD:             cwd,
-			AllowLoginShell: true,
+			ShellType:         shellType,
+			ShellPath:         shellPath,
+			CWD:               cwd,
+			AllowLoginShell:   true,
+			EnvironmentPolicy: policyTable,
 		})
 		r.recordShellSnapshot(time.Since(started), reason)
 	}()
+}
+
+// shellSnapshotEnvironmentPolicyTable returns the thread-level
+// `shell_environment_policy` table, which is the inferred policy for the primary
+// environment (Rust's `inferred_environment_config`). The prewarm captures the
+// session snapshot under it, and a launch whose environment resolves a different
+// policy captures its own.
+func (r *RuntimeRouter) shellSnapshotEnvironmentPolicyTable(cfg *config.Config) map[string]any {
+	if cfg == nil {
+		return nil
+	}
+	table, ok := cfg.Values["shell_environment_policy"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return cloneShellEnvironmentPolicy(table)
 }
 
 // recordShellSnapshot mirrors Rust's shell-snapshot telemetry

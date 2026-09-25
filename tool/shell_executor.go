@@ -753,6 +753,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			ShellPath:           sessionShell.Path,
 			CWD:                 req.CWD,
 			AllowLoginShell:     validation.AllowLoginShell,
+			EnvironmentPolicy:   policyTable,
 			PermissionProfile:   validation.PermissionProfile,
 			PermissionProfileID: validation.PermissionProfileID,
 			EnvironmentID:       req.UnifiedExecEnvironmentID,

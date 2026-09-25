@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"codex_go/execpolicy"
 )
 
 // TestSnapshotCaptureScriptsMatchRust pins the capture scripts: every marker is
@@ -98,6 +100,59 @@ func TestSnapshotCaptureScriptsMatchRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #48099's regression test: the render keeps only the exports the
+// shell environment policy admits, preserves multiline values, and never persists
+// the captured original of a variable the policy sets explicitly.
+func TestRenderScriptAppliesShellEnvironmentPolicyLikeRust(t *testing.T) {
+	captured := ParseCapturedSnapshot(ShellBash, []byte(strings.Join([]string{
+		"# Snapshot file\n# Functions\n",
+		"",
+		"PROFILE_ALLOWED", "declare -x PROFILE_ALLOWED=$'first\\nsecond'",
+		"PROFILE_TOKEN", `declare -x PROFILE_TOKEN="token-sentinel"`,
+		"PROFILE_DENIED", `declare -x PROFILE_DENIED="denied-sentinel"`,
+		"OTHER", `declare -x OTHER="other-sentinel"`,
+		"PROFILE_SECRET", `declare -x PROFILE_SECRET="original-secret-sentinel"`,
+		"", "",
+	}, "\x00")))
+	if captured == nil {
+		t.Fatal("ParseCapturedSnapshot() = nil")
+	}
+	ignoreDefaultExcludes := false
+	policy := &execpolicy.EnvPolicy{
+		Inherit:               "all",
+		IgnoreDefaultExcludes: &ignoreDefaultExcludes,
+		Exclude: []execpolicy.EnvVariablePattern{
+			{Mode: execpolicy.EnvPatternLiteral, Value: "PROFILE_DENIED"},
+		},
+		IncludeOnly: []execpolicy.EnvVariablePattern{
+			{Mode: execpolicy.EnvPatternLiteral, Value: "PATH"},
+			{Mode: execpolicy.EnvPatternWildcard, Value: "PROFILE_*"},
+		},
+		Set: map[string]string{"PROFILE_SECRET": "dummy"},
+	}
+	script := captured.RenderScript(policy)
+	if !strings.Contains(script, "declare -x PROFILE_ALLOWED=$'first\\nsecond'") {
+		t.Fatalf("a multiline allowed export was dropped: %q", script)
+	}
+	for _, sentinel := range []string{"token-sentinel", "denied-sentinel", "other-sentinel", "original-secret-sentinel"} {
+		if strings.Contains(script, sentinel) {
+			t.Fatalf("the snapshot retains %s: %q", sentinel, script)
+		}
+	}
+	if strings.Contains(script, "PROFILE_TOKEN") || strings.Contains(script, "PROFILE_DENIED") ||
+		strings.Contains(script, "OTHER") || strings.Contains(script, "PROFILE_SECRET") {
+		t.Fatalf("the snapshot declares a filtered or overridden export: %q", script)
+	}
+
+	// The default policy keeps every captured declaration.
+	unrestricted := captured.RenderScript(nil)
+	for _, sentinel := range []string{"token-sentinel", "denied-sentinel", "other-sentinel", "original-secret-sentinel"} {
+		if !strings.Contains(unrestricted, sentinel) {
+			t.Fatalf("the default policy dropped %s: %q", sentinel, unrestricted)
+		}
+	}
+}
+
 // TestParseCapturedSnapshotDecodesRecords covers the record grammar, including
 // the incomplete-stream rejections Rust fails closed on.
 func TestParseCapturedSnapshotDecodesRecords(t *testing.T) {
@@ -129,7 +184,7 @@ func TestParseCapturedSnapshotDecodesRecords(t *testing.T) {
 	if string(captured.Environment) != "A=1\x00B=2" {
 		t.Fatalf("Environment = %q", captured.Environment)
 	}
-	script := captured.RenderScript()
+	script := captured.RenderScript(nil)
 	if !strings.HasPrefix(script, "# Snapshot file\nalias h='echo hi'\nexport FOO='bar'\n# exports (native declarations)\n") {
 		t.Fatalf("RenderScript() = %q", script)
 	}
@@ -227,7 +282,7 @@ func TestSnapshotCaptureReplaysWithRealBash(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(snapshotPath), 0o700); err != nil {
 		t.Fatalf("create snapshot dir error = %v", err)
 	}
-	if err := os.WriteFile(snapshotPath, []byte(snapshot.RenderScript()), 0o600); err != nil {
+	if err := os.WriteFile(snapshotPath, []byte(snapshot.RenderScript(nil)), 0o600); err != nil {
 		t.Fatalf("write snapshot error = %v", err)
 	}
 	replay := exec.Command(bash, "-c", "set -e; . \""+snapshotPath+"\"; snapshot_probe_function; printf ' marker=%s\\n' \"$SNAPSHOT_PROBE_MARKER\"")

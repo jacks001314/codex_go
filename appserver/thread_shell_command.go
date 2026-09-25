@@ -65,10 +65,11 @@ func (r *RuntimeRouter) threadShellCommandLaunch(ctx context.Context, run *threa
 	}
 	if provider := r.shellSnapshotProviderForTurn(run.ThreadID, cfg); provider != nil {
 		snapshotPath := provider(ctx, tool.SnapshotProviderRequest{
-			ShellType:       sessionShell.Type,
-			ShellPath:       sessionShell.Path,
-			CWD:             run.CWD,
-			AllowLoginShell: true,
+			ShellType:         sessionShell.Type,
+			ShellPath:         sessionShell.Path,
+			CWD:               run.CWD,
+			AllowLoginShell:   true,
+			EnvironmentPolicy: r.shellSnapshotEnvironmentPolicyTable(cfg),
 		})
 		if snapshotPath != "" {
 			argv = tool.MaybeWrapShellLCWithSnapshot(argv, sessionShell, snapshotPath, explicitOverrides, env, prepends.Entries())
