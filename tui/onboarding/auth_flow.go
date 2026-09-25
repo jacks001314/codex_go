@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -37,6 +38,11 @@ type AuthFlowOptions struct {
 	ForcedWorkspaces []string
 	APIKeyFromEnv    string
 	NoAltScreen      bool
+	// HTTPClient, when set, carries the application network policy the login
+	// requests must observe (Rust's `EmbeddedNetworkPolicy::bind_bootstrap_auth`
+	// applied to the embedded TUI's login flow). Nil keeps the auth package's
+	// own default client.
+	HTTPClient *http.Client
 
 	services *authFlowServices
 }
@@ -513,6 +519,7 @@ func (m *authFlowModel) oauthOptions(openBrowser bool) *auth.OAuthOptions {
 		OpenBrowser:      openBrowser,
 		ForcedWorkspaces: append([]string(nil), m.options.ForcedWorkspaces...),
 		StoreOptions:     m.options.StoreOptions,
+		HTTPClient:       m.options.HTTPClient,
 	}
 }
 

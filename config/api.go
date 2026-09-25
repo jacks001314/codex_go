@@ -1818,13 +1818,20 @@ type ConfigService struct {
 	packagedDefaultsLayer *Layer
 	requirements          *ConfigRequirements
 	requirementsOverride  bool
-	warnings              []ConfigWarningNotification
-	managedLayers         []Layer
-	featureDefaults       map[string]bool
-	importHistory         []ExternalAgentConfigImportHistory
-	nextImportID          int
-	externalAgentHome     string
-	now                   func() time.Time
+	// localRequirements is what the home's requirements file supplied, retained
+	// even after a host installs an effective override. Rust's local application
+	// load (config/src/loader/application.rs) reads exactly the sources that
+	// exist before a cloud bootstrap, so the app-server can authorize bootstrap
+	// and login traffic under the local policy while the effective one - which
+	// may depend on a cloud fetch - is still unknown.
+	localRequirements *ConfigRequirements
+	warnings          []ConfigWarningNotification
+	managedLayers     []Layer
+	featureDefaults   map[string]bool
+	importHistory     []ExternalAgentConfigImportHistory
+	nextImportID      int
+	externalAgentHome string
+	now               func() time.Time
 }
 
 func NewConfigService(codexHome string) *ConfigService {
@@ -1914,9 +1921,23 @@ func (s *ConfigService) ReloadRequirementsFromHome() error {
 		return err
 	}
 	s.mu.Lock()
+	s.localRequirements = cloneRequirements(requirements)
 	s.requirements = cloneRequirements(requirements)
 	s.mu.Unlock()
 	return nil
+}
+
+// LocalRequirements returns the requirements the home's file supplied, without
+// any effective override a host installed afterwards, or nil when the load
+// failed. Rust's local application load reads the same pre-cloud sources, so the
+// app-server authorizes bootstrap traffic with them.
+func (s *ConfigService) LocalRequirements() *ConfigRequirements {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneRequirements(s.localRequirements)
 }
 
 func (s *ConfigService) loadRequirementsFromHome() {
@@ -1935,6 +1956,7 @@ func (s *ConfigService) loadRequirementsFromHome() {
 		return
 	}
 	s.requirements = requirements
+	s.localRequirements = cloneRequirements(requirements)
 }
 
 func (s *ConfigService) loadManagedConfigLayerFromEnv() {

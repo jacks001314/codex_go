@@ -6,11 +6,13 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
 	modelpkg "codex_go/model"
+	codexnetwork "codex_go/network"
 	"codex_go/tui/onboarding"
 )
 
@@ -85,12 +87,21 @@ func interactiveAuthOnboardingOptions(root *cli.RootOptions) (*onboarding.AuthFl
 		return nil, false, nil
 	}
 	noAltScreen := root != nil && root.Shared.NoAltScreen
-	return &onboarding.AuthFlowOptions{
+	options := &onboarding.AuthFlowOptions{
 		CodexHome:        codexHome,
 		StoreOptions:     storeOptions,
 		ChatGPTAllowed:   loaded.IsLoginMethodAllowed(config.ForcedLoginMethodChatGPT),
 		APIKeyAllowed:    loaded.IsLoginMethodAllowed(config.ForcedLoginMethodAPI),
 		ForcedWorkspaces: loaded.EffectiveChatGPTWorkspaces(),
 		NoAltScreen:      noAltScreen,
-	}, true, nil
+	}
+	// Rust binds the local application policy to the embedded login flow
+	// (tui/src/lib.rs `bind_bootstrap_auth`): the login runs before the effective
+	// policy - which can depend on a cloud fetch - exists, so the locally loaded
+	// rules are the ones that authorize it. An unrestricted local policy keeps
+	// the auth package's own default client.
+	if client := policyHTTPClient(loaded, codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 30*time.Second)); client != nil {
+		options.HTTPClient = client
+	}
+	return options, true, nil
 }

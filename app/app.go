@@ -1588,6 +1588,36 @@ func validateFeatureToggles(enable, disable []string) error {
 	return nil
 }
 
+// chatGPTLoginOAuthOptions builds the options the CLI's ChatGPT login flows use.
+//
+// Rust binds the local application policy to these clients
+// (`EmbeddedNetworkPolicy::bind_bootstrap_auth`): login and cloud bootstrap run
+// before the effective policy exists - it can depend on a cloud fetch that has
+// not happened yet - so the rules administrators set locally are the ones that
+// authorize them. An unrestricted local policy leaves the plain clients shared,
+// exactly like the other bootstrap transports.
+func chatGPTLoginOAuthOptions(
+	codexHome string,
+	cfg *config.Config,
+	opts cli.LoginOptions,
+	storeOptions *auth.StoreOptions,
+) *auth.OAuthOptions {
+	options := &auth.OAuthOptions{
+		CodexHome:        codexHome,
+		Issuer:           opts.IssuerBaseURL,
+		ClientID:         opts.ClientID,
+		ForcedWorkspaces: cfg.EffectiveChatGPTWorkspaces(),
+		StoreOptions:     storeOptions,
+	}
+	// The auth package's own default is a 30 second client, so the policy-bound
+	// client keeps the same request budget.
+	options.HTTPClient = policyHTTPClient(cfg, codexnetwork.NewHTTPClient(cfg.RespectSystemProxyEnabled(), 30*time.Second))
+	if fallback := bootstrapFallbackHTTPClient(cfg, 0); fallback != nil {
+		options.FallbackHTTPClient = policyHTTPClient(cfg, fallback)
+	}
+	return options
+}
+
 func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdout, stderr io.Writer) error {
 	codexHome := auth.DefaultCodexHome()
 	loadedConfig, err := config.LoadEffective(codexHome, opts.ConfigOverrides, nil, nil)
@@ -1663,15 +1693,9 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 			return exitMessagef(chatGPTLoginDisabledMessage)
 		}
 		clearExistingAuthBeforeLogin(ctx, codexHome, authStoreOptions)
-		if err := auth.RunDeviceCodeLogin(ctx, &auth.OAuthOptions{
-			CodexHome:          codexHome,
-			Issuer:             opts.IssuerBaseURL,
-			ClientID:           opts.ClientID,
-			DevicePrompt:       stdout,
-			ForcedWorkspaces:   loadedConfig.EffectiveChatGPTWorkspaces(),
-			StoreOptions:       authStoreOptions,
-			FallbackHTTPClient: bootstrapFallbackHTTPClient(loadedConfig, 0),
-		}); err != nil {
+		loginOptions := chatGPTLoginOAuthOptions(codexHome, loadedConfig, opts, authStoreOptions)
+		loginOptions.DevicePrompt = stdout
+		if err := auth.RunDeviceCodeLogin(ctx, loginOptions); err != nil {
 			return exitMessagef("Error logging in with device code: %v", err)
 		}
 		fmt.Fprintln(stdout, auth.LoginFlowSuccessMessage)
@@ -1681,15 +1705,9 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 			return exitMessagef(chatGPTLoginDisabledMessage)
 		}
 		clearExistingAuthBeforeLogin(ctx, codexHome, authStoreOptions)
-		server, err := auth.StartBrowserLogin(ctx, &auth.OAuthOptions{
-			CodexHome:          codexHome,
-			Issuer:             opts.IssuerBaseURL,
-			ClientID:           opts.ClientID,
-			OpenBrowser:        true,
-			ForcedWorkspaces:   loadedConfig.EffectiveChatGPTWorkspaces(),
-			StoreOptions:       authStoreOptions,
-			FallbackHTTPClient: bootstrapFallbackHTTPClient(loadedConfig, 0),
-		})
+		loginOptions := chatGPTLoginOAuthOptions(codexHome, loadedConfig, opts, authStoreOptions)
+		loginOptions.OpenBrowser = true
+		server, err := auth.StartBrowserLogin(ctx, loginOptions)
 		if err != nil {
 			return exitMessagef("Error logging in: %v", err)
 		}

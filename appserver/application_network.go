@@ -39,6 +39,55 @@ func (r *RuntimeRouter) applicationNetworkRequirements() *config.ApplicationRequ
 	return read.Requirements.Application
 }
 
+// localApplicationNetworkRequirements returns the application requirements the
+// home's own file supplies, before any effective override a host installed.
+// Rust loads them independently of user, project and cloud configuration
+// (config/src/loader/application.rs) because bootstrap and login traffic must be
+// authorized before the effective policy - which can depend on a cloud fetch -
+// is known.
+func (r *RuntimeRouter) localApplicationNetworkRequirements() *config.ApplicationRequirements {
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	requirements := r.services.Config.LocalRequirements()
+	if requirements == nil {
+		return nil
+	}
+	return requirements.Application
+}
+
+// refreshLocalApplicationNetworkPolicy publishes the policy composed from the
+// local application requirements, mirroring Rust's second
+// `EmbeddedNetworkPolicy::local` controller. Publication is revision-guarded
+// exactly like the effective policy.
+func (r *RuntimeRouter) refreshLocalApplicationNetworkPolicy() (network.NetworkPolicy, network.DestinationPolicy) {
+	if r == nil || r.localNetworkPolicy == nil {
+		return network.UnmanagedNetworkPolicy(), network.UnrestrictedDestinationPolicy()
+	}
+	r.localNetworkPolicyMu.Lock()
+	defer r.localNetworkPolicyMu.Unlock()
+	policy := r.localNetworkPolicy.Policy()
+	composed := destinationPolicyFromApplicationRequirements(r.localApplicationNetworkRequirements())
+	r.localNetworkPolicy.Publish(policy.Revision(), composed)
+	return policy, composed
+}
+
+// bootstrapAuthHTTPClient binds the local application policy to a client used
+// before the effective policy exists (Rust's
+// `EmbeddedNetworkPolicy::bind_bootstrap_auth`): a restricted local policy limits
+// login and cloud-bootstrap traffic to the destinations administrators allowed
+// locally, while an unrestricted one leaves the caller's client shared.
+func (r *RuntimeRouter) bootstrapAuthHTTPClient(client *http.Client) *http.Client {
+	if client == nil || r == nil {
+		return client
+	}
+	policy, composed := r.refreshLocalApplicationNetworkPolicy()
+	if !policy.IsScoped() || !composed.IsRestricted() {
+		return client
+	}
+	return network.PolicyHTTPClient(policy, client)
+}
+
 // refreshApplicationNetworkPolicy publishes the policy composed from the
 // current managed requirements and returns both the read handle transports bind
 // to and the composed policy. Rust installs the same policy at startup and at

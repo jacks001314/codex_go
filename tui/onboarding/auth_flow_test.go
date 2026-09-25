@@ -2,6 +2,7 @@ package onboarding
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -70,6 +71,48 @@ func TestAuthFlowBrowserLoginCompletesAfterConfirmation(t *testing.T) {
 	_, quit := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
 	if quit == nil || !model.completed || model.state != SignInChatGPTSuccess {
 		t.Fatalf("browser confirmation state=%s completed=%v command=%v", model.state, model.completed, quit)
+	}
+}
+
+// Rust #47411 binds the local application policy to the embedded login flow; the
+// flow must hand that client to every ChatGPT login request it makes.
+func TestAuthFlowCarriesTheBoundClientLikeRust(t *testing.T) {
+	bound := &http.Client{}
+	seen := make([]*http.Client, 0, 2)
+	services := defaultAuthFlowServices()
+	services.requestDeviceCode = func(_ context.Context, options *auth.OAuthOptions) (*auth.DeviceCode, error) {
+		seen = append(seen, options.HTTPClient)
+		return &auth.DeviceCode{VerificationURL: "https://auth.example.test/device", UserCode: "CODE-1", DeviceAuthID: "d1"}, nil
+	}
+	services.completeDeviceCode = func(_ context.Context, options *auth.OAuthOptions, _ *auth.DeviceCode) error {
+		seen = append(seen, options.HTTPClient)
+		return nil
+	}
+	services.startBrowser = func(_ context.Context, options *auth.OAuthOptions) (*auth.BrowserLoginServer, error) {
+		seen = append(seen, options.HTTPClient)
+		return nil, nil
+	}
+	model := newAuthFlowModel(context.Background(), AuthFlowOptions{
+		CodexHome:      t.TempDir(),
+		ChatGPTAllowed: true,
+		APIKeyAllowed:  true,
+		HTTPClient:     bound,
+		services:       services,
+	})
+	_, start := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'2'}})
+	if start == nil {
+		t.Fatal("device start command is nil")
+	}
+	if _, finish := model.Update(start()); finish != nil {
+		model.Update(finish())
+	}
+	if len(seen) == 0 {
+		t.Fatal("the login flow made no request")
+	}
+	for _, client := range seen {
+		if client != bound {
+			t.Fatalf("login request client = %#v, want the bound client", client)
+		}
 	}
 }
 

@@ -445,6 +445,12 @@ type RuntimeRouter struct {
 	// own transports enforce (Rust ConfigManager's NetworkPolicyController).
 	networkPolicy   *network.NetworkPolicyController
 	networkPolicyMu sync.Mutex
+	// localNetworkPolicy publishes the policy composed from the home's own
+	// application requirements, which authorizes the login and cloud-bootstrap
+	// traffic that runs before the effective policy exists (Rust's second
+	// `EmbeddedNetworkPolicy::local` controller).
+	localNetworkPolicy   *network.NetworkPolicyController
+	localNetworkPolicyMu sync.Mutex
 	// messageBoards shares in-memory discussion-board state across every handle
 	// of one agent tree (Rust `InMemoryMessageBoards`); SQLite boards share their
 	// pool through agentboard's own per-path registry.
@@ -668,6 +674,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		agentActivity:           map[string]chan string{},
 		agentMessages:           map[string][]any{},
 		networkPolicy:           network.NewNetworkPolicyController(),
+		localNetworkPolicy:      network.NewNetworkPolicyController(),
 		messageBoardHandles:     map[string]agentboard.Board{},
 	}
 	if router.services.ServerRequests == nil {
@@ -11091,20 +11098,33 @@ func (r *RuntimeRouter) handleCancelLoginAccount(request *Request) (*auth.Cancel
 func (r *RuntimeRouter) accountOAuthOptions() *auth.OAuthOptions {
 	if r != nil && r.services.AccountOAuthOptions != nil {
 		copy := *r.services.AccountOAuthOptions
+		// Rust binds the local application policy to whichever auth factory the
+		// caller supplied, so login traffic is limited by the local rules even
+		// when the effective policy is stricter.
+		copy.HTTPClient = r.bootstrapAuthHTTPClient(copy.HTTPClient)
+		copy.FallbackHTTPClient = r.bootstrapAuthHTTPClient(copy.FallbackHTTPClient)
 		return &copy
 	}
 	options := &auth.OAuthOptions{CodexHome: r.codexHomeForRollout(), StoreOptions: r.authStoreOptions()}
+	base := (*http.Client)(nil)
 	if r.services.HTTPClient != nil {
 		if client, ok := r.services.HTTPClient.(*http.Client); ok {
-			options.HTTPClient = client
+			base = client
 		}
 	}
+	cfg := (*config.Config)(nil)
 	if r.services.Config != nil {
 		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
-			cfg := &config.Config{Values: read.Config}
+			cfg = &config.Config{Values: read.Config}
 			options.ForcedWorkspaces = cfg.ForcedChatGPTWorkspaceIDs()
 		}
 	}
+	if base == nil {
+		// The auth package's default is a 30 second client, so the client the
+		// router supplies keeps the same request budget.
+		base = network.NewHTTPClient(cfg != nil && cfg.RespectSystemProxyEnabled(), 30*time.Second)
+	}
+	options.HTTPClient = r.bootstrapAuthHTTPClient(base)
 	return options
 }
 
