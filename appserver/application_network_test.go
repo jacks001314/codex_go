@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/network"
 	"codex_go/session"
 	"codex_go/turn"
@@ -258,6 +259,10 @@ func TestRuntimeRouterEnforcesApplicationNetworkPolicyLikeRust(t *testing.T) {
 	if _, err := concrete.Do(&http.Request{URL: appServerTestURL(t, "https://denied.example/v1")}); !errors.Is(err, network.ErrNetworkPolicyDestination) {
 		t.Fatalf("concrete client denied request error = %v", err)
 	}
+	// The AWS SDK's credential and region requests follow the same generation.
+	if model.AWSHTTPClient() == nil {
+		t.Fatal("a restricted policy did not install the AWS application client")
+	}
 
 	// Without the managed requirement the same destination is unrestricted.
 	if err := os.Remove(filepath.Join(home, "requirements.toml")); err != nil {
@@ -281,5 +286,8 @@ func TestRuntimeRouterEnforcesApplicationNetworkPolicyLikeRust(t *testing.T) {
 		if _, ok := unrestrictedClient.Transport.(*network.PolicyRoundTripper); ok {
 			t.Fatal("an unrestricted policy still wrapped the concrete client")
 		}
+	}
+	if model.AWSHTTPClient() != nil {
+		t.Fatal("an unrestricted policy left the AWS application client installed")
 	}
 }

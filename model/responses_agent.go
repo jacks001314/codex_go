@@ -3101,9 +3101,9 @@ func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context)
 		if err := provider.Refresh(ctx); err != nil {
 			return fmt.Errorf("failed to export Amazon Bedrock credentials after refresh: %w", err)
 		}
-		awsContext, err = auth.LoadAWSAuthContextWithProvider(awsConfig, provider)
+		awsContext, err = auth.LoadAWSAuthContextWithProviderAndOptions(awsConfig, provider, awsAuthLoadOptions())
 	} else {
-		awsContext, err = auth.LoadAWSAuthContext(awsConfig)
+		awsContext, err = auth.LoadAWSAuthContextWithOptions(awsConfig, awsAuthLoadOptions())
 	}
 	if err != nil {
 		return fmt.Errorf("failed to reload Amazon Bedrock auth after refresh: %w", err)

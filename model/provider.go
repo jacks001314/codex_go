@@ -436,9 +436,9 @@ func (p *AmazonBedrockProvider) APIAuth() (AuthHeaders, error) {
 	var awsContext *auth.AWSAuthContext
 	var err error
 	if config, ok := p.credentialExportConfig(); ok {
-		awsContext, err = auth.LoadAWSAuthContextWithProvider(awsConfig, credentialExportProviderForConfig(config))
+		awsContext, err = auth.LoadAWSAuthContextWithProviderAndOptions(awsConfig, credentialExportProviderForConfig(config), awsAuthLoadOptions())
 	} else {
-		awsContext, err = auth.LoadAWSAuthContext(awsConfig)
+		awsContext, err = auth.LoadAWSAuthContextWithOptions(awsConfig, awsAuthLoadOptions())
 	}
 	if err != nil {
 		return AuthHeaders{}, fmt.Errorf("failed to resolve Amazon Bedrock auth: %w", err)
@@ -499,7 +499,7 @@ func (p *AmazonBedrockProvider) resolveRegion() (string, error) {
 			return region, nil
 		}
 	}
-	region, err := auth.ResolveAWSRegion(p.awsAuthConfig())
+	region, err := auth.ResolveAWSRegionWithOptions(p.awsAuthConfig(), awsAuthLoadOptions())
 	if err != nil {
 		return "", err
 	}

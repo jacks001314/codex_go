@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/network"
 	"codex_go/remotecontrol"
 )
@@ -54,6 +55,14 @@ func (r *RuntimeRouter) refreshApplicationNetworkPolicy() (network.NetworkPolicy
 	policy := r.networkPolicy.Policy()
 	composed := destinationPolicyFromApplicationRequirements(r.applicationNetworkRequirements())
 	r.networkPolicy.Publish(policy.Revision(), composed)
+	// Rust #47408 routes the AWS SDK's credential and region requests through the
+	// application client, so the process-scoped client follows the published
+	// generation.
+	if composed.IsRestricted() {
+		model.SetAWSHTTPClient(network.PolicyHTTPClient(policy, http.DefaultClient))
+	} else {
+		model.SetAWSHTTPClient(nil)
+	}
 	return policy, composed
 }
 

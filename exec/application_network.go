@@ -9,7 +9,10 @@ package exec
 // builds binds that generation.
 
 import (
+	"net/http"
+
 	"codex_go/config"
+	"codex_go/model"
 	"codex_go/network"
 )
 
@@ -21,5 +24,13 @@ func publishApplicationNetworkPolicy(cfg *config.Config) *network.NetworkPolicyC
 	if cfg == nil {
 		return nil
 	}
-	return cfg.BindApplicationNetworkPolicy()
+	controller := cfg.BindApplicationNetworkPolicy()
+	// Rust #47408: the AWS SDK's credential and region requests use the
+	// application client, so the run installs the policy-bound one.
+	if cfg.RestrictsApplicationTraffic() {
+		model.SetAWSHTTPClient(network.PolicyHTTPClient(cfg.NetworkPolicy(), http.DefaultClient))
+	} else {
+		model.SetAWSHTTPClient(nil)
+	}
+	return controller
 }
