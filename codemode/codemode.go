@@ -1118,6 +1118,24 @@ func (s *CellStore) Terminate(id string) (*Cell, error) {
 	return cloneCell(cell), nil
 }
 
+// AppendTerminatedOutput adds output the runtime had already produced when a
+// cell was terminated, so observers receive it in the terminated event instead
+// of losing it with the detached observation (Rust #48207). It never changes the
+// cell's status.
+func (s *CellStore) AppendTerminatedOutput(id string, output string) (*Cell, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cell := s.cells[id]
+	if cell == nil {
+		return nil, fmt.Errorf("%w: %s", ErrCellNotFound, id)
+	}
+	if output != "" {
+		cell.Output += output
+	}
+	cell.UpdatedAt = s.now().UTC()
+	return cloneCell(cell), nil
+}
+
 func (s *CellStore) Get(id string) (*Cell, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

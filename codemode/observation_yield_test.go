@@ -115,6 +115,88 @@ func TestSessionRuntimePreemptEndsWaitObservationLikeRust(t *testing.T) {
 	}
 }
 
+// releaseEngine returns its already-produced output once released, so a test can
+// queue the script's output before terminating the cell.
+type releaseEngine struct {
+	release     chan struct{}
+	produced    chan struct{}
+	producedOne sync.Once
+}
+
+func newReleaseEngine() *releaseEngine {
+	return &releaseEngine{release: make(chan struct{}), produced: make(chan struct{})}
+}
+
+func (e *releaseEngine) Execute(ctx context.Context, request EngineRequest) (*EngineResult, error) {
+	select {
+	case <-e.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	e.producedOne.Do(func() { close(e.produced) })
+	return &EngineResult{ContentItems: []ContentItem{InputText("queued output")}}, nil
+}
+
+func (e *releaseEngine) Interrupt(error) {}
+
+func (e *releaseEngine) Close() error { return nil }
+
+// Mirrors Rust #48207: yield signals and queued runtime events can detach an
+// observer during termination before the remaining output is drained. Output the
+// script had already produced must still reach the termination caller and a later
+// observer in the terminated event, exactly once, even with an immediate yield
+// timeout and a canceled yield signal. Repetition exercises both select outcomes
+// (the runtime's own completion racing the termination).
+func TestSessionRuntimeTerminationPreservesProducedOutputLikeRust(t *testing.T) {
+	for iteration := 0; iteration < 50; iteration++ {
+		engine := newReleaseEngine()
+		runtime := newPreemptRuntime(engine)
+		preempt := tool.NewYieldSignal()
+		preempt.Cancel()
+		started, err := runtime.Execute(context.Background(), &ExecuteRequest{
+			ToolCallID: "call-terminate-output", Source: "text('queued output')", YieldTimeMS: uint64Ptr(0),
+		}, preempt)
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if started.InitialResponse.Variant != "Yielded" {
+			t.Fatalf("immediate yield response = %#v", started.InitialResponse)
+		}
+		// The script produces its output before the termination.
+		close(engine.release)
+		select {
+		case <-engine.produced:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the released engine did not produce output")
+		}
+		terminated, err := runtime.Terminate(started.CellID)
+		if err != nil {
+			t.Fatalf("Terminate() error = %v", err)
+		}
+		if got := concatenatedItemText(terminated.Response.ContentItems); got != "queued output" {
+			t.Fatalf("iteration %d: termination caller output = %q, want the queued output", iteration, got)
+		}
+		observed, err := runtime.Wait(context.Background(), &WaitRequest{CellID: started.CellID, YieldTimeMS: 3000}, nil)
+		if err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+		if observed.Response.Variant != "Terminated" {
+			t.Fatalf("iteration %d: observer response = %#v, want terminated", iteration, observed.Response)
+		}
+		if got := concatenatedItemText(observed.Response.ContentItems); got != "queued output" {
+			t.Fatalf("iteration %d: observer output = %q, want the queued output once", iteration, got)
+		}
+	}
+}
+
+func concatenatedItemText(items []ContentItem) string {
+	output := ""
+	for _, item := range items {
+		output += item.Text
+	}
+	return output
+}
+
 // Mirrors Rust HostState: the host threads the request's yield signal into the
 // session, so a signal that fired before the request was served still ends the
 // observation early.

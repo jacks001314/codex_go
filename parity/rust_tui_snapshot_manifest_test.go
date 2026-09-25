@@ -22,12 +22,12 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	// Re-pinned to upstream 1bf73324ca: #48135 added the remapped-left
-	// external-writer snapshot on top of #48121's command-center draft handoff,
-	// #48116's Max-reasoning footers and #48101's truncated multiline `/ps`
-	// preview.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1326 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1326", got)
+	// Re-pinned to upstream f5ffa46959: #48206 added the partial-dismissal
+	// warnings snapshot on top of #48135's remapped-left external-writer
+	// snapshot, #48121's command-center draft handoff, #48116's Max-reasoning
+	// footers and #48101's truncated multiline `/ps` preview.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1327 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1327", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -84,8 +84,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46733/#46739/#46751/#46752 added the owned-transcript browsing,
 			// prompt-navigation, slash-picker, composer-gap and warnings-page
 			// snapshots plus the fresh-thread animation and retained revert
-			// history.
-			Files:    73,
+			// history. #48206 added the partial-dismissal warnings snapshot.
+			Files:    74,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -96,6 +96,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/app/snapshots/codex_tui__app__owned_transcript__tests__browsing__browsing_footer.snap",
 				"tui/src/app/snapshots/codex_tui__app__owned_transcript__tests__prompt_navigation.snap",
 				"tui/src/app/snapshots/codex_tui__app__warnings_tests__warnings_page.snap",
+				// #48206 keeps the viewer open on "keep and next", so the
+				// partially dismissed warnings list has its own snapshot.
+				"tui/src/app/snapshots/codex_tui__app__warnings_tests__warnings_partial_dismissal.snap",
 				// #47954 moved the startup tips out of the empty state and into
 				// the transcript, so the fresh-thread animation now snapshots
 				// the header rather than the draft layout.
