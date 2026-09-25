@@ -294,7 +294,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
 		// Re-pinned to upstream 8ae55c863d (#47745/#47758/#47957): the startup
 		// prewarm, tool-observation and message-budget client changes.
-		{Path: "core/src/client.rs", SHA256: "82608d33acccfc4ece91b912c2573d7b1bd91c157aee30b990590868a23cf927"},
+		// Re-pinned to upstream c7e80f873f (#48141): preempting model responses
+		// when new user input arrives.
+		{Path: "core/src/client.rs", SHA256: "215135a2e8452e083bdde19a756989001333d66278e97e62e5e7e0e6b6857fbb"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.

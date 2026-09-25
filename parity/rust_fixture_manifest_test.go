@@ -130,7 +130,8 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// tool-observation-budget, retry-after, mxc and patrol suites
 			// (#47017-#47989).
 			// #48135 then added core/tests/suite/pending_input.rs.
-			Files: 257,
+			// #48141 added the astra_input_interrupts_response scenario snapshot.
+			Files: 258,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

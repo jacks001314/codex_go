@@ -178,6 +178,8 @@ func spawnProcessTransport(program string) (*processTransport, error) {
 	// Rust c4513cb982: remote helper processes must not inherit Codex launch
 	// context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
 	envutil.ScrubCommandEnv(cmd)
+	// Rust #48138: launching the host must not create a console window on Windows.
+	suppressCodeModeHostConsoleWindow(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("spawned code-mode host has no stdin: %w", err)
