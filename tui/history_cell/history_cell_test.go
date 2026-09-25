@@ -669,8 +669,30 @@ func TestExecHistoryCells(t *testing.T) {
 		RecentChunks:   []string{"recent output"},
 	}}}
 	multilineDisplay := strings.Join(multiline.DisplayLines(80), "\n")
-	if !strings.Contains(multilineDisplay, "  • echo one [...]") || !strings.Contains(multilineDisplay, "    ↳ recent output") {
+	// Rust #48101: line breaks render as ↵ within the 80-grapheme window, so a
+	// multiline command that fits shows its later lines instead of a marker.
+	if !strings.Contains(multilineDisplay, "  • echo one\u21b5echo two") || !strings.Contains(multilineDisplay, "    ↳ recent output") {
 		t.Fatalf("multiline process display:\n%s", multilineDisplay)
+	}
+	parenthesized := UnifiedExecProcessesCell{Processes: []UnifiedExecProcessDetails{{
+		CommandDisplay: "(\n  sleep 120\n)",
+	}}}
+	if got := strings.Join(parenthesized.DisplayLines(80), "\n"); !strings.Contains(got, "  • (\u21b5  sleep 120\u21b5)") {
+		t.Fatalf("parenthesized process display:\n%s", got)
+	}
+	crlf := UnifiedExecProcessesCell{Processes: []UnifiedExecProcessDetails{{
+		CommandDisplay: "sleep 1\r\nsleep 120",
+	}}}
+	if got := strings.Join(crlf.DisplayLines(80), "\n"); !strings.Contains(got, "  • sleep 1\u21b5sleep 120") {
+		t.Fatalf("CRLF process display:\n%s", got)
+	}
+	// Only a command that exceeds the 80-grapheme window gets the marker.
+	long := UnifiedExecProcessesCell{Processes: []UnifiedExecProcessDetails{{
+		CommandDisplay: "(\n  " + strings.Repeat("x", 100) + "\n)",
+	}}}
+	longDisplay := strings.Join(long.DisplayLines(120), "\n")
+	if !strings.Contains(longDisplay, "(\u21b5  "+strings.Repeat("x", 76)) || !strings.Contains(longDisplay, " [...]") {
+		t.Fatalf("long multiline process display:\n%s", longDisplay)
 	}
 	narrow := UnifiedExecProcessesCell{Processes: []UnifiedExecProcessDetails{{
 		CommandDisplay: "部署计划下一步",

@@ -1,6 +1,8 @@
 package historycell
 
 import (
+	"strings"
+
 	"codex_go/tui"
 
 	"github.com/rivo/uniseg"
@@ -144,17 +146,26 @@ func splitFirstLine(text string) (string, bool) {
 }
 
 func processCommandSnippet(command string) (string, bool) {
-	line, hasMoreLines := splitFirstLine(command)
-	graphemes := uniseg.NewGraphemes(line)
+	// Rust #48101: the preview shows the command's first 80 graphemes with line
+	// breaks rendered as ↵, so a command that begins with an opening parenthesis
+	// still reveals what it does; the truncation marker is reserved for a command
+	// that actually exceeds the limit.
+	const maxGraphemes = 80
+	graphemes := uniseg.NewGraphemes(command)
+	var builder strings.Builder
 	count := 0
 	for graphemes.Next() {
-		if count == 80 {
-			start, _ := graphemes.Positions()
-			return line[:start], true
+		if count == maxGraphemes {
+			return builder.String(), true
 		}
+		cluster := graphemes.Str()
+		if cluster == "\n" || cluster == "\r\n" {
+			cluster = "\u21b5"
+		}
+		builder.WriteString(cluster)
 		count++
 	}
-	return line, hasMoreLines
+	return builder.String(), false
 }
 
 func truncateHistoryLine(text string, width int, forceSuffix bool) string {
