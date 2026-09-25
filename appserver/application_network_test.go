@@ -16,6 +16,66 @@ import (
 	"codex_go/turn"
 )
 
+// accountDoerStub records whether an account/ChatGPT backend request was
+// attempted.
+type accountDoerStub struct {
+	attempts int
+}
+
+func (d *accountDoerStub) Do(*http.Request) (*http.Response, error) {
+	d.attempts++
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+}
+
+// Rust parity (#47703): ChatGPT backend requests (account, plugins, cloud
+// config) preserve the account's application network policy.
+func TestRuntimeRouterAccountClientHonorsApplicationNetworkPolicyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	writeManagedProviderRequirements(t, home, `
+[application.network]
+[application.network.domains]
+"allowed.example" = "allow"
+"denied.example" = "deny"
+`)
+	stub := &accountDoerStub{}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(home)),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		AccountHTTP:  stub,
+	})
+	defer router.Close()
+
+	doer := router.accountHTTPClient()
+	response, err := doer.Do(&http.Request{URL: appServerTestURL(t, "https://allowed.example/backend-api/wham/config")})
+	if err != nil {
+		t.Fatalf("allowed backend request error = %v", err)
+	}
+	_ = response.Body.Close()
+	if stub.attempts != 1 {
+		t.Fatalf("attempts = %d, want the allowed request to reach the account transport", stub.attempts)
+	}
+	if _, err := doer.Do(&http.Request{URL: appServerTestURL(t, "https://denied.example/backend-api/wham/config")}); !errors.Is(err, network.ErrNetworkPolicyDestination) {
+		t.Fatalf("denied backend request error = %v", err)
+	}
+	if stub.attempts != 1 {
+		t.Fatalf("attempts = %d, want the denied request rejected before connecting", stub.attempts)
+	}
+
+	// A host without managed requirements keeps its account client unchanged.
+	plainStub := &accountDoerStub{}
+	plainRouter := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Config:       config.NewConfigService(t.TempDir()),
+		Turns:        turn.NewTurnService(),
+		AccountHTTP:  plainStub,
+	})
+	defer plainRouter.Close()
+	if got, ok := plainRouter.accountHTTPClient().(*accountDoerStub); !ok || got != plainStub {
+		t.Fatal("an unrestricted policy replaced the account client")
+	}
+}
+
 // appServerDoerStub records whether a request was attempted at all, so a test
 // can prove a denied destination never reached the transport.
 type appServerDoerStub struct {

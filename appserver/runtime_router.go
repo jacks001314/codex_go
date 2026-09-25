@@ -11971,10 +11971,23 @@ func rateLimitResetRequestTimeout() time.Duration {
 }
 
 func (r *RuntimeRouter) accountHTTPClient() chatgptapi.HTTPDoer {
+	var base chatgptapi.HTTPDoer
 	if r != nil && r.services.AccountHTTP != nil {
-		return r.services.AccountHTTP
+		base = r.services.AccountHTTP
+	} else {
+		base = http.DefaultClient
 	}
-	return http.DefaultClient
+	if r == nil {
+		return base
+	}
+	// Rust #47703: ChatGPT backend requests preserve the account's application
+	// network policy, so a managed restriction also covers the account, plugin
+	// and cloud-config routes.
+	policy, composed := r.refreshApplicationNetworkPolicy()
+	if !policy.IsManaged() || !composed.IsRestricted() {
+		return base
+	}
+	return &network.PolicyHTTPDoer{Policy: policy, Next: base}
 }
 
 func (r *RuntimeRouter) chatGPTBaseURL() string {
