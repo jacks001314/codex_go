@@ -562,7 +562,9 @@ func workspaceWriteFSEntries(policy *coresandbox.SandboxPolicy) []rustFSEntry {
 			})
 		}
 	}
-	for _, name := range []string{".git", ".agents", ".gcode"} {
+	// Rust #48176 adds `.aws` to the protected metadata names, so the elevated
+	// workspace-write profile keeps it read-only too.
+	for _, name := range []string{".git", ".agents", ".gcode", ".aws"} {
 		subpath := name
 		entries = append(entries, rustFSEntry{Path: specialFSPath("project_roots", &subpath), Access: "read"})
 	}

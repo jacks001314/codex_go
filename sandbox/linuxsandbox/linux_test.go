@@ -184,3 +184,37 @@ func TestManagedProxyRoutesWebsocketEnvAndSocketDirsAreSearchable(t *testing.T) 
 		t.Fatalf("mode=%o", info.Mode().Perm())
 	}
 }
+
+// TestProtectedReadOnlySubpathsIncludeAWSMetadata mirrors Rust #48176: an
+// existing top-level `.aws` directory under a writable root stays read-only, so
+// Linux sandbox writes to protected configuration files fail while siblings
+// remain writable.
+func TestProtectedReadOnlySubpathsIncludeAWSMetadata(t *testing.T) {
+	cwd := t.TempDir()
+	for _, name := range []string{".git", ".agents", ".gcode", ".aws"} {
+		if err := os.MkdirAll(filepath.Join(cwd, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy := &linuxFilesystemPolicy{Kind: "restricted", Entries: []linuxFilesystemEntry{
+		{Access: "write", Special: linuxSpecialPath{Kind: "project_roots"}},
+	}}
+	protected := policy.protectedReadOnlySubpaths(cwd)
+	for _, name := range []string{".git", ".agents", ".gcode", ".aws"} {
+		want := filepath.Join(cwd, name)
+		found := false
+		for _, path := range protected {
+			if path == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("protected subpaths = %#v, want %s", protected, want)
+		}
+	}
+	// A missing metadata directory is not materialized as a carveout.
+	if len(protected) != 4 {
+		t.Fatalf("protected subpaths = %#v, want exactly the four existing metadata dirs", protected)
+	}
+}

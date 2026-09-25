@@ -710,6 +710,9 @@ func rustPermissionProfileWireFromPermissionProfile(profile *PermissionProfile) 
 		addSpecial(FileSystemAccessRead, "project_roots", ".git")
 		addSpecial(FileSystemAccessRead, "project_roots", ".agents")
 		addSpecial(FileSystemAccessRead, "project_roots", ".gcode")
+		// Rust #48176: `.aws` joins the default read-only project-root
+		// metadata subpaths (`FileSystemSandboxPolicy::restricted`).
+		addSpecial(FileSystemAccessRead, "project_roots", ".aws")
 		for _, root := range policy.WritableRoots {
 			addPath(FileSystemAccessWrite, root)
 		}

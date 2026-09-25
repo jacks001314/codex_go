@@ -169,7 +169,11 @@ func buildWindowsWritableRoots(paths []string) []WindowsWritableRoot {
 			Root: cleaned,
 			ReadOnlySubpaths: []string{
 				filepath.Join(cleaned, ".git"),
+				filepath.Join(cleaned, ".agents"),
 				filepath.Join(cleaned, ".gcode"),
+				// Rust #48176 adds `.aws` to the protected metadata paths; the
+				// deny computation keeps only subpaths that exist.
+				filepath.Join(cleaned, ".aws"),
 			},
 		})
 	}

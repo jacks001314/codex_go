@@ -346,6 +346,9 @@ func linuxFilesystemPolicyFromLegacy(policy *legacySandboxPolicy) *linuxFilesyst
 			{Access: "read", Special: linuxSpecialPath{Kind: "project_roots", Subpath: ".git"}},
 			{Access: "read", Special: linuxSpecialPath{Kind: "project_roots", Subpath: ".agents"}},
 			{Access: "read", Special: linuxSpecialPath{Kind: "project_roots", Subpath: ".gcode"}},
+			// Rust #48176: the legacy workspace-write conversion also protects
+			// `.aws` under each writable root.
+			{Access: "read", Special: linuxSpecialPath{Kind: "project_roots", Subpath: ".aws"}},
 		}
 		if !policy.ExcludeSlashTmp {
 			entries = append(entries, linuxFilesystemEntry{Access: "write", Special: linuxSpecialPath{Kind: "slash_tmp"}})
@@ -476,7 +479,9 @@ func (p *linuxFilesystemPolicy) protectedReadOnlySubpaths(cwd string) []string {
 		if root == "/" {
 			continue
 		}
-		for _, name := range []string{".git", ".agents", ".gcode"} {
+		// `.aws` joins the protected metadata names: AWS profiles can select
+		// credential helpers the application executes (Rust #48176).
+		for _, name := range []string{".git", ".agents", ".gcode", ".aws"} {
 			add(filepath.Join(root, name))
 		}
 	}

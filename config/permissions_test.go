@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,6 +95,26 @@ func TestResolveSandboxPermissionProfileWithWorkspaceRootsAnchorsProjectRootsLik
 		if entry.Path.Type == "path" && strings.EqualFold(filepath.Clean(entry.Path.Path), filepath.Clean(cwd)) {
 			t.Fatalf("environment-anchored profile still carried the thread cwd: %s", byEnvironment.ProfileJSON)
 		}
+	}
+}
+
+// Rust #48176: `.aws` joins `.git`/`.agents`/`.codex` as a default read-only
+// project-root metadata subpath, so a writable workspace root cannot modify the
+// AWS credential helpers an AWS profile may select.
+func TestWorkspaceProfileProtectsAWSMetadataPathLikeRust(t *testing.T) {
+	cwd := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", cwd, err)
+	}
+	cfg := &Config{Values: map[string]any{"default_permissions": ":workspace"}}
+	resolved, err := cfg.ResolveSandboxPermissionProfile("", cwd)
+	if err != nil {
+		t.Fatalf("ResolveSandboxPermissionProfile() error = %v", err)
+	}
+	wire := decodeRuntimeProfile(t, resolved.ProfileJSON)
+	assertSpecialRuntimeEntry(t, wire, "project_roots", "", string(sandbox.FileSystemAccessWrite))
+	for _, name := range []string{".git", ".agents", ".gcode", ".aws"} {
+		assertSpecialRuntimeEntry(t, wire, "project_roots", name, string(sandbox.FileSystemAccessRead))
 	}
 }
 

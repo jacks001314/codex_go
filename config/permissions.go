@@ -527,6 +527,10 @@ func builtinPermissionProfileBuilder(profileID string) (*permissionProfileBuilde
 		builder.addEntry(runtimeSpecialEntry("project_roots", ".git", sandbox.FileSystemAccessRead))
 		builder.addEntry(runtimeSpecialEntry("project_roots", ".agents", sandbox.FileSystemAccessRead))
 		builder.addEntry(runtimeSpecialEntry("project_roots", ".gcode", sandbox.FileSystemAccessRead))
+		// AWS profiles can select credential helpers that the application
+		// executes, so the metadata path stays protected by default even though
+		// the project root itself is writable (Rust #48176).
+		builder.addEntry(runtimeSpecialEntry("project_roots", ".aws", sandbox.FileSystemAccessRead))
 	default:
 		return nil, fmt.Errorf("default_permissions refers to unknown built-in profile `%s`", profileID)
 	}

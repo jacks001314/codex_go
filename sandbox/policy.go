@@ -380,7 +380,7 @@ func buildWritableRoots(paths []string) []WritableRoot {
 		out = append(out, WritableRoot{
 			Root:                   path,
 			ReadOnlySubpaths:       protectedSubpaths(path),
-			ProtectedMetadataNames: []string{".git", ".agents", ".gcode"},
+			ProtectedMetadataNames: []string{".git", ".agents", ".gcode", ".aws"},
 		})
 	}
 	return out
@@ -391,6 +391,10 @@ func protectedSubpaths(root string) []string {
 		filepath.Join(root, ".git"),
 		filepath.Join(root, ".agents"),
 		filepath.Join(root, ".gcode"),
+		// AWS profiles can select credential helpers that the application
+		// executes, so a writable root keeps `.aws` protected by default
+		// (Rust #48176).
+		filepath.Join(root, ".aws"),
 	}
 }
 

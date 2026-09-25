@@ -62,10 +62,55 @@ func TestWorkspaceWritableRootsIncludeCWDAndProtectMetadata(t *testing.T) {
 	if !workspace.IsPathWritable(filepath.Join(cwd, "src", "main.go")) {
 		t.Fatal("workspace file should be writable")
 	}
-	for _, directory := range []string{".git", ".agents", ".gcode"} {
+	// `.aws` joined the protected metadata names in Rust #48176: AWS profiles
+	// can select credential helpers that the application executes.
+	for _, directory := range []string{".git", ".agents", ".gcode", ".aws"} {
 		if workspace.IsPathWritable(filepath.Join(cwd, directory, "protected.txt")) {
 			t.Fatalf("%s should be read-only under workspace root", directory)
 		}
+	}
+}
+
+// TestWorkspaceWritableRootsListAWSMetadata mirrors Rust #48176's
+// `PROTECTED_METADATA_PATH_NAMES` update: `.aws` joins the protected metadata
+// names and the default read-only subpaths of a writable root.
+func TestWorkspaceWritableRootsListAWSMetadata(t *testing.T) {
+	cwd := t.TempDir()
+	policy := NewWorkspaceWritePolicy()
+	roots := policy.GetWritableRootsWithCWD(cwd)
+	var workspace *WritableRoot
+	for i := range roots {
+		if roots[i].Root == cleanAbs(cwd) {
+			workspace = &roots[i]
+			break
+		}
+	}
+	if workspace == nil {
+		t.Fatalf("workspace root missing from %#v", roots)
+	}
+	found := false
+	for _, name := range workspace.ProtectedMetadataNames {
+		if name == ".aws" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("protected metadata names = %#v, want .aws", workspace.ProtectedMetadataNames)
+	}
+	awsSubpath := filepath.Join(cwd, ".aws")
+	found = false
+	for _, subpath := range workspace.ReadOnlySubpaths {
+		if sameOrWithin(cleanAbs(awsSubpath), cleanAbs(subpath)) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("read-only subpaths = %#v, want %s", workspace.ReadOnlySubpaths, awsSubpath)
+	}
+	if workspace.IsPathWritable(filepath.Join(awsSubpath, "credentials")) {
+		t.Fatal(".aws contents must stay read-only under a writable root")
 	}
 }
 
