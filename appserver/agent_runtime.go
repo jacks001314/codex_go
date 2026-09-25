@@ -123,6 +123,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.fullAccess = r.guardianFullAccessForTurn
 		modelReviewer.approvalsReviewer = r.guardianApprovalsReviewerForTurn
 		modelReviewer.permissionProfile = r.guardianReviewPermissionProfileForTurn
+		modelReviewer.turnPermissionProfile = r.guardianTurnPermissionProfileForTurn
 		modelReviewer.latestResponseID = r.guardianLatestResponseIDForTurn
 		modelReviewer.nodeReplEvidence = r.guardianReviewNodeReplEvidence
 		modelReviewer.installationID = r.guardianInstallationID
@@ -500,24 +501,37 @@ func (r *RuntimeRouter) guardianReviewNodeReplAutoReviewRequiredForTurn(threadID
 }
 
 func (r *RuntimeRouter) guardianReviewPermissionProfileForTurn(threadID, turnID string) *sandbox.PermissionProfile {
+	profile, _ := r.guardianTurnPermissionProfileForTurn(threadID, turnID)
+	if profile == nil {
+		return nil
+	}
+	readOnly := profile.IntersectWithReadOnly()
+	if readOnly == nil {
+		value := sandbox.ReadOnlyPermissionProfile()
+		readOnly = &value
+	}
+	return readOnly
+}
+
+// guardianTurnPermissionProfileForTurn resolves the reviewed turn's active
+// permission profile and working directory. Rust's Guardian permission evidence
+// is resolved from the reviewed environment's profile
+// (core/src/guardian/permissions.rs::for_environment), not from the read-only
+// profile the reviewer's own session uses.
+func (r *RuntimeRouter) guardianTurnPermissionProfileForTurn(threadID, turnID string) (*sandbox.PermissionProfile, string) {
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 	if active == nil || active.Params == nil {
-		return nil
+		return nil, ""
 	}
 	cfg, err := r.effectiveConfigForTurn(active.Params)
 	if err != nil || cfg == nil {
-		return nil
+		return nil, ""
 	}
 	resolution, err := turnSandboxPermissionProfile(cfg, active.Params.CWD, active.Params)
 	if err != nil || resolution == nil || resolution.Profile == nil {
-		return nil
+		return nil, ""
 	}
-	readOnly := resolution.Profile.IntersectWithReadOnly()
-	if readOnly == nil {
-		profile := sandbox.ReadOnlyPermissionProfile()
-		readOnly = &profile
-	}
-	return readOnly
+	return resolution.Profile, active.Params.CWD
 }
 
 // guardianInstallationID resolves the Codex installation id attached to

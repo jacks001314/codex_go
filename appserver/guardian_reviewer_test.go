@@ -29,6 +29,58 @@ import (
 
 type guardianAgentFunc func(context.Context, *model.AgentRequest) (*model.AgentResponse, error)
 
+// Mirror of Rust's core/src/guardian/permissions.rs: the review prompt carries
+// the reviewed turn's denied read paths and globs, so the reviewer cannot approve
+// an escalation whose purpose is to read them.
+func TestModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust(t *testing.T) {
+	var captured *model.AgentRequest
+	cwd := t.TempDir()
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	profile.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "path", Path: filepath.Join(cwd, "secret")},
+		Access: sandbox.FileSystemAccessDeny,
+	}}
+	reviewer := &modelGuardianReviewer{
+		agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+			captured = request
+			return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`}, nil
+		}),
+		store:                 state.NewReviewStore(),
+		turnPermissionProfile: func(threadID, turnID string) (*sandbox.PermissionProfile, string) { return &profile, cwd },
+	}
+	if _, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "command", Command: "ls", CWD: cwd}); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if captured == nil || !strings.Contains(captured.Prompt, ">>> PARENT TURN PERMISSION CONTEXT START") {
+		t.Fatalf("prompt missing the permission context:\n%#v", captured)
+	}
+	if !strings.Contains(captured.Prompt, "- path `"+filepath.Join(cwd, "secret")+"`") {
+		t.Fatalf("prompt missing the denied read path:\n%s", captured.Prompt)
+	}
+	if !strings.Contains(captured.Prompt, "do not approve escalation whose purpose is to read them") {
+		t.Fatalf("prompt missing the restriction guidance:\n%s", captured.Prompt)
+	}
+
+	// A profile without deny entries contributes no section.
+	open := &modelGuardianReviewer{
+		agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+			captured = request
+			return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`}, nil
+		}),
+		store: state.NewReviewStore(),
+		turnPermissionProfile: func(threadID, turnID string) (*sandbox.PermissionProfile, string) {
+			readOnly := sandbox.ReadOnlyPermissionProfile()
+			return &readOnly, cwd
+		},
+	}
+	if _, _, err := open.Review(context.Background(), "thread-1", "turn-1", "call-2", state.Action{Type: "command", Command: "ls", CWD: cwd}); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if strings.Contains(captured.Prompt, "PARENT TURN PERMISSION CONTEXT") {
+		t.Fatalf("a profile without deny entries rendered a section:\n%s", captured.Prompt)
+	}
+}
+
 func TestModelGuardianReviewerSetsPermissionProfile(t *testing.T) {
 	var captured *model.AgentRequest
 	reviewer := &modelGuardianReviewer{

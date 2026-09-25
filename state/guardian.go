@@ -598,16 +598,22 @@ type BuildPromptOptions struct {
 	// context (Rust's RetainedUserInstructionsSection). A nil context renders no
 	// section.
 	RetainedContext *retainedctx.RetainedContext
+	// PermissionContext carries the reviewed environment's active-policy
+	// evidence: denied read paths and globs the reviewer must not approve an
+	// escalation to read (Rust's PermissionContextSection). A nil or empty
+	// context renders no section.
+	PermissionContext *PermissionContext
 }
 
 // BuildPromptWithOptions renders the Guardian review prompt in the order Rust's
 // composed context uses: the stable evidence first and the planned action last,
 // so the evidence stays a reusable history prefix across approval requests
 // (#46279). Rust's registry order places the root conversation, then the
-// retained user instructions, then the transcript and node-repl evidence, and
-// finally the planned action with its tool descriptions; the sections Go does
-// not model (trusted answers, permissions, previous reviews, trusted
-// tool/skills) come from the review's inherited context instead.
+// retained user instructions, then the transcript, the node-repl evidence and
+// the parent-turn permission context, and finally the planned action with its
+// tool descriptions; the sections Go does not model (trusted answers, previous
+// reviews, trusted tool/skills) come from the review's inherited context
+// instead.
 func BuildPromptWithOptions(action Action, transcript []string, options BuildPromptOptions) (string, error) {
 	if err := action.Validate(); err != nil {
 		return "", err
@@ -650,6 +656,11 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 		if rendered := context.Render(options.NodeReplEvidence); rendered != nil && strings.TrimSpace(rendered.Content) != "" {
 			writeGuardianPromptSection(&builder, rendered.Content)
 		}
+	}
+	if items := PermissionContextSectionItems(options.PermissionContext); len(items) > 0 {
+		// Rust's marker opens with its own newline inside the message that carries
+		// it; the block separator already supplies that paragraph break here.
+		writeGuardianPromptSection(&builder, strings.TrimLeft(strings.Join(items, ""), "\n"))
 	}
 	actionPrompt, err := joinPlannedAction(action, options.Presentation)
 	if err != nil {

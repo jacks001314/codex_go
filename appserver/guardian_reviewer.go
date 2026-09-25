@@ -52,6 +52,10 @@ type modelGuardianReviewer struct {
 	approvalsReviewer          func(threadID, turnID string) string
 	environment                func(context.Context, string, string) ([]any, error)
 	permissionProfile          func(threadID, turnID string) *sandbox.PermissionProfile
+	// turnPermissionProfile resolves the reviewed turn's own profile and cwd for
+	// the permission evidence, which is distinct from the read-only profile the
+	// reviewer's session uses (Rust's guardian permission resolution).
+	turnPermissionProfile func(threadID, turnID string) (*sandbox.PermissionProfile, string)
 	// latestResponseID resolves the reviewed turn's newest response id for the
 	// review request's `parent_response_id` client metadata (Rust #45441).
 	latestResponseID      func(threadID, turnID string) string
@@ -424,8 +428,22 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if nodeReplEvidence != nil && nodeReplEvidence.HasImages() {
 		promptNodeReplEvidence = nil
 	}
+	// Rust's Guardian permission evidence: the reviewed environment's active
+	// profile supplies the denied read paths and globs the reviewer must not
+	// approve an escalation to read (core/src/guardian/permissions.rs).
+	var permissionContext *state.PermissionContext
+	if r.turnPermissionProfile != nil {
+		if profile, cwd := r.turnPermissionProfile(threadID, turnID); profile != nil {
+			deniedPaths := sandbox.UnreadableRootsWithCWD(profile, cwd)
+			deniedGlobs := sandbox.UnreadableGlobsWithCWD(profile, cwd)
+			if len(deniedPaths) > 0 || len(deniedGlobs) > 0 {
+				permissionContext = &state.PermissionContext{DeniedPaths: deniedPaths, DeniedGlobs: deniedGlobs}
+			}
+		}
+	}
 	prompt, err := state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
-		NodeReplEvidence: promptNodeReplEvidence,
+		NodeReplEvidence:  promptNodeReplEvidence,
+		PermissionContext: permissionContext,
 	})
 	if err == nil && r.rootUserAuthorization != nil {
 		var root []string
@@ -434,6 +452,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			prompt, err = state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
 				NodeReplEvidence:      promptNodeReplEvidence,
 				RootUserAuthorization: root,
+				PermissionContext:     permissionContext,
 			})
 		}
 	}
