@@ -83,6 +83,20 @@ type ApprovalRequestMsg struct {
 	Options []ModalOption
 }
 
+// AppLinkAction is one host-side effect of the app-link popup (Rust
+// bottom_pane::app_link_view::AppLinkEvent). The model never performs these
+// itself; Options.OnAppLinkAction forwards them to the host as they happen.
+type AppLinkAction struct {
+	Kind    bottompane.AppLinkEventKind
+	URL     string
+	AppID   string
+	Enabled bool
+}
+
+// AppLinkActionOpenURL is the action that asks the host to open the
+// install/sign-in URL in the user's browser.
+const AppLinkActionOpenURL = bottompane.AppLinkEventOpenURL
+
 type ModalResponse struct {
 	ID          string
 	Kind        ModalKind
@@ -132,13 +146,18 @@ type modalState struct {
 	// passed once; a second activation runs it (Rust #44744).
 	armedOptionID string
 
-	elicitation            *bottompane.ElicitationFormRequest
-	modelPicker            *codextui.ModelPicker
-	modelReasoning         *codextui.ModelReasoningPicker
-	planReasoningScope     *codextui.PlanReasoningScopePicker
-	sessionPicker          *codextui.SessionPickerState
-	sessionAction          *codextui.SessionSelection
-	exitAfterSessionAction bool
+	elicitation *bottompane.ElicitationFormRequest
+	// appLink is the validated tool-suggestion popup shown in place of the plain
+	// elicitation form (Rust #48015 app link view).
+	appLink *bottompane.AppLinkView
+	// appLinkActionsDelivered counts the view events already handed to the host.
+	appLinkActionsDelivered int
+	modelPicker             *codextui.ModelPicker
+	modelReasoning          *codextui.ModelReasoningPicker
+	planReasoningScope      *codextui.PlanReasoningScopePicker
+	sessionPicker           *codextui.SessionPickerState
+	sessionAction           *codextui.SessionSelection
+	exitAfterSessionAction  bool
 	// unarchivePrompt hosts the archived-conversation confirmation and
 	// retrySelection is the resume/fork to retry after unarchiving (Rust
 	// unarchive_prompt.rs + session_start.rs).
@@ -643,6 +662,9 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		return nil
 	}
 	modal := m.modal
+	if modal.appLink != nil {
+		return m.respondAppLinkModal(modal, cancelled)
+	}
 	if cancelled && modal.kind == ModalKindWindowsSandbox && modal.reopenOnCancel {
 		m.notice = ""
 		return nil
@@ -889,6 +911,109 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		return m.closeSessionPickerTerminalMode(callback)
 	}
 	return callback
+}
+
+// respondAppLinkModal drives the validated tool-suggestion popup: the selected
+// option activates the app-link view's action, the resulting host-side effects
+// reach the host, and the popup closes (resolving the elicitation) once the view
+// completes. Mirrors Rust's bottom-pane app link view over AppEventSender
+// (#48015).
+func (m *Model) respondAppLinkModal(modal *modalState, cancelled bool) bubbletea.Cmd {
+	view := modal.appLink
+	if view == nil {
+		m.modal = nil
+		return nil
+	}
+	if cancelled {
+		view.Cancel()
+	} else {
+		labels := view.ActionLabels()
+		if modal.selected < 0 || modal.selected >= len(labels) {
+			return nil
+		}
+		view.SelectedAction = modal.selected
+		view.ActivateSelectedAction()
+	}
+	actions := m.deliverAppLinkActions(modal, view)
+	if view.IsComplete() {
+		m.modal = nil
+		response := ModalResponse{ID: modal.id, Kind: modal.kind}
+		if decision := appLinkElicitationDecision(view); decision != nil {
+			response.Elicitation = decision
+		}
+		callback := m.runAppLinkActions(actions)
+		if m.onModalResponse == nil {
+			return callback
+		}
+		return bubbletea.Sequence(callback, m.onModalResponse(response))
+	}
+	// The flow moved to its confirmation screen; refresh the popup in place.
+	modal.body = strings.Join(view.Rows(firstPositive(m.width-4, 76)), "\n")
+	modal.options = appLinkModalOptions(view)
+	modal.selected = 0
+	return m.runAppLinkActions(actions)
+}
+
+// runAppLinkActions hands the popup's host-side effects to the host.
+func (m *Model) runAppLinkActions(actions []AppLinkAction) bubbletea.Cmd {
+	if m == nil || m.onAppLinkAction == nil || len(actions) == 0 {
+		return nil
+	}
+	commands := make([]bubbletea.Cmd, 0, len(actions))
+	for _, action := range actions {
+		if command := m.onAppLinkAction(action); command != nil {
+			commands = append(commands, command)
+		}
+	}
+	if len(commands) == 0 {
+		return nil
+	}
+	return bubbletea.Sequence(commands...)
+}
+
+// deliverAppLinkActions returns the view events not yet handed to the host.
+func (m *Model) deliverAppLinkActions(modal *modalState, view *bottompane.AppLinkView) []AppLinkAction {
+	events := view.Events()
+	if modal.appLinkActionsDelivered >= len(events) {
+		return nil
+	}
+	pending := events[modal.appLinkActionsDelivered:]
+	modal.appLinkActionsDelivered = len(events)
+	actions := make([]AppLinkAction, 0, len(pending))
+	for _, event := range pending {
+		actions = append(actions, AppLinkAction{
+			Kind:    event.Kind,
+			URL:     event.URL,
+			AppID:   event.AppID,
+			Enabled: event.Enabled,
+		})
+	}
+	return actions
+}
+
+// appLinkElicitationDecision maps a completed app-link view onto the
+// elicitation decision the host resolves with.
+func appLinkElicitationDecision(view *bottompane.AppLinkView) *ElicitationDecision {
+	if view == nil {
+		return nil
+	}
+	for _, event := range view.Events() {
+		if event.Kind != bottompane.AppLinkEventResolveElicitation {
+			continue
+		}
+		return &ElicitationDecision{Action: string(event.Decision)}
+	}
+	return nil
+}
+
+// appLinkModalOptions renders the app-link view's actions as modal options.
+func appLinkModalOptions(view *bottompane.AppLinkView) []ModalOption {
+	labels := view.ActionLabels()
+	options := make([]ModalOption, 0, len(labels))
+	for i, label := range labels {
+		options = append(options, ModalOption{ID: fmt.Sprintf("app_link_%d", i), Label: label})
+	}
+	return options
 }
 
 func (m *Model) closeSessionPickerTerminalMode(next bubbletea.Cmd) bubbletea.Cmd {

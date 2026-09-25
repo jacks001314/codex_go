@@ -501,6 +501,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			brokers.respond(response)
 			return interactiveRemoteModelSelectionCommand(ctx, endpoint, state, response.Picker)
 		},
+		OnAppLinkAction: interactiveAppLinkActionHandler(),
 		OnReadTokenActivity: func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error) {
 			return interactiveRemoteReadTokenActivity(ctx, endpoint, view)
 		},

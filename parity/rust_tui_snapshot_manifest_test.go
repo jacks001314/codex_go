@@ -22,14 +22,14 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	// Re-pinned to upstream 8ae55c863d (the transcript-and-settings lane:
+	// Re-pinned to upstream d0a64e91ae (the transcript-and-settings lane:
 	// #46832/#46849/#46861/#46863/#46864/#46938/#47178/#47322/#47908/#47911/
-	// #47929/#47954): the analytics dashboard snapshots were dropped (#46861)
+	// #47929/#47954/#48015): the analytics dashboard snapshots were dropped (#46861)
 	// while the transcript view, markdown rendering, prompt suggestions, effect
-	// toggles, warnings and settings surfaces grew, netting +35 on top of the
-	// #46752 pinned total of 1285.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1320 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1320", got)
+	// toggles, warnings, settings and declined-tool-suggestion surfaces grew,
+	// netting +36 on top of the #46752 pinned total of 1285.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1321 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1321", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -259,8 +259,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46695/#46697 added the clipped full-access confirmation and the
 			// two Windows sandbox picker fallbacks; #46751 replaced the
 			// warnings-summary presentation and #46752 added the tmux
-			// pets-unavailable notice.
-			Files:    313,
+			// pets-unavailable notice; #48015 added the declined-tool-suggestion
+			// snapshot.
+			Files:    314,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -268,6 +269,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__status_widget_active.snap",
 				"tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__status_widget_and_approval_modal.snap",
 				"tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__unified_exec_begin_restores_working_status.snap",
+				"tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__declined_tool_suggestion.snap",
 			},
 		},
 		{

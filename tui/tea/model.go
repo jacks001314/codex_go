@@ -854,9 +854,14 @@ type Options struct {
 	KeymapConfig              *codextui.KeymapConfig
 	OnKeymapEdit              KeymapEditFunc
 	OnModalResponse           ModalResponseFunc
-	OnSessionAction           SessionActionFunc
-	OnWorkingDirectoryChange  WorkingDirectoryChangeFunc
-	OnResumeSession           SessionResumeFunc
+	// OnAppLinkAction performs the app-link popup's host-side effects (opening
+	// the install/sign-in URL). It is called as the effects happen, so the popup
+	// can stay open on its confirmation screen (Rust #48015 app link view over
+	// AppEvent::OpenUrlInBrowser).
+	OnAppLinkAction          func(action AppLinkAction) bubbletea.Cmd
+	OnSessionAction          SessionActionFunc
+	OnWorkingDirectoryChange WorkingDirectoryChangeFunc
+	OnResumeSession          SessionResumeFunc
 	// OnPromptEdit branches before a transcript prompt selected via backtrack
 	// ("Esc Esc to edit previous message") and returns the branched session.
 	// A nil hook leaves prompt editing unavailable for this runtime.
@@ -1476,6 +1481,7 @@ type Model struct {
 	copyTargets                     []chatwidget.CopyTarget
 	onKeymapEdit                    KeymapEditFunc
 	onModalResponse                 ModalResponseFunc
+	onAppLinkAction                 func(action AppLinkAction) bubbletea.Cmd
 	onSessionAction                 SessionActionFunc
 	onWorkingDirectoryChange        WorkingDirectoryChangeFunc
 	onResumeSession                 SessionResumeFunc
@@ -1848,6 +1854,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		keymapConfig:                    options.KeymapConfig.Clone(),
 		onKeymapEdit:                    options.OnKeymapEdit,
 		onModalResponse:                 options.OnModalResponse,
+		onAppLinkAction:                 options.OnAppLinkAction,
 		onSessionAction:                 options.OnSessionAction,
 		onWorkingDirectoryChange:        options.OnWorkingDirectoryChange,
 		onResumeSession:                 options.OnResumeSession,

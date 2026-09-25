@@ -59,6 +59,22 @@ func (m *Model) openElicitationModal(message ElicitationRequestMsg) bubbletea.Cm
 	}
 	form.ThreadID = message.ThreadID
 	form.TurnID = message.TurnID
+	// Rust #48015: a form-mode tool suggestion is validated before the app link
+	// view is shown; a suggestion whose install URL is not a credential-free
+	// HTTPS URL is declined on the requesting thread without showing a popup.
+	if suggestion := form.ToolSuggestion(); suggestion != nil {
+		params, outcome := bottompane.AppLinkParamsFromToolSuggestion(suggestion, bottompane.AppLinkElicitationTarget{
+			ThreadID:   message.ThreadID,
+			ServerName: message.ServerName,
+			RequestID:  firstNonEmpty(message.RequestID, message.ID),
+		})
+		if outcome == bottompane.AppLinkToolSuggestionDecline {
+			return m.declineElicitationWithoutPopup(firstNonEmpty(message.ID, message.RequestID), message.ServerName)
+		}
+		if outcome == bottompane.AppLinkToolSuggestionAppLink {
+			return m.openAppLinkModal(message, form, params)
+		}
+	}
 	body := strings.Join(form.RenderLines(firstPositive(m.width-4, 76)), "\n")
 	if body == "" {
 		body = strings.TrimSpace(message.Message)
@@ -89,6 +105,53 @@ func elicitationURLBody(message ElicitationRequestMsg) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// openAppLinkModal shows the validated tool-suggestion popup: the app link view
+// renders in place of the plain form, its actions become the modal options, and
+// the elicitation is resolved when the flow completes (Rust #48015).
+func (m *Model) openAppLinkModal(message ElicitationRequestMsg, form *bottompane.ElicitationFormRequest, params bottompane.AppLinkViewParams) bubbletea.Cmd {
+	view := bottompane.NewAppLinkView(params)
+	title := strings.TrimSpace(message.Title)
+	if title == "" {
+		title = "MCP request"
+		if strings.TrimSpace(message.ServerName) != "" {
+			title = "MCP request from " + strings.TrimSpace(message.ServerName)
+		}
+	}
+	m.openModal(ModalRequestMsg{
+		ID:      firstNonEmpty(message.ID, message.RequestID),
+		Kind:    ModalKindElicitation,
+		Title:   title,
+		Body:    strings.Join(view.Rows(firstPositive(m.width-4, 76)), "\n"),
+		Options: appLinkModalOptions(view),
+	})
+	if m.modal != nil {
+		m.modal.appLink = view
+		m.modal.elicitation = form
+	}
+	return m.queueNotification(chatwidget.ElicitationRequestedNotification(message.ServerName))
+}
+
+// declineElicitationWithoutPopup resolves a request as declined without opening
+// a modal, mirroring Rust's `resolve_elicitation(.., Decline, ..)` in the
+// #48015 invalid-install-URL path.
+func (m *Model) declineElicitationWithoutPopup(id string, serverName string) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	response := ModalResponse{
+		ID:   strings.TrimSpace(id),
+		Kind: ModalKindElicitation,
+		Elicitation: &ElicitationDecision{
+			Action: string(bottompane.ElicitationDecline),
+		},
+	}
+	m.notice = ""
+	if m.onModalResponse == nil {
+		return nil
+	}
+	return m.onModalResponse(response)
 }
 
 func elicitationOptionsForForm(form *bottompane.ElicitationFormRequest) []ModalOption {

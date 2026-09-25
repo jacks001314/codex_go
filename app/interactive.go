@@ -1084,6 +1084,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 			return func() bubbletea.Msg { return codextea.MCPStartupFinishAfterLagMsg{} }
 		},
 		OnExternalEditorDirectory: interactiveExternalEditorDirectoryHandler(root, auth.DefaultCodexHome()),
+		OnAppLinkAction:           interactiveAppLinkActionHandler(),
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			approvalBroker.respond(response)
 			elicitationBroker.respond(response)

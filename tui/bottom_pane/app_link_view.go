@@ -151,6 +151,60 @@ func AppLinkViewParamsFromURLRequest(threadID string, serverName string, request
 	return appLinkParamsFromGenericURLParts(threadID, serverName, requestID, request.Message, parsed.String(), request.ElicitationID), true
 }
 
+// AppLinkToolSuggestionOutcome is how a form-mode tool suggestion is presented.
+type AppLinkToolSuggestionOutcome string
+
+const (
+	// AppLinkToolSuggestionForm keeps the plain form modal: the suggestion
+	// carries no install URL.
+	AppLinkToolSuggestionForm AppLinkToolSuggestionOutcome = "form"
+	// AppLinkToolSuggestionDecline resolves the elicitation as declined without
+	// showing a popup (Rust #48015: an invalid install URL is never shown).
+	AppLinkToolSuggestionDecline AppLinkToolSuggestionOutcome = "decline"
+	// AppLinkToolSuggestionAppLink shows the app link view.
+	AppLinkToolSuggestionAppLink AppLinkToolSuggestionOutcome = "app_link"
+)
+
+// AppLinkParamsFromToolSuggestion mirrors the tool-suggestion branch of Rust's
+// bottom_pane::push_mcp_server_elicitation_request: the suggestion's install URL
+// is validated with the same external-URL validator as the URL-mode elicitation
+// (HTTPS, a host, and no embedded credentials), and a suggestion whose install
+// URL is missing or invalid never reaches the app link view.
+func AppLinkParamsFromToolSuggestion(suggestion *ToolSuggestionRequest, target AppLinkElicitationTarget) (AppLinkViewParams, AppLinkToolSuggestionOutcome) {
+	if suggestion == nil || suggestion.InstallURL == nil {
+		return AppLinkViewParams{}, AppLinkToolSuggestionForm
+	}
+	installURL, ok := validateAppLinkExternalURL(*suggestion.InstallURL, false)
+	if !ok {
+		return AppLinkViewParams{}, AppLinkToolSuggestionDecline
+	}
+	suggestionType := AppLinkSuggestionInstall
+	instructions := "Install this app in your browser, then return here."
+	isInstalled := false
+	if suggestion.SuggestType == ToolSuggestionEnable {
+		suggestionType = AppLinkSuggestionEnable
+		instructions = "Enable this app to use it for the current request."
+		isInstalled = true
+	}
+	reason := suggestion.SuggestReason
+	params := AppLinkViewParams{
+		AppID:          suggestion.ToolID,
+		Title:          suggestion.ToolName,
+		Instructions:   instructions,
+		URL:            installURL.String(),
+		IsInstalled:    isInstalled,
+		IsEnabled:      false,
+		SuggestReason:  &reason,
+		SuggestionType: &suggestionType,
+		ElicitationTarget: &AppLinkElicitationTarget{
+			ThreadID:   target.ThreadID,
+			ServerName: target.ServerName,
+			RequestID:  target.RequestID,
+		},
+	}
+	return params, AppLinkToolSuggestionAppLink
+}
+
 func (v AppLinkView) Ready() bool {
 	return v.AppName != "" && v.URL != ""
 }

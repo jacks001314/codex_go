@@ -70,6 +70,9 @@ type ElicitationFormRequest struct {
 	ResponseMode ElicitationResponseMode
 	Fields       []ElicitationField
 	Meta         map[string]any
+	// toolSuggestion is the parsed `codex_approval_kind: tool_suggestion`
+	// metadata; nil for a plain form elicitation.
+	toolSuggestion *ToolSuggestionRequest
 }
 
 type ElicitationDecision struct {
@@ -88,13 +91,113 @@ func NewElicitationFormRequest(serverName string, requestID string, message stri
 		mode = ElicitationApprovalAction
 	}
 	return &ElicitationFormRequest{
-		ServerName:   strings.TrimSpace(serverName),
-		RequestID:    strings.TrimSpace(requestID),
-		Message:      strings.TrimSpace(message),
-		ResponseMode: mode,
-		Fields:       fields,
-		Meta:         cloneMeta(meta),
+		ServerName:     strings.TrimSpace(serverName),
+		RequestID:      strings.TrimSpace(requestID),
+		Message:        strings.TrimSpace(message),
+		ResponseMode:   mode,
+		Fields:         fields,
+		Meta:           cloneMeta(meta),
+		toolSuggestion: parseToolSuggestionRequest(meta),
 	}, nil
+}
+
+// Tool suggestion meta keys, mirroring Rust's
+// bottom_pane/mcp_server_elicitation.rs (`TOOL_TYPE_KEY` and friends).
+const (
+	toolApprovalKindToolSuggestion = "tool_suggestion"
+	toolTypeKey                    = "tool_type"
+	toolSuggestTypeKey             = "suggest_type"
+	toolSuggestReasonKey           = "suggest_reason"
+	toolSuggestInstallURLKey       = "install_url"
+	toolIDKey                      = "tool_id"
+	toolNameKey                    = "tool_name"
+)
+
+// ToolSuggestionToolType is the suggested tool's kind (Rust
+// ToolSuggestionToolType).
+type ToolSuggestionToolType string
+
+const (
+	ToolSuggestionToolConnector ToolSuggestionToolType = "connector"
+	ToolSuggestionToolPlugin    ToolSuggestionToolType = "plugin"
+)
+
+// ToolSuggestionType is the action a tool suggestion prompts for (Rust
+// ToolSuggestionType).
+type ToolSuggestionType string
+
+const (
+	ToolSuggestionInstall ToolSuggestionType = "install"
+	ToolSuggestionEnable  ToolSuggestionType = "enable"
+)
+
+// ToolSuggestionRequest is the parsed `codex_approval_kind: tool_suggestion`
+// metadata of a form elicitation (Rust ToolSuggestionRequest).
+type ToolSuggestionRequest struct {
+	ToolType      ToolSuggestionToolType
+	SuggestType   ToolSuggestionType
+	SuggestReason string
+	ToolID        string
+	ToolName      string
+	// InstallURL is absent when the suggestion carries no install URL; the
+	// caller then falls back to the plain form.
+	InstallURL *string
+}
+
+// parseToolSuggestionRequest mirrors Rust's parse_tool_suggestion_request: an
+// unrecognized tool type, suggest type, or any missing required field means the
+// elicitation is not a tool suggestion.
+func parseToolSuggestionRequest(meta map[string]any) *ToolSuggestionRequest {
+	if len(meta) == 0 || strings.TrimSpace(stringFromMap(meta, "codex_approval_kind")) != toolApprovalKindToolSuggestion {
+		return nil
+	}
+	var toolType ToolSuggestionToolType
+	switch strings.TrimSpace(stringFromMap(meta, toolTypeKey)) {
+	case string(ToolSuggestionToolConnector):
+		toolType = ToolSuggestionToolConnector
+	case string(ToolSuggestionToolPlugin):
+		toolType = ToolSuggestionToolPlugin
+	default:
+		return nil
+	}
+	var suggestType ToolSuggestionType
+	switch strings.TrimSpace(stringFromMap(meta, toolSuggestTypeKey)) {
+	case string(ToolSuggestionInstall):
+		suggestType = ToolSuggestionInstall
+	case string(ToolSuggestionEnable):
+		suggestType = ToolSuggestionEnable
+	default:
+		return nil
+	}
+	reason := strings.TrimSpace(stringFromMap(meta, toolSuggestReasonKey))
+	toolID := strings.TrimSpace(stringFromMap(meta, toolIDKey))
+	toolName := strings.TrimSpace(stringFromMap(meta, toolNameKey))
+	if reason == "" || toolID == "" || toolName == "" {
+		return nil
+	}
+	suggestion := &ToolSuggestionRequest{
+		ToolType:      toolType,
+		SuggestType:   suggestType,
+		SuggestReason: reason,
+		ToolID:        toolID,
+		ToolName:      toolName,
+	}
+	if raw, ok := meta[toolSuggestInstallURLKey]; ok {
+		if value, ok := raw.(string); ok {
+			installURL := strings.TrimSpace(value)
+			suggestion.InstallURL = &installURL
+		}
+	}
+	return suggestion
+}
+
+// ToolSuggestion returns the parsed tool suggestion, or nil for a plain form
+// elicitation.
+func (r *ElicitationFormRequest) ToolSuggestion() *ToolSuggestionRequest {
+	if r == nil {
+		return nil
+	}
+	return r.toolSuggestion
 }
 
 func ElicitationFieldsFromSchema(schema any) ([]ElicitationField, error) {
