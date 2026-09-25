@@ -13,8 +13,50 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-08-21T11:30:00+08:00",
+    "generatedAt": "2026-09-25T00:00:00+08:00",
     "items": [
+        {
+            "id": "static-layer-repin-8ae55c863d",
+            "status": "done",
+            "area": "parity",
+            "reason": "Re-pinned the L0 static parity layer to upstream 8ae55c863d (358 commits since 5c5308fc9a). Inventory: core-plugin-common and websocket-auth joined the top-level directories (118); the workspace members grew by core-plugin-common, ext/agent-message-board and websocket-auth (152). Critical file hashes re-frozen for Cargo.toml (#47447/#47683/#47748), exec/src/lib.rs (#47411), core/src/client.rs (#47745/#47758/#47957), app-server-protocol/src/protocol/common.rs (#47207/#47248/#47377/#47648), app-server/tests/suite/v2/mod.rs (#46917/#47028/#47207/#47407) and core/tests/suite/mod.rs (#47407/#47679/#47819/#47820/#47879). Fixture roots re-counted (cli/tests 38 with the exec-server PID-namespace and WebSocket-auth suites plus doctor path-safety snapshots, app-server v2 154, core/tests/suite 256, chatwidget tests 123/70, tools/src 41). TUI snapshot total 1285 -> 1320 with three new required directories and the fresh-thread animation snapshot replaced (#47954). The windows_sandbox deny-read case was renamed (#47919) and the session-startup-prewarm contract path moved to core/src/session/startup_prewarm.rs. The vendored precomputed exports were re-vendored byte-identical and their SHA-256 pins re-frozen.",
+            "test": "go test ./parity/ -count=1; go test ./appserver -run TestPrecomputedExportArtifactsMatchTargetRustCommit -count=1"
+        },
+        {
+            "id": "features-registry-repin-sync139",
+            "status": "done",
+            "area": "features",
+            "reason": "Rust #47179 promotes daemon_auto_start to stable/default-on, #47799 promotes write_stdin_approval to stable/default-on, #47686/#47688/#47689/#47690 retire guardianv2.thread_context (thread-owned Guardian context capture is unconditional, so the Go gate is fixed on), and #46849 deprecates transcript_v2. New keys registered: defer_mailbox_preemption (#47913), agent_message_board (#47946), prefer_mxc (#47375). The two default flips are behaviour changes Go now mirrors: an eligible interactive launch starts the shared background server and requires the managed standalone install, and an escalated write_stdin requires review unless explicitly disabled.",
+            "test": "go test ./parity -run 'TestFeaturesRegistryMatchesRust|TestRustFeatureKeySurfaceAgainstGo' -count=1; go test ./app -run Interactive -count=1; go test ./appserver -run WriteStdinApproval -count=1"
+        },
+        {
+            "id": "flex-unavailable-terminal-error",
+            "status": "done",
+            "area": "model",
+            "reason": "Aligned upstream dafb133c5b (#47967 Surface Flex capacity failures as a distinct terminal error): codexapi gains ErrorFlexUnavailable with Rust's 'Flex capacity unavailable.' display text and response-debug telemetry message; the model layer recognizes flex_unavailable in HTTP 429 bodies, standalone streamed error events and response.failed, ending the turn without retries; the app-server maps it to flexUnavailable with httpStatusCode 429 (CodexErrorDetails::http_status_code_value reports 429 even when the sampled error carries no status), and the rollout reader accepts the new classification.",
+            "test": "go test ./model -run 'FlexUnavailable|ResponseFailedError|ResponsesHTTPError' -count=1; go test ./appserver -run TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust -count=1; go test ./rollout -count=1"
+        },
+        {
+            "id": "cloud-config-and-explicit-image-background",
+            "status": "done",
+            "area": "config",
+            "reason": "Aligned upstream f3037cafd3 (#47074) and 40eac3ce8a (#47484). ConfigToml/config.schema.json gain the cloud table, so Go recognizes `cloud` with strict CloudToml sub-field validation and Config.CloudSkillsEnabled() reads cloud.skills.enabled defaulting to true while orchestrator.skills stays a legacy no-op (Rust replaced the built-in orchestrator provider with the host-supplied cloud provider). image_gen.imagegen gains the transparent_background boolean and always sends an explicit transparent/opaque background, replacing the previous auto value, with the vendored description updated.",
+            "test": "go test ./config -run 'Cloud|GuardianExtraPolicy' -count=1; go test ./turn -run ImageGeneration -count=1; go test ./parity -run 'TestRustConfigSchemaSurfaceAgainstGo|TestRustConfigTomlTopLevelSurfaceSnapshot|TestRustImagegenDescriptionMatchesGo' -count=1"
+        },
+        {
+            "id": "guardian-extra-policy",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 26cb4d73e2 (#47125 Add extra policy configuration for Guardian reviews): the managed guardian_extra_policy requirement wins over [auto_review] extra_policy, blank values are ignored in both layers, and RenderGuardianPolicyInstructions substitutes {{ extra_policy }} with Rust's two-pass split on the tenant placeholder so placeholder-like text inside either supplied policy stays literal. The vendored policy_template.md and node_repl_policy.md were updated for the same lane (#47647 Browser-connector computer-use rules).",
+            "test": "go test ./config -run Guardian -count=1; go test ./state -run Guardian -count=1; go test ./appserver -run GuardianReviewInstructions -count=1; go test ./parity -run TestRustGuardianPolicyPromptMatchesGo -count=1"
+        },
+        {
+            "id": "gateway-oauth-rpcs",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream 47207/47170 (explicit gateway sign-in and authentication status): app-server advertises account/gatewayOAuth/read|login|cancel in the JSON and TypeScript client surfaces plus the account/gatewayOAuth/changed notification. auth.GatewayAuthManager gained a per-CODEX_HOME login control (notReady/started/succeeded/failed status, subscriptions, one-sign-in-at-a-time guard, LoginWithBrowser with a caller-owned URL handoff) so the read RPC reports provider policy and readiness without credentials, the URL handoff reaches the initiating connection, and cancellation is bound to that connection and acknowledged only after the login releases its slot.",
+            "test": "go test ./auth -run Gateway -count=1; go test ./appserver -run 'GatewayOAuth|TestBuildProtocolSchemaMatchesRustStableFixtures|TestBuildTypeScriptProtocolSchemaMatchesRustFixtures' -count=1"
+        },
         {
             "status": "done",
             "test": "go test ./turn ./appserver ./rollout ./exec ./protocol -run 'ImageGeneration|Transparent' -count=1",
