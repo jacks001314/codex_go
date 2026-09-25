@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"codex_go/sandbox"
 )
 
 const PluginMetricsOutputEnvVar = "CODEX_PLUGIN_METRICS_OUTPUT"
@@ -120,6 +122,25 @@ func (s *PluginMetricsSidecar) OutputDir() string {
 		return ""
 	}
 	return s.outputDir
+}
+
+// AdditionalPermissions mirrors Rust's
+// PluginMetricsSidecar::additional_permissions: the sidecar's only grant is write
+// access to its private output directory. It is a runtime-internal grant, so a
+// caller that records a launch's permissions must keep it apart from the agent's
+// requested permissions (Rust's unified-exec `internal_permissions`, #48073).
+func (s *PluginMetricsSidecar) AdditionalPermissions() *sandbox.AdditionalPermissionProfile {
+	if s == nil {
+		return nil
+	}
+	dir := strings.TrimSpace(s.outputDir)
+	if dir == "" {
+		return nil
+	}
+	// Go's additional-permission profile carries the flattened write roots (its
+	// MarshalJSON emits them under `fileSystem.write`), matching Rust's
+	// `FileSystemPermissions::from_read_write_roots(None, Some([dir]))`.
+	return &sandbox.AdditionalPermissionProfile{FileSystem: []string{dir}}
 }
 
 func (s *PluginMetricsSidecar) Finish(exitCode int) *PluginMeasurementBatch {

@@ -37,6 +37,32 @@ func TestValidatePluginAnalyticsManifestMatchesRust(t *testing.T) {
 	}
 }
 
+// Rust parity (#48073): the sidecar's internal grant is write access to its own
+// private output directory, kept apart from the agent's requested permissions.
+func TestPluginMetricsSidecarAdditionalPermissionsLikeRust(t *testing.T) {
+	sidecar := NewPluginMetricsSidecar(ResolvedPluginMetricsOperation{
+		PluginID:  "plugin-1",
+		Operation: PluginMetricsOperation{OperationName: "run_measure"},
+	})
+	if sidecar == nil {
+		t.Fatal("NewPluginMetricsSidecar() = nil")
+	}
+	defer sidecar.Cleanup()
+	permissions := sidecar.AdditionalPermissions()
+	if permissions == nil || len(permissions.FileSystem) != 1 {
+		t.Fatalf("additional permissions = %#v", permissions)
+	}
+	if permissions.FileSystem[0] != sidecar.OutputDir() {
+		t.Fatalf("write root = %q, want the sidecar output dir %q", permissions.FileSystem[0], sidecar.OutputDir())
+	}
+	if _, err := os.Stat(permissions.FileSystem[0]); err != nil {
+		t.Fatalf("output dir is not a directory: %v", err)
+	}
+	if permissions.Network != nil {
+		t.Fatalf("sidecar permissions grant network access: %#v", permissions.Network)
+	}
+}
+
 func TestPluginMetricsSidecarParsesAndValidatesOutput(t *testing.T) {
 	resolved := ResolvedPluginMetricsOperation{
 		PluginID: "plugin-1",
