@@ -215,7 +215,14 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		fields["stream_attempt"] = attempt + 1
 		fields["stream_max_retries"] = maxRetries
 		responsesDiagnostic("sampling.start", fields)
-		response, err := r.runStreamingOnce(ctx, request, apiRequest)
+		response, err := r.runStreamingOncePreemptible(ctx, request, apiRequest)
+		if err != nil && errors.Is(err, errResponsesSamplingPreempted) {
+			// Rust #48141: a signaled step yields the request instead of
+			// consuming a retry, and the connection state is dropped so the
+			// replacement request sends full history.
+			r.dropConnectionForRequest(request)
+			return preemptedAgentResponse(request), nil
+		}
 		if err == nil {
 			responsesDiagnostic("sampling.completed", map[string]any{"thread_id": request.ThreadID, "turn_id": request.TurnID, "stream_attempt": attempt + 1, "response_id": response.ResponseID})
 			return response, nil
@@ -235,8 +242,11 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 				RetryMax:    maxRetries,
 				RetryStatus: "connection_failed",
 			})
-			if err := sleepWithContext(ctx, connectionRetryDelay); err != nil {
+			if preempted, err := sleepWithContextPreemptible(ctx, request.Preempt, connectionRetryDelay); err != nil {
 				return nil, err
+			} else if preempted {
+				r.dropConnectionForRequest(request)
+				return preemptedAgentResponse(request), nil
 			}
 			connectionRetryDelay *= 2
 			if connectionRetryDelay > maxConnectionRetryDelay {
@@ -262,9 +272,80 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 			RetryDelay:      delay,
 			RetryHTTPStatus: responsesStreamErrorHTTPStatus(err),
 		})
-		if err := sleepWithContext(ctx, delay); err != nil {
+		if preempted, err := sleepWithContextPreemptible(ctx, request.Preempt, delay); err != nil {
 			return nil, err
+		} else if preempted {
+			// Rust #48141: interrupting the retry backoff preserves the original
+			// input for the replacement request.
+			r.dropConnectionForRequest(request)
+			return preemptedAgentResponse(request), nil
 		}
+	}
+}
+
+// errResponsesSamplingPreempted is the internal marker for a sampling request
+// that new user input interrupted (Rust #48141). It never escapes the runner:
+// the preempted step becomes an empty, "needs follow-up" response.
+var errResponsesSamplingPreempted = errors.New("responses sampling preempted")
+
+// preemptedAgentResponse mirrors Rust's signaled-step result: no assistant
+// output, and the turn continues with the queued input.
+func preemptedAgentResponse(request *AgentRequest) *AgentResponse {
+	response := &AgentResponse{Preempted: true}
+	if request != nil {
+		response.ProviderID = strings.TrimSpace(request.ProviderID)
+		response.Model = strings.TrimSpace(request.Model)
+	}
+	return response
+}
+
+// runStreamingOncePreemptible mirrors Rust #48141's `try_run_sampling_request`:
+// the stream future is raced against the request's preemption signal, and a
+// preemption cancels the in-flight request so its transport is abandoned.
+func (r *ResponsesAgentRunner) runStreamingOncePreemptible(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*AgentResponse, error) {
+	if request == nil || request.Preempt == nil {
+		return r.runStreamingOnce(ctx, request, apiRequest)
+	}
+	select {
+	case <-request.Preempt:
+		return nil, errResponsesSamplingPreempted
+	default:
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type outcome struct {
+		response *AgentResponse
+		err      error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		response, err := r.runStreamingOnce(streamCtx, request, apiRequest)
+		done <- outcome{response: response, err: err}
+	}()
+	select {
+	case result := <-done:
+		return result.response, result.err
+	case <-request.Preempt:
+		cancel()
+		return nil, errResponsesSamplingPreempted
+	}
+}
+
+// sleepWithContextPreemptible waits for the retry backoff, reporting true when
+// new user input interrupted it (Rust #48141's retry-backoff preemption).
+func sleepWithContextPreemptible(ctx context.Context, preempt <-chan struct{}, delay time.Duration) (bool, error) {
+	if preempt == nil {
+		return false, sleepWithContext(ctx, delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-preempt:
+		return true, nil
+	case <-timer.C:
+		return false, nil
 	}
 }
 

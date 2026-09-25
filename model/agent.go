@@ -67,6 +67,12 @@ type AgentRequest struct {
 	StreamHandler                ResponsesStreamHandler
 	DisableHostedImageGeneration bool
 	PermissionProfile            *sandbox.PermissionProfile
+	// Preempt, when non-nil, carries the sampling request's preemption signal
+	// (Rust #48141's `StepContext::preempt`): closing it interrupts request
+	// setup, the response stream and the retry backoff so the queued user input
+	// reaches the model without waiting for the unfinished response. A
+	// preempted request returns a response with Preempted set and no output.
+	Preempt <-chan struct{}
 }
 
 type AgentUsage struct {
@@ -315,6 +321,12 @@ type AgentResponse struct {
 	RateLimits        []ResponsesRateLimitSnapshot
 	ReasoningIncluded *bool
 	TimingMetrics     map[string]any
+	// Preempted reports that the sampling request was interrupted by new user
+	// input before it produced a response (Rust #48141's
+	// `SamplingRequestResult { needs_follow_up: true }` for a signaled step). The
+	// turn continues with the queued input instead of treating the step as a
+	// failure.
+	Preempted bool
 }
 
 func AgentResponseMetadata(response *AgentResponse) map[string]any {

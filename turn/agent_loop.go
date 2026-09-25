@@ -376,11 +376,22 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			OutputSchema:                 request.OutputSchema,
 			DisableHostedImageGeneration: request.DisableHostedImageGeneration,
 			StreamHandler:                combineResponsesStreamHandlers(request.StreamHandler, timingStreamHandler(timing, l.now)),
+			// Rust #48141: new user input preempts the unfinished sampling
+			// request so the queued input reaches the model without waiting.
+			Preempt: stepPreempt.Done(),
 		})
 		sampling.CloseAt(l.now())
 		if err != nil {
 			endSamplingRequestSpan()
 			return nil, err
+		}
+		if response.Preempted {
+			// A signaled step produced no assistant output: the turn continues
+			// with the queued input (drained at the top of the next iteration),
+			// and the replacement request sends full history.
+			endSamplingRequestSpan()
+			previousResponseID = ""
+			continue
 		}
 		if l.executedToolCalls != nil {
 			l.executedToolCalls.CommitAttachment(executedToolCallAttachment)

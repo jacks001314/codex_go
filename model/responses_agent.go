@@ -439,6 +439,20 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 }
 
 func (r *ResponsesAgentRunner) websocketSession(request *AgentRequest) *responsesWebsocketSession {
+	key := r.websocketSessionKey(request)
+	r.websocketSessions.mu.Lock()
+	defer r.websocketSessions.mu.Unlock()
+	session := r.websocketSessions.sessions[key]
+	if session == nil {
+		session = &responsesWebsocketSession{}
+		r.websocketSessions.sessions[key] = session
+	}
+	return session
+}
+
+// websocketSessionKey resolves the cache key of the session a request uses,
+// including the reviewer-specific suffix.
+func (r *ResponsesAgentRunner) websocketSessionKey(request *AgentRequest) string {
 	key := responsesWebsocketSessionKey(request)
 	// Rust #45736 reconnects the cached socket when the applicable responses
 	// headers change (they are scoped to the reviewer model), so a Guardian
@@ -451,14 +465,35 @@ func (r *ResponsesAgentRunner) websocketSession(request *AgentRequest) *response
 	if r.isGuardianReviewerInference(guardianModel, request) {
 		key += ":guardian-reviewer"
 	}
-	r.websocketSessions.mu.Lock()
-	defer r.websocketSessions.mu.Unlock()
-	session := r.websocketSessions.sessions[key]
-	if session == nil {
-		session = &responsesWebsocketSession{}
-		r.websocketSessions.sessions[key] = session
+	return key
+}
+
+// dropConnectionForRequest mirrors Rust #48141's
+// `ModelClientSession::drop_connection`: a preempted sampling request drops its
+// cached WebSocket connection and the continuation state, so the replacement
+// request starts a fresh connection and sends full history.
+func (r *ResponsesAgentRunner) dropConnectionForRequest(request *AgentRequest) {
+	if r == nil {
+		return
 	}
-	return session
+	if r.websocketSessions != nil {
+		key := r.websocketSessionKey(request)
+		r.websocketSessions.mu.Lock()
+		session := r.websocketSessions.sessions[key]
+		delete(r.websocketSessions.sessions, key)
+		r.websocketSessions.mu.Unlock()
+		if session != nil {
+			session.mu.Lock()
+			closeResponsesWebsocketSession(session, "preempted")
+			session.mu.Unlock()
+		}
+	}
+	if r.turnState != nil {
+		r.turnState.mu.Lock()
+		r.turnState.turnID = ""
+		r.turnState.value = ""
+		r.turnState.mu.Unlock()
+	}
 }
 
 func (r *ResponsesAgentRunner) websocketsDisabled() bool {
@@ -1150,7 +1185,10 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	if apiRequest.Stream {
 		return r.runStreaming(ctx, request, apiRequest)
 	}
-	httpResponse, err := r.doResponsesHTTPRequestWithRetry(ctx, request, apiRequest, "application/json", r.requestMaxRetries())
+	httpResponse, preempted, err := r.runResponsesHTTPRequestPreemptible(ctx, request, apiRequest)
+	if preempted {
+		return preemptedAgentResponse(request), nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1736,6 +1774,41 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequest(httpRequest *http.Request)
 		}
 	}
 	return client.Do(httpRequest)
+}
+
+// runResponsesHTTPRequestPreemptible mirrors Rust #48141 for the non-streaming
+// sampling path: the request is raced against the step's preemption signal, and
+// a preemption cancels the in-flight request and drops the connection state.
+func (r *ResponsesAgentRunner) runResponsesHTTPRequestPreemptible(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest) (*http.Response, bool, error) {
+	if request == nil || request.Preempt == nil {
+		response, err := r.doResponsesHTTPRequestWithRetry(ctx, request, apiRequest, "application/json", r.requestMaxRetries())
+		return response, false, err
+	}
+	select {
+	case <-request.Preempt:
+		r.dropConnectionForRequest(request)
+		return nil, true, nil
+	default:
+	}
+	requestCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type outcome struct {
+		response *http.Response
+		err      error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		response, err := r.doResponsesHTTPRequestWithRetry(requestCtx, request, apiRequest, "application/json", r.requestMaxRetries())
+		done <- outcome{response: response, err: err}
+	}()
+	select {
+	case result := <-done:
+		return result.response, false, result.err
+	case <-request.Preempt:
+		cancel()
+		r.dropConnectionForRequest(request)
+		return nil, true, nil
+	}
 }
 
 func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, accept string, maxRetries uint64) (*http.Response, error) {
