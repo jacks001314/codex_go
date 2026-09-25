@@ -17,20 +17,9 @@ import (
 // traffic to its explicitly allowed domains, while a missing or disabled
 // requirement leaves application traffic unrestricted.
 func destinationPolicyFromApplicationRequirements(application *config.ApplicationRequirements) network.DestinationPolicy {
-	requirements := (*config.ApplicationNetworkRequirements)(nil)
-	if application != nil {
-		requirements = application.Network
-	}
-	if requirements == nil || !requirements.Enabled {
-		return network.UnrestrictedDestinationPolicy()
-	}
-	allowedHosts := make([]string, 0, len(requirements.Domains))
-	for host, permission := range requirements.Domains {
-		if permission == config.NetworkAllow {
-			allowedHosts = append(allowedHosts, host)
-		}
-	}
-	return network.RestrictedDestinationPolicy(allowedHosts)
+	// The composition lives with the requirements type so every host (the
+	// app-server, codex exec, the CLI) publishes the same policy.
+	return config.DestinationPolicyForApplicationRequirements(application)
 }
 
 // applicationNetworkRequirements returns the effective managed application

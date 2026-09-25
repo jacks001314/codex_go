@@ -199,6 +199,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
+	// The run publishes the application network policy its own transports bind
+	// (Rust EmbeddedNetworkPolicy::activate).
+	publishApplicationNetworkPolicy(cfg)
 	r.configureOtelProvider(cfg, req)
 	defer r.shutdownOtelProvider(context.Background())
 	var managedWorktreeManager *worktree.WorktreeManager
@@ -1674,10 +1677,23 @@ func agentIdentityOptionsForExec(cfg *config.Config) *model.AgentIdentityOptions
 }
 
 func (r *Runner) httpClientForConfig(cfg *config.Config) model.HTTPDoer {
+	var base model.HTTPDoer
 	if r != nil && r.HTTPClient != nil {
-		return r.HTTPClient
+		base = r.HTTPClient
+	} else {
+		base = network.NewHTTPClient(cfg.RespectSystemProxyEnabled(), 0)
 	}
-	return network.NewHTTPClient(cfg.RespectSystemProxyEnabled(), 0)
+	if cfg == nil {
+		return base
+	}
+	// The run's published application network policy is enforced before the
+	// request is issued, so a managed restriction applies to every transport the
+	// run builds.
+	policy := cfg.NetworkPolicy()
+	if !policy.IsScoped() {
+		return base
+	}
+	return &network.PolicyHTTPDoer{Policy: policy, Next: base}
 }
 
 type execResumeContext struct {

@@ -25,6 +25,11 @@ var embeddedDefaultsTOML string
 type Config struct {
 	Values       map[string]any
 	Requirements *ConfigRequirements
+	// ApplicationNetworkPolicy is the live application network policy the runtime
+	// published for this config (Rust Config::application_network_policy). Client
+	// factories built from this config bind it, so every application transport
+	// shares one policy generation. It is never serialized.
+	ApplicationNetworkPolicy *network.NetworkPolicy `json:"-"`
 	// isProjectless records that configuration discovery found no project-root
 	// marker, no Git checkout root and no project-local config directory
 	// (Rust #46328 ConfigLayerStack::is_projectless). Discovery that was
