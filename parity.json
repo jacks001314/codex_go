@@ -13,8 +13,15 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-09-25T00:00:00+08:00",
+    "generatedAt": "2026-09-25T12:00:00+08:00",
     "items": [
+        {
+            "id": "tool-suggestion-install-url-validation",
+            "status": "done",
+            "area": "tui",
+            "reason": "Aligned upstream d0a64e91ae (#48015 Validate tool suggestion install URLs before showing the app link): bottompane parses the form-mode tool suggestion (codex_approval_kind/tool_type/suggest_type/suggest_reason/tool_id/tool_name/install_url) exactly like Rust's parse_tool_suggestion_request, and AppLinkParamsFromToolSuggestion validates the install URL through the same external-URL validator as the URL-mode elicitation (credential-free HTTPS with a host). The tea TUI declines a suggestion with a malformed URL, an unsupported scheme or embedded credentials on the requesting thread without showing a popup, and renders the app link popup for a valid URL: link screen -> confirmation screen, host URL opening through Options.OnAppLinkAction (app wiring uses auth.OpenBrowser), elicitation accept on completion. The static layer is re-pinned to d0a64e91ae (TUI snapshots 1321; chatwidget/snapshots 314 with the declined_tool_suggestion snapshot required).",
+            "test": "go test ./tui/bottom_pane -run ToolSuggestion -count=1; go test ./tui/tea -run ToolSuggestion -count=1; go test ./parity -run TestRustTUISnapshotManifestCoversPrioritySurfaces -count=1"
+        },
         {
             "id": "static-layer-repin-8ae55c863d",
             "status": "done",
