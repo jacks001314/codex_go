@@ -514,6 +514,12 @@ func backendFromVersion(version *string) *BackendKind {
 
 func EnsureManagedCodexBin(path string) error {
 	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		// Rust ensure_managed_codex_bin: on Windows the managed launch is probed
+		// before a daemon is started or stopped, so a launch the caller's Job
+		// Object forbids never takes the current daemon down.
+		if err := ensureDetachedLaunch(path); err != nil {
+			return err
+		}
 		return nil
 	}
 	return fmt.Errorf("managed standalone Codex install not found at %s\n\nThis command requires the standalone install managed by the Codex installer, because the daemon starts and updates app-server from that fixed path.\n\nInstall it with:\n  curl -fsSL https://chatgpt.com/codex/install.sh | sh\n\nThen rerun the command you just tried.", path)
