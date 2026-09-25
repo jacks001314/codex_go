@@ -1,13 +1,11 @@
 package turn
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"strings"
 	"sync"
@@ -929,24 +927,11 @@ func orchestratorResourceBelongsToPackage(pkg string, resource string) bool {
 	return true
 }
 
+// decodeStrictToolArgs delegates to the shared deny-unknown-fields decoder so
+// every Rust `deny_unknown_fields` argument struct decodes identically across
+// tool families.
 func decodeStrictToolArgs(invocation *tool.Invocation, target any) error {
-	if invocation == nil || target == nil {
-		return fmt.Errorf("invalid tool invocation")
-	}
-	raw := strings.TrimSpace(invocation.Payload.Arguments)
-	if raw == "" {
-		raw = "{}"
-	}
-	decoder := json.NewDecoder(bytes.NewBufferString(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return fmt.Errorf("invalid trailing JSON")
-	}
-	return nil
+	return invocation.DecodeStrictArguments(target)
 }
 
 func skillsToolJSONOutput(invocation *tool.Invocation, value any) (*tool.Output, error) {

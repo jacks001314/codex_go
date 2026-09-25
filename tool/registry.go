@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/utils"
 )
 
 var (
@@ -136,6 +138,11 @@ type Invocation struct {
 	StartedAt time.Time
 	Context   map[string]any
 	Cancel    context.CancelCauseFunc
+	// Truncation is the effective model's output-truncation policy for this
+	// call (Rust `ToolCall::truncation_policy`). It bounds a direct call's
+	// response-content budget through ResponseByteBudget; Code Mode calls
+	// ignore it because they receive typed results.
+	Truncation *utils.TruncationPolicy
 }
 
 type CodeModeNotifyFunc func(callID string, text string)

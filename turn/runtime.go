@@ -11,6 +11,7 @@ import (
 	"codex_go/codexapi"
 	"codex_go/model"
 	"codex_go/tool"
+	"codex_go/utils"
 )
 
 type RuntimeOptions struct {
@@ -27,6 +28,11 @@ type RuntimeOptions struct {
 	Now                          func() time.Time
 	MaxTurns                     int
 	ExecutedToolCalls            *ExecutedToolCallRecorder
+	// TruncationPolicyForModel resolves a model's output-truncation policy
+	// (Rust `ModelInfo::truncation_policy`). When set, every tool call of a turn
+	// carries the policy so tools can bound their response budget; when nil, the
+	// tool's own limit governs.
+	TruncationPolicyForModel func(model string) *utils.TruncationPolicy
 }
 
 type Runtime struct {
@@ -39,6 +45,7 @@ type Runtime struct {
 	now                          func() time.Time
 	maxTurns                     int
 	executedToolCalls            *ExecutedToolCallRecorder
+	truncationPolicyForModel     func(model string) *utils.TruncationPolicy
 }
 
 func NewRuntime(options *RuntimeOptions) *Runtime {
@@ -63,6 +70,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		now:                          now,
 		maxTurns:                     options.MaxTurns,
 		executedToolCalls:            executedToolCalls,
+		truncationPolicyForModel:     options.TruncationPolicyForModel,
 	}
 }
 
@@ -256,10 +264,20 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			TurnID:                      request.TurnID,
 			ExecutedToolCalls:           executedToolCalls,
 			ToolMode:                    loopRequest.ToolMode,
+			Truncation:                  r.truncationPolicy(loopRequest.Model),
 		}),
 		MaxTurns: r.maxTurns,
 		Now:      r.now,
 	}).Run(ctx, &loopRequest)
+}
+
+// truncationPolicy resolves the effective model's output-truncation policy for
+// the turn's tool calls (Rust `ToolCall::truncation_policy`).
+func (r *Runtime) truncationPolicy(modelID string) *utils.TruncationPolicy {
+	if r == nil || r.truncationPolicyForModel == nil {
+		return nil
+	}
+	return r.truncationPolicyForModel(strings.TrimSpace(modelID))
 }
 
 func directModeVisibleSpecs(visibleSpecs []tool.Spec, codeModeSpecs []tool.Spec) []tool.Spec {

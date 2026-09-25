@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"unicode/utf8"
 )
@@ -71,6 +72,19 @@ func (p *TruncationPolicy) TokenBudget() int {
 		return p.Limit
 	}
 	return int(ApproxTokensFromByteCount(p.ByteBudget()))
+}
+
+// WithSerializationAllowance mirrors Rust's
+// `codex_utils_output_truncation::with_serialization_allowance`: the existing
+// 20% allowance for serialization and headers. Saved history budgets already
+// include this allowance, so callers must apply it only to the model's raw
+// truncation policy. Rust multiplies the policy value in floating point and
+// rounds up, preserving the policy's mode.
+func (p TruncationPolicy) WithSerializationAllowance() TruncationPolicy {
+	if p.Limit <= 0 {
+		return p
+	}
+	return TruncationPolicy{Mode: p.Mode, Limit: int(math.Ceil(float64(p.Limit) * 1.2))}
 }
 
 func FormattedTruncateText(content string, policy TruncationPolicy) string {

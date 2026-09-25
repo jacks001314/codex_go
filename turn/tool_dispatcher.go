@@ -11,6 +11,7 @@ import (
 
 	"codex_go/model"
 	"codex_go/tool"
+	"codex_go/utils"
 )
 
 type ToolDispatcherOptions struct {
@@ -26,6 +27,11 @@ type ToolDispatcherOptions struct {
 	TurnID                      string
 	ExecutedToolCalls           *ExecutedToolCallRecorder
 	ToolMode                    string
+	// Truncation is the effective model's output-truncation policy for this
+	// turn (Rust `ToolCall::truncation_policy`). It bounds a direct call's
+	// response-content budget; Code Mode calls ignore it because they receive
+	// typed results.
+	Truncation *utils.TruncationPolicy
 }
 
 // observeNonDispatchedItem records a call ID that bypassed local dispatch so a
@@ -95,6 +101,7 @@ type ToolDispatcher struct {
 	turnID                      string
 	executedToolCalls           *ExecutedToolCallRecorder
 	toolMode                    string
+	truncation                  *utils.TruncationPolicy
 	clockMu                     sync.Mutex
 	// preparedDirectCalls/permittedDirectCalls carry the direct-call records
 	// reserved before dispatch so executeToolInvocation can attach each one to
@@ -317,6 +324,7 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		turnID:                      strings.TrimSpace(options.TurnID),
 		executedToolCalls:           options.ExecutedToolCalls,
 		toolMode:                    strings.TrimSpace(options.ToolMode),
+		truncation:                  options.Truncation,
 	}
 }
 
@@ -398,6 +406,7 @@ func (d *ToolDispatcher) addInvocationContext(invocation *tool.Invocation) {
 		invocation.Context["turn_id"] = d.turnID
 		invocation.Context["turnId"] = d.turnID
 	}
+	invocation.Truncation = d.truncation
 }
 
 func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations []*tool.Invocation) ([]ToolExecutionResult, error) {

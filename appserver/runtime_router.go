@@ -51,6 +51,7 @@ import (
 	"codex_go/telemetry"
 	"codex_go/tool"
 	"codex_go/turn"
+	"codex_go/utils"
 )
 
 type RuntimeServices struct {
@@ -13341,10 +13342,14 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 	hooks := r.turnHookAdapter(params, turnID)
 	agent := r.agentForAppTurn(params, turnID)
 	includeToolInfo := false
-	if cfg, err := r.effectiveConfigForTurn(params); err == nil && cfg != nil {
-		// Rust features.tool_registry.turn_metadata_includes_tool_info: only a
-		// gated turn reports the model-visible tool inventory.
-		includeToolInfo = cfg.ToolRegistryTurnMetadataIncludesToolInfo()
+	var turnConfig *config.Config
+	if cfg, err := r.effectiveConfigForTurn(params); err == nil {
+		turnConfig = cfg
+		if cfg != nil {
+			// Rust features.tool_registry.turn_metadata_includes_tool_info: only
+			// a gated turn reports the model-visible tool inventory.
+			includeToolInfo = cfg.ToolRegistryTurnMetadataIncludesToolInfo()
+		}
 	}
 	return turn.NewRuntime(&turn.RuntimeOptions{
 		Agent:                        agent,
@@ -13353,6 +13358,21 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		SteerMailbox:                 r.requireSteerMailbox(),
 		ExecutedToolCalls:            r.executedToolCallRecorder(params.ThreadID),
 		TurnMetadataIncludesToolInfo: includeToolInfo,
+		// Rust threads the effective model's truncation policy onto every tool
+		// call so a tool can bound its response budget.
+		TruncationPolicyForModel: func(modelID string) *utils.TruncationPolicy {
+			if turnConfig == nil {
+				return nil
+			}
+			info := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(modelID), turnConfig)
+			if info == nil || info.TruncationPolicy.Limit <= 0 {
+				return nil
+			}
+			return &utils.TruncationPolicy{
+				Mode:  utils.PolicyMode(info.TruncationPolicy.Mode),
+				Limit: int(info.TruncationPolicy.Limit),
+			}
+		},
 	}), nil
 }
 
