@@ -136,10 +136,11 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		data []byte
 		want string
 	}{
-		// Re-vendored from upstream e75b36efde (#48098): the retained-context
-		// `Ordered_for_RetainedUserMessage` gained the optional assistant `phase`
-		// on the internal protocol surface, which only the stable export carries.
-		{"stable", stablePrecomputedExports, "6ce7f85c12b0b5fc5697bfb4aa845149a6d4aa234698f34b93ae64409ad1dbd1"},
+		// Re-vendored from upstream bf832f4678 (#48109): `CodexHarnessMetadata`
+		// gained `guardian_source_order_guidance`, the delivery proof for retained
+		// source-order labels, on the internal protocol surface only the stable
+		// export carries.
+		{"stable", stablePrecomputedExports, "71b6d71e6d5df28a79c61fca0ab7ea406cc434c9153e2a75eea44d12af852367"},
 		{"experimental", experimentalPrecomputedExports, "42590bd02dcb4ab9ae0f74b2cbd6298ae3eefa9a98c1ac50856059ca2b9814e1"},
 	}
 	for _, test := range tests {

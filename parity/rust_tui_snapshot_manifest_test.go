@@ -22,10 +22,10 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	// Re-pinned to upstream e75b36efde: #48101 added the truncated multiline
-	// `/ps` command preview on top of the d0a64e91ae total of 1321.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1322 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1322", got)
+	// Re-pinned to upstream bf832f4678: #48116 added the Max-reasoning footer
+	// snapshots on top of #48101's truncated multiline `/ps` preview.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1324 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1324", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -256,8 +256,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// two Windows sandbox picker fallbacks; #46751 replaced the
 			// warnings-summary presentation and #46752 added the tmux
 			// pets-unavailable notice; #48015 added the declined-tool-suggestion
-			// snapshot.
-			Files:    314,
+			// snapshot; #48116 added the two Max-reasoning footer snapshots.
+			Files:    316,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -266,6 +266,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__status_widget_and_approval_modal.snap",
 				"tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__unified_exec_begin_restores_working_status.snap",
 				"tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__declined_tool_suggestion.snap",
+				"tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__reasoning_shortcut_max_footer.snap",
+				"tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__reasoning_shortcut_max_plan_footer.snap",
 			},
 		},
 		{
