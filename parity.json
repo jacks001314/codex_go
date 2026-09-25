@@ -13,8 +13,22 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-09-25T12:00:00+08:00",
+    "generatedAt": "2026-09-25T18:00:00+08:00",
     "items": [
+        {
+            "id": "mcp-oauth-authorization-endpoint-scheme",
+            "status": "done",
+            "area": "mcp",
+            "reason": "Aligned upstream 2c2a42e65d (#47326 Restrict MCP OAuth authorization endpoints to HTTP(S)): MCP OAuth discovery rejects an authorization endpoint whose scheme is not http or https before client registration or the authorization URL is returned (mcpOAuthWebEndpoint), mirroring Rust's validate_authorization_server_endpoints. The url matrix (http/https accepted; file, custom, malformed and scheme-relative rejected) is pinned by TestOAuthDiscoveryRejectsNonWebAuthorizationEndpointsLikeRust.",
+            "test": "go test ./mcp -run TestOAuthDiscoveryRejectsNonWebAuthorizationEndpointsLikeRust -count=1"
+        },
+        {
+            "id": "openai-file-blob-upload-retries",
+            "status": "done",
+            "area": "mcp",
+            "reason": "Aligned upstream 171dd0d39c (#47122 five-minute blob allowance), 2c3295306f (#47393 retry transient blob upload failures) and 0037b39cc1 (#47926 retry 502/504): the blob PUT has its own 5-minute deadline shared by up to five attempts, retries 502/503/504 and transport failures with a fresh Azure client request id per attempt (reopening the same contents), honors x-ms-retry-after-ms/Retry-After hints, and never retries terminal statuses (403/409/500) or a delay that cannot fit the remaining budget. Rust's files_retry_tests matrix is mirrored by TestOpenAIFileBlobUploadRetryBehaviorLikeRust and TestOpenAIFileBlobUploadRetriesTransportFailuresLikeRust.",
+            "test": "go test ./mcp -run TestOpenAIFileBlobUpload -count=1"
+        },
         {
             "id": "tool-suggestion-install-url-validation",
             "status": "done",
